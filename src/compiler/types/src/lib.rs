@@ -148,6 +148,20 @@ pub struct SolvedTypes {
     /// lowerer's untyped-def arm behaves exactly as before this field
     /// existed. See `docs/adr/0008-untyped-binding-module-boundary-generalization.md`.
     pub untyped_type_params: BTreeMap<(Vec<Symbol>, Symbol), Vec<Symbol>>,
+    /// Annotation type-variable symbols of each **typed** binding whose only
+    /// role is a UI message slot (`Html msg` / `Element msg` / `Attribute msg`
+    /// / `Event msg`) that solving never pinned to a concrete `Msg` -- at the
+    /// binding itself nor at any use site. Keyed by `(home, def_name)`.
+    ///
+    /// Such a variable has no polymorphic requirement (a message-free subtree
+    /// carries no handler, and no caller instantiates it), so the lowerer
+    /// defaults it to `Unit`: it emits `Html<()>` for the signature, the return,
+    /// and every body node, instead of a `fn page<T1>() -> Html<T1>` whose
+    /// generic no call site can infer (E0283 / E0308). A variable a use DOES pin
+    /// to a concrete `Msg` (`sharedRow` under `viewA : Html MsgA`) is absent --
+    /// genuine msg-polymorphism is preserved. Empty for a binding with no such
+    /// variable (the common case), so the lowerer behaves exactly as before.
+    pub msg_defaulted_vars: BTreeMap<(Vec<Symbol>, Symbol), BTreeSet<Symbol>>,
 }
 
 /// Infer the types of a canonical module.
@@ -649,6 +663,88 @@ fn infer_core(
         }
     }
 
+    // Record, per typed binding, each annotation variable whose ONLY role is a
+    // UI message slot that no use pinned to a concrete `Msg`. The lowerer
+    // defaults such a variable to `Unit` for the binding's own signature -- a
+    // never-pinned `page : Html msg` emits `fn page() -> Html<()>` rather than
+    // an uninferable `fn page<T1>() -> Html<T1>`.
+    //
+    // A variable is defaulted only when EVERY use instantiates it without
+    // pinning it to a concrete type (`SchemeApp::vars` records each use's
+    // instantiation): `sharedRow` used under `viewA : Html MsgA` has a use whose
+    // instantiation is the concrete `MsgA`, so it is NOT defaulted and stays a
+    // genuine generic. A variable appearing anywhere OUTSIDE a UI msg slot is
+    // also excluded -- only a pure message placeholder defaults.
+    let ui_msg_cons: BTreeSet<Symbol> = ["Html", "Element", "Attribute", "Event"]
+        .into_iter()
+        .map(|n| interner.intern(n))
+        .collect::<Result<_, _>>()
+        .map_err(|d| (d, Vec::new()))?;
+    let mut msg_defaulted_vars: BTreeMap<(Vec<Symbol>, Symbol), BTreeSet<Symbol>> = BTreeMap::new();
+    {
+        let mut apps_by_binding: BTreeMap<(Vec<Symbol>, Symbol), Vec<&BTreeMap<u32, VarId>>> =
+            BTreeMap::new();
+        for app in &generated.scheme_apps {
+            apps_by_binding
+                .entry((app.home.clone(), app.name))
+                .or_default()
+                .push(&app.vars);
+        }
+        // The wildcard `any` -- a bare `Html` / `Attribute` annotation the parser
+        // arity-fills to `Html any` -- is NOT a defaulting candidate: it has its
+        // own resolution (the lowerer substitutes its concrete type from the
+        // body's solved region, e.g. a `view` whose body pins the msg via an
+        // event handler), which defaulting to `Unit` would clobber.
+        let any_sym = interner.intern("any").map_err(|d| (d, Vec::new()))?;
+        for (key, ty) in &generated.top_level {
+            let mut ui_msg_vars = BTreeSet::new();
+            let mut other_vars = BTreeSet::new();
+            collect_ui_msg_and_other_vars(ty, &ui_msg_cons, false, &mut ui_msg_vars, &mut other_vars);
+            let candidates: BTreeSet<Symbol> = ui_msg_vars
+                .into_iter()
+                .filter(|v| !other_vars.contains(v))
+                .filter(|v| *v != any_sym)
+                .collect();
+            if candidates.is_empty() {
+                continue;
+            }
+            let empty = Vec::new();
+            let apps = apps_by_binding.get(key).unwrap_or(&empty);
+            let mut defaulted = BTreeSet::new();
+            for var_sym in candidates {
+                let raw = var_sym.as_raw();
+                // A use pins the variable when its instantiation resolves to a
+                // concrete non-`Unit` structure (`viewA : Html MsgA` pins
+                // `sharedRow`'s msg to `MsgA`) OR to a `Rigid` -- the msg is
+                // threaded into an enclosing generic a further-out use will pin
+                // (`class` called inside the generic `sharedRow` binds its msg to
+                // `sharedRow`'s own type parameter). The unpinned states are
+                // `Flex` (never constrained) and `Unit` (a message-free use).
+                let mut pinned = false;
+                for vars in apps {
+                    if let Some(&inst) = vars.get(&raw) {
+                        let root = lift!(uf.find(inst));
+                        match lift!(uf.content(root)) {
+                            Content::Structure(FlatType::Unit) | Content::Flex => {}
+                            Content::Structure(_)
+                            | Content::Rigid
+                            | Content::Super { .. } => {
+                                pinned = true;
+                                break;
+                            }
+                        }
+                    }
+                }
+                if !pinned {
+                    defaulted.insert(var_sym);
+                }
+            }
+            if !defaulted.is_empty() {
+                msg_defaulted_vars.insert(key.clone(), defaulted);
+            }
+        }
+    }
+
     // Recover each typed binding's generic-variable super-type obligations from
     // the skolems its body constrained. A variable the body never constrained
     // stays a plain rigid (no obligation, absent from the map).
@@ -815,9 +911,64 @@ fn infer_core(
             warnings,
             poly_var_map,
             untyped_type_params,
+            msg_defaulted_vars,
         },
         interface,
     ))
+}
+
+/// Classify each annotation type variable of `ty` as either a **UI message
+/// slot** variable (it appears as the argument of a `Html` / `Element` /
+/// `Attribute` / `Event` constructor) or an **other-position** variable.
+///
+/// A variable can land in both sets (`Html msg -> msg`); the caller keeps only
+/// the vars that are exclusively message slots, so a variable used anywhere a
+/// call site can pin it is never defaulted. `in_ui_msg` tracks whether the
+/// current position is already inside such a constructor's argument.
+fn collect_ui_msg_and_other_vars(
+    ty: &Ty,
+    ui_msg_cons: &BTreeSet<Symbol>,
+    in_ui_msg: bool,
+    ui_msg_vars: &mut BTreeSet<Symbol>,
+    other_vars: &mut BTreeSet<Symbol>,
+) {
+    match ty {
+        Ty::Var(raw) => {
+            let sym = Symbol::from_raw(*raw);
+            if in_ui_msg {
+                ui_msg_vars.insert(sym);
+            } else {
+                other_vars.insert(sym);
+            }
+        }
+        Ty::Fun(a, b) => {
+            collect_ui_msg_and_other_vars(a, ui_msg_cons, in_ui_msg, ui_msg_vars, other_vars);
+            collect_ui_msg_and_other_vars(b, ui_msg_cons, in_ui_msg, ui_msg_vars, other_vars);
+        }
+        Ty::Con { name, args, .. } => {
+            let child_in_ui_msg = ui_msg_cons.contains(name);
+            for a in args {
+                collect_ui_msg_and_other_vars(
+                    a,
+                    ui_msg_cons,
+                    child_in_ui_msg,
+                    ui_msg_vars,
+                    other_vars,
+                );
+            }
+        }
+        Ty::Tuple(elems) => {
+            for e in elems {
+                collect_ui_msg_and_other_vars(e, ui_msg_cons, in_ui_msg, ui_msg_vars, other_vars);
+            }
+        }
+        Ty::Record(fields, _) => {
+            for v in fields.values() {
+                collect_ui_msg_and_other_vars(v, ui_msg_cons, in_ui_msg, ui_msg_vars, other_vars);
+            }
+        }
+        Ty::Unit => {}
+    }
 }
 
 /// Verify every use of a super-typed binding pins each obligated generic

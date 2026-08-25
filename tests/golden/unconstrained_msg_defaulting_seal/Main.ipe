@@ -1,0 +1,32 @@
+module Main exposing (main)
+
+-- A view helper whose body carries no message — only `Html.text` / `Attr.class`,
+-- no event handler — infers to `Html msg` with `msg` a free, unconstrained type
+-- variable. `page : Html msg` reaches its only use through the polymorphic
+-- `Html.render`, so nothing pins `msg` to a concrete `Msg`.
+--
+-- Such a variable has no polymorphic requirement, so it defaults to `()`: the
+-- helper monomorphises to `Html<()>`. Emitting it as a Rust generic instead
+-- (`fn page<T1>() -> Html<T1>`) is accepted by ipe but fails the emitted
+-- `cargo build` — its generic is uninferable (E0283) and its `Html<()>` internal
+-- nodes mismatch the `Html<T1>` signature (E0308). ipe MUST exit 0 AND the
+-- emitted project MUST cargo-build (THE SEAL).
+
+import Ipe.String as String
+import Ipe.Html as Html exposing (Html)
+import Ipe.Html.Attributes as Attr
+import Ipe.Io as Io
+
+
+labeledRow : String -> Html msg
+labeledRow label =
+    Html.div [ Attr.class "row" ] [ Html.span [] [ Html.text label ] ]
+
+
+page : Html msg
+page =
+    Html.div [] [ labeledRow "a", labeledRow "b" ]
+
+
+main =
+    Io.println (Html.render page)
