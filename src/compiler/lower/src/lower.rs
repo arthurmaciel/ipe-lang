@@ -7081,14 +7081,89 @@ fn collect_user_calls<'e>(expr: &'e Expr, out: &mut Vec<(FuncId, &'e [Expr])>) {
     }
 }
 
-/// The bare `Var`/`CloneVar` binder an argument expression forwards, if it is
-/// exactly that reference. A caller only propagates a callee's bound when it
-/// hands one of its OWN parameters straight through — a computed / wrapped
-/// argument no longer carries the caller's bare tvar into the callee slot.
-const fn arg_forwarded_binder(arg: &Expr) -> Option<Symbol> {
+/// Every bare `Var`/`CloneVar` binder structurally reachable inside an argument
+/// expression. A caller propagates a callee's auto-trait bound to any of its OWN
+/// parameters that reaches the callee slot — whether handed straight through
+/// (`Store.toList conn (query)`) or carried inside a computed argument
+/// (`Store.toList conn (Store.query s)`, `Store.query s |> limit 10`). The leaf
+/// carrying the caller's tvar is the same in both shapes; only the surrounding
+/// expression differs, so the walk gathers leaves rather than matching a single
+/// bare reference.
+///
+/// Sound to be generous: `Sync`/`Send`/`'static` hold for every concrete emitted
+/// Ipê type, so a leaf that turns out not to reach the callee generic can only
+/// tighten a bound harmlessly, never break a caller. `Expr` carries no per-node
+/// inferred `IrType` at lower time, so this structural leaf-walk sidesteps
+/// arg-expression type inference entirely.
+fn arg_forwarded_binders(arg: &Expr, out: &mut Vec<Symbol>) {
     match arg {
-        Expr::Var(s) | Expr::CloneVar(s) => Some(*s),
-        _ => None,
+        Expr::Var(s) | Expr::CloneVar(s) => out.push(*s),
+        Expr::Call { args, .. } | Expr::Ctor { args, .. } | Expr::TailRecur { args } => {
+            for a in args {
+                arg_forwarded_binders(a, out);
+            }
+        }
+        Expr::Apply { func, args } => {
+            arg_forwarded_binders(func, out);
+            for a in args {
+                arg_forwarded_binders(a, out);
+            }
+        }
+        Expr::Lambda { body, .. }
+        | Expr::SharedLambda { body, .. }
+        | Expr::TailLoop { body, .. } => arg_forwarded_binders(body, out),
+        Expr::Let { value, body, .. } | Expr::Destructure { value, body, .. } => {
+            arg_forwarded_binders(value, out);
+            arg_forwarded_binders(body, out);
+        }
+        Expr::If { cond, then_, else_ } => {
+            arg_forwarded_binders(cond, out);
+            arg_forwarded_binders(then_, out);
+            arg_forwarded_binders(else_, out);
+        }
+        Expr::Match(m) => {
+            arg_forwarded_binders(m.scrutinee(), out);
+            for arm in m.arms() {
+                if let Some(g) = arm.guard.as_ref() {
+                    arg_forwarded_binders(g, out);
+                }
+                arg_forwarded_binders(&arm.body, out);
+            }
+        }
+        Expr::BinOp { lhs, rhs, .. } => {
+            arg_forwarded_binders(lhs, out);
+            arg_forwarded_binders(rhs, out);
+        }
+        Expr::Tuple(items) | Expr::List { items, .. } => {
+            for e in items {
+                arg_forwarded_binders(e, out);
+            }
+        }
+        Expr::Cons { head, tail } => {
+            arg_forwarded_binders(head, out);
+            arg_forwarded_binders(tail, out);
+        }
+        Expr::ListIndexClone { list, .. } | Expr::ListLenCheck { list, .. } => {
+            arg_forwarded_binders(list, out);
+        }
+        Expr::Record { fields, .. } | Expr::Update { fields, .. } => {
+            for (_, e) in fields {
+                arg_forwarded_binders(e, out);
+            }
+        }
+        Expr::TaskSeq { effect, rest } => {
+            arg_forwarded_binders(effect, out);
+            arg_forwarded_binders(rest, out);
+        }
+        Expr::Access { record, .. } => arg_forwarded_binders(record, out),
+        Expr::FuncValue { .. }
+        | Expr::Int(_)
+        | Expr::Bool(_)
+        | Expr::Float(_)
+        | Expr::Str(_)
+        | Expr::PathLit(_)
+        | Expr::Char(_)
+        | Expr::Unit => {}
     }
 }
 
@@ -7114,24 +7189,28 @@ type CalleeSig = (Vec<IrType>, Vec<(Symbol, BoundSet)>);
 ///
 /// This pass closes exactly that gap. For each direct user-function call, it
 /// pairs the callee's bounded generic parameter positions with the caller
-/// arguments filling them: when the caller passes one of its own parameters
-/// bare (a `Var`/`CloneVar`, never a computed value) into a callee position
-/// whose parameter type reaches that callee generic bare, the caller's own tvar
-/// carried bare through that parameter inherits the callee's `Sync`/`Send`/
-/// `'static` auto-trait bounds.
+/// arguments filling them: for every bare `Var`/`CloneVar` binder the argument
+/// carries — straight through (`Store.toList conn q`) or nested inside a
+/// computed / piped argument (`Store.toList conn (Store.query s)`,
+/// `Store.query s |> limit 10`) — reaching a callee position whose parameter
+/// type reaches that callee generic bare, the caller's own tvar carried bare
+/// through that binder inherits the callee's `Sync`/`Send`/`'static` auto-trait
+/// bounds.
 ///
-/// Precision — the pass never over-bounds:
+/// Precision — the pass never breaks a caller:
 ///
-///   * It fires only on a bare-forwarded parameter, so a wrapped or transformed
-///     argument (no longer carrying the caller's bare tvar) propagates nothing.
+///   * It copies only the auto-trait/lifetime bits (`Sync`/`Send`/`'static`),
+///     which hold for every concrete emitted Ipê type — the operator/`Display`/
+///     `IpeRow` bounds are the callee's own body obligations, never a
+///     caller-forwarding concern. Because the copied bits are universally
+///     satisfied, gathering leaves inside a computed argument is deliberately
+///     generous: a leaf that turns out not to reach the callee generic can only
+///     over-tighten a bound harmlessly, never reject a caller.
 ///   * It copies a bound only from a callee position whose parameter type
 ///     REACHES the callee generic bare ([`ir_type_generic_reaches_bare`], which
 ///     stops at opaque `Send + Sync` carriers). A pass-through the callee left
 ///     [`BoundSet::UNBOUNDED`] contributes nothing, so a truly-parametric
 ///     forwarder stays reusable.
-///   * It copies only the auto-trait/lifetime bits (`Sync`/`Send`/`'static`) —
-///     the operator/`Display`/`IpeRow` bounds are the callee's own body
-///     obligations, satisfied there, never a caller-forwarding concern.
 ///
 /// The fixpoint iterates because propagation chains: a caller of `Store.toMaybe`
 /// that itself forwards its generic acquires the bound only once `toMaybe` has
@@ -7183,16 +7262,15 @@ fn propagate_call_site_bounds(funcs: &mut [Func]) {
                     continue;
                 };
                 for (pos, arg) in args.iter().enumerate() {
-                    let Some(binder) = arg_forwarded_binder(arg) else {
+                    // Every bare binder the argument carries — straight through,
+                    // or nested inside a computed / piped argument. Each is a
+                    // candidate to inherit the callee position's bound.
+                    let mut binders: Vec<Symbol> = Vec::new();
+                    arg_forwarded_binders(arg, &mut binders);
+                    if binders.is_empty() {
                         continue;
-                    };
+                    }
                     let Some(callee_pty) = callee_param_tys.get(pos) else {
-                        continue;
-                    };
-                    // Which caller tvar does the forwarded parameter carry bare?
-                    // Only those can inherit a callee bound.
-                    let Some((_, binder_ty)) = caller_params.iter().find(|(b, _)| *b == binder)
-                    else {
                         continue;
                     };
                     // Which callee generic does this position carry bare, and
@@ -7204,17 +7282,26 @@ fn propagate_call_site_bounds(funcs: &mut [Func]) {
                         if !(gbound.has_sync() || gbound.has_send() || gbound.has_static()) {
                             continue;
                         }
-                        for tv in &caller_tvars {
-                            if ir_type_generic_reaches_bare(binder_ty, *tv) {
-                                let slot = add.entry(*tv).or_insert(BoundSet::UNBOUNDED);
-                                if gbound.has_sync() {
-                                    *slot = slot.with_sync();
-                                }
-                                if gbound.has_send() {
-                                    *slot = slot.with_send();
-                                }
-                                if gbound.has_static() {
-                                    *slot = slot.with_static();
+                        for binder in &binders {
+                            // Which caller tvar does this binder carry bare? Only
+                            // those can inherit the callee bound.
+                            let Some((_, binder_ty)) =
+                                caller_params.iter().find(|(b, _)| b == binder)
+                            else {
+                                continue;
+                            };
+                            for tv in &caller_tvars {
+                                if ir_type_generic_reaches_bare(binder_ty, *tv) {
+                                    let slot = add.entry(*tv).or_insert(BoundSet::UNBOUNDED);
+                                    if gbound.has_sync() {
+                                        *slot = slot.with_sync();
+                                    }
+                                    if gbound.has_send() {
+                                        *slot = slot.with_send();
+                                    }
+                                    if gbound.has_static() {
+                                        *slot = slot.with_static();
+                                    }
                                 }
                             }
                         }

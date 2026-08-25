@@ -361,6 +361,27 @@ fn db_store_to_maybe() {
     assert_runs_and_matches_oracle("db_store_to_maybe");
 }
 
+/// SEAL regression: cross-call auto-trait-bound propagation through a NON-BARE
+/// argument. `fetchAll conn s = Store.toList conn (Store.query s)` is generic
+/// over the row type; the caller's tvar rides inside the COMPUTED argument
+/// `Store.query s` (a `Call`, not a bare `Var`) filling `toList`'s bounded
+/// `Query a` slot. A bare-argument-only propagation dropped `toList`'s `Sync`
+/// obligation the moment the tvar rode inside `Store.query s`, so the emitted
+/// `main_fetch_all<T1: Send + Clone>` — missing `Sync` — cargo-failed `E0277`
+/// (`T1 cannot be shared between threads`) though `ipe` reported exit 0: an
+/// exit-0-then-cargo-fail SEAL break. `fetchLimited` (`Store.query s |> limit 1
+/// |> toList conn`) carries the tvar two `Call`s deep, so the golden also proves
+/// the leaf-walk descends nested computed arguments. Both forwarders must stay
+/// GENERIC (`<T1: 'static + Send + Sync + Clone>`, never monomorphized) AND the
+/// emitted crate must `cargo build` and run. Two lines: `all:2`, `limited:1`.
+///
+/// Sanctioned divergence: Ipê emits Rust+sqlx; `Ipe.Db.Store` is an Ipê-only
+/// addition with no reference counterpart; oracle is Ipê's own output.
+#[test]
+fn db_store_generic_forwarder() {
+    assert_runs_and_matches_oracle("db_store_generic_forwarder");
+}
+
 /// SEAL regression: a generic HOF (`Result.map`) applied to a callee whose
 /// return type is a CROSS-MODULE concrete stdlib type (`Ipe.Db.Store.Store`).
 /// Before the fix the `Result.map` type variable erased to `JsonVal` in emitted
