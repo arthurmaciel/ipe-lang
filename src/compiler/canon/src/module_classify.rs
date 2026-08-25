@@ -209,6 +209,7 @@ fn walk_expr<'e>(root: &'e Expr, visit: &mut impl FnMut(&'e Expr)) {
             | Expr_::Float(_)
             | Expr_::Str(_)
             | Expr_::PathLit(_)
+            | Expr_::CustomElementCtor(_)
             | Expr_::Char(_)
             | Expr_::Unit => {}
             Expr_::Call(f, args) => {

@@ -838,6 +838,301 @@ fn canon_custom_element_seal_rejects_type_variable() {
     assert_rejected("canon_custom_element_seal_tyvar", &src, "IPE-N0039");
 }
 
+// ── The `customElement` constructor (WP2, IPE-N0044 / IPE-P0063 / IPE-L0133) ──
+//
+// The reserved `customElement "<js-path>"` constructor is legal ONLY as the whole
+// body of a `CustomElement`-annotated binding, applied to a single string literal
+// naming a widget-hook JS file inside the project. These pin every refusal, plus
+// the positive case that type-checks yet still refuses at emission (the transport
+// is not shipped).
+
+/// A single-file program whose `Main.ipe` sits beside the given extra files
+/// (relative path → contents), built through the full pipeline. Returns the same
+/// [`Outcome`] the shared harness produces — used for the widget-file-exists path,
+/// which needs a real JS file on disk next to the entry.
+fn compile_with_files(name: &str, source: &str, extra: &[(&str, &str)]) -> Outcome {
+    let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
+        .join("negsuite-ce")
+        .join(name);
+    let _ = std::fs::remove_dir_all(&dir);
+    if std::fs::create_dir_all(&dir).is_err() {
+        return Outcome::Skip;
+    }
+    for (rel, contents) in extra {
+        let path = dir.join(rel);
+        if let Some(parent) = path.parent()
+            && std::fs::create_dir_all(parent).is_err()
+        {
+            return Outcome::Skip;
+        }
+        if std::fs::write(&path, contents).is_err() {
+            return Outcome::Skip;
+        }
+    }
+    let entry = dir.join("Main.ipe");
+    if std::fs::write(&entry, source).is_err() {
+        return Outcome::Skip;
+    }
+    let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
+        .join("negsuite-ce-out")
+        .join(name);
+    let _ = std::fs::remove_dir_all(&out);
+    let Ok(runtime) = ipe::resolve_runtime() else {
+        return Outcome::Skip;
+    };
+    match ipe::build_with_options(&entry, &out, &runtime, BuildOptions::default()) {
+        Ok(()) => Outcome::Accepted("compiled successfully (exit 0)".to_owned()),
+        Err(CliError::Pipeline { diag, .. }) => Outcome::Rejected(diag.code().as_str()),
+        Err(other) => Outcome::Accepted(format!("non-pipeline error: {other:?}")),
+    }
+}
+
+/// Assert a fixture with the given extra files is rejected with exactly `expected`.
+#[track_caller]
+fn assert_rejected_with_files(name: &str, source: &str, extra: &[(&str, &str)], expected: &str) {
+    match compile_with_files(name, source, extra) {
+        Outcome::Skip => {}
+        Outcome::Rejected(got) => assert_eq!(
+            got, expected,
+            "{name}: expected {expected}, got {got} — a rejection for the WRONG reason"
+        ),
+        Outcome::Accepted(how) => fail_accepted(name, expected, &how),
+    }
+}
+
+/// (a) `customElement` applied to a NON-literal (a variable) is rejected: the JS
+/// path must be a string literal so it can be read at build time (IPE-N0044).
+#[test]
+fn custom_element_ctor_non_literal_rejected() {
+    let src = format!(
+        "{HEAD}src : String\n\
+         src = \"js/x.js\"\n\
+         editor : CustomElement Int String\n\
+         editor = customElement src\n\
+         main = 1\n"
+    );
+    assert_rejected("custom_element_non_literal", &src, "IPE-N0044");
+}
+
+/// (b) A bare `customElement` value (referenced without its literal argument) is
+/// rejected — the constructor must be applied to its widget path (IPE-N0044).
+#[test]
+fn custom_element_ctor_bare_value_rejected() {
+    let src = format!(
+        "{HEAD}editor : CustomElement Int String\n\
+         editor = customElement\n\
+         main = 1\n"
+    );
+    assert_rejected("custom_element_bare", &src, "IPE-N0044");
+}
+
+/// `customElement` outside a `CustomElement`-annotated binding body is rejected:
+/// here it heads an ordinary (differently-typed) binding, so the reserved name
+/// resolves nowhere legal (IPE-N0044).
+#[test]
+fn custom_element_ctor_wrong_position_rejected() {
+    let src = format!("{HEAD}oops = customElement \"js/x.js\"\nmain = 1\n");
+    assert_rejected("custom_element_wrong_pos", &src, "IPE-N0044");
+}
+
+/// (c) `customElement "does/not/exist.js"` with no such file is rejected: a widget
+/// cannot register against a file that is not there (IPE-N0044, checked at the
+/// build stage that owns the project root).
+#[test]
+fn custom_element_ctor_missing_file_rejected() {
+    let src = format!(
+        "{HEAD}editor : CustomElement Int String\n\
+         editor = customElement \"js/does-not-exist.js\"\n\
+         main = 1\n"
+    );
+    // No extra files written — the named path is absent.
+    assert_rejected_with_files("custom_element_missing_file", &src, &[], "IPE-N0044");
+}
+
+/// (d) `customElement "../escape.js"` is rejected by the shared path seal — a `..`
+/// that climbs out of the project root is refused at build (IPE-P0063), the same
+/// code the `path "…"` literal uses.
+#[test]
+fn custom_element_ctor_path_traversal_rejected() {
+    let src = format!(
+        "{HEAD}editor : CustomElement Int String\n\
+         editor = customElement \"../escape.js\"\n\
+         main = 1\n"
+    );
+    assert_rejected("custom_element_traversal", &src, "IPE-P0063");
+}
+
+/// (e) A well-formed `customElement "js/x.js"` with the file PRESENT type-checks
+/// (the shape + path + existence gates all pass) but is STILL refused at emission
+/// with IPE-L0133 — the widget transport is not shipped, so no `CustomElement`
+/// value reaches codegen (WP2 does not flip the emission gate).
+#[test]
+fn custom_element_ctor_present_file_still_refused_at_emit() {
+    let src = format!(
+        "{HEAD}editor : CustomElement Int String\n\
+         editor = customElement \"js/x.js\"\n\
+         main = 1\n"
+    );
+    assert_rejected_with_files(
+        "custom_element_present",
+        &src,
+        &[(
+            "js/x.js",
+            "export function mount(host, emit) { return {}; }\n",
+        )],
+        "IPE-L0133",
+    );
+}
+
+/// (f) A `CustomElement` value stored in a `Model` field is rejected — it is an
+/// opaque, non-serialisable handle, so it cannot live in app state, exactly like a
+/// function value. Its type refuses fail-closed at lowering (IPE-L0133) before any
+/// codegen, so the widget seam never reaches the Model.
+#[test]
+fn custom_element_in_model_field_rejected() {
+    let src = format!(
+        "{HEAD}type alias Model = {{ widget : CustomElement Int String }}\n\
+         editor : CustomElement Int String\n\
+         editor = customElement \"js/x.js\"\n\
+         main = 1\n"
+    );
+    assert_rejected_with_files(
+        "custom_element_in_model",
+        &src,
+        &[(
+            "js/x.js",
+            "export function mount(host, emit) { return {}; }\n",
+        )],
+        "IPE-L0133",
+    );
+}
+
+/// (g) `customElement "/etc/passwd"` (an ABSOLUTE path) is rejected at CANON with
+/// IPE-N0044 — the widget path must be project-root-relative. An absolute literal
+/// would survive the shared `path "…"` seal (which legitimately accepts absolute
+/// paths) yet, joined at the build gate, `Path::join` discards the project root
+/// and stats an arbitrary out-of-project file. This closes that escape at the name
+/// stage, before any filesystem access.
+///
+/// Verdict-does-not-flip proof: an absolute path whose target EXISTS on the host
+/// (`/etc/passwd`) and one that does NOT (`/nonexistent-…`) must BOTH reject with
+/// the SAME canon code (IPE-N0044), never flipping to a build-stage
+/// existence/emission verdict on whether the outside file happens to be present —
+/// the exact verdict-flip the guardian exercised.
+#[test]
+fn custom_element_ctor_absolute_path_rejected_at_canon() {
+    for (label, abs) in [
+        ("present", "/etc/passwd"),
+        ("absent", "/nonexistent-ipe-widget-\u{2603}.js"),
+    ] {
+        let src = format!(
+            "{HEAD}editor : CustomElement Int String\n\
+             editor = customElement \"{abs}\"\n\
+             main = 1\n"
+        );
+        // Single-file `compile` reaches canon and stops there on rejection, so no
+        // JS file is written — the verdict must be identical for both the
+        // host-existing and the host-missing absolute target.
+        assert_rejected(
+            &format!("custom_element_absolute_{label}"),
+            &src,
+            "IPE-N0044",
+        );
+    }
+}
+
+/// A Windows-rooted spelling (`C:\\…` drive designator and a `\\\\server\\share`
+/// UNC prefix) is ALSO rejected at canon with IPE-N0044, independent of the
+/// compiling host's OS. `Path::is_absolute` on a Unix host would read `C:\x` as
+/// relative, so the all-targets lexical check — not the host's own path logic —
+/// is what turns these back.
+#[test]
+fn custom_element_ctor_windows_rooted_path_rejected_at_canon() {
+    for (label, rooted) in [
+        ("drive", "C:\\\\widgets\\\\evil.js"),
+        ("drive_relative", "C:evil.js"),
+        ("unc", "\\\\\\\\server\\\\share\\\\evil.js"),
+        ("backslash_root", "\\\\evil.js"),
+    ] {
+        let src = format!(
+            "{HEAD}editor : CustomElement Int String\n\
+             editor = customElement \"{rooted}\"\n\
+             main = 1\n"
+        );
+        assert_rejected(
+            &format!("custom_element_win_rooted_{label}"),
+            &src,
+            "IPE-N0044",
+        );
+    }
+}
+
+/// (h) A SYMLINK escape: an in-tree `js` directory entry is a symlink pointing to
+/// a directory OUTSIDE the project, and `customElement "js/evil.js"` names a file
+/// that really EXISTS at the symlink target. The lexical seals cannot see the
+/// symlink (the literal is a clean relative path), so this is the case the
+/// build-gate containment check must close: canonicalising the join resolves the
+/// symlink to its out-of-project target, and the `starts_with` root-containment
+/// assertion refuses it (IPE-N0044) instead of a bare `is_file` FOLLOWING the link
+/// and accepting an arbitrary outside file.
+///
+/// The refusal must NOT depend on the outside file's presence for its SECURITY
+/// verdict — the file is deliberately made to exist here so the check is proven to
+/// reject a genuinely-readable out-of-project target, not merely a dangling link.
+#[cfg(unix)]
+#[test]
+fn custom_element_ctor_symlink_escape_rejected_at_build_gate() {
+    use std::path::PathBuf;
+
+    let base = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("negsuite-ce-symlink");
+    let _ = std::fs::remove_dir_all(&base);
+    let project = base.join("project");
+    let outside = base.join("outside");
+    // The out-of-project directory and a real file inside it (the escape target).
+    if std::fs::create_dir_all(&outside).is_err()
+        || std::fs::write(
+            outside.join("evil.js"),
+            "export function mount(host, emit) { return {}; }\n",
+        )
+        .is_err()
+        || std::fs::create_dir_all(&project).is_err()
+    {
+        return; // scratch unavailable — skip, like the shared harness
+    }
+    // In-tree `js` is a SYMLINK to the outside directory.
+    if std::os::unix::fs::symlink(&outside, project.join("js")).is_err() {
+        return;
+    }
+    let src = format!(
+        "{HEAD}editor : CustomElement Int String\n\
+         editor = customElement \"js/evil.js\"\n\
+         main = 1\n"
+    );
+    let entry = project.join("Main.ipe");
+    if std::fs::write(&entry, &src).is_err() {
+        return;
+    }
+    let out = base.join("out");
+    let _ = std::fs::remove_dir_all(&out);
+    let Ok(runtime) = ipe::resolve_runtime() else {
+        return;
+    };
+    let outcome = match ipe::build_with_options(&entry, &out, &runtime, BuildOptions::default()) {
+        Ok(()) => Outcome::Accepted("compiled successfully (exit 0)".to_owned()),
+        Err(CliError::Pipeline { diag, .. }) => Outcome::Rejected(diag.code().as_str()),
+        Err(other) => Outcome::Accepted(format!("non-pipeline error: {other:?}")),
+    };
+    let _ = std::fs::remove_dir_all(&base);
+    match outcome {
+        Outcome::Skip => {}
+        Outcome::Rejected(got) => assert_eq!(
+            got, "IPE-N0044",
+            "custom_element_symlink_escape: expected IPE-N0044 (containment), got {got}"
+        ),
+        Outcome::Accepted(how) => fail_accepted("custom_element_symlink_escape", "IPE-N0044", &how),
+    }
+}
+
 /// Two imports registering the same qualifier for DIFFERENT sibling modules.
 /// The clash is only observable across a multi-file project (sibling
 /// discovery), so this uses the project harness rather than the single-file

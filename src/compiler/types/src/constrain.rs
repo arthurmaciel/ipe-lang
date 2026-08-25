@@ -323,6 +323,10 @@ struct Builtins {
     attribute: Symbol,
     /// `"Element"` — Ipe.Ui element type constructor `Element msg`.
     element: Symbol,
+    /// `"CustomElement"` — the JS-widget boundary type constructor
+    /// `CustomElement down up`. Empty-module opaque handle; consumed only by the
+    /// `Ui.widget` kernel scheme.
+    custom_element: Symbol,
     /// `"Html"` — Html type constructor `Html msg` (shared by Ipe.Html and
     /// Ipe.Ui render entry points).
     html_con: Symbol,
@@ -775,6 +779,7 @@ impl Builtins {
             // Ipe.Ui / Ipe.Html parametric type constructor symbols.
             attribute: interner.intern("Attribute")?,
             element: interner.intern("Element")?,
+            custom_element: interner.intern("CustomElement")?,
             html_con: interner.intern("Html")?,
             length: interner.intern("Length")?,
             color: interner.intern("Color")?,
@@ -2062,6 +2067,21 @@ impl<'a> Builder<'a> {
             module: Vec::new(),
             name,
             args: Vec::new(),
+        })
+    }
+
+    /// The type of a `customElement "<js-path>"` constructor node: `CustomElement
+    /// down up` with two fresh flexible parameters. The annotation on the binding
+    /// (a resolved `CustomElement down up`) unifies with these, pinning the seal
+    /// types; the arity + SEAL of that annotation were already enforced at canon.
+    fn custom_element_var(&mut self) -> DResult<VarId> {
+        let name = self.builtins.custom_element;
+        let down = self.flex()?;
+        let up = self.flex()?;
+        self.structure(FlatType::Con {
+            module: Vec::new(),
+            name,
+            args: vec![down, up],
         })
     }
 
@@ -3421,6 +3441,7 @@ impl<'a> Builder<'a> {
             canon::Expr_::Float(_) => self.float_var()?,
             canon::Expr_::Str(_) => self.string_var()?,
             canon::Expr_::PathLit(_) => self.path_var()?,
+            canon::Expr_::CustomElementCtor(_) => self.custom_element_var()?,
             canon::Expr_::Char(_) => self.char_var()?,
             canon::Expr_::Unit => self.structure(FlatType::Unit)?,
             canon::Expr_::VarLocal(s) => match local.get(s) {
@@ -4154,6 +4175,7 @@ impl<'a> Builder<'a> {
             // (`builtin_con_module`).
             BuiltinTag::UiAttribute | BuiltinTag::HtmlAttribute => self.builtins.attribute,
             BuiltinTag::UiElement => self.builtins.element,
+            BuiltinTag::CustomElement => self.builtins.custom_element,
             BuiltinTag::Html => self.builtins.html_con,
             BuiltinTag::UiLength => self.builtins.length,
             BuiltinTag::UiColor => self.builtins.color,
@@ -4821,6 +4843,13 @@ impl<'a> Builder<'a> {
             module: Vec::new(),
             name: self.builtins.element,
             args: vec![m],
+        };
+        // `custom_element(down, up)` — the empty-home JS-widget boundary handle
+        // `CustomElement down up`, the argument type of `Ui.widget`.
+        let custom_element = |down: Ty, up: Ty| Ty::Con {
+            module: Vec::new(),
+            name: self.builtins.custom_element,
+            args: vec![down, up],
         };
         let html_t = |m: Ty| Ty::Con {
             module: Vec::new(),
@@ -6489,6 +6518,15 @@ impl<'a> Builder<'a> {
             K::UiText => fun(string(), elem_t(var(0))),
             K::UiHtml => fun(html_t(var(0)), elem_t(var(0))),
             K::UiCells => fun(list(list(char())), elem_t(var(0))),
+            // `widget : CustomElement down up -> down -> (up -> msg) -> Element msg`
+            // (msg = var(0), down = var(1), up = var(2)).
+            K::UiWidget => fun(
+                custom_element(var(1), var(2)),
+                fun(
+                    var(1),
+                    fun(fun(var(2), var(0)), elem_t(var(0))),
+                ),
+            ),
 
             // Ipe.Ui / Font attribute builders — nullary (arity 0).
             K::UiCenterX
@@ -9514,6 +9552,7 @@ mod registry_phase_c_tests {
             K::UiText,
             K::UiHtml,
             K::UiCells,
+            K::UiWidget,
             // The container / tagged-element primitives (first-schemed — no
             // legacy). The layout / flow builders are pure Ipê over them.
             K::UiNode,

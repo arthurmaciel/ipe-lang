@@ -14,7 +14,7 @@ module Ipe.Ui exposing
     ( Element, Attribute, Length, Color, Description, HAlign, VAlign, Location, PseudoClass
     , node, taggedNode
     , layout, layoutWith
-    , none, text, html, cells
+    , none, text, html, cells, widget
     , el, row, column, wrappedRow, grid
     , paragraph, textColumn, form, input
     , button, link, image
@@ -97,6 +97,16 @@ html = Ffi.kernel "Ui_html"
 -- | `cells grid` — a raw terminal cell grid (one inner list per row).
 cells : List (List Char) -> Element msg
 cells = Ffi.kernel "Ui_cells"
+
+
+-- | `widget handle state onEvent` — place a typed JS custom-element widget.
+-- `handle` is a `CustomElement down up` produced by the reserved `customElement`
+-- constructor; `state` is the sealed down-state; `onEvent` maps a decoded typed
+-- up-event into the app's `msg`. The widget transport is not yet shipped, so a
+-- binding whose type mentions `CustomElement` is refused fail-closed at emission
+-- (IPE-L0133) until it lands.
+widget : CustomElement down up -> down -> (up -> msg) -> Element msg
+widget = Ffi.kernel "Ui_widget"
 
 
 -- | `button attrs { onPress, label }` — a `<button>` with an optional press msg.

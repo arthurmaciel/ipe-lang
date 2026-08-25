@@ -98,6 +98,7 @@ fn first_denied(e: &Expr, interner: &Interner) -> Option<Diagnostic> {
         | Expr_::Float(_)
         | Expr_::Str(_)
         | Expr_::PathLit(_)
+        | Expr_::CustomElementCtor(_)
         | Expr_::Char(_)
         | Expr_::Unit => None,
         Expr_::Call(f, args) => first_denied(f, interner)

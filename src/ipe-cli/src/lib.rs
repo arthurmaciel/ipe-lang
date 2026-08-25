@@ -1790,6 +1790,22 @@ fn attribute_canon_errors(
     Ok(())
 }
 
+/// The project root a `customElement "<js-path>"` literal resolves against: the
+/// directory holding the entry file, the same root sibling module discovery uses.
+///
+/// Canon refuses a `..`-escaping literal (IPE-P0063) and an absolute/rooted one
+/// (IPE-N0044), so the joined path is lexically inside this root. That is
+/// necessary but NOT sufficient: a symlink UNDER the root can still point outside
+/// it, so the caller additionally canonicalises the join and asserts containment
+/// (`starts_with` the canonical root) before trusting it — the lexical seals and
+/// the resolved-path containment check are independent layers.
+fn widget_file_root(entry_src_path: &Path) -> &Path {
+    entry_src_path
+        .parent()
+        .filter(|p| p.is_dir())
+        .unwrap_or_else(|| Path::new("."))
+}
+
 /// The in-memory compile core over an already-populated database.
 ///
 /// topo order → per-module canonicalisation (memoized, blame-attributed) →
@@ -1890,6 +1906,53 @@ pub fn compile_prepared(
     let source_for_span = |span: ipe_diagnostics::Span| -> (PathBuf, String) {
         source_for_span_in_linked(linked, &home_to_source, &entry, span)
     };
+
+    // Widget-file gate (IPE-N0044, Security #1). The `customElement` constructor's
+    // shape + lexical path seals (traversal IPE-P0063, absolute/rooted IPE-N0044)
+    // already ran in canon; here — the one stage that owns the project root — two
+    // FILESYSTEM invariants are enforced, defence-in-depth against the lexical
+    // seals:
+    //   1. Containment: the resolved path must lie strictly INSIDE the project
+    //      root. `ContainedRelPath::parse` canonicalises the join and asserts it
+    //      is a descendant of the canonical root, so a symlink UNDER the root that
+    //      points OUTSIDE it (which the lexical seals cannot see) is refused. A
+    //      bare `Path::join`/`is_file` would instead FOLLOW that symlink and stat
+    //      an out-of-project file — the escape this check closes.
+    //   2. Existence: the contained path must name a real file, so a widget never
+    //      registers against a file that is not there.
+    // Both fail closed with IPE-N0044; the widget seam never reaches emission on
+    // an out-of-project or absent file.
+    let widget_root = widget_file_root(&entry_src_path);
+    for widget in ipe_canon::custom_element_gate::collect_widget_files(linked) {
+        let reject = |detail: String| {
+            let (file, src) = source_for_span(widget.span);
+            CliError::Pipeline {
+                file,
+                src,
+                diag: Box::new(ipe_diagnostics::Diagnostic::Name {
+                    span: widget.span,
+                    msg: ipe_diagnostics::NameError::CustomElementCtorMalformed {
+                        detail: detail.into_boxed_str(),
+                    },
+                }),
+            }
+        };
+        let contained = contained_path::ContainedRelPath::parse(widget_root, &widget.cleaned_path)
+            .map_err(|_| {
+                reject(format!(
+                    "the widget-hook file `{}` resolves outside the project directory \
+                         (an absolute path, a `..` climb, or a symlink pointing above the \
+                         project root) and is refused",
+                    widget.cleaned_path
+                ))
+            })?;
+        if !contained.resolved().is_file() {
+            return Err(reject(format!(
+                "the widget-hook file `{}` does not exist in the project",
+                widget.cleaned_path
+            )));
+        }
+    }
 
     // Layer-2 wasm security gate (IPE-N0030, M5): the client entry's
     // reachability closure must not transitively reach a server-classified

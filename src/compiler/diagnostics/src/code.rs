@@ -271,6 +271,11 @@ code! {
     /// shape)`) is declared but never threaded into an app entry — inert data
     /// the runtime never installs, so every setting it lists is silently dropped
     IPE_N0043 = "IPE-N0043", "a config binding is declared but never threaded into an app entry", "IPE-N0043";
+    /// the reserved `customElement "<js-path>"` constructor is malformed at its use
+    /// site — applied to a non-literal, referenced bare (unapplied), given a
+    /// traversing path, its named file absent, or placed anywhere other than the
+    /// whole body of a `CustomElement`-annotated binding (fail-closed at build)
+    IPE_N0044 = "IPE-N0044", "the customElement constructor is malformed at its use site", "IPE-N0044";
 
     // -----------------------------------------------------------------------
     // Type (IPE-T####)
