@@ -1183,7 +1183,7 @@ pub fn canonicalise_module_in_project(
         })
         .collect();
 
-    let (canon_mod, kernel_aliases) = canonicalise_with_env(
+    let (mut canon_mod, kernel_aliases) = canonicalise_with_env(
         m,
         &mut env,
         &mut type_home_map,
@@ -1268,9 +1268,189 @@ pub fn canonicalise_module_in_project(
     if origin == ModuleOrigin::User {
         check_program_tea_import_gate(m, &canon_mod, interner)?;
         check_cross_shape_cmd_sub_gate(m, &canon_mod, interner)?;
+        // Thread a sibling top-level `config` binding into the app entry
+        // (`main = Web.app { … }` becomes `Web.appWith config { … }`), or reject
+        // a `config` binding that no app entry consumes (IPE-N0043).
+        thread_config_binding(&mut canon_mod, interner)?;
     }
 
     Ok((canon_mod, exports))
+}
+
+/// The reserved name of the app's cross-cutting settings binding — a top-level
+/// `config : List (Setting shape)`. Recognised by name (mirroring `main` /
+/// `package`), threaded into the app entry so the whole app's wiring reads from
+/// one place.
+const CONFIG_BINDING: &str = "config";
+
+/// Thread a sibling top-level `config` binding into the module's `Web` app entry,
+/// and reject a `config` binding no entry consumes (IPE-N0043).
+///
+/// When a module declares both a top-level `config` binding and a `main` whose
+/// head is a settings-less `Web` entry (`Web.app` / `Web.appRouted`), rewrite the
+/// entry to `Web.appWith config <cfg>`: the `config` value becomes the settings
+/// argument the runtime installs. Inline `Web.appWith [ … ] { … }` keeps working
+/// unchanged (the entry already carries its settings, so it is not rewritten and
+/// `config` is treated as already-consumed).
+///
+/// A `config` binding that reaches no app entry — because `main` is a Program, a
+/// non-`Web` shape, or absent — is inert data whose settings the runtime never
+/// installs; it fails closed with IPE-N0043 (the discarded-config lint, mirroring
+/// the discarded-`Task` IPE-L0141 posture) rather than compiling into an app that
+/// silently ignores its own configuration.
+///
+/// # Errors
+/// [`Diagnostic::Name`] (IPE-N0043) when a `config` binding is declared but never
+/// threaded into an app entry.
+fn thread_config_binding(canon_mod: &mut canon::Module, interner: &mut Interner) -> DResult<()> {
+    let Some(config_sym) = interner.lookup(CONFIG_BINDING) else {
+        return Ok(()); // `config` never interned → this module cannot name one.
+    };
+    // A top-level `config` binding, and its declaration span (for IPE-N0043 blame).
+    let config_span = canon_mod
+        .defs
+        .iter()
+        .find(|d| d.name().value == config_sym)
+        .map(|d| d.name().span);
+    let Some(config_span) = config_span else {
+        return Ok(()); // no `config` binding — nothing to thread or lint.
+    };
+
+    let Some(main_sym) = interner.lookup("main") else {
+        // `config` present but no `main` can be named → it is never threaded.
+        return Err(discarded_config(config_span));
+    };
+    // Pre-intern the canonical qualifier + settings-carrying entry name so the
+    // walker can re-target the kernel without a live `&mut Interner` borrow held
+    // across the `&mut defs` walk. `interner.intern` is idempotent (returns the
+    // existing symbol when already interned), so this never perturbs numbering
+    // for a module that already names `Web` / `appWith`.
+    let web_sym = interner.intern("Web").ok();
+    let app_with_sym = interner.intern("appWith").ok();
+    let app_sym = interner.intern("app").ok();
+    let app_routed_sym = interner.intern("appRouted").ok();
+    let (Some(web_sym), Some(app_with_sym), Some(app_sym), Some(app_routed_sym)) =
+        (web_sym, app_with_sym, app_sym, app_routed_sym)
+    else {
+        // Interner exhausted (unreachable in practice) → fail closed rather than
+        // silently drop the config.
+        return Err(discarded_config(config_span));
+    };
+
+    let Some(main_def) = canon_mod
+        .defs
+        .iter_mut()
+        .find(|d| d.name().value == main_sym)
+    else {
+        return Err(discarded_config(config_span));
+    };
+
+    let home = main_def.home().to_vec();
+    let body = match main_def {
+        canon::Def::Untyped { body, .. } | canon::Def::Typed { body, .. } => body,
+    };
+    let names = ConfigThreadNames {
+        config: config_sym,
+        web: web_sym,
+        app_with: app_with_sym,
+        app: app_sym,
+        app_routed: app_routed_sym,
+    };
+    if thread_config_into_entry(body, &names, &home) {
+        return Ok(());
+    }
+    // A `config` binding exists but `main` neither is a settings-less `Web` entry
+    // to thread it into nor already carries its own settings — it is discarded.
+    Err(discarded_config(config_span))
+}
+
+/// The pre-interned symbols [`thread_config_into_entry`] needs to recognise a
+/// `Web` app entry and re-target it, resolved before the `&mut defs` walk so no
+/// `&mut Interner` borrow is held across it.
+struct ConfigThreadNames {
+    /// The `config` binding's symbol (threaded as the settings reference).
+    config: Symbol,
+    /// The `Web` qualifier symbol.
+    web: Symbol,
+    /// The settings-carrying `appWith` entry name symbol.
+    app_with: Symbol,
+    /// The settings-less `Web.app` entry name symbol.
+    app: Symbol,
+    /// The settings-less `Web.appRouted` entry name symbol.
+    app_routed: Symbol,
+}
+
+/// Build the IPE-N0043 discarded-`config` diagnostic at the binding's span.
+const fn discarded_config(span: Span) -> Diagnostic {
+    Diagnostic::Name {
+        span,
+        msg: NameError::DiscardedConfig,
+    }
+}
+
+/// Rewrite a settings-less `Web` entry at the head of `body` to thread `config`,
+/// returning whether the `config` binding is now consumed by an app entry.
+///
+/// Returns `true` when:
+/// * the head is `Web.app` / `Web.appRouted` applied to its single cfg record —
+///   rewritten in place to `Web.appWith config <cfg>` (config threaded); or
+/// * the head is already `Web.appWith` — the entry carries its own settings, so
+///   `config` counts as consumed (an inline settings list is the author's choice)
+///   and nothing is rewritten.
+///
+/// Returns `false` when the head is not a `Web` app entry (a Program, a non-`Web`
+/// shape, or an unrecognised form) — `config` reaches no entry and is discarded.
+fn thread_config_into_entry(
+    body: &mut canon::Expr,
+    names: &ConfigThreadNames,
+    home: &[Symbol],
+) -> bool {
+    // Peel `\… -> …` / `let … in …` wrappers to the head call, matching the TEA
+    // entry classification (`main_head_is_tea_entry`). Only a `main` whose head
+    // is a `Web` entry `Call` is threadable; a bare kernel reference with no cfg
+    // argument is not a valid entry and is left for the type-checker.
+    match &mut body.value {
+        canon::Expr_::Lambda(_, inner) | canon::Expr_::Let(_, inner) => {
+            thread_config_into_entry(inner, names, home)
+        }
+        canon::Expr_::Call(callee, args) => {
+            let canon::Expr_::VarKernel { module, name, .. } = &callee.value else {
+                return false;
+            };
+            if *module != names.web {
+                return false; // a non-`Web` shape entry does not thread `config`.
+            }
+            // Already carries its own settings list — `config` is consumed by the
+            // author's explicit inline choice; leave the entry untouched.
+            if *name == names.app_with {
+                return true;
+            }
+            // Settings-less `Web` entry with exactly its cfg record: rewrite the
+            // callee to `Web.appWith` and prepend the `config` reference.
+            if (*name == names.app || *name == names.app_routed) && args.len() == 1 {
+                let module = *module;
+                // Re-target the kernel: `id` is re-resolved by `lower_callee` from
+                // `(module, name)`, so clearing it keeps lowering on the kernel
+                // path (no stale `Web.app` id survives the rewrite).
+                callee.value = canon::Expr_::VarKernel {
+                    id: None,
+                    module,
+                    name: names.app_with,
+                };
+                let config_ref = Located::new(
+                    callee.span,
+                    canon::Expr_::VarTopLevel {
+                        module: home.to_vec(),
+                        name: names.config,
+                    },
+                );
+                args.insert(0, config_ref);
+                return true;
+            }
+            false
+        }
+        _ => false,
+    }
 }
 
 /// The TEA app-entry kernels, keyed `(canonical qualifier, entry name)`. A
@@ -6854,6 +7034,161 @@ mod seal_container_arity_tests {
         assert!(
             seal_container_arity("Connection").is_none(),
             "seal_container_arity(Connection) must return None"
+        );
+    }
+}
+
+#[cfg(test)]
+mod config_threading_tests {
+    //! Unit coverage for [`thread_config_binding`] — the item-1 recognition site
+    //! that threads a sibling top-level `config` binding into a `Web` app entry
+    //! and rejects a `config` binding no entry consumes (IPE-N0043).
+
+    use super::*;
+    use ipe_diagnostics::Located;
+
+    fn sym(i: &mut Interner, s: &str) -> Symbol {
+        i.intern(s).expect("intern must succeed")
+    }
+
+    /// A `VarKernel` head for `Web.<name>` (e.g. `Web.app`).
+    fn web_entry(i: &mut Interner, name: &str) -> canon::Expr {
+        let module = sym(i, "Web");
+        let name = sym(i, name);
+        Located::new(
+            Span::DUMMY,
+            canon::Expr_::VarKernel {
+                id: None,
+                module,
+                name,
+            },
+        )
+    }
+
+    /// `<entry> {cfg}` — an app entry applied to a single (opaque) cfg argument.
+    fn entry_call(entry: canon::Expr) -> canon::Expr {
+        let cfg = Located::new(Span::DUMMY, canon::Expr_::Unit);
+        Located::new(Span::DUMMY, canon::Expr_::Call(Box::new(entry), vec![cfg]))
+    }
+
+    /// A module with the given `main` body and an optional top-level `config`
+    /// binding (a `Unit` body stand-in — only its NAME matters here).
+    fn module_with(i: &mut Interner, main_body: canon::Expr, with_config: bool) -> canon::Module {
+        let home = vec![sym(i, "Main")];
+        let main_name = sym(i, "main");
+        let mut defs = vec![canon::Def::Untyped {
+            home: home.clone(),
+            name: Located::new(Span::DUMMY, main_name),
+            patterns: Vec::new(),
+            body: main_body,
+        }];
+        if with_config {
+            let config_name = sym(i, "config");
+            defs.push(canon::Def::Untyped {
+                home: home.clone(),
+                name: Located::new(Span::DUMMY, config_name),
+                patterns: Vec::new(),
+                body: Located::new(Span::DUMMY, canon::Expr_::Unit),
+            });
+        }
+        canon::Module {
+            imports_unsafe_submodule: false,
+            name: home,
+            unions: Vec::new(),
+            defs,
+        }
+    }
+
+    /// The `main` binding's body from a module (post-threading inspection).
+    fn main_body<'a>(m: &'a canon::Module, i: &Interner) -> Option<&'a canon::Expr> {
+        m.defs
+            .iter()
+            .find(|d| i.resolve(d.name().value) == Some("main"))
+            .map(|d| match d {
+                canon::Def::Untyped { body, .. } | canon::Def::Typed { body, .. } => body,
+            })
+    }
+
+    #[test]
+    fn config_is_threaded_into_web_app_entry() {
+        let mut i = Interner::new();
+        let main_body_expr = entry_call(web_entry(&mut i, "app"));
+        let mut m = module_with(&mut i, main_body_expr, true);
+        thread_config_binding(&mut m, &mut i).expect("config must thread into Web.app");
+
+        // `main` is now `Web.appWith config <cfg>`: callee re-targeted to
+        // `appWith`, `config` prepended as the settings argument.
+        let threaded = main_body(&m, &i).is_some_and(|body| {
+            let canon::Expr_::Call(callee, args) = &body.value else {
+                return false;
+            };
+            let canon::Expr_::VarKernel { name, .. } = &callee.value else {
+                return false;
+            };
+            let re_targeted = i.resolve(*name) == Some("appWith");
+            let config_first = matches!(
+                args.first().map(|a| &a.value),
+                Some(canon::Expr_::VarTopLevel { name, .. }) if i.resolve(*name) == Some("config")
+            );
+            re_targeted && args.len() == 2 && config_first
+        });
+        assert!(
+            threaded,
+            "main must become `Web.appWith config <cfg>` after threading"
+        );
+    }
+
+    #[test]
+    fn inline_app_with_leaves_config_consumed() {
+        // `main = Web.appWith [ … ] { … }` already carries its settings; a sibling
+        // `config` counts as consumed (author's explicit choice), no rewrite.
+        let mut i = Interner::new();
+        let entry = web_entry(&mut i, "appWith");
+        let settings = Located::new(Span::DUMMY, canon::Expr_::Unit);
+        let cfg = Located::new(Span::DUMMY, canon::Expr_::Unit);
+        let main_body = Located::new(
+            Span::DUMMY,
+            canon::Expr_::Call(Box::new(entry), vec![settings, cfg]),
+        );
+        let mut m = module_with(&mut i, main_body, true);
+        thread_config_binding(&mut m, &mut i)
+            .expect("an inline appWith with a sibling config must be accepted");
+    }
+
+    #[test]
+    fn discarded_config_in_a_program_is_rejected() {
+        // `config` present but `main` is a plain Program (Unit body) — no entry
+        // consumes the config, so IPE-N0043 fires.
+        let mut i = Interner::new();
+        let main_body = Located::new(Span::DUMMY, canon::Expr_::Unit);
+        let mut m = module_with(&mut i, main_body, true);
+        let err =
+            thread_config_binding(&mut m, &mut i).expect_err("a discarded config must be rejected");
+        assert!(
+            matches!(
+                err,
+                Diagnostic::Name {
+                    msg: NameError::DiscardedConfig,
+                    ..
+                }
+            ),
+            "expected IPE-N0043 DiscardedConfig, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn no_config_binding_is_a_noop() {
+        // A module with no `config` binding is untouched (no rewrite, no error).
+        let mut i = Interner::new();
+        let main_body_expr = entry_call(web_entry(&mut i, "app"));
+        let mut m = module_with(&mut i, main_body_expr, false);
+        thread_config_binding(&mut m, &mut i).expect("no config → no-op");
+        let untouched = main_body(&m, &i).is_some_and(|body| {
+            matches!(&body.value, canon::Expr_::Call(_, args) if args.len() == 1)
+        });
+        assert!(
+            untouched,
+            "no config threaded when none is declared (single cfg arg stands)"
         );
     }
 }

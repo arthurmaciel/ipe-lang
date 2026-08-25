@@ -485,6 +485,11 @@ fn name_prose(msg: &NameError) -> String {
             "This `Cmd` / `Sub` belongs to a different app shape than the one you're building."
                 .to_string()
         }
+        NameError::DiscardedConfig => {
+            "You wrote a `config` binding, but nothing uses it — its settings would just be \
+             ignored."
+                .to_string()
+        }
         NameError::RemovedSurface {
             qualifier, name, ..
         } => {
@@ -1349,6 +1354,14 @@ fn name_label(msg: &NameError) -> Option<String> {
              is a {} app; import `{}` instead",
             m.imported, m.imported_shape, m.app_shape, m.expected
         )),
+        NameError::DiscardedConfig => Some(
+            "this module declares a top-level `config` binding but never threads it into an \
+             app entry, so every setting it lists is silently dropped; give the module a Web \
+             app entry (`main = Web.app { … }`, which threads a sibling `config` binding \
+             automatically — or pass it explicitly with `Web.appWith config { … }`), or \
+             delete the `config` binding if it is unused"
+                .to_string(),
+        ),
         NameError::RemovedSurface {
             qualifier,
             name,
