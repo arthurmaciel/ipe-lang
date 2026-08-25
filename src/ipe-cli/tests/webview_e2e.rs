@@ -109,6 +109,67 @@ main =
         }
 "#;
 
+/// A minimal Ipe.WebView app mounting a `Ui.widget` whose DOWN state is a user
+/// record (`EditorState`) and whose UP event is a user ADT (`EditorEvent`).
+///
+/// This is the `WebView` SEAL golden for the widget serde derive.
+/// `Ui.widget` routes its down/up seal types through `ui_widget_`, whose bounds
+/// are `Down: serde::Serialize` and `Up: serde::de::DeserializeOwned`.
+/// `WebView`'s `webview_app` bounds the Model only by `Clone + Send`, so the
+/// serde derive on a widget's seal types is gated on the browser SHAPE
+/// (`uses_web || uses_webview`), not the Model bound: the serde-derive gate in
+/// `emit_types` and the app-crate `serde` dependency gate in `project` both fire
+/// for a `WebView` build. A serde-legal widget seal type therefore derives serde
+/// in a `WebView` build exactly as in a Web build. This fixture proves the closed
+/// seam: ipe-accept ⇒ cargo-build.
+const IPE_WEBVIEW_WIDGET: &str = r#"module Main exposing (main)
+
+import Ipe.Tea.WebView as Webview
+import Ipe.Ui as Ui
+import Ipe.Tea.WebView.Cmd as Cmd
+import Ipe.Tea.WebView.Sub as Sub
+
+type alias EditorState = { text : String, line : Int }
+
+type EditorEvent = Changed String | Saved
+
+type Msg = Edited EditorEvent
+
+type alias Model = { state : EditorState }
+
+codeEditor : CustomElement EditorState EditorEvent
+codeEditor = customElement "js/x.js"
+
+init : () -> ( Model, Cmd Msg )
+init _unit =
+    ( { state = { text = "", line = 0 } }, Cmd.none )
+
+update : Msg -> Model -> ( Model, Cmd Msg )
+update _msg model =
+    ( model, Cmd.none )
+
+view : Model -> Element Msg
+view model =
+    Ui.widget codeEditor model.state Edited
+
+subscriptions : Model -> Sub Msg
+subscriptions _model =
+    Sub.none
+
+main =
+    Webview.app
+        { init = init
+        , update = update
+        , view = view
+        , subscriptions = subscriptions
+        , window = { title = "Editor", size = ( 400, 300 ) }
+        }
+"#;
+
+/// The JS custom-element source the widget fixture's `customElement` constructor
+/// points at — its mere presence satisfies the build-time file-existence gate.
+const WIDGET_JS: &str = "export function mount(host, emit) { return {}; }\n";
+
 /// Shared error type for E2E helpers.
 type BoxError = Box<dyn std::error::Error + Send + Sync + 'static>;
 
@@ -125,6 +186,50 @@ fn compile_and_build(test_name: &str, ipe_source: &str) -> Result<std::path::Pat
     std::fs::create_dir_all(&ipe_dir).map_err(|e| -> BoxError {
         format!("{test_name}: cannot create ipe source dir: {e}").into()
     })?;
+
+    let entry = ipe_dir.join("Main.ipe");
+    std::fs::write(&entry, ipe_source)
+        .map_err(|e| -> BoxError { format!("{test_name}: cannot write Main.ipe: {e}").into() })?;
+
+    let out_dir = std::env::temp_dir().join(format!("webview_e2e_{test_name}_emitted"));
+    let _ = std::fs::remove_dir_all(&out_dir);
+
+    let runtime = ipe::resolve_runtime()
+        .map_err(|e| -> BoxError { format!("{test_name}: runtime unavailable: {e}").into() })?;
+
+    ipe::build(&entry, &out_dir, &runtime)
+        .map_err(|e| -> BoxError { format!("{test_name}: ipe build failed: {e}").into() })?;
+
+    let exe = e2e_support::build_rust_binary(test_name, &out_dir)
+        .map_err(|e| -> BoxError { format!("{test_name}: cargo build failed: {e}").into() })?;
+
+    Ok(std::path::PathBuf::from(exe))
+}
+
+/// As [`compile_and_build`], but first writes extra sibling files (e.g. the JS
+/// source a `customElement` constructor references) into the ipe source dir so
+/// the build-time file-existence gate is satisfied.
+fn compile_and_build_with_files(
+    test_name: &str,
+    ipe_source: &str,
+    extra: &[(&str, &str)],
+) -> Result<std::path::PathBuf, BoxError> {
+    let ipe_dir = std::env::temp_dir().join(format!("webview_e2e_{test_name}_ipe"));
+    let _ = std::fs::remove_dir_all(&ipe_dir);
+    std::fs::create_dir_all(&ipe_dir).map_err(|e| -> BoxError {
+        format!("{test_name}: cannot create ipe source dir: {e}").into()
+    })?;
+
+    for (rel, contents) in extra {
+        let path = ipe_dir.join(rel);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| -> BoxError {
+                format!("{test_name}: cannot create {rel} parent dir: {e}").into()
+            })?;
+        }
+        std::fs::write(&path, contents)
+            .map_err(|e| -> BoxError { format!("{test_name}: cannot write {rel}: {e}").into() })?;
+    }
 
     let entry = ipe_dir.join("Main.ipe");
     std::fs::write(&entry, ipe_source)
@@ -193,6 +298,47 @@ fn webview_counter_build_only() -> Result<(), BoxError> {
             // unproven on Linux here, never asserted false-green.
             println!(
                 "LOUD-SKIP: Tier-A (webview build) — system `webkit2gtk`/`glib` dev \
+                 packages not installed on this runner (Ipe.WebView is macOS-first; \
+                 Linux support is tracked, not yet CI-verified). Install \
+                 `libwebkit2gtk-4.1-dev libglib2.0-dev` to run this test for real."
+            );
+            Ok(())
+        }
+        Err(e) => Err(e),
+    }
+}
+
+/// `WebView` SEAL golden: a `Ui.widget` whose down is a user record and up is a
+/// user ADT must ipe-accept AND cargo-build in a `WebView` program.
+///
+/// `ui_widget_` requires `Down: serde::Serialize` and
+/// `Up: serde::de::DeserializeOwned`, but `webview_app` bounds the Model only by
+/// `Clone + Send`. The serde-derive gate in `emit_types` and the app-crate
+/// `serde` dependency gate in `project` therefore key on the browser SHAPE
+/// (`uses_web || uses_webview`), not the Model bound — otherwise a `WebView`
+/// widget program emits no derives and no `serde` dep and ipe-accepts yet
+/// cargo-fails (E0277 on the bounds, E0433 on the by-path `serde::` reference).
+/// A serde-legal widget seal type derives serde in a `WebView` build exactly as
+/// in a Web build; a clean `cargo build` is the proof.
+#[test]
+fn webview_ui_widget_seal_builds() -> Result<(), BoxError> {
+    if std::env::var("IPE_E2E").is_err() {
+        return Ok(());
+    }
+
+    match compile_and_build_with_files(
+        "webview_ui_widget_seal",
+        IPE_WEBVIEW_WIDGET,
+        &[("js/x.js", WIDGET_JS)],
+    ) {
+        Ok(_exe) => Ok(()),
+        Err(e) if is_missing_linux_webview_system_libs(&e.to_string()) => {
+            // LOUD-SKIP, identical posture to Tier-A: `wry`/`tao` link against the
+            // system `webkit2gtk`/`glib` dev packages this runner may not install.
+            // An environment gap, never a false-green — THE SEAL is simply left
+            // unproven on this host, not asserted true.
+            println!(
+                "LOUD-SKIP: WebView widget SEAL — system `webkit2gtk`/`glib` dev \
                  packages not installed on this runner (Ipe.WebView is macOS-first; \
                  Linux support is tracked, not yet CI-verified). Install \
                  `libwebkit2gtk-4.1-dev libglib2.0-dev` to run this test for real."

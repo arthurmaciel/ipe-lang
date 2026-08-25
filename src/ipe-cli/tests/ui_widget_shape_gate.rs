@@ -242,10 +242,11 @@ fn web_view_with_ui_widget_is_accepted() -> Result<(), BoxError> {
 
 /// `WebView.app` also forces the `json` feature, so the shape guard ADMITS its
 /// `Ui.widget` (ipe-0) — it takes the real seal-coded `ui_widget_` path, not the
-/// unconstrained non-`json` fallback this gate exists to reject. This asserts
-/// the admission only; the memory-model shapes do not derive `serde` for the
-/// widget's down/up types, a separate WP4 gap tracked apart from this E0282
-/// shape-guard fix.
+/// unconstrained non-`json` fallback this gate exists to reject. This asserts the
+/// admission only. The emitted crate also cargo-builds: the backend derives
+/// `serde` for a `WebView` `Ui.widget`'s down/up seal types (gated on either
+/// browser shape, not the Model bound), proven end-to-end by
+/// `webview_e2e::webview_ui_widget_seal_builds` under `IPE_E2E=1`.
 #[test]
 fn webview_view_with_ui_widget_is_accepted() -> Result<(), BoxError> {
     assert_accepted(

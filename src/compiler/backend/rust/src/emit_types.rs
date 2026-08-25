@@ -785,10 +785,17 @@ pub fn emit_enum(ctx: &EmitCtx, def: &EnumDef) -> DResult<String> {
     // NON-serde type used AS a Web/Tui/WebView Model; this gate covers every OTHER
     // (non-Model) emitted type in a Web program.
     let self_serde = ctx.enum_is_serde(&def.home, def.name);
-    // When the program uses Ipe.Web, model types must implement serde traits
-    // so the session store can serialise/deserialise them. The live runtime
-    // requires `Model: serde::Serialize + serde::de::DeserializeOwned`.
-    let serde_derives = if self_serde && ctx.uses_web {
+    // Both browser shapes force the runtime `json` feature and route seal types
+    // through serde: Ipe.Web serialises the Model in its session store
+    // (`Model: serde::Serialize + serde::de::DeserializeOwned`), and BOTH Web and
+    // Ipe.WebView carry a `Ui.widget`'s down/up seal types through `ui_widget_`
+    // (`Down: Serialize`, `Up: DeserializeOwned`). WebView's own Model bound is
+    // only `Clone + Send`, so without unioning `uses_webview` here a serde-legal
+    // widget seal type in a WebView program ipe-accepts but cargo-fails E0277 —
+    // the SEAL breach. Emitting the derive on a serde-legal type is always
+    // cargo-buildable (the `is_serde` fixpoint guarantees every leaf derivable),
+    // so widening the gate to either browser shape stays fail-closed.
+    let serde_derives = if self_serde && (ctx.uses_web || ctx.uses_webview) {
         ", serde::Serialize, serde::Deserialize"
     } else {
         ""
@@ -1118,7 +1125,15 @@ pub fn emit_record_struct(ctx: &EmitCtx, rec: &RecordStruct) -> DResult<String> 
     // (serde-OK leaves ⊂ derivable leaves), so serde is never added without CDPeq.
     // The app-entry Model gate independently rejects a non-serde type used AS a
     // Web/Tui/WebView Model; this gate covers every OTHER (non-Model) record.
-    let serde_derives = if rec.is_serde && ctx.uses_web {
+    //
+    // Both browser shapes force serde on seal types: WebView (like Web) carries a
+    // `Ui.widget`'s down/up records through `ui_widget_` (`Down: Serialize`,
+    // `Up: DeserializeOwned`), yet its Model bound is only `Clone + Send`. Gating
+    // solely on `uses_web` therefore ipe-accepts a serde-legal down record in a
+    // WebView program but cargo-fails E0277 — the SEAL breach. `is_serde`
+    // guarantees the derive always compiles, so unioning `uses_webview` is
+    // fail-closed.
+    let serde_derives = if rec.is_serde && (ctx.uses_web || ctx.uses_webview) {
         ", serde::Serialize, serde::Deserialize"
     } else {
         ""

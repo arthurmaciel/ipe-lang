@@ -1684,15 +1684,20 @@ fn dep_model_cargo_toml(ctx: &EmitCtx) -> DResult<String> {
         ctx,
         "ipe_backend_rust::project::dep_model_cargo_toml",
     )?;
-    // A Ipe.Web program emits `#[derive(serde::Serialize, serde::Deserialize)]`
-    // on its Model / other serde-eligible types (see `emit_types`), so the APP
-    // crate references the `serde` crate by path. Under the dependency model the
-    // app crate depends only on `ipe_runtime`, whose `serde` is a private
-    // dependency not re-exported — so the app must declare its own `serde`.
-    // Pin + feature match the vendored `templates/Cargo.toml`. A non-web program
-    // emits no serde derive, so its manifest stays serde-free. Inserted right
-    // after the runtime dependency line, inside `[dependencies]`.
-    if ctx.uses_web {
+    // A browser-shape program emits `#[derive(serde::Serialize, serde::Deserialize)]`
+    // on serde-eligible types (see `emit_types`), so the APP crate references the
+    // `serde` crate by path. Under the dependency model the app crate depends only
+    // on `ipe_runtime`, whose `serde` is a private dependency not re-exported — so
+    // the app must declare its own `serde`. Pin + feature match the vendored
+    // `templates/Cargo.toml`. This covers BOTH browser shapes: Ipe.Web derives
+    // serde on its Model, and Ipe.WebView derives it on a `Ui.widget`'s down/up
+    // seal types (its Model bound is only `Clone + Send`, but the widget seam
+    // still routes through `ui_widget_`'s serde bounds). Gating solely on
+    // `uses_web` leaves a WebView-widget manifest serde-free while its `main.rs`
+    // names `serde::` by path — an ipe-accept-then-cargo-fail (E0433). A non-browser
+    // program emits no serde derive, so its manifest stays serde-free. Inserted
+    // right after the runtime dependency line, inside `[dependencies]`.
+    if ctx.uses_web || ctx.uses_webview {
         manifest = insert_app_serde_dependency(&manifest)?;
     }
     Ok(manifest)
