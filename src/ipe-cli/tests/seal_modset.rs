@@ -213,6 +213,21 @@ const AUTHED_STORE_QUERY: &str = include_str!(concat!(
     "/../../tests/golden/authed_store_query_seal/Main.ipe"
 ));
 
+/// Authed-route program that calls `Revocation.revokeSession principal jti cap`
+/// (the arity-3 form: `Principal -> String -> Int -> Task Error ()`).
+///
+/// The third argument (`cap`, a Unix-epoch expiry in seconds) was added when the
+/// revocation store gained bounded-lifetime entries.  A regression to an arity-2
+/// emit (dropping the `Int` argument) produces a call site that does not match
+/// the three-argument runtime function `auth_revocation_revoke_session`, causing
+/// E0308/E0061 at `cargo build` (ipe exits 0 — the SEAL breach class).  This
+/// test catches that regression: if the emit drops the cap argument the emitted
+/// crate will not build.
+const REVOKE_SESSION_ARITY3: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../tests/golden/revoke_session_arity3_seal/Main.ipe"
+));
+
 // ── The gate: every shape emits AND cargo-builds ────────────────────────────
 
 #[test]
@@ -342,6 +357,26 @@ fn jwt_sign_vendored_builds() {
     emit_and_build_vendored("jwt_sign_vendored", JWT_SIGN).expect(
         "JWT program must cargo-build under the vendored emit model \
          (jwt feature must be in default = [...]; uuid dep must be in scope)",
+    );
+}
+
+/// Arity-3 tripwire for `Revocation.revokeSession`.
+///
+/// The kernel signature is `Principal -> String -> Int -> Task Error ()`.  Any
+/// regression that drops the third `Int` argument (`cap`, the Unix-epoch expiry)
+/// causes the emitted Rust call site to mismatch the three-argument runtime
+/// function `auth_revocation_revoke_session`, producing a `cargo build` failure
+/// (E0061 — wrong number of arguments) despite `ipe` exiting 0 — the SEAL breach
+/// class this test gates.
+#[test]
+fn revoke_session_arity3_builds() {
+    if skip() {
+        return;
+    }
+    emit_and_build("revoke_session_arity3", REVOKE_SESSION_ARITY3).expect(
+        "Revocation.revokeSession must emit a three-argument call site \
+         (Principal, String, Int) and the emitted crate must cargo-build \
+         (regression to arity-2 drops the cap Int and fails E0061)",
     );
 }
 
