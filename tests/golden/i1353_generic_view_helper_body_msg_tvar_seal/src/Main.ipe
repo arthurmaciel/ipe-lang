@@ -1,0 +1,29 @@
+module Main exposing (main)
+
+-- SEAL: a GENUINELY message-polymorphic view helper -- `msg` appears in a
+-- PARAMETER position (`Element msg`), so the emitted `fn box_<T1>(child:
+-- Element<T1>)` keeps its parameter generic and the caller supplies the
+-- concrete message type through the argument. Its body wraps the child through
+-- `Ui.el`, whose result slot MUST stay the same `T1` -- both the helper's own
+-- signature return and every body ui-node call.
+--
+-- Defaulting such a var to `()` (the unpinnable-slot treatment for a var that
+-- occurs ONLY in a result position) emitted `fn box_<T1>(child: Element<T1>) ->
+-- Element<()>` and a body building `Element<()>` nodes -- an E0308/E0283 at the
+-- emitted `cargo build` after `ipe` exit 0, a SEAL break. The parameter position
+-- keeps the var genuinely polymorphic, so it is NOT a defaulting candidate.
+--
+-- ipe MUST exit 0 AND the emitted project MUST cargo-build (THE SEAL).
+
+import Ipe.Html as Html
+import Ipe.Ui as Ui exposing (Element)
+import Ipe.Io as Io
+
+
+box_ : Element msg -> Element msg
+box_ child =
+    Ui.el [] child
+
+
+main =
+    Io.println (Html.htmlRender (Ui.layout [] (box_ (Ui.text "boxed"))))

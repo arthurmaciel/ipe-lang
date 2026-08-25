@@ -705,9 +705,16 @@ fn infer_core(
                 &mut ui_msg_vars,
                 &mut other_vars,
             );
+            // A ui-msg var in a PARAMETER position stays generic (its `Element<T1>`
+            // param is instantiated by the caller's argument), so the RESULT slot
+            // must match it — never default such a var to `()`. `box_ : Element
+            // msg -> Element msg` keeps `msg` generic in both positions.
+            let mut param_msg_vars = BTreeSet::new();
+            collect_param_ui_msg_vars(ty, &ui_msg_cons, &mut param_msg_vars);
             let candidates: BTreeSet<Symbol> = ui_msg_vars
                 .into_iter()
                 .filter(|v| !other_vars.contains(v))
+                .filter(|v| !param_msg_vars.contains(v))
                 .filter(|v| *v != any_sym)
                 .collect();
             if candidates.is_empty() {
@@ -1079,6 +1086,31 @@ fn collect_ui_msg_and_other_vars(
             }
         }
         Ty::Unit => {}
+    }
+}
+
+/// Collect the ui-msg-slot variables that appear in a PARAMETER (input) position
+/// of `ty` — a var inside a `Html` / `Element` / `Attribute` / `Event`
+/// constructor anywhere left of a top-level arrow.
+///
+/// Such a variable is genuinely polymorphic and must NOT be message-defaulted:
+/// its parameter lowers to the generic `Element<T1>` (the caller supplies the
+/// concrete message type through the argument), so the RESULT slot must stay the
+/// same `T1` for the signature to typecheck. Defaulting it to `()` would emit a
+/// `fn helper<T1>(child: Element<T1>) -> Element<()>` whose body wraps `child`
+/// yet claims `Element<()>` — an E0308 after `ipe` exit 0 (a SEAL breach).
+///
+/// Only left-of-arrow positions count: the whole return type is the RESULT, and
+/// a ui-msg var appearing solely there with no input occurrence is the honest
+/// unpinnable-slot case the defaulting exists to catch.
+fn collect_param_ui_msg_vars(ty: &Ty, ui_msg_cons: &BTreeSet<Symbol>, out: &mut BTreeSet<Symbol>) {
+    let mut cur = ty;
+    while let Ty::Fun(param, rest) = cur {
+        let mut param_msg_vars = BTreeSet::new();
+        let mut discard = BTreeSet::new();
+        collect_ui_msg_and_other_vars(param, ui_msg_cons, false, &mut param_msg_vars, &mut discard);
+        out.extend(param_msg_vars);
+        cur = rest.as_ref();
     }
 }
 
