@@ -805,8 +805,29 @@ fn infer_core(
     // binding emits `Html<()>`, matching the concrete `Html ()` annotation a
     // user would otherwise be forced to write. This propagates through the
     // `env` / `regions` read-back below (both post-date this pin).
-    for scheme in untyped_schemes.values() {
+    //
+    // The "no same-module reference pinned it" reasoning only holds WITHIN the
+    // home module. A binding referenced from ANOTHER module is genuinely
+    // message-polymorphic across the boundary: `promote_untyped_boundaries`
+    // discharges each cross-module use through a fresh `copy_var` of the
+    // scheme, so the shared root legitimately stays `Flex` while distinct uses
+    // pin distinct concrete `Msg` types (`viewA : Html MsgA`, `viewB : Html
+    // MsgB`). Defaulting it to `Unit` would emit `fn helper() -> Html<()>` and
+    // break every caller needing `Html<MsgN>` -- an exit-0-then-cargo-fail. So
+    // gate the pin on the SAME "no use pinned it" evidence the annotated path
+    // above uses: a binding that appears as any cross-module reference's source
+    // is NOT defaulted -- it stays generic, exactly as the pre-defaulting path
+    // already emitted it correctly.
+    let cross_module_sources: BTreeSet<(Vec<Symbol>, Symbol)> = generated
+        .pending_instantiations
+        .iter()
+        .map(|pi| pi.source.clone())
+        .collect();
+    for (key, scheme) in &untyped_schemes {
         if scheme.quantified.is_empty() {
+            continue;
+        }
+        if cross_module_sources.contains(key) {
             continue;
         }
         let scheme_ty = lift!(zonk(&mut uf, budget, scheme.root));

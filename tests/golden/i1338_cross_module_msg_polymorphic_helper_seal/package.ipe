@@ -1,0 +1,6 @@
+module Package exposing (package)
+
+
+package =
+    Package.named "i1338_cross_module_msg_polymorphic_helper_seal"
+        |> Package.version "0.1.0"

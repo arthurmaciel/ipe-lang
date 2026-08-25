@@ -1,0 +1,44 @@
+module Main exposing (main)
+
+-- Cross-module counterpart to `i1338_unannotated_view_arg_msg_defaulting_seal`:
+-- there, a same-module message-free helper correctly defaults its `msg` to `()`.
+-- HERE the same-shaped helper (`Lib.sharedRow`, unannotated, message-free,
+-- ATTRIBUTE-FREE) is exported and used from TWO OTHER modules at TWO DISTINCT
+-- concrete message types -- `viewA : Html MsgA` in `ModA`, `viewB : Html MsgB`
+-- here. `promote_untyped_boundaries` discharges each cross-module use through a
+-- fresh instantiation of the helper's generalized scheme, so its shared root
+-- legitimately stays a free type variable.
+--
+-- The un-annotated-UI-msg defaulting must NOT fire on such a binding: pinning
+-- its `msg` to `()` would emit `fn lib_shared_row() -> Html<()>` while the
+-- callers instantiate it at `Html<MsgA>` / `Html<MsgB>` -- an E0308 at the
+-- emitted `cargo build` after ipe exit 0, a SEAL break. The helper MUST instead
+-- stay generic (`fn lib_shared_row<T1: 'static + Clone>() -> Html<T1>`), which
+-- every caller instantiates at its own concrete message type. `Flex` here means
+-- "cross-module-polymorphic", not "message-free".
+--
+-- ipe MUST exit 0 AND the emitted project MUST cargo-build (THE SEAL).
+
+import Ipe.Html as Html exposing (Html)
+import Ipe.Io as Io
+import Lib exposing (sharedRow)
+import ModA exposing (viewA)
+
+
+type MsgB
+    = ClickB
+
+
+viewB : Html MsgB
+viewB =
+    Html.div []
+        [ sharedRow
+        , Html.text "B"
+        ]
+
+
+-- Render BOTH views so neither `viewA` (at `MsgA`) nor `viewB` (at `MsgB`) is
+-- dead-code-eliminated: the emitted crate genuinely instantiates the shared
+-- helper at two distinct concrete message types.
+main =
+    Io.println (Html.render viewA ++ Html.render viewB)

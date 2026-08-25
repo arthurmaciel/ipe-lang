@@ -36,6 +36,8 @@ mod golden_i1309_unconstrained_msg_defaulting_seal;
 mod golden_i130_seal;
 #[path = "g_issues/golden_i1329_server_view_msg_defaulting_seal.rs"]
 mod golden_i1329_server_view_msg_defaulting_seal;
+#[path = "g_issues/golden_i1338_cross_module_msg_polymorphic_helper_seal.rs"]
+mod golden_i1338_cross_module_msg_polymorphic_helper_seal;
 #[path = "g_issues/golden_i1338_unannotated_view_arg_msg_defaulting_seal.rs"]
 mod golden_i1338_unannotated_view_arg_msg_defaulting_seal;
 #[path = "g_issues/golden_i136_alias_truncation.rs"]
