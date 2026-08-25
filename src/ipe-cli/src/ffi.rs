@@ -1684,24 +1684,18 @@ fn add_one(
             .unwrap_or(json),
         _ => json,
     };
-    // Merge any `[[rust.define.closure]]` entries the project manifest declares
-    // for this crate into the inspection document BEFORE the driver decodes it,
-    // so the author-declared adapter flows through the same `PkgInfo` gate + the
-    // unforgeable `FfiInterface` module as an inspected binding.
+    // Lift `foreign` declarations from the project's source files and merge them
+    // into the inspection document before the driver decodes it, so each
+    // author-declared adapter/struct/enum flows through the same `PkgInfo` gate
+    // and the unforgeable `FfiInterface` module as an inspected binding.
     let doc_text = match crate::io_bounded::read_to_string_capped(
         std::path::Path::new(PROJECT_MANIFEST),
         crate::io_bounded::MANIFEST_READ_CAP,
     ) {
         Ok(text) => {
-            let mut closures = rust_define_closures_from_manifest(&text);
-            let mut structs = rust_define_structs_from_manifest(&text);
-            let mut enums = rust_define_enums_from_manifest(&text);
-            // Also lift any `foreign` declarations from the project's source files.
+            reject_legacy_define_tables(&text)?;
             let src_root = Path::new("src");
-            let (fc, fs, fe) = scan_foreign_defines(src_root)?;
-            closures.extend(fc);
-            structs.extend(fs);
-            enums.extend(fe);
+            let (closures, structs, enums) = scan_foreign_defines(src_root)?;
             let sole_dep = rust_dependencies_from_manifest(&text).len() <= 1;
             merge_provides(
                 &doc_text,
@@ -1744,13 +1738,15 @@ fn add_one(
     }
 }
 
-/// The file the FFI text inspector reads the `[rust.dependencies]` /
-/// `[[rust.define.*]]` vocabulary from.
+/// The file the FFI text inspector reads the `[rust.dependencies]` vocabulary
+/// from.
 ///
-/// `package.ipe` cannot yet express those forms (the outstanding ergonomic
-/// Rust-FFI work), so a `package.ipe` with a sibling `ipe.toml` reads the FFI
-/// vocabulary from that sidecar; otherwise the manifest path itself is read.
-fn ffi_define_source(manifest_path: &Path) -> PathBuf {
+/// `package.ipe` cannot yet express `[rust.dependencies]` (the outstanding
+/// ergonomic Rust-FFI work), so a native `package.ipe` keeps that vocabulary in
+/// a sibling `ipe.toml` sidecar, which is read here. A path that is already an
+/// `ipe.toml` (or any non-`package.ipe`) is read as-is, and a `package.ipe`
+/// with no sidecar falls back to itself so a pure-Ipê manifest stays a no-op.
+fn ffi_vocabulary_source(manifest_path: &Path) -> PathBuf {
     if manifest_path.file_name().and_then(|n| n.to_str()) == Some(PROJECT_MANIFEST)
         && let Some(dir) = manifest_path.parent()
     {
@@ -1760,6 +1756,19 @@ fn ffi_define_source(manifest_path: &Path) -> PathBuf {
         }
     }
     manifest_path.to_path_buf()
+}
+
+/// Returns an error if `text` contains a legacy `[[rust.define.*]]` TOML table,
+/// directing the user to `ipe migrate config` to convert it to `foreign` declarations.
+fn reject_legacy_define_tables(text: &str) -> Result<(), CliError> {
+    if text.contains("[[rust.define.") {
+        return Err(CliError::Usage(
+            "[[rust.define.*]] is no longer supported — \
+             run `ipe migrate config` to convert your FFI definitions \
+             to `foreign` declarations in `src/Ffi/<Crate>.ipe`",
+        ));
+    }
+    Ok(())
 }
 
 /// Install the registry FFI dependencies declared in `manifest_path`'s
@@ -1777,7 +1786,7 @@ fn ffi_define_source(manifest_path: &Path) -> PathBuf {
 /// would silently omit bindings for crates that require them to generate their
 /// API surface. The jail, not pre-verification, is the confinement boundary.
 ///
-/// Pure-Ipê manifests (no `[rust.dependencies]` and no `[rust.wrapper]`) are a
+/// Pure-Ipê manifests without `[rust.dependencies]` or `[rust.wrapper]` are a
 /// no-op: the function returns `Ok(())` immediately.
 ///
 /// # Errors
@@ -1788,12 +1797,10 @@ pub fn install_registry_deps_for_project(
     allow_build_scripts: bool,
 ) -> Result<(), CliError> {
     let project_root = manifest_path.parent().unwrap_or_else(|| Path::new("."));
-    // The `[rust.dependencies]` / `[[rust.define.*]]` FFI vocabulary is only
-    // expressible in a legacy `ipe.toml`; lifting it into `package.ipe` is the
-    // outstanding ergonomic Rust-FFI work. A native package therefore keeps that
-    // vocabulary in an `ipe.toml` sidecar next to its `package.ipe`, which the FFI
-    // text inspector reads here.
-    let ffi_source = ffi_define_source(manifest_path);
+    // The `[rust.dependencies]` FFI vocabulary lives in the `ipe.toml` sidecar
+    // for a native `package.ipe`, so resolve the source that actually carries it
+    // before scanning for dependencies.
+    let ffi_source = ffi_vocabulary_source(manifest_path);
     let text = crate::io_bounded::read_to_string_capped(
         &ffi_source,
         crate::io_bounded::MANIFEST_READ_CAP,
@@ -1842,15 +1849,10 @@ pub fn install_registry_deps_for_project(
             )));
         }
     };
-    let mut closures = rust_define_closures_from_manifest(&text);
-    let mut structs = rust_define_structs_from_manifest(&text);
-    let mut enums = rust_define_enums_from_manifest(&text);
-    // Also lift any `foreign` declarations from the project's source files.
+    reject_legacy_define_tables(&text)?;
+    // Lift `foreign` declarations from the project's source files.
     let src_root = project_root.join("src");
-    let (fc, fs, fe) = scan_foreign_defines(&src_root)?;
-    closures.extend(fc);
-    structs.extend(fs);
-    enums.extend(fe);
+    let (closures, structs, enums) = scan_foreign_defines(&src_root)?;
     let sole_dep = deps.len() <= 1;
     for item in &items {
         let item_crate = item
@@ -2117,18 +2119,10 @@ pub fn run_install(rest: &[String]) -> Result<(), CliError> {
             )));
         }
     };
-    // Any `[[rust.define.*]]` entries are merged per-crate below, keyed by the
-    // crate's inspection `name`/`pkg` field, so an author-declared adapter or
-    // struct flows through the driver's decode gate exactly like an inspected
-    // binding. `sole_dep` decides whether an unqualified entry may attach.
-    let mut closures = rust_define_closures_from_manifest(&text);
-    let mut structs = rust_define_structs_from_manifest(&text);
-    let mut enums = rust_define_enums_from_manifest(&text);
-    // Also lift any `foreign` declarations from the project's source files.
-    let (fc, fs, fe) = scan_foreign_defines(Path::new("src"))?;
-    closures.extend(fc);
-    structs.extend(fs);
-    enums.extend(fe);
+    reject_legacy_define_tables(&text)?;
+    // Lift `foreign` declarations from the project's source files; merge them
+    // per-crate below. `sole_dep` decides whether an unqualified entry attaches.
+    let (closures, structs, enums) = scan_foreign_defines(Path::new("src"))?;
     let sole_dep = deps.len() <= 1;
     for item in items {
         // The crate's own name, from its inspection document, is the key an
@@ -2196,16 +2190,16 @@ struct ManifestDep {
 /// lives in the unforgeable `FfiInterface` module exactly like every other
 /// binding (user `.ipe` source still cannot mint a `ForeignCall`).
 #[derive(Debug, PartialEq, Eq)]
-struct ManifestDefineClosure {
+pub(crate) struct ManifestDefineClosure {
     /// The dependency this closure adapter augments (the `[rust.dependencies]`
     /// key). Empty ⇒ attach to the sole dependency (an ambiguity when there is
     /// more than one, refused at merge).
-    krate: String,
+    pub(crate) krate: String,
     /// The wrapper name (the Ipê-facing binding / tri-artifact key).
-    name: String,
+    pub(crate) name: String,
     /// The exact author-declared target signature, verbatim from the manifest.
     /// It reaches emitted Rust only after re-parsing through `ClosureSig`.
-    signature: String,
+    pub(crate) signature: String,
 }
 
 /// One `[[rust.define.struct]]` manifest entry — the author-declared surface
@@ -2219,18 +2213,18 @@ struct ManifestDefineClosure {
 /// than emit-and-cargo-fail, and the wrapper lives in the unforgeable
 /// `FfiInterface` module exactly like every other binding.
 #[derive(Debug, PartialEq, Eq)]
-struct ManifestDefineStruct {
+pub(crate) struct ManifestDefineStruct {
     /// The dependency this struct augments (empty ⇒ the sole dependency).
-    krate: String,
+    pub(crate) krate: String,
     /// The constructor wrapper name (the Ipê-facing binding / tri-artifact key).
-    ctor: String,
+    pub(crate) ctor: String,
     /// The Rust type name to define.
-    struct_name: String,
+    pub(crate) struct_name: String,
     /// The struct fields as `(name, carrier-spelling)` pairs, in order.
-    fields: Vec<(String, String)>,
+    pub(crate) fields: Vec<(String, String)>,
     /// The requested derive tokens (validated against the closed allowlist in
     /// the driver, never rendered raw).
-    derives: Vec<String>,
+    pub(crate) derives: Vec<String>,
 }
 
 /// One `[[rust.define.enum]]` manifest entry — the author-declared surface that
@@ -2246,20 +2240,20 @@ struct ManifestDefineStruct {
 /// over-drops rather than emit-and-cargo-fail, and the wrappers live in the
 /// unforgeable `FfiInterface` module exactly like every other binding.
 #[derive(Debug, PartialEq, Eq)]
-struct ManifestDefineEnum {
+pub(crate) struct ManifestDefineEnum {
     /// The dependency this enum augments (empty ⇒ the sole dependency).
-    krate: String,
+    pub(crate) krate: String,
     /// The constructor-wrapper prefix (the Ipê-facing binding / tri-artifact
     /// key). Each variant's constructor is named `<ctor>_<snake(variant)>`.
-    ctor: String,
+    pub(crate) ctor: String,
     /// The Rust enum name to define.
-    enum_name: String,
+    pub(crate) enum_name: String,
     /// The variants as `(name, payload-carrier-spellings)` pairs, in order.
     /// An empty payload list is a unit variant.
-    variants: Vec<(String, Vec<String>)>,
+    pub(crate) variants: Vec<(String, Vec<String>)>,
     /// The requested derive tokens (validated against the closed allowlist in
     /// the driver, never rendered raw).
-    derives: Vec<String>,
+    pub(crate) derives: Vec<String>,
 }
 
 /// Extract the manifest's `[rust.dependencies]` / `["rust.dependencies"]`
@@ -2416,15 +2410,29 @@ fn find_inline_key(body: &str, key: &str) -> Option<usize> {
     None
 }
 
+/// The `snake_case` of a Rust type name (`CounterState` → `counter_state`), for
+/// the default constructor-wrapper name.
+pub(crate) fn to_snake_case(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 4);
+    for (i, c) in s.chars().enumerate() {
+        if c.is_ascii_uppercase() {
+            if i != 0 {
+                out.push('_');
+            }
+            out.push(c.to_ascii_lowercase());
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
 /// Extract the manifest's `[[rust.define.closure]]` array-of-tables entries.
 ///
-/// Each `[[rust.define.closure]]` header opens a new entry; its `name`,
-/// `signature`, and optional `crate` keys are read line-by-line until the next
-/// table header. Only complete entries (both `name` and `signature` present)
-/// are returned — an entry missing either is dropped here, never merged as a
-/// half-formed function. The `signature` string is carried verbatim; it is the
-/// driver's `ClosureSig` decode, not this reader, that validates it.
-fn rust_define_closures_from_manifest(text: &str) -> Vec<ManifestDefineClosure> {
+/// Used by `ipe migrate config` to read legacy toml define blocks and render
+/// equivalent `foreign` declarations. New code should declare FFI types via
+/// `foreign` in `src/Ffi/<Crate>.ipe` instead.
+pub(crate) fn rust_define_closures_from_manifest(text: &str) -> Vec<ManifestDefineClosure> {
     let mut in_table = false;
     let mut out: Vec<ManifestDefineClosure> = Vec::new();
     let mut cur: Option<(String, String, String)> = None; // (crate, name, signature)
@@ -2474,14 +2482,10 @@ fn rust_define_closures_from_manifest(text: &str) -> Vec<ManifestDefineClosure> 
 
 /// Extract the manifest's `[[rust.define.struct]]` array-of-tables entries.
 ///
-/// Each `[[rust.define.struct]]` header opens a new entry; `name` (the Rust
-/// type), `ctor` (the constructor wrapper name — defaults to `<snake>_new`),
-/// `fields` (an inline table of `field = "carrier"`), `derives` (an array), and
-/// optional `crate` are read line-by-line. Only entries with a `name` and at
-/// least one field are returned; a half-formed entry is dropped here, never
-/// merged. Field types and derives are carried verbatim; the driver's
-/// `StructDef` decode, not this reader, validates them.
-fn rust_define_structs_from_manifest(text: &str) -> Vec<ManifestDefineStruct> {
+/// Used by `ipe migrate config` to read legacy toml define blocks and render
+/// equivalent `foreign` declarations. New code should declare FFI types via
+/// `foreign` in `src/Ffi/<Crate>.ipe` instead.
+pub(crate) fn rust_define_structs_from_manifest(text: &str) -> Vec<ManifestDefineStruct> {
     #[derive(Default)]
     struct Acc {
         krate: String,
@@ -2498,8 +2502,6 @@ fn rust_define_structs_from_manifest(text: &str) -> Vec<ManifestDefineStruct> {
             && !a.name.is_empty()
             && !a.fields.is_empty()
         {
-            // Default the constructor name to `<snake(type)>_new` when the
-            // author did not spell one — the conventional ctor forwarder.
             let ctor = if a.ctor.is_empty() {
                 format!("{}_new", to_snake_case(&a.name))
             } else {
@@ -2560,15 +2562,10 @@ fn rust_define_structs_from_manifest(text: &str) -> Vec<ManifestDefineStruct> {
 
 /// Extract the manifest's `[[rust.define.enum]]` array-of-tables entries.
 ///
-/// Each `[[rust.define.enum]]` header opens a new entry; `name` (the Rust
-/// enum), `ctor` (the constructor-wrapper prefix — defaults to `<snake>_new`),
-/// `variants` (an inline table of `Variant = ["carrier", …]`, `[]` for a unit
-/// variant), `derives` (an array), and optional `crate` are read line-by-line.
-/// Only entries with a `name` and at least one variant are returned; a
-/// half-formed entry is dropped here, never merged. Variant names and payload
-/// types are carried verbatim; the driver's `EnumDef` decode, not this reader,
-/// validates them.
-fn rust_define_enums_from_manifest(text: &str) -> Vec<ManifestDefineEnum> {
+/// Used by `ipe migrate config` to read legacy toml define blocks and render
+/// equivalent `foreign` declarations. New code should declare FFI types via
+/// `foreign` in `src/Ffi/<Crate>.ipe` instead.
+pub(crate) fn rust_define_enums_from_manifest(text: &str) -> Vec<ManifestDefineEnum> {
     #[derive(Default)]
     struct Acc {
         krate: String,
@@ -2643,14 +2640,9 @@ fn rust_define_enums_from_manifest(text: &str) -> Vec<ManifestDefineEnum> {
     out
 }
 
-/// Parse a `define.enum` inline `variants` table body (`Increment = [],
-/// SetValue = ["i64"], Move = ["i64", "i64"]`) into `(variant-name,
-/// payload-carrier-spellings)` pairs, in declaration order. Each value is a
-/// bracketed list of carrier spellings (empty ⇒ a unit variant). Types are
-/// carried verbatim; the driver's `EnumDef` validates them.
-///
-/// The split is bracket-aware: a `,` inside a `[...]` payload list does not end
-/// a variant, so `Move = ["i64", "i64"]` reads as ONE two-payload variant.
+/// Parse a `define.enum` inline `variants` table body into
+/// `(variant-name, payload-carrier-spellings)` pairs, bracket-aware so a `,`
+/// inside a `[...]` payload list does not split the variant.
 fn parse_inline_variant_table(body: &str) -> Vec<(String, Vec<String>)> {
     let mut out: Vec<(String, Vec<String>)> = Vec::new();
     let mut depth = 0_i32;
@@ -2697,9 +2689,8 @@ fn parse_inline_variant_table(body: &str) -> Vec<(String, Vec<String>)> {
     out
 }
 
-/// Parse a `define.struct` inline `fields` table body (`value = "i64", tag =
-/// "String"`) into `(field-name, carrier-spelling)` pairs, in declaration
-/// order. Types are carried verbatim; the driver's `StructDef` validates them.
+/// Parse a `define.struct` inline `fields` table body into
+/// `(field-name, carrier-spelling)` pairs, in declaration order.
 fn parse_inline_field_table(body: &str) -> Vec<(String, String)> {
     body.split(',')
         .filter_map(|pair| {
@@ -2709,23 +2700,6 @@ fn parse_inline_field_table(body: &str) -> Vec<(String, String)> {
             (!name.is_empty() && !ty.is_empty()).then_some((name, ty))
         })
         .collect()
-}
-
-/// The `snake_case` of a Rust type name (`CounterState` → `counter_state`), for
-/// the default constructor-wrapper name.
-fn to_snake_case(s: &str) -> String {
-    let mut out = String::with_capacity(s.len() + 4);
-    for (i, c) in s.chars().enumerate() {
-        if c.is_ascii_uppercase() {
-            if i != 0 {
-                out.push('_');
-            }
-            out.push(c.to_ascii_lowercase());
-        } else {
-            out.push(c);
-        }
-    }
-    out
 }
 
 /// Whether a `[[rust.define.*]]` entry keyed by `entry_crate` attaches to
@@ -2916,7 +2890,7 @@ type ForeignDefines = (
 ///
 /// The returned vectors are the exact same `ManifestDefine*` shapes the TOML
 /// readers produce, so they feed unchanged into `merge_provides`.
-fn scan_foreign_defines(src_root: &Path) -> Result<ForeignDefines, CliError> {
+pub(crate) fn scan_foreign_defines(src_root: &Path) -> Result<ForeignDefines, CliError> {
     let mut closures = Vec::new();
     let mut structs = Vec::new();
     let mut enums = Vec::new();
@@ -4818,5 +4792,41 @@ derives = ["Clone", "Debug"]
             scan_foreign_defines(&dir).expect("no foreign keyword must not produce an error");
         let _ = std::fs::remove_dir_all(&dir);
         assert!(c.is_empty() && s.is_empty() && e.is_empty());
+    }
+
+    #[test]
+    fn legacy_define_tables_are_rejected_with_migration_hint() {
+        let toml_with_define = r#"
+[package]
+name = "my-pkg"
+
+[[rust.define.struct]]
+name = "Counter"
+fields = { value = "i64" }
+"#;
+        let err = reject_legacy_define_tables(toml_with_define)
+            .expect_err("must reject legacy [[rust.define.*]]");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("[[rust.define.*]] is no longer supported"),
+            "diagnostic must say what is rejected: {msg}"
+        );
+        assert!(
+            msg.contains("ipe migrate config"),
+            "diagnostic must point to the migration command: {msg}"
+        );
+    }
+
+    #[test]
+    fn clean_manifest_passes_the_define_table_guard() {
+        let toml_clean = r#"
+[package]
+name = "my-pkg"
+
+[rust.dependencies]
+iced = "=0.12.1"
+"#;
+        reject_legacy_define_tables(toml_clean)
+            .expect("manifest without [[rust.define.*]] must pass");
     }
 }

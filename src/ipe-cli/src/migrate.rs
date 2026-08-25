@@ -1,5 +1,6 @@
 //! `ipe migrate config` — render an existing `ipe.toml` into an equivalent
-//! `package.ipe`.
+//! `package.ipe`, and any `[[rust.define.*]]` blocks into a `foreign`-declaration
+//! `.ipe` FFI module.
 //!
 //! The command is mechanical: it reads the legacy `ipe.toml` through the same
 //! line-scanner every other reader uses ([`crate::project::parse_toml_manifest`]),
@@ -8,13 +9,20 @@
 //! infers, prompts, or edits the source — it is a pure `ProjectManifest -> String`
 //! projection followed by a guarded write.
 //!
+//! When the `ipe.toml` contains `[[rust.define.struct]]`, `[[rust.define.enum]]`,
+//! or `[[rust.define.closure]]` blocks, those are rendered as `foreign`
+//! declarations in a new `src/Ffi/<Crate>.ipe` module — one file per crate,
+//! emitted alongside the `package.ipe`. The `package.ipe` itself carries only the
+//! crate dependency; the defines move to the `.ipe` module.
+//!
 //! # Round-trip guarantee
 //!
 //! Every field is rendered as a blessed builder over string / nullary-constructor
 //! literals, exactly the shape [`crate::package_manifest::read_package_manifest`]
 //! accepts. Reading the emitted `package.ipe` back yields the identical
-//! `ProjectManifest`, so migration is lossless — a round-trip property test pins
-//! this (see this module's tests).
+//! `ProjectManifest`. The emitted `foreign` declarations round-trip through
+//! [`crate::ffi::scan_foreign_defines`] to the identical `ManifestDefine*` values
+//! the `[[rust.define.*]]` readers produced — a round-trip property test pins this.
 //!
 //! # Safety
 //!
@@ -26,6 +34,7 @@ use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
 use crate::CliError;
+use crate::ffi::{ManifestDefineClosure, ManifestDefineEnum, ManifestDefineStruct};
 use crate::project::{IpeDep, ProjectManifest};
 
 /// `ipe migrate config [--force]` — render the current project's `ipe.toml` into
@@ -49,6 +58,7 @@ pub fn run_migrate(rest: &[String]) -> Result<(), CliError> {
 
 /// Parse `migrate config`'s flags and perform the render + guarded write in the
 /// current directory.
+#[allow(clippy::too_many_lines)] // one linear command body: parse flags, read, render, write
 fn run_migrate_config(rest: &[String]) -> Result<(), CliError> {
     let mut force = false;
     for arg in rest {
@@ -76,18 +86,444 @@ fn run_migrate_config(rest: &[String]) -> Result<(), CliError> {
     // The wrapper's path / expose / capabilities live in the raw `[rust.wrapper]`
     // section, not on `ProjectManifest` (which carries only `has_rust_wrapper`),
     // so they are read verbatim here to render the wrapper stage faithfully.
-    let wrapper_text =
+    let toml_text =
         crate::io_bounded::read_to_string_capped(&toml_path, crate::io_bounded::MANIFEST_READ_CAP)?;
-    let wrapper = crate::ffi::rust_wrapper_from_manifest(&wrapper_text);
+    let wrapper = crate::ffi::rust_wrapper_from_manifest(&toml_text);
     let rendered = render_package_ipe(&manifest, wrapper.as_ref())?;
     write_package_ipe(&package_path, &rendered)?;
-
     println!(
-        "migrated {} -> {} (the ipe.toml is left in place; delete it once you are satisfied)",
+        "migrated {} -> {}",
         toml_path.display(),
         package_path.display()
     );
+
+    // Render any `[[rust.define.*]]` blocks as `foreign` declarations in a
+    // `src/Ffi/<Crate>.ipe` module — one file per crate that has defines.
+    let closures = crate::ffi::rust_define_closures_from_manifest(&toml_text);
+    let structs = crate::ffi::rust_define_structs_from_manifest(&toml_text);
+    let enums = crate::ffi::rust_define_enums_from_manifest(&toml_text);
+
+    if !closures.is_empty() || !structs.is_empty() || !enums.is_empty() {
+        // Group by crate name. An empty krate means "sole dependency" — collect the
+        // sole dep name from the manifest, or fall back to "Ffi" as a module name.
+        let sole_dep_name: Option<String> = manifest
+            .rust_dependencies
+            .keys()
+            .next()
+            .map(|k| k.replace('-', "_"));
+
+        // Collect every crate that has at least one define (the qualified krate name,
+        // normalised; empty krate binds to the sole dep when there is exactly one).
+        let mut crates: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+        for c in &closures {
+            crates.insert(effective_krate(&c.krate, sole_dep_name.as_deref()));
+        }
+        for s in &structs {
+            crates.insert(effective_krate(&s.krate, sole_dep_name.as_deref()));
+        }
+        for e in &enums {
+            crates.insert(effective_krate(&e.krate, sole_dep_name.as_deref()));
+        }
+
+        for krate in &crates {
+            let module_name = crate_to_module_name(krate);
+            let ffi_dir = PathBuf::from("src").join("Ffi");
+            std::fs::create_dir_all(&ffi_dir).map_err(|e| CliError::Io {
+                path: ffi_dir.clone(),
+                source: e,
+            })?;
+            let ffi_path = ffi_dir.join(format!("{module_name}.ipe"));
+            if ffi_path.is_file() && !force {
+                return Err(CliError::UsageOwned(format!(
+                    "ipe migrate config: {} already exists — pass --force to overwrite it",
+                    ffi_path.display()
+                )));
+            }
+            let c_for_krate: Vec<&ManifestDefineClosure> = closures
+                .iter()
+                .filter(|c| effective_krate(&c.krate, sole_dep_name.as_deref()) == *krate)
+                .collect();
+            let s_for_krate: Vec<&ManifestDefineStruct> = structs
+                .iter()
+                .filter(|s| effective_krate(&s.krate, sole_dep_name.as_deref()) == *krate)
+                .collect();
+            let e_for_krate: Vec<&ManifestDefineEnum> = enums
+                .iter()
+                .filter(|e| effective_krate(&e.krate, sole_dep_name.as_deref()) == *krate)
+                .collect();
+            let ffi_source = render_foreign_ffi_module(
+                &module_name,
+                krate,
+                &c_for_krate,
+                &s_for_krate,
+                &e_for_krate,
+            )?;
+            std::fs::write(&ffi_path, &ffi_source).map_err(|e| CliError::Io {
+                path: ffi_path.clone(),
+                source: e,
+            })?;
+            println!(
+                "migrated [[rust.define.*]] -> {} ({} struct(s), {} enum(s), {} closure(s))",
+                ffi_path.display(),
+                s_for_krate.len(),
+                e_for_krate.len(),
+                c_for_krate.len()
+            );
+        }
+    }
+
+    println!("(the ipe.toml is left in place; delete it once you are satisfied)");
     Ok(())
+}
+
+/// Resolve an entry's `krate` field to the effective crate name. An empty krate
+/// means "sole dependency" — substitute `sole_dep_name` when provided, or the
+/// placeholder `"ffi"` so the caller always has a valid identifier.
+fn effective_krate<'a>(krate: &'a str, sole_dep_name: Option<&'a str>) -> String {
+    if krate.is_empty() {
+        sole_dep_name.unwrap_or("ffi").to_owned()
+    } else {
+        krate.to_owned()
+    }
+}
+
+/// Convert a crate name (`iced`, `async-stripe`) to the Ipê module-name segment
+/// used in `src/Ffi/<module>.ipe` and `module Ffi.<module>`. Hyphens become
+/// underscores and the first letter is upper-cased — following Ipê's `Module.name`
+/// convention.
+fn crate_to_module_name(krate: &str) -> String {
+    let snake = krate.replace('-', "_");
+    let mut chars = snake.chars();
+    chars.next().map_or_else(String::new, |first| {
+        first.to_uppercase().collect::<String>() + chars.as_str()
+    })
+}
+
+/// Render the `foreign` declarations for one crate's defines into a complete
+/// `src/Ffi/<Crate>.ipe` source module.
+///
+/// The rendered source is the inverse of [`crate::ffi::ForeignReader`]: feeding
+/// it through [`crate::ffi::scan_foreign_defines`] yields the identical
+/// `ManifestDefine*` values the `[[rust.define.*]]` readers produced — the
+/// round-trip property test in this module's tests pins this.
+///
+/// # Errors
+/// [`CliError::UsageOwned`] when a carrier spelling is not one the `Ffi.*`
+/// vocabulary can express — an unrecognised carrier in the stored toml data
+/// would be a bug, but is caught here rather than silently emitting garbage.
+fn render_foreign_ffi_module(
+    module_name: &str,
+    krate: &str,
+    closures: &[&ManifestDefineClosure],
+    structs: &[&ManifestDefineStruct],
+    enums: &[&ManifestDefineEnum],
+) -> Result<String, CliError> {
+    // Collect all exposed names for the `exposing (…)` list.
+    let mut exposed: Vec<String> = Vec::new();
+    for s in structs {
+        exposed.push(s.struct_name.clone());
+    }
+    for e in enums {
+        exposed.push(e.enum_name.clone());
+    }
+    for c in closures {
+        exposed.push(c.name.clone());
+    }
+
+    let mut out = String::new();
+    let _ = writeln!(
+        out,
+        "module Ffi.{module_name} exposing ({})",
+        exposed.join(", ")
+    );
+    // No `import Ffi` — `Ffi.*` are blessed CLI-lift constructors, not an importable
+    // module; the compiler erases `foreign` declarations before canon, so the file
+    // compiles cleanly without any Ffi import.
+    for s in structs {
+        let _ = writeln!(out);
+        out.push_str(&render_foreign_struct(krate, s)?);
+    }
+    for e in enums {
+        let _ = writeln!(out);
+        out.push_str(&render_foreign_enum(krate, e)?);
+    }
+    for c in closures {
+        let _ = writeln!(out);
+        out.push_str(&render_foreign_closure(krate, c)?);
+    }
+    Ok(out)
+}
+
+/// Render one `ManifestDefineStruct` as a `foreign Name = Ffi.crate … |> …` declaration.
+fn render_foreign_struct(krate: &str, s: &ManifestDefineStruct) -> Result<String, CliError> {
+    let mut stages: Vec<String> = Vec::new();
+    stages.push(format!("Ffi.crate {}", string_lit(krate)));
+
+    // `Ffi.struct { field = Carrier, … }` — fields use `=` (record-value assignment syntax,
+    // not `:` type-annotation syntax), matching what `read_struct_fields` / `read_carrier_type_from_expr`
+    // parses: the parser sees a record-value `{ key = expr }`.
+    let field_parts: Vec<String> = s
+        .fields
+        .iter()
+        .map(|(name, carrier)| -> Result<String, CliError> {
+            let ffi_ty = carrier_to_ffi_type(carrier, &s.struct_name)?;
+            Ok(format!("{name} = {ffi_ty}"))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    stages.push(format!("Ffi.struct {{ {} }}", field_parts.join(", ")));
+
+    if !s.derives.is_empty() {
+        stages.push(format!("Ffi.derives {}", render_derives_list(&s.derives)?));
+    }
+
+    // Emit `Ffi.ctor` only when the stored ctor diverges from the default.
+    let default_ctor = format!("{}_new", to_snake_case(&s.struct_name));
+    if s.ctor != default_ctor {
+        stages.push(format!("Ffi.ctor {}", string_lit(&s.ctor)));
+    }
+
+    Ok(render_foreign_decl(&s.struct_name, &stages))
+}
+
+/// Render one `ManifestDefineEnum` as a `foreign Name = Ffi.crate … |> …` declaration.
+fn render_foreign_enum(krate: &str, e: &ManifestDefineEnum) -> Result<String, CliError> {
+    let mut stages: Vec<String> = Vec::new();
+    stages.push(format!("Ffi.crate {}", string_lit(krate)));
+
+    // `Ffi.enum [ Ffi.variant "Name" […], … ]` — inline list, single expression
+    // on one stage so the `|>` layout rule works correctly.
+    let variant_parts: Vec<String> = e
+        .variants
+        .iter()
+        .map(|(name, payload)| -> Result<String, CliError> {
+            if payload.is_empty() {
+                Ok(format!("Ffi.variant {} []", string_lit(name)))
+            } else {
+                let carriers: Vec<String> = payload
+                    .iter()
+                    .map(|c| carrier_to_ffi_expr(c, &e.enum_name))
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(format!(
+                    "Ffi.variant {} [ {} ]",
+                    string_lit(name),
+                    carriers.join(", ")
+                ))
+            }
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    stages.push(format!("Ffi.enum [ {} ]", variant_parts.join(", ")));
+
+    if !e.derives.is_empty() {
+        stages.push(format!("Ffi.derives {}", render_derives_list(&e.derives)?));
+    }
+
+    let default_ctor = format!("{}_new", to_snake_case(&e.enum_name));
+    if e.ctor != default_ctor {
+        stages.push(format!("Ffi.ctor {}", string_lit(&e.ctor)));
+    }
+
+    Ok(render_foreign_decl(&e.enum_name, &stages))
+}
+
+/// Render one `ManifestDefineClosure` as a `foreign name : Ffi.Fn = …` declaration.
+///
+/// The parser reads `foreign name [: annotation] = body` as a single declaration;
+/// the annotation and body are on the same `foreign` binding. The closure
+/// annotation form is `foreign name : Ffi.Fn =\n    Ffi.crate … |> Ffi.closure (…)`.
+fn render_foreign_closure(krate: &str, c: &ManifestDefineClosure) -> Result<String, CliError> {
+    // Parse the stored `Fn(P0, P1, …) -> R + Send + Sync + 'static` string back
+    // into params and return. This is the ONLY place we parse the signature string;
+    // the driver's `ClosureSig::parse` is the gate at install time.
+    let (params, ret) = parse_closure_sig(&c.signature).ok_or_else(|| {
+        CliError::UsageOwned(format!(
+            "ipe migrate config: closure `{}` has an unrecognised signature `{}` — \
+             expected `Fn(P0, …) -> R + Send + Sync + 'static`",
+            c.name, c.signature
+        ))
+    })?;
+
+    let param_exprs: Vec<String> = params
+        .iter()
+        .map(|p| carrier_to_ffi_expr(p, &c.name))
+        .collect::<Result<Vec<_>, _>>()?;
+    let ret_expr = carrier_to_ffi_expr(&ret, &c.name)?;
+
+    let fn_expr = if param_exprs.is_empty() {
+        format!("Ffi.fn [] {ret_expr}")
+    } else {
+        format!("Ffi.fn [ {} ] {ret_expr}", param_exprs.join(", "))
+    };
+
+    let stages = vec![
+        format!("Ffi.crate {}", string_lit(krate)),
+        format!("Ffi.closure ({fn_expr})"),
+    ];
+
+    // The closure annotation `Ffi.Fn` is part of the `foreign` declaration:
+    //   foreign name : Ffi.Fn =
+    //       Ffi.crate "…" |> Ffi.closure (…)
+    Ok(render_foreign_decl_closure(&c.name, &stages))
+}
+
+/// Assemble a `foreign name : Ffi.Fn = pipeline` closure declaration.
+///
+/// For closure annotations the name column is the same as for struct/enum
+/// (`foreign ` = 8 chars, name at col 9). Body uses 10-space indent (col 11).
+fn render_foreign_decl_closure(name: &str, stages: &[String]) -> String {
+    let mut out = String::new();
+    let _ = write!(out, "foreign {name} : Ffi.Fn =");
+    let mut iter = stages.iter();
+    if let Some(first) = iter.next() {
+        let _ = writeln!(out, "\n          {first}");
+    }
+    for stage in iter {
+        let _ = writeln!(out, "              |> {stage}");
+    }
+    out
+}
+
+/// Assemble a `foreign Name = pipeline` struct/enum declaration from ordered
+/// stages, using `|>` threading.
+///
+/// Body indentation: `foreign ` is 8 characters, so the shortest name `N` is at
+/// column 9 (1-indexed). The body must be at a column strictly greater than the
+/// name column — 10 spaces (column 11) satisfies this for all legal names.
+/// Continuation `|>` stages are at 12 spaces (column 13), strictly > 11.
+fn render_foreign_decl(name: &str, stages: &[String]) -> String {
+    let mut out = String::new();
+    let _ = write!(out, "foreign {name} =");
+    let mut iter = stages.iter();
+    if let Some(first) = iter.next() {
+        let _ = writeln!(out, "\n          {first}");
+    }
+    for stage in iter {
+        let _ = writeln!(out, "              |> {stage}");
+    }
+    out
+}
+
+/// Map a canonical carrier spelling (`"Int"`, `"String"`, `"Counter"`) to a
+/// `Ffi.*` type-annotation expression as used in `Ffi.struct { field : Carrier }`.
+///
+/// Scalar carriers map to their `Ffi.*` form; opaque names are passed through as
+/// bare upper-case identifiers (the `read_carrier_type_from_expr` path).
+fn carrier_to_ffi_type(carrier: &str, context: &str) -> Result<String, CliError> {
+    Ok(match carrier {
+        // Canonical Ipê spellings and lower-case toml aliases both accepted.
+        "Int" | "i64" | "int" => "Int".to_owned(),
+        "Float" | "f64" | "float" => "Float".to_owned(),
+        "Bool" | "bool" => "Bool".to_owned(),
+        "Char" | "char" => "Char".to_owned(),
+        "String" | "string" => "String".to_owned(),
+        "Bytes" | "bytes" | "Vec<u8>" => "Bytes".to_owned(),
+        other if other.chars().next().is_some_and(|c| c.is_ascii_uppercase()) => {
+            // Opaque handle — bare upper-case name, matches `Expr_::VarLocal` in reader.
+            other.to_owned()
+        }
+        other => {
+            return Err(CliError::UsageOwned(format!(
+                "ipe migrate config: carrier `{other}` in define for `{context}` cannot be \
+                 expressed in the `Ffi.*` vocabulary — accepted: Int, Float, Bool, Char, \
+                 String, Bytes, or an upper-case opaque handle name"
+            )));
+        }
+    })
+}
+
+/// Map a canonical carrier spelling to a `Ffi.*` builder expression as used in
+/// `Ffi.fn` param/return positions and `Ffi.variant` payload lists.
+///
+/// Scalar carriers become `Ffi.int` etc.; opaque names become `Ffi.opaque "Name"`.
+fn carrier_to_ffi_expr(carrier: &str, context: &str) -> Result<String, CliError> {
+    Ok(match carrier {
+        "Int" | "i64" | "int" => "Ffi.int".to_owned(),
+        "Float" | "f64" | "float" => "Ffi.float".to_owned(),
+        "Bool" | "bool" => "Ffi.bool".to_owned(),
+        "Char" | "char" => "Ffi.char".to_owned(),
+        "String" | "string" => "Ffi.string".to_owned(),
+        "Bytes" | "bytes" | "Vec<u8>" => "Ffi.bytes".to_owned(),
+        other if other.chars().next().is_some_and(|c| c.is_ascii_uppercase()) => {
+            format!("Ffi.opaque {}", string_lit(other))
+        }
+        other => {
+            return Err(CliError::UsageOwned(format!(
+                "ipe migrate config: carrier `{other}` in define for `{context}` cannot be \
+                 expressed in the `Ffi.*` vocabulary — accepted: Int, Float, Bool, Char, \
+                 String, Bytes, or an upper-case opaque handle name"
+            )));
+        }
+    })
+}
+
+/// Render a `#[derive]` list as `[ Ffi.clone, Ffi.debug, … ]`.
+fn render_derives_list(derives: &[String]) -> Result<String, CliError> {
+    let items: Vec<String> = derives
+        .iter()
+        .map(|d| {
+            derive_to_ffi_builder(d).ok_or_else(|| {
+                CliError::UsageOwned(format!(
+                    "ipe migrate config: derive `{d}` has no `Ffi.*` spelling — \
+                     accepted: Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Copy"
+                ))
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(inline_list(&items))
+}
+
+/// Map a Rust derive token to its `Ffi.<builder>` name — the inverse of
+/// [`crate::ffi::ffi_derive_name`].
+fn derive_to_ffi_builder(derive: &str) -> Option<String> {
+    let builder = match derive {
+        "Clone" => "Ffi.clone",
+        "Debug" => "Ffi.debug",
+        "Default" => "Ffi.default_",
+        "PartialEq" => "Ffi.partialEq",
+        "Eq" => "Ffi.eq",
+        "PartialOrd" => "Ffi.partialOrd",
+        "Ord" => "Ffi.ord",
+        "Hash" => "Ffi.hash",
+        "Copy" => "Ffi.copy",
+        _ => return None,
+    };
+    Some(builder.to_owned())
+}
+
+/// Parse `Fn(P0, P1, …) -> R + Send + Sync + 'static` into `(params, ret)`.
+/// Returns `None` when the signature does not match this exact shape.
+fn parse_closure_sig(sig: &str) -> Option<(Vec<String>, String)> {
+    // Strip the bound suffix first.
+    let core = sig.strip_suffix(" + Send + Sync + 'static").unwrap_or(sig);
+    // `Fn(params) -> R`
+    let rest = core.strip_prefix("Fn(")?;
+    let (params_str, ret_str) = rest.split_once(") -> ")?;
+    let params: Vec<String> = if params_str.trim().is_empty() {
+        Vec::new()
+    } else {
+        params_str
+            .split(',')
+            .map(|p| p.trim().to_owned())
+            .filter(|p| !p.is_empty())
+            .collect()
+    };
+    Some((params, ret_str.trim().to_owned()))
+}
+
+/// The `snake_case` of a Rust type name, matching the default-ctor logic in
+/// `ffi.rs` so we can detect whether the stored ctor is the default.
+fn to_snake_case(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 4);
+    for (i, c) in s.chars().enumerate() {
+        if c.is_ascii_uppercase() {
+            if i != 0 {
+                out.push('_');
+            }
+            out.push(c.to_ascii_lowercase());
+        } else {
+            out.push(c);
+        }
+    }
+    out
 }
 
 /// Write the rendered `package.ipe`, mapping an IO failure to [`CliError::Io`].
@@ -884,5 +1320,160 @@ mod tests {
             !rendered.contains("|>"),
             "a minimal manifest has no pipeline stages: {rendered}"
         );
+    }
+
+    // ── Foreign-define round-trip tests ──────────────────────────────────────
+
+    /// The core round-trip helper: render `(closures, structs, enums)` as a
+    /// `foreign` module, write it under a temp `src/Ffi/` tree, scan it back with
+    /// `scan_foreign_defines`, and assert byte-identity to the originals.
+    fn assert_foreign_round_trips(
+        test_name: &str,
+        krate: &str,
+        closures: &[crate::ffi::ManifestDefineClosure],
+        structs: &[crate::ffi::ManifestDefineStruct],
+        enums: &[crate::ffi::ManifestDefineEnum],
+    ) {
+        let root = std::env::temp_dir().join(format!("ipe_migrate_ffi_{test_name}"));
+        let _ = std::fs::remove_dir_all(&root);
+        let src_ffi = root.join("src").join("Ffi");
+        std::fs::create_dir_all(&src_ffi).expect("create src/Ffi/");
+
+        let module_name = crate_to_module_name(krate);
+        let c_refs: Vec<&crate::ffi::ManifestDefineClosure> = closures.iter().collect();
+        let s_refs: Vec<&crate::ffi::ManifestDefineStruct> = structs.iter().collect();
+        let e_refs: Vec<&crate::ffi::ManifestDefineEnum> = enums.iter().collect();
+
+        let source = render_foreign_ffi_module(&module_name, krate, &c_refs, &s_refs, &e_refs)
+            .unwrap_or_else(|e| panic!("render must not fail: {e}"));
+
+        let file_path = src_ffi.join(format!("{module_name}.ipe"));
+        std::fs::write(&file_path, &source).expect("write ffi module");
+
+        // Re-scan from the written file.
+        let (got_closures, got_structs, got_enums) =
+            crate::ffi::scan_foreign_defines(&root.join("src")).unwrap_or_else(|e| {
+                panic!(
+                    "scan_foreign_defines must not fail on rendered source; \
+                         error: {e}\n--- source ---\n{source}"
+                )
+            });
+
+        assert_eq!(
+            got_structs, structs,
+            "structs did not round-trip\n--- source ---\n{source}"
+        );
+        assert_eq!(
+            got_enums, enums,
+            "enums did not round-trip\n--- source ---\n{source}"
+        );
+        assert_eq!(
+            got_closures, closures,
+            "closures did not round-trip\n--- source ---\n{source}"
+        );
+    }
+
+    #[test]
+    fn foreign_round_trip_iced_counter_defines() {
+        // The three defines from the iced-counter ipe.toml, expressed in the
+        // canonical carrier spellings the `foreign` reader produces (uppercase:
+        // `"Int"` not `"i64"`). The TOML reader accepts `"i64"` too; the `foreign`
+        // reader normalizes to uppercase on read-back, so the round-trip goes through
+        // the normalized form.
+        let structs = vec![crate::ffi::ManifestDefineStruct {
+            krate: "iced".to_owned(),
+            ctor: "counter_new".to_owned(),
+            struct_name: "Counter".to_owned(),
+            fields: vec![("value".to_owned(), "Int".to_owned())],
+            derives: vec!["Default".to_owned(), "Clone".to_owned()],
+        }];
+        let enums = vec![crate::ffi::ManifestDefineEnum {
+            krate: "iced".to_owned(),
+            ctor: "message_new".to_owned(),
+            enum_name: "Message".to_owned(),
+            variants: vec![
+                ("Increment".to_owned(), vec![]),
+                ("Decrement".to_owned(), vec![]),
+            ],
+            derives: vec!["Clone".to_owned(), "Debug".to_owned()],
+        }];
+        let closures = vec![crate::ffi::ManifestDefineClosure {
+            krate: "iced".to_owned(),
+            name: "counter_update".to_owned(),
+            signature: "Fn(Int) -> Int + Send + Sync + 'static".to_owned(),
+        }];
+        assert_foreign_round_trips("iced_counter", "iced", &closures, &structs, &enums);
+    }
+
+    #[test]
+    fn foreign_round_trip_struct_with_explicit_ctor() {
+        // A struct with a non-default `ctor` must survive the round-trip.
+        let structs = vec![crate::ffi::ManifestDefineStruct {
+            krate: "demo".to_owned(),
+            ctor: "make_widget".to_owned(), // non-default — NOT `widget_new`
+            struct_name: "Widget".to_owned(),
+            fields: vec![
+                ("id".to_owned(), "Int".to_owned()),
+                ("label".to_owned(), "String".to_owned()),
+            ],
+            derives: vec!["Clone".to_owned(), "Debug".to_owned()],
+        }];
+        assert_foreign_round_trips("explicit_ctor", "demo", &[], &structs, &[]);
+    }
+
+    #[test]
+    fn foreign_round_trip_enum_with_payload_variants() {
+        // An enum with a mix of unit and payload variants.
+        let enums = vec![crate::ffi::ManifestDefineEnum {
+            krate: "mylib".to_owned(),
+            ctor: "event_new".to_owned(),
+            enum_name: "Event".to_owned(),
+            variants: vec![
+                ("Click".to_owned(), vec![]),
+                ("Move".to_owned(), vec!["Int".to_owned(), "Int".to_owned()]),
+                ("Text".to_owned(), vec!["String".to_owned()]),
+            ],
+            derives: vec!["Clone".to_owned()],
+        }];
+        assert_foreign_round_trips("payload_enum", "mylib", &[], &[], &enums);
+    }
+
+    #[test]
+    fn foreign_round_trip_closure_multi_param() {
+        // A closure with multiple parameters.
+        let closures = vec![crate::ffi::ManifestDefineClosure {
+            krate: "engine".to_owned(),
+            name: "process".to_owned(),
+            signature: "Fn(Int, Bool) -> String + Send + Sync + 'static".to_owned(),
+        }];
+        assert_foreign_round_trips("multi_param_closure", "engine", &closures, &[], &[]);
+    }
+
+    #[test]
+    fn parse_closure_sig_parses_canonical_form() {
+        assert_eq!(
+            parse_closure_sig("Fn(Int) -> Int + Send + Sync + 'static"),
+            Some((vec!["Int".to_owned()], "Int".to_owned()))
+        );
+        assert_eq!(
+            parse_closure_sig("Fn(Int, Bool) -> String + Send + Sync + 'static"),
+            Some((
+                vec!["Int".to_owned(), "Bool".to_owned()],
+                "String".to_owned()
+            ))
+        );
+        assert_eq!(
+            parse_closure_sig("Fn() -> Int + Send + Sync + 'static"),
+            Some((vec![], "Int".to_owned()))
+        );
+        assert_eq!(parse_closure_sig("not-a-sig"), None);
+    }
+
+    #[test]
+    fn crate_to_module_name_handles_hyphens_and_capitalisation() {
+        assert_eq!(crate_to_module_name("iced"), "Iced");
+        assert_eq!(crate_to_module_name("async-stripe"), "Async_stripe");
+        assert_eq!(crate_to_module_name("my_lib"), "My_lib");
+        assert_eq!(crate_to_module_name(""), "");
     }
 }
