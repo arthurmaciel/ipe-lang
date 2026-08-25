@@ -801,6 +801,34 @@ fn canon_custom_element_seal_rejects_secret() {
     assert_rejected("canon_custom_element_seal_secret", &src, "IPE-N0039");
 }
 
+/// The SEAL rejects a `Secret` in the DOWN slot regardless of the UP type
+/// (IPE-N0039). Pins that the secret exclusion holds independent of the sibling
+/// parameter — a secret-tier value must never be serialised down to browser JS.
+#[test]
+fn canon_custom_element_seal_rejects_secret_down_int_up() {
+    let src = format!("{HEAD}x : CustomElement Secret Int\nx = x\nmain = 1\n");
+    assert_rejected("canon_custom_element_seal_secret_int", &src, "IPE-N0039");
+}
+
+/// The SEAL rejects a reserved SINK type (`SqlFragment`) in the UP slot
+/// (IPE-N0039). Pins that the sink exclusion covers the up-event parameter too,
+/// not only the down-state one: a sink-privileged value crossing the seam would
+/// launder its sink privilege to untrusted browser JS.
+#[test]
+fn canon_custom_element_seal_rejects_sink_up() {
+    let src = format!("{HEAD}x : CustomElement Int SqlFragment\nx = x\nmain = 1\n");
+    assert_rejected("canon_custom_element_seal_sink_up", &src, "IPE-N0039");
+}
+
+/// The SEAL rejects a reserved sink-privileged handle (`Url`) as a boundary
+/// parameter (IPE-N0039). Pins that the exclusion set spans the sink-privileged
+/// handles, not just `Secret`/`SqlFragment`.
+#[test]
+fn canon_custom_element_seal_rejects_url() {
+    let src = format!("{HEAD}x : CustomElement Url Int\nx = x\nmain = 1\n");
+    assert_rejected("canon_custom_element_seal_url", &src, "IPE-N0039");
+}
+
 /// The SEAL rejects a type-variable boundary parameter (IPE-N0039): the seal is
 /// monomorphic and concrete, so a bare type variable — which has no single
 /// generated codec — is refused fail-closed.
