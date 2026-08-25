@@ -1,0 +1,36 @@
+module Main exposing (main)
+
+import Ipe.Io as Io
+import Ipe.String as String
+
+
+-- Two GENUINELY-DISTINCT generic record shapes that share the SAME field-name
+-- set `{q}`. `wrapOne` surfaces `{ q : a }` from its body; `firstOfPair`
+-- surfaces `{ q : ( a, a ) }`. Both are well-typed, so the backend must
+-- synthesise TWO distinct structs (`RecQ<T1>` for `{q:a}`, `RecQ2<T1>` for
+-- `{q:(a,a)}`) instead of raising IPE-I0001 — the name-set no longer names a
+-- parametric record uniquely. The generic template of each shape is folded once
+-- (no spurious duplication of alpha-equivalent occurrences).
+wrapOne : a -> a
+wrapOne value =
+    let
+        r =
+            { q = value }
+    in
+    r.q
+
+
+firstOfPair : a -> a
+firstOfPair value =
+    let
+        r =
+            { q = ( value, value ) }
+    in
+    case r.q of
+        ( x, _ ) ->
+            x
+
+
+main : Task Error ()
+main =
+    Io.println (String.fromInt (wrapOne 7 + firstOfPair 3))
