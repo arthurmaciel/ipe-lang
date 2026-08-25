@@ -9,18 +9,21 @@ module Lib.Auth exposing
     , verifyEmail
     )
 
-import Ipe.Maybe exposing (..)
+import Ipe.Maybe as Maybe exposing (..)
 import Ipe.Result as Result
 import Ipe.List as List
 import Ipe.String as String
 import Ipe.Task as Task
 import Ipe.Error as Error exposing (Error)
 
-import Github.Com.Google.Uuid as Uuid
 import Ipe.Auth as Auth
+import Ipe.Crypto as Crypto
+import Ipe.Db as Db exposing (Db)
+import Ipe.Db.Unsafe as DbUnsafe
 import Ipe.Db exposing (SqlValue(..))
 import Ipe.Db.Store as Store
-import Lib.Db as Db exposing (User, SessionUser)
+import Ipe.Dict as Dict
+import Lib.Db as Lib exposing (User, SessionUser)
 
 
 hashPassword : String -> String
@@ -39,40 +42,67 @@ verifyPassword password storedHash =
     Result.withDefault False (Auth.verifyPassword password storedHash)
 
 
+-- generateToken : Task Error String — CSPRNG-backed UUID via Crypto.randomToken.
+generateToken : () -> Task Error String
 generateToken _ =
-    Result.withDefault "" (Uuid.newString ())
+    Crypto.randomToken 32
 
 
--- createUser : Result Error String (verification token). The UNIQUE email
--- constraint (Store.unique "email") turns a duplicate into a driver error,
--- which we present as InvalidInput so the form renders it inline.
-createUser : String -> String -> Result Error String
-createUser email password =
-    let
-        passHash = hashPassword password
-        token = generateToken ()
+-- createUser : Task Error String (verification token). The UNIQUE email
+-- constraint turns a duplicate into a driver error surfaced as InvalidInput.
+createUser : Db -> String -> String -> Task Error String
+createUser conn email password =
+    generateToken ()
+        |> Task.andThen
+               (\token ->
+                   let
+                       passHash = hashPassword password
+                       newUser =
+                           { id = 0
+                           , email = email
+                           , passwordHash = passHash
+                           , verified = 0
+                           , verificationToken = token
+                           , createdAt = ""
+                           }
+                   in
+                       Task.fromResult Lib.userStore
+                           |> Task.andThen
+                                  (\store ->
+                                      Store.insert conn store newUser
+                                          |> Task.map (\_ -> token)
+                                          |> Task.onError
+                                                 (\_ ->
+                                                     Task.fail
+                                                         (Error.invalidInput
+                                                             "That email is already registered, or a server error occurred."))))
 
-        newUser =
-            { id = 0
-            , email = email
-            , passwordHash = passHash
-            , verified = 0
-            , verificationToken = token
-            , createdAt = ""
-            }
-    in
-        case Task.run (Store.insert Db.conn Db.userStore newUser) of
 
-            Ok _ ->
-                Ok token
+-- authenticateUser : Task Error User. Wrong email / wrong password both
+-- surface as PermissionDenied; DB errors propagate upstream.
+authenticateUser : Db -> String -> String -> Task Error User
+authenticateUser conn email password =
+    Task.fromResult Lib.userStore
+        |> Task.andThen
+               (\store ->
+                   Store.query store
+                       |> Store.where (Store.eq .email email)
+                       |> Store.toList conn
+                       |> Task.map List.head
+                       |> Task.andThen
+                              (\maybeUser ->
+                                  case maybeUser of
 
-            Err _ ->
-                Err
-                    (Error.invalidInput
-                        "That email is already registered, or a server error occurred.")
+                                      Nothing ->
+                                          Task.fail
+                                              (Error.permissionDenied
+                                                  |> Error.withMessage "Invalid email or password.")
+
+                                      Just user ->
+                                          Task.fromResult (checkCredentials password user)))
 
 
--- Verifies the password + verified flag, returning the whole user on success.
+-- Verifies password + verified flag, returning the whole user on success.
 checkCredentials : String -> User -> Result Error User
 checkCredentials password user =
     if verifyPassword password user.passwordHash then
@@ -91,87 +121,74 @@ checkCredentials password user =
                 |> Error.withMessage "Invalid email or password.")
 
 
--- authenticateUser : Result Error User. Wrong email / wrong password both
--- PermissionDenied; DB errors surface upstream.
-authenticateUser : String -> String -> Result Error User
-authenticateUser email password =
-    case Task.run (Store.findBy Db.conn Db.userStore "email" email) of
-
-        Err e ->
-            Err e
-
-        Ok Nothing ->
-            Err
-                (Error.permissionDenied
-                    |> Error.withMessage "Invalid email or password.")
-
-        Ok (Just user) ->
-            checkCredentials password user
-
-
--- createSession : Result Error String — generates a token, inserts the row,
+-- createSession : Task Error String — generates a token, inserts the row,
 -- returns the token for the cookie.
-createSession : Int -> Result Error String
-createSession userId =
-    let
-        token = generateToken ()
-        newSession =
-            { id = 0, userId = userId, token = token, createdAt = "" }
-    in
-        case Task.run (Store.insert Db.conn Db.sessionStore newSession) of
-
-            Ok _ ->
-                Ok token
-
-            Err e ->
-                Err e
-
-
--- getSessionUser : Result Error (Maybe SessionUser). A JOIN (users ⋈
--- sessions) — a single-table Store can't express it, so `Store.selectRaw`
--- runs the SQL and decodes each row into the typed `SessionUser` projection.
-getSessionUser : String -> Result Error (Maybe SessionUser)
-getSessionUser sessionToken =
-    case Task.run
-             (Store.selectRaw
-                 Db.conn
-                 Db.sessionUserCodec
-                 "SELECT u.id, u.email, u.created_at FROM users u INNER JOIN sessions s ON u.id = s.user_id WHERE s.token = ? LIMIT 1"
-                 [ SqlString sessionToken ]) of
-
-        Err e ->
-            Err e
-
-        Ok rows ->
-            Ok (List.head rows)
+createSession : Db -> Int -> Task Error String
+createSession conn userId =
+    generateToken ()
+        |> Task.andThen
+               (\token ->
+                   let
+                       newSession =
+                           { id = 0, userId = userId, token = token, createdAt = "" }
+                   in
+                       Task.fromResult Lib.sessionStore
+                           |> Task.andThen
+                                  (\store ->
+                                      Store.insert conn store newSession
+                                          |> Task.map (\_ -> token)))
 
 
--- verifyEmail : Result Error String — flip verified=1 for the row matching the
--- verification token (only while still unverified), via a typed read-write.
-verifyEmail : String -> Result Error String
-verifyEmail token =
-    case Task.run (findByToken token) of
-
-        Err e ->
-            Err e
-
-        Ok Nothing ->
-            Ok "Your email has been verified! You can now sign in."
-
-        Ok (Just user) ->
-            case Task.run
-                     (Store.update Db.conn Db.userStore { user | verified = 1 }) of
-
-                Err e ->
-                    Err e
-
-                Ok _ ->
-                    Ok "Your email has been verified! You can now sign in."
+-- getSessionUser : Task Error (Maybe SessionUser). Runs a JOIN
+-- (users ⋈ sessions) via raw SQL — single-table Store cannot express it.
+getSessionUser : Db -> String -> Task Error (Maybe SessionUser)
+getSessionUser conn sessionToken =
+    DbUnsafe.unsafeQuery
+        conn
+        "SELECT u.id, u.email, u.created_at FROM users u INNER JOIN sessions s ON u.id = s.user_id WHERE s.token = ? LIMIT 1"
+        [ SqlString sessionToken ]
+        |> Task.map (\rows -> List.head (List.filterMap decodeSessionUser rows))
 
 
-findByToken : String -> Task Error (Maybe User)
-findByToken token =
-    Store.query Db.userStore
-        |> Store.where_ (Store.eq "verificationToken" (SqlString token))
-        |> Store.where_ (Store.eq "verified" (SqlInt 0))
-        |> Store.toMaybe Db.conn
+decodeSessionUser : Dict String String -> Maybe SessionUser
+decodeSessionUser row =
+    case ( Dict.get "id" row, Dict.get "email" row, Dict.get "created_at" row ) of
+
+        ( Just idStr, Just email, Just createdAt ) ->
+            case String.toInt idStr of
+
+                Just id ->
+                    Just { id = id, email = email, createdAt = createdAt }
+
+                Nothing ->
+                    Nothing
+
+        _ ->
+            Nothing
+
+
+-- verifyEmail : Task Error String — flip verified=1 for the row matching the
+-- verification token (only while still unverified).
+verifyEmail : Db -> String -> Task Error String
+verifyEmail conn token =
+    Task.fromResult Lib.userStore
+        |> Task.andThen
+               (\store ->
+                   Store.query store
+                       |> Store.where (Store.eq .verificationToken token)
+                       |> Store.where (Store.eq .verified 0)
+                       |> Store.toList conn
+                       |> Task.map List.head
+                       |> Task.andThen
+                              (\maybeUser ->
+                                  case maybeUser of
+
+                                      Nothing ->
+                                          Task.succeed
+                                              "Your email has been verified! You can now sign in."
+
+                                      Just user ->
+                                          Store.update conn store { user | verified = 1 }
+                                              |> Task.map
+                                                     (\_ ->
+                                                         "Your email has been verified! You can now sign in.")))
