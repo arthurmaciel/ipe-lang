@@ -457,3 +457,210 @@ fn end_to_end_builds_and_prints_forty_two() -> DResult<()> {
     let _ = std::fs::remove_dir_all(out.join("target"));
     Ok(())
 }
+
+// ---------------------------------------------------------------------------
+// Regression: order-independent most-specific resolution
+// ---------------------------------------------------------------------------
+//
+// Three templates share the field-name set `{ q }`:
+//   T0: `{ q : a }`              specificity 0  (one generic)
+//   T1: `{ q : (a, a) }`         specificity 1  (tuple of two generics)
+//   T2: `{ q : ((a,a),(a,a)) }`  specificity 3  (nested tuple)
+//
+// A concrete use site `{ q : ((Int,Int),(Int,Int)) }` instantiation-matches all
+// three.  T2 is the uniquely most-specific.  A single-pass scan that stops at
+// the first equal-specificity pair produces declaration-order-dependent results.
+// The two-pass fix always picks T2 regardless of order.
+
+/// Build a `{ q : <ty> }` record type.
+fn q_record(q: Symbol, ty: IrType) -> IrType {
+    let mut fields = BTreeMap::new();
+    fields.insert(q, ty);
+    IrType::Record(fields)
+}
+
+/// Three-template program with the deepest template at position `deepest_pos`
+/// (0 = first, 2 = last).  The concrete use site is `{ q : ((Int,Int),(Int,Int)) }`.
+fn three_template_program(interner: &mut Interner, deepest_pos: usize) -> DResult<Program> {
+    let main_mod = interner.intern("Main")?;
+    let q = interner.intern("q")?;
+    let a = interner.intern("a")?;
+    let f0 = interner.intern("f0")?;
+    let f1 = interner.intern("f1")?;
+    let f2 = interner.intern("f2")?;
+    let fconc = interner.intern("fconc")?;
+    let p = interner.intern("p")?;
+
+    // T0: `{ q : a }` — specificity 0
+    let t0_rec = q_record(q, IrType::Generic(a));
+    // T1: `{ q : (a, a) }` — specificity 1
+    let t1_rec = q_record(
+        q,
+        IrType::Tuple(vec![IrType::Generic(a), IrType::Generic(a)]),
+    );
+    // T2: `{ q : ((a,a),(a,a)) }` — specificity 3
+    let t2_rec = q_record(
+        q,
+        IrType::Tuple(vec![
+            IrType::Tuple(vec![IrType::Generic(a), IrType::Generic(a)]),
+            IrType::Tuple(vec![IrType::Generic(a), IrType::Generic(a)]),
+        ]),
+    );
+    // Concrete: `{ q : ((Int,Int),(Int,Int)) }` — instantiation-matches all three
+    let conc_rec = q_record(
+        q,
+        IrType::Tuple(vec![
+            IrType::Tuple(vec![IrType::Int, IrType::Int]),
+            IrType::Tuple(vec![IrType::Int, IrType::Int]),
+        ]),
+    );
+
+    // All three generic template functions; we'll reorder them below.
+    let all_templates = [
+        (f0, t0_rec),
+        (f1, t1_rec),
+        (f2, t2_rec),
+    ];
+    // Rotate so T2 (index 2) ends up at `deepest_pos` (0 or 2 from callers).
+    // With deepest_pos=0: order is T2, T0, T1.
+    // With deepest_pos=2: order is T0, T1, T2 (the bug-triggering order).
+    let ordered = if deepest_pos == 0 {
+        [
+            all_templates[2].clone(),
+            all_templates[0].clone(),
+            all_templates[1].clone(),
+        ]
+    } else {
+        all_templates
+    };
+
+    let mut funcs: Vec<Func> = ordered
+        .into_iter()
+        .zip([0_u32, 1, 2])
+        .map(|((name, rec), raw_id)| Func {
+            id: FuncId::from_raw(raw_id),
+            name,
+            home: ModPath(vec![]),
+            type_params: vec![(a, BoundSet::UNBOUNDED)],
+            row_params: vec![],
+            params: vec![(p, rec.clone())],
+            ret: rec,
+            body: Expr::Var(p),
+        })
+        .collect();
+    funcs.push(Func {
+        id: FuncId::from_raw(3),
+        name: fconc,
+        home: ModPath(vec![]),
+        type_params: vec![],
+        row_params: vec![],
+        params: vec![(p, conc_rec.clone())],
+        ret: conc_rec,
+        body: Expr::Var(p),
+    });
+
+    Ok(program(main_mod, funcs, vec![], None))
+}
+
+/// Deepest template (specificity 3) defined LAST: a single-pass scan tied T0
+/// and T1 before reaching T2, producing a spurious IPE-I0001.  After the
+/// two-pass fix this must succeed and resolve the concrete shape to the
+/// most-specific struct.
+#[test]
+fn most_specific_resolution_order_independent_deepest_last() -> DResult<()> {
+    let mut interner = Interner::new();
+    let prog = three_template_program(&mut interner, 2)?;
+    let out = emit(&interner, &prog)?;
+    assert!(
+        out.contains("RecQ"),
+        "concrete use site must resolve to the most-specific struct:\n{out}"
+    );
+    Ok(())
+}
+
+/// Deepest template defined FIRST: was already correct under the old scan.
+/// Both orderings must produce the same outcome.
+#[test]
+fn most_specific_resolution_order_independent_deepest_first() -> DResult<()> {
+    let mut interner_first = Interner::new();
+    let prog_first = three_template_program(&mut interner_first, 0)?;
+    let out_first = emit(&interner_first, &prog_first)?;
+
+    let mut interner_last = Interner::new();
+    let prog_last = three_template_program(&mut interner_last, 2)?;
+    let out_last = emit(&interner_last, &prog_last)?;
+
+    assert!(
+        out_first.contains("RecQ"),
+        "deepest-first must resolve to a struct:\n{out_first}"
+    );
+    assert!(
+        out_last.contains("RecQ"),
+        "deepest-last must resolve to a struct:\n{out_last}"
+    );
+    Ok(())
+}
+
+/// True ambiguity: two templates at the same maximum specificity, both
+/// matching a single concrete use site.  The two-pass fix must still surface
+/// this as a `CompilerBug` rather than silently picking either one.
+///
+/// Templates: `{ q : (a, Int) }` and `{ q : (Int, a) }`, both specificity 2.
+/// Concrete: `{ q : (Int, Int) }` — instantiation-matches both.
+#[test]
+fn true_tie_at_max_specificity_is_ambiguity_error() -> DResult<()> {
+    let mut interner = Interner::new();
+    let main_mod = interner.intern("Main")?;
+    let q = interner.intern("q")?;
+    let a = interner.intern("a")?;
+    let fa = interner.intern("fa")?;
+    let fb = interner.intern("fb")?;
+    let fconc = interner.intern("fconc")?;
+    let p = interner.intern("p")?;
+
+    // `{ q : (a, Int) }` — specificity 2
+    let rec_a = q_record(q, IrType::Tuple(vec![IrType::Generic(a), IrType::Int]));
+    // `{ q : (Int, a) }` — specificity 2
+    let rec_b = q_record(q, IrType::Tuple(vec![IrType::Int, IrType::Generic(a)]));
+    // Concrete `{ q : (Int, Int) }` — matches both templates above at equal specificity
+    let rec_conc = q_record(q, IrType::Tuple(vec![IrType::Int, IrType::Int]));
+
+    let fn_a = Func {
+        id: FuncId::from_raw(0),
+        name: fa,
+        home: ModPath(vec![]),
+        type_params: vec![(a, BoundSet::UNBOUNDED)],
+        row_params: vec![],
+        params: vec![(p, rec_a.clone())],
+        ret: rec_a,
+        body: Expr::Var(p),
+    };
+    let fn_b = Func {
+        id: FuncId::from_raw(1),
+        name: fb,
+        home: ModPath(vec![]),
+        type_params: vec![(a, BoundSet::UNBOUNDED)],
+        row_params: vec![],
+        params: vec![(p, rec_b.clone())],
+        ret: rec_b,
+        body: Expr::Var(p),
+    };
+    let fn_conc = Func {
+        id: FuncId::from_raw(2),
+        name: fconc,
+        home: ModPath(vec![]),
+        type_params: vec![],
+        row_params: vec![],
+        params: vec![(p, rec_conc.clone())],
+        ret: rec_conc,
+        body: Expr::Var(p),
+    };
+
+    let prog = program(main_mod, vec![fn_a, fn_b, fn_conc], vec![], None);
+    let res = emit(&interner, &prog);
+    assert!(
+        matches!(res, Err(Diagnostic::CompilerBug { .. })),
+        "a true max-specificity tie must surface as CompilerBug, got {res:?}"
+    );
+    Ok(())
+}
