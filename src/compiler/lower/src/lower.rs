@@ -20016,10 +20016,12 @@ impl<'a> Lowerer<'a> {
                 // concrete inferred type (fail-closed, IPE-L0148): a `Secret`/
                 // reserved-sink payload and a `Decoder Value` subscription are both
                 // rejected — the untyped channel cannot be spelled and a secret can
-                // never be serialised to JS. On passing the seal, emission is still
-                // fail-closed (IPE-L0149, `Feature::JsPortTransport`) until the
-                // per-target live transport ships, so nothing undenoted reaches
-                // codegen. This is the port twin of the `CustomElement` gates.
+                // never be serialised to JS. On passing the seal the call lowers
+                // through the uniform kernel path to the live per-target transport
+                // (`js_send` / `js_subscribe`): outbound seal-encodes the payload to
+                // the browser, inbound decodes an untrusted payload through the same
+                // fail-closed bounded seal decoder. This is the port twin of the
+                // `CustomElement` gates.
                 Callee::Kernel(KernelFn::JsSend) if args.len() == 1 => {
                     let payload = args.first().ok_or_else(|| {
                         bug(
@@ -20028,7 +20030,7 @@ impl<'a> Lowerer<'a> {
                         )
                     })?;
                     self.reject_illegal_js_port_seal(payload)?;
-                    return Err(unsupported(payload.span, Feature::JsPortTransport));
+                    return Ok(Intercepted::Fallthrough(Some(peek)));
                 }
                 Callee::Kernel(KernelFn::JsSubscribe) if args.len() == 2 => {
                     let decoder = args.first().ok_or_else(|| {
@@ -20038,7 +20040,7 @@ impl<'a> Lowerer<'a> {
                         )
                     })?;
                     self.reject_illegal_js_port_seal(decoder)?;
-                    return Err(unsupported(decoder.span, Feature::JsPortTransport));
+                    return Ok(Intercepted::Fallthrough(Some(peek)));
                 }
                 // ── Debug.todo : String -> a — inject call-site location ──────
                 // The surface arity is 1 (user supplies only the note string).

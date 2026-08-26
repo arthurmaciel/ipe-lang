@@ -2798,6 +2798,17 @@ fn emit_tea_call(
         // `Cmd.publishNoEcho : String -> Dict String String -> Cmd msg`
         // Both map to the standard N-arg emit path (runtime live/pubsub.rs).
         KernelFn::CmdPublish | KernelFn::CmdPublishNoEcho => Ok(None),
+        // ── Ipe.Js ports: Js.send / Js.subscribe ─────────────────────────────────
+        // `Js.send : a -> Cmd msg`  →  `js_send(<payload>)`
+        // `Js.subscribe : Decoder a -> (a -> msg) -> Sub msg`
+        //   →  `js_subscribe(<decoder>, <to_msg>)`
+        // Both take their surface args in the runtime fn's order, so the default
+        // N-arg emit path renders the call verbatim. The payload's concrete type
+        // (`T: serde::Serialize`) and the decoder's `Decoder<IpeError, T>` are
+        // resolved by Rust inference at the call site; no boxing or re-wrap is
+        // needed — `js_send`/`js_subscribe` bound the handler `Send`-only, moving
+        // it into one detached task, the same shape `sub_subscribe_topic` uses.
+        KernelFn::JsSend | KernelFn::JsSubscribe => Ok(None),
         // (`Ipe.PubSub.publish` / `publishNoEcho` are `class = Web`, Task-shaped —
         // emitted in `emit_ui_call`, not here. They are not TEA-loop kernels.)
         // ── Ipe.WebSocket: onOpen / onMessage / onClose / onError ───────────

@@ -429,3 +429,102 @@ fn a_manifest_less_single_file_handle_discloses_custom_element() -> TestResult {
     let _ = std::fs::remove_dir_all(&dir);
     Ok(())
 }
+
+// ── the `js-port` disclosure axis ───────────────────────────────────────────
+
+/// A Web-shape app that reaches a `Js.send` / `Js.subscribe` port exchanges raw
+/// typed values with page JavaScript, so its inferred capability set must contain
+/// `js-port`. A port program discloses the same way a widget program discloses
+/// `custom-element`: through the `verify_capabilities` inference `ipe
+/// capabilities` reports.
+const JS_PORT_APP: &str = r#"module Main exposing (main)
+
+import Ipe.Tea.Web as Web
+import Ipe.Tea.Web.Cmd as Cmd
+import Ipe.Tea.Web.Sub as Sub
+import Ipe.Ui as Ui
+import Ipe.Js as Js
+import Ipe.Json.Decode as Decode
+
+type alias Model = { n : Int }
+
+type Msg = Tick | Got Int
+
+init : a -> ( Model, Cmd.Cmd Msg )
+init _r =
+    ( { n = 0 }, Cmd.none )
+
+update : Msg -> Model -> ( Model, Cmd.Cmd Msg )
+update msg model =
+    case msg of
+        Tick ->
+            ( model, Js.send model.n )
+
+        Got k ->
+            ( { n = k }, Cmd.none )
+
+view : Model -> Element Msg
+view _model =
+    Ui.text "ok"
+
+subscriptions : Model -> Sub.Sub Msg
+subscriptions _model =
+    Js.subscribe Decode.int Got
+
+main =
+    Web.app
+        { init = init, update = update, view = view, subscriptions = subscriptions
+        , routes = [], notFound = Tick
+        }
+"#;
+
+/// Write [`JS_PORT_APP`] as a manifest-less single file and return its dir.
+fn js_port_project(tag: &str) -> Result<PathBuf, Box<dyn Error>> {
+    let dir = std::env::temp_dir().join(format!(
+        "ipe-jsport-{tag}-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir)?;
+    std::fs::write(dir.join("Main.ipe"), JS_PORT_APP)?;
+    Ok(dir)
+}
+
+/// A port program's inferred set is exactly `{js-port}`: declaring that set must
+/// verify. Now that a seal-legal port lowers to the live transport (rather than
+/// aborting at emission), the disclosure surfaces end-to-end.
+#[test]
+fn a_port_program_discloses_js_port() -> TestResult {
+    let dir = js_port_project("infer")?;
+    let entry = dir.join("Main.ipe");
+    let declared = BTreeSet::from([Capability::JsPort]);
+    let r = verify_capabilities(&entry, &declared);
+    assert!(
+        r.is_ok(),
+        "a port program's inferred set is exactly {{js-port}}: {r:?}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+    Ok(())
+}
+
+/// Fail-closed: a program that reaches a port but declares NOTHING on the
+/// `js-port` axis is rejected as under-declared — a port-bearing module can never
+/// hide the disclosure.
+#[test]
+fn a_port_program_that_hides_js_port_is_rejected() -> TestResult {
+    let dir = js_port_project("hide")?;
+    let entry = dir.join("Main.ipe");
+    let declared = BTreeSet::new();
+    let r = verify_capabilities(&entry, &declared);
+    assert!(
+        matches!(
+            &r,
+            Err(ipe::CliError::CapabilityMismatch { missing, .. })
+                if missing.contains(&"js-port")
+        ),
+        "a port program that omits `js-port` must be rejected as under-declared, got: {r:?}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+    Ok(())
+}

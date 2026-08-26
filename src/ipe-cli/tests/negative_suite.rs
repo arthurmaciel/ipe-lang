@@ -1303,14 +1303,16 @@ fn canon_user_kernel_alias_is_rejected() {
     assert_rejected("canon_user_kernel_alias_is_rejected", &src, "IPE-N0042");
 }
 
-// ── Ipe.Js ports — raw typed Ipê↔JS transport (IPE-L0148 / IPE-L0149) ──
+// ── Ipe.Js ports — raw typed Ipê↔JS transport (IPE-L0148 boundary seal) ──
 //
 // A port (`Js.send` / `Js.subscribe`) reuses the same seal the `CustomElement`
 // boundary enforces, but on the CONCRETE inferred crossing type (a port's `a` is
-// inferred, not annotated). These pin: a seal-legal port type-checks + seal-checks
-// then fails closed at emission (IPE-L0149, transport not shipped); a `Secret`
-// payload and an untyped `Value` decoder are both rejected fail-closed (IPE-L0148)
-// — a secret must never cross to JS, and the untyped channel cannot be spelled.
+// inferred, not annotated). A seal-legal port lowers through the uniform kernel
+// path to the `js_send` / `js_subscribe` runtime transport — outbound
+// seal-encodes the payload to the browser, inbound decodes an untrusted payload
+// through the fail-closed bounded seal decoder. A `Secret` payload and an untyped
+// `Value` decoder are both rejected fail-closed (IPE-L0148) — a secret must never
+// cross to JS, and the untyped channel cannot be spelled.
 //
 // A port CALL must be REACHABLE for its lowering gate to fire, so every fixture
 // wires the port into a real Web-shape TEA app (`update` / `subscriptions`), not a
@@ -1355,15 +1357,17 @@ fn js_port_app(decoder_expr: &str) -> String {
     )
 }
 
-/// A seal-LEGAL port (an `Int` payload out, an `Int` decoder in) type-checks and
-/// passes the boundary seal, then fails CLOSED at emission with IPE-L0149: the raw
-/// port transport (per-target lowering + JS runtime glue) is not shipped yet, so
-/// no undenoted seam reaches codegen. This is the port twin of the shipped
-/// custom-element emission gate — `ipe` accepts the type, the emit is fail-closed.
+/// A seal-LEGAL port (an `Int` payload out, an `Int` decoder in) type-checks,
+/// passes the boundary seal, and lowers through the uniform kernel path to the
+/// `js_send` / `js_subscribe` transport — so `ipe` ACCEPTS it (exit 0) and the
+/// emitted Rust is well-formed. This is the port twin of the shipped
+/// custom-element emission golden; the full `ipe`-accept ⇒ `cargo build` SEAL
+/// round-trip is pinned by the `js_port` e2e golden (`webview_e2e`), and the
+/// `js-port` capability disclosure by the `capabilities` suite.
 #[test]
-fn js_port_seal_legal_fails_closed_at_emission() {
+fn js_port_seal_legal_lowers_and_builds() {
     let src = js_port_app("Decode.int");
-    assert_rejected("js_port_seal_legal", &src, "IPE-L0149");
+    assert_compiles("js_port_seal_legal", &src);
 }
 
 /// A `Js.subscribe` whose decoder is `Decoder Value` (an untyped JSON hole) is

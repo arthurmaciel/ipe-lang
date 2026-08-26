@@ -2026,15 +2026,6 @@ const fn feature_label(f: Feature) -> &'static str {
              `CustomElement down up` boundary enforces [feature: \
              js-port-boundary-seal]"
         }
-        Feature::JsPortTransport => {
-            "a seal-legal `Js.send` / `Js.subscribe` port is accepted and \
-             seal-checked at the type level, but its raw transport — the \
-             per-target lowering (server-driven network stream vs client-WASM \
-             in-process) and the generated `ipe.send` / `ipe.onReceive` JS runtime \
-             glue — is not emittable yet, so a program that builds a port cannot be \
-             compiled to Rust until that transport ships [feature: \
-             js-port-transport]"
-        }
         Feature::FunctionElementEquality => {
             "a function value stored in a `List`/`Dict` is `Clone` (so it can be \
              stored and forwarded, and mapped/folded/filtered by the `List.map` \
