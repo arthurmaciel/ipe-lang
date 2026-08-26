@@ -398,6 +398,36 @@ pub fn render_page_full(sid: &str, base: &str, body: &str, csrf_token: &str) -> 
     page_shell(&head_extra, &body_inner, &tail_scripts)
 }
 
+/// Same as [`render_page_full`] but appends `overlay` (raw HTML) after the
+/// `#ipe-root` div. The overlay must carry `data-ipe-debugger` so the
+/// diff/patch engine ignores it.
+#[cfg(feature = "debugger")]
+fn render_page_full_with_overlay(
+    sid: &str,
+    base: &str,
+    body: &str,
+    csrf_token: &str,
+    overlay: &str,
+) -> String {
+    let sid_js = format!("{sid:?}");
+    let base_js = format!("{base:?}");
+    let csrf_js = format!("{csrf_token:?}");
+    let dev_banner = dev_console_banner(base);
+    let (hex16, b64) = client_js_hashes();
+    let client_src = format!("{base}/_ipe/client.{hex16}.js");
+    let integrity = format!("sha256-{b64}");
+    let config_js = web_client_config_js();
+    let head_extra = format!("<meta name=\"ipe-base\" content=\"{base}\">");
+    let body_inner = format!("<div id=\"ipe-root\">{body}</div>{dev_banner}{overlay}");
+    let widget_scripts = widget_assets::page_scripts(base, widget_assets::WidgetTransport::Server);
+    let tail_scripts = format!(
+        "<script>window.__IPE_SID={sid_js};window.__IPE_BASE={base_js};window.__IPE_CSRF_TOKEN={csrf_js};{config_js}</script>\
+         <script src=\"{client_src}\" integrity=\"{integrity}\" crossorigin=\"anonymous\"></script>\
+         {widget_scripts}"
+    );
+    page_shell(&head_extra, &body_inner, &tail_scripts)
+}
+
 /// Floating "🔍 Console" link injected into every dev-mode page. The
 /// implementation lives in the always-compiled `telemetry` module so the
 /// Ipe.Http.Server path (`server.rs`) shares the identical byte-exact banner;
@@ -423,6 +453,10 @@ pub struct SessionEntry<Model, Msg> {
     pub seq: u64,
     pub sse_tx: Option<SseTx>,
     pub msg_tx: Sender<Msg>,
+    /// Bounded rolling message log for time-travel scrubbing. Present only
+    /// when the `debugger` feature is active; absent builds pay no cost.
+    #[cfg(feature = "debugger")]
+    pub history: crate::debugger::RecordBuffer<Msg, Model>,
 }
 
 /// SSE patches envelope. The browser client (`live/client.js`) consumes the
@@ -743,6 +777,8 @@ async fn drive_session<Model, Msg, FUpdate, FView, FSubs>(
         // (finite cardinality), never a payload — see telemetry::variant_name.
         // Extracted BEFORE `update` consumes `msg`.
         let msg_name = crate::telemetry::variant_name(&msg);
+        #[cfg(feature = "debugger")]
+        let msg_for_history = msg.clone();
         let msg_started = std::time::Instant::now();
         let (next, cmd) = update(msg, model);
         crate::telemetry::metric_observe(
@@ -773,6 +809,9 @@ async fn drive_session<Model, Msg, FUpdate, FView, FSubs>(
             e.index = build_index(&tree);
             e.model = next.clone();
             e.seq += 1;
+            #[cfg(feature = "debugger")]
+            e.history
+                .record(msg_for_history, next.clone(), &|m, mdl| (*update)(m, mdl));
             (patches, e.seq, e.sse_tx.clone(), noop)
         };
         // Msg counter (Go parity: ipe_web_msg_total{name,outcome,noop}). All
@@ -1035,6 +1074,59 @@ fn page_response(
         h.append(axum::http::header::SET_COOKIE, v);
     }
     // Security response headers (Go parity + hardening) — page GET only.
+    for (name, val) in csrf::security_headers() {
+        if let Ok(v) = axum::http::HeaderValue::from_str(&val) {
+            h.insert(axum::http::HeaderName::from_static(name), v);
+        }
+    }
+    resp
+}
+
+/// Same as [`page_response`] but injects `overlay` (raw HTML) after `#ipe-root`
+/// via [`render_page_full_with_overlay`]. Active only with the `debugger` feature.
+#[cfg(feature = "debugger")]
+fn page_response_with_overlay(
+    sid: &str,
+    body: &str,
+    overlay: &str,
+    csrf_token: &str,
+    headers: &axum::http::HeaderMap,
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    let html = render_page_full_with_overlay(sid, &web_base_path(), body, csrf_token, overlay);
+    let secure = if csrf::cookies_secure() || request_is_https(headers) {
+        "; Secure"
+    } else {
+        ""
+    };
+    let same_site = if csrf::frame_ancestors().is_some() {
+        "None"
+    } else {
+        "Lax"
+    };
+    let max_age = web_ttl().as_secs();
+    let session_cookie = format!(
+        "{}={sid}; Path={}; HttpOnly; SameSite={same_site}{secure}; Max-Age={max_age}",
+        session_cookie_name(),
+        cookie_path()
+    );
+    let csrf_cookie = csrf::csrf_set_cookie(csrf_token, &web_base_path());
+    let mut resp = (
+        axum::http::StatusCode::OK,
+        [(
+            axum::http::header::CONTENT_TYPE,
+            "text/html; charset=utf-8".to_string(),
+        )],
+        html,
+    )
+        .into_response();
+    let h = resp.headers_mut();
+    if let Ok(v) = axum::http::HeaderValue::from_str(&session_cookie) {
+        h.append(axum::http::header::SET_COOKIE, v);
+    }
+    if let Ok(v) = axum::http::HeaderValue::from_str(&csrf_cookie) {
+        h.append(axum::http::header::SET_COOKIE, v);
+    }
     for (name, val) in csrf::security_headers() {
         if let Ok(v) = axum::http::HeaderValue::from_str(&val) {
             h.insert(axum::http::HeaderName::from_static(name), v);
@@ -1635,7 +1727,8 @@ where
                 Some((sid, store::StoreHit::Web(handle))) => {
                     // sid is carried from the cookie lookup; the "hit but no sid"
                     // state is unrepresentable.
-                    let body = {
+                    #[cfg_attr(not(feature = "debugger"), allow(unused_variables))]
+                    let (body, history_labels, history_total) = {
                         let mut e = handle.lock().unwrap_or_else(|e| e.into_inner());
                         e.model = (st.route_resolver)(e.model.clone(), uri.path());
                         let mut tree = (st.view)(e.model.clone());
@@ -1643,9 +1736,29 @@ where
                         style_inject::apply_style_injections(&mut tree);
                         e.index = build_index(&tree);
                         e.last_view = tree.clone();
-                        render_html(&tree)
+                        let body = render_html(&tree);
+                        #[cfg(feature = "debugger")]
+                        let labels: Vec<String> =
+                            e.history.msgs().map(|m| format!("{m:?}")).collect();
+                        #[cfg(not(feature = "debugger"))]
+                        let labels: Vec<String> = Vec::new();
+                        let total = labels.len();
+                        (body, labels, total)
                     };
                     st.store.set(&sid, handle).await; // touch last-seen
+                    #[cfg(feature = "debugger")]
+                    {
+                        let base = web_base_path();
+                        let overlay = crate::debugger::server::overlay_html(
+                            &history_labels,
+                            history_total,
+                            &base,
+                        );
+                        return page_response_with_overlay(
+                            &sid, &body, &overlay, &csrf_tok, &headers,
+                        );
+                    }
+                    #[cfg(not(feature = "debugger"))]
                     return page_response(&sid, &body, &csrf_tok, &headers);
                 }
                 Some((sid, store::StoreHit::Cold(m))) => {
@@ -1700,6 +1813,11 @@ where
             // a channel — no Go bound to match; 1024 is far above any
             // legitimate burst of user-driven events.
             let (msg_tx, msg_rx) = mpsc::channel::<Msg>(1024);
+            #[cfg(feature = "debugger")]
+            let history_init = crate::debugger::RecordBuffer::new(
+                model.clone(),
+                crate::debugger::DEFAULT_HISTORY_CAP,
+            );
             let entry = Arc::new(Mutex::new(SessionEntry {
                 model,
                 last_view: tree,
@@ -1707,6 +1825,8 @@ where
                 seq: 0,
                 sse_tx: None,
                 msg_tx: msg_tx.clone(),
+                #[cfg(feature = "debugger")]
+                history: history_init,
             }));
             st.store.set(&sid, entry.clone()).await;
 
@@ -1734,6 +1854,13 @@ where
             // Fire init's Cmd into the loop (None for a cold-restored session).
             run_cmd(cmd0, &msg_tx, &sid);
 
+            #[cfg(feature = "debugger")]
+            {
+                let base = web_base_path();
+                let overlay = crate::debugger::server::overlay_html(&[], 0, &base);
+                return page_response_with_overlay(&sid, &body, &overlay, &csrf_tok, &headers);
+            }
+            #[cfg(not(feature = "debugger"))]
             page_response(&sid, &body, &csrf_tok, &headers)
         }
 
@@ -2154,6 +2281,75 @@ where
             )
         }
 
+        // ── POST /_ipe/debug/scrub ────────────────────────────────────────
+        // Session-scoped time-travel scrub endpoint. Registered only when the
+        // `debugger` feature is active. The CSRF middleware (wrapped around
+        // the whole router) already validates `X-Ipe-Csrf` before this handler
+        // runs; the handler itself only needs to authenticate the session.
+        //
+        // Request body: `{"index": N}` — reconstruct model at retained step N.
+        // Response: `{"body": "<html>"}` — the view rendered at step N.
+        // Out-of-range N is clamped to the last retained step. No Cmd is fired.
+        // Live history is never mutated — reconstruct is a pure re-fold.
+        #[cfg(feature = "debugger")]
+        async fn scrub_handler<Model, Msg, FInit, FUpdate, FView, FSubs>(
+            State(st): State<WebState<Model, Msg, FInit, FUpdate, FView, FSubs>>,
+            headers: axum::http::HeaderMap,
+            axum::Json(body): axum::Json<serde_json::Value>,
+        ) -> axum::response::Response
+        where
+            Model: Clone + PartialEq + Send + 'static,
+            Msg: Clone + Send + std::fmt::Debug + 'static,
+            FInit: Send + Sync + 'static,
+            FUpdate: Fn(Msg, Model) -> (Model, crate::tea::IpeCmd<Msg>) + Send + Sync + 'static,
+            FView: Fn(Model) -> crate::html::Html<Msg> + Send + Sync + 'static,
+            FSubs: Send + Sync + 'static,
+        {
+            use axum::response::IntoResponse;
+            let sid = match sid_from_cookie(&headers) {
+                Some(s) => s,
+                None => {
+                    return (axum::http::StatusCode::UNAUTHORIZED, "no session").into_response();
+                }
+            };
+            let handle = match st.store.get(&sid).await {
+                Some(store::StoreHit::Web(h)) => h,
+                _ => {
+                    return (axum::http::StatusCode::NOT_FOUND, "session not found")
+                        .into_response();
+                }
+            };
+            let requested_n = body
+                .get("index")
+                .and_then(|v| v.as_u64())
+                .map(|n| n as usize)
+                .unwrap_or(0);
+            let model_at_n = {
+                let e = handle.lock().unwrap_or_else(|e| e.into_inner());
+                let total = e.history.len();
+                let n = requested_n.min(total.saturating_sub(1));
+                e.history.reconstruct(n, &|m, mdl| (*st.update)(m, mdl))
+            };
+            let model = match model_at_n {
+                Some(m) => m,
+                None => {
+                    return (axum::http::StatusCode::NOT_FOUND, "step out of range")
+                        .into_response();
+                }
+            };
+            let mut tree = (st.view)(model);
+            assign_ipe_ids(&mut tree, "r");
+            style_inject::apply_style_injections(&mut tree);
+            let html_body = render_html(&tree);
+            let resp_json = serde_json::json!({ "body": html_body });
+            (
+                axum::http::StatusCode::OK,
+                [(axum::http::header::CONTENT_TYPE, "application/json")],
+                resp_json.to_string(),
+            )
+                .into_response()
+        }
+
         // Cloned for the shutdown path's dev-only reload push — the router's
         // `.with_state(state)` takes ownership of `state` below.
         let shutdown_store = state.store.clone();
@@ -2164,7 +2360,15 @@ where
                 get(sse_handler::<Model, Msg, FInit, FUpdate, FView, FSubs>),
             )
             .route("/_ipe/event", event_route)
-            .route(&client_js_route_path, get(serve_client_js))
+            .route(&client_js_route_path, get(serve_client_js));
+        #[cfg(feature = "debugger")]
+        {
+            router = router.route(
+                "/_ipe/debug/scrub",
+                post(scrub_handler::<Model, Msg, FInit, FUpdate, FView, FSubs>),
+            );
+        }
+        let mut router = router
             // Observability surface (Go parity — observability.go).
             .route("/_ipe/healthz", get(observability::healthz))
             .route("/_ipe/readyz", get(observability::readyz))
@@ -2376,6 +2580,8 @@ mod reload_push_tests {
             seq: 0,
             sse_tx,
             msg_tx: tx,
+            #[cfg(feature = "debugger")]
+            history: crate::debugger::RecordBuffer::new((), crate::debugger::DEFAULT_HISTORY_CAP),
         }))
     }
 
@@ -2850,6 +3056,8 @@ mod sse_reconnect_reconcile_tests {
             seq: 0,
             sse_tx: None,
             msg_tx,
+            #[cfg(feature = "debugger")]
+            history: crate::debugger::RecordBuffer::new(page, crate::debugger::DEFAULT_HISTORY_CAP),
         }));
 
         (entry, route_resolver, route_matched, view)
@@ -2951,6 +3159,11 @@ mod sse_reconnect_reconcile_tests {
             seq: 0,
             sse_tx: None,
             msg_tx,
+            #[cfg(feature = "debugger")]
+            history: crate::debugger::RecordBuffer::new(
+                TestPage::Home,
+                crate::debugger::DEFAULT_HISTORY_CAP,
+            ),
         }));
 
         reconcile(&entry, &route_matched, &route_resolver, &view, "/");
