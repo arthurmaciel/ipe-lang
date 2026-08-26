@@ -221,6 +221,10 @@ web-sys = { version = "0.3", optional = true, features = [
     "KeyboardEvent",
     "Location",
     "HtmlDocument",
+    # `Ui.widget` wasm-client up-event: the glue dispatches a typed `CustomEvent`
+    # whose `detail` carries the encoded `up`; the sink reads it via checked
+    # `dyn_ref::<CustomEvent>` and folds the fail-closed-decoded msg into `update`.
+    "CustomEvent",
     # M4 Cmd/Sub browser bridge: fetch (Http.get/post/request) + WebSocket
     # client (Ipe.WebSocket).
     "Request",
@@ -421,7 +425,15 @@ websocket_client = ["tokio", "tokio/net", "tokio/sync", "tokio-tungstenite", "fu
 # `web`, so the native-window backend carries it transitively.
 # `crypto-core`: `web/mod.rs` SHA-256s the client-JS SRI integrity hash and
 # `web/csrf.rs` constant-time compares CSRF tokens via `subtle`.
-web = ["server", "http_client", "dep:serde_json", "json", "serde", "dep:serde_urlencoded", "async-trait", "tokio/signal", "tokio/process", "encoding", "uuid", "time-core", "crypto-core"]
+web = ["widget-assets", "server", "http_client", "dep:serde_json", "json", "serde", "dep:serde_urlencoded", "async-trait", "tokio/signal", "tokio/process", "encoding", "uuid", "time-core", "crypto-core"]
+# The `Ui.widget` custom-element glue generator + SRI-pinned asset addressing
+# (`widget_assets.rs`) as a STANDALONE surface, decoupled from the heavy `web`
+# server. `sha2` (content digest) rides `crypto-core`; `base64` (the SRI value)
+# rides `encoding`. The native CLI's static/wasm bundler compiles the runtime
+# with ONLY this feature to drive the ONE glue generator over the widget manifest
+# at build time — the same code the server path calls, no second glue. `web`
+# implies it so the server keeps `ipe_runtime::web::widget_assets::*` unchanged.
+widget-assets = ["crypto-core", "encoding"]
 # `db-postgres` (not bare `db`) selects a concrete sqlx driver — it also pulls
 # `sqlite`, so both driver code paths compile. `jwt` + `url` cover the
 # JWT/auth and URL/SSRF surfaces that `db`/`web`/`http_client` reach.

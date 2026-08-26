@@ -2113,15 +2113,32 @@ pub fn compile_prepared(
         ipe_db::emit_manifest(db, source_root, entry_file, config).map_err(span_attributed_err)?;
     let mut emitted = (*emitted).clone();
 
-    // WP5: thread the widget manifest into the emitted program. The emit query
-    // is a pure function of the source text and cannot read the widget files off
-    // disk (INV-1: no salsa query touches the filesystem); this stage owns the
-    // project root and already read each file above, so it injects the one-time
-    // startup registration here — the runtime then serves each asset
-    // content-addressed + SRI and generates the registration glue. A widget-free
-    // program injects nothing (byte-identical emit).
+    // Thread the widget manifest into the emitted program. The emit query is a
+    // pure function of the source text and cannot read the widget files off disk
+    // (INV-1: no salsa query touches the filesystem); this stage owns the project
+    // root and already read each file above, so it wires the transport here.
+    //
+    // Two transports, one manifest (§ js-interop-design):
+    //  * Native (server-driven Web) — inject the one-time `widget_assets::register`
+    //    into `main`, so the runtime serves each asset content-addressed + SRI and
+    //    generates the attribute/POST glue at process start.
+    //  * WasmClient (browser client) — there is no server to serve routes, so the
+    //    static bundle carries the assets: write each author file + the generated
+    //    property/CustomEvent glue into `www/`, SRI-pinned, and reference them from
+    //    the static `index.html`. The in-process wasm sink delivers down-state as a
+    //    decoded property and folds up-`CustomEvent`s into `update`.
+    //
+    // A widget-free program injects nothing under either target (byte-identical
+    // emit).
     if !widget_manifest.is_empty() {
-        inject_widget_registration(&mut emitted, &widget_manifest)?;
+        match config.target(db) {
+            ipe_ir::Target::Native => {
+                inject_widget_registration(&mut emitted, &widget_manifest)?;
+            }
+            ipe_ir::Target::WasmClient => {
+                inject_wasm_widget_bundle(&mut emitted, &widget_manifest)?;
+            }
+        }
     }
     Ok(emitted)
 }
@@ -2184,6 +2201,107 @@ fn inject_widget_registration(
     };
     let insert_at = pos + ANCHOR.len();
     main.insert_str(insert_at, &call);
+    Ok(())
+}
+
+/// Assemble the browser-client widget bundle into the emitted static SPA.
+///
+/// The `WasmClient` target has no server to mount asset routes, so the assets
+/// ride the static `www/` tree. This writes, for the widget manifest:
+///
+///  * each author hook file at `www/_ipe/widget.<hex16>.js` (content-addressed,
+///    so a page pinning its SRI can never be served different bytes);
+///  * the generated registration glue at `www/_ipe/widget-glue.<hex16>.js`
+///    (the `WasmClient` transport: down as a decoded property, up as a typed
+///    `CustomEvent`) — produced by the SAME `ipe_runtime::widget_assets` generator
+///    the server path serves, so there is one glue, not a drift-prone twin;
+///  * SRI-pinned `<link rel="modulepreload">` + glue `<script type="module">`
+///    references spliced into `www/index.html` before `</head>`.
+///
+/// The hash the page pins is `sha256` over the served bytes (§ `widget_assets`),
+/// so page integrity == served bytes for the static target exactly as for the
+/// server. `base` is empty: the static SPA is root-mounted, so the absolute
+/// `/_ipe/…` asset URLs resolve against the `www/` document root.
+///
+/// # Errors
+/// [`CliError`] carrying a [`Diagnostic::CompilerBug`] if `www/index.html` is
+/// absent from the emitted file set or lacks the `</head>` anchor — a drifted
+/// wasm emit template, surfaced loudly.
+fn inject_wasm_widget_bundle(
+    emitted: &mut ipe_backend::EmittedProject,
+    manifest: &BTreeMap<String, String>,
+) -> Result<(), CliError> {
+    use ipe_runtime_rust::widget_assets::{
+        WidgetAsset, WidgetTransport, glue_js_for, glue_path_for, page_scripts_for,
+        widget_asset_path,
+    };
+
+    // The static SPA is root-mounted; the `/_ipe/…` asset URLs are document-root
+    // absolute, so the `www/`-relative file path drops the leading slash.
+    const BASE: &str = "";
+    const TRANSPORT: WidgetTransport = WidgetTransport::WasmClient;
+    const HEAD_CLOSE: &str = "</head>";
+
+    let bug = |detail: String| CliError::Pipeline {
+        file: PathBuf::from("www/index.html"),
+        src: String::new(),
+        diag: Box::new(ipe_diagnostics::Diagnostic::CompilerBug {
+            where_: "ipe_cli::inject_wasm_widget_bundle",
+            detail,
+        }),
+    };
+    let rel = |p: &str| -> Result<ipe_backend::RelPath, CliError> {
+        ipe_backend::RelPath::new(p.to_owned()).map_err(|_| {
+            bug(format!(
+                "the generated widget asset path `{p}` is not a valid in-project relative path"
+            ))
+        })
+    };
+
+    // Rebuild the explicit asset slice (deterministic BTreeMap order → byte-stable
+    // emit) the registry-free generator consumes.
+    let assets: Vec<WidgetAsset> = manifest
+        .iter()
+        .map(|(tag, content)| WidgetAsset {
+            tag: tag.clone(),
+            content: content.clone(),
+        })
+        .collect();
+
+    // Write each author hook file content-addressed under `www/`. `widget_asset_path`
+    // yields the absolute URL path `/_ipe/widget.<hex16>.js`; strip the leading
+    // `/` for the `www/`-relative file key.
+    for asset in &assets {
+        let url_path = widget_asset_path(&asset.content);
+        let file_path = format!("www{url_path}");
+        emitted
+            .files
+            .insert(rel(&file_path)?, asset.content.clone());
+    }
+
+    // Write the generated glue (WasmClient transport) content-addressed under `www/`.
+    let glue_url = glue_path_for(&assets, BASE, TRANSPORT);
+    let glue_body = glue_js_for(&assets, BASE, TRANSPORT);
+    emitted
+        .files
+        .insert(rel(&format!("www{glue_url}"))?, glue_body);
+
+    // Splice the SRI-pinned preload + glue script references into `index.html`
+    // before `</head>` (external + SRI + crossorigin — no inline script, so the
+    // static shell's CSP `script-src 'self' 'wasm-unsafe-eval'` is unchanged).
+    let scripts = page_scripts_for(&assets, BASE, TRANSPORT);
+    let index = emitted
+        .files
+        .get_mut("www/index.html")
+        .ok_or_else(|| bug("no www/index.html in the emitted wasm file set".to_owned()))?;
+    let Some(pos) = index.find(HEAD_CLOSE) else {
+        return Err(bug(
+            "the emitted www/index.html is missing the `</head>` anchor the widget bundle \
+             splices before — the wasm emit template drifted"
+                .to_owned(),
+        ));
+    };
+    index.insert_str(pos, &scripts);
     Ok(())
 }
 

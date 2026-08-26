@@ -42,6 +42,7 @@ use crate::tea::{IpeCmd, IpeSub};
 
 pub mod pubsub;
 mod subs;
+pub mod widget;
 
 /// Root ipe-id path — matches the Web/WebView renderers so a future
 /// SSR-adopt path sees identical ids.
@@ -302,6 +303,10 @@ where
     });
 
     attach_delegated_listeners(&body, &app)?;
+    attach_widget_up_listener(&body, &app)?;
+    // The first paint went through `set_inner_html`, not the attribute-patch
+    // path, so deliver each `Ui.widget`'s decoded down-state PROPERTY once here.
+    widget::sync_widget_properties(&document, &app.tree.borrow());
     run_cmd(&app, cmd0);
     resync_subscriptions(&app);
     Ok(())
@@ -375,6 +380,11 @@ where
     });
 
     attach_delegated_listeners(&body, &app)?;
+    attach_widget_up_listener(&body, &app)?;
+    // Adopt does NOT repaint (the server DOM is trusted), so the widget's `state`
+    // property has not been set. Deliver it from the client view tree once here,
+    // so the author hook receives the decoded down-state on takeover.
+    widget::sync_widget_properties(&document, &app.tree.borrow());
     // No cmd0: in hydrate mode there is no `init`-produced command to run.
     // The first user interaction triggers the normal update→diff→patch cycle.
     resync_subscriptions(&app);
@@ -465,7 +475,11 @@ where
     });
 
     attach_delegated_listeners(&body, &app)?;
+    attach_widget_up_listener(&body, &app)?;
     attach_popstate_listener(&app)?;
+    // First paint went through `set_inner_html`; deliver each widget's decoded
+    // down-state PROPERTY once here (later changes ride the diff/patch route).
+    widget::sync_widget_properties(&document, &app.tree.borrow());
     run_cmd(&app, cmd0);
     resync_subscriptions(&app);
     Ok(())
@@ -524,6 +538,12 @@ where
     apply_patches(&patches);
     *app.index.borrow_mut() = build_index(&new_tree);
     *app.tree.borrow_mut() = new_tree;
+    // A widget that first appears via an `html`-subtree replace bypasses the
+    // attribute-patch property route; re-deliver each widget's decoded down-state
+    // PROPERTY (idempotent, bounded by the widget count).
+    if let Ok(document) = document() {
+        widget::sync_widget_properties(&document, &app.tree.borrow());
+    }
 
     resync_subscriptions(app);
 }
@@ -599,6 +619,72 @@ where
         closure.forget();
     }
     Ok(())
+}
+
+/// Attach the single delegated `Ui.widget` up-event listener on `<body>`.
+///
+/// The wasm-client widget glue dispatches a bubbling `CustomEvent` named
+/// [`widget::up_event_name`] carrying the encoded `up` value in `detail`. This
+/// one body-level listener receives it, climbs to the nearest `ipe-id`-bearing
+/// ancestor, and runs that node's generated `OnWidget` handler — the SAME total,
+/// fail-closed seal up-decoder the server path invokes — folding the decoded msg
+/// into the in-process TEA loop. A malformed/oversized `detail`, or one that does
+/// not decode to the declared `up` type, is dropped whole (`None`): no partial
+/// value, no panic, no network hop.
+fn attach_widget_up_listener<Model, Msg>(
+    body: &web_sys::HtmlElement,
+    app: &Rc<App<Model, Msg>>,
+) -> Result<(), String>
+where
+    Model: Clone + 'static,
+    Msg: Clone + 'static,
+{
+    let app = Rc::clone(app);
+    let closure = Closure::<dyn Fn(web_sys::Event)>::new(move |ev: web_sys::Event| {
+        on_widget_up_event(&app, &ev);
+    });
+    let name = widget::up_event_name();
+    body.add_event_listener_with_callback(name, closure.as_ref().unchecked_ref())
+        .map_err(|e| format!("addEventListener({name}) failed: {e:?}"))?;
+    // The delegated widget-up listener lives for the whole app lifetime.
+    closure.forget();
+    Ok(())
+}
+
+/// Decode + dispatch one widget up-`CustomEvent`. The encoded `up` rides the
+/// event `detail` (a string); a non-string / absent detail drops before any
+/// decoder runs. Climb from the target to the nearest `ipe-id` ancestor whose
+/// `OnWidget` handler resolves the payload — the fail-closed seal decode returns
+/// `None` on any mismatch, so nothing partial is ever enqueued.
+fn on_widget_up_event<Model, Msg>(app: &Rc<App<Model, Msg>>, ev: &web_sys::Event)
+where
+    Model: Clone + 'static,
+    Msg: Clone + 'static,
+{
+    let Some(detail) = widget::up_event_detail(ev) else {
+        // A forged/malformed CustomEvent (non-string detail, or not a
+        // CustomEvent) — dropped fail-closed before the seal decoder runs.
+        return;
+    };
+    let args = [detail];
+    let mut cur: Option<web_sys::Element> = ev
+        .target()
+        .and_then(|t| t.dyn_into::<web_sys::Element>().ok());
+    while let Some(el) = cur {
+        if let Some(ipe_id) = el.get_attribute("ipe-id") {
+            // The generated `OnWidget` closure runs the total, fail-closed seal
+            // up-decoder over `detail`; a mismatch yields `None` (clean drop).
+            if let Some(msg) = app
+                .index
+                .borrow()
+                .resolve(&ipe_id, widget::UP_WIRE_NAME, &args)
+            {
+                enqueue(app, msg);
+                return;
+            }
+        }
+        cur = el.parent_element();
+    }
 }
 
 /// Decode + dispatch one delegated DOM event: climb from the target to the
@@ -747,6 +833,12 @@ where
     apply_patches(&patches);
     *app.index.borrow_mut() = build_index(&new_tree);
     *app.tree.borrow_mut() = new_tree;
+    // A widget that first appears via an `html`-subtree replace bypasses the
+    // attribute-patch property route; re-deliver each widget's decoded down-state
+    // PROPERTY (idempotent, bounded by the widget count).
+    if let Ok(document) = document() {
+        widget::sync_widget_properties(&document, &app.tree.borrow());
+    }
 
     for cmd in cmds {
         run_cmd(app, cmd);
@@ -816,6 +908,15 @@ fn apply_patches(patches: &[Patch]) {
             el.set_inner_html(html);
         }
         for (k, v) in &p.attrs {
+            // `Ui.widget` down-state: on a compiler-generated `ipe-ce-*` node the
+            // `state` value crosses as a DECODED PROPERTY (the wasm-client
+            // adapter), never the escaped attribute the server path writes. The
+            // glue's `set state(v)` setter forwards the decoded object to the
+            // author hook — data handed to a setter, never spliced into markup.
+            if k == "state" && widget::is_widget_tag(&el.tag_name().to_lowercase()) {
+                widget::set_widget_down_property(&el, v);
+                continue;
+            }
             if v.is_empty() {
                 let _ = el.remove_attribute(k);
             } else {

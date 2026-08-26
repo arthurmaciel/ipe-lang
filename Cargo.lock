@@ -2013,6 +2013,7 @@ dependencies = [
  "e2e-support",
  "hex",
  "include_dir",
+ "ipe-runtime-rust",
  "ipe_backend",
  "ipe_backend_rust",
  "ipe_canon",

@@ -177,6 +177,7 @@ web-sys = { version = "0.3", features = [
   "Event", "EventTarget", "console", "HtmlInputElement",
   "HtmlTextAreaElement", "HtmlSelectElement", "HtmlFormElement",
   "FormData", "KeyboardEvent", "Location", "HtmlDocument",
+  "CustomEvent",
   "Request", "RequestInit", "RequestMode", "RequestRedirect",
   "Response", "Headers", "AbortController", "AbortSignal",
   "WebSocket", "MessageEvent", "CloseEvent", "ErrorEvent", "BinaryType",

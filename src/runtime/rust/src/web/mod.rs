@@ -16,9 +16,12 @@ pub mod console;
 pub mod csrf;
 pub mod style_inject;
 // Custom-element (`Ui.widget`) registration glue + SRI-pinned author-JS serving.
-// Populated once at process start by the generated `main`; inert (no routes, no
-// page scripts) for a program that registers no widget.
-pub mod widget_assets;
+// The generator lives at the crate top level (`crate::widget_assets`) so the
+// build-time static/wasm bundler can reach it without the server surface; `web`
+// re-exports it here so the server's `ipe_runtime::web::widget_assets::*` path
+// (the process-start `register` + route mounting) is byte-unchanged. Populated
+// once at process start by the generated `main`; inert for a widget-free program.
+pub use crate::widget_assets;
 // Pre-built console child + reverse-proxy — spawns the bundled console
 // binary and proxies /_ipe/console/*; falls back to in-process `console` when the
 // binary is absent.
@@ -385,7 +388,7 @@ pub fn render_page_full(sid: &str, base: &str, body: &str, csrf_token: &str) -> 
     // `modulepreload` SRI pin per author asset. Empty when the program registers
     // no widget, so a widget-free page is byte-identical and its CSP is unchanged.
     // It loads AFTER the client core so `__ipeEmitWidgetUp` can reuse `__ipeSend`.
-    let widget_scripts = widget_assets::page_scripts(base);
+    let widget_scripts = widget_assets::page_scripts(base, widget_assets::WidgetTransport::Server);
     let tail_scripts = format!(
         "<script>window.__IPE_SID={sid_js};window.__IPE_BASE={base_js};window.__IPE_CSRF_TOKEN={csrf_js};{config_js}</script>\
          <script src=\"{client_src}\" integrity=\"{integrity}\" crossorigin=\"anonymous\"></script>\
@@ -2226,12 +2229,15 @@ where
                 let content: &'static str = &asset.content;
                 router = router.route(&path, get(move || async move { serve_widget_js(content) }));
             }
-            let glue_path = widget_assets::glue_path(&base);
+            let glue_path = widget_assets::glue_path(&base, widget_assets::WidgetTransport::Server);
             // The glue body folds in the base-prefixed author URLs, so it is
             // computed once here for the process (base is stable at startup) and
             // leaked to `'static` for the handler — a one-time, bounded allocation
             // sized by the program's widget count, never per-request.
-            let glue_body: &'static str = Box::leak(widget_assets::glue_js(&base).into_boxed_str());
+            let glue_body: &'static str = Box::leak(
+                widget_assets::glue_js(&base, widget_assets::WidgetTransport::Server)
+                    .into_boxed_str(),
+            );
             router = router.route(
                 &glue_path,
                 get(move || async move { serve_widget_js(glue_body) }),
