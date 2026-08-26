@@ -64,6 +64,21 @@ pub fn custom_element_(tag: String) -> IpeCustomElement {
 /// `args[0]` under this name through `/_ipe/event`, the same path a click uses.
 pub const WIDGET_UP_EVENT: &str = "ipe-widget";
 
+/// The DOM `CustomEvent` type name a `WasmClient`-transport widget dispatches its
+/// up-event under. Defined here (compiles on every target) so the native glue
+/// generator (`web::widget_assets`) and the browser-WASM sink (`wasm::widget`)
+/// reference ONE constant — the emitted glue's `dispatchEvent` name and the
+/// sink's listener name can never drift. Distinct from [`WIDGET_UP_EVENT`] (the
+/// server POST wire name) so a page carrying both transports never cross-wires.
+pub const WIDGET_UP_CUSTOM_EVENT: &str = "ipe-widget-up";
+
+/// The `ipe-ce-` prefix every compiler-generated custom-element tag carries. The
+/// browser-WASM sink keys its down-property / up-CustomEvent adapter on this
+/// prefix (a widget node is exactly a `TaggedNode` whose tag starts with it), and
+/// the lowerer mints only tags of this shape — so the sink can never mistake an
+/// ordinary element for a widget, nor miss a real one.
+pub const CUSTOM_ELEMENT_TAG_PREFIX: &str = "ipe-ce-";
+
 /// `Ui.widget ce state on_up` — render the widget node.
 ///
 /// Emits `<ipe-ce-… state="{escaped json}" …>` (an empty-child `TaggedNode`):

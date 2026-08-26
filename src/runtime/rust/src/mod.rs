@@ -491,6 +491,14 @@ pub mod webview;
 #[cfg(feature = "tokio")]
 pub use webview::{WebViewAppCfg, WebViewWindowCfg, webview_app};
 
+// `Ui.widget` custom-element glue generator + SRI-pinned asset addressing. A
+// standalone surface (needs only `sha2`/`base64` + the shared wire constants),
+// decoupled from the heavy `web` server so the native static/wasm bundler can
+// drive the ONE glue generator at build time. `web` implies `widget-assets`, so
+// the server path reaches it re-exported as `web::widget_assets` (below).
+#[cfg(feature = "widget-assets")]
+pub mod widget_assets;
+
 #[cfg(feature = "web")]
 pub mod web;
 #[cfg(feature = "web")]
