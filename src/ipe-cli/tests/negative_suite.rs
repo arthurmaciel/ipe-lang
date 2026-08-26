@@ -2081,7 +2081,8 @@ fn release_rejects_debug_explain() {
 #[test]
 fn case_with_todo_arm_still_requires_all_constructors() {
     let src = format!(
-        "{HEAD}import Ipe.Debug as Debug\n\
+        "{HEAD}import Ipe.Io as Io\n\
+         import Ipe.Debug as Debug\n\
          type Color = Red | Green | Blue\n\
          describe : Color -> String\n\
          describe c =\n\
@@ -2089,7 +2090,7 @@ fn case_with_todo_arm_still_requires_all_constructors() {
          \x20       Red   -> \"done\"\n\
          \x20       Green -> Debug.todo \"pending\"\n\
          main : Task Error ()\n\
-         main =\n    Task.succeed ()\n"
+         main =\n    Io.println (describe Red)\n"
     );
     assert_rejected("case_todo_does_not_excuse_missing_arm", &src, "IPE-T0010");
 }
