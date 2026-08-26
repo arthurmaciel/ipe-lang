@@ -1039,6 +1039,7 @@ mod schema_tag_tests {
             Vec::new(),
             false,
             None,
+            false,
             String::new(),
         )?;
 

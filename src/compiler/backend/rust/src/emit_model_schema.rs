@@ -466,6 +466,7 @@ mod tests {
             Vec::new(),
             false,
             None,
+            false,
             String::new(),
         )?;
         model_schema_tag(&ctx, &IrType::Record(fields))
@@ -633,6 +634,7 @@ mod tests {
             Vec::new(),
             false,
             None,
+            false,
             String::new(),
         )?;
 
@@ -721,6 +723,7 @@ mod tests {
             Vec::new(),
             false,
             None,
+            false,
             String::new(),
         )?;
         let a = model_schema_tag(&ctx_1, &model)?;
@@ -733,6 +736,7 @@ mod tests {
             Vec::new(),
             false,
             None,
+            false,
             String::new(),
         )?;
         let b = model_schema_tag(&ctx_2, &model)?;

@@ -476,6 +476,7 @@ pub fn native_vs_legacy_sweep(
         Vec::new(),
         false,
         None,
+        false,
         String::new(),
     )?;
     let mut divergences = Vec::new();
@@ -2238,6 +2239,7 @@ mod tests {
             Vec::new(),
             false,
             None,
+            false,
             String::new(),
         )
         .expect("EmitCtx::build");
@@ -2840,6 +2842,7 @@ mod tests {
             Vec::new(),
             false,
             None,
+            false,
             String::new(),
         )
         .expect("EmitCtx::build");
@@ -3460,6 +3463,7 @@ mod tests {
             Vec::new(),
             false,
             None,
+            false,
             String::new(),
         )
         .expect("EmitCtx::build");
@@ -3852,6 +3856,7 @@ mod tests {
             Vec::new(),
             false,
             None,
+            false,
             String::new(),
         )
         .expect("EmitCtx::build");

@@ -33,7 +33,11 @@ use super::{IpeResult, IpeTask, from_u8_slice, ok_res, str_err};
 // fallback below only matters for the standalone `ipe-runtime-rust` crate's
 // own narrow-feature builds, never for a real Ipê program. See
 // `docs/adr/0014-kernel-robustness-blocking-offload-and-toctou.md` §2.2.
-#[cfg(feature = "tokio")]
+// tokio is native-only (declared under the `cfg(not(target_arch = "wasm32"))`
+// dependency table), so the `spawn_blocking` offload compiles only there. On
+// wasm32 the synchronous fallback runs even when `feature = "tokio"` is set —
+// the browser has no blocking-thread pool to offload to.
+#[cfg(all(feature = "tokio", not(target_arch = "wasm32")))]
 async fn run_blocking<T, F>(f: F) -> Result<T, String>
 where
     F: FnOnce() -> Result<T, String> + Send + 'static,
@@ -45,7 +49,7 @@ where
     }
 }
 
-#[cfg(not(feature = "tokio"))]
+#[cfg(any(not(feature = "tokio"), target_arch = "wasm32"))]
 // `async` is required here to match the tokio variant's signature; callers
 // always use `.await` to work with both feature configurations uniformly.
 #[allow(clippy::unused_async)]

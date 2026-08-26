@@ -1145,6 +1145,15 @@ pub struct BuildConfig {
     /// project. Threaded to [`ipe_backend_rust::RustBackend::with_runtime_dep`].
     #[returns(ref)]
     pub runtime_dep: Option<ipe_backend_rust::RuntimeDep>,
+    /// `true` when `ipe build/run --debugger` selected the development-only
+    /// time-travelling debugger. Threaded to
+    /// [`ipe_backend_rust::RustBackend::with_debugger`], which adds the runtime
+    /// `debugger` feature to the emitted project's dependency feature list so the
+    /// TEA driver records each step. Lives on `BuildConfig` (not `SourceRoot`) so
+    /// toggling it re-runs only the emit demand, never lower/typecheck. Never set
+    /// for `ipe release` — the release command does not expose the flag, so no
+    /// production artifact carries recorder code.
+    pub debugger: bool,
     /// The project name from `ipe.toml`, already sanitized via
     /// [`ipe_backend_rust::sanitize_cargo_name`] by the driver before storage.
     /// Threaded to [`ipe_backend_rust::RustBackend::with_project_name`] so the
@@ -1233,6 +1242,7 @@ pub fn emit_project(
     let wasm_public_env = config.wasm_public_env(db).clone();
     let wasm_hydrate_mode = config.wasm_hydrate_mode(db);
     let runtime_dep = config.runtime_dep(db).clone();
+    let debugger = config.debugger(db);
     let cargo_name = config.cargo_name(db).clone();
     let interner = db.interner().lock();
     ipe_backend_rust::RustBackend::new(&interner)
@@ -1242,6 +1252,7 @@ pub fn emit_project(
         .with_wasm_public_env(wasm_public_env)
         .with_wasm_hydrate_mode(wasm_hydrate_mode)
         .with_runtime_dep(runtime_dep)
+        .with_debugger(debugger)
         .with_project_name(&cargo_name)
         .emit(&program)
         .map(Arc::new)
@@ -1438,6 +1449,7 @@ pub fn emit_manifest(
     let wasm_public_env = config.wasm_public_env(db).clone();
     let wasm_hydrate_mode = config.wasm_hydrate_mode(db);
     let runtime_dep = config.runtime_dep(db).clone();
+    let debugger = config.debugger(db);
     let interner = db.interner().lock();
     ipe_backend_rust::RustBackend::new(&interner)
         .with_db_driver(driver)
@@ -1446,6 +1458,7 @@ pub fn emit_manifest(
         .with_wasm_public_env(wasm_public_env)
         .with_wasm_hydrate_mode(wasm_hydrate_mode)
         .with_runtime_dep(runtime_dep)
+        .with_debugger(debugger)
         .assemble_split_manifest(&program, &spine, &module_texts)
         .map(Arc::new)
         .map_err(|d| (d, Vec::new()))

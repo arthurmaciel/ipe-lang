@@ -246,9 +246,9 @@ struct App<Model, Msg> {
     router: Option<Box<dyn Fn(&str, Model) -> Option<Model>>>,
     /// Development-only time-travelling debugger recorder. Passive: records
     /// each live-pass `update` step without re-firing any `Cmd`. Present only
-    /// when the `debugger` feature is active (`ipe build/run --debugger`).
-    /// The overlay UI (message list + scrubber) is stage a2; this field exposes
-    /// the recorder API for that next increment.
+    /// when the `debugger` feature is active (`ipe build/run --debugger`). This
+    /// field exposes the recorder API; the interactive overlay UI (message list
+    /// + scrubber) that consumes it is not built yet.
     #[cfg(feature = "debugger")]
     recorder: RefCell<crate::debugger::RecordBuffer<Msg, Model>>,
 }

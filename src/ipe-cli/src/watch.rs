@@ -865,6 +865,8 @@ fn run_inner(
                         Some(ipe_backend_rust::RuntimeDep {
                             root: runtime_dep_root.clone(),
                         }),
+                        // `ipe watch` does not expose `--debugger`; never record.
+                        false,
                         resolved.cargo_name.clone(),
                     );
                     config = Some(cfg);

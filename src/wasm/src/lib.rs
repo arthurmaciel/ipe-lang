@@ -127,6 +127,8 @@ fn compile_inner(source: &str) -> Result<ipe_backend::EmittedProject, String> {
         false,
         // Wasm always vendors its runtime (closed template); dep model is a no-op.
         None,
+        // The browser playground does not expose `--debugger`; never record.
+        false,
         String::new(),
     );
 

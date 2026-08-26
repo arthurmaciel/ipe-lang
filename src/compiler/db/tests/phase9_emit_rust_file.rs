@@ -191,6 +191,7 @@ fn emit_spine_file_memoized_coarse_floor() {
         false,
         false,
         None,
+        false,
         String::new(),
     );
 
@@ -250,6 +251,7 @@ fn emit_rust_file_memoized_per_file() {
         false,
         false,
         None,
+        false,
         String::new(),
     );
 
@@ -360,6 +362,7 @@ fn emit_manifest_matches_emit_project_for_single_module() {
         false,
         false,
         None,
+        false,
         String::new(),
     );
 
@@ -399,6 +402,7 @@ fn emit_manifest_matches_emit_project_for_two_modules() {
         false,
         false,
         None,
+        false,
         String::new(),
     );
 

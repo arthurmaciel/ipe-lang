@@ -849,8 +849,10 @@ pub struct BuildOptions {
     /// (single-file builds with no `ipe.toml`).
     pub cargo_name: String,
     /// `true` when `ipe build --debugger` / `ipe run --debugger` was passed.
-    /// Activates the `debugger` feature in the emitted runtime so the TEA loop
-    /// instantiates the recorder. NEVER set for `ipe release` builds — the
+    /// Threaded through [`ipe_db::BuildConfig`] to
+    /// [`ipe_backend_rust::RustBackend::with_debugger`], which adds the
+    /// `debugger` feature to the emitted project's runtime dependency so the TEA
+    /// driver instantiates the recorder. NEVER set for `ipe release` builds — the
     /// release command does not expose this flag, so no production artifact can
     /// carry recorder code.
     pub debugger: bool,
@@ -1461,6 +1463,7 @@ fn compile_modules_observed(
                     .with_wasm_public_env(options.wasm_public_env.clone())
                     .with_wasm_hydrate_mode(options.wasm_hydrate_mode)
                     .with_runtime_dep(runtime_dep.clone())
+                    .with_debugger(options.debugger)
                     .with_project_name(&options.cargo_name)
                     .emit(&program)
             };
@@ -1513,6 +1516,7 @@ fn compile_modules_observed(
         options.wasm_hydrate_mode,
         options.production,
         runtime_dep,
+        options.debugger,
         options.cargo_name.clone(),
     );
 
