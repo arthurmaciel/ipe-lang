@@ -7650,6 +7650,16 @@ impl<'a> Builder<'a> {
                 fun(int(), fun(string(), fun(var(0), sub(var(1)))))
             }
 
+            // ── Ipe.Js — the raw typed transport across the Ipê↔JS seam ──
+            // `send : a -> Cmd msg` — payload `a` = var(0), msg = var(1).
+            // `subscribe : Decoder a -> (a -> msg) -> Sub msg` — decoded `a`
+            // = var(0), msg = var(1). The seal-legality of the concrete `a` is a
+            // structural predicate, not an HM constraint, so it is enforced at
+            // lowering (`reject_illegal_js_port_seal`), exactly as the
+            // `CustomElement` seal is a canon gate rather than a type-scheme bound.
+            K::JsSend => fun(var(0), cmd(var(1))),
+            K::JsSubscribe => fun(dec(var(0)), fun(fun(var(0), var(1)), sub(var(1)))),
+
             // ── Ipe.Env — build-time-embedded public config ──────────
             // public : String -> Maybe String. Resolves ONLY for a
             // `[wasm] publicEnv`-allowlisted key (`env_public.rs`, a
@@ -9714,6 +9724,9 @@ mod registry_phase_c_tests {
             K::WebSocketClose,
             K::WebSocketCloseWithCode,
             K::SubSubscribeWebSocket,
+            // ── Ipe.Js — the raw typed transport across the Ipê↔JS seam ──
+            K::JsSend,
+            K::JsSubscribe,
             // ── Ipe.Process — subprocess execution (no shell) ──
             K::ProcessRun,
             // ── Ipe.Env — build-time-embedded public config ──

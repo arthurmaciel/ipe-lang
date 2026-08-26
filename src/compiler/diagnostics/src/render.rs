@@ -2015,6 +2015,26 @@ const fn feature_label(f: Feature) -> &'static str {
              emittable yet, so a program that builds one cannot be compiled to Rust \
              until that transport ships [feature: custom-element-transport]"
         }
+        Feature::JsPortBoundarySeal => {
+            "a `Js.send` payload or a `Js.subscribe` decoder crosses the Ipê↔JS \
+             port seam with a type that cannot be sealed: a `Secret` or \
+             reserved-sink type (a secret must never be serialised to JS), an \
+             untyped `Value` (the untyped channel cannot be spelled — wrap the \
+             payload in a declared ADT such as `type RawJson = RawJson String`), a \
+             function, an effect carrier, or another non-plain value. A port value \
+             must be a plain, closed, concrete value type, exactly the seal the \
+             `CustomElement down up` boundary enforces [feature: \
+             js-port-boundary-seal]"
+        }
+        Feature::JsPortTransport => {
+            "a seal-legal `Js.send` / `Js.subscribe` port is accepted and \
+             seal-checked at the type level, but its raw transport — the \
+             per-target lowering (server-driven network stream vs client-WASM \
+             in-process) and the generated `ipe.send` / `ipe.onReceive` JS runtime \
+             glue — is not emittable yet, so a program that builds a port cannot be \
+             compiled to Rust until that transport ships [feature: \
+             js-port-transport]"
+        }
         Feature::FunctionElementEquality => {
             "a function value stored in a `List`/`Dict` is `Clone` (so it can be \
              stored and forwarded, and mapped/folded/filtered by the `List.map` \

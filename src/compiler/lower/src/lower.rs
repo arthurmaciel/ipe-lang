@@ -25,7 +25,8 @@ use ipe_intern::{Interner, Symbol};
 use ipe_ir::{
     Arm, BinOp, BoundSet, CallPin, Callee, Capability, EnumDef, Expr, Func, FuncId, IrType,
     KernelFn, Match, ModPath, Module, OnFormKind, Pat, Program, RowParam, RuntimeModule, TypeDef,
-    UiCtor, UiPlain, Variant, fun_value_arc_promotable, is_dispatch_free, is_irrefutable,
+    UiCtor, UiPlain, Variant, fun_value_arc_promotable, ir_type_is_serde, is_dispatch_free,
+    is_irrefutable,
 };
 use ipe_types::{RowTail, SolvedTypes, Ty, TyBounds};
 
@@ -10952,6 +10953,38 @@ const fn unsupported(span: Span, feature: Feature) -> Diagnostic {
     }
 }
 
+/// Whether `ty` is a legal seal for the Ipê↔JS port boundary — a plain, closed,
+/// concrete value type that may cross to/from JavaScript.
+///
+/// This is the RUNTIME-side twin of the canon seal predicate
+/// (`boundary_seal_rejection`) the `CustomElement down up` annotation uses, applied
+/// here to the CONCRETE inferred type of a `Js.send` payload / `Js.subscribe`
+/// decoder because a port's crossing type is inferred, not annotated. Fail-closed
+/// by construction:
+///
+/// * A `Secret` or reserved-sink type (`Url`/`Path`/`Dsn`/`SqlFragment`/`Regex`/
+///   key/mac/…), a function, an effect carrier (`Cmd`/`Sub`/`Task`/`Decoder`), a
+///   view value, or any opaque handle is NOT serde
+///   ([`ir_type_is_serde`] = `false`) and is therefore rejected — a secret must
+///   never be serialised to JS.
+/// * An untyped `Value`/`Json` (or a nested `Decoder`) anywhere is rejected
+///   ([`ir_type_mentions_json`]) — the untyped channel cannot be spelled. This is
+///   the port-specific layer on top of [`ir_type_is_serde`], which alone would
+///   ACCEPT `IrType::Json` (a `Value` round-trips through serde).
+///
+/// A user ADT (`IrType::Enum`) is accepted at THIS layer with an
+/// all-accepting enum oracle, exactly as the canon predicate accepts a user ADT
+/// reference and defers its transitive field re-verification to the generated
+/// per-type seal codec (a later increment). Until that codec lands, emission stays
+/// fully fail-closed at the `JsPortTransport` arm, so no undecoded value can reach
+/// codegen through an ADT that would carry a non-plain field.
+fn ir_type_is_port_seal_legal(ty: &IrType) -> bool {
+    // The enum oracle accepts every user ADT at this layer (see the doc comment):
+    // the concrete field types are not needed to prove the CROSSING type's shape,
+    // and the codec re-derives them when the live transport lands.
+    ir_type_is_serde(ty, &|_home: &ModPath, _name: Symbol| true) && !ir_type_mentions_json(ty)
+}
+
 /// Build the fail-closed [`Diagnostic::Lower`] (IPE-L0145) for a `Store.eq` /
 /// `Store.eqBy` column argument the accessor intercept rejected, carrying the
 /// specific defect and the offending source `span`.
@@ -19475,6 +19508,43 @@ impl<'a> Lowerer<'a> {
         self.lower_expr(e)
     }
 
+    /// Fail-closed SEAL gate for a `Js.send` payload / `Js.subscribe` decoder:
+    /// reject a crossing value whose CONCRETE inferred type is not seal-legal.
+    ///
+    /// `arg` is the port kernel's first argument — the `Js.send` payload (whose
+    /// own type IS the seal type) or the `Js.subscribe` `Decoder a` (whose INNER
+    /// `a` is the seal type). The concrete type is read from the solved region
+    /// types and converted json-aware so an untyped `Value` surfaces as
+    /// [`IrType::Json`] rather than a polymorphism error. A `Decoder inner` is
+    /// unwrapped to `inner` before the check; anything else is checked directly.
+    ///
+    /// Rejects (IPE-L0148) when the seal type is not [`ir_type_is_port_seal_legal`]
+    /// — a `Secret`/reserved-sink type, an untyped `Value`, a function, an effect
+    /// carrier, or another non-plain value. Fail-closed by construction: an
+    /// unresolved region type (which should never happen for a type-checked call)
+    /// is treated as a rejection, never silently accepted.
+    fn reject_illegal_js_port_seal(&self, arg: &canon::Expr) -> DResult<()> {
+        let Some(ty) = self.region_ty(arg.span) else {
+            // No inferred type for a type-checked port argument is an impossible
+            // invariant; fail closed with the seal rejection rather than let an
+            // unproven value reach the seam.
+            return Err(unsupported(arg.span, Feature::JsPortBoundarySeal));
+        };
+        let ir = self.ir_type_from_ty_json(ty, arg.span)?;
+        // `Js.subscribe`'s arg is a `Decoder a`; the seal type is the inner `a`.
+        // `Js.send`'s arg IS the payload. An `IrType::Decoder(inner)` is the only
+        // shape that must be unwrapped; every other shape is the seal type itself.
+        let seal_ty = match &ir {
+            IrType::Decoder(inner) => inner.as_ref(),
+            other => other,
+        };
+        if ir_type_is_port_seal_legal(seal_ty) {
+            Ok(())
+        } else {
+            Err(unsupported(arg.span, Feature::JsPortBoundarySeal))
+        }
+    }
+
     fn lower_call(
         &self,
         callee: &canon::Expr,
@@ -19789,6 +19859,41 @@ impl<'a> Lowerer<'a> {
                     return Ok(Intercepted::Done(
                         self.lower_store_policy_rule(&peek, args)?,
                     ));
+                }
+                // ── Ipe.Js ports (raw typed Ipê↔JS transport) ────────────
+                //
+                // `Js.send : a -> Cmd msg` (arity 1) and
+                // `Js.subscribe : Decoder a -> (a -> msg) -> Sub msg` (arity 2)
+                // are the raw port surface. The crossing value `a` MUST be a
+                // plain, closed, concrete seal type — the same discipline the
+                // `CustomElement down up` boundary enforces — but a port's `a` is
+                // INFERRED, not annotated, so the seal is checked HERE on the
+                // concrete inferred type (fail-closed, IPE-L0148): a `Secret`/
+                // reserved-sink payload and a `Decoder Value` subscription are both
+                // rejected — the untyped channel cannot be spelled and a secret can
+                // never be serialised to JS. On passing the seal, emission is still
+                // fail-closed (IPE-L0149, `Feature::JsPortTransport`) until the
+                // per-target live transport ships, so nothing undenoted reaches
+                // codegen. This is the port twin of the `CustomElement` gates.
+                Callee::Kernel(KernelFn::JsSend) if args.len() == 1 => {
+                    let payload = args.first().ok_or_else(|| {
+                        bug(
+                            "ipe_lower::intercept_web_kernel_call",
+                            "Js.send missing payload arg",
+                        )
+                    })?;
+                    self.reject_illegal_js_port_seal(payload)?;
+                    return Err(unsupported(payload.span, Feature::JsPortTransport));
+                }
+                Callee::Kernel(KernelFn::JsSubscribe) if args.len() == 2 => {
+                    let decoder = args.first().ok_or_else(|| {
+                        bug(
+                            "ipe_lower::intercept_web_kernel_call",
+                            "Js.subscribe missing decoder arg",
+                        )
+                    })?;
+                    self.reject_illegal_js_port_seal(decoder)?;
+                    return Err(unsupported(decoder.span, Feature::JsPortTransport));
                 }
                 _ => {}
             }
@@ -22198,7 +22303,11 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::StoreImmutable
                 // ── Server: cookie token source — arity 1 ────────────────
                 // `Server.cookieToken : String -> TokenSource`
-                | KernelFn::ServerCookieToken,
+                | KernelFn::ServerCookieToken
+                // ── Ipe.Js port — outbound. `Js.send : a -> Cmd msg`. Arity 1;
+                //    the port intercept rejects it before emission, this is the
+                //    defensive fixed count.
+                | KernelFn::JsSend,
             ) => Ok(1),
             Callee::Kernel(
                 KernelFn::StringAppend
@@ -22488,7 +22597,12 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::ErrorWithDetails
                 // `Web.appWith : List (Setting Web) -> WebAppCfg model msg
                 //   -> Task Error ()`
-                | KernelFn::WebAppWith,
+                | KernelFn::WebAppWith
+                // ── Ipe.Js port — inbound.
+                //   `Js.subscribe : Decoder a -> (a -> msg) -> Sub msg`. Arity 2;
+                //   the port intercept rejects it before emission, this is the
+                //   defensive fixed count.
+                | KernelFn::JsSubscribe,
             ) => Ok(2),
             Callee::Kernel(
                 KernelFn::StringReplace
@@ -24202,6 +24316,9 @@ impl<'a> Lowerer<'a> {
                     ("Sub", "every") => Ok(Callee::Kernel(KernelFn::SubEvery)),
                     ("Sub", "map") => Ok(Callee::Kernel(KernelFn::SubMap)),
                     ("Sub", "subscribeTopic") => Ok(Callee::Kernel(KernelFn::SubSubscribeTopic)),
+                    // ── Ipe.Js ports (raw typed Ipê↔JS transport) ────────────
+                    ("Js", "send") => Ok(Callee::Kernel(KernelFn::JsSend)),
+                    ("Js", "subscribe") => Ok(Callee::Kernel(KernelFn::JsSubscribe)),
                     ("Time", "every") => Ok(Callee::Kernel(KernelFn::TimeEvery)),
                     // ── Ipe.Http.Server kernels ─────────────────────────────
                     ("Server", "get") => Ok(Callee::Kernel(KernelFn::ServerGet)),
