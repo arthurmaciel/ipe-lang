@@ -345,7 +345,7 @@ mod email_smtp_tests {
             host: String::new(),
             port: 0,
             user: String::new(),
-            pass: String::new(),
+            pass: secret_from_string(String::new()),
         };
         let t = email_send::<IpeError>(EmailProvider::Smtp(cfg), msg("a@b.com"));
         assert!(task_run(t).is_err());
@@ -359,7 +359,7 @@ mod email_smtp_tests {
             host: "127.0.0.1".to_string(),
             port: 2599,
             user: String::new(),
-            pass: String::new(),
+            pass: secret_from_string(String::new()),
         };
         let t = email_send::<IpeError>(EmailProvider::Smtp(cfg), msg("not-an-email"));
         assert!(task_run(t).is_err());
