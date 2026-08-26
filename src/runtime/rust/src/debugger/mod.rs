@@ -161,6 +161,20 @@ impl<Msg: Clone, Model: Clone> RecordBuffer<Msg, Model> {
     pub fn msgs(&self) -> impl Iterator<Item = &Msg> {
         self.log.iter().map(|s| &s.msg)
     }
+
+    /// Render each retained message as a redacted label string (oldest first).
+    ///
+    /// Labels pass through `IpeStringify::ipe_show` so any `Secret`-bearing
+    /// field renders as `<redacted>`. The raw `Msg` value is never serialised.
+    #[cfg(feature = "debugger")]
+    pub fn labels(&self) -> Vec<String>
+    where
+        Msg: crate::stringify::IpeStringify,
+    {
+        self.msgs()
+            .map(crate::stringify::IpeStringify::ipe_show)
+            .collect()
+    }
 }
 
 // ── History — fn-pointer variant, self-contained ──────────────────────────
@@ -613,6 +627,51 @@ mod tests {
         assert_eq!(
             rendered, "<redacted>",
             "Secret must stringify to the fixed redacted placeholder"
+        );
+    }
+
+    // `RecordBuffer::labels()` — the server-driven GET-page label path — renders
+    // each retained Msg via `IpeStringify::ipe_show`, so a `Secret`-bearing Msg
+    // yields `<redacted>` rather than the plaintext value.
+    #[cfg(all(feature = "debugger", feature = "secret"))]
+    #[test]
+    fn record_buffer_labels_redacts_secret() {
+        use crate::secret::secret_from_string;
+        use crate::stringify::IpeStringify;
+
+        #[derive(Clone, Debug)]
+        enum SecretMsg {
+            Login(crate::secret::Secret),
+        }
+
+        impl IpeStringify for SecretMsg {
+            fn ipe_show(&self) -> String {
+                match self {
+                    SecretMsg::Login(s) => format!("Login({})", s.ipe_show()),
+                }
+            }
+        }
+
+        #[derive(Clone, Debug)]
+        struct SecretModel;
+
+        let secret = secret_from_string("hunter2".to_owned());
+        let mut buf = RecordBuffer::new(SecretModel, 8);
+        buf.record(SecretMsg::Login(secret.clone()), SecretModel, &|_msg, m| {
+            (m, IpeCmd::None)
+        });
+
+        let labels = buf.labels();
+        assert_eq!(labels.len(), 1);
+        assert!(
+            !labels[0].contains("hunter2"),
+            "server-driven label must not expose the secret; got: {:?}",
+            labels[0]
+        );
+        assert!(
+            labels[0].contains("<redacted>"),
+            "server-driven label must render Secret as <redacted>; got: {:?}",
+            labels[0]
         );
     }
 }
