@@ -1438,6 +1438,81 @@ fn js_port_send_secret_rejected() {
     assert_rejected("js_port_send_secret", src, "IPE-L0148");
 }
 
+/// A `Js.send` whose payload is a user ADT with a `Secret` buried in one of its
+/// variants (`type Payload = Wrap Secret | Empty`) is rejected fail-closed at
+/// lowering with IPE-L0148: the boundary seal walks the ADT's transitive variant
+/// payloads, so a secret hidden one constructor deep can never cross to JS. Absent
+/// this transitive check the bare "accept every user ADT" seal oracle would admit
+/// the crossing — the exact hole this pins closed.
+#[test]
+fn js_port_send_nested_secret_in_adt_rejected() {
+    let src = "module Main exposing (main)\n\
+         import Ipe.Tea.Web as Web\n\
+         import Ipe.Tea.Web.Cmd as Cmd\n\
+         import Ipe.Tea.Web.Sub as Sub\n\
+         import Ipe.Ui as Ui\n\
+         import Ipe.Js as Js\n\
+         import Ipe.Secret as Secret\n\
+         type Payload = Wrap Secret | Empty\n\
+         type alias Model = { p : Payload }\n\
+         type Msg = Tick\n\
+         init : a -> ( Model, Cmd.Cmd Msg )\n\
+         init _r =\n\
+         \x20   ( { p = Wrap (Secret.fromString \"x\") }, Cmd.none )\n\
+         update : Msg -> Model -> ( Model, Cmd.Cmd Msg )\n\
+         update _msg model =\n\
+         \x20   ( model, Js.send model.p )\n\
+         view : Model -> Element Msg\n\
+         view _model =\n\
+         \x20   Ui.text \"ok\"\n\
+         subscriptions : Model -> Sub.Sub Msg\n\
+         subscriptions _model =\n\
+         \x20   Sub.none\n\
+         main =\n\
+         \x20   Web.app\n\
+         \x20       { init = init, update = update, view = view, subscriptions = subscriptions\n\
+         \x20       , routes = [], notFound = Tick\n\
+         \x20       }\n";
+    assert_rejected("js_port_nested_secret_adt", src, "IPE-L0148");
+}
+
+/// A `Js.send` whose payload is a polymorphic wrapper ADT instantiated at a
+/// `Secret` (`type Box a = Box a` used as `Box Secret`) is rejected fail-closed at
+/// lowering with IPE-L0148: the seal instantiates the wrapper's type parameter and
+/// re-checks the concrete payload, so `Box Secret` is refused even though `Box a`
+/// itself is a legal shape for a non-secret `a`.
+#[test]
+fn js_port_send_polymorphic_wrapper_secret_rejected() {
+    let src = "module Main exposing (main)\n\
+         import Ipe.Tea.Web as Web\n\
+         import Ipe.Tea.Web.Cmd as Cmd\n\
+         import Ipe.Tea.Web.Sub as Sub\n\
+         import Ipe.Ui as Ui\n\
+         import Ipe.Js as Js\n\
+         import Ipe.Secret as Secret\n\
+         type Box a = Box a\n\
+         type alias Model = { b : Box Secret }\n\
+         type Msg = Tick\n\
+         init : a -> ( Model, Cmd.Cmd Msg )\n\
+         init _r =\n\
+         \x20   ( { b = Box (Secret.fromString \"x\") }, Cmd.none )\n\
+         update : Msg -> Model -> ( Model, Cmd.Cmd Msg )\n\
+         update _msg model =\n\
+         \x20   ( model, Js.send model.b )\n\
+         view : Model -> Element Msg\n\
+         view _model =\n\
+         \x20   Ui.text \"ok\"\n\
+         subscriptions : Model -> Sub.Sub Msg\n\
+         subscriptions _model =\n\
+         \x20   Sub.none\n\
+         main =\n\
+         \x20   Web.app\n\
+         \x20       { init = init, update = update, view = view, subscriptions = subscriptions\n\
+         \x20       , routes = [], notFound = Tick\n\
+         \x20       }\n";
+    assert_rejected("js_port_poly_wrapper_secret", src, "IPE-L0148");
+}
+
 // ===========================================================================
 // Type — IPE-T####
 // ===========================================================================

@@ -10972,17 +10972,18 @@ const fn unsupported(span: Span, feature: Feature) -> Diagnostic {
 ///   the port-specific layer on top of [`ir_type_is_serde`], which alone would
 ///   ACCEPT `IrType::Json` (a `Value` round-trips through serde).
 ///
-/// A user ADT (`IrType::Enum`) is accepted at THIS layer with an
-/// all-accepting enum oracle, exactly as the canon predicate accepts a user ADT
-/// reference and defers its transitive field re-verification to the generated
-/// per-type seal codec (a later increment). Until that codec lands, emission stays
-/// fully fail-closed at the `JsPortTransport` arm, so no undecoded value can reach
-/// codegen through an ADT that would carry a non-plain field.
-fn ir_type_is_port_seal_legal(ty: &IrType) -> bool {
-    // The enum oracle accepts every user ADT at this layer (see the doc comment):
-    // the concrete field types are not needed to prove the CROSSING type's shape,
-    // and the codec re-derives them when the live transport lands.
-    ir_type_is_serde(ty, &|_home: &ModPath, _name: Symbol| true) && !ir_type_mentions_json(ty)
+/// A user ADT (`IrType::Enum`) is legal ONLY when `enum_legal` proves it so — the
+/// whole-program transitive port-seal fixpoint
+/// ([`Lowerer::port_seal_enum_oracle`]) that demotes any ADT reaching a `Secret`
+/// or other non-port-seal-legal leaf through any variant payload. The oracle is
+/// threaded here rather than assumed all-accepting so a `Secret` nested inside an
+/// ADT variant — the shape a bare codec-deferral would let cross the seam — is
+/// refused fail-closed BEFORE the live transport lowers it.
+fn ir_type_is_port_seal_legal(
+    ty: &IrType,
+    enum_legal: &impl Fn(&ModPath, Symbol) -> bool,
+) -> bool {
+    ir_type_is_serde(ty, enum_legal) && !ir_type_mentions_json(ty)
 }
 
 /// Build the fail-closed [`Diagnostic::Lower`] (IPE-L0145) for a `Store.eq` /
@@ -11844,6 +11845,17 @@ pub struct Lowerer<'a> {
     /// `<file>:<line>` string injected into `Debug.todo` lowered args.
     /// Empty string → falls back to `"<unknown>:0"`.
     source_text: String,
+    /// Memoised whole-program port-seal legality of every user ADT, keyed by its
+    /// nominal `(home, name)` identity: `true` iff EVERY reachable variant payload
+    /// of the type is itself port-seal-legal (a plain, closed, concrete value that
+    /// may cross the Ipê↔JS seam). Computed once, lazily, by
+    /// [`Self::port_seal_enum_oracle`] as a monotone demotion fixpoint over
+    /// `self.m.unions`, so a `Secret` (or any non-serde leaf) buried arbitrarily
+    /// deep inside an ADT variant — directly, transitively, or through a
+    /// polymorphic wrapper instantiated at a secret — demotes the whole ADT and
+    /// the port seal rejects the crossing. `None` until first consulted; interior
+    /// mutability so the seal check stays over a shared `&self`.
+    port_seal_enum_legal: std::cell::RefCell<Option<BTreeMap<(ModPath, Symbol), bool>>>,
 }
 
 /// Normalize the fn-carrier of every function type that sits DIRECTLY under a
@@ -12787,6 +12799,7 @@ impl<'a> Lowerer<'a> {
             fn_row_params: std::cell::RefCell::new(BTreeMap::new()),
             source_path: source_path.to_owned(),
             source_text: source_text.to_owned(),
+            port_seal_enum_legal: std::cell::RefCell::new(None),
         }
     }
 
@@ -19573,10 +19586,110 @@ impl<'a> Lowerer<'a> {
             IrType::Decoder(inner) => inner.as_ref(),
             other => other,
         };
-        if ir_type_is_port_seal_legal(seal_ty) {
+        // The enum oracle is the whole-program transitive port-seal fixpoint: a
+        // referenced user ADT is legal ONLY if every one of its reachable variant
+        // payloads is itself port-seal-legal, so a `Secret` buried inside a variant
+        // (directly, transitively, or through a polymorphic wrapper) demotes the
+        // ADT and turns the crossing away. Unknown `(home, name)` defaults to
+        // `false` — fail-closed, never a permissive default.
+        let oracle = self.port_seal_enum_oracle();
+        let enum_legal = |home: &ModPath, name: Symbol| {
+            oracle.get(&(home.clone(), name)).copied().unwrap_or(false)
+        };
+        if ir_type_is_port_seal_legal(seal_ty, &enum_legal) {
             Ok(())
         } else {
             Err(unsupported(arg.span, Feature::JsPortBoundarySeal))
+        }
+    }
+
+    /// The memoised whole-program port-seal legality of every user ADT, computed
+    /// once as a monotone demotion fixpoint over `self.m.unions` and consulted by
+    /// [`Self::reject_illegal_js_port_seal`] as the enum oracle.
+    ///
+    /// Every user enum starts optimistic (legal) and is demoted to illegal the
+    /// moment any reachable variant payload is proven non-port-seal-legal — a
+    /// non-serde leaf (`Secret`, an effect carrier, a view value, a function, any
+    /// opaque handle), a `Value`/`Json` hole, or a reference to an
+    /// already-demoted enum. Illegality only propagates (`true → false`), so the
+    /// loop reaches a fixpoint in at most `enum count` passes. This is the port
+    /// twin of the backend's whole-program `enum_serde` fixpoint, computed here
+    /// (at lowering) because the port seal is checked before emission and on the
+    /// INFERRED crossing type.
+    ///
+    /// A union whose payload cannot be lowered to an [`IrType`] here (a gate the
+    /// full lowering would raise) is treated as illegal — fail-closed: absent
+    /// proof the payload is a plain value, the crossing is refused.
+    fn port_seal_enum_oracle(&self) -> BTreeMap<(ModPath, Symbol), bool> {
+        if let Some(cached) = self.port_seal_enum_legal.borrow().as_ref() {
+            return cached.clone();
+        }
+        {
+            let mut legal: BTreeMap<(ModPath, Symbol), bool> = self
+                .m
+                .unions
+                .iter()
+                .map(|u| ((ModPath(u.home.clone()), u.name), true))
+                .collect();
+            // Lower each union's variant payloads to `IrType` once (a payload that
+            // fails to lower marks its enum illegal outright). The generics passed
+            // are the union's own declared vars, so a polymorphic field lowers to
+            // `IrType::Generic` and the use-site `args` recursion in
+            // `ir_type_is_serde` carries the concrete instantiation's legality.
+            let mut payloads: BTreeMap<(ModPath, Symbol), Option<Vec<IrType>>> = BTreeMap::new();
+            for u in &self.m.unions {
+                let key = (ModPath(u.home.clone()), u.name);
+                let mut fields: Vec<IrType> = Vec::new();
+                let mut ok = true;
+                for ctor in &u.ctors {
+                    for arg in &ctor.args {
+                        match self.ir_type_from_canon(arg, &u.vars) {
+                            Ok(ir) => fields.push(ir),
+                            Err(_) => {
+                                ok = false;
+                                break;
+                            }
+                        }
+                    }
+                    if !ok {
+                        break;
+                    }
+                }
+                if ok {
+                    payloads.insert(key, Some(fields));
+                } else {
+                    legal.insert(key.clone(), false);
+                    payloads.insert(key, None);
+                }
+            }
+            loop {
+                let mut to_demote: Vec<(ModPath, Symbol)> = Vec::new();
+                {
+                    let lookup = |home: &ModPath, name: Symbol| {
+                        legal.get(&(home.clone(), name)).copied().unwrap_or(false)
+                    };
+                    for (key, fields_opt) in &payloads {
+                        if !legal.get(key).copied().unwrap_or(false) {
+                            continue;
+                        }
+                        let Some(fields) = fields_opt else { continue };
+                        let all_legal = fields
+                            .iter()
+                            .all(|f| ir_type_is_port_seal_legal(f, &lookup));
+                        if !all_legal {
+                            to_demote.push(key.clone());
+                        }
+                    }
+                }
+                if to_demote.is_empty() {
+                    break;
+                }
+                for k in to_demote {
+                    legal.insert(k, false);
+                }
+            }
+            *self.port_seal_enum_legal.borrow_mut() = Some(legal.clone());
+            legal
         }
     }
 
