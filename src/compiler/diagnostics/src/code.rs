@@ -458,9 +458,6 @@ code! {
     /// non-seal-legal type (a `Secret`/reserved-sink, an untyped `Value`, a
     /// function, or another non-plain value)
     IPE_L0148 = "IPE-L0148", "a JS port boundary value is not seal-legal (a secret/sink, an untyped Value, or a non-plain type cannot cross to JS)", "IPE-L0148";
-    /// a seal-legal `Js.send`/`Js.subscribe` port is accepted at the type level
-    /// but its raw transport (per-target lowering + JS runtime glue) is not shipped
-    IPE_L0149 = "IPE-L0149", "a JS port boundary value is not emittable yet (raw port transport not shipped)", "IPE-L0149";
     /// expression nests too deeply for the backend
     IPE_L0200 = "IPE-L0200", "expression nests too deeply for the backend", "IPE-L0200";
 
