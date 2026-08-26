@@ -2057,48 +2057,77 @@ fn release_rejects_debug_todo() {
 }
 
 /// `ipe release` (production flag) must reject `Debug.explain` with IPE-L0140 —
-/// module membership alone gates it, independent of `Debug.todo`.
-/// Dev build accepts it; production build blocks it.
-///
-/// NOTE: `Debug.explain` is an arity-0 attribute kernel. The lowerer emits it
-/// as a 0-arg `Expr::Call` inside the TEA app's `view` body. A pre-existing
-/// gap in the kernel-usage scan means `uses_debug` is not set for this path,
-/// so production builds currently accept it instead of firing IPE-L0140.
-/// This test is ignored until that scan gap is closed.
-/// See: <https://github.com/arthurmaciel/ipe-lang/issues> (file on integration).
+/// module membership alone gates it, independent of `Debug.todo`. The attribute
+/// is reachable from `main` through the rendered `Web.app` view, so the
+/// kernel-usage scan sees it and sets `uses_debug`. Dev build accepts it (a
+/// dev-only construct is permitted by `build` / `run`); production blocks it.
 #[test]
-#[ignore = "pre-existing gap: DebugExplain does not set uses_debug in TEA view scan"]
 fn release_rejects_debug_explain() {
-    let src = "module Main exposing (main)\n\
-         import Ipe.Tea.Web exposing (app)\n\
-         import Ipe.Tea.Web.Cmd as Cmd\n\
-         import Ipe.Tea.Web.Sub as Sub\n\
+    let src = explain_reachable_src();
+    assert_rejected_production("release_rejects_debug_explain", &src, "IPE-L0140");
+}
+
+/// The same reachable-`Debug.explain` program a `release` build rejects builds
+/// cleanly under a development build — the gate is production-only.
+#[test]
+fn dev_build_accepts_reachable_debug_explain() {
+    let src = explain_reachable_src();
+    assert_compiles("dev_build_accepts_reachable_debug_explain", &src);
+}
+
+/// A `Debug.explain` in genuinely DEAD code (a top-level binding never reachable
+/// from `main`) ships nothing — it is DCE'd — so even a production build accepts
+/// it. Only a REACHABLE dev-only construct is rejected, mirroring `Debug.todo`.
+#[test]
+fn release_accepts_dead_debug_explain() {
+    let src = format!(
+        "{HEAD}import Ipe.Io as Io\n\
          import Ipe.Ui as Ui\n\
          import Ipe.Debug as Debug\n\
-         type Page = Home\n\
+         unused : Element msg\n\
+         unused =\n    Ui.el [ Debug.explain ] (Ui.text \"hi\")\n\
+         main : Task Error ()\n\
+         main =\n    Io.println \"ok\"\n"
+    );
+    match compile_production("release_accepts_dead_debug_explain", &src) {
+        Outcome::Skip => {}
+        Outcome::Accepted(how) if how.starts_with("compiled successfully") => {}
+        Outcome::Accepted(how) => assert!(
+            false_marker(),
+            "release_accepts_dead_debug_explain: expected a clean compile, \
+             got a non-pipeline failure ({how})"
+        ),
+        Outcome::Rejected(got) => assert!(
+            false_marker(),
+            "release_accepts_dead_debug_explain: a DEAD Debug.explain must be \
+             DCE'd and accepted, but ipe REJECTED it with {got}"
+        ),
+    }
+}
+
+/// A rendered `Web.app` view carrying `Debug.explain` on an element — the
+/// attribute is reachable from `main` through the app config record's `view`
+/// field. Shared by the reject/accept companions above.
+fn explain_reachable_src() -> String {
+    format!(
+        "{HEAD}import Ipe.Tea.Web as Web\n\
+         import Ipe.Ui as Ui\n\
+         import Ipe.Tea.Web.Cmd as Cmd\n\
+         import Ipe.Tea.Web.Sub as Sub\n\
+         import Ipe.Debug as Debug\n\
          type Msg = Noop\n\
-         type alias Model = { x : Int }\n\
+         type alias Model = {{}}\n\
          init : a -> ( Model, Cmd Msg )\n\
-         init _req = ( { x = 0 }, Cmd.none )\n\
+         init _req = ( {{}}, Cmd.none )\n\
          update : Msg -> Model -> ( Model, Cmd Msg )\n\
          update _msg model = ( model, Cmd.none )\n\
+         view : Model -> Element Msg\n\
+         view _model = Ui.el [ Debug.explain ] (Ui.text \"hi\")\n\
          subscriptions : Model -> Sub Msg\n\
          subscriptions _model = Sub.none\n\
-         view : Model -> Element Msg\n\
-         view _model =\n\
-         \x20   Ui.el\n\
-         \x20       [ Debug.explain ]\n\
-         \x20       (Ui.text \"hi\")\n\
-         main =\n\
-         \x20   app\n\
-         \x20       { init = init\n\
-         \x20       , update = update\n\
-         \x20       , view = view\n\
-         \x20       , subscriptions = subscriptions\n\
-         \x20       , routes = []\n\
-         \x20       , notFound = Home\n\
-         \x20       }\n";
-    assert_rejected_production("release_rejects_debug_explain", src, "IPE-L0140");
+         main =\n    \
+         Web.app {{ init = init, update = update, view = view, subscriptions = subscriptions, routes = [], notFound = Noop }}\n"
+    )
 }
 
 /// A `case` missing an arm is non-exhaustive (IPE-T0010) even when another arm
