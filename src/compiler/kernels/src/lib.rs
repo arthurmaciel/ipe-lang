@@ -2034,6 +2034,19 @@ pub enum StdlibKernel {
     WebSocketClose,         // Int -> Task Error () (arity 1)
     WebSocketCloseWithCode, // Int -> String -> Int -> Task Error () (arity 3)
     SubSubscribeWebSocket,  // Int -> String -> (any -> msg) -> Sub msg (arity 3)
+    // ── Ipe.Js — the raw typed transport across the Ipê↔JS seam (ports) ──
+    // `Js.send : a -> Cmd msg` (outbound) and
+    // `Js.subscribe : Decoder a -> (a -> msg) -> Sub msg` (inbound). The crossing
+    // value `a` must be a plain, closed, concrete SEAL type: the CONCRETE argument
+    // type is checked fail-closed at canon (`port_boundary_seal_rejection`, the
+    // same seal predicate `CustomElement down up` uses), so a `Secret`/reserved-
+    // sink payload and a `Decoder Value` subscription are both rejected (IPE-N0039)
+    // — the untyped channel cannot be spelled. Both disclose the `js-port`
+    // capability. Emission is fail-closed (IPE-L0135, `Feature::JsPortTransport`)
+    // until the per-target live transport ships, so the value type-resolves and is
+    // seal-checked but no undenoted value reaches codegen.
+    JsSend,      // a -> Cmd msg (arity 1)
+    JsSubscribe, // Decoder a -> (a -> msg) -> Sub msg (arity 2)
     // ── Ipe.Env — build-time-embedded public config (wasm M5 residual) ──
     // `Env.public "KEY"` resolves ONLY for names in the project's `[wasm]
     // publicEnv` allowlist (`ipe.toml`, validated against the secret-name
@@ -3938,6 +3951,11 @@ impl StdlibKernel {
                 Tea,
                 "sub_subscribe_ws_message",
             ),
+            // The runtime fn names here are placeholders: a port value is refused
+            // fail-closed at emission (IPE-L0135) until the live per-target
+            // transport ships, so neither name is ever emitted.
+            Self::JsSend => d("Js", "send", 1, Tea, "js_send"),
+            Self::JsSubscribe => d("Js", "subscribe", 2, Tea, "js_subscribe"),
             Self::EnvPublic => d("Env", "public", 1, Pure, "env_public"),
             // ── Ipe.Ui.Region ──────────────────────────────────────────────
             Self::RegionMainContent => d("Region", "mainContent", 0, Ui, "ui_region_main_content_"),
@@ -5201,6 +5219,9 @@ impl StdlibKernel {
         Self::WebSocketClose,
         Self::WebSocketCloseWithCode,
         Self::SubSubscribeWebSocket,
+        // ── Ipe.Js — the raw typed transport across the Ipê↔JS seam ──────
+        Self::JsSend,
+        Self::JsSubscribe,
         // ── Ipe.Env — build-time-embedded public config ──────────────
         Self::EnvPublic,
         // ── Ipe.Ui.Region ──────────────────────────────────────────────
@@ -6895,6 +6916,16 @@ impl StdlibKernel {
         );
         const SUB_SUBSCRIBE_WS: TyShape =
             TyShape::Fun(&INT, &TyShape::Fun(&STRING, &TyShape::Fun(&A, &SUB_B)));
+        // Ipe.Js ports. `send : a -> Cmd msg` — payload `a` is the scheme's `B`
+        // (the sealed crossing value), `msg` is `A` (so `Cmd msg` reuses `CMD_A`).
+        // `subscribe : Decoder a -> (a -> msg) -> Sub msg` — decoded `a` is `B`,
+        // `msg` is `A`, reusing `DEC_B` / `B_TO_A` / `SUB_A`. The seal-legality of
+        // the concrete `a` is not expressible as a `TyShape` bound (it is a
+        // structural predicate, not a class), so it is enforced separately at canon
+        // (`port_boundary_seal_rejection`), exactly as `CustomElement`'s seal is a
+        // canon gate rather than a scheme constraint.
+        const JS_SEND: TyShape = TyShape::Fun(&B, &CMD_A);
+        const JS_SUBSCRIBE: TyShape = TyShape::Fun(&DEC_B, &TyShape::Fun(&B_TO_A, &SUB_A));
         // Ws server.
         const WS_ON_CB_TO_CFG: TyShape = TyShape::Fun(
             &TyShape::Fun(&WS_SERVER, &TASK_UNIT),
@@ -8458,6 +8489,10 @@ impl StdlibKernel {
             Self::WebSocketCloseWithCode => Some(&WS_CLOSE_WITH_CODE),
             Self::SubSubscribeWebSocket => Some(&SUB_SUBSCRIBE_WS),
 
+            // ── Ipe.Js ports. ──
+            Self::JsSend => Some(&JS_SEND),
+            Self::JsSubscribe => Some(&JS_SUBSCRIBE),
+
             // ── Ws server (opaque handle / cfg). ──
             Self::WsDefaultCfg => Some(&WS_SERVER_CFG),
             Self::WsWithOnConnect | Self::WsWithOnClose => Some(&WS_ON_CB_TO_CFG),
@@ -9138,6 +9173,15 @@ impl StdlibKernel {
             // consumes it, so tagging this one kernel is the whole inference point:
             // any module whose reachable code binds a widget discloses the axis.
             Self::UiWidget => Some(Capability::CustomElement),
+            // `Js.send` / `Js.subscribe` exchange typed values with page JS over
+            // the raw port transport: their reachable presence means the program
+            // talks to attacker-controlled browser JavaScript, gated only by the
+            // seal type (outbound) and the fail-closed seal decoder (inbound). That
+            // is a security-relevant declared-trust disclosure — the `js-port`
+            // axis. Tagging these two kernels is the whole inference point: any
+            // module whose reachable code binds a port discloses the axis, through
+            // the same SSOT the other axes use.
+            Self::JsSend | Self::JsSubscribe => Some(Capability::JsPort),
             Self::TimeNow
             | Self::TimeSleep
             | Self::TimeUnixMillis
@@ -10191,6 +10235,8 @@ impl StdlibKernel {
                 | Self::SubSubscribeTopic
                 | Self::HttpStreamChunks
                 | Self::SubSubscribeWebSocket
+                | Self::JsSend
+                | Self::JsSubscribe
         )
     }
 

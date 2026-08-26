@@ -244,7 +244,12 @@ impl CapabilitySet {
             Capability::Clock
             | Capability::Random
             | Capability::Unsafe
-            | Capability::CustomElement => None,
+            | Capability::CustomElement
+            // `js-port` discloses typed data exchange with page JS; like
+            // `custom-element` it has no server-side runtime surface a jail could
+            // isolate (the far side is the client page), so it is never a
+            // confinement-set member.
+            | Capability::JsPort => None,
         }
     }
 
@@ -364,9 +369,15 @@ pub const fn is_runtime_unenforceable_for(cap: Capability, jail: JailForTarget) 
         // runtime surface to enforce (it runs in the client page); the
         // unenforceability question does not apply to it either — never
         // unenforceable, its integrity is the served page's SRI pin.
-        Capability::Clock | Capability::Random | Capability::Unsafe | Capability::CustomElement => {
-            false
-        }
+        // `js-port` is the same class as `custom-element`: it discloses typed
+        // exchange with page JS, which has no server-side runtime surface to
+        // enforce, so the unenforceability question does not apply — its inbound
+        // integrity is the fail-closed seal decoder, not a jail confinement.
+        Capability::Clock
+        | Capability::Random
+        | Capability::Unsafe
+        | Capability::CustomElement
+        | Capability::JsPort => false,
         // A runtime-enforced axis is unenforceable exactly where the target's
         // jail does NOT confine it.
         Capability::Network
@@ -1186,7 +1197,8 @@ mod tests {
                 Capability::Clock
                 | Capability::Random
                 | Capability::Unsafe
-                | Capability::CustomElement => {
+                | Capability::CustomElement
+                | Capability::JsPort => {
                     assert!(!unenf, "{cap:?}");
                 }
                 _ => assert!(unenf, "{cap:?} must be refused until a runtime jail exists"),
@@ -1215,7 +1227,8 @@ mod tests {
                 Capability::Clock
                 | Capability::Random
                 | Capability::Unsafe
-                | Capability::CustomElement => {
+                | Capability::CustomElement
+                | Capability::JsPort => {
                     assert!(!unenf, "{cap:?}");
                 }
                 _ => assert!(unenf, "{cap:?} stays refused on a refuse-gap target"),
@@ -1487,7 +1500,8 @@ mod tests {
                 Capability::Clock
                 | Capability::Random
                 | Capability::Unsafe
-                | Capability::CustomElement => {
+                | Capability::CustomElement
+                | Capability::JsPort => {
                     assert!(!unenf, "{cap:?}");
                 }
                 _ => assert!(unenf, "{cap:?} stays refused on an empty-set target"),

@@ -1264,6 +1264,141 @@ fn canon_user_kernel_alias_is_rejected() {
     assert_rejected("canon_user_kernel_alias_is_rejected", &src, "IPE-N0042");
 }
 
+// ── Ipe.Js ports — raw typed Ipê↔JS transport (IPE-L0148 / IPE-L0149) ──
+//
+// A port (`Js.send` / `Js.subscribe`) reuses the same seal the `CustomElement`
+// boundary enforces, but on the CONCRETE inferred crossing type (a port's `a` is
+// inferred, not annotated). These pin: a seal-legal port type-checks + seal-checks
+// then fails closed at emission (IPE-L0149, transport not shipped); a `Secret`
+// payload and an untyped `Value` decoder are both rejected fail-closed (IPE-L0148)
+// — a secret must never cross to JS, and the untyped channel cannot be spelled.
+//
+// A port CALL must be REACHABLE for its lowering gate to fire, so every fixture
+// wires the port into a real Web-shape TEA app (`update` / `subscriptions`), not a
+// dead top-level binding (which DCE would drop before lowering).
+
+/// A minimal Web-shape TEA app that wires a reachable `Js.send` outbound port with
+/// an `Int` payload (through `update`) and a reachable `Js.subscribe` inbound port
+/// with `decoder_expr` producing a value fed to `Got` (through `subscriptions`), so
+/// both port lowering gates fire.
+fn js_port_app(decoder_expr: &str) -> String {
+    format!(
+        "module Main exposing (main)\n\
+         import Ipe.Tea.Web as Web\n\
+         import Ipe.Tea.Web.Cmd as Cmd\n\
+         import Ipe.Tea.Web.Sub as Sub\n\
+         import Ipe.Ui as Ui\n\
+         import Ipe.Js as Js\n\
+         import Ipe.Json.Decode as Decode\n\
+         type alias Model = {{ n : Int }}\n\
+         type Msg = Tick | Got Int\n\
+         init : a -> ( Model, Cmd.Cmd Msg )\n\
+         init _r =\n\
+         \x20   ( {{ n = 0 }}, Cmd.none )\n\
+         update : Msg -> Model -> ( Model, Cmd.Cmd Msg )\n\
+         update msg model =\n\
+         \x20   case msg of\n\
+         \x20       Tick ->\n\
+         \x20           ( model, Js.send model.n )\n\
+         \x20       Got k ->\n\
+         \x20           ( {{ n = k }}, Cmd.none )\n\
+         view : Model -> Element Msg\n\
+         view _model =\n\
+         \x20   Ui.text \"ok\"\n\
+         subscriptions : Model -> Sub.Sub Msg\n\
+         subscriptions _model =\n\
+         \x20   Js.subscribe {decoder_expr} Got\n\
+         main =\n\
+         \x20   Web.app\n\
+         \x20       {{ init = init, update = update, view = view, subscriptions = subscriptions\n\
+         \x20       , routes = [], notFound = Tick\n\
+         \x20       }}\n"
+    )
+}
+
+/// A seal-LEGAL port (an `Int` payload out, an `Int` decoder in) type-checks and
+/// passes the boundary seal, then fails CLOSED at emission with IPE-L0149: the raw
+/// port transport (per-target lowering + JS runtime glue) is not shipped yet, so
+/// no undenoted seam reaches codegen. This is the port twin of the shipped
+/// custom-element emission gate — `ipe` accepts the type, the emit is fail-closed.
+#[test]
+fn js_port_seal_legal_fails_closed_at_emission() {
+    let src = js_port_app("Decode.int");
+    assert_rejected("js_port_seal_legal", &src, "IPE-L0149");
+}
+
+/// A `Js.subscribe` whose decoder is `Decoder Value` (an untyped JSON hole) is
+/// rejected fail-closed at lowering with IPE-L0148: the untyped channel cannot be
+/// spelled, so an undecoded value can never travel inward. Parse-don't-validate at
+/// the trust boundary — a genuinely free-form payload must be NAMED with a declared
+/// ADT, never left as `Value`. The inbound handler is typed `Value -> Msg` so the
+/// program is otherwise well-typed; only the seal turns it away.
+#[test]
+fn js_port_subscribe_value_decoder_rejected() {
+    let src = "module Main exposing (main)\n\
+         import Ipe.Tea.Web as Web\n\
+         import Ipe.Tea.Web.Cmd as Cmd\n\
+         import Ipe.Tea.Web.Sub as Sub\n\
+         import Ipe.Ui as Ui\n\
+         import Ipe.Js as Js\n\
+         import Ipe.Json.Decode as Decode\n\
+         type alias Model = { n : Int }\n\
+         type Msg = Tick | GotV Value\n\
+         init : a -> ( Model, Cmd.Cmd Msg )\n\
+         init _r =\n\
+         \x20   ( { n = 0 }, Cmd.none )\n\
+         update : Msg -> Model -> ( Model, Cmd.Cmd Msg )\n\
+         update _msg model =\n\
+         \x20   ( model, Cmd.none )\n\
+         view : Model -> Element Msg\n\
+         view _model =\n\
+         \x20   Ui.text \"ok\"\n\
+         subscriptions : Model -> Sub.Sub Msg\n\
+         subscriptions _model =\n\
+         \x20   Js.subscribe Decode.value GotV\n\
+         main =\n\
+         \x20   Web.app\n\
+         \x20       { init = init, update = update, view = view, subscriptions = subscriptions\n\
+         \x20       , routes = [], notFound = Tick\n\
+         \x20       }\n";
+    assert_rejected("js_port_subscribe_value", src, "IPE-L0148");
+}
+
+/// A `Js.send` whose payload is a `Secret` is rejected fail-closed at lowering with
+/// IPE-L0148: a secret-tier value must NEVER be serialised across the Ipê↔JS seam.
+/// The same security exclusion the custom-element seal enforces (IPE-N0039), here
+/// on the concrete inferred payload type of a port.
+#[test]
+fn js_port_send_secret_rejected() {
+    let src = "module Main exposing (main)\n\
+         import Ipe.Tea.Web as Web\n\
+         import Ipe.Tea.Web.Cmd as Cmd\n\
+         import Ipe.Tea.Web.Sub as Sub\n\
+         import Ipe.Ui as Ui\n\
+         import Ipe.Js as Js\n\
+         import Ipe.Secret as Secret\n\
+         type alias Model = { s : Secret }\n\
+         type Msg = Tick\n\
+         init : a -> ( Model, Cmd.Cmd Msg )\n\
+         init _r =\n\
+         \x20   ( { s = Secret.fromString \"x\" }, Cmd.none )\n\
+         update : Msg -> Model -> ( Model, Cmd.Cmd Msg )\n\
+         update _msg model =\n\
+         \x20   ( model, Js.send model.s )\n\
+         view : Model -> Element Msg\n\
+         view _model =\n\
+         \x20   Ui.text \"ok\"\n\
+         subscriptions : Model -> Sub.Sub Msg\n\
+         subscriptions _model =\n\
+         \x20   Sub.none\n\
+         main =\n\
+         \x20   Web.app\n\
+         \x20       { init = init, update = update, view = view, subscriptions = subscriptions\n\
+         \x20       , routes = [], notFound = Tick\n\
+         \x20       }\n";
+    assert_rejected("js_port_send_secret", src, "IPE-L0148");
+}
+
 // ===========================================================================
 // Type — IPE-T####
 // ===========================================================================

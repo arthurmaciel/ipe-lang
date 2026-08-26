@@ -18,16 +18,17 @@ use crate::code::{
     IPE_L0120, IPE_L0121, IPE_L0122, IPE_L0123, IPE_L0124, IPE_L0125, IPE_L0126, IPE_L0127,
     IPE_L0128, IPE_L0129, IPE_L0130, IPE_L0131, IPE_L0132, IPE_L0133, IPE_L0134, IPE_L0135,
     IPE_L0136, IPE_L0140, IPE_L0141, IPE_L0142, IPE_L0143, IPE_L0144, IPE_L0145, IPE_L0146,
-    IPE_L0147, IPE_L0200, IPE_N0001, IPE_N0002, IPE_N0003, IPE_N0004, IPE_N0005, IPE_N0010,
-    IPE_N0011, IPE_N0012, IPE_N0013, IPE_N0020, IPE_N0021, IPE_N0022, IPE_N0023, IPE_N0024,
-    IPE_N0025, IPE_N0026, IPE_N0027, IPE_N0028, IPE_N0029, IPE_N0030, IPE_N0031, IPE_N0032,
-    IPE_N0033, IPE_N0034, IPE_N0035, IPE_N0036, IPE_N0037, IPE_N0038, IPE_N0039, IPE_N0040,
-    IPE_N0041, IPE_N0042, IPE_N0043, IPE_N0044, IPE_P0001, IPE_P0002, IPE_P0003, IPE_P0010,
-    IPE_P0011, IPE_P0012, IPE_P0013, IPE_P0014, IPE_P0015, IPE_P0016, IPE_P0017, IPE_P0018,
-    IPE_P0020, IPE_P0021, IPE_P0030, IPE_P0031, IPE_P0040, IPE_P0041, IPE_P0050, IPE_P0060,
-    IPE_P0061, IPE_P0062, IPE_P0063, IPE_P0064, IPE_P0065, IPE_P0066, IPE_P0067, IPE_S0001,
-    IPE_T0001, IPE_T0002, IPE_T0003, IPE_T0004, IPE_T0010, IPE_T0011, IPE_T0012, IPE_T0013,
-    IPE_T0014, IPE_T0015, IPE_T0016, IPE_T0017, IPE_T0018, IPE_T0019, IPE_T0020, Severity,
+    IPE_L0147, IPE_L0148, IPE_L0149, IPE_L0200, IPE_N0001, IPE_N0002, IPE_N0003, IPE_N0004,
+    IPE_N0005, IPE_N0010, IPE_N0011, IPE_N0012, IPE_N0013, IPE_N0020, IPE_N0021, IPE_N0022,
+    IPE_N0023, IPE_N0024, IPE_N0025, IPE_N0026, IPE_N0027, IPE_N0028, IPE_N0029, IPE_N0030,
+    IPE_N0031, IPE_N0032, IPE_N0033, IPE_N0034, IPE_N0035, IPE_N0036, IPE_N0037, IPE_N0038,
+    IPE_N0039, IPE_N0040, IPE_N0041, IPE_N0042, IPE_N0043, IPE_N0044, IPE_P0001, IPE_P0002,
+    IPE_P0003, IPE_P0010, IPE_P0011, IPE_P0012, IPE_P0013, IPE_P0014, IPE_P0015, IPE_P0016,
+    IPE_P0017, IPE_P0018, IPE_P0020, IPE_P0021, IPE_P0030, IPE_P0031, IPE_P0040, IPE_P0041,
+    IPE_P0050, IPE_P0060, IPE_P0061, IPE_P0062, IPE_P0063, IPE_P0064, IPE_P0065, IPE_P0066,
+    IPE_P0067, IPE_S0001, IPE_T0001, IPE_T0002, IPE_T0003, IPE_T0004, IPE_T0010, IPE_T0011,
+    IPE_T0012, IPE_T0013, IPE_T0014, IPE_T0015, IPE_T0016, IPE_T0017, IPE_T0018, IPE_T0019,
+    IPE_T0020, Severity,
 };
 use crate::span::Span;
 
@@ -1065,6 +1066,24 @@ pub enum Feature {
     /// ever reaches codegen. A `CustomElement`-typed binding is accepted at the
     /// type level but cannot be built until the transport ships. [IPE-L0133]
     CustomElementTransport,
+    /// A `Js.send` payload or a `Js.subscribe` decoder crossed the Ipê↔JS port
+    /// seam with a type that is NOT seal-legal: a `Secret` or reserved-sink type
+    /// (a secret must never be serialised to JS), an untyped `Value`/`Json` (the
+    /// untyped channel cannot be spelled — name the payload with a declared ADT
+    /// instead), a function, an effect carrier, or another non-plain value. The
+    /// crossing value must be a plain, closed, concrete value type, exactly the
+    /// seal the `CustomElement down up` boundary enforces. Fail closed here rather
+    /// than serialise a value the boundary cannot prove safe. [IPE-L0148]
+    JsPortBoundarySeal,
+    /// A seal-legal `Js.send` / `Js.subscribe` port reached lowering. The payload
+    /// type passes the seal, but the raw port transport — the per-target lowering
+    /// (server-driven network stream vs client-WASM in-process) plus the generated
+    /// `ipe.send` / `ipe.onReceive` JS runtime glue — is not emitted yet. Fail
+    /// closed here with a clean diagnostic rather than an ICE at the lowerer's
+    /// empty-home catch-all: the contract is that no untyped or undenoted seam
+    /// ever reaches codegen. A port is accepted and seal-checked at the type level
+    /// but cannot be built until the transport ships. [IPE-L0149]
+    JsPortTransport,
     /// A collection element that embeds a function reached a collection kernel
     /// that cannot represent it: an equality-/ordering-requiring kernel
     /// (`List.member` / `List.sort` / `List.unique` / `List.maximum` /
@@ -1890,6 +1909,8 @@ const fn feature_code(f: Feature) -> Code {
         Feature::CustomElementTransport => IPE_L0133,
         Feature::FunctionElementEquality => IPE_L0134,
         Feature::NonCloneValueReuse => IPE_L0135,
+        Feature::JsPortBoundarySeal => IPE_L0148,
+        Feature::JsPortTransport => IPE_L0149,
     }
 }
 

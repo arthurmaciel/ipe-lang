@@ -546,6 +546,21 @@ const STD_MONEY: &str = include_str!("../Ipe/Money.ipe");
 /// `WebSocket` qualifier stays out of `STDLIB_MODULE_QUALIFIERS`.
 const IPE_CORE_WEBSOCKET: &str = include_str!("../Ipe/WebSocket.ipe");
 
+/// `Ipe.Js` — the raw typed transport across the Ipê↔JS seam, ports (compiled
+/// source).
+///
+/// Exposes `send : a -> Cmd msg` (outbound) and
+/// `subscribe : Decoder a -> (a -> msg) -> Sub msg` (inbound), routed through the
+/// `Ffi.kernel "Js_send"` / `"Js_subscribe"` aliases to the registered `JsSend` /
+/// `JsSubscribe` kernels. The crossing value is seal-checked fail-closed on its
+/// CONCRETE type (IPE-N0039, the same predicate the `CustomElement down up`
+/// boundary uses), so a `Secret`/reserved-sink payload and a `Decoder Value`
+/// subscription are both rejected at compile time — the untyped channel cannot be
+/// spelled. Reachable use discloses the `js-port` capability. Resolved via the
+/// `Ffi.kernel` alias fast-path, so the `Js` qualifier stays out of
+/// `STDLIB_MODULE_QUALIFIERS`.
+const IPE_CORE_JS: &str = include_str!("../Ipe/Js.ipe");
+
 /// `Ipe.Env` — build-time-embedded public config (compiled source).
 ///
 /// Defines `public : String -> Maybe String`, routed through the
@@ -770,6 +785,10 @@ pub const COMPILED_STD_MODULES: &[CompiledStdModule] = &[
     CompiledStdModule {
         dotted: "Ipe.WebSocket",
         source: IPE_CORE_WEBSOCKET,
+    },
+    CompiledStdModule {
+        dotted: "Ipe.Js",
+        source: IPE_CORE_JS,
     },
     CompiledStdModule {
         dotted: "Ipe.Env",

@@ -64,6 +64,16 @@ pub enum Capability {
     /// deliberately NOT low-value: a shipped-JS surface must always surface to the
     /// consumer, exactly as [`Self::NativeFfi`] does.
     CustomElement,
+    /// Using a JS port: the program's reachable code binds `Js.send` (outbound
+    /// Ipê→JS) or `Js.subscribe` (inbound JS→Ipê), so it exchanges typed values
+    /// with page JavaScript over the raw transport. Like [`Self::CustomElement`],
+    /// this is a disclosure of a declared-trust surface the server-side sandbox
+    /// cannot see through: the far side is attacker-controlled browser JS, gated
+    /// only by the fail-closed seal decoder (inbound) and the seal type (outbound).
+    /// Its presence discloses that the package exchanges data with page JS whose
+    /// behaviour is the package author's declared trust. Deliberately NOT
+    /// low-value: a JS-exchange surface must always surface to the consumer.
+    JsPort,
 }
 
 impl Capability {
@@ -82,6 +92,7 @@ impl Capability {
         Self::FfiRaw,
         Self::Unsafe,
         Self::CustomElement,
+        Self::JsPort,
     ];
 
     /// Whether this capability carries no OS-isolatable resource surface — the
@@ -115,6 +126,7 @@ impl Capability {
             Self::FfiRaw => "ffi-raw",
             Self::Unsafe => "unsafe",
             Self::CustomElement => "custom-element",
+            Self::JsPort => "js-port",
         }
     }
 }
@@ -139,6 +151,7 @@ impl std::str::FromStr for Capability {
             "ffi-raw" => Ok(Self::FfiRaw),
             "unsafe" => Ok(Self::Unsafe),
             "custom-element" => Ok(Self::CustomElement),
+            "js-port" => Ok(Self::JsPort),
             other => Err(UnknownCapability(other.to_owned())),
         }
     }
@@ -156,7 +169,7 @@ impl std::fmt::Display for UnknownCapability {
             f,
             "unknown capability {:?} (expected one of: network, filesystem, \
              database, env, subprocess, clock, random, native-ffi, ffi-raw, unsafe, \
-             custom-element)",
+             custom-element, js-port)",
             self.0
         )
     }
@@ -241,7 +254,7 @@ mod tests {
         // A guard against `ALL` drifting from the enum: each name is distinct,
         // and the count matches the declared axes.
         let names: Vec<&str> = Capability::ALL.iter().map(|c| c.as_str()).collect();
-        assert_eq!(names.len(), 11);
+        assert_eq!(names.len(), 12);
         let mut sorted = names.clone();
         sorted.sort_unstable();
         sorted.dedup();
@@ -261,6 +274,7 @@ mod tests {
         assert_eq!(Capability::FfiRaw.as_str(), "ffi-raw");
         assert_eq!(Capability::Unsafe.as_str(), "unsafe");
         assert_eq!(Capability::CustomElement.as_str(), "custom-element");
+        assert_eq!(Capability::JsPort.as_str(), "js-port");
     }
 
     #[test]
@@ -299,6 +313,9 @@ mod tests {
         // surface analogous to `native-ffi`: it must always surface, never be
         // grouped with the clock/random/unsafe noise the low-value flag marks.
         assert!(!Capability::CustomElement.is_low_value());
+        // `js-port` is the same class of declared-trust JS-exchange disclosure: it
+        // must always surface to the consumer, never be grouped as low-value.
+        assert!(!Capability::JsPort.is_low_value());
     }
 
     #[test]
