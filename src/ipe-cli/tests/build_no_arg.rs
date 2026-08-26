@@ -46,7 +46,7 @@ macro_rules! in_dir {
 }
 
 // ---------------------------------------------------------------------------
-// CLI-parsing: no-project directory → usage error (no ipe.toml, no src/Main.ipe)
+// CLI-parsing: no-project directory → usage error (no package.ipe, no src/Main.ipe)
 // ---------------------------------------------------------------------------
 
 /// `ipe build` with no argument in an empty temp directory returns a usage

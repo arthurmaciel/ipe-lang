@@ -1075,7 +1075,7 @@ mod tests {
 
     /// Parse + canonicalise a single module through the MULTI-module entry
     /// (`canonicalise_module`) with no deps — the path the build driver uses for
-    /// a project with a `ipe.toml`, and the one that processes `import`
+    /// a project with a `package.ipe`, and the one that processes `import`
     /// declarations. Returns the canonical module + interner.
     fn canon_module_src(src: &str) -> Option<(ast::Module, Interner)> {
         let mut i = Interner::new();

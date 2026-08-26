@@ -201,10 +201,10 @@ pub(crate) struct ResolvedProject {
     pub(crate) blame_path: PathBuf,
     pub(crate) db_driver: ipe_backend_rust::DbDriver,
     /// The `[wasm] publicEnv` allowlist (empty for the no-manifest / sibling-
-    /// discovery path — there is no `ipe.toml` to declare one).
+    /// discovery path — there is no manifest to declare one).
     pub(crate) wasm_public_env: Vec<String>,
-    /// The sanitized Cargo package name for the emitted crate (from `ipe.toml`
-    /// `name` via [`ipe_backend_rust::sanitize_cargo_name`]). Empty string
+    /// The sanitized Cargo package name for the emitted crate (from `package.ipe`
+    /// name via [`ipe_backend_rust::sanitize_cargo_name`]). Empty string
     /// when no manifest is present (sibling-discovery path uses `"ipe-app"`).
     pub(crate) cargo_name: String,
 }

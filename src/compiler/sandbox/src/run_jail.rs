@@ -91,13 +91,13 @@ macro_rules! on_jailed_target {
     };
 }
 
-// ── the database axis (a run-jail input, resolved from ipe.toml) ─────────────
+// ── the database axis (a run-jail input, resolved from package.ipe) ──────────
 
 /// How `Capability::Database` lowers for this project.
 ///
 /// The driver decides whether a database effect is really a network effect (a
 /// TCP driver) or a filesystem effect (an embedded/`SQLite` file). Resolved by
-/// the CLI from the `ipe.toml` driver selection before the profile is built.
+/// the CLI from the `package.ipe` driver selection before the profile is built.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DatabaseAxis {
     /// A TCP-connected database (`Postgres`, `MySQL`, …) → the `network` control.
@@ -115,7 +115,7 @@ pub enum DatabaseAxis {
 /// Why a capability set could not be lowered to a profile.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProfileError {
-    /// The set includes `database` but the `ipe.toml` driver could not be
+    /// The set includes `database` but the `package.ipe` driver could not be
     /// resolved to a concrete axis. Fail-closed: dropping the axis would
     /// *tighten* the jail past what the program needs (a false-deny), and
     /// guessing an axis could under-isolate — so this refuses.
@@ -127,7 +127,7 @@ impl std::fmt::Display for ProfileError {
         match self {
             Self::UnknownDatabaseDriver => write!(
                 f,
-                "the program uses `database`, but the ipe.toml database driver could not be \
+                "the program uses `database`, but the package.ipe database driver could not be \
                  resolved to a concrete axis (network or filesystem); refusing to build a jail \
                  that might over- or under-isolate it"
             ),

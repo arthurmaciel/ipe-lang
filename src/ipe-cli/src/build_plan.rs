@@ -3,8 +3,8 @@
 //! `docs/architecture/static-compilation.md`).
 //!
 //! The request arrives through three precedence layers — CLI flags, env
-//! (`IPE_STATIC` / `IPE_TARGET` / `IPE_ALLOC`), `ipe.toml` `[rust]` — merged
-//! per-field (CLI > env > toml) and resolved ONCE into
+//! (`IPE_STATIC` / `IPE_TARGET` / `IPE_ALLOC`), `package.ipe` `[rust]` — merged
+//! per-field (CLI > env > manifest) and resolved ONCE into
 //! `Result<Option<StaticPlan>, Refusal>` before any compilation starts.
 //! Downstream code sees either `None` (a normal dynamic build) or a plan
 //! whose every gate already passed; an illegal combination never constructs
@@ -55,7 +55,7 @@ impl AllocatorChoice {
     }
 }
 
-/// One precedence layer of the static request (CLI, env, or `ipe.toml`).
+/// One precedence layer of the static request (CLI, env, or `package.ipe`).
 /// Every field is `Option` so a layer overrides only what it actually sets.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct StaticRequestLayer {
@@ -117,7 +117,7 @@ pub fn env_layer() -> Result<StaticRequestLayer, Refusal> {
     })
 }
 
-/// Parse a boolean request value (`ipe.toml` key or env var).
+/// Parse a boolean request value (`package.ipe` setting or env var).
 ///
 /// # Errors
 /// [`Refusal::InvalidBool`] naming the source and the malformed value.
@@ -172,7 +172,7 @@ pub enum Refusal {
     /// skipping the C-compiler preflight — a build that lies about its promise
     /// and fails at link time. Refused until the swaps land.
     CfreeNotYetWired,
-    /// A boolean request value (env var or `ipe.toml` key) is malformed.
+    /// A boolean request value (env var or `package.ipe` setting) is malformed.
     InvalidBool { source: &'static str, got: String },
 }
 

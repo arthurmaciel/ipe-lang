@@ -16,7 +16,7 @@ use crate::CliError;
 
 // ── Per-surface read caps ─────────────────────────────────────────────────────
 
-/// Maximum bytes for a `package.ipe` or `ipe.toml` manifest file.
+/// Maximum bytes for a `package.ipe` or legacy `ipe.toml` manifest file.
 ///
 /// 512 KiB is generous for any real manifest while refusing a device node or a
 /// multi-GiB file that would exhaust memory.

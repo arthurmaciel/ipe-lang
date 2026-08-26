@@ -47,12 +47,12 @@ pub use preamble::{epilogue, preamble};
 
 /// Which SQL database driver the emitted project targets.
 ///
-/// Selected by `ipe.toml`'s `[database] driver` key
+/// Selected by `package.ipe`'s database driver setting
 /// (`crates/ipe/src/project.rs::DbDriver`, converted at the `ipe` →
 /// `ipe_backend_rust` boundary via [`RustBackend::with_db_driver`]) — drives
 /// the `ipe_runtime/config.rs` template and `Cargo.toml` sqlx feature
 /// [`crate::project::emit_program`] selects. `Sqlite` is the default: a
-/// program with no `[database]` section, or one built via the single-file
+/// program with no database setting, or one built via the single-file
 /// `ipe build` path (no manifest at all), emits byte-identical output to
 /// pre-driver-selection backends.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -193,14 +193,14 @@ pub struct RustBackend<'a> {
     /// `ipe release` (the release command does not expose the flag), so no
     /// production artifact carries recorder code. Set via [`Self::with_debugger`].
     debugger: bool,
-    /// The project name from `ipe.toml`, sanitized into a valid Cargo package
+    /// The project name from `package.ipe`, sanitized into a valid Cargo package
     /// name via [`sanitize_cargo_name`]. Becomes the emitted crate's
     /// `[package] name`. Empty string signals "use the safe fallback
     /// `ipe-app`" — set via [`Self::with_project_name`].
     cargo_name: String,
 }
 
-/// Convert an arbitrary `ipe.toml` `name` value into a valid Cargo package
+/// Convert an arbitrary `package.ipe` name value into a valid Cargo package
 /// name and binary name.
 ///
 /// Cargo package names must be non-empty, start with a letter or `_`, contain
@@ -335,9 +335,9 @@ impl<'a> RustBackend<'a> {
         }
     }
 
-    /// Set the emitted crate's package name from the `ipe.toml` `name` field.
+    /// Set the emitted crate's package name from the `package.ipe` name field.
     /// The value is sanitized via [`sanitize_cargo_name`] before use, so any
-    /// valid (or invalid) `ipe.toml` name produces a valid Cargo package name.
+    /// valid (or invalid) name produces a valid Cargo package name.
     /// When not called (or called with an empty string), the emitted crate is
     /// named `ipe-app` — the safe default.
     #[must_use]
@@ -380,8 +380,8 @@ impl<'a> RustBackend<'a> {
         self
     }
 
-    /// Select the SQL driver the emitted project targets (from `ipe.toml`'s
-    /// `[database] driver`). No-op on programs that don't use any Db kernel.
+    /// Select the SQL driver the emitted project targets (from `package.ipe`'s
+    /// database setting). No-op on programs that don't use any Db kernel.
     #[must_use]
     pub const fn with_db_driver(mut self, driver: DbDriver) -> Self {
         self.db_driver = driver;
@@ -397,7 +397,7 @@ impl<'a> RustBackend<'a> {
         self
     }
 
-    /// Supply the `[wasm] publicEnv` allowlist (from `ipe.toml`, already
+    /// Supply the `[wasm] publicEnv` allowlist (from `package.ipe`, already
     /// validated against the secret-name denylist at parse time — see
     /// `ipe_cli::project::is_denylisted_public_env_name`). No-op on programs
     /// that call no `Env.public`. Threaded through regardless of
@@ -705,9 +705,9 @@ pub(crate) struct EmitCtx<'a> {
     ///   values to the runtime's `SqlParam`.
     pub(crate) uses_db: bool,
     /// Which SQL driver the emitted `Cargo.toml` / `ipe_runtime/config.rs`
-    /// target when [`Self::uses_db`] is set (`ipe.toml`'s `[database] driver`,
-    /// threaded in via [`RustBackend::with_db_driver`]). Meaningless / ignored
-    /// when `uses_db` is `false`.
+    /// target when [`Self::uses_db`] is set (from `package.ipe`'s database
+    /// setting, threaded in via [`RustBackend::with_db_driver`]). Meaningless /
+    /// ignored when `uses_db` is `false`.
     pub(crate) db_driver: DbDriver,
     /// The compilation target (`Native` | `WasmClient`) — selects the manifest
     /// template, the vendored runtime module set, and the entry shape.
@@ -1000,12 +1000,12 @@ pub(crate) struct EmitCtx<'a> {
     /// proven to need no reactor. Wasm targets ignore this (their entry is
     /// `#[wasm_bindgen(start)]`, their runtime already tokio-free).
     pub(crate) uses_async_runtime: bool,
-    /// The `[wasm] publicEnv` allowlist (`ipe.toml`, threaded in via
-    /// [`RustBackend::with_wasm_public_env`]) — already validated against the
-    /// secret-name denylist at `ipe.toml` parse time. Meaningless / ignored
+    /// The `[wasm] publicEnv` allowlist from `package.ipe`, threaded in via
+    /// [`RustBackend::with_wasm_public_env`] — already validated against the
+    /// secret-name denylist at manifest parse time. Meaningless / ignored
     /// when [`Self::uses_env_public`] is `false`.
     pub(crate) wasm_public_env: Vec<String>,
-    /// `true` when `[wasm] mode = "hydrate"` was set in `ipe.toml`. When set,
+    /// `true` when `[wasm] mode = "hydrate"` was set in `package.ipe`. When set,
     /// the emitted wasm epilogue includes a `#[wasm_bindgen] pub fn hydrate(…)`
     /// export in addition to the `#[wasm_bindgen(start)] ipe_start` entry —
     /// the fault-tolerant island parse + `wasm_adopt_app` fallback path (M7).
@@ -1107,7 +1107,7 @@ pub(crate) struct EmitCtx<'a> {
     /// Every `IrType::Record` and every record literal resolves through this map.
     record_by_fieldset: BTreeMap<Vec<String>, Vec<usize>>,
     /// The sanitized Cargo package name for the emitted crate. Derived from
-    /// the `ipe.toml` `name` field via [`sanitize_cargo_name`] and threaded in
+    /// the `package.ipe` name field via [`sanitize_cargo_name`] and threaded in
     /// through [`RustBackend::with_project_name`]. Used by
     /// [`crate::project::assemble_project_files`] to write `[package] name =
     /// "<cargo_name>"` into the emitted `Cargo.toml`. Defaults to `"ipe-app"`
