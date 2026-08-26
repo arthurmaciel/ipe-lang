@@ -13642,6 +13642,39 @@ impl<'a> Lowerer<'a> {
     /// (arity 2: accessor + store). The accessor argument (`.field`) names the
     /// validated column; the store argument is lowered and passed on to the
     /// corresponding `*Named` stdlib helper alongside the extracted column name.
+    /// `Store.join storeA .keyA storeB .keyB` — extract the two join columns
+    /// from the accessor arguments (the same `accessor_column` snake-case
+    /// derivation the query leaves use) and rewrite to the `joinNamed` stdlib
+    /// helper carrying both stores and both validated key columns. The accessor
+    /// never survives lowering, so no closure is emitted and no column string is
+    /// caller-supplied.
+    fn lower_store_join(&self, args: &[canon::Expr]) -> DResult<Expr> {
+        let (Some(store_a), Some(acc_a), Some(store_b), Some(acc_b)) =
+            (args.first(), args.get(1), args.get(2), args.get(3))
+        else {
+            return Err(bug(
+                "ipe_lower::lower_store_join",
+                "Store.join kernel arity < 4",
+            ));
+        };
+        let (column_a, _field_ty_a) = self.accessor_column(acc_a)?;
+        let (column_b, _field_ty_b) = self.accessor_column(acc_b)?;
+        let lowered_store_a = self.lower_expr(store_a)?;
+        let lowered_store_b = self.lower_expr(store_b)?;
+        let id = self.store_named_func_id("joinNamed")?;
+        Ok(Expr::Call {
+            callee: Callee::Func(id),
+            args: vec![
+                lowered_store_a,
+                Expr::Str(column_a),
+                lowered_store_b,
+                Expr::Str(column_b),
+            ],
+            pin: CallPin::None,
+            on_form: OnFormKind::NotForm,
+        })
+    }
+
     fn lower_store_spec(&self, peek: &Callee, args: &[canon::Expr]) -> DResult<Expr> {
         let (Some(acc), Some(store)) = (args.first(), args.get(1)) else {
             return Err(bug(
@@ -19936,6 +19969,9 @@ impl<'a> Lowerer<'a> {
                 // in `ipe_lower` and the `every_kernel_name_resolves` test in
                 // `ipe-runtime-rust` jointly ensure the match-arm set and the SSOT
                 // stay in sync.
+                Callee::Kernel(KernelFn::StoreJoin) if args.len() == 4 => {
+                    return Ok(Intercepted::Done(self.lower_store_join(args)?));
+                }
                 Callee::Kernel(KernelFn::StoreEqCol) if args.len() == 2 => {
                     return Ok(Intercepted::Done(self.lower_store_eq(&peek, args)?));
                 }
@@ -22870,7 +22906,10 @@ impl<'a> Lowerer<'a> {
             ) => Ok(3),
             // ── JsonDec arity-4 ─────────────────────────────────────────
             Callee::Kernel(
-                KernelFn::JsonDecMap3
+                // `Store.join` — arity 4 (storeA, accA, storeB, accB), intercepted
+                // at lowering; this is only the defensive fallback count.
+                KernelFn::StoreJoin
+                | KernelFn::JsonDecMap3
                 // ── Result/Maybe map3 — arity 4 ────────────────────────
                 | KernelFn::ResultMap3
                 | KernelFn::MaybeMap3
@@ -22938,7 +22977,9 @@ impl<'a> Lowerer<'a> {
             // `Db.Dsn.build` — arity 7 (driverTag, host, port, database, user,
             // password, tlsTag).
             Callee::Kernel(KernelFn::ConfigMap6 | KernelFn::DsnBuild) => Ok(7),
-            Callee::Kernel(KernelFn::ConfigMap7) => Ok(8),
+            // `Db.findJoin` — arity 8 (Db, leftTable, leftAlias, leftCols,
+            // rightTable, rightAlias, rightCols, frag).
+            Callee::Kernel(KernelFn::ConfigMap7 | KernelFn::DbFindJoin) => Ok(8),
             Callee::Kernel(KernelFn::ConfigMap8) => Ok(9),
             // ── Ipe.Ui / Ipe.Html render kernels ─────────────────────────
             // Arity 0: nullary constants — no arguments.
@@ -24372,10 +24413,12 @@ impl<'a> Lowerer<'a> {
                     ("Sql", "inList") => Ok(Callee::Kernel(KernelFn::SqlInList)),
                     ("Sql", "like") => Ok(Callee::Kernel(KernelFn::SqlLike)),
                     ("Db", "findWhere") => Ok(Callee::Kernel(KernelFn::DbFindWhere)),
+                    ("Db", "findJoin") => Ok(Callee::Kernel(KernelFn::DbFindJoin)),
                     ("Db", "deleteWhere") => Ok(Callee::Kernel(KernelFn::DbDeleteWhere)),
                     ("Db", "updateWhere") => Ok(Callee::Kernel(KernelFn::DbUpdateWhere)),
                     // Typed accessor query leaves — intercepted at lowering, so
                     // these arms are the legacy fallback for the pre-resolved id.
+                    ("Store", "join") => Ok(Callee::Kernel(KernelFn::StoreJoin)),
                     ("Store", "eq") => Ok(Callee::Kernel(KernelFn::StoreEqCol)),
                     ("Store", "eqBy") => Ok(Callee::Kernel(KernelFn::StoreEqBy)),
                     ("Store", "neq") => Ok(Callee::Kernel(KernelFn::StoreNeqCol)),

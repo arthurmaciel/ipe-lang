@@ -181,6 +181,25 @@ impl<T1: IpeStringify + std::fmt::Debug + 'static> IpeStringify for IpeDbStoreQu
         }
     }
 }
+pub(crate) enum IpeDbStoreJoined<T1: 'static, T2: 'static> {
+    Joined(RecFragKeyAKeyBPoisonStoreAStoreB<T1, T2>),
+}
+impl<T1: Clone + 'static, T2: Clone + 'static> Clone for IpeDbStoreJoined<T1, T2> {
+    fn clone(&self) -> Self {
+        match self {
+            IpeDbStoreJoined::Joined(p0) => IpeDbStoreJoined::Joined(p0.clone()),
+        }
+    }
+}
+impl<T1: IpeStringify + std::fmt::Debug + 'static, T2: IpeStringify + std::fmt::Debug + 'static> IpeStringify
+    for IpeDbStoreJoined<T1, T2>
+{
+    fn ipe_show(&self) -> String {
+        match self {
+            IpeDbStoreJoined::Joined(_) => format!("Joined {}", "<fn>"),
+        }
+    }
+}
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum IpeDbStoreRule {
     OwnerColumn(String),

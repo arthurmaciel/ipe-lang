@@ -1381,6 +1381,7 @@ impl Env {
                     "findManyByField",
                     "findByConditions",
                     "findWhere",
+                    "findJoin",
                     "deleteWhere",
                     "updateWhere",
                     // External read path — `…On` reads over a `Connection a`.

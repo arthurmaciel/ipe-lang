@@ -673,6 +673,12 @@ struct Builtins {
     /// result of the accessor-typed column-spec builder kernel schemes
     /// (`StorePrimaryKey` / `StoreSerial` / … / `StoreDefaultInt`).
     store_con: Symbol,
+    /// `"Joined"` — the `Ipe.Db.Store.Joined a b` two-store inner-join ADT, the
+    /// result of the `StoreJoin` kernel scheme
+    /// (`Store a -> (a -> k) -> Store b -> (b -> k) -> Joined a b`). It carries
+    /// both stores' row types so `toList` decodes each side through its own
+    /// codec.
+    joined_con: Symbol,
     /// `"Policy"` — the `Ipe.Db.Store.Policy row` row-security algebra ADT. The
     /// `row` argument is phantom (the runtime `Policy` carries only rule data),
     /// but it ties the accessor's record type to the store's row type in the
@@ -916,6 +922,7 @@ impl Builtins {
             topic_con: interner.intern("Topic")?,
             cond_con: interner.intern("Cond")?,
             store_con: interner.intern("Store")?,
+            joined_con: interner.intern("Joined")?,
             policy_con: interner.intern("Policy")?,
             codec_con: interner.intern("Codec")?,
         })
@@ -4462,6 +4469,14 @@ impl<'a> Builder<'a> {
             name: self.builtins.store_con,
             args: vec![row],
         };
+        // `Joined a b` — the two-store inner-join ADT (`Ipe.Db.Store`), the
+        // result of `Store.join`. It carries both sides' row types so `toList`
+        // returns `(a, b)` pairs decoded through each store's own codec.
+        let joined = |a: Ty, b: Ty| Ty::Con {
+            module: Vec::new(),
+            name: self.builtins.joined_con,
+            args: vec![a, b],
+        };
         // `Policy row` — the row-security policy algebra ADT (`Ipe.Db.Store`),
         // the result of the accessor-typed policy builders. The `row` argument
         // is phantom over the rule data but shares the accessor's record type,
@@ -5839,6 +5854,40 @@ impl<'a> Builder<'a> {
                 db(),
                 fun(string(), fun(sqlfragment(), task(list(dict(string(), string()))))),
             ),
+            // `Db.findJoin : Db -> String -> String -> List String -> String
+            //                -> String -> List String -> SqlFragment
+            //                -> Task (List (Dict String String, Dict String String))`
+            // — an inner join of two tables as one parameterized statement; each
+            // result row is the pair of the two sides' plain-keyed cell maps, so
+            // a caller decodes each side through its own store codec.
+            K::DbFindJoin => fun(
+                db(),
+                fun(
+                    string(),
+                    fun(
+                        string(),
+                        fun(
+                            list(string()),
+                            fun(
+                                string(),
+                                fun(
+                                    string(),
+                                    fun(
+                                        list(string()),
+                                        fun(
+                                            sqlfragment(),
+                                            task(list(tuple2(
+                                                dict(string(), string()),
+                                                dict(string(), string()),
+                                            ))),
+                                        ),
+                                    ),
+                                ),
+                            ),
+                        ),
+                    ),
+                ),
+            ),
             // `Db.deleteWhere : Db -> String -> SqlFragment -> Task Int`
             K::DbDeleteWhere => fun(db(), fun(string(), fun(sqlfragment(), task(int())))),
             // `Db.updateWhere : Db -> String -> List (String, SqlField)
@@ -5892,6 +5941,23 @@ impl<'a> Builder<'a> {
             // `Db.defaultMigration : String -> Migration` — a Migration named
             // with an empty SQL body.
             K::DbDefaultMigration => fun(string(), migration()),
+
+            // `Store.join : Store a -> (a -> k) -> Store b -> (b -> k)
+            //               -> Joined a b` — an inner join of two stores on key
+            // equality. The two getter-arrow accessors name the join columns;
+            // both share the key type `k` (var 2), so a mistyped join key is a
+            // type mismatch. Lowering replaces each accessor with its validated
+            // column and rewrites to the `joinNamed` stdlib helper.
+            K::StoreJoin => fun(
+                store(var(0)),
+                fun(
+                    fun(var(0), var(2)),
+                    fun(
+                        store(var(1)),
+                        fun(fun(var(1), var(2)), joined(var(0), var(1))),
+                    ),
+                ),
+            ),
 
             // `Store.eq : (row -> t) -> t -> Cond` — the getter-arrow scheme lets
             // an accessor literal `.field` unify against the first parameter by
@@ -9906,8 +9972,11 @@ mod registry_phase_c_tests {
             K::SqlInList,
             K::SqlLike,
             K::DbFindWhere,
+            K::DbFindJoin,
             K::DbDeleteWhere,
             K::DbUpdateWhere,
+            // Two-store inner-join constructor (getter-arrow scheme, Ipê-new).
+            K::StoreJoin,
             // Typed accessor query leaves (getter-arrow schemes, Ipê-new).
             K::StoreEqCol,
             K::StoreEqBy,

@@ -1424,6 +1424,14 @@ pub enum StdlibKernel {
     /// identifier; the call becomes the `Compare OpEq name (sqlValue)` `Cond`
     /// constructor, so the audited `Cond`→`SqlFragment` path is reused unchanged.
     StoreEqCol,
+    /// `Store.join : Store a -> (a -> k) -> Store b -> (b -> k) -> Joined a b` —
+    /// an inner join of two stores on key equality. The two accessor arguments
+    /// (`.authorId`, `.id`) name the join columns the same way `Store.eq` names a
+    /// column; their result type `k` must match, so a mistyped join key is a type
+    /// error. At lowering each accessor is recognised and replaced by its
+    /// validated column identifier, and the call becomes the `joinNamed` stdlib
+    /// helper carrying both stores and both key columns.
+    StoreJoin,
     /// `Store.eqBy : Codec t -> (row -> t) -> t -> Cond` — the accessor-typed
     /// equality leaf for an ENUM or newtype column whose wire form is not
     /// type-derivable. The `Codec t` argument projects the comparison value to a
@@ -2320,6 +2328,16 @@ pub enum StdlibKernel {
     /// `Db.findWhere : Db -> String -> SqlFragment -> Task Error (List Row)` —
     /// the `SqlFragment`-typed replacement for the removed `unsafeFindWhere`.
     DbFindWhere,
+    /// `Db.findJoin : Db -> String -> String -> List String -> String -> String
+    ///                -> List String -> SqlFragment
+    ///                -> Task Error (List (Row, Row))` — read an inner join of
+    /// two tables as one parameterized statement. The two `(table, alias,
+    /// columns)` triples name the join sides; every identifier reaches SQL only
+    /// after the runtime re-validates it, and `frag` (the join-key equality plus
+    /// any filter) is a combinator-built `SqlFragment`, so no value or identifier
+    /// is interpolated. Each result row is the pair of the two sides' plain-keyed
+    /// cell maps, so a caller decodes each side through its own store codec.
+    DbFindJoin,
     /// `Db.deleteWhere : Db -> String -> SqlFragment -> Task Error Int`
     DbDeleteWhere,
     /// `Db.updateWhere : Db -> String -> List (String, SqlField) -> SqlFragment -> Task Error Int`
@@ -3330,6 +3348,9 @@ impl StdlibKernel {
             // column identifier), so the runtime-fn name is a never-called
             // placeholder like `DbDefaultMigration`.
             Self::StoreEqCol => d("Store", "eq", 2, Pure, "store_eq_col"),
+            // Accessor-intercepted at lowering (rewritten to `joinNamed`); the
+            // runtime name is a never-called placeholder like `store_eq_col`.
+            Self::StoreJoin => d("Store", "join", 4, Pure, "store_join"),
             // Accessor-typed equality leaf for enum/newtype columns — lowered
             // inline to the `Compare` `Cond` constructor (the value bound through
             // the passed codec), so the runtime-fn name is a never-called
@@ -4129,6 +4150,7 @@ impl StdlibKernel {
             Self::SqlInList => d("Sql", "inList", 2, Db, "sql_in_list"),
             Self::SqlLike => d("Sql", "like", 2, Db, "sql_like"),
             Self::DbFindWhere => d("Db", "findWhere", 3, Db, "db_find_where"),
+            Self::DbFindJoin => d("Db", "findJoin", 8, Db, "db_find_join"),
             Self::DbDeleteWhere => d("Db", "deleteWhere", 3, Db, "db_delete_where"),
             Self::DbUpdateWhere => d("Db", "updateWhere", 4, Db, "db_update_where"),
             // ── Ipe.Secret — opaque secret-string wrapper ─
@@ -4867,6 +4889,7 @@ impl StdlibKernel {
         Self::DbWithTransaction,
         Self::DbMigrate,
         Self::DbDefaultMigration,
+        Self::StoreJoin,
         Self::StoreEqCol,
         Self::StoreEqBy,
         Self::StoreNeqCol,
@@ -5366,6 +5389,7 @@ impl StdlibKernel {
         Self::SqlInList,
         Self::SqlLike,
         Self::DbFindWhere,
+        Self::DbFindJoin,
         Self::DbDeleteWhere,
         Self::DbUpdateWhere,
         Self::SecretFromString,
@@ -5561,6 +5585,7 @@ impl StdlibKernel {
                 | Self::SqlInList
                 | Self::SqlLike
                 | Self::DbFindWhere
+                | Self::DbFindJoin
                 | Self::DbDeleteWhere
                 | Self::DbUpdateWhere
         )
@@ -7111,6 +7136,28 @@ impl StdlibKernel {
         const STRING_TO_FIND_WHERE: TyShape =
             TyShape::Fun(&STRING, &SQLFRAGMENT_TO_TASK_LIST_DICT_SS);
         const DB_FIND_WHERE: TyShape = TyShape::Fun(&DB, &STRING_TO_FIND_WHERE);
+        // `Db.findJoin : Db -> String -> String -> List String -> String
+        //                -> String -> List String -> SqlFragment
+        //                -> Task (List (Dict String String, Dict String String))`.
+        const TUPLE_DICT_SS_DICT_SS: TyShape =
+            TyShape::Tuple(&[DICT_STRING_STRING, DICT_STRING_STRING]);
+        const LIST_TUPLE_DICT_SS_DICT_SS: TyShape =
+            TyShape::Con(BuiltinTag::List, &[TUPLE_DICT_SS_DICT_SS]);
+        const TASK_LIST_TUPLE_DICT_SS_DICT_SS: TyShape =
+            TyShape::Con(BuiltinTag::Task, &[LIST_TUPLE_DICT_SS_DICT_SS]);
+        const SQLFRAGMENT_TO_FIND_JOIN: TyShape =
+            TyShape::Fun(&SQLFRAGMENT, &TASK_LIST_TUPLE_DICT_SS_DICT_SS);
+        const LIST_STRING_TO_FIND_JOIN: TyShape =
+            TyShape::Fun(&LIST_STRING, &SQLFRAGMENT_TO_FIND_JOIN);
+        const STRING_TO_LIST_STRING_TO_FIND_JOIN: TyShape =
+            TyShape::Fun(&STRING, &LIST_STRING_TO_FIND_JOIN);
+        const STRING_2_TO_FIND_JOIN: TyShape =
+            TyShape::Fun(&STRING, &STRING_TO_LIST_STRING_TO_FIND_JOIN);
+        const LIST_STRING_2_TO_FIND_JOIN: TyShape =
+            TyShape::Fun(&LIST_STRING, &STRING_2_TO_FIND_JOIN);
+        const STRING_3_TO_FIND_JOIN: TyShape = TyShape::Fun(&STRING, &LIST_STRING_2_TO_FIND_JOIN);
+        const STRING_4_TO_FIND_JOIN: TyShape = TyShape::Fun(&STRING, &STRING_3_TO_FIND_JOIN);
+        const DB_FIND_JOIN: TyShape = TyShape::Fun(&DB, &STRING_4_TO_FIND_JOIN);
         // `Db.deleteWhere : Db -> String -> SqlFragment -> Task Int`.
         const SQLFRAGMENT_TO_TASK_INT: TyShape = TyShape::Fun(&SQLFRAGMENT, &TASK_INT);
         const STRING_TO_DELETE_WHERE: TyShape = TyShape::Fun(&STRING, &SQLFRAGMENT_TO_TASK_INT);
@@ -8502,6 +8549,7 @@ impl StdlibKernel {
             Self::DbFindManyByField => Some(&DB_FIND_MANY_BY_FIELD),
             Self::DbFindByConditions => Some(&DB_FIND_BY_CONDITIONS),
             Self::DbFindWhere => Some(&DB_FIND_WHERE),
+            Self::DbFindJoin => Some(&DB_FIND_JOIN),
             Self::DbDeleteWhere => Some(&DB_DELETE_WHERE),
             Self::DbUpdateWhere => Some(&DB_UPDATE_WHERE),
             Self::DbInsertFields => Some(&DB_INSERT_FIELDS),
@@ -8900,6 +8948,8 @@ impl StdlibKernel {
     ///   `store_*` dead-symbol allowlist from this constant at test time instead
     ///   of maintaining a parallel string list.
     pub const ACCESSOR_INTERCEPT_PLACEHOLDERS: &[Self] = &[
+        // ── Join constructor — arity-4 (storeA, accA, storeB, accB) ──────────
+        Self::StoreJoin,
         // ── Query leaves — arity-2 (accessor + store) ────────────────────────
         Self::StoreEqCol,
         Self::StoreEqBy,
@@ -9154,6 +9204,7 @@ impl StdlibKernel {
             | Self::DbWithTransaction
             | Self::DbMigrate
             | Self::DbFindWhere
+            | Self::DbFindJoin
             | Self::DbDeleteWhere
             | Self::DbUpdateWhere
             | Self::DbDefaultMigration
@@ -9296,6 +9347,7 @@ impl StdlibKernel {
             | Self::CharIsAlphaNum
             | Self::CharIsHexDigit
             | Self::CharIsOctDigit
+            | Self::StoreJoin
             | Self::StoreEqCol
             | Self::StoreEqBy
             | Self::StoreNeqCol
