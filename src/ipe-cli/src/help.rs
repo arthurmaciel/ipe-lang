@@ -142,19 +142,19 @@ const COMMANDS: &[Command] = &[
         ],
     },
     Command {
-        name: "deploy",
-        run: crate::run_deploy,
-        summary: "Build a single self-jailing binary (app + profile fused into sandbox wrapper); a multi-file opt-out is available.",
+        name: "release",
+        run: crate::run_release,
+        summary: "Build the production artifact — optimised, Debug.* gated. Native-bearing apps get a jailed bundle; pure-native apps get a plain optimised binary; `--target wasm` produces a production browser bundle.",
         args: "[<path>]",
         args_desc: "A source file, a project directory, or a package.ipe. Defaults to the current project.",
         options: &[
             Opt {
                 flag: "[--out <dir>]",
-                desc: "write the artifact to <dir> (default: deploy/)",
+                desc: "write the artifact to <dir> (default: release/)",
             },
             Opt {
-                flag: "[--target <triple>]",
-                desc: "the musl-static target triple (default: x86_64-unknown-linux-musl)",
+                flag: "[--target wasm|<triple>]",
+                desc: "produce a browser bundle (`wasm`) or a musl-static binary for <triple> (default: x86_64-unknown-linux-musl)",
             },
             Opt {
                 flag: "[--runtime <dir>]",
@@ -162,15 +162,15 @@ const COMMANDS: &[Command] = &[
             },
             Opt {
                 flag: "[--bundle]",
-                desc: "multi-file opt-out: wrapper + app + profile as siblings (less safe; app binary can be run directly, bypassing the sandbox)",
+                desc: "native-bearing only: multi-file opt-out — wrapper + app + profile as siblings (app binary can be run directly, bypassing the sandbox)",
             },
             Opt {
                 flag: "[--embed]",
-                desc: "no-op alias for the default single-file mode (kept for compatibility)",
+                desc: "native-bearing only: default single self-jailing binary (app + profile fused into wrapper)",
             },
             Opt {
                 flag: "[--capabilities] [--plain|--json]",
-                desc: "print the embedded ipe.profile capability model for the app without deploying",
+                desc: "print the inferred capability model for the app without building",
             },
         ],
     },
@@ -576,7 +576,7 @@ const COMMANDS: &[Command] = &[
 const SECTIONS: &[Section] = &[
     Section {
         title: "Development",
-        commands: &["init", "build", "run", "exec", "deploy", "watch"],
+        commands: &["init", "build", "run", "exec", "release", "watch"],
     },
     Section {
         title: "Quality",

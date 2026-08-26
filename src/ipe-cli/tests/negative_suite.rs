@@ -1835,8 +1835,7 @@ fn lower_task_do_effect_as_body_compiles() {
 /// CONTRAPOSITIVE: `Debug.log` is the sanctioned debug print — it returns its
 /// value (`String -> a -> a`), not a `Task`, so it is usable inside a pure
 /// function without escaping the effect discipline. A development build accepts
-/// it (a production `--optimize` build rejects it with IPE-L0140, covered
-/// separately).
+/// it (`ipe release` rejects it with IPE-L0140, covered separately).
 #[test]
 fn lower_debug_log_in_sync_context_compiles() {
     let src = format!(

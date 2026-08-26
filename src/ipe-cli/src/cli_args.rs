@@ -381,11 +381,6 @@ pub struct BuildArgs {
     pub runtime: Option<String>,
     /// `--fix` — apply machine-applicable fixes before building.
     pub fix: bool,
-    /// `--optimize` — a PRODUCTION build. Rejects any development-only
-    /// `Debug.*` escape hatch (IPE-L0140). Mirrors Elm's `--optimize` gate on
-    /// its own `Debug` module. Does not compose with `--emit-ir` (which stops
-    /// before the emit demand the gate runs on).
-    pub production: bool,
     /// `--accept-risks` — take responsibility for every disclosed `.Unsafe`
     /// escape-hatch import and proceed without the acknowledgment prompt. The
     /// one-off, non-interactive form of consent (the durable form is
@@ -418,7 +413,6 @@ pub fn parse_build(rest: &[String]) -> Result<BuildArgs, CliError> {
     let mut runtime: Option<String> = None;
     let mut emit_ir = false;
     let mut fix = false;
-    let mut production = false;
     let mut accept_risks = false;
     let mut static_flags = StaticFlags::default();
     let mut format: Option<OutputFormat> = None;
@@ -444,7 +438,6 @@ pub fn parse_build(rest: &[String]) -> Result<BuildArgs, CliError> {
             )?,
             "--emit-ir" => emit_ir = true,
             "--fix" => fix = true,
-            "--optimize" => production = true,
             "--accept-risks" => accept_risks = true,
             other => {
                 return Err(usage_unknown_flag("build", other));
@@ -498,11 +491,6 @@ pub fn parse_build(rest: &[String]) -> Result<BuildArgs, CliError> {
         if static_flags.c_free {
             return Err(CliError::Usage("--emit-ir does not compose with --cfree"));
         }
-        if production {
-            return Err(CliError::Usage(
-                "--emit-ir does not compose with --optimize",
-            ));
-        }
         BuildMode::EmitIr
     } else if wasm {
         // Clear the pseudo-triple so it never enters static resolution.
@@ -523,7 +511,6 @@ pub fn parse_build(rest: &[String]) -> Result<BuildArgs, CliError> {
         entry,
         runtime,
         fix,
-        production,
         accept_risks,
         mode,
         format: format.unwrap_or_default(),
@@ -684,9 +671,9 @@ pub fn parse_eject(rest: &[String]) -> Result<EjectArgs, CliError> {
     })
 }
 
-/// How `ipe deploy` packages the artifact.
+/// How `ipe release` packages a native-bearing artifact.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum DeployMode {
+pub enum ReleaseMode {
     /// Default: fuse app binary and profile into the wrapper for a single
     /// self-jailing binary — the only way to run it applies the sandbox.
     #[default]
@@ -697,21 +684,22 @@ pub enum DeployMode {
     Bundle,
 }
 
-/// Fully-parsed `ipe deploy` arguments.
+/// Fully-parsed `ipe release` arguments.
 #[derive(Debug)]
-pub struct DeployArgs {
+pub struct ReleaseArgs {
     /// The positional entry (`None` → project-aware default).
     pub entry: Option<String>,
-    /// `--out <dir>` — where to write the bundle directory (optional; defaults
-    /// to `deploy/`).
+    /// `--out <dir>` — where to write the artifact (optional; defaults to
+    /// `release/`).
     pub out: Option<String>,
     /// `--runtime <dir>` — vendor the Ipê runtime from here.
     pub runtime: Option<String>,
-    /// `--target <triple>` — the musl-static rustc triple to build for.
-    /// Defaults to `x86_64-unknown-linux-musl`.
+    /// `--target <value>` — either a musl-static rustc triple for a native
+    /// build, or the literal `wasm` to produce a browser bundle.
     pub target: Option<String>,
-    /// How to package the artifact (single self-jailing binary by default).
-    pub mode: DeployMode,
+    /// How to package a native-bearing artifact (embed mode by default; unused
+    /// for pure-native and wasm targets).
+    pub mode: ReleaseMode,
     /// `--capabilities` / `--show-profile` — inspect the inferred capability
     /// model without building or writing anything.
     pub capabilities_only: bool,
@@ -719,15 +707,15 @@ pub struct DeployArgs {
     pub format: OutputFormat,
 }
 
-/// Parse `ipe deploy`'s argument tail.
+/// Parse `ipe release`'s argument tail.
 ///
-/// `--out` is optional (default: `deploy/`). Each value flag is rejected on a
-/// second occurrence.
+/// `--out` is optional. `--target` accepts either a musl-static triple or the
+/// literal `wasm`. Each value flag is rejected on a second occurrence.
 ///
 /// # Errors
 ///
 /// [`CliError::Usage`] / [`CliError::UsageOwned`] naming the exact problem.
-pub fn parse_deploy(rest: &[String]) -> Result<DeployArgs, CliError> {
+pub fn parse_release(rest: &[String]) -> Result<ReleaseArgs, CliError> {
     let mut it = rest.iter().peekable();
     let entry = take_leading_entry(&mut it);
 
@@ -740,52 +728,52 @@ pub fn parse_deploy(rest: &[String]) -> Result<DeployArgs, CliError> {
     let mut capabilities_only = false;
 
     while let Some(flag) = it.next() {
-        if consume_format(&mut format, flag, "deploy")? {
+        if consume_format(&mut format, flag, "release")? {
             continue;
         }
         match flag.as_str() {
             "--out" => set_once(
                 &mut out,
-                take_value(&mut it, "--out", "deploy")?,
+                take_value(&mut it, "--out", "release")?,
                 "--out",
-                "deploy",
+                "release",
             )?,
             "--runtime" => set_once(
                 &mut runtime,
-                take_value(&mut it, "--runtime", "deploy")?,
+                take_value(&mut it, "--runtime", "release")?,
                 "--runtime",
-                "deploy",
+                "release",
             )?,
             "--target" => set_once(
                 &mut target,
-                take_value(&mut it, "--target", "deploy")?,
+                take_value(&mut it, "--target", "release")?,
                 "--target",
-                "deploy",
+                "release",
             )?,
             "--embed" => saw_embed = true,
             "--bundle" => saw_bundle = true,
             "--capabilities" | "--show-profile" => capabilities_only = true,
             other => {
-                return Err(usage_unknown_flag("deploy", other));
+                return Err(usage_unknown_flag("release", other));
             }
         }
     }
 
     if saw_embed && saw_bundle {
         return Err(CliError::UsageOwned(
-            "ipe deploy: --embed and --bundle are mutually exclusive (embed is the default \
+            "ipe release: --embed and --bundle are mutually exclusive (embed is the default \
              single self-jailing binary; --bundle is the multi-file opt-out)"
                 .to_owned(),
         ));
     }
 
     let mode = if saw_bundle {
-        DeployMode::Bundle
+        ReleaseMode::Bundle
     } else {
-        DeployMode::Embed
+        ReleaseMode::Embed
     };
 
-    Ok(DeployArgs {
+    Ok(ReleaseArgs {
         entry,
         out,
         runtime,
@@ -1541,58 +1529,70 @@ mod tests {
         assert!(split_format(&s(&["--plain", "--plain"]), "diff").is_err());
     }
 
-    // ---- deploy -------------------------------------------------------------
+    // ---- release ------------------------------------------------------------
 
     #[test]
-    fn deploy_defaults_to_embed_mode() {
-        let a = parse_deploy(&[]).expect("empty deploy");
-        assert_eq!(a.mode, DeployMode::Embed);
+    fn release_defaults_to_embed_mode() {
+        let a = parse_release(&[]).expect("empty release");
+        assert_eq!(a.mode, ReleaseMode::Embed);
         assert!(!a.capabilities_only);
         assert_eq!(a.format, OutputFormat::Human);
     }
 
     #[test]
-    fn deploy_embed_flag_is_default_mode() {
-        let a = parse_deploy(&s(&["--embed"])).expect("--embed");
-        assert_eq!(a.mode, DeployMode::Embed);
+    fn release_embed_flag_is_default_mode() {
+        let a = parse_release(&s(&["--embed"])).expect("--embed");
+        assert_eq!(a.mode, ReleaseMode::Embed);
     }
 
     #[test]
-    fn deploy_bundle_flag_selects_bundle_mode() {
-        let a = parse_deploy(&s(&["--bundle"])).expect("--bundle");
-        assert_eq!(a.mode, DeployMode::Bundle);
+    fn release_bundle_flag_selects_bundle_mode() {
+        let a = parse_release(&s(&["--bundle"])).expect("--bundle");
+        assert_eq!(a.mode, ReleaseMode::Bundle);
     }
 
     #[test]
-    fn deploy_embed_and_bundle_together_rejected() {
+    fn release_embed_and_bundle_together_rejected() {
         assert!(matches!(
-            parse_deploy(&s(&["--embed", "--bundle"])),
+            parse_release(&s(&["--embed", "--bundle"])),
             Err(CliError::UsageOwned(_))
         ));
-        assert!(parse_deploy(&s(&["--bundle", "--embed"])).is_err());
+        assert!(parse_release(&s(&["--bundle", "--embed"])).is_err());
     }
 
     #[test]
-    fn deploy_capabilities_flag_sets_dry_inspect() {
-        let a = parse_deploy(&s(&["--capabilities"])).expect("--capabilities");
+    fn release_capabilities_flag_sets_dry_inspect() {
+        let a = parse_release(&s(&["--capabilities"])).expect("--capabilities");
         assert!(a.capabilities_only);
     }
 
     #[test]
-    fn deploy_show_profile_is_capabilities_alias() {
-        let a = parse_deploy(&s(&["--show-profile"])).expect("--show-profile");
+    fn release_show_profile_is_capabilities_alias() {
+        let a = parse_release(&s(&["--show-profile"])).expect("--show-profile");
         assert!(a.capabilities_only);
     }
 
     #[test]
-    fn deploy_capabilities_takes_output_format() {
-        let a = parse_deploy(&s(&["--capabilities", "--json"])).expect("--capabilities --json");
+    fn release_capabilities_takes_output_format() {
+        let a = parse_release(&s(&["--capabilities", "--json"])).expect("--capabilities --json");
         assert!(a.capabilities_only);
         assert_eq!(a.format, OutputFormat::Json);
     }
 
     #[test]
-    fn deploy_plain_and_json_together_rejected() {
-        assert!(parse_deploy(&s(&["--plain", "--json"])).is_err());
+    fn release_plain_and_json_together_rejected() {
+        assert!(parse_release(&s(&["--plain", "--json"])).is_err());
+    }
+
+    #[test]
+    fn release_wasm_target_accepted() {
+        let a = parse_release(&s(&["--target", "wasm"])).expect("--target wasm");
+        assert_eq!(a.target.as_deref(), Some("wasm"));
+    }
+
+    #[test]
+    fn release_unknown_flag_rejected() {
+        assert!(parse_release(&s(&["--optimize"])).is_err());
+        assert!(parse_release(&s(&["--bogus"])).is_err());
     }
 }
