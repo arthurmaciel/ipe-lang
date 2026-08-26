@@ -848,6 +848,12 @@ pub struct BuildOptions {
     /// named accordingly. Empty string uses the safe `"ipe-app"` default
     /// (single-file builds with no `ipe.toml`).
     pub cargo_name: String,
+    /// `true` when `ipe build --debugger` / `ipe run --debugger` was passed.
+    /// Activates the `debugger` feature in the emitted runtime so the TEA loop
+    /// instantiates the recorder. NEVER set for `ipe release` builds — the
+    /// release command does not expose this flag, so no production artifact can
+    /// carry recorder code.
+    pub debugger: bool,
 }
 
 /// Select the emit model from the environment.
@@ -3207,6 +3213,7 @@ fn run_build_body(rest: &[String]) -> Result<(), CliError> {
         tree_shake_vendored: false,
         // Filled in by build_project_with_options once the manifest is parsed.
         cargo_name: String::new(),
+        debugger: args.debugger,
     };
 
     // Human-friendly progress: the compile+emit below is otherwise silent, so
@@ -3550,6 +3557,8 @@ pub(crate) fn run_release(rest: &[String]) -> Result<(), CliError> {
             runtime_dep,
             tree_shake_vendored: false,
             cargo_name: String::new(),
+            // The debugger is never enabled on a release build.
+            debugger: false,
         };
         manifest.as_ref().map_or_else(
             || {
@@ -4319,6 +4328,7 @@ fn run_run_body(rest: &[String]) -> Result<(), CliError> {
         tree_shake_vendored: false,
         // Filled in by build_project_with_options once the manifest is parsed.
         cargo_name: String::new(),
+        debugger: args.debugger,
     };
 
     // Human-friendly progress: the compile+emit below is otherwise silent, so

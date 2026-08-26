@@ -289,3 +289,55 @@ fn top_level_unknown_command_rejected() {
         Err(CliError::UnknownCommand { .. })
     ));
 }
+
+// ===========================================================================
+// --debugger flag: accepted by build/run, rejected by release
+// ===========================================================================
+
+/// `ipe build --debugger` parses and sets the flag.
+#[test]
+fn build_debugger_flag_accepted() {
+    let a = parse_build(&v(&["--debugger"])).expect("--debugger must parse");
+    assert!(a.debugger, "--debugger must set the field");
+}
+
+/// `ipe build --debugger` composes with other flags.
+#[test]
+fn build_debugger_flag_composes() {
+    let a = parse_build(&v(&["Main.ipe", "--debugger", "--out", "o"]))
+        .expect("--debugger + --out must parse");
+    assert!(a.debugger);
+    assert_eq!(a.entry.as_deref(), Some("Main.ipe"));
+}
+
+/// Without `--debugger`, the field is `false`.
+#[test]
+fn build_no_debugger_flag_is_false() {
+    let a = parse_build(&v(&[])).expect("empty must parse");
+    assert!(!a.debugger, "debugger must default to false");
+}
+
+/// `ipe run --debugger` parses and sets the flag.
+#[test]
+fn run_debugger_flag_accepted() {
+    let a = parse_run(&v(&["--debugger"])).expect("--debugger must parse");
+    assert!(a.debugger, "--debugger must set the field");
+}
+
+/// Without `--debugger` on `ipe run`, the field is `false`.
+#[test]
+fn run_no_debugger_flag_is_false() {
+    let a = parse_run(&v(&[])).expect("empty must parse");
+    assert!(!a.debugger, "debugger must default to false");
+}
+
+/// `ipe release --debugger` must be rejected (unknown flag on release).
+#[test]
+fn release_debugger_flag_rejected() {
+    use ipe::cli_args::parse_release;
+    let result = parse_release(&v(&["--debugger"]));
+    assert!(
+        result.is_err(),
+        "`ipe release --debugger` must be rejected as unknown flag, got: {result:?}"
+    );
+}
