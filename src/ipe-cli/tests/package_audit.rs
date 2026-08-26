@@ -718,7 +718,7 @@ fn normal_cache_dir_is_deleted_before_regen() {
     let _ = std::fs::remove_dir_all(&pkg);
 }
 
-// ── WP6: index admission fail-closed on the `custom-element` axis ────────────
+// ── index admission fail-closed on the `custom-element` axis ─────────────────
 
 /// Admission (the same gate index-admission CI runs) is FAIL-CLOSED for a widget
 /// package that hides the disclosure: a package shipping a `Ui.widget` but
@@ -775,7 +775,7 @@ fn a_widget_package_that_declares_custom_element_passes() {
     let _ = std::fs::remove_dir_all(&pkg);
 }
 
-/// WP6 index→page hash pin, fail-closed: the index's per-version `sha256` is the
+/// Index→page hash pin, fail-closed: the index's per-version `sha256` is the
 /// content hash of the whole source tree, which INCLUDES the shipped widget JS
 /// file. A widget file tampered after the pin was recorded changes the tree hash,
 /// so the recorded pin no longer names the tampered bytes — the admission

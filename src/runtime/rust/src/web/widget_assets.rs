@@ -381,7 +381,7 @@ mod tests {
         assert!(GLUE_PRELUDE.contains("__ipeSend(\"ipe-widget\""));
     }
 
-    /// WP6 index→page hash pin: the 64-hex hash the index/manifest records for a
+    /// Index→page hash pin: the 64-hex hash the index/manifest records for a
     /// widget file, the `hex16` URL segment, and the SRI the page pins are all one
     /// `sha256(content)` — so the index-recorded pin can never disagree with the
     /// bytes the page SRI verifies. Proven by deriving the SRI base64 from the

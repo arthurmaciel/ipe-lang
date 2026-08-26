@@ -72,7 +72,7 @@ const COUNTER_JS: &str =
 /// under a unique temp dir, returning the dir. The caller removes it.
 fn widget_project(tag: &str) -> Result<PathBuf, Box<dyn Error>> {
     let dir = std::env::temp_dir().join(format!(
-        "ipe-wp6-{tag}-{}-{:?}",
+        "ipe-ce-cap-{tag}-{}-{:?}",
         std::process::id(),
         std::thread::current().id()
     ));
@@ -203,7 +203,7 @@ fn acceptance_http_and_clock_example_infers_network_and_clock() -> TestResult {
     Ok(())
 }
 
-// ── WP6: the `custom-element` disclosure axis ───────────────────────────────
+// ── the `custom-element` disclosure axis ────────────────────────────────────
 
 /// A program that mounts a `Ui.widget` ships browser JS, so its inferred
 /// capability set must contain `custom-element`. Proven through the same
@@ -227,7 +227,7 @@ fn a_widget_program_discloses_custom_element() -> TestResult {
 
 /// Fail-closed: a program that ships a widget but declares NOTHING on the
 /// `custom-element` axis is rejected — a widget-bearing module can never hide the
-/// disclosure. This is the load-bearing WP6 invariant.
+/// disclosure. This is the load-bearing invariant.
 #[test]
 fn a_widget_program_that_hides_custom_element_is_rejected() -> TestResult {
     let dir = widget_project("hide")?;
