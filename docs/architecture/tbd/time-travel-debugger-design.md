@@ -1,7 +1,8 @@
 # Time-travelling debugger for TEA apps
 
-> Design proposal — not yet implemented. Illustrative code/commands describe the
-> target design.
+> All three staged delivery shapes — WASM (a), server-driven (b), and Terminal
+> (c) — are implemented. The design below documents the settled shape and
+> decisions common to all shapes.
 
 A dev-only debugger that records a TEA run and lets a developer scrub, inspect, and
 replay past `Model` states. Feasible because TEA state changes only through
@@ -61,6 +62,23 @@ message log — recording the log reconstructs any past state exactly.
   existing patch wire. No new codec.
 - **(c) Terminal.** Reuse the core behind the terminal loop driver; a terminal-native
   overlay (message list + scrub) is the lightest surface.
+
+  The terminal debugger lives in `src/runtime/rust/src/debugger/tui.rs` behind
+  `#[cfg(all(feature = "debugger", not(target_arch = "wasm32")))]`. Both TUI
+  drivers (`Terminal.appLines` / `tui_app` and `Terminal.appScreen` / `tui_app_ui`)
+  are hooked. Key bindings (active only in a `--debugger` build):
+
+  | Key        | Effect                                       |
+  |------------|----------------------------------------------|
+  | **Ctrl-T** | Toggle time-travel mode on / off             |
+  | Ctrl-Left  | Step one message backward (time-travel mode) |
+  | Ctrl-Right | Step one message forward  (time-travel mode) |
+
+  In live mode a status line at the bottom of the frame shows `[DBG] recording —
+  N steps`. In time-travel mode it shows `[DBG TT] step N/M …prev | CURRENT |
+  next…` with truncated message labels. Labels pass through `IpeStringify::ipe_show`
+  so any `Secret`-bearing field renders as `<redacted>`. Pressing Ctrl-T again
+  returns to the live head without re-firing any `Cmd`.
 
 The core (record / re-fold / export / bound) is written once in (a) and shared;
 (b) and (c) add only a driver hook and an overlay-delivery path.

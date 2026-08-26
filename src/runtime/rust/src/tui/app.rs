@@ -11,6 +11,9 @@
 //! terminal wedged. Raw-mode failure returns `Err`; `TERM=dumb` is refused.
 
 use super::super::core::{IpeResult, IpeTask, ok_res};
+#[cfg(all(feature = "debugger", not(target_arch = "wasm32")))]
+use super::super::debugger::tui::TuiDebugger;
+use super::super::stringify::IpeStringify;
 use super::super::tea::{CliEvent, IpeCmd, IpeSub, SubManager, cli_run_cmd};
 use super::super::ui::Element;
 use super::focus::{
@@ -247,77 +250,6 @@ where
     let _ = tx.send(CliEvent::Eof);
 }
 
-/// Shared terminal TEA driver. `render_frame` turns the current model into the
-/// ANSI frame painted each tick — `tui_app` passes the user's `String` view
-/// straight through; `tui_app_ui` renders the `Ipe.Ui` Element tree via
-/// `render_element`. Everything else (raw-key reader, `SubManager` ticks,
-/// `cli_run_cmd`, RAII teardown) is identical and lives here once.
-#[allow(clippy::type_complexity)]
-fn tui_run<Model, Msg, E, FInit, FUpdate, FSubs, FOnKey, FRender>(
-    init: FInit,
-    update: FUpdate,
-    subscriptions: FSubs,
-    on_key: FOnKey,
-    render_frame: FRender,
-) -> IpeTask<E, ()>
-where
-    E: Send + From<String> + 'static,
-    Model: Clone + Send + 'static,
-    Msg: Clone + Send + 'static,
-    FInit: Fn(()) -> (Model, IpeCmd<Msg>) + Send + 'static,
-    FUpdate: Fn(Msg, Model) -> (Model, IpeCmd<Msg>) + Send + 'static,
-    FSubs: Fn(Model) -> IpeSub<Msg> + Send + 'static,
-    FOnKey: Fn(String, String) -> Msg + Send + 'static,
-    FRender: Fn(&Model) -> String + Send + 'static,
-{
-    Box::pin(async move {
-        if crate::system::read_env_var("TERM").as_deref() == Ok("dumb") {
-            return IpeResult::Err(
-                "Tui: TERM=dumb is not an interactive terminal"
-                    .to_string()
-                    .into(),
-            );
-        }
-        let _guard = match TuiGuard::enter() {
-            Ok(g) => g,
-            Err(e) => return IpeResult::Err(e.into()),
-        };
-
-        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<CliEvent<Msg>>();
-
-        // Blocking raw-key reader → Key(kind, value) events, then Eof. on_key is
-        // applied in the main task (keeps it off the blocking thread).
-        let key_tx = tx.clone();
-        std::thread::spawn(move || {
-            read_keys_loop(&key_tx, |k| (k.kind, k.value));
-        });
-
-        let (mut model, cmd0) = init(());
-        cli_run_cmd(cmd0, &tx);
-        let mut submgr = SubManager::new(tx.clone());
-        submgr.update(subscriptions(model.clone()));
-        paint(&render_frame(&model));
-
-        while let Some(ev) = rx.recv().await {
-            let msg = match ev {
-                CliEvent::Key(kind, value) => on_key(kind, value),
-                // Tui fires Cmds untracked, so a Perform result also arrives as a
-                // plain Msg; PerformDone is matched for exhaustiveness.
-                CliEvent::Msg(m) | CliEvent::PerformDone(m) => m,
-                CliEvent::Line(_) => continue, // Tui has no line input
-                CliEvent::Eof => break,
-            };
-            let (next, cmd) = update(msg, model);
-            model = next;
-            cli_run_cmd(cmd, &tx);
-            submgr.update(subscriptions(model.clone()));
-            paint(&render_frame(&model));
-        }
-        submgr.stop_all();
-        ok_res(())
-    })
-}
-
 /// `tui_app` — terminal TEA driver for a `view : Model -> String` (the raw
 /// frame is painted verbatim), the vehicle for the `Ui.cells` raw-cell escape.
 /// `on_key` receives the decoded key's
@@ -334,15 +266,148 @@ pub fn tui_app<Model, Msg, E, FInit, FUpdate, FView, FSubs, FOnKey>(
 where
     E: Send + From<String> + 'static,
     Model: Clone + Send + 'static,
-    Msg: Clone + Send + 'static,
+    Msg: Clone + Send + IpeStringify + 'static,
     FInit: Fn(()) -> (Model, IpeCmd<Msg>) + Send + 'static,
-    FUpdate: Fn(Msg, Model) -> (Model, IpeCmd<Msg>) + Send + 'static,
+    FUpdate: Fn(Msg, Model) -> (Model, IpeCmd<Msg>) + Send + Sync + 'static,
     FView: Fn(Model) -> String + Send + 'static,
     FSubs: Fn(Model) -> IpeSub<Msg> + Send + 'static,
     FOnKey: Fn(String, String) -> Msg + Send + 'static,
 {
-    tui_run(init, update, subscriptions, on_key, move |m: &Model| {
-        view(m.clone())
+    // Wrap update in an Arc so it can be shared between the live-pass call
+    // site and the debugger's reconstruct closure without requiring Clone.
+    // The Arc is a single allocation per session; it is transparent to the
+    // non-debugger build path (Arc<F>: Fn(...) when F: Fn(...)).
+    let update = std::sync::Arc::new(update);
+    Box::pin(async move {
+        if crate::system::read_env_var("TERM").as_deref() == Ok("dumb") {
+            return IpeResult::Err(
+                "Tui: TERM=dumb is not an interactive terminal"
+                    .to_string()
+                    .into(),
+            );
+        }
+        let _guard = match TuiGuard::enter() {
+            Ok(g) => g,
+            Err(e) => return IpeResult::Err(e.into()),
+        };
+
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<CliEvent<Msg>>();
+
+        let key_tx = tx.clone();
+        std::thread::spawn(move || {
+            read_keys_loop(&key_tx, |k| {
+                // Under the debugger, fold a Ctrl modifier on Left/Right into the
+                // kind (`ctrlleft`/`ctrlright`) so the history step keys are
+                // distinguishable on the flat (kind, value) channel.
+                #[cfg(all(feature = "debugger", not(target_arch = "wasm32")))]
+                let kind = if k.ctrl && (k.kind == "left" || k.kind == "right") {
+                    format!("ctrl{}", k.kind)
+                } else {
+                    k.kind
+                };
+                #[cfg(not(all(feature = "debugger", not(target_arch = "wasm32"))))]
+                let kind = k.kind;
+                (kind, k.value)
+            });
+        });
+
+        let (mut model, cmd0) = init(());
+        cli_run_cmd(cmd0, &tx);
+        let mut submgr = SubManager::new(tx.clone());
+        submgr.update(subscriptions(model.clone()));
+
+        #[cfg(all(feature = "debugger", not(target_arch = "wasm32")))]
+        let mut dbg = {
+            let upd = std::sync::Arc::clone(&update);
+            TuiDebugger::new(model.clone(), move |msg, mdl| upd(msg, mdl))
+        };
+
+        let render_frame = move |m: &Model| view(m.clone());
+
+        // Initial paint.
+        #[cfg(all(feature = "debugger", not(target_arch = "wasm32")))]
+        {
+            let mut frame = render_frame(&model);
+            frame.push_str("\r\n");
+            frame.push_str(&dbg.status_line());
+            paint(&frame);
+        }
+        #[cfg(not(all(feature = "debugger", not(target_arch = "wasm32"))))]
+        paint(&render_frame(&model));
+
+        while let Some(ev) = rx.recv().await {
+            let msg = match ev {
+                CliEvent::Key(kind, value) => {
+                    #[cfg(all(feature = "debugger", not(target_arch = "wasm32")))]
+                    {
+                        // Ctrl-T: toggle time-travel mode.
+                        if kind == crate::debugger::tui::TOGGLE_KIND
+                            && value == crate::debugger::tui::TOGGLE_VALUE
+                        {
+                            let display_model = dbg.toggle().unwrap_or_else(|| model.clone());
+                            let mut frame = render_frame(&display_model);
+                            frame.push_str("\r\n");
+                            frame.push_str(&dbg.status_line());
+                            paint(&frame);
+                            continue;
+                        }
+                        // Ctrl-Left / Ctrl-Right: step in time-travel mode.
+                        if dbg.is_scrubbing() {
+                            if kind == crate::debugger::tui::STEP_BACK_KIND {
+                                if let Some(past) = dbg.step_back() {
+                                    let mut frame = render_frame(&past);
+                                    frame.push_str("\r\n");
+                                    frame.push_str(&dbg.status_line());
+                                    paint(&frame);
+                                }
+                                continue;
+                            }
+                            if kind == crate::debugger::tui::STEP_FWD_KIND {
+                                if let Some(past) = dbg.step_fwd() {
+                                    let mut frame = render_frame(&past);
+                                    frame.push_str("\r\n");
+                                    frame.push_str(&dbg.status_line());
+                                    paint(&frame);
+                                }
+                                continue;
+                            }
+                        }
+                    }
+                    on_key(kind, value)
+                }
+                CliEvent::Msg(m) | CliEvent::PerformDone(m) => m,
+                CliEvent::Line(_) => continue,
+                CliEvent::Eof => break,
+            };
+
+            #[cfg(all(feature = "debugger", not(target_arch = "wasm32")))]
+            let (next, cmd) = update(msg.clone(), model);
+            #[cfg(not(all(feature = "debugger", not(target_arch = "wasm32"))))]
+            let (next, cmd) = update(msg, model);
+
+            model = next;
+
+            #[cfg(all(feature = "debugger", not(target_arch = "wasm32")))]
+            dbg.record(msg, model.clone());
+
+            cli_run_cmd(cmd, &tx);
+            submgr.update(subscriptions(model.clone()));
+
+            #[cfg(all(feature = "debugger", not(target_arch = "wasm32")))]
+            {
+                // In time-travel mode: stay frozen on the pinned past step.
+                // Toggle Ctrl-T to return to the live head.
+                let display_model = dbg.current_reconstructed().unwrap_or_else(|| model.clone());
+                let mut frame = render_frame(&display_model);
+                frame.push_str("\r\n");
+                frame.push_str(&dbg.status_line());
+                paint(&frame);
+            }
+            #[cfg(not(all(feature = "debugger", not(target_arch = "wasm32"))))]
+            paint(&render_frame(&model));
+        }
+        submgr.stop_all();
+        ok_res(())
     })
 }
 
@@ -404,13 +469,15 @@ pub fn tui_app_ui<Model, Msg, E, FInit, FUpdate, FView, FSubs, FOnKey>(
 where
     E: Send + From<String> + 'static,
     Model: Clone + Send + 'static,
-    Msg: Clone + Send + 'static,
+    Msg: Clone + Send + IpeStringify + 'static,
     FInit: Fn(()) -> (Model, IpeCmd<Msg>) + Send + 'static,
-    FUpdate: Fn(Msg, Model) -> (Model, IpeCmd<Msg>) + Send + 'static,
+    FUpdate: Fn(Msg, Model) -> (Model, IpeCmd<Msg>) + Send + Sync + 'static,
     FView: Fn(Model) -> Element<Msg> + Send + 'static,
     FSubs: Fn(Model) -> IpeSub<Msg> + Send + 'static,
     FOnKey: Fn(String, String) -> Msg + Send + 'static,
 {
+    // Wrap update in Arc — same rationale as tui_app.
+    let update = std::sync::Arc::new(update);
     Box::pin(async move {
         if crate::system::read_env_var("TERM").as_deref() == Ok("dumb") {
             return IpeResult::Err(
@@ -445,6 +512,12 @@ where
         let mut submgr = SubManager::new(tx.clone());
         submgr.update(subscriptions(model.clone()));
 
+        #[cfg(all(feature = "debugger", not(target_arch = "wasm32")))]
+        let mut dbg = {
+            let upd = std::sync::Arc::clone(&update);
+            TuiDebugger::new(model.clone(), move |msg, mdl| upd(msg, mdl))
+        };
+
         let mut inputs = InputRegistry::new();
         let mut focus_idx = 0usize;
         let mut scroll_y = 0usize;
@@ -458,6 +531,62 @@ where
                 CliEvent::Eof => break,
                 CliEvent::Line(_) => continue,
                 CliEvent::Key(kind, value) => {
+                    // Debugger key intercept — must come before any app key handling.
+                    #[cfg(all(feature = "debugger", not(target_arch = "wasm32")))]
+                    {
+                        // Ctrl-T: toggle time-travel mode.
+                        if kind == crate::debugger::tui::TOGGLE_KIND
+                            && value == crate::debugger::tui::TOGGLE_VALUE
+                        {
+                            let display_model = dbg.toggle().unwrap_or_else(|| model.clone());
+                            let (cols, rows) = term_size();
+                            let (frame, fs, _) = render_with_focus(
+                                &view(display_model.clone()),
+                                cols,
+                                rows,
+                                focus_idx,
+                                &mut inputs,
+                                scroll_y,
+                            );
+                            let mut annotated = frame;
+                            annotated.push_str("\r\n");
+                            annotated.push_str(&dbg.status_line());
+                            paint(&annotated);
+                            focusables = fs;
+                            continue;
+                        }
+                        // Ctrl-Left / Ctrl-Right: step in time-travel mode.
+                        if dbg.is_scrubbing() {
+                            let stepped = if kind == crate::debugger::tui::STEP_BACK_KIND {
+                                dbg.step_back()
+                            } else if kind == crate::debugger::tui::STEP_FWD_KIND {
+                                dbg.step_fwd()
+                            } else {
+                                None
+                            };
+                            if let Some(past) = stepped {
+                                let (cols, rows) = term_size();
+                                let (frame, fs, _) = render_with_focus(
+                                    &view(past),
+                                    cols,
+                                    rows,
+                                    focus_idx,
+                                    &mut inputs,
+                                    scroll_y,
+                                );
+                                let mut annotated = frame;
+                                annotated.push_str("\r\n");
+                                annotated.push_str(&dbg.status_line());
+                                paint(&annotated);
+                                focusables = fs;
+                                continue;
+                            } else if kind == crate::debugger::tui::STEP_BACK_KIND
+                                || kind == crate::debugger::tui::STEP_FWD_KIND
+                            {
+                                continue;
+                            }
+                        }
+                    }
                     // Mouse: wheel scrolls the viewport; a left-press focuses the
                     // hit element and activates it (if not an input).
                     if kind == "mouse" {
@@ -641,12 +770,45 @@ where
             }
 
             if let Some(msg) = produced {
+                #[cfg(all(feature = "debugger", not(target_arch = "wasm32")))]
+                let (next, cmd) = update(msg.clone(), model);
+                #[cfg(not(all(feature = "debugger", not(target_arch = "wasm32"))))]
                 let (next, cmd) = update(msg, model);
+
                 model = next;
+
+                #[cfg(all(feature = "debugger", not(target_arch = "wasm32")))]
+                dbg.record(msg, model.clone());
+
                 cli_run_cmd(cmd, &tx);
                 submgr.update(subscriptions(model.clone()));
-                focusables =
-                    render_and_paint(&view, &model, &mut inputs, &mut focus_idx, &mut scroll_y);
+
+                #[cfg(all(feature = "debugger", not(target_arch = "wasm32")))]
+                {
+                    // In time-travel mode: freeze on the pinned past step.
+                    // Toggle Ctrl-T to return to the live head.
+                    let display_model =
+                        dbg.current_reconstructed().unwrap_or_else(|| model.clone());
+                    let (cols, rows) = term_size();
+                    let (frame, fs, _) = render_with_focus(
+                        &view(display_model),
+                        cols,
+                        rows,
+                        focus_idx,
+                        &mut inputs,
+                        scroll_y,
+                    );
+                    let mut annotated = frame;
+                    annotated.push_str("\r\n");
+                    annotated.push_str(&dbg.status_line());
+                    paint(&annotated);
+                    focusables = fs;
+                }
+                #[cfg(not(all(feature = "debugger", not(target_arch = "wasm32"))))]
+                {
+                    focusables =
+                        render_and_paint(&view, &model, &mut inputs, &mut focus_idx, &mut scroll_y);
+                }
             }
         }
         submgr.stop_all();
