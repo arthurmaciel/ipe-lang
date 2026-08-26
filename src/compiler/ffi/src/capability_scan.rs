@@ -1180,7 +1180,13 @@ mod tests {
         for cap in Capability::ALL {
             let unenf = is_runtime_unenforceable(*cap);
             match cap {
-                Capability::Clock | Capability::Random | Capability::Unsafe => {
+                // Non-determinism, the `unsafe` provenance label, and the
+                // `custom-element` browser-JS disclosure carry no server-side
+                // isolation surface — never refused-until-jail.
+                Capability::Clock
+                | Capability::Random
+                | Capability::Unsafe
+                | Capability::CustomElement => {
                     assert!(!unenf, "{cap:?}");
                 }
                 _ => assert!(unenf, "{cap:?} must be refused until a runtime jail exists"),
@@ -1206,7 +1212,10 @@ mod tests {
         for cap in Capability::ALL {
             let unenf = is_runtime_unenforceable_for(*cap, JailForTarget::REFUSE_GAP);
             match cap {
-                Capability::Clock | Capability::Random | Capability::Unsafe => {
+                Capability::Clock
+                | Capability::Random
+                | Capability::Unsafe
+                | Capability::CustomElement => {
                     assert!(!unenf, "{cap:?}");
                 }
                 _ => assert!(unenf, "{cap:?} stays refused on a refuse-gap target"),
@@ -1471,10 +1480,14 @@ mod tests {
         for cap in Capability::ALL {
             let unenf = is_runtime_unenforceable_for(*cap, JailForTarget::REFUSE_GAP);
             match cap {
-                // Non-determinism and the `unsafe` provenance label carry no
+                // Non-determinism, the `unsafe` provenance label, and the
+                // `custom-element` browser-JS disclosure carry no server-side
                 // isolation surface, so they are enforceable on every target —
                 // never refused, even on the empty set.
-                Capability::Clock | Capability::Random | Capability::Unsafe => {
+                Capability::Clock
+                | Capability::Random
+                | Capability::Unsafe
+                | Capability::CustomElement => {
                     assert!(!unenf, "{cap:?}");
                 }
                 _ => assert!(unenf, "{cap:?} stays refused on an empty-set target"),
