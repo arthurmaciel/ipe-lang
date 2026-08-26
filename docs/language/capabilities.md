@@ -25,6 +25,7 @@ dependency is well-behaved, you can see the precise set of things it is even
 | `ffi-raw` | A native crossing whose signature the author asserted via `Rust.Ffi.call`, rather than derived from crate inspection. Always accompanies `native-ffi`; its presence discloses the assertion. |
 | `unsafe` | Importing an `Ipe.<M>.Unsafe` escape hatch — a member that mints a security-tier value by *assertion* instead of by *parse* (raw HTML, raw SQL, secret reveal). A provenance disclosure, not an OS-enforced resource axis. See [Acknowledging an unsafe escape hatch](#acknowledging-an-unsafe-escape-hatch). |
 | `custom-element` | Shipping a browser custom-element widget — reachable code mounts `Ui.widget` over a `customElement "<path>"` handle, so the program serves author JavaScript that runs in the page. A disclosure of a declared-trust surface, not a server-side resource axis. See [The browser-JS boundary](#the-browser-js-boundary). |
+| `js-port` | Exchanging raw typed values with page JavaScript — reachable code reaches `Js.send` / `Js.subscribe`, so the program crosses the Ipê↔JS boundary directly rather than through a widget element. A disclosure of a declared-trust surface, on the same axis as `custom-element`. See [The browser-JS boundary](#the-browser-js-boundary). |
 
 The vocabulary is closed and coarse for now: `network` means *any* network, not
 per-host; `filesystem` means *any* file, not per-path. Finer, per-resource
@@ -120,6 +121,59 @@ Beyond those three, a widget is **declared trust in the package author**: its
 JavaScript is not sandboxed and its behaviour is not proven. Ipê never markets the
 sandbox as covering browser JS. Treat a `custom-element` package the way you treat
 any dependency you let run in your users' browsers — read it, or trust its author.
+
+### Raw ports: `Ipe.Js`
+
+When the page JavaScript is not a widget element but a plain script, a **port**
+crosses the same boundary directly. `Js.send` hands a typed value out to the page;
+`Js.subscribe` decodes a value the page sent in. Both ride the same fail-closed
+seal the widget boundary uses:
+
+- The outbound value is canonically encoded and delivered to the page's
+  `ipe.onReceive` handler; a `Secret`, a function, or an untyped `Value` is
+  **rejected at compile time** (`IPE-L0148`) — a secret can never cross to JS, and
+  a raw channel cannot be spelled (wrap a free-form payload in a declared type).
+- The inbound value is decoded by the `Decoder` you pass; a payload that does not
+  decode is **dropped whole**, never a partial value.
+- Reaching a port infers the `js-port` capability, so a program that talks to page
+  JS says so.
+
+A minimal send-and-receive app — outbound in `update`, inbound in
+`subscriptions`:
+
+```elm
+module Main exposing (main)
+
+import Ipe.Tea.Web as Web
+import Ipe.Tea.Web.Cmd as Cmd
+import Ipe.Tea.Web.Sub as Sub
+import Ipe.Ui as Ui
+import Ipe.Js as Js
+import Ipe.Json.Decode as Decode
+
+type alias Model = { n : Int }
+
+type Msg = Bump | Got Int
+
+update : Msg -> Model -> ( Model, Cmd.Cmd Msg )
+update msg model =
+    case msg of
+        Bump ->
+            -- send the current count out to the page's `ipe.onReceive`
+            ( model, Js.send model.n )
+
+        Got k ->
+            -- a value the page sent via `ipe.send(k)`, decoded as an Int
+            ( { n = k }, Cmd.none )
+
+subscriptions : Model -> Sub.Sub Msg
+subscriptions _model =
+    Js.subscribe Decode.int Got
+```
+
+On the page side the surface is identical whether the app is server-driven or
+compiled to WebAssembly: `ipe.onReceive(fn)` registers the outbound handler and
+`ipe.send(value)` pushes a value in.
 
 ## Where enforcement lives
 
