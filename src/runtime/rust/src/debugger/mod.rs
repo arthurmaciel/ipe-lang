@@ -516,4 +516,94 @@ mod tests {
             "type-mismatch blob must yield None"
         );
     }
+
+    // ── Overlay scrub wiring (unit-level) ──────────────────────────────────
+
+    // Selecting step N via `reconstruct(N)` returns the model at that step;
+    // no additional effects fire beyond the original live pass.
+    #[test]
+    fn scrub_reconstruct_wiring() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let effect_count = Arc::new(AtomicUsize::new(0));
+
+        // update: increment count; live pass also bumps the effect counter.
+        let counter = Arc::clone(&effect_count);
+        let live_update = move |msg: TestMsg, model: TestModel| -> (TestModel, IpeCmd<TestMsg>) {
+            counter.fetch_add(1, Ordering::SeqCst);
+            let TestMsg::Add(n) = msg;
+            (
+                TestModel {
+                    count: model.count + n,
+                },
+                IpeCmd::None,
+            )
+        };
+
+        // The fn-pointer used for reconstruct does NOT touch the counter.
+        let reconstruct_update: fn(TestMsg, TestModel) -> (TestModel, IpeCmd<TestMsg>) =
+            test_update;
+
+        // Simulate live pass: record 3 steps.
+        let mut buf = RecordBuffer::new(TestModel { count: 0 }, 16);
+        let mut live = TestModel { count: 0 };
+        let msgs_in = [TestMsg::Add(10), TestMsg::Add(5), TestMsg::Add(3)];
+        for msg in &msgs_in {
+            let (next, _cmd) = live_update(msg.clone(), live.clone());
+            buf.record(msg.clone(), next.clone(), &|m, mdl| {
+                // The record-time closure is the one used for base advancement
+                // on overflow — use the non-counting fn here.
+                reconstruct_update(m, mdl)
+            });
+            live = next;
+        }
+
+        let live_effects = effect_count.load(Ordering::SeqCst);
+        assert_eq!(live_effects, 3, "live pass must fire exactly 3 effects");
+
+        // Scrub to step 1 (after msgs[0]+msgs[1]): count = 15.
+        let at_step_1 = buf.reconstruct(1, &reconstruct_update).expect("step 1");
+        assert_eq!(
+            at_step_1.count, 15,
+            "reconstruct at step 1 must yield count=15"
+        );
+
+        // Scrub to step 0 (after msgs[0]): count = 10.
+        let at_step_0 = buf.reconstruct(0, &reconstruct_update).expect("step 0");
+        assert_eq!(
+            at_step_0.count, 10,
+            "reconstruct at step 0 must yield count=10"
+        );
+
+        // No additional effects fired during scrubbing.
+        let after_scrub_effects = effect_count.load(Ordering::SeqCst);
+        assert_eq!(
+            live_effects, after_scrub_effects,
+            "reconstruct must not fire any additional effects"
+        );
+
+        // Returning to live (no reconstruct call needed — caller uses live model).
+        assert_eq!(live.count, 18, "live model is count=18 after 3 steps");
+    }
+
+    // `Secret`-bearing values are redacted in the message label rendered by
+    // `IpeStringify::ipe_show` — the same path the overlay's `label_fn` uses.
+    #[cfg(feature = "secret")]
+    #[test]
+    fn secret_redacted_in_label() {
+        use crate::secret::secret_from_string;
+        use crate::stringify::IpeStringify;
+
+        let secret = secret_from_string("super-secret-token".to_owned());
+        let rendered = secret.ipe_show();
+        assert!(
+            !rendered.contains("super-secret-token"),
+            "Secret must not appear in rendered label; got: {rendered:?}"
+        );
+        assert_eq!(
+            rendered, "<redacted>",
+            "Secret must stringify to the fixed redacted placeholder"
+        );
+    }
 }

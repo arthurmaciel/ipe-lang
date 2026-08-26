@@ -40,6 +40,8 @@ use crate::dom::{HandlerIndex, WebReq, build_index, diff::Patch, diff::diff};
 use crate::html::{FormData, Html, assign_ipe_ids, render_html};
 use crate::tea::{IpeCmd, IpeSub};
 
+#[cfg(feature = "debugger")]
+mod debugger_overlay;
 pub mod pubsub;
 mod subs;
 pub mod widget;
@@ -94,7 +96,7 @@ pub fn wasm_app<E, Model, Msg, FInit, FUpdate, FView, FSubs>(
 where
     E: From<String> + 'static,
     Model: Clone + 'static,
-    Msg: Clone + 'static,
+    Msg: Clone + crate::stringify::IpeStringify + 'static,
     FInit: Fn(WebReq) -> (Model, IpeCmd<Msg>) + 'static,
     FUpdate: Fn(Msg, Model) -> (Model, IpeCmd<Msg>) + 'static,
     FView: Fn(Model) -> Html<Msg> + 'static,
@@ -138,7 +140,7 @@ pub fn wasm_adopt_app<E, Model, Msg, FUpdate, FView, FSubs>(
 where
     E: From<String> + 'static,
     Model: Clone + 'static,
-    Msg: Clone + 'static,
+    Msg: Clone + crate::stringify::IpeStringify + 'static,
     FUpdate: Fn(Msg, Model) -> (Model, IpeCmd<Msg>) + 'static,
     FView: Fn(Model) -> Html<Msg> + 'static,
     FSubs: Fn(Model) -> IpeSub<Msg> + 'static,
@@ -179,7 +181,7 @@ pub fn wasm_app_routed<E, Model, Msg, Page, FInit, FUpdate, FView, FSubs, FSetPa
 where
     E: From<String> + 'static,
     Model: Clone + 'static,
-    Msg: Clone + 'static,
+    Msg: Clone + crate::stringify::IpeStringify + 'static,
     Page: Clone + 'static,
     FInit: Fn(WebReq) -> (Model, IpeCmd<Msg>) + 'static,
     FUpdate: Fn(Msg, Model) -> (Model, IpeCmd<Msg>) + 'static,
@@ -246,11 +248,24 @@ struct App<Model, Msg> {
     router: Option<Box<dyn Fn(&str, Model) -> Option<Model>>>,
     /// Development-only time-travelling debugger recorder. Passive: records
     /// each live-pass `update` step without re-firing any `Cmd`. Present only
-    /// when the `debugger` feature is active (`ipe build/run --debugger`). This
-    /// field exposes the recorder API; the interactive overlay UI (message list
-    /// + scrubber) that consumes it is not built yet.
+    /// when the `debugger` feature is active (`ipe build/run --debugger`).
     #[cfg(feature = "debugger")]
     recorder: RefCell<crate::debugger::RecordBuffer<Msg, Model>>,
+    /// Pre-rendered string labels for each recorded step, newest at the back.
+    /// Populated in `flush` via `label_fn`; kept in sync with `recorder`.
+    /// Stored as strings so `flush` and all generic callers need no
+    /// `IpeStringify` bound — the bound is satisfied once at construction.
+    #[cfg(feature = "debugger")]
+    label_log: RefCell<std::collections::VecDeque<String>>,
+    /// Renders a `Msg` to its display label. Stored as a boxed closure so no
+    /// `IpeStringify` bound is needed anywhere `App` is referenced generically.
+    #[cfg(feature = "debugger")]
+    label_fn: Box<dyn Fn(&Msg) -> String>,
+    /// The debugger overlay panel (message list + scrubber). Mounted once into
+    /// `<body>` at startup; never part of the app view tree or ipe-id space.
+    /// `None` when mounting the overlay DOM failed (warning logged; app continues).
+    #[cfg(feature = "debugger")]
+    overlay: Option<std::rc::Rc<debugger_overlay::OverlayState>>,
 }
 
 /// Recompute `subscriptions(model)` and hand it to the `SubManager`, wrapped
@@ -277,7 +292,7 @@ fn mount_app<Model, Msg, FInit, FUpdate, FView, FSubs>(
 ) -> Result<(), String>
 where
     Model: Clone + 'static,
-    Msg: Clone + 'static,
+    Msg: Clone + crate::stringify::IpeStringify + 'static,
     FInit: Fn(WebReq) -> (Model, IpeCmd<Msg>) + 'static,
     FUpdate: Fn(Msg, Model) -> (Model, IpeCmd<Msg>) + 'static,
     FView: Fn(Model) -> Html<Msg> + 'static,
@@ -299,6 +314,8 @@ where
     // we keep `model` alive until after the `App` is built.
     #[cfg(feature = "debugger")]
     let recorder_base = model.clone();
+    #[cfg(feature = "debugger")]
+    let overlay = debugger_overlay::mount_overlay();
     let app = Rc::new(App {
         model: RefCell::new(model),
         tree: RefCell::new(tree),
@@ -316,8 +333,16 @@ where
             recorder_base,
             crate::debugger::DEFAULT_HISTORY_CAP,
         )),
+        #[cfg(feature = "debugger")]
+        label_log: RefCell::new(std::collections::VecDeque::new()),
+        #[cfg(feature = "debugger")]
+        label_fn: Box::new(|m: &Msg| crate::stringify::IpeStringify::ipe_show(m)),
+        #[cfg(feature = "debugger")]
+        overlay,
     });
 
+    #[cfg(feature = "debugger")]
+    attach_overlay_listeners(&app);
     attach_delegated_listeners(&body, &app)?;
     attach_widget_up_listener(&body, &app)?;
     // The first paint went through `set_inner_html`, not the attribute-patch
@@ -351,7 +376,7 @@ fn adopt_app<Model, Msg, FUpdate, FView, FSubs>(
 ) -> Result<(), String>
 where
     Model: Clone + 'static,
-    Msg: Clone + 'static,
+    Msg: Clone + crate::stringify::IpeStringify + 'static,
     FUpdate: Fn(Msg, Model) -> (Model, IpeCmd<Msg>) + 'static,
     FView: Fn(Model) -> Html<Msg> + 'static,
     FSubs: Fn(Model) -> IpeSub<Msg> + 'static,
@@ -383,6 +408,8 @@ where
     let index = build_index(&tree);
     #[cfg(feature = "debugger")]
     let recorder_base = model.clone();
+    #[cfg(feature = "debugger")]
+    let overlay = debugger_overlay::mount_overlay();
     let app = Rc::new(App {
         model: RefCell::new(model),
         tree: RefCell::new(tree),
@@ -400,8 +427,16 @@ where
             recorder_base,
             crate::debugger::DEFAULT_HISTORY_CAP,
         )),
+        #[cfg(feature = "debugger")]
+        label_log: RefCell::new(std::collections::VecDeque::new()),
+        #[cfg(feature = "debugger")]
+        label_fn: Box::new(|m: &Msg| crate::stringify::IpeStringify::ipe_show(m)),
+        #[cfg(feature = "debugger")]
+        overlay,
     });
 
+    #[cfg(feature = "debugger")]
+    attach_overlay_listeners(&app);
     attach_delegated_listeners(&body, &app)?;
     attach_widget_up_listener(&body, &app)?;
     // Adopt does NOT repaint (the server DOM is trusted), so the widget's `state`
@@ -429,7 +464,7 @@ fn mount_app_routed<Model, Msg, Page, FInit, FUpdate, FView, FSubs, FSetPage>(
 ) -> Result<(), String>
 where
     Model: Clone + 'static,
-    Msg: Clone + 'static,
+    Msg: Clone + crate::stringify::IpeStringify + 'static,
     Page: Clone + 'static,
     FInit: Fn(WebReq) -> (Model, IpeCmd<Msg>) + 'static,
     FUpdate: Fn(Msg, Model) -> (Model, IpeCmd<Msg>) + 'static,
@@ -485,6 +520,8 @@ where
 
     #[cfg(feature = "debugger")]
     let recorder_base = model.clone();
+    #[cfg(feature = "debugger")]
+    let overlay = debugger_overlay::mount_overlay();
     let app = Rc::new(App {
         model: RefCell::new(model),
         tree: RefCell::new(tree),
@@ -502,8 +539,16 @@ where
             recorder_base,
             crate::debugger::DEFAULT_HISTORY_CAP,
         )),
+        #[cfg(feature = "debugger")]
+        label_log: RefCell::new(std::collections::VecDeque::new()),
+        #[cfg(feature = "debugger")]
+        label_fn: Box::new(|m: &Msg| crate::stringify::IpeStringify::ipe_show(m)),
+        #[cfg(feature = "debugger")]
+        overlay,
     });
 
+    #[cfg(feature = "debugger")]
+    attach_overlay_listeners(&app);
     attach_delegated_listeners(&body, &app)?;
     attach_widget_up_listener(&body, &app)?;
     attach_popstate_listener(&app)?;
@@ -858,28 +903,58 @@ where
         let (next, cmd) = (app.update)(msg, model);
         // Passive recording: store the message and the resulting model after the
         // live pass. Effects fire normally above; recording does not re-fire them.
+        // The pre-rendered label is pushed alongside to avoid requiring
+        // `IpeStringify` on every generic caller — the bound is satisfied once
+        // at construction via `label_fn`.
         #[cfg(feature = "debugger")]
-        app.recorder
-            .borrow_mut()
-            .record(msg_for_recorder, next.clone(), &|m, mdl| {
-                (app.update)(m, mdl)
-            });
+        {
+            let label = (app.label_fn)(&msg_for_recorder);
+            app.recorder
+                .borrow_mut()
+                .record(msg_for_recorder, next.clone(), &|m, mdl| {
+                    (app.update)(m, mdl)
+                });
+            // Keep `label_log` in sync with the recorder ring buffer.
+            // On overflow the recorder drops its oldest step; mirror that here.
+            let cap = app.recorder.borrow().cap();
+            let mut log = app.label_log.borrow_mut();
+            if log.len() >= cap {
+                log.pop_front();
+            }
+            log.push_back(label);
+        }
         model = next;
         cmds.push(cmd);
     }
     *app.model.borrow_mut() = model.clone();
 
-    let mut new_tree = (app.view)(model);
-    assign_ipe_ids(&mut new_tree, ROOT_IPE_ID);
-    let patches = diff(&app.tree.borrow(), &new_tree);
-    apply_patches(&patches);
-    *app.index.borrow_mut() = build_index(&new_tree);
-    *app.tree.borrow_mut() = new_tree;
-    // A widget that first appears via an `html`-subtree replace bypasses the
-    // attribute-patch property route; re-deliver each widget's decoded down-state
-    // PROPERTY (idempotent, bounded by the widget count).
-    if let Ok(document) = document() {
-        widget::sync_widget_properties(&document, &app.tree.borrow());
+    // When the user has scrubbed to a past step, the app view is frozen at that
+    // reconstructed model. Live messages keep recording above (history is never
+    // corrupted), but the DOM is NOT updated to the new live model — the user's
+    // chosen past step stays visible until they return the scrubber to the end.
+    // Effects still fire (they were produced by the live update pass above).
+    #[cfg(feature = "debugger")]
+    let scrub_active = app
+        .overlay
+        .as_ref()
+        .and_then(|ov| ov.scrub_step())
+        .is_some();
+    #[cfg(not(feature = "debugger"))]
+    let scrub_active = false;
+
+    if !scrub_active {
+        let mut new_tree = (app.view)(model);
+        assign_ipe_ids(&mut new_tree, ROOT_IPE_ID);
+        let patches = diff(&app.tree.borrow(), &new_tree);
+        apply_patches(&patches);
+        *app.index.borrow_mut() = build_index(&new_tree);
+        *app.tree.borrow_mut() = new_tree;
+        // A widget that first appears via an `html`-subtree replace bypasses the
+        // attribute-patch property route; re-deliver each widget's decoded down-state
+        // PROPERTY (idempotent, bounded by the widget count).
+        if let Ok(document) = document() {
+            widget::sync_widget_properties(&document, &app.tree.borrow());
+        }
     }
 
     for cmd in cmds {
@@ -890,6 +965,10 @@ where
     // `Sub.every` timers/`Sub.subscribeTopic` registrations and respawns from
     // the fresh `Sub` tree.
     resync_subscriptions(app);
+
+    // Refresh the overlay panel with the newly recorded step.
+    #[cfg(feature = "debugger")]
+    refresh_overlay(app);
 }
 
 /// Fire a Cmd: None/Batch recurse; Perform runs on the microtask queue and
@@ -921,6 +1000,97 @@ where
             thunk(&app.origin);
         }
     }
+}
+
+/// Wire the debugger overlay scrubber and message-list click listeners.
+///
+/// When the scrubber moves to a past step, `flush_overlay_scrub` re-renders the
+/// app at the reconstructed model WITHOUT running any `Cmd`. When it moves back
+/// to the end, live mode resumes and the current live model is re-rendered.
+#[cfg(feature = "debugger")]
+fn attach_overlay_listeners<Model, Msg>(app: &Rc<App<Model, Msg>>)
+where
+    Model: Clone + 'static,
+    Msg: Clone + 'static,
+{
+    let Some(ref overlay) = app.overlay else {
+        return;
+    };
+    let overlay_rc = std::rc::Rc::clone(overlay);
+    let app2 = Rc::clone(app);
+    debugger_overlay::attach_overlay_listeners(&overlay_rc, move |step| {
+        flush_overlay_scrub(&app2, step);
+    });
+}
+
+/// Re-render the app at step `n` (scrubbed) or at the live model (`None`).
+///
+/// Reconstruction is a pure re-fold — no `Cmd` is run. The diff→patch cycle
+/// updates only the app's own DOM nodes (the overlay panel is not part of the
+/// app view tree). This function does NOT enqueue any message.
+#[cfg(feature = "debugger")]
+fn flush_overlay_scrub<Model, Msg>(app: &Rc<App<Model, Msg>>, step: Option<usize>)
+where
+    Model: Clone + 'static,
+    Msg: Clone + 'static,
+{
+    use crate::dom::{build_index, diff::diff};
+    use crate::html::assign_ipe_ids;
+
+    let render_model = match step {
+        None => {
+            // Resuming live: re-render the current live model.
+            app.model.borrow().clone()
+        }
+        Some(n) => {
+            // Reconstruct without re-firing effects.
+            let reconstructed = app
+                .recorder
+                .borrow()
+                .reconstruct(n, &|m, mdl| (app.update)(m, mdl));
+            match reconstructed {
+                Some(m) => m,
+                None => {
+                    // Step out of range (ring buffer may have advanced); resume live.
+                    if let Some(ref ov) = app.overlay {
+                        ov.scrub_step.set(None);
+                    }
+                    app.model.borrow().clone()
+                }
+            }
+        }
+    };
+
+    let mut new_tree = (app.view)(render_model);
+    assign_ipe_ids(&mut new_tree, ROOT_IPE_ID);
+    let patches = diff(&app.tree.borrow(), &new_tree);
+    apply_patches(&patches);
+    *app.index.borrow_mut() = build_index(&new_tree);
+    *app.tree.borrow_mut() = new_tree;
+    if let Ok(document) = document() {
+        widget::sync_widget_properties(&document, &app.tree.borrow());
+    }
+
+    // Refresh the overlay panel to highlight the newly selected step.
+    refresh_overlay(app);
+}
+
+/// Refresh the overlay panel (message list + scrubber) from the current
+/// recorder snapshot. Uses pre-rendered `label_log` strings, so no
+/// `IpeStringify` bound is needed here.
+#[cfg(feature = "debugger")]
+fn refresh_overlay<Model, Msg>(app: &Rc<App<Model, Msg>>)
+where
+    Model: Clone + 'static,
+    Msg: Clone + 'static,
+{
+    let Some(ref overlay) = app.overlay else {
+        return;
+    };
+    let len = app.recorder.borrow().len();
+    let selected = overlay.scrub_step();
+    let labels: Vec<String> = app.label_log.borrow().iter().cloned().collect();
+    debugger_overlay::render_overlay(overlay, labels.into_iter(), len, selected);
 }
 
 /// Apply the same `Vec<Patch>` the SSE wire serialises, via typed web-sys
