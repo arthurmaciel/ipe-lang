@@ -19,14 +19,20 @@
 //! The transport is process-/tab-local and cfg-split, mirroring `ws_client.rs`
 //! and the pub/sub broker:
 //!
-//! * **Native (server).** Inbound port messages arrive as strings on a
-//!   process-global broadcast channel that the server's inbound route feeds after
-//!   applying the same session + CSRF + bounded-seal checks the `/_ipe/event`
-//!   route applies; a `js_subscribe` `Source` drains that broadcast. Outbound
-//!   strings are delivered to a registered out-sink the server drains to push to
-//!   the browser (alongside the SSE patch stream). Both channels default to a
-//!   real in-process broadcast so the transport is total and observable even with
-//!   no browser attached.
+//! * **Native (server).** Inbound port messages arrive as strings on a broadcast
+//!   channel that the server's inbound route feeds after applying the same session
+//!   + CSRF + bounded-seal checks the `/_ipe/event` route applies; a `js_subscribe`
+//!   `Source` drains that broadcast. Outbound strings are delivered to a registered
+//!   out-sink the server drains to push to the browser (alongside the SSE patch
+//!   stream). Both channels default to a real in-process broadcast so the transport
+//!   is total and observable even with no browser attached.
+//!
+//!   The default channels here are process-scoped. A live multi-session server must
+//!   wire per-SESSION channels (one seam per session, not one per process) before
+//!   routing browser traffic through them, or one session's inbound payloads would
+//!   reach another session's `js_subscribe`. That per-session wiring is a
+//!   security-scoped step the server binder owns; these seams exist so it can drive
+//!   them, not so it can share one across sessions.
 //! * **Wasm (`feature = "wasm-client"`).** In-process, no network. Outbound calls
 //!   the browser-registered `window.ipeOnReceive` handler with the seal-encoded
 //!   string; inbound is fed by the browser's `window.ipe.send(...)` pushing a
@@ -266,11 +272,11 @@ mod tests {
     use crate::json::{Decoder, JsonVal, json_decode_int};
     use std::sync::{Arc, Mutex};
 
-    // The inbound port channel is one process-global broadcast (one process is
-    // one port seam — the correct production shape), so a concurrently-running
-    // test's `deliver_inbound` would reach this test's subscriber. Serialise the
-    // inbound tests behind one async lock (held across `.await`, so a std guard
-    // would be `!Send`) so each drives the shared channel alone.
+    // The default inbound port channel is one process-scoped broadcast, so a
+    // concurrently-running test's `deliver_inbound` would reach this test's
+    // subscriber. Serialise the inbound tests behind one async lock (held across
+    // `.await`, so a std guard would be `!Send`) so each drives the shared channel
+    // alone.
     fn inbound_test_lock() -> &'static tokio::sync::Mutex<()> {
         static LOCK: std::sync::OnceLock<tokio::sync::Mutex<()>> = std::sync::OnceLock::new();
         LOCK.get_or_init(|| tokio::sync::Mutex::new(()))

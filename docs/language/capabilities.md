@@ -10,7 +10,7 @@ The idea is *verify behaviour, not reputation*: rather than trusting that a
 dependency is well-behaved, you can see the precise set of things it is even
 *able* to do before you run it.
 
-## The eleven capabilities
+## The twelve capabilities
 
 | Capability | What it covers |
 |---|---|
