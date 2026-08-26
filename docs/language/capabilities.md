@@ -141,7 +141,7 @@ seal the widget boundary uses:
 A minimal send-and-receive app — outbound in `update`, inbound in
 `subscriptions`:
 
-```elm
+```
 module Main exposing (main)
 
 import Ipe.Tea.Web as Web
@@ -225,7 +225,7 @@ warning, no prompt, no flag. Consent has three forms:
 - **The durable manifest token** in `package.ipe`, so a repeatedly-built project
   never re-prompts and CI needs no flag:
 
-  ```elm
+  ```
   package =
       Package.named "my-app"
           |> Package.accepts [ Capability.unsafe ]
