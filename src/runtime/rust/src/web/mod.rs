@@ -19,7 +19,8 @@ pub mod style_inject;
 // The generator lives at the crate top level (`crate::widget_assets`) so the
 // build-time static/wasm bundler can reach it without the server surface; `web`
 // re-exports it here so the server's `ipe_runtime::web::widget_assets::*` path
-// (the process-start `register` + route mounting) is byte-unchanged. Populated
+// (the process-start `register` + route mounting) keeps its security shape.
+// Populated
 // once at process start by the generated `main`; inert for a widget-free program.
 pub use crate::widget_assets;
 // Pre-built console child + reverse-proxy — spawns the bundled console

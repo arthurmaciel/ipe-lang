@@ -2118,7 +2118,7 @@ pub fn compile_prepared(
     // (INV-1: no salsa query touches the filesystem); this stage owns the project
     // root and already read each file above, so it wires the transport here.
     //
-    // Two transports, one manifest (§ js-interop-design):
+    // Two transports, one manifest:
     //  * Native (server-driven Web) — inject the one-time `widget_assets::register`
     //    into `main`, so the runtime serves each asset content-addressed + SRI and
     //    generates the attribute/POST glue at process start.
