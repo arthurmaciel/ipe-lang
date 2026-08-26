@@ -1,20 +1,30 @@
 -- | Ipe.Email — provider-abstract email send (Layer 3 Ipe source).
 --
 -- Supports Resend, AWS SES, SendGrid, and raw SMTP under one API.
--- Pick a provider once at boot (typically from `System.getenv`) and
--- the rest of the codebase calls `Email.send provider message`.
 --
--- v0.15.46 stdlib convention: every typed record ships with a
--- `default*` constructor + `with*` builder helpers so future
--- field additions don't break record literals.
+-- The provider is passed EXPLICITLY as the first argument to every send:
+-- `Email.send provider message`. Provider configuration is intentionally NOT
+-- part of the global `config` binding and is never ambient-installed — an
+-- "install once, a later send reads it" path would admit a representable
+-- "used-before-installed" state, which this API refuses to represent. A send
+-- without a provider is a type error, not a runtime surprise.
 --
--- v0.15.47.
+-- Every provider credential is a `Secret` (`Ipe.Secret`): the Resend and
+-- SendGrid API keys, the SES secret key, and the SMTP password are all sealed
+-- and cannot be `Debug`-printed, stringified, logged, or serialised. The
+-- runtime send kernel reveals each `Secret` only at the actual HTTP/SMTP call —
+-- the plaintext never reaches a log line or an error message.
+--
+-- Every typed record ships with a `default*` constructor + `with*` builder
+-- helpers so future field additions don't break record literals.
 --
 -- Example:
 --
+--     import Ipe.Secret
+--
 --     provider : EmailProvider
 --     provider =
---         Resend (System.getenvOr "RESEND_API_KEY" "")
+--         Resend (Secret.fromString (System.getenvOr "RESEND_API_KEY" ""))
 --
 --     msg : EmailMessage
 --     msg =
@@ -61,6 +71,7 @@ module Ipe.Email exposing
 import Ipe.Ffi as Ffi
 import Ipe.Error exposing (Error)
 import Ipe.Bytes exposing (Bytes)
+import Ipe.Secret
 
 
 -- | A single email message.
@@ -91,28 +102,33 @@ type alias Attachment =
     }
 
 
--- | SES auth: region + credentials.
+-- | SES auth: region + credentials.  The access-key id (`key`) identifies the
+-- IAM principal and is not itself a secret (it travels in the request's
+-- `Authorization` credential scope); the `secret` access key IS a credential
+-- and is a sealed `Secret`.
 type alias SesConfig =
     { region : String
     , key : String
-    , secret : String
+    , secret : Secret
     }
 
 
--- | SMTP transport: host + port + creds.
+-- | SMTP transport: host + port + creds.  The `pass` is a sealed `Secret`.
 type alias SmtpConfig =
     { host : String
     , port : Int
     , user : String
-    , pass : String
+    , pass : Secret
     }
 
 
--- | The provider to send through.  Pick at boot; pass to `send`.
+-- | The provider to send through.  Pass explicitly to `send`.  The Resend and
+-- SendGrid API keys are sealed `Secret`s; the SES / SMTP credentials live in
+-- their config records (also sealed).
 type EmailProvider
-    = Resend String
+    = Resend Secret
     | Ses SesConfig
-    | SendGrid String
+    | SendGrid Secret
     | Smtp SmtpConfig
 
 
@@ -193,24 +209,27 @@ withContent bytes att =
 
 
 -- | `defaultSesConfig "us-east-1"` — SesConfig with the region set;
--- pair with `withSesKey` + `withSesSecret` to provision credentials.
+-- pair with `withSesKey` + `withSesSecret` to provision credentials.  The
+-- secret access key starts sealed-empty.
 defaultSesConfig : String -> SesConfig
 defaultSesConfig region =
     { region = region
     , key = ""
-    , secret = ""
+    , secret = Secret.fromString ""
     }
 
 
--- | `withSesKey "AKIA..." cfg` — replace the SES access key.
+-- | `withSesKey "AKIA..." cfg` — replace the SES access-key id (the IAM
+-- principal identifier — not itself a secret).
 withSesKey : String -> SesConfig -> SesConfig
 withSesKey key cfg =
     { cfg | key = key }
 
 
--- | `withSesSecret "..." cfg` — replace the SES secret key.  Never
--- log this — `Ipe.Auth`'s typed-secret hygiene applies.
-withSesSecret : String -> SesConfig -> SesConfig
+-- | `withSesSecret (Secret.fromString "...") cfg` — replace the SES secret
+-- access key.  The value is a sealed `Secret`; it is revealed only at the send
+-- kernel's SigV4 signing step, never logged.
+withSesSecret : Secret -> SesConfig -> SesConfig
 withSesSecret secret cfg =
     { cfg | secret = secret }
 
@@ -224,7 +243,7 @@ defaultSmtpConfig host =
     { host = host
     , port = 587
     , user = ""
-    , pass = ""
+    , pass = Secret.fromString ""
     }
 
 
@@ -240,17 +259,23 @@ withSmtpUser user cfg =
     { cfg | user = user }
 
 
--- | `withSmtpPass "..." cfg` — replace the SMTP password.  Never
--- log this — `Ipe.Auth`'s typed-secret hygiene applies.
-withSmtpPass : String -> SmtpConfig -> SmtpConfig
+-- | `withSmtpPass (Secret.fromString "...") cfg` — replace the SMTP password.
+-- The value is a sealed `Secret`; it is revealed only at the send kernel's SMTP
+-- AUTH step (over a required-TLS channel when credentials are set), never logged.
+withSmtpPass : Secret -> SmtpConfig -> SmtpConfig
 withSmtpPass pass cfg =
     { cfg | pass = pass }
 
 
--- | `send provider message` — submit the message to the chosen
--- provider.  Returns the provider's message ID on success.  Fails
--- on network errors, auth errors, or invalid input (missing
--- recipient, etc.).
+-- | `send provider message` — submit the message to the chosen provider.
+-- The provider is a REQUIRED positional argument (there is no default and no
+-- ambient install), so a send is impossible without one.  Returns the
+-- provider's message ID on success.  Fails on network errors, auth errors, or
+-- invalid input (missing recipient, etc.).
+--
+-- The provider's sealed credentials cross into the runtime kernel still sealed;
+-- the kernel reveals each `Secret` only at the outbound HTTP/SMTP call. No auth
+-- error or diagnostic returned from a failed send carries the plaintext.
 send : EmailProvider -> EmailMessage -> Task Error String
 send = Ffi.kernel "Email_send"
 

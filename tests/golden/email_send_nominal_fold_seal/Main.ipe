@@ -4,6 +4,7 @@ import Ipe.Task as Task
 import Ipe.Email as Email
 import Ipe.Bytes as Bytes
 import Ipe.Io as Io
+import Ipe.Secret
 
 -- SEAL fixture for backlog #210 "Ipe.Email family": a typed `EmailMessage`
 -- built via `defaultMessage` + `with*` builders is fed DIRECTLY to
@@ -28,7 +29,7 @@ import Ipe.Io as Io
 main =
     let
         provider =
-            Email.Resend "test-key"
+            Email.Resend (Secret.fromString "test-key")
 
         message =
             Email.defaultMessage

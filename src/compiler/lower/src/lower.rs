@@ -647,12 +647,13 @@ fn is_csv_doc_canon_shape(fields: &mut [(&str, &canon::Type)], interner: &Intern
 /// Folds to `IrType::EmailAttachment`.
 const EMAIL_ATTACHMENT_FIELDS: &[&str] = &["content", "filename", "mimeType"];
 
-/// `SesConfig` — sorted field NAMES `{ key, region, secret }`, all `String`.
-/// Folds to `IrType::EmailSesConfig`.
+/// `SesConfig` — sorted field NAMES `{ key, region, secret }`: `key`/`region`
+/// are `String`, `secret` is a sealed `Secret`. Folds to `IrType::EmailSesConfig`.
 const EMAIL_SES_FIELDS: &[&str] = &["key", "region", "secret"];
 
-/// `SmtpConfig` — sorted field NAMES `{ host, pass, port, user }` (`port : Int`,
-/// the rest `String`). Folds to `IrType::EmailSmtpConfig`.
+/// `SmtpConfig` — sorted field NAMES `{ host, pass, port, user }`: `port : Int`,
+/// `pass : Secret` (sealed), `host`/`user` are `String`. Folds to
+/// `IrType::EmailSmtpConfig`.
 const EMAIL_SMTP_FIELDS: &[&str] = &["host", "pass", "port", "user"];
 
 /// `EmailMessage` — sorted field NAMES `{ attachments, bcc, cc, from, htmlBody,
@@ -699,42 +700,25 @@ fn canon_ty_is_bytes(ty: &canon::Type, interner: &Interner) -> bool {
         if args.is_empty() && interner.resolve(*name) == Some("Bytes"))
 }
 
-/// Does `fields` match an all-`String` record whose sorted field NAMES equal
-/// `expected`? Sorts `fields` in place. Used for the `SesConfig` shape
-/// (all-`String`).
-fn is_all_string_record_shape(
-    fields: &mut [(&str, &Ty)],
-    expected: &[&str],
-    interner: &Interner,
-) -> bool {
-    if fields.len() != expected.len() {
-        return false;
-    }
-    fields.sort_unstable_by_key(|(name, _)| *name);
-    fields
-        .iter()
-        .zip(expected.iter())
-        .all(|((name, ty), exp)| *name == *exp && ty_is_string(ty, interner))
+/// Is `ty` the `Ipe.Secret` sealed secret type?  Matched by NAME only
+/// (module-agnostic), mirroring `ir_type_from_ty`'s `"Secret" => IrType::Secret`
+/// arm — the type is imported from `Ipe.Secret` (a non-empty module path), so
+/// this predicate does not require an empty module.  Used by the `SesConfig` /
+/// `SmtpConfig` folds, whose credential fields are `Secret`, not `String`.
+fn ty_is_secret(ty: &Ty, interner: &Interner) -> bool {
+    matches!(ty, Ty::Con { name, args, .. }
+        if args.is_empty() && interner.resolve(*name) == Some("Secret"))
 }
 
-/// The [`canon::Type`] twin of [`is_all_string_record_shape`].
-fn is_all_string_canon_record_shape(
-    fields: &mut [(&str, &canon::Type)],
-    expected: &[&str],
-    interner: &Interner,
-) -> bool {
-    if fields.len() != expected.len() {
-        return false;
-    }
-    fields.sort_unstable_by_key(|(name, _)| *name);
-    fields
-        .iter()
-        .zip(expected.iter())
-        .all(|((name, ty), exp)| *name == *exp && canon_ty_is_string(ty, interner))
+/// The [`canon::Type`] twin of [`ty_is_secret`].
+fn canon_ty_is_secret(ty: &canon::Type, interner: &Interner) -> bool {
+    matches!(ty, canon::Type::Con { name, args, .. }
+        if args.is_empty() && interner.resolve(*name) == Some("Secret"))
 }
 
 /// Does `fields` match the `SmtpConfig` shape — `{ host, pass, port, user }`
-/// with `port : Int` and the other three `String`? Sorts `fields` in place.
+/// with `port : Int`, `pass : Secret` (sealed), and `host`/`user` `String`?
+/// Sorts `fields` in place.
 fn is_email_smtp_shape(fields: &mut [(&str, &Ty)], interner: &Interner) -> bool {
     if fields.len() != EMAIL_SMTP_FIELDS.len() {
         return false;
@@ -743,7 +727,7 @@ fn is_email_smtp_shape(fields: &mut [(&str, &Ty)], interner: &Interner) -> bool 
     matches!(fields, [(host_n, host_ty), (pass_n, pass_ty), (port_n, port_ty), (user_n, user_ty)]
         if *host_n == "host" && *pass_n == "pass" && *port_n == "port" && *user_n == "user"
             && ty_is_string(host_ty, interner)
-            && ty_is_string(pass_ty, interner)
+            && ty_is_secret(pass_ty, interner)
             && ty_is_int(port_ty, interner)
             && ty_is_string(user_ty, interner))
 }
@@ -757,9 +741,37 @@ fn is_email_smtp_canon_shape(fields: &mut [(&str, &canon::Type)], interner: &Int
     matches!(fields, [(host_n, host_ty), (pass_n, pass_ty), (port_n, port_ty), (user_n, user_ty)]
         if *host_n == "host" && *pass_n == "pass" && *port_n == "port" && *user_n == "user"
             && canon_ty_is_string(host_ty, interner)
-            && canon_ty_is_string(pass_ty, interner)
+            && canon_ty_is_secret(pass_ty, interner)
             && canon_ty_is_int(port_ty, interner)
             && canon_ty_is_string(user_ty, interner))
+}
+
+/// Does `fields` match the `SesConfig` shape — `{ key, region, secret }` with
+/// `key`/`region` `String` and `secret : Secret` (sealed)? Sorts `fields` in
+/// place. Sorted order: key, region, secret.
+fn is_email_ses_shape(fields: &mut [(&str, &Ty)], interner: &Interner) -> bool {
+    if fields.len() != EMAIL_SES_FIELDS.len() {
+        return false;
+    }
+    fields.sort_unstable_by_key(|(name, _)| *name);
+    matches!(fields, [(key_n, key_ty), (region_n, region_ty), (secret_n, secret_ty)]
+        if *key_n == "key" && *region_n == "region" && *secret_n == "secret"
+            && ty_is_string(key_ty, interner)
+            && ty_is_string(region_ty, interner)
+            && ty_is_secret(secret_ty, interner))
+}
+
+/// The [`canon::Type`] twin of [`is_email_ses_shape`].
+fn is_email_ses_canon_shape(fields: &mut [(&str, &canon::Type)], interner: &Interner) -> bool {
+    if fields.len() != EMAIL_SES_FIELDS.len() {
+        return false;
+    }
+    fields.sort_unstable_by_key(|(name, _)| *name);
+    matches!(fields, [(key_n, key_ty), (region_n, region_ty), (secret_n, secret_ty)]
+        if *key_n == "key" && *region_n == "region" && *secret_n == "secret"
+            && canon_ty_is_string(key_ty, interner)
+            && canon_ty_is_string(region_ty, interner)
+            && canon_ty_is_secret(secret_ty, interner))
 }
 
 /// Does `fields` match the 9-field `EmailMessage` shape (NAMES + TYPES)? Sorts
@@ -16674,11 +16686,7 @@ impl<'a> Lowerer<'a> {
                 if is_email_attachment_canon_shape(&mut named_fields, self.interner) {
                     return Ok(IrType::EmailAttachment);
                 }
-                if is_all_string_canon_record_shape(
-                    &mut named_fields,
-                    EMAIL_SES_FIELDS,
-                    self.interner,
-                ) {
+                if is_email_ses_canon_shape(&mut named_fields, self.interner) {
                     return Ok(IrType::EmailSesConfig);
                 }
                 let mut ir_fields = BTreeMap::new();
@@ -17847,7 +17855,7 @@ impl<'a> Lowerer<'a> {
                 if is_email_attachment_shape(&mut named_fields, self.interner) {
                     return Ok(IrType::EmailAttachment);
                 }
-                if is_all_string_record_shape(&mut named_fields, EMAIL_SES_FIELDS, self.interner) {
+                if is_email_ses_shape(&mut named_fields, self.interner) {
                     return Ok(IrType::EmailSesConfig);
                 }
                 let mut lowered = BTreeMap::new();
