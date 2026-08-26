@@ -3510,9 +3510,6 @@ pub(crate) fn run_release(rest: &[String]) -> Result<(), CliError> {
         return run_release_capabilities(&entry_path, manifest.as_deref(), args.format);
     }
 
-    // `--target wasm` routes to the wasm bundle path (production build).
-    let cli_wasm = args.target.as_deref() == Some("wasm");
-
     // Discover the manifest (same logic as build/eject).
     let manifest = discover_manifest(&entry_path)?;
 
@@ -3523,8 +3520,12 @@ pub(crate) fn run_release(rest: &[String]) -> Result<(), CliError> {
     let manifest_wasm: Option<project::WasmConfig> =
         manifest_parsed.as_ref().map(|m| m.wasm.clone());
 
-    // Resolve the wasm target: CLI `--target wasm` > env > manifest.
-    let wasm_target = resolve_wasm_target(cli_wasm, manifest_wasm.as_ref());
+    // Route on the typed target: Wasm → browser bundle; Native → static binary.
+    // `resolve_wasm_target` also checks the `IPE_TARGET` env var and manifest.
+    let wasm_target = resolve_wasm_target(
+        args.target == cli_args::ReleaseTarget::Wasm,
+        manifest_wasm.as_ref(),
+    );
 
     if wasm_target {
         // Browser/wasm production path.
@@ -3589,16 +3590,15 @@ pub(crate) fn run_release(rest: &[String]) -> Result<(), CliError> {
         return Ok(());
     }
 
-    // Native path: resolve the target triple. Default: x86_64 musl-static.
-    let triple = match &args.target {
-        Some(t) if t != "wasm" => ipe_backend_rust::static_build::StaticTriple::parse(t)
-            .ok_or_else(|| {
-                CliError::UsageOwned(format!(
-                    "ipe release: unsupported target `{t}`; supported: wasm, {}",
-                    ipe_backend_rust::static_build::StaticTriple::SUPPORTED.join(", ")
-                ))
-            })?,
-        _ => ipe_backend_rust::static_build::StaticTriple::default(),
+    // Native path: extract the triple already validated at parse time.
+    let triple = match args.target {
+        cli_args::ReleaseTarget::Native(t) => t,
+        cli_args::ReleaseTarget::Wasm => {
+            // `wasm_target` above is true when `args.target == Wasm`, so this
+            // branch is unreachable in practice; the exhaustive match keeps the
+            // compiler satisfied without a panic or unreachable!().
+            return Ok(());
+        }
     };
 
     // Resolve capabilities up-front to discriminate between native-bearing

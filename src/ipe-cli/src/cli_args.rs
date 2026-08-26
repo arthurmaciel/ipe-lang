@@ -15,6 +15,7 @@
 
 use crate::CliError;
 use crate::build_plan::{AllocatorChoice, StaticRequestLayer};
+pub use ipe_backend_rust::static_build::StaticTriple;
 
 /// The one phrasing for "a command was given a flag it does not recognise".
 ///
@@ -686,6 +687,49 @@ pub fn parse_eject(rest: &[String]) -> Result<EjectArgs, CliError> {
     })
 }
 
+/// Where `ipe release` sends its output artifact: a browser bundle or a
+/// statically-linked native binary for a specific rustc target triple.
+///
+/// Constructed exclusively through [`ReleaseTarget::parse`], so the `"wasm"`
+/// sentinel cannot leak past the CLI boundary.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ReleaseTarget {
+    /// `--target wasm`: emit a browser/Wasm bundle.
+    Wasm,
+    /// `--target <triple>` or the default (omitted): a musl-static native binary
+    /// for the given [`ipe_backend_rust::static_build::StaticTriple`].
+    Native(ipe_backend_rust::static_build::StaticTriple),
+}
+
+impl ReleaseTarget {
+    /// Parse the raw `--target` value (or its absence) into a typed variant.
+    ///
+    /// `None` → the default native triple. `Some("wasm")` → [`Self::Wasm`].
+    /// `Some(triple)` → [`Self::Native`] when the triple is in the supported
+    /// set; anything else is an error that names the supported values.
+    ///
+    /// # Errors
+    ///
+    /// [`CliError::UsageOwned`] when the triple string is not in the supported
+    /// set.
+    pub fn parse(raw: Option<&str>) -> Result<Self, CliError> {
+        match raw {
+            None => Ok(Self::Native(
+                ipe_backend_rust::static_build::StaticTriple::default(),
+            )),
+            Some("wasm") => Ok(Self::Wasm),
+            Some(t) => ipe_backend_rust::static_build::StaticTriple::parse(t)
+                .map(Self::Native)
+                .ok_or_else(|| {
+                    CliError::UsageOwned(format!(
+                        "ipe release: unsupported target `{t}`; supported: wasm, {}",
+                        ipe_backend_rust::static_build::StaticTriple::SUPPORTED.join(", ")
+                    ))
+                }),
+        }
+    }
+}
+
 /// How `ipe release` packages a native-bearing artifact.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ReleaseMode {
@@ -709,9 +753,9 @@ pub struct ReleaseArgs {
     pub out: Option<String>,
     /// `--runtime <dir>` — vendor the Ipê runtime from here.
     pub runtime: Option<String>,
-    /// `--target <value>` — either a musl-static rustc triple for a native
-    /// build, or the literal `wasm` to produce a browser bundle.
-    pub target: Option<String>,
+    /// `--target <value>` — the resolved build destination: a browser bundle
+    /// (`wasm`) or a musl-static native triple.
+    pub target: ReleaseTarget,
     /// How to package a native-bearing artifact (embed mode by default; unused
     /// for pure-native and wasm targets).
     pub mode: ReleaseMode,
@@ -787,6 +831,8 @@ pub fn parse_release(rest: &[String]) -> Result<ReleaseArgs, CliError> {
     } else {
         ReleaseMode::Embed
     };
+
+    let target = ReleaseTarget::parse(target.as_deref())?;
 
     Ok(ReleaseArgs {
         entry,
@@ -1602,7 +1648,34 @@ mod tests {
     #[test]
     fn release_wasm_target_accepted() {
         let a = parse_release(&s(&["--target", "wasm"])).expect("--target wasm");
-        assert_eq!(a.target.as_deref(), Some("wasm"));
+        assert_eq!(a.target, ReleaseTarget::Wasm);
+    }
+
+    #[test]
+    fn release_target_none_defaults_to_native_x86_64() {
+        let a = parse_release(&[]).expect("empty release");
+        assert_eq!(
+            a.target,
+            ReleaseTarget::Native(StaticTriple::X8664LinuxMusl)
+        );
+    }
+
+    #[test]
+    fn release_target_valid_triple_accepted() {
+        let a = parse_release(&s(&["--target", "aarch64-unknown-linux-musl"]))
+            .expect("--target aarch64");
+        assert_eq!(
+            a.target,
+            ReleaseTarget::Native(StaticTriple::Aarch64LinuxMusl)
+        );
+    }
+
+    #[test]
+    fn release_target_invalid_triple_rejected() {
+        let err = parse_release(&s(&["--target", "wasm32-unknown-bogus"]));
+        assert!(err.is_err());
+        let msg = format!("{}", err.unwrap_err());
+        assert!(msg.contains("unsupported target"), "got: {msg}");
     }
 
     #[test]
