@@ -2,7 +2,7 @@
 //! checks. The full end-to-end release (compile + cargo build + bundle layout)
 //! requires the musl target installed and is gated on `IPE_E2E=1`.
 
-use ipe::cli_args::{ReleaseMode, parse_release};
+use ipe::cli_args::{ReleaseMode, ReleaseTarget, StaticTriple, parse_release};
 
 // ── Argument parsing ─────────────────────────────────────────────────────────
 
@@ -14,7 +14,10 @@ fn release_no_args_defaults() {
     let parsed = parse_release(&args).expect("no-arg parse must succeed");
     assert!(parsed.entry.is_none());
     assert!(parsed.out.is_none());
-    assert!(parsed.target.is_none());
+    assert_eq!(
+        parsed.target,
+        ReleaseTarget::Native(StaticTriple::X8664LinuxMusl)
+    );
     assert!(parsed.runtime.is_none());
     assert_eq!(parsed.mode, ReleaseMode::Embed);
     assert!(!parsed.capabilities_only);
@@ -67,7 +70,10 @@ fn release_out_flag() {
 fn release_target_flag_native() {
     let args: Vec<String> = vec!["--target".into(), "x86_64-unknown-linux-musl".into()];
     let parsed = parse_release(&args).expect("--target parse must succeed");
-    assert_eq!(parsed.target.as_deref(), Some("x86_64-unknown-linux-musl"));
+    assert_eq!(
+        parsed.target,
+        ReleaseTarget::Native(StaticTriple::X8664LinuxMusl)
+    );
 }
 
 /// `--target wasm` is accepted (browser bundle path).
@@ -75,7 +81,7 @@ fn release_target_flag_native() {
 fn release_target_flag_wasm() {
     let args: Vec<String> = vec!["--target".into(), "wasm".into()];
     let parsed = parse_release(&args).expect("--target wasm parse must succeed");
-    assert_eq!(parsed.target.as_deref(), Some("wasm"));
+    assert_eq!(parsed.target, ReleaseTarget::Wasm);
 }
 
 /// A positional entry is captured.
