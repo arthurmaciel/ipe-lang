@@ -295,7 +295,20 @@ where
 
         let key_tx = tx.clone();
         std::thread::spawn(move || {
-            read_keys_loop(&key_tx, |k| (k.kind, k.value));
+            read_keys_loop(&key_tx, |k| {
+                // Under the debugger, fold a Ctrl modifier on Left/Right into the
+                // kind (`ctrlleft`/`ctrlright`) so the history step keys are
+                // distinguishable on the flat (kind, value) channel.
+                #[cfg(all(feature = "debugger", not(target_arch = "wasm32")))]
+                let kind = if k.ctrl && (k.kind == "left" || k.kind == "right") {
+                    format!("ctrl{}", k.kind)
+                } else {
+                    k.kind
+                };
+                #[cfg(not(all(feature = "debugger", not(target_arch = "wasm32"))))]
+                let kind = k.kind;
+                (kind, k.value)
+            });
         });
 
         let (mut model, cmd0) = init(());
