@@ -62,6 +62,13 @@ pub mod config;
 #[cfg(feature = "config")]
 pub mod config_decode;
 pub mod core;
+// Development-only TEA time-travelling debugger core. Only present when the
+// `debugger` feature is active (`ipe build/run --debugger`). Zero code emitted
+// for a non-`--debugger` build. NOT part of the emitted `mod.rs` template —
+// the compiler injects the `debugger` feature only on `build`/`run`, never on
+// `release`, so production artifacts carry no recorder code.
+#[cfg(feature = "debugger")]
+pub mod debugger;
 // Constant-time byte equality — the SSOT predicate all secret/tag/key
 // newtypes use for `PartialEq`. Gated on `crypto-core` (which pulls `subtle`).
 // `secret` implies `crypto-core`, so this gate covers every caller.

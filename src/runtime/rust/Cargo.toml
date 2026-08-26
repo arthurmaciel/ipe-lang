@@ -438,6 +438,17 @@ widget-assets = ["crypto-core", "encoding"]
 # `sqlite`, so both driver code paths compile. `jwt` + `url` cover the
 # JWT/auth and URL/SSRF surfaces that `db`/`web`/`http_client` reach.
 full = ["async", "json", "jwt", "url", "db", "db-postgres", "redis_store", "crypto", "crypto-core", "secret", "compression", "csv_kernel", "cache_kernel", "tui", "config", "server", "http_client", "email", "websocket_client", "web", "time", "log", "regex", "uuid", "random", "decimal", "char-category"]
+# Development-only time-travelling debugger core (recorder / re-fold / export /
+# import). NOT in `full` and NOT implied by `wasm-client` — the debugger is a
+# build-mode opt-in (`ipe build/run --debugger`), never a default. `ipe release`
+# refuses `--debugger`, so this feature is always absent from production artifacts.
+# Implies `json` (the seal-codec export/import path) and `serde` (the Msg
+# seal-legality gate). Also implies `async` (which enables `tokio`) so the `tea`
+# module (`IpeCmd`/`IpeSub`) is available — the recorder references `IpeCmd` in
+# its `record` and `reconstruct` signatures. The core module is unconditional on
+# target; the wasm-client hook into `wasm/mod.rs` is additionally target-cfg'd to
+# `wasm32` (and `wasm-client` implies `tea` independently via `wasm-client`).
+debugger = ["json", "serde", "async"]
 # Browser-WASM TEA sink (`src/wasm/`): mount + patch-apply + delegated events.
 # Compiles only on wasm32 (the module is target-cfg'd); NOT in `full` — native
 # builds never link the wasm glue.
