@@ -213,7 +213,10 @@ mod wasm {
     /// [`IpeCmd::Publish`].
     pub fn js_send<T, M>(payload: T) -> IpeCmd<M>
     where
-        T: serde::Serialize + 'static,
+        // `IpeCmd::Publish` carries a `Send` thunk on every target (the enum
+        // variant is target-neutral), so the captured payload is `Send` even
+        // though the wasm delivery runs single-threaded.
+        T: serde::Serialize + Send + 'static,
     {
         IpeCmd::Publish(Box::new(move |_origin| {
             if let Ok(value) = serde_json::to_value(&payload) {

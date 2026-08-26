@@ -588,3 +588,65 @@ fn ui_widget_serves_sri_glue_and_round_trips_up_event() -> Result<(), BoxError> 
 
     Ok(())
 }
+
+/// A `Web.app` that reaches a `Js.send` outbound port (an `Int` payload, through
+/// `update`) and a `Js.subscribe` inbound port (an `Int` decoder feeding `Got`,
+/// through `subscriptions`) — the minimal seal-legal port program.
+const JS_PORT_APP: &str = r#"module Main exposing (main)
+
+import Ipe.Tea.Web as Web
+import Ipe.Tea.Web.Cmd as Cmd
+import Ipe.Tea.Web.Sub as Sub
+import Ipe.Ui as Ui
+import Ipe.Js as Js
+import Ipe.Json.Decode as Decode
+
+type alias Model = { n : Int }
+
+type Msg = Tick | Got Int
+
+init : a -> ( Model, Cmd.Cmd Msg )
+init _r =
+    ( { n = 0 }, Cmd.none )
+
+update : Msg -> Model -> ( Model, Cmd.Cmd Msg )
+update msg model =
+    case msg of
+        Tick ->
+            ( model, Js.send model.n )
+
+        Got k ->
+            ( { n = k }, Cmd.none )
+
+view : Model -> Element Msg
+view _model =
+    Ui.text "ok"
+
+subscriptions : Model -> Sub.Sub Msg
+subscriptions _model =
+    Js.subscribe Decode.int Got
+
+main =
+    Web.app
+        { init = init, update = update, view = view, subscriptions = subscriptions
+        , routes = [], notFound = Tick
+        }
+"#;
+
+/// THE SEAL for `Ipe.Js` ports: a seal-legal port program `ipe`-accepts (exit 0)
+/// AND the emitted Rust `cargo build`s. A `Js.send model.n` lowers to
+/// `js_send(...)` and `Js.subscribe Decode.int Got` to
+/// `js_subscribe(json_decode_int(), ...)`; the payload type's serde derive is
+/// already present (the seal-legality gate guarantees it), so the generic
+/// transport call resolves with no per-port adapter. If either the lowering arm
+/// or the runtime signature drifted, this build would fail — the whole point.
+#[test]
+fn js_port_seal_legal_lowers_and_builds() -> Result<(), BoxError> {
+    if std::env::var("IPE_E2E").is_err() {
+        return Ok(());
+    }
+    // `compile_and_build` returns the built binary path; reaching it means both
+    // `ipe build` (accept + emit) and `cargo build` (THE SEAL) succeeded.
+    let _exe = compile_and_build("js_port_seal", JS_PORT_APP)?;
+    Ok(())
+}

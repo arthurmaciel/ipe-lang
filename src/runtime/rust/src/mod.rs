@@ -527,6 +527,13 @@ pub use webview::{WebViewAppCfg, WebViewWindowCfg, webview_app};
 #[cfg(feature = "widget-assets")]
 pub mod widget_assets;
 
+// `Ipe.Js` port browser surface (`window.ipe.send` / `onReceive` / `onSync`),
+// served content-addressed with SRI — the same fixed-asset addressing
+// `widget_assets` uses, identical bytes on every target. Rides `widget-assets`
+// (it needs only `sha2` + `base64`).
+#[cfg(feature = "widget-assets")]
+pub mod js_port_glue;
+
 #[cfg(feature = "web")]
 pub mod web;
 #[cfg(feature = "web")]
