@@ -10352,7 +10352,7 @@ struct KernelUsage {
     /// The `Ipe.Email` `Email.send` kernel.
     email: bool,
     /// The `Ipe.Env` `Env.public` kernel — gates emitting the per-project
-    /// `env_public.rs` (built from `ipe.toml`'s `[wasm] publicEnv` allowlist).
+    /// `env_public.rs` (built from `package.ipe`'s `[wasm] publicEnv` allowlist).
     env_public: bool,
     /// Any development-only `Debug.*` escape hatch (`Debug.log`). Recorded
     /// unconditionally here; a PRODUCTION build (`ipe release`) rejects it at

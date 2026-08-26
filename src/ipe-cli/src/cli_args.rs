@@ -287,7 +287,7 @@ fn take_leading_entry(
 ///
 /// This carries `--target` as a raw string still (its closed form is
 /// [`crate::build_plan::StaticTriple`], resolved during static-plan resolution
-/// together with the env / `ipe.toml` layers), but `--allocator` is parsed into
+/// together with the env / `package.ipe` layers), but `--allocator` is parsed into
 /// the closed [`AllocatorChoice`] enum at this boundary so an out-of-set name
 /// can never reach resolution.
 #[derive(Default)]
@@ -384,7 +384,7 @@ pub struct BuildArgs {
     /// `--accept-risks` — take responsibility for every disclosed `.Unsafe`
     /// escape-hatch import and proceed without the acknowledgment prompt. The
     /// one-off, non-interactive form of consent (the durable form is
-    /// `[capabilities] accept = ["unsafe"]` in `ipe.toml`).
+    /// `[capabilities] accept = ["unsafe"]` in `package.ipe`).
     pub accept_risks: bool,
     /// `--debugger` — compile the development-only time-travelling debugger into
     /// the emitted runtime loop. Absent from `ipe release` so the debugger can

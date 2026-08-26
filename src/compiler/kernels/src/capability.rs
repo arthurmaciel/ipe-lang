@@ -27,7 +27,7 @@ pub enum Capability {
     Filesystem,
     /// Structured database access (SQL queries, migrations, row decoders).
     ///
-    /// Resolved by SP4 sandbox to filesystem or network per the ipe.toml driver.
+    /// Resolved by SP4 sandbox to filesystem or network per the `package.ipe` driver.
     Database,
     /// Reading or writing process environment (environment variables, argv).
     Env,

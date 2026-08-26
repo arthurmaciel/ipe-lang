@@ -124,7 +124,7 @@ fn risk_of(module: &str) -> &'static str {
 /// The remedy line every refusal / prompt shares.
 const fn remedy_line() -> &'static str {
     "  = re-run with --accept-risks to take responsibility and proceed, or add \n\
-     \x20   `accept = [\"unsafe\"]` under [capabilities] in ipe.toml for durable consent."
+     \x20   `accept = [\"unsafe\"]` under [capabilities] in package.ipe for durable consent."
 }
 
 /// Whether consent is already recorded, without any prompt: the one-off flag or

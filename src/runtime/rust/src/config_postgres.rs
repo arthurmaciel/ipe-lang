@@ -4,8 +4,8 @@
 // (the crate root always uses `config.rs`, the sqlite variant). This file
 // exists purely as an `include_str!` source for `ipe_backend_rust::project`
 // (see `RUNTIME_CONFIG_RS_DB_POSTGRES`), which writes it verbatim to
-// `<emitted-project>/src/ipe_runtime/config.rs` when `ipe.toml`'s
-// `[database] driver = "postgres"`.
+// `<emitted-project>/src/ipe_runtime/config.rs` when `package.ipe`'s
+// database driver is `Package.postgres`.
 //
 // Every symbol name matches `config.rs`'s sqlite variant exactly (`DbPool`,
 // `DbRow`, `ipe_db_url`, `db_last_insert_id`, `db_format_sql`,

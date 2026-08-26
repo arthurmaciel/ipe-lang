@@ -419,7 +419,7 @@ fn set_format(slot: &mut Option<OutputFormat>, requested: OutputFormat) -> Resul
     }
 }
 
-/// Locate the package's `ipe.toml`, parse the manifest, and build the package to
+/// Locate the package's `package.ipe`, parse the manifest, and build the package to
 /// its emitted Rust in a fresh temp directory (never the project's own `out/`, so
 /// the audit leaves no artifact behind and cannot race a concurrent build).
 ///

@@ -2468,7 +2468,7 @@ fn sandbox_help(msg: &SandboxError) -> Vec<HelpLine> {
 fn consent_help(msg: &ConsentError) -> Vec<HelpLine> {
     let remedy = HelpLine::Note(
         "re-run with --accept-risks to take responsibility and proceed, or add \
-         `accept = [\"unsafe\"]` under [capabilities] in ipe.toml for durable consent"
+         `accept = [\"unsafe\"]` under [capabilities] in package.ipe for durable consent"
             .into(),
     );
     match msg {

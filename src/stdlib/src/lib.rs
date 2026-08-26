@@ -565,7 +565,7 @@ const IPE_CORE_JS: &str = include_str!("../Ipe/Js.ipe");
 ///
 /// Defines `public : String -> Maybe String`, routed through the
 /// `Ffi.kernel "Env_public"` alias to the registered `EnvPublic` kernel. The
-/// generated `env_public.rs` (per-project, keyed on `ipe.toml`'s `[wasm]
+/// generated `env_public.rs` (per-project, keyed on `package.ipe`'s `[wasm]
 /// publicEnv` allowlist) is what actually backs it — see
 /// `ipe_backend_rust::project::render_env_public_rs`. Resolved via the
 /// `Ffi.kernel` alias fast-path, so the `Env` qualifier stays out of

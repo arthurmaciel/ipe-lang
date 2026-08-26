@@ -385,7 +385,7 @@ pub struct Module {
     ///
     /// Set by `ipe_lower` when a call site resolves to `KernelFn::EnvPublic`.
     /// The backend reads this flag to decide whether to emit the per-project
-    /// `env_public.rs` (built from `ipe.toml`'s `[wasm] publicEnv` allowlist)
+    /// `env_public.rs` (built from `package.ipe`'s `[wasm] publicEnv` allowlist)
     /// and append `pub mod env_public; pub use env_public::*;` to the
     /// emitted `ipe_runtime/mod.rs`.
     pub uses_env_public: bool,

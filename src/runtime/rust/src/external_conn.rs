@@ -4,7 +4,7 @@
 //! # Why this is distinct from `Db`
 //!
 //! The app's own connection (`Db`) is a pool of the ONE dialect the build fixed
-//! from `ipe.toml`. An external source can be a DIFFERENT dialect, so its pool
+//! from `package.ipe`. An external source can be a DIFFERENT dialect, so its pool
 //! cannot reuse the monomorphised `Db` type — it is an independent pool of the
 //! driver named by the parsed [`Dsn`]. Both sqlx drivers link under the `db`
 //! feature, so either dialect is buildable here.

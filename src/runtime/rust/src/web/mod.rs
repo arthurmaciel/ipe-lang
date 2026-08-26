@@ -2450,13 +2450,13 @@ where
             );
         }
 
-        // ipe.toml `[web] static` (baked as IPE_WEB_STATIC_DIR) → serve files at
+        // package.ipe `[web] static` (baked as IPE_WEB_STATIC_DIR) → serve files at
         // /static/* via ServeDir. MUST be added before the `/*path` page catch-all
         // so a /static/<file> request hits ServeDir, not the page handler (which
         // would return HTML). ServeDir blocks `..` path traversal by construction
         // (percent-decodes first, so `%2e%2e` is caught too). NOTE: like Go's
         // http.FileServer it FOLLOWS symlinks inside the dir — the dir is
-        // author-controlled (ipe.toml [web] static), so that is the intended
+        // author-controlled (package.ipe [web] static), so that is the intended
         // contract, NOT a confinement guarantee. Absent/empty → no static mount.
         // IPE_WEB_STATIC_DIR (deprecated alias: IPE_LIVE_STATIC_DIR).
         if let Some(dir) =

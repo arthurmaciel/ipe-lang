@@ -315,7 +315,7 @@ const IR_KEY_TAG: &[u8] = b"ipec-build-cache-ir-key-v1";
 /// `config.db_driver`), never `linked_program`/`typecheck`/`lower_program`
 /// (see `docs/architecture/salsa-incremental-compilation-2026-07-11.md`
 /// §11.2/§13) — so an IR-tier key that included it would over-invalidate: a
-/// `[database] driver` edit in `ipe.toml` would needlessly miss a perfectly
+/// `[database] driver` edit in `package.ipe` would needlessly miss a perfectly
 /// reusable `Program`, even though the ONLY thing that changed is read by
 /// the emit stage this tier deliberately sits upstream of.
 #[must_use]
@@ -483,7 +483,7 @@ pub fn store(cache_root: &Path, epoch: &str, key: &str, project: &EmittedProject
 // `write_emitted_project`/tier-1-`store` path a full pipeline run uses. A
 // hit here is therefore a smaller win than an `EmittedProject`-tier hit
 // (emit still runs), but covers the case an `EmittedProject`-tier miss does
-// NOT: a `db_driver`-only edit (SQL driver flip in `ipe.toml`), where the
+// NOT: a `db_driver`-only edit (SQL driver flip in `package.ipe`), where the
 // SAME `Program` this tier caches is still exactly reusable even though the
 // `EmittedProject` tier's key (which folds in `db_driver`) misses.
 //
