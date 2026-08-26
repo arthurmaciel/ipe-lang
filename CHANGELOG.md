@@ -10,6 +10,58 @@ Entries below the header are maintained by
 section is generated from Conventional Commit messages and prepended when the
 standing release pull request is merged.
 
+## [0.1.69](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.1.68...ipe-v0.1.69) (2026-08-26)
+
+
+### Features
+
+* **auth:** session revocation via Ipe.Auth.Revocation ([#1269](https://github.com/arthurmaciel/ipe-lang/issues/1269) P3) ([2c03489](https://github.com/arthurmaciel/ipe-lang/commit/2c03489d3a0f5ee658cf461a76431815bc2ee2a6))
+* **capabilities:** infer and disclose the custom-element browser-JS capability with index-to-page hash pinning ([#1361](https://github.com/arthurmaciel/ipe-lang/issues/1361)) ([4e1ee0f](https://github.com/arthurmaciel/ipe-lang/commit/4e1ee0f7e7d99f75bb387d35cedeb0aa0d382304))
+* **cli:** ContainedRelPath + read_to_string_capped + bounded module walk ([#1295](https://github.com/arthurmaciel/ipe-lang/issues/1295) [#1297](https://github.com/arthurmaciel/ipe-lang/issues/1297)) ([38ce6de](https://github.com/arthurmaciel/ipe-lang/commit/38ce6de82ad29ba1e8c5fe127d9cf1c307c57332))
+* **config:** typed cross-cutting config gap-fill ([#1268](https://github.com/arthurmaciel/ipe-lang/issues/1268)) ([#1335](https://github.com/arthurmaciel/ipe-lang/issues/1335)) ([969c769](https://github.com/arthurmaciel/ipe-lang/commit/969c769500e883281f68b956bc73d84758af166f))
+* **email:** type provider credentials as Secret, revealed only at the send boundary ([26bf00a](https://github.com/arthurmaciel/ipe-lang/commit/26bf00ad68171a388887c25d65ae8c9eac132885)), closes [#1336](https://github.com/arthurmaciel/ipe-lang/issues/1336)
+* **ffi:** [#1289](https://github.com/arthurmaciel/ipe-lang/issues/1289) P2 — ipe migrate config, retire toml [[rust.define.*]], re-green iced-counter ([#1318](https://github.com/arthurmaciel/ipe-lang/issues/1318)) ([33dc3bd](https://github.com/arthurmaciel/ipe-lang/commit/33dc3bdd78c0cba4f44b2e52616d499999bca40c))
+* **ffi:** add `foreign` declaration surface + `Ffi.*` blessed-call lift (Phase 1, [#1289](https://github.com/arthurmaciel/ipe-lang/issues/1289)) ([35d113f](https://github.com/arthurmaciel/ipe-lang/commit/35d113f7002b0c2522b0fbd1033b26e9bc72fa65))
+* **js-interop:** client glue + SRI widget serving (WP5) ([398972a](https://github.com/arthurmaciel/ipe-lang/commit/398972ace1fdf6967d75b3ef8368c269b79c7de5))
+* **js-interop:** custom-element emission + WebView-serde shape gate (WP4) ([b8e0299](https://github.com/arthurmaciel/ipe-lang/commit/b8e02994b97c29513df9bca504bd036899f7e06b))
+* **js-interop:** WP1 — pin CustomElement seal exclusion of Secret + reserved sink types ([#1350](https://github.com/arthurmaciel/ipe-lang/issues/1350)) ([3aa7412](https://github.com/arthurmaciel/ipe-lang/commit/3aa74120f564da1fcdc267983fec8ac037e36145))
+* **js-interop:** WP2 — customElement constructor + Ui.widget kernel sigs ([#333](https://github.com/arthurmaciel/ipe-lang/issues/333)) ([#1352](https://github.com/arthurmaciel/ipe-lang/issues/1352)) ([70b4cc2](https://github.com/arthurmaciel/ipe-lang/commit/70b4cc27f1bfe905044f0ac947659694c65b874f))
+* **js-interop:** WP3 — Rust seal codec (total, fail-closed decode) ([#1356](https://github.com/arthurmaciel/ipe-lang/issues/1356)) ([d4c5f14](https://github.com/arthurmaciel/ipe-lang/commit/d4c5f1420c0637ec0bf1d0bb16371b6457a2fa7a))
+* **lower/emit:** G1+G2+G6 row-poly record-update emission via IpeWithF setter witnesses ([8c41ac0](https://github.com/arthurmaciel/ipe-lang/commit/8c41ac0913787687494f11df16cb3e656082ba50))
+
+
+### Bug Fixes
+
+* **cli:** cap source-file reads via read_to_string_capped at all .ipe read sites ([bf75fb1](https://github.com/arthurmaciel/ipe-lang/commit/bf75fb1ca3986beb8ad7d3dac104cedddc4ac39d))
+* **config,runtime:** reject shadowed config binding + drop redundant must_use ([#1339](https://github.com/arthurmaciel/ipe-lang/issues/1339), [#1340](https://github.com/arthurmaciel/ipe-lang/issues/1340)) ([#1341](https://github.com/arthurmaciel/ipe-lang/issues/1341)) ([7069176](https://github.com/arthurmaciel/ipe-lang/commit/70691768d9d0769998e416aa245d84217457b306))
+* default un-annotated view msg tvar in argument position ([#1338](https://github.com/arthurmaciel/ipe-lang/issues/1338)) ([#1344](https://github.com/arthurmaciel/ipe-lang/issues/1344)) ([c0bd21f](https://github.com/arthurmaciel/ipe-lang/commit/c0bd21f795103d82bddde84d7a5feab6e16aaae6))
+* **emit:** close three vendored-model SEAL gaps (jwt / auth / server in web) ([21bbb1e](https://github.com/arthurmaciel/ipe-lang/commit/21bbb1eacb8f1482f4190dd913ff0ec8a85d232f))
+* **emit:** close vendored db-surface SEAL hole ([#1303](https://github.com/arthurmaciel/ipe-lang/issues/1303)) ([#1306](https://github.com/arthurmaciel/ipe-lang/issues/1306)) ([9e23976](https://github.com/arthurmaciel/ipe-lang/commit/9e23976973366a048768902525442fc2e67fe17f))
+* **emit:** disambiguate distinct generic record shapes sharing a field-name set ([#1346](https://github.com/arthurmaciel/ipe-lang/issues/1346)) ([#1348](https://github.com/arthurmaciel/ipe-lang/issues/1348)) ([a902178](https://github.com/arthurmaciel/ipe-lang/commit/a902178c0b37d1aeb14128e449229adf2144db00))
+* **emit:** emit pub mod server; for uses_web/uses_webview in vendored model ([3a99b8e](https://github.com/arthurmaciel/ipe-lang/commit/3a99b8ef3312503a1eae39266b1fbd93cd1e5d0f))
+* **emit:** force uuid feature for jwt/auth programs ([#1307](https://github.com/arthurmaciel/ipe-lang/issues/1307)) ([#1308](https://github.com/arthurmaciel/ipe-lang/issues/1308)) ([8464275](https://github.com/arthurmaciel/ipe-lang/commit/8464275002b422368aa35192f242cc97fb485c84))
+* **emit:** make record most-specific resolution order-independent (two-pass) ([#1358](https://github.com/arthurmaciel/ipe-lang/issues/1358)) ([3f2c136](https://github.com/arthurmaciel/ipe-lang/commit/3f2c136a2ab8985e67603dd8679fa7c1bee2d77b))
+* **emit:** resolve concrete record straddling two generic templates to the most-specific ([#1349](https://github.com/arthurmaciel/ipe-lang/issues/1349)) ([#1355](https://github.com/arthurmaciel/ipe-lang/issues/1355)) ([4f59f82](https://github.com/arthurmaciel/ipe-lang/commit/4f59f8246991ef54f9e616425abdcad83c3dea23))
+* **emit:** synthesise struct for single-field record shapes ([#1343](https://github.com/arthurmaciel/ipe-lang/issues/1343)) ([#1345](https://github.com/arthurmaciel/ipe-lang/issues/1345)) ([e649aaa](https://github.com/arthurmaciel/ipe-lang/commit/e649aaa49122a02cceda7536cbb9347d147523c3))
+* **examples:** migrate 08-notes-app to current compiler APIs ([#1337](https://github.com/arthurmaciel/ipe-lang/issues/1337)) ([74dbe34](https://github.com/arthurmaciel/ipe-lang/commit/74dbe3484e0dfdf29bca69d5ac5822ed417c62de))
+* **ffi:** harden opaqueTypeIds decode to fail-closed + strip ANSI from foreign rustc stderr ([19d4a6a](https://github.com/arthurmaciel/ipe-lang/commit/19d4a6ab643a4de5dae7f187c0c6e9c8579d9ee5))
+* green main — combine revocation-symbol + FIRST_SCHEMED-burndown + migrate-sourceRoot fixes ([#1310](https://github.com/arthurmaciel/ipe-lang/issues/1310)/[#1319](https://github.com/arthurmaciel/ipe-lang/issues/1319)/[#1320](https://github.com/arthurmaciel/ipe-lang/issues/1320)) ([#1323](https://github.com/arthurmaciel/ipe-lang/issues/1323)) ([46ae5d2](https://github.com/arthurmaciel/ipe-lang/commit/46ae5d23a2326b3c8aa5eb2459893be76d88e551))
+* **login:** URL-encode form fields in post_form ([4efe82e](https://github.com/arthurmaciel/ipe-lang/commit/4efe82e1c1ef71e921efd7e03e55967026a72c35))
+* **lower:** propagate auto-trait bounds to local-derived values ([#1333](https://github.com/arthurmaciel/ipe-lang/issues/1333)) ([#1342](https://github.com/arthurmaciel/ipe-lang/issues/1342)) ([ba05fb7](https://github.com/arthurmaciel/ipe-lang/commit/ba05fb72d780da695aba62ac3b0a747472b2dbaf))
+* **lower:** propagate callee auto-trait bounds across user calls (Store.toMaybe SEAL) ([#1312](https://github.com/arthurmaciel/ipe-lang/issues/1312)) ([94a6db9](https://github.com/arthurmaciel/ipe-lang/commit/94a6db9ef84db72e7ec1df08315004f0560dc179))
+* **migrate:** fail-closed validate closure-return + define names before writing ([#1316](https://github.com/arthurmaciel/ipe-lang/issues/1316)) ([#1328](https://github.com/arthurmaciel/ipe-lang/issues/1328)) ([18bb499](https://github.com/arthurmaciel/ipe-lang/commit/18bb4998daa6f81d3cf213a3dd6d5091a392e91e))
+* **migrate:** refuse non-UTF-8 dependency paths instead of silently corrupting ([ae8896f](https://github.com/arthurmaciel/ipe-lang/commit/ae8896f2bd1a241789a237961a44a8eb623a27ea))
+* **migrate:** warn on unrecognised keys in known ipe.toml sections ([6805ab8](https://github.com/arthurmaciel/ipe-lang/commit/6805ab8aeac761c5505854e82ea3f2785f004ee4))
+* **revocation:** replace unbounded HashSets with bounded HashMap&lt;id, cap_unix_secs&gt; ([#1315](https://github.com/arthurmaciel/ipe-lang/issues/1315)) ([604d619](https://github.com/arthurmaciel/ipe-lang/commit/604d6198d619b49339c41842b89d5924f118b515))
+* **runtime/auth:** reissue cookie honors request_is_https for Secure parity ([#1294](https://github.com/arthurmaciel/ipe-lang/issues/1294)) ([1c6d9cb](https://github.com/arthurmaciel/ipe-lang/commit/1c6d9cb3101dc1c83f2e38fb4bd42bad203044d0))
+* **runtime/auth:** reissue_set_cookie cookie-security signal without a web dep ([#1302](https://github.com/arthurmaciel/ipe-lang/issues/1302)) ([e955c5d](https://github.com/arthurmaciel/ipe-lang/commit/e955c5d8511ea6ffa625d119ca8b78a14364d582))
+* **test:** rework modset-closure scanner to detect inline crate:: paths + fix web→server breach ([#1293](https://github.com/arthurmaciel/ipe-lang/issues/1293)) ([14dd92c](https://github.com/arthurmaciel/ipe-lang/commit/14dd92c174ba57bdf24e62bb09e318ff6f06af01))
+* **toolchain:** declare musl static targets in the pin ([#1275](https://github.com/arthurmaciel/ipe-lang/issues/1275) follow-up) ([477c635](https://github.com/arthurmaciel/ipe-lang/commit/477c63553d3f400f7b729e92788418c9fe7ceea7))
+* **toolchain:** pin channel to 1.97.1 to stop clippy drift ([#1275](https://github.com/arthurmaciel/ipe-lang/issues/1275)) ([a69f906](https://github.com/arthurmaciel/ipe-lang/commit/a69f9061c834b30329dec8be226e59a9f320142a))
+* **types,lower:** default unconstrained UI-msg tvar to Unit ([#1309](https://github.com/arthurmaciel/ipe-lang/issues/1309)) ([#1326](https://github.com/arthurmaciel/ipe-lang/issues/1326)) ([04cfc8a](https://github.com/arthurmaciel/ipe-lang/commit/04cfc8abbc981aca0322f69b2a44808a14483e69))
+* **types:** default cross-module unpinned/monomorphic view msg tvars ([#1347](https://github.com/arthurmaciel/ipe-lang/issues/1347)) ([#1351](https://github.com/arthurmaciel/ipe-lang/issues/1351)) ([9d9254d](https://github.com/arthurmaciel/ipe-lang/commit/9d9254dcbb421539c9b416895322d770da2b48d4))
+* **types:** keep a parameter-position ui-msg tvar generic, not defaulted to () ([#1353](https://github.com/arthurmaciel/ipe-lang/issues/1353)) ([#1354](https://github.com/arthurmaciel/ipe-lang/issues/1354)) ([e937585](https://github.com/arthurmaciel/ipe-lang/commit/e937585da00284869816a9abcf9dcb97cad8cd22))
+
 ## [0.1.68](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.1.67...ipe-v0.1.68) (2026-08-24)
 
 
