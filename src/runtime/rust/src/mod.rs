@@ -420,6 +420,27 @@ pub mod tea;
 ))]
 pub use tea::*;
 
+// `Ipe.Js` ports — the raw typed Ipê↔JS transport behind `Js.send` /
+// `Js.subscribe`. Rides `IpeCmd`/`IpeSub` (so it follows `tea`'s gate) and the
+// `seal_codec` (so it also needs `json`); available on the native tokio path and
+// the wasm-client sink, with the two halves cfg-split inside the file.
+#[cfg(all(
+    feature = "json",
+    any(
+        feature = "tokio",
+        all(target_arch = "wasm32", feature = "wasm-client")
+    )
+))]
+pub mod js_port;
+#[cfg(all(
+    feature = "json",
+    any(
+        feature = "tokio",
+        all(target_arch = "wasm32", feature = "wasm-client")
+    )
+))]
+pub use js_port::*;
+
 // Browser-WASM TEA sink (mount / patch-apply / delegated events). Only
 // meaningful on wasm32; the feature keeps native builds' dep graph untouched.
 #[cfg(all(target_arch = "wasm32", feature = "wasm-client"))]
