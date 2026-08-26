@@ -1085,6 +1085,47 @@ fn wasm_vendored_modset_declares_app_config() {
     );
 }
 
+/// The wasm vendored module set must declare `seal_codec` — `ui/widget.rs`
+/// imports `crate::seal_codec::{SealLimits, seal_decode_serde}` under
+/// `#[cfg(feature = "json")]`, and the wasm module set always carries `json`
+/// (`pub mod json;` is unconditional in `WASM_RUNTIME_MOD_RS`). So on wasm the
+/// edge is effectively unconditional; without `seal_codec` the emitted wasm
+/// crate fails `cargo check --target wasm32-unknown-unknown` with E0432.
+///
+/// The structural `wasm_vendored_modset_is_closed` scanner excludes the
+/// `#[cfg(...)]`-gated import line, so a named witness pins the specific edge
+/// that the `Ui.widget` up-decode path relies on.
+#[test]
+fn wasm_vendored_modset_declares_seal_codec() {
+    let mut interner = Interner::new();
+    let main = interner.intern("Main").expect("intern Main");
+    let prog = Program {
+        imports_unsafe_submodule: false,
+        modules: vec![module_for_mask(main, 0)],
+    };
+    let emitted = RustBackend::new(&interner)
+        .with_target(Target::WasmClient)
+        .emit(&prog)
+        .expect("wasm vendored emit must succeed");
+    let mod_rs = emitted
+        .files
+        .get("src/ipe_runtime/mod.rs")
+        .expect("wasm vendored emit must include src/ipe_runtime/mod.rs");
+    let declared = declared_modules(mod_rs);
+    assert!(
+        declared.contains("seal_codec"),
+        "`WASM_RUNTIME_MOD_RS` must declare `seal_codec` — `ui/widget.rs` \
+         imports `crate::seal_codec::{{SealLimits, seal_decode_serde}}` and the \
+         wasm module set always carries `json`, so its absence is E0432 in \
+         `cargo check --target wasm32-unknown-unknown`. Declared: {declared:?}"
+    );
+    assert!(
+        declared.contains("json") && declared.contains("ui"),
+        "`WASM_RUNTIME_MOD_RS` must declare `json` and `ui` (preconditions for \
+         the `seal_codec` edge); got {declared:?}"
+    );
+}
+
 // ── scanner unit tests: inline-path and cfg(test) regression ─────────────────
 
 /// The `crate_refs_in_line` scanner must detect `crate::<seg>::` occurrences

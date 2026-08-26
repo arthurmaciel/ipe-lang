@@ -242,6 +242,7 @@ pub mod http_header;
 pub mod http_client;
 pub mod io;
 pub mod json;
+pub mod seal_codec;
 pub mod list;
 pub mod log;
 pub mod math;

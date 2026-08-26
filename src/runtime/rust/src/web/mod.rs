@@ -405,12 +405,20 @@ pub fn render_page_full(sid: &str, base: &str, body: &str, csrf_token: &str) -> 
 /// already installed when `window.ipe.send` first fires. Content-addressed +
 /// integrity-pinned exactly like the client core, so a tampered byte makes the
 /// browser refuse the module.
+#[cfg(feature = "widget-assets")]
 fn port_glue_script(base: &str) -> String {
     let path = crate::js_port_glue::port_glue_path();
     let integrity = crate::js_port_glue::port_glue_integrity();
     format!(
         "<script src=\"{base}{path}\" integrity=\"{integrity}\" crossorigin=\"anonymous\"></script>"
     )
+}
+
+/// No `Ipe.Js` port glue when the widget-asset serving surface is absent: the
+/// page carries no port `<script>` and `window.ipe` is never wired.
+#[cfg(not(feature = "widget-assets"))]
+fn port_glue_script(_base: &str) -> String {
+    String::new()
 }
 
 /// Same as [`render_page_full`] but appends `overlay` (raw HTML) after the
@@ -739,13 +747,17 @@ async fn drive_session<Model, Msg, FUpdate, FView, FSubs>(
     // so binding open/close here drops no-longer-reachable channels without
     // touching every store backend's eviction path. The guard closes on EVERY exit
     // path, including the early `return` when the session is already gone.
+    #[cfg(all(feature = "json", feature = "tokio"))]
     struct PortLifecycle(String);
+    #[cfg(all(feature = "json", feature = "tokio"))]
     impl Drop for PortLifecycle {
         fn drop(&mut self) {
             crate::js_port::session_close(&self.0);
         }
     }
+    #[cfg(all(feature = "json", feature = "tokio"))]
     crate::js_port::session_open(&sid);
+    #[cfg(all(feature = "json", feature = "tokio"))]
     let _port_lifecycle = PortLifecycle(sid.clone());
 
     // Initial subscriptions — Go parity (setupSubscriptions runs at session
@@ -2012,6 +2024,7 @@ where
             // sink runs on the synchronous Cmd-dispatch path): a full SSE buffer
             // drops the one frame rather than blocking the dispatch loop, the same
             // fire-and-forget contract the port carries client-side.
+            #[cfg(all(feature = "json", feature = "tokio"))]
             if let Some(sid) = sid.clone() {
                 let port_tx = tx.clone();
                 crate::js_port::register_out_sink_for(
@@ -2320,9 +2333,12 @@ where
             // over-nested frame BEFORE delivering it. A rejected frame is dropped
             // whole (200 ack, nothing delivered) — the client is never trusted, and
             // a bad frame is not an error the browser must retry.
-            use crate::seal_codec::{SealLimits, seal_boundary_check};
-            if seal_boundary_check(&parsed.payload, SealLimits::default()).is_ok() {
-                crate::js_port::deliver_inbound_for(&sid, parsed.payload);
+            #[cfg(all(feature = "json", feature = "tokio"))]
+            {
+                use crate::seal_codec::{SealLimits, seal_boundary_check};
+                if seal_boundary_check(&parsed.payload, SealLimits::default()).is_ok() {
+                    crate::js_port::deliver_inbound_for(&sid, parsed.payload);
+                }
             }
             (
                 StatusCode::OK,
@@ -2502,16 +2518,17 @@ where
             )
             .route("/_ipe/event", event_route)
             .route("/_ipe/port", port_route)
-            .route(&client_js_route_path, get(serve_client_js))
-            // The `Ipe.Js` browser port surface (`window.ipe`), served
-            // content-addressed with SRI — the same static, immutable discipline as
-            // the client core and widget glue. A GET of fixed bytes (no user input),
-            // so it is CSRF-exempt by method and open. Registered before the page
-            // catch-all so the glue URL hits its static handler.
-            .route(
-                &crate::js_port_glue::port_glue_path(),
-                get(|| async { serve_widget_js(crate::js_port_glue::port_glue_js()) }),
-            );
+            .route(&client_js_route_path, get(serve_client_js));
+        // The `Ipe.Js` browser port surface (`window.ipe`), served
+        // content-addressed with SRI — the same static, immutable discipline as
+        // the client core and widget glue. A GET of fixed bytes (no user input),
+        // so it is CSRF-exempt by method and open. Registered before the page
+        // catch-all so the glue URL hits its static handler.
+        #[cfg(feature = "widget-assets")]
+        let router = router.route(
+            &crate::js_port_glue::port_glue_path(),
+            get(|| async { serve_widget_js(crate::js_port_glue::port_glue_js()) }),
+        );
         #[cfg(feature = "debugger")]
         let router = router.route(
             "/_ipe/debug/scrub",
