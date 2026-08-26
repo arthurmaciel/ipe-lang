@@ -241,24 +241,28 @@ fn glue_class(base: &str, transport: WidgetTransport, tag: &str, content: &str) 
     // `__ipeParseState` (the ONE down-parse helper) so a hostile `state` never
     // crosses as anything but data.
     let down_members: &str = match transport {
-        WidgetTransport::Server => "\
+        WidgetTransport::Server => {
+            "\
   static get observedAttributes() { return [\"state\"]; }
   attributeChangedCallback(name, _old, val) {
     if (name === \"state\" && this.__ipeHook) {
       this.__ipeHook.onState(__ipeParseState(val));
     }
-  }",
+  }"
+        }
         // The wasm sink assigns the decoded structured value to this property; the
         // setter caches it so a `set state` BEFORE `connectedCallback` still
         // reaches the hook once it mounts (the sink may patch the property before
         // the element upgrades). No attribute is read — the property IS the down
         // channel.
-        WidgetTransport::WasmClient => "\
+        WidgetTransport::WasmClient => {
+            "\
   set state(v) {
     this.__ipeState = v;
     if (this.__ipeHook) { this.__ipeHook.onState(v); }
   }
-  get state() { return this.__ipeState; }",
+  get state() { return this.__ipeState; }"
+        }
     };
     // Up-event wiring differs by transport; both hand the author's `emit(up)` an
     // encoder that never touches the DOM as script.

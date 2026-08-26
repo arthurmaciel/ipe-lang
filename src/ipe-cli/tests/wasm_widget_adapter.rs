@@ -25,7 +25,7 @@ use ipe::BuildOptions;
 type BoxError = Box<dyn std::error::Error + Send + Sync + 'static>;
 
 /// A `Web.app` whose view mounts one `Ui.widget`. Compiled for `--target wasm`,
-/// the down/up seam takes the wasm-client adapter (property / CustomEvent).
+/// the down/up seam takes the wasm-client adapter (property / `CustomEvent`).
 const WIDGET_APP: &str = r#"module Main exposing (main)
 
 import Ipe.Tea.Web as Web
@@ -208,7 +208,11 @@ fn wasm_widget_asset_pin_is_content_addressed() -> Result<(), BoxError> {
         .strip_prefix("widget.")
         .and_then(|s| s.strip_suffix(".js"))
         .unwrap_or("");
-    assert_eq!(hex.len(), 16, "content-addressed segment must be hex16: {name}");
+    assert_eq!(
+        hex.len(),
+        16,
+        "content-addressed segment must be hex16: {name}"
+    );
     assert!(
         hex.bytes().all(|b| b.is_ascii_hexdigit()),
         "content-addressed segment must be hex: {name}"
