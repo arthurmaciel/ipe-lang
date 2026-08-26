@@ -1035,7 +1035,12 @@ pub fn lower_program(db: &dyn Db, root: SourceRoot, entry: SourceFile) -> LowerR
     let linked = linked_program(db, root, entry).map_err(|d| (d, Vec::new()))?;
     let types = typecheck(db, root, entry)?;
     let mut interner = db.interner().lock();
-    ipe_lower::lower(&linked.module, &types, &mut interner).map(Arc::new)
+    // Provide the entry file's display path and source text so the lowerer
+    // can inject `<file>:<line>` into `Debug.todo` call sites.
+    let src_path = entry.module_path(db).join(".");
+    let src_path = format!("{src_path}.ipe");
+    let src_text = entry.text(db).clone();
+    ipe_lower::lower(&linked.module, &types, &mut interner, &src_path, &src_text).map(Arc::new)
 }
 
 // ---------------------------------------------------------------------------
@@ -1157,6 +1162,42 @@ pub struct BuildConfig {
 // pure-backend emit error is homeless → driver heuristic.
 pub type EmitResult = Result<Arc<ipe_backend::EmittedProject>, (Diagnostic, Vec<Symbol>)>;
 
+/// The production `Debug.*` gate (IPE-L0140): a `release` build rejects any
+/// reachable development-only escape hatch (`Debug.log` / `Debug.todo` /
+/// `Debug.explain`) fail-closed. Membership in `Ipe.Debug` is the gate — the
+/// lowerer sets `uses_debug` unconditionally on any module whose surviving
+/// (DCE-reachable) IR names a dev-only kernel, so a dead-code `Debug.*` that
+/// prunes away never trips it.
+///
+/// This is the SINGLE gate site, called from every emit route: the
+/// single-home collapse ([`emit_project`]) AND the multi-home split assembly
+/// ([`emit_manifest`]). Both must gate — a program that pulls in a
+/// compiled-source stdlib module (`Ipe.Ui`, `Ipe.Tea.Web`, …) has two or more
+/// emitted homes and takes the split path, so gating only the collapse path
+/// would let a reachable `Debug.explain` in a rendered view ship.
+fn reject_dev_only_in_production(
+    db: &dyn Db,
+    program: &ipe_ir::Program,
+    config: BuildConfig,
+) -> Result<(), (Diagnostic, Vec<Symbol>)> {
+    if config.production(db)
+        && let Some(home) = program
+            .modules
+            .iter()
+            .find(|m| m.uses_debug)
+            .map(|m| m.name.0.clone())
+    {
+        let diag = Diagnostic::Lower {
+            span: ipe_diagnostics::Span::DUMMY,
+            msg: ipe_diagnostics::LowerError::DevOnlyKernelInProduction {
+                kernel: "Debug.log".into(),
+            },
+        };
+        return Err((diag, home));
+    }
+    Ok(())
+}
+
 /// Emit [`lower_program`]'s IR to a Rust [`ipe_backend::EmittedProject`].
 ///
 /// **Coarse per-program SEAM**, the [`lower_program`] sibling: depends on
@@ -1184,26 +1225,7 @@ pub fn emit_project(
 
     let program = lower_program(db, root, entry)?;
 
-    // Production gate: `ipe release` rejects any development-only `Debug.*`
-    // escape hatch (IPE-L0140) rather than silently stripping or shipping it.
-    // The `uses_debug` flag is set unconditionally by the lowerer, so this
-    // gate lives on the emit demand (which DOES depend on `config`) — toggling
-    // the production flag never re-runs lower/typecheck.
-    if config.production(db)
-        && let Some(home) = program
-            .modules
-            .iter()
-            .find(|m| m.uses_debug)
-            .map(|m| m.name.0.clone())
-    {
-        let diag = Diagnostic::Lower {
-            span: ipe_diagnostics::Span::DUMMY,
-            msg: ipe_diagnostics::LowerError::DevOnlyKernelInProduction {
-                kernel: "Debug.log".into(),
-            },
-        };
-        return Err((diag, home));
-    }
+    reject_dev_only_in_production(db, &program, config)?;
 
     let driver = config.db_driver(db);
     let ffi = config.ffi(db).clone();
@@ -1394,6 +1416,14 @@ pub fn emit_manifest(
     // dependency edges that make the §4.3 early-cut observable), then hand the
     // verbatim texts to the backend's file-count-agnostic assembler.
     let program = lower_program(db, root, entry)?;
+
+    // The production `Debug.*` gate must fire on this multi-home path too, not
+    // only on the single-home collapse: a program that pulls in a
+    // compiled-source stdlib module (`Ipe.Ui`, `Ipe.Tea.Web`, …) has two or
+    // more emitted homes and reaches here, so a reachable `Debug.explain` in a
+    // rendered view would otherwise ship past the gate.
+    reject_dev_only_in_production(db, &program, config)?;
+
     let spine = emit_spine_file(db, root, entry, config)?;
     let mut module_texts: BTreeMap<ipe_ir::ModPath, String> = BTreeMap::new();
     for home in homes.iter() {

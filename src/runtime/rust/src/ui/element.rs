@@ -204,6 +204,10 @@ pub enum Attribute<M> {
     AttrBorderShadow(i64, i64, i64, i64, Color),
     AttrBorderInsetShadow(i64, i64, i64, i64, Color),
     AttrPointer,
+    /// `Debug.explain` — draws visible outlines on this element and all
+    /// descendants to make the invisible layout box tree visible during
+    /// development.  Never changes layout; Web/WebView only.
+    AttrExplain,
     AttrOverflow(String, String),
     AttrPseudoRule(PseudoClass, String),
     AttrTransition(String, bool),

@@ -6328,8 +6328,8 @@ fn pipeline_first_diagnostic(source: &str) -> Option<Diagnostic> {
         Err(d) => return Some(d),
     };
     // `--fix` diagnostic probe: single source, home is irrelevant — take just
-    // the diagnostic.
-    ipe_lower::lower(&canonical, &types, &mut interner)
+    // the diagnostic. Source info not available here; location falls back.
+    ipe_lower::lower(&canonical, &types, &mut interner, "", "")
         .err()
         .map(|(diag, _home)| diag)
 }

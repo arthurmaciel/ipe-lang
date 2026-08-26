@@ -79,6 +79,45 @@ fn compile(name: &str, source: &str, target: Target) -> Outcome {
     }
 }
 
+/// Like [`compile`] but with the production flag set — simulates `ipe release`
+/// so the `Debug.*` gate (IPE-L0140) fires without spawning a real release build.
+fn compile_production(name: &str, source: &str) -> Outcome {
+    let Some(entry) = write_entry(name, source) else {
+        return Outcome::Skip;
+    };
+    let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
+        .join("negsuite-prod-out")
+        .join(name);
+    let _ = std::fs::remove_dir_all(&out);
+    let Ok(runtime) = ipe::resolve_runtime() else {
+        return Outcome::Skip;
+    };
+    let options = BuildOptions {
+        production: true,
+        ..BuildOptions::default()
+    };
+    match ipe::build_with_options(&entry, &out, &runtime, options) {
+        Ok(()) => Outcome::Accepted("compiled successfully (exit 0)".to_owned()),
+        Err(CliError::Pipeline { diag, .. }) => Outcome::Rejected(diag.code().as_str()),
+        Err(other) => Outcome::Accepted(format!("non-pipeline error: {other:?}")),
+    }
+}
+
+/// Assert that `source`, compiled with the production flag, is rejected with
+/// exactly `expected`. A wrong code, an accept (a SEAL hole), or a non-pipeline
+/// failure fails the test.
+#[track_caller]
+fn assert_rejected_production(name: &str, source: &str, expected: &str) {
+    match compile_production(name, source) {
+        Outcome::Skip => {}
+        Outcome::Rejected(got) => assert_eq!(
+            got, expected,
+            "{name}: expected {expected}, got {got} — rejected for the WRONG reason"
+        ),
+        Outcome::Accepted(how) => fail_accepted(name, expected, &how),
+    }
+}
+
 /// Run the full `ipe` pipeline over a multi-file project (sibling discovery):
 /// `files` are written under a fresh `src/` keyed by `name`, and `Main.ipe` is
 /// the entry. Needed for cross-module gates (e.g. duplicate import qualifier)
@@ -1982,6 +2021,133 @@ fn lower_debug_log_in_sync_context_compiles() {
          main =\n    Io.println (shout \"hi\")\n"
     );
     assert_compiles("lower_debug_log_sync", &src);
+}
+
+/// CONTRAPOSITIVE: `Debug.todo` is accepted in a development build — `String ->
+/// a` diverges at runtime but compiles anywhere.  `ipe release` gates it with
+/// IPE-L0140 (covered in the release-gate suite).
+#[test]
+fn lower_debug_todo_compiles_in_dev_build() {
+    let src = format!(
+        "{HEAD}import Ipe.Io as Io\n\
+         import Ipe.Debug as Debug\n\
+         describe : Int -> String\n\
+         describe n =\n    Debug.todo \"not implemented\"\n\
+         main : Task Error ()\n\
+         main =\n    Io.println (describe 1)\n"
+    );
+    assert_compiles("lower_debug_todo_dev", &src);
+}
+
+/// `ipe release` (production flag) must reject `Debug.todo` with IPE-L0140 —
+/// membership in `Ipe.Debug` is the gate, regardless of app kind or target.
+/// Companion to [`lower_debug_todo_compiles_in_dev_build`]: the same program
+/// that a dev build accepts must be blocked by a production build.
+#[test]
+fn release_rejects_debug_todo() {
+    let src = format!(
+        "{HEAD}import Ipe.Io as Io\n\
+         import Ipe.Debug as Debug\n\
+         describe : Int -> String\n\
+         describe n =\n    Debug.todo \"not ready\"\n\
+         main : Task Error ()\n\
+         main =\n    Io.println (describe 1)\n"
+    );
+    assert_rejected_production("release_rejects_debug_todo", &src, "IPE-L0140");
+}
+
+/// `ipe release` (production flag) must reject `Debug.explain` with IPE-L0140 —
+/// module membership alone gates it, independent of `Debug.todo`. The attribute
+/// is reachable from `main` through the rendered `Web.app` view, so the
+/// kernel-usage scan sees it and sets `uses_debug`. Dev build accepts it (a
+/// dev-only construct is permitted by `build` / `run`); production blocks it.
+#[test]
+fn release_rejects_debug_explain() {
+    let src = explain_reachable_src();
+    assert_rejected_production("release_rejects_debug_explain", &src, "IPE-L0140");
+}
+
+/// The same reachable-`Debug.explain` program a `release` build rejects builds
+/// cleanly under a development build — the gate is production-only.
+#[test]
+fn dev_build_accepts_reachable_debug_explain() {
+    let src = explain_reachable_src();
+    assert_compiles("dev_build_accepts_reachable_debug_explain", &src);
+}
+
+/// A `Debug.explain` in genuinely DEAD code (a top-level binding never reachable
+/// from `main`) ships nothing — it is DCE'd — so even a production build accepts
+/// it. Only a REACHABLE dev-only construct is rejected, mirroring `Debug.todo`.
+#[test]
+fn release_accepts_dead_debug_explain() {
+    let src = format!(
+        "{HEAD}import Ipe.Io as Io\n\
+         import Ipe.Ui as Ui\n\
+         import Ipe.Debug as Debug\n\
+         unused : Element msg\n\
+         unused =\n    Ui.el [ Debug.explain ] (Ui.text \"hi\")\n\
+         main : Task Error ()\n\
+         main =\n    Io.println \"ok\"\n"
+    );
+    match compile_production("release_accepts_dead_debug_explain", &src) {
+        Outcome::Skip => {}
+        Outcome::Accepted(how) if how.starts_with("compiled successfully") => {}
+        Outcome::Accepted(how) => assert!(
+            false_marker(),
+            "release_accepts_dead_debug_explain: expected a clean compile, \
+             got a non-pipeline failure ({how})"
+        ),
+        Outcome::Rejected(got) => assert!(
+            false_marker(),
+            "release_accepts_dead_debug_explain: a DEAD Debug.explain must be \
+             DCE'd and accepted, but ipe REJECTED it with {got}"
+        ),
+    }
+}
+
+/// A rendered `Web.app` view carrying `Debug.explain` on an element — the
+/// attribute is reachable from `main` through the app config record's `view`
+/// field. Shared by the reject/accept companions above.
+fn explain_reachable_src() -> String {
+    format!(
+        "{HEAD}import Ipe.Tea.Web as Web\n\
+         import Ipe.Ui as Ui\n\
+         import Ipe.Tea.Web.Cmd as Cmd\n\
+         import Ipe.Tea.Web.Sub as Sub\n\
+         import Ipe.Debug as Debug\n\
+         type Msg = Noop\n\
+         type alias Model = {{}}\n\
+         init : a -> ( Model, Cmd Msg )\n\
+         init _req = ( {{}}, Cmd.none )\n\
+         update : Msg -> Model -> ( Model, Cmd Msg )\n\
+         update _msg model = ( model, Cmd.none )\n\
+         view : Model -> Element Msg\n\
+         view _model = Ui.el [ Debug.explain ] (Ui.text \"hi\")\n\
+         subscriptions : Model -> Sub Msg\n\
+         subscriptions _model = Sub.none\n\
+         main =\n    \
+         Web.app {{ init = init, update = update, view = view, subscriptions = subscriptions, routes = [], notFound = Noop }}\n"
+    )
+}
+
+/// A `case` missing an arm is non-exhaustive (IPE-T0010) even when another arm
+/// contains `Debug.todo`. `todo` is a value-level expression that inhabits any
+/// type; it is NOT a wildcard pattern and does NOT satisfy exhaustiveness.
+#[test]
+fn case_with_todo_arm_still_requires_all_constructors() {
+    let src = format!(
+        "{HEAD}import Ipe.Io as Io\n\
+         import Ipe.Debug as Debug\n\
+         type Color = Red | Green | Blue\n\
+         describe : Color -> String\n\
+         describe c =\n\
+         \x20   case c of\n\
+         \x20       Red   -> \"done\"\n\
+         \x20       Green -> Debug.todo \"pending\"\n\
+         main : Task Error ()\n\
+         main =\n    Io.println (describe Red)\n"
+    );
+    assert_rejected("case_todo_does_not_excuse_missing_arm", &src, "IPE-T0010");
 }
 
 /// The applicative record-codec builder seed — `object ctor` for a `Builder`
