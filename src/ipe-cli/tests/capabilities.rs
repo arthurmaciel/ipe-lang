@@ -398,3 +398,34 @@ fn a_handle_constructed_in_an_imported_module_discloses_custom_element() -> Test
     let _ = std::fs::remove_dir_all(&dir);
     Ok(())
 }
+
+/// The manifest-less single-file audit path (the `entry` alone, no `package.ipe`
+/// up-tree) must disclose `custom-element` for a constructed-but-unmounted
+/// `customElement` handle. This is the seam `ipe deploy … --capabilities` and the
+/// run-jail resolver consume via [`ipe::run_sandbox::resolve_for_run`]; routing it
+/// through the served-widget-aware inference keeps it consistent with `ipe
+/// capabilities` / `package audit`. The `customElement "js/counter.js"` literal
+/// resolves against the lone entry's own directory, so the JS sits beside it.
+#[test]
+fn a_manifest_less_single_file_handle_discloses_custom_element() -> TestResult {
+    let dir = std::env::temp_dir().join(format!(
+        "ipe-ce-singlefile-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("js"))?;
+    std::fs::write(dir.join("Main.ipe"), UNMOUNTED_WIDGET_APP)?;
+    std::fs::write(dir.join("js/counter.js"), COUNTER_JS)?;
+
+    let entry = dir.join("Main.ipe");
+    let resolved = ipe::run_sandbox::resolve_for_run(None, None, &entry)?;
+    assert!(
+        resolved.inferred.contains(&Capability::CustomElement),
+        "a manifest-less single file that constructs a served widget handle must \
+         disclose `custom-element` from the single-file audit path, got: {:?}",
+        resolved.inferred
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+    Ok(())
+}

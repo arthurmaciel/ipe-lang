@@ -502,10 +502,23 @@ pub fn resolve_for_run(
             declared: m.capabilities.clone(),
         })
     } else {
-        // A single file: inference over the entry alone, no declared set.
-        let program = crate::lower_entry(entry)?;
+        // A single file: inference over the entry alone, no declared set. The
+        // inference routes through the same served-widget-aware SSOT every other
+        // capability-audit surface uses, so a constructed `customElement` handle
+        // (whose JS the emitter serves) discloses `custom-element` here too,
+        // whether or not a `Ui.widget` mounts it.
+        let graph = crate::build_source_graph(entry)?;
+        let program = graph.run_attributed(entry, |db, root, file| {
+            ipe_db::lower_program(db, root, file)
+        })?;
+        let inferred = crate::capabilities_including_served_widgets(
+            &graph.db,
+            graph.source_root,
+            graph.entry_file,
+            &program,
+        );
         Ok(ResolvedCapabilities {
-            inferred: ipe_lower::program_capabilities(&program),
+            inferred,
             declared: BTreeSet::new(),
         })
     }

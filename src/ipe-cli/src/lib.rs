@@ -1082,7 +1082,7 @@ struct CollectedSources {
 ///
 /// This is the file-path shorthand's source-collection step, shared by the
 /// build path ([`build_with_sibling_discovery_with_options`]) and the
-/// single-entry analysis paths ([`lower_entry`], [`emit_ir_text`]) so all
+/// single-entry analysis paths ([`lower_entry_via_graph`], [`emit_ir_text`]) so all
 /// three see the SAME module set — a program that imports a compiled-source
 /// stdlib module resolves identically whether it is built or merely analysed.
 /// It is the equivalent of `Graph.discoverModulesMulti [srcRoot] entryPath` in
@@ -4600,18 +4600,6 @@ pub fn emit_ir_text(entry: &Path) -> Result<String, CliError> {
 // `capabilities` — report / verify a program's inferred capability set
 // ===========================================================================
 
-/// Run parse → canon → types → lower over a single `.ipe` entry, returning the
-/// lowered program. Shares the exact pipeline [`emit_ir_text`] uses so the two
-/// analysis surfaces cannot diverge.
-///
-/// # Errors
-/// [`CliError::Pipeline`] when the compiler rejects the program;
-/// [`CliError::Io`] when the entry file cannot be read.
-pub(crate) fn lower_entry(entry: &Path) -> Result<ipe_ir::Program, CliError> {
-    let (_db, program) = lower_entry_via_graph(entry)?;
-    Ok((*program).clone())
-}
-
 /// The whole set of security capabilities a program discloses: the kernel-derived
 /// set [`ipe_lower::program_capabilities`] infers from the lowered program, PLUS
 /// [`ipe_ir::Capability::CustomElement`] whenever the program constructs any
@@ -4630,7 +4618,7 @@ pub(crate) fn lower_entry(entry: &Path) -> Result<ipe_ir::Program, CliError> {
 /// This is the single inference point every capability consumer routes through —
 /// the report, the declared-set verify, package inference, and index admission —
 /// so none of them can disclose a different set than the emitter serves.
-fn capabilities_including_served_widgets(
+pub(crate) fn capabilities_including_served_widgets(
     db: &dyn ipe_db::Db,
     root: ipe_db::SourceRoot,
     entry_file: ipe_db::SourceFile,
@@ -4690,10 +4678,10 @@ fn lower_entry_via_graph(
 /// source root, and the entry module's [`ipe_db::SourceFile`] handle — the
 /// product of sibling discovery + compiled-source stdlib injection shared by
 /// every single-entry analysis path.
-struct SourceGraph {
-    db: ipe_db::IpeDatabase,
-    source_root: ipe_db::SourceRoot,
-    entry_file: ipe_db::SourceFile,
+pub(crate) struct SourceGraph {
+    pub(crate) db: ipe_db::IpeDatabase,
+    pub(crate) source_root: ipe_db::SourceRoot,
+    pub(crate) entry_file: ipe_db::SourceFile,
     /// The whole module set (path → (file, src)) — every module a diagnostic
     /// span may index into, so a rejecting query can be framed against the
     /// source that OWNS the span rather than the entry file (the caret bug).
@@ -4719,7 +4707,7 @@ impl SourceGraph {
     /// # Errors
     /// [`CliError::Pipeline`] carrying the first compiler diagnostic; the query
     /// closure's own error otherwise.
-    fn run_attributed<T>(
+    pub(crate) fn run_attributed<T>(
         &self,
         blame_path: &Path,
         run_query: impl FnOnce(
@@ -4784,7 +4772,7 @@ impl SourceGraph {
 /// # Errors
 /// [`CliError::Pipeline`] when the entry does not parse; [`CliError::Io`] on any
 /// filesystem failure; [`CliError::Usage`] if the entry is not in the built map.
-fn build_source_graph(entry: &Path) -> Result<SourceGraph, CliError> {
+pub(crate) fn build_source_graph(entry: &Path) -> Result<SourceGraph, CliError> {
     let mut collected = collect_entry_and_siblings(entry)?;
     let injected =
         project::inject_compiled_std_closure(&mut collected.sources, &mut collected.discovered);
@@ -6752,10 +6740,11 @@ mod tests {
         );
 
         // The same source-graph pipeline backs `ipe capabilities` via
-        // `lower_entry`; it must resolve identically (a pure test program).
+        // `lower_entry_via_graph`; it must resolve identically (a pure test
+        // program).
         assert!(
-            lower_entry(&entry).is_ok(),
-            "lower_entry (capabilities path) must resolve `Ipe.Test` too"
+            lower_entry_via_graph(&entry).is_ok(),
+            "lower_entry_via_graph (capabilities path) must resolve `Ipe.Test` too"
         );
     }
 
