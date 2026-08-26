@@ -1625,7 +1625,7 @@ fn lower_label(msg: &LowerError) -> String {
         ),
         LowerError::DevOnlyKernelInProduction { kernel } => format!(
             "`{kernel}` is a development-only debugging escape hatch and cannot be used \
-             in a production build (`ipe build --optimize`)"
+             in a production build (`ipe release`)"
         ),
         LowerError::UiCellsInWebShape(app) => format!(
             "`Ui.cells` is terminal-only; not available in the {} shape — it paints a \

@@ -1127,7 +1127,7 @@ pub struct BuildConfig {
     /// to emit the `#[wasm_bindgen] pub fn hydrate(…)` export (M7 SSR +
     /// hydration island parse + adopt path).
     pub wasm_hydrate_mode: bool,
-    /// `true` for a PRODUCTION build (`ipe build --optimize`). Development-only
+    /// `true` for a PRODUCTION build (`ipe release`). Development-only
     /// escape hatches (`Debug.*`) are rejected at emit demand (IPE-L0140) so a
     /// shipped program never carries a debug window. Lives on `BuildConfig`
     /// (not `SourceRoot`) so toggling it re-runs only [`emit_project`], never
@@ -1184,11 +1184,11 @@ pub fn emit_project(
 
     let program = lower_program(db, root, entry)?;
 
-    // Production gate: a `--optimize` build rejects any development-only
-    // `Debug.*` escape hatch (IPE-L0140) rather than silently stripping or
-    // shipping it. The `uses_debug` flag is set unconditionally by the
-    // lowerer, so this gate lives on the emit demand (which DOES depend on
-    // `config`) — toggling `--optimize` never re-runs lower/typecheck.
+    // Production gate: `ipe release` rejects any development-only `Debug.*`
+    // escape hatch (IPE-L0140) rather than silently stripping or shipping it.
+    // The `uses_debug` flag is set unconditionally by the lowerer, so this
+    // gate lives on the emit demand (which DOES depend on `config`) — toggling
+    // the production flag never re-runs lower/typecheck.
     if config.production(db)
         && let Some(home) = program
             .modules

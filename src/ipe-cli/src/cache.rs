@@ -254,11 +254,11 @@ pub fn compute_project_key(
     // entry must never serve a wasm build (or vice versa).
     update_len_prefixed(&mut hasher, format!("{target:?}").as_bytes());
 
-    // A PRODUCTION build (`--optimize`) rejects any `Debug.*` use (IPE-L0140),
-    // so its outcome differs from a development build for a Debug-using program
-    // (error vs emitted project). Keying on it keeps the two builds' cache
-    // entries disjoint — a dev-cached project is never served to `--optimize`,
-    // and vice versa. (For a Debug-free program the emitted bytes are identical
+    // `ipe release` rejects any `Debug.*` use (IPE-L0140), so its outcome
+    // differs from a development build for a Debug-using program (error vs
+    // emitted project). Keying on it keeps the two builds' cache entries
+    // disjoint — a dev-cached project is never served to a release build, and
+    // vice versa. (For a Debug-free program the emitted bytes are identical
     // either way; the extra key bit only costs a one-time cold entry.)
     hasher.update([u8::from(production)]);
 
@@ -677,11 +677,11 @@ mod tests {
         assert_ne!(sqlite, postgres, "the SQL driver is part of the key");
     }
 
-    /// A `--optimize` (production) build rejects any `Debug.*` use (IPE-L0140),
-    /// so its outcome differs from a development build for a Debug-using
-    /// program. The key must separate the two so a dev-cached project is never
-    /// served to `--optimize` (or vice versa) — the tier-1 proof of the emit
-    /// demand's production gate.
+    /// `ipe release` rejects any `Debug.*` use (IPE-L0140), so its outcome
+    /// differs from a development build for a Debug-using program. The key must
+    /// separate the two so a dev-cached project is never served to a release
+    /// build (or vice versa) — the tier-1 proof of the emit demand's
+    /// production gate.
     #[test]
     fn key_changes_with_production() {
         let (sources, injected) = sample_sources();

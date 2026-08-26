@@ -423,7 +423,7 @@ code! {
     /// shipping a crate that cannot build.
     IPE_L0136 = "IPE-L0136", "`main` is not a runnable program entry", "IPE-L0136";
     /// a `Debug.*` development-only escape hatch reached a production build
-    /// (`ipe build --optimize`)
+    /// (`ipe release`)
     IPE_L0140 = "IPE-L0140", "a Debug.* escape hatch was used in a production build", "IPE-L0140";
     /// a `Task`-typed value was discarded (`let _ = <task>`) in a non-`Task`
     /// context, which would run its effect through an implicit `Task.run`

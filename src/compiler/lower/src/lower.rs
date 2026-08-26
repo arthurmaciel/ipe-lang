@@ -10355,7 +10355,7 @@ struct KernelUsage {
     /// `env_public.rs` (built from `ipe.toml`'s `[wasm] publicEnv` allowlist).
     env_public: bool,
     /// Any development-only `Debug.*` escape hatch (`Debug.log`). Recorded
-    /// unconditionally here; a PRODUCTION build (`--optimize`) rejects it at
+    /// unconditionally here; a PRODUCTION build (`ipe release`) rejects it at
     /// emit demand (IPE-L0140). A development build ignores the flag.
     debug: bool,
     /// Any foreign-crate FFI wrapper call ([`Callee::Ffi`]) — gates the

@@ -321,19 +321,6 @@ pub enum CliError {
         /// The specific reason the program cannot be ejected.
         reason: String,
     },
-    /// `ipe deploy` was asked to bundle a pure Ipê app — one with no native/FFI
-    /// content and therefore no capability profile. A jailed deploy bundle is
-    /// only meaningful for native-bearing programs (ones that cross into
-    /// `Rust.` FFI and carry an `ipe.profile`). A pure app is structurally
-    /// bounded to its inferred capabilities and needs no wrapper jail; deploy
-    /// the compiled binary directly.
-    ///
-    /// This is a hard, typed refusal — no partial bundle is produced. Carries
-    /// the entry path so the message can name the program.
-    DeployPureApp {
-        /// The entry file that was compiled as a pure app.
-        entry: PathBuf,
-    },
     /// A `Pipeline` diagnostic was already rendered as JSON and written to
     /// stderr by the caller. The process must exit non-zero, but there is
     /// nothing left to print — the JSON line is the complete machine output.
@@ -529,7 +516,6 @@ impl std::fmt::Display for CliError {
                 style::GUTTER
             ),
             Self::EjectUnsupported { reason } => write!(f, "{}eject: {reason}", style::GUTTER),
-            Self::DeployPureApp { entry } => fmt_deploy_pure_app(entry, f),
             // The JSON line was already written; nothing more to print.
             Self::DiagnosticJsonEmitted => Ok(()),
             Self::FileTooLarge { path, max } => write!(
@@ -600,20 +586,6 @@ fn fmt_io_error(
             source.kind()
         )
     }
-}
-
-/// Render [`CliError::DeployPureApp`] for `Display`. Split out to keep the
-/// main `Display` match within the line-count limit.
-fn fmt_deploy_pure_app(entry: &Path, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-    write!(
-        f,
-        "{}deploy: `{}` is a pure Ipê app (no native/FFI content, no capability \
-         profile) — a jailed deploy bundle is unnecessary.\n\
-         {}         Deploy the app binary directly instead of using `ipe deploy`.",
-        style::GUTTER,
-        entry.display(),
-        style::GUTTER,
-    )
 }
 
 /// Render the runtime-install error family (`RuntimeDirInvalid`,
@@ -843,10 +815,10 @@ pub struct BuildOptions {
     /// to clean `ipe_main()` with a console warning (fault-tolerant hydrate — see
     /// spec Q6 §"Fault-tolerant hydrate — parse, don't unwrap").
     pub wasm_hydrate_mode: bool,
-    /// `true` for a PRODUCTION build (`ipe build --optimize`). Threaded into
+    /// `true` for a production build (`ipe release` — any target). Threaded into
     /// [`ipe_db::BuildConfig::production`] so the emit demand rejects any
     /// development-only `Debug.*` escape hatch (IPE-L0140). Default `false`
-    /// (a development build).
+    /// (`ipe build` / `ipe run` are development builds — `Debug.*` permitted).
     pub production: bool,
     /// `true` (the DEFAULT) selects the dependency-model emit: the emitted
     /// project declares the runtime as a path dependency with a
@@ -1454,8 +1426,8 @@ fn compile_modules_observed(
             // Production gate on the IR-cache fast path: this path bypasses
             // `emit_project` (the DB layer where the gate normally runs), so a
             // cached IR that uses a development-only `Debug.*` escape hatch must
-            // be rejected here too (IPE-L0140) — otherwise `--optimize` would
-            // ship the debug window whenever the IR tier happened to hit.
+            // be rejected here too (IPE-L0140) — otherwise a cached dev artifact
+            // could slip through a release build that hits this tier.
             if options.production && program.modules.iter().any(|m| m.uses_debug) {
                 let diag = Diagnostic::Lower {
                     span: ipe_diagnostics::Span::DUMMY,
@@ -3225,7 +3197,8 @@ fn run_build_body(rest: &[String]) -> Result<(), CliError> {
         },
         wasm_public_env: Vec::new(),
         wasm_hydrate_mode: false,
-        production: args.production,
+        // `ipe build` is a development artifact — Debug.* is permitted.
+        production: false,
         runtime_dep,
         // `ipe build` never tree-shakes the vendored tree — a dep-model build
         // carries no vendored source, and a vendored (`IPE_RUNTIME_VENDORED`)
@@ -3470,25 +3443,33 @@ pub(crate) fn run_eject(rest: &[String]) -> Result<(), CliError> {
     Ok(())
 }
 
-/// `ipe deploy [<path>] [--out <dir>] [--target <triple>] [--embed]` — build a
-/// self-contained, toolchain-free jailed deploy bundle.
+/// `ipe release [<path>] [--out <dir>] [--target wasm|<triple>] [--embed]` —
+/// build the production artifact for every app kind.
 ///
-/// The bundle contains `ipe-wrapper` (the jailed launcher), `ipe-app` (the
-/// statically-linked app binary), and `ipe.profile` (the serialised capability
-/// profile). Copying the bundle dir to a server with no toolchain and running
-/// `./ipe-wrapper -- <args>` verifies the profile against the capability floor
-/// embedded in `ipe-app` and execs the app inside the sandbox jail.
+/// The artifact kind is determined by the app and the `--target` flag:
 ///
-/// The `--embed` flag fuses the app binary and profile into the wrapper binary
-/// itself for a single-file scp workflow; `--show-profile` on the embedded
-/// wrapper dumps the fused profile for auditability.
+/// - **Native-bearing** (app crosses into `Rust.` / FFI): the jailed bundle —
+///   `ipe-wrapper` (jailed launcher), `ipe-app` (statically-linked app binary),
+///   and `ipe.profile` (serialised capability profile). The `--embed` flag
+///   (the default) fuses all three into a single self-jailing binary.
+/// - **Pure native** (no native/FFI content): a plain optimised binary under
+///   the release cargo profile. No jail wrapper is needed; the binary is
+///   structurally bounded to its inferred capabilities.
+/// - **Browser/wasm** (`--target wasm`): the production browser bundle
+///   (optimised `.wasm` + generated glue + assets) exactly as `ipe build
+///   --target wasm` produces, but with the production flag set so the
+///   `Ipe.Debug` gate (IPE-L0140) fires.
 ///
-/// ## Honest limit
+/// Every path sets `production = true` so the `Ipe.Debug.*` gate fires for
+/// all app kinds. `ipe build` and `ipe run` leave `production = false`
+/// (development — `Debug.*` is permitted there).
 ///
-/// The inner `ipe-app` is a native ELF/Mach-O/PE binary — an operator can
-/// run it directly without the wrapper, bypassing the jail. The wrapper makes
-/// the sanctioned, jailed, profile-verified path the easy toolchain-free one;
-/// it does not make unjailed execution impossible for a sufficiently privileged
+/// ## Honest limit (native-bearing)
+///
+/// The inner `ipe-app` is a native ELF/Mach-O/PE binary — an operator can run
+/// it directly without the wrapper, bypassing the jail. The wrapper makes the
+/// sanctioned, jailed, profile-verified path the easy toolchain-free one; it
+/// does not make unjailed execution impossible for a sufficiently privileged
 /// local operator. This limit is documented, not a defect.
 ///
 /// ## Security boundary
@@ -3503,8 +3484,8 @@ pub(crate) fn run_eject(rest: &[String]) -> Result<(), CliError> {
 /// Build, toolchain, manifest-parse, filesystem, and capability-resolution
 /// errors.
 #[allow(clippy::too_many_lines)]
-pub(crate) fn run_deploy(rest: &[String]) -> Result<(), CliError> {
-    let args = cli_args::parse_deploy(rest)?;
+pub(crate) fn run_release(rest: &[String]) -> Result<(), CliError> {
+    let args = cli_args::parse_release(rest)?;
     let entry = match args.entry {
         Some(e) => e,
         None => default_entry()?,
@@ -3515,90 +3496,210 @@ pub(crate) fn run_deploy(rest: &[String]) -> Result<(), CliError> {
     // model without building or writing anything.
     if args.capabilities_only {
         let manifest = discover_manifest(&entry_path)?;
-        return run_deploy_capabilities(&entry_path, manifest.as_deref(), args.format);
+        return run_release_capabilities(&entry_path, manifest.as_deref(), args.format);
     }
 
-    // Bundle output directory: deploy/ by default.
-    let out_dir = args
-        .out
-        .as_deref()
-        .map_or_else(|| PathBuf::from("deploy"), PathBuf::from);
-
-    // Resolve the target triple. Default: x86_64 musl-static.
-    let triple = match &args.target {
-        Some(t) => ipe_backend_rust::static_build::StaticTriple::parse(t).ok_or_else(|| {
-            CliError::UsageOwned(format!(
-                "ipe deploy: unsupported target `{t}`; supported: {}",
-                ipe_backend_rust::static_build::StaticTriple::SUPPORTED.join(", ")
-            ))
-        })?,
-        None => ipe_backend_rust::static_build::StaticTriple::default(),
-    };
+    // `--target wasm` routes to the wasm bundle path (production build).
+    let cli_wasm = args.target.as_deref() == Some("wasm");
 
     // Discover the manifest (same logic as build/eject).
     let manifest = discover_manifest(&entry_path)?;
 
-    // Deploy is native-only and always static — refuse wasm configs.
-    let manifest_wasm: Option<project::WasmConfig> = manifest
-        .as_deref()
-        .map(project::parse_manifest)
-        .transpose()?
-        .map(|m| m.wasm);
-    if resolve_wasm_target(false, manifest_wasm.as_ref()) {
-        return Err(CliError::EjectUnsupported {
-            reason: "deploy produces a native static binary; the wasm target is not supported — \
-                     use `ipe build --target wasm` for browser apps"
-                .to_owned(),
-        });
-    }
-
-    // Resolve capabilities up-front: a pure Ipê app (no NativeFfi / FfiRaw)
-    // emits no ipe.profile and needs no jailed wrapper — detect it before
-    // touching the toolchain or writing any output so the error is fast and
-    // no partial state is left on disk.
     let manifest_parsed = match manifest.as_deref() {
         Some(m) => Some(project::parse_manifest(m)?),
         None => None,
     };
+    let manifest_wasm: Option<project::WasmConfig> =
+        manifest_parsed.as_ref().map(|m| m.wasm.clone());
+
+    // Resolve the wasm target: CLI `--target wasm` > env > manifest.
+    let wasm_target = resolve_wasm_target(cli_wasm, manifest_wasm.as_ref());
+
+    if wasm_target {
+        // Browser/wasm production path.
+        let out_dir = args
+            .out
+            .as_deref()
+            .map_or_else(|| PathBuf::from("release"), PathBuf::from);
+        let runtime_dep = runtime_dep_from_env();
+        let runtime_dir = resolve_vendored_runtime_dir(args.runtime, !runtime_dep)?;
+
+        let show_progress = {
+            use std::io::IsTerminal as _;
+            std::io::stderr().is_terminal()
+        };
+        if show_progress {
+            eprintln!(
+                "{}",
+                style::gutter(&format!("{} releasing {entry} (wasm)", style::glyph::STEP))
+            );
+        }
+
+        // Emit the Rust wasm project with production=true so the Debug gate fires.
+        let options = BuildOptions {
+            static_plan: None,
+            target: ipe_ir::Target::WasmClient,
+            wasm_public_env: manifest_parsed
+                .as_ref()
+                .map(|m| m.wasm.public_env.clone())
+                .unwrap_or_default(),
+            wasm_hydrate_mode: manifest_wasm
+                .as_ref()
+                .is_some_and(|w| w.mode.as_deref() == Some("hydrate")),
+            production: true,
+            runtime_dep,
+            tree_shake_vendored: false,
+            cargo_name: String::new(),
+        };
+        manifest.as_ref().map_or_else(
+            || {
+                build_with_sibling_discovery_with_options(
+                    &entry_path,
+                    &out_dir,
+                    &runtime_dir,
+                    options.clone(),
+                )
+            },
+            |m| build_project_with_options(m, &out_dir, &runtime_dir, options.clone()),
+        )?;
+        bundle_wasm(&out_dir)?;
+        if show_progress {
+            eprintln!(
+                "{}",
+                style::gutter(&format!(
+                    "{} released → {}/www/",
+                    style::glyph::OK,
+                    out_dir.display()
+                ))
+            );
+        }
+        return Ok(());
+    }
+
+    // Native path: resolve the target triple. Default: x86_64 musl-static.
+    let triple = match &args.target {
+        Some(t) if t != "wasm" => ipe_backend_rust::static_build::StaticTriple::parse(t)
+            .ok_or_else(|| {
+                CliError::UsageOwned(format!(
+                    "ipe release: unsupported target `{t}`; supported: wasm, {}",
+                    ipe_backend_rust::static_build::StaticTriple::SUPPORTED.join(", ")
+                ))
+            })?,
+        _ => ipe_backend_rust::static_build::StaticTriple::default(),
+    };
+
+    // Resolve capabilities up-front to discriminate between native-bearing
+    // (needs jail wrapper) and pure-native (plain optimised binary).
     let driver = manifest_parsed
         .as_ref()
         .map_or(ipe_backend_rust::DbDriver::Sqlite, |m| m.driver);
     let resolved =
         run_sandbox::resolve_for_run(manifest_parsed.as_ref(), manifest.as_deref(), &entry_path)?;
 
-    if !run_sandbox::is_native_bearing(&resolved.union()) {
-        return Err(CliError::DeployPureApp { entry: entry_path });
-    }
-
     let runtime_dir = resolve_vendored_runtime_dir(args.runtime, false)?;
 
-    // Static plan forced for the app binary: default allocator (dlmalloc, pure
-    // Rust), C-with-libc profile so the emitted project's C deps can link.
+    let show_progress = {
+        use std::io::IsTerminal as _;
+        std::io::stderr().is_terminal()
+    };
+
+    if !run_sandbox::is_native_bearing(&resolved.union()) {
+        // Pure-native path: emit and build a plain release binary.
+        let out_dir = args
+            .out
+            .as_deref()
+            .map_or_else(|| PathBuf::from("release"), PathBuf::from);
+
+        if show_progress {
+            eprintln!(
+                "{}",
+                style::gutter(&format!("{} releasing {entry}", style::glyph::STEP))
+            );
+        }
+
+        let cargo_bin = toolchain::require_cargo(toolchain::ToolIntent::Build)?;
+
+        let app_static_plan = Some(ipe_backend_rust::static_build::StaticPlan {
+            triple,
+            c_profile: ipe_backend_rust::static_build::CProfile::WithLibc {
+                allocator: ipe_backend_rust::static_build::StaticAllocator::Dlmalloc,
+            },
+        });
+
+        let options = BuildOptions {
+            static_plan: app_static_plan,
+            target: ipe_ir::Target::Native,
+            production: true,
+            runtime_dep: runtime_dep_from_env(),
+            tree_shake_vendored: false,
+            ..BuildOptions::default()
+        };
+        manifest.as_ref().map_or_else(
+            || {
+                build_with_sibling_discovery_with_options(
+                    &entry_path,
+                    &out_dir,
+                    &runtime_dir,
+                    options.clone(),
+                )
+            },
+            |m| build_project_with_options(m, &out_dir, &runtime_dir, options.clone()),
+        )?;
+
+        let mut app_cargo = std::process::Command::new(cargo_bin.path());
+        app_cargo
+            .arg("build")
+            .arg("--release")
+            .args(["--target", triple.as_str()])
+            .current_dir(&out_dir);
+        build_emitted_project(&mut app_cargo, "the release binary", None, &out_dir)?;
+
+        let app_target_dir = cargo_target_directory(&out_dir)?;
+        let bin_name = emitted_bin_name(&out_dir);
+        let bin_path = app_target_dir
+            .join(triple.as_str())
+            .join("release")
+            .join(&bin_name);
+        if show_progress {
+            eprintln!(
+                "{}",
+                style::gutter(&format!(
+                    "{} released → {}",
+                    style::glyph::OK,
+                    bin_path.display()
+                ))
+            );
+        }
+        return Ok(());
+    }
+
+    // Native-bearing path: jailed bundle (same substance as the predecessor).
+    let out_dir = args
+        .out
+        .as_deref()
+        .map_or_else(|| PathBuf::from("release"), PathBuf::from);
+
+    if show_progress {
+        eprintln!(
+            "{}",
+            style::gutter(&format!("{} releasing {entry}", style::glyph::STEP))
+        );
+    }
+
+    let cargo_bin = toolchain::require_cargo(toolchain::ToolIntent::Build)?;
+
+    // Step 1: emit + build the app binary (static, musl, production).
+    let app_out = out_dir.join("app");
     let app_static_plan = Some(ipe_backend_rust::static_build::StaticPlan {
         triple,
         c_profile: ipe_backend_rust::static_build::CProfile::WithLibc {
             allocator: ipe_backend_rust::static_build::StaticAllocator::Dlmalloc,
         },
     });
-
-    let cargo_bin = toolchain::require_cargo(toolchain::ToolIntent::Build)?;
-
-    let show_progress = {
-        use std::io::IsTerminal as _;
-        std::io::stderr().is_terminal()
-    };
-    if show_progress {
-        eprintln!(
-            "{}",
-            style::gutter(&format!("{} deploying {entry}", style::glyph::STEP))
-        );
-    }
-
-    // Step 1: emit + build the app binary (static, musl).
-    let app_out = out_dir.join("app");
     let options = BuildOptions {
         static_plan: app_static_plan,
         target: ipe_ir::Target::Native,
+        production: true,
         runtime_dep: runtime_dep_from_env(),
         tree_shake_vendored: false,
         ..BuildOptions::default()
@@ -3615,14 +3716,13 @@ pub(crate) fn run_deploy(rest: &[String]) -> Result<(), CliError> {
         |m| build_project_with_options(m, &app_out, &runtime_dir, options.clone()),
     )?;
 
-    // Build the app binary.
     let mut app_cargo = std::process::Command::new(cargo_bin.path());
     app_cargo
         .arg("build")
         .arg("--release")
         .args(["--target", triple.as_str()])
         .current_dir(&app_out);
-    build_emitted_project(&mut app_cargo, "the deploy app", None, &app_out)?;
+    build_emitted_project(&mut app_cargo, "the release app", None, &app_out)?;
 
     // Write the capability enforcement artifacts (ipe.profile + embedded floor).
     let profile = run_sandbox::build_profile(&resolved, driver)?;
@@ -3632,14 +3732,14 @@ pub(crate) fn run_deploy(rest: &[String]) -> Result<(), CliError> {
     // `CARGO_TARGET_DIR` (set by the user or the agent lane), so we resolve
     // it via cargo metadata rather than assuming `app_out/target/`.
     let app_target_dir = cargo_target_directory(&app_out)?;
-    let deploy_bin_name = emitted_bin_name(&app_out);
+    let release_bin_name = emitted_bin_name(&app_out);
     let app_binary = app_target_dir
         .join(triple.as_str())
         .join("release")
-        .join(&deploy_bin_name);
+        .join(&release_bin_name);
     if !app_binary.is_file() {
         return Err(CliError::UsageOwned(format!(
-            "ipe deploy: expected app binary at {} — cargo build succeeded but binary is missing",
+            "ipe release: expected app binary at {} — cargo build succeeded but binary is missing",
             app_binary.display()
         )));
     }
@@ -3662,7 +3762,7 @@ pub(crate) fn run_deploy(rest: &[String]) -> Result<(), CliError> {
         .arg("ipe_wrapper")
         .args(["--target", wrapper_static_plan.triple.as_str()]);
 
-    if matches!(args.mode, cli_args::DeployMode::Embed) {
+    if matches!(args.mode, cli_args::ReleaseMode::Embed) {
         // Embed mode: pass the app binary + profile as env vars so build.rs
         // copies them into OUT_DIR and enables the embed_mode cfg.
         wrapper_cargo
@@ -3676,7 +3776,7 @@ pub(crate) fn run_deploy(rest: &[String]) -> Result<(), CliError> {
 
     build_emitted_project(
         &mut wrapper_cargo,
-        "the deploy wrapper",
+        "the release wrapper",
         None,
         &workspace_root,
     )?;
@@ -3697,7 +3797,7 @@ pub(crate) fn run_deploy(rest: &[String]) -> Result<(), CliError> {
         .join("ipe-wrapper");
 
     let artifact = match args.mode {
-        cli_args::DeployMode::Embed => {
+        cli_args::ReleaseMode::Embed => {
             // Single-file embed: copy only the wrapper (app + profile baked in).
             let dest = bundle_dir.join("ipe-wrapper");
             std::fs::copy(&wrapper_src, &dest).map_err(|e| CliError::Io {
@@ -3708,7 +3808,7 @@ pub(crate) fn run_deploy(rest: &[String]) -> Result<(), CliError> {
             set_executable(&dest)?;
             dest
         }
-        cli_args::DeployMode::Bundle => {
+        cli_args::ReleaseMode::Bundle => {
             // Bundle: wrapper + app + profile as siblings.
             let wrapper_dest = bundle_dir.join("ipe-wrapper");
             let app_dest = bundle_dir.join("ipe-app");
@@ -3738,21 +3838,24 @@ pub(crate) fn run_deploy(rest: &[String]) -> Result<(), CliError> {
         // Post-build report: how the binary is linked, where it landed, and the
         // capability model it will enforce.
         let cap_names: Vec<&'static str> = resolved.union().iter().map(|c| c.as_str()).collect();
-        eprint!("{}", deploy_report(&artifact, &cap_names, args.mode));
+        eprint!(
+            "{}",
+            release_bundle_report(&artifact, &cap_names, args.mode)
+        );
         match args.mode {
-            cli_args::DeployMode::Embed => eprintln!(
+            cli_args::ReleaseMode::Embed => eprintln!(
                 "{}",
                 style::gutter(&format!(
-                    "{} deployed → {} (single self-jailing binary; \
+                    "{} released → {} (single self-jailing binary; \
                      run `--capabilities` to audit)",
                     style::glyph::OK,
                     artifact.display()
                 ))
             ),
-            cli_args::DeployMode::Bundle => eprintln!(
+            cli_args::ReleaseMode::Bundle => eprintln!(
                 "{}",
                 style::gutter(&format!(
-                    "{} deployed (bundle) → {} (run `./ipe-wrapper -- <args>`; \
+                    "{} released (bundle) → {} (run `./ipe-wrapper -- <args>`; \
                      WARNING: ipe-app can be run directly, bypassing the sandbox — \
                      prefer embed mode for production)",
                     style::glyph::OK,
@@ -3765,8 +3868,8 @@ pub(crate) fn run_deploy(rest: &[String]) -> Result<(), CliError> {
 }
 
 /// Inspect the inferred capability model for `entry_path` without building or
-/// writing anything — the body of `ipe deploy --capabilities` / `--show-profile`.
-fn run_deploy_capabilities(
+/// writing anything — the body of `ipe release --capabilities` / `--show-profile`.
+fn run_release_capabilities(
     entry_path: &Path,
     manifest: Option<&Path>,
     format: cli_args::OutputFormat,
@@ -3784,15 +3887,18 @@ fn run_deploy_capabilities(
     Ok(())
 }
 
-/// The human-readable post-build deploy report: link kind, artifact path, and
-/// the enforced capability model. Deploy always links a static musl binary, so
-/// that fact is stated plainly rather than inferred.
-fn deploy_report(artifact: &Path, capabilities: &[&str], mode: cli_args::DeployMode) -> String {
+/// The human-readable post-build report for a native-bearing release bundle:
+/// link kind, artifact path, and the enforced capability model.
+fn release_bundle_report(
+    artifact: &Path,
+    capabilities: &[&str],
+    mode: cli_args::ReleaseMode,
+) -> String {
     use std::fmt::Write as _;
 
     let kind = match mode {
-        cli_args::DeployMode::Embed => "single self-jailing binary",
-        cli_args::DeployMode::Bundle => "multi-file bundle (wrapper + app + profile)",
+        cli_args::ReleaseMode::Embed => "single self-jailing binary",
+        cli_args::ReleaseMode::Bundle => "multi-file bundle (wrapper + app + profile)",
     };
     let mut body = String::new();
     let _ = writeln!(body, "link: static (musl)");
@@ -3833,7 +3939,7 @@ fn find_workspace_root() -> Result<PathBuf, CliError> {
             Some(p) => candidate = p,
             None => {
                 return Err(CliError::UsageOwned(
-                    "ipe deploy: cannot locate workspace root (no Cargo.toml with [workspace] \
+                    "ipe release: cannot locate workspace root (no Cargo.toml with [workspace] \
                      found in any parent directory)"
                         .to_owned(),
                 ));

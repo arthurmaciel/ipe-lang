@@ -13,9 +13,9 @@
 -- NOT a `Task`. Reach for it to inspect a value mid-expression while
 -- developing, then remove it.
 --
--- DEV-ONLY, exactly like Elm's `Debug` under `--optimize`: a PRODUCTION
--- build (`ipe build --optimize`) REJECTS any `Debug.*` use with a clear
--- diagnostic (IPE-L0140) rather than silently stripping or shipping it.
+-- DEV-ONLY: `ipe release` REJECTS any `Debug.*` use with a clear diagnostic
+-- (IPE-L0140) rather than silently stripping or shipping it. Use `ipe build`
+-- or `ipe run` during development.
 module Ipe.Debug exposing
     ( log
     )

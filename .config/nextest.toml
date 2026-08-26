@@ -50,7 +50,7 @@ filter = 'binary(watch_sigterm) | binary(watch_integration) | binary(server_e2e)
 test-group = 'heavy-server-e2e'
 
 [[profile.ci.overrides]]
-filter = 'binary(build_no_arg) | binary(deploy_subcommand)'
+filter = 'binary(build_no_arg) | binary(release_subcommand)'
 test-group = 'cwd-mutating'
 
 # The parity probes compile every golden fixture twice (clean + incremental),
@@ -65,5 +65,5 @@ filter = 'binary(watch_sigterm) | binary(watch_integration) | binary(server_e2e)
 test-group = 'heavy-server-e2e'
 
 [[profile.default.overrides]]
-filter = 'binary(build_no_arg) | binary(deploy_subcommand)'
+filter = 'binary(build_no_arg) | binary(release_subcommand)'
 test-group = 'cwd-mutating'

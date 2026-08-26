@@ -1,7 +1,7 @@
 //! Toolchain-free jailed deploy launcher.
 //!
-//! `ipe-wrapper` is the entry point of a deploy bundle produced by
-//! `ipe deploy`. It locates `ipe-app` and `ipe.profile` by a FIXED RELATIVE
+//! `ipe-wrapper` is the entry point of a release bundle produced by
+//! `ipe release`. It locates `ipe-app` and `ipe.profile` by a FIXED RELATIVE
 //! PATH next to the wrapper binary (no `cargo`/toolchain dependency), verifies
 //! the profile against the capability floor embedded in `ipe-app`, and execs
 //! the app inside the sandbox jail. Every verification failure is
@@ -262,7 +262,7 @@ fn exec_after_verify(
     app_path: &std::path::Path,
     app_args: &[OsString],
 ) -> ExitCode {
-    // The marker's ABSENCE means the binary was not built with `ipe deploy`'s
+    // The marker's ABSENCE means the binary was not built with `ipe release`'s
     // embedded floor. Refuse — we cannot verify confinement correctness without
     // the floor.
     let Some(floor) = run_jail::scan_capfloor(app_bytes) else {
