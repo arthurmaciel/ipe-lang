@@ -13,6 +13,80 @@ mod support;
 
 type TestResult = Result<(), Box<dyn Error>>;
 
+/// A minimal Web-shape TEA app whose view mounts one `Ui.widget` over a
+/// `customElement` handle — the smallest program that ships browser JS, so its
+/// inferred capability set must contain `custom-element`.
+const WIDGET_APP: &str = r#"module Main exposing (main)
+
+import Ipe.Tea.Web as Web
+import Ipe.Ui as Ui
+import Ipe.Tea.Web.Cmd as Cmd
+import Ipe.Tea.Web.Sub as Sub
+import Ipe.String as String
+
+type alias WidgetState = { count : Int }
+
+type WidgetUp = Bumped Int
+
+type Msg = FromWidget WidgetUp
+
+type alias Model = { count : Int }
+
+counter : CustomElement WidgetState WidgetUp
+counter = customElement "js/counter.js"
+
+init : a -> ( Model, Cmd.Cmd Msg )
+init _req =
+    ( { count = 0 }, Cmd.none )
+
+update : Msg -> Model -> ( Model, Cmd.Cmd Msg )
+update msg model =
+    case msg of
+        FromWidget (Bumped n) ->
+            ( { count = model.count + n }, Cmd.none )
+
+view : Model -> Element Msg
+view model =
+    Ui.column []
+        [ Ui.widget counter { count = model.count } FromWidget
+        , Ui.text (String.fromInt model.count)
+        ]
+
+subscriptions : Model -> Sub.Sub Msg
+subscriptions _model =
+    Sub.none
+
+main =
+    Web.app
+        { init = init, update = update, view = view, subscriptions = subscriptions
+        , routes = [], notFound = FromWidget (Bumped 0)
+        }
+"#;
+
+/// The author widget-hook JS. Its exact bytes are what the served page SRI pins;
+/// present so the build path's widget-file gate is satisfied when a test builds.
+const COUNTER_JS: &str =
+    "export function mount(host, emit) {\n  return { onState(state) {} };\n}\n";
+
+/// Materialise a widget project (`package.ipe` + `src/Main.ipe` + `src/js/…`)
+/// under a unique temp dir, returning the dir. The caller removes it.
+fn widget_project(tag: &str) -> Result<PathBuf, Box<dyn Error>> {
+    let dir = std::env::temp_dir().join(format!(
+        "ipe-ce-cap-{tag}-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("src/js"))?;
+    std::fs::write(
+        dir.join("package.ipe"),
+        "module Package exposing (package)\n\n\npackage =\n    Package.named \"widgetpkg\"\n        |> Package.version \"0.1.0\"\n",
+    )?;
+    std::fs::write(dir.join("src/Main.ipe"), WIDGET_APP)?;
+    std::fs::write(dir.join("src/js/counter.js"), COUNTER_JS)?;
+    Ok(dir)
+}
+
 /// Absolute path to a fixture under this crate's `tests/fixtures/capabilities`.
 fn fixture(name: &str) -> PathBuf {
     support::manifest_dir()
@@ -126,5 +200,232 @@ fn acceptance_http_and_clock_example_infers_network_and_clock() -> TestResult {
     let declared = BTreeSet::from([Capability::Network, Capability::Clock]);
     let r = verify_capabilities(&example, &declared);
     assert!(r.is_ok(), "the exact inferred set must verify: {r:?}");
+    Ok(())
+}
+
+// ── the `custom-element` disclosure axis ────────────────────────────────────
+
+/// A program that mounts a `Ui.widget` ships browser JS, so its inferred
+/// capability set must contain `custom-element`. Proven through the same
+/// `verify_capabilities` inference `ipe capabilities` reports, over a real
+/// Web-shape widget app.
+#[test]
+fn a_widget_program_discloses_custom_element() -> TestResult {
+    let dir = widget_project("infer")?;
+    let entry = dir.join("src/Main.ipe");
+    // Declaring exactly `{custom-element}` must verify: it is the whole inferred
+    // set of a widget app that reaches no other effect.
+    let declared = BTreeSet::from([Capability::CustomElement]);
+    let r = verify_capabilities(&entry, &declared);
+    assert!(
+        r.is_ok(),
+        "a widget program's inferred set is exactly {{custom-element}}: {r:?}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+    Ok(())
+}
+
+/// Fail-closed: a program that ships a widget but declares NOTHING on the
+/// `custom-element` axis is rejected — a widget-bearing module can never hide the
+/// disclosure. This is the load-bearing invariant.
+#[test]
+fn a_widget_program_that_hides_custom_element_is_rejected() -> TestResult {
+    let dir = widget_project("hide")?;
+    let entry = dir.join("src/Main.ipe");
+    // Declare the empty set even though the program ships a widget.
+    let declared = BTreeSet::new();
+    let r = verify_capabilities(&entry, &declared);
+    assert!(
+        matches!(
+            &r,
+            Err(ipe::CliError::CapabilityMismatch { missing, .. })
+                if missing.contains(&"custom-element")
+        ),
+        "a widget program that omits `custom-element` must be rejected as under-declared, got: {r:?}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+    Ok(())
+}
+
+/// A Web-shape app that CONSTRUCTS a `customElement` handle at top level but never
+/// mounts it in `view`. The emitter still serves the author JS (the handle is a
+/// served asset the moment it is constructed), so disclosure must follow serving:
+/// the inferred set contains `custom-element` even though no `Ui.widget` is
+/// reachable and the handle DCEs out of the lowered program. The prior kernel-only
+/// inference reported nothing here while the emitter served the JS — a
+/// served-but-undisclosed browser-JS hole. The `js/counter.js` marker in the
+/// served bytes is the same file the mounted-case project ships.
+const UNMOUNTED_WIDGET_APP: &str = r#"module Main exposing (main)
+
+import Ipe.Tea.Web as Web
+import Ipe.Ui as Ui
+import Ipe.Tea.Web.Cmd as Cmd
+import Ipe.Tea.Web.Sub as Sub
+import Ipe.String as String
+
+type alias WidgetState = { count : Int }
+
+type WidgetUp = Bumped Int
+
+type Msg = Noop
+
+type alias Model = { count : Int }
+
+counter : CustomElement WidgetState WidgetUp
+counter = customElement "js/counter.js"
+
+init : a -> ( Model, Cmd.Cmd Msg )
+init _req =
+    ( { count = 0 }, Cmd.none )
+
+update : Msg -> Model -> ( Model, Cmd.Cmd Msg )
+update msg model =
+    case msg of
+        Noop ->
+            ( model, Cmd.none )
+
+view : Model -> Element Msg
+view model =
+    Ui.column []
+        [ Ui.text (String.fromInt model.count)
+        ]
+
+subscriptions : Model -> Sub.Sub Msg
+subscriptions _model =
+    Sub.none
+
+main =
+    Web.app
+        { init = init, update = update, view = view, subscriptions = subscriptions
+        , routes = [], notFound = Noop
+        }
+"#;
+
+/// Materialise an unmounted-handle widget project (a `customElement` handle
+/// constructed but never mounted), returning its dir. The caller removes it.
+fn unmounted_widget_project(tag: &str) -> Result<PathBuf, Box<dyn Error>> {
+    let dir = std::env::temp_dir().join(format!(
+        "ipe-ce-unmounted-{tag}-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("src/js"))?;
+    std::fs::write(
+        dir.join("package.ipe"),
+        "module Package exposing (package)\n\n\npackage =\n    Package.named \"unmountedpkg\"\n        |> Package.version \"0.1.0\"\n",
+    )?;
+    std::fs::write(dir.join("src/Main.ipe"), UNMOUNTED_WIDGET_APP)?;
+    std::fs::write(dir.join("src/js/counter.js"), COUNTER_JS)?;
+    Ok(dir)
+}
+
+/// An unmounted `customElement` handle still ships browser JS, so its inferred
+/// capability set contains `custom-element`: declaring exactly `{custom-element}`
+/// verifies. Disclosure derives from the served-asset walk, not from a reachable
+/// `Ui.widget` kernel.
+#[test]
+fn an_unmounted_handle_still_discloses_custom_element() -> TestResult {
+    let dir = unmounted_widget_project("infer")?;
+    let entry = dir.join("src/Main.ipe");
+    let declared = BTreeSet::from([Capability::CustomElement]);
+    let r = verify_capabilities(&entry, &declared);
+    assert!(
+        r.is_ok(),
+        "an unmounted-handle app's inferred set is exactly {{custom-element}}: {r:?}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+    Ok(())
+}
+
+/// Fail-closed on the unmounted-handle case: constructing a `customElement` handle
+/// ships its JS, so declaring NOTHING is rejected with a `custom-element`-naming
+/// mismatch — the exact hole a mounted-only test never exercised.
+#[test]
+fn an_unmounted_handle_that_hides_custom_element_is_rejected() -> TestResult {
+    let dir = unmounted_widget_project("hide")?;
+    let entry = dir.join("src/Main.ipe");
+    let declared = BTreeSet::new();
+    let r = verify_capabilities(&entry, &declared);
+    assert!(
+        matches!(
+            &r,
+            Err(ipe::CliError::CapabilityMismatch { missing, .. })
+                if missing.contains(&"custom-element")
+        ),
+        "an unmounted-handle app that omits `custom-element` must be rejected as under-declared, got: {r:?}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+    Ok(())
+}
+
+/// Transitivity: a `customElement` handle constructed in an IMPORTED module and
+/// never mounted anywhere still ships its JS, so the entry's inferred set
+/// discloses `custom-element`. The served-asset walk covers the whole linked
+/// program, so a handle a dependency constructs is disclosed by the consumer.
+#[test]
+fn a_handle_constructed_in_an_imported_module_discloses_custom_element() -> TestResult {
+    let dir = std::env::temp_dir().join(format!(
+        "ipe-ce-transitive-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("src/js"))?;
+    std::fs::write(
+        dir.join("package.ipe"),
+        "module Package exposing (package)\n\n\npackage =\n    Package.named \"transpkg\"\n        |> Package.version \"0.1.0\"\n",
+    )?;
+    // Module B constructs the handle; nothing mounts it.
+    std::fs::write(
+        dir.join("src/Widgets.ipe"),
+        "module Widgets exposing (counter)\n\ntype alias WidgetState = { count : Int }\n\ntype WidgetUp = Bumped Int\n\ncounter : CustomElement WidgetState WidgetUp\ncounter = customElement \"js/counter.js\"\n",
+    )?;
+    // Main imports Widgets but never mounts `counter`.
+    std::fs::write(
+        dir.join("src/Main.ipe"),
+        "module Main exposing (main)\n\nimport Ipe.Tea.Web as Web\nimport Ipe.Ui as Ui\nimport Ipe.Tea.Web.Cmd as Cmd\nimport Ipe.Tea.Web.Sub as Sub\nimport Ipe.String as String\nimport Widgets\n\ntype Msg = Noop\n\ntype alias Model = { count : Int }\n\ninit : a -> ( Model, Cmd.Cmd Msg )\ninit _req =\n    ( { count = 0 }, Cmd.none )\n\nupdate : Msg -> Model -> ( Model, Cmd.Cmd Msg )\nupdate msg model =\n    case msg of\n        Noop ->\n            ( model, Cmd.none )\n\nview : Model -> Element Msg\nview model =\n    Ui.column [] [ Ui.text (String.fromInt model.count) ]\n\nsubscriptions : Model -> Sub.Sub Msg\nsubscriptions _model =\n    Sub.none\n\nmain =\n    Web.app\n        { init = init, update = update, view = view, subscriptions = subscriptions\n        , routes = [], notFound = Noop\n        }\n",
+    )?;
+    std::fs::write(dir.join("src/js/counter.js"), COUNTER_JS)?;
+
+    let entry = dir.join("src/Main.ipe");
+    let declared = BTreeSet::from([Capability::CustomElement]);
+    let r = verify_capabilities(&entry, &declared);
+    assert!(
+        r.is_ok(),
+        "a handle constructed in an imported module must disclose `custom-element` transitively: {r:?}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+    Ok(())
+}
+
+/// The manifest-less single-file audit path (the `entry` alone, no `package.ipe`
+/// up-tree) must disclose `custom-element` for a constructed-but-unmounted
+/// `customElement` handle. This is the seam `ipe deploy … --capabilities` and the
+/// run-jail resolver consume via [`ipe::run_sandbox::resolve_for_run`]; routing it
+/// through the served-widget-aware inference keeps it consistent with `ipe
+/// capabilities` / `package audit`. The `customElement "js/counter.js"` literal
+/// resolves against the lone entry's own directory, so the JS sits beside it.
+#[test]
+fn a_manifest_less_single_file_handle_discloses_custom_element() -> TestResult {
+    let dir = std::env::temp_dir().join(format!(
+        "ipe-ce-singlefile-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("js"))?;
+    std::fs::write(dir.join("Main.ipe"), UNMOUNTED_WIDGET_APP)?;
+    std::fs::write(dir.join("js/counter.js"), COUNTER_JS)?;
+
+    let entry = dir.join("Main.ipe");
+    let resolved = ipe::run_sandbox::resolve_for_run(None, None, &entry)?;
+    assert!(
+        resolved.inferred.contains(&Capability::CustomElement),
+        "a manifest-less single file that constructs a served widget handle must \
+         disclose `custom-element` from the single-file audit path, got: {:?}",
+        resolved.inferred
+    );
+    let _ = std::fs::remove_dir_all(&dir);
     Ok(())
 }

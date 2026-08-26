@@ -1082,7 +1082,7 @@ struct CollectedSources {
 ///
 /// This is the file-path shorthand's source-collection step, shared by the
 /// build path ([`build_with_sibling_discovery_with_options`]) and the
-/// single-entry analysis paths ([`lower_entry`], [`emit_ir_text`]) so all
+/// single-entry analysis paths ([`lower_entry_via_graph`], [`emit_ir_text`]) so all
 /// three see the SAME module set — a program that imports a compiled-source
 /// stdlib module resolves identically whether it is built or merely analysed.
 /// It is the equivalent of `Graph.discoverModulesMulti [srcRoot] entryPath` in
@@ -4600,16 +4600,53 @@ pub fn emit_ir_text(entry: &Path) -> Result<String, CliError> {
 // `capabilities` — report / verify a program's inferred capability set
 // ===========================================================================
 
-/// Run parse → canon → types → lower over a single `.ipe` entry, returning the
-/// lowered program. Shares the exact pipeline [`emit_ir_text`] uses so the two
-/// analysis surfaces cannot diverge.
+/// The whole set of security capabilities a program discloses: the kernel-derived
+/// set [`ipe_lower::program_capabilities`] infers from the lowered program, PLUS
+/// [`ipe_ir::Capability::CustomElement`] whenever the program constructs any
+/// `customElement` handle.
 ///
-/// # Errors
-/// [`CliError::Pipeline`] when the compiler rejects the program;
-/// [`CliError::Io`] when the entry file cannot be read.
-pub(crate) fn lower_entry(entry: &Path) -> Result<ipe_ir::Program, CliError> {
-    let (_db, program) = lower_entry_via_graph(entry)?;
-    Ok((*program).clone())
+/// The custom-element axis is derived from the SAME walk emission serves from —
+/// [`ipe_canon::custom_element_gate::collect_widget_files`] over the pre-DCE
+/// `linked` module — so the served-asset set and the disclosed-capability set are
+/// one set by construction. A handle that is constructed but never mounted (and
+/// so lowers to a capability-free leaf that DCE may drop) still ships its browser
+/// JS through the emitted `widget_assets::register`, and this derivation discloses
+/// it regardless of the lowered program's reachability. `collect_widget_files`
+/// walks the whole linked program, so a handle constructed in an imported module
+/// is disclosed transitively.
+///
+/// This is the single inference point every capability consumer routes through —
+/// the report, the declared-set verify, package inference, and index admission —
+/// so none of them can disclose a different set than the emitter serves.
+pub(crate) fn capabilities_including_served_widgets(
+    db: &dyn ipe_db::Db,
+    root: ipe_db::SourceRoot,
+    entry_file: ipe_db::SourceFile,
+    program: &ipe_ir::Program,
+) -> std::collections::BTreeSet<ipe_ir::Capability> {
+    let mut caps = ipe_lower::program_capabilities(program);
+    if program_constructs_a_widget(db, root, entry_file) {
+        caps.insert(ipe_ir::Capability::CustomElement);
+    }
+    caps
+}
+
+/// True when the linked program constructs at least one `customElement` handle —
+/// i.e. the emitter serves at least one widget asset for it. Reuses the exact
+/// [`ipe_canon::custom_element_gate::collect_widget_files`] walk emission uses, so
+/// the serve decision and this disclose decision are the same decision.
+///
+/// A program whose linking fails has no served widget (nothing is emitted), so a
+/// link failure conservatively contributes no widget disclosure here; the failing
+/// pipeline surfaces its own diagnostic through the caller's own lowering.
+fn program_constructs_a_widget(
+    db: &dyn ipe_db::Db,
+    root: ipe_db::SourceRoot,
+    entry_file: ipe_db::SourceFile,
+) -> bool {
+    ipe_db::linked_program(db, root, entry_file).is_ok_and(|linked| {
+        !ipe_canon::custom_element_gate::collect_widget_files(&linked.module).is_empty()
+    })
 }
 
 /// Lower a single `.ipe` entry through the SAME injection-aware source-graph
@@ -4641,10 +4678,10 @@ fn lower_entry_via_graph(
 /// source root, and the entry module's [`ipe_db::SourceFile`] handle — the
 /// product of sibling discovery + compiled-source stdlib injection shared by
 /// every single-entry analysis path.
-struct SourceGraph {
-    db: ipe_db::IpeDatabase,
-    source_root: ipe_db::SourceRoot,
-    entry_file: ipe_db::SourceFile,
+pub(crate) struct SourceGraph {
+    pub(crate) db: ipe_db::IpeDatabase,
+    pub(crate) source_root: ipe_db::SourceRoot,
+    pub(crate) entry_file: ipe_db::SourceFile,
     /// The whole module set (path → (file, src)) — every module a diagnostic
     /// span may index into, so a rejecting query can be framed against the
     /// source that OWNS the span rather than the entry file (the caret bug).
@@ -4670,7 +4707,7 @@ impl SourceGraph {
     /// # Errors
     /// [`CliError::Pipeline`] carrying the first compiler diagnostic; the query
     /// closure's own error otherwise.
-    fn run_attributed<T>(
+    pub(crate) fn run_attributed<T>(
         &self,
         blame_path: &Path,
         run_query: impl FnOnce(
@@ -4735,7 +4772,7 @@ impl SourceGraph {
 /// # Errors
 /// [`CliError::Pipeline`] when the entry does not parse; [`CliError::Io`] on any
 /// filesystem failure; [`CliError::Usage`] if the entry is not in the built map.
-fn build_source_graph(entry: &Path) -> Result<SourceGraph, CliError> {
+pub(crate) fn build_source_graph(entry: &Path) -> Result<SourceGraph, CliError> {
     let mut collected = collect_entry_and_siblings(entry)?;
     let injected =
         project::inject_compiled_std_closure(&mut collected.sources, &mut collected.discovered);
@@ -5682,8 +5719,16 @@ pub(crate) fn run_capabilities(rest: &[String]) -> Result<(), CliError> {
     // `ipe capabilities` in a project dir passes `.` straight to the reader and
     // fails with a raw "Is a directory" io error.
     let entry = resolve_analysis_entry(&arg)?;
-    let program = lower_entry(&entry)?;
-    let caps = ipe_lower::program_capabilities(&program);
+    let graph = build_source_graph(&entry)?;
+    let program = graph.run_attributed(&entry, |db, root, file| {
+        ipe_db::lower_program(db, root, file)
+    })?;
+    let caps = capabilities_including_served_widgets(
+        &graph.db,
+        graph.source_root,
+        graph.entry_file,
+        &program,
+    );
     let names: Vec<&'static str> = caps.iter().map(|c| c.as_str()).collect();
     print!(
         "{}",
@@ -5918,8 +5963,16 @@ pub fn verify_capabilities(
     entry: &Path,
     declared: &std::collections::BTreeSet<ipe_ir::Capability>,
 ) -> Result<(), CliError> {
-    let program = lower_entry(entry)?;
-    let inferred = ipe_lower::program_capabilities(&program);
+    let graph = build_source_graph(entry)?;
+    let program = graph.run_attributed(entry, |db, root, file| {
+        ipe_db::lower_program(db, root, file)
+    })?;
+    let inferred = capabilities_including_served_widgets(
+        &graph.db,
+        graph.source_root,
+        graph.entry_file,
+        &program,
+    );
     if *declared == inferred {
         return Ok(());
     }
@@ -5994,7 +6047,12 @@ pub fn infer_package_capabilities(
         };
         match ipe_db::lower_program(&db, source_root, entry_file) {
             Ok(program) => {
-                inferred.extend(ipe_lower::program_capabilities(&program));
+                inferred.extend(capabilities_including_served_widgets(
+                    &db,
+                    source_root,
+                    entry_file,
+                    &program,
+                ));
                 any_lowered = true;
             }
             Err((diag, _)) => {
@@ -6682,10 +6740,11 @@ mod tests {
         );
 
         // The same source-graph pipeline backs `ipe capabilities` via
-        // `lower_entry`; it must resolve identically (a pure test program).
+        // `lower_entry_via_graph`; it must resolve identically (a pure test
+        // program).
         assert!(
-            lower_entry(&entry).is_ok(),
-            "lower_entry (capabilities path) must resolve `Ipe.Test` too"
+            lower_entry_via_graph(&entry).is_ok(),
+            "lower_entry_via_graph (capabilities path) must resolve `Ipe.Test` too"
         );
     }
 

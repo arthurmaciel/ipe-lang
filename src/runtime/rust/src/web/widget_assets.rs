@@ -1,7 +1,7 @@
-//! Server-driven `Ui.widget` glue generation + SRI-pinned asset serving (WP5).
+//! Server-driven `Ui.widget` glue generation + SRI-pinned asset serving.
 //!
-//! WP4 renders a `<ipe-ce-<hex> state="…">` node whose `state` is an
-//! entity-escaped down-JSON attribute and whose up-events post through
+//! The Web-shape renderer emits a `<ipe-ce-<hex> state="…">` node whose `state`
+//! is an entity-escaped down-JSON attribute and whose up-events post through
 //! `/_ipe/event`. But nothing in the browser DEFINES that element and the
 //! author's widget JS is never served, so the widget renders inert. This module
 //! closes that gap for the server-driven (Web-shape) target:
@@ -28,11 +28,11 @@
 //!   injection is impossible by construction (Security #4).
 //!
 //! * **Up-wiring.** `mount`'s `emit(up)` routes through `__ipeEmitWidgetUp(host,
-//!   up)`, which reads the node's `data-ipe-hid` (the ipe-id the WP4 render
+//!   up)`, which reads the node's `data-ipe-hid` (the ipe-id the renderer
 //!   already stamps for the `OnWidget` handler) and calls the EXISTING
 //!   `__ipeSend("ipe-widget", [JSON.stringify(up)], hid)` — inheriting the
 //!   session cookie + CSRF token + `/_ipe/event` envelope unchanged. Server-side
-//!   the posted body still flows through the WP4 total, fail-closed
+//!   the posted body still flows through the total, fail-closed
 //!   `seal_decode_serde` up-decoder (drop on mismatch), which this module does
 //!   NOT touch.
 //!
@@ -40,7 +40,7 @@
 //!
 //! * The down-state reaches the client only as `JSON.parse` of a
 //!   browser-unescaped attribute — data, never `eval`, never spliced into a
-//!   script (Security #1, inherited from WP4).
+//!   script (Security #1).
 //! * Every generated script is EXTERNAL and SRI-pinned; no inline script and no
 //!   `unsafe-inline`/`unsafe-eval` is introduced, so the page CSP is unchanged
 //!   (Security #3/#4).
@@ -64,6 +64,16 @@ pub struct WidgetAsset {
     pub content: String,
 }
 
+/// The single SHA-256 digest of one widget file's content — the ONE hash every
+/// content-addressing form below derives from. Making every form (the cache-bust
+/// URL segment and the SRI) a rendering of this one digest is what guarantees one
+/// hash from source to browser: they cannot disagree with the served bytes because
+/// they are all this digest over those exact bytes.
+fn content_digest(content: &str) -> [u8; 32] {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(content.as_bytes()).into()
+}
+
 /// Content-addressing for one asset: `(hex16, base64full)` over SHA-256(content).
 /// `hex16` (first 16 hex chars of the digest) is the cache-busting URL segment;
 /// `base64full` (standard base64 of the full 32-byte digest) is the SRI value.
@@ -71,8 +81,7 @@ pub struct WidgetAsset {
 /// disagree because they are computed from the same bytes.
 fn content_hashes(content: &str) -> (String, String) {
     use base64::{Engine as _, engine::general_purpose::STANDARD as B64};
-    use sha2::{Digest, Sha256};
-    let digest: [u8; 32] = Sha256::digest(content.as_bytes()).into();
+    let digest = content_digest(content);
     let hex16: String = digest[..8].iter().map(|b| format!("{b:02x}")).collect();
     let base64full = B64.encode(digest);
     (hex16, base64full)
@@ -209,7 +218,7 @@ if (!customElements.get({tag:?})) {{
 /// attribute yields `null` rather than throwing (the down direction is not the
 /// attacker-controlled edge, but a throw in `attributeChangedCallback` must not
 /// wedge the element). `__ipeEmitWidgetUp` reads the node's `data-ipe-hid` (the
-/// ipe-id the WP4 render stamps for the `OnWidget` handler) and posts the
+/// ipe-id the renderer stamps for the `OnWidget` handler) and posts the
 /// JSON-encoded `up` value through `__ipeSend` under the fixed `ipe-widget` event
 /// name — the SAME envelope, CSRF token, and session cookie a click uses. If the
 /// client core (`__ipeSend`) has not loaded, the emit is dropped with a console
@@ -351,6 +360,51 @@ mod tests {
         assert!(!GLUE_PRELUDE.contains("eval("));
         // The up-emit reuses the existing wire, never inventing a new fetch.
         assert!(GLUE_PRELUDE.contains("__ipeSend(\"ipe-widget\""));
+    }
+
+    /// The served URL segment and the page SRI a widget file pins are one
+    /// `sha256(content)` — so the URL a page requests and the integrity it checks
+    /// that response against can never disagree with the served bytes. Proven by
+    /// deriving the SRI base64 straight from the served URL's digest and matching
+    /// `widget_asset_integrity`.
+    #[test]
+    fn served_url_and_page_sri_bind_to_one_digest() {
+        use base64::{Engine as _, engine::general_purpose::STANDARD as B64};
+        let content = "export function mount(host, emit){ return { onState(){} }; }";
+        let digest = content_digest(content);
+        // The SRI the page pins is base64 of the SAME digest the served URL's
+        // hex16 prefix is taken from.
+        let sri_from_digest = format!("sha256-{}", B64.encode(digest));
+        assert_eq!(
+            sri_from_digest,
+            widget_asset_integrity(content),
+            "the page SRI must be base64 of the served bytes' digest — one hash from source to browser"
+        );
+        let hex16: String = digest[..8].iter().map(|b| format!("{b:02x}")).collect();
+        assert_eq!(
+            widget_asset_path(content),
+            format!("/_ipe/widget.{hex16}.js")
+        );
+    }
+
+    /// A tampered widget file (one changed byte) yields a DIFFERENT served URL and
+    /// a different SRI — so a page pinning the honest file's integrity refuses the
+    /// tampered bytes. This is the fail-closed catch: a swapped file cannot pass a
+    /// pin computed over the honest bytes.
+    #[test]
+    fn a_tampered_widget_file_diverges_from_the_served_pin() {
+        let honest = "export function mount(host, emit){ return { onState(){} }; }";
+        let tampered = "export function mount(host, emit){ steal(); return { onState(){} }; }";
+        assert_ne!(
+            widget_asset_path(honest),
+            widget_asset_path(tampered),
+            "a tampered widget file must not share the honest file's served URL"
+        );
+        assert_ne!(
+            widget_asset_integrity(honest),
+            widget_asset_integrity(tampered),
+            "a tampered widget file must not share the honest file's page SRI"
+        );
     }
 
     #[test]

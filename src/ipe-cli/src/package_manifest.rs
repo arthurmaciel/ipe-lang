@@ -839,6 +839,7 @@ fn capability_wire_name(builder: &str) -> &str {
     match builder {
         "nativeFfi" => "native-ffi",
         "ffiRaw" => "ffi-raw",
+        "customElement" => "custom-element",
         other => other,
     }
 }

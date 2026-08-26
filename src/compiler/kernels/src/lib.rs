@@ -9129,6 +9129,15 @@ impl StdlibKernel {
             | Self::SystemSetenv
             | Self::SystemUnsetenv => Some(Capability::Env),
             Self::ProcessRun => Some(Capability::Subprocess),
+            // `Ui.widget` places a browser custom-element widget: its reachable
+            // presence means the program serves author-written JS that runs in
+            // the page with full DOM authority. That shipped-JS surface is a
+            // security-relevant disclosure (declared trust, SRI-pinned but not
+            // sandboxed) — the `custom-element` axis. The `customElement "<path>"`
+            // handle is a reserved constructor, not a kernel, and only `Ui.widget`
+            // consumes it, so tagging this one kernel is the whole inference point:
+            // any module whose reachable code binds a widget discloses the axis.
+            Self::UiWidget => Some(Capability::CustomElement),
             Self::TimeNow
             | Self::TimeSleep
             | Self::TimeUnixMillis
@@ -9583,7 +9592,6 @@ impl StdlibKernel {
             | Self::UiText
             | Self::UiHtml
             | Self::UiCells
-            | Self::UiWidget
             | Self::UiNode
             | Self::UiTaggedNode
             | Self::UiButton

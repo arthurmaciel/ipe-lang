@@ -152,14 +152,18 @@ pub fn resolve_refusal(
     union: &BTreeSet<Capability>,
 ) -> Result<bool, CliError> {
     // The axes that would run with the user's full authority (clock/random carry
-    // no OS control, and `unsafe` is a provenance label with no isolation surface,
+    // no OS control, `unsafe` is a provenance label with no isolation surface, and
+    // `custom-element` is a browser-side disclosure the SERVER jail never governs,
     // so none of them is part of the jail-authority warning).
     let names: Vec<&str> = union
         .iter()
         .filter(|c| {
             !matches!(
                 c,
-                Capability::Clock | Capability::Random | Capability::Unsafe
+                Capability::Clock
+                    | Capability::Random
+                    | Capability::Unsafe
+                    | Capability::CustomElement
             )
         })
         .map(|c| c.as_str())
@@ -498,10 +502,23 @@ pub fn resolve_for_run(
             declared: m.capabilities.clone(),
         })
     } else {
-        // A single file: inference over the entry alone, no declared set.
-        let program = crate::lower_entry(entry)?;
+        // A single file: inference over the entry alone, no declared set. The
+        // inference routes through the same served-widget-aware SSOT every other
+        // capability-audit surface uses, so a constructed `customElement` handle
+        // (whose JS the emitter serves) discloses `custom-element` here too,
+        // whether or not a `Ui.widget` mounts it.
+        let graph = crate::build_source_graph(entry)?;
+        let program = graph.run_attributed(entry, |db, root, file| {
+            ipe_db::lower_program(db, root, file)
+        })?;
+        let inferred = crate::capabilities_including_served_widgets(
+            &graph.db,
+            graph.source_root,
+            graph.entry_file,
+            &program,
+        );
         Ok(ResolvedCapabilities {
-            inferred: ipe_lower::program_capabilities(&program),
+            inferred,
             declared: BTreeSet::new(),
         })
     }
