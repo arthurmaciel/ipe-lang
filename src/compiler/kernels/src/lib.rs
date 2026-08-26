@@ -2048,14 +2048,16 @@ pub enum StdlibKernel {
     // ── Ipe.Js — the raw typed transport across the Ipê↔JS seam (ports) ──
     // `Js.send : a -> Cmd msg` (outbound) and
     // `Js.subscribe : Decoder a -> (a -> msg) -> Sub msg` (inbound). The crossing
-    // value `a` must be a plain, closed, concrete SEAL type: the CONCRETE argument
-    // type is checked fail-closed at canon (`port_boundary_seal_rejection`, the
-    // same seal predicate `CustomElement down up` uses), so a `Secret`/reserved-
-    // sink payload and a `Decoder Value` subscription are both rejected (IPE-N0039)
-    // — the untyped channel cannot be spelled. Both disclose the `js-port`
-    // capability. Emission is fail-closed (IPE-L0135, `Feature::JsPortTransport`)
-    // until the per-target live transport ships, so the value type-resolves and is
-    // seal-checked but no undenoted value reaches codegen.
+    // value `a` must be a plain, closed, concrete SEAL type: the CONCRETE inferred
+    // argument type is checked fail-closed at lowering (`reject_illegal_js_port_seal`,
+    // the same seal `CustomElement down up` enforces, extended transitively through
+    // ADT payloads), so a `Secret`/reserved-sink payload and a `Decoder Value`
+    // subscription are both rejected (IPE-L0148) — a secret can never cross to JS and
+    // the untyped channel cannot be spelled. On passing the seal the port lowers to
+    // the live per-target transport (IPE-L0149): a server-driven crossing rides the
+    // event-class wire behind the fail-closed seal decoder, a client-wasm crossing
+    // delivers in-process through the seal codec. Both disclose the `js-port`
+    // capability.
     JsSend,      // a -> Cmd msg (arity 1)
     JsSubscribe, // Decoder a -> (a -> msg) -> Sub msg (arity 2)
     // ── Ipe.Env — build-time-embedded public config (wasm M5 residual) ──
@@ -3968,9 +3970,10 @@ impl StdlibKernel {
                 Tea,
                 "sub_subscribe_ws_message",
             ),
-            // The runtime fn names here are placeholders: a port value is refused
-            // fail-closed at emission (IPE-L0135) until the live per-target
-            // transport ships, so neither name is ever emitted.
+            // The runtime fn names here name the live per-target port transport
+            // (IPE-L0149's lowering): `js_send` posts the seal-encoded payload,
+            // `js_subscribe` decodes an inbound payload through the fail-closed
+            // seal decoder.
             Self::JsSend => d("Js", "send", 1, Tea, "js_send"),
             Self::JsSubscribe => d("Js", "subscribe", 2, Tea, "js_subscribe"),
             Self::EnvPublic => d("Env", "public", 1, Pure, "env_public"),

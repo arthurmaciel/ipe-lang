@@ -10979,10 +10979,7 @@ const fn unsupported(span: Span, feature: Feature) -> Diagnostic {
 /// threaded here rather than assumed all-accepting so a `Secret` nested inside an
 /// ADT variant — the shape a bare codec-deferral would let cross the seam — is
 /// refused fail-closed BEFORE the live transport lowers it.
-fn ir_type_is_port_seal_legal(
-    ty: &IrType,
-    enum_legal: &impl Fn(&ModPath, Symbol) -> bool,
-) -> bool {
+fn ir_type_is_port_seal_legal(ty: &IrType, enum_legal: &impl Fn(&ModPath, Symbol) -> bool) -> bool {
     ir_type_is_serde(ty, enum_legal) && !ir_type_mentions_json(ty)
 }
 
@@ -19643,12 +19640,11 @@ impl<'a> Lowerer<'a> {
                 let mut ok = true;
                 for ctor in &u.ctors {
                     for arg in &ctor.args {
-                        match self.ir_type_from_canon(arg, &u.vars) {
-                            Ok(ir) => fields.push(ir),
-                            Err(_) => {
-                                ok = false;
-                                break;
-                            }
+                        if let Ok(ir) = self.ir_type_from_canon(arg, &u.vars) {
+                            fields.push(ir);
+                        } else {
+                            ok = false;
+                            break;
                         }
                     }
                     if !ok {
