@@ -1,6 +1,6 @@
-# Deploy bundle
+# Release bundle
 
-`ipe deploy` produces a **single self-jailing binary**: a launcher
+`ipe release` produces a **single self-jailing binary**: a launcher
 (`ipe-wrapper`) with the app binary and its capability profile fused in at
 compile time. The launcher extracts the app, verifies the profile against the
 capability floor embedded in the app binary, and execs the app inside the
@@ -14,7 +14,7 @@ disk beside the wrapper and an operator can run it directly, bypassing the
 sandbox. Prefer the default single-file form for production; reach for
 `--bundle` only when the pieces must be inspected or replaced independently.
 
-All command examples in this document are **illustrative** — `ipe deploy` is
+All command examples in this document are **illustrative** — `ipe release` is
 built by this crate and requires the musl toolchain and (on the target server)
 `bwrap`/`prlimit` at runtime; they are not runnable as-is from the repo root.
 
@@ -23,7 +23,7 @@ built by this crate and requires the musl toolchain and (on the target server)
 The wrapper trusts two things:
 
 1. **The embedded capability floor** — a `#[used]` static in the app binary's
-   `.rodata`, emitted by `ipe deploy` and scanned passively (the binary is
+   `.rodata`, emitted by `ipe release` and scanned passively (the binary is
    never executed to read it). It records the precise axis grants (network,
    filesystem, subprocess, env var names) the binary was built expecting.
    `strip` cannot remove it (`.rodata` is allocated); a linker or attacker
@@ -72,7 +72,7 @@ The default artifact is one file, with `ipe-app` and `ipe.profile` fused into
 the wrapper at compile time (via `include_bytes!`):
 
 ```text
-deploy/bundle/ipe-wrapper   # wrapper + app + profile, all baked in
+release/bundle/ipe-wrapper   # wrapper + app + profile, all baked in
 ```
 
 The wrapper writes the app bytes to a temp file (owner-execute only, `0o700` on
@@ -89,10 +89,10 @@ On a target server with `bwrap` + `prlimit` installed, run the artifact as
 
 ## Multi-file layout (`--bundle`)
 
-`ipe deploy --bundle` lays the pieces out as siblings instead of fusing them:
+`ipe release --bundle` lays the pieces out as siblings instead of fusing them:
 
 ```text
-deploy/bundle/
+release/bundle/
 ├── ipe-wrapper   # the jailed launcher
 ├── ipe-app       # the statically-linked app binary (musl-static)
 └── ipe.profile   # the capability manifest (plain text, auditable)
@@ -109,13 +109,13 @@ directory as capable of running the app un-jailed.
 
 ## Inspecting the capability model (`--capabilities` / `--show-profile`)
 
-`ipe deploy --capabilities` (alias `--show-profile`) prints the capability model
-the app would enforce and exits without building or writing anything. It accepts
-`--plain` (bare names, one per line) and `--json` (a stable object) alongside the
-default human-readable report (illustrative):
+`ipe release --capabilities` (alias `--show-profile`) prints the capability
+model the app would enforce and exits without building or writing anything. It
+accepts `--plain` (bare names, one per line) and `--json` (a stable object)
+alongside the default human-readable report (illustrative):
 
 ```text
-ipe deploy --capabilities --json
+ipe release --capabilities --json
 ```
 
 Once deployed, the running launcher exposes the same inspection via
@@ -125,7 +125,7 @@ Once deployed, the running launcher exposes the same inspection via
 
 `ipe exec <dir>` runs a build artifact jailed from a local build output
 directory. It requires `cargo metadata` (and therefore `cargo`) to locate the
-binary. `ipe deploy` extends that to a server with no toolchain by:
+binary. `ipe release` extends that to a server with no toolchain by:
 
 1. Building statically-linked (`--static --target <musl-triple>`) binaries —
    zero runtime dynamic-library dependencies.

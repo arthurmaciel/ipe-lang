@@ -1234,7 +1234,7 @@ pub enum StdlibKernel {
     // ── Debug (development-only) ──────────────────────────────────────────────
     /// `Debug.log : String -> a -> a` — print `"label: value"` to stderr, return
     /// the value unchanged. The one deliberate impure escape hatch; a production
-    /// build (`ipe build --optimize`) rejects any use (IPE-L0140).
+    /// build (`ipe release`) rejects any use (IPE-L0140).
     DebugLog,
     // ── Time (non-TEA) ──────────────────────────────────────────────────────
     TimeNow,
@@ -10163,7 +10163,7 @@ impl StdlibKernel {
 
     /// `true` when this variant belongs to the TEA (`Cmd` / `Sub` /
     /// A development-only escape hatch (the `Ipe.Debug` family). Rejected in a
-    /// PRODUCTION build (`ipe build --optimize`, IPE-L0140) rather than
+    /// PRODUCTION build (`ipe release`, IPE-L0140) rather than
     /// silently stripped or shipped. The single SSOT for "which kernels are
     /// dev-only" — the lowerer's usage scan and every gate consult this.
     #[must_use]

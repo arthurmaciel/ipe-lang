@@ -1,6 +1,6 @@
 //! Build script for the deploy wrapper.
 //!
-//! When `IPE_EMBED_APP` and `IPE_EMBED_PROFILE` are set (by `ipe deploy
+//! When `IPE_EMBED_APP` and `IPE_EMBED_PROFILE` are set (by `ipe release
 //! --embed`), copies those files into `OUT_DIR` as `embedded-app` and
 //! `embedded-profile`, and emits `cargo::rustc-cfg=embed_mode` so `main.rs`
 //! compiles the embed-mode path. When the vars are absent the standard

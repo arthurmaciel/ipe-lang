@@ -8,9 +8,8 @@
 //! like Go's `%v`, records/ADTs via their codegen-emitted impl).
 //!
 //! This is the ONE deliberate impure escape hatch in the language — NOT a
-//! `Task`. A PRODUCTION build (`ipe build --optimize`) rejects any `Debug.*`
-//! use at compile time (IPE-L0140), so this function is only ever reached from
-//! a development build.
+//! `Task`. `ipe release` rejects any `Debug.*` use at compile time (IPE-L0140),
+//! so this function is only ever reached from a development build.
 
 use crate::stringify::IpeStringify;
 

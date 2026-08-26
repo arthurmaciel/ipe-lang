@@ -393,7 +393,7 @@ pub struct Module {
     /// `Debug.*` escape-hatch call (`Debug.log`) in the module's function
     /// bodies. Set unconditionally (regardless of build profile) at the same
     /// choke point as the other `uses_*` flags; a PRODUCTION build
-    /// (`ipe build --optimize`) reads it at emit demand to reject the program
+    /// (`ipe release`) reads it at emit demand to reject the program
     /// (IPE-L0140), while a development build ignores it.
     pub uses_debug: bool,
     /// `true` when the lowerer lowered at least one [`Callee::Ffi`] call —
