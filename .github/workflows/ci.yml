@@ -224,7 +224,7 @@ jobs:
   # Guards the ipe-runtime-rust feature graph against silent coupling. The
   # workspace jobs above build the runtime with its DEFAULT features (`[]`), so
   # narrow subsets are otherwise unexercised. In particular a DB-only server /
-  # CLI app must compile WITHOUT `live` (Ipe.Live) — if a future change adds an
+  # CLI app must compile WITHOUT `live` (Ipe.Web) — if a future change adds an
   # ungated reference to a `live`-only item (e.g. `super::LiveReq`) from
   # `db`-gated code, or pulls `live` into the `db` feature list, this job fails.
   # Keep `db` and `live` independently buildable; gate cross-feature items with
