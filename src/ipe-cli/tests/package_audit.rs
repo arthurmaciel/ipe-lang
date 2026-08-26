@@ -144,12 +144,68 @@ main =
         }
 "#;
 
+/// A Web-shape TEA app that CONSTRUCTS a `customElement` handle at top level but
+/// never mounts it in `view`. The emitter still serves the author JS, so the
+/// package's honest capability set is `{custom-element}` — the served-but-unmounted
+/// hole a mounted-only audit test never exercised.
+const UNMOUNTED_WIDGET_MAIN: &str = r#"module Main exposing (main)
+
+import Ipe.Tea.Web as Web
+import Ipe.Ui as Ui
+import Ipe.Tea.Web.Cmd as Cmd
+import Ipe.Tea.Web.Sub as Sub
+import Ipe.String as String
+
+type alias WidgetState = { count : Int }
+
+type WidgetUp = Bumped Int
+
+type Msg = Noop
+
+type alias Model = { count : Int }
+
+counter : CustomElement WidgetState WidgetUp
+counter = customElement "js/counter.js"
+
+init : a -> ( Model, Cmd.Cmd Msg )
+init _req =
+    ( { count = 0 }, Cmd.none )
+
+update : Msg -> Model -> ( Model, Cmd.Cmd Msg )
+update msg model =
+    case msg of
+        Noop ->
+            ( model, Cmd.none )
+
+view : Model -> Element Msg
+view model =
+    Ui.column []
+        [ Ui.text (String.fromInt model.count)
+        ]
+
+subscriptions : Model -> Sub.Sub Msg
+subscriptions _model =
+    Sub.none
+
+main =
+    Web.app
+        { init = init, update = update, view = view, subscriptions = subscriptions
+        , routes = [], notFound = Noop
+        }
+"#;
+
 /// Write a widget package: `package.ipe` + `src/Main.ipe` + the author widget
 /// JS the `customElement "js/counter.js"` literal names, so a build path that
 /// resolves the widget file is satisfied.
 fn write_widget_package(pkg: &Path, manifest: &str) {
+    write_widget_package_with_main(pkg, manifest, WIDGET_MAIN);
+}
+
+/// Write a widget package with an explicit `Main` source (mounted or unmounted),
+/// plus the author widget JS the `customElement "js/counter.js"` literal names.
+fn write_widget_package_with_main(pkg: &Path, manifest: &str, main: &str) {
     std::fs::write(pkg.join("package.ipe"), manifest).expect("write package.ipe");
-    std::fs::write(pkg.join("src").join("Main.ipe"), WIDGET_MAIN).expect("write Main.ipe");
+    std::fs::write(pkg.join("src").join("Main.ipe"), main).expect("write Main.ipe");
     std::fs::create_dir_all(pkg.join("src").join("js")).expect("create src/js");
     std::fs::write(
         pkg.join("src").join("js").join("counter.js"),
@@ -737,6 +793,38 @@ fn a_widget_package_that_hides_custom_element_is_rejected() {
     assert!(
         !ok,
         "a widget package that omits `custom-element` must reject; stdout:\n{stdout}\nstderr:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("capability consistency"),
+        "the reject names the capability check; got:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("custom-element") && stderr.contains("used but NOT declared"),
+        "the diagnostic names the hidden `custom-element` effect; got:\n{stderr}"
+    );
+
+    let _ = std::fs::remove_dir_all(&pkg);
+}
+
+/// Fail-closed on the unmounted-handle case: a package that CONSTRUCTS a
+/// `customElement` handle but never mounts it still ships browser JS, so declaring
+/// NOTHING is rejected with a `custom-element`-naming mismatch. Admission derives
+/// the axis from the served-asset walk, not from a reachable `Ui.widget` kernel —
+/// so a served-but-unmounted widget can never be admitted undisclosed.
+#[test]
+fn an_unmounted_widget_package_that_hides_custom_element_is_rejected() {
+    let pkg = temp_pkg("undeclared-unmounted-widget");
+    write_widget_package_with_main(
+        &pkg,
+        "module Package exposing (package)\n\n\npackage =\n    Package.named \"unmounted-widget-pkg\"\n        |> Package.version \"0.1.0\"\n",
+        UNMOUNTED_WIDGET_MAIN,
+    );
+    let index = empty_index("undeclared-unmounted-widget");
+
+    let (ok, stdout, stderr) = run_audit(&pkg, &index);
+    assert!(
+        !ok,
+        "an unmounted-handle widget package that omits `custom-element` must reject; stdout:\n{stdout}\nstderr:\n{stderr}"
     );
     assert!(
         stderr.contains("capability consistency"),

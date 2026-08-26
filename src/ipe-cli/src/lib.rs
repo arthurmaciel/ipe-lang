@@ -4612,6 +4612,55 @@ pub(crate) fn lower_entry(entry: &Path) -> Result<ipe_ir::Program, CliError> {
     Ok((*program).clone())
 }
 
+/// The whole set of security capabilities a program discloses: the kernel-derived
+/// set [`ipe_lower::program_capabilities`] infers from the lowered program, PLUS
+/// [`ipe_ir::Capability::CustomElement`] whenever the program constructs any
+/// `customElement` handle.
+///
+/// The custom-element axis is derived from the SAME walk emission serves from —
+/// [`ipe_canon::custom_element_gate::collect_widget_files`] over the pre-DCE
+/// `linked` module — so the served-asset set and the disclosed-capability set are
+/// one set by construction. A handle that is constructed but never mounted (and
+/// so lowers to a capability-free leaf that DCE may drop) still ships its browser
+/// JS through the emitted `widget_assets::register`, and this derivation discloses
+/// it regardless of the lowered program's reachability. `collect_widget_files`
+/// walks the whole linked program, so a handle constructed in an imported module
+/// is disclosed transitively.
+///
+/// This is the single inference point every capability consumer routes through —
+/// the report, the declared-set verify, package inference, and index admission —
+/// so none of them can disclose a different set than the emitter serves.
+fn capabilities_including_served_widgets(
+    db: &dyn ipe_db::Db,
+    root: ipe_db::SourceRoot,
+    entry_file: ipe_db::SourceFile,
+    program: &ipe_ir::Program,
+) -> std::collections::BTreeSet<ipe_ir::Capability> {
+    let mut caps = ipe_lower::program_capabilities(program);
+    if program_constructs_a_widget(db, root, entry_file) {
+        caps.insert(ipe_ir::Capability::CustomElement);
+    }
+    caps
+}
+
+/// True when the linked program constructs at least one `customElement` handle —
+/// i.e. the emitter serves at least one widget asset for it. Reuses the exact
+/// [`ipe_canon::custom_element_gate::collect_widget_files`] walk emission uses, so
+/// the serve decision and this disclose decision are the same decision.
+///
+/// A program whose linking fails has no served widget (nothing is emitted), so a
+/// link failure conservatively contributes no widget disclosure here; the failing
+/// pipeline surfaces its own diagnostic through the caller's own lowering.
+fn program_constructs_a_widget(
+    db: &dyn ipe_db::Db,
+    root: ipe_db::SourceRoot,
+    entry_file: ipe_db::SourceFile,
+) -> bool {
+    ipe_db::linked_program(db, root, entry_file).is_ok_and(|linked| {
+        !ipe_canon::custom_element_gate::collect_widget_files(&linked.module).is_empty()
+    })
+}
+
 /// Lower a single `.ipe` entry through the SAME injection-aware source-graph
 /// pipeline the build path uses, returning the owning database (its interner
 /// backs any downstream `ipe_ir::pretty`) and the lowered program.
@@ -5682,8 +5731,16 @@ pub(crate) fn run_capabilities(rest: &[String]) -> Result<(), CliError> {
     // `ipe capabilities` in a project dir passes `.` straight to the reader and
     // fails with a raw "Is a directory" io error.
     let entry = resolve_analysis_entry(&arg)?;
-    let program = lower_entry(&entry)?;
-    let caps = ipe_lower::program_capabilities(&program);
+    let graph = build_source_graph(&entry)?;
+    let program = graph.run_attributed(&entry, |db, root, file| {
+        ipe_db::lower_program(db, root, file)
+    })?;
+    let caps = capabilities_including_served_widgets(
+        &graph.db,
+        graph.source_root,
+        graph.entry_file,
+        &program,
+    );
     let names: Vec<&'static str> = caps.iter().map(|c| c.as_str()).collect();
     print!(
         "{}",
@@ -5918,8 +5975,16 @@ pub fn verify_capabilities(
     entry: &Path,
     declared: &std::collections::BTreeSet<ipe_ir::Capability>,
 ) -> Result<(), CliError> {
-    let program = lower_entry(entry)?;
-    let inferred = ipe_lower::program_capabilities(&program);
+    let graph = build_source_graph(entry)?;
+    let program = graph.run_attributed(entry, |db, root, file| {
+        ipe_db::lower_program(db, root, file)
+    })?;
+    let inferred = capabilities_including_served_widgets(
+        &graph.db,
+        graph.source_root,
+        graph.entry_file,
+        &program,
+    );
     if *declared == inferred {
         return Ok(());
     }
@@ -5994,7 +6059,12 @@ pub fn infer_package_capabilities(
         };
         match ipe_db::lower_program(&db, source_root, entry_file) {
             Ok(program) => {
-                inferred.extend(ipe_lower::program_capabilities(&program));
+                inferred.extend(capabilities_including_served_widgets(
+                    &db,
+                    source_root,
+                    entry_file,
+                    &program,
+                ));
                 any_lowered = true;
             }
             Err((diag, _)) => {
