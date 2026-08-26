@@ -8,7 +8,7 @@ import Ipe.Dict as Dict
 import Ipe.Task as Task
 import Ipe.Html as Html
 import Ipe.Io as Io
-import Ipe.Live as Live
+import Ipe.Tea.Web as Web
 import Ipe.Tea.Web.Cmd as Cmd
 import Ipe.Tea.Web.Sub as Sub
 import Ipe.Time as Time
@@ -994,27 +994,27 @@ requireAdmin model =
 -- ══════════════════════════════════════════════════════
 main : Task Error ()
 main =
-    Live.app
+    Web.app
         { init = init
         , update = update
         , view = view
         , subscriptions = subscriptions
         , routes =
-              [ Live.route "/" HomePage
-              , Live.route "/products" ProductsPage
-              , Live.route "/product/:id" ProductPage
-              , Live.route "/cart" CartPage
-              , Live.route "/orders" OrdersPage
-              , Live.route "/order/:id" OrderPage
-              , Live.route "/order/:id/success" OrderSuccessPage
-              , Live.route "/auth/signin" AuthSignInPage
-              , Live.route "/admin/products" AdminProductsPage
-              , Live.route "/admin/products/new" AdminNewProductPage
-              , Live.route "/admin/products/:id" AdminEditProductPage
-              , Live.route "/admin/orders" AdminOrdersPage
-              , Live.route "/admin/orders/:id" AdminOrderPage
-              , Live.route "/privacy-policy" PrivacyPolicyPage
-              , Live.route "/terms" TermsPage
+              [ Web.route "/" HomePage
+              , Web.route "/products" ProductsPage
+              , Web.route "/product/:id" ProductPage
+              , Web.route "/cart" CartPage
+              , Web.route "/orders" OrdersPage
+              , Web.route "/order/:id" OrderPage
+              , Web.route "/order/:id/success" OrderSuccessPage
+              , Web.route "/auth/signin" AuthSignInPage
+              , Web.route "/admin/products" AdminProductsPage
+              , Web.route "/admin/products/new" AdminNewProductPage
+              , Web.route "/admin/products/:id" AdminEditProductPage
+              , Web.route "/admin/orders" AdminOrdersPage
+              , Web.route "/admin/orders/:id" AdminOrderPage
+              , Web.route "/privacy-policy" PrivacyPolicyPage
+              , Web.route "/terms" TermsPage
               ]
         , notFound = NotFoundPage
         , guard = guard

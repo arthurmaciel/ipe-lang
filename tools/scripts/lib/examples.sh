@@ -30,7 +30,7 @@
 #
 # The `examples/wasm/*` glob is load-bearing: those dirs are non-numbered, so
 # without it they fall out of every sweep set and a stale shape rename (e.g.
-# Ipe.Live → Ipe.Web) rots them silently.
+# Ipe.Web → Ipe.WebView) rots them silently.
 all_examples() {
   local d globs=(examples/[0-9]*/ examples/wasm/*/ examples/rust/*/ examples/ffi/*/ examples/shapes/*/*/ \
                  examples/sky/ipe/[0-9]*/ examples/sky/ipe/simple/ examples/sky/ipe/test_pkg/)
@@ -230,7 +230,7 @@ needs_ffi_install() {
 # ── example_shape <dir>: wasm|tui|webview|fyne|server|live|cli ───────────────
 # `_shape_match` strips Ipê comments — both `{- … -}` block/doc comments (which
 # can span lines) AND `--…` line comments — from the whole source before matching,
-# so prose that names a backend (e.g. a `{-| … like Ipe.Live … -}` doc comment on
+# so prose that names a backend (e.g. a `{-| … like Ipe.Web … -}` doc comment on
 # a CLI example) can't misclassify the example by its shape.
 _shape_match() { # $1=src dir  $2=regex
   find "$1" -name '*.ipe' -exec cat {} + 2>/dev/null \

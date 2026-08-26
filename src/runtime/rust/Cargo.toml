@@ -102,7 +102,7 @@ md-5 = { version = "0.10", optional = true }
 # it emits. `db-postgres` also activates `sqlite` (the Live session store keeps
 # a sqlite side table even under the postgres driver — see `db_cargo_toml`).
 sqlx = { version = "0.8", features = ["runtime-tokio-rustls"], optional = true }
-# Ipe.Live session-checkpoint body encoding (H24 wire format: base64(tag ++ bincode)).
+# Ipe.Web session-checkpoint body encoding (H24 wire format: base64(tag ++ bincode)).
 bincode = { version = "1", optional = true }
 redis = { version = "0.27", features = ["tokio-comp"], optional = true }
 # `Ipe.Regex` regex kernels + `String.isUrl`, behind the `regex` feature. A
@@ -169,7 +169,7 @@ crossterm = { version = "0.28", optional = true }
 wry = { version = "0.55", optional = true }
 tao = { version = "0.35", optional = true }
 
-# Unix-only: the Ipe.Live console reverse-proxy (live/console_proxy.rs) uses
+# Unix-only: the Ipe.Web console reverse-proxy (live/console_proxy.rs) uses
 # libc::prctl(PR_SET_PDEATHSIG) on Linux so the spawned console child dies with
 # the parent even on SIGKILL. Tiny, ubiquitous; referenced only under
 # cfg(target_os = "linux").
