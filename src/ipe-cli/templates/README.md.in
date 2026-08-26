@@ -1,7 +1,7 @@
 # {name}
 
 An Ipê application scaffolded by `ipe init`. `src/Main.ipe` is a small
-[`Ipe.Live`](https://ipe-lang.org) counter — a Model holding a count, `Increment`
+[`Ipe.Web`](https://ipe-lang.org) counter — a Model holding a count, `Increment`
 and `Decrement` messages, and a two-button view — that serves its UI over HTTP.
 
 Run it:
