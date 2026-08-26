@@ -12034,6 +12034,18 @@ mod tests {
         assert_eq!(StdlibKernel::DebugLog.capability(), None);
         // `Env.public` reads a build-time constant, not the live environment.
         assert_eq!(StdlibKernel::EnvPublic.capability(), None);
+        // `Ui.widget` ships browser JS → the `custom-element` disclosure axis.
+        assert_eq!(
+            StdlibKernel::UiWidget.capability(),
+            Some(Capability::CustomElement)
+        );
+        // `Js.send` / `Js.subscribe` exchange typed data with page JS → the
+        // `js-port` disclosure axis, inferred through this same SSOT.
+        assert_eq!(StdlibKernel::JsSend.capability(), Some(Capability::JsPort));
+        assert_eq!(
+            StdlibKernel::JsSubscribe.capability(),
+            Some(Capability::JsPort)
+        );
     }
 
     /// Every `Ipe.Http` kernel (qualifier `"Http"`) emits a symbol that lives in
