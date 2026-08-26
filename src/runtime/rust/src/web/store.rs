@@ -779,6 +779,8 @@ mod tests {
             seq: 0,
             sse_tx: None,
             msg_tx: tx,
+            #[cfg(feature = "debugger")]
+            history: crate::debugger::RecordBuffer::new((), crate::debugger::DEFAULT_HISTORY_CAP),
         }))
     }
 
@@ -805,6 +807,11 @@ mod tests {
             seq: 0,
             sse_tx: None,
             msg_tx: tx,
+            #[cfg(feature = "debugger")]
+            history: crate::debugger::RecordBuffer::new(
+                model,
+                crate::debugger::DEFAULT_HISTORY_CAP,
+            ),
         }))
     }
 

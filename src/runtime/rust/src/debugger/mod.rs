@@ -37,6 +37,10 @@ use std::collections::VecDeque;
 
 use crate::tea::IpeCmd;
 
+// Server-driven TEA debugger: session-scoped history and overlay HTML.
+// All items gated on `feature = "debugger"` via the inner `#![cfg(...)]`.
+pub mod server;
+
 /// The default message-log capacity when none is configured.
 pub const DEFAULT_HISTORY_CAP: usize = 512;
 
