@@ -718,7 +718,7 @@ function __ipePostEvent(body) {
   // Phase 1.2 — attach the per-session CSRF token. The server-side
   // middleware (runtime-go/rt/csrf_middleware.go) rejects POSTs
   // without a matching X-Ipe-Csrf / __ipe_csrf cookie pair. Empty
-  // token means CSRF is disabled at the runtime level (ipe.toml
+  // token means CSRF is disabled at the runtime level (package.ipe
   // [security] csrf = false) — header omitted, middleware skipped.
   var headers = {"Content-Type":"application/json"};
   if (__ipeCsrfToken) headers["X-Ipe-Csrf"] = __ipeCsrfToken;
@@ -1543,7 +1543,7 @@ function __ipeForceReopenSSE() {
   }
   __ipeRetryAttempts++;
   // Session-loss probe: when the SSE is wedged (typically a server
-  // restart with the memory store, or a ipe.toml [live] store change
+  // restart with the memory store, or a package.ipe [live] store change
   // wiping the persistent session), no amount of reopen retries can
   // recover the lost session — the only path forward is a full page
   // reload, which fires handleInitial and creates a fresh session.

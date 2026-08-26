@@ -94,7 +94,7 @@ pub enum CliError {
     /// given); a near-miss to a known command is offered as a `maybe` hint.
     UnknownCommand { attempted: String },
     /// Command-line / manifest misuse whose message must echo user-supplied
-    /// input (e.g. an unrecognised `ipe.toml` value) — kept distinct from
+    /// input (e.g. an unrecognised manifest value) — kept distinct from
     /// [`Self::Usage`] so no call site needs to leak a `String` into a
     /// `&'static str` just to report what the user actually wrote.
     UsageOwned(String),
@@ -799,14 +799,14 @@ pub struct BuildOptions {
     /// `ipe build --target wasm`) — threaded into kernel resolution (the
     /// Layer-1 wasm gate), the emitted manifest, and both cache keys.
     pub target: ipe_ir::Target,
-    /// The `[wasm] publicEnv` allowlist (`ipe.toml`, already validated
-    /// against the secret-name denylist at parse time). Empty when the
-    /// project has no `[wasm]` section (or no `ipe.toml` at all — the
+    /// The `[wasm] publicEnv` allowlist from `package.ipe`, already validated
+    /// against the secret-name denylist at parse time. Empty when the
+    /// project has no `[wasm]` section (or no manifest — the
     /// sibling-discovery single-file path). Threaded into
     /// [`ipe_backend_rust::RustBackend::with_wasm_public_env`] /
     /// [`ipe_db::BuildConfig::wasm_public_env`].
     pub wasm_public_env: Vec<String>,
-    /// `true` when `[wasm] mode = "hydrate"` in the project's `ipe.toml`.
+    /// `true` when `[wasm] mode = "hydrate"` in the project's `package.ipe`.
     /// Causes the backend to emit a `#[wasm_bindgen] pub fn hydrate(model_json: &str)`
     /// export in addition to the `#[wasm_bindgen(start)] pub fn ipe_start()` entry.
     /// The emitted `hydrate` function parses the island JSON as the user's declared
@@ -842,11 +842,11 @@ pub struct BuildOptions {
     /// identical either way — trimming only changes what source lands on disk).
     pub tree_shake_vendored: bool,
     /// The sanitized Cargo package name for the emitted crate, derived from
-    /// `ipe.toml`'s `name` field via
+    /// `package.ipe`'s name via
     /// [`ipe_backend_rust::sanitize_cargo_name`]. The emitted `Cargo.toml`
     /// carries `[package] name = "<cargo_name>"` and the built binary is
     /// named accordingly. Empty string uses the safe `"ipe-app"` default
-    /// (single-file builds with no `ipe.toml`).
+    /// (single-file builds with no manifest).
     pub cargo_name: String,
     /// `true` when `ipe build --debugger` / `ipe run --debugger` was passed.
     /// Threaded through [`ipe_db::BuildConfig`] to
@@ -943,8 +943,8 @@ pub fn build_with_options(
     }];
 
     // No manifest on the single-file path — default to sqlite, matching the
-    // documented `ipe.toml` default for a project that has no `[database]`
-    // section at all.
+    // documented `package.ipe` default for a project that has no database
+    // setting.
     compile_modules(
         sources,
         discovered,
@@ -960,7 +960,7 @@ pub fn build_with_options(
 /// Build a `.ipe` entry file and all sibling modules discovered in the same
 /// source directory.
 ///
-/// When no `ipe.toml` is present, the entry file's parent directory is used
+/// When no manifest is present, the entry file's parent directory is used
 /// as the source root. Every `*.ipe` file found there is loaded and compiled
 /// together — fixing IPE-N0020 for multi-file projects built via the
 /// file-path shorthand (`ipe build src/Main.ipe`).
@@ -999,7 +999,7 @@ pub fn build_with_sibling_discovery_with_options(
 ) -> Result<(), CliError> {
     let collected = collect_entry_and_siblings(entry)?;
 
-    // No ipe.toml on this path either (sibling discovery is the "no manifest
+    // No manifest on this path either (sibling discovery is the "no manifest
     // found" fallback) — default to sqlite, same rationale as `build`.
     compile_modules(
         collected.sources,
@@ -1034,7 +1034,7 @@ fn build_test_with_project_sources(
 ) -> Result<(), CliError> {
     let collected = collect_test_sources(project_src_root, test_entry)?;
 
-    // No ipe.toml driver is threaded here (the test stage mirrors the sibling
+    // No manifest driver is threaded here (the test stage mirrors the sibling
     // build's "no manifest" fallback) — default to sqlite, same rationale as
     // `build_with_sibling_discovery`.
     compile_modules(
@@ -1503,7 +1503,7 @@ fn compile_modules_observed(
     let db = ipe_db::IpeDatabase::new();
     let source_root = create_source_root(&db, &sources, &injected, &ffi_injected);
     // The config input (see `ipe_db::BuildConfig`'s doc for why this
-    // is narrowed to `db_driver` rather than the full `ipe.toml` shape). A
+    // is narrowed to `db_driver` rather than the full manifest shape). A
     // fresh `BuildConfig` per one-shot invocation is fine here — unlike the
     // clean-vs-incremental parity gate's warm sequence, this driver never
     // re-demands `emit_project` against a second config instance.
@@ -3031,7 +3031,7 @@ fn discover_manifest(entry_path: &Path) -> Result<Option<PathBuf>, CliError> {
 }
 
 /// Resolve the static request with full precedence — CLI flags > env
-/// (`IPE_STATIC` / `IPE_TARGET` / `IPE_ALLOC`) > `ipe.toml` `[rust]` > AUTO —
+/// (`IPE_STATIC` / `IPE_TARGET` / `IPE_ALLOC`) > `package.ipe` `[rust]` > AUTO —
 /// into a typed plan (or a typed refusal — no artifact), run the toolchain
 /// preflight, and surface the mimalloc opt-in notice. Shared by `build` and
 /// `run`; resolved ONCE before any compilation starts.
@@ -3072,7 +3072,7 @@ fn resolve_static_plan(
 
 /// Resolve the wasm-vs-native target with the three-tier precedence chain:
 /// CLI flag (`--target wasm`) > `IPE_TARGET=wasm` env > `[wasm].mode` in
-/// `ipe.toml` > default native.
+/// `package.ipe` > default native.
 ///
 /// `cli_wasm` carries the parsed `--target wasm` flag from `BuildMode::Emit`.
 /// `wasm_config` is `None` when there is no manifest (sibling-discovery build).
@@ -3234,7 +3234,7 @@ fn run_build_body(rest: &[String]) -> Result<(), CliError> {
         );
     }
 
-    // No ipe.toml found: compile entry + all sibling .ipe files in the same
+    // No manifest found: compile entry + all sibling .ipe files in the same
     // directory. Byte-identical to `build` when the directory holds only the
     // entry file (regression-covered by the golden suite).
     manifest.as_ref().map_or_else(
@@ -5561,7 +5561,7 @@ enum TestStdio {
 /// `ipe test` and `ipe verify`'s final stage.
 ///
 /// The test entry is the file at `<project-root>/tests/Main.ipe`. The project
-/// root is the directory holding `ipe.toml`; with no manifest it is the parent
+/// root is the directory holding `package.ipe`; with no manifest it is the parent
 /// of the entry's `src/` directory (the conventional layout), or the entry's
 /// own directory for a flat single-directory project. The test entry is built
 /// against the project's `src/` tree AND its `tests/` siblings, so a test that
@@ -5952,8 +5952,8 @@ pub(crate) fn run_capabilities(rest: &[String]) -> Result<(), CliError> {
         Some(e) => PathBuf::from(e),
         None => PathBuf::from(default_entry()?),
     };
-    // Route a directory / `ipe.toml` / project-root `.` to its entry `.ipe` file,
-    // the same argument convention `ipe type-check` uses. Without this a bare
+    // Route a directory / project-root `.` to its entry `.ipe` file, the same
+    // argument convention `ipe type-check` uses. Without this a bare
     // `ipe capabilities` in a project dir passes `.` straight to the reader and
     // fails with a raw "Is a directory" io error.
     let entry = resolve_analysis_entry(&arg)?;
@@ -7297,7 +7297,7 @@ main =
         let _ = fs::remove_dir_all(&dir);
     }
 
-    /// When no ipe.toml exists in any parent directory, returns None.
+    /// When no package.ipe exists in any parent directory, returns None.
     #[test]
     fn find_manifest_returns_none_when_absent() {
         let tmp = std::env::temp_dir().join("ipec_no_manifest_test");
@@ -7305,7 +7305,7 @@ main =
         fs::create_dir_all(&tmp).expect("create dir");
         let ipe = tmp.join("Standalone.ipe");
         fs::write(&ipe, "module Standalone exposing (f)\nf = 0\n").expect("write ipe");
-        // Deliberately no ipe.toml anywhere under tmp.
+        // Deliberately no package.ipe anywhere under tmp.
         // The walk terminates at the filesystem root without finding one.
         // We cannot guarantee the walk terminates before reaching /tmp or /
         // on all systems, so we only assert non-panicking behaviour and that

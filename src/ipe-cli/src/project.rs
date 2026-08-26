@@ -36,29 +36,27 @@ use crate::CliError;
 // Public types
 // ---------------------------------------------------------------------------
 
-/// The parsed, validated content of a `ipe.toml` manifest.
+/// The parsed, validated content of a `package.ipe` manifest.
 #[derive(Clone, Debug)]
 pub struct ProjectManifest {
-    /// The project name (from `[project] name = "…"`).
+    /// The project name (from `Package.named "…"`).
     pub name: String,
-    /// The package version (from `version = "…"`, at the top level or under
-    /// `[project]`), parsed into a typed [`semver::Version`]. `None` when the
-    /// manifest declares no version — the package gate's enforced-semver check
-    /// needs one, so `ipe package audit` rejects a versionless manifest rather
-    /// than inventing a version.
+    /// The package version (from `Package.version "…"`), parsed into a typed
+    /// [`semver::Version`]. `None` when the manifest declares no version — the
+    /// package gate's enforced-semver check needs one, so `ipe package audit`
+    /// rejects a versionless manifest rather than inventing a version.
     pub version: Option<semver::Version>,
-    /// Absolute path to the project root directory (where `ipe.toml` lives).
+    /// Absolute path to the project root directory (where `package.ipe` lives).
     pub root: PathBuf,
     /// Absolute path to the source root (`<root>/src` by default).
     pub src_root: PathBuf,
-    /// The SQL driver the emitted project targets (from `[database] driver
-    /// = "…"`). Defaults to [`ipe_backend_rust::DbDriver::Sqlite`] when the
-    /// `[database]` section (or the `driver` key within it) is absent — the
-    /// documented default in `AGENTS.md`'s `ipe.toml` schema table.
+    /// The SQL driver the emitted project targets (from `Package.database …`).
+    /// Defaults to [`ipe_backend_rust::DbDriver::Sqlite`] when absent — the
+    /// documented default in `AGENTS.md`'s `package.ipe` schema table.
     pub driver: ipe_backend_rust::DbDriver,
     /// The `[rust]` static-build request layer (`static` / `target` /
     /// `allocator` / `allowSlowAllocator` / `cFree`) — the lowest-precedence layer
-    /// (CLI > env > `ipe.toml`) of `crate::build_plan::resolve`'s input.
+    /// (CLI > env > `package.ipe`) of `crate::build_plan::resolve`'s input.
     /// Every field defaults to unset when the section (or key) is absent.
     /// Malformed values (a bad bool, an unknown allocator) are refused at
     /// parse time, never silently ignored.
@@ -92,7 +90,7 @@ pub struct ProjectManifest {
     pub has_rust_wrapper: bool,
 }
 
-/// `[wasm]` `ipe.toml` section (spec: `docs/adr/0042-wasm-client-target.md` Q6
+/// `[wasm]` section of a `package.ipe` manifest (spec: `docs/adr/0042-wasm-client-target.md` Q6
 /// "Opt-in mechanism").
 ///
 /// ```toml
@@ -146,8 +144,8 @@ impl WasmConfig {
 /// Denies `*_SECRET`, `*_TOKEN`, `*_KEY`, `*_PASSWORD`, `DATABASE_URL`, and
 /// the internal `IPE_*` namespace. An allowlisted name matching this is a
 /// BUILD error (parse time), forcing the author to confirm — never a silent
-/// drop, never a runtime-only refusal. Case-insensitive (`ipe.toml` authors
-/// may write either case; the runtime env-var namespace itself is
+/// drop, never a runtime-only refusal. Case-insensitive (manifest authors may
+/// write either case; the runtime env-var namespace itself is
 /// case-sensitive POSIX convention, but a same-name-different-case entry is
 /// exactly the kind of "did they mean the secret" ambiguity this gate exists
 /// to catch).
@@ -237,7 +235,7 @@ pub use ipe_db::CycleError;
 /// type.
 pub use ipe_ir::Capability;
 
-/// One `ipe.toml [dependencies]` entry: an Ipê package pulled from the index by
+/// One `package.ipe` dependency entry: an Ipê package pulled from the index by
 /// version, or one of the two escapes (a git repo, a local path).
 ///
 /// Modelled as a sum, not three optional fields, so an entry can never be both a
@@ -259,7 +257,7 @@ pub enum IpeDep {
     Path(PathBuf),
 }
 
-/// One `ipe.toml [rust.dependencies]` entry: a crates.io crate bound as a
+/// One `package.ipe` Rust-dependency entry: a crates.io crate bound as a
 /// foreign-function dependency, with its version requirement and feature list.
 #[derive(Clone, Debug, PartialEq, Eq, Default)]
 pub struct RustDep {

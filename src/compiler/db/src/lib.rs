@@ -1075,19 +1075,19 @@ pub struct RustFileId {
 // ---------------------------------------------------------------------------
 
 /// The build-wide, driver-supplied configuration that affects **emission**
-/// but nothing upstream of it — today exactly the `ipe.toml [database]
+/// but nothing upstream of it — today exactly the `package.ipe [database]
 /// driver` selection.
 ///
 /// This is the incremental plan's `project_config()` seam (design doc Q1b),
 /// deliberately narrowed to the ONE field that has a real tracked-query
-/// consumer today ([`emit_project`]) rather than the full parsed-`ipe.toml`
+/// consumer today ([`emit_project`]) rather than the full parsed-`package.ipe`
 /// shape the design doc sketches (`entry`, `codegen_flags`, `[log]`
 /// fields, …). The discipline: reserved seams stay design-level until a real
 /// consumer exists — a `ProjectConfig` with fields nothing reads is a
 /// dead-surface trap. `db_driver` earns its place because [`emit_project`]
 /// genuinely reads it (routing `RustBackend::with_db_driver`), and nothing
 /// upstream of emission (`canonicalize`, `typecheck`, `lower_program`) is
-/// affected by the SQL driver choice — `ipe.toml`'s `driver` key changes the
+/// affected by the SQL driver choice — `package.ipe`'s driver key changes the
 /// emitted `Cargo.toml`/`ipe_runtime/config.rs` shape only.
 ///
 /// **Field-granularity, honestly scoped.** Salsa's `#[salsa::input]` macro
@@ -1109,8 +1109,8 @@ pub struct RustFileId {
 /// its own input, entirely separate from [`SourceRoot`]/[`SourceFile`].
 #[salsa::input]
 pub struct BuildConfig {
-    /// The SQL driver the emitted project targets (`ipe.toml [database]
-    /// driver`). See [`ipe_backend_rust::DbDriver`].
+    /// The SQL driver the emitted project targets (from `package.ipe`).
+    /// See [`ipe_backend_rust::DbDriver`].
     pub db_driver: ipe_backend_rust::DbDriver,
     /// The consumer-side FFI emission inputs (installed foreign-crate
     /// bindings + opaque-type map + pinned dep lines), assembled by the
@@ -1122,12 +1122,12 @@ pub struct BuildConfig {
     /// `ipe build --target wasm`) — selects the emitted manifest template,
     /// vendored runtime module set, and entry shape.
     pub target: ipe_ir::Target,
-    /// The `[wasm] publicEnv` allowlist (`ipe.toml`, already validated
-    /// against the secret-name denylist at PARSE time). Empty when the
+    /// The `[wasm] publicEnv` allowlist from `package.ipe`, already validated
+    /// against the secret-name denylist at PARSE time. Empty when the
     /// section/key is absent. See [`ipe_backend_rust::RustBackend::with_wasm_public_env`].
     #[returns(ref)]
     pub wasm_public_env: Vec<String>,
-    /// `true` when `[wasm] mode = "hydrate"` is set in `ipe.toml`. Passed
+    /// `true` when `[wasm] mode = "hydrate"` is set in `package.ipe`. Passed
     /// through to [`ipe_backend_rust::RustBackend::with_wasm_hydrate_mode`]
     /// to emit the `#[wasm_bindgen] pub fn hydrate(…)` export (M7 SSR +
     /// hydration island parse + adopt path).
@@ -1154,7 +1154,7 @@ pub struct BuildConfig {
     /// for `ipe release` — the release command does not expose the flag, so no
     /// production artifact carries recorder code.
     pub debugger: bool,
-    /// The project name from `ipe.toml`, already sanitized via
+    /// The project name from `package.ipe`, already sanitized via
     /// [`ipe_backend_rust::sanitize_cargo_name`] by the driver before storage.
     /// Threaded to [`ipe_backend_rust::RustBackend::with_project_name`] so the
     /// emitted crate carries `[package] name = "<cargo_name>"` rather than the

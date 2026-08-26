@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
 //! SEAL: the emitted Cargo project's `[package] name` matches the sanitized
-//! project name from `ipe.toml`, and the renamed crate actually `cargo build`s.
+//! project name from `package.ipe`, and the renamed crate actually `cargo build`s.
 //!
 //! Gated on `IPE_E2E=1` so the default `cargo test` stays fast and offline.
 
@@ -105,7 +105,7 @@ fn sanitized_name_project_cargo_builds() -> DResult<()> {
             .emit(&prog)?;
 
         // The `[package] name` in the emitted Cargo.toml must match the
-        // sanitized form, not the raw ipe.toml value.
+        // sanitized form, not the raw package.ipe value.
         assert!(
             emitted
                 .cargo_toml

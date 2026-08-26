@@ -1,6 +1,6 @@
 // DB kernel functions — generic over E and over backend.
 // Uses DbPool, DbRow, ipe_db_url, db_last_insert_id, db_format_sql from
-// config.rs (generated at build time per ipe.toml [database] driver).
+// config.rs (generated at build time per package.ipe database driver).
 use super::json::{Decoder, JsonVal, decode_and_map, decode_err_str, decode_field, decode_ok};
 use super::*;
 use sqlx::{Column, Row, TypeInfo};
@@ -880,7 +880,7 @@ pub fn db_connect<E: Send + From<String> + 'static>(_unit: ()) -> IpeTask<E, Db>
 }
 
 /// `Db.open : String -> String -> Task Error Db` (driver, path). The compiled
-/// `DbPool` type is already fixed by the ipe.toml driver, so `driver` is
+/// `DbPool` type is already fixed by the `package.ipe` driver, so `driver` is
 /// informational; we connect using `path`. For sqlite a bare file path needs a
 /// `sqlite://…?mode=rwc` URL (create-if-missing); other drivers pass `path`
 /// through as the connection string. (Was wrongly `(_unit: ())` → ignored both
