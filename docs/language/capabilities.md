@@ -175,6 +175,15 @@ On the page side the surface is identical whether the app is server-driven or
 compiled to WebAssembly: `ipe.onReceive(fn)` registers the outbound handler and
 `ipe.send(value)` pushes a value in.
 
+Both targets deliver live. On the WebAssembly target the port is in-process and
+tab-local. On the server-driven target each browser session gets its own port
+channels, bound to that session's authenticated identity: an outbound `Js.send`
+reaches only the session that produced it, and an inbound value from a browser
+reaches only that session's `Js.subscribe`. A browser posts an inbound value to
+the server over the same session-cookie + CSRF-protected wire the event stream
+uses; the value passes the bounded fail-closed seal budget before it is
+delivered, and one session can never observe another session's port traffic.
+
 ## Where enforcement lives
 
 - **Pure Ipê code** → the capability is absent from the binary. Nothing to
