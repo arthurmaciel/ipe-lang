@@ -58,10 +58,13 @@ use ipe_types::SolvedTypes;
 ///   unresolved scrutinee enum, or a match arm set that fails
 ///   [`ipe_ir::Match::new`]'s exhaustiveness proof. These are unreachable for
 ///   well-typed, well-canonicalised input.
+#[allow(clippy::too_many_lines)]
 pub fn lower(
     m: &canon::Module,
     types: &SolvedTypes,
     interner: &mut Interner,
+    source_path: &str,
+    source_text: &str,
 ) -> Result<ipe_ir::Program, (Diagnostic, Vec<ipe_intern::Symbol>)> {
     // Widest callable arity — the ceiling for the eta / capture pools below.
     // Declared first (an item before any statement) so the `homeless` closure
@@ -236,6 +239,8 @@ pub fn lower(
             nested_strlit_binders,
         },
         &builtins,
+        source_path,
+        source_text,
     )
     .run()
 }
@@ -293,7 +298,7 @@ mod tests {
         let src = ipe_parse::parse_module(GOLDEN, &mut i).ok()?;
         let m = ipe_canon::canonicalise(&src, &mut i).ok()?;
         let types = ipe_types::infer(&m, &mut i).ok()?;
-        let program = lower(&m, &types, &mut i).ok()?;
+        let program = lower(&m, &types, &mut i, "", "").ok()?;
         Some((program, i))
     }
 
@@ -479,7 +484,7 @@ mod tests {
         let src = ipe_parse::parse_module(source, &mut i).ok()?;
         let m = ipe_canon::canonicalise(&src, &mut i).ok()?;
         let types = ipe_types::infer(&m, &mut i).ok()?;
-        let program = lower(&m, &types, &mut i).ok()?;
+        let program = lower(&m, &types, &mut i, "", "").ok()?;
         let module = program.modules.into_iter().next()?;
         let func = module
             .funcs
@@ -495,7 +500,7 @@ mod tests {
         let src = ipe_parse::parse_module(source, &mut i).ok()?;
         let m = ipe_canon::canonicalise(&src, &mut i).ok()?;
         let types = ipe_types::infer(&m, &mut i).ok()?;
-        let program = lower(&m, &types, &mut i).ok()?;
+        let program = lower(&m, &types, &mut i, "", "").ok()?;
         let module = program.modules.into_iter().next()?;
         let func = module
             .funcs
@@ -611,7 +616,7 @@ mod tests {
         let src = ipe_parse::parse_module(source, &mut i)?;
         let m = ipe_canon::canonicalise(&src, &mut i)?;
         let types = ipe_types::infer(&m, &mut i)?;
-        lower(&m, &types, &mut i)
+        lower(&m, &types, &mut i, "", "")
             .map(|_| ())
             .map_err(|(d, _home)| d)
     }
@@ -1026,7 +1031,7 @@ mod tests {
                     .ok()?;
             let m = ipe_canon::canonicalise(&src, &mut i).ok()?;
             let types = ipe_types::infer(&m, &mut i).ok()?;
-            lower(&m, &types, &mut i).ok()
+            lower(&m, &types, &mut i, "", "").ok()
         })();
         assert!(pipeline.is_some(), "v must lower");
         let Some(program) = pipeline else { return };

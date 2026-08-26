@@ -79,6 +79,45 @@ fn compile(name: &str, source: &str, target: Target) -> Outcome {
     }
 }
 
+/// Like [`compile`] but with the production flag set — simulates `ipe release`
+/// so the `Debug.*` gate (IPE-L0140) fires without spawning a real release build.
+fn compile_production(name: &str, source: &str) -> Outcome {
+    let Some(entry) = write_entry(name, source) else {
+        return Outcome::Skip;
+    };
+    let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
+        .join("negsuite-prod-out")
+        .join(name);
+    let _ = std::fs::remove_dir_all(&out);
+    let Ok(runtime) = ipe::resolve_runtime() else {
+        return Outcome::Skip;
+    };
+    let options = BuildOptions {
+        production: true,
+        ..BuildOptions::default()
+    };
+    match ipe::build_with_options(&entry, &out, &runtime, options) {
+        Ok(()) => Outcome::Accepted("compiled successfully (exit 0)".to_owned()),
+        Err(CliError::Pipeline { diag, .. }) => Outcome::Rejected(diag.code().as_str()),
+        Err(other) => Outcome::Accepted(format!("non-pipeline error: {other:?}")),
+    }
+}
+
+/// Assert that `source`, compiled with the production flag, is rejected with
+/// exactly `expected`. A wrong code, an accept (a SEAL hole), or a non-pipeline
+/// failure fails the test.
+#[track_caller]
+fn assert_rejected_production(name: &str, source: &str, expected: &str) {
+    match compile_production(name, source) {
+        Outcome::Skip => {}
+        Outcome::Rejected(got) => assert_eq!(
+            got, expected,
+            "{name}: expected {expected}, got {got} — rejected for the WRONG reason"
+        ),
+        Outcome::Accepted(how) => fail_accepted(name, expected, &how),
+    }
+}
+
 /// Run the full `ipe` pipeline over a multi-file project (sibling discovery):
 /// `files` are written under a fresh `src/` keyed by `name`, and `Main.ipe` is
 /// the entry. Needed for cross-module gates (e.g. duplicate import qualifier)
@@ -1998,6 +2037,61 @@ fn lower_debug_todo_compiles_in_dev_build() {
          main =\n    Io.println (describe 1)\n"
     );
     assert_compiles("lower_debug_todo_dev", &src);
+}
+
+/// `ipe release` (production flag) must reject `Debug.todo` with IPE-L0140 —
+/// membership in `Ipe.Debug` is the gate, regardless of app kind or target.
+/// Companion to [`lower_debug_todo_compiles_in_dev_build`]: the same program
+/// that a dev build accepts must be blocked by a production build.
+#[test]
+fn release_rejects_debug_todo() {
+    let src = format!(
+        "{HEAD}import Ipe.Io as Io\n\
+         import Ipe.Debug as Debug\n\
+         describe : Int -> String\n\
+         describe n =\n    Debug.todo \"not ready\"\n\
+         main : Task Error ()\n\
+         main =\n    Io.println (describe 1)\n"
+    );
+    assert_rejected_production("release_rejects_debug_todo", &src, "IPE-L0140");
+}
+
+/// `ipe release` (production flag) must reject `Debug.explain` with IPE-L0140 —
+/// module membership alone gates it, independent of `Debug.todo`.
+/// Dev build accepts it; production build blocks it.
+#[test]
+fn release_rejects_debug_explain() {
+    let src = format!(
+        "{HEAD}import Ipe.Ui as Ui\n\
+         import Ipe.Debug as Debug\n\
+         view : String -> Ui.Element msg\n\
+         view label =\n\
+         \x20   Ui.el\n\
+         \x20       [ Debug.explain ]\n\
+         \x20       (Ui.text label)\n\
+         main : Task Error ()\n\
+         main =\n    Task.succeed ()\n"
+    );
+    assert_rejected_production("release_rejects_debug_explain", &src, "IPE-L0140");
+}
+
+/// A `case` missing an arm is non-exhaustive (IPE-T0010) even when another arm
+/// contains `Debug.todo`. `todo` is a value-level expression that inhabits any
+/// type; it is NOT a wildcard pattern and does NOT satisfy exhaustiveness.
+#[test]
+fn case_with_todo_arm_still_requires_all_constructors() {
+    let src = format!(
+        "{HEAD}import Ipe.Debug as Debug\n\
+         type Color = Red | Green | Blue\n\
+         describe : Color -> String\n\
+         describe c =\n\
+         \x20   case c of\n\
+         \x20       Red   -> \"done\"\n\
+         \x20       Green -> Debug.todo \"pending\"\n\
+         main : Task Error ()\n\
+         main =\n    Task.succeed ()\n"
+    );
+    assert_rejected("case_todo_does_not_excuse_missing_arm", &src, "IPE-T0010");
 }
 
 /// The applicative record-codec builder seed — `object ctor` for a `Builder`

@@ -11835,6 +11835,15 @@ pub struct Lowerer<'a> {
     /// only E0271 at `cargo` time would reveal the problem, which is acceptable
     /// for the rare forward-reference pattern.
     fn_row_params: std::cell::RefCell<BTreeMap<TopLevelKey, Vec<(usize, RowParam)>>>,
+    /// Display path for the source file being lowered (e.g. `"Main.ipe"`).
+    /// Used to construct the call-site location injected into `Debug.todo`
+    /// calls at lowering time. Empty string → falls back to `"<unknown>:0"`.
+    source_path: String,
+    /// Full source text for the file being lowered.  Together with
+    /// `source_path` and the call-site [`Span`] this produces the
+    /// `<file>:<line>` string injected into `Debug.todo` lowered args.
+    /// Empty string → falls back to `"<unknown>:0"`.
+    source_text: String,
 }
 
 /// Normalize the fn-carrier of every function type that sits DIRECTLY under a
@@ -12543,6 +12552,8 @@ impl<'a> Lowerer<'a> {
         interner: &'a Interner,
         pools: SymbolPools,
         builtins: &'a BuiltinCtors,
+        source_path: &str,
+        source_text: &str,
     ) -> Self {
         let SymbolPools {
             eta_params,
@@ -12774,6 +12785,8 @@ impl<'a> Lowerer<'a> {
             toplevel_fn_aliases: std::cell::RefCell::new(BTreeMap::new()),
             shared_fn_reads: std::cell::RefCell::new(BTreeMap::new()),
             fn_row_params: std::cell::RefCell::new(BTreeMap::new()),
+            source_path: source_path.to_owned(),
+            source_text: source_text.to_owned(),
         }
     }
 
@@ -13783,8 +13796,30 @@ impl<'a> Lowerer<'a> {
     /// heuristic for those, as it already does for homeless type errors. Every
     /// `?` below yields a bare `Diagnostic`; the per-def `lower_def` boundary is
     /// the one site that attaches a non-empty home.
-    #[allow(clippy::similar_names)] // `uses_ui` / `uses_tui` are intentionally similar
+    #[allow(clippy::similar_names)] // `uses_ui` / `uses_tui_shape` are intentionally similar
     #[allow(clippy::too_many_lines)] // the module-assembly tail is one linear pass
+    /// Resolve a source [`Span`] to a human-readable `"<file>:<line>"` string
+    /// using the source path and text threaded into the lowerer at construction
+    /// time.  Falls back to `"<unknown>:0"` when source info is absent.
+    fn span_to_location(&self, span: Span) -> String {
+        if self.source_path.is_empty() || self.source_text.is_empty() {
+            return "<unknown>:0".to_owned();
+        }
+        let byte = (span.lo as usize).min(self.source_text.len());
+        // Clamp to the nearest char boundary (source text is valid UTF-8).
+        let byte = {
+            let mut b = byte;
+            while b > 0 && !self.source_text.is_char_boundary(b) {
+                b -= 1;
+            }
+            b
+        };
+        let before = &self.source_text[..byte];
+        let line = before.bytes().filter(|&b| b == b'\n').count() + 1;
+        format!("{}:{}", self.source_path, line)
+    }
+
+    #[allow(clippy::too_many_lines)]
     pub fn run(self) -> Result<Program, (Diagnostic, Vec<Symbol>)> {
         let mut types_ir: Vec<TypeDef> = Vec::with_capacity(self.m.unions.len());
         for u in &self.m.unions {
@@ -14253,18 +14288,18 @@ impl<'a> Lowerer<'a> {
         // detect Ipe.Ui / Ipe.Html / Ipe.Web / Ipe.Tui / Ipe.WebView usage.
         // TUI runtime files (tui/app.rs, tui/layout.rs, tui/focus.rs) import
         // `super::super::ui` and `super::super::html` unconditionally, so
-        // `uses_ui` must be true whenever `uses_tui` is true — even when the
+        // `uses_ui` must be true whenever `uses_tui_shape` is true — even when the
         // Ipê source only calls `Ui.column`/`Ui.el`/`Ui.text` (kernels that
-        // trigger `uses_tui`) and never calls `Ui.layout`/`Ui.layoutWith`
+        // trigger `uses_tui_shape`) and never calls `Ui.layout`/`Ui.layoutWith`
         // (kernels that trigger `uses_ui`).
-        let uses_tui = kernel_usage.tui;
-        let uses_ui = kernel_usage.ui || uses_tui;
+        let uses_tui_shape = kernel_usage.tui;
+        let uses_ui = kernel_usage.ui || uses_tui_shape;
         let uses_web = kernel_usage.web;
         let uses_webview = kernel_usage.webview;
 
         // detect Ipe.Css (Ipe.CssSafety) leaf-kernel usage. Independent
         // of `uses_ui` — a pure-Ipe.Css program uses no render kernel.
-        let uses_css = kernel_usage.css;
+        let uses_css_leaf = kernel_usage.css;
 
         // detect Ipe.Auth kernel usage — any of hashPassword, verifyPassword,
         // signToken, verifyToken, register, login, setRole, and companions.  The
@@ -14339,9 +14374,9 @@ impl<'a> Lowerer<'a> {
             uses_url,
             uses_ui,
             uses_web,
-            uses_tui,
+            uses_tui: uses_tui_shape,
             uses_webview,
-            uses_css,
+            uses_css: uses_css_leaf,
             uses_auth,
             uses_principal,
             uses_websocket,
@@ -19556,7 +19591,7 @@ impl<'a> Lowerer<'a> {
         self.reject_float_keyed_collection(call_span)?;
 
         // App-entry / Web.route intercepts — see the helper.
-        match self.intercept_web_kernel_call(callee, args)? {
+        match self.intercept_web_kernel_call(callee, args, call_span)? {
             Intercepted::Done(e) => Ok(e),
             Intercepted::Fallthrough(peeked) => {
                 self.lower_call_uniform(callee, args, call_span, peeked)
@@ -19577,6 +19612,7 @@ impl<'a> Lowerer<'a> {
         &self,
         callee: &canon::Expr,
         args: &[canon::Expr],
+        call_span: Span,
     ) -> DResult<Intercepted> {
         if let canon::Expr_::VarKernel { .. } | canon::Expr_::VarTopLevel { .. } = &callee.value {
             let peek = self.lower_callee(callee)?;
@@ -19894,6 +19930,24 @@ impl<'a> Lowerer<'a> {
                     })?;
                     self.reject_illegal_js_port_seal(decoder)?;
                     return Err(unsupported(decoder.span, Feature::JsPortTransport));
+                }
+                // ── Debug.todo : String -> a — inject call-site location ──────
+                // The surface arity is 1 (user supplies only the note string).
+                // At lowering time a compiler-injected location string is prepended
+                // so the runtime `debug_todo(location, note)` can print
+                // `TODO at <file>:<line>: <note>` without any runtime source-map
+                // dependency.  The intercept bypasses the arity-1 uniform check.
+                Callee::Kernel(KernelFn::DebugTodo) if args.len() == 1 => {
+                    if let Some(note_arg) = args.first() {
+                        let lowered_note = self.lower_expr(note_arg)?;
+                        let location = self.span_to_location(call_span);
+                        return Ok(Intercepted::Done(Expr::Call {
+                            callee: peek,
+                            args: vec![Expr::Str(location), lowered_note],
+                            pin: CallPin::None,
+                            on_form: OnFormKind::NotForm,
+                        }));
+                    }
                 }
                 _ => {}
             }
@@ -27094,6 +27148,8 @@ mod tests {
                 nested_strlit_binders: vec![],
             },
             &builtins,
+            "",
+            "",
         );
 
         let prelude_home = ModPath(Vec::new());
@@ -27366,6 +27422,8 @@ mod tests {
                 nested_strlit_binders: vec![],
             },
             &builtins,
+            "",
+            "",
         );
 
         // ── Test loop ────────────────────────────────────────────────────────
@@ -27483,6 +27541,8 @@ mod tests {
                 nested_strlit_binders: vec![],
             },
             &builtins,
+            "",
+            "",
         );
 
         let mut mismatches = Vec::new();
@@ -28858,6 +28918,8 @@ mod tests {
                 nested_strlit_binders: vec![],
             },
             &builtins,
+            "",
+            "",
         );
 
         // Build the two IR types that would come from lowering:
@@ -29126,6 +29188,8 @@ mod tests {
                 nested_strlit_binders: vec![],
             },
             &builtins,
+            "",
+            "",
         );
 
         let any = || ipe_ir::IrType::Generic(any_sym);

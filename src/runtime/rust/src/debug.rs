@@ -27,12 +27,16 @@ pub fn debug_log<T: IpeStringify>(label: String, value: T) -> T {
     value
 }
 
-/// `Debug.todo : String -> a`. Prints `"TODO: <note>"` to stderr then exits
-/// with a non-zero code.  Returns `!` (the never type), which coerces to any
-/// `A` at the call site — no Rust `panic!` is used.
-pub fn debug_todo<A>(note: String) -> A {
+/// `Debug.todo : String -> a`. Prints `"TODO at <file>:<line>: <note>"` to
+/// stderr then exits with a non-zero code.  Returns `!` (the never type),
+/// which coerces to any `A` at the call site — no Rust `panic!` is used.
+///
+/// `location` is a `"<file>:<line>"` string injected by the lowerer at
+/// compile time from the call-site source span; it is never computed at
+/// runtime.  `note` is the developer-supplied string argument.
+pub fn debug_todo<A>(location: String, note: String) -> A {
     use std::io::Write as _;
-    let msg = format!("TODO: {note}");
+    let msg = format!("TODO at {location}: {note}");
     // Broken-pipe suppression: same discipline as `debug_log`.
     let _ = writeln!(std::io::stderr().lock(), "{msg}");
     crate::system::system_exit(1)

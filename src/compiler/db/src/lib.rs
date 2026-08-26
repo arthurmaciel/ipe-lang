@@ -1035,7 +1035,12 @@ pub fn lower_program(db: &dyn Db, root: SourceRoot, entry: SourceFile) -> LowerR
     let linked = linked_program(db, root, entry).map_err(|d| (d, Vec::new()))?;
     let types = typecheck(db, root, entry)?;
     let mut interner = db.interner().lock();
-    ipe_lower::lower(&linked.module, &types, &mut interner).map(Arc::new)
+    // Provide the entry file's display path and source text so the lowerer
+    // can inject `<file>:<line>` into `Debug.todo` call sites.
+    let src_path = entry.module_path(db).join(".");
+    let src_path = format!("{src_path}.ipe");
+    let src_text = entry.text(db).clone();
+    ipe_lower::lower(&linked.module, &types, &mut interner, &src_path, &src_text).map(Arc::new)
 }
 
 // ---------------------------------------------------------------------------
