@@ -215,6 +215,28 @@ pub fn seal_decode_serde<T: serde::de::DeserializeOwned>(
     })
 }
 
+/// Fail-closed boundary gate for an untrusted raw JS-boundary input, applying the
+/// SAME conservative-first bounds as [`seal_decode`] steps 1–2 (byte budget +
+/// depth-bounded parse) WITHOUT a typed decode. It is the check an untyped ingress
+/// route (the `Ipe.Js` inbound port) runs before fanning a raw frame to its
+/// per-session subscribers, each of which then runs its own typed [`seal_decode`].
+///
+/// A payload that exceeds the byte budget, is not valid JSON, or is nested past
+/// the depth budget is refused here and dropped WHOLE at the boundary — the same
+/// discipline as a typed decode failure, never a panic and never a partial frame.
+#[cfg(feature = "json")]
+pub fn seal_boundary_check(input: &str, limits: SealLimits) -> Result<(), SealDecodeError> {
+    if input.len() > limits.max_input_bytes {
+        return Err(SealDecodeError::TooLarge {
+            len: input.len(),
+            max: limits.max_input_bytes,
+        });
+    }
+    parse_depth_bounded(input, limits.max_nesting_depth)
+        .map(|_| ())
+        .map_err(|detail| SealDecodeError::Malformed { detail })
+}
+
 /// Parse `input` into a [`JsonVal`] with the deserializer's recursion limit set
 /// to `max_depth`, so a document nested deeper than the seal budget is rejected
 /// as a parse error rather than recursing further. Returns the parser's own error

@@ -390,12 +390,27 @@ pub fn render_page_full(sid: &str, base: &str, body: &str, csrf_token: &str) -> 
     // no widget, so a widget-free page is byte-identical and its CSP is unchanged.
     // It loads AFTER the client core so `__ipeEmitWidgetUp` can reuse `__ipeSend`.
     let widget_scripts = widget_assets::page_scripts(base, widget_assets::WidgetTransport::Server);
+    let port_glue = port_glue_script(base);
     let tail_scripts = format!(
         "<script>window.__IPE_SID={sid_js};window.__IPE_BASE={base_js};window.__IPE_CSRF_TOKEN={csrf_js};{config_js}</script>\
          <script src=\"{client_src}\" integrity=\"{integrity}\" crossorigin=\"anonymous\"></script>\
-         {widget_scripts}"
+         {widget_scripts}{port_glue}"
     );
     page_shell(&head_extra, &body_inner, &tail_scripts)
+}
+
+/// The SRI-pinned `<script>` tag that loads the `Ipe.Js` browser port surface,
+/// or an empty string when the glue is unavailable. Loaded AFTER the client core
+/// so `window.__ipePortSend` (the inbound seam) and the `port` SSE listener are
+/// already installed when `window.ipe.send` first fires. Content-addressed +
+/// integrity-pinned exactly like the client core, so a tampered byte makes the
+/// browser refuse the module.
+fn port_glue_script(base: &str) -> String {
+    let path = crate::js_port_glue::port_glue_path();
+    let integrity = crate::js_port_glue::port_glue_integrity();
+    format!(
+        "<script src=\"{base}{path}\" integrity=\"{integrity}\" crossorigin=\"anonymous\"></script>"
+    )
 }
 
 /// Same as [`render_page_full`] but appends `overlay` (raw HTML) after the
@@ -420,10 +435,11 @@ fn render_page_full_with_overlay(
     let head_extra = format!("<meta name=\"ipe-base\" content=\"{base}\">");
     let body_inner = format!("<div id=\"ipe-root\">{body}</div>{dev_banner}{overlay}");
     let widget_scripts = widget_assets::page_scripts(base, widget_assets::WidgetTransport::Server);
+    let port_glue = port_glue_script(base);
     let tail_scripts = format!(
         "<script>window.__IPE_SID={sid_js};window.__IPE_BASE={base_js};window.__IPE_CSRF_TOKEN={csrf_js};{config_js}</script>\
          <script src=\"{client_src}\" integrity=\"{integrity}\" crossorigin=\"anonymous\"></script>\
-         {widget_scripts}"
+         {widget_scripts}{port_glue}"
     );
     page_shell(&head_extra, &body_inner, &tail_scripts)
 }
@@ -715,6 +731,23 @@ async fn drive_session<Model, Msg, FUpdate, FView, FSubs>(
     FSubs: Fn(Model) -> IpeSub<Msg> + Send + Sync + 'static,
 {
     let mut sub_handles: Vec<tokio::task::JoinHandle<()>> = Vec::new();
+
+    // `Ipe.Js` port channel lifecycle. Open this session's inbound/outbound port
+    // endpoints now (before the browser can POST to `/_ipe/port`) and close them
+    // when the driver exits — the driver is the session's single mortal owner (it
+    // exits once the store has evicted the session and no SSE connection pins it),
+    // so binding open/close here drops no-longer-reachable channels without
+    // touching every store backend's eviction path. The guard closes on EVERY exit
+    // path, including the early `return` when the session is already gone.
+    struct PortLifecycle(String);
+    impl Drop for PortLifecycle {
+        fn drop(&mut self) {
+            crate::js_port::session_close(&self.0);
+        }
+    }
+    crate::js_port::session_open(&sid);
+    let _port_lifecycle = PortLifecycle(sid.clone());
+
     // Initial subscriptions — Go parity (setupSubscriptions runs at session
     // creation, before the first event; live.go:3729). Without this a
     // watch-only session never subscribes until it dispatches its own Msg, so a
@@ -1969,6 +2002,26 @@ where
                 entry.lock().unwrap_or_else(|e| e.into_inner()).sse_tx = Some(tx.clone());
             }
 
+            // Bind this session's `Ipe.Js` outbound port sink to THIS SSE
+            // connection: every `js_send` whose origin is this sid is forwarded to
+            // the browser as an `event: port` frame over the same stream that
+            // carries DOM patches (mirroring how the custom-element served-widget
+            // transport delivers per-session). The sink is keyed by sid in the port
+            // registry, so a frame can only ever reach the session that produced it
+            // — never another session's stream. `try_send` is non-blocking (this
+            // sink runs on the synchronous Cmd-dispatch path): a full SSE buffer
+            // drops the one frame rather than blocking the dispatch loop, the same
+            // fire-and-forget contract the port carries client-side.
+            if let Some(sid) = sid.clone() {
+                let port_tx = tx.clone();
+                crate::js_port::register_out_sink_for(
+                    &sid,
+                    std::sync::Arc::new(move |encoded: &str| {
+                        let _ = port_tx.try_send(SsePatch(sse::frame("port", encoded)));
+                    }),
+                );
+            }
+
             // Metrics (Go parity: ipe_web_sse_connections_total /
             // ipe_web_sessions_active). Count the connection and mark the session
             // active; the gauge is decremented when the response body stream is
@@ -2201,6 +2254,87 @@ where
                 .into_response()
         }
 
+        // ── POST /_ipe/port ───────────────────────────────────────────────
+        // The `Ipe.Js` inbound port route: a browser→server port frame. Runs the
+        // SAME trust gate as `/_ipe/event` — the CSRF middleware validates the
+        // mutating POST, and the target session is authenticated by the session
+        // COOKIE sid ONLY (never a body-supplied id), so a caller cannot address
+        // another session's port by naming it. The raw payload is checked
+        // fail-closed through the bounded seal boundary (byte + depth budget);
+        // an oversized/malformed/over-nested frame is DROPPED WHOLE here, and only
+        // an accepted frame is delivered to THIS session's inbound channel — never
+        // any other session's. The per-subscriber typed seal decode still runs in
+        // `js_subscribe`, so a well-formed-but-wrong-type frame is dropped there.
+        async fn port_handler<Model, Msg, FInit, FUpdate, FView, FSubs>(
+            State(st): State<WebState<Model, Msg, FInit, FUpdate, FView, FSubs>>,
+            headers: axum::http::HeaderMap,
+            body: axum::body::Bytes,
+        ) -> Response
+        where
+            Model: Clone + Send + 'static,
+            Msg: Clone + Send + 'static,
+            FInit: Send + Sync + 'static,
+            FUpdate: Send + Sync + 'static,
+            FView: Send + Sync + 'static,
+            FSubs: Send + Sync + 'static,
+        {
+            #[derive(serde::Deserialize)]
+            struct PortBody {
+                /// The raw seal wire string the browser sent (`JSON.stringify` of
+                /// the developer's port value). Decoded fail-closed downstream.
+                #[serde(default)]
+                payload: String,
+            }
+            let parsed: PortBody = match serde_json::from_slice(&body) {
+                Ok(b) => b,
+                Err(_) => return (StatusCode::BAD_REQUEST, "bad body").into_response(),
+            };
+            // Authenticate by the COOKIE sid ONLY (same rule as event_handler) —
+            // never trust a body-supplied session id.
+            let sid = match sid_from_cookie(&headers) {
+                Some(s) => s,
+                None => {
+                    return (
+                        StatusCode::NOT_FOUND,
+                        [(axum::http::HeaderName::from_static("x-ipe-web"), "1")],
+                        SESSION_LOST_BODY,
+                    )
+                        .into_response();
+                }
+            };
+            // The session must exist (a live Web session) for the frame to have a
+            // destination; an unknown sid is the same session-lost 404 the event
+            // path returns.
+            match st.store.get(&sid).await {
+                Some(store::StoreHit::Web(_)) => {}
+                _ => {
+                    return (
+                        StatusCode::NOT_FOUND,
+                        [(axum::http::HeaderName::from_static("x-ipe-web"), "1")],
+                        SESSION_LOST_BODY,
+                    )
+                        .into_response();
+                }
+            }
+            // Fail-closed boundary gate: reject an oversized / malformed /
+            // over-nested frame BEFORE delivering it. A rejected frame is dropped
+            // whole (200 ack, nothing delivered) — the client is never trusted, and
+            // a bad frame is not an error the browser must retry.
+            use crate::seal_codec::{SealLimits, seal_boundary_check};
+            if seal_boundary_check(&parsed.payload, SealLimits::default()).is_ok() {
+                crate::js_port::deliver_inbound_for(&sid, parsed.payload);
+            }
+            (
+                StatusCode::OK,
+                [
+                    (axum::http::header::CONTENT_TYPE, "application/json"),
+                    (axum::http::HeaderName::from_static("x-ipe-web"), "1"),
+                ],
+                "{\"ok\":true}",
+            )
+                .into_response()
+        }
+
         // Background TTL eviction (Go memoryStore.cleanupLoop parity): sweep
         // idle-expired sessions every 60 s. Persistent backends also prune their
         // checkpoint table in `sweep`.
@@ -2242,6 +2376,12 @@ where
         // before the handler sees the bytes, so an over-sized payload is
         // rejected at the extract layer with 413 Payload Too Large.
         let event_route = post(event_handler::<Model, Msg, FInit, FUpdate, FView, FSubs>)
+            .layer(axum::extract::DefaultBodyLimit::max(web_max_body_bytes()));
+
+        // Inbound `Ipe.Js` port route: same body-size cap as `/_ipe/event`, so an
+        // over-sized port frame is rejected at the extract layer (413) before the
+        // handler's own seal-boundary budget even runs.
+        let port_route = post(port_handler::<Model, Msg, FInit, FUpdate, FView, FSubs>)
             .layer(axum::extract::DefaultBodyLimit::max(web_max_body_bytes()));
 
         // Content-addressed client JS asset route. The URL is computed once at
@@ -2355,20 +2495,28 @@ where
         // `.with_state(state)` takes ownership of `state` below.
         let shutdown_store = state.store.clone();
 
-        let mut router = Router::new()
+        let router = Router::new()
             .route(
                 "/_ipe/sse",
                 get(sse_handler::<Model, Msg, FInit, FUpdate, FView, FSubs>),
             )
             .route("/_ipe/event", event_route)
-            .route(&client_js_route_path, get(serve_client_js));
-        #[cfg(feature = "debugger")]
-        {
-            router = router.route(
-                "/_ipe/debug/scrub",
-                post(scrub_handler::<Model, Msg, FInit, FUpdate, FView, FSubs>),
+            .route("/_ipe/port", port_route)
+            .route(&client_js_route_path, get(serve_client_js))
+            // The `Ipe.Js` browser port surface (`window.ipe`), served
+            // content-addressed with SRI — the same static, immutable discipline as
+            // the client core and widget glue. A GET of fixed bytes (no user input),
+            // so it is CSRF-exempt by method and open. Registered before the page
+            // catch-all so the glue URL hits its static handler.
+            .route(
+                &crate::js_port_glue::port_glue_path(),
+                get(|| async { serve_widget_js(crate::js_port_glue::port_glue_js()) }),
             );
-        }
+        #[cfg(feature = "debugger")]
+        let router = router.route(
+            "/_ipe/debug/scrub",
+            post(scrub_handler::<Model, Msg, FInit, FUpdate, FView, FSubs>),
+        );
         let mut router = router
             // Observability surface (Go parity — observability.go).
             .route("/_ipe/healthz", get(observability::healthz))

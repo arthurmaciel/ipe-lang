@@ -1196,6 +1196,28 @@ function __ipeResizeImage(file, maxW, maxH, cb) {
 // registered handler by id, so the id maps to __ipeSend's handlerId slot
 // (not msgName) and value maps to args.
 window.__ipe_send = function(id, value, opts) { __ipeSend("", value, id, opts); };
+
+// Ipe.Js inbound port seam. The port glue (window.ipe.send) stringifies
+// the developer's value and hands the raw JSON string here; this POSTs it
+// to /_ipe/port with the per-session CSRF token. The server authenticates
+// by the session cookie, gates the frame fail-closed through the bounded
+// seal budget, and delivers it to THIS session's js_subscribe only — never
+// another session's. Fire-and-forget: a network failure drops the one
+// frame (the port is best-effort, unlike the seq-ordered event path), so
+// there is no retry queue here. `raw` is already a JSON string, so it is
+// wrapped in a small envelope {payload: raw} the server parses.
+window.__ipePortSend = function(raw) {
+  if (typeof raw !== "string") return;
+  var headers = {"Content-Type":"application/json"};
+  if (__ipeCsrfToken) headers["X-Ipe-Csrf"] = __ipeCsrfToken;
+  fetch(__ipeBase + "/_ipe/port", {
+    method: "POST",
+    headers: headers,
+    body: JSON.stringify({ payload: raw }),
+    credentials: "same-origin"
+  }).catch(function() { /* best-effort port send; drop on failure */ });
+};
+
 // ipe-nav: intercept clicks on <a ipe-nav ...> links so navigation is a
 // client-side fetch + innerHTML swap instead of a full page reload.
 // Falls back to normal navigation on modifier keys (cmd/ctrl/shift/alt),
@@ -1484,6 +1506,18 @@ function __ipeOpenSSE() {
     __ipeHandleResponse(frame.seq, frame.ackInputs, function() {
       __ipeApplyPatches(frame.patches);
     }, frame.globalSeq);
+  });
+  // Ipe.Js outbound port frame: the server's js_send delivers the seal
+  // wire string (a JSON string) for THIS session over its own SSE
+  // stream. Hand it to the port glue's receiver (window.ipeOnReceive),
+  // which parses it as data (never eval) and calls the page's
+  // ipe.onReceive/onSync handler. A frame that arrives before the glue
+  // has wired a receiver is a no-op (deliver checks typeof).
+  __ipeSSE.addEventListener("port", function(e) {
+    __ipeLastSseAt = Date.now();
+    if (typeof window.ipeOnReceive === "function") {
+      window.ipeOnReceive(e.data);
+    }
   });
   __ipeSSE.addEventListener("open", function() {
     // EventSource fired open — but we don't trust this alone, since a
