@@ -17,14 +17,20 @@ Ipê is meant to be:
    over community-openess or favor efficiency over security or correctness), it
    is better to fork the project and start a new one with different principles.
 
-3. community-centered: diversity is not only welcomed, but it is the foundation of
+2. community-centered: diversity is not only welcomed, but it is the foundation of
    the Ipê project. Respecting diversity in its many forms (related to age, gender,
-   sexual orientation, ethinicity, race, culture, physical and cognitive ability,
+   sexual orientation, ethnicity, race, culture, physical and cognitive ability,
    experience and socio-economic levels, etc) is MANDATORY. While respecting the
    values, principles and rules, the community has full autonomy to modify and
    extend the language, always trying to reach consensus. If after 3
    attempts of discussions and votes no consensus is reached, a fourth round of
    discussion and vote should elect the majority's decision.
+
+   The core language and standard library are kept deliberately small and
+   principled. Breadth — new capabilities, platform and device integrations,
+   domain libraries — is meant to grow as community packages built on these
+   principles, so developers and users extend the language together rather than
+   waiting on the core to cover every need.
 
 ## The six technical principles (strict order)
 
@@ -56,9 +62,10 @@ rules during development and use.
 4. **Efficiency** — within the bounds of 1–3: no needless allocation or
    cloning, no hot-path recomputation, no O(n²) where O(n) is trivial, small
    binary and memory footprint. Never bought by trading a higher principle.
-5. **Completeness** — cover as much of the language + stdlib as possible. A
-   missing kernel/feature is a documented limitation, not a bug; the goal is
-   to keep shrinking that set.
+5. **Ease of use** — the language stays out of the developer's way: a small and
+   predictable surface, sensible defaults, little ceremony, and diagnostics that
+   explain both the problem and the fix rather than only naming it. A feature
+   that is present but hard to use correctly is not yet finished.
 6. **Readability** — codegen and generated Rust are clear, well-named,
    maintainable. Everything else equal, the clearer form wins.
 
