@@ -89,6 +89,10 @@ rustix = { version = "0.38", features = ["fs"] }
 # `cargo build --message-format=json` parsing that locates the produced binary
 # lives in the `e2e_support` crate, so serde_json is pulled in transitively.
 e2e-support = { path = "../../tools/e2e-support" }
+# SRI content-pinning assertion in the widget E2E: the test recomputes
+# `sha256-<base64>` over the served asset bytes and asserts it equals the
+# `integrity` the page pinned (page == bytes). Same version as the runtime.
+base64 = "0.22"
 
 [lints]
 workspace = true

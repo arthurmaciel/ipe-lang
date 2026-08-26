@@ -28,6 +28,13 @@ mod lower;
 /// by manifest generation (SP2) and sandbox configuration (SP4).
 pub use capabilities::program_capabilities;
 
+/// The generated `ipe-ce-<hex16>` custom-element tag for a widget hook at a
+/// cleaned, in-project path. The SINGLE definition the lowerer uses to render the
+/// `Ui.widget` view node — re-exported so the build stage that serves the widget
+/// asset (and generates its registration glue) mints the identical tag, never a
+/// drifting second hash of the same path.
+pub use lower::custom_element_tag;
+
 /// Test-only surface: the crate-private TCO analysis/rewrite,
 /// re-exported so the integration-test binary can drive them directly. Hidden
 /// from the public docs; not part of the stable API.
