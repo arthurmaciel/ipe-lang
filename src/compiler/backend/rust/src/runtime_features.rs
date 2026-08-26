@@ -158,6 +158,13 @@ pub enum RuntimeFeature {
     /// selected on a native target — the `wasm` runtime module is target-cfg'd to
     /// `wasm32`, so a native crate that enabled it would fail to link.
     WasmClient,
+    /// `debugger` — the development-only time-travelling debugger recorder
+    /// (`ipe build/run --debugger`). Selected by [`EmitCtx::debugger`], not by
+    /// any kernel/surface reachability: it is a build-mode opt-in, orthogonal to
+    /// what the program uses. Adds the `debugger/mod.rs` recorder module and the
+    /// wasm TEA record hook. `ipe release` never sets the flag, so no production
+    /// artifact carries recorder code.
+    Debugger,
 }
 
 impl RuntimeFeature {
@@ -194,6 +201,7 @@ impl RuntimeFeature {
             Self::Crypto => "crypto",
             Self::Jwt => "jwt",
             Self::WasmClient => "wasm-client",
+            Self::Debugger => "debugger",
         }
     }
 }
@@ -245,6 +253,13 @@ pub fn runtime_features(ctx: &EmitCtx) -> RuntimeFeatureSet {
     if ctx.target == ipe_ir::Target::WasmClient {
         let mut set = BTreeSet::new();
         set.insert(RuntimeFeature::WasmClient);
+        // `ipe build/run --debugger --target wasm`: the recorder rides on top of
+        // the closed wasm floor. `debugger` implies `json`/`serde`, already in
+        // the `wasm-client` floor, and its `async` implication is inert on wasm
+        // (tokio is native-only) — the wasm `tea` types come from `wasm-client`.
+        if ctx.debugger {
+            set.insert(RuntimeFeature::Debugger);
+        }
         return RuntimeFeatureSet(set);
     }
 
@@ -444,6 +459,14 @@ pub fn runtime_features(ctx: &EmitCtx) -> RuntimeFeatureSet {
         set.insert(RuntimeFeature::Jwt);
     }
 
+    // Development-only time-travelling debugger (`ipe build/run --debugger`).
+    // Orthogonal to reachability — a build-mode opt-in, not a kernel/surface. It
+    // implies `json`/`serde`/`async` in the crate graph, all already present for
+    // any TEA program the recorder wraps. `ipe release` never sets the flag.
+    if ctx.debugger {
+        set.insert(RuntimeFeature::Debugger);
+    }
+
     RuntimeFeatureSet(set)
 }
 
@@ -516,6 +539,63 @@ mod tests {
         let backend = RustBackend::new(&interner);
         let ctx = backend.emit_ctx_for_tests(&prog).expect("build EmitCtx");
         runtime_features(&ctx).as_feature_names()
+    }
+
+    /// Compute the selected feature names for a single-module program under the
+    /// given target and `--debugger` flag, so the debugger wiring is exercised
+    /// through the exact ctx `ipe build/run --debugger` builds.
+    fn features_for_target_debugger(
+        target: ipe_ir::Target,
+        debugger: bool,
+        configure: impl FnOnce(&mut Module),
+    ) -> Vec<&'static str> {
+        let mut interner = Interner::new();
+        let main = interner.intern("Main").expect("intern Main");
+        let prog = Program {
+            imports_unsafe_submodule: false,
+            modules: vec![ctx_module(main, configure)],
+        };
+        let backend = RustBackend::new(&interner)
+            .with_target(target)
+            .with_debugger(debugger);
+        let ctx = backend.emit_ctx_for_tests(&prog).expect("build EmitCtx");
+        runtime_features(&ctx).as_feature_names()
+    }
+
+    // `ipe build/run --debugger` must make the emitted runtime request the
+    // `debugger` feature so the recorder is present; a build WITHOUT the flag
+    // must not select it (the recorder stays absent), on both the native and the
+    // wasm target.
+    #[test]
+    fn debugger_flag_selects_debugger_feature_native() {
+        let with = features_for_target_debugger(ipe_ir::Target::Native, true, |_| {});
+        assert!(
+            with.contains(&"debugger"),
+            "`--debugger` (native) must select the `debugger` feature: {with:?}"
+        );
+        let without = features_for_target_debugger(ipe_ir::Target::Native, false, |_| {});
+        assert!(
+            !without.contains(&"debugger"),
+            "a native build without `--debugger` must NOT select it: {without:?}"
+        );
+    }
+
+    #[test]
+    fn debugger_flag_selects_debugger_feature_wasm() {
+        let with = features_for_target_debugger(ipe_ir::Target::WasmClient, true, |_| {});
+        assert!(
+            with.contains(&"debugger"),
+            "`--debugger --target wasm` must select the `debugger` feature: {with:?}"
+        );
+        assert!(
+            with.contains(&"wasm-client"),
+            "the wasm floor stays present alongside `debugger`: {with:?}"
+        );
+        let without = features_for_target_debugger(ipe_ir::Target::WasmClient, false, |_| {});
+        assert!(
+            !without.contains(&"debugger"),
+            "a wasm build without `--debugger` must NOT select it: {without:?}"
+        );
     }
 
     #[test]

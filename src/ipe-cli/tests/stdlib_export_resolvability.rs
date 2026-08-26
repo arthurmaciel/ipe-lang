@@ -70,6 +70,7 @@ fn compile_main(main: &str) -> Result<(), String> {
         false,
         false,
         None,
+        false,
         String::new(),
     );
     ipe::compile_prepared(

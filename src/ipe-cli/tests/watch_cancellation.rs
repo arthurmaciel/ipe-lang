@@ -65,6 +65,7 @@ fn compile_worker_is_cancelled_by_a_concurrent_input_edit() {
         false,
         false,
         None,
+        false,
         String::new(),
     );
 
@@ -140,6 +141,7 @@ fn the_same_fixture_compiles_cleanly_without_a_concurrent_edit() {
         false,
         false,
         None,
+        false,
         String::new(),
     );
 

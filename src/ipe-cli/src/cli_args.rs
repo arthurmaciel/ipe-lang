@@ -386,6 +386,11 @@ pub struct BuildArgs {
     /// one-off, non-interactive form of consent (the durable form is
     /// `[capabilities] accept = ["unsafe"]` in `ipe.toml`).
     pub accept_risks: bool,
+    /// `--debugger` — compile the development-only time-travelling debugger into
+    /// the emitted runtime loop. Absent from `ipe release` so the debugger can
+    /// never ship in a production artifact. Orthogonal to the `Debug.*`
+    /// source-construct gate.
+    pub debugger: bool,
     /// The emit surface (IR dump vs project emit).
     pub mode: BuildMode,
     /// `--json` — emit each diagnostic as a stable JSON object instead of the
@@ -414,6 +419,7 @@ pub fn parse_build(rest: &[String]) -> Result<BuildArgs, CliError> {
     let mut emit_ir = false;
     let mut fix = false;
     let mut accept_risks = false;
+    let mut debugger = false;
     let mut static_flags = StaticFlags::default();
     let mut format: Option<OutputFormat> = None;
     while let Some(flag) = it.next() {
@@ -439,6 +445,7 @@ pub fn parse_build(rest: &[String]) -> Result<BuildArgs, CliError> {
             "--emit-ir" => emit_ir = true,
             "--fix" => fix = true,
             "--accept-risks" => accept_risks = true,
+            "--debugger" => debugger = true,
             other => {
                 return Err(usage_unknown_flag("build", other));
             }
@@ -512,6 +519,7 @@ pub fn parse_build(rest: &[String]) -> Result<BuildArgs, CliError> {
         runtime,
         fix,
         accept_risks,
+        debugger,
         mode,
         format: format.unwrap_or_default(),
     })
@@ -531,6 +539,10 @@ pub struct RunArgs {
     /// escape-hatch import and proceed without the acknowledgment prompt. Same
     /// one-off consent as `ipe build --accept-risks`.
     pub accept_risks: bool,
+    /// `--debugger` — compile the development-only time-travelling debugger into
+    /// the emitted runtime loop. Absent from `ipe release` so the debugger can
+    /// never ship in a production artifact.
+    pub debugger: bool,
     /// Arguments after `--`, forwarded verbatim to the compiled binary.
     pub bin_args: Vec<String>,
     /// `--json` — emit each diagnostic as a stable JSON object instead of the
@@ -566,6 +578,7 @@ pub fn parse_run(rest: &[String]) -> Result<RunArgs, CliError> {
     let mut out: Option<String> = None;
     let mut runtime: Option<String> = None;
     let mut accept_risks = false;
+    let mut debugger = false;
     let mut static_flags = StaticFlags::default();
     let mut format: Option<OutputFormat> = None;
     while let Some(flag) = it.next() {
@@ -589,6 +602,7 @@ pub fn parse_run(rest: &[String]) -> Result<RunArgs, CliError> {
                 "run",
             )?,
             "--accept-risks" => accept_risks = true,
+            "--debugger" => debugger = true,
             other => {
                 return Err(usage_unknown_flag("run", other));
             }
@@ -608,6 +622,7 @@ pub fn parse_run(rest: &[String]) -> Result<RunArgs, CliError> {
         runtime,
         static_layer: static_flags.layer(),
         accept_risks,
+        debugger,
         bin_args,
         format: format.unwrap_or_default(),
     })

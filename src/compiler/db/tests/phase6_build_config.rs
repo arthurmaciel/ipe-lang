@@ -109,6 +109,7 @@ fn emit_project_memoized_coarse_floor() {
         false,
         false,
         None,
+        false,
         String::new(),
     );
 
@@ -169,6 +170,7 @@ fn emit_project_config_change_does_not_retrigger_lower() {
         false,
         false,
         None,
+        false,
         String::new(),
     );
 
@@ -230,6 +232,7 @@ fn emit_project_source_edit_retriggers_lower_and_emit() {
         false,
         false,
         None,
+        false,
         String::new(),
     );
 
@@ -263,6 +266,7 @@ fn emit_project_short_circuits_on_lower_error() {
         false,
         false,
         None,
+        false,
         String::new(),
     );
 

@@ -187,6 +187,12 @@ pub struct RustBackend<'a> {
     wasm_public_env: Vec<String>,
     wasm_hydrate_mode: bool,
     runtime_dep: Option<RuntimeDep>,
+    /// `true` when `ipe build --debugger` / `ipe run --debugger` was passed. Adds
+    /// the runtime `debugger` feature to the emitted project's dependency feature
+    /// list so the TEA driver instantiates the recorder. Never set for
+    /// `ipe release` (the release command does not expose the flag), so no
+    /// production artifact carries recorder code. Set via [`Self::with_debugger`].
+    debugger: bool,
     /// The project name from `ipe.toml`, sanitized into a valid Cargo package
     /// name via [`sanitize_cargo_name`]. Becomes the emitted crate's
     /// `[package] name`. Empty string signals "use the safe fallback
@@ -324,6 +330,7 @@ impl<'a> RustBackend<'a> {
             wasm_public_env: Vec::new(),
             wasm_hydrate_mode: false,
             runtime_dep: None,
+            debugger: false,
             cargo_name: String::new(),
         }
     }
@@ -351,6 +358,17 @@ impl<'a> RustBackend<'a> {
     #[must_use]
     pub fn with_runtime_dep(mut self, runtime_dep: Option<RuntimeDep>) -> Self {
         self.runtime_dep = runtime_dep;
+        self
+    }
+
+    /// Enable the development-only time-travelling debugger: the emitted
+    /// project's runtime dependency gains the `debugger` feature so the TEA
+    /// driver records each `(msg, model)` step. `ipe release` never calls this
+    /// (the flag is a `build`/`run`-only opt-in), so a production artifact never
+    /// carries recorder code.
+    #[must_use]
+    pub const fn with_debugger(mut self, debugger: bool) -> Self {
+        self.debugger = debugger;
         self
     }
 
@@ -424,6 +442,7 @@ impl<'a> RustBackend<'a> {
             self.wasm_public_env.clone(),
             self.wasm_hydrate_mode,
             self.runtime_dep.clone(),
+            self.debugger,
             self.cargo_name.clone(),
         )?;
         project::emit_spine(&ctx, program)
@@ -448,6 +467,7 @@ impl<'a> RustBackend<'a> {
             self.wasm_public_env.clone(),
             self.wasm_hydrate_mode,
             self.runtime_dep.clone(),
+            self.debugger,
             self.cargo_name.clone(),
         )
     }
@@ -472,6 +492,7 @@ impl<'a> RustBackend<'a> {
             self.wasm_public_env.clone(),
             self.wasm_hydrate_mode,
             self.runtime_dep.clone(),
+            self.debugger,
             self.cargo_name.clone(),
         )?;
         Ok(runtime_features::runtime_features(&ctx).as_feature_names())
@@ -496,6 +517,7 @@ impl<'a> RustBackend<'a> {
             self.wasm_public_env.clone(),
             self.wasm_hydrate_mode,
             self.runtime_dep.clone(),
+            self.debugger,
             self.cargo_name.clone(),
         )?;
         project::emit_module_file(
@@ -535,6 +557,7 @@ impl<'a> RustBackend<'a> {
             self.wasm_public_env.clone(),
             self.wasm_hydrate_mode,
             self.runtime_dep.clone(),
+            self.debugger,
             self.cargo_name.clone(),
         )?;
         project::assemble_split_manifest(&ctx, program, spine_text, module_texts)
@@ -581,6 +604,7 @@ impl Backend for RustBackend<'_> {
             self.wasm_public_env.clone(),
             self.wasm_hydrate_mode,
             self.runtime_dep.clone(),
+            self.debugger,
             self.cargo_name.clone(),
         )?;
         project::emit_program(&ctx, program)
@@ -993,6 +1017,12 @@ pub(crate) struct EmitCtx<'a> {
     /// source; `None` (the default) emits the byte-identical vendored project.
     /// Ignored on the wasm target (which keeps its closed vendoring template).
     pub(crate) runtime_dep: Option<RuntimeDep>,
+    /// `true` when `ipe build/run --debugger` selected the development-only
+    /// time-travelling debugger. When set, [`crate::runtime_features`] adds the
+    /// `debugger` feature to the emitted runtime dependency's feature list on
+    /// both targets, so the TEA driver records each `(msg, model)` step. Never
+    /// set for `ipe release`, so no production artifact carries recorder code.
+    pub(crate) debugger: bool,
     /// The Rust type name for the emitted `SqlValue` enum (e.g. `MainSqlValue`).
     /// `None` when `uses_db` is `false`.
     pub(crate) sqlvalue_rust_name: Option<String>,
@@ -1142,7 +1172,7 @@ fn record_field_is_clone(ty: &IrType, enum_clone: &BTreeMap<(ModPath, Symbol), b
 impl<'a> EmitCtx<'a> {
     #[allow(clippy::too_many_lines)]
     #[allow(clippy::similar_names)] // `uses_ui` / `uses_tui` are intentionally similar
-    #[allow(clippy::too_many_arguments)] // the backend-config thread-through (driver, ffi, target, wasm, runtime-dep, cargo_name)
+    #[allow(clippy::too_many_arguments)] // the backend-config thread-through (driver, ffi, target, wasm, runtime-dep, debugger, cargo_name)
     fn build(
         interner: &'a Interner,
         program: &Program,
@@ -1152,6 +1182,7 @@ impl<'a> EmitCtx<'a> {
         wasm_public_env: Vec<String>,
         wasm_hydrate_mode: bool,
         runtime_dep: Option<RuntimeDep>,
+        debugger: bool,
         cargo_name: String,
     ) -> DResult<Self> {
         let mut enum_names: BTreeMap<(ModPath, Symbol), String> = BTreeMap::new();
@@ -1746,6 +1777,7 @@ impl<'a> EmitCtx<'a> {
             wasm_public_env,
             wasm_hydrate_mode,
             runtime_dep,
+            debugger,
             sqlvalue_rust_name,
             sqlfield_rust_name,
             hydration_state_rust_name: None,
@@ -4195,6 +4227,7 @@ mod record_struct_namespace_tests {
             Vec::new(),
             false,
             None,
+            false,
             String::new(),
         )?;
         assert_eq!(ctx.record_structs().len(), 1);
@@ -4294,6 +4327,7 @@ mod record_struct_namespace_tests {
             Vec::new(),
             false,
             None,
+            false,
             String::new(),
         )?;
         ctx.assert_record_structs_disjoint_from_type_namespace(&BTreeSet::new())
@@ -4376,6 +4410,7 @@ mod record_struct_namespace_tests {
             Vec::new(),
             false,
             None,
+            false,
             String::new(),
         )?;
 

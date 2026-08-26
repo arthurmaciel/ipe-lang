@@ -98,6 +98,7 @@ fn body_edit_reexecutes_only_the_edited_module_file() {
         false,
         false,
         None,
+        false,
         String::new(),
     );
 

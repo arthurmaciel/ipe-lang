@@ -244,6 +244,13 @@ struct App<Model, Msg> {
     /// (`web::route::matches_any`; prevents handler-index orphaning on noise
     /// paths like `/favicon.ico`).
     router: Option<Box<dyn Fn(&str, Model) -> Option<Model>>>,
+    /// Development-only time-travelling debugger recorder. Passive: records
+    /// each live-pass `update` step without re-firing any `Cmd`. Present only
+    /// when the `debugger` feature is active (`ipe build/run --debugger`). This
+    /// field exposes the recorder API; the interactive overlay UI (message list
+    /// + scrubber) that consumes it is not built yet.
+    #[cfg(feature = "debugger")]
+    recorder: RefCell<crate::debugger::RecordBuffer<Msg, Model>>,
 }
 
 /// Recompute `subscriptions(model)` and hand it to the `SubManager`, wrapped
@@ -288,6 +295,10 @@ where
     body.set_inner_html(&render_html(&tree));
 
     let index = build_index(&tree);
+    // Under the `debugger` feature the recorder seeds from the initial model, so
+    // we keep `model` alive until after the `App` is built.
+    #[cfg(feature = "debugger")]
+    let recorder_base = model.clone();
     let app = Rc::new(App {
         model: RefCell::new(model),
         tree: RefCell::new(tree),
@@ -300,6 +311,11 @@ where
         submgr: RefCell::new(subs::SubManager::new()),
         origin: next_instance_origin(),
         router: None,
+        #[cfg(feature = "debugger")]
+        recorder: RefCell::new(crate::debugger::RecordBuffer::new(
+            recorder_base,
+            crate::debugger::DEFAULT_HISTORY_CAP,
+        )),
     });
 
     attach_delegated_listeners(&body, &app)?;
@@ -365,6 +381,8 @@ where
     }
 
     let index = build_index(&tree);
+    #[cfg(feature = "debugger")]
+    let recorder_base = model.clone();
     let app = Rc::new(App {
         model: RefCell::new(model),
         tree: RefCell::new(tree),
@@ -377,6 +395,11 @@ where
         submgr: RefCell::new(subs::SubManager::new()),
         origin: next_instance_origin(),
         router: None,
+        #[cfg(feature = "debugger")]
+        recorder: RefCell::new(crate::debugger::RecordBuffer::new(
+            recorder_base,
+            crate::debugger::DEFAULT_HISTORY_CAP,
+        )),
     });
 
     attach_delegated_listeners(&body, &app)?;
@@ -460,6 +483,8 @@ where
         })
     };
 
+    #[cfg(feature = "debugger")]
+    let recorder_base = model.clone();
     let app = Rc::new(App {
         model: RefCell::new(model),
         tree: RefCell::new(tree),
@@ -472,6 +497,11 @@ where
         submgr: RefCell::new(subs::SubManager::new()),
         origin: next_instance_origin(),
         router: Some(router),
+        #[cfg(feature = "debugger")]
+        recorder: RefCell::new(crate::debugger::RecordBuffer::new(
+            recorder_base,
+            crate::debugger::DEFAULT_HISTORY_CAP,
+        )),
     });
 
     attach_delegated_listeners(&body, &app)?;
@@ -821,7 +851,19 @@ where
     let mut model = app.model.borrow().clone();
     let mut cmds: Vec<IpeCmd<Msg>> = Vec::new();
     for msg in msgs {
+        // Clone the msg before calling update so the recorder can store it;
+        // the clone is compiled out entirely when `debugger` is not active.
+        #[cfg(feature = "debugger")]
+        let msg_for_recorder = msg.clone();
         let (next, cmd) = (app.update)(msg, model);
+        // Passive recording: store the message and the resulting model after the
+        // live pass. Effects fire normally above; recording does not re-fire them.
+        #[cfg(feature = "debugger")]
+        app.recorder
+            .borrow_mut()
+            .record(msg_for_recorder, next.clone(), &|m, mdl| {
+                (app.update)(m, mdl)
+            });
         model = next;
         cmds.push(cmd);
     }
