@@ -282,7 +282,9 @@ mod tests {
 
     // Materialise a `js_subscribe` Source the way the Web loop does and collect
     // the emitted Msgs.
-    fn collect(decoder: Decoder<IpeError, i64>) -> (tokio::task::JoinHandle<()>, Arc<Mutex<Vec<i64>>>) {
+    fn collect(
+        decoder: Decoder<IpeError, i64>,
+    ) -> (tokio::task::JoinHandle<()>, Arc<Mutex<Vec<i64>>>) {
         let got = Arc::new(Mutex::new(Vec::<i64>::new()));
         let got2 = got.clone();
         let emit: Arc<dyn Fn(i64) + Send + Sync> = Arc::new(move |m| got2.lock().unwrap().push(m));
@@ -322,7 +324,10 @@ mod tests {
         let seen: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
         let seen2 = seen.clone();
         register_out_sink(Arc::new(move |s: &str| {
-            seen2.lock().unwrap_or_else(|e| e.into_inner()).push(s.to_string());
+            seen2
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .push(s.to_string());
         }));
         let mut rx = subscribe_outbound();
         let cmd: IpeCmd<i64> = js_send::<i64, i64>(42);
