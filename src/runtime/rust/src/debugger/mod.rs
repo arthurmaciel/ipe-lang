@@ -41,6 +41,11 @@ use crate::tea::IpeCmd;
 // All items gated on `feature = "debugger"` via the inner `#![cfg(...)]`.
 pub mod server;
 
+// Terminal (TUI) time-travel debugger.
+// Gated on both `feature = "debugger"` AND `not(target_arch = "wasm32")`
+// via the inner `#![cfg(...)]` in tui.rs — zero code on wasm32.
+pub mod tui;
+
 /// The default message-log capacity when none is configured.
 pub const DEFAULT_HISTORY_CAP: usize = 512;
 
