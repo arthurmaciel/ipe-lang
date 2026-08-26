@@ -6916,16 +6916,18 @@ impl StdlibKernel {
         );
         const SUB_SUBSCRIBE_WS: TyShape =
             TyShape::Fun(&INT, &TyShape::Fun(&STRING, &TyShape::Fun(&A, &SUB_B)));
-        // Ipe.Js ports. `send : a -> Cmd msg` — payload `a` is the scheme's `B`
-        // (the sealed crossing value), `msg` is `A` (so `Cmd msg` reuses `CMD_A`).
-        // `subscribe : Decoder a -> (a -> msg) -> Sub msg` — decoded `a` is `B`,
-        // `msg` is `A`, reusing `DEC_B` / `B_TO_A` / `SUB_A`. The seal-legality of
-        // the concrete `a` is not expressible as a `TyShape` bound (it is a
-        // structural predicate, not a class), so it is enforced separately at canon
-        // (`port_boundary_seal_rejection`), exactly as `CustomElement`'s seal is a
+        // Ipe.Js ports. `send : a -> Cmd msg` — payload `a` is the scheme's `A`
+        // (the sealed crossing value), `msg` is `B` (so `Cmd msg` reuses `CMD_B`).
+        // `subscribe : Decoder a -> (a -> msg) -> Sub msg` — decoded `a` is `A`,
+        // `msg` is `B`, reusing `DEC_A` / `A_TO_B` / `SUB_B`. The variable order
+        // matches the HM scheme in `ipe_types::constrain` byte-for-byte (checked by
+        // `interpreted_shape_matches_legacy`). The seal-legality of the concrete
+        // `a` is not expressible as a `TyShape` bound (it is a structural predicate,
+        // not a class), so it is enforced separately at lowering
+        // (`reject_illegal_js_port_seal`), exactly as `CustomElement`'s seal is a
         // canon gate rather than a scheme constraint.
-        const JS_SEND: TyShape = TyShape::Fun(&B, &CMD_A);
-        const JS_SUBSCRIBE: TyShape = TyShape::Fun(&DEC_B, &TyShape::Fun(&B_TO_A, &SUB_A));
+        const JS_SEND: TyShape = TyShape::Fun(&A, &CMD_B);
+        const JS_SUBSCRIBE: TyShape = TyShape::Fun(&DEC_A, &TyShape::Fun(&A_TO_B, &SUB_B));
         // Ws server.
         const WS_ON_CB_TO_CFG: TyShape = TyShape::Fun(
             &TyShape::Fun(&WS_SERVER, &TASK_UNIT),
