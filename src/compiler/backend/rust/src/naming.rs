@@ -546,6 +546,8 @@ mod tests {
         assert_eq!(kernel_name(KernelFn::IoPrintln), "io_println");
         assert_eq!(kernel_name(KernelFn::IoEprintln), "io_eprintln");
         assert_eq!(kernel_name(KernelFn::DebugLog), "debug_log");
+        assert_eq!(kernel_name(KernelFn::DebugTodo), "debug_todo");
+        assert_eq!(kernel_name(KernelFn::DebugExplain), "debug_explain_");
         // ── Http kernels ──────────────────────────────────────────────
         assert_eq!(kernel_name(KernelFn::HttpGet), "http_get");
         assert_eq!(kernel_name(KernelFn::HttpPost), "http_post");

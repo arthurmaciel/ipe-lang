@@ -26,3 +26,14 @@ pub fn debug_log<T: IpeStringify>(label: String, value: T) -> T {
     let _ = writeln!(std::io::stderr().lock(), "{line}");
     value
 }
+
+/// `Debug.todo : String -> a`. Prints `"TODO: <note>"` to stderr then exits
+/// with a non-zero code.  Returns `!` (the never type), which coerces to any
+/// `A` at the call site — no Rust `panic!` is used.
+pub fn debug_todo<A>(note: String) -> A {
+    use std::io::Write as _;
+    let msg = format!("TODO: {note}");
+    // Broken-pipe suppression: same discipline as `debug_log`.
+    let _ = writeln!(std::io::stderr().lock(), "{msg}");
+    crate::system::system_exit(1)
+}

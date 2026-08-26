@@ -500,6 +500,16 @@ pub const fn ui_call_shape(k: KernelFn) -> Option<UiEmitPlan> {
         KernelFn::WebViewApp => delegate(UiDelegate::WebView),
         KernelFn::TerminalAppLines => delegate(UiDelegate::Console),
 
+        // ── Debug.explain — dev-only, Web/WebView only ────────────────────
+        // `Debug.explain : Attribute msg` draws visible outlines on the element
+        // and all descendants without changing layout.  Reject in Terminal /
+        // Program shapes (fail-closed) — there is no DOM to outline.
+        KernelFn::DebugExplain => guarded(
+            "ipe_runtime::ui::helpers::debug_explain_",
+            0,
+            Guard::RejectInNonWebShape,
+        ),
+
         // ── Predicate-keyed HTML families ─────────────────────────────────
         _ if k.html_event_shape().is_some() => native(N::HtmlEvent),
 
@@ -638,16 +648,15 @@ mod tests {
         }
     }
 
-    /// The non-web-shape guard set is exactly `Ui.widget` — the one UI kernel
-    /// whose seam (the seal-coded up-event handler) has no transport outside a
-    /// browser shape. A new browser-only widget added without the guard fails
-    /// here rather than downstream when the emitted crate's non-`json` runtime
-    /// fallback leaves a type parameter unconstrained (rustc E0282).
+    /// The non-web-shape guard set covers kernels that have no denotation
+    /// outside a browser shape: `Ui.widget` (no up-event transport) and
+    /// `Debug.explain` (no DOM to outline).  A new browser-only kernel that
+    /// omits the guard fails here rather than silently emitting dead code.
     #[test]
-    fn reject_in_non_web_shape_guard_is_exactly_ui_widget() {
+    fn reject_in_non_web_shape_guard_is_exactly_browser_only_kernels() {
         for &k in KernelFn::ALL {
             let guarded = ui_call_shape(k).is_some_and(|p| p.guard == Guard::RejectInNonWebShape);
-            let expected = matches!(k, KernelFn::UiWidget);
+            let expected = matches!(k, KernelFn::UiWidget | KernelFn::DebugExplain);
             assert_eq!(guarded, expected, "{k:?}: non-web-guarded={guarded}");
         }
     }

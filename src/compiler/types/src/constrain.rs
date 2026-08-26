@@ -5498,6 +5498,16 @@ impl<'a> Builder<'a> {
             // production build rejects any use before this scheme is reached
             // (IPE-L0140, `reject_dev_only_kernels`).
             K::DebugLog => fun(string(), fun(var(0), var(0))),
+            // `Debug.todo : String -> a` — diverging; result var is unconstrained
+            // and unifies with any expected type, so a `todo` placeholder compiles
+            // anywhere.  Reaching it at runtime aborts with a non-zero exit
+            // (never a Rust panic). A `todo` in a `case` arm does NOT satisfy
+            // exhaustiveness.
+            K::DebugTodo => fun(string(), var(0)),
+            // `Debug.explain : Attribute msg` — nullary; the message type var is
+            // unconstrained.  Draws visible outlines on the element and all
+            // descendants without changing layout.  Web/WebView only.
+            K::DebugExplain => attr(var(0)),
 
             // ── Time ──
             K::TimeNow | K::TimeUnixMillis => fun(Ty::Unit, task(int())),
@@ -9485,6 +9495,9 @@ mod registry_phase_c_tests {
             K::IoReadSecret,
             // Debug.log (Ipê-new — dev-only; Stringify obligation on `a`).
             K::DebugLog,
+            // Debug.todo / Debug.explain — Ipê-new dev-only; no legacy oracle.
+            K::DebugTodo,
+            K::DebugExplain,
             // `Basics.clamp` — first-schemed hole; carries the `Comparable a`
             // (Ord) obligation, base scheme in `stdlib_scheme`.
             K::BasicsClamp,

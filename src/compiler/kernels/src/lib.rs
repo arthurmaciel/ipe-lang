@@ -1236,6 +1236,17 @@ pub enum StdlibKernel {
     /// the value unchanged. The one deliberate impure escape hatch; a production
     /// build (`ipe release`) rejects any use (IPE-L0140).
     DebugLog,
+    /// `Debug.todo : String -> a` — typed unfinished-code marker. Compiles in
+    /// development so the finished branches can run; reaching it at runtime aborts
+    /// via the Error path (`TODO at <location>: <note>`) with a non-zero exit.
+    /// Never returns a value of `a` — the `!` return makes it diverging. A
+    /// production build (`ipe release`) rejects any use (IPE-L0140).
+    DebugTodo,
+    /// `Debug.explain : Attribute msg` — draw visible outlines on an element and
+    /// all its descendants (box bounds vs padding, distinct colours). Never
+    /// changes layout. Applies to `Web` / `WebView` shapes only; a production build
+    /// (`ipe release`) rejects any use (IPE-L0140).
+    DebugExplain,
     // ── Time (non-TEA) ──────────────────────────────────────────────────────
     TimeNow,
     TimeSleep,
@@ -3156,6 +3167,12 @@ impl StdlibKernel {
             Self::IoPrintln => d("Io", "println", 1, Pure, "io_println"),
             Self::IoEprintln => d("Io", "eprintln", 1, Pure, "io_eprintln"),
             Self::DebugLog => d("Debug", "log", 2, Pure, "debug_log"),
+            // `Debug.todo : String -> a` — prints the note to stderr and
+            // exits non-zero; the result type coerces to any `A` via `!`.
+            Self::DebugTodo => d("Debug", "todo", 1, Pure, "debug_todo"),
+            // `Debug.explain : Attribute msg` — nullary UI helper (trailing
+            // underscore matches the UI-helpers naming convention).
+            Self::DebugExplain => d("Debug", "explain", 0, Ui, "debug_explain_"),
             // ── Time (non-TEA) ──────────────────────────────────────────────
             Self::TimeNow => d("Time", "now", 1, Pure, "time_now"),
             Self::TimeSleep => d("Time", "sleep", 1, Pure, "time_sleep"),
@@ -4744,6 +4761,8 @@ impl StdlibKernel {
         Self::IoEprintln,
         // Debug (development-only)
         Self::DebugLog,
+        Self::DebugTodo,
+        Self::DebugExplain,
         // Time (non-TEA)
         Self::TimeNow,
         Self::TimeSleep,
@@ -8156,6 +8175,12 @@ impl StdlibKernel {
             //    `constrain_var_kernel`, so the shape is exercised only by the
             //    totality / oracle tripwires, never in production. ──
             Self::DebugLog => Some(&STRING_TO_A_TO_A),
+            // `Debug.todo : String -> a` — diverging; unconstrained result var.
+            // Same shape class as `System.exit : Int -> a` (never returns `a`).
+            Self::DebugTodo => Some(&STRING_TO_A),
+            // `Debug.explain : Attribute msg` — nullary, same class as the
+            // other nullary Ui attribute builders (`UiPointer`, `UiCenterX`, …).
+            Self::DebugExplain => Some(&UI_ATTR_A),
             Self::ErrorToString => Some(&A_TO_STRING),
             Self::SystemExit => Some(&INT_TO_A),
             Self::HttpParseQuery => Some(&STRING_TO_DICT_STRING_STRING),
@@ -10070,7 +10095,11 @@ impl StdlibKernel {
             | Self::LocaleFromTag
             | Self::LocaleToTag
             | Self::StringToUpperIn
-            | Self::StringToLowerIn => None,
+            | Self::StringToLowerIn
+            // `Debug.todo` / `Debug.explain` are dev-only escape hatches;
+            // no runtime capability beyond `Debug.*` dev membership.
+            | Self::DebugTodo
+            | Self::DebugExplain => None,
         }
     }
 
@@ -10214,7 +10243,7 @@ impl StdlibKernel {
     /// dev-only" — the lowerer's usage scan and every gate consult this.
     #[must_use]
     pub const fn is_dev_only(self) -> bool {
-        matches!(self, Self::DebugLog)
+        matches!(self, Self::DebugLog | Self::DebugTodo | Self::DebugExplain)
     }
 
     /// `Time.every`) subsystem, including reserved pub/sub variants.
@@ -11375,6 +11404,8 @@ impl StdlibKernel {
                 // ── Ipe.Ui.Keyed ────────────────────────────────────────────
                 | Self::KeyedColumn
                 | Self::KeyedRow
+                // ── Debug.explain — dev-only, Ui class ──────────────────
+                | Self::DebugExplain
         )
     }
 

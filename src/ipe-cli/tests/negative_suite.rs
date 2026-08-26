@@ -1984,6 +1984,22 @@ fn lower_debug_log_in_sync_context_compiles() {
     assert_compiles("lower_debug_log_sync", &src);
 }
 
+/// CONTRAPOSITIVE: `Debug.todo` is accepted in a development build — `String ->
+/// a` diverges at runtime but compiles anywhere.  `ipe release` gates it with
+/// IPE-L0140 (covered in the release-gate suite).
+#[test]
+fn lower_debug_todo_compiles_in_dev_build() {
+    let src = format!(
+        "{HEAD}import Ipe.Io as Io\n\
+         import Ipe.Debug as Debug\n\
+         describe : Int -> String\n\
+         describe n =\n    Debug.todo \"not implemented\"\n\
+         main : Task Error ()\n\
+         main =\n    Io.println (describe 1)\n"
+    );
+    assert_compiles("lower_debug_todo_dev", &src);
+}
+
 /// The applicative record-codec builder seed — `object ctor` for a `Builder`
 /// wrapping a `{} -> Decoder ctor` factory — routes a curried constructor
 /// through a decoder field by a type variable. The generic accumulator emits a

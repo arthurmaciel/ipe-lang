@@ -264,6 +264,14 @@ pub fn ui_pointer_<M>() -> Attribute<M> {
     Attribute::AttrPointer
 }
 
+/// `Debug.explain : Attribute msg` — draws a visible outline on this element
+/// and all its descendants to reveal the invisible box tree.  Does not change
+/// layout.  Web/WebView only; rejected in Terminal/Program at emit time.
+#[must_use]
+pub fn debug_explain_<M>() -> Attribute<M> {
+    Attribute::AttrExplain
+}
+
 /// `Ui.clip : Attribute msg` — clip overflow on BOTH axes.
 #[must_use]
 pub fn ui_clip_<M>() -> Attribute<M> {

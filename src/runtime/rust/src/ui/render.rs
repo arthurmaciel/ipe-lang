@@ -297,6 +297,14 @@ pub(crate) fn build_style_string<M>(attrs: &[Attribute<M>]) -> String {
             Attribute::AttrPointer => {
                 decl!("cursor:pointer");
             }
+            Attribute::AttrExplain => {
+                // A solid blue outline on the element boundary — 2 px, never
+                // changes layout (outline is outside the box model, like
+                // `outline` vs `border`).  The offset makes nested outlines
+                // visually distinct from parent/sibling ones.
+                decl!("outline:2px solid rgba(0,100,255,0.5)");
+                decl!("outline-offset:2px");
+            }
             Attribute::AttrOverflow(x, y) => {
                 // Per-component gating: one bad axis drops alone, the other
                 // legit axis still renders.
@@ -600,6 +608,23 @@ fn render_paragraph_child<M: Clone>(child: Element<M>, depth: usize) -> Html<M> 
     }
 }
 
+/// Prepend `AttrExplain` to an element's attribute list so that the outline
+/// propagates depth-first to all descendants.  Only `Node` and `TaggedNode`
+/// carry attributes; `Empty`, `Text`, `Raw`, and `Cells` are left unchanged.
+fn inject_explain<M: Clone>(elem: Element<M>) -> Element<M> {
+    match elem {
+        Element::Node(desc, mut attrs, kids) => {
+            attrs.insert(0, Attribute::AttrExplain);
+            Element::Node(desc, attrs, kids)
+        }
+        Element::TaggedNode(tag, desc, mut attrs, kids) => {
+            attrs.insert(0, Attribute::AttrExplain);
+            Element::TaggedNode(tag, desc, attrs, kids)
+        }
+        other => other,
+    }
+}
+
 fn render_node_as<M: Clone>(
     tag: &str,
     attrs: &[Attribute<M>],
@@ -614,6 +639,11 @@ fn render_node_as<M: Clone>(
         html_attrs.insert(0, HtmlAttribute::Attr("style".to_owned(), style_str));
     }
 
+    // `Debug.explain` propagates to every descendant: inject `AttrExplain`
+    // into the direct children so they in turn inject it into their own
+    // children (transitively), without touching the element data itself.
+    let explain_active = attrs.iter().any(|a| matches!(a, Attribute::AttrExplain));
+
     // A `Ui.paragraph` node's element children must flow inline: a bare
     // `Ui.el` lowers to `Element::Node(NoDescription, …)` (a block `<div>`),
     // which both breaks onto its own line and — as a `<div>` inside a `<p>` —
@@ -626,6 +656,8 @@ fn render_node_as<M: Clone>(
     let mut html_kids: Vec<Html<M>> = kids
         .into_iter()
         .map(|k| {
+            // Propagate explain to children by injecting the attr.
+            let k = if explain_active { inject_explain(k) } else { k };
             if inside_paragraph {
                 render_paragraph_child(k, child_depth)
             } else {

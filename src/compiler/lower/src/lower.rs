@@ -22164,6 +22164,8 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::SystemCwd
                 | KernelFn::SystemLoadEnv
                 | KernelFn::SystemExit
+                // ── Debug.todo : String -> a — dev-only, arity 1 ────────
+                | KernelFn::DebugTodo
                 // ── Random arity-1 ──────────────────────────────────────
                 | KernelFn::RandomChoice
                 | KernelFn::RandomChoiceMaybe
@@ -22874,7 +22876,9 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::UiFocus
                 | KernelFn::UiFocusVisible
                 | KernelFn::UiActive
-                | KernelFn::UiDisabled,
+                | KernelFn::UiDisabled
+                // ── Debug.explain : Attribute msg — dev-only, arity 0 ──
+                | KernelFn::DebugExplain,
             ) => Ok(0),
             // Arity 1: single-argument pure serialisation / escape helpers.
             Callee::Kernel(
@@ -24111,6 +24115,8 @@ impl<'a> Lowerer<'a> {
                     ("Io", "println") => Ok(Callee::Kernel(KernelFn::IoPrintln)),
                     ("Io", "eprintln") => Ok(Callee::Kernel(KernelFn::IoEprintln)),
                     ("Debug", "log") => Ok(Callee::Kernel(KernelFn::DebugLog)),
+                    ("Debug", "todo") => Ok(Callee::Kernel(KernelFn::DebugTodo)),
+                    ("Debug", "explain") => Ok(Callee::Kernel(KernelFn::DebugExplain)),
                     // ── Time kernels ────────────────────────────────────
                     ("Time", "now") => Ok(Callee::Kernel(KernelFn::TimeNow)),
                     ("Time", "sleep") => Ok(Callee::Kernel(KernelFn::TimeSleep)),

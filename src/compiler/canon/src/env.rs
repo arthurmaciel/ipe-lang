@@ -1229,8 +1229,8 @@ impl Env {
                     "eprintln",
                 ],
             ),
-            // `Ipe.Debug` — dev-only escape hatch. `log : String -> a -> a`.
-            ("Debug", &["log"]),
+            // `Ipe.Debug` — dev-only escape hatch.
+            ("Debug", &["log", "todo", "explain"]),
             // `Ipe.Time` — time effects + TEA tick subscription.
             (
                 "Time",

@@ -1,23 +1,56 @@
--- | Ipe.Debug — the development-only escape hatch (Elm-style `Debug.log`).
+-- | Ipe.Debug — development-only escape hatches.
 --
--- `Debug.log label value` prints `"<label>: <value>"` to stderr as a
--- side effect and returns `value` UNCHANGED, so it can be spliced into
--- any expression without altering its result:
+-- Every member of this module is rejected by `ipe release` (IPE-L0140).
+-- Use `ipe build` or `ipe run` during development.
+--
+-- ## `log`
 --
 --     import Ipe.Debug as Debug
 --
 --     total =
 --         Debug.log "subtotal" subtotal + tax
 --
--- This is the ONE deliberate impure escape hatch in the language: it is
--- NOT a `Task`. Reach for it to inspect a value mid-expression while
--- developing, then remove it.
+-- `log label value` prints `"label: value"` to stderr and returns `value`
+-- unchanged. The value is stringified through the same polymorphic path as
+-- `Basics.toString` / `{{expr}}` interpolation, so any value renders.
 --
--- DEV-ONLY: `ipe release` REJECTS any `Debug.*` use with a clear diagnostic
--- (IPE-L0140) rather than silently stripping or shipping it. Use `ipe build`
--- or `ipe run` during development.
+-- ## `todo`
+--
+--     import Ipe.Debug as Debug
+--
+--     describeShape : Shape -> String
+--     describeShape shape =
+--         case shape of
+--             Circle r ->
+--                 "circle with radius " ++ String.fromFloat r
+--
+--             Rectangle _ _ ->
+--                 Debug.todo "rectangle case not implemented yet"
+--
+-- `todo note` marks an unfinished code path. The module still compiles so
+-- the finished branches can be run and tested. Reaching a `todo` at runtime
+-- aborts with `TODO at <location>: <note>` on stderr and exits non-zero. A
+-- `todo` in a `case` arm does NOT satisfy exhaustiveness — a `case` missing
+-- an arm is still an error even if another arm contains a `todo`.
+--
+-- ## `explain`
+--
+--     import Ipe.Debug as Debug
+--     import Ipe.Ui as Ui
+--
+--     view model =
+--         Ui.column
+--             [ Debug.explain ]
+--             [ Ui.text "hello" ]
+--
+-- `explain` is an `Attribute msg` that draws visible outlines around the
+-- element it is applied to and every descendant, making the invisible box
+-- tree visible without changing layout. Distinct colours distinguish element
+-- bounds from padding. Applies to Web and WebView shapes.
 module Ipe.Debug exposing
     ( log
+    , todo
+    , explain
     )
 
 
@@ -29,3 +62,17 @@ import Ipe.Ffi as Ffi
 -- `Basics.toString` / `{{expr}}` interpolation, so any value renders.
 log : String -> a -> a
 log = Ffi.kernel "Debug_log"
+
+
+-- | `todo note` — mark an unfinished code path.
+-- The module compiles; reaching this at runtime aborts with
+-- `TODO at <location>: <note>` on stderr and a non-zero exit.
+-- A `todo` in a `case` arm does NOT satisfy exhaustiveness.
+todo : String -> a
+todo = Ffi.kernel "Debug_todo"
+
+
+-- | `explain` — draw visible outlines on an element and all its descendants.
+-- Applies to Web and WebView shapes. Does not change layout.
+explain : Attribute msg
+explain = Ffi.kernel "Debug_explain"
