@@ -53,6 +53,17 @@ pub enum Capability {
     /// not a resource axis an OS jail can isolate — its presence marks that the
     /// program contains a value the compiler could not prove safe.
     Unsafe,
+    /// Shipping a browser custom-element widget: the program's reachable code
+    /// binds `Ui.widget` over a `customElement "<path>"` handle, so it serves
+    /// author-written JavaScript that runs in the page with full DOM authority.
+    /// Like [`Self::NativeFfi`], this is a disclosure of a declared-trust surface
+    /// the server-side sandbox cannot see through — the browser JS is not an OS
+    /// resource axis an OS jail confines. Its presence discloses that the package
+    /// ships client JS whose behaviour is the package author's declared trust; the
+    /// served bytes are SRI-pinned and CSP-constrained, but never sandboxed. It is
+    /// deliberately NOT low-value: a shipped-JS surface must always surface to the
+    /// consumer, exactly as [`Self::NativeFfi`] does.
+    CustomElement,
 }
 
 impl Capability {
@@ -70,6 +81,7 @@ impl Capability {
         Self::NativeFfi,
         Self::FfiRaw,
         Self::Unsafe,
+        Self::CustomElement,
     ];
 
     /// Whether this capability carries no OS-isolatable resource surface — the
@@ -102,6 +114,7 @@ impl Capability {
             Self::NativeFfi => "native-ffi",
             Self::FfiRaw => "ffi-raw",
             Self::Unsafe => "unsafe",
+            Self::CustomElement => "custom-element",
         }
     }
 }
@@ -125,6 +138,7 @@ impl std::str::FromStr for Capability {
             "native-ffi" => Ok(Self::NativeFfi),
             "ffi-raw" => Ok(Self::FfiRaw),
             "unsafe" => Ok(Self::Unsafe),
+            "custom-element" => Ok(Self::CustomElement),
             other => Err(UnknownCapability(other.to_owned())),
         }
     }
@@ -141,7 +155,8 @@ impl std::fmt::Display for UnknownCapability {
         write!(
             f,
             "unknown capability {:?} (expected one of: network, filesystem, \
-             database, env, subprocess, clock, random, native-ffi, ffi-raw, unsafe)",
+             database, env, subprocess, clock, random, native-ffi, ffi-raw, unsafe, \
+             custom-element)",
             self.0
         )
     }
@@ -226,7 +241,7 @@ mod tests {
         // A guard against `ALL` drifting from the enum: each name is distinct,
         // and the count matches the declared axes.
         let names: Vec<&str> = Capability::ALL.iter().map(|c| c.as_str()).collect();
-        assert_eq!(names.len(), 10);
+        assert_eq!(names.len(), 11);
         let mut sorted = names.clone();
         sorted.sort_unstable();
         sorted.dedup();
@@ -245,6 +260,7 @@ mod tests {
         assert_eq!(Capability::NativeFfi.as_str(), "native-ffi");
         assert_eq!(Capability::FfiRaw.as_str(), "ffi-raw");
         assert_eq!(Capability::Unsafe.as_str(), "unsafe");
+        assert_eq!(Capability::CustomElement.as_str(), "custom-element");
     }
 
     #[test]
@@ -279,6 +295,10 @@ mod tests {
         assert!(Capability::Unsafe.is_low_value());
         assert!(!Capability::Network.is_low_value());
         assert!(!Capability::NativeFfi.is_low_value());
+        // `custom-element` is a disclosure of shipped browser JS, a declared-trust
+        // surface analogous to `native-ffi`: it must always surface, never be
+        // grouped with the clock/random/unsafe noise the low-value flag marks.
+        assert!(!Capability::CustomElement.is_low_value());
     }
 
     #[test]

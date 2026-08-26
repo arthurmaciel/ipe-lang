@@ -126,8 +126,8 @@ Check [language documentation](docs/language/README.md).
 
 Every effect in Ipê flows through a capability-tagged kernel, so the compiler can
 tell you exactly what a program is allowed to do — network, filesystem, env,
-subprocess, clock, random, native-ffi — from its code alone, with nothing to
-declare. 
+subprocess, clock, random, native-ffi, custom-element — from its code alone, with
+nothing to declare. 
 
 `ipe capabilities <entry>` prints that inferred set as a human report by
 default; `--plain` gives the bare names, one per line, for a script:
@@ -143,7 +143,10 @@ a new effectful kernel gains the matching capability automatically.
 
 `native-ffi`
 appears whenever the program crosses into `Rust.` code, which is opaque to the
-inference and the one place effects can escape the model.
+inference and the one place effects can escape the model. `custom-element` appears
+whenever the program ships a browser widget (`Ui.widget`): the served JavaScript is
+SRI-pinned and CSP-constrained, but the sandbox protects the server, not
+third-party browser JS — a widget is declared trust in the package author.
 
 See [**Capabilities**](docs/language/capabilities.md) for the full model.
 

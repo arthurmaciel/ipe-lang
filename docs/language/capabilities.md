@@ -2,14 +2,15 @@
 
 Ipê tells you exactly what a program can touch on the security-relevant axis —
 network, filesystem, database, environment, subprocess, clock, randomness, native
-code — **from its code alone, with nothing to declare.** The compiler reads the
-answer off the program; you never annotate it, and it cannot be wrong or hidden.
+code, shipped browser JS — **from its code alone, with nothing to declare.** The
+compiler reads the answer off the program; you never annotate it, and it cannot be
+wrong or hidden.
 
 The idea is *verify behaviour, not reputation*: rather than trusting that a
 dependency is well-behaved, you can see the precise set of things it is even
 *able* to do before you run it.
 
-## The ten capabilities
+## The eleven capabilities
 
 | Capability | What it covers |
 |---|---|
@@ -23,6 +24,7 @@ dependency is well-behaved, you can see the precise set of things it is even
 | `native-ffi` | Crossing into native `Rust.` code, which is opaque to inference (see below). |
 | `ffi-raw` | A native crossing whose signature the author asserted via `Rust.Ffi.call`, rather than derived from crate inspection. Always accompanies `native-ffi`; its presence discloses the assertion. |
 | `unsafe` | Importing an `Ipe.<M>.Unsafe` escape hatch — a member that mints a security-tier value by *assertion* instead of by *parse* (raw HTML, raw SQL, secret reveal). A provenance disclosure, not an OS-enforced resource axis. See [Acknowledging an unsafe escape hatch](#acknowledging-an-unsafe-escape-hatch). |
+| `custom-element` | Shipping a browser custom-element widget — reachable code mounts `Ui.widget` over a `customElement "<path>"` handle, so the program serves author JavaScript that runs in the page. A disclosure of a declared-trust surface, not a server-side resource axis. See [The browser-JS boundary](#the-browser-js-boundary). |
 
 The vocabulary is closed and coarse for now: `network` means *any* network, not
 per-host; `filesystem` means *any* file, not per-path. Finer, per-resource
@@ -85,6 +87,39 @@ are planned and tracked as GitHub issues: a declarative `provide.*` type-creatio
 surface (whose shapes stay capability-inferable) and an author-supplied
 wrapper-crate tier (which declares capabilities, is inference-checked, and is
 refused unless its effects are containable).
+
+## The browser-JS boundary
+
+A package may ship a browser widget: `Ui.widget` mounts a custom element whose
+behaviour is author-written JavaScript, served with the page. Any reachable use of
+`Ui.widget` infers the `custom-element` capability, so a package that ships browser
+JS cannot hide it — the manifest's declared set must include it, `ipe capabilities`
+surfaces it, and index admission re-verifies it, exactly as for every other axis.
+
+This axis is honest about a hard limit. **The native sandbox protects the server
+build and the server run. It does not make third-party browser JavaScript safe.** A
+widget script runs in the visitor's page with full DOM authority; the server-side
+jail cannot see or confine it. What Ipê guarantees for shipped browser JS is
+exactly three things, and no more:
+
+1. **The boundary is typed and fail-closed.** State crosses to the widget only as
+   an escaped attribute or a decoded property, and every up-event is parsed by a
+   generated total decoder that drops a malformed payload rather than constructing
+   a value.
+2. **The capability is disclosed and auditable.** `custom-element` is inferred from
+   the code, must be declared, and is re-verified at index admission — a package
+   that serves browser JS says so, and you see it before you install.
+3. **The served JS is SRI-pinned and CSP-constrained.** Each widget file is served
+   content-addressed with an `integrity="sha256-…"` computed over its bytes, so a
+   tampered file fails to load; every script is external under `script-src 'self'`,
+   so no inline script or `eval` is introduced. The hash the package index records
+   for a widget file is the same `sha256` the page pins — one hash from index to
+   browser.
+
+Beyond those three, a widget is **declared trust in the package author**: its
+JavaScript is not sandboxed and its behaviour is not proven. Ipê never markets the
+sandbox as covering browser JS. Treat a `custom-element` package the way you treat
+any dependency you let run in your users' browsers — read it, or trust its author.
 
 ## Where enforcement lives
 

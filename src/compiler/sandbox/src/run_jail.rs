@@ -589,6 +589,13 @@ pub fn profile_from_capabilities(
             // Like the FFI arms it is pure provenance disclosure, not a resource
             // axis the jail can open or close — an explicit no-op arm.
             Capability::Unsafe => {}
+            // `custom-element` discloses that the program serves author browser
+            // JS. That JS runs in the client page, never in the jailed server
+            // process, so it is not an axis this OS jail opens or closes — an
+            // explicit no-op arm. The disclosure is enforced by the served page's
+            // SRI pin + CSP and surfaced to the consumer as a capability, not by
+            // confining the server run.
+            Capability::CustomElement => {}
         }
     }
 

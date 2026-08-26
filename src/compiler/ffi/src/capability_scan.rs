@@ -237,8 +237,14 @@ impl CapabilitySet {
             Capability::NativeFfi | Capability::FfiRaw => Some(5),
             // `unsafe` is a provenance label, not a confinement axis: there is
             // no runtime surface a jail could isolate, so it is never a set
-            // member — the same posture as clock/random.
-            Capability::Clock | Capability::Random | Capability::Unsafe => None,
+            // member — the same posture as clock/random. `custom-element` is a
+            // disclosure of shipped browser JS: it has no SERVER-side runtime
+            // surface a jail could isolate (the JS runs in the client page), so it
+            // too is never a confinement-set member.
+            Capability::Clock
+            | Capability::Random
+            | Capability::Unsafe
+            | Capability::CustomElement => None,
         }
     }
 
@@ -354,7 +360,13 @@ pub const fn is_runtime_unenforceable_for(cap: Capability, jail: JailForTarget) 
         // Non-determinism, never an isolation surface: enforceable everywhere.
         // `unsafe` is likewise a provenance label with no isolation surface, so
         // the unenforceability question does not apply — never unenforceable.
-        Capability::Clock | Capability::Random | Capability::Unsafe => false,
+        // `custom-element` discloses shipped browser JS, which has no server-side
+        // runtime surface to enforce (it runs in the client page); the
+        // unenforceability question does not apply to it either — never
+        // unenforceable, its integrity is the served page's SRI pin.
+        Capability::Clock | Capability::Random | Capability::Unsafe | Capability::CustomElement => {
+            false
+        }
         // A runtime-enforced axis is unenforceable exactly where the target's
         // jail does NOT confine it.
         Capability::Network

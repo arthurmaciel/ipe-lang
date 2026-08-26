@@ -64,6 +64,17 @@ pub struct WidgetAsset {
     pub content: String,
 }
 
+/// The single SHA-256 digest of one widget file's content — the ONE hash every
+/// content-addressing form below derives from. Making every form (the cache-bust
+/// URL segment, the SRI, and the index-recorded hash) a rendering of this one
+/// digest is what guarantees "one hash from index to browser" (§7.2): they cannot
+/// disagree with the served bytes because they are all this digest over those
+/// exact bytes.
+fn content_digest(content: &str) -> [u8; 32] {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(content.as_bytes()).into()
+}
+
 /// Content-addressing for one asset: `(hex16, base64full)` over SHA-256(content).
 /// `hex16` (first 16 hex chars of the digest) is the cache-busting URL segment;
 /// `base64full` (standard base64 of the full 32-byte digest) is the SRI value.
@@ -71,11 +82,28 @@ pub struct WidgetAsset {
 /// disagree because they are computed from the same bytes.
 fn content_hashes(content: &str) -> (String, String) {
     use base64::{Engine as _, engine::general_purpose::STANDARD as B64};
-    use sha2::{Digest, Sha256};
-    let digest: [u8; 32] = Sha256::digest(content.as_bytes()).into();
+    let digest = content_digest(content);
     let hex16: String = digest[..8].iter().map(|b| format!("{b:02x}")).collect();
     let base64full = B64.encode(digest);
     (hex16, base64full)
+}
+
+/// The full-length lowercase-hex SHA-256 of one widget file's content — the
+/// canonical content hash the package index/manifest records for that widget
+/// (§7.2 "one hash from index to browser").
+///
+/// This is the SAME digest [`content_hashes`] derives the served URL and the page
+/// SRI from, rendered as the 64-char hex the index wire format uses. Binding the
+/// index-recorded hash to this function makes the pin verifiable end-to-end: the
+/// hash the index stores, the `hex16` cache-busting URL segment, and the SRI the
+/// page pins all come from one `sha256(content)`, so none can disagree with the
+/// bytes served — a tampered widget file yields a different hash on every one.
+#[must_use]
+pub fn widget_asset_sha256_hex(content: &str) -> String {
+    content_digest(content)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
 }
 
 /// The process-global widget registry, populated ONCE at process start by the
@@ -351,6 +379,65 @@ mod tests {
         assert!(!GLUE_PRELUDE.contains("eval("));
         // The up-emit reuses the existing wire, never inventing a new fetch.
         assert!(GLUE_PRELUDE.contains("__ipeSend(\"ipe-widget\""));
+    }
+
+    /// WP6 index→page hash pin: the 64-hex hash the index/manifest records for a
+    /// widget file, the `hex16` URL segment, and the SRI the page pins are all one
+    /// `sha256(content)` — so the index-recorded pin can never disagree with the
+    /// bytes the page SRI verifies. Proven by deriving the SRI base64 from the
+    /// recorded full-hex digest and matching `widget_asset_integrity`.
+    #[test]
+    fn recorded_hash_binds_to_the_served_sri() {
+        use base64::{Engine as _, engine::general_purpose::STANDARD as B64};
+        let content = "export function mount(host, emit){ return { onState(){} }; }";
+        let recorded = widget_asset_sha256_hex(content);
+        // The recorded hash is the full 64-char hex of the SAME digest the SRI
+        // and the URL derive from.
+        assert_eq!(recorded.len(), 64);
+        let digest = hex_to_bytes(&recorded);
+        let sri_from_recorded = format!("sha256-{}", B64.encode(digest));
+        assert_eq!(
+            sri_from_recorded,
+            widget_asset_integrity(content),
+            "the page SRI must be derivable from the index-recorded hash — one hash from index to browser"
+        );
+        // The URL's hex16 is the first 16 hex chars of the recorded hash.
+        assert_eq!(
+            widget_asset_path(content),
+            format!("/_ipe/widget.{}.js", &recorded[..16])
+        );
+    }
+
+    /// A tampered widget file (one changed byte) yields a DIFFERENT recorded hash,
+    /// a different SRI, and a different URL — so the index pin over the original
+    /// bytes fails to match the tampered bytes. This is the fail-closed catch: a
+    /// swapped file cannot pass a pin computed over the honest bytes.
+    #[test]
+    fn a_tampered_widget_file_diverges_from_the_recorded_pin() {
+        let honest = "export function mount(host, emit){ return { onState(){} }; }";
+        let tampered = "export function mount(host, emit){ steal(); return { onState(){} }; }";
+        assert_ne!(
+            widget_asset_sha256_hex(honest),
+            widget_asset_sha256_hex(tampered),
+            "a tampered widget file must not share the honest file's recorded hash"
+        );
+        assert_ne!(
+            widget_asset_integrity(honest),
+            widget_asset_integrity(tampered),
+            "a tampered widget file must not share the honest file's page SRI"
+        );
+    }
+
+    /// Decode a lowercase-hex string into bytes for the pin-binding test. Total
+    /// over the 64-char hex `widget_asset_sha256_hex` produces.
+    fn hex_to_bytes(hex: &str) -> Vec<u8> {
+        hex.as_bytes()
+            .chunks(2)
+            .filter_map(|pair| {
+                let s = std::str::from_utf8(pair).ok()?;
+                u8::from_str_radix(s, 16).ok()
+            })
+            .collect()
     }
 
     #[test]

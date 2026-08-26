@@ -95,6 +95,69 @@ const NETWORK_MAIN: &str = "module Main exposing (main)\n\
                             \x20   Http.get \"http://example.com\"\n\
                             \x20       |> Task.andThen (\\_ -> Io.println \"done\")\n";
 
+/// A Web-shape TEA app that mounts one `Ui.widget` — its inferred capability
+/// set is `{custom-element}` because it ships author browser JS.
+const WIDGET_MAIN: &str = r#"module Main exposing (main)
+
+import Ipe.Tea.Web as Web
+import Ipe.Ui as Ui
+import Ipe.Tea.Web.Cmd as Cmd
+import Ipe.Tea.Web.Sub as Sub
+import Ipe.String as String
+
+type alias WidgetState = { count : Int }
+
+type WidgetUp = Bumped Int
+
+type Msg = FromWidget WidgetUp
+
+type alias Model = { count : Int }
+
+counter : CustomElement WidgetState WidgetUp
+counter = customElement "js/counter.js"
+
+init : a -> ( Model, Cmd.Cmd Msg )
+init _req =
+    ( { count = 0 }, Cmd.none )
+
+update : Msg -> Model -> ( Model, Cmd.Cmd Msg )
+update msg model =
+    case msg of
+        FromWidget (Bumped n) ->
+            ( { count = model.count + n }, Cmd.none )
+
+view : Model -> Element Msg
+view model =
+    Ui.column []
+        [ Ui.widget counter { count = model.count } FromWidget
+        , Ui.text (String.fromInt model.count)
+        ]
+
+subscriptions : Model -> Sub.Sub Msg
+subscriptions _model =
+    Sub.none
+
+main =
+    Web.app
+        { init = init, update = update, view = view, subscriptions = subscriptions
+        , routes = [], notFound = FromWidget (Bumped 0)
+        }
+"#;
+
+/// Write a widget package: `package.ipe` + `src/Main.ipe` + the author widget
+/// JS the `customElement "js/counter.js"` literal names, so a build path that
+/// resolves the widget file is satisfied.
+fn write_widget_package(pkg: &Path, manifest: &str) {
+    std::fs::write(pkg.join("package.ipe"), manifest).expect("write package.ipe");
+    std::fs::write(pkg.join("src").join("Main.ipe"), WIDGET_MAIN).expect("write Main.ipe");
+    std::fs::create_dir_all(pkg.join("src").join("js")).expect("create src/js");
+    std::fs::write(
+        pkg.join("src").join("js").join("counter.js"),
+        "export function mount(host, emit) {\n  return { onState(s) {} };\n}\n",
+    )
+    .expect("write widget js");
+}
+
 /// An empty index checkout root (no `packages/` entries) — used when a package
 /// has no published predecessor, so the enforced-semver check skips.
 fn empty_index(tag: &str) -> PathBuf {
@@ -650,6 +713,102 @@ fn normal_cache_dir_is_deleted_before_regen() {
     assert!(
         !cache.exists(),
         "the committed cache dir must be deleted before regen runs"
+    );
+
+    let _ = std::fs::remove_dir_all(&pkg);
+}
+
+// ── WP6: index admission fail-closed on the `custom-element` axis ────────────
+
+/// Admission (the same gate index-admission CI runs) is FAIL-CLOSED for a widget
+/// package that hides the disclosure: a package shipping a `Ui.widget` but
+/// declaring NOTHING is rejected — a shipped-JS surface can never be admitted
+/// without disclosing `custom-element`.
+#[test]
+fn a_widget_package_that_hides_custom_element_is_rejected() {
+    let pkg = temp_pkg("undeclared-widget");
+    write_widget_package(
+        &pkg,
+        "module Package exposing (package)\n\n\npackage =\n    Package.named \"widget-pkg\"\n        |> Package.version \"0.1.0\"\n",
+    );
+    let index = empty_index("undeclared-widget");
+
+    let (ok, stdout, stderr) = run_audit(&pkg, &index);
+    assert!(
+        !ok,
+        "a widget package that omits `custom-element` must reject; stdout:\n{stdout}\nstderr:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("capability consistency"),
+        "the reject names the capability check; got:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("custom-element") && stderr.contains("used but NOT declared"),
+        "the diagnostic names the hidden `custom-element` effect; got:\n{stderr}"
+    );
+
+    let _ = std::fs::remove_dir_all(&pkg);
+}
+
+/// The other half: a widget package that HONESTLY declares
+/// `Capability.customElement` passes the capability-consistency gate — the
+/// disclosed shipped-JS surface is admitted with the axis on record.
+#[test]
+fn a_widget_package_that_declares_custom_element_passes() {
+    let pkg = temp_pkg("declared-widget");
+    write_widget_package(
+        &pkg,
+        "module Package exposing (package)\n\n\npackage =\n    Package.named \"widget-pkg\"\n        |> Package.version \"0.1.0\"\n        |> Package.declares [ Capability.customElement ]\n",
+    );
+    let index = empty_index("declared-widget");
+
+    let (ok, stdout, stderr) = run_audit(&pkg, &index);
+    assert!(
+        ok,
+        "a widget package declaring `custom-element` must pass; stdout:\n{stdout}\nstderr:\n{stderr}"
+    );
+    assert!(
+        stdout.contains("all Tier-1 checks passed"),
+        "the pass line is printed; got:\n{stdout}"
+    );
+
+    let _ = std::fs::remove_dir_all(&pkg);
+}
+
+/// WP6 index→page hash pin, fail-closed: the index's per-version `sha256` is the
+/// content hash of the whole source tree, which INCLUDES the shipped widget JS
+/// file. A widget file tampered after the pin was recorded changes the tree hash,
+/// so the recorded pin no longer names the tampered bytes — the admission
+/// hash-verify (`verify_hash`) refuses it rather than serving a swapped file. The
+/// same widget bytes back the served page SRI, so the pin the index records and
+/// the SRI the page serves are one hash over one file: tamper is caught on both.
+#[test]
+fn a_tampered_widget_file_breaks_the_recorded_index_hash() {
+    let pkg = temp_pkg("widget-hash-pin");
+    write_widget_package(
+        &pkg,
+        "module Package exposing (package)\n\n\npackage =\n    Package.named \"widget-pkg\"\n        |> Package.version \"0.1.0\"\n        |> Package.declares [ Capability.customElement ]\n",
+    );
+
+    // The honest tree's content hash — exactly what `ipe publish` records and the
+    // admission gate re-verifies (`resolve::fetch_and_verify_index_version`).
+    let honest = ipe::resolve::hash_source_tree(&pkg).expect("hash honest widget tree");
+
+    // Tamper the shipped widget JS after the pin was recorded.
+    std::fs::write(
+        pkg.join("src").join("js").join("counter.js"),
+        "export function mount(host, emit) {\n  steal(document.cookie);\n  return { onState(s) {} };\n}\n",
+    )
+    .expect("tamper widget js");
+
+    let tampered = ipe::resolve::hash_source_tree(&pkg).expect("hash tampered widget tree");
+
+    // The recorded index pin no longer names the tampered bytes — fail-closed:
+    // the admission hash-verify would reject this tree as a HashMismatch, so a
+    // swapped widget file can never be served under the honest pin.
+    assert_ne!(
+        honest, tampered,
+        "a tampered widget file must change the index-recorded tree hash, so the pin fails closed"
     );
 
     let _ = std::fs::remove_dir_all(&pkg);
