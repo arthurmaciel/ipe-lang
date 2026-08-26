@@ -68,9 +68,26 @@ front-door composition.
 | `Email.EmailProvider` | which transport | `Resend String \| Ses … \| SendGrid String \| Smtp …` | `Email.ipe:112` | `Resend`/`SendGrid` API keys are bare `String` |
 | `Analytics.Config` | sink + consent + identity | `type alias { sink, consent, userId, traits }` | `src/stdlib/Ipe/Analytics.ipe:272` | not a secret, but a per-module `defaultConfig`/`withX` loader; consent defaults `Pending` (fail-closed) |
 
-`Email` builders (`defaultSmtpConfig`, `withSmtpPass`, `withSesSecret`) at
-`Email.ipe:222`–`259` set these plaintext fields. `IPE_EMAIL_DRY_RUN` gates
-send at runtime (`src/runtime/rust/src/email.rs:162`).
+`Email` builders (`defaultSmtpConfig`, `withSmtpPass`, `withSesSecret`) set the
+credential fields; `IPE_EMAIL_DRY_RUN` gates send at runtime
+(`src/runtime/rust/src/email.rs`).
+
+> **Decided — Email and Analytics stay explicit per-call; they are NOT folded
+> into `config`.** Provider configuration threads as a required per-call typed
+> argument (`Email.send provider message`; `Analytics.*` take a `Config`
+> explicitly). An ambient "install once, a later send reads it" path is rejected:
+> it would admit a representable *used-before-installed* state, against
+> make-invalid-states-unrepresentable. The per-call shape is also cross-shape
+> (Program/Terminal/Web alike). The credential-hygiene half of the gap is
+> closed independently: every `Email` credential is now a `Secret`
+> (`Resend Secret`, `SendGrid Secret`, `SesConfig.secret : Secret`,
+> `SmtpConfig.pass : Secret`), revealed only at the runtime send boundary; the
+> "plaintext secret in source" note above no longer applies. `Analytics` was
+> already sound — `Pii` wraps a `Secret` with no reveal, and its sinks
+> (`Stderr` / `Jsonl Path`) are credential-free. The rows and migration steps
+> below that fold Email/Analytics into `Setting`s are superseded for those two
+> modules; the umbrella-config direction still stands for the reserved shape
+> settings and the loose `IPE_*` variables.
 
 ### C. Loose environment variables (the ~40-var stringly surface)
 

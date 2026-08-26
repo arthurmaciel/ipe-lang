@@ -19,6 +19,7 @@
 //! `IPE_EMAIL_ENDPOINT_<PROVIDER>` overrides per-provider URLs for fixtures.
 
 use super::*;
+use crate::secret::Secret;
 use base64::{Engine, engine::general_purpose::STANDARD as B64};
 use hmac::{Hmac, Mac};
 use sha2::{Digest, Sha256};
@@ -115,28 +116,42 @@ pub struct EmailAttachment {
 }
 
 /// Ipê.Email.SesConfig.
+///
+/// `secret` is the SES secret access key — a sealed [`Secret`], revealed only
+/// inside [`send_ses`] at the SigV4 signing step. `key` (the access-key id)
+/// identifies the IAM principal and travels in the request's credential scope,
+/// so it is not itself a secret.
 #[derive(Clone, Debug)]
 pub struct SesConfig {
     pub region: String,
     pub key: String,
-    pub secret: String,
+    pub secret: Secret,
 }
 
 /// Ipê.Email.SmtpConfig.
+///
+/// `pass` is the SMTP password — a sealed [`Secret`], revealed only inside
+/// [`send_smtp`] when building the transport credentials (over a required-TLS
+/// channel when a user is configured).
 #[derive(Clone, Debug)]
 pub struct SmtpConfig {
     pub host: String,
     pub port: i64,
     pub user: String,
-    pub pass: String,
+    pub pass: Secret,
 }
 
 /// Ipê.Email.EmailProvider — the ADT; variant names match the Ipê ctors.
+///
+/// The Resend / SendGrid API keys are sealed [`Secret`]s; the SES / SMTP
+/// credentials are sealed inside their config records. A provider is `Debug`-
+/// safe by construction: every credential it carries redacts under `Debug`
+/// (see [`Secret`]), so logging a whole `EmailProvider` never leaks a plaintext.
 #[derive(Clone, Debug)]
 pub enum EmailProvider {
-    Resend(String),
+    Resend(Secret),
     Ses(SesConfig),
-    SendGrid(String),
+    SendGrid(Secret),
     Smtp(SmtpConfig),
 }
 
@@ -172,9 +187,17 @@ pub fn email_send<E: From<String> + Send + 'static>(
                     .into(),
             );
         }
+        // Reveal the sealed key ONLY here, at the send boundary — the plaintext
+        // exists only as a local passed straight into the provider call, never
+        // logged, stored, or returned. For SES / SMTP the reveal happens deeper
+        // still, inside the provider fn at the exact signing / auth step.
         match provider {
-            EmailProvider::Resend(key) => send_resend(&key, &msg).await,
-            EmailProvider::SendGrid(key) => send_sendgrid(&key, &msg).await,
+            EmailProvider::Resend(key) => {
+                send_resend(&crate::secret::secret_reveal(key), &msg).await
+            }
+            EmailProvider::SendGrid(key) => {
+                send_sendgrid(&crate::secret::secret_reveal(key), &msg).await
+            }
             EmailProvider::Ses(cfg) => send_ses(&cfg, &msg).await,
             EmailProvider::Smtp(cfg) => send_smtp(&cfg, &msg).await,
         }
@@ -399,7 +422,12 @@ fn json_obj_set(v: &mut serde_json::Value, key: &str, val: serde_json::Value) {
 // ──────────────────── SES v2 (SigV4) ────────────────────
 
 async fn send_ses<E: From<String>>(cfg: &SesConfig, m: &EmailMessage) -> IpeResult<E, String> {
-    if cfg.region.is_empty() || cfg.key.is_empty() || cfg.secret.is_empty() {
+    // Reveal the sealed secret access key ONCE, here at the send boundary — it is
+    // consumed only by `ses_sign_v4` below (the SigV4 HMAC chain) and is never
+    // logged or returned. The empty-key precheck reads the revealed local, not
+    // the `Secret` (which has no `is_empty`, by design).
+    let secret = crate::secret::secret_reveal(cfg.secret.clone());
+    if cfg.region.is_empty() || cfg.key.is_empty() || secret.is_empty() {
         return IpeResult::Err(
             "email.send/Ses: region+key+secret required"
                 .to_string()
@@ -474,7 +502,7 @@ async fn send_ses<E: From<String>>(cfg: &SesConfig, m: &EmailMessage) -> IpeResu
     let payload = serde_json::to_vec(&body).unwrap_or_default();
 
     let host = format!("email.{}.amazonaws.com", cfg.region);
-    let headers = ses_sign_v4(&host, &cfg.region, &cfg.key, &cfg.secret, &payload);
+    let headers = ses_sign_v4(&host, &cfg.region, &cfg.key, &secret, &payload);
     let endpoint = email_endpoint("ses", &format!("https://{}/v2/email/outbound-emails", host));
     let header_refs: Vec<(&str, String)> = headers.iter().map(|(k, v)| (*k, v.clone())).collect();
     match email_post_json::<E>(&endpoint, &header_refs, payload).await {
@@ -720,7 +748,14 @@ async fn send_smtp<E: From<String>>(cfg: &SmtpConfig, m: &EmailMessage) -> IpeRe
         .tls(tls_policy)
         .timeout(Some(std::time::Duration::from_secs(30)));
     if !cfg.user.is_empty() {
-        tb = tb.credentials(Credentials::new(cfg.user.clone(), cfg.pass.clone()));
+        // Reveal the sealed password ONLY here, at the AUTH step — the plaintext
+        // is moved straight into lettre's `Credentials` and is never logged or
+        // returned. The TLS policy above already forced `Tls::Required` whenever a
+        // user is set, so these credentials never ride a cleartext channel.
+        tb = tb.credentials(Credentials::new(
+            cfg.user.clone(),
+            crate::secret::secret_reveal(cfg.pass.clone()),
+        ));
     }
     let transport = tb.build();
 
@@ -764,14 +799,67 @@ mod tests {
             attachments: vec![],
             replyTo: String::new(),
         };
-        let r: IpeResult<String, String> =
-            email_send(EmailProvider::Resend("key".into()), msg).await;
+        let r: IpeResult<String, String> = email_send(
+            EmailProvider::Resend(crate::secret::secret_from_string("key".into())),
+            msg,
+        )
+        .await;
         match r {
             IpeResult::Ok(id) => assert!(id.starts_with("dry-run-")),
             IpeResult::Err(e) => panic!("dry-run failed: {}", e),
         }
         // SAFETY: test-only env mutation.
         unsafe { std::env::remove_var("IPE_EMAIL_DRY_RUN") };
+    }
+
+    // ── Provider credential secrecy (leak-proof) tests ──────────────────────
+
+    /// The plaintext credential a provider is built from. If ANY `Debug` /
+    /// stringify path over an `EmailProvider` echoes this, the test fails.
+    const CRED_MARKER: &str = "sk_live_LEAK_MARKER_9f3z";
+
+    /// `Debug`-formatting an `EmailProvider` (or its config records) must render
+    /// the sealed credential as the redacted placeholder, never the plaintext —
+    /// this is the security invariant the `Secret` typing buys. Covers every
+    /// variant: the bare-key `Resend` / `SendGrid` and the config-record
+    /// `Ses` / `Smtp`.
+    #[test]
+    fn provider_debug_never_leaks_the_credential() {
+        let providers = vec![
+            EmailProvider::Resend(crate::secret::secret_from_string(CRED_MARKER.to_owned())),
+            EmailProvider::SendGrid(crate::secret::secret_from_string(CRED_MARKER.to_owned())),
+            EmailProvider::Ses(SesConfig {
+                region: "us-east-1".to_owned(),
+                key: "AKIAEXAMPLE".to_owned(),
+                secret: crate::secret::secret_from_string(CRED_MARKER.to_owned()),
+            }),
+            EmailProvider::Smtp(SmtpConfig {
+                host: "smtp.example.com".to_owned(),
+                port: 587,
+                user: "mailer".to_owned(),
+                pass: crate::secret::secret_from_string(CRED_MARKER.to_owned()),
+            }),
+        ];
+        for p in &providers {
+            let shown = format!("{p:?}");
+            assert!(
+                !shown.contains(CRED_MARKER),
+                "EmailProvider Debug leaked the plaintext credential: {shown}"
+            );
+            assert!(
+                shown.contains("<redacted>"),
+                "EmailProvider Debug must render the credential as <redacted>: {shown}"
+            );
+        }
+    }
+
+    /// The `secret_reveal` un-seal at the send boundary must recover the exact
+    /// plaintext (proving the seal is not lossy) — the positive counterpart to
+    /// the leak test. This is the ONLY path that recovers the plaintext.
+    #[test]
+    fn send_boundary_reveal_recovers_the_credential() {
+        let sealed = crate::secret::secret_from_string(CRED_MARKER.to_owned());
+        assert_eq!(crate::secret::secret_reveal(sealed), CRED_MARKER);
     }
 
     // ── EmailAddress typed parse boundary tests ──────────────────────────────
@@ -892,7 +980,7 @@ mod tests {
             host: host.to_string(),
             port: 25,
             user: String::new(),
-            pass: String::new(),
+            pass: crate::secret::secret_from_string(String::new()),
         };
         // VettedDial::for_host mirrors the guard in email_send_smtp exactly.
         // We test at this layer rather than driving the full async fn so the
