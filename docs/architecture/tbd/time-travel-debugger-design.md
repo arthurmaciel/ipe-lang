@@ -56,7 +56,7 @@ message log — recording the log reconstructs any past state exactly.
   a message list + a scrubber; selecting step N re-renders the view at the
   reconstructed `Model` (feed it to the same in-process view — trivial in-process).
   Re-render at a past state does not re-fire effects.
-- **(b) Server-driven (`Ipe.Live`).** Reuse the same core behind the server loop
+- **(b) Server-driven (`Ipe.Web`).** Reuse the same core behind the server loop
   driver: record server-side, and the scrub re-drives the client render over the
   existing patch wire. No new codec.
 - **(c) Terminal.** Reuse the core behind the terminal loop driver; a terminal-native

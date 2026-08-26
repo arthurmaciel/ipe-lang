@@ -1003,6 +1003,7 @@ fn request_is_https(headers: &axum::http::HeaderMap) -> bool {
 
 /// Build the full-page HTTP response for a GET (initial render or reuse): the
 /// client-bearing HTML wrap + the session cookie (name/path base-path-aware).
+#[cfg(not(feature = "debugger"))]
 fn page_response(
     sid: &str,
     body: &str,
@@ -2290,7 +2291,7 @@ where
         // Request body: `{"index": N}` — reconstruct model at retained step N.
         // Response: `{"body": "<html>"}` — the view rendered at step N.
         // Out-of-range N is clamped to the last retained step. No Cmd is fired.
-        // Live history is never mutated — reconstruct is a pure re-fold.
+        // The recorded history is never mutated — reconstruct is a pure re-fold.
         #[cfg(feature = "debugger")]
         async fn scrub_handler<Model, Msg, FInit, FUpdate, FView, FSubs>(
             State(st): State<WebState<Model, Msg, FInit, FUpdate, FView, FSubs>>,

@@ -417,7 +417,7 @@ mod tests {
 
         #[derive(Clone, Debug)]
         enum SecretMsg {
-            Login(crate::secret::Secret<String>),
+            Login(crate::secret::Secret),
         }
 
         impl IpeStringify for SecretMsg {
