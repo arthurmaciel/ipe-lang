@@ -76,7 +76,7 @@ site list and tripwire details: **`docs/internals/kernel-registration.md`**.
 ## Governance
 
 - **`PRINCIPLES.md`** is the enforcement SSOT: the precedence order
-  (Security > Correctness > Soundness > Efficiency > Completeness > Readability),
+  (Security > Correctness > Soundness > Efficiency > Ease of use > Readability),
   parse-don't-validate, make-invalid-states-unrepresentable, no `panic`/`unwrap`/
   `expect`/raw-index in production code, and THE SEAL. Read it; this file does not
   restate it.
