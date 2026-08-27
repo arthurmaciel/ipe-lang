@@ -11,6 +11,8 @@
 
 use std::path::{Path, PathBuf};
 
+use ipe::CliError;
+
 use crate::support::repo_root;
 
 fn fixture_entry(root: &Path, golden: &str) -> PathBuf {
@@ -34,10 +36,19 @@ fn draft_query_without_classification_is_rejected() {
         return; // resolver unavailable — skip
     };
     let built = ipe::build(&entry, &out, &runtime);
-    assert!(
-        built.is_err(),
-        "querying an unclassified `Draft` with `Store.all` MUST be rejected — a \
-         table is unqueryable until classified with `Store.public` or \
-         `Store.secured` (deny-by-default)"
+    // Pin the REASON, not just the failure: a `Draft` read is a type mismatch
+    // (Store expected, Draft found) — IPE-T0001. Asserting only `is_err()` would
+    // pass on any unrelated build failure, leaving the deny-by-default guarantee
+    // unproven.
+    let got = match &built {
+        Err(CliError::Pipeline { diag, .. }) => Some(diag.code()),
+        _ => None,
+    };
+    assert_eq!(
+        got,
+        Some(ipe_diagnostics::IPE_T0001),
+        "querying an unclassified `Draft` with `Store.all` MUST be rejected with \
+         IPE-T0001 (Store expected, Draft found) — a table is unqueryable until \
+         classified with `Store.public` or `Store.secured` (deny-by-default); got: {built:?}"
     );
 }
