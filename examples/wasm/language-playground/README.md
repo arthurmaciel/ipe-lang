@@ -75,5 +75,5 @@ every jailed build after that is fully offline.)
    transcript back to the page.
 
 The security model and the load-bearing tests live in
-[docs/playground.md](../../../docs/playground.md) and
+[docs/topics/playground.md](../../../docs/topics/playground.md) and
 `jail-runner/tests/sandbox_security.rs`.

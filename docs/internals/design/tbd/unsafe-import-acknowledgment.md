@@ -3,7 +3,7 @@
 > Status: design proposal, no implementation. Every fenced flag/signature below
 > is **illustrative of the proposed surface**, not shipped API. This note builds
 > directly on the disclosed `.Unsafe` convention and the inferred `unsafe`
-> capability (`docs/architecture/tbd/unsafe-escape-convention-design.md`); read
+> capability (`docs/internals/design/tbd/unsafe-escape-convention-design.md`); read
 > that first — this adds one thing on top of it: a build-time acknowledgment
 > when *user* code reaches for a disclosed unsafe escape.
 
@@ -128,7 +128,7 @@ already uses.
   zero `unsafe` and letting the fail-closed non-interactive path reject any
   inferred `unsafe`.
 - **With `.Unsafe` packaging.** This is what makes a *packaged* `Html.Unsafe` or
-  `Db.Unsafe` (see `docs/architecture/tbd/stdlib-core-vs-package-policy.md`)
+  `Db.Unsafe` (see `docs/internals/design/tbd/stdlib-core-vs-package-policy.md`)
   safe-by-consent. Wherever the `.Unsafe` submodule lives — core or a package —
   the same import-derived `unsafe` capability fires and the same acknowledgment
   gate applies. Residency does not weaken or strengthen the boundary; consent

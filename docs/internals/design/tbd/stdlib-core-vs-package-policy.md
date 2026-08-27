@@ -1,7 +1,7 @@
 # Stdlib core-vs-package policy — a lean core, an opt-in package ecosystem
 
 > Status: design proposal, no implementation. This note sits **above**
-> `docs/architecture/tbd/stdlib-placement-policy.md` and its ADR
+> `docs/internals/design/tbd/stdlib-placement-policy.md` and its ADR
 > `docs/adr/0057-stdlib-placement.md`. Those partition the stdlib by *what a
 > function is* (capability / security-defense / perf primitive / cold
 > computation) to decide native-vs-Ipê. This note partitions the stdlib by
@@ -59,7 +59,7 @@ its subject matter.
 
 3. **Package-later** — needs a **new native kernel or native crate** that is not
    yet bindable from package source. It can move only after the native-package /
-   FFI-to-Rust tier lands (`docs/architecture/ffi-to-rust.md`,
+   FFI-to-Rust tier lands (`docs/internals/design/ffi-to-rust.md`,
    `docs/adr/0033-ipe-rust-ffi-subsystem.md`), which lets a package declare and
    bind native code under the disclosed-and-consented capability model.
 
@@ -104,9 +104,9 @@ it does not re-implement it.
 
 **`Html.Unsafe` in a package is safe by consent, not by residency.**
 `Ipe.Html.Unsafe.unsafeRaw` is an XSS sink. Its safety when packaged comes from
-the **unsafe-import acknowledgment** (`docs/architecture/tbd/unsafe-import-acknowledgment.md`)
+the **unsafe-import acknowledgment** (`docs/internals/design/tbd/unsafe-import-acknowledgment.md`)
 and the inferred `unsafe` capability
-(`docs/architecture/tbd/unsafe-escape-convention-design.md`): importing the
+(`docs/internals/design/tbd/unsafe-escape-convention-design.md`): importing the
 `.Unsafe` submodule discloses `unsafe`, and consuming user code must acknowledge
 it. A packaged `Html.Unsafe` is exactly as visible and consented-to as a core
 one — the boundary is the capability, not the shelf it sits on.
@@ -254,7 +254,7 @@ as one module or many; by the 99-line `ipe doc --list`, 12 leaves are non-core
   and this note's links are the real sources. Flagged as an open naming
   question.)*
 - **Package-later leaves** wait on the native-package / FFI-to-Rust tier
-  (`docs/architecture/ffi-to-rust.md`, `docs/adr/0033-ipe-rust-ffi-subsystem.md`),
+  (`docs/internals/design/ffi-to-rust.md`, `docs/adr/0033-ipe-rust-ffi-subsystem.md`),
   which lets a package declare-and-bind native code under disclosed capabilities.
 - **Dogfood as teaching.** Convert examples to `ipe add` the first-party
   packages. That migration *is* the package-authoring and package-consuming

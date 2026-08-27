@@ -14,7 +14,7 @@ Each module listed below links to a detail page with full doc-strings and exampl
 
 ## Io
 
-[Full reference](internals/stdlib/Io.md)
+[Full reference](stdlib/Io.md)
 
 | Symbol | Summary |
 |--------|----------|
@@ -22,7 +22,7 @@ Each module listed below links to a detail page with full doc-strings and exampl
 
 ## List
 
-[Full reference](internals/stdlib/List.md)
+[Full reference](stdlib/List.md)
 
 | Symbol | Summary |
 |--------|----------|
@@ -58,7 +58,7 @@ Each module listed below links to a detail page with full doc-strings and exampl
 
 ## Maybe
 
-[Full reference](internals/stdlib/Maybe.md)
+[Full reference](stdlib/Maybe.md)
 
 | Symbol | Summary |
 |--------|----------|
@@ -76,7 +76,7 @@ Each module listed below links to a detail page with full doc-strings and exampl
 
 ## Result
 
-[Full reference](internals/stdlib/Result.md)
+[Full reference](stdlib/Result.md)
 
 | Symbol | Summary |
 |--------|----------|
@@ -95,7 +95,7 @@ Each module listed below links to a detail page with full doc-strings and exampl
 
 ## String
 
-[Full reference](internals/stdlib/String.md)
+[Full reference](stdlib/String.md)
 
 | Symbol | Summary |
 |--------|----------|

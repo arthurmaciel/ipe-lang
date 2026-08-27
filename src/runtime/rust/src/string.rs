@@ -829,7 +829,7 @@ mod tests {
     // `String.fromFloat` follows Go's `strconv.FormatFloat(f,'g',-1,64)` shape,
     // the correctness anchor the example sweep diffs against. Where that shape
     // diverges from Elm's JS `String(f)`, the divergence is recorded in
-    // `docs/elm-coverage/behaviour-verdicts.md` (verdict: keep-ours). These
+    // `docs/topics/elm-coverage/behaviour-verdicts.md` (verdict: keep-ours). These
     // tests pin the exact points of agreement and divergence.
 
     // Agrees with Elm: an integral float drops its fraction.

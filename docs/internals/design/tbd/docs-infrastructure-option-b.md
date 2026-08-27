@@ -159,7 +159,7 @@ copy) the per-kind SSOTs:
 
 - symbols/modules → the parsed doc-strings from (A)/(B)
 - diagnostics → `src/compiler/diagnostics/explain/*.md` (already SSOT, 132 pages)
-- constructs / idioms / glossary → `docs/content/*.md` (new content files, the
+- constructs / idioms / glossary → `docs/constructs/*.md` (new content files, the
   only newly-authored prose — for language constructs like `case`, `do`, and a
   glossary with etymology per the kind-teacher convention)
 - CLI commands → the `help.rs` `COMMANDS` registry (already SSOT)
@@ -203,12 +203,12 @@ idiom/topic. This is the single lookup that both `ipe doc` and the site use.
 
 ### G. `docs/*.md` generation
 
-- Generate `docs/stdlib.md` (index: modules → exported symbols with one-line
-  summaries, cross-linked) and `docs/internals/stdlib/<Module>.md` (detailed:
+- Generate `docs/reference/stdlib.md` (index: modules → exported symbols with one-line
+  summaries, cross-linked) and `docs/reference/stdlib/<Module>.md` (detailed:
   each symbol's signature + doc-string + example) from the index (D).
 - A CI job regenerates and `git diff --exit-code`s them, so a doc-string edit
   that isn't reflected in the committed `.md` reddens the build (no drift).
-- **Acceptance.** `docs/stdlib.md` + internals are generated, committed, and
+- **Acceptance.** `docs/reference/stdlib.md` + internals are generated, committed, and
   diff-clean in CI; editing a doc-string and regenerating updates them.
 
 ### H. `ipe doc serve` — the HTML site

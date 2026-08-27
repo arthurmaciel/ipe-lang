@@ -1,9 +1,9 @@
 # Divergences from Elm
 
 The full **coverage matrix** (every `elm/*` module → per-value status) lives in
-[`elm-coverage/README.md`](elm-coverage/README.md) and the exhaustive
+[`elm-coverage/README.md`](topics/elm-coverage/README.md) and the exhaustive
 per-value `elm/core` table in
-[`elm-coverage/elm-core-coverage.md`](elm-coverage/elm-core-coverage.md).
+[`elm-coverage/elm-core-coverage.md`](topics/elm-coverage/elm-core-coverage.md).
 This document is the durable ledger of the deliberate **departures** from Elm's
 API shape — the places where Ipê provides the same capability under a different
 type or omits an Elm module on purpose. Each entry states only *what differs*

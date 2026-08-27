@@ -3,7 +3,7 @@
 Design: make every currently-unconditional external dependency of
 `ipe-runtime-rust` optional and its consuming module `cfg(feature = …)`-gated,
 so the reachability-driven feature selection
-(`docs/architecture/function-level-dependency-emission.md`) actually drops the
+(`docs/internals/design/function-level-dependency-emission.md`) actually drops the
 residual dependency floor. This is the runtime-crate half that design defers;
 companion to ADR 0054 and
 `precompiled-runtime-and-shared-target.md`.

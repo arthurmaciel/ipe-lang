@@ -329,7 +329,7 @@ fn a_spawned_subprocess_cannot_escape_the_jail() {
     if !e2e_enabled() {
         return;
     }
-    // The honest guarantee (see docs/playground.md threat model): the run jail's
+    // The honest guarantee (see docs/topics/playground.md threat model): the run jail's
     // seccomp filter denies the legacy `fork`/`vfork`/`clone` subprocess paths but
     // NOT `clone3` — which `posix_spawn` uses on modern glibc — because the tokio
     // runtime creates its threads via `clone3` and seccomp cannot inspect its

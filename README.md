@@ -271,7 +271,7 @@ ipe doc check
 
 `ipe lsp` speaks JSON-RPC over stdio — type-directed completion, go-to-definition,
 find-references, rename, formatting, code actions, semantic tokens, and more.
-See [editor integration documentation](docs/editor-integration.md) for setup
+See [editor integration documentation](docs/topics/editor-integration.md) for setup
 instructions covering Helix, Neovim, VS Code, Emacs (lsp-mode and Doom Emacs),
 and Zed.
 
@@ -350,7 +350,7 @@ Optional per-machine tools — a compilation cache
 ([mold](https://github.com/rui314/mold) / [lld](https://lld.llvm.org/)), and a
 fast debug codegen backend
 ([cranelift](https://github.com/rust-lang/rustc_codegen_cranelift)) — cut that
-substantially. See [rust performance improvement](docs/rust-perf-improvement.md)
+substantially. See [rust performance improvement](docs/topics/faster-builds.md)
 for per-platform install and `~/.cargo/config.toml` recipes.
 
 ## Support

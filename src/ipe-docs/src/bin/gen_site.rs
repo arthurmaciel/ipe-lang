@@ -25,7 +25,7 @@
 //!
 //! - `<out-dir>`: where the HTML tree is written (created if absent)
 //! - `<explain-dir>`: path to `src/compiler/diagnostics/explain/`
-//! - `<content-dir>`: path to `docs/content/`
+//! - `<content-dir>`: path to `docs/constructs/`
 //!
 //! ## Follow-up
 //!

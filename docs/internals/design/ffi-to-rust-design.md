@@ -1,6 +1,6 @@
 # FFI-to-Rust: finishing the consolidated boundary
 
-The boundary itself is specified in `docs/architecture/ffi-to-rust.md` — three
+The boundary itself is specified in `docs/internals/design/ffi-to-rust.md` — three
 orthogonal axes (representation / binding path / provenance), one fail-closed
 failure story, one capability/sandbox model. This document is the companion
 *implementation state map and completion plan*: what of that specification is
