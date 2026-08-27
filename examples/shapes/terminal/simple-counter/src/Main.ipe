@@ -1,15 +1,13 @@
 module Main exposing (main)
 
 {-|
-20-cli-counter — first end-to-end demo of Sky.Cli, the line-oriented
-TEA backend. Same `init / update / view / subscriptions` shape as
-Sky.Live, plus a CLI-specific `onLine : String -> Msg` that maps
-each stdin line to a Msg.
+A line-oriented TEA counter using `Terminal.appLines`.
 
-Run:
-    sky run src/Main.sky
+The `onLine : String -> Msg` callback maps each stdin line to a `Msg`,
+giving the same `init / update / view / subscriptions` shape as other
+TEA backends.
 
-Then type:
+Type:
     +     increment
     -     decrement
     r     reset to zero
@@ -53,8 +51,6 @@ update msg model =
             ( { count = 0 }, Cmd.none )
 
         Quit ->
-            -- Cmd.perform fires the Task in a goroutine; System.exit 0
-            -- terminates the process before the result comes back.
             ( model, Cmd.perform (System.exit 0) (\_ -> NoOp) )
 
         NoOp ->
