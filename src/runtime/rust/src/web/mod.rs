@@ -748,17 +748,23 @@ async fn drive_session<Model, Msg, FUpdate, FView, FSubs>(
     // touching every store backend's eviction path. The guard closes on EVERY exit
     // path, including the early `return` when the session is already gone.
     #[cfg(all(feature = "json", feature = "tokio"))]
-    struct PortLifecycle(String);
+    struct PortLifecycle(Option<crate::js_port::SessionId>);
     #[cfg(all(feature = "json", feature = "tokio"))]
     impl Drop for PortLifecycle {
         fn drop(&mut self) {
-            crate::js_port::session_close(&self.0);
+            if let Some(port_sid) = &self.0 {
+                crate::js_port::session_close(port_sid);
+            }
         }
     }
     #[cfg(all(feature = "json", feature = "tokio"))]
-    crate::js_port::session_open(&sid);
-    #[cfg(all(feature = "json", feature = "tokio"))]
-    let _port_lifecycle = PortLifecycle(sid.clone());
+    let _port_lifecycle = {
+        let port_sid = crate::js_port::SessionId::parse(&sid);
+        if let Some(ref ps) = port_sid {
+            crate::js_port::session_open(ps);
+        }
+        PortLifecycle(port_sid)
+    };
 
     // Initial subscriptions — Go parity (setupSubscriptions runs at session
     // creation, before the first event; live.go:3729). Without this a
@@ -2025,10 +2031,10 @@ where
             // drops the one frame rather than blocking the dispatch loop, the same
             // fire-and-forget contract the port carries client-side.
             #[cfg(all(feature = "json", feature = "tokio"))]
-            if let Some(sid) = sid.clone() {
+            if let Some(port_sid) = sid.as_deref().and_then(crate::js_port::SessionId::parse) {
                 let port_tx = tx.clone();
                 crate::js_port::register_out_sink_for(
-                    &sid,
+                    &port_sid,
                     std::sync::Arc::new(move |encoded: &str| {
                         let _ = port_tx.try_send(SsePatch(sse::frame("port", encoded)));
                     }),
@@ -2337,7 +2343,11 @@ where
             {
                 use crate::seal_codec::{SealLimits, seal_boundary_check};
                 if seal_boundary_check(&parsed.payload, SealLimits::default()).is_ok() {
-                    crate::js_port::deliver_inbound_for(&sid, parsed.payload);
+                    // Parse at the delivery boundary: an invalid/empty sid has no
+                    // registry entry and cannot be represented as a SessionId.
+                    if let Some(port_sid) = crate::js_port::SessionId::parse(&sid) {
+                        crate::js_port::deliver_inbound_for(&port_sid, parsed.payload);
+                    }
                 }
             }
             (
