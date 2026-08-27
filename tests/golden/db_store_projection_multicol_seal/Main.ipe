@@ -5,12 +5,11 @@ module Main exposing (main)
 -- stores join on `books.author_id = authors.id`; `select` projects TWO columns as
 -- a flat tuple of references (`( book.title, author.name )`) so the join lowers to
 -- ONE parameterized statement selecting exactly those two columns
--- (`SELECT a0.title AS p0, a1.name AS p1 FROM …`, column pushdown). Each projected
--- row comes back as a `Row` keyed by the output names `p0` / `p1`, read by
--- position with `Store.projReadText 0` / `Store.projReadText 1`. No live database
--- is needed: `Task.onError` catches the connection failure and the program exits
--- cleanly. The SEAL proof is a `cargo build` of the emitted project under
--- `IPE_E2E=1`.
+-- (`SELECT a0.title AS p0, a1.name AS p1 FROM …`, column pushdown). The
+-- projection returns the typed `List ( String, String )` directly. No live
+-- database is needed: `Task.onError` catches the connection failure and the
+-- program exits cleanly. The SEAL proof is a `cargo build` of the emitted project
+-- under `IPE_E2E=1`.
 --
 -- The projection is expressed as a value that lowers to SQL, not a per-row
 -- fan-out:
@@ -18,9 +17,11 @@ module Main exposing (main)
 --     two projected columns by bare field references read at compile time (never
 --     run over real rows), so a projection that is not a flat tuple of column
 --     references is a build error.
---   * `Store.selectToList` returns `List Row`, each row carrying `p0` and `p1`.
---   * The decode is caller-side and monomorphic: each `projReadText` reads its own
---     `p<index>` cell, so the projection value stores no decoder.
+--   * `Store.selectToList` returns `List ( String, String )` — the per-column
+--     decode is emitted concretely at the call site from the projected tuple
+--     shape, so the caller sees the typed tuple with no positional read.
+--   * The decode is monomorphic and never stored: the projection value carries
+--     only the ordered `(alias, column)` list, so it holds no decoder.
 --
 -- Expected output:
 --   projection-multicol-seal:ok
@@ -85,9 +86,9 @@ authorsStore =
 
 
 -- The projection: one parameterized statement selecting `book.title` and
--- `author.name`, no per-row fan-out. Each projected row is a `Row` keyed by `p0`
--- (title) and `p1` (name).
-titledAuthors : Db -> Store Book -> Store Author -> Task Error (List Store.Row)
+-- `author.name`, no per-row fan-out. The typed return is `List ( String, String )`
+-- (title, name) per matched pair.
+titledAuthors : Db -> Store Book -> Store Author -> Task Error (List ( String, String ))
 titledAuthors db books authors =
     Store.selectToList db
         (Store.select (\( book, author ) -> ( book.title, author.name ))
@@ -95,7 +96,7 @@ titledAuthors db books authors =
         )
 
 
-run : Db -> Task Error (List Store.Row)
+run : Db -> Task Error (List ( String, String ))
 run db =
     case booksStore of
         Ok books ->

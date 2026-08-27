@@ -135,6 +135,14 @@ pub fn lower(
     let any_param_binders = interner
         .fresh_symbols("anyp_", any_param_site_count)
         .map_err(homeless)?;
+    // One bounded group of fresh binders per `Store.selectToList` /
+    // `Store.selectToMaybe` call site, for the concrete per-column decode the
+    // intercept emits there. Same two-borrow ordering as the `anyp_` pool: the
+    // (immutable-borrow) count precedes the (mutable-mint) `fresh_symbols` call.
+    let projection_decode_site_count = lower::count_projection_decode_sites(m, interner);
+    let projection_decode_binders = interner
+        .fresh_symbols("projdec_", projection_decode_site_count)
+        .map_err(homeless)?;
     // one fresh thunk-binder symbol per syntactic destructure-binder
     // `let` / single-arm product `case` site, consumed only when the bound
     // value's solved type contains a Decoder (the type gate runs post-solve,
@@ -234,6 +242,7 @@ pub fn lower(
             cap_params,
             param_binders,
             any_param_binders,
+            projection_decode_binders,
             destructure_thunk_binders,
             nested_cons_binders,
             nested_strlit_binders,

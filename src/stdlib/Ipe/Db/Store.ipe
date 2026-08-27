@@ -228,7 +228,6 @@ module Ipe.Db.Store exposing
     , joinToList, joinToMaybe, joinCount
     , Select
     , select, selectNamed
-    , projReadText, projReadInt, projReadBool, projReadFloat
     , selectToList, selectToMaybe
     , Policy, Secured
     , unrestricted, publicRead, ownerColumn, immutable, andPolicy, secured
@@ -2911,18 +2910,21 @@ joinCount conn joined =
 -- raw value into the SELECT text — a body that is not a column reference (or a
 -- flat tuple of column references) is a fail-closed build error (IPE-L0149),
 -- never a computed fragment. Each projected column binds to an output name by
--- position (`p0`, `p1`, …); a caller decodes each back by that position with the
--- matching `projRead*` helper, so the projection carries no stored decoder.
+-- position (`p0`, `p1`, …); `selectToList` / `selectToMaybe` return the projected
+-- `row` directly — the per-column decode is emitted concretely at the call site
+-- from the projected shape the `select` lambda fixed, so no decoder is stored in
+-- the projection value and the caller sees a typed `row`, never a positional read.
 
 
--- | A column projection over a join, decoded to `row` at `selectToList` /
--- `selectToMaybe`. Built only through `select`, so the projected columns and the
--- decoder that reads them back cannot drift. `joined` is the underlying join
--- (its `FROM … WHERE` and any `poison`); `projections` is the ordered list of
--- validated `(alias, column)` references the `SELECT` names, each bound to an
--- output name by position; `decode` reads one projected `Row` (keyed by those
--- output names) back into `row`.
-type Select
+-- | A column projection over a join, returned as the typed `row` by
+-- `selectToList` / `selectToMaybe`. `row` is a PHANTOM type argument: it records
+-- the projected shape the `select` lambda fixed so the call site emits the right
+-- concrete decode, while the runtime value carries only query data. Built only
+-- through `select`, so the projected columns and the shape that reads them back
+-- cannot drift. `joined` is the underlying join (its `FROM … WHERE` and any
+-- `poison`); `projections` is the ordered list of validated `(alias, column)`
+-- references the `SELECT` names, each bound to an output name by position.
+type Select row
     = Select
         { joinedA : String
         , joinedB : String
@@ -2944,26 +2946,23 @@ type Select
 -- non-reference or nested-tuple element — is a fail-closed build error, never a
 -- raw SQL fragment.
 --
--- `selectToList` returns each projected row as a `Row` keyed by the output names
--- `p0`, `p1`, … in projection order; read each projected value back with the
--- matching `projRead*` helper at its position (`projReadText 0 row`,
--- `projReadInt 1 row`, …). Keeping the decode caller-side keeps the projected
--- shape a plain typed read rather than a stored function.
+-- `selectToList` / `selectToMaybe` return the projected `row` directly: the
+-- per-column decode is emitted concretely at the call site from the projected
+-- shape this lambda fixed, so a single-column projection yields the scalar and a
+-- tuple projection yields the tuple — no positional read in caller code.
 --
 -- Example:
 --
---     -- one column
+--     -- one column: a `List String`
 --     Store.join books .authorId authors .id
 --         |> Store.select (\( _, author ) -> author.name)
 --         |> Store.selectToList db
---         -- each row: `Store.projReadText 0 row == Ok "<author name>"`
 --
---     -- two columns
+--     -- two columns: a `List ( String, String )`
 --     Store.join books .authorId authors .id
 --         |> Store.select (\( book, author ) -> ( book.title, author.name ))
 --         |> Store.selectToList db
---         -- each row: `projReadText 0 row` = title, `projReadText 1 row` = name
-select : (( a, b ) -> row) -> Joined a b -> Select
+select : (( a, b ) -> row) -> Joined a b -> Select row
 select =
     Ffi.kernel "Store_select"
 
@@ -2973,7 +2972,7 @@ select =
 -- tables, alias-bound `FROM … WHERE` fragment, and any inherited `poison`.
 -- Reached only through the `Store.select` lowering intercept; not part of the
 -- accessor caller surface.
-selectNamed : Joined a b -> List ( String, String ) -> Select
+selectNamed : Joined a b -> List ( String, String ) -> Select row
 selectNamed joined projections =
     case joined of
         Joined r ->
@@ -2992,22 +2991,71 @@ selectNamed joined projections =
                                 }
 
 
--- | `selectToList db sel` — run the projection and return each projected row as
--- a `Row` keyed by the projection output names (`p0`, …). Lowers to ONE
--- parameterized statement (`SELECT proj … FROM ta AS a0, tb AS a1 WHERE …`)
--- through `Db.findProjection`: every projected identifier is re-validated at the
--- runtime boundary, and every filter value is a bound parameter. A poisoned
--- projection (an inherited filter naming an unknown column) fails closed with the
--- typed `Err`. Read each projected value back with the matching `projRead*` helper
--- at its position (`0`, `1`, … in projection order).
+-- | `selectToList db sel` — run the projection and return the projected `row`
+-- for every matched join row. Lowers to ONE parameterized statement
+-- (`SELECT proj … FROM ta AS a0, tb AS a1 WHERE …`) through `Db.findProjection`:
+-- every projected identifier is re-validated at the runtime boundary, and every
+-- filter value is a bound parameter. A poisoned projection (an inherited filter
+-- naming an unknown column) fails closed with the typed `Err`.
+--
+-- The `Select` argument must be a `Store.select` projection expression: the
+-- compiler reads the projected shape and each column's type from it and emits the
+-- concrete per-column decode at this call site (a single column yields the scalar,
+-- a tuple yields the tuple), so no decoder is stored in the value. A `Select` that
+-- is not a `Store.select` expression is a fail-closed build error (IPE-L0149); the
+-- body below is that fail-closed fallback, reached only when the intercept does
+-- not fire.
 --
 -- Example:
 --
 --     Store.join books .authorId authors .id
 --         |> Store.select (\( book, author ) -> ( book.title, author.name ))
 --         |> Store.selectToList db
-selectToList : Db -> Select -> Task Error (List Row)
+--         -- : Task Error (List ( String, String ))
+selectToList : Db -> Select row -> Task Error (List row)
 selectToList conn sel =
+    Task.fail selectNotProjectionError
+
+
+-- | `selectToMaybe db sel` — run the projection and return the FIRST projected
+-- `row`, or `Nothing`. Like `selectToList`, the `Select` argument must be a
+-- `Store.select` projection expression (the decode is emitted at this call site).
+selectToMaybe : Db -> Select row -> Task Error (Maybe row)
+selectToMaybe conn sel =
+    Task.fail selectNotProjectionError
+
+
+selectNotProjectionError : Error
+selectNotProjectionError =
+    Error.invalidInput
+        "Ipe.Db.Store: selectToList / selectToMaybe require a `Store.select` projection expression"
+
+
+-- Run the projection, decode every matched row through `decode`, and return the
+-- typed list. The `selectToList` intercept emits this call with the concrete
+-- per-column `decode` (`Row -> Result Error row`) built from the projection's
+-- known shape, so the decode is monomorphic and stored nowhere. A row that does
+-- not decode fails the whole task closed (`Result.combine` returns the first
+-- `Err`, lifted to `Task.fail`). Internal to the emitted decode; not exposed.
+selectDecodeList : (Row -> Result Error row) -> Db -> Select row -> Task Error (List row)
+selectDecodeList decode conn sel =
+    Task.andThen
+        (\rows -> Task.fromResult (Result.combine (List.map decode rows)))
+        (selectRows conn sel)
+
+
+-- The `selectToMaybe` counterpart: decode every row, then keep the first. Same
+-- fail-closed decode as `selectDecodeList`. Internal to the emitted decode.
+selectDecodeMaybe : (Row -> Result Error row) -> Db -> Select row -> Task Error (Maybe row)
+selectDecodeMaybe decode conn sel =
+    Task.map List.head (selectDecodeList decode conn sel)
+
+
+-- Run the projection and return each matched join row as a `Row` keyed by the
+-- projection output names (`p0`, …). The untyped read `selectDecodeList` wraps
+-- with the concrete per-column decode; not part of the caller surface.
+selectRows : Db -> Select row -> Task Error (List Row)
+selectRows conn sel =
     case sel of
         Select r ->
             case r.poison of
@@ -3024,47 +3072,70 @@ selectToList conn sel =
                         r.projections
 
 
--- | `selectToMaybe db sel` — run the projection and return the FIRST projected
--- row (as a `Row`), or `Nothing`.
-selectToMaybe : Db -> Select -> Task Error (Maybe Row)
-selectToMaybe conn sel =
-    Task.map List.head (selectToList conn sel)
-
-
 -- The projection output name a projected column binds to, by position: the first
 -- projected column is `p0`, the second `p1`, and so on. Both the SQL `SELECT`
--- alias (built in the runtime from this same convention) and the decoder read a
--- cell by this name, so the projection list and the decoder cannot disagree on a
--- column's position.
+-- alias (built in the runtime from this same convention) and the emitted decode
+-- read a cell by this name, so the projection list and the decode cannot disagree
+-- on a column's position.
 projOutputName : Int -> String
 projOutputName index =
     String.concat [ "p", String.fromInt index ]
 
 
--- | Read the projected column bound to position `index` back as `String`. The
--- decoder the `select` intercept emits calls one `projRead*` per projected
--- column, keyed by the same `p<index>` output name the runtime projects into.
-projReadText : Int -> Row -> Result Error String
-projReadText index row =
+-- Read the projected column bound to position `index` back as `String`. The
+-- concrete decode the `selectToList` / `selectToMaybe` intercept emits calls one
+-- `projectionRead*` per projected column, keyed by the same `p<index>` output
+-- name the runtime projects into. Internal to the emitted decode; not exposed.
+projectionReadText : Int -> Row -> Result Error String
+projectionReadText index row =
     readText (projOutputName index) row
 
 
--- | Read the projected column bound to position `index` back as `Int`.
-projReadInt : Int -> Row -> Result Error Int
-projReadInt index row =
+-- Read the projected column bound to position `index` back as `Int`. Internal to
+-- the emitted decode; not exposed.
+projectionReadInt : Int -> Row -> Result Error Int
+projectionReadInt index row =
     readInt (projOutputName index) row
 
 
--- | Read the projected column bound to position `index` back as `Bool`.
-projReadBool : Int -> Row -> Result Error Bool
-projReadBool index row =
+-- Read the projected column bound to position `index` back as `Bool`. Internal to
+-- the emitted decode; not exposed.
+projectionReadBool : Int -> Row -> Result Error Bool
+projectionReadBool index row =
     readBool (projOutputName index) row
 
 
--- | Read the projected column bound to position `index` back as `Float`.
-projReadFloat : Int -> Row -> Result Error Float
-projReadFloat index row =
+-- Read the projected column bound to position `index` back as `Float`. Internal
+-- to the emitted decode; not exposed.
+projectionReadFloat : Int -> Row -> Result Error Float
+projectionReadFloat index row =
     readFloat (projOutputName index) row
+
+
+-- Combine two-to-five per-column reads (`Row -> Result Error t`) into the
+-- projected tuple, threading each read's `Result` (the first `Err` wins). The
+-- `selectToList` / `selectToMaybe` intercept emits `projectionDecodeN` applied to
+-- the concrete per-column readers for the projected tuple's shape, so the decode
+-- is monomorphic and the tuple width is fixed at the call site. Internal to the
+-- emitted decode; not exposed.
+projectionDecode2 : (Row -> Result Error a) -> (Row -> Result Error b) -> Row -> Result Error ( a, b )
+projectionDecode2 rd0 rd1 row =
+    Result.map2 (\a b -> ( a, b )) (rd0 row) (rd1 row)
+
+
+projectionDecode3 : (Row -> Result Error a) -> (Row -> Result Error b) -> (Row -> Result Error c) -> Row -> Result Error ( a, b, c )
+projectionDecode3 rd0 rd1 rd2 row =
+    Result.map3 (\a b c -> ( a, b, c )) (rd0 row) (rd1 row) (rd2 row)
+
+
+projectionDecode4 : (Row -> Result Error a) -> (Row -> Result Error b) -> (Row -> Result Error c) -> (Row -> Result Error d) -> Row -> Result Error ( a, b, c, d )
+projectionDecode4 rd0 rd1 rd2 rd3 row =
+    Result.map4 (\a b c d -> ( a, b, c, d )) (rd0 row) (rd1 row) (rd2 row) (rd3 row)
+
+
+projectionDecode5 : (Row -> Result Error a) -> (Row -> Result Error b) -> (Row -> Result Error c) -> (Row -> Result Error d) -> (Row -> Result Error e) -> Row -> Result Error ( a, b, c, d, e )
+projectionDecode5 rd0 rd1 rd2 rd3 rd4 row =
+    Result.map5 (\a b c d e -> ( a, b, c, d, e )) (rd0 row) (rd1 row) (rd2 row) (rd3 row) (rd4 row)
 
 
 -- Decode each `(leftRow, rightRow)` cell-map pair through the two codecs into a
