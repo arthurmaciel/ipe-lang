@@ -623,6 +623,23 @@ fn db_decode_money() {
     assert_runs_and_matches_oracle("db_decode_money");
 }
 
+/// `Db.Decode.decimal "value"` decodes a TEXT column written by `SqlDecimal`
+/// (the lossless exact-decimal serialisation) back into a `Decimal` value. A
+/// malformed value is a total `Task Err` — never a panic — caught via
+/// `Task.onError`. Output: `"3.14159\nmalformed:caught"`.
+///
+/// Proves the full kernel-registration recipe for `DbDecDecimal`: canon
+/// `Db.Decode` allowlist, `StdlibKernel::DbDecDecimal` decl, constrain.rs
+/// scheme (`String -> Decoder Decimal`), `ipe_lower` arity-1 dispatch,
+/// `ipe_backend_rust` standard-path emit.
+///
+/// Ipê-new kernel (no ancestor equivalent). Sanctioned divergence: Ipê emits
+/// Rust+sqlx; oracle is Ipê's own output.
+#[test]
+fn db_decode_decimal() {
+    assert_runs_and_matches_oracle("db_decode_decimal");
+}
+
 // ── Schema drift fails closed through the typed row path ──────────────────────
 
 /// A table with column `full_name` decoded by a `Db.Decode.string "name"` — the

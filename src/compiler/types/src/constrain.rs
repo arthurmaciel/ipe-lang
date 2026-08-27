@@ -6089,6 +6089,9 @@ impl<'a> Builder<'a> {
             // recorded divergence from the Go backend's `Decoder Money`,
             // documented in `docs/divergences-from-sky.md`.
             K::DbDecMoney => fun(string(), dec(tuple2(decimal(), string()))),
+            // `Db.Decode.decimal : String -> Decoder Decimal` — reads an exact-decimal
+            // TEXT column. FIRST_SCHEMED (Ipê-new, no legacy oracle).
+            K::DbDecDecimal => fun(string(), dec(decimal())),
             // `Db.Decode.bytes : String -> Decoder (List Int)` — hex-decodes a
             // BYTEA/BLOB column. Ipê's `Bytes`/`List Int` representation is a
             // `List Int`; the runtime returns `Vec<u8>` which lowers identically.
@@ -10007,11 +10010,13 @@ mod registry_phase_c_tests {
             // Row-security policy builders (Ipê-new).
             K::StoreOwnerColumn,
             K::StoreImmutable,
-            // `Db.Decode.money` and `Db.Decode.bytes` — Ipê-NEW kernels (the
-            // ancestor has no DbDec money/bytes routes), so they close genuine
-            // holes rather than relocating legacy `kernel_ty` schemes. Their
-            // DbDec siblings are RELOCATED; these are deliberately not.
+            // `Db.Decode.money`, `Db.Decode.decimal`, and `Db.Decode.bytes` —
+            // Ipê-new kernels (the ancestor has no DbDec money/decimal/bytes
+            // routes), closing genuine holes rather than relocating legacy
+            // `kernel_ty` schemes. Their DbDec siblings are RELOCATED; these
+            // are deliberately not.
             K::DbDecMoney,
+            K::DbDecDecimal,
             K::DbDecBytes,
             // ── Ipe.Secret (4) ─────────────────────────────
             K::SecretFromString,
