@@ -5771,6 +5771,63 @@ mod tests {
         );
     }
 
+    /// Golden SQL: a two-column projection lowers to EXACTLY one parameterized
+    /// statement — `SELECT a0.title AS p0, a1.name AS p1 FROM lt AS a0, rt AS a1
+    /// WHERE a0.k = a1.k`. Each projected column is bound to its own `p<index>`
+    /// output name in order (column pushdown), every identifier is a validated
+    /// `alias.column` reference, and the key is column-to-column (no bind).
+    #[test]
+    fn projection_statement_two_columns_is_exact_parameterized_sql() {
+        let frag = sql_eq(
+            sql_column("a1.id".to_string()),
+            sql_column("a0.author_id".to_string()),
+        );
+        assert!(frag.binds.is_empty(), "a column=column key binds no value");
+        let sql = build_projection_statement(
+            "books",
+            "a0",
+            "authors",
+            "a1",
+            &[
+                ("a0".to_string(), "title".to_string()),
+                ("a1".to_string(), "name".to_string()),
+            ],
+            &frag.sql,
+        )
+        .expect("statement builds");
+        assert_eq!(
+            sql,
+            "SELECT a0.title AS p0, a1.name AS p1 \
+             FROM books AS a0, authors AS a1 WHERE (a1.id = a0.author_id)"
+        );
+    }
+
+    /// A two-column projection where one column is not a bare SQL identifier
+    /// fails the whole statement closed — the runtime re-validation gate holds
+    /// per projected column, never emitting a partial SELECT.
+    #[test]
+    fn projection_statement_two_columns_rejects_bad_second_column() {
+        let frag = sql_eq(
+            sql_column("a1.id".to_string()),
+            sql_column("a0.author_id".to_string()),
+        );
+        let built = build_projection_statement(
+            "books",
+            "a0",
+            "authors",
+            "a1",
+            &[
+                ("a0".to_string(), "title".to_string()),
+                ("a1".to_string(), "name); DROP TABLE authors".to_string()),
+            ],
+            &frag.sql,
+        );
+        assert!(
+            built.is_err(),
+            "a non-identifier column anywhere in the projection must fail closed"
+        );
+    }
+
     /// Golden SQL: a projection over a join + a right-side filter. Only the
     /// projected column is selected; the filter value is a `?` placeholder with a
     /// matching bind, never interpolated.
@@ -5869,6 +5926,51 @@ mod tests {
                 for row in &rows {
                     assert_eq!(row.get("p0").map(String::as_str), Some("Ada"));
                     assert_eq!(row.len(), 1, "only the projected column is read");
+                }
+            }
+            IpeResult::Err(e) => panic!("expected Ok, got Err({e})"),
+        }
+    }
+
+    /// `Db.findProjection` reads two projected columns over the active-author
+    /// join, each keyed by its own output name (`p0` = book title, `p1` = author
+    /// name), in projection order (column pushdown). The filter value binds as a
+    /// parameter; each returned row carries exactly the two projected columns.
+    #[tokio::test]
+    async fn test_find_projection_two_columns() {
+        let db = fresh_join_db().await;
+        let frag = sql_and(
+            sql_eq(
+                sql_column("a1.id".to_string()),
+                sql_column("a0.author_id".to_string()),
+            ),
+            sql_eq(sql_column("a1.active".to_string()), sql_param(1_i64)),
+        );
+        let found: IpeResult<String, Vec<HashMap<String, String>>> = db_find_projection(
+            db,
+            "books".into(),
+            "a0".into(),
+            "authors".into(),
+            "a1".into(),
+            frag,
+            vec![
+                ("a0".to_string(), "title".to_string()),
+                ("a1".to_string(), "name".to_string()),
+            ],
+        )
+        .await;
+        match found {
+            IpeResult::Ok(rows) => {
+                assert_eq!(rows.len(), 2, "only active author Ada's two books");
+                let mut titles: Vec<&str> = rows
+                    .iter()
+                    .filter_map(|r| r.get("p0").map(String::as_str))
+                    .collect();
+                titles.sort_unstable();
+                assert_eq!(titles, ["Engines", "Structures"], "p0 is the book title");
+                for row in &rows {
+                    assert_eq!(row.get("p1").map(String::as_str), Some("Ada"));
+                    assert_eq!(row.len(), 2, "exactly the two projected columns");
                 }
             }
             IpeResult::Err(e) => panic!("expected Ok, got Err({e})"),

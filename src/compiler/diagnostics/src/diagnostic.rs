@@ -1371,9 +1371,13 @@ pub enum StoreSelectProjectionDefect {
     /// shape (a two-binder tuple parameter over a projection body).
     NotAProjectionLambda,
     /// The projection body is not a single `cols.field` column reference over
-    /// one of the two bound side records. A multi-column tuple projection is not
-    /// yet lowerable and takes this cause until the projection-tuple slice lands.
+    /// one of the two bound side records, nor a tuple whose every element is such
+    /// a reference. A computed value, a literal, or a reference to something other
+    /// than a bound side record takes this cause.
     UnsupportedProjectionBody,
+    /// A projected tuple element is itself a tuple. A multi-column projection is
+    /// a flat tuple of `side.field` references; nesting is not a column shape.
+    NestedProjectionTuple,
     /// The projection references a field absent from the side's row type.
     /// `field` is the field name the projection read.
     UnknownField {
@@ -2284,11 +2288,17 @@ fn store_select_projection_invalid_help(defect: &StoreSelectProjectionDefect) ->
                 .into()
         }
         StoreSelectProjectionDefect::UnsupportedProjectionBody => {
-            "project one column as a bare `side.field` reference — \
-             `Store.select (\\( _, author ) -> author.name)`. Projecting several \
-             columns at once (a tuple of references) is not yet available; select \
-             one column, or read both full rows with `Store.joinToList` and build \
-             the shape in ordinary code."
+            "project columns as bare `side.field` references — one column \
+             `Store.select (\\( _, author ) -> author.name)`, or a tuple of \
+             columns `Store.select (\\( book, author ) -> ( book.title, author.name ))`. \
+             A computed value or a literal is not a column; do the transform in \
+             ordinary code after `Store.selectToList`."
+                .into()
+        }
+        StoreSelectProjectionDefect::NestedProjectionTuple => {
+            "a multi-column projection is a flat tuple of `side.field` references, \
+             such as `( book.title, author.name )` — a tuple element cannot itself \
+             be a tuple."
                 .into()
         }
         StoreSelectProjectionDefect::UnknownField { field } => format!(
