@@ -555,17 +555,26 @@ const RUNTIME_MOD_RS_TEA_APPEND: &str = "pub mod tea;\npub use tea::*;\n";
 
 // ── Ipe.Http.Server ──────────────────────────────────────────────────────
 
-/// Lines appended to `ipe_runtime/mod.rs` when the program uses
-/// Ipe.Http.Server kernels.
+/// Lines appended to `ipe_runtime/mod.rs` when the program uses the server
+/// surface (`uses_server || uses_web || uses_webview`).
 ///
-/// `server.rs` and `server_stream.rs` are gated by the `server` Cargo
-/// feature in the runtime source; `http_stream.rs` (the client-side
-/// streaming reader) is always usable when `reqwest` is present.
-/// The generated Cargo.toml's default features include `"server"` when
-/// these lines are appended.
+/// `server.rs` and `server_stream.rs` are gated by the `server` Cargo feature
+/// in the runtime source. The generated Cargo.toml's default features include
+/// `"server"` when these lines are appended. `http_stream.rs` is NOT included
+/// here — it is declared separately when the program reaches the outbound HTTP
+/// client (`reaches_http_client`), keeping reqwest out of web apps that make
+/// no outbound HTTP calls.
 const RUNTIME_MOD_RS_SERVER_APPEND: &str = "pub mod server;\npub use server::*;\n\
-    pub mod server_stream;\npub use server_stream::*;\n\
-    pub mod http_stream;\npub use http_stream::*;\n";
+    pub mod server_stream;\npub use server_stream::*;\n";
+
+/// Lines appended to `ipe_runtime/mod.rs` when the program reaches the
+/// outbound HTTP client (`reaches_http_client`).
+///
+/// `http_stream.rs` (the client-side streaming reader for `Ipe.Http.Stream`)
+/// calls `crate::http_client::ssrf_apply` + `method_to_reqwest`, so it must
+/// be declared alongside `http_client` — not bundled with the server surface.
+/// A server/web program that makes no outbound HTTP calls never declares it.
+const RUNTIME_MOD_RS_HTTP_STREAM_APPEND: &str = "pub mod http_stream;\npub use http_stream::*;\n";
 
 // ── Ipe.Http — outbound HTTP client ─────────────────────────────────────────
 
@@ -576,9 +585,9 @@ const RUNTIME_MOD_RS_SERVER_APPEND: &str = "pub mod server;\npub use server::*;\
 /// builders and `http_parse_query`) is vendored into every emitted crate but
 /// declared only on demand — it is the sole consumer of the `reqwest` crate,
 /// which [`http_client_cargo_toml`] adds under the same condition. The module
-/// is pulled in whenever the program calls a client kernel (`uses_http`) or
-/// uses a surface whose own runtime module calls into `http_client`: the server
-/// (`http_stream.rs`), the web/live telemetry exporters, and `email.rs`.
+/// is declared when a program calls a client kernel (`uses_http`) or uses the
+/// email surface (`email.rs` calls `http_client::ssrf_apply`). Web and server
+/// modules make no outbound HTTP calls and do not require this module.
 const RUNTIME_MOD_RS_HTTP_CLIENT_APPEND: &str = "pub mod http_client;\npub use http_client::*;\n";
 
 /// Lines appended to `ipe_runtime/mod.rs` for the SSRF deny-private validators.
@@ -2280,12 +2289,12 @@ fn assemble_project_files(
     } else {
         cargo_toml
     };
-    // Outbound HTTP client (`reqwest`): pulled in whenever the program reaches
-    // the `http_client` runtime module — a client kernel (`uses_http`), or a
-    // surface whose own runtime module calls into `http_client`: the server
-    // (`http_stream.rs`), the web/live telemetry exporters, and `email.rs`. The
-    // `url` crate stays unconditional (backs `Ipe.Url` + `ssrf`), so only the
-    // reqwest HTTP stack (~60 transitive crates) is gated here.
+    // Outbound HTTP client (`reqwest`): pulled in by a client kernel
+    // (`uses_http`), the server surface (`http_stream.rs` calls `ssrf_apply`+
+    // `method_to_reqwest`), or the email surface (`email.rs` calls
+    // `ssrf_apply`). Web and webview reach reqwest through the server surface
+    // they imply. The `url` crate stays unconditional (backs `Ipe.Url` +
+    // `ssrf`), so only the reqwest HTTP stack (~60 transitive crates) is gated.
     let uses_http_client = ctx.reaches_http_client();
     let cargo_toml = if uses_http_client {
         http_client_cargo_toml(&cargo_toml)?
@@ -2451,10 +2460,12 @@ fn assemble_project_files(
             mod_rs.push_str(RUNTIME_MOD_RS_DB_APPEND);
         }
         // Outbound HTTP client + its SSRF validators. `http_client` (the reqwest
-        // consumer) is declared when the program reaches it — directly
-        // (`uses_http`) or through a surface whose runtime module calls into it
-        // (server `http_stream`, web/live exporters, `email`). `ssrf.rs` (the
-        // reqwest-free URL validators) is declared alongside `http_client`, the
+        // consumer) and `http_stream` (which calls `http_client::ssrf_apply` +
+        // `method_to_reqwest`) are declared together when the program reaches
+        // the outbound HTTP surface — an HTTP kernel (`uses_http`) or email.
+        // Server/web apps with no outbound HTTP calls omit both modules and
+        // reqwest. `ssrf.rs` (the reqwest-free URL validators) is declared
+        // alongside `http_client`, the
         // WebSocket client, OR a Db program (`db.rs::build_pool` applies the SSRF
         // host gate via `crate::ssrf::VettedDial::for_host` unconditionally in
         // production code; a vendored Db build without this declaration fails
@@ -2473,6 +2484,7 @@ fn assemble_project_files(
         }
         if uses_http_client {
             mod_rs.push_str(RUNTIME_MOD_RS_HTTP_CLIENT_APPEND);
+            mod_rs.push_str(RUNTIME_MOD_RS_HTTP_STREAM_APPEND);
         }
         if uses_http_client || ctx.uses_websocket || ctx.uses_db {
             mod_rs.push_str(RUNTIME_MOD_RS_SSRF_APPEND);

@@ -60,9 +60,11 @@ pub enum RuntimeFeature {
     WebsocketClient,
     /// `email` — the SMTP transport (`uses_email`).
     Email,
-    /// `http_client` — the reqwest outbound HTTP stack
-    /// (`reaches_http_client()`: an HTTP kernel or a surface whose runtime
-    /// module — server / web / webview / email — calls into it).
+    /// `http_client` — the reqwest outbound HTTP stack (`reaches_http_client()`:
+    /// an HTTP kernel or the email surface, whose `email.rs` calls
+    /// `http_client::ssrf_apply`). `http_stream.rs` (which calls
+    /// `ssrf_apply` + `method_to_reqwest`) is declared alongside `http_client`
+    /// so server/web apps that make no outbound HTTP calls omit reqwest.
     HttpClient,
     /// `url` — the `Ipe.Url` typed-URL module + `ssrf` validators, i.e. the
     /// `url` crate and its idna → ICU4X subtree (`reaches_url()`: a URL kernel
@@ -313,8 +315,11 @@ pub fn runtime_features(ctx: &EmitCtx) -> RuntimeFeatureSet {
         set.insert(RuntimeFeature::Email);
     }
 
-    // Outbound HTTP client (reqwest) — an HTTP kernel or a surface that reaches
-    // `http_client.rs` (server / web / webview / email).
+    // Outbound HTTP client (reqwest): an HTTP kernel (`uses_http`) or the email
+    // surface (`email.rs` calls `http_client::ssrf_apply`). `http_stream.rs`
+    // (which calls `ssrf_apply` + `method_to_reqwest`) is declared alongside
+    // `http_client` by the emitter — server/web apps with no outbound HTTP omit
+    // reqwest entirely.
     if ctx.reaches_http_client() {
         set.insert(RuntimeFeature::HttpClient);
     }

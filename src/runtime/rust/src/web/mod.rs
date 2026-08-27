@@ -25,12 +25,18 @@ pub mod style_inject;
 pub use crate::widget_assets;
 // Pre-built console child + reverse-proxy — spawns the bundled console
 // binary and proxies /_ipe/console/*; falls back to in-process `console` when the
-// binary is absent.
+// binary is absent. Uses reqwest for the reverse-proxy path; gated so a web
+// app that makes no outbound HTTP calls (no `http_client` feature) stays reqwest-free.
+#[cfg(feature = "http_client")]
 pub mod console_proxy;
 pub mod observability;
 // Observability export pipelines: federation push to a parent ingest
 // and remote-hub OTLP push. Both env-gated + inert by default.
+// Use reqwest for outbound push; gated so a web app with no outbound HTTP
+// kernel (`http_client` absent) stays reqwest-free.
+#[cfg(feature = "http_client")]
 pub mod hub_exporter;
+#[cfg(feature = "http_client")]
 pub mod push_exporter;
 // Hub read-side kernels (the bundled console's data plane). Gated on `db` —
 // they read the SQLite telemetry spill via sqlx, so a `live`-only program with
@@ -1309,6 +1315,11 @@ fn shutdown_grace() -> std::time::Duration {
 /// the cap. This MUST be called before every `process::exit` because
 /// `process::exit` skips Drop, so the mpsc Sender never drops and the
 /// batchers' channel-close drain path never runs without this explicit flush.
+///
+/// No-op when `http_client` is absent: the push/hub exporters make outbound
+/// HTTP calls and are gated behind that feature; a web app with no outbound
+/// HTTP kernel has no exporters to flush.
+#[cfg(feature = "http_client")]
 async fn flush_exporters() {
     // 500 ms total cap (split across two exporters in sequence — each is capped
     // independently so a slow/unavailable first target doesn't eat all of the
@@ -1317,6 +1328,8 @@ async fn flush_exporters() {
     push_exporter::flush_now(CAP_MS).await;
     hub_exporter::flush_now(CAP_MS).await;
 }
+#[cfg(not(feature = "http_client"))]
+async fn flush_exporters() {}
 
 /// Push a bounded `event: reload` frame to every session THIS PROCESS is
 /// currently serving over SSE, so a connected browser skips its own
@@ -1407,6 +1420,8 @@ where
     // Load-bearing: the child is tracked in a `static` whose `Drop`
     // (`kill_on_drop`) never runs on `process::exit`, so this explicit
     // `start_kill` is what prevents an orphan console child after a clean exit.
+    // Absent when `http_client` is not active: the console proxy uses reqwest.
+    #[cfg(feature = "http_client")]
     console_proxy::shutdown_console();
 
     // Telemetry export pipelines (push/hub exporters) flush every ~2 s on a
@@ -1428,6 +1443,7 @@ where
         tokio::time::sleep(shutdown_grace()).await;
         // Defense-in-depth: kill the console child again in case it was spawned
         // after the first teardown call (shutdown_console is idempotent).
+        #[cfg(feature = "http_client")]
         console_proxy::shutdown_console();
         flush_exporters().await;
         // IPE-RUST-AUDIT:ACCEPTED (Arthur Maciel) — Ipe.Web server shutdown boundary: the grace timer won the drain race, exit zero [ledger #boundary]
@@ -1440,6 +1456,7 @@ where
     tokio::spawn(async {
         wait_for_term_or_int().await;
         eprintln!("Ipe.Web: forcing exit (second signal)");
+        #[cfg(feature = "http_client")]
         console_proxy::shutdown_console();
         flush_exporters().await;
         // IPE-RUST-AUDIT:ACCEPTED (Arthur Maciel) — Ipe.Web server shutdown boundary: a second interrupt forces exit 130 (128 + SIGINT) [ledger #boundary]
@@ -2385,8 +2402,11 @@ where
 
         // Observability export pipelines: federation push to a parent ingest
         // (IPE_PARENT_URL) and remote-hub OTLP push (IPE_CONSOLE_HUB).
-        // Both env-gated + inert by default.
+        // Both env-gated + inert by default. Only available when `http_client`
+        // is active: these pipelines make outbound HTTP calls via reqwest.
+        #[cfg(feature = "http_client")]
         push_exporter::enable_from_env().await;
+        #[cfg(feature = "http_client")]
         hub_exporter::enable_from_env().await;
 
         // Console precedence: try the pre-built console child +
@@ -2395,7 +2415,12 @@ where
         // Decided HERE (before the router is built) so both the proxy routes and
         // the in-process console routes sit under the same `track` middleware,
         // and the two never collide on `/_ipe/console`.
+        // Only when `http_client` is active: the console proxy uses reqwest for
+        // the reverse-proxy path. Without it, always use the in-process console.
+        #[cfg(feature = "http_client")]
         let use_console_proxy = console_proxy::ensure_console_proxy().await;
+        #[cfg(not(feature = "http_client"))]
+        let use_console_proxy = false;
 
         // Body-size cap on /_ipe/event: mirrors Go's http.MaxBytesReader
         // (runtime-go/rt/live.go:3915). axum's DefaultBodyLimit applies
@@ -2560,39 +2585,47 @@ where
                     .layer(axum::extract::DefaultBodyLimit::max(web_max_body_bytes())),
             );
 
-        router = if use_console_proxy {
-            // Real bundled Ipe.Web console, spawned as a child + proxied. The
-            // child process logs its OWN `session store: …` line + a
-            // `reverse-proxy ready` line (console_proxy), so the parent does not
-            // duplicate the inline-mount log here.
-            console_proxy::proxy_routes(router)
-        } else {
-            // In-process console (plain-HTML shell + JSON APIs). Go mounts the
-            // console as an in-process Ipe.Web sub-app that inits its OWN session
-            // store, so Go logs the memory-store line TWICE (root + console) and
-            // then the inline-mount line (console.go:328). The Rust in-process
-            // console has no separate store, so we emit the matching SECOND store
-            // line + the mount line here — but ONLY when the console actually
-            // mounts (gate open: not a sub-app, not `IPE_CONSOLE_AUTH=off`, not
-            // production-without-admin-token), mirroring Go's mount skip.
-            if console_proxy::gate_allows() {
-                eprintln!("{}", store::memory_store_log_line(web_ttl()));
-                eprintln!(
-                    "[ipe.console] inline console mounted as Ipe.Web sub-app at /_ipe/console mode={}",
-                    console::console_auth_mode_label()
-                );
-            }
-            router
-                .route("/_ipe/console", get(console::console_html))
-                .route("/_ipe/console/api/overview", get(console::api_overview))
-                .route("/_ipe/console/api/logs", get(console::api_logs))
-                .route("/_ipe/console/api/errors", get(console::api_errors))
-                .route("/_ipe/console/api/traces", get(console::api_traces))
-                .route(
-                    "/_ipe/console/api/metrics-summary",
-                    get(console::api_metrics_summary),
-                )
-        };
+        // When `http_client` is active: the console proxy (which uses reqwest)
+        // may have been spawned; route via proxy_routes if so, else fall back
+        // to the in-process console with gate check.
+        // When `http_client` is absent: always use the in-process console
+        // (use_console_proxy is unconditionally false; console_proxy not compiled).
+        #[cfg(feature = "http_client")]
+        {
+            router = if use_console_proxy {
+                // Real bundled Ipe.Web console, spawned as a child + proxied. The
+                // child process logs its OWN `session store: …` line + a
+                // `reverse-proxy ready` line (console_proxy), so the parent does not
+                // duplicate the inline-mount log here.
+                console_proxy::proxy_routes(router)
+            } else {
+                // In-process console (plain-HTML shell + JSON APIs).
+                if console_proxy::gate_allows() {
+                    eprintln!("{}", store::memory_store_log_line(web_ttl()));
+                    eprintln!(
+                        "[ipe.console] inline console mounted as Ipe.Web sub-app at /_ipe/console mode={}",
+                        console::console_auth_mode_label()
+                    );
+                }
+                router
+                    .route("/_ipe/console", get(console::console_html))
+                    .route("/_ipe/console/api/overview", get(console::api_overview))
+                    .route("/_ipe/console/api/logs", get(console::api_logs))
+                    .route("/_ipe/console/api/errors", get(console::api_errors))
+                    .route("/_ipe/console/api/traces", get(console::api_traces))
+                    .route(
+                        "/_ipe/console/api/metrics-summary",
+                        get(console::api_metrics_summary),
+                    )
+            };
+        }
+        // When `http_client` is absent, the console proxy and push/hub exporters
+        // are unavailable (they make outbound HTTP calls via reqwest). The
+        // in-process console routes are still wired via the `#[cfg(feature =
+        // "http_client")]` block above when the gate allows — but a web app built
+        // without an outbound HTTP kernel simply omits the proxy-backed console.
+        // This is intentional: the console is an observability tool, not part of
+        // the application's serving contract.
 
         // Custom-element (`Ui.widget`) assets: one content-addressed route per
         // registered author module + one for the generated registration glue.
