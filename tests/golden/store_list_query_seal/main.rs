@@ -235,6 +235,41 @@ impl<T1: IpeStringify + std::fmt::Debug + 'static> IpeStringify for RecEncMkDecS
         )
     }
 }
+pub struct RecFragKeyAKeyBPoisonStoreAStoreB<T1: 'static, T2: 'static> {
+    frag: ipe_runtime::db::SqlFragment,
+    keyA: String,
+    keyB: String,
+    poison: IpeMaybe<ipe_runtime::error::IpeError>,
+    storeA: IpeDbStoreStore<T1>,
+    storeB: IpeDbStoreStore<T2>,
+}
+impl<T1: Clone + 'static, T2: Clone + 'static> Clone for RecFragKeyAKeyBPoisonStoreAStoreB<T1, T2> {
+    fn clone(&self) -> Self {
+        Self {
+            frag: self.frag.clone(),
+            keyA: self.keyA.clone(),
+            keyB: self.keyB.clone(),
+            poison: self.poison.clone(),
+            storeA: self.storeA.clone(),
+            storeB: self.storeB.clone(),
+        }
+    }
+}
+impl<T1: IpeStringify + std::fmt::Debug + 'static, T2: IpeStringify + std::fmt::Debug + 'static> IpeStringify
+    for RecFragKeyAKeyBPoisonStoreAStoreB<T1, T2>
+{
+    fn ipe_show(&self) -> String {
+        format!(
+            "{{{} {} {} {} {} {}}}",
+            (&ipe_runtime::stringify::Wrap(&self.frag)).dispatch(),
+            (&ipe_runtime::stringify::Wrap(&self.keyA)).dispatch(),
+            (&ipe_runtime::stringify::Wrap(&self.keyB)).dispatch(),
+            (&ipe_runtime::stringify::Wrap(&self.poison)).dispatch(),
+            "<fn>",
+            "<fn>"
+        )
+    }
+}
 pub struct RecFragLimOffOrderingsPoisonStore<T1: 'static> {
     frag: IpeMaybe<ipe_runtime::db::SqlFragment>,
     lim: IpeMaybe<i64>,

@@ -1,0 +1,116 @@
+module Main exposing (main)
+
+-- SEAL smoke for the typed two-store inner join (`Store.join` / `joinFilterRight`
+-- / `joinToList`). Two `Codec.auto`-derived stores join on
+-- `books.author_id = authors.id`; the join lowers to ONE parameterized statement
+-- and returns each matched pair, both full rows decoded through their own codec.
+-- No live database is needed: `Task.onError` catches the connection failure and
+-- the program exits cleanly. The SEAL proof is a `cargo build` of the emitted
+-- project under `IPE_E2E=1`.
+--
+-- The join is expressed as a value that lowers to SQL, not a per-row fan-out:
+--   * `Store.join books .authorId authors .id` names the join columns by
+--     accessor (`.authorId` snake_cases to `author_id`, `.id` to `id`), so a
+--     mistyped join key is a type error.
+--   * `joinFilterRight (Store.eq .active True)` restricts the right side; the
+--     value binds as a parameter.
+--   * `joinToList` returns `List ( Book, Author )`, each side decoded through its
+--     own store codec.
+--
+-- Expected output:
+--   join-seal:ok
+
+
+import Ipe.Codec as Codec exposing (Codec)
+import Ipe.Db as Db exposing (Db)
+import Ipe.Db.Store as Store exposing (Store)
+import Ipe.Error exposing (Error)
+import Ipe.Io as Io
+import Ipe.List as List
+import Ipe.Result as Result exposing (Result(..))
+import Ipe.Task as Task exposing (Task)
+
+
+type alias Book =
+    { id : String
+    , title : String
+    , authorId : String
+    }
+
+
+type alias Author =
+    { id : String
+    , name : String
+    , active : Bool
+    }
+
+
+blankBook : Book
+blankBook =
+    { id = "", title = "", authorId = "" }
+
+
+blankAuthor : Author
+blankAuthor =
+    { id = "", name = "", active = False }
+
+
+bookCodec : Codec Book
+bookCodec =
+    Codec.auto blankBook
+
+
+authorCodec : Codec Author
+authorCodec =
+    Codec.auto blankAuthor
+
+
+-- Both sides are codec-driven stores, so `joinToList` decodes each row through
+-- its store's own codec.
+booksStore : Result Error (Store Book)
+booksStore =
+    Store.fromCodec "books" bookCodec
+        |> Result.map (\s -> Store.primaryKey .id s)
+
+
+authorsStore : Result Error (Store Author)
+authorsStore =
+    Store.fromCodec "authors" authorCodec
+        |> Result.map (\s -> Store.primaryKey .id s)
+
+
+-- The join: one parameterized statement, no per-row fan-out. Filters the right
+-- (author) side to active authors, then returns both full rows per matched pair.
+activeAuthorBooks : Db -> Store Book -> Store Author -> Task Error (List ( Book, Author ))
+activeAuthorBooks db books authors =
+    Store.join books .authorId authors .id
+        |> Store.joinFilterRight (Store.eq .active True)
+        |> Store.joinToList db
+
+
+run : Db -> Task Error (List ( Book, Author ))
+run db =
+    case booksStore of
+        Ok books ->
+            case authorsStore of
+                Ok authors ->
+                    activeAuthorBooks db books authors
+
+                Err e ->
+                    Task.fail e
+
+        Err e ->
+            Task.fail e
+
+
+main : Task Error ()
+main =
+    Task.andThen
+        (\_ -> Io.println "join-seal:ok")
+        (Task.onError
+            (\_ -> Task.succeed ())
+            (Task.andThen
+                (\db -> Task.map (\_ -> ()) (run db))
+                (Db.connect ())
+            )
+        )

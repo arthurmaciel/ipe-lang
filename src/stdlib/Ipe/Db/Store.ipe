@@ -101,6 +101,33 @@
 --
 -- A misdeclared identifier — a table or column name with a quote, a semicolon,
 -- or a space — makes the constructor return `Err`, so it never reaches SQL.
+--
+-- Joining two stores (one parameterized statement, no per-row fan-out):
+--
+--     import Ipe.Db as Db exposing (Db)
+--     import Ipe.Db.Store as Store exposing (Store)
+--     import Ipe.Task as Task exposing (Task)
+--     import Ipe.Error exposing (Error)
+--
+--     -- `join` names the two join columns by accessor (`.authorId` = `.id`);
+--     -- `joinFilterRight` restricts the right side; `joinToList` returns each
+--     -- matched pair, both full rows decoded through their own store codec.
+--     activeAuthorBooks : Db -> Store Book -> Store Author -> Task Error (List ( Book, Author ))
+--     activeAuthorBooks db books authors =
+--         Store.join books .authorId authors .id
+--             |> Store.joinFilterRight (Store.eq .active True)
+--             |> Store.joinToList db
+--
+-- lowers to one statement:
+--
+--     select a0.id as a0__id, a0.title as a0__title, a0.author_id as a0__author_id,
+--            a1.id as a1__id, a1.name as a1__name, a1.active as a1__active
+--     from books as a0, authors as a1
+--     where (a0.author_id = a1.id) and (a1.active = ?)
+--
+-- Every table, alias, and column is a validated identifier; the filter value is
+-- a bound parameter, never interpolated. `joinFilterLeft` filters the left side,
+-- `joinToMaybe` / `joinCount` read the first pair / the match count.
 module Ipe.Db.Store exposing
     ( Store(..)
     , Column(..)
@@ -135,6 +162,10 @@ module Ipe.Db.Store exposing
     , and, or, not
     , orderAsc, orderDesc, limit, offset
     , toList, toMaybe, count
+    , Joined
+    , join, joinNamed
+    , joinFilterLeft, joinFilterRight
+    , joinToList, joinToMaybe, joinCount
     , Policy, Secured
     , unrestricted, publicRead, ownerColumn, immutable, andPolicy, secured
     , ownerColumnNamed, immutableNamed
@@ -2186,6 +2217,283 @@ columnTypeOf columns name =
                 columnTypeOf rest name
 
 
+-- ─── Typed two-store inner join ─────────────────────────────────────
+--
+-- A `Joined a b` is an inner join of two stores on key equality, lowering to
+-- ONE parameterized `SELECT` over a two-table `FROM` — never a per-row fan-out.
+-- It carries both stores (so both codecs are in hand for decode), the two
+-- validated join-key columns, and an accumulated joined `WHERE` fragment. The
+-- two sides are bound to the fixed aliases `a0` (left) and `a1` (right); every
+-- column the join references reaches SQL only as a validated `alias.column`
+-- reference through `Sql.column`, and every filter value binds as a parameter
+-- through `Sql.param`, so the join adds no injection surface over the audited
+-- single-table path. A filter column absent from its side's store fails closed
+-- with a typed `Err` carried as `poison`, exactly as the single-table `Query`
+-- does. Built only through `join`, so both key columns are already accepted.
+
+
+-- | The alias bound to the left store in a join (`FROM ta AS a0`).
+leftAlias : String
+leftAlias =
+    "a0"
+
+
+-- | The alias bound to the right store in a join (`FROM tb AS a1`).
+rightAlias : String
+rightAlias =
+    "a1"
+
+
+-- | An inner join of two stores on key equality, decoded through each store's
+-- own codec at `joinToList` / `joinToMaybe` / `joinCount`. `storeA` / `storeB`
+-- are the two sides (left bound to `a0`, right to `a1`); `keyA` / `keyB` are the
+-- validated join-key columns (`a0.keyA = a1.keyB`); `frag` is the accumulated
+-- joined `WHERE` fragment (the key equality plus any `joinFilterLeft` /
+-- `joinFilterRight`); `poison` holds the first fail-closed error (a filter
+-- column absent from its side). Opaque: the stores it reads and the codecs it
+-- decodes with cannot drift, because both come from the two `Store` values
+-- `join` captured.
+type Joined a b
+    = Joined
+        { storeA : Store a
+        , storeB : Store b
+        , keyA : String
+        , keyB : String
+        , frag : SqlFragment
+        , poison : Maybe Error
+        }
+
+
+-- | `join storeA .keyA storeB .keyB` — begin an inner join of `storeA` and
+-- `storeB` on `a0.keyA = a1.keyB`. The two accessor arguments name the join
+-- columns the same way `eq .field` names a column: each `.field` is checked
+-- against its store's row type at compile time, and their result type `k` must
+-- match, so a mistyped join key is a type error. The lowering intercept extracts
+-- each accessor's validated column and calls `joinNamed`.
+--
+-- Example:
+--
+--     import Ipe.Db as Db exposing (Db)
+--     import Ipe.Db.Store as Store exposing (Store)
+--     import Ipe.Task as Task exposing (Task)
+--     import Ipe.Error exposing (Error)
+--
+--     type alias Book =
+--         { id : String, title : String, authorId : String }
+--
+--     type alias Author =
+--         { id : String, name : String }
+--
+--     booksByAuthor : Db -> Store Book -> Store Author -> Task Error (List ( Book, Author ))
+--     booksByAuthor conn books authors =
+--         Store.join books .authorId authors .id
+--             |> Store.joinToList conn
+join : Store a -> (a -> k) -> Store b -> (b -> k) -> Joined a b
+join =
+    Ffi.kernel "Store_join"
+
+
+-- | The lowered form of `join`: each accessor `.field` has already been turned
+-- into its validated, snake_cased column name (`keyA` / `keyB`). Builds the
+-- `Joined` with the key-equality WHERE fragment `a0.keyA = a1.keyB` — both sides
+-- reach SQL only through `Sql.column` on the aliased reference. If either key is
+-- somehow not a valid dotted identifier the fragment poisons itself (the
+-- `Sql.column` gate), which the runners surface as a typed `Err`; no value is
+-- interpolated.
+--
+-- Reached only through the `Store.join` lowering intercept, which supplies the
+-- columns; not part of the accessor caller surface.
+joinNamed : Store a -> String -> Store b -> String -> Joined a b
+joinNamed storeA keyA storeB keyB =
+    Joined
+        { storeA = storeA
+        , storeB = storeB
+        , keyA = keyA
+        , keyB = keyB
+        , frag = joinKeyEquals keyA keyB
+        , poison = Nothing
+        }
+
+
+-- The join-key equality fragment `a0.keyA = a1.keyB`: each side is a validated
+-- `alias.column` reference through `Sql.column`, never interpolated text.
+joinKeyEquals : String -> String -> SqlFragment
+joinKeyEquals keyA keyB =
+    Sql.eq
+        (Sql.column (qualified leftAlias keyA))
+        (Sql.column (qualified rightAlias keyB))
+
+
+-- Qualify a bare column with a table alias (`a0` + `title` → `a0.title`). The
+-- result is a dotted reference `Sql.column` accepts through the same identifier
+-- gate the single-table path uses.
+qualified : String -> String -> String
+qualified alias col =
+    String.concat [ alias, ".", col ]
+
+
+-- | `joinFilterLeft cond joined` — restrict the join to rows whose LEFT side
+-- matches `cond`. `cond` is an ordinary `Cond a` over the left store's row type
+-- (built with `eq` / `and` / …), so it is row-checked to the left side and its
+-- values bind as parameters. Its columns are validated against the left store's
+-- own columns and qualified with the left alias (`a0.col`) before reaching SQL,
+-- so a column absent from the left store fails closed with a typed `Err`.
+-- Repeated filters AND-join.
+--
+-- Example:
+--
+--     Store.join books .authorId authors .id
+--         |> Store.joinFilterLeft (Store.eq .available True)
+joinFilterLeft : Cond a -> Joined a b -> Joined a b
+joinFilterLeft cond joined =
+    case joined of
+        Joined r ->
+            case r.storeA of
+                Store s ->
+                    addJoinFilter leftAlias s.currentColumns cond joined
+
+
+-- | `joinFilterRight cond joined` — restrict the join to rows whose RIGHT side
+-- matches `cond`. The right-side counterpart to `joinFilterLeft`: `cond` is a
+-- `Cond b` over the right store's row type, validated against the right store's
+-- columns and qualified with the right alias (`a1.col`).
+--
+-- Example:
+--
+--     Store.join books .authorId authors .id
+--         |> Store.joinFilterRight (Store.eq .active True)
+joinFilterRight : Cond b -> Joined a b -> Joined a b
+joinFilterRight cond joined =
+    case joined of
+        Joined r ->
+            case r.storeB of
+                Store s ->
+                    addJoinFilter rightAlias s.currentColumns cond joined
+
+
+-- Lower `cond` against one side's columns, qualify each referenced column with
+-- that side's alias, and AND it into the join's WHERE fragment. A column absent
+-- from the side's store poisons the join with the first fail-closed error, so a
+-- poisoned join issues no SQL and fails at the terminal runner.
+addJoinFilter : String -> List Column -> Cond row -> Joined a b -> Joined a b
+addJoinFilter alias columns cond joined =
+    case joined of
+        Joined r ->
+            case condFragmentInQualified alias columns cond of
+                Err e ->
+                    Joined
+                        { storeA = r.storeA
+                        , storeB = r.storeB
+                        , keyA = r.keyA
+                        , keyB = r.keyB
+                        , frag = r.frag
+                        , poison = firstPoison r.poison e
+                        }
+
+                Ok lowered ->
+                    Joined
+                        { storeA = r.storeA
+                        , storeB = r.storeB
+                        , keyA = r.keyA
+                        , keyB = r.keyB
+                        , frag = Sql.and r.frag lowered
+                        , poison = r.poison
+                        }
+
+
+-- | `joinToList conn joined` — run the join and return each matched pair, both
+-- full rows decoded through their own store's codec. Lowers to ONE
+-- parameterized statement (`SELECT … FROM ta AS a0, tb AS a1 WHERE a0.keyA =
+-- a1.keyB [AND filters]`) through `Db.findJoin`: every identifier (both tables,
+-- both aliases, every projected column) is re-validated at the runtime boundary,
+-- and every filter value is a bound parameter. A poisoned join (a filter naming
+-- an unknown column) fails closed with the typed `Err`; a row that does not
+-- decode to its side's type is a typed `Err`.
+--
+-- Example:
+--
+--     Store.join books .authorId authors .id
+--         |> Store.joinFilterRight (Store.eq .active True)
+--         |> Store.joinToList conn
+joinToList : Db -> Joined a b -> Task Error (List ( a, b ))
+joinToList conn joined =
+    case joined of
+        Joined r ->
+            case r.poison of
+                Just e ->
+                    Task.fail e
+
+                Nothing ->
+                    case r.storeA of
+                        Store sa ->
+                            case r.storeB of
+                                Store sb ->
+                                    Task.andThen
+                                        (\pairs -> decodeJoinRows sa.codec sb.codec pairs)
+                                        (Db.findJoin conn
+                                            sa.table
+                                            leftAlias
+                                            (List.map columnName sa.currentColumns)
+                                            sb.table
+                                            rightAlias
+                                            (List.map columnName sb.currentColumns)
+                                            r.frag
+                                        )
+
+
+-- | `joinToMaybe conn joined` — run the join and decode the FIRST matched pair,
+-- or `Nothing`.
+--
+-- Example:
+--
+--     Store.join books .authorId authors .id
+--         |> Store.joinFilterLeft (Store.eq .id "book-1")
+--         |> Store.joinToMaybe conn
+joinToMaybe : Db -> Joined a b -> Task Error (Maybe ( a, b ))
+joinToMaybe conn joined =
+    Task.map List.head (joinToList conn joined)
+
+
+-- | `joinCount conn joined` — run the join's filter and return how many pairs
+-- match. Decodes nothing; counts the matched join rows.
+--
+-- Example:
+--
+--     Store.join books .authorId authors .id
+--         |> Store.joinFilterRight (Store.eq .active True)
+--         |> Store.joinCount conn
+joinCount : Db -> Joined a b -> Task Error Int
+joinCount conn joined =
+    Task.map List.length (joinToList conn joined)
+
+
+-- Decode each `(leftRow, rightRow)` cell-map pair through the two codecs into a
+-- typed `( a, b )` pair. A pair whose either side does not decode to its store's
+-- type is a typed `Err`, never a wrong value.
+decodeJoinRows : Codec a -> Codec b -> List ( Row, Row ) -> Task Error (List ( a, b ))
+decodeJoinRows codecA codecB pairs =
+    case pairs of
+        [] ->
+            Task.succeed []
+
+        first :: rest ->
+            case first of
+                ( leftRow, rightRow ) ->
+                    case DbCodec.codecFromRow codecA leftRow of
+                        Err e ->
+                            Task.fail e
+
+                        Ok a ->
+                            case DbCodec.codecFromRow codecB rightRow of
+                                Err e ->
+                                    Task.fail e
+
+                                Ok b ->
+                                    Task.map
+                                        (\more -> ( a, b ) :: more)
+                                        (decodeJoinRows codecA codecB rest)
+
+
 -- ── Cond → SqlFragment lowering (the single validation + emit point) ──
 
 
@@ -2266,6 +2574,70 @@ compareFragment op col value =
 
         OpLte ->
             Sql.lte lhs rhs
+
+
+-- Lower a `Cond` for one join side to an audited `SqlFragment`, validating every
+-- column against that side's own column list first and QUALIFYING each accepted
+-- column with the side's table alias (`col` → `alias.col`) before it reaches
+-- SQL. The bare column is what the store's derived list names, so the
+-- membership check stays against `columns`; only the emitted reference is
+-- qualified, so the join's WHERE names each side unambiguously. A column absent
+-- from the side's store is a typed `Err` (parse-don't-validate); every value
+-- binds through `Sql.param`. This is `condFragmentIn` with the alias qualifier —
+-- the two share the same validation contract, differing only in the emitted
+-- column reference.
+condFragmentInQualified : String -> List Column -> Cond row -> Result Error SqlFragment
+condFragmentInQualified alias columns cond =
+    case cond of
+        Compare op col value ->
+            checkColumn columns col
+                (compareFragment op (qualified alias col) value)
+
+        Like col pattern ->
+            checkColumn columns col
+                (Sql.like (Sql.column (qualified alias col)) pattern)
+
+        IsNull col ->
+            checkColumn columns col
+                (Sql.isNull (Sql.column (qualified alias col)))
+
+        NotNull col ->
+            checkColumn columns col
+                (Sql.isNotNull (Sql.column (qualified alias col)))
+
+        InList col values ->
+            checkColumn columns col
+                (Sql.inList (Sql.column (qualified alias col)) values)
+
+        AndList conds ->
+            foldCondsQualified alias columns Sql.and trueFragment conds
+
+        OrList conds ->
+            foldCondsQualified alias columns Sql.or falseFragment conds
+
+        NotCond inner ->
+            Result.map Sql.not (condFragmentInQualified alias columns inner)
+
+
+-- The alias-qualifying counterpart to `foldConds`, threading the side's alias
+-- through each recursive lowering.
+foldCondsQualified : String -> List Column -> (SqlFragment -> SqlFragment -> SqlFragment) -> SqlFragment -> List (Cond row) -> Result Error SqlFragment
+foldCondsQualified alias columns join emptyFragment conds =
+    case conds of
+        [] ->
+            Ok emptyFragment
+
+        [ single ] ->
+            condFragmentInQualified alias columns single
+
+        first :: rest ->
+            case condFragmentInQualified alias columns first of
+                Err e ->
+                    Err e
+
+                Ok head ->
+                    Result.map (\tail -> join head tail)
+                        (foldCondsQualified alias columns join emptyFragment rest)
 
 
 -- Fold a list of conditions with a binary connective, using `emptyFragment` as
