@@ -1,14 +1,67 @@
 -- | Ipe.Db.Store — typed, injection-safe persistence over the audited `Ipe.Db`.
 --
--- A `Store a` is one table whose row type is `a`, described once by a
--- `Codec a`. The codec is the single source of truth: its `Shape` yields the
--- table's columns and their types, its encoder writes a row, and its decoder
--- reads one back. Identifiers are declared once, validated once, and reused by
--- every read and write. The safe surface cannot express SQL injection: every
--- table and column identifier reaches SQL only after `validSqlIdent` accepts it,
--- and every value binds as a parameter, never interpolated. A caller who wants
--- raw SQL must reach for `Ipe.Db.Unsafe`, which discloses that capability
--- program-wide.
+-- A `Store a` is one classified, queryable table whose row type is `a`,
+-- described once by a `Codec a`. The codec is the single source of truth: its
+-- `Shape` yields the table's columns and their types, its encoder writes a row,
+-- and its decoder reads one back. Identifiers are declared once, validated once,
+-- and reused by every read and write. The safe surface cannot express SQL
+-- injection: every table and column identifier reaches SQL only after
+-- `validSqlIdent` accepts it, and every value binds as a parameter, never
+-- interpolated. A caller who wants raw SQL must reach for `Ipe.Db.Unsafe`, which
+-- discloses that capability program-wide.
+--
+-- Deny-by-default access, made structural: a table is not queryable until its
+-- access intent is declared. `fromCodec` returns a `Draft a` — a table whose
+-- schema is known but whose access intent is not. A `Draft a` has no read or
+-- write operation; the schema-shaping builders (`primaryKey` / `serial` /
+-- `unique` / `defaultNow` / `index` / …) refine it, but nothing reads or writes
+-- it. Classification promotes a `Draft a` to a queryable value, and it is the
+-- only path to one:
+--
+--   * `public : Draft a -> Store a` — an explicit, greppable, auditable
+--     declaration that the table is world-readable and world-writable. The reads
+--     and writes (`all` / `get` / `findWhere` / `insert` / `insertReturning` /
+--     `update` / …) accept a `Store a`.
+--   * `secured : Policy a -> Draft a -> Result Error (Secured a)` — attaches a
+--     row-security `Policy` and yields a `Secured a`, read and written only
+--     through the authenticated `…As` operations (`allAs` / `getAs` / …), each
+--     of which takes a `Principal`.
+--
+-- No read or write function accepts a `Draft a`, and a `Store a` / `Secured a`
+-- exists only via `public` / `secured`, so a table someone forgot to classify is
+-- unqueryable by construction (make-invalid-states-unrepresentable). `public` is
+-- a first-class term, so "which tables are world-open" is a code search for
+-- `Store.public`, not an audit of every `fromCodec` site.
+--
+-- Minimal flow:
+--
+--     import Ipe.Db.Store as Store exposing (Store, Draft)
+--     import Ipe.Codec as Codec exposing (Codec)
+--     import Ipe.Result as Result exposing (Result(..))
+--
+--     type alias Country =
+--         { code : String, name : String }
+--
+--     -- A world-readable reference table: an explicit `public` declaration.
+--     countries : Result Error (Store Country)
+--     countries =
+--         case Store.fromCodec "countries" countryCodec of
+--             Err e ->
+--                 Err e
+--
+--             Ok draft ->
+--                 Ok (Store.public (Store.primaryKey .code draft))
+--
+--     -- A per-owner table: `secured` attaches the policy, yielding a `Secured`.
+--     documents : Result Error (Store.Secured Document)
+--     documents =
+--         case Store.fromCodec "documents" documentCodec of
+--             Err e ->
+--                 Err e
+--
+--             Ok draft ->
+--                 Store.secured (Store.ownerColumn .owner)
+--                     (Store.serial .id draft)
 --
 -- The security argument, made structural:
 --
@@ -71,11 +124,13 @@
 --     userStore =
 --         Store.fromCodec "users" userCodec
 --             |> Result.map (Store.primaryKey .id)
+--             |> Result.map Store.public
 --
 -- The column-spec builders (`primaryKey`, `serial`, …) name their column by an
--- accessor literal (`.id`), checked against the row type at compile time. A
--- raw-column escape (below) has no row type, so its columns are named by a bare
--- string through the capability-gated `Ipe.Db.Store.Unsafe`.
+-- accessor literal (`.id`), checked against the row type at compile time, and
+-- shape the `Draft` before classification. A raw-column escape (below) has no row
+-- type, so its columns are named by a bare string through the capability-gated
+-- `Ipe.Db.Store.Unsafe`.
 --
 -- The raw-column escape (a dynamic or non-codec table) builds a `Store Row`
 -- whose rows are the untyped `Dict String String` the DB layer returns; read a
@@ -91,6 +146,7 @@
 --             , Store.intColumn "age"
 --             ]
 --             |> Result.map (StoreU.primaryKey "id")
+--             |> Result.map Store.public
 --
 --     readUser : Store.Row -> Result Error User
 --     readUser row =
@@ -129,7 +185,8 @@
 -- a bound parameter, never interpolated. `joinFilterLeft` filters the left side,
 -- `joinToMaybe` / `joinCount` read the first pair / the match count.
 module Ipe.Db.Store exposing
-    ( Store(..)
+    ( Draft(..)
+    , Store(..)
     , Column(..)
     , ColType(..)
     , ColumnSpec(..)
@@ -138,6 +195,7 @@ module Ipe.Db.Store exposing
     , validSqlIdent
     , column, textColumn, intColumn, floatColumn, boolColumn
     , fromCodec, fromColumns, rowCodec
+    , public
     , primaryKey, serial, unique, defaultNow
     , defaultText, defaultInt, touchOnUpdate
     , primaryKeyNamed, serialNamed, uniqueNamed, defaultNowNamed
@@ -256,20 +314,52 @@ type SchemaOp
     | RenameTable String String
 
 
--- | One table whose schema, reads, and writes derive from its `Codec a`.
--- `codec` is the single source of truth: its `Shape` yields the columns and
--- their types, its encoder writes a row, its decoder reads one back. `specs`
--- are the DB-only facts; `pk` is the validated primary-key column used by the
--- by-key operations. `frozenTable` and `frozenColumns` hold the table name and
--- columns as first constructed (the source for the never-drifting create entry
--- — neither is edited by a rename). `table` and `currentColumns` track the
--- current-schema view after any renames (the identifiers CRUD targets). `ops`
--- is the ordered schema-op log folded by `migrations`, threaded from
--- `frozenTable` so each rename entry names the table as of its own position.
--- `indexes` is the ordered list of declarative index specs emitted after the
--- create entry by `create` / `migrations`. Built only through `fromCodec` /
--- `fromColumns`, so every identifier it holds has already been accepted by
--- `validSqlIdent`.
+-- | A table under construction: its schema is known but its access intent is
+-- not yet declared, so it is NOT queryable. `fromCodec` / `fromColumns` return a
+-- `Draft a`, the schema-shaping builders (`primaryKey` / `serial` / `unique` /
+-- `defaultNow` / `defaultText` / `defaultInt` / `touchOnUpdate` / `index` /
+-- `indexNamed`) refine one, and `public` / `secured` are the only ways to promote
+-- one to a queryable `Store a` / `Secured a`. No read or write operation accepts
+-- a `Draft a`, so a table left unclassified cannot be read or written by mistake
+-- (deny-by-default).
+--
+-- The record fields are the same schema payload a `Store a` carries: `codec` is
+-- the single source of truth (its `Shape` yields the columns and their types),
+-- `specs` are the DB-only facts, `pk` is the validated primary-key column,
+-- `frozenTable` / `frozenColumns` hold the table name and columns as first
+-- constructed, `table` / `currentColumns` track the current-schema view after any
+-- renames, `ops` is the ordered schema-op log, and `indexes` is the ordered index
+-- specs. Built only through `fromCodec` / `fromColumns`, so every identifier it
+-- holds has already been accepted by `validSqlIdent`.
+type Draft a
+    = Draft
+        { table : String
+        , frozenTable : String
+        , frozenColumns : List Column
+        , currentColumns : List Column
+        , codec : Codec a
+        , specs : List ColumnSpec
+        , pk : Maybe String
+        , ops : List SchemaOp
+        , indexes : List IndexSpec
+        }
+
+
+-- | One classified, queryable table whose schema, reads, and writes derive from
+-- its `Codec a`. A `Store a` is reachable only through `public` (an explicit,
+-- auditable world-open declaration) applied to a `Draft a`, so every queryable
+-- store has passed through a deliberate classification. Its record fields carry
+-- the same schema payload the `Draft a` held: `codec` is the single source of
+-- truth (its `Shape` yields the columns and their types, its encoder writes a
+-- row, its decoder reads one back); `specs` are the DB-only facts; `pk` is the
+-- validated primary-key column used by the by-key operations. `frozenTable` and
+-- `frozenColumns` hold the table name and columns as first constructed (the
+-- source for the never-drifting create entry — neither is edited by a rename).
+-- `table` and `currentColumns` track the current-schema view after any renames
+-- (the identifiers CRUD targets). `ops` is the ordered schema-op log folded by
+-- `migrations`, threaded from `frozenTable` so each rename entry names the table
+-- as of its own position. `indexes` is the ordered list of declarative index
+-- specs emitted after the create entry by `create` / `migrations`.
 type Store a
     = Store
         { table : String
@@ -383,15 +473,19 @@ boolColumn name =
 -- ─── Store construction (fail-closed) ──────────────────────────────
 
 
--- | `fromCodec table codec` — build a store from a record codec, or fail
+-- | `fromCodec table codec` — build a `Draft` from a record codec, or fail
 -- closed. The columns are derived from the codec's `Shape`: an `SRecord`
 -- becomes the typed column list, a non-`SRecord` codec (a bare scalar, a blob)
 -- names no columns and is an `Err`. The table name and every derived column
 -- name are run through `validSqlIdent`; the first non-conforming identifier is
--- an `Err`, and no store is produced. A returned `Store` therefore holds only
+-- an `Err`, and no draft is produced. A returned `Draft` therefore holds only
 -- accepted identifiers, and its columns cannot drift from the codec that reads
 -- and writes its rows (parse-don't-validate + one source of truth).
-fromCodec : String -> Codec a -> Result Error (Store a)
+--
+-- A `Draft` is NOT queryable: classify it with `public` (world-open) or
+-- `secured` (policy-guarded) to obtain a value the read and write operations
+-- accept (deny-by-default).
+fromCodec : String -> Codec a -> Result Error (Draft a)
 fromCodec table codec =
     case Codec.shape codec of
         SRecord cols ->
@@ -411,23 +505,25 @@ columnFromShape pair =
             column name colType
 
 
--- | `fromColumns table columns` — the raw-column escape: build a `Store Row`
+-- | `fromColumns table columns` — the raw-column escape: build a `Draft Row`
 -- for a dynamic or non-codec table, whose rows are the untyped
--- `Dict String String` the DB layer returns. The store's codec is the row codec
--- derived from `columns` (`rowCodec`), so the same codec-driven CRUD applies:
--- writes bind each declared column, reads decode back into a `Row`, and the
--- typed `read*` helpers parse a column into its Ipê type. Like `fromCodec`, the
--- table name and every column name run through `validSqlIdent`, so an invalid
--- identifier fails closed before any SQL is built.
-fromColumns : String -> List Column -> Result Error (Store Row)
+-- `Dict String String` the DB layer returns. The draft's codec is the row codec
+-- derived from `columns` (`rowCodec`), so the same codec-driven CRUD applies once
+-- the draft is classified: writes bind each declared column, reads decode back
+-- into a `Row`, and the typed `read*` helpers parse a column into its Ipê type.
+-- Like `fromCodec`, the table name and every column name run through
+-- `validSqlIdent`, so an invalid identifier fails closed before any SQL is built.
+-- Classify the result with `public` / `secured` before querying (deny-by-default).
+fromColumns : String -> List Column -> Result Error (Draft Row)
 fromColumns table columns =
     buildStore table columns (rowCodec columns)
 
 
 -- The shared constructor for both `fromCodec` and `fromColumns`: validate the
 -- table name and every column name, then freeze the columns and attach the
--- codec. The single validation boundary (parse-don't-validate).
-buildStore : String -> List Column -> Codec a -> Result Error (Store a)
+-- codec, producing an unclassified `Draft`. The single validation boundary
+-- (parse-don't-validate).
+buildStore : String -> List Column -> Codec a -> Result Error (Draft a)
 buildStore table columns codec =
     if Basics.not (validSqlIdent table) then
         Err (invalidIdentError "table" table)
@@ -439,7 +535,7 @@ buildStore table columns codec =
 
             Nothing ->
                 Ok
-                    (Store
+                    (Draft
                         { table = table
                         , frozenTable = table
                         , frozenColumns = columns
@@ -529,37 +625,79 @@ rowCell name row =
             ""
 
 
+-- ─── Classification (the only Draft → queryable promotions) ─────────
+
+
+-- | `public draft` — classify `draft` as a world-readable, world-writable table
+-- and return the queryable `Store a`. This is the explicit, auditable escape
+-- hatch: a code search for `Store.public` enumerates exactly the tables a
+-- reviewer must confirm are meant to be open, because `public` is a first-class
+-- declaration, not the absence of one. It is the only promotion from a `Draft` to
+-- a `Store`; `secured` is the policy-guarded alternative (deny-by-default: an
+-- unclassified `Draft` is unqueryable by construction).
+--
+-- Example:
+--
+--     import Ipe.Db.Store as Store exposing (Store)
+--     import Ipe.Result as Result exposing (Result(..))
+--
+--     countries : Result Error (Store Country)
+--     countries =
+--         case Store.fromCodec "countries" countryCodec of
+--             Err e ->
+--                 Err e
+--
+--             Ok draft ->
+--                 Ok (Store.public (Store.primaryKey .code draft))
+public : Draft a -> Store a
+public draft =
+    case draft of
+        Draft r ->
+            Store
+                { table = r.table
+                , frozenTable = r.frozenTable
+                , frozenColumns = r.frozenColumns
+                , currentColumns = r.currentColumns
+                , codec = r.codec
+                , specs = r.specs
+                , pk = r.pk
+                , ops = r.ops
+                , indexes = r.indexes
+                }
+
+
 -- ─── Column-spec builders ──────────────────────────────────────────
 --
--- Each attaches one typed `ColumnSpec` to the store. `primaryKey` additionally
+-- Each attaches one typed `ColumnSpec` to the `Draft`, before classification,
+-- because it shapes the schema, not the access policy. `primaryKey` additionally
 -- records the validated key column the by-key operations read. The identifier
--- was validated when the store was built, so no spec can smuggle an unchecked
+-- was validated when the draft was built, so no spec can smuggle an unchecked
 -- name into SQL.
 
 
 -- | Mark the accessor-named column the primary key. The lowering intercept
 -- extracts the column name from the accessor and calls `primaryKeyNamed`.
-primaryKey : (row -> t) -> Store row -> Store row
+primaryKey : (row -> t) -> Draft row -> Draft row
 primaryKey =
     Ffi.kernel "Store_primaryKey"
 
 
 -- | Mark the accessor-named column DB-assigned (serial). `insert` omits it so
 -- the database generates it — a client value can never overwrite a serial column.
-serial : (row -> t) -> Store row -> Store row
+serial : (row -> t) -> Draft row -> Draft row
 serial =
     Ffi.kernel "Store_serial"
 
 
 -- | Mark the accessor-named column unique.
-unique : (row -> t) -> Store row -> Store row
+unique : (row -> t) -> Draft row -> Draft row
 unique =
     Ffi.kernel "Store_unique"
 
 
 -- | Mark the accessor-named column DB-stamped with the current time on insert.
 -- `insert` omits it so the database stamps it.
-defaultNow : (row -> t) -> Store row -> Store row
+defaultNow : (row -> t) -> Draft row -> Draft row
 defaultNow =
     Ffi.kernel "Store_defaultNow"
 
@@ -576,7 +714,7 @@ defaultNow =
 --     withStatusDefault : Store { status : String } -> Store { status : String }
 --     withStatusDefault store =
 --         Store.defaultText .status "active" store
-defaultText : (row -> String) -> String -> Store row -> Store row
+defaultText : (row -> String) -> String -> Draft row -> Draft row
 defaultText =
     Ffi.kernel "Store_defaultText"
 
@@ -593,7 +731,7 @@ defaultText =
 --     withRetryDefault : Store { retries : Int } -> Store { retries : Int }
 --     withRetryDefault store =
 --         Store.defaultInt .retries 0 store
-defaultInt : (row -> Int) -> Int -> Store row -> Store row
+defaultInt : (row -> Int) -> Int -> Draft row -> Draft row
 defaultInt =
     Ffi.kernel "Store_defaultInt"
 
@@ -610,21 +748,21 @@ defaultInt =
 --     withUpdatedAt : Store { updatedAt : String } -> Store { updatedAt : String }
 --     withUpdatedAt store =
 --         Store.touchOnUpdate .updatedAt store
-touchOnUpdate : (row -> t) -> Store row -> Store row
+touchOnUpdate : (row -> t) -> Draft row -> Draft row
 touchOnUpdate =
     Ffi.kernel "Store_touchOnUpdate"
 
 
 -- The stringly forms below are reached by the accessor-typed kernel intercepts
 -- above, and are exported for the capability-gated `Ipe.Db.Store.Unsafe` string
--- surface (a raw-column `fromColumns` store has no row type, so its columns can
--- only be named by a bare string).
+-- surface (a raw-column `fromColumns` draft has no row type, so its columns can
+-- only be named by a bare string). They shape the `Draft`, before classification.
 
-primaryKeyNamed : String -> Store a -> Store a
-primaryKeyNamed name store =
-    case store of
-        Store r ->
-            Store
+primaryKeyNamed : String -> Draft a -> Draft a
+primaryKeyNamed name draft =
+    case draft of
+        Draft r ->
+            Draft
                 { table = r.table
                 , frozenTable = r.frozenTable
                 , frozenColumns = r.frozenColumns
@@ -637,41 +775,41 @@ primaryKeyNamed name store =
                 }
 
 
-serialNamed : String -> Store a -> Store a
-serialNamed name store =
-    addSpec (Serial name) store
+serialNamed : String -> Draft a -> Draft a
+serialNamed name draft =
+    addSpec (Serial name) draft
 
 
-uniqueNamed : String -> Store a -> Store a
-uniqueNamed name store =
-    addSpec (Unique name) store
+uniqueNamed : String -> Draft a -> Draft a
+uniqueNamed name draft =
+    addSpec (Unique name) draft
 
 
-defaultNowNamed : String -> Store a -> Store a
-defaultNowNamed name store =
-    addSpec (DefaultNow name) store
+defaultNowNamed : String -> Draft a -> Draft a
+defaultNowNamed name draft =
+    addSpec (DefaultNow name) draft
 
 
-defaultTextNamed : String -> String -> Store a -> Store a
-defaultTextNamed name value store =
-    addSpec (DefaultText name value) store
+defaultTextNamed : String -> String -> Draft a -> Draft a
+defaultTextNamed name value draft =
+    addSpec (DefaultText name value) draft
 
 
-defaultIntNamed : String -> Int -> Store a -> Store a
-defaultIntNamed name value store =
-    addSpec (DefaultInt name value) store
+defaultIntNamed : String -> Int -> Draft a -> Draft a
+defaultIntNamed name value draft =
+    addSpec (DefaultInt name value) draft
 
 
-touchOnUpdateNamed : String -> Store a -> Store a
-touchOnUpdateNamed name store =
-    addSpec (TouchOnUpdate name) store
+touchOnUpdateNamed : String -> Draft a -> Draft a
+touchOnUpdateNamed name draft =
+    addSpec (TouchOnUpdate name) draft
 
 
-addSpec : ColumnSpec -> Store a -> Store a
-addSpec spec store =
-    case store of
-        Store r ->
-            Store
+addSpec : ColumnSpec -> Draft a -> Draft a
+addSpec spec draft =
+    case draft of
+        Draft r ->
+            Draft
                 { table = r.table
                 , frozenTable = r.frozenTable
                 , frozenColumns = r.frozenColumns
@@ -687,11 +825,12 @@ addSpec spec store =
 -- ─── Declarative index builders ────────────────────────────────────
 
 
--- | `index columns store` — declare a non-unique performance index over one or
--- more columns of `store`, with the index name derived from the table name and
+-- | `index columns draft` — declare a non-unique performance index over one or
+-- more columns of `draft`, with the index name derived from the table name and
 -- the column list (`idx_<table>_<col1>_<col2>_…`). Every column in `columns`
--- must be a name present in the store's codec-derived column list; an unknown
--- column or an invalid identifier fails closed at `create` time.
+-- must be a name present in the draft's codec-derived column list; an unknown
+-- column or an invalid identifier fails closed at `create` time. Shaping the
+-- schema, this refines the `Draft` before classification.
 --
 -- The index is emitted as a separate `CREATE INDEX` ledger entry after the
 -- `CREATE TABLE` entry in `migrations`. Existing indexes are not affected
@@ -711,16 +850,18 @@ addSpec spec store =
 --             |> Result.map (Store.primaryKey .id)
 --             |> Result.map (Store.index [ "author_id" ])
 --             |> Result.map (Store.index [ "author_id", "published_at" ])
-index : List String -> Store a -> Store a
-index columns store =
-    addIndex (Index columns) store
+--             |> Result.map Store.public
+index : List String -> Draft a -> Draft a
+index columns draft =
+    addIndex (Index columns) draft
 
 
--- | `indexNamed name columns store` — declare a non-unique performance index
--- over one or more columns of `store`, with a caller-supplied index name.
+-- | `indexNamed name columns draft` — declare a non-unique performance index
+-- over one or more columns of `draft`, with a caller-supplied index name.
 -- `name` must pass `validSqlIdent`; every column in `columns` must be a name
--- present in the store's codec-derived column list. An invalid name, an unknown
--- column, or an invalid column identifier fails closed at `create` time.
+-- present in the draft's codec-derived column list. An invalid name, an unknown
+-- column, or an invalid column identifier fails closed at `create` time. Shaping
+-- the schema, this refines the `Draft` before classification.
 --
 -- Example:
 --
@@ -735,16 +876,17 @@ index columns store =
 --             |> Result.map (Store.serial .id)
 --             |> Result.map (Store.primaryKey .id)
 --             |> Result.map (Store.indexNamed "posts_author_published" [ "author_id", "published_at" ])
-indexNamed : String -> List String -> Store a -> Store a
-indexNamed name columns store =
-    addIndex (IndexNamed name columns) store
+--             |> Result.map Store.public
+indexNamed : String -> List String -> Draft a -> Draft a
+indexNamed name columns draft =
+    addIndex (IndexNamed name columns) draft
 
 
-addIndex : IndexSpec -> Store a -> Store a
-addIndex spec store =
-    case store of
-        Store r ->
-            Store
+addIndex : IndexSpec -> Draft a -> Draft a
+addIndex spec draft =
+    case draft of
+        Draft r ->
+            Draft
                 { table = r.table
                 , frozenTable = r.frozenTable
                 , frozenColumns = r.frozenColumns
@@ -791,6 +933,7 @@ addIndex spec store =
 --                     , Store.intColumn "age"
 --                     ]
 --                     |> Result.map (StoreU.primaryKey "id")
+--                     |> Result.map Store.public
 --                     |> Result.map (Store.renameColumn "name" "full_name")
 --         in
 --         case storeResult |> Result.andThen Store.migrations of
@@ -855,6 +998,7 @@ renameColumnInList from to cols =
 --                     , Store.textColumn "email"
 --                     ]
 --                     |> Result.map (StoreU.primaryKey "id")
+--                     |> Result.map Store.public
 --                     |> Result.map (Store.renameTable "accounts")
 --         in
 --         case storeResult |> Result.andThen Store.migrations of
@@ -913,6 +1057,7 @@ renameTable to store =
 --                     , Store.intColumn "age"
 --                     ]
 --                     |> Result.map (StoreU.primaryKey "id")
+--                     |> Result.map Store.public
 --                     |> Result.map (Store.renameColumn "name" "full_name")
 --         in
 --         case storeResult |> Result.andThen Store.migrations of
@@ -3538,12 +3683,12 @@ migrationName table =
 -- compile time exactly like a query column, so a policy over a non-existent or
 -- cross-row column is a build error.
 --
--- Deny-by-default: a `Store` with no policy is simply unsecured; a `Secured`
--- store is reachable only by attaching a policy through `secured`, and the
--- future secured operations accept only a `Secured`. `secured` re-validates
--- every policy column against the store's codec-derived columns (the same
+-- Deny-by-default: a `Draft` is unqueryable until classified. A `Secured` store
+-- is reachable only by attaching a policy through `secured`, and the
+-- authenticated `…As` operations accept only a `Secured`. `secured` re-validates
+-- every policy column against the draft's codec-derived columns (the same
 -- fail-closed check the query leaves use), so a policy that names a column the
--- store does not have is a typed `Err`, never a silently ineffective policy.
+-- draft does not have is a typed `Err`, never a silently ineffective policy.
 
 
 -- | One row-security rule over a validated column name. Internal to this module:
@@ -3660,13 +3805,15 @@ andPolicy extra base =
                     Policy (baseRules ++ extraRules)
 
 
--- | `secured policy store` — attach `policy` to `store`, or fail closed. Every
--- column the policy names is re-validated against the store's own codec-derived
--- columns (the same `hasColumn` check the query leaves and `specsWithinColumns`
--- use): a policy column absent from the store is a typed `Err`, never a silently
--- ineffective policy. On success the store is wrapped in an opaque `Secured` —
--- the only value the future secured operations accept — so deny-by-default holds:
--- a store is secured only by an explicit, validated policy.
+-- | `secured policy draft` — classify `draft` by attaching `policy`, or fail
+-- closed. This is one of the two `Draft` → queryable promotions (`public` is the
+-- other): it yields an opaque `Secured a`, the only value the authenticated
+-- `…As` operations accept. Every column the policy names is re-validated against
+-- the draft's own codec-derived columns (the same `hasColumn` check the query
+-- leaves and `specsWithinColumns` use): a policy column absent from the draft is
+-- a typed `Err`, never a silently ineffective policy. Deny-by-default holds — a
+-- table is queryable only through a deliberate classification, and a `secured`
+-- table is reachable only with a `Principal` through the `…As` operations.
 --
 -- Example:
 --
@@ -3674,11 +3821,11 @@ andPolicy extra base =
 --         (Store.ownerColumn .author
 --             |> Store.andPolicy (Store.immutable .createdAt)
 --         )
---         store
-secured : Policy a -> Store a -> Result Error (Secured a)
-secured policy store =
-    case store of
-        Store r ->
+--         draft
+secured : Policy a -> Draft a -> Result Error (Secured a)
+secured policy draft =
+    case draft of
+        Draft r ->
             case policy of
                 Policy rules ->
                     case firstUnknownPolicyColumn r.currentColumns rules of
@@ -3686,7 +3833,7 @@ secured policy store =
                             Err (unknownColumnError bad)
 
                         Nothing ->
-                            Ok (Secured store policy)
+                            Ok (Secured (public draft) policy)
 
 
 -- The first column named by a rule that is not one of the store's columns, or
