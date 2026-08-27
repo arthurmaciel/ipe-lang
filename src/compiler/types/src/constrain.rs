@@ -4501,14 +4501,15 @@ impl<'a> Builder<'a> {
             name: self.builtins.joined_con,
             args: vec![a, b],
         };
-        // `Select` — the column-projection ADT (`Ipe.Db.Store`), the result of
-        // `Store.select`. The projected rows are returned as plain `Row` cell
-        // maps by `selectToList` / `selectToMaybe`, decoded caller-side by the
-        // `projRead*` helpers, so the type carries no projected-shape argument.
-        let select = || Ty::Con {
+        // `Select row` — the column-projection ADT (`Ipe.Db.Store`), the result
+        // of `Store.select`. `row` is the projected shape the lambda returns; it
+        // is phantom over the runtime value (which carries only query data) but
+        // records the shape so `selectToList` / `selectToMaybe` return the typed
+        // `row` — the concrete decode is emitted at the call site from it.
+        let select = |row: Ty| Ty::Con {
             module: Vec::new(),
             name: self.builtins.select_con,
-            args: vec![],
+            args: vec![row],
         };
         // `Policy row` — the row-security policy algebra ADT (`Ipe.Db.Store`),
         // the result of the accessor-typed policy builders. The `row` argument
@@ -6034,7 +6035,7 @@ impl<'a> Builder<'a> {
             // reference, so a computed projection cannot enter the SELECT.
             K::StoreSelect => fun(
                 fun(tuple2(var(0), var(1)), var(2)),
-                fun(joined(var(0), var(1)), select()),
+                fun(joined(var(0), var(1)), select(var(2))),
             ),
 
             // `Store.eq : (row -> t) -> t -> Cond` — the getter-arrow scheme lets

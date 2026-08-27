@@ -4,19 +4,20 @@ module Main exposing (main)
 -- (`Store.join` / `Store.select` / `Store.selectToList`). Two `Codec.auto`-derived
 -- stores join on `books.author_id = authors.id`; `select` projects one column
 -- (`author.name`) so the join lowers to ONE parameterized statement selecting
--- exactly that column (`SELECT a1.name AS p0 FROM …`, column pushdown). Each
--- projected row comes back as a `Row` keyed by the output name `p0`, read with
--- `Store.projReadText 0`. No live database is needed: `Task.onError` catches the
--- connection failure and the program exits cleanly. The SEAL proof is a
--- `cargo build` of the emitted project under `IPE_E2E=1`.
+-- exactly that column (`SELECT a1.name AS p0 FROM …`, column pushdown). The
+-- projection returns the typed `List String` directly. No live database is
+-- needed: `Task.onError` catches the connection failure and the program exits
+-- cleanly. The SEAL proof is a `cargo build` of the emitted project under
+-- `IPE_E2E=1`.
 --
 -- The projection is expressed as a value that lowers to SQL, not a per-row
 -- fan-out:
 --   * `Store.select (\( _, author ) -> author.name)` names the projected column
 --     by a bare field reference read at compile time (never run over real rows),
 --     so a projection that is not a single column reference is a build error.
---   * `Store.selectToList` returns `List Row`, each row carrying only `p0`.
---   * `Store.projReadText 0` reads the projected author name back.
+--   * `Store.selectToList` returns `List String` — the per-column decode is
+--     emitted concretely at the call site from the projected shape, so a
+--     single-column projection yields the scalar with no positional read.
 --
 -- Expected output:
 --   projection-seal:ok
@@ -81,8 +82,8 @@ authorsStore =
 
 
 -- The projection: one parameterized statement selecting only `author.name`, no
--- per-row fan-out. Each projected row is a `Row` keyed by `p0`.
-authorNames : Db -> Store Book -> Store Author -> Task Error (List Store.Row)
+-- per-row fan-out. The typed return is `List String`.
+authorNames : Db -> Store Book -> Store Author -> Task Error (List String)
 authorNames db books authors =
     Store.selectToList db
         (Store.select (\( _, author ) -> author.name)
@@ -90,7 +91,7 @@ authorNames db books authors =
         )
 
 
-run : Db -> Task Error (List Store.Row)
+run : Db -> Task Error (List String)
 run db =
     case booksStore of
         Ok books ->

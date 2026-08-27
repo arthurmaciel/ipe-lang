@@ -67,7 +67,7 @@ authorsStore =
 
 -- A tuple element is a string literal, not a column reference — rejected
 -- (IPE-L0149).
-badProjection : Db -> Store Book -> Store Author -> Task Error (List Store.Row)
+badProjection : Db -> Store Book -> Store Author -> Task Error (List ( String, String ))
 badProjection db books authors =
     Store.selectToList db
         (Store.select (\( book, _ ) -> ( book.title, "literal" ))
@@ -75,7 +75,7 @@ badProjection db books authors =
         )
 
 
-run : Db -> Task Error (List Store.Row)
+run : Db -> Task Error (List ( String, String ))
 run db =
     case booksStore of
         Ok books ->

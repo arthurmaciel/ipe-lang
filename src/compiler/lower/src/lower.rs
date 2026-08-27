@@ -11023,6 +11023,91 @@ fn proj_pair_ir_type() -> IrType {
     IrType::Tuple(vec![IrType::Str, IrType::Str])
 }
 
+/// The IR type of a projection `Row` — the `Dict String String` cell map the DB
+/// projection layer returns. Types the emitted decode's `row` binder.
+fn row_ir_type() -> IrType {
+    IrType::Dict(Box::new(IrType::Str), Box::new(IrType::Str))
+}
+
+/// The IR type of the `Error` channel — the fixed error side of every
+/// `Result Error _` the emitted decode threads.
+const fn error_ir_type() -> IrType {
+    IrType::Error
+}
+
+/// Which result shape a `Store.selectTo*` intercept emits: `selectToList`
+/// returns `List row`, `selectToMaybe` returns `Maybe row` (its first row).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum SelectResultShape {
+    List,
+    Maybe,
+}
+
+/// The scalar type of a projected column — the four types the DB projection layer
+/// reads a cell back as. Each names both the concrete decoded value type and the
+/// internal `Ipe.Db.Store` reader the emitted per-row decode calls at its output
+/// position.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum ProjColKind {
+    Text,
+    Int,
+    Bool,
+    Float,
+}
+
+impl ProjColKind {
+    /// Classify a projected field's solved type into its column kind, or `None`
+    /// when the type is not one the projection layer reads back (which the caller
+    /// turns into a fail-closed IPE-L0149).
+    fn of_ty(ty: &Ty, interner: &Interner) -> Option<Self> {
+        match ty {
+            Ty::Con { module, name, args } if module.is_empty() && args.is_empty() => {
+                match interner.resolve(*name) {
+                    Some("String") => Some(Self::Text),
+                    Some("Int") => Some(Self::Int),
+                    Some("Bool") => Some(Self::Bool),
+                    Some("Float") => Some(Self::Float),
+                    _ => None,
+                }
+            }
+            _ => None,
+        }
+    }
+
+    /// The internal `Ipe.Db.Store` positional reader for this column kind — the
+    /// helper the emitted decode calls to read the cell at its output position.
+    const fn reader(self) -> &'static str {
+        match self {
+            Self::Text => "projectionReadText",
+            Self::Int => "projectionReadInt",
+            Self::Bool => "projectionReadBool",
+            Self::Float => "projectionReadFloat",
+        }
+    }
+
+    /// The concrete decoded value type of this column, used to type the emitted
+    /// decode's binders and tuple.
+    const fn value_ir_type(self) -> IrType {
+        match self {
+            Self::Text => IrType::Str,
+            Self::Int => IrType::Int,
+            Self::Bool => IrType::Bool,
+            Self::Float => IrType::Float,
+        }
+    }
+}
+
+/// One column of a `Store.select` projection: its join-side `alias`, its
+/// validated `column` name, and the scalar `kind` that fixes the concrete reader
+/// and decoded type. The `select` intercept builds these; the
+/// `selectToList` / `selectToMaybe` intercept consumes the `kind`s to emit the
+/// concrete per-column decode at the call site.
+struct ProjectedColumn {
+    alias: String,
+    column: String,
+    kind: ProjColKind,
+}
+
 /// Fail-closed SEAL gate for a point-free / partially-applied accessor-typed
 /// `Store.*` placeholder kernel (`Store.eq`, `Store.serial`, …). These leaves
 /// have no runtime function — the accessor-intercept rewrites the SATURATED
@@ -11721,6 +11806,18 @@ pub struct Lowerer<'a> {
     /// Monotonic cursor into [`Self::any_param_binders`], mirroring
     /// [`Self::param_cursor`]'s shape exactly.
     any_param_cursor: Cell<usize>,
+    /// Pre-minted, collision-free binder names for the concrete per-column decode
+    /// the `Store.selectToList` / `Store.selectToMaybe` intercept emits at each
+    /// call site (the `rows` / `row` / per-column / `xs` binders). Sized by
+    /// [`count_projection_decode_sites`] and handed out through
+    /// [`Self::projection_decode_cursor`] as a GLOBALLY-unique supply, mirroring
+    /// [`Self::param_binders`]; [`Interner::fresh_symbols`] guarantees the names
+    /// dodge every user identifier and each other, so the emitted closures never
+    /// rely on Rust shadowing.
+    projection_decode_binders: Vec<Symbol>,
+    /// Monotonic cursor into [`Self::projection_decode_binders`], mirroring
+    /// [`Self::param_cursor`]'s shape exactly.
+    projection_decode_cursor: Cell<usize>,
     /// Pre-minted, collision-free names for the destructure-thunk
     /// binding (`let destr_thunk_N = move || <value>; …`) that
     /// [`Self::build_destructure_or_decoder_thunk`] introduces when a
@@ -12223,6 +12320,113 @@ pub fn count_destructure_param_sites(m: &canon::Module) -> usize {
         .sum()
 }
 
+/// The number of pre-minted binder symbols one `Store.selectToList` /
+/// `Store.selectToMaybe` call site can need when the compiler emits its concrete
+/// per-column decode: the `rows` and `row` binders, one binder per projected
+/// column combined into the tuple (capped by the widest `Result.map*`, five),
+/// and the `xs` binder the `Maybe`-shaped result's `List.head` step uses. Sized
+/// as an upper bound so a projection can never overrun the pool.
+const SELECT_DECODE_BINDERS_PER_SITE: usize = 8;
+
+/// Count every `Store.selectToList` / `Store.selectToMaybe` call site — the
+/// pre-sizing pass for [`Lowerer::projection_decode_binders`]. Each such call is
+/// intercepted at lowering and emits a concrete per-column decode that needs a
+/// bounded number of fresh binders ([`SELECT_DECODE_BINDERS_PER_SITE`]). The
+/// count is purely syntactic (the callee's spelling), so it over-counts a
+/// same-named non-`Store` call harmlessly; under-counting would overrun the
+/// pool, which fails closed as a [`bug`], never an index panic.
+pub fn count_projection_decode_sites(m: &canon::Module, interner: &Interner) -> usize {
+    fn is_select_to(callee: &canon::Expr, interner: &Interner) -> bool {
+        match &callee.value {
+            canon::Expr_::VarTopLevel { name, .. } | canon::Expr_::VarKernel { name, .. } => {
+                matches!(
+                    interner.resolve(*name),
+                    Some("selectToList" | "selectToMaybe")
+                )
+            }
+            _ => false,
+        }
+    }
+    fn walk_expr(e: &canon::Expr, interner: &Interner) -> usize {
+        let here = match &e.value {
+            canon::Expr_::Call(callee, _) if is_select_to(callee, interner) => {
+                SELECT_DECODE_BINDERS_PER_SITE
+            }
+            _ => 0,
+        };
+        let nested = match &e.value {
+            canon::Expr_::Lambda(_, body) | canon::Expr_::Access(body, _) => {
+                walk_expr(body, interner)
+            }
+            canon::Expr_::Call(callee, args) => {
+                walk_expr(callee, interner)
+                    + args.iter().map(|a| walk_expr(a, interner)).sum::<usize>()
+            }
+            canon::Expr_::ForeignCall { args, .. } => {
+                args.iter().map(|a| walk_expr(a, interner)).sum()
+            }
+            canon::Expr_::Binop { lhs, rhs, .. } => {
+                walk_expr(lhs, interner) + walk_expr(rhs, interner)
+            }
+            canon::Expr_::Case(scrut, branches) => {
+                walk_expr(scrut, interner)
+                    + branches
+                        .iter()
+                        .map(|b| walk_expr(&b.body, interner))
+                        .sum::<usize>()
+            }
+            canon::Expr_::Let(bindings, body) => {
+                bindings
+                    .iter()
+                    .map(|b| walk_expr(&b.body, interner))
+                    .sum::<usize>()
+                    + walk_expr(body, interner)
+            }
+            canon::Expr_::If(branches, else_expr) => {
+                branches
+                    .iter()
+                    .map(|(c, b)| walk_expr(c, interner) + walk_expr(b, interner))
+                    .sum::<usize>()
+                    + walk_expr(else_expr, interner)
+            }
+            canon::Expr_::Tuple(elems) | canon::Expr_::List(elems) => {
+                elems.iter().map(|x| walk_expr(x, interner)).sum()
+            }
+            canon::Expr_::Cons(head, tail) => walk_expr(head, interner) + walk_expr(tail, interner),
+            canon::Expr_::Record(fields) => {
+                fields.iter().map(|(_, v)| walk_expr(v, interner)).sum()
+            }
+            canon::Expr_::Update(base, fields) => {
+                walk_expr(base, interner)
+                    + fields
+                        .iter()
+                        .map(|(_, v)| walk_expr(v, interner))
+                        .sum::<usize>()
+            }
+            canon::Expr_::VarLocal(_)
+            | canon::Expr_::VarTopLevel { .. }
+            | canon::Expr_::VarKernel { .. }
+            | canon::Expr_::VarCtor { .. }
+            | canon::Expr_::Int(_)
+            | canon::Expr_::Float(_)
+            | canon::Expr_::Str(_)
+            | canon::Expr_::PathLit(_)
+            | canon::Expr_::CustomElementCtor(_)
+            | canon::Expr_::Char(_)
+            | canon::Expr_::Unit => 0,
+        };
+        here + nested
+    }
+    m.defs
+        .iter()
+        .map(|d| match d {
+            canon::Def::Typed { body, .. } | canon::Def::Untyped { body, .. } => {
+                walk_expr(body, interner)
+            }
+        })
+        .sum()
+}
+
 /// Count every `any`-wildcard occurrence (bare OR nested inside a container)
 /// in PARAM and RETURN position across every [`canon::Def::Typed`] annotation
 /// in the module — the pre-sizing pass for [`Lowerer::any_param_binders`].
@@ -12560,6 +12764,7 @@ pub struct SymbolPools {
     pub cap_params: Vec<Symbol>,
     pub param_binders: Vec<Symbol>,
     pub any_param_binders: Vec<Symbol>,
+    pub projection_decode_binders: Vec<Symbol>,
     pub destructure_thunk_binders: Vec<Symbol>,
     pub nested_cons_binders: Vec<Symbol>,
     pub nested_strlit_binders: Vec<Symbol>,
@@ -12599,6 +12804,7 @@ impl<'a> Lowerer<'a> {
             cap_params,
             param_binders,
             any_param_binders,
+            projection_decode_binders,
             destructure_thunk_binders,
             nested_cons_binders,
             nested_strlit_binders,
@@ -12810,6 +13016,8 @@ impl<'a> Lowerer<'a> {
             param_cursor: Cell::new(0),
             any_param_binders,
             any_param_cursor: Cell::new(0),
+            projection_decode_binders,
+            projection_decode_cursor: Cell::new(0),
             destructure_thunk_binders,
             destructure_thunk_cursor: Cell::new(0),
             nested_cons_binders,
@@ -13719,8 +13927,8 @@ impl<'a> Lowerer<'a> {
     /// positions `0`, `1`, … The referenced column is read from each `side.field`
     /// element at compile time, validated against that side's solved row type, and
     /// the SELECT list is set to exactly those columns (column pushdown). The
-    /// projected row comes back keyed by the `p<index>` output names, decoded
-    /// caller-side by position (`projReadText 0`, `projReadInt 1`, …), so no
+    /// projected row is decoded at the `selectToList`/`selectToMaybe` call site by
+    /// a monomorphic reader picked from each column's solved scalar type, so no
     /// decoder is stored in the projection value. A projection that is not a
     /// column reference (or a flat tuple of column references) fails closed
     /// (IPE-L0149) rather than emitting a partial statement or a `SELECT *`.
@@ -13736,7 +13944,7 @@ impl<'a> Lowerer<'a> {
         let lowered_joined = self.lower_expr(joined)?;
         let items = projected
             .into_iter()
-            .map(|(alias, column)| Expr::Tuple(vec![Expr::Str(alias), Expr::Str(column)]))
+            .map(|col| Expr::Tuple(vec![Expr::Str(col.alias), Expr::Str(col.column)]))
             .collect();
         let projections = Expr::List {
             elem: proj_pair_ir_type(),
@@ -13760,7 +13968,7 @@ impl<'a> Lowerer<'a> {
         &self,
         binders: [Option<Symbol>; 2],
         body: &canon::Expr,
-    ) -> DResult<Vec<(String, String)>> {
+    ) -> DResult<Vec<ProjectedColumn>> {
         if let canon::Expr_::Tuple(elems) = &body.value {
             if elems.is_empty() {
                 return Err(unsupported_store_select(
@@ -13831,7 +14039,7 @@ impl<'a> Lowerer<'a> {
         &self,
         binders: [Option<Symbol>; 2],
         body: &canon::Expr,
-    ) -> DResult<(String, String)> {
+    ) -> DResult<ProjectedColumn> {
         let canon::Expr_::Access(base, field) = &body.value else {
             return Err(unsupported_store_select(
                 body.span,
@@ -13856,20 +14064,23 @@ impl<'a> Lowerer<'a> {
         };
         // The accessed record's solved type carries the field: confirm the field
         // is one it declares (a bare `.field` on a solved record), so a column
-        // absent from the row is a fail-closed build error.
-        let field_present = match self.region_ty(base.span) {
-            Some(Ty::Record(fields, _)) => fields.keys().any(|k| *k == *field),
-            _ => false,
+        // absent from the row is a fail-closed build error. The field's solved
+        // type also chooses the concrete per-column reader the decode emits, so a
+        // projection whose column type is not one the DB layer reads back is a
+        // fail-closed build error too.
+        let field_ty = match self.region_ty(base.span) {
+            Some(Ty::Record(fields, _)) => fields.get(field),
+            _ => None,
         };
         let field_name = self.resolve(*field)?.to_string();
-        if !field_present {
+        let Some(field_ty) = field_ty else {
             return Err(unsupported_store_select(
                 body.span,
                 StoreSelectProjectionDefect::UnknownField {
                     field: field_name.into_boxed_str(),
                 },
             ));
-        }
+        };
         let column_name = ipe_canon::to_snake_case(&field_name);
         if !is_valid_sql_column(&column_name) {
             return Err(unsupported_store_select(
@@ -13879,7 +14090,210 @@ impl<'a> Lowerer<'a> {
                 },
             ));
         }
-        Ok((alias, column_name))
+        let Some(kind) = ProjColKind::of_ty(field_ty, self.interner) else {
+            return Err(unsupported_store_select(
+                body.span,
+                StoreSelectProjectionDefect::UnsupportedProjectionBody,
+            ));
+        };
+        Ok(ProjectedColumn {
+            alias,
+            column: column_name,
+            kind,
+        })
+    }
+
+    /// Does `id` resolve to the `Ipe.Db.Store` top-level binding named `helper`?
+    /// Used to recognise a `Store.selectToList` / `Store.selectToMaybe` call in
+    /// the intercept dispatch. Both names are unique to `Ipe.Db.Store`, so the
+    /// bare-name lookup cannot alias another module's binding.
+    fn is_store_func(&self, id: FuncId, helper: &str) -> bool {
+        self.store_named_func_id(helper) == Ok(id)
+    }
+
+    /// Hand out the next globally-unique fresh binder from
+    /// [`Self::projection_decode_binders`] for the emitted projection decode.
+    /// Mirrors [`Self::fresh_param_binder`]; sized by
+    /// [`count_projection_decode_sites`], so an overrun is an internal invariant
+    /// violation surfaced as a [`bug`], never an index panic.
+    fn fresh_projection_decode_binder(&self) -> DResult<Symbol> {
+        let i = self.projection_decode_cursor.get();
+        let sym = *self.projection_decode_binders.get(i).ok_or_else(|| {
+            bug(
+                "ipe_lower::fresh_projection_decode_binder",
+                "projection-decode fresh-binder pool exhausted",
+            )
+        })?;
+        self.projection_decode_cursor.set(i + 1);
+        Ok(sym)
+    }
+
+    /// Lower `Store.selectToList db (Store.select … join)` /
+    /// `Store.selectToMaybe …` into the untyped projection read wrapped by the
+    /// concrete per-column decode emitted here.
+    ///
+    /// The second argument MUST be a `Store.select` expression: its lambda fixes
+    /// the projected shape and each column's type, so the decode reads each
+    /// `p<index>` cell with the concrete `projectionRead*` for that column's type
+    /// and combines the reads into the projected `row` — a single column decodes
+    /// to the scalar, a tuple to the tuple. A failed read fails the whole task
+    /// closed (`Task.fail`). No decoder is stored in the value: the `Select` the
+    /// intercept builds (`selectNamed`) carries only the `(alias, column)` list.
+    /// A second argument that is not a `Store.select` expression is a fail-closed
+    /// build error (IPE-L0149).
+    fn lower_store_select_to(
+        &self,
+        args: &[canon::Expr],
+        shape: SelectResultShape,
+    ) -> DResult<Expr> {
+        let (Some(db), Some(select_arg)) = (args.first(), args.get(1)) else {
+            return Err(bug(
+                "ipe_lower::lower_store_select_to",
+                "selectTo* arity < 2",
+            ));
+        };
+        // The projected shape and column types come from the `Store.select`
+        // expression the argument must be — read its lambda's projected columns.
+        let cols = self.select_arg_projected_columns(select_arg)?;
+        let lowered_db = self.lower_expr(db)?;
+        let lowered_select = self.lower_expr(select_arg)?;
+
+        // `\row -> <decode row into the projected value>` : Row -> Result Error row.
+        let (decode_lambda, _value_ty) = self.projection_decode_lambda(&cols)?;
+
+        // The stdlib helper runs `selectRows` and threads `decode` over the rows
+        // (`selectDecodeList` / `selectDecodeMaybe`), keeping the `List.map` /
+        // `Result.combine` / `Task.*` plumbing where it is linked. The decode
+        // itself is the concrete monomorphic lambda emitted here.
+        let helper = match shape {
+            SelectResultShape::List => "selectDecodeList",
+            SelectResultShape::Maybe => "selectDecodeMaybe",
+        };
+        Ok(Expr::Call {
+            callee: Callee::Func(self.store_named_func_id(helper)?),
+            args: vec![decode_lambda, lowered_db, lowered_select],
+            pin: CallPin::None,
+            on_form: OnFormKind::NotForm,
+        })
+    }
+
+    /// Read the projected columns from a `selectToList` / `selectToMaybe`
+    /// argument that must be a `Store.select` expression. Fails closed
+    /// (IPE-L0149) when the argument is not a direct `Store.select` call — the
+    /// concrete decode can only be emitted from a projection whose shape and
+    /// column types are visible at this call site.
+    fn select_arg_projected_columns(
+        &self,
+        select_arg: &canon::Expr,
+    ) -> DResult<Vec<ProjectedColumn>> {
+        let canon::Expr_::Call(callee, sel_args) = &select_arg.value else {
+            return Err(unsupported_store_select(
+                select_arg.span,
+                StoreSelectProjectionDefect::UnsupportedProjectionBody,
+            ));
+        };
+        let is_select = matches!(
+            self.lower_callee(callee),
+            Ok(Callee::Kernel(KernelFn::StoreSelect))
+        );
+        if !is_select || sel_args.len() != 2 {
+            return Err(unsupported_store_select(
+                select_arg.span,
+                StoreSelectProjectionDefect::UnsupportedProjectionBody,
+            ));
+        }
+        let Some(lambda) = sel_args.first() else {
+            return Err(unsupported_store_select(
+                select_arg.span,
+                StoreSelectProjectionDefect::UnsupportedProjectionBody,
+            ));
+        };
+        let (binders, body) = Self::select_lambda_parts(lambda)?;
+        self.select_projections(binders, body)
+    }
+
+    /// Build the concrete per-row decode `\row -> <projected value>`
+    /// (`Row -> Result Error row`) for the projected columns, plus the decoded
+    /// value's IR type. A single column decodes directly to its scalar with the
+    /// column's `projectionRead*`; two-to-five columns thread each column's read
+    /// through the matching `projectionDecode*` combinator into the tuple. A
+    /// projection wider than five columns is a fail-closed build error.
+    ///
+    /// Every stdlib binding the decode names — the `projectionRead*` readers and
+    /// the `projectionDecode*` combinators — lives in `Ipe.Db.Store`, referenced
+    /// only through the (kept) `Store` helpers, so the emitted decode pulls no
+    /// binding the whole-program reachability pass could have pruned.
+    fn projection_decode_lambda(&self, cols: &[ProjectedColumn]) -> DResult<(Expr, IrType)> {
+        let row_binder = self.fresh_projection_decode_binder()?;
+        // `projectionRead<kind> i row` — read the cell at output position `i`.
+        let read_at = |i: usize, col: &ProjectedColumn, row: Symbol| -> DResult<Expr> {
+            Ok(Expr::Call {
+                callee: Callee::Func(self.store_named_func_id(col.kind.reader())?),
+                args: vec![
+                    Expr::Int(i64::try_from(i).unwrap_or(i64::MAX)),
+                    Expr::Var(row),
+                ],
+                pin: CallPin::None,
+                on_form: OnFormKind::NotForm,
+            })
+        };
+        let (body, value_ty) = match cols {
+            [] => {
+                return Err(bug(
+                    "ipe_lower::projection_decode_lambda",
+                    "projection names no column",
+                ));
+            }
+            [only] => (read_at(0, only, row_binder)?, only.kind.value_ir_type()),
+            many => {
+                let combinator = match many.len() {
+                    2 => "projectionDecode2",
+                    3 => "projectionDecode3",
+                    4 => "projectionDecode4",
+                    5 => "projectionDecode5",
+                    _ => {
+                        // A tuple wider than the widest `projectionDecode*`
+                        // combinator has no monomorphic threading — fail closed
+                        // rather than emit an unsupported decode.
+                        return Err(unsupported_store_select(
+                            Span::DUMMY,
+                            StoreSelectProjectionDefect::UnsupportedProjectionBody,
+                        ));
+                    }
+                };
+                let elem_tys: Vec<IrType> = many.iter().map(|c| c.kind.value_ir_type()).collect();
+                // Each column becomes a reader `\r -> projectionRead<kind> i r`
+                // (`Row -> Result Error t`), threaded by `projectionDecode<n>`.
+                let mut call_args = Vec::with_capacity(many.len() + 1);
+                for (i, col) in many.iter().enumerate() {
+                    let r = self.fresh_projection_decode_binder()?;
+                    let read = read_at(i, col, r)?;
+                    call_args.push(Expr::Lambda {
+                        params: vec![(r, row_ir_type())],
+                        ret: IrType::Result(
+                            Box::new(error_ir_type()),
+                            Box::new(col.kind.value_ir_type()),
+                        ),
+                        body: Box::new(read),
+                    });
+                }
+                call_args.push(Expr::Var(row_binder));
+                let combined = Expr::Call {
+                    callee: Callee::Func(self.store_named_func_id(combinator)?),
+                    args: call_args,
+                    pin: CallPin::None,
+                    on_form: OnFormKind::NotForm,
+                };
+                (combined, IrType::Tuple(elem_tys))
+            }
+        };
+        let result_ty = IrType::Result(Box::new(error_ir_type()), Box::new(value_ty.clone()));
+        let lambda = Expr::Lambda {
+            params: vec![(row_binder, row_ir_type())],
+            ret: result_ty,
+            body: Box::new(body),
+        };
+        Ok((lambda, value_ty))
     }
 
     fn lower_store_spec(&self, peek: &Callee, args: &[canon::Expr]) -> DResult<Expr> {
@@ -14940,6 +15354,25 @@ impl<'a> Lowerer<'a> {
             )
     }
 
+    /// is `(module, name)` the `Ipe.Db.Store.Select` column-projection ADT —
+    /// module `["Ipe", "Db", "Store"]`, name `Select`? Its `row` argument is a
+    /// PHANTOM: no `Select` constructor carries a `row` value (the parameter
+    /// records the projected shape so `selectToList` / `selectToMaybe` return the
+    /// typed `row`, while the runtime value holds only query data). It is dropped
+    /// at lowering so the emitted enum is the non-generic `IpeDbStoreSelect`;
+    /// otherwise every `selectNamed` construction leaves the enum's type argument
+    /// unconstrained at the point of construction — an uninferrable `T`
+    /// (E0283/E0392), exactly as for `Cond` / `Policy`.
+    fn is_select_con(&self, module: &[Symbol], name: Symbol) -> bool {
+        self.interner.resolve(name) == Some("Select")
+            && matches!(
+                module,
+                [a, b, c] if self.interner.resolve(*a) == Some("Ipe")
+                    && self.interner.resolve(*b) == Some("Db")
+                    && self.interner.resolve(*c) == Some("Store")
+            )
+    }
+
     /// is `(module, name)` the `Ipe.Cache.Cache` opaque handle type —
     /// module `["Ipe", "Cache"]`, name `Cache`? Its `k`/`v` args are dropped at
     /// lowering (backed by the non-generic runtime `IpeCacheHandle`).
@@ -14976,7 +15409,9 @@ impl<'a> Lowerer<'a> {
         // type-determinate; the `is_cond_con` arms in `ir_type_from_ty` /
         // `ir_type_from_canon` drop the matching type argument at every use site,
         // so the decl and the references agree.
-        let cond_phantom = self.is_cond_con(&u.home, u.name) || self.is_policy_con(&u.home, u.name);
+        let cond_phantom = self.is_cond_con(&u.home, u.name)
+            || self.is_policy_con(&u.home, u.name)
+            || self.is_select_con(&u.home, u.name);
         let type_params = if cond_phantom {
             Vec::new()
         } else {
@@ -16818,6 +17253,7 @@ impl<'a> Lowerer<'a> {
                     let ir_args = if self.is_cache_handle_con(home, *name)
                         || self.is_cond_con(home, *name)
                         || self.is_policy_con(home, *name)
+                        || self.is_select_con(home, *name)
                     {
                         Vec::new()
                     } else {
@@ -17950,6 +18386,7 @@ impl<'a> Lowerer<'a> {
                     let ir_args = if self.is_cache_handle_con(module, *name)
                         || self.is_cond_con(module, *name)
                         || self.is_policy_con(module, *name)
+                        || self.is_select_con(module, *name)
                     {
                         Vec::new()
                     } else {
@@ -20197,6 +20634,21 @@ impl<'a> Lowerer<'a> {
                 }
                 Callee::Kernel(KernelFn::StoreSelect) if args.len() == 2 => {
                     return Ok(Intercepted::Done(self.lower_store_select(args)?));
+                }
+                // `Store.selectToList` / `Store.selectToMaybe` return the projected
+                // `row` directly. The projected shape and each column's type live in
+                // the `Store.select` expression this call's second argument must be,
+                // so the concrete per-column decode is emitted HERE, at the call
+                // site, over that known shape — never a decoder stored in the value.
+                Callee::Func(id) if args.len() == 2 && self.is_store_func(*id, "selectToList") => {
+                    return Ok(Intercepted::Done(
+                        self.lower_store_select_to(args, SelectResultShape::List)?,
+                    ));
+                }
+                Callee::Func(id) if args.len() == 2 && self.is_store_func(*id, "selectToMaybe") => {
+                    return Ok(Intercepted::Done(
+                        self.lower_store_select_to(args, SelectResultShape::Maybe)?,
+                    ));
                 }
                 Callee::Kernel(KernelFn::StoreEqCol) if args.len() == 2 => {
                     return Ok(Intercepted::Done(self.lower_store_eq(&peek, args)?));
@@ -27535,6 +27987,7 @@ mod tests {
                 cap_params: vec![],
                 param_binders: vec![],
                 any_param_binders: vec![],
+                projection_decode_binders: vec![],
                 destructure_thunk_binders: vec![],
                 nested_cons_binders: vec![],
                 nested_strlit_binders: vec![],
@@ -27809,6 +28262,7 @@ mod tests {
                 cap_params: vec![],
                 param_binders: vec![],
                 any_param_binders: vec![],
+                projection_decode_binders: vec![],
                 destructure_thunk_binders: vec![],
                 nested_cons_binders: vec![],
                 nested_strlit_binders: vec![],
@@ -27928,6 +28382,7 @@ mod tests {
                 cap_params: vec![],
                 param_binders: vec![],
                 any_param_binders: vec![],
+                projection_decode_binders: vec![],
                 destructure_thunk_binders: vec![],
                 nested_cons_binders: vec![],
                 nested_strlit_binders: vec![],
@@ -29305,6 +29760,7 @@ mod tests {
                 param_binders: vec![],
                 // Two slots: one for each `any` occurrence.
                 any_param_binders: vec![fresh0, fresh1],
+                projection_decode_binders: vec![],
                 destructure_thunk_binders: vec![],
                 nested_cons_binders: vec![],
                 nested_strlit_binders: vec![],
@@ -29575,6 +30031,7 @@ mod tests {
                 cap_params: vec![],
                 param_binders: vec![],
                 any_param_binders: pool_syms,
+                projection_decode_binders: vec![],
                 destructure_thunk_binders: vec![],
                 nested_cons_binders: vec![],
                 nested_strlit_binders: vec![],
