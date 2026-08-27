@@ -74,7 +74,8 @@ fn generate_writes_docs_json_and_markdown() -> io::Result<()> {
     let (ok, stdout, stderr) = run(&["doc", as_str(&pkg), "--out", as_str(&out)]);
     assert!(ok, "generate must succeed:\n{stdout}\n{stderr}");
 
-    let json = fs::read_to_string(out.join("docs.json"))?;
+    // docs.json lives under the json/ subfolder.
+    let json = fs::read_to_string(out.join("json").join("docs.json"))?;
     // The versioned schema and the exposed surface (module, union, value) with
     // its checker-provided signature and its scanned doc-comment.
     assert!(
@@ -93,9 +94,15 @@ fn generate_writes_docs_json_and_markdown() -> io::Result<()> {
         "the union's doc-comment is present:\n{json}"
     );
 
-    let md = fs::read_to_string(out.join("Shapes.md"))?;
+    // Markdown pages live under the markdown/ subfolder.
+    let md = fs::read_to_string(out.join("markdown").join("Shapes.md"))?;
     assert!(md.contains("# Shapes"));
     assert!(md.contains("### `area"));
+    // The markdown index is also generated.
+    assert!(
+        out.join("markdown").join("index.md").exists(),
+        "markdown index is written"
+    );
     Ok(())
 }
 
@@ -106,8 +113,9 @@ fn generate_writes_a_self_contained_html_site_with_anchors_and_xrefs() -> io::Re
     let (ok, stdout, stderr) = run(&["doc", as_str(&pkg), "--out", as_str(&out)]);
     assert!(ok, "generate must succeed:\n{stdout}\n{stderr}");
 
-    // The site is self-contained: an index page, a per-module page, bundled CSS.
-    let index = fs::read_to_string(out.join("index.html"))?;
+    // The HTML site lives under the html/ subfolder.
+    let html_dir = out.join("html");
+    let index = fs::read_to_string(html_dir.join("index.html"))?;
     assert!(index.contains("<!DOCTYPE html>"));
     assert!(
         index.contains("href=\"style.css\""),
@@ -118,11 +126,11 @@ fn generate_writes_a_self_contained_html_site_with_anchors_and_xrefs() -> io::Re
         "the index lists the module:\n{index}"
     );
     assert!(
-        out.join("style.css").exists(),
+        html_dir.join("style.css").exists(),
         "the CSS is written beside it"
     );
 
-    let page = fs::read_to_string(out.join("Shapes.html"))?;
+    let page = fs::read_to_string(html_dir.join("Shapes.html"))?;
     // Stable per-entry anchors, identical to the docs.json anchor scheme.
     assert!(
         page.contains("id=\"Shape\""),
@@ -152,12 +160,51 @@ fn docs_json_records_resolved_cross_references() -> io::Result<()> {
     let (ok, _o, _e) = run(&["doc", as_str(&pkg), "--out", as_str(&out)]);
     assert!(ok);
 
-    let json = fs::read_to_string(out.join("docs.json"))?;
+    // docs.json lives under the json/ subfolder.
+    let json = fs::read_to_string(out.join("json").join("docs.json"))?;
     // `area : Shape -> Float` records exactly one reference — the in-package
     // `Shape` — and none for the built-in `Float`.
     assert!(
         json.contains("\"anchor\": \"Shapes#Shape\""),
         "the in-package reference is recorded:\n{json}"
+    );
+    Ok(())
+}
+
+#[test]
+fn generate_without_project_documents_stdlib() -> io::Result<()> {
+    // In an empty directory (no package manifest), `ipe doc --write-format html`
+    // must succeed and produce doc/html/ containing stdlib module pages.
+    let dir = fresh_dir("stdlib_no_project");
+    fs::create_dir_all(&dir)?;
+    let out = dir.join("out");
+    let (ok, stdout, stderr) = run_in(
+        &dir,
+        &["doc", "--write-format", "html", "--out", as_str(&out)],
+    );
+    assert!(ok, "stdlib-only generate must succeed:\n{stdout}\n{stderr}");
+
+    let html_dir = out.join("html");
+    assert!(
+        html_dir.exists(),
+        "doc/html/ is created even without a project"
+    );
+    assert!(
+        html_dir.join("index.html").exists(),
+        "index.html is written"
+    );
+    // At least one well-known stdlib module page must be present.
+    let has_list = html_dir.join("Ipe-List.html").exists();
+    let has_string = html_dir.join("Ipe-String.html").exists();
+    assert!(
+        has_list || has_string,
+        "at least one stdlib module page exists in {html_dir:?}"
+    );
+    // The index must mention at least one stdlib module.
+    let index = fs::read_to_string(html_dir.join("index.html"))?;
+    assert!(
+        index.contains("Ipe.List") || index.contains("Ipe.String"),
+        "the index lists stdlib modules:\n{index}"
     );
     Ok(())
 }
@@ -344,7 +391,8 @@ fn generated_docs_json_is_local_first_and_tags_each_module_kind() -> io::Result<
     let (ok, stdout, stderr) = run(&["doc", as_str(&pkg), "--out", as_str(&out)]);
     assert!(ok, "generate must succeed:\n{stdout}\n{stderr}");
 
-    let json = fs::read_to_string(out.join("docs.json"))?;
+    // docs.json lives under the json/ subfolder.
+    let json = fs::read_to_string(out.join("json").join("docs.json"))?;
     // Each module carries its group tag.
     assert!(
         json.contains("\"kind\": \"local\""),
