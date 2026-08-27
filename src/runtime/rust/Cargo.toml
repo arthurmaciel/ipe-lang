@@ -438,7 +438,11 @@ websocket_client = ["tokio", "tokio/net", "tokio/sync", "tokio-tungstenite", "fu
 # `web`, so the native-window backend carries it transitively.
 # `crypto-core`: `web/mod.rs` SHA-256s the client-JS SRI integrity hash and
 # `web/csrf.rs` constant-time compares CSRF tokens via `subtle`.
-web = ["widget-assets", "server", "http_client", "dep:serde_json", "json", "serde", "dep:serde_urlencoded", "async-trait", "tokio/signal", "tokio/process", "encoding", "uuid", "time-core", "crypto-core"]
+# `http_client` is absent: the web/server modules make no outbound HTTP calls.
+# A web app with an HTTP kernel (`uses_http`) or email selects `http_client`
+# through `reaches_http_client()` in the backend — reqwest never enters a plain
+# web app.
+web = ["widget-assets", "server", "dep:serde_json", "json", "serde", "dep:serde_urlencoded", "async-trait", "tokio/signal", "tokio/process", "encoding", "uuid", "time-core", "crypto-core"]
 # The `Ui.widget` custom-element glue generator + SRI-pinned asset addressing
 # (`widget_assets.rs`) as a STANDALONE surface, decoupled from the heavy `web`
 # server. `sha2` (content digest) rides `crypto-core`; `base64` (the SRI value)

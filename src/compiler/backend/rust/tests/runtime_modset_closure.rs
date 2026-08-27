@@ -849,7 +849,10 @@ fn base_declares_ct_eq_with_crypto_core_and_secret() {
 
 /// Guard the specific witnesses of the previously-live breaches at the flag
 /// level: a `uses_web` shape must declare `tea` (web/pubsub `use crate::tea`),
-/// and a `uses_server` shape must declare both `tea` and `http_stream`.
+/// and a `uses_server` shape must declare `tea` (`http_stream.rs` `use super::*`
+/// → `IpeSub`). `http_stream` is declared only when `reaches_http_client` is
+/// true (an HTTP kernel or email), so a server-only shape omits it — keeping
+/// reqwest out of server/web apps with no outbound HTTP calls.
 #[test]
 fn web_shape_declares_tea() {
     let mut interner = Interner::new();
@@ -869,10 +872,10 @@ fn web_shape_declares_tea() {
 }
 
 #[test]
-fn server_shape_declares_tea_and_http_stream() {
+fn server_shape_declares_tea_without_http_stream() {
     let mut interner = Interner::new();
     let main = interner.intern("Main").expect("intern Main");
-    // uses_server only (bit 1).
+    // uses_server only (bit 1) — no HTTP kernel, no email.
     let prog = Program {
         imports_unsafe_submodule: false,
         modules: vec![module_for_mask(main, 1 << 1)],
@@ -881,8 +884,31 @@ fn server_shape_declares_tea_and_http_stream() {
     let mod_rs = emitted.files.get("src/ipe_runtime/mod.rs").expect("mod.rs");
     let declared = declared_modules(mod_rs);
     assert!(
-        declared.contains("tea") && declared.contains("server") && declared.contains("http_stream"),
-        "uses_server must declare `server`, `tea`, and `http_stream`; got {declared:?}"
+        declared.contains("tea") && declared.contains("server"),
+        "uses_server must declare `server` and `tea`; got {declared:?}"
+    );
+    assert!(
+        !declared.contains("http_stream"),
+        "uses_server without an HTTP kernel must NOT declare `http_stream` \
+         (reqwest must stay absent from a plain server app); got {declared:?}"
+    );
+}
+
+#[test]
+fn http_kernel_shape_declares_http_stream() {
+    let mut interner = Interner::new();
+    let main = interner.intern("Main").expect("intern Main");
+    // uses_http (bit 11) — the outbound HTTP client kernel.
+    let prog = Program {
+        imports_unsafe_submodule: false,
+        modules: vec![module_for_mask(main, 1 << 11)],
+    };
+    let emitted = RustBackend::new(&interner).emit(&prog).expect("emit");
+    let mod_rs = emitted.files.get("src/ipe_runtime/mod.rs").expect("mod.rs");
+    let declared = declared_modules(mod_rs);
+    assert!(
+        declared.contains("http_client") && declared.contains("http_stream"),
+        "uses_http must declare both `http_client` and `http_stream`; got {declared:?}"
     );
 }
 

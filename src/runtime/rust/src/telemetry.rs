@@ -97,23 +97,23 @@ fn spill_span(_ts_ms: u64, _name: &str, _dur_us: u64, _ok: bool) {}
 /// stub keeps the always-compiled sink reqwest/tokio-free for non-live programs.
 /// Each exporter is independently env-gated and a non-blocking drop-on-full
 /// offer, so this never blocks or panics the caller.
-#[cfg(feature = "web")]
+#[cfg(all(feature = "web", feature = "http_client"))]
 #[inline]
 fn export_log(ts_ms: u64, level: &str, message: &str) {
     crate::web::push_exporter::offer_log(ts_ms, level, message);
     crate::web::hub_exporter::offer_log(ts_ms, level, message);
 }
-#[cfg(not(feature = "web"))]
+#[cfg(not(all(feature = "web", feature = "http_client")))]
 #[inline]
 fn export_log(_ts_ms: u64, _level: &str, _message: &str) {}
 
-#[cfg(feature = "web")]
+#[cfg(all(feature = "web", feature = "http_client"))]
 #[inline]
 fn export_span(ts_ms: u64, name: &str, dur_us: u64, ok: bool) {
     crate::web::push_exporter::offer_span(ts_ms, name, dur_us, ok);
     crate::web::hub_exporter::offer_span(ts_ms, name, dur_us, ok);
 }
-#[cfg(not(feature = "web"))]
+#[cfg(not(all(feature = "web", feature = "http_client")))]
 #[inline]
 fn export_span(_ts_ms: u64, _name: &str, _dur_us: u64, _ok: bool) {}
 
