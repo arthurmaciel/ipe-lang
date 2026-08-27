@@ -1381,6 +1381,7 @@ impl Env {
                     "findManyByField",
                     "findByConditions",
                     "findWhere",
+                    "findJoin",
                     "deleteWhere",
                     "updateWhere",
                     // External read path — `…On` reads over a `Connection a`.
@@ -1433,8 +1434,9 @@ impl Env {
             (
                 "Db.Decode",
                 &[
-                    "string", "int", "float", "bool", "bytes", "money", "nullable", "map",
-                    "andThen", "succeed", "fail", "map2", "map3", "map4", "required", "optional",
+                    "string", "int", "float", "bool", "bytes", "money", "decimal", "nullable",
+                    "map", "andThen", "succeed", "fail", "map2", "map3", "map4", "required",
+                    "optional",
                 ],
             ),
             // Ipe.Http.Server kernels.

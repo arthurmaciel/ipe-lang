@@ -2518,6 +2518,36 @@ fn emit_db_call(
                 "{fn_name}({conn_s}.clone(), {table_s}, {frag_s})"
             )))
         }
+        // ── Db.findJoin: (conn, lt, la, lcols, rt, ra, rcols, frag) ──────────
+        //
+        // Eight flat args, one per validated identifier group. The two `List
+        // String` column lists emit as `vec![…]` (a `Vec<String>`), the two
+        // tables / two aliases as plain `String`, and `frag` as the bare
+        // `SqlFragment` struct — no `List SqlValue` projection is needed. Only
+        // the `conn.clone()` treatment is special (shared with every Db kernel).
+        KernelFn::DbFindJoin => {
+            let conn_e = arg!(0, "conn")?;
+            let left_table_e = arg!(1, "leftTable")?;
+            let left_alias_e = arg!(2, "leftAlias")?;
+            let left_cols_e = arg!(3, "leftColumns")?;
+            let right_table_e = arg!(4, "rightTable")?;
+            let right_alias_e = arg!(5, "rightAlias")?;
+            let right_cols_e = arg!(6, "rightColumns")?;
+            let frag_e = arg!(7, "frag")?;
+            let conn_s = emit_expr_at(ctx, conn_e, indent, child, generics)?;
+            let left_table_s = emit_expr_at(ctx, left_table_e, indent, child, generics)?;
+            let left_alias_s = emit_expr_at(ctx, left_alias_e, indent, child, generics)?;
+            let left_cols_s = emit_expr_at(ctx, left_cols_e, indent, child, generics)?;
+            let right_table_s = emit_expr_at(ctx, right_table_e, indent, child, generics)?;
+            let right_alias_s = emit_expr_at(ctx, right_alias_e, indent, child, generics)?;
+            let right_cols_s = emit_expr_at(ctx, right_cols_e, indent, child, generics)?;
+            let frag_s = emit_expr_at(ctx, frag_e, indent, child, generics)?;
+            let fn_name = crate::naming::kernel_name(*k);
+            Ok(Some(format!(
+                "{fn_name}({conn_s}.clone(), {left_table_s}, {left_alias_s}, {left_cols_s}, \
+                 {right_table_s}, {right_alias_s}, {right_cols_s}, {frag_s})"
+            )))
+        }
         // ── Sql.inList: (frag: SqlFragment, values: List SqlValue) ───────────
         //
         // `values` needs the same `List SqlValue` → `Vec<SqlParam>` projection
@@ -2576,6 +2606,8 @@ fn emit_db_call(
         | KernelFn::DbDecRequired
         | KernelFn::DbDecOptional
         | KernelFn::DbDecMoney
+        | KernelFn::DbDecDecimal
+        | KernelFn::DbDecBytes
         // `Sql.column`/`param`/`int`/`string`/`float`/`bool`/`eq`/`ne`/`gt`/`lt`/
         // `gte`/`lte`/`and`/`or`/`not`/`isNull`/`isNotNull`/`like` take plain
         // scalar or `SqlFragment` args — no `Db` handle, no List projection.

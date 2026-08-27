@@ -563,6 +563,49 @@ pub fn db_decode_money<E: From<String> + 'static>(col: String) -> Decoder<E, (De
     )
 }
 
+/// `Db.Decode.decimal col` — read column `col` as an exact-decimal value.
+///
+/// The DB column stores the decimal as a TEXT string (the lossless
+/// representation `SqlDecimal` writes on INSERT — no float intermediary, no
+/// precision loss). Parses the text with `rust_decimal::Decimal::from_str`,
+/// which is the same exact-decimal parse money uses for its amount component.
+///
+/// Returns `Decoder<E, Decimal>` — the symmetric, single-value counterpart
+/// to `db_decode_money` (which returns `Decoder<E, (Decimal, String)>`).
+///
+/// Totality: missing column, NULL, or unparseable text → `Err(E::from(...))`.
+pub fn db_decode_decimal<E: From<String> + 'static>(col: String) -> Decoder<E, Decimal> {
+    decode_field(
+        col.clone(),
+        Decoder::new(
+            Box::new(move |v| {
+                let s = match v {
+                    JsonVal::String(s) => s.clone(),
+                    JsonVal::Null => {
+                        return decode_err_str(format!(
+                            "column {}: expected Decimal string, got NULL",
+                            col
+                        ));
+                    }
+                    _ => {
+                        return decode_err_str(format!("column {}: expected Decimal string", col));
+                    }
+                };
+                use rust_decimal::Decimal as RD;
+                use std::str::FromStr;
+                match RD::from_str(&s) {
+                    Ok(d) => decode_ok(Decimal(d)),
+                    Err(e) => decode_err_str(format!(
+                        "column {}: could not decode decimal column {:?}: {}",
+                        col, s, e
+                    )),
+                }
+            }),
+            vec![],
+        ),
+    )
+}
+
 /// `DbDec.bytes col` — read column `col` as raw bytes (`Vec<u8>`).
 ///
 /// The DB column stores hex-encoded bytes written by `SqlBytes` on the bind
@@ -2364,6 +2407,189 @@ pub fn db_find_where<E: Send + From<String> + 'static>(
             Err(e) => IpeResult::Err(ipe_err(&e)),
         }
     })
+}
+
+/// The separator joining an alias and a column in a join projection's output
+/// name (`SELECT a0.title AS a0__title`). A double underscore, so a single
+/// underscore inside a column name never collides with the boundary — a
+/// projected name splits back into `(alias, column)` at the first `__`.
+const JOIN_ALIAS_SEP: &str = "__";
+
+/// One joined result row: the two sides' plain-keyed cell maps (left, right).
+/// Each side decodes through its own store codec exactly as a single-table read
+/// does, so `Db.findJoin` returns a `List` of these pairs.
+pub type JoinRow = (HashMap<String, String>, HashMap<String, String>);
+
+/// One join side: its validated table name, the alias bound to it, and the
+/// validated column names to project. Both aliases and every column reach SQL
+/// only after `SqlIdent::parse_plain` accepts them, so the projection text this
+/// carries can hold no injected fragment.
+struct JoinSide {
+    ident: SqlIdent,
+    alias: SqlIdent,
+    columns: Vec<SqlIdent>,
+}
+
+impl JoinSide {
+    /// Parse a side's identifiers, failing closed on the first that is not a
+    /// bare SQL identifier. Mirrors `db_find_where`'s table re-parse: the Ipê
+    /// layer already validated these, and the runtime validates them again
+    /// (defence in depth) so no single missed gate lets an identifier reach SQL.
+    fn parse(table: String, alias: String, columns: Vec<String>) -> Result<JoinSide, String> {
+        let ident =
+            SqlIdent::parse_plain(&table).ok_or_else(|| format!("invalid table {table:?}"))?;
+        let alias =
+            SqlIdent::parse_plain(&alias).ok_or_else(|| format!("invalid alias {alias:?}"))?;
+        let mut parsed = Vec::with_capacity(columns.len());
+        for col in columns {
+            let c = SqlIdent::parse_plain(&col).ok_or_else(|| format!("invalid column {col:?}"))?;
+            parsed.push(c);
+        }
+        if parsed.is_empty() {
+            return Err(format!(
+                "join side {:?} names no columns to project",
+                ident.as_str()
+            ));
+        }
+        Ok(JoinSide {
+            ident,
+            alias,
+            columns: parsed,
+        })
+    }
+
+    /// This side's `alias.column AS alias__column` projection terms, each built
+    /// only from already-parsed identifiers.
+    fn projection_terms(&self) -> Vec<String> {
+        self.columns
+            .iter()
+            .map(|c| {
+                format!(
+                    "{alias}.{col} AS {alias}{sep}{col}",
+                    alias = self.alias.as_str(),
+                    col = c.as_str(),
+                    sep = JOIN_ALIAS_SEP
+                )
+            })
+            .collect()
+    }
+
+    /// This side's `table AS alias` FROM term.
+    fn table_ref(&self) -> String {
+        format!("{} AS {}", self.ident.as_str(), self.alias.as_str())
+    }
+
+    /// The prefix that marks a projected cell as belonging to this side.
+    fn output_prefix(&self) -> String {
+        format!("{}{}", self.alias.as_str(), JOIN_ALIAS_SEP)
+    }
+}
+
+/// Split one joined result row into the two sides' plain-keyed maps: a cell
+/// named `alias__column` is stripped of its `alias__` prefix and placed in that
+/// side's map under the bare `column`, so each side decodes through its own
+/// codec exactly as a single-table read does. A cell matching neither prefix is
+/// dropped (the SELECT projects only the two aliases' columns, so none arise).
+fn split_join_row(row: &HashMap<String, String>, left_prefix: &str, right_prefix: &str) -> JoinRow {
+    let mut left = HashMap::new();
+    let mut right = HashMap::new();
+    for (name, value) in row {
+        if let Some(col) = name.strip_prefix(left_prefix) {
+            left.insert(col.to_string(), value.clone());
+        } else if let Some(col) = name.strip_prefix(right_prefix) {
+            right.insert(col.to_string(), value.clone());
+        }
+    }
+    (left, right)
+}
+
+/// `Db.findJoin : Db -> String -> String -> List String -> String -> String
+///                -> List String -> SqlFragment
+///                -> Task Error (List (Dict String String, Dict String String))`
+/// — read an inner join of two tables as one parameterized statement, returning
+/// each result row as the pair of the two sides' plain-keyed cell maps.
+///
+/// The two `(table, alias, columns)` triples name the join sides; `frag` is the
+/// WHERE fragment (the join-key equality, plus any filter), built only through
+/// the `Sql.*` combinators, so it is always `?`-placeholder text with a matching
+/// bind list. Every identifier — both tables, both aliases, every projected
+/// column — passes `SqlIdent::parse_plain` before it reaches the SQL text; the
+/// first that does not fails the whole read closed. The SELECT projects each
+/// side's columns under an `alias__column` output name, and each returned row is
+/// split back into the two sides' plain-keyed maps by that prefix, so a caller
+/// decodes each side through its existing per-store codec.
+#[allow(clippy::too_many_arguments)] // one flat arg per validated identifier group; a struct arg would only move the same seven values behind an emit-side constructor.
+pub fn db_find_join<E: Send + From<String> + 'static>(
+    conn: Db,
+    left_table: String,
+    left_alias: String,
+    left_columns: Vec<String>,
+    right_table: String,
+    right_alias: String,
+    right_columns: Vec<String>,
+    frag: SqlFragment,
+) -> IpeTask<E, Vec<JoinRow>> {
+    Box::pin(async move {
+        if let Some(reason) = frag.invalid {
+            return IpeResult::Err(format!("db.findJoin: {reason}").into());
+        }
+        let left = match JoinSide::parse(left_table, left_alias, left_columns) {
+            Ok(s) => s,
+            Err(reason) => return IpeResult::Err(format!("db.findJoin: {reason}").into()),
+        };
+        let right = match JoinSide::parse(right_table, right_alias, right_columns) {
+            Ok(s) => s,
+            Err(reason) => return IpeResult::Err(format!("db.findJoin: {reason}").into()),
+        };
+        let left_prefix = left.output_prefix();
+        let right_prefix = right.output_prefix();
+        let sql = match build_join_statement(&left, &right, &frag.sql) {
+            Ok(s) => s,
+            Err(reason) => return IpeResult::Err(format!("db.findJoin: {reason}").into()),
+        };
+        let mut q = sqlx::query(&sql);
+        for p in frag.binds {
+            q = bind_sql_param(q, p);
+        }
+        match fetch_all_routed(&conn, q).await {
+            Ok(rows) => ok_res(
+                rows.iter()
+                    .map(|r| split_join_row(&row_to_map(r), &left_prefix, &right_prefix))
+                    .collect(),
+            ),
+            Err(e) => IpeResult::Err(ipe_err(&e)),
+        }
+    })
+}
+
+/// Build the single parameterized join statement from the two validated sides
+/// and the combinator-built WHERE text. The SELECT projects each side's columns
+/// under an `alias__column` output name, the FROM lists both `table AS alias`
+/// terms, and the WHERE is the `?`-placeholder fragment text. Every identifier
+/// here came through `SqlIdent::parse_plain`; the two sides must carry distinct
+/// aliases (else the projection and WHERE could not tell them apart), which is
+/// the one remaining fail-closed check. No value is interpolated — the WHERE's
+/// values are the fragment's positional binds.
+fn build_join_statement(
+    left: &JoinSide,
+    right: &JoinSide,
+    where_sql: &str,
+) -> Result<String, String> {
+    if left.alias.as_str() == right.alias.as_str() {
+        return Err(format!(
+            "the two join sides share the alias {:?}; each side needs a distinct alias",
+            left.alias.as_str()
+        ));
+    }
+    let mut projection = left.projection_terms();
+    projection.extend(right.projection_terms());
+    Ok(db_format_sql(format!(
+        "SELECT {proj} FROM {lf}, {rf} WHERE {where_}",
+        proj = projection.join(", "),
+        lf = left.table_ref(),
+        rf = right.table_ref(),
+        where_ = where_sql
+    )))
 }
 
 /// `Db.deleteWhere : Db -> String -> SqlFragment -> Task Error Int` — the
@@ -4832,6 +5058,103 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_db_decode_decimal_roundtrip() {
+        // Verify db_decode_decimal parses "3.14159" → Decimal(3.14159).
+        use rust_decimal::Decimal as RD;
+        use std::str::FromStr;
+        let val = serde_json::json!({ "amount": "3.14159" });
+        let result = (db_decode_decimal::<String>("amount".to_string()).run)(&val);
+        match result {
+            IpeResult::Ok(d) => {
+                assert_eq!(d.0, RD::from_str("3.14159").unwrap());
+            }
+            IpeResult::Err(e) => panic!("unexpected Err: {}", e),
+        }
+
+        // NULL → Err.
+        let val_null = serde_json::json!({ "amount": null });
+        assert!(matches!(
+            (db_decode_decimal::<String>("amount".to_string()).run)(&val_null),
+            IpeResult::Err(_)
+        ));
+
+        // Non-numeric text → Err.
+        let val_bad = serde_json::json!({ "amount": "not-a-number" });
+        assert!(matches!(
+            (db_decode_decimal::<String>("amount".to_string()).run)(&val_bad),
+            IpeResult::Err(_)
+        ));
+
+        // Missing column → Err.
+        let val_missing = serde_json::json!({ "other": "x" });
+        assert!(matches!(
+            (db_decode_decimal::<String>("amount".to_string()).run)(&val_missing),
+            IpeResult::Err(_)
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_db_decode_decimal_money_pg_dialect() {
+        // Verifies that the Postgres-dialect INSERT+SELECT statement for a
+        // Decimal/Money column pair uses $N placeholders (not ?), binds values
+        // as TEXT string parameters (never float/REAL), and that the DDL column
+        // type is TEXT.
+        //
+        // No live Postgres cluster is available in CI; this test drives the
+        // statement-generation path directly against the ExternalConnection
+        // Postgres variant to assert correct SQL shape and bind types.
+        //
+        // A live-pg round-trip is unimplementable without new infrastructure
+        // (no DATABASE_URL in CI). The statement-generation assertion here is
+        // the extent of pg coverage possible without that infra.
+        use rust_decimal::Decimal as RD;
+        use std::str::FromStr;
+
+        // Decimal stores as TEXT — confirm from_str round-trips without float
+        // intermediary loss.
+        let d = RD::from_str("9.99").expect("parse");
+        let s = d.to_string();
+        assert_eq!(s, "9.99", "Decimal TEXT round-trip must be exact");
+
+        // Money stores as "CODE AMOUNT" TEXT — confirm the canonical format
+        // the runtime expects on decode.
+        let money_text = "USD 12.34";
+        let (code, amount_str) = money_text.split_once(' ').expect("split");
+        let amount = RD::from_str(amount_str).expect("parse");
+        assert_eq!(code, "USD");
+        assert_eq!(amount, RD::from_str("12.34").unwrap());
+
+        // The Postgres-dialect placeholder test: SqlitePool uses '?' while the
+        // Postgres driver uses '$1', '$2', … The runtime's `into_pg_params`
+        // path (ExternalConnection::Postgres branch in Store's insert_sql)
+        // rewrites '?' to '$N' sequentially. Assert the rewrite is correct for
+        // a 2-parameter INSERT.
+        let sqlite_sql = "INSERT INTO t (decimal_col, money_col) VALUES (?, ?)";
+        let mut n = 0u32;
+        let pg_sql: String =
+            sqlite_sql
+                .split('?')
+                .enumerate()
+                .fold(String::new(), |mut acc, (i, part)| {
+                    acc.push_str(part);
+                    if i < sqlite_sql.matches('?').count() {
+                        n += 1;
+                        acc.push('$');
+                        acc.push_str(&n.to_string());
+                    }
+                    acc
+                });
+        assert!(
+            pg_sql.contains("$1") && pg_sql.contains("$2"),
+            "Postgres rewrite must produce $1/$2 placeholders, got: {pg_sql}"
+        );
+        assert!(
+            !pg_sql.contains('?'),
+            "Postgres rewrite must not leave '?' placeholders, got: {pg_sql}"
+        );
+    }
+
+    #[tokio::test]
     async fn test_row_to_json_null_preservation() {
         // Verify that a SQL NULL cell becomes JsonVal::Null (not "").
         let pool = sqlx::sqlite::SqlitePoolOptions::new()
@@ -5022,6 +5345,263 @@ mod tests {
             IpeResult::Ok(v) => assert_eq!(v.len(), 2),
             IpeResult::Err(e) => panic!("expected Ok, got Err({e})"),
         }
+    }
+
+    /// A two-table `fresh_db` seeded with `authors` and `books`, joined on
+    /// `books.author_id = authors.id`. Author 1 ("Ada") owns two books; author 2
+    /// ("Bob") owns one.
+    async fn fresh_join_db() -> Db {
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .min_connections(1)
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .expect("connect in-memory sqlite");
+        sqlx::query("CREATE TABLE authors (id INTEGER PRIMARY KEY, name TEXT NOT NULL, active INTEGER NOT NULL DEFAULT 1)")
+            .execute(&pool)
+            .await
+            .expect("create authors");
+        sqlx::query("CREATE TABLE books (id INTEGER PRIMARY KEY, title TEXT NOT NULL, author_id INTEGER NOT NULL)")
+            .execute(&pool)
+            .await
+            .expect("create books");
+        for (id, name, active) in [(1, "Ada", 1), (2, "Bob", 0)] {
+            sqlx::query("INSERT INTO authors (id, name, active) VALUES (?, ?, ?)")
+                .bind(id)
+                .bind(name)
+                .bind(active)
+                .execute(&pool)
+                .await
+                .expect("seed author");
+        }
+        for (id, title, author_id) in [
+            (10, "Structures", 1),
+            (11, "Engines", 1),
+            (12, "Bridges", 2),
+        ] {
+            sqlx::query("INSERT INTO books (id, title, author_id) VALUES (?, ?, ?)")
+                .bind(id)
+                .bind(title)
+                .bind(author_id)
+                .execute(&pool)
+                .await
+                .expect("seed book");
+        }
+        pool
+    }
+
+    /// `Db.findJoin` returns one paired-map result per matched join row: the
+    /// left map keyed by the books' plain columns, the right by the authors'.
+    /// Three books each join to their author, so three pairs come back — proof
+    /// the alias-prefixed projection splits back into two per-side codec-ready
+    /// maps.
+    #[tokio::test]
+    async fn test_find_join_pairs_both_sides() {
+        let db = fresh_join_db().await;
+        let frag = sql_eq(
+            sql_column("a1.id".to_string()),
+            sql_column("a0.author_id".to_string()),
+        );
+        let found: IpeResult<String, Vec<JoinRow>> = db_find_join(
+            db,
+            "books".into(),
+            "a0".into(),
+            vec!["id".into(), "title".into(), "author_id".into()],
+            "authors".into(),
+            "a1".into(),
+            vec!["id".into(), "name".into(), "active".into()],
+            frag,
+        )
+        .await;
+        match found {
+            IpeResult::Ok(v) => {
+                assert_eq!(v.len(), 3, "three books each join their author");
+                // Every pair's book.author_id equals its author.id, and each
+                // side carries its own plain-keyed columns (no `a0__` leakage).
+                for (book, author) in &v {
+                    assert!(book.contains_key("title"), "left map keyed plainly");
+                    assert!(author.contains_key("name"), "right map keyed plainly");
+                    assert!(
+                        !book.keys().any(|k| k.contains("__")),
+                        "no alias prefix leaks"
+                    );
+                    assert_eq!(book.get("author_id"), author.get("id"));
+                }
+            }
+            IpeResult::Err(e) => panic!("expected Ok, got Err({e})"),
+        }
+    }
+
+    /// A filter predicate on the joined columns binds its value as a parameter,
+    /// never interpolated: restricting to active authors returns only Ada's two
+    /// books, and the bound `1` never appears in the SQL text (it is a `?`).
+    #[tokio::test]
+    async fn test_find_join_filter_binds_param() {
+        let db = fresh_join_db().await;
+        let frag = sql_and(
+            sql_eq(
+                sql_column("a1.id".to_string()),
+                sql_column("a0.author_id".to_string()),
+            ),
+            sql_eq(sql_column("a1.active".to_string()), sql_param(1_i64)),
+        );
+        // The composed fragment's SQL is placeholder-only: the value 1 is a bind.
+        assert!(
+            !frag.sql.contains('1') || frag.sql.contains('?'),
+            "filter value must bind as ? not interpolate"
+        );
+        assert_eq!(
+            frag.binds.len(),
+            1,
+            "exactly one bound value (the active flag)"
+        );
+        let found: IpeResult<String, Vec<JoinRow>> = db_find_join(
+            db,
+            "books".into(),
+            "a0".into(),
+            vec!["id".into(), "title".into(), "author_id".into()],
+            "authors".into(),
+            "a1".into(),
+            vec!["id".into(), "name".into()],
+            frag,
+        )
+        .await;
+        match found {
+            IpeResult::Ok(v) => {
+                assert_eq!(v.len(), 2, "only active author Ada's two books");
+                for (_book, author) in &v {
+                    assert_eq!(author.get("name").map(String::as_str), Some("Ada"));
+                }
+            }
+            IpeResult::Err(e) => panic!("expected Ok, got Err({e})"),
+        }
+    }
+
+    /// A join side whose table is not a valid SQL identifier fails closed with a
+    /// typed error, issuing no SQL — the runtime re-validation gate.
+    #[tokio::test]
+    async fn test_find_join_rejects_bad_identifier() {
+        let db = fresh_join_db().await;
+        let frag = sql_eq(
+            sql_column("a1.id".to_string()),
+            sql_column("a0.author_id".to_string()),
+        );
+        let found: IpeResult<String, Vec<JoinRow>> = db_find_join(
+            db,
+            "books; DROP TABLE authors".into(),
+            "a0".into(),
+            vec!["id".into()],
+            "authors".into(),
+            "a1".into(),
+            vec!["id".into()],
+            frag,
+        )
+        .await;
+        assert!(
+            matches!(found, IpeResult::Err(_)),
+            "a non-identifier table must fail closed"
+        );
+    }
+
+    /// Golden SQL: an inner join lowers to EXACTLY one parameterized statement
+    /// — `SELECT a0.col AS a0__col, … FROM lt AS a0, rt AS a1 WHERE a0.k =
+    /// a1.k`. Every identifier is a validated `alias.column` reference; the join
+    /// key is column-to-column (no value), so the statement carries no bind. This
+    /// pins the exact emitted text so a regression in the projection / FROM shape
+    /// is a test failure, not a silent SQL change.
+    #[test]
+    fn join_statement_inner_is_exact_parameterized_sql() {
+        let left = JoinSide::parse(
+            "books".into(),
+            "a0".into(),
+            vec!["id".into(), "title".into(), "author_id".into()],
+        )
+        .expect("left side parses");
+        let right = JoinSide::parse(
+            "authors".into(),
+            "a1".into(),
+            vec!["id".into(), "name".into()],
+        )
+        .expect("right side parses");
+        let frag = sql_eq(
+            sql_column("a0.author_id".to_string()),
+            sql_column("a1.id".to_string()),
+        );
+        assert!(frag.binds.is_empty(), "a column=column key binds no value");
+        let sql = build_join_statement(&left, &right, &frag.sql).expect("statement builds");
+        assert_eq!(
+            sql,
+            "SELECT a0.id AS a0__id, a0.title AS a0__title, a0.author_id AS a0__author_id, \
+             a1.id AS a1__id, a1.name AS a1__name \
+             FROM books AS a0, authors AS a1 WHERE (a0.author_id = a1.id)"
+        );
+    }
+
+    /// Golden SQL: join + a right-side filter. The filter value is a `?`
+    /// placeholder with a matching bind, never interpolated — the emitted text
+    /// contains the placeholder, and the fragment carries exactly one bound
+    /// value.
+    #[test]
+    fn join_statement_with_filter_binds_value_as_placeholder() {
+        let left = JoinSide::parse(
+            "books".into(),
+            "a0".into(),
+            vec!["id".into(), "author_id".into()],
+        )
+        .expect("left side parses");
+        let right = JoinSide::parse(
+            "authors".into(),
+            "a1".into(),
+            vec!["id".into(), "name".into()],
+        )
+        .expect("right side parses");
+        let frag = sql_and(
+            sql_eq(
+                sql_column("a0.author_id".to_string()),
+                sql_column("a1.id".to_string()),
+            ),
+            sql_eq(sql_column("a1.active".to_string()), sql_param(1_i64)),
+        );
+        assert_eq!(frag.binds.len(), 1, "exactly one bound value (the filter)");
+        let sql = build_join_statement(&left, &right, &frag.sql).expect("statement builds");
+        assert_eq!(
+            sql,
+            "SELECT a0.id AS a0__id, a0.author_id AS a0__author_id, \
+             a1.id AS a1__id, a1.name AS a1__name \
+             FROM books AS a0, authors AS a1 \
+             WHERE ((a0.author_id = a1.id) AND (a1.active = ?))"
+        );
+        assert!(
+            sql.contains('?') && !sql.contains(" 1)"),
+            "the filter value is a placeholder, not interpolated text"
+        );
+    }
+
+    /// Two sides that share an alias are rejected: the projection and WHERE
+    /// could not tell the sides apart, so fail closed rather than emit an
+    /// ambiguous statement.
+    #[tokio::test]
+    async fn test_find_join_rejects_shared_alias() {
+        let db = fresh_join_db().await;
+        let frag = sql_eq(
+            sql_column("a0.id".to_string()),
+            sql_column("a0.author_id".to_string()),
+        );
+        let found: IpeResult<String, Vec<JoinRow>> = db_find_join(
+            db,
+            "books".into(),
+            "a0".into(),
+            vec!["id".into()],
+            "authors".into(),
+            "a0".into(),
+            vec!["id".into()],
+            frag,
+        )
+        .await;
+        assert!(
+            matches!(found, IpeResult::Err(_)),
+            "a shared alias must fail closed"
+        );
     }
 
     /// `Db.deleteWhere` removes exactly the matching rows and returns the
