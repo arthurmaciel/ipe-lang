@@ -9,8 +9,8 @@ lift it, sub-case by sub-case, soundly.
 Motivated by the open SEAL-audit issue "row-polymorphic record-update function
 passed as a value to a typed HOF may emit a signature mismatch" (referred to
 below as the *HOF-value SEAL audit*). Companion to the already-partly-shipped
-`docs/architecture/row-polymorphism-design.md` (the witness-trait strategy + its
-6-increment plan) and to `docs/architecture/generic-function-carrier-design.md`
+`docs/internals/design/row-polymorphism-design.md` (the witness-trait strategy + its
+6-increment plan) and to `docs/internals/design/generic-function-carrier-design.md`
 (function values crossing generic call boundaries). This document extends the
 first to the **entire** IPE-L0131 set and reconciles the row-poly-function-as-a-
 value case with the second.

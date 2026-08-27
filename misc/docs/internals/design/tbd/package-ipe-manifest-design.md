@@ -2,7 +2,7 @@
 
 Status: design proposal. Every fenced Ipê block below illustrates the **proposed
 surface, not shipped API** — none of it is runnable today. This detail-designs
-Concern 1 of `docs/architecture/tbd/config-design.md` (the manifest slice):
+Concern 1 of `docs/internals/design/tbd/config-design.md` (the manifest slice):
 replace the `ipe.toml` manifest with a `package.ipe` written in Ipê and **read
 syntactically, never evaluated**.
 

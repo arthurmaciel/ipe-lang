@@ -167,7 +167,7 @@ logAndFail op e =
 
 
 -- v0.16.3 #467 fix verification — the canonical `|>` chain (per
--- CLAUDE.md / docs/stdlib.md) now works.  Pre-fix this panicked
+-- CLAUDE.md / docs/reference/stdlib.md) now works.  Pre-fix this panicked
 -- with `rt.Coerce: expected ..._Response_R, got rt.SkyResponse`.
 -- Closes the workaround documented at Routes.Todos.errorJson.
 errorJson : Int -> String -> Response

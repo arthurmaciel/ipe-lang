@@ -1903,7 +1903,7 @@ mod key_value_pairs_tests {
 }
 
 // Behaviour verdicts audited against Elm's documented `elm/json` semantics.
-// Each test pins one verdict from `docs/elm-coverage/behaviour-verdicts.md`.
+// Each test pins one verdict from `docs/topics/elm-coverage/behaviour-verdicts.md`.
 #[cfg(test)]
 mod elm_behaviour_verdicts {
     use super::*;

@@ -3,8 +3,7 @@
 > **Ipê** is an Elm-family pure-functional language that compiles to Rust. This
 > repo is the compiler, runtime, and stdlib — a Rust workspace. This file orients
 > an agent working *on the compiler*; it links down rather than duplicating
-> `PRINCIPLES.md` (the enforcement SSOT), `docs/internals/` (deep references), or
-> `README.md` (the project intro).
+> `PRINCIPLES.md` (the enforcement SSOT) or `README.md` (the project intro).
 >
 > **Need the Ipê language itself** — to write `.ipe` stdlib modules, examples, or
 > test fixtures, or to understand what the compiler accepts? That is a separate,
@@ -57,14 +56,14 @@ cargo nextest run -p <touched-crate>     # plus each crate you changed
 - **Clippy:** `--all-targets` lints test code; the workspace bans `panic!`/`unreachable!`/
   `todo!` even in `#[cfg(test)]`. Fix the code, never the lint level.
 
-Full gate mechanics, guard daemons, and the release pipeline: **`docs/internals/dev-ops.md`**.
+Full gate mechanics, guard daemons, and the release pipeline are in `misc/docs/internals/dev-ops.md` (untracked; present in the working tree).
 
 ## Registering a kernel
 
 A kernel's facts have one source; touching or adding a kernel requires updating every
 mirrored site (kernels enum, type scheme, arity table, emitted symbol, module
 registration). A tripwire makes a missed site a compile-time or CI error. Full
-site list and tripwire details: **`docs/internals/kernel-registration.md`**.
+site list and tripwire details: `misc/docs/internals/kernel-registration.md` (untracked; present in the working tree).
 
 ## Tooling — use first
 
@@ -95,7 +94,7 @@ site list and tripwire details: **`docs/internals/kernel-registration.md`**.
 is current. One PR per unit of functionality (check `gh pr list` first; extend an
 existing PR rather than opening a parallel one). Versions and `CHANGELOG.md` are
 automated by release-please from Conventional Commit messages — never bump by
-hand. Slow checks run post-merge and nightly; detail in `docs/internals/dev-ops.md`.
+hand. Slow checks run post-merge and nightly; detail in `misc/docs/internals/dev-ops.md`.
 
 ## Non-regression invariants (the test suite enforces these)
 

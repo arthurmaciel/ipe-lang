@@ -6,7 +6,7 @@ import Ipe.Io as Io
 -- models the open row (RowTail::Open); the backend erases it to a rustc generic
 -- bounded by the synthesised `name` witness trait, so the field read resolves
 -- through a getter and rustc monomorphises the call to the one concrete
--- argument shape. See docs/architecture/row-polymorphism-design.md §4 and
+-- argument shape. See docs/internals/design/row-polymorphism-design.md §4 and
 -- docs/adr/0018-row-poly-records-pinned-before-lowering.md.
 getName : { r | name : String } -> String
 getName rec =

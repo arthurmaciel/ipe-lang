@@ -2,7 +2,7 @@
 
 # `List`
 
-[Back to stdlib index](../../stdlib.md)
+[Back to stdlib index](../stdlib.md)
 
 ## `all`
 

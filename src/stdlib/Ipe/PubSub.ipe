@@ -20,7 +20,7 @@
 -- raw handler reaches every subscribed Ipe.Web session in the
 -- same process, with identical ordering + echo semantics.
 --
--- See `docs/shapes/web.md` for the two homes and their contexts,
+-- See `misc/docs/shapes/web.md` for the two homes and their contexts,
 -- and `examples/shapes/web/task-publish` for the canonical pattern.
 --
 -- The pub/sub fan-out comes in two flavours:

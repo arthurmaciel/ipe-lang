@@ -38,6 +38,6 @@ security/correctness/soundness benefit.
   exit-0-then-cargo-fail; the `FIRST_SCHEMED` gate catches a future accidental
   drop.
 - The iterative Rust implementations are a recorded efficiency-only divergence
-  (constant stack, output-identical) in `docs/divergences-from-sky.md`.
+  (constant stack, output-identical).
 - Adjacent same-class gaps (`any`, `all`, `find`) are filed as same-family
   follow-up, not left as latent `IPE-L0108`.

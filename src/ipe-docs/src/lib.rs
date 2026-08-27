@@ -10,7 +10,7 @@
 //!   as-is; the index is the aggregator, not the author.
 //! - **Diagnostics** — the `src/compiler/diagnostics/explain/*.md` files
 //!   (already SSOT). Read at index-build time from the filesystem.
-//! - **Constructs / glossary** — `docs/content/*.md` files (the only newly
+//! - **Constructs / glossary** — `docs/constructs/*.md` files (the only newly
 //!   authored prose; seed entries: `case`, `do`).
 //! - **CLI commands** — injected by the caller from `help.rs`'s `COMMANDS`
 //!   table (the SSOT). The index never imports `ipe` to avoid a circular
@@ -41,7 +41,7 @@ pub enum EntryKind {
     Module,
     /// A compiler diagnostic, identified by its `IPE-X0000` code.
     Diagnostic,
-    /// A language construct or glossary term (sourced from `docs/content/`).
+    /// A language construct or glossary term (sourced from `docs/constructs/`).
     Construct,
     /// An `ipe` CLI command (sourced from the `COMMANDS` registry via the
     /// caller-injected [`CommandInfo`] slice).
@@ -62,7 +62,7 @@ pub struct Entry {
     /// - `Symbol` / `Module`: the dotted module name, e.g. `Ipe.List` or
     ///   `Ipe.List.map`.
     /// - `Diagnostic`: the diagnostic code, e.g. `IPE-L0107`.
-    /// - `Construct`: the stem of the `docs/content/<name>.md` file, e.g.
+    /// - `Construct`: the stem of the `docs/constructs/<name>.md` file, e.g.
     ///   `case`.
     /// - `Command`: the command name, e.g. `version`.
     pub source_key: String,
@@ -96,7 +96,7 @@ impl Index {
     /// Build the index from all four SSOTs.
     ///
     /// - `explain_dir`: path to `src/compiler/diagnostics/explain/`
-    /// - `content_dir`: path to `docs/content/`
+    /// - `content_dir`: path to `docs/constructs/`
     /// - `commands`: command metadata from `help.rs`'s `COMMANDS` table
     ///
     /// # Errors
@@ -487,7 +487,7 @@ mod tests {
     fn build_index() -> Index {
         Index::build(
             &workspace_path("src/compiler/diagnostics/explain"),
-            &workspace_path("docs/content"),
+            &workspace_path("docs/constructs"),
             &test_commands(),
         )
         .expect("index build must succeed")

@@ -10,8 +10,8 @@ Entries are alphabetical.
 
 What a program is permitted to do — read the filesystem, open a network
 connection, access a secret. Ipê infers a program's capabilities from the code
-it actually uses; nothing is declared. See
-[Capabilities](../language/capabilities.md).
+it actually uses; nothing is declared. Run `ipe capabilities --help` for the
+full model.
 
 ## Cmd
 
@@ -31,8 +31,7 @@ the type and, in a [`case`](#exhaustive-match), how you take it apart.
 
 The `-- |` comment immediately above a definition in `.ipe` source. It is the
 single source of a symbol's documentation: `ipe doc`, the Markdown reference, and
-the served site are all generated from it. See the
-[documentation design](../architecture/tbd/documentation-design.md).
+the served site are all generated from it.
 
 ## exhaustive match
 
@@ -95,8 +94,7 @@ value", `Result` says why. See [`Ipe.Result`](../modules/Ipe.Result.md).
 ## shape
 
 Which kind of program an entry point produces — Web, WebView, Terminal, or
-Program. The compiler infers the shape from the function `main` is bound to. See
-[application shapes](../shapes/README.md).
+Program. The compiler infers the shape from the function `main` is bound to.
 
 ## Task
 

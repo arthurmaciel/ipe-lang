@@ -116,7 +116,7 @@ jobs:
 
       # Upload all screenshots and diff logs as a CI artifact for visual review.
       # Screenshots are NOT committed to git (too large; reference baselines are
-      # a future decision — see docs/architecture/tbd/visual-parity-harness.md).
+      # a future decision).
       - name: Upload screenshots and logs
         if: always()
         uses: actions/upload-artifact@v7

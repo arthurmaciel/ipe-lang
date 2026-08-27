@@ -20,7 +20,7 @@
 //!    `ipe_runtime::web::WebReq` directly — no synthesised record.
 //!
 //! Full design: `docs/adr/0021-tea-state-engine-and-prescriptive-init.md`;
-//! divergence B24 in `docs/divergences-from-sky.md`.
+//! divergence B24 in `misc/docs/divergences-from-sky.md`.
 //!
 //! Compile-only assertions always run; the cargo build is `IPE_E2E=1`-gated
 //! with an ISOLATED `CARGO_TARGET_DIR` (a shared dir's fingerprint reuse can

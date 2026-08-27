@@ -372,7 +372,7 @@ one-line annotation suitable for appending to the issue body.
 
 | Issue | Relationship | One-line annotation |
 |---|---|---|
-| 666 | **FIXES** | Resolves the open naming/placement question: `Html.raw` ships as `Ipe.Html.Unsafe.unsafeRaw`, disclosed by the new import-derived `unsafe` capability (see docs/architecture/tbd/unsafe-escape-convention-design.md). |
+| 666 | **FIXES** | Resolves the open naming/placement question: `Html.raw` ships as `Ipe.Html.Unsafe.unsafeRaw`, disclosed by the new import-derived `unsafe` capability (see docs/internals/design/tbd/unsafe-escape-convention-design.md). |
 | 333 | **COORDINATES** | The forbidden `data-ipe-eval`/`new Function` seam gets its one sanctioned home as `Ipe.Js.Unsafe.unsafeEval`, behind the `unsafe` capability — the escape the "closed front door" still needs, made auditable. |
 | 663 | **COORDINATES** | The record↔JSON codec + `Db.Store` is the safe default that makes hand-written SQL disappear; this convention defines the *rare escape* (`Ipe.Db.Unsafe`) for when raw SQL is still needed. |
 | 641 | **COORDINATES** | `Db.open <driver> <dsn>` to an arbitrary external DB is an unaudited-connection escape; if it bypasses the configured-DB safety it belongs behind `Ipe.Db.Unsafe` + `unsafe`. |

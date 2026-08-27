@@ -4,8 +4,8 @@ A program that reacts to input over time — a web page, a desktop window, a
 terminal UI — cannot be a single pure function from input to output: it has
 *state* that changes as events arrive. Ipê structures such programs with **The
 Elm Architecture** (TEA), a pattern with four named parts. This page explains
-the pattern; the [shape guides](../shapes/README.md) show the runnable form for
-each kind of program.
+the pattern; the shape guides (run `ipe doc Web`, `ipe doc Terminal`, etc.) show
+the runnable form for each kind of program.
 
 ## The four parts
 
@@ -93,20 +93,15 @@ each kind of program, since they differ by shape.
 The same four-part structure drives every interactive Ipê program; the *shape*
 determines where it runs and what `view` produces:
 
-- [Web](../shapes/web.md) — server-driven web applications.
-- [WebView](../shapes/webview.md) — native desktop windows.
-- [Terminal](../shapes/terminal.md) — full-screen or line-oriented terminal
-  apps.
-- [Program](../shapes/program.md) — for a script or one-shot tool with no state
-  loop, you write a plain `main` instead of TEA (see
-  [getting started](getting-started.md)).
+- **Web** (`ipe doc Web`) — server-driven web applications.
+- **WebView** (`ipe doc WebView`) — native desktop windows.
+- **Terminal** (`ipe doc Terminal`) — full-screen or line-oriented terminal apps.
+- **Program** — for a script or one-shot tool with no state loop, write a plain
+  `main` instead of TEA (see [getting started](getting-started.md)).
 
 ## Where to go next
 
-- [Application shapes](../shapes/README.md) — the runnable form of TEA for each
-  target.
-- [Views: Ui, Html, and Css](../language/ui.md) — what `view` returns and how to
-  build it.
+- [Views: Ui and Html](glossary.md#ui) — what `view` returns and how to build it.
 - [Glossary](glossary.md) — `Model`, `Msg`, `Cmd`, `subscriptions`,
   `record update`.
 ```

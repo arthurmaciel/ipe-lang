@@ -6273,7 +6273,7 @@ impl<'a> Builder<'a> {
             // project-generated types unnameable from this crate (see
             // `docs/adr/0013-multi-driver-db-compile-time-selection.md`) — a
             // recorded divergence from the Go backend's `Decoder Money`,
-            // documented in `docs/divergences-from-sky.md`.
+            // documented in `misc/docs/divergences-from-sky.md`.
             K::DbDecMoney => fun(string(), dec(tuple2(decimal(), string()))),
             // `Db.Decode.decimal : String -> Decoder Decimal` — reads an exact-decimal
             // TEXT column. FIRST_SCHEMED (Ipê-new, no legacy oracle).
@@ -6926,7 +6926,7 @@ impl<'a> Builder<'a> {
             //
             // Sanctioned divergence from Ipê Go: `Breakpoint` is typed as
             // `String` in the Rust port rather than as a distinct opaque type
-            // (see `docs/divergences-from-sky.md` §B-Breakpoint).  Users cannot
+            // (see `misc/docs/divergences-from-sky.md` §B-Breakpoint).  Users cannot
             // fabricate arbitrary `Breakpoint` values because all constructors
             // (`mobile`, `tablet`, …) are kernels whose schemes return `string()`;
             // the only type-safety gap vs. the Go backend is that a plain `String`

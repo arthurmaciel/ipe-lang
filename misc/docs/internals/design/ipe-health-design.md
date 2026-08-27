@@ -140,7 +140,7 @@ the apply engine does.
 | `sandbox` | Sandbox | the FFI build-jail / run-jail prerequisites for this platform | Linux: `bwrap` + `prlimit` on PATH (the exact tools `run_jail::RunJailTools` needs; the refusal message in `src/compiler/sandbox/src/run_jail.rs` names them); macOS: `sandbox-exec` (base system); Windows: Job Object + AppContainer arm is built-in — nothing installable; FreeBSD: `jail(8)` is base system — detail notes the privilege it requires | Linux: consented install of `bubblewrap` per the matrix; elsewhere informational | no — pure programs never need the jail, and a native-bearing run without one is already fail-closed at run time; health surfaces it early rather than gating on it |
 | `disk` | Disk | free space where the shared target / build caches live | filesystem free-space probe at `$IPE_HOME` (statvfs on unix, `GetDiskFreeSpaceExW` on Windows, behind one small platform module) | none auto; suggestion names the biggest ipe-owned directories to reclaim manually | `warn` below a comfortable threshold (a shared-target epoch is 1–3 GB); `missing` + **critical** only below a hard floor where builds will fail |
 
-**Deliberate exclusion — cranelift.** `docs/rust-perf-improvement.md` also
+**Deliberate exclusion — cranelift.** `docs/topics/faster-builds.md` also
 covers the cranelift debug backend, but it requires the nightly toolchain and
 an `[unstable]` cargo table. Health never configures nightly-only or unstable
 features; the perf doc remains the manual path. A check that cannot suggest a
@@ -168,7 +168,7 @@ path uses, so the two can never disagree about where the runtime lives.
 The suggestion and install command shown are selected by detected OS/arch —
 a Linux user never sees a `brew` line. Install commands come from each tool's
 official documentation (linked); the recipes match the verified ones in
-`docs/rust-perf-improvement.md`.
+`docs/topics/faster-builds.md`.
 
 | Tool | Detect | Linux | macOS | Windows | FreeBSD | Docs |
 |---|---|---|---|---|---|---|
@@ -424,7 +424,7 @@ probe, so every phase's tests run hermetically on any host.
    target-dir resolution module, the health check + `HomeSetup` fix.
 5. **Docs and help.**
    `help.rs` `COMMANDS` entry + section placement; the command's `--help`
-   page; cross-links from `docs/rust-perf-improvement.md` ("health can set
+   page; cross-links from `docs/topics/faster-builds.md` ("health can set
    these up for you") and the sandbox docs; installer hint only if the
    install-time wiring lands. Includes correcting the stale
    `ipe health --fix` phrase in the `write_atomic` doc comment

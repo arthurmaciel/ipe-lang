@@ -43,11 +43,8 @@ Four documents, one purpose each; each fact lives in exactly one of them.
    unrepresentable, single-source-of-truth, and fix-the-structure — so authored
    Ipê is secure/correct/sound/efficient/complete/readable on the first write.
 
-3. **`docs/internals/dev-ops.md` — the deep operational procedures.** The
-   mem-guard/disk-guard daemons and tuning, the two-tier-gate mechanics,
-   end-of-mission cleanup, and the release-please/cargo-deny pipeline.
-   `DEVELOPMENT.md` is **deleted**: its frequently-needed essentials condense
-   into root `AGENTS.md`, its depth lands here.
+3. **Deep operational procedures** (dev-ops, guard daemons, release pipeline) — no
+   longer in the tracked repo; the essentials are condensed into root `AGENTS.md`.
 
 4. **`PRINCIPLES.md` — values, principles, and rules only.** The operational
    *mechanics* (two-tier-gate step lists, write-boundary paths, agent-lane

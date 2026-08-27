@@ -38,7 +38,7 @@ Rejected alternatives:
   payloads) needs seams at every construction/extraction boundary, and
   `Arc<dyn Fn>` still lacks `Debug`/`PartialEq`/serde, so no use-gate goes away.
 - **Bare `fn` pointers** — silently forbids capturing closures, which Ipê
-  semantics require; this breakage is documented in `docs/divergences-from-sky.md`.
+  semantics require; this breakage is a documented sanctioned divergence.
 
 ## Consequences
 
@@ -47,7 +47,7 @@ Rejected alternatives:
   clone-hoist pass (ADR 0007) subsumes it.
 - **This is a sanctioned divergence from upstream's `fn`-pointer approach**:
   Ipê's `Box<dyn Fn>` with captures is strictly more general and the right
-  trade-off for Ipê semantics (recorded in `docs/divergences-from-sky.md`).
+  trade-off for Ipê semantics.
 - **Invariant that must keep holding:** the construction lift stays sound only
   while the three upstream guards (runtime bounded derives, the derive-demotion
   fixpoint, and the type-checker/Model/serde gates) remain in place; weakening

@@ -84,7 +84,7 @@ spirit of the String path. (Whether malformed numeric segments should instead
 route to `notFound` is a future refinement, recorded not built.)
 
 This is a **sanctioned divergence** (strictly safer, static typing catches the
-mismatch at compile time), recorded in `docs/divergences-from-sky.md`.
+mismatch at compile time).
 
 ### Invariant that must keep holding
 

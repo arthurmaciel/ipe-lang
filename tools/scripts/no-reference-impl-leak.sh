@@ -13,11 +13,8 @@
 #   src/stdlib/src/**/*.rs    — the embed glue (include_str! wrappers)
 #   README.md                 — public landing page
 #   docs/*.md                 — public top-level documentation
-#                               (docs/architecture/ etc. are developer-internal)
 #
 # Carve-outs (SSOT — enumerated here, not spread across the codebase):
-#   docs/divergences-from-sky.md  — divergence ledger; comparison is its purpose
-#   docs/divergences-from-elm.md  — divergence ledger; comparison is its purpose
 #   src/ipe-cli/tests/            — internal test oracles, never shipped to users
 #   examples/sky/                 — tracked reference-impl mirror, not our source
 
@@ -61,8 +58,6 @@ is_carved_out() {
     local fp="$1"
     local carve
     for carve in \
-        "docs/divergences-from-sky.md" \
-        "docs/divergences-from-elm.md" \
         "src/ipe-cli/tests" \
         "examples/sky"
     do

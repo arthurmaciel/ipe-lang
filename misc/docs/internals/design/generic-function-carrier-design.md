@@ -7,7 +7,7 @@ rejected at the call boundary with IPE-L0107, so the class can no longer emit
 cargo-failing Rust. The A2 carrier propagation (build-and-run via `Arc`
 instantiation) remains future work.
 
-Companion to `docs/architecture/tbd/first-class-functions-design.md`, which
+Companion to `docs/internals/design/tbd/first-class-functions-design.md`, which
 designs function *storage* in concrete composites. This document covers the
 seam that design cannot see: a function value instantiating a **declared
 type variable** of a generic user function.

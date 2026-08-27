@@ -64,7 +64,7 @@ took the ledger from four classes to two such HMAC assertions.
 ## Review verdict
 
 The ledger's four original classes have been burned down as far as security
-permits (`docs/internals/rust-abrupt-failure-ledger.md`):
+permits:
 
 - **#3 (`ffi_polyfills` `panic!` ×2) — eliminated.** The dynamic-dispatch FFI
   shape has no `target=rust` denotation (no `.ipe` source names it; the IR has no

@@ -84,7 +84,7 @@ cargo build --release
 - **Sky's batteries-included standard library** — Web live applications (SSR + real-time), typed HTTP, 
   typed SQL, auth, email, cache, pub/sub, and WebSockets, all behind a
   single `Task Error a` effect boundary. `Error` is a typed, classified value
-  you construct and inspect — see [Errors](docs/language/error-handling.md).
+  you construct and inspect — see `ipe doc Error` or `ipe explain IPE-T0001`.
 - **Rust compiler** — the compiler itself is written in Rust: fast, parallel,
   memory-safe.
 - **Rust backend** — emits readable Rust.
@@ -102,24 +102,20 @@ One language, four ways to ship. Pick the entry point that matches your app.
 
 | Shape | Entry point | Use it for | TEA |
 |---|---|---|---|
-| [`Ipe.Tea.Web`](docs/shapes/web.md) | `Web.app` | Web apps — server-rendered HTML, real-time SSE patches, sessions | ✓ |
-| [`Ipe.Tea.WebView`](docs/shapes/webview.md) | `WebView.app` | Native desktop apps | ✓ |
-| [`Ipe.Tea.Terminal`](docs/shapes/terminal.md) | `Terminal.appScreen` / `Terminal.appLines` | Terminal UIs (`appScreen`) and line-oriented REPLs (`appLines`) | ✓ |
-| [`Program`](docs/shapes/program.md) | plain `main` | Scripts, one-shot tools, cron jobs, HTTP servers | |
+| `Ipe.Tea.Web` | `Web.app` | Web apps — server-rendered HTML, real-time SSE patches, sessions | ✓ |
+| `Ipe.Tea.WebView` | `WebView.app` | Native desktop apps | ✓ |
+| `Ipe.Tea.Terminal` | `Terminal.appScreen` / `Terminal.appLines` | Terminal UIs (`appScreen`) and line-oriented REPLs (`appLines`) | ✓ |
+| `Program` | plain `main` | Scripts, one-shot tools, cron jobs, HTTP servers | |
 
 The three ✓ shapes follow [The Elm Architecture](https://guide.elm-lang.org/architecture/)
 (`init` / `update` / `view` / `subscriptions`) — and Web, WebView, and
 `Terminal.appScreen` share the **same `Ipe.Ui` view code**, so one
 `view : Model -> Element Msg` renders on web, desktop, and terminal.
-See [`docs/shapes/`](docs/shapes/README.md) for a guide to each shape, and
-[`examples/`](examples/) for runnable programs.
+See [`examples/`](examples/) for runnable programs.
 
 Views are built from two vocabularies — the portable `Ipe.Ui` layout language
-and the raw-DOM `Ipe.Html` — plus the security-gated `Ipe.Css`. See
-[Views: Ui, Html, and Css](docs/language/ui.md) for how they relate, how to intermix
-them, and static rendering.
-
-Check [language documentation](docs/language/README.md).
+and the raw-DOM `Ipe.Html` — plus the security-gated `Ipe.Css`. Run `ipe doc Ui`
+for the layout reference.
 
 ## Capabilities
 
@@ -147,7 +143,7 @@ whenever the program ships a browser widget (`Ui.widget`): the served JavaScript
 SRI-pinned and CSP-constrained, but the sandbox protects the server, not
 third-party browser JS — a widget is declared trust in the package author.
 
-See [**Capabilities**](docs/language/capabilities.md) for the full model.
+Run `ipe capabilities --help` for the full model.
 
 <!--
 ## Dependencies
@@ -271,7 +267,7 @@ ipe doc check
 
 `ipe lsp` speaks JSON-RPC over stdio — type-directed completion, go-to-definition,
 find-references, rename, formatting, code actions, semantic tokens, and more.
-See [editor integration documentation](docs/editor-integration.md) for setup
+See [editor integration documentation](docs/topics/editor-integration.md) for setup
 instructions covering Helix, Neovim, VS Code, Emacs (lsp-mode and Doom Emacs),
 and Zed.
 
@@ -350,7 +346,7 @@ Optional per-machine tools — a compilation cache
 ([mold](https://github.com/rui314/mold) / [lld](https://lld.llvm.org/)), and a
 fast debug codegen backend
 ([cranelift](https://github.com/rust-lang/rustc_codegen_cranelift)) — cut that
-substantially. See [rust performance improvement](docs/rust-perf-improvement.md)
+substantially. See [rust performance improvement](docs/topics/faster-builds.md)
 for per-platform install and `~/.cargo/config.toml` recipes.
 
 ## Support

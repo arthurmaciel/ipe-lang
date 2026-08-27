@@ -503,14 +503,14 @@ fn parse_port(value: &str) -> Result<u16, CliError> {
     }
 }
 
-/// Language construct pages embedded at compile time from `docs/content/`.
+/// Language construct pages embedded at compile time from `docs/constructs/`.
 ///
 /// Each entry is `(key, markdown_text)`. The key becomes the index entry key
 /// (e.g. `"case"` resolves via `ipe doc case`). Adding a new construct page
-/// requires a new `docs/content/<name>.md` and a new entry here.
-static CONTENT_PAGES: &[(&str, &str)] = &[
-    ("case", include_str!("../../../docs/content/case.md")),
-    ("do", include_str!("../../../docs/content/do.md")),
+/// requires a new `docs/constructs/<name>.md` and a new entry here.
+static CONSTRUCT_PAGES: &[(&str, &str)] = &[
+    ("case", include_str!("../../../docs/constructs/case.md")),
+    ("do", include_str!("../../../docs/constructs/do.md")),
 ];
 
 /// Return `true` when `s` looks like a symbol key: it starts uppercase, contains
@@ -530,7 +530,7 @@ fn is_symbol_key(s: &str) -> bool {
 ///
 /// Diagnostics are indexed from the compile-time embedded explain pages (same
 /// source as `ipe explain`) — no filesystem lookup required. Language constructs
-/// are indexed from the embedded `docs/content/*.md` files via a compile-time
+/// are indexed from the embedded `docs/constructs/*.md` files via a compile-time
 /// static table. Commands are injected from `help.rs`'s `COMMANDS` registry.
 fn build_index() -> Result<Index, CliError> {
     use ipe_docs::IndexBuilder;
@@ -556,7 +556,7 @@ fn build_index() -> Result<Index, CliError> {
     }
 
     // Constructs: compile-time embedded content pages.
-    for (key, text) in CONTENT_PAGES {
+    for (key, text) in CONSTRUCT_PAGES {
         builder.insert(
             (*key).to_owned(),
             ipe_docs::Entry {

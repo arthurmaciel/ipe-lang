@@ -140,8 +140,7 @@ jobs:
 
   # No compiler-internal jargon or raw Rust types leak into user-facing text
   # (rendered diagnostic goldens + `ipe explain` pages). Pure git + ripgrep, no
-  # toolchain, so it stays on the fast required PR path. House style SSOT:
-  # docs/internals/diagnostic-tone.md.
+  # toolchain, so it stays on the fast required PR path.
   diagnostic-tone:
     runs-on: ubuntu-latest
     needs: changes
@@ -1156,7 +1155,7 @@ jobs:
           IPE_RUNTIME_DIR: ${{ github.workspace }}/src/runtime/rust/src
         run: cargo nextest run -p ipe --test audit_native --profile ci
 
-  # Drift gate for docs/stdlib.md + docs/internals/stdlib/<Module>.md.
+  # Drift gate for docs/reference/stdlib.md + docs/reference/stdlib/<Module>.md.
   #
   # Runs the gen-stdlib-docs generator against the committed `.md` files and
   # fails when the output differs, so a doc-string edit that is not reflected
@@ -1174,7 +1173,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: mozilla-actions/sccache-action@v0.0.9
       - uses: Swatinem/rust-cache@v2
-      - name: Regenerate docs/stdlib.md and docs/internals/stdlib/
+      - name: Regenerate docs/reference/stdlib.md and docs/reference/stdlib/
         run: cargo run -p ipe_docs --bin gen-stdlib-docs -- --repo-root "${{ github.workspace }}"
       - name: Fail if generated docs differ from committed files
-        run: git diff --exit-code docs/stdlib.md docs/internals/stdlib/
+        run: git diff --exit-code docs/reference/stdlib.md docs/reference/stdlib/

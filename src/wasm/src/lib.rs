@@ -6,7 +6,7 @@
 //! emit — runs as a WebAssembly module, turning Ipê source into diagnostics and
 //! the emitted Rust source. Running the emitted program is out of scope
 //! in-browser (it needs a Rust toolchain); the playground shows the emitted Rust
-//! instead. See `docs/internals/wasm.md`.
+//! instead. See `misc/docs/internals/wasm.md`.
 //!
 //! ## What is and is not compiled in
 //!
