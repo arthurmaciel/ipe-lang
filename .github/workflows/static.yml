@@ -35,7 +35,7 @@ on:
     paths-ignore:
       - '**.md'
   schedule:
-    - cron: '52 4 * * *'      # nightly, offset from ci.yml / security.yml / examples-sweep
+    - cron: '52 4 * * *'      # nightly, offset from ci.yml / security.yml
   workflow_dispatch: {}
 
 concurrency:
@@ -368,7 +368,7 @@ jobs:
   # Cross-compiles the emitted example crate for `x86_64-unknown-freebsd` from
   # an ubuntu host. This is a BUILD-ONLY gate: GitHub has no native FreeBSD
   # runner, so running the FreeBSD ELF on the ubuntu host is not possible (wrong
-  # ABI). A native run check lives in examples-sweep-freebsd (vmactions VM).
+  # ABI).
   #
   # NOTE: `ipe build --static` is NOT used. `StaticTriple` in the compiler is a
   # closed enum (Linux musl only); FreeBSD is not in the supported set. The emitted
