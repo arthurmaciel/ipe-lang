@@ -1070,15 +1070,14 @@ fn list_modules(path: &Path, format: OutputFormat) {
 
     match format {
         OutputFormat::Plain => {
-            // Hierarchical plain output: 2-space indent per namespace depth.
-            if !project_names.is_empty() {
-                let proj_refs: Vec<&str> = project_names.iter().map(String::as_str).collect();
-                let tree = build_namespace_tree(&proj_refs);
-                print_plain_tree(&tree, 0);
+            // One queryable module name per line (project first, then stdlib).
+            // Kept flat — every line must resolve on `ipe doc <name>`; the
+            // namespace hierarchy is presented in the human listing, the
+            // Markdown index, and the HTML nav (which can show pure-prefix
+            // headers a plain, machine-readable list must not).
+            for name in &ordered {
+                println!("{name}");
             }
-            let stdlib_refs: Vec<&str> = stdlib_names.iter().map(String::as_str).collect();
-            let tree = build_namespace_tree(&stdlib_refs);
-            print_plain_tree(&tree, 0);
         }
         OutputFormat::Json => {
             let names: Vec<&str> = ordered.iter().map(|n| n.as_str()).collect();
@@ -2464,19 +2463,6 @@ fn render_plain_tree(nodes: &[NamespaceNode], depth: usize, out: &mut String) {
             let _ = writeln!(out, "{indent}{}/", node.full_name);
         }
         render_plain_tree(&node.children, depth + 1, out);
-    }
-}
-
-/// Print a namespace tree to stdout with 2-space indent per depth.
-fn print_plain_tree(nodes: &[NamespaceNode], depth: usize) {
-    let indent = "  ".repeat(depth);
-    for node in nodes {
-        if node.is_module {
-            println!("{indent}{}", node.full_name);
-        } else {
-            println!("{indent}{}/", node.full_name);
-        }
-        print_plain_tree(&node.children, depth + 1);
     }
 }
 
