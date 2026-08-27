@@ -27,7 +27,7 @@ projected by `select`, and run by `toList`:
 ```
 join   : Store a -> (a -> k) -> Store b -> (b -> k) -> Joined a b
 filter : (( Cols a, Cols b ) -> Pred) -> Joined a b -> Joined a b
-orderBy: (( Cols a, Cols b ) -> Proj o) -> Order -> Joined a b -> Joined a b
+orderBy: (( Cols a, Cols b ) -> Projection o) -> Order -> Joined a b -> Joined a b
 select : (( Cols a, Cols b ) -> row) -> Joined a b -> Select row
 toList : Db -> Select row -> Task Error (List row)
 toMaybe: Db -> Select row -> Task Error (Maybe row)
@@ -59,8 +59,8 @@ where author.id = book.author_id
 
 `book` and `author` inside the `select` lambda are **column records**
 (`Cols Book`, `Cols Author`): a record shaped like the row type but with every
-field wrapped in `Proj`. Because a field accessor is polymorphic over any record
-carrying that field, `author.name` on a `Cols Author` yields a `Proj String` — a
+field wrapped in `Projection`. Because a field accessor is polymorphic over any record
+carrying that field, `author.name` on a `Cols Author` yields a `Projection String` — a
 symbolic column reference, not a fetched value. The lambda therefore returns a
 projection, never a computed result, so it is lowerable by construction.
 
@@ -78,42 +78,42 @@ titlesByActiveAuthors db =
 -- where author.id = book.author_id and author.active = $1
 ```
 
-A `select` whose lambda returns a bare `Proj t` projects one column decoding to
-`t`; a tuple or record of `Proj` fields projects those columns decoding to that
+A `select` whose lambda returns a bare `Projection t` projects one column decoding to
+`t`; a tuple or record of `Projection` fields projects those columns decoding to that
 tuple or record.
 
-## The projection sublanguage (`Proj`)
+## The projection sublanguage (`Projection`)
 
-`Proj t` is a typed SQL expression yielding `t`. The **only** ways to obtain a
-`Proj` are:
+`Projection t` is a typed SQL expression yielding `t`. The **only** ways to obtain a
+`Projection` are:
 
-  * a column reference — a field of a `Cols a` record (`author.name : Proj String`);
-  * a literal — `lit : t -> Proj t`, which binds as a parameter, never as text;
-  * a lifted operator — a sanctioned, extensible set (`upper : Proj String ->
-    Proj String`, arithmetic on `Proj` numbers, `coalesce`, comparisons that
+  * a column reference — a field of a `Cols a` record (`author.name : Projection String`);
+  * a literal — `literal : t -> Projection t`, which binds as a parameter, never as text;
+  * a lifted operator — a sanctioned, extensible set (`upper : Projection String ->
+    Projection String`, arithmetic on `Projection` numbers, `coalesce`, comparisons that
     build a `Pred`, …), each lowering to a SQL function or operator.
 
-Because a raw value cannot enter a `Proj` except through `lit` (a parameter),
-and a `Cols` field is already `Proj`-typed, a projection that SQL cannot express
+Because a raw value cannot enter a `Projection` except through `literal` (a parameter),
+and a `Cols` field is already `Projection`-typed, a projection that SQL cannot express
 is **unrepresentable**: `String.toUpper author.name` does not type-check
-(`author.name : Proj String`, not `String`), so the caller reaches for the
+(`author.name : Projection String`, not `String`), so the caller reaches for the
 lifted `upper` or does the transform in ordinary code after `toList`. This is
 the make-invalid-states-unrepresentable posture applied to the query boundary.
 
 `Pred` is the joined-query predicate produced by lifted comparisons (`is`,
-`eqCol`, `gtCol`, `and`, `or`, `not`) over `Proj` values — the two-table analogue
+`eqCol`, `gtCol`, `and`, `or`, `not`) over `Projection` values — the two-table analogue
 of the existing single-table `Cond`.
 
 ## Compiler support: deriving `Cols a`
 
 `Cols a` is the one piece that needs compiler help. Ipê has no higher-kinded
-types, so there is no generic mapping from a row record `a` to its all-`Proj`
+types, so there is no generic mapping from a row record `a` to its all-`Projection`
 version. Instead the compiler derives it from the store's `Codec`, which already
 carries every field's name, type, and column name (its `Shape` is
 `SRecord [(field, type)]`):
 
   * For each row type used as a join side, the compiler emits a `Cols`
-    record whose fields mirror the row's fields, each typed `Proj <fieldType>`
+    record whose fields mirror the row's fields, each typed `Projection <fieldType>`
     and carrying a `(tableAlias, columnName)` reference.
   * The `join` combinator binds each side's `Cols` value to that side's alias,
     then hands the pair to the `select` / `filter` / `orderBy` lambda.
@@ -127,14 +127,14 @@ kind of type.
 ## SQL lowering
 
 `Joined a b` lowers to `FROM ta AS a0, tb AS a1 WHERE a0.k = a1.k [AND preds]`;
-`select` sets the `SELECT` list from the projected `Proj` expressions; `orderBy`
+`select` sets the `SELECT` list from the projected `Projection` expressions; `orderBy`
 / `limit` / `offset` append. One statement, fully parameterized:
 
   * every table alias and column name passes `validSqlIdent` before it reaches
     SQL text (both join keys, every projected column, every predicate column);
-  * every value binds as a parameter (`lit`, predicate right-hand sides) — never
+  * every value binds as a parameter (`literal`, predicate right-hand sides) — never
     interpolated;
-  * the projected row decodes through the `Proj` result types; schema drift (a
+  * the projected row decodes through the `Projection` result types; schema drift (a
     missing column, a cell that is not the declared shape) is a typed `Err`.
 
 ## Security invariants (must hold — the store's whole argument, extended)
@@ -142,9 +142,9 @@ kind of type.
   * Identifiers are parsed, not validated: a `Joined` carries only accepted
     aliases and column names, because a join on a column absent from the codec,
     or a mis-shaped codec, is rejected at construction.
-  * Values never touch SQL text: `lit` and predicate operands bind as parameters.
-  * Un-lowerable projections are unrepresentable: `Proj` has no constructor that
-    admits a raw runtime value except the parameterized `lit`.
+  * Values never touch SQL text: `literal` and predicate operands bind as parameters.
+  * Un-lowerable projections are unrepresentable: `Projection` has no constructor that
+    admits a raw runtime value except the parameterized `literal`.
   * Fail closed: anything the DSL cannot express safely is a compile or build
     error, never a silent `SELECT *` or a text-concatenated fragment.
   * Raw SQL remains behind `Ipe.Db.Unsafe`, which discloses that capability
@@ -161,8 +161,8 @@ The surface above is the target. It lands in slices, each holding THE SEAL
     (callers project in ordinary code after `toList`). This slice removes the
     per-row fan-out immediately and needs no `Cols` derivation, only the join
     lowering and its SQL generation. It is the fast first landing.
-  * **The typed-projection slice.** `Cols a` derivation plus `select` / `Proj` /
-    `lit`, giving the `author.name` surface and column pushdown (`SELECT` only
+  * **The typed-projection slice.** `Cols a` derivation plus `select` / `Projection` /
+    `literal`, giving the `author.name` surface and column pushdown (`SELECT` only
     the asked-for columns). This is the compiler piece.
   * **The lifted-operator slice.** `upper` / `coalesce` / arithmetic and richer
     join shapes (left/outer, three or more tables). Additive; deferrable.
@@ -171,7 +171,7 @@ The surface above is the target. It lands in slices, each holding THE SEAL
 
 The capability matches a bespoke database language's composable, typed,
 single-statement joins with projection and no per-row fan-out. The projection is
-expressed through typed column records and `Proj` constructors rather than an
+expressed through typed column records and `Projection` constructors rather than an
 arbitrary lambda lowered symbolically to SQL, because Ipê is a general-purpose,
 eagerly-evaluated language: a projection lambda that ran on real rows would lose
 the column identity, and interpreting its syntax symbolically is exactly the
