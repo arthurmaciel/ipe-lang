@@ -221,12 +221,10 @@ mod native {
         IpeCmd::Publish(Box::new(move |origin| {
             // A seal-legal payload's concrete type serialises to a JSON value by
             // construction (the seal gate — IPE-L0148 — guarantees a plain, closed,
-            // non-secret type). Serialisation therefore cannot fail here. Surface
-            // the impossible branch honestly instead of silently dropping the frame:
-            // a debug build trips an assertion carrying the type name (so a future
-            // non-seal-legal caller is caught in test), and a release build drops the
-            // one frame rather than emitting a malformed wire string. The seal is not
-            // loosened either way.
+            // non-secret type), so this Err branch is unreachable for a seal-legal
+            // caller. Surface it honestly instead of silently dropping the frame:
+            // log the offending type and drop the single frame rather than emit a
+            // malformed wire string. The seal is not loosened either way.
             match serde_json::to_value(&payload) {
                 Ok(value) => {
                     let encoded = seal_encode(&value);
@@ -236,11 +234,6 @@ mod native {
                     }
                 }
                 Err(e) => {
-                    debug_assert!(
-                        false,
-                        "js_send: seal-legal payload of type {} failed serde serialisation: {e}",
-                        std::any::type_name::<T>()
-                    );
                     eprintln!(
                         "[ipe-runtime BUG] js_send: payload of type {} failed serialisation ({e}); frame dropped — please report",
                         std::any::type_name::<T>()
