@@ -10055,10 +10055,13 @@ mod registry_phase_c_tests {
             K::SqlLike,
             K::DbFindWhere,
             K::DbFindJoin,
+            K::DbFindProjection,
             K::DbDeleteWhere,
             K::DbUpdateWhere,
             // Two-store inner-join constructor (getter-arrow scheme, Ipê-new).
             K::StoreJoin,
+            // Single-column projection over a join (getter-arrow scheme, Ipê-new).
+            K::StoreSelect,
             // Typed accessor query leaves (getter-arrow schemes, Ipê-new).
             K::StoreEqCol,
             K::StoreEqBy,
