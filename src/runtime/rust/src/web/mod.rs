@@ -1521,7 +1521,9 @@ where
         serde::Serialize + serde::de::DeserializeOwned + Clone + PartialEq + Send + Sync + 'static,
     // Debug: forwarded through serve_web → drive_session for the
     // ipe_web_msg_seconds{name} label. Generated Msg enums always derive Debug.
-    Msg: Clone + Send + Sync + std::fmt::Debug + 'static,
+    // IpeStringify: forwarded through serve_web → page for debugger overlay
+    // labels via `ipe_show`. Generated Msg enums always satisfy this bound.
+    Msg: Clone + Send + Sync + std::fmt::Debug + crate::stringify::IpeStringify + 'static,
     FInit: Fn(req::WebReq) -> (Model, IpeCmd<Msg>) + Send + Sync + 'static,
     FUpdate: Fn(Msg, Model) -> (Model, IpeCmd<Msg>) + Send + Sync + 'static,
     FView: Fn(Model) -> Html<Msg> + Send + Sync + 'static,
@@ -1576,7 +1578,9 @@ where
         serde::Serialize + serde::de::DeserializeOwned + Clone + PartialEq + Send + Sync + 'static,
     // Debug: forwarded through serve_web → drive_session for the
     // ipe_web_msg_seconds{name} label. Generated Msg enums always derive Debug.
-    Msg: Clone + Send + Sync + std::fmt::Debug + 'static,
+    // IpeStringify: forwarded through serve_web → page for debugger overlay
+    // labels via `ipe_show`. Generated Msg enums always satisfy this bound.
+    Msg: Clone + Send + Sync + std::fmt::Debug + crate::stringify::IpeStringify + 'static,
     Page: Clone + Send + Sync + 'static,
     FInit: Fn(req::WebReq) -> (Model, IpeCmd<Msg>) + Send + Sync + 'static,
     FUpdate: Fn(Msg, Model) -> (Model, IpeCmd<Msg>) + Send + Sync + 'static,
@@ -1719,7 +1723,9 @@ where
     E: From<String> + Send + 'static,
     Model: Clone + PartialEq + Send + 'static,
     // Debug: forwarded to drive_session for the ipe_web_msg_seconds{name} label.
-    Msg: Clone + Send + std::fmt::Debug + 'static,
+    // IpeStringify: forwarded to the page handler for debugger overlay labels.
+    // Generated Msg types always satisfy both bounds.
+    Msg: Clone + Send + std::fmt::Debug + crate::stringify::IpeStringify + 'static,
     FInit: Fn(req::WebReq) -> (Model, IpeCmd<Msg>) + Send + Sync + 'static,
     FUpdate: Fn(Msg, Model) -> (Model, IpeCmd<Msg>) + Send + Sync + 'static,
     FView: Fn(Model) -> Html<Msg> + Send + Sync + 'static,
@@ -1743,7 +1749,10 @@ where
             Model: Clone + PartialEq + Send + 'static,
             // Debug: the GET handler creates a session and spawns drive_session,
             // which needs the bound for the ipe_web_msg_seconds{name} label.
-            Msg: Clone + Send + std::fmt::Debug + 'static,
+            // IpeStringify: the debugger overlay renders message labels via
+            // `ipe_show` so `Secret`-bearing fields are structurally redacted.
+            // Generated Msg types always satisfy both bounds.
+            Msg: Clone + Send + std::fmt::Debug + crate::stringify::IpeStringify + 'static,
             FInit: Fn(req::WebReq) -> (Model, IpeCmd<Msg>) + Send + Sync + 'static,
             FUpdate: Fn(Msg, Model) -> (Model, IpeCmd<Msg>) + Send + Sync + 'static,
             FView: Fn(Model) -> Html<Msg> + Send + Sync + 'static,
@@ -1807,8 +1816,7 @@ where
                         e.last_view = tree.clone();
                         let body = render_html(&tree);
                         #[cfg(feature = "debugger")]
-                        let labels: Vec<String> =
-                            e.history.msgs().map(|m| format!("{m:?}")).collect();
+                        let labels: Vec<String> = e.history.labels();
                         #[cfg(not(feature = "debugger"))]
                         let labels: Vec<String> = Vec::new();
                         let total = labels.len();
