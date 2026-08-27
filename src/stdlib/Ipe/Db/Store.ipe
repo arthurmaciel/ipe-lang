@@ -133,6 +133,7 @@ module Ipe.Db.Store exposing
     , Column(..)
     , ColType(..)
     , ColumnSpec(..)
+    , IndexSpec(..)
     , Row
     , validSqlIdent
     , column, textColumn, intColumn, floatColumn, boolColumn
@@ -141,9 +142,10 @@ module Ipe.Db.Store exposing
     , defaultText, defaultInt, touchOnUpdate
     , primaryKeyNamed, serialNamed, uniqueNamed, defaultNowNamed
     , defaultTextNamed, defaultIntNamed, touchOnUpdateNamed
+    , index, indexNamed
     , tableName, columnNames, createSql
     , readText, readInt, readBool, readFloat
-    , insert, all, get, delete, findWhere, create
+    , insert, insertReturning, all, get, delete, findWhere, create
     , allOn, getOn, findWhereOn
     , update, updateWhere, deleteWhere, findBy
     , renameColumn, renameTable, migrations
@@ -235,6 +237,16 @@ type ColumnSpec
     | TouchOnUpdate String
 
 
+-- | A declarative performance index over one or more of the store's columns.
+-- Declared through `index` (name derived from table + columns) or `indexNamed`
+-- (caller-supplied name). The columns are validated against the store's
+-- codec-derived column list at `create` time; an unknown column or an invalid
+-- identifier fails closed with no DDL produced.
+type IndexSpec
+    = Index (List String)
+    | IndexNamed String (List String)
+
+
 -- | A schema-evolution operation recorded in the store's op log. Each op is
 -- appended by `renameColumn` / `renameTable`; the log folds to ledger entries
 -- in `migrations`. Kept as a closed ADT so `migrations` is the single point
@@ -254,8 +266,10 @@ type SchemaOp
 -- current-schema view after any renames (the identifiers CRUD targets). `ops`
 -- is the ordered schema-op log folded by `migrations`, threaded from
 -- `frozenTable` so each rename entry names the table as of its own position.
--- Built only through `fromCodec` / `fromColumns`, so every identifier it holds
--- has already been accepted by `validSqlIdent`.
+-- `indexes` is the ordered list of declarative index specs emitted after the
+-- create entry by `create` / `migrations`. Built only through `fromCodec` /
+-- `fromColumns`, so every identifier it holds has already been accepted by
+-- `validSqlIdent`.
 type Store a
     = Store
         { table : String
@@ -266,6 +280,7 @@ type Store a
         , specs : List ColumnSpec
         , pk : Maybe String
         , ops : List SchemaOp
+        , indexes : List IndexSpec
         }
 
 
@@ -433,6 +448,7 @@ buildStore table columns codec =
                         , specs = []
                         , pk = Nothing
                         , ops = []
+                        , indexes = []
                         }
                     )
 
@@ -617,6 +633,7 @@ primaryKeyNamed name store =
                 , specs = PrimaryKey name :: r.specs
                 , pk = Just name
                 , ops = r.ops
+                , indexes = r.indexes
                 }
 
 
@@ -663,6 +680,80 @@ addSpec spec store =
                 , specs = spec :: r.specs
                 , pk = r.pk
                 , ops = r.ops
+                , indexes = r.indexes
+                }
+
+
+-- ─── Declarative index builders ────────────────────────────────────
+
+
+-- | `index columns store` — declare a non-unique performance index over one or
+-- more columns of `store`, with the index name derived from the table name and
+-- the column list (`idx_<table>_<col1>_<col2>_…`). Every column in `columns`
+-- must be a name present in the store's codec-derived column list; an unknown
+-- column or an invalid identifier fails closed at `create` time.
+--
+-- The index is emitted as a separate `CREATE INDEX` ledger entry after the
+-- `CREATE TABLE` entry in `migrations`. Existing indexes are not affected
+-- (idempotent when the ledger already records this entry name).
+--
+-- Example:
+--
+--     import Ipe.Db.Store as Store exposing (Store)
+--
+--     type alias Post =
+--         { id : Int, authorId : String, publishedAt : String }
+--
+--     postsStore : Result Error (Store Post)
+--     postsStore =
+--         Store.fromCodec "posts" postCodec
+--             |> Result.map (Store.serial .id)
+--             |> Result.map (Store.primaryKey .id)
+--             |> Result.map (Store.index [ "author_id" ])
+--             |> Result.map (Store.index [ "author_id", "published_at" ])
+index : List String -> Store a -> Store a
+index columns store =
+    addIndex (Index columns) store
+
+
+-- | `indexNamed name columns store` — declare a non-unique performance index
+-- over one or more columns of `store`, with a caller-supplied index name.
+-- `name` must pass `validSqlIdent`; every column in `columns` must be a name
+-- present in the store's codec-derived column list. An invalid name, an unknown
+-- column, or an invalid column identifier fails closed at `create` time.
+--
+-- Example:
+--
+--     import Ipe.Db.Store as Store exposing (Store)
+--
+--     type alias Post =
+--         { id : Int, authorId : String, publishedAt : String }
+--
+--     postsStore : Result Error (Store Post)
+--     postsStore =
+--         Store.fromCodec "posts" postCodec
+--             |> Result.map (Store.serial .id)
+--             |> Result.map (Store.primaryKey .id)
+--             |> Result.map (Store.indexNamed "posts_author_published" [ "author_id", "published_at" ])
+indexNamed : String -> List String -> Store a -> Store a
+indexNamed name columns store =
+    addIndex (IndexNamed name columns) store
+
+
+addIndex : IndexSpec -> Store a -> Store a
+addIndex spec store =
+    case store of
+        Store r ->
+            Store
+                { table = r.table
+                , frozenTable = r.frozenTable
+                , frozenColumns = r.frozenColumns
+                , currentColumns = r.currentColumns
+                , codec = r.codec
+                , specs = r.specs
+                , pk = r.pk
+                , ops = r.ops
+                , indexes = r.indexes ++ [ spec ]
                 }
 
 
@@ -721,6 +812,7 @@ renameColumn from to store =
                 , specs = r.specs
                 , pk = r.pk
                 , ops = r.ops ++ [ RenameColumn from to ]
+                , indexes = r.indexes
                 }
 
 
@@ -784,6 +876,7 @@ renameTable to store =
                 , specs = r.specs
                 , pk = r.pk
                 , ops = r.ops ++ [ RenameTable r.table to ]
+                , indexes = r.indexes
                 }
 
 
@@ -851,7 +944,12 @@ migrations store =
                             Err e
 
                         Ok renameEntries ->
-                            Ok (createEntry :: renameEntries)
+                            case foldIndexes r.table r.currentColumns r.indexes of
+                                Err e ->
+                                    Err e
+
+                                Ok indexEntries ->
+                                    Ok (createEntry :: renameEntries ++ indexEntries)
 
 
 foldOps : String -> List SchemaOp -> Result Error (List Db.Migration)
@@ -942,6 +1040,124 @@ renameTableEntry from to =
     }
 
 
+-- ─── Index DDL builders ────────────────────────────────────────────
+--
+-- Fold the store's declared indexes to `CREATE INDEX` ledger entries. Every
+-- identifier — the index name (derived or caller-supplied), the table name, and
+-- each column name — passes through `validSqlIdent` before it reaches the DDL
+-- string, and each column is also checked against the store's current column
+-- list (parse-don't-validate: a column absent from the codec is an `Err`, never
+-- silently dropped). No values are involved (DDL only) — there is no parameter
+-- path for indexes.
+
+
+-- Fold the store's index specs to an ordered list of ledger entries, or fail
+-- closed on the first invalid identifier or unknown column.
+foldIndexes : String -> List Column -> List IndexSpec -> Result Error (List Db.Migration)
+foldIndexes table columns indexes =
+    case indexes of
+        [] ->
+            Ok []
+
+        first :: rest ->
+            case indexToEntry table columns first of
+                Err e ->
+                    Err e
+
+                Ok entry ->
+                    case foldIndexes table columns rest of
+                        Err e ->
+                            Err e
+
+                        Ok more ->
+                            Ok (entry :: more)
+
+
+-- Validate and build the `CREATE INDEX` ledger entry for one `IndexSpec`.
+-- The table name, the index name (derived or supplied), and every column name
+-- all pass through `validSqlIdent`; each column is also checked against the
+-- store's current column list (a column absent from the codec is an `Err`).
+indexToEntry : String -> List Column -> IndexSpec -> Result Error Db.Migration
+indexToEntry table columns spec =
+    case spec of
+        Index cols ->
+            let
+                name =
+                    String.concat
+                        [ "idx_"
+                        , table
+                        , "_"
+                        , String.join "_" cols
+                        ]
+            in
+            buildIndexEntry table name cols columns
+
+        IndexNamed name cols ->
+            buildIndexEntry table name cols columns
+
+
+-- Build a `CREATE INDEX` entry from already-name-resolved components, running
+-- every identifier through `validSqlIdent` and each column through the store's
+-- column list before constructing the DDL string. Fails on the first invalid or
+-- unknown identifier with no partial SQL produced.
+buildIndexEntry : String -> String -> List String -> List Column -> Result Error Db.Migration
+buildIndexEntry table name cols storeColumns =
+    if Basics.not (validSqlIdent table) then
+        Err (invalidIdentError "table" table)
+
+    else if Basics.not (validSqlIdent name) then
+        Err (invalidIdentError "index" name)
+
+    else if List.isEmpty cols then
+        Err emptyIndexError
+
+    else
+        case firstInvalidIndexColumn storeColumns cols of
+            Just bad ->
+                Err bad
+
+            Nothing ->
+                Ok
+                    { name = String.concat [ "create_index_", name ]
+                    , sql =
+                        String.concat
+                            [ "CREATE INDEX IF NOT EXISTS "
+                            , name
+                            , " ON "
+                            , table
+                            , " ("
+                            , String.join ", " cols
+                            , ")"
+                            ]
+                    }
+
+
+-- Check the first column in `cols` that either fails `validSqlIdent` or is
+-- absent from the store's column list. Returns `Just (Err e)` for the first
+-- bad column, `Nothing` when all are valid and present.
+firstInvalidIndexColumn : List Column -> List String -> Maybe Error
+firstInvalidIndexColumn storeColumns cols =
+    case cols of
+        [] ->
+            Nothing
+
+        name :: rest ->
+            if Basics.not (validSqlIdent name) then
+                Just (invalidIdentError "column" name)
+
+            else if Basics.not (hasColumn storeColumns name) then
+                Just (unknownColumnError name)
+
+            else
+                firstInvalidIndexColumn storeColumns rest
+
+
+emptyIndexError : Error
+emptyIndexError =
+    Error.invalidInput
+        "Ipe.Db.Store: an index must name at least one column"
+
+
 -- ─── Introspection ─────────────────────────────────────────────────
 
 
@@ -1029,6 +1245,67 @@ specOmitsColumn spec name =
 
         DefaultInt _ _ ->
             False
+
+
+-- | `insertReturning conn store row` — insert one row and return the stored row
+-- as decoded by the store's codec, including any DB-assigned columns (such as a
+-- `serial` primary key). The same OmitField logic as `insert` omits `Serial` /
+-- `DefaultNow` columns from the write so the database fills them; `RETURNING *`
+-- reads every column back — the DB-assigned values are present in the result.
+-- The returned row is decoded through the store's own codec (the same path `all`
+-- / `get` / `findWhere` use), so a schema drift (a missing column, a cell that
+-- is not the declared shape) is a typed `Err`, never a wrong value.
+--
+-- A codec projection that fails, or a RETURNING row that does not decode to the
+-- store's type, is a typed `Err`. Fails closed with no SQL on a non-record codec.
+--
+-- Example:
+--
+--     import Ipe.Db as Db exposing (Db)
+--     import Ipe.Db.Store as Store exposing (Store)
+--     import Ipe.Task as Task exposing (Task)
+--     import Ipe.Error exposing (Error)
+--
+--     type alias Item =
+--         { id : Int, name : String }
+--
+--     -- `id` is `serial`, so the DB assigns it; `insertReturning` gives it back.
+--     addItem : Db -> Store Item -> String -> Task Error Item
+--     addItem conn store name =
+--         Store.insertReturning conn store { id = 0, name = name }
+insertReturning : Db -> Store a -> a -> Task Error a
+insertReturning conn store row =
+    case store of
+        Store r ->
+            case DbCodec.codecToBinds r.codec row of
+                Err e ->
+                    Task.fail e
+
+                Ok binds ->
+                    case r.codec of
+                        Codec codecR ->
+                            Task.andThen
+                                (\results ->
+                                    case results of
+                                        first :: _ ->
+                                            Task.succeed first
+
+                                        [] ->
+                                            Task.fail insertReturningNoRowError
+                                )
+                                (Db.insertFieldsReturning
+                                    conn
+                                    r.table
+                                    (insertFields r.specs binds)
+                                    "*"
+                                    (codecR.mkDec {})
+                                )
+
+
+insertReturningNoRowError : Error
+insertReturningNoRowError =
+    Error.invalidInput
+        "Ipe.Db.Store: insertReturning did not receive a RETURNING row from the database"
 
 
 -- | `update conn store row` — update the row whose primary key matches `row`'s

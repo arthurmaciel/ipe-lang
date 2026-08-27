@@ -14,6 +14,10 @@ mod golden_db_get_alias_row;
 mod golden_db_get_iperow_bound;
 #[path = "g_db/golden_db_store_accessor_leaves.rs"]
 mod golden_db_store_accessor_leaves;
+#[path = "g_db/golden_db_store_index_seal.rs"]
+mod golden_db_store_index_seal;
+#[path = "g_db/golden_db_store_insert_returning_seal.rs"]
+mod golden_db_store_insert_returning_seal;
 #[path = "g_db/golden_db_store_join_seal.rs"]
 mod golden_db_store_join_seal;
 #[path = "g_db/golden_db_store_policy_algebra.rs"]
