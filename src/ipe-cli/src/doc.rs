@@ -4,13 +4,43 @@
 //! public API a consumer sees, each entry carrying its checker-inferred type
 //! signature, its `-- |` doc-comment, and a stable source location.
 //!
+//! ## Output layout
+//!
+//! Each rendering writes into its own subfolder of the output base (`doc/` by
+//! default, overridden with `--out DIR`):
+//!
+//! - `<base>/json/docs.json` — the machine-readable source of truth.
+//! - `<base>/markdown/<Module>.md` and `<base>/markdown/index.md` — Markdown views.
+//! - `<base>/html/index.html`, `<base>/html/<Module>.html`, `<base>/html/style.css`
+//!   — the self-contained HTML site.
+//!
+//! Cross-links within each format are relative to that format's subfolder. The
+//! logical anchor scheme (`Module#Name`) is format-neutral and identical across
+//! all three renderings.
+//!
+//! ## Stdlib documentation without a project
+//!
+//! The command succeeds in any directory. When no project source is reachable at
+//! `PATH`, it falls back to stdlib-only documentation rather than erroring. Running
+//! `ipe doc --write-format html` in an empty directory writes the full stdlib
+//! reference to `doc/html/`.
+//!
+//! ## Module index hierarchy
+//!
+//! The module listing in HTML and Markdown is a namespace tree — `Ipe.Db.Codec`
+//! nests under `Ipe.Db`, not in a flat alphabetical list. A prefix that has no
+//! module at its exact dotted path renders as a non-link section header.
+//!
+//! ## Command surface
+//!
 //! The command surface is a closed [`DocMode`] parsed at the CLI boundary, so an
 //! invalid flag combination is unrepresentable downstream (parse, don't validate;
 //! make-invalid-states-unrepresentable):
 //!
 //! * `ipe doc [PATH] [--out DIR] [--write-format markdown|json|html|all]` — generate
-//!   `docs.json` plus the selected human-facing renderings. Includes all stdlib modules
-//!   (both compiled-source and kernel-backed) alongside the project's own modules.
+//!   renderings under `<out>/{json,markdown,html}/`. Works without a project.
+//!   Includes all stdlib modules (both compiled-source and kernel-backed) alongside
+//!   any project modules found at `PATH`.
 //! * `ipe doc list [--plain|--json]` — list all stdlib modules (and project modules),
 //!   one per line. Default: guttered human output; `--plain`: bare names; `--json`:
 //!   `{"modules":[…]}`. The former `--list` flag is a deprecated alias that still
@@ -1040,6 +1070,11 @@ fn list_modules(path: &Path, format: OutputFormat) {
 
     match format {
         OutputFormat::Plain => {
+            // One queryable module name per line (project first, then stdlib).
+            // Kept flat — every line must resolve on `ipe doc <name>`; the
+            // namespace hierarchy is presented in the human listing, the
+            // Markdown index, and the HTML nav (which can show pure-prefix
+            // headers a plain, machine-readable list must not).
             for name in &ordered {
                 println!("{name}");
             }
@@ -1060,14 +1095,22 @@ fn list_modules(path: &Path, format: OutputFormat) {
             if project_names.is_empty() {
                 let _ = writeln!(body, "{GUTTER}  (none)\n");
             } else {
-                for name in &project_names {
-                    let _ = writeln!(body, "{GUTTER}  {name}");
+                let proj_refs: Vec<&str> = project_names.iter().map(String::as_str).collect();
+                let tree = build_namespace_tree(&proj_refs);
+                let mut tree_out = String::new();
+                render_plain_tree(&tree, 0, &mut tree_out);
+                for line in tree_out.lines() {
+                    let _ = writeln!(body, "{GUTTER}  {line}");
                 }
                 body.push('\n');
             }
             let _ = writeln!(body, "{GUTTER}{LABEL_STDLIB} ({}):\n", stdlib_names.len());
-            for name in &stdlib_names {
-                let _ = writeln!(body, "{GUTTER}  {name}");
+            let stdlib_refs: Vec<&str> = stdlib_names.iter().map(String::as_str).collect();
+            let tree = build_namespace_tree(&stdlib_refs);
+            let mut tree_out = String::new();
+            render_plain_tree(&tree, 0, &mut tree_out);
+            for line in tree_out.lines() {
+                let _ = writeln!(body, "{GUTTER}  {line}");
             }
             print!("{}", frame(body.trim_end_matches('\n')));
         }
@@ -1574,17 +1617,39 @@ fn signature_references(ty: &TyDoc, index: &AnchorIndex) -> Vec<TypeRef> {
     refs
 }
 
-/// The renderings written for one `ipe doc` generate call, keyed by output
-/// filename, so `generate` and `serve` share exactly one site builder.
-fn render_site(docs: &DocsJson, write_format: WriteFormat) -> BTreeMap<String, String> {
+/// The renderings for one `ipe doc` generate call, split by format subdirectory.
+///
+/// Returns three maps keyed by bare filename (no subfolder prefix):
+/// - `json_files`: the `docs.json` source of truth
+/// - `markdown_files`: per-module `.md` pages + the Markdown index
+/// - `html_files`: the self-contained HTML site (`index.html`, per-module
+///   pages, `style.css`)
+///
+/// The caller writes each map into its matching `<base>/json/`,
+/// `<base>/markdown/`, or `<base>/html/` subfolder. Cross-links within each
+/// format are relative to that subfolder (e.g. HTML `<a href="Ipe-List.html">`
+/// resolves within `html/`; Markdown `[…](Ipe-List.md)` within `markdown/`).
+/// The `docs.json` cross-reference anchors are format-neutral logical
+/// addresses, identical across all three renderings.
+fn render_site_split(
+    docs: &DocsJson,
+    write_format: WriteFormat,
+) -> (
+    BTreeMap<String, String>,
+    BTreeMap<String, String>,
+    BTreeMap<String, String>,
+) {
     let index = AnchorIndex::build(docs);
-    let mut files = BTreeMap::new();
+    let mut json_files = BTreeMap::new();
+    let mut markdown_files = BTreeMap::new();
+    let mut html_files = BTreeMap::new();
 
-    files.insert("docs.json".to_owned(), render_json(docs));
+    json_files.insert("docs.json".to_owned(), render_json(docs));
 
     if write_format.wants_markdown() {
+        markdown_files.insert("index.md".to_owned(), render_markdown_index(docs));
         for module in &docs.modules {
-            files.insert(
+            markdown_files.insert(
                 format!("{}.md", module_stem(&module.name)),
                 render_markdown(module, &index),
             );
@@ -1592,32 +1657,58 @@ fn render_site(docs: &DocsJson, write_format: WriteFormat) -> BTreeMap<String, S
     }
 
     if write_format.wants_html() {
-        files.insert("index.html".to_owned(), render_html_index(docs));
-        files.insert("style.css".to_owned(), STYLE_CSS.to_owned());
+        html_files.insert("index.html".to_owned(), render_html_index(docs));
+        html_files.insert("style.css".to_owned(), STYLE_CSS.to_owned());
         for module in &docs.modules {
-            files.insert(
+            html_files.insert(
                 format!("{}.html", module_stem(&module.name)),
                 render_html_module(module, &index),
             );
         }
     }
 
+    (json_files, markdown_files, html_files)
+}
+
+/// Build the flat file map for the HTTP serve loop (HTML only, no disk writes).
+fn render_site_for_serve(docs: &DocsJson) -> BTreeMap<String, String> {
+    let index = AnchorIndex::build(docs);
+    let mut files = BTreeMap::new();
+    files.insert("index.html".to_owned(), render_html_index(docs));
+    files.insert("style.css".to_owned(), STYLE_CSS.to_owned());
+    for module in &docs.modules {
+        files.insert(
+            format!("{}.html", module_stem(&module.name)),
+            render_html_module(module, &index),
+        );
+    }
     files
 }
 
 /// Generate `docs.json` and the selected renderings for the package at `path`,
-/// writing them under `out`. Includes stdlib modules alongside the project.
+/// writing them under `out/{json,markdown,html}/` subfolders.
+///
+/// Attempts full project + stdlib documentation. When no project source is
+/// reachable at `path` (no source files, no valid project), falls back to
+/// stdlib-only so the command succeeds in any directory, including an empty
+/// scratch dir.
 ///
 /// # Errors
-/// As [`build_docs`], plus [`CliError::Io`] on a write failure.
+/// [`CliError::Io`] on a write failure. Project extraction errors are silently
+/// absorbed by the stdlib-only fallback.
 fn generate(path: &Path, out: &Path, write_format: WriteFormat) -> Result<(), CliError> {
-    let docs = build_docs(path)?;
-    let files = render_site(&docs, write_format);
+    // Attempt full project + stdlib documentation. When no project is reachable
+    // at `path`, fall back to stdlib-only so the command succeeds in any dir.
+    let docs = build_docs(path).unwrap_or_else(|_| build_stdlib_only_docs());
 
-    std::fs::create_dir_all(out).map_err(|e| crate::io_err(out, e))?;
-    for (name, contents) in &files {
-        let file_path = out.join(name);
-        std::fs::write(&file_path, contents).map_err(|e| crate::io_err(&file_path, e))?;
+    let (json_files, markdown_files, html_files) = render_site_split(&docs, write_format);
+
+    write_format_dir(out, "json", &json_files)?;
+    if write_format.wants_markdown() {
+        write_format_dir(out, "markdown", &markdown_files)?;
+    }
+    if write_format.wants_html() {
+        write_format_dir(out, "html", &html_files)?;
     }
 
     print!(
@@ -1630,6 +1721,39 @@ fn generate(path: &Path, out: &Path, write_format: WriteFormat) -> Result<(), Cl
         )))
     );
     Ok(())
+}
+
+/// Write every file in `files` into `<base>/<subdir>/`, creating the directory
+/// when absent.
+///
+/// # Errors
+/// [`CliError::Io`] on any filesystem failure.
+fn write_format_dir(
+    base: &Path,
+    subdir: &str,
+    files: &BTreeMap<String, String>,
+) -> Result<(), CliError> {
+    let dir = base.join(subdir);
+    std::fs::create_dir_all(&dir).map_err(|e| crate::io_err(&dir, e))?;
+    for (name, contents) in files {
+        let file_path = dir.join(name);
+        std::fs::write(&file_path, contents).map_err(|e| crate::io_err(&file_path, e))?;
+    }
+    Ok(())
+}
+
+/// Build a stdlib-only [`DocsJson`] without accessing any project on disk.
+///
+/// Used when `ipe doc --write-format <fmt>` is invoked outside a project
+/// directory. The project extraction pipeline (`extract_tree`/`read_tree`) is
+/// not called; only stdlib modules are enumerated.
+fn build_stdlib_only_docs() -> DocsJson {
+    let mut stdlib = build_stdlib_docs();
+    stdlib.sort_by(|a, b| a.name.cmp(&b.name));
+    DocsJson {
+        version: DOCS_JSON_VERSION,
+        modules: stdlib,
+    }
 }
 
 /// Verify every exposed binding in the package at `path` carries a doc-comment.
@@ -2207,6 +2331,179 @@ fn render_markdown(module: &ModuleDoc, index: &AnchorIndex) -> String {
 }
 
 // ===========================================================================
+// Namespace hierarchy — shared by Markdown index, HTML nav, and plain list.
+// ===========================================================================
+
+/// A node in the namespace tree built from dotted module names.
+///
+/// Each node represents one segment (e.g. `Db` within `Ipe.Db`). A node is a
+/// *module* when a [`ModuleDoc`] exists at its exact dotted path; it is a
+/// *namespace header* when it has children but no module of its own at that
+/// exact path. Children are kept in sorted order so every level renders
+/// alphabetically.
+struct NamespaceNode {
+    /// The dotted path to this node (e.g. `Ipe.Db`).
+    full_name: String,
+    /// Whether a [`ModuleDoc`] exists at this exact path.
+    is_module: bool,
+    /// Child nodes, sorted alphabetically by their trailing segment.
+    children: Vec<Self>,
+}
+
+/// Build a namespace tree from a flat, sorted slice of module names.
+///
+/// Returns the root children (the top-level segments). A pure prefix node
+/// that has children but no module of its own at its exact path is marked
+/// `is_module = false` and renders as a non-link header.
+fn build_namespace_tree(names: &[&str]) -> Vec<NamespaceNode> {
+    let mut roots: Vec<NamespaceNode> = Vec::new();
+    for name in names {
+        insert_into_tree(&mut roots, &name.split('.').collect::<Vec<_>>(), 0);
+    }
+    roots
+}
+
+/// Recursively insert a dotted module name into the tree at `depth`.
+fn insert_into_tree(nodes: &mut Vec<NamespaceNode>, segments: &[&str], depth: usize) {
+    if depth >= segments.len() {
+        return;
+    }
+    let Some(prefix_segs) = segments.get(..=depth) else {
+        return;
+    };
+    let prefix = prefix_segs.join(".");
+
+    if let Some(node) = nodes.iter_mut().find(|n| n.full_name == prefix) {
+        if depth + 1 == segments.len() {
+            node.is_module = true;
+        } else {
+            insert_into_tree(&mut node.children, segments, depth + 1);
+        }
+    } else {
+        let is_module = depth + 1 == segments.len();
+        let mut node = NamespaceNode {
+            full_name: prefix,
+            is_module,
+            children: Vec::new(),
+        };
+        if !is_module {
+            insert_into_tree(&mut node.children, segments, depth + 1);
+        }
+        nodes.push(node);
+        nodes.sort_by(|a, b| a.full_name.cmp(&b.full_name));
+    }
+}
+
+/// Render a namespace tree as indented Markdown lines.
+///
+/// Modules are links to their `.md` page; pure prefix headers are bold text
+/// with no link. Each namespace depth is indented by exactly 2 spaces.
+fn render_markdown_tree(nodes: &[NamespaceNode], depth: usize, out: &mut String) {
+    let indent = "  ".repeat(depth);
+    for node in nodes {
+        if node.is_module {
+            let stem = module_stem(&node.full_name);
+            let _ = writeln!(out, "{indent}- [{name}]({stem}.md)", name = node.full_name);
+        } else {
+            let _ = writeln!(out, "{indent}- **{}**", node.full_name);
+        }
+        render_markdown_tree(&node.children, depth + 1, out);
+    }
+}
+
+/// Render the Markdown index page for the whole doc set.
+///
+/// Presents project modules under their section first, then the stdlib, each
+/// section as its own namespace tree. When only stdlib modules are present the
+/// project section is omitted.
+fn render_markdown_index(docs: &DocsJson) -> String {
+    let mut out = String::from("# API documentation\n\n");
+
+    let project_names: Vec<&str> = docs
+        .modules
+        .iter()
+        .filter(|m| m.kind == ModuleKind::Local)
+        .map(|m| m.name.as_str())
+        .collect();
+
+    let stdlib_names: Vec<&str> = docs
+        .modules
+        .iter()
+        .filter(|m| m.kind == ModuleKind::Stdlib)
+        .map(|m| m.name.as_str())
+        .collect();
+
+    if !project_names.is_empty() {
+        let _ = writeln!(out, "## {LABEL_PROJECT}\n");
+        let tree = build_namespace_tree(&project_names);
+        render_markdown_tree(&tree, 0, &mut out);
+        out.push('\n');
+    }
+
+    if !stdlib_names.is_empty() {
+        let _ = writeln!(out, "## {LABEL_STDLIB}\n");
+        let tree = build_namespace_tree(&stdlib_names);
+        render_markdown_tree(&tree, 0, &mut out);
+    }
+
+    out
+}
+
+/// Render a namespace tree into a string with 2-space indent per depth.
+///
+/// Module nodes emit their full dotted name; pure prefix header nodes emit
+/// their full dotted name followed by `/` to indicate they are a namespace
+/// without a module at that exact path.
+fn render_plain_tree(nodes: &[NamespaceNode], depth: usize, out: &mut String) {
+    let indent = "  ".repeat(depth);
+    for node in nodes {
+        if node.is_module {
+            let _ = writeln!(out, "{indent}{}", node.full_name);
+        } else {
+            let _ = writeln!(out, "{indent}{}/", node.full_name);
+        }
+        render_plain_tree(&node.children, depth + 1, out);
+    }
+}
+
+/// Render a namespace tree as nested HTML `<ul>/<li>` markup.
+///
+/// Modules emit an `<a href="…">` link; pure prefix headers emit a plain
+/// `<span>`. Children are wrapped in a nested `<ul>`.
+fn render_html_tree(nodes: &[NamespaceNode], out: &mut String) {
+    out.push_str("<ul class=\"modules\">\n");
+    for node in nodes {
+        out.push_str("<li class=\"module\"");
+        let _ = write!(
+            out,
+            " data-name=\"{}\"",
+            html_escape(&node.full_name.to_lowercase())
+        );
+        out.push('>');
+        if node.is_module {
+            let stem = module_stem(&node.full_name);
+            let _ = write!(
+                out,
+                "<a href=\"{stem}.html\">{}</a>",
+                html_escape(&node.full_name)
+            );
+        } else {
+            let _ = write!(
+                out,
+                "<span class=\"ns-header\">{}</span>",
+                html_escape(&node.full_name)
+            );
+        }
+        if !node.children.is_empty() {
+            out.push('\n');
+            render_html_tree(&node.children, out);
+        }
+        out.push_str("</li>\n");
+    }
+    out.push_str("</ul>\n");
+}
+
+// ===========================================================================
 // HTML site — a self-contained static rendering over the same `DocsJson` model.
 // ===========================================================================
 
@@ -2254,6 +2551,8 @@ pre.sig {
   border-radius: 4px; overflow-x: auto; border: 1px solid var(--border);
 }
 p.comment { margin: 0.4rem 0 0; color: var(--muted); }
+span.ns-header { color: var(--muted); font-style: italic; }
+ul.modules ul { padding-left: 1.2rem; }
 @media (max-width: 40rem) { ul.modules { columns: 1; } }
 ";
 
@@ -2333,8 +2632,8 @@ fn html_page(title: &str, body: &str) -> String {
 }
 
 /// Render the index page — the package's module list, project modules first
-/// under their labelled section, then the standard library, with a client-side
-/// filter box that hides non-matching entries as the reader types.
+/// under their labelled section, then the standard library. Each section is a
+/// hierarchical namespace tree with a client-side filter box.
 fn render_html_index(docs: &DocsJson) -> String {
     let mut body = String::from("<h1>API documentation</h1>\n");
     body.push_str(
@@ -2350,28 +2649,26 @@ fn render_html_index(docs: &DocsJson) -> String {
     html_page("API documentation", &body)
 }
 
-/// Append one labelled module section (all modules of `kind`, already in name
-/// order) to the index body. A section with no modules is omitted.
+/// Append one labelled module section as a hierarchical namespace tree to the
+/// index body. A section with no modules is omitted.
 fn render_html_module_section(body: &mut String, docs: &DocsJson, kind: ModuleKind, label: &str) {
-    let group: Vec<&ModuleDoc> = docs.modules.iter().filter(|m| m.kind == kind).collect();
-    if group.is_empty() {
+    let names: Vec<&str> = docs
+        .modules
+        .iter()
+        .filter(|m| m.kind == kind)
+        .map(|m| m.name.as_str())
+        .collect();
+    if names.is_empty() {
         return;
     }
     let _ = writeln!(
         body,
-        "<section class=\"group\"><h2>{}</h2>\n<ul class=\"modules\">",
+        "<section class=\"group\"><h2>{}</h2>",
         html_escape(label)
     );
-    for module in group {
-        let _ = writeln!(
-            body,
-            "<li class=\"module\" data-name=\"{}\"><a href=\"{}.html\">{}</a></li>",
-            html_escape(&module.name.to_lowercase()),
-            html_escape(&module_stem(&module.name)),
-            html_escape(&module.name)
-        );
-    }
-    body.push_str("</ul></section>\n");
+    let tree = build_namespace_tree(&names);
+    render_html_tree(&tree, body);
+    body.push_str("</section>\n");
 }
 
 /// Render one module's page — its doc-comment, its exposed types and values,
@@ -2465,8 +2762,8 @@ fn render_html_module(module: &ModuleDoc, index: &AnchorIndex) -> String {
 fn serve(path: &Path, port: Option<u16>) -> Result<(), CliError> {
     use std::net::TcpListener;
 
-    let docs = build_docs(path)?;
-    let site = render_site(&docs, WriteFormat::Html);
+    let docs = build_docs(path).unwrap_or_else(|_| build_stdlib_only_docs());
+    let site = render_site_for_serve(&docs);
 
     let addr = format!("127.0.0.1:{}", port.unwrap_or(0));
     let listener = TcpListener::bind(&addr).map_err(|e| crate::io_err(Path::new(&addr), e))?;
@@ -3137,5 +3434,229 @@ mod tests {
         assert!(r.contains("Content-Length: 2\r\n"));
         assert!(r.contains("Connection: close\r\n"));
         assert!(r.ends_with("\r\n\r\nhi"));
+    }
+
+    // ── Per-format subfolder layout ────────────────────────────────────────
+
+    #[test]
+    fn render_site_split_writes_three_separate_maps() {
+        let docs = DocsJson {
+            version: DOCS_JSON_VERSION,
+            modules: vec![local_module("App"), stdlib_module("Ipe.List")],
+        };
+        let (json, markdown, html) = render_site_split(&docs, WriteFormat::All);
+        assert!(json.contains_key("docs.json"), "json map has docs.json");
+        assert!(
+            markdown.contains_key("index.md"),
+            "markdown map has index.md"
+        );
+        assert!(
+            markdown.contains_key("App.md"),
+            "markdown map has module page"
+        );
+        assert!(
+            markdown.contains_key("Ipe-List.md"),
+            "markdown map has stdlib page"
+        );
+        assert!(html.contains_key("index.html"), "html map has index.html");
+        assert!(html.contains_key("style.css"), "html map has stylesheet");
+        assert!(html.contains_key("App.html"), "html map has module page");
+    }
+
+    #[test]
+    fn render_site_split_json_only_omits_markdown_and_html() {
+        let docs = one_module_docs(local_module("App"));
+        let (json, markdown, html) = render_site_split(&docs, WriteFormat::Json);
+        assert!(json.contains_key("docs.json"));
+        assert!(markdown.is_empty(), "no markdown for Json format");
+        assert!(html.is_empty(), "no html for Json format");
+    }
+
+    #[test]
+    fn render_site_split_markdown_only_omits_html() {
+        let docs = one_module_docs(local_module("App"));
+        let (json, markdown, html) = render_site_split(&docs, WriteFormat::Markdown);
+        assert!(json.contains_key("docs.json"));
+        assert!(!markdown.is_empty());
+        assert!(html.is_empty());
+    }
+
+    #[test]
+    fn write_format_dir_creates_subfolder_and_writes_files() {
+        use std::fs;
+        let tmp = std::env::temp_dir().join(format!("ipe-doc-test-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&tmp);
+        let mut files = BTreeMap::new();
+        files.insert("docs.json".to_owned(), "{\"v\":1}".to_owned());
+        write_format_dir(&tmp, "json", &files).expect("write_format_dir");
+        let written = tmp.join("json").join("docs.json");
+        assert!(written.exists(), "docs.json written under json/");
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    // ── Stdlib docs without a project ─────────────────────────────────────
+
+    #[test]
+    fn build_stdlib_only_docs_contains_known_modules() {
+        let docs = build_stdlib_only_docs();
+        let names: Vec<&str> = docs.modules.iter().map(|m| m.name.as_str()).collect();
+        assert!(names.contains(&"Ipe.List"), "Ipe.List in stdlib: {names:?}");
+        assert!(
+            names.contains(&"Ipe.String"),
+            "Ipe.String in stdlib: {names:?}"
+        );
+        assert!(!docs.modules.is_empty(), "at least one module");
+    }
+
+    #[test]
+    fn build_stdlib_only_docs_all_modules_are_stdlib_kind() {
+        let docs = build_stdlib_only_docs();
+        for m in &docs.modules {
+            assert_eq!(
+                m.kind,
+                ModuleKind::Stdlib,
+                "{} should be Stdlib kind",
+                m.name
+            );
+        }
+    }
+
+    // ── Hierarchical namespace tree ────────────────────────────────────────
+
+    #[test]
+    fn namespace_tree_nests_children_under_shared_prefix() {
+        let names = ["Ipe.Db", "Ipe.Db.Codec", "Ipe.Db.Store", "Ipe.List"];
+        let tree = build_namespace_tree(&names);
+        // Top level: Ipe (namespace only, has children)
+        assert_eq!(tree.len(), 1, "one top-level node: Ipe");
+        let ipe = tree.first().expect("one top-level Ipe node");
+        assert_eq!(ipe.full_name, "Ipe");
+        assert!(!ipe.is_module, "Ipe itself is not a module here");
+        // Children of Ipe: Db, List
+        let child_names: Vec<&str> = ipe.children.iter().map(|n| n.full_name.as_str()).collect();
+        assert!(
+            child_names.contains(&"Ipe.Db"),
+            "Ipe.Db is a child: {child_names:?}"
+        );
+        assert!(
+            child_names.contains(&"Ipe.List"),
+            "Ipe.List is a child: {child_names:?}"
+        );
+        // Ipe.Db has children Codec and Store
+        let db = ipe
+            .children
+            .iter()
+            .find(|n| n.full_name == "Ipe.Db")
+            .expect("Ipe.Db node");
+        assert!(db.is_module, "Ipe.Db is itself a module");
+        let db_children: Vec<&str> = db.children.iter().map(|n| n.full_name.as_str()).collect();
+        assert!(
+            db_children.contains(&"Ipe.Db.Codec"),
+            "Codec nested: {db_children:?}"
+        );
+        assert!(
+            db_children.contains(&"Ipe.Db.Store"),
+            "Store nested: {db_children:?}"
+        );
+    }
+
+    #[test]
+    fn markdown_index_indents_submodule_two_spaces_under_parent() {
+        let docs = DocsJson {
+            version: DOCS_JSON_VERSION,
+            modules: vec![
+                stdlib_module("Ipe.Db"),
+                stdlib_module("Ipe.Db.Codec"),
+                stdlib_module("Ipe.Db.Store"),
+                stdlib_module("Ipe.List"),
+            ],
+        };
+        let idx = render_markdown_index(&docs);
+        // Ipe.Db.Codec must appear indented under Ipe.Db — two extra spaces.
+        // In the tree: Ipe (depth 0) -> Ipe.Db (depth 1) -> Ipe.Db.Codec (depth 2)
+        // render_markdown_tree uses depth relative to its call site (0 for roots).
+        // Root = Ipe at depth 0 → "- **Ipe**"
+        // Ipe.Db at depth 1 → "  - [Ipe.Db](...)"
+        // Ipe.Db.Codec at depth 2 → "    - [Ipe.Db.Codec](...)"
+        let codec_line = idx
+            .lines()
+            .find(|l| l.contains("Ipe.Db.Codec"))
+            .expect("Ipe.Db.Codec in index");
+        let db_line = idx
+            .lines()
+            .find(|l| {
+                l.contains("Ipe.Db)")
+                    || (l.contains("Ipe.Db") && !l.contains("Codec") && !l.contains("Store"))
+            })
+            .expect("Ipe.Db in index");
+        // codec_line must have more leading spaces than db_line
+        let codec_indent = codec_line.len() - codec_line.trim_start().len();
+        let db_indent = db_line.len() - db_line.trim_start().len();
+        assert!(
+            codec_indent > db_indent,
+            "Ipe.Db.Codec is indented more than Ipe.Db: db={db_indent} codec={codec_indent}\n{idx}"
+        );
+        // The difference should be exactly 2 (one extra depth level)
+        assert_eq!(
+            codec_indent - db_indent,
+            2,
+            "exactly 2 extra spaces per depth: {idx}"
+        );
+    }
+
+    #[test]
+    fn html_index_nests_submodules_in_child_ul() {
+        let docs = DocsJson {
+            version: DOCS_JSON_VERSION,
+            modules: vec![
+                stdlib_module("Ipe.Db"),
+                stdlib_module("Ipe.Db.Codec"),
+                stdlib_module("Ipe.List"),
+            ],
+        };
+        let idx = render_html_index(&docs);
+        // Ipe.Db.Codec must appear inside a nested <ul> inside Ipe's <li>
+        // The simplest proxy: Ipe.Db.Codec's <a> appears after Ipe.Db's <a>,
+        // and there must be a nested <ul> between them.
+        let db_pos = idx.find("Ipe-Db.html").expect("Ipe.Db link");
+        let codec_pos = idx.find("Ipe-Db-Codec.html").expect("Ipe.Db.Codec link");
+        assert!(codec_pos > db_pos, "Codec comes after Db in markup");
+        // A <ul> must appear between Db and Codec (nesting).
+        let between = &idx[db_pos..codec_pos];
+        assert!(
+            between.contains("<ul"),
+            "nested <ul> between Db and Codec: {between}"
+        );
+    }
+
+    #[test]
+    fn pure_prefix_namespace_renders_as_non_link_header_in_html() {
+        // "Ipe" has no module of its own; only Ipe.List and Ipe.String exist.
+        let docs = DocsJson {
+            version: DOCS_JSON_VERSION,
+            modules: vec![stdlib_module("Ipe.List"), stdlib_module("Ipe.String")],
+        };
+        let idx = render_html_index(&docs);
+        // "Ipe" should appear as a span.ns-header, not a link.
+        assert!(
+            idx.contains("class=\"ns-header\">Ipe<"),
+            "Ipe prefix is a non-link header: {idx}"
+        );
+        assert!(
+            !idx.contains("href=\"Ipe.html\""),
+            "no link for pure prefix node: {idx}"
+        );
+    }
+
+    #[test]
+    fn markdown_index_renders_pure_prefix_as_bold_non_link() {
+        let docs = DocsJson {
+            version: DOCS_JSON_VERSION,
+            modules: vec![stdlib_module("Ipe.List"), stdlib_module("Ipe.String")],
+        };
+        let idx = render_markdown_index(&docs);
+        // "Ipe" prefix has no module → bold non-link header.
+        assert!(idx.contains("**Ipe**"), "pure prefix is bold: {idx}");
+        assert!(!idx.contains("[Ipe]"), "pure prefix is not linked: {idx}");
     }
 }

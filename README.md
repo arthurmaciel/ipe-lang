@@ -240,17 +240,31 @@ and the offending line, capability, version, or dependency.
 
 ## Documenting a package
 
-`ipe doc` generates reference documentation for a package from its own source.
+`ipe doc` generates reference documentation from source. It works with or
+without a project: run it in an empty directory to document the full stdlib.
 
-Your own project modules come first, under a **Project modules** heading, ahead
-of the **Standard library** — so you see your API before the stdlib.
+Each rendering lands in its own subfolder of the output base (`doc/` by
+default): `doc/json/docs.json`, `doc/markdown/`, and `doc/html/`. The module
+listing in HTML and Markdown is a namespace tree — `Ipe.Db.Codec` nests under
+`Ipe.Db`, not in a flat alphabetical list. Your own project modules appear
+first, under a **Project modules** heading, ahead of the **Standard library**.
 
-```
-$ ipe doc                          # write doc/ (docs.json + Markdown + HTML) for the current project
-$ ipe doc path/to/pkg --out site   # or a specific package, to a chosen directory
-$ ipe doc --format html            # write only one rendering (markdown | json | html | all)
-$ ipe doc serve                    # build the HTML site and preview it on loopback
-$ ipe doc check                    # a CI gate: exit non-zero if a binding is undocumented
+<!-- The commands below are verified against the released binary. -->
+```sh
+# Document the stdlib (works in any directory, no project needed):
+ipe doc --write-format html
+
+# Document a specific project package to a chosen directory:
+ipe doc path/to/pkg --out site
+
+# Write only one rendering (json | markdown | html | all; default: all):
+ipe doc --write-format markdown
+
+# Build the HTML site and preview it on loopback:
+ipe doc serve
+
+# CI coverage gate — exit non-zero when a binding lacks a doc-comment:
+ipe doc check
 ```
 
 ## Editor setup (LSP)

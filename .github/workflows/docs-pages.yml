@@ -1,0 +1,59 @@
+name: Deploy stdlib API docs to GitHub Pages
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "src/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/docs-pages.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+environment:
+  name: github-pages
+  url: ${{ steps.deployment.outputs.page_url }}
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build ipe
+        run: cargo build -p ipe --release
+
+      - name: Generate stdlib API documentation
+        run: |
+          mkdir -p _scratch
+          cd _scratch
+          ../target/release/ipe doc --write-format html
+          cd ..
+
+      - name: Stage site artifact
+        run: |
+          mkdir -p _site/api
+          cp -r _scratch/doc/html/. _site/api/
+          # Minimal root redirect so the Pages root does not 404.
+          printf '<!DOCTYPE html>\n<html>\n<head>\n<meta http-equiv="refresh" content="0;url=api/">\n</head>\n<body>\n<a href="api/">API documentation</a>\n</body>\n</html>\n' > _site/index.html
+
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+      - id: deployment
+        name: Deploy to GitHub Pages
+        uses: actions/deploy-pages@v4
