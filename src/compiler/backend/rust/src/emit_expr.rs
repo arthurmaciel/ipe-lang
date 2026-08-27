@@ -2564,6 +2564,7 @@ fn emit_db_call(
             let right_alias_e = arg!(4, "rightAlias")?;
             let frag_e = arg!(5, "frag")?;
             let projections_e = arg!(6, "projections")?;
+            let extra_binds_e = arg!(7, "extraBinds")?;
             let conn_s = emit_expr_at(ctx, conn_e, indent, child, generics)?;
             let left_table_s = emit_expr_at(ctx, left_table_e, indent, child, generics)?;
             let left_alias_s = emit_expr_at(ctx, left_alias_e, indent, child, generics)?;
@@ -2571,10 +2572,12 @@ fn emit_db_call(
             let right_alias_s = emit_expr_at(ctx, right_alias_e, indent, child, generics)?;
             let frag_s = emit_expr_at(ctx, frag_e, indent, child, generics)?;
             let projections_s = emit_expr_at(ctx, projections_e, indent, child, generics)?;
+            let extra_binds_s = emit_expr_at(ctx, extra_binds_e, indent, child, generics)?;
             let fn_name = crate::naming::kernel_name(*k);
             Ok(Some(format!(
                 "{fn_name}({conn_s}.clone(), {left_table_s}, {left_alias_s}, \
-                 {right_table_s}, {right_alias_s}, {frag_s}, {projections_s})"
+                 {right_table_s}, {right_alias_s}, {frag_s}, {projections_s}, {})",
+                project_params(&extra_binds_s)
             )))
         }
         // ── Db.findJoinOrdered: (conn, lt, la, lcols, rt, ra, rcols, frag,
@@ -2613,10 +2616,11 @@ fn emit_db_call(
             )))
         }
         // ── Db.findProjectionOrdered: (conn, lt, la, rt, ra, frag, projections,
-        //                              orderAlias, orderCol, orderAsc) ──────────
+        //                              extraBinds, orderAlias, orderCol, orderAsc)
         //
-        // Ten flat args: the seven from `DbFindProjection` plus the three ORDER
-        // BY arguments (alias String, column String, ascending Bool).
+        // Eleven flat args: the eight from `DbFindProjection` (including
+        // `extraBinds`) plus the three ORDER BY arguments (alias String, column
+        // String, ascending Bool).
         KernelFn::DbFindProjectionOrdered => {
             let conn_e = arg!(0, "conn")?;
             let left_table_e = arg!(1, "leftTable")?;
@@ -2625,9 +2629,10 @@ fn emit_db_call(
             let right_alias_e = arg!(4, "rightAlias")?;
             let frag_e = arg!(5, "frag")?;
             let projections_e = arg!(6, "projections")?;
-            let order_alias_e = arg!(7, "orderAlias")?;
-            let order_col_e = arg!(8, "orderCol")?;
-            let order_asc_e = arg!(9, "orderAsc")?;
+            let extra_binds_e = arg!(7, "extraBinds")?;
+            let order_alias_e = arg!(8, "orderAlias")?;
+            let order_col_e = arg!(9, "orderCol")?;
+            let order_asc_e = arg!(10, "orderAsc")?;
             let conn_s = emit_expr_at(ctx, conn_e, indent, child, generics)?;
             let left_table_s = emit_expr_at(ctx, left_table_e, indent, child, generics)?;
             let left_alias_s = emit_expr_at(ctx, left_alias_e, indent, child, generics)?;
@@ -2635,14 +2640,16 @@ fn emit_db_call(
             let right_alias_s = emit_expr_at(ctx, right_alias_e, indent, child, generics)?;
             let frag_s = emit_expr_at(ctx, frag_e, indent, child, generics)?;
             let projections_s = emit_expr_at(ctx, projections_e, indent, child, generics)?;
+            let extra_binds_s = emit_expr_at(ctx, extra_binds_e, indent, child, generics)?;
             let order_alias_s = emit_expr_at(ctx, order_alias_e, indent, child, generics)?;
             let order_col_s = emit_expr_at(ctx, order_col_e, indent, child, generics)?;
             let order_asc_s = emit_expr_at(ctx, order_asc_e, indent, child, generics)?;
             let fn_name = crate::naming::kernel_name(*k);
             Ok(Some(format!(
                 "{fn_name}({conn_s}.clone(), {left_table_s}, {left_alias_s}, \
-                 {right_table_s}, {right_alias_s}, {frag_s}, {projections_s}, \
-                 {order_alias_s}, {order_col_s}, {order_asc_s})"
+                 {right_table_s}, {right_alias_s}, {frag_s}, {projections_s}, {}, \
+                 {order_alias_s}, {order_col_s}, {order_asc_s})",
+                project_params(&extra_binds_s)
             )))
         }
         // ── Sql.inList: (frag: SqlFragment, values: List SqlValue) ───────────

@@ -11097,14 +11097,25 @@ impl ProjColKind {
     }
 }
 
-/// One column of a `Store.select` projection: its join-side `alias`, its
-/// validated `column` name, and the scalar `kind` that fixes the concrete reader
-/// and decoded type. The `select` intercept builds these; the
+/// The origin of one element in a `Store.select` projection: either a bare
+/// field access on a join-side record (`alias.column`) or a `literal(value)`
+/// call whose argument binds as a SQL parameter (`? AS pN`).
+enum ProjectionSource {
+    /// A `side.field` column reference: `alias` is the join-side alias
+    /// (`a0` / `a1`), `column` is the snake-cased, SQL-validated field name.
+    Column { alias: String, column: String },
+    /// A `Store.literal(value)` element: the lowered argument expression is
+    /// bound as a `SqlValue` parameter (`?`) rather than named as a column.
+    Literal { lowered: Expr },
+}
+
+/// One element of a `Store.select` projection: its source (a column reference
+/// or a literal parameter binding) and the scalar `kind` that fixes the
+/// concrete reader and decoded type. The `select` intercept builds these; the
 /// `selectToList` / `selectToMaybe` intercept consumes the `kind`s to emit the
 /// concrete per-column decode at the call site.
 struct ProjectedColumn {
-    alias: String,
-    column: String,
+    source: ProjectionSource,
     kind: ProjColKind,
 }
 
@@ -13975,14 +13986,10 @@ impl<'a> Lowerer<'a> {
     /// `(alias, column)` reference bound to output position `0`; a multi-column
     /// projection (`\( book, author ) -> ( book.title, author.name )`) lowers to
     /// the ordered `(alias, column)` list, one per tuple element, bound to
-    /// positions `0`, `1`, … The referenced column is read from each `side.field`
-    /// element at compile time, validated against that side's solved row type, and
-    /// the SELECT list is set to exactly those columns (column pushdown). The
-    /// projected row is decoded at the `selectToList`/`selectToMaybe` call site by
-    /// a monomorphic reader picked from each column's solved scalar type, so no
-    /// decoder is stored in the projection value. A projection that is not a
-    /// column reference (or a flat tuple of column references) fails closed
-    /// (IPE-L0149) rather than emitting a partial statement or a `SELECT *`.
+    /// positions `0`, `1`, … A `literal(value)` element lowers to a sentinel
+    /// `("", "")` pair in the column list and a corresponding `SqlValue` in the
+    /// `extraBinds` list, emitting `? AS pN` in the SELECT with the value bound
+    /// as a parameter. Every value binds as a parameter, never interpolated.
     fn lower_store_select(&self, args: &[canon::Expr]) -> DResult<Expr> {
         let (Some(lambda), Some(joined)) = (args.first(), args.get(1)) else {
             return Err(bug(
@@ -13993,18 +14000,60 @@ impl<'a> Lowerer<'a> {
         let (binders, body) = Self::select_lambda_parts(lambda)?;
         let projected = self.select_projections(binders, body)?;
         let lowered_joined = self.lower_expr(joined)?;
-        let items = projected
-            .into_iter()
-            .map(|col| Expr::Tuple(vec![Expr::Str(col.alias), Expr::Str(col.column)]))
-            .collect();
+
+        // Partition projected elements into the (alias, column) pair list and the
+        // ordered literal-bind `SqlValue` list. Column references emit the pair
+        // directly; literal elements emit the sentinel `("", "")` pair and one
+        // `SqlValue` constructor wrapping the lowered argument.
+        let mut pair_items: Vec<Expr> = Vec::with_capacity(projected.len());
+        let mut literal_items: Vec<Expr> = Vec::with_capacity(projected.len());
+        for col in projected {
+            match col.source {
+                ProjectionSource::Column { alias, column } => {
+                    pair_items.push(Expr::Tuple(vec![Expr::Str(alias), Expr::Str(column)]));
+                }
+                ProjectionSource::Literal { lowered } => {
+                    // Sentinel pair — the runtime recognises an empty alias as a
+                    // literal-parameter position and emits `? AS pN` there.
+                    pair_items.push(Expr::Tuple(vec![
+                        Expr::Str(String::new()),
+                        Expr::Str(String::new()),
+                    ]));
+                    // Wrap in the `SqlValue` constructor the field's type selects,
+                    // so `project_params` in the emitter converts it to `SqlParam`.
+                    let variant = match col.kind {
+                        ProjColKind::Text => self.builtins.sql_string,
+                        ProjColKind::Int => self.builtins.sql_int,
+                        ProjColKind::Bool => self.builtins.sql_bool,
+                        ProjColKind::Float => self.builtins.sql_float,
+                    };
+                    literal_items.push(Expr::Ctor {
+                        home: ModPath(Vec::new()),
+                        ty: self.builtins.sqlvalue,
+                        variant,
+                        args: vec![lowered],
+                    });
+                }
+            }
+        }
+
         let projections = Expr::List {
             elem: proj_pair_ir_type(),
-            items,
+            items: pair_items,
+        };
+        let sqlvalue_ir = IrType::Enum {
+            home: ModPath(Vec::new()),
+            name: self.builtins.sqlvalue,
+            args: Vec::new(),
+        };
+        let extra_binds = Expr::List {
+            elem: sqlvalue_ir,
+            items: literal_items,
         };
         let id = self.store_named_func_id("selectNamed")?;
         Ok(Expr::Call {
             callee: Callee::Func(id),
-            args: vec![lowered_joined, projections],
+            args: vec![lowered_joined, projections, extra_binds],
             pin: CallPin::None,
             on_form: OnFormKind::NotForm,
         })
@@ -14080,17 +14129,52 @@ impl<'a> Lowerer<'a> {
         Ok(([left_sym, right_sym], body))
     }
 
-    /// Read a single-column projection body (`side.field`) into its
-    /// `(alias, column)`, or fail closed. The body must be a field access on one
-    /// of the two bound side records; the binder position selects the alias
-    /// (`a0` / `a1`), and the field snake-cases to the column. The field is
-    /// confirmed present on the side's solved record type, so a projection naming
-    /// a column absent from the row fails closed.
+    /// Read a single projection body element into its `ProjectedColumn`, or fail
+    /// closed. Handles two shapes:
+    ///
+    /// - `side.field` — a column reference: the binder position selects the
+    ///   join-side alias (`a0` / `a1`), and the field snake-cases to the column.
+    ///   The field is confirmed present on the side's solved record type.
+    ///
+    /// - `literal(value)` — a `Store.literal` call: the argument is lowered and
+    ///   bound as a SQL parameter (`? AS pN`); its type picks the concrete reader.
+    ///
+    /// Anything else fails closed (IPE-L0149).
     fn select_single_projection(
         &self,
         binders: [Option<Symbol>; 2],
         body: &canon::Expr,
     ) -> DResult<ProjectedColumn> {
+        // ── `Store.literal(value)` element ──────────────────────────────────
+        if let canon::Expr_::Call(callee_expr, args) = &body.value
+            && matches!(
+                self.lower_callee(callee_expr),
+                Ok(Callee::Kernel(KernelFn::StoreLiteral))
+            )
+        {
+            let Some(value_expr) = args.first() else {
+                return Err(unsupported_store_select(
+                    body.span,
+                    StoreSelectProjectionDefect::UnsupportedProjectionBody,
+                ));
+            };
+            let value_ty = self.region_ty(value_expr.span);
+            let kind = value_ty
+                .and_then(|ty| ProjColKind::of_ty(ty, self.interner))
+                .ok_or_else(|| {
+                    unsupported_store_select(
+                        body.span,
+                        StoreSelectProjectionDefect::UnsupportedProjectionBody,
+                    )
+                })?;
+            let lowered = self.lower_expr(value_expr)?;
+            return Ok(ProjectedColumn {
+                source: ProjectionSource::Literal { lowered },
+                kind,
+            });
+        }
+
+        // ── `side.field` column reference ───────────────────────────────────
         let canon::Expr_::Access(base, field) = &body.value else {
             return Err(unsupported_store_select(
                 body.span,
@@ -14148,8 +14232,10 @@ impl<'a> Lowerer<'a> {
             ));
         };
         Ok(ProjectedColumn {
-            alias,
-            column: column_name,
+            source: ProjectionSource::Column {
+                alias,
+                column: column_name,
+            },
             kind,
         })
     }
@@ -23244,6 +23330,9 @@ impl<'a> Lowerer<'a> {
                 // a defensive fallback count; the intercept fires first.
                 | KernelFn::StoreOwnerColumn
                 | KernelFn::StoreImmutable
+                // `Store.literal` — arity 1 (value). Recognized structurally inside
+                // the `Store.select` projection body; this is the defensive fallback.
+                | KernelFn::StoreLiteral
                 // ── Server: cookie token source — arity 1 ────────────────
                 // `Server.cookieToken : String -> TokenSource`
                 | KernelFn::ServerCookieToken
@@ -23720,18 +23809,19 @@ impl<'a> Lowerer<'a> {
             // `Config.map6`/`map7`/`map8` — arities 7/8/9
             // `Db.Dsn.build` — arity 7 (driverTag, host, port, database, user,
             // password, tlsTag).
-            // `Db.findProjection` — arity 7 (Db, leftTable, leftAlias, rightTable,
-            // rightAlias, frag, projections).
-            Callee::Kernel(
-                KernelFn::ConfigMap6 | KernelFn::DsnBuild | KernelFn::DbFindProjection,
-            ) => Ok(7),
+            Callee::Kernel(KernelFn::ConfigMap6 | KernelFn::DsnBuild) => Ok(7),
+            // `Db.findProjection` — arity 8 (Db, leftTable, leftAlias, rightTable,
+            // rightAlias, frag, projections, extraBinds).
             // `Db.findJoin` — arity 8 (Db, leftTable, leftAlias, leftCols,
             // rightTable, rightAlias, rightCols, frag).
-            Callee::Kernel(KernelFn::ConfigMap7 | KernelFn::DbFindJoin) => Ok(8),
+            Callee::Kernel(
+                KernelFn::ConfigMap7 | KernelFn::DbFindJoin | KernelFn::DbFindProjection,
+            ) => Ok(8),
             Callee::Kernel(KernelFn::ConfigMap8) => Ok(9),
-            // `Db.findProjectionOrdered` — arity 10 (Db, leftTable, leftAlias,
-            // rightTable, rightAlias, frag, projections, orderAlias, orderCol, orderAsc).
-            Callee::Kernel(KernelFn::DbFindProjectionOrdered) => Ok(10),
+            // `Db.findProjectionOrdered` — arity 11 (Db, leftTable, leftAlias,
+            // rightTable, rightAlias, frag, projections, extraBinds, orderAlias,
+            // orderCol, orderAsc).
+            Callee::Kernel(KernelFn::DbFindProjectionOrdered) => Ok(11),
             // `Db.findJoinOrdered` — arity 11 (Db, leftTable, leftAlias, leftCols,
             // rightTable, rightAlias, rightCols, frag, orderAlias, orderCol, orderAsc).
             Callee::Kernel(KernelFn::DbFindJoinOrdered) => Ok(11),
@@ -25213,6 +25303,10 @@ impl<'a> Lowerer<'a> {
                     // orderBy modifiers — intercepted at lowering.
                     ("Store", "orderByLeft") => Ok(Callee::Kernel(KernelFn::StoreOrderByLeft)),
                     ("Store", "orderByRight") => Ok(Callee::Kernel(KernelFn::StoreOrderByRight)),
+                    // Literal projection element — recognized inside `Store.select`
+                    // lambda bodies; this fallback handles the exceptional point-free
+                    // or partial-application path (rejected by the is-placeholder gate).
+                    ("Store", "literal") => Ok(Callee::Kernel(KernelFn::StoreLiteral)),
                     // ── Secret kernels ──────────────────────────
                     ("Secret", "fromString") => Ok(Callee::Kernel(KernelFn::SecretFromString)),
                     ("Secret", "reveal") => Ok(Callee::Kernel(KernelFn::SecretReveal)),

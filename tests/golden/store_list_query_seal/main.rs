@@ -239,7 +239,8 @@ impl<T1: IpeStringify + std::fmt::Debug + 'static> IpeStringify for RecEncMkDecS
     }
 }
 #[derive(Clone, Debug, PartialEq)]
-pub struct RecFragJoinedAJoinedBLeftTableOrderPoisonProjectionsRightTable {
+pub struct RecExtraBindsFragJoinedAJoinedBLeftTableOrderPoisonProjectionsRightTable {
+    extraBinds: Vec<MainSqlValue>,
     frag: ipe_runtime::db::SqlFragment,
     joinedA: String,
     joinedB: String,
@@ -249,10 +250,11 @@ pub struct RecFragJoinedAJoinedBLeftTableOrderPoisonProjectionsRightTable {
     projections: Vec<(String, String)>,
     rightTable: String,
 }
-impl IpeStringify for RecFragJoinedAJoinedBLeftTableOrderPoisonProjectionsRightTable {
+impl IpeStringify for RecExtraBindsFragJoinedAJoinedBLeftTableOrderPoisonProjectionsRightTable {
     fn ipe_show(&self) -> String {
         format!(
-            "{{{} {} {} {} {} {} {} {}}}",
+            "{{{} {} {} {} {} {} {} {} {}}}",
+            (&ipe_runtime::stringify::Wrap(&self.extraBinds)).dispatch(),
             (&ipe_runtime::stringify::Wrap(&self.frag)).dispatch(),
             (&ipe_runtime::stringify::Wrap(&self.joinedA)).dispatch(),
             (&ipe_runtime::stringify::Wrap(&self.joinedB)).dispatch(),

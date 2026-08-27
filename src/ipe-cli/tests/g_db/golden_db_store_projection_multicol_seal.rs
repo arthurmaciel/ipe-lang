@@ -111,10 +111,12 @@ fn db_store_projection_multicol_seal_builds() {
 }
 
 /// Extract the body (between the first `{` and its matching `}`) of the emitted
-/// `Select` projection record struct — the record whose generated name ends in
-/// `OrderPoisonProjectionsRightTable`. Returns `None` if the struct is absent.
+/// `Select` projection record struct. The generated name encodes all field names
+/// alphabetically; the marker used here matches the current field set
+/// (`extraBinds`, `frag`, `joinedA`, `joinedB`, `leftTable`, `order`, `poison`,
+/// `projections`, `rightTable`). Returns `None` if the struct is absent.
 fn projection_record_struct_body(src: &str) -> Option<&str> {
-    let marker = "struct RecFragJoinedAJoinedBLeftTableOrderPoisonProjectionsRightTable";
+    let marker = "struct RecExtraBindsFragJoinedAJoinedBLeftTableOrderPoisonProjectionsRightTable";
     let start = src.find(marker)?;
     let open = src[start..].find('{')? + start;
     let close = src[open..].find('}')? + open;

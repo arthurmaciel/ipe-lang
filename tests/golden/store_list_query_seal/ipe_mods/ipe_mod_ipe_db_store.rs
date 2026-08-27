@@ -251,7 +251,7 @@ impl<T1: IpeStringify + std::fmt::Debug + 'static, T2: IpeStringify + std::fmt::
 }
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum IpeDbStoreSelect {
-    Select(RecFragJoinedAJoinedBLeftTableOrderPoisonProjectionsRightTable),
+    Select(RecExtraBindsFragJoinedAJoinedBLeftTableOrderPoisonProjectionsRightTable),
 }
 impl IpeStringify for IpeDbStoreSelect {
     fn ipe_show(&self) -> String {
