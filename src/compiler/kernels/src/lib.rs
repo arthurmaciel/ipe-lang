@@ -1526,6 +1526,10 @@ pub enum StdlibKernel {
     DbDecRequired,
     DbDecOptional,
     DbDecMoney,
+    /// `Db.Decode.decimal : String -> Decoder Decimal` — reads a TEXT column
+    /// as an exact-decimal value. Symmetric counterpart to `DbDecMoney`
+    /// (which returns `Decoder (Decimal, String)`).
+    DbDecDecimal,
     /// `Db.Decode.bytes : String -> Decoder (List Int)` — hex-decodes a
     /// BYTEA/BLOB column written by `SqlBytes` back to raw bytes.
     DbDecBytes,
@@ -3411,6 +3415,7 @@ impl StdlibKernel {
             Self::DbDecRequired => d("Db.Decode", "required", 3, Db, "db_decode_required"),
             Self::DbDecOptional => d("Db.Decode", "optional", 4, Db, "db_decode_optional"),
             Self::DbDecMoney => d("Db.Decode", "money", 1, Db, "db_decode_money"),
+            Self::DbDecDecimal => d("Db.Decode", "decimal", 1, Db, "db_decode_decimal"),
             Self::DbDecBytes => d("Db.Decode", "bytes", 1, Db, "db_decode_bytes"),
             // ── TEA: Cmd / Sub / Time.every ─────────────────────────────────
             Self::CmdNone => d("Cmd", "none", 0, Tea, "cmd_none"),
@@ -4934,6 +4939,7 @@ impl StdlibKernel {
         Self::DbDecRequired,
         Self::DbDecOptional,
         Self::DbDecMoney,
+        Self::DbDecDecimal,
         Self::DbDecBytes,
         // TEA: Cmd / Sub / Time.every
         Self::CmdNone,
@@ -5557,6 +5563,7 @@ impl StdlibKernel {
                 | Self::DbDecRequired
                 | Self::DbDecOptional
                 | Self::DbDecMoney
+                | Self::DbDecDecimal
                 | Self::DbDecBytes
                 // ── Ipe.Db.Sql — classified `Db` like
                 // `Db.Decode.*` above: no live connection is touched by the
@@ -6742,6 +6749,9 @@ impl StdlibKernel {
         const DEC_TUPLE_DECIMAL_STRING: TyShape =
             TyShape::Con(BuiltinTag::Decoder, &[TUPLE_DECIMAL_STRING]);
         const DB_DEC_MONEY: TyShape = TyShape::Fun(&STRING, &DEC_TUPLE_DECIMAL_STRING);
+        // `Db.Decode.decimal : String -> Decoder Decimal`.
+        const DEC_DECIMAL: TyShape = TyShape::Con(BuiltinTag::Decoder, &[DECIMAL]);
+        const DB_DEC_DECIMAL: TyShape = TyShape::Fun(&STRING, &DEC_DECIMAL);
         // `Db.Decode.bytes : String -> Decoder (List Int)`.
         const DEC_LIST_INT: TyShape = TyShape::Con(BuiltinTag::Decoder, &[LIST_INT]);
         const DB_DEC_BYTES: TyShape = TyShape::Fun(&STRING, &DEC_LIST_INT);
@@ -8356,6 +8366,7 @@ impl StdlibKernel {
             Self::DbDecFloat => Some(&STRING_TO_DEC_FLOAT),
             Self::DbDecBool => Some(&STRING_TO_DEC_BOOL),
             Self::DbDecMoney => Some(&DB_DEC_MONEY),
+            Self::DbDecDecimal => Some(&DB_DEC_DECIMAL),
             Self::DbDecBytes => Some(&DB_DEC_BYTES),
 
             // ── Json.Encode encoders (`Value = any`). ──
@@ -9223,6 +9234,7 @@ impl StdlibKernel {
             | Self::DbDecRequired
             | Self::DbDecOptional
             | Self::DbDecMoney
+            | Self::DbDecDecimal
             | Self::DbDecBytes
             // Closing an external pool and executing against an already-open one
             // touch a database but reach no NEW network host — `database`, the
@@ -10595,6 +10607,7 @@ impl StdlibKernel {
                 | Self::DbDecRequired
                 | Self::DbDecOptional
                 | Self::DbDecMoney
+                | Self::DbDecDecimal
                 | Self::DbDecBytes
                 | Self::ServerJson
                 | Self::JwtWithClaim

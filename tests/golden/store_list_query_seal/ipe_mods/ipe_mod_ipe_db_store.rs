@@ -58,6 +58,25 @@ impl IpeStringify for IpeDbStoreColumnSpec {
     }
 }
 #[derive(Clone, Debug, PartialEq)]
+pub(crate) enum IpeDbStoreIndexSpec {
+    Index(Vec<String>),
+    IndexNamed(String, Vec<String>),
+}
+impl IpeStringify for IpeDbStoreIndexSpec {
+    fn ipe_show(&self) -> String {
+        match self {
+            IpeDbStoreIndexSpec::Index(p0) => {
+                format!("Index {}", (&ipe_runtime::stringify::Wrap(p0)).dispatch())
+            }
+            IpeDbStoreIndexSpec::IndexNamed(p0, p1) => format!(
+                "IndexNamed {} {}",
+                (&ipe_runtime::stringify::Wrap(p0)).dispatch(),
+                (&ipe_runtime::stringify::Wrap(p1)).dispatch()
+            ),
+        }
+    }
+}
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) enum IpeDbStoreSchemaOp {
     RenameColumn(String, String),
     RenameTable(String, String),
@@ -79,7 +98,7 @@ impl IpeStringify for IpeDbStoreSchemaOp {
     }
 }
 pub(crate) enum IpeDbStoreStore<T1: 'static> {
-    Store(RecCodecCurrentColumnsFrozenColumnsFrozenTableOpsPkSpecsTable<T1>),
+    Store(RecCodecCurrentColumnsFrozenColumnsFrozenTableIndexesOpsPkSpecsTable<T1>),
 }
 impl<T1: Clone + 'static> Clone for IpeDbStoreStore<T1> {
     fn clone(&self) -> Self {
@@ -339,11 +358,12 @@ pub(crate) fn user_ipe_db_store_build_store<T1: Clone>(
             ),
             IpeMaybe::Nothing => {
                 IpeResult::Ok(IpeDbStoreStore::Store(
-                    RecCodecCurrentColumnsFrozenColumnsFrozenTableOpsPkSpecsTable {
+                    RecCodecCurrentColumnsFrozenColumnsFrozenTableIndexesOpsPkSpecsTable {
                         codec: codec,
                         currentColumns: columns.clone(),
                         frozenColumns: columns,
                         frozenTable: table.clone(),
+                        indexes: Vec::<IpeDbStoreIndexSpec>::new(),
                         ops: Vec::<IpeDbStoreSchemaOp>::new(),
                         pk: IpeMaybe::Nothing,
                         specs: Vec::<IpeDbStoreColumnSpec>::new(),

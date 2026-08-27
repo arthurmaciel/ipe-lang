@@ -1,0 +1,82 @@
+module Main exposing (main)
+
+-- SEAL smoke for `Store.insertReturning`: inserts a row into a `serial`-keyed
+-- store and reads the DB-assigned id back in one statement via
+-- `INSERT ... RETURNING *`. The codec decodes the RETURNING row through the
+-- store's own codec, so the returned record carries the DB-assigned serial id.
+-- No live database is needed: `Task.onError` catches the connection failure and
+-- the program exits cleanly. The SEAL proof is a `cargo build` of the emitted
+-- project under `IPE_E2E=1`.
+--
+-- Security properties:
+--   * Column names in the insert write: validated identifiers, values bound as
+--     parameters, never interpolated.
+--   * The RETURNING projection is the literal "*" (no caller-supplied
+--     identifier reaches the SQL text).
+--   * The RETURNING row decodes through the store's codec (the same path as
+--     `all`/`get`/`findWhere`), so schema drift is a typed Err.
+--
+-- Expected output:
+--   insert-returning-seal:ok
+
+
+import Ipe.Codec as Codec exposing (Codec)
+import Ipe.Db as Db exposing (Db)
+import Ipe.Db.Store as Store exposing (Store)
+import Ipe.Error exposing (Error)
+import Ipe.Io as Io
+import Ipe.Result as Result exposing (Result(..))
+import Ipe.Task as Task exposing (Task)
+
+
+type alias Item =
+    { id : Int
+    , name : String
+    }
+
+
+blankItem : Item
+blankItem =
+    { id = 0, name = "" }
+
+
+itemCodec : Codec Item
+itemCodec =
+    Codec.auto blankItem
+
+
+itemStore : Result Error (Store Item)
+itemStore =
+    case Store.fromCodec "items" itemCodec of
+        Err e ->
+            Err e
+
+        Ok s ->
+            Ok (Store.primaryKey .id (Store.serial .id s))
+
+
+run : Db -> Task Error Item
+run db =
+    case itemStore of
+        Ok store ->
+            Store.create db store
+                |> Task.andThen
+                    (\_ ->
+                        Store.insertReturning db store { id = 0, name = "widget" }
+                    )
+
+        Err e ->
+            Task.fail e
+
+
+main : Task Error ()
+main =
+    Task.andThen
+        (\_ -> Io.println "insert-returning-seal:ok")
+        (Task.onError
+            (\_ -> Task.succeed ())
+            (Task.andThen
+                (\db -> Task.map (\_ -> ()) (run db))
+                (Db.connect ())
+            )
+        )

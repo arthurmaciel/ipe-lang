@@ -120,18 +120,19 @@ impl IpeStringify for RecAuthorBody {
         )
     }
 }
-pub struct RecCodecCurrentColumnsFrozenColumnsFrozenTableOpsPkSpecsTable<T1: 'static> {
+pub struct RecCodecCurrentColumnsFrozenColumnsFrozenTableIndexesOpsPkSpecsTable<T1: 'static> {
     codec: IpeCodecCodec<T1>,
     currentColumns: Vec<IpeDbStoreColumn>,
     frozenColumns: Vec<IpeDbStoreColumn>,
     frozenTable: String,
+    indexes: Vec<IpeDbStoreIndexSpec>,
     ops: Vec<IpeDbStoreSchemaOp>,
     pk: IpeMaybe<String>,
     specs: Vec<IpeDbStoreColumnSpec>,
     table: String,
 }
 impl<T1: Clone + 'static> Clone
-    for RecCodecCurrentColumnsFrozenColumnsFrozenTableOpsPkSpecsTable<T1>
+    for RecCodecCurrentColumnsFrozenColumnsFrozenTableIndexesOpsPkSpecsTable<T1>
 {
     fn clone(&self) -> Self {
         Self {
@@ -139,6 +140,7 @@ impl<T1: Clone + 'static> Clone
             currentColumns: self.currentColumns.clone(),
             frozenColumns: self.frozenColumns.clone(),
             frozenTable: self.frozenTable.clone(),
+            indexes: self.indexes.clone(),
             ops: self.ops.clone(),
             pk: self.pk.clone(),
             specs: self.specs.clone(),
@@ -147,15 +149,16 @@ impl<T1: Clone + 'static> Clone
     }
 }
 impl<T1: IpeStringify + std::fmt::Debug + 'static> IpeStringify
-    for RecCodecCurrentColumnsFrozenColumnsFrozenTableOpsPkSpecsTable<T1>
+    for RecCodecCurrentColumnsFrozenColumnsFrozenTableIndexesOpsPkSpecsTable<T1>
 {
     fn ipe_show(&self) -> String {
         format!(
-            "{{{} {} {} {} {} {} {} {}}}",
+            "{{{} {} {} {} {} {} {} {} {}}}",
             "<fn>",
             (&ipe_runtime::stringify::Wrap(&self.currentColumns)).dispatch(),
             (&ipe_runtime::stringify::Wrap(&self.frozenColumns)).dispatch(),
             (&ipe_runtime::stringify::Wrap(&self.frozenTable)).dispatch(),
+            (&ipe_runtime::stringify::Wrap(&self.indexes)).dispatch(),
             (&ipe_runtime::stringify::Wrap(&self.ops)).dispatch(),
             (&ipe_runtime::stringify::Wrap(&self.pk)).dispatch(),
             (&ipe_runtime::stringify::Wrap(&self.specs)).dispatch(),

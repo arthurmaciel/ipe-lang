@@ -1,0 +1,92 @@
+module Main exposing (main)
+
+-- SEAL smoke for `Store.index` and `Store.indexNamed`: declares single-column,
+-- composite, and named performance indexes on a codec-derived store and calls
+-- `Store.create` to emit the DDL. The DDL is validated (every identifier passes
+-- `validSqlIdent`, every column is checked against the store's codec-derived
+-- column list) before it reaches any SQL string. No live database is needed:
+-- `Task.onError` catches the connection failure and the program exits cleanly.
+-- The SEAL proof is a `cargo build` of the emitted project under `IPE_E2E=1`.
+--
+-- Security properties:
+--   * Every index name (derived or caller-supplied), the table name, and each
+--     column name is validated through `validSqlIdent` at `create` time —
+--     no raw identifier reaches SQL text.
+--   * Each column is cross-checked against the store's codec-derived column
+--     list; an unknown column fails closed with a typed Err (parse-don't-validate).
+--   * No values are involved (DDL only); there is no parameter surface here.
+--
+-- Expected output:
+--   index-seal:ok
+
+
+import Ipe.Codec as Codec exposing (Codec)
+import Ipe.Db as Db exposing (Db)
+import Ipe.Db.Store as Store exposing (Store)
+import Ipe.Error exposing (Error)
+import Ipe.Io as Io
+import Ipe.Result as Result exposing (Result(..))
+import Ipe.Task as Task exposing (Task)
+
+
+type alias Post =
+    { id : Int
+    , authorId : String
+    , publishedAt : String
+    }
+
+
+blankPost : Post
+blankPost =
+    { id = 0, authorId = "", publishedAt = "" }
+
+
+postCodec : Codec Post
+postCodec =
+    Codec.auto blankPost
+
+
+-- Demonstrates all three index forms:
+--   * `index [ "author_id" ]` — single-column, derived name `idx_posts_author_id`
+--   * `index [ "author_id", "published_at" ]` — composite, derived name
+--     `idx_posts_author_id_published_at`
+--   * `indexNamed "posts_author_pub" [ "author_id", "published_at" ]` — named
+postStore : Result Error (Store Post)
+postStore =
+    case Store.fromCodec "posts" postCodec of
+        Err e ->
+            Err e
+
+        Ok s ->
+            Ok
+                (Store.indexNamed "posts_author_pub"
+                    [ "author_id", "published_at" ]
+                    (Store.index [ "author_id", "published_at" ]
+                        (Store.index [ "author_id" ]
+                            (Store.primaryKey .id (Store.serial .id s))
+                        )
+                    )
+                )
+
+
+run : Db -> Task Error ()
+run db =
+    case postStore of
+        Ok store ->
+            Task.map (\_ -> ()) (Store.create db store)
+
+        Err e ->
+            Task.fail e
+
+
+main : Task Error ()
+main =
+    Task.andThen
+        (\_ -> Io.println "index-seal:ok")
+        (Task.onError
+            (\_ -> Task.succeed ())
+            (Task.andThen
+                (\db -> run db)
+                (Db.connect ())
+            )
+        )
