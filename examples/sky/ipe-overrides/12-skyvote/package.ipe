@@ -1,7 +1,0 @@
-module Package exposing (package)
-
-
-package =
-    Package.named "skyvote"
-        |> Package.version "0.1.0"
-        |> Package.accepts [ Capability.unsafe ]

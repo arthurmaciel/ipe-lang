@@ -1,6 +1,0 @@
-module Package exposing (package)
-
-
-package =
-    Package.named "record-update-map"
-        |> Package.version "0.1.0"
