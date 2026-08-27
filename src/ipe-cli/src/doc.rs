@@ -1332,8 +1332,17 @@ fn is_plain_comment(line: &str) -> bool {
 }
 
 /// The text of a plain `--` comment line, marker stripped.
+///
+/// Strips the `-- ` prefix (with a single space) so that any indentation
+/// following the space is preserved in the returned text — allowing indented
+/// code examples embedded in doc-comments to carry their leading spaces into
+/// the accumulated block and, from there, into the HTML code-block renderer.
+/// A bare `--` with no following space (a blank continuation line) strips only
+/// the `--`, returning an empty string.
 fn plain_comment_text(line: &str) -> &str {
-    line.strip_prefix("--").unwrap_or(line).trim_start()
+    line.strip_prefix("-- ")
+        .or_else(|| line.strip_prefix("--"))
+        .unwrap_or(line)
 }
 
 /// What binding a code line opens, for attaching a preceding doc-comment.
@@ -2254,6 +2263,12 @@ pre.sig {
   border-radius: 4px; overflow-x: auto; border: 1px solid var(--border);
 }
 p.comment { margin: 0.4rem 0 0; color: var(--muted); }
+pre.doc-code {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 4px; padding: 0.6rem 0.8rem; overflow-x: auto;
+  margin: 0.6rem 0 0; color: var(--fg);
+}
+pre.doc-code code { background: none; padding: 0; }
 @media (max-width: 40rem) { ul.modules { columns: 1; } }
 ";
 
@@ -2297,6 +2312,120 @@ fn html_escape(s: &str) -> String {
             c => out.push(c),
         }
     }
+    out
+}
+
+/// Render a doc-comment body as structured HTML.
+///
+/// The output contains block-level tags and must be inserted verbatim into the
+/// page body — do not wrap it in an additional `<p>`.
+///
+/// Code blocks are emitted as `<pre class="doc-code"><code>…</code></pre>` with
+/// all content html-escaped and internal whitespace (newlines, leading spaces)
+/// preserved exactly as written.  Two detection rules apply:
+///
+/// * A fenced block is a run of lines bracketed by opening/closing fence lines
+///   that consist solely of three backticks (optionally followed by a language
+///   tag on the opening fence).  The fence lines themselves are stripped; inner
+///   lines are emitted verbatim.
+///
+/// * An indented block is a run of consecutive non-blank lines that each start
+///   with at least four spaces.  The leading four-space marker is stripped from
+///   each line; the remaining content (including any additional indentation) is
+///   preserved.
+///
+/// Prose paragraphs are blank-line–separated runs of non-code lines emitted as
+/// `<p class="comment">…</p>`.  Within prose, spans delimited by single
+/// backticks become `<code>…</code>`; all other text is html-escaped.
+fn render_comment_html(comment: &str) -> String {
+    /// Render inline backtick spans in prose text as `<code>`.
+    fn render_inline(text: &str) -> String {
+        let mut out = String::new();
+        let mut rest = text;
+        while let Some(open) = rest.find('`') {
+            out.push_str(&html_escape(&rest[..open]));
+            rest = &rest[open + 1..];
+            if let Some(close) = rest.find('`') {
+                out.push_str("<code>");
+                out.push_str(&html_escape(&rest[..close]));
+                out.push_str("</code>");
+                rest = &rest[close + 1..];
+            } else {
+                // Unmatched backtick: emit literally.
+                out.push('`');
+            }
+        }
+        out.push_str(&html_escape(rest));
+        out
+    }
+
+    /// Flush a prose paragraph buffer to `out`.
+    fn flush_prose(out: &mut String, prose: &mut Vec<String>) {
+        if prose.is_empty() {
+            return;
+        }
+        let text = prose.join(" ");
+        let _ = writeln!(out, "<p class=\"comment\">{}</p>", render_inline(&text));
+        prose.clear();
+    }
+
+    /// Flush a code block buffer to `out`, html-escaping the content.
+    fn flush_code(out: &mut String, code: &mut Vec<String>) {
+        if code.is_empty() {
+            return;
+        }
+        out.push_str("<pre class=\"doc-code\"><code>");
+        for (i, line) in code.iter().enumerate() {
+            if i > 0 {
+                out.push('\n');
+            }
+            out.push_str(&html_escape(line));
+        }
+        out.push_str("</code></pre>\n");
+        code.clear();
+    }
+
+    let mut out = String::new();
+    let mut prose: Vec<String> = Vec::new();
+    let mut code_buf: Vec<String> = Vec::new();
+    let mut fenced = false;
+
+    for line in comment.lines() {
+        let trimmed = line.trim_start_matches(' ');
+        let fence_delim = trimmed.starts_with("```");
+
+        if fenced {
+            if fence_delim {
+                // Closing delimiter: flush the accumulated code block.
+                fenced = false;
+                flush_code(&mut out, &mut code_buf);
+            } else {
+                code_buf.push(line.to_owned());
+            }
+        } else if fence_delim {
+            // Opening delimiter: flush prose, then enter fenced mode.
+            flush_prose(&mut out, &mut prose);
+            fenced = true;
+            // The opening delimiter line (plus any language tag) is dropped.
+        } else if let Some(rest) = line.strip_prefix("    ") {
+            // Indented code block: flush prose, strip the four-space marker.
+            flush_prose(&mut out, &mut prose);
+            code_buf.push(rest.to_owned());
+        } else if line.trim().is_empty() {
+            // Blank line: close any open paragraph or indented code block.
+            flush_prose(&mut out, &mut prose);
+            flush_code(&mut out, &mut code_buf);
+        } else {
+            // Prose line: close any open indented code block first.
+            flush_code(&mut out, &mut code_buf);
+            prose.push(line.trim().to_owned());
+        }
+    }
+
+    // Flush any trailing content (an unclosed fence is treated as a code block).
+    flush_prose(&mut out, &mut prose);
+    flush_code(&mut out, &mut code_buf);
+
     out
 }
 
@@ -2381,11 +2510,7 @@ fn render_html_module(module: &ModuleDoc, index: &AnchorIndex) -> String {
         String::from("<nav class=\"crumb\"><a href=\"index.html\">&larr; all modules</a></nav>\n");
     let _ = writeln!(body, "<h1>{}</h1>", html_escape(&module.name));
     if !module.comment.is_empty() {
-        let _ = writeln!(
-            body,
-            "<p class=\"comment\">{}</p>",
-            html_escape(&module.comment)
-        );
+        body.push_str(&render_comment_html(&module.comment));
     }
 
     if !module.unions.is_empty() {
@@ -2399,11 +2524,7 @@ fn render_html_module(module: &ModuleDoc, index: &AnchorIndex) -> String {
                 html_escape(&union_params(union.params))
             );
             if !union.comment.is_empty() {
-                let _ = writeln!(
-                    body,
-                    "<p class=\"comment\">{}</p>",
-                    html_escape(&union.comment)
-                );
+                body.push_str(&render_comment_html(&union.comment));
             }
             for ctor in &union.ctors {
                 body.push_str("<pre class=\"sig\">");
@@ -2431,11 +2552,7 @@ fn render_html_module(module: &ModuleDoc, index: &AnchorIndex) -> String {
                 html_escape(&value.name)
             );
             if !value.comment.is_empty() {
-                let _ = writeln!(
-                    body,
-                    "<p class=\"comment\">{}</p>",
-                    html_escape(&value.comment)
-                );
+                body.push_str(&render_comment_html(&value.comment));
             }
             body.push_str("</section>\n");
         }
@@ -3118,6 +3235,32 @@ mod tests {
     #[test]
     fn html_escapes_markup_in_names_and_comments() {
         assert_eq!(html_escape("a<b>&\"'"), "a&lt;b&gt;&amp;&quot;&#39;");
+    }
+
+    #[test]
+    fn render_comment_indented_block_preserves_relative_indentation() {
+        let comment = "    line_a\n        line_b";
+        let html = render_comment_html(comment);
+        assert!(html.contains("<pre class=\"doc-code\"><code>"), "{html}");
+        assert!(html.contains("line_a\n    line_b"), "{html}");
+    }
+
+    #[test]
+    fn render_comment_inline_backtick_becomes_code_element() {
+        let comment = "Call `foo` here.";
+        let html = render_comment_html(comment);
+        assert!(html.contains("<code>foo</code>"), "{html}");
+        assert!(html.contains("<p class=\"comment\">"), "{html}");
+    }
+
+    #[test]
+    fn render_comment_fenced_block_renders_in_pre_without_delimiters() {
+        let comment = "Example:\n```ipe\nfoo =\n    bar\n```\nEnd.";
+        let html = render_comment_html(comment);
+        assert!(html.contains("<pre class=\"doc-code\"><code>"), "{html}");
+        assert!(html.contains("foo =\n    bar"), "{html}");
+        assert!(!html.contains("```"), "{html}");
+        assert!(html.contains("End."), "{html}");
     }
 
     #[test]
