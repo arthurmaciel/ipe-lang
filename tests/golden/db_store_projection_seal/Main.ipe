@@ -1,0 +1,118 @@
+module Main exposing (main)
+
+-- SEAL smoke for the typed single-column projection over a two-store inner join
+-- (`Store.join` / `Store.select` / `Store.selectToList`). Two `Codec.auto`-derived
+-- stores join on `books.author_id = authors.id`; `select` projects one column
+-- (`author.name`) so the join lowers to ONE parameterized statement selecting
+-- exactly that column (`SELECT a1.name AS p0 FROM …`, column pushdown). Each
+-- projected row comes back as a `Row` keyed by the output name `p0`, read with
+-- `Store.projReadText 0`. No live database is needed: `Task.onError` catches the
+-- connection failure and the program exits cleanly. The SEAL proof is a
+-- `cargo build` of the emitted project under `IPE_E2E=1`.
+--
+-- The projection is expressed as a value that lowers to SQL, not a per-row
+-- fan-out:
+--   * `Store.select (\( _, author ) -> author.name)` names the projected column
+--     by a bare field reference read at compile time (never run over real rows),
+--     so a projection that is not a single column reference is a build error.
+--   * `Store.selectToList` returns `List Row`, each row carrying only `p0`.
+--   * `Store.projReadText 0` reads the projected author name back.
+--
+-- Expected output:
+--   projection-seal:ok
+
+
+import Ipe.Codec as Codec exposing (Codec)
+import Ipe.Db as Db exposing (Db)
+import Ipe.Db.Store as Store exposing (Store)
+import Ipe.Error exposing (Error)
+import Ipe.Io as Io
+import Ipe.List as List
+import Ipe.Result as Result exposing (Result(..))
+import Ipe.Task as Task exposing (Task)
+
+
+type alias Book =
+    { id : String
+    , title : String
+    , authorId : String
+    }
+
+
+type alias Author =
+    { id : String
+    , name : String
+    , active : Bool
+    }
+
+
+blankBook : Book
+blankBook =
+    { id = "", title = "", authorId = "" }
+
+
+blankAuthor : Author
+blankAuthor =
+    { id = "", name = "", active = False }
+
+
+bookCodec : Codec Book
+bookCodec =
+    Codec.auto blankBook
+
+
+authorCodec : Codec Author
+authorCodec =
+    Codec.auto blankAuthor
+
+
+booksStore : Result Error (Store Book)
+booksStore =
+    Store.fromCodec "books" bookCodec
+        |> Result.map (\s -> Store.primaryKey .id s)
+        |> Result.map Store.public
+
+
+authorsStore : Result Error (Store Author)
+authorsStore =
+    Store.fromCodec "authors" authorCodec
+        |> Result.map (\s -> Store.primaryKey .id s)
+        |> Result.map Store.public
+
+
+-- The projection: one parameterized statement selecting only `author.name`, no
+-- per-row fan-out. Each projected row is a `Row` keyed by `p0`.
+authorNames : Db -> Store Book -> Store Author -> Task Error (List Store.Row)
+authorNames db books authors =
+    Store.selectToList db
+        (Store.select (\( _, author ) -> author.name)
+            (Store.join books .authorId authors .id)
+        )
+
+
+run : Db -> Task Error (List Store.Row)
+run db =
+    case booksStore of
+        Ok books ->
+            case authorsStore of
+                Ok authors ->
+                    authorNames db books authors
+
+                Err e ->
+                    Task.fail e
+
+        Err e ->
+            Task.fail e
+
+
+main : Task Error ()
+main =
+    Task.andThen
+        (\_ -> Io.println "projection-seal:ok")
+        (Task.onError
+            (\_ -> Task.succeed ())
+            (Task.andThen
+                (\db -> Task.map (\_ -> ()) (run db))
+                (Db.connect ())
+            )
+        )
