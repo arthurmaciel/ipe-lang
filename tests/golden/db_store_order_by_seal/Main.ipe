@@ -1,0 +1,124 @@
+module Main exposing (main)
+
+-- SEAL smoke for `Store.orderByLeft` / `Store.orderByRight` — sort direction
+-- on a two-store inner join. Two `Codec.auto`-derived stores join on
+-- `books.author_id = authors.id`; `orderByRight .name Desc` sorts the result
+-- descending by the author's name, lowering to ONE parameterized statement with
+-- `ORDER BY a1.name DESC` appended. No live database is needed: `Task.onError`
+-- catches the connection failure and the program exits cleanly. The SEAL proof
+-- is a `cargo build` of the emitted project under `IPE_E2E=1`.
+--
+-- The order-by is expressed as a value that lowers to SQL, not a per-row
+-- sort in application code:
+--   * `Store.orderByRight .name Desc` names the sort column by accessor (`.name`
+--     snake_cases to `name`) and the direction with the `Desc` constructor, so a
+--     mistyped column is a type error and the direction cannot be an arbitrary
+--     string.
+--   * `Store.joinToList` returns `List ( Book, Author )`, each side decoded
+--     through its own store codec, in descending author-name order.
+--
+-- Expected output:
+--   order-by-seal:ok
+
+
+import Ipe.Codec as Codec exposing (Codec)
+import Ipe.Db as Db exposing (Db)
+import Ipe.Db.Store as Store exposing (Store, Order(..))
+import Ipe.Error exposing (Error)
+import Ipe.Io as Io
+import Ipe.List as List
+import Ipe.Result as Result exposing (Result(..))
+import Ipe.Task as Task exposing (Task)
+
+
+type alias Book =
+    { id : String
+    , title : String
+    , authorId : String
+    }
+
+
+type alias Author =
+    { id : String
+    , name : String
+    , active : Bool
+    }
+
+
+blankBook : Book
+blankBook =
+    { id = "", title = "", authorId = "" }
+
+
+blankAuthor : Author
+blankAuthor =
+    { id = "", name = "", active = False }
+
+
+bookCodec : Codec Book
+bookCodec =
+    Codec.auto blankBook
+
+
+authorCodec : Codec Author
+authorCodec =
+    Codec.auto blankAuthor
+
+
+booksStore : Result Error (Store Book)
+booksStore =
+    Store.fromCodec "books" bookCodec
+        |> Result.map (\s -> Store.primaryKey .id s)
+        |> Result.map Store.public
+
+
+authorsStore : Result Error (Store Author)
+authorsStore =
+    Store.fromCodec "authors" authorCodec
+        |> Result.map (\s -> Store.primaryKey .id s)
+        |> Result.map Store.public
+
+
+-- The join with ORDER BY: books joined to active authors, sorted descending by
+-- author name. Lowers to one statement with `ORDER BY a1.name DESC`.
+--
+-- `orderByRight .name Desc` is a 3-arg saturated call (accessor, direction,
+-- joined); the `let` binding makes all three arguments visible at once so the
+-- compiler's accessor-intercept fires at the call site.
+booksByAuthorDesc : Db -> Store Book -> Store Author -> Task Error (List ( Book, Author ))
+booksByAuthorDesc db books authors =
+    let
+        filtered =
+            Store.join books .authorId authors .id
+                |> Store.joinFilterRight (Store.eq .active True)
+    in
+    Store.orderByRight .name Desc filtered
+        |> Store.joinToList db
+
+
+run : Db -> Task Error (List ( Book, Author ))
+run db =
+    case booksStore of
+        Ok books ->
+            case authorsStore of
+                Ok authors ->
+                    booksByAuthorDesc db books authors
+
+                Err e ->
+                    Task.fail e
+
+        Err e ->
+            Task.fail e
+
+
+main : Task Error ()
+main =
+    Task.andThen
+        (\_ -> Io.println "order-by-seal:ok")
+        (Task.onError
+            (\_ -> Task.succeed ())
+            (Task.andThen
+                (\db -> Task.map (\_ -> ()) (run db))
+                (Db.connect ())
+            )
+        )

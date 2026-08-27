@@ -1383,6 +1383,8 @@ impl Env {
                     "findWhere",
                     "findJoin",
                     "findProjection",
+                    "findJoinOrdered",
+                    "findProjectionOrdered",
                     "deleteWhere",
                     "updateWhere",
                     // External read path — `…On` reads over a `Connection a`.

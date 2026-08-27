@@ -697,6 +697,11 @@ struct Builtins {
     /// `StoreOwnerColumn` / `StoreImmutable` kernel schemes, so `secured`
     /// (`Policy row -> Store row -> …`) pins the policy's columns to the store.
     policy_con: Symbol,
+    /// `"Order"` — the `Ipe.Db.Store.Order` nullary ADT (`Asc | Desc`), the
+    /// sort-direction argument of `orderByLeft` / `orderByRight`. It has no
+    /// type parameters; the scheme just names the ADT so inference pins the
+    /// second argument of each kernel to `Order`.
+    order_con: Symbol,
 }
 
 impl Builtins {
@@ -938,6 +943,7 @@ impl Builtins {
             joined_con: interner.intern("Joined")?,
             select_con: interner.intern("Select")?,
             policy_con: interner.intern("Policy")?,
+            order_con: interner.intern("Order")?,
             codec_con: interner.intern("Codec")?,
         })
     }
@@ -4397,12 +4403,6 @@ impl<'a> Builder<'a> {
             name: self.builtins.bytes,
             args: Vec::new(),
         };
-        // `Order` is a zero-argument constructor.
-        let order = || Ty::Con {
-            module: Vec::new(),
-            name: self.builtins.order,
-            args: Vec::new(),
-        };
         // `Decimal` is a zero-argument constructor (Ipe.Decimal).
         let decimal = || Ty::Con {
             module: Vec::new(),
@@ -4521,6 +4521,15 @@ impl<'a> Builder<'a> {
             module: Vec::new(),
             name: self.builtins.policy_con,
             args: vec![row],
+        };
+        // `Order` — the `Ipe.Db.Store.Order` nullary ADT (`Asc | Desc`). The
+        // `orderByLeft` / `orderByRight` scheme names it directly so the
+        // type-checker requires the caller to pass an `Order`, not an
+        // arbitrary type. It has no type parameters.
+        let order = || Ty::Con {
+            module: Vec::new(),
+            name: self.builtins.order_con,
+            args: Vec::new(),
         };
         // `Codec inner` — the `Ipe.Codec` codec ADT, the first parameter of
         // `Store.eqBy`. Empty module unifies with the user's `Ipe.Codec.Codec`.
@@ -5953,6 +5962,86 @@ impl<'a> Builder<'a> {
                     ),
                 ),
             ),
+            // `Db.findJoinOrdered : Db -> String -> String -> List String -> String
+            //                       -> String -> List String -> SqlFragment
+            //                       -> String -> String -> Bool
+            //                       -> Task (List (Dict String String, Dict String String))`
+            // — ordered variant of `Db.findJoin` with three trailing args:
+            // `orderAlias`, `orderCol`, and ascending `Bool`.
+            K::DbFindJoinOrdered => fun(
+                db(),
+                fun(
+                    string(),
+                    fun(
+                        string(),
+                        fun(
+                            list(string()),
+                            fun(
+                                string(),
+                                fun(
+                                    string(),
+                                    fun(
+                                        list(string()),
+                                        fun(
+                                            sqlfragment(),
+                                            fun(
+                                                string(),
+                                                fun(
+                                                    string(),
+                                                    fun(
+                                                        bool_ty(),
+                                                        task(list(tuple2(
+                                                            dict(string(), string()),
+                                                            dict(string(), string()),
+                                                        ))),
+                                                    ),
+                                                ),
+                                            ),
+                                        ),
+                                    ),
+                                ),
+                            ),
+                        ),
+                    ),
+                ),
+            ),
+            // `Db.findProjectionOrdered : Db -> String -> String -> String -> String
+            //                             -> SqlFragment -> List (String, String)
+            //                             -> String -> String -> Bool
+            //                             -> Task (List (Dict String String))`
+            // — ordered variant of `Db.findProjection` with three trailing args:
+            // `orderAlias`, `orderCol`, and ascending `Bool`.
+            K::DbFindProjectionOrdered => fun(
+                db(),
+                fun(
+                    string(),
+                    fun(
+                        string(),
+                        fun(
+                            string(),
+                            fun(
+                                string(),
+                                fun(
+                                    sqlfragment(),
+                                    fun(
+                                        list(tuple2(string(), string())),
+                                        fun(
+                                            string(),
+                                            fun(
+                                                string(),
+                                                fun(
+                                                    bool_ty(),
+                                                    task(list(dict(string(), string()))),
+                                                ),
+                                            ),
+                                        ),
+                                    ),
+                                ),
+                            ),
+                        ),
+                    ),
+                ),
+            ),
             // `Db.deleteWhere : Db -> String -> SqlFragment -> Task Int`
             K::DbDeleteWhere => fun(db(), fun(string(), fun(sqlfragment(), task(int())))),
             // `Db.updateWhere : Db -> String -> List (String, SqlField)
@@ -6123,6 +6212,23 @@ impl<'a> Builder<'a> {
             K::StoreOwnerColumn | K::StoreImmutable => {
                 fun(fun(var(0), var(1)), policy(var(0)))
             }
+
+            // `orderByLeft : (a -> k) -> Order -> Joined a b -> Joined a b`
+            // `orderByRight : (b -> k) -> Order -> Joined a b -> Joined a b`
+            // The getter-arrow scheme pins the accessor's source type to the
+            // relevant join side (`a` for left, `b` for right). `Order` is the
+            // sort-direction ADT (`Asc | Desc`). The `Joined a b` threads through
+            // unchanged — lowering attaches the ORDER BY fragment to the query
+            // plan rather than producing a new type. `k` (var 2) is the accessor's
+            // return type — unconstrained (any field may sort).
+            K::StoreOrderByLeft => fun(
+                fun(var(0), var(2)),
+                fun(order(), fun(joined(var(0), var(1)), joined(var(0), var(1)))),
+            ),
+            K::StoreOrderByRight => fun(
+                fun(var(1), var(2)),
+                fun(order(), fun(joined(var(0), var(1)), joined(var(0), var(1)))),
+            ),
 
             // ── Db.Decode ──
             K::DbDecString => fun(string(), dec(string())),
@@ -10057,6 +10163,8 @@ mod registry_phase_c_tests {
             K::DbFindWhere,
             K::DbFindJoin,
             K::DbFindProjection,
+            K::DbFindJoinOrdered,
+            K::DbFindProjectionOrdered,
             K::DbDeleteWhere,
             K::DbUpdateWhere,
             // Two-store inner-join constructor (getter-arrow scheme, Ipê-new).
@@ -10093,6 +10201,9 @@ mod registry_phase_c_tests {
             // Row-security policy builders (Ipê-new).
             K::StoreOwnerColumn,
             K::StoreImmutable,
+            // ORDER BY modifiers (Ipê-new, no legacy oracle).
+            K::StoreOrderByLeft,
+            K::StoreOrderByRight,
             // `Db.Decode.money`, `Db.Decode.decimal`, and `Db.Decode.bytes` —
             // Ipê-new kernels (the ancestor has no DbDec money/decimal/bytes
             // routes), closing genuine holes rather than relocating legacy
