@@ -74,26 +74,49 @@ fn db_store_projection_multicol_seal_builds() {
 
     crate::support::assert_seal_builds(GOLDEN, &out);
 
-    // Witness the concrete/monomorphized decode: the emitted `main`-module source
-    // constructs the exact ordered two-column projection list, and neither the
-    // projection value nor the `select_to_list` path stores a boxed decoder for
-    // it. (Framework machinery elsewhere — codecs, `Task` — may use `dyn Fn`; the
-    // claim is scoped to the projection's own decode.)
+    // Witness the concrete/monomorphized decode. The projection value the emitted
+    // program builds carries the ordered `(alias, column)` list as plain data and
+    // NO boxed decoder field, and the projection lowers to the `selectNamed` data
+    // constructor with both columns named literally — the decode is caller-side by
+    // position (`projRead*`), never a stored `dyn Fn`. (Codec machinery elsewhere
+    // in the crate legitimately uses `dyn Fn`; this claim is scoped to the
+    // projection's own value and decode.)
     let main_mod = out.join("src").join("ipe_mods").join("ipe_mod_main.rs");
-    let src = std::fs::read_to_string(&main_mod).expect("emitted main module must exist");
+    let module_src = std::fs::read_to_string(&main_mod).expect("emitted main module must exist");
     assert!(
-        src.contains("\"title\".to_string()") && src.contains("\"name\".to_string()"),
+        module_src.contains("\"title\".to_string()") && module_src.contains("\"name\".to_string()"),
         "the emitted projection must name both projected columns as plain data"
     );
-    // The projection is built as a Vec of (alias, column) string pairs — a data
-    // list, not a decoder closure.
     assert!(
-        src.contains("user_ipe_db_store_select_named"),
+        module_src.contains("user_ipe_db_store_select_named"),
         "the projection must lower to the `selectNamed` data constructor"
     );
+
+    // The `Select` projection record struct: its `projections` field is a plain
+    // `Vec<(String, String)>` and the struct declares no boxed-decoder field.
+    let main_rs = out.join("src").join("main.rs");
+    let main_src = std::fs::read_to_string(&main_rs).expect("emitted main.rs must exist");
+    let struct_body = projection_record_struct_body(&main_src)
+        .expect("emitted crate must define the projection record struct");
     assert!(
-        !src.contains("Box<dyn Fn") && !src.contains("dyn Fn"),
-        "the multi-column projection's `main`-module emit must carry no boxed \
-         decoder — the decode is concrete/monomorphized and caller-side"
+        struct_body.contains("projections: Vec<(String, String)>"),
+        "the projection record must carry the ordered column list as plain data, \
+         got struct body:\n{struct_body}"
     );
+    assert!(
+        !struct_body.contains("dyn Fn") && !struct_body.contains("Box<dyn"),
+        "the projection record must carry NO boxed decoder field — the decode is \
+         concrete/monomorphized and caller-side, got struct body:\n{struct_body}"
+    );
+}
+
+/// Extract the body (between the first `{` and its matching `}`) of the emitted
+/// `Select` projection record struct — the record whose generated name ends in
+/// `ProjectionsRightTable`. Returns `None` if the struct is absent.
+fn projection_record_struct_body(src: &str) -> Option<&str> {
+    let marker = "struct RecFragJoinedAJoinedBLeftTablePoisonProjectionsRightTable";
+    let start = src.find(marker)?;
+    let open = src[start..].find('{')? + start;
+    let close = src[open..].find('}')? + open;
+    Some(&src[open..=close])
 }
