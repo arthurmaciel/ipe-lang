@@ -33,11 +33,12 @@
 //!
 //!   Cross-session delivery is UNREPRESENTABLE: there is no process-global port
 //!   channel and no API to send to a port by name across sessions — a channel handle
-//!   is only ever obtained from a sid. A caller with no session sid in scope
-//!   (sid == "") subscribes to an inert per-call channel that no route ever feeds,
-//!   so an unscoped subscription receives nothing rather than another session's
-//!   traffic. Channels are created on session start (`session_open`) and dropped on
-//!   session end/eviction (`session_close`), reusing the session store's lifecycle.
+//!   is only ever obtained from a [`SessionId`]. A caller with no session sid in scope
+//!   gets `None` from [`scope_sid`] and subscribes to an inert per-call channel that
+//!   no route ever feeds, so an unscoped subscription receives nothing rather than
+//!   another session's traffic. Channels are created on session start ([`session_open`])
+//!   and dropped on session end/eviction ([`session_close`]), reusing the session
+//!   store's lifecycle.
 //! * **Wasm (`feature = "wasm-client"`).** In-process, no network. Outbound calls
 //!   the browser-registered `window.ipeOnReceive` handler with the seal-encoded
 //!   string; inbound is fed by the browser's `window.ipe.send(...)` pushing a
@@ -45,6 +46,60 @@
 
 use crate::seal_codec::{SealLimits, seal_encode};
 use crate::tea::{IpeCmd, IpeSub};
+
+// ─── SessionId newtype ──────────────────────────────────────────────────────
+
+/// A validated session identifier: a non-empty, all-lowercase-hex string
+/// produced by the server's CSPRNG-backed session-minting path.
+///
+/// The constructor [`SessionId::parse`] is the only way to build a value of
+/// this type from outside this module. It rejects an empty string and any
+/// string whose characters are not all lowercase hexadecimal (`[0-9a-f]`),
+/// so an invalid or absent session id is unrepresentable past the parse
+/// boundary — the per-call `is_empty()` guards in the native registry fall
+/// away entirely.
+///
+/// `Display`/`Debug` expose the raw hex string so the store can use it as a
+/// map key and the dispatch loop can pass it to [`js_send`] via
+/// `IpeCmd::Publish`'s `origin: &str` argument.
+#[derive(Clone, PartialEq, Eq, Hash)]
+pub struct SessionId(String);
+
+impl SessionId {
+    /// Parse a raw session-id string into a `SessionId`.
+    ///
+    /// Returns `None` when `raw` is empty or contains any character outside
+    /// `[0-9a-f]`. The server's [`new_sid`][crate::web] always produces a
+    /// 32-char lowercase-hex UUID-simple string, so every legitimately minted
+    /// session id passes this check.
+    pub fn parse(raw: &str) -> Option<Self> {
+        if raw.is_empty() {
+            return None;
+        }
+        if raw.chars().all(|c| matches!(c, '0'..='9' | 'a'..='f')) {
+            Some(SessionId(raw.to_string()))
+        } else {
+            None
+        }
+    }
+
+    /// The validated hex string, borrowed.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for SessionId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::fmt::Debug for SessionId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
 
 // ─── Native (server) transport ─────────────────────────────────────────────
 
@@ -86,10 +141,10 @@ mod native {
     }
 
     /// The per-session port registry, keyed by session sid. A channel handle is
-    /// ONLY ever obtained by looking up a sid here; there is no process-global
-    /// channel, so no `js_send`/`js_subscribe`/inbound-route can reach a session
-    /// other than the one whose sid it holds — cross-session delivery is
-    /// unrepresentable.
+    /// ONLY ever obtained by looking up a [`SessionId`] here; there is no
+    /// process-global channel, so no `js_send`/`js_subscribe`/inbound-route can
+    /// reach a session other than the one whose sid it holds — cross-session
+    /// delivery is unrepresentable.
     fn sessions() -> &'static Mutex<HashMap<String, SessionPorts>> {
         static S: OnceLock<Mutex<HashMap<String, SessionPorts>>> = OnceLock::new();
         S.get_or_init(|| Mutex::new(HashMap::new()))
@@ -105,40 +160,40 @@ mod native {
     /// in the current scope. Under the `web` server this reads the same task-local
     /// the pub/sub broker sets (via `pubsub::with_session_sid`), so a `js_subscribe`
     /// binds to the OWNING session. Outside a live server (e.g. a `tokio`-only test
-    /// build with no `web` feature) there is no session scope, so it is empty and
-    /// callers fall back to an explicit sid.
+    /// build with no `web` feature) there is no session scope, so it returns `None`
+    /// and callers fall back to an inert private channel.
     #[cfg(feature = "web")]
-    fn scope_sid() -> String {
-        crate::web::pubsub::current_session_sid()
+    pub(super) fn scope_sid() -> Option<SessionId> {
+        SessionId::parse(&crate::web::pubsub::current_session_sid())
     }
     #[cfg(not(feature = "web"))]
-    fn scope_sid() -> String {
-        String::new()
+    pub(super) fn scope_sid() -> Option<SessionId> {
+        None
     }
 
     /// Create a session's port endpoints on session start (idempotent). Called by
     /// the live server when it creates the session, so the inbound channel exists
     /// before the browser can POST to it.
-    pub fn session_open(sid: &str) {
+    pub fn session_open(sid: &SessionId) {
         lock_sessions()
-            .entry(sid.to_string())
+            .entry(sid.0.clone())
             .or_insert_with(SessionPorts::new);
     }
 
     /// Drop a session's port endpoints on session end/eviction. Any live
     /// `js_subscribe` receiver on the dropped inbound channel observes `Closed`
     /// and ends; no dead-session channel lingers.
-    pub fn session_close(sid: &str) {
-        lock_sessions().remove(sid);
+    pub fn session_close(sid: &SessionId) {
+        lock_sessions().remove(&sid.0);
     }
 
     /// Install `sid`'s browser-push sink. Called when the live server attaches the
     /// session's client transport; every subsequent `js_send` whose origin is
     /// `sid` is delivered to `sink`. Creates the session entry if the sink is
     /// wired before `session_open` (idempotent).
-    pub fn register_out_sink_for(sid: &str, sink: OutSink) {
+    pub fn register_out_sink_for(sid: &SessionId, sink: OutSink) {
         let mut g = lock_sessions();
-        g.entry(sid.to_string())
+        g.entry(sid.0.clone())
             .or_insert_with(SessionPorts::new)
             .out_sink = Some(sink);
     }
@@ -147,8 +202,8 @@ mod native {
     /// the server's inbound port route AFTER its session-cookie + CSRF +
     /// bounded-seal checks have accepted the body. Delivery reaches ONLY `sid`;
     /// an unknown/closed session is a fire-and-forget no-op (never an error).
-    pub fn deliver_inbound_for(sid: &str, raw: String) {
-        let sender = lock_sessions().get(sid).map(|p| p.inbound.clone());
+    pub fn deliver_inbound_for(sid: &SessionId, raw: String) {
+        let sender = lock_sessions().get(&sid.0).map(|p| p.inbound.clone());
         if let Some(tx) = sender {
             let _ = tx.send(raw);
         }
@@ -204,8 +259,8 @@ mod native {
     /// `with_session_sid` scope is active), then moved into the spawned task, so
     /// the recv loop drains exactly that session's channel and can never observe
     /// another session's inbound frames. A subscription materialised with no
-    /// session sid in scope (sid == "") binds an inert per-call channel that no
-    /// route feeds, so it receives nothing.
+    /// session sid in scope (no valid [`SessionId`]) binds an inert per-call
+    /// channel that no route feeds, so it receives nothing.
     ///
     /// `to_msg` is moved into exactly one detached task and never shared behind an
     /// `Arc`, so `Send` (not `Send + Sync`) is the exact contract — the same
@@ -217,17 +272,17 @@ mod native {
         T: Send + 'static,
     {
         // Read the owning sid while the materialisation scope is live, then bind
-        // this session's inbound receiver. An empty sid (no live session) gets a
+        // this session's inbound receiver. No valid sid (no live session) gets a
         // fresh private channel no route publishes to — an inert, fail-closed drain.
-        let owner_sid = scope_sid();
-        let rx = if owner_sid.is_empty() {
-            broadcast::channel(PORT_CAP).1
-        } else {
-            let mut g = lock_sessions();
-            g.entry(owner_sid)
-                .or_insert_with(SessionPorts::new)
-                .inbound
-                .subscribe()
+        let rx = match scope_sid() {
+            None => broadcast::channel(PORT_CAP).1,
+            Some(owner_sid) => {
+                let mut g = lock_sessions();
+                g.entry(owner_sid.0)
+                    .or_insert_with(SessionPorts::new)
+                    .inbound
+                    .subscribe()
+            }
         };
         IpeSub::Source(Box::new(move |emit| {
             let mut rx = rx;
@@ -359,6 +414,31 @@ mod tests {
     use super::*;
     use crate::json::JsonVal;
 
+    // ── SessionId constructor contract ────────────────────────────────────────
+
+    #[test]
+    fn session_id_rejects_empty() {
+        assert!(SessionId::parse("").is_none());
+    }
+
+    #[test]
+    fn session_id_rejects_non_hex() {
+        assert!(SessionId::parse("abc123XYZ").is_none()); // uppercase letters
+        assert!(SessionId::parse("g1234567").is_none()); // 'g' not hex
+        assert!(SessionId::parse("  ").is_none()); // whitespace
+        assert!(SessionId::parse("abc-def").is_none()); // hyphen
+        assert!(SessionId::parse("ABCDEF").is_none()); // uppercase hex
+    }
+
+    #[test]
+    fn session_id_accepts_valid_hex() {
+        // 32-char lowercase hex — the shape new_sid() produces.
+        let raw = "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6";
+        let sid = SessionId::parse(raw).expect("valid hex must parse");
+        assert_eq!(sid.as_str(), raw);
+        assert_eq!(sid.to_string(), raw);
+    }
+
     // ── Feature-independent: canonical seal encoding ───────────────────────────
     #[test]
     fn outbound_encodes_record_canonically() {
@@ -395,11 +475,16 @@ mod tests {
             )
         }
 
+        // Parse a test sid string — all test sids are valid hex by construction.
+        fn test_sid(raw: &str) -> SessionId {
+            SessionId::parse(raw).expect("test sid must be valid hex")
+        }
+
         // Materialise a `js_subscribe` Source the way the Web driver does —
         // INSIDE `with_session_sid(sid, …)`, so the subscription binds `sid`'s
         // inbound channel — and collect the emitted Msgs.
         fn collect_for(
-            sid: &str,
+            sid: &SessionId,
             decoder: Decoder<IpeError, i64>,
         ) -> (tokio::task::JoinHandle<()>, Arc<Mutex<Vec<i64>>>) {
             let got = Arc::new(Mutex::new(Vec::<i64>::new()));
@@ -418,49 +503,53 @@ mod tests {
 
         #[tokio::test]
         async fn inbound_clean_payload_is_emitted() {
-            session_open("s-clean");
-            let (h, got) = collect_for("s-clean", int_decoder());
+            let sid = test_sid("a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6");
+            session_open(&sid);
+            let (h, got) = collect_for(&sid, int_decoder());
             tokio::time::sleep(std::time::Duration::from_millis(20)).await; // let it subscribe
-            deliver_inbound_for("s-clean", "7".to_string());
+            deliver_inbound_for(&sid, "7".to_string());
             tokio::time::sleep(std::time::Duration::from_millis(20)).await;
             assert_eq!(*got.lock().unwrap_or_else(|e| e.into_inner()), vec![7]);
             h.abort();
-            session_close("s-clean");
+            session_close(&sid);
         }
 
         #[tokio::test]
         async fn inbound_undecodable_payload_is_dropped_whole() {
-            session_open("s-bad");
-            let (h, got) = collect_for("s-bad", int_decoder());
+            let sid = test_sid("b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7");
+            session_open(&sid);
+            let (h, got) = collect_for(&sid, int_decoder());
             tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-            deliver_inbound_for("s-bad", "\"not an int\"".to_string()); // string, not i64
-            deliver_inbound_for("s-bad", "{not json".to_string()); // malformed
+            deliver_inbound_for(&sid, "\"not an int\"".to_string()); // string, not i64
+            deliver_inbound_for(&sid, "{not json".to_string()); // malformed
             tokio::time::sleep(std::time::Duration::from_millis(20)).await;
             assert!(got.lock().unwrap_or_else(|e| e.into_inner()).is_empty()); // both dropped, no panic, no partial
             h.abort();
-            session_close("s-bad");
+            session_close(&sid);
         }
 
         #[tokio::test]
         async fn inbound_failing_decoder_drops_every_payload() {
-            session_open("s-never");
-            let (h, got) = collect_for("s-never", never_decoder());
+            let sid = test_sid("c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8");
+            session_open(&sid);
+            let (h, got) = collect_for(&sid, never_decoder());
             tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-            deliver_inbound_for("s-never", "1".to_string());
-            deliver_inbound_for("s-never", "2".to_string());
+            deliver_inbound_for(&sid, "1".to_string());
+            deliver_inbound_for(&sid, "2".to_string());
             tokio::time::sleep(std::time::Duration::from_millis(20)).await;
             assert!(got.lock().unwrap_or_else(|e| e.into_inner()).is_empty());
             h.abort();
-            session_close("s-never");
+            session_close(&sid);
         }
 
         #[tokio::test]
         async fn outbound_send_encodes_and_delivers_to_origin_sink() {
             let seen: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
             let seen2 = seen.clone();
-            session_open("s-out");
+            let sid = test_sid("d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9");
+            session_open(&sid);
             register_out_sink_for(
-                "s-out",
+                &sid,
                 Arc::new(move |s: &str| {
                     seen2
                         .lock()
@@ -472,7 +561,7 @@ mod tests {
             match cmd {
                 // The dispatch loop injects the origin sid; delivery reaches only
                 // that session's sink.
-                IpeCmd::Publish(thunk) => assert_eq!(thunk("s-out"), 0),
+                IpeCmd::Publish(thunk) => assert_eq!(thunk(sid.as_str()), 0),
                 _ => unreachable!("js_send builds a Publish cmd"),
             }
             // Canonical seal encoding of the integer 42 is the string "42".
@@ -483,7 +572,7 @@ mod tests {
                     .map(String::as_str),
                 Some("42")
             );
-            session_close("s-out");
+            session_close(&sid);
         }
 
         // THE cross-session-isolation proof. Two live sessions, A and B. A's
@@ -492,12 +581,14 @@ mod tests {
         // Cross-session delivery is unrepresentable, verified end-to-end.
         #[tokio::test]
         async fn sessions_are_isolated_inbound_and_outbound() {
-            session_open("A");
-            session_open("B");
+            let sid_a = test_sid("e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0");
+            let sid_b = test_sid("f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1");
+            session_open(&sid_a);
+            session_open(&sid_b);
 
             // Inbound: one subscriber per session, bound via the session scope.
-            let (ha, got_a) = collect_for("A", int_decoder());
-            let (hb, got_b) = collect_for("B", int_decoder());
+            let (ha, got_a) = collect_for(&sid_a, int_decoder());
+            let (hb, got_b) = collect_for(&sid_b, int_decoder());
 
             // Outbound: one out-sink per session.
             let out_a: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
@@ -505,7 +596,7 @@ mod tests {
             let oa = out_a.clone();
             let ob = out_b.clone();
             register_out_sink_for(
-                "A",
+                &sid_a,
                 Arc::new(move |s: &str| {
                     oa.lock()
                         .unwrap_or_else(|e| e.into_inner())
@@ -513,7 +604,7 @@ mod tests {
                 }),
             );
             register_out_sink_for(
-                "B",
+                &sid_b,
                 Arc::new(move |s: &str| {
                     ob.lock()
                         .unwrap_or_else(|e| e.into_inner())
@@ -523,11 +614,11 @@ mod tests {
             tokio::time::sleep(std::time::Duration::from_millis(20)).await; // subscribe
 
             // A's browser sends 11 inbound; only A's subscriber must see it.
-            deliver_inbound_for("A", "11".to_string());
+            deliver_inbound_for(&sid_a, "11".to_string());
             // A's program sends 99 outbound; only A's sink must see it.
             match js_send::<i64, i64>(99) {
                 IpeCmd::Publish(thunk) => {
-                    thunk("A");
+                    thunk(sid_a.as_str());
                 }
                 _ => unreachable!(),
             }
@@ -543,8 +634,8 @@ mod tests {
 
             ha.abort();
             hb.abort();
-            session_close("A");
-            session_close("B");
+            session_close(&sid_a);
+            session_close(&sid_b);
         }
 
         // A subscription materialised with NO session sid in scope binds an inert
@@ -552,8 +643,9 @@ mod tests {
         // inbound frames (fail-closed when the owner is unknown).
         #[tokio::test]
         async fn unscoped_subscription_receives_nothing() {
-            session_open("scoped");
-            // NOTE: materialised OUTSIDE with_session_sid → owner sid is "".
+            let sid = test_sid("a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2");
+            session_open(&sid);
+            // NOTE: materialised OUTSIDE with_session_sid → owner sid is absent.
             let got = Arc::new(Mutex::new(Vec::<i64>::new()));
             let got2 = got.clone();
             let emit: Arc<dyn Fn(i64) + Send + Sync> =
@@ -564,11 +656,11 @@ mod tests {
                 _ => unreachable!(),
             };
             tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-            deliver_inbound_for("scoped", "5".to_string());
+            deliver_inbound_for(&sid, "5".to_string());
             tokio::time::sleep(std::time::Duration::from_millis(20)).await;
             assert!(got.lock().unwrap_or_else(|e| e.into_inner()).is_empty()); // inert drain — nothing delivered
             h.abort();
-            session_close("scoped");
+            session_close(&sid);
         }
 
         // After `session_close`, a delivery to that sid is a fire-and-forget no-op
@@ -576,11 +668,12 @@ mod tests {
         // channel lingers.
         #[tokio::test]
         async fn closed_session_delivery_is_a_noop() {
-            session_open("gone");
-            let (h, got) = collect_for("gone", int_decoder());
+            let sid = test_sid("b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3");
+            session_open(&sid);
+            let (h, got) = collect_for(&sid, int_decoder());
             tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-            session_close("gone");
-            deliver_inbound_for("gone", "1".to_string()); // no channel → dropped
+            session_close(&sid);
+            deliver_inbound_for(&sid, "1".to_string()); // no channel → dropped
             tokio::time::sleep(std::time::Duration::from_millis(20)).await;
             assert!(got.lock().unwrap_or_else(|e| e.into_inner()).is_empty());
             h.abort();
