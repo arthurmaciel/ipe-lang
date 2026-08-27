@@ -104,6 +104,7 @@ hand. Slow checks run post-merge and nightly; detail in `docs/internals/dev-ops.
 - No runtime panic from well-typed Ipê code.
 - No `dyn Any` / `.downcast` / type-erasure in the backend — concrete over
   generic; a wildcard `any` has exactly one concrete lowering per position.
+- Prefer concrete/monomorphized emit over `Box<dyn Fn>` / boxed trait objects when the type is known at the emit site — `dyn` erasure invites fragile auto-trait-bound (`Send`/`Sync`) inference and accept-then-`cargo`-fail.
 - Secrets are typed — never `Debug`/`Display` a secret into a log or error.
 - Record field enumeration sorts by field index before any order-dependent emit.
 - THE SEAL: `ipe build` ⇒ the emitted Rust `cargo build`s — every acceptance path
