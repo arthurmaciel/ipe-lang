@@ -18,14 +18,7 @@ at the top and follow the links; each page assumes only the ones before it.
 
 - [Glossary](glossary.md) — every term of art, defined once.
 - **Module reference** (`../modules/`) — one page per `Ipe.*` module, each export
-  with its signature, description, and a verified example. This is generated from
-  the modules' source doc-strings (see the
-  [documentation design](../internals/design/tbd/documentation-design.md)) and is
-  browsable with `ipe doc serve`.
-- [The Ipê language](../language/README.md) — the language reference, chapter by
-  chapter (strings, errors, capabilities, the filesystem, views).
-- [Application shapes](../shapes/README.md) — the four kinds of program and how
-  to build each.
+  with its signature, description, and a verified example; browsable with `ipe doc serve`.
 
 ## Looking something up from the terminal
 

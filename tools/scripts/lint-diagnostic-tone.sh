@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Diagnostic tone/jargon gate: no compiler-internal vocabulary in user-facing
-# text. The house style SSOT is docs/internals/diagnostic-tone.md; this gate
-# mechanises its "no internal jargon" table for the two user-facing text sets:
+# text. This gate mechanises the "no internal jargon" rule for the two
+# user-facing text sets:
 #
 #   render_goldens/*.txt   the byte-locked rendered diagnostic output
 #   explain/*.md           the long-form `ipe explain <CODE>` pages
@@ -64,7 +64,7 @@ scan "$explain_dir" "$jargon_cased" '*.md'  '' -w
 scan "$goldens_dir" "$rust_types"   '*.txt'
 
 if [ "$violations" -ne 0 ]; then
-    echo "diagnostic-tone: internal jargon found in user-facing text (see docs/internals/diagnostic-tone.md)" >&2
+    echo "diagnostic-tone: internal jargon found in user-facing text" >&2
     exit 1
 fi
 

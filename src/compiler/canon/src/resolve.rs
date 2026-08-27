@@ -6710,7 +6710,7 @@ fn resolve_simple_interp_ref(
     // Divergence from ../ipe: `resolveInterpolationRef` lacks literal handling
     // and would surface `54` as a `VarLocal` → naming error. Recognising the
     // literal is strictly better (a well-typed program compiles instead of
-    // ICE-ing). Recorded in docs/divergences-from-sky.md.
+    // ICE-ing). Recorded in misc/docs/divergences-from-sky.md.
     if s.starts_with(|c: char| c.is_ascii_digit()) {
         if let Ok(n) = s.parse::<i64>() {
             return Ok(Located::new(span, canon::Expr_::Int(n)));

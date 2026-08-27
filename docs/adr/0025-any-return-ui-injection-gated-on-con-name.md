@@ -39,5 +39,4 @@ prior art), never a return-only generic.
   non-UI `… -> any` body carrying a free type var fails closed with `IPE-L0102`,
   actionable ("annotate the element type or drop the `any`").
 - **Sanctioned divergence:** a backend that erases `any` to a wildcard accepts
-  `w : Int -> any; w n = []`; Ipê rejects it — loud-not-silently-wrong, recorded
-  in `docs/divergences-from-sky.md`.
+  `w : Int -> any; w n = []`; Ipê rejects it — loud-not-silently-wrong.

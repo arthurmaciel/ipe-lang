@@ -190,7 +190,7 @@ sendBinaryRaw =
 
 -- | `sendBinary sock bytes` — write a binary frame.  Takes `Bytes`
 -- (a distinct primitive in this backend, unlike the reference's
--- String alias — see `docs/divergences-from-sky.md` §B18).
+-- String alias — see `misc/docs/divergences-from-sky.md` §B18).
 sendBinary : WebSocket -> Bytes -> Task Error ()
 sendBinary sock msg =
     case sock of

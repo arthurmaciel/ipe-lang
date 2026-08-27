@@ -103,7 +103,7 @@ discovered in production.
 `Result` whose `Err` describes what was wrong. At the boundary where effects run
 — a file read, a database query — the error type is
 [`Ipe.Error`](../modules/Ipe.Error.md), a typed, matchable value rather than a
-string. See the [error-handling chapter](../language/error-handling.md).
+string.
 
 ## Making invalid states unrepresentable
 

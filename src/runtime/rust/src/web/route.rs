@@ -9,7 +9,7 @@
 //! The builder returns `Option<Page>` so that a `:param` segment that fails to
 //! decode into the expected payload type (e.g. `"abc"` for an `Int` param)
 //! returns `None` and `match_routes` falls through to `not_found` rather than
-//! silently substituting a default value. See `docs/divergences-from-sky.md
+//! silently substituting a default value. See `misc/docs/divergences-from-sky.md
 //! §B-route-param`.
 
 use std::sync::Arc;

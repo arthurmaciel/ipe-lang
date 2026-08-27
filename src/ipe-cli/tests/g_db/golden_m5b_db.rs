@@ -617,7 +617,7 @@ fn db_find_by_field() {
 /// backend's `Db.Decode.money` returns `Decoder (Decimal, String)`, not the
 /// Go backend's `Decoder Money` — `Money`/`Currency` are project-generated
 /// Rust types unnameable from the shared runtime crate. See
-/// `docs/divergences-from-sky.md` (`B-DbDecMoney`).
+/// `misc/docs/divergences-from-sky.md` (`B-DbDecMoney`).
 #[test]
 fn db_decode_money() {
     assert_runs_and_matches_oracle("db_decode_money");

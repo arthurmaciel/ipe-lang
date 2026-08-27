@@ -78,8 +78,7 @@ binders.
   and total but over-clones. Ipê uses **true last-use** analysis: clone every
   owned read except the last, which moves (N−1 vs N clones), and additionally
   excludes borrow positions the coarser count does not. Rust move semantics let
-  us move the last use. Strictly-better divergence, recorded in
-  `docs/divergences-from-sky.md`.
+  us move the last use. Strictly-better divergence.
 * **As-pattern — Ipê correctly binds the whole; the simpler approach has a
   latent bug.** A simpler implementation drops the alias name entirely —
   rendering `((a,b) as w)` as just `(a, b)` and never binding `w`. A body that

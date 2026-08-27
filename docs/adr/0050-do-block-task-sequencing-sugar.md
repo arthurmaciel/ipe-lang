@@ -83,8 +83,7 @@ Alternatives rejected:
   sugar. Anything that would make it observably differ from its `Task.andThen` /
   `Task.parallel` expansion — new runtime behaviour, an error channel a plain
   chain lacks — is out of bounds.
-- This is a deliberate syntactic divergence from the Elm surface, recorded in
-  `docs/divergences-from-sky.md`.
+- This is a deliberate syntactic divergence from the Elm surface.
 
 ## Conventions
 
