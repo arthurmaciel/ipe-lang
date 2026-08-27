@@ -528,7 +528,8 @@ fn upgrade_bad_flag_shows_help() {
 #[test]
 fn check_success_output_is_guttered_and_framed() {
     // Use the examples tree as a known well-typed source so no fixture is needed.
-    let entry = support::manifest_dir().join("../../examples/shapes/non-tea/hello-world/src/Main.ipe");
+    let entry =
+        support::manifest_dir().join("../../examples/shapes/non-tea/hello-world/src/Main.ipe");
     // Only run when the example exists (CI always has it; a sparse checkout may not).
     if !entry.is_file() {
         return;
