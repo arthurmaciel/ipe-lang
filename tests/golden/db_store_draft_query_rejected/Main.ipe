@@ -1,0 +1,75 @@
+module Main exposing (main)
+
+-- Deny-by-default proof: reading an UNCLASSIFIED `Draft` must be a compile
+-- error. `Store.fromCodec` returns a `Draft Item` — a table whose schema is
+-- known but whose access intent is not declared. `Store.all` accepts only a
+-- classified `Store Item`, so passing the `Draft` straight to `Store.all`
+-- (without `Store.public` or `Store.secured`) is a TYPE MISMATCH: the table a
+-- developer forgot to classify cannot be queried (make-invalid-states-
+-- unrepresentable).
+--
+-- The fix the compiler points to is one classification step —
+-- `... |> Store.public` (world-open) or `Store.secured policy ...` (guarded) —
+-- between `fromCodec` and the first read. This fixture omits it on purpose, so
+-- the build MUST fail; the golden test asserts rejection.
+
+
+import Ipe.Codec as Codec exposing (Codec)
+import Ipe.Db as Db exposing (Db)
+import Ipe.Db.Store as Store
+import Ipe.Error exposing (Error)
+import Ipe.Io as Io
+import Ipe.Result as Result exposing (Result(..))
+import Ipe.Task as Task exposing (Task)
+
+
+type alias Item =
+    { id : Int
+    , name : String
+    }
+
+
+blankItem : Item
+blankItem =
+    { id = 0, name = "" }
+
+
+itemCodec : Codec Item
+itemCodec =
+    Codec.auto blankItem
+
+
+-- The unclassified draft: `fromCodec` yields a `Draft Item`, and the schema
+-- builders keep it a `Draft`. No `public` / `secured` classifies it.
+itemDraft : Result Error (Store.Draft Item)
+itemDraft =
+    case Store.fromCodec "items" itemCodec of
+        Err e ->
+            Err e
+
+        Ok draft ->
+            Ok (Store.primaryKey .id (Store.serial .id draft))
+
+
+-- Rejected: `Store.all` takes a `Store Item`, but `draft` is a `Draft Item`.
+readAll : Db -> Task Error (List Item)
+readAll db =
+    case itemDraft of
+        Ok draft ->
+            Store.all db draft
+
+        Err e ->
+            Task.fail e
+
+
+main : Task Error ()
+main =
+    Task.andThen
+        (\_ -> Io.println "unreachable")
+        (Task.onError
+            (\_ -> Task.succeed ())
+            (Task.andThen
+                (\db -> Task.map (\_ -> ()) (readAll db))
+                (Db.connect ())
+            )
+        )
