@@ -71,12 +71,14 @@ booksStore : Result Error (Store Book)
 booksStore =
     Store.fromCodec "books" bookCodec
         |> Result.map (\s -> Store.primaryKey .id s)
+        |> Result.map Store.public
 
 
 authorsStore : Result Error (Store Author)
 authorsStore =
     Store.fromCodec "authors" authorCodec
         |> Result.map (\s -> Store.primaryKey .id s)
+        |> Result.map Store.public
 
 
 -- The join: one parameterized statement, no per-row fan-out. Filters the right

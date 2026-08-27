@@ -538,7 +538,7 @@ eventsStore =
             Err e
 
         Ok s ->
-            Ok (Store.serial .id (Store.primaryKey .id (Store.defaultNow .recordedAt s)))
+            Ok (Store.public (Store.serial .id (Store.primaryKey .id (Store.defaultNow .recordedAt s))))
 
 
 -- | `persist db store cfg eventName eventProps` — persist a named event with a

@@ -52,7 +52,7 @@ itemStore =
             Err e
 
         Ok s ->
-            Ok (Store.primaryKey .id (Store.serial .id s))
+            Ok (Store.public (Store.primaryKey .id (Store.serial .id s)))
 
 
 run : Db -> Task Error Item

@@ -63,7 +63,7 @@ userStore : Result Error (Store Store.Row)
 userStore =
     case Store.fromColumns "users" userColumns of
         Ok s ->
-            Ok (StoreU.primaryKey "id" s)
+            Ok (Store.public (StoreU.primaryKey "id" s))
 
         Err e ->
             Err e
@@ -78,6 +78,7 @@ badStore =
         , Store.textColumn "name\"; DROP TABLE users; --"
         , Store.intColumn "age"
         ]
+        |> Result.map Store.public
 
 
 rejectBadIdentLine : String

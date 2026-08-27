@@ -42,9 +42,19 @@ pub(crate) fn ipe_main() -> IpeTask<()> {
                 db_connect(()),
                 Box::new(move |db: Db| -> IpeTask<()> {
                     task_and_then(
-                        task_from_result(crate::user_ipe_db_store_from_columns(
-                            "names".to_string(),
-                            vec![crate::user_ipe_db_store_text_column("name".to_string())],
+                        task_from_result(ipe_result_map(
+                            crate::user_ipe_db_store_from_columns("names".to_string(), vec![
+                                crate::user_ipe_db_store_text_column("name".to_string()),
+                            ]),
+                            {
+                                let __ipe_fn: Box<
+                                    dyn Fn(IpeDbStoreDraft<HashMap<String, String>>) -> IpeDbStoreStore<HashMap<String, String>>
+                                        + Send
+                                        + Sync
+                                        + 'static,
+                                > = Box::new(crate::user_ipe_db_store_public);
+                                __ipe_fn
+                            },
                         )),
                         Box::new(move |store: IpeDbStoreStore<HashMap<String, String>>| -> IpeTask<()> {
                             task_and_then(

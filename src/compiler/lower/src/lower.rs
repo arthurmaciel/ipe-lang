@@ -14149,11 +14149,27 @@ impl<'a> Lowerer<'a> {
 
         // detect outbound `Ipe.Http` client usage — any client kernel, or any
         // emittable type position that mentions an `HttpRequest` / `HttpMethod`
-        // (both live in the `http_client` runtime module). The backend uses
-        // this flag to declare `http_client` in the emitted `ipe_runtime/mod.rs`
-        // and add the `reqwest` dependency.
+        // (both live in the `http_client` runtime module), or any position that
+        // mentions `ChunkEvent` / `StreamId` from `http_stream`. The backend
+        // uses this flag to declare `http_client` in the emitted
+        // `ipe_runtime/mod.rs` and add the `reqwest` dependency.
+        //
+        // The `http_stream` arm is needed because `http_stream.rs` imports
+        // `reqwest::Response` unconditionally: a program whose `Msg` type
+        // carries `ChunkEvent` (even with the live `HttpStream.chunks` call
+        // pruned as dead code) still causes `http_stream` to be declared, and
+        // that module requires `reqwest` to compile. Without this guard, a
+        // program that names `ChunkEvent` in an ADT but never calls an
+        // outbound-HTTP kernel would get `server` declared (via the
+        // `ir_type_mentions_http_stream` arm of `uses_server`) but not
+        // `http_client`, causing the emitted crate to fail with E0412 on the
+        // `reqwest::Response` inside `http_stream.rs`.
+        let http_mentions_interner = &self.interner;
         let uses_http = kernel_usage.http
-            || program_type_mentions(&funcs, &records, &types_ir, &ir_type_mentions_http);
+            || program_type_mentions(&funcs, &records, &types_ir, &ir_type_mentions_http)
+            || program_type_mentions(&funcs, &records, &types_ir, &|t| {
+                ir_type_mentions_http_stream(t, http_mentions_interner)
+            });
 
         // detect `Ipe.Config` TOML/YAML decoder usage — any kernel emitting into
         // the `config_decode` runtime module (`Config.decodeToml` / `decodeYaml`

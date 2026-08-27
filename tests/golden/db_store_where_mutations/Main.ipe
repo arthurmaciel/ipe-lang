@@ -69,6 +69,7 @@ accountStore =
                     |> StoreU.defaultText "status" "active"
                     |> StoreU.defaultInt "retries" 0
                     |> StoreU.touchOnUpdate "updated_at"
+                    |> Store.public
                 )
 
         Err e ->

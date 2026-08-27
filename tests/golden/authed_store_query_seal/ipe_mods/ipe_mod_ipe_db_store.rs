@@ -97,6 +97,23 @@ impl IpeStringify for IpeDbStoreSchemaOp {
         }
     }
 }
+pub(crate) enum IpeDbStoreDraft<T1: 'static> {
+    Draft(RecCodecCurrentColumnsFrozenColumnsFrozenTableIndexesOpsPkSpecsTable<T1>),
+}
+impl<T1: Clone + 'static> Clone for IpeDbStoreDraft<T1> {
+    fn clone(&self) -> Self {
+        match self {
+            IpeDbStoreDraft::Draft(p0) => IpeDbStoreDraft::Draft(p0.clone()),
+        }
+    }
+}
+impl<T1: IpeStringify + std::fmt::Debug + 'static> IpeStringify for IpeDbStoreDraft<T1> {
+    fn ipe_show(&self) -> String {
+        match self {
+            IpeDbStoreDraft::Draft(_) => format!("Draft {}", "<fn>"),
+        }
+    }
+}
 pub(crate) enum IpeDbStoreStore<T1: 'static> {
     Store(RecCodecCurrentColumnsFrozenColumnsFrozenTableIndexesOpsPkSpecsTable<T1>),
 }
@@ -329,7 +346,7 @@ pub(crate) fn user_ipe_db_store_column(name: String, colType: IpeCodecColType) -
 pub(crate) fn user_ipe_db_store_from_codec<T1: Clone>(
     table: String,
     codec: IpeCodecCodec<T1>,
-) -> IpeResult<ipe_runtime::error::IpeError, IpeDbStoreStore<T1>> {
+) -> IpeResult<ipe_runtime::error::IpeError, IpeDbStoreDraft<T1>> {
     let _ipe_recursion_guard = crate::recursion_guard();
     match crate::user_ipe_codec_shape(codec.clone()) {
         IpeCodecShape::SRecord(cols) => {
@@ -367,7 +384,7 @@ pub(crate) fn user_ipe_db_store_build_store<T1: Clone>(
     table: String,
     columns: Vec<IpeDbStoreColumn>,
     codec: IpeCodecCodec<T1>,
-) -> IpeResult<ipe_runtime::error::IpeError, IpeDbStoreStore<T1>> {
+) -> IpeResult<ipe_runtime::error::IpeError, IpeDbStoreDraft<T1>> {
     let _ipe_recursion_guard = crate::recursion_guard();
     (if basics_not(crate::user_ipe_db_store_valid_sql_ident(table.clone())) {
         IpeResult::Err(
@@ -379,7 +396,7 @@ pub(crate) fn user_ipe_db_store_build_store<T1: Clone>(
                 crate::user_ipe_db_store_invalid_ident_error("column".to_string(), bad),
             ),
             IpeMaybe::Nothing => {
-                IpeResult::Ok(IpeDbStoreStore::Store(
+                IpeResult::Ok(IpeDbStoreDraft::Draft(
                     RecCodecCurrentColumnsFrozenColumnsFrozenTableIndexesOpsPkSpecsTable {
                         codec: codec,
                         currentColumns: columns.clone(),
@@ -425,6 +442,28 @@ pub(crate) fn user_ipe_db_store_column_name(col: IpeDbStoreColumn) -> String {
     let _ipe_recursion_guard = crate::recursion_guard();
     match col {
         IpeDbStoreColumn::Column(r) => (r).name.clone(),
+    }
+}
+pub(crate) fn user_ipe_db_store_public<T1: Clone>(
+    draft: IpeDbStoreDraft<T1>,
+) -> IpeDbStoreStore<T1> {
+    let _ipe_recursion_guard = crate::recursion_guard();
+    match draft {
+        IpeDbStoreDraft::Draft(r) => {
+            IpeDbStoreStore::Store(
+                RecCodecCurrentColumnsFrozenColumnsFrozenTableIndexesOpsPkSpecsTable {
+                    codec: (r.clone()).codec.clone(),
+                    currentColumns: (r.clone()).currentColumns.clone(),
+                    frozenColumns: (r.clone()).frozenColumns.clone(),
+                    frozenTable: (r.clone()).frozenTable.clone(),
+                    indexes: (r.clone()).indexes.clone(),
+                    ops: (r.clone()).ops.clone(),
+                    pk: (r.clone()).pk.clone(),
+                    specs: (r.clone()).specs.clone(),
+                    table: (r).table.clone(),
+                },
+            )
+        }
     }
 }
 pub(crate) fn user_ipe_db_store_has_column(columns: Vec<IpeDbStoreColumn>, name: String) -> bool {
@@ -473,17 +512,20 @@ pub(crate) fn user_ipe_db_store_owner_column_named(col: String) -> IpeDbStorePol
 }
 pub(crate) fn user_ipe_db_store_secured<T1: Clone>(
     policy: IpeDbStorePolicy,
-    store: IpeDbStoreStore<T1>,
+    draft: IpeDbStoreDraft<T1>,
 ) -> IpeResult<ipe_runtime::error::IpeError, IpeDbStoreSecured<T1>> {
     let _ipe_recursion_guard = crate::recursion_guard();
-    match store.clone() {
-        IpeDbStoreStore::Store(r) => match policy.clone() {
+    match draft.clone() {
+        IpeDbStoreDraft::Draft(r) => match policy.clone() {
             IpeDbStorePolicy::Policy(rules) => match crate::user_ipe_db_store_first_unknown_policy_column((r).currentColumns.clone(), rules)
             {
                 IpeMaybe::Just(bad) => {
                     IpeResult::Err(crate::user_ipe_db_store_unknown_column_error(bad))
                 }
-                IpeMaybe::Nothing => IpeResult::Ok(IpeDbStoreSecured::Secured(store, policy)),
+                IpeMaybe::Nothing => IpeResult::Ok(IpeDbStoreSecured::Secured(
+                    crate::user_ipe_db_store_public(draft),
+                    policy,
+                )),
             },
         },
     }

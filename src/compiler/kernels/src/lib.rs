@@ -10430,21 +10430,23 @@ impl StdlibKernel {
     /// `true` when this variant belongs to the outbound `Ipe.Http` client
     /// family — the `Http.get` / `Http.post` / `Http.request` senders plus the
     /// pure request/method builders (`Http.defaultRequest`, `Http.with*`,
-    /// `Http.methodFromString` / `methodToString`) and the `Http.parseQuery`
-    /// query splitter.
+    /// `Http.methodFromString` / `methodToString`), the `Http.parseQuery`
+    /// query splitter, and the `Ipe.Http.Stream` relay kernels.
     ///
-    /// Every variant here emits a symbol that lives in the `http_client`
-    /// runtime module, so any of them requires that module to be declared and
-    /// the `reqwest` crate to be linked. Used by `ipe_lower` to detect
-    /// `uses_http` and by the backend to declare `http_client` in the emitted
-    /// `ipe_runtime/mod.rs` and add `reqwest` to the emitted manifest — unlike
-    /// `Ipe.Url` (whose `url`-crate surface stays unconditional), the reqwest
-    /// HTTP stack is pulled in only on demand.
+    /// Every variant here emits a symbol that lives in the `http_client` or
+    /// `http_stream` runtime module, both of which require reqwest. Used by
+    /// `ipe_lower` to detect `uses_http` and by the backend to declare
+    /// `http_client` + `http_stream` in the emitted `ipe_runtime/mod.rs` and
+    /// add `reqwest` to the emitted manifest — unlike `Ipe.Url` (whose
+    /// `url`-crate surface stays unconditional), the reqwest HTTP stack is
+    /// pulled in only on demand.
     ///
-    /// The `Ipe.Http.Stream` relay kernels (`HttpStream*`) are NOT here: they
-    /// are `is_server` (or force the `server` runtime module), so they pull
-    /// `http_client` transitively through the server surface's `http_stream`
-    /// module, which itself calls into `http_client`.
+    /// The `Ipe.Http.Stream` relay kernels (`HttpStream*`) are included here
+    /// because `http_stream.rs` calls `http_client::ssrf_apply` and
+    /// `http_client::method_to_reqwest` — both modules require reqwest. A
+    /// program using `HttpStream.*` makes outbound HTTP connections and must
+    /// pull reqwest; `uses_http = true` causes the backend to declare both
+    /// `http_client` and `http_stream` together.
     #[must_use]
     pub const fn is_http_client(self) -> bool {
         matches!(
@@ -10464,6 +10466,13 @@ impl StdlibKernel {
                 | Self::HttpWithMaxRedirects
                 | Self::HttpMethodFromString
                 | Self::HttpMethodToString
+                // Outbound HTTP streaming: open/stream/close a reqwest response
+                // body incrementally. These call http_client::ssrf_apply +
+                // method_to_reqwest, so they require reqwest just like Http.get.
+                | Self::HttpStreamOpen
+                | Self::HttpStreamForEachChunk
+                | Self::HttpStreamClose
+                | Self::HttpStreamChunks
         )
     }
 

@@ -70,46 +70,6 @@ pub fn console_bin_path() -> Option<std::path::PathBuf> {
     if pb.is_file() { Some(pb) } else { None }
 }
 
-/// Boot-time decision: should the console child be spawned + mounted at all?
-/// Mirrors Go `MountEmbeddedConsole`'s skip conditions (console.go:257).
-/// `false` → the caller skips the proxy (and may mount the in-process console or
-/// nothing, per its own gate).
-pub fn gate_allows() -> bool {
-    // Sub-app context: the parent owns its own console; a nested app must not
-    // recursively mount one. IPE_WEB_BASE_PATH (deprecated alias: IPE_LIVE_BASE_PATH).
-    if crate::system::read_env_var_renamed("IPE_WEB_BASE_PATH", "IPE_LIVE_BASE_PATH")
-        .map(|v| !v.is_empty())
-        .unwrap_or(false)
-    {
-        return false;
-    }
-    // Explicit opt-outs.
-    if matches!(
-        crate::system::read_env_var("IPE_CONSOLE_EMBED").as_deref(),
-        Ok("off") | Ok("0") | Ok("false")
-    ) {
-        return false;
-    }
-    if crate::system::read_env_var("IPE_CONSOLE_AUTH")
-        .map(|v| v.trim().eq_ignore_ascii_case("off"))
-        .unwrap_or(false)
-    {
-        return false;
-    }
-    // Production without an admin token → no silent open-to-the-world mount.
-    if super::super::telemetry::production_from_env()
-        && crate::system::read_env_var("IPE_ADMIN_TOKEN")
-            .map(|v| v.is_empty())
-            .unwrap_or(true)
-        && crate::system::read_env_var("IPE_CONSOLE_TOKEN")
-            .map(|v| v.is_empty())
-            .unwrap_or(true)
-    {
-        return false;
-    }
-    true
-}
-
 /// Spawn the pre-built console child on `child_port`, pointing it at the data
 /// `store`. Returns `Some(())` on a successful spawn (the `Child` is tracked in
 /// `CHILD`); `None` when the binary is absent or the spawn fails — the caller
@@ -437,7 +397,7 @@ fn parent_spill_active() -> bool {
 }
 
 pub async fn ensure_console_proxy() -> bool {
-    if !gate_allows() {
+    if !super::console::gate_allows() {
         return false;
     }
     // Fast path for the common case (binary not pre-built yet): skip the
@@ -523,24 +483,6 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn gate_skips_in_subapp_context() {
-        // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
-        unsafe { std::env::set_var("IPE_WEB_BASE_PATH", "/billing") };
-        assert!(!gate_allows());
-        // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
-        unsafe { std::env::remove_var("IPE_WEB_BASE_PATH") };
-    }
-
-    #[test]
-    fn gate_skips_on_explicit_off() {
-        // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
-        unsafe { std::env::set_var("IPE_CONSOLE_EMBED", "off") };
-        assert!(!gate_allows());
-        // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
-        unsafe { std::env::remove_var("IPE_CONSOLE_EMBED") };
-    }
 
     #[test]
     fn bin_path_none_when_absent() {

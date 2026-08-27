@@ -216,8 +216,10 @@ pub(crate) fn resolve_first_non_private_addr_with_port(
 /// constructor still returns `Ok(VettedDial(()))` so callers are not broken
 /// in dev; the invariant is "passed the policy in effect," not "is always public."
 #[derive(Debug)]
+#[cfg_attr(not(any(feature = "db", feature = "email")), allow(dead_code))]
 pub(crate) struct VettedDial(());
 
+#[cfg_attr(not(any(feature = "db", feature = "email")), allow(dead_code))]
 impl VettedDial {
     /// Verify `host:port` against the SSRF deny-private policy and return a proof
     /// token on success.  Returns `Err(message)` if the guard is on and the host

@@ -732,22 +732,23 @@ pub(crate) struct EmitCtx<'a> {
     /// * extends the `tokio` dependency with `"net"` and `"sync"` features;
     /// * appends `pub mod server; pub use server::*; pub mod server_stream;
     ///   pub use server_stream::*;` to the emitted `ipe_runtime/mod.rs`.
+    ///   (`http_stream` is declared separately under `reaches_http_client`.)
     pub(crate) uses_server: bool,
     /// `true` when the program uses at least one outbound `Ipe.Http` client
     /// kernel (`Http.get` / `post` / `request`, the pure request/method
     /// builders, `Http.parseQuery`) or mentions an `HttpRequest` / `HttpMethod`
     /// in a signature. When set, [`crate::project::assemble_project_files`]:
     ///
-    /// * declares `pub mod http_client; pub use http_client::*;` in the emitted
+    /// * declares `pub mod http_client; pub use http_client::*;` and
+    ///   `pub mod http_stream; pub use http_stream::*;` in the emitted
     ///   `ipe_runtime/mod.rs`;
     /// * adds the `reqwest` dependency to the emitted `Cargo.toml`;
     /// * keeps the `http_client` kernel-wrapper bindings in the emitted prelude.
     ///
     /// The `url` crate stays unconditional (it backs the always-present
     /// `Ipe.Url` and `ssrf` surfaces), so only the reqwest HTTP stack is gated.
-    /// `uses_server` / `uses_web` / `uses_webview` / `uses_email` force this on
-    /// too: their runtime modules (`http_stream`, the `web` telemetry exporters,
-    /// `email`) call into `http_client`.
+    /// `uses_email` also forces this on (`email.rs` calls `http_client::ssrf_apply`).
+    /// Server/web/webview shapes without an outbound HTTP kernel omit reqwest.
     pub(crate) uses_http: bool,
     /// `true` when the program uses at least one `Ipe.Config` decoder that emits
     /// into the `config_decode` runtime module (`Config.decodeToml` /
@@ -1847,13 +1848,17 @@ impl<'a> EmitCtx<'a> {
     /// so `project::assemble_project_files` declares it, adds the `reqwest`
     /// dependency, and keeps the `http_client` prelude bindings.
     ///
-    /// The module is reached directly by a client kernel ([`Self::uses_http`]),
-    /// or transitively by a surface whose own runtime module calls into it: the
-    /// server (`http_stream`), the web/live telemetry exporters, and `email`.
+    /// The module is reached directly by a client kernel ([`Self::uses_http`])
+    /// or by the email surface (whose `email.rs` calls `http_client::ssrf_apply`
+    /// for outbound-request SSRF hardening). `http_stream.rs` (which calls
+    /// `http_client::ssrf_apply` + `method_to_reqwest`) is declared alongside
+    /// `http_client` whenever this is true, keeping reqwest out of server/web
+    /// apps that make no outbound HTTP calls.
+    ///
     /// This is the single source of truth shared by the manifest augmenter, the
     /// `mod.rs` append, and the prelude filter — they can never disagree.
     pub(crate) const fn reaches_http_client(&self) -> bool {
-        self.uses_http || self.uses_server || self.uses_web || self.uses_webview || self.uses_email
+        self.uses_http || self.uses_email
     }
 
     /// `true` when the emitted crate reaches the `jwt` runtime module — so
@@ -1981,15 +1986,16 @@ impl<'a> EmitCtx<'a> {
     /// [`Self::reaches_jwt`]) base64url/hex for token segments; `web/*`
     /// ([`Self::uses_web`] / [`Self::uses_webview`]) base64/hex for the session
     /// store + console proxy + SRI; and `http_client.rs` (via
-    /// [`Self::reaches_http_client`]) form-url-decodes query pairs, so every
-    /// program that reaches the client module — including a bare `Ipe.Http` client
-    /// with no server/web surface — needs `encoding`. FAIL-CLOSED — any uncertain
-    /// consumer keeps the feature on; over-inclusion is the accepted precision
-    /// loss, dropping a codec a program needs is the forbidden failure.
+    /// [`Self::reaches_http_client`]) form-url-decodes query pairs. FAIL-CLOSED —
+    /// any uncertain consumer keeps the feature on; over-inclusion is the accepted
+    /// precision loss, dropping a codec a program needs is the forbidden failure.
     pub(crate) const fn reaches_encoding(&self) -> bool {
         self.uses_encoding
             || self.uses_crypto
             || self.uses_db
+            || self.uses_server
+            || self.uses_web
+            || self.uses_webview
             || self.reaches_http_client()
             || self.reaches_jwt()
     }
