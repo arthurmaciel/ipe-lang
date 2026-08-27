@@ -13927,8 +13927,8 @@ impl<'a> Lowerer<'a> {
     /// positions `0`, `1`, … The referenced column is read from each `side.field`
     /// element at compile time, validated against that side's solved row type, and
     /// the SELECT list is set to exactly those columns (column pushdown). The
-    /// projected row comes back keyed by the `p<index>` output names, decoded
-    /// caller-side by position (`projReadText 0`, `projReadInt 1`, …), so no
+    /// projected row is decoded at the `selectToList`/`selectToMaybe` call site by
+    /// a monomorphic reader picked from each column's solved scalar type, so no
     /// decoder is stored in the projection value. A projection that is not a
     /// column reference (or a flat tuple of column references) fails closed
     /// (IPE-L0149) rather than emitting a partial statement or a `SELECT *`.
