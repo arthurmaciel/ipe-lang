@@ -13913,6 +13913,57 @@ impl<'a> Lowerer<'a> {
         })
     }
 
+    /// `Store.orderByLeft accessor order joined` /
+    /// `Store.orderByRight accessor order joined` — extract the column from the
+    /// accessor (same snake-case derivation every other accessor-typed leaf uses),
+    /// read the `Order` ADT constructor (`Asc` → `true`, `Desc` → `false`) from
+    /// the second argument, and rewrite to `orderByLeftNamed` / `orderByRightNamed`
+    /// with the validated column string and ascending bool. Fails closed (IPE-L0149)
+    /// if the second argument is not a bare `Asc` or `Desc` constructor.
+    fn lower_store_order_by(&self, peek: &Callee, args: &[canon::Expr]) -> DResult<Expr> {
+        let (Some(acc), Some(order_arg), Some(joined)) = (args.first(), args.get(1), args.get(2))
+        else {
+            return Err(bug(
+                "ipe_lower::lower_store_order_by",
+                "Store.orderByLeft/orderByRight kernel arity < 3",
+            ));
+        };
+        let (column, _field_ty) = self.accessor_column(acc)?;
+        // The `order` argument must be a bare `Asc` or `Desc` constructor — a
+        // nullary ADT value. Anything else (a let-bound alias, a passed-through
+        // variable) is not structurally recognisable here and fails closed.
+        let ascending = match &order_arg.value {
+            canon::Expr_::VarCtor { name, .. } => match self.resolve(*name)? {
+                "Asc" => true,
+                "Desc" => false,
+                _other => {
+                    return Err(unsupported_store_select(
+                        order_arg.span,
+                        StoreSelectProjectionDefect::UnsupportedProjectionBody,
+                    ));
+                }
+            },
+            _ => {
+                return Err(unsupported_store_select(
+                    order_arg.span,
+                    StoreSelectProjectionDefect::UnsupportedProjectionBody,
+                ));
+            }
+        };
+        let helper_name = match peek {
+            Callee::Kernel(KernelFn::StoreOrderByLeft) => "orderByLeftNamed",
+            _ => "orderByRightNamed",
+        };
+        let lowered_joined = self.lower_expr(joined)?;
+        let id = self.store_named_func_id(helper_name)?;
+        Ok(Expr::Call {
+            callee: Callee::Func(id),
+            args: vec![lowered_joined, Expr::Str(column), Expr::Bool(ascending)],
+            pin: CallPin::None,
+            on_form: OnFormKind::NotForm,
+        })
+    }
+
     /// `Store.select (\( colsA, colsB ) -> projection) joined` — read the
     /// projection lambda into the ordered `(alias, column)` references it names
     /// and a per-column decoder, then rewrite to the `selectNamed` stdlib helper.
@@ -20719,6 +20770,15 @@ impl<'a> Lowerer<'a> {
                         self.lower_store_policy_rule(&peek, args)?,
                     ));
                 }
+                // `Store.orderByLeft` / `Store.orderByRight` — arity 3 (accessor +
+                // Order + Joined). Extract the column from the accessor, detect the
+                // `Asc`/`Desc` ADT constructor, and rewrite to `orderByLeftNamed` /
+                // `orderByRightNamed`.
+                Callee::Kernel(KernelFn::StoreOrderByLeft | KernelFn::StoreOrderByRight)
+                    if args.len() == 3 =>
+                {
+                    return Ok(Intercepted::Done(self.lower_store_order_by(&peek, args)?));
+                }
                 // ── Ipe.Js ports (raw typed Ipê↔JS transport) ────────────
                 //
                 // `Js.send : a -> Cmd msg` (arity 1) and
@@ -23582,7 +23642,11 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::StoreInListBy
                 // `defaultText` / `defaultInt` — arity 3 (accessor + value + store).
                 | KernelFn::StoreDefaultText
-                | KernelFn::StoreDefaultInt,
+                | KernelFn::StoreDefaultInt
+                // `orderByLeft` / `orderByRight` — arity 3 (accessor + Order + Joined).
+                // Intercepted at lowering; this is only the defensive fallback count.
+                | KernelFn::StoreOrderByLeft
+                | KernelFn::StoreOrderByRight,
             ) => Ok(3),
             // ── JsonDec arity-4 ─────────────────────────────────────────
             Callee::Kernel(
@@ -23665,6 +23729,12 @@ impl<'a> Lowerer<'a> {
             // rightTable, rightAlias, rightCols, frag).
             Callee::Kernel(KernelFn::ConfigMap7 | KernelFn::DbFindJoin) => Ok(8),
             Callee::Kernel(KernelFn::ConfigMap8) => Ok(9),
+            // `Db.findProjectionOrdered` — arity 10 (Db, leftTable, leftAlias,
+            // rightTable, rightAlias, frag, projections, orderAlias, orderCol, orderAsc).
+            Callee::Kernel(KernelFn::DbFindProjectionOrdered) => Ok(10),
+            // `Db.findJoinOrdered` — arity 11 (Db, leftTable, leftAlias, leftCols,
+            // rightTable, rightAlias, rightCols, frag, orderAlias, orderCol, orderAsc).
+            Callee::Kernel(KernelFn::DbFindJoinOrdered) => Ok(11),
             // ── Ipe.Ui / Ipe.Html render kernels ─────────────────────────
             // Arity 0: nullary constants — no arguments.
             Callee::Kernel(
@@ -25102,6 +25172,10 @@ impl<'a> Lowerer<'a> {
                     ("Db", "findWhere") => Ok(Callee::Kernel(KernelFn::DbFindWhere)),
                     ("Db", "findJoin") => Ok(Callee::Kernel(KernelFn::DbFindJoin)),
                     ("Db", "findProjection") => Ok(Callee::Kernel(KernelFn::DbFindProjection)),
+                    ("Db", "findJoinOrdered") => Ok(Callee::Kernel(KernelFn::DbFindJoinOrdered)),
+                    ("Db", "findProjectionOrdered") => {
+                        Ok(Callee::Kernel(KernelFn::DbFindProjectionOrdered))
+                    }
                     ("Db", "deleteWhere") => Ok(Callee::Kernel(KernelFn::DbDeleteWhere)),
                     ("Db", "updateWhere") => Ok(Callee::Kernel(KernelFn::DbUpdateWhere)),
                     // Typed accessor query leaves — intercepted at lowering, so
@@ -25136,6 +25210,9 @@ impl<'a> Lowerer<'a> {
                     // Row-security policy builders — intercepted at lowering.
                     ("Store", "ownerColumn") => Ok(Callee::Kernel(KernelFn::StoreOwnerColumn)),
                     ("Store", "immutable") => Ok(Callee::Kernel(KernelFn::StoreImmutable)),
+                    // orderBy modifiers — intercepted at lowering.
+                    ("Store", "orderByLeft") => Ok(Callee::Kernel(KernelFn::StoreOrderByLeft)),
+                    ("Store", "orderByRight") => Ok(Callee::Kernel(KernelFn::StoreOrderByRight)),
                     // ── Secret kernels ──────────────────────────
                     ("Secret", "fromString") => Ok(Callee::Kernel(KernelFn::SecretFromString)),
                     ("Secret", "reveal") => Ok(Callee::Kernel(KernelFn::SecretReveal)),

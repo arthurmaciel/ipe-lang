@@ -2592,6 +2592,33 @@ fn build_join_statement(
     )))
 }
 
+/// Build the join statement like `build_join_statement` but append
+/// `ORDER BY <order_clause>`. The `order_clause` string was produced by
+/// `parse_order_clause` and contains only pre-validated identifiers; no
+/// interpolation occurs here.
+fn build_join_statement_ordered(
+    left: &JoinSide,
+    right: &JoinSide,
+    where_sql: &str,
+    order_clause: &str,
+) -> Result<String, String> {
+    if left.alias.as_str() == right.alias.as_str() {
+        return Err(format!(
+            "the two join sides share the alias {:?}; each side needs a distinct alias",
+            left.alias.as_str()
+        ));
+    }
+    let mut projection = left.projection_terms();
+    projection.extend(right.projection_terms());
+    Ok(db_format_sql(format!(
+        "SELECT {proj} FROM {lf}, {rf} WHERE {where_} ORDER BY {order_clause}",
+        proj = projection.join(", "),
+        lf = left.table_ref(),
+        rf = right.table_ref(),
+        where_ = where_sql
+    )))
+}
+
 /// One projected column: the alias-qualified source (`alias.column`) and the
 /// output name it is bound to (`p0`, `p1`, …). Both the alias and the column
 /// reach SQL only after `SqlIdent::parse_plain` accepts them, so the projection
@@ -2683,6 +2710,135 @@ pub fn db_find_projection<E: Send + From<String> + 'static>(
     })
 }
 
+/// `Db.findJoinOrdered : Db -> String -> String -> List String -> String -> String
+///                       -> List String -> SqlFragment -> String -> String -> Bool
+///                       -> Task Error (List (Dict String String, Dict String String))`
+/// — ordered variant of `db_find_join`. Identical to `db_find_join` but appends
+/// `ORDER BY <order_alias>.<order_col> ASC|DESC` to the join statement. The three
+/// trailing arguments are the validated order-column alias, column name, and
+/// ascending direction. Every identifier passes `SqlIdent::parse_plain`; the
+/// first that does not fails the whole read closed. No value is interpolated.
+#[allow(clippy::too_many_arguments)]
+pub fn db_find_join_ordered<E: Send + From<String> + 'static>(
+    conn: Db,
+    left_table: String,
+    left_alias: String,
+    left_columns: Vec<String>,
+    right_table: String,
+    right_alias: String,
+    right_columns: Vec<String>,
+    frag: SqlFragment,
+    order_alias: String,
+    order_col: String,
+    order_asc: bool,
+) -> IpeTask<E, Vec<JoinRow>> {
+    Box::pin(async move {
+        if let Some(reason) = frag.invalid {
+            return IpeResult::Err(format!("db.findJoinOrdered: {reason}").into());
+        }
+        let left = match JoinSide::parse(left_table, left_alias, left_columns) {
+            Ok(s) => s,
+            Err(reason) => return IpeResult::Err(format!("db.findJoinOrdered: {reason}").into()),
+        };
+        let right = match JoinSide::parse(right_table, right_alias, right_columns) {
+            Ok(s) => s,
+            Err(reason) => return IpeResult::Err(format!("db.findJoinOrdered: {reason}").into()),
+        };
+        let order_clause = match parse_order_clause(&order_alias, &order_col, order_asc) {
+            Ok(s) => s,
+            Err(reason) => return IpeResult::Err(format!("db.findJoinOrdered: {reason}").into()),
+        };
+        let left_prefix = left.output_prefix();
+        let right_prefix = right.output_prefix();
+        let sql = match build_join_statement_ordered(&left, &right, &frag.sql, &order_clause) {
+            Ok(s) => s,
+            Err(reason) => return IpeResult::Err(format!("db.findJoinOrdered: {reason}").into()),
+        };
+        let mut q = sqlx::query(&sql);
+        for p in frag.binds {
+            q = bind_sql_param(q, p);
+        }
+        match fetch_all_routed(&conn, q).await {
+            Ok(rows) => ok_res(
+                rows.iter()
+                    .map(|r| split_join_row(&row_to_map(r), &left_prefix, &right_prefix))
+                    .collect(),
+            ),
+            Err(e) => IpeResult::Err(ipe_err(&e)),
+        }
+    })
+}
+
+/// `Db.findProjectionOrdered : Db -> String -> String -> String -> String
+///                             -> SqlFragment -> List (String, String)
+///                             -> String -> String -> Bool
+///                             -> Task Error (List (Dict String String))`
+/// — ordered variant of `db_find_projection`. Identical to `db_find_projection`
+/// but appends `ORDER BY <order_alias>.<order_col> ASC|DESC` to the projection
+/// statement. The three trailing arguments are the validated order-column alias,
+/// column name, and ascending direction. Every identifier passes
+/// `SqlIdent::parse_plain`; the first that does not fails the whole read closed.
+#[allow(clippy::too_many_arguments)]
+pub fn db_find_projection_ordered<E: Send + From<String> + 'static>(
+    conn: Db,
+    left_table: String,
+    left_alias: String,
+    right_table: String,
+    right_alias: String,
+    frag: SqlFragment,
+    projections: Vec<(String, String)>,
+    order_alias: String,
+    order_col: String,
+    order_asc: bool,
+) -> IpeTask<E, Vec<HashMap<String, String>>> {
+    Box::pin(async move {
+        if let Some(reason) = frag.invalid {
+            return IpeResult::Err(format!("db.findProjectionOrdered: {reason}").into());
+        }
+        let order_clause = match parse_order_clause(&order_alias, &order_col, order_asc) {
+            Ok(s) => s,
+            Err(reason) => {
+                return IpeResult::Err(format!("db.findProjectionOrdered: {reason}").into());
+            }
+        };
+        let sql = match build_projection_statement_ordered(
+            &left_table,
+            &left_alias,
+            &right_table,
+            &right_alias,
+            &projections,
+            &frag.sql,
+            &order_clause,
+        ) {
+            Ok(s) => s,
+            Err(reason) => {
+                return IpeResult::Err(format!("db.findProjectionOrdered: {reason}").into());
+            }
+        };
+        let mut q = sqlx::query(&sql);
+        for p in frag.binds {
+            q = bind_sql_param(q, p);
+        }
+        match fetch_all_routed(&conn, q).await {
+            Ok(rows) => ok_res(rows.iter().map(row_to_map).collect()),
+            Err(e) => IpeResult::Err(ipe_err(&e)),
+        }
+    })
+}
+
+/// Validate the `(alias, column)` pair for an ORDER BY clause and return the
+/// `"alias.column ASC|DESC"` fragment. Both identifiers pass
+/// `SqlIdent::parse_plain`; the first that does not produces an `Err`. No value
+/// is interpolated — only pre-validated column and alias strings enter the SQL.
+fn parse_order_clause(alias: &str, col: &str, ascending: bool) -> Result<String, String> {
+    let alias_id =
+        SqlIdent::parse_plain(alias).ok_or_else(|| format!("invalid order alias {alias:?}"))?;
+    let col_id =
+        SqlIdent::parse_plain(col).ok_or_else(|| format!("invalid order column {col:?}"))?;
+    let dir = if ascending { "ASC" } else { "DESC" };
+    Ok(format!("{}.{} {dir}", alias_id.as_str(), col_id.as_str()))
+}
+
 /// Build the single parameterized projection statement from the two validated
 /// sides, the ordered projection references, and the combinator-built WHERE
 /// text. The SELECT names only the projected `alias.column AS p<index>` terms
@@ -2722,6 +2878,51 @@ fn build_projection_statement(
     }
     Ok(db_format_sql(format!(
         "SELECT {proj} FROM {lt} AS {la}, {rt} AS {ra} WHERE {where_}",
+        proj = terms.join(", "),
+        lt = left_table_id.as_str(),
+        la = left_alias_id.as_str(),
+        rt = right_table_id.as_str(),
+        ra = right_alias_id.as_str(),
+        where_ = where_sql
+    )))
+}
+
+/// Build the projection statement like `build_projection_statement` but append
+/// `ORDER BY <order_clause>`. The `order_clause` string was produced by
+/// `parse_order_clause` and contains only pre-validated identifiers.
+fn build_projection_statement_ordered(
+    left_table: &str,
+    left_alias: &str,
+    right_table: &str,
+    right_alias: &str,
+    projections: &[(String, String)],
+    where_sql: &str,
+    order_clause: &str,
+) -> Result<String, String> {
+    let left_table_id =
+        SqlIdent::parse_plain(left_table).ok_or_else(|| format!("invalid table {left_table:?}"))?;
+    let left_alias_id =
+        SqlIdent::parse_plain(left_alias).ok_or_else(|| format!("invalid alias {left_alias:?}"))?;
+    let right_table_id = SqlIdent::parse_plain(right_table)
+        .ok_or_else(|| format!("invalid table {right_table:?}"))?;
+    let right_alias_id = SqlIdent::parse_plain(right_alias)
+        .ok_or_else(|| format!("invalid alias {right_alias:?}"))?;
+    if left_alias_id.as_str() == right_alias_id.as_str() {
+        return Err(format!(
+            "the two join sides share the alias {:?}; each side needs a distinct alias",
+            left_alias_id.as_str()
+        ));
+    }
+    if projections.is_empty() {
+        return Err("a projection must name at least one column".to_string());
+    }
+    let mut terms = Vec::with_capacity(projections.len());
+    for (index, (alias, column)) in projections.iter().enumerate() {
+        let projected = ProjectionColumn::parse(alias, column, index)?;
+        terms.push(projected.projection_term());
+    }
+    Ok(db_format_sql(format!(
+        "SELECT {proj} FROM {lt} AS {la}, {rt} AS {ra} WHERE {where_} ORDER BY {order_clause}",
         proj = terms.join(", "),
         lt = left_table_id.as_str(),
         la = left_alias_id.as_str(),

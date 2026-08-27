@@ -1518,6 +1518,18 @@ pub enum StdlibKernel {
     /// one immutable-column rule over the accessor-named column. The intercept
     /// extracts the column name and delegates to the `immutableNamed` helper.
     StoreImmutable,
+    /// `Store.orderByLeft : (a -> k) -> Order -> Joined a b -> Joined a b` —
+    /// sort a join result by a column on the LEFT side (`a0`), ascending or
+    /// descending. The accessor names the column (validated at lowering, the same
+    /// snake-case derivation every other accessor-typed leaf uses); `Order` is
+    /// `Asc | Desc`. At lowering the accessor becomes the validated column
+    /// identifier and the call becomes `orderByLeftNamed`, which adds the
+    /// `ORDER BY a0.col ASC|DESC` clause to the join/projection statement.
+    StoreOrderByLeft,
+    /// `Store.orderByRight : (b -> k) -> Order -> Joined a b -> Joined a b` —
+    /// the right-side (`a1`) counterpart to `StoreOrderByLeft`. The accessor
+    /// names a column on the right store; `Order` is `Asc | Desc`.
+    StoreOrderByRight,
     // ── Db.Decode ───────────────────────────────────────────────────────────
     DbDecString,
     DbDecInt,
@@ -2361,6 +2373,23 @@ pub enum StdlibKernel {
     /// result row is one cell map keyed by the projection output names
     /// (`p0`, `p1`, …), so a caller decodes each projected column by position.
     DbFindProjection,
+    /// `Db.findJoinOrdered : Db -> String -> String -> List String -> String
+    ///                       -> String -> List String -> SqlFragment
+    ///                       -> String -> String -> Bool
+    ///                       -> Task Error (List (Row, Row))` — ordered variant of
+    /// `Db.findJoin` that appends `ORDER BY <orderAlias>.<orderCol> ASC|DESC` to
+    /// the join statement. The three trailing args are the order-column alias,
+    /// column name, and ascending flag. Every identifier is re-validated at the
+    /// runtime boundary; no value is interpolated.
+    DbFindJoinOrdered,
+    /// `Db.findProjectionOrdered : Db -> String -> String -> String -> String
+    ///                             -> SqlFragment -> List (String, String)
+    ///                             -> String -> String -> Bool
+    ///                             -> Task Error (List Row)` — ordered variant of
+    /// `Db.findProjection` that appends `ORDER BY <orderAlias>.<orderCol> ASC|DESC`.
+    /// The three trailing args are the order-column alias, column name, and
+    /// ascending flag. Every identifier is re-validated at the runtime boundary.
+    DbFindProjectionOrdered,
     /// `Db.deleteWhere : Db -> String -> SqlFragment -> Task Error Int`
     DbDeleteWhere,
     /// `Db.updateWhere : Db -> String -> List (String, SqlField) -> SqlFragment -> Task Error Int`
@@ -3420,6 +3449,11 @@ impl StdlibKernel {
             // inline (accessor becomes the validated column, then the stringly
             // `*Named` helper is called). Runtime-fn names are placeholders.
             Self::StoreOwnerColumn => d("Store", "ownerColumn", 1, Pure, "store_owner_column"),
+            // Accessor-intercepted at lowering (rewritten to `orderByLeftNamed`/
+            // `orderByRightNamed`); the runtime-fn names are never-called
+            // placeholders like `store_join`.
+            Self::StoreOrderByLeft => d("Store", "orderByLeft", 3, Pure, "store_order_by_left"),
+            Self::StoreOrderByRight => d("Store", "orderByRight", 3, Pure, "store_order_by_right"),
             Self::StoreImmutable => d("Store", "immutable", 1, Pure, "store_immutable"),
             // ── Db.Decode ───────────────────────────────────────────────────
             Self::DbDecString => d("Db.Decode", "string", 1, Db, "db_decode_string"),
@@ -4179,6 +4213,14 @@ impl StdlibKernel {
             Self::DbFindWhere => d("Db", "findWhere", 3, Db, "db_find_where"),
             Self::DbFindJoin => d("Db", "findJoin", 8, Db, "db_find_join"),
             Self::DbFindProjection => d("Db", "findProjection", 7, Db, "db_find_projection"),
+            Self::DbFindJoinOrdered => d("Db", "findJoinOrdered", 11, Db, "db_find_join_ordered"),
+            Self::DbFindProjectionOrdered => d(
+                "Db",
+                "findProjectionOrdered",
+                10,
+                Db,
+                "db_find_projection_ordered",
+            ),
             Self::DbDeleteWhere => d("Db", "deleteWhere", 3, Db, "db_delete_where"),
             Self::DbUpdateWhere => d("Db", "updateWhere", 4, Db, "db_update_where"),
             // ── Ipe.Secret — opaque secret-string wrapper ─
@@ -4947,6 +4989,9 @@ impl StdlibKernel {
         // Row-security policy builders (accessor-typed).
         Self::StoreOwnerColumn,
         Self::StoreImmutable,
+        // orderBy modifiers (accessor-typed).
+        Self::StoreOrderByLeft,
+        Self::StoreOrderByRight,
         // Db.Decode
         Self::DbDecString,
         Self::DbDecInt,
@@ -5421,6 +5466,8 @@ impl StdlibKernel {
         Self::DbFindWhere,
         Self::DbFindJoin,
         Self::DbFindProjection,
+        Self::DbFindJoinOrdered,
+        Self::DbFindProjectionOrdered,
         Self::DbDeleteWhere,
         Self::DbUpdateWhere,
         Self::SecretFromString,
@@ -5619,6 +5666,8 @@ impl StdlibKernel {
                 | Self::DbFindWhere
                 | Self::DbFindJoin
                 | Self::DbFindProjection
+                | Self::DbFindJoinOrdered
+                | Self::DbFindProjectionOrdered
                 | Self::DbDeleteWhere
                 | Self::DbUpdateWhere
         )
@@ -7210,6 +7259,48 @@ impl StdlibKernel {
         const STRING_4_TO_FIND_PROJECTION: TyShape =
             TyShape::Fun(&STRING, &STRING_3_TO_FIND_PROJECTION);
         const DB_FIND_PROJECTION: TyShape = TyShape::Fun(&DB, &STRING_4_TO_FIND_PROJECTION);
+        // `Db.findJoinOrdered : Db -> String -> String -> List String -> String
+        //                       -> String -> List String -> SqlFragment
+        //                       -> String -> String -> Bool
+        //                       -> Task (List (Dict String String, Dict String String))`.
+        // Identical to `DB_FIND_JOIN` plus 3 trailing args: orderAlias, orderCol, Bool.
+        const BOOL_TO_FIND_JOIN_ORDERED: TyShape =
+            TyShape::Fun(&BOOL, &TASK_LIST_TUPLE_DICT_SS_DICT_SS);
+        const STRING_TO_BOOL_TO_FIND_JOIN_ORDERED: TyShape =
+            TyShape::Fun(&STRING, &BOOL_TO_FIND_JOIN_ORDERED);
+        const STRING_2_ORDER_TO_FIND_JOIN: TyShape =
+            TyShape::Fun(&STRING, &STRING_TO_BOOL_TO_FIND_JOIN_ORDERED);
+        const SQLFRAGMENT_TO_FIND_JOIN_ORD: TyShape =
+            TyShape::Fun(&SQLFRAGMENT, &STRING_2_ORDER_TO_FIND_JOIN);
+        const LIST_STRING_TO_FIND_JOIN_ORD: TyShape =
+            TyShape::Fun(&LIST_STRING, &SQLFRAGMENT_TO_FIND_JOIN_ORD);
+        const STR_TO_LS_TO_FIND_JOIN_ORD: TyShape =
+            TyShape::Fun(&STRING, &LIST_STRING_TO_FIND_JOIN_ORD);
+        const STR2_TO_FIND_JOIN_ORD: TyShape = TyShape::Fun(&STRING, &STR_TO_LS_TO_FIND_JOIN_ORD);
+        const LS_STR2_TO_FIND_JOIN_ORD: TyShape =
+            TyShape::Fun(&LIST_STRING, &STR2_TO_FIND_JOIN_ORD);
+        const STR3_TO_FIND_JOIN_ORD: TyShape = TyShape::Fun(&STRING, &LS_STR2_TO_FIND_JOIN_ORD);
+        const STR4_TO_FIND_JOIN_ORD: TyShape = TyShape::Fun(&STRING, &STR3_TO_FIND_JOIN_ORD);
+        const DB_FIND_JOIN_ORDERED: TyShape = TyShape::Fun(&DB, &STR4_TO_FIND_JOIN_ORD);
+        // `Db.findProjectionOrdered : Db -> String -> String -> String -> String
+        //                             -> SqlFragment -> List (String, String)
+        //                             -> String -> String -> Bool
+        //                             -> Task (List (Dict String String))`.
+        // Identical to `DB_FIND_PROJECTION` plus 3 trailing args: orderAlias, orderCol, Bool.
+        const BOOL_TO_FIND_PROJ_ORD: TyShape = TyShape::Fun(&BOOL, &TASK_LIST_DICT_SS);
+        const STRING_TO_BOOL_TO_FIND_PROJ_ORD: TyShape =
+            TyShape::Fun(&STRING, &BOOL_TO_FIND_PROJ_ORD);
+        const STRING_2_ORDER_TO_FIND_PROJ: TyShape =
+            TyShape::Fun(&STRING, &STRING_TO_BOOL_TO_FIND_PROJ_ORD);
+        const LIST_TSS_TO_FIND_PROJ_ORD: TyShape =
+            TyShape::Fun(&LIST_TUPLE_STRING_STRING, &STRING_2_ORDER_TO_FIND_PROJ);
+        const SQLFRAGMENT_TO_FIND_PROJ_ORD: TyShape =
+            TyShape::Fun(&SQLFRAGMENT, &LIST_TSS_TO_FIND_PROJ_ORD);
+        const STR_TO_FIND_PROJ_ORD: TyShape = TyShape::Fun(&STRING, &SQLFRAGMENT_TO_FIND_PROJ_ORD);
+        const STR2_TO_FIND_PROJ_ORD: TyShape = TyShape::Fun(&STRING, &STR_TO_FIND_PROJ_ORD);
+        const STR3_TO_FIND_PROJ_ORD: TyShape = TyShape::Fun(&STRING, &STR2_TO_FIND_PROJ_ORD);
+        const STR4_TO_FIND_PROJ_ORD: TyShape = TyShape::Fun(&STRING, &STR3_TO_FIND_PROJ_ORD);
+        const DB_FIND_PROJECTION_ORDERED: TyShape = TyShape::Fun(&DB, &STR4_TO_FIND_PROJ_ORD);
         // `Db.deleteWhere : Db -> String -> SqlFragment -> Task Int`.
         const SQLFRAGMENT_TO_TASK_INT: TyShape = TyShape::Fun(&SQLFRAGMENT, &TASK_INT);
         const STRING_TO_DELETE_WHERE: TyShape = TyShape::Fun(&STRING, &SQLFRAGMENT_TO_TASK_INT);
@@ -8604,6 +8695,8 @@ impl StdlibKernel {
             Self::DbFindWhere => Some(&DB_FIND_WHERE),
             Self::DbFindJoin => Some(&DB_FIND_JOIN),
             Self::DbFindProjection => Some(&DB_FIND_PROJECTION),
+            Self::DbFindJoinOrdered => Some(&DB_FIND_JOIN_ORDERED),
+            Self::DbFindProjectionOrdered => Some(&DB_FIND_PROJECTION_ORDERED),
             Self::DbDeleteWhere => Some(&DB_DELETE_WHERE),
             Self::DbUpdateWhere => Some(&DB_UPDATE_WHERE),
             Self::DbInsertFields => Some(&DB_INSERT_FIELDS),
@@ -9036,6 +9129,9 @@ impl StdlibKernel {
         // ── Row-security policy builders — arity-1 (accessor only) ───────────
         Self::StoreOwnerColumn,
         Self::StoreImmutable,
+        // ── orderBy modifiers — arity-3 (accessor + Order + Joined) ──────────
+        Self::StoreOrderByLeft,
+        Self::StoreOrderByRight,
     ];
 
     /// Returns `true` when this kernel is an accessor-intercept placeholder —
@@ -9262,6 +9358,8 @@ impl StdlibKernel {
             | Self::DbFindWhere
             | Self::DbFindJoin
             | Self::DbFindProjection
+            | Self::DbFindJoinOrdered
+            | Self::DbFindProjectionOrdered
             | Self::DbDeleteWhere
             | Self::DbUpdateWhere
             | Self::DbDefaultMigration
@@ -9433,6 +9531,8 @@ impl StdlibKernel {
             | Self::StoreDefaultInt
             | Self::StoreOwnerColumn
             | Self::StoreImmutable
+            | Self::StoreOrderByLeft
+            | Self::StoreOrderByRight
             | Self::ListMap
             | Self::ListFilter
             | Self::ListFoldl

@@ -239,43 +239,49 @@ impl<T1: IpeStringify + std::fmt::Debug + 'static> IpeStringify for RecEncMkDecS
     }
 }
 #[derive(Clone, Debug, PartialEq)]
-pub struct RecFragJoinedAJoinedBLeftTablePoisonProjectionsRightTable {
+pub struct RecFragJoinedAJoinedBLeftTableOrderPoisonProjectionsRightTable {
     frag: ipe_runtime::db::SqlFragment,
     joinedA: String,
     joinedB: String,
     leftTable: String,
+    order: IpeMaybe<(String, String, bool)>,
     poison: IpeMaybe<ipe_runtime::error::IpeError>,
     projections: Vec<(String, String)>,
     rightTable: String,
 }
-impl IpeStringify for RecFragJoinedAJoinedBLeftTablePoisonProjectionsRightTable {
+impl IpeStringify for RecFragJoinedAJoinedBLeftTableOrderPoisonProjectionsRightTable {
     fn ipe_show(&self) -> String {
         format!(
-            "{{{} {} {} {} {} {} {}}}",
+            "{{{} {} {} {} {} {} {} {}}}",
             (&ipe_runtime::stringify::Wrap(&self.frag)).dispatch(),
             (&ipe_runtime::stringify::Wrap(&self.joinedA)).dispatch(),
             (&ipe_runtime::stringify::Wrap(&self.joinedB)).dispatch(),
             (&ipe_runtime::stringify::Wrap(&self.leftTable)).dispatch(),
+            (&ipe_runtime::stringify::Wrap(&self.order)).dispatch(),
             (&ipe_runtime::stringify::Wrap(&self.poison)).dispatch(),
             (&ipe_runtime::stringify::Wrap(&self.projections)).dispatch(),
             (&ipe_runtime::stringify::Wrap(&self.rightTable)).dispatch()
         )
     }
 }
-pub struct RecFragKeyAKeyBPoisonStoreAStoreB<T1: 'static, T2: 'static> {
+pub struct RecFragKeyAKeyBOrderPoisonStoreAStoreB<T1: 'static, T2: 'static> {
     frag: ipe_runtime::db::SqlFragment,
     keyA: String,
     keyB: String,
+    order: IpeMaybe<(String, String, bool)>,
     poison: IpeMaybe<ipe_runtime::error::IpeError>,
     storeA: IpeDbStoreStore<T1>,
     storeB: IpeDbStoreStore<T2>,
 }
-impl<T1: Clone + 'static, T2: Clone + 'static> Clone for RecFragKeyAKeyBPoisonStoreAStoreB<T1, T2> {
+impl<T1: Clone + 'static, T2: Clone + 'static> Clone
+    for RecFragKeyAKeyBOrderPoisonStoreAStoreB<T1, T2>
+{
     fn clone(&self) -> Self {
         Self {
             frag: self.frag.clone(),
             keyA: self.keyA.clone(),
             keyB: self.keyB.clone(),
+            order: self.order.clone(),
             poison: self.poison.clone(),
             storeA: self.storeA.clone(),
             storeB: self.storeB.clone(),
@@ -283,14 +289,15 @@ impl<T1: Clone + 'static, T2: Clone + 'static> Clone for RecFragKeyAKeyBPoisonSt
     }
 }
 impl<T1: IpeStringify + std::fmt::Debug + 'static, T2: IpeStringify + std::fmt::Debug + 'static> IpeStringify
-    for RecFragKeyAKeyBPoisonStoreAStoreB<T1, T2>
+    for RecFragKeyAKeyBOrderPoisonStoreAStoreB<T1, T2>
 {
     fn ipe_show(&self) -> String {
         format!(
-            "{{{} {} {} {} {} {}}}",
+            "{{{} {} {} {} {} {} {}}}",
             (&ipe_runtime::stringify::Wrap(&self.frag)).dispatch(),
             (&ipe_runtime::stringify::Wrap(&self.keyA)).dispatch(),
             (&ipe_runtime::stringify::Wrap(&self.keyB)).dispatch(),
+            (&ipe_runtime::stringify::Wrap(&self.order)).dispatch(),
             (&ipe_runtime::stringify::Wrap(&self.poison)).dispatch(),
             "<fn>",
             "<fn>"

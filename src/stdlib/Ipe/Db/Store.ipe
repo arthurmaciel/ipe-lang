@@ -222,9 +222,12 @@ module Ipe.Db.Store exposing
     , and, or, not
     , orderAsc, orderDesc, limit, offset
     , toList, toMaybe, count
+    , Order(..)
     , Joined
     , join, joinNamed
     , joinFilterLeft, joinFilterRight
+    , orderByLeft, orderByRight
+    , orderByLeftNamed, orderByRightNamed
     , joinToList, joinToMaybe, joinCount
     , Select
     , select, selectNamed
@@ -2669,15 +2672,23 @@ rightAlias =
     "a1"
 
 
+-- | Sort direction for `orderByLeft` / `orderByRight`. `Asc` sorts the join
+-- result ascending on the named column; `Desc` sorts descending.
+type Order
+    = Asc
+    | Desc
+
+
 -- | An inner join of two stores on key equality, decoded through each store's
 -- own codec at `joinToList` / `joinToMaybe` / `joinCount`. `storeA` / `storeB`
 -- are the two sides (left bound to `a0`, right to `a1`); `keyA` / `keyB` are the
 -- validated join-key columns (`a0.keyA = a1.keyB`); `frag` is the accumulated
 -- joined `WHERE` fragment (the key equality plus any `joinFilterLeft` /
--- `joinFilterRight`); `poison` holds the first fail-closed error (a filter
--- column absent from its side). Opaque: the stores it reads and the codecs it
--- decodes with cannot drift, because both come from the two `Store` values
--- `join` captured.
+-- `joinFilterRight`); `order` is an optional `(alias, column, ascending)` triple
+-- attached by `orderByLeft` / `orderByRight`; `poison` holds the first
+-- fail-closed error (a filter column absent from its side). Opaque: the stores
+-- it reads and the codecs it decodes with cannot drift, because both come from
+-- the two `Store` values `join` captured.
 type Joined a b
     = Joined
         { storeA : Store a
@@ -2685,6 +2696,7 @@ type Joined a b
         , keyA : String
         , keyB : String
         , frag : SqlFragment
+        , order : Maybe ( String, String, Bool )
         , poison : Maybe Error
         }
 
@@ -2736,6 +2748,7 @@ joinNamed storeA keyA storeB keyB =
         , keyA = keyA
         , keyB = keyB
         , frag = joinKeyEquals keyA keyB
+        , order = Nothing
         , poison = Nothing
         }
 
@@ -2812,6 +2825,7 @@ addJoinFilter alias columns cond joined =
                         , keyA = r.keyA
                         , keyB = r.keyB
                         , frag = r.frag
+                        , order = r.order
                         , poison = firstPoison r.poison e
                         }
 
@@ -2822,14 +2836,83 @@ addJoinFilter alias columns cond joined =
                         , keyA = r.keyA
                         , keyB = r.keyB
                         , frag = Sql.and r.frag lowered
+                        , order = r.order
                         , poison = r.poison
                         }
+
+
+-- | `orderByLeft accessor order joined` — sort the join result by a column from
+-- the LEFT side (`a0`). The accessor names the sort column the same way `eq`
+-- names a filter column; lowering extracts the snake_cased column name and
+-- rewrites to `orderByLeftNamed`. `Asc` sorts ascending; `Desc` descending.
+-- Only the last `orderByLeft` / `orderByRight` call on a `Joined` takes effect.
+--
+-- Example:
+--
+--     Store.join books .authorId authors .id
+--         |> Store.orderByLeft .title Asc
+--         |> Store.joinToList db
+orderByLeft : (a -> k) -> Order -> Joined a b -> Joined a b
+orderByLeft =
+    Ffi.kernel "Store_orderByLeft"
+
+
+-- | `orderByRight accessor order joined` — sort the join result by a column from
+-- the RIGHT side (`a1`). Symmetric to `orderByLeft`.
+--
+-- Example:
+--
+--     Store.join books .authorId authors .id
+--         |> Store.joinFilterRight (Store.eq .active True)
+--         |> Store.orderByRight .name Desc
+--         |> Store.joinToList db
+orderByRight : (b -> k) -> Order -> Joined a b -> Joined a b
+orderByRight =
+    Ffi.kernel "Store_orderByRight"
+
+
+-- | Lowered form of `orderByLeft`: the accessor has already been turned into its
+-- validated column name and the `Order` into a `Bool`. Attaches the sort
+-- specification to the join so `joinToList` routes to `Db.findJoinOrdered`.
+-- Reached only through the `Store.orderByLeft` lowering intercept.
+orderByLeftNamed : Joined a b -> String -> Bool -> Joined a b
+orderByLeftNamed joined col ascending =
+    case joined of
+        Joined r ->
+            Joined
+                { storeA = r.storeA
+                , storeB = r.storeB
+                , keyA = r.keyA
+                , keyB = r.keyB
+                , frag = r.frag
+                , order = Just ( leftAlias, col, ascending )
+                , poison = r.poison
+                }
+
+
+-- | Lowered form of `orderByRight`: symmetric to `orderByLeftNamed` but uses
+-- the RIGHT side alias (`a1`). Reached only through the `Store.orderByRight`
+-- lowering intercept.
+orderByRightNamed : Joined a b -> String -> Bool -> Joined a b
+orderByRightNamed joined col ascending =
+    case joined of
+        Joined r ->
+            Joined
+                { storeA = r.storeA
+                , storeB = r.storeB
+                , keyA = r.keyA
+                , keyB = r.keyB
+                , frag = r.frag
+                , order = Just ( rightAlias, col, ascending )
+                , poison = r.poison
+                }
 
 
 -- | `joinToList conn joined` — run the join and return each matched pair, both
 -- full rows decoded through their own store's codec. Lowers to ONE
 -- parameterized statement (`SELECT … FROM ta AS a0, tb AS a1 WHERE a0.keyA =
--- a1.keyB [AND filters]`) through `Db.findJoin`: every identifier (both tables,
+-- a1.keyB [AND filters]`) through `Db.findJoin` (or `Db.findJoinOrdered` when
+-- `orderByLeft` / `orderByRight` was applied): every identifier (both tables,
 -- both aliases, every projected column) is re-validated at the runtime boundary,
 -- and every filter value is a bound parameter. A poisoned join (a filter naming
 -- an unknown column) fails closed with the typed `Err`; a row that does not
@@ -2853,17 +2936,35 @@ joinToList conn joined =
                         Store sa ->
                             case r.storeB of
                                 Store sb ->
-                                    Task.andThen
-                                        (\pairs -> decodeJoinRows sa.codec sb.codec pairs)
-                                        (Db.findJoin conn
-                                            sa.table
-                                            leftAlias
-                                            (List.map columnName sa.currentColumns)
-                                            sb.table
-                                            rightAlias
-                                            (List.map columnName sb.currentColumns)
-                                            r.frag
-                                        )
+                                    case r.order of
+                                        Nothing ->
+                                            Task.andThen
+                                                (\pairs -> decodeJoinRows sa.codec sb.codec pairs)
+                                                (Db.findJoin conn
+                                                    sa.table
+                                                    leftAlias
+                                                    (List.map columnName sa.currentColumns)
+                                                    sb.table
+                                                    rightAlias
+                                                    (List.map columnName sb.currentColumns)
+                                                    r.frag
+                                                )
+
+                                        Just ( orderAlias, orderCol, orderAsc ) ->
+                                            Task.andThen
+                                                (\pairs -> decodeJoinRows sa.codec sb.codec pairs)
+                                                (Db.findJoinOrdered conn
+                                                    sa.table
+                                                    leftAlias
+                                                    (List.map columnName sa.currentColumns)
+                                                    sb.table
+                                                    rightAlias
+                                                    (List.map columnName sb.currentColumns)
+                                                    r.frag
+                                                    orderAlias
+                                                    orderCol
+                                                    orderAsc
+                                                )
 
 
 -- | `joinToMaybe conn joined` — run the join and decode the FIRST matched pair,
@@ -2931,6 +3032,7 @@ type Select row
         , leftTable : String
         , rightTable : String
         , frag : SqlFragment
+        , order : Maybe ( String, String, Bool )
         , poison : Maybe Error
         , projections : List ( String, String )
         }
@@ -2986,6 +3088,7 @@ selectNamed joined projections =
                                 , leftTable = sa.table
                                 , rightTable = sb.table
                                 , frag = r.frag
+                                , order = r.order
                                 , poison = r.poison
                                 , projections = projections
                                 }
@@ -3063,13 +3166,27 @@ selectRows conn sel =
                     Task.fail e
 
                 Nothing ->
-                    Db.findProjection conn
-                        r.leftTable
-                        r.joinedA
-                        r.rightTable
-                        r.joinedB
-                        r.frag
-                        r.projections
+                    case r.order of
+                        Nothing ->
+                            Db.findProjection conn
+                                r.leftTable
+                                r.joinedA
+                                r.rightTable
+                                r.joinedB
+                                r.frag
+                                r.projections
+
+                        Just ( orderAlias, orderCol, orderAsc ) ->
+                            Db.findProjectionOrdered conn
+                                r.leftTable
+                                r.joinedA
+                                r.rightTable
+                                r.joinedB
+                                r.frag
+                                r.projections
+                                orderAlias
+                                orderCol
+                                orderAsc
 
 
 -- The projection output name a projected column binds to, by position: the first

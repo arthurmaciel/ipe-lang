@@ -2577,6 +2577,74 @@ fn emit_db_call(
                  {right_table_s}, {right_alias_s}, {frag_s}, {projections_s})"
             )))
         }
+        // ── Db.findJoinOrdered: (conn, lt, la, lcols, rt, ra, rcols, frag,
+        //                         orderAlias, orderCol, orderAsc) ──────────────
+        //
+        // Eleven flat args: the eight from `DbFindJoin` plus the three ORDER BY
+        // arguments (alias String, column String, ascending Bool).
+        KernelFn::DbFindJoinOrdered => {
+            let conn_e = arg!(0, "conn")?;
+            let left_table_e = arg!(1, "leftTable")?;
+            let left_alias_e = arg!(2, "leftAlias")?;
+            let left_cols_e = arg!(3, "leftColumns")?;
+            let right_table_e = arg!(4, "rightTable")?;
+            let right_alias_e = arg!(5, "rightAlias")?;
+            let right_cols_e = arg!(6, "rightColumns")?;
+            let frag_e = arg!(7, "frag")?;
+            let order_alias_e = arg!(8, "orderAlias")?;
+            let order_col_e = arg!(9, "orderCol")?;
+            let order_asc_e = arg!(10, "orderAsc")?;
+            let conn_s = emit_expr_at(ctx, conn_e, indent, child, generics)?;
+            let left_table_s = emit_expr_at(ctx, left_table_e, indent, child, generics)?;
+            let left_alias_s = emit_expr_at(ctx, left_alias_e, indent, child, generics)?;
+            let left_cols_s = emit_expr_at(ctx, left_cols_e, indent, child, generics)?;
+            let right_table_s = emit_expr_at(ctx, right_table_e, indent, child, generics)?;
+            let right_alias_s = emit_expr_at(ctx, right_alias_e, indent, child, generics)?;
+            let right_cols_s = emit_expr_at(ctx, right_cols_e, indent, child, generics)?;
+            let frag_s = emit_expr_at(ctx, frag_e, indent, child, generics)?;
+            let order_alias_s = emit_expr_at(ctx, order_alias_e, indent, child, generics)?;
+            let order_col_s = emit_expr_at(ctx, order_col_e, indent, child, generics)?;
+            let order_asc_s = emit_expr_at(ctx, order_asc_e, indent, child, generics)?;
+            let fn_name = crate::naming::kernel_name(*k);
+            Ok(Some(format!(
+                "{fn_name}({conn_s}.clone(), {left_table_s}, {left_alias_s}, {left_cols_s}, \
+                 {right_table_s}, {right_alias_s}, {right_cols_s}, {frag_s}, \
+                 {order_alias_s}, {order_col_s}, {order_asc_s})"
+            )))
+        }
+        // ── Db.findProjectionOrdered: (conn, lt, la, rt, ra, frag, projections,
+        //                              orderAlias, orderCol, orderAsc) ──────────
+        //
+        // Ten flat args: the seven from `DbFindProjection` plus the three ORDER
+        // BY arguments (alias String, column String, ascending Bool).
+        KernelFn::DbFindProjectionOrdered => {
+            let conn_e = arg!(0, "conn")?;
+            let left_table_e = arg!(1, "leftTable")?;
+            let left_alias_e = arg!(2, "leftAlias")?;
+            let right_table_e = arg!(3, "rightTable")?;
+            let right_alias_e = arg!(4, "rightAlias")?;
+            let frag_e = arg!(5, "frag")?;
+            let projections_e = arg!(6, "projections")?;
+            let order_alias_e = arg!(7, "orderAlias")?;
+            let order_col_e = arg!(8, "orderCol")?;
+            let order_asc_e = arg!(9, "orderAsc")?;
+            let conn_s = emit_expr_at(ctx, conn_e, indent, child, generics)?;
+            let left_table_s = emit_expr_at(ctx, left_table_e, indent, child, generics)?;
+            let left_alias_s = emit_expr_at(ctx, left_alias_e, indent, child, generics)?;
+            let right_table_s = emit_expr_at(ctx, right_table_e, indent, child, generics)?;
+            let right_alias_s = emit_expr_at(ctx, right_alias_e, indent, child, generics)?;
+            let frag_s = emit_expr_at(ctx, frag_e, indent, child, generics)?;
+            let projections_s = emit_expr_at(ctx, projections_e, indent, child, generics)?;
+            let order_alias_s = emit_expr_at(ctx, order_alias_e, indent, child, generics)?;
+            let order_col_s = emit_expr_at(ctx, order_col_e, indent, child, generics)?;
+            let order_asc_s = emit_expr_at(ctx, order_asc_e, indent, child, generics)?;
+            let fn_name = crate::naming::kernel_name(*k);
+            Ok(Some(format!(
+                "{fn_name}({conn_s}.clone(), {left_table_s}, {left_alias_s}, \
+                 {right_table_s}, {right_alias_s}, {frag_s}, {projections_s}, \
+                 {order_alias_s}, {order_col_s}, {order_asc_s})"
+            )))
+        }
         // ── Sql.inList: (frag: SqlFragment, values: List SqlValue) ───────────
         //
         // `values` needs the same `List SqlValue` → `Vec<SqlParam>` projection
