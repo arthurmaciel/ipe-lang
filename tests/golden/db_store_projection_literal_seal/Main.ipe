@@ -1,0 +1,119 @@
+module Main exposing (main)
+
+-- SEAL smoke for `Store.literal` in a typed projection body. Two
+-- `Codec.auto`-derived stores join on `books.author_id = authors.id`; `select`
+-- projects one `Store.literal` element and one column reference so the join
+-- lowers to `SELECT ? AS p0, a1.name AS p1 FROM …` — the literal value binds
+-- as a SQL parameter at position `p0`, the column reference projects to `p1`.
+--
+-- The projection returns the typed `List ( String, String )` directly. No live
+-- database is needed: `Task.onError` catches the connection failure and the
+-- program exits cleanly. The SEAL proof is a `cargo build` of the emitted
+-- project under `IPE_E2E=1`.
+--
+-- `Store.literal "fiction"` is recognized structurally at compile time:
+--   * its type is `String`, so `p0` decodes as text;
+--   * the sentinel `("", "")` pair in the projection list tells the runtime to
+--     emit `? AS p0` in the SELECT and bind the wrapped value before WHERE params;
+--   * point-free or partially-applied `literal` is a fail-closed build error
+--     (IPE-L0146), so only the applied `literal "fiction"` form is valid here.
+--
+-- Expected output:
+--   projection-literal-seal:ok
+
+
+import Ipe.Codec as Codec exposing (Codec)
+import Ipe.Db as Db exposing (Db)
+import Ipe.Db.Store as Store exposing (Store)
+import Ipe.Error exposing (Error)
+import Ipe.Io as Io
+import Ipe.List as List
+import Ipe.Result as Result exposing (Result(..))
+import Ipe.Task as Task exposing (Task)
+
+
+type alias Book =
+    { id : String
+    , title : String
+    , authorId : String
+    }
+
+
+type alias Author =
+    { id : String
+    , name : String
+    , active : Bool
+    }
+
+
+blankBook : Book
+blankBook =
+    { id = "", title = "", authorId = "" }
+
+
+blankAuthor : Author
+blankAuthor =
+    { id = "", name = "", active = False }
+
+
+bookCodec : Codec Book
+bookCodec =
+    Codec.auto blankBook
+
+
+authorCodec : Codec Author
+authorCodec =
+    Codec.auto blankAuthor
+
+
+booksStore : Result Error (Store Book)
+booksStore =
+    Store.fromCodec "books" bookCodec
+        |> Result.map (\s -> Store.primaryKey .id s)
+        |> Result.map Store.public
+
+
+authorsStore : Result Error (Store Author)
+authorsStore =
+    Store.fromCodec "authors" authorCodec
+        |> Result.map (\s -> Store.primaryKey .id s)
+        |> Result.map Store.public
+
+
+-- The projection: one literal position (`? AS p0`) and one column reference
+-- (`a1.name AS p1`). The literal value "fiction" binds as a parameter; no value
+-- is interpolated. The typed return is `List ( String, String )`.
+labeledNames : Db -> Store Book -> Store Author -> Task Error (List ( String, String ))
+labeledNames db books authors =
+    Store.selectToList db
+        (Store.select (\( _, author ) -> ( Store.literal "fiction", author.name ))
+            (Store.join books .authorId authors .id)
+        )
+
+
+run : Db -> Task Error (List ( String, String ))
+run db =
+    case booksStore of
+        Ok books ->
+            case authorsStore of
+                Ok authors ->
+                    labeledNames db books authors
+
+                Err e ->
+                    Task.fail e
+
+        Err e ->
+            Task.fail e
+
+
+main : Task Error ()
+main =
+    Task.andThen
+        (\_ -> Io.println "projection-literal-seal:ok")
+        (Task.onError
+            (\_ -> Task.succeed ())
+            (Task.andThen
+                (\db -> Task.map (\_ -> ()) (run db))
+                (Db.connect ())
+            )
+        )

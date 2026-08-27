@@ -1440,6 +1440,13 @@ pub enum StdlibKernel {
     /// read into the ordered `(alias, column)` projection list and a per-column
     /// decoder, and the call becomes the `selectNamed` stdlib helper.
     StoreSelect,
+    /// `Store.literal : t -> t` — a projection element that binds its argument
+    /// as a SQL parameter (`? AS pN`) rather than naming a column. Valid only
+    /// inside a `Store.select` projection lambda; recognized structurally at
+    /// lowering (the argument is bound as a `SqlValue` in the SELECT, never
+    /// interpolated into SQL text). An accessor-intercept placeholder: a
+    /// point-free or partially-applied `literal` is a fail-closed IPE-L0146.
+    StoreLiteral,
     /// `Store.eqBy : Codec t -> (row -> t) -> t -> Cond` — the accessor-typed
     /// equality leaf for an ENUM or newtype column whose wire form is not
     /// type-derivable. The `Codec t` argument projects the comparison value to a
@@ -3406,6 +3413,7 @@ impl StdlibKernel {
             // Accessor-intercepted at lowering (rewritten to `selectNamed`); the
             // runtime name is a never-called placeholder like `store_join`.
             Self::StoreSelect => d("Store", "select", 2, Pure, "store_select"),
+            Self::StoreLiteral => d("Store", "literal", 1, Pure, "store_literal"),
             // Accessor-typed equality leaf for enum/newtype columns — lowered
             // inline to the `Compare` `Cond` constructor (the value bound through
             // the passed codec), so the runtime-fn name is a never-called
@@ -4212,12 +4220,12 @@ impl StdlibKernel {
             Self::SqlLike => d("Sql", "like", 2, Db, "sql_like"),
             Self::DbFindWhere => d("Db", "findWhere", 3, Db, "db_find_where"),
             Self::DbFindJoin => d("Db", "findJoin", 8, Db, "db_find_join"),
-            Self::DbFindProjection => d("Db", "findProjection", 7, Db, "db_find_projection"),
+            Self::DbFindProjection => d("Db", "findProjection", 8, Db, "db_find_projection"),
             Self::DbFindJoinOrdered => d("Db", "findJoinOrdered", 11, Db, "db_find_join_ordered"),
             Self::DbFindProjectionOrdered => d(
                 "Db",
                 "findProjectionOrdered",
-                10,
+                11,
                 Db,
                 "db_find_projection_ordered",
             ),
@@ -4961,6 +4969,7 @@ impl StdlibKernel {
         Self::DbDefaultMigration,
         Self::StoreJoin,
         Self::StoreSelect,
+        Self::StoreLiteral,
         Self::StoreEqCol,
         Self::StoreEqBy,
         Self::StoreNeqCol,
@@ -7244,10 +7253,13 @@ impl StdlibKernel {
         const STRING_4_TO_FIND_JOIN: TyShape = TyShape::Fun(&STRING, &STRING_3_TO_FIND_JOIN);
         const DB_FIND_JOIN: TyShape = TyShape::Fun(&DB, &STRING_4_TO_FIND_JOIN);
         // `Db.findProjection : Db -> String -> String -> String -> String
-        //                      -> SqlFragment -> List (String, String)
+        //                      -> SqlFragment -> List (String, String) -> List a
         //                      -> Task (List (Dict String String))`.
+        // `List a` (= `LIST_A`) is the `extraBinds` parameter — `Store.literal`
+        // bind values, schemed polymorphically so a concrete `SqlValue` element unifies.
+        const LIST_A_TO_FIND_PROJECTION: TyShape = TyShape::Fun(&LIST_A, &TASK_LIST_DICT_SS);
         const LIST_TSS_TO_FIND_PROJECTION: TyShape =
-            TyShape::Fun(&LIST_TUPLE_STRING_STRING, &TASK_LIST_DICT_SS);
+            TyShape::Fun(&LIST_TUPLE_STRING_STRING, &LIST_A_TO_FIND_PROJECTION);
         const SQLFRAGMENT_TO_FIND_PROJECTION: TyShape =
             TyShape::Fun(&SQLFRAGMENT, &LIST_TSS_TO_FIND_PROJECTION);
         const STRING_TO_FIND_PROJECTION: TyShape =
@@ -7283,17 +7295,20 @@ impl StdlibKernel {
         const STR4_TO_FIND_JOIN_ORD: TyShape = TyShape::Fun(&STRING, &STR3_TO_FIND_JOIN_ORD);
         const DB_FIND_JOIN_ORDERED: TyShape = TyShape::Fun(&DB, &STR4_TO_FIND_JOIN_ORD);
         // `Db.findProjectionOrdered : Db -> String -> String -> String -> String
-        //                             -> SqlFragment -> List (String, String)
+        //                             -> SqlFragment -> List (String, String) -> List a
         //                             -> String -> String -> Bool
         //                             -> Task (List (Dict String String))`.
-        // Identical to `DB_FIND_PROJECTION` plus 3 trailing args: orderAlias, orderCol, Bool.
+        // `List a` is `extraBinds` (same as in `DB_FIND_PROJECTION`).
+        // Three trailing args after `extraBinds`: orderAlias, orderCol, Bool.
         const BOOL_TO_FIND_PROJ_ORD: TyShape = TyShape::Fun(&BOOL, &TASK_LIST_DICT_SS);
         const STRING_TO_BOOL_TO_FIND_PROJ_ORD: TyShape =
             TyShape::Fun(&STRING, &BOOL_TO_FIND_PROJ_ORD);
         const STRING_2_ORDER_TO_FIND_PROJ: TyShape =
             TyShape::Fun(&STRING, &STRING_TO_BOOL_TO_FIND_PROJ_ORD);
+        const LIST_A_TO_FIND_PROJ_ORD: TyShape =
+            TyShape::Fun(&LIST_A, &STRING_2_ORDER_TO_FIND_PROJ);
         const LIST_TSS_TO_FIND_PROJ_ORD: TyShape =
-            TyShape::Fun(&LIST_TUPLE_STRING_STRING, &STRING_2_ORDER_TO_FIND_PROJ);
+            TyShape::Fun(&LIST_TUPLE_STRING_STRING, &LIST_A_TO_FIND_PROJ_ORD);
         const SQLFRAGMENT_TO_FIND_PROJ_ORD: TyShape =
             TyShape::Fun(&SQLFRAGMENT, &LIST_TSS_TO_FIND_PROJ_ORD);
         const STR_TO_FIND_PROJ_ORD: TyShape = TyShape::Fun(&STRING, &SQLFRAGMENT_TO_FIND_PROJ_ORD);
@@ -9099,6 +9114,8 @@ impl StdlibKernel {
         Self::StoreJoin,
         // ── Projection constructor — arity-2 (select lambda + joined) ────────
         Self::StoreSelect,
+        // ── Literal projection element — arity-1 (value) ─────────────────────
+        Self::StoreLiteral,
         // ── Query leaves — arity-2 (accessor + store) ────────────────────────
         Self::StoreEqCol,
         Self::StoreEqBy,
@@ -9505,6 +9522,7 @@ impl StdlibKernel {
             | Self::CharIsOctDigit
             | Self::StoreJoin
             | Self::StoreSelect
+            | Self::StoreLiteral
             | Self::StoreEqCol
             | Self::StoreEqBy
             | Self::StoreNeqCol

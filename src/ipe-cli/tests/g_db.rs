@@ -26,6 +26,8 @@ mod golden_db_store_join_seal;
 mod golden_db_store_order_by_seal;
 #[path = "g_db/golden_db_store_policy_algebra.rs"]
 mod golden_db_store_policy_algebra;
+#[path = "g_db/golden_db_store_projection_literal_seal.rs"]
+mod golden_db_store_projection_literal_seal;
 #[path = "g_db/golden_db_store_projection_multicol_seal.rs"]
 mod golden_db_store_projection_multicol_seal;
 #[path = "g_db/golden_db_store_projection_rejections.rs"]

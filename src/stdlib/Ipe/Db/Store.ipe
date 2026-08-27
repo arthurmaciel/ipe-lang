@@ -230,7 +230,7 @@ module Ipe.Db.Store exposing
     , orderByLeftNamed, orderByRightNamed
     , joinToList, joinToMaybe, joinCount
     , Select
-    , select, selectNamed
+    , select, selectNamed, literal
     , selectToList, selectToMaybe
     , Policy, Secured
     , unrestricted, publicRead, ownerColumn, immutable, andPolicy, secured
@@ -3035,6 +3035,7 @@ type Select row
         , order : Maybe ( String, String, Bool )
         , poison : Maybe Error
         , projections : List ( String, String )
+        , extraBinds : List SqlValue
         }
 
 
@@ -3069,13 +3070,33 @@ select =
     Ffi.kernel "Store_select"
 
 
+-- | `literal value` — inside a `Store.select` projection lambda, binds `value`
+-- as a SQL parameter (`? AS pN`) rather than naming a column. The value is
+-- never interpolated into SQL text; its type picks the concrete reader the decode
+-- emits. Valid only as a direct element of a `Store.select` projection body: a
+-- point-free or partially-applied `literal` is a fail-closed build error.
+--
+-- Example:
+--
+--     Store.join books .authorId authors .id
+--         |> Store.select (\( _, author ) -> ( literal "fiction", author.name ))
+--         |> Store.selectToList db
+--         -- : Task Error (List ( String, String ))
+--         -- SQL: SELECT ? AS p0, a1.name AS p1 FROM …
+literal : t -> t
+literal =
+    Ffi.kernel "Store_literal"
+
+
 -- | The lowered form of `select`: the lambda has already been read into the
--- ordered `(alias, column)` projection list. Builds the `Select` from the join's
--- tables, alias-bound `FROM … WHERE` fragment, and any inherited `poison`.
--- Reached only through the `Store.select` lowering intercept; not part of the
--- accessor caller surface.
-selectNamed : Joined a b -> List ( String, String ) -> Select row
-selectNamed joined projections =
+-- ordered `(alias, column)` projection list, with any `literal(value)` positions
+-- represented by an empty sentinel pair `("", "")` and their `SqlValue`-wrapped
+-- arguments in `extraBinds` (in the same positional order). Builds the `Select`
+-- from the join's tables, alias-bound `FROM … WHERE` fragment, and any inherited
+-- `poison`. Reached only through the `Store.select` lowering intercept; not part
+-- of the accessor caller surface.
+selectNamed : Joined a b -> List ( String, String ) -> List SqlValue -> Select row
+selectNamed joined projections extraBinds =
     case joined of
         Joined r ->
             case r.storeA of
@@ -3091,6 +3112,7 @@ selectNamed joined projections =
                                 , order = r.order
                                 , poison = r.poison
                                 , projections = projections
+                                , extraBinds = extraBinds
                                 }
 
 
@@ -3175,6 +3197,7 @@ selectRows conn sel =
                                 r.joinedB
                                 r.frag
                                 r.projections
+                                r.extraBinds
 
                         Just ( orderAlias, orderCol, orderAsc ) ->
                             Db.findProjectionOrdered conn
@@ -3184,6 +3207,7 @@ selectRows conn sel =
                                 r.joinedB
                                 r.frag
                                 r.projections
+                                r.extraBinds
                                 orderAlias
                                 orderCol
                                 orderAsc
