@@ -10,8 +10,8 @@
 //! `ipe` AND the emitted crate builds/runs correctly", which the rejection-only
 //! harness cannot express.
 //!
-//! The cargo build+run step is `IPE_E2E`-gated (it reuses the examples-sweep's
-//! build-and-run core via `e2e_support::build_and_run_rust`), so the default fast
+//! The cargo build+run step is `IPE_E2E`-gated (reuses
+//! `e2e_support::build_and_run_rust`), so the default fast
 //! pass stays emit-only: without `IPE_E2E` the tests assert only `ipe` exit 0.
 //!
 //! Run the full seal (`ipe` + cargo + run):

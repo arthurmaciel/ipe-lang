@@ -1,5 +1,0 @@
-module Package exposing (package)
-
-
-package =
-    Package.named "sky-console"

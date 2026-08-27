@@ -1,9 +1,0 @@
-{
-    "kind": "cli",
-    "steps": [
-        {
-            "args": [],
-            "expectExit": 0
-        }
-    ]
-}

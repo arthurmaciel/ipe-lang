@@ -16,7 +16,6 @@
 #
 # Carve-outs (SSOT — enumerated here, not spread across the codebase):
 #   src/ipe-cli/tests/            — internal test oracles, never shipped to users
-#   examples/sky/                 — tracked reference-impl mirror, not our source
 
 set -euo pipefail
 
@@ -58,8 +57,7 @@ is_carved_out() {
     local fp="$1"
     local carve
     for carve in \
-        "src/ipe-cli/tests" \
-        "examples/sky"
+        "src/ipe-cli/tests"
     do
         if [[ "$fp" == "$carve" || "$fp" == "$carve/"* ]]; then
             return 0

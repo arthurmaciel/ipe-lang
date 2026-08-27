@@ -8,13 +8,11 @@
 # entry — so a compiler change that reddens a canonical example breaks the gate
 # instead of rotting silently in the tree.
 #
-# This is a FLOOR, complementary to (not a duplicate of) two heavier checks:
+# This is a FLOOR, complementary to (not a duplicate of) the heavier check:
 #   • ci.yml's `shapes-examples` build gate — `ipe type-check` + `ipe build` +
-#     cargo over the 4 shapes only. This floor is check-only but WIDER: it also
-#     covers examples/wasm/**, which otherwise reaches `ipe type-check` only in the
-#     non-gating nightly examples-sweep.
-#   • examples-sweep.sh — the full mirror BUILD+RUN parity proof (heavy,
-#     non-gating, includes the upstream examples/sky/** set this floor excludes).
+#     cargo over the shape examples. This floor is check-only but WIDER: it also
+#     covers examples/wasm/**, which otherwise only reaches `ipe type-check` in the
+#     non-gating nightly E2E suite.
 #
 # Exit: 0 = every first-party example type-checks · 1 = one or more failed ·
 #       2 = setup (no repo / no ipe binary).

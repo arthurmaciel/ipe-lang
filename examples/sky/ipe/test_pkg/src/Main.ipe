@@ -1,9 +1,0 @@
-module Main exposing (main)
-
-import Ipe.Io as Io
-
-
-main =
-    do
-        list = [ 1, 2, 3 ]
-        Io.println "List ready"

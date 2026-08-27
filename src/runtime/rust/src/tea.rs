@@ -539,7 +539,7 @@ where
         // user's prompt formatting decides whether to add one)" — Go only ever
         // appends ONE newline, at `fmt.Println()` after the event loop exits
         // (same as here). This is intentional REPL-prompt design:
-        // `examples/sky/ipe/20-cli-counter`'s `view` returns
+        // `examples/shapes/terminal/simple-counter`'s `view` returns
         // `"count=" ++ ... ++ "  (+, -, r, q) > "` with NO trailing newline so
         // the cursor stays on the prompt line for the user's input. An app that
         // wants each render on its own line supplies its own trailing "\n"

@@ -12,7 +12,7 @@ terminal. Piped or redirected output, or any run with `NO_COLOR` set, is clean
 plain text with no escape codes.
 
 ```
-$ ipe capabilities examples/sky/02-go-stdlib/src/Main.ipe
+$ ipe capabilities examples/shapes/program/release-preflight/src/Main.ipe
   This program exercises 2 security capabilities:
     • network
     • clock

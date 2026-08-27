@@ -398,24 +398,22 @@ jobs:
           IPE="$PWD/target/release/ipe"
           WARM="$(mktemp -d)"
           cd "$WARM"
-          "$IPE" build "$GITHUB_WORKSPACE/examples/sky/ipe/01-hello-world/package.ipe" --out out/rust
+          "$IPE" build "$GITHUB_WORKSPACE/examples/shapes/non-tea/hello-world/package.ipe" --out out/rust
           cd out/rust
           cargo build --release   # compiles the runtime dep tree into the shared target
-      - name: Emit + build + run (examples/sky/ipe/01-hello-world)
+      - name: Emit + build + run (examples/shapes/non-tea/hello-world)
         env:
           CARGO_TARGET_DIR: ${{ github.workspace }}/.cache/seal-shared-target
         run: |
           set -euo pipefail
           IPE="$PWD/target/release/ipe"
-          cd examples/sky/ipe/01-hello-world
+          cd examples/shapes/non-tea/hello-world
           "$IPE" build package.ipe --out out/rust
           cd out/rust
           cargo build --release   # incremental: deps already in the shared target
           OUT="$(cargo run --release --quiet)"
           echo "emitted-binary output: $OUT"
-          # The mirror port preserves the upstream greeting string verbatim (the
-          # token rewrite never touches string literals).
-          echo "$OUT" | grep -q 'Hello from Sky!'
+          echo "$OUT" | grep -q 'Hello, Ipê!'
 
   # First-party shape examples — the representative user-facing gate. Every
   # committed example under examples/shapes/ (one per shape: program, terminal,
@@ -423,8 +421,8 @@ jobs:
   # every PR. This is the fast, non-flaky core of the examples proof: it catches
   # a compiler change that makes a shipped example stop type-checking or emit a
   # crate that no longer compiles — the two ways a user first feels a regression.
-  # Interactive RUN coverage (browser round-trips, pty-driven tui) stays in the
-  # nightly examples-sweep, which also carries the live upstream-mirror set.
+  # Interactive RUN coverage (browser round-trips, pty-driven tui) is outside
+  # this build gate.
   shapes-examples:
     name: first-party shapes (build gate)
     runs-on: ubuntu-latest
@@ -493,8 +491,8 @@ jobs:
   #
   # Complementary, not redundant, to `shapes-examples` above: that job BUILDS +
   # cargo-compiles the 4 shapes; this floor is check-only (no cargo) but WIDER —
-  # it also covers examples/wasm/**, which otherwise reaches `ipe type-check`
-  # only in the non-gating nightly examples-sweep. So a wasm example that stops
+  # it also covers examples/wasm/**, which no other required gate type-checks.
+  # So a wasm example that stops
   # type-checking (e.g. a pub/sub contract change) breaks a PR here instead of
   # rotting in the tree.
   first-party-check-floor:
@@ -646,8 +644,7 @@ jobs:
       # Without these the `bare_html_view_cargo_builds` E2E golden fails when
       # cargo tries to link the emitted Webview project — pkg-config cannot find
       # gobject-2.0 and the build exits non-zero (THE SEAL breach in CI only,
-      # not in the emitter). The same packages are already installed in the
-      # examples-sweep job for the same reason.
+      # not in the emitter).
       - name: Install webview link deps (wry/tao — GLib/GTK/WebKit)
         run: |
           sudo apt-get update

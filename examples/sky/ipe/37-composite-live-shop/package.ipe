@@ -1,6 +1,0 @@
-module Package exposing (package)
-
-
-package =
-    Package.named "composite-live-shop"
-        |> Package.version "0.1.0"

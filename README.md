@@ -128,7 +128,7 @@ nothing to declare.
 default; `--plain` gives the bare names, one per line, for a script:
 
 ```
-$ ipe capabilities --plain examples/sky/ipe/02-go-stdlib/src/Main.ipe
+$ ipe capabilities --plain examples/shapes/program/release-preflight/src/Main.ipe
 network
 clock
 ```
@@ -303,17 +303,14 @@ the source-only contract forbids).
 `ipe build --static` produces a fully-static musl binary — zero runtime
 dependencies, copy and run anywhere.
 
-```sh
-# Prerequisite (once):
-rustup target add x86_64-unknown-linux-musl
-sudo apt-get install musl-tools   # or equivalent on your distro
+Prerequisite (once): add the musl target with
+`rustup target add x86_64-unknown-linux-musl` and install `musl-tools` from
+your distro's package manager.
 
-# Build a static binary (x86_64 Linux, dlmalloc allocator — the default):
-cd examples/sky/ipe/01-hello-world
-ipe build package.ipe --out out/rust --static
-cd out/rust
-cargo build --release --target x86_64-unknown-linux-musl
-```
+To build a static binary from `examples/shapes/non-tea/hello-world`:
+run `ipe build package.ipe --out out/rust --static` inside that directory,
+then `cargo build --release --target x86_64-unknown-linux-musl` inside
+`out/rust/`.
 
 The emitted `.cargo/config.toml` sets `+crt-static` automatically; no extra
 `RUSTFLAGS` are needed.

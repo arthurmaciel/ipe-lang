@@ -13,7 +13,7 @@ module Main exposing (main)
 -- world and returns it (`World -> Result Error World`), so the value is used
 -- exactly once per step. An opaque foreign handle for a non-`Clone` Rust type
 -- (bevy's `World` is `!Clone`) cannot be duplicated, so a linear thread is the
--- only shape the shim-free FFI can compile — see examples/sky/BLOCKERS.md.
+-- only shape the shim-free FFI can compile.
 
 import Ipe.Result as Result
 import Ipe.String as String

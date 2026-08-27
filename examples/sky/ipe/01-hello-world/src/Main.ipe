@@ -1,7 +1,0 @@
-module Main exposing (main)
-
-import Ipe.Io as Io
-
-
-main =
-    Io.println "Hello from Sky!"

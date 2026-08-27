@@ -1,6 +1,0 @@
-module Package exposing (package)
-
-
-package =
-    Package.named "kernel-variadic-arity"
-        |> Package.version "0.1.0"

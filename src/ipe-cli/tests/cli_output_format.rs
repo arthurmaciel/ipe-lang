@@ -148,7 +148,7 @@ fn capabilities_in_a_project_dir_resolves_the_entry() {
     // A known-valid example project (a `package.ipe` + `src/Main.ipe`). Run
     // `capabilities` with NO positional and the project dir as the working
     // directory, exactly as the bug report did.
-    let proj = support::manifest_dir().join("../../examples/sky/ipe/01-hello-world");
+    let proj = support::manifest_dir().join("../../examples/shapes/non-tea/hello-world");
     // Only run when the example exists (CI always has it; a sparse checkout may not).
     if !proj.join("package.ipe").is_file() {
         return;
@@ -197,7 +197,7 @@ fn capabilities_in_a_project_dir_resolves_the_entry() {
 /// the directory itself and failing with a raw "Is a directory" io error.
 #[test]
 fn emit_ir_in_a_project_dir_resolves_the_entry() {
-    let proj = support::manifest_dir().join("../../examples/sky/ipe/01-hello-world");
+    let proj = support::manifest_dir().join("../../examples/shapes/non-tea/hello-world");
     if !proj.join("package.ipe").is_file() {
         return;
     }
@@ -528,7 +528,8 @@ fn upgrade_bad_flag_shows_help() {
 #[test]
 fn check_success_output_is_guttered_and_framed() {
     // Use the examples tree as a known well-typed source so no fixture is needed.
-    let entry = support::manifest_dir().join("../../examples/sky/ipe/01-hello-world/src/Main.ipe");
+    let entry =
+        support::manifest_dir().join("../../examples/shapes/non-tea/hello-world/src/Main.ipe");
     // Only run when the example exists (CI always has it; a sparse checkout may not).
     if !entry.is_file() {
         return;

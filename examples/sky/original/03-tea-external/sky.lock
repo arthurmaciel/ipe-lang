@@ -1,3 +1,0 @@
-go:
-  github.com/google/uuid: latest
-  github.com/joho/godotenv: latest

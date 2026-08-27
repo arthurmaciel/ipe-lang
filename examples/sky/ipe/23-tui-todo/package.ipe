@@ -1,6 +1,0 @@
-module Package exposing (package)
-
-
-package =
-    Package.named "tui-todo"
-        |> Package.version "0.1.0"

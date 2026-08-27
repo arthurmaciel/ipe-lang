@@ -7,8 +7,6 @@ old unqualified Prelude `println`, an `import Ipe.Log exposing (println)`, or a
 qualified `Log.println` is rewritten to call `Io.println`, importing
 `Ipe.Io as Io` exactly once.
 
-`examples/sky/original/**` is the raw upstream mirror and is never touched.
-
 Idempotent: a file already on `Io.println` with an `Ipe.Io` import is left as-is.
 """
 
@@ -32,9 +30,6 @@ IMPORT_IO = "import Ipe.Io as Io"
 
 def is_skipped(path: Path) -> bool:
     parts = path.as_posix()
-    # The raw upstream mirror is never touched.
-    if "examples/sky/original/" in parts:
-        return True
     # The embedded standard-library sources ARE the kernel definitions of
     # `Ipe.Io` / `Ipe.Log` / etc. — `println`/`eprintln` there are the kernel
     # `Ffi.kernel` bindings, not call sites, and must never be rewritten.

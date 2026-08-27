@@ -291,9 +291,9 @@ fn webview_counter_build_only() -> Result<(), BoxError> {
             // LOUD-SKIP, same posture as Tier-B's `xvfb-run`-absent skip:
             // `wry`/`tao` link against the system `webkit2gtk`/`glib` dev
             // packages on Linux, which this runner does not install
-            // (`examples-sweep.yml` documents the same gap: "webview
-            // examples don't build on ipe during phase 1"; `Ipe.WebView` is
-            // macOS-first per CLAUDE.md). This is an environment gap, not a
+            // `Ipe.WebView` is macOS-first; `wry`/`tao` link against
+            // system webkit2gtk/glib dev packages on Linux (an environment
+            // gap, not a codegen regression). This is an environment gap, not a
             // codegen regression — THE SEAL (ipe exit-0 ⇒ cargo exit-0) is
             // unproven on Linux here, never asserted false-green.
             println!(
