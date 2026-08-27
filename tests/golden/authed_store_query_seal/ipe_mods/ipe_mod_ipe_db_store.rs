@@ -217,8 +217,21 @@ impl<T1: IpeStringify + std::fmt::Debug + 'static> IpeStringify for IpeDbStoreQu
         }
     }
 }
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum IpeDbStoreOrder {
+    Asc,
+    Desc,
+}
+impl IpeStringify for IpeDbStoreOrder {
+    fn ipe_show(&self) -> String {
+        match self {
+            IpeDbStoreOrder::Asc => "Asc".to_string(),
+            IpeDbStoreOrder::Desc => "Desc".to_string(),
+        }
+    }
+}
 pub(crate) enum IpeDbStoreJoined<T1: 'static, T2: 'static> {
-    Joined(RecFragKeyAKeyBPoisonStoreAStoreB<T1, T2>),
+    Joined(RecFragKeyAKeyBOrderPoisonStoreAStoreB<T1, T2>),
 }
 impl<T1: Clone + 'static, T2: Clone + 'static> Clone for IpeDbStoreJoined<T1, T2> {
     fn clone(&self) -> Self {
@@ -238,7 +251,7 @@ impl<T1: IpeStringify + std::fmt::Debug + 'static, T2: IpeStringify + std::fmt::
 }
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum IpeDbStoreSelect {
-    Select(RecFragJoinedAJoinedBLeftTablePoisonProjectionsRightTable),
+    Select(RecFragJoinedAJoinedBLeftTableOrderPoisonProjectionsRightTable),
 }
 impl IpeStringify for IpeDbStoreSelect {
     fn ipe_show(&self) -> String {
