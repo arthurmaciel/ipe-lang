@@ -24,6 +24,10 @@ mod golden_db_store_insert_returning_seal;
 mod golden_db_store_join_seal;
 #[path = "g_db/golden_db_store_policy_algebra.rs"]
 mod golden_db_store_policy_algebra;
+#[path = "g_db/golden_db_store_projection_multicol_seal.rs"]
+mod golden_db_store_projection_multicol_seal;
+#[path = "g_db/golden_db_store_projection_rejections.rs"]
+mod golden_db_store_projection_rejections;
 #[path = "g_db/golden_db_store_projection_seal.rs"]
 mod golden_db_store_projection_seal;
 #[path = "g_db/golden_db_wrapper_empty_params_165.rs"]

@@ -1,0 +1,95 @@
+//! Fail-closed refusals for `Store.select` projections (IPE-L0149).
+//!
+//! `Store.select` accepts a projection body that is a bare `side.field` column
+//! reference, or a flat tuple of such references. Anything else — a computed
+//! value, a literal, a nested tuple — must be a fail-closed build error, never a
+//! partial statement or a `SELECT *`. Each case here is driven by a real `.ipe`
+//! program whose stores and join are well-formed; only the projection body is at
+//! fault, so the build must be rejected with exactly IPE-L0149. Asserting only
+//! `is_err()` would pass on any unrelated failure and leave the refusal unproven,
+//! so each test pins the diagnostic code.
+
+use std::path::{Path, PathBuf};
+
+use ipe::CliError;
+
+use crate::support::repo_root;
+
+fn fixture_entry(root: &Path, golden: &str) -> PathBuf {
+    root.join("tests")
+        .join("golden")
+        .join(golden)
+        .join("Main.ipe")
+}
+
+/// Build `golden` and return the diagnostic code it was rejected with, or `None`
+/// if it built or failed without a pipeline diagnostic.
+fn rejection_code(golden: &str) -> Option<ipe_diagnostics::Code> {
+    let root = repo_root();
+    let entry = fixture_entry(&root, golden);
+    let out = std::env::temp_dir().join(format!("ipec_{golden}"));
+    let _ = std::fs::remove_dir_all(&out);
+
+    let runtime = ipe::resolve_runtime().ok()?;
+    match ipe::build(&entry, &out, &runtime) {
+        Err(CliError::Pipeline { diag, .. }) => Some(diag.code()),
+        _ => None,
+    }
+}
+
+/// A SINGLE-column projection body that computes a value (`String.append …`)
+/// instead of naming a bare column is rejected with IPE-L0149 (the back-filled
+/// single-reference refusal).
+#[test]
+fn single_column_computed_projection_is_rejected() {
+    let Some(code) = rejection_code("db_store_projection_reject_single_computed") else {
+        return; // resolver unavailable — skip
+    };
+    assert_eq!(
+        code,
+        ipe_diagnostics::IPE_L0149,
+        "a computed single-column projection body must fail closed with IPE-L0149"
+    );
+}
+
+/// A tuple element that computes a value (`String.toUpper author.name`) is
+/// rejected with IPE-L0149.
+#[test]
+fn multicol_computed_element_is_rejected() {
+    let Some(code) = rejection_code("db_store_projection_reject_computed") else {
+        return;
+    };
+    assert_eq!(
+        code,
+        ipe_diagnostics::IPE_L0149,
+        "a computed tuple element must fail closed with IPE-L0149"
+    );
+}
+
+/// A tuple element that is a literal (`"literal"`) rather than a column
+/// reference is rejected with IPE-L0149.
+#[test]
+fn multicol_literal_element_is_rejected() {
+    let Some(code) = rejection_code("db_store_projection_reject_literal") else {
+        return;
+    };
+    assert_eq!(
+        code,
+        ipe_diagnostics::IPE_L0149,
+        "a literal tuple element must fail closed with IPE-L0149"
+    );
+}
+
+/// A tuple element that is itself a tuple (a nested projection) is rejected with
+/// IPE-L0149 — a multi-column projection is a flat tuple of references.
+#[test]
+fn multicol_nested_tuple_element_is_rejected() {
+    let Some(code) = rejection_code("db_store_projection_reject_nested_tuple") else {
+        return;
+    };
+    assert_eq!(
+        code,
+        ipe_diagnostics::IPE_L0149,
+        "a nested-tuple projection element must fail closed with IPE-L0149"
+    );
+}

@@ -2893,23 +2893,26 @@ joinCount conn joined =
     Task.map List.length (joinToList conn joined)
 
 
--- ─── Typed single-column projection over a join (`select` / `Select`) ─
+-- ─── Typed column projection over a join (`select` / `Select`) ───────
 --
--- `select` projects one column of a join instead of returning both full rows.
--- Its lambda receives the pair of the two sides' row records (`( a, b )`) and
--- returns a bare field reference on one side (`\( _, author ) -> author.name`).
--- The lambda is never run over real rows: the compiler reads the referenced
--- column from that `side.field` body at lowering, validates it against the
--- side's row type, and sets the SQL `SELECT` list to exactly that column (column
--- pushdown), over the join's existing `FROM … WHERE`.
+-- `select` projects specific columns of a join instead of returning both full
+-- rows. Its lambda receives the pair of the two sides' row records (`( a, b )`)
+-- and returns either a bare field reference on one side
+-- (`\( _, author ) -> author.name`) or a flat tuple of such references
+-- (`\( book, author ) -> ( book.title, author.name )`). The lambda is never run
+-- over real rows: the compiler reads each referenced column from its `side.field`
+-- element at lowering, validates it against that side's row type, and sets the
+-- SQL `SELECT` list to exactly those columns (column pushdown), over the join's
+-- existing `FROM … WHERE`.
 --
--- The security posture is the join's, extended: the projected identifier
+-- The security posture is the join's, extended: each projected identifier
 -- (alias + column) is a validated `alias.column` reference that reaches SQL only
 -- through the runtime's identifier gate, and the `select` lambda cannot smuggle a
--- raw value into the SELECT text — a body that is not a single column reference
--- is a fail-closed build error (IPE-L0149), never a computed fragment. Selecting
--- several columns at once is a later slice; for now a caller projects one column,
--- or reads both full rows with `joinToList` and shapes them in ordinary code.
+-- raw value into the SELECT text — a body that is not a column reference (or a
+-- flat tuple of column references) is a fail-closed build error (IPE-L0149),
+-- never a computed fragment. Each projected column binds to an output name by
+-- position (`p0`, `p1`, …); a caller decodes each back by that position with the
+-- matching `projRead*` helper, so the projection carries no stored decoder.
 
 
 -- | A column projection over a join, decoded to `row` at `selectToList` /
@@ -2931,27 +2934,35 @@ type Select
         }
 
 
--- | `select (\( left, right ) -> right.field) joined` — project one column of
--- `joined` instead of both full rows. The lambda receives the two sides' row
--- records and returns a bare field reference on one side; lowering reads that
--- referenced column and sets the SQL `SELECT` list to exactly that column. The
--- lambda is never run over real rows, so the field reference names a validated
--- column: a projection that is not a single `side.field` reference (a computed
--- expression, a multi-column tuple) is a fail-closed build error, never a raw
--- SQL fragment.
+-- | `select (\( left, right ) -> projection) joined` — project specific columns
+-- of `joined` instead of both full rows. The lambda receives the two sides' row
+-- records and returns either a bare field reference on one side or a flat tuple
+-- of such references; lowering reads each referenced column and sets the SQL
+-- `SELECT` list to exactly those columns. The lambda is never run over real
+-- rows, so each field reference names a validated column: a projection that is
+-- not a column reference (a computed expression, a literal) — or a tuple with a
+-- non-reference or nested-tuple element — is a fail-closed build error, never a
+-- raw SQL fragment.
 --
--- `selectToList` returns each projected row as a `Row` keyed by the output name
--- `p0`; read the projected value back with the matching `projRead*` helper at
--- position `0` (`projReadText 0 row`, `projReadInt 0 row`, …). Keeping the
--- decode caller-side keeps the projected shape a plain typed read rather than a
--- stored function.
+-- `selectToList` returns each projected row as a `Row` keyed by the output names
+-- `p0`, `p1`, … in projection order; read each projected value back with the
+-- matching `projRead*` helper at its position (`projReadText 0 row`,
+-- `projReadInt 1 row`, …). Keeping the decode caller-side keeps the projected
+-- shape a plain typed read rather than a stored function.
 --
 -- Example:
 --
+--     -- one column
 --     Store.join books .authorId authors .id
 --         |> Store.select (\( _, author ) -> author.name)
 --         |> Store.selectToList db
 --         -- each row: `Store.projReadText 0 row == Ok "<author name>"`
+--
+--     -- two columns
+--     Store.join books .authorId authors .id
+--         |> Store.select (\( book, author ) -> ( book.title, author.name ))
+--         |> Store.selectToList db
+--         -- each row: `projReadText 0 row` = title, `projReadText 1 row` = name
 select : (( a, b ) -> row) -> Joined a b -> Select
 select =
     Ffi.kernel "Store_select"
@@ -2987,13 +2998,13 @@ selectNamed joined projections =
 -- through `Db.findProjection`: every projected identifier is re-validated at the
 -- runtime boundary, and every filter value is a bound parameter. A poisoned
 -- projection (an inherited filter naming an unknown column) fails closed with the
--- typed `Err`. Read the projected value back with the matching `projRead*` helper
--- at position `0`.
+-- typed `Err`. Read each projected value back with the matching `projRead*` helper
+-- at its position (`0`, `1`, … in projection order).
 --
 -- Example:
 --
 --     Store.join books .authorId authors .id
---         |> Store.select (\( _, author ) -> author.name)
+--         |> Store.select (\( book, author ) -> ( book.title, author.name ))
 --         |> Store.selectToList db
 selectToList : Db -> Select -> Task Error (List Row)
 selectToList conn sel =

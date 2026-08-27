@@ -705,8 +705,13 @@ fn lower_prose(msg: &LowerError) -> String {
                     .to_string()
             }
             StoreSelectProjectionDefect::UnsupportedProjectionBody => {
-                "A `Store.select` projection must be a single `side.field` column \
-                 reference; a multi-column tuple projection is not yet available."
+                "A `Store.select` projection must be a `side.field` column \
+                 reference, or a tuple of such references."
+                    .to_string()
+            }
+            StoreSelectProjectionDefect::NestedProjectionTuple => {
+                "A `Store.select` multi-column projection is a flat tuple of \
+                 `side.field` references; a tuple element cannot itself be a tuple."
                     .to_string()
             }
             StoreSelectProjectionDefect::UnknownField { field } => {
@@ -1727,9 +1732,13 @@ fn store_select_projection_label(defect: &StoreSelectProjectionDefect) -> String
                 .to_string()
         }
         StoreSelectProjectionDefect::UnsupportedProjectionBody => {
-            "project one column as a bare `side.field` reference; a multi-column \
-             tuple projection is not yet lowerable — select one column, or read \
-             both rows with `Store.joinToList`"
+            "project columns as bare `side.field` references — one column, or a \
+             tuple of columns; a computed value or a literal is not a column"
+                .to_string()
+        }
+        StoreSelectProjectionDefect::NestedProjectionTuple => {
+            "a multi-column projection is a flat tuple of `side.field` references; \
+             a tuple element cannot itself be a tuple"
                 .to_string()
         }
         StoreSelectProjectionDefect::UnknownField { field } => format!(

@@ -13712,13 +13712,18 @@ impl<'a> Lowerer<'a> {
     /// column records), so a projected column is a validated identifier and no
     /// raw value can enter the SELECT text.
     ///
-    /// The core lowers a single-column projection (`\( _, author ) -> author.name`)
-    /// to one `(alias, column)` reference plus the `projRead*` reader its field
-    /// type selects, bound to output position `0`. A projection that is not a
-    /// single side-record column reference fails closed (IPE-L0149) rather than
-    /// emitting a partial or `SELECT *` — a multi-column tuple projection takes
-    /// the `UnsupportedProjectionBody` cause until the projection-tuple slice
-    /// derives the wider decoder.
+    /// A single-column projection (`\( _, author ) -> author.name`) lowers to one
+    /// `(alias, column)` reference bound to output position `0`; a multi-column
+    /// projection (`\( book, author ) -> ( book.title, author.name )`) lowers to
+    /// the ordered `(alias, column)` list, one per tuple element, bound to
+    /// positions `0`, `1`, … The referenced column is read from each `side.field`
+    /// element at compile time, validated against that side's solved row type, and
+    /// the SELECT list is set to exactly those columns (column pushdown). The
+    /// projected row comes back keyed by the `p<index>` output names, decoded
+    /// caller-side by position (`projReadText 0`, `projReadInt 1`, …), so no
+    /// decoder is stored in the projection value. A projection that is not a
+    /// column reference (or a flat tuple of column references) fails closed
+    /// (IPE-L0149) rather than emitting a partial statement or a `SELECT *`.
     fn lower_store_select(&self, args: &[canon::Expr]) -> DResult<Expr> {
         let (Some(lambda), Some(joined)) = (args.first(), args.get(1)) else {
             return Err(bug(
@@ -13727,11 +13732,15 @@ impl<'a> Lowerer<'a> {
             ));
         };
         let (binders, body) = Self::select_lambda_parts(lambda)?;
-        let (alias, column) = self.select_single_projection(binders, body)?;
+        let projected = self.select_projections(binders, body)?;
         let lowered_joined = self.lower_expr(joined)?;
+        let items = projected
+            .into_iter()
+            .map(|(alias, column)| Expr::Tuple(vec![Expr::Str(alias), Expr::Str(column)]))
+            .collect();
         let projections = Expr::List {
             elem: proj_pair_ir_type(),
-            items: vec![Expr::Tuple(vec![Expr::Str(alias), Expr::Str(column)])],
+            items,
         };
         let id = self.store_named_func_id("selectNamed")?;
         Ok(Expr::Call {
@@ -13740,6 +13749,39 @@ impl<'a> Lowerer<'a> {
             pin: CallPin::None,
             on_form: OnFormKind::NotForm,
         })
+    }
+
+    /// Read the projection body into the ordered `(alias, column)` list it names.
+    /// A bare `side.field` body yields one pair; a tuple body yields one pair per
+    /// element, each read and validated as its own column reference. An empty
+    /// tuple, or a tuple element that is itself a tuple, or any element that is
+    /// not a `side.field` column reference, fails closed (IPE-L0149).
+    fn select_projections(
+        &self,
+        binders: [Option<Symbol>; 2],
+        body: &canon::Expr,
+    ) -> DResult<Vec<(String, String)>> {
+        if let canon::Expr_::Tuple(elems) = &body.value {
+            if elems.is_empty() {
+                return Err(unsupported_store_select(
+                    body.span,
+                    StoreSelectProjectionDefect::UnsupportedProjectionBody,
+                ));
+            }
+            let mut cols = Vec::with_capacity(elems.len());
+            for elem in elems {
+                if matches!(elem.value, canon::Expr_::Tuple(_)) {
+                    return Err(unsupported_store_select(
+                        elem.span,
+                        StoreSelectProjectionDefect::NestedProjectionTuple,
+                    ));
+                }
+                cols.push(self.select_single_projection(binders, elem)?);
+            }
+            Ok(cols)
+        } else {
+            Ok(vec![self.select_single_projection(binders, body)?])
+        }
     }
 
     /// Read the two tuple binders and the body of a `Store.select` projection
