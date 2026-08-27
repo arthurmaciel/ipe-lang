@@ -112,11 +112,11 @@ main =
         Err e ->
             Io.println (Error.toString e)
 
-        Ok store ->
+        Ok draft ->
             Task.andThen
                 (\conn ->
                     Db.withTransaction conn
-                        (\txconn -> run txconn store)
+                        (\txconn -> run txconn (Store.public draft))
                 )
                 (Db.open "sqlite" "sqlite::memory:")
 

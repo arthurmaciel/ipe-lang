@@ -86,7 +86,7 @@ userStore =
                 s3 = Store.defaultInt .verified 0 s2
                 s4 = Store.defaultNow .createdAt s3
             in
-                Ok s4
+                Ok (Store.public s4)
 
 
 sessionStore : Result Error (Store Session)
@@ -98,7 +98,7 @@ sessionStore =
                 s2 = Store.unique .token s1
                 s3 = Store.defaultNow .createdAt s2
             in
-                Ok s3
+                Ok (Store.public s3)
 
 
 noteStore : Result Error (Store Note)
@@ -111,7 +111,7 @@ noteStore =
                 s3 = Store.defaultNow .createdAt s2
                 s4 = Store.touchOnUpdate .updatedAt s3
             in
-                Ok s4
+                Ok (Store.public s4)
 
 
 -- ── JOIN projection (users ⋈ sessions) ──────────────────────────────

@@ -59,11 +59,13 @@ postStore =
 
         Ok s ->
             Ok
-                (Store.indexNamed "posts_author_pub"
-                    [ "author_id", "published_at" ]
-                    (Store.index [ "author_id", "published_at" ]
-                        (Store.index [ "author_id" ]
-                            (Store.primaryKey .id (Store.serial .id s))
+                (Store.public
+                    (Store.indexNamed "posts_author_pub"
+                        [ "author_id", "published_at" ]
+                        (Store.index [ "author_id", "published_at" ]
+                            (Store.index [ "author_id" ]
+                                (Store.primaryKey .id (Store.serial .id s))
+                            )
                         )
                     )
                 )
