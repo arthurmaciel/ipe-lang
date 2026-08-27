@@ -252,6 +252,30 @@ impl<T1: IpeStringify + std::fmt::Debug + 'static> IpeStringify for RecEncMkDecS
         )
     }
 }
+#[derive(Clone, Debug, PartialEq)]
+pub struct RecFragJoinedAJoinedBLeftTablePoisonProjectionsRightTable {
+    frag: ipe_runtime::db::SqlFragment,
+    joinedA: String,
+    joinedB: String,
+    leftTable: String,
+    poison: IpeMaybe<ipe_runtime::error::IpeError>,
+    projections: Vec<(String, String)>,
+    rightTable: String,
+}
+impl IpeStringify for RecFragJoinedAJoinedBLeftTablePoisonProjectionsRightTable {
+    fn ipe_show(&self) -> String {
+        format!(
+            "{{{} {} {} {} {} {} {}}}",
+            (&ipe_runtime::stringify::Wrap(&self.frag)).dispatch(),
+            (&ipe_runtime::stringify::Wrap(&self.joinedA)).dispatch(),
+            (&ipe_runtime::stringify::Wrap(&self.joinedB)).dispatch(),
+            (&ipe_runtime::stringify::Wrap(&self.leftTable)).dispatch(),
+            (&ipe_runtime::stringify::Wrap(&self.poison)).dispatch(),
+            (&ipe_runtime::stringify::Wrap(&self.projections)).dispatch(),
+            (&ipe_runtime::stringify::Wrap(&self.rightTable)).dispatch()
+        )
+    }
+}
 pub struct RecFragKeyAKeyBPoisonStoreAStoreB<T1: 'static, T2: 'static> {
     frag: ipe_runtime::db::SqlFragment,
     keyA: String,

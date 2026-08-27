@@ -1382,6 +1382,7 @@ impl Env {
                     "findByConditions",
                     "findWhere",
                     "findJoin",
+                    "findProjection",
                     "deleteWhere",
                     "updateWhere",
                     // External read path — `…On` reads over a `Connection a`.

@@ -34,7 +34,8 @@ use crate::diagnostic::{
     AppShape, Applicability, CaseDefect, CodecAutoRejection, ConsentError, Diagnostic, Expected,
     ExpectedSet, ExposingDefect, Feature, FfiError, HeaderDefect, HelpLine, Hint, IfDefect,
     LetDefect, LowerError, NameError, ParseError, SandboxError, SealRejection, SpanRole,
-    StoreEqAccessorDefect, Suggestion, TokenKind, TyDoc, TypeDeclDefect, TypeError,
+    StoreEqAccessorDefect, StoreSelectProjectionDefect, Suggestion, TokenKind, TyDoc,
+    TypeDeclDefect, TypeError,
 };
 use crate::span::Span;
 
@@ -696,6 +697,25 @@ fn lower_prose(msg: &LowerError) -> String {
                  around point-free or partially applied."
             )
         }
+        LowerError::StoreSelectProjectionInvalid(defect) => match defect {
+            StoreSelectProjectionDefect::NotAProjectionLambda => {
+                "A `Store.select` projection must be `\\( left, right ) -> \
+                 side.field` — a two-binder tuple parameter over a column \
+                 reference."
+                    .to_string()
+            }
+            StoreSelectProjectionDefect::UnsupportedProjectionBody => {
+                "A `Store.select` projection must be a single `side.field` column \
+                 reference; a multi-column tuple projection is not yet available."
+                    .to_string()
+            }
+            StoreSelectProjectionDefect::UnknownField { field } => {
+                format!("This side's row has no `{field}` field for the projection.")
+            }
+            StoreSelectProjectionDefect::InvalidColumn { column } => {
+                format!("`{column}` is not a valid SQL column name.")
+            }
+        },
     }
 }
 
@@ -1693,6 +1713,33 @@ fn lower_label(msg: &LowerError) -> String {
                  function value)"
             )
         }
+        LowerError::StoreSelectProjectionInvalid(defect) => store_select_projection_label(defect),
+    }
+}
+
+/// The detailed caret label for a [`LowerError::StoreSelectProjectionInvalid`],
+/// factored out of [`lower_label`] so that dispatcher stays under the line cap.
+fn store_select_projection_label(defect: &StoreSelectProjectionDefect) -> String {
+    match defect {
+        StoreSelectProjectionDefect::NotAProjectionLambda => {
+            "a `Store.select` projection is `\\( left, right ) -> side.field` — a \
+             two-binder tuple parameter over a column reference on one side"
+                .to_string()
+        }
+        StoreSelectProjectionDefect::UnsupportedProjectionBody => {
+            "project one column as a bare `side.field` reference; a multi-column \
+             tuple projection is not yet lowerable — select one column, or read \
+             both rows with `Store.joinToList`"
+                .to_string()
+        }
+        StoreSelectProjectionDefect::UnknownField { field } => format!(
+            "the projection reads a `{field}` field the side's row type does not \
+             declare — name a field that exists on that store's row"
+        ),
+        StoreSelectProjectionDefect::InvalidColumn { column } => format!(
+            "the column name `{column}` derived from the projected field is not a \
+             valid SQL identifier (letters, digits, and underscore only)"
+        ),
     }
 }
 

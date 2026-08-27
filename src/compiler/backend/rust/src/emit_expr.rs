@@ -2548,6 +2548,35 @@ fn emit_db_call(
                  {right_table_s}, {right_alias_s}, {right_cols_s}, {frag_s})"
             )))
         }
+        // ── Db.findProjection: (conn, lt, la, rt, ra, frag, projections) ─────
+        //
+        // Seven flat args. The two tables / two aliases emit as plain `String`,
+        // `frag` as the bare `SqlFragment` struct, and `projections`
+        // (`List (String, String)`) as `vec![(String, String), …]`, a
+        // `Vec<(String, String)>` — no `List SqlValue` param projection is
+        // needed. Only the `conn.clone()` treatment is special (shared with
+        // every Db kernel).
+        KernelFn::DbFindProjection => {
+            let conn_e = arg!(0, "conn")?;
+            let left_table_e = arg!(1, "leftTable")?;
+            let left_alias_e = arg!(2, "leftAlias")?;
+            let right_table_e = arg!(3, "rightTable")?;
+            let right_alias_e = arg!(4, "rightAlias")?;
+            let frag_e = arg!(5, "frag")?;
+            let projections_e = arg!(6, "projections")?;
+            let conn_s = emit_expr_at(ctx, conn_e, indent, child, generics)?;
+            let left_table_s = emit_expr_at(ctx, left_table_e, indent, child, generics)?;
+            let left_alias_s = emit_expr_at(ctx, left_alias_e, indent, child, generics)?;
+            let right_table_s = emit_expr_at(ctx, right_table_e, indent, child, generics)?;
+            let right_alias_s = emit_expr_at(ctx, right_alias_e, indent, child, generics)?;
+            let frag_s = emit_expr_at(ctx, frag_e, indent, child, generics)?;
+            let projections_s = emit_expr_at(ctx, projections_e, indent, child, generics)?;
+            let fn_name = crate::naming::kernel_name(*k);
+            Ok(Some(format!(
+                "{fn_name}({conn_s}.clone(), {left_table_s}, {left_alias_s}, \
+                 {right_table_s}, {right_alias_s}, {frag_s}, {projections_s})"
+            )))
+        }
         // ── Sql.inList: (frag: SqlFragment, values: List SqlValue) ───────────
         //
         // `values` needs the same `List SqlValue` → `Vec<SqlParam>` projection

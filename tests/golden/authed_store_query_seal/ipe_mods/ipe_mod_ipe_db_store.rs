@@ -237,6 +237,19 @@ impl<T1: IpeStringify + std::fmt::Debug + 'static, T2: IpeStringify + std::fmt::
     }
 }
 #[derive(Clone, Debug, PartialEq)]
+pub(crate) enum IpeDbStoreSelect {
+    Select(RecFragJoinedAJoinedBLeftTablePoisonProjectionsRightTable),
+}
+impl IpeStringify for IpeDbStoreSelect {
+    fn ipe_show(&self) -> String {
+        match self {
+            IpeDbStoreSelect::Select(p0) => {
+                format!("Select {}", (&ipe_runtime::stringify::Wrap(p0)).dispatch())
+            }
+        }
+    }
+}
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) enum IpeDbStoreRule {
     OwnerColumn(String),
     PublicRead,

@@ -20,6 +20,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use ipe_canon::ast as canon;
 use ipe_diagnostics::{
     DResult, Diagnostic, Feature, Located, LowerError, MainRetName, Span, StoreEqAccessorDefect,
+    StoreSelectProjectionDefect,
 };
 use ipe_intern::{Interner, Symbol};
 use ipe_ir::{
@@ -10993,6 +10994,35 @@ const fn unsupported_store_eq(span: Span, defect: StoreEqAccessorDefect) -> Diag
     }
 }
 
+/// Build the fail-closed [`Diagnostic::Lower`] (IPE-L0149) for a `Store.select`
+/// projection lambda the intercept rejected, carrying the specific defect and
+/// the offending source `span`.
+const fn unsupported_store_select(span: Span, defect: StoreSelectProjectionDefect) -> Diagnostic {
+    Diagnostic::Lower {
+        span,
+        msg: LowerError::StoreSelectProjectionInvalid(defect),
+    }
+}
+
+/// The alias bound to a join's left store (`FROM ta AS a0`). Kept in step with
+/// the `Ipe.Db.Store` `leftAlias`, the single value both the `select` projection
+/// references and the runtime statement builder qualify columns with.
+fn join_left_alias() -> String {
+    "a0".to_string()
+}
+
+/// The alias bound to a join's right store (`FROM tb AS a1`), the counterpart to
+/// [`join_left_alias`].
+fn join_right_alias() -> String {
+    "a1".to_string()
+}
+
+/// The IR element type of a projection reference — a `(String, String)` tuple of
+/// `(alias, column)`. Used to type the `selectNamed` projection list literal.
+fn proj_pair_ir_type() -> IrType {
+    IrType::Tuple(vec![IrType::Str, IrType::Str])
+}
+
 /// Fail-closed SEAL gate for a point-free / partially-applied accessor-typed
 /// `Store.*` placeholder kernel (`Store.eq`, `Store.serial`, …). These leaves
 /// have no runtime function — the accessor-intercept rewrites the SATURATED
@@ -13673,6 +13703,141 @@ impl<'a> Lowerer<'a> {
             pin: CallPin::None,
             on_form: OnFormKind::NotForm,
         })
+    }
+
+    /// `Store.select (\( colsA, colsB ) -> projection) joined` — read the
+    /// projection lambda into the ordered `(alias, column)` references it names
+    /// and a per-column decoder, then rewrite to the `selectNamed` stdlib helper.
+    /// The lambda is analysed here (never emitted as a runtime closure over the
+    /// column records), so a projected column is a validated identifier and no
+    /// raw value can enter the SELECT text.
+    ///
+    /// The core lowers a single-column projection (`\( _, author ) -> author.name`)
+    /// to one `(alias, column)` reference plus the `projRead*` reader its field
+    /// type selects, bound to output position `0`. A projection that is not a
+    /// single side-record column reference fails closed (IPE-L0149) rather than
+    /// emitting a partial or `SELECT *` — a multi-column tuple projection takes
+    /// the `UnsupportedProjectionBody` cause until the projection-tuple slice
+    /// derives the wider decoder.
+    fn lower_store_select(&self, args: &[canon::Expr]) -> DResult<Expr> {
+        let (Some(lambda), Some(joined)) = (args.first(), args.get(1)) else {
+            return Err(bug(
+                "ipe_lower::lower_store_select",
+                "Store.select kernel arity < 2",
+            ));
+        };
+        let (binders, body) = Self::select_lambda_parts(lambda)?;
+        let (alias, column) = self.select_single_projection(binders, body)?;
+        let lowered_joined = self.lower_expr(joined)?;
+        let projections = Expr::List {
+            elem: proj_pair_ir_type(),
+            items: vec![Expr::Tuple(vec![Expr::Str(alias), Expr::Str(column)])],
+        };
+        let id = self.store_named_func_id("selectNamed")?;
+        Ok(Expr::Call {
+            callee: Callee::Func(id),
+            args: vec![lowered_joined, projections],
+            pin: CallPin::None,
+            on_form: OnFormKind::NotForm,
+        })
+    }
+
+    /// Read the two tuple binders and the body of a `Store.select` projection
+    /// lambda (`\( colsA, colsB ) -> body`), or fail closed. The lambda must be a
+    /// single-parameter lambda whose parameter is a two-element tuple pattern of
+    /// plain variable binders.
+    fn select_lambda_parts(lambda: &canon::Expr) -> DResult<([Option<Symbol>; 2], &canon::Expr)> {
+        let not_lambda = || {
+            unsupported_store_select(
+                lambda.span,
+                StoreSelectProjectionDefect::NotAProjectionLambda,
+            )
+        };
+        let canon::Expr_::Lambda(params, body) = &lambda.value else {
+            return Err(not_lambda());
+        };
+        let [param] = params.as_slice() else {
+            return Err(not_lambda());
+        };
+        let canon::Pattern_::PTuple(elems) = &param.value else {
+            return Err(not_lambda());
+        };
+        let [left, right] = elems.as_slice() else {
+            return Err(not_lambda());
+        };
+        // Each side binds either a variable (the side a projection reads) or the
+        // wildcard `_` (the unread side). Any other pattern is not a projection
+        // lambda.
+        let binder = |pat: &canon::Pattern| match &pat.value {
+            canon::Pattern_::PVar(sym) => Some(Some(*sym)),
+            canon::Pattern_::PAnything => Some(None),
+            _ => None,
+        };
+        let (Some(left_sym), Some(right_sym)) = (binder(left), binder(right)) else {
+            return Err(not_lambda());
+        };
+        Ok(([left_sym, right_sym], body))
+    }
+
+    /// Read a single-column projection body (`side.field`) into its
+    /// `(alias, column)`, or fail closed. The body must be a field access on one
+    /// of the two bound side records; the binder position selects the alias
+    /// (`a0` / `a1`), and the field snake-cases to the column. The field is
+    /// confirmed present on the side's solved record type, so a projection naming
+    /// a column absent from the row fails closed.
+    fn select_single_projection(
+        &self,
+        binders: [Option<Symbol>; 2],
+        body: &canon::Expr,
+    ) -> DResult<(String, String)> {
+        let canon::Expr_::Access(base, field) = &body.value else {
+            return Err(unsupported_store_select(
+                body.span,
+                StoreSelectProjectionDefect::UnsupportedProjectionBody,
+            ));
+        };
+        let canon::Expr_::VarLocal(base_sym) = &base.value else {
+            return Err(unsupported_store_select(
+                body.span,
+                StoreSelectProjectionDefect::UnsupportedProjectionBody,
+            ));
+        };
+        let alias = if binders[0] == Some(*base_sym) {
+            join_left_alias()
+        } else if binders[1] == Some(*base_sym) {
+            join_right_alias()
+        } else {
+            return Err(unsupported_store_select(
+                body.span,
+                StoreSelectProjectionDefect::UnsupportedProjectionBody,
+            ));
+        };
+        // The accessed record's solved type carries the field: confirm the field
+        // is one it declares (a bare `.field` on a solved record), so a column
+        // absent from the row is a fail-closed build error.
+        let field_present = match self.region_ty(base.span) {
+            Some(Ty::Record(fields, _)) => fields.keys().any(|k| *k == *field),
+            _ => false,
+        };
+        let field_name = self.resolve(*field)?.to_string();
+        if !field_present {
+            return Err(unsupported_store_select(
+                body.span,
+                StoreSelectProjectionDefect::UnknownField {
+                    field: field_name.into_boxed_str(),
+                },
+            ));
+        }
+        let column_name = ipe_canon::to_snake_case(&field_name);
+        if !is_valid_sql_column(&column_name) {
+            return Err(unsupported_store_select(
+                body.span,
+                StoreSelectProjectionDefect::InvalidColumn {
+                    column: column_name.into_boxed_str(),
+                },
+            ));
+        }
+        Ok((alias, column_name))
     }
 
     fn lower_store_spec(&self, peek: &Callee, args: &[canon::Expr]) -> DResult<Expr> {
@@ -19988,6 +20153,9 @@ impl<'a> Lowerer<'a> {
                 Callee::Kernel(KernelFn::StoreJoin) if args.len() == 4 => {
                     return Ok(Intercepted::Done(self.lower_store_join(args)?));
                 }
+                Callee::Kernel(KernelFn::StoreSelect) if args.len() == 2 => {
+                    return Ok(Intercepted::Done(self.lower_store_select(args)?));
+                }
                 Callee::Kernel(KernelFn::StoreEqCol) if args.len() == 2 => {
                     return Ok(Intercepted::Done(self.lower_store_eq(&peek, args)?));
                 }
@@ -22994,7 +23162,11 @@ impl<'a> Lowerer<'a> {
             // `Config.map6`/`map7`/`map8` — arities 7/8/9
             // `Db.Dsn.build` — arity 7 (driverTag, host, port, database, user,
             // password, tlsTag).
-            Callee::Kernel(KernelFn::ConfigMap6 | KernelFn::DsnBuild) => Ok(7),
+            // `Db.findProjection` — arity 7 (Db, leftTable, leftAlias, rightTable,
+            // rightAlias, frag, projections).
+            Callee::Kernel(
+                KernelFn::ConfigMap6 | KernelFn::DsnBuild | KernelFn::DbFindProjection,
+            ) => Ok(7),
             // `Db.findJoin` — arity 8 (Db, leftTable, leftAlias, leftCols,
             // rightTable, rightAlias, rightCols, frag).
             Callee::Kernel(KernelFn::ConfigMap7 | KernelFn::DbFindJoin) => Ok(8),
@@ -23375,7 +23547,10 @@ impl<'a> Lowerer<'a> {
                 // `Html.voidNode : String -> List (Attribute msg) -> Html msg`
                 | KernelFn::HtmlVoidNode
                 // `Ui.onPseudo : PseudoClass -> List (Attribute msg) -> Attribute msg`
-                | KernelFn::UiOnPseudo,
+                | KernelFn::UiOnPseudo
+                // `Store.select` — arity 2 (projection lambda, joined), intercepted
+                // at lowering; this is only the defensive fallback count.
+                | KernelFn::StoreSelect,
             ) => Ok(2),
             // Arity 3: `Ui.rgb r g b`, `Html.node tag attrs children`,
             //          `Ui.breakpoint query attrs element`.
@@ -24432,11 +24607,13 @@ impl<'a> Lowerer<'a> {
                     ("Sql", "like") => Ok(Callee::Kernel(KernelFn::SqlLike)),
                     ("Db", "findWhere") => Ok(Callee::Kernel(KernelFn::DbFindWhere)),
                     ("Db", "findJoin") => Ok(Callee::Kernel(KernelFn::DbFindJoin)),
+                    ("Db", "findProjection") => Ok(Callee::Kernel(KernelFn::DbFindProjection)),
                     ("Db", "deleteWhere") => Ok(Callee::Kernel(KernelFn::DbDeleteWhere)),
                     ("Db", "updateWhere") => Ok(Callee::Kernel(KernelFn::DbUpdateWhere)),
                     // Typed accessor query leaves — intercepted at lowering, so
                     // these arms are the legacy fallback for the pre-resolved id.
                     ("Store", "join") => Ok(Callee::Kernel(KernelFn::StoreJoin)),
+                    ("Store", "select") => Ok(Callee::Kernel(KernelFn::StoreSelect)),
                     ("Store", "eq") => Ok(Callee::Kernel(KernelFn::StoreEqCol)),
                     ("Store", "eqBy") => Ok(Callee::Kernel(KernelFn::StoreEqBy)),
                     ("Store", "neq") => Ok(Callee::Kernel(KernelFn::StoreNeqCol)),
