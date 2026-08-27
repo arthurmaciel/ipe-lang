@@ -741,15 +741,11 @@ run_iter() {
             ;;
         corpus)
             # Replay a known-good corpus example — validates the compiler
-            # doesn't drift under repeated invocation. Prefer 01-hello-world
-            # which is the unconditional pass example in this port. Fall back
-            # to a synthesised template if no corpus example is available.
-            # NOTE: 00-standard-libs imports Ipe.Money which has a pre-existing
-            # stdlib type error (unrelated to soundness under test) — skip it.
+            # doesn't drift under repeated invocation. Fall back to a
+            # synthesised template if no corpus example is available.
             local corpus_src=""
             for _corpus_cand in \
-                "$REPO/examples/sky/ipe/01-hello-world/src/Main.ipe" \
-                "$REPO/examples/sky/ipe/14-task-demo/src/Main.ipe"; do
+                "$REPO/examples/shapes/non-tea/hello-world/src/Main.ipe"; do
                 [[ -f "$_corpus_cand" ]] && { corpus_src="$_corpus_cand"; break; }
             done
             if [[ -n "$corpus_src" ]]; then
@@ -766,8 +762,7 @@ run_iter() {
             else
                 local composite_corpus=""
                 for _cc in \
-                    "$REPO/examples/sky/ipe/01-hello-world/src/Main.ipe" \
-                    "$REPO/examples/sky/ipe/14-task-demo/src/Main.ipe"; do
+                    "$REPO/examples/shapes/non-tea/hello-world/src/Main.ipe"; do
                     [[ -f "$_cc" ]] && { composite_corpus="$_cc"; break; }
                 done
                 if [[ -n "$composite_corpus" ]]; then

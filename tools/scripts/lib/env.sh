@@ -1,6 +1,6 @@
 # shellcheck shell=bash
-# tools/scripts/lib/env.sh — SINGLE SOURCE OF TRUTH for the Ipê examples-sweep command
-# env. SOURCE this (never execute it): `source "$(dirname "$0")/lib/env.sh"`.
+# tools/scripts/lib/env.sh — shared environment bootstrap for Ipê tooling.
+# SOURCE this (never execute it): `source "$(dirname "$0")/lib/env.sh"`.
 #
 # The compiler is `ipe` (a Rust cargo workspace); the binary is built by cargo
 # and lives in the (possibly global) cargo target dir. This file defines

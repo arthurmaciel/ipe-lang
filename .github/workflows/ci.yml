@@ -398,24 +398,22 @@ jobs:
           IPE="$PWD/target/release/ipe"
           WARM="$(mktemp -d)"
           cd "$WARM"
-          "$IPE" build "$GITHUB_WORKSPACE/examples/sky/ipe/01-hello-world/package.ipe" --out out/rust
+          "$IPE" build "$GITHUB_WORKSPACE/examples/shapes/non-tea/hello-world/package.ipe" --out out/rust
           cd out/rust
           cargo build --release   # compiles the runtime dep tree into the shared target
-      - name: Emit + build + run (examples/sky/ipe/01-hello-world)
+      - name: Emit + build + run (examples/shapes/non-tea/hello-world)
         env:
           CARGO_TARGET_DIR: ${{ github.workspace }}/.cache/seal-shared-target
         run: |
           set -euo pipefail
           IPE="$PWD/target/release/ipe"
-          cd examples/sky/ipe/01-hello-world
+          cd examples/shapes/non-tea/hello-world
           "$IPE" build package.ipe --out out/rust
           cd out/rust
           cargo build --release   # incremental: deps already in the shared target
           OUT="$(cargo run --release --quiet)"
           echo "emitted-binary output: $OUT"
-          # The mirror port preserves the upstream greeting string verbatim (the
-          # token rewrite never touches string literals).
-          echo "$OUT" | grep -q 'Hello from Sky!'
+          echo "$OUT" | grep -q 'Hello, Ipê!'
 
   # First-party shape examples — the representative user-facing gate. Every
   # committed example under examples/shapes/ (one per shape: program, terminal,

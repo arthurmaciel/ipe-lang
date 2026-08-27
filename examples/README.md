@@ -39,37 +39,12 @@ example sweep.
 | `ffi/bevy-game` | `bevy_ecs` | A headless ECS world tick over the shim-free auto-FFI: creates a `World`, threads it through real ECS maintenance operations, and reads the final entity count as observable state — every `World.*` call is a generated binding, zero hand-written Rust shims. |
 | `ffi/iced-counter` | `iced` | A binding spike mapping Iced's Elm architecture onto Ipê's TEA over the real `iced` crate: the `Model`/`Message` struct + enum bindings are emitted and forwarded; the `update`/`view` closure-to-run wiring is in progress. |
 
-## Sky-derived examples
-
-The upstream `anzellai/sky` examples (00–39 + `simple` + `test_pkg`) are not
-vendored here. They live as a declarative patch under `sky/` and are
-materialised at sweep time:
-
-- `sky/manifest.toml` — the authoritative list of upstream examples and their
-  scope (`rename-map` patch, or excluded via `go_ffi = true`).
-- `sky/rename-map.tsv` — the token-level `Sky.*`/`Std.*` → `Ipe.*` rename map
-  applied by `tools/scripts/lib/sky-to-ipe-transform.py`.
-- `sky/ipe-patches/<name>.patch` — optional per-example semantic delta on top.
-- `sky/README.md` — how the mirror + patch pipeline works.
-
-Run `bash tools/scripts/examples-sweep.sh` to materialise the mirrored examples under
-`sky/<name>/`, patch them, and build + run each. The materialised trees are
-git-ignored.
-
 ## Running an example
 
-```sh
-# Build and run a CLI example
-ipe build package.ipe --out out/rust
-cargo run --manifest-path out/rust/Cargo.toml
+Each example is a self-contained Ipê project. Build it with
+`ipe build package.ipe --out out/rust` (requires a built `ipe` binary from
+`cargo build --release -p ipe`), then run the emitted crate with
+`cargo run --manifest-path out/rust/Cargo.toml`.
 
-# Build a WASM example (outputs to out/rust/www/)
-cd examples/wasm/spa
-ipe build package.ipe --out out/rust --target wasm
-```
-
-Or use the sweep to build and run all in-scope examples at once:
-
-```sh
-IPE_SWEEP_BUILD_ONLY=1 bash tools/scripts/examples-sweep.sh
-```
+For a WASM example, pass `--target wasm` to `ipe build` and serve
+`out/rust/www/` with any HTTP server.

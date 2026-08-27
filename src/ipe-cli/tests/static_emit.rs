@@ -455,7 +455,7 @@ fn tls_stays_rustls_with_bundled_roots_in_every_manifest_source() {
     );
 }
 
-/// Full static proof (THE SEAL, end to end): emit `examples/sky/ipe/01-hello-world`
+/// Full static proof (THE SEAL, end to end): emit `examples/shapes/non-tea/hello-world`
 /// under the dlmalloc static plan, `cargo build` it standalone for musl with
 /// CWD = the emitted crate dir (cargo discovers `.cargo/config.toml` from
 /// CWD, not from `--manifest-path`), then assert the binary is genuinely
@@ -468,9 +468,9 @@ fn end_to_end_static_binary_is_static_and_runs() {
     let root = repo_root();
     let entry = root
         .join("examples")
-        .join("sky")
-        .join("ipe")
-        .join("01-hello-world")
+        .join("shapes")
+        .join("non-tea")
+        .join("hello-world")
         .join("src")
         .join("Main.ipe");
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("static_e2e");
@@ -531,7 +531,7 @@ fn end_to_end_static_binary_is_static_and_runs() {
         .output()
         .expect("run binary");
     assert!(run.status.success(), "static binary exited non-zero");
-    assert_eq!(String::from_utf8_lossy(&run.stdout), "Hello from Sky!\n");
+    assert_eq!(String::from_utf8_lossy(&run.stdout), "Hello, Ipê!\n");
 }
 
 /// `ipe run --static` end to end: the driver emits, cargo-builds for the
@@ -545,9 +545,9 @@ fn ipe_run_static_builds_and_executes_a_static_binary() {
     let root = repo_root();
     let entry = root
         .join("examples")
-        .join("sky")
-        .join("ipe")
-        .join("01-hello-world")
+        .join("shapes")
+        .join("non-tea")
+        .join("hello-world")
         .join("src")
         .join("Main.ipe");
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("static_run_e2e");
@@ -573,7 +573,7 @@ fn ipe_run_static_builds_and_executes_a_static_binary() {
         String::from_utf8_lossy(&run.stderr)
     );
     assert!(
-        String::from_utf8_lossy(&run.stdout).contains("Hello from Sky!"),
+        String::from_utf8_lossy(&run.stdout).contains("Hello, Ipê!"),
         "expected program output, got: {}",
         String::from_utf8_lossy(&run.stdout)
     );

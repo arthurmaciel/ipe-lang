@@ -52,5 +52,4 @@ still fails closed with `IPE-L0130`.
 The wall is Bevy's generic core. `spawn` / `insert` are generic over `Bundle`,
 systems are Rust `Fn` closures, and `Component` is a user-defined Rust type —
 none of which the shim-free FFI can express from Ipê (a closure / `dyn` argument
-and a `<T: Bundle>` method both over-drop by design). The precise dropped
-constructs are ledgered in `examples/sky/BLOCKERS.md`.
+and a `<T: Bundle>` method both over-drop by design).

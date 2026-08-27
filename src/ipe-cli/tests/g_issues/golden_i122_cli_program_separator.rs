@@ -6,7 +6,7 @@
 //! WITHOUT a trailing newline (the user's prompt formatting decides whether
 //! to add one)".
 //!
-//! Forcing a newline after every render would break `examples/sky/ipe/20-cli-counter`'s
+//! Forcing a newline after every render would break `examples/shapes/terminal/simple-counter`'s
 //! REPL-prompt UX (`view` returns `"count=... > "` with no trailing newline so
 //! the cursor stays on the prompt line) and diverge from the Go reference.
 //! This test asserts the CORRECT (Go-parity) glued-together behavior so
