@@ -2592,6 +2592,145 @@ fn build_join_statement(
     )))
 }
 
+/// One projected column: the alias-qualified source (`alias.column`) and the
+/// output name it is bound to (`p0`, `p1`, …). Both the alias and the column
+/// reach SQL only after `SqlIdent::parse_plain` accepts them, so the projection
+/// text this carries can hold no injected fragment.
+struct ProjectionColumn {
+    alias: SqlIdent,
+    column: SqlIdent,
+    output: SqlIdent,
+}
+
+impl ProjectionColumn {
+    /// Parse one `(alias, column)` reference into a validated projection at
+    /// output position `index`. Fails closed on the first identifier that is not
+    /// a bare SQL identifier (defence in depth — the Ipê layer already validated
+    /// these).
+    fn parse(alias: &str, column: &str, index: usize) -> Result<ProjectionColumn, String> {
+        let alias =
+            SqlIdent::parse_plain(alias).ok_or_else(|| format!("invalid alias {alias:?}"))?;
+        let column =
+            SqlIdent::parse_plain(column).ok_or_else(|| format!("invalid column {column:?}"))?;
+        let output_name = format!("p{index}");
+        let output = SqlIdent::parse_plain(&output_name)
+            .ok_or_else(|| format!("invalid projection output {output_name:?}"))?;
+        Ok(ProjectionColumn {
+            alias,
+            column,
+            output,
+        })
+    }
+
+    /// This column's `alias.column AS p<index>` projection term, built only from
+    /// already-parsed identifiers.
+    fn projection_term(&self) -> String {
+        format!(
+            "{alias}.{col} AS {out}",
+            alias = self.alias.as_str(),
+            col = self.column.as_str(),
+            out = self.output.as_str()
+        )
+    }
+}
+
+/// `Db.findProjection : Db -> String -> String -> String -> String
+///                      -> SqlFragment -> List (String, String)
+///                      -> Task Error (List (Dict String String))` — read a typed
+/// projection over a two-table join as one parameterized statement.
+///
+/// The two `(table, alias)` pairs name the join sides; `frag` is the WHERE
+/// fragment (the join-key equality plus any filter), built only through the
+/// `Sql.*` combinators; `projections` is the ordered `(alias, column)` references
+/// to project. Every identifier — both tables, both aliases, and every projected
+/// alias and column — passes `SqlIdent::parse_plain` before it reaches SQL text;
+/// the first that does not fails the whole read closed. The SELECT projects each
+/// reference under a `p<index>` output name, so a caller decodes each projected
+/// column by position; no value is interpolated.
+#[allow(clippy::too_many_arguments)] // one flat arg per validated identifier group; a struct arg would only move the same values behind an emit-side constructor.
+pub fn db_find_projection<E: Send + From<String> + 'static>(
+    conn: Db,
+    left_table: String,
+    left_alias: String,
+    right_table: String,
+    right_alias: String,
+    frag: SqlFragment,
+    projections: Vec<(String, String)>,
+) -> IpeTask<E, Vec<HashMap<String, String>>> {
+    Box::pin(async move {
+        if let Some(reason) = frag.invalid {
+            return IpeResult::Err(format!("db.findProjection: {reason}").into());
+        }
+        let sql = match build_projection_statement(
+            &left_table,
+            &left_alias,
+            &right_table,
+            &right_alias,
+            &projections,
+            &frag.sql,
+        ) {
+            Ok(s) => s,
+            Err(reason) => return IpeResult::Err(format!("db.findProjection: {reason}").into()),
+        };
+        let mut q = sqlx::query(&sql);
+        for p in frag.binds {
+            q = bind_sql_param(q, p);
+        }
+        match fetch_all_routed(&conn, q).await {
+            Ok(rows) => ok_res(rows.iter().map(row_to_map).collect()),
+            Err(e) => IpeResult::Err(ipe_err(&e)),
+        }
+    })
+}
+
+/// Build the single parameterized projection statement from the two validated
+/// sides, the ordered projection references, and the combinator-built WHERE
+/// text. The SELECT names only the projected `alias.column AS p<index>` terms
+/// (column pushdown), the FROM lists both `table AS alias` terms, and the WHERE
+/// is the `?`-placeholder fragment text. Every identifier passes
+/// `SqlIdent::parse_plain`; the two sides must carry distinct aliases and the
+/// projection must name at least one column — the remaining fail-closed checks.
+fn build_projection_statement(
+    left_table: &str,
+    left_alias: &str,
+    right_table: &str,
+    right_alias: &str,
+    projections: &[(String, String)],
+    where_sql: &str,
+) -> Result<String, String> {
+    let left_table_id =
+        SqlIdent::parse_plain(left_table).ok_or_else(|| format!("invalid table {left_table:?}"))?;
+    let left_alias_id =
+        SqlIdent::parse_plain(left_alias).ok_or_else(|| format!("invalid alias {left_alias:?}"))?;
+    let right_table_id = SqlIdent::parse_plain(right_table)
+        .ok_or_else(|| format!("invalid table {right_table:?}"))?;
+    let right_alias_id = SqlIdent::parse_plain(right_alias)
+        .ok_or_else(|| format!("invalid alias {right_alias:?}"))?;
+    if left_alias_id.as_str() == right_alias_id.as_str() {
+        return Err(format!(
+            "the two join sides share the alias {:?}; each side needs a distinct alias",
+            left_alias_id.as_str()
+        ));
+    }
+    if projections.is_empty() {
+        return Err("a projection must name at least one column".to_string());
+    }
+    let mut terms = Vec::with_capacity(projections.len());
+    for (index, (alias, column)) in projections.iter().enumerate() {
+        let projected = ProjectionColumn::parse(alias, column, index)?;
+        terms.push(projected.projection_term());
+    }
+    Ok(db_format_sql(format!(
+        "SELECT {proj} FROM {lt} AS {la}, {rt} AS {ra} WHERE {where_}",
+        proj = terms.join(", "),
+        lt = left_table_id.as_str(),
+        la = left_alias_id.as_str(),
+        rt = right_table_id.as_str(),
+        ra = right_alias_id.as_str(),
+        where_ = where_sql
+    )))
+}
+
 /// `Db.deleteWhere : Db -> String -> SqlFragment -> Task Error Int` — the
 /// row-count deletion counterpart to [`db_find_where`].
 pub fn db_delete_where<E: Send + From<String> + 'static>(
@@ -5602,6 +5741,138 @@ mod tests {
             matches!(found, IpeResult::Err(_)),
             "a shared alias must fail closed"
         );
+    }
+
+    /// Golden SQL: a single-column projection lowers to EXACTLY one
+    /// parameterized statement — `SELECT a1.name AS p0 FROM lt AS a0, rt AS a1
+    /// WHERE a0.k = a1.k`. Only the projected column is selected (column
+    /// pushdown), bound to the output name `p0`; every identifier is a validated
+    /// `alias.column` reference and the key is column-to-column (no bind).
+    #[test]
+    fn projection_statement_single_column_is_exact_parameterized_sql() {
+        let frag = sql_eq(
+            sql_column("a1.id".to_string()),
+            sql_column("a0.author_id".to_string()),
+        );
+        assert!(frag.binds.is_empty(), "a column=column key binds no value");
+        let sql = build_projection_statement(
+            "books",
+            "a0",
+            "authors",
+            "a1",
+            &[("a1".to_string(), "name".to_string())],
+            &frag.sql,
+        )
+        .expect("statement builds");
+        assert_eq!(
+            sql,
+            "SELECT a1.name AS p0 \
+             FROM books AS a0, authors AS a1 WHERE (a1.id = a0.author_id)"
+        );
+    }
+
+    /// Golden SQL: a projection over a join + a right-side filter. Only the
+    /// projected column is selected; the filter value is a `?` placeholder with a
+    /// matching bind, never interpolated.
+    #[test]
+    fn projection_statement_with_filter_binds_value_as_placeholder() {
+        let frag = sql_and(
+            sql_eq(
+                sql_column("a1.id".to_string()),
+                sql_column("a0.author_id".to_string()),
+            ),
+            sql_eq(sql_column("a1.active".to_string()), sql_param(1_i64)),
+        );
+        assert_eq!(frag.binds.len(), 1, "exactly one bound value (the filter)");
+        let sql = build_projection_statement(
+            "books",
+            "a0",
+            "authors",
+            "a1",
+            &[("a1".to_string(), "name".to_string())],
+            &frag.sql,
+        )
+        .expect("statement builds");
+        assert_eq!(
+            sql,
+            "SELECT a1.name AS p0 \
+             FROM books AS a0, authors AS a1 \
+             WHERE ((a1.id = a0.author_id) AND (a1.active = ?))"
+        );
+        assert!(
+            sql.contains('?') && !sql.contains(" 1)"),
+            "the filter value is a placeholder, not interpolated text"
+        );
+    }
+
+    /// A projected column identifier that is not a bare SQL identifier fails
+    /// closed with no SQL — the runtime re-validation gate over the projection.
+    #[test]
+    fn projection_statement_rejects_bad_column() {
+        let frag = sql_eq(
+            sql_column("a1.id".to_string()),
+            sql_column("a0.author_id".to_string()),
+        );
+        let built = build_projection_statement(
+            "books",
+            "a0",
+            "authors",
+            "a1",
+            &[("a1".to_string(), "name; DROP TABLE authors".to_string())],
+            &frag.sql,
+        );
+        assert!(
+            built.is_err(),
+            "a non-identifier projected column must fail closed"
+        );
+    }
+
+    /// An empty projection is rejected — a projection must name at least one
+    /// column, never fall back to `SELECT *`.
+    #[test]
+    fn projection_statement_rejects_empty_projection() {
+        let frag = sql_eq(
+            sql_column("a1.id".to_string()),
+            sql_column("a0.author_id".to_string()),
+        );
+        let built = build_projection_statement("books", "a0", "authors", "a1", &[], &frag.sql);
+        assert!(built.is_err(), "an empty projection must fail closed");
+    }
+
+    /// `Db.findProjection` reads only the projected column, keyed by the output
+    /// name `p0`: projecting the author name over the active-author join returns
+    /// Ada's two books' author name, each row carrying just `p0` (column
+    /// pushdown), and the filter value binds as a parameter.
+    #[tokio::test]
+    async fn test_find_projection_single_column() {
+        let db = fresh_join_db().await;
+        let frag = sql_and(
+            sql_eq(
+                sql_column("a1.id".to_string()),
+                sql_column("a0.author_id".to_string()),
+            ),
+            sql_eq(sql_column("a1.active".to_string()), sql_param(1_i64)),
+        );
+        let found: IpeResult<String, Vec<HashMap<String, String>>> = db_find_projection(
+            db,
+            "books".into(),
+            "a0".into(),
+            "authors".into(),
+            "a1".into(),
+            frag,
+            vec![("a1".to_string(), "name".to_string())],
+        )
+        .await;
+        match found {
+            IpeResult::Ok(rows) => {
+                assert_eq!(rows.len(), 2, "only active author Ada's two books");
+                for row in &rows {
+                    assert_eq!(row.get("p0").map(String::as_str), Some("Ada"));
+                    assert_eq!(row.len(), 1, "only the projected column is read");
+                }
+            }
+            IpeResult::Err(e) => panic!("expected Ok, got Err({e})"),
+        }
     }
 
     /// `Db.deleteWhere` removes exactly the matching rows and returns the

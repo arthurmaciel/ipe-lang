@@ -458,6 +458,10 @@ code! {
     /// non-seal-legal type (a `Secret`/reserved-sink, an untyped `Value`, a
     /// function, or another non-plain value)
     IPE_L0148 = "IPE-L0148", "a JS port boundary value is not seal-legal (a secret/sink, an untyped Value, or a non-plain type cannot cross to JS)", "IPE-L0148";
+    /// a `Store.select` projection lambda is not a lowerable column projection —
+    /// its body is not a single `cols.field` column reference over one of the
+    /// two bound side records, or names a field absent from that side's row
+    IPE_L0149 = "IPE-L0149", "a Store.select projection is not a usable column reference", "IPE-L0149";
     /// expression nests too deeply for the backend
     IPE_L0200 = "IPE-L0200", "expression nests too deeply for the backend", "IPE-L0200";
 

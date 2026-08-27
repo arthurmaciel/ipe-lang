@@ -1432,6 +1432,14 @@ pub enum StdlibKernel {
     /// validated column identifier, and the call becomes the `joinNamed` stdlib
     /// helper carrying both stores and both key columns.
     StoreJoin,
+    /// `Store.select : (( Cols a, Cols b ) -> row) -> Joined a b -> Select row`
+    /// — project specific columns of a join. The lambda receives the two sides'
+    /// column records; a field accessor on a `Cols` record is a validated column
+    /// reference (a `Proj`), so the projection cannot name a column absent from
+    /// the codec or carry a raw value into SQL text. At lowering the lambda is
+    /// read into the ordered `(alias, column)` projection list and a per-column
+    /// decoder, and the call becomes the `selectNamed` stdlib helper.
+    StoreSelect,
     /// `Store.eqBy : Codec t -> (row -> t) -> t -> Cond` — the accessor-typed
     /// equality leaf for an ENUM or newtype column whose wire form is not
     /// type-derivable. The `Codec t` argument projects the comparison value to a
@@ -2342,6 +2350,17 @@ pub enum StdlibKernel {
     /// is interpolated. Each result row is the pair of the two sides' plain-keyed
     /// cell maps, so a caller decodes each side through its own store codec.
     DbFindJoin,
+    /// `Db.findProjection : Db -> String -> String -> String -> String
+    ///                      -> SqlFragment -> List (String, String)
+    ///                      -> Task Error (List Row)` — read a typed projection
+    /// over a two-table join as one parameterized statement. The two
+    /// `(table, alias)` pairs name the join sides, `frag` is the join-key
+    /// equality plus any filter, and the `List (String, String)` is the ordered
+    /// `(alias, column)` references to project. Every identifier reaches SQL only
+    /// after the runtime re-validates it, and no value is interpolated. Each
+    /// result row is one cell map keyed by the projection output names
+    /// (`p0`, `p1`, …), so a caller decodes each projected column by position.
+    DbFindProjection,
     /// `Db.deleteWhere : Db -> String -> SqlFragment -> Task Error Int`
     DbDeleteWhere,
     /// `Db.updateWhere : Db -> String -> List (String, SqlField) -> SqlFragment -> Task Error Int`
@@ -3355,6 +3374,9 @@ impl StdlibKernel {
             // Accessor-intercepted at lowering (rewritten to `joinNamed`); the
             // runtime name is a never-called placeholder like `store_eq_col`.
             Self::StoreJoin => d("Store", "join", 4, Pure, "store_join"),
+            // Accessor-intercepted at lowering (rewritten to `selectNamed`); the
+            // runtime name is a never-called placeholder like `store_join`.
+            Self::StoreSelect => d("Store", "select", 2, Pure, "store_select"),
             // Accessor-typed equality leaf for enum/newtype columns — lowered
             // inline to the `Compare` `Cond` constructor (the value bound through
             // the passed codec), so the runtime-fn name is a never-called
@@ -4156,6 +4178,7 @@ impl StdlibKernel {
             Self::SqlLike => d("Sql", "like", 2, Db, "sql_like"),
             Self::DbFindWhere => d("Db", "findWhere", 3, Db, "db_find_where"),
             Self::DbFindJoin => d("Db", "findJoin", 8, Db, "db_find_join"),
+            Self::DbFindProjection => d("Db", "findProjection", 7, Db, "db_find_projection"),
             Self::DbDeleteWhere => d("Db", "deleteWhere", 3, Db, "db_delete_where"),
             Self::DbUpdateWhere => d("Db", "updateWhere", 4, Db, "db_update_where"),
             // ── Ipe.Secret — opaque secret-string wrapper ─
@@ -4895,6 +4918,7 @@ impl StdlibKernel {
         Self::DbMigrate,
         Self::DbDefaultMigration,
         Self::StoreJoin,
+        Self::StoreSelect,
         Self::StoreEqCol,
         Self::StoreEqBy,
         Self::StoreNeqCol,
@@ -5396,6 +5420,7 @@ impl StdlibKernel {
         Self::SqlLike,
         Self::DbFindWhere,
         Self::DbFindJoin,
+        Self::DbFindProjection,
         Self::DbDeleteWhere,
         Self::DbUpdateWhere,
         Self::SecretFromString,
@@ -5593,6 +5618,7 @@ impl StdlibKernel {
                 | Self::SqlLike
                 | Self::DbFindWhere
                 | Self::DbFindJoin
+                | Self::DbFindProjection
                 | Self::DbDeleteWhere
                 | Self::DbUpdateWhere
         )
@@ -7168,6 +7194,22 @@ impl StdlibKernel {
         const STRING_3_TO_FIND_JOIN: TyShape = TyShape::Fun(&STRING, &LIST_STRING_2_TO_FIND_JOIN);
         const STRING_4_TO_FIND_JOIN: TyShape = TyShape::Fun(&STRING, &STRING_3_TO_FIND_JOIN);
         const DB_FIND_JOIN: TyShape = TyShape::Fun(&DB, &STRING_4_TO_FIND_JOIN);
+        // `Db.findProjection : Db -> String -> String -> String -> String
+        //                      -> SqlFragment -> List (String, String)
+        //                      -> Task (List (Dict String String))`.
+        const LIST_TSS_TO_FIND_PROJECTION: TyShape =
+            TyShape::Fun(&LIST_TUPLE_STRING_STRING, &TASK_LIST_DICT_SS);
+        const SQLFRAGMENT_TO_FIND_PROJECTION: TyShape =
+            TyShape::Fun(&SQLFRAGMENT, &LIST_TSS_TO_FIND_PROJECTION);
+        const STRING_TO_FIND_PROJECTION: TyShape =
+            TyShape::Fun(&STRING, &SQLFRAGMENT_TO_FIND_PROJECTION);
+        const STRING_2_TO_FIND_PROJECTION: TyShape =
+            TyShape::Fun(&STRING, &STRING_TO_FIND_PROJECTION);
+        const STRING_3_TO_FIND_PROJECTION: TyShape =
+            TyShape::Fun(&STRING, &STRING_2_TO_FIND_PROJECTION);
+        const STRING_4_TO_FIND_PROJECTION: TyShape =
+            TyShape::Fun(&STRING, &STRING_3_TO_FIND_PROJECTION);
+        const DB_FIND_PROJECTION: TyShape = TyShape::Fun(&DB, &STRING_4_TO_FIND_PROJECTION);
         // `Db.deleteWhere : Db -> String -> SqlFragment -> Task Int`.
         const SQLFRAGMENT_TO_TASK_INT: TyShape = TyShape::Fun(&SQLFRAGMENT, &TASK_INT);
         const STRING_TO_DELETE_WHERE: TyShape = TyShape::Fun(&STRING, &SQLFRAGMENT_TO_TASK_INT);
@@ -8561,6 +8603,7 @@ impl StdlibKernel {
             Self::DbFindByConditions => Some(&DB_FIND_BY_CONDITIONS),
             Self::DbFindWhere => Some(&DB_FIND_WHERE),
             Self::DbFindJoin => Some(&DB_FIND_JOIN),
+            Self::DbFindProjection => Some(&DB_FIND_PROJECTION),
             Self::DbDeleteWhere => Some(&DB_DELETE_WHERE),
             Self::DbUpdateWhere => Some(&DB_UPDATE_WHERE),
             Self::DbInsertFields => Some(&DB_INSERT_FIELDS),
@@ -8961,6 +9004,8 @@ impl StdlibKernel {
     pub const ACCESSOR_INTERCEPT_PLACEHOLDERS: &[Self] = &[
         // ── Join constructor — arity-4 (storeA, accA, storeB, accB) ──────────
         Self::StoreJoin,
+        // ── Projection constructor — arity-2 (select lambda + joined) ────────
+        Self::StoreSelect,
         // ── Query leaves — arity-2 (accessor + store) ────────────────────────
         Self::StoreEqCol,
         Self::StoreEqBy,
@@ -9216,6 +9261,7 @@ impl StdlibKernel {
             | Self::DbMigrate
             | Self::DbFindWhere
             | Self::DbFindJoin
+            | Self::DbFindProjection
             | Self::DbDeleteWhere
             | Self::DbUpdateWhere
             | Self::DbDefaultMigration
@@ -9360,6 +9406,7 @@ impl StdlibKernel {
             | Self::CharIsHexDigit
             | Self::CharIsOctDigit
             | Self::StoreJoin
+            | Self::StoreSelect
             | Self::StoreEqCol
             | Self::StoreEqBy
             | Self::StoreNeqCol

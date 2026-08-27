@@ -226,6 +226,10 @@ module Ipe.Db.Store exposing
     , join, joinNamed
     , joinFilterLeft, joinFilterRight
     , joinToList, joinToMaybe, joinCount
+    , Select
+    , select, selectNamed
+    , projReadText, projReadInt, projReadBool, projReadFloat
+    , selectToList, selectToMaybe
     , Policy, Secured
     , unrestricted, publicRead, ownerColumn, immutable, andPolicy, secured
     , ownerColumnNamed, immutableNamed
@@ -2887,6 +2891,169 @@ joinToMaybe conn joined =
 joinCount : Db -> Joined a b -> Task Error Int
 joinCount conn joined =
     Task.map List.length (joinToList conn joined)
+
+
+-- ─── Typed single-column projection over a join (`select` / `Select`) ─
+--
+-- `select` projects one column of a join instead of returning both full rows.
+-- Its lambda receives the pair of the two sides' row records (`( a, b )`) and
+-- returns a bare field reference on one side (`\( _, author ) -> author.name`).
+-- The lambda is never run over real rows: the compiler reads the referenced
+-- column from that `side.field` body at lowering, validates it against the
+-- side's row type, and sets the SQL `SELECT` list to exactly that column (column
+-- pushdown), over the join's existing `FROM … WHERE`.
+--
+-- The security posture is the join's, extended: the projected identifier
+-- (alias + column) is a validated `alias.column` reference that reaches SQL only
+-- through the runtime's identifier gate, and the `select` lambda cannot smuggle a
+-- raw value into the SELECT text — a body that is not a single column reference
+-- is a fail-closed build error (IPE-L0149), never a computed fragment. Selecting
+-- several columns at once is a later slice; for now a caller projects one column,
+-- or reads both full rows with `joinToList` and shapes them in ordinary code.
+
+
+-- | A column projection over a join, decoded to `row` at `selectToList` /
+-- `selectToMaybe`. Built only through `select`, so the projected columns and the
+-- decoder that reads them back cannot drift. `joined` is the underlying join
+-- (its `FROM … WHERE` and any `poison`); `projections` is the ordered list of
+-- validated `(alias, column)` references the `SELECT` names, each bound to an
+-- output name by position; `decode` reads one projected `Row` (keyed by those
+-- output names) back into `row`.
+type Select
+    = Select
+        { joinedA : String
+        , joinedB : String
+        , leftTable : String
+        , rightTable : String
+        , frag : SqlFragment
+        , poison : Maybe Error
+        , projections : List ( String, String )
+        }
+
+
+-- | `select (\( left, right ) -> right.field) joined` — project one column of
+-- `joined` instead of both full rows. The lambda receives the two sides' row
+-- records and returns a bare field reference on one side; lowering reads that
+-- referenced column and sets the SQL `SELECT` list to exactly that column. The
+-- lambda is never run over real rows, so the field reference names a validated
+-- column: a projection that is not a single `side.field` reference (a computed
+-- expression, a multi-column tuple) is a fail-closed build error, never a raw
+-- SQL fragment.
+--
+-- `selectToList` returns each projected row as a `Row` keyed by the output name
+-- `p0`; read the projected value back with the matching `projRead*` helper at
+-- position `0` (`projReadText 0 row`, `projReadInt 0 row`, …). Keeping the
+-- decode caller-side keeps the projected shape a plain typed read rather than a
+-- stored function.
+--
+-- Example:
+--
+--     Store.join books .authorId authors .id
+--         |> Store.select (\( _, author ) -> author.name)
+--         |> Store.selectToList db
+--         -- each row: `Store.projReadText 0 row == Ok "<author name>"`
+select : (( a, b ) -> row) -> Joined a b -> Select
+select =
+    Ffi.kernel "Store_select"
+
+
+-- | The lowered form of `select`: the lambda has already been read into the
+-- ordered `(alias, column)` projection list. Builds the `Select` from the join's
+-- tables, alias-bound `FROM … WHERE` fragment, and any inherited `poison`.
+-- Reached only through the `Store.select` lowering intercept; not part of the
+-- accessor caller surface.
+selectNamed : Joined a b -> List ( String, String ) -> Select
+selectNamed joined projections =
+    case joined of
+        Joined r ->
+            case r.storeA of
+                Store sa ->
+                    case r.storeB of
+                        Store sb ->
+                            Select
+                                { joinedA = leftAlias
+                                , joinedB = rightAlias
+                                , leftTable = sa.table
+                                , rightTable = sb.table
+                                , frag = r.frag
+                                , poison = r.poison
+                                , projections = projections
+                                }
+
+
+-- | `selectToList db sel` — run the projection and return each projected row as
+-- a `Row` keyed by the projection output names (`p0`, …). Lowers to ONE
+-- parameterized statement (`SELECT proj … FROM ta AS a0, tb AS a1 WHERE …`)
+-- through `Db.findProjection`: every projected identifier is re-validated at the
+-- runtime boundary, and every filter value is a bound parameter. A poisoned
+-- projection (an inherited filter naming an unknown column) fails closed with the
+-- typed `Err`. Read the projected value back with the matching `projRead*` helper
+-- at position `0`.
+--
+-- Example:
+--
+--     Store.join books .authorId authors .id
+--         |> Store.select (\( _, author ) -> author.name)
+--         |> Store.selectToList db
+selectToList : Db -> Select -> Task Error (List Row)
+selectToList conn sel =
+    case sel of
+        Select r ->
+            case r.poison of
+                Just e ->
+                    Task.fail e
+
+                Nothing ->
+                    Db.findProjection conn
+                        r.leftTable
+                        r.joinedA
+                        r.rightTable
+                        r.joinedB
+                        r.frag
+                        r.projections
+
+
+-- | `selectToMaybe db sel` — run the projection and return the FIRST projected
+-- row (as a `Row`), or `Nothing`.
+selectToMaybe : Db -> Select -> Task Error (Maybe Row)
+selectToMaybe conn sel =
+    Task.map List.head (selectToList conn sel)
+
+
+-- The projection output name a projected column binds to, by position: the first
+-- projected column is `p0`, the second `p1`, and so on. Both the SQL `SELECT`
+-- alias (built in the runtime from this same convention) and the decoder read a
+-- cell by this name, so the projection list and the decoder cannot disagree on a
+-- column's position.
+projOutputName : Int -> String
+projOutputName index =
+    String.concat [ "p", String.fromInt index ]
+
+
+-- | Read the projected column bound to position `index` back as `String`. The
+-- decoder the `select` intercept emits calls one `projRead*` per projected
+-- column, keyed by the same `p<index>` output name the runtime projects into.
+projReadText : Int -> Row -> Result Error String
+projReadText index row =
+    readText (projOutputName index) row
+
+
+-- | Read the projected column bound to position `index` back as `Int`.
+projReadInt : Int -> Row -> Result Error Int
+projReadInt index row =
+    readInt (projOutputName index) row
+
+
+-- | Read the projected column bound to position `index` back as `Bool`.
+projReadBool : Int -> Row -> Result Error Bool
+projReadBool index row =
+    readBool (projOutputName index) row
+
+
+-- | Read the projected column bound to position `index` back as `Float`.
+projReadFloat : Int -> Row -> Result Error Float
+projReadFloat index row =
+    readFloat (projOutputName index) row
 
 
 -- Decode each `(leftRow, rightRow)` cell-map pair through the two codecs into a

@@ -686,6 +686,11 @@ struct Builtins {
     /// both stores' row types so `toList` decodes each side through its own
     /// codec.
     joined_con: Symbol,
+    /// `"Select"` — the `Ipe.Db.Store.Select row` column-projection ADT, the
+    /// result of the `StoreSelect` kernel scheme
+    /// (`(( Cols a, Cols b ) -> row) -> Joined a b -> Select row`). Its `row`
+    /// argument is the projected shape the lambda returns.
+    select_con: Symbol,
     /// `"Policy"` — the `Ipe.Db.Store.Policy row` row-security algebra ADT. The
     /// `row` argument is phantom (the runtime `Policy` carries only rule data),
     /// but it ties the accessor's record type to the store's row type in the
@@ -931,6 +936,7 @@ impl Builtins {
             store_con: interner.intern("Store")?,
             draft_con: interner.intern("Draft")?,
             joined_con: interner.intern("Joined")?,
+            select_con: interner.intern("Select")?,
             policy_con: interner.intern("Policy")?,
             codec_con: interner.intern("Codec")?,
         })
@@ -4495,6 +4501,15 @@ impl<'a> Builder<'a> {
             name: self.builtins.joined_con,
             args: vec![a, b],
         };
+        // `Select` — the column-projection ADT (`Ipe.Db.Store`), the result of
+        // `Store.select`. The projected rows are returned as plain `Row` cell
+        // maps by `selectToList` / `selectToMaybe`, decoded caller-side by the
+        // `projRead*` helpers, so the type carries no projected-shape argument.
+        let select = || Ty::Con {
+            module: Vec::new(),
+            name: self.builtins.select_con,
+            args: vec![],
+        };
         // `Policy row` — the row-security policy algebra ADT (`Ipe.Db.Store`),
         // the result of the accessor-typed policy builders. The `row` argument
         // is phantom over the rule data but shares the accessor's record type,
@@ -5906,6 +5921,37 @@ impl<'a> Builder<'a> {
                     ),
                 ),
             ),
+            // `Db.findProjection : Db -> String -> String -> String -> String
+            //                      -> SqlFragment -> List (String, String)
+            //                      -> Task (List (Dict String String))` — read a
+            // typed projection over a two-table join as one parameterized
+            // statement. The two `(table, alias)` pairs name the sides, `frag`
+            // carries the join-key equality plus any filter, and the
+            // `List (String, String)` is the ordered `(alias, column)` references
+            // to project; each result row is one cell map keyed by the projection
+            // output names (`p0`, `p1`, …), decoded by position.
+            K::DbFindProjection => fun(
+                db(),
+                fun(
+                    string(),
+                    fun(
+                        string(),
+                        fun(
+                            string(),
+                            fun(
+                                string(),
+                                fun(
+                                    sqlfragment(),
+                                    fun(
+                                        list(tuple2(string(), string())),
+                                        task(list(dict(string(), string()))),
+                                    ),
+                                ),
+                            ),
+                        ),
+                    ),
+                ),
+            ),
             // `Db.deleteWhere : Db -> String -> SqlFragment -> Task Int`
             K::DbDeleteWhere => fun(db(), fun(string(), fun(sqlfragment(), task(int())))),
             // `Db.updateWhere : Db -> String -> List (String, SqlField)
@@ -5975,6 +6021,20 @@ impl<'a> Builder<'a> {
                         fun(fun(var(1), var(2)), joined(var(0), var(1))),
                     ),
                 ),
+            ),
+
+            // `Store.select : (( a, b ) -> row) -> Joined a b -> Select row` —
+            // project specific columns of a join. The lambda receives the two
+            // sides' row records (`a` = var 0, `b` = var 1) so a field accessor
+            // on a side (`author.name`) reads that side's real field type; its
+            // result `row` (var 2) is the projected shape. The lambda is never
+            // run over real rows — lowering reads the accessed column from a bare
+            // `side.field` body and rewrites to the `selectNamed` stdlib helper,
+            // failing closed (IPE-L0149) on any body that is not a single column
+            // reference, so a computed projection cannot enter the SELECT.
+            K::StoreSelect => fun(
+                fun(tuple2(var(0), var(1)), var(2)),
+                fun(joined(var(0), var(1)), select()),
             ),
 
             // `Store.eq : (row -> t) -> t -> Cond` — the getter-arrow scheme lets
