@@ -648,20 +648,24 @@ mod tests {
     }
 
     #[test]
-    fn web_pulls_server_http_client_and_url() {
-        // A web program reaches server (axum), the http_client surface, and the
-        // url parser transitively — none named directly.
+    fn web_selects_server_without_outbound_http() {
+        // A web program reaches server (axum) but makes no outbound request: with
+        // no `Ipe.Http` kernel and no email it does not link the reqwest client,
+        // so `http_client` — and the `url` parser that only rides along with it —
+        // are both dropped. `server`, `async`, and `json` remain.
         let f = features_for(|m| {
             m.uses_web = true;
             m.uses_async_runtime = true;
         });
-        for want in ["web", "server", "http_client", "url", "async", "json"] {
+        for want in ["web", "server", "async", "json"] {
             assert!(f.contains(&want), "web program must select `{want}`: {f:?}");
         }
-        assert!(
-            !f.contains(&"tui"),
-            "web program must not select `tui`: {f:?}"
-        );
+        for reject in ["http_client", "url", "tui"] {
+            assert!(
+                !f.contains(&reject),
+                "a web program with no outbound HTTP must not select `{reject}`: {f:?}"
+            );
+        }
     }
 
     #[test]
