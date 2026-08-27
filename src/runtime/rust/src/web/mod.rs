@@ -2419,8 +2419,6 @@ where
         // the reverse-proxy path. Without it, always use the in-process console.
         #[cfg(feature = "http_client")]
         let use_console_proxy = console_proxy::ensure_console_proxy().await;
-        #[cfg(not(feature = "http_client"))]
-        let use_console_proxy = false;
 
         // Body-size cap on /_ipe/event: mirrors Go's http.MaxBytesReader
         // (runtime-go/rt/live.go:3915). axum's DefaultBodyLimit applies
@@ -2585,47 +2583,53 @@ where
                     .layer(axum::extract::DefaultBodyLimit::max(web_max_body_bytes())),
             );
 
-        // When `http_client` is active: the console proxy (which uses reqwest)
-        // may have been spawned; route via proxy_routes if so, else fall back
-        // to the in-process console with gate check.
-        // When `http_client` is absent: always use the in-process console
-        // (use_console_proxy is unconditionally false; console_proxy not compiled).
+        // When `http_client` is active and the pre-built console binary is
+        // present, the proxy replaces the in-process console: a child process is
+        // spawned and all `/_ipe/console/*` traffic is forwarded to it via
+        // reqwest. The child logs its own `session store: …` + `reverse-proxy
+        // ready` lines, so the parent does not duplicate the inline-mount log.
         #[cfg(feature = "http_client")]
-        {
-            router = if use_console_proxy {
-                // Real bundled Ipe.Web console, spawned as a child + proxied. The
-                // child process logs its OWN `session store: …` line + a
-                // `reverse-proxy ready` line (console_proxy), so the parent does not
-                // duplicate the inline-mount log here.
-                console_proxy::proxy_routes(router)
-            } else {
-                // In-process console (plain-HTML shell + JSON APIs).
-                if console_proxy::gate_allows() {
-                    eprintln!("{}", store::memory_store_log_line(web_ttl()));
-                    eprintln!(
-                        "[ipe.console] inline console mounted as Ipe.Web sub-app at /_ipe/console mode={}",
-                        console::console_auth_mode_label()
-                    );
-                }
-                router
-                    .route("/_ipe/console", get(console::console_html))
-                    .route("/_ipe/console/api/overview", get(console::api_overview))
-                    .route("/_ipe/console/api/logs", get(console::api_logs))
-                    .route("/_ipe/console/api/errors", get(console::api_errors))
-                    .route("/_ipe/console/api/traces", get(console::api_traces))
-                    .route(
-                        "/_ipe/console/api/metrics-summary",
-                        get(console::api_metrics_summary),
-                    )
-            };
+        if use_console_proxy {
+            router = console_proxy::proxy_routes(router);
         }
-        // When `http_client` is absent, the console proxy and push/hub exporters
-        // are unavailable (they make outbound HTTP calls via reqwest). The
-        // in-process console routes are still wired via the `#[cfg(feature =
-        // "http_client")]` block above when the gate allows — but a web app built
-        // without an outbound HTTP kernel simply omits the proxy-backed console.
-        // This is intentional: the console is an observability tool, not part of
-        // the application's serving contract.
+
+        // The in-process console (`/_ipe/console` + `/_ipe/console/api/*`) is
+        // reqwest-free and mounts under `web` alone — no `http_client` required.
+        // A web app without an outbound HTTP kernel still serves the developer
+        // dashboard. The proxy override above takes precedence when active: when
+        // the proxy is live (`use_console_proxy` true) it owns `/_ipe/console`,
+        // so we skip this block to avoid duplicate route registration.
+        let proxy_active = {
+            #[cfg(feature = "http_client")]
+            {
+                use_console_proxy
+            }
+            #[cfg(not(feature = "http_client"))]
+            {
+                false
+            }
+        };
+        if !proxy_active && console::gate_allows() {
+            eprintln!("{}", store::memory_store_log_line(web_ttl()));
+            eprintln!(
+                "[ipe.console] inline console mounted as Ipe.Web sub-app at /_ipe/console mode={}",
+                console::console_auth_mode_label()
+            );
+            router = router
+                .route("/_ipe/console", get(console::console_html))
+                .route("/_ipe/console/api/overview", get(console::api_overview))
+                .route("/_ipe/console/api/logs", get(console::api_logs))
+                .route("/_ipe/console/api/errors", get(console::api_errors))
+                .route("/_ipe/console/api/traces", get(console::api_traces))
+                .route(
+                    "/_ipe/console/api/metrics-summary",
+                    get(console::api_metrics_summary),
+                );
+        }
+        // The console proxy needs `http_client` (outbound reqwest). The
+        // in-process console is served under `web` whenever the mount gate
+        // allows, so a web app without an outbound HTTP kernel still gets
+        // `/_ipe/console`.
 
         // Custom-element (`Ui.widget`) assets: one content-addressed route per
         // registered author module + one for the generated registration glue.

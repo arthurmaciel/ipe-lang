@@ -16,6 +16,50 @@ const fn json_ct() -> (header::HeaderName, &'static str) {
     (header::CONTENT_TYPE, "application/json")
 }
 
+/// Boot-time decision: should the console be mounted at all?
+/// `false` → the caller skips the console entirely (in-process or proxy).
+///
+/// Conditions that suppress the console mount:
+/// - sub-app context: the parent owns its own console; a nested app must not
+///   recursively mount one (`IPE_WEB_BASE_PATH` / deprecated `IPE_LIVE_BASE_PATH`);
+/// - explicit opt-out via `IPE_CONSOLE_EMBED=off|0|false`;
+/// - `IPE_CONSOLE_AUTH=off` (operator declared surface absent);
+/// - production without an admin token (fail-closed — no silent open-to-world mount).
+///
+/// This function is reqwest-free; it lives here so the mount decision is
+/// available regardless of whether `http_client` is compiled in.
+pub fn gate_allows() -> bool {
+    if crate::system::read_env_var_renamed("IPE_WEB_BASE_PATH", "IPE_LIVE_BASE_PATH")
+        .map(|v| !v.is_empty())
+        .unwrap_or(false)
+    {
+        return false;
+    }
+    if matches!(
+        crate::system::read_env_var("IPE_CONSOLE_EMBED").as_deref(),
+        Ok("off") | Ok("0") | Ok("false")
+    ) {
+        return false;
+    }
+    if crate::system::read_env_var("IPE_CONSOLE_AUTH")
+        .map(|v| v.trim().eq_ignore_ascii_case("off"))
+        .unwrap_or(false)
+    {
+        return false;
+    }
+    if super::super::telemetry::production_from_env()
+        && crate::system::read_env_var("IPE_ADMIN_TOKEN")
+            .map(|v| v.is_empty())
+            .unwrap_or(true)
+        && crate::system::read_env_var("IPE_CONSOLE_TOKEN")
+            .map(|v| v.is_empty())
+            .unwrap_or(true)
+    {
+        return false;
+    }
+    true
+}
+
 /// `GET /_ipe/console` — the plain-HTML dashboard shell (no framework, no CSS
 /// deps). Polls the api endpoints below.
 pub async fn console_html() -> impl IntoResponse {
@@ -449,6 +493,24 @@ fn ingest_token_blocked(headers: &axum::http::HeaderMap) -> Option<axum::respons
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn gate_skips_in_subapp_context() {
+        // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
+        unsafe { std::env::set_var("IPE_WEB_BASE_PATH", "/billing") };
+        assert!(!gate_allows());
+        // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
+        unsafe { std::env::remove_var("IPE_WEB_BASE_PATH") };
+    }
+
+    #[test]
+    fn gate_skips_on_explicit_off() {
+        // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
+        unsafe { std::env::set_var("IPE_CONSOLE_EMBED", "off") };
+        assert!(!gate_allows());
+        // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
+        unsafe { std::env::remove_var("IPE_CONSOLE_EMBED") };
+    }
 
     // Pure (no env dependency) — safe as its own test, no race with
     // ingest_token_gate's IPE_INGEST_TOKEN mutation below.
