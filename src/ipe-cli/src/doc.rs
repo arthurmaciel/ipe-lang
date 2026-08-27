@@ -1840,7 +1840,7 @@ fn signature_references(ty: &TyDoc, index: &AnchorIndex) -> Vec<TypeRef> {
 /// - `json_files`: the `docs.json` source of truth
 /// - `markdown_files`: per-module `.md` pages + the Markdown index
 /// - `html_files`: the self-contained HTML site (`index.html`, per-module
-///   pages, `style.css`)
+///   pages, `style.css`, per-kind index pages)
 ///
 /// The caller writes each map into its matching `<base>/json/`,
 /// `<base>/markdown/`, or `<base>/html/` subfolder. Cross-links within each
@@ -1850,6 +1850,7 @@ fn signature_references(ty: &TyDoc, index: &AnchorIndex) -> Vec<TypeRef> {
 /// addresses, identical across all three renderings.
 fn render_site_split(
     docs: &DocsJson,
+    bundle: &crate::doc_bundle::DocBundle,
     write_format: WriteFormat,
 ) -> (
     BTreeMap<String, String>,
@@ -1874,13 +1875,35 @@ fn render_site_split(
     }
 
     if write_format.wants_html() {
-        html_files.insert("index.html".to_owned(), render_html_index(docs));
+        let search_script = build_site_search_script(bundle, "");
+        html_files.insert(
+            "index.html".to_owned(),
+            render_html_index(docs, bundle, &search_script),
+        );
         html_files.insert("style.css".to_owned(), STYLE_CSS.to_owned());
         for module in &docs.modules {
             html_files.insert(
                 format!("{}.html", module_stem(&module.name)),
-                render_html_module(module, &index),
+                render_html_module(module, &index, &search_script),
             );
+        }
+        // Per-kind index pages: module/index.html, diagnostic/index.html,
+        // cli/index.html, and one page per curated kind.
+        let ref_search = build_site_search_script(bundle, "../");
+        html_files.insert(
+            "module/index.html".to_owned(),
+            render_reference_index(docs, &ref_search),
+        );
+        html_files.insert(
+            "diagnostic/index.html".to_owned(),
+            render_diagnostic_index(bundle, &ref_search),
+        );
+        html_files.insert(
+            "cli/index.html".to_owned(),
+            render_cli_index(bundle, &ref_search),
+        );
+        for (path, content) in render_curated_kind_indexes(bundle, &ref_search) {
+            html_files.insert(path, content);
         }
     }
 
@@ -1888,18 +1911,53 @@ fn render_site_split(
 }
 
 /// Build the flat file map for the HTTP serve loop (HTML only, no disk writes).
-fn render_site_for_serve(docs: &DocsJson) -> BTreeMap<String, String> {
+fn render_site_for_serve(
+    docs: &DocsJson,
+    bundle: &crate::doc_bundle::DocBundle,
+) -> BTreeMap<String, String> {
     let index = AnchorIndex::build(docs);
+    let search_script = build_site_search_script(bundle, "");
+    let ref_search = build_site_search_script(bundle, "../");
     let mut files = BTreeMap::new();
-    files.insert("index.html".to_owned(), render_html_index(docs));
+    files.insert(
+        "index.html".to_owned(),
+        render_html_index(docs, bundle, &search_script),
+    );
     files.insert("style.css".to_owned(), STYLE_CSS.to_owned());
     for module in &docs.modules {
         files.insert(
             format!("{}.html", module_stem(&module.name)),
-            render_html_module(module, &index),
+            render_html_module(module, &index, &search_script),
         );
     }
+    files.insert(
+        "module/index.html".to_owned(),
+        render_reference_index(docs, &ref_search),
+    );
+    files.insert(
+        "diagnostic/index.html".to_owned(),
+        render_diagnostic_index(bundle, &ref_search),
+    );
+    files.insert(
+        "cli/index.html".to_owned(),
+        render_cli_index(bundle, &ref_search),
+    );
+    for (path, content) in render_curated_kind_indexes(bundle, &ref_search) {
+        files.insert(path, content);
+    }
     files
+}
+
+/// Build the search script with the full entry index for the site.
+///
+/// `href_base` is the JS-level base prefix for building entry hrefs (`""` for
+/// root-level pages, `"../"` for pages one level deep like `module/index.html`).
+fn build_site_search_script(bundle: &crate::doc_bundle::DocBundle, href_base: &str) -> String {
+    let entries: Vec<(&str, &str, &str)> = bundle
+        .all_entries()
+        .map(|e| (e.kind.prefix(), e.key.as_str(), e.title.as_str()))
+        .collect();
+    build_search_script(&entries, href_base)
 }
 
 /// Generate `docs.json` and the selected renderings for the package at `path`,
@@ -1917,8 +1975,10 @@ fn generate(path: &Path, out: &Path, write_format: WriteFormat) -> Result<(), Cl
     // Attempt full project + stdlib documentation. When no project is reachable
     // at `path`, fall back to stdlib-only so the command succeeds in any dir.
     let docs = build_docs(path).unwrap_or_else(|_| build_stdlib_only_docs());
+    let docs_root = locate_docs_root();
+    let bundle = build_doc_bundle(&docs_root)?;
 
-    let (json_files, markdown_files, html_files) = render_site_split(&docs, write_format);
+    let (json_files, markdown_files, html_files) = render_site_split(&docs, &bundle, write_format);
 
     write_format_dir(out, "json", &json_files)?;
     if write_format.wants_markdown() {
@@ -1954,6 +2014,9 @@ fn write_format_dir(
     std::fs::create_dir_all(&dir).map_err(|e| crate::io_err(&dir, e))?;
     for (name, contents) in files {
         let file_path = dir.join(name);
+        if let Some(parent) = file_path.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| crate::io_err(parent, e))?;
+        }
         std::fs::write(&file_path, contents).map_err(|e| crate::io_err(&file_path, e))?;
     }
     Ok(())
@@ -2683,43 +2746,6 @@ fn render_plain_tree(nodes: &[NamespaceNode], depth: usize, out: &mut String) {
     }
 }
 
-/// Render a namespace tree as nested HTML `<ul>/<li>` markup.
-///
-/// Modules emit an `<a href="…">` link; pure prefix headers emit a plain
-/// `<span>`. Children are wrapped in a nested `<ul>`.
-fn render_html_tree(nodes: &[NamespaceNode], out: &mut String) {
-    out.push_str("<ul class=\"modules\">\n");
-    for node in nodes {
-        out.push_str("<li class=\"module\"");
-        let _ = write!(
-            out,
-            " data-name=\"{}\"",
-            html_escape(&node.full_name.to_lowercase())
-        );
-        out.push('>');
-        if node.is_module {
-            let stem = module_stem(&node.full_name);
-            let _ = write!(
-                out,
-                "<a href=\"{stem}.html\">{}</a>",
-                html_escape(&node.full_name)
-            );
-        } else {
-            let _ = write!(
-                out,
-                "<span class=\"ns-header\">{}</span>",
-                html_escape(&node.full_name)
-            );
-        }
-        if !node.children.is_empty() {
-            out.push('\n');
-            render_html_tree(&node.children, out);
-        }
-        out.push_str("</li>\n");
-    }
-    out.push_str("</ul>\n");
-}
-
 // ===========================================================================
 // HTML site — a self-contained static rendering over the same `DocsJson` model.
 // ===========================================================================
@@ -2739,13 +2765,49 @@ const STYLE_CSS: &str = "\
 }
 body {
   font: 16px/1.6 system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
-  margin: 0; padding: 2rem; max-width: 60rem; margin-inline: auto;
+  margin: 0; padding: 0; max-width: none;
   background: var(--bg); color: var(--fg);
 }
+.page-body { max-width: 60rem; margin-inline: auto; padding: 1.5rem 2rem; }
 h1 { font-size: 1.6rem; color: var(--accent); }
 h2 { font-size: 1.2rem; margin-top: 2rem; color: var(--accent); }
 a { color: var(--accent); text-decoration: none; }
 a:hover, a:focus { color: var(--accent-strong); text-decoration: underline; }
+nav.site-header {
+  background: var(--surface); border-bottom: 1px solid var(--border);
+  padding: 0.6rem 1.5rem; display: flex; align-items: center; gap: 1.2rem;
+  flex-wrap: wrap; position: sticky; top: 0; z-index: 10;
+}
+nav.site-header .site-title {
+  font-weight: 700; color: var(--accent-strong); font-size: 1rem;
+  text-decoration: none; margin-right: 0.4rem;
+}
+nav.site-header a { color: var(--fg); font-size: 0.9rem; }
+nav.site-header a:hover, nav.site-header a:focus { color: var(--accent-strong); }
+nav.site-header a.active { color: var(--accent); font-weight: 600; }
+nav.site-header .sep {
+  color: var(--border); font-size: 1.2rem; line-height: 1;
+  user-select: none;
+}
+nav.site-header .search-wrap { margin-left: auto; position: relative; }
+nav.site-header input.nav-search {
+  width: 14rem; padding: 0.25rem 0.6rem; font-size: 0.9rem;
+  background: var(--bg); color: var(--fg);
+  border: 1px solid var(--border); border-radius: 4px;
+}
+nav.site-header input.nav-search:focus { outline: 2px solid var(--accent); }
+.search-results {
+  position: absolute; top: calc(100% + 4px); right: 0; width: 20rem;
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 6px; list-style: none; margin: 0; padding: 0.25rem 0;
+  z-index: 100; display: none; max-height: 18rem; overflow-y: auto;
+}
+.search-results li a {
+  display: block; padding: 0.3rem 0.8rem; font-size: 0.85rem;
+  color: var(--fg);
+}
+.search-results li a:hover { background: var(--bg); color: var(--accent-strong); }
+.search-results li a .sr-kind { color: var(--muted); font-size: 0.75rem; margin-left: 0.4rem; }
 nav.crumb { margin-bottom: 1.5rem; font-size: 0.9rem; }
 input.filter {
   width: 100%; box-sizing: border-box; margin: 0.5rem 0 1.5rem;
@@ -2776,13 +2838,27 @@ pre.doc-code {
 pre.doc-code code { background: none; padding: 0; }
 span.ns-header { color: var(--muted); font-style: italic; }
 ul.modules ul { padding-left: 1.2rem; }
-@media (max-width: 40rem) { ul.modules { columns: 1; } }
+section.kind-group { margin-bottom: 2.5rem; }
+section.kind-group h2 { margin-bottom: 0.6rem; }
+ul.curated-entries {
+  list-style: none; padding: 0; margin: 0;
+}
+ul.curated-entries li { margin: 0.6rem 0; }
+ul.curated-entries .entry-title { font-weight: 600; }
+ul.curated-entries .entry-summary { color: var(--muted); font-size: 0.9rem; margin-left: 0.5rem; }
+ul.index-entries {
+  list-style: none; padding: 0; margin: 0.4rem 0;
+}
+ul.index-entries li { margin: 0.4rem 0; }
+ul.index-entries .entry-key { color: var(--muted); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.85rem; margin-left: 0.5rem; }
+@media (max-width: 40rem) { ul.modules { columns: 1; } nav.site-header { gap: 0.6rem; } }
 ";
 
-/// The inline filter script bundled into the index page. It hides any module
-/// list item whose lowercased `data-name` does not contain the (lowercased)
-/// query, and collapses a section that ends up with no visible module. No
-/// external dependency — a single `input` listener over the static list.
+/// The inline filter script bundled into the module-list index page.
+///
+/// Hides any module list item whose lowercased `data-name` does not contain
+/// the (lowercased) query, and collapses a section that ends up with no
+/// visible module. No external dependency.
 const FILTER_SCRIPT: &str = "\
 <script>
 (function () {
@@ -2804,6 +2880,136 @@ const FILTER_SCRIPT: &str = "\
 })();
 </script>
 ";
+
+/// The inline search script embedded in every HTML page.
+///
+/// Reads the `ENTRY_INDEX` JSON variable (embedded per-page) and does
+/// client-side substring filtering against key and title. Selecting a result
+/// navigates to that entry's page. Degrades gracefully when JS is off: the
+/// header links still work, the search box is simply non-functional.
+const SEARCH_SCRIPT_TEMPLATE: &str = "\
+<script>
+(function () {
+  var INDEX = ENTRY_INDEX_PLACEHOLDER;
+  var box = document.getElementById('nav-search');
+  var list = document.getElementById('search-results');
+  if (!box || !list) return;
+  function show(entries) {
+    list.innerHTML = '';
+    entries.slice(0, 12).forEach(function (e) {
+      var li = document.createElement('li');
+      var a = document.createElement('a');
+      a.href = HREF_BASE + e.kind + '/' + e.key + '.html';
+      a.innerHTML = '<span class=\"sr-title\">' + esc(e.title) + '</span>'
+        + '<span class=\"sr-kind\">' + esc(e.kind) + '</span>';
+      li.appendChild(a);
+      list.appendChild(li);
+    });
+    list.style.display = entries.length ? 'block' : 'none';
+  }
+  function esc(s) {
+    return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  }
+  function rank(q) {
+    var ql = q.toLowerCase();
+    var scored = INDEX.map(function (e) {
+      var k = e.key.toLowerCase(), t = e.title.toLowerCase();
+      var s = 0;
+      if (k === ql || t === ql) s = 1000;
+      else if (k.indexOf(ql) === 0) s = 800;
+      else if (t.indexOf(ql) === 0) s = 600;
+      else if (k.indexOf(ql) !== -1) s = 400;
+      else if (t.indexOf(ql) !== -1) s = 200;
+      return { e: e, s: s };
+    }).filter(function (x) { return x.s > 0; });
+    scored.sort(function (a, b) { return b.s - a.s; });
+    return scored.map(function (x) { return x.e; });
+  }
+  box.addEventListener('input', function () {
+    var q = box.value.trim();
+    if (q.length < 1) { list.style.display = 'none'; return; }
+    show(rank(q));
+  });
+  document.addEventListener('click', function (ev) {
+    if (!box.contains(ev.target) && !list.contains(ev.target)) {
+      list.style.display = 'none';
+    }
+  });
+})();
+</script>
+";
+
+/// Which section of the navigation is currently active.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum NavSection {
+    Home,
+    Guide,
+    Topic,
+    Idiom,
+    Construct,
+    Reference,
+    Diagnostic,
+    Cli,
+}
+
+/// Render the persistent site header.
+///
+/// `base` is the relative path prefix needed to reach the site root from the
+/// current page (empty string `""` for root-level pages, `"../"` for pages
+/// one directory deep). The active section is highlighted.
+fn render_header(active: NavSection, base: &str, search_script: &str) -> String {
+    let link = |section: NavSection, href: &str, label: &str| -> String {
+        let cls = if active == section {
+            " class=\"active\""
+        } else {
+            ""
+        };
+        format!("<a href=\"{base}{href}\"{cls}>{label}</a>")
+    };
+    let mut h = String::from("<nav class=\"site-header\">\n");
+    let _ = writeln!(
+        h,
+        "<a class=\"site-title\" href=\"{base}index.html\">Ip\u{ea} docs</a>"
+    );
+    h.push_str(&link(NavSection::Guide, "guide/index.html", "Guides"));
+    h.push('\n');
+    h.push_str(&link(NavSection::Topic, "topic/index.html", "Topics"));
+    h.push('\n');
+    h.push_str(&link(NavSection::Idiom, "idiom/index.html", "Idioms"));
+    h.push('\n');
+    h.push_str(&link(
+        NavSection::Construct,
+        "construct/index.html",
+        "Constructs",
+    ));
+    h.push('\n');
+    h.push_str("<span class=\"sep\">\u{2502}</span>\n");
+    h.push_str(&link(
+        NavSection::Reference,
+        "module/index.html",
+        "Reference",
+    ));
+    h.push('\n');
+    h.push_str(&link(
+        NavSection::Diagnostic,
+        "diagnostic/index.html",
+        "Diagnostics",
+    ));
+    h.push('\n');
+    h.push_str(&link(NavSection::Cli, "cli/index.html", "CLI"));
+    h.push('\n');
+    h.push_str(
+        "<span class=\"search-wrap\">\
+         <input type=\"search\" id=\"nav-search\" class=\"nav-search\" \
+         placeholder=\"Search\u{2026}\" aria-label=\"Search documentation\" \
+         autocomplete=\"off\">\
+         <ul class=\"search-results\" id=\"search-results\"></ul>\
+         </span>\n",
+    );
+    h.push_str("</nav>\n");
+    h.push_str(search_script);
+    h
+}
 
 /// Escape the five characters an HTML text/attribute context requires, so a type
 /// name or a doc-comment can never inject markup.
@@ -2958,37 +3164,108 @@ fn html_signature(pieces: &[SigPiece]) -> String {
 
 /// Wrap a page body in the shared HTML shell (doctype, `<head>` linking the
 /// bundled stylesheet, `<body>`).
-fn html_page(title: &str, body: &str) -> String {
+///
+/// `css_href` is the relative path to `style.css` from the page's location.
+/// `header` is the rendered persistent nav header (already HTML, inserted
+/// before the body wrapper). When absent, a bare `<body>` is emitted (used
+/// only by legacy callers that do not yet carry a header).
+fn html_page(title: &str, css_href: &str, header: &str, body: &str) -> String {
     format!(
         "<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n\
          <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n\
-         <title>{}</title>\n<link rel=\"stylesheet\" href=\"style.css\">\n</head>\n\
-         <body>\n{body}</body>\n</html>\n",
+         <title>{}</title>\n<link rel=\"stylesheet\" href=\"{css_href}\">\n</head>\n\
+         <body>\n{header}<div class=\"page-body\">\n{body}</div>\n</body>\n</html>\n",
         html_escape(title)
     )
 }
 
-/// Render the index page — the package's module list, project modules first
-/// under their labelled section, then the standard library. Each section is a
-/// hierarchical namespace tree with a client-side filter box.
-fn render_html_index(docs: &DocsJson) -> String {
-    let mut body = String::from("<h1>API documentation</h1>\n");
+/// Build the search script with the embedded entry index.
+///
+/// `entries` are (kind, key, title) triples for every searchable entry.
+/// `href_base` is the JS-level base path to prepend when building hrefs.
+fn build_search_script(entries: &[(&str, &str, &str)], href_base: &str) -> String {
+    use crate::cli_args::json;
+    let mut json_buf = String::from("[");
+    for (i, (kind, key, title)) in entries.iter().enumerate() {
+        if i > 0 {
+            json_buf.push(',');
+        }
+        let _ = std::fmt::Write::write_fmt(
+            &mut json_buf,
+            format_args!(
+                "{{\"kind\":{},\"key\":{},\"title\":{}}}",
+                json::string(kind),
+                json::string(key),
+                json::string(title)
+            ),
+        );
+    }
+    json_buf.push(']');
+    let json = json_buf;
+
+    let href_base_js = format!("'{}'", href_base.replace('\'', "\\'"));
+    SEARCH_SCRIPT_TEMPLATE
+        .replace("ENTRY_INDEX_PLACEHOLDER", &json)
+        .replace("HREF_BASE", &href_base_js)
+}
+
+/// Sort curated entries: entries with an explicit `order:` first (ascending),
+/// then alphabetically by title for the remainder.
+fn sort_curated_entries(entries: &mut Vec<&crate::doc_bundle::DocEntry>) {
+    entries.sort_by(|a, b| match (a.order, b.order) {
+        (Some(oa), Some(ob)) => oa.cmp(&ob).then_with(|| a.title.cmp(&b.title)),
+        (Some(_), None) => std::cmp::Ordering::Less,
+        (None, Some(_)) => std::cmp::Ordering::Greater,
+        (None, None) => a.title.cmp(&b.title),
+    });
+}
+
+/// Extract a one-line summary from a Markdown body -- the first non-blank,
+/// non-heading prose sentence (stripped of backtick markers). Returns an empty
+/// string when no suitable sentence is found.
+fn first_sentence(body: &str) -> String {
+    for line in body.lines() {
+        let t = line.trim();
+        if t.is_empty() || t.starts_with('#') || t.starts_with("---") {
+            continue;
+        }
+        // Drop backtick delimiters for a plain-text summary.
+        let plain: String = t.chars().filter(|&c| c != '`').take(120).collect();
+        return plain;
+    }
+    String::new()
+}
+
+/// Render the Reference (module) index page.
+///
+/// Lists all module entries; each links to its module page. Modules are
+/// presented in the same hierarchical namespace tree used on the old landing.
+fn render_reference_index(docs: &DocsJson, search_script: &str) -> String {
+    let header = render_header(NavSection::Reference, "../", search_script);
+    let mut body = String::from("<h1>Reference</h1>\n");
     body.push_str(
         "<input type=\"search\" id=\"filter\" class=\"filter\" \
          placeholder=\"Filter modules\u{2026}\" aria-label=\"Filter modules\" \
          autocomplete=\"off\">\n",
     );
 
-    render_html_module_section(&mut body, docs, ModuleKind::Local, LABEL_PROJECT);
-    render_html_module_section(&mut body, docs, ModuleKind::Stdlib, LABEL_STDLIB);
+    render_html_module_section_relative(&mut body, docs, ModuleKind::Local, LABEL_PROJECT);
+    render_html_module_section_relative(&mut body, docs, ModuleKind::Stdlib, LABEL_STDLIB);
 
     body.push_str(FILTER_SCRIPT);
-    html_page("API documentation", &body)
+    html_page("Reference", "../style.css", &header, &body)
 }
 
-/// Append one labelled module section as a hierarchical namespace tree to the
-/// index body. A section with no modules is omitted.
-fn render_html_module_section(body: &mut String, docs: &DocsJson, kind: ModuleKind, label: &str) {
+/// Render one module section for the reference index.
+///
+/// Like `render_html_module_section` but links resolve relative to
+/// `module/index.html` (one level down), so paths are `../{stem}.html`.
+fn render_html_module_section_relative(
+    body: &mut String,
+    docs: &DocsJson,
+    kind: ModuleKind,
+    label: &str,
+) {
     let names: Vec<&str> = docs
         .modules
         .iter()
@@ -3004,15 +3281,239 @@ fn render_html_module_section(body: &mut String, docs: &DocsJson, kind: ModuleKi
         html_escape(label)
     );
     let tree = build_namespace_tree(&names);
-    render_html_tree(&tree, body);
+    render_html_tree_relative(&tree, body);
     body.push_str("</section>\n");
+}
+
+/// Render a namespace tree with links relative to a subdirectory page.
+///
+/// Module links use `../{stem}.html` (one level up from `module/index.html`).
+fn render_html_tree_relative(nodes: &[NamespaceNode], out: &mut String) {
+    out.push_str("<ul class=\"modules\">\n");
+    for node in nodes {
+        out.push_str("<li class=\"module\"");
+        let _ = write!(
+            out,
+            " data-name=\"{}\"",
+            html_escape(&node.full_name.to_lowercase())
+        );
+        out.push('>');
+        if node.is_module {
+            let stem = module_stem(&node.full_name);
+            let _ = write!(
+                out,
+                "<a href=\"../{stem}.html\">{}</a>",
+                html_escape(&node.full_name)
+            );
+        } else {
+            let _ = write!(
+                out,
+                "<span class=\"ns-header\">{}</span>",
+                html_escape(&node.full_name)
+            );
+        }
+        if !node.children.is_empty() {
+            out.push('\n');
+            render_html_tree_relative(&node.children, out);
+        }
+        out.push_str("</li>\n");
+    }
+    out.push_str("</ul>\n");
+}
+
+/// Render the Diagnostics index page.
+///
+/// Lists all `Diagnostic` entries (`IPE-Xnnnn — title`), each linking to its
+/// page.
+fn render_diagnostic_index(bundle: &crate::doc_bundle::DocBundle, search_script: &str) -> String {
+    let header = render_header(NavSection::Diagnostic, "../", search_script);
+    let mut body = String::from("<h1>Diagnostics</h1>\n");
+    body.push_str("<ul class=\"index-entries\">\n");
+    let mut entries: Vec<&crate::doc_bundle::DocEntry> = bundle
+        .entries_for_kind(crate::doc_bundle::DocKind::Diagnostic)
+        .collect();
+    entries.sort_by(|a, b| a.key.cmp(&b.key));
+    for entry in entries {
+        let href = format!(
+            "../{}/{}.html",
+            entry.kind.prefix(),
+            html_escape(&entry.key)
+        );
+        let _ = writeln!(
+            body,
+            "<li><a href=\"{href}\">{}</a><span class=\"entry-key\">{}</span></li>",
+            html_escape(&entry.key),
+            html_escape(&entry.title),
+        );
+    }
+    body.push_str("</ul>\n");
+    html_page("Diagnostics", "../style.css", &header, &body)
+}
+
+/// Render the CLI index page.
+///
+/// Lists all `Cli` entries (subcommand — summary), each linking to its page.
+fn render_cli_index(bundle: &crate::doc_bundle::DocBundle, search_script: &str) -> String {
+    let header = render_header(NavSection::Cli, "../", search_script);
+    let mut body = String::from("<h1>CLI</h1>\n");
+    body.push_str("<ul class=\"index-entries\">\n");
+    let mut entries: Vec<&crate::doc_bundle::DocEntry> = bundle
+        .entries_for_kind(crate::doc_bundle::DocKind::Cli)
+        .collect();
+    entries.sort_by(|a, b| a.key.cmp(&b.key));
+    for entry in entries {
+        let href = format!(
+            "../{}/{}.html",
+            entry.kind.prefix(),
+            html_escape(&entry.key)
+        );
+        let summary = first_sentence(&entry.body);
+        let _ = write!(
+            body,
+            "<li><a href=\"{href}\">{}</a>",
+            html_escape(&entry.key),
+        );
+        if !summary.is_empty() {
+            let _ = write!(
+                body,
+                "<span class=\"entry-key\">{}</span>",
+                html_escape(&summary),
+            );
+        }
+        body.push_str("</li>\n");
+    }
+    body.push_str("</ul>\n");
+    html_page("CLI", "../style.css", &header, &body)
+}
+
+/// Render per-kind index pages for curated kinds (Guide, Topic, Idiom, Construct).
+///
+/// Each page lists its entries with title and summary. Returns a map of
+/// `{kind}/index.html` → HTML content.
+fn render_curated_kind_indexes(
+    bundle: &crate::doc_bundle::DocBundle,
+    search_script: &str,
+) -> BTreeMap<String, String> {
+    let mut out = BTreeMap::new();
+    let curated = [
+        (
+            crate::doc_bundle::DocKind::Guide,
+            "Guides",
+            NavSection::Guide,
+        ),
+        (
+            crate::doc_bundle::DocKind::Topic,
+            "Topics",
+            NavSection::Topic,
+        ),
+        (
+            crate::doc_bundle::DocKind::Idiom,
+            "Idioms",
+            NavSection::Idiom,
+        ),
+        (
+            crate::doc_bundle::DocKind::Construct,
+            "Constructs",
+            NavSection::Construct,
+        ),
+    ];
+    for (kind, label, nav) in curated {
+        let header = render_header(nav, "../", search_script);
+        let mut body = format!("<h1>{}</h1>\n", html_escape(label));
+        let mut entries: Vec<&crate::doc_bundle::DocEntry> =
+            bundle.entries_for_kind(kind).collect();
+        sort_curated_entries(&mut entries);
+        body.push_str("<ul class=\"curated-entries\">\n");
+        for entry in entries {
+            let href = format!("../{}/{}.html", kind.prefix(), html_escape(&entry.key));
+            let summary = first_sentence(&entry.body);
+            let _ = write!(
+                body,
+                "<li><a href=\"{href}\" class=\"entry-title\">{}</a>",
+                html_escape(&entry.title)
+            );
+            if !summary.is_empty() {
+                let _ = write!(
+                    body,
+                    "<span class=\"entry-summary\">{}</span>",
+                    html_escape(&summary)
+                );
+            }
+            body.push_str("</li>\n");
+        }
+        body.push_str("</ul>\n");
+        let page = html_page(label, "../style.css", &header, &body);
+        out.insert(format!("{}/index.html", kind.prefix()), page);
+    }
+    out
+}
+
+/// Render the teach-first landing page.
+///
+/// Lists curated kinds in teach order: Guides → Topics → Idioms → Constructs.
+/// Each kind section lists its entries ordered by front-matter `order:` then
+/// alphabetically by title. Generated kinds (Reference, Diagnostics, CLI) are
+/// reachable in one click from the header.
+fn render_html_index(
+    _docs: &DocsJson,
+    bundle: &crate::doc_bundle::DocBundle,
+    search_script: &str,
+) -> String {
+    let header = render_header(NavSection::Home, "", search_script);
+    let mut body = String::from("<h1>Documentation</h1>\n");
+
+    let curated = [
+        (crate::doc_bundle::DocKind::Guide, "Guides"),
+        (crate::doc_bundle::DocKind::Topic, "Topics"),
+        (crate::doc_bundle::DocKind::Idiom, "Idioms"),
+        (crate::doc_bundle::DocKind::Construct, "Constructs"),
+    ];
+
+    for (kind, label) in curated {
+        let mut entries: Vec<&crate::doc_bundle::DocEntry> =
+            bundle.entries_for_kind(kind).collect();
+        if entries.is_empty() {
+            continue;
+        }
+        sort_curated_entries(&mut entries);
+        let _ = writeln!(body, "<section class=\"kind-group\">");
+        let _ = writeln!(body, "<h2>{}</h2>", html_escape(label));
+        body.push_str("<ul class=\"curated-entries\">\n");
+        for entry in entries {
+            let href = format!("{}/{}.html", kind.prefix(), html_escape(&entry.key));
+            let summary = first_sentence(&entry.body);
+            let _ = write!(
+                body,
+                "<li><a href=\"{href}\" class=\"entry-title\">{}</a>",
+                html_escape(&entry.title)
+            );
+            if !summary.is_empty() {
+                let _ = write!(
+                    body,
+                    "<span class=\"entry-summary\">{}</span>",
+                    html_escape(&summary)
+                );
+            }
+            body.push_str("</li>\n");
+        }
+        body.push_str("</ul>\n</section>\n");
+    }
+
+    if body == "<h1>Documentation</h1>\n" {
+        // No curated entries yet -- show the module index as a fallback.
+        body.push_str("<p>See <a href=\"module/index.html\">Reference</a> for the full API.</p>\n");
+    }
+
+    html_page("Documentation", "style.css", &header, &body)
 }
 
 /// Render one module's page — its doc-comment, its exposed types and values,
 /// each entry carrying a stable `id` anchor and its cross-linked signature.
-fn render_html_module(module: &ModuleDoc, index: &AnchorIndex) -> String {
-    let mut body =
-        String::from("<nav class=\"crumb\"><a href=\"index.html\">&larr; all modules</a></nav>\n");
+fn render_html_module(module: &ModuleDoc, index: &AnchorIndex, search_script: &str) -> String {
+    let header = render_header(NavSection::Reference, "", search_script);
+    let mut body = String::from(
+        "<nav class=\"crumb\"><a href=\"module/index.html\">&larr; Reference</a></nav>\n",
+    );
     let _ = writeln!(body, "<h1>{}</h1>", html_escape(&module.name));
     if !module.comment.is_empty() {
         body.push_str(&render_comment_html(&module.comment));
@@ -3063,7 +3564,7 @@ fn render_html_module(module: &ModuleDoc, index: &AnchorIndex) -> String {
         }
     }
 
-    html_page(&module.name, &body)
+    html_page(&module.name, "style.css", &header, &body)
 }
 
 // ===========================================================================
@@ -3088,7 +3589,9 @@ fn serve(path: &Path, port: Option<u16>) -> Result<(), CliError> {
     use std::net::TcpListener;
 
     let docs = build_docs(path).unwrap_or_else(|_| build_stdlib_only_docs());
-    let site = render_site_for_serve(&docs);
+    let docs_root = locate_docs_root();
+    let bundle = build_doc_bundle(&docs_root)?;
+    let site = render_site_for_serve(&docs, &bundle);
 
     let addr = format!("127.0.0.1:{}", port.unwrap_or(0));
     let listener = TcpListener::bind(&addr).map_err(|e| crate::io_err(Path::new(&addr), e))?;
@@ -3623,30 +4126,23 @@ mod tests {
         let module = color_module();
         let docs = one_module_docs(color_module());
         let index = AnchorIndex::build(&docs);
+        let bundle = crate::doc_bundle::DocBundle::empty();
+        let search_script = build_site_search_script(&bundle, "");
 
-        let idx = render_html_index(&docs);
+        let idx = render_html_index(&docs, &bundle, &search_script);
         assert!(idx.contains("<!DOCTYPE html>"));
         assert!(idx.contains("href=\"style.css\""), "links the bundled CSS");
+        // The header is present on the landing page with all nav links.
         assert!(
-            idx.contains("href=\"M.html\">M</a>"),
-            "lists the module: {idx}"
-        );
-        // The filter box and its no-dependency inline script are present.
-        assert!(
-            idx.contains("<input type=\"search\" id=\"filter\""),
-            "the index carries a search box: {idx}"
+            idx.contains("module/index.html"),
+            "reference link present: {idx}"
         );
         assert!(
-            idx.contains("addEventListener('input'"),
-            "the inline filter script is bundled: {idx}"
-        );
-        // A local module lands under the project-modules section label.
-        assert!(
-            idx.contains(LABEL_PROJECT),
-            "the project section label is present: {idx}"
+            idx.contains("nav-search"),
+            "the nav search box is present: {idx}"
         );
 
-        let page = render_html_module(&module, &index);
+        let page = render_html_module(&module, &index, &search_script);
         assert!(
             page.contains("id=\"Color\""),
             "the type has a stable anchor"
@@ -3658,6 +4154,11 @@ mod tests {
         assert!(
             page.contains("<a href=\"M.html#Color\">M.Color</a>"),
             "the in-package type links: {page}"
+        );
+        // Module page carries the persistent header.
+        assert!(
+            page.contains("module/index.html"),
+            "module page has reference link: {page}"
         );
     }
 
@@ -3684,13 +4185,15 @@ mod tests {
     }
 
     #[test]
-    fn html_index_groups_local_before_stdlib_with_section_labels() {
-        // Feed both kinds; the model is already local-first (build_docs order).
+    fn reference_index_groups_local_before_stdlib_with_section_labels() {
+        // Feed both kinds; the reference index presents them in their section order.
         let docs = DocsJson {
             version: DOCS_JSON_VERSION,
             modules: vec![local_module("App"), stdlib_module("Ipe.List")],
         };
-        let idx = render_html_index(&docs);
+        let bundle = crate::doc_bundle::DocBundle::empty();
+        let search_script = build_site_search_script(&bundle, "../");
+        let idx = render_reference_index(&docs, &search_script);
 
         // Both section labels render.
         assert!(idx.contains(LABEL_PROJECT), "project label: {idx}");
@@ -3699,6 +4202,8 @@ mod tests {
         let p = idx.find(LABEL_PROJECT).expect("project label present");
         let s = idx.find(LABEL_STDLIB).expect("stdlib label present");
         assert!(p < s, "project section comes first: {idx}");
+        // The reference index lists the module with a link to its page.
+        assert!(idx.contains("App.html"), "App module linked: {idx}");
     }
 
     #[test]
@@ -3795,7 +4300,8 @@ mod tests {
             version: DOCS_JSON_VERSION,
             modules: vec![local_module("App"), stdlib_module("Ipe.List")],
         };
-        let (json, markdown, html) = render_site_split(&docs, WriteFormat::All);
+        let bundle = crate::doc_bundle::DocBundle::empty();
+        let (json, markdown, html) = render_site_split(&docs, &bundle, WriteFormat::All);
         assert!(json.contains_key("docs.json"), "json map has docs.json");
         assert!(
             markdown.contains_key("index.md"),
@@ -3812,12 +4318,26 @@ mod tests {
         assert!(html.contains_key("index.html"), "html map has index.html");
         assert!(html.contains_key("style.css"), "html map has stylesheet");
         assert!(html.contains_key("App.html"), "html map has module page");
+        // Per-kind index pages are included in the html map.
+        assert!(
+            html.contains_key("module/index.html"),
+            "html map has reference index: {html:?}"
+        );
+        assert!(
+            html.contains_key("diagnostic/index.html"),
+            "html map has diagnostics index: {html:?}"
+        );
+        assert!(
+            html.contains_key("cli/index.html"),
+            "html map has cli index: {html:?}"
+        );
     }
 
     #[test]
     fn render_site_split_json_only_omits_markdown_and_html() {
         let docs = one_module_docs(local_module("App"));
-        let (json, markdown, html) = render_site_split(&docs, WriteFormat::Json);
+        let bundle = crate::doc_bundle::DocBundle::empty();
+        let (json, markdown, html) = render_site_split(&docs, &bundle, WriteFormat::Json);
         assert!(json.contains_key("docs.json"));
         assert!(markdown.is_empty(), "no markdown for Json format");
         assert!(html.is_empty(), "no html for Json format");
@@ -3826,7 +4346,8 @@ mod tests {
     #[test]
     fn render_site_split_markdown_only_omits_html() {
         let docs = one_module_docs(local_module("App"));
-        let (json, markdown, html) = render_site_split(&docs, WriteFormat::Markdown);
+        let bundle = crate::doc_bundle::DocBundle::empty();
+        let (json, markdown, html) = render_site_split(&docs, &bundle, WriteFormat::Markdown);
         assert!(json.contains_key("docs.json"));
         assert!(!markdown.is_empty());
         assert!(html.is_empty());
@@ -3956,7 +4477,7 @@ mod tests {
     }
 
     #[test]
-    fn html_index_nests_submodules_in_child_ul() {
+    fn reference_index_nests_submodules_in_child_ul() {
         let docs = DocsJson {
             version: DOCS_JSON_VERSION,
             modules: vec![
@@ -3965,7 +4486,9 @@ mod tests {
                 stdlib_module("Ipe.List"),
             ],
         };
-        let idx = render_html_index(&docs);
+        let bundle = crate::doc_bundle::DocBundle::empty();
+        let search_script = build_site_search_script(&bundle, "../");
+        let idx = render_reference_index(&docs, &search_script);
         // Ipe.Db.Codec must appear inside a nested <ul> inside Ipe's <li>
         // The simplest proxy: Ipe.Db.Codec's <a> appears after Ipe.Db's <a>,
         // and there must be a nested <ul> between them.
@@ -3987,7 +4510,9 @@ mod tests {
             version: DOCS_JSON_VERSION,
             modules: vec![stdlib_module("Ipe.List"), stdlib_module("Ipe.String")],
         };
-        let idx = render_html_index(&docs);
+        let bundle = crate::doc_bundle::DocBundle::empty();
+        let search_script = build_site_search_script(&bundle, "../");
+        let idx = render_reference_index(&docs, &search_script);
         // "Ipe" should appear as a span.ns-header, not a link.
         assert!(
             idx.contains("class=\"ns-header\">Ipe<"),
@@ -4009,5 +4534,243 @@ mod tests {
         // "Ipe" prefix has no module → bold non-link header.
         assert!(idx.contains("**Ipe**"), "pure prefix is bold: {idx}");
         assert!(!idx.contains("[Ipe]"), "pure prefix is not linked: {idx}");
+    }
+
+    // ── Slice-2: HTML site navigation ─────────────────────────────────────
+
+    /// Build a minimal bundle with one entry per generated kind plus curated.
+    fn nav_test_bundle() -> crate::doc_bundle::DocBundle {
+        use crate::doc_bundle::{BundleSource, DocBundle};
+        let modules = vec![BundleSource::titled("Ipe.List", "Ipe.List")];
+        let symbols = vec![];
+        let diagnostics = vec![BundleSource::with_body(
+            "IPE-L0107",
+            "IPE-L0107",
+            "No functions in record fields.",
+        )];
+        let cli = vec![BundleSource::with_body(
+            "build",
+            "build",
+            "Compile the project.",
+        )];
+        // docs_root does not exist; curated directories are absent → zero entries.
+        let docs_root = std::path::Path::new("/nonexistent");
+        DocBundle::build(docs_root, &modules, &symbols, &diagnostics, &cli)
+            .expect("nav_test_bundle")
+    }
+
+    #[test]
+    fn header_appears_on_landing_module_and_guide_pages() {
+        let docs = one_module_docs(local_module("App"));
+        let bundle = nav_test_bundle();
+        let search = build_site_search_script(&bundle, "");
+        let ref_search = build_site_search_script(&bundle, "../");
+
+        // Landing page.
+        let landing = render_html_index(&docs, &bundle, &search);
+        assert!(
+            landing.contains("module/index.html"),
+            "landing header has reference link: {landing}"
+        );
+        assert!(
+            landing.contains("diagnostic/index.html"),
+            "landing header has diagnostics link: {landing}"
+        );
+        assert!(
+            landing.contains("cli/index.html"),
+            "landing header has cli link: {landing}"
+        );
+
+        // Module page.
+        let anchor = AnchorIndex::build(&docs);
+        let module_page =
+            render_html_module(docs.modules.first().expect("one module"), &anchor, &search);
+        assert!(
+            module_page.contains("module/index.html"),
+            "module page header has reference link: {module_page}"
+        );
+        assert!(
+            module_page.contains("diagnostic/index.html"),
+            "module page header has diagnostics link: {module_page}"
+        );
+
+        // Reference index page (one level down, uses ../).
+        let ref_page = render_reference_index(&docs, &ref_search);
+        assert!(
+            ref_page.contains("../module/index.html")
+                || ref_page.contains("../diagnostic/index.html"),
+            "reference index header present: {ref_page}"
+        );
+    }
+
+    #[test]
+    fn landing_page_lists_curated_kinds_in_teach_order() {
+        // The landing page places Guides before Topics, Topics before Idioms, etc.
+        // With an empty bundle the landing renders a fallback paragraph.
+        // We need entries in curated kinds to verify order.
+        use crate::doc_bundle::DocBundle;
+        let docs = one_module_docs(local_module("App"));
+        let bundle = {
+            let mut b = DocBundle::empty();
+            b.insert(
+                crate::doc_bundle::DocKind::Guide,
+                "getting-started".to_owned(),
+                "Getting Started".to_owned(),
+                "Begin here.".to_owned(),
+            )
+            .unwrap();
+            b.insert(
+                crate::doc_bundle::DocKind::Topic,
+                "types".to_owned(),
+                "Types".to_owned(),
+                "Type system overview.".to_owned(),
+            )
+            .unwrap();
+            b
+        };
+        let search = build_site_search_script(&bundle, "");
+        let landing = render_html_index(&docs, &bundle, &search);
+
+        // "Guides" section heading must precede "Topics" section heading.
+        let guide_pos = landing.find("Guides").expect("Guides section");
+        let topic_pos = landing.find("Topics").expect("Topics section");
+        assert!(
+            guide_pos < topic_pos,
+            "Guides precedes Topics in teach order: {landing}"
+        );
+    }
+
+    #[test]
+    fn landing_respects_front_matter_order_within_kind() {
+        // sort_curated_entries puts order=0 before order=1, and both before unordered.
+        let first = crate::doc_bundle::DocEntry {
+            kind: crate::doc_bundle::DocKind::Guide,
+            key: "first".to_owned(),
+            title: "First Guide".to_owned(),
+            body: String::new(),
+            order: Some(0),
+        };
+        let second = crate::doc_bundle::DocEntry {
+            kind: crate::doc_bundle::DocKind::Guide,
+            key: "second".to_owned(),
+            title: "Second Guide".to_owned(),
+            body: String::new(),
+            order: Some(1),
+        };
+        let unordered = crate::doc_bundle::DocEntry {
+            kind: crate::doc_bundle::DocKind::Guide,
+            key: "zz-alpha".to_owned(),
+            title: "Alpha".to_owned(),
+            body: String::new(),
+            order: None,
+        };
+        let mut to_sort = vec![&second, &unordered, &first];
+        sort_curated_entries(&mut to_sort);
+        assert_eq!(
+            to_sort.first().map(|e| e.key.as_str()),
+            Some("first"),
+            "order:0 comes first"
+        );
+        assert_eq!(
+            to_sort.get(1).map(|e| e.key.as_str()),
+            Some("second"),
+            "order:1 comes second"
+        );
+        assert_eq!(
+            to_sort.last().map(|e| e.key.as_str()),
+            Some("zz-alpha"),
+            "unordered entry last"
+        );
+    }
+
+    #[test]
+    fn reference_index_is_one_click_from_header() {
+        let docs = DocsJson {
+            version: DOCS_JSON_VERSION,
+            modules: vec![stdlib_module("Ipe.List")],
+        };
+        let bundle = nav_test_bundle();
+        let ref_search = build_site_search_script(&bundle, "../");
+        let ref_page = render_reference_index(&docs, &ref_search);
+
+        // The reference page lists the known module with a link.
+        assert!(
+            ref_page.contains("Ipe.List"),
+            "Ipe.List appears in reference index: {ref_page}"
+        );
+        assert!(
+            ref_page.contains("Ipe-List.html"),
+            "reference index links to module page: {ref_page}"
+        );
+    }
+
+    #[test]
+    fn diagnostic_index_lists_known_code() {
+        let bundle = nav_test_bundle();
+        let ref_search = build_site_search_script(&bundle, "../");
+        let page = render_diagnostic_index(&bundle, &ref_search);
+
+        assert!(
+            page.contains("IPE-L0107"),
+            "known diagnostic appears in index: {page}"
+        );
+        assert!(
+            page.contains("<!DOCTYPE html>"),
+            "diagnostics index is a valid HTML page: {page}"
+        );
+    }
+
+    #[test]
+    fn cli_index_lists_known_subcommand() {
+        let bundle = nav_test_bundle();
+        let ref_search = build_site_search_script(&bundle, "../");
+        let page = render_cli_index(&bundle, &ref_search);
+
+        assert!(
+            page.contains("build"),
+            "known cli command appears in index: {page}"
+        );
+        assert!(
+            page.contains("<!DOCTYPE html>"),
+            "cli index is a valid HTML page: {page}"
+        );
+    }
+
+    #[test]
+    fn search_index_is_embedded_valid_json_with_multiple_kinds() {
+        let bundle = nav_test_bundle();
+        let script = build_site_search_script(&bundle, "");
+
+        // The script contains a JSON array literal starting with '['.
+        let json_start = script.find('[').expect("JSON array start in script");
+        let json_end = script.rfind(']').expect("JSON array end in script");
+        let json_str = &script[json_start..=json_end];
+
+        // Must be parseable as a JSON array (minimal validation without serde).
+        assert!(json_str.starts_with('['), "JSON array starts with [");
+        assert!(json_str.ends_with(']'), "JSON array ends with ]");
+
+        // Contains entries for multiple kinds (module + diagnostic + cli).
+        assert!(
+            json_str.contains("\"module\"") && json_str.contains("\"diagnostic\""),
+            "search index contains multiple kinds: {json_str}"
+        );
+
+        // The inline script element is present.
+        assert!(
+            script.contains("<script>"),
+            "search script contains <script> tag"
+        );
+    }
+
+    #[test]
+    fn serve_file_name_handles_subdirectory_paths() {
+        // Paths like /module/index.html must map correctly.
+        assert_eq!(serve_file_name("/module/index.html"), "module/index.html");
+        assert_eq!(
+            serve_file_name("/diagnostic/index.html"),
+            "diagnostic/index.html"
+        );
+        assert_eq!(serve_file_name("/cli/index.html"), "cli/index.html");
     }
 }

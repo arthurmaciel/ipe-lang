@@ -121,9 +121,11 @@ fn generate_writes_a_self_contained_html_site_with_anchors_and_xrefs() -> io::Re
         index.contains("href=\"style.css\""),
         "the index links the bundled CSS:\n{index}"
     );
+    // The landing page is now teach-first; module links live in module/index.html.
+    let module_index = fs::read_to_string(html_dir.join("module").join("index.html"))?;
     assert!(
-        index.contains("href=\"Shapes.html\""),
-        "the index lists the module:\n{index}"
+        module_index.contains("href=\"../Shapes.html\""),
+        "the module index lists the module:\n{module_index}"
     );
     assert!(
         html_dir.join("style.css").exists(),
