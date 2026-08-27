@@ -116,6 +116,7 @@ use ipe_types::{VarNamer, kernel_type_table, ty_to_doc};
 use crate::CliError;
 use crate::api_surface::{ModuleApi, ModulePath, PublicApi, UnionApi, extract_tree, read_tree};
 use crate::cli_args::OutputFormat;
+use crate::doc_bundle::{BundleSource, DocBundle, fuzzy_rank, is_qualified};
 
 /// The `docs.json` schema version. Bumped only on an incompatible shape change,
 /// so a consumer can refuse a document it does not understand rather than
@@ -581,37 +582,238 @@ fn build_index() -> Result<Index, CliError> {
 
 /// `ipe doc <key>` — look up any entity by key and render it.
 ///
-/// Resolves symbols, modules, diagnostic codes, constructs, and CLI commands
-/// via the `ipe_docs` content index. Renders rich by default, `--plain` for
-/// terse output, and `--json` for machine consumers.
-fn run_doc_lookup(key: &str, format: OutputFormat) -> Result<(), CliError> {
-    let index = build_index()?;
+/// Build the unified [`DocBundle`] from all documentation sources.
+///
+/// Modules and symbols from the stdlib, diagnostic codes from the embedded
+/// explain pages, CLI commands from `help.rs`, and markdown pages from the
+/// `docs/` directory-convention directories are all indexed together.
+///
+/// `docs_root` is normally the repo's `docs/` directory; when it is absent or
+/// unreachable, the directory-convention kinds yield zero entries (no error).
+fn build_doc_bundle(docs_root: &std::path::Path) -> Result<DocBundle, CliError> {
+    // Modules: one entry per stdlib module name.
+    let module_sources: Vec<BundleSource> = stdlib_module_names()
+        .into_iter()
+        .map(|name| BundleSource::titled(name.clone(), name))
+        .collect();
 
-    let Some(entry) = index.resolve(key) else {
+    // Symbols: sourced from the ipe_docs index (already built from parsed
+    // stdlib source).
+    let mut symbol_sources: Vec<BundleSource> = Vec::new();
+    {
+        use ipe_docs::IndexBuilder;
+        let mut builder = IndexBuilder::new();
+        let _ = builder.add_stdlib();
+        let _ = builder.add_compiled_stdlib();
+        let idx = builder.finish();
+        for key in idx.keys() {
+            if let Some(entry) = idx.resolve(key)
+                && matches!(entry.kind, ipe_docs::EntryKind::Symbol)
+            {
+                symbol_sources.push(BundleSource::with_body(
+                    key.to_owned(),
+                    key.to_owned(),
+                    entry.text.clone(),
+                ));
+            }
+        }
+    }
+
+    // Diagnostics: from the embedded explain pages.
+    let diagnostic_sources: Vec<BundleSource> = ipe_diagnostics::ALL_CODES
+        .iter()
+        .map(|code| {
+            let body = ipe_diagnostics::explain_page(*code)
+                .unwrap_or("")
+                .to_owned();
+            BundleSource::with_body(code.as_str().to_owned(), code.as_str().to_owned(), body)
+        })
+        .collect();
+
+    // CLI commands: from the COMMANDS registry.
+    let cli_sources: Vec<BundleSource> = crate::help::command_names()
+        .into_iter()
+        .filter_map(|name| {
+            crate::help::command_summary(name).map(|summary| {
+                BundleSource::with_body(name.to_owned(), name.to_owned(), summary.to_owned())
+            })
+        })
+        .collect();
+
+    DocBundle::build(
+        docs_root,
+        &module_sources,
+        &symbol_sources,
+        &diagnostic_sources,
+        &cli_sources,
+    )
+    .map_err(|e| CliError::UsageOwned(format!("ipe doc: bundle build error: {e}")))
+}
+
+/// `ipe doc kind:key` -- exact scoped bundle lookup.
+///
+/// Resolves a `kind:key` qualified reference against the unified bundle and
+/// renders the matched entry. On a miss, reports which keys are available in
+/// that kind.
+fn run_bundle_lookup(key: &str, format: OutputFormat) -> Result<(), CliError> {
+    // Locate the docs root relative to the repo, falling back gracefully when
+    // running outside the repo tree (e.g. a user's home directory).
+    let docs_root = locate_docs_root();
+    let bundle = build_doc_bundle(&docs_root)?;
+
+    match bundle.resolve_qualified(key) {
+        Ok(entry) => {
+            render_bundle_entry(entry, format);
+            Ok(())
+        }
+        Err(crate::doc_bundle::BundleError::UnknownKind(prefix)) => {
+            Err(CliError::UsageOwned(format!(
+                "ipe doc: `{prefix}` is not a known documentation kind\n\
+             Known kinds: module, symbol, diagnostic, construct, idiom, topic, guide, cli"
+            )))
+        }
+        Err(crate::doc_bundle::BundleError::UnknownKey { kind, key: k }) => {
+            let near: Vec<String> = bundle
+                .entries_for_kind(kind)
+                .take(5)
+                .map(|e| format!("  {}:{}", kind, e.key))
+                .collect();
+            let hint = if near.is_empty() {
+                String::from("  (no entries in this kind)")
+            } else {
+                near.join("\n")
+            };
+            Err(CliError::UsageOwned(format!(
+                "ipe doc: no `{kind}` entry for key `{k}`\n\
+                 Nearby keys:\n{hint}"
+            )))
+        }
+        Err(e) => Err(CliError::UsageOwned(format!("ipe doc: {e}"))),
+    }
+}
+
+/// `ipe doc <bare>` -- fuzzy search across all kinds.
+///
+/// First tries the existing `ipe_docs` index for exact matches (preserving
+/// backward-compatible behaviour for diagnostic codes, symbol keys, and module
+/// names). When the exact lookup misses, falls back to the bundle fuzzy ranker.
+fn run_doc_lookup_with_fuzzy(key: &str, format: OutputFormat) -> Result<(), CliError> {
+    // Try the legacy exact index first.
+    let index = build_index()?;
+    if let Some(entry) = index.resolve(key) {
+        let stdout = std::io::stdout();
+        match format {
+            OutputFormat::Plain => print!("{}", render_doc_entry_plain(entry)),
+            OutputFormat::Json => print!("{}", render_doc_entry_json(entry)),
+            OutputFormat::Human => {
+                let p = crate::style::Palette::for_stream(&stdout);
+                print!(
+                    "{}",
+                    crate::style::frame(&crate::style::gutter(&render_doc_entry_human(entry, p)))
+                );
+            }
+        }
+        return Ok(());
+    }
+
+    // No exact match: try fuzzy across the bundle.
+    let docs_root = locate_docs_root();
+    let bundle = build_doc_bundle(&docs_root)?;
+    let results = fuzzy_rank(&bundle, key);
+
+    if results.is_empty() {
         return Err(CliError::UsageOwned(format!(
             "ipe doc: no documentation found for `{key}`\n\
              \n\
              Try `ipe doc list` to browse available entries."
         )));
-    };
+    }
 
+    // One clear best: render it.
+    let Some(first) = results.first() else {
+        // Already checked `results.is_empty()` above; this branch is unreachable.
+        return Ok(());
+    };
+    let best_score = first.score;
+    let close: Vec<_> = results
+        .iter()
+        .take_while(|r| r.score >= best_score.saturating_sub(200))
+        .collect();
+
+    if let [only] = close.as_slice() {
+        render_bundle_entry(only.entry, format);
+        return Ok(());
+    }
+
+    // Several close results: print a ranked disambiguation list.
+    let mut list = format!("ipe doc: `{key}` is ambiguous. Did you mean one of:\n");
+    for r in &results {
+        let _ = writeln!(
+            list,
+            "  {}:{} -- {}",
+            r.entry.kind, r.entry.key, r.entry.title
+        );
+    }
+    Err(CliError::UsageOwned(list))
+}
+
+/// Render a [`crate::doc_bundle::DocEntry`] per the requested output format.
+fn render_bundle_entry(entry: &crate::doc_bundle::DocEntry, format: OutputFormat) {
     let stdout = std::io::stdout();
     match format {
         OutputFormat::Plain => {
-            print!("{}", render_doc_entry_plain(entry));
+            let mut out = entry.body.clone();
+            if !out.ends_with('\n') {
+                out.push('\n');
+            }
+            print!("{out}");
         }
         OutputFormat::Json => {
-            print!("{}", render_doc_entry_json(entry));
+            println!(
+                "{{\"kind\":{},\"key\":{},\"title\":{},\"body\":{}}}",
+                doc_json_str(entry.kind.prefix()),
+                doc_json_str(&entry.key),
+                doc_json_str(&entry.title),
+                doc_json_str(&entry.body),
+            );
         }
         OutputFormat::Human => {
             let p = crate::style::Palette::for_stream(&stdout);
-            print!(
-                "{}",
-                crate::style::frame(&crate::style::gutter(&render_doc_entry_human(entry, p)))
+            let mut out = String::new();
+            let _ = writeln!(
+                out,
+                "{}{}{}  {}[{}]{}",
+                p.bold, entry.key, p.reset, p.dim, entry.kind, p.reset
             );
+            if !entry.body.is_empty() {
+                out.push('\n');
+                out.push_str(&entry.body);
+                if !entry.body.ends_with('\n') {
+                    out.push('\n');
+                }
+            }
+            print!("{}", crate::style::frame(&crate::style::gutter(&out)));
         }
     }
-    Ok(())
+}
+
+/// Locate the `docs/` directory relative to the binary's own location, falling
+/// back to the current directory's `docs/` when a repo layout is not found.
+/// Returns a path that may not exist; callers must tolerate an absent root.
+fn locate_docs_root() -> std::path::PathBuf {
+    // Walk up from cwd looking for a `docs/` that exists.
+    let mut dir = std::env::current_dir().unwrap_or_default();
+    loop {
+        let candidate = dir.join("docs");
+        if candidate.is_dir() {
+            return candidate;
+        }
+        match dir.parent() {
+            Some(parent) => dir = parent.to_owned(),
+            None => break,
+        }
+    }
+    std::path::PathBuf::from("docs")
 }
 
 /// Plain (terse) rendering of a documentation entry: signature + example.
@@ -693,7 +895,13 @@ pub fn run_doc(rest: &[String]) -> Result<(), CliError> {
         }
         DocMode::Query { module, format } => query_module(&module, format),
         DocMode::CheckExamples => check_examples(),
-        DocMode::Lookup { key, format } => run_doc_lookup(&key, format),
+        DocMode::Lookup { key, format } => {
+            if is_qualified(&key) {
+                run_bundle_lookup(&key, format)
+            } else {
+                run_doc_lookup_with_fuzzy(&key, format)
+            }
+        }
     }
 }
 
