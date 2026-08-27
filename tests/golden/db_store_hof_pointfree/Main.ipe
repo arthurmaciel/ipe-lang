@@ -20,12 +20,14 @@ pointFreeStore : Result Error (Store Store.Row)
 pointFreeStore =
     Store.fromColumns "users" [ Store.textColumn "id" ]
         |> Result.map (StoreU.primaryKey "id")
+        |> Result.map Store.public
 
 -- Eta-expanded: the same mapper spelled as an explicit lambda.
 etaStore : Result Error (Store Store.Row)
 etaStore =
     Store.fromColumns "orders" [ Store.textColumn "id" ]
         |> Result.map (\s -> StoreU.primaryKey "id" s)
+        |> Result.map Store.public
 
 -- Same-module control: `Result.map` over an in-module ADT still lowers to the
 -- concrete in-module type, never JsonVal.

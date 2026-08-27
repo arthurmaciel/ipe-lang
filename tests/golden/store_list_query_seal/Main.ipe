@@ -65,7 +65,9 @@ main =
                                 (fetchNames db store)
                         )
                         (Task.fromResult
-                            (Store.fromColumns "names" [ Store.textColumn "name" ])
+                            (Result.map Store.public
+                                (Store.fromColumns "names" [ Store.textColumn "name" ])
+                            )
                         )
                 )
                 (Db.connect ())

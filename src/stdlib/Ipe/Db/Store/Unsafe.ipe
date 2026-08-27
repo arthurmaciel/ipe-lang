@@ -23,7 +23,7 @@ module Ipe.Db.Store.Unsafe exposing
     )
 
 
-import Ipe.Db.Store as Store exposing (Cond(..), CompareOp(..), Store)
+import Ipe.Db.Store as Store exposing (Cond(..), CompareOp(..), Draft)
 
 
 -- | `eq col value` — the rows where `col` equals `value`. `value` binds as a
@@ -142,62 +142,64 @@ inList col values =
 
 
 -- The column-spec builders below name a column by a bare string, for a
--- raw-column `Store.fromColumns` store that has no row type to name an accessor
--- against. Each delegates to the audited `*Named` helper in `Ipe.Db.Store`; the
--- string names the column, which is validated against the store's own columns
--- when the schema DDL is built, so a name absent from the store fails closed.
+-- raw-column `Store.fromColumns` draft that has no row type to name an accessor
+-- against. Each shapes the `Draft` (before classification), delegating to the
+-- audited `*Named` helper in `Ipe.Db.Store`; the string names the column, which
+-- is validated against the draft's own columns when the schema DDL is built, so a
+-- name absent from the draft fails closed.
 
 
--- | `primaryKey col store` — mark the string-named `col` the primary key.
+-- | `primaryKey col draft` — mark the string-named `col` the primary key.
 --
 -- Example:
 --
 --     Store.fromColumns "users" [ Store.textColumn "id" ]
 --         |> Result.map (Unsafe.primaryKey "id")
-primaryKey : String -> Store row -> Store row
-primaryKey col store =
-    Store.primaryKeyNamed col store
+--         |> Result.map Store.public
+primaryKey : String -> Draft row -> Draft row
+primaryKey col draft =
+    Store.primaryKeyNamed col draft
 
 
--- | `serial col store` — mark the string-named `col` DB-assigned (serial), so
+-- | `serial col draft` — mark the string-named `col` DB-assigned (serial), so
 -- `insert` omits it and the database generates it.
-serial : String -> Store row -> Store row
-serial col store =
-    Store.serialNamed col store
+serial : String -> Draft row -> Draft row
+serial col draft =
+    Store.serialNamed col draft
 
 
--- | `unique col store` — mark the string-named `col` unique.
-unique : String -> Store row -> Store row
-unique col store =
-    Store.uniqueNamed col store
+-- | `unique col draft` — mark the string-named `col` unique.
+unique : String -> Draft row -> Draft row
+unique col draft =
+    Store.uniqueNamed col draft
 
 
--- | `defaultNow col store` — mark the string-named `col` DB-stamped with the
+-- | `defaultNow col draft` — mark the string-named `col` DB-stamped with the
 -- current time on insert, so `insert` omits it and the database stamps it.
-defaultNow : String -> Store row -> Store row
-defaultNow col store =
-    Store.defaultNowNamed col store
+defaultNow : String -> Draft row -> Draft row
+defaultNow col draft =
+    Store.defaultNowNamed col draft
 
 
--- | `touchOnUpdate col store` — mark the string-named `col` a DB-stamped
+-- | `touchOnUpdate col draft` — mark the string-named `col` a DB-stamped
 -- updated-at column, omitted from every client write so the database owns it.
-touchOnUpdate : String -> Store row -> Store row
-touchOnUpdate col store =
-    Store.touchOnUpdateNamed col store
+touchOnUpdate : String -> Draft row -> Draft row
+touchOnUpdate col draft =
+    Store.touchOnUpdateNamed col draft
 
 
--- | `defaultText col value store` — give the string-named `col` a DB-level
+-- | `defaultText col value draft` — give the string-named `col` a DB-level
 -- `DEFAULT` of the text `value`. The literal is emitted through the same
 -- single-quote-doubling escape SQL string literals require, so `value` cannot
 -- break out of the literal.
-defaultText : String -> String -> Store row -> Store row
-defaultText col value store =
-    Store.defaultTextNamed col value store
+defaultText : String -> String -> Draft row -> Draft row
+defaultText col value draft =
+    Store.defaultTextNamed col value draft
 
 
--- | `defaultInt col value store` — give the string-named `col` a DB-level
+-- | `defaultInt col value draft` — give the string-named `col` a DB-level
 -- `DEFAULT` of the integer `value`. An integer renders as its own decimal
 -- digits, so the emitted `DEFAULT` literal is always safe.
-defaultInt : String -> Int -> Store row -> Store row
-defaultInt col value store =
-    Store.defaultIntNamed col value store
+defaultInt : String -> Int -> Draft row -> Draft row
+defaultInt col value draft =
+    Store.defaultIntNamed col value draft

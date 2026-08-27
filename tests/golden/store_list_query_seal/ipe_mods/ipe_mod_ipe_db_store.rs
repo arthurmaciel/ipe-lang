@@ -97,6 +97,23 @@ impl IpeStringify for IpeDbStoreSchemaOp {
         }
     }
 }
+pub(crate) enum IpeDbStoreDraft<T1: 'static> {
+    Draft(RecCodecCurrentColumnsFrozenColumnsFrozenTableIndexesOpsPkSpecsTable<T1>),
+}
+impl<T1: Clone + 'static> Clone for IpeDbStoreDraft<T1> {
+    fn clone(&self) -> Self {
+        match self {
+            IpeDbStoreDraft::Draft(p0) => IpeDbStoreDraft::Draft(p0.clone()),
+        }
+    }
+}
+impl<T1: IpeStringify + std::fmt::Debug + 'static> IpeStringify for IpeDbStoreDraft<T1> {
+    fn ipe_show(&self) -> String {
+        match self {
+            IpeDbStoreDraft::Draft(_) => format!("Draft {}", "<fn>"),
+        }
+    }
+}
 pub(crate) enum IpeDbStoreStore<T1: 'static> {
     Store(RecCodecCurrentColumnsFrozenColumnsFrozenTableIndexesOpsPkSpecsTable<T1>),
 }
@@ -333,7 +350,7 @@ pub(crate) fn user_ipe_db_store_text_column(name: String) -> IpeDbStoreColumn {
 pub(crate) fn user_ipe_db_store_from_columns(
     table: String,
     columns: Vec<IpeDbStoreColumn>,
-) -> IpeResult<ipe_runtime::error::IpeError, IpeDbStoreStore<HashMap<String, String>>> {
+) -> IpeResult<ipe_runtime::error::IpeError, IpeDbStoreDraft<HashMap<String, String>>> {
     let _ipe_recursion_guard = crate::recursion_guard();
     crate::user_ipe_db_store_build_store(
         table,
@@ -345,7 +362,7 @@ pub(crate) fn user_ipe_db_store_build_store<T1: Clone>(
     table: String,
     columns: Vec<IpeDbStoreColumn>,
     codec: IpeCodecCodec<T1>,
-) -> IpeResult<ipe_runtime::error::IpeError, IpeDbStoreStore<T1>> {
+) -> IpeResult<ipe_runtime::error::IpeError, IpeDbStoreDraft<T1>> {
     let _ipe_recursion_guard = crate::recursion_guard();
     (if basics_not(crate::user_ipe_db_store_valid_sql_ident(table.clone())) {
         IpeResult::Err(
@@ -357,7 +374,7 @@ pub(crate) fn user_ipe_db_store_build_store<T1: Clone>(
                 crate::user_ipe_db_store_invalid_ident_error("column".to_string(), bad),
             ),
             IpeMaybe::Nothing => {
-                IpeResult::Ok(IpeDbStoreStore::Store(
+                IpeResult::Ok(IpeDbStoreDraft::Draft(
                     RecCodecCurrentColumnsFrozenColumnsFrozenTableIndexesOpsPkSpecsTable {
                         codec: codec,
                         currentColumns: columns.clone(),
@@ -476,6 +493,28 @@ pub(crate) fn user_ipe_db_store_row_cell(name: String, row: HashMap<String, Stri
     match dict_get(name, row.clone()) {
         IpeMaybe::Just(s) => s,
         IpeMaybe::Nothing => "".to_string(),
+    }
+}
+pub(crate) fn user_ipe_db_store_public<T1: Clone>(
+    draft: IpeDbStoreDraft<T1>,
+) -> IpeDbStoreStore<T1> {
+    let _ipe_recursion_guard = crate::recursion_guard();
+    match draft {
+        IpeDbStoreDraft::Draft(r) => {
+            IpeDbStoreStore::Store(
+                RecCodecCurrentColumnsFrozenColumnsFrozenTableIndexesOpsPkSpecsTable {
+                    codec: (r.clone()).codec.clone(),
+                    currentColumns: (r.clone()).currentColumns.clone(),
+                    frozenColumns: (r.clone()).frozenColumns.clone(),
+                    frozenTable: (r.clone()).frozenTable.clone(),
+                    indexes: (r.clone()).indexes.clone(),
+                    ops: (r.clone()).ops.clone(),
+                    pk: (r.clone()).pk.clone(),
+                    specs: (r.clone()).specs.clone(),
+                    table: (r).table.clone(),
+                },
+            )
+        }
     }
 }
 pub(crate) fn user_ipe_db_store_all<T1: 'static + Send + Sync + Clone>(

@@ -28,7 +28,7 @@ serialNoPkDdl =
             Err e
 
         Ok s ->
-            Store.createSql (StoreU.serial "id" s)
+            Store.createSql (Store.public (StoreU.serial "id" s))
 
 
 -- serial WITH a matching primaryKey spec — createSql must return Ok with the
@@ -40,7 +40,7 @@ serialWithPkDdl =
             Err e
 
         Ok s ->
-            Store.createSql (StoreU.primaryKey "id" (StoreU.serial "id" s))
+            Store.createSql (Store.public (StoreU.primaryKey "id" (StoreU.serial "id" s)))
 
 
 -- A plain store with no serial column: createSql is unaffected.
@@ -51,7 +51,7 @@ plainDdl =
             Err e
 
         Ok s ->
-            Store.createSql s
+            Store.createSql (Store.public s)
 
 
 serialNoPkLine : String

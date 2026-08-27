@@ -39,6 +39,7 @@ usersStore =
         , Store.intColumn "age"
         ]
         |> Result.map (StoreU.primaryKey "id")
+        |> Result.map Store.public
         |> Result.map (Store.renameColumn "name" "full_name")
         |> Result.map (Store.renameTable "accounts")
 
@@ -47,6 +48,7 @@ usersStore =
 noopStore : Result Error (Store Store.Row)
 noopStore =
     Store.fromColumns "items" [ Store.textColumn "id" ]
+        |> Result.map Store.public
         |> Result.map (Store.renameColumn "id" "id")
 
 

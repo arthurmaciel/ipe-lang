@@ -669,10 +669,17 @@ struct Builtins {
     /// `StoreEqBy` kernel scheme (`Codec t -> …`), so an enum/newtype column's
     /// comparison value is projected to a bound `SqlValue` through its own codec.
     codec_con: Symbol,
-    /// `"Store"` — the `Ipe.Db.Store.Store a` ADT, used as the parameter and
-    /// result of the accessor-typed column-spec builder kernel schemes
-    /// (`StorePrimaryKey` / `StoreSerial` / … / `StoreDefaultInt`).
+    /// `"Store"` — the `Ipe.Db.Store.Store a` ADT, the classified, queryable
+    /// table. Reads and writes accept a `Store a`; it is reachable only via
+    /// `public` / `secured` applied to a `Draft a` (deny-by-default).
     store_con: Symbol,
+    /// `"Draft"` — the `Ipe.Db.Store.Draft a` ADT, the unclassified table
+    /// `fromCodec` returns. Used as the parameter and result of the accessor-typed
+    /// schema-shaping builder kernel schemes (`StorePrimaryKey` / `StoreSerial` /
+    /// … / `StoreDefaultInt`): they refine a `Draft`, before classification. No
+    /// read or write kernel accepts a `Draft`, so an unclassified table is
+    /// unqueryable by construction.
+    draft_con: Symbol,
     /// `"Joined"` — the `Ipe.Db.Store.Joined a b` two-store inner-join ADT, the
     /// result of the `StoreJoin` kernel scheme
     /// (`Store a -> (a -> k) -> Store b -> (b -> k) -> Joined a b`). It carries
@@ -922,6 +929,7 @@ impl Builtins {
             topic_con: interner.intern("Topic")?,
             cond_con: interner.intern("Cond")?,
             store_con: interner.intern("Store")?,
+            draft_con: interner.intern("Draft")?,
             joined_con: interner.intern("Joined")?,
             policy_con: interner.intern("Policy")?,
             codec_con: interner.intern("Codec")?,
@@ -4469,6 +4477,16 @@ impl<'a> Builder<'a> {
             name: self.builtins.store_con,
             args: vec![row],
         };
+        // `Draft row` — the `Ipe.Db.Store.Draft a` unclassified-table ADT. The
+        // schema-shaping column-spec builders (`primaryKey` / `serial` / … /
+        // `defaultInt`) take and return a `Draft row`, so they refine the table
+        // before classification; no read/write kernel accepts a `Draft`, so an
+        // unclassified table is unqueryable by construction (deny-by-default).
+        let draft = |row: Ty| Ty::Con {
+            module: Vec::new(),
+            name: self.builtins.draft_con,
+            args: vec![row],
+        };
         // `Joined a b` — the two-store inner-join ADT (`Ipe.Db.Store`), the
         // result of `Store.join`. It carries both sides' row types so `toList`
         // returns `(a, b)` pairs decoded through each store's own codec.
@@ -6005,33 +6023,34 @@ impl<'a> Builder<'a> {
                 fun(fun(var(0), var(1)), fun(list(var(1)), cond(var(0)))),
             ),
 
-            // ── Db.Store column-spec builders (accessor-typed) ──
+            // ── Db.Store schema-shaping builders (accessor-typed) ──
             // `primaryKey / serial / unique / defaultNow / touchOnUpdate :
-            //   (row -> t) -> Store row -> Store row`
-            // The getter-arrow scheme pins the accessor's source type to the
-            // store's row type. `t` (var 1) is the field type — it is not
-            // constrained by the return type (any field may be a key/serial/…).
+            //   (row -> t) -> Draft row -> Draft row`
+            // They refine a `Draft` (the unclassified table), before
+            // classification. The getter-arrow scheme pins the accessor's source
+            // type to the draft's row type. `t` (var 1) is the field type — it is
+            // not constrained by the return type (any field may be a key/serial/…).
             K::StorePrimaryKey
             | K::StoreSerial
             | K::StoreUnique
             | K::StoreDefaultNow
             | K::StoreTouchOnUpdate => {
-                fun(fun(var(0), var(1)), fun(store(var(0)), store(var(0))))
+                fun(fun(var(0), var(1)), fun(draft(var(0)), draft(var(0))))
             }
 
-            // `defaultText : (row -> String) -> String -> Store row -> Store row`
+            // `defaultText : (row -> String) -> String -> Draft row -> Draft row`
             // The accessor must name a `String` field (pinned by the getter-arrow
             // scheme). The default value is a plain `String` argument.
             K::StoreDefaultText => fun(
                 fun(var(0), string()),
-                fun(string(), fun(store(var(0)), store(var(0)))),
+                fun(string(), fun(draft(var(0)), draft(var(0)))),
             ),
 
-            // `defaultInt : (row -> Int) -> Int -> Store row -> Store row`
+            // `defaultInt : (row -> Int) -> Int -> Draft row -> Draft row`
             // The accessor must name an `Int` field; the default value is `Int`.
             K::StoreDefaultInt => fun(
                 fun(var(0), int()),
-                fun(int(), fun(store(var(0)), store(var(0)))),
+                fun(int(), fun(draft(var(0)), draft(var(0)))),
             ),
 
             // ── Db.Store row-security policy builders (accessor-typed) ──
