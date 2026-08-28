@@ -168,10 +168,9 @@ pub enum RowTail {
 /// This is the single source of truth for the field-name set. The type
 /// checker interns exactly these strings for the `RetryPolicy` scheme, and the
 /// lowering gate recognises the closed record by matching this exact set — a
-/// record that is not exactly these five closed fields is not a `RetryPolicy`
+/// record that is not exactly these four closed fields is not a `RetryPolicy`
 /// and must not take the kernel-struct exemption.
-pub const RETRY_POLICY_FIELDS: [&str; 5] =
-    ["baseMs", "jitter", "kind", "maxAttempts", "shouldRetry"];
+pub const RETRY_POLICY_FIELDS: [&str; 4] = ["baseMs", "maxAttempts", "shouldRetry", "strategy"];
 
 /// The super-type obligations a type variable carries: the operations a body
 /// performs on it that only *some* types support.

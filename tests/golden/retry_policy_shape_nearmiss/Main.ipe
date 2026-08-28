@@ -5,7 +5,7 @@ import Ipe.Io as Io
 
 -- SEAL negative: a USER record that merely NAMES a `shouldRetry` field is NOT
 -- the kernel `RetryPolicy e` shape (the exact closed
--- `{ baseMs, jitter, kind, maxAttempts, shouldRetry }`). The RetryPolicy gate
+-- `{ baseMs, maxAttempts, shouldRetry, strategy }`). The RetryPolicy gate
 -- exemption must match that FULL closed signature, never a lone `shouldRetry`
 -- key — otherwise this record takes the kernel-struct carrier and the emitted
 -- crate fails `cargo build` (E0308, `Box` vs `Arc`) after ipe accepted (a SEAL

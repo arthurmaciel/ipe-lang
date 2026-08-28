@@ -101,6 +101,7 @@ const fn ir_type_is_definitely_copy(ty: &IrType) -> bool {
             | IrType::Bool
             | IrType::Char
             | IrType::Unit
+            | IrType::BackoffStrategy
             | IrType::Order
             | IrType::HttpMethod
             | IrType::Decimal
@@ -1983,20 +1984,22 @@ fn emit_task_retry_call(
         | KernelFn::TaskDefaultRetryPolicy
         | KernelFn::TaskWithMaxAttempts
         | KernelFn::TaskWithBaseMs
-        | KernelFn::TaskWithKind),
+        | KernelFn::BackoffLinear
+        | KernelFn::BackoffLinearWithJitter
+        | KernelFn::BackoffExponential
+        | KernelFn::BackoffExponentialWithJitter),
     ) = callee
     else {
         return Ok(None);
     };
 
-    // `RetryPolicy e = { baseMs, jitter, kind, maxAttempts, shouldRetry }` —
+    // `RetryPolicy e = { baseMs, maxAttempts, shouldRetry, strategy }` —
     // alphabetical BTreeMap order matches the emitted struct name.
     let rp_key: Vec<String> = vec![
         "baseMs".to_owned(),
-        "jitter".to_owned(),
-        "kind".to_owned(),
         "maxAttempts".to_owned(),
         "shouldRetry".to_owned(),
+        "strategy".to_owned(),
     ];
     // Only builders that construct a new struct need the struct name.
     // For the pure move-update builders (TaskWithJitter etc.) we look it up too
@@ -2006,7 +2009,7 @@ fn emit_task_retry_call(
         .map_err(|_| Diagnostic::CompilerBug {
             where_: "ipe_backend_rust::emit_task_retry_call",
             detail: "no synthesised struct for RetryPolicy fieldset \
-                 {baseMs, jitter, kind, maxAttempts, shouldRetry}; \
+                 {baseMs, maxAttempts, shouldRetry, strategy}; \
                  the lowerer must surface the RetryPolicy record type before emission"
                 .to_owned(),
         })?
@@ -2016,14 +2019,15 @@ fn emit_task_retry_call(
     match k {
         KernelFn::TaskDefaultRetryPolicy => {
             // `defaultRetryPolicy : RetryPolicy e` — 0-arg, emit inline literal.
-            // 3 attempts, 500 ms, exponential (kind=1), no jitter, always-retry.
+            // 3 attempts, 500 ms, exponential with jitter, always-retry.
             Ok(Some(format!(
-                "{rp_name} {{ baseMs: 500i64, jitter: false, kind: 1i64, \
-                 maxAttempts: 3i64, shouldRetry: ::std::sync::Arc::new(|_: IpeError| true) }}"
+                "{rp_name} {{ baseMs: 500i64, maxAttempts: 3i64, \
+                 shouldRetry: ::std::sync::Arc::new(|_: IpeError| true), \
+                 strategy: ipe_runtime::task::BackoffStrategy::ExponentialWithJitter }}"
             )))
         }
         KernelFn::TaskLinearBackoff => {
-            // `linearBackoff maxAttempts delayMs` — constant delay, kind=0.
+            // `linearBackoff maxAttempts delayMs` — constant delay, Linear strategy.
             let n = args.first().ok_or_else(|| Diagnostic::CompilerBug {
                 where_: "ipe_backend_rust::emit_task_retry_call",
                 detail: "TaskLinearBackoff expects 2 arguments (maxAttempts, delayMs)".to_owned(),
@@ -2035,12 +2039,13 @@ fn emit_task_retry_call(
             let n_s = emit_expr_at(ctx, n, indent, child, generics)?;
             let ms_s = emit_expr_at(ctx, ms, indent, child, generics)?;
             Ok(Some(format!(
-                "{rp_name} {{ baseMs: {ms_s}, jitter: false, kind: 0i64, \
-                 maxAttempts: {n_s}, shouldRetry: ::std::sync::Arc::new(|_: IpeError| true) }}"
+                "{rp_name} {{ baseMs: {ms_s}, maxAttempts: {n_s}, \
+                 shouldRetry: ::std::sync::Arc::new(|_: IpeError| true), \
+                 strategy: ipe_runtime::task::BackoffStrategy::Linear }}"
             )))
         }
         KernelFn::TaskExponentialBackoff => {
-            // `exponentialBackoff maxAttempts baseMs` — exponential, kind=1.
+            // `exponentialBackoff maxAttempts baseMs` — exponential, Exponential strategy.
             let n = args.first().ok_or_else(|| Diagnostic::CompilerBug {
                 where_: "ipe_backend_rust::emit_task_retry_call",
                 detail: "TaskExponentialBackoff expects 2 arguments (maxAttempts, baseMs)"
@@ -2054,19 +2059,30 @@ fn emit_task_retry_call(
             let n_s = emit_expr_at(ctx, n, indent, child, generics)?;
             let ms_s = emit_expr_at(ctx, ms, indent, child, generics)?;
             Ok(Some(format!(
-                "{rp_name} {{ baseMs: {ms_s}, jitter: false, kind: 1i64, \
-                 maxAttempts: {n_s}, shouldRetry: ::std::sync::Arc::new(|_: IpeError| true) }}"
+                "{rp_name} {{ baseMs: {ms_s}, maxAttempts: {n_s}, \
+                 shouldRetry: ::std::sync::Arc::new(|_: IpeError| true), \
+                 strategy: ipe_runtime::task::BackoffStrategy::Exponential }}"
             )))
         }
         KernelFn::TaskWithJitter => {
-            // `withJitter policy` — set jitter=true, MOVE the record.
+            // `withJitter policy` — upgrade strategy to its jitter variant.
+            // Linear → LinearWithJitter, Exponential → ExponentialWithJitter.
             let policy = args.first().ok_or_else(|| Diagnostic::CompilerBug {
                 where_: "ipe_backend_rust::emit_task_retry_call",
                 detail: "TaskWithJitter expects 1 argument (policy)".to_owned(),
             })?;
             let policy_s = emit_expr_at(ctx, policy, indent, child, generics)?;
             Ok(Some(format!(
-                "{{ let mut __ipe_rec = ({policy_s}); __ipe_rec.jitter = true; __ipe_rec }}"
+                "{{ \
+                 let mut __ipe_rec = ({policy_s}); \
+                 __ipe_rec.strategy = match __ipe_rec.strategy {{ \
+                 ipe_runtime::task::BackoffStrategy::Linear => \
+                     ipe_runtime::task::BackoffStrategy::LinearWithJitter, \
+                 ipe_runtime::task::BackoffStrategy::Exponential => \
+                     ipe_runtime::task::BackoffStrategy::ExponentialWithJitter, \
+                 other => other, \
+                 }}; \
+                 __ipe_rec }}"
             )))
         }
         KernelFn::TaskWithMaxAttempts => {
@@ -2101,22 +2117,18 @@ fn emit_task_retry_call(
                 "{{ let mut __ipe_rec = ({policy_s}); __ipe_rec.baseMs = {ms_s}; __ipe_rec }}"
             )))
         }
-        KernelFn::TaskWithKind => {
-            // `withKind k policy` — move-update kind.
-            let k_arg = args.first().ok_or_else(|| Diagnostic::CompilerBug {
-                where_: "ipe_backend_rust::emit_task_retry_call",
-                detail: "TaskWithKind expects 2 arguments (k, policy)".to_owned(),
-            })?;
-            let policy = args.get(1).ok_or_else(|| Diagnostic::CompilerBug {
-                where_: "ipe_backend_rust::emit_task_retry_call",
-                detail: "TaskWithKind expects 2 arguments (k, policy)".to_owned(),
-            })?;
-            let k_s = emit_expr_at(ctx, k_arg, indent, child, generics)?;
-            let policy_s = emit_expr_at(ctx, policy, indent, child, generics)?;
-            Ok(Some(format!(
-                "{{ let mut __ipe_rec = ({policy_s}); __ipe_rec.kind = {k_s}; __ipe_rec }}"
-            )))
-        }
+        KernelFn::BackoffLinear => Ok(Some(
+            "ipe_runtime::task::BackoffStrategy::Linear".to_owned(),
+        )),
+        KernelFn::BackoffLinearWithJitter => Ok(Some(
+            "ipe_runtime::task::BackoffStrategy::LinearWithJitter".to_owned(),
+        )),
+        KernelFn::BackoffExponential => Ok(Some(
+            "ipe_runtime::task::BackoffStrategy::Exponential".to_owned(),
+        )),
+        KernelFn::BackoffExponentialWithJitter => Ok(Some(
+            "ipe_runtime::task::BackoffStrategy::ExponentialWithJitter".to_owned(),
+        )),
         KernelFn::TaskRetryOn | KernelFn::TaskWithRetryOn => {
             // `retryOn pred policy` / `withRetryOn pred policy` — move-update shouldRetry.
             let pred = args.first().ok_or_else(|| Diagnostic::CompilerBug {
@@ -2163,8 +2175,7 @@ fn emit_task_retry_call(
                  ipe_runtime::task::task_retry_with(\
                  __ipe_p.maxAttempts, \
                  __ipe_p.baseMs, \
-                 __ipe_p.jitter, \
-                 __ipe_p.kind, \
+                 __ipe_p.strategy, \
                  move |__ipe_e: &IpeError| (__ipe_sr)(__ipe_e.clone()), \
                  move || {{ {task_s} }}\
                  ) }}"

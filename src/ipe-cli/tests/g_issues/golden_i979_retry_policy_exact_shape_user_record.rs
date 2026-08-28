@@ -1,22 +1,16 @@
 //! Positive boundary test for the `RetryPolicy` exact-shape guard.
 //!
-//! A USER record with the EXACT five `RetryPolicy` field names
-//! (`baseMs`, `jitter`, `kind`, `maxAttempts`, `shouldRetry`) and a function-
-//! typed `shouldRetry : Int -> Bool` COMPILES AND RUNS correctly.  This is NOT
-//! a bypass of IPE-L0107: the fn-value-reuse `Arc<dyn Fn>` carrier handles the
-//! function field (same as any other record-fn field); the generic DERIVE carrier
+//! A USER record that shares three of the four `RetryPolicy` field names
+//! (`baseMs`, `maxAttempts`, `shouldRetry`) but uses a different fourth field
+//! (`mode : Int` instead of `strategy : BackoffStrategy`) COMPILES AND RUNS
+//! correctly.  This is NOT a bypass of IPE-L0107: the fn-value-reuse
+//! `Arc<dyn Fn>` carrier handles the function field; the generic DERIVE carrier
 //! is never involved, so L0107 does not apply.
 //!
-//! The test documents the intended boundary alongside the existing negative tests
-//! (`retry_policy_nearmiss_still_rejects` / `retry_policy_shape_nearmiss_rejects`)
-//! and replaces any over-stated comment that implied the exact-shape user record
-//! was rejected.
-//!
-//! The emitted crate must contain exactly ONE struct for the five-field set
-//! (the user's `Int -> Bool` predicate struct), not a second dead `_2`
-//! `Arc<dyn Fn(IpeError) -> bool>` duplicate from the concretisation.  The
-//! `non_camel_case_types` warning the duplicate drew is proof of the defect;
-//! its absence here is the structural fix.
+//! The test documents the intended boundary: the kernel `RetryPolicy` exemption
+//! matches exactly the four-field closed shape `{ baseMs, maxAttempts,
+//! shouldRetry, strategy }`. A record with even one different field name is a
+//! plain user record and goes through the standard fn-value-reuse path.
 
 use std::path::{Path, PathBuf};
 
@@ -29,9 +23,8 @@ fn fixture_entry(root: &Path) -> PathBuf {
         .join("Main.ipe")
 }
 
-/// The frontend must accept the exact-5-field user record with `shouldRetry :
-/// Int -> Bool` — no IPE-L0107, no ICE.  This is the positive boundary: the
-/// user record is sound (fn-value-reuse carrier, not derive carrier).
+/// The frontend must accept the user record with `shouldRetry : Int -> Bool`
+/// and a different fourth field — no IPE-L0107, no ICE.
 #[test]
 fn retry_policy_exact_shape_user_record_emits() {
     let root = repo_root();
@@ -44,16 +37,14 @@ fn retry_policy_exact_shape_user_record_emits() {
     let built = ipe::build(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
-        "a user record with the exact five `RetryPolicy` field names and \
-         `shouldRetry : Int -> Bool` must be accepted and emitted — the \
-         fn-value-reuse carrier handles the function field, L0107 does not \
-         apply; got: {built:?}"
+        "a user record with `shouldRetry : Int -> Bool` and a non-matching fourth \
+         field must be accepted and emitted — fn-value-reuse carrier handles the \
+         function field, L0107 does not apply; got: {built:?}"
     );
 }
 
 /// Under `IPE_E2E=1`: build and run the emitted crate.
-/// `makePolicy 3 True` produces `{{ baseMs=100, jitter=True, kind=1,
-///  maxAttempts=3, shouldRetry=\n -> n < 3 }}`.
+/// `makePolicy 3 1` produces a policy with `maxAttempts=3`.
 /// `applyPolicy p 1` → `"retry"` (1 < 3 = true).
 /// `applyPolicy p 5` → `"done"` (5 < 3 = false).
 /// `p.maxAttempts` → `"3"`.

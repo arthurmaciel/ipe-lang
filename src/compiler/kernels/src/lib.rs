@@ -204,6 +204,9 @@ pub enum BuiltinTag {
     ErrorKind,
     /// `ErrorDetails` — the nullary structured-error-detail union.
     ErrorDetails,
+    /// `BackoffStrategy` — the four-constructor retry-strategy ADT
+    /// (`Linear | LinearWithJitter | Exponential | ExponentialWithJitter`).
+    BackoffStrategy,
     /// `Decimal` — the nullary fixed-point decimal value type.
     Decimal,
     /// `Task` — the effect constructor `Task a` (its error channel is the
@@ -553,14 +556,12 @@ pub enum FieldTag {
     // ── RetryPolicy ──
     /// `"baseMs"`.
     RetryBaseMs,
-    /// `"jitter"`.
-    RetryJitter,
-    /// `"kind"`.
-    RetryKind,
     /// `"maxAttempts"`.
     RetryMaxAttempts,
     /// `"shouldRetry"`.
     RetryShouldRetry,
+    /// `"strategy"` — the `BackoffStrategy` ADT field.
+    RetryStrategy,
     // ── Ui.layoutWith ──
     /// `"wrapperAttrs"`.
     LayoutWrapperAttrs,
@@ -1209,13 +1210,13 @@ pub enum StdlibKernel {
     /// Runs the task retrying per policy on failure.
     TaskRetryWith,
     /// `Task.linearBackoff : Int -> Int -> RetryPolicy e`
-    /// Constant-delay policy; kind=0.
+    /// Constant-delay policy; strategy=Linear.
     TaskLinearBackoff,
     /// `Task.exponentialBackoff : Int -> Int -> RetryPolicy e`
-    /// Exponential back-off policy; kind=1.
+    /// Exponential back-off policy; strategy=Exponential.
     TaskExponentialBackoff,
     /// `Task.withJitter : RetryPolicy e -> RetryPolicy e`
-    /// Enables random jitter on the policy.
+    /// Upgrades the policy's strategy to its `*WithJitter` variant.
     TaskWithJitter,
     /// `Task.retryOn : (e -> Bool) -> RetryPolicy e -> RetryPolicy e`
     /// Sets the shouldRetry predicate.
@@ -1224,15 +1225,21 @@ pub enum StdlibKernel {
     /// Alias for retryOn.
     TaskWithRetryOn,
     /// `Task.defaultRetryPolicy : RetryPolicy e`
-    /// 3 attempts, 500 ms exponential, no jitter, retry-all.
+    /// 3 attempts, 500 ms exponential with jitter, retry-all.
     TaskDefaultRetryPolicy,
     /// `Task.withMaxAttempts : Int -> RetryPolicy e -> RetryPolicy e`
     TaskWithMaxAttempts,
     /// `Task.withBaseMs : Int -> RetryPolicy e -> RetryPolicy e`
     TaskWithBaseMs,
-    /// `Task.withKind : Int -> RetryPolicy e -> RetryPolicy e`
-    /// 0 = linear, 1 = exponential.
-    TaskWithKind,
+    // ── BackoffStrategy constructors ────────────────────────────────────────
+    /// `Task.Linear : BackoffStrategy` — constant delay, no jitter.
+    BackoffLinear,
+    /// `Task.LinearWithJitter : BackoffStrategy` — constant delay with jitter.
+    BackoffLinearWithJitter,
+    /// `Task.Exponential : BackoffStrategy` — doubling delay, no jitter.
+    BackoffExponential,
+    /// `Task.ExponentialWithJitter : BackoffStrategy` — doubling delay with jitter.
+    BackoffExponentialWithJitter,
     // ── Io ──────────────────────────────────────────────────────────────────
     IoReadLine,
     /// `Io.readSecret : String -> Task Error String` — write a prompt, then read
@@ -3276,7 +3283,23 @@ impl StdlibKernel {
                 d("Task", "withMaxAttempts", 2, Pure, "task_with_max_attempts")
             }
             Self::TaskWithBaseMs => d("Task", "withBaseMs", 2, Pure, "task_with_base_ms"),
-            Self::TaskWithKind => d("Task", "withKind", 2, Pure, "task_with_kind"),
+            // ── BackoffStrategy constructors ─────────────────────────────────
+            Self::BackoffLinear => d("Task", "Linear", 0, Pure, "backoff_linear"),
+            Self::BackoffLinearWithJitter => d(
+                "Task",
+                "LinearWithJitter",
+                0,
+                Pure,
+                "backoff_linear_with_jitter",
+            ),
+            Self::BackoffExponential => d("Task", "Exponential", 0, Pure, "backoff_exponential"),
+            Self::BackoffExponentialWithJitter => d(
+                "Task",
+                "ExponentialWithJitter",
+                0,
+                Pure,
+                "backoff_exponential_with_jitter",
+            ),
             // ── Io ──────────────────────────────────────────────────────────
             Self::IoReadLine => d("Io", "readLine", 1, Pure, "io_read_line"),
             Self::IoReadSecret => d("Io", "readSecret", 1, Pure, "io_read_secret"),
@@ -4904,7 +4927,11 @@ impl StdlibKernel {
         Self::TaskDefaultRetryPolicy,
         Self::TaskWithMaxAttempts,
         Self::TaskWithBaseMs,
-        Self::TaskWithKind,
+        // BackoffStrategy constructors
+        Self::BackoffLinear,
+        Self::BackoffLinearWithJitter,
+        Self::BackoffExponential,
+        Self::BackoffExponentialWithJitter,
         // Io
         Self::IoReadLine,
         Self::IoReadSecret,
@@ -7801,15 +7828,17 @@ impl StdlibKernel {
             ],
             tail: RowTailShape::Closed,
         };
-        // `RetryPolicy e { baseMs, jitter, kind, maxAttempts, shouldRetry : e -> Bool }`.
+        // `BackoffStrategy` — the four-constructor retry-strategy ADT.
+        const BACKOFF_STRATEGY: TyShape = TyShape::Con(BuiltinTag::BackoffStrategy, &[]);
+        // `RetryPolicy e { baseMs, maxAttempts, shouldRetry : e -> Bool, strategy }`.
         // `e` = var(0). `A_TO_BOOL` (`shouldRetry : a -> Bool`) is defined above.
+        // Fields in alphabetical BTreeMap order: baseMs, maxAttempts, shouldRetry, strategy.
         const RETRY_POLICY: TyShape = TyShape::Record {
             fields: &[
-                (FieldTag::RetryKind, &INT),
-                (FieldTag::RetryMaxAttempts, &INT),
                 (FieldTag::RetryBaseMs, &INT),
-                (FieldTag::RetryJitter, &BOOL),
+                (FieldTag::RetryMaxAttempts, &INT),
                 (FieldTag::RetryShouldRetry, &A_TO_BOOL),
+                (FieldTag::RetryStrategy, &BACKOFF_STRATEGY),
             ],
             tail: RowTailShape::Closed,
         };
@@ -7817,11 +7846,10 @@ impl StdlibKernel {
         // to `Error`, so `shouldRetry : Error -> Bool`.
         const RETRY_POLICY_ERROR: TyShape = TyShape::Record {
             fields: &[
-                (FieldTag::RetryKind, &INT),
-                (FieldTag::RetryMaxAttempts, &INT),
                 (FieldTag::RetryBaseMs, &INT),
-                (FieldTag::RetryJitter, &BOOL),
+                (FieldTag::RetryMaxAttempts, &INT),
                 (FieldTag::RetryShouldRetry, &ERROR_TO_BOOL),
+                (FieldTag::RetryStrategy, &BACKOFF_STRATEGY),
             ],
             tail: RowTailShape::Closed,
         };
@@ -8127,6 +8155,8 @@ impl StdlibKernel {
         const RETRY_ON: TyShape = TyShape::Fun(&A_TO_BOOL, &RETRY_POLICY_TO_RETRY_POLICY);
         // `retryWith : RetryPolicy Error -> Task e a -> Task e a`. var(0) = a.
         const RETRY_WITH: TyShape = TyShape::Fun(&RETRY_POLICY_ERROR, &TASK_A_TO_TASK_A);
+        // `BackoffStrategy` nullary constructors.
+        const BACKOFF_STRATEGY_CON: TyShape = TyShape::Con(BuiltinTag::BackoffStrategy, &[]);
         // App-entry whole signatures — `cfg -> Task ()`.
         const WEB_APP: TyShape = TyShape::Fun(&WEB_APP_CFG, &TASK_UNIT);
         const TERMINAL_APP_SCREEN: TyShape = TyShape::Fun(&TERMINAL_SCREEN_CFG, &TASK_UNIT);
@@ -9143,10 +9173,12 @@ impl StdlibKernel {
             Self::TaskWithJitter => Some(&RETRY_POLICY_TO_RETRY_POLICY),
             Self::TaskRetryOn | Self::TaskWithRetryOn => Some(&RETRY_ON),
             Self::TaskDefaultRetryPolicy => Some(&RETRY_POLICY),
-            Self::TaskWithMaxAttempts | Self::TaskWithBaseMs | Self::TaskWithKind => {
-                Some(&INT_TO_RETRY_TO_RETRY)
-            }
+            Self::TaskWithMaxAttempts | Self::TaskWithBaseMs => Some(&INT_TO_RETRY_TO_RETRY),
             Self::TaskRetryWith => Some(&RETRY_WITH),
+            Self::BackoffLinear
+            | Self::BackoffLinearWithJitter
+            | Self::BackoffExponential
+            | Self::BackoffExponentialWithJitter => Some(&BACKOFF_STRATEGY_CON),
             // App-entry cfg records.
             Self::WebApp => Some(&WEB_APP),
             Self::TerminalAppScreen => Some(&TERMINAL_APP_SCREEN),
@@ -9962,7 +9994,10 @@ impl StdlibKernel {
             | Self::TaskDefaultRetryPolicy
             | Self::TaskWithMaxAttempts
             | Self::TaskWithBaseMs
-            | Self::TaskWithKind
+            | Self::BackoffLinear
+            | Self::BackoffLinearWithJitter
+            | Self::BackoffExponential
+            | Self::BackoffExponentialWithJitter
             | Self::IoReadLine
             | Self::IoReadSecret
             | Self::IoWriteStdout
@@ -11475,6 +11510,17 @@ impl StdlibKernel {
         // `System.loadEnv` (a `spawn_blocking` offload) likewise touch the
         // reactor. All are fail-closed to reactor-requiring by NAME so a future
         // rename cannot silently demote them.
+        // `BackoffStrategy` constructors are pure zero-arity values; they carry no
+        // future and never touch the reactor.
+        if matches!(
+            self,
+            Self::BackoffLinear
+                | Self::BackoffLinearWithJitter
+                | Self::BackoffExponential
+                | Self::BackoffExponentialWithJitter
+        ) {
+            return false;
+        }
         if matches!(
             self,
             Self::TaskRun
@@ -12541,9 +12587,21 @@ mod tests {
                     | StdlibKernel::SystemLoadEnv
             )
         };
+        // `BackoffStrategy` constructors are pure zero-arity values under the
+        // `"Task"` qualifier; they need an explicit pure exemption.
+        let pure_exceptions = |k: StdlibKernel| {
+            matches!(
+                k,
+                StdlibKernel::BackoffLinear
+                    | StdlibKernel::BackoffLinearWithJitter
+                    | StdlibKernel::BackoffExponential
+                    | StdlibKernel::BackoffExponentialWithJitter
+            )
+        };
         for k in StdlibKernel::ALL {
             let q = k.decl().qualifier;
-            let expected_async = reactor_carveouts(*k) || !PURE_QUALIFIERS.contains(&q);
+            let expected_async =
+                (reactor_carveouts(*k) || !PURE_QUALIFIERS.contains(&q)) && !pure_exceptions(*k);
             assert_eq!(
                 k.requires_async_runtime(),
                 expected_async,

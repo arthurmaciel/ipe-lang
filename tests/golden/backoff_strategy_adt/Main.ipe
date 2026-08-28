@@ -1,0 +1,53 @@
+module Main exposing (main)
+
+import Ipe.Io as Io
+import Ipe.String
+import Ipe.Task as Task
+
+
+-- SEAL positive: `RetryPolicy` builder functions return the correct strategy.
+-- `linearBackoff` → Linear strategy (constant delay).
+-- `exponentialBackoff` → Exponential strategy (doubling delay).
+-- `withJitter` upgrades each to its jitter variant.
+-- `retryWith` accepts a policy built from any strategy and runs the task.
+--
+-- Field access on `p.strategy` and passing the policy to `retryWith` must
+-- compile and emit without error.
+
+
+main =
+    let
+        p1 = Task.linearBackoff 3 100
+        p2 = Task.exponentialBackoff 3 100
+        p3 = Task.withJitter p1
+        p4 = Task.withJitter p2
+        p5 = Task.defaultRetryPolicy
+        p6 = Task.withMaxAttempts 5 p5
+        p7 = Task.withBaseMs 200 p2
+    in
+    Task.andThen
+        (\_ ->
+            Task.andThen
+                (\_ ->
+                    Task.andThen
+                        (\_ ->
+                            Task.andThen
+                                (\_ -> Io.println "ok")
+                                (Task.retryWith p4 (Task.succeed "done"))
+                        )
+                        (Task.retryWith p3 (Task.succeed "done"))
+                )
+                (Task.retryWith p7 (Task.succeed "done"))
+        )
+        (Task.andThen
+            (\_ ->
+                Task.andThen
+                    (\_ ->
+                        Task.andThen
+                            (\_ -> Io.println (String.fromInt p6.maxAttempts))
+                            (Task.retryWith p2 (Task.succeed "done"))
+                    )
+                    (Task.retryWith p1 (Task.succeed "done"))
+            )
+            (Task.retryWith p5 (Task.succeed "start"))
+        )

@@ -174,6 +174,11 @@ struct Builtins {
     /// built-in exactly like `ErrorKind` — see `ipe_lower`'s
     /// `enum_variants`/`ctor_arity` seeding.
     errordetails: Symbol,
+    /// `BackoffStrategy` — the 4-constructor retry-backoff strategy ADT
+    /// (`Linear | LinearWithJitter | Exponential | ExponentialWithJitter`).
+    /// Registered as a Prelude built-in; seeded by `ipe_lower`'s
+    /// `enum_variants`/`ctor_arity` (via `BuiltinTag::BackoffStrategy`).
+    backoffstrategy: Symbol,
     /// The 5 `ErrorDetails` constructor symbols, in canon's registered index
     /// order (`crates/ipe_canon/src/env.rs`) — do not reorder.
     ed_ffi_panic: Symbol,
@@ -467,12 +472,10 @@ struct Builtins {
     retry_f_max_attempts: Symbol,
     /// `"baseMs"` — base delay in milliseconds in `RetryPolicy e`.
     retry_f_base_ms: Symbol,
-    /// `"jitter"` — enable jitter flag in `RetryPolicy e`.
-    retry_f_jitter: Symbol,
-    /// `"kind"` — delay kind (0=linear, 1=exponential) in `RetryPolicy e`.
-    retry_f_kind: Symbol,
     /// `"shouldRetry"` — predicate field `e -> Bool` in `RetryPolicy e`.
     retry_f_should_retry: Symbol,
+    /// `"strategy"` — the `BackoffStrategy` ADT field in `RetryPolicy e`.
+    retry_f_strategy: Symbol,
     // ── Border/padding edge field name symbols (Border.widthEach) ────────────
     /// `"top"` — top edge field of `Border.widthEach { top, right, bottom, left }`.
     edge_f_top: Symbol,
@@ -755,6 +758,7 @@ impl Builtins {
             ek_unavailable: interner.intern("Unavailable")?,
             ek_unexpected: interner.intern("Unexpected")?,
             errordetails: interner.intern("ErrorDetails")?,
+            backoffstrategy: interner.intern("BackoffStrategy")?,
             ed_ffi_panic: interner.intern("FfiPanic")?,
             ed_type_mismatch: interner.intern("TypeMismatch")?,
             ed_http_status: interner.intern("HttpStatus")?,
@@ -902,11 +906,12 @@ impl Builtins {
             eq: interner.intern("EQ")?,
             gt: interner.intern("GT")?,
             // ── Task.RetryPolicy field names (retry surface) ─────────────────────
-            retry_f_max_attempts: interner.intern("maxAttempts")?,
+            // Interned in BTreeMap / alphabetical order so the TyShape record
+            // field slice order matches the symbol-key sort order.
             retry_f_base_ms: interner.intern("baseMs")?,
-            retry_f_jitter: interner.intern("jitter")?,
-            retry_f_kind: interner.intern("kind")?,
+            retry_f_max_attempts: interner.intern("maxAttempts")?,
             retry_f_should_retry: interner.intern("shouldRetry")?,
+            retry_f_strategy: interner.intern("strategy")?,
             // ── Border/padding edge field names (Border.widthEach) ───────────────
             edge_f_top: interner.intern("top")?,
             edge_f_right: interner.intern("right")?,
@@ -4237,6 +4242,7 @@ impl<'a> Builder<'a> {
             BuiltinTag::WebReq => self.builtins.web_req,
             BuiltinTag::WebRoute => self.builtins.live_route_con,
             BuiltinTag::EmailProvider => self.builtins.email_provider,
+            BuiltinTag::BackoffStrategy => self.builtins.backoffstrategy,
         }
     }
 
@@ -4282,10 +4288,9 @@ impl<'a> Builder<'a> {
             FieldTag::EmailMimeType => self.builtins.email_f_mime_type,
             FieldTag::EmailContent => self.builtins.email_f_content,
             FieldTag::RetryBaseMs => self.builtins.retry_f_base_ms,
-            FieldTag::RetryJitter => self.builtins.retry_f_jitter,
-            FieldTag::RetryKind => self.builtins.retry_f_kind,
             FieldTag::RetryMaxAttempts => self.builtins.retry_f_max_attempts,
             FieldTag::RetryShouldRetry => self.builtins.retry_f_should_retry,
+            FieldTag::RetryStrategy => self.builtins.retry_f_strategy,
             FieldTag::LayoutWrapperAttrs => self.builtins.lw_wrapper_attrs,
             FieldTag::LayoutRootAttrs => self.builtins.lw_root_attrs,
             FieldTag::ButtonOnPress => self.builtins.btn_f_on_press,
@@ -5091,18 +5096,21 @@ impl<'a> Builder<'a> {
             req_fields.insert(self.builtins.http_f_url, string());
             Ty::Record(req_fields, RowTail::Closed)
         };
-        // `RetryPolicy e = { baseMs : Int, jitter : Bool, kind : Int,
-        //                    maxAttempts : Int, shouldRetry : e -> Bool }`
-        // Fields sorted alphabetically (BTreeMap order) — this matches the
-        // Rust struct `RecBaseMsJitterKindMaxAttemptsShouldRetry<T1>` that
-        // the backend emits for this record type.
+        // `BackoffStrategy` — the four-constructor retry-strategy ADT.
+        let backoff_strategy = || Ty::Con {
+            module: vec![],
+            name: self.builtins.backoffstrategy,
+            args: vec![],
+        };
+        // `RetryPolicy e = { baseMs : Int, maxAttempts : Int,
+        //                    shouldRetry : e -> Bool, strategy : BackoffStrategy }`
+        // Fields sorted alphabetically (BTreeMap order) — matches the emitted Rust struct.
         let retry_policy = |e: Ty| {
             let mut rp_fields = BTreeMap::new();
             rp_fields.insert(self.builtins.retry_f_base_ms, int());
-            rp_fields.insert(self.builtins.retry_f_jitter, bool_ty());
-            rp_fields.insert(self.builtins.retry_f_kind, int());
             rp_fields.insert(self.builtins.retry_f_max_attempts, int());
             rp_fields.insert(self.builtins.retry_f_should_retry, fun(e, bool_ty()));
+            rp_fields.insert(self.builtins.retry_f_strategy, backoff_strategy());
             Ty::Record(rp_fields, RowTail::Closed)
         };
         Some(match k {
@@ -5558,14 +5566,19 @@ impl<'a> Builder<'a> {
             }
             // `defaultRetryPolicy : RetryPolicy e`
             K::TaskDefaultRetryPolicy => retry_policy(var(0)),
-            // `withMaxAttempts / withBaseMs / withKind : Int -> RetryPolicy e -> RetryPolicy e`
-            K::TaskWithMaxAttempts | K::TaskWithBaseMs | K::TaskWithKind => {
+            // `withMaxAttempts / withBaseMs : Int -> RetryPolicy e -> RetryPolicy e`
+            K::TaskWithMaxAttempts | K::TaskWithBaseMs => {
                 fun(int(), fun(retry_policy(var(0)), retry_policy(var(0))))
             }
             // `retryWith : RetryPolicy Error -> Task Error a -> Task Error a`
             K::TaskRetryWith => {
                 fun(retry_policy(error_ty()), fun(task(var(0)), task(var(0))))
             }
+            // `BackoffStrategy` nullary constructors.
+            K::BackoffLinear
+            | K::BackoffLinearWithJitter
+            | K::BackoffExponential
+            | K::BackoffExponentialWithJitter => backoff_strategy(),
 
             // ── Io / File / System: String -> Task () ──
             K::IoWriteStdout
@@ -9311,7 +9324,10 @@ mod registry_phase_c_tests {
             K::TaskDefaultRetryPolicy,
             K::TaskWithMaxAttempts,
             K::TaskWithBaseMs,
-            K::TaskWithKind,
+            K::BackoffLinear,
+            K::BackoffLinearWithJitter,
+            K::BackoffExponential,
+            K::BackoffExponentialWithJitter,
             // Io (3)
             K::IoReadLine,
             K::IoWriteStdout,
@@ -10626,10 +10642,9 @@ mod registry_phase_c_tests {
         let builtins = make_builder(&mut interner);
         let mut field_names: Vec<&str> = [
             builtins.retry_f_base_ms,
-            builtins.retry_f_jitter,
-            builtins.retry_f_kind,
             builtins.retry_f_max_attempts,
             builtins.retry_f_should_retry,
+            builtins.retry_f_strategy,
         ]
         .into_iter()
         .filter_map(|s| interner.resolve(s))

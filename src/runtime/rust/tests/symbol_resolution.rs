@@ -39,7 +39,7 @@ const KNOWN_DEAD_OR_EPILOGUE: &[&str] = &[
     //         values into the emitted binary at compile time; there is no
     //         runtime fn to resolve — the value is a baked constant. ──────────
     "env_public",
-    // ── Dead: emit_task_retry_call constructs RetryPolicy / ShouldRetry
+    // ── Dead: emit_task_retry_call constructs RetryPolicy / BackoffStrategy
     //         values inline for the builder variants; only task_retry_with has
     //         a real runtime fn. These name strings are never emitted. ────────
     "task_default_retry_policy",
@@ -48,9 +48,12 @@ const KNOWN_DEAD_OR_EPILOGUE: &[&str] = &[
     "task_retry_on",
     "task_with_base_ms",
     "task_with_jitter",
-    "task_with_kind",
     "task_with_max_attempts",
     "task_with_retry_on",
+    "backoff_linear",
+    "backoff_linear_with_jitter",
+    "backoff_exponential",
+    "backoff_exponential_with_jitter",
     // ── Dead: emit_http_builder_call constructs an HttpRequest struct inline
     //         for these variants; the name string is never used. ─────────────
     "http_default_request",

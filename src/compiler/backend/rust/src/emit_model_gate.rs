@@ -350,6 +350,7 @@ fn leaf_of_bounded(ctx: &EmitCtx, ty: &IrType, app: AppShape, fuel: u32) -> Mode
         // leaves (`ErrorInfo`/`PanicInfo`/`TypeInfo`, SEAL fix)
         // derive serde — admissible leaves (e.g. a Model's `historyError :
         // Maybe Error` field).
+        | IrType::BackoffStrategy
         | IrType::Order
         | IrType::HttpMethod
         | IrType::Decimal

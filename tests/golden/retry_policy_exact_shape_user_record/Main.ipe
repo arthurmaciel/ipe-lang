@@ -4,33 +4,33 @@ import Ipe.Io as Io
 import Ipe.String
 
 
--- A USER record that shares the exact five RetryPolicy field names
--- (`baseMs`, `jitter`, `kind`, `maxAttempts`, `shouldRetry`) but carries a
--- concrete non-Error predicate type (`Int -> Bool`) for `shouldRetry`.
+-- A USER record that shares three of the four RetryPolicy field names
+-- (`baseMs`, `maxAttempts`, `shouldRetry`) but uses a plain `Int` for the
+-- fourth field (`mode`) instead of `BackoffStrategy`.
 --
--- This is the boundary the RetryPolicy exemption guards: the five-field closed
--- shape with a function-typed `shouldRetry` is a VALID user record — it is NOT
--- a bypass of IPE-L0107 because the fn-value-reuse carrier (not the derive
--- carrier) handles the `shouldRetry` field.  L0107 protects the generic DERIVE
--- path; this record never touches that path.  The test documents the intended
--- boundary by exercising it: ipe must accept, emit, and run the program.
+-- This is the boundary the RetryPolicy exemption guards: the exact closed
+-- shape with a function-typed `shouldRetry` and the exact field set is the
+-- kernel `RetryPolicy`. A record with even ONE different field name (here
+-- `mode` instead of `strategy`) is a plain user record — it uses the
+-- fn-value-reuse carrier for `shouldRetry`, never the kernel-struct path.
+-- L0107 protects the generic DERIVE path; this record never touches that
+-- path.  The test documents the intended boundary by exercising it: ipe
+-- must accept, emit, and run the program.
 
 
 type alias Policy =
     { baseMs : Int
-    , jitter : Bool
-    , kind : Int
     , maxAttempts : Int
+    , mode : Int
     , shouldRetry : Int -> Bool
     }
 
 
-makePolicy : Int -> Bool -> Policy
-makePolicy attempts useJitter =
+makePolicy : Int -> Int -> Policy
+makePolicy attempts m =
     { baseMs = 100
-    , jitter = useJitter
-    , kind = 1
     , maxAttempts = attempts
+    , mode = m
     , shouldRetry = \n -> n < attempts
     }
 
@@ -46,7 +46,7 @@ applyPolicy p attempt =
 
 main =
     let
-        p = makePolicy 3 True
+        p = makePolicy 3 1
     in
     Io.println
         (applyPolicy p 1

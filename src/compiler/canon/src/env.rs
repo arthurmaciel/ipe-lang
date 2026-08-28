@@ -1206,7 +1206,7 @@ impl Env {
                     "decode",
                 ],
             ),
-            // `Ipe.Task` — Task combinators + retry surface.
+            // `Ipe.Task` — Task combinators + retry surface + BackoffStrategy constructors.
             (
                 "Task",
                 &[
@@ -1236,7 +1236,11 @@ impl Env {
                     "defaultRetryPolicy",
                     "withMaxAttempts",
                     "withBaseMs",
-                    "withKind",
+                    // BackoffStrategy constructors
+                    "Linear",
+                    "LinearWithJitter",
+                    "Exponential",
+                    "ExponentialWithJitter",
                 ],
             ),
             // `Ipe.Io` — I/O effects. `println`/`eprintln` write a line

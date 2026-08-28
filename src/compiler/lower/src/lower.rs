@@ -511,12 +511,16 @@ fn ty_is_int(ty: &Ty, interner: &Interner) -> bool {
         if module.is_empty() && args.is_empty() && interner.resolve(*name) == Some("Int"))
 }
 
-/// Is `ty` the built-in `Bool` — an empty-module, arg-less `Con` named `Bool`?
-/// Mirrors [`ty_is_int`]; used by the `RetryPolicy` shape check for the `jitter`
-/// field.
-fn ty_is_bool(ty: &Ty, interner: &Interner) -> bool {
+/// Is `ty` the built-in `BackoffStrategy` — an empty-module, arg-less `Con`
+/// named `BackoffStrategy`? Used by the `RetryPolicy` shape check for the
+/// `strategy` field, or a free `Ty::Var` (solver left the field unsolved).
+fn is_backoff_strategy_ty(interner: &Interner, ty: &Ty) -> bool {
+    if ty_contains_var(ty) {
+        return true;
+    }
     matches!(ty, Ty::Con { module, name, args }
-        if module.is_empty() && args.is_empty() && interner.resolve(*name) == Some("Bool"))
+        if module.is_empty() && args.is_empty()
+            && interner.resolve(*name) == Some("BackoffStrategy"))
 }
 
 /// The [`canon::Type`] twin of [`ty_is_int`].
@@ -1656,8 +1660,8 @@ fn is_enum_like_con_head(interner: &Interner, name: Symbol) -> bool {
 /// carrier's own [`ty_contains_fun`] check (unchanged), so this only exempts the
 /// wrapper as the outermost shape.
 /// Is `ty` the anonymous `RetryPolicy e` record — the kernel-managed FULL shape
-/// `{ baseMs : Int, jitter : Bool, kind : Int, maxAttempts : Int,
-///    shouldRetry : e -> Bool }` (names AND types)?
+/// `{ baseMs : Int, maxAttempts : Int, shouldRetry : e -> Bool,
+///    strategy : BackoffStrategy }` (names AND types)?
 ///
 /// This record is materialised as a runtime value passed to `task_retry_with`:
 /// its Rust struct is emitted by `emit_task_retry_call` with
@@ -1667,14 +1671,11 @@ fn is_enum_like_con_head(interner: &Interner, name: Symbol) -> bool {
 /// against — it is a dedicated non-derivable struct the emitter owns. The gates
 /// exempt exactly this shape.
 ///
-/// The match is on the FULL closed shape: [`RowTail::Closed`], exactly the five
+/// The match is on the FULL closed shape: [`RowTail::Closed`], exactly the four
 /// [`ipe_types::RETRY_POLICY_FIELDS`] field-name symbols, AND the required type
-/// for each field (`Int` / `Bool` / kernel `shouldRetry` arrow). A user record
-/// that shares the five names but supplies a wrong field type (e.g.
-/// `baseMs : String`, `jitter : Int`, `shouldRetry : Int -> Int`) is NOT this
-/// kernel shape and is not exempted. This makes the fold to the opaque runtime
-/// type unrepresentable for type-mismatched inputs — accept ⇒ the concretised
-/// struct's fields are type-matched ⇒ cargo builds.
+/// for each field (`Int` / `BackoffStrategy` / kernel `shouldRetry` arrow). A user
+/// record that shares the four names but supplies a wrong field type is NOT this
+/// kernel shape and is not exempted.
 ///
 /// [`ipe_types::RETRY_POLICY_FIELDS`] is the single source of truth for the
 /// name set; field types are checked here (the single source for the type
@@ -1691,9 +1692,9 @@ fn is_retry_policy_record(interner: &Interner, ty: &Ty) -> bool {
             return false;
         };
         match name {
-            "baseMs" | "kind" | "maxAttempts" => ty_is_int(field_ty, interner),
-            "jitter" => ty_is_bool(field_ty, interner),
+            "baseMs" | "maxAttempts" => ty_is_int(field_ty, interner),
             "shouldRetry" => is_kernel_shouldretry_ty(interner, field_ty),
+            "strategy" => is_backoff_strategy_ty(interner, field_ty),
             _ => false,
         }
     })
@@ -1725,8 +1726,8 @@ fn is_kernel_shouldretry_ty(interner: &Interner, field_ty: &Ty) -> bool {
 /// `IrType::Error`.
 ///
 /// `RetryPolicy e` is the kernel-managed record
-/// `{ baseMs : Int, jitter : Bool, kind : Int, maxAttempts : Int,
-///    shouldRetry : e -> Bool }`.
+/// `{ baseMs : Int, maxAttempts : Int, shouldRetry : e -> Bool,
+///    strategy : BackoffStrategy }`.
 /// The type parameter `e` is the error type; at the Ipê stdlib level it stays
 /// polymorphic, but at codegen the only ever-constructed value is
 /// `RetryPolicy Error` (all builders hardcode `IpeError` in their emitted Rust).
@@ -1735,11 +1736,11 @@ fn is_kernel_shouldretry_ty(interner: &Interner, field_ty: &Ty) -> bool {
 /// builder calls even when the solver left `e` as a free `Ty::Var`.
 ///
 /// The `shouldRetry` field is a record-field function and is carried on the
-/// `Arc<dyn Fn>` carrier (`IrType::SharedFun`) — matching what
-/// `normalize_record_fun_carriers` would produce for a concretely-typed field.
+/// `Arc<dyn Fn>` carrier (`IrType::SharedFun`). The `strategy` field is an
+/// opaque enum emitted by `emit_task_retry_call` as
+/// `ipe_runtime::task::BackoffStrategy`.
 /// Returns `None` when the record is not the kernel shape
-/// ([`is_retry_policy_record`] verifies names AND types), so a user record
-/// that shares the field names but has mismatched types does not fold here.
+/// ([`is_retry_policy_record`] verifies names AND types).
 fn retry_policy_concrete_ir(interner: &Interner, ty: &Ty) -> Option<IrType> {
     let Ty::Record(fields, RowTail::Closed) = ty else {
         return None;
@@ -1754,15 +1755,14 @@ fn retry_policy_concrete_ir(interner: &Interner, ty: &Ty) -> Option<IrType> {
     for sym in fields.keys() {
         let name = interner.resolve(*sym)?;
         let ir = match name {
-            "baseMs" | "kind" | "maxAttempts" => IrType::Int,
-            "jitter" => IrType::Bool,
+            "baseMs" | "maxAttempts" => IrType::Int,
             // `shouldRetry : e -> Bool` — fix `e` to `IrType::Error` and carry
-            // the field on the `Arc<dyn Fn>` carrier, matching what
-            // `normalize_record_fun_carriers` produces for a concrete arrow
-            // field. The kernel arrow type is already verified by
-            // `is_retry_policy_record` (the gate above), so no re-guard is
-            // needed here.
+            // the field on the `Arc<dyn Fn>` carrier. The kernel arrow type is
+            // already verified by `is_retry_policy_record` (the gate above).
             "shouldRetry" => IrType::SharedFun(vec![IrType::Error], Box::new(IrType::Bool)),
+            // `strategy : BackoffStrategy` — dedicated IR leaf; the emitter
+            // renders `ipe_runtime::task::BackoffStrategy::*` constructors.
+            "strategy" => IrType::BackoffStrategy,
             _ => return None,
         };
         ir_fields.insert(*sym, ir);
@@ -2240,6 +2240,7 @@ fn ir_type_mentions(ty: &IrType, leaf: &impl Fn(&IrType) -> bool) -> bool {
         | IrType::Db
         | IrType::Generic(_)
         | IrType::RowGeneric(_)
+        | IrType::BackoffStrategy
         | IrType::Order
         | IrType::HttpMethod
         | IrType::Decimal
@@ -2880,6 +2881,8 @@ fn ir_contains_fun(ty: &IrType) -> bool {
         // `ErrorKind`/`Error`/`ErrorDetails` and the nominal error-payload
         // leaves (`ErrorInfo`/`PanicInfo`/`TypeInfo`, SEAL fix)
         // are leaves — no embedded function.
+        // `BackoffStrategy` is a Copy leaf — no embedded function.
+        | IrType::BackoffStrategy
         | IrType::Order
         | IrType::HttpMethod
         | IrType::Decimal
@@ -3008,6 +3011,7 @@ fn clone_class(env: CloneEnv<'_>, t: &IrType) -> CloneClass {
         | IrType::Bool
         | IrType::Char
         | IrType::Unit
+        | IrType::BackoffStrategy
         | IrType::Order
         | IrType::HttpMethod
         | IrType::Decimal
@@ -6138,6 +6142,7 @@ fn ir_type_mentions_generic(ty: &IrType, tv: Symbol) -> bool {
         | IrType::WebSocketServerCfg
         | IrType::UiPlain(_)
         | IrType::WebReq
+        | IrType::BackoffStrategy
         | IrType::Order
         | IrType::HttpMethod
         | IrType::Decimal
@@ -6256,6 +6261,7 @@ fn ir_type_generic_in_decoder(ty: &IrType, tv: Symbol) -> bool {
         | IrType::WebSocketServerCfg
         | IrType::UiPlain(_)
         | IrType::WebReq
+        | IrType::BackoffStrategy
         | IrType::Order
         | IrType::HttpMethod
         | IrType::Decimal
@@ -6367,6 +6373,7 @@ fn ir_type_generic_reaches_bare(ty: &IrType, tv: Symbol) -> bool {
         | IrType::WebSocketServerCfg
         | IrType::UiPlain(_)
         | IrType::WebReq
+        | IrType::BackoffStrategy
         | IrType::Order
         | IrType::HttpMethod
         | IrType::Decimal
@@ -11439,6 +11446,7 @@ const fn ir_type_label(ty: &IrType) -> &'static str {
         IrType::Ui { .. } => "Html",
         IrType::UiPlain(_) => "UiValue",
         IrType::Secret => "Secret",
+        IrType::BackoffStrategy => "BackoffStrategy",
         IrType::Order => "Order",
         IrType::HttpMethod => "HttpMethod",
         IrType::Decimal => "Decimal",
@@ -12404,6 +12412,14 @@ pub struct BuiltinCtors {
     pub hm_patch: Symbol,
     pub hm_head: Symbol,
     pub hm_options: Symbol,
+    // ── BackoffStrategy ADT ─────────────────────────────
+    // 4 nullary constructors; `Linear` / `LinearWithJitter` / `Exponential` /
+    // `ExponentialWithJitter`. Prelude built-in seeded here exactly like `Order`.
+    pub backoffstrategy: Symbol,
+    pub bs_linear: Symbol,
+    pub bs_linear_with_jitter: Symbol,
+    pub bs_exponential: Symbol,
+    pub bs_exponential_with_jitter: Symbol,
 }
 
 /// The parameter-pattern count of a single top-level binding — the number of
@@ -13192,7 +13208,24 @@ impl<'a> Lowerer<'a> {
         ctor_arity.insert((prelude_home.clone(), builtins.hm_delete), 0);
         ctor_arity.insert((prelude_home.clone(), builtins.hm_patch), 0);
         ctor_arity.insert((prelude_home.clone(), builtins.hm_head), 0);
-        ctor_arity.insert((prelude_home, builtins.hm_options), 0); // final move
+        ctor_arity.insert((prelude_home.clone(), builtins.hm_options), 0);
+        // ── BackoffStrategy ADT ──────────────────────────────────────
+        // 4 nullary constructors. Prelude built-in; seeding here lets
+        // `case s of Linear -> …` validate and `Task.Linear` lower as a
+        // saturated nullary construction.
+        enum_variants.insert(
+            (prelude_home.clone(), builtins.backoffstrategy),
+            vec![
+                builtins.bs_linear,
+                builtins.bs_linear_with_jitter,
+                builtins.bs_exponential,
+                builtins.bs_exponential_with_jitter,
+            ],
+        );
+        ctor_arity.insert((prelude_home.clone(), builtins.bs_linear), 0);
+        ctor_arity.insert((prelude_home.clone(), builtins.bs_linear_with_jitter), 0);
+        ctor_arity.insert((prelude_home.clone(), builtins.bs_exponential), 0);
+        ctor_arity.insert((prelude_home, builtins.bs_exponential_with_jitter), 0); // final move
 
         Self {
             m,
@@ -13408,6 +13441,7 @@ impl<'a> Lowerer<'a> {
             | IrType::Bytes
             | IrType::Json
             | IrType::Db
+            | IrType::BackoffStrategy
             | IrType::Order
             | IrType::HttpMethod
             | IrType::Decimal
@@ -17390,6 +17424,9 @@ impl<'a> Lowerer<'a> {
                 "Int" | "HostMode" | "LogLevel" | "CsrfMode" | "RevocationMode" => Ok(IrType::Int),
                 "Float" => Ok(IrType::Float),
                 "Bool" => Ok(IrType::Bool),
+                // `BackoffStrategy` is the retry-backoff ADT.
+                // Backed by `ipe_runtime::task::BackoffStrategy` (4 unit variants).
+                "BackoffStrategy" => Ok(IrType::BackoffStrategy),
                 // `Order` is the built-in three-way comparison result type.
                 // Backed by `ipe_runtime::IpeOrder` (repr(u8) enum: LT/EQ/GT).
                 "Order" => Ok(IrType::Order),
@@ -18550,6 +18587,9 @@ impl<'a> Lowerer<'a> {
                 "Int" | "HostMode" | "LogLevel" | "CsrfMode" | "RevocationMode" => Ok(IrType::Int),
                 "Float" => Ok(IrType::Float),
                 "Bool" => Ok(IrType::Bool),
+                // `BackoffStrategy` is the retry-backoff ADT.
+                // Backed by `ipe_runtime::task::BackoffStrategy` (4 unit variants).
+                "BackoffStrategy" => Ok(IrType::BackoffStrategy),
                 // `Order` is the built-in three-way comparison result type.
                 // Backed by `ipe_runtime::IpeOrder` (repr(u8) enum: LT/EQ/GT).
                 "Order" => Ok(IrType::Order),
@@ -23457,7 +23497,12 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::WebRevocationStore
                 // ── Server: bearer token source — arity 0 ────────────────
                 // `Server.bearerToken : TokenSource`
-                | KernelFn::ServerTokenBearer,
+                | KernelFn::ServerTokenBearer
+                // ── BackoffStrategy constructors — arity 0 ────────────────
+                | KernelFn::BackoffLinear
+                | KernelFn::BackoffLinearWithJitter
+                | KernelFn::BackoffExponential
+                | KernelFn::BackoffExponentialWithJitter,
             ) => Ok(0),
             Callee::Kernel(
                 KernelFn::StringFromInt
@@ -23986,7 +24031,6 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::TaskWithRetryOn
                 | KernelFn::TaskWithMaxAttempts
                 | KernelFn::TaskWithBaseMs
-                | KernelFn::TaskWithKind
                 // ── System arity-2 ──────────────────────────────────────
                 | KernelFn::SystemGetenvOr
                 | KernelFn::SystemSetenv
@@ -25626,7 +25670,14 @@ impl<'a> Lowerer<'a> {
                         Ok(Callee::Kernel(KernelFn::TaskWithMaxAttempts))
                     }
                     ("Task", "withBaseMs") => Ok(Callee::Kernel(KernelFn::TaskWithBaseMs)),
-                    ("Task", "withKind") => Ok(Callee::Kernel(KernelFn::TaskWithKind)),
+                    ("Task", "Linear") => Ok(Callee::Kernel(KernelFn::BackoffLinear)),
+                    ("Task", "LinearWithJitter") => {
+                        Ok(Callee::Kernel(KernelFn::BackoffLinearWithJitter))
+                    }
+                    ("Task", "Exponential") => Ok(Callee::Kernel(KernelFn::BackoffExponential)),
+                    ("Task", "ExponentialWithJitter") => {
+                        Ok(Callee::Kernel(KernelFn::BackoffExponentialWithJitter))
+                    }
                     // ── Io kernels ──────────────────────────────────────
                     ("Io", "readLine") => Ok(Callee::Kernel(KernelFn::IoReadLine)),
                     ("Io", "readSecret") => Ok(Callee::Kernel(KernelFn::IoReadSecret)),
@@ -28320,6 +28371,7 @@ fn collect_ir_generic_syms(ty: &IrType, out: &mut BTreeSet<Symbol>) {
         | IrType::Bytes
         | IrType::Json
         | IrType::Db
+        | IrType::BackoffStrategy
         | IrType::Order
         | IrType::HttpMethod
         | IrType::ErrorKind
@@ -28522,6 +28574,12 @@ mod tests {
         let hm_patch = interner.intern("Patch").unwrap();
         let hm_head = interner.intern("Head").unwrap();
         let hm_options = interner.intern("Options").unwrap();
+        // ── BackoffStrategy ADT ─────────────────────────
+        let backoffstrategy = interner.intern("BackoffStrategy").unwrap();
+        let bs_linear = interner.intern("Linear").unwrap();
+        let bs_linear_with_jitter = interner.intern("LinearWithJitter").unwrap();
+        let bs_exponential = interner.intern("Exponential").unwrap();
+        let bs_exponential_with_jitter = interner.intern("ExponentialWithJitter").unwrap();
 
         BuiltinCtors {
             maybe,
@@ -28578,6 +28636,12 @@ mod tests {
             hm_patch,
             hm_head,
             hm_options,
+            // ── BackoffStrategy ─────────────────────
+            backoffstrategy,
+            bs_linear,
+            bs_linear_with_jitter,
+            bs_exponential,
+            bs_exponential_with_jitter,
         }
     }
 
@@ -30728,6 +30792,7 @@ mod tests {
             | ipe_ir::IrType::Bytes
             | ipe_ir::IrType::Json
             | ipe_ir::IrType::Db
+            | ipe_ir::IrType::BackoffStrategy
             | ipe_ir::IrType::Order
             | ipe_ir::IrType::HttpMethod
             | ipe_ir::IrType::Decimal
@@ -30890,20 +30955,24 @@ mod tests {
         Ty::Fun(Box::new(error_ty), Box::new(bool_ty))
     }
 
+    /// Build a `BackoffStrategy` type Con (empty-module, no args).
+    fn backoff_strategy_ty(interner: &mut Interner) -> Ty {
+        builtin_con(interner, "BackoffStrategy")
+    }
+
     /// Build the genuine kernel `RetryPolicy e` closed record with `e` as a
     /// free solver variable.
     fn genuine_retry_policy_var(interner: &mut Interner) -> Ty {
         let int_ty = builtin_con(interner, "Int");
-        let bool_ty = builtin_con(interner, "Bool");
         let should_retry = shouldretry_var_arrow(interner);
+        let strategy = backoff_strategy_ty(interner);
         closed_record(
             interner,
             &[
                 ("baseMs", int_ty.clone()),
-                ("jitter", bool_ty),
-                ("kind", int_ty.clone()),
                 ("maxAttempts", int_ty),
                 ("shouldRetry", should_retry),
+                ("strategy", strategy),
             ],
         )
     }
@@ -30912,16 +30981,15 @@ mod tests {
     /// fixed to `Error`.
     fn genuine_retry_policy_error(interner: &mut Interner) -> Ty {
         let int_ty = builtin_con(interner, "Int");
-        let bool_ty = builtin_con(interner, "Bool");
         let should_retry = shouldretry_error_arrow(interner);
+        let strategy = backoff_strategy_ty(interner);
         closed_record(
             interner,
             &[
                 ("baseMs", int_ty.clone()),
-                ("jitter", bool_ty),
-                ("kind", int_ty.clone()),
                 ("maxAttempts", int_ty),
                 ("shouldRetry", should_retry),
+                ("strategy", strategy),
             ],
         )
     }
@@ -30945,14 +31013,13 @@ mod tests {
         );
     }
 
-    /// Each of the five field-type corruptions must make `is_retry_policy_record`
-    /// return false — one type-mismatched field per case.
+    /// Each field-type corruption must make `is_retry_policy_record` return false.
     #[test]
     fn retry_policy_predicate_rejects_each_field_type_corruption() {
         let mut interner = Interner::new();
         let int_ty = builtin_con(&mut interner, "Int");
-        let bool_ty = builtin_con(&mut interner, "Bool");
         let string_ty = builtin_con(&mut interner, "String");
+        let strategy_good = backoff_strategy_ty(&mut interner);
         let should_retry_good = shouldretry_var_arrow(&mut interner);
         let should_retry_bad = Ty::Fun(Box::new(int_ty.clone()), Box::new(int_ty.clone()));
 
@@ -30961,10 +31028,9 @@ mod tests {
             &mut interner,
             &[
                 ("baseMs", string_ty.clone()),
-                ("jitter", bool_ty.clone()),
-                ("kind", int_ty.clone()),
                 ("maxAttempts", int_ty.clone()),
                 ("shouldRetry", should_retry_good.clone()),
+                ("strategy", strategy_good.clone()),
             ],
         );
         assert!(
@@ -30972,47 +31038,14 @@ mod tests {
             "baseMs:String must be rejected"
         );
 
-        // jitter : Int (should be Bool)
-        let ty = closed_record(
-            &mut interner,
-            &[
-                ("baseMs", int_ty.clone()),
-                ("jitter", int_ty.clone()),
-                ("kind", int_ty.clone()),
-                ("maxAttempts", int_ty.clone()),
-                ("shouldRetry", should_retry_good.clone()),
-            ],
-        );
-        assert!(
-            !super::is_retry_policy_record(&interner, &ty),
-            "jitter:Int must be rejected"
-        );
-
-        // kind : Bool (should be Int)
-        let ty = closed_record(
-            &mut interner,
-            &[
-                ("baseMs", int_ty.clone()),
-                ("jitter", bool_ty.clone()),
-                ("kind", bool_ty.clone()),
-                ("maxAttempts", int_ty.clone()),
-                ("shouldRetry", should_retry_good.clone()),
-            ],
-        );
-        assert!(
-            !super::is_retry_policy_record(&interner, &ty),
-            "kind:Bool must be rejected"
-        );
-
         // maxAttempts : String (should be Int)
         let ty = closed_record(
             &mut interner,
             &[
                 ("baseMs", int_ty.clone()),
-                ("jitter", bool_ty.clone()),
-                ("kind", int_ty.clone()),
                 ("maxAttempts", string_ty),
-                ("shouldRetry", should_retry_good),
+                ("shouldRetry", should_retry_good.clone()),
+                ("strategy", strategy_good.clone()),
             ],
         );
         assert!(
@@ -31025,15 +31058,29 @@ mod tests {
             &mut interner,
             &[
                 ("baseMs", int_ty.clone()),
-                ("jitter", bool_ty),
-                ("kind", int_ty.clone()),
-                ("maxAttempts", int_ty),
+                ("maxAttempts", int_ty.clone()),
                 ("shouldRetry", should_retry_bad),
+                ("strategy", strategy_good),
             ],
         );
         assert!(
             !super::is_retry_policy_record(&interner, &ty),
             "shouldRetry:Int->Int must be rejected"
+        );
+
+        // strategy : Int (should be BackoffStrategy)
+        let ty = closed_record(
+            &mut interner,
+            &[
+                ("baseMs", int_ty.clone()),
+                ("maxAttempts", int_ty.clone()),
+                ("shouldRetry", should_retry_good),
+                ("strategy", int_ty),
+            ],
+        );
+        assert!(
+            !super::is_retry_policy_record(&interner, &ty),
+            "strategy:Int must be rejected"
         );
     }
 
@@ -31043,17 +31090,16 @@ mod tests {
     fn retry_policy_predicate_rejects_open_row() {
         let mut interner = Interner::new();
         let int_ty = builtin_con(&mut interner, "Int");
-        let bool_ty = builtin_con(&mut interner, "Bool");
         let should_retry = shouldretry_var_arrow(&mut interner);
+        let strategy = backoff_strategy_ty(&mut interner);
 
         let ty = open_record(
             &mut interner,
             &[
                 ("baseMs", int_ty.clone()),
-                ("jitter", bool_ty),
-                ("kind", int_ty.clone()),
                 ("maxAttempts", int_ty),
                 ("shouldRetry", should_retry),
+                ("strategy", strategy),
             ],
         );
         assert!(
@@ -31062,25 +31108,24 @@ mod tests {
         );
     }
 
-    /// Wrong arity (four fields instead of five) must be rejected.
+    /// Wrong arity (three fields instead of four) must be rejected.
     #[test]
     fn retry_policy_predicate_rejects_wrong_arity() {
         let mut interner = Interner::new();
         let int_ty = builtin_con(&mut interner, "Int");
-        let bool_ty = builtin_con(&mut interner, "Bool");
+        let strategy = backoff_strategy_ty(&mut interner);
 
         let ty = closed_record(
             &mut interner,
             &[
                 ("baseMs", int_ty.clone()),
-                ("jitter", bool_ty),
-                ("kind", int_ty.clone()),
                 ("maxAttempts", int_ty),
+                ("strategy", strategy),
             ],
         );
         assert!(
             !super::is_retry_policy_record(&interner, &ty),
-            "four-field record must be rejected"
+            "three-field record must be rejected"
         );
     }
 
@@ -31089,17 +31134,16 @@ mod tests {
     fn retry_policy_predicate_rejects_renamed_field() {
         let mut interner = Interner::new();
         let int_ty = builtin_con(&mut interner, "Int");
-        let bool_ty = builtin_con(&mut interner, "Bool");
         let should_retry = shouldretry_var_arrow(&mut interner);
+        let strategy = backoff_strategy_ty(&mut interner);
 
         let ty = closed_record(
             &mut interner,
             &[
                 ("baseMsX", int_ty.clone()),
-                ("jitter", bool_ty),
-                ("kind", int_ty.clone()),
                 ("maxAttempts", int_ty),
                 ("shouldRetry", should_retry),
+                ("strategy", strategy),
             ],
         );
         assert!(
@@ -31115,17 +31159,16 @@ mod tests {
     fn retry_policy_concrete_ir_rejects_non_kernel_shouldretry() {
         let mut interner = Interner::new();
         let int_ty = builtin_con(&mut interner, "Int");
-        let bool_ty = builtin_con(&mut interner, "Bool");
+        let strategy = backoff_strategy_ty(&mut interner);
         let bad_should_retry = Ty::Fun(Box::new(int_ty.clone()), Box::new(int_ty.clone()));
 
         let ty = closed_record(
             &mut interner,
             &[
                 ("baseMs", int_ty.clone()),
-                ("jitter", bool_ty),
-                ("kind", int_ty.clone()),
                 ("maxAttempts", int_ty),
                 ("shouldRetry", bad_should_retry),
+                ("strategy", strategy),
             ],
         );
         let result = super::retry_policy_concrete_ir(&interner, &ty);

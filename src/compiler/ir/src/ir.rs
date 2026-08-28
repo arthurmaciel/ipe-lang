@@ -1235,6 +1235,14 @@ pub enum IrType {
     /// pattern matching without a range-check.
     Order,
 
+    /// `Ipe.Task.BackoffStrategy` — the four-constructor retry-backoff ADT.
+    ///
+    /// Renders as `ipe_runtime::task::BackoffStrategy` (a `#[derive(Clone,
+    /// Copy, Debug, PartialEq, Eq)]` enum with four variants: `Linear /
+    /// LinearWithJitter / Exponential / ExponentialWithJitter`). Constructors
+    /// emit via the `builtin_runtime_enum` path — no synthetic `EnumDef`.
+    BackoffStrategy,
+
     /// `Ipe.Http.HttpMethod` — the closed ADT for HTTP verbs.
     ///
     /// Renders as `ipe_runtime::HttpMethod` (a `#[derive(Clone, Copy, Debug,
@@ -1716,6 +1724,8 @@ pub fn ir_type_is_derivable(
         // `Secret` derives Clone; `PartialEq`/`Debug` are hand-written
         // (constant-time equality, always-redacting Debug — see its own doc)
         // — fully derivable, not serde (see `ir_type_is_serde`).
+        // `BackoffStrategy` derives Clone+Copy+Debug+PartialEq+Eq — fully derivable, not serde.
+        | IrType::BackoffStrategy
         | IrType::Order
         | IrType::HttpMethod
         | IrType::Decimal
@@ -2010,6 +2020,8 @@ pub fn ir_type_is_serde(ty: &IrType, enum_serde: &impl Fn(&ModPath, Symbol) -> b
         | IrType::WebSocketServer
         | IrType::WebSocketServerCfg
         | IrType::WebReq
+        // `BackoffStrategy` is not a session datum — kernel-boundary value, no serde derive.
+        | IrType::BackoffStrategy
         // Typed-key newtypes must NEVER round-trip through serde — a `Key`
         // in a Web Model session store would be a secret-material leak; a
         // `Mac` in a session store is unnecessary exposure; an `EmailAddress`
@@ -2101,6 +2113,7 @@ pub fn carrier_is_clone(ty: &IrType) -> bool {
         | IrType::Unit
         | IrType::Bytes
         | IrType::Json
+        | IrType::BackoffStrategy
         | IrType::Order
         | IrType::HttpMethod
         | IrType::Decimal

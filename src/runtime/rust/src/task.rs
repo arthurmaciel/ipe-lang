@@ -626,16 +626,32 @@ pub fn task_parallel<E: From<String> + Send + 'static, A: Send + 'static>(
     })
 }
 
+/// The four backoff strategies for `RetryPolicy`.
+///
+/// Replaces the old `kind: i64` + `jitter: bool` pair. Each constructor names
+/// the combination unambiguously; invalid states (any `Int` value for `kind`,
+/// any `Bool` value for `jitter`) are not representable.
+///
+/// - `Linear` — constant delay of `baseMs` on every retry.
+/// - `LinearWithJitter` — constant delay with uniform [0.5×, 1.5×) jitter.
+/// - `Exponential` — delay doubles each attempt: `baseMs × 2^(attempt-1)`.
+/// - `ExponentialWithJitter` — exponential delay with the same jitter band.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BackoffStrategy {
+    Linear,
+    LinearWithJitter,
+    Exponential,
+    ExponentialWithJitter,
+}
+
 // Task.retryWith : RetryPolicy e -> Task e a -> Task e a
 //
 // A real retry loop, faithful to runtime-go/rt/task_retry.go. The two things
 // Rust could not give the old run-once stub — re-running the one-shot
 // `IpeTask` future, and reading the generated, runtime-unnameable `RetryPolicy`
 // / `ShouldRetry` ADT fields — are both supplied by CODEGEN now:
-//   * The policy is DESTRUCTURED at the call site into the primitive fields
-//     (`max_attempts` / `base_ms` / `jitter` / `kind`) plus a `should_retry`
-//     closure lowered from the `ShouldRetry e` ADT (`RetryAlways` → `|_| true`,
-//     `RetryWhen f` → `move |e| f(e.clone())`).
+//   * The policy is DESTRUCTURED at the call site into `max_attempts`,
+//     `base_ms`, a `BackoffStrategy`, and a `should_retry` closure.
 //   * The task argument is wrapped in a re-runnable `make_task : impl Fn() ->
 //     IpeTask<E, A>` closure, so each attempt rebuilds a fresh future (the
 //     side effects re-fire per attempt, exactly as Go re-invokes its thunk).
@@ -662,8 +678,7 @@ pub fn task_parallel<E: From<String> + Send + 'static, A: Send + 'static>(
 pub fn task_retry_with<E, A>(
     max_attempts: i64,
     base_ms: i64,
-    jitter: bool,
-    kind: i64,
+    strategy: BackoffStrategy,
     should_retry: impl Fn(&E) -> bool + Send + 'static,
     make_task: impl Fn() -> IpeTask<E, A> + Send + 'static,
 ) -> IpeTask<E, A>
@@ -685,7 +700,7 @@ where
                     if !should_retry(&e) {
                         return IpeResult::Err(e);
                     }
-                    let delay = retry_compute_delay(kind, base, attempt, jitter);
+                    let delay = retry_compute_delay(strategy, base, attempt);
                     if delay > 0 {
                         tokio::time::sleep(std::time::Duration::from_millis(delay as u64)).await;
                     }
@@ -702,19 +717,29 @@ where
 // so gated with it.
 #[cfg(all(feature = "tokio", not(target_arch = "wasm32")))]
 const RETRY_DELAY_CAP_MS: i64 = 30_000;
-#[cfg(all(feature = "tokio", not(target_arch = "wasm32")))]
-const RETRY_KIND_EXPONENTIAL: i64 = 1;
 
 // Port of Go's `computeDelay`. Wait before attempt n+1 (1-indexed: attempt 1
-// runs, then sleep compute_delay(1), then attempt 2, ...). Linear → `base`
-// every time; exponential → `base * 2^(attempt-1)` capped at 30 s. Jitter
-// multiplies by a uniform factor in [0.5, 1.5). Total: saturating arithmetic,
-// no overflow panic, result clamped to [0, RETRY_DELAY_CAP_MS]. Called only by
-// the reactor-gated `task_retry_with`, so gated with it.
+// runs, then sleep compute_delay(1), then attempt 2, ...).
+//
+// `Linear*`   → `base` every time.
+// `Exponential*` → `base * 2^(attempt-1)` capped at 30 s.
+// `*WithJitter` variants multiply by a uniform factor in [0.5, 1.5).
+//
+// Total: saturating arithmetic, no overflow panic, result clamped to
+// [0, RETRY_DELAY_CAP_MS]. Called only by the reactor-gated `task_retry_with`.
 #[cfg(all(feature = "tokio", not(target_arch = "wasm32")))]
-fn retry_compute_delay(kind: i64, base_ms: i64, attempt: i64, jitter: bool) -> i64 {
+fn retry_compute_delay(strategy: BackoffStrategy, base_ms: i64, attempt: i64) -> i64 {
+    let exponential = matches!(
+        strategy,
+        BackoffStrategy::Exponential | BackoffStrategy::ExponentialWithJitter
+    );
+    let jitter = matches!(
+        strategy,
+        BackoffStrategy::LinearWithJitter | BackoffStrategy::ExponentialWithJitter
+    );
+
     let mut d = base_ms;
-    if kind == RETRY_KIND_EXPONENTIAL {
+    if exponential {
         // base * 2^(attempt-1). Guard the shift (and the multiply) against
         // overflow on large attempt counts — saturate to the cap instead.
         if (1..=30).contains(&attempt) {
@@ -758,38 +783,56 @@ mod retry_tests {
 
     #[test]
     fn delay_linear_is_constant() {
-        // kind=0 (linear): always `base`, ignoring attempt.
-        assert_eq!(retry_compute_delay(0, 100, 1, false), 100);
-        assert_eq!(retry_compute_delay(0, 100, 5, false), 100);
+        assert_eq!(retry_compute_delay(BackoffStrategy::Linear, 100, 1), 100);
+        assert_eq!(retry_compute_delay(BackoffStrategy::Linear, 100, 5), 100);
     }
 
     #[test]
     fn delay_exponential_doubles() {
-        // kind=1: base * 2^(attempt-1).
-        assert_eq!(retry_compute_delay(1, 100, 1, false), 100);
-        assert_eq!(retry_compute_delay(1, 100, 2, false), 200);
-        assert_eq!(retry_compute_delay(1, 100, 3, false), 400);
-        assert_eq!(retry_compute_delay(1, 100, 4, false), 800);
+        assert_eq!(
+            retry_compute_delay(BackoffStrategy::Exponential, 100, 1),
+            100
+        );
+        assert_eq!(
+            retry_compute_delay(BackoffStrategy::Exponential, 100, 2),
+            200
+        );
+        assert_eq!(
+            retry_compute_delay(BackoffStrategy::Exponential, 100, 3),
+            400
+        );
+        assert_eq!(
+            retry_compute_delay(BackoffStrategy::Exponential, 100, 4),
+            800
+        );
     }
 
     #[test]
     fn delay_capped_at_30s() {
         // A large exponential must clamp to RETRY_DELAY_CAP_MS, never overflow.
-        assert_eq!(retry_compute_delay(1, 1000, 20, false), RETRY_DELAY_CAP_MS);
-        assert_eq!(retry_compute_delay(1, 1000, 99, false), RETRY_DELAY_CAP_MS);
-        // Even a huge base saturates rather than panicking.
         assert_eq!(
-            retry_compute_delay(1, i64::MAX, 5, false),
+            retry_compute_delay(BackoffStrategy::Exponential, 1000, 20),
+            RETRY_DELAY_CAP_MS
+        );
+        assert_eq!(
+            retry_compute_delay(BackoffStrategy::Exponential, 1000, 99),
+            RETRY_DELAY_CAP_MS
+        );
+        assert_eq!(
+            retry_compute_delay(BackoffStrategy::Exponential, i64::MAX, 5),
             RETRY_DELAY_CAP_MS
         );
     }
 
     #[test]
     fn delay_zero_base_is_zero() {
-        assert_eq!(retry_compute_delay(0, 0, 3, false), 0);
-        assert_eq!(retry_compute_delay(1, 0, 3, false), 0);
+        assert_eq!(retry_compute_delay(BackoffStrategy::Linear, 0, 3), 0);
+        assert_eq!(retry_compute_delay(BackoffStrategy::Exponential, 0, 3), 0);
         // jitter on a zero delay stays zero (guarded by `d > 0`).
-        assert_eq!(retry_compute_delay(1, 0, 3, true), 0);
+        assert_eq!(
+            retry_compute_delay(BackoffStrategy::ExponentialWithJitter, 0, 3),
+            0
+        );
     }
 
     #[test]
@@ -798,7 +841,7 @@ mod retry_tests {
         // in [0.5*d, 1.5*d] and never exceed the cap. Probe many draws.
         let base = 1000;
         for _ in 0..1000 {
-            let d = retry_compute_delay(0, base, 1, true);
+            let d = retry_compute_delay(BackoffStrategy::LinearWithJitter, base, 1);
             assert!(d >= 500, "jitter delay {} below 0.5*base", d);
             assert!(d <= 1500, "jitter delay {} above 1.5*base", d);
             assert!(d <= RETRY_DELAY_CAP_MS);
@@ -833,8 +876,7 @@ mod retry_tests {
         let task = task_retry_with(
             5,
             0,
-            false,
-            0,
+            BackoffStrategy::Linear,
             |_e: &String| true,
             transient_factory(counter.clone(), 3),
         );
@@ -852,8 +894,7 @@ mod retry_tests {
         let task = task_retry_with(
             4,
             0,
-            false,
-            0,
+            BackoffStrategy::Linear,
             |_e: &String| true,
             transient_factory(counter.clone(), 999),
         );
@@ -871,8 +912,7 @@ mod retry_tests {
         let task = task_retry_with(
             5,
             0,
-            false,
-            0,
+            BackoffStrategy::Linear,
             |_e: &String| false,
             transient_factory(counter.clone(), 999),
         );
@@ -891,8 +931,7 @@ mod retry_tests {
         let task = task_retry_with(
             10,
             0,
-            false,
-            0,
+            BackoffStrategy::Linear,
             |e: &String| e == "boom-1",
             transient_factory(counter.clone(), 999),
         );
@@ -911,8 +950,7 @@ mod retry_tests {
         let task = task_retry_with(
             0,
             0,
-            false,
-            0,
+            BackoffStrategy::Linear,
             |_e: &String| true,
             transient_factory(counter.clone(), 999),
         );
@@ -930,8 +968,7 @@ mod retry_tests {
         let task = task_retry_with(
             5,
             0,
-            false,
-            0,
+            BackoffStrategy::Linear,
             |_e: &String| true,
             transient_factory(counter.clone(), 1),
         );
