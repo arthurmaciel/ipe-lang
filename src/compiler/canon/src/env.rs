@@ -584,6 +584,29 @@ impl Env {
         self.qual_vars.get(&qualifier)
     }
 
+    /// All `StdlibKernel` values that are catalog-reachable in this `Env`.
+    ///
+    /// Iterates every entry in [`Self::qual_vars`] across all qualifier maps and
+    /// yields the kernel carried by each [`VarHome::Kernel`] home. Each yielded
+    /// kernel has at least one surface name that resolves through the catalog —
+    /// the inverse direction guarded by the anti-drift tripwire in `ipe_stdlib`.
+    ///
+    /// Aliases and shape-scoped copies produce duplicate yields for the same
+    /// kernel; callers that need set membership collect into a `Vec` and use
+    /// `contains`, or deduplicate as needed.
+    pub fn kernel_homes(&self) -> impl Iterator<Item = StdlibKernel> + '_ {
+        self.qual_vars
+            .values()
+            .flat_map(|members| members.values())
+            .filter_map(|home| {
+                if let VarHome::Kernel(k, _, _) = home {
+                    Some(*k)
+                } else {
+                    None
+                }
+            })
+    }
+
     /// Resolve a stdlib module's full import `path` (segment symbols) to the
     /// canonical qualifier symbol under which its kernel members are registered.
     ///

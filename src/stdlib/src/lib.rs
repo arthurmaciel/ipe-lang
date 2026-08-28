@@ -1159,4 +1159,128 @@ mod tests {
             violations.join("\n")
         );
     }
+
+    /// Anti-drift tripwire: every registered `StdlibKernel` whose qualifier is
+    /// user-visible must be reachable through at least one of two paths —
+    ///
+    /// 1. **Catalog reachability**: its `(qualifier, name)` appears as a
+    ///    `VarHome::Kernel` in a freshly-built `Env`'s `qual_vars`.
+    /// 2. **Compiled-source reachability**: a compiled-source `.ipe` module
+    ///    contains a point-free `Ffi.kernel "Qualifier_name"` alias whose raw
+    ///    string, split at the first `_`, matches `(qualifier, name)`.
+    ///
+    /// A kernel reachable through neither resolves to IPE-N0005 (`X doesn't have
+    /// anything called Y`) — a silently dead feature.  This test closes that class
+    /// for every future kernel without a hand-maintained allow-list.
+    ///
+    /// The inverse direction (catalog entry → registry) is guarded by the
+    /// `stdlib_catalog_matches_kernel_registry` tripwire in `ipe_canon`.
+    #[test]
+    fn every_kernel_is_reachable() {
+        use ipe_canon::Env;
+        use ipe_intern::Interner;
+        use ipe_kernels::StdlibKernel;
+        use ipe_syntax::Expr_;
+
+        // ── Step 1: catalog-reachable set ────────────────────────────────────
+        // Collect every StdlibKernel carried by a VarHome::Kernel entry across
+        // all qualifier maps.  Aliases and shape-scoped copies may yield the
+        // same kernel more than once; Vec + contains() is sufficient.
+        let mut interner = Interner::new();
+        let env = Env::initial(vec![], &mut interner).expect("Env::initial must not fail");
+        let catalog_reachable: Vec<StdlibKernel> = env.kernel_homes().collect();
+
+        // ── Step 2: compiled-source-reachable set ────────────────────────────
+        // Scan every compiled-source module for the exact `Ffi.kernel "<raw>"`
+        // call shape (point-free binding whose body is a qualified call
+        // `Ffi.kernel` applied to a single string literal).  Split the raw
+        // string at the first `_` to recover `(qualifier, name)`.
+        //
+        // The parsed AST walk mirrors `detect_kernel_alias` in `ipe_canon` and
+        // is immune to false positives from comments or string content: only
+        // value bodies that parse as `VarQual("Ffi", "kernel")` applied to one
+        // string literal are counted.
+        let mut compiled_reachable: Vec<(String, String)> = Vec::new();
+
+        let all_sources = MODULES
+            .iter()
+            .map(|m| m.source)
+            .chain(COMPILED_STD_MODULES.iter().map(|m| m.source));
+
+        for source in all_sources {
+            let mut local_interner = Interner::new();
+            let Ok(parsed) = ipe_parse::parse_module(source, &mut local_interner) else {
+                continue; // parse failures are caught by other tests
+            };
+            // Re-intern the reserved `Ffi` / `kernel` tokens in this module's
+            // interner so symbol comparisons are valid within the same interner.
+            let Ok(local_ffi) = local_interner.intern("Ffi") else {
+                continue;
+            };
+            let Ok(local_kernel) = local_interner.intern("kernel") else {
+                continue;
+            };
+            for value in &parsed.values {
+                // Only bare (point-free) bindings are Ffi.kernel aliases.
+                if !value.value.patterns.is_empty() {
+                    continue;
+                }
+                let Expr_::Call(callee, args) = &value.value.body.value else {
+                    continue;
+                };
+                let Expr_::VarQual(q_sym, m_sym) = &callee.value else {
+                    continue;
+                };
+                if *q_sym != local_ffi || *m_sym != local_kernel {
+                    continue;
+                }
+                let [arg] = args.as_slice() else {
+                    continue;
+                };
+                let Expr_::Str(raw) = &arg.value else {
+                    continue;
+                };
+                // Split at the first `_`: `"File_walk"` → `("File", "walk")`.
+                if let Some((q, n)) = raw.split_once('_')
+                    && !q.is_empty()
+                    && !n.is_empty()
+                {
+                    compiled_reachable.push((q.to_owned(), n.to_owned()));
+                }
+            }
+        }
+
+        // ── Step 3: cross-check every registered kernel ───────────────────────
+        let mut failures: Vec<String> = Vec::new();
+        for sk in StdlibKernel::ALL {
+            let d = sk.decl();
+            // Internal kernels (qualifier starts with `_`) are not user-visible.
+            if d.qualifier.starts_with('_') {
+                continue;
+            }
+            let catalog_ok = catalog_reachable.contains(sk);
+            let compiled_ok = compiled_reachable
+                .iter()
+                .any(|(q, n)| q == d.qualifier && n == d.name);
+            if !catalog_ok && !compiled_ok {
+                failures.push(format!(
+                    "StdlibKernel::{sk:?} — `{q}.{n}` is registered but UNREACHABLE: \
+                     not in the env.rs QUALIFIERS member catalog and not via a \
+                     `Ffi.kernel \"{q}_{n}\"` alias in any compiled-source module. \
+                     It resolves to IPE-N0005 (dead feature). Add its catalog line \
+                     to `install_prelude_qualifiers` OR its `Ffi.kernel` alias to \
+                     the owning `.ipe` module.",
+                    sk = sk,
+                    q = d.qualifier,
+                    n = d.name,
+                ));
+            }
+        }
+        assert!(
+            failures.is_empty(),
+            "kernel reachability tripwire: {} dead feature(s) found:\n{}",
+            failures.len(),
+            failures.join("\n")
+        );
+    }
 }

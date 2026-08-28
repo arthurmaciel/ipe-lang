@@ -2340,6 +2340,7 @@ version = "0.1.69"
 dependencies = [
  "ipe_canon",
  "ipe_intern",
+ "ipe_kernels",
  "ipe_parse",
  "ipe_syntax",
 ]
