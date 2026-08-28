@@ -460,14 +460,8 @@ pub fn builtin_empty_home_arity(name: Option<&str>) -> Option<usize> {
     match name? {
         "List" | "Maybe" | "Set" | "Connection" | "Setting" => Some(1),
         "Dict" | "Result" => Some(2),
-        "ReadOnly"
-        | "ReadWrite"
-        | "HostMode"
-        | "LogLevel"
-        | "CsrfMode"
-        | "RevocationMode"
-        | "ProjectionTerm"
-        | "CoalesceOperand" => Some(0),
+        "ReadOnly" | "ReadWrite" | "HostMode" | "LogLevel" | "CsrfMode" | "RevocationMode"
+        | "ProjectionTerm" | "CoalesceOperand" => Some(0),
         _ => None,
     }
 }
