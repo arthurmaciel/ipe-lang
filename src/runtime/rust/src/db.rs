@@ -8,6 +8,43 @@ use std::collections::HashMap;
 
 pub type Db = DbPool;
 
+/// One term in a `Store.select` projection — the typed carrier that replaces the
+/// stringly-encoded `(tag, operand_a, operand_b)` triple.  Illegal states are
+/// unrepresentable: the variant set is closed, there is no tag-string re-derivation,
+/// and no "else = column" fallthrough.
+///
+/// Defence in depth is preserved: every `String` field that reaches SQL text is
+/// re-validated via [`SqlIdent::parse_plain`] or [`SqlIdent::parse_dotted`] inside
+/// [`build_projection_statement`] before interpolation.
+#[derive(Clone, Debug, PartialEq)]
+pub enum ProjectionTerm {
+    /// Plain `alias.column AS pN` — `alias` and `column` are bare SQL identifiers.
+    ColumnTerm(String, String),
+    /// `? AS pN` — `Store.literal` position; the bound value comes from the
+    /// `extra_binds` slice in positional order.
+    LiteralTerm,
+    /// `UPPER(dotted) AS pN` — `dotted` is `"alias.col"` re-validated via
+    /// [`SqlIdent::parse_dotted`].
+    UpperTerm(String),
+    /// `LOWER(dotted) AS pN` — `dotted` is `"alias.col"` re-validated via
+    /// [`SqlIdent::parse_dotted`].
+    LowerTerm(String),
+    /// `COALESCE(a, b) AS pN` — each operand is either a dotted column or a
+    /// literal `?` placeholder.
+    CoalesceTerm(CoalesceOperand, CoalesceOperand),
+}
+
+/// One operand inside a [`ProjectionTerm::CoalesceTerm`].  Replaces the
+/// `is_empty()` sentinel on the `(tag, operand_a, operand_b)` third string.
+#[derive(Clone, Debug, PartialEq)]
+pub enum CoalesceOperand {
+    /// A dotted `alias.col` column reference, re-validated via
+    /// [`SqlIdent::parse_dotted`] before SQL interpolation.
+    OperandColumn(String),
+    /// A `?` placeholder whose bound value comes from `extra_binds`.
+    OperandLiteral,
+}
+
 /// Build a Ipê-visible `Error` from a sqlx error WITHOUT leaking row/column
 /// VALUES. The `Display` of a driver error (PostgreSQL/MySQL especially) embeds
 /// the offending value in a constraint-violation message — e.g.
@@ -2686,7 +2723,7 @@ pub fn db_find_projection<E: Send + From<String> + 'static>(
     right_table: String,
     right_alias: String,
     frag: SqlFragment,
-    projections: Vec<(String, String, String)>,
+    projections: Vec<ProjectionTerm>,
     extra_binds: Vec<SqlParam>,
 ) -> IpeTask<E, Vec<HashMap<String, String>>> {
     Box::pin(async move {
@@ -2806,7 +2843,7 @@ pub fn db_find_projection_ordered<E: Send + From<String> + 'static>(
     right_table: String,
     right_alias: String,
     frag: SqlFragment,
-    projections: Vec<(String, String, String)>,
+    projections: Vec<ProjectionTerm>,
     extra_binds: Vec<SqlParam>,
     order_alias: String,
     order_col: String,
@@ -2873,36 +2910,36 @@ fn parse_order_clause(alias: &str, col: &str, ascending: bool) -> Result<String,
 }
 
 /// Build the single parameterized projection statement from the two validated
-/// sides, the ordered projection term triples, and the combinator-built WHERE
-/// text. The SELECT names only the projected terms as `p<index>` outputs
+/// sides, the ordered typed [`ProjectionTerm`] list, and the combinator-built
+/// WHERE text.  The SELECT names only the projected terms as `p<index>` outputs
 /// (column pushdown), the FROM lists both `table AS alias` terms, and the WHERE
 /// is the `?`-placeholder fragment text.
 ///
-/// Each projection triple `(tag, operand_a, operand_b)` encodes one SELECT term:
+/// Each [`ProjectionTerm`] variant maps to one SELECT term:
 ///
-/// - `("", "", "")` — `Store.literal` position: emits `? AS p<index>`; the
-///   bound value comes from `extra_binds` in positional order.
-/// - `("UPPER"/"LOWER", dotted_col, "")` — unary text function sentinel:
-///   emits `UPPER(alias.col) AS p<index>` or `LOWER(…)`. `dotted_col` is
-///   `"alias.col"` re-validated via `SqlIdent::parse_dotted`.
-/// - `("COALESCE", operand_a, operand_b)` — binary COALESCE sentinel: each
-///   non-empty operand is a dotted column re-validated via `parse_dotted`; an
-///   empty operand is a `?` placeholder whose value binds from `extra_binds`.
-///   Emits `COALESCE(a, b) AS p<index>`.
-/// - `(alias, column, "")` — plain `alias.column AS p<index>` column reference.
+/// - [`ProjectionTerm::LiteralTerm`] — `? AS p<index>`; bound value from
+///   `extra_binds` in positional order.
+/// - [`ProjectionTerm::UpperTerm`] / [`ProjectionTerm::LowerTerm`] — the dotted
+///   `"alias.col"` field is re-validated via [`SqlIdent::parse_dotted`]; SQL
+///   function name comes from the closed variant set, never from input.
+/// - [`ProjectionTerm::CoalesceTerm`] — each [`CoalesceOperand`] is either
+///   `OperandColumn(dotted)` (re-validated via `parse_dotted`) or
+///   `OperandLiteral` (a `?` bound from `extra_binds`).
+/// - [`ProjectionTerm::ColumnTerm`] — `alias.column AS p<index>`, both
+///   identifiers re-validated via [`SqlIdent::parse_plain`].
 ///
-/// The returned `usize` is the total count of `?` parameter positions across
-/// all terms so the caller can validate the bound `extra_binds` slice.
+/// The returned `usize` is the total count of `?` positions across all terms so
+/// the caller can validate the bound `extra_binds` slice.
 ///
-/// Every non-empty identifier passes `SqlIdent::parse_plain` or
-/// `SqlIdent::parse_dotted` before it reaches SQL text; the two sides must
+/// Every identifier passes [`SqlIdent::parse_plain`] or
+/// [`SqlIdent::parse_dotted`] before it reaches SQL text; the two sides must
 /// carry distinct aliases and the projection must name at least one term.
 fn build_projection_statement(
     left_table: &str,
     left_alias: &str,
     right_table: &str,
     right_alias: &str,
-    projections: &[(String, String, String)],
+    projections: &[ProjectionTerm],
     where_sql: &str,
 ) -> Result<(String, usize), String> {
     let left_table_id =
@@ -2924,43 +2961,49 @@ fn build_projection_statement(
     }
     let mut terms = Vec::with_capacity(projections.len());
     let mut literal_count: usize = 0;
-    for (index, (tag, operand_a, operand_b)) in projections.iter().enumerate() {
+    for (index, term) in projections.iter().enumerate() {
         let output_name = format!("p{index}");
         let output = SqlIdent::parse_plain(&output_name)
             .ok_or_else(|| format!("invalid projection output {output_name:?}"))?;
-        if tag.is_empty() {
-            // `Store.literal` position: bind the value as a `?` parameter.
-            terms.push(format!("? AS {}", output.as_str()));
-            literal_count += 1;
-        } else if tag == "UPPER" || tag == "LOWER" {
-            // `Store.upper` / `Store.lower` sentinel: `operand_a` is "alias.col"
-            // (dotted). Validate via `SqlIdent::parse_dotted` (defence in depth)
-            // before interpolation — the SQL function name comes from our own
-            // closed tag set, never from user input.
-            let dotted = SqlIdent::parse_dotted(operand_a)
-                .ok_or_else(|| format!("invalid projection column {operand_a:?}"))?;
-            terms.push(format!(
-                "{fn_name}({col}) AS {out}",
-                fn_name = tag,
-                col = dotted.as_str(),
-                out = output.as_str(),
-            ));
-        } else if tag == "COALESCE" {
-            // `Store.coalesce` sentinel: each non-empty operand is a dotted
-            // column re-validated via `parse_dotted`; an empty operand is a `?`
-            // whose value binds from `extra_binds`. The SQL function name comes
-            // from our own closed tag set, never from user input.
-            let a_sql = render_coalesce_operand(operand_a, &mut literal_count)?;
-            let b_sql = render_coalesce_operand(operand_b, &mut literal_count)?;
-            terms.push(format!(
-                "COALESCE({a}, {b}) AS {out}",
-                a = a_sql,
-                b = b_sql,
-                out = output.as_str(),
-            ));
-        } else {
-            let projected = ProjectionColumn::parse(tag, operand_a, index)?;
-            terms.push(projected.projection_term());
+        match term {
+            ProjectionTerm::LiteralTerm => {
+                terms.push(format!("? AS {}", output.as_str()));
+                literal_count += 1;
+            }
+            ProjectionTerm::UpperTerm(dotted) => {
+                // Defence in depth: re-validate the dotted column via
+                // `SqlIdent::parse_dotted` before interpolation.
+                let col = SqlIdent::parse_dotted(dotted)
+                    .ok_or_else(|| format!("invalid projection column {dotted:?}"))?;
+                terms.push(format!(
+                    "UPPER({col}) AS {out}",
+                    col = col.as_str(),
+                    out = output.as_str(),
+                ));
+            }
+            ProjectionTerm::LowerTerm(dotted) => {
+                let col = SqlIdent::parse_dotted(dotted)
+                    .ok_or_else(|| format!("invalid projection column {dotted:?}"))?;
+                terms.push(format!(
+                    "LOWER({col}) AS {out}",
+                    col = col.as_str(),
+                    out = output.as_str(),
+                ));
+            }
+            ProjectionTerm::CoalesceTerm(a, b) => {
+                let a_sql = render_coalesce_operand(a, &mut literal_count)?;
+                let b_sql = render_coalesce_operand(b, &mut literal_count)?;
+                terms.push(format!(
+                    "COALESCE({a}, {b}) AS {out}",
+                    a = a_sql,
+                    b = b_sql,
+                    out = output.as_str(),
+                ));
+            }
+            ProjectionTerm::ColumnTerm(alias, column) => {
+                let projected = ProjectionColumn::parse(alias, column, index)?;
+                terms.push(projected.projection_term());
+            }
         }
     }
     Ok((
@@ -2977,33 +3020,38 @@ fn build_projection_statement(
     ))
 }
 
-/// Render one operand of a `COALESCE` projection term for inclusion in the
-/// generated SQL. A non-empty operand is a dotted `alias.column` reference
-/// re-validated via [`SqlIdent::parse_dotted`] (defence in depth) before it
-/// reaches SQL text. An empty operand is a literal `?` placeholder whose bound
-/// value comes from `extra_binds` at the position tracked by `literal_count`.
-fn render_coalesce_operand(operand: &str, literal_count: &mut usize) -> Result<String, String> {
-    if operand.is_empty() {
-        *literal_count += 1;
-        Ok("?".to_string())
-    } else {
-        let dotted = SqlIdent::parse_dotted(operand)
-            .ok_or_else(|| format!("invalid COALESCE operand {operand:?}"))?;
-        Ok(dotted.as_str().to_string())
+/// Render one [`CoalesceOperand`] for SQL inclusion.  A column operand's dotted
+/// reference is re-validated via [`SqlIdent::parse_dotted`] (defence in depth)
+/// before it reaches SQL text.  A literal operand emits `?` and increments the
+/// caller's `literal_count`.
+fn render_coalesce_operand(
+    operand: &CoalesceOperand,
+    literal_count: &mut usize,
+) -> Result<String, String> {
+    match operand {
+        CoalesceOperand::OperandLiteral => {
+            *literal_count += 1;
+            Ok("?".to_string())
+        }
+        CoalesceOperand::OperandColumn(dotted) => {
+            let id = SqlIdent::parse_dotted(dotted)
+                .ok_or_else(|| format!("invalid COALESCE operand {dotted:?}"))?;
+            Ok(id.as_str().to_string())
+        }
     }
 }
 
-/// Build the projection statement like `build_projection_statement` but append
-/// `ORDER BY <order_clause>`. The `order_clause` string was produced by
-/// `parse_order_clause` and contains only pre-validated identifiers. Returns
-/// the SQL string and the count of `Store.literal` positions (empty-alias pairs)
-/// for the caller to validate the bound `extra_binds` slice.
+/// Build the projection statement like [`build_projection_statement`] but append
+/// `ORDER BY <order_clause>`.  The `order_clause` string was produced by
+/// [`parse_order_clause`] and contains only pre-validated identifiers.  Returns
+/// the SQL string and the count of literal `?` positions for the caller to
+/// validate the bound `extra_binds` slice.
 fn build_projection_statement_ordered(
     left_table: &str,
     left_alias: &str,
     right_table: &str,
     right_alias: &str,
-    projections: &[(String, String, String)],
+    projections: &[ProjectionTerm],
     where_sql: &str,
     order_clause: &str,
 ) -> Result<(String, usize), String> {
@@ -3026,34 +3074,47 @@ fn build_projection_statement_ordered(
     }
     let mut terms = Vec::with_capacity(projections.len());
     let mut literal_count: usize = 0;
-    for (index, (tag, operand_a, operand_b)) in projections.iter().enumerate() {
+    for (index, term) in projections.iter().enumerate() {
         let output_name = format!("p{index}");
         let output = SqlIdent::parse_plain(&output_name)
             .ok_or_else(|| format!("invalid projection output {output_name:?}"))?;
-        if tag.is_empty() {
-            terms.push(format!("? AS {}", output.as_str()));
-            literal_count += 1;
-        } else if tag == "UPPER" || tag == "LOWER" {
-            let dotted = SqlIdent::parse_dotted(operand_a)
-                .ok_or_else(|| format!("invalid projection column {operand_a:?}"))?;
-            terms.push(format!(
-                "{fn_name}({col}) AS {out}",
-                fn_name = tag,
-                col = dotted.as_str(),
-                out = output.as_str(),
-            ));
-        } else if tag == "COALESCE" {
-            let a_sql = render_coalesce_operand(operand_a, &mut literal_count)?;
-            let b_sql = render_coalesce_operand(operand_b, &mut literal_count)?;
-            terms.push(format!(
-                "COALESCE({a}, {b}) AS {out}",
-                a = a_sql,
-                b = b_sql,
-                out = output.as_str(),
-            ));
-        } else {
-            let projected = ProjectionColumn::parse(tag, operand_a, index)?;
-            terms.push(projected.projection_term());
+        match term {
+            ProjectionTerm::LiteralTerm => {
+                terms.push(format!("? AS {}", output.as_str()));
+                literal_count += 1;
+            }
+            ProjectionTerm::UpperTerm(dotted) => {
+                let col = SqlIdent::parse_dotted(dotted)
+                    .ok_or_else(|| format!("invalid projection column {dotted:?}"))?;
+                terms.push(format!(
+                    "UPPER({col}) AS {out}",
+                    col = col.as_str(),
+                    out = output.as_str(),
+                ));
+            }
+            ProjectionTerm::LowerTerm(dotted) => {
+                let col = SqlIdent::parse_dotted(dotted)
+                    .ok_or_else(|| format!("invalid projection column {dotted:?}"))?;
+                terms.push(format!(
+                    "LOWER({col}) AS {out}",
+                    col = col.as_str(),
+                    out = output.as_str(),
+                ));
+            }
+            ProjectionTerm::CoalesceTerm(a, b) => {
+                let a_sql = render_coalesce_operand(a, &mut literal_count)?;
+                let b_sql = render_coalesce_operand(b, &mut literal_count)?;
+                terms.push(format!(
+                    "COALESCE({a}, {b}) AS {out}",
+                    a = a_sql,
+                    b = b_sql,
+                    out = output.as_str(),
+                ));
+            }
+            ProjectionTerm::ColumnTerm(alias, column) => {
+                let projected = ProjectionColumn::parse(alias, column, index)?;
+                terms.push(projected.projection_term());
+            }
         }
     }
     Ok((
@@ -6099,7 +6160,7 @@ mod tests {
             "a0",
             "authors",
             "a1",
-            &[("a1".to_string(), "name".to_string(), "".to_string())],
+            &[ProjectionTerm::ColumnTerm("a1".into(), "name".into())],
             &frag.sql,
         )
         .expect("statement builds");
@@ -6129,8 +6190,8 @@ mod tests {
             "authors",
             "a1",
             &[
-                ("a0".to_string(), "title".to_string(), "".to_string()),
-                ("a1".to_string(), "name".to_string(), "".to_string()),
+                ProjectionTerm::ColumnTerm("a0".into(), "title".into()),
+                ProjectionTerm::ColumnTerm("a1".into(), "name".into()),
             ],
             &frag.sql,
         )
@@ -6158,12 +6219,8 @@ mod tests {
             "authors",
             "a1",
             &[
-                ("a0".to_string(), "title".to_string(), "".to_string()),
-                (
-                    "a1".to_string(),
-                    "name); DROP TABLE authors".to_string(),
-                    "".to_string(),
-                ),
+                ProjectionTerm::ColumnTerm("a0".into(), "title".into()),
+                ProjectionTerm::ColumnTerm("a1".into(), "name); DROP TABLE authors".into()),
             ],
             &frag.sql,
         );
@@ -6191,7 +6248,7 @@ mod tests {
             "a0",
             "authors",
             "a1",
-            &[("a1".to_string(), "name".to_string(), "".to_string())],
+            &[ProjectionTerm::ColumnTerm("a1".into(), "name".into())],
             &frag.sql,
         )
         .expect("statement builds");
@@ -6221,10 +6278,9 @@ mod tests {
             "a0",
             "authors",
             "a1",
-            &[(
-                "a1".to_string(),
-                "name; DROP TABLE authors".to_string(),
-                "".to_string(),
+            &[ProjectionTerm::ColumnTerm(
+                "a1".into(),
+                "name; DROP TABLE authors".into(),
             )],
             &frag.sql,
         );
@@ -6267,7 +6323,7 @@ mod tests {
             "authors".into(),
             "a1".into(),
             frag,
-            vec![("a1".to_string(), "name".to_string(), "".to_string())],
+            vec![ProjectionTerm::ColumnTerm("a1".into(), "name".into())],
             vec![],
         )
         .await;
@@ -6305,8 +6361,8 @@ mod tests {
             "a1".into(),
             frag,
             vec![
-                ("a0".to_string(), "title".to_string(), "".to_string()),
-                ("a1".to_string(), "name".to_string(), "".to_string()),
+                ProjectionTerm::ColumnTerm("a0".into(), "title".into()),
+                ProjectionTerm::ColumnTerm("a1".into(), "name".into()),
             ],
             vec![],
         )
@@ -7161,14 +7217,13 @@ mod tests {
         assert!(result.is_err(), "a non-identifier column must be rejected");
     }
 
-    // ── Store.upper / Store.lower sentinel: `UPPER/LOWER(alias.col) AS pN` ─────
+    // ── Store.upper / Store.lower: `UPPER/LOWER(alias.col) AS pN` ──────────────
 
-    /// Golden SQL: the `("UPPER", "a1.name", "")` sentinel triple emits exactly
-    /// `UPPER(a1.name) AS p0` — the SQL function name comes from our own closed
-    /// tag set, and the dotted column reference is re-validated via
-    /// `SqlIdent::parse_dotted` (defence in depth) before interpolation.
+    /// Golden SQL: `UpperTerm("a1.name")` emits exactly `UPPER(a1.name) AS p0`
+    /// — the SQL function name comes from the closed variant, the dotted column
+    /// is re-validated via `SqlIdent::parse_dotted` (defence in depth).
     #[test]
-    fn projection_statement_upper_sentinel_emits_exact_function_sql() {
+    fn projection_statement_upper_term_emits_exact_function_sql() {
         let frag = sql_eq(
             sql_column("a1.id".to_string()),
             sql_column("a0.author_id".to_string()),
@@ -7178,14 +7233,11 @@ mod tests {
             "a0",
             "authors",
             "a1",
-            &[("UPPER".to_string(), "a1.name".to_string(), "".to_string())],
+            &[ProjectionTerm::UpperTerm("a1.name".into())],
             &frag.sql,
         )
-        .expect("UPPER sentinel with a valid dotted column must build");
-        assert_eq!(
-            literal_count, 0,
-            "an UPPER sentinel binds no extra parameter"
-        );
+        .expect("UpperTerm with a valid dotted column must build");
+        assert_eq!(literal_count, 0, "an UpperTerm binds no extra parameter");
         assert_eq!(
             sql,
             "SELECT UPPER(a1.name) AS p0 \
@@ -7193,11 +7245,10 @@ mod tests {
         );
     }
 
-    /// A bad dotted column inside the UPPER sentinel (injection characters in the
-    /// column half) is rejected fail-closed — `SqlIdent::parse_dotted` refuses the
-    /// identifier before it can reach SQL text.
+    /// A bad dotted column inside `UpperTerm` is rejected fail-closed —
+    /// `SqlIdent::parse_dotted` refuses the identifier before SQL text.
     #[test]
-    fn projection_statement_upper_sentinel_rejects_bad_dotted_column() {
+    fn projection_statement_upper_term_rejects_bad_dotted_column() {
         let frag = sql_eq(
             sql_column("a1.id".to_string()),
             sql_column("a0.author_id".to_string()),
@@ -7207,10 +7258,8 @@ mod tests {
             "a0",
             "authors",
             "a1",
-            &[(
-                "UPPER".to_string(),
-                "a1.name); DROP TABLE authors".to_string(),
-                "".to_string(),
+            &[ProjectionTerm::UpperTerm(
+                "a1.name); DROP TABLE authors".into(),
             )],
             &frag.sql,
         );
@@ -7223,11 +7272,7 @@ mod tests {
             "a0",
             "authors",
             "a1",
-            &[(
-                "UPPER".to_string(),
-                "a1.name col".to_string(),
-                "".to_string(),
-            )],
+            &[ProjectionTerm::UpperTerm("a1.name col".into())],
             &frag.sql,
         );
         assert!(
@@ -7239,11 +7284,7 @@ mod tests {
             "a0",
             "authors",
             "a1",
-            &[(
-                "UPPER".to_string(),
-                "a1.name(x)".to_string(),
-                "".to_string(),
-            )],
+            &[ProjectionTerm::UpperTerm("a1.name(x)".into())],
             &frag.sql,
         );
         assert!(
@@ -7252,28 +7293,24 @@ mod tests {
         );
     }
 
-    // ── Store.literal sentinel: `? AS pN` in projection SELECT ────────────────
+    // ── Store.literal: `? AS pN` in projection SELECT ────────────────────────
 
-    /// Golden SQL: a mixed projection with one `Store.literal` position and one
-    /// column reference lowers to `SELECT ? AS p0, a1.name AS p1 FROM … WHERE …`.
-    /// The empty-tag sentinel triple `("", "", "")` produces `? AS p0`; the literal
-    /// count returned is 1 so the caller binds exactly one extra parameter before
-    /// the WHERE params.
+    /// Golden SQL: a mixed projection with `LiteralTerm` and `ColumnTerm` lowers
+    /// to `SELECT ? AS p0, a1.name AS p1 FROM … WHERE …`.  Literal count is 1.
     #[test]
-    fn projection_statement_literal_sentinel_emits_question_mark_alias() {
+    fn projection_statement_literal_term_emits_question_mark_alias() {
         let frag = sql_eq(
             sql_column("a1.id".to_string()),
             sql_column("a0.author_id".to_string()),
         );
-        // ("", "", "") is the sentinel for a `Store.literal` position.
         let (sql, literal_count) = build_projection_statement(
             "books",
             "a0",
             "authors",
             "a1",
             &[
-                ("".to_string(), "".to_string(), "".to_string()),
-                ("a1".to_string(), "name".to_string(), "".to_string()),
+                ProjectionTerm::LiteralTerm,
+                ProjectionTerm::ColumnTerm("a1".into(), "name".into()),
             ],
             &frag.sql,
         )
@@ -7302,7 +7339,6 @@ mod tests {
             ),
             sql_eq(sql_column("a1.active".to_string()), sql_param(1_i64)),
         );
-        // ("", "", "") maps to `? AS p0`; ("a1", "name", "") maps to `a1.name AS p1`.
         let found: IpeResult<String, Vec<HashMap<String, String>>> = db_find_projection(
             db,
             "books".into(),
@@ -7311,8 +7347,8 @@ mod tests {
             "a1".into(),
             frag,
             vec![
-                ("".to_string(), "".to_string(), "".to_string()),
-                ("a1".to_string(), "name".to_string(), "".to_string()),
+                ProjectionTerm::LiteralTerm,
+                ProjectionTerm::ColumnTerm("a1".into(), "name".into()),
             ],
             vec![SqlParam::Text("fiction".to_string())],
         )
@@ -7339,7 +7375,7 @@ mod tests {
     }
 
     /// `db_find_projection` with a mismatched `extra_binds` count fails closed —
-    /// one literal position in the projection but zero extra binds.
+    /// one `LiteralTerm` in the projection but zero extra binds.
     #[tokio::test]
     async fn test_find_projection_rejects_mismatched_extra_binds() {
         let db = fresh_join_db().await;
@@ -7354,7 +7390,7 @@ mod tests {
             "authors".into(),
             "a1".into(),
             frag,
-            vec![("".to_string(), "".to_string(), "".to_string())],
+            vec![ProjectionTerm::LiteralTerm],
             vec![], // no extra bind for the one literal position — must fail
         )
         .await;
@@ -7364,12 +7400,11 @@ mod tests {
         );
     }
 
-    // ── Store.coalesce sentinel: `COALESCE(a, b) AS pN` ──────────────────────
+    // ── Store.coalesce: `COALESCE(a, b) AS pN` ───────────────────────────────
 
-    /// Golden SQL: the `("COALESCE", "a1.name", "")` triple emits exactly
-    /// `COALESCE(a1.name, ?) AS p0` — column operand `a` is re-validated via
-    /// `SqlIdent::parse_dotted`; the empty operand `b` is a `?` bound from
-    /// `extra_binds`. Literal count is 1.
+    /// Golden SQL: `CoalesceTerm(OperandColumn("a1.name"), OperandLiteral)` emits
+    /// exactly `COALESCE(a1.name, ?) AS p0` — the column operand is re-validated
+    /// via `SqlIdent::parse_dotted`; the literal operand emits `?`.  Count is 1.
     #[test]
     fn projection_statement_coalesce_column_literal_emits_exact_sql() {
         let frag = sql_eq(
@@ -7381,17 +7416,16 @@ mod tests {
             "a0",
             "authors",
             "a1",
-            &[(
-                "COALESCE".to_string(),
-                "a1.name".to_string(),
-                "".to_string(),
+            &[ProjectionTerm::CoalesceTerm(
+                CoalesceOperand::OperandColumn("a1.name".into()),
+                CoalesceOperand::OperandLiteral,
             )],
             &frag.sql,
         )
-        .expect("COALESCE(column, literal) must build");
+        .expect("CoalesceTerm(column, literal) must build");
         assert_eq!(
             literal_count, 1,
-            "one literal position for the empty operand"
+            "one literal position for the OperandLiteral"
         );
         assert_eq!(
             sql,
@@ -7400,7 +7434,7 @@ mod tests {
         );
     }
 
-    /// Golden SQL: `("COALESCE", "a0.name", "a1.fallback", "")` emits
+    /// Golden SQL: `CoalesceTerm(OperandColumn("a0.name"), OperandColumn("a1.fallback"))` emits
     /// `COALESCE(a0.name, a1.fallback) AS p0` — both operands are column
     /// references re-validated via `SqlIdent::parse_dotted`; no extra bind.
     #[test]
@@ -7414,14 +7448,13 @@ mod tests {
             "a0",
             "authors",
             "a1",
-            &[(
-                "COALESCE".to_string(),
-                "a0.name".to_string(),
-                "a1.fallback".to_string(),
+            &[ProjectionTerm::CoalesceTerm(
+                CoalesceOperand::OperandColumn("a0.name".into()),
+                CoalesceOperand::OperandColumn("a1.fallback".into()),
             )],
             &frag.sql,
         )
-        .expect("COALESCE(column, column) must build");
+        .expect("CoalesceTerm(column, column) must build");
         assert_eq!(
             literal_count, 0,
             "no literal positions: both operands are columns"
@@ -7433,7 +7466,7 @@ mod tests {
         );
     }
 
-    /// A bad dotted column inside a COALESCE sentinel is rejected fail-closed.
+    /// A bad dotted column inside a `CoalesceTerm` is rejected fail-closed.
     #[test]
     fn projection_statement_coalesce_rejects_bad_dotted_operand() {
         let frag = sql_eq(
@@ -7445,10 +7478,9 @@ mod tests {
             "a0",
             "authors",
             "a1",
-            &[(
-                "COALESCE".to_string(),
-                "a1.name); DROP TABLE authors".to_string(),
-                "".to_string(),
+            &[ProjectionTerm::CoalesceTerm(
+                CoalesceOperand::OperandColumn("a1.name); DROP TABLE authors".into()),
+                CoalesceOperand::OperandLiteral,
             )],
             &frag.sql,
         );
@@ -7461,10 +7493,9 @@ mod tests {
             "a0",
             "authors",
             "a1",
-            &[(
-                "COALESCE".to_string(),
-                "a1.name".to_string(),
-                "a0.col; DROP".to_string(),
+            &[ProjectionTerm::CoalesceTerm(
+                CoalesceOperand::OperandColumn("a1.name".into()),
+                CoalesceOperand::OperandColumn("a0.col; DROP".into()),
             )],
             &frag.sql,
         );
@@ -7495,10 +7526,9 @@ mod tests {
             "authors".into(),
             "a1".into(),
             frag,
-            vec![(
-                "COALESCE".to_string(),
-                "a1.name".to_string(),
-                "".to_string(),
+            vec![ProjectionTerm::CoalesceTerm(
+                CoalesceOperand::OperandColumn("a1.name".into()),
+                CoalesceOperand::OperandLiteral,
             )],
             vec![SqlParam::Text("unknown".to_string())],
         )

@@ -138,6 +138,11 @@ pub const RESERVED_BUILTIN_TYPES: &[&str] = &[
     "Sub",
     "SqlValue",
     "SqlField",
+    // `Ipe.Db.Store`'s typed projection-descriptor ADTs.  Reserved so user code
+    // cannot declare a same-named union and silently override the synthetic
+    // `EnumDef` the lowerer injects (same precedent as `SqlValue`/`SqlField`).
+    "ProjectionTerm",
+    "CoalesceOperand",
     // `Ipe.Db.Sql`'s opaque WHERE-fragment type — reserved (not
     // `EXTRA_BUILTIN_TYPE_NAMES`) so user shadowing of this security-tier type
     // is a hard canon error, matching the `SqlValue`/`SqlField` precedent.
@@ -455,9 +460,14 @@ pub fn builtin_empty_home_arity(name: Option<&str>) -> Option<usize> {
     match name? {
         "List" | "Maybe" | "Set" | "Connection" | "Setting" => Some(1),
         "Dict" | "Result" => Some(2),
-        "ReadOnly" | "ReadWrite" | "HostMode" | "LogLevel" | "CsrfMode" | "RevocationMode" => {
-            Some(0)
-        }
+        "ReadOnly"
+        | "ReadWrite"
+        | "HostMode"
+        | "LogLevel"
+        | "CsrfMode"
+        | "RevocationMode"
+        | "ProjectionTerm"
+        | "CoalesceOperand" => Some(0),
         _ => None,
     }
 }

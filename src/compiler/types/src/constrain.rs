@@ -720,6 +720,35 @@ struct Builtins {
     /// type parameters; the scheme just names the ADT so inference pins the
     /// second argument of each kernel to `Order`.
     order_con: Symbol,
+    // ── Ipe.Db.Store.ProjectionTerm / CoalesceOperand ─────────────────────────
+    /// `"ProjectionTerm"` — typed representation of a single named-select
+    /// projection, backing `selectNamed`. Defined in `ipe_runtime::db` and
+    /// exported via a type alias from the Spine. Zero type arguments.
+    projection_term: Symbol,
+    /// `"ColumnTerm"` — `ColumnTerm String String` constructor of `ProjectionTerm`
+    /// (left-table column, right-table column).
+    column_term: Symbol,
+    /// `"LiteralTerm"` — `LiteralTerm` nullary constructor of `ProjectionTerm`
+    /// (a `?` literal placeholder).
+    literal_term: Symbol,
+    /// `"UpperTerm"` — `UpperTerm String` constructor of `ProjectionTerm`
+    /// (upper-cased column reference).
+    upper_term: Symbol,
+    /// `"LowerTerm"` — `LowerTerm String` constructor of `ProjectionTerm`
+    /// (lower-cased column reference).
+    lower_term: Symbol,
+    /// `"CoalesceTerm"` — `CoalesceTerm CoalesceOperand CoalesceOperand`
+    /// constructor of `ProjectionTerm` (SQL COALESCE of two operands).
+    coalesce_term: Symbol,
+    /// `"CoalesceOperand"` — companion type for the two operands of `CoalesceTerm`.
+    /// Defined in `ipe_runtime::db` alongside `ProjectionTerm`.
+    coalesce_operand: Symbol,
+    /// `"OperandColumn"` — `OperandColumn String` constructor of `CoalesceOperand`
+    /// (a dotted column reference).
+    operand_column: Symbol,
+    /// `"OperandLiteral"` — `OperandLiteral` nullary constructor of `CoalesceOperand`
+    /// (a `?` literal placeholder).
+    operand_literal: Symbol,
 }
 
 impl Builtins {
@@ -973,6 +1002,16 @@ impl Builtins {
             policy_con: interner.intern("Policy")?,
             order_con: interner.intern("Order")?,
             codec_con: interner.intern("Codec")?,
+            // ── ProjectionTerm / CoalesceOperand ──────────────────────────────
+            projection_term: interner.intern("ProjectionTerm")?,
+            column_term: interner.intern("ColumnTerm")?,
+            literal_term: interner.intern("LiteralTerm")?,
+            upper_term: interner.intern("UpperTerm")?,
+            lower_term: interner.intern("LowerTerm")?,
+            coalesce_term: interner.intern("CoalesceTerm")?,
+            coalesce_operand: interner.intern("CoalesceOperand")?,
+            operand_column: interner.intern("OperandColumn")?,
+            operand_literal: interner.intern("OperandLiteral")?,
         })
     }
 
@@ -1314,7 +1353,7 @@ impl Builtins {
             (
                 self.sql_money,
                 CtorScheme {
-                    arg_tys: vec![string_ty],
+                    arg_tys: vec![string_ty.clone()],
                     result: sqlvalue_ty.clone(),
                 },
             ),
@@ -1379,6 +1418,103 @@ impl Builtins {
                     result: Ty::Con {
                         module: Vec::new(),
                         name: self.order,
+                        args: Vec::new(),
+                    },
+                },
+            ),
+            // ── ProjectionTerm constructors ────────────────────────────────────
+            // ColumnTerm : String -> String -> ProjectionTerm
+            (
+                self.column_term,
+                CtorScheme {
+                    arg_tys: vec![string_ty.clone(), string_ty.clone()],
+                    result: Ty::Con {
+                        module: Vec::new(),
+                        name: self.projection_term,
+                        args: Vec::new(),
+                    },
+                },
+            ),
+            // LiteralTerm : ProjectionTerm  (nullary — a ? literal placeholder)
+            (
+                self.literal_term,
+                CtorScheme {
+                    arg_tys: Vec::new(),
+                    result: Ty::Con {
+                        module: Vec::new(),
+                        name: self.projection_term,
+                        args: Vec::new(),
+                    },
+                },
+            ),
+            // UpperTerm : String -> ProjectionTerm
+            (
+                self.upper_term,
+                CtorScheme {
+                    arg_tys: vec![string_ty.clone()],
+                    result: Ty::Con {
+                        module: Vec::new(),
+                        name: self.projection_term,
+                        args: Vec::new(),
+                    },
+                },
+            ),
+            // LowerTerm : String -> ProjectionTerm
+            (
+                self.lower_term,
+                CtorScheme {
+                    arg_tys: vec![string_ty.clone()],
+                    result: Ty::Con {
+                        module: Vec::new(),
+                        name: self.projection_term,
+                        args: Vec::new(),
+                    },
+                },
+            ),
+            // CoalesceTerm : CoalesceOperand -> CoalesceOperand -> ProjectionTerm
+            (
+                self.coalesce_term,
+                CtorScheme {
+                    arg_tys: vec![
+                        Ty::Con {
+                            module: Vec::new(),
+                            name: self.coalesce_operand,
+                            args: Vec::new(),
+                        },
+                        Ty::Con {
+                            module: Vec::new(),
+                            name: self.coalesce_operand,
+                            args: Vec::new(),
+                        },
+                    ],
+                    result: Ty::Con {
+                        module: Vec::new(),
+                        name: self.projection_term,
+                        args: Vec::new(),
+                    },
+                },
+            ),
+            // ── CoalesceOperand constructors ───────────────────────────────────
+            // OperandColumn : String -> CoalesceOperand
+            (
+                self.operand_column,
+                CtorScheme {
+                    arg_tys: vec![string_ty],
+                    result: Ty::Con {
+                        module: Vec::new(),
+                        name: self.coalesce_operand,
+                        args: Vec::new(),
+                    },
+                },
+            ),
+            // OperandLiteral : CoalesceOperand  (nullary — a ? literal placeholder)
+            (
+                self.operand_literal,
+                CtorScheme {
+                    arg_tys: Vec::new(),
+                    result: Ty::Con {
+                        module: Vec::new(),
+                        name: self.coalesce_operand,
                         args: Vec::new(),
                     },
                 },
@@ -4191,6 +4327,8 @@ impl<'a> Builder<'a> {
             BuiltinTag::SqlValue => self.builtins.sqlvalue,
             BuiltinTag::SqlField => self.builtins.sqlfield,
             BuiltinTag::SqlFragment => self.builtins.sqlfragment,
+            BuiltinTag::ProjectionTerm => self.builtins.projection_term,
+            BuiltinTag::CoalesceOperand => self.builtins.coalesce_operand,
             BuiltinTag::Secret => self.builtins.secret,
             BuiltinTag::Path => self.builtins.path,
             BuiltinTag::Regex => self.builtins.regex,
@@ -4462,7 +4600,6 @@ impl<'a> Builder<'a> {
             args: Vec::new(),
         };
         let tuple2 = |a: Ty, b: Ty| Ty::Tuple(vec![a, b]);
-        let tuple3 = |a: Ty, b: Ty, c: Ty| Ty::Tuple(vec![a, b, c]);
         // `task(a)` — `Task a` (the error channel is the implicit `IpeError`).
         let task = |a: Ty| Ty::Con {
             module: Vec::new(),
@@ -4611,6 +4748,13 @@ impl<'a> Builder<'a> {
         let sqlfragment = || Ty::Con {
             module: Vec::new(),
             name: self.builtins.sqlfragment,
+            args: Vec::new(),
+        };
+        // `ProjectionTerm` — the typed column-projection ADT for
+        // `Ipe.Db.Store.selectNamed`.
+        let projection_term = || Ty::Con {
+            module: Vec::new(),
+            name: self.builtins.projection_term,
             args: Vec::new(),
         };
         // `Secret` — `Ipe.Secret`'s opaque sealed secret-string type.
@@ -6010,11 +6154,11 @@ impl<'a> Builder<'a> {
             // typed projection over a two-table join as one parameterized
             // statement. The two `(table, alias)` pairs name the sides, `frag`
             // carries the join-key equality plus any filter, and the
-            // `List (String, String, String)` is the ordered descriptor triples
+            // `List ProjectionTerm` is the ordered projection descriptor list
             // (see `selectNamed`). Each result row is one cell map keyed by the
             // projection output names (`p0`, `p1`, …), decoded by position.
             // `Db.findProjection : Db -> String -> String -> String -> String
-            //                      -> SqlFragment -> List (String, String, String)
+            //                      -> SqlFragment -> List ProjectionTerm
             //                      -> List SqlValue
             //                      -> Task (List (Dict String String))`
             // — `extraBinds` is `List SqlValue` (the generated per-project ADT);
@@ -6032,7 +6176,7 @@ impl<'a> Builder<'a> {
                                 fun(
                                     sqlfragment(),
                                     fun(
-                                        list(tuple3(string(), string(), string())),
+                                        list(projection_term()),
                                         fun(
                                             list(var(0)),
                                             task(list(dict(string(), string()))),
@@ -6088,7 +6232,7 @@ impl<'a> Builder<'a> {
                 ),
             ),
             // `Db.findProjectionOrdered : Db -> String -> String -> String -> String
-            //                             -> SqlFragment -> List (String, String, String)
+            //                             -> SqlFragment -> List ProjectionTerm
             //                             -> List SqlValue
             //                             -> String -> String -> Bool
             //                             -> Task (List (Dict String String))`
@@ -6108,7 +6252,7 @@ impl<'a> Builder<'a> {
                                 fun(
                                     sqlfragment(),
                                     fun(
-                                        list(tuple3(string(), string(), string())),
+                                        list(projection_term()),
                                         fun(
                                             list(var(0)),
                                             fun(

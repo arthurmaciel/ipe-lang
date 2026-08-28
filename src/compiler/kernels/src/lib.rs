@@ -232,6 +232,12 @@ pub enum BuiltinTag {
     SqlField,
     /// `SqlFragment` — the nullary opaque validated SQL WHERE-fragment.
     SqlFragment,
+    /// `ProjectionTerm` — the typed projection-descriptor ADT for `selectNamed`.
+    /// Defined in `ipe_runtime::db`; aliased into the Spine by the backend.
+    ProjectionTerm,
+    /// `CoalesceOperand` — companion to `ProjectionTerm` for `CoalesceTerm` operands.
+    /// Defined in `ipe_runtime::db`; aliased into the Spine by the backend.
+    CoalesceOperand,
     /// `Secret` — the nullary opaque sealed secret-string.
     Secret,
     /// `Path` — the nullary opaque validated filesystem path.
@@ -7376,18 +7382,17 @@ impl StdlibKernel {
         const STRING_4_TO_FIND_JOIN: TyShape = TyShape::Fun(&STRING, &STRING_3_TO_FIND_JOIN);
         const DB_FIND_JOIN: TyShape = TyShape::Fun(&DB, &STRING_4_TO_FIND_JOIN);
         // `Db.findProjection : Db -> String -> String -> String -> String
-        //                      -> SqlFragment -> List (String, String, String) -> List a
+        //                      -> SqlFragment -> List ProjectionTerm -> List a
         //                      -> Task (List (Dict String String))`.
         // `List a` (= `LIST_A`) is the `extraBinds` parameter — `Store.literal`
         // bind values, schemed polymorphically so a concrete `SqlValue` element unifies.
-        const TUPLE_STRING_STRING_STRING: TyShape = TyShape::Tuple(&[STRING, STRING, STRING]);
-        const LIST_TUPLE_STRING_STRING_STRING: TyShape =
-            TyShape::Con(BuiltinTag::List, &[TUPLE_STRING_STRING_STRING]);
+        const PROJECTION_TERM: TyShape = TyShape::Con(BuiltinTag::ProjectionTerm, &[]);
+        const LIST_PROJECTION_TERM: TyShape = TyShape::Con(BuiltinTag::List, &[PROJECTION_TERM]);
         const LIST_A_TO_FIND_PROJECTION: TyShape = TyShape::Fun(&LIST_A, &TASK_LIST_DICT_SS);
-        const LIST_TSS_TO_FIND_PROJECTION: TyShape =
-            TyShape::Fun(&LIST_TUPLE_STRING_STRING_STRING, &LIST_A_TO_FIND_PROJECTION);
+        const LIST_PT_TO_FIND_PROJECTION: TyShape =
+            TyShape::Fun(&LIST_PROJECTION_TERM, &LIST_A_TO_FIND_PROJECTION);
         const SQLFRAGMENT_TO_FIND_PROJECTION: TyShape =
-            TyShape::Fun(&SQLFRAGMENT, &LIST_TSS_TO_FIND_PROJECTION);
+            TyShape::Fun(&SQLFRAGMENT, &LIST_PT_TO_FIND_PROJECTION);
         const STRING_TO_FIND_PROJECTION: TyShape =
             TyShape::Fun(&STRING, &SQLFRAGMENT_TO_FIND_PROJECTION);
         const STRING_2_TO_FIND_PROJECTION: TyShape =
@@ -7421,7 +7426,7 @@ impl StdlibKernel {
         const STR4_TO_FIND_JOIN_ORD: TyShape = TyShape::Fun(&STRING, &STR3_TO_FIND_JOIN_ORD);
         const DB_FIND_JOIN_ORDERED: TyShape = TyShape::Fun(&DB, &STR4_TO_FIND_JOIN_ORD);
         // `Db.findProjectionOrdered : Db -> String -> String -> String -> String
-        //                             -> SqlFragment -> List (String, String, String) -> List a
+        //                             -> SqlFragment -> List ProjectionTerm -> List a
         //                             -> String -> String -> Bool
         //                             -> Task (List (Dict String String))`.
         // `List a` is `extraBinds` (same as in `DB_FIND_PROJECTION`).
@@ -7433,10 +7438,10 @@ impl StdlibKernel {
             TyShape::Fun(&STRING, &STRING_TO_BOOL_TO_FIND_PROJ_ORD);
         const LIST_A_TO_FIND_PROJ_ORD: TyShape =
             TyShape::Fun(&LIST_A, &STRING_2_ORDER_TO_FIND_PROJ);
-        const LIST_TSS_TO_FIND_PROJ_ORD: TyShape =
-            TyShape::Fun(&LIST_TUPLE_STRING_STRING_STRING, &LIST_A_TO_FIND_PROJ_ORD);
+        const LIST_PT_TO_FIND_PROJ_ORD: TyShape =
+            TyShape::Fun(&LIST_PROJECTION_TERM, &LIST_A_TO_FIND_PROJ_ORD);
         const SQLFRAGMENT_TO_FIND_PROJ_ORD: TyShape =
-            TyShape::Fun(&SQLFRAGMENT, &LIST_TSS_TO_FIND_PROJ_ORD);
+            TyShape::Fun(&SQLFRAGMENT, &LIST_PT_TO_FIND_PROJ_ORD);
         const STR_TO_FIND_PROJ_ORD: TyShape = TyShape::Fun(&STRING, &SQLFRAGMENT_TO_FIND_PROJ_ORD);
         const STR2_TO_FIND_PROJ_ORD: TyShape = TyShape::Fun(&STRING, &STR_TO_FIND_PROJ_ORD);
         const STR3_TO_FIND_PROJ_ORD: TyShape = TyShape::Fun(&STRING, &STR2_TO_FIND_PROJ_ORD);
