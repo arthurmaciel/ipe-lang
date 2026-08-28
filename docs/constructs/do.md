@@ -1,16 +1,22 @@
 # do
 
-A syntactic shorthand for chaining `Task.andThen` calls. Each `<-` line binds
-the result of a `Task` to a name; the final expression is the overall `Task`
-result. The desugaring is mechanical: every `name <- task` becomes a
+A syntactic shorthand for chaining `Task.andThen` calls. The block sequences
+one or more effect steps; the final expression is the overall `Task` result.
+The desugaring is mechanical: every `name <- task` becomes a
 `Task.andThen (\name -> …)` wrapping the rest of the block.
 
 ## Syntax
 
+Three statement forms are available inside a `do` block:
+
     do
-        <name> <- <task-expr>
-        <name> <- <task-expr>
-        <expr>
+        <name> <- <task-expr>   -- bind: run the task, name its result
+        <name> = <pure-expr>    -- pure let: bind a pure value, no task run
+        <task-expr>             -- run: run the task, discard the ()
+
+A `do` block must contain at least one `<-` bind or bare-run step. A block
+whose every statement is a `=` pure-let binding is rejected at compile time
+(`IPE-P0065`); use `let … in` for an all-pure block.
 
 ## Example
 
@@ -18,7 +24,8 @@ result. The desugaring is mechanical: every `name <- task` becomes a
     greet =
         do
             name <- Io.readLine
-            Io.println ("Hello, " ++ name ++ "!")
+            greeting = "Hello, " ++ name ++ "!"
+            Io.println greeting
 
 ## Desugaring
 
@@ -27,12 +34,18 @@ The `do` block above is equivalent to:
     greet : Task Error ()
     greet =
         Io.readLine
-            |> Task.andThen (\name -> Io.println ("Hello, " ++ name ++ "!"))
+            |> Task.andThen (\name ->
+                let greeting = "Hello, " ++ name ++ "!" in
+                Io.println greeting)
 
 ## Notes
 
-- Only `Task`-typed expressions may appear on the right-hand side of `<-`.
+- Only `Task`-typed expressions may appear on the right-hand side of `<-` or
+  as a bare-run step.
+- The right-hand side of `=` must be a pure (non-`Task`) expression.
 - The final line must be a `Task` expression (not a plain value).
+- A block with no `<-` or bare-run step is a compile error. Use `let … in`
+  for pure binding sequences; `do` and `let … in` are disjoint by construction.
 - `do` is notation — it generates no runtime overhead beyond the `andThen` chain.
 
 ## See also
