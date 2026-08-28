@@ -218,8 +218,8 @@ easingToCss e =
 --             , fillMode = Animation.forwards
 --             , respectReducedMotion = True
 --             , keyframes =
---                 [ ( 0,   [ Transform.opacity 0, Transform.translateY 10 ] )
---                 , ( 100, [ Transform.opacity 1, Transform.translateY 0 ] )
+--                 [ ( 0,   [ Transform.opacity (Css.opacityOf 0), Transform.translateY 10 ] )
+--                 , ( 100, [ Transform.opacity (Css.opacityOf 1), Transform.translateY 0 ] )
 --                 ]
 --             }
 --         ]
@@ -299,7 +299,7 @@ withRespectReducedMotion respect spec =
     { spec | respectReducedMotion = respect }
 
 
--- | `withKeyframes [(0, [Transform.opacity 0.0]), (100, [Transform.opacity 1.0])] spec`
+-- | `withKeyframes [(0, [Transform.opacity (Css.opacityOf 0.0)]), (100, [Transform.opacity (Css.opacityOf 1.0)])] spec`
 -- — replace the entire keyframe list.
 withKeyframes : List ( Int, List Prop ) -> Spec -> Spec
 withKeyframes frames spec =

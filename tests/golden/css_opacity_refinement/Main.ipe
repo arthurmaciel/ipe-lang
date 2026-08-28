@@ -1,0 +1,30 @@
+module Main exposing (main)
+
+import Ipe.Css as Css
+import Ipe.Io as Io
+import Ipe.Math as Math
+
+
+-- Pins the `Opacity` newtype: normal path, clamp, and NaN-guard.
+--
+-- Lines emitted (one per output row):
+--   rgba(255,0,0,0.5)   — Css.rgba with opacityOf 0.5
+--   opacity:0.5         — Css.opacity with opacityOf 0.5 (renderProp format)
+--   1                   — opacityOf 1.7 clamped to 1
+--   0                   — opacityOf NaN maps to 0
+
+
+outputs : String
+outputs =
+    Css.colorToString (Css.rgba 255 0 0 (Css.opacityOf 0.5))
+        ++ "\n"
+        ++ Css.renderProp (Css.opacity (Css.opacityOf 0.5))
+        ++ "\n"
+        ++ Css.opacityToString (Css.opacityOf 1.7)
+        ++ "\n"
+        ++ Css.opacityToString (Css.opacityOf Math.nan)
+
+
+main : Task Error ()
+main =
+    Io.println outputs

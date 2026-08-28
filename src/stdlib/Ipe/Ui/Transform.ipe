@@ -31,8 +31,8 @@ module Ipe.Ui.Transform exposing
 --         , fillMode = Animation.forwards
 --         , respectReducedMotion = True
 --         , keyframes =
---             [ ( 0,   [ Transform.opacity 0, Transform.scale 0.9 ] )
---             , ( 100, [ Transform.opacity 1, Transform.scale 1.0 ] )
+--             [ ( 0,   [ Transform.opacity (Css.opacityOf 0), Transform.scale 0.9 ] )
+--             , ( 100, [ Transform.opacity (Css.opacityOf 1), Transform.scale 1.0 ] )
 --             ]
 --         }
 --
@@ -51,7 +51,7 @@ import Ipe.String as String
 -- the renderer can join them correctly.
 type Prop
     = TransformPart String
-    | OpacityProp Float
+    | OpacityProp Css.Opacity
 
 
 -- ─── Transform builders ──────────────────────────────────────────
@@ -107,7 +107,7 @@ skewY deg =
 
 -- Opacity in [0, 1]. Emits as a standalone `opacity: <n>` rule;
 -- composable with transforms on the same keyframe.
-opacity : Float -> Prop
+opacity : Css.Opacity -> Prop
 opacity a =
     OpacityProp a
 
@@ -151,7 +151,7 @@ standaloneToCssProp p =
             Css.property "transform" ""
 
         OpacityProp a ->
-            Css.property "opacity" (String.fromFloat a)
+            Css.property "opacity" (Css.opacityToString a)
 
 
 -- Lower a list of Props to a list of `Css.CssProp` values, suitable

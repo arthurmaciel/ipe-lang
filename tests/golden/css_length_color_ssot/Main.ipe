@@ -39,15 +39,15 @@ lengths =
 
 colors : String
 colors =
-    Css.colorToString (Css.rgba 0 0 0 1.0)
+    Css.colorToString (Css.rgba 0 0 0 (Css.opacityOf 1.0))
         ++ "\n"
-        ++ Css.colorToString (Css.rgba 255 0 0 1.0)
+        ++ Css.colorToString (Css.rgba 255 0 0 (Css.opacityOf 1.0))
         ++ "\n"
-        ++ Css.colorToString (Css.rgba 0 128 255 1.0)
+        ++ Css.colorToString (Css.rgba 0 128 255 (Css.opacityOf 1.0))
         ++ "\n"
-        ++ Css.colorToString (Css.rgba 0 0 0 0.0)
+        ++ Css.colorToString (Css.rgba 0 0 0 (Css.opacityOf 0.0))
         ++ "\n"
-        ++ Css.colorToString (Css.rgba 255 128 0 0.5)
+        ++ Css.colorToString (Css.rgba 255 128 0 (Css.opacityOf 0.5))
 
 
 main : Task Error ()
