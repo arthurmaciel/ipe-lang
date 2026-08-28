@@ -571,10 +571,7 @@ fn file_walk_sync(root: &str) -> Result<Vec<Path>, String> {
     Ok(out)
 }
 
-fn file_walk_matching_sync(
-    root: &str,
-    pred: &dyn Fn(&Path) -> bool,
-) -> Result<Vec<Path>, String> {
+fn file_walk_matching_sync(root: &str, pred: &dyn Fn(&Path) -> bool) -> Result<Vec<Path>, String> {
     let root_path = std::path::Path::new(root);
     if !root_path.is_dir() {
         return Err(format!("not a directory: {root}"));
