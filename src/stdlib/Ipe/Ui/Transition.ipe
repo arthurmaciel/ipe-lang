@@ -31,8 +31,10 @@ module Ipe.Ui.Transition exposing
     , attributeUnsafe
     )
 
+import Ipe.Basics as Basics
 import Ipe.Css as Css
 import Ipe.List as List
+import Ipe.Math as Math
 import Ipe.String as String
 import Ipe.Ui as Ui exposing (Attribute)
 
@@ -113,12 +115,28 @@ easeInOut =
     EaseInOut
 
 
--- Cubic-bezier control points. All four params should be in [0, 1]
--- for standard curves; the X coordinates (`x1`, `x2`) MUST stay in
--- [0, 1] or the browser rejects the curve.
-cubicBezier : Float -> Float -> Float -> Float -> Easing
-cubicBezier x1 y1 x2 y2 =
-    CubicBezier x1 y1 x2 y2
+-- Refine a Float into [0, 1]: NaN maps to 0 (the safe identity-ish default
+-- rather than a browser-rejecting NaN), otherwise clamp. Parse-don't-validate:
+-- the value that leaves here is already in range, so no downstream site
+-- re-checks it.
+unitClamp : Float -> Float
+unitClamp n =
+    if Math.isNaN n then
+        0.0
+
+    else
+        Basics.clamp 0.0 1.0 n
+
+
+-- Cubic-bezier control-point curve. The X coordinates MUST lie in [0, 1]
+-- (a browser rejects an out-of-range X and silently falls back to default
+-- easing), so they are clamped into [0, 1] here — an out-of-range X cannot
+-- reach the emitted `cubic-bezier(...)`. Y is unconstrained (overshoot curves
+-- legally use Y outside [0, 1]). Named fields remove the four-positional-Float
+-- transposition hazard.
+cubicBezier : { x1 : Float, y1 : Float, x2 : Float, y2 : Float } -> Easing
+cubicBezier c =
+    CubicBezier (unitClamp c.x1) c.y1 (unitClamp c.x2) c.y2
 
 
 -- ─── CSS lowering ────────────────────────────────────────────────

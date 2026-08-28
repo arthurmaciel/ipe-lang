@@ -30,6 +30,8 @@ mod golden_shape;
 mod golden_stdui;
 #[path = "g_stdui/golden_stdui_animation_seal.rs"]
 mod golden_stdui_animation_seal;
+#[path = "g_stdui/golden_stdui_cubic_bezier_seal.rs"]
+mod golden_stdui_cubic_bezier_seal;
 #[path = "g_stdui/golden_stdui_dualattr.rs"]
 mod golden_stdui_dualattr;
 #[path = "g_stdui/golden_stdui_event_illtyped.rs"]
