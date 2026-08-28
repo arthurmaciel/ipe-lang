@@ -71,6 +71,20 @@ pub fn email_address_to_string(addr: EmailAddress) -> String {
     addr.0
 }
 
+impl EmailAddress {
+    /// Borrow the validated address string.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    /// Consume into the owned address string.
+    #[must_use]
+    pub fn into_string(self) -> String {
+        self.0
+    }
+}
+
 /// Structural validation matching `String.isEmail` / Go's `net/mail.ParseAddress`
 /// posture: bare `user@domain.tld`, no name component, no embedded spaces.
 fn email_address_is_valid(s: &str) -> bool {
@@ -79,25 +93,22 @@ fn email_address_is_valid(s: &str) -> bool {
 
 /// Ipê.Email.EmailMessage — field names/types match the Ipê record alias.
 ///
-/// Text fields (`from`, `to`, `cc`, `bcc`, `replyTo`, `subject`, `textBody`,
-/// `htmlBody`) are `String` — they are genuinely UTF-8 text. Attachment bodies
-/// are `Vec<u8>` (Bytes), the correct type for arbitrary binary content.
-/// The additive `EmailAddress` type (and `parseAddress`/`addressToString`)
-/// is the parse-don't-validate boundary for new code that wants type-enforced
-/// addresses; existing call sites using `defaultMessage` / `with*` helpers
-/// keep passing plain `String` values unchanged.
+/// Address fields (`from`, `to`, `cc`, `bcc`, `replyTo`) carry validated
+/// `EmailAddress` values: construction via `parseAddress` is the ONLY path,
+/// so an invalid address is a Ipê compile-time type error. Subject, body, and
+/// MIME fields remain `String`. Attachment bodies are `Vec<u8>` (Bytes).
 #[allow(non_snake_case)]
 #[derive(Clone, Debug)]
 pub struct EmailMessage {
-    pub from: String,
-    pub to: Vec<String>,
-    pub cc: Vec<String>,
-    pub bcc: Vec<String>,
+    pub from: EmailAddress,
+    pub to: Vec<EmailAddress>,
+    pub cc: Vec<EmailAddress>,
+    pub bcc: Vec<EmailAddress>,
     pub subject: String,
     pub textBody: String,
     pub htmlBody: String,
     pub attachments: Vec<EmailAttachment>,
-    pub replyTo: String,
+    pub replyTo: EmailAddress,
 }
 
 /// Ipê.Email.Attachment — `content` carries the attachment body as raw bytes.
@@ -177,9 +188,8 @@ pub fn email_send<E: From<String> + Send + 'static>(
         if crate::system::read_env_var("IPE_EMAIL_DRY_RUN").as_deref() == Ok("1") {
             return IpeResult::Ok(format!("dry-run-{}", email_gen_id()));
         }
-        if msg.from.is_empty() {
-            return IpeResult::Err("email.send: from required".to_string().into());
-        }
+        // `msg.from` is an `EmailAddress` — structurally valid by construction;
+        // no empty-string guard needed here.
         if msg.to.is_empty() {
             return IpeResult::Err(
                 "email.send: at least one recipient required"
@@ -287,7 +297,7 @@ async fn send_resend<E: From<String>>(api_key: &str, m: &EmailMessage) -> IpeRes
         return IpeResult::Err("email.send/Resend: empty API key".to_string().into());
     }
     let mut body = serde_json::Map::new();
-    body.insert("from".into(), m.from.clone().into());
+    body.insert("from".into(), m.from.as_str().to_string().into());
     body.insert("to".into(), to_json_array(&m.to));
     body.insert("subject".into(), m.subject.clone().into());
     if !m.cc.is_empty() {
@@ -302,9 +312,7 @@ async fn send_resend<E: From<String>>(api_key: &str, m: &EmailMessage) -> IpeRes
     if !m.htmlBody.is_empty() {
         body.insert("html".into(), m.htmlBody.clone().into());
     }
-    if !m.replyTo.is_empty() {
-        body.insert("reply_to".into(), m.replyTo.clone().into());
-    }
+    body.insert("reply_to".into(), m.replyTo.as_str().to_string().into());
     if !m.attachments.is_empty() {
         let atts: Vec<serde_json::Value> = m
             .attachments
@@ -368,17 +376,15 @@ async fn send_sendgrid<E: From<String>>(api_key: &str, m: &EmailMessage) -> IpeR
     }
     let mut body = serde_json::json!({
         "personalizations": [ serde_json::Value::Object(personalisation) ],
-        "from": { "email": m.from },
+        "from": { "email": m.from.as_str() },
         "subject": m.subject,
         "content": content,
     });
-    if !m.replyTo.is_empty() {
-        json_obj_set(
-            &mut body,
-            "reply_to",
-            serde_json::json!({ "email": m.replyTo }),
-        );
-    }
+    json_obj_set(
+        &mut body,
+        "reply_to",
+        serde_json::json!({ "email": m.replyTo.as_str() }),
+    );
     if !m.attachments.is_empty() {
         // SendGrid v3 attachments: base64 `content` (the field is `Vec<u8>`
         // so encode directly — no conversion), `filename`, `type` (MIME),
@@ -499,7 +505,7 @@ async fn send_ses<E: From<String>>(cfg: &SesConfig, m: &EmailMessage) -> IpeResu
         );
     }
     let body = serde_json::json!({
-        "FromEmailAddress": m.from,
+        "FromEmailAddress": m.from.as_str(),
         "Destination": destination,
         "Content": { "Simple": simple },
     });
@@ -645,33 +651,31 @@ async fn send_smtp<E: From<String>>(cfg: &SmtpConfig, m: &EmailMessage) -> IpeRe
     };
 
     let mut builder = Message::builder();
-    builder = match parse_mbox(&m.from) {
+    builder = match parse_mbox(m.from.as_str()) {
         Ok(mb) => builder.from(mb),
         Err(e) => return IpeResult::Err(e.into()),
     };
     for to in &m.to {
-        match parse_mbox(to) {
+        match parse_mbox(to.as_str()) {
             Ok(mb) => builder = builder.to(mb),
             Err(e) => return IpeResult::Err(e.into()),
         }
     }
     for cc in &m.cc {
-        match parse_mbox(cc) {
+        match parse_mbox(cc.as_str()) {
             Ok(mb) => builder = builder.cc(mb),
             Err(e) => return IpeResult::Err(e.into()),
         }
     }
     for bcc in &m.bcc {
-        match parse_mbox(bcc) {
+        match parse_mbox(bcc.as_str()) {
             Ok(mb) => builder = builder.bcc(mb),
             Err(e) => return IpeResult::Err(e.into()),
         }
     }
-    if !m.replyTo.is_empty() {
-        match parse_mbox(&m.replyTo) {
-            Ok(mb) => builder = builder.reply_to(mb),
-            Err(e) => return IpeResult::Err(e.into()),
-        }
+    match parse_mbox(m.replyTo.as_str()) {
+        Ok(mb) => builder = builder.reply_to(mb),
+        Err(e) => return IpeResult::Err(e.into()),
     }
     builder = builder.subject(m.subject.clone());
 
@@ -771,14 +775,18 @@ async fn send_smtp<E: From<String>>(cfg: &SmtpConfig, m: &EmailMessage) -> IpeRe
 
 // ──────────────────── small helpers ────────────────────
 
-fn to_json_array(xs: &[String]) -> serde_json::Value {
-    serde_json::Value::Array(xs.iter().map(|s| s.clone().into()).collect())
-}
-
-fn addr_objs(xs: &[String]) -> serde_json::Value {
+fn to_json_array(xs: &[EmailAddress]) -> serde_json::Value {
     serde_json::Value::Array(
         xs.iter()
-            .map(|s| serde_json::json!({ "email": s }))
+            .map(|a| serde_json::Value::String(a.as_str().to_string()))
+            .collect(),
+    )
+}
+
+fn addr_objs(xs: &[EmailAddress]) -> serde_json::Value {
+    serde_json::Value::Array(
+        xs.iter()
+            .map(|a| serde_json::json!({ "email": a.as_str() }))
             .collect(),
     )
 }
@@ -792,16 +800,18 @@ mod tests {
         // SAFETY: test-only env mutation; unsafe in Rust 2024 due to reader/mutator
         // environ race.
         unsafe { std::env::set_var("IPE_EMAIL_DRY_RUN", "1") };
+        let from_addr = EmailAddress("a@example.com".to_owned());
+        let to_addr = EmailAddress("b@example.com".to_owned());
         let msg = EmailMessage {
-            from: "a@example.com".into(),
-            to: vec!["b@example.com".into()],
+            from: from_addr.clone(),
+            to: vec![to_addr],
             cc: vec![],
             bcc: vec![],
             subject: "hi".into(),
             textBody: "hello".into(),
             htmlBody: String::new(),
             attachments: vec![],
-            replyTo: String::new(),
+            replyTo: from_addr,
         };
         let r: IpeResult<String, String> = email_send(
             EmailProvider::Resend(crate::secret::secret_from_string("key".into())),

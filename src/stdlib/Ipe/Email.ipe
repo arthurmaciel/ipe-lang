@@ -28,12 +28,15 @@
 --
 --     msg : EmailMessage
 --     msg =
---         Email.defaultMessage
---             { from = "noreply@example.com"
---             , to = [ "alice@example.com" ]
---             , subject = "Hi"
---             }
---             |> Email.withTextBody "Hello, world!"
+--         case ( Email.parseAddress "noreply@example.com"
+--              , Email.parseAddress "alice@example.com"
+--              ) of
+--             ( Just from, Just to ) ->
+--                 Email.defaultMessage { from = from, to = [ to ], subject = "Hi" }
+--                     |> Email.withTextBody "Hello, world!"
+--             _ ->
+--                 -- addresses above are compile-time constants and always parse
+--                 Debug.crash "unreachable"
 --
 --     main =
 --         Email.send provider msg
@@ -61,7 +64,6 @@ module Ipe.Email exposing
     , withAttachment
     , withReplyTo
     , send
-    -- Typed address newtype (additive — existing String fields unchanged)
     , EmailAddress
     , parseAddress
     , addressToString
@@ -78,17 +80,21 @@ import Ipe.Secret
 --
 -- Build with `defaultMessage { from, to, subject }` + `with*`
 -- helpers; never construct via record literal so future fields
--- don't break call sites (v0.15.46 convention).
+-- don't break call sites.
+--
+-- Address fields (`from`, `to`, `cc`, `bcc`, `replyTo`) require
+-- `EmailAddress` values — constructed via `parseAddress`.  This makes
+-- an invalid address a compile error rather than a runtime bounce.
 type alias EmailMessage =
-    { from : String
-    , to : List String
-    , cc : List String
-    , bcc : List String
+    { from : EmailAddress
+    , to : List EmailAddress
+    , cc : List EmailAddress
+    , bcc : List EmailAddress
     , subject : String
     , textBody : String
     , htmlBody : String
     , attachments : List Attachment
-    , replyTo : String
+    , replyTo : EmailAddress
     }
 
 
@@ -133,8 +139,10 @@ type EmailProvider
 
 
 -- | Construct a baseline message with the three required fields
--- (`from`, `to`, `subject`).  Optional fields default to empty.
-defaultMessage : { from : String, to : List String, subject : String } -> EmailMessage
+-- (`from`, `to`, `subject`).  Address fields take `EmailAddress`
+-- values — use `parseAddress` to obtain them.  Optional address
+-- fields default to empty; `replyTo` defaults to `from`.
+defaultMessage : { from : EmailAddress, to : List EmailAddress, subject : String } -> EmailMessage
 defaultMessage core =
     { from = core.from
     , to = core.to
@@ -144,18 +152,18 @@ defaultMessage core =
     , textBody = ""
     , htmlBody = ""
     , attachments = []
-    , replyTo = ""
+    , replyTo = core.from
     }
 
 
 -- | Override CC.
-withCc : List String -> EmailMessage -> EmailMessage
+withCc : List EmailAddress -> EmailMessage -> EmailMessage
 withCc cc msg =
     { msg | cc = cc }
 
 
 -- | Override BCC.
-withBcc : List String -> EmailMessage -> EmailMessage
+withBcc : List EmailAddress -> EmailMessage -> EmailMessage
 withBcc bcc msg =
     { msg | bcc = bcc }
 
@@ -180,7 +188,7 @@ withAttachment att msg =
 
 
 -- | Override Reply-To.
-withReplyTo : String -> EmailMessage -> EmailMessage
+withReplyTo : EmailAddress -> EmailMessage -> EmailMessage
 withReplyTo addr msg =
     { msg | replyTo = addr }
 
@@ -283,10 +291,11 @@ send = Ffi.kernel "Email_send"
 -- ── Typed address newtype ──────────────────────────────────────────────────────
 --
 -- `EmailAddress` is an opaque type that can only be constructed via
--- `parseAddress`.  An unparseable address surface as `Nothing`, never
--- a silent accept.  Existing `EmailMessage` fields remain `String` for
--- backward compatibility; use `addressToString` to convert before
--- passing to a message builder.
+-- `parseAddress`.  An unparseable address surfaces as `Nothing`, never
+-- a silent accept.  All `EmailMessage` address fields (`from`, `to`,
+-- `cc`, `bcc`, `replyTo`) require `EmailAddress` values, making an
+-- invalid address a compile-time type error.  Use `addressToString`
+-- to recover the canonical string when needed.
 
 -- | An opaque, validated email address.  Construct only via `parseAddress`.
 type EmailAddress = EmailAddress

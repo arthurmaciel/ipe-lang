@@ -11,8 +11,9 @@
 //! * `crypto_sha_hash` — `sha256` / `sha512` / `sha1` / `md5` of `"abc"`;
 //!   known standard test vectors; byte-parity with Go.
 //!
-//! * `crypto_hmac` — `hmacSha256` / `hmacSha512` with RFC 4231 case-1 key
-//!   (`0x0b × 20`) and message `"Hi There"`; known test vectors; byte-parity.
+//! * `crypto_hmac` — `hmacSha256` / `hmacSha512` (typed, `Key` argument) with
+//!   RFC 4231 case-1 key (`0x0b × 20` via `keyFromBytes`) and message `"Hi
+//!   There"`; known test vectors; byte-parity.
 //!
 //! * `crypto_constant_time` — `constantTimeEqual "abc" "abc"` → `true`;
 //!   `constantTimeEqual "abc" "abd"` → `false`.
@@ -89,8 +90,9 @@ fn crypto_sha_hash() {
 // ── HMAC-SHA256 / HMAC-SHA512 ────────────────────────────────────────────────
 
 /// `Crypto.hmacSha256 key "Hi There"` and `Crypto.hmacSha512 key "Hi There"`
-/// with the RFC 4231 test-case-1 key (`0x0b` × 20) produce the standard known
-/// MAC values; byte-parity with Go.
+/// with the RFC 4231 test-case-1 key (`0x0b` × 20, constructed via
+/// `Crypto.keyFromBytes`) produce the standard known MAC values; byte-parity
+/// with Go.
 #[test]
 fn crypto_hmac() {
     assert_runs_and_matches_oracle("crypto_hmac");

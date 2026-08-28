@@ -7,26 +7,25 @@
 --     random nonce on every call; the nonce is prepended to the
 --     ciphertext so `decrypt` can recover it.
 --   * Key/secret material is never logged.
---   * Typed variants (`Key`, `Mac`) enforce role at compile time.
---     A `Key` can only be constructed at explicit parse boundaries;
---     passing a `Mac` where a `Key` is expected is a compile error.
+--   * `Key` and `Mac` enforce role at compile time: `hmacSha256` and
+--     `hmacSha512` require a `Key`; passing a bare `String` (e.g. a
+--     plaintext message) where a key is expected is a compile error.
+--     Construct a `Key` via `keyFromString` or `keyFromBytes`.
 module Ipe.Crypto exposing
     ( sha256, sha512, sha1, md5
-    , hmacSha256, hmacSha512
     , rsaSha256Sign, rsaSha256Verify
     , constantTimeEqual
     , aesGcmEncrypt, aesGcmDecrypt
     , chacha20Encrypt, chacha20Decrypt
     , aesKeyFromPassword, chachaKeyFromPassword
     , randomBytes, randomToken
-    -- Typed newtypes (additive — existing String-typed functions unchanged)
     , Key
     , Mac
     , keyFromString
     , keyFromBytes
     , macToHex
-    , hmacSha256WithKey
-    , hmacSha512WithKey
+    , hmacSha256
+    , hmacSha512
     , aesGcmEncryptKey
     , aesGcmDecryptKey
     , chacha20EncryptKey
@@ -55,12 +54,18 @@ md5 = Ffi.kernel "Crypto_md5"
 
 
 -- ── HMAC ─────────────────────────────────────────────────────────────────────
+--
+-- Both functions require a `Key`.  Construct one via `keyFromString` or
+-- `keyFromBytes` at your parse boundary.  Passing a bare `String` where a
+-- `Key` is expected is a compile error, making message-as-key impossible.
 
-hmacSha256 : String -> String -> String
-hmacSha256 = Ffi.kernel "Crypto_hmacSha256"
+-- | `hmacSha256 key message` — HMAC-SHA-256.  Returns a typed `Mac`.
+hmacSha256 : Key -> String -> Mac
+hmacSha256 = Ffi.kernel "Crypto_hmacSha256WithKey"
 
-hmacSha512 : String -> String -> String
-hmacSha512 = Ffi.kernel "Crypto_hmacSha512"
+-- | `hmacSha512 key message` — HMAC-SHA-512.  Returns a typed `Mac`.
+hmacSha512 : Key -> String -> Mac
+hmacSha512 = Ffi.kernel "Crypto_hmacSha512WithKey"
 
 
 -- ── RSA / asymmetric ─────────────────────────────────────────────────────────
@@ -113,10 +118,9 @@ randomToken = Ffi.kernel "Crypto_randomToken"
 
 -- ── Typed newtypes ────────────────────────────────────────────────────────────
 --
--- `Key` and `Mac` are opaque types backed by runtime newtypes in
--- `ipe_runtime::crypto`.  They enforce role at the type level:
--- passing a `Mac` where a `Key` is expected is a compile error.
--- Key material never appears in logs (Debug redacts to "<key>").
+-- `Key` and `Mac` are opaque types backed by runtime newtypes.
+-- They enforce role at the type level: passing a `Mac` where a `Key`
+-- is expected is a compile error.  Key material never appears in logs.
 
 -- | An opaque cryptographic key.  Construct only via `keyFromString`
 -- or `keyFromBytes`; never forge from a plain string.
@@ -139,18 +143,6 @@ keyFromBytes = Ffi.kernel "Key_fromBytes"
 -- | Render a `Mac` as a lowercase hex string for storage or display.
 macToHex : Mac -> String
 macToHex = Ffi.kernel "Mac_toHex"
-
-
--- ── Typed HMAC ───────────────────────────────────────────────────────────────
-
--- | `hmacSha256WithKey key message` — produce a typed `Mac`.
--- Use this instead of `hmacSha256` when you hold a `Key`.
-hmacSha256WithKey : Key -> String -> Mac
-hmacSha256WithKey = Ffi.kernel "Crypto_hmacSha256WithKey"
-
--- | `hmacSha512WithKey key message` — produce a typed `Mac`.
-hmacSha512WithKey : Key -> String -> Mac
-hmacSha512WithKey = Ffi.kernel "Crypto_hmacSha512WithKey"
 
 
 -- ── Typed AEAD ───────────────────────────────────────────────────────────────

@@ -325,17 +325,28 @@ proptest! {
 mod email_smtp_tests {
     use ipe_runtime_rust::*;
 
+    fn addr(s: &str) -> EmailAddress {
+        // Tests use known-valid addresses; construct directly via the private
+        // field to avoid the parse overhead.  In production Ipê source, the
+        // ONLY path is `parseAddress`.
+        match email_address_parse(s.to_owned()) {
+            IpeMaybe::Just(a) => a,
+            IpeMaybe::Nothing => panic!("test helper: {:?} is not a valid address", s),
+        }
+    }
+
     fn msg(from: &str) -> EmailMessage {
+        let from_addr = addr(from);
         EmailMessage {
-            from: from.to_string(),
-            to: vec!["rcpt@example.com".to_string()],
+            from: from_addr.clone(),
+            to: vec![addr("rcpt@example.com")],
             cc: vec![],
             bcc: vec![],
             subject: "s".to_string(),
             textBody: "b".to_string(),
             htmlBody: String::new(),
             attachments: vec![],
-            replyTo: String::new(),
+            replyTo: from_addr,
         }
     }
 
@@ -352,16 +363,16 @@ mod email_smtp_tests {
     }
 
     #[test]
-    fn smtp_bad_from_address_is_err() {
-        // non-empty (passes email_send's empty-from guard) but not an RFC-5322
-        // mailbox → send_smtp's parse returns Err, never panics.
+    fn smtp_unreachable_host_is_err() {
+        // Port 2599 on localhost is (almost certainly) not listening;
+        // the send must fail rather than hang.
         let cfg = SmtpConfig {
             host: "127.0.0.1".to_string(),
             port: 2599,
             user: String::new(),
             pass: secret_from_string(String::new()),
         };
-        let t = email_send::<IpeError>(EmailProvider::Smtp(cfg), msg("not-an-email"));
+        let t = email_send::<IpeError>(EmailProvider::Smtp(cfg), msg("a@b.com"));
         assert!(task_run(t).is_err());
     }
 }

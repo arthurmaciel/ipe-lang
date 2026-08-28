@@ -5108,10 +5108,10 @@ impl<'a> Builder<'a> {
         // `email_send` kernel takes (mirrors the `CsvDoc` / `CacheCfg` folds).
         let email_message_rec = || {
             let mut m = BTreeMap::new();
-            m.insert(self.builtins.email_f_from, string());
-            m.insert(self.builtins.email_f_to, list(string()));
-            m.insert(self.builtins.email_f_cc, list(string()));
-            m.insert(self.builtins.email_f_bcc, list(string()));
+            m.insert(self.builtins.email_f_from, email_address());
+            m.insert(self.builtins.email_f_to, list(email_address()));
+            m.insert(self.builtins.email_f_cc, list(email_address()));
+            m.insert(self.builtins.email_f_bcc, list(email_address()));
             m.insert(self.builtins.email_f_subject, string());
             m.insert(self.builtins.email_f_text_body, string());
             m.insert(self.builtins.email_f_html_body, string());
@@ -5125,7 +5125,7 @@ impl<'a> Builder<'a> {
                 self.builtins.email_f_attachments,
                 list(Ty::Record(att, RowTail::Closed)),
             );
-            m.insert(self.builtins.email_f_reply_to, string());
+            m.insert(self.builtins.email_f_reply_to, email_address());
             Ty::Record(m, RowTail::Closed)
         };
         let attr = |m: Ty| Ty::Con {
@@ -7846,7 +7846,7 @@ impl<'a> Builder<'a> {
             K::ConfigDecodeJson => {
                 fun(string(), fun(dec(var(0)), result(error_ty(), var(0))))
             }
-            K::ConfigLoadFromFile => fun(string(), fun(dec(var(0)), task(var(0)))),
+            K::ConfigLoadFromFile => fun(path(), fun(dec(var(0)), task(var(0)))),
 
             // ── Result (internal) — `okDefault : a -> Result e a`, the Ok-wrap
             //    used during lowering (runtime `ok_res(a) -> Result e a`). ──
@@ -7988,8 +7988,8 @@ impl<'a> Builder<'a> {
             K::BytesToHex | K::CharFromCode | K::CharIsAlpha | K::CharIsAlphaNum |
             K::CharIsDigit | K::CharIsHexDigit | K::CharIsLower | K::CharIsOctDigit |
             K::CharIsUpper | K::CharToCode | K::CharToLower | K::CharToUpper |
-            K::CryptoAesKeyFromPassword | K::CryptoChachaKeyFromPassword | K::CryptoConstantTimeEqual | K::CryptoHmacSha256 |
-            K::CryptoHmacSha512 | K::CryptoMd5 | K::CryptoRsaSha256Verify | K::CryptoSha1 |
+            K::CryptoAesKeyFromPassword | K::CryptoChachaKeyFromPassword | K::CryptoConstantTimeEqual |
+            K::CryptoMd5 | K::CryptoRsaSha256Verify | K::CryptoSha1 |
             K::CryptoSha256 | K::CryptoSha512 | K::CssSafetyStripStyleClose | K::EncodingBase64Encode |
             K::EncodingHexEncode | K::EncodingUrlEncode | K::FontMonospace | K::FontSansSerif |
             K::FontSerif | K::HtmlEscapeAttr | K::HtmlEscapeText | K::MathAbs |
@@ -8310,7 +8310,7 @@ impl<'a> Builder<'a> {
             }
             K::CsvEncode => fun(csv_rec(), string()),
             K::CsvEncodeWithDelimiter => fun(string(), fun(csv_rec(), string())),
-            K::CsvParseStreamFromFile => fun(string(), task(list(list(string())))),
+            K::CsvParseStreamFromFile => fun(path(), task(list(list(string())))),
 
             // ── Ipe.Cache (7 kernels) ─────────────────────────────────────
             // All take the raw `Int` handle. `k`/`v` are the surface key/value
@@ -9913,8 +9913,6 @@ mod registry_phase_c_tests {
             K::CryptoSha512,
             K::CryptoSha1,
             K::CryptoMd5,
-            K::CryptoHmacSha256,
-            K::CryptoHmacSha512,
             K::CryptoRsaSha256Sign,
             K::CryptoRsaSha256Verify,
             K::CryptoConstantTimeEqual,
@@ -11325,8 +11323,6 @@ mod registry_phase_c_tests {
             K::StringFromChar | K::CharToLower | K::CharToUpper => fun(char(), string()),
             K::StringAppend
             | K::SystemGetenvOr
-            | K::CryptoHmacSha256
-            | K::CryptoHmacSha512
             | K::CryptoAesKeyFromPassword
             | K::CryptoChachaKeyFromPassword => fun(string(), fun(string(), string())),
             K::StringContains

@@ -24194,8 +24194,6 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::MathMod
                 | KernelFn::MathRemainder
                 // ── Crypto arity-2 ─────────────────────────────────────
-                | KernelFn::CryptoHmacSha256
-                | KernelFn::CryptoHmacSha512
                 | KernelFn::CryptoRsaSha256Sign
                 | KernelFn::CryptoConstantTimeEqual
                 | KernelFn::CryptoAesGcmEncrypt
@@ -25781,8 +25779,8 @@ impl<'a> Lowerer<'a> {
                     ("Crypto", "sha512") => Ok(Callee::Kernel(KernelFn::CryptoSha512)),
                     ("Crypto", "sha1") => Ok(Callee::Kernel(KernelFn::CryptoSha1)),
                     ("Crypto", "md5") => Ok(Callee::Kernel(KernelFn::CryptoMd5)),
-                    ("Crypto", "hmacSha256") => Ok(Callee::Kernel(KernelFn::CryptoHmacSha256)),
-                    ("Crypto", "hmacSha512") => Ok(Callee::Kernel(KernelFn::CryptoHmacSha512)),
+                    ("Crypto", "hmacSha256") => Ok(Callee::Kernel(KernelFn::CryptoHmacSha256WithKey)),
+                    ("Crypto", "hmacSha512") => Ok(Callee::Kernel(KernelFn::CryptoHmacSha512WithKey)),
                     ("Crypto", "rsaSha256Sign") => {
                         Ok(Callee::Kernel(KernelFn::CryptoRsaSha256Sign))
                     }

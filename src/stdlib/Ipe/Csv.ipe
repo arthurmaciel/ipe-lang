@@ -24,6 +24,7 @@ module Ipe.Csv exposing
 
 import Ipe.Ffi as Ffi
 import Ipe.Error exposing (Error)
+import Ipe.Path exposing (Path)
 
 
 -- | A parsed CSV document.
@@ -89,12 +90,13 @@ encodeWithDelimiter : String -> Csv -> String
 encodeWithDelimiter = Ffi.kernel "Csv_encodeWithDelimiter"
 
 
--- | `parseStreamFromFile path` — stream-read a CSV file into
--- memory as `List (List String)` (including the header).  Uses
--- `encoding/csv`'s buffered reader so it doesn't materialise the
--- raw file before parsing, which makes it suitable for large
--- exports.  For truly massive files (>1 GB) prefer running the
--- import inside a worker `Task` and chunking by row count at the
--- caller.
-parseStreamFromFile : String -> Task Error (List (List String))
+-- | `parseStreamFromFile path` — stream-read a CSV file at the
+-- validated `path` into memory as `List (List String)` (including
+-- the header).  The `Path` argument enforces NUL-byte and
+-- `..`-traversal guards at the type level.  Uses a buffered reader
+-- so it doesn't materialise the raw file before parsing, making it
+-- suitable for large exports.  For files >1 GB, prefer a worker
+-- `Task` that chunks by row count.  Use `Path.fromString` to
+-- construct the `Path` argument.
+parseStreamFromFile : Path -> Task Error (List (List String))
 parseStreamFromFile = Ffi.kernel "Csv_parseStreamFromFile"

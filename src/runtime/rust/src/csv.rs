@@ -222,15 +222,20 @@ fn csv_parse_stream_from_file_sync(path: &str) -> Result<Vec<Vec<String>>, Strin
     Ok(out)
 }
 
-/// Csv.parseStreamFromFile : String -> Task Error (List (List String))
+/// Csv.parseStreamFromFile : Path -> Task Error (List (List String))
 /// Returns every row (including the header).
+///
+/// The `Path` argument carries the NUL-byte and `..`-traversal guards
+/// enforced at construction by `Path.fromString`; the validated string is
+/// extracted once before the async move.
 ///
 /// file I/O + incremental CSV parsing (up to `IPE_CSV_MAX_ROWS`, no
 /// byte cap) is offloaded to tokio's blocking pool via `run_blocking` — see
 /// the module-level doc comment on `run_blocking` above.
 pub fn csv_parse_stream_from_file<E: From<String> + Send + 'static>(
-    path: String,
+    path: crate::path::Path,
 ) -> IpeTask<E, Vec<Vec<String>>> {
+    let path = path.into_string();
     Box::pin(async move {
         match run_blocking(move || csv_parse_stream_from_file_sync(&path)).await {
             Ok(v) => ok_res(v),
@@ -291,6 +296,10 @@ mod tests {
             .block_on(fut)
     }
 
+    fn make_path(s: &str) -> crate::path::Path {
+        crate::path::path_literal(s.to_string())
+    }
+
     /// Functional correctness (independent of whether `run_blocking` takes
     /// the real `spawn_blocking` path or the no-tokio-feature fallback —
     /// both paths must return the same rows).
@@ -299,7 +308,7 @@ mod tests {
         let p = std::env::temp_dir().join(format!("ipe_csv_stream_{}.csv", std::process::id()));
         std::fs::write(&p, "a,b\n1,2\n3,4\n").unwrap();
         let res: IpeResult<String, Vec<Vec<String>>> =
-            block(csv_parse_stream_from_file(p.to_string_lossy().into_owned()));
+            block(csv_parse_stream_from_file(make_path(&p.to_string_lossy())));
         let _ = std::fs::remove_file(&p);
         match res {
             IpeResult::Ok(rows) => {
@@ -319,7 +328,7 @@ mod tests {
     #[test]
     fn parse_stream_from_file_missing_file_errs() {
         let res: IpeResult<String, Vec<Vec<String>>> = block(csv_parse_stream_from_file(
-            "/nonexistent/ipe/csv/path/does-not-exist.csv".to_string(),
+            make_path("/nonexistent/ipe/csv/path/does-not-exist.csv"),
         ));
         assert!(matches!(res, IpeResult::Err(_)));
     }
@@ -331,7 +340,7 @@ mod tests {
         // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
         unsafe { std::env::set_var("IPE_CSV_MAX_ROWS", "2") };
         let res: IpeResult<String, Vec<Vec<String>>> =
-            block(csv_parse_stream_from_file(p.to_string_lossy().into_owned()));
+            block(csv_parse_stream_from_file(make_path(&p.to_string_lossy())));
         // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
         unsafe { std::env::remove_var("IPE_CSV_MAX_ROWS") };
         let _ = std::fs::remove_file(&p);
@@ -378,7 +387,7 @@ mod stream_from_file_spawn_blocking_tests {
             }
             std::fs::write(&p, content).unwrap();
         }
-        let path = p.to_string_lossy().into_owned();
+        let path = crate::path::path_literal(p.to_string_lossy().into_owned());
 
         let ticks = rt.block_on(async move {
             let counter = Arc::new(AtomicU64::new(0));

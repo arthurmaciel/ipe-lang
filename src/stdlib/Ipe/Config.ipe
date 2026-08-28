@@ -25,7 +25,10 @@
 --                 (\\f -> Config.map f (Config.field "name" Config.string))
 --
 --     loadDb : Task Error DbCfg
---     loadDb = Config.loadFromFile "config/database.toml" dbDecoder
+--     loadDb =
+--         case Path.fromString "config/database.toml" of
+--             Err e  -> Task.fail e
+--             Ok p   -> Config.loadFromFile p dbDecoder
 module Ipe.Config exposing
     ( Decoder
     , string, int, float, bool
@@ -45,6 +48,7 @@ module Ipe.Config exposing
 import Ipe.Ffi as Ffi
 import Ipe.Error exposing (Error)
 import Ipe.Maybe exposing (Maybe(..))
+import Ipe.Path exposing (Path)
 
 
 -- | Opaque decoder.  Construct with the combinators below.
@@ -204,8 +208,9 @@ decodeJson : String -> Decoder a -> Result Error a
 decodeJson = Ffi.kernel "Config_decodeJson"
 
 
--- | `loadFromFile path decoder` — read `path`, dispatch to the
--- right decoder by extension (`.toml`, `.yaml`, `.yml`, `.json`),
--- then decode.
-loadFromFile : String -> Decoder a -> Task Error a
+-- | `loadFromFile path decoder` — read `path` (a validated `Path`,
+-- NUL-byte- and `..`-traversal-checked), dispatch to the right
+-- decoder by extension (`.toml`, `.yaml`, `.yml`, `.json`), then
+-- decode.  Use `Path.fromString` to obtain a `Path` from a raw string.
+loadFromFile : Path -> Decoder a -> Task Error a
 loadFromFile = Ffi.kernel "Config_loadFromFile"
