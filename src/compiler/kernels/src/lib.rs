@@ -382,6 +382,19 @@ pub enum BuiltinTag {
     /// `EmailProvider` — the opaque provider handle `Email.send` takes before the
     /// `EmailMessage`. Nullary.
     EmailProvider,
+    // ── Shape opaque app-leaf type constructors ──────────────────────────────
+    /// `WebApp` — opaque app handle returned by `Web.app` / `Web.appRouted` /
+    /// `Web.appWith`. Nullary; backed by `ipe_runtime::tea::WebApp`.
+    WebApp,
+    /// `WebViewApp` — opaque app handle returned by `WebView.app`. Nullary;
+    /// backed by `ipe_runtime::tea::WebViewApp`.
+    WebViewApp,
+    /// `TuiApp` — opaque app handle returned by `Terminal.appScreen`. Nullary;
+    /// backed by `ipe_runtime::tea::TuiApp`.
+    TuiApp,
+    /// `CliApp` — opaque app handle returned by `Terminal.appLines`. Nullary;
+    /// backed by `ipe_runtime::tea::CliApp`.
+    CliApp,
 }
 
 /// A `'static`, `const`-embeddable representation of a kernel's HM type scheme.
@@ -8046,11 +8059,16 @@ impl StdlibKernel {
         const RETRY_ON: TyShape = TyShape::Fun(&A_TO_BOOL, &RETRY_POLICY_TO_RETRY_POLICY);
         // `retryWith : RetryPolicy Error -> Task e a -> Task e a`. var(0) = a.
         const RETRY_WITH: TyShape = TyShape::Fun(&RETRY_POLICY_ERROR, &TASK_A_TO_TASK_A);
-        // App-entry whole signatures — `cfg -> Task ()`.
-        const WEB_APP: TyShape = TyShape::Fun(&WEB_APP_CFG, &TASK_UNIT);
-        const TERMINAL_APP_SCREEN: TyShape = TyShape::Fun(&TERMINAL_SCREEN_CFG, &TASK_UNIT);
-        const TERMINAL_APP_LINES: TyShape = TyShape::Fun(&TERMINAL_LINES_CFG, &TASK_UNIT);
-        const WEBVIEW_APP: TyShape = TyShape::Fun(&WEBVIEW_APP_CFG, &TASK_UNIT);
+        // App-entry whole signatures — `cfg -> <ShapeApp>`.
+        // Each entry builder returns its shape's opaque app leaf, not `Task ()`.
+        const WEB_APP_LEAF: TyShape = TyShape::Con(BuiltinTag::WebApp, &[]);
+        const WEBVIEW_APP_LEAF: TyShape = TyShape::Con(BuiltinTag::WebViewApp, &[]);
+        const TUI_APP_LEAF: TyShape = TyShape::Con(BuiltinTag::TuiApp, &[]);
+        const CLI_APP_LEAF: TyShape = TyShape::Con(BuiltinTag::CliApp, &[]);
+        const WEB_APP: TyShape = TyShape::Fun(&WEB_APP_CFG, &WEB_APP_LEAF);
+        const TERMINAL_APP_SCREEN: TyShape = TyShape::Fun(&TERMINAL_SCREEN_CFG, &TUI_APP_LEAF);
+        const TERMINAL_APP_LINES: TyShape = TyShape::Fun(&TERMINAL_LINES_CFG, &CLI_APP_LEAF);
+        const WEBVIEW_APP: TyShape = TyShape::Fun(&WEBVIEW_APP_CFG, &WEBVIEW_APP_LEAF);
         // Ui builders taking a record.
         const LAYOUT_WITH: TyShape = {
             const HTML_A_INNER: TyShape = TyShape::Con(BuiltinTag::Html, &[A]);

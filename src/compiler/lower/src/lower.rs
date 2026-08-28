@@ -2201,6 +2201,10 @@ fn ir_type_mentions(ty: &IrType, leaf: &impl Fn(&IrType) -> bool) -> bool {
         | IrType::WebSocketServerCfg
         | IrType::WebReq
         | IrType::Regex
+        | IrType::WebApp
+        | IrType::WebViewApp
+        | IrType::TuiApp
+        | IrType::CliApp
         | IrType::UiPlain(_) => false,
         // Single-payload carriers.
         IrType::Task(inner)
@@ -2839,7 +2843,13 @@ fn ir_contains_fun(ty: &IrType) -> bool {
         // `AuthConfig` / `TokenSource` are opaque descriptors — no embedded
         // function.
         | IrType::AuthConfig
-        | IrType::TokenSource => false,
+        | IrType::TokenSource
+        // Shape app leaves — opaque handles wrapping runtime event loops,
+        // no embedded Ipê function.
+        | IrType::WebApp
+        | IrType::WebViewApp
+        | IrType::TuiApp
+        | IrType::CliApp => false,
         // `WebRoute page` carries the page type it builds — recurse (the
         // route's own builder closure is runtime-internal, not a Ipê `Fn`).
         IrType::WebRoute(page) => ir_contains_fun(page),
@@ -3026,7 +3036,12 @@ fn clone_class(env: CloneEnv<'_>, t: &IrType) -> CloneClass {
         // its `Clone` rides the emitted `R: … + Clone` witness bound, and every
         // field read off it emits an explicit `.clone()`, so no bare capture of
         // the whole row value relies on a `CloneOk` classification.
-        | IrType::RowGeneric(_) => CloneClass::NonClone,
+        | IrType::RowGeneric(_)
+        // Opaque shape-app handles wrap active event loops — not Clone.
+        | IrType::WebApp
+        | IrType::WebViewApp
+        | IrType::TuiApp
+        | IrType::CliApp => CloneClass::NonClone,
         // Composite: CloneOk iff all components CloneOk (no NonClone part).
         // `Maybe`, `List`, `Set`, `Result`, `Dict` are NAMED Rust types
         // (`IpeMaybe<T>`, `Vec<T>`, `BTreeSet<T>`, `IpeResult<E,A>`,
@@ -6095,6 +6110,11 @@ fn ir_type_mentions_generic(ty: &IrType, tv: Symbol) -> bool {
         // `AuthConfig` / `TokenSource` are non-parametric — no type var.
         | IrType::AuthConfig
         | IrType::TokenSource
+        // Shape app leaves are non-parametric — no type var.
+        | IrType::WebApp
+        | IrType::WebViewApp
+        | IrType::TuiApp
+        | IrType::CliApp
         // A row variable is a distinct row generic (`R{n}`), never the ordinary
         // `T{n}` type variable this predicate tracks.
         | IrType::RowGeneric(_) => false,
@@ -6203,6 +6223,10 @@ fn ir_type_generic_in_decoder(ty: &IrType, tv: Symbol) -> bool {
         | IrType::Principal
         | IrType::AuthConfig
         | IrType::TokenSource
+        | IrType::WebApp
+        | IrType::WebViewApp
+        | IrType::TuiApp
+        | IrType::CliApp
         | IrType::RowGeneric(_) => false,
     }
 }
@@ -6313,6 +6337,10 @@ fn ir_type_generic_reaches_bare(ty: &IrType, tv: Symbol) -> bool {
         | IrType::Principal
         | IrType::AuthConfig
         | IrType::TokenSource
+        | IrType::WebApp
+        | IrType::WebViewApp
+        | IrType::TuiApp
+        | IrType::CliApp
         | IrType::RowGeneric(_) => false,
     }
 }
@@ -11199,23 +11227,34 @@ pub const fn float_key_rejected(ir: &IrType) -> bool {
 /// Whether `main`'s return type is a runnable program entry.
 ///
 /// The emitted `fn main` wraps the entry in the runtime's single run site, which
-/// needs a `Task`. Three lowered return shapes reach that run site as a `Task`:
+/// needs a `Task` or a shape app handle. Four lowered return shapes reach that run
+/// site:
 ///
-/// * `Task(_)` — a `Task Error a` written directly (a script `main = Io.println …`,
-///   or an app entry like `Web.app { … }` whose own result is a `Task Error ()`).
+/// * `Task(_)` — a `Task Error a` written directly (a script `main = Io.println …`).
 ///   The run site discards the produced value, so any `a` is admissible.
 /// * `Result(Error, _)` — a top-level `main = someTask |> Task.run`; the backend
 ///   re-wraps the resolved `Result` into an already-settled `Task`.
 /// * `Unit` — a synchronous `Task.run`-calls idiom whose body evaluates to `()`;
 ///   the backend wraps it as `task_succeed(())`.
+/// * Shape app leaves (`WebApp` / `WebViewApp` / `TuiApp` / `CliApp`) — each
+///   wraps its own event-loop task; the backend calls the leaf's `run_blocking`
+///   wrapper in `fn main` instead of `block_on(ipe_main())`.
 ///
 /// Any other type (an `Int`, a `String`, a function, …) has no effect to run and
-/// cannot reach the run site as a `Task`, so it is rejected ([`LowerError::NonEntryMain`]).
+/// cannot reach the run site, so it is rejected ([`LowerError::NonEntryMain`]).
 /// The set here is exactly the one the backend's entry emission can build, so
 /// acceptance fails closed at `ipe` time instead of open at `cargo` time.
 fn main_ret_is_runnable_entry(ret: &IrType) -> bool {
     match ret {
-        IrType::Task(_) | IrType::Unit => true,
+        // Opaque shape-app leaves: each has a `run_blocking` entry the emitted
+        // `fn main` calls; accepting them here keeps the SEAL closed (a program
+        // whose `main` returns a shape handle still compiles and runs).
+        IrType::Task(_)
+        | IrType::Unit
+        | IrType::WebApp
+        | IrType::WebViewApp
+        | IrType::TuiApp
+        | IrType::CliApp => true,
         IrType::Result(err, _) => matches!(**err, IrType::Error),
         _ => false,
     }
@@ -11329,6 +11368,10 @@ const fn ir_type_label(ty: &IrType) -> &'static str {
         IrType::WebSocketServer => "WebSocketServer",
         IrType::WebSocketServerCfg => "WebSocketServerCfg",
         IrType::WebReq => "WebReq",
+        IrType::WebApp => "WebApp",
+        IrType::WebViewApp => "WebViewApp",
+        IrType::TuiApp => "TuiApp",
+        IrType::CliApp => "CliApp",
     }
 }
 
@@ -13302,7 +13345,11 @@ impl<'a> Lowerer<'a> {
             | IrType::Locale
             | IrType::Principal
             | IrType::AuthConfig
-            | IrType::TokenSource => Ok(ty),
+            | IrType::TokenSource
+            | IrType::WebApp
+            | IrType::WebViewApp
+            | IrType::TuiApp
+            | IrType::CliApp => Ok(ty),
         }
     }
 
@@ -17395,6 +17442,11 @@ impl<'a> Lowerer<'a> {
                 }
                 // Ipe.Web opaque types in annotations (mirrors `ir_type_from_ty`).
                 "WebReq" => Ok(IrType::WebReq),
+                // Shape app-leaf opaque types in annotations.
+                "WebApp" => Ok(IrType::WebApp),
+                "WebViewApp" => Ok(IrType::WebViewApp),
+                "TuiApp" => Ok(IrType::TuiApp),
+                "CliApp" => Ok(IrType::CliApp),
                 // `StreamId` / `ChunkEvent` — builtin-registered Http.Stream ADTs
                 // (no synthetic EnumDef injection, so not in enum_variants).
                 // Mirrors the `ir_type_from_ty` arms added for these types.
@@ -18727,6 +18779,11 @@ impl<'a> Lowerer<'a> {
                 "LayoutContext" => Ok(IrType::UiPlain(UiPlain::LayoutContext)),
                 // ── Ipe.Web opaque types ─────────────────────────────────
                 "WebReq" => Ok(IrType::WebReq),
+                // ── Shape opaque app leaves ───────────────────────────────
+                "WebApp" => Ok(IrType::WebApp),
+                "WebViewApp" => Ok(IrType::WebViewApp),
+                "TuiApp" => Ok(IrType::TuiApp),
+                "CliApp" => Ok(IrType::CliApp),
                 // `WebRoute page` — the route descriptor produced by
                 // `Web.route`, parametric on the page type it builds.
                 // The solver's `WebRoute` Con always carries exactly one
@@ -24188,15 +24245,15 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::HtmlOnKeyUp
                 | KernelFn::HtmlOnBool
                 // ── app-entry stubs — arity 1 ────────────────────────────
-                // `Web.app : WebAppCfg model msg -> Task Error ()`
+                // `Web.app : WebAppCfg model msg -> WebApp`
                 | KernelFn::WebApp
-                // `Web.appRouted : WebAppCfg model msg -> Task Error ()`
+                // `Web.appRouted : WebAppCfg model msg -> WebApp`
                 | KernelFn::WebAppRouted
-                // `Terminal.appScreen : TerminalCfg model msg -> Task Error ()`
+                // `Terminal.appScreen : TerminalCfg model msg -> TuiApp`
                 | KernelFn::TerminalAppScreen
-                // `WebView.app : WebViewCfg model msg -> Task Error ()`
+                // `WebView.app : WebViewCfg model msg -> WebViewApp`
                 | KernelFn::WebViewApp
-                // `Terminal.appLines : TerminalCfg model msg -> Task Error ()`
+                // `Terminal.appLines : TerminalCfg model msg -> CliApp`
                 | KernelFn::TerminalAppLines
                 // ── runtime-config front door — arity 1 ──────────────────
                 // `App.fromEnv : String -> Secret`
@@ -27934,6 +27991,7 @@ impl<'a> Lowerer<'a> {
 /// structurally necessary.
 ///
 /// See the Bug-28 / Bug-29 fix comments in [`lower_def`] for full motivation.
+#[allow(clippy::too_many_lines)]
 fn collect_ir_generic_syms(ty: &IrType, out: &mut BTreeSet<Symbol>) {
     match ty {
         IrType::Generic(sym) => {
@@ -28045,6 +28103,10 @@ fn collect_ir_generic_syms(ty: &IrType, out: &mut BTreeSet<Symbol>) {
         // `AuthConfig` / `TokenSource` are non-parametric — no generic syms.
         | IrType::AuthConfig
         | IrType::TokenSource
+        | IrType::WebApp
+        | IrType::WebViewApp
+        | IrType::TuiApp
+        | IrType::CliApp
         // A row variable is tracked in `Func::row_params`, NOT in the ordinary
         // `T{n}` generic scope. Collecting it here would double-count it as both
         // a `T`-generic and an `R`-generic, so this arm is a deliberate no-op.
@@ -30445,7 +30507,11 @@ mod tests {
             | ipe_ir::IrType::Locale
             | ipe_ir::IrType::Principal
             | ipe_ir::IrType::AuthConfig
-            | ipe_ir::IrType::TokenSource => {}
+            | ipe_ir::IrType::TokenSource
+            | ipe_ir::IrType::WebApp
+            | ipe_ir::IrType::WebViewApp
+            | ipe_ir::IrType::TuiApp
+            | ipe_ir::IrType::CliApp => {}
         }
 
         // One representative per container variant: the shallowest tree

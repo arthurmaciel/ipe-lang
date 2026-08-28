@@ -702,6 +702,19 @@ struct Builtins {
     /// type parameters; the scheme just names the ADT so inference pins the
     /// second argument of each kernel to `Order`.
     order_con: Symbol,
+    // ── Shape opaque app-leaf type constructor symbols ────────────────────────
+    /// `"WebApp"` — opaque app handle returned by `Web.app` / `Web.appRouted` /
+    /// `Web.appWith`. Nullary; backed by `ipe_runtime::tea::WebApp`.
+    web_app: Symbol,
+    /// `"WebViewApp"` — opaque app handle returned by `WebView.app`. Nullary;
+    /// backed by `ipe_runtime::tea::WebViewApp`.
+    webview_app: Symbol,
+    /// `"TuiApp"` — opaque app handle returned by `Terminal.appScreen`. Nullary;
+    /// backed by `ipe_runtime::tea::TuiApp`.
+    tui_app: Symbol,
+    /// `"CliApp"` — opaque app handle returned by `Terminal.appLines`. Nullary;
+    /// backed by `ipe_runtime::tea::CliApp`.
+    cli_app: Symbol,
 }
 
 impl Builtins {
@@ -945,6 +958,11 @@ impl Builtins {
             policy_con: interner.intern("Policy")?,
             order_con: interner.intern("Order")?,
             codec_con: interner.intern("Codec")?,
+            // ── Shape opaque app-leaf type constructor symbols ─────────────
+            web_app: interner.intern("WebApp")?,
+            webview_app: interner.intern("WebViewApp")?,
+            tui_app: interner.intern("TuiApp")?,
+            cli_app: interner.intern("CliApp")?,
         })
     }
 
@@ -4214,6 +4232,10 @@ impl<'a> Builder<'a> {
             BuiltinTag::WebReq => self.builtins.web_req,
             BuiltinTag::WebRoute => self.builtins.live_route_con,
             BuiltinTag::EmailProvider => self.builtins.email_provider,
+            BuiltinTag::WebApp => self.builtins.web_app,
+            BuiltinTag::WebViewApp => self.builtins.webview_app,
+            BuiltinTag::TuiApp => self.builtins.tui_app,
+            BuiltinTag::CliApp => self.builtins.cli_app,
         }
     }
 

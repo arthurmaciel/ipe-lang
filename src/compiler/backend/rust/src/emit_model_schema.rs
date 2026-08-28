@@ -173,6 +173,11 @@ const TAG_SHAPE_WEB: u8 = 73;
 const TAG_SHAPE_WEBVIEW: u8 = 74;
 const TAG_SHAPE_TERMINAL: u8 = 75;
 const TAG_CUSTOM_ELEMENT: u8 = 76;
+// Shape opaque app leaves — non-serde, never a Model field; present for exhaustiveness.
+const TAG_WEB_APP: u8 = 77;
+const TAG_WEBVIEW_APP: u8 = 78;
+const TAG_TUI_APP: u8 = 79;
+const TAG_CLI_APP: u8 = 80;
 /// Fuel exhaustion marker — distinct from every variant tag.
 const TAG_FUEL_EXHAUSTED: u8 = 0xFF;
 
@@ -256,6 +261,11 @@ fn hash_ty(ctx: &EmitCtx, ty: &IrType, h: &mut Sha256, fuel: u32) -> DResult<()>
         // present for exhaustiveness.
         IrType::AuthConfig => h.update([TAG_AUTH_CONFIG]),
         IrType::TokenSource => h.update([TAG_TOKEN_SOURCE]),
+        // Shape opaque app leaves — non-serde, never a Model field; present for exhaustiveness.
+        IrType::WebApp => h.update([TAG_WEB_APP]),
+        IrType::WebViewApp => h.update([TAG_WEBVIEW_APP]),
+        IrType::TuiApp => h.update([TAG_TUI_APP]),
+        IrType::CliApp => h.update([TAG_CLI_APP]),
 
         IrType::Task(inner) => {
             h.update([TAG_TASK]);

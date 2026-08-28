@@ -121,13 +121,13 @@ fn emit_console_inner(
     let on_line_s = emit_console_fn(ctx, on_line_e, indent, child, generics)?;
 
     Ok(Some(format!(
-        "ipe_runtime::console_app(\
+        "ipe_runtime::tea::CliApp(ipe_runtime::console_app(\
          {init_s}, \
          {update_s}, \
          {view_s}, \
          {subs_s}, \
          {on_line_s}\
-         )"
+         ))"
     )))
 }
 

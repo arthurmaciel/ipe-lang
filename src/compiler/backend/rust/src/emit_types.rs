@@ -490,6 +490,11 @@ pub fn render_type(ctx: &EmitCtx, ty: &IrType, generics: GenericScope) -> DResul
         },
         // Web types — render to qualified runtime paths.
         IrType::WebReq => "ipe_runtime::web::WebReq".to_owned(),
+        // Shape opaque app leaves — render to qualified runtime paths.
+        IrType::WebApp => "ipe_runtime::tea::WebApp".to_owned(),
+        IrType::WebViewApp => "ipe_runtime::tea::WebViewApp".to_owned(),
+        IrType::TuiApp => "ipe_runtime::tea::TuiApp".to_owned(),
+        IrType::CliApp => "ipe_runtime::tea::CliApp".to_owned(),
         // `Route<Page>` has NO default type parameter in the runtime
         // (`web/route.rs`), so the page argument MUST be rendered: a bare
         // `Route` is an E0107 cargo failure in every rendered position — the
