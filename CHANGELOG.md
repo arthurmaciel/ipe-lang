@@ -10,6 +10,44 @@ Entries below the header are maintained by
 section is generated from Conventional Commit messages and prepended when the
 standing release pull request is merged.
 
+## [0.1.70](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.1.69...ipe-v0.1.70) (2026-08-28)
+
+
+### Features
+
+* **#1423:** add `ipe doc --type` type-signature search ([#1441](https://github.com/arthurmaciel/ipe-lang/issues/1441)) ([03c892f](https://github.com/arthurmaciel/ipe-lang/commit/03c892f7b899d0bfcde5e14a32697b04cc44f303))
+* **chart:** nominal Point/Range/Pixel records to stop axis transposition ([#1439](https://github.com/arthurmaciel/ipe-lang/issues/1439)) ([9e7a56c](https://github.com/arthurmaciel/ipe-lang/commit/9e7a56ccb0f9832407b9a27751da667103f0f3fc)), closes [#1425](https://github.com/arthurmaciel/ipe-lang/issues/1425)
+* **cli:** ipe release production command replacing deploy, gating Debug.* on the release verb ([8370ac6](https://github.com/arthurmaciel/ipe-lang/commit/8370ac6710133c2c080a763c2e6fbaa53a0ae16b))
+* **db:** add Db.Decode.decimal combinator + Decimal/Money round-trip test coverage ([#1394](https://github.com/arthurmaciel/ipe-lang/issues/1394)) ([e062dda](https://github.com/arthurmaciel/ipe-lang/commit/e062dda6bc6973524bc751645d06bffec45de0bf))
+* **db:** replace stringly-typed projection triple with ProjectionTerm/CoalesceOperand ([#1432](https://github.com/arthurmaciel/ipe-lang/issues/1432)) ([#1442](https://github.com/arthurmaciel/ipe-lang/issues/1442)) ([8b953c4](https://github.com/arthurmaciel/ipe-lang/commit/8b953c4ccd16712b67a1d73e5806d51f46f13925))
+* **db:** typed join query for Ipe.Db.Store (single-statement joins, no N+1) ([#1391](https://github.com/arthurmaciel/ipe-lang/issues/1391)) ([b481499](https://github.com/arthurmaciel/ipe-lang/commit/b4814999c186cbca307b402dcc48e6516a92c7b3))
+* **debugger:** client-WASM overlay UI — message list + scrubber panel ([#1372](https://github.com/arthurmaciel/ipe-lang/issues/1372)) ([df54cee](https://github.com/arthurmaciel/ipe-lang/commit/df54cee45cdb55277e07d8d51647ce4eb0b8b416))
+* **debugger:** server-driven time-travel for server-rendered web apps ([#1373](https://github.com/arthurmaciel/ipe-lang/issues/1373)) ([bdbd00a](https://github.com/arthurmaciel/ipe-lang/commit/bdbd00a332634f65e204eb28620d4f3aed85fdbf))
+* **debugger:** terminal time-travel for TUI apps ([#1376](https://github.com/arthurmaciel/ipe-lang/issues/1376)) ([f48f00b](https://github.com/arthurmaciel/ipe-lang/commit/f48f00beb058c53c79d7d18c53319c213ed13a7f))
+* **debugger:** time-travel recorder core and --debugger build flag ([4127d43](https://github.com/arthurmaciel/ipe-lang/commit/4127d4301ad9ed23655effeb7e1ca2d0389c5156))
+* **doc:** HTML site navigation — persistent header, teach-first landing, index pages, search ([#1414](https://github.com/arthurmaciel/ipe-lang/issues/1414)) ([fcaf4ea](https://github.com/arthurmaciel/ipe-lang/commit/fcaf4ea968691286dc00726163e8308f5d5c1d94))
+* **doc:** unified DocBundle index, kind:key resolver, [[ref]] rewriter, fuzzy CLI search ([#1411](https://github.com/arthurmaciel/ipe-lang/issues/1411)) ([472ed15](https://github.com/arthurmaciel/ipe-lang/commit/472ed157619d0758beaf5979d83e240bae56554b))
+* **file:** add Ipe.File.walk and Ipe.File.walkMatching ([#1419](https://github.com/arthurmaciel/ipe-lang/issues/1419)) ([5d48d4a](https://github.com/arthurmaciel/ipe-lang/commit/5d48d4ae17efec7ecefe5bde140455c9e7e01993))
+* **http:** RedirectPolicy ADT replaces followRedirects:Bool + maxRedirects:Int ([#1426](https://github.com/arthurmaciel/ipe-lang/issues/1426)) ([#1443](https://github.com/arthurmaciel/ipe-lang/issues/1443)) ([63db3b8](https://github.com/arthurmaciel/ipe-lang/commit/63db3b86e2f437776482cc30acfa6202b65a8667))
+* **js-interop:** live JS port transport — client-WASM wire + lowering flip ([#1382](https://github.com/arthurmaciel/ipe-lang/issues/1382)) ([af6af79](https://github.com/arthurmaciel/ipe-lang/commit/af6af795350037cb3796b9bcc784cd5b363cf91e))
+* **js-interop:** server-driven JS port transport with per-session channels ([#1383](https://github.com/arthurmaciel/ipe-lang/issues/1383)) ([1da30de](https://github.com/arthurmaciel/ipe-lang/commit/1da30debb712ac89ade9e1a2667756a919fbbfca))
+* **js-interop:** typed JS ports boundary (Js.send/subscribe/sync) with fail-closed gates ([4305f16](https://github.com/arthurmaciel/ipe-lang/commit/4305f169e96b2d34f98ce1293d451f530adb53c3))
+* **js-interop:** wasm-client custom-element adapter (property down, CustomEvent up) ([db94075](https://github.com/arthurmaciel/ipe-lang/commit/db940755f056f72bc3a4682b0c93bfc7de50cd47))
+* **shape:** opaque App IrType leaves + Shape surface Stage 1 ([#1444](https://github.com/arthurmaciel/ipe-lang/issues/1444)) ([aed588a](https://github.com/arthurmaciel/ipe-lang/commit/aed588aa737699d8db03c54e0ffb69e41aaa30bd))
+* **stdlib:** Debug.todo typed hole and Debug.explain layout outline ([505c329](https://github.com/arthurmaciel/ipe-lang/commit/505c3295474c830e3ba080517d89ac4a1b2a8452)), closes [#910](https://github.com/arthurmaciel/ipe-lang/issues/910) [#912](https://github.com/arthurmaciel/ipe-lang/issues/912)
+* **stdlib:** Opacity newtype for opacity/alpha — NaN-guard + clamp ([#1427](https://github.com/arthurmaciel/ipe-lang/issues/1427)) ([#1440](https://github.com/arthurmaciel/ipe-lang/issues/1440)) ([04fe209](https://github.com/arthurmaciel/ipe-lang/commit/04fe209b133cac8eb29d1b4b396426e91b927965))
+* **stdlib:** typed named-field cubicBezier with X-clamp in Ui.Transition/Animation ([#1437](https://github.com/arthurmaciel/ipe-lang/issues/1437)) ([3b707bc](https://github.com/arthurmaciel/ipe-lang/commit/3b707bca9d578b06b66136f12bb9d194b6c2e236)), closes [#1424](https://github.com/arthurmaciel/ipe-lang/issues/1424)
+* **store:** add Store.literal for SQL-parameter projection elements ([#1413](https://github.com/arthurmaciel/ipe-lang/issues/1413)) ([2705a78](https://github.com/arthurmaciel/ipe-lang/commit/2705a78d532648a0fea69e521cb7a11ebdb85b61))
+* **store:** Store.coalesce projection operator + 3-tuple projection descriptor ABI ([#1429](https://github.com/arthurmaciel/ipe-lang/issues/1429)) ([171dad4](https://github.com/arthurmaciel/ipe-lang/commit/171dad40e82a9ab515d8401fb1fc1f8d7a3dd4ba))
+* **store:** Store.upper / Store.lower projection operators + IPE-L0149 type label ([#1415](https://github.com/arthurmaciel/ipe-lang/issues/1415)) ([2d2a3d9](https://github.com/arthurmaciel/ipe-lang/commit/2d2a3d9a8e55f736b52e5916036a5fab96ea2b85))
+* **task:** replace RetryPolicy kind+jitter fields with BackoffStrategy ADT ([#1421](https://github.com/arthurmaciel/ipe-lang/issues/1421)) ([#1438](https://github.com/arthurmaciel/ipe-lang/issues/1438)) ([fd873ad](https://github.com/arthurmaciel/ipe-lang/commit/fd873ad074c22b5d6cb927bcc36c9aac2ef321ca))
+
+
+### Bug Fixes
+
+* **debugger:** render server-driven overlay labels via IpeStringify::ipe_show ([#1397](https://github.com/arthurmaciel/ipe-lang/issues/1397)) ([5dae5e8](https://github.com/arthurmaciel/ipe-lang/commit/5dae5e8249fba35eda02d707e887440b62e695c7)), closes [#1375](https://github.com/arthurmaciel/ipe-lang/issues/1375)
+* **doc:** render indented code blocks in HTML doc-comments as &lt;pre&gt; ([#1400](https://github.com/arthurmaciel/ipe-lang/issues/1400)) ([6d3ff00](https://github.com/arthurmaciel/ipe-lang/commit/6d3ff0017f34db151add9e91d71d8ad6de2d0cd7))
+
 ## [0.1.69](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.1.68...ipe-v0.1.69) (2026-08-26)
 
 
