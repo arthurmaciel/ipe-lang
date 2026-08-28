@@ -159,8 +159,8 @@ pub fn jwt_encode_hs256<E: From<String>>(
     );
 
     // Mirror Go's pipeline exactly: hmacSha256 returns lowercase hex, hexDecode
-    // back to the raw MAC bytes, then base64url. `crypto_hmac_sha256` is the same
-    // Go-parity primitive `Crypto.hmacSha256` lowers to.
+    // back to the raw MAC bytes, then base64url. Uses the raw-string `crypto_hmac_sha256`
+    // from the lower pipeline (JWT takes a raw secret string, not a typed Key).
     let mac_hex = super::crypto_core::crypto_hmac_sha256(secret, signing_input.clone());
     let mac_bytes = match hex::decode(&mac_hex) {
         Ok(b) => b,

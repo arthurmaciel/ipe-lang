@@ -11189,8 +11189,8 @@ impl StdlibKernel {
 
     /// `true` when this variant's emitted symbol lives in `crypto_core.rs` AND is
     /// available with only the `crypto-core` feature — the cryptographic floor:
-    /// SHA-2 hash (`sha256`/`sha512`), the HMAC family (`hmacSha256`/`hmacSha512`
-    /// and their `Key`-typed `WithKey` forms), the constant-time compare, the
+    /// SHA-2 hash (`sha256`/`sha512`), the typed HMAC family (`hmacSha256WithKey`/
+    /// `hmacSha512WithKey`), the constant-time compare, the
     /// entropy pair (`randomBytes`/`randomToken`), and the typed `Key`/`Mac`
     /// newtype kernels (`Key.fromString` / `Key.fromBytes` / `Mac.toHex`).
     ///

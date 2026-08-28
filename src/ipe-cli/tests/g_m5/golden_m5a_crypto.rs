@@ -11,20 +11,20 @@
 //! * `crypto_sha_hash` — `sha256` / `sha512` / `sha1` / `md5` of `"abc"`;
 //!   known standard test vectors; byte-parity with Go.
 //!
-//! * `crypto_hmac` — `hmacSha256` / `hmacSha512` with RFC 4231 case-1 key
-//!   (`0x0b × 20`) and message `"Hi There"`; known test vectors; byte-parity.
+//! * `crypto_hmac` — `hmacSha256WithKey` / `hmacSha512WithKey` with RFC 4231
+//!   case-1 key (`0x0b × 20`) and message `"Hi There"`; known test vectors.
 //!
 //! * `crypto_constant_time` — `constantTimeEqual "abc" "abc"` → `true`;
 //!   `constantTimeEqual "abc" "abd"` → `false`.
 //!
-//! * `crypto_aes_roundtrip` — `aesGcmEncrypt` then `aesGcmDecrypt` recovers
-//!   the plaintext.  Nonce is random so ciphertext differs per run; only `"ok"`
-//!   is checked.
+//! * `crypto_aes_roundtrip` — `aesGcmEncryptKey` then `aesGcmDecryptKey`
+//!   recovers the plaintext.  Nonce is random so ciphertext differs per run;
+//!   only `"ok"` is checked.
 //!
-//! * `crypto_chacha_roundtrip` — `chacha20Encrypt` then `chacha20Decrypt`
+//! * `crypto_chacha_roundtrip` — `chacha20EncryptKey` then `chacha20DecryptKey`
 //!   recovers the plaintext.  Same round-trip shape as AES.
 //!
-//! * `crypto_keyfrompassword` — `aesKeyFromPassword` is deterministic:
+//! * `crypto_keyfrompassword` — `aesKeyFromPasswordKey` is deterministic:
 //!   derive the key twice; encrypt with the first, decrypt with the second;
 //!   both keys must agree.
 //!
@@ -88,7 +88,7 @@ fn crypto_sha_hash() {
 
 // ── HMAC-SHA256 / HMAC-SHA512 ────────────────────────────────────────────────
 
-/// `Crypto.hmacSha256 key "Hi There"` and `Crypto.hmacSha512 key "Hi There"`
+/// `Crypto.hmacSha256WithKey k "Hi There"` and `Crypto.hmacSha512WithKey k "Hi There"`
 /// with the RFC 4231 test-case-1 key (`0x0b` × 20) produce the standard known
 /// MAC values; byte-parity with Go.
 #[test]
@@ -108,7 +108,7 @@ fn crypto_constant_time() {
 
 // ── AES-GCM round-trip ───────────────────────────────────────────────────────
 
-/// `Crypto.aesGcmEncrypt key plaintext` followed by `Crypto.aesGcmDecrypt key
+/// `Crypto.aesGcmEncryptKey key plaintext` followed by `Crypto.aesGcmDecryptKey key
 /// ciphertext` recovers the original plaintext.  The nonce is random so the
 /// ciphertext differs each run; only `"ok"` is asserted.
 #[test]
@@ -118,7 +118,7 @@ fn crypto_aes_roundtrip() {
 
 // ── ChaCha20-Poly1305 round-trip ─────────────────────────────────────────────
 
-/// `Crypto.chacha20Encrypt key plaintext` followed by `Crypto.chacha20Decrypt
+/// `Crypto.chacha20EncryptKey key plaintext` followed by `Crypto.chacha20DecryptKey
 /// key ciphertext` recovers the original plaintext.  Nonce is random; only
 /// `"ok"` is asserted.
 #[test]
@@ -128,7 +128,7 @@ fn crypto_chacha_roundtrip() {
 
 // ── Key-from-password determinism ────────────────────────────────────────────
 
-/// `Crypto.aesKeyFromPassword` is deterministic: deriving the key twice from
+/// `Crypto.aesKeyFromPasswordKey` is deterministic: deriving the key twice from
 /// the same password and salt produces the same bytes.  Encrypt with key1 and
 /// decrypt with independently-derived key2; if they match, the round-trip
 /// succeeds and `"ok"` is printed.

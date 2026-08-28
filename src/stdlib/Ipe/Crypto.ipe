@@ -3,13 +3,12 @@
 -- All functions are aliased to the runtime kernel via Stage 4 `Ffi.kernel`.
 -- Security notes:
 --   * `constantTimeEqual` stays constant-time (backed by `subtle`).
---   * AEAD functions (`aesGcmEncrypt`, `chacha20Encrypt`) use a fresh
---     random nonce on every call; the nonce is prepended to the
---     ciphertext so `decrypt` can recover it.
+--   * AEAD functions use a fresh random nonce on every call; the nonce is
+--     prepended to the ciphertext so `decrypt` can recover it.
 --   * Key/secret material is never logged.
---   * Typed variants (`Key`, `Mac`) enforce role at compile time.
---     A `Key` can only be constructed at explicit parse boundaries;
---     passing a `Mac` where a `Key` is expected is a compile error.
+--   * `Key` and `Mac` enforce role at compile time: a `Key` is constructed
+--     only at explicit parse boundaries; passing a `Mac` where a `Key` is
+--     expected is a type error.
 module Ipe.Crypto exposing
     ( sha256, sha512, sha1, md5
     , rsaSha256Sign, rsaSha256Verify
@@ -49,15 +48,6 @@ md5 : String -> String
 md5 = Ffi.kernel "Crypto_md5"
 
 
--- ── HMAC ─────────────────────────────────────────────────────────────────────
-
-hmacSha256 : String -> String -> String
-hmacSha256 = Ffi.kernel "Crypto_hmacSha256"
-
-hmacSha512 : String -> String -> String
-hmacSha512 = Ffi.kernel "Crypto_hmacSha512"
-
-
 -- ── RSA / asymmetric ─────────────────────────────────────────────────────────
 
 rsaSha256Sign : String -> String -> Result Error String
@@ -71,30 +61,6 @@ rsaSha256Verify = Ffi.kernel "Crypto_rsaSha256Verify"
 
 constantTimeEqual : String -> String -> Bool
 constantTimeEqual = Ffi.kernel "Crypto_constantTimeEqual"
-
-
--- ── AEAD symmetric encryption ─────────────────────────────────────────────────
-
-aesGcmEncrypt : String -> String -> Result Error String
-aesGcmEncrypt = Ffi.kernel "Crypto_aesGcmEncrypt"
-
-aesGcmDecrypt : String -> String -> Result Error String
-aesGcmDecrypt = Ffi.kernel "Crypto_aesGcmDecrypt"
-
-chacha20Encrypt : String -> String -> Result Error String
-chacha20Encrypt = Ffi.kernel "Crypto_chacha20Encrypt"
-
-chacha20Decrypt : String -> String -> Result Error String
-chacha20Decrypt = Ffi.kernel "Crypto_chacha20Decrypt"
-
-
--- ── Key derivation ────────────────────────────────────────────────────────────
-
-aesKeyFromPassword : String -> String -> String
-aesKeyFromPassword = Ffi.kernel "Crypto_aesKeyFromPassword"
-
-chachaKeyFromPassword : String -> String -> String
-chachaKeyFromPassword = Ffi.kernel "Crypto_chachaKeyFromPassword"
 
 
 -- ── Random ───────────────────────────────────────────────────────────────────
@@ -139,7 +105,6 @@ macToHex = Ffi.kernel "Mac_toHex"
 -- ── Typed HMAC ───────────────────────────────────────────────────────────────
 
 -- | `hmacSha256WithKey key message` — produce a typed `Mac`.
--- Use this instead of `hmacSha256` when you hold a `Key`.
 hmacSha256WithKey : Key -> String -> Mac
 hmacSha256WithKey = Ffi.kernel "Crypto_hmacSha256WithKey"
 

@@ -24,7 +24,7 @@ use super::*;
 // inspect the byte content directly; the role is what matters.
 
 /// `Crypto.Key` — an opaque cryptographic key obtained from `Key.fromString`,
-/// `Key.fromBytes`, or `Crypto.aesKeyFromPassword` / `Crypto.chachaKeyFromPassword`.
+/// `Key.fromBytes`, or `Crypto.aesKeyFromPasswordKey` / `Crypto.chachaKeyFromPasswordKey`.
 ///
 /// Distinct from `String`: passing a `Key` where a message is expected (or
 /// vice-versa) is a compile-time error, not a silent wrong MAC or ciphertext.
@@ -53,7 +53,7 @@ impl crate::stringify::IpeStringify for Key {
 }
 
 /// `Crypto.Mac` — an opaque message authentication code (hex-encoded) returned
-/// by `Crypto.hmacSha256` / `Crypto.hmacSha512` with the typed-key variants.
+/// by `Crypto.hmacSha256WithKey` / `Crypto.hmacSha512WithKey`.
 ///
 /// Distinct from `String` so a MAC output cannot be silently passed where a
 /// key or plaintext is expected. Wraps the hex-encoded tag; `Mac.toHex` is the
@@ -302,7 +302,8 @@ pub fn crypto_sha512(s: String) -> String {
     result.iter().map(|b| format!("{:02x}", b)).collect()
 }
 
-/// Ipê `hmacSha256 : String -> String -> String` (key, message → hex tag).
+/// Raw HMAC-SHA256 (key: String, message: String → hex tag).
+/// Retained for the lower pipeline; the Ipe surface uses `hmacSha256WithKey` (typed `Key`).
 pub fn crypto_hmac_sha256(key: String, msg: String) -> String {
     use hmac::{Hmac, Mac};
     use sha2::Sha256;
@@ -367,7 +368,8 @@ pub fn crypto_hmac_sha512_key(key: Key, msg: String) -> Mac {
     Mac(hex)
 }
 
-/// Ipê `hmacSha512 : String -> String -> String`.
+/// Raw HMAC-SHA512 (key: String, message: String → hex tag).
+/// Retained for the lower pipeline; the Ipe surface uses `hmacSha512WithKey` (typed `Key`).
 pub fn crypto_hmac_sha512(key: String, msg: String) -> String {
     use hmac::{Hmac, Mac};
     use sha2::Sha512;

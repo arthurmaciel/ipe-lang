@@ -61,7 +61,7 @@ pub fn crypto_md5(s: String) -> String {
 // base64-encoded here (the Go backend passes raw bytes). Keys are opaque and
 // never cross the backend boundary, so this backend-local encoding is sound and
 // is what lets a PBKDF2-derived key (arbitrary bytes) live in a Rust `String`
-// (which must be valid UTF-8). aesKeyFromPassword emits the base64 form; the
+// (which must be valid UTF-8). aesKeyFromPasswordKey emits the base64 form; the
 // AEAD fns base64-decode it back to 32 raw bytes.
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -82,13 +82,13 @@ fn aead_read_key(name: &str, key: &str) -> Result<Vec<u8>, String> {
     use base64::{Engine, engine::general_purpose::STANDARD};
     let k = STANDARD.decode(key.as_bytes()).map_err(|_| {
         format!(
-            "{}: key must be a 32-byte key from Crypto.aesKeyFromPassword",
+            "{}: key must be a 32-byte key from Crypto.aesKeyFromPasswordKey",
             name
         )
     })?;
     if k.len() != AEAD_KEY_BYTES {
         return Err(format!(
-            "{}: key must be {} bytes, got {} (derive via Crypto.aesKeyFromPassword)",
+            "{}: key must be {} bytes, got {} (derive via Crypto.aesKeyFromPasswordKey)",
             name,
             AEAD_KEY_BYTES,
             k.len()
@@ -115,7 +115,8 @@ pub fn crypto_aes_gcm_decrypt_key<E: From<String>>(
     crypto_aes_gcm_decrypt(crate::crypto_core::crypto_key_reveal(key), encoded)
 }
 
-// Crypto.aesGcmEncrypt : String -> String -> Result Error String
+// Raw String-keyed AES-GCM encrypt; retained for the lower pipeline.
+// Ipe surface uses aesGcmEncryptKey (typed Key).
 #[cfg(not(target_arch = "wasm32"))]
 pub fn crypto_aes_gcm_encrypt<E: From<String>>(
     key: String,
@@ -149,7 +150,7 @@ pub fn crypto_aes_gcm_encrypt<E: From<String>>(
     }
 }
 
-// Crypto.aesGcmDecrypt : String -> String -> Result Error String
+// Raw String-keyed AES-GCM decrypt; retained for the lower pipeline.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn crypto_aes_gcm_decrypt<E: From<String>>(
     key: String,
@@ -214,7 +215,7 @@ pub fn crypto_chacha20_decrypt_key<E: From<String>>(
     crypto_chacha20_decrypt(crate::crypto_core::crypto_key_reveal(key), encoded)
 }
 
-// Crypto.chacha20Encrypt : String -> String -> Result Error String
+// Raw String-keyed ChaCha20-Poly1305 encrypt; retained for the lower pipeline.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn crypto_chacha20_encrypt<E: From<String>>(
     key: String,
@@ -246,7 +247,7 @@ pub fn crypto_chacha20_encrypt<E: From<String>>(
     }
 }
 
-// Crypto.chacha20Decrypt : String -> String -> Result Error String
+// Raw String-keyed ChaCha20-Poly1305 decrypt; retained for the lower pipeline.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn crypto_chacha20_decrypt<E: From<String>>(
     key: String,
@@ -291,7 +292,8 @@ pub fn crypto_chacha20_decrypt<E: From<String>>(
     }
 }
 
-// Crypto.aesKeyFromPassword : String -> String -> String
+// Raw String-returning key derivation; retained for the lower pipeline.
+// Ipe surface uses aesKeyFromPasswordKey (returns typed Key).
 // PBKDF2-HMAC-SHA256, 100k iters, 32-byte key, returned base64-encoded.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn crypto_aes_key_from_password(password: String, salt: String) -> String {
@@ -306,7 +308,7 @@ pub fn crypto_aes_key_from_password(password: String, salt: String) -> String {
     STANDARD.encode(key)
 }
 
-// Crypto.chachaKeyFromPassword : String -> String -> String  (same derivation)
+// Raw String-returning ChaCha key derivation; retained for lower pipeline.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn crypto_chacha_key_from_password(password: String, salt: String) -> String {
     crypto_aes_key_from_password(password, salt)

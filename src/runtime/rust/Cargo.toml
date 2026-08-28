@@ -90,8 +90,8 @@ getrandom = { version = "0.2", optional = true }
 # secret does not linger in freed heap memory. Optional, behind the `secret`
 # feature: a program that reaches no `Secret` drops `secret.rs` and `zeroize`.
 zeroize = { version = "1", optional = true }
-# HMAC family — the `crypto_core` floor's `hmacSha256`/`hmacSha512`. Optional,
-# behind `crypto-core`.
+# HMAC family — the `crypto_core` floor's typed HMAC (hmacSha256WithKey/hmacSha512WithKey).
+# Optional, behind `crypto-core`.
 hmac = { version = "0.12", optional = true }
 # Legacy SHA-1 / MD5 checksums (`Crypto.sha1`/`md5`) live in `crypto.rs`, the
 # heavy surface — optional, behind the `crypto` feature.

@@ -279,10 +279,7 @@ mod load_from_file_tests {
         let p = std::env::temp_dir().join(format!("ipe_cfg_json_{}.json", std::process::id()));
         std::fs::write(&p, r#"{"name": "ipe"}"#).unwrap();
         let path: Path = path_from_string(p.to_string_lossy().into_owned()).unwrap();
-        let res: IpeResult<String, String> = block(config_load_from_file(
-            path,
-            name_decoder(),
-        ));
+        let res: IpeResult<String, String> = block(config_load_from_file(path, name_decoder()));
         let _ = std::fs::remove_file(&p);
         match res {
             IpeResult::Ok(s) => assert_eq!(s, "ipe"),
@@ -295,10 +292,7 @@ mod load_from_file_tests {
         let p = std::env::temp_dir().join(format!("ipe_cfg_toml_{}.toml", std::process::id()));
         std::fs::write(&p, "name = \"ipe\"\n").unwrap();
         let path: Path = path_from_string(p.to_string_lossy().into_owned()).unwrap();
-        let res: IpeResult<String, String> = block(config_load_from_file(
-            path,
-            name_decoder(),
-        ));
+        let res: IpeResult<String, String> = block(config_load_from_file(path, name_decoder()));
         let _ = std::fs::remove_file(&p);
         match res {
             IpeResult::Ok(s) => assert_eq!(s, "ipe"),
@@ -313,10 +307,7 @@ mod load_from_file_tests {
         // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
         unsafe { std::env::set_var("IPE_CONFIG_MAX_BYTES", "1024") };
         let path: Path = path_from_string(p.to_string_lossy().into_owned()).unwrap();
-        let res: IpeResult<String, String> = block(config_load_from_file(
-            path,
-            name_decoder(),
-        ));
+        let res: IpeResult<String, String> = block(config_load_from_file(path, name_decoder()));
         // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
         unsafe { std::env::remove_var("IPE_CONFIG_MAX_BYTES") };
         let _ = std::fs::remove_file(&p);

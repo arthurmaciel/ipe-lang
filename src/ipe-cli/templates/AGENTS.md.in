@@ -359,7 +359,7 @@ app code.
 | `Regex` | `Ipe.Regex` | match, find, findAll, replace, split |
 | `Char` | `Ipe.Char` | isAlpha, isDigit, isLower, isUpper, toUpper, toLower |
 | `Path` | `Ipe.Path` | base, dir, ext, isAbsolute |
-| `Crypto` | `Ipe.Crypto` | sha256, sha512, sha1, md5, hmacSha256, hmacSha512, rsaSha256Sign, rsaSha256Verify, constantTimeEqual (pure); aesGcmEncrypt/Decrypt, chacha20Encrypt/Decrypt, aesKeyFromPassword, chachaKeyFromPassword (Result Error String, symmetric encryption/AEAD); randomBytes, randomToken (Task, entropy) |
+| `Crypto` | `Ipe.Crypto` | sha256, sha512, sha1, md5, rsaSha256Sign, rsaSha256Verify, constantTimeEqual (pure); Key/Mac newtypes — keyFromString, keyFromBytes, macToHex; hmacSha256WithKey, hmacSha512WithKey (typed HMAC); aesGcmEncryptKey/DecryptKey, chacha20EncryptKey/DecryptKey (typed AEAD, Result Error String); aesKeyFromPasswordKey, chachaKeyFromPasswordKey (typed key derivation → Key); randomBytes, randomToken (Task, entropy) |
 | `Bytes` | `Ipe.Bytes` | empty, length, isEmpty, fromString/toString (UTF-8 lossy via Maybe), fromHex/toHex, fromBase64/toBase64, append, slice |
 | `Jwt` | `Ipe.Jwt` | encode, decode (HS256+RS256, sig+`exp`/`nbf` checked); `hs256`/`rs256` algos; `claims` builder — issuer/subject/audience/expiresAt/notBefore/issuedAt/jwtId/withClaim |
 | `Encoding` | `Ipe.Encoding` | base64Encode/Decode, urlEncode/Decode, hexEncode/Decode |

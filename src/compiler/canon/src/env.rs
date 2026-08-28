@@ -1111,7 +1111,8 @@ impl Env {
                 &["required", "optional", "custom", "requiredAt"],
             ),
             // `Ipe.Crypto` — hashes / HMAC / RSA / AEAD / key-derivation / random.
-            // String-typed surface (backward-compat) + typed-key variants (§6.11).
+            // All HMAC and AEAD entry points require a typed `Key`; the raw
+            // String-keyed variants were removed (security boundary, audit C-11/C-12).
             (
                 "Crypto",
                 &[
@@ -1119,20 +1120,16 @@ impl Env {
                     "sha512",
                     "sha1",
                     "md5",
-                    "hmacSha256",
-                    "hmacSha512",
                     "rsaSha256Sign",
                     "rsaSha256Verify",
                     "constantTimeEqual",
-                    "aesGcmEncrypt",
-                    "aesGcmDecrypt",
-                    "chacha20Encrypt",
-                    "chacha20Decrypt",
-                    "aesKeyFromPassword",
-                    "chachaKeyFromPassword",
                     "randomBytes",
                     "randomToken",
-                    // typed-key variants (additive, §6.11)
+                    "Key",
+                    "Mac",
+                    "keyFromString",
+                    "keyFromBytes",
+                    "macToHex",
                     "hmacSha256WithKey",
                     "hmacSha512WithKey",
                     "aesGcmEncryptKey",
