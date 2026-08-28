@@ -6,13 +6,21 @@ possibly using the previous result — write a `do` block instead of a chain of
 
 ## The shape
 
-A `do` block is a sequence of steps, read top to bottom. Two forms of step:
+A `do` block is a sequence of steps, read top to bottom. Three statement forms:
 
 - **`name <- task`** — run `task`, bind its success value to `name`, continue.
+- **`name = expr`** — bind a pure value to `name` (no task run). Desugars to
+  `let name = expr in` around the rest of the block.
 - **`task`** — run `task` for its effect and discard the result (a `()`).
 
 The block's value is its last step. A failure anywhere short-circuits the rest —
 you never thread the error by hand.
+
+Every `do` block must contain at least one `<-` bind or bare-run step. A block
+whose every line is a pure `=` binding is a compile error — use `let … in`
+there instead. `do` and `let … in` are disjoint by construction: `let … in` is
+for pure binding sequences; `do` is for Task sequencing with at least one real
+effect step.
 
 ## Why prefer it
 
@@ -53,6 +61,11 @@ A single effect needs no `do` — just return the task. One `andThen` is fine
 inline; the payoff starts at two chained steps. For *independent* values combined
 at the end (not a dependent sequence), `Task.map2`..`map5` or `Task.parallel` say
 that better than a `do` block.
+
+For a block that is entirely pure — no task runs, just a few name bindings
+followed by an expression — use `let … in`, not `do`. A `do` whose every
+statement is a `=` binding and has no `<-` or bare-run step is a compile error;
+the compiler will direct you to `let … in`.
 
 ## References
 
