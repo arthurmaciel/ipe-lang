@@ -4460,6 +4460,27 @@ impl<'a> Builder<'a> {
             name: self.builtins.task,
             args: vec![Ty::Unit],
         };
+        // Opaque app-leaf constructors — nullary, no type arguments.
+        let web_app_leaf = || Ty::Con {
+            module: Vec::new(),
+            name: self.builtins.web_app,
+            args: Vec::new(),
+        };
+        let webview_app_leaf = || Ty::Con {
+            module: Vec::new(),
+            name: self.builtins.webview_app,
+            args: Vec::new(),
+        };
+        let tui_app_leaf = || Ty::Con {
+            module: Vec::new(),
+            name: self.builtins.tui_app,
+            args: Vec::new(),
+        };
+        let cli_app_leaf = || Ty::Con {
+            module: Vec::new(),
+            name: self.builtins.cli_app,
+            args: Vec::new(),
+        };
         let cmd = |m: Ty| Ty::Con {
             module: Vec::new(),
             name: self.builtins.cmd,
@@ -6566,9 +6587,9 @@ impl<'a> Builder<'a> {
                     // Open row tail — var(3) absorbs optional extra fields.
                     RowTail::Open(3),
                 );
-                fun(cfg_rec, task_unit())
+                fun(cfg_rec, web_app_leaf())
             }
-            // `Web.appWith : List (Setting Web) -> { … } -> Task ()` — the
+            // `Web.appWith : List (Setting Web) -> { … } -> WebApp` — the
             // additive settings-carrying web entry. Same cfg record as
             // `K::WebApp`, preceded by a shape-pinned `List (Setting Web)`: a
             // `Terminal`-only or cross-shape setting in that slot is an
@@ -6592,7 +6613,7 @@ impl<'a> Builder<'a> {
                     },
                     RowTail::Open(3),
                 );
-                fun(list(setting(shape_web())), fun(cfg_rec, task_unit()))
+                fun(list(setting(shape_web())), fun(cfg_rec, web_app_leaf()))
             }
             // `Web.route : String -> builder -> WebRoute page`
             // with builder = var(1) DISTINCT from page = var(0).
@@ -6665,7 +6686,7 @@ impl<'a> Builder<'a> {
                     // Open row: absorbs optional fields (guard, canvasWidth, canvasHeight, …).
                     RowTail::Open(3),
                 );
-                fun(cfg_rec, task_unit())
+                fun(cfg_rec, tui_app_leaf())
             }
 
             // ── Ipe.Terminal line-oriented app-entry (`appLines`) ───────────────
@@ -6692,7 +6713,7 @@ impl<'a> Builder<'a> {
                     // row is a `Web.app`-only surface).
                     RowTail::Closed,
                 );
-                fun(cfg_rec, task_unit())
+                fun(cfg_rec, cli_app_leaf())
             }
 
             // ── Ipe.WebView app-entry (already schemed in kernel_ty) ──
@@ -6724,7 +6745,7 @@ impl<'a> Builder<'a> {
                     },
                     RowTail::Closed,
                 );
-                fun(cfg_rec, task_unit())
+                fun(cfg_rec, webview_app_leaf())
             }
 
             // ══ FIRST-SCHEMED families ══
