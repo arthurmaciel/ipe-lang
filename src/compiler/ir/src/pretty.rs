@@ -261,6 +261,8 @@ fn ir_type_name_at(interner: &Interner, ty: &IrType, depth: u16) -> String {
         IrType::SqlFragment => "SqlFragment".to_owned(),
         IrType::Secret => "Secret".to_owned(),
         IrType::Path => "Path".to_owned(),
+        // Ipe.Process.runWith input config record.
+        IrType::ProcessRunWithCfg => "ProcessRunWithCfg".to_owned(),
         // Ipe.Cache config / stats records.
         IrType::CacheCfg => "CacheCfg".to_owned(),
         IrType::CacheStats => "CacheStats".to_owned(),

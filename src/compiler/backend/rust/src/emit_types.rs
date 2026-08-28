@@ -413,6 +413,9 @@ pub fn render_type(ctx: &EmitCtx, ty: &IrType, generics: GenericScope) -> DResul
         IrType::WebSocketServerCfg => "WsServerCfg<IpeError>".to_owned(),
         // Ipe.Cache config / stats records — re-exported (ungated) from
         // ipe_runtime::cache, so the bare name resolves via the crate glob use.
+        // `ProcessRunWithCfg` — re-exported from ipe_runtime::system, bare via
+        // the glob use.
+        IrType::ProcessRunWithCfg => "ProcessRunWithCfg".to_owned(),
         IrType::CacheCfg => "CacheCfg".to_owned(),
         IrType::CacheStats => "CacheStats".to_owned(),
         // Ipe.WebSocket connect-config record — re-exported (feature-gated

@@ -79,7 +79,7 @@ chartElement : Element Msg
 chartElement =
     Chart.bar
         (Chart.defaultCfg |> Chart.withWidth 100 |> Chart.withHeight 40)
-        [ Chart.series [(0.0, 10.0), (1.0, 20.0), (2.0, 15.0)] ]
+        [ Chart.series [ { x = 0.0, y = 10.0 }, { x = 1.0, y = 20.0 }, { x = 2.0, y = 15.0 } ] ]
 
 
 main : Task Error ()

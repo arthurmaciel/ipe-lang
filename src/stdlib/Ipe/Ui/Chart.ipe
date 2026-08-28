@@ -36,7 +36,20 @@ import Ipe.Html.Attributes as Attr
 import Ipe.Ui as Ui exposing (Element, Color)
 
 
-type alias Point = (Float, Float)
+-- A data sample. Named fields prevent silent axis transposition.
+type alias Point =
+    { x : Float, y : Float }
+
+
+-- An axis interval [lo, hi]. Distinct from Point so a range cannot
+-- be passed where a sample is expected, or vice versa.
+type alias Range =
+    { lo : Float, hi : Float }
+
+
+-- A projected device coordinate in the SVG viewport.
+type alias Pixel =
+    { px : Float, py : Float }
 
 
 type alias Cfg =
@@ -44,7 +57,7 @@ type alias Cfg =
     , height : Int
     , color : Color
     , title : Maybe String
-    , yRange : Maybe ( Float, Float )
+    , yRange : Maybe Range
     , gridLines : Bool
     }
 
@@ -89,7 +102,7 @@ withTitle t cfg =
 
 withYRange : Float -> Float -> Cfg -> Cfg
 withYRange lo hi cfg =
-    { cfg | yRange = Just ( lo, hi ) }
+    { cfg | yRange = Just { lo = lo, hi = hi } }
 
 
 withGridLines : Bool -> Cfg -> Cfg
@@ -121,57 +134,57 @@ plotInset =
     { left = 32, right = 8, top = 24, bottom = 24 }
 
 
-xRange : List Point -> ( Float, Float )
+xRange : List Point -> Range
 xRange pts =
     case pts of
         [] ->
-            ( 0.0, 1.0 )
+            { lo = 0.0, hi = 1.0 }
 
-        (px, _) :: rest ->
-            xRangeHelp px px rest
+        pt :: rest ->
+            xRangeHelp pt.x pt.x rest
 
 
-xRangeHelp : Float -> Float -> List Point -> ( Float, Float )
+xRangeHelp : Float -> Float -> List Point -> Range
 xRangeHelp lo hi pts =
     case pts of
         [] ->
-            ( lo, hi )
+            { lo = lo, hi = hi }
 
-        (x, _) :: rest ->
-            xRangeHelp (Math.min lo x) (Math.max hi x) rest
+        pt :: rest ->
+            xRangeHelp (Math.min lo pt.x) (Math.max hi pt.x) rest
 
 
-yRange : List Point -> ( Float, Float )
+yRange : List Point -> Range
 yRange pts =
     case pts of
         [] ->
-            ( 0.0, 1.0 )
+            { lo = 0.0, hi = 1.0 }
 
-        (_, py) :: rest ->
-            yRangeHelp py py rest
+        pt :: rest ->
+            yRangeHelp pt.y pt.y rest
 
 
-yRangeHelp : Float -> Float -> List Point -> ( Float, Float )
+yRangeHelp : Float -> Float -> List Point -> Range
 yRangeHelp lo hi pts =
     case pts of
         [] ->
-            ( lo, hi )
+            { lo = lo, hi = hi }
 
-        (_, y) :: rest ->
-            yRangeHelp (Math.min lo y) (Math.max hi y) rest
+        pt :: rest ->
+            yRangeHelp (Math.min lo pt.y) (Math.max hi pt.y) rest
 
 
-xRangeAll : List Series -> ( Float, Float )
+xRangeAll : List Series -> Range
 xRangeAll seriesList =
     case seriesList of
         [] ->
-            ( 0.0, 1.0 )
+            { lo = 0.0, hi = 1.0 }
 
         s :: rest ->
             xRangeAllHelp (xRange s.points) rest
 
 
-xRangeAllHelp : ( Float, Float ) -> List Series -> ( Float, Float )
+xRangeAllHelp : Range -> List Series -> Range
 xRangeAllHelp acc seriesList =
     case seriesList of
         [] ->
@@ -179,23 +192,22 @@ xRangeAllHelp acc seriesList =
 
         s :: rest ->
             let
-                (alo, ahi) = acc
-                (blo, bhi) = xRange s.points
+                b = xRange s.points
             in
-                xRangeAllHelp (Math.min alo blo, Math.max ahi bhi) rest
+                xRangeAllHelp { lo = Math.min acc.lo b.lo, hi = Math.max acc.hi b.hi } rest
 
 
-yRangeAll : List Series -> ( Float, Float )
+yRangeAll : List Series -> Range
 yRangeAll seriesList =
     case seriesList of
         [] ->
-            ( 0.0, 1.0 )
+            { lo = 0.0, hi = 1.0 }
 
         s :: rest ->
             yRangeAllHelp (yRange s.points) rest
 
 
-yRangeAllHelp : ( Float, Float ) -> List Series -> ( Float, Float )
+yRangeAllHelp : Range -> List Series -> Range
 yRangeAllHelp acc seriesList =
     case seriesList of
         [] ->
@@ -203,10 +215,9 @@ yRangeAllHelp acc seriesList =
 
         s :: rest ->
             let
-                (alo, ahi) = acc
-                (blo, bhi) = yRange s.points
+                b = yRange s.points
             in
-                yRangeAllHelp (Math.min alo blo, Math.max ahi bhi) rest
+                yRangeAllHelp { lo = Math.min acc.lo b.lo, hi = Math.max acc.hi b.hi } rest
 
 
 seriesColor : Cfg -> Series -> Color
@@ -219,7 +230,7 @@ seriesColor cfg s =
             cfg.color
 
 
-effectiveYRange : Cfg -> List Series -> ( Float, Float )
+effectiveYRange : Cfg -> List Series -> Range
 effectiveYRange cfg seriesList =
     case cfg.yRange of
         Just r ->
@@ -227,25 +238,22 @@ effectiveYRange cfg seriesList =
 
         Nothing ->
             let
-                (lo, hi) = yRangeAll seriesList
-                lo2 = Math.min lo 0.0
-                pad = (hi - lo2) * 0.05
-                hi2 = hi + pad
+                r = yRangeAll seriesList
+                lo2 = Math.min r.lo 0.0
+                pad = (r.hi - lo2) * 0.05
+                hi2 = r.hi + pad
             in
                 if hi2 <= lo2 then
-                    ( lo2, lo2 + 1.0 )
+                    { lo = lo2, hi = lo2 + 1.0 }
                 else
-                    ( lo2, hi2 )
+                    { lo = lo2, hi = hi2 }
 
 
-projectPoint : Int -> Int -> ( Float, Float ) -> ( Float, Float ) -> Point -> ( Float, Float )
+projectPoint : Int -> Int -> Range -> Range -> Point -> Pixel
 projectPoint w h xR yR pt =
     let
-        (x, y) = pt
-        (xMin, xMax) = xR
-        (yMin, yMax) = yR
-        xSpan = xMax - xMin
-        ySpan = yMax - yMin
+        xSpan = xR.hi - xR.lo
+        ySpan = yR.hi - yR.lo
         plotW = w - plotInset.left - plotInset.right
         plotH = h - plotInset.top - plotInset.bottom
         plotWf = intToFloat plotW
@@ -256,16 +264,16 @@ projectPoint w h xR yR pt =
             if xSpan == 0.0 then
                 0.5
             else
-                (x - xMin) / xSpan
+                (pt.x - xR.lo) / xSpan
         ny =
             if ySpan == 0.0 then
                 0.5
             else
-                (y - yMin) / ySpan
-        px = leftF + nx * plotWf
-        py = topF + (1.0 - ny) * plotHf
+                (pt.y - yR.lo) / ySpan
     in
-        ( px, py )
+        { px = leftF + nx * plotWf
+        , py = topF + (1.0 - ny) * plotHf
+        }
 
 
 intToFloat : Int -> Float
@@ -342,23 +350,20 @@ gridLine x1 x2 _ plotH idx =
             []
 
 
-buildPathD : List ( Float, Float ) -> String
+buildPathD : List Pixel -> String
 buildPathD coords =
     case coords of
         [] ->
             ""
 
-        (x0, y0) :: rest ->
-            "M " ++ String.fromFloat x0 ++ "," ++ String.fromFloat y0 ++
+        p0 :: rest ->
+            "M " ++ String.fromFloat p0.px ++ "," ++ String.fromFloat p0.py ++
                 List.foldl appendLineSeg "" rest
 
 
-appendLineSeg : ( Float, Float ) -> String -> String
-appendLineSeg pt acc =
-    let
-        (x, y) = pt
-    in
-        acc ++ " L " ++ String.fromFloat x ++ "," ++ String.fromFloat y
+appendLineSeg : Pixel -> String -> String
+appendLineSeg p acc =
+    acc ++ " L " ++ String.fromFloat p.px ++ "," ++ String.fromFloat p.py
 
 
 labelTitle : Maybe String -> List (Html msg)
@@ -393,7 +398,7 @@ line cfg seriesList =
         Ui.html (Html.node "svg" (svgRootAttrs cfg) children)
 
 
-lineOne : Cfg -> ( Float, Float ) -> ( Float, Float ) -> Series -> List (Html msg)
+lineOne : Cfg -> Range -> Range -> Series -> List (Html msg)
 lineOne cfg xR yR s =
     let
         col = Ui.colorCss (seriesColor cfg s)
@@ -421,18 +426,15 @@ lineOne cfg xR yR s =
                 [ pathNode ]
 
 
-singlePointCircle : String -> ( Float, Float ) -> List (Html msg) -> Html msg
-singlePointCircle col pt extras =
-    let
-        (x, y) = pt
-    in
-        Html.node "circle"
-            [ Attr.attribute "cx" (String.fromFloat x)
-            , Attr.attribute "cy" (String.fromFloat y)
-            , Attr.attribute "r" "3"
-            , Attr.attribute "fill" col
-            ]
-            extras
+singlePointCircle : String -> Pixel -> List (Html msg) -> Html msg
+singlePointCircle col p extras =
+    Html.node "circle"
+        [ Attr.attribute "cx" (String.fromFloat p.px)
+        , Attr.attribute "cy" (String.fromFloat p.py)
+        , Attr.attribute "r" "3"
+        , Attr.attribute "fill" col
+        ]
+        extras
 
 
 axesNodes : Cfg -> List (Html msg)
@@ -478,7 +480,7 @@ area cfg seriesList =
         Ui.html (Html.node "svg" (svgRootAttrs cfg) children)
 
 
-areaOne : Cfg -> ( Float, Float ) -> ( Float, Float ) -> Series -> List (Html msg)
+areaOne : Cfg -> Range -> Range -> Series -> List (Html msg)
 areaOne cfg xR yR s =
     let
         col = Ui.colorCss (seriesColor cfg s)
@@ -505,19 +507,19 @@ areaOne cfg xR yR s =
                 [ areaNode ]
 
 
-buildAreaD : Float -> List ( Float, Float ) -> String
+buildAreaD : Float -> List Pixel -> String
 buildAreaD baselineY coords =
     case coords of
         [] ->
             ""
 
-        (x0, y0) :: _ ->
+        p0 :: _ ->
             let
                 start =
-                    "M " ++ String.fromFloat x0 ++ "," ++ String.fromFloat baselineY ++
-                        " L " ++ String.fromFloat x0 ++ "," ++ String.fromFloat y0
+                    "M " ++ String.fromFloat p0.px ++ "," ++ String.fromFloat baselineY ++
+                        " L " ++ String.fromFloat p0.px ++ "," ++ String.fromFloat p0.py
                 middle = List.foldl appendLineSeg "" coords
-                lastX = lastXCoord coords x0
+                lastX = lastXCoord coords p0.px
                 close =
                     " L " ++ String.fromFloat lastX ++ "," ++ String.fromFloat baselineY ++
                         " Z"
@@ -525,14 +527,14 @@ buildAreaD baselineY coords =
                 start ++ middle ++ close
 
 
-lastXCoord : List ( Float, Float ) -> Float -> Float
+lastXCoord : List Pixel -> Float -> Float
 lastXCoord coords fallback =
     case coords of
         [] ->
             fallback
 
-        [(x, _)] ->
-            x
+        [p] ->
+            p.px
 
         _ :: rest ->
             lastXCoord rest fallback
@@ -550,7 +552,7 @@ bar cfg seriesList =
         Ui.html (Html.node "svg" (svgRootAttrs cfg) children)
 
 
-barOne : Cfg -> List Series -> ( Float, Float ) -> Int -> Series -> List (Html msg)
+barOne : Cfg -> List Series -> Range -> Int -> Series -> List (Html msg)
 barOne cfg allSeries yR seriesIdx s =
     let
         col = Ui.colorCss (seriesColor cfg s)
@@ -566,8 +568,7 @@ barOne cfg allSeries yR seriesIdx s =
         barsWidth = groupWidth * 0.8
         groupGap = groupWidth * 0.2
         barWidth = barsWidth / nSeriesF
-        (yMin, yMax) = yR
-        ySpan = yMax - yMin
+        ySpan = yR.hi - yR.lo
         baselineY = intToFloat (plotInset.top + plotH)
         leftF = intToFloat plotInset.left
         topF = intToFloat plotInset.top
@@ -576,7 +577,6 @@ barOne cfg allSeries yR seriesIdx s =
         List.indexedMap
             (\gi pt ->
                 let
-                    (_, y) = pt
                     giF = intToFloat gi
                     groupX = leftF + groupGap * 0.5 + giF * groupWidth
                     barX = groupX + seriesIdxF * barWidth
@@ -584,12 +584,12 @@ barOne cfg allSeries yR seriesIdx s =
                         if ySpan == 0.0 then
                             baselineY
                         else
-                            topF + (1.0 - (y - yMin) / ySpan) * plotHf
+                            topF + (1.0 - (pt.y - yR.lo) / ySpan) * plotHf
                     barH =
                         if ySpan == 0.0 then
                             0.0
                         else
-                            ((y - Math.max yMin 0.0) / ySpan) * plotHf
+                            ((pt.y - Math.max yR.lo 0.0) / ySpan) * plotHf
                     finalH = Math.max 0.0 barH
                 in
                     Html.node "rect"
@@ -619,16 +619,15 @@ sparkline cfg values =
 
                 Nothing ->
                     let
-                        (lo, hi) = yRangeOfFloats values
-                        pad = (hi - lo) * 0.1
+                        r = yRangeOfFloats values
+                        pad = (r.hi - r.lo) * 0.1
                     in
-                        if hi <= lo then
-                            ( lo - 0.5, lo + 0.5 )
+                        if r.hi <= r.lo then
+                            { lo = r.lo - 0.5, hi = r.lo + 0.5 }
                         else
-                            ( lo - pad, hi + pad )
+                            { lo = r.lo - pad, hi = r.hi + pad }
 
-        (yMin, yMax) = ys
-        ySpan = yMax - yMin
+        ySpan = ys.hi - ys.lo
         nF = intToFloat (Math.max 1 (n - 1))
         projected =
             List.indexedMap
@@ -640,10 +639,10 @@ sparkline cfg values =
                             if ySpan == 0.0 then
                                 0.5
                             else
-                                (v - yMin) / ySpan
+                                (v - ys.lo) / ySpan
                         y = (1.0 - ny) * hf
                     in
-                        (x, y)
+                        { px = x, py = y }
                 )
                 values
         pathD = buildPathD projected
@@ -670,21 +669,21 @@ sparkline cfg values =
             )
 
 
-yRangeOfFloats : List Float -> ( Float, Float )
+yRangeOfFloats : List Float -> Range
 yRangeOfFloats vals =
     case vals of
         [] ->
-            ( 0.0, 1.0 )
+            { lo = 0.0, hi = 1.0 }
 
         v :: rest ->
             yRangeOfFloatsHelp v v rest
 
 
-yRangeOfFloatsHelp : Float -> Float -> List Float -> ( Float, Float )
+yRangeOfFloatsHelp : Float -> Float -> List Float -> Range
 yRangeOfFloatsHelp lo hi vals =
     case vals of
         [] ->
-            ( lo, hi )
+            { lo = lo, hi = hi }
 
         v :: rest ->
             yRangeOfFloatsHelp (Math.min lo v) (Math.max hi v) rest
@@ -701,10 +700,10 @@ heatmap cfg grid =
         colsF = intToFloat (Math.max 1 nCols)
         cellW = wf / colsF
         cellH = hf / rowsF
-        (gMin, gMax) = heatmapRange grid
+        r = heatmapRange grid
         cells =
             List.concat
-                (List.indexedMap (\r row -> heatmapRow cfg cellW cellH gMin gMax r row) grid)
+                (List.indexedMap (\ri row -> heatmapRow cfg cellW cellH r.lo r.hi ri row) grid)
     in
         Ui.html
             (Html.node "svg"
@@ -773,40 +772,39 @@ heatmapMaxColsHelp acc grid =
             heatmapMaxColsHelp (Math.max acc (List.length row)) rest
 
 
-heatmapRange : List (List Float) -> ( Float, Float )
+heatmapRange : List (List Float) -> Range
 heatmapRange grid =
     case grid of
         [] ->
-            ( 0.0, 1.0 )
+            { lo = 0.0, hi = 1.0 }
 
         row :: _ ->
             case row of
                 [] ->
-                    ( 0.0, 1.0 )
+                    { lo = 0.0, hi = 1.0 }
 
                 v :: _ ->
                     heatmapRangeHelp v v grid
 
 
-heatmapRangeHelp : Float -> Float -> List (List Float) -> ( Float, Float )
+heatmapRangeHelp : Float -> Float -> List (List Float) -> Range
 heatmapRangeHelp lo hi grid =
     case grid of
         [] ->
-            ( lo, hi )
+            { lo = lo, hi = hi }
 
         row :: rest ->
             let
-                (rLo, rHi) = yRangeOfFloats row
+                r = yRangeOfFloats row
                 newLo =
                     if List.isEmpty row then
                         lo
                     else
-                        Math.min lo rLo
+                        Math.min lo r.lo
                 newHi =
                     if List.isEmpty row then
                         hi
                     else
-                        Math.max hi rHi
+                        Math.max hi r.hi
             in
                 heatmapRangeHelp newLo newHi rest
-

@@ -60,6 +60,14 @@ choice : List a -> Task Error (Maybe a)
 choice = Ffi.kernel "Random_choiceMaybe"
 
 
+-- Internal: entropy-backed choice returning the element directly (Task Error a).
+-- Errors when the list is empty.  Use `choice` (Maybe-returning) for safe
+-- polymorphic access; `choiceRaw` is the String-typed partial variant used
+-- internally for backends that require a non-Maybe return.
+choiceRaw : List String -> Task Error String
+choiceRaw = Ffi.kernel "Random_choice"
+
+
 -- | Fisher-Yates shuffle.  Returns a new list with the same
 -- elements in pseudo-random order; the input is not mutated.
 shuffle : List a -> Task Error (List a)

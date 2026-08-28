@@ -1403,6 +1403,19 @@ pub enum IrType {
     /// pattern, backing `toString` via the runtime's `Debug`-based fallback.
     Regex,
 
+    /// `Ipe.Process.runWith`'s input record `{ args : List String, command :
+    /// String, cwd : Maybe Path, env : List (String, String) }`. Renders as
+    /// `ipe_runtime::system::ProcessRunWithCfg`.
+    ///
+    /// The lowerer folds any solved / annotated record matching that exact
+    /// 4-field shape to this opaque variant (same mechanism as
+    /// [`IrType::CacheCfg`]) so a `Process.runWith`-call record literal
+    /// constructs the runtime struct the `process_run_with` kernel takes, rather
+    /// than a backend-synthesised `RecArgsCommand…` struct that would mismatch
+    /// it (E0308). Fully `Clone` (derivable on the runtime struct); never stored
+    /// in a Ipe.Web Model.
+    ProcessRunWithCfg,
+
     /// `Ipe.Cache`'s configuration record `{ maxEntries : Int, ttlMs : Int,
     /// maxBytes : Int }`. Renders as `ipe_runtime::cache::CacheCfg`.
     ///
@@ -1731,8 +1744,9 @@ pub fn ir_type_is_derivable(
         // `Dsn` derives Clone; `Debug` is hand-written (redacting) — fully
         // derivable, not serde (carries a `Secret`).
         | IrType::Dsn
-        // Cache config / stats + Csv document runtime structs derive
-        // Clone+Debug+PartialEq.
+        // Cache config / stats + Csv document + process-run-with config runtime
+        // structs derive Clone+Debug+PartialEq.
+        | IrType::ProcessRunWithCfg
         | IrType::CacheCfg
         | IrType::WebSocketClientCfg
         | IrType::CacheStats
@@ -1986,10 +2000,10 @@ pub fn ir_type_is_serde(ty: &IrType, enum_serde: &impl Fn(&ModPath, Symbol) -> b
         // `ipe_runtime::dsn::Dsn` has no serde impl), so a Model field of type
         // `Dsn` is a compile-time IPE-L0120, same posture as `Url` / `Secret`.
         | IrType::Dsn
-        // Cache config / stats + Csv document are kernel-boundary data records
-        // — derivable (see `ir_type_is_derivable`) but never persisted to a
-        // session store, so not serde (the runtime structs carry no serde
-        // derive).
+        // Cache config / stats + Csv document + process-run-with config are
+        // kernel-boundary data records — derivable (see `ir_type_is_derivable`)
+        // but never persisted to a session store, so not serde.
+        | IrType::ProcessRunWithCfg
         | IrType::CacheCfg
         | IrType::WebSocketClientCfg
         | IrType::CacheStats
@@ -2140,6 +2154,7 @@ pub fn carrier_is_clone(ty: &IrType) -> bool {
         | IrType::WebSocketServerCfg
         | IrType::UiPlain(_)
         | IrType::WebReq
+        | IrType::ProcessRunWithCfg
         | IrType::CacheCfg
         | IrType::WebSocketClientCfg
         | IrType::CacheStats

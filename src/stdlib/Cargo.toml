@@ -16,6 +16,7 @@ path = "src/lib.rs"
 # `ipe_stdlib`.)
 [dev-dependencies]
 ipe_intern = { path = "../compiler/intern" }
+ipe_kernels = { path = "../compiler/kernels" }
 ipe_parse = { path = "../compiler/parse" }
 ipe_canon = { path = "../compiler/canon" }
 ipe_syntax = { path = "../compiler/syntax" }

@@ -7,12 +7,18 @@
 -- exit or a spawn failure is a typed `Error` carrying the exit code and the
 -- child's stderr.
 --
+-- `Process.runWith` is the richer variant: it captures exit code, stdout, and
+-- stderr independently, supports a per-child working directory and environment
+-- overrides, and treats a non-zero exit as a NORMAL result (carried in
+-- `exitCode`) rather than a Task failure. Only a spawn failure fails the Task.
+--
 -- This is a server-only capability (`subprocess`): it is DEFAULT-DENIED under
 -- `--target wasm` (a browser bundle has no process surface), and a program
 -- that runs a child process is tagged with the `subprocess` capability so a
 -- sandbox can isolate it.
 module Ipe.Process exposing
     ( run
+    , runWith
     )
 
 
@@ -26,3 +32,31 @@ import Ipe.Error exposing (Error)
 run : String -> List String -> Task Error String
 run =
     Ffi.kernel "Process_run"
+
+
+-- | `runWith cfg` — run a child process with per-child options.
+--
+-- The `cfg` record controls every axis of the spawn:
+--
+--   - `command` — the executable path or name (resolved via `PATH`);
+--     never passed through a shell.
+--   - `args` — the argument vector; each element is passed literally
+--     as a separate `argv` entry (no word-splitting, no glob expansion).
+--   - `cwd` — optional working directory for the child; `Nothing` inherits
+--     the parent's current directory.
+--   - `env` — per-child environment overrides applied on top of the parent
+--     environment; pairs are `(key, value)`.
+--
+-- A non-zero exit is a NORMAL result carried in `exitCode`; only a spawn
+-- failure (e.g. the executable does not exist) fails the Task.
+-- `stdout` and `stderr` are each captured independently (no pipe-deadlock
+-- risk) and bounded by `IPE_PROCESS_OUTPUT_MAX` (default 16 MiB per stream).
+runWith :
+    { command : String
+    , args : List String
+    , cwd : Maybe Path
+    , env : List ( String, String )
+    }
+    -> Task Error { exitCode : Int, stdout : String, stderr : String }
+runWith =
+    Ffi.kernel "Process_runWith"

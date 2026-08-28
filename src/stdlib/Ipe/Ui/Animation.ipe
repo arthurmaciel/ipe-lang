@@ -192,9 +192,9 @@ easeInOut =
     Transition.easeInOut
 
 
-cubicBezier : Float -> Float -> Float -> Float -> Easing
-cubicBezier x1 y1 x2 y2 =
-    Transition.cubicBezier x1 y1 x2 y2
+cubicBezier : { x1 : Float, y1 : Float, x2 : Float, y2 : Float } -> Easing
+cubicBezier c =
+    Transition.cubicBezier c
 
 
 easingToCss : Easing -> String

@@ -2953,6 +2953,7 @@ const fn ir_type_is_record_shape_leaf(ty: &IrType) -> bool {
             | IrType::SqlFragment
             | IrType::Secret
             | IrType::Path
+            | IrType::ProcessRunWithCfg
             | IrType::CacheCfg
             | IrType::WebSocketClientCfg
             | IrType::CacheStats
@@ -3093,8 +3094,9 @@ fn collect_record_shapes(
         // `Setting`/markers are opaque wrappers — no shape.
         | IrType::Dsn | IrType::Connection | IrType::ConnReadOnly | IrType::ConnReadWrite
         | IrType::Setting | IrType::ShapeWeb | IrType::ShapeWebView | IrType::ShapeTerminal
-        // Cache config / stats + Csv document are folded to nominal runtime
-        // structs — no structural record shape to synthesise.
+        // Process-run-with cfg + Cache config / stats + Csv document fold to
+        // nominal runtime structs — no structural record shape to synthesise.
+        | IrType::ProcessRunWithCfg
         | IrType::CacheCfg
         | IrType::WebSocketClientCfg
         | IrType::CacheStats
@@ -3265,8 +3267,9 @@ fn type_reaches_enum(
         | IrType::Dsn
         | IrType::Connection | IrType::ConnReadOnly | IrType::ConnReadWrite
         | IrType::Setting | IrType::ShapeWeb | IrType::ShapeWebView | IrType::ShapeTerminal
-        // Cache config / stats + Csv document are monomorphic runtime structs
-        // — no reachable enum edge to `target`.
+        // Process-run-with cfg + Cache config / stats + Csv document are
+        // monomorphic runtime structs — no reachable enum edge to `target`.
+        | IrType::ProcessRunWithCfg
         | IrType::CacheCfg
         | IrType::WebSocketClientCfg
         | IrType::CacheStats
@@ -3376,8 +3379,9 @@ fn contains_generic(ty: &IrType) -> bool {
         | IrType::ConnReadOnly
         | IrType::ConnReadWrite
         | IrType::Setting | IrType::ShapeWeb | IrType::ShapeWebView | IrType::ShapeTerminal
-        // Cache config / stats + Csv document are monomorphic — no generic
-        // parameters.
+        // Process-run-with cfg + Cache config / stats + Csv document are
+        // monomorphic — no generic parameters.
+        | IrType::ProcessRunWithCfg
         | IrType::CacheCfg
         | IrType::WebSocketClientCfg
         | IrType::CacheStats
@@ -3518,8 +3522,9 @@ fn collect_generics(ty: &IrType, out: &mut Vec<Symbol>) {
         | IrType::ConnReadOnly
         | IrType::ConnReadWrite
         | IrType::Setting | IrType::ShapeWeb | IrType::ShapeWebView | IrType::ShapeTerminal
-        // Cache config / stats + Csv document are monomorphic — no generics to
-        // collect.
+        // Process-run-with cfg + Cache config / stats + Csv document are
+        // monomorphic — no generics to collect.
+        | IrType::ProcessRunWithCfg
         | IrType::CacheCfg
         | IrType::WebSocketClientCfg
         | IrType::CacheStats
@@ -3873,8 +3878,9 @@ fn match_template(
         | IrType::ConnReadOnly
         | IrType::ConnReadWrite
         | IrType::Setting | IrType::ShapeWeb | IrType::ShapeWebView | IrType::ShapeTerminal
-        // Cache config / stats + Csv document are monomorphic runtime-struct
-        // leaves.
+        // Process-run-with cfg + Cache config / stats + Csv document are
+        // monomorphic runtime-struct leaves.
+        | IrType::ProcessRunWithCfg
         | IrType::CacheCfg
         | IrType::WebSocketClientCfg
         | IrType::CacheStats
