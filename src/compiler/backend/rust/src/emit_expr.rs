@@ -1462,6 +1462,7 @@ pub fn call_has_kernel_special_case(
     }
     if emit_json_decoder_call(ctx, callee, args, indent, child, generics)?.is_some()
         || emit_http_call(ctx, callee, args, indent, child, generics)?.is_some()
+        || emit_process_run_with_call(ctx, callee, args, indent, child, generics)?.is_some()
         || emit_http_builder_call(ctx, callee, args, indent, child, generics)?.is_some()
         || emit_task_retry_call(ctx, callee, args, indent, child, generics)?.is_some()
         || emit_db_call(ctx, callee, args, indent, child, generics)?.is_some()
@@ -1683,6 +1684,65 @@ fn emit_http_call(
         // `None` — handled above by the `match k` guard.
         _ => Ok(None),
     }
+}
+
+/// Handle `Process.runWith` kernel calls.
+///
+/// `process_run_with` in the runtime returns `ipe_runtime::system::ProcessRunOutput`
+/// (a runtime-owned struct with fields `exitCode`, `stdout`, `stderr`), while the
+/// emitted user code treats the result as the synthesised record struct for
+/// `{ exitCode, stderr, stdout }`.  A `task_map` closure converts one to the other
+/// at the call site — the same Design B used by `emit_http_call` for `HttpResponse`.
+///
+/// Returns `None` for any other callee.
+#[inline(never)]
+fn emit_process_run_with_call(
+    ctx: &EmitCtx,
+    callee: &Callee,
+    args: &[Expr],
+    indent: usize,
+    child: u16,
+    generics: GenericScope,
+) -> DResult<Option<String>> {
+    let Callee::Kernel(KernelFn::ProcessRunWith) = callee else {
+        return Ok(None);
+    };
+
+    // Resolve the synthesised struct name for the `{ exitCode, stderr, stdout }` field set.
+    // Fields are sorted alphabetically: exitCode < stderr < stdout.
+    let resp_key: Vec<String> = vec![
+        "exitCode".to_owned(),
+        "stderr".to_owned(),
+        "stdout".to_owned(),
+    ];
+    let resp_struct =
+        ctx.record_struct_by_key(&resp_key, None)
+            .map_err(|_| Diagnostic::CompilerBug {
+                where_: "ipe_backend_rust::emit_process_run_with_call",
+                detail: "no synthesised struct for ProcessRunOutput fieldset \
+                     {exitCode, stderr, stdout}; the lowerer must surface the \
+                     runWith return record type before emission"
+                    .to_owned(),
+            })?;
+    let resp_name = &resp_struct.name;
+
+    // Build the task_map conversion closure: pure field-for-field move.
+    // All fields are owned (i64 / String), no borrows, no boxing.
+    let conv = format!(
+        "|__r: ipe_runtime::system::ProcessRunOutput| {resp_name} {{ \
+         exitCode: __r.exitCode, stderr: __r.stderr, stdout: __r.stdout }}"
+    );
+
+    let cfg_arg = args.first().ok_or_else(|| Diagnostic::CompilerBug {
+        where_: "ipe_backend_rust::emit_process_run_with_call",
+        detail: "ProcessRunWith expects exactly 1 argument (cfg record)".to_owned(),
+    })?;
+    let cfg_s = emit_expr_at(ctx, cfg_arg, indent, child, generics)?;
+
+    Ok(Some(format!(
+        "task_map(Box::new({conv}), \
+         ipe_runtime::system::process_run_with::<IpeError>({cfg_s}))"
+    )))
 }
 
 /// Handle Http builder kernel calls that emit inline struct construction or
@@ -5245,6 +5305,14 @@ pub fn emit_expr_at(
                 if let Some(result) = emit_http_call(ctx, callee, args, indent, child, generics)? {
                     return Ok(result);
                 }
+                // Process.runWith returns `ProcessRunOutput` (runtime struct); a
+                // task_map closure converts it to the synthesised user record struct
+                // for `{ exitCode, stderr, stdout }` — same Design B as Http.get.
+                if let Some(result) =
+                    emit_process_run_with_call(ctx, callee, args, indent, child, generics)?
+                {
+                    return Ok(result);
+                }
                 // Http builder kernels: Http.defaultRequest / Http.withMethod /
                 // Http.withTimeout / Http.withBody / Http.withHeader emit inline
                 // struct construction or clone-and-reassign record updates.
@@ -6929,6 +6997,14 @@ const HTTP_REQUEST_FIELDS: &[&str] = &[
     "url",
 ];
 
+/// the sorted `Ipe.Process.runWith` input record field-name set — a record
+/// literal with exactly these names (and no registered synthesised struct,
+/// because the lowerer folded the shape to `IrType::ProcessRunWithCfg`)
+/// constructs the runtime `ipe_runtime::system::ProcessRunWithCfg` struct.
+/// Mirrors [`CACHE_CFG_FIELDS`]; kept in sync with
+/// `ipe_lower::lower::PROCESS_RUN_WITH_CFG_FIELDS`.
+const PROCESS_RUN_WITH_CFG_FIELDS: &[&str] = &["args", "command", "cwd", "env"];
+
 /// the sorted `Ipe.Cache.CacheCfg` field-name set — a record literal with
 /// exactly these names (and no registered synthesised struct, because the
 /// lowerer folded the shape to `IrType::CacheCfg`) constructs the runtime
@@ -7061,6 +7137,15 @@ pub fn record_struct_name(
                     .iter()
                     .zip(HTTP_REQUEST_FIELDS.iter())
                     .all(|(a, b)| a.as_str() == *b);
+            // same fall-through as HttpRequest — a `ProcessRunWithCfg`-shaped
+            // literal has no registered struct (folded to
+            // `IrType::ProcessRunWithCfg`), so it constructs the runtime
+            // `ProcessRunWithCfg` (re-exported bare via the glob).
+            let is_process_run_with_cfg = sorted.len() == PROCESS_RUN_WITH_CFG_FIELDS.len()
+                && sorted
+                    .iter()
+                    .zip(PROCESS_RUN_WITH_CFG_FIELDS.iter())
+                    .all(|(a, b)| a.as_str() == *b);
             // same fall-through as HttpRequest — a `CacheCfg`-shaped literal
             // has no registered struct (folded to `IrType::CacheCfg`), so it
             // constructs the runtime `CacheCfg` (re-exported bare via the glob).
@@ -7109,6 +7194,8 @@ pub fn record_struct_name(
             };
             if is_http_request {
                 "HttpRequest".to_owned()
+            } else if is_process_run_with_cfg {
+                "ProcessRunWithCfg".to_owned()
             } else if is_cache_cfg {
                 "CacheCfg".to_owned()
             } else if is_csv_doc {

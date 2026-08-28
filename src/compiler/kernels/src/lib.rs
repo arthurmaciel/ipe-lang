@@ -649,6 +649,21 @@ pub enum FieldTag {
     ImageSrc,
     /// `"description"`.
     ImageDescription,
+    // ── Process.runWith input / output records ──
+    /// `"command"` — `Process.runWith` input: the executable name/path.
+    ProcessCommand,
+    /// `"args"` — `Process.runWith` input: the argument vector.
+    ProcessArgs,
+    /// `"cwd"` — `Process.runWith` input: optional per-child working directory.
+    ProcessCwd,
+    /// `"env"` — `Process.runWith` input: per-child env overrides.
+    ProcessEnv,
+    /// `"exitCode"` — `Process.runWith` output: the child's exit status code.
+    ProcessExitCode,
+    /// `"stdout"` — `Process.runWith` output: the child's captured standard output.
+    ProcessStdout,
+    /// `"stderr"` — `Process.runWith` output: the child's captured standard error.
+    ProcessStderr,
 }
 
 /// The whole kernel "row" as one descriptor.
@@ -1305,6 +1320,7 @@ pub enum StdlibKernel {
     FileWalkMatching,
     // ── Process ───────────────────────────────────────────────────────────────
     ProcessRun,
+    ProcessRunWith,
     // ── Http ────────────────────────────────────────────────────────────────
     HttpGet,
     HttpPost,
@@ -3321,6 +3337,7 @@ impl StdlibKernel {
             Self::FileWalkMatching => d("File", "walkMatching", 2, Pure, "file_walk_matching"),
             // ── Process ───────────────────────────────────────────────────────
             Self::ProcessRun => d("Process", "run", 2, Pure, "process_run"),
+            Self::ProcessRunWith => d("Process", "runWith", 1, Pure, "process_run_with"),
             // ── Http ────────────────────────────────────────────────────────
             Self::HttpGet => d("Http", "get", 1, Pure, "http_get"),
             Self::HttpPost => d("Http", "post", 2, Pure, "http_post"),
@@ -4948,6 +4965,7 @@ impl StdlibKernel {
         Self::FileWalkMatching,
         // Process
         Self::ProcessRun,
+        Self::ProcessRunWith,
         // Http
         Self::HttpGet,
         Self::HttpPost,
@@ -6549,6 +6567,36 @@ impl StdlibKernel {
         // `String -> List String -> Task String` (process.run).
         const LIST_STRING_TO_TASK_STRING: TyShape = TyShape::Fun(&LIST_STRING, &TASK_STRING);
         const PROCESS_RUN: TyShape = TyShape::Fun(&STRING, &LIST_STRING_TO_TASK_STRING);
+        // `{ command, args, cwd, env } -> Task { exitCode, stdout, stderr }` (process.runWith).
+        const MAYBE_PATH: TyShape = TyShape::Con(BuiltinTag::Maybe, &[PATH]);
+        // `List (String, String)` for env overrides.
+        const TUPLE_STRING_STRING_PLAIN: TyShape = TyShape::Tuple(&[STRING, STRING]);
+        const LIST_TUPLE_SS: TyShape = TyShape::Con(BuiltinTag::List, &[TUPLE_STRING_STRING_PLAIN]);
+        // Input record: fields in ascending resolved-symbol (intern) order.
+        // Intern sequence: command, args, cwd, env → symbol IDs: command < args < cwd < env.
+        const PROCESS_RUN_WITH_INPUT: TyShape = TyShape::Record {
+            fields: &[
+                (FieldTag::ProcessCommand, &STRING),
+                (FieldTag::ProcessArgs, &LIST_STRING),
+                (FieldTag::ProcessCwd, &MAYBE_PATH),
+                (FieldTag::ProcessEnv, &LIST_TUPLE_SS),
+            ],
+            tail: RowTailShape::Closed,
+        };
+        // Output record: fields in ascending resolved-symbol (intern) order.
+        // Intern sequence: exitCode, stdout, stderr → symbol IDs: exitCode < stdout < stderr.
+        const PROCESS_RUN_WITH_OUTPUT: TyShape = TyShape::Record {
+            fields: &[
+                (FieldTag::ProcessExitCode, &INT),
+                (FieldTag::ProcessStdout, &STRING),
+                (FieldTag::ProcessStderr, &STRING),
+            ],
+            tail: RowTailShape::Closed,
+        };
+        const TASK_PROCESS_OUTPUT: TyShape =
+            TyShape::Con(BuiltinTag::Task, &[PROCESS_RUN_WITH_OUTPUT]);
+        const PROCESS_RUN_WITH: TyShape =
+            TyShape::Fun(&PROCESS_RUN_WITH_INPUT, &TASK_PROCESS_OUTPUT);
         // `Path -> Task (List String)` (file.readDir).
         const PATH_TO_TASK_LIST_STRING: TyShape = TyShape::Fun(&PATH, &TASK_LIST_STRING);
         // `Path -> Int -> Task String` (file.readFileLimit).
@@ -8524,6 +8572,7 @@ impl StdlibKernel {
             Self::RandomShuffle => Some(&RANDOM_SHUFFLE),
             Self::RandomWeighted => Some(&RANDOM_WEIGHTED),
             Self::ProcessRun => Some(&PROCESS_RUN),
+            Self::ProcessRunWith => Some(&PROCESS_RUN_WITH),
 
             // ── Json.Decode / Db.Decode / Config — the shared `Decoder a`
             //    carrier families. ──
@@ -9475,7 +9524,7 @@ impl StdlibKernel {
             | Self::SystemGetenvBool
             | Self::SystemSetenv
             | Self::SystemUnsetenv => Some(Capability::Env),
-            Self::ProcessRun => Some(Capability::Subprocess),
+            Self::ProcessRun | Self::ProcessRunWith => Some(Capability::Subprocess),
             // `Ui.widget` places a browser custom-element widget: its reachable
             // presence means the program serves author-written JS that runs in
             // the page with full DOM authority. That shipped-JS surface is a
@@ -12916,6 +12965,7 @@ mod tests {
             StdlibKernel::DbConnect,
             StdlibKernel::FileReadFile,
             StdlibKernel::ProcessRun,
+            StdlibKernel::ProcessRunWith,
             StdlibKernel::SystemGetenv,
             StdlibKernel::SystemExit,
             StdlibKernel::ServerListen,

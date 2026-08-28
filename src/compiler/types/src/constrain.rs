@@ -498,6 +498,21 @@ struct Builtins {
     img_f_src: Symbol,
     /// `"description"` — alt-text field of `Ui.image _ { src, description }`.
     img_f_description: Symbol,
+    // ── Process.runWith input / output record field name symbols ──────────
+    /// `"command"` — `Process.runWith` input: executable name or path.
+    process_f_command: Symbol,
+    /// `"args"` — `Process.runWith` input: argument vector.
+    process_f_args: Symbol,
+    /// `"cwd"` — `Process.runWith` input: optional per-child working directory.
+    process_f_cwd: Symbol,
+    /// `"env"` — `Process.runWith` input: per-child env overrides.
+    process_f_env: Symbol,
+    /// `"exitCode"` — `Process.runWith` output: exit status code.
+    process_f_exit_code: Symbol,
+    /// `"stdout"` — `Process.runWith` output: captured standard output.
+    process_f_stdout: Symbol,
+    /// `"stderr"` — `Process.runWith` output: captured standard error.
+    process_f_stderr: Symbol,
     // ── JWT builder opaque type constructor symbols (D-00) ────────────────────
     /// `"Claims"` — opaque JWT claims builder object.  Backed at runtime by
     /// `serde_json::Value` (a JSON object accumulator).  Used as the input /
@@ -906,6 +921,14 @@ impl Builtins {
             // ── Ui.image record field names ────────────────────────────────
             img_f_src: interner.intern("src")?,
             img_f_description: interner.intern("description")?,
+            // ── Process.runWith input / output record field names ─────────
+            process_f_command: interner.intern("command")?,
+            process_f_args: interner.intern("args")?,
+            process_f_cwd: interner.intern("cwd")?,
+            process_f_env: interner.intern("env")?,
+            process_f_exit_code: interner.intern("exitCode")?,
+            process_f_stdout: interner.intern("stdout")?,
+            process_f_stderr: interner.intern("stderr")?,
             // ── JWT builder opaque type constructor symbols (D-00) ──────────────
             jwt_claims: interner.intern("Claims")?,
             jwt_algorithm: interner.intern("Algorithm")?,
@@ -4303,6 +4326,13 @@ impl<'a> Builder<'a> {
             FieldTag::ShadowColor => self.builtins.shadow_f_color,
             FieldTag::ImageSrc => self.builtins.img_f_src,
             FieldTag::ImageDescription => self.builtins.img_f_description,
+            FieldTag::ProcessCommand => self.builtins.process_f_command,
+            FieldTag::ProcessArgs => self.builtins.process_f_args,
+            FieldTag::ProcessCwd => self.builtins.process_f_cwd,
+            FieldTag::ProcessEnv => self.builtins.process_f_env,
+            FieldTag::ProcessExitCode => self.builtins.process_f_exit_code,
+            FieldTag::ProcessStdout => self.builtins.process_f_stdout,
+            FieldTag::ProcessStderr => self.builtins.process_f_stderr,
         }
     }
 
@@ -5608,6 +5638,31 @@ impl<'a> Builder<'a> {
             // ── Process ──
             // `run : String -> List String -> Task Error String`
             K::ProcessRun => fun(string(), fun(list(string()), task(string()))),
+            // `runWith : { args, command, cwd, env } -> Task { exitCode, stderr, stdout }`
+            // Input record fields in BTreeMap key order (ascending byte): args < command < cwd < env.
+            // Output record fields in BTreeMap key order: exitCode < stderr < stdout.
+            K::ProcessRunWith => {
+                let mut input_fields = BTreeMap::new();
+                input_fields.insert(self.builtins.process_f_args, list(string()));
+                input_fields.insert(self.builtins.process_f_command, string());
+                input_fields.insert(
+                    self.builtins.process_f_cwd,
+                    maybe(path()),
+                );
+                input_fields.insert(
+                    self.builtins.process_f_env,
+                    list(tuple2(string(), string())),
+                );
+                let input_rec = Ty::Record(input_fields, RowTail::Closed);
+
+                let mut output_fields = BTreeMap::new();
+                output_fields.insert(self.builtins.process_f_exit_code, int());
+                output_fields.insert(self.builtins.process_f_stderr, string());
+                output_fields.insert(self.builtins.process_f_stdout, string());
+                let output_rec = Ty::Record(output_fields, RowTail::Closed);
+
+                fun(input_rec, task(output_rec))
+            }
 
             // ── File (remaining) — all consume a validated `Path` ──
             K::FileReadDir => fun(path(), task(list(string()))),
@@ -10040,6 +10095,7 @@ mod registry_phase_c_tests {
             K::JsSubscribe,
             // ── Ipe.Process — subprocess execution (no shell) ──
             K::ProcessRun,
+            K::ProcessRunWith,
             // ── Ipe.Env — build-time-embedded public config ──
             K::EnvPublic,
             // ── Ipe.Ui.Region — all 8 landmark/live-region attrs ──

@@ -2813,6 +2813,9 @@ fn ir_type_contains_non_serde(ty: &IrType) -> bool {
         | IrType::EmailSesConfig
         | IrType::EmailSmtpConfig
         | IrType::EmailProvider
+        // `ProcessRunWithCfg` — kernel-boundary non-serde input record; rejected
+        // in a HydrationState record, same posture as the Email/Cache cfg types.
+        | IrType::ProcessRunWithCfg
         // Typed-key newtypes — not serde; a Key/Mac/EmailAddress in a
         // HydrationState record is rejected.
         | IrType::CryptoKey

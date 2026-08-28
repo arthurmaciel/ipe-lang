@@ -378,6 +378,156 @@ fn process_run_with_cap<E: Send + From<String> + 'static>(
         }
     })
 }
+/// The structured result of a `runWith` spawn: independent exit code, stdout, and
+/// stderr captures. Exposed as a `pub struct` so the emitter can access its fields
+/// directly (the same pattern `email::EmailMessage` and `cache::CacheCfg` use).
+///
+/// Field names match the Ipê record keys verbatim (`exitCode` / `stdout` /
+/// `stderr`); `#[allow(non_snake_case)]` suppresses the style lint for `exitCode`.
+#[allow(non_snake_case)]
+pub struct ProcessRunOutput {
+    pub exitCode: i64,
+    pub stdout: String,
+    pub stderr: String,
+}
+
+/// Spawn `cmd args` under optional `cwd` and env overrides, capturing stdout and
+/// stderr INDEPENDENTLY on SEPARATE threads (no sequential-drain pipe-deadlock),
+/// each bounded by `take(cap + 1)`. Returns the exit code alongside the two
+/// streams. The child is reaped on every exit path via `ChildGuard`. An env pair
+/// whose key is empty, contains `=` or NUL, or whose value contains NUL is
+/// silently skipped — the same guard `locked_set_var` applies.
+fn process_run_with_sync(
+    cmd: &str,
+    args: &[String],
+    cwd: Option<&std::path::Path>,
+    env_overrides: &[(String, String)],
+    cap: u64,
+) -> Result<ProcessRunOutput, String> {
+    use std::process::{Command, Stdio};
+
+    let mut builder = Command::new(cmd);
+    builder
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+
+    if let Some(dir) = cwd {
+        builder.current_dir(dir);
+    }
+
+    for (k, v) in env_overrides {
+        // Guard against invalid keys/values — same policy as `locked_set_var`.
+        if k.is_empty() || k.contains('=') || k.contains('\0') || v.contains('\0') {
+            continue;
+        }
+        builder.env(k, v);
+    }
+
+    let child = builder.spawn().map_err(|e| format!("{cmd}: {e}"))?;
+    let mut guard = ChildGuard(Some(child));
+
+    let limit = cap.saturating_add(1);
+
+    let (stdout_pipe, stderr_pipe) = {
+        let c = guard
+            .get_mut()
+            .ok_or_else(|| format!("{cmd}: child unexpectedly reaped"))?;
+        (c.stdout.take(), c.stderr.take())
+    };
+    let out_handle = spawn_capture_thread(stdout_pipe, limit);
+    let err_handle = spawn_capture_thread(stderr_pipe, limit);
+
+    let stdout_bytes = out_handle
+        .join()
+        .map_err(|_| format!("{cmd}: stdout capture thread panicked"))?
+        .map_err(|e| format!("{cmd}: {e}"))?;
+    let stderr_bytes = err_handle
+        .join()
+        .map_err(|_| format!("{cmd}: stderr capture thread panicked"))?
+        .map_err(|e| format!("{cmd}: {e}"))?;
+
+    if stdout_bytes.len() as u64 > cap {
+        return Err(format!(
+            "{cmd}: stdout exceeds the {cap}-byte capture ceiling \
+             (raise IPE_PROCESS_OUTPUT_MAX)"
+        ));
+    }
+    if stderr_bytes.len() as u64 > cap {
+        return Err(format!(
+            "{cmd}: stderr exceeds the {cap}-byte capture ceiling \
+             (raise IPE_PROCESS_OUTPUT_MAX)"
+        ));
+    }
+
+    let status = guard.wait().map_err(|e| format!("{cmd}: {e}"))?;
+
+    #[allow(non_snake_case)]
+    Ok(ProcessRunOutput {
+        exitCode: i64::from(status.code().unwrap_or(-1)),
+        stdout: String::from_utf8_lossy(&stdout_bytes).into_owned(),
+        stderr: String::from_utf8_lossy(&stderr_bytes).into_owned(),
+    })
+}
+
+/// `Ipe.Process.runWith` — spawn a child process with per-child cwd and env
+/// overrides, capturing exit code, stdout, and stderr independently.
+///
+/// A non-zero exit is a NORMAL result carried in `exitCode`; only a spawn
+/// failure fails the Task. Both streams are bounded by `IPE_PROCESS_OUTPUT_MAX`
+/// (default 16 MiB) and drained concurrently (no pipe-deadlock). The blocking
+/// spawn+wait is offloaded via `run_blocking` so a long-running child cannot
+/// stall the tokio worker thread.
+///
+/// SECURITY: same `subprocess` capability gate as `Process.run`. Per-child
+/// `cwd` and env overrides do NOT escape the jail/sandbox roots — the child
+/// inherits its confined environment from the parent, and the overrides are
+/// applied ON TOP of that already-confined environment.
+#[must_use]
+pub fn process_run_with<E: Send + From<String> + 'static>(
+    cfg: ProcessRunWithCfg,
+) -> IpeTask<E, ProcessRunOutput> {
+    process_run_with_impl(cfg, process_output_ceiling())
+}
+
+/// `ProcessRunWithCfg` — the Ipê record `{ command, args, cwd, env }` lowered
+/// to a plain Rust struct. Owned values let the closure move into `run_blocking`
+/// without a lifetime on the borrow. The emitter constructs this directly
+/// (same pattern as `EmailMessage` / `CacheCfg`).
+///
+/// Field names match the Ipê record keys verbatim (`exitCode` etc.); the
+/// non_snake_case allow is per-field.
+pub struct ProcessRunWithCfg {
+    pub command: String,
+    pub args: Vec<String>,
+    /// `Nothing` → inherit the parent cwd; `Just(p)` → set the child's cwd.
+    pub cwd: IpeMaybe<String>,
+    /// Per-child env overrides as `(key, value)` pairs.
+    pub env: Vec<(String, String)>,
+}
+
+#[must_use]
+fn process_run_with_impl<E: Send + From<String> + 'static>(
+    cfg: ProcessRunWithCfg,
+    cap: u64,
+) -> IpeTask<E, ProcessRunOutput> {
+    Box::pin(async move {
+        let result = run_blocking(move || {
+            let cwd_path: Option<std::path::PathBuf> = match &cfg.cwd {
+                IpeMaybe::Just(p) => Some(std::path::PathBuf::from(p)),
+                IpeMaybe::Nothing => None,
+            };
+            process_run_with_sync(&cfg.command, &cfg.args, cwd_path.as_deref(), &cfg.env, cap)
+        })
+        .await;
+        match result {
+            Ok(out) => ok_res(out),
+            Err(e) => IpeResult::Err(str_err(&e)),
+        }
+    })
+}
+
 /// Process-exit cleanup hook. `std::process::exit` (what `System.exit` lowers to)
 /// bypasses Drop, so an RAII guard's destructor never runs on that path. A backend
 /// driver that puts the terminal/process into a state needing restoration (the
@@ -728,6 +878,176 @@ mod process_run_tests {
             matches!(res, IpeResult::Err(_)),
             "64 bytes of output under an 8-byte ceiling must Err, not OOM/truncate"
         );
+    }
+}
+
+#[cfg(test)]
+mod process_run_with_tests {
+    use super::*;
+
+    fn block<T>(fut: impl std::future::Future<Output = T>) -> T {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(fut)
+    }
+
+    fn cfg(command: &str, args: &[&str]) -> ProcessRunWithCfg {
+        ProcessRunWithCfg {
+            command: command.to_owned(),
+            args: args.iter().map(|s| s.to_string()).collect(),
+            cwd: IpeMaybe::Nothing,
+            env: Vec::new(),
+        }
+    }
+
+    /// Non-zero exit is carried in `exitCode` — the Task succeeds.
+    #[test]
+    fn nonzero_exit_is_normal_result_not_task_failure() {
+        let res: IpeResult<String, ProcessRunOutput> =
+            block(process_run_with::<String>(cfg("false", &[])));
+        match res {
+            IpeResult::Ok(out) => {
+                assert_ne!(out.exitCode, 0, "false must exit non-zero");
+            }
+            IpeResult::Err(e) => panic!("spawn failure not expected: {e}"),
+        }
+    }
+
+    /// Successful command: exit 0, stdout captured.
+    #[test]
+    fn success_captures_stdout_and_exit_zero() {
+        let res: IpeResult<String, ProcessRunOutput> =
+            block(process_run_with::<String>(cfg("echo", &["hello"])));
+        match res {
+            IpeResult::Ok(out) => {
+                assert_eq!(out.exitCode, 0);
+                assert!(
+                    out.stdout.contains("hello"),
+                    "expected stdout: {:?}",
+                    out.stdout
+                );
+                assert!(out.stderr.is_empty(), "unexpected stderr: {:?}", out.stderr);
+            }
+            IpeResult::Err(e) => panic!("unexpected error: {e}"),
+        }
+    }
+
+    /// stderr is captured separately from stdout.
+    #[test]
+    fn stderr_captured_separately() {
+        let res: IpeResult<String, ProcessRunOutput> = block(process_run_with::<String>(cfg(
+            "sh",
+            &["-c", "echo err >&2"],
+        )));
+        match res {
+            IpeResult::Ok(out) => {
+                assert!(out.stdout.is_empty(), "unexpected stdout: {:?}", out.stdout);
+                assert!(
+                    out.stderr.contains("err"),
+                    "expected stderr: {:?}",
+                    out.stderr
+                );
+            }
+            IpeResult::Err(e) => panic!("unexpected error: {e}"),
+        }
+    }
+
+    /// Spawn failure (non-existent binary) → Task.fail.
+    #[test]
+    fn nonexistent_binary_fails_task() {
+        let res: IpeResult<String, ProcessRunOutput> = block(process_run_with::<String>(cfg(
+            "ipe-does-not-exist-xyz",
+            &[],
+        )));
+        assert!(matches!(res, IpeResult::Err(_)));
+    }
+
+    /// cwd override is honoured: `pwd` must echo the target directory.
+    #[test]
+    fn cwd_override_is_honoured() {
+        let tmp = std::env::temp_dir();
+        let tmp_str = tmp.to_string_lossy().into_owned();
+        let mut c = cfg("sh", &["-c", "pwd"]);
+        c.cwd = IpeMaybe::Just(tmp_str.clone());
+        let res: IpeResult<String, ProcessRunOutput> = block(process_run_with::<String>(c));
+        match res {
+            IpeResult::Ok(out) => {
+                let canonical_tmp = std::fs::canonicalize(&tmp)
+                    .unwrap_or(tmp.clone())
+                    .to_string_lossy()
+                    .into_owned();
+                let got = out.stdout.trim().to_owned();
+                assert!(
+                    got == canonical_tmp || got == tmp_str,
+                    "pwd must report the overridden cwd; got {got:?}, expected {canonical_tmp:?}"
+                );
+            }
+            IpeResult::Err(e) => panic!("unexpected error: {e}"),
+        }
+    }
+
+    /// env override is passed to the child; parent env is also inherited.
+    #[test]
+    fn env_override_is_passed_to_child() {
+        let marker = format!("ipe_run_with_probe_{}", std::process::id());
+        let mut c = cfg("sh", &["-c", "echo $IPE_RUN_WITH_TEST_VAR"]);
+        c.env = vec![("IPE_RUN_WITH_TEST_VAR".to_owned(), marker.clone())];
+        let res: IpeResult<String, ProcessRunOutput> = block(process_run_with::<String>(c));
+        match res {
+            IpeResult::Ok(out) => {
+                assert!(
+                    out.stdout.contains(&marker),
+                    "env override must be visible to child; got {:?}",
+                    out.stdout
+                );
+            }
+            IpeResult::Err(e) => panic!("unexpected error: {e}"),
+        }
+    }
+
+    /// The ceiling applies per-stream; a stream that exceeds it fails the Task.
+    #[test]
+    fn per_stream_ceiling_is_enforced() {
+        let c = ProcessRunWithCfg {
+            command: "printf".to_owned(),
+            args: vec!["%s".to_owned(), "x".repeat(64)],
+            cwd: IpeMaybe::Nothing,
+            env: Vec::new(),
+        };
+        // Swap command for a ceiling test via the internal cap-threaded helper.
+        let _ = c; // used below via process_run_with_impl directly
+        let res: IpeResult<String, ProcessRunOutput> = block(process_run_with_impl::<String>(
+            ProcessRunWithCfg {
+                command: "printf".to_owned(),
+                args: vec!["%s".to_owned(), "x".repeat(64)],
+                cwd: IpeMaybe::Nothing,
+                env: Vec::new(),
+            },
+            8,
+        ));
+        assert!(
+            matches!(res, IpeResult::Err(_)),
+            "64-byte output under an 8-byte ceiling must fail"
+        );
+    }
+
+    /// No-shell guard: a shell-metacharacter argument is passed verbatim.
+    #[test]
+    fn args_passed_literally_no_shell() {
+        let payload = "; echo pwned".to_owned();
+        let res: IpeResult<String, ProcessRunOutput> =
+            block(process_run_with::<String>(cfg("printf", &["%s", &payload])));
+        match res {
+            IpeResult::Ok(out) => {
+                assert_eq!(
+                    out.stdout, payload,
+                    "argv must be literal, not shell-interpreted"
+                );
+            }
+            IpeResult::Err(e) => panic!("unexpected error: {e}"),
+        }
     }
 }
 
