@@ -11097,6 +11097,28 @@ impl ProjColKind {
     }
 }
 
+/// A short human-readable Ipê type label for a solved inference type, used
+/// in diagnostics when a `Store.literal` argument's type is not a supported
+/// scalar. Resolves named constructors via the interner; uses structural labels
+/// for tuple, record, and function types.
+fn projection_ty_label(ty: &Ty, interner: &Interner) -> Box<str> {
+    match ty {
+        Ty::Con { name, args, .. } => {
+            let base = interner.resolve(*name).unwrap_or("unknown");
+            if args.is_empty() {
+                base.into()
+            } else {
+                format!("{base} …").into_boxed_str()
+            }
+        }
+        Ty::Tuple(_) => "tuple".into(),
+        Ty::Record(_, _) => "record".into(),
+        Ty::Fun(_, _) => "function".into(),
+        Ty::Unit => "()".into(),
+        Ty::Var(_) => "type variable".into(),
+    }
+}
+
 /// The origin of one element in a `Store.select` projection: either a bare
 /// field access on a join-side record (`alias.column`) or a `literal(value)`
 /// call whose argument binds as a SQL parameter (`? AS pN`).
@@ -14159,14 +14181,16 @@ impl<'a> Lowerer<'a> {
                 ));
             };
             let value_ty = self.region_ty(value_expr.span);
-            let kind = value_ty
-                .and_then(|ty| ProjColKind::of_ty(ty, self.interner))
-                .ok_or_else(|| {
-                    unsupported_store_select(
-                        body.span,
-                        StoreSelectProjectionDefect::UnsupportedProjectionBody,
-                    )
-                })?;
+            let Some(kind) = value_ty.and_then(|ty| ProjColKind::of_ty(ty, self.interner)) else {
+                let ty_label = value_ty.map_or_else(
+                    || "unknown".into(),
+                    |ty| projection_ty_label(ty, self.interner),
+                );
+                return Err(unsupported_store_select(
+                    body.span,
+                    StoreSelectProjectionDefect::LiteralTypeUnsupported { ty: ty_label },
+                ));
+            };
             let lowered = self.lower_expr(value_expr)?;
             return Ok(ProjectedColumn {
                 source: ProjectionSource::Literal { lowered },
