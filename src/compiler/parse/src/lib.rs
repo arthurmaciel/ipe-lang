@@ -15,7 +15,7 @@ mod parser;
 
 use ipe_diagnostics::DResult;
 use ipe_intern::Interner;
-use ipe_syntax::Module;
+use ipe_syntax::{Module, TypeAnnotation};
 
 pub use parser::MAX_DEPTH;
 
@@ -39,6 +39,46 @@ pub fn parse_module(src: &str, interner: &mut Interner) -> DResult<Module> {
     let toks = lexer::lex(src)?;
     let mut p = parser::Parser::new(toks, interner);
     p.parse_module()
+}
+
+/// Parse a standalone type expression (a type annotation) from source text.
+///
+/// Returns the parsed [`TypeAnnotation`] and the [`Interner`] that holds any
+/// interned symbols. The interner is returned so callers can resolve symbol
+/// names back to strings.
+///
+/// The query may optionally start with `->` (a leading arrow), which is the
+/// "return-type-only" query form (`-> Task Error ()`). In that case the leading
+/// `->` is consumed and a phantom unit left-hand side is prepended so the
+/// result can be matched as a curried function whose result is the written type.
+///
+/// # Errors
+///
+/// Returns a [`Diagnostic`] if the source cannot be lexed or does not form a
+/// valid type expression, or if any tokens remain unconsumed after the type
+/// (trailing garbage is a parse error, not a silent truncation).
+pub fn parse_type_query(src: &str) -> DResult<(TypeAnnotation, Interner)> {
+    let mut interner = Interner::new();
+
+    // A query may start with `->` to express "any function whose result is T".
+    // Strip the leading `->` and later wrap the parsed type in a
+    // `TLambda(TUnit, <parsed>)` phantom to unify with result-matching.
+    let trimmed = src.trim();
+    let (is_result_only, effective_src) =
+        trimmed.strip_prefix("->").map_or((false, trimmed), |rest| (true, rest.trim()));
+
+    let toks = lexer::lex(effective_src)?;
+    let mut p = parser::Parser::new(toks, &mut interner);
+    let ann = p.parse_type_standalone()?;
+
+    let final_ann = if is_result_only {
+        // Wrap: `() -> <ann>`.
+        TypeAnnotation::TLambda(Box::new(TypeAnnotation::TUnit), Box::new(ann))
+    } else {
+        ann
+    };
+
+    Ok((final_ann, interner))
 }
 
 /// Token-level scan of the module paths named by `import` in `src`.

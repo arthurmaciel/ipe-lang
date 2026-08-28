@@ -990,6 +990,32 @@ impl<'a> Parser<'a> {
 
     // ---- types ------------------------------------------------------------
 
+    /// Parse a full type expression, consuming ALL tokens in the stream.
+    ///
+    /// Called by [`ipe_parse::parse_type_query`] for doc type-search queries.
+    /// Uses threshold 0 so every token continues the block (no layout context).
+    /// Returns a typed error when any tokens remain unconsumed after the type,
+    /// ensuring trailing garbage does not silently produce a partial parse.
+    ///
+    /// # Errors
+    /// [`Diagnostic::Parse`] on a malformed type or unconsumed trailing tokens.
+    pub fn parse_type_standalone(&mut self) -> DResult<TypeAnnotation> {
+        let ann = self.parse_type(0, 0)?;
+        // Fail-closed: trailing tokens after the type expression are an error.
+        if let Some(trailing) = self.peek() {
+            let span = trailing.span;
+            let found = tok_kind(&trailing.kind);
+            return Err(Diagnostic::Parse {
+                span,
+                msg: ParseError::UnexpectedToken {
+                    found,
+                    expected: ExpectedSet(Box::new([])),
+                },
+            });
+        }
+        Ok(ann.value)
+    }
+
     fn parse_type(&mut self, threshold: u32, depth: u32) -> DResult<Located<TypeAnnotation>> {
         if depth > MAX_DEPTH {
             return Err(self.too_deep(Construct::Type));

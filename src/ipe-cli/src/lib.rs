@@ -26,6 +26,7 @@ pub mod contained_path;
 pub mod diff;
 pub mod doc;
 pub mod doc_bundle;
+pub mod doc_type_search;
 pub mod explain;
 pub mod ffi;
 pub mod fmt;
