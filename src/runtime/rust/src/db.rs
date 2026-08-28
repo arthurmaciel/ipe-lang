@@ -7104,6 +7104,88 @@ mod tests {
         assert!(result.is_err(), "a non-identifier column must be rejected");
     }
 
+    // ── Store.upper / Store.lower sentinel: `UPPER/LOWER(alias.col) AS pN` ─────
+
+    /// Golden SQL: the `("UPPER", "a1.name")` sentinel pair emits exactly
+    /// `UPPER(a1.name) AS p0` — the SQL function name comes from our own closed
+    /// tag set, and the dotted column reference is re-validated via
+    /// `SqlIdent::parse_dotted` (defence in depth) before interpolation.
+    #[test]
+    fn projection_statement_upper_sentinel_emits_exact_function_sql() {
+        let frag = sql_eq(
+            sql_column("a1.id".to_string()),
+            sql_column("a0.author_id".to_string()),
+        );
+        let (sql, literal_count) = build_projection_statement(
+            "books",
+            "a0",
+            "authors",
+            "a1",
+            &[("UPPER".to_string(), "a1.name".to_string())],
+            &frag.sql,
+        )
+        .expect("UPPER sentinel with a valid dotted column must build");
+        assert_eq!(
+            literal_count, 0,
+            "an UPPER sentinel binds no extra parameter"
+        );
+        assert_eq!(
+            sql,
+            "SELECT UPPER(a1.name) AS p0 \
+             FROM books AS a0, authors AS a1 WHERE (a1.id = a0.author_id)"
+        );
+    }
+
+    /// A bad dotted column inside the UPPER sentinel (injection characters in the
+    /// column half) is rejected fail-closed — `SqlIdent::parse_dotted` refuses the
+    /// identifier before it can reach SQL text.
+    #[test]
+    fn projection_statement_upper_sentinel_rejects_bad_dotted_column() {
+        let frag = sql_eq(
+            sql_column("a1.id".to_string()),
+            sql_column("a0.author_id".to_string()),
+        );
+        let with_semicolon = build_projection_statement(
+            "books",
+            "a0",
+            "authors",
+            "a1",
+            &[(
+                "UPPER".to_string(),
+                "a1.name); DROP TABLE authors".to_string(),
+            )],
+            &frag.sql,
+        );
+        assert!(
+            with_semicolon.is_err(),
+            "a dotted column with injection characters must be rejected fail-closed"
+        );
+        let with_space = build_projection_statement(
+            "books",
+            "a0",
+            "authors",
+            "a1",
+            &[("UPPER".to_string(), "a1.name col".to_string())],
+            &frag.sql,
+        );
+        assert!(
+            with_space.is_err(),
+            "a dotted column with a space must be rejected fail-closed"
+        );
+        let with_paren = build_projection_statement(
+            "books",
+            "a0",
+            "authors",
+            "a1",
+            &[("UPPER".to_string(), "a1.name(x)".to_string())],
+            &frag.sql,
+        );
+        assert!(
+            with_paren.is_err(),
+            "a dotted column with a paren must be rejected fail-closed"
+        );
+    }
+
     // ── Store.literal sentinel: `? AS pN` in projection SELECT ────────────────
 
     /// Golden SQL: a mixed projection with one `Store.literal` position and one
