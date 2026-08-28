@@ -247,7 +247,7 @@ pub struct RecExtraBindsFragJoinedAJoinedBLeftTableOrderPoisonProjectionsRightTa
     leftTable: String,
     order: IpeMaybe<(String, String, bool)>,
     poison: IpeMaybe<ipe_runtime::error::IpeError>,
-    projections: Vec<(String, String)>,
+    projections: Vec<(String, String, String)>,
     rightTable: String,
 }
 impl IpeStringify for RecExtraBindsFragJoinedAJoinedBLeftTableOrderPoisonProjectionsRightTable {

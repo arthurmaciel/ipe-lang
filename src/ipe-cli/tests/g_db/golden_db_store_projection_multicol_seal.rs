@@ -10,7 +10,7 @@
 //! is re-validated at the runtime boundary, and no filter value is interpolated.
 //!
 //! The decode is concrete/monomorphized: the projection value carries only an
-//! ordered `(alias, column)` list (a plain `Vec<(String, String)>`), never a
+//! ordered `(tag, operand_a, operand_b)` list (a plain `Vec<(String, String, String)>`), never a
 //! boxed decoder — the caller reads each `p<index>` cell with its own typed
 //! `projRead*`. So the multi-column path introduces no `Box<dyn Fn …>` decoder.
 //!
@@ -93,13 +93,14 @@ fn db_store_projection_multicol_seal_builds() {
     );
 
     // The `Select` projection record struct: its `projections` field is a plain
-    // `Vec<(String, String)>` and the struct declares no boxed-decoder field.
+    // `Vec<(String, String, String)>` (tag, operand_a, operand_b) and the struct
+    // declares no boxed-decoder field.
     let main_rs = out.join("src").join("main.rs");
     let main_src = std::fs::read_to_string(&main_rs).expect("emitted main.rs must exist");
     let struct_body = projection_record_struct_body(&main_src)
         .expect("emitted crate must define the projection record struct");
     assert!(
-        struct_body.contains("projections: Vec<(String, String)>"),
+        struct_body.contains("projections: Vec<(String, String, String)>"),
         "the projection record must carry the ordered column list as plain data, \
          got struct body:\n{struct_body}"
     );

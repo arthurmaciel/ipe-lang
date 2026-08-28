@@ -11112,7 +11112,7 @@ fn join_right_alias() -> String {
 /// The IR element type of a projection reference — a `(String, String)` tuple of
 /// `(alias, column)`. Used to type the `selectNamed` projection list literal.
 fn proj_pair_ir_type() -> IrType {
-    IrType::Tuple(vec![IrType::Str, IrType::Str])
+    IrType::Tuple(vec![IrType::Str, IrType::Str, IrType::Str])
 }
 
 /// The IR type of a projection `Row` — the `Dict String String` cell map the DB
@@ -11213,8 +11213,9 @@ fn projection_ty_label(ty: &Ty, interner: &Interner) -> Box<str> {
 
 /// The origin of one element in a `Store.select` projection: either a bare
 /// field access on a join-side record (`alias.column`), a `literal(value)`
-/// call whose argument binds as a SQL parameter (`? AS pN`), or a unary text
-/// operator (`upper`/`lower`) applied to a column reference.
+/// call whose argument binds as a SQL parameter (`? AS pN`), a unary text
+/// operator (`upper`/`lower`) applied to a column reference, or a binary
+/// `coalesce` of two projection operands (each a column or a literal).
 enum ProjectionSource {
     /// A `side.field` column reference: `alias` is the join-side alias
     /// (`a0` / `a1`), `column` is the snake-cased, SQL-validated field name.
@@ -11229,6 +11230,32 @@ enum ProjectionSource {
     /// `Store.lower(side.field)` — emits `LOWER(alias.column) AS pN`.
     /// Symmetric counterpart to `UpperOf`; same validation constraints.
     LowerOf { alias: String, column: String },
+    /// `Store.coalesce(projA, projB)` — emits `COALESCE(a, b) AS pN`.
+    ///
+    /// Each operand is a `CoalesceOperand`: either a SQL-validated dotted
+    /// column reference (`Column { alias, column }`) or a `Literal { lowered }`
+    /// whose value binds as a `?` parameter before the WHERE parameters. The
+    /// runtime re-validates every column operand via `SqlIdent::parse_dotted`
+    /// (defence in depth); the tag `"COALESCE"` comes from our own closed set,
+    /// never from user input.
+    Coalesce {
+        left: CoalesceOperand,
+        right: CoalesceOperand,
+    },
+}
+
+/// One operand of a `Store.coalesce` binary expression: either a direct
+/// `side.field` column reference or a `Store.literal(value)` binding. Kept
+/// separate from `ProjectionSource` because operands cannot themselves be
+/// `coalesce` (the surface type is `Projection a`, not recursive), keeping the
+/// descriptor flat and the encoding unambiguous.
+enum CoalesceOperand {
+    /// A SQL-validated `alias.column` reference. The runtime re-validates via
+    /// `SqlIdent::parse_dotted`.
+    Column { alias: String, column: String },
+    /// A `Store.literal(value)` binding: the lowered argument expression is
+    /// bound as a `?` parameter before the WHERE parameters.
+    Literal { lowered: Expr },
 }
 
 /// One element of a `Store.select` projection: its source (a column reference
@@ -11239,6 +11266,39 @@ enum ProjectionSource {
 struct ProjectedColumn {
     source: ProjectionSource,
     kind: ProjColKind,
+}
+
+/// Encode one operand of a `Store.coalesce` term for the projection triple.
+///
+/// A `Column` operand encodes as the dotted `"alias.column"` string with no
+/// literal bind; a `Literal` operand encodes as `""` (the empty string that the
+/// runtime treats as a `?` placeholder) and a `SqlValue` constructor for the
+/// bound value.
+///
+/// Returns `(encoded_string, Option<SqlValue_expr>)`.
+fn emit_coalesce_operand(
+    operand: CoalesceOperand,
+    kind: ProjColKind,
+    builtins: &BuiltinCtors,
+) -> (String, Option<Expr>) {
+    match operand {
+        CoalesceOperand::Column { alias, column } => (format!("{alias}.{column}"), None),
+        CoalesceOperand::Literal { lowered } => {
+            let variant = match kind {
+                ProjColKind::Text => builtins.sql_string,
+                ProjColKind::Int => builtins.sql_int,
+                ProjColKind::Bool => builtins.sql_bool,
+                ProjColKind::Float => builtins.sql_float,
+            };
+            let ctor = Expr::Ctor {
+                home: ModPath(Vec::new()),
+                ty: builtins.sqlvalue,
+                variant,
+                args: vec![lowered],
+            };
+            (String::new(), Some(ctor))
+        }
+    }
 }
 
 /// Fail-closed SEAL gate for a point-free / partially-applied accessor-typed
@@ -14125,23 +14185,30 @@ impl<'a> Lowerer<'a> {
         let projected = self.select_projections(binders, body)?;
         let lowered_joined = self.lower_expr(joined)?;
 
-        // Partition projected elements into the (alias, column) pair list and the
-        // ordered literal-bind `SqlValue` list. Column references emit the pair
-        // directly; literal elements emit the sentinel `("", "")` pair and one
-        // `SqlValue` constructor wrapping the lowered argument. Upper/lower elements
-        // emit a sentinel pair `("UPPER"/"LOWER", "alias.column")` so the runtime
-        // can emit `UPPER(alias.column) AS pN` / `LOWER(alias.column) AS pN`.
+        // Partition projected elements into the (tag, operand_a, operand_b) triple
+        // list and the ordered literal-bind `SqlValue` list. Column references emit
+        // `(alias, column, "")`. Literal elements emit `("", "", "")` and one
+        // `SqlValue` constructor. Upper/lower elements emit
+        // `("UPPER"/"LOWER", "alias.column", "")`. Coalesce elements emit
+        // `("COALESCE", operand_a, operand_b)` where each operand is either a
+        // dotted column or `""` (literal position — one `SqlValue` per empty
+        // operand, left before right in bind order).
         let mut pair_items: Vec<Expr> = Vec::with_capacity(projected.len());
         let mut literal_items: Vec<Expr> = Vec::with_capacity(projected.len());
         for col in projected {
             match col.source {
                 ProjectionSource::Column { alias, column } => {
-                    pair_items.push(Expr::Tuple(vec![Expr::Str(alias), Expr::Str(column)]));
+                    pair_items.push(Expr::Tuple(vec![
+                        Expr::Str(alias),
+                        Expr::Str(column),
+                        Expr::Str(String::new()),
+                    ]));
                 }
                 ProjectionSource::Literal { lowered } => {
-                    // Sentinel pair — the runtime recognises an empty alias as a
+                    // Sentinel triple — the runtime recognises an empty tag as a
                     // literal-parameter position and emits `? AS pN` there.
                     pair_items.push(Expr::Tuple(vec![
+                        Expr::Str(String::new()),
                         Expr::Str(String::new()),
                         Expr::Str(String::new()),
                     ]));
@@ -14161,13 +14228,15 @@ impl<'a> Lowerer<'a> {
                     });
                 }
                 ProjectionSource::UpperOf { alias, column } => {
-                    // Sentinel: SQL function name in first, dotted alias.column in
-                    // second. The runtime validates the dotted form via
-                    // `SqlIdent::parse_dotted` (defence in depth) before interpolation.
+                    // Sentinel: SQL function name in first slot, dotted alias.column
+                    // in second, empty third. The runtime validates the dotted form
+                    // via `SqlIdent::parse_dotted` (defence in depth) before
+                    // interpolation.
                     let dotted = format!("{alias}.{column}");
                     pair_items.push(Expr::Tuple(vec![
                         Expr::Str("UPPER".to_owned()),
                         Expr::Str(dotted),
+                        Expr::Str(String::new()),
                     ]));
                 }
                 ProjectionSource::LowerOf { alias, column } => {
@@ -14175,6 +14244,26 @@ impl<'a> Lowerer<'a> {
                     pair_items.push(Expr::Tuple(vec![
                         Expr::Str("LOWER".to_owned()),
                         Expr::Str(dotted),
+                        Expr::Str(String::new()),
+                    ]));
+                }
+                ProjectionSource::Coalesce { left, right } => {
+                    // `("COALESCE", operand_a, operand_b)`: each non-empty operand
+                    // is a dotted column validated at compile time; an empty operand
+                    // is a literal `?` whose `SqlValue` bind follows in left→right
+                    // order, before the WHERE binds.
+                    let (a_str, a_lit) = emit_coalesce_operand(left, col.kind, self.builtins);
+                    let (b_str, b_lit) = emit_coalesce_operand(right, col.kind, self.builtins);
+                    if let Some(v) = a_lit {
+                        literal_items.push(v);
+                    }
+                    if let Some(v) = b_lit {
+                        literal_items.push(v);
+                    }
+                    pair_items.push(Expr::Tuple(vec![
+                        Expr::Str("COALESCE".to_owned()),
+                        Expr::Str(a_str),
+                        Expr::Str(b_str),
                     ]));
                 }
             }
@@ -14410,6 +14499,41 @@ impl<'a> Lowerer<'a> {
             }
         }
 
+        // ── `Store.coalesce(projA, projB)` element ───────────────────────────
+        if let canon::Expr_::Call(callee_expr, args) = &body.value
+            && matches!(
+                self.lower_callee(callee_expr),
+                Ok(Callee::Kernel(KernelFn::StoreCoalesce))
+            )
+        {
+            let (Some(left_expr), Some(right_expr)) = (args.first(), args.get(1)) else {
+                return Err(unsupported_store_select(
+                    body.span,
+                    StoreSelectProjectionDefect::UnsupportedProjectionBody,
+                ));
+            };
+            // Determine the result kind from the left operand's type (both
+            // operands must have the same type — enforced by the type constraint
+            // `coalesce : Projection a -> Projection a -> Projection a`).
+            let result_ty = self.region_ty(left_expr.span);
+            let Some(kind) = result_ty.and_then(|ty| ProjColKind::of_ty(ty, self.interner)) else {
+                let ty_label = result_ty.map_or_else(
+                    || "unknown".into(),
+                    |ty| projection_ty_label(ty, self.interner),
+                );
+                return Err(unsupported_store_select(
+                    body.span,
+                    StoreSelectProjectionDefect::LiteralTypeUnsupported { ty: ty_label },
+                ));
+            };
+            let left = self.lower_coalesce_operand(binders, left_expr)?;
+            let right = self.lower_coalesce_operand(binders, right_expr)?;
+            return Ok(ProjectedColumn {
+                source: ProjectionSource::Coalesce { left, right },
+                kind,
+            });
+        }
+
         // ── `side.field` column reference ───────────────────────────────────
         let canon::Expr_::Access(base, field) = &body.value else {
             return Err(unsupported_store_select(
@@ -14473,6 +14597,90 @@ impl<'a> Lowerer<'a> {
                 column: column_name,
             },
             kind,
+        })
+    }
+
+    /// Lower one operand of a `Store.coalesce` call into a `CoalesceOperand`.
+    ///
+    /// Accepts two shapes:
+    ///
+    /// - `side.field` — a direct column accessor, resolved to an alias + a
+    ///   SQL-validated, snake-cased column name, exactly as in `select_single_projection`.
+    /// - `Store.literal(value)` — a literal parameter bind, lowered to a
+    ///   `CoalesceOperand::Literal`.
+    ///
+    /// Any other shape (a computation, a nested coalesce, …) fails closed with
+    /// IPE-L0149.
+    fn lower_coalesce_operand(
+        &self,
+        binders: [Option<Symbol>; 2],
+        expr: &canon::Expr,
+    ) -> DResult<CoalesceOperand> {
+        // `Store.literal(value)` operand.
+        if let canon::Expr_::Call(callee_expr, args) = &expr.value
+            && matches!(
+                self.lower_callee(callee_expr),
+                Ok(Callee::Kernel(KernelFn::StoreLiteral))
+            )
+        {
+            let Some(value_expr) = args.first() else {
+                return Err(unsupported_store_select(
+                    expr.span,
+                    StoreSelectProjectionDefect::UnsupportedProjectionBody,
+                ));
+            };
+            let lowered = self.lower_expr(value_expr)?;
+            return Ok(CoalesceOperand::Literal { lowered });
+        }
+
+        // `side.field` column operand.
+        let canon::Expr_::Access(base, field) = &expr.value else {
+            return Err(unsupported_store_select(
+                expr.span,
+                StoreSelectProjectionDefect::UnsupportedProjectionBody,
+            ));
+        };
+        let canon::Expr_::VarLocal(base_sym) = &base.value else {
+            return Err(unsupported_store_select(
+                expr.span,
+                StoreSelectProjectionDefect::UnsupportedProjectionBody,
+            ));
+        };
+        let alias = if binders[0] == Some(*base_sym) {
+            join_left_alias()
+        } else if binders[1] == Some(*base_sym) {
+            join_right_alias()
+        } else {
+            return Err(unsupported_store_select(
+                expr.span,
+                StoreSelectProjectionDefect::UnsupportedProjectionBody,
+            ));
+        };
+        let field_ty = match self.region_ty(base.span) {
+            Some(Ty::Record(fields, _)) => fields.get(field),
+            _ => None,
+        };
+        let field_name = self.resolve(*field)?.to_string();
+        if field_ty.is_none() {
+            return Err(unsupported_store_select(
+                expr.span,
+                StoreSelectProjectionDefect::UnknownField {
+                    field: field_name.into_boxed_str(),
+                },
+            ));
+        }
+        let column_name = ipe_canon::to_snake_case(&field_name);
+        if !is_valid_sql_column(&column_name) {
+            return Err(unsupported_store_select(
+                expr.span,
+                StoreSelectProjectionDefect::InvalidColumn {
+                    column: column_name.into_boxed_str(),
+                },
+            ));
+        }
+        Ok(CoalesceOperand::Column {
+            alias,
+            column: column_name,
         })
     }
 
@@ -23460,6 +23668,7 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::FileTempFile
                 | KernelFn::FileTempDir
                 | KernelFn::FileDelete
+                | KernelFn::FileWalk
                 // ── Process arity-1 ─────────────────────────────────────
                 // `ProcessRunWith` : { args, command, cwd, env } -> Task Error { exitCode, stdout, stderr }
                 | KernelFn::ProcessRunWith
@@ -23621,6 +23830,9 @@ impl<'a> Lowerer<'a> {
                 // / `Store.lte` / `Store.like` / `Store.inList` — arity 2, all
                 // intercepted at lowering. These arities are only defensive fallback
                 // counts; the intercept fires before the generic arity dispatch.
+                // `Store.coalesce` — arity 2 (left projection + right projection).
+                // Intercepted inside the `Store.select` projection body.
+                | KernelFn::StoreCoalesce
                 | KernelFn::StoreEqCol
                 | KernelFn::StoreNeqCol
                 | KernelFn::StoreGtCol
@@ -23789,6 +24001,7 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::FileAppend
                 | KernelFn::FileCopy
                 | KernelFn::FileRename
+                | KernelFn::FileWalkMatching
                 // ── Process arity-2 ─────────────────────────────────────
                 // `ProcessRun` : String -> List String -> Task Error String
                 | KernelFn::ProcessRun
@@ -25466,6 +25679,8 @@ impl<'a> Lowerer<'a> {
                     ("File", "copy") => Ok(Callee::Kernel(KernelFn::FileCopy)),
                     ("File", "rename") => Ok(Callee::Kernel(KernelFn::FileRename)),
                     ("File", "delete") => Ok(Callee::Kernel(KernelFn::FileDelete)),
+                    ("File", "walk") => Ok(Callee::Kernel(KernelFn::FileWalk)),
+                    ("File", "walkMatching") => Ok(Callee::Kernel(KernelFn::FileWalkMatching)),
                     ("Process", "run") => Ok(Callee::Kernel(KernelFn::ProcessRun)),
                     ("Process", "runWith") => Ok(Callee::Kernel(KernelFn::ProcessRunWith)),
                     // ── Http kernels ────────────────────────────────────
@@ -25566,6 +25781,9 @@ impl<'a> Lowerer<'a> {
                     // lambda bodies; same point-free fallback behaviour as `literal`.
                     ("Store", "upper") => Ok(Callee::Kernel(KernelFn::StoreUpper)),
                     ("Store", "lower") => Ok(Callee::Kernel(KernelFn::StoreLower)),
+                    // Binary coalesce projection operator — recognized inside
+                    // `Store.select` lambda bodies; same point-free fallback behaviour.
+                    ("Store", "coalesce") => Ok(Callee::Kernel(KernelFn::StoreCoalesce)),
                     // ── Secret kernels ──────────────────────────
                     ("Secret", "fromString") => Ok(Callee::Kernel(KernelFn::SecretFromString)),
                     ("Secret", "reveal") => Ok(Callee::Kernel(KernelFn::SecretReveal)),

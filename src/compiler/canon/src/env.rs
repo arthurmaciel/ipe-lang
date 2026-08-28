@@ -1280,6 +1280,8 @@ impl Env {
                     "append",
                     "readDir",
                     "isDir",
+                    "walk",
+                    "walkMatching",
                     "tempFile",
                     "tempDir",
                     "copy",

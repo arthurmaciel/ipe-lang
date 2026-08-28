@@ -115,23 +115,19 @@ fn multicol_nested_tuple_element_is_rejected() {
 }
 
 /// `Store.upper` applied to a non-String column (here `Bool`) must be rejected.
-/// The type system rejects this at inference (T0001) because `Store.upper :
-/// String -> String` and `active : Bool` — the wrong type is caught before
-/// lowering fires. This test confirms the program does not compile and does not
-/// slip through to emit broken SQL.
+/// `Store.upper : String -> String` unifies with `active : Bool` as a type
+/// mismatch (IPE-T0001) before lowering fires. Pinning the specific code
+/// confirms this path is correct — a bare `is_err()` would pass on any
+/// unrelated failure and leave the refusal unproven.
 #[test]
 fn upper_on_non_string_column_is_rejected() {
-    let root = repo_root();
-    let entry = fixture_entry(&root, "db_store_projection_upper_non_string_rejected");
-    let out = std::env::temp_dir().join("ipec_db_store_projection_upper_non_string_rejected");
-    let _ = std::fs::remove_dir_all(&out);
-    let Ok(runtime) = ipe::resolve_runtime() else {
-        return;
+    let Some(code) = rejection_code("db_store_projection_upper_non_string_rejected") else {
+        return; // resolver unavailable — skip
     };
-    let result = ipe::build(&entry, &out, &runtime);
-    assert!(
-        result.is_err(),
-        "Store.upper on a non-String column must be rejected at compile time"
+    assert_eq!(
+        code,
+        ipe_diagnostics::IPE_T0001,
+        "Store.upper on a non-String column must fail with a type-mismatch IPE-T0001"
     );
 }
 

@@ -230,7 +230,7 @@ module Ipe.Db.Store exposing
     , orderByLeftNamed, orderByRightNamed
     , joinToList, joinToMaybe, joinCount
     , Select
-    , select, selectNamed, literal, upper, lower
+    , select, selectNamed, literal, upper, lower, coalesce
     , selectToList, selectToMaybe
     , Policy, Secured
     , unrestricted, publicRead, ownerColumn, immutable, andPolicy, secured
@@ -3023,8 +3023,9 @@ joinCount conn joined =
 -- concrete decode, while the runtime value carries only query data. Built only
 -- through `select`, so the projected columns and the shape that reads them back
 -- cannot drift. `joined` is the underlying join (its `FROM … WHERE` and any
--- `poison`); `projections` is the ordered list of validated `(alias, column)`
--- references the `SELECT` names, each bound to an output name by position.
+-- `poison`); `projections` is the ordered projection descriptor list — each
+-- entry is a `(tag, operand_a, operand_b)` triple encoding one SELECT term (see
+-- `selectNamed` for the encoding).
 type Select row
     = Select
         { joinedA : String
@@ -3034,7 +3035,7 @@ type Select row
         , frag : SqlFragment
         , order : Maybe ( String, String, Bool )
         , poison : Maybe Error
-        , projections : List ( String, String )
+        , projections : List ( String, String, String )
         , extraBinds : List SqlValue
         }
 
@@ -3120,14 +3121,39 @@ lower =
     Ffi.kernel "Store_lower"
 
 
+-- | `coalesce left right` — inside a `Store.select` projection lambda, emits
+-- `COALESCE(a, b) AS pN` in the SELECT list, returning the first non-null
+-- value. Both operands must share the same scalar type `a` (the type variable
+-- is unified by the constraint scheme). Each operand is either a bare
+-- `side.field` column reference or a `Store.literal` value; a computed
+-- expression is a fail-closed build error (IPE-L0149). The operand types must
+-- agree; a mismatch is a compile-time type error. Every column identifier is
+-- validated at compile time and re-checked by the runtime.
+--
+-- Example:
+--
+--     Store.join books .authorId authors .id
+--         |> Store.select (\( _, author ) -> coalesce author.name (literal "unknown"))
+--         |> Store.selectToList db
+--         -- SQL: SELECT COALESCE(a1.name, ?) AS p0 FROM …
+coalesce : Projection a -> Projection a -> Projection a
+coalesce =
+    Ffi.kernel "Store_coalesce"
+
+
 -- | The lowered form of `select`: the lambda has already been read into the
--- ordered `(alias, column)` projection list, with any `literal(value)` positions
--- represented by an empty sentinel pair `("", "")` and their `SqlValue`-wrapped
--- arguments in `extraBinds` (in the same positional order). Builds the `Select`
--- from the join's tables, alias-bound `FROM … WHERE` fragment, and any inherited
--- `poison`. Reached only through the `Store.select` lowering intercept; not part
--- of the accessor caller surface.
-selectNamed : Joined a b -> List ( String, String ) -> List SqlValue -> Select row
+-- ordered projection descriptor list, where each entry is a `(tag, operand_a,
+-- operand_b)` triple. A plain column reference is `(alias, column, "")` (alias
+-- is the table alias, column is the validated field name). A literal position is
+-- `("", "", "")` and its `SqlValue`-wrapped argument appears in `extraBinds` in
+-- positional order. A `Store.upper`/`Store.lower` operator is `("UPPER",
+-- "alias.column", "")` / `("LOWER", "alias.column", "")`. A `Store.coalesce`
+-- is `("COALESCE", operand_a_encoded, operand_b_encoded)` where each operand
+-- encodes as `""` (literal, bound via `extraBinds`) or `"alias.column"` (column
+-- reference). Builds the `Select` from the join's tables, alias-bound `FROM …
+-- WHERE` fragment, and any inherited `poison`. Reached only through the
+-- `Store.select` lowering intercept; not part of the accessor caller surface.
+selectNamed : Joined a b -> List ( String, String, String ) -> List SqlValue -> Select row
 selectNamed joined projections extraBinds =
     case joined of
         Joined r ->

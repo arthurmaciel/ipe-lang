@@ -11,6 +11,7 @@ Each module listed below links to a detail page with full doc-strings and exampl
 - [Maybe](#maybe)
 - [Result](#result)
 - [String](#string)
+- [Task](#task)
 
 ## Io
 
@@ -151,4 +152,38 @@ Each module listed below links to a detail page with full doc-strings and exampl
 | `trimStart` | `trimStart s` — remove leading whitespace only. |
 | `uncons` | `uncons s` — split off the first character and the rest; `Nothing` on `""`. |
 | `words` | `words s` — split `s` into words on whitespace boundaries. |
+
+## Task
+
+[Full reference](stdlib/Task.md)
+
+| Symbol | Summary |
+|--------|----------|
+| `RetryPolicy` | Retry configuration for `retryWith`, built with the `linearBackoff` / |
+| `andThen` | `andThen next task` — run `task`, then feed its success value to `next` to |
+| `andThenResult` | `andThenResult step task` — like `andThen`, but `step` returns a plain |
+| `attempt` | `attempt toMsg task` — run `task` as a `Cmd`, mapping its settled `Result` |
+| `defaultRetryPolicy` | `defaultRetryPolicy` — a sensible starting policy: 3 attempts, 500 ms |
+| `exponentialBackoff` | `exponentialBackoff maxAttempts baseMs` — a policy whose delay doubles each |
+| `fail` | `fail err` — a task that settles with `err` on the implicit error channel, so |
+| `fromResult` | `fromResult result` — lift a `Result` into a task: `Ok` becomes a success, |
+| `lazy` | `lazy makeTask` — defer building a task until it is run, by wrapping it in a |
+| `linearBackoff` | `linearBackoff maxAttempts delayMs` — a constant-delay policy that retries on |
+| `map` | `map f task` — transform a task's success value with `f`, leaving the error |
+| `map2` | `map2`..`map5` — combine 2..5 independent tasks with an N-ary function. |
+| `map3` | `map3 f a b c` — combine three independent tasks with a three-argument |
+| `map4` | `map4 f a b c d` — combine four independent tasks with a four-argument |
+| `map5` | `map5 f a b c d e` — combine five independent tasks with a five-argument |
+| `mapError` | `mapError f task` — transform the error a task fails with, leaving a success |
+| `onError` | `onError recover task` — if `task` fails, run `recover` on the error to |
+| `parallel` | `parallel tasks` — run a list of tasks concurrently, collecting their results |
+| `retryOn` | `retryOn pred policy` — replace the policy's `shouldRetry` predicate so it |
+| `retryWith` | `retryWith policy task` — run `task`, retrying according to `policy` whenever |
+| `sequence` | `sequence tasks` — run a list of tasks one after another, collecting their |
+| `succeed` | `succeed value` — a task that runs no effect and settles with `value`. The |
+| `withBaseMs` | `withBaseMs ms policy` — set the base delay in milliseconds. |
+| `withJitter` | `withJitter policy` — add random jitter to the policy's delays, spreading out |
+| `withKind` | `withKind k policy` — set the delay kind: `0` = linear, `1` = exponential. |
+| `withMaxAttempts` | `withMaxAttempts n policy` — set the maximum number of attempts. |
+| `withRetryOn` | `withRetryOn pred policy` — an alias for `retryOn` with the same semantics and |
 
