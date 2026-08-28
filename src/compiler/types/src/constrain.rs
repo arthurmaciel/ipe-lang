@@ -749,6 +749,19 @@ struct Builtins {
     /// `"OperandLiteral"` — `OperandLiteral` nullary constructor of `CoalesceOperand`
     /// (a `?` literal placeholder).
     operand_literal: Symbol,
+    // ── Shape opaque app-leaf type constructor symbols ────────────────────────
+    /// `"WebApp"` — opaque app handle returned by `Web.app` / `Web.appRouted` /
+    /// `Web.appWith`. Nullary; backed by `ipe_runtime::tea::WebApp`.
+    web_app: Symbol,
+    /// `"WebViewApp"` — opaque app handle returned by `WebView.app`. Nullary;
+    /// backed by `ipe_runtime::tea::WebViewApp`.
+    webview_app: Symbol,
+    /// `"TuiApp"` — opaque app handle returned by `Terminal.appScreen`. Nullary;
+    /// backed by `ipe_runtime::tea::TuiApp`.
+    tui_app: Symbol,
+    /// `"CliApp"` — opaque app handle returned by `Terminal.appLines`. Nullary;
+    /// backed by `ipe_runtime::tea::CliApp`.
+    cli_app: Symbol,
 }
 
 impl Builtins {
@@ -1012,6 +1025,11 @@ impl Builtins {
             coalesce_operand: interner.intern("CoalesceOperand")?,
             operand_column: interner.intern("OperandColumn")?,
             operand_literal: interner.intern("OperandLiteral")?,
+            // ── Shape opaque app-leaf type constructor symbols ─────────────
+            web_app: interner.intern("WebApp")?,
+            webview_app: interner.intern("WebViewApp")?,
+            tui_app: interner.intern("TuiApp")?,
+            cli_app: interner.intern("CliApp")?,
         })
     }
 
@@ -4381,6 +4399,10 @@ impl<'a> Builder<'a> {
             BuiltinTag::WebRoute => self.builtins.live_route_con,
             BuiltinTag::EmailProvider => self.builtins.email_provider,
             BuiltinTag::BackoffStrategy => self.builtins.backoffstrategy,
+            BuiltinTag::WebApp => self.builtins.web_app,
+            BuiltinTag::WebViewApp => self.builtins.webview_app,
+            BuiltinTag::TuiApp => self.builtins.tui_app,
+            BuiltinTag::CliApp => self.builtins.cli_app,
         }
     }
 
@@ -4610,6 +4632,27 @@ impl<'a> Builder<'a> {
             module: Vec::new(),
             name: self.builtins.task,
             args: vec![Ty::Unit],
+        };
+        // Opaque app-leaf constructors — nullary, no type arguments.
+        let web_app_leaf = || Ty::Con {
+            module: Vec::new(),
+            name: self.builtins.web_app,
+            args: Vec::new(),
+        };
+        let webview_app_leaf = || Ty::Con {
+            module: Vec::new(),
+            name: self.builtins.webview_app,
+            args: Vec::new(),
+        };
+        let tui_app_leaf = || Ty::Con {
+            module: Vec::new(),
+            name: self.builtins.tui_app,
+            args: Vec::new(),
+        };
+        let cli_app_leaf = || Ty::Con {
+            module: Vec::new(),
+            name: self.builtins.cli_app,
+            args: Vec::new(),
         };
         let cmd = |m: Ty| Ty::Con {
             module: Vec::new(),
@@ -6766,9 +6809,9 @@ impl<'a> Builder<'a> {
                     // Open row tail — var(3) absorbs optional extra fields.
                     RowTail::Open(3),
                 );
-                fun(cfg_rec, task_unit())
+                fun(cfg_rec, web_app_leaf())
             }
-            // `Web.appWith : List (Setting Web) -> { … } -> Task ()` — the
+            // `Web.appWith : List (Setting Web) -> { … } -> WebApp` — the
             // additive settings-carrying web entry. Same cfg record as
             // `K::WebApp`, preceded by a shape-pinned `List (Setting Web)`: a
             // `Terminal`-only or cross-shape setting in that slot is an
@@ -6792,7 +6835,7 @@ impl<'a> Builder<'a> {
                     },
                     RowTail::Open(3),
                 );
-                fun(list(setting(shape_web())), fun(cfg_rec, task_unit()))
+                fun(list(setting(shape_web())), fun(cfg_rec, web_app_leaf()))
             }
             // `Web.route : String -> builder -> WebRoute page`
             // with builder = var(1) DISTINCT from page = var(0).
@@ -6865,7 +6908,7 @@ impl<'a> Builder<'a> {
                     // Open row: absorbs optional fields (guard, canvasWidth, canvasHeight, …).
                     RowTail::Open(3),
                 );
-                fun(cfg_rec, task_unit())
+                fun(cfg_rec, tui_app_leaf())
             }
 
             // ── Ipe.Terminal line-oriented app-entry (`appLines`) ───────────────
@@ -6892,7 +6935,7 @@ impl<'a> Builder<'a> {
                     // row is a `Web.app`-only surface).
                     RowTail::Closed,
                 );
-                fun(cfg_rec, task_unit())
+                fun(cfg_rec, cli_app_leaf())
             }
 
             // ── Ipe.WebView app-entry (already schemed in kernel_ty) ──
@@ -6924,7 +6967,7 @@ impl<'a> Builder<'a> {
                     },
                     RowTail::Closed,
                 );
-                fun(cfg_rec, task_unit())
+                fun(cfg_rec, webview_app_leaf())
             }
 
             // ══ FIRST-SCHEMED families ══

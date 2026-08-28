@@ -2968,6 +2968,10 @@ const fn ir_type_is_record_shape_leaf(ty: &IrType) -> bool {
             | IrType::EmailAddress
             | IrType::Locale
             | IrType::Principal
+            | IrType::WebApp
+            | IrType::WebViewApp
+            | IrType::TuiApp
+            | IrType::CliApp
     )
 }
 
@@ -3113,7 +3117,9 @@ fn collect_record_shapes(
         | IrType::EmailAddress
         // `Locale`/`Principal`, and the `AuthConfig`/`TokenSource` authed-route
         // descriptors, are opaque handles — no record shape.
-        | IrType::Locale | IrType::Principal | IrType::AuthConfig | IrType::TokenSource => {}
+        | IrType::Locale | IrType::Principal | IrType::AuthConfig | IrType::TokenSource
+        // Shape opaque app leaves — no record shape.
+        | IrType::WebApp | IrType::WebViewApp | IrType::TuiApp | IrType::CliApp => {}
         // `WebRoute page` descends in case the page type carries a record shape.
         IrType::WebRoute(page) => collect_record_shapes(interner, page, shapes)?,
         IrType::CustomElement { down, up } => {
@@ -3289,7 +3295,9 @@ fn type_reaches_enum(
         | IrType::Locale
         // `Principal`, and the `AuthConfig`/`TokenSource` authed-route
         // descriptors, are monomorphic opaque leaves — no enum edge.
-        | IrType::Principal | IrType::AuthConfig | IrType::TokenSource => false,
+        | IrType::Principal | IrType::AuthConfig | IrType::TokenSource
+        // Shape opaque app leaves — monomorphic, no enum edge.
+        | IrType::WebApp | IrType::WebViewApp | IrType::TuiApp | IrType::CliApp => false,
         // `Route<Page>` stores its `not_found`/built pages by value — a page
         // type reaching `target` through a route is a genuine size edge.
         IrType::WebRoute(page) => type_reaches_enum(page, target, enums, visited),
@@ -3405,6 +3413,8 @@ fn contains_generic(ty: &IrType) -> bool {
         // `AuthConfig` / `TokenSource` are monomorphic — no generic parameters.
         | IrType::AuthConfig
         | IrType::TokenSource
+        // Shape opaque app leaves — monomorphic, no generic parameters.
+        | IrType::WebApp | IrType::WebViewApp | IrType::TuiApp | IrType::CliApp
         // A row variable is a SEPARATE row generic (`R{n}`), never an ordinary
         // `T{n}` record-struct parameter, and never appears inside a record-
         // struct field. It contributes no `<T>` clause here.
@@ -3546,6 +3556,8 @@ fn collect_generics(ty: &IrType, out: &mut Vec<Symbol>) {
         // `AuthConfig` / `TokenSource` are monomorphic — no generics to collect.
         | IrType::AuthConfig
         | IrType::TokenSource
+        // Shape opaque app leaves — monomorphic, no generics to collect.
+        | IrType::WebApp | IrType::WebViewApp | IrType::TuiApp | IrType::CliApp
         // A row variable is a separate row generic (`R{n}`), tracked in
         // `Func::row_params`, never in the ordinary `T{n}` scope collected here.
         | IrType::RowGeneric(_) => {}
@@ -3900,7 +3912,9 @@ fn match_template(
         | IrType::Principal
         // `AuthConfig` / `TokenSource` are monomorphic opaque leaves.
         | IrType::AuthConfig
-        | IrType::TokenSource => {
+        | IrType::TokenSource
+        // Shape opaque app leaves — monomorphic.
+        | IrType::WebApp | IrType::WebViewApp | IrType::TuiApp | IrType::CliApp => {
             if template == concrete {
                 Ok(())
             } else {

@@ -20,12 +20,13 @@
 //!   `emit_webview_fn` (raw function name for `FuncValue`, fallback to
 //!   `emit_expr_at`). A named `fn` item satisfies `Send + Sync + 'static` via
 //!   the blanket impl; `Box<dyn Fn>` does not without explicit bound annotation.
-//! * **G3**: The `fn main` entry MUST use `block_on_current_thread(ipe_main())`
-//!   when `uses_webview` is set. This switch is performed in `project.rs`
-//!   (`emit_program`) via an anchor-asserted `replacen-once` that aborts with
-//!   `CompilerBug` on zero-match — ensuring a well-typed Webview app never
-//!   silently runs the event loop off the main thread (a hard tao/Cocoa
-//!   `NSApplication` requirement on macOS).
+//! * The `fn main` entry uses `ipe_main().run_blocking()` for shape app
+//!   entries. For `WebViewApp`, `run_blocking()` internally calls
+//!   `block_on_current_thread`, satisfying tao/Cocoa's requirement that the
+//!   event loop runs on the process main thread (hard `NSApplication`
+//!   requirement on macOS). This switch is performed in `project.rs`
+//!   (`emit_program` / `emit_spine`) via an anchor-asserted `replacen-once`
+//!   that aborts with `CompilerBug` on zero-match.
 
 use ipe_diagnostics::{DResult, Diagnostic};
 use ipe_ir::{Callee, Expr, KernelFn};
@@ -200,13 +201,13 @@ fn emit_webview_app_inner(
     let h_s = emit_expr_at(ctx, h_e, indent, child, generics)?;
 
     Ok(Some(format!(
-        "ipe_runtime::webview::webview_app(\
+        "ipe_runtime::tea::WebViewApp(ipe_runtime::webview::webview_app(\
          {init_s}, \
          {update_s}, \
          {view_s}, \
          {subs_s}, \
          ipe_runtime::webview::WebViewWindowCfg {{ title: {title_s}, size: ({w_s}, {h_s}) }}\
-         )"
+         ))"
     )))
 }
 

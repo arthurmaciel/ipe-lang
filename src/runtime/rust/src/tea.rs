@@ -600,6 +600,69 @@ where
     })
 }
 
+// ─── Shape opaque app-leaf types ──────────────────────────────────────────
+//
+// Each entry builder (`Web.app`, `WebView.app`, `Terminal.appScreen`,
+// `Terminal.appLines`) returns one of these opaque handles instead of
+// `IpeTask<E, ()>`. The handle wraps the underlying task and exposes a single
+// `run_blocking` method consumed by the emitted `fn main()`. This erases the
+// msg/model type parameters from the program's `main` type signature while
+// keeping the emit path concrete (no `dyn`).
+
+/// Opaque app handle returned by `Web.app` / `Web.appRouted` / `Web.appWith`.
+/// Backed by a boxed `IpeTask<IpeError, ()>`; run via `run_blocking`.
+#[cfg(not(target_arch = "wasm32"))]
+pub struct WebApp(pub crate::IpeTask<crate::error::IpeError, ()>);
+
+#[cfg(not(target_arch = "wasm32"))]
+impl WebApp {
+    /// Blocking entry: drives the underlying task to completion on a
+    /// fresh tokio runtime. Returns the task's `IpeResult`.
+    pub fn run_blocking(self) -> crate::IpeResult<crate::error::IpeError, ()> {
+        crate::task::block_on(self.0)
+    }
+}
+
+/// Opaque app handle returned by `WebView.app`.
+/// Backed by a boxed `IpeTask<IpeError, ()>`; run via `run_blocking` on the
+/// current thread (tao/Cocoa mandates the process main thread on macOS).
+#[cfg(not(target_arch = "wasm32"))]
+pub struct WebViewApp(pub crate::IpeTask<crate::error::IpeError, ()>);
+
+#[cfg(not(target_arch = "wasm32"))]
+impl WebViewApp {
+    /// Blocking entry on the CURRENT thread (required by tao/Cocoa on macOS).
+    pub fn run_blocking(self) -> crate::IpeResult<crate::error::IpeError, ()> {
+        crate::task::block_on_current_thread(self.0)
+    }
+}
+
+/// Opaque app handle returned by `Terminal.appScreen`.
+/// Backed by a boxed `IpeTask<IpeError, ()>`; run via `run_blocking`.
+#[cfg(not(target_arch = "wasm32"))]
+pub struct TuiApp(pub crate::IpeTask<crate::error::IpeError, ()>);
+
+#[cfg(not(target_arch = "wasm32"))]
+impl TuiApp {
+    /// Blocking entry: drives the underlying task to completion.
+    pub fn run_blocking(self) -> crate::IpeResult<crate::error::IpeError, ()> {
+        crate::task::block_on(self.0)
+    }
+}
+
+/// Opaque app handle returned by `Terminal.appLines`.
+/// Backed by a boxed `IpeTask<IpeError, ()>`; run via `run_blocking`.
+#[cfg(not(target_arch = "wasm32"))]
+pub struct CliApp(pub crate::IpeTask<crate::error::IpeError, ()>);
+
+#[cfg(not(target_arch = "wasm32"))]
+impl CliApp {
+    /// Blocking entry: drives the underlying task to completion.
+    pub fn run_blocking(self) -> crate::IpeResult<crate::error::IpeError, ()> {
+        crate::task::block_on(self.0)
+    }
+}
+
 // ─── Cmd.map / Sub.map unit tests ──────────────────────────────────────────
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
