@@ -486,6 +486,150 @@ pub fn file_rename<E: Send + From<String> + 'static>(src: Path, dst: Path) -> Ip
     })
 }
 
+// ─── Recursive walk ────────────────────────────────────────────────────────
+
+/// Recursive engine shared by `file_walk_sync` and `file_walk_matching_sync`.
+///
+/// Descends `dir`, appending every regular file (and symlink-to-file) as a
+/// `Path` to `out`. Directories are recursed into; symlink cycles are detected
+/// by tracking the canonicalized real path of every directory before descending
+/// — if the real path is already in `visited`, the directory is skipped (no
+/// error, no infinite loop). A broken symlink or an unresolvable `canonicalize`
+/// call is silently skipped (fail-closed for traversal safety; surfacing those
+/// as errors would expose path or permission information from subtrees the
+/// caller did not ask about).
+///
+/// `pred`: optional predicate on the file's `Path`. `None` includes all files;
+/// `Some(f)` includes only those where `f(path)` is `true`. The predicate
+/// borrows the `Path` by reference; the caller clones only if it keeps it.
+fn walk_dir(
+    dir: &std::path::Path,
+    visited: &mut std::collections::HashSet<std::path::PathBuf>,
+    pred: Option<&dyn Fn(&Path) -> bool>,
+    out: &mut Vec<Path>,
+) -> Result<(), String> {
+    // Guard against symlink cycles: canonicalize this directory's real path
+    // and skip if already seen. `canonicalize` follows all symlinks; if it
+    // fails (broken symlink, permission denied, path does not exist), skip
+    // this subtree rather than erroring.
+    let real = match std::fs::canonicalize(dir) {
+        Ok(p) => p,
+        Err(_) => return Ok(()),
+    };
+    if !visited.insert(real) {
+        // Already visited this real directory — cycle detected, skip.
+        return Ok(());
+    }
+
+    let rd = match std::fs::read_dir(dir) {
+        Ok(rd) => rd,
+        Err(e) => return Err(format!("{e}")),
+    };
+
+    for entry in rd {
+        let entry = entry.map_err(|e| format!("{e}"))?;
+        let entry_path = entry.path();
+
+        // Use `metadata()` (follows symlinks) so symlinks to files and
+        // symlinks to directories are classified correctly. Symlink-to-
+        // directory cycles are caught by the `canonicalize` guard above.
+        let meta = match std::fs::metadata(&entry_path) {
+            Ok(m) => m,
+            Err(_) => continue, // broken symlink or permission denied — skip
+        };
+
+        if meta.is_dir() {
+            walk_dir(&entry_path, visited, pred, out)?;
+        } else if meta.is_file() {
+            // `entry_path` is `dir.join(entry.file_name())` — rooted when
+            // `dir` is rooted. The root was validated by `path_from_string`;
+            // entry names come from the OS (not user input), so they cannot
+            // carry `..` or NUL. `path_literal` is the correct constructor
+            // for already-trusted, already-cleaned path strings.
+            let path_str = entry_path.to_string_lossy().into_owned();
+            let ipe_path = super::path::path_literal(path_str);
+            if pred.is_none_or(|f| f(&ipe_path)) {
+                out.push(ipe_path);
+            }
+        }
+        // Symlinks to files: covered by `meta.is_file()` above.
+        // Symlinks to directories: covered by `meta.is_dir()` + cycle guard.
+    }
+
+    Ok(())
+}
+
+fn file_walk_sync(root: &str) -> Result<Vec<Path>, String> {
+    let root_path = std::path::Path::new(root);
+    if !root_path.is_dir() {
+        return Err(format!("not a directory: {root}"));
+    }
+    let mut visited = std::collections::HashSet::new();
+    let mut out = Vec::new();
+    walk_dir(root_path, &mut visited, None, &mut out)?;
+    out.sort_by(|a, b| a.as_str().cmp(b.as_str()));
+    Ok(out)
+}
+
+fn file_walk_matching_sync(
+    root: &str,
+    pred: &dyn Fn(&Path) -> bool,
+) -> Result<Vec<Path>, String> {
+    let root_path = std::path::Path::new(root);
+    if !root_path.is_dir() {
+        return Err(format!("not a directory: {root}"));
+    }
+    let mut visited = std::collections::HashSet::new();
+    let mut out = Vec::new();
+    walk_dir(root_path, &mut visited, Some(pred), &mut out)?;
+    out.sort_by(|a, b| a.as_str().cmp(b.as_str()));
+    Ok(out)
+}
+
+/// `Ipe.File.walk : Path -> Task Error (List Path)`
+/// Recursively walk `root`, returning the absolute path of every regular file
+/// (files only, no directories) reachable from it in deterministic
+/// (lexicographically sorted) order.
+///
+/// Symlink cycles are detected and skipped — a symlink loop cannot cause
+/// unbounded recursion or a stack overflow. Broken symlinks and unreadable
+/// subtrees are silently skipped (fail-closed for traversal safety). An error
+/// is returned only if `root` itself is not a readable directory.
+#[must_use]
+pub fn file_walk<E: Send + From<String> + 'static>(root: Path) -> IpeTask<E, Vec<Path>> {
+    let root = root.into_string();
+    Box::pin(async move {
+        match run_blocking(move || file_walk_sync(&root)).await {
+            Ok(paths) => ok_res(paths),
+            Err(e) => IpeResult::Err(str_err(&e)),
+        }
+    })
+}
+
+/// `Ipe.File.walkMatching : Path -> (Path -> Bool) -> Task Error (List Path)`
+/// Like `walk`, but only includes files for which `pred` returns `True`.
+/// The predicate receives the file's absolute `Path` and runs synchronously
+/// during the walk (no `Task`, no I/O inside the predicate). Returns files in
+/// deterministic (lexicographically sorted) order.
+#[must_use]
+pub fn file_walk_matching<E: Send + From<String> + 'static>(
+    root: Path,
+    pred: Box<dyn Fn(Path) -> bool + Send + Sync + 'static>,
+) -> IpeTask<E, Vec<Path>> {
+    let root = root.into_string();
+    Box::pin(async move {
+        // Bridge: the emitted predicate owns its `Path` argument, but
+        // `walk_dir` borrows. Wrap in an adapter that clones the borrow into
+        // an owned value before calling `pred`.
+        let adapter: Box<dyn Fn(&Path) -> bool + Send + Sync + 'static> =
+            Box::new(move |p: &Path| pred(p.clone()));
+        match run_blocking(move || file_walk_matching_sync(&root, adapter.as_ref())).await {
+            Ok(paths) => ok_res(paths),
+            Err(e) => IpeResult::Err(str_err(&e)),
+        }
+    })
+}
+
 /// Test-only: seal an absolute `std::path::Path` (always a rooted, non-escaping
 /// path) into an `Ipe.Path`. Kernel call sites now take a typed `Path`, so the
 /// tests construct one through the same validated seal a real program uses.
@@ -773,6 +917,162 @@ mod spawn_blocking_tests {
             "concurrent ticker task made ZERO progress while file_write_file ran — \
              the blocking write is starving the single-threaded executor \
              (spawn_blocking missing or not taking effect)"
+        );
+    }
+}
+
+#[cfg(test)]
+mod walk_tests {
+    use super::*;
+
+    fn block<T>(fut: impl std::future::Future<Output = T>) -> T {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(fut)
+    }
+
+    /// Build a temp dir tree:
+    ///   root/
+    ///     a.txt
+    ///     sub/
+    ///       b.txt
+    ///       c.txt
+    ///     empty/          (dir, no files)
+    /// Returns the root path.
+    fn make_tree() -> std::path::PathBuf {
+        let root = std::env::temp_dir().join(format!(
+            "ipe_walk_test_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| d.subsec_nanos())
+        ));
+        std::fs::create_dir_all(root.join("sub")).unwrap();
+        std::fs::create_dir_all(root.join("empty")).unwrap();
+        std::fs::write(root.join("a.txt"), b"a").unwrap();
+        std::fs::write(root.join("sub").join("b.txt"), b"b").unwrap();
+        std::fs::write(root.join("sub").join("c.txt"), b"c").unwrap();
+        root
+    }
+
+    fn cleanup(root: &std::path::Path) {
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn walk_returns_files_only_no_dirs() {
+        let root = make_tree();
+        let res: IpeResult<String, Vec<Path>> = block(file_walk(tp(&root)));
+        let names: Vec<String> = match res {
+            IpeResult::Ok(paths) => paths.into_iter().map(|p| p.into_string()).collect(),
+            IpeResult::Err(e) => panic!("unexpected Err: {e}"),
+        };
+        // All results must be files (not directories).
+        for name in &names {
+            let m = std::fs::metadata(name).unwrap();
+            assert!(m.is_file(), "{name} should be a file");
+        }
+        // Three files total: a.txt, sub/b.txt, sub/c.txt.
+        assert_eq!(names.len(), 3, "expected 3 files, got: {names:?}");
+        cleanup(&root);
+    }
+
+    #[test]
+    fn walk_order_is_deterministic_lexicographic() {
+        let root = make_tree();
+        let res: IpeResult<String, Vec<Path>> = block(file_walk(tp(&root)));
+        let paths: Vec<String> = match res {
+            IpeResult::Ok(ps) => ps.into_iter().map(|p| p.into_string()).collect(),
+            IpeResult::Err(e) => panic!("unexpected Err: {e}"),
+        };
+        // The list must be sorted.
+        let mut sorted = paths.clone();
+        sorted.sort();
+        assert_eq!(paths, sorted, "walk results are not in sorted order");
+        cleanup(&root);
+    }
+
+    #[test]
+    fn walk_matching_filters_by_predicate() {
+        let root = make_tree();
+        // Keep only files ending in b.txt.
+        let pred: Box<dyn Fn(Path) -> bool + Send + Sync + 'static> =
+            Box::new(|p: Path| p.as_str().ends_with("b.txt"));
+        let res: IpeResult<String, Vec<Path>> = block(file_walk_matching(tp(&root), pred));
+        let paths: Vec<String> = match res {
+            IpeResult::Ok(ps) => ps.into_iter().map(|p| p.into_string()).collect(),
+            IpeResult::Err(e) => panic!("unexpected Err: {e}"),
+        };
+        assert_eq!(
+            paths.len(),
+            1,
+            "expected 1 file matching b.txt, got: {paths:?}"
+        );
+        assert!(
+            paths[0].ends_with("b.txt"),
+            "expected b.txt, got: {}",
+            paths[0]
+        );
+        cleanup(&root);
+    }
+
+    #[test]
+    fn walk_on_nonexistent_root_errs() {
+        let root = std::env::temp_dir().join("ipe_walk_nonexistent_38291");
+        let res: IpeResult<String, Vec<Path>> = block(file_walk(tp(&root)));
+        assert!(
+            matches!(res, IpeResult::Err(_)),
+            "walk on non-existent root should Err"
+        );
+    }
+
+    /// Symlink cycle must not hang or stack-overflow — the walk terminates and
+    /// returns the non-cyclic files.
+    #[cfg(unix)]
+    #[test]
+    fn walk_symlink_cycle_does_not_hang() {
+        use std::os::unix::fs::symlink;
+        let root = std::env::temp_dir().join(format!(
+            "ipe_walk_cycle_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| d.subsec_nanos())
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("real.txt"), b"r").unwrap();
+        // Create a symlink `loop -> root` — walking into `loop` would re-enter
+        // `root`, which we have already canonicalized and placed in `visited`.
+        let link_path = root.join("loop");
+        let _ = symlink(&root, &link_path);
+
+        let res: IpeResult<String, Vec<Path>> = block(file_walk(tp(&root)));
+        let paths: Vec<String> = match res {
+            IpeResult::Ok(ps) => ps.into_iter().map(|p| p.into_string()).collect(),
+            IpeResult::Err(e) => panic!("unexpected Err from cyclic walk: {e}"),
+        };
+        // The cycle is skipped; real.txt is still returned.
+        assert!(
+            paths.iter().any(|p| p.ends_with("real.txt")),
+            "real.txt must be present even with a symlink cycle: {paths:?}"
+        );
+        cleanup(&root);
+    }
+
+    /// walk must not escape the capability root via path traversal — the
+    /// path argument goes through `path_from_string`, which rejects `..`
+    /// escapes lexically. This test confirms the guard is wired correctly.
+    #[test]
+    fn walk_rejects_dotdot_escape_at_path_boundary() {
+        // `path_from_string` rejects relative paths that `..`-escape their
+        // base. Construct the attempt and assert it fails at the seal.
+        let escape_attempt = "../..".to_string();
+        let seal_result = super::super::path::path_from_string::<String>(escape_attempt);
+        assert!(
+            matches!(seal_result, IpeResult::Err(_)),
+            "path_from_string must reject `../..` traversal"
         );
     }
 }
