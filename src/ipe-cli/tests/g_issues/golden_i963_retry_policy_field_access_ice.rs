@@ -1,6 +1,6 @@
 //! Regression for the `RetryPolicy` struct-synthesis ICE (IPE-I0001).
 //!
-//! Accessing a `RetryPolicy` field (`policy.maxAttempts`, `.kind`, `.jitter`,
+//! Accessing a `RetryPolicy` field (`policy.maxAttempts`, `.strategy`, `.baseMs`,
 //! ...) or passing a predicate lambda to `retryOn` / `withRetryOn` triggered
 //! IPE-I0001 when the solver left the type parameter `e` of `RetryPolicy e` as
 //! a free `Ty::Var`.  The root cause: `collect_records_in_ty`'s
@@ -9,7 +9,7 @@
 //! the synthesis table.  The backend's `record_struct_by_key` then could not
 //! find it and raised a `CompilerBug` ICE.
 //!
-//! Fix: before the `ty_contains_var` guard, detect the exact 5-field closed
+//! Fix: before the `ty_contains_var` guard, detect the exact 4-field closed
 //! `RetryPolicy` shape and register its concrete IR with `e` fixed to
 //! `IrType::Error` (the only runtime instantiation).  The struct is then
 //! found by all retry-kernel paths in `emit_task_retry_call`.
@@ -68,7 +68,7 @@ fn retry_policy_nearmiss_still_rejects() {
         Some(ipe_diagnostics::IPE_L0107),
         "a user `{{ shouldRetry : Int -> Int }}` record must still fail closed \
          with IPE-L0107 after the fix — the RetryPolicy exemption is scoped to \
-         the exact 5-field closed shape; got: {built:?}"
+         the exact 4-field closed shape; got: {built:?}"
     );
 }
 

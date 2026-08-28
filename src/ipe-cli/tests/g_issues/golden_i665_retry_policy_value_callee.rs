@@ -12,7 +12,7 @@
 //! kernel-managed (`emit_task_retry_call` emits `shouldRetry` as an
 //! `Arc<dyn Fn>` field and skips the `Clone`/`PartialEq` derives), so it is a
 //! sound end-to-end path, not a generic derive carrier. The gate exempts
-//! exactly the closed five-field shape; a user record that merely names a
+//! exactly the closed four-field shape; a user record that merely names a
 //! `shouldRetry` field, or any near-miss, still fails closed.
 //!
 //! This golden is the end-to-end SEAL lock: the emitted crate must `cargo
@@ -103,7 +103,7 @@ fn retry_policy_value_callee_builds_and_runs() {
 }
 
 /// SEAL negative: the `RetryPolicy` exemption must be scoped to the FULL closed
-/// `{ baseMs, jitter, kind, maxAttempts, shouldRetry }` shape, never a lone
+/// `{ baseMs, maxAttempts, shouldRetry, strategy }` shape, never a lone
 /// `shouldRetry` key. A USER record `{ shouldRetry : Int -> Int }` threaded
 /// through the value-callee path is NOT that kernel record — exempting it would
 /// route its fn field onto the kernel-struct `Arc` carrier while the ordinary

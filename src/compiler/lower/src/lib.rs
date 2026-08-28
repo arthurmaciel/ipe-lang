@@ -232,6 +232,12 @@ pub fn lower(
         hm_patch: interner.intern("Patch").map_err(homeless)?,
         hm_head: interner.intern("Head").map_err(homeless)?,
         hm_options: interner.intern("Options").map_err(homeless)?,
+        // ── BackoffStrategy ADT ─────────────────────────────────
+        backoffstrategy: interner.intern("BackoffStrategy").map_err(homeless)?,
+        bs_linear: interner.intern("Linear").map_err(homeless)?,
+        bs_linear_with_jitter: interner.intern("LinearWithJitter").map_err(homeless)?,
+        bs_exponential: interner.intern("Exponential").map_err(homeless)?,
+        bs_exponential_with_jitter: interner.intern("ExponentialWithJitter").map_err(homeless)?,
     };
     lower::Lowerer::new(
         m,
