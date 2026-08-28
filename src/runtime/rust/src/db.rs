@@ -2686,7 +2686,7 @@ pub fn db_find_projection<E: Send + From<String> + 'static>(
     right_table: String,
     right_alias: String,
     frag: SqlFragment,
-    projections: Vec<(String, String)>,
+    projections: Vec<(String, String, String)>,
     extra_binds: Vec<SqlParam>,
 ) -> IpeTask<E, Vec<HashMap<String, String>>> {
     Box::pin(async move {
@@ -2806,7 +2806,7 @@ pub fn db_find_projection_ordered<E: Send + From<String> + 'static>(
     right_table: String,
     right_alias: String,
     frag: SqlFragment,
-    projections: Vec<(String, String)>,
+    projections: Vec<(String, String, String)>,
     extra_binds: Vec<SqlParam>,
     order_alias: String,
     order_col: String,
@@ -2873,25 +2873,36 @@ fn parse_order_clause(alias: &str, col: &str, ascending: bool) -> Result<String,
 }
 
 /// Build the single parameterized projection statement from the two validated
-/// sides, the ordered projection references, and the combinator-built WHERE
-/// text. The SELECT names only the projected `alias.column AS p<index>` terms
+/// sides, the ordered projection term triples, and the combinator-built WHERE
+/// text. The SELECT names only the projected terms as `p<index>` outputs
 /// (column pushdown), the FROM lists both `table AS alias` terms, and the WHERE
 /// is the `?`-placeholder fragment text.
 ///
-/// Projection pairs with an empty alias are `Store.literal` positions: the
-/// emitted SELECT term is `? AS p<index>` — the value binds as a `?` parameter
-/// before the WHERE parameters, never interpolated. The returned `usize` is the
-/// count of such literal positions so the caller can validate the bound
-/// `extra_binds` slice.
+/// Each projection triple `(tag, operand_a, operand_b)` encodes one SELECT term:
 ///
-/// Every non-empty identifier passes `SqlIdent::parse_plain`; the two sides
-/// must carry distinct aliases and the projection must name at least one column.
+/// - `("", "", "")` — `Store.literal` position: emits `? AS p<index>`; the
+///   bound value comes from `extra_binds` in positional order.
+/// - `("UPPER"/"LOWER", dotted_col, "")` — unary text function sentinel:
+///   emits `UPPER(alias.col) AS p<index>` or `LOWER(…)`. `dotted_col` is
+///   `"alias.col"` re-validated via `SqlIdent::parse_dotted`.
+/// - `("COALESCE", operand_a, operand_b)` — binary COALESCE sentinel: each
+///   non-empty operand is a dotted column re-validated via `parse_dotted`; an
+///   empty operand is a `?` placeholder whose value binds from `extra_binds`.
+///   Emits `COALESCE(a, b) AS p<index>`.
+/// - `(alias, column, "")` — plain `alias.column AS p<index>` column reference.
+///
+/// The returned `usize` is the total count of `?` parameter positions across
+/// all terms so the caller can validate the bound `extra_binds` slice.
+///
+/// Every non-empty identifier passes `SqlIdent::parse_plain` or
+/// `SqlIdent::parse_dotted` before it reaches SQL text; the two sides must
+/// carry distinct aliases and the projection must name at least one term.
 fn build_projection_statement(
     left_table: &str,
     left_alias: &str,
     right_table: &str,
     right_alias: &str,
-    projections: &[(String, String)],
+    projections: &[(String, String, String)],
     where_sql: &str,
 ) -> Result<(String, usize), String> {
     let left_table_id =
@@ -2913,29 +2924,42 @@ fn build_projection_statement(
     }
     let mut terms = Vec::with_capacity(projections.len());
     let mut literal_count: usize = 0;
-    for (index, (alias, column)) in projections.iter().enumerate() {
+    for (index, (tag, operand_a, operand_b)) in projections.iter().enumerate() {
         let output_name = format!("p{index}");
         let output = SqlIdent::parse_plain(&output_name)
             .ok_or_else(|| format!("invalid projection output {output_name:?}"))?;
-        if alias.is_empty() {
+        if tag.is_empty() {
             // `Store.literal` position: bind the value as a `?` parameter.
             terms.push(format!("? AS {}", output.as_str()));
             literal_count += 1;
-        } else if alias == "UPPER" || alias == "LOWER" {
-            // `Store.upper` / `Store.lower` sentinel: `column` is "alias.col"
+        } else if tag == "UPPER" || tag == "LOWER" {
+            // `Store.upper` / `Store.lower` sentinel: `operand_a` is "alias.col"
             // (dotted). Validate via `SqlIdent::parse_dotted` (defence in depth)
             // before interpolation — the SQL function name comes from our own
-            // enum, never from user input.
-            let dotted = SqlIdent::parse_dotted(column)
-                .ok_or_else(|| format!("invalid projection column {column:?}"))?;
+            // closed tag set, never from user input.
+            let dotted = SqlIdent::parse_dotted(operand_a)
+                .ok_or_else(|| format!("invalid projection column {operand_a:?}"))?;
             terms.push(format!(
                 "{fn_name}({col}) AS {out}",
-                fn_name = alias,
+                fn_name = tag,
                 col = dotted.as_str(),
                 out = output.as_str(),
             ));
+        } else if tag == "COALESCE" {
+            // `Store.coalesce` sentinel: each non-empty operand is a dotted
+            // column re-validated via `parse_dotted`; an empty operand is a `?`
+            // whose value binds from `extra_binds`. The SQL function name comes
+            // from our own closed tag set, never from user input.
+            let a_sql = render_coalesce_operand(operand_a, &mut literal_count)?;
+            let b_sql = render_coalesce_operand(operand_b, &mut literal_count)?;
+            terms.push(format!(
+                "COALESCE({a}, {b}) AS {out}",
+                a = a_sql,
+                b = b_sql,
+                out = output.as_str(),
+            ));
         } else {
-            let projected = ProjectionColumn::parse(alias, column, index)?;
+            let projected = ProjectionColumn::parse(tag, operand_a, index)?;
             terms.push(projected.projection_term());
         }
     }
@@ -2953,6 +2977,22 @@ fn build_projection_statement(
     ))
 }
 
+/// Render one operand of a `COALESCE` projection term for inclusion in the
+/// generated SQL. A non-empty operand is a dotted `alias.column` reference
+/// re-validated via [`SqlIdent::parse_dotted`] (defence in depth) before it
+/// reaches SQL text. An empty operand is a literal `?` placeholder whose bound
+/// value comes from `extra_binds` at the position tracked by `literal_count`.
+fn render_coalesce_operand(operand: &str, literal_count: &mut usize) -> Result<String, String> {
+    if operand.is_empty() {
+        *literal_count += 1;
+        Ok("?".to_string())
+    } else {
+        let dotted = SqlIdent::parse_dotted(operand)
+            .ok_or_else(|| format!("invalid COALESCE operand {operand:?}"))?;
+        Ok(dotted.as_str().to_string())
+    }
+}
+
 /// Build the projection statement like `build_projection_statement` but append
 /// `ORDER BY <order_clause>`. The `order_clause` string was produced by
 /// `parse_order_clause` and contains only pre-validated identifiers. Returns
@@ -2963,7 +3003,7 @@ fn build_projection_statement_ordered(
     left_alias: &str,
     right_table: &str,
     right_alias: &str,
-    projections: &[(String, String)],
+    projections: &[(String, String, String)],
     where_sql: &str,
     order_clause: &str,
 ) -> Result<(String, usize), String> {
@@ -2986,24 +3026,33 @@ fn build_projection_statement_ordered(
     }
     let mut terms = Vec::with_capacity(projections.len());
     let mut literal_count: usize = 0;
-    for (index, (alias, column)) in projections.iter().enumerate() {
+    for (index, (tag, operand_a, operand_b)) in projections.iter().enumerate() {
         let output_name = format!("p{index}");
         let output = SqlIdent::parse_plain(&output_name)
             .ok_or_else(|| format!("invalid projection output {output_name:?}"))?;
-        if alias.is_empty() {
+        if tag.is_empty() {
             terms.push(format!("? AS {}", output.as_str()));
             literal_count += 1;
-        } else if alias == "UPPER" || alias == "LOWER" {
-            let dotted = SqlIdent::parse_dotted(column)
-                .ok_or_else(|| format!("invalid projection column {column:?}"))?;
+        } else if tag == "UPPER" || tag == "LOWER" {
+            let dotted = SqlIdent::parse_dotted(operand_a)
+                .ok_or_else(|| format!("invalid projection column {operand_a:?}"))?;
             terms.push(format!(
                 "{fn_name}({col}) AS {out}",
-                fn_name = alias,
+                fn_name = tag,
                 col = dotted.as_str(),
                 out = output.as_str(),
             ));
+        } else if tag == "COALESCE" {
+            let a_sql = render_coalesce_operand(operand_a, &mut literal_count)?;
+            let b_sql = render_coalesce_operand(operand_b, &mut literal_count)?;
+            terms.push(format!(
+                "COALESCE({a}, {b}) AS {out}",
+                a = a_sql,
+                b = b_sql,
+                out = output.as_str(),
+            ));
         } else {
-            let projected = ProjectionColumn::parse(alias, column, index)?;
+            let projected = ProjectionColumn::parse(tag, operand_a, index)?;
             terms.push(projected.projection_term());
         }
     }
@@ -6050,7 +6099,7 @@ mod tests {
             "a0",
             "authors",
             "a1",
-            &[("a1".to_string(), "name".to_string())],
+            &[("a1".to_string(), "name".to_string(), "".to_string())],
             &frag.sql,
         )
         .expect("statement builds");
@@ -6080,8 +6129,8 @@ mod tests {
             "authors",
             "a1",
             &[
-                ("a0".to_string(), "title".to_string()),
-                ("a1".to_string(), "name".to_string()),
+                ("a0".to_string(), "title".to_string(), "".to_string()),
+                ("a1".to_string(), "name".to_string(), "".to_string()),
             ],
             &frag.sql,
         )
@@ -6109,8 +6158,12 @@ mod tests {
             "authors",
             "a1",
             &[
-                ("a0".to_string(), "title".to_string()),
-                ("a1".to_string(), "name); DROP TABLE authors".to_string()),
+                ("a0".to_string(), "title".to_string(), "".to_string()),
+                (
+                    "a1".to_string(),
+                    "name); DROP TABLE authors".to_string(),
+                    "".to_string(),
+                ),
             ],
             &frag.sql,
         );
@@ -6138,7 +6191,7 @@ mod tests {
             "a0",
             "authors",
             "a1",
-            &[("a1".to_string(), "name".to_string())],
+            &[("a1".to_string(), "name".to_string(), "".to_string())],
             &frag.sql,
         )
         .expect("statement builds");
@@ -6168,7 +6221,11 @@ mod tests {
             "a0",
             "authors",
             "a1",
-            &[("a1".to_string(), "name; DROP TABLE authors".to_string())],
+            &[(
+                "a1".to_string(),
+                "name; DROP TABLE authors".to_string(),
+                "".to_string(),
+            )],
             &frag.sql,
         );
         assert!(
@@ -6210,7 +6267,7 @@ mod tests {
             "authors".into(),
             "a1".into(),
             frag,
-            vec![("a1".to_string(), "name".to_string())],
+            vec![("a1".to_string(), "name".to_string(), "".to_string())],
             vec![],
         )
         .await;
@@ -6248,8 +6305,8 @@ mod tests {
             "a1".into(),
             frag,
             vec![
-                ("a0".to_string(), "title".to_string()),
-                ("a1".to_string(), "name".to_string()),
+                ("a0".to_string(), "title".to_string(), "".to_string()),
+                ("a1".to_string(), "name".to_string(), "".to_string()),
             ],
             vec![],
         )
@@ -7106,7 +7163,7 @@ mod tests {
 
     // ── Store.upper / Store.lower sentinel: `UPPER/LOWER(alias.col) AS pN` ─────
 
-    /// Golden SQL: the `("UPPER", "a1.name")` sentinel pair emits exactly
+    /// Golden SQL: the `("UPPER", "a1.name", "")` sentinel triple emits exactly
     /// `UPPER(a1.name) AS p0` — the SQL function name comes from our own closed
     /// tag set, and the dotted column reference is re-validated via
     /// `SqlIdent::parse_dotted` (defence in depth) before interpolation.
@@ -7121,7 +7178,7 @@ mod tests {
             "a0",
             "authors",
             "a1",
-            &[("UPPER".to_string(), "a1.name".to_string())],
+            &[("UPPER".to_string(), "a1.name".to_string(), "".to_string())],
             &frag.sql,
         )
         .expect("UPPER sentinel with a valid dotted column must build");
@@ -7153,6 +7210,7 @@ mod tests {
             &[(
                 "UPPER".to_string(),
                 "a1.name); DROP TABLE authors".to_string(),
+                "".to_string(),
             )],
             &frag.sql,
         );
@@ -7165,7 +7223,11 @@ mod tests {
             "a0",
             "authors",
             "a1",
-            &[("UPPER".to_string(), "a1.name col".to_string())],
+            &[(
+                "UPPER".to_string(),
+                "a1.name col".to_string(),
+                "".to_string(),
+            )],
             &frag.sql,
         );
         assert!(
@@ -7177,7 +7239,11 @@ mod tests {
             "a0",
             "authors",
             "a1",
-            &[("UPPER".to_string(), "a1.name(x)".to_string())],
+            &[(
+                "UPPER".to_string(),
+                "a1.name(x)".to_string(),
+                "".to_string(),
+            )],
             &frag.sql,
         );
         assert!(
@@ -7190,23 +7256,24 @@ mod tests {
 
     /// Golden SQL: a mixed projection with one `Store.literal` position and one
     /// column reference lowers to `SELECT ? AS p0, a1.name AS p1 FROM … WHERE …`.
-    /// The empty-alias sentinel pair produces `? AS p0`; the literal count returned
-    /// is 1 so the caller binds exactly one extra parameter before the WHERE params.
+    /// The empty-tag sentinel triple `("", "", "")` produces `? AS p0`; the literal
+    /// count returned is 1 so the caller binds exactly one extra parameter before
+    /// the WHERE params.
     #[test]
     fn projection_statement_literal_sentinel_emits_question_mark_alias() {
         let frag = sql_eq(
             sql_column("a1.id".to_string()),
             sql_column("a0.author_id".to_string()),
         );
-        // ("", "") is the sentinel for a `Store.literal` position.
+        // ("", "", "") is the sentinel for a `Store.literal` position.
         let (sql, literal_count) = build_projection_statement(
             "books",
             "a0",
             "authors",
             "a1",
             &[
-                ("".to_string(), "".to_string()),
-                ("a1".to_string(), "name".to_string()),
+                ("".to_string(), "".to_string(), "".to_string()),
+                ("a1".to_string(), "name".to_string(), "".to_string()),
             ],
             &frag.sql,
         )
@@ -7235,7 +7302,7 @@ mod tests {
             ),
             sql_eq(sql_column("a1.active".to_string()), sql_param(1_i64)),
         );
-        // Sentinel ("", "") maps to `? AS p0`; "a1"/"name" maps to `a1.name AS p1`.
+        // ("", "", "") maps to `? AS p0`; ("a1", "name", "") maps to `a1.name AS p1`.
         let found: IpeResult<String, Vec<HashMap<String, String>>> = db_find_projection(
             db,
             "books".into(),
@@ -7244,8 +7311,8 @@ mod tests {
             "a1".into(),
             frag,
             vec![
-                ("".to_string(), "".to_string()),
-                ("a1".to_string(), "name".to_string()),
+                ("".to_string(), "".to_string(), "".to_string()),
+                ("a1".to_string(), "name".to_string(), "".to_string()),
             ],
             vec![SqlParam::Text("fiction".to_string())],
         )
@@ -7287,7 +7354,7 @@ mod tests {
             "authors".into(),
             "a1".into(),
             frag,
-            vec![("".to_string(), "".to_string())],
+            vec![("".to_string(), "".to_string(), "".to_string())],
             vec![], // no extra bind for the one literal position — must fail
         )
         .await;
@@ -7295,5 +7362,159 @@ mod tests {
             matches!(found, IpeResult::Err(_)),
             "a mismatched extra_binds count must fail closed"
         );
+    }
+
+    // ── Store.coalesce sentinel: `COALESCE(a, b) AS pN` ──────────────────────
+
+    /// Golden SQL: the `("COALESCE", "a1.name", "")` triple emits exactly
+    /// `COALESCE(a1.name, ?) AS p0` — column operand `a` is re-validated via
+    /// `SqlIdent::parse_dotted`; the empty operand `b` is a `?` bound from
+    /// `extra_binds`. Literal count is 1.
+    #[test]
+    fn projection_statement_coalesce_column_literal_emits_exact_sql() {
+        let frag = sql_eq(
+            sql_column("a1.id".to_string()),
+            sql_column("a0.author_id".to_string()),
+        );
+        let (sql, literal_count) = build_projection_statement(
+            "books",
+            "a0",
+            "authors",
+            "a1",
+            &[(
+                "COALESCE".to_string(),
+                "a1.name".to_string(),
+                "".to_string(),
+            )],
+            &frag.sql,
+        )
+        .expect("COALESCE(column, literal) must build");
+        assert_eq!(
+            literal_count, 1,
+            "one literal position for the empty operand"
+        );
+        assert_eq!(
+            sql,
+            "SELECT COALESCE(a1.name, ?) AS p0 \
+             FROM books AS a0, authors AS a1 WHERE (a1.id = a0.author_id)"
+        );
+    }
+
+    /// Golden SQL: `("COALESCE", "a0.name", "a1.fallback", "")` emits
+    /// `COALESCE(a0.name, a1.fallback) AS p0` — both operands are column
+    /// references re-validated via `SqlIdent::parse_dotted`; no extra bind.
+    #[test]
+    fn projection_statement_coalesce_two_columns_emits_exact_sql() {
+        let frag = sql_eq(
+            sql_column("a1.id".to_string()),
+            sql_column("a0.author_id".to_string()),
+        );
+        let (sql, literal_count) = build_projection_statement(
+            "books",
+            "a0",
+            "authors",
+            "a1",
+            &[(
+                "COALESCE".to_string(),
+                "a0.name".to_string(),
+                "a1.fallback".to_string(),
+            )],
+            &frag.sql,
+        )
+        .expect("COALESCE(column, column) must build");
+        assert_eq!(
+            literal_count, 0,
+            "no literal positions: both operands are columns"
+        );
+        assert_eq!(
+            sql,
+            "SELECT COALESCE(a0.name, a1.fallback) AS p0 \
+             FROM books AS a0, authors AS a1 WHERE (a1.id = a0.author_id)"
+        );
+    }
+
+    /// A bad dotted column inside a COALESCE sentinel is rejected fail-closed.
+    #[test]
+    fn projection_statement_coalesce_rejects_bad_dotted_operand() {
+        let frag = sql_eq(
+            sql_column("a1.id".to_string()),
+            sql_column("a0.author_id".to_string()),
+        );
+        let bad_a = build_projection_statement(
+            "books",
+            "a0",
+            "authors",
+            "a1",
+            &[(
+                "COALESCE".to_string(),
+                "a1.name); DROP TABLE authors".to_string(),
+                "".to_string(),
+            )],
+            &frag.sql,
+        );
+        assert!(
+            bad_a.is_err(),
+            "injection in first COALESCE operand must be rejected fail-closed"
+        );
+        let bad_b = build_projection_statement(
+            "books",
+            "a0",
+            "authors",
+            "a1",
+            &[(
+                "COALESCE".to_string(),
+                "a1.name".to_string(),
+                "a0.col; DROP".to_string(),
+            )],
+            &frag.sql,
+        );
+        assert!(
+            bad_b.is_err(),
+            "injection in second COALESCE operand must be rejected fail-closed"
+        );
+    }
+
+    /// `db_find_projection` with a COALESCE(column, literal) position binds the
+    /// extra param before the WHERE params and returns the coalesced value in `p0`.
+    #[tokio::test]
+    async fn test_find_projection_coalesce_column_literal() {
+        let db = fresh_join_db().await;
+        let frag = sql_and(
+            sql_eq(
+                sql_column("a1.id".to_string()),
+                sql_column("a0.author_id".to_string()),
+            ),
+            sql_eq(sql_column("a1.active".to_string()), sql_param(1_i64)),
+        );
+        // COALESCE(a1.name, ?) — the column is non-null for active Ada, so COALESCE
+        // returns the column value ("Ada"), not the fallback literal.
+        let found: IpeResult<String, Vec<HashMap<String, String>>> = db_find_projection(
+            db,
+            "books".into(),
+            "a0".into(),
+            "authors".into(),
+            "a1".into(),
+            frag,
+            vec![(
+                "COALESCE".to_string(),
+                "a1.name".to_string(),
+                "".to_string(),
+            )],
+            vec![SqlParam::Text("unknown".to_string())],
+        )
+        .await;
+        match found {
+            IpeResult::Ok(rows) => {
+                assert_eq!(rows.len(), 2, "only active author Ada's two books");
+                for row in &rows {
+                    assert_eq!(
+                        row.get("p0").map(String::as_str),
+                        Some("Ada"),
+                        "COALESCE returns the non-null column value"
+                    );
+                }
+            }
+            IpeResult::Err(e) => panic!("expected Ok, got Err({e})"),
+        }
     }
 }
