@@ -25246,6 +25246,36 @@ impl<'a> Lowerer<'a> {
                     }
                     ("Crypto", "randomBytes") => Ok(Callee::Kernel(KernelFn::CryptoRandomBytes)),
                     ("Crypto", "randomToken") => Ok(Callee::Kernel(KernelFn::CryptoRandomToken)),
+                    // ── Crypto typed-key newtypes ───────────────────────
+                    ("Crypto", "keyFromString") => {
+                        Ok(Callee::Kernel(KernelFn::CryptoKeyFromString))
+                    }
+                    ("Crypto", "keyFromBytes") => Ok(Callee::Kernel(KernelFn::CryptoKeyFromBytes)),
+                    ("Crypto", "macToHex") => Ok(Callee::Kernel(KernelFn::CryptoMacToHex)),
+                    ("Crypto", "hmacSha256WithKey") => {
+                        Ok(Callee::Kernel(KernelFn::CryptoHmacSha256WithKey))
+                    }
+                    ("Crypto", "hmacSha512WithKey") => {
+                        Ok(Callee::Kernel(KernelFn::CryptoHmacSha512WithKey))
+                    }
+                    ("Crypto", "aesGcmEncryptKey") => {
+                        Ok(Callee::Kernel(KernelFn::CryptoAesGcmEncryptKey))
+                    }
+                    ("Crypto", "aesGcmDecryptKey") => {
+                        Ok(Callee::Kernel(KernelFn::CryptoAesGcmDecryptKey))
+                    }
+                    ("Crypto", "chacha20EncryptKey") => {
+                        Ok(Callee::Kernel(KernelFn::CryptoChacha20EncryptKey))
+                    }
+                    ("Crypto", "chacha20DecryptKey") => {
+                        Ok(Callee::Kernel(KernelFn::CryptoChacha20DecryptKey))
+                    }
+                    ("Crypto", "aesKeyFromPasswordKey") => {
+                        Ok(Callee::Kernel(KernelFn::CryptoAesKeyFromPasswordKey))
+                    }
+                    ("Crypto", "chachaKeyFromPasswordKey") => {
+                        Ok(Callee::Kernel(KernelFn::CryptoChachaKeyFromPasswordKey))
+                    }
                     // ── Uuid kernels ────────────────────────────────────
                     ("Uuid", "v4") => Ok(Callee::Kernel(KernelFn::UuidV4)),
                     ("Uuid", "v7") => Ok(Callee::Kernel(KernelFn::UuidV7)),
