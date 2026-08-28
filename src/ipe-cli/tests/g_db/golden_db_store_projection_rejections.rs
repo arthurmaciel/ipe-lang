@@ -114,6 +114,27 @@ fn multicol_nested_tuple_element_is_rejected() {
     );
 }
 
+/// `Store.upper` applied to a non-String column (here `Bool`) must be rejected.
+/// The type system rejects this at inference (T0001) because `Store.upper :
+/// String -> String` and `active : Bool` — the wrong type is caught before
+/// lowering fires. This test confirms the program does not compile and does not
+/// slip through to emit broken SQL.
+#[test]
+fn upper_on_non_string_column_is_rejected() {
+    let root = repo_root();
+    let entry = fixture_entry(&root, "db_store_projection_upper_non_string_rejected");
+    let out = std::env::temp_dir().join("ipec_db_store_projection_upper_non_string_rejected");
+    let _ = std::fs::remove_dir_all(&out);
+    let Ok(runtime) = ipe::resolve_runtime() else {
+        return;
+    };
+    let result = ipe::build(&entry, &out, &runtime);
+    assert!(
+        result.is_err(),
+        "Store.upper on a non-String column must be rejected at compile time"
+    );
+}
+
 /// A `Store.literal` whose argument type is not a supported scalar (String /
 /// Int / Bool / Float) is rejected with IPE-L0149 /
 /// `LiteralTypeUnsupported`, and the diagnostic names the unsupported type.

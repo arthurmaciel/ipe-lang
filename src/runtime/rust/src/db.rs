@@ -2921,6 +2921,19 @@ fn build_projection_statement(
             // `Store.literal` position: bind the value as a `?` parameter.
             terms.push(format!("? AS {}", output.as_str()));
             literal_count += 1;
+        } else if alias == "UPPER" || alias == "LOWER" {
+            // `Store.upper` / `Store.lower` sentinel: `column` is "alias.col"
+            // (dotted). Validate via `SqlIdent::parse_dotted` (defence in depth)
+            // before interpolation — the SQL function name comes from our own
+            // enum, never from user input.
+            let dotted = SqlIdent::parse_dotted(column)
+                .ok_or_else(|| format!("invalid projection column {column:?}"))?;
+            terms.push(format!(
+                "{fn_name}({col}) AS {out}",
+                fn_name = alias,
+                col = dotted.as_str(),
+                out = output.as_str(),
+            ));
         } else {
             let projected = ProjectionColumn::parse(alias, column, index)?;
             terms.push(projected.projection_term());
@@ -2980,6 +2993,15 @@ fn build_projection_statement_ordered(
         if alias.is_empty() {
             terms.push(format!("? AS {}", output.as_str()));
             literal_count += 1;
+        } else if alias == "UPPER" || alias == "LOWER" {
+            let dotted = SqlIdent::parse_dotted(column)
+                .ok_or_else(|| format!("invalid projection column {column:?}"))?;
+            terms.push(format!(
+                "{fn_name}({col}) AS {out}",
+                fn_name = alias,
+                col = dotted.as_str(),
+                out = output.as_str(),
+            ));
         } else {
             let projected = ProjectionColumn::parse(alias, column, index)?;
             terms.push(projected.projection_term());

@@ -1447,6 +1447,17 @@ pub enum StdlibKernel {
     /// interpolated into SQL text). An accessor-intercept placeholder: a
     /// point-free or partially-applied `literal` is a fail-closed IPE-L0146.
     StoreLiteral,
+    /// `Store.upper : String -> String` — a projection-body operator that wraps
+    /// a column reference in SQL `UPPER(…)`. Valid only as a direct element of a
+    /// `Store.select` projection body applied to a `side.field` column reference.
+    /// Recognized structurally at lowering; the column is re-validated by the
+    /// runtime (defence in depth). Point-free or partial use is a fail-closed
+    /// IPE-L0146.
+    StoreUpper,
+    /// `Store.lower : String -> String` — a projection-body operator that wraps
+    /// a column reference in SQL `LOWER(…)`. Symmetric counterpart to
+    /// `StoreUpper`; the same structural restrictions apply.
+    StoreLower,
     /// `Store.eqBy : Codec t -> (row -> t) -> t -> Cond` — the accessor-typed
     /// equality leaf for an ENUM or newtype column whose wire form is not
     /// type-derivable. The `Codec t` argument projects the comparison value to a
@@ -3414,6 +3425,11 @@ impl StdlibKernel {
             // runtime name is a never-called placeholder like `store_join`.
             Self::StoreSelect => d("Store", "select", 2, Pure, "store_select"),
             Self::StoreLiteral => d("Store", "literal", 1, Pure, "store_literal"),
+            // Intercepted at lowering (rewritten to a `UPPER`/`LOWER` sentinel
+            // in the projection pair); the runtime-fn name is a never-called
+            // placeholder, the same class as `store_literal`.
+            Self::StoreUpper => d("Store", "upper", 1, Pure, "store_upper"),
+            Self::StoreLower => d("Store", "lower", 1, Pure, "store_lower"),
             // Accessor-typed equality leaf for enum/newtype columns — lowered
             // inline to the `Compare` `Cond` constructor (the value bound through
             // the passed codec), so the runtime-fn name is a never-called
@@ -4970,6 +4986,8 @@ impl StdlibKernel {
         Self::StoreJoin,
         Self::StoreSelect,
         Self::StoreLiteral,
+        Self::StoreUpper,
+        Self::StoreLower,
         Self::StoreEqCol,
         Self::StoreEqBy,
         Self::StoreNeqCol,
@@ -9116,6 +9134,9 @@ impl StdlibKernel {
         Self::StoreSelect,
         // ── Literal projection element — arity-1 (value) ─────────────────────
         Self::StoreLiteral,
+        // ── Unary text projection operators — arity-1 (inner column expr) ─────
+        Self::StoreUpper,
+        Self::StoreLower,
         // ── Query leaves — arity-2 (accessor + store) ────────────────────────
         Self::StoreEqCol,
         Self::StoreEqBy,
@@ -9523,6 +9544,8 @@ impl StdlibKernel {
             | Self::StoreJoin
             | Self::StoreSelect
             | Self::StoreLiteral
+            | Self::StoreUpper
+            | Self::StoreLower
             | Self::StoreEqCol
             | Self::StoreEqBy
             | Self::StoreNeqCol

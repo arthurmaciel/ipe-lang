@@ -230,7 +230,7 @@ module Ipe.Db.Store exposing
     , orderByLeftNamed, orderByRightNamed
     , joinToList, joinToMaybe, joinCount
     , Select
-    , select, selectNamed, literal
+    , select, selectNamed, literal, upper, lower
     , selectToList, selectToMaybe
     , Policy, Secured
     , unrestricted, publicRead, ownerColumn, immutable, andPolicy, secured
@@ -3086,6 +3086,38 @@ select =
 literal : t -> t
 literal =
     Ffi.kernel "Store_literal"
+
+
+-- | `upper col` — inside a `Store.select` projection lambda, applies SQL
+-- `UPPER(…)` to a `String` column reference. Valid only as a direct element of a
+-- `Store.select` projection body applied to a `side.field` accessor; the accessor
+-- must resolve to a `String` column. A non-column or non-String argument is a
+-- fail-closed build error (IPE-L0149). Every column identifier is validated at
+-- compile time and re-checked by the runtime.
+--
+-- Example:
+--
+--     joinedBooks
+--         |> Store.select (\( _, author ) -> upper author.name)
+--         |> Store.selectToList db
+--         -- SQL: SELECT UPPER(a1.name) AS p0 FROM …
+upper : String -> String
+upper =
+    Ffi.kernel "Store_upper"
+
+
+-- | `lower col` — symmetric counterpart to `upper`: applies SQL `LOWER(…)` to
+-- a `String` column reference. The same structural restrictions apply.
+--
+-- Example:
+--
+--     joinedBooks
+--         |> Store.select (\( book, _ ) -> lower book.title)
+--         |> Store.selectToList db
+--         -- SQL: SELECT LOWER(a0.title) AS p0 FROM …
+lower : String -> String
+lower =
+    Ffi.kernel "Store_lower"
 
 
 -- | The lowered form of `select`: the lambda has already been read into the
