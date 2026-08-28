@@ -293,7 +293,8 @@ fn parse_doc_with(rest: &[String], notice: &mut dyn FnMut(&str)) -> Result<DocMo
         })
         .or_else(|| {
             // Also accept `--type=<query>` (single token).
-            rest.iter().find_map(|s| s.strip_prefix("--type=").map(str::to_owned))
+            rest.iter()
+                .find_map(|s| s.strip_prefix("--type=").map(str::to_owned))
         });
 
     // The deprecated `--list` flag still selects the `list` mode. It is a
@@ -334,7 +335,9 @@ fn parse_doc_with(rest: &[String], notice: &mut dyn FnMut(&str)) -> Result<DocMo
                     output_format = Some(OutputFormat::Json);
                 }
                 // Skip the query value token (it follows --type).
-                _ if rest.windows(2).any(|p| matches!(p, [f, v] if f == "--type" && v == tok)) => {}
+                _ if rest
+                    .windows(2)
+                    .any(|p| matches!(p, [f, v] if f == "--type" && v == tok)) => {}
                 flag if flag.starts_with('-') => {
                     return Err(CliError::UsageOwned(format!(
                         "ipe doc --type: unknown flag `{flag}`"
@@ -841,7 +844,7 @@ fn run_doc_lookup_with_fuzzy(key: &str, format: OutputFormat) -> Result<(), CliE
 /// Fail-closed: an unparseable query exits non-zero with a descriptive message.
 fn run_type_search(query: &str, format: OutputFormat) -> Result<(), CliError> {
     use crate::doc_type_search::{
-        render_type_matches_human, render_type_matches_json, type_search, TypeSearchError,
+        TypeSearchError, render_type_matches_human, render_type_matches_json, type_search,
     };
 
     let docs = build_docs(&PathBuf::from(DEFAULT_PATH))?;

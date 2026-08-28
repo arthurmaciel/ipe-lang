@@ -64,8 +64,9 @@ pub fn parse_type_query(src: &str) -> DResult<(TypeAnnotation, Interner)> {
     // Strip the leading `->` and later wrap the parsed type in a
     // `TLambda(TUnit, <parsed>)` phantom to unify with result-matching.
     let trimmed = src.trim();
-    let (is_result_only, effective_src) =
-        trimmed.strip_prefix("->").map_or((false, trimmed), |rest| (true, rest.trim()));
+    let (is_result_only, effective_src) = trimmed
+        .strip_prefix("->")
+        .map_or((false, trimmed), |rest| (true, rest.trim()));
 
     let toks = lexer::lex(effective_src)?;
     let mut p = parser::Parser::new(toks, &mut interner);
