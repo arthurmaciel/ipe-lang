@@ -107,9 +107,9 @@ impl IpeStringify for IpeCssLength {
 pub(crate) enum IpeCssColor {
     Hex(String),
     Rgb(i64, i64, i64),
-    Rgba(i64, i64, i64, f64),
+    Rgba(i64, i64, i64, IpeCssOpacity),
     Hsl(i64, i64, i64),
-    Hsla(i64, i64, i64, f64),
+    Hsla(i64, i64, i64, IpeCssOpacity),
     ColorTransparent,
     ColorCurrent,
     ColorRaw(String),
@@ -152,6 +152,19 @@ impl IpeStringify for IpeCssColor {
                 "ColorRaw {}",
                 (&ipe_runtime::stringify::Wrap(p0)).dispatch()
             ),
+        }
+    }
+}
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum IpeCssOpacity {
+    Opacity(f64),
+}
+impl IpeStringify for IpeCssOpacity {
+    fn ipe_show(&self) -> String {
+        match self {
+            IpeCssOpacity::Opacity(p0) => {
+                format!("Opacity {}", (&ipe_runtime::stringify::Wrap(p0)).dispatch())
+            }
         }
     }
 }
@@ -501,6 +514,20 @@ impl IpeStringify for IpeCssBorderStyle {
         }
     }
 }
+pub(crate) fn user_ipe_css_opacity_of(n: f64) -> IpeCssOpacity {
+    let _ipe_recursion_guard = crate::recursion_guard();
+    (if math_is_nan(n) {
+        IpeCssOpacity::Opacity(0.0)
+    } else {
+        IpeCssOpacity::Opacity(basics_clamp(0.0, 1.0, n))
+    })
+}
+pub(crate) fn user_ipe_css_opacity_to_string(o: IpeCssOpacity) -> String {
+    let _ipe_recursion_guard = crate::recursion_guard();
+    match o {
+        IpeCssOpacity::Opacity(n) => crate::user_ipe_css_float_str(n),
+    }
+}
 pub(crate) fn user_ipe_css_float_str(n: f64) -> String {
     let _ipe_recursion_guard = crate::recursion_guard();
     string_from_float(n)
@@ -570,7 +597,7 @@ pub(crate) fn user_ipe_css_color_to_string(c: IpeCssColor) -> String {
                                     ",".to_string(),
                                     format!(
                                         "{}{}",
-                                        crate::user_ipe_css_float_str(a),
+                                        crate::user_ipe_css_opacity_to_string(a),
                                         ")".to_string()
                                     )
                                 )
@@ -624,7 +651,7 @@ pub(crate) fn user_ipe_css_color_to_string(c: IpeCssColor) -> String {
                                     "%,".to_string(),
                                     format!(
                                         "{}{}",
-                                        crate::user_ipe_css_float_str(a),
+                                        crate::user_ipe_css_opacity_to_string(a),
                                         ")".to_string()
                                     )
                                 )
@@ -651,7 +678,7 @@ pub(crate) fn user_ipe_css_vw(n: i64) -> IpeCssLength {
     let _ipe_recursion_guard = crate::recursion_guard();
     IpeCssLength::Vw(n)
 }
-pub(crate) fn user_ipe_css_rgba(r: i64, g: i64, b: i64, a: f64) -> IpeCssColor {
+pub(crate) fn user_ipe_css_rgba(r: i64, g: i64, b: i64, a: IpeCssOpacity) -> IpeCssColor {
     let _ipe_recursion_guard = crate::recursion_guard();
     IpeCssColor::Rgba(r, g, b, a)
 }

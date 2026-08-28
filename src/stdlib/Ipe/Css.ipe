@@ -1,10 +1,11 @@
 module Ipe.Css exposing
-    ( CssProp, CssRule, Length, Color
+    ( CssProp, CssRule, Length, Color, Opacity
     , Display(..), Position(..), TextAlign(..), Cursor(..)
     , FlexDirection(..), FlexWrap(..), Align(..), FontWeight(..)
     , FontStyle(..), Overflow(..), WhiteSpace(..), BoxSizing(..)
     , PointerEvents(..), TextDecoration(..), BorderStyle(..)
     , lengthToString, colorToString, floatStr
+    , opacityOf, opaque, opacityToString
     , px, rem, em, pct, vh, vw, ch, fr, num, zero, auto, lengthRaw, calc, minmax
     , hex, rgb, rgba, hsl, hsla, transparent, currentColor, colorRaw
     , deg, ms, sec, rotate, scale, scaleXY, translateX, translateY, translate, skewX, skewY
@@ -81,6 +82,8 @@ module Ipe.Css exposing
 --     across runs (pure Ipe render); only an attack string diverges (it is
 --     neutralised) — a sanctioned security divergence.
 
+import Ipe.Basics as Basics
+import Ipe.Math as Math
 import Ipe.String as String
 import Ipe.List as List
 import Ipe.CssSafety exposing (safeValue, safePropName, safeSelector, sanitizeRawBody, stripStyleClose)
@@ -128,12 +131,46 @@ type Length
 type Color
     = Hex String
     | Rgb Int Int Int
-    | Rgba Int Int Int Float
+    | Rgba Int Int Int Opacity
     | Hsl Int Int Int
-    | Hsla Int Int Int Float
+    | Hsla Int Int Int Opacity
     | ColorTransparent
     | ColorCurrent
     | ColorRaw String
+
+
+-- An opacity/alpha value refined into [0, 1]. Build only via `opacityOf`
+-- (or the `opaque` preset); the constructor is not exported so an out-of-range
+-- or NaN alpha has no representation. Parse-don't-validate: the value inside
+-- is already in range, so no renderer re-checks it.
+type Opacity
+    = Opacity Float
+
+
+-- Refine a Float into an Opacity: NaN maps to fully transparent (0.0) —
+-- the fail-safe reading of "no meaningful value" — otherwise clamp into [0, 1].
+opacityOf : Float -> Opacity
+opacityOf n =
+    if Math.isNaN n then
+        Opacity 0.0
+
+    else
+        Opacity (Basics.clamp 0.0 1.0 n)
+
+
+-- Fully opaque: opacity 1.0.
+opaque : Opacity
+opaque =
+    Opacity 1.0
+
+
+-- Render the refined value. Used by every opacity/alpha emit site; the value
+-- is already in [0, 1] so no guard here.
+opacityToString : Opacity -> String
+opacityToString o =
+    case o of
+        Opacity n ->
+            floatStr n
 
 
 -- ─── Keyword enums (bounded value spaces) ───────────────────────
@@ -361,7 +398,7 @@ colorToString c =
                 ++ ","
                 ++ String.fromInt b
                 ++ ","
-                ++ floatStr a
+                ++ opacityToString a
                 ++ ")"
 
         Hsl h s l ->
@@ -381,7 +418,7 @@ colorToString c =
                 ++ "%,"
                 ++ String.fromInt l
                 ++ "%,"
-                ++ floatStr a
+                ++ opacityToString a
                 ++ ")"
 
         ColorTransparent ->
@@ -489,7 +526,7 @@ rgb r g b =
     Rgb r g b
 
 
-rgba : Int -> Int -> Int -> Float -> Color
+rgba : Int -> Int -> Int -> Opacity -> Color
 rgba r g b a =
     Rgba r g b a
 
@@ -499,7 +536,7 @@ hsl h s l =
     Hsl h s l
 
 
-hsla : Int -> Int -> Int -> Float -> Color
+hsla : Int -> Int -> Int -> Opacity -> Color
 hsla h s l a =
     Hsla h s l a
 
@@ -1444,9 +1481,9 @@ zIndex n =
     prop "z-index" (String.fromInt n)
 
 
-opacity : Float -> CssProp
-opacity n =
-    prop "opacity" (floatStr n)
+opacity : Opacity -> CssProp
+opacity o =
+    prop "opacity" (opacityToString o)
 
 
 content : String -> CssProp

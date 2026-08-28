@@ -68,20 +68,29 @@ pub(crate) fn main_colors() -> String {
     CELL.get_or_init(|| {
         format!(
             "{}{}",
-            crate::user_ipe_css_color_to_string(crate::user_ipe_css_rgba(0, 0, 0, 1.0)),
+            crate::user_ipe_css_color_to_string(
+                crate::user_ipe_css_rgba(0, 0, 0, crate::user_ipe_css_opacity_of(1.0)),
+            ),
             format!(
                 "{}{}",
                 "\n".to_string(),
                 format!(
                     "{}{}",
-                    crate::user_ipe_css_color_to_string(crate::user_ipe_css_rgba(255, 0, 0, 1.0)),
+                    crate::user_ipe_css_color_to_string(
+                        crate::user_ipe_css_rgba(255, 0, 0, crate::user_ipe_css_opacity_of(1.0)),
+                    ),
                     format!(
                         "{}{}",
                         "\n".to_string(),
                         format!(
                             "{}{}",
                             crate::user_ipe_css_color_to_string(
-                                crate::user_ipe_css_rgba(0, 128, 255, 1.0),
+                                crate::user_ipe_css_rgba(
+                                    0,
+                                    128,
+                                    255,
+                                    crate::user_ipe_css_opacity_of(1.0),
+                                ),
                             ),
                             format!(
                                 "{}{}",
@@ -89,13 +98,23 @@ pub(crate) fn main_colors() -> String {
                                 format!(
                                     "{}{}",
                                     crate::user_ipe_css_color_to_string(
-                                        crate::user_ipe_css_rgba(0, 0, 0, 0.0),
+                                        crate::user_ipe_css_rgba(
+                                            0,
+                                            0,
+                                            0,
+                                            crate::user_ipe_css_opacity_of(0.0),
+                                        ),
                                     ),
                                     format!(
                                         "{}{}",
                                         "\n".to_string(),
                                         crate::user_ipe_css_color_to_string(
-                                            crate::user_ipe_css_rgba(255, 128, 0, 0.5),
+                                            crate::user_ipe_css_rgba(
+                                                255,
+                                                128,
+                                                0,
+                                                crate::user_ipe_css_opacity_of(0.5),
+                                            ),
                                         )
                                     )
                                 )

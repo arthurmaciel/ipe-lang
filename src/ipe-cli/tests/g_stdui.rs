@@ -6,6 +6,8 @@ mod support;
 
 #[path = "g_stdui/golden_css_length_color_ssot.rs"]
 mod golden_css_length_color_ssot;
+#[path = "g_stdui/golden_css_opacity_refinement.rs"]
+mod golden_css_opacity_refinement;
 #[path = "g_stdui/golden_css_source.rs"]
 mod golden_css_source;
 #[path = "g_stdui/golden_css_transform_ssot.rs"]
