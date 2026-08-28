@@ -20,7 +20,7 @@ headerStr pair =
         ( k, v ) -> k ++ ":" ++ v
 
 
-printReq : { body : String, followRedirects : Bool, headers : List ( String, String ), maxRedirects : Int, method : Http.HttpMethod, timeout : Int, url : String } -> String
+printReq : { body : String, headers : List ( String, String ), method : Http.HttpMethod, redirects : Http.RedirectPolicy, timeout : Int, url : String } -> String
 printReq req =
     String.join "\n" [ req.url, String.fromInt req.timeout, req.body, String.join "," (List.map headerStr req.headers) ]
 

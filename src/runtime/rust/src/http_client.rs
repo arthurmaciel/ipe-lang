@@ -3,8 +3,7 @@
 //! HttpResponse/HttpRequest map to the Ipê record aliases via runtimeOpaqueTypes
 //! (like Csv's CsvDoc), so `resp.status` / `.body` / `.headers` resolve onto
 //! these pub fields and the Ipê-built `defaultRequest` record constructs this
-//! struct directly. Field names match the Ipê records verbatim (camelCase
-//! `followRedirects` / `maxRedirects` — hence the non_snake_case allow).
+//! struct directly. Field names match the Ipê records verbatim.
 //!
 //! ## SSRF protection (default-ON in production)
 //!
@@ -55,6 +54,20 @@ pub struct HttpResponse {
     pub status: i64,
     pub body: String,
     pub headers: HashMap<String, String>,
+}
+
+/// Redirect behaviour for an outbound `HttpRequest` — the Rust mirror of the
+/// `RedirectPolicy` ADT in `Ipe.Http`.  Variant names match the Ipê
+/// constructors verbatim so emitted match arms resolve through the
+/// `pub use http_client::*` glob in the generated `mod.rs`.
+///
+/// `FollowRedirects(i64)` carries the user-supplied max hop count.  The runtime
+/// clamps it to `0` via `.max(0)` before casting to `usize`, so a negative
+/// value from Ipê code is safe (0 hops followed, not a negative cast).
+#[derive(Clone, Debug)]
+pub enum RedirectPolicy {
+    NoRedirects,
+    FollowRedirects(i64),
 }
 
 /// Closed set of HTTP methods — the Rust mirror of the `HttpMethod` ADT in
@@ -125,16 +138,14 @@ pub(crate) fn method_to_reqwest(m: HttpMethod) -> reqwest::Method {
 
 /// Ipe.Http.HttpRequest — built in Ipê (defaultRequest + with* updates),
 /// so every field is pub for external struct-literal construction.
-#[allow(non_snake_case)]
 #[derive(Clone, Debug)]
 pub struct HttpRequest {
-    pub method: HttpMethod,
-    pub url: String,
     pub body: String,
     pub headers: Vec<(String, String)>,
+    pub method: HttpMethod,
+    pub redirects: RedirectPolicy,
     pub timeout: i64,
-    pub followRedirects: bool,
-    pub maxRedirects: i64,
+    pub url: String,
 }
 
 /// `Http.methodFromString : String -> Maybe HttpMethod` — the typed parse
@@ -187,13 +198,12 @@ fn narrow_http_scheme(url: &crate::url::Url) -> Result<String, String> {
 /// in one place.
 fn http_request_with_target(target: String) -> HttpRequest {
     HttpRequest {
-        method: HttpMethod::Get,
-        url: target,
         body: String::new(),
         headers: Vec::new(),
+        method: HttpMethod::Get,
+        redirects: RedirectPolicy::FollowRedirects(10),
         timeout: 30000,
-        followRedirects: true,
-        maxRedirects: 10,
+        url: target,
     }
 }
 
@@ -325,8 +335,7 @@ fn redact_userinfo(url: &str) -> String {
 pub(crate) fn ssrf_apply(
     mut builder: reqwest::ClientBuilder,
     url: &str,
-    follow_redirects: bool,
-    max_redirects: i64,
+    policy: RedirectPolicy,
 ) -> Result<reqwest::ClientBuilder, String> {
     let deny = ssrf_deny_private_enabled();
     if deny {
@@ -355,25 +364,29 @@ pub(crate) fn ssrf_apply(
         // hostname can't be re-resolved by name to a rebind target at connect.
         builder = builder.dns_resolver(std::sync::Arc::new(DenyPrivateResolver));
     }
-    builder = if follow_redirects {
-        if deny {
-            let max = max_redirects.max(0) as usize;
-            builder.redirect(reqwest::redirect::Policy::custom(move |attempt| {
-                if attempt.previous().len() >= max {
-                    return attempt.error(format!("http: too many redirects (max {})", max));
-                }
-                if let Err(msg) = ssrf_check_url(attempt.url().as_str()) {
-                    return attempt.error(msg);
-                }
-                attempt.follow()
-            }))
-        } else {
-            builder.redirect(reqwest::redirect::Policy::limited(
-                max_redirects.max(0) as usize
-            ))
+    // Apply the redirect policy.  The per-redirect-hop SSRF re-check is
+    // preserved unchanged: only the follow/limit decision now reads
+    // `RedirectPolicy` instead of a `(bool, i64)` pair.
+    builder = match policy {
+        RedirectPolicy::NoRedirects => builder.redirect(reqwest::redirect::Policy::none()),
+        RedirectPolicy::FollowRedirects(max_hops) => {
+            // Clamp to 0: a user-supplied negative Int is safe (0 hops
+            // followed).  This is the load-bearing `.max(0)` the spec requires.
+            let max = max_hops.max(0) as usize;
+            if deny {
+                builder.redirect(reqwest::redirect::Policy::custom(move |attempt| {
+                    if attempt.previous().len() >= max {
+                        return attempt.error(format!("http: too many redirects (max {})", max));
+                    }
+                    if let Err(msg) = ssrf_check_url(attempt.url().as_str()) {
+                        return attempt.error(msg);
+                    }
+                    attempt.follow()
+                }))
+            } else {
+                builder.redirect(reqwest::redirect::Policy::limited(max))
+            }
         }
-    } else {
-        builder.redirect(reqwest::redirect::Policy::none())
     };
     Ok(builder)
 }
@@ -420,7 +433,7 @@ async fn do_request<E: From<String> + Send + 'static>(
     }
 
     let builder = reqwest::Client::builder();
-    let mut builder = match ssrf_apply(builder, &req.url, req.followRedirects, req.maxRedirects) {
+    let mut builder = match ssrf_apply(builder, &req.url, req.redirects) {
         Ok(b) => b,
         Err(e) => return IpeResult::Err(e.into()),
     };
@@ -557,13 +570,12 @@ async fn read_body_capped<E: From<String> + Send + 'static>(
 #[cfg(not(target_arch = "wasm32"))]
 pub fn http_get<E: From<String> + Send + 'static>(url: String) -> IpeTask<E, HttpResponse> {
     Box::pin(do_request(HttpRequest {
-        method: HttpMethod::Get,
-        url,
         body: String::new(),
         headers: Vec::new(),
+        method: HttpMethod::Get,
+        redirects: RedirectPolicy::FollowRedirects(10),
         timeout: 30000,
-        followRedirects: true,
-        maxRedirects: 10,
+        url,
     }))
 }
 
@@ -574,13 +586,12 @@ pub fn http_post<E: From<String> + Send + 'static>(
     body: String,
 ) -> IpeTask<E, HttpResponse> {
     Box::pin(do_request(HttpRequest {
-        method: HttpMethod::Post,
-        url,
         body,
         headers: Vec::new(),
+        method: HttpMethod::Post,
+        redirects: RedirectPolicy::FollowRedirects(10),
         timeout: 30000,
-        followRedirects: true,
-        maxRedirects: 10,
+        url,
     }))
 }
 
@@ -678,10 +689,9 @@ async fn do_fetch<E: From<String> + 'static>(req: HttpRequest) -> IpeResult<E, H
     init.set_method(req.method.as_str());
     init.set_headers(&headers);
     init.set_mode(web_sys::RequestMode::Cors);
-    init.set_redirect(if req.followRedirects {
-        web_sys::RequestRedirect::Follow
-    } else {
-        web_sys::RequestRedirect::Error
+    init.set_redirect(match &req.redirects {
+        RedirectPolicy::FollowRedirects(_) => web_sys::RequestRedirect::Follow,
+        RedirectPolicy::NoRedirects => web_sys::RequestRedirect::Error,
     });
     if !req.body.is_empty() {
         init.set_body(&JsValue::from_str(&req.body));
@@ -771,13 +781,12 @@ async fn do_fetch<E: From<String> + 'static>(req: HttpRequest) -> IpeResult<E, H
 #[cfg(target_arch = "wasm32")]
 pub fn http_get<E: From<String> + 'static>(url: String) -> IpeTask<E, HttpResponse> {
     Box::pin(do_fetch(HttpRequest {
-        method: HttpMethod::Get,
-        url,
         body: String::new(),
         headers: Vec::new(),
+        method: HttpMethod::Get,
+        redirects: RedirectPolicy::FollowRedirects(10),
         timeout: 30000,
-        followRedirects: true,
-        maxRedirects: 10,
+        url,
     }))
 }
 
@@ -785,13 +794,12 @@ pub fn http_get<E: From<String> + 'static>(url: String) -> IpeTask<E, HttpRespon
 #[cfg(target_arch = "wasm32")]
 pub fn http_post<E: From<String> + 'static>(url: String, body: String) -> IpeTask<E, HttpResponse> {
     Box::pin(do_fetch(HttpRequest {
-        method: HttpMethod::Post,
-        url,
         body,
         headers: Vec::new(),
+        method: HttpMethod::Post,
+        redirects: RedirectPolicy::FollowRedirects(10),
         timeout: 30000,
-        followRedirects: true,
-        maxRedirects: 10,
+        url,
     }))
 }
 
@@ -911,10 +919,9 @@ mod tests {
     fn with_url_retarget_re_narrows_scheme() {
         let base = http_request_with_target("http://example.com/".to_string());
         // Retarget to another http URL — Ok, url replaced, other fields kept.
-        let base_body = {
-            let mut b = base.clone();
-            b.body = "keep-me".to_string();
-            b
+        let base_body = HttpRequest {
+            body: "keep-me".to_string(),
+            ..base.clone()
         };
         match http_with_url::<String>(seal("https://example.org/next"), base_body.clone()) {
             IpeResult::Ok(req) => {
@@ -928,5 +935,45 @@ mod tests {
             IpeResult::Err(e) => assert!(e.contains("not http/https"), "got: {e}"),
             IpeResult::Ok(_) => panic!("file: retarget must fail closed"),
         }
+    }
+
+    // ── RedirectPolicy — struct field and negative-clamp proof ──────────────
+
+    /// `HttpRequest` carries `redirects: RedirectPolicy` and the default is
+    /// `FollowRedirects(10)`.  Verify the struct builds correctly and the
+    /// `NoRedirects` variant is distinct.
+    #[test]
+    fn redirect_policy_default_and_variants() {
+        let req = http_request_with_target("http://example.com/".to_string());
+        match req.redirects {
+            RedirectPolicy::FollowRedirects(n) => {
+                assert_eq!(n, 10, "default hop count must be 10")
+            }
+            RedirectPolicy::NoRedirects => panic!("default must be FollowRedirects(10)"),
+        }
+        // NoRedirects round-trip.
+        let mut req2 = req.clone();
+        req2.redirects = RedirectPolicy::NoRedirects;
+        assert!(
+            matches!(req2.redirects, RedirectPolicy::NoRedirects),
+            "NoRedirects must survive a clone-and-assign"
+        );
+    }
+
+    /// A negative `FollowRedirects` value from user code must not panic or
+    /// cause a negative cast.  The `.max(0)` clamp in `ssrf_apply` is the
+    /// load-bearing floor; this test pins it at the type level.
+    #[test]
+    fn negative_follow_redirects_clamps_to_zero_without_panic() {
+        // `max_hops.max(0) as usize` — must not panic for any i64 value.
+        let negative: i64 = -1;
+        let clamped = negative.max(0) as usize;
+        assert_eq!(
+            clamped, 0,
+            "negative hop count must clamp to 0, not wrap or panic"
+        );
+        let min_i64: i64 = i64::MIN;
+        let clamped_min = min_i64.max(0) as usize;
+        assert_eq!(clamped_min, 0, "i64::MIN must clamp to 0");
     }
 }

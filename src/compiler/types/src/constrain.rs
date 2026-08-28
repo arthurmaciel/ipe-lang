@@ -225,10 +225,10 @@ struct Builtins {
     http_f_url: Symbol,
     /// `"timeout"` — `HttpRequest` only.
     http_f_timeout: Symbol,
-    /// `"followRedirects"` — `HttpRequest` only (camelCase Ipê field name).
-    http_f_follow_redirects: Symbol,
-    /// `"maxRedirects"` — `HttpRequest` only (camelCase Ipê field name).
-    http_f_max_redirects: Symbol,
+    /// `"redirects"` — `HttpRequest` only.
+    http_f_redirects: Symbol,
+    /// `"RedirectPolicy"` — the `Ipe.Http.RedirectPolicy` ADT type constructor.
+    redirect_policy: Symbol,
     /// `"contentType"` — `Ipe.Http.Server.Response` record field (camelCase).
     server_f_content_type: Symbol,
     /// `"name"` — `Ipe.Db.Migration` record field.
@@ -809,8 +809,8 @@ impl Builtins {
             http_method: interner.intern("HttpMethod")?,
             http_f_url: interner.intern("url")?,
             http_f_timeout: interner.intern("timeout")?,
-            http_f_follow_redirects: interner.intern("followRedirects")?,
-            http_f_max_redirects: interner.intern("maxRedirects")?,
+            http_f_redirects: interner.intern("redirects")?,
+            redirect_policy: interner.intern("RedirectPolicy")?,
             // Db symbols.
             db: interner.intern("Db")?,
             sqlvalue: interner.intern("SqlValue")?,
@@ -2953,8 +2953,7 @@ impl<'a> Builder<'a> {
                     })
                 } else if args.is_empty() && self.interner.resolve(name) == Some("HttpRequest") {
                     // `HttpRequest` is a stdlib type alias for a structural record
-                    // (`{ body, followRedirects, headers, maxRedirects, method,
-                    // timeout, url }`).  The Rust port has no Ipê-source stdlib
+                    // (`{ body, headers, method, redirects, timeout, url }`).  The Rust port has no Ipê-source stdlib
                     // files, so the canonicaliser never registers `HttpRequest` as a
                     // type alias — it falls through to an opaque `Con`.  Expand it
                     // here so user annotations like `upstreamRequest : HttpRequest`
@@ -2967,8 +2966,8 @@ impl<'a> Builder<'a> {
                     };
                     let string = || mk(self.builtins.string);
                     let int = || mk(self.builtins.int);
-                    let bool_ty = || mk(self.builtins.bool);
                     let http_method_ty = || mk(self.builtins.http_method);
+                    let redirect_policy_ty = || mk(self.builtins.redirect_policy);
                     let list = |t: Ty| Ty::Con {
                         module: Vec::new(),
                         name: self.builtins.list,
@@ -2976,13 +2975,12 @@ impl<'a> Builder<'a> {
                     };
                     let mut req_fields = BTreeMap::new();
                     req_fields.insert(self.builtins.http_f_body, string());
-                    req_fields.insert(self.builtins.http_f_follow_redirects, bool_ty());
                     req_fields.insert(
                         self.builtins.http_f_headers,
                         list(Ty::Tuple(vec![string(), string()])),
                     );
-                    req_fields.insert(self.builtins.http_f_max_redirects, int());
                     req_fields.insert(self.builtins.http_f_method, http_method_ty());
+                    req_fields.insert(self.builtins.http_f_redirects, redirect_policy_ty());
                     req_fields.insert(self.builtins.http_f_timeout, int());
                     req_fields.insert(self.builtins.http_f_url, string());
                     Ok(Ty::Record(req_fields, RowTail::Closed))
@@ -4347,6 +4345,7 @@ impl<'a> Builder<'a> {
             BuiltinTag::RevocationMode => self.builtins.revocation_mode,
             BuiltinTag::Locale => self.builtins.locale,
             BuiltinTag::HttpMethod => self.builtins.http_method,
+            BuiltinTag::RedirectPolicy => self.builtins.redirect_policy,
             BuiltinTag::CryptoKey => self.builtins.crypto_key,
             BuiltinTag::CryptoMac => self.builtins.crypto_mac,
             BuiltinTag::EmailAddress => self.builtins.email_address,
@@ -4398,8 +4397,7 @@ impl<'a> Builder<'a> {
             FieldTag::HttpMethod => self.builtins.http_f_method,
             FieldTag::HttpUrl => self.builtins.http_f_url,
             FieldTag::HttpTimeout => self.builtins.http_f_timeout,
-            FieldTag::HttpFollowRedirects => self.builtins.http_f_follow_redirects,
-            FieldTag::HttpMaxRedirects => self.builtins.http_f_max_redirects,
+            FieldTag::HttpRedirects => self.builtins.http_f_redirects,
             FieldTag::ServerContentType => self.builtins.server_f_content_type,
             FieldTag::CsvHeader => self.builtins.csv_f_header,
             FieldTag::CsvRows => self.builtins.csv_f_rows,
@@ -5224,18 +5222,21 @@ impl<'a> Builder<'a> {
             name: self.builtins.http_method,
             args: Vec::new(),
         };
-        // `HttpRequest = { body, followRedirects, headers, maxRedirects, method, timeout, url }`
-        // `method` is now `HttpMethod` (ADT), not `String`.
+        // `HttpRequest = { body, headers, method, redirects, timeout, url }`
+        let redirect_policy_ty = || Ty::Con {
+            module: Vec::new(),
+            name: self.builtins.redirect_policy,
+            args: Vec::new(),
+        };
         let http_request = || {
             let mut req_fields = BTreeMap::new();
             req_fields.insert(self.builtins.http_f_body, string());
-            req_fields.insert(self.builtins.http_f_follow_redirects, bool_ty());
             req_fields.insert(
                 self.builtins.http_f_headers,
                 list(tuple2(string(), string())),
             );
-            req_fields.insert(self.builtins.http_f_max_redirects, int());
             req_fields.insert(self.builtins.http_f_method, http_method_ty());
+            req_fields.insert(self.builtins.http_f_redirects, redirect_policy_ty());
             req_fields.insert(self.builtins.http_f_timeout, int());
             req_fields.insert(self.builtins.http_f_url, string());
             Ty::Record(req_fields, RowTail::Closed)
@@ -5844,8 +5845,7 @@ impl<'a> Builder<'a> {
             K::HttpWithBody => fun(string(), fun(http_request(), http_request())),
             K::HttpWithHeader => fun(string(), fun(string(), fun(http_request(), http_request()))),
             K::HttpWithUrl => fun(url(), fun(http_request(), result(error_ty(), http_request()))),
-            K::HttpWithFollowRedirects => fun(bool_ty(), fun(http_request(), http_request())),
-            K::HttpWithMaxRedirects => fun(int(), fun(http_request(), http_request())),
+            K::HttpWithRedirects => fun(redirect_policy_ty(), fun(http_request(), http_request())),
 
             // ── Cmd ──
             K::CmdNone => cmd(var(0)),
@@ -9533,8 +9533,7 @@ mod registry_phase_c_tests {
             K::HttpWithBody,
             K::HttpWithHeader,
             K::HttpWithUrl,
-            K::HttpWithFollowRedirects,
-            K::HttpWithMaxRedirects,
+            K::HttpWithRedirects,
             // Cmd (3)
             K::CmdNone,
             K::CmdBatch,

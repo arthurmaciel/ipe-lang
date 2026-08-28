@@ -303,6 +303,8 @@ pub enum BuiltinTag {
     Locale,
     /// `HttpMethod` — the nullary closed HTTP-method ADT.
     HttpMethod,
+    /// `RedirectPolicy` — the redirect-behaviour ADT (`NoRedirects | FollowRedirects Int`).
+    RedirectPolicy,
     /// `CryptoKey` — the nullary opaque role-typed crypto key.
     CryptoKey,
     /// `CryptoMac` — the nullary opaque role-typed MAC output.
@@ -501,10 +503,8 @@ pub enum FieldTag {
     HttpUrl,
     /// `"timeout"`.
     HttpTimeout,
-    /// `"followRedirects"`.
-    HttpFollowRedirects,
-    /// `"maxRedirects"`.
-    HttpMaxRedirects,
+    /// `"redirects"`.
+    HttpRedirects,
     /// `"contentType"` — `Ipe.Http.Server.Response`.
     ServerContentType,
     // ── Csv ──
@@ -1354,12 +1354,9 @@ pub enum StdlibKernel {
     /// `Http.withUrl : Url -> HttpRequest -> Result Error HttpRequest` —
     /// retarget to a typed `Url`, re-narrowing the scheme (fail-closed).
     HttpWithUrl,
-    /// `Http.withFollowRedirects : Bool -> HttpRequest -> HttpRequest` —
-    /// pure builder (Go parity).
-    HttpWithFollowRedirects,
-    /// `Http.withMaxRedirects : Int -> HttpRequest -> HttpRequest` — pure
-    /// builder (Go parity).
-    HttpWithMaxRedirects,
+    /// `Http.withRedirects : RedirectPolicy -> HttpRequest -> HttpRequest` —
+    /// pure builder that sets the redirect policy.
+    HttpWithRedirects,
     /// `Http.methodFromString : String -> Maybe HttpMethod` — typed parse
     /// boundary; `Nothing` for unrecognised verbs.
     HttpMethodFromString,
@@ -3387,20 +3384,7 @@ impl StdlibKernel {
             Self::HttpWithBody => d("Http", "withBody", 2, Pure, "http_with_body"),
             Self::HttpWithHeader => d("Http", "withHeader", 3, Pure, "http_with_header"),
             Self::HttpWithUrl => d("Http", "withUrl", 2, Pure, "http_with_url"),
-            Self::HttpWithFollowRedirects => d(
-                "Http",
-                "withFollowRedirects",
-                2,
-                Pure,
-                "http_with_follow_redirects",
-            ),
-            Self::HttpWithMaxRedirects => d(
-                "Http",
-                "withMaxRedirects",
-                2,
-                Pure,
-                "http_with_max_redirects",
-            ),
+            Self::HttpWithRedirects => d("Http", "withRedirects", 2, Pure, "http_with_redirects"),
             Self::HttpMethodFromString => d(
                 "Http",
                 "methodFromString",
@@ -5011,8 +4995,7 @@ impl StdlibKernel {
         Self::HttpWithBody,
         Self::HttpWithHeader,
         Self::HttpWithUrl,
-        Self::HttpWithFollowRedirects,
-        Self::HttpWithMaxRedirects,
+        Self::HttpWithRedirects,
         Self::HttpMethodFromString,
         Self::HttpMethodToString,
         // Db
@@ -7756,8 +7739,12 @@ impl StdlibKernel {
             ],
             tail: RowTailShape::Closed,
         };
-        // `HttpRequest { body, followRedirects, headers, maxRedirects, method,
-        // timeout, url }`.
+        const REDIRECT_POLICY: TyShape = TyShape::Con(BuiltinTag::RedirectPolicy, &[]);
+        // `HttpRequest { body, headers, method, url, timeout, redirects }`.
+        // Field order matches the BTreeMap iteration order (ascending intern-symbol
+        // order from the Builtins constructor): body, headers, method, url, timeout,
+        // redirects — NOT alphabetical order.  The `interpreted_shape_matches_legacy`
+        // test enforces this invariant.
         const HTTP_REQUEST: TyShape = TyShape::Record {
             fields: &[
                 (FieldTag::HttpBody, &STRING),
@@ -7765,8 +7752,7 @@ impl StdlibKernel {
                 (FieldTag::HttpMethod, &HTTP_METHOD),
                 (FieldTag::HttpUrl, &STRING),
                 (FieldTag::HttpTimeout, &INT),
-                (FieldTag::HttpFollowRedirects, &BOOL),
-                (FieldTag::HttpMaxRedirects, &INT),
+                (FieldTag::HttpRedirects, &REDIRECT_POLICY),
             ],
             tail: RowTailShape::Closed,
         };
@@ -8061,10 +8047,9 @@ impl StdlibKernel {
         const HTTP_REQUEST_TO_HTTP_REQUEST: TyShape = TyShape::Fun(&HTTP_REQUEST, &HTTP_REQUEST);
         const HTTP_WITH_METHOD: TyShape = TyShape::Fun(&HTTP_METHOD, &HTTP_REQUEST_TO_HTTP_REQUEST);
         const HTTP_WITH_TIMEOUT: TyShape = TyShape::Fun(&INT, &HTTP_REQUEST_TO_HTTP_REQUEST);
-        const HTTP_WITH_MAX_REDIRECTS: TyShape = TyShape::Fun(&INT, &HTTP_REQUEST_TO_HTTP_REQUEST);
+        const HTTP_WITH_REDIRECTS: TyShape =
+            TyShape::Fun(&REDIRECT_POLICY, &HTTP_REQUEST_TO_HTTP_REQUEST);
         const HTTP_WITH_BODY: TyShape = TyShape::Fun(&STRING, &HTTP_REQUEST_TO_HTTP_REQUEST);
-        const HTTP_WITH_FOLLOW_REDIRECTS: TyShape =
-            TyShape::Fun(&BOOL, &HTTP_REQUEST_TO_HTTP_REQUEST);
         const STRING_TO_HTTP_REQUEST_TO_HTTP_REQUEST: TyShape =
             TyShape::Fun(&STRING, &HTTP_REQUEST_TO_HTTP_REQUEST);
         const HTTP_WITH_HEADER: TyShape =
@@ -9125,11 +9110,10 @@ impl StdlibKernel {
             Self::HttpDefaultRequestFromString => Some(&HTTP_DEFAULT_REQUEST_FROM_STRING),
             Self::HttpWithMethod => Some(&HTTP_WITH_METHOD),
             Self::HttpWithTimeout => Some(&HTTP_WITH_TIMEOUT),
-            Self::HttpWithMaxRedirects => Some(&HTTP_WITH_MAX_REDIRECTS),
+            Self::HttpWithRedirects => Some(&HTTP_WITH_REDIRECTS),
             Self::HttpWithBody => Some(&HTTP_WITH_BODY),
             Self::HttpWithHeader => Some(&HTTP_WITH_HEADER),
             Self::HttpWithUrl => Some(&HTTP_WITH_URL),
-            Self::HttpWithFollowRedirects => Some(&HTTP_WITH_FOLLOW_REDIRECTS),
             // Server response (record) kernels.
             Self::ServerGet
             | Self::ServerPost
@@ -10020,8 +10004,7 @@ impl StdlibKernel {
             | Self::HttpWithBody
             | Self::HttpWithHeader
             | Self::HttpWithUrl
-            | Self::HttpWithFollowRedirects
-            | Self::HttpWithMaxRedirects
+            | Self::HttpWithRedirects
             | Self::CmdNone
             | Self::CmdBatch
             | Self::CmdPerform
@@ -10779,8 +10762,7 @@ impl StdlibKernel {
                 | Self::HttpWithBody
                 | Self::HttpWithHeader
                 | Self::HttpWithUrl
-                | Self::HttpWithFollowRedirects
-                | Self::HttpWithMaxRedirects
+                | Self::HttpWithRedirects
                 | Self::HttpMethodFromString
                 | Self::HttpMethodToString
                 // Outbound HTTP streaming: open/stream/close a reqwest response

@@ -4,8 +4,8 @@
 //! `ir_type_from_canon`'s `canon::Type::Record` arm, and
 //! `ipe_backend_rust::emit_expr::emit_record`'s independent
 //! `HTTP_REQUEST_FIELDS` special case) is unsound: checking whether the field
-//! NAMES exactly match the 7-field set `{body, followRedirects, headers,
-//! maxRedirects, method, timeout, url}` regardless of field TYPES silently
+//! NAMES exactly match the 6-field set `{body, headers, method, redirects,
+//! timeout, url}` regardless of field TYPES silently
 //! miscompiles a completely unrelated user record that happens to share those 7
 //! field names (e.g. every field `Int`, nothing HTTP-related): `ipe` exits 0,
 //! but the emitted `cargo build` fails with a wall of E0308 errors (the
@@ -84,16 +84,16 @@ fn name_only_shape_does_not_emit_runtime_http_request_literal() {
 
     assert!(
         !main_rs.contains("ipe_runtime::HttpRequest {") && !main_rs.contains("HttpRequest {"),
-        "an all-Int 7-field record sharing HttpRequest's field NAMES (not \
+        "an all-Int 6-field record sharing HttpRequest's field NAMES (not \
          TYPES) must NOT be emitted as an `HttpRequest` struct literal — \
-         that struct's fields are typed String/Bool/List and would reject \
-         Int values with E0308.\n\
+         that struct's fields are typed String/RedirectPolicy/List and would \
+         reject Int values with E0308.\n\
          --- src/main.rs ---\n{main_rs}"
     );
 }
 
 /// The literal must instead resolve through the ordinary synthesised-record
-/// path — i.e. some `Rec...` struct literal carrying the 7 `1..=7` integer
+/// path — i.e. some `Rec...` struct literal carrying the 6 `1..=6` integer
 /// field initialisers, proving `emit_record` deferred to the registered
 /// struct (`EmitCtx::has_record_struct_for`) rather than its name-only
 /// `HttpRequest` fallback.
@@ -110,20 +110,19 @@ fn name_only_shape_emits_a_synthesised_record_struct() {
         return;
     };
 
-    // The struct DEFINITION carries all 7 field names typed `i64` (Ipê
-    // `Int`), and the literal construction site initialises all 7 with the
-    // fixture's `1..=7` integers — both are only true if `emit_record`
+    // The struct DEFINITION carries all 6 field names typed `i64` (Ipê
+    // `Int`), and the literal construction site initialises all 6 with the
+    // fixture's `1..=6` integers — both are only true if `emit_record`
     // resolved a real synthesised struct instead of mislabelling the
     // literal `HttpRequest`.
     assert!(
         main_rs.contains("body: i64")
-            && main_rs.contains("followRedirects: i64")
             && main_rs.contains("headers: i64")
-            && main_rs.contains("maxRedirects: i64")
             && main_rs.contains("method: i64")
+            && main_rs.contains("redirects: i64")
             && main_rs.contains("timeout: i64")
             && main_rs.contains("url: i64"),
-        "expected a synthesised record struct with all 7 fields typed `i64` \
+        "expected a synthesised record struct with all 6 fields typed `i64` \
          (Ipe `Int`) — got:\n--- src/main.rs ---\n{main_rs}"
     );
 }
@@ -159,5 +158,5 @@ fn http_request_name_only_fold_seal_builds_and_runs() {
          String/Bool/List fields); stdout:\n{}",
         outcome.stdout
     );
-    assert_eq!(outcome.stdout.trim(), "28", "wrong runtime output");
+    assert_eq!(outcome.stdout.trim(), "21", "wrong runtime output");
 }

@@ -1651,12 +1651,10 @@ fn emit_http_call(
             //
             // `HttpRequest` is the opaque nominal type `ir_type_from_ty`
             // folds any solved record shape matching the canonical
-            // {body, followRedirects, headers, maxRedirects, method, timeout,
-            // url} field set into (`ipe_lower::lower::ir_type_from_ty`'s
-            // HTTP_REQUEST_FIELDS special case) — it is ALWAYS backed by
-            // `ipe_runtime::HttpRequest`, never a backend-synthesised
-            // `record_by_fieldset` struct (which is only populated for
-            // shapes the special case does NOT intercept). So `req_expr`'s
+            // {body, headers, method, redirects, timeout, url} field set into
+            // (`ipe_lower::lower::ir_type_from_ty`'s HTTP_REQUEST_FIELDS special
+            // case) — it is ALWAYS backed by `ipe_runtime::HttpRequest`, never a
+            // backend-synthesised `record_by_fieldset` struct.  So `req_expr`'s
             // emitted Rust value already has the runtime's field names —
             // no `record_struct_by_key` lookup needed here.
             let req_expr = args.first().ok_or_else(|| Diagnostic::CompilerBug {
@@ -1665,19 +1663,14 @@ fn emit_http_call(
             })?;
             let req_s = emit_expr_at(ctx, req_expr, indent, child, generics)?;
             // Bind the synthesised request struct once (`__req`) and move each
-            // field exactly once into `ipe_runtime::HttpRequest`. The runtime
-            // struct uses `#[allow(non_snake_case)]` camelCase field names
-            // verbatim — `followRedirects`, `maxRedirects` — so they must match
-            // here exactly. The Ipê names emit via `emit_ident` as-is (none are
-            // Rust keywords); the runtime names are string literals.
+            // field exactly once into `ipe_runtime::HttpRequest`.
             Ok(Some(format!(
                 "({{ let __req = {req_s}; task_map(Box::new({conv}), \
                  ipe_runtime::http_client::http_request::<IpeError>(\
                  ipe_runtime::HttpRequest {{ \
-                 method: __req.method, url: __req.url, body: __req.body, \
-                 headers: __req.headers, timeout: __req.timeout, \
-                 followRedirects: __req.followRedirects, \
-                 maxRedirects: __req.maxRedirects }}))\
+                 body: __req.body, headers: __req.headers, method: __req.method, \
+                 redirects: __req.redirects, timeout: __req.timeout, \
+                 url: __req.url }}))\
                  }})"
             )))
         }
@@ -1757,8 +1750,7 @@ fn emit_process_run_with_call(
 /// http/https scheme narrowing and return `Result Error HttpRequest`.
 ///
 /// * **`HttpWithMethod m req`**, **`HttpWithTimeout t req`**,
-///   **`HttpWithBody b req`**,
-///   **`HttpWithFollowRedirects f req`**, **`HttpWithMaxRedirects n req`**
+///   **`HttpWithBody b req`**, **`HttpWithRedirects p req`**
 ///   — each emits a clone-and-reassign
 ///   block
 ///   (`{ let mut __ipe_rec = (req).clone(); __ipe_rec.field = val; __ipe_rec }`)
@@ -1788,16 +1780,15 @@ fn emit_http_builder_call(
         | KernelFn::HttpWithTimeout
         | KernelFn::HttpWithBody
         | KernelFn::HttpWithHeader
-        | KernelFn::HttpWithFollowRedirects
-        | KernelFn::HttpWithMaxRedirects),
+        | KernelFn::HttpWithRedirects),
     ) = callee
     else {
         return Ok(None);
     };
 
     // `HttpRequest` is the opaque nominal type `ir_type_from_ty` folds any
-    // solved record shape matching the canonical {body, followRedirects,
-    // headers, maxRedirects, method, timeout, url} field set into
+    // solved record shape matching the canonical {body, headers, method,
+    // redirects, timeout, url} field set into
     // (`ipe_lower::lower::ir_type_from_ty`'s HTTP_REQUEST_FIELDS special
     // case) — it is ALWAYS backed by `ipe_runtime::HttpRequest`, never a
     // backend-synthesised `record_by_fieldset` struct. So `HttpDefaultRequest`
@@ -1862,38 +1853,21 @@ fn emit_http_builder_call(
                  __ipe_rec.body = {b_s}; __ipe_rec }}"
             )))
         }
-        KernelFn::HttpWithFollowRedirects => {
-            // withFollowRedirects : Bool -> HttpRequest -> HttpRequest
-            let flag = args.first().ok_or_else(|| Diagnostic::CompilerBug {
+        KernelFn::HttpWithRedirects => {
+            // withRedirects : RedirectPolicy -> HttpRequest -> HttpRequest
+            let policy = args.first().ok_or_else(|| Diagnostic::CompilerBug {
                 where_: "ipe_backend_rust::emit_http_builder_call",
-                detail: "HttpWithFollowRedirects expects 2 arguments (flag, req)".to_owned(),
+                detail: "HttpWithRedirects expects 2 arguments (policy, req)".to_owned(),
             })?;
             let req = args.get(1).ok_or_else(|| Diagnostic::CompilerBug {
                 where_: "ipe_backend_rust::emit_http_builder_call",
-                detail: "HttpWithFollowRedirects expects 2 arguments (flag, req)".to_owned(),
+                detail: "HttpWithRedirects expects 2 arguments (policy, req)".to_owned(),
             })?;
-            let flag_src = emit_expr_at(ctx, flag, indent, child, generics)?;
+            let policy_src = emit_expr_at(ctx, policy, indent, child, generics)?;
             let req_s = emit_expr_at(ctx, req, indent, child, generics)?;
             Ok(Some(format!(
                 "{{ let mut __ipe_rec = ({req_s}).clone(); \
-                 __ipe_rec.followRedirects = {flag_src}; __ipe_rec }}"
-            )))
-        }
-        KernelFn::HttpWithMaxRedirects => {
-            // withMaxRedirects : Int -> HttpRequest -> HttpRequest
-            let n = args.first().ok_or_else(|| Diagnostic::CompilerBug {
-                where_: "ipe_backend_rust::emit_http_builder_call",
-                detail: "HttpWithMaxRedirects expects 2 arguments (n, req)".to_owned(),
-            })?;
-            let req = args.get(1).ok_or_else(|| Diagnostic::CompilerBug {
-                where_: "ipe_backend_rust::emit_http_builder_call",
-                detail: "HttpWithMaxRedirects expects 2 arguments (n, req)".to_owned(),
-            })?;
-            let n_s = emit_expr_at(ctx, n, indent, child, generics)?;
-            let req_s = emit_expr_at(ctx, req, indent, child, generics)?;
-            Ok(Some(format!(
-                "{{ let mut __ipe_rec = ({req_s}).clone(); \
-                 __ipe_rec.maxRedirects = {n_s}; __ipe_rec }}"
+                 __ipe_rec.redirects = {policy_src}; __ipe_rec }}"
             )))
         }
         KernelFn::HttpWithHeader => {
@@ -6998,15 +6972,7 @@ fn render_record_pat(ctx: &EmitCtx, fields: &[(Symbol, Pat)]) -> DResult<String>
 /// (`ipe_lower::lower::is_http_request_shape`) directly here — deferring to
 /// the registry is how this call site stays in sync with that test without
 /// duplicating it.
-const HTTP_REQUEST_FIELDS: &[&str] = &[
-    "body",
-    "followRedirects",
-    "headers",
-    "maxRedirects",
-    "method",
-    "timeout",
-    "url",
-];
+const HTTP_REQUEST_FIELDS: &[&str] = &["body", "headers", "method", "redirects", "timeout", "url"];
 
 /// the sorted `Ipe.Process.runWith` input record field-name set — a record
 /// literal with exactly these names (and no registered synthesised struct,

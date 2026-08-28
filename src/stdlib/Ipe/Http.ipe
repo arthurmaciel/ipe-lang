@@ -43,6 +43,7 @@ module Ipe.Http exposing
     ( HttpMethod(..)
     , HttpRequest
     , HttpResponse
+    , RedirectPolicy(..)
     , defaultRequest
     , defaultRequestFromString
     , get
@@ -52,10 +53,9 @@ module Ipe.Http exposing
     , post
     , request
     , withBody
-    , withFollowRedirects
     , withHeader
-    , withMaxRedirects
     , withMethod
+    , withRedirects
     , withTimeout
     , withUrl
     )
@@ -84,18 +84,27 @@ type HttpMethod
     | Options
 
 
+-- | Redirect behaviour for an outbound request.  `NoRedirects` prevents all
+-- redirects; `FollowRedirects n` follows up to `n` hops (negative values are
+-- clamped to 0 at the runtime boundary).  Replaces the coupled
+-- `followRedirects : Bool` / `maxRedirects : Int` pair, making the
+-- "don't follow but here's a max count" contradiction unrepresentable.
+type RedirectPolicy
+    = NoRedirects
+    | FollowRedirects Int
+
+
 type alias HttpResponse =
     { status : Int, body : String, headers : Dict String String }
 
 
 type alias HttpRequest =
-    { method : HttpMethod
-    , url : String
-    , body : String
+    { body : String
     , headers : List ( String, String )
+    , method : HttpMethod
+    , redirects : RedirectPolicy
     , timeout : Int
-    , followRedirects : Bool
-    , maxRedirects : Int
+    , url : String
     }
 
 
@@ -182,13 +191,12 @@ defaultRequest url =
     case narrowHttpScheme url of
         Ok ok ->
             Ok
-                { method = Get
-                , url = Url.toString ok
-                , body = ""
+                { body = ""
                 , headers = []
+                , method = Get
+                , redirects = FollowRedirects 10
                 , timeout = 30000
-                , followRedirects = True
-                , maxRedirects = 10
+                , url = Url.toString ok
                 }
 
         Err e ->
@@ -237,13 +245,12 @@ withUrl url req =
         Err e ->
             Err e
 
-withFollowRedirects : Bool -> HttpRequest -> HttpRequest
-withFollowRedirects f req =
-    { req | followRedirects = f }
-
-withMaxRedirects : Int -> HttpRequest -> HttpRequest
-withMaxRedirects n req =
-    { req | maxRedirects = n }
+-- | Set the redirect policy for a request.  `withRedirects NoRedirects`
+-- prevents all redirects; `withRedirects (FollowRedirects n)` follows up to
+-- `n` hops.
+withRedirects : RedirectPolicy -> HttpRequest -> HttpRequest
+withRedirects p req =
+    { req | redirects = p }
 
 
 -- `withHeader k v req` cons-prepends `(k, v)` to `req.headers`

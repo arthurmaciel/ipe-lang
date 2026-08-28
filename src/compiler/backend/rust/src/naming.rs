@@ -563,12 +563,8 @@ mod tests {
         assert_eq!(kernel_name(KernelFn::HttpWithHeader), "http_with_header");
         assert_eq!(kernel_name(KernelFn::HttpWithUrl), "http_with_url");
         assert_eq!(
-            kernel_name(KernelFn::HttpWithFollowRedirects),
-            "http_with_follow_redirects"
-        );
-        assert_eq!(
-            kernel_name(KernelFn::HttpWithMaxRedirects),
-            "http_with_max_redirects"
+            kernel_name(KernelFn::HttpWithRedirects),
+            "http_with_redirects"
         );
         assert_eq!(
             kernel_name(KernelFn::HttpMethodFromString),

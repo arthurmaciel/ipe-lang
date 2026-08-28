@@ -1,12 +1,11 @@
-//! `Http` builders: `withUrl` / `withFollowRedirects` / `withMaxRedirects`.
+//! `Http` builders: `withUrl` / `withRedirects`.
 //!
-//! `withFollowRedirects` / `withMaxRedirects` are pure single-field record
-//! updates on `HttpRequest`, emitted through `emit_http_builder_call`'s
-//! clone-and-reassign block like their siblings (`withMethod` / `withTimeout` /
-//! `withBody`). `withUrl` is the typed-target retarget: it takes a typed `Url`,
-//! re-narrows the scheme to http/https at the API layer (fail-closed), and is
-//! emitted as a call to the runtime fn `http_with_url` returning
-//! `Result Error HttpRequest`.
+//! `withRedirects` is a pure single-field record update on `HttpRequest`,
+//! emitted through `emit_http_builder_call`'s clone-and-reassign block like
+//! its siblings (`withMethod` / `withTimeout` / `withBody`).  `withUrl` is
+//! the typed-target retarget: it takes a typed `Url`, re-narrows the scheme to
+//! http/https at the API layer (fail-closed), and is emitted as a call to the
+//! runtime fn `http_with_url` returning `Result Error HttpRequest`.
 //!
 //! Compile-tier assertion runs always; the run-tier requires `IPE_E2E=1`:
 //!
@@ -36,7 +35,7 @@ fn redirect_builders_compile_and_run() {
     assert!(runtime.is_ok(), "runtime must resolve: {:?}", runtime.err());
     let Ok(runtime) = runtime else { return };
 
-    // ipe-0: the three builders must resolve through the kernel path.
+    // ipe-0: the builders must resolve through the kernel path.
     let built = ipe::build(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
@@ -44,22 +43,20 @@ fn redirect_builders_compile_and_run() {
         built.err()
     );
 
-    // Emission regression: the record-update builders must emit their
-    // clone-and-reassign block targeting the right field.
+    // Emission regression: `withRedirects` must emit its clone-and-reassign
+    // block targeting the `redirects` field.
     let emitted = std::fs::read_to_string(out.join("src").join("main.rs")).unwrap_or_default();
-    for needle in ["__ipe_rec.followRedirects = ", "__ipe_rec.maxRedirects = "] {
-        assert!(
-            emitted.contains(needle),
-            "emitted Rust must contain `{needle}` (builder record update).\n\
-             Relevant lines:\n{}",
-            emitted
-                .lines()
-                .filter(|l| l.contains("__ipe_rec"))
-                .take(10)
-                .collect::<Vec<_>>()
-                .join("\n")
-        );
-    }
+    assert!(
+        emitted.contains("__ipe_rec.redirects = "),
+        "emitted Rust must contain `__ipe_rec.redirects = ` (builder record update).\n\
+         Relevant lines:\n{}",
+        emitted
+            .lines()
+            .filter(|l| l.contains("__ipe_rec"))
+            .take(10)
+            .collect::<Vec<_>>()
+            .join("\n")
+    );
     // `withUrl` is the typed-target retarget: it must emit a call to the runtime
     // fn that performs the fail-closed http/https scheme narrowing, not a raw
     // record update (a raw update would skip the narrowing).
@@ -83,9 +80,10 @@ fn redirect_builders_compile_and_run() {
     );
     assert_eq!(
         outcome.stdout.trim(),
-        // `withUrl` carries the typed `Url`'s canonical serialization, which the
-        // `url` crate normalises with a root path (`.../` for an empty path).
-        "http://example.org/\nnoredirect\n3",
-        "builder chain must override url/followRedirects/maxRedirects"
+        // `withUrl` carries the typed `Url`'s canonical serialization; the two
+        // blocks exercise both `RedirectPolicy` variants (NoRedirects and
+        // FollowRedirects Int).
+        "http://example.org/\nnoredirect\nhttp://example.org/\nfollow 3",
+        "builder chain must override url and both redirect-policy variants"
     );
 }
