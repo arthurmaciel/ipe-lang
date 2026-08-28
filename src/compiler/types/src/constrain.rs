@@ -229,6 +229,10 @@ struct Builtins {
     http_f_redirects: Symbol,
     /// `"RedirectPolicy"` — the `Ipe.Http.RedirectPolicy` ADT type constructor.
     redirect_policy: Symbol,
+    /// `"NoRedirects"` — nullary `RedirectPolicy` constructor.
+    no_redirects: Symbol,
+    /// `"FollowRedirects"` — `Int -> RedirectPolicy` constructor.
+    follow_redirects: Symbol,
     /// `"contentType"` — `Ipe.Http.Server.Response` record field (camelCase).
     server_f_content_type: Symbol,
     /// `"name"` — `Ipe.Db.Migration` record field.
@@ -811,6 +815,8 @@ impl Builtins {
             http_f_timeout: interner.intern("timeout")?,
             http_f_redirects: interner.intern("redirects")?,
             redirect_policy: interner.intern("RedirectPolicy")?,
+            no_redirects: interner.intern("NoRedirects")?,
+            follow_redirects: interner.intern("FollowRedirects")?,
             // Db symbols.
             db: interner.intern("Db")?,
             sqlvalue: interner.intern("SqlValue")?,
@@ -1119,6 +1125,12 @@ impl Builtins {
             name: self.errorinfo,
             args: Vec::new(),
         };
+        // Monomorphic `RedirectPolicy` — no type params.
+        let redirect_policy_ty = Ty::Con {
+            module: Vec::new(),
+            name: self.redirect_policy,
+            args: Vec::new(),
+        };
         vec![
             (
                 self.true_,
@@ -1132,6 +1144,20 @@ impl Builtins {
                 CtorScheme {
                     arg_tys: Vec::new(),
                     result: bool_ty,
+                },
+            ),
+            (
+                self.no_redirects,
+                CtorScheme {
+                    arg_tys: Vec::new(),
+                    result: redirect_policy_ty.clone(),
+                },
+            ),
+            (
+                self.follow_redirects,
+                CtorScheme {
+                    arg_tys: vec![int_ty.clone()],
+                    result: redirect_policy_ty,
                 },
             ),
             (

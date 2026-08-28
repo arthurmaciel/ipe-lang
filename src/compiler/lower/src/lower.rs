@@ -12433,6 +12433,12 @@ pub struct BuiltinCtors {
     pub bs_linear_with_jitter: Symbol,
     pub bs_exponential: Symbol,
     pub bs_exponential_with_jitter: Symbol,
+    // ── RedirectPolicy ADT ─────────────────────────────
+    // `NoRedirects` (nullary) / `FollowRedirects Int`. Prelude built-in like
+    // `HttpMethod`, but destructured in user code (`case req.redirects of …`).
+    pub redirect_policy: Symbol,
+    pub no_redirects: Symbol,
+    pub follow_redirects: Symbol,
 }
 
 /// The parameter-pattern count of a single top-level binding — the number of
@@ -13238,7 +13244,20 @@ impl<'a> Lowerer<'a> {
         ctor_arity.insert((prelude_home.clone(), builtins.bs_linear), 0);
         ctor_arity.insert((prelude_home.clone(), builtins.bs_linear_with_jitter), 0);
         ctor_arity.insert((prelude_home.clone(), builtins.bs_exponential), 0);
-        ctor_arity.insert((prelude_home, builtins.bs_exponential_with_jitter), 0); // final move
+        ctor_arity.insert(
+            (prelude_home.clone(), builtins.bs_exponential_with_jitter),
+            0,
+        );
+        // ── RedirectPolicy ADT ───────────────────────────────────────
+        // `NoRedirects` (nullary) / `FollowRedirects Int` — destructured in user
+        // code; seeding here lets `case req.redirects of NoRedirects -> … ;
+        // FollowRedirects n -> …` validate and lower past the enum-cover check.
+        enum_variants.insert(
+            (prelude_home.clone(), builtins.redirect_policy),
+            vec![builtins.no_redirects, builtins.follow_redirects],
+        );
+        ctor_arity.insert((prelude_home.clone(), builtins.no_redirects), 0);
+        ctor_arity.insert((prelude_home, builtins.follow_redirects), 1); // FollowRedirects(Int) — final move
 
         Self {
             m,
@@ -28709,6 +28728,10 @@ mod tests {
         let bs_linear_with_jitter = interner.intern("LinearWithJitter").unwrap();
         let bs_exponential = interner.intern("Exponential").unwrap();
         let bs_exponential_with_jitter = interner.intern("ExponentialWithJitter").unwrap();
+        // ── RedirectPolicy ADT ─────────────────────────
+        let redirect_policy = interner.intern("RedirectPolicy").unwrap();
+        let no_redirects = interner.intern("NoRedirects").unwrap();
+        let follow_redirects = interner.intern("FollowRedirects").unwrap();
 
         BuiltinCtors {
             maybe,
@@ -28781,6 +28804,10 @@ mod tests {
             bs_linear_with_jitter,
             bs_exponential,
             bs_exponential_with_jitter,
+            // ── RedirectPolicy ─────────────────────
+            redirect_policy,
+            no_redirects,
+            follow_redirects,
         }
     }
 

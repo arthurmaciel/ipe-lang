@@ -1,6 +1,6 @@
 module Main exposing (main)
 
-import Ipe.Http as Http exposing (RedirectPolicy(..))
+import Ipe.Http as Http
 import Ipe.Io as Io
 import Ipe.String
 import Ipe.Url as Url
@@ -28,7 +28,7 @@ printReq req =
                 "noredirect"
 
             FollowRedirects n ->
-                "follow " ++ Ipe.String.fromInt n
+                "follow " ++ String.fromInt n
         ]
 
 
@@ -42,10 +42,10 @@ main =
                             Io.println
                                 (String.join "\n"
                                     [ printReq
-                                        (Http.withRedirects Http.NoRedirects retargeted)
+                                        (Http.withRedirects NoRedirects retargeted)
                                     , printReq
                                         (Http.withRedirects
-                                            (Http.FollowRedirects 3)
+                                            (FollowRedirects 3)
                                             retargeted)
                                     ]
                                 )

@@ -2797,6 +2797,14 @@ impl<'a> EmitCtx<'a> {
         if self.is_cache_handle_type(home, ty) {
             return Ok("IpeCacheHandle");
         }
+        // `RedirectPolicy` is a Prelude-built-in enum backed by the runtime
+        // `ipe_runtime::http_client::RedirectPolicy` (in scope via
+        // `pub use ipe_runtime::*`). Its `EnumDef` is suppressed in `ipe_lower`,
+        // so it is absent from `enum_names`; route it here like `StreamId`, so a
+        // `case req.redirects of …` scrutinee type resolves in type position.
+        if home.0.is_empty() && matches!(self.interner.resolve(ty), Some("RedirectPolicy")) {
+            return Ok("RedirectPolicy");
+        }
         self.enum_names
             .get(&(home.clone(), ty))
             .map(String::as_str)
@@ -2889,6 +2897,12 @@ impl<'a> EmitCtx<'a> {
             // Its `EnumDef` is suppressed in `ipe_lower`, so construction
             // and pattern-matching route through this arm.
             Some("HttpMethod") => Some("HttpMethod"),
+            // `RedirectPolicy` is backed by `ipe_runtime::http_client::RedirectPolicy`
+            // (`NoRedirects` / `FollowRedirects(i64)`), in scope via
+            // `pub use ipe_runtime::*`. Its `EnumDef` is suppressed in `ipe_lower`,
+            // so construction (`FollowRedirects 3`) and matching
+            // (`case req.redirects of NoRedirects -> …`) route through this arm.
+            Some("RedirectPolicy") => Some("RedirectPolicy"),
             _ => None,
         }
     }
