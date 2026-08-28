@@ -109,12 +109,7 @@ pub fn http_stream_open<E: From<String> + Send + 'static>(
         // per-redirect re-check via the shared helper, identical to Http.get/post.
         let builder =
             reqwest::Client::builder().connect_timeout(std::time::Duration::from_secs(30));
-        let builder = match crate::http_client::ssrf_apply(
-            builder,
-            &req.url,
-            req.followRedirects,
-            req.maxRedirects,
-        ) {
+        let builder = match crate::http_client::ssrf_apply(builder, &req.url, req.redirects) {
             Ok(b) => b,
             Err(msg) => return IpeResult::Err(msg.into()),
         };

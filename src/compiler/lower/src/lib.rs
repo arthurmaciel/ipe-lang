@@ -248,6 +248,10 @@ pub fn lower(
         bs_linear_with_jitter: interner.intern("LinearWithJitter").map_err(homeless)?,
         bs_exponential: interner.intern("Exponential").map_err(homeless)?,
         bs_exponential_with_jitter: interner.intern("ExponentialWithJitter").map_err(homeless)?,
+        // ── RedirectPolicy ADT ─────────────────────────────────
+        redirect_policy: interner.intern("RedirectPolicy").map_err(homeless)?,
+        no_redirects: interner.intern("NoRedirects").map_err(homeless)?,
+        follow_redirects: interner.intern("FollowRedirects").map_err(homeless)?,
     };
     lower::Lowerer::new(
         m,

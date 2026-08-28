@@ -141,11 +141,11 @@ fn http_response_fields() {
 /// `Http.defaultRequestFromString url` whose ONLY consumer is a field read
 /// (`req.url`) — no `Http.request` call, and no OTHER function signature in the
 /// program spells out the
-/// `{body, followRedirects, headers, maxRedirects, method, timeout, url}`
+/// `{body, headers, method, redirects, timeout, url}`
 /// fieldset as an explicit annotation — must still emit and build.
 ///
 /// `ipe_lower::lower::ir_type_from_ty` folds any solved record matching that
-/// exact 7-field shape into the opaque `IrType::HttpRequest` (so
+/// exact 6-field shape into the opaque `IrType::HttpRequest` (so
 /// `Http.request` / `HttpStream.open` call sites see the runtime type),
 /// regardless of the value's OTHER consumers. The typed-target builder is now
 /// backed by the runtime fn `http_default_request_from_string`, which

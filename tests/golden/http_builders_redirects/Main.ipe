@@ -6,27 +6,29 @@ import Ipe.String
 import Ipe.Url as Url
 
 
--- The three builders on top of the M5b set:
--- Http.withUrl / Http.withFollowRedirects / Http.withMaxRedirects.
--- withFollowRedirects / withMaxRedirects are single-field record updates on
--- HttpRequest; withUrl retargets to a typed Url and re-narrows the scheme to
--- http/https (fail-closed), returning a Result. The chain below overrides
--- every one of the defaultRequest values they own
--- (url "http://example.com" -> "http://example.org",
---  followRedirects True -> False, maxRedirects 10 -> 3).
+-- `Http.withRedirects` with both `NoRedirects` and `FollowRedirects Int`,
+-- plus a `withUrl` retarget. The chain overrides defaultRequest values:
+--   url "http://example.com" -> "http://example.org"
+--   redirects (FollowRedirects 10) -> NoRedirects   (first line block)
+--   redirects (FollowRedirects 10) -> FollowRedirects 3 (second line block)
 --
 -- Expected output:
 --   http://example.org
 --   noredirect
---   3
+--   http://example.org
+--   follow 3
 
 
-printReq : { body : String, followRedirects : Bool, headers : List ( String, String ), maxRedirects : Int, method : Http.HttpMethod, timeout : Int, url : String } -> String
+printReq : { body : String, headers : List ( String, String ), method : Http.HttpMethod, redirects : Http.RedirectPolicy, timeout : Int, url : String } -> String
 printReq req =
     String.join "\n"
         [ req.url
-        , if req.followRedirects then "redirect" else "noredirect"
-        , String.fromInt req.maxRedirects
+        , case req.redirects of
+            NoRedirects ->
+                "noredirect"
+
+            FollowRedirects n ->
+                "follow " ++ String.fromInt n
         ]
 
 
@@ -38,9 +40,15 @@ main =
                     case Http.withUrl target req0 of
                         Ok retargeted ->
                             Io.println
-                                (printReq
-                                    (Http.withMaxRedirects 3
-                                        (Http.withFollowRedirects False retargeted)))
+                                (String.join "\n"
+                                    [ printReq
+                                        (Http.withRedirects NoRedirects retargeted)
+                                    , printReq
+                                        (Http.withRedirects
+                                            (FollowRedirects 3)
+                                            retargeted)
+                                    ]
+                                )
 
                         Err _ ->
                             Io.println "blocked"

@@ -216,9 +216,13 @@ async fn email_post_json<E: From<String>>(
     // region-interpolated, so when IPE_HTTP_DENY_PRIVATE is set this pins DNS to
     // a vetted non-private addr — otherwise a crafted endpoint could exfiltrate
     // the bearer token + payload to a metadata/loopback host. Email POSTs never
-    // follow redirects (false / 0).
+    // follow redirects.
     let builder = reqwest::Client::builder().timeout(std::time::Duration::from_secs(30));
-    let builder = match crate::http_client::ssrf_apply(builder, url, false, 0) {
+    let builder = match crate::http_client::ssrf_apply(
+        builder,
+        url,
+        crate::http_client::RedirectPolicy::NoRedirects,
+    ) {
         Ok(b) => b,
         Err(e) => return Err(e.into()),
     };

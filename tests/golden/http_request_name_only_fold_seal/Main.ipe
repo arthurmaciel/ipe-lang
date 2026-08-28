@@ -3,22 +3,16 @@ module Main exposing (main)
 import Ipe.Io as Io
 import Ipe.String
 
--- Regression fixture for the BACKLOG Critical row "Name-only HttpRequest-shape
--- false-positive fold": a record literal that shares the CANONICAL
--- `HttpRequest` fieldset {body, followRedirects, headers, maxRedirects,
--- method, timeout, url} in NAME ONLY -- every field here is `Int`, nothing
--- HTTP-related.
+-- Regression fixture for the "Name-only HttpRequest-shape false-positive fold":
+-- a record literal that shares the canonical `HttpRequest` fieldset
+-- {body, headers, method, redirects, timeout, url} in NAME ONLY -- every
+-- field here is `Int`, nothing HTTP-related.
 --
--- Pre-fix, `ipe_lower::lower::ir_type_from_ty`'s `Ty::Record` arm and its
--- sibling in `ir_type_from_canon`'s `canon::Type::Record` arm folded ANY
--- record matching that 7-field NAME set to the opaque `IrType::HttpRequest`
--- regardless of field TYPES -- and `ipe_backend_rust::emit_expr::emit_record`
--- independently duplicated the same name-only mistake. `ipec` exited 0; the
--- emitted `cargo build` failed with a wall of E0308 (Int values assigned into
--- `ipe_runtime::HttpRequest`'s typed String / Bool / List fields).
-sumFields : { body : Int, followRedirects : Int, headers : Int, maxRedirects : Int, method : Int, timeout : Int, url : Int } -> Int
+-- The lowerer must NOT fold this to `IrType::HttpRequest` because the field
+-- TYPES differ (all `Int`, not String/RedirectPolicy/etc).
+sumFields : { body : Int, headers : Int, method : Int, redirects : Int, timeout : Int, url : Int } -> Int
 sumFields c =
-    c.body + c.followRedirects + c.headers + c.maxRedirects + c.method + c.timeout + c.url
+    c.body + c.headers + c.method + c.redirects + c.timeout + c.url
 
 
 main =
@@ -26,12 +20,11 @@ main =
         (String.fromInt
             (sumFields
                 { body = 1
-                , followRedirects = 2
-                , headers = 3
-                , maxRedirects = 4
-                , method = 5
-                , timeout = 6
-                , url = 7
+                , headers = 2
+                , method = 3
+                , redirects = 4
+                , timeout = 5
+                , url = 6
                 }
             )
         )

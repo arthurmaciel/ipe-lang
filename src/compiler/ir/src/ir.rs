@@ -1142,8 +1142,8 @@ pub enum IrType {
     ///
     /// Corresponds to `ipe_runtime::http::HttpRequest`.  In Ipê source, users
     /// write `HttpRequest` literals as structural records; the lowerer detects
-    /// the canonical 7-field set (`body`, `followRedirects`, `headers`,
-    /// `maxRedirects`, `method`, `timeout`, `url`) and folds it to this opaque
+    /// the canonical 6-field set (`body`, `headers`, `method`, `redirects`,
+    /// `timeout`, `url`) and folds it to this opaque
     /// variant instead of synthesising a backend record struct, so call sites
     /// that pass the value to `http_stream_open` / `http_request` kernels see
     /// the correct runtime type.  Never stored in a Ipe.Web Model.

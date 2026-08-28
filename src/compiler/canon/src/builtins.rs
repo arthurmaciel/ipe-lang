@@ -151,6 +151,19 @@ pub const BUILTIN_UNIONS: &[BuiltinUnion] = &[
         exhaust_union: true,
         qualified_home: Some("Http"),
     },
+    // ── RedirectPolicy (Ipe.Http) ──────────────────────────────────────────
+    // Redirect behaviour for an outbound request, replacing the coupled
+    // `followRedirects : Bool` + `maxRedirects : Int` pair. Unlike the verb set,
+    // this union is destructured in user code (`case req.redirects of …`), so its
+    // constructors are ambient-unqualified (like `Just`/`Ok`) rather than
+    // qualified-only. Index order matches the `RedirectPolicy` enum in
+    // `ipe_runtime::http_client`.
+    BuiltinUnion {
+        type_name: "RedirectPolicy",
+        ctors: &[("NoRedirects", 0, 0), ("FollowRedirects", 1, 1)],
+        exhaust_union: true,
+        qualified_home: None,
+    },
     // ── Error / ErrorKind / ErrorDetails ───────────────────────────────────
     // `Error : ErrorKind -> ErrorInfo -> Error` — arity 2. The sole constructor
     // shares the type's name.

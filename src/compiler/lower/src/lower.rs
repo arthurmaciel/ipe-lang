@@ -217,7 +217,6 @@ pub const OPAQUE_NAMES_ABOVE_GUARD: &[&str] = &[
 #[derive(Clone, Copy)]
 enum HttpFieldTy {
     Str,
-    Bool,
     Int,
     /// `List (String, String)`.
     StrPairList,
@@ -227,11 +226,15 @@ enum HttpFieldTy {
     /// Matched as a zero-argument `Ty::Con` whose name resolves to `"HttpMethod"` —
     /// analogous to `Bool`/`Int` builtins, with no module path (empty `module`).
     HttpMethodAdt,
+    /// The `RedirectPolicy` ADT (`NoRedirects | FollowRedirects Int`).
+    /// Matched as a zero-argument `Ty::Con` whose name resolves to `"RedirectPolicy"` —
+    /// same convention as `HttpMethodAdt`.
+    RedirectPolicyAdt,
 }
 
 /// The canonical `HttpRequest` record shape as `(field name, expected field
-/// TYPE)` pairs, alphabetically sorted by name: `body`, `followRedirects`,
-/// `headers`, `maxRedirects`, `method`, `timeout`, `url`.
+/// TYPE)` pairs, alphabetically sorted by name: `body`, `headers`, `method`,
+/// `redirects`, `timeout`, `url`.
 ///
 /// Shared by [`Lowerer::ir_type_from_ty`]'s structural fold (solved/inferred
 /// `Ty::Record` regions — e.g. a `Http.defaultRequest |> withMethod |> …`
@@ -262,10 +265,9 @@ enum HttpFieldTy {
 /// sound answer under a purely structural type system.
 const HTTP_REQUEST_FIELD_TYPES: &[(&str, HttpFieldTy)] = &[
     ("body", HttpFieldTy::Str),
-    ("followRedirects", HttpFieldTy::Bool),
     ("headers", HttpFieldTy::StrPairList),
-    ("maxRedirects", HttpFieldTy::Int),
     ("method", HttpFieldTy::HttpMethodAdt),
+    ("redirects", HttpFieldTy::RedirectPolicyAdt),
     ("timeout", HttpFieldTy::Int),
     ("url", HttpFieldTy::Str),
 ];
@@ -328,9 +330,6 @@ fn ty_matches_http_field(ty: &Ty, expected: HttpFieldTy, interner: &Interner) ->
         (HttpFieldTy::Str, Ty::Con { module, name, args }) => {
             module.is_empty() && args.is_empty() && interner.resolve(*name) == Some("String")
         }
-        (HttpFieldTy::Bool, Ty::Con { module, name, args }) => {
-            module.is_empty() && args.is_empty() && interner.resolve(*name) == Some("Bool")
-        }
         (HttpFieldTy::Int, Ty::Con { module, name, args }) => {
             module.is_empty() && args.is_empty() && interner.resolve(*name) == Some("Int")
         }
@@ -360,6 +359,11 @@ fn ty_matches_http_field(ty: &Ty, expected: HttpFieldTy, interner: &Interner) ->
         (HttpFieldTy::HttpMethodAdt, Ty::Con { module, name, args }) => {
             module.is_empty() && args.is_empty() && interner.resolve(*name) == Some("HttpMethod")
         }
+        (HttpFieldTy::RedirectPolicyAdt, Ty::Con { module, name, args }) => {
+            module.is_empty()
+                && args.is_empty()
+                && interner.resolve(*name) == Some("RedirectPolicy")
+        }
         _ => false,
     }
 }
@@ -378,9 +382,6 @@ fn canon_ty_matches_http_field(
     match (expected, ty) {
         (HttpFieldTy::Str, canon::Type::Con { home, name, args }) => {
             home.is_empty() && args.is_empty() && interner.resolve(*name) == Some("String")
-        }
-        (HttpFieldTy::Bool, canon::Type::Con { home, name, args }) => {
-            home.is_empty() && args.is_empty() && interner.resolve(*name) == Some("Bool")
         }
         (HttpFieldTy::Int, canon::Type::Con { home, name, args }) => {
             home.is_empty() && args.is_empty() && interner.resolve(*name) == Some("Int")
@@ -410,6 +411,9 @@ fn canon_ty_matches_http_field(
         }
         (HttpFieldTy::HttpMethodAdt, canon::Type::Con { home, name, args }) => {
             home.is_empty() && args.is_empty() && interner.resolve(*name) == Some("HttpMethod")
+        }
+        (HttpFieldTy::RedirectPolicyAdt, canon::Type::Con { home, name, args }) => {
+            home.is_empty() && args.is_empty() && interner.resolve(*name) == Some("RedirectPolicy")
         }
         _ => false,
     }
@@ -12472,6 +12476,12 @@ pub struct BuiltinCtors {
     pub bs_linear_with_jitter: Symbol,
     pub bs_exponential: Symbol,
     pub bs_exponential_with_jitter: Symbol,
+    // ── RedirectPolicy ADT ─────────────────────────────
+    // `NoRedirects` (nullary) / `FollowRedirects Int`. Prelude built-in like
+    // `HttpMethod`, but destructured in user code (`case req.redirects of …`).
+    pub redirect_policy: Symbol,
+    pub no_redirects: Symbol,
+    pub follow_redirects: Symbol,
 }
 
 /// The parameter-pattern count of a single top-level binding — the number of
@@ -13277,7 +13287,20 @@ impl<'a> Lowerer<'a> {
         ctor_arity.insert((prelude_home.clone(), builtins.bs_linear), 0);
         ctor_arity.insert((prelude_home.clone(), builtins.bs_linear_with_jitter), 0);
         ctor_arity.insert((prelude_home.clone(), builtins.bs_exponential), 0);
-        ctor_arity.insert((prelude_home, builtins.bs_exponential_with_jitter), 0); // final move
+        ctor_arity.insert(
+            (prelude_home.clone(), builtins.bs_exponential_with_jitter),
+            0,
+        );
+        // ── RedirectPolicy ADT ───────────────────────────────────────
+        // `NoRedirects` (nullary) / `FollowRedirects Int` — destructured in user
+        // code; seeding here lets `case req.redirects of NoRedirects -> … ;
+        // FollowRedirects n -> …` validate and lower past the enum-cover check.
+        enum_variants.insert(
+            (prelude_home.clone(), builtins.redirect_policy),
+            vec![builtins.no_redirects, builtins.follow_redirects],
+        );
+        ctor_arity.insert((prelude_home.clone(), builtins.no_redirects), 0);
+        ctor_arity.insert((prelude_home, builtins.follow_redirects), 1); // FollowRedirects(Int) — final move
 
         Self {
             m,
@@ -19357,9 +19380,9 @@ impl<'a> Lowerer<'a> {
             // `Ty` are simply absent from the IR (the optional-field mechanism
             // works through the open row var at type-check time, not at codegen).
             //
-            // Special case: detect the canonical 7-field `HttpRequest` record —
-            // `body`, `followRedirects`, `headers`, `maxRedirects`, `method`,
-            // `timeout`, `url` — and fold it to the opaque `IrType::HttpRequest`
+            // Special case: detect the canonical 6-field `HttpRequest` record —
+            // `body`, `headers`, `method`, `redirects`, `timeout`, `url` —
+            // and fold it to the opaque `IrType::HttpRequest`
             // so call sites that pass the value to `http_stream_open` /
             // `http_request` kernels see the correct runtime type, rather than a
             // backend-synthesised struct with an auto-generated name.
@@ -24231,15 +24254,13 @@ impl<'a> Lowerer<'a> {
                 // ── Http arity-2 ────────────────────────────────────────
                 // `HttpPost` : String -> String -> Task Error HttpResponse
                 // `HttpWithMethod` / `HttpWithTimeout` / `HttpWithBody` /
-                // `HttpWithUrl` / `HttpWithFollowRedirects` /
-                // `HttpWithMaxRedirects` : pure builders
+                // `HttpWithUrl` / `HttpWithRedirects` : pure builders
                 | KernelFn::HttpPost
                 | KernelFn::HttpWithMethod
                 | KernelFn::HttpWithTimeout
                 | KernelFn::HttpWithBody
                 | KernelFn::HttpWithUrl
-                | KernelFn::HttpWithFollowRedirects
-                | KernelFn::HttpWithMaxRedirects
+                | KernelFn::HttpWithRedirects
                 // ── Db arity-2 ───────────────────────────────────────
                 // `DbOpen : String -> String -> Task Error Db`
                 | KernelFn::DbOpen
@@ -25927,12 +25948,7 @@ impl<'a> Lowerer<'a> {
                     ("Http", "withBody") => Ok(Callee::Kernel(KernelFn::HttpWithBody)),
                     ("Http", "withHeader") => Ok(Callee::Kernel(KernelFn::HttpWithHeader)),
                     ("Http", "withUrl") => Ok(Callee::Kernel(KernelFn::HttpWithUrl)),
-                    ("Http", "withFollowRedirects") => {
-                        Ok(Callee::Kernel(KernelFn::HttpWithFollowRedirects))
-                    }
-                    ("Http", "withMaxRedirects") => {
-                        Ok(Callee::Kernel(KernelFn::HttpWithMaxRedirects))
-                    }
+                    ("Http", "withRedirects") => Ok(Callee::Kernel(KernelFn::HttpWithRedirects)),
                     ("Http", "methodFromString") => {
                         Ok(Callee::Kernel(KernelFn::HttpMethodFromString))
                     }
@@ -28773,6 +28789,10 @@ mod tests {
         let bs_linear_with_jitter = interner.intern("LinearWithJitter").unwrap();
         let bs_exponential = interner.intern("Exponential").unwrap();
         let bs_exponential_with_jitter = interner.intern("ExponentialWithJitter").unwrap();
+        // ── RedirectPolicy ADT ─────────────────────────
+        let redirect_policy = interner.intern("RedirectPolicy").unwrap();
+        let no_redirects = interner.intern("NoRedirects").unwrap();
+        let follow_redirects = interner.intern("FollowRedirects").unwrap();
 
         BuiltinCtors {
             maybe,
@@ -28845,6 +28865,10 @@ mod tests {
             bs_linear_with_jitter,
             bs_exponential,
             bs_exponential_with_jitter,
+            // ── RedirectPolicy ─────────────────────
+            redirect_policy,
+            no_redirects,
+            follow_redirects,
         }
     }
 
