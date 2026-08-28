@@ -156,3 +156,27 @@ fn crypto_random_bytes() {
 fn crypto_random_token() {
     assert_runs_and_matches_oracle("crypto_random_token");
 }
+
+// ── String-as-key type-error seal ────────────────────────────────────────────
+
+/// Passing a bare `String` where `Crypto.hmacSha256` expects a `Key` is a
+/// compile-time type error — the `Key` newtype makes message-as-key impossible.
+#[test]
+fn crypto_hmac_string_key_is_type_error() {
+    let root = repo_root();
+    let entry = root
+        .join("tests")
+        .join("golden")
+        .join("crypto_hmac_string_key_rejected")
+        .join("Main.ipe");
+    let out = std::env::temp_dir().join("ipec_crypto_hmac_string_key_rejected");
+    let _ = std::fs::remove_dir_all(&out);
+    let Ok(runtime) = ipe::resolve_runtime() else {
+        return; // runtime unresolvable — skip.
+    };
+    let built = ipe::build(&entry, &out, &runtime);
+    assert!(
+        built.is_err(),
+        "hmacSha256 with a bare String key must be rejected, but ipe accepted it: {built:?}"
+    );
+}

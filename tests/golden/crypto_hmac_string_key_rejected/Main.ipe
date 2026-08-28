@@ -1,0 +1,15 @@
+module Main exposing (main)
+
+import Ipe.Io as Io
+import Ipe.Crypto as Crypto
+
+-- Type-error fixture: passing a bare String where a Key is required must be
+-- a compile error.  `hmacSha256` now has type `Key -> String -> Mac`, so
+-- `hmacSha256 "secret-key" "message"` mixes up key and Key-position String,
+-- making message-as-key impossible at the type level.
+
+main =
+    let
+        mac = Crypto.hmacSha256 "not-a-key" "message"
+    in
+    Io.println (Crypto.macToHex mac)
