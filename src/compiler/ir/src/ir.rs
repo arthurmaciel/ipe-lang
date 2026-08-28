@@ -1720,6 +1720,7 @@ pub enum UiPlain {
 /// variant must make an explicit derivability decision here rather than default
 /// silently into the derivable branch (walker-arm rule).
 #[must_use]
+#[allow(clippy::too_many_lines)] // one arm per IrType variant, deliberately exhaustive
 pub fn ir_type_is_derivable(
     ty: &IrType,
     enum_derivable: &impl Fn(&ModPath, Symbol) -> bool,
