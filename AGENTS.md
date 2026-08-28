@@ -96,6 +96,15 @@ existing PR rather than opening a parallel one). Versions and `CHANGELOG.md` are
 automated by release-please from Conventional Commit messages — never bump by
 hand. Slow checks run post-merge and nightly; detail in `misc/docs/internals/dev-ops.md`.
 
+## Stdlib API boundary rule: no bare primitives at typed boundaries
+
+Never accept a primitive type (`Int`, `String`, `Bool`, `Char`) at a public
+boundary when a more principled, structured type is required. A fixed set of
+values is a sum type; a structured string (path, URL, token, identifier) is a
+typed newtype with a parser (parse-don't-validate); a bounded number is a
+refinement or newtype. If the correct typed wrapper already exists in the
+stdlib, the boundary MUST use it, not a bare primitive.
+
 ## Non-regression invariants (the test suite enforces these)
 
 - No `Result String a` / `Task String a` in public surfaces — use
