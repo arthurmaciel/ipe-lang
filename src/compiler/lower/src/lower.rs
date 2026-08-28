@@ -23562,6 +23562,7 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::FileTempFile
                 | KernelFn::FileTempDir
                 | KernelFn::FileDelete
+                | KernelFn::FileWalk
                 // ── Http arity-1 ────────────────────────────────────────
                 // `HttpGet` : String -> Task Error HttpResponse
                 // `HttpRequest` : HttpRequest -> Task Error HttpResponse
@@ -23891,6 +23892,7 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::FileAppend
                 | KernelFn::FileCopy
                 | KernelFn::FileRename
+                | KernelFn::FileWalkMatching
                 // ── Process arity-2 ─────────────────────────────────────
                 // `ProcessRun` : String -> List String -> Task Error String
                 | KernelFn::ProcessRun
@@ -25568,6 +25570,8 @@ impl<'a> Lowerer<'a> {
                     ("File", "copy") => Ok(Callee::Kernel(KernelFn::FileCopy)),
                     ("File", "rename") => Ok(Callee::Kernel(KernelFn::FileRename)),
                     ("File", "delete") => Ok(Callee::Kernel(KernelFn::FileDelete)),
+                    ("File", "walk") => Ok(Callee::Kernel(KernelFn::FileWalk)),
+                    ("File", "walkMatching") => Ok(Callee::Kernel(KernelFn::FileWalkMatching)),
                     ("Process", "run") => Ok(Callee::Kernel(KernelFn::ProcessRun)),
                     // ── Http kernels ────────────────────────────────────
                     ("Http", "get") => Ok(Callee::Kernel(KernelFn::HttpGet)),

@@ -5613,6 +5613,10 @@ impl<'a> Builder<'a> {
             K::FileReadDir => fun(path(), task(list(string()))),
             K::FileReadFileLimit => fun(path(), fun(int(), task(string()))),
             K::FileReadFileBytes => fun(path(), task(list(int()))),
+            // `walk : Path -> Task Error (List Path)` — recursive, files only.
+            K::FileWalk => fun(path(), task(list(path()))),
+            // `walkMatching : Path -> (Path -> Bool) -> Task Error (List Path)`
+            K::FileWalkMatching => fun(path(), fun(fun(path(), bool_ty()), task(list(path())))),
 
             // ── Http ──
             K::HttpGet => fun(string(), task(http_response())),
@@ -9284,7 +9288,7 @@ mod registry_phase_c_tests {
             K::RandomChoiceMaybe,
             K::RandomShuffle,
             K::RandomWeighted,
-            // File (15)
+            // File (17)
             K::FileReadFile,
             K::FileWriteFile,
             K::FileExists,
@@ -9300,6 +9304,8 @@ mod registry_phase_c_tests {
             K::FileCopy,
             K::FileRename,
             K::FileDelete,
+            K::FileWalk,
+            K::FileWalkMatching,
             // Http (13)
             K::HttpGet,
             K::HttpPost,

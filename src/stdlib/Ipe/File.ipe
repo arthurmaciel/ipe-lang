@@ -12,6 +12,7 @@ module Ipe.File exposing
     , writeFile, append
     , exists, remove
     , mkdirAll, readDir, isDir
+    , walk, walkMatching
     , tempFile, tempDir, copy, rename
     )
 
@@ -80,6 +81,40 @@ readDir = Ffi.kernel "File_readDir"
 
 isDir : Path -> Task Error Bool
 isDir = Ffi.kernel "File_isDir"
+
+
+-- | `walk root` -- recursively walk `root`, returning the absolute path of
+-- every regular file reachable from it in lexicographic order.  Directories
+-- are not included.  Symlink cycles are detected and skipped; broken symlinks
+-- and unreadable subtrees are silently skipped.  Returns `Err` only if `root`
+-- itself is not a readable directory.
+--
+-- Example:
+--
+--     case Path.fromString "/my/project" of
+--         Err e ->
+--             Task.fail e
+--
+--         Ok root ->
+--             File.walk root
+--                 |> Task.andThen
+--                     (\files ->
+--                         -- files : List Path
+--                         Io.println (String.join "\n" (List.map Path.toString files))
+--                     )
+walk : Path -> Task Error (List Path)
+walk = Ffi.kernel "File_walk"
+
+
+-- | `walkMatching root pred` -- like `walk`, but only includes files for
+-- which `pred` returns `True`.  The predicate runs synchronously during the
+-- walk and receives each file's absolute `Path`.
+--
+-- Example — collect only `.ipe` source files:
+--
+--     walkMatching root (\p -> String.endsWith ".ipe" (Path.toString p))
+walkMatching : Path -> (Path -> Bool) -> Task Error (List Path)
+walkMatching = Ffi.kernel "File_walkMatching"
 
 
 -- Misc

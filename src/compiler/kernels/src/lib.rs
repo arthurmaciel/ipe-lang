@@ -1297,6 +1297,12 @@ pub enum StdlibKernel {
     FileCopy,
     FileRename,
     FileDelete,
+    /// `File.walk : Path -> Task Error (List Path)` — recursive walk,
+    /// files only, lexicographic order, symlink-cycle-safe.
+    FileWalk,
+    /// `File.walkMatching : Path -> (Path -> Bool) -> Task Error (List Path)`
+    /// — like `walk` but filtered by a synchronous predicate.
+    FileWalkMatching,
     // ── Process ───────────────────────────────────────────────────────────────
     ProcessRun,
     // ── Http ────────────────────────────────────────────────────────────────
@@ -3311,6 +3317,8 @@ impl StdlibKernel {
             Self::FileCopy => d("File", "copy", 2, Pure, "file_copy"),
             Self::FileRename => d("File", "rename", 2, Pure, "file_rename"),
             Self::FileDelete => d("File", "delete", 1, Pure, "file_delete"),
+            Self::FileWalk => d("File", "walk", 1, Pure, "file_walk"),
+            Self::FileWalkMatching => d("File", "walkMatching", 2, Pure, "file_walk_matching"),
             // ── Process ───────────────────────────────────────────────────────
             Self::ProcessRun => d("Process", "run", 2, Pure, "process_run"),
             // ── Http ────────────────────────────────────────────────────────
@@ -4936,6 +4944,8 @@ impl StdlibKernel {
         Self::FileCopy,
         Self::FileRename,
         Self::FileDelete,
+        Self::FileWalk,
+        Self::FileWalkMatching,
         // Process
         Self::ProcessRun,
         // Http
@@ -6547,6 +6557,14 @@ impl StdlibKernel {
         // `Path -> Task (List Int)` (file.readFileBytes).
         const TASK_LIST_INT: TyShape = TyShape::Con(BuiltinTag::Task, &[LIST_INT]);
         const PATH_TO_TASK_LIST_INT: TyShape = TyShape::Fun(&PATH, &TASK_LIST_INT);
+        // `Path -> Task (List Path)` (file.walk).
+        const LIST_PATH: TyShape = TyShape::Con(BuiltinTag::List, &[PATH]);
+        const TASK_LIST_PATH: TyShape = TyShape::Con(BuiltinTag::Task, &[LIST_PATH]);
+        const PATH_TO_TASK_LIST_PATH: TyShape = TyShape::Fun(&PATH, &TASK_LIST_PATH);
+        // `Path -> (Path -> Bool) -> Task (List Path)` (file.walkMatching).
+        // PATH_TO_BOOL is already defined (used by Path.isAbsolute).
+        const PATH_TO_BOOL_TO_TASK_LIST_PATH: TyShape =
+            TyShape::Fun(&PATH, &TyShape::Fun(&PATH_TO_BOOL, &TASK_LIST_PATH));
         // `Int -> a` (system.exit).
         // (INT_TO_A already defined above.)
 
@@ -8495,6 +8513,8 @@ impl StdlibKernel {
             Self::FileReadDir => Some(&PATH_TO_TASK_LIST_STRING),
             Self::FileReadFileLimit => Some(&PATH_TO_INT_TO_TASK_STRING),
             Self::FileReadFileBytes => Some(&PATH_TO_TASK_LIST_INT),
+            Self::FileWalk => Some(&PATH_TO_TASK_LIST_PATH),
+            Self::FileWalkMatching => Some(&PATH_TO_BOOL_TO_TASK_LIST_PATH),
 
             // ── Random / Process. ──
             Self::RandomInt => Some(&INT_TO_INT_TO_TASK_INT),
@@ -9385,6 +9405,8 @@ impl StdlibKernel {
             | Self::FileCopy
             | Self::FileRename
             | Self::FileDelete
+            | Self::FileWalk
+            | Self::FileWalkMatching
             | Self::CsvParseStreamFromFile
             | Self::ConfigLoadFromFile => Some(Capability::Filesystem),
             Self::DbConnect
