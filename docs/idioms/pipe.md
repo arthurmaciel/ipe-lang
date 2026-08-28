@@ -21,7 +21,7 @@ report text =
 ```
 
 As a pipeline it reads as a recipe, top to bottom — from
-[`examples/shapes/program/word-frequency`](../../examples/shapes/program/word-frequency):
+[`examples/shapes/script/word-frequency`](../../examples/shapes/script/word-frequency):
 
 ```ipe
 report : String -> String

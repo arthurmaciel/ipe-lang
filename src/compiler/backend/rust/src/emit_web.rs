@@ -149,6 +149,7 @@ pub fn emit_web_call(
             let Some(app_s) = emit_web_app_inner(ctx, fields, indent, child, generics)? else {
                 return Ok(None);
             };
+            // `app_s` is already wrapped in `WebApp(...)` by `emit_web_app_inner`.
             Ok(Some(format!(
                 "{{ ipe_runtime::app_config::install_web({settings_s}); {app_s} }}"
             )))
@@ -488,7 +489,7 @@ fn emit_web_app_inner(
         )?;
         return Ok(Some(format!(
             "{{ {tag_const} \
-             ipe_runtime::web::web_app_routed(\
+             ipe_runtime::tea::WebApp(ipe_runtime::web::web_app_routed(\
              {init_s}, \
              {update_s}, \
              {view_s}, \
@@ -499,7 +500,7 @@ fn emit_web_app_inner(
              ::std::env::var(\"IPE_LIVE_STORE\").unwrap_or_else(|_| \"memory\".to_string()), \
              ::std::env::var(\"IPE_LIVE_STORE_PATH\").unwrap_or_else(|_| ::std::string::String::new()), \
              IPE_WEB_MODEL_SCHEMA_TAG\
-             ) }}"
+             )) }}"
         )));
     }
 
@@ -510,7 +511,7 @@ fn emit_web_app_inner(
     // switch stores without recompilation (`IPE_LIVE_STORE` / `IPE_LIVE_STORE_PATH`).
     Ok(Some(format!(
         "{{ {tag_const} \
-         ipe_runtime::web::web_app(\
+         ipe_runtime::tea::WebApp(ipe_runtime::web::web_app(\
          {init_s}, \
          {update_s}, \
          {view_s}, \
@@ -518,7 +519,7 @@ fn emit_web_app_inner(
          ::std::env::var(\"IPE_LIVE_STORE\").unwrap_or_else(|_| \"memory\".to_string()), \
          ::std::env::var(\"IPE_LIVE_STORE_PATH\").unwrap_or_else(|_| ::std::string::String::new()), \
          IPE_WEB_MODEL_SCHEMA_TAG\
-         ) }}"
+         )) }}"
     )))
 }
 
@@ -888,6 +889,10 @@ const fn ir_type_display_name(ty: &IrType) -> &'static str {
         IrType::Principal => "Principal",
         IrType::AuthConfig => "AuthConfig",
         IrType::TokenSource => "TokenSource",
+        IrType::WebApp => "WebApp",
+        IrType::WebViewApp => "WebViewApp",
+        IrType::TuiApp => "TuiApp",
+        IrType::CliApp => "CliApp",
     }
 }
 

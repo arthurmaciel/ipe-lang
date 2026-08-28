@@ -1599,6 +1599,31 @@ pub enum IrType {
     /// non-serde (a `Locale` is a transient runtime value, not a session-store
     /// datum).  Model-schema tag: 62.
     Locale,
+    // ── Shape opaque app leaves ─────────────────────────────────────────────
+    /// The msg-erased result of `Ipe.Tea.Web.app` — an opaque handle carrying
+    /// a fully-initialised web app whose `msg` type was erased at the
+    /// `app`-call boundary.
+    ///
+    /// Rendered as `ipe_runtime::tea::WebApp`. The handle is opaque (no public
+    /// constructor in Ipê; produced only by `Web.app`/`Web.appRouted`/`Web.appWith`)
+    /// so `mountApp : WebApp -> Route` can reject a `TuiApp` at compile time.
+    /// Non-derivable, non-serde: the handle wraps live runtime state.
+    WebApp,
+    /// The msg-erased result of `Ipe.Tea.WebView.app` — the `WebView`
+    /// counterpart of [`Self::WebApp`].
+    ///
+    /// Rendered as `ipe_runtime::tea::WebViewApp`.
+    WebViewApp,
+    /// The msg-erased result of `Ipe.Tea.Terminal.appScreen` — a live TUI
+    /// (terminal full-screen) app handle.
+    ///
+    /// Rendered as `ipe_runtime::tea::TuiApp`.
+    TuiApp,
+    /// The msg-erased result of `Ipe.Tea.Terminal.appLines` — a live
+    /// line-oriented CLI app handle.
+    ///
+    /// Rendered as `ipe_runtime::tea::CliApp`.
+    CliApp,
 }
 
 /// Tag enum for the message-parametric `Ipe.Ui` / `Ipe.Html` types.
@@ -1695,6 +1720,7 @@ pub enum UiPlain {
 /// variant must make an explicit derivability decision here rather than default
 /// silently into the derivable branch (walker-arm rule).
 #[must_use]
+#[allow(clippy::too_many_lines)] // one arm per IrType variant, deliberately exhaustive
 pub fn ir_type_is_derivable(
     ty: &IrType,
     enum_derivable: &impl Fn(&ModPath, Symbol) -> bool,
@@ -1837,7 +1863,13 @@ pub fn ir_type_is_derivable(
         | IrType::WebRoute(_)
         // The widget handle carries a generated tag string only; it never
         // crosses the seam, so it is non-derivable regardless of its seal args.
-        | IrType::CustomElement { .. } => false,
+        | IrType::CustomElement { .. }
+        // Opaque shape app leaves — each wraps live runtime state (event loops,
+        // handles) that cannot be cloned, compared, or serialised.
+        | IrType::WebApp
+        | IrType::WebViewApp
+        | IrType::TuiApp
+        | IrType::CliApp => false,
         // Transparent carriers: derivable iff every carried element is.
         IrType::Maybe(e) | IrType::List(e) | IrType::Set(e) => {
             ir_type_is_derivable(e, enum_derivable)
@@ -2048,7 +2080,14 @@ pub fn ir_type_is_serde(ty: &IrType, enum_serde: &impl Fn(&ModPath, Symbol) -> b
         | IrType::WebRoute(_)
         // The widget handle is never a session datum and never crosses the
         // seam; the runtime type carries no serde derive.
-        | IrType::CustomElement { .. } => false,
+        | IrType::CustomElement { .. }
+        // Opaque shape app leaves — live runtime handles wrapping event loops;
+        // they cannot be serialised. A shape app handle in a Web Model field is
+        // a compile-time IPE-L0120 rejection.
+        | IrType::WebApp
+        | IrType::WebViewApp
+        | IrType::TuiApp
+        | IrType::CliApp => false,
         // Transparent carriers: serde-OK iff every carried element is.
         IrType::Maybe(e) | IrType::List(e) | IrType::Set(e) => ir_type_is_serde(e, enum_serde),
         IrType::Result(a, b) | IrType::Dict(a, b) => {
@@ -2199,7 +2238,13 @@ pub fn carrier_is_clone(ty: &IrType) -> bool {
         // A row generic's `Clone`-ness rides its emitted `R: Clone` witness
         // bound, exactly as a plain generic's rides `T: Clone` — the carrier
         // itself makes no promise here.
-        | IrType::RowGeneric(_) => false,
+        | IrType::RowGeneric(_)
+        // Opaque shape app leaves — live runtime handles wrapping event loops;
+        // not `Clone`.
+        | IrType::WebApp
+        | IrType::WebViewApp
+        | IrType::TuiApp
+        | IrType::CliApp => false,
         // Transparent carriers: `Clone` iff every carried element is.
         IrType::Maybe(e) | IrType::List(e) | IrType::Set(e) => carrier_is_clone(e),
         IrType::Result(a, b) | IrType::Dict(a, b) => carrier_is_clone(a) && carrier_is_clone(b),

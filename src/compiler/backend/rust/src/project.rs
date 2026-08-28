@@ -664,6 +664,26 @@ const RUNTIME_MOD_RS_COMPRESS_APPEND: &str = "pub mod compression;\npub use comp
 /// on transitively.
 const RUNTIME_MOD_RS_CSV_APPEND: &str = "pub mod csv;\npub use csv::*;\n";
 
+// ── Shape-app entry-switch anchors ────────────────────────────────────────────
+//
+// When `ipe_main` returns a shape-app leaf (WebApp / WebViewApp / TuiApp /
+// CliApp), `emit_func` emits the correct return type from the IR — no return-
+// type rewrite is needed. Only the epilogue `fn main` body needs updating:
+// `block_on(ipe_main())` → `ipe_main().run_blocking()`. Hoisted to module
+// scope so no `const` item appears after a statement.
+
+/// The `block_on(ipe_main())` call in `fn main`'s epilogue body.
+const SHAPE_APP_BLOCK_ON_ANCHOR: &str = "block_on(ipe_main())";
+/// Replacement: calls the leaf type's `run_blocking()` method.
+const SHAPE_APP_RUN_BLOCKING: &str = "ipe_main().run_blocking()";
+/// Leaf constructor prefixes used to detect a shape-app program in emitted text.
+const SHAPE_APP_LEAVES: &[&str] = &[
+    "ipe_runtime::tea::WebViewApp(",
+    "ipe_runtime::tea::WebApp(",
+    "ipe_runtime::tea::TuiApp(",
+    "ipe_runtime::tea::CliApp(",
+];
+
 // ── Ipe.Encoding / Ipe.Bytes — base64 / hex / percent codecs ─────────────────
 
 /// Lines appended to `ipe_runtime/mod.rs` when the program reaches the codec
@@ -1469,7 +1489,7 @@ pub fn emit_program(ctx: &EmitCtx, program: &Program) -> DResult<EmittedProject>
         // LOAD-BEARING — every single-module golden must stay byte-identical to
         // this inline layout: preamble, user types (via `type_order`), Spine
         // enums, record structs, DB-projection impls, kernel-wrapper prelude,
-        // user funcs (via `func_order`), epilogue, G3.
+        // user funcs (via `func_order`), epilogue, shape-app entry switch.
         let Partitioned {
             buckets,
             type_order,
@@ -1579,24 +1599,43 @@ pub fn emit_program(ctx: &EmitCtx, program: &Program) -> DResult<EmittedProject>
             ipe_ir::Target::WasmClient => out.push_str(&epilogue_wasm(ctx)?),
         }
 
-        // ── G3: Webview main-thread entry switch ──────────────────────────────
-        // Ipe.WebView's `tao` event loop requires the process's TRUE main
-        // thread on every OS. The standard entry uses `block_on`; Webview MUST
-        // use `block_on_current_thread`. (In the real split, `emit_spine`
-        // performs this same switch on its own — the anchor lives in the
-        // epilogue, which is Spine-only.)
-        if ctx.uses_webview {
-            const BLOCK_ON_ANCHOR: &str = "block_on(ipe_main())";
-            const BLOCK_ON_THREAD_REPLACEMENT: &str = "block_on_current_thread(ipe_main())";
-            let replaced = out.replacen(BLOCK_ON_ANCHOR, BLOCK_ON_THREAD_REPLACEMENT, 1);
+        // Shape-app entry switch (Native only).
+        //
+        // When `ipe_main` returns a shape app leaf (`WebApp` / `WebViewApp` /
+        // `TuiApp` / `CliApp`) its emitted body contains the corresponding
+        // `ipe_runtime::tea::<Leaf>(...)` constructor. The template declares
+        // `ipe_main() -> IpeTask<()>` and `match block_on(ipe_main()) { ... }` —
+        // both must be updated to use the concrete leaf type and its
+        // `run_blocking()` method.
+        //
+        // Detection is done by scanning the emitted body for the four known
+        // leaf constructors; this avoids a dependency on per-shape `uses_*` flags
+        // (CliApp programs, for example, do not set any shape flag in EmitCtx).
+        //
+        // WASM: `epilogue_wasm` has a different entry — no `block_on` call and
+        // a different `ipe_main` signature — so the switch is skipped there.
+        // Shape-app epilogue switch (Native only).
+        //
+        // When `ipe_main` returns a shape-app leaf (WebApp / WebViewApp / TuiApp
+        // / CliApp), `emit_func` already emits the correct return type from the
+        // IR — no return-type rewrite is needed. Only the epilogue `fn main` body
+        // needs updating: `block_on(ipe_main())` → `ipe_main().run_blocking()`.
+        //
+        // Detection scans the emitted text for a known leaf constructor call; this
+        // naturally handles CliApp (which sets no shape flag in EmitCtx).
+        //
+        // WASM: `epilogue_wasm` uses a different entry without `block_on`, so
+        // the switch is skipped there.
+        if ctx.target == ipe_ir::Target::Native
+            && SHAPE_APP_LEAVES.iter().any(|ctor| out.contains(ctor))
+        {
+            let replaced = out.replacen(SHAPE_APP_BLOCK_ON_ANCHOR, SHAPE_APP_RUN_BLOCKING, 1);
             if replaced == out {
                 return Err(Diagnostic::CompilerBug {
-                    where_: "ipe_backend_rust::project::emit_program::G3_block_on",
+                    where_: "ipe_backend_rust::project::emit_program::shape_app_entry_switch",
                     detail: format!(
-                        "G3 webview entry-switch: anchor {BLOCK_ON_ANCHOR:?} not found in \
-                         emitted output — epilogue golden has drifted; Ipe.WebView REQUIRES \
-                         block_on_current_thread (tao/Cocoa NSApplication mandates the \
-                         process main thread on macOS; omitting the switch is a runtime crash)"
+                        "shape-app entry-switch: anchor {SHAPE_APP_BLOCK_ON_ANCHOR:?} \
+                         not found in emitted output — epilogue golden has drifted"
                     ),
                 });
             }
@@ -2830,7 +2869,12 @@ fn ir_type_contains_non_serde(ty: &IrType) -> bool {
         // `AuthConfig`/`TokenSource` — not serde; authed-route descriptors are
         // rejected in a HydrationState record.
         | IrType::AuthConfig
-        | IrType::TokenSource => true,
+        | IrType::TokenSource
+        // Shape opaque app leaves — not serde; rejected in a HydrationState record.
+        | IrType::WebApp
+        | IrType::WebViewApp
+        | IrType::TuiApp
+        | IrType::CliApp => true,
     }
 }
 
@@ -2927,7 +2971,7 @@ fn check_hydration_state_fields(ctx: &EmitCtx, program: &Program) -> DResult<()>
 ///
 /// Propagates any [`Diagnostic`] from the reused `preamble`/`emit_enum`/
 /// `emit_record_struct`/`emit_db_projection_impls`/`runtime_bindings`/
-/// `epilogue` rendering, and the G3 Webview anchor assertion.
+/// `epilogue` rendering, and the shape-app entry-switch assertion.
 pub fn emit_spine(ctx: &EmitCtx, program: &Program) -> DResult<String> {
     check_hydration_state_fields(ctx, program)?;
 
@@ -2993,21 +3037,23 @@ pub fn emit_spine(ctx: &EmitCtx, program: &Program) -> DResult<String> {
         ipe_ir::Target::WasmClient => out.push_str(&epilogue_wasm(ctx)?),
     }
 
-    // ── G3: Webview main-thread entry switch ──────────────────────────────
-    // The `block_on(ipe_main())` anchor lives in the epilogue, which is
-    // Spine-only — so under the split this scan sees a strictly smaller
-    // haystack than the whole concatenated `main.rs` (design doc §2.3).
-    if ctx.uses_webview {
-        const BLOCK_ON_ANCHOR: &str = "block_on(ipe_main())";
-        const BLOCK_ON_THREAD_REPLACEMENT: &str = "block_on_current_thread(ipe_main())";
-        let replaced = out.replacen(BLOCK_ON_ANCHOR, BLOCK_ON_THREAD_REPLACEMENT, 1);
+    // Shape-app epilogue switch in the spine (Native only).
+    //
+    // In the split layout `ipe_main` lives in a module file; its return type
+    // is already correct from the IR. Only the epilogue's `fn main` body needs
+    // updating: swap `block_on(ipe_main())` for `ipe_main().run_blocking()`.
+    //
+    // CliApp does not set a shape flag in EmitCtx; it is handled by the
+    // content-scan in the single-file path only.
+    let uses_shape_app_leaf_flagged = ctx.uses_web || ctx.uses_tui || ctx.uses_webview;
+    if uses_shape_app_leaf_flagged && ctx.target == ipe_ir::Target::Native {
+        let replaced = out.replacen(SHAPE_APP_BLOCK_ON_ANCHOR, SHAPE_APP_RUN_BLOCKING, 1);
         if replaced == out {
             return Err(Diagnostic::CompilerBug {
-                where_: "ipe_backend_rust::project::emit_spine::G3_block_on",
+                where_: "ipe_backend_rust::project::emit_spine::shape_app_entry_switch",
                 detail: format!(
-                    "G3 webview entry-switch: anchor {BLOCK_ON_ANCHOR:?} not found in \
-                     emitted spine — epilogue golden has drifted; Ipe.WebView REQUIRES \
-                     block_on_current_thread"
+                    "shape-app entry-switch: anchor {SHAPE_APP_BLOCK_ON_ANCHOR:?} not found \
+                     in emitted spine — epilogue golden has drifted"
                 ),
             });
         }

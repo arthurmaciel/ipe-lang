@@ -294,6 +294,10 @@ fn ir_type_name_at(interner: &Interner, ty: &IrType, depth: u16) -> String {
         IrType::ShapeWebView => "WebView".to_owned(),
         IrType::ShapeTerminal => "Terminal".to_owned(),
         IrType::Locale => "Locale".to_owned(),
+        IrType::WebApp => "WebApp".to_owned(),
+        IrType::WebViewApp => "WebViewApp".to_owned(),
+        IrType::TuiApp => "TuiApp".to_owned(),
+        IrType::CliApp => "CliApp".to_owned(),
     }
 }
 

@@ -37,7 +37,7 @@ main =
 ```
 
 The same logic as a `do` block reads straight down —
-from [`examples/shapes/program/release-preflight`](../../examples/shapes/program/release-preflight):
+from [`examples/shapes/script/release-preflight`](../../examples/shapes/script/release-preflight):
 
 ```ipe
 main =

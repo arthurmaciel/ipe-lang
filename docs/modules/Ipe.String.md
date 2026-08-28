@@ -20,7 +20,7 @@ that governs every value in the language.
 
 ## A worked example
 
-The [`word-frequency`](../../examples/shapes/program/word-frequency) program
+The [`word-frequency`](../../examples/shapes/script/word-frequency) program
 (also the [`Ipe.List` guide's](Ipe.List.md) example) leans on `Ipe.String` at both
 ends of its pipeline — normalising the input text, then formatting the output.
 

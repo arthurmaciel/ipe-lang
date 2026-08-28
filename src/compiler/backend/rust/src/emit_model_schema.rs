@@ -176,6 +176,11 @@ const TAG_CUSTOM_ELEMENT: u8 = 76;
 // `ProcessRunWithCfg` — kernel-boundary non-serde input record for `Ipe.Process.runWith`.
 const TAG_PROCESS_RUN_WITH_CFG: u8 = 77;
 const TAG_BACKOFF_STRATEGY: u8 = 78;
+// Shape opaque app leaves — non-serde, never a Model field; present for exhaustiveness.
+const TAG_WEB_APP: u8 = 79;
+const TAG_WEBVIEW_APP: u8 = 80;
+const TAG_TUI_APP: u8 = 81;
+const TAG_CLI_APP: u8 = 82;
 /// Fuel exhaustion marker — distinct from every variant tag.
 const TAG_FUEL_EXHAUSTED: u8 = 0xFF;
 
@@ -262,6 +267,11 @@ fn hash_ty(ctx: &EmitCtx, ty: &IrType, h: &mut Sha256, fuel: u32) -> DResult<()>
         // present for exhaustiveness.
         IrType::AuthConfig => h.update([TAG_AUTH_CONFIG]),
         IrType::TokenSource => h.update([TAG_TOKEN_SOURCE]),
+        // Shape opaque app leaves — non-serde, never a Model field; present for exhaustiveness.
+        IrType::WebApp => h.update([TAG_WEB_APP]),
+        IrType::WebViewApp => h.update([TAG_WEBVIEW_APP]),
+        IrType::TuiApp => h.update([TAG_TUI_APP]),
+        IrType::CliApp => h.update([TAG_CLI_APP]),
 
         IrType::Task(inner) => {
             h.update([TAG_TASK]);

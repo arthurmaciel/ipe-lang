@@ -164,13 +164,13 @@ fn emit_tui_inner(
     let on_key_s = emit_tui_on_key(ctx, on_key_e, indent, child, generics)?;
 
     Ok(Some(format!(
-        "ipe_runtime::tui::tui_app_ui(\
+        "ipe_runtime::tea::TuiApp(ipe_runtime::tui::tui_app_ui(\
          {init_s}, \
          {update_s}, \
          {view_s}, \
          {subs_s}, \
          {on_key_s}\
-         )"
+         ))"
     )))
 }
 
