@@ -6149,6 +6149,15 @@ impl<'a> Builder<'a> {
             // Recognized structurally at lowering (not emitted as a call).
             K::StoreLiteral => fun(var(0), var(0)),
 
+            // `Store.upper : String -> String` — wraps a column reference in SQL
+            // `UPPER(…)` inside a projection body. Recognized structurally at
+            // lowering (not emitted as a runtime call); the inner argument must be
+            // a direct `side.field` column accessor.
+            K::StoreUpper => fun(string(), string()),
+            // `Store.lower : String -> String` — symmetric counterpart wrapping
+            // `LOWER(…)`. Same structural restrictions as `StoreUpper`.
+            K::StoreLower => fun(string(), string()),
+
             // `Store.eq : (row -> t) -> t -> Cond` — the getter-arrow scheme lets
             // an accessor literal `.field` unify against the first parameter by
             // ordinary inference, pinning `t` to the field's type so the value's
@@ -10195,6 +10204,9 @@ mod registry_phase_c_tests {
             K::StoreSelect,
             // Literal-value projection element (Ipê-new, no legacy oracle).
             K::StoreLiteral,
+            // Unary text projection operators (Ipê-new, no legacy oracle).
+            K::StoreUpper,
+            K::StoreLower,
             // Typed accessor query leaves (getter-arrow schemes, Ipê-new).
             K::StoreEqCol,
             K::StoreEqBy,

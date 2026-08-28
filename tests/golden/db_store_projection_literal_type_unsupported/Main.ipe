@@ -1,0 +1,120 @@
+module Main exposing (main)
+
+-- NEGATIVE golden: a `Store.literal` whose argument type is not a supported
+-- scalar (String / Int / Bool / Float) must be rejected at lowering with
+-- IPE-L0149 / LiteralTypeUnsupported. The diagnostic must name the unsupported
+-- type so the error is actionable. The stores and join are well-formed; only
+-- the `Store.literal` argument type is at fault.
+--
+-- `Store.literal` has type `t -> t`, so passing a non-scalar value type-checks.
+-- The rejection happens in lowering when `ProjColKind::of_ty` returns `None`
+-- for a record type — the projection layer cannot bind a record as a SQL
+-- parameter.
+
+
+import Ipe.Codec as Codec exposing (Codec)
+import Ipe.Db as Db exposing (Db)
+import Ipe.Db.Store as Store exposing (Store)
+import Ipe.Error exposing (Error)
+import Ipe.Io as Io
+import Ipe.Result as Result exposing (Result(..))
+import Ipe.Task as Task exposing (Task)
+
+
+type alias Book =
+    { id : String
+    , title : String
+    , authorId : String
+    }
+
+
+type alias Author =
+    { id : String
+    , name : String
+    , active : Bool
+    }
+
+
+type alias Tag =
+    { label : String
+    , weight : Int
+    }
+
+
+blankBook : Book
+blankBook =
+    { id = "", title = "", authorId = "" }
+
+
+blankAuthor : Author
+blankAuthor =
+    { id = "", name = "", active = False }
+
+
+bookCodec : Codec Book
+bookCodec =
+    Codec.auto blankBook
+
+
+authorCodec : Codec Author
+authorCodec =
+    Codec.auto blankAuthor
+
+
+booksStore : Result Error (Store Book)
+booksStore =
+    Store.fromCodec "books" bookCodec
+        |> Result.map (\s -> Store.primaryKey .id s)
+        |> Result.map Store.public
+
+
+authorsStore : Result Error (Store Author)
+authorsStore =
+    Store.fromCodec "authors" authorCodec
+        |> Result.map (\s -> Store.primaryKey .id s)
+        |> Result.map Store.public
+
+
+blankTag : Tag
+blankTag =
+    { label = "", weight = 0 }
+
+
+-- A `Store.literal` whose argument is a record value — not a supported scalar.
+-- `Store.literal` has type `t -> t`, so `t = Tag` type-checks. Lowering must
+-- reject it with IPE-L0149 / LiteralTypeUnsupported naming "record".
+badLiteral : Db -> Store Book -> Store Author -> Task Error (List Tag)
+badLiteral db books authors =
+    Store.selectToList db
+        (Store.select
+            (\( _, _ ) -> Store.literal blankTag)
+            (Store.join books .authorId authors .id)
+        )
+
+
+run : Db -> Task Error (List Tag)
+run db =
+    case booksStore of
+        Ok books ->
+            case authorsStore of
+                Ok authors ->
+                    badLiteral db books authors
+
+                Err e ->
+                    Task.fail e
+
+        Err e ->
+            Task.fail e
+
+
+main : Task Error ()
+main =
+    Task.andThen
+        (\_ -> Io.println "unreachable")
+        (Task.onError
+            (\_ -> Task.succeed ())
+            (Task.andThen
+                (\db -> Task.map (\_ -> ()) (run db))
+                (Db.connect ())
+            )
+        )

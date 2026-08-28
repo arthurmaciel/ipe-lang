@@ -34,6 +34,8 @@ mod golden_db_store_projection_multicol_seal;
 mod golden_db_store_projection_rejections;
 #[path = "g_db/golden_db_store_projection_seal.rs"]
 mod golden_db_store_projection_seal;
+#[path = "g_db/golden_db_store_projection_upper_lower_seal.rs"]
+mod golden_db_store_projection_upper_lower_seal;
 #[path = "g_db/golden_db_wrapper_empty_params_165.rs"]
 mod golden_db_wrapper_empty_params_165;
 #[path = "g_db/golden_i177_db_get_false_positive.rs"]

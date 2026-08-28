@@ -11097,9 +11097,32 @@ impl ProjColKind {
     }
 }
 
+/// A short human-readable Ipê type label for a solved inference type, used
+/// in diagnostics when a `Store.literal` argument's type is not a supported
+/// scalar. Resolves named constructors via the interner; uses structural labels
+/// for tuple, record, and function types.
+fn projection_ty_label(ty: &Ty, interner: &Interner) -> Box<str> {
+    match ty {
+        Ty::Con { name, args, .. } => {
+            let base = interner.resolve(*name).unwrap_or("unknown");
+            if args.is_empty() {
+                base.into()
+            } else {
+                format!("{base} …").into_boxed_str()
+            }
+        }
+        Ty::Tuple(_) => "tuple".into(),
+        Ty::Record(_, _) => "record".into(),
+        Ty::Fun(_, _) => "function".into(),
+        Ty::Unit => "()".into(),
+        Ty::Var(_) => "type variable".into(),
+    }
+}
+
 /// The origin of one element in a `Store.select` projection: either a bare
-/// field access on a join-side record (`alias.column`) or a `literal(value)`
-/// call whose argument binds as a SQL parameter (`? AS pN`).
+/// field access on a join-side record (`alias.column`), a `literal(value)`
+/// call whose argument binds as a SQL parameter (`? AS pN`), or a unary text
+/// operator (`upper`/`lower`) applied to a column reference.
 enum ProjectionSource {
     /// A `side.field` column reference: `alias` is the join-side alias
     /// (`a0` / `a1`), `column` is the snake-cased, SQL-validated field name.
@@ -11107,6 +11130,13 @@ enum ProjectionSource {
     /// A `Store.literal(value)` element: the lowered argument expression is
     /// bound as a `SqlValue` parameter (`?`) rather than named as a column.
     Literal { lowered: Expr },
+    /// `Store.upper(side.field)` — emits `UPPER(alias.column) AS pN`.
+    /// `alias` and `column` are SQL-validated at compile time; the runtime
+    /// re-validates via `SqlIdent::parse_dotted` (defence in depth).
+    UpperOf { alias: String, column: String },
+    /// `Store.lower(side.field)` — emits `LOWER(alias.column) AS pN`.
+    /// Symmetric counterpart to `UpperOf`; same validation constraints.
+    LowerOf { alias: String, column: String },
 }
 
 /// One element of a `Store.select` projection: its source (a column reference
@@ -14004,7 +14034,9 @@ impl<'a> Lowerer<'a> {
         // Partition projected elements into the (alias, column) pair list and the
         // ordered literal-bind `SqlValue` list. Column references emit the pair
         // directly; literal elements emit the sentinel `("", "")` pair and one
-        // `SqlValue` constructor wrapping the lowered argument.
+        // `SqlValue` constructor wrapping the lowered argument. Upper/lower elements
+        // emit a sentinel pair `("UPPER"/"LOWER", "alias.column")` so the runtime
+        // can emit `UPPER(alias.column) AS pN` / `LOWER(alias.column) AS pN`.
         let mut pair_items: Vec<Expr> = Vec::with_capacity(projected.len());
         let mut literal_items: Vec<Expr> = Vec::with_capacity(projected.len());
         for col in projected {
@@ -14033,6 +14065,23 @@ impl<'a> Lowerer<'a> {
                         variant,
                         args: vec![lowered],
                     });
+                }
+                ProjectionSource::UpperOf { alias, column } => {
+                    // Sentinel: SQL function name in first, dotted alias.column in
+                    // second. The runtime validates the dotted form via
+                    // `SqlIdent::parse_dotted` (defence in depth) before interpolation.
+                    let dotted = format!("{alias}.{column}");
+                    pair_items.push(Expr::Tuple(vec![
+                        Expr::Str("UPPER".to_owned()),
+                        Expr::Str(dotted),
+                    ]));
+                }
+                ProjectionSource::LowerOf { alias, column } => {
+                    let dotted = format!("{alias}.{column}");
+                    pair_items.push(Expr::Tuple(vec![
+                        Expr::Str("LOWER".to_owned()),
+                        Expr::Str(dotted),
+                    ]));
                 }
             }
         }
@@ -14130,7 +14179,7 @@ impl<'a> Lowerer<'a> {
     }
 
     /// Read a single projection body element into its `ProjectedColumn`, or fail
-    /// closed. Handles two shapes:
+    /// closed. Handles four shapes:
     ///
     /// - `side.field` — a column reference: the binder position selects the
     ///   join-side alias (`a0` / `a1`), and the field snake-cases to the column.
@@ -14139,7 +14188,12 @@ impl<'a> Lowerer<'a> {
     /// - `literal(value)` — a `Store.literal` call: the argument is lowered and
     ///   bound as a SQL parameter (`? AS pN`); its type picks the concrete reader.
     ///
+    /// - `upper(side.field)` / `lower(side.field)` — a `Store.upper` / `Store.lower`
+    ///   call whose single argument must itself be a `side.field` accessor on a
+    ///   `String` column. Emitted as `UPPER(alias.col)` / `LOWER(alias.col)`.
+    ///
     /// Anything else fails closed (IPE-L0149).
+    #[allow(clippy::too_many_lines)] // four structural shapes with full validation per path
     fn select_single_projection(
         &self,
         binders: [Option<Symbol>; 2],
@@ -14159,19 +14213,107 @@ impl<'a> Lowerer<'a> {
                 ));
             };
             let value_ty = self.region_ty(value_expr.span);
-            let kind = value_ty
-                .and_then(|ty| ProjColKind::of_ty(ty, self.interner))
-                .ok_or_else(|| {
-                    unsupported_store_select(
-                        body.span,
-                        StoreSelectProjectionDefect::UnsupportedProjectionBody,
-                    )
-                })?;
+            let Some(kind) = value_ty.and_then(|ty| ProjColKind::of_ty(ty, self.interner)) else {
+                let ty_label = value_ty.map_or_else(
+                    || "unknown".into(),
+                    |ty| projection_ty_label(ty, self.interner),
+                );
+                return Err(unsupported_store_select(
+                    body.span,
+                    StoreSelectProjectionDefect::LiteralTypeUnsupported { ty: ty_label },
+                ));
+            };
             let lowered = self.lower_expr(value_expr)?;
             return Ok(ProjectedColumn {
                 source: ProjectionSource::Literal { lowered },
                 kind,
             });
+        }
+
+        // ── `Store.upper(side.field)` / `Store.lower(side.field)` elements ──
+        if let canon::Expr_::Call(callee_expr, args) = &body.value {
+            let callee_kind = match self.lower_callee(callee_expr) {
+                Ok(Callee::Kernel(KernelFn::StoreUpper)) => Some(KernelFn::StoreUpper),
+                Ok(Callee::Kernel(KernelFn::StoreLower)) => Some(KernelFn::StoreLower),
+                _ => None,
+            };
+            if let Some(op) = callee_kind {
+                let Some(inner) = args.first() else {
+                    return Err(unsupported_store_select(
+                        body.span,
+                        StoreSelectProjectionDefect::UnsupportedProjectionBody,
+                    ));
+                };
+                // The inner argument must be a direct `side.field` access on a
+                // String column — same validation as the plain `Column` path.
+                let canon::Expr_::Access(inner_base, inner_field) = &inner.value else {
+                    return Err(unsupported_store_select(
+                        body.span,
+                        StoreSelectProjectionDefect::UnsupportedProjectionBody,
+                    ));
+                };
+                let canon::Expr_::VarLocal(inner_sym) = &inner_base.value else {
+                    return Err(unsupported_store_select(
+                        body.span,
+                        StoreSelectProjectionDefect::UnsupportedProjectionBody,
+                    ));
+                };
+                let alias = if binders[0] == Some(*inner_sym) {
+                    join_left_alias()
+                } else if binders[1] == Some(*inner_sym) {
+                    join_right_alias()
+                } else {
+                    return Err(unsupported_store_select(
+                        body.span,
+                        StoreSelectProjectionDefect::UnsupportedProjectionBody,
+                    ));
+                };
+                let field_ty = match self.region_ty(inner_base.span) {
+                    Some(Ty::Record(fields, _)) => fields.get(inner_field),
+                    _ => None,
+                };
+                let field_name = self.resolve(*inner_field)?.to_string();
+                let Some(field_ty) = field_ty else {
+                    return Err(unsupported_store_select(
+                        body.span,
+                        StoreSelectProjectionDefect::UnknownField {
+                            field: field_name.into_boxed_str(),
+                        },
+                    ));
+                };
+                // upper/lower require the column to be a String (Text) column.
+                if ProjColKind::of_ty(field_ty, self.interner) != Some(ProjColKind::Text) {
+                    return Err(unsupported_store_select(
+                        body.span,
+                        StoreSelectProjectionDefect::UnsupportedProjectionBody,
+                    ));
+                }
+                let column_name = ipe_canon::to_snake_case(&field_name);
+                if !is_valid_sql_column(&column_name) {
+                    return Err(unsupported_store_select(
+                        body.span,
+                        StoreSelectProjectionDefect::InvalidColumn {
+                            column: column_name.into_boxed_str(),
+                        },
+                    ));
+                }
+                return Ok(match op {
+                    KernelFn::StoreUpper => ProjectedColumn {
+                        source: ProjectionSource::UpperOf {
+                            alias,
+                            column: column_name,
+                        },
+                        kind: ProjColKind::Text,
+                    },
+                    _ => ProjectedColumn {
+                        source: ProjectionSource::LowerOf {
+                            alias,
+                            column: column_name,
+                        },
+                        kind: ProjColKind::Text,
+                    },
+                });
+            }
         }
 
         // ── `side.field` column reference ───────────────────────────────────
@@ -23333,6 +23475,9 @@ impl<'a> Lowerer<'a> {
                 // `Store.literal` — arity 1 (value). Recognized structurally inside
                 // the `Store.select` projection body; this is the defensive fallback.
                 | KernelFn::StoreLiteral
+                // `Store.upper` / `Store.lower` — arity 1 (inner column ref).
+                | KernelFn::StoreUpper
+                | KernelFn::StoreLower
                 // ── Server: cookie token source — arity 1 ────────────────
                 // `Server.cookieToken : String -> TokenSource`
                 | KernelFn::ServerCookieToken
@@ -25307,6 +25452,10 @@ impl<'a> Lowerer<'a> {
                     // lambda bodies; this fallback handles the exceptional point-free
                     // or partial-application path (rejected by the is-placeholder gate).
                     ("Store", "literal") => Ok(Callee::Kernel(KernelFn::StoreLiteral)),
+                    // Unary text projection operators — recognized inside `Store.select`
+                    // lambda bodies; same point-free fallback behaviour as `literal`.
+                    ("Store", "upper") => Ok(Callee::Kernel(KernelFn::StoreUpper)),
+                    ("Store", "lower") => Ok(Callee::Kernel(KernelFn::StoreLower)),
                     // ── Secret kernels ──────────────────────────
                     ("Secret", "fromString") => Ok(Callee::Kernel(KernelFn::SecretFromString)),
                     ("Secret", "reveal") => Ok(Callee::Kernel(KernelFn::SecretReveal)),

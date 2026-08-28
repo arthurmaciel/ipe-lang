@@ -1390,6 +1390,13 @@ pub enum StoreSelectProjectionDefect {
         /// The derived column name that failed the identifier charset gate.
         column: Box<str>,
     },
+    /// A `Store.literal` element's argument type is not one of the four scalar
+    /// types the projection layer can read back (String / Int / Bool / Float).
+    /// `ty` is a short human-readable label for the unsupported type.
+    LiteralTypeUnsupported {
+        /// Short human-readable Ipê type label for the unsupported type.
+        ty: Box<str>,
+    },
 }
 
 // ===========================================================================
@@ -2309,6 +2316,13 @@ fn store_select_projection_invalid_help(defect: &StoreSelectProjectionDefect) ->
         StoreSelectProjectionDefect::InvalidColumn { column } => format!(
             "the column name `{column}` is not a valid SQL identifier — use letters, \
              digits, and underscore only."
+        )
+        .into_boxed_str(),
+        StoreSelectProjectionDefect::LiteralTypeUnsupported { ty } => format!(
+            "`Store.literal` accepts String, Int, Bool, or Float — the projection \
+             layer binds one of those scalars as a SQL parameter. `{ty}` is not a \
+             supported scalar; do any transformation in ordinary code after \
+             `Store.selectToList`."
         )
         .into_boxed_str(),
     };

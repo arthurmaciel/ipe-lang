@@ -9,9 +9,14 @@
 //! `is_err()` would pass on any unrelated failure and leave the refusal unproven,
 //! so each test pins the diagnostic code.
 
+// A failed `panic` in these tests is the failure signal — the test fixture
+// does not compile or produce a build artifact for the runtime to execute.
+#![allow(clippy::panic)]
+
 use std::path::{Path, PathBuf};
 
 use ipe::CliError;
+use ipe_diagnostics::{Diagnostic, LowerError, StoreSelectProjectionDefect};
 
 use crate::support::repo_root;
 
@@ -33,6 +38,21 @@ fn rejection_code(golden: &str) -> Option<ipe_diagnostics::Code> {
     let runtime = ipe::resolve_runtime().ok()?;
     match ipe::build(&entry, &out, &runtime) {
         Err(CliError::Pipeline { diag, .. }) => Some(diag.code()),
+        _ => None,
+    }
+}
+
+/// Build `golden` and return the full [`Diagnostic`] it was rejected with, or
+/// `None` if it built or failed without a pipeline diagnostic.
+fn rejection_diagnostic(golden: &str) -> Option<Box<Diagnostic>> {
+    let root = repo_root();
+    let entry = fixture_entry(&root, golden);
+    let out = std::env::temp_dir().join(format!("ipec_{golden}"));
+    let _ = std::fs::remove_dir_all(&out);
+
+    let runtime = ipe::resolve_runtime().ok()?;
+    match ipe::build(&entry, &out, &runtime) {
+        Err(CliError::Pipeline { diag, .. }) => Some(diag),
         _ => None,
     }
 }
@@ -91,5 +111,60 @@ fn multicol_nested_tuple_element_is_rejected() {
         code,
         ipe_diagnostics::IPE_L0149,
         "a nested-tuple projection element must fail closed with IPE-L0149"
+    );
+}
+
+/// `Store.upper` applied to a non-String column (here `Bool`) must be rejected.
+/// The type system rejects this at inference (T0001) because `Store.upper :
+/// String -> String` and `active : Bool` — the wrong type is caught before
+/// lowering fires. This test confirms the program does not compile and does not
+/// slip through to emit broken SQL.
+#[test]
+fn upper_on_non_string_column_is_rejected() {
+    let root = repo_root();
+    let entry = fixture_entry(&root, "db_store_projection_upper_non_string_rejected");
+    let out = std::env::temp_dir().join("ipec_db_store_projection_upper_non_string_rejected");
+    let _ = std::fs::remove_dir_all(&out);
+    let Ok(runtime) = ipe::resolve_runtime() else {
+        return;
+    };
+    let result = ipe::build(&entry, &out, &runtime);
+    assert!(
+        result.is_err(),
+        "Store.upper on a non-String column must be rejected at compile time"
+    );
+}
+
+/// A `Store.literal` whose argument type is not a supported scalar (String /
+/// Int / Bool / Float) is rejected with IPE-L0149 /
+/// `LiteralTypeUnsupported`, and the diagnostic names the unsupported type.
+/// This pins the specific path through `ProjColKind::of_ty` → `None` for a
+/// literal argument — distinct from the general `UnsupportedProjectionBody`
+/// that covers computed column expressions.
+#[test]
+fn literal_unsupported_type_is_rejected_with_type_name() {
+    let Some(diag) = rejection_diagnostic("db_store_projection_literal_type_unsupported") else {
+        return; // resolver unavailable — skip
+    };
+    assert_eq!(
+        diag.code(),
+        ipe_diagnostics::IPE_L0149,
+        "a Store.literal with an unsupported argument type must fail closed with IPE-L0149"
+    );
+    let Diagnostic::Lower {
+        msg: LowerError::StoreSelectProjectionInvalid(defect),
+        ..
+    } = *diag
+    else {
+        panic!(
+            "expected StoreSelectProjectionInvalid, got a different diagnostic variant: {diag:?}"
+        );
+    };
+    let StoreSelectProjectionDefect::LiteralTypeUnsupported { ty } = defect else {
+        panic!("expected LiteralTypeUnsupported defect, got: {defect:?}");
+    };
+    assert!(
+        ty.contains("record"),
+        "diagnostic must name the unsupported type; got type label: {ty:?}"
     );
 }

@@ -720,6 +720,12 @@ fn lower_prose(msg: &LowerError) -> String {
             StoreSelectProjectionDefect::InvalidColumn { column } => {
                 format!("`{column}` is not a valid SQL column name.")
             }
+            StoreSelectProjectionDefect::LiteralTypeUnsupported { ty } => {
+                format!(
+                    "`Store.literal` must bind a String, Int, Bool, or Float value — \
+                     `{ty}` is not a supported scalar type."
+                )
+            }
         },
     }
 }
@@ -1748,6 +1754,10 @@ fn store_select_projection_label(defect: &StoreSelectProjectionDefect) -> String
         StoreSelectProjectionDefect::InvalidColumn { column } => format!(
             "the column name `{column}` derived from the projected field is not a \
              valid SQL identifier (letters, digits, and underscore only)"
+        ),
+        StoreSelectProjectionDefect::LiteralTypeUnsupported { ty } => format!(
+            "`Store.literal` binds a scalar SQL parameter — `{ty}` is not a \
+             supported scalar (String, Int, Bool, or Float)"
         ),
     }
 }
