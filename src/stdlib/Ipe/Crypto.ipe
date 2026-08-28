@@ -12,14 +12,9 @@
 --     passing a `Mac` where a `Key` is expected is a compile error.
 module Ipe.Crypto exposing
     ( sha256, sha512, sha1, md5
-    , hmacSha256, hmacSha512
     , rsaSha256Sign, rsaSha256Verify
     , constantTimeEqual
-    , aesGcmEncrypt, aesGcmDecrypt
-    , chacha20Encrypt, chacha20Decrypt
-    , aesKeyFromPassword, chachaKeyFromPassword
     , randomBytes, randomToken
-    -- Typed newtypes (additive — existing String-typed functions unchanged)
     , Key
     , Mac
     , keyFromString

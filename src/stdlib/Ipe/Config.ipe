@@ -24,8 +24,8 @@
 --             |> Config.andThen
 --                 (\\f -> Config.map f (Config.field "name" Config.string))
 --
---     loadDb : Task Error DbCfg
---     loadDb = Config.loadFromFile "config/database.toml" dbDecoder
+--     loadDb : Path -> Task Error DbCfg
+--     loadDb path = Config.loadFromFile path dbDecoder
 module Ipe.Config exposing
     ( Decoder
     , string, int, float, bool
@@ -45,6 +45,7 @@ module Ipe.Config exposing
 import Ipe.Ffi as Ffi
 import Ipe.Error exposing (Error)
 import Ipe.Maybe exposing (Maybe(..))
+import Ipe.Path exposing (Path)
 
 
 -- | Opaque decoder.  Construct with the combinators below.
@@ -207,5 +208,5 @@ decodeJson = Ffi.kernel "Config_decodeJson"
 -- | `loadFromFile path decoder` — read `path`, dispatch to the
 -- right decoder by extension (`.toml`, `.yaml`, `.yml`, `.json`),
 -- then decode.
-loadFromFile : String -> Decoder a -> Task Error a
+loadFromFile : Path -> Decoder a -> Task Error a
 loadFromFile = Ffi.kernel "Config_loadFromFile"

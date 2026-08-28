@@ -3,14 +3,18 @@ import Ipe.Io as Io
 import Ipe.Crypto
 
 -- AES-GCM round-trip: encrypt then decrypt returns the original plaintext.
--- Keys are derived inline (PBKDF2 is deterministic, same inputs → same key).
+-- Keys are derived via the typed Key-returning derivation function.
 -- The nonce is random so the ciphertext differs each run; only "ok" is tested.
 main =
     let
+        key1 = Crypto.aesKeyFromPasswordKey "password" "salt"
+
+        key2 = Crypto.aesKeyFromPasswordKey "password" "salt"
+
         result =
-            case Crypto.aesGcmEncrypt (Crypto.aesKeyFromPassword "password" "salt") "hello" of
+            case Crypto.aesGcmEncryptKey key1 "hello" of
                 Ok ciphertext ->
-                    case Crypto.aesGcmDecrypt (Crypto.aesKeyFromPassword "password" "salt") ciphertext of
+                    case Crypto.aesGcmDecryptKey key2 ciphertext of
                         Ok plaintext ->
                             if plaintext == "hello" then
                                 "ok"

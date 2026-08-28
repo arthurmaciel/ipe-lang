@@ -10,12 +10,25 @@ import Ipe.String
 -- Two key bindings avoid the Rust move issue (key is consumed by each HMAC call).
 main =
     let
-        key1 = String.repeat 20 (String.fromChar (Char.fromCode 11))
+        rawKey = String.repeat 20 (String.fromChar (Char.fromCode 11))
 
-        key2 = String.repeat 20 (String.fromChar (Char.fromCode 11))
+        key1 = Crypto.keyFromString rawKey
 
-        h256 = Crypto.hmacSha256 key1 "Hi There"
-
-        h512 = Crypto.hmacSha512 key2 "Hi There"
+        key2 = Crypto.keyFromString rawKey
     in
-    Io.println (String.join " " [ h256, h512 ])
+    case key1 of
+        Nothing ->
+            Io.println "key-parse-failed"
+
+        Just k1 ->
+            case key2 of
+                Nothing ->
+                    Io.println "key-parse-failed"
+
+                Just k2 ->
+                    let
+                        h256 = Crypto.macToHex (Crypto.hmacSha256WithKey k1 "Hi There")
+
+                        h512 = Crypto.macToHex (Crypto.hmacSha512WithKey k2 "Hi There")
+                    in
+                    Io.println (String.join " " [ h256, h512 ])

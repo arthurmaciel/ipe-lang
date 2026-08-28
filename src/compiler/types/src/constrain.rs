@@ -7555,7 +7555,7 @@ impl<'a> Builder<'a> {
             K::ConfigDecodeJson => {
                 fun(string(), fun(dec(var(0)), result(error_ty(), var(0))))
             }
-            K::ConfigLoadFromFile => fun(string(), fun(dec(var(0)), task(var(0)))),
+            K::ConfigLoadFromFile => fun(path(), fun(dec(var(0)), task(var(0)))),
 
             // ── Result (internal) — `okDefault : a -> Result e a`, the Ok-wrap
             //    used during lowering (runtime `ok_res(a) -> Result e a`). ──
@@ -8019,7 +8019,7 @@ impl<'a> Builder<'a> {
             }
             K::CsvEncode => fun(csv_rec(), string()),
             K::CsvEncodeWithDelimiter => fun(string(), fun(csv_rec(), string())),
-            K::CsvParseStreamFromFile => fun(string(), task(list(list(string())))),
+            K::CsvParseStreamFromFile => fun(path(), task(list(list(string())))),
 
             // ── Ipe.Cache (7 kernels) ─────────────────────────────────────
             // All take the raw `Int` handle. `k`/`v` are the surface key/value

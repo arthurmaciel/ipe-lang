@@ -2508,7 +2508,7 @@ pub enum StdlibKernel {
     CsvEncode,
     /// `Csv.encodeWithDelimiter : String -> Csv -> String`.
     CsvEncodeWithDelimiter,
-    /// `Csv.parseStreamFromFile : String -> Task Error (List (List String))`.
+    /// `Csv.parseStreamFromFile : Path -> Task Error (List (List String))`.
     CsvParseStreamFromFile,
 
     // ── Ipe.Cache — in-memory LRU + TTL cache ─────────────────────────
@@ -2598,7 +2598,7 @@ pub enum StdlibKernel {
     ConfigDecodeYaml,
     /// `Config.decodeJson : String -> Decoder a -> Result Error a`.
     ConfigDecodeJson,
-    /// `Config.loadFromFile : String -> Decoder a -> Task Error a`.
+    /// `Config.loadFromFile : Path -> Decoder a -> Task Error a`.
     ConfigLoadFromFile,
     // ── Ipe.Email — provider-abstract email send ──────────────────────
     // Task-effectful; runtime `ipe_runtime::email::email_send`. Routed via the
@@ -6832,9 +6832,9 @@ impl StdlibKernel {
         // Config `decodeToml/Yaml/Json : String -> Decoder a -> Result Error a`.
         const DEC_A_TO_RESULT_ERR_A: TyShape = TyShape::Fun(&DEC_A, &RESULT_ERR_A);
         const CONFIG_DECODE: TyShape = TyShape::Fun(&STRING, &DEC_A_TO_RESULT_ERR_A);
-        // Config `loadFromFile : String -> Decoder a -> Task a`.
+        // Config `loadFromFile : Path -> Decoder a -> Task a`.
         const DEC_A_TO_TASK_A: TyShape = TyShape::Fun(&DEC_A, &TASK_A);
-        const CONFIG_LOAD: TyShape = TyShape::Fun(&STRING, &DEC_A_TO_TASK_A);
+        const CONFIG_LOAD: TyShape = TyShape::Fun(&PATH, &DEC_A_TO_TASK_A);
         // Config `keyValuePairs : Decoder a -> Decoder (List (String, a))`.
         const TUPLE_STRING_A: TyShape = TyShape::Tuple(&[STRING, A]);
         const LIST_TUPLE_STRING_A: TyShape = TyShape::Con(BuiltinTag::List, &[TUPLE_STRING_A]);

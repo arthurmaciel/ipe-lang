@@ -212,7 +212,7 @@ fn config_read_capped(path: &str, cap: u64) -> Result<String, String> {
     Ok(contents)
 }
 
-// Config.loadFromFile : String -> Decoder a -> Task Error a
+// Config.loadFromFile : Path -> Decoder a -> Task Error a
 // Extension dispatch: .toml / .yaml|.yml / .json (default json).
 //
 // the file read is offloaded via `run_blocking` (see the module-level
@@ -221,9 +221,10 @@ fn config_read_capped(path: &str, cap: u64) -> Result<String, String> {
 // after the read completes — decoding an already-in-memory, size-capped
 // (≤16 MiB default) string is fast enough not to warrant its own offload.
 pub fn config_load_from_file<E: From<String> + Send + 'static, T: Send + 'static>(
-    path: String,
+    path: Path,
     decoder: Decoder<E, T>,
 ) -> IpeTask<E, T> {
+    let path_str = path.into_string();
     Box::pin(async move {
         // Cap the file size before slurping it into memory so a Config.loadFromFile
         // on an attacker-influenced path can't force an unbounded in-memory copy
@@ -234,15 +235,15 @@ pub fn config_load_from_file<E: From<String> + Send + 'static, T: Send + 'static
             .filter(|n| *n > 0)
             .unwrap_or(16 * 1024 * 1024);
         let contents = match run_blocking({
-            let path = path.clone();
-            move || config_read_capped(&path, cap)
+            let path_str = path_str.clone();
+            move || config_read_capped(&path_str, cap)
         })
         .await
         {
             Ok(c) => c,
             Err(e) => return IpeResult::Err(str_err(&e)),
         };
-        let lower = path.to_ascii_lowercase();
+        let lower = path_str.to_ascii_lowercase();
         if lower.ends_with(".toml") {
             config_decode_toml(contents, decoder)
         } else if lower.ends_with(".yaml") || lower.ends_with(".yml") {
@@ -277,8 +278,9 @@ mod load_from_file_tests {
     fn loads_and_decodes_json() {
         let p = std::env::temp_dir().join(format!("ipe_cfg_json_{}.json", std::process::id()));
         std::fs::write(&p, r#"{"name": "ipe"}"#).unwrap();
+        let path: Path = path_from_string(p.to_string_lossy().into_owned()).unwrap();
         let res: IpeResult<String, String> = block(config_load_from_file(
-            p.to_string_lossy().into_owned(),
+            path,
             name_decoder(),
         ));
         let _ = std::fs::remove_file(&p);
@@ -292,8 +294,9 @@ mod load_from_file_tests {
     fn loads_and_decodes_toml() {
         let p = std::env::temp_dir().join(format!("ipe_cfg_toml_{}.toml", std::process::id()));
         std::fs::write(&p, "name = \"ipe\"\n").unwrap();
+        let path: Path = path_from_string(p.to_string_lossy().into_owned()).unwrap();
         let res: IpeResult<String, String> = block(config_load_from_file(
-            p.to_string_lossy().into_owned(),
+            path,
             name_decoder(),
         ));
         let _ = std::fs::remove_file(&p);
@@ -309,8 +312,9 @@ mod load_from_file_tests {
         std::fs::write(&p, vec![b'a'; 8192]).unwrap();
         // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
         unsafe { std::env::set_var("IPE_CONFIG_MAX_BYTES", "1024") };
+        let path: Path = path_from_string(p.to_string_lossy().into_owned()).unwrap();
         let res: IpeResult<String, String> = block(config_load_from_file(
-            p.to_string_lossy().into_owned(),
+            path,
             name_decoder(),
         ));
         // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
@@ -324,10 +328,10 @@ mod load_from_file_tests {
 
     #[test]
     fn missing_file_errs() {
-        let res: IpeResult<String, String> = block(config_load_from_file(
-            "/nonexistent/ipe/config/path/does-not-exist.json".to_string(),
-            name_decoder(),
-        ));
+        let path: Path =
+            path_from_string("/nonexistent/ipe/config/path/does-not-exist.json".to_string())
+                .unwrap();
+        let res: IpeResult<String, String> = block(config_load_from_file(path, name_decoder()));
         assert!(matches!(res, IpeResult::Err(_)));
     }
 }
@@ -364,7 +368,7 @@ mod load_from_file_spawn_blocking_tests {
         // cap.
         let big = "x".repeat(12 * 1024 * 1024);
         std::fs::write(&p, format!(r#"{{"name": "{}"}}"#, big)).unwrap();
-        let path = p.to_string_lossy().into_owned();
+        let path: Path = path_from_string(p.to_string_lossy().into_owned()).unwrap();
 
         let ticks = rt.block_on(async move {
             let counter = Arc::new(AtomicU64::new(0));
