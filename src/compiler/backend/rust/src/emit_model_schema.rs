@@ -173,6 +173,7 @@ const TAG_SHAPE_WEB: u8 = 73;
 const TAG_SHAPE_WEBVIEW: u8 = 74;
 const TAG_SHAPE_TERMINAL: u8 = 75;
 const TAG_CUSTOM_ELEMENT: u8 = 76;
+const TAG_BACKOFF_STRATEGY: u8 = 77;
 /// Fuel exhaustion marker — distinct from every variant tag.
 const TAG_FUEL_EXHAUSTED: u8 = 0xFF;
 
@@ -208,6 +209,7 @@ fn hash_ty(ctx: &EmitCtx, ty: &IrType, h: &mut Sha256, fuel: u32) -> DResult<()>
         IrType::WebSocketServer => h.update([TAG_WEBSOCKET_SERVER]),
         IrType::WebSocketServerCfg => h.update([TAG_WEBSOCKET_SERVER_CFG]),
         IrType::WebReq => h.update([TAG_LIVE_REQ]),
+        IrType::BackoffStrategy => h.update([TAG_BACKOFF_STRATEGY]),
         IrType::Order => h.update([TAG_ORDER]),
         IrType::HttpMethod => h.update([TAG_HTTP_METHOD]),
         IrType::Decimal => h.update([TAG_DECIMAL]),

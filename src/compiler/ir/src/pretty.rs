@@ -245,6 +245,7 @@ fn ir_type_name_at(interner: &Interner, ty: &IrType, depth: u16) -> String {
             parts.push(ir_type_name_at(interner, ret, depth));
             parts.join(" -> ")
         }
+        IrType::BackoffStrategy => "BackoffStrategy".to_owned(),
         IrType::Order => "Order".to_owned(),
         IrType::HttpMethod => "HttpMethod".to_owned(),
         IrType::Decimal => "Decimal".to_owned(),

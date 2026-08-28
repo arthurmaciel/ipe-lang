@@ -846,6 +846,7 @@ const fn ir_type_display_name(ty: &IrType) -> &'static str {
         IrType::WebReq => "WebReq",
         IrType::WebRoute(_) => "WebRoute",
         IrType::CustomElement { .. } => "CustomElement",
+        IrType::BackoffStrategy => "BackoffStrategy",
         IrType::Order => "Order",
         IrType::HttpMethod => "HttpMethod",
         IrType::Decimal => "Decimal",

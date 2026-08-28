@@ -50,6 +50,8 @@ mod golden_i1353_generic_view_helper_body_msg_tvar_seal;
 mod golden_i136_alias_truncation;
 #[path = "g_issues/golden_i138_total_resolution.rs"]
 mod golden_i138_total_resolution;
+#[path = "g_issues/golden_i1421_backoff_strategy_adt.rs"]
+mod golden_i1421_backoff_strategy_adt;
 #[path = "g_issues/golden_i142_access_copy_elision.rs"]
 mod golden_i142_access_copy_elision;
 #[path = "g_issues/golden_i147_ctor_as_fn_seal.rs"]
@@ -92,8 +94,6 @@ mod golden_i858_update_base_nonclone_reuse_seal;
 mod golden_i963_retry_policy_field_access_ice;
 #[path = "g_issues/golden_i979_retry_policy_exact_shape_user_record.rs"]
 mod golden_i979_retry_policy_exact_shape_user_record;
-#[path = "g_issues/golden_i1421_backoff_strategy_adt.rs"]
-mod golden_i1421_backoff_strategy_adt;
 #[path = "g_issues/golden_i981_fn_value_move_then_call.rs"]
 mod golden_i981_fn_value_move_then_call;
 #[path = "g_issues/golden_i984_cons_fn_value_arc_carrier.rs"]

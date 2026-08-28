@@ -201,6 +201,7 @@ fn leaf_of(ctx: &EmitCtx, ty: &IrType, app: AppShape) -> ModelLeaf {
     leaf_of_bounded(ctx, ty, app, 64)
 }
 
+#[allow(clippy::too_many_lines)]
 fn leaf_of_bounded(ctx: &EmitCtx, ty: &IrType, app: AppShape, fuel: u32) -> ModelLeaf {
     if fuel == 0 {
         return ModelLeaf::Handle;
@@ -346,6 +347,7 @@ fn leaf_of_bounded(ctx: &EmitCtx, ty: &IrType, app: AppShape, fuel: u32) -> Mode
         // leaves (`ErrorInfo`/`PanicInfo`/`TypeInfo`, SEAL fix)
         // derive serde — admissible leaves (e.g. a Model's `historyError :
         // Maybe Error` field).
+        | IrType::BackoffStrategy
         | IrType::Order
         | IrType::HttpMethod
         | IrType::Decimal

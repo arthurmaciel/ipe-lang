@@ -101,6 +101,7 @@ const fn ir_type_is_definitely_copy(ty: &IrType) -> bool {
             | IrType::Bool
             | IrType::Char
             | IrType::Unit
+            | IrType::BackoffStrategy
             | IrType::Order
             | IrType::HttpMethod
             | IrType::Decimal

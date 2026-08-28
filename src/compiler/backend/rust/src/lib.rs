@@ -2940,6 +2940,7 @@ const fn ir_type_is_record_shape_leaf(ty: &IrType) -> bool {
             | IrType::Generic(_)
             | IrType::UiPlain(_)
             | IrType::WebReq
+            | IrType::BackoffStrategy
             | IrType::Order
             | IrType::HttpMethod
             | IrType::Decimal
@@ -3070,6 +3071,8 @@ fn collect_record_shapes(
         // `Order` (LT/EQ/GT) is a primitive leaf — no record shape.
         // `HttpMethod` is a closed 7-variant ADT — no record shape.
         // `Decimal` is a Copy newtype — no record shape.
+        // `BackoffStrategy` is a Copy 4-variant enum — no record shape.
+        | IrType::BackoffStrategy
         | IrType::Order
         | IrType::HttpMethod
         | IrType::Decimal
@@ -3236,6 +3239,8 @@ fn type_reaches_enum(
         // `Order` is a primitive value — no cycle risk.
         // `HttpMethod` is a closed 7-variant ADT — no cycle risk.
         // `Decimal` is a Copy newtype — no cycle risk.
+        // `BackoffStrategy` is a Copy 4-variant enum — no cycle risk.
+        | IrType::BackoffStrategy
         | IrType::Order
         | IrType::HttpMethod
         | IrType::Decimal
@@ -3345,6 +3350,8 @@ fn contains_generic(ty: &IrType) -> bool {
         // `Order` is monomorphic — no generic parameters.
         // `HttpMethod` is monomorphic — no generic parameters.
         // `Decimal` is monomorphic — no generic parameters.
+        // `BackoffStrategy` is monomorphic — no generic parameters.
+        | IrType::BackoffStrategy
         | IrType::Order
         | IrType::HttpMethod
         | IrType::Decimal
@@ -3485,6 +3492,8 @@ fn collect_generics(ty: &IrType, out: &mut Vec<Symbol>) {
         // `Order` is monomorphic — no generics to collect.
         // `HttpMethod` is monomorphic — no generics to collect.
         // `Decimal` is monomorphic — no generics to collect.
+        // `BackoffStrategy` is monomorphic — no generics to collect.
+        | IrType::BackoffStrategy
         | IrType::Order
         | IrType::HttpMethod
         | IrType::Decimal
@@ -3838,6 +3847,8 @@ fn match_template(
         // `Order` is a monomorphic leaf — must equal exactly.
         // `HttpMethod` is a monomorphic leaf — must equal exactly.
         // `Decimal` is a monomorphic leaf — must equal exactly.
+        // `BackoffStrategy` is a monomorphic leaf — must equal exactly.
+        | IrType::BackoffStrategy
         | IrType::Order
         | IrType::HttpMethod
         | IrType::Decimal

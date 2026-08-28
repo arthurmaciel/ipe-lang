@@ -1674,9 +1674,9 @@ fn retry_policy_concrete_ir(interner: &Interner, ty: &Ty) -> Option<IrType> {
             // the field on the `Arc<dyn Fn>` carrier. The kernel arrow type is
             // already verified by `is_retry_policy_record` (the gate above).
             "shouldRetry" => IrType::SharedFun(vec![IrType::Error], Box::new(IrType::Bool)),
-            // `strategy : BackoffStrategy` — opaque enum; carried as an `Int`
-            // at the IR level (the emitter renders the Rust enum constructor).
-            "strategy" => IrType::Int,
+            // `strategy : BackoffStrategy` — dedicated IR leaf; the emitter
+            // renders `ipe_runtime::task::BackoffStrategy::*` constructors.
+            "strategy" => IrType::BackoffStrategy,
             _ => return None,
         };
         ir_fields.insert(*sym, ir);
@@ -2154,6 +2154,7 @@ fn ir_type_mentions(ty: &IrType, leaf: &impl Fn(&IrType) -> bool) -> bool {
         | IrType::Db
         | IrType::Generic(_)
         | IrType::RowGeneric(_)
+        | IrType::BackoffStrategy
         | IrType::Order
         | IrType::HttpMethod
         | IrType::Decimal
@@ -2793,6 +2794,8 @@ fn ir_contains_fun(ty: &IrType) -> bool {
         // `ErrorKind`/`Error`/`ErrorDetails` and the nominal error-payload
         // leaves (`ErrorInfo`/`PanicInfo`/`TypeInfo`, SEAL fix)
         // are leaves — no embedded function.
+        // `BackoffStrategy` is a Copy leaf — no embedded function.
+        | IrType::BackoffStrategy
         | IrType::Order
         | IrType::HttpMethod
         | IrType::Decimal
@@ -2920,6 +2923,7 @@ fn clone_class(env: CloneEnv<'_>, t: &IrType) -> CloneClass {
         | IrType::Bool
         | IrType::Char
         | IrType::Unit
+        | IrType::BackoffStrategy
         | IrType::Order
         | IrType::HttpMethod
         | IrType::Decimal
@@ -6049,6 +6053,7 @@ fn ir_type_mentions_generic(ty: &IrType, tv: Symbol) -> bool {
         | IrType::WebSocketServerCfg
         | IrType::UiPlain(_)
         | IrType::WebReq
+        | IrType::BackoffStrategy
         | IrType::Order
         | IrType::HttpMethod
         | IrType::Decimal
@@ -6166,6 +6171,7 @@ fn ir_type_generic_in_decoder(ty: &IrType, tv: Symbol) -> bool {
         | IrType::WebSocketServerCfg
         | IrType::UiPlain(_)
         | IrType::WebReq
+        | IrType::BackoffStrategy
         | IrType::Order
         | IrType::HttpMethod
         | IrType::Decimal
@@ -6276,6 +6282,7 @@ fn ir_type_generic_reaches_bare(ty: &IrType, tv: Symbol) -> bool {
         | IrType::WebSocketServerCfg
         | IrType::UiPlain(_)
         | IrType::WebReq
+        | IrType::BackoffStrategy
         | IrType::Order
         | IrType::HttpMethod
         | IrType::Decimal
@@ -11347,6 +11354,7 @@ const fn ir_type_label(ty: &IrType) -> &'static str {
         IrType::Ui { .. } => "Html",
         IrType::UiPlain(_) => "UiValue",
         IrType::Secret => "Secret",
+        IrType::BackoffStrategy => "BackoffStrategy",
         IrType::Order => "Order",
         IrType::HttpMethod => "HttpMethod",
         IrType::Decimal => "Decimal",
@@ -13340,6 +13348,7 @@ impl<'a> Lowerer<'a> {
             | IrType::Bytes
             | IrType::Json
             | IrType::Db
+            | IrType::BackoffStrategy
             | IrType::Order
             | IrType::HttpMethod
             | IrType::Decimal
@@ -17321,6 +17330,9 @@ impl<'a> Lowerer<'a> {
                 "Int" | "HostMode" | "LogLevel" | "CsrfMode" | "RevocationMode" => Ok(IrType::Int),
                 "Float" => Ok(IrType::Float),
                 "Bool" => Ok(IrType::Bool),
+                // `BackoffStrategy` is the retry-backoff ADT.
+                // Backed by `ipe_runtime::task::BackoffStrategy` (4 unit variants).
+                "BackoffStrategy" => Ok(IrType::BackoffStrategy),
                 // `Order` is the built-in three-way comparison result type.
                 // Backed by `ipe_runtime::IpeOrder` (repr(u8) enum: LT/EQ/GT).
                 "Order" => Ok(IrType::Order),
@@ -18476,6 +18488,9 @@ impl<'a> Lowerer<'a> {
                 "Int" | "HostMode" | "LogLevel" | "CsrfMode" | "RevocationMode" => Ok(IrType::Int),
                 "Float" => Ok(IrType::Float),
                 "Bool" => Ok(IrType::Bool),
+                // `BackoffStrategy` is the retry-backoff ADT.
+                // Backed by `ipe_runtime::task::BackoffStrategy` (4 unit variants).
+                "BackoffStrategy" => Ok(IrType::BackoffStrategy),
                 // `Order` is the built-in three-way comparison result type.
                 // Backed by `ipe_runtime::IpeOrder` (repr(u8) enum: LT/EQ/GT).
                 "Order" => Ok(IrType::Order),
@@ -28188,6 +28203,7 @@ impl<'a> Lowerer<'a> {
 /// structurally necessary.
 ///
 /// See the Bug-28 / Bug-29 fix comments in [`lower_def`] for full motivation.
+#[allow(clippy::too_many_lines)]
 fn collect_ir_generic_syms(ty: &IrType, out: &mut BTreeSet<Symbol>) {
     match ty {
         IrType::Generic(sym) => {
@@ -28245,6 +28261,7 @@ fn collect_ir_generic_syms(ty: &IrType, out: &mut BTreeSet<Symbol>) {
         | IrType::Bytes
         | IrType::Json
         | IrType::Db
+        | IrType::BackoffStrategy
         | IrType::Order
         | IrType::HttpMethod
         | IrType::ErrorKind
@@ -30664,6 +30681,7 @@ mod tests {
             | ipe_ir::IrType::Bytes
             | ipe_ir::IrType::Json
             | ipe_ir::IrType::Db
+            | ipe_ir::IrType::BackoffStrategy
             | ipe_ir::IrType::Order
             | ipe_ir::IrType::HttpMethod
             | ipe_ir::IrType::Decimal
@@ -30930,7 +30948,7 @@ mod tests {
                 ("baseMs", int_ty.clone()),
                 ("maxAttempts", int_ty.clone()),
                 ("shouldRetry", should_retry_bad),
-                ("strategy", strategy_good.clone()),
+                ("strategy", strategy_good),
             ],
         );
         assert!(
