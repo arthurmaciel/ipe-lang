@@ -94,6 +94,10 @@ pub struct DocEntry {
     pub title: String,
     /// The raw Markdown body (front-matter already stripped when present).
     pub body: String,
+    /// Optional sort position from front-matter `order:` -- lower values sort
+    /// first. Absent means the entry sorts after all explicitly ordered entries,
+    /// then alphabetically by title.
+    pub order: Option<i64>,
 }
 
 // == DocBundle ================================================================
@@ -135,6 +139,7 @@ impl DocBundle {
                 src.key.clone(),
                 src.title.clone(),
                 src.body.clone(),
+                None,
             )?;
         }
         for src in symbols {
@@ -144,6 +149,7 @@ impl DocBundle {
                 src.key.clone(),
                 src.title.clone(),
                 src.body.clone(),
+                None,
             )?;
         }
         for src in diagnostics {
@@ -153,6 +159,7 @@ impl DocBundle {
                 src.key.clone(),
                 src.title.clone(),
                 src.body.clone(),
+                None,
             )?;
         }
         for src in cli_commands {
@@ -162,6 +169,7 @@ impl DocBundle {
                 src.key.clone(),
                 src.title.clone(),
                 src.body.clone(),
+                None,
             )?;
         }
 
@@ -236,7 +244,7 @@ impl DocBundle {
         title: String,
         body: String,
     ) -> Result<(), BundleError> {
-        insert_entry(&mut self.maps, kind, key, title, body)
+        insert_entry(&mut self.maps, kind, key, title, body, None)
     }
 }
 
@@ -371,10 +379,8 @@ fn ingest_markdown_dir(
         let source_label = path.display().to_string();
 
         if !is_valid_slug(slug) {
-            return Err(BundleError::InvalidSlug {
-                slug: slug.to_owned(),
-                source: source_label,
-            });
+            // Skip housekeeping files (README.md, etc.) that are not bundle entries.
+            continue;
         }
 
         let raw =
@@ -383,8 +389,13 @@ fn ingest_markdown_dir(
                 detail: "could not read file".to_owned(),
             })?;
 
-        let ParsedMarkdown { key, title, body } = parse_markdown_file(slug, &raw, &source_label)?;
-        insert_entry(maps, kind, key, title, body)?;
+        let ParsedMarkdown {
+            key,
+            title,
+            body,
+            order,
+        } = parse_markdown_file(slug, &raw, &source_label)?;
+        insert_entry(maps, kind, key, title, body, order)?;
     }
     Ok(())
 }
@@ -419,6 +430,7 @@ fn parse_markdown_file(
 
     let mut fm_key: Option<String> = None;
     let mut fm_title: Option<String> = None;
+    let mut fm_order: Option<i64> = None;
     if let Some(fm) = front_matter_str {
         for line in fm.lines() {
             let line = line.trim();
@@ -436,6 +448,9 @@ fn parse_markdown_file(
             match field {
                 "key" => fm_key = Some(value),
                 "title" => fm_title = Some(value),
+                "order" => {
+                    fm_order = value.parse::<i64>().ok();
+                }
                 _ => {}
             }
         }
@@ -458,13 +473,19 @@ fn parse_markdown_file(
         .filter(|t| !t.is_empty())
         .unwrap_or_else(|| extract_h1_title(&body).unwrap_or_else(|| humanise_slug(&key)));
 
-    Ok(ParsedMarkdown { key, title, body })
+    Ok(ParsedMarkdown {
+        key,
+        title,
+        body,
+        order: fm_order,
+    })
 }
 
 struct ParsedMarkdown {
     key: String,
     title: String,
     body: String,
+    order: Option<i64>,
 }
 
 /// Return the text of the first `# ` heading in `body`, or `None` when absent.
@@ -516,6 +537,7 @@ fn insert_entry(
     key: String,
     title: String,
     body: String,
+    order: Option<i64>,
 ) -> Result<(), BundleError> {
     let map = maps.entry(kind).or_default();
     if map.contains_key(&key) {
@@ -532,6 +554,7 @@ fn insert_entry(
             key,
             title,
             body,
+            order,
         },
     );
     Ok(())
@@ -1083,12 +1106,44 @@ mod tests {
     // -- No-panic witness -----------------------------------------------------
 
     #[test]
-    fn invalid_slug_returns_typed_error() {
-        let tmp = tempdir("ingest_malformed");
-        fs::write(tmp.join("Bad.md"), "# Bad\n").unwrap();
+    fn non_slug_filename_is_skipped_not_an_error() {
+        // Files whose stem is not a valid slug (e.g. README.md, CHANGELOG.md)
+        // are housekeeping files, not bundle entries; they are skipped silently.
+        let tmp = tempdir("ingest_non_slug");
+        fs::write(tmp.join("README.md"), "# README\n").unwrap();
+        fs::write(tmp.join("valid-entry.md"), "# Valid\n").unwrap();
         let mut maps = BTreeMap::new();
         let result = ingest_markdown_dir(&tmp, DocKind::Topic, &mut maps);
-        assert!(result.is_err(), "invalid slug must return Err");
+        assert!(
+            result.is_ok(),
+            "non-slug filename must be skipped, not an error"
+        );
+        assert!(
+            maps.get(&DocKind::Topic)
+                .is_some_and(|m| m.contains_key("valid-entry")),
+            "valid entry is still ingested"
+        );
+        assert!(
+            !maps
+                .get(&DocKind::Topic)
+                .is_some_and(|m| m.contains_key("README")),
+            "README is not ingested"
+        );
+    }
+
+    #[test]
+    fn invalid_fm_key_returns_typed_error() {
+        // A file with a valid slug filename but an explicit bad `key:` in
+        // front-matter must still return an error.
+        let tmp = tempdir("ingest_bad_fm_key");
+        fs::write(
+            tmp.join("valid.md"),
+            "---\nkey: Bad Key!\ntitle: t\n---\nbody\n",
+        )
+        .unwrap();
+        let mut maps = BTreeMap::new();
+        let result = ingest_markdown_dir(&tmp, DocKind::Topic, &mut maps);
+        assert!(result.is_err(), "invalid fm key must return Err");
         assert!(
             matches!(result, Err(BundleError::InvalidSlug { .. })),
             "expected InvalidSlug"

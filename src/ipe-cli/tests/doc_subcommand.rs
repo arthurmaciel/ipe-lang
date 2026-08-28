@@ -121,9 +121,11 @@ fn generate_writes_a_self_contained_html_site_with_anchors_and_xrefs() -> io::Re
         index.contains("href=\"style.css\""),
         "the index links the bundled CSS:\n{index}"
     );
+    // The landing page is now teach-first; module links live in module/index.html.
+    let module_index = fs::read_to_string(html_dir.join("module").join("index.html"))?;
     assert!(
-        index.contains("href=\"Shapes.html\""),
-        "the index lists the module:\n{index}"
+        module_index.contains("href=\"../Shapes.html\""),
+        "the module index lists the module:\n{module_index}"
     );
     assert!(
         html_dir.join("style.css").exists(),
@@ -271,12 +273,23 @@ fn serve_binds_a_free_port_and_serves_the_index() -> io::Result<()> {
         "serve returns 200 for /:\n{response}"
     );
     assert!(
-        response.contains("<h1>API documentation</h1>"),
-        "serve returns the index HTML:\n{response}"
+        response.contains("text/html"),
+        "serve returns HTML content-type for /:\n{response}"
     );
+    // The teach-first landing has its own h1 — not the old generated title.
     assert!(
-        response.contains("Shapes.html"),
-        "the served index lists the module:\n{response}"
+        response.contains("<h1>Documentation</h1>"),
+        "serve returns the teach-first landing page:\n{response}"
+    );
+    // The persistent header is present on the landing.
+    assert!(
+        response.contains("site-header"),
+        "serve landing includes the persistent nav header:\n{response}"
+    );
+    // Reference (the module index) is one click away via the header link.
+    assert!(
+        response.contains("module/index.html"),
+        "the persistent header links to the module reference index:\n{response}"
     );
     Ok(())
 }
