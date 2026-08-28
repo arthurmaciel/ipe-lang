@@ -14,7 +14,7 @@ when the check passed. The proof of validity travels in the type.
 
 ## Why prefer it
 
-From [`examples/shapes/program/parse-port`](../../examples/shapes/program/parse-port).
+From [`examples/shapes/script/parse-port`](../../examples/shapes/script/parse-port).
 The boundary parser turns a `String` into a `Maybe Port`:
 
 ```ipe

@@ -416,7 +416,7 @@ jobs:
           echo "$OUT" | grep -q 'Hello, Ipê!'
 
   # First-party shape examples — the representative user-facing gate. Every
-  # committed example under examples/shapes/ (one per shape: program, terminal,
+  # committed example under examples/shapes/ (one per shape: script, terminal,
   # web) must `ipe type-check`, `ipe build`, and cargo-build its emitted crate on
   # every PR. This is the fast, non-flaky core of the examples proof: it catches
   # a compiler change that makes a shipped example stop type-checking or emit a
@@ -453,7 +453,7 @@ jobs:
           set -euo pipefail
           IPE="$PWD/target/release/ipe"
           WARM="$(mktemp -d)"; cd "$WARM"
-          "$IPE" build "$GITHUB_WORKSPACE/examples/shapes/program/release-preflight/package.ipe" --out out/rust
+          "$IPE" build "$GITHUB_WORKSPACE/examples/shapes/script/release-preflight/package.ipe" --out out/rust
           cd out/rust && cargo build --release
       - name: Check + emit + build every first-party shape
         env:

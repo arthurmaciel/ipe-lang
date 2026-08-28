@@ -26,7 +26,7 @@ Three knots trip up newcomers. Untangle them and the module falls into place.
 
 ## A worked example
 
-[`examples/shapes/program/release-preflight`](../../examples/shapes/program/release-preflight)
+[`examples/shapes/script/release-preflight`](../../examples/shapes/script/release-preflight)
 is a plain-`main` batch program (no TEA loop): a release check that announces the
 run, fires three independent checks concurrently, and prints a report.
 

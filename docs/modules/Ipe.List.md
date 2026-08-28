@@ -23,7 +23,7 @@ one caller's transformation affecting another's.
 
 ## A worked example
 
-[`examples/shapes/program/word-frequency`](../../examples/shapes/program/word-frequency)
+[`examples/shapes/script/word-frequency`](../../examples/shapes/script/word-frequency)
 turns a paragraph into its three most common words. The whole computation is one
 `|>` pipeline, read left to right — a tour of the families in order:
 

@@ -128,7 +128,7 @@ nothing to declare.
 default; `--plain` gives the bare names, one per line, for a script:
 
 ```
-$ ipe capabilities --plain examples/shapes/program/release-preflight/src/Main.ipe
+$ ipe capabilities --plain examples/shapes/script/release-preflight/src/Main.ipe
 network
 clock
 ```
@@ -287,7 +287,7 @@ Rust-only shop that must comply with a "Rust only" rule.
 
 ```sh
 # Eject the program-shape example into a standalone project:
-ipe eject examples/shapes/program/release-preflight/package.ipe --out /tmp/eject-demo
+ipe eject examples/shapes/script/release-preflight/package.ipe --out /tmp/eject-demo
 
 # Build it with plain cargo — no ipe toolchain required:
 cd /tmp/eject-demo
