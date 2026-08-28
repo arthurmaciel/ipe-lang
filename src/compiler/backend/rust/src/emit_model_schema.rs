@@ -173,6 +173,8 @@ const TAG_SHAPE_WEB: u8 = 73;
 const TAG_SHAPE_WEBVIEW: u8 = 74;
 const TAG_SHAPE_TERMINAL: u8 = 75;
 const TAG_CUSTOM_ELEMENT: u8 = 76;
+// `ProcessRunWithCfg` — kernel-boundary non-serde input record for `Ipe.Process.runWith`.
+const TAG_PROCESS_RUN_WITH_CFG: u8 = 77;
 /// Fuel exhaustion marker — distinct from every variant tag.
 const TAG_FUEL_EXHAUSTED: u8 = 0xFF;
 
@@ -230,6 +232,8 @@ fn hash_ty(ctx: &EmitCtx, ty: &IrType, h: &mut Sha256, fuel: u32) -> DResult<()>
         IrType::EmailSesConfig => h.update([TAG_EMAIL_SES_CONFIG]),
         IrType::EmailSmtpConfig => h.update([TAG_EMAIL_SMTP_CONFIG]),
         IrType::EmailProvider => h.update([TAG_EMAIL_PROVIDER]),
+        // `ProcessRunWithCfg` — kernel-boundary non-serde input record; present for exhaustiveness.
+        IrType::ProcessRunWithCfg => h.update([TAG_PROCESS_RUN_WITH_CFG]),
         // Typed-key newtypes — non-serde but present for exhaustiveness.
         IrType::CryptoKey => h.update([TAG_CRYPTO_KEY]),
         IrType::CryptoMac => h.update([TAG_CRYPTO_MAC]),

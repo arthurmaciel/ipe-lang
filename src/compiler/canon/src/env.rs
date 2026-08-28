@@ -1287,10 +1287,11 @@ impl Env {
                     "delete",
                 ],
             ),
-            // `Ipe.Process` — subprocess execution with NO shell. `run` is an
-            // effect kernel (`String -> List String -> Task Error String`); a
-            // server-only capability (`subprocess`), default-denied under wasm.
-            ("Process", &["run"]),
+            // `Ipe.Process` — subprocess execution with NO shell.
+            // `run` : `String -> List String -> Task Error String`.
+            // `runWith` : `{ command, args, cwd, env } -> Task Error { exitCode, stdout, stderr }`.
+            // Both are server-only (`subprocess` capability), default-denied under wasm.
+            ("Process", &["run", "runWith"]),
             // `Ipe.Http` — outbound HTTP client.
             // `get` / `post` / `request` are effect kernels (Task Error
             // HttpResponse); `parseQuery` is a pure kernel (String -> Dict

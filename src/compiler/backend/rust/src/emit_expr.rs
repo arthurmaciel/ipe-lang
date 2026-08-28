@@ -6929,6 +6929,14 @@ const HTTP_REQUEST_FIELDS: &[&str] = &[
     "url",
 ];
 
+/// the sorted `Ipe.Process.runWith` input record field-name set — a record
+/// literal with exactly these names (and no registered synthesised struct,
+/// because the lowerer folded the shape to `IrType::ProcessRunWithCfg`)
+/// constructs the runtime `ipe_runtime::system::ProcessRunWithCfg` struct.
+/// Mirrors [`CACHE_CFG_FIELDS`]; kept in sync with
+/// `ipe_lower::lower::PROCESS_RUN_WITH_CFG_FIELDS`.
+const PROCESS_RUN_WITH_CFG_FIELDS: &[&str] = &["args", "command", "cwd", "env"];
+
 /// the sorted `Ipe.Cache.CacheCfg` field-name set — a record literal with
 /// exactly these names (and no registered synthesised struct, because the
 /// lowerer folded the shape to `IrType::CacheCfg`) constructs the runtime
@@ -7061,6 +7069,15 @@ pub fn record_struct_name(
                     .iter()
                     .zip(HTTP_REQUEST_FIELDS.iter())
                     .all(|(a, b)| a.as_str() == *b);
+            // same fall-through as HttpRequest — a `ProcessRunWithCfg`-shaped
+            // literal has no registered struct (folded to
+            // `IrType::ProcessRunWithCfg`), so it constructs the runtime
+            // `ProcessRunWithCfg` (re-exported bare via the glob).
+            let is_process_run_with_cfg = sorted.len() == PROCESS_RUN_WITH_CFG_FIELDS.len()
+                && sorted
+                    .iter()
+                    .zip(PROCESS_RUN_WITH_CFG_FIELDS.iter())
+                    .all(|(a, b)| a.as_str() == *b);
             // same fall-through as HttpRequest — a `CacheCfg`-shaped literal
             // has no registered struct (folded to `IrType::CacheCfg`), so it
             // constructs the runtime `CacheCfg` (re-exported bare via the glob).
@@ -7109,6 +7126,8 @@ pub fn record_struct_name(
             };
             if is_http_request {
                 "HttpRequest".to_owned()
+            } else if is_process_run_with_cfg {
+                "ProcessRunWithCfg".to_owned()
             } else if is_cache_cfg {
                 "CacheCfg".to_owned()
             } else if is_csv_doc {

@@ -201,6 +201,7 @@ fn leaf_of(ctx: &EmitCtx, ty: &IrType, app: AppShape) -> ModelLeaf {
     leaf_of_bounded(ctx, ty, app, 64)
 }
 
+#[allow(clippy::too_many_lines)] // one arm per IrType variant, deliberately exhaustive
 fn leaf_of_bounded(ctx: &EmitCtx, ty: &IrType, app: AppShape, fuel: u32) -> ModelLeaf {
     if fuel == 0 {
         return ModelLeaf::Handle;
@@ -284,6 +285,9 @@ fn leaf_of_bounded(ctx: &EmitCtx, ty: &IrType, app: AppShape, fuel: u32) -> Mode
         | IrType::EmailSesConfig
         | IrType::EmailSmtpConfig
         | IrType::EmailProvider
+        // `ProcessRunWithCfg` is a kernel-boundary non-serde input record — not a
+        // valid Model leaf, same classification as the Email/Cache cfg types.
+        | IrType::ProcessRunWithCfg
         // Typed-key newtypes are not serde — a `Key`/`Mac`/`EmailAddress` in a
         // Web Model would be a compile-time IPE-L0120.
         | IrType::CryptoKey
