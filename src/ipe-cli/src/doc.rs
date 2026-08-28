@@ -213,6 +213,16 @@ pub enum DocMode {
         /// How to render the result.
         format: OutputFormat,
     },
+    /// Search the stdlib API by type signature (Elm/Hoogle-style).
+    ///
+    /// Parses `query` as an Ipê type expression, alpha-normalizes it, and
+    /// returns ranked symbol matches. An unparseable query is a typed error.
+    TypeSearch {
+        /// The type-expression query string, e.g. `List a -> (a -> b) -> List b`.
+        query: String,
+        /// How to render the results.
+        format: OutputFormat,
+    },
 }
 
 /// The default output directory when `--out` is omitted, mirroring Elm's `doc/`.
@@ -265,11 +275,27 @@ const LIST_DEPRECATION_NOTICE: &str =
 
 /// [`parse_doc`] with the deprecation-notice sink injected, so a test can
 /// observe the alias notice without inspecting a process's stderr.
+#[allow(clippy::too_many_lines)]
 fn parse_doc_with(rest: &[String], notice: &mut dyn FnMut(&str)) -> Result<DocMode, CliError> {
     let mut it = rest.iter().peekable();
 
     // `--check-examples` selects the doc-test gate; detected before other flags.
     let has_check_examples = rest.iter().any(|s| s == "--check-examples");
+
+    // `--type <query>` selects the type-signature search mode. Detected early
+    // because the query value can contain spaces and special characters that
+    // would otherwise confuse the positional-argument scanner.
+    let type_query: Option<String> = rest
+        .windows(2)
+        .find_map(|pair| match pair {
+            [flag, val] if flag == "--type" => Some(val.clone()),
+            _ => None,
+        })
+        .or_else(|| {
+            // Also accept `--type=<query>` (single token).
+            rest.iter()
+                .find_map(|s| s.strip_prefix("--type=").map(str::to_owned))
+        });
 
     // The deprecated `--list` flag still selects the `list` mode. It is a
     // flag-style alias for the bare `list` word, detected before the positional
@@ -277,6 +303,58 @@ fn parse_doc_with(rest: &[String], notice: &mut dyn FnMut(&str)) -> Result<DocMo
     let has_list_flag = rest.iter().any(|s| s == "--list");
     if has_list_flag {
         notice(LIST_DEPRECATION_NOTICE);
+    }
+
+    // `--type` is mutually exclusive with all other subcommands.
+    if let Some(query) = type_query {
+        if has_check_examples || has_list_flag {
+            return Err(CliError::Usage(
+                "ipe doc: --type is mutually exclusive with --check-examples and --list",
+            ));
+        }
+        // Consume remaining flags for TypeSearch (only --plain/--json allowed).
+        let mut output_format: Option<OutputFormat> = None;
+        for tok in rest {
+            match tok.as_str() {
+                "--type" => {}
+                t if t.starts_with("--type=") => {}
+                "--plain" => {
+                    if output_format.is_some() {
+                        return Err(CliError::Usage(
+                            "ipe doc: --plain and --json are mutually exclusive",
+                        ));
+                    }
+                    output_format = Some(OutputFormat::Plain);
+                }
+                "--json" => {
+                    if output_format.is_some() {
+                        return Err(CliError::Usage(
+                            "ipe doc: --plain and --json are mutually exclusive",
+                        ));
+                    }
+                    output_format = Some(OutputFormat::Json);
+                }
+                // Skip the query value token (it follows --type).
+                _ if rest
+                    .windows(2)
+                    .any(|p| matches!(p, [f, v] if f == "--type" && v == tok)) => {}
+                flag if flag.starts_with('-') => {
+                    return Err(CliError::UsageOwned(format!(
+                        "ipe doc --type: unknown flag `{flag}`"
+                    )));
+                }
+                _ => {
+                    return Err(CliError::Usage(
+                        "ipe doc --type: unexpected positional argument; \
+                         use `ipe doc --type \"<type expr>\"`",
+                    ));
+                }
+            }
+        }
+        return Ok(DocMode::TypeSearch {
+            query,
+            format: output_format.unwrap_or_default(),
+        });
     }
 
     let sub = if has_check_examples {
@@ -757,6 +835,51 @@ fn run_doc_lookup_with_fuzzy(key: &str, format: OutputFormat) -> Result<(), CliE
     Err(CliError::UsageOwned(list))
 }
 
+/// `ipe doc --type "<type expr>"` — search the stdlib API by type signature.
+///
+/// Builds the full stdlib docs, normalizes each symbol's `signature_ty`, and
+/// scores it against the parsed + normalized query. Results are printed ranked
+/// (lower score = better), up to 20 hits.
+///
+/// Fail-closed: an unparseable query exits non-zero with a descriptive message.
+fn run_type_search(query: &str, format: OutputFormat) -> Result<(), CliError> {
+    use crate::doc_type_search::{
+        TypeSearchError, render_type_matches_human, render_type_matches_json, type_search,
+    };
+
+    let docs = build_docs(&PathBuf::from(DEFAULT_PATH))?;
+    let hits = type_search(&docs.modules, query, 20).map_err(TypeSearchError::into_cli_error)?;
+
+    let stdout = std::io::stdout();
+    match format {
+        OutputFormat::Plain | OutputFormat::Human => {
+            let text = render_type_matches_human(&hits);
+            if text.is_empty() {
+                return Err(CliError::UsageOwned(format!(
+                    "ipe doc --type: no symbols match `{query}`"
+                )));
+            }
+            if matches!(format, OutputFormat::Human) {
+                let p = crate::style::Palette::for_stream(&stdout);
+                let header = format!(
+                    "{}Type-signature matches for `{}`{}\n\n",
+                    p.bold, query, p.reset
+                );
+                print!(
+                    "{}",
+                    crate::style::frame(&crate::style::gutter(&format!("{header}{text}")))
+                );
+            } else {
+                print!("{text}");
+            }
+        }
+        OutputFormat::Json => {
+            println!("{}", render_type_matches_json(&hits));
+        }
+    }
+    Ok(())
+}
+
 /// Render a [`crate::doc_bundle::DocEntry`] per the requested output format.
 fn render_bundle_entry(entry: &crate::doc_bundle::DocEntry, format: OutputFormat) {
     let stdout = std::io::stdout();
@@ -902,6 +1025,7 @@ pub fn run_doc(rest: &[String]) -> Result<(), CliError> {
                 run_doc_lookup_with_fuzzy(&key, format)
             }
         }
+        DocMode::TypeSearch { query, format } => run_type_search(&query, format),
     }
 }
 
