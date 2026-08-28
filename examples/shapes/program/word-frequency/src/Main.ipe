@@ -1,0 +1,95 @@
+module Main exposing (main)
+
+import Ipe.List as List
+import Ipe.Dict as Dict
+import Ipe.String as String
+import Ipe.Io as Io
+
+
+-- A word-frequency report in the non-TEA `Program` shape: a plain `main` that
+-- turns a paragraph into its three most common words. It is one `List` pipeline
+-- end to end — split, normalise, tally, rank, take — with each step a new list,
+-- never a mutation of the last.
+main =
+    Io.println (report sample)
+
+
+sample : String
+sample =
+    "the quick brown fox the lazy dog THE Fox jumps over the Lazy dog"
+
+
+-- The whole computation as a `|>` pipeline, read left to right: raw text in, a
+-- formatted top-three report out.
+report : String -> String
+report text =
+    text
+        |> tokenize
+        |> tally
+        |> ranked
+        |> List.take 3
+        |> List.map formatRow
+        |> String.join "\n"
+
+
+-- Lower-case the text and split it into words. `String.words` drops the runs of
+-- whitespace; `List.filter` drops any empty token so punctuation-only pieces do
+-- not count.
+tokenize : String -> List String
+tokenize text =
+    text
+        |> String.toLower
+        |> String.words
+        |> List.filter (\word -> not (String.isEmpty word))
+
+
+-- Count occurrences by folding the words into a `Dict`, bumping each word's
+-- entry. `List.foldl` walks the list once, threading the growing tally as its
+-- accumulator — the immutable equivalent of a mutable counter map.
+tally : List String -> List ( String, Int )
+tally words =
+    List.foldl bump Dict.empty words
+        |> Dict.toList
+
+
+bump : String -> Dict String Int -> Dict String Int
+bump word counts =
+    Dict.update word increment counts
+
+
+increment : Maybe Int -> Maybe Int
+increment current =
+    case current of
+
+        Nothing ->
+            Just 1
+
+        Just n ->
+            Just (n + 1)
+
+
+-- Order the (word, count) pairs by descending count, breaking ties
+-- alphabetically. `List.sortWith` takes a comparison returning `Order`; the
+-- stable sort keeps equal-count words in the tie-break order below.
+ranked : List ( String, Int ) -> List ( String, Int )
+ranked counts =
+    List.sortWith byCountThenWord counts
+
+
+byCountThenWord : ( String, Int ) -> ( String, Int ) -> Order
+byCountThenWord ( wordA, countA ) ( wordB, countB ) =
+    case compare countB countA of
+
+        EQ ->
+            compare wordA wordB
+
+        LT ->
+            LT
+
+        GT ->
+            GT
+
+
+formatRow : ( String, Int ) -> String
+formatRow ( word, count ) =
+    String.padRight 8 ' ' word ++ String.fromInt count

@@ -1,0 +1,10 @@
+{
+    "kind": "cli",
+    "steps": [
+        {
+            "args": [],
+            "expectExit": 0,
+            "expectStdoutContains": ["listening on 8080", "rejected 70000", "rejected notaport"]
+        }
+    ]
+}
