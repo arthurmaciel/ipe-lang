@@ -1715,15 +1715,15 @@ fn emit_process_run_with_call(
         "stderr".to_owned(),
         "stdout".to_owned(),
     ];
-    let resp_struct = ctx
-        .record_struct_by_key(&resp_key, None)
-        .map_err(|_| Diagnostic::CompilerBug {
-            where_: "ipe_backend_rust::emit_process_run_with_call",
-            detail: "no synthesised struct for ProcessRunOutput fieldset \
+    let resp_struct =
+        ctx.record_struct_by_key(&resp_key, None)
+            .map_err(|_| Diagnostic::CompilerBug {
+                where_: "ipe_backend_rust::emit_process_run_with_call",
+                detail: "no synthesised struct for ProcessRunOutput fieldset \
                      {exitCode, stderr, stdout}; the lowerer must surface the \
                      runWith return record type before emission"
-                .to_owned(),
-        })?;
+                    .to_owned(),
+            })?;
     let resp_name = &resp_struct.name;
 
     // Build the task_map conversion closure: pure field-for-field move.
