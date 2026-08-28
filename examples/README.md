@@ -26,7 +26,9 @@ The per-shape demos linked from [`docs/shapes/`](../docs/shapes/) live under
 | terminal | `shapes/terminal/file-browser` | A keyboard-driven directory browser over `Terminal.appScreen`: `File.readDir` lists the working directory, arrow keys navigate, and the selected file's first bytes render as a raw `Ui.cells` hexdump island inside the `Ipe.Ui` view. |
 | terminal | `shapes/terminal/http-shell` | An HTTP query shell over `Terminal.appLines`: each stdin line like `get <url>` performs a real `Http.get` and prints the response status + body. |
 | web | `shapes/web/task-publish` | The top-level, Task-shaped `Ipe.PubSub.publish` (`String -> any -> Task Error Int`) fired from a `Ipe.Tea.Web` app's `update` via `Cmd.perform`, with the subscriber count routed back into the model. Shows the Task form composing where a broadcast bus runs. |
-| program | `shapes/program/release-preflight` | A plain-`main` batch program (no TEA loop): a release-preflight check run to completion. |
+| program | `shapes/program/release-preflight` | A plain-`main` batch program (no TEA loop): a release-preflight check run to completion. The worked example for the `Ipe.Task` guide and the `do`-notation idiom. |
+| program | `shapes/program/word-frequency` | A plain-`main` batch program: a paragraph reduced to its three most common words via one `List` pipeline (tokenize, tally, rank, take). The worked example for the `Ipe.List` and `Ipe.String` guides and the pipe idiom. |
+| program | `shapes/program/parse-port` | A plain-`main` batch program demonstrating parse-don't-validate: a `String -> Maybe Port` boundary parser so no downstream code re-checks the range. The worked example for the parse-don't-validate idiom. |
 
 ## FFI examples
 

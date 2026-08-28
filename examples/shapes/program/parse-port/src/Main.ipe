@@ -1,0 +1,55 @@
+module Main exposing (main)
+
+import Ipe.String as String
+import Ipe.Maybe as Maybe exposing (Maybe(..))
+import Ipe.Io as Io
+
+
+-- Parse, don't validate: turn untyped input into a typed value ONCE, at the
+-- boundary. A `Port` cannot be built out of range, so every function downstream
+-- that holds one already knows it is 1..65535 — no re-checking, no invalid state.
+type alias Port =
+    { number : Int }
+
+
+-- The boundary parser: `String -> Maybe Port`. The `Maybe` in the return type is
+-- the whole point — an un-parsable or out-of-range string cannot produce a `Port`,
+-- so a caller must handle the `Nothing` before it can touch a `.number`.
+parsePort : String -> Maybe Port
+parsePort raw =
+    case String.toInt raw of
+
+        Nothing ->
+            Nothing
+
+        Just n ->
+            if n > 0 && n <= 65535 then
+                Just { number = n }
+
+            else
+                Nothing
+
+
+-- Downstream code takes a `Port`, never a raw `String` or `Int`. It cannot be
+-- handed an invalid port, so it does no checking of its own.
+describe : Port -> String
+describe port_ =
+    "listening on " ++ String.fromInt port_.number
+
+
+report : String -> String
+report raw =
+    case parsePort raw of
+
+        Just port_ ->
+            describe port_
+
+        Nothing ->
+            "rejected " ++ raw ++ ": not a port in 1..65535"
+
+
+main =
+    do
+        Io.println (report "8080")
+        Io.println (report "70000")
+        Io.println (report "notaport")
