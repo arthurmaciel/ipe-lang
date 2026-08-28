@@ -2662,18 +2662,22 @@ impl ProjectionColumn {
 }
 
 /// `Db.findProjection : Db -> String -> String -> String -> String
-///                      -> SqlFragment -> List (String, String)
+///                      -> SqlFragment -> List (String, String) -> List SqlValue
 ///                      -> Task Error (List (Dict String String))` — read a typed
 /// projection over a two-table join as one parameterized statement.
 ///
 /// The two `(table, alias)` pairs name the join sides; `frag` is the WHERE
 /// fragment (the join-key equality plus any filter), built only through the
 /// `Sql.*` combinators; `projections` is the ordered `(alias, column)` references
-/// to project. Every identifier — both tables, both aliases, and every projected
+/// to project, with empty-alias sentinels marking `Store.literal` positions;
+/// `extra_binds` holds the `SqlParam` values for those positions, in the same
+/// positional order.
+///
+/// Every non-empty identifier — both tables, both aliases, and every projected
 /// alias and column — passes `SqlIdent::parse_plain` before it reaches SQL text;
-/// the first that does not fails the whole read closed. The SELECT projects each
-/// reference under a `p<index>` output name, so a caller decodes each projected
-/// column by position; no value is interpolated.
+/// the first that does not fails the whole read closed. `Store.literal` positions
+/// emit `? AS p<index>` in the SELECT; their bound values bind before the WHERE
+/// `?` parameters so no value is ever interpolated.
 #[allow(clippy::too_many_arguments)] // one flat arg per validated identifier group; a struct arg would only move the same values behind an emit-side constructor.
 pub fn db_find_projection<E: Send + From<String> + 'static>(
     conn: Db,
@@ -2683,12 +2687,13 @@ pub fn db_find_projection<E: Send + From<String> + 'static>(
     right_alias: String,
     frag: SqlFragment,
     projections: Vec<(String, String)>,
+    extra_binds: Vec<SqlParam>,
 ) -> IpeTask<E, Vec<HashMap<String, String>>> {
     Box::pin(async move {
         if let Some(reason) = frag.invalid {
             return IpeResult::Err(format!("db.findProjection: {reason}").into());
         }
-        let sql = match build_projection_statement(
+        let (sql, literal_count) = match build_projection_statement(
             &left_table,
             &left_alias,
             &right_table,
@@ -2696,10 +2701,23 @@ pub fn db_find_projection<E: Send + From<String> + 'static>(
             &projections,
             &frag.sql,
         ) {
-            Ok(s) => s,
+            Ok(pair) => pair,
             Err(reason) => return IpeResult::Err(format!("db.findProjection: {reason}").into()),
         };
+        if extra_binds.len() != literal_count {
+            return IpeResult::Err(
+                format!(
+                    "db.findProjection: {literal_count} literal position(s) but {} extra bind(s)",
+                    extra_binds.len()
+                )
+                .into(),
+            );
+        }
         let mut q = sqlx::query(&sql);
+        // Bind literal (SELECT `?`) params first — they appear before WHERE `?` params.
+        for p in extra_binds {
+            q = bind_sql_param(q, p);
+        }
         for p in frag.binds {
             q = bind_sql_param(q, p);
         }
@@ -2770,13 +2788,15 @@ pub fn db_find_join_ordered<E: Send + From<String> + 'static>(
 }
 
 /// `Db.findProjectionOrdered : Db -> String -> String -> String -> String
-///                             -> SqlFragment -> List (String, String)
+///                             -> SqlFragment -> List (String, String) -> List SqlValue
 ///                             -> String -> String -> Bool
 ///                             -> Task Error (List (Dict String String))`
 /// — ordered variant of `db_find_projection`. Identical to `db_find_projection`
 /// but appends `ORDER BY <order_alias>.<order_col> ASC|DESC` to the projection
-/// statement. The three trailing arguments are the validated order-column alias,
-/// column name, and ascending direction. Every identifier passes
+/// statement. `extra_binds` holds `SqlParam` values for any `Store.literal`
+/// positions in the projection (empty-alias sentinels), bound before the WHERE
+/// parameters. The three trailing arguments are the validated order-column alias,
+/// column name, and ascending direction. Every non-empty identifier passes
 /// `SqlIdent::parse_plain`; the first that does not fails the whole read closed.
 #[allow(clippy::too_many_arguments)]
 pub fn db_find_projection_ordered<E: Send + From<String> + 'static>(
@@ -2787,6 +2807,7 @@ pub fn db_find_projection_ordered<E: Send + From<String> + 'static>(
     right_alias: String,
     frag: SqlFragment,
     projections: Vec<(String, String)>,
+    extra_binds: Vec<SqlParam>,
     order_alias: String,
     order_col: String,
     order_asc: bool,
@@ -2801,7 +2822,7 @@ pub fn db_find_projection_ordered<E: Send + From<String> + 'static>(
                 return IpeResult::Err(format!("db.findProjectionOrdered: {reason}").into());
             }
         };
-        let sql = match build_projection_statement_ordered(
+        let (sql, literal_count) = match build_projection_statement_ordered(
             &left_table,
             &left_alias,
             &right_table,
@@ -2810,12 +2831,24 @@ pub fn db_find_projection_ordered<E: Send + From<String> + 'static>(
             &frag.sql,
             &order_clause,
         ) {
-            Ok(s) => s,
+            Ok(pair) => pair,
             Err(reason) => {
                 return IpeResult::Err(format!("db.findProjectionOrdered: {reason}").into());
             }
         };
+        if extra_binds.len() != literal_count {
+            return IpeResult::Err(
+                format!(
+                    "db.findProjectionOrdered: {literal_count} literal position(s) but {} extra bind(s)",
+                    extra_binds.len()
+                )
+                .into(),
+            );
+        }
         let mut q = sqlx::query(&sql);
+        for p in extra_binds {
+            q = bind_sql_param(q, p);
+        }
         for p in frag.binds {
             q = bind_sql_param(q, p);
         }
@@ -2843,9 +2876,16 @@ fn parse_order_clause(alias: &str, col: &str, ascending: bool) -> Result<String,
 /// sides, the ordered projection references, and the combinator-built WHERE
 /// text. The SELECT names only the projected `alias.column AS p<index>` terms
 /// (column pushdown), the FROM lists both `table AS alias` terms, and the WHERE
-/// is the `?`-placeholder fragment text. Every identifier passes
-/// `SqlIdent::parse_plain`; the two sides must carry distinct aliases and the
-/// projection must name at least one column — the remaining fail-closed checks.
+/// is the `?`-placeholder fragment text.
+///
+/// Projection pairs with an empty alias are `Store.literal` positions: the
+/// emitted SELECT term is `? AS p<index>` — the value binds as a `?` parameter
+/// before the WHERE parameters, never interpolated. The returned `usize` is the
+/// count of such literal positions so the caller can validate the bound
+/// `extra_binds` slice.
+///
+/// Every non-empty identifier passes `SqlIdent::parse_plain`; the two sides
+/// must carry distinct aliases and the projection must name at least one column.
 fn build_projection_statement(
     left_table: &str,
     left_alias: &str,
@@ -2853,7 +2893,7 @@ fn build_projection_statement(
     right_alias: &str,
     projections: &[(String, String)],
     where_sql: &str,
-) -> Result<String, String> {
+) -> Result<(String, usize), String> {
     let left_table_id =
         SqlIdent::parse_plain(left_table).ok_or_else(|| format!("invalid table {left_table:?}"))?;
     let left_alias_id =
@@ -2872,24 +2912,39 @@ fn build_projection_statement(
         return Err("a projection must name at least one column".to_string());
     }
     let mut terms = Vec::with_capacity(projections.len());
+    let mut literal_count: usize = 0;
     for (index, (alias, column)) in projections.iter().enumerate() {
-        let projected = ProjectionColumn::parse(alias, column, index)?;
-        terms.push(projected.projection_term());
+        let output_name = format!("p{index}");
+        let output = SqlIdent::parse_plain(&output_name)
+            .ok_or_else(|| format!("invalid projection output {output_name:?}"))?;
+        if alias.is_empty() {
+            // `Store.literal` position: bind the value as a `?` parameter.
+            terms.push(format!("? AS {}", output.as_str()));
+            literal_count += 1;
+        } else {
+            let projected = ProjectionColumn::parse(alias, column, index)?;
+            terms.push(projected.projection_term());
+        }
     }
-    Ok(db_format_sql(format!(
-        "SELECT {proj} FROM {lt} AS {la}, {rt} AS {ra} WHERE {where_}",
-        proj = terms.join(", "),
-        lt = left_table_id.as_str(),
-        la = left_alias_id.as_str(),
-        rt = right_table_id.as_str(),
-        ra = right_alias_id.as_str(),
-        where_ = where_sql
-    )))
+    Ok((
+        db_format_sql(format!(
+            "SELECT {proj} FROM {lt} AS {la}, {rt} AS {ra} WHERE {where_}",
+            proj = terms.join(", "),
+            lt = left_table_id.as_str(),
+            la = left_alias_id.as_str(),
+            rt = right_table_id.as_str(),
+            ra = right_alias_id.as_str(),
+            where_ = where_sql
+        )),
+        literal_count,
+    ))
 }
 
 /// Build the projection statement like `build_projection_statement` but append
 /// `ORDER BY <order_clause>`. The `order_clause` string was produced by
-/// `parse_order_clause` and contains only pre-validated identifiers.
+/// `parse_order_clause` and contains only pre-validated identifiers. Returns
+/// the SQL string and the count of `Store.literal` positions (empty-alias pairs)
+/// for the caller to validate the bound `extra_binds` slice.
 fn build_projection_statement_ordered(
     left_table: &str,
     left_alias: &str,
@@ -2898,7 +2953,7 @@ fn build_projection_statement_ordered(
     projections: &[(String, String)],
     where_sql: &str,
     order_clause: &str,
-) -> Result<String, String> {
+) -> Result<(String, usize), String> {
     let left_table_id =
         SqlIdent::parse_plain(left_table).ok_or_else(|| format!("invalid table {left_table:?}"))?;
     let left_alias_id =
@@ -2917,19 +2972,31 @@ fn build_projection_statement_ordered(
         return Err("a projection must name at least one column".to_string());
     }
     let mut terms = Vec::with_capacity(projections.len());
+    let mut literal_count: usize = 0;
     for (index, (alias, column)) in projections.iter().enumerate() {
-        let projected = ProjectionColumn::parse(alias, column, index)?;
-        terms.push(projected.projection_term());
+        let output_name = format!("p{index}");
+        let output = SqlIdent::parse_plain(&output_name)
+            .ok_or_else(|| format!("invalid projection output {output_name:?}"))?;
+        if alias.is_empty() {
+            terms.push(format!("? AS {}", output.as_str()));
+            literal_count += 1;
+        } else {
+            let projected = ProjectionColumn::parse(alias, column, index)?;
+            terms.push(projected.projection_term());
+        }
     }
-    Ok(db_format_sql(format!(
-        "SELECT {proj} FROM {lt} AS {la}, {rt} AS {ra} WHERE {where_} ORDER BY {order_clause}",
-        proj = terms.join(", "),
-        lt = left_table_id.as_str(),
-        la = left_alias_id.as_str(),
-        rt = right_table_id.as_str(),
-        ra = right_alias_id.as_str(),
-        where_ = where_sql
-    )))
+    Ok((
+        db_format_sql(format!(
+            "SELECT {proj} FROM {lt} AS {la}, {rt} AS {ra} WHERE {where_} ORDER BY {order_clause}",
+            proj = terms.join(", "),
+            lt = left_table_id.as_str(),
+            la = left_alias_id.as_str(),
+            rt = right_table_id.as_str(),
+            ra = right_alias_id.as_str(),
+            where_ = where_sql
+        )),
+        literal_count,
+    ))
 }
 
 /// `Db.deleteWhere : Db -> String -> SqlFragment -> Task Error Int` — the
@@ -5956,7 +6023,7 @@ mod tests {
             sql_column("a0.author_id".to_string()),
         );
         assert!(frag.binds.is_empty(), "a column=column key binds no value");
-        let sql = build_projection_statement(
+        let (sql, literal_count) = build_projection_statement(
             "books",
             "a0",
             "authors",
@@ -5965,6 +6032,7 @@ mod tests {
             &frag.sql,
         )
         .expect("statement builds");
+        assert_eq!(literal_count, 0, "no literal positions");
         assert_eq!(
             sql,
             "SELECT a1.name AS p0 \
@@ -5984,7 +6052,7 @@ mod tests {
             sql_column("a0.author_id".to_string()),
         );
         assert!(frag.binds.is_empty(), "a column=column key binds no value");
-        let sql = build_projection_statement(
+        let (sql, literal_count) = build_projection_statement(
             "books",
             "a0",
             "authors",
@@ -5996,6 +6064,7 @@ mod tests {
             &frag.sql,
         )
         .expect("statement builds");
+        assert_eq!(literal_count, 0, "no literal positions");
         assert_eq!(
             sql,
             "SELECT a0.title AS p0, a1.name AS p1 \
@@ -6042,7 +6111,7 @@ mod tests {
             sql_eq(sql_column("a1.active".to_string()), sql_param(1_i64)),
         );
         assert_eq!(frag.binds.len(), 1, "exactly one bound value (the filter)");
-        let sql = build_projection_statement(
+        let (sql, literal_count) = build_projection_statement(
             "books",
             "a0",
             "authors",
@@ -6051,6 +6120,7 @@ mod tests {
             &frag.sql,
         )
         .expect("statement builds");
+        assert_eq!(literal_count, 0, "no literal positions");
         assert_eq!(
             sql,
             "SELECT a1.name AS p0 \
@@ -6119,6 +6189,7 @@ mod tests {
             "a1".into(),
             frag,
             vec![("a1".to_string(), "name".to_string())],
+            vec![],
         )
         .await;
         match found {
@@ -6158,6 +6229,7 @@ mod tests {
                 ("a0".to_string(), "title".to_string()),
                 ("a1".to_string(), "name".to_string()),
             ],
+            vec![],
         )
         .await;
         match found {
@@ -6972,5 +7044,152 @@ mod tests {
             "guard off must not block private host (dev workflow)"
         );
         unsafe { std::env::remove_var("IPE_HTTP_DENY_PRIVATE") };
+    }
+
+    // ── parse_order_clause ─────────────────────────────────────────────────────
+
+    /// `parse_order_clause` with a valid alias, column, and descending direction
+    /// produces the exact `alias.column DESC` fragment the ordered projection
+    /// statement embeds — no interpolation, both identifiers pre-validated.
+    #[test]
+    fn parse_order_clause_valid_desc_is_exact_sql_fragment() {
+        let clause =
+            parse_order_clause("a1", "name", false).expect("valid identifiers must succeed");
+        assert_eq!(clause, "a1.name DESC");
+    }
+
+    /// `parse_order_clause` with ascending direction produces the `ASC` form.
+    #[test]
+    fn parse_order_clause_valid_asc_is_exact_sql_fragment() {
+        let clause =
+            parse_order_clause("a0", "created_at", true).expect("valid identifiers must succeed");
+        assert_eq!(clause, "a0.created_at ASC");
+    }
+
+    /// An invalid order-column alias (contains SQL-injection characters) is
+    /// rejected by `parse_order_clause` — the clause never reaches SQL text.
+    #[test]
+    fn parse_order_clause_rejects_bad_alias() {
+        let result = parse_order_clause("a1; DROP TABLE books", "name", true);
+        assert!(result.is_err(), "a non-identifier alias must be rejected");
+    }
+
+    /// An invalid order column name (contains SQL-injection characters) is
+    /// rejected by `parse_order_clause` — the clause never reaches SQL text.
+    #[test]
+    fn parse_order_clause_rejects_bad_column() {
+        let result = parse_order_clause("a1", "name); DROP TABLE books", false);
+        assert!(result.is_err(), "a non-identifier column must be rejected");
+    }
+
+    // ── Store.literal sentinel: `? AS pN` in projection SELECT ────────────────
+
+    /// Golden SQL: a mixed projection with one `Store.literal` position and one
+    /// column reference lowers to `SELECT ? AS p0, a1.name AS p1 FROM … WHERE …`.
+    /// The empty-alias sentinel pair produces `? AS p0`; the literal count returned
+    /// is 1 so the caller binds exactly one extra parameter before the WHERE params.
+    #[test]
+    fn projection_statement_literal_sentinel_emits_question_mark_alias() {
+        let frag = sql_eq(
+            sql_column("a1.id".to_string()),
+            sql_column("a0.author_id".to_string()),
+        );
+        // ("", "") is the sentinel for a `Store.literal` position.
+        let (sql, literal_count) = build_projection_statement(
+            "books",
+            "a0",
+            "authors",
+            "a1",
+            &[
+                ("".to_string(), "".to_string()),
+                ("a1".to_string(), "name".to_string()),
+            ],
+            &frag.sql,
+        )
+        .expect("statement builds");
+        assert_eq!(literal_count, 1, "one literal position");
+        assert_eq!(
+            sql,
+            "SELECT ? AS p0, a1.name AS p1 \
+             FROM books AS a0, authors AS a1 WHERE (a1.id = a0.author_id)"
+        );
+        assert!(
+            sql.starts_with("SELECT ? AS p0"),
+            "the literal position is a `?` placeholder, not a column reference"
+        );
+    }
+
+    /// `db_find_projection` with a `Store.literal` position binds the extra param
+    /// before the WHERE params and returns it as the `p0` column in every row.
+    #[tokio::test]
+    async fn test_find_projection_literal_bind_appears_in_result() {
+        let db = fresh_join_db().await;
+        let frag = sql_and(
+            sql_eq(
+                sql_column("a1.id".to_string()),
+                sql_column("a0.author_id".to_string()),
+            ),
+            sql_eq(sql_column("a1.active".to_string()), sql_param(1_i64)),
+        );
+        // Sentinel ("", "") maps to `? AS p0`; "a1"/"name" maps to `a1.name AS p1`.
+        let found: IpeResult<String, Vec<HashMap<String, String>>> = db_find_projection(
+            db,
+            "books".into(),
+            "a0".into(),
+            "authors".into(),
+            "a1".into(),
+            frag,
+            vec![
+                ("".to_string(), "".to_string()),
+                ("a1".to_string(), "name".to_string()),
+            ],
+            vec![SqlParam::Text("fiction".to_string())],
+        )
+        .await;
+        match found {
+            IpeResult::Ok(rows) => {
+                assert_eq!(rows.len(), 2, "only active author Ada's two books");
+                for row in &rows {
+                    assert_eq!(
+                        row.get("p0").map(String::as_str),
+                        Some("fiction"),
+                        "p0 is the literal value bound as a parameter"
+                    );
+                    assert_eq!(
+                        row.get("p1").map(String::as_str),
+                        Some("Ada"),
+                        "p1 is the projected column"
+                    );
+                    assert_eq!(row.len(), 2, "exactly two projected columns");
+                }
+            }
+            IpeResult::Err(e) => panic!("expected Ok, got Err({e})"),
+        }
+    }
+
+    /// `db_find_projection` with a mismatched `extra_binds` count fails closed —
+    /// one literal position in the projection but zero extra binds.
+    #[tokio::test]
+    async fn test_find_projection_rejects_mismatched_extra_binds() {
+        let db = fresh_join_db().await;
+        let frag = sql_eq(
+            sql_column("a1.id".to_string()),
+            sql_column("a0.author_id".to_string()),
+        );
+        let found: IpeResult<String, Vec<HashMap<String, String>>> = db_find_projection(
+            db,
+            "books".into(),
+            "a0".into(),
+            "authors".into(),
+            "a1".into(),
+            frag,
+            vec![("".to_string(), "".to_string())],
+            vec![], // no extra bind for the one literal position — must fail
+        )
+        .await;
+        assert!(
+            matches!(found, IpeResult::Err(_)),
+            "a mismatched extra_binds count must fail closed"
+        );
     }
 }

@@ -5940,6 +5940,12 @@ impl<'a> Builder<'a> {
             // `List (String, String)` is the ordered `(alias, column)` references
             // to project; each result row is one cell map keyed by the projection
             // output names (`p0`, `p1`, …), decoded by position.
+            // `Db.findProjection : Db -> String -> String -> String -> String
+            //                      -> SqlFragment -> List (String, String)
+            //                      -> List SqlValue
+            //                      -> Task (List (Dict String String))`
+            // — `extraBinds` is `List SqlValue` (the generated per-project ADT);
+            // schemed as `list(var(0))` so a concrete `SqlValue` element unifies.
             K::DbFindProjection => fun(
                 db(),
                 fun(
@@ -5954,7 +5960,10 @@ impl<'a> Builder<'a> {
                                     sqlfragment(),
                                     fun(
                                         list(tuple2(string(), string())),
-                                        task(list(dict(string(), string()))),
+                                        fun(
+                                            list(var(0)),
+                                            task(list(dict(string(), string()))),
+                                        ),
                                     ),
                                 ),
                             ),
@@ -6007,10 +6016,12 @@ impl<'a> Builder<'a> {
             ),
             // `Db.findProjectionOrdered : Db -> String -> String -> String -> String
             //                             -> SqlFragment -> List (String, String)
+            //                             -> List SqlValue
             //                             -> String -> String -> Bool
             //                             -> Task (List (Dict String String))`
-            // — ordered variant of `Db.findProjection` with three trailing args:
-            // `orderAlias`, `orderCol`, and ascending `Bool`.
+            // — ordered variant of `Db.findProjection` with `extraBinds` (the
+            // `Store.literal` bind list, schemed as `list(var(0))`) inserted
+            // between `projections` and the three ORDER BY args.
             K::DbFindProjectionOrdered => fun(
                 db(),
                 fun(
@@ -6026,12 +6037,15 @@ impl<'a> Builder<'a> {
                                     fun(
                                         list(tuple2(string(), string())),
                                         fun(
-                                            string(),
+                                            list(var(0)),
                                             fun(
                                                 string(),
                                                 fun(
-                                                    bool_ty(),
-                                                    task(list(dict(string(), string()))),
+                                                    string(),
+                                                    fun(
+                                                        bool_ty(),
+                                                        task(list(dict(string(), string()))),
+                                                    ),
                                                 ),
                                             ),
                                         ),
@@ -6126,6 +6140,14 @@ impl<'a> Builder<'a> {
                 fun(tuple2(var(0), var(1)), var(2)),
                 fun(joined(var(0), var(1)), select(var(2))),
             ),
+
+            // `Store.literal : t -> t` — a projection-body element that binds its
+            // argument as a SQL parameter (`? AS pN`) rather than naming a column.
+            // The identity type scheme lets the projection lambda's return type
+            // unify: `literal "x"` has type `String`, so
+            // `(\(_, a) -> (literal "x", a.name))` has type `(String, String)`.
+            // Recognized structurally at lowering (not emitted as a call).
+            K::StoreLiteral => fun(var(0), var(0)),
 
             // `Store.eq : (row -> t) -> t -> Cond` — the getter-arrow scheme lets
             // an accessor literal `.field` unify against the first parameter by
@@ -10171,6 +10193,8 @@ mod registry_phase_c_tests {
             K::StoreJoin,
             // Single-column projection over a join (getter-arrow scheme, Ipê-new).
             K::StoreSelect,
+            // Literal-value projection element (Ipê-new, no legacy oracle).
+            K::StoreLiteral,
             // Typed accessor query leaves (getter-arrow schemes, Ipê-new).
             K::StoreEqCol,
             K::StoreEqBy,
