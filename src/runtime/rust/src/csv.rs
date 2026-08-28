@@ -299,7 +299,10 @@ mod tests {
     fn parse_stream_from_file_reads_all_rows() {
         let p = std::env::temp_dir().join(format!("ipe_csv_stream_{}.csv", std::process::id()));
         std::fs::write(&p, "a,b\n1,2\n3,4\n").unwrap();
-        let path: Path = path_from_string(p.to_string_lossy().into_owned()).unwrap();
+        let path: Path = match path_from_string::<String>(p.to_string_lossy().into_owned()) {
+            IpeResult::Ok(p) => p,
+            IpeResult::Err(e) => panic!("path_from_string failed: {e}"),
+        };
         let res: IpeResult<String, Vec<Vec<String>>> = block(csv_parse_stream_from_file(path));
         let _ = std::fs::remove_file(&p);
         match res {
@@ -319,8 +322,12 @@ mod tests {
 
     #[test]
     fn parse_stream_from_file_missing_file_errs() {
-        let path: Path =
-            path_from_string("/nonexistent/ipe/csv/path/does-not-exist.csv".to_string()).unwrap();
+        let path: Path = match path_from_string::<String>(
+            "/nonexistent/ipe/csv/path/does-not-exist.csv".to_string(),
+        ) {
+            IpeResult::Ok(p) => p,
+            IpeResult::Err(e) => panic!("path_from_string failed: {e}"),
+        };
         let res: IpeResult<String, Vec<Vec<String>>> = block(csv_parse_stream_from_file(path));
         assert!(matches!(res, IpeResult::Err(_)));
     }
@@ -331,7 +338,10 @@ mod tests {
         std::fs::write(&p, "a\n1\n2\n3\n4\n5\n").unwrap();
         // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
         unsafe { std::env::set_var("IPE_CSV_MAX_ROWS", "2") };
-        let path: Path = path_from_string(p.to_string_lossy().into_owned()).unwrap();
+        let path: Path = match path_from_string::<String>(p.to_string_lossy().into_owned()) {
+            IpeResult::Ok(p) => p,
+            IpeResult::Err(e) => panic!("path_from_string failed: {e}"),
+        };
         let res: IpeResult<String, Vec<Vec<String>>> = block(csv_parse_stream_from_file(path));
         // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
         unsafe { std::env::remove_var("IPE_CSV_MAX_ROWS") };
@@ -379,7 +389,10 @@ mod stream_from_file_spawn_blocking_tests {
             }
             std::fs::write(&p, content).unwrap();
         }
-        let path: Path = path_from_string(p.to_string_lossy().into_owned()).unwrap();
+        let path: Path = match path_from_string::<String>(p.to_string_lossy().into_owned()) {
+            IpeResult::Ok(p) => p,
+            IpeResult::Err(e) => panic!("path_from_string failed: {e}"),
+        };
 
         let ticks = rt.block_on(async move {
             let counter = Arc::new(AtomicU64::new(0));

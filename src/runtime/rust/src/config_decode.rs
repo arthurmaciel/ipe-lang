@@ -278,7 +278,10 @@ mod load_from_file_tests {
     fn loads_and_decodes_json() {
         let p = std::env::temp_dir().join(format!("ipe_cfg_json_{}.json", std::process::id()));
         std::fs::write(&p, r#"{"name": "ipe"}"#).unwrap();
-        let path: Path = path_from_string(p.to_string_lossy().into_owned()).unwrap();
+        let path: Path = match path_from_string::<String>(p.to_string_lossy().into_owned()) {
+            IpeResult::Ok(p) => p,
+            IpeResult::Err(e) => panic!("path_from_string failed: {e}"),
+        };
         let res: IpeResult<String, String> = block(config_load_from_file(path, name_decoder()));
         let _ = std::fs::remove_file(&p);
         match res {
@@ -291,7 +294,10 @@ mod load_from_file_tests {
     fn loads_and_decodes_toml() {
         let p = std::env::temp_dir().join(format!("ipe_cfg_toml_{}.toml", std::process::id()));
         std::fs::write(&p, "name = \"ipe\"\n").unwrap();
-        let path: Path = path_from_string(p.to_string_lossy().into_owned()).unwrap();
+        let path: Path = match path_from_string::<String>(p.to_string_lossy().into_owned()) {
+            IpeResult::Ok(p) => p,
+            IpeResult::Err(e) => panic!("path_from_string failed: {e}"),
+        };
         let res: IpeResult<String, String> = block(config_load_from_file(path, name_decoder()));
         let _ = std::fs::remove_file(&p);
         match res {
@@ -306,7 +312,10 @@ mod load_from_file_tests {
         std::fs::write(&p, vec![b'a'; 8192]).unwrap();
         // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
         unsafe { std::env::set_var("IPE_CONFIG_MAX_BYTES", "1024") };
-        let path: Path = path_from_string(p.to_string_lossy().into_owned()).unwrap();
+        let path: Path = match path_from_string::<String>(p.to_string_lossy().into_owned()) {
+            IpeResult::Ok(p) => p,
+            IpeResult::Err(e) => panic!("path_from_string failed: {e}"),
+        };
         let res: IpeResult<String, String> = block(config_load_from_file(path, name_decoder()));
         // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
         unsafe { std::env::remove_var("IPE_CONFIG_MAX_BYTES") };
@@ -319,9 +328,12 @@ mod load_from_file_tests {
 
     #[test]
     fn missing_file_errs() {
-        let path: Path =
-            path_from_string("/nonexistent/ipe/config/path/does-not-exist.json".to_string())
-                .unwrap();
+        let path: Path = match path_from_string::<String>(
+            "/nonexistent/ipe/config/path/does-not-exist.json".to_string(),
+        ) {
+            IpeResult::Ok(p) => p,
+            IpeResult::Err(e) => panic!("path_from_string failed: {e}"),
+        };
         let res: IpeResult<String, String> = block(config_load_from_file(path, name_decoder()));
         assert!(matches!(res, IpeResult::Err(_)));
     }
@@ -359,7 +371,10 @@ mod load_from_file_spawn_blocking_tests {
         // cap.
         let big = "x".repeat(12 * 1024 * 1024);
         std::fs::write(&p, format!(r#"{{"name": "{}"}}"#, big)).unwrap();
-        let path: Path = path_from_string(p.to_string_lossy().into_owned()).unwrap();
+        let path: Path = match path_from_string::<String>(p.to_string_lossy().into_owned()) {
+            IpeResult::Ok(p) => p,
+            IpeResult::Err(e) => panic!("path_from_string failed: {e}"),
+        };
 
         let ticks = rt.block_on(async move {
             let counter = Arc::new(AtomicU64::new(0));
