@@ -4,6 +4,33 @@
 
 [Back to stdlib index](../stdlib.md)
 
+## `BackoffStrategy`
+
+The four backoff strategies available to `RetryPolicy`.
+
+  - `Linear` — constant delay: every attempt waits exactly `baseMs`.
+  - `LinearWithJitter` — constant delay with random jitter added.
+  - `Exponential` — delay doubles each attempt: `baseMs * 2^(attempt-1)`.
+  - `ExponentialWithJitter` — exponential delay with random jitter added.
+
+Use `withJitter` to upgrade a base strategy to its jitter variant.
+
+## `Exponential`
+
+The `Exponential` backoff-strategy constructor.
+
+## `ExponentialWithJitter`
+
+The `ExponentialWithJitter` backoff-strategy constructor.
+
+## `Linear`
+
+The `Linear` backoff-strategy constructor.
+
+## `LinearWithJitter`
+
+The `LinearWithJitter` backoff-strategy constructor.
+
 ## `RetryPolicy`
 
 Retry configuration for `retryWith`, built with the `linearBackoff` /
@@ -13,9 +40,8 @@ Fields:
 
   - `maxAttempts` — maximum number of attempts, including the first.
   - `baseMs` — base delay between attempts, in milliseconds.
-  - `jitter` — when `True`, add randomised jitter to each delay.
-  - `kind` — `0` = linear (constant delay), `1` = exponential (`base * 2^(attempt-1)`).
   - `shouldRetry` — predicate; `True` means retry on this error.
+  - `strategy` — the backoff strategy controlling delay growth and jitter.
 
 ## `andThen`
 
@@ -50,7 +76,7 @@ attempt (\result -> result) (succeed 1) --> Cmd (Result Error Int)
 ## `defaultRetryPolicy`
 
 `defaultRetryPolicy` — a sensible starting policy: 3 attempts, 500 ms
-exponential back-off, no jitter, retry on all errors. Refine it with the `with*`
+exponential back-off with jitter, retry on all errors. Refine it with the `with*`
 combinators.
 
 ```ipe
@@ -228,19 +254,12 @@ withBaseMs 250 (exponentialBackoff 3 100) --> RetryPolicy e
 
 ## `withJitter`
 
-`withJitter policy` — add random jitter to the policy's delays, spreading out
-retries so many clients do not all retry in lockstep.
+`withJitter policy` — upgrade the policy's strategy to its jitter variant:
+`Linear` becomes `LinearWithJitter`, `Exponential` becomes `ExponentialWithJitter`.
+Already-jittered strategies are unchanged.
 
 ```ipe
 withJitter (exponentialBackoff 5 100) --> RetryPolicy e
-```
-
-## `withKind`
-
-`withKind k policy` — set the delay kind: `0` = linear, `1` = exponential.
-
-```ipe
-withKind 1 (linearBackoff 3 100) --> RetryPolicy e
 ```
 
 ## `withMaxAttempts`

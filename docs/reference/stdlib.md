@@ -159,6 +159,11 @@ Each module listed below links to a detail page with full doc-strings and exampl
 
 | Symbol | Summary |
 |--------|----------|
+| `BackoffStrategy` | The four backoff strategies available to `RetryPolicy`. |
+| `Exponential` | The `Exponential` backoff-strategy constructor. |
+| `ExponentialWithJitter` | The `ExponentialWithJitter` backoff-strategy constructor. |
+| `Linear` | The `Linear` backoff-strategy constructor. |
+| `LinearWithJitter` | The `LinearWithJitter` backoff-strategy constructor. |
 | `RetryPolicy` | Retry configuration for `retryWith`, built with the `linearBackoff` / |
 | `andThen` | `andThen next task` — run `task`, then feed its success value to `next` to |
 | `andThenResult` | `andThenResult step task` — like `andThen`, but `step` returns a plain |
@@ -182,8 +187,7 @@ Each module listed below links to a detail page with full doc-strings and exampl
 | `sequence` | `sequence tasks` — run a list of tasks one after another, collecting their |
 | `succeed` | `succeed value` — a task that runs no effect and settles with `value`. The |
 | `withBaseMs` | `withBaseMs ms policy` — set the base delay in milliseconds. |
-| `withJitter` | `withJitter policy` — add random jitter to the policy's delays, spreading out |
-| `withKind` | `withKind k policy` — set the delay kind: `0` = linear, `1` = exponential. |
+| `withJitter` | `withJitter policy` — upgrade the policy's strategy to its jitter variant: |
 | `withMaxAttempts` | `withMaxAttempts n policy` — set the maximum number of attempts. |
 | `withRetryOn` | `withRetryOn pred policy` — an alias for `retryOn` with the same semantics and |
 
