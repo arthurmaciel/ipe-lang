@@ -98,6 +98,27 @@ pub const BUILTIN_UNIONS: &[BuiltinUnion] = &[
         exhaust_union: true,
         qualified_home: None,
     },
+    // ── ProjectionTerm / CoalesceOperand (Ipe.Db.Store.selectNamed) ────────
+    // Index order matches `synthetic_projection_term_enum` / `synthetic_coalesce_operand_enum`
+    // in ipe_lower and the `ProjectionTerm` / `CoalesceOperand` enums in ipe_runtime::db.
+    BuiltinUnion {
+        type_name: "ProjectionTerm",
+        ctors: &[
+            ("ColumnTerm", 0, 2),
+            ("LiteralTerm", 1, 0),
+            ("UpperTerm", 2, 1),
+            ("LowerTerm", 3, 1),
+            ("CoalesceTerm", 4, 2),
+        ],
+        exhaust_union: true,
+        qualified_home: None,
+    },
+    BuiltinUnion {
+        type_name: "CoalesceOperand",
+        ctors: &[("OperandColumn", 0, 1), ("OperandLiteral", 1, 0)],
+        exhaust_union: true,
+        qualified_home: None,
+    },
     // ── ChunkEvent / StreamId (Ipe.Http.Stream) ────────────────────────────
     BuiltinUnion {
         type_name: "ChunkEvent",

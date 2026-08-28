@@ -11118,10 +11118,6 @@ fn join_right_alias() -> String {
 
 /// The IR element type of a projection reference — a `(String, String)` tuple of
 /// `(alias, column)`. Used to type the `selectNamed` projection list literal.
-fn proj_pair_ir_type() -> IrType {
-    IrType::Tuple(vec![IrType::Str, IrType::Str, IrType::Str])
-}
-
 /// The IR type of a projection `Row` — the `Dict String String` cell map the DB
 /// projection layer returns. Types the emitted decode's `row` binder.
 fn row_ir_type() -> IrType {
@@ -11275,35 +11271,38 @@ struct ProjectedColumn {
     kind: ProjColKind,
 }
 
-/// Encode one operand of a `Store.coalesce` term for the projection triple.
+/// Build a `CoalesceOperand` IR constructor for one operand of a `Store.coalesce`
+/// projection term.
 ///
-/// A `Column` operand encodes as the dotted `"alias.column"` string with no
-/// literal bind; a `Literal` operand encodes as `""` (the empty string that the
-/// runtime treats as a `?` placeholder) and a `SqlValue` constructor for the
-/// bound value.
-///
-/// Returns `(encoded_string, Option<SqlValue_expr>)`.
-fn emit_coalesce_operand(
+/// Returns `(variant_name, args)` for the `Expr::Ctor` the caller builds.
+/// A `Column` operand maps to `OperandColumn(dotted)`.
+/// A `Literal` operand maps to `OperandLiteral` and pushes the typed `SqlValue`
+/// expression into `literal_items` (left operand before right, before WHERE binds).
+fn emit_coalesce_operand_expr(
     operand: CoalesceOperand,
     kind: ProjColKind,
     builtins: &BuiltinCtors,
-) -> (String, Option<Expr>) {
+    literal_items: &mut Vec<Expr>,
+) -> (Symbol, Vec<Expr>) {
     match operand {
-        CoalesceOperand::Column { alias, column } => (format!("{alias}.{column}"), None),
+        CoalesceOperand::Column { alias, column } => (
+            builtins.operand_column,
+            vec![Expr::Str(format!("{alias}.{column}"))],
+        ),
         CoalesceOperand::Literal { lowered } => {
-            let variant = match kind {
+            let sql_variant = match kind {
                 ProjColKind::Text => builtins.sql_string,
                 ProjColKind::Int => builtins.sql_int,
                 ProjColKind::Bool => builtins.sql_bool,
                 ProjColKind::Float => builtins.sql_float,
             };
-            let ctor = Expr::Ctor {
+            literal_items.push(Expr::Ctor {
                 home: ModPath(Vec::new()),
                 ty: builtins.sqlvalue,
-                variant,
+                variant: sql_variant,
                 args: vec![lowered],
-            };
-            (String::new(), Some(ctor))
+            });
+            (builtins.operand_literal, Vec::new())
         }
     }
 }
@@ -12373,6 +12372,16 @@ pub struct BuiltinCtors {
     pub sql_null: Symbol,
     pub set_field: Symbol,
     pub omit_field: Symbol,
+    // ── ProjectionTerm / CoalesceOperand ────────────────────────────
+    pub projection_term: Symbol,
+    pub column_term: Symbol,
+    pub literal_term: Symbol,
+    pub upper_term: Symbol,
+    pub lower_term: Symbol,
+    pub coalesce_term: Symbol,
+    pub coalesce_operand: Symbol,
+    pub operand_column: Symbol,
+    pub operand_literal: Symbol,
     // ── Order ADT ─────────────────────────────────────────────────────
     pub order: Symbol,
     pub lt: Symbol,
@@ -14208,6 +14217,7 @@ impl<'a> Lowerer<'a> {
     /// `("", "")` pair in the column list and a corresponding `SqlValue` in the
     /// `extraBinds` list, emitting `? AS pN` in the SELECT with the value bound
     /// as a parameter. Every value binds as a parameter, never interpolated.
+    #[allow(clippy::too_many_lines)] // one arm per ProjectionSource variant; exhaustive by design
     fn lower_store_select(&self, args: &[canon::Expr]) -> DResult<Expr> {
         let (Some(lambda), Some(joined)) = (args.first(), args.get(1)) else {
             return Err(bug(
@@ -14219,92 +14229,102 @@ impl<'a> Lowerer<'a> {
         let projected = self.select_projections(binders, body)?;
         let lowered_joined = self.lower_expr(joined)?;
 
-        // Partition projected elements into the (tag, operand_a, operand_b) triple
-        // list and the ordered literal-bind `SqlValue` list. Column references emit
-        // `(alias, column, "")`. Literal elements emit `("", "", "")` and one
-        // `SqlValue` constructor. Upper/lower elements emit
-        // `("UPPER"/"LOWER", "alias.column", "")`. Coalesce elements emit
-        // `("COALESCE", operand_a, operand_b)` where each operand is either a
-        // dotted column or `""` (literal position — one `SqlValue` per empty
-        // operand, left before right in bind order).
+        // Build the typed `ProjectionTerm` list and the ordered literal-bind
+        // `SqlValue` list.  Each `ProjectionSource` variant maps to one
+        // `ProjectionTerm` constructor; literal binds collect into
+        // `literal_items` in left→right order (coalesce left before right,
+        // before the WHERE binds).
         let mut pair_items: Vec<Expr> = Vec::with_capacity(projected.len());
         let mut literal_items: Vec<Expr> = Vec::with_capacity(projected.len());
+        let b = self.builtins;
+        let pt_ty = b.projection_term;
+        let co_ty = b.coalesce_operand;
         for col in projected {
             match col.source {
                 ProjectionSource::Column { alias, column } => {
-                    pair_items.push(Expr::Tuple(vec![
-                        Expr::Str(alias),
-                        Expr::Str(column),
-                        Expr::Str(String::new()),
-                    ]));
+                    pair_items.push(Expr::Ctor {
+                        home: ModPath(Vec::new()),
+                        ty: pt_ty,
+                        variant: b.column_term,
+                        args: vec![Expr::Str(alias), Expr::Str(column)],
+                    });
                 }
                 ProjectionSource::Literal { lowered } => {
-                    // Sentinel triple — the runtime recognises an empty tag as a
-                    // literal-parameter position and emits `? AS pN` there.
-                    pair_items.push(Expr::Tuple(vec![
-                        Expr::Str(String::new()),
-                        Expr::Str(String::new()),
-                        Expr::Str(String::new()),
-                    ]));
+                    pair_items.push(Expr::Ctor {
+                        home: ModPath(Vec::new()),
+                        ty: pt_ty,
+                        variant: b.literal_term,
+                        args: Vec::new(),
+                    });
                     // Wrap in the `SqlValue` constructor the field's type selects,
                     // so `project_params` in the emitter converts it to `SqlParam`.
                     let variant = match col.kind {
-                        ProjColKind::Text => self.builtins.sql_string,
-                        ProjColKind::Int => self.builtins.sql_int,
-                        ProjColKind::Bool => self.builtins.sql_bool,
-                        ProjColKind::Float => self.builtins.sql_float,
+                        ProjColKind::Text => b.sql_string,
+                        ProjColKind::Int => b.sql_int,
+                        ProjColKind::Bool => b.sql_bool,
+                        ProjColKind::Float => b.sql_float,
                     };
                     literal_items.push(Expr::Ctor {
                         home: ModPath(Vec::new()),
-                        ty: self.builtins.sqlvalue,
+                        ty: b.sqlvalue,
                         variant,
                         args: vec![lowered],
                     });
                 }
                 ProjectionSource::UpperOf { alias, column } => {
-                    // Sentinel: SQL function name in first slot, dotted alias.column
-                    // in second, empty third. The runtime validates the dotted form
-                    // via `SqlIdent::parse_dotted` (defence in depth) before
-                    // interpolation.
                     let dotted = format!("{alias}.{column}");
-                    pair_items.push(Expr::Tuple(vec![
-                        Expr::Str("UPPER".to_owned()),
-                        Expr::Str(dotted),
-                        Expr::Str(String::new()),
-                    ]));
+                    pair_items.push(Expr::Ctor {
+                        home: ModPath(Vec::new()),
+                        ty: pt_ty,
+                        variant: b.upper_term,
+                        args: vec![Expr::Str(dotted)],
+                    });
                 }
                 ProjectionSource::LowerOf { alias, column } => {
                     let dotted = format!("{alias}.{column}");
-                    pair_items.push(Expr::Tuple(vec![
-                        Expr::Str("LOWER".to_owned()),
-                        Expr::Str(dotted),
-                        Expr::Str(String::new()),
-                    ]));
+                    pair_items.push(Expr::Ctor {
+                        home: ModPath(Vec::new()),
+                        ty: pt_ty,
+                        variant: b.lower_term,
+                        args: vec![Expr::Str(dotted)],
+                    });
                 }
                 ProjectionSource::Coalesce { left, right } => {
-                    // `("COALESCE", operand_a, operand_b)`: each non-empty operand
-                    // is a dotted column validated at compile time; an empty operand
-                    // is a literal `?` whose `SqlValue` bind follows in left→right
-                    // order, before the WHERE binds.
-                    let (a_str, a_lit) = emit_coalesce_operand(left, col.kind, self.builtins);
-                    let (b_str, b_lit) = emit_coalesce_operand(right, col.kind, self.builtins);
-                    if let Some(v) = a_lit {
-                        literal_items.push(v);
-                    }
-                    if let Some(v) = b_lit {
-                        literal_items.push(v);
-                    }
-                    pair_items.push(Expr::Tuple(vec![
-                        Expr::Str("COALESCE".to_owned()),
-                        Expr::Str(a_str),
-                        Expr::Str(b_str),
-                    ]));
+                    // Each operand is either a dotted column reference or a literal
+                    // `?` bind.  Literal binds push their `SqlValue` into
+                    // `literal_items` in left→right order before WHERE binds.
+                    let a_expr = emit_coalesce_operand_expr(left, col.kind, b, &mut literal_items);
+                    let b_expr = emit_coalesce_operand_expr(right, col.kind, b, &mut literal_items);
+                    pair_items.push(Expr::Ctor {
+                        home: ModPath(Vec::new()),
+                        ty: pt_ty,
+                        variant: b.coalesce_term,
+                        args: vec![
+                            Expr::Ctor {
+                                home: ModPath(Vec::new()),
+                                ty: co_ty,
+                                variant: a_expr.0,
+                                args: a_expr.1,
+                            },
+                            Expr::Ctor {
+                                home: ModPath(Vec::new()),
+                                ty: co_ty,
+                                variant: b_expr.0,
+                                args: b_expr.1,
+                            },
+                        ],
+                    });
                 }
             }
         }
 
+        let projection_term_ir = IrType::Enum {
+            home: ModPath(Vec::new()),
+            name: b.projection_term,
+            args: Vec::new(),
+        };
         let projections = Expr::List {
-            elem: proj_pair_ir_type(),
+            elem: projection_term_ir,
             items: pair_items,
         };
         let sqlvalue_ir = IrType::Enum {
@@ -15357,6 +15377,12 @@ impl<'a> Lowerer<'a> {
         if uses_sqlvalue {
             types_ir.push(TypeDef::Enum(self.synthetic_sqlvalue_enum()));
             types_ir.push(TypeDef::Enum(self.synthetic_sqlfield_enum()));
+            // `ProjectionTerm`/`CoalesceOperand` are consumed only by the
+            // `selectNamed` Db helper; any Db kernel use already implies
+            // `uses_sqlvalue`, so piggyback the injection here to keep the
+            // condition in one place.
+            types_ir.push(TypeDef::Enum(self.synthetic_projection_term_enum()));
+            types_ir.push(TypeDef::Enum(self.synthetic_coalesce_operand_enum()));
         }
 
         // detect whether any TEA kernel call is present. The backend uses
@@ -15798,6 +15824,84 @@ impl<'a> Lowerer<'a> {
                 },
                 Variant {
                     name: b.omit_field,
+                    fields: Vec::new(),
+                },
+            ],
+        }
+    }
+
+    /// Synthesise the built-in `ProjectionTerm` ADT as an [`EnumDef`].
+    ///
+    /// ```text
+    /// type ProjectionTerm
+    ///     = ColumnTerm String String     -- left-table col, right-table col
+    ///     | LiteralTerm                  -- ? literal placeholder
+    ///     | UpperTerm String             -- UPPER(col)
+    ///     | LowerTerm String             -- LOWER(col)
+    ///     | CoalesceTerm CoalesceOperand CoalesceOperand
+    /// ```
+    ///
+    /// Defined in `ipe_runtime::db`; the backend emits a type alias for it in the
+    /// project Spine rather than a full per-project enum.
+    fn synthetic_projection_term_enum(&self) -> EnumDef {
+        let b = self.builtins;
+        let co = IrType::Enum {
+            home: ModPath(Vec::new()),
+            name: b.coalesce_operand,
+            args: Vec::new(),
+        };
+        EnumDef {
+            name: b.projection_term,
+            home: ModPath(Vec::new()),
+            type_params: Vec::new(),
+            variants: vec![
+                Variant {
+                    name: b.column_term,
+                    fields: vec![IrType::Str, IrType::Str],
+                },
+                Variant {
+                    name: b.literal_term,
+                    fields: Vec::new(),
+                },
+                Variant {
+                    name: b.upper_term,
+                    fields: vec![IrType::Str],
+                },
+                Variant {
+                    name: b.lower_term,
+                    fields: vec![IrType::Str],
+                },
+                Variant {
+                    name: b.coalesce_term,
+                    fields: vec![co.clone(), co],
+                },
+            ],
+        }
+    }
+
+    /// Synthesise the built-in `CoalesceOperand` ADT as an [`EnumDef`].
+    ///
+    /// ```text
+    /// type CoalesceOperand
+    ///     = OperandColumn String   -- a dotted column reference
+    ///     | OperandLiteral         -- a ? literal placeholder
+    /// ```
+    ///
+    /// Companion to `ProjectionTerm`; defined in `ipe_runtime::db` and aliased
+    /// into the project Spine by the backend.
+    fn synthetic_coalesce_operand_enum(&self) -> EnumDef {
+        let b = self.builtins;
+        EnumDef {
+            name: b.coalesce_operand,
+            home: ModPath(Vec::new()),
+            type_params: Vec::new(),
+            variants: vec![
+                Variant {
+                    name: b.operand_column,
+                    fields: vec![IrType::Str],
+                },
+                Variant {
+                    name: b.operand_literal,
                     fields: Vec::new(),
                 },
             ],
@@ -17734,14 +17838,21 @@ impl<'a> Lowerer<'a> {
                 }
                 // Ipe.Web opaque types in annotations (mirrors `ir_type_from_ty`).
                 "WebReq" => Ok(IrType::WebReq),
-                // `StreamId` / `ChunkEvent` — builtin-registered Http.Stream ADTs
-                // (no synthetic EnumDef injection, so not in enum_variants).
-                // Mirrors the `ir_type_from_ty` arms added for these types.
-                "StreamId" | "ChunkEvent" => Ok(IrType::Enum {
-                    home: ModPath(Vec::new()),
-                    name: *name,
-                    args: Vec::new(),
-                }),
+                // Built-in ADTs that are never in `enum_variants` at lowering time
+                // (either no synthetic EnumDef injection, or injected after functions
+                // are lowered). All map to `IrType::Enum { home: [] }` directly.
+                //   `StreamId` / `ChunkEvent` — Http.Stream ADTs registered in
+                //       BUILTIN_UNIONS, no EnumDef injection.
+                //   `ProjectionTerm` / `CoalesceOperand` — Db.Store ADTs whose
+                //       EnumDefs are injected into `types_ir` AFTER lowering
+                //       (when `uses_sqlvalue` is true).
+                "StreamId" | "ChunkEvent" | "ProjectionTerm" | "CoalesceOperand" => {
+                    Ok(IrType::Enum {
+                        home: ModPath(Vec::new()),
+                        name: *name,
+                        args: Vec::new(),
+                    })
+                }
                 // `StreamWriter` — opaque server-side stream writer handle.
                 // Mirrors `ir_type_from_ty`'s "StreamWriter" arm.
                 "StreamWriter" => Ok(IrType::StreamWriter),
@@ -19123,6 +19234,17 @@ impl<'a> Lowerer<'a> {
                         up: Box::new(up),
                     })
                 }
+                // `ProjectionTerm` / `CoalesceOperand` — synthetic built-in ADTs
+                // for `selectNamed`.  Their `EnumDef`s are injected into `types_ir`
+                // AFTER functions are lowered (when `uses_sqlvalue` is true), so
+                // they are never in `enum_variants` at lowering time.  Map them to
+                // `IrType::Enum { home: [] }` directly, twin of the
+                // `ir_type_from_canon` arm.
+                "ProjectionTerm" | "CoalesceOperand" => Ok(IrType::Enum {
+                    home: ModPath(Vec::new()),
+                    name: *name,
+                    args: Vec::new(),
+                }),
                 // The opaque JSON value type (`Value = any` in Ipê). A concrete
                 // `Con { name: "Value" }` reaches here only from the schemed
                 // `JsonEnc.*` encoders (constrain's `json_value` builtin); it
@@ -28539,6 +28661,16 @@ mod tests {
         let sql_null = interner.intern("SqlNull").unwrap();
         let set_field = interner.intern("SetField").unwrap();
         let omit_field = interner.intern("OmitField").unwrap();
+        // ── ProjectionTerm / CoalesceOperand ──────────────────────────────────
+        let projection_term = interner.intern("ProjectionTerm").unwrap();
+        let column_term = interner.intern("ColumnTerm").unwrap();
+        let literal_term = interner.intern("LiteralTerm").unwrap();
+        let upper_term = interner.intern("UpperTerm").unwrap();
+        let lower_term = interner.intern("LowerTerm").unwrap();
+        let coalesce_term = interner.intern("CoalesceTerm").unwrap();
+        let coalesce_operand = interner.intern("CoalesceOperand").unwrap();
+        let operand_column = interner.intern("OperandColumn").unwrap();
+        let operand_literal = interner.intern("OperandLiteral").unwrap();
         // ── Order ADT ─────────────────────────────────────────────────
         let order = interner.intern("Order").unwrap();
         let lt = interner.intern("LT").unwrap();
@@ -28601,6 +28733,16 @@ mod tests {
             sql_null,
             set_field,
             omit_field,
+            // ── ProjectionTerm / CoalesceOperand ──────────────────────
+            projection_term,
+            column_term,
+            literal_term,
+            upper_term,
+            lower_term,
+            coalesce_term,
+            coalesce_operand,
+            operand_column,
+            operand_literal,
             // ── Order ADT ─────────────────────────────────────────────
             order,
             lt,
@@ -28685,6 +28827,12 @@ mod tests {
             .expect("intern shared built-in table");
         let chunk_event = interner.intern("ChunkEvent").expect("intern");
         let stream_id = interner.intern("StreamId").expect("intern");
+        // `ProjectionTerm` / `CoalesceOperand` — injected into `types_ir` AFTER
+        // functions are lowered (when `uses_sqlvalue` is true), so they are never
+        // seeded into `enum_variants` at construction time. Skip exactly like
+        // `StreamId` / `ChunkEvent`.
+        let projection_term = interner.intern("ProjectionTerm").expect("intern");
+        let coalesce_operand = interner.intern("CoalesceOperand").expect("intern");
         let module = canon::Module {
             imports_unsafe_submodule: false,
             name: vec![],
@@ -28713,7 +28861,11 @@ mod tests {
 
         let prelude_home = ModPath(Vec::new());
         for (&union, ctors) in &shared.exhaust_union_ctors {
-            if union == chunk_event || union == stream_id {
+            if union == chunk_event
+                || union == stream_id
+                || union == projection_term
+                || union == coalesce_operand
+            {
                 continue;
             }
             let seeded_variants = lowerer

@@ -97,6 +97,8 @@ impl IpeStringify for MainSqlField {
         }
     }
 }
+pub type MainProjectionTerm = ipe_runtime::db::ProjectionTerm;
+pub type MainCoalesceOperand = ipe_runtime::db::CoalesceOperand;
 #[derive(Clone, Debug, PartialEq)]
 pub struct Rec_ {
 
@@ -247,7 +249,7 @@ pub struct RecExtraBindsFragJoinedAJoinedBLeftTableOrderPoisonProjectionsRightTa
     leftTable: String,
     order: IpeMaybe<(String, String, bool)>,
     poison: IpeMaybe<ipe_runtime::error::IpeError>,
-    projections: Vec<(String, String, String)>,
+    projections: Vec<MainProjectionTerm>,
     rightTable: String,
 }
 impl IpeStringify for RecExtraBindsFragJoinedAJoinedBLeftTableOrderPoisonProjectionsRightTable {

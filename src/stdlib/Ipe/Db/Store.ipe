@@ -3023,9 +3023,8 @@ joinCount conn joined =
 -- concrete decode, while the runtime value carries only query data. Built only
 -- through `select`, so the projected columns and the shape that reads them back
 -- cannot drift. `joined` is the underlying join (its `FROM … WHERE` and any
--- `poison`); `projections` is the ordered projection descriptor list — each
--- entry is a `(tag, operand_a, operand_b)` triple encoding one SELECT term (see
--- `selectNamed` for the encoding).
+-- `poison`); `projections` is the ordered typed projection descriptor list (one
+-- `ProjectionTerm` per SELECT term — see `selectNamed`).
 type Select row
     = Select
         { joinedA : String
@@ -3035,7 +3034,7 @@ type Select row
         , frag : SqlFragment
         , order : Maybe ( String, String, Bool )
         , poison : Maybe Error
-        , projections : List ( String, String, String )
+        , projections : List ProjectionTerm
         , extraBinds : List SqlValue
         }
 
@@ -3142,18 +3141,14 @@ coalesce =
 
 
 -- | The lowered form of `select`: the lambda has already been read into the
--- ordered projection descriptor list, where each entry is a `(tag, operand_a,
--- operand_b)` triple. A plain column reference is `(alias, column, "")` (alias
--- is the table alias, column is the validated field name). A literal position is
--- `("", "", "")` and its `SqlValue`-wrapped argument appears in `extraBinds` in
--- positional order. A `Store.upper`/`Store.lower` operator is `("UPPER",
--- "alias.column", "")` / `("LOWER", "alias.column", "")`. A `Store.coalesce`
--- is `("COALESCE", operand_a_encoded, operand_b_encoded)` where each operand
--- encodes as `""` (literal, bound via `extraBinds`) or `"alias.column"` (column
--- reference). Builds the `Select` from the join's tables, alias-bound `FROM …
+-- ordered `ProjectionTerm` list. Each term is one typed SELECT descriptor:
+-- `ColumnTerm alias col`, `LiteralTerm`, `UpperTerm dotted`, `LowerTerm dotted`,
+-- or `CoalesceTerm operandA operandB`. Literal-position `SqlValue` binds appear
+-- in `extraBinds` in left→right, coalesce-left-before-right order, ahead of the
+-- WHERE binds. Builds the `Select` from the join's tables, alias-bound `FROM …
 -- WHERE` fragment, and any inherited `poison`. Reached only through the
 -- `Store.select` lowering intercept; not part of the accessor caller surface.
-selectNamed : Joined a b -> List ( String, String, String ) -> List SqlValue -> Select row
+selectNamed : Joined a b -> List ProjectionTerm -> List SqlValue -> Select row
 selectNamed joined projections extraBinds =
     case joined of
         Joined r ->

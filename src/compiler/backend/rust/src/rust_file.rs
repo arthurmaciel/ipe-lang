@@ -150,10 +150,12 @@ pub struct Partitioned<'p> {
 /// Proven TOTAL: every item in `program.modules[..].types /
 /// .funcs` appears in EXACTLY ONE output bucket — no drop, no duplicate.
 ///
-/// **`SqlValue`/`SqlField` Spine special case (design doc §2.2).** These two
-/// synthetic enums (`ipe_lower::lower`'s `synthetic_sqlvalue_enum` /
-/// `synthetic_sqlfield_enum`) carry the empty canonical `home` — the SAME
-/// documented Prelude-built-in home every OTHER hand-built-IR item with an
+/// **`SqlValue`/`SqlField`/`ProjectionTerm`/`CoalesceOperand` Spine special
+/// case (design doc §2.2).** These four synthetic enums (the first two from
+/// `ipe_lower::lower`'s `synthetic_sqlvalue_enum` / `synthetic_sqlfield_enum`,
+/// the last two from `synthetic_projection_term_enum` /
+/// `synthetic_coalesce_operand_enum`) carry the empty canonical `home` — the
+/// SAME documented Prelude-built-in home every OTHER hand-built-IR item with an
 /// empty `home` carries. Left unpatched, the generic empty-home fallback
 /// below would route them into whichever `IpeModule` bucket the program's
 /// entry-point module happens to own — contradicting §2.2's decision that
@@ -162,7 +164,7 @@ pub struct Partitioned<'p> {
 /// the generic empty-home fallback runs, reusing the exact detection idiom
 /// `EmitCtx::build`'s `uses_db` scan already applies
 /// (`crate::lib`'s `uses_db` / `sqlvalue_rust_name` / `sqlfield_rust_name`).
-/// (SqlValue/SqlField route to `Spine`, never a `IpeModule` bucket, so they
+/// (These four enums route to `Spine`, never an `IpeModule` bucket, so they
 /// never enter `type_order` either — same invariant as `buckets`.)
 pub fn partition_items<'p>(program: &'p Program, interner: &Interner) -> Partitioned<'p> {
     let mut out: BTreeMap<RustFileId, (Vec<&'p EnumDef>, Vec<&'p Func>)> = BTreeMap::new();
@@ -182,7 +184,10 @@ pub fn partition_items<'p>(program: &'p Program, interner: &Interner) -> Partiti
             // `Module.name` — reuses the exact detection idiom `uses_db`
             // already applies.
             let resolved = interner.resolve(def.name);
-            if matches!(resolved, Some("SqlValue" | "SqlField")) {
+            if matches!(
+                resolved,
+                Some("SqlValue" | "SqlField" | "ProjectionTerm" | "CoalesceOperand")
+            ) {
                 out.entry(RustFileId::Spine).or_default().0.push(def);
                 continue;
             }
@@ -532,18 +537,19 @@ mod tests {
     }
 
     #[test]
-    fn partition_items_forces_sqlvalue_and_sqlfield_into_spine() -> DResult<()> {
+    fn partition_items_forces_db_builtins_into_spine() -> DResult<()> {
         let mut interner = Interner::new();
         let main_mod = interner.intern("Main")?;
         let sqlvalue = interner.intern("SqlValue")?;
         let sqlfield = interner.intern("SqlField")?;
+        let projection_term = interner.intern("ProjectionTerm")?;
+        let coalesce_operand = interner.intern("CoalesceOperand")?;
         let sql_string = interner.intern("SqlString")?;
 
         let mut module = empty_module(ModPath(vec![main_mod]));
-        // `SqlValue`/`SqlField` carry the empty canonical Prelude-built-in
-        // home (`ipe_lower::lower`'s `synthetic_sqlvalue_enum` /
-        // `synthetic_sqlfield_enum`) — matching the real driver path exactly,
-        // not merely simulating hand-built IR (design doc §2.2).
+        // All four DB built-ins carry the empty canonical Prelude-built-in
+        // home and must route to Spine, not the generic empty-home module
+        // fallback (design doc §2.2).
         module.types = vec![
             TypeDef::Enum(EnumDef {
                 name: sqlvalue,
@@ -556,6 +562,24 @@ mod tests {
             }),
             TypeDef::Enum(EnumDef {
                 name: sqlfield,
+                home: ModPath(vec![]),
+                type_params: vec![],
+                variants: vec![Variant {
+                    name: sql_string,
+                    fields: vec![],
+                }],
+            }),
+            TypeDef::Enum(EnumDef {
+                name: projection_term,
+                home: ModPath(vec![]),
+                type_params: vec![],
+                variants: vec![Variant {
+                    name: sql_string,
+                    fields: vec![],
+                }],
+            }),
+            TypeDef::Enum(EnumDef {
+                name: coalesce_operand,
                 home: ModPath(vec![]),
                 type_params: vec![],
                 variants: vec![Variant {
@@ -576,12 +600,12 @@ mod tests {
             .expect("expected a Spine bucket");
         assert_eq!(
             spine_enums.len(),
-            2,
-            "both SqlValue and SqlField must route to Spine"
+            4,
+            "SqlValue, SqlField, ProjectionTerm, and CoalesceOperand must all route to Spine"
         );
         assert!(
             !buckets.contains_key(&RustFileId::IpeModule(ModPath(vec![main_mod]))),
-            "SqlValue/SqlField must NEVER fall into the generic empty-home module fallback"
+            "DB built-ins must NEVER fall into the generic empty-home module fallback"
         );
         Ok(())
     }
