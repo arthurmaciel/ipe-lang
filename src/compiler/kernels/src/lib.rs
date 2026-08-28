@@ -1458,6 +1458,13 @@ pub enum StdlibKernel {
     /// a column reference in SQL `LOWER(…)`. Symmetric counterpart to
     /// `StoreUpper`; the same structural restrictions apply.
     StoreLower,
+    /// `Store.coalesce : Projection a -> Projection a -> Projection a` — emits
+    /// `COALESCE(a, b) AS pN` in the SELECT list. Both operands must be either a
+    /// bare column reference (`side.field`) or a `Store.literal` value; the two
+    /// arguments must share the same `Projection` type variable. Lowered inline
+    /// to a `COALESCE` sentinel triple in the projection descriptor; the
+    /// runtime-fn name is a never-called placeholder.
+    StoreCoalesce,
     /// `Store.eqBy : Codec t -> (row -> t) -> t -> Cond` — the accessor-typed
     /// equality leaf for an ENUM or newtype column whose wire form is not
     /// type-derivable. The `Codec t` argument projects the comparison value to a
@@ -3430,6 +3437,10 @@ impl StdlibKernel {
             // placeholder, the same class as `store_literal`.
             Self::StoreUpper => d("Store", "upper", 1, Pure, "store_upper"),
             Self::StoreLower => d("Store", "lower", 1, Pure, "store_lower"),
+            // Intercepted at lowering (rewritten to a `COALESCE` sentinel triple in
+            // the projection descriptor); the runtime-fn name is a never-called
+            // placeholder.
+            Self::StoreCoalesce => d("Store", "coalesce", 2, Pure, "store_coalesce"),
             // Accessor-typed equality leaf for enum/newtype columns — lowered
             // inline to the `Compare` `Cond` constructor (the value bound through
             // the passed codec), so the runtime-fn name is a never-called
@@ -4988,6 +4999,7 @@ impl StdlibKernel {
         Self::StoreLiteral,
         Self::StoreUpper,
         Self::StoreLower,
+        Self::StoreCoalesce,
         Self::StoreEqCol,
         Self::StoreEqBy,
         Self::StoreNeqCol,
@@ -7271,13 +7283,16 @@ impl StdlibKernel {
         const STRING_4_TO_FIND_JOIN: TyShape = TyShape::Fun(&STRING, &STRING_3_TO_FIND_JOIN);
         const DB_FIND_JOIN: TyShape = TyShape::Fun(&DB, &STRING_4_TO_FIND_JOIN);
         // `Db.findProjection : Db -> String -> String -> String -> String
-        //                      -> SqlFragment -> List (String, String) -> List a
+        //                      -> SqlFragment -> List (String, String, String) -> List a
         //                      -> Task (List (Dict String String))`.
         // `List a` (= `LIST_A`) is the `extraBinds` parameter — `Store.literal`
         // bind values, schemed polymorphically so a concrete `SqlValue` element unifies.
+        const TUPLE_STRING_STRING_STRING: TyShape = TyShape::Tuple(&[STRING, STRING, STRING]);
+        const LIST_TUPLE_STRING_STRING_STRING: TyShape =
+            TyShape::Con(BuiltinTag::List, &[TUPLE_STRING_STRING_STRING]);
         const LIST_A_TO_FIND_PROJECTION: TyShape = TyShape::Fun(&LIST_A, &TASK_LIST_DICT_SS);
         const LIST_TSS_TO_FIND_PROJECTION: TyShape =
-            TyShape::Fun(&LIST_TUPLE_STRING_STRING, &LIST_A_TO_FIND_PROJECTION);
+            TyShape::Fun(&LIST_TUPLE_STRING_STRING_STRING, &LIST_A_TO_FIND_PROJECTION);
         const SQLFRAGMENT_TO_FIND_PROJECTION: TyShape =
             TyShape::Fun(&SQLFRAGMENT, &LIST_TSS_TO_FIND_PROJECTION);
         const STRING_TO_FIND_PROJECTION: TyShape =
@@ -7313,7 +7328,7 @@ impl StdlibKernel {
         const STR4_TO_FIND_JOIN_ORD: TyShape = TyShape::Fun(&STRING, &STR3_TO_FIND_JOIN_ORD);
         const DB_FIND_JOIN_ORDERED: TyShape = TyShape::Fun(&DB, &STR4_TO_FIND_JOIN_ORD);
         // `Db.findProjectionOrdered : Db -> String -> String -> String -> String
-        //                             -> SqlFragment -> List (String, String) -> List a
+        //                             -> SqlFragment -> List (String, String, String) -> List a
         //                             -> String -> String -> Bool
         //                             -> Task (List (Dict String String))`.
         // `List a` is `extraBinds` (same as in `DB_FIND_PROJECTION`).
@@ -7326,7 +7341,7 @@ impl StdlibKernel {
         const LIST_A_TO_FIND_PROJ_ORD: TyShape =
             TyShape::Fun(&LIST_A, &STRING_2_ORDER_TO_FIND_PROJ);
         const LIST_TSS_TO_FIND_PROJ_ORD: TyShape =
-            TyShape::Fun(&LIST_TUPLE_STRING_STRING, &LIST_A_TO_FIND_PROJ_ORD);
+            TyShape::Fun(&LIST_TUPLE_STRING_STRING_STRING, &LIST_A_TO_FIND_PROJ_ORD);
         const SQLFRAGMENT_TO_FIND_PROJ_ORD: TyShape =
             TyShape::Fun(&SQLFRAGMENT, &LIST_TSS_TO_FIND_PROJ_ORD);
         const STR_TO_FIND_PROJ_ORD: TyShape = TyShape::Fun(&STRING, &SQLFRAGMENT_TO_FIND_PROJ_ORD);
@@ -9137,6 +9152,8 @@ impl StdlibKernel {
         // ── Unary text projection operators — arity-1 (inner column expr) ─────
         Self::StoreUpper,
         Self::StoreLower,
+        // ── Binary coalesce projection operator — arity-2 (left + right) ─────
+        Self::StoreCoalesce,
         // ── Query leaves — arity-2 (accessor + store) ────────────────────────
         Self::StoreEqCol,
         Self::StoreEqBy,
@@ -9546,6 +9563,7 @@ impl StdlibKernel {
             | Self::StoreLiteral
             | Self::StoreUpper
             | Self::StoreLower
+            | Self::StoreCoalesce
             | Self::StoreEqCol
             | Self::StoreEqBy
             | Self::StoreNeqCol

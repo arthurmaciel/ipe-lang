@@ -4427,6 +4427,7 @@ impl<'a> Builder<'a> {
             args: Vec::new(),
         };
         let tuple2 = |a: Ty, b: Ty| Ty::Tuple(vec![a, b]);
+        let tuple3 = |a: Ty, b: Ty, c: Ty| Ty::Tuple(vec![a, b, c]);
         // `task(a)` — `Task a` (the error channel is the implicit `IpeError`).
         let task = |a: Ty| Ty::Con {
             module: Vec::new(),
@@ -5932,16 +5933,16 @@ impl<'a> Builder<'a> {
                 ),
             ),
             // `Db.findProjection : Db -> String -> String -> String -> String
-            //                      -> SqlFragment -> List (String, String)
+            //                      -> SqlFragment -> List (String, String, String)
             //                      -> Task (List (Dict String String))` — read a
             // typed projection over a two-table join as one parameterized
             // statement. The two `(table, alias)` pairs name the sides, `frag`
             // carries the join-key equality plus any filter, and the
-            // `List (String, String)` is the ordered `(alias, column)` references
-            // to project; each result row is one cell map keyed by the projection
-            // output names (`p0`, `p1`, …), decoded by position.
+            // `List (String, String, String)` is the ordered descriptor triples
+            // (see `selectNamed`). Each result row is one cell map keyed by the
+            // projection output names (`p0`, `p1`, …), decoded by position.
             // `Db.findProjection : Db -> String -> String -> String -> String
-            //                      -> SqlFragment -> List (String, String)
+            //                      -> SqlFragment -> List (String, String, String)
             //                      -> List SqlValue
             //                      -> Task (List (Dict String String))`
             // — `extraBinds` is `List SqlValue` (the generated per-project ADT);
@@ -5959,7 +5960,7 @@ impl<'a> Builder<'a> {
                                 fun(
                                     sqlfragment(),
                                     fun(
-                                        list(tuple2(string(), string())),
+                                        list(tuple3(string(), string(), string())),
                                         fun(
                                             list(var(0)),
                                             task(list(dict(string(), string()))),
@@ -6015,7 +6016,7 @@ impl<'a> Builder<'a> {
                 ),
             ),
             // `Db.findProjectionOrdered : Db -> String -> String -> String -> String
-            //                             -> SqlFragment -> List (String, String)
+            //                             -> SqlFragment -> List (String, String, String)
             //                             -> List SqlValue
             //                             -> String -> String -> Bool
             //                             -> Task (List (Dict String String))`
@@ -6035,7 +6036,7 @@ impl<'a> Builder<'a> {
                                 fun(
                                     sqlfragment(),
                                     fun(
-                                        list(tuple2(string(), string())),
+                                        list(tuple3(string(), string(), string())),
                                         fun(
                                             list(var(0)),
                                             fun(
@@ -6157,6 +6158,11 @@ impl<'a> Builder<'a> {
             // `Store.lower : String -> String` — symmetric counterpart wrapping
             // `LOWER(…)`. Same structural restrictions as `StoreUpper`.
             K::StoreLower => fun(string(), string()),
+            // `Store.coalesce : Projection a -> Projection a -> Projection a` —
+            // both operands share the same type variable; `a` is a scalar type
+            // (`String`, `Int`, `Bool`, or `Float`). Recognized structurally at
+            // lowering (not emitted as a runtime call).
+            K::StoreCoalesce => fun(var(0), fun(var(0), var(0))),
 
             // `Store.eq : (row -> t) -> t -> Cond` — the getter-arrow scheme lets
             // an accessor literal `.field` unify against the first parameter by
@@ -10207,6 +10213,8 @@ mod registry_phase_c_tests {
             // Unary text projection operators (Ipê-new, no legacy oracle).
             K::StoreUpper,
             K::StoreLower,
+            // Binary coalesce projection operator (Ipê-new, no legacy oracle).
+            K::StoreCoalesce,
             // Typed accessor query leaves (getter-arrow schemes, Ipê-new).
             K::StoreEqCol,
             K::StoreEqBy,
