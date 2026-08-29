@@ -52,7 +52,12 @@ pub const STDLIB_MODULE_QUALIFIERS: &[(&[&str], &str)] = &[
     (&["Ipe", "Result"], "Result"),
     (&["Ipe", "Error"], "Error"),
     (&["Ipe", "Math"], "Math"),
-    (&["Ipe", "Bitwise"], "Bitwise"),
+    // NOTE — `Ipe.Bitwise` is DELIBERATELY absent: it is a COMPILED-SOURCE
+    // Layer-3 module (registered in `ipe::stdlib::COMPILED_STD_MODULES`). Its
+    // members are point-free `Ffi.kernel "Bitwise_*"` aliases that
+    // `detect_kernel_alias` routes to the registered `Bitwise*` `StdlibKernel`
+    // variants. A module is EITHER a kernel qualifier here OR compiled-source
+    // — never both (`compiled_vs_kernel_qualifier_disjoint`), so it stays out.
     (&["Ipe", "Dict"], "Dict"),
     (&["Ipe", "Set"], "Set"),
     (&["Ipe", "Bytes"], "Bytes"),
@@ -997,19 +1002,10 @@ impl Env {
                     "remainder",
                 ],
             ),
-            // `Ipe.Bitwise` — Int-only bitwise ops (elm/core Bitwise parity).
-            (
-                "Bitwise",
-                &[
-                    "and",
-                    "or",
-                    "xor",
-                    "complement",
-                    "shiftLeftBy",
-                    "shiftRightBy",
-                    "shiftRightZfBy",
-                ],
-            ),
+            // `Ipe.Bitwise` is DELIBERATELY absent: it is COMPILED-SOURCE
+            // (`ipe::stdlib::COMPILED_STD_MODULES`), so its whole surface resolves
+            // from `Ipe/Bitwise.ipe` — the `Ffi.kernel "Bitwise_*"` aliases —
+            // not from this kernel-qualifier catalog.
             (
                 "Basics",
                 &[
