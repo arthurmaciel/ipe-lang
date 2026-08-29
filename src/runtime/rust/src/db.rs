@@ -31,13 +31,43 @@ pub enum ProjectionTerm {
     LowerTerm(String),
     /// `COALESCE(a, b) AS pN` — each operand is either a dotted column or a
     /// literal `?` placeholder.
-    CoalesceTerm(CoalesceOperand, CoalesceOperand),
+    CoalesceTerm(ProjectionOperand, ProjectionOperand),
+    /// `(a <op> b) AS pN` — a binary arithmetic expression over two numeric
+    /// operands, each a dotted column or a literal `?` placeholder.  The
+    /// [`ArithOp`] tag is drawn from a closed set, never from input.
+    ArithTerm(ArithOp, ProjectionOperand, ProjectionOperand),
 }
 
-/// One operand inside a [`ProjectionTerm::CoalesceTerm`].  Replaces the
-/// `is_empty()` sentinel on the `(tag, operand_a, operand_b)` third string.
+/// The closed set of binary arithmetic operators a `Store.select` projection may
+/// lift over two numeric operands.  A fixed tag — never attacker-controlled —
+/// so the SQL operator symbol comes only from [`ArithOp::sql_symbol`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ArithOp {
+    /// SQL `+`.
+    ArithAdd,
+    /// SQL `-`.
+    ArithSub,
+    /// SQL `*`.
+    ArithMul,
+}
+
+impl ArithOp {
+    /// The SQL infix symbol for this operator.  A method over a closed enum, so
+    /// the symbol reaching SQL text is one of exactly three fixed strings.
+    const fn sql_symbol(self) -> &'static str {
+        match self {
+            Self::ArithAdd => "+",
+            Self::ArithSub => "-",
+            Self::ArithMul => "*",
+        }
+    }
+}
+
+/// One operand inside a [`ProjectionTerm::CoalesceTerm`] or
+/// [`ProjectionTerm::ArithTerm`].  Replaces the `is_empty()` sentinel on the
+/// `(tag, operand_a, operand_b)` third string.
 #[derive(Clone, Debug, PartialEq)]
-pub enum CoalesceOperand {
+pub enum ProjectionOperand {
     /// A dotted `alias.col` column reference, re-validated via
     /// [`SqlIdent::parse_dotted`] before SQL interpolation.
     OperandColumn(String),
@@ -2922,7 +2952,7 @@ fn parse_order_clause(alias: &str, col: &str, ascending: bool) -> Result<String,
 /// - [`ProjectionTerm::UpperTerm`] / [`ProjectionTerm::LowerTerm`] — the dotted
 ///   `"alias.col"` field is re-validated via [`SqlIdent::parse_dotted`]; SQL
 ///   function name comes from the closed variant set, never from input.
-/// - [`ProjectionTerm::CoalesceTerm`] — each [`CoalesceOperand`] is either
+/// - [`ProjectionTerm::CoalesceTerm`] — each [`ProjectionOperand`] is either
 ///   `OperandColumn(dotted)` (re-validated via `parse_dotted`) or
 ///   `OperandLiteral` (a `?` bound from `extra_binds`).
 /// - [`ProjectionTerm::ColumnTerm`] — `alias.column AS p<index>`, both
@@ -2959,6 +2989,29 @@ fn build_projection_statement(
     if projections.is_empty() {
         return Err("a projection must name at least one column".to_string());
     }
+    let (terms, literal_count) = render_projection_terms(projections)?;
+    Ok((
+        db_format_sql(format!(
+            "SELECT {proj} FROM {lt} AS {la}, {rt} AS {ra} WHERE {where_}",
+            proj = terms.join(", "),
+            lt = left_table_id.as_str(),
+            la = left_alias_id.as_str(),
+            rt = right_table_id.as_str(),
+            ra = right_alias_id.as_str(),
+            where_ = where_sql
+        )),
+        literal_count,
+    ))
+}
+
+/// Render every [`ProjectionTerm`] into its `… AS pN` SELECT fragment, returning
+/// the fragment list and the count of literal `?` positions the caller must bind.
+/// The single source of truth for projection-term SQL — shared by the plain and
+/// `ORDER BY` statement builders so the two cannot drift.  Every dotted column
+/// operand is re-validated via [`SqlIdent::parse_dotted`] and every output alias
+/// via [`SqlIdent::parse_plain`] before it reaches SQL text (defence in depth);
+/// every value is a bound `?`, never interpolated; the operator tags are closed.
+fn render_projection_terms(projections: &[ProjectionTerm]) -> Result<(Vec<String>, usize), String> {
     let mut terms = Vec::with_capacity(projections.len());
     let mut literal_count: usize = 0;
     for (index, term) in projections.iter().enumerate() {
@@ -2991,11 +3044,25 @@ fn build_projection_statement(
                 ));
             }
             ProjectionTerm::CoalesceTerm(a, b) => {
-                let a_sql = render_coalesce_operand(a, &mut literal_count)?;
-                let b_sql = render_coalesce_operand(b, &mut literal_count)?;
+                let a_sql = render_projection_operand(a, &mut literal_count)?;
+                let b_sql = render_projection_operand(b, &mut literal_count)?;
                 terms.push(format!(
                     "COALESCE({a}, {b}) AS {out}",
                     a = a_sql,
+                    b = b_sql,
+                    out = output.as_str(),
+                ));
+            }
+            ProjectionTerm::ArithTerm(op, a, b) => {
+                let a_sql = render_projection_operand(a, &mut literal_count)?;
+                let b_sql = render_projection_operand(b, &mut literal_count)?;
+                // The operator symbol is drawn from the closed `ArithOp` set,
+                // never from input; both operands are validated columns or `?`
+                // binds, so the parenthesised expression carries no injection.
+                terms.push(format!(
+                    "({a} {op} {b}) AS {out}",
+                    a = a_sql,
+                    op = op.sql_symbol(),
                     b = b_sql,
                     out = output.as_str(),
                 ));
@@ -3006,36 +3073,25 @@ fn build_projection_statement(
             }
         }
     }
-    Ok((
-        db_format_sql(format!(
-            "SELECT {proj} FROM {lt} AS {la}, {rt} AS {ra} WHERE {where_}",
-            proj = terms.join(", "),
-            lt = left_table_id.as_str(),
-            la = left_alias_id.as_str(),
-            rt = right_table_id.as_str(),
-            ra = right_alias_id.as_str(),
-            where_ = where_sql
-        )),
-        literal_count,
-    ))
+    Ok((terms, literal_count))
 }
 
-/// Render one [`CoalesceOperand`] for SQL inclusion.  A column operand's dotted
+/// Render one [`ProjectionOperand`] for SQL inclusion.  A column operand's dotted
 /// reference is re-validated via [`SqlIdent::parse_dotted`] (defence in depth)
 /// before it reaches SQL text.  A literal operand emits `?` and increments the
 /// caller's `literal_count`.
-fn render_coalesce_operand(
-    operand: &CoalesceOperand,
+fn render_projection_operand(
+    operand: &ProjectionOperand,
     literal_count: &mut usize,
 ) -> Result<String, String> {
     match operand {
-        CoalesceOperand::OperandLiteral => {
+        ProjectionOperand::OperandLiteral => {
             *literal_count += 1;
             Ok("?".to_string())
         }
-        CoalesceOperand::OperandColumn(dotted) => {
+        ProjectionOperand::OperandColumn(dotted) => {
             let id = SqlIdent::parse_dotted(dotted)
-                .ok_or_else(|| format!("invalid COALESCE operand {dotted:?}"))?;
+                .ok_or_else(|| format!("invalid projection operand {dotted:?}"))?;
             Ok(id.as_str().to_string())
         }
     }
@@ -3072,51 +3128,7 @@ fn build_projection_statement_ordered(
     if projections.is_empty() {
         return Err("a projection must name at least one column".to_string());
     }
-    let mut terms = Vec::with_capacity(projections.len());
-    let mut literal_count: usize = 0;
-    for (index, term) in projections.iter().enumerate() {
-        let output_name = format!("p{index}");
-        let output = SqlIdent::parse_plain(&output_name)
-            .ok_or_else(|| format!("invalid projection output {output_name:?}"))?;
-        match term {
-            ProjectionTerm::LiteralTerm => {
-                terms.push(format!("? AS {}", output.as_str()));
-                literal_count += 1;
-            }
-            ProjectionTerm::UpperTerm(dotted) => {
-                let col = SqlIdent::parse_dotted(dotted)
-                    .ok_or_else(|| format!("invalid projection column {dotted:?}"))?;
-                terms.push(format!(
-                    "UPPER({col}) AS {out}",
-                    col = col.as_str(),
-                    out = output.as_str(),
-                ));
-            }
-            ProjectionTerm::LowerTerm(dotted) => {
-                let col = SqlIdent::parse_dotted(dotted)
-                    .ok_or_else(|| format!("invalid projection column {dotted:?}"))?;
-                terms.push(format!(
-                    "LOWER({col}) AS {out}",
-                    col = col.as_str(),
-                    out = output.as_str(),
-                ));
-            }
-            ProjectionTerm::CoalesceTerm(a, b) => {
-                let a_sql = render_coalesce_operand(a, &mut literal_count)?;
-                let b_sql = render_coalesce_operand(b, &mut literal_count)?;
-                terms.push(format!(
-                    "COALESCE({a}, {b}) AS {out}",
-                    a = a_sql,
-                    b = b_sql,
-                    out = output.as_str(),
-                ));
-            }
-            ProjectionTerm::ColumnTerm(alias, column) => {
-                let projected = ProjectionColumn::parse(alias, column, index)?;
-                terms.push(projected.projection_term());
-            }
-        }
-    }
+    let (terms, literal_count) = render_projection_terms(projections)?;
     Ok((
         db_format_sql(format!(
             "SELECT {proj} FROM {lt} AS {la}, {rt} AS {ra} WHERE {where_} ORDER BY {order_clause}",
@@ -7417,8 +7429,8 @@ mod tests {
             "authors",
             "a1",
             &[ProjectionTerm::CoalesceTerm(
-                CoalesceOperand::OperandColumn("a1.name".into()),
-                CoalesceOperand::OperandLiteral,
+                ProjectionOperand::OperandColumn("a1.name".into()),
+                ProjectionOperand::OperandLiteral,
             )],
             &frag.sql,
         )
@@ -7449,8 +7461,8 @@ mod tests {
             "authors",
             "a1",
             &[ProjectionTerm::CoalesceTerm(
-                CoalesceOperand::OperandColumn("a0.name".into()),
-                CoalesceOperand::OperandColumn("a1.fallback".into()),
+                ProjectionOperand::OperandColumn("a0.name".into()),
+                ProjectionOperand::OperandColumn("a1.fallback".into()),
             )],
             &frag.sql,
         )
@@ -7479,8 +7491,8 @@ mod tests {
             "authors",
             "a1",
             &[ProjectionTerm::CoalesceTerm(
-                CoalesceOperand::OperandColumn("a1.name); DROP TABLE authors".into()),
-                CoalesceOperand::OperandLiteral,
+                ProjectionOperand::OperandColumn("a1.name); DROP TABLE authors".into()),
+                ProjectionOperand::OperandLiteral,
             )],
             &frag.sql,
         );
@@ -7494,8 +7506,8 @@ mod tests {
             "authors",
             "a1",
             &[ProjectionTerm::CoalesceTerm(
-                CoalesceOperand::OperandColumn("a1.name".into()),
-                CoalesceOperand::OperandColumn("a0.col; DROP".into()),
+                ProjectionOperand::OperandColumn("a1.name".into()),
+                ProjectionOperand::OperandColumn("a0.col; DROP".into()),
             )],
             &frag.sql,
         );
@@ -7527,8 +7539,8 @@ mod tests {
             "a1".into(),
             frag,
             vec![ProjectionTerm::CoalesceTerm(
-                CoalesceOperand::OperandColumn("a1.name".into()),
-                CoalesceOperand::OperandLiteral,
+                ProjectionOperand::OperandColumn("a1.name".into()),
+                ProjectionOperand::OperandLiteral,
             )],
             vec![SqlParam::Text("unknown".to_string())],
         )
@@ -7543,6 +7555,187 @@ mod tests {
                         "COALESCE returns the non-null column value"
                     );
                 }
+            }
+            IpeResult::Err(e) => panic!("expected Ok, got Err({e})"),
+        }
+    }
+
+    // ── Store.add / .sub / .mul: `(a <op> b) AS pN` ──────────────────────────
+
+    /// Golden SQL: `ArithTerm(ArithAdd, OperandColumn("a0.quantity"), OperandLiteral)`
+    /// emits exactly `(a0.quantity + ?) AS p0` — the column operand is
+    /// re-validated via `SqlIdent::parse_dotted`; the literal operand emits `?`.
+    /// Count is 1.
+    #[test]
+    fn projection_statement_arith_add_column_literal_emits_exact_sql() {
+        let frag = sql_eq(
+            sql_column("a1.id".to_string()),
+            sql_column("a0.author_id".to_string()),
+        );
+        let (sql, literal_count) = build_projection_statement(
+            "books",
+            "a0",
+            "authors",
+            "a1",
+            &[ProjectionTerm::ArithTerm(
+                ArithOp::ArithAdd,
+                ProjectionOperand::OperandColumn("a0.quantity".into()),
+                ProjectionOperand::OperandLiteral,
+            )],
+            &frag.sql,
+        )
+        .expect("ArithTerm(add, column, literal) must build");
+        assert_eq!(
+            literal_count, 1,
+            "one literal position for the OperandLiteral"
+        );
+        assert_eq!(
+            sql,
+            "SELECT (a0.quantity + ?) AS p0 \
+             FROM books AS a0, authors AS a1 WHERE (a1.id = a0.author_id)"
+        );
+    }
+
+    /// Golden SQL: `ArithTerm(ArithSub, column, column)` emits
+    /// `(a0.price - a0.discount) AS p0` — both operands re-validated; no bind.
+    #[test]
+    fn projection_statement_arith_sub_two_columns_emits_exact_sql() {
+        let frag = sql_eq(
+            sql_column("a1.id".to_string()),
+            sql_column("a0.author_id".to_string()),
+        );
+        let (sql, literal_count) = build_projection_statement(
+            "books",
+            "a0",
+            "authors",
+            "a1",
+            &[ProjectionTerm::ArithTerm(
+                ArithOp::ArithSub,
+                ProjectionOperand::OperandColumn("a0.price".into()),
+                ProjectionOperand::OperandColumn("a0.discount".into()),
+            )],
+            &frag.sql,
+        )
+        .expect("ArithTerm(sub, column, column) must build");
+        assert_eq!(
+            literal_count, 0,
+            "no literal positions: both operands are columns"
+        );
+        assert_eq!(
+            sql,
+            "SELECT (a0.price - a0.discount) AS p0 \
+             FROM books AS a0, authors AS a1 WHERE (a1.id = a0.author_id)"
+        );
+    }
+
+    /// Golden SQL: `ArithTerm(ArithMul, column, literal)` emits
+    /// `(a0.price * ?) AS p0` with one bound literal.
+    #[test]
+    fn projection_statement_arith_mul_column_literal_emits_exact_sql() {
+        let frag = sql_eq(
+            sql_column("a1.id".to_string()),
+            sql_column("a0.author_id".to_string()),
+        );
+        let (sql, literal_count) = build_projection_statement(
+            "books",
+            "a0",
+            "authors",
+            "a1",
+            &[ProjectionTerm::ArithTerm(
+                ArithOp::ArithMul,
+                ProjectionOperand::OperandColumn("a0.price".into()),
+                ProjectionOperand::OperandLiteral,
+            )],
+            &frag.sql,
+        )
+        .expect("ArithTerm(mul, column, literal) must build");
+        assert_eq!(literal_count, 1, "one literal position");
+        assert_eq!(
+            sql,
+            "SELECT (a0.price * ?) AS p0 \
+             FROM books AS a0, authors AS a1 WHERE (a1.id = a0.author_id)"
+        );
+    }
+
+    /// A bad dotted column inside an `ArithTerm` is rejected fail-closed —
+    /// `SqlIdent::parse_dotted` refuses an operand with injection characters,
+    /// in either operand position.
+    #[test]
+    fn projection_statement_arith_rejects_bad_dotted_operand() {
+        let frag = sql_eq(
+            sql_column("a1.id".to_string()),
+            sql_column("a0.author_id".to_string()),
+        );
+        let bad_a = build_projection_statement(
+            "books",
+            "a0",
+            "authors",
+            "a1",
+            &[ProjectionTerm::ArithTerm(
+                ArithOp::ArithAdd,
+                ProjectionOperand::OperandColumn("a0.price); DROP TABLE books".into()),
+                ProjectionOperand::OperandLiteral,
+            )],
+            &frag.sql,
+        );
+        assert!(
+            bad_a.is_err(),
+            "injection in first arithmetic operand must be rejected fail-closed"
+        );
+        let bad_b = build_projection_statement(
+            "books",
+            "a0",
+            "authors",
+            "a1",
+            &[ProjectionTerm::ArithTerm(
+                ArithOp::ArithMul,
+                ProjectionOperand::OperandColumn("a0.price".into()),
+                ProjectionOperand::OperandColumn("a0.qty; DROP".into()),
+            )],
+            &frag.sql,
+        );
+        assert!(
+            bad_b.is_err(),
+            "injection in second arithmetic operand must be rejected fail-closed"
+        );
+    }
+
+    /// `db_find_projection` with an `(a0.id + ?)` position binds the extra param
+    /// before the WHERE params and returns the summed value in `p0`.
+    #[tokio::test]
+    async fn test_find_projection_arith_column_literal() {
+        let db = fresh_join_db().await;
+        let frag = sql_and(
+            sql_eq(
+                sql_column("a1.id".to_string()),
+                sql_column("a0.author_id".to_string()),
+            ),
+            sql_eq(sql_column("a0.id".to_string()), sql_param(10_i64)),
+        );
+        // (a0.id + ?) with the book id 10 and a bound literal 5 → 15.
+        let found: IpeResult<String, Vec<HashMap<String, String>>> = db_find_projection(
+            db,
+            "books".into(),
+            "a0".into(),
+            "authors".into(),
+            "a1".into(),
+            frag,
+            vec![ProjectionTerm::ArithTerm(
+                ArithOp::ArithAdd,
+                ProjectionOperand::OperandColumn("a0.id".into()),
+                ProjectionOperand::OperandLiteral,
+            )],
+            vec![SqlParam::Int(5)],
+        )
+        .await;
+        match found {
+            IpeResult::Ok(rows) => {
+                assert_eq!(rows.len(), 1, "exactly the one book with id 10");
+                assert_eq!(
+                    rows[0].get("p0").map(String::as_str),
+                    Some("15"),
+                    "(a0.id + ?) = 10 + 5 = 15"
+                );
             }
             IpeResult::Err(e) => panic!("expected Ok, got Err({e})"),
         }

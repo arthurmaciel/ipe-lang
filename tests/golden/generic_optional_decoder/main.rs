@@ -98,7 +98,8 @@ impl IpeStringify for MainSqlField {
     }
 }
 pub type MainProjectionTerm = ipe_runtime::db::ProjectionTerm;
-pub type MainCoalesceOperand = ipe_runtime::db::CoalesceOperand;
+pub type MainProjectionOperand = ipe_runtime::db::ProjectionOperand;
+pub type MainArithOp = ipe_runtime::db::ArithOp;
 impl MainSqlValue {
     /// Convert this `SqlValue` into the runtime-nameable `SqlParam`.
     /// Used by `into_field_param` and by legacy call sites that name

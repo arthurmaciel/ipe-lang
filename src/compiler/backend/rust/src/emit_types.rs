@@ -732,13 +732,17 @@ pub fn emit_enum(ctx: &EmitCtx, def: &EnumDef) -> DResult<String> {
     if ctx.is_websocket_bridged_enum(&def.home, def.name)? {
         return Ok(String::new());
     }
-    // `ProjectionTerm` / `CoalesceOperand` are Prelude built-ins whose
+    // `ProjectionTerm` / `ProjectionOperand` are Prelude built-ins whose
     // definition lives in `ipe_runtime::db`.  Instead of re-emitting a full
     // enum body (which would clash or drift from the runtime type the
     // `db_find_projection` signature names), emit a type alias so the
     // generated crate and the runtime share ONE nominal type.
     let resolved_name = ctx.interner.resolve(def.name);
-    if def.home.0.is_empty() && matches!(resolved_name, Some("ProjectionTerm" | "CoalesceOperand"))
+    if def.home.0.is_empty()
+        && matches!(
+            resolved_name,
+            Some("ProjectionTerm" | "ProjectionOperand" | "ArithOp")
+        )
     {
         let alias_name = ctx.enum_name(&def.home, def.name)?.to_owned();
         let runtime_name = resolved_name.unwrap_or("");

@@ -230,7 +230,7 @@ module Ipe.Db.Store exposing
     , orderByLeftNamed, orderByRightNamed
     , joinToList, joinToMaybe, joinCount
     , Select
-    , select, selectNamed, literal, upper, lower, coalesce
+    , select, selectNamed, literal, upper, lower, coalesce, add, sub, mul
     , selectToList, selectToMaybe
     , Policy, Secured
     , unrestricted, publicRead, ownerColumn, immutable, andPolicy, secured
@@ -3138,6 +3138,39 @@ lower =
 coalesce : Projection a -> Projection a -> Projection a
 coalesce =
     Ffi.kernel "Store_coalesce"
+
+
+-- | `add left right` — inside a `Store.select` projection lambda, emits
+-- `(a + b) AS pN` in the SELECT list over two numeric operands. Both operands
+-- share one numeric type (`Int` or `Float`); a non-numeric operand is a
+-- compile-time type error. Each operand is either a bare `side.field` column
+-- reference or a `Store.literal` value; a computed expression is a fail-closed
+-- build error (IPE-L0149). Every column identifier is validated at compile time
+-- and re-checked by the runtime.
+--
+-- Example:
+--
+--     Store.join lineItems .orderId orders .id
+--         |> Store.select (\( item, _ ) -> add item.price (literal 10))
+--         |> Store.selectToList db
+--         -- SQL: SELECT (a0.price + ?) AS p0 FROM …
+add : a -> a -> a
+add =
+    Ffi.kernel "Store_add"
+
+
+-- | `sub left right` — subtraction counterpart to `add`: emits `(a - b) AS pN`.
+-- The same operand and numeric-type restrictions apply.
+sub : a -> a -> a
+sub =
+    Ffi.kernel "Store_sub"
+
+
+-- | `mul left right` — multiplication counterpart to `add`: emits
+-- `(a * b) AS pN`. The same operand and numeric-type restrictions apply.
+mul : a -> a -> a
+mul =
+    Ffi.kernel "Store_mul"
 
 
 -- | The lowered form of `select`: the lambda has already been read into the

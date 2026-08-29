@@ -131,6 +131,23 @@ fn upper_on_non_string_column_is_rejected() {
     );
 }
 
+/// `Store.add` applied to a non-numeric column (here `String`) must be
+/// rejected. The arithmetic operators are `number a => a -> a -> a`; unifying a
+/// `String` operand against the numeric-bounded variable is a type mismatch
+/// (IPE-T0001), fail-closed before lowering. Pinning the specific code confirms
+/// the numeric obligation is enforced rather than an unrelated failure.
+#[test]
+fn arith_on_non_numeric_column_is_rejected() {
+    let Some(code) = rejection_code("db_store_projection_arith_non_numeric_rejected") else {
+        return; // resolver unavailable — skip
+    };
+    assert_eq!(
+        code,
+        ipe_diagnostics::IPE_T0001,
+        "Store.add on a non-numeric column must fail with a type-mismatch IPE-T0001"
+    );
+}
+
 /// A `Store.literal` whose argument type is not a supported scalar (String /
 /// Int / Bool / Float) is rejected with IPE-L0149 /
 /// `LiteralTypeUnsupported`, and the diagnostic names the unsupported type.

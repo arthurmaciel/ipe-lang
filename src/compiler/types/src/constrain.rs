@@ -724,7 +724,7 @@ struct Builtins {
     /// type parameters; the scheme just names the ADT so inference pins the
     /// second argument of each kernel to `Order`.
     order_con: Symbol,
-    // ── Ipe.Db.Store.ProjectionTerm / CoalesceOperand ─────────────────────────
+    // ── Ipe.Db.Store.ProjectionTerm / ProjectionOperand ─────────────────────────
     /// `"ProjectionTerm"` — typed representation of a single named-select
     /// projection, backing `selectNamed`. Defined in `ipe_runtime::db` and
     /// exported via a type alias from the Spine. Zero type arguments.
@@ -741,16 +741,16 @@ struct Builtins {
     /// `"LowerTerm"` — `LowerTerm String` constructor of `ProjectionTerm`
     /// (lower-cased column reference).
     lower_term: Symbol,
-    /// `"CoalesceTerm"` — `CoalesceTerm CoalesceOperand CoalesceOperand`
+    /// `"CoalesceTerm"` — `CoalesceTerm ProjectionOperand ProjectionOperand`
     /// constructor of `ProjectionTerm` (SQL COALESCE of two operands).
     coalesce_term: Symbol,
-    /// `"CoalesceOperand"` — companion type for the two operands of `CoalesceTerm`.
+    /// `"ProjectionOperand"` — companion type for the two operands of `CoalesceTerm`.
     /// Defined in `ipe_runtime::db` alongside `ProjectionTerm`.
-    coalesce_operand: Symbol,
-    /// `"OperandColumn"` — `OperandColumn String` constructor of `CoalesceOperand`
+    projection_operand: Symbol,
+    /// `"OperandColumn"` — `OperandColumn String` constructor of `ProjectionOperand`
     /// (a dotted column reference).
     operand_column: Symbol,
-    /// `"OperandLiteral"` — `OperandLiteral` nullary constructor of `CoalesceOperand`
+    /// `"OperandLiteral"` — `OperandLiteral` nullary constructor of `ProjectionOperand`
     /// (a `?` literal placeholder).
     operand_literal: Symbol,
     // ── Shape opaque app-leaf type constructor symbols ────────────────────────
@@ -1021,14 +1021,14 @@ impl Builtins {
             policy_con: interner.intern("Policy")?,
             order_con: interner.intern("Order")?,
             codec_con: interner.intern("Codec")?,
-            // ── ProjectionTerm / CoalesceOperand ──────────────────────────────
+            // ── ProjectionTerm / ProjectionOperand ──────────────────────────────
             projection_term: interner.intern("ProjectionTerm")?,
             column_term: interner.intern("ColumnTerm")?,
             literal_term: interner.intern("LiteralTerm")?,
             upper_term: interner.intern("UpperTerm")?,
             lower_term: interner.intern("LowerTerm")?,
             coalesce_term: interner.intern("CoalesceTerm")?,
-            coalesce_operand: interner.intern("CoalesceOperand")?,
+            projection_operand: interner.intern("ProjectionOperand")?,
             operand_column: interner.intern("OperandColumn")?,
             operand_literal: interner.intern("OperandLiteral")?,
             // ── Shape opaque app-leaf type constructor symbols ─────────────
@@ -1515,19 +1515,19 @@ impl Builtins {
                     },
                 },
             ),
-            // CoalesceTerm : CoalesceOperand -> CoalesceOperand -> ProjectionTerm
+            // CoalesceTerm : ProjectionOperand -> ProjectionOperand -> ProjectionTerm
             (
                 self.coalesce_term,
                 CtorScheme {
                     arg_tys: vec![
                         Ty::Con {
                             module: Vec::new(),
-                            name: self.coalesce_operand,
+                            name: self.projection_operand,
                             args: Vec::new(),
                         },
                         Ty::Con {
                             module: Vec::new(),
-                            name: self.coalesce_operand,
+                            name: self.projection_operand,
                             args: Vec::new(),
                         },
                     ],
@@ -1538,27 +1538,27 @@ impl Builtins {
                     },
                 },
             ),
-            // ── CoalesceOperand constructors ───────────────────────────────────
-            // OperandColumn : String -> CoalesceOperand
+            // ── ProjectionOperand constructors ───────────────────────────────────
+            // OperandColumn : String -> ProjectionOperand
             (
                 self.operand_column,
                 CtorScheme {
                     arg_tys: vec![string_ty],
                     result: Ty::Con {
                         module: Vec::new(),
-                        name: self.coalesce_operand,
+                        name: self.projection_operand,
                         args: Vec::new(),
                     },
                 },
             ),
-            // OperandLiteral : CoalesceOperand  (nullary — a ? literal placeholder)
+            // OperandLiteral : ProjectionOperand  (nullary — a ? literal placeholder)
             (
                 self.operand_literal,
                 CtorScheme {
                     arg_tys: Vec::new(),
                     result: Ty::Con {
                         module: Vec::new(),
-                        name: self.coalesce_operand,
+                        name: self.projection_operand,
                         args: Vec::new(),
                     },
                 },
@@ -3339,6 +3339,25 @@ impl<'a> Builder<'a> {
                 let s = self.super_var(TyBounds::sub(), span)?;
                 return self.structure(FlatType::Fun(s, s));
             }
+            // `Store.add / .sub / .mul : number a => a -> a -> a` — the
+            // arithmetic projection operators.  ONE Number-bounded super-var is
+            // reused across both argument positions AND the result, so a
+            // non-numeric operand (String / Bool / record / function) fails
+            // closed (T0001) instead of emitting an unbounded scheme, and the
+            // two operands must share the same numeric type.  The obligation is
+            // the same one `+` / `-` / `*` mint (ADD / SUB / MUL).  DIRECT-build
+            // (not `stdlib_scheme` + tie) so all three positions collapse to the
+            // one bounded var.
+            if let Some(bound) = match k {
+                StdlibKernel::StoreAdd => Some(TyBounds::add()),
+                StdlibKernel::StoreSub => Some(TyBounds::sub()),
+                StdlibKernel::StoreMul => Some(TyBounds::mul()),
+                _ => None,
+            } {
+                let s = self.super_var(bound, span)?;
+                let inner = self.structure(FlatType::Fun(s, s))?;
+                return self.structure(FlatType::Fun(s, inner));
+            }
             // `min / max : comparable a => a -> a -> a` — same Comparable (Ord)
             // obligation as `Math.min` / `Math.max`. DIRECT-build (not
             // `stdlib_scheme` + tie) so all three positions collapse to ONE
@@ -4370,7 +4389,7 @@ impl<'a> Builder<'a> {
             BuiltinTag::SqlField => self.builtins.sqlfield,
             BuiltinTag::SqlFragment => self.builtins.sqlfragment,
             BuiltinTag::ProjectionTerm => self.builtins.projection_term,
-            BuiltinTag::CoalesceOperand => self.builtins.coalesce_operand,
+            BuiltinTag::ProjectionOperand => self.builtins.projection_operand,
             BuiltinTag::Secret => self.builtins.secret,
             BuiltinTag::Path => self.builtins.path,
             BuiltinTag::Regex => self.builtins.regex,
@@ -6448,6 +6467,12 @@ impl<'a> Builder<'a> {
             // (`String`, `Int`, `Bool`, or `Float`). Recognized structurally at
             // lowering (not emitted as a runtime call).
             K::StoreCoalesce => fun(var(0), fun(var(0), var(0))),
+            // `Store.add / .sub / .mul : number a => a -> a -> a` — arithmetic
+            // over two numeric projection operands. Base scheme for the totality
+            // gate; the Number obligation binding all three positions to one
+            // bounded var is minted in `constrain_var_kernel`. Recognized
+            // structurally at lowering (not emitted as a runtime call).
+            K::StoreAdd | K::StoreSub | K::StoreMul => fun(var(0), fun(var(0), var(0))),
 
             // `Store.eq : (row -> t) -> t -> Cond` — the getter-arrow scheme lets
             // an accessor literal `.field` unify against the first parameter by
@@ -10505,6 +10530,10 @@ mod registry_phase_c_tests {
             K::StoreLower,
             // Binary coalesce projection operator (Ipê-new, no legacy oracle).
             K::StoreCoalesce,
+            // Binary arithmetic projection operators (Ipê-new, no legacy oracle).
+            K::StoreAdd,
+            K::StoreSub,
+            K::StoreMul,
             // Typed accessor query leaves (getter-arrow schemes, Ipê-new).
             K::StoreEqCol,
             K::StoreEqBy,

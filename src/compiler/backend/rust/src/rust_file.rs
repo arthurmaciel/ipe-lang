@@ -150,11 +150,11 @@ pub struct Partitioned<'p> {
 /// Proven TOTAL: every item in `program.modules[..].types /
 /// .funcs` appears in EXACTLY ONE output bucket — no drop, no duplicate.
 ///
-/// **`SqlValue`/`SqlField`/`ProjectionTerm`/`CoalesceOperand` Spine special
+/// **`SqlValue`/`SqlField`/`ProjectionTerm`/`ProjectionOperand` Spine special
 /// case (design doc §2.2).** These four synthetic enums (the first two from
 /// `ipe_lower::lower`'s `synthetic_sqlvalue_enum` / `synthetic_sqlfield_enum`,
 /// the last two from `synthetic_projection_term_enum` /
-/// `synthetic_coalesce_operand_enum`) carry the empty canonical `home` — the
+/// `synthetic_projection_operand_enum`) carry the empty canonical `home` — the
 /// SAME documented Prelude-built-in home every OTHER hand-built-IR item with an
 /// empty `home` carries. Left unpatched, the generic empty-home fallback
 /// below would route them into whichever `IpeModule` bucket the program's
@@ -186,7 +186,7 @@ pub fn partition_items<'p>(program: &'p Program, interner: &Interner) -> Partiti
             let resolved = interner.resolve(def.name);
             if matches!(
                 resolved,
-                Some("SqlValue" | "SqlField" | "ProjectionTerm" | "CoalesceOperand")
+                Some("SqlValue" | "SqlField" | "ProjectionTerm" | "ProjectionOperand" | "ArithOp")
             ) {
                 out.entry(RustFileId::Spine).or_default().0.push(def);
                 continue;
@@ -543,7 +543,7 @@ mod tests {
         let sqlvalue = interner.intern("SqlValue")?;
         let sqlfield = interner.intern("SqlField")?;
         let projection_term = interner.intern("ProjectionTerm")?;
-        let coalesce_operand = interner.intern("CoalesceOperand")?;
+        let projection_operand = interner.intern("ProjectionOperand")?;
         let sql_string = interner.intern("SqlString")?;
 
         let mut module = empty_module(ModPath(vec![main_mod]));
@@ -579,7 +579,7 @@ mod tests {
                 }],
             }),
             TypeDef::Enum(EnumDef {
-                name: coalesce_operand,
+                name: projection_operand,
                 home: ModPath(vec![]),
                 type_params: vec![],
                 variants: vec![Variant {
@@ -601,7 +601,7 @@ mod tests {
         assert_eq!(
             spine_enums.len(),
             4,
-            "SqlValue, SqlField, ProjectionTerm, and CoalesceOperand must all route to Spine"
+            "SqlValue, SqlField, ProjectionTerm, and ProjectionOperand must all route to Spine"
         );
         assert!(
             !buckets.contains_key(&RustFileId::IpeModule(ModPath(vec![main_mod]))),

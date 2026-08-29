@@ -235,9 +235,9 @@ pub enum BuiltinTag {
     /// `ProjectionTerm` — the typed projection-descriptor ADT for `selectNamed`.
     /// Defined in `ipe_runtime::db`; aliased into the Spine by the backend.
     ProjectionTerm,
-    /// `CoalesceOperand` — companion to `ProjectionTerm` for `CoalesceTerm` operands.
+    /// `ProjectionOperand` — companion to `ProjectionTerm` for `CoalesceTerm` operands.
     /// Defined in `ipe_runtime::db`; aliased into the Spine by the backend.
-    CoalesceOperand,
+    ProjectionOperand,
     /// `Secret` — the nullary opaque sealed secret-string.
     Secret,
     /// `Path` — the nullary opaque validated filesystem path.
@@ -1510,6 +1510,18 @@ pub enum StdlibKernel {
     /// to a `COALESCE` sentinel triple in the projection descriptor; the
     /// runtime-fn name is a never-called placeholder.
     StoreCoalesce,
+    /// `Store.add : number a => a -> a -> a` — emits `(a + b) AS pN` in a
+    /// projection SELECT list.  Both operands are a bare column reference
+    /// (`side.field`) or a `Store.literal` value, sharing one numeric type.
+    /// Lowered inline to an arithmetic term in the projection descriptor; the
+    /// runtime-fn name is a never-called placeholder.
+    StoreAdd,
+    /// `Store.sub : number a => a -> a -> a` — emits `(a - b) AS pN`.  Same
+    /// operand and numeric-type restrictions as `StoreAdd`.
+    StoreSub,
+    /// `Store.mul : number a => a -> a -> a` — emits `(a * b) AS pN`.  Same
+    /// operand and numeric-type restrictions as `StoreAdd`.
+    StoreMul,
     /// `Store.eqBy : Codec t -> (row -> t) -> t -> Cond` — the accessor-typed
     /// equality leaf for an ENUM or newtype column whose wire form is not
     /// type-derivable. The `Codec t` argument projects the comparison value to a
@@ -3492,6 +3504,12 @@ impl StdlibKernel {
             // the projection descriptor); the runtime-fn name is a never-called
             // placeholder.
             Self::StoreCoalesce => d("Store", "coalesce", 2, Pure, "store_coalesce"),
+            // Intercepted at lowering (rewritten to an arithmetic term in the
+            // projection descriptor); the runtime-fn name is a never-called
+            // placeholder, the same class as `store_coalesce`.
+            Self::StoreAdd => d("Store", "add", 2, Pure, "store_add"),
+            Self::StoreSub => d("Store", "sub", 2, Pure, "store_sub"),
+            Self::StoreMul => d("Store", "mul", 2, Pure, "store_mul"),
             // Accessor-typed equality leaf for enum/newtype columns — lowered
             // inline to the `Compare` `Cond` constructor (the value bound through
             // the passed codec), so the runtime-fn name is a never-called
@@ -5057,6 +5075,9 @@ impl StdlibKernel {
         Self::StoreUpper,
         Self::StoreLower,
         Self::StoreCoalesce,
+        Self::StoreAdd,
+        Self::StoreSub,
+        Self::StoreMul,
         Self::StoreEqCol,
         Self::StoreEqBy,
         Self::StoreNeqCol,
@@ -9262,6 +9283,10 @@ impl StdlibKernel {
         Self::StoreLower,
         // ── Binary coalesce projection operator — arity-2 (left + right) ─────
         Self::StoreCoalesce,
+        // ── Binary arithmetic projection operators — arity-2 (left + right) ──
+        Self::StoreAdd,
+        Self::StoreSub,
+        Self::StoreMul,
         // ── Query leaves — arity-2 (accessor + store) ────────────────────────
         Self::StoreEqCol,
         Self::StoreEqBy,
@@ -9674,6 +9699,9 @@ impl StdlibKernel {
             | Self::StoreUpper
             | Self::StoreLower
             | Self::StoreCoalesce
+            | Self::StoreAdd
+            | Self::StoreSub
+            | Self::StoreMul
             | Self::StoreEqCol
             | Self::StoreEqBy
             | Self::StoreNeqCol
