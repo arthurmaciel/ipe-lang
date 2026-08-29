@@ -46,7 +46,13 @@ const SET: &str = include_str!("../Ipe/Set.ipe");
 const BYTES: &str = include_str!("../Ipe/Bytes.ipe");
 /// `Ipe.Crypto` — hashes / HMAC / RSA / AEAD / key-derivation / random.
 const CRYPTO: &str = include_str!("../Ipe/Crypto.ipe");
-/// `Ipe.Bitwise` — Int-only bitwise operations (kernel-qualified surface).
+/// `Ipe.Bitwise` — Int-only bitwise operations, compiled-source Layer-3.
+///
+/// Every member is a point-free `Ffi.kernel "Bitwise_*"` alias resolved by
+/// `ipe_canon::resolve::detect_kernel_alias` to a registered `Bitwise*`
+/// `StdlibKernel` variant (`ipe_runtime::bitwise::*`). Registered in
+/// [`COMPILED_STD_MODULES`] (NOT `MODULES`); NOT in `STDLIB_MODULE_QUALIFIERS`,
+/// so the disjointness invariant holds.
 const BITWISE: &str = include_str!("../Ipe/Bitwise.ipe");
 /// `Ipe.Task` — Task combinator surface.
 const TASK: &str = include_str!("../Ipe/Task.ipe");
@@ -260,10 +266,6 @@ pub const MODULES: &[StdModule] = &[
     StdModule {
         name: "Ipe.Crypto",
         source: CRYPTO,
-    },
-    StdModule {
-        name: "Ipe.Bitwise",
-        source: BITWISE,
     },
     StdModule {
         name: "Ipe.Task",
@@ -684,6 +686,14 @@ pub const COMPILED_STD_MODULES: &[CompiledStdModule] = &[
     CompiledStdModule {
         dotted: "Ipe.Tuple",
         source: TUPLE,
+    },
+    // Ipe.Bitwise — Layer-3 source; every member is a point-free
+    // `Ffi.kernel "Bitwise_*"` alias resolved by `detect_kernel_alias` to the
+    // registered `Bitwise*` kernels (`ipe_runtime::bitwise::*`). Disjoint from
+    // `STDLIB_MODULE_QUALIFIERS` (no `"Bitwise"` entry there).
+    CompiledStdModule {
+        dotted: "Ipe.Bitwise",
+        source: BITWISE,
     },
     CompiledStdModule {
         dotted: "Ipe.Random",
