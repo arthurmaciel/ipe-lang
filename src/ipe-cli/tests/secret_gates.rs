@@ -61,3 +61,18 @@ fn secret_concat_is_rejected() {
         ipe_diagnostics::IPE_T0001,
     );
 }
+
+/// `Secret.fromString "sk_live_abc123"` — a committed source-text string
+/// LITERAL as the seal argument bakes a credential into source. The
+/// committed-literal ban rejects it at ipe compile time with `IPE-L0150`,
+/// fail-closed, before any Rust is emitted — never accepted, never deferred to
+/// a `cargo` build. A RUNTIME `String` (e.g. `App.fromEnvRequired "VAR"`) in
+/// the same position is fine; only a literal is refused.
+#[test]
+fn secret_from_string_literal_is_rejected() {
+    assert_gate(
+        "secret_literal_rejected",
+        "secret_literal_rejected_emit",
+        ipe_diagnostics::IPE_L0150,
+    );
+}

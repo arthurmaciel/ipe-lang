@@ -13,6 +13,7 @@ import Ipe.Http.Server exposing (Request, Response)
 import Ipe.Io as Io
 import Ipe.Secret as Secret
 import Ipe.String as String
+import Ipe.System as System
 import Ipe.Task as Task exposing (Task)
 
 
@@ -24,7 +25,7 @@ handlePing _ principal =
 authCfg : Server.AuthConfig
 authCfg =
     Server.authConfig
-        (Secret.fromString "this-is-a-32-byte-or-longer-secret-key-value")
+        (Secret.fromString (System.getenvOr "SIGNING_KEY" "this-is-a-32-byte-or-longer-secret-key-value"))
         Server.bearerToken
 
 

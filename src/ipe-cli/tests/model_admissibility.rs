@@ -224,6 +224,7 @@ import Ipe.Ui as Ui
 import Ipe.Tea.Web.Cmd
 import Ipe.Secret
 import Ipe.String
+import Ipe.System as System
 import Ipe.Tea.Web.Sub
 
 type Msg = Tick
@@ -232,7 +233,7 @@ type alias Model = { count : Int, apiKey : Secret }
 
 init : a -> ( Model, Cmd Msg )
 init _req =
-    ( { count = 0, apiKey = Secret.fromString "sk_live_x" }, Cmd.none )
+    ( { count = 0, apiKey = Secret.fromString (System.getenvOr "K" "sk_live_x") }, Cmd.none )
 
 update : Msg -> Model -> ( Model, Cmd Msg )
 update msg model =

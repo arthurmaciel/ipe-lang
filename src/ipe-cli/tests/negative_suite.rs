@@ -633,10 +633,11 @@ fn security_secret_unsafe_reveal_compiles_off_submodule() {
                import Ipe.Io as Io\n\
                import Ipe.Secret as Secret\n\
                import Ipe.Secret.Unsafe as Unsafe\n\
+               import Ipe.System as System\n\
                main : Task Error ()\n\
                main =\n\
                \x20   do\n\
-               \x20       Unsafe.unsafeReveal (Secret.fromString \"sk\")\n\
+               \x20       Unsafe.unsafeReveal (Secret.fromString (System.getenvOr \"K\" \"sk\"))\n\
                \x20       Io.println \"ok\"\n";
     assert_compiles("security_secret_unsafe_reveal", src);
 }
@@ -652,10 +653,11 @@ fn security_secret_use_compiles_off_plain_secret() {
     let src = "module Main exposing (main)\n\
                import Ipe.Io as Io\n\
                import Ipe.Secret as Secret\n\
+               import Ipe.System as System\n\
                main : Task Error ()\n\
                main =\n\
                \x20   do\n\
-               \x20       Secret.use (Secret.fromString \"sk\") (\\plain -> plain)\n\
+               \x20       Secret.use (Secret.fromString (System.getenvOr \"K\" \"sk\")) (\\plain -> plain)\n\
                \x20       Io.println \"ok\"\n";
     assert_compiles("security_secret_use_scoped", src);
 }
@@ -1420,11 +1422,12 @@ fn js_port_send_secret_rejected() {
          import Ipe.Ui as Ui\n\
          import Ipe.Js as Js\n\
          import Ipe.Secret as Secret\n\
+         import Ipe.System as System\n\
          type alias Model = { s : Secret }\n\
          type Msg = Tick\n\
          init : a -> ( Model, Cmd.Cmd Msg )\n\
          init _r =\n\
-         \x20   ( { s = Secret.fromString \"x\" }, Cmd.none )\n\
+         \x20   ( { s = Secret.fromString (System.getenvOr \"K\" \"x\") }, Cmd.none )\n\
          update : Msg -> Model -> ( Model, Cmd.Cmd Msg )\n\
          update _msg model =\n\
          \x20   ( model, Js.send model.s )\n\
@@ -1457,12 +1460,13 @@ fn js_port_send_nested_secret_in_adt_rejected() {
          import Ipe.Ui as Ui\n\
          import Ipe.Js as Js\n\
          import Ipe.Secret as Secret\n\
+         import Ipe.System as System\n\
          type Payload = Wrap Secret | Empty\n\
          type alias Model = { p : Payload }\n\
          type Msg = Tick\n\
          init : a -> ( Model, Cmd.Cmd Msg )\n\
          init _r =\n\
-         \x20   ( { p = Wrap (Secret.fromString \"x\") }, Cmd.none )\n\
+         \x20   ( { p = Wrap (Secret.fromString (System.getenvOr \"K\" \"x\")) }, Cmd.none )\n\
          update : Msg -> Model -> ( Model, Cmd.Cmd Msg )\n\
          update _msg model =\n\
          \x20   ( model, Js.send model.p )\n\
@@ -1494,12 +1498,13 @@ fn js_port_send_polymorphic_wrapper_secret_rejected() {
          import Ipe.Ui as Ui\n\
          import Ipe.Js as Js\n\
          import Ipe.Secret as Secret\n\
+         import Ipe.System as System\n\
          type Box a = Box a\n\
          type alias Model = { b : Box Secret }\n\
          type Msg = Tick\n\
          init : a -> ( Model, Cmd.Cmd Msg )\n\
          init _r =\n\
-         \x20   ( { b = Box (Secret.fromString \"x\") }, Cmd.none )\n\
+         \x20   ( { b = Box (Secret.fromString (System.getenvOr \"K\" \"x\")) }, Cmd.none )\n\
          update : Msg -> Model -> ( Model, Cmd.Cmd Msg )\n\
          update _msg model =\n\
          \x20   ( model, Js.send model.b )\n\
@@ -1682,6 +1687,7 @@ fn effect_secret_concat_rejected() {
 fn effect_secret_in_live_model() {
     let src = "module Main exposing (main)\n\
          import Ipe.Secret as Secret\n\
+         import Ipe.System as System\n\
          import Ipe.Tea.Web exposing (app)\n\
          import Ipe.Tea.Web.Cmd as Cmd\n\
          import Ipe.Tea.Web.Sub as Sub\n\
@@ -1692,7 +1698,7 @@ fn effect_secret_in_live_model() {
          type alias Model = { count : Int, apiKey : Secret }\n\
          \n\
          init : a -> ( Model, Cmd Msg )\n\
-         init _req = ( { count = 0, apiKey = Secret.fromString \"sk_live_x\" }, Cmd.none )\n\
+         init _req = ( { count = 0, apiKey = Secret.fromString (System.getenvOr \"K\" \"sk_live_x\") }, Cmd.none )\n\
          update : Msg -> Model -> ( Model, Cmd Msg )\n\
          update _msg model = ( model, Cmd.none )\n\
          subscriptions : Model -> Sub Msg\n\

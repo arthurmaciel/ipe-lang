@@ -21511,6 +21511,45 @@ impl<'a> Lowerer<'a> {
                         }));
                     }
                 }
+                // ── `Secret.fromString "literal"` committed-literal ban ──
+                //
+                // `Secret.fromString : String -> Secret` is the seal for turning
+                // a RUNTIME `String` (an env read, a parse result, a function
+                // argument) into a typed `Secret`. A source-text string LITERAL
+                // as its argument means a credential baked into source — a
+                // committed-secret leak. SECURITY-tier, fail-closed: reject it
+                // here (IPE-L0150) before emit, with the diagnostic pointing at
+                // the literal's own span and carrying NO payload (it never
+                // echoes the secret text). The recommended source is
+                // `App.fromEnvRequired "VAR"` (read at runtime); a non-literal
+                // argument (any runtime `String`) falls through and is accepted.
+                //
+                // This is the ONLY literal-into-`Secret` path that reaches
+                // lowering: a bare `String` literal in any OTHER `Secret`-typed
+                // position (a `Secret` record field, a `Secret` function
+                // argument) is a `String`-vs-`Secret` inference mismatch
+                // (IPE-T0001) that never gets this far — so the seal argument is
+                // the single structural chokepoint to guard.
+                Callee::Kernel(KernelFn::SecretFromString) if args.len() == 1 => {
+                    // A NON-EMPTY source-text literal is a committed credential —
+                    // rejected. The EMPTY-string literal `""` is exempt: it
+                    // carries no secret material, so it cannot leak anything, and
+                    // it is the sanctioned "sealed-empty, override later"
+                    // placeholder default (`Email.defaultSesConfig`'s
+                    // `secret = Secret.fromString ""`, replaced by
+                    // `withSesSecret`). Any non-empty literal has no such benign
+                    // reading.
+                    if let Some(arg0) = args.first()
+                        && let canon::Expr_::Str(lit) = &arg0.value
+                        && !lit.is_empty()
+                    {
+                        return Err(Diagnostic::Lower {
+                            span: arg0.span,
+                            msg: LowerError::SecretFromStringLiteral,
+                        });
+                    }
+                    return Ok(Intercepted::Fallthrough(Some(peek)));
+                }
                 // ── Input.text / email / username / search / currentPassword /
                 //    newPassword / multiline / checkbox cfg literal
                 //    (L0107 exemption) ──

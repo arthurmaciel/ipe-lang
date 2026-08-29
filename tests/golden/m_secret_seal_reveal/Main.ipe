@@ -2,6 +2,7 @@ module Main exposing (main)
 import Ipe.Io as Io
 import Ipe.Task as Task
 import Ipe.Secret
+import Ipe.System as System
 
 -- golden: `Secret.fromString` is the seal; `Secret.use` is the scoped consume
 -- (apply a function to the plaintext, return its result); `Secret.redacted` is
@@ -14,7 +15,7 @@ import Ipe.Secret
 -- the scoped `Secret.use` covers this common case off the `unsafe` axis.
 
 secretVal =
-    Secret.fromString "sk_live_zx9K3_MARKER"
+    Secret.fromString (System.getenvOr "TEST_SECRET" "sk_live_zx9K3_MARKER")
 
 main =
     do
