@@ -1,0 +1,19 @@
+module Main exposing (main)
+
+import Ipe.Io as Io
+import Ipe.Secret
+
+
+-- Committed-literal ban (IPE-L0150), reached through a bounded LOCAL
+-- constant-fold: a `let`-bound source-text literal (`cred = "sk_live_…"`)
+-- applied to `Secret.fromString` bakes a credential into source just as
+-- directly as the inline literal. The seal folds the argument through the
+-- enclosing `let` scope to the constant string and rejects it at ipe compile
+-- time, fail-closed, before any Rust is emitted. Only a runtime-derived value
+-- (env read, function parameter, cross-function result) is accepted.
+main =
+    let
+        cred =
+            "sk_live_letbound"
+    in
+    Secret.use (Secret.fromString cred) (\_ -> Io.println "unreachable")

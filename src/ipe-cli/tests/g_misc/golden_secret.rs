@@ -215,6 +215,35 @@ fn direct_seal_over_env_string_builds_and_redacts() {
     );
 }
 
+/// `sealParam raw` seals a function PARAMETER, and `Secret.fromString
+/// (deriveAtRuntime "…")` seals a CROSS-FUNCTION result — neither of which the
+/// LOCAL constant-fold can reduce, so the committed-literal gate (IPE-L0150)
+/// accepts both (the honest residual). Proves the fold that catches
+/// `let`/`do`/append literals does NOT over-reach into runtime-derived values:
+/// the build succeeds and each sealed plaintext redacts to the fixed placeholder
+/// (the markers must NEVER echo).
+#[test]
+fn runtime_derived_seals_are_accepted_and_redact() {
+    if !e2e_enabled() {
+        return;
+    }
+    let out = compile_build_run("m_secret_runtime_derived");
+    assert_eq!(out.exit_code, Some(0), "got {:?}", out.exit_code);
+    for marker in ["sk_live_PARAM_MARKER", "sk_live_DERIVE_MARKER"] {
+        assert!(
+            !out.stdout.contains(marker),
+            "a runtime-derived sealed plaintext must NEVER echo. Full stdout: {:?}",
+            out.stdout
+        );
+    }
+    assert_eq!(
+        out.stdout.trim(),
+        "<redacted>,<redacted>",
+        "both runtime-derived seals redact to the fixed placeholder. Full stdout: {:?}",
+        out.stdout
+    );
+}
+
 // ── Pure compile-only smoke (always runs, no IPE_E2E / no cargo) ───────────
 
 /// All five fixtures above must at least `ipe`-compile cleanly even when
@@ -231,6 +260,7 @@ fn all_secret_goldens_compile() {
         "m_secret_auth_roundtrip",
         "m_secret_map_runtime",
         "m_secret_env_direct",
+        "m_secret_runtime_derived",
     ] {
         let entry = golden_dir(&root, name).join("Main.ipe");
         let out = std::env::temp_dir().join(format!("ipec_{name}_compileonly"));

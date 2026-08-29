@@ -105,3 +105,58 @@ fn secret_from_string_alias_is_rejected() {
         ipe_diagnostics::IPE_L0151,
     );
 }
+
+/// `let cred = "sk_live_letbound" in Secret.fromString cred` — a `let`-bound
+/// source-text literal applied to the SATURATED seal. The seal folds its
+/// argument through the enclosing `let` scope to the constant string and refuses
+/// it with `IPE-L0150` — the same committed-literal ban the inline
+/// `Secret.fromString "…"` hits, reached through a bounded LOCAL constant-fold.
+/// This is the plainest accidental hardcoding, and the syntactic `Str`-node test
+/// missed it.
+#[test]
+fn secret_from_string_letbound_literal_is_rejected() {
+    assert_gate(
+        "secret_letbound_literal_rejected",
+        "secret_letbound_literal_rejected_emit",
+        ipe_diagnostics::IPE_L0150,
+    );
+}
+
+/// `do cred = "sk_live_dobound" … Secret.fromString cred` — a `do`-notation pure
+/// `=` binding desugars to the same `let` the `let cred = …` form produces, so a
+/// credential bound in a `do` block reaches the seal through the identical local
+/// fold and is refused with `IPE-L0150`, fail-closed.
+#[test]
+fn secret_from_string_dobound_literal_is_rejected() {
+    assert_gate(
+        "secret_dobound_literal_rejected",
+        "secret_dobound_literal_rejected_emit",
+        ipe_diagnostics::IPE_L0150,
+    );
+}
+
+/// `Secret.fromString (String.append "sk_live_" "concat")` — a literal string
+/// join whose every operand folds to a constant. `String.append` (and the
+/// `String.concat [ … ]` spelling) folds to the concatenated constant, which the
+/// seal refuses with `IPE-L0150` — a committed credential assembled from pieces
+/// is still a committed credential.
+#[test]
+fn secret_from_string_append_literal_is_rejected() {
+    assert_gate(
+        "secret_append_literal_rejected",
+        "secret_append_literal_rejected_emit",
+        ipe_diagnostics::IPE_L0150,
+    );
+}
+
+/// `Secret.fromString ("sk_live_" ++ "concatop")` — the `++` operator
+/// canonicalises to the same `append` kernel `String.append` does, so a literal
+/// `++` join folds to the constant and is refused with `IPE-L0150`, fail-closed.
+#[test]
+fn secret_from_string_concatop_literal_is_rejected() {
+    assert_gate(
+        "secret_concatop_literal_rejected",
+        "secret_concatop_literal_rejected_emit",
+        ipe_diagnostics::IPE_L0150,
+    );
+}
