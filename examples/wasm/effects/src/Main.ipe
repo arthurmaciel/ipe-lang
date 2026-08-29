@@ -5,7 +5,7 @@ module Main exposing (main)
 --   * Log.info            -> console.info          (via Cmd.perform)
 --   * Random.int           -> crypto.getRandomValues (via Cmd.perform)
 --   * PubSub.publish / Sub.subscribeTopic -> the in-tab pub/sub broker
---   * Http.get              -> fetch                (same-origin index.html)
+--   * Http.get              -> fetch                (a typed absolute Url; CORS)
 --
 -- `Ipe.WebSocket` is deliberately NOT imported here: the M1 target-keyed
 -- gate (`ipe_canon::target_gate`) walks every function LINKED into a module
@@ -28,6 +28,7 @@ import Ipe.Tea.Web.Sub as Sub
 import Ipe.Log as Log
 import Ipe.Random as Random
 import Ipe.Http as Http
+import Ipe.Url as Url
 import Ipe.PubSub as PubSub
 import Ipe.Task as Task
 import Ipe.Ui as Ui
@@ -130,9 +131,14 @@ update msg model =
             ( { model | pings = model.pings + 1, lastPing = "received: " ++ payload }, Cmd.none )
 
         FetchClicked ->
-            ( { model | fetchStatus = "fetching..." }
-            , Cmd.perform (Task.map summarizeResponse (Http.get "./index.html")) GotFetch
-            )
+            case Url.fromString "https://example.com/" of
+                Ok url ->
+                    ( { model | fetchStatus = "fetching..." }
+                    , Cmd.perform (Task.map summarizeResponse (Http.get url)) GotFetch
+                    )
+
+                Err e ->
+                    ( { model | fetchStatus = "bad URL: " ++ errorToString e }, Cmd.none )
 
         GotFetch result ->
             case result of

@@ -89,11 +89,17 @@ const NETWORK_MAIN: &str = "module Main exposing (main)\n\
                             import Ipe.Http as Http\n\
                             import Ipe.Task as Task\n\
                             import Ipe.Io as Io\n\
+                            import Ipe.Url as Url\n\
                             \n\
                             main : Task ()\n\
                             main =\n\
-                            \x20   Http.get \"http://example.com\"\n\
-                            \x20       |> Task.andThen (\\_ -> Io.println \"done\")\n";
+                            \x20   case Url.fromString \"http://example.com\" of\n\
+                            \x20       Ok url ->\n\
+                            \x20           Http.get url\n\
+                            \x20               |> Task.andThen (\\_ -> Io.println \"done\")\n\
+                            \n\
+                            \x20       Err e ->\n\
+                            \x20           Task.fail e\n";
 
 /// A Web-shape TEA app that mounts one `Ui.widget` — its inferred capability
 /// set is `{custom-element}` because it ships author browser JS.
@@ -310,12 +316,14 @@ import Ipe.Io
     std::fs::write(
         pkg.join("src").join("Extra.ipe"),
         "module Extra exposing (fetch)\n\nimport Ipe.Http as Http\n\
-         import Ipe.Task as Task\nimport Ipe.Io as Io\n\n\
-import Ipe.Http
-import Ipe.Io
+         import Ipe.Task as Task\nimport Ipe.Io as Io\nimport Ipe.Url as Url\n\n\
          fetch : Task ()\nfetch =\n\
-         \x20   Http.get \"http://example.com\"\n\
-         \x20       |> Task.andThen (\\_ -> Io.println \"done\")\n",
+         \x20   case Url.fromString \"http://example.com\" of\n\
+         \x20       Ok url ->\n\
+         \x20           Http.get url\n\
+         \x20               |> Task.andThen (\\_ -> Io.println \"done\")\n\n\
+         \x20       Err e ->\n\
+         \x20           Task.fail e\n",
     )
     .expect("write Extra");
     let index = empty_index("sibling-cap");

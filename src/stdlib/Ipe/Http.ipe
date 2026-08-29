@@ -6,18 +6,21 @@
 -- redaction. These records are transport DTOs carried to that boundary;
 -- downstream code MUST NOT re-validate.
 --
--- Request TARGETS are the typed `Ipe.Url.Url`, not a raw `String`. The
--- primary constructor `defaultRequest` and the retarget setter `withUrl`
--- take an already-sealed `Url` (parsed exactly once at `Url.fromString`) and
--- narrow its scheme to `http`/`https` at THIS API layer, returning `Err` on
--- any other scheme. The narrowing is fail-closed BY CONSTRUCTION: a
+-- Request TARGETS are the typed `Ipe.Url.Url`, not a raw `String` — at EVERY
+-- entry point. The one-shot senders `get` / `post` take a `Url`; the primary
+-- constructor `defaultRequest` and the retarget setter `withUrl` take an
+-- already-sealed `Url` (parsed exactly once at `Url.fromString`) and narrow
+-- its scheme to `http`/`https` at THIS API layer, returning `Err` on any
+-- other scheme. The narrowing is fail-closed BY CONSTRUCTION: a
 -- builder-assembled request whose scheme is not `http(s)` cannot be built,
 -- so it is rejected even when the runtime SSRF guard is disabled in
 -- development — the runtime scheme allowlist is defence-in-depth, never the
 -- only line. `defaultRequestFromString` is the MARKED raw-string boundary:
 -- it runs `Url.fromString` and returns `Result`, so a raw string is an
 -- explicit parse-at-the-boundary, never a silent stringly default. There is
--- no unmarked `String` request-target path.
+-- no unmarked `String` request-target path: a caller reaches `get` / `post`
+-- only by first passing a raw string through `Url.fromString`, which validates
+-- it and returns a `Result`.
 --
 -- `HttpMethod` is a closed ADT — make-invalid-states-unrepresentable for
 -- HTTP verbs. `methodFromString` is the single typed parse boundary for
@@ -111,12 +114,20 @@ type alias HttpRequest =
 -- ── Effect kernels ────────────────────────────────────────────────────────────
 
 
-get : String -> Task Error HttpResponse
+-- | `get url` — outbound GET. Takes an already-sealed typed `Url` (parsed once
+-- at `Url.fromString`, the single SSRF parse boundary): a caller must
+-- `Url.fromString` and handle the `Result` before calling, so a scheme-confused
+-- or unparseable target can never reach the request. The runtime SSRF floor
+-- (per-hop scheme allowlist + private-IP resolver) is unchanged — this typed
+-- argument is defence-in-depth at the API boundary, not a replacement for it.
+get : Url -> Task Error HttpResponse
 get =
     Ffi.kernel "Http_get"
 
 
-post : String -> String -> Task Error HttpResponse
+-- | `post url body` — outbound POST. Takes an already-sealed typed `Url` (see
+-- `get`) and a request body. The runtime SSRF floor is unchanged.
+post : Url -> String -> Task Error HttpResponse
 post =
     Ffi.kernel "Http_post"
 

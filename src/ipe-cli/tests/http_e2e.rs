@@ -139,11 +139,17 @@ import Ipe.Io
 import Ipe.String
 import Ipe.System
 import Ipe.Task
+import Ipe.Url
 
 main =
-    Task.andThen
-        (\resp -> Io.println (String.fromInt resp.status ++ "\n" ++ resp.body))
-        (Http.get (System.getenvOr "IPE_HTTP_TEST_URL" "http://127.0.0.1:1"))
+    case Url.fromString (System.getenvOr "IPE_HTTP_TEST_URL" "http://127.0.0.1:1") of
+        Ok url ->
+            Task.andThen
+                (\resp -> Io.println (String.fromInt resp.status ++ "\n" ++ resp.body))
+                (Http.get url)
+
+        Err e ->
+            Task.fail e
 "#;
 
 const IPE_HTTP_POST_PROGRAM: &str = r#"module Main exposing (main)
@@ -153,11 +159,17 @@ import Ipe.Io
 import Ipe.String
 import Ipe.System
 import Ipe.Task
+import Ipe.Url
 
 main =
-    Task.andThen
-        (\resp -> Io.println (String.fromInt resp.status ++ "\n" ++ resp.body))
-        (Http.post (System.getenvOr "IPE_HTTP_TEST_URL" "http://127.0.0.1:1") "ping")
+    case Url.fromString (System.getenvOr "IPE_HTTP_TEST_URL" "http://127.0.0.1:1") of
+        Ok url ->
+            Task.andThen
+                (\resp -> Io.println (String.fromInt resp.status ++ "\n" ++ resp.body))
+                (Http.post url "ping")
+
+        Err e ->
+            Task.fail e
 "#;
 
 // The SSRF program reads the fixture URL from `IPE_HTTP_TEST_URL` (a LIVE
@@ -176,13 +188,19 @@ import Ipe.Io
 import Ipe.String
 import Ipe.System
 import Ipe.Task
+import Ipe.Url
 
 main =
-    Task.onError
-        (\e -> Io.println "DENIED")
-        (Task.andThen
-            (\resp -> Io.println (String.fromInt resp.status))
-            (Http.get (System.getenvOr "IPE_HTTP_TEST_URL" "http://127.0.0.1:1")))
+    case Url.fromString (System.getenvOr "IPE_HTTP_TEST_URL" "http://127.0.0.1:1") of
+        Ok url ->
+            Task.onError
+                (\e -> Io.println "DENIED")
+                (Task.andThen
+                    (\resp -> Io.println (String.fromInt resp.status))
+                    (Http.get url))
+
+        Err e ->
+            Task.fail e
 "#;
 
 // ── Tests ─────────────────────────────────────────────────────────────────────

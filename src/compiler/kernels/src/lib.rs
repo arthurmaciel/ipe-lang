@@ -8064,9 +8064,9 @@ impl StdlibKernel {
         const DB_MIGRATE: TyShape = TyShape::Fun(&DB, &LIST_MIGRATION_TO_TASK);
         // Http.
         const TASK_HTTP_RESPONSE: TyShape = TyShape::Con(BuiltinTag::Task, &[HTTP_RESPONSE]);
-        const HTTP_GET: TyShape = TyShape::Fun(&STRING, &TASK_HTTP_RESPONSE);
+        const HTTP_GET: TyShape = TyShape::Fun(&URL, &TASK_HTTP_RESPONSE);
         const STRING_TO_TASK_HTTP_RESPONSE: TyShape = TyShape::Fun(&STRING, &TASK_HTTP_RESPONSE);
-        const HTTP_POST: TyShape = TyShape::Fun(&STRING, &STRING_TO_TASK_HTTP_RESPONSE);
+        const HTTP_POST: TyShape = TyShape::Fun(&URL, &STRING_TO_TASK_HTTP_RESPONSE);
         const HTTP_DO_REQUEST: TyShape = TyShape::Fun(&HTTP_REQUEST, &TASK_HTTP_RESPONSE);
         const RESULT_ERROR_HTTP_REQUEST: TyShape =
             TyShape::Con(BuiltinTag::Result, &[ERROR, HTTP_REQUEST]);

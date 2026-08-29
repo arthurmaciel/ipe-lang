@@ -1615,8 +1615,8 @@ fn emit_http_call(
 
     match k {
         KernelFn::HttpGet => {
-            // Http.get : String -> Task Error HttpResponse
-            // args[0] = url : String
+            // Http.get : Url -> Task Error HttpResponse
+            // args[0] = url : Url (already-sealed; emits as ipe_runtime::url::Url)
             let url = args.first().ok_or_else(|| Diagnostic::CompilerBug {
                 where_: "ipe_backend_rust::emit_http_call",
                 detail: "HttpGet expects exactly 1 argument (url)".to_owned(),
@@ -1628,8 +1628,8 @@ fn emit_http_call(
             )))
         }
         KernelFn::HttpPost => {
-            // Http.post : String -> String -> Task Error HttpResponse
-            // args[0] = url, args[1] = body
+            // Http.post : Url -> String -> Task Error HttpResponse
+            // args[0] = url : Url (already-sealed), args[1] = body : String
             let url = args.first().ok_or_else(|| Diagnostic::CompilerBug {
                 where_: "ipe_backend_rust::emit_http_call",
                 detail: "HttpPost expects 2 arguments (url, body)".to_owned(),

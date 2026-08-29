@@ -566,23 +566,36 @@ async fn read_body_capped<E: From<String> + Send + 'static>(
     IpeResult::Ok(String::from_utf8_lossy(&buf).into_owned())
 }
 
-/// Http.get : String -> Task Error HttpResponse
+/// Http.get : Url -> Task Error HttpResponse
+///
+/// Takes an already-sealed typed `Url` (parsed exactly once at
+/// `Url.fromString`, the single SSRF parse boundary) and carries its canonical
+/// serialization as the transport target. The runtime SSRF floor in
+/// `do_request` (per-hop scheme allowlist + private-IP resolver) is unchanged —
+/// the typed argument is the defence-in-depth guard at the API boundary, not a
+/// replacement for the runtime floor.
 #[cfg(not(target_arch = "wasm32"))]
-pub fn http_get<E: From<String> + Send + 'static>(url: String) -> IpeTask<E, HttpResponse> {
+pub fn http_get<E: From<String> + Send + 'static>(
+    url: crate::url::Url,
+) -> IpeTask<E, HttpResponse> {
     Box::pin(do_request(HttpRequest {
         body: String::new(),
         headers: Vec::new(),
         method: HttpMethod::Get,
         redirects: RedirectPolicy::FollowRedirects(10),
         timeout: 30000,
-        url,
+        url: crate::url::url_to_string(url),
     }))
 }
 
-/// Http.post : String -> String -> Task Error HttpResponse
+/// Http.post : Url -> String -> Task Error HttpResponse
+///
+/// Takes an already-sealed typed `Url` (see [`http_get`]) and carries its
+/// canonical serialization as the transport target. The runtime SSRF floor is
+/// unchanged.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn http_post<E: From<String> + Send + 'static>(
-    url: String,
+    url: crate::url::Url,
     body: String,
 ) -> IpeTask<E, HttpResponse> {
     Box::pin(do_request(HttpRequest {
@@ -591,7 +604,7 @@ pub fn http_post<E: From<String> + Send + 'static>(
         method: HttpMethod::Post,
         redirects: RedirectPolicy::FollowRedirects(10),
         timeout: 30000,
-        url,
+        url: crate::url::url_to_string(url),
     }))
 }
 
@@ -777,29 +790,32 @@ async fn do_fetch<E: From<String> + 'static>(req: HttpRequest) -> IpeResult<E, H
     })
 }
 
-/// Http.get : String -> Task Error HttpResponse (browser substitute)
+/// Http.get : Url -> Task Error HttpResponse (browser substitute)
 #[cfg(target_arch = "wasm32")]
-pub fn http_get<E: From<String> + 'static>(url: String) -> IpeTask<E, HttpResponse> {
+pub fn http_get<E: From<String> + 'static>(url: crate::url::Url) -> IpeTask<E, HttpResponse> {
     Box::pin(do_fetch(HttpRequest {
         body: String::new(),
         headers: Vec::new(),
         method: HttpMethod::Get,
         redirects: RedirectPolicy::FollowRedirects(10),
         timeout: 30000,
-        url,
+        url: crate::url::url_to_string(url),
     }))
 }
 
-/// Http.post : String -> String -> Task Error HttpResponse (browser substitute)
+/// Http.post : Url -> String -> Task Error HttpResponse (browser substitute)
 #[cfg(target_arch = "wasm32")]
-pub fn http_post<E: From<String> + 'static>(url: String, body: String) -> IpeTask<E, HttpResponse> {
+pub fn http_post<E: From<String> + 'static>(
+    url: crate::url::Url,
+    body: String,
+) -> IpeTask<E, HttpResponse> {
     Box::pin(do_fetch(HttpRequest {
         body,
         headers: Vec::new(),
         method: HttpMethod::Post,
         redirects: RedirectPolicy::FollowRedirects(10),
         timeout: 30000,
-        url,
+        url: crate::url::url_to_string(url),
     }))
 }
 
