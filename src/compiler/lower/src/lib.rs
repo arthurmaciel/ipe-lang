@@ -198,16 +198,21 @@ pub fn lower(
         sqlfield: interner.intern("SqlField").map_err(homeless)?,
         set_field: interner.intern("SetField").map_err(homeless)?,
         omit_field: interner.intern("OmitField").map_err(homeless)?,
-        // ── ProjectionTerm / CoalesceOperand ──────────────────────────
+        // ── ProjectionTerm / ProjectionOperand ──────────────────────────
         projection_term: interner.intern("ProjectionTerm").map_err(homeless)?,
         column_term: interner.intern("ColumnTerm").map_err(homeless)?,
         literal_term: interner.intern("LiteralTerm").map_err(homeless)?,
         upper_term: interner.intern("UpperTerm").map_err(homeless)?,
         lower_term: interner.intern("LowerTerm").map_err(homeless)?,
         coalesce_term: interner.intern("CoalesceTerm").map_err(homeless)?,
-        coalesce_operand: interner.intern("CoalesceOperand").map_err(homeless)?,
+        arith_term: interner.intern("ArithTerm").map_err(homeless)?,
+        projection_operand: interner.intern("ProjectionOperand").map_err(homeless)?,
         operand_column: interner.intern("OperandColumn").map_err(homeless)?,
         operand_literal: interner.intern("OperandLiteral").map_err(homeless)?,
+        arith_op: interner.intern("ArithOp").map_err(homeless)?,
+        arith_add: interner.intern("ArithAdd").map_err(homeless)?,
+        arith_sub: interner.intern("ArithSub").map_err(homeless)?,
+        arith_mul: interner.intern("ArithMul").map_err(homeless)?,
         // ── Order ADT ─────────────────────────────────────────────────
         order: interner.intern("Order").map_err(homeless)?,
         lt: interner.intern("LT").map_err(homeless)?,

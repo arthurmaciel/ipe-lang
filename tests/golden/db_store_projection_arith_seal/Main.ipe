@@ -1,0 +1,144 @@
+module Main exposing (main)
+
+-- SEAL smoke for `Store.add` / `Store.sub` / `Store.mul` in a typed projection
+-- body. Two `Codec.auto`-derived stores join on `lineItems.orderId = orders.id`.
+-- Three `select` calls exercise the arithmetic operators over numeric operands:
+--
+--   1. column + literal: `add item.quantity (literal 1)`
+--      emits: SELECT (a0.quantity + ?) AS p0 FROM …
+--
+--   2. column - column: `sub item.price item.discount`
+--      emits: SELECT (a0.price - a0.discount) AS p0 FROM …
+--
+--   3. column * literal: `mul item.price (literal 2)`
+--      emits: SELECT (a0.price * ?) AS p0 FROM …
+--
+-- Column identifiers are validated at compile time and re-checked by the
+-- runtime; literal operands bind as parameters. No live database is needed:
+-- `Task.onError` catches any connection failure and the program exits cleanly.
+-- The SEAL proof is a `cargo build` of the emitted project under `IPE_E2E=1`.
+--
+-- Expected output:
+--   projection-arith-seal:ok
+
+
+import Ipe.Codec as Codec exposing (Codec)
+import Ipe.Db as Db exposing (Db)
+import Ipe.Db.Store as Store exposing (Store)
+import Ipe.Error exposing (Error)
+import Ipe.Io as Io
+import Ipe.List as List
+import Ipe.Result as Result exposing (Result(..))
+import Ipe.Task as Task exposing (Task)
+
+
+type alias LineItem =
+    { id : String
+    , orderId : String
+    , quantity : Int
+    , price : Int
+    , discount : Int
+    }
+
+
+type alias Order =
+    { id : String
+    , total : Int
+    }
+
+
+blankItem : LineItem
+blankItem =
+    { id = "", orderId = "", quantity = 0, price = 0, discount = 0 }
+
+
+blankOrder : Order
+blankOrder =
+    { id = "", total = 0 }
+
+
+itemCodec : Codec LineItem
+itemCodec =
+    Codec.auto blankItem
+
+
+orderCodec : Codec Order
+orderCodec =
+    Codec.auto blankOrder
+
+
+itemsStore : Result Error (Store LineItem)
+itemsStore =
+    Store.fromCodec "line_items" itemCodec
+        |> Result.map (\s -> Store.primaryKey .id s)
+        |> Result.map Store.public
+
+
+ordersStore : Result Error (Store Order)
+ordersStore =
+    Store.fromCodec "orders" orderCodec
+        |> Result.map (\s -> Store.primaryKey .id s)
+        |> Result.map Store.public
+
+
+-- Projects (a0.quantity + ?) — column + literal.
+addLiteral : Db -> Store LineItem -> Store Order -> Task Error (List Int)
+addLiteral db items orders =
+    Store.selectToList db
+        (Store.select
+            (\( item, _ ) -> Store.add item.quantity (Store.literal 1))
+            (Store.join items .orderId orders .id)
+        )
+
+
+-- Projects (a0.price - a0.discount) — column - column.
+subColumns : Db -> Store LineItem -> Store Order -> Task Error (List Int)
+subColumns db items orders =
+    Store.selectToList db
+        (Store.select
+            (\( item, _ ) -> Store.sub item.price item.discount)
+            (Store.join items .orderId orders .id)
+        )
+
+
+-- Projects (a0.price * ?) — column * literal.
+mulLiteral : Db -> Store LineItem -> Store Order -> Task Error (List Int)
+mulLiteral db items orders =
+    Store.selectToList db
+        (Store.select
+            (\( item, _ ) -> Store.mul item.price (Store.literal 2))
+            (Store.join items .orderId orders .id)
+        )
+
+
+run : Db -> Task Error ()
+run db =
+    case itemsStore of
+        Ok items ->
+            case ordersStore of
+                Ok orders ->
+                    Task.andThen
+                        (\_ -> Task.map (\_ -> ()) (mulLiteral db items orders))
+                        (Task.andThen
+                            (\_ -> Task.map (\_ -> ()) (subColumns db items orders))
+                            (Task.map (\_ -> ()) (addLiteral db items orders))
+                        )
+
+                Err e ->
+                    Task.fail e
+
+        Err e ->
+            Task.fail e
+
+
+main : Task Error ()
+main =
+    Task.andThen
+        (\_ -> Io.println "projection-arith-seal:ok")
+        (Task.onError
+            (\_ -> Task.succeed ())
+            (Task.andThen
+                (\db -> run db)
+                (Db.connect ())
+            )
+        )

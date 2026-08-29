@@ -98,7 +98,8 @@ impl IpeStringify for MainSqlField {
     }
 }
 pub type MainProjectionTerm = ipe_runtime::db::ProjectionTerm;
-pub type MainCoalesceOperand = ipe_runtime::db::CoalesceOperand;
+pub type MainProjectionOperand = ipe_runtime::db::ProjectionOperand;
+pub type MainArithOp = ipe_runtime::db::ArithOp;
 #[derive(Clone, Debug, PartialEq)]
 pub struct Rec_ {
 

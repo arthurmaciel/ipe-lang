@@ -11267,16 +11267,38 @@ enum ProjectionSource {
     LowerOf { alias: String, column: String },
     /// `Store.coalesce(projA, projB)` — emits `COALESCE(a, b) AS pN`.
     ///
-    /// Each operand is a `CoalesceOperand`: either a SQL-validated dotted
+    /// Each operand is a `ProjectionOperand`: either a SQL-validated dotted
     /// column reference (`Column { alias, column }`) or a `Literal { lowered }`
     /// whose value binds as a `?` parameter before the WHERE parameters. The
     /// runtime re-validates every column operand via `SqlIdent::parse_dotted`
     /// (defence in depth); the tag `"COALESCE"` comes from our own closed set,
     /// never from user input.
     Coalesce {
-        left: CoalesceOperand,
-        right: CoalesceOperand,
+        left: ProjectionOperand,
+        right: ProjectionOperand,
     },
+    /// `Store.add(projA, projB)` / `Store.sub` / `Store.mul` — emits
+    /// `(a <op> b) AS pN`.
+    ///
+    /// The operand encoding is the same closed `ProjectionOperand` (column or
+    /// literal) as `Coalesce`; the runtime re-validates every column operand via
+    /// `SqlIdent::parse_dotted` (defence in depth) and the `op` tag comes from
+    /// our own closed set, never from user input.
+    Arith {
+        op: ArithKind,
+        left: ProjectionOperand,
+        right: ProjectionOperand,
+    },
+}
+
+/// The closed set of binary arithmetic operators liftable over two numeric
+/// projection operands. A compile-side twin of `ipe_runtime::db::ArithOp`;
+/// mapped to the emitted `ArithOp` constructor at descriptor-build time.
+#[derive(Clone, Copy)]
+enum ArithKind {
+    Add,
+    Sub,
+    Mul,
 }
 
 /// One operand of a `Store.coalesce` binary expression: either a direct
@@ -11284,7 +11306,7 @@ enum ProjectionSource {
 /// separate from `ProjectionSource` because operands cannot themselves be
 /// `coalesce` (the surface type is `Projection a`, not recursive), keeping the
 /// descriptor flat and the encoding unambiguous.
-enum CoalesceOperand {
+enum ProjectionOperand {
     /// A SQL-validated `alias.column` reference. The runtime re-validates via
     /// `SqlIdent::parse_dotted`.
     Column { alias: String, column: String },
@@ -11303,25 +11325,25 @@ struct ProjectedColumn {
     kind: ProjColKind,
 }
 
-/// Build a `CoalesceOperand` IR constructor for one operand of a `Store.coalesce`
+/// Build a `ProjectionOperand` IR constructor for one operand of a `Store.coalesce`
 /// projection term.
 ///
 /// Returns `(variant_name, args)` for the `Expr::Ctor` the caller builds.
 /// A `Column` operand maps to `OperandColumn(dotted)`.
 /// A `Literal` operand maps to `OperandLiteral` and pushes the typed `SqlValue`
 /// expression into `literal_items` (left operand before right, before WHERE binds).
-fn emit_coalesce_operand_expr(
-    operand: CoalesceOperand,
+fn emit_projection_operand_expr(
+    operand: ProjectionOperand,
     kind: ProjColKind,
     builtins: &BuiltinCtors,
     literal_items: &mut Vec<Expr>,
 ) -> (Symbol, Vec<Expr>) {
     match operand {
-        CoalesceOperand::Column { alias, column } => (
+        ProjectionOperand::Column { alias, column } => (
             builtins.operand_column,
             vec![Expr::Str(format!("{alias}.{column}"))],
         ),
-        CoalesceOperand::Literal { lowered } => {
+        ProjectionOperand::Literal { lowered } => {
             let sql_variant = match kind {
                 ProjColKind::Text => builtins.sql_string,
                 ProjColKind::Int => builtins.sql_int,
@@ -12419,16 +12441,21 @@ pub struct BuiltinCtors {
     pub sql_null: Symbol,
     pub set_field: Symbol,
     pub omit_field: Symbol,
-    // ── ProjectionTerm / CoalesceOperand ────────────────────────────
+    // ── ProjectionTerm / ProjectionOperand ────────────────────────────
     pub projection_term: Symbol,
     pub column_term: Symbol,
     pub literal_term: Symbol,
     pub upper_term: Symbol,
     pub lower_term: Symbol,
     pub coalesce_term: Symbol,
-    pub coalesce_operand: Symbol,
+    pub arith_term: Symbol,
+    pub projection_operand: Symbol,
     pub operand_column: Symbol,
     pub operand_literal: Symbol,
+    pub arith_op: Symbol,
+    pub arith_add: Symbol,
+    pub arith_sub: Symbol,
+    pub arith_mul: Symbol,
     // ── Order ADT ─────────────────────────────────────────────────────
     pub order: Symbol,
     pub lt: Symbol,
@@ -14308,7 +14335,7 @@ impl<'a> Lowerer<'a> {
         let mut literal_items: Vec<Expr> = Vec::with_capacity(projected.len());
         let b = self.builtins;
         let pt_ty = b.projection_term;
-        let co_ty = b.coalesce_operand;
+        let co_ty = b.projection_operand;
         for col in projected {
             match col.source {
                 ProjectionSource::Column { alias, column } => {
@@ -14363,13 +14390,54 @@ impl<'a> Lowerer<'a> {
                     // Each operand is either a dotted column reference or a literal
                     // `?` bind.  Literal binds push their `SqlValue` into
                     // `literal_items` in left→right order before WHERE binds.
-                    let a_expr = emit_coalesce_operand_expr(left, col.kind, b, &mut literal_items);
-                    let b_expr = emit_coalesce_operand_expr(right, col.kind, b, &mut literal_items);
+                    let a_expr =
+                        emit_projection_operand_expr(left, col.kind, b, &mut literal_items);
+                    let b_expr =
+                        emit_projection_operand_expr(right, col.kind, b, &mut literal_items);
                     pair_items.push(Expr::Ctor {
                         home: ModPath(Vec::new()),
                         ty: pt_ty,
                         variant: b.coalesce_term,
                         args: vec![
+                            Expr::Ctor {
+                                home: ModPath(Vec::new()),
+                                ty: co_ty,
+                                variant: a_expr.0,
+                                args: a_expr.1,
+                            },
+                            Expr::Ctor {
+                                home: ModPath(Vec::new()),
+                                ty: co_ty,
+                                variant: b_expr.0,
+                                args: b_expr.1,
+                            },
+                        ],
+                    });
+                }
+                ProjectionSource::Arith { op, left, right } => {
+                    // The operand encoding is identical to `Coalesce`; the extra
+                    // leading argument is the closed `ArithOp` tag.  Literal binds
+                    // push their `SqlValue` in left→right order before WHERE binds.
+                    let op_variant = match op {
+                        ArithKind::Add => b.arith_add,
+                        ArithKind::Sub => b.arith_sub,
+                        ArithKind::Mul => b.arith_mul,
+                    };
+                    let a_expr =
+                        emit_projection_operand_expr(left, col.kind, b, &mut literal_items);
+                    let b_expr =
+                        emit_projection_operand_expr(right, col.kind, b, &mut literal_items);
+                    pair_items.push(Expr::Ctor {
+                        home: ModPath(Vec::new()),
+                        ty: pt_ty,
+                        variant: b.arith_term,
+                        args: vec![
+                            Expr::Ctor {
+                                home: ModPath(Vec::new()),
+                                ty: b.arith_op,
+                                variant: op_variant,
+                                args: Vec::new(),
+                            },
                             Expr::Ctor {
                                 home: ModPath(Vec::new()),
                                 ty: co_ty,
@@ -14650,12 +14718,59 @@ impl<'a> Lowerer<'a> {
                     StoreSelectProjectionDefect::LiteralTypeUnsupported { ty: ty_label },
                 ));
             };
-            let left = self.lower_coalesce_operand(binders, left_expr)?;
-            let right = self.lower_coalesce_operand(binders, right_expr)?;
+            let left = self.lower_projection_operand(binders, left_expr)?;
+            let right = self.lower_projection_operand(binders, right_expr)?;
             return Ok(ProjectedColumn {
                 source: ProjectionSource::Coalesce { left, right },
                 kind,
             });
+        }
+
+        // ── `Store.add / .sub / .mul (projA, projB)` element ─────────────────
+        if let canon::Expr_::Call(callee_expr, args) = &body.value {
+            let op = match self.lower_callee(callee_expr) {
+                Ok(Callee::Kernel(KernelFn::StoreAdd)) => Some(ArithKind::Add),
+                Ok(Callee::Kernel(KernelFn::StoreSub)) => Some(ArithKind::Sub),
+                Ok(Callee::Kernel(KernelFn::StoreMul)) => Some(ArithKind::Mul),
+                _ => None,
+            };
+            if let Some(op) = op {
+                let (Some(left_expr), Some(right_expr)) = (args.first(), args.get(1)) else {
+                    return Err(unsupported_store_select(
+                        body.span,
+                        StoreSelectProjectionDefect::UnsupportedProjectionBody,
+                    ));
+                };
+                // The result column kind is the operands' shared numeric type
+                // (`number a => a -> a -> a` unifies both operands and the
+                // result). It must be a numeric scalar the projection layer reads
+                // back (`Int` / `Float`); a `String` / `Bool` / unresolved-var
+                // result fails closed.
+                let result_ty = self.region_ty(left_expr.span);
+                let Some(kind) = result_ty.and_then(|ty| ProjColKind::of_ty(ty, self.interner))
+                else {
+                    let ty_label = result_ty.map_or_else(
+                        || "unknown".into(),
+                        |ty| projection_ty_label(ty, self.interner),
+                    );
+                    return Err(unsupported_store_select(
+                        body.span,
+                        StoreSelectProjectionDefect::LiteralTypeUnsupported { ty: ty_label },
+                    ));
+                };
+                if !matches!(kind, ProjColKind::Int | ProjColKind::Float) {
+                    return Err(unsupported_store_select(
+                        body.span,
+                        StoreSelectProjectionDefect::UnsupportedProjectionBody,
+                    ));
+                }
+                let left = self.lower_projection_operand(binders, left_expr)?;
+                let right = self.lower_projection_operand(binders, right_expr)?;
+                return Ok(ProjectedColumn {
+                    source: ProjectionSource::Arith { op, left, right },
+                    kind,
+                });
+            }
         }
 
         // ── `side.field` column reference ───────────────────────────────────
@@ -14724,22 +14839,22 @@ impl<'a> Lowerer<'a> {
         })
     }
 
-    /// Lower one operand of a `Store.coalesce` call into a `CoalesceOperand`.
+    /// Lower one operand of a `Store.coalesce` call into a `ProjectionOperand`.
     ///
     /// Accepts two shapes:
     ///
     /// - `side.field` — a direct column accessor, resolved to an alias + a
     ///   SQL-validated, snake-cased column name, exactly as in `select_single_projection`.
     /// - `Store.literal(value)` — a literal parameter bind, lowered to a
-    ///   `CoalesceOperand::Literal`.
+    ///   `ProjectionOperand::Literal`.
     ///
     /// Any other shape (a computation, a nested coalesce, …) fails closed with
     /// IPE-L0149.
-    fn lower_coalesce_operand(
+    fn lower_projection_operand(
         &self,
         binders: [Option<Symbol>; 2],
         expr: &canon::Expr,
-    ) -> DResult<CoalesceOperand> {
+    ) -> DResult<ProjectionOperand> {
         // `Store.literal(value)` operand.
         if let canon::Expr_::Call(callee_expr, args) = &expr.value
             && matches!(
@@ -14754,7 +14869,7 @@ impl<'a> Lowerer<'a> {
                 ));
             };
             let lowered = self.lower_expr(value_expr)?;
-            return Ok(CoalesceOperand::Literal { lowered });
+            return Ok(ProjectionOperand::Literal { lowered });
         }
 
         // `side.field` column operand.
@@ -14802,7 +14917,7 @@ impl<'a> Lowerer<'a> {
                 },
             ));
         }
-        Ok(CoalesceOperand::Column {
+        Ok(ProjectionOperand::Column {
             alias,
             column: column_name,
         })
@@ -15447,12 +15562,13 @@ impl<'a> Lowerer<'a> {
         if uses_sqlvalue {
             types_ir.push(TypeDef::Enum(self.synthetic_sqlvalue_enum()));
             types_ir.push(TypeDef::Enum(self.synthetic_sqlfield_enum()));
-            // `ProjectionTerm`/`CoalesceOperand` are consumed only by the
+            // `ProjectionTerm`/`ProjectionOperand` are consumed only by the
             // `selectNamed` Db helper; any Db kernel use already implies
             // `uses_sqlvalue`, so piggyback the injection here to keep the
             // condition in one place.
             types_ir.push(TypeDef::Enum(self.synthetic_projection_term_enum()));
-            types_ir.push(TypeDef::Enum(self.synthetic_coalesce_operand_enum()));
+            types_ir.push(TypeDef::Enum(self.synthetic_projection_operand_enum()));
+            types_ir.push(TypeDef::Enum(self.synthetic_arith_op_enum()));
         }
 
         // detect whether any TEA kernel call is present. The backend uses
@@ -15908,16 +16024,22 @@ impl<'a> Lowerer<'a> {
     ///     | LiteralTerm                  -- ? literal placeholder
     ///     | UpperTerm String             -- UPPER(col)
     ///     | LowerTerm String             -- LOWER(col)
-    ///     | CoalesceTerm CoalesceOperand CoalesceOperand
+    ///     | CoalesceTerm ProjectionOperand ProjectionOperand
+    ///     | ArithTerm ArithOp ProjectionOperand ProjectionOperand
     /// ```
     ///
     /// Defined in `ipe_runtime::db`; the backend emits a type alias for it in the
     /// project Spine rather than a full per-project enum.
     fn synthetic_projection_term_enum(&self) -> EnumDef {
         let b = self.builtins;
-        let co = IrType::Enum {
+        let co = || IrType::Enum {
             home: ModPath(Vec::new()),
-            name: b.coalesce_operand,
+            name: b.projection_operand,
+            args: Vec::new(),
+        };
+        let arith_op = IrType::Enum {
+            home: ModPath(Vec::new()),
+            name: b.arith_op,
             args: Vec::new(),
         };
         EnumDef {
@@ -15943,26 +16065,64 @@ impl<'a> Lowerer<'a> {
                 },
                 Variant {
                     name: b.coalesce_term,
-                    fields: vec![co.clone(), co],
+                    fields: vec![co(), co()],
+                },
+                Variant {
+                    name: b.arith_term,
+                    fields: vec![arith_op, co(), co()],
                 },
             ],
         }
     }
 
-    /// Synthesise the built-in `CoalesceOperand` ADT as an [`EnumDef`].
+    /// Synthesise the built-in `ArithOp` ADT as an [`EnumDef`].
     ///
     /// ```text
-    /// type CoalesceOperand
+    /// type ArithOp
+    ///     = ArithAdd   -- SQL `+`
+    ///     | ArithSub   -- SQL `-`
+    ///     | ArithMul   -- SQL `*`
+    /// ```
+    ///
+    /// The closed operator tag for `ProjectionTerm.ArithTerm`; defined in
+    /// `ipe_runtime::db` and aliased into the project Spine by the backend.
+    fn synthetic_arith_op_enum(&self) -> EnumDef {
+        let b = self.builtins;
+        EnumDef {
+            name: b.arith_op,
+            home: ModPath(Vec::new()),
+            type_params: Vec::new(),
+            variants: vec![
+                Variant {
+                    name: b.arith_add,
+                    fields: Vec::new(),
+                },
+                Variant {
+                    name: b.arith_sub,
+                    fields: Vec::new(),
+                },
+                Variant {
+                    name: b.arith_mul,
+                    fields: Vec::new(),
+                },
+            ],
+        }
+    }
+
+    /// Synthesise the built-in `ProjectionOperand` ADT as an [`EnumDef`].
+    ///
+    /// ```text
+    /// type ProjectionOperand
     ///     = OperandColumn String   -- a dotted column reference
     ///     | OperandLiteral         -- a ? literal placeholder
     /// ```
     ///
     /// Companion to `ProjectionTerm`; defined in `ipe_runtime::db` and aliased
     /// into the project Spine by the backend.
-    fn synthetic_coalesce_operand_enum(&self) -> EnumDef {
+    fn synthetic_projection_operand_enum(&self) -> EnumDef {
         let b = self.builtins;
         EnumDef {
-            name: b.coalesce_operand,
+            name: b.projection_operand,
             home: ModPath(Vec::new()),
             type_params: Vec::new(),
             variants: vec![
@@ -17918,10 +18078,10 @@ impl<'a> Lowerer<'a> {
                 // are lowered). All map to `IrType::Enum { home: [] }` directly.
                 //   `StreamId` / `ChunkEvent` — Http.Stream ADTs registered in
                 //       BUILTIN_UNIONS, no EnumDef injection.
-                //   `ProjectionTerm` / `CoalesceOperand` — Db.Store ADTs whose
-                //       EnumDefs are injected into `types_ir` AFTER lowering
-                //       (when `uses_sqlvalue` is true).
-                "StreamId" | "ChunkEvent" | "ProjectionTerm" | "CoalesceOperand" => {
+                //   `ProjectionTerm` / `ProjectionOperand` / `ArithOp` — Db.Store
+                //       ADTs whose EnumDefs are injected into `types_ir` AFTER
+                //       lowering (when `uses_sqlvalue` is true).
+                "StreamId" | "ChunkEvent" | "ProjectionTerm" | "ProjectionOperand" | "ArithOp" => {
                     Ok(IrType::Enum {
                         home: ModPath(Vec::new()),
                         name: *name,
@@ -19314,13 +19474,13 @@ impl<'a> Lowerer<'a> {
                         up: Box::new(up),
                     })
                 }
-                // `ProjectionTerm` / `CoalesceOperand` — synthetic built-in ADTs
-                // for `selectNamed`.  Their `EnumDef`s are injected into `types_ir`
-                // AFTER functions are lowered (when `uses_sqlvalue` is true), so
-                // they are never in `enum_variants` at lowering time.  Map them to
-                // `IrType::Enum { home: [] }` directly, twin of the
+                // `ProjectionTerm` / `ProjectionOperand` / `ArithOp` — synthetic
+                // built-in ADTs for `selectNamed`.  Their `EnumDef`s are injected
+                // into `types_ir` AFTER functions are lowered (when `uses_sqlvalue`
+                // is true), so they are never in `enum_variants` at lowering time.
+                // Map them to `IrType::Enum { home: [] }` directly, twin of the
                 // `ir_type_from_canon` arm.
-                "ProjectionTerm" | "CoalesceOperand" => Ok(IrType::Enum {
+                "ProjectionTerm" | "ProjectionOperand" | "ArithOp" => Ok(IrType::Enum {
                     home: ModPath(Vec::new()),
                     name: *name,
                     args: Vec::new(),
@@ -24077,9 +24237,13 @@ impl<'a> Lowerer<'a> {
                 // / `Store.lte` / `Store.like` / `Store.inList` — arity 2, all
                 // intercepted at lowering. These arities are only defensive fallback
                 // counts; the intercept fires before the generic arity dispatch.
-                // `Store.coalesce` — arity 2 (left projection + right projection).
-                // Intercepted inside the `Store.select` projection body.
+                // `Store.coalesce` / `Store.add` / `Store.sub` / `Store.mul` —
+                // arity 2 (left projection + right projection). Intercepted inside
+                // the `Store.select` projection body.
                 | KernelFn::StoreCoalesce
+                | KernelFn::StoreAdd
+                | KernelFn::StoreSub
+                | KernelFn::StoreMul
                 | KernelFn::StoreEqCol
                 | KernelFn::StoreNeqCol
                 | KernelFn::StoreGtCol
@@ -26030,6 +26194,11 @@ impl<'a> Lowerer<'a> {
                     // Binary coalesce projection operator — recognized inside
                     // `Store.select` lambda bodies; same point-free fallback behaviour.
                     ("Store", "coalesce") => Ok(Callee::Kernel(KernelFn::StoreCoalesce)),
+                    // Binary arithmetic projection operators — recognized inside
+                    // `Store.select` lambda bodies; same point-free fallback behaviour.
+                    ("Store", "add") => Ok(Callee::Kernel(KernelFn::StoreAdd)),
+                    ("Store", "sub") => Ok(Callee::Kernel(KernelFn::StoreSub)),
+                    ("Store", "mul") => Ok(Callee::Kernel(KernelFn::StoreMul)),
                     // ── Secret kernels ──────────────────────────
                     ("Secret", "fromString") => Ok(Callee::Kernel(KernelFn::SecretFromString)),
                     ("Secret", "reveal") => Ok(Callee::Kernel(KernelFn::SecretReveal)),
@@ -28738,16 +28907,21 @@ mod tests {
         let sql_null = interner.intern("SqlNull").unwrap();
         let set_field = interner.intern("SetField").unwrap();
         let omit_field = interner.intern("OmitField").unwrap();
-        // ── ProjectionTerm / CoalesceOperand ──────────────────────────────────
+        // ── ProjectionTerm / ProjectionOperand ──────────────────────────────────
         let projection_term = interner.intern("ProjectionTerm").unwrap();
         let column_term = interner.intern("ColumnTerm").unwrap();
         let literal_term = interner.intern("LiteralTerm").unwrap();
         let upper_term = interner.intern("UpperTerm").unwrap();
         let lower_term = interner.intern("LowerTerm").unwrap();
         let coalesce_term = interner.intern("CoalesceTerm").unwrap();
-        let coalesce_operand = interner.intern("CoalesceOperand").unwrap();
+        let arith_term = interner.intern("ArithTerm").unwrap();
+        let projection_operand = interner.intern("ProjectionOperand").unwrap();
         let operand_column = interner.intern("OperandColumn").unwrap();
         let operand_literal = interner.intern("OperandLiteral").unwrap();
+        let arith_op = interner.intern("ArithOp").unwrap();
+        let arith_add = interner.intern("ArithAdd").unwrap();
+        let arith_sub = interner.intern("ArithSub").unwrap();
+        let arith_mul = interner.intern("ArithMul").unwrap();
         // ── Order ADT ─────────────────────────────────────────────────
         let order = interner.intern("Order").unwrap();
         let lt = interner.intern("LT").unwrap();
@@ -28814,16 +28988,21 @@ mod tests {
             sql_null,
             set_field,
             omit_field,
-            // ── ProjectionTerm / CoalesceOperand ──────────────────────
+            // ── ProjectionTerm / ProjectionOperand ──────────────────────
             projection_term,
             column_term,
             literal_term,
             upper_term,
             lower_term,
             coalesce_term,
-            coalesce_operand,
+            arith_term,
+            projection_operand,
             operand_column,
             operand_literal,
+            arith_op,
+            arith_add,
+            arith_sub,
+            arith_mul,
             // ── Order ADT ─────────────────────────────────────────────
             order,
             lt,
@@ -28912,12 +29091,13 @@ mod tests {
             .expect("intern shared built-in table");
         let chunk_event = interner.intern("ChunkEvent").expect("intern");
         let stream_id = interner.intern("StreamId").expect("intern");
-        // `ProjectionTerm` / `CoalesceOperand` — injected into `types_ir` AFTER
-        // functions are lowered (when `uses_sqlvalue` is true), so they are never
-        // seeded into `enum_variants` at construction time. Skip exactly like
-        // `StreamId` / `ChunkEvent`.
+        // `ProjectionTerm` / `ProjectionOperand` / `ArithOp` — injected into
+        // `types_ir` AFTER functions are lowered (when `uses_sqlvalue` is true),
+        // so they are never seeded into `enum_variants` at construction time.
+        // Skip exactly like `StreamId` / `ChunkEvent`.
         let projection_term = interner.intern("ProjectionTerm").expect("intern");
-        let coalesce_operand = interner.intern("CoalesceOperand").expect("intern");
+        let projection_operand = interner.intern("ProjectionOperand").expect("intern");
+        let arith_op = interner.intern("ArithOp").expect("intern");
         let module = canon::Module {
             imports_unsafe_submodule: false,
             name: vec![],
@@ -28949,7 +29129,8 @@ mod tests {
             if union == chunk_event
                 || union == stream_id
                 || union == projection_term
-                || union == coalesce_operand
+                || union == projection_operand
+                || union == arith_op
             {
                 continue;
             }

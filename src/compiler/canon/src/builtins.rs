@@ -98,9 +98,9 @@ pub const BUILTIN_UNIONS: &[BuiltinUnion] = &[
         exhaust_union: true,
         qualified_home: None,
     },
-    // ── ProjectionTerm / CoalesceOperand (Ipe.Db.Store.selectNamed) ────────
-    // Index order matches `synthetic_projection_term_enum` / `synthetic_coalesce_operand_enum`
-    // in ipe_lower and the `ProjectionTerm` / `CoalesceOperand` enums in ipe_runtime::db.
+    // ── ProjectionTerm / ProjectionOperand (Ipe.Db.Store.selectNamed) ────────
+    // Index order matches `synthetic_projection_term_enum` / `synthetic_projection_operand_enum`
+    // in ipe_lower and the `ProjectionTerm` / `ProjectionOperand` enums in ipe_runtime::db.
     BuiltinUnion {
         type_name: "ProjectionTerm",
         ctors: &[
@@ -109,13 +109,20 @@ pub const BUILTIN_UNIONS: &[BuiltinUnion] = &[
             ("UpperTerm", 2, 1),
             ("LowerTerm", 3, 1),
             ("CoalesceTerm", 4, 2),
+            ("ArithTerm", 5, 3),
         ],
         exhaust_union: true,
         qualified_home: None,
     },
     BuiltinUnion {
-        type_name: "CoalesceOperand",
+        type_name: "ProjectionOperand",
         ctors: &[("OperandColumn", 0, 1), ("OperandLiteral", 1, 0)],
+        exhaust_union: true,
+        qualified_home: None,
+    },
+    BuiltinUnion {
+        type_name: "ArithOp",
+        ctors: &[("ArithAdd", 0, 0), ("ArithSub", 1, 0), ("ArithMul", 2, 0)],
         exhaust_union: true,
         qualified_home: None,
     },
