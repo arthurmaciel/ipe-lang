@@ -4,16 +4,20 @@ import Ipe.Auth
 import Ipe.Dict
 import Ipe.Maybe
 import Ipe.Secret
+import Ipe.System as System
 
--- backlog #44 golden: `Auth.signToken` / `Auth.verifyToken` are re-typed to
--- take `Secret` (not `String`) at the signing-key position — "secrets are
--- typed, never `fmt`-stringified" (PRINCIPLES.md). Sign a token with a
--- `Secret`-sealed key, verify it with the SAME sealed key, and read a claim
--- back — a full round trip through the AUTH_WRAPPERS boundary that reveals
--- the `Secret` immediately before delegating to the runtime.
+-- golden: `Auth.signToken` / `Auth.verifyToken` take `Secret` (not `String`)
+-- at the signing-key position — "secrets are typed, never `fmt`-stringified"
+-- (PRINCIPLES.md). Sign a token with a `Secret`-sealed key, verify it with the
+-- SAME sealed key, and read a claim back — a full round trip through the auth
+-- boundary that reveals the `Secret` immediately before delegating to the
+-- runtime.
+--
+-- The key is sealed from a runtime `String` (`System.getenvOr` with a
+-- test-default fallback), never a committed literal (IPE-L0150).
 
 signingKey =
-    Secret.fromString "this-is-a-32-byte-or-longer-secret-key-value"
+    Secret.fromString (System.getenvOr "SIGNING_KEY" "this-is-a-32-byte-or-longer-secret-key-value")
 
 main =
     case Auth.signToken signingKey (Dict.fromList [ ( "sub", "alice" ) ]) 3600 of

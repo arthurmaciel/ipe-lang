@@ -6,15 +6,15 @@ pub(crate) fn main_doc_codec() -> IpeCodecCodec<RecAuthorBody> {
         enc: {
             let __ipe_fn: ::std::sync::Arc<
                 dyn Fn(RecAuthorBody) -> JsonVal + Send + Sync + 'static,
-            > = ::std::sync::Arc::new(move |codec_rec_4026629124: RecAuthorBody| -> JsonVal {
+            > = ::std::sync::Arc::new(move |codec_rec_4026630916: RecAuthorBody| -> JsonVal {
                 json_enc_object(vec![
                     (
                         "author".to_string(),
-                        json_enc_string((codec_rec_4026629124.clone()).author.clone()),
+                        json_enc_string((codec_rec_4026630916.clone()).author.clone()),
                     ),
                     (
                         "body".to_string(),
-                        json_enc_string((codec_rec_4026629124).body.clone()),
+                        json_enc_string((codec_rec_4026630916).body.clone()),
                     ),
                 ])
             });
@@ -147,7 +147,10 @@ pub(crate) fn main_handle_my_docs(
 pub(crate) fn main_auth_cfg() -> ipe_runtime::server::AuthConfig {
     let _ipe_recursion_guard = crate::recursion_guard();
     server_auth_config(
-        secret_from_string("this-is-a-32-byte-or-longer-secret-key-value".to_string()),
+        secret_from_string(system_getenv_or(
+            "SIGNING_KEY".to_string(),
+            "this-is-a-32-byte-or-longer-secret-key-value".to_string(),
+        )),
         server_token_bearer(),
     )
 }

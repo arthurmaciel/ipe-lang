@@ -1,13 +1,19 @@
 module Main exposing (main)
-import Ipe.Secret
 
--- backlog #44 negative gate: `Secret` does NOT implement the `++` append
--- obligation (`Appendable a => a -> a -> a`, pinned to `String` / `List _`
--- only, see `ipe_types::constrain`'s `BinopClass::Append` arm) — a `Secret`
+import Ipe.App as App
+
+
+-- Negative gate: `Secret` does NOT implement the `++` append obligation
+-- (`Appendable a => a -> a -> a`, pinned to `String` / `List _` only, see
+-- `ipe_types::constrain`'s `BinopClass::Append` arm) — a `Secret`
 -- concatenated with a `String` is a compile-time type error, never a runtime
 -- concern. This is one of the "every plausible accidental-stringification
--- path" cases the fix spec's mandatory regression tests call out: string
--- concatenation on a `Secret` must not compile.
-
+-- path" cases the mandatory regression tests call out: string concatenation
+-- on a `Secret` must not compile.
+--
+-- The `Secret` comes from `App.fromEnvRequired` (a runtime env read), NOT a
+-- committed string literal — a literal argument to `Secret.fromString` is
+-- rejected earlier by the committed-literal ban (IPE-L0150), which would mask
+-- the `++` mismatch this fixture exists to prove.
 main =
-    "using key " ++ Secret.fromString "sk_live_abc123"
+    "using key " ++ App.fromEnvRequired "API_KEY"

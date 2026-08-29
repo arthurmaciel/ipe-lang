@@ -1,0 +1,16 @@
+module Main exposing (main)
+
+import Ipe.Io as Io
+import Ipe.Secret
+
+
+-- Committed-literal ban (IPE-L0150), reached through a bounded LOCAL
+-- constant-fold of the `++` string-append operator. `"sk_live_" ++ "concatop"`
+-- canonicalises to the same `append` the `String.append` spelling does; both
+-- operands are literals, so the whole expression folds to a
+-- compile-time-constant string — a committed credential. The seal folds it and
+-- rejects it at ipe compile time, fail-closed, before any Rust is emitted.
+main =
+    Secret.use
+        (Secret.fromString ("sk_live_" ++ "concatop"))
+        (\_ -> Io.println "unreachable")

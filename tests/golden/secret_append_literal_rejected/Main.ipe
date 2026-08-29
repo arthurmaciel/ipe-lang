@@ -1,0 +1,18 @@
+module Main exposing (main)
+
+import Ipe.Io as Io
+import Ipe.Secret
+import Ipe.String as String
+
+
+-- Committed-literal ban (IPE-L0150), reached through a bounded LOCAL
+-- constant-fold of a literal string join. `String.append "sk_live_" "concat"`
+-- (equivalently `"sk_live_" ++ "concat"` or `String.concat [ … ]`) is a
+-- compile-time-constant string whose every operand is itself a literal, so it
+-- bakes a credential into source. The seal folds the join to the constant and
+-- rejects it at ipe compile time, fail-closed, before any Rust is emitted. A
+-- join where any operand is runtime-derived does NOT fold and is accepted.
+main =
+    Secret.use
+        (Secret.fromString (String.append "sk_live_" "concat"))
+        (\_ -> Io.println "unreachable")

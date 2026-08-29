@@ -1,0 +1,42 @@
+module Main exposing (main)
+
+import Ipe.Io as Io
+import Ipe.Secret
+import Ipe.String as String
+import Ipe.System as System
+
+
+-- golden: the seal applied to values the LOCAL constant-fold cannot reduce, so
+-- IPE-L0150 accepts them (the honest residual). Two shapes:
+--
+--   1. `sealParam` receives a `String` PARAMETER and seals it. A function
+--      parameter has no constant binding in scope, so the fold yields nothing
+--      and the seal is accepted.
+--   2. `deriveAtRuntime` builds a `String` in a SEPARATE function from a runtime
+--      input; `main` seals its cross-function result. The fold is LOCAL — it
+--      never propagates across a function boundary — so this is accepted too.
+--
+-- Both plaintexts are runtime env reads (defaulting to markers). `Secret.redacted`
+-- maps each back to the fixed placeholder, so neither marker ever echoes.
+sealParam raw =
+    Secret.fromString raw
+
+
+deriveAtRuntime prefix =
+    String.append prefix (System.getenvOr "SECRET_SUFFIX" "sk_live_DERIVE_MARKER")
+
+
+main =
+    let
+        fromParam =
+            sealParam (System.getenvOr "SECRET_PARAM" "sk_live_PARAM_MARKER")
+
+        fromCross =
+            Secret.fromString (deriveAtRuntime "prefix_")
+    in
+    Io.println
+        (String.join ","
+            [ Secret.redacted fromParam
+            , Secret.redacted fromCross
+            ]
+        )

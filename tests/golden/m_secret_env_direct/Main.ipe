@@ -1,0 +1,19 @@
+module Main exposing (main)
+
+import Ipe.Io as Io
+import Ipe.Secret
+import Ipe.System as System
+
+
+-- golden: `Secret.fromString` applied DIRECTLY to a runtime `String`
+-- (`System.getenvOr` result). The seal is saturated, so its argument passes
+-- through the committed-literal gate (IPE-L0150) — a runtime String is
+-- accepted; only a source-text literal is refused. `Secret.redacted` proves
+-- the plaintext (defaulting to the marker) never echoes: stdout is the fixed
+-- `"<redacted>"` placeholder, never the marker.
+secretVal =
+    Secret.fromString (System.getenvOr "APP_SECRET" "sk_live_ENV_DIRECT_MARKER")
+
+
+main =
+    Io.println (Secret.redacted secretVal)

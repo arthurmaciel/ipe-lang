@@ -3,6 +3,7 @@ module Main exposing (main)
 import Ipe.Task as Task
 import Ipe.Log as Log
 import Ipe.Secret
+import Ipe.System as System
 
 -- backlog #44 golden: logging a `Secret` directly is safe BY CONSTRUCTION —
 -- `Log.infoWith`'s attr-list element carries the Stringify obligation
@@ -15,4 +16,5 @@ import Ipe.Secret
 
 main : Task Error ()
 main =
-    Log.infoWith "boot" [ Secret.fromString "sk_live_LOGGED_SECRET_MARKER" ]
+    Log.infoWith "boot"
+        [ Secret.fromString (System.getenvOr "LOG_SECRET" "sk_live_LOGGED_SECRET_MARKER") ]

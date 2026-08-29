@@ -1,27 +1,28 @@
 module Main exposing (main)
 import Ipe.Io as Io
 import Ipe.Secret
+import Ipe.System as System
 
--- backlog #44 golden: a record containing a `Secret` field stays fully
--- derivable (`Clone` / `Debug` / `PartialEq`) — proves the derive-blast-radius
--- fix (marking `Secret` merely non-serde, not non-derivable, per the fix
--- spec §1) rather than the naive "leaf is non-derivable" design that would
--- have made the WHOLE record lose ALL derives (the #45/#70 exit-0-then-
--- cargo-fail class). Exercises record `==` (recurses into `Secret`'s own
--- constant-time equality) AND the record-update syntax `{ r | f = v }`
--- (requires `Clone` on the base record, which requires `Clone` on every
+-- golden: a record containing a `Secret` field stays fully derivable
+-- (`Clone` / `Debug` / `PartialEq`) — `Secret` is merely non-serde, not
+-- non-derivable, so the WHOLE record keeps its derives. Exercises record `==`
+-- (recurses into `Secret`'s own constant-time equality) AND the record-update
+-- syntax `{ r | f = v }` (requires `Clone` on the base record, hence on every
 -- field including `apiKey : Secret`).
+--
+-- The key is sealed from a runtime `String` (`System.getenvOr` with a
+-- test-default fallback), never a committed literal (IPE-L0150).
 
 type alias Config =
     { apiKey : Secret, label : String }
 
 cfg1 : Config
 cfg1 =
-    { apiKey = Secret.fromString "k1", label = "prod" }
+    { apiKey = Secret.fromString (System.getenvOr "API_KEY" "k1"), label = "prod" }
 
 cfg2 : Config
 cfg2 =
-    { apiKey = Secret.fromString "k1", label = "prod" }
+    { apiKey = Secret.fromString (System.getenvOr "API_KEY" "k1"), label = "prod" }
 
 cfg3 : Config
 cfg3 =

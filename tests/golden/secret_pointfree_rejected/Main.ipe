@@ -1,0 +1,21 @@
+module Main exposing (main)
+
+import Ipe.Io as Io
+import Ipe.List as List
+import Ipe.Secret
+import Ipe.String
+
+
+-- Un-applied `Secret.fromString` ban (IPE-L0151): passing the seal as a value
+-- to `List.map` routes its argument (the committed literal `"sk_live_…"`)
+-- around the committed-literal gate (IPE-L0150), which reads a saturated
+-- call's argument. The seal is legal only as a direct one-argument call, so
+-- this point-free reference is rejected at ipe compile time, fail-closed,
+-- before any Rust is emitted. Seal each String inside a lambda instead:
+-- `List.map (\s -> Secret.fromString s) runtimeStrings`.
+sealed =
+    List.map Secret.fromString [ "sk_live_committed" ]
+
+
+main =
+    Io.println (String.fromInt (List.length sealed))

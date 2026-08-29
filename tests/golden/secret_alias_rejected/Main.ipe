@@ -1,0 +1,18 @@
+module Main exposing (main)
+
+import Ipe.Io as Io
+import Ipe.Secret
+
+
+-- Un-applied `Secret.fromString` ban (IPE-L0151): binding the seal to a name
+-- (`seal = Secret.fromString`) and applying the alias later routes the
+-- committed literal `"sk_live_…"` around the committed-literal gate
+-- (IPE-L0150), which reads a saturated call's argument. The seal is legal only
+-- as a direct one-argument call, so this aliasing reference is rejected at ipe
+-- compile time, fail-closed, before any Rust is emitted.
+main =
+    let
+        seal =
+            Secret.fromString
+    in
+    Secret.use (seal "sk_live_committed") (\_ -> Io.println "unreachable")

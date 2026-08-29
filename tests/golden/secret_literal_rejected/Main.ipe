@@ -1,0 +1,13 @@
+module Main exposing (main)
+
+import Ipe.Secret
+
+
+-- Committed-literal ban (IPE-L0150): a source-text string LITERAL as the
+-- argument to `Secret.fromString` bakes a credential into source — a
+-- committed-secret leak. It is rejected at ipe compile time, fail-closed,
+-- before any Rust is emitted. The recommended source is
+-- `App.fromEnvRequired "VAR"` (read at runtime); sealing a `String` the
+-- program obtained at runtime is also accepted. Only a literal is refused.
+main =
+    Secret.use (Secret.fromString "sk_live_abc123") (\_ -> ())

@@ -5,6 +5,7 @@ import Ipe.Email as Email
 import Ipe.Bytes as Bytes
 import Ipe.Io as Io
 import Ipe.Secret
+import Ipe.System as System
 
 
 -- SEAL fixture: a typed `EmailMessage` built via `defaultMessage` + `with*`
@@ -28,7 +29,7 @@ main =
         ( Just from, Just to ) ->
             let
                 provider =
-                    Email.Resend (Secret.fromString "test-key")
+                    Email.Resend (Secret.fromString (System.getenvOr "RESEND_API_KEY" "test-key"))
 
                 message =
                     Email.defaultMessage { from = from, to = [ to ], subject = "Hi" }

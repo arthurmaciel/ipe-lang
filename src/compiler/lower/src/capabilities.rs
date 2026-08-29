@@ -154,7 +154,7 @@ mod tests {
     #[test]
     fn using_secret_use_off_plain_secret_discloses_no_unsafe() {
         let caps = caps_of(
-            "module Main exposing (main)\nimport Ipe.Io\nimport Ipe.Secret\nmain : Task ()\nmain =\n    Io.println (Secret.use (Secret.fromString \"sk\") (\\p -> p))\n",
+            "module Main exposing (main)\nimport Ipe.Io\nimport Ipe.Secret\nimport Ipe.System as System\nmain : Task ()\nmain =\n    Io.println (Secret.use (Secret.fromString (System.getenvOr \"K\" \"sk\")) (\\p -> p))\n",
         );
         assert!(
             caps.as_ref()

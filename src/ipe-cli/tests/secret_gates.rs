@@ -61,3 +61,102 @@ fn secret_concat_is_rejected() {
         ipe_diagnostics::IPE_T0001,
     );
 }
+
+/// `Secret.fromString "sk_live_abc123"` — a committed source-text string
+/// LITERAL as the seal argument bakes a credential into source. The
+/// committed-literal ban rejects it at ipe compile time with `IPE-L0150`,
+/// fail-closed, before any Rust is emitted — never accepted, never deferred to
+/// a `cargo` build. A RUNTIME `String` (e.g. `App.fromEnvRequired "VAR"`) in
+/// the same position is fine; only a literal is refused.
+#[test]
+fn secret_from_string_literal_is_rejected() {
+    assert_gate(
+        "secret_literal_rejected",
+        "secret_literal_rejected_emit",
+        ipe_diagnostics::IPE_L0150,
+    );
+}
+
+/// `List.map Secret.fromString [ "sk_live_committed" ]` — the seal is passed as
+/// a VALUE, so its argument (a committed literal) is applied later, out of the
+/// committed-literal gate's (IPE-L0150) sight. The un-applied-seal ban rejects
+/// the point-free reference at ipe compile time with `IPE-L0151`, fail-closed,
+/// keeping the literal gate structural: `Secret.fromString` is legal only as a
+/// saturated one-argument call, so every argument is seen.
+#[test]
+fn secret_from_string_point_free_is_rejected() {
+    assert_gate(
+        "secret_pointfree_rejected",
+        "secret_pointfree_rejected_emit",
+        ipe_diagnostics::IPE_L0151,
+    );
+}
+
+/// `let seal = Secret.fromString in seal "sk_live_committed"` — binding the seal
+/// to a name and applying the alias later is the same escape as the point-free
+/// case: the literal reaches a `Secret` on a path the argument gate never sees.
+/// The un-applied-seal ban rejects the aliasing reference at ipe compile time
+/// with `IPE-L0151`, fail-closed.
+#[test]
+fn secret_from_string_alias_is_rejected() {
+    assert_gate(
+        "secret_alias_rejected",
+        "secret_alias_rejected_emit",
+        ipe_diagnostics::IPE_L0151,
+    );
+}
+
+/// `let cred = "sk_live_letbound" in Secret.fromString cred` — a `let`-bound
+/// source-text literal applied to the SATURATED seal. The seal folds its
+/// argument through the enclosing `let` scope to the constant string and refuses
+/// it with `IPE-L0150` — the same committed-literal ban the inline
+/// `Secret.fromString "…"` hits, reached through a bounded LOCAL constant-fold.
+/// This is the plainest accidental hardcoding, and the syntactic `Str`-node test
+/// missed it.
+#[test]
+fn secret_from_string_letbound_literal_is_rejected() {
+    assert_gate(
+        "secret_letbound_literal_rejected",
+        "secret_letbound_literal_rejected_emit",
+        ipe_diagnostics::IPE_L0150,
+    );
+}
+
+/// `do cred = "sk_live_dobound" … Secret.fromString cred` — a `do`-notation pure
+/// `=` binding desugars to the same `let` the `let cred = …` form produces, so a
+/// credential bound in a `do` block reaches the seal through the identical local
+/// fold and is refused with `IPE-L0150`, fail-closed.
+#[test]
+fn secret_from_string_dobound_literal_is_rejected() {
+    assert_gate(
+        "secret_dobound_literal_rejected",
+        "secret_dobound_literal_rejected_emit",
+        ipe_diagnostics::IPE_L0150,
+    );
+}
+
+/// `Secret.fromString (String.append "sk_live_" "concat")` — a literal string
+/// join whose every operand folds to a constant. `String.append` (and the
+/// `String.concat [ … ]` spelling) folds to the concatenated constant, which the
+/// seal refuses with `IPE-L0150` — a committed credential assembled from pieces
+/// is still a committed credential.
+#[test]
+fn secret_from_string_append_literal_is_rejected() {
+    assert_gate(
+        "secret_append_literal_rejected",
+        "secret_append_literal_rejected_emit",
+        ipe_diagnostics::IPE_L0150,
+    );
+}
+
+/// `Secret.fromString ("sk_live_" ++ "concatop")` — the `++` operator
+/// canonicalises to the same `append` kernel `String.append` does, so a literal
+/// `++` join folds to the constant and is refused with `IPE-L0150`, fail-closed.
+#[test]
+fn secret_from_string_concatop_literal_is_rejected() {
+    assert_gate(
+        "secret_concatop_literal_rejected",
+        "secret_concatop_literal_rejected_emit",
+        ipe_diagnostics::IPE_L0150,
+    );
+}

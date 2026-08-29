@@ -1,16 +1,20 @@
 module Main exposing (main)
 import Ipe.Io as Io
 import Ipe.Secret
+import Ipe.System as System
 
--- backlog #44 golden: `Secret`'s ONLY equality is the hand-written
--- constant-time `PartialEq` (`==` is always safe by construction — see the
--- fix spec §1). Exercises match / content-mismatch / length-mismatch in one
--- program.
+-- golden: `Secret`'s ONLY equality is the hand-written constant-time
+-- `PartialEq` (`==` is always safe by construction). Exercises match /
+-- content-mismatch / length-mismatch in one program.
+--
+-- Each `Secret` is sealed from a runtime `String` (`System.getenvOr` with a
+-- test-default fallback), never a committed literal — a bare literal argument
+-- to `Secret.fromString` is rejected by the committed-literal ban (IPE-L0150).
 
-a = Secret.fromString "same-value"
-b = Secret.fromString "same-value"
-c = Secret.fromString "different-value-longer"
-d = Secret.fromString "short"
+a = Secret.fromString (System.getenvOr "S_A" "same-value")
+b = Secret.fromString (System.getenvOr "S_B" "same-value")
+c = Secret.fromString (System.getenvOr "S_C" "different-value-longer")
+d = Secret.fromString (System.getenvOr "S_D" "short")
 
 boolStr : Bool -> String
 boolStr flag =

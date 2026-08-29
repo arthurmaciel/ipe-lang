@@ -1,0 +1,29 @@
+module Main exposing (main)
+
+import Ipe.Io as Io
+import Ipe.List as List
+import Ipe.Secret
+import Ipe.String
+import Ipe.System as System
+
+
+-- golden: sealing each String of a RUNTIME list into a `Secret` via a lambda.
+-- `Secret.fromString` is fully applied to the lambda's own parameter `s`, so
+-- the committed-literal seal gate still sees every argument — this is the
+-- sanctioned point-free replacement (IPE-L0151 forbids passing the bare seal
+-- to `List.map`, not this lambda form). Each element is a runtime `String`
+-- read from the environment (defaulting to a marker), never a source literal
+-- reaching the seal. `Secret.redacted` maps each sealed value back to the
+-- fixed `"<redacted>"` placeholder, proving the plaintext never echoes.
+raws =
+    [ System.getenvOr "SECRET_A" "sk_live_MAP_MARKER_A"
+    , System.getenvOr "SECRET_B" "sk_live_MAP_MARKER_B"
+    ]
+
+
+sealed =
+    List.map (\s -> Secret.fromString s) raws
+
+
+main =
+    Io.println (String.join "," (List.map Secret.redacted sealed))

@@ -1,0 +1,18 @@
+module Main exposing (main)
+
+import Ipe.Io as Io
+import Ipe.Secret
+
+
+-- Committed-literal ban (IPE-L0150), reached through a bounded LOCAL
+-- constant-fold of a `do`-notation pure `=` binding. A `do` block's `cred =
+-- "sk_live_…"` is a pure assignment that desugars to the same `let` a
+-- `let cred = "…" in` produces, so applying `Secret.fromString` to `cred` bakes
+-- a credential into source exactly as the `let`-bound and inline literals do.
+-- The seal folds the argument through the enclosing scope to the constant
+-- string and rejects it at ipe compile time, fail-closed, before any Rust is
+-- emitted.
+main =
+    do
+        cred = "sk_live_dobound"
+        Io.println (Secret.redacted (Secret.fromString cred))

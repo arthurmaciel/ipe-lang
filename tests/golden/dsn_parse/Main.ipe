@@ -5,6 +5,7 @@ import Ipe.Db.Dsn as Dsn exposing (Dsn, Driver(..), TlsMode(..))
 import Ipe.Result as Result exposing (Result(..))
 import Ipe.Secret
 import Ipe.String as String
+import Ipe.System as System
 
 
 -- Ipe.Db.Dsn parse-don't-validate golden (pure — no connect, no I/O beyond
@@ -95,7 +96,7 @@ buildTyped =
             , port = 5432
             , database = "metrics"
             , user = "etl"
-            , password = Secret.fromString "hunter2SENTINEL"
+            , password = Secret.fromString (System.getenvOr "DB_PASSWORD" "hunter2SENTINEL")
             , tls = Require
             }
     of
