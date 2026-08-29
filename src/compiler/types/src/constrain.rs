@@ -5920,8 +5920,8 @@ impl<'a> Builder<'a> {
             K::FileWalkMatching => fun(path(), fun(fun(path(), bool_ty()), task(list(path())))),
 
             // ── Http ──
-            K::HttpGet => fun(string(), task(http_response())),
-            K::HttpPost => fun(string(), fun(string(), task(http_response()))),
+            K::HttpGet => fun(url(), task(http_response())),
+            K::HttpPost => fun(url(), fun(string(), task(http_response()))),
             K::HttpRequest => fun(http_request(), task(http_response())),
             K::HttpParseQuery => fun(string(), dict(string(), string())),
             K::HttpDefaultRequest => fun(url(), result(error_ty(), http_request())),
