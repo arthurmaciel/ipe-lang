@@ -6,44 +6,42 @@ import Ipe.Bytes as Bytes
 import Ipe.Io as Io
 import Ipe.Secret
 
--- SEAL fixture for backlog #210 "Ipe.Email family": a typed `EmailMessage`
--- built via `defaultMessage` + `with*` builders is fed DIRECTLY to
--- `Email.send`, and the `EmailProvider` ADT is constructed via its `Resend`
--- ctor. `ipe_lower` folds the message / attachment / provider record + ADT
--- shapes to the nominal runtime types (`ipe_runtime::email::{EmailMessage,
--- EmailAttachment, EmailProvider}`) the `email_send` kernel takes — a
--- backend-synthesised `Rec…` struct or a duplicate `StdEmailEmailProvider`
--- enum would mismatch the kernel boundary with E0308. This exercises the fold
--- (message + attachment) AND the EmailProvider ctor routing.
+
+-- SEAL fixture: a typed `EmailMessage` built via `defaultMessage` + `with*`
+-- builders is fed directly to `Email.send`, and the `EmailProvider` ADT is
+-- constructed via its `Resend` ctor.  `ipe_lower` folds the message /
+-- attachment / provider record + ADT shapes to the nominal runtime types the
+-- `email_send` kernel takes.  This exercises the fold (message + attachment)
+-- AND the `EmailProvider` ctor routing.
 --
--- The values are let-bound WITHOUT explicit `: Email.EmailMessage` annotations
--- (an explicit alias annotation on a binding keeps the alias nominal instead of
--- expanding it — a pre-existing compiler limitation shared with `Ipe.Csv`, not
--- specific to `Ipe.Email`); inference flows the structural shape that folds to
--- the runtime struct, exactly as the `Ipe.Csv` seal fixture does.
+-- Address fields require `EmailAddress` values obtained via `parseAddress`.
+-- The constants below are always valid; the `Nothing` arm is unreachable.
 --
--- `IPE_EMAIL_DRY_RUN=1` short-circuits the provider and returns a synthetic id
--- so the run needs no network; the printed line is `sent` on success.
+-- `IPE_EMAIL_DRY_RUN=1` short-circuits the provider and returns a synthetic
+-- id so the run needs no network; the printed line is `sent` on success.
 
 
 main =
-    let
-        provider =
-            Email.Resend (Secret.fromString "test-key")
+    case ( Email.parseAddress "noreply@example.com"
+         , Email.parseAddress "alice@example.com"
+         ) of
+        ( Just from, Just to ) ->
+            let
+                provider =
+                    Email.Resend (Secret.fromString "test-key")
 
-        message =
-            Email.defaultMessage
-                { from = "noreply@example.com"
-                , to = [ "alice@example.com" ]
-                , subject = "Hi"
-                }
-                |> Email.withTextBody "Hello, world!"
-                |> Email.withAttachment
-                    (Email.defaultAttachment "note.txt"
-                        |> Email.withMimeType "text/plain"
-                        |> Email.withContent (Bytes.fromString "body bytes")
-                    )
-    in
-    Email.send provider message
-        |> Task.andThen (\_ -> Task.succeed (Io.println "sent"))
-        |> Task.onError (\_ -> Task.succeed (Io.println "failed"))
+                message =
+                    Email.defaultMessage { from = from, to = [ to ], subject = "Hi" }
+                        |> Email.withTextBody "Hello, world!"
+                        |> Email.withAttachment
+                            (Email.defaultAttachment "note.txt"
+                                |> Email.withMimeType "text/plain"
+                                |> Email.withContent (Bytes.fromString "body bytes")
+                            )
+            in
+            Email.send provider message
+                |> Task.andThen (\_ -> Task.succeed (Io.println "sent"))
+                |> Task.onError (\_ -> Task.succeed (Io.println "failed"))
+
+        _ ->
+            Task.succeed (Io.println "unreachable")

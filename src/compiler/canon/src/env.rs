@@ -1138,8 +1138,6 @@ impl Env {
                     "sha512",
                     "sha1",
                     "md5",
-                    "hmacSha256",
-                    "hmacSha512",
                     "rsaSha256Sign",
                     "rsaSha256Verify",
                     "constantTimeEqual",
@@ -1812,6 +1810,14 @@ impl Env {
             // `Random.range` is likewise DELIBERATELY absent: `Ipe.Random` is now
             // COMPILED-SOURCE, so `range lo hi = int lo hi` lives in
             // `Ipe/Random.ipe` as pure Ipê, not a kernel-qualifier alias.
+            //
+            // `Crypto.hmacSha256`/`hmacSha512` are the typed-`Key` HMAC surface,
+            // aliasing the canonical `hmacSha256WithKey`/`hmacSha512WithKey`
+            // kernels. The String-keyed originals were removed so passing a bare
+            // `String` key is a compile-time type error; the alias inherits the
+            // canonical kernel's `Key -> String -> Mac` scheme.
+            ("Crypto", "hmacSha256", "hmacSha256WithKey"),
+            ("Crypto", "hmacSha512", "hmacSha512WithKey"),
         ];
 
         // ── Cross-qualifier member re-exports ────────────────────────────────

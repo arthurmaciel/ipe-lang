@@ -726,6 +726,33 @@ fn canon_ty_is_secret(ty: &canon::Type, interner: &Interner) -> bool {
         if args.is_empty() && interner.resolve(*name) == Some("Secret"))
 }
 
+/// Is `ty` the `Ipe.Email.EmailAddress` opaque type?  Matched by NAME only
+/// (module-agnostic), mirroring `ir_type_from_ty`'s `"EmailAddress" => IrType::EmailAddress`.
+fn ty_is_email_address(ty: &Ty, interner: &Interner) -> bool {
+    matches!(ty, Ty::Con { name, args, .. }
+        if args.is_empty() && interner.resolve(*name) == Some("EmailAddress"))
+}
+
+/// The [`canon::Type`] twin of [`ty_is_email_address`].
+fn canon_ty_is_email_address(ty: &canon::Type, interner: &Interner) -> bool {
+    matches!(ty, canon::Type::Con { name, args, .. }
+        if args.is_empty() && interner.resolve(*name) == Some("EmailAddress"))
+}
+
+/// Is `ty` a `List EmailAddress`?
+fn ty_is_list_of_email_address(ty: &Ty, interner: &Interner) -> bool {
+    matches!(ty, Ty::Con { name, args, .. }
+        if interner.resolve(*name) == Some("List")
+            && matches!(args.as_slice(), [inner] if ty_is_email_address(inner, interner)))
+}
+
+/// The [`canon::Type`] twin of [`ty_is_list_of_email_address`].
+fn canon_ty_is_list_of_email_address(ty: &canon::Type, interner: &Interner) -> bool {
+    matches!(ty, canon::Type::Con { name, args, .. }
+        if interner.resolve(*name) == Some("List")
+            && matches!(args.as_slice(), [inner] if canon_ty_is_email_address(inner, interner)))
+}
+
 /// Does `fields` match the `SmtpConfig` shape — `{ host, pass, port, user }`
 /// with `port : Int`, `pass : Secret` (sealed), and `host`/`user` `String`?
 /// Sorts `fields` in place.
@@ -787,9 +814,9 @@ fn is_email_ses_canon_shape(fields: &mut [(&str, &canon::Type)], interner: &Inte
 /// Does `fields` match the 9-field `EmailMessage` shape (NAMES + TYPES)? Sorts
 /// `fields` in place. The `attachments` element is checked to be a `List` of a
 /// record whose own shape is the `Attachment` shape (`{ content : Bytes,
-/// filename : String, mimeType : String }`); the `to`/`cc`/`bcc` are `List
-/// String`; the remaining five (`from`/`htmlBody`/`replyTo`/`subject`/
-/// `textBody`) are `String`.
+/// filename : String, mimeType : String }`); `to`/`cc`/`bcc` are `List
+/// EmailAddress`; `from`/`replyTo` are `EmailAddress`; `htmlBody`/`subject`/
+/// `textBody` are `String`.
 fn is_email_message_shape(fields: &mut [(&str, &Ty)], interner: &Interner) -> bool {
     if fields.len() != EMAIL_MESSAGE_FIELDS.len() {
         return false;
@@ -803,9 +830,9 @@ fn is_email_message_shape(fields: &mut [(&str, &Ty)], interner: &Interner) -> bo
         return false;
     }
     fields.iter().all(|(name, ty)| match *name {
-        "to" | "cc" | "bcc" => ty_is_list_of_string(ty, 1, interner),
+        "to" | "cc" | "bcc" => ty_is_list_of_email_address(ty, interner),
+        "from" | "replyTo" => ty_is_email_address(ty, interner),
         "attachments" => ty_is_list_of_attachment(ty, interner),
-        // from / htmlBody / replyTo / subject / textBody
         _ => ty_is_string(ty, interner),
     })
 }
@@ -824,7 +851,8 @@ fn is_email_message_canon_shape(fields: &mut [(&str, &canon::Type)], interner: &
         return false;
     }
     fields.iter().all(|(name, ty)| match *name {
-        "to" | "cc" | "bcc" => canon_ty_is_list_of_string(ty, 1, interner),
+        "to" | "cc" | "bcc" => canon_ty_is_list_of_email_address(ty, interner),
+        "from" | "replyTo" => canon_ty_is_email_address(ty, interner),
         "attachments" => canon_ty_is_list_of_attachment(ty, interner),
         _ => canon_ty_is_string(ty, interner),
     })
@@ -24358,8 +24386,6 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::MathMod
                 | KernelFn::MathRemainder
                 // ── Crypto arity-2 ─────────────────────────────────────
-                | KernelFn::CryptoHmacSha256
-                | KernelFn::CryptoHmacSha512
                 | KernelFn::CryptoRsaSha256Sign
                 | KernelFn::CryptoConstantTimeEqual
                 | KernelFn::CryptoAesGcmEncrypt
@@ -25945,8 +25971,12 @@ impl<'a> Lowerer<'a> {
                     ("Crypto", "sha512") => Ok(Callee::Kernel(KernelFn::CryptoSha512)),
                     ("Crypto", "sha1") => Ok(Callee::Kernel(KernelFn::CryptoSha1)),
                     ("Crypto", "md5") => Ok(Callee::Kernel(KernelFn::CryptoMd5)),
-                    ("Crypto", "hmacSha256") => Ok(Callee::Kernel(KernelFn::CryptoHmacSha256)),
-                    ("Crypto", "hmacSha512") => Ok(Callee::Kernel(KernelFn::CryptoHmacSha512)),
+                    ("Crypto", "hmacSha256") => {
+                        Ok(Callee::Kernel(KernelFn::CryptoHmacSha256WithKey))
+                    }
+                    ("Crypto", "hmacSha512") => {
+                        Ok(Callee::Kernel(KernelFn::CryptoHmacSha512WithKey))
+                    }
                     ("Crypto", "rsaSha256Sign") => {
                         Ok(Callee::Kernel(KernelFn::CryptoRsaSha256Sign))
                     }

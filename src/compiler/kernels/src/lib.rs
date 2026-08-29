@@ -1148,8 +1148,6 @@ pub enum StdlibKernel {
     CryptoSha512,
     CryptoSha1,
     CryptoMd5,
-    CryptoHmacSha256,
-    CryptoHmacSha512,
     CryptoRsaSha256Sign,
     CryptoRsaSha256Verify,
     CryptoConstantTimeEqual,
@@ -3182,8 +3180,6 @@ impl StdlibKernel {
             Self::CryptoSha512 => d("Crypto", "sha512", 1, Pure, "crypto_sha512"),
             Self::CryptoSha1 => d("Crypto", "sha1", 1, Pure, "crypto_sha1"),
             Self::CryptoMd5 => d("Crypto", "md5", 1, Pure, "crypto_md5"),
-            Self::CryptoHmacSha256 => d("Crypto", "hmacSha256", 2, Pure, "crypto_hmac_sha256"),
-            Self::CryptoHmacSha512 => d("Crypto", "hmacSha512", 2, Pure, "crypto_hmac_sha512"),
             Self::CryptoRsaSha256Sign => d(
                 "Crypto",
                 "rsaSha256Sign",
@@ -4886,8 +4882,6 @@ impl StdlibKernel {
         Self::CryptoSha512,
         Self::CryptoSha1,
         Self::CryptoMd5,
-        Self::CryptoHmacSha256,
-        Self::CryptoHmacSha512,
         Self::CryptoRsaSha256Sign,
         Self::CryptoRsaSha256Verify,
         Self::CryptoConstantTimeEqual,
@@ -6962,7 +6956,7 @@ impl StdlibKernel {
         const CONFIG_DECODE: TyShape = TyShape::Fun(&STRING, &DEC_A_TO_RESULT_ERR_A);
         // Config `loadFromFile : String -> Decoder a -> Task a`.
         const DEC_A_TO_TASK_A: TyShape = TyShape::Fun(&DEC_A, &TASK_A);
-        const CONFIG_LOAD: TyShape = TyShape::Fun(&STRING, &DEC_A_TO_TASK_A);
+        const CONFIG_LOAD: TyShape = TyShape::Fun(&PATH, &DEC_A_TO_TASK_A);
         // Config `keyValuePairs : Decoder a -> Decoder (List (String, a))`.
         const TUPLE_STRING_A: TyShape = TyShape::Tuple(&[STRING, A]);
         const LIST_TUPLE_STRING_A: TyShape = TyShape::Con(BuiltinTag::List, &[TUPLE_STRING_A]);
@@ -7839,17 +7833,18 @@ impl StdlibKernel {
         const LIST_EMAIL_ATTACHMENT: TyShape = TyShape::Con(BuiltinTag::List, &[EMAIL_ATTACHMENT]);
         // `EmailMessage { from, to, cc, bcc, subject, textBody, htmlBody,
         // attachments : List Attachment, replyTo }`.
+        const LIST_EMAIL_ADDRESS: TyShape = TyShape::Con(BuiltinTag::List, &[EMAIL_ADDRESS]);
         const EMAIL_MESSAGE: TyShape = TyShape::Record {
             fields: &[
-                (FieldTag::EmailFrom, &STRING),
-                (FieldTag::EmailTo, &LIST_STRING),
-                (FieldTag::EmailCc, &LIST_STRING),
-                (FieldTag::EmailBcc, &LIST_STRING),
+                (FieldTag::EmailFrom, &EMAIL_ADDRESS),
+                (FieldTag::EmailTo, &LIST_EMAIL_ADDRESS),
+                (FieldTag::EmailCc, &LIST_EMAIL_ADDRESS),
+                (FieldTag::EmailBcc, &LIST_EMAIL_ADDRESS),
                 (FieldTag::EmailSubject, &STRING),
                 (FieldTag::EmailTextBody, &STRING),
                 (FieldTag::EmailHtmlBody, &STRING),
                 (FieldTag::EmailAttachments, &LIST_EMAIL_ATTACHMENT),
-                (FieldTag::EmailReplyTo, &STRING),
+                (FieldTag::EmailReplyTo, &EMAIL_ADDRESS),
             ],
             tail: RowTailShape::Closed,
         };
@@ -8316,8 +8311,6 @@ impl StdlibKernel {
             Self::StringFromChar | Self::CharToLower | Self::CharToUpper => Some(&CHAR_TO_STRING),
             Self::StringAppend
             | Self::SystemGetenvOr
-            | Self::CryptoHmacSha256
-            | Self::CryptoHmacSha512
             | Self::CryptoAesKeyFromPassword
             | Self::CryptoChachaKeyFromPassword => Some(&STRING_TO_STRING_TO_STRING),
             Self::StringContains
@@ -9973,8 +9966,6 @@ impl StdlibKernel {
             | Self::CryptoSha512
             | Self::CryptoSha1
             | Self::CryptoMd5
-            | Self::CryptoHmacSha256
-            | Self::CryptoHmacSha512
             | Self::CryptoRsaSha256Sign
             | Self::CryptoRsaSha256Verify
             | Self::CryptoConstantTimeEqual
@@ -11372,8 +11363,6 @@ impl StdlibKernel {
             self,
             Self::CryptoSha256
                 | Self::CryptoSha512
-                | Self::CryptoHmacSha256
-                | Self::CryptoHmacSha512
                 | Self::CryptoHmacSha256WithKey
                 | Self::CryptoHmacSha512WithKey
                 | Self::CryptoConstantTimeEqual
