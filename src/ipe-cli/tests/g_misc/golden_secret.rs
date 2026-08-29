@@ -161,6 +161,60 @@ fn auth_sign_verify_round_trip_with_secret_key() {
     assert_eq!(out.stdout.trim(), "alice");
 }
 
+// ── (d) the un-applied-seal ban leaves the legitimate applied forms working ──
+
+/// `List.map (\s -> Secret.fromString s) runtimeStrings` — the sanctioned
+/// replacement for the banned point-free `List.map Secret.fromString …`. The
+/// seal is FULLY APPLIED to the lambda's own parameter, so the committed-literal
+/// gate still sees every argument; each element is a runtime `String` (an env
+/// read), never a source literal. `Secret.redacted` maps each sealed value back
+/// to the fixed placeholder — the plaintext markers must NEVER appear in stdout.
+#[test]
+fn map_seal_over_runtime_strings_builds_and_redacts() {
+    if !e2e_enabled() {
+        return;
+    }
+    let out = compile_build_run("m_secret_map_runtime");
+    assert_eq!(out.exit_code, Some(0), "got {:?}", out.exit_code);
+    for marker in ["sk_live_MAP_MARKER_A", "sk_live_MAP_MARKER_B"] {
+        assert!(
+            !out.stdout.contains(marker),
+            "a sealed runtime String's plaintext must NEVER echo. Full stdout: {:?}",
+            out.stdout
+        );
+    }
+    assert_eq!(
+        out.stdout.trim(),
+        "<redacted>,<redacted>",
+        "each sealed element redacts to the fixed placeholder. Full stdout: {:?}",
+        out.stdout
+    );
+}
+
+/// `Secret.fromString (System.getenvOr "APP_SECRET" "…")` — the seal applied
+/// DIRECTLY to a runtime `String`. A saturated call whose argument is a runtime
+/// value is accepted (only a source-text literal is refused); `Secret.redacted`
+/// proves the plaintext (the default marker) never echoes.
+#[test]
+fn direct_seal_over_env_string_builds_and_redacts() {
+    if !e2e_enabled() {
+        return;
+    }
+    let out = compile_build_run("m_secret_env_direct");
+    assert_eq!(out.exit_code, Some(0), "got {:?}", out.exit_code);
+    assert!(
+        !out.stdout.contains("sk_live_ENV_DIRECT_MARKER"),
+        "the sealed env String's plaintext must NEVER echo. Full stdout: {:?}",
+        out.stdout
+    );
+    assert_eq!(
+        out.stdout.trim(),
+        "<redacted>",
+        "Secret.redacted must print the fixed placeholder. Full stdout: {:?}",
+        out.stdout
+    );
+}
+
 // ── Pure compile-only smoke (always runs, no IPE_E2E / no cargo) ───────────
 
 /// All five fixtures above must at least `ipe`-compile cleanly even when
@@ -175,6 +229,8 @@ fn all_secret_goldens_compile() {
         "m_secret_record",
         "m_secret_log_redact",
         "m_secret_auth_roundtrip",
+        "m_secret_map_runtime",
+        "m_secret_env_direct",
     ] {
         let entry = golden_dir(&root, name).join("Main.ipe");
         let out = std::env::temp_dir().join(format!("ipec_{name}_compileonly"));

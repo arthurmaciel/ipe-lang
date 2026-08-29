@@ -465,6 +465,10 @@ code! {
     /// a committed string literal reached a `Secret`-typed position — a secret
     /// must not be baked into source; read it from the environment at runtime
     IPE_L0150 = "IPE-L0150", "a committed string literal cannot become a Secret", "IPE-L0150";
+    /// `Secret.fromString` was referenced without being fully applied (point-free,
+    /// let-bound, or passed as a value); it is legal only as a saturated one-argument
+    /// call so every argument passes the committed-literal seal gate
+    IPE_L0151 = "IPE-L0151", "`Secret.fromString` must be applied directly to its argument", "IPE-L0151";
     /// expression nests too deeply for the backend
     IPE_L0200 = "IPE-L0200", "expression nests too deeply for the backend", "IPE-L0200";
 

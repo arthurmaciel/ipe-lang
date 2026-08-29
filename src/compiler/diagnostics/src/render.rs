@@ -623,6 +623,11 @@ fn lower_prose(msg: &LowerError) -> String {
         LowerError::SecretFromStringLiteral => {
             "A secret can't be written straight into your code as a quoted string.".to_string()
         }
+        LowerError::SecretFromStringUnapplied => {
+            "`Secret.fromString` has to be called right on its argument — you can't pass it \
+             around or store it under a name."
+                .to_string()
+        }
         LowerError::UiCellsInWebShape(_) => {
             "`Ui.cells` paints a terminal character grid, so it has no meaning in a browser app."
                 .to_string()
@@ -1666,6 +1671,14 @@ fn lower_label(msg: &LowerError) -> String {
              baked into source. Read it from the environment at runtime with \
              `App.fromEnvRequired \"VAR\"`, or seal a `String` obtained at runtime with \
              `Secret.fromString`"
+                .to_string()
+        }
+        LowerError::SecretFromStringUnapplied => {
+            "`Secret.fromString` must be applied directly to its argument — it cannot be \
+             passed as a value, let-bound, or otherwise used point-free. The committed-literal \
+             seal gate reads the call's argument, so an un-applied reference would route a later \
+             argument around it. Write `Secret.fromString runtimeString`, or map with a lambda: \
+             `List.map (\\s -> Secret.fromString s) runtimeStrings`"
                 .to_string()
         }
         LowerError::UiCellsInWebShape(app) => format!(

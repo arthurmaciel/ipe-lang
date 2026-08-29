@@ -11413,6 +11413,32 @@ fn reject_point_free_store_kernel(callee: &Callee, span: Span) -> DResult<()> {
     Ok(())
 }
 
+/// Fail-closed SECURITY gate: `Secret.fromString` is legal ONLY as a saturated
+/// one-argument call. The committed-literal ban (IPE-L0150) inspects the
+/// ARGUMENT of a direct `Secret.fromString "…"` call — but that check is
+/// reachable only when the seal is fully applied at the call site. A reference
+/// that is NOT the callee of a saturated call — passed as a value
+/// (`List.map Secret.fromString […]`), let-bound (`seal = Secret.fromString`),
+/// or otherwise used point-free — reaches lowering as a bare kernel reify
+/// (`Callee::Kernel(SecretFromString)` with no argument in hand). Its eventual
+/// argument is supplied later, out of the literal gate's sight, so a committed
+/// credential slips through. Reject the un-applied reference here (IPE-L0151),
+/// so every path into a `Secret` flows through the saturated-call argument
+/// check — the seal is structural, not merely a call-site pattern. A no-op
+/// (`Ok`) for every other callee; the SATURATED direct call never reaches this
+/// reify path (it is intercepted as a `Call` upstream), so legitimate
+/// `Secret.fromString runtimeString` and `List.map (\s -> Secret.fromString s)`
+/// (the seal is applied to the lambda's own parameter) are unaffected.
+const fn reject_unapplied_secret_from_string(callee: &Callee, span: Span) -> DResult<()> {
+    if matches!(callee, Callee::Kernel(KernelFn::SecretFromString)) {
+        return Err(Diagnostic::Lower {
+            span,
+            msg: LowerError::SecretFromStringUnapplied,
+        });
+    }
+    Ok(())
+}
+
 /// Whether a column name derived from a record-field accessor is a valid SQL
 /// identifier — non-empty and ASCII-alphanumeric-or-underscore. A strict subset
 /// of the runtime's plain-mode identifier gate (defence in depth: the query
@@ -20892,6 +20918,14 @@ impl<'a> Lowerer<'a> {
                 // never-defined symbol (E0425). See
                 // [`reject_point_free_store_kernel`].
                 reject_point_free_store_kernel(&callee, e.span)?;
+                // Fail-closed SECURITY gate: an un-applied `Secret.fromString`
+                // reference (point-free, let-bound, passed as a value) routes
+                // around the committed-literal seal gate (IPE-L0150), which reads
+                // a SATURATED call's argument. Reject it so the seal is
+                // structural — every path into a `Secret` is a saturated call
+                // whose argument the literal gate sees. See
+                // [`reject_unapplied_secret_from_string`].
+                reject_unapplied_secret_from_string(&callee, e.span)?;
                 // For kernel callees use the JSON-aware type resolver so that
                 // a `Value = any = Ty::Var` in the argument / return position
                 // of a JSON kernel (e.g. `JsonEnc.string : String -> Value`)

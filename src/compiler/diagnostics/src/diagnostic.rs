@@ -18,17 +18,17 @@ use crate::code::{
     IPE_L0120, IPE_L0121, IPE_L0122, IPE_L0123, IPE_L0124, IPE_L0125, IPE_L0126, IPE_L0127,
     IPE_L0128, IPE_L0129, IPE_L0130, IPE_L0131, IPE_L0132, IPE_L0133, IPE_L0134, IPE_L0135,
     IPE_L0136, IPE_L0140, IPE_L0141, IPE_L0142, IPE_L0143, IPE_L0144, IPE_L0145, IPE_L0146,
-    IPE_L0147, IPE_L0148, IPE_L0149, IPE_L0150, IPE_L0200, IPE_N0001, IPE_N0002, IPE_N0003,
-    IPE_N0004, IPE_N0005, IPE_N0010, IPE_N0011, IPE_N0012, IPE_N0013, IPE_N0020, IPE_N0021,
-    IPE_N0022, IPE_N0023, IPE_N0024, IPE_N0025, IPE_N0026, IPE_N0027, IPE_N0028, IPE_N0029,
-    IPE_N0030, IPE_N0031, IPE_N0032, IPE_N0033, IPE_N0034, IPE_N0035, IPE_N0036, IPE_N0037,
-    IPE_N0038, IPE_N0039, IPE_N0040, IPE_N0041, IPE_N0042, IPE_N0043, IPE_N0044, IPE_P0001,
-    IPE_P0002, IPE_P0003, IPE_P0010, IPE_P0011, IPE_P0012, IPE_P0013, IPE_P0014, IPE_P0015,
-    IPE_P0016, IPE_P0017, IPE_P0018, IPE_P0020, IPE_P0021, IPE_P0030, IPE_P0031, IPE_P0040,
-    IPE_P0041, IPE_P0050, IPE_P0060, IPE_P0061, IPE_P0062, IPE_P0063, IPE_P0064, IPE_P0065,
-    IPE_P0066, IPE_P0067, IPE_S0001, IPE_T0001, IPE_T0002, IPE_T0003, IPE_T0004, IPE_T0010,
-    IPE_T0011, IPE_T0012, IPE_T0013, IPE_T0014, IPE_T0015, IPE_T0016, IPE_T0017, IPE_T0018,
-    IPE_T0019, IPE_T0020, Severity,
+    IPE_L0147, IPE_L0148, IPE_L0149, IPE_L0150, IPE_L0151, IPE_L0200, IPE_N0001, IPE_N0002,
+    IPE_N0003, IPE_N0004, IPE_N0005, IPE_N0010, IPE_N0011, IPE_N0012, IPE_N0013, IPE_N0020,
+    IPE_N0021, IPE_N0022, IPE_N0023, IPE_N0024, IPE_N0025, IPE_N0026, IPE_N0027, IPE_N0028,
+    IPE_N0029, IPE_N0030, IPE_N0031, IPE_N0032, IPE_N0033, IPE_N0034, IPE_N0035, IPE_N0036,
+    IPE_N0037, IPE_N0038, IPE_N0039, IPE_N0040, IPE_N0041, IPE_N0042, IPE_N0043, IPE_N0044,
+    IPE_P0001, IPE_P0002, IPE_P0003, IPE_P0010, IPE_P0011, IPE_P0012, IPE_P0013, IPE_P0014,
+    IPE_P0015, IPE_P0016, IPE_P0017, IPE_P0018, IPE_P0020, IPE_P0021, IPE_P0030, IPE_P0031,
+    IPE_P0040, IPE_P0041, IPE_P0050, IPE_P0060, IPE_P0061, IPE_P0062, IPE_P0063, IPE_P0064,
+    IPE_P0065, IPE_P0066, IPE_P0067, IPE_S0001, IPE_T0001, IPE_T0002, IPE_T0003, IPE_T0004,
+    IPE_T0010, IPE_T0011, IPE_T0012, IPE_T0013, IPE_T0014, IPE_T0015, IPE_T0016, IPE_T0017,
+    IPE_T0018, IPE_T0019, IPE_T0020, Severity,
 };
 use crate::span::Span;
 
@@ -1229,6 +1229,17 @@ pub enum LowerError {
     /// SECURITY-tier fail-closed gate converts a would-be committed-credential
     /// leak into an ipe-time error. [IPE-L0150]
     SecretFromStringLiteral,
+    /// `Secret.fromString` was referenced without being fully applied — passed
+    /// as a value (`List.map Secret.fromString …`), let-bound (`seal =
+    /// Secret.fromString`), or otherwise used point-free. The committed-literal
+    /// seal gate ([`Self::SecretFromStringLiteral`]) inspects the ARGUMENT of a
+    /// saturated call; an un-applied reference routes around it (the argument is
+    /// supplied later, out of the gate's sight), reopening the committed-secret
+    /// leak. `Secret.fromString` is therefore legal only as a direct
+    /// one-argument call, so every argument is seen. Carries no payload. The
+    /// SECURITY-tier fail-closed gate makes the seal structural: every path into
+    /// a `Secret` flows through the argument check. [IPE-L0151]
+    SecretFromStringUnapplied,
     /// `Ui.cells` (a raw terminal cell grid) appears in a `Web`/`WebView`
     /// program. It paints directly to the terminal and has no denotation in a
     /// browser view, so it is admissible only under the `Terminal` shape
@@ -1902,6 +1913,7 @@ const fn lower_code(msg: &LowerError) -> Code {
         LowerError::InadmissibleAppModel { .. } => IPE_L0120,
         LowerError::InadmissibleAppMsg { .. } => IPE_L0125,
         LowerError::SecretFromStringLiteral => IPE_L0150,
+        LowerError::SecretFromStringUnapplied => IPE_L0151,
         LowerError::BackendNestingTooDeep { .. } => IPE_L0200,
         LowerError::DecodeSucceedArityTooHigh { .. } => IPE_L0121,
         LowerError::RouteParamCountMismatch { .. } => IPE_L0122,
@@ -2271,6 +2283,15 @@ fn lower_help(msg: &LowerError) -> Vec<HelpLine> {
              (which returns a `Secret` directly), or seal a `String` the program obtained \
              at runtime with `Secret.fromString`. A runtime `String` is accepted here; only \
              a source-text literal is refused."
+                .into(),
+        )],
+        LowerError::SecretFromStringUnapplied => vec![HelpLine::Note(
+            "`Secret.fromString` seals its argument into a `Secret`, so it must be \
+             applied directly to that argument — the seal gate that refuses a committed \
+             literal reads the call's argument, and an un-applied reference hides the \
+             argument from it. Write `Secret.fromString runtimeString` (or, to map a list, \
+             `List.map (\\s -> Secret.fromString s) runtimeStrings`) instead of passing \
+             `Secret.fromString` as a value or binding it to a name."
                 .into(),
         )],
         LowerError::UiCellsInWebShape(_) => vec![HelpLine::Note(

@@ -76,3 +76,32 @@ fn secret_from_string_literal_is_rejected() {
         ipe_diagnostics::IPE_L0150,
     );
 }
+
+/// `List.map Secret.fromString [ "sk_live_committed" ]` — the seal is passed as
+/// a VALUE, so its argument (a committed literal) is applied later, out of the
+/// committed-literal gate's (IPE-L0150) sight. The un-applied-seal ban rejects
+/// the point-free reference at ipe compile time with `IPE-L0151`, fail-closed,
+/// keeping the literal gate structural: `Secret.fromString` is legal only as a
+/// saturated one-argument call, so every argument is seen.
+#[test]
+fn secret_from_string_point_free_is_rejected() {
+    assert_gate(
+        "secret_pointfree_rejected",
+        "secret_pointfree_rejected_emit",
+        ipe_diagnostics::IPE_L0151,
+    );
+}
+
+/// `let seal = Secret.fromString in seal "sk_live_committed"` — binding the seal
+/// to a name and applying the alias later is the same escape as the point-free
+/// case: the literal reaches a `Secret` on a path the argument gate never sees.
+/// The un-applied-seal ban rejects the aliasing reference at ipe compile time
+/// with `IPE-L0151`, fail-closed.
+#[test]
+fn secret_from_string_alias_is_rejected() {
+    assert_gate(
+        "secret_alias_rejected",
+        "secret_alias_rejected_emit",
+        ipe_diagnostics::IPE_L0151,
+    );
+}
