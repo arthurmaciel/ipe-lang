@@ -14,7 +14,7 @@ mimalloc = { version = "0.1", optional = true, default-features = false }
 # The Ipê runtime, bundled alongside this crate under `ipe_runtime_dep/`.
 # A relative path dependency: `cargo build` works in any environment
 # (cross-compiler container, offline, CI) because the source is local.
-ipe_runtime = { package = "ipe-runtime-rust", path = "ipe_runtime_dep", default-features = false, features = [] }
+ipe_runtime = { package = "ipe-runtime-rust", path = "__IPE_RUNTIME_PATH__", default-features = false, features = [] }
 
 [profile.dev]
 debug = 0
