@@ -3,8 +3,14 @@ module Main exposing (main)
 import Ipe.Http as Http
 import Ipe.Task as Task
 import Ipe.Io as Io
+import Ipe.Url as Url
 
 main : Task ()
 main =
-    Http.get "http://example.com"
-        |> Task.andThen (\_ -> Io.println "done")
+    case Url.fromString "http://example.com" of
+        Ok url ->
+            Http.get url
+                |> Task.andThen (\_ -> Io.println "done")
+
+        Err e ->
+            Task.fail e

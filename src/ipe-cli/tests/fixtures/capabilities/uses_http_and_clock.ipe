@@ -5,18 +5,24 @@ import Ipe.Time as Time
 import Ipe.Task as Task
 import Ipe.Io as Io
 import Ipe.String as String
+import Ipe.Url as Url
 
 main : Task ()
 main =
-    Time.now ()
-        |> Task.andThen
-            (\t ->
-                Http.get "https://httpbin.org/get"
-                    |> Task.andThen
-                        (\resp ->
-                            Io.println
-                                (Time.timeString t
-                                    ++ " body length: "
-                                    ++ String.fromInt (String.length resp.body))
-                        )
-            )
+    case Url.fromString "https://httpbin.org/get" of
+        Ok url ->
+            Time.now ()
+                |> Task.andThen
+                    (\t ->
+                        Http.get url
+                            |> Task.andThen
+                                (\resp ->
+                                    Io.println
+                                        (Time.timeString t
+                                            ++ " body length: "
+                                            ++ String.fromInt (String.length resp.body))
+                                )
+                    )
+
+        Err e ->
+            Task.fail e

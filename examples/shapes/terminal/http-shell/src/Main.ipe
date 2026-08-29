@@ -18,6 +18,7 @@ import Ipe.String as String
 import Ipe.System as System
 import Ipe.Tea.Terminal as Terminal
 import Ipe.Http as Http
+import Ipe.Url as Url
 import Ipe.Task as Task
 import Ipe.Tea.Terminal.Cmd as Cmd
 import Ipe.Tea.Terminal.Sub as Sub
@@ -59,13 +60,22 @@ update msg model =
     case msg of
         Entered command ->
             case command of
-                Get url ->
-                    ( { model
-                        | outcome = "fetching " ++ url ++ " ..."
-                        , requests = model.requests + 1
-                      }
-                    , Task.attempt Fetched (Task.map summarise (Http.get url))
-                    )
+                Get raw ->
+                    case Url.fromString raw of
+                        Ok url ->
+                            ( { model
+                                | outcome = "fetching " ++ raw ++ " ..."
+                                , requests = model.requests + 1
+                              }
+                            , Task.attempt Fetched (Task.map summarise (Http.get url))
+                            )
+
+                        Err _err ->
+                            ( { model
+                                | outcome = "?  not a valid absolute URL: " ++ raw
+                              }
+                            , Cmd.none
+                            )
 
                 Quit ->
                     ( model, Cmd.perform (System.exit 0) (\_ -> Entered Blank) )

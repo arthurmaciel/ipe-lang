@@ -51,7 +51,7 @@ mod tests {
     #[test]
     fn http_program_infers_network() {
         let caps = caps_of(
-            "module Main exposing (main)\nimport Ipe.Http\nimport Ipe.Io\nimport Ipe.Task\nmain : Task ()\nmain =\n    Task.andThen (\\_ -> Io.println \"done\") (Http.get \"http://example.com\")\n",
+            "module Main exposing (main)\nimport Ipe.Http\nimport Ipe.Io\nimport Ipe.Task\nmain : Task ()\nmain =\n    case Http.defaultRequestFromString \"http://example.com\" of\n        Ok req ->\n            Task.andThen (\\_ -> Io.println \"done\") (Http.request req)\n\n        Err e ->\n            Task.fail e\n",
         );
         assert_eq!(
             caps,
@@ -68,7 +68,7 @@ mod tests {
     #[test]
     fn exposed_library_module_without_main_infers_network() {
         let caps = caps_of(
-            "module Extra exposing (fetch)\nimport Ipe.Http\nimport Ipe.Io\nimport Ipe.Task\nfetch : Task ()\nfetch =\n    Task.andThen (\\_ -> Io.println \"done\") (Http.get \"http://example.com\")\n",
+            "module Extra exposing (fetch)\nimport Ipe.Http\nimport Ipe.Io\nimport Ipe.Task\nfetch : Task ()\nfetch =\n    case Http.defaultRequestFromString \"http://example.com\" of\n        Ok req ->\n            Task.andThen (\\_ -> Io.println \"done\") (Http.request req)\n\n        Err e ->\n            Task.fail e\n",
         );
         assert_eq!(
             caps,

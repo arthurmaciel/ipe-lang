@@ -8064,9 +8064,9 @@ impl StdlibKernel {
         const DB_MIGRATE: TyShape = TyShape::Fun(&DB, &LIST_MIGRATION_TO_TASK);
         // Http.
         const TASK_HTTP_RESPONSE: TyShape = TyShape::Con(BuiltinTag::Task, &[HTTP_RESPONSE]);
-        const HTTP_GET: TyShape = TyShape::Fun(&STRING, &TASK_HTTP_RESPONSE);
+        const HTTP_GET: TyShape = TyShape::Fun(&URL, &TASK_HTTP_RESPONSE);
         const STRING_TO_TASK_HTTP_RESPONSE: TyShape = TyShape::Fun(&STRING, &TASK_HTTP_RESPONSE);
-        const HTTP_POST: TyShape = TyShape::Fun(&STRING, &STRING_TO_TASK_HTTP_RESPONSE);
+        const HTTP_POST: TyShape = TyShape::Fun(&URL, &STRING_TO_TASK_HTTP_RESPONSE);
         const HTTP_DO_REQUEST: TyShape = TyShape::Fun(&HTTP_REQUEST, &TASK_HTTP_RESPONSE);
         const RESULT_ERROR_HTTP_REQUEST: TyShape =
             TyShape::Con(BuiltinTag::Result, &[ERROR, HTTP_REQUEST]);
@@ -12139,6 +12139,11 @@ impl StdlibKernel {
                 //     (`defaultRequest`/`withMethod`/…), which have no
                 //     runtime symbol at all (inline `HttpRequest{..}` struct
                 //     literals in `emit_expr.rs`) and so carry no wasm risk.
+                //   - `Url` → the `url` crate's pure parser (url.rs), which has
+                //     a genuine wasm32 build (no host I/O, no tokio). Required
+                //     because `Http.get`/`post` take a typed `Url`, whose only
+                //     constructor (`Url.fromString`) must be callable on the
+                //     client for a browser fetch to build a request at all.
                 matches!(
                     decl.qualifier,
                     "String"
@@ -12165,6 +12170,7 @@ impl StdlibKernel {
                         | "Log"
                         | "Random"
                         | "Http"
+                        | "Url"
                 ) ||
                 // Pure calendar helpers (chrono, no clock read) PLUS the M4
                 // `Date.now()`/`setTimeout` clock+sleep substitutes.
@@ -13094,6 +13100,11 @@ mod tests {
             StdlibKernel::HttpPost,
             StdlibKernel::HttpRequest,
             StdlibKernel::HttpParseQuery,
+            // `Http.get`/`post` take a typed `Url`; the `url` crate parser has a
+            // wasm build, so the constructor + accessors are client-available.
+            StdlibKernel::UrlFromString,
+            StdlibKernel::UrlToString,
+            StdlibKernel::UrlScheme,
             StdlibKernel::TimeNow,
             StdlibKernel::TimeSleep,
             StdlibKernel::TimeUnixMillis,
