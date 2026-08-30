@@ -2363,14 +2363,11 @@ fn ir_type_mentions(ty: &IrType, leaf: &impl Fn(&IrType) -> bool) -> bool {
 /// used-check must include the TYPES, not just the kernels; otherwise
 /// `ServerResponse` is referenced but undefined (E0412 — a SEAL breach).
 fn ir_type_mentions_server(ty: &IrType) -> bool {
+    // The `server`-gated opaque handles all map to `RuntimeFeatureId::Server` in
+    // the SSOT; routing through it keeps this view total and drift-free (a new
+    // `server`-gated leaf is detected here the day its requirement is declared).
     ir_type_mentions(ty, &|t| {
-        matches!(
-            t,
-            IrType::ServerRequest
-                | IrType::ServerResponse
-                | IrType::ServerRoute
-                | IrType::ServerCookie
-        )
+        ipe_ir::ir_type_feature_requirement(t) == Some(ipe_ir::RuntimeFeatureId::Server)
     })
 }
 
@@ -2398,7 +2395,7 @@ fn ir_type_mentions_sqlvalue(ty: &IrType, sqlvalue: Symbol, sqlfield: Symbol) ->
 /// for the client surface.
 fn ir_type_mentions_http(ty: &IrType) -> bool {
     ir_type_mentions(ty, &|t| {
-        matches!(t, IrType::HttpRequest | IrType::HttpMethod)
+        ipe_ir::ir_type_feature_requirement(t) == Some(ipe_ir::RuntimeFeatureId::HttpClient)
     })
 }
 
@@ -2410,7 +2407,9 @@ fn ir_type_mentions_http(ty: &IrType) -> bool {
 /// still references the type in emitted code, and the module (and its `csv`
 /// dependency) must be present. Mirrors [`ir_type_mentions_http`].
 fn ir_type_mentions_csv(ty: &IrType) -> bool {
-    ir_type_mentions(ty, &|t| matches!(t, IrType::CsvDoc))
+    ir_type_mentions(ty, &|t| {
+        ipe_ir::ir_type_feature_requirement(t) == Some(ipe_ir::RuntimeFeatureId::Csv)
+    })
 }
 
 /// `true` when `ty` mentions the `Ipe.Cache` config record `CacheCfg`
@@ -2426,7 +2425,9 @@ fn ir_type_mentions_csv(ty: &IrType) -> bool {
 /// separately by [`ir_type_mentions_cache_handle`] (which needs the interner to
 /// resolve its `Ipe.Cache.Cache` identity). Mirrors [`ir_type_mentions_csv`].
 fn ir_type_mentions_cache(ty: &IrType) -> bool {
-    ir_type_mentions(ty, &|t| matches!(t, IrType::CacheCfg | IrType::CacheStats))
+    ir_type_mentions(ty, &|t| {
+        ipe_ir::ir_type_feature_requirement(t) == Some(ipe_ir::RuntimeFeatureId::CacheKernel)
+    })
 }
 
 /// `true` when `ty` mentions the opaque `Ipe.Cache` handle enum — an
@@ -2496,7 +2497,9 @@ fn ir_type_mentions_http_stream(ty: &IrType, interner: &Interner) -> bool {
 /// `Algorithm` also folds to `IrType::Secret` (see the JWT `Algorithm` alias),
 /// so this guard covers it too. Mirrors [`ir_type_mentions_csv`].
 fn ir_type_mentions_secret(ty: &IrType) -> bool {
-    ir_type_mentions(ty, &|t| matches!(t, IrType::Secret))
+    ir_type_mentions(ty, &|t| {
+        ipe_ir::ir_type_feature_requirement(t) == Some(ipe_ir::RuntimeFeatureId::Secret)
+    })
 }
 
 /// `true` when `ty` mentions the `Ipe.Decimal` opaque type `Decimal`, defined in
@@ -2511,7 +2514,9 @@ fn ir_type_mentions_secret(ty: &IrType) -> bool {
 /// alone would emit that reference with no module in scope (E0433 — a SEAL
 /// breach). Mirrors [`ir_type_mentions_secret`].
 fn ir_type_mentions_decimal(ty: &IrType) -> bool {
-    ir_type_mentions(ty, &|t| matches!(t, IrType::Decimal))
+    ir_type_mentions(ty, &|t| {
+        ipe_ir::ir_type_feature_requirement(t) == Some(ipe_ir::RuntimeFeatureId::Decimal)
+    })
 }
 
 /// `true` when `ty` mentions `Json` (`IrType::Json`, rendered `JsonVal`) or a
@@ -2524,7 +2529,25 @@ fn ir_type_mentions_decimal(ty: &IrType) -> bool {
 /// even when it calls no `Json.*` kernel (a decoder forwarded as a parameter) —
 /// the type-mention guard the fail-closed `uses_json` requires.
 fn ir_type_mentions_json(ty: &IrType) -> bool {
-    ir_type_mentions(ty, &|t| matches!(t, IrType::Json | IrType::Decoder(_)))
+    ir_type_mentions(ty, &|t| {
+        ipe_ir::ir_type_feature_requirement(t) == Some(ipe_ir::RuntimeFeatureId::Json)
+    })
+}
+
+/// `true` when `ty` mentions the `Ipe.Url` opaque type `Url`, rendered
+/// `ipe_runtime::url::Url` (feature-gated on `url`). A stdlib type can EMBED a
+/// `Url` field (`{ src : Url }`) and be brought into a program by a plain import
+/// with no `Url` KERNEL call, so a program that only NAMES a `Url` value in a
+/// signature, record field, or enum-variant payload still emits a
+/// `ipe_runtime::url::Url` reference resolved through the gated module — dropping
+/// `url` on the call-site flag alone leaves that reference dangling (E0433 — the
+/// breach this closes). Routed through the [`ipe_ir::ir_type_feature_requirement`]
+/// SSOT so the leaf can never again be silently un-gated. Mirrors
+/// [`ir_type_mentions_secret`].
+fn ir_type_mentions_url(ty: &IrType) -> bool {
+    ir_type_mentions(ty, &|t| {
+        ipe_ir::ir_type_feature_requirement(t) == Some(ipe_ir::RuntimeFeatureId::Url)
+    })
 }
 
 /// Does any [`IrType`] occurring ANYWHERE in `expr` satisfy `pred`?
@@ -15848,17 +15871,19 @@ impl<'a> Lowerer<'a> {
         let uses_jwt = kernel_usage.jwt;
 
         // detect `Ipe.Url` usage — any `Url.fromString` / `toString` / `scheme` /
-        // `host` / `port` / `path` / `query` / `fragment` / `buildQuery` kernel.
-        // The backend uses this flag to declare `url` in the emitted
+        // `host` / `port` / `path` / `query` / `fragment` / `buildQuery` kernel,
+        // OR any emittable type position that mentions the `Url` opaque type. The
+        // backend uses this flag to declare `url` in the emitted
         // `ipe_runtime/mod.rs` and add the `url` crate (with its `idna` → ICU4X
-        // subtree). No type-mention guard is needed: the opaque `Url` type has a
-        // single constructor (`Url.fromString`), itself a `Url` kernel, so a
-        // program holding a `Url` value has necessarily called one — a signature
-        // can never mention `Url` without a call site setting this flag. The
-        // `http_client` / `ws_client` surfaces also parse with the `url` crate, so
-        // the backend force-declares `url` under
-        // `uses_url || reaches_http_client || uses_websocket`.
-        let uses_url = kernel_usage.url;
+        // subtree). The type-mention guard is REQUIRED: a stdlib type can EMBED a
+        // `Url` field and be brought in by a plain import with no `Url` KERNEL
+        // call, so a program that only NAMES a `Url` value still emits a
+        // `ipe_runtime::url::Url` reference — omitting the guard drops the module
+        // with the reference left dangling (E0433). The `http_client` / `ws_client`
+        // surfaces also parse with the `url` crate, so the backend force-declares
+        // `url` under `uses_url || reaches_http_client || uses_websocket`.
+        let uses_url = kernel_usage.url
+            || program_type_mentions(&funcs, &records, &types_ir, &ir_type_mentions_url);
 
         // detect Ipe.Ui / Ipe.Html / Ipe.Web / Ipe.Tui / Ipe.WebView usage.
         // TUI runtime files (tui/app.rs, tui/layout.rs, tui/focus.rs) import

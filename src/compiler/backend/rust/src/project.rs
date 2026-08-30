@@ -1569,11 +1569,16 @@ pub fn emit_program(ctx: &EmitCtx, program: &Program) -> DResult<EmittedProject>
         // Empty (nothing pushed) when the program has no row annotation.
         out.push_str(&emit_row_witnesses(ctx, program)?);
 
-        // boundary-projection impl blocks.  When the program uses Db
+        // boundary-projection impl blocks.  When the program uses Db QUERY
         // kernels, the lowerer injected synthetic `SqlValue` / `SqlField`
-        // enums.  The Db call sites need to project Ipê ADT values to the
-        // runtime's concrete `SqlParam` / `Option<SqlParam>`.
-        if ctx.uses_db {
+        // enums, and the Db call sites project Ipê ADT values to the runtime's
+        // concrete `SqlParam` / `Option<SqlParam>`. Keyed on the injected enum's
+        // PRESENCE, not on `uses_db`: a program that only NAMES a `db`-gated type
+        // (`Dsn` / `Connection`) forces the `db` feature (for `dsn.rs` /
+        // `external_conn.rs`) through the type-closure fold without injecting a
+        // `SqlValue` enum, so there is no projection to emit — gating on
+        // `uses_db` would then reference an enum that does not exist.
+        if ctx.sqlvalue_rust_name.is_some() {
             out.push_str(&emit_db_projection_impls(ctx)?);
         }
 
