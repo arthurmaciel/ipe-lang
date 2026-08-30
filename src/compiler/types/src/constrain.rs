@@ -8038,7 +8038,9 @@ impl<'a> Builder<'a> {
             K::StringReverse | K::StringRight | K::StringSlice | K::StringStartsWith |
             K::StringStartsWithIn | K::StringToLower | K::StringToUpper | K::StringTrim |
             K::StringTrimEnd | K::StringTrimStart | K::SystemGetenvOr | K::TimeDaysInMonth |
-            K::TimeIsLeapYear | K::TimeTimeString | K::UiDarkMode | K::UiDesktop |
+            K::TimeIsLeapYear | K::TimeTimeString | K::TimeFormat | K::TimeFormatHTTP |
+            K::TimeFormatISO8601 | K::TimeFormatRFC3339 | K::TimeAddMillis | K::TimeDiffMillis |
+            K::UiDarkMode | K::UiDesktop |
             K::UiLightMode | K::UiMobile | K::UiReducedMotion | K::UiTablet => return None,
 
             K::WebAppRouted => return None,
@@ -9577,6 +9579,12 @@ mod registry_phase_c_tests {
             K::TimeTimeString,
             K::TimeIsLeapYear,
             K::TimeDaysInMonth,
+            K::TimeFormat,
+            K::TimeFormatHTTP,
+            K::TimeFormatISO8601,
+            K::TimeFormatRFC3339,
+            K::TimeAddMillis,
+            K::TimeDiffMillis,
             K::TimeEvery,
             // System (11)
             K::SystemArgs,
@@ -11323,7 +11331,11 @@ mod registry_phase_c_tests {
             K::BasicsNot => fun(bool_ty(), bool_ty()),
 
             // ── String / Money / Time primitive shapes. ──
-            K::StringFromInt | K::TimeTimeString => fun(int(), string()),
+            K::StringFromInt
+            | K::TimeTimeString
+            | K::TimeFormatHTTP
+            | K::TimeFormatISO8601
+            | K::TimeFormatRFC3339 => fun(int(), string()),
             K::StringFromFloat => fun(float(), string()),
             // `Money.minorUnits : String -> Int` (the ISO-code-taking kernel).
             K::StringLength | K::MoneyMinorUnits => fun(string(), int()),
@@ -11401,7 +11413,10 @@ mod registry_phase_c_tests {
 
             // ── Time calendar helpers. ──
             K::TimeIsLeapYear => fun(int(), bool_ty()),
-            K::TimeDaysInMonth => fun(int(), fun(int(), int())),
+            K::TimeDaysInMonth | K::TimeAddMillis | K::TimeDiffMillis => {
+                fun(int(), fun(int(), int()))
+            }
+            K::TimeFormat => fun(string(), fun(int(), string())),
 
             // ── RateLimit / string constants. ──
             K::RateLimitAllow => fun(string(), fun(string(), fun(int(), fun(int(), bool_ty())))),

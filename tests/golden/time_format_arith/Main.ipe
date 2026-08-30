@@ -1,0 +1,23 @@
+module Main exposing (main)
+
+import Ipe.Io as Io
+import Ipe.String
+import Ipe.Task as Task
+import Ipe.Time as Time
+
+
+-- Fixed epoch-ms (2023-11-14 22:13:20 UTC) exercises every newly registered
+-- kernel without reading the system clock.
+epochMs : Int
+epochMs =
+    1700000000000
+
+
+main : Task Error ()
+main =
+    Io.println (Time.format "2006-01-02" epochMs)
+        |> Task.andThen (\_ -> Io.println (Time.formatHTTP epochMs))
+        |> Task.andThen (\_ -> Io.println (Time.formatISO8601 epochMs))
+        |> Task.andThen (\_ -> Io.println (Time.formatRFC3339 epochMs))
+        |> Task.andThen (\_ -> Io.println (String.fromInt (Time.addMillis 5000 epochMs)))
+        |> Task.andThen (\_ -> Io.println (String.fromInt (Time.diffMillis (epochMs + 5000) epochMs)))

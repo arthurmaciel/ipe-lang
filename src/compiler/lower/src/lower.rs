@@ -24169,6 +24169,9 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::TimeUnixMillis
                 | KernelFn::TimeTimeString
                 | KernelFn::TimeIsLeapYear
+                | KernelFn::TimeFormatHTTP
+                | KernelFn::TimeFormatISO8601
+                | KernelFn::TimeFormatRFC3339
                 // ── System arity-1 ──────────────────────────────────────
                 | KernelFn::SystemArgs
                 | KernelFn::SystemGetenv
@@ -24476,8 +24479,11 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::JsonDecMap
                 | KernelFn::JsonDecAndThen
                 | KernelFn::JsonDecPCustom
-                // ── Time arity-2 (Ipe.Time calendar helper) ─────────────────
+                // ── Time arity-2 (Ipe.Time calendar helpers + arithmetic) ────
                 | KernelFn::TimeDaysInMonth
+                | KernelFn::TimeFormat
+                | KernelFn::TimeAddMillis
+                | KernelFn::TimeDiffMillis
                 // ── Math arity-2 (Float → Float → Float) ────────────────────
                 | KernelFn::MathPow
                 | KernelFn::MathHypot
@@ -26188,6 +26194,12 @@ impl<'a> Lowerer<'a> {
                     ("Time", "timeString") => Ok(Callee::Kernel(KernelFn::TimeTimeString)),
                     ("Time", "isLeapYear") => Ok(Callee::Kernel(KernelFn::TimeIsLeapYear)),
                     ("Time", "daysInMonth") => Ok(Callee::Kernel(KernelFn::TimeDaysInMonth)),
+                    ("Time", "format") => Ok(Callee::Kernel(KernelFn::TimeFormat)),
+                    ("Time", "formatHTTP") => Ok(Callee::Kernel(KernelFn::TimeFormatHTTP)),
+                    ("Time", "formatISO8601") => Ok(Callee::Kernel(KernelFn::TimeFormatISO8601)),
+                    ("Time", "formatRFC3339") => Ok(Callee::Kernel(KernelFn::TimeFormatRFC3339)),
+                    ("Time", "addMillis") => Ok(Callee::Kernel(KernelFn::TimeAddMillis)),
+                    ("Time", "diffMillis") => Ok(Callee::Kernel(KernelFn::TimeDiffMillis)),
                     // ── System kernels ──────────────────────────────────
                     ("System", "args") => Ok(Callee::Kernel(KernelFn::SystemArgs)),
                     ("System", "getenv") => Ok(Callee::Kernel(KernelFn::SystemGetenv)),
