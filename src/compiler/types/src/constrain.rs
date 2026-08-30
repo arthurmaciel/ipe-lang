@@ -3593,7 +3593,7 @@ impl<'a> Builder<'a> {
             // the Model var (var index 0) and notFound var (var index 2), then
             // push a `RoutedWebCheck` so `resolve_routed_web_checks` can run
             // the gate after the HM solver settles.
-            if matches!(k, StdlibKernel::WebApp) {
+            if matches!(k, StdlibKernel::WebApp | StdlibKernel::WebEmbed) {
                 let ty = self.stdlib_scheme(k).ok_or(Diagnostic::Lower {
                     span,
                     msg: LowerError::Unsupported(Feature::Kernels),
@@ -5984,6 +5984,11 @@ impl<'a> Builder<'a> {
             | K::ServerAny
             | K::ServerApi => fun(string(), fun(fun(req(), task(resp())), route())),
             K::ServerStatic => fun(string(), fun(string(), route())),
+            // `mountApp : String -> WebApp -> Route`. The nominal `WebApp` in
+            // the second slot is the §9 type gate: a `TuiApp`/`CliApp`/
+            // `WebViewApp` (or any non-`WebApp`) fails to unify here (IPE-T0001)
+            // — an app of the wrong shape is unrepresentable in a mount.
+            K::ServerMountApp => fun(string(), fun(web_app_leaf(), route())),
             K::ServerListen => fun(int(), fun(list(route()), task_unit())),
             K::ServerText | K::ServerJson | K::ServerHtml | K::ServerRedirect => {
                 fun(string(), resp())
@@ -6829,7 +6834,10 @@ impl<'a> Builder<'a> {
             // (emit_web.rs T5) — not at type time.
             //
             // Removes #[allow(dead_code)] from `live_f_routes` / `live_f_not_found`.
-            K::WebApp => {
+            // `Web.embed` shares `Web.app`'s exact six-field cfg scheme — both
+            // produce the `WebApp` leaf from the same record. `embed`'s handle
+            // is destined for `Server.mountApp`; `app`'s binds its own listener.
+            K::WebApp | K::WebEmbed => {
                 // `view : Model -> Element Msg`; the framework applies
                 // `Ui.layout` internally, unifying the graphical shapes on
                 // `Element`. Raw HTML is reached through the `Ui.html` node
@@ -10705,6 +10713,9 @@ mod registry_phase_c_tests {
             K::TaskMap4,
             K::TaskMap5,
             K::TaskAttempt,
+            // `Web.embed : WebConfig -> WebApp` — Ipê-new (no legacy oracle);
+            // a mountable web-app handle sharing `Web.app`'s cfg scheme.
+            K::WebEmbed,
             // ── Ipe.App runtime-config front door (8, Ipê-new) ──────────────
             K::WebAppWith,
             K::AppFromEnv,
@@ -10734,6 +10745,9 @@ mod registry_phase_c_tests {
             K::WebCsrfInherit,
             K::WebRevocationOff,
             K::WebRevocationStore,
+            // `Server.mountApp : String -> WebApp -> Route` — Ipê-new (no legacy
+            // oracle); mounts an embedded web app into the shared server router.
+            K::ServerMountApp,
             // `Server.withRevocation : RevocationMode -> AuthConfig -> AuthConfig` —
             // Ipê-new (no legacy oracle); arms the revocation gate on an auth config.
             K::ServerWithRevocation,

@@ -676,12 +676,18 @@ const RUNTIME_MOD_RS_CSV_APPEND: &str = "pub mod csv;\npub use csv::*;\n";
 const SHAPE_APP_BLOCK_ON_ANCHOR: &str = "block_on(ipe_main())";
 /// Replacement: calls the leaf type's `run_blocking()` method.
 const SHAPE_APP_RUN_BLOCKING: &str = "ipe_main().run_blocking()";
-/// Leaf constructor prefixes used to detect a shape-app program in emitted text.
-const SHAPE_APP_LEAVES: &[&str] = &[
-    "ipe_runtime::tea::WebViewApp(",
-    "ipe_runtime::tea::WebApp(",
-    "ipe_runtime::tea::TuiApp(",
-    "ipe_runtime::tea::CliApp(",
+/// `ipe_main`'s RETURN-TYPE render for each shape-app leaf. The entry switch
+/// fires only when `ipe_main`'s own signature returns a leaf — NOT merely when a
+/// leaf constructor appears anywhere in the body. A `Server.mountApp
+/// (Web.embed { … })` program builds a `WebApp(…)` value inside `ipe_main`'s
+/// body but `ipe_main` itself returns `IpeTask<()>` (`Server.listen`), so it is
+/// a Program (`block_on`), not a shape app. Keying on the return type keeps the
+/// two apart.
+const SHAPE_APP_RETURN_TYPES: &[&str] = &[
+    "fn ipe_main() -> ipe_runtime::tea::WebViewApp",
+    "fn ipe_main() -> ipe_runtime::tea::WebApp",
+    "fn ipe_main() -> ipe_runtime::tea::TuiApp",
+    "fn ipe_main() -> ipe_runtime::tea::CliApp",
 ];
 
 // ── Ipe.Encoding / Ipe.Bytes — base64 / hex / percent codecs ─────────────────
@@ -1627,7 +1633,7 @@ pub fn emit_program(ctx: &EmitCtx, program: &Program) -> DResult<EmittedProject>
         // WASM: `epilogue_wasm` uses a different entry without `block_on`, so
         // the switch is skipped there.
         if ctx.target == ipe_ir::Target::Native
-            && SHAPE_APP_LEAVES.iter().any(|ctor| out.contains(ctor))
+            && SHAPE_APP_RETURN_TYPES.iter().any(|sig| out.contains(sig))
         {
             let replaced = out.replacen(SHAPE_APP_BLOCK_ON_ANCHOR, SHAPE_APP_RUN_BLOCKING, 1);
             if replaced == out {
@@ -3043,19 +3049,25 @@ pub fn emit_spine(ctx: &EmitCtx, program: &Program) -> DResult<String> {
     // is already correct from the IR. Only the epilogue's `fn main` body needs
     // updating: swap `block_on(ipe_main())` for `ipe_main().run_blocking()`.
     //
-    // `CliApp` does not set a shape flag in `EmitCtx`, so it cannot be detected
-    // via the flag-based path used by Web/Tui/WebView. Instead, check whether
-    // any module's entry function returns `IrType::CliApp` directly from the IR.
-    let uses_cli_app = program.modules.iter().any(|m| {
+    // The switch fires iff the program's ENTRY function itself RETURNS a shape
+    // leaf (`WebApp`/`WebViewApp`/`TuiApp`/`CliApp`) — read directly from the IR,
+    // NOT from the coarse `uses_web` flag. A `Server.listen [ Server.mountApp
+    // (Web.embed { … }) … ]` program sets `uses_web` (it builds an embedded
+    // `WebApp` value) yet its `main` returns `IpeTask<()>`; it is a Program
+    // (`block_on`), not a shape app. Keying on the entry's return type keeps the
+    // two apart (and subsumes the old `CliApp`-has-no-flag special case).
+    let main_returns_shape_leaf = program.modules.iter().any(|m| {
         m.entry.is_some_and(|eid| {
-            m.funcs
-                .iter()
-                .any(|f| f.id == eid && matches!(f.ret, IrType::CliApp))
+            m.funcs.iter().any(|f| {
+                f.id == eid
+                    && matches!(
+                        f.ret,
+                        IrType::WebApp | IrType::WebViewApp | IrType::TuiApp | IrType::CliApp
+                    )
+            })
         })
     });
-    let uses_shape_app_leaf_flagged =
-        ctx.uses_web || ctx.uses_tui || ctx.uses_webview || uses_cli_app;
-    if uses_shape_app_leaf_flagged && ctx.target == ipe_ir::Target::Native {
+    if main_returns_shape_leaf && ctx.target == ipe_ir::Target::Native {
         let replaced = out.replacen(SHAPE_APP_BLOCK_ON_ANCHOR, SHAPE_APP_RUN_BLOCKING, 1);
         if replaced == out {
             return Err(Diagnostic::CompilerBug {

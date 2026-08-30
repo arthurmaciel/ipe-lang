@@ -3210,6 +3210,10 @@ fn emit_server_call(
         | KernelFn::ServerAny
         | KernelFn::ServerApi
         | KernelFn::ServerStatic
+        // `Server.mountApp prefix webApp` → `server_mount_app(prefix, webApp)`
+        // via the standard 2-arg call path; the `WebApp` arg is the leaf value
+        // built by `Web.embed` (a `WebApp(web_app(...))` handle).
+        | KernelFn::ServerMountApp
         | KernelFn::ServerListen
         | KernelFn::ServerText
         | KernelFn::ServerJson

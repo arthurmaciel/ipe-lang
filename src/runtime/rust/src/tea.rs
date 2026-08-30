@@ -609,17 +609,68 @@ where
 // msg/model type parameters from the program's `main` type signature while
 // keeping the emit path concrete (no `dyn`).
 
-/// Opaque app handle returned by `Web.app` / `Web.appRouted` / `Web.appWith`.
-/// Backed by a boxed `IpeTask<IpeError, ()>`; run via `run_blocking`.
+/// A concrete-erased builder that, given a mount base-path prefix, produces the
+/// embedded web app's fully-layered axum `Router` (the same router the
+/// standalone `serve_web` binds). Boxed so `WebApp` stays non-generic — the box
+/// is over the *builder*, NOT the app's handlers: `init`/`update`/`view`/`subs`
+/// are concrete monomorphised closures captured inside, so the mounted app is
+/// erased-free at the handler level (§9: no `dyn` over the app / handlers).
+#[cfg(all(not(target_arch = "wasm32"), feature = "web"))]
+pub type MountBuilder = Box<
+    dyn FnOnce(String) -> std::pin::Pin<Box<dyn std::future::Future<Output = axum::Router> + Send>>
+        + Send,
+>;
+
+/// Opaque app handle returned by `Web.app` / `Web.appRouted` / `Web.appWith`
+/// (standalone) or `Web.embed` (mountable). The `WebApp(...)` tuple form is the
+/// leaf-constructor the backend's shape-app entry switch detects; the inner
+/// [`WebAppKind`] selects the run mode.
 #[cfg(not(target_arch = "wasm32"))]
-pub struct WebApp(pub crate::IpeTask<crate::error::IpeError, ()>);
+pub struct WebApp(pub WebAppKind);
+
+/// The two run modes a `WebApp` leaf can carry.
+///
+/// * `Standalone` — from `Web.app`: a fully-built server task that binds its
+///   own listener. `run_blocking` drives it.
+/// * `Mountable` — from `Web.embed`: carries BOTH a standalone `serve` task (so
+///   a top-level `main = Web.embed { … }` still runs on its own port) AND a
+///   `router` builder that `Server.mountApp` nests under a prefix on the shared
+///   server port (one listener).
+#[cfg(not(target_arch = "wasm32"))]
+pub enum WebAppKind {
+    Standalone(crate::IpeTask<crate::error::IpeError, ()>),
+    #[cfg(feature = "web")]
+    Mountable {
+        serve: crate::IpeTask<crate::error::IpeError, ()>,
+        router: MountBuilder,
+    },
+}
 
 #[cfg(not(target_arch = "wasm32"))]
 impl WebApp {
     /// Blocking entry: drives the underlying task to completion on a
-    /// fresh tokio runtime. Returns the task's `IpeResult`.
+    /// fresh tokio runtime. Returns the task's `IpeResult`. A mountable handle
+    /// used top-level runs its standalone `serve` task (binds its own port).
     pub fn run_blocking(self) -> crate::IpeResult<crate::error::IpeError, ()> {
-        crate::task::block_on(self.0)
+        match self.0 {
+            WebAppKind::Standalone(task) => crate::task::block_on(task),
+            #[cfg(feature = "web")]
+            WebAppKind::Mountable { serve, .. } => crate::task::block_on(serve),
+        }
+    }
+
+    /// Take the mount router-builder, if this is an embedded (mountable) handle.
+    /// `Server.mountApp` calls this; a `Web.app` (standalone) handle yields
+    /// `None`, which the mount path turns into a fail-closed diagnostic route
+    /// (unreachable for well-typed source: `mountApp` only accepts `Web.embed`
+    /// / `Web.app` handles, and `Web.app` handles are still mountable-capable
+    /// only via `embed`).
+    #[cfg(feature = "web")]
+    pub fn into_mount_builder(self) -> Option<MountBuilder> {
+        match self.0 {
+            WebAppKind::Mountable { router, .. } => Some(router),
+            WebAppKind::Standalone(_) => None,
+        }
     }
 }
 

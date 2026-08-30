@@ -21490,8 +21490,12 @@ impl<'a> Lowerer<'a> {
         if let canon::Expr_::VarKernel { .. } | canon::Expr_::VarTopLevel { .. } = &callee.value {
             let peek = self.lower_callee(callee)?;
             match &peek {
-                // ── Web.app cfg literal (L0107 exemption) ──
-                Callee::Kernel(KernelFn::WebApp) if args.len() == 1 => {
+                // ── Web.app / Web.embed cfg literal (L0107 exemption) ──
+                //
+                // `Web.embed` takes the same six-field cfg record as `Web.app`
+                // and follows the same inline-literal gate — a let-bound / piped
+                // cfg is IPE-L0119, never an ICE.
+                Callee::Kernel(KernelFn::WebApp | KernelFn::WebEmbed) if args.len() == 1 => {
                     // `args.len() == 1` is the match guard above; `first()` is
                     // always `Some` here.  Using `first()` instead of `args[0]`
                     // keeps `clippy::indexing_slicing` clean.
@@ -24610,6 +24614,8 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::ServerApi
                 // `Server.static : String -> String -> Route`
                 | KernelFn::ServerStatic
+                // `Server.mountApp : String -> WebApp -> Route`
+                | KernelFn::ServerMountApp
                 // `Server.listen : Int -> List Route -> Task Error ()`
                 | KernelFn::ServerListen
                 // `Server.withStatus : Int -> Response -> Response`
@@ -25051,6 +25057,8 @@ impl<'a> Lowerer<'a> {
                 // ── app-entry stubs — arity 1 ────────────────────────────
                 // `Web.app : WebAppCfg model msg -> WebApp`
                 | KernelFn::WebApp
+                // `Web.embed : WebAppCfg model msg -> WebApp` (mountable handle)
+                | KernelFn::WebEmbed
                 // `Web.appRouted : WebAppCfg model msg -> WebApp`
                 | KernelFn::WebAppRouted
                 // `Terminal.appScreen : TerminalCfg model msg -> TuiApp`
@@ -26436,6 +26444,7 @@ impl<'a> Lowerer<'a> {
                     ("Server", "any") => Ok(Callee::Kernel(KernelFn::ServerAny)),
                     ("Server", "api") => Ok(Callee::Kernel(KernelFn::ServerApi)),
                     ("Server", "static") => Ok(Callee::Kernel(KernelFn::ServerStatic)),
+                    ("Server", "mountApp") => Ok(Callee::Kernel(KernelFn::ServerMountApp)),
                     ("Server", "listen") => Ok(Callee::Kernel(KernelFn::ServerListen)),
                     ("Server", "text") => Ok(Callee::Kernel(KernelFn::ServerText)),
                     ("Server", "json") => Ok(Callee::Kernel(KernelFn::ServerJson)),
@@ -26772,6 +26781,7 @@ impl<'a> Lowerer<'a> {
                     ("Keyed", "row") => Ok(Callee::Kernel(KernelFn::KeyedRow)),
                     // ── Ipe.Web app-entry kernels ─────────────────────────
                     ("Web", "app") => Ok(Callee::Kernel(KernelFn::WebApp)),
+                    ("Web", "embed") => Ok(Callee::Kernel(KernelFn::WebEmbed)),
                     ("Web", "appRouted") => Ok(Callee::Kernel(KernelFn::WebAppRouted)),
                     ("Web", "route") => Ok(Callee::Kernel(KernelFn::WebRoute)),
                     // `Ipe.Html.renderStatic` — shape-neutral static-render bridge.

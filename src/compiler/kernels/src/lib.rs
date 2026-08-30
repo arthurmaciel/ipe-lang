@@ -1678,6 +1678,12 @@ pub enum StdlibKernel {
     ServerAny,
     ServerApi,
     ServerStatic,
+    /// `Server.mountApp : String -> WebApp -> Route` — mount a `Web.embed`
+    /// handle at a path prefix into the shared server Router. The nominal
+    /// `WebApp` argument is the §9 type gate (a non-`WebApp` shape leaf is a
+    /// compile error). Contributes one served route-group; the app runs on the
+    /// same port as the sibling `Server.get`/`post` handlers (one listener).
+    ServerMountApp,
     ServerListen,
     ServerText,
     ServerJson,
@@ -1865,6 +1871,12 @@ pub enum StdlibKernel {
     // ── Ipe.Web app-entry kernels ───────────────────────────────────────
     WebApp,
     WebAppRouted,
+    /// `Web.embed : { … } -> WebApp` — produce a mountable web-app handle from
+    /// the same six-field cfg as `Web.app`. The result is the opaque `WebApp`
+    /// leaf; unlike `Web.app` (a top-level entry that binds its own listener),
+    /// an `embed`'d `WebApp` is meant to be `Server.mountApp`'d into a shared
+    /// server router on one port. Shares `Web.app`'s emit path.
+    WebEmbed,
     WebRoute,
     WebRenderStatic,
     // ── Ipe.Terminal app-entry kernels ───────────────────────────────────
@@ -3627,6 +3639,7 @@ impl StdlibKernel {
             Self::ServerAny => d("Server", "any", 2, Server, "server_any"),
             Self::ServerApi => d("Server", "api", 2, Server, "server_api"),
             Self::ServerStatic => d("Server", "static", 2, Server, "server_static"),
+            Self::ServerMountApp => d("Server", "mountApp", 2, Server, "server_mount_app"),
             Self::ServerListen => d("Server", "listen", 2, Server, "server_listen"),
             Self::ServerText => d("Server", "text", 1, Server, "server_text"),
             Self::ServerJson => d("Server", "json", 1, Server, "server_json"),
@@ -3786,6 +3799,9 @@ impl StdlibKernel {
             // ── Ipe.Web app-entry kernels ───────────────────────────────
             Self::WebApp => d("Web", "app", 1, Web, "web_app"),
             Self::WebAppRouted => d("Web", "appRouted", 1, Web, "web_app_routed"),
+            // `Web.embed` shares `Web.app`'s emit path (both build the `WebApp`
+            // leaf from the same cfg); the runtime symbol is the same builder.
+            Self::WebEmbed => d("Web", "embed", 1, Web, "web_app"),
             Self::WebRoute => d("Web", "route", 2, Web, "web_route"),
             // `Ipe.Html.renderStatic` is a shape-neutral static-render bridge, NOT
             // a TEA entry: it renders a `view` once to HTML and returns a `Task`, so
@@ -5167,6 +5183,7 @@ impl StdlibKernel {
         Self::ServerAny,
         Self::ServerApi,
         Self::ServerStatic,
+        Self::ServerMountApp,
         Self::ServerListen,
         Self::ServerText,
         Self::ServerJson,
@@ -5301,6 +5318,7 @@ impl StdlibKernel {
         // Web
         Self::WebApp,
         Self::WebAppRouted,
+        Self::WebEmbed,
         Self::WebRoute,
         Self::WebRenderStatic,
         // Terminal
@@ -8203,6 +8221,11 @@ impl StdlibKernel {
         const TUI_APP_LEAF: TyShape = TyShape::Con(BuiltinTag::TuiApp, &[]);
         const CLI_APP_LEAF: TyShape = TyShape::Con(BuiltinTag::CliApp, &[]);
         const WEB_APP: TyShape = TyShape::Fun(&WEB_APP_CFG, &WEB_APP_LEAF);
+        // `Server.mountApp : String -> WebApp -> ServerRoute` — nominal `WebApp`
+        // in the second slot is the §9 type gate: only a `Web.embed`/`Web.app`
+        // handle mounts; a `TuiApp`/`CliApp`/`WebViewApp` is rejected at unify.
+        const WEB_APP_LEAF_TO_SERVER_ROUTE: TyShape = TyShape::Fun(&WEB_APP_LEAF, &SERVER_ROUTE);
+        const MOUNT_APP: TyShape = TyShape::Fun(&STRING, &WEB_APP_LEAF_TO_SERVER_ROUTE);
         const TERMINAL_APP_SCREEN: TyShape = TyShape::Fun(&TERMINAL_SCREEN_CFG, &TUI_APP_LEAF);
         const TERMINAL_APP_LINES: TyShape = TyShape::Fun(&TERMINAL_LINES_CFG, &CLI_APP_LEAF);
         const WEBVIEW_APP: TyShape = TyShape::Fun(&WEBVIEW_APP_CFG, &WEBVIEW_APP_LEAF);
@@ -9155,6 +9178,7 @@ impl StdlibKernel {
 
             // ── Server route-listen (non-record). ──
             Self::ServerListen => Some(&SERVER_LISTEN),
+            Self::ServerMountApp => Some(&MOUNT_APP),
 
             // ── Record / open-row families. ──
             // Migration (Db).
@@ -9227,7 +9251,7 @@ impl StdlibKernel {
             | Self::BackoffExponential
             | Self::BackoffExponentialWithJitter => Some(&BACKOFF_STRATEGY_CON),
             // App-entry cfg records.
-            Self::WebApp => Some(&WEB_APP),
+            Self::WebApp | Self::WebEmbed => Some(&WEB_APP),
             Self::TerminalAppScreen => Some(&TERMINAL_APP_SCREEN),
             Self::TerminalAppLines => Some(&TERMINAL_APP_LINES),
             Self::WebViewApp => Some(&WEBVIEW_APP),
@@ -9455,6 +9479,7 @@ impl StdlibKernel {
             | Self::ServerAny
             | Self::ServerApi
             | Self::ServerStatic
+            | Self::ServerMountApp
             | Self::ServerListen
             | Self::ServerText
             | Self::ServerJson
@@ -10165,6 +10190,7 @@ impl StdlibKernel {
             | Self::HtmlBoolAttribute
             | Self::HtmlNoAttr
             | Self::WebApp
+            | Self::WebEmbed
             | Self::WebAppRouted
             | Self::WebRoute
             | Self::WebRenderStatic
@@ -10721,6 +10747,7 @@ impl StdlibKernel {
                 | Self::ServerAny
                 | Self::ServerApi
                 | Self::ServerStatic
+                | Self::ServerMountApp
                 | Self::ServerListen
                 | Self::ServerText
                 | Self::ServerJson
@@ -11983,6 +12010,7 @@ impl StdlibKernel {
         matches!(
             self,
             Self::WebApp
+                | Self::WebEmbed
                 | Self::WebAppRouted
                 | Self::WebAppWith
                 | Self::WebRoute
