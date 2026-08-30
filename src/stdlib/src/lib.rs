@@ -34,7 +34,13 @@ const LIST: &str = include_str!("../Ipe/List.ipe");
 const STRING: &str = include_str!("../Ipe/String.ipe");
 /// `Ipe.Char` — single-character helpers.
 const CHAR: &str = include_str!("../Ipe/Char.ipe");
-/// `Ipe.Dict` — string-keyed associative map.
+/// `Ipe.Dict` — string-keyed associative map, compiled-source Layer-3.
+///
+/// Every member is a point-free `Ffi.kernel "Dict_*"` alias resolved by
+/// `ipe_canon::resolve::detect_kernel_alias` to a registered `Dict*`
+/// `StdlibKernel` variant. Registered in [`COMPILED_STD_MODULES`] (NOT
+/// `MODULES`); NOT in `STDLIB_MODULE_QUALIFIERS`, so the disjointness
+/// invariant holds.
 const DICT: &str = include_str!("../Ipe/Dict.ipe");
 /// `Ipe.Set` — unordered set of unique elements.
 const SET: &str = include_str!("../Ipe/Set.ipe");
@@ -256,10 +262,6 @@ pub const MODULES: &[StdModule] = &[
     StdModule {
         name: "Ipe.Char",
         source: CHAR,
-    },
-    StdModule {
-        name: "Ipe.Dict",
-        source: DICT,
     },
     StdModule {
         name: "Ipe.Set",
@@ -704,6 +706,14 @@ pub const COMPILED_STD_MODULES: &[CompiledStdModule] = &[
     CompiledStdModule {
         dotted: "Ipe.Debug",
         source: DEBUG,
+    },
+    // Ipe.Dict — Layer-3 source; every member is a point-free
+    // `Ffi.kernel "Dict_*"` alias resolved by `detect_kernel_alias` to the
+    // registered `Dict*` kernels (`ipe_runtime::dict::*`). Disjoint from
+    // `STDLIB_MODULE_QUALIFIERS` (no `"Dict"` entry there).
+    CompiledStdModule {
+        dotted: "Ipe.Dict",
+        source: DICT,
     },
     CompiledStdModule {
         dotted: "Ipe.Random",

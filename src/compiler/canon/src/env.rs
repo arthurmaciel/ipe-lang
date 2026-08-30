@@ -58,7 +58,12 @@ pub const STDLIB_MODULE_QUALIFIERS: &[(&[&str], &str)] = &[
     // `detect_kernel_alias` routes to the registered `Bitwise*` `StdlibKernel`
     // variants. A module is EITHER a kernel qualifier here OR compiled-source
     // — never both (`compiled_vs_kernel_qualifier_disjoint`), so it stays out.
-    (&["Ipe", "Dict"], "Dict"),
+    // NOTE — `Ipe.Dict` is DELIBERATELY absent: it is a COMPILED-SOURCE
+    // Layer-3 module (registered in `ipe::stdlib::COMPILED_STD_MODULES`). Its
+    // members are point-free `Ffi.kernel "Dict_*"` aliases that
+    // `detect_kernel_alias` routes to the registered `Dict*` `StdlibKernel`
+    // variants. A module is EITHER a kernel qualifier here OR compiled-source
+    // — never both (`compiled_vs_kernel_qualifier_disjoint`), so it stays out.
     (&["Ipe", "Set"], "Set"),
     (&["Ipe", "Bytes"], "Bytes"),
     (&["Ipe", "Encoding"], "Encoding"),
@@ -1017,33 +1022,9 @@ impl Env {
                     "compare", "negate", "abs", "sqrt", "min", "max",
                 ],
             ),
-            // `Ipe.Dict` — associative map kernels.
-            (
-                "Dict",
-                &[
-                    "empty",
-                    "isEmpty",
-                    "size",
-                    "insert",
-                    "get",
-                    "remove",
-                    "member",
-                    "keys",
-                    "values",
-                    "toList",
-                    "fromList",
-                    "map",
-                    "foldl",
-                    "union",
-                    "singleton",
-                    "foldr",
-                    "filter",
-                    "partition",
-                    "intersect",
-                    "diff",
-                    "update",
-                ],
-            ),
+            // NOTE — `Ipe.Dict` is DELIBERATELY absent from this catalog:
+            // it is a compiled-source module; its `Dict_*` kernels are
+            // reached via `detect_kernel_alias`, not the qualifier table.
             // `Ipe.Set` — set kernels.
             (
                 "Set",
