@@ -1244,6 +1244,45 @@ pub fn install_panic_classifier() {
     }));
 }
 
+/// Two-space gutter matching the CLI's own `GUTTER` constant (2 spaces).
+/// Duplicated here because the runtime must not depend on `ipe-cli`; the
+/// drift test in `install_style_drift.rs` asserts these agree.
+const EPRINT_GUTTER: &str = "  ";
+
+/// Format a task-error message as styled text. Each line is guttered; the first
+/// line is prefixed with the failure glyph. ANSI colour is applied only when
+/// `use_color` is true.
+pub(crate) fn format_task_error(msg: &str, use_color: bool) -> String {
+    let (red, reset) = if use_color {
+        ("\x1b[31m", "\x1b[0m")
+    } else {
+        ("", "")
+    };
+    let mut out = String::new();
+    let mut lines = msg.lines();
+    if let Some(first) = lines.next() {
+        out.push_str(&format!("{EPRINT_GUTTER}{red}✗{reset} {first}\n"));
+        for rest in lines {
+            out.push_str(&format!("{EPRINT_GUTTER}  {rest}\n"));
+        }
+    }
+    out
+}
+
+/// Print a task-error message to stderr, styled like the CLI: a red `✗` glyph
+/// on the first line with a 2-space gutter, then each continuation line
+/// indented by the same gutter. When stderr is not a terminal or `NO_COLOR` is
+/// set, the glyph and gutter are still printed but without ANSI colour codes.
+///
+/// Intended for the emitted app's `fn main` to replace the raw `{:?}` debug
+/// print with a readable, consistently styled failure.
+pub fn eprint_task_error(msg: &str) {
+    use std::io::{IsTerminal as _, Write as _};
+    let use_color = std::io::stderr().is_terminal() && std::env::var_os("NO_COLOR").is_none();
+    let formatted = format_task_error(msg, use_color);
+    let _ = std::io::stderr().write_all(formatted.as_bytes());
+}
+
 // The whole test module exercises the `IpeMaybe` serde round-trip (its
 // `Serialize` derive + hand-written `Deserialize` visitor), so it compiles only
 // when the `serde` feature is on. `cargo test --features serde` (or `json`) runs
@@ -1848,5 +1887,49 @@ mod recursion_guard_tests {
             .expect("spawn test thread")
             .join()
             .expect("test thread panicked");
+    }
+}
+
+#[cfg(test)]
+mod eprint_tests {
+    use super::*;
+
+    /// In plain (no-colour) mode the first line is guttered with a ✗ glyph and
+    /// continuation lines get the matching indent, with no ANSI escapes.
+    #[test]
+    fn eprint_task_error_plain_single_line() {
+        let out = format_task_error("something went wrong", false);
+        assert_eq!(out, "  ✗ something went wrong\n");
+        assert!(!out.contains('\x1b'), "no ANSI in plain mode");
+    }
+
+    #[test]
+    fn eprint_task_error_plain_multi_line() {
+        let msg = "port 8000 is already in use.\nSet a different port.";
+        let out = format_task_error(msg, false);
+        let lines: Vec<&str> = out.lines().collect();
+        assert_eq!(lines.len(), 2);
+        assert!(
+            lines[0].starts_with("  ✗ "),
+            "first line has gutter + glyph"
+        );
+        assert!(
+            lines[1].starts_with("    "),
+            "continuation line is indented"
+        );
+        assert!(!out.contains('\x1b'), "no ANSI in plain mode");
+    }
+
+    #[test]
+    fn eprint_task_error_colour_mode_has_ansi() {
+        let out = format_task_error("error", true);
+        assert!(out.contains('\x1b'), "colour mode carries ANSI escapes");
+        assert!(out.contains("✗"), "failure glyph present");
+    }
+
+    #[test]
+    fn eprint_task_error_empty_message_produces_no_output() {
+        let out = format_task_error("", false);
+        assert!(out.is_empty(), "empty message → no output");
     }
 }

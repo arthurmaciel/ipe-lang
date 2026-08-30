@@ -375,6 +375,10 @@ pub enum BuildMode {
 }
 
 /// Fully-parsed `ipe build` arguments.
+// Four independent one-of-two CLI switches (`fix`, `accept_risks`, `debugger`,
+// `quiet`) each maps naturally to a bool; a two-variant enum or state machine
+// would obscure their independence rather than clarify it.
+#[allow(clippy::struct_excessive_bools)]
 pub struct BuildArgs {
     /// The positional entry (`None` → project-aware default).
     pub entry: Option<String>,

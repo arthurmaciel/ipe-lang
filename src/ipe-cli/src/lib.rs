@@ -3013,6 +3013,13 @@ pub(crate) fn run_watch(rest: &[String]) -> Result<(), CliError> {
     opts.port = args.port;
     opts.cargo_path = cargo_bin.path().to_path_buf();
     opts.quiet = args.quiet;
+    // Version header: human mode only (not quiet, not piped).
+    if !args.quiet {
+        use std::io::IsTerminal as _;
+        if std::io::stderr().is_terminal() {
+            style::print_command_header();
+        }
+    }
     watch::run(&opts)
 }
 
@@ -3094,24 +3101,48 @@ fn resolve_wasm_target(cli_wasm: bool, wasm_config: Option<&project::WasmConfig>
 // A linear pipeline (parse → discover manifest → acknowledge unsafe → resolve
 // target → emit → cargo build); the steps share enough locals that splitting
 // reads worse than the whole.
+/// The outcome of a successful `ipe build`, carrying the facts needed to render
+/// either a human progress line or a JSON success object.
+struct BuildSuccess {
+    /// The entry source file that was compiled.
+    entry: String,
+    /// The output directory holding the emitted Rust project.
+    out_dir: PathBuf,
+}
+
 #[allow(clippy::too_many_lines)]
 pub(crate) fn run_build(rest: &[String]) -> Result<(), CliError> {
     // Parse args once to learn the format before running the body.
     let format = cli_args::parse_build(rest)
         .map(|a| a.format)
         .unwrap_or_default();
-    run_build_body(rest).map_err(|e| {
-        if format == cli_args::OutputFormat::Json {
+    let result = run_build_body(rest);
+    match result {
+        Err(e) => Err(if format == cli_args::OutputFormat::Json {
             emit_pipeline_json(e)
         } else {
             e
+        }),
+        Ok(success) => {
+            if format == cli_args::OutputFormat::Json {
+                // Machine-readable success: one JSON object to stdout.
+                let json = serde_json::json!({
+                    "status": "ok",
+                    "entry": success.entry,
+                    "out": success.out_dir.to_string_lossy(),
+                });
+                println!("{json}");
+            }
+            // Human progress line already printed inside run_build_body.
+            Ok(())
         }
-    })
+    }
 }
 
-/// Inner implementation of `run_build`, unaware of JSON formatting.
+/// Inner implementation of `run_build`, format-agnostic on the success path.
+/// Returns a [`BuildSuccess`] describing the outcome; the caller renders it.
 #[allow(clippy::too_many_lines)]
-fn run_build_body(rest: &[String]) -> Result<(), CliError> {
+fn run_build_body(rest: &[String]) -> Result<BuildSuccess, CliError> {
     let args = cli_args::parse_build(rest)?;
     let entry = match args.entry {
         Some(e) => e,
@@ -3136,7 +3167,10 @@ fn run_build_body(rest: &[String]) -> Result<(), CliError> {
             let ir_entry = resolve_analysis_entry(&entry_path)?;
             let tree = emit_ir_text(&ir_entry)?;
             print!("{tree}");
-            return Ok(());
+            return Ok(BuildSuccess {
+                entry,
+                out_dir: PathBuf::new(),
+            });
         }
         cli_args::BuildMode::Emit {
             out,
@@ -3229,12 +3263,14 @@ fn run_build_body(rest: &[String]) -> Result<(), CliError> {
     // Human-friendly progress: the compile+emit below is otherwise silent, so
     // bracket it with a start/done line. Shown only on an interactive terminal so
     // piped / CI output stays clean; status goes to stderr (stdout carries data).
-    // Suppressed entirely when `--quiet` is set (only warnings and errors remain).
-    let show_progress = !args.quiet && {
+    // Suppressed in quiet mode (only warnings/errors) and in JSON mode (machine
+    // output only — one JSON object to stdout at the end).
+    let show_progress = !args.quiet && args.format != cli_args::OutputFormat::Json && {
         use std::io::IsTerminal as _;
         std::io::stderr().is_terminal()
     };
     if show_progress {
+        style::print_command_header();
         eprintln!(
             "{}",
             style::gutter(&format!("{} building {entry}", style::glyph::STEP))
@@ -3280,7 +3316,7 @@ fn run_build_body(rest: &[String]) -> Result<(), CliError> {
             ))
         );
     }
-    Ok(())
+    Ok(BuildSuccess { entry, out_dir })
 }
 
 /// Compile the just-emitted native crate and write its runtime-enforcement
@@ -4393,6 +4429,7 @@ fn run_run_body(rest: &[String]) -> Result<(), CliError> {
         std::io::stderr().is_terminal()
     };
     if show_progress {
+        style::print_command_header();
         eprintln!(
             "{}",
             style::gutter(&format!("{} building {entry}", style::glyph::STEP))
@@ -6831,7 +6868,10 @@ mod tests {
         assert!(should_force(true, false), "tty + color on → force");
         assert!(!should_force(false, false), "not a tty → no force");
         assert!(!should_force(true, true), "NO_COLOR set → no force");
-        assert!(!should_force(false, true), "not a tty + NO_COLOR → no force");
+        assert!(
+            !should_force(false, true),
+            "not a tty + NO_COLOR → no force"
+        );
     }
 
     /// `missing_runtime_feature` pulls the feature name out of `cargo`'s
