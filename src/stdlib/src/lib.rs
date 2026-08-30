@@ -1169,7 +1169,14 @@ mod tests {
     /// alias does not resolve to anything (no backward-compatible mapping).
     #[test]
     fn basics_resolves_and_prelude_is_gone() {
-        assert_eq!(source("Ipe.Basics"), Some(BASICS));
+        // `Ipe.Basics` migrated to compiled-source: no longer a `MODULES`
+        // parse-fixture, so `source` returns `None`; its text is reached through
+        // the compiled-source table.
+        assert_eq!(source("Ipe.Basics"), None);
+        assert!(is_compiled_source_segments(&[
+            "Ipe".to_owned(),
+            "Basics".to_owned()
+        ]));
         assert_eq!(source("Ipe.Prelude"), None);
     }
 
@@ -1289,7 +1296,10 @@ mod tests {
         assert!(compiled_std_source_segments(&palette).is_some());
 
         let log = vec!["Ipe".to_owned(), "Log".to_owned()];
-        assert!(!is_compiled_source_segments(&log), "Ipe.Log is a kernel");
+        assert!(
+            is_compiled_source_segments(&log),
+            "Ipe.Log is compiled-source"
+        );
 
         let nope = vec!["Ipe".to_owned(), "Nope".to_owned()];
         assert!(!is_compiled_source_segments(&nope));
