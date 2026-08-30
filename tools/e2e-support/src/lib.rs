@@ -19,6 +19,50 @@ pub const EXPECTED_FILE: &str = "expected.txt";
 /// The Ipê entry point inside every golden directory.
 pub const MAIN_IPE: &str = "Main.ipe";
 
+/// Stable token stored in a portable golden `Cargo.toml` instead of the
+/// machine-specific `ipe-runtime-rust` crate path.
+///
+/// The real emit writes a live, resolvable absolute path so `cargo build`
+/// works in any environment; only the golden fixture stores this placeholder
+/// so the byte-compare is machine-independent. The comparison and bless paths
+/// both normalise the emitted path to this value before touching the golden.
+pub const RUNTIME_PATH_PLACEHOLDER: &str = "__IPE_RUNTIME_PATH__";
+
+/// Replace the `ipe-runtime-rust` dependency's `path = "<abs>"` value in a
+/// `Cargo.toml` text with [`RUNTIME_PATH_PLACEHOLDER`], leaving every other
+/// byte untouched.
+///
+/// Only the one `ipe_runtime = { … package = "ipe-runtime-rust" … path = "…"
+/// … }` dependency line carries a machine-specific value; the rewrite is
+/// scoped to `path = "…"` on that line, so a manifest with no such line (e.g.
+/// the vendored / wasm shape) passes through unchanged, and any real manifest
+/// drift still surfaces as a diff.
+#[must_use]
+pub fn normalize_runtime_dep_path(manifest: &str) -> String {
+    manifest
+        .lines()
+        .map(|line| {
+            if line.contains("package = \"ipe-runtime-rust\"")
+                && let Some(start) = line.find("path = \"")
+            {
+                let val_start = start + "path = \"".len();
+                if let Some(rel_end) = line[val_start..].find('"') {
+                    let end = val_start + rel_end;
+                    return format!(
+                        "{}{}{}",
+                        &line[..val_start],
+                        RUNTIME_PATH_PLACEHOLDER,
+                        &line[end..]
+                    );
+                }
+            }
+            line.to_owned()
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+        + if manifest.ends_with('\n') { "\n" } else { "" }
+}
+
 /// Captured stdout + exit code from running a built program.
 #[derive(Clone, Debug)]
 pub struct RunResult {
