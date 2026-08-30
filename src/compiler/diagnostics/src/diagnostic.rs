@@ -1119,15 +1119,15 @@ pub enum AppShape {
     /// `Ipe.Web` — the Model is persisted to the session store, so
     /// it must be `serde`-serialisable (as well as `Clone` + `PartialEq`).
     Web,
-    /// `Ipe.Terminal` `appScreen` — the Model is kept in memory, so it
-    /// must be `Clone`.
-    TerminalScreen,
+    /// `Ipe.Tea.Tui` — the full-screen terminal app form. The Model is kept in
+    /// memory, so it must be `Clone`. Folds onto the `Terminal` canonical shape.
+    Tui,
     /// `Ipe.WebView` — the Model is kept in memory, so it must
     /// be `Clone`.
     WebView,
-    /// `Ipe.Terminal` `appLines` — the Model is kept in memory, so it
-    /// must be `Clone`.
-    TerminalLines,
+    /// `Ipe.Tea.Cli` — the line-oriented terminal app form. The Model is kept in
+    /// memory, so it must be `Clone`. Folds onto the `Terminal` canonical shape.
+    Cli,
 }
 
 /// The category of the non-admissible payload found inside a Model.
@@ -2155,7 +2155,7 @@ pub fn inadmissible_model_message(app: AppShape, field: &str, leaf: ModelLeaf) -
             "Ipe.Web",
             "serialisable (it is persisted to the session store)",
         ),
-        AppShape::TerminalScreen | AppShape::TerminalLines => ("Ipe.Terminal", "clonable"),
+        AppShape::Tui | AppShape::Cli => ("Ipe.Terminal", "clonable"),
         AppShape::WebView => ("Ipe.WebView", "clonable"),
     };
     let leaf_phrase = match leaf {
@@ -2188,7 +2188,7 @@ pub fn inadmissible_model_message(app: AppShape, field: &str, leaf: ModelLeaf) -
 pub fn inadmissible_msg_message(app: AppShape, field: &str, leaf: ModelLeaf) -> String {
     let shape = match app {
         AppShape::Web => "Ipe.Web",
-        AppShape::TerminalScreen | AppShape::TerminalLines => "Ipe.Terminal",
+        AppShape::Tui | AppShape::Cli => "Ipe.Terminal",
         AppShape::WebView => "Ipe.WebView",
     };
     let leaf_phrase = match leaf {
