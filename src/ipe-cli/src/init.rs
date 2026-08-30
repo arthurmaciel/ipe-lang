@@ -297,7 +297,9 @@ fn print_next_steps(target_arg: &str, project_name: &str) {
          Next steps:\n\
          {run_cmd}\n\
          \n\
-         Then open http://localhost:8000 and click the counter buttons.\n"
+         Then open http://localhost:8000 and click the counter buttons.\n\
+         \n\
+         Tip: run  ipe health  to tune your toolchain for faster builds.\n"
     );
     print!("{}", style::frame(&style::gutter(&body)));
 }
