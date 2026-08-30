@@ -94,7 +94,12 @@ pub const STDLIB_MODULE_QUALIFIERS: &[(&[&str], &str)] = &[
     // `detect_kernel_alias` routes to the registered `Bytes*` `StdlibKernel`
     // variants. A module is EITHER a kernel qualifier here OR compiled-source
     // — never both (`compiled_vs_kernel_qualifier_disjoint`), so it stays out.
-    (&["Ipe", "Encoding"], "Encoding"),
+    // NOTE — `Ipe.Encoding` is DELIBERATELY absent: it is a COMPILED-SOURCE
+    // Layer-3 module (registered in `ipe::stdlib::COMPILED_STD_MODULES`). Its
+    // members are point-free `Ffi.kernel "Encoding_*"` aliases that
+    // `detect_kernel_alias` routes to the registered `Encoding*` `StdlibKernel`
+    // variants. A module is EITHER a kernel qualifier here OR compiled-source
+    // — never both (`compiled_vs_kernel_qualifier_disjoint`), so it stays out.
     (&["Ipe", "Crypto"], "Crypto"),
     // NOTE — `Ipe.Uuid` is DELIBERATELY absent: it is a COMPILED-SOURCE
     // Layer-3 module (registered in `ipe::stdlib::COMPILED_STD_MODULES`). Its
@@ -977,18 +982,9 @@ impl Env {
             // NOTE — `Ipe.Bytes` is DELIBERATELY absent from this catalog:
             // it is a compiled-source module; its `Bytes_*` kernels are
             // reached via `detect_kernel_alias`, not the qualifier table.
-            // `Ipe.Encoding` — text encoding helpers.
-            (
-                "Encoding",
-                &[
-                    "base64Encode",
-                    "base64Decode",
-                    "urlEncode",
-                    "urlDecode",
-                    "hexEncode",
-                    "hexDecode",
-                ],
-            ),
+            // NOTE — `Ipe.Encoding` is DELIBERATELY absent from this catalog:
+            // it is a compiled-source module; its `Encoding_*` kernels are
+            // reached via `detect_kernel_alias`, not the qualifier table.
             // `Ipe.Json.Encode` — JSON encoder.
             (
                 "JsonEnc",
