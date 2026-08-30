@@ -197,7 +197,8 @@ main =
 const TUI_CMD_MSG: &str = r"module Main exposing (main)
 
 import Ipe.Tea.Terminal as Terminal
-import Ipe.Ui as Ui
+import Ipe.Ui.Cells as Cells
+import Ipe.Ui.Cells exposing (Cells)
 import Ipe.Tea.Terminal.Cmd
 import Ipe.String
 import Ipe.Tea.Terminal.Sub
@@ -223,9 +224,9 @@ update msg model =
         WithEffect _ ->
             ( model, Cmd.none )
 
-view : Model -> Element Msg
+view : Model -> Cells Msg
 view model =
-    Ui.column [] [ Ui.el [] (Ui.text (String.fromInt model.count)) ]
+    Cells.column [] [ Cells.el [] (Cells.text (String.fromInt model.count)) ]
 
 subscriptions : Model -> Sub Msg
 subscriptions _model =
@@ -249,7 +250,8 @@ main =
 const TUI_FN_MSG: &str = r"module Main exposing (main)
 
 import Ipe.Tea.Terminal as Terminal
-import Ipe.Ui as Ui
+import Ipe.Ui.Cells as Cells
+import Ipe.Ui.Cells exposing (Cells)
 import Ipe.Tea.Terminal.Cmd
 import Ipe.String
 import Ipe.Tea.Terminal.Sub
@@ -272,9 +274,9 @@ update msg model =
         SetHandler _ ->
             ( model, Cmd.none )
 
-view : Model -> Element Msg
+view : Model -> Cells Msg
 view model =
-    Ui.column [] [ Ui.el [] (Ui.text (String.fromInt model.count)) ]
+    Cells.column [] [ Cells.el [] (Cells.text (String.fromInt model.count)) ]
 
 subscriptions : Model -> Sub Msg
 subscriptions _model =

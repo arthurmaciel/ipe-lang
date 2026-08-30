@@ -136,12 +136,14 @@ main =
         }
 "#;
 
-/// `Ui.cells` inside a `Terminal.appScreen` view — must be ACCEPTED (the raw
-/// cell grid is a terminal primitive; this is the shape it belongs to).
+/// `Cells.cells` inside a `Terminal.appScreen` view — must be ACCEPTED (the raw
+/// cell grid is a terminal primitive; this is the shape it belongs to). A Tui
+/// view is `Cells Msg`, so the grid island is built with `Cells.cells`.
 const TERMINAL_UI_CELLS: &str = r#"module Main exposing (main)
 
 import Ipe.Tea.Terminal as Terminal
-import Ipe.Ui as Ui
+import Ipe.Ui.Cells as Cells
+import Ipe.Ui.Cells exposing (Cells)
 import Ipe.Tea.Terminal.Cmd
 import Ipe.Tea.Terminal.Sub
 
@@ -159,11 +161,11 @@ update msg model =
         NoOp ->
             ( model, Cmd.none )
 
-view : Model -> Element Msg
+view : Model -> Cells Msg
 view _model =
-    Ui.column []
-        [ Ui.text "grid:"
-        , Ui.cells [ [ '4', '8' ], [ '6', '9' ] ]
+    Cells.column []
+        [ Cells.text "grid:"
+        , Cells.cells [ [ '4', '8' ], [ '6', '9' ] ]
         ]
 
 subscriptions : Model -> Sub Msg
@@ -196,8 +198,8 @@ fn webview_view_with_ui_cells_is_rejected() -> Result<(), BoxError> {
     assert_rejected_with("webview_ui_cells", WEBVIEW_UI_CELLS, "IPE-L0132")
 }
 
-/// Non-regression control: `Ui.cells` under `Terminal.appScreen` is the shape
-/// it belongs to and must compile cleanly (ipe-0).
+/// Non-regression control: `Cells.cells` under `Terminal.appScreen` is the
+/// shape it belongs to and must compile cleanly (ipe-0).
 #[test]
 fn terminal_view_with_ui_cells_is_accepted() -> Result<(), BoxError> {
     assert_accepted("terminal_ui_cells", TERMINAL_UI_CELLS)

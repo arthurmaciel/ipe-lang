@@ -82,12 +82,15 @@ fn assert_accepted(test_name: &str, source: &str, extra: &[(&str, &str)]) -> Res
 /// at — its mere presence satisfies the build-time file-existence gate.
 const WIDGET_JS: &str = "export function mount(host, emit) { return {}; }\n";
 
-/// `Ui.widget` inside a `Terminal.appScreen` view — must be rejected with
-/// IPE-L0147 (a browser custom element has no seam in a terminal build).
+/// `Ui.widget` inside a `Terminal.appScreen` view — must be rejected. A Tui
+/// view is `Cells Msg`; `Ui.widget` returns `Element msg`, so the type checker
+/// rejects the program (a browser custom element has no seam in a terminal
+/// build, and no `Cells` denotation either).
 const TERMINAL_UI_WIDGET: &str = r#"module Main exposing (main)
 
 import Ipe.Tea.Terminal as Terminal
 import Ipe.Ui as Ui
+import Ipe.Ui.Cells exposing (Cells)
 import Ipe.Tea.Terminal.Cmd
 import Ipe.Tea.Terminal.Sub
 
@@ -110,7 +113,7 @@ update : Msg -> Model -> ( Model, Cmd Msg )
 update _msg model =
     ( model, Cmd.none )
 
-view : Model -> Element Msg
+view : Model -> Cells Msg
 view model =
     Ui.widget codeEditor model.state Edited
 
@@ -221,16 +224,23 @@ main =
 "#;
 
 /// A `Terminal.appScreen` view mounting `Ui.widget` is a browser-only node in a
-/// terminal build: rejected fail-closed with IPE-L0147, not a cargo failure or a
-/// panic (the emitted crate would otherwise trip rustc E0282).
+/// terminal build: rejected fail-closed at ipe time (not a cargo failure or a
+/// panic). A Tui view is `Cells Msg` and `Ui.widget` returns `Element msg`, so
+/// the type checker rejects it (IPE-T0001); the `RejectInNonWebShape` shape gate
+/// (IPE-L0147) is defense-in-depth for any path that bypasses type inference.
 #[test]
 fn terminal_view_with_ui_widget_is_rejected() -> Result<(), BoxError> {
-    assert_rejected_with(
+    match compile_with_files(
         "terminal_ui_widget",
         TERMINAL_UI_WIDGET,
         &[("js/x.js", WIDGET_JS)],
-        "IPE-L0147",
-    )
+    )? {
+        Ok(()) => Err("terminal_ui_widget: expected a type error, but ipec succeeded".into()),
+        Err(ipe::CliError::Pipeline { .. }) => Ok(()),
+        Err(other) => {
+            Err(format!("terminal_ui_widget: expected a type error, got {other:?}").into())
+        }
+    }
 }
 
 /// Non-regression control: `Ui.widget` under `Web.app` is the shape it belongs

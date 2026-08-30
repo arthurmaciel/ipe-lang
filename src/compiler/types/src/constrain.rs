@@ -6941,7 +6941,7 @@ impl<'a> Builder<'a> {
 
             // ── Ipe.Terminal full-screen app-entry (`appScreen`) ────────────────
             //
-            // `view : Model -> Element Msg`, driven by `onKey`. `onKey` is
+            // `view : Model -> Cells Msg`, driven by `onKey`. `onKey` is
             // REQUIRED because the runtime's `tui_app_ui` entry takes a concrete
             // `FOnKey: Fn(String, String) -> Msg` bound (no `Option` form), so a
             // `Msg` cannot be fabricated when the handler is absent.
@@ -6972,7 +6972,7 @@ impl<'a> Builder<'a> {
                         let mut m = BTreeMap::new();
                         m.insert(self.builtins.live_f_init, fun(Ty::Unit, tup.clone()));
                         m.insert(self.builtins.live_f_update, fun(var(1), fun(var(0), tup)));
-                        m.insert(self.builtins.live_f_view, fun(var(0), elem_t(var(1))));
+                        m.insert(self.builtins.live_f_view, fun(var(0), cells_t(var(1))));
                         m.insert(self.builtins.live_f_subscriptions, fun(var(0), sub(var(1))));
                         // onKey : { kind : String, value : String } -> msg (pinned).
                         m.insert(self.builtins.tui_f_on_key, fun(key_event, var(1)));
