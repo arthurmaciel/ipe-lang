@@ -98,16 +98,12 @@ fn compile_worker_is_cancelled_by_a_concurrent_input_edit() {
     let a_path = vec!["A".to_owned()];
     let main_path = vec!["Main".to_owned()];
     let a_file = SourceFile::new(&db, a_path.clone(), DEP_A.to_owned(), ModuleOrigin::User);
-    let main_file =
-        SourceFile::new(&db, main_path.clone(), ENTRY.to_owned(), ModuleOrigin::User);
+    let main_file = SourceFile::new(&db, main_path.clone(), ENTRY.to_owned(), ModuleOrigin::User);
 
     let mut file_map: BTreeMap<Vec<String>, SourceFile> =
         BTreeMap::from([(a_path.clone(), a_file), (main_path.clone(), main_file)]);
     let mut sources: BTreeMap<Vec<String>, (PathBuf, String)> = BTreeMap::from([
-        (
-            a_path.clone(),
-            (PathBuf::from("<test>/A.ipe"), DEP_A.to_owned()),
-        ),
+        (a_path, (PathBuf::from("<test>/A.ipe"), DEP_A.to_owned())),
         (
             main_path.clone(),
             (PathBuf::from("<test>/Main.ipe"), ENTRY.to_owned()),
@@ -180,16 +176,12 @@ fn the_same_fixture_compiles_cleanly_without_a_concurrent_edit() {
     let a_path = vec!["A".to_owned()];
     let main_path = vec!["Main".to_owned()];
     let a_file = SourceFile::new(&db, a_path.clone(), DEP_A.to_owned(), ModuleOrigin::User);
-    let main_file =
-        SourceFile::new(&db, main_path.clone(), ENTRY.to_owned(), ModuleOrigin::User);
+    let main_file = SourceFile::new(&db, main_path.clone(), ENTRY.to_owned(), ModuleOrigin::User);
 
     let mut file_map: BTreeMap<Vec<String>, SourceFile> =
         BTreeMap::from([(a_path.clone(), a_file), (main_path.clone(), main_file)]);
     let mut sources: BTreeMap<Vec<String>, (PathBuf, String)> = BTreeMap::from([
-        (
-            a_path,
-            (PathBuf::from("<test>/A.ipe"), DEP_A.to_owned()),
-        ),
+        (a_path, (PathBuf::from("<test>/A.ipe"), DEP_A.to_owned())),
         (
             main_path.clone(),
             (PathBuf::from("<test>/Main.ipe"), ENTRY.to_owned()),
