@@ -276,7 +276,7 @@ pub use regex_kernel::*;
 
 // JWT needs `jsonwebtoken` (decode) plus json (the deterministic JSON encoder for
 // the token payload) and crypto (the HMAC / RSA signing primitives the encode
-// path reuses for byte-identical-to-Go tokens). Gated on the `jwt` feature,
+// path reuses for stable-format tokens). Gated on the `jwt` feature,
 // which implies both `json` and `crypto`; keeping `jsonwebtoken` out of the
 // floor `json` feature so a plain JSON program does not link it.
 #[cfg(feature = "jwt")]

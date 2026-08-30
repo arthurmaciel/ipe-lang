@@ -1346,7 +1346,7 @@ pub fn ui_behind_<M: Clone>(elem: Element<M>) -> Attribute<M> {
 // These functions support `Ui.breakpoint` / `Ui.mediaQuery` and the named
 // `Breakpoint` constants (`Ui.mobile`, `Ui.tablet`, …).
 //
-// **Sanctioned divergence from Ipe Go**: in the Go runtime `Breakpoint` is an
+// Sanctioned divergence: `Breakpoint` is an
 // opaque struct that carries the CSS media-query string; in this Rust port we
 // model `Breakpoint` as a plain `String` (the raw CSS query).  Since
 // upstream's `breakpoint bp attrs child = mediaQuery (breakpointToQuery bp)

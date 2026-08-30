@@ -95,7 +95,7 @@ pub fn dict_is_empty<K, V>(d: HashMap<K, V>) -> bool {
 
 /// `Dict.union : Dict k v -> Dict k v -> Dict k v`.
 /// Left-biased: `a`'s bindings win on collision (matches  `Dict_union` —
-/// Go inserts `mb` first then `ma` overwrites, so `ma` wins).
+/// `mb` is inserted first then `ma` overwrites, so `ma` wins).
 #[must_use]
 pub fn dict_union<K: Hash + Eq + Clone, V: Clone>(
     a: HashMap<K, V>,

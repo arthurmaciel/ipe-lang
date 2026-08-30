@@ -490,7 +490,7 @@ impl<'a> SafeCssMediaQuery<'a> {
 ///   pass removes nothing.
 ///
 /// Total (never panics; the `</style` needle is ASCII so byte indices are valid
-/// char boundaries in `out`).  Stronger-than-Go on purpose: security outranks
+/// char boundaries in `out`).  Stricter on purpose: security outranks
 /// byte-for-byte (documented divergence).
 pub(crate) fn strip_style_close(s: &str) -> String {
     let mut out = s.to_string();

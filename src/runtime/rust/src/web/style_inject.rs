@@ -4,7 +4,7 @@
 //! The shared `Ipe.Ui` stdlib emits `data-ipe-{mq,pc,tr,anim}-*` marker
 //! *attributes* on elements for `Ui.breakpoint` / `Ui.mediaQuery`,
 //! `Background.hoverColor` / `Ui.onPseudo`, `Transition.attribute`, and
-//! `Animation.attribute`. The Go backend consumes them into ipe-id-scoped
+//! `Animation.attribute`, consumed into ipe-id-scoped
 //! `<style>` blocks; without this pass the Rust backend rendered the markers
 //! inert and produced zero CSS, so hover / breakpoint / media-query /
 //! transition / animation were entirely dead.
@@ -56,7 +56,7 @@ const ALL_MARKERS: &[&str] = &[
 
 /// Run every style-marker pass over the tree in  fixed order. Call
 /// immediately after `assign_ipe_ids`, on the SAME tree that becomes both the
-/// render output AND the diff baseline (Go applies it before render + before
+/// render output AND the diff baseline (applied before render + before
 /// storing the tree, so the diff compares two already-injected trees and never
 /// sees a marker-attr-vs-style-child asymmetry → no spurious replace).
 /// Hard recursion-depth bound for the style-injection tree walk — same rationale

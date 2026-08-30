@@ -153,7 +153,7 @@ pub fn random_float<E: Send + 'static>(lo: f64, hi: f64) -> IpeTask<E, f64> {
         // `/ u64::MAX` (which rounds to 1.0 and could emit `hi`,
         // breaking the half-open upper bound).
         let unit = (lcg_next() >> 11) as f64 / (1u64 << 53) as f64;
-        // Degenerate bounds: Go silently returns a value < lo when
+        // Degenerate bounds: returns a value < lo when
         // hi < lo. We clamp to lo instead (sound, no negative-range
         // footgun) — same defensive choice as random_int's `hi < lo`
         // guard above.

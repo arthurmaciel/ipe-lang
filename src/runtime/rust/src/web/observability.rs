@@ -110,7 +110,7 @@ pub async fn track(
         let dur_us = start.elapsed().as_micros().min(u64::MAX as u128) as u64;
         // Request-latency histogram .
         // UNLABELED on purpose — labeling by the raw path would be an unbounded-
-        // cardinality memory-DoS (the registry never evicts); Go labels by a
+        // cardinality memory-DoS (the registry never evicts); labels by a
         // bounded route template, which the Rust middleware doesn't have here.
         super::super::telemetry::metric_observe(
             "ipe_web_request_seconds",

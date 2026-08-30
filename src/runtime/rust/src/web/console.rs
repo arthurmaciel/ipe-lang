@@ -4,7 +4,7 @@
 //! the `telemetry` ring buffers, and a `/_ipe/observability/ingest` POST that
 //! folds a sub-app's batched logs into the same rings.
 //!
-//! Unlike Go (which spawns the console as a child Ipe.Web process and reverse-
+//! Unlike the separate-process console path, this
 //! proxies it), the Rust console is served in-process directly off the Web
 //! router — no extra process, same data. No panic vectors.
 
@@ -218,7 +218,7 @@ fn resolve_console_auth_mode() -> ConsoleAuthMode {
 ///
 /// Derivation : `IPE_CONSOLE_AUTH` (case-insensitive, trimmed) selects
 /// `off`/`token`/`app`; unset → `dev-open` in dev (the default) or `unset-prod`
-/// in production (`ENV`/`IPE_ENV` non-dev); any unknown value → `off` (Go refuses
+/// in production (`ENV`/`IPE_ENV` non-dev); any unknown value → `off` (refuses
 /// to silently widen to something more permissive).
 pub fn console_auth_mode_label() -> &'static str {
     resolve_console_auth_mode().label()
@@ -251,8 +251,7 @@ pub fn gate_blocked(headers: &axum::http::HeaderMap) -> Option<axum::response::R
     if !telemetry::production_from_env() {
         return None;
     }
-    // Admin-token source precedence mirrors Go: IPE_ADMIN_TOKEN, then the legacy
-    // aliases IPE_CONSOLE_TOKEN and IPE_METRICS_TOKEN (Go honours IPE_METRICS_TOKEN
+    // Admin-token source precedence     // aliases IPE_CONSOLE_TOKEN and IPE_METRICS_TOKEN (IPE_METRICS_TOKEN
     // as a back-compat alias — without it a prod operator who only set the legacy
     // var is locked out / forced to a weaker config).
     let want = crate::system::read_env_var("IPE_ADMIN_TOKEN")

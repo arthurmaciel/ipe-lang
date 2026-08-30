@@ -689,7 +689,7 @@ mod tests {
                 assert_eq!(m.get("sub").unwrap(), "user-123");
                 assert_eq!(m.get("role").unwrap(), "admin");
                 assert!(m.contains_key("exp"));
-                assert!(m.contains_key("iat")); // parity with Go's Auth_signToken
+                assert!(m.contains_key("iat")); // matches golden
             }
             _ => panic!("verify"),
         }

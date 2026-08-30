@@ -20,8 +20,7 @@ use super::helpers::{ui_column_, ui_row_};
 /// `Node`/`TaggedNode` carry an attribute list; the key is prepended there.
 /// `Text`/`Empty`/`Raw` have no attribute slot, so they are wrapped in a keyed
 /// `el` (`Node` with one child) — the wrapper carries the key and the child
-/// retains its own identity inside it.  This matches the Go runtime's
-/// keyed-wrapper behaviour.
+/// retains its own identity inside it.  This matches the /// keyed-wrapper behaviour.
 fn attach_key<M: Clone>(key: String, child: Element<M>) -> Element<M> {
     let key_attr = Attribute::AttrAttribute("ipe-key".to_owned(), key.clone());
     match child {

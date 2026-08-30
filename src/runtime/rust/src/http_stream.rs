@@ -160,8 +160,7 @@ pub fn http_stream_open<E: From<String> + Send + 'static>(
 /// per chunk. Bridges the client consumer to a server producer
 /// (`Server.Stream.emit`) inside one Ipe.Http.Server handler — the relay shape.
 ///
-/// Semantics (parity with the Go runtime):
-///   * clean EOF              → Ok ()
+/// Semantics (///   * clean EOF              → Ok ()
 ///   * upstream read error     → Err e
 ///   * `body chunk` returns Err → abort, close, Err e (fail-fast)
 ///   * the handle is always removed (connection released) on exit.

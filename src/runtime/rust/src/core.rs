@@ -1095,7 +1095,7 @@ impl Drop for RecursionGuard {
 
 /// Map a Rust panic message to a Ipê error classification ( panic-class
 /// taxonomy, restricted to the kinds reachable from well-typed Ipê on the typed
-/// Rust backend — TypeMismatch/CoerceFailure are Go-runtime-only).
+/// Rust backend — TypeMismatch/CoerceFailure are compiler-only).
 fn classify_panic(msg: &str) -> &'static str {
     let m = msg.to_ascii_lowercase();
     if m.contains("divide by zero") || m.contains("divisor of zero") {

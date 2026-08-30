@@ -46,7 +46,7 @@ pub enum StreamWriter {
 }
 
 /// Handler with its Ipê error type E erased: the effect IS the emits, the
-/// IpeResult is discarded (parity with the Go dispatcher's `_ = task.await`).
+/// IpeResult is discarded (await`).
 type ErasedStreamHandler =
     Arc<dyn Fn(StreamWriter) -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + Sync>;
 
@@ -122,7 +122,7 @@ fn sentinel_nonce() -> &'static str {
         format!("{:016x}{:016x}", a, b)
     })
 }
-// Bounded channel — matches the Go runtime's streamChanBuffer (16). emit's
+// Bounded channel — matches the streamChanBuffer (16). emit's
 // `send().await` blocks when full → backpressure to the producer/relay.
 const STREAM_CHAN_BUFFER: usize = 16;
 

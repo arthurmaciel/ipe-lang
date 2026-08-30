@@ -629,7 +629,7 @@ where
                                     let old_focus = focus_idx;
                                     focus_idx = hit;
                                     // onBlur (old) + onFocus (new) on a click focus
-                                    // change — same as Tab nav (Go fires it on both).
+                                    // change — same as Tab nav .
                                     dispatch_focus_change(&focusables, old_focus, hit, &tx);
                                     let is_input =
                                         focusables.get(hit).map(|f| f.is_input).unwrap_or(false);

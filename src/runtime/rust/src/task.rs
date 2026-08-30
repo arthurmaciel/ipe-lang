@@ -528,7 +528,7 @@ pub fn task_run<E: From<String> + Send + 'static, A: Send + 'static>(
 // write, a duplicate charge, a duplicate email) would still fire AFTER the
 // batch has already been reported as failed — a double-write / double-charge
 // hazard. `abort()` on each survivor closes that hole. (Reference: ../ipe's
-// Go/upstream `Task.parallel` early-cancel shape; adopted here for the Rust
+// Early-cancel shape for the Rust
 // runtime.)
 //
 // DETERMINISM — Ok order AND error order.
@@ -654,7 +654,7 @@ pub enum BackoffStrategy {
 //     `base_ms`, a `BackoffStrategy`, and a `should_retry` closure.
 //   * The task argument is wrapped in a re-runnable `make_task : impl Fn() ->
 //     IpeTask<E, A>` closure, so each attempt rebuilds a fresh future (the
-//     side effects re-fire per attempt, exactly as Go re-invokes its thunk).
+//     side effects re-fire per attempt).
 //
 // Semantics (mirror  `Task_retryWith` loop):
 //   attempt 1..=max_attempts:

@@ -476,7 +476,7 @@ async fn do_request<E: From<String> + Send + 'static>(
     for (k, v) in resp.headers() {
         if let Ok(s) = v.to_str() {
             // MIME-case parity: reqwest's `HeaderName::as_str()`
-            // ALWAYS returns lower-case, but the Go reference stores response
+            // ALWAYS returns lower-case, but canonical storage expects
             // headers canonicalised (`net/http.Header` always is) — a Ipê
             // program's `Dict.get "Content-Type" resp.headers` must find the
             // key. Route through the SAME `canonical_header` the Server
@@ -524,7 +524,7 @@ fn http_body_cap() -> usize {
 /// guard is the INCREMENTAL cap in the stream loop below, which bounds the
 /// decompressed body to `cap` regardless of encoding or a lying/chunked length —
 /// a bomb is capped at `cap` resident bytes, never unbounded. UTF-8 lossy
-/// (matches `Http.Stream`'s chunk decode; Go reads bytes→string too).
+/// (matches `Http.Stream`'s chunk decode).
 #[cfg(not(target_arch = "wasm32"))]
 async fn read_body_capped<E: From<String> + Send + 'static>(
     resp: reqwest::Response,
@@ -848,7 +848,7 @@ mod tests {
         let window = &src[start..src.len().min(start + 1600)];
         assert!(
             window.contains("canonical_header(k.as_str())"),
-            "response-header keys must be canonicalised (Go MIME-case parity, #33 §6.1)"
+            "response-header keys must be canonicalised (MIME canonical case)"
         );
         assert!(
             !window.contains("insert(k.as_str().to_string()"),

@@ -1195,7 +1195,7 @@ fn float_to_i64_or_default(field: &str, f: f64) -> i64 {
 }
 
 pub fn db_get_int<R: IpeRow>(field: String, row: &R) -> i64 {
-    // Align with db_decode_int / Go: accept "42" or a decimal string like
+    // Align with db_decode_int: accept "42" or a decimal string like
     // "3.0" (truncate to 3) before defaulting to 0.
     let s = row.ipe_get(&field);
     if let Ok(i) = s.parse::<i64>() {
@@ -1208,7 +1208,7 @@ pub fn db_get_int<R: IpeRow>(field: String, row: &R) -> i64 {
 }
 
 /// Lowercase sha256-hex of a migration's SQL text. This value is stored in the
-/// `_ipe_migrations` ledger and is a CROSS-BACKEND DB CONTRACT: the Go backend
+/// `_ipe_migrations` ledger and is a CROSS-BACKEND DB CONTRACT:
 /// records `fmt.Sprintf("%x", sha256.Sum256([]byte(stmt)))` (db_auth.go), so a
 /// database created/advanced by one backend must hash byte-identically under the
 /// other. Hence sha256, lowercase hex, over the exact statement bytes — never a
@@ -1433,8 +1433,7 @@ pub fn db_migrate_apply<E: Send + From<String> + 'static>(
             }
         }
 
-        // 4. `migrate` op mode — print the summary, then exit. Mirrors Go.
-        if op == "migrate" {
+        // 4. `migrate` op mode — print the summary, then exit.         if op == "migrate" {
             if out.is_empty() {
                 println!("db: schema already up to date — 0 migrations applied");
             } else {
@@ -1883,7 +1882,7 @@ pub fn db_query_decode<E: Send + From<String> + 'static, A: Send + 'static>(
     })
 }
 
-/// `queryDecode` with `List SqlValue` params (Go v0.16.26 mixed-type) — mirror of
+/// `queryDecode` with `List SqlValue` params  — mirror of
 /// `db_query_decode` binding each param via the total `bind_sql_param` instead of
 /// `q.bind(String)`. Codegen routes HERE when the params arg's solved element type
 /// is `SqlValue` (ExprEmitter `isSqlValueListArg`); a homogeneous `List String`
@@ -3812,7 +3811,7 @@ pub fn db_update_fields<E: Send + From<String> + 'static>(
 /// returned row via the `Decoder<E,A>` (using `row_to_json` — NULL-preserving).
 ///
 /// The `projection` string is caller-controlled but VALIDATED for injection
-/// safety (stricter than Go): it must be `"*"` or a comma-separated list of
+/// safety: it must be `"*"` or a comma-separated list of
 /// plain identifiers (`col` / `table.col`, chars `[A-Za-z0-9_.]` only). Arbitrary
 /// SQL expressions and `AS` aliases are intentionally REJECTED (`Err`), as is an
 /// empty projection.
@@ -4613,7 +4612,7 @@ mod tests {
     #[tokio::test]
     async fn exec_query_params_bind_mixed_sqlvalue_types() {
         // db_exec_params / db_query_params bind the full SqlParam range (the
-        // Go `List SqlValue` mixed-type path) — Text/Int/Bool/Float/Null — and
+        //  mixed-type path) — Text/Int/Bool/Float/Null — and
         // round-trip through a SqlValue-param WHERE. `with_default` extracts the
         // Ok value (a wrong/Err result then fails the following assert).
         let db = fresh_db().await;

@@ -187,7 +187,7 @@ fn file_read_file_limit_sync(path: &str, cap: u64) -> Result<String, String> {
 /// Read at most `limit` bytes. Returns `Err` when the file is larger than
 /// `limit` (to avoid OOM on unbounded inputs) or when the content is not
 /// valid UTF-8 (use `readFileBytes` for binary data in that case).
-/// A non-positive limit falls back to the same 10 MiB default Go uses.
+/// A non-positive limit falls back to the 10 MiB default.
 ///
 /// AUD-09 gap-sweep TOCTOU fix: no separate `metadata()` pre-check. A
 /// stat-then-read split is TOCTOU — a file that grows between the two
@@ -241,7 +241,7 @@ fn file_read_file_bytes_sync(path: &str) -> Result<Vec<i64>, String> {
 
 /// `Ipe.File.readFileBytes : String -> Task Error (List Int)`
 /// Read the file as raw bytes, returned as `Vec<i64>` (Ipê `List Int`,
-/// values 0..=255). Uses the same 10 MiB default cap as Go — a file over the
+/// values 0..=255). Uses a 10 MiB cap — a file over the
 /// cap is an `Err`, never a silent truncation (sibling fix to
 /// `readFileLimit`'s TOCTOU close, commit 706f026). For text content with
 /// guaranteed UTF-8, prefer `readFile` / `readFileLimit`.
@@ -414,7 +414,7 @@ fn make_temp_path(prefix: &str, is_dir: bool) -> Result<String, String> {
         if is_dir {
             // Owner-only (0700) on Unix — a temp dir created with the default
             // umask can be world-readable/traversable, exposing whatever the
-            // caller writes into it (Go uses 0700 for MkdirTemp).
+            // caller writes into it .
             #[cfg_attr(not(unix), allow(unused_mut))] // mutated only under cfg(unix)
             let mut builder = std::fs::DirBuilder::new();
             #[cfg(unix)]

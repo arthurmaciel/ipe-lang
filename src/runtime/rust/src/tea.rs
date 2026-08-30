@@ -536,7 +536,7 @@ where
         // A render must NOT force a trailing "\n": that would diverge from the
         // the spec. ``'s `cliPrintView` is explicit that
         // it "writes the result to stdout WITHOUT a trailing newline (the
-        // user's prompt formatting decides whether to add one)" — Go only ever
+        // user's prompt formatting decides whether to add one)" — runtime only ever
         // appends ONE newline, at `fmt.Println()` after the event loop exits
         // (same as here). This is intentional REPL-prompt design:
         // `examples/shapes/terminal/simple-counter`'s `view` returns
