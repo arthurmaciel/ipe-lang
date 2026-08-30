@@ -111,6 +111,17 @@ toMaybe (Ok 42) --> Just 42
 toMaybe (Err "oops") --> Nothing
 ```
 
+## `traverse`
+
+`traverse f list` — map each element to a `Result`, collecting successes;
+short-circuits on the first `Err`.
+
+```ipe
+traverse (\n -> if n > 0 then Ok n else Err "negative") [ 1, 2, 3 ] --> Ok [ 1, 2, 3 ]
+traverse (\n -> if n > 0 then Ok n else Err "negative") [ 1, -2, 3 ] --> Err "negative"
+traverse (\n -> if n > 0 then Ok n else Err "negative") [] --> Ok []
+```
+
 ## `withDefault`
 
 `withDefault fallback result` — the success value, or `fallback` if `Err`.
