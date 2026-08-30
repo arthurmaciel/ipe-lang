@@ -2199,6 +2199,7 @@ dependencies = [
  "ipe_kernels",
  "ipe_lower",
  "ipe_parse",
+ "ipe_stdlib",
  "ipe_syntax",
  "ipe_types",
  "salsa",

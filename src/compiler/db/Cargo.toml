@@ -18,5 +18,8 @@ ipe_ir = { path = "../ir" }
 ipe_backend = { path = "../backend" }
 ipe_backend_rust = { path = "../backend/rust" }
 
+[dev-dependencies]
+ipe_stdlib = { path = "../../stdlib" }
+
 [lints]
 workspace = true

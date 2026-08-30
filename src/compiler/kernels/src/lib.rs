@@ -1295,6 +1295,13 @@ pub enum StdlibKernel {
     // `Ffi.callPure "Time_isLeapYear"` / `"Time_daysInMonth"`.
     TimeIsLeapYear,
     TimeDaysInMonth,
+    // ── Time formatting + arithmetic (backed by time.rs) ──────────────────
+    TimeFormat,
+    TimeFormatHTTP,
+    TimeFormatISO8601,
+    TimeFormatRFC3339,
+    TimeAddMillis,
+    TimeDiffMillis,
     // ── System ──────────────────────────────────────────────────────────────
     SystemArgs,
     SystemGetenv,
@@ -3345,6 +3352,12 @@ impl StdlibKernel {
             Self::TimeTimeString => d("Time", "timeString", 1, Pure, "time_time_string"),
             Self::TimeIsLeapYear => d("Time", "isLeapYear", 1, Pure, "time_is_leap_year"),
             Self::TimeDaysInMonth => d("Time", "daysInMonth", 2, Pure, "time_days_in_month"),
+            Self::TimeFormat => d("Time", "format", 2, Pure, "time_format"),
+            Self::TimeFormatHTTP => d("Time", "formatHTTP", 1, Pure, "time_format_http"),
+            Self::TimeFormatISO8601 => d("Time", "formatISO8601", 1, Pure, "time_format_iso8601"),
+            Self::TimeFormatRFC3339 => d("Time", "formatRFC3339", 1, Pure, "time_format_rfc3339"),
+            Self::TimeAddMillis => d("Time", "addMillis", 2, Pure, "time_add_millis"),
+            Self::TimeDiffMillis => d("Time", "diffMillis", 2, Pure, "time_diff_millis"),
             // ── System ──────────────────────────────────────────────────────
             Self::SystemArgs => d("System", "args", 1, Pure, "system_args"),
             Self::SystemGetenv => d("System", "getenv", 1, Pure, "system_getenv"),
@@ -4965,6 +4978,12 @@ impl StdlibKernel {
         Self::TimeTimeString,
         Self::TimeIsLeapYear,
         Self::TimeDaysInMonth,
+        Self::TimeFormat,
+        Self::TimeFormatHTTP,
+        Self::TimeFormatISO8601,
+        Self::TimeFormatRFC3339,
+        Self::TimeAddMillis,
+        Self::TimeDiffMillis,
         // System
         Self::SystemArgs,
         Self::SystemGetenv,
@@ -5917,6 +5936,7 @@ impl StdlibKernel {
         const STRING_TO_BOOL: TyShape = TyShape::Fun(&STRING, &BOOL);
         const STRING_TO_STRING: TyShape = TyShape::Fun(&STRING, &STRING);
         const STRING_TO_BYTES: TyShape = TyShape::Fun(&STRING, &BYTES);
+        const STRING_TO_INT_TO_STRING: TyShape = TyShape::Fun(&STRING, &INT_TO_STRING);
         const STRING_TO_STRING_TO_STRING: TyShape = TyShape::Fun(&STRING, &STRING_TO_STRING);
         const STRING_TO_STRING_TO_BOOL: TyShape = TyShape::Fun(&STRING, &STRING_TO_BOOL);
         const STRING_TO_STRING_TO_STRING_TO_STRING: TyShape =
@@ -8360,7 +8380,13 @@ impl StdlibKernel {
 
             // ── Time (pure calendar kernels — no Task wrap). ──
             Self::TimeIsLeapYear => Some(&INT_TO_BOOL),
-            Self::TimeDaysInMonth => Some(&INT_TO_INT_TO_INT),
+            Self::TimeDaysInMonth | Self::TimeAddMillis | Self::TimeDiffMillis => {
+                Some(&INT_TO_INT_TO_INT)
+            }
+            Self::TimeFormatHTTP | Self::TimeFormatISO8601 | Self::TimeFormatRFC3339 => {
+                Some(&INT_TO_STRING)
+            }
+            Self::TimeFormat => Some(&STRING_TO_INT_TO_STRING),
 
             // ── RateLimit / string-constant kernels. ──
             Self::RateLimitAllow => Some(&STRING_TO_STRING_TO_INT_TO_INT_TO_BOOL),
@@ -10498,6 +10524,15 @@ impl StdlibKernel {
             | Self::LocaleToTag
             | Self::StringToUpperIn
             | Self::StringToLowerIn
+            // `Time.format*` / `Time.addMillis` / `Time.diffMillis` are pure
+            // converters that take a supplied timestamp as input — they read no
+            // system clock and disclose no `Clock` capability.
+            | Self::TimeFormat
+            | Self::TimeFormatHTTP
+            | Self::TimeFormatISO8601
+            | Self::TimeFormatRFC3339
+            | Self::TimeAddMillis
+            | Self::TimeDiffMillis
             // `Debug.todo` / `Debug.explain` are dev-only escape hatches;
             // no runtime capability beyond `Debug.*` dev membership.
             | Self::DebugTodo
@@ -11147,6 +11182,12 @@ impl StdlibKernel {
                 | Self::TimeTimeString
                 | Self::TimeIsLeapYear
                 | Self::TimeDaysInMonth
+                | Self::TimeFormat
+                | Self::TimeFormatHTTP
+                | Self::TimeFormatISO8601
+                | Self::TimeFormatRFC3339
+                | Self::TimeAddMillis
+                | Self::TimeDiffMillis
         )
     }
 
@@ -12069,6 +12110,7 @@ impl StdlibKernel {
     /// The `WasmClient` allowlist. The catch-all `false` arm IS the
     /// default-deny invariant — never widen it to a family without a probe
     /// build proving the family's runtime module compiles to wasm32.
+    #[allow(clippy::too_many_lines)]
     fn wasm_client_available(self) -> bool {
         let decl = self.decl();
         match decl.class {
@@ -12179,6 +12221,12 @@ impl StdlibKernel {
                     Self::TimeTimeString
                         | Self::TimeIsLeapYear
                         | Self::TimeDaysInMonth
+                        | Self::TimeFormat
+                        | Self::TimeFormatHTTP
+                        | Self::TimeFormatISO8601
+                        | Self::TimeFormatRFC3339
+                        | Self::TimeAddMillis
+                        | Self::TimeDiffMillis
                         | Self::TimeNow
                         | Self::TimeSleep
                         | Self::TimeUnixMillis

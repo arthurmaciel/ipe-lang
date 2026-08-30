@@ -11,6 +11,7 @@ module Ipe.Time exposing
     , format, formatHTTP, formatISO8601, formatRFC3339
     , addMillis, diffMillis
     , every
+    , isLeapYear, daysInMonth
     )
 
 
@@ -74,3 +75,16 @@ diffMillis = Ffi.kernel "Time_diffMillis"
 -- that emits `msg` every `intervalMillis` milliseconds.
 every : Int -> msg -> Sub msg
 every = Ffi.kernel "Time_every"
+
+
+-- Pure calendar helpers
+
+
+-- | `isLeapYear year` — True when `year` is a leap year.
+isLeapYear : Int -> Bool
+isLeapYear = Ffi.kernel "Time_isLeapYear"
+
+
+-- | `daysInMonth year month` — number of days in `month` of `year`.
+daysInMonth : Int -> Int -> Int
+daysInMonth = Ffi.kernel "Time_daysInMonth"
