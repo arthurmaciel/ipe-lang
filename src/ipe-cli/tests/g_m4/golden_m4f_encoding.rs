@@ -1,5 +1,5 @@
 //! `Ipe.Encoding` parity gate — base64 / URL / hex encode-decode
-//! kernels with byte-for-byte Go parity.
+//! kernels with byte-for-byte golden parity.
 //!
 //! These golden tests exercise the `Ipe.Encoding` kernel family end-to-end:
 //!
@@ -38,17 +38,17 @@
 //! non-ASCII (no Latin-1 truncation).
 //!
 //! `encoding_invalid` carries `oracle_divergence = true` (Go-failure kind):
-//! the Go backend PANICS with `CoerceFailure` (`rt.ResultCoerce` →
+//! the the backend PANICS with `CoerceFailure` (`rt.ResultCoerce` →
 //! `coerceInner`) when narrowing the `Result` of a decode kernel inside a
 //! top-level `case … of Ok _ … Err _ …`, so it cannot produce a reference for
 //! this shape. ipe handles it correctly (`"invalid"`), which `refresh-oracle`
 //! caches. This is an UPSTREAM (Go-backend) bug, not a Ipê-Rust one. TRACKED:
-//! re-verify this golden against the live Go oracle once the upstream
+//! re-verify this golden against the live golden oracle once the upstream
 //! CoerceFailure-on-decode-Result narrowing is fixed (`refresh-oracle
 //! encoding_invalid`) — if Go then succeeds, the flag should flip back to
 //! `false`. The base64/url/hex DECODE oracles decode from a let-bound `case`
 //! whose `Err _` arm yields a String literal (a different routing shape that Go
-//! handles), so they stay parity-clean — re-verified against the live Go oracle.
+//! handles), so they stay parity-clean — re-verified against the live golden oracle.
 //!
 //! Every test is gated on `IPE_E2E=1`; without it the test returns early. Run:
 //!
@@ -120,7 +120,7 @@ fn encoding_url_unreserved() {
 
 // ── hexEncode + hexDecode ────────────────────────────────────────────────────
 
-/// `Encoding.hexEncode "Hi!"` → `"486921"` (lowercase hex, Go parity);
+/// `Encoding.hexEncode "Hi!"` → `"486921"` (lowercase hex, golden parity);
 /// `Encoding.hexDecode "486921"` → `Ok "Hi!"`.  Output: `"486921 Hi!"`.
 #[test]
 fn encoding_hex_roundtrip() {

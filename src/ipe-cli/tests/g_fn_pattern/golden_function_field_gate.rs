@@ -17,7 +17,7 @@
 //! `unwrap (wrap (\n -> n + 1))` is `\n -> n + 1` and `f 41 == 42`). It must
 //! NEVER accept the program and then cargo-fail.
 //!
-//! Note on the Go oracle: the Go reference compiler at
+//! Note on the golden oracle: the the reference compiler at
 //! `/home/arthur/Documentos/comp/ipe/out/ipe` ALSO fails this shape today —
 //! its codegen emits Go that `go build` rejects (E5001 "Ipê compiler bug",
 //! `cannot call f ... any is not a function`), hand-verified in a temp dir. So

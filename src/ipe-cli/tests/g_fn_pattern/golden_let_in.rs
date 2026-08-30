@@ -2,12 +2,12 @@
 //! checked-in golden for single- and multi-binding `let`s, and (behind
 //! `IPE_E2E=1`) the emitted project must build and print `22`.
 //!
-//! Behavioural-parity oracle: the Go reference compiler at
+//! Verified: the reference compiler at
 //! `/home/arthur/Documentos/comp/ipe/out/ipe` compiles + runs the SAME
-//! `Main.ipe` to stdout `22\n`, exit 0 — verified by hand:
+//! `Main.ipe` to stdout `22\n`, exit 0:
 //!
 //! ```text
-//! $ ipe run tests/golden/let_in/Main.ipe   # Go backend
+//! $ ipe run tests/golden/let_in/Main.ipe   
 //! 22
 //! ```
 //!
@@ -15,9 +15,9 @@
 //! 8`, then `b = a + 4 = 12` (a later binding reads an earlier one); the entry's
 //! inline `let total = double 5 + triple 4` is `10 + 12 = 22`. The Rust
 //! `end_to_end_*` test below asserts the Rust backend reaches the identical `22`.
-//! Running the Go toolchain inside `cargo test` is impractical (it needs the
-//! Haskell `ipe` binary plus a Go toolchain), so the hand-computed value is the
-//! in-test oracle, documented here against the Go-equivalent command.
+//! Running the the toolchain inside `cargo test` is impractical (it needs the
+//! the `ipe` binary plus a the toolchain), so the hand-computed value is the
+//! in-test oracle, documented here against the equivalent command.
 
 use std::path::{Path, PathBuf};
 
@@ -60,7 +60,7 @@ fn emits_byte_identical_main_rs() {
 }
 
 /// Full spine: compile, build the emitted Cargo project, run it, and assert the
-/// `let`-bound arithmetic prints `22` — the same value the Go backend produces.
+/// `let`-bound arithmetic prints `22` — the expected value.
 /// Gated on `IPE_E2E=1` so the default `cargo test` stays fast.
 #[test]
 fn end_to_end_builds_and_prints_twenty_two() {
@@ -85,5 +85,5 @@ fn end_to_end_builds_and_prints_twenty_two() {
         &repo_root().join("tests").join("golden").join("let_in"),
         &outcome.stdout,
     );
-    assert_eq!(outcome.exit_code, Some(0), "exit 0, matching the Go oracle");
+    assert_eq!(outcome.exit_code, Some(0), "exit 0");
 }

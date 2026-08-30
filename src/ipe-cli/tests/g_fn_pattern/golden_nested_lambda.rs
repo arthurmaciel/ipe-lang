@@ -19,18 +19,18 @@
 //! Both paths compute `1 + 2 + 3 = 6`; the entry prints the shared value, so a
 //! divergence between the two reshapes would change the output.
 //!
-//! Behavioural-parity oracle: the Go reference compiler at
+//! Verified: the reference compiler at
 //! `/home/arthur/Documentos/comp/ipe/out/ipe` compiles + runs the SAME
-//! `Main.ipe` to stdout `6\n`, exit 0 — verified by hand:
+//! `Main.ipe` to stdout `6\n`, exit 0:
 //!
 //! ```text
-//! $ ipe run tests/golden/nested_lambda/Main.ipe   # Go backend
+//! $ ipe run tests/golden/nested_lambda/Main.ipe   
 //! 6
 //! ```
 //!
-//! Running the Go toolchain inside `cargo test` is impractical (it needs the
-//! Haskell `ipe` binary plus a Go toolchain), so the hand-computed value is the
-//! in-test oracle, documented here against the Go-equivalent command.
+//! Running the the toolchain inside `cargo test` is impractical (it needs the
+//! the `ipe` binary plus a the toolchain), so the hand-computed value is the
+//! in-test oracle, documented here against the equivalent command.
 
 use std::path::{Path, PathBuf};
 
@@ -73,7 +73,7 @@ fn emits_byte_identical_main_rs() {
 }
 
 /// Full spine: compile, build the emitted Cargo project, run it, and assert the
-/// nested-lambda flattening prints `6` — the same value the Go backend produces.
+/// nested-lambda flattening prints `6` — the expected value.
 /// Gated on `IPE_E2E=1` so the default `cargo test` stays fast.
 #[test]
 fn end_to_end_builds_and_prints_six() {
@@ -101,5 +101,5 @@ fn end_to_end_builds_and_prints_six() {
             .join("nested_lambda"),
         &outcome.stdout,
     );
-    assert_eq!(outcome.exit_code, Some(0), "exit 0, matching the Go oracle");
+    assert_eq!(outcome.exit_code, Some(0), "exit 0");
 }

@@ -11,7 +11,7 @@
 //! ## Oracle provenance
 //!
 //! All three goldens are TRUE Go-parity goldens (`oracle_divergence = false`):
-//! the Go reference compiler compiled the identical `Main.ipe` and produced the
+//! the the reference compiler compiled the identical `Main.ipe` and produced the
 //! captured `expected_go.txt`.  The test asserts byte-identity of stdout with
 //! the Go output.
 //!

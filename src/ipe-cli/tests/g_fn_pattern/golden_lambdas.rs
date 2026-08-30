@@ -3,12 +3,12 @@
 //! multi-parameter `\a b -> e`, and an outer-local capture), and (behind
 //! `IPE_E2E=1`) the emitted project must build and print `62`.
 //!
-//! Behavioural-parity oracle: the Go reference compiler at
+//! Verified: the reference compiler at
 //! `/home/arthur/Documentos/comp/ipe/out/ipe` compiles + runs the SAME
-//! `Main.ipe` to stdout `62\n`, exit 0 — verified by hand:
+//! `Main.ipe` to stdout `62\n`, exit 0:
 //!
 //! ```text
-//! $ ipe run tests/golden/lambdas/Main.ipe   # Go backend
+//! $ ipe run tests/golden/lambdas/Main.ipe   
 //! 62
 //! ```
 //!
@@ -16,9 +16,9 @@
 //! applies an inline lambda that captures the outer local `n = 10` → `15`;
 //! `add 2 3` applies the multi-parameter lambda `\a b -> a + b` → `5`. The
 //! entry's `let r = inc 41 + (\x -> x + n) 5 + add 2 3` is `42 + 15 + 5 = 62`.
-//! Running the Go toolchain inside `cargo test` is impractical (it needs the
-//! Haskell `ipe` binary plus a Go toolchain), so the hand-computed value is the
-//! in-test oracle, documented here against the Go-equivalent command.
+//! Running the the toolchain inside `cargo test` is impractical (it needs the
+//! the `ipe` binary plus a the toolchain), so the hand-computed value is the
+//! in-test oracle, documented here against the equivalent command.
 
 use std::path::{Path, PathBuf};
 
@@ -61,7 +61,7 @@ fn emits_byte_identical_main_rs() {
 }
 
 /// Full spine: compile, build the emitted Cargo project, run it, and assert the
-/// lambda-driven arithmetic prints `62` — the same value the Go backend
+/// lambda-driven arithmetic prints `62` — the same value the the backend
 /// produces. Gated on `IPE_E2E=1` so the default `cargo test` stays fast.
 #[test]
 fn end_to_end_builds_and_prints_sixty_two() {
@@ -86,5 +86,5 @@ fn end_to_end_builds_and_prints_sixty_two() {
         &repo_root().join("tests").join("golden").join("lambdas"),
         &outcome.stdout,
     );
-    assert_eq!(outcome.exit_code, Some(0), "exit 0, matching the Go oracle");
+    assert_eq!(outcome.exit_code, Some(0), "exit 0");
 }

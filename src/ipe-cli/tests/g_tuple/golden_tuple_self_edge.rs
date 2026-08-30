@@ -15,7 +15,7 @@
 //! balanced by `Box::new` at construction and a deref at pattern binding.
 //!
 //! Note: the Go reference parser does NOT accept a tuple type as a constructor
-//! payload, so there is no Go oracle for this exact source — `ipec` accepts a
+//! payload, so there is no golden oracle for this exact source — `ipec` accepts a
 //! superset here. The in-test hand-computed `5` is the oracle, and the gate's
 //! load-bearing assertion is that the emitted crate BUILDS (no E0072) and runs,
 //! pinning the indirect-cycle soundness floor so it can never regress to the

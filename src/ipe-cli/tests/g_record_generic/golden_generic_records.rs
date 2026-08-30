@@ -11,20 +11,20 @@
 //! canonicaliser → solver → lowerer → Rust backend), not just the hand-built IR
 //! unit tests in `ipe_backend_rust`.
 //!
-//! Behavioural-parity oracle: the Go reference compiler at
+//! Verified: the reference compiler at
 //! `/home/arthur/Documentos/comp/ipe/out/ipe` compiles + runs the SAME
-//! `Main.ipe` to stdout `42\n`, exit 0 — verified by hand in a temp dir (so the
+//! `Main.ipe` to stdout `42\n`, exit 0 in a temp dir (so the
 //! Go build artifacts never touch the reference tree):
 //!
 //! ```text
-//! $ cd "$(mktemp -d)" && ipe run Main.ipe   # Go backend
+//! $ cd "$(mktemp -d)" && ipe run Main.ipe   
 //! 42
 //! ```
 //!
 //! The `end_to_end_*` test below asserts the Rust backend reaches the identical
-//! `42`. Running the Go toolchain inside `cargo test` is impractical (it needs
-//! the Haskell `ipe` binary plus a Go toolchain), so the hand-verified value is
-//! the in-test oracle, documented here against the Go-equivalent command.
+//! `42`. Running the the toolchain inside `cargo test` is impractical (it needs
+//! the the `ipe` binary plus a the toolchain), so the hand-verified value is
+//! the in-test oracle, documented here against the equivalent command.
 
 use std::path::{Path, PathBuf};
 
@@ -67,7 +67,7 @@ fn emits_byte_identical_main_rs() {
 }
 
 /// Full spine: compile, build the emitted Cargo project, run it, and assert the
-/// generic-record program prints `42` — the same value the Go backend produces.
+/// generic-record program prints `42` — the expected value.
 /// Gated on `IPE_E2E=1` so the default `cargo test` stays fast.
 #[test]
 fn end_to_end_builds_and_prints_forty_two() {
@@ -95,5 +95,5 @@ fn end_to_end_builds_and_prints_forty_two() {
             .join("generic_records"),
         &outcome.stdout,
     );
-    assert_eq!(outcome.exit_code, Some(0), "exit 0, matching the Go oracle");
+    assert_eq!(outcome.exit_code, Some(0), "exit 0");
 }

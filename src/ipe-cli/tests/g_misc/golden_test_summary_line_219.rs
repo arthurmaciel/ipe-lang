@@ -1,12 +1,12 @@
 //! Regression — `Ipe.Test.runMain` must print the pass/fail SUMMARY line
 //! to stdout, matching the Go reference.
 //!
-//! The Go/Haskell reference `Ipe.Test.summarise` prints exactly one line,
+//! The Go/the compiler reference `Ipe.Test.summarise` prints exactly one line,
 //! `"<pass> passed, <fail> failed (<total> total)"`, before `runMain` picks the
 //! exit code. The Rust fork's `summarise` was simplified to a pure predicate
 //! with NO output, so a `Test.runMain tests` program (e.g. example
 //! `00-standard-libs`) exited 0 with EMPTY stdout — a stdout divergence from the
-//! Go oracle. This test pins the summary line so the divergence cannot return.
+//! golden oracle. This test pins the summary line so the divergence cannot return.
 //!
 //! Gated on `IPE_E2E=1`. Run:
 //! `IPE_E2E=1 cargo test -p ipe --test golden_test_summary_line_219`.

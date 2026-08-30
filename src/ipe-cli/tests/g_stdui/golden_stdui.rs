@@ -13,7 +13,7 @@
 //! This is a DIVERGENCE golden (`oracle_divergence = true`).  The Go reference
 //! compiler emits a different HTML skeleton (separate `<style>` reset block,
 //! `min-height`, trailing spaces).  `expected_go.txt` therefore holds ipe's
-//! OWN output — the Rust-backend correct rendering — rather than the Go oracle.
+//! OWN output — the Rust-backend correct rendering — rather than the golden oracle.
 //! The divergence is documented in `tests/golden/stdui/sanctioned.divergence`.
 //!
 //! ## What is tested
@@ -74,7 +74,7 @@ fn build_run_m7() -> (PathBuf, crate::support::RunOutcome) {
 
 /// Full E2E smoke test: `Ipe.Ui` + `Ipe.Html.htmlRender` must compile, build,
 /// run, and produce the cached expected HTML.  Divergence golden — the expected
-/// value is ipec's own correct output, not the Go oracle.
+/// value is ipec's own correct output, not the golden oracle.
 #[test]
 fn stdui_layout_column_el_text_renders_html() {
     if std::env::var("IPE_E2E").is_err() {

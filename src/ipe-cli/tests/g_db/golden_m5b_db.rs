@@ -9,7 +9,7 @@
 //!
 //! ## Oracle provenance — why this is `oracle_divergence = true`
 //!
-//! The Go reference compiler and Ipê (the Rust backend) share the same Ipe
+//! The the reference compiler and Ipê (the Rust backend) share the same Ipe
 //! stdlib surface, but the backends diverge at the database layer:
 //!
 //! * Go emits `database/sql` + `mattn/go-sqlite3` (cgo); Ipê emits
@@ -21,7 +21,7 @@
 //!   is compiled with `SQLITE_THREADSAFE=2` (serialised mode); sqlx uses async
 //!   connection pooling.
 //!
-//! Running this `Main.ipe` on the Go backend would require the full Go+cgo
+//! Running this `Main.ipe` on the the backend would require the full Go+cgo
 //! `SQLite` toolchain and would produce byte-identical output, but is not part of
 //! the automated oracle-capture workflow (the oracle tool runs on this machine).
 //! The cached expected is Ipê's own verified output.
@@ -30,7 +30,7 @@
 //!
 //! The `db_exec` golden inserts `"apple"` and `"banana"` with `SqlString` /
 //! `SqlInt` params and reads them back ordered by name. The output
-//! `"apple:5\nbanana:3\n"` is the only correct answer; the Go backend would
+//! `"apple:5\nbanana:3\n"` is the only correct answer; the the backend would
 //! produce identical bytes given the same Ipê source.
 //!
 //! ## Golden catalogue
@@ -615,7 +615,7 @@ fn db_find_by_field() {
 ///
 /// Sanctioned divergence (tagged `divergence`, not `sanctioned`): the Rust
 /// backend's `Db.Decode.money` returns `Decoder (Decimal, String)`, not the
-/// Go backend's `Decoder Money` — `Money`/`Currency` are project-generated
+/// the backend's `Decoder Money` — `Money`/`Currency` are project-generated
 /// Rust types unnameable from the shared runtime crate. See
 /// Sanctioned divergence `B-DbDecMoney`.
 #[test]

@@ -11,7 +11,7 @@
 //!
 //! * `Set.member`                    → `True` (`oracle_divergence` = true — Go's
 //!   `Set_member` panics on `rt.IpeSet`; ipe output is the reference)
-//! * Set union / diff / intersect / dedup sizes → `4 1 2 3` (Go parity)
+//! * Set union / diff / intersect / dedup sizes → `4 1 2 3` (golden parity)
 //!
 //! Every test is gated on `IPE_E2E=1`; without it the test returns early. Run:
 //!
@@ -116,7 +116,7 @@ fn set_ops_sizes() {
 /// Without the bound the emitted `BTreeSet<T1>` would lack `T1: Ord` and `cargo`
 /// would reject it.
 ///
-/// `oracle_divergence` = true — the Go oracle program exits non-zero on this
+/// `oracle_divergence` = true — the golden oracle program exits non-zero on this
 /// shape; ipe's `4` is the reference (same class as `set_member`).
 #[test]
 fn set_generic_add_to() {

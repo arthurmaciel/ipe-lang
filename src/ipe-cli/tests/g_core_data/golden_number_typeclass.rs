@@ -11,12 +11,12 @@
 //! byte-identical to the checked-in golden, and (behind `IPE_E2E=1`) the emitted
 //! project must build and print `42`.
 //!
-//! Behavioural-parity oracle: the Go reference compiler at
+//! Verified: the reference compiler at
 //! `/home/arthur/Documentos/comp/ipe/out/ipe` compiles + runs the SAME
 //! `Main.ipe` to stdout `42\n`, exit 0:
 //!
 //! ```text
-//! $ cd "$(mktemp -d)" && ipe run Main.ipe   # Go backend
+//! $ cd "$(mktemp -d)" && ipe run Main.ipe   
 //! 42
 //! ```
 
@@ -61,7 +61,7 @@ fn emits_byte_identical_main_rs() {
 }
 
 /// Full spine: compile, build the emitted Cargo project, run it, and assert the
-/// Number-generic program prints `42` — the value the Go backend produces.
+/// Number-generic program prints `42` — the expected backend produces.
 /// Gated on `IPE_E2E=1` so the default `cargo test` stays fast.
 #[test]
 fn end_to_end_builds_and_prints_forty_two() {
@@ -89,5 +89,5 @@ fn end_to_end_builds_and_prints_forty_two() {
             .join("number_typeclass"),
         &outcome.stdout,
     );
-    assert_eq!(outcome.exit_code, Some(0), "exit 0, matching the Go oracle");
+    assert_eq!(outcome.exit_code, Some(0), "exit 0");
 }

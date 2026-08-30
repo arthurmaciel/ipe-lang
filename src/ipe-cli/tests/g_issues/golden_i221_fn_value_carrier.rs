@@ -17,10 +17,10 @@
 //! `Box<dyn Fn>` slots and `impl Fn` kernels are still satisfied — every other
 //! binding keeps the lean `Box` carrier.
 //!
-//! Behavioural-parity oracle: the Go reference toolchain compiles and runs
+//! Verified: the Go reference toolchain compiles and runs
 //! `fn_value_reuse_promoted` (`47`) and `fn_param_capture_promoted`
 //! (`13`) to the asserted stdout. `fn_capture_eta_promoted` is REJECTED
-//! by the Go backend (`not enough arguments in call to wrap` — the same
+//! by the the backend (`not enough arguments in call to wrap` — the same
 //! local-fn-value partial-application arity gap this promotion closes), so its
 //! `4` is the hand-computed language-semantics value; accepting the shape is a
 //! recorded strictly-better divergence.
@@ -73,7 +73,7 @@ fn assert_e2e_prints(name: &str, want_stdout: &str) {
 
     let outcome = crate::support::build_and_run_emitted(name, &out);
     assert_eq!(outcome.stdout, want_stdout, "must match the Go oracle");
-    assert_eq!(outcome.exit_code, Some(0), "exit 0, matching the Go oracle");
+    assert_eq!(outcome.exit_code, Some(0), "exit 0");
 }
 
 #[test]

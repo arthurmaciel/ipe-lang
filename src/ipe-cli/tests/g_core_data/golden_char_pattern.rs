@@ -3,7 +3,7 @@
 //! `ipe` must emit `main.rs` byte-identical to the checked-in golden, and
 //! (behind `IPE_E2E=1`) the emitted project must build and print `2`.
 //!
-//! Behavioural-parity oracle: the Go reference compiler at
+//! Verified: the reference compiler at
 //! `/home/arthur/Documentos/comp/ipe/out/ipe` compiles + runs the SAME
 //! `Main.ipe` to stdout `2\n`, exit 0 — hand-verified in a temp dir.
 use std::path::{Path, PathBuf};
@@ -74,5 +74,5 @@ fn end_to_end_builds_and_prints_two() {
             .join("char_pattern"),
         &outcome.stdout,
     );
-    assert_eq!(outcome.exit_code, Some(0), "exit 0, matching the Go oracle");
+    assert_eq!(outcome.exit_code, Some(0), "exit 0");
 }

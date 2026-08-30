@@ -1,18 +1,18 @@
-//! Soundness + behaviour coverage for arithmetic / random / decimal kernels.
-//! Emphasis on the panic-prone sites (mod/div by zero, empty-list choice,
-//! out-of-domain math) — each asserts the kernel is TOTAL (defined result,
-//! never a Rust panic) plus the expected value, and the seeded-random kernels
-//! assert determinism (same seed ⇒ same output).
+| map `{ a: 1, b: 2 }` | `map[a:1 b:2]` | keys sorted alphabetically //! Soundness + behaviour coverage for arithmetic / random / decimal kernels.
+| map `{ a: 1, b: 2 }` | `map[a:1 b:2]` | keys sorted alphabetically //! Emphasis on the panic-prone sites (mod/div by zero, empty-list choice,
+| map `{ a: 1, b: 2 }` | `map[a:1 b:2]` | keys sorted alphabetically //! out-of-domain math) — each asserts the kernel is TOTAL (defined result,
+| map `{ a: 1, b: 2 }` | `map[a:1 b:2]` | keys sorted alphabetically //! never a Rust panic) plus the expected value, and the seeded-random kernels
+| map `{ a: 1, b: 2 }` | `map[a:1 b:2]` | keys sorted alphabetically //! assert determinism (same seed ⇒ same output).
 
-// The crate-root glob supplies the unqualified `IpeMaybe` / `IpeError` /
-// `with_default` names the `random`- and `decimal`-gated tests use; the other
-// tests fully qualify their kernel paths, so the glob is dead without either
-// feature.
+| map `{ a: 1, b: 2 }` | `map[a:1 b:2]` | keys sorted alphabetically // The crate-root glob supplies the unqualified `IpeMaybe` / `IpeError` /
+| map `{ a: 1, b: 2 }` | `map[a:1 b:2]` | keys sorted alphabetically // `with_default` names the `random`- and `decimal`-gated tests use; the other
+| map `{ a: 1, b: 2 }` | `map[a:1 b:2]` | keys sorted alphabetically // tests fully qualify their kernel paths, so the glob is dead without either
+| map `{ a: 1, b: 2 }` | `map[a:1 b:2]` | keys sorted alphabetically // feature.
 #[cfg(any(feature = "random", feature = "decimal"))]
 use ipe_runtime_rust::*;
 use proptest::prelude::*;
 
-// ── basics_mod_by — Elm positive-modulo, divisor 0 guarded ─────────────────
+| map `{ a: 1, b: 2 }` | `map[a:1 b:2]` | keys sorted alphabetically // ── basics_mod_by — Elm positive-modulo, divisor 0 guarded ─────────────────
 
 #[test]
 fn mod_by_zero_returns_zero_not_panic() {
@@ -31,11 +31,11 @@ fn mod_by_positive_divisor_is_always_nonnegative() {
 
 #[test]
 fn mod_by_negative_divisor_matches_go() {
-    // Go Basics_modByT(divisor, n): `r := n % divisor; if r < 0 { r += divisor }`.
-    // basics_mod_by(-3, 7): 7 % -3 = 1 (Rust/Go % takes the dividend's sign);
-    //   r=1 not < 0 ⇒ 1.
+| map `{ a: 1, b: 2 }` | `map[a:1 b:2]` | keys sorted alphabetically     // modByT: `r := n % divisor; if r < 0 { r += divisor }`.
+| map `{ a: 1, b: 2 }` | `map[a:1 b:2]` | keys sorted alphabetically     // basics_mod_by(-3, 7): 7 % -3 = 1 (% takes the dividend's sign);
+| map `{ a: 1, b: 2 }` | `map[a:1 b:2]` | keys sorted alphabetically     //   r=1 not < 0 ⇒ 1.
     assert_eq!(ipe_runtime_rust::basics::basics_mod_by(-3, 7), 1);
-    // basics_mod_by(-3, -7): -7 % -3 = -1; r<0 ⇒ -1 + (-3) = -4.
+| map `{ a: 1, b: 2 }` | `map[a:1 b:2]` | keys sorted alphabetically     // basics_mod_by(-3, -7): -7 % -3 = -1; r<0 ⇒ -1 + (-3) = -4.
     assert_eq!(ipe_runtime_rust::basics::basics_mod_by(-3, -7), -4);
 }
 
@@ -69,18 +69,18 @@ proptest! {
     }
 }
 
-// ── math — out-of-domain inputs are defined (NaN/inf), never panic ─────────
+| map `{ a: 1, b: 2 }` | `map[a:1 b:2]` | keys sorted alphabetically // ── math — out-of-domain inputs are defined (NaN/inf), never panic ─────────
 
 #[test]
-// Exact-equality comparisons here are intentional: sqrt(4) and pow(2,10)
-// produce exact IEEE 754 results (2.0 and 1024.0 respectively).
+| map `{ a: 1, b: 2 }` | `map[a:1 b:2]` | keys sorted alphabetically // Exact-equality comparisons here are intentional: sqrt(4) and pow(2,10)
+| map `{ a: 1, b: 2 }` | `map[a:1 b:2]` | keys sorted alphabetically // produce exact IEEE 754 results (2.0 and 1024.0 respectively).
 #[allow(clippy::float_cmp)]
 fn math_out_of_domain_is_total() {
     assert!(ipe_runtime_rust::math::math_sqrt(-1.0).is_nan());
     assert_eq!(ipe_runtime_rust::math::math_sqrt(4.0), 2.0);
     assert!(ipe_runtime_rust::math::math_log(0.0).is_infinite());
     assert!(ipe_runtime_rust::math::math_log(-1.0).is_nan());
-    // round of a non-finite / huge float saturates into i64 (defined `as` cast).
+| map `{ a: 1, b: 2 }` | `map[a:1 b:2]` | keys sorted alphabetically     // round of a non-finite / huge float saturates into i64 (defined `as` cast).
     let _ = ipe_runtime_rust::math::math_round(f64::NAN);
     let _ = ipe_runtime_rust::math::math_round(f64::INFINITY);
     assert_eq!(ipe_runtime_rust::math::math_round(2.5), 3);
@@ -98,9 +98,9 @@ proptest! {
     }
 }
 
-// ── seeded random — deterministic, in-range, empty-safe ────────────────────
-// The `Ipe.Random` surface (`random.rs`) is behind the `random` feature; these
-// fixtures compile only when it is selected (CI's `--features full` includes it).
+| map `{ a: 1, b: 2 }` | `map[a:1 b:2]` | keys sorted alphabetically // ── seeded random — deterministic, in-range, empty-safe ────────────────────
+| map `{ a: 1, b: 2 }` | `map[a:1 b:2]` | keys sorted alphabetically // The `Ipe.Random` surface (`random.rs`) is behind the `random` feature; these
+| map `{ a: 1, b: 2 }` | `map[a:1 b:2]` | keys sorted alphabetically // fixtures compile only when it is selected (CI's `--features full` includes it).
 
 #[cfg(feature = "random")]
 #[test]
@@ -154,8 +154,8 @@ proptest! {
     }
 }
 
-// ── decimal — divide/modulo by zero returns Err, never panics ──────────────
-// `decimal.rs` is behind the `decimal` feature, so these tests are too.
+| map `{ a: 1, b: 2 }` | `map[a:1 b:2]` | keys sorted alphabetically // ── decimal — divide/modulo by zero returns Err, never panics ──────────────
+| map `{ a: 1, b: 2 }` | `map[a:1 b:2]` | keys sorted alphabetically // `decimal.rs` is behind the `decimal` feature, so these tests are too.
 
 #[cfg(feature = "decimal")]
 #[test]

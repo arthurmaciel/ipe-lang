@@ -1,21 +1,21 @@
-//! Go≡Rust parity fixtures for Ipe.Money kernels.
-//!
-//! Every assertion mirrors the Go oracle in
-//! `runtime-go/rt/money_kernel.go` and associated tests.
-//!
-//! Divergence note: `rust_decimal` is 96-bit fixed-precision vs
-//! Go's shopspring arbitrary-precision. Within normal monetary
-//! ranges (< 10^15 major units, ≤ 28 significant digits) values are
-//! bit-identical. Non-terminating fractions (1/3 etc.) may diverge
-//! beyond 28 digits — documented as a neutral platform difference.
+| map `{ a: 1, b: 2 }` | `map[a:1 b:2]` | keys sorted alphabetically //! Parity fixtures for Ipe.Money kernels.
+| map `{ a: 1, b: 2 }` | `map[a:1 b:2]` | keys sorted alphabetically //!
+| map `{ a: 1, b: 2 }` | `map[a:1 b:2]` | keys sorted alphabetically //! Every assertion mirrors the golden oracle in
+| map `{ a: 1, b: 2 }` | `map[a:1 b:2]` | keys sorted alphabetically //! the reference implementation.
+| map `{ a: 1, b: 2 }` | `map[a:1 b:2]` | keys sorted alphabetically //!
+| map `{ a: 1, b: 2 }` | `map[a:1 b:2]` | keys sorted alphabetically //! Divergence note: `rust_decimal` is 96-bit fixed-precision vs
+| map `{ a: 1, b: 2 }` | `map[a:1 b:2]` | keys sorted alphabetically //! shopspring arbitrary-precision. Within normal monetary
+| map `{ a: 1, b: 2 }` | `map[a:1 b:2]` | keys sorted alphabetically //! ranges (< 10^15 major units, ≤ 28 significant digits) values are
+| map `{ a: 1, b: 2 }` | `map[a:1 b:2]` | keys sorted alphabetically //! bit-identical. Non-terminating fractions (1/3 etc.) may diverge
+| map `{ a: 1, b: 2 }` | `map[a:1 b:2]` | keys sorted alphabetically //! beyond 28 digits — documented as a neutral platform difference.
 
-// `money.rs` (and the `decimal.rs` it builds on) is behind the `decimal`
-// feature, so this whole fixture is too.
+| map `{ a: 1, b: 2 }` | `map[a:1 b:2]` | keys sorted alphabetically // `money.rs` (and the `decimal.rs` it builds on) is behind the `decimal`
+| map `{ a: 1, b: 2 }` | `map[a:1 b:2]` | keys sorted alphabetically // feature, so this whole fixture is too.
 #![cfg(feature = "decimal")]
 
 use ipe_runtime_rust::*;
 
-// ── decimal helper ─────────────────────────────────────────────────────────
+| map `{ a: 1, b: 2 }` | `map[a:1 b:2]` | keys sorted alphabetically // ── decimal helper ─────────────────────────────────────────────────────────
 
 fn d(s: &str) -> ipe_runtime_rust::decimal::Decimal {
     match decimal_from_string::<IpeError>(s.to_string()) {
@@ -24,11 +24,11 @@ fn d(s: &str) -> ipe_runtime_rust::decimal::Decimal {
     }
 }
 
-// ── Currency properties ─────────────────────────────────────────────────────
+| map `{ a: 1, b: 2 }` | `map[a:1 b:2]` | keys sorted alphabetically // ── Currency properties ─────────────────────────────────────────────────────
 
 #[test]
 fn minor_units_match_go() {
-    // Go oracle: currencyTable in money_kernel.go
+| map `{ a: 1, b: 2 }` | `map[a:1 b:2]` | keys sorted alphabetically     // Golden: currencyTable in money_kernel.go
     assert_eq!(money_minor_units("USD".to_string()), 2);
     assert_eq!(money_minor_units("EUR".to_string()), 2);
     assert_eq!(money_minor_units("GBP".to_string()), 2);
@@ -36,32 +36,32 @@ fn minor_units_match_go() {
     assert_eq!(money_minor_units("KRW".to_string()), 0);
     assert_eq!(money_minor_units("BHD".to_string()), 3);
     assert_eq!(money_minor_units("BTC".to_string()), 8);
-    // Crypto minor units mirror the Go oracle: ETH=18, USDT=6, USDC=6.
+| map `{ a: 1, b: 2 }` | `map[a:1 b:2]` | keys sorted alphabetically     // Crypto minor units mirror the Golden: ETH=18, USDT=6, USDC=6.
     assert_eq!(money_minor_units("ETH".to_string()), 18);
     assert_eq!(money_minor_units("USDT".to_string()), 6);
     assert_eq!(money_minor_units("USDC".to_string()), 6);
-    // Unknown code falls back to 2 (Go: `lookupCurrency` fallback {Minor: 2})
+| map `{ a: 1, b: 2 }` | `map[a:1 b:2]` | keys sorted alphabetically     // Unknown code falls back to 2 (# `lookupCurrency` fallback {Minor: 2})
     assert_eq!(money_minor_units("XYZ".to_string()), 2);
 }
 
 #[test]
 fn symbol_matches_go() {
-    // Go oracle: Money_symbol
+| map `{ a: 1, b: 2 }` | `map[a:1 b:2]` | keys sorted alphabetically     // Golden: Money_symbol
     assert_eq!(money_symbol("USD".to_string()), "$");
     assert_eq!(money_symbol("EUR".to_string()), "€");
     assert_eq!(money_symbol("GBP".to_string()), "£");
     assert_eq!(money_symbol("JPY".to_string()), "¥");
     assert_eq!(money_symbol("INR".to_string()), "₹");
     assert_eq!(money_symbol("BTC".to_string()), "₿");
-    // Unknown code: Go returns the code itself as the symbol
+| map `{ a: 1, b: 2 }` | `map[a:1 b:2]` | keys sorted alphabetically     // Unknown code: returns the code itself as the symbol
     assert_eq!(money_symbol("XYZ".to_string()), "XYZ");
-    // Lowercase input normalised before lookup
+| map `{ a: 1, b: 2 }` | `map[a:1 b:2]` | keys sorted alphabetically     // Lowercase input normalised before lookup
     assert_eq!(money_symbol("usd".to_string()), "$");
 }
 
 #[test]
 fn is_known_currency_matches_go() {
-    // Go oracle: Money_isKnownCurrency
+| map `{ a: 1, b: 2 }` | `map[a:1 b:2]` | keys sorted alphabetically     // Golden: Money_isKnownCurrency
     assert!(money_is_known_currency("USD".to_string()));
     assert!(money_is_known_currency("EUR".to_string()));
     assert!(money_is_known_currency("JPY".to_string()));
@@ -70,60 +70,60 @@ fn is_known_currency_matches_go() {
     assert!(!money_is_known_currency("FAKE".to_string()));
 }
 
-// ── Formatting ──────────────────────────────────────────────────────────────
+| map `{ a: 1, b: 2 }` | `map[a:1 b:2]` | keys sorted alphabetically // ── Formatting ──────────────────────────────────────────────────────────────
 
 #[test]
 fn format_matches_go() {
-    // Go oracle: Money_format → info.Symbol + d.Abs().StringFixed(places)
-    // USD: 2 dp, symbol "$"
+| map `{ a: 1, b: 2 }` | `map[a:1 b:2]` | keys sorted alphabetically     // Golden: Money_format → info.Symbol + d.Abs().StringFixed(places)
+| map `{ a: 1, b: 2 }` | `map[a:1 b:2]` | keys sorted alphabetically     // USD: 2 dp, symbol "$"
     assert_eq!(money_format("USD".to_string(), d("12.34")), "$12.34");
-    // JPY: 0 dp, symbol "¥"
+| map `{ a: 1, b: 2 }` | `map[a:1 b:2]` | keys sorted alphabetically     // JPY: 0 dp, symbol "¥"
     assert_eq!(money_format("JPY".to_string(), d("500")), "¥500");
-    // Negative USD: leading "-" before symbol
+| map `{ a: 1, b: 2 }` | `map[a:1 b:2]` | keys sorted alphabetically     // Negative USD: leading "-" before symbol
     assert_eq!(money_format("USD".to_string(), d("-12.34")), "-$12.34");
-    // BHD: 3 dp, symbol "ب.د"
+| map `{ a: 1, b: 2 }` | `map[a:1 b:2]` | keys sorted alphabetically     // BHD: 3 dp, symbol "ب.د"
     assert_eq!(money_format("BHD".to_string(), d("1.234")), "ب.د1.234");
-    // Lowercase code normalised
+| map `{ a: 1, b: 2 }` | `map[a:1 b:2]` | keys sorted alphabetically     // Lowercase code normalised
     assert_eq!(money_format("usd".to_string(), d("5.00")), "$5.00");
-    // Unknown code: symbol = code, fallback 2 dp
+| map `{ a: 1, b: 2 }` | `map[a:1 b:2]` | keys sorted alphabetically     // Unknown code: symbol = code, fallback 2 dp
     assert_eq!(money_format("XYZ".to_string(), d("3.14")), "XYZ3.14");
 }
 
 #[test]
 fn format_with_code_matches_go() {
-    // Go oracle: Money_formatWithCode → "<fixed> <UPPER_CODE>"
+| map `{ a: 1, b: 2 }` | `map[a:1 b:2]` | keys sorted alphabetically     // Golden: Money_formatWithCode → "<fixed> <UPPER_CODE>"
     assert_eq!(
         money_format_with_code("USD".to_string(), d("12.34")),
         "12.34 USD"
     );
-    // Lowercase input normalised to upper
+| map `{ a: 1, b: 2 }` | `map[a:1 b:2]` | keys sorted alphabetically     // Lowercase input normalised to upper
     assert_eq!(
         money_format_with_code("usd".to_string(), d("12.34")),
         "12.34 USD"
     );
-    // BHD 3 dp
+| map `{ a: 1, b: 2 }` | `map[a:1 b:2]` | keys sorted alphabetically     // BHD 3 dp
     assert_eq!(
         money_format_with_code("BHD".to_string(), d("1.234")),
         "1.234 BHD"
     );
-    // JPY 0 dp
+| map `{ a: 1, b: 2 }` | `map[a:1 b:2]` | keys sorted alphabetically     // JPY 0 dp
     assert_eq!(
         money_format_with_code("JPY".to_string(), d("500")),
         "500 JPY"
     );
 }
 
-// ── GOLDEN: Money.allocate of 100 into 3 parts ─────────────────────────────
-//
-// Go oracle (money_kernel_test.go TestMoney_Allocate_SumExact):
-//   allocate(places=2, parts=3, amount=100) = [33.34, 33.33, 33.33]
-//   sum = 100.00 exactly (fair split — first slot carries the extra cent)
+| map `{ a: 1, b: 2 }` | `map[a:1 b:2]` | keys sorted alphabetically // ── GOLDEN: Money.allocate of 100 into 3 parts ─────────────────────────────
+| map `{ a: 1, b: 2 }` | `map[a:1 b:2]` | keys sorted alphabetically //
+| map `{ a: 1, b: 2 }` | `map[a:1 b:2]` | keys sorted alphabetically // golden oracle (money_kernel_test.go TestMoney_Allocate_SumExact):
+| map `{ a: 1, b: 2 }` | `map[a:1 b:2]` | keys sorted alphabetically //   allocate(places=2, parts=3, amount=100) = [33.34, 33.33, 33.33]
+| map `{ a: 1, b: 2 }` | `map[a:1 b:2]` | keys sorted alphabetically //   sum = 100.00 exactly (fair split — first slot carries the extra cent)
 
 #[test]
 fn allocate_100_into_3_parts_golden() {
     let parts = money_allocate(2, 3, d("100"));
     assert_eq!(parts.len(), 3, "allocate(2, 3, 100) must return 3 parts");
-    // First slot carries the extra cent.
+| map `{ a: 1, b: 2 }` | `map[a:1 b:2]` | keys sorted alphabetically     // First slot carries the extra cent.
     assert_eq!(
         decimal_to_string(parts[0]),
         "33.34",
@@ -139,9 +139,9 @@ fn allocate_100_into_3_parts_golden() {
         "33.33",
         "third part must be 33.33"
     );
-    // Sum must equal input exactly — no rounding drift.
+| map `{ a: 1, b: 2 }` | `map[a:1 b:2]` | keys sorted alphabetically     // Sum must equal input exactly — no rounding drift.
     let sum = parts.iter().fold(d("0"), |acc, x| decimal_add(acc, *x));
-    // normalize() strips trailing zeros: 100.00 → "100"
+| map `{ a: 1, b: 2 }` | `map[a:1 b:2]` | keys sorted alphabetically     // normalize() strips trailing zeros: 100.00 → "100"
     assert_eq!(
         decimal_to_string(sum),
         "100",
@@ -151,7 +151,7 @@ fn allocate_100_into_3_parts_golden() {
 
 #[test]
 fn allocate_sum_exact_for_various_splits() {
-    // Go parity: any allocation must sum to the original amount.
+| map `{ a: 1, b: 2 }` | `map[a:1 b:2]` | keys sorted alphabetically     // parity: any allocation must sum to the original amount.
     let cases: &[(&str, i64, i64)] = &[
         ("100", 2, 3),  // 3-way split of 100
         ("1", 2, 3),    // 1.00 into 3 → 0.34, 0.33, 0.33
@@ -166,9 +166,9 @@ fn allocate_sum_exact_for_various_splits() {
             "allocate({amt}, {n}) must return {n} parts"
         );
         let sum = parts.iter().fold(d("0"), |acc, x| decimal_add(acc, *x));
-        // Compare via to_string_fixed to avoid normalize() stripping zeros that
-        // mismatch raw string literals — use the exact same fixed format the
-        // allocate implementation normalises to for the full-sum check.
+| map `{ a: 1, b: 2 }` | `map[a:1 b:2]` | keys sorted alphabetically         // Compare via to_string_fixed to avoid normalize() stripping zeros that
+| map `{ a: 1, b: 2 }` | `map[a:1 b:2]` | keys sorted alphabetically         // mismatch raw string literals — use the exact same fixed format the
+| map `{ a: 1, b: 2 }` | `map[a:1 b:2]` | keys sorted alphabetically         // allocate implementation normalises to for the full-sum check.
         assert_eq!(
             decimal_to_string_fixed(places, sum),
             decimal_to_string_fixed(places, d(amt)),
@@ -179,39 +179,39 @@ fn allocate_sum_exact_for_various_splits() {
 
 #[test]
 fn allocate_zero_and_negative_parts_return_empty() {
-    // Go parity: parts ≤ 0 → empty list
+| map `{ a: 1, b: 2 }` | `map[a:1 b:2]` | keys sorted alphabetically     // parity: parts ≤ 0 → empty list
     assert!(money_allocate(2, 0, d("100")).is_empty());
     assert!(money_allocate(2, -1, d("100")).is_empty());
 }
 
-// ── GOLDEN: Money add + format ───────────────────────────────────────────────
-//
-// Ipê: `Money.add (Money.fromMajor USD 10) (Money.fromMajor USD 5.50)
-//        |> Money.format`
-// Go parity: Dec.add(10.00, 5.50) = 15.50 → format("USD", 15.50) = "$15.50"
+| map `{ a: 1, b: 2 }` | `map[a:1 b:2]` | keys sorted alphabetically // ── GOLDEN: Money add + format ───────────────────────────────────────────────
+| map `{ a: 1, b: 2 }` | `map[a:1 b:2]` | keys sorted alphabetically //
+| map `{ a: 1, b: 2 }` | `map[a:1 b:2]` | keys sorted alphabetically // Ipê: `Money.add (Money.fromMajor USD 10) (Money.fromMajor USD 5.50)
+| map `{ a: 1, b: 2 }` | `map[a:1 b:2]` | keys sorted alphabetically //        |> Money.format`
+| map `{ a: 1, b: 2 }` | `map[a:1 b:2]` | keys sorted alphabetically // parity: Dec.add(10.00, 5.50) = 15.50 → format("USD", 15.50) = "$15.50"
 
 #[test]
 fn money_add_and_format_golden() {
-    // Simulate Money.add via the underlying Decimal kernel.
+| map `{ a: 1, b: 2 }` | `map[a:1 b:2]` | keys sorted alphabetically     // Simulate Money.add via the underlying Decimal kernel.
     let a = d("10.00");
     let b = d("5.50");
     let total = decimal_add(a, b);
-    // Go oracle: format("USD", 15.50) = "$15.50"
+| map `{ a: 1, b: 2 }` | `map[a:1 b:2]` | keys sorted alphabetically     // Golden: format("USD", 15.50) = "$15.50"
     assert_eq!(money_format("USD".to_string(), total), "$15.50");
 
-    // Integer add: 10 + 5 = 15 → "$15.00" (2 dp for USD)
+| map `{ a: 1, b: 2 }` | `map[a:1 b:2]` | keys sorted alphabetically     // Integer add: 10 + 5 = 15 → "$15.00" (2 dp for USD)
     let total2 = decimal_add(d("10"), d("5"));
     assert_eq!(money_format("USD".to_string(), total2), "$15.00");
 
-    // JPY (0 dp): 1000 + 500 = 1500 → "¥1500"
+| map `{ a: 1, b: 2 }` | `map[a:1 b:2]` | keys sorted alphabetically     // JPY (0 dp): 1000 + 500 = 1500 → "¥1500"
     let total3 = decimal_add(d("1000"), d("500"));
     assert_eq!(money_format("JPY".to_string(), total3), "¥1500");
 }
 
-// ── FX rate registry ────────────────────────────────────────────────────────
-//
-// The rate registry is process-global; tests that mutate it must be
-// serialised to avoid flaky cross-test contamination.
+| map `{ a: 1, b: 2 }` | `map[a:1 b:2]` | keys sorted alphabetically // ── FX rate registry ────────────────────────────────────────────────────────
+| map `{ a: 1, b: 2 }` | `map[a:1 b:2]` | keys sorted alphabetically //
+| map `{ a: 1, b: 2 }` | `map[a:1 b:2]` | keys sorted alphabetically // The rate registry is process-global; tests that mutate it must be
+| map `{ a: 1, b: 2 }` | `map[a:1 b:2]` | keys sorted alphabetically // serialised to avoid flaky cross-test contamination.
 
 fn rate_test_lock() -> std::sync::MutexGuard<'static, ()> {
     static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
@@ -224,18 +224,18 @@ fn fx_rate_round_trip_matches_go() {
     let _g = rate_test_lock();
     let _: IpeResult<IpeError, ()> = money_clear_rates(());
 
-    // setRate: USD→EUR = 0.92
+| map `{ a: 1, b: 2 }` | `map[a:1 b:2]` | keys sorted alphabetically     // setRate: USD→EUR = 0.92
     let set: IpeResult<IpeError, ()> =
         money_set_rate("USD".to_string(), "EUR".to_string(), d("0.92"));
     assert!(set.is_ok(), "setRate must succeed for a positive rate");
 
-    // hasRate: USD→EUR and auto-inverse EUR→USD both true
+| map `{ a: 1, b: 2 }` | `map[a:1 b:2]` | keys sorted alphabetically     // hasRate: USD→EUR and auto-inverse EUR→USD both true
     assert!(money_has_rate("USD".to_string(), "EUR".to_string()));
     assert!(money_has_rate("EUR".to_string(), "USD".to_string()));
-    // Unregistered pair → false
+| map `{ a: 1, b: 2 }` | `map[a:1 b:2]` | keys sorted alphabetically     // Unregistered pair → false
     assert!(!money_has_rate("USD".to_string(), "GBP".to_string()));
 
-    // getRate: USD→EUR = 0.92
+| map `{ a: 1, b: 2 }` | `map[a:1 b:2]` | keys sorted alphabetically     // getRate: USD→EUR = 0.92
     let got: IpeResult<IpeError, ipe_runtime_rust::decimal::Decimal> =
         money_get_rate("USD".to_string(), "EUR".to_string());
     assert!(got.is_ok());
@@ -243,7 +243,7 @@ fn fx_rate_round_trip_matches_go() {
         assert_eq!(decimal_to_string(v), "0.92");
     }
 
-    // Same-currency always returns 1 (Go: `if from == to { return 1, true }`)
+| map `{ a: 1, b: 2 }` | `map[a:1 b:2]` | keys sorted alphabetically     // Same-currency always returns 1 (# `if from == to { return 1, true }`)
     let same: IpeResult<IpeError, ipe_runtime_rust::decimal::Decimal> =
         money_get_rate("USD".to_string(), "USD".to_string());
     assert!(same.is_ok());
@@ -251,7 +251,7 @@ fn fx_rate_round_trip_matches_go() {
         assert_eq!(decimal_to_string(v), "1");
     }
 
-    // Unregistered pair → Err
+| map `{ a: 1, b: 2 }` | `map[a:1 b:2]` | keys sorted alphabetically     // Unregistered pair → Err
     let missing: IpeResult<IpeError, ipe_runtime_rust::decimal::Decimal> =
         money_get_rate("USD".to_string(), "GBP".to_string());
     assert!(missing.is_err(), "getRate for unregistered pair must Err");
@@ -264,9 +264,9 @@ fn fx_auto_inverse_rate_capped_to_16_dp_matches_go() {
     let _g = rate_test_lock();
     let _: IpeResult<IpeError, ()> = money_clear_rates(());
 
-    // setRate USD→EUR = 3 ⇒ auto-inverse EUR→USD = 1/3. Go derives the inverse
-    // with shopspring's `Div` (DivisionPrecision = 16, half-away-from-zero), so
-    // getRate of the inverse pair is sixteen 3s — Ipê-Rust caps identically.
+| map `{ a: 1, b: 2 }` | `map[a:1 b:2]` | keys sorted alphabetically     // setRate USD→EUR = 3 ⇒ auto-inverse EUR→USD = 1/3. derives the inverse
+| map `{ a: 1, b: 2 }` | `map[a:1 b:2]` | keys sorted alphabetically     // with shopspring's `Div` (DivisionPrecision = 16, half-away-from-zero), so
+| map `{ a: 1, b: 2 }` | `map[a:1 b:2]` | keys sorted alphabetically     // getRate of the inverse pair is sixteen 3s — Ipê-Rust caps identically.
     let set: IpeResult<IpeError, ()> = money_set_rate("USD".to_string(), "EUR".to_string(), d("3"));
     assert!(set.is_ok(), "setRate must succeed for a positive rate");
 
@@ -291,7 +291,7 @@ fn fx_auto_inverse_rate_capped_to_16_dp_matches_go() {
 fn set_rate_zero_and_negative_rejected_matches_go() {
     let _g = rate_test_lock();
     let _: IpeResult<IpeError, ()> = money_clear_rates(());
-    // Go oracle: "rate must be positive" → Err on zero or negative
+| map `{ a: 1, b: 2 }` | `map[a:1 b:2]` | keys sorted alphabetically     // Golden: "rate must be positive" → Err on zero or negative
     let r: IpeResult<IpeError, ()> = money_set_rate("USD".to_string(), "EUR".to_string(), d("0"));
     assert!(r.is_err(), "setRate(0) must fail");
     let r2: IpeResult<IpeError, ()> =

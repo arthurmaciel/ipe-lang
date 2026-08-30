@@ -3,12 +3,12 @@
 //! and nested `if`s, and (behind `IPE_E2E=1`) the emitted project must build
 //! and print `10`.
 //!
-//! Behavioural-parity oracle: the Go reference compiler at
+//! Verified: the reference compiler at
 //! `/home/arthur/Documentos/comp/ipe/out/ipe` compiles + runs the SAME
-//! `Main.ipe` to stdout `10\n`, exit 0 — verified by hand:
+//! `Main.ipe` to stdout `10\n`, exit 0:
 //!
 //! ```text
-//! $ ipe run tests/golden/if_expr/Main.ipe   # Go backend
+//! $ ipe run tests/golden/if_expr/Main.ipe   
 //! 10
 //! ```
 //!
@@ -16,9 +16,9 @@
 //! leading `n > 0` branch); `classify (0 - 3) = 2` (the `else if n < 0`
 //! branch); the entry's `total = 7 + 1 + 2 = 10`. The `end_to_end_*` test
 //! below asserts the Rust backend reaches the identical `10`. Running the Go
-//! toolchain inside `cargo test` is impractical (it needs the Haskell `ipe`
-//! binary plus a Go toolchain), so the hand-computed value is the in-test
-//! oracle, documented here against the Go-equivalent command.
+//! toolchain inside `cargo test` is impractical (it needs the the compiler `ipe`
+//! binary plus a the toolchain), so the hand-computed value is the in-test
+//! oracle, documented here against the equivalent command.
 
 use std::path::{Path, PathBuf};
 
@@ -61,7 +61,7 @@ fn emits_byte_identical_main_rs() {
 }
 
 /// Full spine: compile, build the emitted Cargo project, run it, and assert the
-/// `if`-driven arithmetic prints `10` — the same value the Go backend produces.
+/// `if`-driven arithmetic prints `10` — the expected value.
 /// Gated on `IPE_E2E=1` so the default `cargo test` stays fast.
 #[test]
 fn end_to_end_builds_and_prints_ten() {
@@ -86,5 +86,5 @@ fn end_to_end_builds_and_prints_ten() {
         &repo_root().join("tests").join("golden").join("if_expr"),
         &outcome.stdout,
     );
-    assert_eq!(outcome.exit_code, Some(0), "exit 0, matching the Go oracle");
+    assert_eq!(outcome.exit_code, Some(0), "exit 0");
 }

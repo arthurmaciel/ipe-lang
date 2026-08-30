@@ -7,7 +7,7 @@
 //! checked-in golden, and (behind `IPE_E2E=1`) the emitted project must build
 //! and print `20`.
 //!
-//! Behavioural-parity oracle: the Go reference compiler at
+//! Verified: the reference compiler at
 //! `/home/arthur/Documentos/comp/ipe/out/ipe` compiles + runs the SAME
 //! `Main.ipe` to stdout `20\n`, exit 0 — hand-verified in a temp dir:
 //! `combine (10, 3) = (10 + 3) + (10 - 3) = 13 + 7 = 20`.
@@ -76,5 +76,5 @@ fn end_to_end_builds_and_prints_twenty() {
         &repo_root().join("tests").join("golden").join("alias_tuple"),
         &outcome.stdout,
     );
-    assert_eq!(outcome.exit_code, Some(0), "exit 0, matching the Go oracle");
+    assert_eq!(outcome.exit_code, Some(0), "exit 0");
 }

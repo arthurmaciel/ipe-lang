@@ -142,7 +142,7 @@ main =
 ";
 
 /// `Web.app` with a NON-EMPTY `routes` list but Model has
-/// no `page` field.  The Go oracle (`tools/oracle/bin/ipe`) compiles this fine
+/// no `page` field.  The golden oracle (`tools/oracle/bin/ipe`) compiles this fine
 /// (Go's `applyRoute` calls `RecordUpdate(model, {"Page": page})` which is a
 /// silent no-op when the `Page` field is absent).  This shape must compile on
 /// the non-routed path, matching the reference.
@@ -461,7 +461,7 @@ fn routed_empty_routes_well_typed_cargo_builds() {
 
 // ── Non-empty routes, no `page` field → non-routed path ──────────────────────
 //
-// The Go oracle compiles a `Web.app` with non-empty `routes` but no `page`
+// The golden oracle compiles a `Web.app` with non-empty `routes` but no `page`
 // field in Model — `applyRoute` calls `RecordUpdate(model, {"Page": page})`
 // which silently no-ops when `Page` is absent.  This shape must not be gated
 // stricter than the reference; the non-routed path (`web_app`) is emitted
@@ -471,7 +471,7 @@ fn routed_empty_routes_well_typed_cargo_builds() {
 /// field must compile on the non-routed path (mirrors `examples/24-tui-
 /// kitchen-sink` and `examples/25-ipe-console`).
 ///
-/// Before fix: ipec returned IPE-L0124 (gate was overly strict vs. Go oracle).
+/// Before fix: ipec returned IPE-L0124 (gate was overly strict vs. golden oracle).
 /// After fix: ipe exits 0 and emits `web_app` (not `web_app_routed`).
 #[test]
 fn non_routed_with_nonempty_routes_compiles() {

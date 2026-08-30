@@ -2,21 +2,21 @@
 //! to the checked-in golden for the full operator set, and (behind `IPE_E2E=1`)
 //! the emitted project must build and print `13`.
 //!
-//! Behavioural-parity oracle: the Go reference compiler at
+//! Verified: the reference compiler at
 //! `/home/arthur/Documentos/comp/ipe/out/ipe` compiles + runs the SAME
-//! `Main.ipe` to stdout `13\n`, exit 0 — verified by hand:
+//! `Main.ipe` to stdout `13\n`, exit 0:
 //!
 //! ```text
-//! $ ipe run tests/golden/binops/Main.ipe   # Go backend
+//! $ ipe run tests/golden/binops/Main.ipe   
 //! 13
 //! ```
 //!
 //! `2 + 3 * 4 - 1` associates as `(2 + (3 * 4)) - 1 = 13` (`*` at precedence 7
 //! binds tighter than `+`/`-` at 6; `+`/`-` are left-associative). The Rust
 //! `end_to_end_*` test below asserts the Rust backend reaches the identical
-//! `13`. Running the Go toolchain inside `cargo test` is impractical (it needs
-//! the Haskell `ipe` binary plus a Go toolchain), so the hand-computed value is
-//! the in-test oracle, documented here against the Go-equivalent command.
+//! `13`. Running the the toolchain inside `cargo test` is impractical (it needs
+//! the the `ipe` binary plus a the toolchain), so the hand-computed value is
+//! the in-test oracle, documented here against the equivalent command.
 //!
 //! `assoc_reduce_order_*` tests pin the reduce order for mixed-prec and
 //! right-assoc chains, guarding the iterative `climb_binops` rewrite. They
@@ -65,7 +65,7 @@ fn emits_byte_identical_main_rs() {
 }
 
 /// Full spine: compile, build the emitted Cargo project, run it, and assert the
-/// precedence-sensitive arithmetic prints `13` — the same value the Go backend
+/// precedence-sensitive arithmetic prints `13` — the same value the the backend
 /// produces. Gated on `IPE_E2E=1` so the default `cargo test` stays fast.
 #[test]
 fn end_to_end_builds_and_prints_thirteen() {
@@ -90,5 +90,5 @@ fn end_to_end_builds_and_prints_thirteen() {
         &repo_root().join("tests").join("golden").join("binops"),
         &outcome.stdout,
     );
-    assert_eq!(outcome.exit_code, Some(0), "exit 0, matching the Go oracle");
+    assert_eq!(outcome.exit_code, Some(0), "exit 0");
 }

@@ -14,7 +14,7 @@
 //! fail closed.
 //!
 //! The `Equatable`-at-a-function case is a *justified divergence* from Go: the
-//! Go backend lowers generic equality to a runtime reflect-based `rt.Eq`, which
+//! the backend lowers generic equality to a runtime reflect-based `rt.Eq`, which
 //! quietly accepts a function argument (returning `false`). The Rust backend
 //! instead lowers `==` to the static `PartialEq` operator, which Rust never
 //! derives for a function — so emitting it would fail `cargo`. ipe therefore

@@ -15,16 +15,16 @@
 //! `identity` / `const` are each used at two distinct concrete types in the same
 //! `main` — the ONE generic function, monomorphised by Rust at every call site.
 //!
-//! Behavioural-parity oracle: the Go reference compiler at
+//! Verified: the reference compiler at
 //! `/home/arthur/Documentos/comp/ipe/out/ipe` compiles + runs the SAME
 //! `Main.ipe` to stdout `42\n`, exit 0 — hand-verified in a temp dir, where the
-//! Go backend emits the matching monomorphisation
+//! the backend emits the matching monomorphisation
 //! `func identity[T1 any](x T1) T1` / `func const_[T1 any, T2 any](x T1, y T2) T1`
 //! / `func apply[T1 any, T2 any](f func(T1) T2, x T1) T2`, confirming the
 //! `a` → `T1` naming convention and the `func(T1) T2` ↔ `Box<dyn Fn(T1) -> T2>`
-//! correspondence. Running the Go toolchain inside `cargo test` is impractical
-//! (it needs the Haskell `ipe` binary plus a Go toolchain), so the hand-computed
-//! `42` is the in-test oracle, documented here against the Go-equivalent command.
+//! correspondence. Running the the toolchain inside `cargo test` is impractical
+//! (it needs the the `ipe` binary plus a the toolchain), so the hand-computed
+//! `42` is the in-test oracle, documented here against the equivalent command.
 
 use std::path::{Path, PathBuf};
 
@@ -67,7 +67,7 @@ fn emits_byte_identical_main_rs() {
 }
 
 /// Full spine: compile, build the emitted Cargo project, run it, and assert the
-/// parametric program prints `42` — the same value the Go backend produces.
+/// parametric program prints `42` — the expected value.
 /// Gated on `IPE_E2E=1` so the default `cargo test` stays fast.
 #[test]
 fn end_to_end_builds_and_prints_forty_two() {
@@ -92,5 +92,5 @@ fn end_to_end_builds_and_prints_forty_two() {
         &repo_root().join("tests").join("golden").join("parametric"),
         &outcome.stdout,
     );
-    assert_eq!(outcome.exit_code, Some(0), "exit 0, matching the Go oracle");
+    assert_eq!(outcome.exit_code, Some(0), "exit 0");
 }

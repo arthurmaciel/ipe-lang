@@ -7,37 +7,36 @@
 //! `expected_go.txt`). All tests are gated on `IPE_E2E=1`; without it they
 //! return early.
 //!
-//! ## Oracle provenance — what is and isn't Go-compared here
+//! ## Oracle provenance — what is and isn't oracle-compared here
 //!
-//! These goldens are NOT shared-`Main.ipe` Go-parity goldens. Two distinct
+//! These goldens are NOT shared-`Main.ipe` oracle-parity goldens. Two distinct
 //! reasons (both recorded as `oracle_divergence = true` with a tagged reason in
 //! each golden's `sanctioned.divergence` marker):
 //!
 //! * **JWT (`m5b_jwt_*`) — API-surface divergence.** The Rust backend surfaces
 //!   FLAT kernels (`Jwt.encodeHs256` / `decodeHs256` / `encodeRs256` /
-//!   `decodeRs256`); the Go backend exposes only the builder API
+//!   `decodeRs256`); the reference compiler exposes only the builder API
 //!   (`Jwt.encode` / `hs256` / `rs256` / `claims` / `decode`). So this exact
-//!   `Main.ipe` does not compile on the Go reference and the cached expected is
-//!   ipe's own output, NOT a Go run of the same source.
+//!   `Main.ipe` does not compile on the reference compiler and the cached
+//!   expected is ipe's own output.
 //!
 //! * **UUID (`m5b_uuid_*`) — soundness divergence.** `Uuid.v4` / `Uuid.v7` are
-//!   typed on the EFFECT tier (`() -> Task Error String`) because
-//!   entropy is not a memoizable pure value; the Go reference still types them as
-//!   bare `Uuid.v4 : String` (Limitation #7), so these Task-sequenced programs
-//!   are not co-typable with the Go backend and cannot be Go-oracled. The cached
+//!   typed on the EFFECT tier (`() -> Task Error String`) because entropy is not
+//!   a memoizable pure value; the reference compiler still types them as bare
+//!   `Uuid.v4 : String` (Limitation #7), so these Task-sequenced programs are
+//!   not co-typable with the reference and cannot be oracle-compared. The cached
 //!   expected is ipe's (semantically correct) output. `Uuid.parse` is the pure
-//!   `String -> Maybe String` parser on both backends.
+//!   `String -> Maybe String` parser on both.
 //!
-//! ## Byte-parity with Go IS proven — separately and explicitly
+//! ## Byte-parity IS proven — separately and explicitly
 //!
-//! Although the shared-`Main.ipe` oracle cannot run the flat-kernel program on
-//! Go, the produced JWT bytes ARE byte-identical to the Go backend. The
-//! `jwt_hs256_bytes` / `jwt_rs256_bytes` goldens print the token, and
+//! Although the shared-`Main.ipe` oracle cannot run the flat-kernel program,
+//! the produced JWT bytes ARE byte-identical to the reference implementation.
+//! The `jwt_hs256_bytes` / `jwt_rs256_bytes` goldens print the token, and
 //! [`jwt_hs256_bytes`] / [`jwt_rs256_bytes`] assert that printed token equals a
-//! token captured verbatim from the Go reference compiler running the
-//! equivalent builder-API program (`Jwt.encode (Jwt.hs256 secret) (claims …)`).
-//! The same constants are byte-checked at the unit level in
-//! `src/runtime/rust/src/jwt.rs`.
+//! token captured verbatim from the reference running the equivalent builder-API
+//! program (`Jwt.encode (Jwt.hs256 secret) (claims …)`). The same constants
+//! are byte-checked at the unit level in `src/runtime/rust/src/jwt.rs`.
 //!
 //! ## Golden catalogue
 //!
@@ -68,16 +67,16 @@
 
 use std::path::{Path, PathBuf};
 
-/// The genuine Go-backend HS256 token for the equivalent builder-API program
+/// Canonical HS256 token for the equivalent builder-API program
 /// `Jwt.encode (Jwt.hs256 "test-secret-key-0123456789abcdef")
-///  (claims |> subject "alice" |> expiresAt 9999999999)`, captured verbatim
-/// from the Go reference compiler. `jwt_hs256_bytes` must reproduce it.
+///  (claims |> subject "alice" |> expiresAt 9999999999)`, captured from the
+/// reference implementation. `jwt_hs256_bytes` must reproduce it.
 const GO_HS256_TOKEN: &str = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJleHAiOjk5OTk5OTk5OTksInN1YiI6ImFsaWNlIn0.O6u4Zgjn9lL3myvfLfP5QFaGIHx-KBfzZ7lgkbJL_N0";
 
-/// The genuine Go-backend RS256 token for the equivalent builder-API program
-/// over the same fixed RSA-2048 key and `claims |> subject "bob" |> expiresAt …`,
-/// captured verbatim from the Go reference compiler. RS256 (PKCS#1 v1.5) is
-/// deterministic, so `jwt_rs256_bytes` must reproduce it byte for byte.
+/// Canonical RS256 token for the equivalent builder-API program over the same
+/// fixed RSA-2048 key and `claims |> subject "bob" |> expiresAt …`, captured
+/// from the reference implementation. RS256 (PKCS#1 v1.5) is deterministic,
+/// so `jwt_rs256_bytes` must reproduce it byte for byte.
 const GO_RS256_TOKEN: &str = "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJleHAiOjk5OTk5OTk5OTksInN1YiI6ImJvYiJ9.GJ29fLyt4u8M_CMSvhSizRpjWXEDsrVtDL92QOX27HwB9YvKI4_ksftEN8-wK1xiT5y1tmrWmUs3_UHPTepyCJ9Y02JDphZ5X4k0784CIKxNvdr1RcAn-V24Wyc_rTFOELDR9XeBPNIhYRzVuQnaQ27PbmpF3skoyH40eOI7emrTVlbPhkgnWsoULuKOEI3yF9VU62QFoPDEuio_59LMcuk2EZrnh-Rql1zF5cNixt30_Vu5mUwBHkYZ2J2ZEm_S2VIrXvIluIfp5pzNmOK1TdLv9yQHY1PPcfcvHizHK4IKnMNTXrkk8W0NCaP5faf4hzaZVPIoqJ7D220PHPgWEg";
 
 fn repo_root() -> PathBuf {
@@ -129,8 +128,8 @@ fn assert_runs_and_matches_oracle(name: &str) {
 }
 
 /// Compile/build/run a byte-parity golden and assert its emitted token equals
-/// the `go_token` captured from the Go reference compiler — the explicit
-/// Go-byte-equality proof — AND that it still matches the cached oracle.
+/// the `canonical_token` captured from the reference — the explicit
+/// byte-equality proof — AND that it still matches the cached oracle.
 fn assert_token_byte_identical_to_go(name: &str, go_token: &str) {
     if std::env::var("IPE_E2E").is_err() {
         return;
@@ -139,7 +138,7 @@ fn assert_token_byte_identical_to_go(name: &str, go_token: &str) {
     assert_eq!(
         outcome.stdout.trim_end(),
         go_token,
-        "{name}: emitted token must be byte-identical to the captured Go token"
+        "{name}: emitted token must be byte-identical to the captured canonical token"
     );
     // Keep the cached-oracle gate honest too (expected holds the same bytes).
     crate::support::assert_go_parity(name, &dir, &outcome.stdout);
@@ -152,9 +151,9 @@ fn assert_token_byte_identical_to_go(name: &str, go_token: &str) {
 /// `Task.andThen`: a generated id is 36 chars with version nibble `4` / `7`, and
 /// a fresh `v4` round-trips through the pure `Uuid.parse`.  Output: `"ok"`.
 ///
-/// Recorded soundness divergence (NOT Go-parity): the Go reference types
-/// `Uuid.v4` as a bare `String` (Limitation #7) and cannot express this
-/// Task-sequenced program. Expected holds ipe's correct output.
+/// Recorded soundness divergence: the reference compiler types `Uuid.v4`
+/// as a bare `String` (Limitation #7) and cannot express this Task-sequenced
+/// program. Expected holds ipe's correct output.
 #[test]
 fn uuid_format() {
     assert_runs_and_matches_oracle("uuid_format");
@@ -177,7 +176,7 @@ fn uuid_distinct() {
 /// `Uuid.parse "not-a-uuid"` → `Nothing`; `Uuid.parse "<valid-uuid>"` → `Just _`.
 /// Output: `"ok"`.
 ///
-/// Recorded divergence (NOT Go-parity): the Go reference returns `Nothing` for
+/// Recorded divergence: the reference compiler returns `Nothing` for
 /// the canonical UUID on this shape. Expected holds ipe's correct output.
 #[test]
 fn uuid_parse() {
@@ -189,8 +188,8 @@ fn uuid_parse() {
 /// `encodeHs256 secret claims` then `decodeHs256 secret token` with the same
 /// 32-byte key succeeds.  Output: `"ok"`.
 ///
-/// Recorded API-surface divergence (the flat kernel does not exist in the Go
-/// backend); the token bytes are Go-identical — see [`jwt_hs256_bytes`].
+/// Recorded API-surface divergence (the flat kernel does not exist in the
+/// reference compiler); token bytes verified identical — see [`jwt_hs256_bytes`].
 #[test]
 fn jwt_hs256_roundtrip() {
     assert_runs_and_matches_oracle("jwt_hs256_roundtrip");
@@ -210,29 +209,27 @@ fn jwt_hs256_tamper() {
 /// `encodeRs256 privKeyPem claims` then `decodeRs256 pubKeyPem token` with a
 /// matching RSA-2048 PKCS#8/SPKI key pair round-trips.  Output: `"ok"`.
 ///
-/// Recorded API-surface divergence; the token bytes are Go-identical — see
+/// Recorded API-surface divergence; token bytes verified identical — see
 /// [`jwt_rs256_bytes`].
 #[test]
 fn jwt_rs256_roundtrip() {
     assert_runs_and_matches_oracle("jwt_rs256_roundtrip");
 }
 
-// ── JWT HS256 byte-parity with Go ─────────────────────────────────────────────
+// ── JWT HS256 byte-parity ─────────────────────────────────────────────────────
 
-/// The HS256 token `encodeHs256` emits is byte-identical to the token the Go
-/// reference compiler produces for the equivalent builder-API program. This is
-/// the explicit Go-byte-equality proof the flat-kernel goldens otherwise can't
-/// express through the shared-`Main.ipe` oracle.
+/// The HS256 token `encodeHs256` emits is byte-identical to the canonical
+/// reference token. This is the explicit byte-equality proof the flat-kernel
+/// goldens otherwise can't express through the shared-`Main.ipe` oracle.
 #[test]
 fn jwt_hs256_bytes() {
     assert_token_byte_identical_to_go("jwt_hs256_bytes", GO_HS256_TOKEN);
 }
 
-// ── JWT RS256 byte-parity with Go ─────────────────────────────────────────────
+// ── JWT RS256 byte-parity ─────────────────────────────────────────────────────
 
-/// The RS256 token `encodeRs256` emits is byte-identical to the token the Go
-/// reference compiler produces for the equivalent builder-API program (RS256 is
-/// deterministic).
+/// The RS256 token `encodeRs256` emits is byte-identical to the canonical
+/// reference token (RS256 is deterministic).
 #[test]
 fn jwt_rs256_bytes() {
     assert_token_byte_identical_to_go("jwt_rs256_bytes", GO_RS256_TOKEN);

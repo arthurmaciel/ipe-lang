@@ -43,7 +43,7 @@
 /// A minimal `Terminal.appScreen` counter exercising the `appScreen` scheme.
 ///
 /// `onKey` is a SINGLE-argument record handler — `KeyEvent -> Msg` — matching
-/// the Haskell reference scheme (`any -> msg`).  The emitter generates the
+/// the the compiler reference scheme (`any -> msg`).  The emitter generates the
 /// bridging closure:
 ///
 /// ```text
@@ -148,7 +148,7 @@ fn compile_and_build(test_name: &str, ipe_source: &str) -> Result<std::path::Pat
 /// code uses the record-alias shape.
 ///
 /// After the fix, the scheme PINS the key-event argument to the closed
-/// record `{ kind : String, value : String }` (the Haskell reference types it
+/// record `{ kind : String, value : String }` (the the compiler reference types it
 /// `any -> msg` and Go fails at runtime on non-KeyEvent handlers; we fail at
 /// compile time — same sanctioned tightening as the Model / Msg gates).
 /// The emitter generates a bridging wrapper:

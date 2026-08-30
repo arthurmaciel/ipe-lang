@@ -2,23 +2,23 @@
 //! checked-in golden for a program that constructs tuple values and compares
 //! them, and (behind `IPE_E2E=1`) the emitted project must build and print `1`.
 //!
-//! Behavioural-parity oracle: the Go reference compiler at
+//! Verified: the reference compiler at
 //! `/home/arthur/Documentos/comp/ipe/out/ipe` compiles + runs the SAME
-//! `Main.ipe` to stdout `1\n`, exit 0 — verified by hand in a temp dir (so the
+//! `Main.ipe` to stdout `1\n`, exit 0 in a temp dir (so the
 //! Go build artifacts never touch the reference tree):
 //!
 //! ```text
-//! $ cd "$(mktemp -d)" && ipe run Main.ipe   # Go backend
+//! $ cd "$(mktemp -d)" && ipe run Main.ipe   
 //! 1
 //! ```
 //!
 //! `same = if (1, 2) == (1, 2) then 1 else 0 = 1` (the tuples are equal);
 //! `diff = if (1, 2) == (1, 3) then 10 else 0 = 0` (the second elements
 //! differ); the entry prints `same + diff = 1`. The `end_to_end_*` test below
-//! asserts the Rust backend reaches the identical `1`. Running the Go toolchain
-//! inside `cargo test` is impractical (it needs the Haskell `ipe` binary plus a
-//! Go toolchain), so the hand-verified value is the in-test oracle, documented
-//! here against the Go-equivalent command.
+//! asserts the Rust backend reaches the identical `1`. Running the the toolchain
+//! inside `cargo test` is impractical (it needs the the `ipe` binary plus a
+//! the toolchain), so the hand-verified value is the in-test oracle, documented
+//! here against the equivalent command.
 
 use std::path::{Path, PathBuf};
 
@@ -61,7 +61,7 @@ fn emits_byte_identical_main_rs() {
 }
 
 /// Full spine: compile, build the emitted Cargo project, run it, and assert the
-/// tuple-equality program prints `1` — the same value the Go backend produces.
+/// tuple-equality program prints `1` — the expected value.
 /// Gated on `IPE_E2E=1` so the default `cargo test` stays fast.
 #[test]
 fn end_to_end_builds_and_prints_one() {
@@ -86,5 +86,5 @@ fn end_to_end_builds_and_prints_one() {
         &repo_root().join("tests").join("golden").join("tuples"),
         &outcome.stdout,
     );
-    assert_eq!(outcome.exit_code, Some(0), "exit 0, matching the Go oracle");
+    assert_eq!(outcome.exit_code, Some(0), "exit 0");
 }

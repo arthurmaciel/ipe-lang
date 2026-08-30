@@ -19,7 +19,7 @@
 //! with the semantically-correct output. It must NEVER accept the program and
 //! then cargo-fail.
 //!
-//! Note on the Go oracle: the Go reference compiler (`/usr/local/bin/ipe`,
+//! Note on the golden oracle: the the reference compiler (`/usr/local/bin/ipe`,
 //! v0.16.29) fails this exact shape — its codegen emits Go that `go build`
 //! rejects (`invalid operation: cannot call f (variable of interface type any):
 //! any is not a function`), captured in `oracle.meta` as a Go-failure

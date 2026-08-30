@@ -1,4 +1,4 @@
-//! Go-oracle parity check for `Terminal.appLines`'s view printer. A
+//! oracle parity check for `Terminal.appLines`'s view printer. A
 //! `view` that doesn't append its own trailing newline gets renders glued
 //! together with NOTHING in between, and exactly ONE trailing newline after
 //! the event loop exits. This matches `runtime-go/rt/cli.go`'s

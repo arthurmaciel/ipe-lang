@@ -3,12 +3,12 @@
 //! (eta-expansion) and over-application (saturation), and (behind `IPE_E2E=1`)
 //! the emitted project must build and print `15`.
 //!
-//! Behavioural-parity oracle: the Go reference compiler at
+//! Verified: the reference compiler at
 //! `/home/arthur/Documentos/comp/ipe/out/ipe` compiles + runs the SAME
-//! `Main.ipe` to stdout `15\n`, exit 0 — verified by hand:
+//! `Main.ipe` to stdout `15\n`, exit 0:
 //!
 //! ```text
-//! $ ipe run tests/golden/partial/Main.ipe   # Go backend
+//! $ ipe run tests/golden/partial/Main.ipe   
 //! 15
 //! ```
 //!
@@ -18,10 +18,10 @@
 //! a + b`): the first arg saturates `over(1)` and the surplus `2` applies to the
 //! returned closure → `3`. `applyTwice (add 1) 5` passes the partial `add 1` as
 //! a first-class function and applies it twice: `add 1 (add 1 5)` → `7`. The
-//! entry prints `p + o + h = 5 + 3 + 7 = 15`. Running the Go toolchain inside
-//! `cargo test` is impractical (it needs the Haskell `ipe` binary plus a Go
+//! entry prints `p + o + h = 5 + 3 + 7 = 15`. Running the the toolchain inside
+//! `cargo test` is impractical (it needs the the `ipe` binary plus a Go
 //! toolchain), so the hand-computed value is the in-test oracle, documented here
-//! against the Go-equivalent command.
+//! against the equivalent command.
 
 use std::path::{Path, PathBuf};
 
@@ -90,5 +90,5 @@ fn end_to_end_builds_and_prints_fifteen() {
         &repo_root().join("tests").join("golden").join("partial"),
         &outcome.stdout,
     );
-    assert_eq!(outcome.exit_code, Some(0), "exit 0, matching the Go oracle");
+    assert_eq!(outcome.exit_code, Some(0), "exit 0");
 }

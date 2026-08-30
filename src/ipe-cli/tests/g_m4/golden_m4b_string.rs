@@ -1,5 +1,5 @@
 //! Ipe.String parity gate: String and Char kernel functions compile
-//! and run with Go parity (rune-correct, byte-for-byte output match).
+//! and run with golden parity (rune-correct, byte-for-byte output match).
 //!
 //! Surfaces the full `Ipe.String` and `Ipe.Char` kernel sets,
 //! mirroring the Go runtime's `String_*` / `Char_*` helpers. Key semantic
@@ -35,7 +35,7 @@ fn golden_dir(root: &Path, name: &str) -> PathBuf {
 }
 
 /// Compile `tests/golden/<name>/Main.ipe`, build the emitted Cargo project,
-/// run it, and assert its stdout matches the Go oracle cached in
+/// run it, and assert its stdout matches the golden oracle cached in
 /// `expected_go.txt` / `oracle.meta`. Gated on `IPE_E2E=1`.
 fn assert_runs_and_matches_oracle(name: &str) {
     if std::env::var("IPE_E2E").is_err() {
@@ -56,7 +56,7 @@ fn assert_runs_and_matches_oracle(name: &str) {
 
     let outcome = crate::support::build_and_run_emitted(name, &out);
     crate::support::assert_go_parity(name, &dir, &outcome.stdout);
-    assert_eq!(outcome.exit_code, Some(0), "exit 0, matching the Go oracle");
+    assert_eq!(outcome.exit_code, Some(0), "exit 0");
 }
 
 // ── toUpper ──────────────────────────────────────────────────────────────────

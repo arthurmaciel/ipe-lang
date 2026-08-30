@@ -8,7 +8,7 @@
 //!
 //! Each single-file positive compiles `tests/golden/<name>/Main.ipe` through
 //! `ipe`, builds the emitted Rust project in the shared cargo target, runs it,
-//! and checks stdout against the cached Go oracle (`oracle.meta` +
+//! and checks stdout against the cached golden oracle (`oracle.meta` +
 //! `expected_go.txt`). All three carry `oracle_divergence = false` — the Go
 //! reference compiler produces byte-identical stdout, captured via
 //! `refresh-oracle`.
@@ -43,7 +43,7 @@
 //!   binary and checking the exit code (gated on `IPE_E2E`).
 //! * `blockcomment_unterminated` — a `{-` that is never closed → `IPE-P0017`
 //!   (unterminated block comment). This is a sanctioned stricter behaviour: the
-//!   Go oracle leniently swallows the unterminated comment to EOF and builds an
+//!   golden oracle leniently swallows the unterminated comment to EOF and builds an
 //!   empty program, so there is no oracle to diff — the diagnostic code is the
 //!   assertion.
 //! * `mm_neg_qualtype_unknownmod` — an annotation referencing `Bogus.Box`, a
@@ -94,7 +94,7 @@ fn assert_single_oracle(name: &str) {
 
     let outcome = crate::support::build_and_run_emitted(name, &out);
     crate::support::assert_go_parity(name, &dir, &outcome.stdout);
-    assert_eq!(outcome.exit_code, Some(0), "exit 0, matching the Go oracle");
+    assert_eq!(outcome.exit_code, Some(0), "exit 0");
 }
 
 #[test]

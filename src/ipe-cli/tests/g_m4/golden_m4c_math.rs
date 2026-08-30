@@ -15,7 +15,7 @@
 //!        not meaningful on String)
 //!      * `Math.max "b" "a"` → `"b"`
 //!
-//! 2. **Go parity** — the rest. Here Ipê's output is the target, so the cached
+//! 2. **golden parity** — the rest. Here Ipê's output is the target, so the cached
 //!    oracle is the Go output (`oracle_divergence = false`) and Ipe must
 //!    match it byte-for-byte: `Math.min` / `Math.max` on `Int` (Ipê's `AsInt`
 //!    path gives the correct result for integers), `abs`, `sqrt` (incl. the
@@ -66,7 +66,7 @@ fn assert_runs_and_matches_oracle(name: &str) {
     assert_eq!(outcome.exit_code, Some(0), "exit 0, matching the oracle");
 }
 
-// ── min / max — Int (TRUE Go parity: AsInt path is correct on integers) ───────
+// ── min / max — Int (TRUE golden parity: AsInt path is correct on integers) ───────
 
 /// `Math.min 3 7` → `3`.
 #[test]

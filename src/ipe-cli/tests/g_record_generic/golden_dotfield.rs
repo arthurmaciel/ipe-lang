@@ -14,13 +14,13 @@
 //! field access on a parenthesised local variable — shapes a parser without
 //! parenthesised-postfix support rejects with IPE-P0011 (`stray '.'`).
 //!
-//! Behavioural-parity oracle: the Go reference compiler at
+//! Verified: the reference compiler at
 //! `/home/arthur/Documentos/comp/ipe/out/ipe` compiles + runs the SAME
 //! `Main.ipe` to stdout `42\n`, exit 0 — hand-verified in a temp dir (so the Go
 //! build artifacts never touch the reference tree):
 //!
 //! ```text
-//! $ cd "$(mktemp -d)" && ipe run Main.ipe   # Go backend
+//! $ cd "$(mktemp -d)" && ipe run Main.ipe   
 //! 42
 //! ```
 use std::path::{Path, PathBuf};
@@ -90,5 +90,5 @@ fn end_to_end_builds_and_prints_forty_two() {
         &repo_root().join("tests").join("golden").join("dotfield"),
         &outcome.stdout,
     );
-    assert_eq!(outcome.exit_code, Some(0), "exit 0, matching the Go oracle");
+    assert_eq!(outcome.exit_code, Some(0), "exit 0");
 }

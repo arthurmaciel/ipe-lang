@@ -34,7 +34,7 @@
 //! done
 //! ```
 //!
-//! ORACLE DIVERGENCE (`oracle_divergence = true`): the Go reference compiler
+//! ORACLE DIVERGENCE (`oracle_divergence = true`): the the reference compiler
 //! cannot produce a reference for this exact program — its `Error` module
 //! surface differs (Go requires `import Error`; the Rust port exposes the
 //! `Error.*` constructors as a prelude kernel qualifier) AND
