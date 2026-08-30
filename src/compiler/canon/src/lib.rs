@@ -566,9 +566,9 @@ mod tests {
 
     #[test]
     fn suggestions_sorted_by_distance_then_name() {
-        // Several `List`/`Basics` members sit at equal edit distance from
+        // Several `Maybe` members sit at equal edit distance from
         // `ma`; assert the rendered list is `(distance, name)`-sorted.
-        let err = canon_err("module Main exposing (main)\nimport Ipe.List\n\nmain = List.ma\n");
+        let err = canon_err("module Main exposing (main)\nimport Ipe.Maybe\n\nmain = Maybe.ma\n");
         let Some(Diagnostic::Name {
             msg: NameError::NoSuchMember { suggestions, .. },
             ..
@@ -3196,13 +3196,13 @@ mod tests {
     #[test]
     fn stdlib_exposing_wildcard_allows_local_shadow() {
         // `exposing (..)` on a stdlib module floods the LOW-PRIORITY
-        // wildcard tier. A local `map` must NOT collide (no `DuplicateValue`) and
-        // a bare `map` use must resolve to the LOCAL binding, silently shadowing
-        // the wildcard member (`Ipe.List` exports `map`).
+        // wildcard tier. A local `withDefault` must NOT collide (no `DuplicateValue`) and
+        // a bare `withDefault` use must resolve to the LOCAL binding, silently shadowing
+        // the wildcard member (`Ipe.Maybe` exports `withDefault`).
         let src = "module Main exposing (main)\n\
-                   import Ipe.List exposing (..)\n\
-                   map = 1\n\
-                   main = map\n";
+                   import Ipe.Maybe exposing (..)\n\
+                   withDefault = 1\n\
+                   main = withDefault\n";
         let Some((m, i)) = canon_src(src) else {
             assert!(false_marker(), "local shadow of a wildcard member is legal");
             return;
@@ -3212,8 +3212,8 @@ mod tests {
             None => None,
         };
         assert!(
-            matches!(body, Some(Expr_::VarTopLevel { name, .. }) if i.resolve(*name) == Some("map")),
-            "bare `map` must resolve to the LOCAL top-level binding, got {body:?}"
+            matches!(body, Some(Expr_::VarTopLevel { name, .. }) if i.resolve(*name) == Some("withDefault")),
+            "bare `withDefault` must resolve to the LOCAL top-level binding, got {body:?}"
         );
     }
 
