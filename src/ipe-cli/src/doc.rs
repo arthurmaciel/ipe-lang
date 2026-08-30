@@ -582,14 +582,54 @@ fn parse_port(value: &str) -> Result<u16, CliError> {
     }
 }
 
+/// Strip a leading YAML front-matter block from `text`.
+///
+/// A front-matter block starts with `---\n` on the first line and ends at the
+/// next `\n---\n`. Everything from the opening `---` through the closing `---\n`
+/// is removed; the rest of the text is returned unchanged. Pages without a
+/// front-matter block are returned as-is.
+fn strip_front_matter(text: &str) -> &str {
+    let Some(rest) = text.strip_prefix("---\n") else {
+        return text;
+    };
+    // Find the closing delimiter.
+    if let Some(close_pos) = rest.find("\n---\n") {
+        &rest[close_pos + "\n---\n".len()..]
+    } else {
+        // No closing delimiter — return original text unchanged.
+        text
+    }
+}
+
 /// Language construct pages embedded at compile time from `docs/constructs/`.
 ///
-/// Each entry is `(key, markdown_text)`. The key becomes the index entry key
-/// (e.g. `"case"` resolves via `ipe doc case`). Adding a new construct page
-/// requires a new `docs/constructs/<name>.md` and a new entry here.
+/// Each entry is `(key, markdown_text)`. The key resolves via `ipe doc <key>`.
+/// Adding a construct page requires a new `docs/constructs/<name>.md` and a new
+/// entry here. Pages may carry YAML front-matter; [`strip_front_matter`] removes
+/// it before the text reaches the CLI renderer.
 static CONSTRUCT_PAGES: &[(&str, &str)] = &[
     ("case", include_str!("../../../docs/constructs/case.md")),
     ("do", include_str!("../../../docs/constructs/do.md")),
+    ("if", include_str!("../../../docs/constructs/if.md")),
+    ("import", include_str!("../../../docs/constructs/import.md")),
+    ("lambda", include_str!("../../../docs/constructs/lambda.md")),
+    ("let", include_str!("../../../docs/constructs/let.md")),
+    ("module", include_str!("../../../docs/constructs/module.md")),
+    (
+        "or-pattern",
+        include_str!("../../../docs/constructs/or-pattern.md"),
+    ),
+    ("pipe", include_str!("../../../docs/constructs/pipe.md")),
+    ("record", include_str!("../../../docs/constructs/record.md")),
+    (
+        "record-update",
+        include_str!("../../../docs/constructs/record-update.md"),
+    ),
+    ("type", include_str!("../../../docs/constructs/type.md")),
+    (
+        "type-alias",
+        include_str!("../../../docs/constructs/type-alias.md"),
+    ),
 ];
 
 /// Return `true` when `s` looks like a symbol key: it starts uppercase, contains
@@ -634,14 +674,14 @@ fn build_index() -> Result<Index, CliError> {
         );
     }
 
-    // Constructs: compile-time embedded content pages.
+    // Constructs: compile-time embedded content pages (front-matter stripped for CLI display).
     for (key, text) in CONSTRUCT_PAGES {
         builder.insert(
             (*key).to_owned(),
             ipe_docs::Entry {
                 kind: ipe_docs::EntryKind::Construct,
                 source_key: (*key).to_owned(),
-                text: (*text).to_owned(),
+                text: strip_front_matter(text).to_owned(),
             },
         );
     }
