@@ -670,6 +670,15 @@ const STD_TRACE: &str = include_str!("../Ipe/Trace.ipe");
 /// module pay no ICU4X dependency cost.
 const LOCALE: &str = include_str!("../Ipe/Locale.ipe");
 
+/// `Ipe.Math` — numeric helpers, compiled-source Layer-3.
+///
+/// Every member is a point-free `Ffi.kernel "Math_*"` alias resolved by
+/// `ipe_canon::resolve::detect_kernel_alias` to a registered `Math*`
+/// `StdlibKernel` variant (`ipe_runtime::math::*`). Registered in
+/// [`COMPILED_STD_MODULES`] (NOT `MODULES`); NOT in `STDLIB_MODULE_QUALIFIERS`,
+/// so the disjointness invariant holds.
+const MATH: &str = include_str!("../Ipe/Math.ipe");
+
 /// `Ipe.Ui.Events` — pure Ipê re-exports of `Ipe.Ui` event helpers (compiled source).
 ///
 /// Pure Ipê; no Ffi.kernel calls.  RESOLVES (ipe-0 AND cargo-0): the
@@ -959,6 +968,15 @@ pub const COMPILED_STD_MODULES: &[CompiledStdModule] = &[
     CompiledStdModule {
         dotted: "Ipe.Locale",
         source: LOCALE,
+    },
+    // Ipe.Math — Layer-3 source; every member is a point-free
+    // `Ffi.kernel "Math_*"` alias resolved by `detect_kernel_alias` to the
+    // registered `Math*` kernels (`ipe_runtime::math::*`). Disjoint from
+    // `STDLIB_MODULE_QUALIFIERS` (no `"Math"` entry there), so the invariant
+    // holds.
+    CompiledStdModule {
+        dotted: "Ipe.Math",
+        source: MATH,
     },
 ];
 
