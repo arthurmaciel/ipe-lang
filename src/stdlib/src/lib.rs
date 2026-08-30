@@ -58,7 +58,13 @@ const BITWISE: &str = include_str!("../Ipe/Bitwise.ipe");
 const TASK: &str = include_str!("../Ipe/Task.ipe");
 /// `Ipe.Io` — standard-I/O effect kernels.
 const IO: &str = include_str!("../Ipe/Io.ipe");
-/// `Ipe.Debug` — development-only `Debug.log` escape hatch (kernel-only).
+/// `Ipe.Debug` — development-only escape hatch, compiled-source Layer-3.
+///
+/// Every member is a point-free `Ffi.kernel "Debug_*"` alias resolved by
+/// `ipe_canon::resolve::detect_kernel_alias` to a registered `Debug*`
+/// `StdlibKernel` variant. Registered in [`COMPILED_STD_MODULES`] (NOT
+/// `MODULES`); NOT in `STDLIB_MODULE_QUALIFIERS`, so the disjointness
+/// invariant holds.
 const DEBUG: &str = include_str!("../Ipe/Debug.ipe");
 /// `Ipe.Time` — time effect kernels.
 const TIME: &str = include_str!("../Ipe/Time.ipe");
@@ -274,10 +280,6 @@ pub const MODULES: &[StdModule] = &[
     StdModule {
         name: "Ipe.Io",
         source: IO,
-    },
-    StdModule {
-        name: "Ipe.Debug",
-        source: DEBUG,
     },
     StdModule {
         name: "Ipe.Time",
@@ -694,6 +696,14 @@ pub const COMPILED_STD_MODULES: &[CompiledStdModule] = &[
     CompiledStdModule {
         dotted: "Ipe.Bitwise",
         source: BITWISE,
+    },
+    // Ipe.Debug — Layer-3 source; every member is a point-free
+    // `Ffi.kernel "Debug_*"` alias resolved by `detect_kernel_alias` to the
+    // registered `Debug*` kernels (`ipe_runtime::debug::*`). Disjoint from
+    // `STDLIB_MODULE_QUALIFIERS` (no `"Debug"` entry there).
+    CompiledStdModule {
+        dotted: "Ipe.Debug",
+        source: DEBUG,
     },
     CompiledStdModule {
         dotted: "Ipe.Random",
