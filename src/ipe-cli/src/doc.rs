@@ -2346,25 +2346,52 @@ fn extract_doc_examples(module_name: &str, src: &str) -> Vec<Example> {
     examples
 }
 
+/// The dotted module path an `import` line names, if the line is one.
+///
+/// `import Ipe.Duration as Duration exposing (Duration)` yields `Ipe.Duration`.
+/// A line that is not a top-level import returns `None`.
+fn import_line_module(line: &str) -> Option<&str> {
+    let rest = line.strip_prefix("import ")?;
+    Some(rest.split_whitespace().next().unwrap_or(rest))
+}
+
+/// The top-level `import …` lines of a module source, verbatim.
+///
+/// A doc-string example is scoped exactly as the documenting module is: it sees
+/// that module's own imports (aliases included), so a qualified name the module
+/// imports — `Duration.millis` under `import Ipe.Duration as Duration` — resolves
+/// in the example without the example having to restate the import.
+fn extract_module_imports(src: &str) -> Vec<String> {
+    src.lines()
+        .filter(|line| line.starts_with("import "))
+        .map(str::to_owned)
+        .collect()
+}
+
 /// Synthesize a minimal compilable module wrapping `body`.
 ///
 /// If `body` already starts with `module ` it is returned as-is. Otherwise a
 /// `module Main exposing (..)` header is prepended. The module that the
 /// doc-string belongs to (`source_module`, e.g. `Ipe.Maybe`) is imported with
-/// `exposing (..)` so unqualified names from it resolve. Additional imports for
-/// commonly-qualified names are injected when the corresponding prefix appears
-/// in `body`.
+/// `exposing (..)` so unqualified names from it resolve, and that module's own
+/// imports (`module_imports`, e.g. `import Ipe.Duration as Duration`) are
+/// injected so an example naming a qualified import of the documenting module
+/// resolves exactly as it does inside that module.
 ///
 /// Lines that contain `-->` are treated as expression/result assertions. The
 /// expression (the part before `-->`) is assigned to a fresh top-level binding
 /// (`docCheckN = <expr>`) so the type-checker can infer its type without
 /// needing a `main` entry point.
-fn synthesize_module(body: &str, source_module: &str) -> String {
+fn synthesize_module(body: &str, source_module: &str, module_imports: &[String]) -> String {
     if body.trim_start().starts_with("module ") {
         return body.to_owned();
     }
 
     let mut out = String::from("module Main exposing (..)\n");
+
+    // Track which modules are already imported so no module is imported twice
+    // (a duplicate import is itself a type error).
+    let mut imported: Vec<&str> = Vec::new();
 
     // Import the module whose doc-string this example comes from; its
     // unqualified names are in scope in the example.
@@ -2375,9 +2402,24 @@ fn synthesize_module(body: &str, source_module: &str) -> String {
             .unwrap_or(source_module);
         out.push('\n');
         let _ = writeln!(out, "import {source_module} as {short} exposing (..)");
+        imported.push(source_module);
     }
 
-    // Auto-inject additional imports for qualified names used in the block.
+    // Inject the documenting module's own imports, so the example resolves the
+    // qualified names that module has in scope (aliases and `exposing` included).
+    for import in module_imports {
+        if let Some(module) = import_line_module(import)
+            && !imported.contains(&module)
+        {
+            out.push('\n');
+            out.push_str(import);
+            imported.push(module);
+        }
+    }
+
+    // Fall back to a fixed set of common imports for a qualified prefix the
+    // example uses that the documenting module does not itself import (e.g. a
+    // `Ipe.Maybe` example that reaches for `List.map`).
     for (prefix, import) in &[
         ("Maybe.", "import Ipe.Maybe as Maybe exposing (Maybe(..))"),
         ("List.", "import Ipe.List as List"),
@@ -2393,12 +2435,13 @@ fn synthesize_module(body: &str, source_module: &str) -> String {
         ("Debug.", "import Ipe.Debug as Debug"),
         ("Char.", "import Ipe.Char as Char"),
     ] {
-        // Only inject if the prefix appears AND the module is not already
-        // imported as the source module (avoid a duplicate import).
-        let module_for_prefix = import.split_whitespace().nth(1).unwrap_or("");
-        if body.contains(prefix) && module_for_prefix != source_module {
+        let Some(module_for_prefix) = import_line_module(import) else {
+            continue;
+        };
+        if body.contains(prefix) && !imported.contains(&module_for_prefix) {
             out.push('\n');
             out.push_str(import);
+            imported.push(module_for_prefix);
         }
     }
 
@@ -2510,9 +2553,10 @@ fn check_examples() -> Result<(), CliError> {
 
     for (module_name, src) in &all_sources {
         let examples = extract_doc_examples(module_name, src);
+        let module_imports = extract_module_imports(src);
         for ex in &examples {
             total += 1;
-            let module_src = synthesize_module(&ex.body, module_name);
+            let module_src = synthesize_module(&ex.body, module_name, &module_imports);
 
             // Write to a temp file.
             let snippet_path = tmp_dir.child("Main.ipe");
@@ -4941,5 +4985,68 @@ mod tests {
             "diagnostic/index.html"
         );
         assert_eq!(serve_file_name("/cli/index.html"), "cli/index.html");
+    }
+
+    #[test]
+    fn extract_module_imports_reads_top_level_import_lines() {
+        let src = "\
+module Ipe.Task exposing (..)
+
+import Ipe.Ffi as Ffi
+import Ipe.Duration as Duration exposing (Duration)
+
+withBaseMs = something
+";
+        assert_eq!(
+            extract_module_imports(src),
+            s(&[
+                "import Ipe.Ffi as Ffi",
+                "import Ipe.Duration as Duration exposing (Duration)",
+            ])
+        );
+    }
+
+    #[test]
+    fn import_line_module_reads_the_dotted_path() {
+        assert_eq!(
+            import_line_module("import Ipe.Duration as Duration exposing (Duration)"),
+            Some("Ipe.Duration")
+        );
+        assert_eq!(import_line_module("import Ipe.Ffi as Ffi"), Some("Ipe.Ffi"));
+        assert_eq!(import_line_module("withBaseMs = something"), None);
+    }
+
+    #[test]
+    fn synthesize_injects_a_qualified_name_the_module_imports() {
+        // An example that names `Duration.millis` — a qualified import of the
+        // documenting module, NOT one of its exports — must have that import
+        // injected so it resolves exactly as it does inside the module.
+        let imports = s(&["import Ipe.Duration as Duration exposing (Duration)"]);
+        let out = synthesize_module(
+            "withBaseMs (Duration.millis 250) policy",
+            "Ipe.Task",
+            &imports,
+        );
+        assert!(
+            out.contains("import Ipe.Duration as Duration exposing (Duration)"),
+            "expected the module's own Duration import to be injected:\n{out}"
+        );
+        assert!(
+            out.contains("import Ipe.Task as Task exposing (..)"),
+            "expected the documenting module to be imported:\n{out}"
+        );
+    }
+
+    #[test]
+    fn synthesize_does_not_import_a_module_twice() {
+        // The documenting module's import list and the common-prefix fallback
+        // must not both emit an import for the same module.
+        let imports = s(&["import Ipe.List as List"]);
+        let out = synthesize_module("List.map f xs", "Ipe.Maybe", &imports);
+        assert_eq!(
+            out.matches("import Ipe.List").count(),
+            1,
+            "Ipe.List must be imported exactly once:\n{out}"
+        );
     }
 }
