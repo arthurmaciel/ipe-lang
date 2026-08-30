@@ -97,6 +97,14 @@ const SYSTEM: &str = include_str!("../Ipe/System.ipe");
 /// [`COMPILED_STD_MODULES`] (NOT `MODULES`); NOT in `STDLIB_MODULE_QUALIFIERS`,
 /// so the disjointness invariant holds.
 const RANDOM: &str = include_str!("../Ipe/Random.ipe");
+/// `Ipe.Encoding` — text encoding helpers (base64 / URL / hex), compiled-source Layer-3.
+///
+/// Every member is a point-free `Ffi.kernel "Encoding_*"` alias resolved by
+/// `ipe_canon::resolve::detect_kernel_alias` to a registered `Encoding*`
+/// `StdlibKernel` variant (`ipe_runtime::encoding::*`). Registered in
+/// [`COMPILED_STD_MODULES`] (NOT `MODULES`); NOT in `STDLIB_MODULE_QUALIFIERS`,
+/// so the disjointness invariant holds.
+const ENCODING: &str = include_str!("../Ipe/Encoding.ipe");
 /// `Ipe.File` — file-system effect kernels.
 const FILE: &str = include_str!("../Ipe/File.ipe");
 /// `Ipe.Http` — outbound HTTP client kernels + pure builders.
@@ -698,6 +706,14 @@ pub const COMPILED_STD_MODULES: &[CompiledStdModule] = &[
     CompiledStdModule {
         dotted: "Ipe.Bitwise",
         source: BITWISE,
+    },
+    // Ipe.Encoding — Layer-3 source; every member is a point-free
+    // `Ffi.kernel "Encoding_*"` alias resolved by `detect_kernel_alias` to the
+    // registered `Encoding*` kernels (`ipe_runtime::encoding::*`). Disjoint from
+    // `STDLIB_MODULE_QUALIFIERS` (no `"Encoding"` entry there).
+    CompiledStdModule {
+        dotted: "Ipe.Encoding",
+        source: ENCODING,
     },
     // Ipe.Debug — Layer-3 source; every member is a point-free
     // `Ffi.kernel "Debug_*"` alias resolved by `detect_kernel_alias` to the
