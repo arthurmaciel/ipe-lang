@@ -25616,14 +25616,7 @@ impl<'a> Lowerer<'a> {
             // `String.toUpperIn`/`toLowerIn` are arity-2.
             Callee::Kernel(KernelFn::StringToUpperIn | KernelFn::StringToLowerIn) => Ok(2),
             Callee::Kernel(
-                KernelFn::CryptoHmacSha256WithKey
-                | KernelFn::CryptoHmacSha512WithKey
-                | KernelFn::CryptoAesKeyFromPasswordKey
-                | KernelFn::CryptoChachaKeyFromPasswordKey
-                | KernelFn::CryptoAesGcmEncryptKey
-                | KernelFn::CryptoAesGcmDecryptKey
-                | KernelFn::CryptoChacha20EncryptKey
-                | KernelFn::CryptoChacha20DecryptKey,
+                KernelFn::CryptoHmacSha256WithKey | KernelFn::CryptoHmacSha512WithKey,
             ) => Ok(2),
             Callee::Func(id) => {
                 let idx = usize::try_from(id.as_raw()).unwrap_or(usize::MAX);
@@ -29648,12 +29641,6 @@ mod tests {
         KernelFn::CryptoMacToHex,
         KernelFn::CryptoHmacSha256WithKey,
         KernelFn::CryptoHmacSha512WithKey,
-        KernelFn::CryptoAesKeyFromPasswordKey,
-        KernelFn::CryptoChachaKeyFromPasswordKey,
-        KernelFn::CryptoAesGcmEncryptKey,
-        KernelFn::CryptoAesGcmDecryptKey,
-        KernelFn::CryptoChacha20EncryptKey,
-        KernelFn::CryptoChacha20DecryptKey,
         // Ipe.Email.EmailAddress — compiled-source Layer-3 module.
         KernelFn::EmailAddressParse,
         KernelFn::EmailAddressToString,

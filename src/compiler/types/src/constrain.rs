@@ -7070,12 +7070,21 @@ impl<'a> Builder<'a> {
             //    runtime (`ipe_aes_gcm_encrypt(key, plaintext)` — a fresh random
             //    nonce is prepended internally, so no third arg). Both take
             //    `key -> plaintext/ciphertext -> Result Error String`. ──
-            K::CryptoRsaSha256Sign
-            | K::CryptoAesGcmEncrypt
+            K::CryptoRsaSha256Sign => {
+                fun(string(), fun(string(), result(error_ty(), string())))
+            }
+            // AEAD requires a typed `Key` in the key role — a bare `String`
+            // (message/plaintext) can never stand in for the key.
+            K::CryptoAesGcmEncrypt
             | K::CryptoAesGcmDecrypt
             | K::CryptoChacha20Encrypt
             | K::CryptoChacha20Decrypt => {
-                fun(string(), fun(string(), result(error_ty(), string())))
+                fun(crypto_key(), fun(string(), result(error_ty(), string())))
+            }
+            // Key-derivation returns a typed `Key`, never a raw `String`, so a
+            // derived key can only flow into a `Key`-typed sink.
+            K::CryptoAesKeyFromPassword | K::CryptoChachaKeyFromPassword => {
+                fun(string(), fun(string(), crypto_key()))
             }
             K::CryptoRandomBytes | K::CryptoRandomToken => fun(int(), task(string())),
 
@@ -8025,7 +8034,7 @@ impl<'a> Builder<'a> {
             K::BytesToHex | K::CharFromCode | K::CharIsAlpha | K::CharIsAlphaNum |
             K::CharIsDigit | K::CharIsHexDigit | K::CharIsLower | K::CharIsOctDigit |
             K::CharIsUpper | K::CharToCode | K::CharToLower | K::CharToUpper |
-            K::CryptoAesKeyFromPassword | K::CryptoChachaKeyFromPassword | K::CryptoConstantTimeEqual |
+            K::CryptoConstantTimeEqual |
             K::CryptoMd5 | K::CryptoRsaSha256Verify | K::CryptoSha1 |
             K::CryptoSha256 | K::CryptoSha512 | K::CssSafetyStripStyleClose | K::EncodingBase64Encode |
             K::EncodingHexEncode | K::EncodingUrlEncode | K::FontMonospace | K::FontSansSerif |
@@ -8377,8 +8386,8 @@ impl<'a> Builder<'a> {
             //   fromBytes  : String -> Key
             // Extraction boundary:
             //   Mac.toHex  : Mac -> String
-            K::CryptoKeyFromString => fun(string(), crypto_key()),
-            K::CryptoKeyFromBytes => fun(string(), crypto_key()),
+            K::CryptoKeyFromString => fun(string(), maybe(crypto_key())),
+            K::CryptoKeyFromBytes => fun(string(), maybe(crypto_key())),
             K::CryptoMacToHex => fun(crypto_mac(), string()),
             // Typed HMAC variants — Key replaces the bare String role parameter;
             // Mac replaces the bare String return:
@@ -8386,28 +8395,6 @@ impl<'a> Builder<'a> {
             //   hmacSha512WithKey : Key -> String -> Mac
             K::CryptoHmacSha256WithKey => fun(crypto_key(), fun(string(), crypto_mac())),
             K::CryptoHmacSha512WithKey => fun(crypto_key(), fun(string(), crypto_mac())),
-            // Typed key-derivation — same inputs, typed Key output:
-            //   aesKeyFromPasswordKey   : String -> String -> Key
-            //   chachaKeyFromPasswordKey: String -> String -> Key
-            K::CryptoAesKeyFromPasswordKey => fun(string(), fun(string(), crypto_key())),
-            K::CryptoChachaKeyFromPasswordKey => fun(string(), fun(string(), crypto_key())),
-            // Typed AEAD variants — Key replaces bare String key role:
-            //   aesGcmEncryptKey  : Key -> String -> Result Error String
-            //   aesGcmDecryptKey  : Key -> String -> Result Error String
-            //   chacha20EncryptKey: Key -> String -> Result Error String
-            //   chacha20DecryptKey: Key -> String -> Result Error String
-            K::CryptoAesGcmEncryptKey => {
-                fun(crypto_key(), fun(string(), result(error_ty(), string())))
-            }
-            K::CryptoAesGcmDecryptKey => {
-                fun(crypto_key(), fun(string(), result(error_ty(), string())))
-            }
-            K::CryptoChacha20EncryptKey => {
-                fun(crypto_key(), fun(string(), result(error_ty(), string())))
-            }
-            K::CryptoChacha20DecryptKey => {
-                fun(crypto_key(), fun(string(), result(error_ty(), string())))
-            }
 
             // ── Ipe.Email.EmailAddress ────────────────────────────────────────────
             // parse-don't-validate boundary — invalid addresses surface as Nothing:
@@ -10668,18 +10655,12 @@ mod registry_phase_c_tests {
             K::ConfigLoadFromFile,
             // ── Ipe.Email (1) ──────────────────────────────────────────
             K::EmailSend,
-            // ── Ipe.Crypto typed-key newtypes (11) ─────────────────────
+            // ── Ipe.Crypto typed-key newtypes (5) ──────────────────────
             K::CryptoKeyFromString,
             K::CryptoKeyFromBytes,
             K::CryptoMacToHex,
             K::CryptoHmacSha256WithKey,
             K::CryptoHmacSha512WithKey,
-            K::CryptoAesKeyFromPasswordKey,
-            K::CryptoChachaKeyFromPasswordKey,
-            K::CryptoAesGcmEncryptKey,
-            K::CryptoAesGcmDecryptKey,
-            K::CryptoChacha20EncryptKey,
-            K::CryptoChacha20DecryptKey,
             // ── Ipe.Email.EmailAddress (2) ──────────────────────────────
             K::EmailAddressParse,
             K::EmailAddressToString,
@@ -11380,10 +11361,7 @@ mod registry_phase_c_tests {
             | K::MoneySymbol
             | K::MoneyCurrencyName => fun(string(), string()),
             K::StringFromChar | K::CharToLower | K::CharToUpper => fun(char(), string()),
-            K::StringAppend
-            | K::SystemGetenvOr
-            | K::CryptoAesKeyFromPassword
-            | K::CryptoChachaKeyFromPassword => fun(string(), fun(string(), string())),
+            K::StringAppend | K::SystemGetenvOr => fun(string(), fun(string(), string())),
             K::StringContains
             | K::StringStartsWith
             | K::StringEndsWith

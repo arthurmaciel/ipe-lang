@@ -97,7 +97,7 @@ fn aead_read_key(name: &str, key: &str) -> Result<Vec<u8>, String> {
     Ok(k)
 }
 
-// Crypto.aesGcmEncryptKey : Key -> String -> Result Error String  (typed variant)
+// Crypto.aesGcmEncrypt : Key -> String -> Result Error String  (typed key)
 #[cfg(not(target_arch = "wasm32"))]
 pub fn crypto_aes_gcm_encrypt_key<E: From<String>>(
     key: Key,
@@ -106,7 +106,7 @@ pub fn crypto_aes_gcm_encrypt_key<E: From<String>>(
     crypto_aes_gcm_encrypt(crate::crypto_core::crypto_key_reveal(key), plaintext)
 }
 
-// Crypto.aesGcmDecryptKey : Key -> String -> Result Error String  (typed variant)
+// Crypto.aesGcmDecrypt : Key -> String -> Result Error String  (typed key)
 #[cfg(not(target_arch = "wasm32"))]
 pub fn crypto_aes_gcm_decrypt_key<E: From<String>>(
     key: Key,
@@ -115,7 +115,8 @@ pub fn crypto_aes_gcm_decrypt_key<E: From<String>>(
     crypto_aes_gcm_decrypt(crate::crypto_core::crypto_key_reveal(key), encoded)
 }
 
-// Crypto.aesGcmEncrypt : String -> String -> Result Error String
+// Internal String-keyed AES-256-GCM core — reached only through the typed
+// `crypto_aes_gcm_encrypt_key` wrapper; the Ipê surface exposes no bare-String key.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn crypto_aes_gcm_encrypt<E: From<String>>(
     key: String,
@@ -149,7 +150,8 @@ pub fn crypto_aes_gcm_encrypt<E: From<String>>(
     }
 }
 
-// Crypto.aesGcmDecrypt : String -> String -> Result Error String
+// Internal String-keyed AES-256-GCM core — reached only through the typed
+// `crypto_aes_gcm_decrypt_key` wrapper.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn crypto_aes_gcm_decrypt<E: From<String>>(
     key: String,
@@ -196,7 +198,7 @@ pub fn crypto_aes_gcm_decrypt<E: From<String>>(
     }
 }
 
-// Crypto.chacha20EncryptKey : Key -> String -> Result Error String  (typed variant)
+// Crypto.chacha20Encrypt : Key -> String -> Result Error String  (typed key)
 #[cfg(not(target_arch = "wasm32"))]
 pub fn crypto_chacha20_encrypt_key<E: From<String>>(
     key: Key,
@@ -205,7 +207,7 @@ pub fn crypto_chacha20_encrypt_key<E: From<String>>(
     crypto_chacha20_encrypt(crate::crypto_core::crypto_key_reveal(key), plaintext)
 }
 
-// Crypto.chacha20DecryptKey : Key -> String -> Result Error String  (typed variant)
+// Crypto.chacha20Decrypt : Key -> String -> Result Error String  (typed key)
 #[cfg(not(target_arch = "wasm32"))]
 pub fn crypto_chacha20_decrypt_key<E: From<String>>(
     key: Key,
@@ -214,7 +216,8 @@ pub fn crypto_chacha20_decrypt_key<E: From<String>>(
     crypto_chacha20_decrypt(crate::crypto_core::crypto_key_reveal(key), encoded)
 }
 
-// Crypto.chacha20Encrypt : String -> String -> Result Error String
+// Internal String-keyed ChaCha20-Poly1305 core — reached only through the typed
+// `crypto_chacha20_encrypt_key` wrapper.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn crypto_chacha20_encrypt<E: From<String>>(
     key: String,
@@ -246,7 +249,8 @@ pub fn crypto_chacha20_encrypt<E: From<String>>(
     }
 }
 
-// Crypto.chacha20Decrypt : String -> String -> Result Error String
+// Internal String-keyed ChaCha20-Poly1305 core — reached only through the typed
+// `crypto_chacha20_decrypt_key` wrapper.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn crypto_chacha20_decrypt<E: From<String>>(
     key: String,
@@ -306,26 +310,19 @@ pub fn crypto_aes_key_from_password(password: String, salt: String) -> String {
     STANDARD.encode(key)
 }
 
-// Crypto.chachaKeyFromPassword : String -> String -> String  (same derivation)
-#[cfg(not(target_arch = "wasm32"))]
-pub fn crypto_chacha_key_from_password(password: String, salt: String) -> String {
-    crypto_aes_key_from_password(password, salt)
-}
-
-// Crypto.aesKeyFromPasswordKey : String -> String -> Key  (typed-key variant)
+// Crypto.aesKeyFromPassword : String -> String -> Key
 //
 // Returns a typed `Key` rather than a bare `String` so the derived key can
-// only be passed to typed AEAD operations (`aesGcmEncryptKey` /
-// `aesGcmDecryptKey`), making a role-swap a compile error.
+// only be passed to typed AEAD operations, making a role-swap a compile error.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn crypto_aes_key_from_password_key(password: String, salt: String) -> Key {
-    crypto_key_from_string(crypto_aes_key_from_password(password, salt))
+    crypto_key_promote(crypto_aes_key_from_password(password, salt))
 }
 
-// Crypto.chachaKeyFromPasswordKey : String -> String -> Key  (typed-key variant)
+// Crypto.chachaKeyFromPassword : String -> String -> Key
 #[cfg(not(target_arch = "wasm32"))]
 pub fn crypto_chacha_key_from_password_key(password: String, salt: String) -> Key {
-    crypto_key_from_string(crypto_aes_key_from_password(password, salt))
+    crypto_key_promote(crypto_aes_key_from_password(password, salt))
 }
 
 // ── Concrete (non-generic) wrappers for generated Ipê code ─────────────
@@ -338,42 +335,6 @@ pub fn crypto_chacha_key_from_password_key(password: String, salt: String) -> Ke
 // (e.g. `Err _ ->` in a case expression). These concrete aliases pin
 // `E = IpeError` up-front, eliminating the ambiguity without changing runtime
 // semantics.
-
-/// Generated-code alias for `crypto_aes_gcm_encrypt` with `E = String`.
-#[cfg(not(target_arch = "wasm32"))]
-pub fn ipe_aes_gcm_encrypt(
-    key: String,
-    plaintext: String,
-) -> IpeResult<crate::error::IpeError, String> {
-    crypto_aes_gcm_encrypt(key, plaintext)
-}
-
-/// Generated-code alias for `crypto_aes_gcm_decrypt` with `E = String`.
-#[cfg(not(target_arch = "wasm32"))]
-pub fn ipe_aes_gcm_decrypt(
-    key: String,
-    encoded: String,
-) -> IpeResult<crate::error::IpeError, String> {
-    crypto_aes_gcm_decrypt(key, encoded)
-}
-
-/// Generated-code alias for `crypto_chacha20_encrypt` with `E = String`.
-#[cfg(not(target_arch = "wasm32"))]
-pub fn ipe_chacha20_encrypt(
-    key: String,
-    plaintext: String,
-) -> IpeResult<crate::error::IpeError, String> {
-    crypto_chacha20_encrypt(key, plaintext)
-}
-
-/// Generated-code alias for `crypto_chacha20_decrypt` with `E = String`.
-#[cfg(not(target_arch = "wasm32"))]
-pub fn ipe_chacha20_decrypt(
-    key: String,
-    encoded: String,
-) -> IpeResult<crate::error::IpeError, String> {
-    crypto_chacha20_decrypt(key, encoded)
-}
 
 /// Generated-code alias for `crypto_aes_gcm_encrypt_key` with `E = IpeError`.
 #[cfg(not(target_arch = "wasm32"))]
