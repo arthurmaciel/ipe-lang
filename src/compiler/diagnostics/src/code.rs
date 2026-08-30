@@ -276,6 +276,10 @@ code! {
     /// traversing path, its named file absent, or placed anywhere other than the
     /// whole body of a `CustomElement`-annotated binding (fail-closed at build)
     IPE_N0044 = "IPE-N0044", "the customElement constructor is malformed at its use site", "IPE-N0044";
+    /// `main` chooses its shape at runtime — its head is an `if` / `case`
+    /// whose branches reach app entries — but a program's shape is a
+    /// compile-time choice, pinned by the entry head, not a runtime value
+    IPE_N0045 = "IPE-N0045", "main selects its shape at runtime, but a shape is a compile-time choice", "IPE-N0045";
 
     // -----------------------------------------------------------------------
     // Type (IPE-T####)
