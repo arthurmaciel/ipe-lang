@@ -53,7 +53,15 @@ pub const STDLIB_MODULE_QUALIFIERS: &[(&[&str], &str)] = &[
     // variants. A module is EITHER a kernel qualifier here OR compiled-source
     // — never both (`compiled_vs_kernel_qualifier_disjoint`), so it stays out.
     (&["Ipe", "List"], "List"),
-    (&["Ipe", "Maybe"], "Maybe"),
+    // NOTE — `Ipe.Maybe` is DELIBERATELY absent: it is a COMPILED-SOURCE
+    // Layer-3 module (registered in `ipe::stdlib::COMPILED_STD_MODULES`). Its
+    // members are point-free `Ffi.kernel "Maybe_*"` aliases that
+    // `detect_kernel_alias` routes to the registered `Maybe*` `StdlibKernel`
+    // variants. The `Maybe` type and `Just`/`Nothing` constructors remain
+    // kernel-anchored (reserved builtin type) — this absence only removes the
+    // qualifier from the pre-installed table. A module is EITHER a kernel
+    // qualifier here OR compiled-source — never both
+    // (`compiled_vs_kernel_qualifier_disjoint`), so it stays out.
     (&["Ipe", "Result"], "Result"),
     (&["Ipe", "Error"], "Error"),
     (&["Ipe", "Math"], "Math"),
@@ -844,22 +852,9 @@ impl Env {
                     "map5",
                 ],
             ),
-            (
-                "Maybe",
-                &[
-                    "withDefault",
-                    "map",
-                    "andThen",
-                    "map2",
-                    "map3",
-                    "map4",
-                    "map5",
-                    "andMap",
-                    "combine",
-                    "isJust",
-                    "isNothing",
-                ],
-            ),
+            // NOTE — `Ipe.Maybe` is DELIBERATELY absent from this catalog:
+            // it is a compiled-source module; its `Maybe_*` kernels are
+            // reached via `detect_kernel_alias`, not the qualifier table.
             (
                 "Result",
                 &[
