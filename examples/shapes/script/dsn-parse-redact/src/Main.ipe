@@ -1,0 +1,66 @@
+module Main exposing (main)
+
+import Ipe.Db.Dsn as Dsn exposing (Dsn, Driver(..))
+import Ipe.Net as Net
+import Ipe.Maybe exposing (Maybe(..))
+import Ipe.Result exposing (Result(..))
+import Ipe.String as String
+import Ipe.Task as Task
+import Ipe.Io as Io
+
+
+-- A `Dsn` is a typed, opaque database connection descriptor. Three ideas:
+--   • `parse` is the SEAL: a `Dsn` value is a proof the string passed every
+--     fail-closed validator — an unknown driver, a bad port, or an explicit
+--     `sslmode=disable` is a typed `Err`, never a silently-accepted descriptor.
+--   • The password is a `Secret`: there is NO accessor for it. The only display
+--     path is `redacted`, which substitutes a placeholder — a DSN cannot leak
+--     its credential into a log line.
+--   • Connecting (`open`) is a separate, separately-disclosed capability; a
+--     `Dsn` on its own does no I/O, so parsing one is pure and safe.
+
+
+-- Describe a parse result: either the redacted descriptor and its parts, or the
+-- typed rejection. `redacted` is the ONLY way to render a `Dsn`.
+describe : String -> String
+describe raw =
+    case Dsn.parse raw of
+        Ok dsn ->
+            "accepted: "
+                ++ Dsn.redacted dsn
+                ++ " | driver="
+                ++ driverName (Dsn.driver dsn)
+                ++ " host="
+                ++ Dsn.host dsn
+                ++ " port="
+                ++ portText (Dsn.port dsn)
+
+        Err _ ->
+            "rejected (fail-closed): " ++ raw
+
+
+driverName : Driver -> String
+driverName d =
+    case d of
+        Postgres ->
+            "postgres"
+
+        Sqlite ->
+            "sqlite"
+
+
+portText : Maybe Net.Port -> String
+portText mp =
+    case mp of
+        Just p ->
+            String.fromInt (Net.toInt p)
+
+        Nothing ->
+            "(none)"
+
+
+main =
+    do
+        Io.println (describe "postgres://app:s3cr3t@db.internal:5432/store?sslmode=require")
+        Io.println (describe "postgres://app:s3cr3t@db.internal:5432/store?sslmode=disable")
+        Io.println (describe "mysql://app@db.internal/store")

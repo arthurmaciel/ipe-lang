@@ -1,0 +1,6 @@
+module Package exposing (package)
+
+
+package =
+    Package.named "palette-shades"
+        |> Package.version "0.1.0"

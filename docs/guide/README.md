@@ -53,6 +53,16 @@ cross-link where topics meet.
   password read).
 - **Content and markup** — [HTML](html.md) (typed element trees, XSS-safe by
   construction), [Markdown](markdown.md) (a typed block tree, no raw HTML).
+- **Caching** — [Cache](cache.md) (bounded, in-memory LRU with optional TTL; a
+  miss is a `Maybe`, not a failure).
+- **Observability** — [Logging](log.md) (structured, levelled log records),
+  [Tracing](trace.md) (application-level spans + the `Debug` development hatches).
+- **Design tokens** — [Palette](palette.md) (closed token sets and named
+  magnitudes as types).
+- **Testing** — [Testing](test.md) (the in-process framework: tests as values,
+  assertions as results, exit-coded runs).
+- **Databases** — [Connection descriptors](dsn.md) (a typed, credential-safe
+  `Dsn`; parse-don't-validate at the connection boundary).
 
 ## Reference and lookup
 

@@ -1,0 +1,49 @@
+module Main exposing (main)
+
+import Ipe.Test as Test exposing (Test)
+import Ipe.List as List
+import Ipe.Result exposing (Result(..))
+
+
+-- `Ipe.Test` is a lightweight in-process test framework. Three ideas:
+--   • A test is a VALUE: `Test.test name thunk` and `Test.suite name children`
+--     build a tree of `Test`, so tests are ordinary data you compose, not a
+--     special runtime construct.
+--   • An assertion returns a `TestResult`, never throwing: `Test.equal`,
+--     `Test.ok`, `Test.isTrue`, `Test.err` each yield `Passed` or a `Failed`
+--     that carries WHY, so a failure is a value with a reason.
+--   • `Test.runMain` runs the tree, prints a summary, and sets the process exit
+--     code — 0 when every test passes, non-zero otherwise — so a suite is a
+--     runnable program CI can gate on.
+
+
+-- The function under test: a tiny pure helper.
+doubled : Int -> Int
+doubled n =
+    n * 2
+
+
+-- A parse that fails closed on a non-numeric string.
+parsePositive : Int -> Result String Int
+parsePositive n =
+    if n > 0 then
+        Ok n
+
+    else
+        Err "not positive"
+
+
+suite : Test
+suite =
+    Test.suite "arithmetic"
+        [ Test.test "doubling two is four" (\_ -> Test.equal 4 (doubled 2))
+        , Test.test "doubling zero is zero" (\_ -> Test.equal 0 (doubled 0))
+        , Test.test "list length" (\_ -> Test.equal 3 (List.length [ 1, 2, 3 ]))
+        , Test.test "positive parse succeeds" (\_ -> Test.ok (parsePositive 7))
+        , Test.test "non-positive parse fails" (\_ -> Test.err (parsePositive 0))
+        , Test.test "membership is true" (\_ -> Test.isTrue (List.member 2 [ 1, 2, 3 ]))
+        ]
+
+
+main =
+    Test.runMain [ suite ]
