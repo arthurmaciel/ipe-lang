@@ -10497,8 +10497,10 @@ struct KernelUsage {
     principal: bool,
     /// Any Ipe.Web kernel.
     web: bool,
-    /// Any Ipe.Tui kernel.
+    /// Any Ipe.Tui kernel (`Terminal.appScreen`).
     tui: bool,
+    /// Any Ipe.Console kernel (`Terminal.appLines`).
+    console: bool,
     /// Any Ipe.WebView kernel.
     webview: bool,
     /// Any outbound `Ipe.WebSocket` client kernel — gates the
@@ -10581,6 +10583,7 @@ impl KernelUsage {
             && self.auth
             && self.web
             && self.tui
+            && self.console
             && self.webview
             && self.websocket
             && self.email
@@ -10628,6 +10631,7 @@ impl KernelUsage {
         self.principal |= matches!(k, KernelFn::AuthSubject);
         self.web |= k.is_web();
         self.tui |= k.is_tui();
+        self.console |= k.is_console();
         self.webview |= k.is_webview();
         self.websocket |= k.is_websocket_client();
         self.email |= matches!(k, KernelFn::EmailSend);
@@ -15868,6 +15872,7 @@ impl<'a> Lowerer<'a> {
         // trigger `uses_tui_shape`) and never calls `Ui.layout`/`Ui.layoutWith`
         // (kernels that trigger `uses_ui`).
         let uses_tui_shape = kernel_usage.tui;
+        let uses_console_shape = kernel_usage.console;
         let uses_ui = kernel_usage.ui || uses_tui_shape;
         let uses_web = kernel_usage.web;
         let uses_webview = kernel_usage.webview;
@@ -15950,6 +15955,7 @@ impl<'a> Lowerer<'a> {
             uses_ui,
             uses_web,
             uses_tui: uses_tui_shape,
+            uses_console: uses_console_shape,
             uses_webview,
             uses_css: uses_css_leaf,
             uses_auth,

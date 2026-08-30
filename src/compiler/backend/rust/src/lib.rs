@@ -919,6 +919,11 @@ pub(crate) struct EmitCtx<'a> {
     /// app-entry kernel.  When set, the emitted project gains the `"tui"`
     /// Cargo feature and the tui module is wired into `ipe_runtime/mod.rs`.
     pub(crate) uses_tui: bool,
+    /// `true` when the program uses the `Ipe.Terminal` line-oriented app-entry
+    /// (`Terminal.appLines`). When set, the guard in `emit_ui_plan` rejects
+    /// `Ui.cells` with IPE-L0153 (a terminal cell grid has no string
+    /// denotation in a line-oriented Cli view).
+    pub(crate) uses_console: bool,
     /// `true` when the program uses at least one `Ipe.WebView` app-entry kernel.
     /// When set, the emitted project gains the `"webview"` Cargo feature
     /// (which transitively pulls `"live"`) and the main entry is switched to
@@ -1679,11 +1684,12 @@ impl<'a> EmitCtx<'a> {
         // [`Self::reaches_url`], not here.
         let uses_url = program.modules.iter().any(|m| m.uses_url);
 
-        // detect Ipe.Ui / Ipe.Html / Ipe.Web / Ipe.Tui / Ipe.WebView usage.
-        let (uses_ui, uses_web, uses_tui, uses_webview) = (
+        // detect Ipe.Ui / Ipe.Html / Ipe.Web / Ipe.Tui / Ipe.Console / Ipe.WebView usage.
+        let (uses_ui, uses_web, uses_tui, uses_console, uses_webview) = (
             program.modules.iter().any(|m| m.uses_ui),
             program.modules.iter().any(|m| m.uses_web),
             program.modules.iter().any(|m| m.uses_tui),
+            program.modules.iter().any(|m| m.uses_console),
             program.modules.iter().any(|m| m.uses_webview),
         );
 
@@ -1764,6 +1770,7 @@ impl<'a> EmitCtx<'a> {
             uses_ui,
             uses_web,
             uses_tui,
+            uses_console,
             uses_webview,
             uses_css,
             uses_auth,

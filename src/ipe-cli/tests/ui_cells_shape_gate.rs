@@ -202,3 +202,50 @@ fn webview_view_with_ui_cells_is_rejected() -> Result<(), BoxError> {
 fn terminal_view_with_ui_cells_is_accepted() -> Result<(), BoxError> {
     assert_accepted("terminal_ui_cells", TERMINAL_UI_CELLS)
 }
+
+/// `Ui.cells` inside a `Terminal.appLines` (Cli shape) view — must be rejected
+/// with IPE-L0153. A Cli view returns `String`; a character grid has no string
+/// denotation.
+const CLI_UI_CELLS: &str = r#"module Main exposing (main)
+
+import Ipe.Tea.Terminal as Terminal
+import Ipe.Ui as Ui
+
+type Msg = NoOp
+
+type alias Model = { count : Int }
+
+init : () -> ( Model, Cmd Msg )
+init _unit =
+    ( { count = 0 }, Cmd.none )
+
+update : Msg -> Model -> ( Model, Cmd Msg )
+update msg model =
+    case msg of
+        NoOp ->
+            ( model, Cmd.none )
+
+view : Model -> String
+view _model =
+    Ui.cells [ [ 'h', 'i' ] ]
+
+subscriptions : Model -> Sub Msg
+subscriptions _model =
+    Sub.none
+
+onLine : String -> Msg
+onLine _line =
+    NoOp
+
+main =
+    Terminal.appLines
+        { init = init, update = update, view = view
+        , subscriptions = subscriptions, onLine = onLine
+        }
+"#;
+
+/// `Ui.cells` in a `Terminal.appLines` view is rejected with IPE-L0153.
+#[test]
+fn cli_view_with_ui_cells_is_rejected() -> Result<(), BoxError> {
+    assert_rejected_with("cli_ui_cells", CLI_UI_CELLS, "IPE-L0153")
+}

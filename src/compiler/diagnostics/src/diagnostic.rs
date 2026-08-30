@@ -18,8 +18,9 @@ use crate::code::{
     IPE_L0120, IPE_L0121, IPE_L0122, IPE_L0123, IPE_L0124, IPE_L0125, IPE_L0126, IPE_L0127,
     IPE_L0128, IPE_L0129, IPE_L0130, IPE_L0131, IPE_L0132, IPE_L0133, IPE_L0134, IPE_L0135,
     IPE_L0136, IPE_L0140, IPE_L0141, IPE_L0142, IPE_L0143, IPE_L0144, IPE_L0145, IPE_L0146,
-    IPE_L0147, IPE_L0148, IPE_L0149, IPE_L0150, IPE_L0151, IPE_L0200, IPE_N0001, IPE_N0002,
-    IPE_N0003, IPE_N0004, IPE_N0005, IPE_N0010, IPE_N0011, IPE_N0012, IPE_N0013, IPE_N0020,
+    IPE_L0147, IPE_L0148, IPE_L0149, IPE_L0150, IPE_L0151, IPE_L0153, IPE_L0200, IPE_N0001,
+    IPE_N0002, IPE_N0003, IPE_N0004, IPE_N0005, IPE_N0010, IPE_N0011, IPE_N0012, IPE_N0013,
+    IPE_N0020,
     IPE_N0021, IPE_N0022, IPE_N0023, IPE_N0024, IPE_N0025, IPE_N0026, IPE_N0027, IPE_N0028,
     IPE_N0029, IPE_N0030, IPE_N0031, IPE_N0032, IPE_N0033, IPE_N0034, IPE_N0035, IPE_N0036,
     IPE_N0037, IPE_N0038, IPE_N0039, IPE_N0040, IPE_N0041, IPE_N0042, IPE_N0043, IPE_N0044,
@@ -1255,6 +1256,11 @@ pub enum LowerError {
     /// the web-family shape that rejected it — the SECURITY-tier fail-closed
     /// gate converts a would-be wrong-render into an ipe-time error. [IPE-L0132]
     UiCellsInWebShape(AppShape),
+    /// `Ui.cells` (a raw terminal cell grid) appears in a `Cli`
+    /// (`Terminal.appLines`) program. A Cli view returns `String` (line I/O),
+    /// so a `Cells` grid has no string denotation. Rejected at ipe time.
+    /// [IPE-L0153]
+    UiCellsInCliShape(AppShape),
     /// `Ui.widget` (a server-driven custom element) appears outside a browser
     /// shape. Its up-event handler is carried over the seal codec, which is
     /// present only when the `json` runtime feature is on — and only the browser
@@ -1931,6 +1937,7 @@ const fn lower_code(msg: &LowerError) -> Code {
         }
         LowerError::DevOnlyKernelInProduction { .. } => IPE_L0140,
         LowerError::UiCellsInWebShape(_) => IPE_L0132,
+        LowerError::UiCellsInCliShape(_) => IPE_L0153,
         LowerError::UiWidgetInNonWebShape => IPE_L0147,
         LowerError::LawlessEffectDiscard => IPE_L0141,
         LowerError::RoutedAppMissingPageField { .. } => IPE_L0124,
@@ -2306,9 +2313,16 @@ fn lower_help(msg: &LowerError) -> Vec<HelpLine> {
         )],
         LowerError::UiCellsInWebShape(_) => vec![HelpLine::Note(
             "`Ui.cells` paints a raw character grid onto the terminal, which a browser \
-             cannot render. Use it only under `Terminal.appScreen` / `Terminal.appLines`; \
+             cannot render. Use it only under `Terminal.appScreen`; \
              for the same content in a Web/WebView view, render it with `Ui.text` (or a \
              `Ui.column` of rows) instead."
+                .into(),
+        )],
+        LowerError::UiCellsInCliShape(_) => vec![HelpLine::Note(
+            "`Ui.cells` paints a terminal character grid — a Cli (line-oriented) view \
+             returns `String`, so there is no character-grid surface to paint on. \
+             Use it only under `Terminal.appScreen`; for line output, \
+             format the content as a `String` instead."
                 .into(),
         )],
         LowerError::UiWidgetInNonWebShape => vec![HelpLine::Note(

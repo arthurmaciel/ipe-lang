@@ -308,6 +308,12 @@ pub struct Module {
     /// Set by `ipe_lower` when any call site resolves to a
     /// `KernelFn::is_tui()` variant.
     pub uses_tui: bool,
+    /// `true` when the lowerer detected the `Ipe.Terminal` line-oriented
+    /// app-entry (`Terminal.appLines`) in the module's function bodies.
+    ///
+    /// Set by `ipe_lower` when any call site resolves to a
+    /// `KernelFn::is_console()` variant.
+    pub uses_console: bool,
     /// `true` when the lowerer detected at least one `Ipe.WebView`
     /// kernel call (`Webview.app`) in the module's function bodies.
     ///
@@ -4308,6 +4314,7 @@ mod tests {
                 uses_ui: false,
                 uses_web: false,
                 uses_tui: false,
+                uses_console: false,
                 uses_webview: false,
                 uses_css: false,
                 uses_auth: false,
@@ -4839,6 +4846,7 @@ mod serde_persistence_tests {
                 uses_ui: false,
                 uses_web: false,
                 uses_tui: false,
+                uses_console: false,
                 uses_webview: false,
                 uses_css: false,
                 uses_auth: false,
@@ -4930,6 +4938,7 @@ mod serde_persistence_tests {
                 uses_ui: false,
                 uses_web: false,
                 uses_tui: false,
+                uses_console: false,
                 uses_webview: false,
                 uses_css: false,
                 uses_auth: false,
