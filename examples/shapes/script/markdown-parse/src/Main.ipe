@@ -1,0 +1,90 @@
+module Main exposing (main)
+
+import Ipe.Markdown as Markdown exposing (Block(..), HeadingLevel(..))
+import Ipe.List as List
+import Ipe.String as String
+import Ipe.Task as Task
+import Ipe.Io as Io
+
+
+-- Parse markdown into its typed block tree, exercising the ideas `Ipe.Markdown`
+-- turns on:
+--   • `parseBlocks` returns a typed `List Block` — headers, paragraphs, lists, and
+--     code are DISTINCT variants, so a consumer matches on structure, not on
+--     re-scanning the raw text.
+--   • The full `render` produces an `Ipe.Ui` element tree (for a Web/WebView app);
+--     the parser is public so a script can walk the structure directly.
+--   • The parser never emits raw HTML — link/image URLs are sanitised at the sink,
+--     so untrusted markdown is safe to render without an extra pass.
+
+
+source : String
+source =
+    String.join "\n"
+        [ "# Release notes"
+        , ""
+        , "The **fast** path is now the default."
+        , ""
+        , "- typed blocks"
+        , "- no raw HTML"
+        ]
+
+
+-- Summarise each block by its variant — matching on the typed tree, not the text.
+describe : Block -> String
+describe block =
+    case block of
+        HeaderBlock level title ->
+            "header " ++ headingText level ++ ": " ++ title
+
+        ParaBlock body ->
+            "paragraph (" ++ String.fromInt (String.length body) ++ " chars)"
+
+        BulletBlock items ->
+            "bullet list of " ++ String.fromInt (List.length items)
+
+        NumberedBlock items ->
+            "numbered list of " ++ String.fromInt (List.length items)
+
+        CodeBlock body ->
+            "code block (" ++ String.fromInt (String.length body) ++ " chars)"
+
+        TableBlock _ rows ->
+            "table of " ++ String.fromInt (List.length rows) ++ " rows"
+
+        RuleBlock ->
+            "horizontal rule"
+
+        BlockquoteBlock inner ->
+            "blockquote of " ++ String.fromInt (List.length inner) ++ " blocks"
+
+
+headingText : HeadingLevel -> String
+headingText level =
+    case level of
+        H1 ->
+            "H1"
+
+        H2 ->
+            "H2"
+
+        H3 ->
+            "H3"
+
+        H4 ->
+            "H4"
+
+        H5 ->
+            "H5"
+
+        H6 ->
+            "H6"
+
+
+main =
+    do
+        Io.println "Parsed markdown blocks:"
+        Markdown.parseBlocks source
+            |> List.map (\block -> Io.println ("  " ++ describe block))
+            |> Task.sequence
+            |> Task.map (always ())

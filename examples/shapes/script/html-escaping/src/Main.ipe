@@ -1,0 +1,39 @@
+module Main exposing (main)
+
+import Ipe.Html as Html exposing (Html)
+import Ipe.Html.Attributes as Attr
+import Ipe.Task as Task
+import Ipe.Io as Io
+
+
+-- Build an HTML fragment from typed element builders, exercising the ideas
+-- `Ipe.Html` turns on:
+--   • `Html.text` is safe-by-construction: a user string is ESCAPED at the render
+--     sink, so `<script>` in a comment becomes inert text, never a live tag.
+--   • A page is a tree of typed builders (`div`/`p`/`a`), not string concatenation
+--     — the structure can't produce malformed or unbalanced HTML.
+--   • `Html.render` serialises the tree to a string once, at the XSS barrier.
+
+
+-- A comment card. The author name is untrusted input containing an injection
+-- attempt; `Html.text` escapes it so it renders as text, not as markup.
+commentCard : String -> String -> Html msg
+commentCard author body =
+    Html.div
+        [ Attr.class "comment" ]
+        [ Html.p [ Attr.class "author" ] [ Html.text author ]
+        , Html.p [ Attr.class "body" ] [ Html.text body ]
+        ]
+
+
+main =
+    let
+        untrustedAuthor =
+            "<script>steal()</script>"
+
+        fragment =
+            commentCard untrustedAuthor "Nice article!"
+    in
+    do
+        Io.println "Rendered HTML (author was a script-injection attempt):"
+        Io.println (Html.render fragment)

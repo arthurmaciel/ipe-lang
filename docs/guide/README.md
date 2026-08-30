@@ -50,6 +50,8 @@ cross-link where topics meet.
 - **The process and the terminal** — [System](system.md) (arguments, environment,
   working directory, exit), [Standard I/O](io.md) (stdout/stderr/stdin, the
   password read).
+- **Content and markup** — [HTML](html.md) (typed element trees, XSS-safe by
+  construction), [Markdown](markdown.md) (a typed block tree, no raw HTML).
 
 ## Reference and lookup
 
