@@ -483,60 +483,114 @@ fn emit_web_app_inner(
     // (constrain.rs kernel scheme) but are only forwarded to the runtime in the
     // routed branch — single-page apps pass them as structural no-ops.
     if let Some((model_ty, page_ty)) = routed_page_field(ctx, view_e) {
-        let routes_e = lookup_field(ctx, fields, "routes")?;
-        let not_found_e = lookup_field(ctx, fields, "notFound")?;
-        let routes_s = emit_expr_at(ctx, routes_e, indent, child, generics)?;
-        let not_found_s = emit_expr_at(ctx, not_found_e, indent, child, generics)?;
-        let model_ty_s = render_type(ctx, model_ty, generics)?;
-        let page_ty_s = render_type(ctx, page_ty, generics)?;
-        let set_page = set_page_closure(
-            ctx,
-            fields,
-            update_e,
-            &page_ty_s,
-            &model_ty_s,
-            indent,
-            child,
-            generics,
-        )?;
-        if mountable {
-            // A routed `Web.embed` needs a routed mount router-builder
-            // (`web_embed_router_routed`), not yet implemented. Reject at emit —
-            // fail-closed, never a mis-emit. A single-page `Web.embed` mounts
-            // today; a routed one is a follow-up.
-            return Err(Diagnostic::CompilerBug {
-                where_: "ipe_backend_rust::emit_web_call::WebEmbed",
-                detail: "Web.embed of a routed app (Model with a `page` field) is \
-                         not yet supported for Server.mountApp; embed a single-page \
-                         Web app, or serve the routed app standalone with Web.app"
-                    .into(),
-            });
-        }
-        return Ok(Some(format!(
-            "{{ {tag_const} \
-             ipe_runtime::tea::WebApp(ipe_runtime::tea::WebAppKind::Standalone(\
-             ipe_runtime::web::web_app_routed(\
-             {init_s}, \
-             {update_s}, \
-             {view_s}, \
-             {subs_s}, \
-             {routes_s}, \
-             {not_found_s}, \
-             {set_page}, \
-             ::std::env::var(\"IPE_LIVE_STORE\").unwrap_or_else(|_| \"memory\".to_string()), \
-             ::std::env::var(\"IPE_LIVE_STORE_PATH\").unwrap_or_else(|_| ::std::string::String::new()), \
-             IPE_WEB_MODEL_SCHEMA_TAG\
-             ))) }}"
-        )));
+        return emit_routed_web_leaf(
+            ctx, fields, &tag_const, mountable, model_ty, page_ty, update_e, &init_s, &update_s,
+            &view_s, &subs_s, indent, child, generics,
+        );
     }
 
     // Single-page (non-routed) path — `routes`/`notFound` are structurally
-    // present in the cfg but not forwarded to the runtime entry.
-    //
-    // The store kind and path come from env at call time so a single binary can
-    // switch stores without recompilation (`IPE_LIVE_STORE` / `IPE_LIVE_STORE_PATH`).
-    // The four callbacks + store args are shared by the standalone `web_app`
-    // task and (for `Web.embed`) the `web_embed_router` mount builder.
+    // present in the cfg but not forwarded to the runtime entry. Delegated to a
+    // helper to keep this function within the line budget.
+    emit_single_page_web_leaf(
+        ctx, &tag_const, mountable, init_e, update_e, view_e, subs_e, &init_s, &update_s, &view_s,
+        &subs_s, indent, child, generics,
+    )
+}
+
+/// Emit the routed (`Model` has a `page` field) `WebApp` leaf — a `Standalone`
+/// `web_app_routed` handle. Routing (routes table + `notFound` + generated
+/// `set_page`) is forwarded to the runtime entry.
+///
+/// A routed `Web.embed` needs a routed mount router-builder
+/// (`web_embed_router_routed`), which is not yet implemented, so `mountable`
+/// here is rejected fail-closed at emit — never a mis-emit. A single-page
+/// `Web.embed` mounts today; a routed one is a follow-up.
+#[allow(clippy::too_many_arguments)] // threads the pre-emitted callback strings + their source exprs + the solved model/page types
+fn emit_routed_web_leaf(
+    ctx: &EmitCtx,
+    fields: &[(ipe_intern::Symbol, Expr)],
+    tag_const: &str,
+    mountable: bool,
+    model_ty: &ipe_ir::IrType,
+    page_ty: &ipe_ir::IrType,
+    update_e: &Expr,
+    init_s: &str,
+    update_s: &str,
+    view_s: &str,
+    subs_s: &str,
+    indent: usize,
+    child: u16,
+    generics: GenericScope,
+) -> DResult<Option<String>> {
+    let routes_e = lookup_field(ctx, fields, "routes")?;
+    let not_found_e = lookup_field(ctx, fields, "notFound")?;
+    let routes_s = emit_expr_at(ctx, routes_e, indent, child, generics)?;
+    let not_found_s = emit_expr_at(ctx, not_found_e, indent, child, generics)?;
+    let model_ty_s = render_type(ctx, model_ty, generics)?;
+    let page_ty_s = render_type(ctx, page_ty, generics)?;
+    let set_page = set_page_closure(
+        ctx,
+        fields,
+        update_e,
+        &page_ty_s,
+        &model_ty_s,
+        indent,
+        child,
+        generics,
+    )?;
+    if mountable {
+        return Err(Diagnostic::CompilerBug {
+            where_: "ipe_backend_rust::emit_web_call::WebEmbed",
+            detail: "Web.embed of a routed app (Model with a `page` field) is \
+                     not yet supported for Server.mountApp; embed a single-page \
+                     Web app, or serve the routed app standalone with Web.app"
+                .into(),
+        });
+    }
+    Ok(Some(format!(
+        "{{ {tag_const} \
+         ipe_runtime::tea::WebApp(ipe_runtime::tea::WebAppKind::Standalone(\
+         ipe_runtime::web::web_app_routed(\
+         {init_s}, \
+         {update_s}, \
+         {view_s}, \
+         {subs_s}, \
+         {routes_s}, \
+         {not_found_s}, \
+         {set_page}, \
+         ::std::env::var(\"IPE_LIVE_STORE\").unwrap_or_else(|_| \"memory\".to_string()), \
+         ::std::env::var(\"IPE_LIVE_STORE_PATH\").unwrap_or_else(|_| ::std::string::String::new()), \
+         IPE_WEB_MODEL_SCHEMA_TAG\
+         ))) }}"
+    )))
+}
+
+/// Emit the single-page (non-routed) `WebApp` leaf: a `Standalone` handle for
+/// `Web.app`, or a `Mountable` handle (standalone `serve` task + a
+/// `web_embed_router` router builder) for `Web.embed`.
+///
+/// The store kind/path come from env at call time so one binary can switch
+/// stores without recompilation. For `Web.embed` the four callbacks are emitted
+/// a SECOND time for the router builder — each `emit_web_fn` yields a named `fn`
+/// item / pure closure, so re-emitting is a fresh reference, not a move.
+#[allow(clippy::too_many_arguments)] // threads the already-emitted callback strings + their source exprs
+fn emit_single_page_web_leaf(
+    ctx: &EmitCtx,
+    tag_const: &str,
+    mountable: bool,
+    init_e: &Expr,
+    update_e: &Expr,
+    view_e: &Expr,
+    subs_e: &Expr,
+    init_s: &str,
+    update_s: &str,
+    view_s: &str,
+    subs_s: &str,
+    indent: usize,
+    child: u16,
+    generics: GenericScope,
+) -> DResult<Option<String>> {
     let store_args = "::std::env::var(\"IPE_LIVE_STORE\").unwrap_or_else(|_| \"memory\".to_string()), \
          ::std::env::var(\"IPE_LIVE_STORE_PATH\").unwrap_or_else(|_| ::std::string::String::new()), \
          IPE_WEB_MODEL_SCHEMA_TAG";
@@ -544,10 +598,6 @@ fn emit_web_app_inner(
         "ipe_runtime::web::web_app({init_s}, {update_s}, {view_s}, {subs_s}, {store_args})"
     );
     if mountable {
-        // `Web.embed`: carry both the standalone task (top-level `run_blocking`)
-        // and the router builder (`Server.mountApp`). Callbacks are emitted a
-        // second time for the builder — each `emit_web_fn` produces a named `fn`
-        // item / pure closure, so re-emitting is a fresh reference, not a move.
         let init_s2 = emit_web_fn(ctx, init_e, indent, child, generics)?;
         let update_s2 = emit_web_fn(ctx, update_e, indent, child, generics)?;
         let view_raw_s2 = emit_web_fn(ctx, view_e, indent, child, generics)?;
