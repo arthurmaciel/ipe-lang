@@ -4,8 +4,7 @@
 //! LRU keyed on the function pointer and argument equality; Ipê does not yet
 //! have a TEA-integrated memoisation layer. In v1 these functions evaluate
 //! immediately, which is semantically equivalent (same output, just no caching
-//! benefit). The divergence is recorded in `misc/docs/divergences-from-sky.md`
-//! §B-Lazy.
+//! benefit). Sanctioned divergence §B-Lazy.
 //!
 //! Every function carries a trailing underscore per the `naming.rs` convention.
 

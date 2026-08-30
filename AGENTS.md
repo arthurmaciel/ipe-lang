@@ -56,14 +56,14 @@ cargo nextest run -p <touched-crate>     # plus each crate you changed
 - **Clippy:** `--all-targets` lints test code; the workspace bans `panic!`/`unreachable!`/
   `todo!` even in `#[cfg(test)]`. Fix the code, never the lint level.
 
-Full gate mechanics, guard daemons, and the release pipeline are in `misc/docs/internals/dev-ops.md` (untracked; present in the working tree).
+Full gate mechanics, guard daemons, and the release pipeline: run the CI commands in `AGENTS.md` (this file); the kernel-registration tripwire is enforced at compile time.
 
 ## Registering a kernel
 
 A kernel's facts have one source; touching or adding a kernel requires updating every
 mirrored site (kernels enum, type scheme, arity table, emitted symbol, module
 registration). A tripwire makes a missed site a compile-time or CI error. Full
-site list and tripwire details: `misc/docs/internals/kernel-registration.md` (untracked; present in the working tree).
+The tripwire enforces completeness at compile time; a missed site is a build error.
 
 ## Tooling — use first
 
@@ -94,7 +94,7 @@ site list and tripwire details: `misc/docs/internals/kernel-registration.md` (un
 is current. One PR per unit of functionality (check `gh pr list` first; extend an
 existing PR rather than opening a parallel one). Versions and `CHANGELOG.md` are
 automated by release-please from Conventional Commit messages — never bump by
-hand. Slow checks run post-merge and nightly; detail in `misc/docs/internals/dev-ops.md`.
+hand. Slow checks run post-merge and nightly.
 
 ## Stdlib API boundary rule: no bare primitives at typed boundaries
 

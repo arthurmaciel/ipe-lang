@@ -675,8 +675,7 @@ const STD_LIVE_CONSOLE: &str = include_str!("../Ipe/Web/Console.ipe");
 /// type scheme (`String -> a -> Task Error Int`) and a dedicated emit arm
 /// (`pubsub_publish::<_, IpeError>(topic, payload)`).  A member use exits ipe-0
 /// AND cargo-0.  The payload `a` is a genuine monomorphized type var (concrete-
-/// over-generic), never erased.  See `misc/docs/divergences-from-sky.md`
-/// §B-FfiKernelAliasSealed for the closed completeness gap.
+/// over-generic), never erased.  Sanctioned divergence §B-FfiKernelAliasSealed: closed completeness gap.
 /// Not in `STDLIB_MODULE_QUALIFIERS` so disjointness invariant holds.
 const STD_PUBSUB: &str = include_str!("../Ipe/PubSub.ipe");
 
@@ -717,8 +716,7 @@ const ERROR: &str = include_str!("../Ipe/Error.ipe");
 /// Pure Ipê; no Ffi.kernel calls.  RESOLVES (ipe-0 AND cargo-0): the
 /// `onSubmit`/`onInput` re-exports are typed to the Rust kernels'
 /// function-arg schemes (`(a -> msg) -> Attribute msg` /
-/// `(String -> msg) -> Attribute msg`) — see `misc/docs/divergences-from-sky.md`
-/// §B-UiEventsFnArg.
+/// `(String -> msg) -> Attribute msg`) — sanctioned divergence §B-UiEventsFnArg.
 /// Not in `STDLIB_MODULE_QUALIFIERS` so disjointness invariant holds.
 const STD_UI_EVENTS: &str = include_str!("../Ipe/Ui/Events.ipe");
 

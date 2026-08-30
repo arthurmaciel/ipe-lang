@@ -7,8 +7,7 @@
 //! the list.  Without the attribute the stamper falls back to positional ids,
 //! which shift on reorder and mis-patch uncontrolled-input state / focus.
 //!
-//! See `misc/docs/divergences-from-sky.md §B-Keyed` for the ipe-key-stamp approach
-//! vs the reference's VNode-key differ.
+//! Sanctioned divergence §B-Keyed: ipe-key-stamp approach vs the reference VNode-key differ.
 //!
 //! Every function carries a trailing underscore per the `naming.rs` convention.
 

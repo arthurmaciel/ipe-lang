@@ -387,7 +387,7 @@ sumOfHelp xs acc =
 
 -- WARNING: `compare`/`lt`/`lte`/`gt`/`gte` compare amounts only and ignore
 -- currency. Cross-currency comparisons silently treat values as same-currency.
--- See `misc/docs/divergences-from-sky.md`.
+-- Sanctioned divergence: amount-only comparison ignores currency.
 compare : Money -> Money -> Int
 compare a b =
     Dec.compare (amount a) (amount b)

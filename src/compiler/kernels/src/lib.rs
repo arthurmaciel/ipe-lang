@@ -2249,7 +2249,7 @@ pub enum StdlibKernel {
     ///
     /// **Eager in v1.** Ipê's Go runtime memoises the subtree; Ipê evaluates
     /// immediately (no keyed LRU available before the TEA diff layer).  The
-    /// divergence is recorded in `misc/docs/divergences-from-sky.md` §B-Lazy.
+    /// Sanctioned divergence §B-Lazy.
     LazyLazy,
     /// `Lazy.lazy2 : (a -> b -> Element msg) -> a -> b -> Element msg` (eager)
     LazyLazy2,

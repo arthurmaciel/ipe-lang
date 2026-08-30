@@ -7,7 +7,7 @@
 -- reproducibility matters.  For entropy-backed one-shot draws use the
 -- Task-tier `Ipe.Random` surface (`Random.int` / `Random.float`) instead.
 --
--- Divergence from elm/random (recorded in `misc/docs/divergences-from-elm.md`):
+-- Divergence from elm/random (sanctioned):
 -- the combinators are SEED-EXPLICIT — they take the current `Seed` and
 -- return `( value, nextSeed )` directly (a fused `map … |> step`) rather
 -- than returning a deferred `Generator`.  Elm's point-free

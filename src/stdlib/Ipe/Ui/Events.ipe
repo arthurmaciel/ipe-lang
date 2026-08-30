@@ -23,7 +23,7 @@ onClick m = Ui.onClick m
 -- `DoSignIn : LoginForm -> Msg`). Upstream Ipe's `onSubmit` is the
 -- permissive `a -> Attribute b`; this re-export mirrors the Rust
 -- kernel's function-arg contract so the wrapper type-checks against
--- it (recorded in misc/docs/divergences-from-sky.md).
+-- it (sanctioned divergence §B-UiEventsFnArg).
 onSubmit : (a -> msg) -> Ui.Attribute msg
 onSubmit m = Ui.onSubmit m
 
