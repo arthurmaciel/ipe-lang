@@ -48,7 +48,6 @@ fn compile_with_files(
     Ok(ipe::build(&entry, &out_dir, &runtime))
 }
 
-
 /// Assert compilation succeeded (ipe-0).
 fn assert_accepted(test_name: &str, source: &str, extra: &[(&str, &str)]) -> Result<(), BoxError> {
     match compile_with_files(test_name, source, extra)? {
