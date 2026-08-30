@@ -2739,7 +2739,7 @@ mod tests {
         assert!(solved.is_ok(), "inference must succeed");
         let Ok(solved) = solved else { return };
 
-        // main = Io.println "done"
+        // main = System.unsetenv (String.fromInt (update Increment 0))
         let main_def = m
             .defs
             .iter()
@@ -2757,20 +2757,20 @@ mod tests {
             return;
         };
 
-        // Outer call: println "done" : Task ()
+        // Outer call: System.unsetenv … : Task ()
         let outer = as_call(body);
         assert!(outer.is_some(), "main body is a call");
-        let Some((_println, outer_args)) = outer else {
+        let Some((_unsetenv, outer_args)) = outer else {
             return;
         };
-        let println_region = solved.regions.get(&(main_home.clone(), body.span));
+        let unsetenv_region = solved.regions.get(&(main_home.clone(), body.span));
         assert!(
             matches!(
-                println_region,
+                unsetenv_region,
                 Some(Ty::Con { name, args, .. })
                     if i.resolve(*name) == Some("Task") && args.as_slice() == [Ty::Unit]
             ),
-            "println region must be Task (): {println_region:?}"
+            "unsetenv region must be Task (): {unsetenv_region:?}"
         );
 
         // The arg is the string literal "done" : String
@@ -3414,10 +3414,9 @@ mod tests {
         // builtin has no user-writable record-update form. It must be the
         // dedicated `BuiltinRecordUpdate` (IPE-T0017) naming the type.
         let src = "module Main exposing (main)\n\
-                   import Ipe.Io as Io\n\
                    f : PanicInfo -> PanicInfo\n\
                    f p =\n    { p | message = \"x\" }\n\
-                   main =\n    Io.println \"never\"\n";
+                   main =\n    0\n";
         let parsed = canon_src(src);
         assert!(
             parsed.is_some(),

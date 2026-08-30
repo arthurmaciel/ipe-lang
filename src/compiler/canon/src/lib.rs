@@ -513,9 +513,10 @@ mod tests {
 
     #[test]
     fn unknown_value_suggests_close_name() {
-        // `printn` is one edit from the `Ipe.Io` member `println`.
-        let err =
-            canon_err("module Main exposing (main)\nimport Ipe.Io as Io\n\nmain = Io.printn\n");
+        // `readFil` is one edit from the `Ipe.File` member `readFile`.
+        let err = canon_err(
+            "module Main exposing (main)\nimport Ipe.File as File\n\nmain = File.readFil\n",
+        );
         assert!(
             matches!(
                 &err,
@@ -538,10 +539,10 @@ mod tests {
         else {
             return;
         };
-        assert_eq!(&*member, "printn");
+        assert_eq!(&*member, "readFil");
         assert!(
-            suggestions.iter().any(|s| &**s == "println"),
-            "suggestions should include `println`, got {suggestions:?}"
+            suggestions.iter().any(|s| &**s == "readFile"),
+            "suggestions should include `readFile`, got {suggestions:?}"
         );
     }
 
@@ -2113,12 +2114,11 @@ mod tests {
             "module Dep exposing (Color(..))\n\
              type Color = Red | Green | Blue\n",
             "module Main exposing (main)\n\
-             import Dep exposing (Color(..))\n\
-             import Ipe.Io as Io\n\n\
+             import Dep exposing (Color(..))\n\n\
              type Color = Warm | Cool\n\n\
              describe : Color -> String\n\
              describe c =\n    case c of\n        Warm -> \"warm\"\n        Cool -> \"cool\"\n\n\
-             main =\n    Io.println (describe Warm)\n",
+             main =\n    describe Warm\n",
         );
         assert!(
             matches!(
@@ -2141,10 +2141,9 @@ mod tests {
             "module Dep exposing (Color(..))\n\
              type Color = Red | Green | Blue\n",
             "module Main exposing (main)\n\
-             import Dep exposing (Color(..))\n\
-             import Ipe.Io as Io\n\n\
+             import Dep exposing (Color(..))\n\n\
              type alias Color = Int\n\n\
-             main =\n    Io.println \"hi\"\n",
+             main =\n    0\n",
         );
         assert!(
             matches!(
@@ -2168,12 +2167,11 @@ mod tests {
         let err = canon_main_with_dep(
             "module Dep exposing (Color(..))\n\
              type Color = Red | Green | Blue\n",
-            "module Main exposing (main)\n\
-             import Ipe.Io as Io\n\n\
+            "module Main exposing (main)\n\n\
              type Color = Warm | Cool\n\n\
              describe : Color -> String\n\
              describe c =\n    case c of\n        Warm -> \"warm\"\n        Cool -> \"cool\"\n\n\
-             main =\n    Io.println (describe Warm)\n",
+             main =\n    describe Warm\n",
         );
         assert!(
             err.is_none(),
@@ -3122,17 +3120,17 @@ mod tests {
     }
 
     #[test]
-    fn stdlib_exposing_println_resolves_unqualified() {
-        // `import Ipe.Io exposing (println)` → bare `println` resolves via the
-        // exposing path to `VarKernel { module: Io, name: println }`.
+    fn stdlib_exposing_member_resolves_unqualified() {
+        // `import Ipe.System exposing (exit)` → bare `exit` resolves via the
+        // exposing path to `VarKernel { module: System, name: exit }`.
         let src = "module Main exposing (main)\n\
-                   import Ipe.Io exposing (println)\n\n\
-                   main = println\n";
+                   import Ipe.System exposing (exit)\n\n\
+                   main = exit\n";
         let Some((m, i)) = canon_src(src) else {
-            assert!(false_marker(), "exposing (println) must canonicalise");
+            assert!(false_marker(), "exposing (exit) must canonicalise");
             return;
         };
-        assert_main_is_kernel(&m, &i, "Io", "println");
+        assert_main_is_kernel(&m, &i, "System", "exit");
     }
 
     #[test]
@@ -4119,15 +4117,13 @@ mod tests {
             (
                 "module Main exposing (main)\n\
                  import Ipe.Task as Task\n\
-                 import Ipe.Io as Io\n\
-                 main = Io.println \"hi\" |> Task.run\n",
+                 main = Task.succeed () |> Task.run\n",
                 "run",
             ),
             (
                 "module Main exposing (main)\n\
                  import Ipe.Task as Task\n\
-                 import Ipe.Io as Io\n\
-                 main = Task.perform (Io.println \"hi\")\n",
+                 main = Task.perform (Task.succeed ())\n",
                 "perform",
             ),
         ] {

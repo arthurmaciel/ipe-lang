@@ -79,9 +79,9 @@ fn root_of(db: &IpeDatabase, files: &[(&[&str], SourceFile)]) -> SourceRoot {
 }
 
 /// Like [`root_of`] but also injects the transitive closure of compiled-source
-/// stdlib modules (e.g. `Ipe.Time`) that the user files import.
+/// stdlib modules (e.g. `Ipe.Io`, `Ipe.Time`) that the user files import.
 ///
-/// Kernel-qualifier modules (`Ipe.Io`, `Ipe.String`, …) resolve from the
+/// Kernel-qualifier modules (`Ipe.String`, `Ipe.Task`, …) resolve from the
 /// canon catalog without source injection — only compiled-source modules need
 /// this. Each injected file carries [`ModuleOrigin::EmbeddedStdlib`] so canon
 /// accepts the `Ipe.*` namespace without an IPE-N0025 rejection.

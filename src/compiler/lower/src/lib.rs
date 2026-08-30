@@ -476,7 +476,7 @@ mod tests {
         assert!(main.params.is_empty());
         assert_eq!(main.ret, IrType::Task(Box::new(IrType::Unit)));
 
-        // main = Io.println (String.fromInt (update Increment 0))
+        // main = System.unsetenv (String.fromInt (update Increment 0))
         assert!(
             matches!(&main.body, Expr::Call { .. }),
             "main body is a call"
@@ -484,7 +484,7 @@ mod tests {
         let Expr::Call { callee, args, .. } = &main.body else {
             return;
         };
-        assert_eq!(*callee, Callee::Kernel(KernelFn::IoPrintln));
+        assert_eq!(*callee, Callee::Kernel(KernelFn::SystemUnsetenv));
         assert_eq!(args.len(), 1);
 
         let Some(Expr::Call {
