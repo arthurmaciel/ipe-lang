@@ -136,7 +136,7 @@ mod tests {
     #[test]
     fn decode_form_genuine_coercion_failure_still_none() {
         // A non-numeric string into an i64 field is a GENUINE type error — it
-        // must still fail (None + warn), unchanged from Go (json.Unmarshal also
+        // must still fail (None + warn), unchanged.Unmarshal also
         // errors on a malformed number). Only MISSING-field stopped being a
         // failure; present-but-malformed stays a failure.
         let mut bad = FormData::new();
@@ -206,7 +206,7 @@ mod tests {
     // (`note : Maybe String` → `IpeMaybe<String>`) is idiomatic. The codegen
     // `#[derive(Default)]` on this struct requires `IpeMaybe<T>: Default`, which
     // `impl Default for IpeMaybe` (= `Nothing`) supplies, so a MISSING `note`
-    // decodes to `Nothing` (the missing-field leniency, Go's `json.Unmarshal`
+    // decodes to `Nothing` (the missing-field leniency,  `json.Unmarshal`
     // nil parity).
     //
     // NB on a PRESENT value: `IpeMaybe` derives serde's default (externally-

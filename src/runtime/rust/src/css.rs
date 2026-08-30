@@ -225,7 +225,7 @@ mod tests {
                 .to_ascii_lowercase()
                 .contains("</style")
         );
-        // benign body is identity (Go byte-parity for non-attack input).
+        // benign body is identity.
         assert_eq!(
             strip_style_close_kernel(".card {\n  color: red;\n}\n".into()),
             ".card {\n  color: red;\n}\n"

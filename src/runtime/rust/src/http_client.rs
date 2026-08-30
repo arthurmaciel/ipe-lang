@@ -480,7 +480,7 @@ async fn do_request<E: From<String> + Send + 'static>(
             // headers canonicalised (`net/http.Header` always is) — a Ipê
             // program's `Dict.get "Content-Type" resp.headers` must find the
             // key. Route through the SAME `canonical_header` the Server
-            // inbound path uses (its Go-parity table is pinned by
+            // inbound path uses (its  table is pinned by
             // `canonical_header_matches_go_canonical_mime_key`).
             headers.insert(
                 crate::http_header::canonical_header(k.as_str()),
@@ -831,11 +831,11 @@ mod tests {
 
     /// Wiring seal: the response-header collection loop must route
     /// every key through `http_header::canonical_header` (reqwest's
-    /// `HeaderName::as_str()` is always lower-case; Go's `net/http.Header` is
+    /// `HeaderName::as_str()` is always lower-case;  `net/http.Header` is
     /// always canonical — `Dict.get "Content-Type"` parity depends on it).
     /// `do_request` needs a live round-trip to test end-to-end, so this pins
     /// the call's PRESENCE at the source level; the transform itself is
-    /// proven by `http_header`'s own Go-parity table test.
+    /// proven by `http_header`'s own  table test.
     #[test]
     fn response_header_loop_canonicalises_keys() {
         let src = include_str!("http_client.rs");

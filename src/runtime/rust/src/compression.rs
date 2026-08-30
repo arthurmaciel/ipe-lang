@@ -49,7 +49,7 @@ fn gzip_bytes(data: &[u8]) -> Result<Vec<u8>, String> {
 
 fn gunzip_bytes(data: &[u8]) -> Result<Vec<u8>, String> {
     // AUD-09: `GzDecoder` only decodes the FIRST gzip member and silently
-    // ignores any trailing concatenated members — Go's `gzip.Reader` (via
+    // ignores any trailing concatenated members —  `gzip.Reader` (via
     // `multistream(true)`, the default) decodes ALL concatenated members.
     // `MultiGzDecoder` matches the Go behavior; single-member input decodes
     // identically either way, so this is a pure completeness fix, not a

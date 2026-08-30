@@ -1,5 +1,5 @@
 //! Ipe.Web observability endpoints — the operator surface mounted on every
-//! Web app, mirroring Go's `runtime-go/rt/observability.go`:
+//! Web app, mirroring  ``:
 //!
 //! - `GET /_ipe/healthz`  — liveness probe, always `{"status":"ok"}`.
 //! - `GET /_ipe/readyz`   — readiness probe, `{"status":"ready"}` (200) or
@@ -20,7 +20,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 /// Readiness flag. Starts ready; a graceful-shutdown signal flips it so
 /// `/_ipe/readyz` reports `draining` and load balancers stop routing new traffic
-/// while in-flight requests finish (Go parity: `readinessReady`).
+/// while in-flight requests finish .
 static READY: AtomicBool = AtomicBool::new(true);
 
 /// Flip readiness to draining (call from a shutdown handler). Idempotent.
@@ -62,7 +62,7 @@ pub async fn buildinfo() -> impl IntoResponse {
 
 /// `GET /_ipe/metrics` — full Prometheus 0.0.4 text exposition.
 pub async fn metrics() -> impl IntoResponse {
-    // The whole exposition comes from the labeled registry (Go parity:
+    // The whole exposition comes from the labeled registry (:
     // prometheus.go's WriteProm) — active sessions, SSE connections, 5xx errors,
     // request-latency histogram, AND `ipe_web_requests_total{method,status}`
     // written per request by the `track` middleware below. `write_prom` emits
@@ -78,7 +78,7 @@ pub async fn metrics() -> impl IntoResponse {
     )
 }
 
-/// axum middleware: per-request observability (Go parity — its access-log +
+/// axum middleware: per-request observability (— its access-log +
 /// OTel-span middleware wraps the whole mux). Counts every request, and for
 /// user-facing requests auto-records a span + an access log so the console has
 /// data without the app calling `Ipe.Trace`/`Ipe.Log` itself.
@@ -108,7 +108,7 @@ pub async fn track(
     // telemetry, not its own page renders.
     if !is_internal_path(&path) && !is_sub_app() {
         let dur_us = start.elapsed().as_micros().min(u64::MAX as u128) as u64;
-        // Request-latency histogram (Go parity: Observe ipe_web_request_seconds).
+        // Request-latency histogram .
         // UNLABELED on purpose — labeling by the raw path would be an unbounded-
         // cardinality memory-DoS (the registry never evicts); Go labels by a
         // bounded route template, which the Rust middleware doesn't have here.
@@ -117,10 +117,10 @@ pub async fn track(
             &[],
             dur_us as f64 / 1_000_000.0,
         );
-        // Labeled request counter (Go parity: prometheus.go's
-        // ipe_web_requests_total{method,route,status}). We keep Go's two
+        // Labeled request counter (prometheus.go's
+        // ipe_web_requests_total{method,route,status}). We keep  two
         // BOUNDED labels — `method` normalised to a closed set, and the full
-        // numeric `status` (bounded by the HTTP spec) — but DROP Go's `route`
+        // numeric `status` (bounded by the HTTP spec) — but DROP  `route`
         // label: it is derived from the raw request path, an attacker-
         // controllable, UNBOUNDED value, and the registry never evicts (the
         // classic Prometheus cardinality memory-DoS). The histogram above drops
@@ -272,7 +272,7 @@ mod tests {
 
     #[tokio::test]
     async fn metrics_exposes_counter() {
-        // The registry is empty until the first inc (matches Go, whose own
+        // The registry is empty until the first inc (
         // metrics test Incs first); the `track` middleware writes this series
         // per request. Seed one labeled series, then assert the name + its
         // bounded labels appear. Substring-only assertions keep this
@@ -305,7 +305,7 @@ mod tests {
     }
 
     // Regression: a panicking handler must become a 500 (not an unwound, dropped
-    // connection) AND still be counted by `track` as status 500 — the Go-parity
+    // connection) AND still be counted by `track` as status 500 — the 
     // contract for the new `CatchPanicLayer` placed INNER of `track` in the
     // Ipe.Web router. Well-typed Ipê can't panic (the no-panic thesis), so this
     // defense-in-depth floor can only be exercised from a test handler that
@@ -372,7 +372,7 @@ mod tests {
             !body.contains("SECRET123") && !body.contains("/etc/secret"),
             "panic message LEAKED into the 500 response body: {body}"
         );
-        // Go parity: the converted 500 returns through `track` normally, so the
+        // the converted 500 returns through `track` normally, so the
         // request is counted with status="500" (not skipped via an unwind).
         let m = crate::telemetry::write_prom();
         assert!(m.contains("ipe_web_requests_total"), "{m}");

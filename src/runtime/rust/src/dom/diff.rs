@@ -2,7 +2,7 @@ use crate::html::{Attribute, Html};
 use std::collections::HashMap;
 
 /// A single DOM patch emitted by `diff`. Field names mirror the Go `Patch` struct
-/// (JSON: `id`, `text`, `html`, `attrs`, `remove`) — see `runtime-go/rt/live.go`.
+/// (JSON: `id`, `text`, `html`, `attrs`, `remove`) — see ``.
 ///
 /// `diff` is in the always-compiled `dom` data path, but `Patch` is serialized
 /// only by the Web SSE wire / the browser-WASM sink — surfaces that imply the
@@ -41,7 +41,7 @@ impl Patch {
 /// Structural diff between two `Html` trees that have already had `assign_ipe_ids`
 /// applied. Returns the minimal list of `Patch` operations needed to update the
 /// DOM from `old` to `new`. Faithful port of Go `diffNodes`
-/// (`runtime-go/rt/live.go`):
+/// (``):
 /// - Matched-tag element pair: diff attributes + events, then children.
 /// - Tag/kind mismatch, child-count change, or any mixed-child text change:
 ///   whole-subtree `html` replace at the parent.
@@ -71,7 +71,7 @@ fn ipe_id<M>(n: &Html<M>) -> Option<&str> {
     None
 }
 
-/// Emit a whole-subtree innerHTML replace at `id` (Go: `Patch{ID, HTML}`).
+/// Emit a whole-subtree innerHTML replace at `id` .
 ///
 /// `parent_tag` is the tag of the element whose children are being replaced.
 /// When it is `"script"` or `"style"`, the rendered body is passed through the
@@ -103,7 +103,7 @@ fn diff_node_depth<M>(old: &Html<M>, new: &Html<M>, out: &mut Vec<Patch>, depth:
         _ => return,
     };
     // Patch id targets the element currently in the DOM — the OLD tree's id
-    // (Go parity: `old.IpeID`). Borrowed: `Patch::for_id` copies it only when
+    // . Borrowed: `Patch::for_id` copies it only when
     // a Patch is actually built, so an unchanged element pair allocates
     // nothing here (efficiency-audit §6 medium).
     let id: &str = ipe_id(old).unwrap_or("");
@@ -140,7 +140,7 @@ fn diff_node_depth<M>(old: &Html<M>, new: &Html<M>, out: &mut Vec<Patch>, depth:
         match (oc, nc) {
             (Html::HText(o), Html::HText(n)) => {
                 // Mixed-child text change → replace the whole subtree at the parent
-                // (Go parity: single-text is the fast path above; anything else is a
+                // (single-text is the fast path above; anything else is a
                 // parent html-replace).
                 if o != n {
                     push_html_replace(id, ot, nk, out);
@@ -181,7 +181,7 @@ fn diff_attrs<M>(old: &[Attribute<M>], new: &[Attribute<M>], p: &mut Patch) {
                     m.insert(k.as_str(), v.as_str());
                 }
                 Attribute::BoolAttr(k, true) => {
-                    // Go parity: live.go line 190 `vn.Attrs[k] = k`.
+                    // live.go line 190 `vn.Attrs[k] = k`.
                     // Key-as-value encodes a present boolean attr; "" is the remove sentinel only.
                     m.insert(k.as_str(), k.as_str());
                 }
@@ -414,7 +414,7 @@ mod tests {
         ids(&mut b);
         let p = diff(&a, &b);
         assert_eq!(p.len(), 1);
-        // Go parity: present BoolAttr encodes as {k: k}, NOT {k: ""}.
+        // present BoolAttr encodes as {k: k}, NOT {k: ""}.
         assert_eq!(
             p[0].attrs.get("disabled").map(String::as_str),
             Some("disabled")

@@ -1,6 +1,6 @@
 //! Ipe.Http.Server.Stream — server-side streaming HTTP responses (chunked / SSE).
 //!
-//! Mirror of `runtime-go/rt/server_stream.go`. Where http_stream.rs reads an
+//! Mirror of ``. Where http_stream.rs reads an
 //! upstream body chunk-by-chunk, this writes a response body chunk-by-chunk to
 //! the client over a long-lived connection.
 //!

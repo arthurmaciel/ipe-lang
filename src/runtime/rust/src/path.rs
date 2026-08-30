@@ -63,7 +63,7 @@ const WINDOWS: bool = false;
 const WINDOWS: bool = true;
 
 /// The canonical separator emitted in a cleaned path (all input separators
-/// normalise to this): `/` on Unix, `\` on Windows, matching Go `filepath`.
+/// normalise to this): `/` on Unix, `\` on Windows, 
 const SEP: u8 = if WINDOWS { b'\\' } else { b'/' };
 
 /// `Ipe.Path`'s opaque, validated newtype. See the module doc for the
@@ -93,7 +93,7 @@ impl super::stringify::IpeStringify for Path {
 /// Fails closed (`Err`) on a NUL byte, a Windows trailing-dot/space traversal
 /// disguise, or a `..` escape; succeeds with the lexically-cleaned form
 /// otherwise. The empty string cleans to `"."` (the current directory),
-/// matching Go `filepath.Clean("")`.
+/// Clean("")`.
 #[must_use]
 pub fn path_from_string<E: From<String>>(s: String) -> IpeResult<E, Path> {
     if has_nul(&s) {

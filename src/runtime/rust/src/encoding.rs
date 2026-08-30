@@ -7,7 +7,7 @@ use super::IpeResult;
 use base64::{Engine, engine::general_purpose::STANDARD as B64};
 use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, percent_decode_str, utf8_percent_encode};
 
-/// The set of bytes `urlEncode` percent-encodes, matching Go's
+/// The set of bytes `urlEncode` percent-encodes, matching 
 /// `url.QueryEscape` (`encodeQueryComponent`): every byte is escaped EXCEPT
 /// the ASCII alphanumerics and the four unreserved marks `-` `_` `.` `~`
 /// (RFC 3986 §2.3). Space is handled separately (`%20` → `+`) below.
@@ -72,8 +72,8 @@ pub(crate) fn form_url_decode(s: &str) -> String {
 }
 
 /// Ipê `base64Encode : String -> String` — encodes the input's UTF-8 bytes
-/// (Go parity: `base64.StdEncoding.EncodeToString([]byte(s))`). Non-ASCII
-/// matches Go rather than silently truncating codepoints > 255.
+/// )`). Non-ASCII
+/// 
 #[must_use]
 pub fn base64_encode(s: String) -> String {
     B64.encode(s.as_bytes())
@@ -121,7 +121,7 @@ pub fn url_decode<E: From<String>>(s: String) -> IpeResult<E, String> {
 }
 
 /// Ipê `hexEncode : String -> String` — encodes the input's UTF-8 bytes
-/// (Go parity: `hex.EncodeToString([]byte(s))`). Non-ASCII matches Go rather
+/// )`). Non-ASCII 
 /// than truncating codepoints > 255.
 #[must_use]
 pub fn encoding_hex_encode(s: String) -> String {
@@ -237,7 +237,7 @@ mod tests {
         assert!(matches!(decoded, IpeResult::Ok(ref s) if s == "Hello, Ipe!"));
     }
 
-    // non-ASCII goes through UTF-8 (Go parity), not Latin-1 truncation.
+    // non-ASCII goes through UTF-8 , not Latin-1 truncation.
     #[test]
     fn base64_hex_nonascii_match_go_utf8_bytes() {
         // Go: base64/hex of []byte("café") = UTF-8 bytes 63 61 66 C3 A9.

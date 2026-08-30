@@ -4,7 +4,7 @@
 //! field-for-field**. They live in the runtime (not generated per-project) so
 //! that every backend — Ipe.Web (→ HTML), Ipe.Tui (→ ANSI cells), Ipe.WebView
 //! (→ native webview) — renders the SAME structured `Element` tree to its own
-//! target, exactly as the Go backend does (`runtime-go/rt/tui_ui.go` walks the
+//! target, exactly as the Go backend does (`` walks the
 //! structured Element ADT directly; it never round-trips through CSS).
 //!
 //! The Rust codegen maps the Ipê `Ipe.Ui.*` types onto these via

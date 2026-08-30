@@ -13,7 +13,7 @@
 /// Canonicalise a `-`-separated header name (`content-type` -> `Content-Type`).
 ///
 /// Upper-cases the first ASCII letter of each `-`-separated segment and
-/// lower-cases the rest, matching Go's `textproto.CanonicalMIMEHeaderKey` for
+/// lower-cases the rest, matching  `textproto.CanonicalMIMEHeaderKey` for
 /// every well-formed (valid-token) header name: valid token bytes are ASCII,
 /// only `-` triggers the next-uppercase in both implementations, and `_`/`.`/
 /// digits are non-triggers in both.
@@ -83,7 +83,7 @@ pub(crate) fn origin_host_mismatch(origin: &str, host: &str) -> bool {
 mod tests {
     use super::{canonical_header, origin_host_mismatch};
 
-    /// Well-formed header names — byte-identical to Go's
+    /// Well-formed header names — byte-identical to 
     /// `textproto.CanonicalMIMEHeaderKey`.
     #[test]
     fn canonical_header_matches_go_canonical_mime_key() {

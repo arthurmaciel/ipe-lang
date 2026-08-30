@@ -1,6 +1,6 @@
 //! Ipe.Http.Stream — incremental HTTP response bodies (client side).
 //!
-//! Mirror of `runtime-go/rt/http_stream.go`. Reads an outbound HTTP response
+//! Mirror of ``. Reads an outbound HTTP response
 //! body chunk-by-chunk via reqwest's `bytes_stream()` instead of buffering the
 //! whole body (`Http.get`).
 //!

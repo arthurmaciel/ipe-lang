@@ -5,7 +5,7 @@
 //! `/_ipe/console/*`. The console binary is **pre-built at the user's `ipe build`
 //! time** into a shared cache — at runtime this module only `exec`s it,
 //! never builds. See `runtime-rust/README.md` §"Rust vs Go — divergent strategies"
-//! for why Rust takes the separate-process path Go abandoned (Go's subprocess
+//! for why Rust takes the separate-process path Go abandoned ( subprocess
 //! OOM was a *runtime* `go build`, which a pre-built binary doesn't incur).
 //!
 //! This module: gate + spawn + lifecycle + the reverse-proxy handler.
@@ -41,7 +41,7 @@ const MAX_PROXY_BODY: usize = 16 * 1024 * 1024;
 const READY_TIMEOUT: Duration = Duration::from_secs(8);
 
 /// The spawned console child, tracked so the parent can kill it on shutdown
-/// (Go's `ShutdownSubApps` equivalent — Go deleted it when it went in-process;
+/// ( `ShutdownSubApps` equivalent — Go deleted it when it went in-process;
 /// the separate-process Rust path needs it back to avoid an orphan child).
 static CHILD: Mutex<Option<Child>> = Mutex::new(None);
 

@@ -1,13 +1,13 @@
 // Log helpers — Go-format parity for `Ipe.Log.*`.
 //
-// The plain + JSON line shapes mirror `runtime-go/rt/rt.go`'s `logEmit`
+// The plain + JSON line shapes mirror ``'s `logEmit`
 // byte-for-byte (modulo the genuinely-nondeterministic timestamp):
 //
 //   plain:  <RFC3339Nano-UTC> <LEVEL> <message>[ key=value …]   (level UPPER)
 //   json:   {"level":"<level>","msg":"<message>","time":"<ts>"}  (level lower,
-//           keys alphabetically sorted to match Go's json.Marshal of a map)
+//           keys alphabetically sorted to match  json.Marshal of a map)
 //
-// Stream routing matches Go: warn + error → stderr, debug + info → stdout.
+// Stream routing 
 // `IPE_LOG_LEVEL` gates output (debug < info < warn < error; default info);
 // `IPE_LOG_FORMAT=json` switches to the JSON shape. Each line is also mirrored
 // into the telemetry ring (the Ipê Console reads it).
@@ -51,9 +51,9 @@ fn log_json() -> bool {
     crate::system::read_env_var("IPE_LOG_FORMAT").unwrap_or_default() == "json"
 }
 
-/// Current UTC instant in Go's `time.RFC3339Nano` layout
+/// Current UTC instant in  `time.RFC3339Nano` layout
 /// (`2006-01-02T15:04:05.999999999Z07:00`): nanosecond precision with trailing
-/// zeros trimmed, UTC rendered as `Z`. Matches Go's
+/// zeros trimmed, UTC rendered as `Z`. Matches 
 /// `now.UTC().Format(time.RFC3339Nano)`.
 #[cfg(not(target_arch = "wasm32"))]
 fn rfc3339_nano_now() -> String {
@@ -86,7 +86,7 @@ fn rfc3339_nano_now() -> String {
 }
 
 /// Minimal JSON string escaping for the hand-built plain/JSON records, matching
-/// Go's `json.Marshal` for the characters that occur in log text. Reuses the
+///  `json.Marshal` for the characters that occur in log text. Reuses the
 /// telemetry escaper so the two sinks never diverge.
 fn json_str(s: &str) -> String {
     format!("\"{}\"", super::telemetry::json_escape(s))
@@ -176,7 +176,7 @@ fn log_emit(level: i32, level_name: &str, msg: &str) {
     if log_json() {
         // Go marshals a map[string]any → keys sorted alphabetically:
         // level, msg, time (no attrs are surfaced to JSON fields today —
-        // the *With variants flatten into the message, matching Go's
+        // the *With variants flatten into the message, matching 
         // plain-driver behaviour for the List-element call shape).
         let line = format!(
             "{{\"level\":{},\"msg\":{},\"time\":{}}}",
@@ -226,14 +226,14 @@ pub fn log_info<E: Send + 'static>(msg: String) -> IpeTask<E, ()> {
 // so no codegen change is needed — the call site passes its concrete `Vec<A>`
 // and the bound always holds.
 //
-// Rendering mirrors Go's `renderLogMsgWithAttrs` byte-for-byte: the flat attr
+// Rendering implements `renderLogMsgWithAttrs` byte-for-byte: the flat attr
 // list is space-joined onto the message (`msg a1 a2 …`, each `ai` via `%v`),
 // then handed to `log_emit` as a single pre-rendered line — so the plain path
 // sanitises the attr values too (no newline-injection via an attr) and the JSON
-// path surfaces them inside `msg` exactly as Go does for the List call shape
-// (Go's With variants pass `ctx=nil`).
+// path surfaces them inside `msg` exactly for the List call shape
+// ( With variants pass `ctx=nil`).
 
-/// Flatten `(msg, attrs)` into one line, mirroring Go's `renderLogMsgWithAttrs`:
+/// Flatten `(msg, attrs)` into one line, mirroring  `renderLogMsgWithAttrs`:
 /// `msg` followed by a space + the `%v` of each attr element, in order.
 fn render_with_attrs<A: IpeStringify>(msg: &str, attrs: &[A]) -> String {
     if attrs.is_empty() {

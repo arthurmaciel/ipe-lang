@@ -433,7 +433,7 @@ pub fn ui_background_image_<M>(s: String) -> Attribute<M> {
 ///
 /// Renders `background-image: linear-gradient(<angle>deg, <c1> <p1>%, …);`
 /// via the existing `AttrBgGradient` runtime variant (already rendered by
-/// `render.rs`'s `build_style_string`). Float formatting matches Go's
+/// `render.rs`'s `build_style_string`). Float formatting matches 
 /// `String.fromFloat` via the shared `string_from_float` kernel (parity with
 /// the `../ipe` reference's `String.fromFloat angle` / `String.fromFloat pct`).
 #[must_use]
@@ -634,7 +634,7 @@ pub fn html_node_<M>(
 /// `Html.doctype : List (Html msg) -> Html msg` — wraps children in the
 /// `!doctype-wrapper` pseudo-tag; `ipe_runtime::html::render_into_ctx`
 /// recognises that literal tag and emits `<!DOCTYPE html>` before the
-/// children directly (mirrors Go's `live.go:303-312`).
+/// children directly (implements `live.go:303-312`).
 #[must_use]
 pub fn html_doctype_<M>(children: Vec<Html<M>>) -> Html<M> {
     Html::HElement("!doctype-wrapper".to_owned(), Vec::new(), children)
@@ -1237,7 +1237,7 @@ pub fn ui_paragraph_<M: Clone>(attrs: Vec<Attribute<M>>, children: Vec<Element<M
 /// Ipe.Web dispatch layer (`HandlerIndex::resolve_form`) decodes the wire
 /// `FormData` into `T` via a re-encoded x-www-form-urlencoded round trip
 /// (`web::form::decode_form_or_warn` — type-directed per-field coercion, NOT
-/// a JSON path), matching the Go backend's `json.Unmarshal` semantics at the
+/// a JSON path), matching the  `json.Unmarshal` semantics at the
 /// record-shape level (case-insensitive field-name match, missing field ⇒
 /// zero value). `F: Fn(T) -> M + Send + Sync + 'static` is a strictly
 /// narrower requirement than an `A: Any` bound.

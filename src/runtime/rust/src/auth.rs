@@ -35,7 +35,7 @@ fn dummy_bcrypt_hash() -> &'static str {
 // ─── Pure crypto kernels ──────────────────────────────────────────────
 
 /// Ipê `hashPassword : String -> Result Error String`. Bcrypt with default
-/// cost 12 (matches Go runtime).
+/// cost 12 (
 pub fn auth_hash_password<E: From<String>>(pw: String) -> IpeResult<E, String> {
     auth_hash_password_cost(pw, 12)
 }
@@ -120,7 +120,7 @@ pub fn auth_password_strength<E: From<String>>(pw: String) -> IpeResult<E, Strin
 /// string values at the runtime level (Ipê's polymorphic `a` resolves to
 /// HashMap<String,String> at the FFI boundary). Adds `exp` (now + expirySeconds),
 /// `iat` (now), `cap` (now + AuthMaxLifetime), and `jti` (a random session id)
-/// claims. Secret must be ≥32 bytes (matches Go's production gate).
+/// claims. Secret must be ≥32 bytes (matches  production gate).
 ///
 /// `cap` is the absolute lifetime ceiling — a token is invalid once `now >= cap`
 /// regardless of `exp`. It is stamped at first issue and must never be rewritten
@@ -275,7 +275,7 @@ pub fn auth_verify_token<E: From<String>>(
     }
     let key = jsonwebtoken::DecodingKey::from_secret(secret.as_bytes());
     let mut validation = jsonwebtoken::Validation::new(jsonwebtoken::Algorithm::HS256);
-    // Go's oracle rejects at `now >= exp` with zero clock skew. jsonwebtoken's
+    //  oracle rejects at `now >= exp` with zero clock skew. jsonwebtoken's
     // native boundary with leeway = 0 is `exp < now` (accepts at the exact
     // instant now == exp); reject_tokens_expiring_in_less_than = 1 shifts the
     // reject condition to `exp - 1 < now` (≡ `now >= exp`), restoring parity.
@@ -322,7 +322,7 @@ pub fn auth_verify_token<E: From<String>>(
         for (k, v) in m {
             // Coerce each claim value to a string. Numbers/booleans get
             // their JSON-text representation; nested objects/arrays get their
-            // JSON serialisation (matches Go runtime's fmt.Sprintf behaviour).
+            // JSON serialisation (Sprintf behaviour).
             let s = match v {
                 serde_json::Value::String(s) => s,
                 other => other.to_string(),

@@ -123,7 +123,7 @@ pub(crate) fn crypto_key_reveal(key: Key) -> String {
 #[cfg(not(target_arch = "wasm32"))]
 pub fn crypto_random_bytes<E: From<String> + Send + 'static>(n: i64) -> IpeTask<E, String> {
     Box::pin(async move {
-        // SECURITY: Mirror Go oracle exactly: reject size <= 0 || size > 1024
+        // SECURITY: Mirror the spec exactly: reject size <= 0 || size > 1024
         // (rt.go ~l6536: `if size <= 0 || size > 1024 { return ErrInvalidInput }`)
         // to prevent unbounded attacker-controlled allocation (DoS vector).
         if n <= 0 || n > 1024 {
@@ -175,7 +175,7 @@ pub fn crypto_random_bytes<E: From<String> + 'static>(n: i64) -> IpeTask<E, Stri
     })
 }
 
-/// Lowercase hex encoding, byte-order + nibble-order identical to Go's
+/// Lowercase hex encoding, byte-order + nibble-order identical to 
 /// `hex.EncodeToString` (high nibble first, then low). Total: the `& 0x0f` index
 /// is always < 16 so `.get` never falls back.
 fn hex_lower(buf: &[u8]) -> String {
@@ -188,7 +188,7 @@ fn hex_lower(buf: &[u8]) -> String {
     out
 }
 
-/// URL-safe base64 WITHOUT padding, byte-identical to Go's
+/// URL-safe base64 WITHOUT padding, byte-identical to 
 /// `base64.RawURLEncoding.EncodeToString` — the `-_` alphabet, no `=` pad. Inline
 /// (not the `base64` crate) so the `crypto_core` floor carries no
 /// unconditional codec-crate reference: `crypto_random_token` is emitted in every
@@ -229,11 +229,11 @@ fn base64url_no_pad(buf: &[u8]) -> String {
 // `Crypto.randomToken : Int -> Task Error String`. Go returns URL-safe base64
 // WITHOUT padding (rt.go ~l6560: `base64.RawURLEncoding.EncodeToString(b)`) — the
 // `-_` alphabet, no `=` pad. Width `n` is bytes of ENTROPY; the returned string is
-// longer (ceil(n*4/3) chars). (A prior hex encoding diverged from Go's base64.)
+// longer (ceil(n*4/3) chars). (A prior hex encoding diverged from  base64.)
 #[cfg(not(target_arch = "wasm32"))]
 pub fn crypto_random_token<E: From<String> + Send + 'static>(n: i64) -> IpeTask<E, String> {
     Box::pin(async move {
-        // SECURITY: Mirror Go oracle exactly: reject size <= 0 || size > 1024
+        // SECURITY: Mirror the spec exactly: reject size <= 0 || size > 1024
         // (rt.go ~l6553: `if size <= 0 || size > 1024 { return ErrInvalidInput }`)
         // to prevent unbounded attacker-controlled allocation (DoS vector).
         if n <= 0 || n > 1024 {
@@ -393,7 +393,7 @@ pub fn crypto_hmac_sha512(key: String, msg: String) -> String {
 /// Ipê `rsaSha256Sign : String -> String -> Result Error String`
 /// Sign `msg` with the PKCS#1 v1.5 SHA-256 RSA scheme using `key_pem`.
 /// Accepts PKCS#1 (`-----BEGIN RSA PRIVATE KEY-----`) and PKCS#8
-/// (`-----BEGIN PRIVATE KEY-----`) PEM private keys — mirrors Go oracle
+/// (`-----BEGIN PRIVATE KEY-----`) PEM private keys — mirrors the spec
 /// (rt.go ~l6472: tries ParsePKCS1PrivateKey then ParsePKCS8PrivateKey).
 /// Returns standard-base64-encoded signature (base64.StdEncoding, rt.go ~l6488).
 #[cfg(feature = "crypto")]
@@ -410,7 +410,7 @@ pub fn crypto_rsa_sha256_sign<E: From<String>>(
     };
     use sha2::Sha256;
 
-    // Try PKCS#8 first (the openssl default), then fall back to PKCS#1 — mirrors Go.
+    // Try PKCS#8 first (the openssl default), then fall back to PKCS#1.
     let priv_key = match rsa::RsaPrivateKey::from_pkcs8_pem(&key_pem) {
         Ok(k) => k,
         _ => match rsa::RsaPrivateKey::from_pkcs1_pem(&key_pem) {
@@ -441,7 +441,7 @@ pub fn crypto_rsa_sha256_sign<E: From<String>>(
 /// Ipê `rsaSha256Verify : String -> String -> String -> Bool`
 /// (pemPublicKey, msg, base64Signature). Returns `false` on any failure — never panics.
 /// Accepts SPKI/PKIX public keys (`-----BEGIN PUBLIC KEY-----`, the common openssl form)
-/// and PKCS#1 public keys (`-----BEGIN RSA PUBLIC KEY-----`) — mirrors Go oracle
+/// and PKCS#1 public keys (`-----BEGIN RSA PUBLIC KEY-----`) — mirrors the spec
 /// (rt.go ~l6500: tries ParsePKIXPublicKey then ParsePKCS1PublicKey).
 /// Signature is standard-base64 (base64.StdEncoding, rt.go ~l6511).
 #[cfg(feature = "crypto")]
@@ -455,7 +455,7 @@ pub fn crypto_rsa_sha256_verify(key_pem: String, msg: String, sig_b64: String) -
     };
     use sha2::Sha256;
 
-    // Try SPKI/PKIX first (-----BEGIN PUBLIC KEY-----), then PKCS#1 — mirrors Go.
+    // Try SPKI/PKIX first (-----BEGIN PUBLIC KEY-----), then PKCS#1.
     let pub_key = match rsa::RsaPublicKey::from_public_key_pem(&key_pem) {
         Ok(k) => k,
         _ => match rsa::RsaPublicKey::from_pkcs1_pem(&key_pem) {
@@ -560,12 +560,12 @@ TsgxkiXH9sjXrPHT1hXn2tKCv9MkR8MD1Ndh6jo7inBZUK0YG7H6Jx0CAwEAAQ==
         let msg = "hello, ipe".to_string();
         let sig: IpeResult<String, String> =
             crypto_rsa_sha256_sign(RSA_PRIV_PEM.to_string(), msg.clone());
-        // Sign returns standard base64 (mirrors Go's base64.StdEncoding).
+        // Sign returns standard base64 (implements base64.StdEncoding).
         let sig_b64 = match sig {
             IpeResult::Ok(s) => s,
             IpeResult::Err(e) => panic!("sign failed: {}", e),
         };
-        // Verify takes the PUBLIC key, not the private key (mirrors Go oracle).
+        // Verify takes the PUBLIC key, not the private key (mirrors the spec).
         assert!(crypto_rsa_sha256_verify(
             RSA_PUB_PEM.to_string(),
             msg,

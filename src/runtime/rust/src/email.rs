@@ -1,6 +1,6 @@
 //! Ipe.Email — provider-abstract email send (Resend / SendGrid / SES / SMTP).
 //!
-//! Mirror of `runtime-go/rt/email_kernel.go`. The Ipê records
+//! Mirror of ``. The Ipê records
 //! (`EmailMessage` / `Attachment` / `SesConfig` / `SmtpConfig`) and the
 //! `EmailProvider` ADT map to the runtime types below via the
 //! runtimeOpaqueTypes registry — so the generated `StdEmail*` are `pub use`
@@ -85,7 +85,7 @@ impl EmailAddress {
     }
 }
 
-/// Structural validation matching `String.isEmail` / Go's `net/mail.ParseAddress`
+/// Structural validation matching `String.isEmail` /  `net/mail.ParseAddress`
 /// posture: bare `user@domain.tld`, no name component, no embedded spaces.
 fn email_address_is_valid(s: &str) -> bool {
     crate::string::string_is_email(s.to_owned())
@@ -628,9 +628,9 @@ fn civil_from_days(z: i64) -> (i64, i64, i64) {
 /// `Ipe.Email.send (Smtp cfg) msg` — SMTP transport via `lettre`, matching the Go
 /// backend's `smtp.SendMail` posture: connect to host:port, **opportunistic
 /// STARTTLS** (upgrade to TLS when the server advertises it, plaintext otherwise
-/// — identical security posture to Go's stdlib), PLAIN auth when a user is
+/// — identical security posture to  stdlib), PLAIN auth when a user is
 /// configured. lettre's builder assembles standards-compliant MIME (text/html
-/// alternative + attachments); not byte-identical to Go's hand-rolled wire, but
+/// alternative + attachments); not byte-identical to  hand-rolled wire, but
 /// the delivered message (from/to/cc/bcc/reply-to/subject/body/attachments) is
 /// equivalent. A local plaintext catcher (no STARTTLS advertised) is reachable
 /// via the opportunistic fallback, which is how this is verified.
@@ -922,7 +922,7 @@ mod tests {
     #[test]
     fn civil_from_days_epoch() {
         assert_eq!(civil_from_days(0), (1970, 1, 1));
-        // Day 18628 after epoch = Jan 1 of the year the Go parity fixture uses.
+        // Day 18628 after epoch = Jan 1 of the year the fixture uses.
         assert_eq!(civil_from_days(18628), (2021, 1, 1));
     }
 

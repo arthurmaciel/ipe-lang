@@ -51,7 +51,7 @@ pub fn str_err<E: From<String>>(s: &str) -> E {
 /// [B8 SECURITY — load-bearing] The foreign error's raw `Debug` is NEVER
 /// surfaced to the Ipê side. A real network/auth client error (a reqwest/hyper
 /// transport failure, a stripe API error) can echo the request URL, request
-/// headers, a bearer token, or an API key in its `Debug`. So we follow Go's
+/// headers, a bearer token, or an API key in its `Debug`. So we follow 
 /// two-level error pattern: the raw `Debug` detail is logged SERVER-SIDE under a
 /// fresh correlation id (operators can trace it), and ONLY a fixed generic
 /// message carrying that id is returned to Ipê (`Error.toString` shows
@@ -148,7 +148,7 @@ pub(crate) fn scrub_log_controls(s: &str) -> String {
 
 /// Bake a config-derived default for an env var: set `key=val` ONLY when the
 /// var is unset, so shell env / `.env` still win (precedence: process env >
-/// baked default). Go parity: the generated `init()`'s `rt.SetPortDefault` +
+/// baked default). the generated `init()`'s `rt.SetPortDefault` +
 /// `tomlIpeEnv` family. Routed through the process-global env lock
 /// (`locked_set_var_if_absent`) so it is sound by construction even if a thread
 /// is already reading the environment.
@@ -412,7 +412,7 @@ impl<T> IpeMaybe<T> {
     }
 }
 
-// `Nothing` is the natural zero of an absent `Maybe`, mirroring Go's
+// `Nothing` is the natural zero of an absent `Maybe`, mirroring 
 // `json.Unmarshal` decoding a missing nullable field to nil. This MANUAL impl
 // (the derive would demand `T: Default`, which a `IpeMaybe<NonDefault>` field
 // cannot satisfy) lets a form-target record carrying a `Maybe X` field qualify
@@ -1083,17 +1083,17 @@ impl Drop for RecursionGuard {
 }
 
 // ===========================================
-// Synchronous-panic gate (Go parity: rt.LogPanicAndExit)
+// Synchronous-panic gate 
 // ===========================================
 // The generated `fn main()` installs this FIRST so any panic that escapes the
 // synchronous Ipê path — a div-by-zero (`a / 0`), an index-out-of-range, an
 // arithmetic overflow, etc. — is CLASSIFIED into a Ipê error kind, logged
 // structurally with a short correlation id, and the process exits 1 — instead of
-// dumping a raw Rust backtrace. Mirrors Go's `defer rt.LogPanicAndExit()` on
+// dumping a raw Rust backtrace. Implements `defer rt.LogPanicAndExit()` on
 // every emitted `func main()` (AGENTS.md "Synchronous-panic gate"). The hook is
 // total (no unwrap/index/panic of its own) and honours `IPE_LOG_FORMAT=json`.
 
-/// Map a Rust panic message to a Ipê error classification (Go's panic-class
+/// Map a Rust panic message to a Ipê error classification ( panic-class
 /// taxonomy, restricted to the kinds reachable from well-typed Ipê on the typed
 /// Rust backend — TypeMismatch/CoerceFailure are Go-runtime-only).
 fn classify_panic(msg: &str) -> &'static str {

@@ -1,5 +1,5 @@
-//! Session stores — the `SessionStore` abstraction + backends, mirroring Go's
-//! `runtime-go/rt/live_store.go`.
+//! Session stores — the `SessionStore` abstraction + backends, mirroring 
+//! ``.
 //!
 //! A session's LIVE state (the tokio driver, SSE channel, rebuilt `HandlerIndex`)
 //! is always per-process. A persistent backend additionally keeps a serialized
@@ -183,7 +183,7 @@ fn now_secs() -> i64 {
 /// serde-JSON model checkpoint. `get` returns the live handle on a cache hit,
 /// else a `Cold` model decoded from the blob (the caller hydrates a fresh
 /// driver). Requires `Model: Serialize + DeserializeOwned` (the codegen derives
-/// it). Mirrors Go's `sqliteStore`.
+/// it). Implements `sqliteStore`.
 #[cfg(feature = "db")]
 pub struct SqliteStore<Model, Msg> {
     pool: sqlx::SqlitePool,
@@ -339,7 +339,7 @@ where
 /// blob table + idle-TTL sweep) but over a `PgPool`, for horizontally-scaled
 /// deployments (Cloud Run / ECS / k8s) where a returning request can land on a
 /// different replica than the one that created the session. `connStr` is a
-/// `postgres://user:pass@host/db` URL. Mirrors Go's `postgresStore`.
+/// `postgres://user:pass@host/db` URL. Implements `postgresStore`.
 #[cfg(feature = "db")]
 pub struct PostgresStore<Model, Msg> {
     pool: sqlx::PgPool,
@@ -494,7 +494,7 @@ fn redis_key(sid: &str) -> String {
 /// out of sync). Expiry is the server's job; there's no sweep loop for the
 /// persisted side. A `mem_cache` keeps the same-process live handle (owns the
 /// driver) so a hit on the originating replica reuses it. `addr` is a full
-/// `redis://[:pass@]host:port/db` URL or a bare `host:port`. Mirrors Go's
+/// `redis://[:pass@]host:port/db` URL or a bare `host:port`. Mirrors 
 /// `redisStore` plus the H24 schema-tag gate.
 #[cfg(feature = "redis_store")]
 pub struct RedisStore<Model, Msg> {
@@ -676,10 +676,10 @@ where
         }
     }
     let _ = (kind, path, schema_tag);
-    // Go parity (live_store.go:1032): the memory store logs through Go's `log`
+    // (live_store.go:1032): the memory store logs through  `log`
     // package, so the line carries a `log.LstdFlags` timestamp prefix and a
     // Go-`Duration.String()` ttl (`1h0m0s` / `30m0s`). The persistent stores
-    // above use a bare `eprintln!` (matching Go's `log.Printf` there too, minus
+    // above use a bare `eprintln!` (matching  `log.Printf` there too, minus
     // the duration), so only memory needs the duration + timestamp shape.
     eprintln!("{}", memory_store_log_line(ttl));
     Arc::new(MemoryStore::new(ttl))
@@ -687,7 +687,7 @@ where
 
 /// The exact `[ipe.live] session store: memory (ttl=…)` line Go emits, with a
 /// Go `log.LstdFlags` timestamp prefix and a Go-`Duration.String()` ttl. Shared
-/// so the in-process console sub-app mount can emit the SAME second line Go's
+/// so the in-process console sub-app mount can emit the SAME second line 
 /// console sub-app store init produces (Go prints this line TWICE: root + console).
 pub(crate) fn memory_store_log_line(ttl: Duration) -> String {
     format!(
@@ -697,12 +697,12 @@ pub(crate) fn memory_store_log_line(ttl: Duration) -> String {
     )
 }
 
-/// Render a `chrono::Local` now as Go's `log.LstdFlags` prefix: `2006/01/02 15:04:05`.
+/// Render a `chrono::Local` now as  `log.LstdFlags` prefix: `2006/01/02 15:04:05`.
 fn go_log_timestamp() -> String {
     chrono::Local::now().format("%Y/%m/%d %H:%M:%S").to_string()
 }
 
-/// Render a whole-second `Duration` the way Go's `time.Duration.String()` does
+/// Render a whole-second `Duration` the way  `time.Duration.String()` does
 /// for our TTL granularity: `1h0m0s`, `30m0s`, `45s`, `0s`. Sub-second remainder
 /// is dropped (TTLs are whole seconds — `IPE_WEB_TTL` parses to `u64` seconds).
 fn go_duration_string(d: Duration) -> String {

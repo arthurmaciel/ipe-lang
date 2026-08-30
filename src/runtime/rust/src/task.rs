@@ -646,7 +646,7 @@ pub enum BackoffStrategy {
 
 // Task.retryWith : RetryPolicy e -> Task e a -> Task e a
 //
-// A real retry loop, faithful to runtime-go/rt/task_retry.go. The two things
+// A real retry loop, faithful to  The two things
 // Rust could not give the old run-once stub — re-running the one-shot
 // `IpeTask` future, and reading the generated, runtime-unnameable `RetryPolicy`
 // / `ShouldRetry` ADT fields — are both supplied by CODEGEN now:
@@ -656,7 +656,7 @@ pub enum BackoffStrategy {
 //     IpeTask<E, A>` closure, so each attempt rebuilds a fresh future (the
 //     side effects re-fire per attempt, exactly as Go re-invokes its thunk).
 //
-// Semantics (mirror Go's `Task_retryWith` loop):
+// Semantics (mirror  `Task_retryWith` loop):
 //   attempt 1..=max_attempts:
 //     run make_task().await
 //       Ok(a)  → return Ok(a)
@@ -711,14 +711,14 @@ where
     })
 }
 
-// Backoff cap (ms). Mirrors Go's `retryDelayCapMs` — exponential growth and the
+// Backoff cap (ms). Implements `retryDelayCapMs` — exponential growth and the
 // post-jitter delay are both clamped here so a huge attempt count or base can't
 // produce an unbounded sleep. Used only by the reactor-gated `task_retry_with`,
 // so gated with it.
 #[cfg(all(feature = "tokio", not(target_arch = "wasm32")))]
 const RETRY_DELAY_CAP_MS: i64 = 30_000;
 
-// Port of Go's `computeDelay`. Wait before attempt n+1 (1-indexed: attempt 1
+// Port of  `computeDelay`. Wait before attempt n+1 (1-indexed: attempt 1
 // runs, then sleep compute_delay(1), then attempt 2, ...).
 //
 // `Linear*`   → `base` every time.

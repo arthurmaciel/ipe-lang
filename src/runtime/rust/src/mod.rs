@@ -274,7 +274,7 @@ pub mod regex_kernel;
 #[cfg(feature = "regex")]
 pub use regex_kernel::*;
 
-// JWT needs `jsonwebtoken` (decode) plus json (the Go-parity JSON encoder for
+// JWT needs `jsonwebtoken` (decode) plus json (the deterministic JSON encoder for
 // the token payload) and crypto (the HMAC / RSA signing primitives the encode
 // path reuses for byte-identical-to-Go tokens). Gated on the `jwt` feature,
 // which implies both `json` and `crypto`; keeping `jsonwebtoken` out of the
@@ -513,7 +513,7 @@ pub mod ui;
 // runtime like `tea`). The cross-platform floor (a stub returning a graceful Err)
 // keeps `import Ipe.Tea.WebView` linking everywhere; the real wry/tao window backend
 // needs the system webview dev libs (staged behind the webview design doc).
-// Mirrors Go's webview_stub.go.
+// Implements webview_stub.go.
 #[cfg(feature = "tokio")]
 pub mod webview;
 #[cfg(feature = "tokio")]

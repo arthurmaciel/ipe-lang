@@ -270,7 +270,7 @@ fn file_append_sync(path: &str, content: &str) -> Result<(), String> {
 
 /// `Ipe.File.append : String -> String -> Task Error ()`
 /// Append `content` to the end of the file at `path`, creating it if absent.
-/// Mirrors Go's `os.OpenFile(…, O_APPEND|O_CREATE|O_WRONLY, 0644)`.
+/// Implements `os.OpenFile(…, O_APPEND|O_CREATE|O_WRONLY, 0644)`.
 #[must_use]
 pub fn file_append<E: Send + From<String> + 'static>(
     path: Path,
@@ -293,7 +293,7 @@ fn file_remove_sync(path: &str) -> Result<(), String> {
 
 /// `Ipe.File.remove : String -> Task Error ()`
 /// Remove the file at `path`. Returns `Err` on any I/O failure (including
-/// "not found"). Mirrors Go's `os.Remove`.
+/// "not found"). Implements `os.Remove`.
 #[must_use]
 pub fn file_remove<E: Send + From<String> + 'static>(path: Path) -> IpeTask<E, ()> {
     let path = path.into_string();
@@ -310,7 +310,7 @@ pub fn file_remove<E: Send + From<String> + 'static>(path: Path) -> IpeTask<E, (
 fn file_read_dir_sync(path: &str) -> Result<Vec<String>, String> {
     // Propagate per-entry read errors instead of silently dropping them
     // (`rd.flatten()` would discard `Err` items mid-walk, omitting entries
-    // a transient stat/readdir failure touched — Go's `os.ReadDir` surfaces
+    // a transient stat/readdir failure touched —  `os.ReadDir` surfaces
     // such an error rather than returning a truncated list).
     let rd = std::fs::read_dir(path).map_err(|e| format!("{e}"))?;
     let mut names: Vec<String> = Vec::new();
@@ -323,7 +323,7 @@ fn file_read_dir_sync(path: &str) -> Result<Vec<String>, String> {
 
 /// `Ipe.File.readDir : String -> Task Error (List String)`
 /// Return the names (not full paths) of all entries in the directory at
-/// `path`, in filesystem order. Mirrors Go's `os.ReadDir` → `e.Name()`.
+/// `path`, in filesystem order. Implements `os.ReadDir` → `e.Name()`.
 #[must_use]
 pub fn file_read_dir<E: Send + From<String> + 'static>(path: Path) -> IpeTask<E, Vec<String>> {
     let path = path.into_string();
@@ -338,7 +338,7 @@ pub fn file_read_dir<E: Send + From<String> + 'static>(path: Path) -> IpeTask<E,
 /// `Ipe.File.isDir : String -> Task Error Bool`
 /// Returns `Ok(true)` when `path` exists and is a directory, `Ok(false)` when
 /// it exists and is not a directory, and `Ok(false)` (not `Err`) when the path
-/// does not exist — matching Go's shape (`os.Stat` error → `false`).
+/// does not exist — matching  shape (`os.Stat` error → `false`).
 #[must_use]
 pub fn file_is_dir<E: Send + 'static>(path: Path) -> IpeTask<E, bool> {
     let path = path.into_string();
@@ -428,7 +428,7 @@ fn make_temp_path(prefix: &str, is_dir: bool) -> Result<String, String> {
                 Err(e) => return Err(format!("{e}")),
             }
         } else {
-            // Owner-only (0600) on Unix — same rationale; Go's CreateTemp is 0600.
+            // Owner-only (0600) on Unix — same rationale;  CreateTemp is 0600.
             let mut opts = std::fs::OpenOptions::new();
             opts.write(true).create_new(true);
             #[cfg(unix)]
@@ -456,7 +456,7 @@ fn file_copy_sync(src: &str, dst: &str) -> Result<(), String> {
 
 /// `Ipe.File.copy : String -> String -> Task Error ()`
 /// Copy the file at `src` to `dst`, creating or overwriting `dst`.
-/// Mirrors Go's `io.Copy(out, in)` pattern.
+/// Implements `io.Copy(out, in)` pattern.
 #[must_use]
 pub fn file_copy<E: Send + From<String> + 'static>(src: Path, dst: Path) -> IpeTask<E, ()> {
     let (src, dst) = (src.into_string(), dst.into_string());
@@ -474,7 +474,7 @@ fn file_rename_sync(src: &str, dst: &str) -> Result<(), String> {
 
 /// `Ipe.File.rename : String -> String -> Task Error ()`
 /// Rename (move) the file or directory at `src` to `dst`.
-/// Mirrors Go's `os.Rename`.
+/// Implements `os.Rename`.
 #[must_use]
 pub fn file_rename<E: Send + From<String> + 'static>(src: Path, dst: Path) -> IpeTask<E, ()> {
     let (src, dst) = (src.into_string(), dst.into_string());

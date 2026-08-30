@@ -80,7 +80,7 @@ pub fn ipe_int_mul(a: i64, b: i64) -> i64 {
 
 /// Integer division for Ipê's `//` operator.
 ///
-/// Parity target: Ipê-Go `rt.IntDiv` (`runtime-go/rt/rt.go`).
+/// Parity target: Ipê-Go `rt.IntDiv` (``).
 ///
 /// Two cases the bare Rust `a / b` cannot handle on `i64`:
 ///
@@ -122,7 +122,7 @@ pub fn ipe_int_div(a: i64, b: i64) -> i64 {
 
 // CONTRACT (documented deliberately): `min`/`max` use a real
 // `PartialOrd` compare. For floats this tracks the TYPED Go path (`Math_minT`),
-// NOT Go's polymorphic any-path (which routes floats through `AsInt` and compares
+// NOT  polymorphic any-path (which routes floats through `AsInt` and compares
 // truncated ints) — the typed compare is the correct one. NaN tie-break is fixed
 // and total: `min(NaN, x)` / `max(NaN, x)` return the SECOND argument (`<=`/`>=`
 // is false for any NaN), never panic.
@@ -145,7 +145,7 @@ pub fn math_pow(base: f64, exp: f64) -> f64 {
 // CONTRACT (documented deliberately): the `as i64` float→int
 // casts SATURATE by Rust's definition — NaN → 0, +∞ → i64::MAX, −∞ → i64::MIN,
 // out-of-range finite → the nearest bound. This is TOTAL (never panics/UB) and is
-// the deliberate contract; Go's `int64(math.Floor(x))` on the same extreme inputs
+// the deliberate contract;  `int64(math.Floor(x))` on the same extreme inputs
 // is implementation-defined (not a well-defined parity target), so we pin the
 // safe saturating behaviour rather than chase undefined Go output.
 #[must_use]
@@ -157,7 +157,7 @@ pub fn math_ceil(x: f64) -> i64 {
     x.ceil() as i64
 }
 
-/// Ipê `round : Float -> Int` — half-away-from-zero (Go's `math.Round` semantics
+/// Ipê `round : Float -> Int` — half-away-from-zero ( `math.Round` semantics
 /// match this). Rust's `f64::round` also goes half-away-from-zero, so we just cast.
 #[must_use]
 pub fn math_round(x: f64) -> i64 {
@@ -254,19 +254,19 @@ pub fn math_atanh(x: f64) -> f64 {
     x.atanh()
 }
 
-// Modulo + remainder (parity with Go's math.Mod / math.Remainder).
+// Modulo + remainder (parity with  math.Mod / math.Remainder).
 /// Float modulo — result has the sign of x (the dividend).
-/// Equivalent to Go's `math.Mod(x, y)` and C's `fmod(x, y)`.
+/// Equivalent to  `math.Mod(x, y)` and C's `fmod(x, y)`.
 /// Rust's `x % y` is identical to C fmod for f64.
 #[must_use]
 pub fn math_mod(x: f64, y: f64) -> f64 {
     x % y
 }
-/// IEEE 754 balanced remainder — equivalent to Go's `math.Remainder(x, y)`.
+/// IEEE 754 balanced remainder — equivalent to  `math.Remainder(x, y)`.
 /// The result satisfies `x = n*y + remainder` where `n` is the nearest integer
 /// to `x/y` (rounded half-to-even), so `|remainder| <= |y|/2`.
 ///
-/// Uses fmod-based argument reduction (a direct port of Go's
+/// Uses fmod-based argument reduction (a direct port of 
 /// `math.Remainder`) so it stays exact for large-magnitude operands. A naive
 /// `x - (x / y).round_ties_even() * y` loses precision once `|x/y|` exceeds
 /// 2^53 (the quotient rounds away the low integer bits), diverging from the
@@ -289,7 +289,7 @@ pub fn math_remainder(x: f64, y: f64) -> f64 {
     let y = y.abs();
 
     // Exact equality on abs-reduced values is intentional in IEEE 754 remainder
-    // argument reduction (ported from Go's math.Remainder).
+    // argument reduction (ported from  math.Remainder).
     #[allow(clippy::float_cmp)]
     if x == y {
         return if sign { -0.0 } else { 0.0 };
@@ -434,7 +434,7 @@ mod tests {
     }
 
     #[test]
-    // 1.5 is exactly representable; these are the exact Go oracle values.
+    // 1.5 is exactly representable; these are the exact the spec values.
     #[allow(clippy::float_cmp)]
     fn test_math_mod() {
         // Go: math.Mod(5.5, 2.0) = 1.5  (sign of dividend)

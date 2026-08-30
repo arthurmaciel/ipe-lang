@@ -15,7 +15,7 @@
 //!
 //! ### Design rationale
 //! `Ui.layout` emits an outer 100 vh flex-column wrapper (matching Ipê's Go
-//! runtime `runtime-go/rt/ui.go`) and the converted root element inside it.
+//! runtime ``) and the converted root element inside it.
 //! `Ui.layoutWith` additionally applies `wrapperAttrs` to the outer wrapper and
 //! `rootAttrs` to an intermediate flex root, mirroring `Ui.layoutWith`'s Go shape.
 
