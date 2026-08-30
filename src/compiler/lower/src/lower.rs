@@ -26444,6 +26444,7 @@ impl<'a> Lowerer<'a> {
                     ("Server", "any") => Ok(Callee::Kernel(KernelFn::ServerAny)),
                     ("Server", "api") => Ok(Callee::Kernel(KernelFn::ServerApi)),
                     ("Server", "static") => Ok(Callee::Kernel(KernelFn::ServerStatic)),
+                    ("Server", "mountApp") => Ok(Callee::Kernel(KernelFn::ServerMountApp)),
                     ("Server", "listen") => Ok(Callee::Kernel(KernelFn::ServerListen)),
                     ("Server", "text") => Ok(Callee::Kernel(KernelFn::ServerText)),
                     ("Server", "json") => Ok(Callee::Kernel(KernelFn::ServerJson)),
@@ -26780,6 +26781,7 @@ impl<'a> Lowerer<'a> {
                     ("Keyed", "row") => Ok(Callee::Kernel(KernelFn::KeyedRow)),
                     // ── Ipe.Web app-entry kernels ─────────────────────────
                     ("Web", "app") => Ok(Callee::Kernel(KernelFn::WebApp)),
+                    ("Web", "embed") => Ok(Callee::Kernel(KernelFn::WebEmbed)),
                     ("Web", "appRouted") => Ok(Callee::Kernel(KernelFn::WebAppRouted)),
                     ("Web", "route") => Ok(Callee::Kernel(KernelFn::WebRoute)),
                     // `Ipe.Html.renderStatic` — shape-neutral static-render bridge.

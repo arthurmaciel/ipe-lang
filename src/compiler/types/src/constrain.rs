@@ -10713,6 +10713,9 @@ mod registry_phase_c_tests {
             K::TaskMap4,
             K::TaskMap5,
             K::TaskAttempt,
+            // `Web.embed : WebConfig -> WebApp` — Ipê-new (no legacy oracle);
+            // a mountable web-app handle sharing `Web.app`'s cfg scheme.
+            K::WebEmbed,
             // ── Ipe.App runtime-config front door (8, Ipê-new) ──────────────
             K::WebAppWith,
             K::AppFromEnv,
@@ -10742,6 +10745,9 @@ mod registry_phase_c_tests {
             K::WebCsrfInherit,
             K::WebRevocationOff,
             K::WebRevocationStore,
+            // `Server.mountApp : String -> WebApp -> Route` — Ipê-new (no legacy
+            // oracle); mounts an embedded web app into the shared server router.
+            K::ServerMountApp,
             // `Server.withRevocation : RevocationMode -> AuthConfig -> AuthConfig` —
             // Ipê-new (no legacy oracle); arms the revocation gate on an auth config.
             K::ServerWithRevocation,
