@@ -1102,8 +1102,8 @@ fn server_mounts_web_app_and_api_on_one_port() -> Result<(), BoxError> {
     assert!(
         is_html(&app_slash) || is_html(&app_noslash),
         "{test_name}: mounted /app did not return an HTML page (embedded web app not served on the shared port?)\n--- /app/ (first 300) ---\n{}\n--- /app (first 300) ---\n{}",
-        &app_slash.chars().take(300).collect::<String>(),
-        &app_noslash.chars().take(300).collect::<String>()
+        app_slash.chars().take(300).collect::<String>(),
+        app_noslash.chars().take(300).collect::<String>()
     );
 
     Ok(())
