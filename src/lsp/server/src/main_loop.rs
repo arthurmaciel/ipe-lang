@@ -1112,6 +1112,20 @@ mod tests {
                     origin: ModuleOrigin::User,
                 },
             );
+            for module in ipe_stdlib::COMPILED_STD_MODULES {
+                let path: Vec<String> = module.dotted.split('.').map(str::to_owned).collect();
+                files.insert(
+                    path.clone(),
+                    LoadedFile {
+                        path: PathBuf::from(format!(
+                            "<stdlib>/{}.ipe",
+                            module.dotted.replace('.', "/")
+                        )),
+                        text: module.source.to_owned(),
+                        origin: ModuleOrigin::EmbeddedStdlib,
+                    },
+                );
+            }
             Ok(LoadedProject {
                 files,
                 entry_module: vec!["Main".to_owned()],

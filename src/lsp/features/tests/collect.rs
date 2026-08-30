@@ -40,7 +40,10 @@ fn diags_for<'a>(all: &'a [ModuleDiagnostics], module: &[&str]) -> &'a ModuleDia
 }
 
 const DEP_A: &str = "module A exposing (visible)\n\nvisible = 1\n";
-const ENTRY_OK: &str = "module Main exposing (main)\n\nimport A exposing (visible)\nimport Ipe.Io as Io\nimport Ipe.String as String\n\nmain : Task Error ()\nmain =\n    Io.println (String.fromInt visible)\n";
+// `ENTRY_OK` uses `Ipe.System` — a kernel-qualifier module that resolves
+// without needing to be in the SourceRoot, so the clean-project test can
+// assert exactly 2 module entries (one per user file).
+const ENTRY_OK: &str = "module Main exposing (main)\n\nimport A exposing (visible)\nimport Ipe.System as System\n\nmain : Task Error ()\nmain =\n    System.setenv \"KEY\" \"x\"\n";
 const ENTRY_TYPE_ERROR: &str = "module Main exposing (main)\n\nimport A exposing (visible)\n\n\
     main : Int\n\
     main = \"not an int\"\n";
@@ -142,13 +145,21 @@ fn apply_edit(text: &str, edit: &TextEdit) -> String {
     out
 }
 
-/// IPE-N0034 quick-fix: a Tier-C stdlib qualifier used without its import
-/// yields an "Add import `Ipe.X`" code action whose edit, once applied, clears
-/// the diagnostic (SEAL — the program compiles).
+/// IPE-N0034 quick-fix: a kernel-qualifier stdlib module used without its
+/// import yields an "Add import `Ipe.X`" code action whose edit, once applied,
+/// clears the diagnostic (SEAL — the program compiles).
 #[test]
 fn add_import_quick_fix_inserts_the_missing_import_and_clears_the_diagnostic() {
-    // `String.fromInt` names the Tier-C `Ipe.String` module with no import.
-    let src = "module Main exposing (main)\n\nimport Ipe.Io as Io\n\nmain =\n    Io.println (String.fromInt 0)\n";
+    // `Crypto.sha256` names the `Ipe.Crypto` kernel-qualifier module without
+    // an import declaration. `Ipe.Crypto` is a kernel qualifier (present in
+    // `STDLIB_MODULE_QUALIFIERS`), so the missing-import gate fires IPE-N0034.
+    // Kernel qualifiers resolve without needing to be in the SourceRoot, so
+    // the minimal root (only Main) is sufficient both before and after the fix.
+    //
+    // `System.setenv` wraps `Crypto.sha256 "hello"` to give `main` the
+    // required `Task Error ()` type. `Ipe.System` is also a kernel qualifier,
+    // so it too resolves without being in the SourceRoot.
+    let src = "module Main exposing (main)\n\nimport Ipe.System as System\n\nmain =\n    System.setenv \"KEY\" (Crypto.sha256 \"hello\")\n";
     let mut db = IpeDatabase::new();
     let entry = file(&db, &["Main"], src);
     let root = root_of(&db, &[(&["Main"], entry)]);
@@ -187,7 +198,7 @@ fn add_import_quick_fix_inserts_the_missing_import_and_clears_the_diagnostic() {
             CodeActionOrCommand::Command(_) => None,
         })
         .expect("one CodeAction for IPE-N0034");
-    assert_eq!(action.title, "Add import Ipe.String");
+    assert_eq!(action.title, "Add import Ipe.Crypto");
     let edit = action
         .edit
         .as_ref()
@@ -196,7 +207,7 @@ fn add_import_quick_fix_inserts_the_missing_import_and_clears_the_diagnostic() {
         .and_then(|v| v.first())
         .expect("edit present");
     assert!(
-        edit.new_text.contains("import Ipe.String"),
+        edit.new_text.contains("import Ipe.Crypto"),
         "inserts the named import, got {:?}",
         edit.new_text
     );
@@ -204,7 +215,7 @@ fn add_import_quick_fix_inserts_the_missing_import_and_clears_the_diagnostic() {
     // SEAL: applying the edit makes the program compile — N0034 is gone.
     let fixed = apply_edit(src, edit);
     assert!(
-        fixed.contains("\nimport Ipe.String\n"),
+        fixed.contains("\nimport Ipe.Crypto\n"),
         "the fixed source carries the import: {fixed:?}"
     );
     assert!(ipe_db::set_text_if_changed(&mut db, entry, &fixed));
@@ -219,11 +230,19 @@ fn add_import_quick_fix_inserts_the_missing_import_and_clears_the_diagnostic() {
 /// The insert is sorted among existing imports, not just appended.
 #[test]
 fn add_import_quick_fix_sorts_among_existing_imports() {
-    // `Ipe.String` should land between `Ipe.List` and `Ipe.Task`.
+    // `Ipe.Crypto` should land between `Ipe.App` (A < C) and `Ipe.System`
+    // (S > C). All three are kernel qualifiers (present in
+    // `STDLIB_MODULE_QUALIFIERS`), so they resolve without needing to be in
+    // the SourceRoot. `Crypto` is missing → IPE-N0034 fires; the quick-fix
+    // must insert `import Ipe.Crypto` in sorted order.
+    //
+    // The body uses `System.setenv` (String -> String -> Task Error ()) with
+    // `Crypto.sha256 "hello"` (String) as its second argument, so after the
+    // fix the module type-checks clean.
     let src = "module Main exposing (main)\n\n\
-        import Ipe.List as List\n\
-        import Ipe.Task as Task\n\n\
-        main = Task.succeed (String.fromInt (List.length []))\n";
+        import Ipe.App as App\n\
+        import Ipe.System as System\n\n\
+        main = System.setenv \"KEY\" (Crypto.sha256 \"hello\")\n";
     let mut db = IpeDatabase::new();
     let entry = file(&db, &["Main"], src);
     let root = root_of(&db, &[(&["Main"], entry)]);
@@ -271,12 +290,12 @@ fn add_import_quick_fix_sorts_among_existing_imports() {
         .expect("edit present");
 
     let fixed = apply_edit(src, edit);
-    let list_at = fixed.find("import Ipe.List").expect("List present");
-    let string_at = fixed.find("import Ipe.String").expect("String inserted");
-    let task_at = fixed.find("import Ipe.Task").expect("Task present");
+    let app_at = fixed.find("import Ipe.App").expect("App present");
+    let crypto_at = fixed.find("import Ipe.Crypto").expect("Crypto inserted");
+    let system_at = fixed.find("import Ipe.System").expect("System present");
     assert!(
-        list_at < string_at && string_at < task_at,
-        "String sorts between List and Task: {fixed:?}"
+        app_at < crypto_at && crypto_at < system_at,
+        "Crypto sorts between App and System: {fixed:?}"
     );
 
     // SEAL: the sorted insert also compiles.
