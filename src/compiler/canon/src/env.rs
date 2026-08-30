@@ -76,7 +76,14 @@ pub const STDLIB_MODULE_QUALIFIERS: &[(&[&str], &str)] = &[
     // `detect_kernel_alias` routes to the registered `Result*` `StdlibKernel`
     // variants. A module is EITHER a kernel qualifier here OR compiled-source
     // — never both (`compiled_vs_kernel_qualifier_disjoint`), so it stays out.
-    (&["Ipe", "Error"], "Error"),
+    // NOTE — `Ipe.Error` is DELIBERATELY absent: it is a COMPILED-SOURCE
+    // Layer-3 module (registered in `ipe_stdlib::COMPILED_STD_MODULES`). Its
+    // members are point-free `Ffi.kernel "Error_*"` aliases that
+    // `detect_kernel_alias` routes to the registered `Error*` `StdlibKernel`
+    // variants. `Error` / `ErrorKind` / `ErrorDetails` are kernel-implicit
+    // reserved builtin types; the module re-exports them as type-only exposures.
+    // A module is EITHER a kernel qualifier here OR compiled-source
+    // — never both (`compiled_vs_kernel_qualifier_disjoint`), so it stays out.
     (&["Ipe", "Math"], "Math"),
     // NOTE — `Ipe.Bitwise` is DELIBERATELY absent: it is a COMPILED-SOURCE
     // Layer-3 module (registered in `ipe::stdlib::COMPILED_STD_MODULES`). Its
@@ -886,34 +893,12 @@ impl Env {
             // `Ipe.Result` re-exports the builtin `Result(..)` type + ctors
             // via its `exposing` list; ambient `Ok`/`Err` builtins remain
             // accessible with no import.
-            // `Ipe.Error` — the real `Error ErrorKind ErrorInfo` ADT.
-            // Message constructors + nullary constructors + `toString`
-            // render + `withMessage` modifier + `isRetryable` classification +
-            // `withDetails` modifier (attaches the
-            // `ErrorDetails` union to `ErrorInfo.details : Maybe ErrorDetails`).
-            (
-                "Error",
-                &[
-                    "unexpected",
-                    "invalidInput",
-                    "io",
-                    "network",
-                    "ffi",
-                    "decode",
-                    "conflict",
-                    "unavailable",
-                    "timeout",
-                    "notFound",
-                    "permissionDenied",
-                    "toString",
-                    "withMessage",
-                    "isRetryable",
-                    "withDetails",
-                    "kind",
-                    "message",
-                    "kindName",
-                ],
-            ),
+            // NOTE — `Ipe.Error` is DELIBERATELY absent from this catalog: it is
+            // a COMPILED-SOURCE module (registered in `ipe_stdlib::COMPILED_STD_MODULES`).
+            // Its members are point-free `Ffi.kernel "Error_*"` aliases routed by
+            // `detect_kernel_alias` to the registered `Error*` `StdlibKernel` variants.
+            // A module is EITHER a kernel qualifier here OR compiled-source
+            // — never both (`compiled_vs_kernel_qualifier_disjoint`), so it stays out.
             // `Ipe.CssSafety` — the Ipe.Css leaf security kernels: four
             // `String -> Maybe String` parsers (`safeValue`/`safePropName`/
             // `safeSelector` gate declarations/selectors at construction;

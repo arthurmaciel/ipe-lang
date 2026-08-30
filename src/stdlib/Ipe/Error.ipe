@@ -1,0 +1,143 @@
+-- | Ipe.Error — the structured `Error` type (Layer-3 Ipe source).
+--
+-- `Error` is the implicit error channel of every `Task` and the payload of
+-- `Result Error a`.  Its constructors classify the kind of failure at
+-- construction time (the `ErrorKind` tag) and carry a human-readable
+-- message; optional `ErrorDetails` attach structured context for logging or
+-- round-tripping without widening the public interface.
+--
+-- Constructors fall into two groups:
+--
+-- * **Message-carrying** — take a `String` description and produce an `Error`:
+--   `unexpected`, `invalidInput`, `io`, `network`, `ffi`, `decode`,
+--   `conflict`, `unavailable`.
+--
+-- * **Canonical** — produce an `Error` with a fixed message matching the
+--   kind label: `timeout`, `notFound`, `permissionDenied`.
+--
+-- Modifiers and inspectors:
+--
+-- * `withMessage` — replace the error message.
+-- * `withDetails` — attach an `ErrorDetails` value.
+-- * `toString` — render as `"<Kind>: <message>"`.
+-- * `isRetryable` — `True` for `timeout`, `network`, and `unavailable`.
+-- * `kind` — extract the `ErrorKind` tag.
+-- * `message` — extract the bare message string.
+-- * `kindName` — stable lowercase label of an `ErrorKind`.
+module Ipe.Error exposing
+    ( Error(..)
+    , ErrorKind(..)
+    , ErrorDetails(..)
+    , unexpected
+    , invalidInput
+    , io
+    , network
+    , ffi
+    , decode
+    , conflict
+    , unavailable
+    , timeout
+    , notFound
+    , permissionDenied
+    , toString
+    , withMessage
+    , isRetryable
+    , withDetails
+    , kind
+    , message
+    , kindName
+    )
+
+
+import Ipe.Ffi as Ffi
+
+
+-- | Construct an `Error` with kind `Unexpected` and the given message.
+unexpected : String -> Error
+unexpected = Ffi.kernel "Error_unexpected"
+
+
+-- | Construct an `Error` with kind `InvalidInput` and the given message.
+invalidInput : String -> Error
+invalidInput = Ffi.kernel "Error_invalidInput"
+
+
+-- | Construct an `Error` with kind `Io` and the given message.
+io : String -> Error
+io = Ffi.kernel "Error_io"
+
+
+-- | Construct an `Error` with kind `Network` and the given message.
+network : String -> Error
+network = Ffi.kernel "Error_network"
+
+
+-- | Construct an `Error` with kind `Ffi` and the given message.
+ffi : String -> Error
+ffi = Ffi.kernel "Error_ffi"
+
+
+-- | Construct an `Error` with kind `Decode` and the given message.
+decode : String -> Error
+decode = Ffi.kernel "Error_decode"
+
+
+-- | Construct an `Error` with kind `Conflict` and the given message.
+conflict : String -> Error
+conflict = Ffi.kernel "Error_conflict"
+
+
+-- | Construct an `Error` with kind `Unavailable` and the given message.
+unavailable : String -> Error
+unavailable = Ffi.kernel "Error_unavailable"
+
+
+-- | Canonical `Error` with kind `Timeout` and a fixed message.
+timeout : Error
+timeout = Ffi.kernel "Error_timeout"
+
+
+-- | Canonical `Error` with kind `NotFound` and a fixed message.
+notFound : Error
+notFound = Ffi.kernel "Error_notFound"
+
+
+-- | Canonical `Error` with kind `PermissionDenied` and a fixed message.
+permissionDenied : Error
+permissionDenied = Ffi.kernel "Error_permissionDenied"
+
+
+-- | Render an `Error` as `"<Kind>: <message>"`.
+toString : Error -> String
+toString = Ffi.kernel "Error_toString"
+
+
+-- | Replace the message carried by an `Error`, preserving its kind and details.
+withMessage : String -> Error -> Error
+withMessage = Ffi.kernel "Error_withMessage"
+
+
+-- | `True` when the error kind is retryable: `Timeout`, `Network`, or
+-- `Unavailable`.
+isRetryable : Error -> Bool
+isRetryable = Ffi.kernel "Error_isRetryable"
+
+
+-- | Attach an `ErrorDetails` value to an `Error`.
+withDetails : ErrorDetails -> Error -> Error
+withDetails = Ffi.kernel "Error_withDetails"
+
+
+-- | Extract the `ErrorKind` classification tag from an `Error`.
+kind : Error -> ErrorKind
+kind = Ffi.kernel "Error_kind"
+
+
+-- | Extract the bare message string from an `Error`.
+message : Error -> String
+message = Ffi.kernel "Error_message"
+
+
+-- | Stable lowercase label of an `ErrorKind` (the same prefix `toString` uses).
+kindName : ErrorKind -> String
+kindName = Ffi.kernel "Error_kindName"

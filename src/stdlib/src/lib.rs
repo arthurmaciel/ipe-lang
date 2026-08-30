@@ -685,6 +685,16 @@ const LOG: &str = include_str!("../Ipe/Log.ipe");
 /// `compiled_vs_kernel_qualifier_disjoint` invariant holds.
 const LEVEL: &str = include_str!("../Ipe/Level.ipe");
 
+/// `Ipe.Error` — the structured `Error` type (Layer-3 Ipê source).
+///
+/// `Error` / `ErrorKind` / `ErrorDetails` are reserved builtin types;
+/// the module re-exports them via `Error(..)` / `ErrorKind(..)` /
+/// `ErrorDetails(..)` and provides every constructor + inspector as a
+/// point-free `Ffi.kernel "Error_*"` alias. Registered in
+/// [`COMPILED_STD_MODULES`] (NOT `MODULES`); NOT in
+/// `STDLIB_MODULE_QUALIFIERS`, so the disjointness invariant holds.
+const ERROR: &str = include_str!("../Ipe/Error.ipe");
+
 /// Every compiled-source stdlib module, keyed by its dotted import name.
 ///
 /// Disjoint from [`MODULES`] (parse fixtures) and from `ipe_canon`'s
@@ -1027,6 +1037,14 @@ pub const COMPILED_STD_MODULES: &[CompiledStdModule] = &[
     CompiledStdModule {
         dotted: "Ipe.Level",
         source: LEVEL,
+    },
+    // Ipe.Error — Layer-3 source; constructors/inspectors are point-free
+    // `Ffi.kernel "Error_*"` aliases. `Error` / `ErrorKind` / `ErrorDetails`
+    // are reserved builtin types re-exported via `exposing`. Disjoint from
+    // `STDLIB_MODULE_QUALIFIERS` (no `"Error"` entry there).
+    CompiledStdModule {
+        dotted: "Ipe.Error",
+        source: ERROR,
     },
 ];
 
