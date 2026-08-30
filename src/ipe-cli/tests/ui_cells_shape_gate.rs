@@ -213,7 +213,7 @@ fn terminal_view_with_ui_cells_is_accepted() -> Result<(), BoxError> {
 /// code analysis before emission, so the gate fires only if the type system
 /// is bypassed (e.g., programmatic IR construction). This test confirms
 /// the type-level rejection.
-const CLI_UI_CELLS: &str = r#"module Main exposing (main)
+const CLI_UI_CELLS: &str = r"module Main exposing (main)
 
 import Ipe.Tea.Terminal as Terminal
 import Ipe.Ui as Ui
@@ -249,7 +249,7 @@ main =
         { init = init, update = update, view = view
         , subscriptions = subscriptions, onLine = onLine
         }
-"#;
+";
 
 /// `Ui.cells` in a `Terminal.appLines` view is rejected because the type checker
 /// rejects `Element msg` where `String` is required (IPE-T0001). The backend

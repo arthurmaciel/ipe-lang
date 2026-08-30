@@ -55,6 +55,7 @@ const fn empty_module(name: ModPath) -> Module {
         uses_ui: false,
         uses_web: false,
         uses_tui: false,
+        uses_console: false,
         uses_webview: false,
         uses_css: false,
         uses_auth: false,

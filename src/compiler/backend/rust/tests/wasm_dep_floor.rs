@@ -66,6 +66,7 @@ fn minimal_wasm_program() -> (Program, Interner) {
             uses_ui: false,
             uses_web: false,
             uses_tui: false,
+            uses_console: false,
             uses_webview: false,
             uses_css: false,
             uses_auth: false,
