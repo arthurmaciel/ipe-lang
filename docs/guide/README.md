@@ -57,6 +57,9 @@ cross-link where topics meet.
 - **Instrumentation and delivery** — [Analytics](analytics.md) (consent-gated,
   PII-safe event tracking), [Email](email.md) (provider-abstract send with sealed
   credentials).
+- **Web application surfaces** — [Page head](web-head.md) (typed `<head>` /
+  SEO tags), [Pub/sub](pubsub.md) (in-process typed broadcast), [Browser ports](js.md)
+  (the typed Ipê↔JS seam).
 
 ## Reference and lookup
 

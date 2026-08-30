@@ -1,0 +1,86 @@
+module Main exposing (main)
+
+-- | head-seo — per-page `<head>` content with `Ipe.Web.Head`.
+--
+-- A `Ipe.Tea.Web` app can supply an optional `head : Model -> List (Html msg)`
+-- field on its `Web.app` cfg. The runtime calls it once per full page load and
+-- splices the rendered tags into `<head>` — after the required charset/viewport
+-- tags, before the style reset. `Ipe.Web.Head` gives typed helpers for the common
+-- SEO tags so the strings are HTML-escaped and the URLs are validated `Ipe.Url`
+-- values, not bare strings that could smuggle a `javascript:` href.
+
+
+import Ipe.Tea.Web as Web
+import Ipe.Web.Head as Head
+import Ipe.Html as Html exposing (Html)
+import Ipe.Ui as Ui
+import Ipe.Tea.Web.Cmd as Cmd
+import Ipe.Tea.Web.Sub as Sub
+import Ipe.Url as Url
+import Ipe.Result exposing (Result(..))
+
+
+type Msg
+    = Ignored
+
+
+type alias Model =
+    { pageTitle : String }
+
+
+init : a -> ( Model, Cmd Msg )
+init _req =
+    ( { pageTitle = "Home" }, Cmd.none )
+
+
+update : Msg -> Model -> ( Model, Cmd Msg )
+update _msg model =
+    ( model, Cmd.none )
+
+
+subscriptions : Model -> Sub Msg
+subscriptions _model =
+    Sub.none
+
+
+-- The per-page head. Titles are HTML-escaped by the runtime; the Open Graph and
+-- theme-color tags are ordinary typed helpers. `Head.canonical` requires a
+-- validated `Ipe.Url.Url` — a bare String could silently produce a relative or
+-- `javascript:` href — so it is emitted only when the URL parses. `Url.fromString`
+-- is the one constructor, and it is the boundary where an unparseable URL is
+-- turned away rather than carried into a tag.
+head : Model -> List (Html Msg)
+head model =
+    let
+        base =
+            [ Head.title model.pageTitle
+            , Head.meta "description" "A minimal Ipe.Web page with typed head tags."
+            , Head.metaProperty "og:title" model.pageTitle
+            , Head.metaProperty "og:type" "website"
+            , Head.themeColor "#1a1a2e"
+            ]
+    in
+    case Url.fromString "https://example.com/" of
+        Ok url ->
+            base ++ [ Head.canonical url ]
+
+        Err _ ->
+            base
+
+
+view : Model -> Element Msg
+view model =
+    Ui.column []
+        [ Ui.text ("page: " ++ model.pageTitle) ]
+
+
+main =
+    Web.app
+        { init = init
+        , update = update
+        , view = view
+        , subscriptions = subscriptions
+        , routes = []
+        , notFound = Ignored
+        , head = head
+        }
