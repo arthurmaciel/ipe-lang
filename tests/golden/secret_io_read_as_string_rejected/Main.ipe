@@ -1,0 +1,16 @@
+module Main exposing (main)
+import Ipe.Io as Io
+import Ipe.Task as Task
+
+-- negative gate: `Io.readSecret : String -> Task Error Secret` yields the opaque
+-- `Secret`. Passing that bound `Secret` where a plain `String` is expected —
+-- here `Io.println`, which prints in the clear — must be REJECTED at ipe compile
+-- time (IPE-T0001, `String` vs `Secret`), never accepted and left to leak the
+-- plaintext at runtime. This is the whole point of the type change: a
+-- freshly-read secret cannot flow into a log/println without an explicit
+-- `Secret.use` / `Secret.reveal`.
+
+main =
+    do
+        secret <- Io.readSecret "Password: "
+        Io.println secret

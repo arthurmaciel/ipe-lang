@@ -1259,10 +1259,13 @@ pub enum StdlibKernel {
     BackoffExponentialWithJitter,
     // ── Io ──────────────────────────────────────────────────────────────────
     IoReadLine,
-    /// `Io.readSecret : String -> Task Error String` — write a prompt, then read
+    /// `Io.readSecret : String -> Task Error Secret` — write a prompt, then read
     /// one line from stdin with terminal echo suppressed (a password read). The
     /// prior terminal mode is always restored, even on error. On a non-tty stdin
-    /// this degrades to a plain line read (no echo state to toggle).
+    /// this degrades to a plain line read (no echo state to toggle). The line is
+    /// returned as an opaque sealed `Secret`, not a bare `String`: the plaintext
+    /// is reachable only through the scoped `Secret.use` / `Secret.reveal` API, so
+    /// a freshly-read secret cannot flow into a log/error/serialization by default.
     IoReadSecret,
     IoWriteStdout,
     IoWriteStderr,
@@ -6573,6 +6576,7 @@ impl StdlibKernel {
         const TASK_BOOL: TyShape = TyShape::Con(BuiltinTag::Task, &[BOOL]);
         const TASK_FLOAT: TyShape = TyShape::Con(BuiltinTag::Task, &[FLOAT]);
         const TASK_BYTES: TyShape = TyShape::Con(BuiltinTag::Task, &[BYTES]);
+        const TASK_SECRET: TyShape = TyShape::Con(BuiltinTag::Task, &[SECRET]);
         const CMD_A: TyShape = TyShape::Con(BuiltinTag::Cmd, &[A]);
         const CMD_B: TyShape = TyShape::Con(BuiltinTag::Cmd, &[B]);
         const SUB_A: TyShape = TyShape::Con(BuiltinTag::Sub, &[A]);
@@ -6609,8 +6613,12 @@ impl StdlibKernel {
         const UNIT_TO_TASK_UNIT: TyShape = TyShape::Fun(&UNIT, &TASK_UNIT);
         // `() -> Task String`.
         const UNIT_TO_TASK_STRING: TyShape = TyShape::Fun(&UNIT, &TASK_STRING);
-        // `String -> Task String` (getenv / tempFile / tempDir / readSecret).
+        // `String -> Task String` (getenv / tempFile / tempDir).
         const STRING_TO_TASK_STRING: TyShape = TyShape::Fun(&STRING, &TASK_STRING);
+        // `String -> Task Secret` (readSecret): the prompt goes in, an opaque
+        // sealed `Secret` comes out — the plaintext is reachable only through the
+        // scoped `Secret.use` / `Secret.reveal` API, never as a bare `String`.
+        const STRING_TO_TASK_SECRET: TyShape = TyShape::Fun(&STRING, &TASK_SECRET);
         // `Path -> Task String` (readFile).
         const PATH_TO_TASK_STRING: TyShape = TyShape::Fun(&PATH, &TASK_STRING);
         // `() -> Task Int` (time.now / unixMillis).
@@ -8643,7 +8651,7 @@ impl StdlibKernel {
             | Self::SystemUnsetenv => Some(&STRING_TO_TASK_UNIT),
             Self::FileRemove | Self::FileMkdirAll | Self::FileDelete => Some(&PATH_TO_TASK_UNIT),
             Self::IoReadLine | Self::SystemCwd => Some(&UNIT_TO_TASK_STRING),
-            Self::IoReadSecret => Some(&STRING_TO_TASK_STRING),
+            Self::IoReadSecret => Some(&STRING_TO_TASK_SECRET),
             Self::TimeNow | Self::TimeUnixMillis => Some(&UNIT_TO_TASK_INT),
             Self::TimeSleep => Some(&INT_TO_TASK_UNIT),
             Self::SystemGetenv | Self::FileTempFile | Self::FileTempDir => {

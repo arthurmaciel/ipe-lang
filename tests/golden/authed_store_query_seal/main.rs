@@ -521,9 +521,6 @@ pub fn task_run<A: Send + 'static>(t: IpeTask<A>) -> IpeResult<IpeError, A> {
 pub fn io_read_line(_: ()) -> IpeTask<String> {
     ipe_runtime::io::io_read_line(())
 }
-pub fn io_read_secret(prompt: String) -> IpeTask<String> {
-    ipe_runtime::io::io_read_secret(prompt)
-}
 pub fn io_write_stdout(s: String) -> IpeTask<()> {
     ipe_runtime::io::io_write_stdout(s)
 }
@@ -535,6 +532,16 @@ pub fn io_println(msg: String) -> IpeTask<()> {
 }
 pub fn io_eprintln(msg: String) -> IpeTask<()> {
     ipe_runtime::io::io_eprintln(msg)
+}
+// ── Io secret kernels ──────────────────────────────────────────────────────
+// `Io.readSecret` returns the opaque `Secret`, so its wrapper hard-references
+// `ipe_runtime::secret::Secret`. That module is `secret`-gated in the dependency
+// model, so this wrapper is cut from the prelude for a program that reaches no
+// secret surface (`!reach.secret`) — the same drop the crypto/random/log
+// sections take. A program that reads a secret holds a `Secret`-typed value,
+// which turns the `secret` feature on and keeps this wrapper.
+pub fn io_read_secret(prompt: String) -> IpeTask<ipe_runtime::secret::Secret> {
+    ipe_runtime::io::io_read_secret(prompt)
 }
 // ── System kernels ─────────────────────────────────────────────────────────
 pub fn system_getenv(key: String) -> IpeTask<String> {

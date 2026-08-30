@@ -327,6 +327,13 @@ const WASM_ABSENT_MODULE_PATHS: &[&str] = &[
     "ipe_runtime::task::",
     "ipe_runtime::http_client::",
     "ipe_runtime::crypto::",
+    // `Io.readSecret` — a no-echo terminal password read. There is no terminal
+    // in the browser, and its wrapper returns the `secret`-feature-gated
+    // `ipe_runtime::secret::Secret`, which the closed vendored wasm template does
+    // not enable. Dropping the wrapper here keeps the wasm prelude buildable and
+    // matches the absence of a terminal on that target. The sibling `io_*`
+    // wrappers stay (each names a distinct `ipe_runtime::io::io_*` path).
+    "ipe_runtime::io::io_read_secret",
     // `time.rs` is vendored (its pure calendar kernels are allowlisted), but
     // the clock/sleep entry points inside it need the browser substitute
     // below — most of the module (chrono/tokio helpers) still isn't wasm-safe
@@ -1225,6 +1232,14 @@ struct PreludeReach {
     /// `type Value = JsonVal;` alias, which lives in the fixed preamble, is cut on
     /// the SAME flag by [`crate::preamble::preamble`].
     json: bool,
+    /// The program reaches the `Ipe.Secret` surface — keep the `Io secret kernels`
+    /// section (the `io_read_secret` wrapper, whose return type hard-references
+    /// `ipe_runtime::secret::Secret`). When false the section is cut: the `secret`
+    /// module is `secret`-gated in the dependency model, so naming its `Secret`
+    /// type from an unconditional wrapper would be an unresolved-path E0433. A
+    /// program that reads a secret holds a `Secret`-typed value, which sets this
+    /// flag and turns the `secret` feature on.
+    secret: bool,
 }
 
 /// Drop a mid-prelude section — the wrappers between its own `header` and the
@@ -1299,6 +1314,17 @@ fn native_runtime_bindings(reach: PreludeReach) -> DResult<String> {
             });
         }
         filtered = filtered.replace(DECODER_ALIAS, "");
+    }
+
+    // `Io secret` — the single `io_read_secret` wrapper (`Io.readSecret`), whose
+    // return type hard-references `ipe_runtime::secret::Secret`. Cut between the
+    // `Io secret kernels` header and the following `System kernels` header when
+    // the program reaches no secret surface (`!reach.secret`): the `secret`
+    // module is `secret`-gated in the dependency model, so keeping the wrapper
+    // would name an absent `Secret` type (E0433).
+    if !reach.secret {
+        filtered =
+            drop_prelude_section(&filtered, "// ── Io secret kernels", "// ── System kernels")?;
     }
 
     // `Log` — the eight `log_*` wrappers (the only static-prelude references to
@@ -1566,6 +1592,7 @@ pub fn emit_program(ctx: &EmitCtx, program: &Program) -> DResult<EmittedProject>
                     time_core: ctx.reaches_time_core(),
                     crypto_core: ctx.reaches_crypto_core(),
                     json: ctx.reaches_json(),
+                    secret: ctx.reaches_secret(),
                 })?);
             }
             ipe_ir::Target::WasmClient => out.push_str(&wasm_runtime_bindings()?),
@@ -2436,6 +2463,17 @@ fn assemble_project_files(
     } else {
         cargo_toml
     };
+    // Ipe.Secret: promote the `secret` feature when the program reaches the
+    // secret surface. The vendored `secret.rs` compiles unconditionally, but the
+    // functions that mint a `Secret` from another module — `io.rs::io_read_secret`
+    // (`Io.readSecret`), `app_config.rs::resolve_db_url_override` — are
+    // `#[cfg(feature = "secret")]`, so a `Secret`-reaching program must have the
+    // feature on. Idempotent: `db_cargo_toml` already added it for db programs.
+    let cargo_toml = if ctx.reaches_secret() {
+        secret_cargo_toml(&cargo_toml)?
+    } else {
+        cargo_toml
+    };
     // TEA runtime: `tea.rs` drives its event loop over a `tokio::sync::mpsc`
     // channel, so any program that pulls the `tea` module needs tokio's `"sync"`
     // feature. The union mirrors the `tea` mod.rs append below (a `Cmd`/`Sub`
@@ -3021,6 +3059,7 @@ pub fn emit_spine(ctx: &EmitCtx, program: &Program) -> DResult<String> {
                 time_core: ctx.reaches_time_core(),
                 crypto_core: ctx.reaches_crypto_core(),
                 json: ctx.reaches_json(),
+                secret: ctx.reaches_secret(),
             })?);
         }
         ipe_ir::Target::WasmClient => out.push_str(&wasm_runtime_bindings()?),
@@ -4499,6 +4538,50 @@ fn jwt_cargo_toml(base: &str) -> DResult<String> {
     result.push_str(&deps);
     result.push_str(step1.get(anchor_pos..).unwrap_or(""));
     Ok(result)
+}
+
+/// Promote the `secret` feature into the vendored manifest's `default = [...]`
+/// list for a program that reaches the `Ipe.Secret` surface (`reaches_secret`).
+///
+/// The vendored `secret.rs` module is compiled unconditionally (a bare `pub mod
+/// secret;` in the emitted `ipe_runtime/mod.rs`), so the `Secret` TYPE resolves
+/// with the feature off. The feature still gates the FUNCTIONS that live in other
+/// modules but hand back a `Secret` — the vendored `io.rs::io_read_secret`
+/// (`Io.readSecret`) and `app_config.rs::resolve_db_url_override` are
+/// `#[cfg(feature = "secret")]`. Without this promotion a vendored `Io.readSecret`
+/// program would emit a wrapper calling a cfg'd-out runtime function (E0425).
+///
+/// Idempotent: a no-op when `"secret"` is already in the default list (e.g. a
+/// db program, whose [`db_cargo_toml`] already added it).
+fn secret_cargo_toml(base: &str) -> DResult<String> {
+    const DEFAULT_PREFIX: &str = "default = [";
+    // Already promoted (db path, or a prior call) — nothing to do.
+    let pfx = base
+        .find(DEFAULT_PREFIX)
+        .ok_or_else(|| Diagnostic::CompilerBug {
+            where_: "ipe_backend_rust::project::secret_cargo_toml",
+            detail: format!("Cargo.toml anchor {DEFAULT_PREFIX:?} not found — golden drifted"),
+        })?;
+    let search_from = pfx + DEFAULT_PREFIX.len();
+    let rel = base
+        .get(search_from..)
+        .and_then(|s| s.find(']'))
+        .ok_or_else(|| Diagnostic::CompilerBug {
+            where_: "ipe_backend_rust::project::secret_cargo_toml",
+            detail: "default feature list has no closing ']' — golden drifted".to_owned(),
+        })?;
+    let close = search_from + rel;
+    if base
+        .get(search_from..close)
+        .is_some_and(|list| list.contains("\"secret\""))
+    {
+        return Ok(base.to_owned());
+    }
+    let mut out = String::with_capacity(base.len() + 12);
+    out.push_str(base.get(..close).unwrap_or(""));
+    out.push_str(r#", "secret""#);
+    out.push_str(base.get(close..).unwrap_or(""));
+    Ok(out)
 }
 
 /// Slice each compiler-generated FFI interface-forwarder module down to the

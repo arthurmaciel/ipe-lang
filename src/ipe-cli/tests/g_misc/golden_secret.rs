@@ -261,6 +261,10 @@ fn all_secret_goldens_compile() {
         "m_secret_map_runtime",
         "m_secret_env_direct",
         "m_secret_runtime_derived",
+        // `Io.readSecret : String -> Task Error Secret` — the read secret flows
+        // straight into the scoped `Secret.use`; proves the `Secret`-typed
+        // result type-checks end to end.
+        "m_secret_io_read",
     ] {
         let entry = golden_dir(&root, name).join("Main.ipe");
         let out = std::env::temp_dir().join(format!("ipec_{name}_compileonly"));

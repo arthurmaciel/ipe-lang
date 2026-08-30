@@ -35,13 +35,13 @@ pub fn io_read_line<E: Send + From<String> + 'static>(_: ()) -> IpeTask<E, Strin
 /// Restores the saved terminal attributes when dropped, so echo is turned back
 /// on even if the read errors or the thread unwinds. This is the fail-safe: the
 /// terminal is never left with echo disabled once the guard leaves scope.
-#[cfg(unix)]
+#[cfg(all(unix, feature = "secret"))]
 struct EchoGuard {
     fd: std::os::unix::io::RawFd,
     prior: libc::termios,
 }
 
-#[cfg(unix)]
+#[cfg(all(unix, feature = "secret"))]
 impl Drop for EchoGuard {
     fn drop(&mut self) {
         // Best-effort restore; a failure here cannot itself be surfaced from
@@ -56,7 +56,7 @@ impl Drop for EchoGuard {
 /// Disable terminal echo on `fd`, returning a guard that restores the prior mode
 /// on drop. `None` when `fd` is not a tty (nothing to toggle — the caller then
 /// reads with echo unchanged, i.e. a plain line read).
-#[cfg(unix)]
+#[cfg(all(unix, feature = "secret"))]
 fn suppress_echo(fd: std::os::unix::io::RawFd) -> Option<EchoGuard> {
     // Not a terminal (piped/redirected stdin): there is no echo state to change,
     // so report "no guard" and let the caller fall back to a normal read.
@@ -75,17 +75,27 @@ fn suppress_echo(fd: std::os::unix::io::RawFd) -> Option<EchoGuard> {
     Some(EchoGuard { fd, prior })
 }
 
-/// `Io.readSecret : String -> Task Error String`. Writes `prompt` to stdout,
+/// `Io.readSecret : String -> Task Error Secret`. Writes `prompt` to stdout,
 /// then reads one line from stdin with terminal echo suppressed (a password
 /// read) and strips the trailing newline. The prior terminal mode is always
 /// restored on return — success, error, or unwind — via an RAII guard.
+///
+/// The read line is sealed into an opaque [`crate::secret::Secret`] before it is
+/// handed back — never returned as a bare `String`. The plaintext is reachable
+/// only through the scoped `Secret.use` / `Secret.reveal` API, so a freshly-read
+/// secret cannot flow into a log line, an error message, or a serialized payload
+/// by accident. Gated behind the `secret` feature: a program that reads a secret
+/// necessarily holds a `Secret`-typed value, which turns the feature on.
 ///
 /// On a non-tty stdin (piped/redirected) there is no echo state to toggle, so
 /// this degrades to a plain line read. On non-Unix targets, where no echo
 /// toggle is wired, it also reads with echo unchanged. Capped at the same
 /// 1 MiB `IO_READ_LINE_CAP_BYTES` limit as `readLine` (truncate, never OOM).
+#[cfg(feature = "secret")]
 #[must_use]
-pub fn io_read_secret<E: Send + From<String> + 'static>(prompt: String) -> IpeTask<E, String> {
+pub fn io_read_secret<E: Send + From<String> + 'static>(
+    prompt: String,
+) -> IpeTask<E, crate::secret::Secret> {
     Box::pin(async move {
         {
             let mut out = std::io::stdout();
@@ -105,8 +115,12 @@ pub fn io_read_secret<E: Send + From<String> + 'static>(prompt: String) -> IpeTa
         let mut reader = std::io::BufReader::new(limited);
         let result = match std::io::BufRead::read_line(&mut reader, &mut line) {
             Ok(_) => {
+                // Seal the plaintext into `Secret` at the read boundary: the bare
+                // `String` never escapes this function, so the sealed value's
+                // redaction / no-`Debug` / zeroize-on-`Drop` protections cover it
+                // from the moment it is read.
                 let trimmed = line.trim_end_matches(['\n', '\r']).to_string();
-                ok_res(trimmed)
+                ok_res(crate::secret::secret_from_string(trimmed))
             }
             Err(e) => IpeResult::Err(str_err(&format!("{e}"))),
         };
@@ -191,7 +205,10 @@ pub fn io_eprintln<E: Send + From<String> + 'static>(msg: String) -> IpeTask<E, 
     })
 }
 
-#[cfg(all(test, unix))]
+// The echo guard exists only when the `secret` feature is on (it is used solely
+// by `io_read_secret`, which returns a `secret`-gated `Secret`), so its tests
+// are gated the same way.
+#[cfg(all(test, unix, feature = "secret"))]
 mod echo_guard_tests {
     use super::suppress_echo;
 

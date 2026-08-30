@@ -1,0 +1,17 @@
+module Main exposing (main)
+import Ipe.Io as Io
+import Ipe.Task as Task
+import Ipe.Secret
+import Ipe.String as String
+
+-- golden: `Io.readSecret : String -> Task Error Secret` returns the opaque
+-- `Secret`, never a bare `String`. The read secret is consumed only through the
+-- scoped `Secret.use` (its plaintext never escapes the closure), so a
+-- freshly-read password cannot flow into a log/error/serialized payload by
+-- accident. Compile-only (there is no stdin in the test harness) — the point is
+-- that this TYPE-CHECKS: the `Secret` flows straight into `Secret.use`.
+
+main =
+    do
+        secret <- Io.readSecret "Password: "
+        Io.println ("read a secret of length " ++ String.fromInt (Secret.use secret String.length))
