@@ -1,6 +1,5 @@
 module Main exposing (main)
 import Ipe.System as System
-import Ipe.String
 
 type Msg = Increment | Decrement
 
@@ -11,4 +10,4 @@ update msg count =
         Decrement -> count - 1
 
 main =
-    System.unsetenv (String.fromInt (update Increment 0))
+    System.getenv "HOME"
