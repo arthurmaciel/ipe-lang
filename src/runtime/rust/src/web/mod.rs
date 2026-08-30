@@ -551,7 +551,7 @@ type ParamResolver = Arc<dyn Fn(&str) -> crate::dict::IpeDict<String> + Send + S
 type RouteMatched = Arc<dyn Fn(&str) -> bool + Send + Sync>;
 
 /// Shared axum state: the session store + Arc'd TEA callbacks.
-struct WebState<Model, Msg, FInit, FUpdate, FView, FSubs> {
+pub(crate) struct WebState<Model, Msg, FInit, FUpdate, FView, FSubs> {
     store: Arc<dyn store::SessionStore<Model, Msg>>,
     init: Arc<FInit>,
     update: Arc<FUpdate>,
@@ -1551,6 +1551,73 @@ where
     })
 }
 
+/// `Web.embed`'s mount router-builder: same single-page `WebState` as
+/// [`web_app`], but instead of binding a listener it returns a closure that —
+/// given the mount base-path prefix — builds the fully-layered axum `Router`
+/// (via [`build_web_router`]) for `Server.mountApp` to nest under that prefix
+/// on the shared server port.
+///
+/// The base-path prefix is installed process-wide (`IPE_WEB_BASE_PATH`) at
+/// build time so the embedded app's session-cookie / CSRF-cookie / asset paths
+/// scope to the mount, reusing the existing sub-app base-path machinery. The
+/// console/proxy surface is OFF for a mounted sub-app (the parent server owns
+/// those concerns), so `use_console_proxy` is `false`.
+///
+/// `Model`/`Msg`/the four callbacks stay concrete inside the returned closure —
+/// only the outer builder is boxed (no `dyn` over the app's handlers).
+pub fn web_embed_router<Model, Msg, FInit, FUpdate, FView, FSubs>(
+    init: FInit,
+    update: FUpdate,
+    view: FView,
+    subscriptions: FSubs,
+    store_kind: String,
+    store_path: String,
+    schema_tag: [u8; 32],
+) -> crate::tea::MountBuilder
+where
+    Model:
+        serde::Serialize + serde::de::DeserializeOwned + Clone + PartialEq + Send + Sync + 'static,
+    Msg: Clone + Send + Sync + std::fmt::Debug + crate::stringify::IpeStringify + 'static,
+    FInit: Fn(req::WebReq) -> (Model, IpeCmd<Msg>) + Send + Sync + 'static,
+    FUpdate: Fn(Msg, Model) -> (Model, IpeCmd<Msg>) + Send + Sync + 'static,
+    FView: Fn(Model) -> Html<Msg> + Send + Sync + 'static,
+    FSubs: Fn(Model) -> IpeSub<Msg> + Send + Sync + 'static,
+{
+    Box::new(move |prefix: String| {
+        Box::pin(async move {
+            // Scope the embedded app's cookies + assets to the mount prefix,
+            // reusing the sub-app base-path mechanism. A single mounted WebApp
+            // per server is the current contract (multiple distinct-prefix web
+            // mounts would need per-mount base-path threading).
+            let base = normalise_base_path(&prefix);
+            if !base.is_empty() {
+                // SAFETY: set once, before any request is served, during router
+                // assembly — no concurrent env reads race this write.
+                unsafe {
+                    std::env::set_var("IPE_WEB_BASE_PATH", &base);
+                }
+            }
+            let store =
+                store::choose_store::<Model, Msg>(&store_kind, &store_path, web_ttl(), schema_tag)
+                    .await;
+            let state = WebState {
+                store,
+                init: Arc::new(init),
+                update: Arc::new(update),
+                view: Arc::new(view),
+                subs: Arc::new(subscriptions),
+                route_resolver: Arc::new(|m, _path| m),
+                param_resolver: Arc::new(|_path| crate::dict::dict_empty()),
+                route_matched: Arc::new(|path| path == "/"),
+                session_count: Arc::new(AtomicUsize::new(0)),
+            };
+            // The router is E-free (E only surfaces on the standalone
+            // `serve_web` task's result), so `build_web_router` carries no `E`.
+            build_web_router::<Model, Msg, FInit, FUpdate, FView, FSubs>(state, false)
+        }) as std::pin::Pin<Box<dyn std::future::Future<Output = axum::Router> + Send>>
+    })
+}
+
 /// `Ipe.Web.app { …, routes, notFound }` with URL routing — serve via axum.
 ///
 /// Identical to `web_app` except a `route_resolver` is built from the route
@@ -1713,6 +1780,721 @@ fn static_noise_mime(ext: &str) -> &'static str {
     }
 }
 
+mod handlers {
+    use super::*;
+    use axum::extract::State;
+    use axum::http::StatusCode;
+    use axum::response::{IntoResponse, Response};
+
+    // ── GET page (root + any path) ────────────────────────────────────
+    pub(super) async fn page<Model, Msg, FInit, FUpdate, FView, FSubs>(
+        State(st): State<WebState<Model, Msg, FInit, FUpdate, FView, FSubs>>,
+        method: axum::http::Method,
+        uri: axum::http::Uri,
+        headers: axum::http::HeaderMap,
+    ) -> Response
+    where
+        Model: Clone + PartialEq + Send + 'static,
+        // Debug: the GET handler creates a session and spawns drive_session,
+        // which needs the bound for the ipe_web_msg_seconds{name} label.
+        // IpeStringify: the debugger overlay renders message labels via
+        // `ipe_show` so `Secret`-bearing fields are structurally redacted.
+        // Generated Msg types always satisfy both bounds.
+        Msg: Clone + Send + std::fmt::Debug + crate::stringify::IpeStringify + 'static,
+        FInit: Fn(req::WebReq) -> (Model, IpeCmd<Msg>) + Send + Sync + 'static,
+        FUpdate: Fn(Msg, Model) -> (Model, IpeCmd<Msg>) + Send + Sync + 'static,
+        FView: Fn(Model) -> Html<Msg> + Send + Sync + 'static,
+        FSubs: Fn(Model) -> IpeSub<Msg> + Send + Sync + 'static,
+    {
+        // Cookie-based session lifecycle (Go store.Get on every GET):
+        //   * Web hit  → reuse the in-process session; re-apply routing for
+        //                 this GET's path + re-render (no new driver).
+        //   * Cold hit  → a persisted model (post-restart / different replica);
+        //                 hydrate a fresh driver seeded with it (no init).
+        //   * miss      → init a new session.
+        let cookie_sid = sid_from_cookie(&headers);
+        // CSRF double-submit token: reuse the browser's existing well-formed
+        // per-app CSRF cookie (so a reload keeps the same token), else mint a
+        // fresh one. `page_response` sets the cookie + injects the value into
+        // the page JS; the client echoes it back in the `X-Ipê-Csrf` header.
+        let csrf_tok = csrf::cookie_value(&headers, &csrf::csrf_cookie_name_for(&web_base_path()))
+            .filter(|t| csrf::token_is_well_formed(t))
+            .unwrap_or_else(csrf::gen_token);
+
+        // Go parity (handleInitial): unrouted browser-noise paths 404 (or
+        // serve from the static root) BEFORE any session work — they must
+        // never run `init` (double-init race against the real `GET /`) and
+        // never touch an existing session (see the routed guards below).
+        let routed = (st.route_matched)(uri.path());
+        if !routed && is_browser_noise_path(uri.path()) {
+            if let Some(resp) = serve_noise_from_static_root(uri.path()).await {
+                return resp;
+            }
+            return (StatusCode::NOT_FOUND, "404 page not found").into_response();
+        }
+
+        let hit = match cookie_sid.as_ref() {
+            Some(s) => st.store.get(s).await.map(|h| (s.clone(), h)),
+            None => None,
+        };
+
+        // Go parity (handleInitial): an unrouted GET against an EXISTING
+        // session (live or persisted) 404s WITHOUT touching it. Re-routing
+        // here would write the `notFound` page into the model and rebuild
+        // the handler index from that view, orphaning every handler on the
+        // page the browser is still showing — the next event POST (form
+        // submit, click, input) would silently resolve to nothing.
+        if !routed && hit.is_some() {
+            return (StatusCode::NOT_FOUND, "404 page not found").into_response();
+        }
+
+        let (sid, model, cmd0) = match hit {
+            Some((sid, store::StoreHit::Web(handle))) => {
+                // sid is carried from the cookie lookup; the "hit but no sid"
+                // state is unrepresentable.
+                #[cfg_attr(not(feature = "debugger"), allow(unused_variables))]
+                let (body, history_labels, history_total) = {
+                    let mut e = handle.lock().unwrap_or_else(|e| e.into_inner());
+                    e.model = (st.route_resolver)(e.model.clone(), uri.path());
+                    let mut tree = (st.view)(e.model.clone());
+                    assign_ipe_ids(&mut tree, "r");
+                    style_inject::apply_style_injections(&mut tree);
+                    e.index = build_index(&tree);
+                    e.last_view = tree.clone();
+                    let body = render_html(&tree);
+                    #[cfg(feature = "debugger")]
+                    let labels: Vec<String> = e.history.labels();
+                    #[cfg(not(feature = "debugger"))]
+                    let labels: Vec<String> = Vec::new();
+                    let total = labels.len();
+                    (body, labels, total)
+                };
+                st.store.set(&sid, handle).await; // touch last-seen
+                #[cfg(feature = "debugger")]
+                {
+                    let base = web_base_path();
+                    let overlay = crate::debugger::server::overlay_html(
+                        &history_labels,
+                        history_total,
+                        &base,
+                    );
+                    return page_response_with_overlay(&sid, &body, &overlay, &csrf_tok, &headers);
+                }
+                #[cfg(not(feature = "debugger"))]
+                return page_response(&sid, &body, &csrf_tok, &headers);
+            }
+            Some((sid, store::StoreHit::Cold(m))) => {
+                // A returning user with a valid sid cookie → not new attack
+                // volume, so NOT rejected; but count its driver so the slot it
+                // gets below is paired (decremented on the driver's exit).
+                st.session_count.fetch_add(1, Ordering::SeqCst);
+                (sid, (st.route_resolver)(m, uri.path()), IpeCmd::None)
+            }
+            None => {
+                // Admission control (cookieless = brand-new session = the
+                // attack surface). Reserve a slot atomically: fetch_add-then-test
+                // avoids the load-then-add TOCTOU where N concurrent GETs all
+                // pass at cap-1. ALWAYS reserve (so the slot built below is
+                // paired 1:1 with a decrement); only the rejection is gated on
+                // cap>0 (0 = unlimited opt-out). Over cap → roll back + 503.
+                let cap = max_sessions();
+                let reserved = st.session_count.fetch_add(1, Ordering::SeqCst);
+                if cap > 0 && reserved >= cap {
+                    st.session_count.fetch_sub(1, Ordering::SeqCst);
+                    return (
+                        StatusCode::SERVICE_UNAVAILABLE,
+                        [(axum::http::header::RETRY_AFTER, "2")],
+                        "server at session capacity",
+                    )
+                        .into_response();
+                }
+                // Build the request context (params from routing — empty when
+                // unrouted) and init a fresh model. The param_resolver is
+                // model-independent, breaking the init↔routing cycle.
+                let params = (st.param_resolver)(uri.path());
+                let req = req::web_req(&method, &uri, &headers, params);
+                let (m, c) = (st.init)(req);
+                // Session fixation guard: a store MISS means this sid is NOT a
+                // known session, so NEVER adopt the client-supplied cookie value
+                // — always mint a fresh sid. (A HIT path keeps cookie_sid.)
+                let s = new_sid();
+                (s, (st.route_resolver)(m, uri.path()), c)
+            }
+        };
+
+        let mut tree = (st.view)(model.clone());
+        assign_ipe_ids(&mut tree, "r");
+        style_inject::apply_style_injections(&mut tree);
+        let index = build_index(&tree);
+        let body = render_html(&tree);
+
+        // Bounded per-session Msg queue: cap at 1024 to prevent a fast
+        // client from growing the queue without bound (per-session memory
+        // DoS). On overflow events are dropped with a warn (see
+        // event_handler). Go serialises dispatch under sess.mu instead of
+        // a channel — no Go bound to match; 1024 is far above any
+        // legitimate burst of user-driven events.
+        let (msg_tx, msg_rx) = mpsc::channel::<Msg>(1024);
+        #[cfg(feature = "debugger")]
+        let history_init =
+            crate::debugger::RecordBuffer::new(model.clone(), crate::debugger::DEFAULT_HISTORY_CAP);
+        let entry = Arc::new(Mutex::new(SessionEntry {
+            model,
+            last_view: tree,
+            index,
+            seq: 0,
+            sse_tx: None,
+            msg_tx: msg_tx.clone(),
+            #[cfg(feature = "debugger")]
+            history: history_init,
+        }));
+        st.store.set(&sid, entry.clone()).await;
+
+        // The admission slot for this driver (reserved by the Cold/None arm
+        // above); its Drop decrements session_count when the driver exits.
+        let slot = SessionSlot {
+            count: st.session_count.clone(),
+        };
+        // Spawn the per-session driver with a WEAK entry ref (the store +
+        // any SSE connection are the strong holders) so the driver is mortal:
+        // it exits once the session is evicted and unconnected, releasing the
+        // slot. The local strong `entry` drops at this handler's return,
+        // leaving the store (+ future SSE) as the only strong holders.
+        tokio::spawn(drive_session(
+            Arc::downgrade(&entry),
+            msg_rx,
+            msg_tx.clone(),
+            st.update.clone(),
+            st.view.clone(),
+            st.subs.clone(),
+            st.store.clone(),
+            sid.clone(),
+            slot,
+        ));
+        // Fire init's Cmd into the loop (None for a cold-restored session).
+        run_cmd(cmd0, &msg_tx, &sid);
+
+        #[cfg(feature = "debugger")]
+        {
+            let base = web_base_path();
+            let overlay = crate::debugger::server::overlay_html(&[], 0, &base);
+            return page_response_with_overlay(&sid, &body, &overlay, &csrf_tok, &headers);
+        }
+        #[cfg(not(feature = "debugger"))]
+        page_response(&sid, &body, &csrf_tok, &headers)
+    }
+
+    // ── GET /_ipe/sse ─────────────────────────────────────────────────
+    pub(super) async fn sse_handler<Model, Msg, FInit, FUpdate, FView, FSubs>(
+        State(st): State<WebState<Model, Msg, FInit, FUpdate, FView, FSubs>>,
+        axum::extract::Query(qs): axum::extract::Query<std::collections::HashMap<String, String>>,
+        headers: axum::http::HeaderMap,
+    ) -> Response
+    where
+        Model: Clone + Send + 'static,
+        Msg: Clone + Send + 'static,
+        FInit: Send + Sync + 'static,
+        FUpdate: Send + Sync + 'static,
+        FView: Fn(Model) -> Html<Msg> + Send + Sync + 'static,
+        FSubs: Send + Sync + 'static,
+    {
+        let sid = sid_from_cookie(&headers);
+        let entry = match &sid {
+            Some(s) => match st.store.get(s).await {
+                Some(store::StoreHit::Web(h)) => Some(h),
+                _ => None,
+            },
+            None => None,
+        };
+        let entry = match entry {
+            Some(e) => e,
+            // X-Ipê-Web: 1 lets the client distinguish a genuine session-lost
+            // 404 (reload to recover) from a wedged proxy (client.js probes for
+            // exactly this header — l1481/l1530).
+            None => {
+                return (
+                    StatusCode::NOT_FOUND,
+                    [(axum::http::HeaderName::from_static("x-ipe-web"), "1")],
+                    SESSION_LOST_BODY,
+                )
+                    .into_response();
+            }
+        };
+
+        // Reconnect reconciliation: the client sends
+        // `?path=<encodeURIComponent(location.pathname)>` on every (re)open,
+        // so after a bfcache Back/Forward, reload, or full-page navigation the
+        // server knows which URL the browser is actually displaying.
+        //
+        // If the path param is present AND matches a declared route, apply
+        // `route_resolver` to reconcile the model's page to that URL before the
+        // resync render — preventing the stale-page bounce where the server's
+        // model still thinks the user is on page B while the browser has
+        // navigated back to page A.
+        //
+        // Absent param (older cached client) or an unroutable path (browser
+        // noise, unknown URL) falls through to the current behaviour unchanged.
+        // Idempotent when the tab is already on the page its URL names: the
+        // resolver applied to the already-matching route is a no-op.
+        //
+        // Sub-app base-path trimming: the client sends the raw
+        // `location.pathname` which includes any reverse-proxy prefix; strip the
+        // base before matching so mounted sub-apps reconcile against their
+        // own route table, not the root path.
+        if let Some(raw_path) = qs.get("path") {
+            // Sanitise: accept only paths (must start with `/`), reject anything
+            // with `?` or `#` to avoid confusing the route matcher with query
+            // strings or fragments the client should not be sending here.
+            let client_path = raw_path.trim();
+            let is_valid_path = client_path.starts_with('/')
+                && !client_path.contains('?')
+                && !client_path.contains('#');
+            if is_valid_path {
+                let base = web_base_path();
+                // Strip the sub-app base prefix so the remaining path is
+                // root-relative within this app's own route table.
+                let route_path = if base.is_empty() {
+                    client_path
+                } else {
+                    client_path.strip_prefix(&base).unwrap_or(client_path)
+                };
+                // Only reconcile when the path matches a declared route —
+                // unknown paths (404 territory) fall through unchanged.
+                if (st.route_matched)(route_path) {
+                    let mut g = entry.lock().unwrap_or_else(|e| e.into_inner());
+                    g.model = (st.route_resolver)(g.model.clone(), route_path);
+                    // Keep last_view in sync with the reconciled model so the
+                    // resync render below reflects the correct page. The tree
+                    // MUST carry ipe-ids: the resync frame replaces the whole
+                    // DOM on the client, and an unstamped tree renders every
+                    // event element without `ipe-id`/`data-ipe-hid`, so each
+                    // click posts an empty handlerId the server can't resolve.
+                    // Stamp + rebuild the handler index exactly as the page and
+                    // update render paths do, so ids stay consistent across all
+                    // three render sites.
+                    let mut tree = (st.view)(g.model.clone());
+                    assign_ipe_ids(&mut tree, "r");
+                    style_inject::apply_style_injections(&mut tree);
+                    g.index = build_index(&tree);
+                    g.last_view = tree;
+                }
+            }
+        }
+
+        let (tx, rx) = sse::channel();
+        {
+            entry.lock().unwrap_or_else(|e| e.into_inner()).sse_tx = Some(tx.clone());
+        }
+
+        // Bind this session's `Ipe.Js` outbound port sink to THIS SSE
+        // connection: every `js_send` whose origin is this sid is forwarded to
+        // the browser as an `event: port` frame over the same stream that
+        // carries DOM patches (mirroring how the custom-element served-widget
+        // transport delivers per-session). The sink is keyed by sid in the port
+        // registry, so a frame can only ever reach the session that produced it
+        // — never another session's stream. `try_send` is non-blocking (this
+        // sink runs on the synchronous Cmd-dispatch path): a full SSE buffer
+        // drops the one frame rather than blocking the dispatch loop, the same
+        // fire-and-forget contract the port carries client-side.
+        #[cfg(all(feature = "json", feature = "tokio"))]
+        if let Some(port_sid) = sid.as_deref().and_then(crate::js_port::SessionId::parse) {
+            let port_tx = tx.clone();
+            crate::js_port::register_out_sink_for(
+                &port_sid,
+                std::sync::Arc::new(move |encoded: &str| {
+                    let _ = port_tx.try_send(SsePatch(sse::frame("port", encoded)));
+                }),
+            );
+        }
+
+        // Metrics (Go parity: ipe_web_sse_connections_total /
+        // ipe_web_sessions_active). Count the connection and mark the session
+        // active; the gauge is decremented when the response body stream is
+        // dropped on disconnect (the SessionGauge guard below).
+        crate::telemetry::metric_inc("ipe_web_sse_connections_total", &[], 1);
+        crate::telemetry::metric_add_gauge("ipe_web_sessions_active", &[], 1);
+
+        // Immediate hello + ~2KB proxy-buffer padding comment, then a 15s
+        // heartbeat keepalive (Go parity: live.go SSE handshake).
+        let _ = tx
+            .send(SsePatch(format!(": {}\n\n", " ".repeat(2048))))
+            .await;
+        // Go-parity hello payload (live.go ~5486): `{"v":1,"sid":...,"ts":<ms>}`.
+        // Reaching here means `entry` exists ⇒ the cookie sid was a live session,
+        // so `sid` is Some; the impossible None degrades to an empty sid (the
+        // client already holds its sid via window.__IPE_SID — the body is
+        // confirmatory). The sid is hex (new_sid) ⇒ JSON-safe without escaping.
+        let hello_sid = sid.as_deref().unwrap_or("");
+        let hello_ts = chrono::Utc::now().timestamp_millis();
+        let _ = tx
+            .send(SsePatch(sse::frame(
+                "hello",
+                &format!("{{\"v\":1,\"sid\":\"{hello_sid}\",\"ts\":{hello_ts}}}"),
+            )))
+            .await;
+
+        // Reconnect-resync (Go parity: handleSSE full-body frame, live.go:5498).
+        // A session restored from the store on a cold hit — or any process
+        // restart / `ipe watch` rebuild / redeploy paired with a persistent
+        // store — has no live subscriptions from the previous process, so
+        // nothing pushes until the next user Msg. Render the current view once
+        // and ship it as a full-body `event: patch` frame; the client consumes
+        // `{seq, body}` → __ipePatch full replace (client.js:1318). No globalSeq
+        // field → the client's broadcast-dedup guard (globalSeq>0) can never
+        // drop this authoritative, idempotent frame. Bump seq under the same
+        // lock the event path uses so it stays monotonic vs later patches; drop
+        // the guard before the await (never hold a std Mutex across .await).
+        //
+        // When the reconnect reconciliation above ran, the model and last_view
+        // were already updated; the render here picks up the reconciled state.
+        let resync = {
+            let mut g = entry.lock().unwrap_or_else(|e| e.into_inner());
+            g.seq += 1;
+            let html = render_html(&g.last_view);
+            serde_json::json!({ "seq": g.seq, "body": html }).to_string()
+        };
+        let _ = tx.send(SsePatch(sse::frame("patch", &resync))).await;
+        {
+            let tx = tx.clone();
+            tokio::spawn(async move {
+                loop {
+                    tokio::time::sleep(std::time::Duration::from_secs(15)).await;
+                    if tx
+                        .send(SsePatch(sse::frame("heartbeat", "{}")))
+                        .await
+                        .is_err()
+                    {
+                        break;
+                    }
+                }
+            });
+        }
+
+        // Drop guard tied to the stream lifetime: when the client disconnects
+        // (axum drops the response body) or the channel closes, the unfold
+        // state — and this guard — drops, decrementing the active-sessions
+        // gauge exactly once.
+        struct SessionGauge;
+        impl Drop for SessionGauge {
+            fn drop(&mut self) {
+                crate::telemetry::metric_add_gauge("ipe_web_sessions_active", &[], -1);
+            }
+        }
+        // Pin the STRONG entry Arc into the stream state for the connection's
+        // whole life. This is load-bearing: the driver now holds only a Weak
+        // ref, so without this an idle-but-SSE-connected (watch-only) session
+        // — one receiving Cmd.publish / Sub.every broadcasts but sending no
+        // user Msgs, hence never written-through to refresh store last-seen —
+        // would be TTL-evicted, its last strong ref dropped, and its driver
+        // would exit mid-stream. Holding the strong Arc here keeps it (and its
+        // driver) alive exactly as long as the client stays connected; on
+        // disconnect axum drops the body → this Arc releases.
+        let body_stream = futures_util::stream::unfold(
+            (rx, SessionGauge, entry),
+            |(mut rx, guard, entry)| async move {
+                rx.recv().await.map(|SsePatch(s)| {
+                    (
+                        Ok::<_, std::io::Error>(axum::body::Bytes::from(s)),
+                        (rx, guard, entry),
+                    )
+                })
+            },
+        );
+        match Response::builder()
+            .status(StatusCode::OK)
+            .header(axum::http::header::CONTENT_TYPE, "text/event-stream")
+            .header(axum::http::header::CACHE_CONTROL, "no-cache")
+            .header("x-accel-buffering", "no")
+            .body(axum::body::Body::from_stream(body_stream))
+        {
+            Ok(r) => r.into_response(),
+            // Headers/status are all literals, so this never fails; total
+            // fallback per the no-runtime-errors rule.
+            Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+        }
+    }
+
+    // ── POST /_ipe/event ──────────────────────────────────────────────
+    pub(super) async fn event_handler<Model, Msg, FInit, FUpdate, FView, FSubs>(
+        State(st): State<WebState<Model, Msg, FInit, FUpdate, FView, FSubs>>,
+        headers: axum::http::HeaderMap,
+        body: axum::body::Bytes,
+    ) -> Response
+    where
+        Model: Clone + Send + 'static,
+        Msg: Clone + Send + 'static,
+        FInit: Send + Sync + 'static,
+        FUpdate: Send + Sync + 'static,
+        FView: Send + Sync + 'static,
+        FSubs: Send + Sync + 'static,
+    {
+        let parsed: EventBody = match serde_json::from_slice(&body) {
+            Ok(b) => b,
+            Err(_) => return (StatusCode::BAD_REQUEST, "bad body").into_response(),
+        };
+        // Authenticate the target session by the COOKIE sid ONLY — never the
+        // body-supplied `sessionId`. Trusting a body id lets a caller act on
+        // ANY session by naming it (an auth-bypass that, paired with a
+        // guessable sid, was a hijack path). A legitimate browser always has
+        // the HttpOnly session cookie by the time an event fires (the page
+        // GET set it). No cookie → no session.
+        let _ = &parsed.session_id; // body field retained for wire-compat; not trusted for auth
+        let sid = match sid_from_cookie(&headers) {
+            Some(s) => s,
+            None => {
+                return (
+                    StatusCode::NOT_FOUND,
+                    [(axum::http::HeaderName::from_static("x-ipe-web"), "1")],
+                    SESSION_LOST_BODY,
+                )
+                    .into_response();
+            }
+        };
+        let entry = match st.store.get(&sid).await {
+            Some(store::StoreHit::Web(h)) => Some(h),
+            _ => None,
+        };
+        let entry = match entry {
+            Some(e) => e,
+            // X-Ipê-Web: 1 lets the client distinguish a genuine session-lost
+            // 404 (reload to recover) from a wedged proxy (client.js probes for
+            // exactly this header — l1481/l1530).
+            None => {
+                return (
+                    StatusCode::NOT_FOUND,
+                    [(axum::http::HeaderName::from_static("x-ipe-web"), "1")],
+                    SESSION_LOST_BODY,
+                )
+                    .into_response();
+            }
+        };
+
+        let hid = if !parsed.handler_id.is_empty() {
+            parsed.handler_id
+        } else {
+            parsed.id
+        };
+        // Event name: explicit `event` override, else the `msg` marker
+        // (render_html sets it to the event name), else default to click.
+        let event = if !parsed.event.is_empty() {
+            parsed.event
+        } else if !parsed.msg.is_empty() {
+            parsed.msg
+        } else {
+            "click".to_string()
+        };
+
+        let (msg, seq) = {
+            let e = entry.lock().unwrap_or_else(|e| e.into_inner());
+            if event == "submit" {
+                // args[0] is the form-data object {name: value, …}.
+                let fd: FormData = parsed
+                    .args
+                    .first()
+                    .and_then(|v| v.as_object())
+                    .map(|o| {
+                        o.iter()
+                            .map(|(k, v)| (k.clone(), value_to_string(v)))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                (e.index.resolve_form(&hid, &event, fd), e.seq)
+            } else {
+                let args: Vec<String> = parsed.args.iter().map(value_to_string).collect();
+                (e.index.resolve(&hid, &event, &args), e.seq)
+            }
+        };
+        if let Some(m) = msg {
+            let tx = {
+                entry
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .msg_tx
+                    .clone()
+            };
+            // try_send is non-blocking; on a full queue drop the event and
+            // return 429 so the client can back off (Go parity: Go
+            // serialises under sess.mu and drops the handler if the
+            // session is gone; no client-side queue bound to match — we
+            // choose 429 over silent drop so the browser retry loop fires).
+            if let Err(e) = tx.try_send(m) {
+                eprintln!(
+                    "[ipe.live] event_handler: session msg queue full or closed; dropping event ({})",
+                    e
+                );
+                return (StatusCode::TOO_MANY_REQUESTS, "event queue full").into_response();
+            }
+        }
+        // Real patches flow over SSE from the driver; ack with an empty list.
+        // X-Ipê-Web: 1 marks this as a genuine Ipe.Web response (the client
+        // treats a 200 WITHOUT it as a wedged-proxy signal).
+        (
+            StatusCode::OK,
+            [
+                (axum::http::header::CONTENT_TYPE, "application/json"),
+                (axum::http::HeaderName::from_static("x-ipe-web"), "1"),
+            ],
+            format!("{{\"seq\":{seq},\"patches\":[]}}"),
+        )
+            .into_response()
+    }
+
+    // ── POST /_ipe/port ───────────────────────────────────────────────
+    // The `Ipe.Js` inbound port route: a browser→server port frame. Runs the
+    // SAME trust gate as `/_ipe/event` — the CSRF middleware validates the
+    // mutating POST, and the target session is authenticated by the session
+    // COOKIE sid ONLY (never a body-supplied id), so a caller cannot address
+    // another session's port by naming it. The raw payload is checked
+    // fail-closed through the bounded seal boundary (byte + depth budget);
+    // an oversized/malformed/over-nested frame is DROPPED WHOLE here, and only
+    // an accepted frame is delivered to THIS session's inbound channel — never
+    // any other session's. The per-subscriber typed seal decode still runs in
+    // `js_subscribe`, so a well-formed-but-wrong-type frame is dropped there.
+    pub(super) async fn port_handler<Model, Msg, FInit, FUpdate, FView, FSubs>(
+        State(st): State<WebState<Model, Msg, FInit, FUpdate, FView, FSubs>>,
+        headers: axum::http::HeaderMap,
+        body: axum::body::Bytes,
+    ) -> Response
+    where
+        Model: Clone + Send + 'static,
+        Msg: Clone + Send + 'static,
+        FInit: Send + Sync + 'static,
+        FUpdate: Send + Sync + 'static,
+        FView: Send + Sync + 'static,
+        FSubs: Send + Sync + 'static,
+    {
+        #[derive(serde::Deserialize)]
+        struct PortBody {
+            /// The raw seal wire string the browser sent (`JSON.stringify` of
+            /// the developer's port value). Decoded fail-closed downstream.
+            #[serde(default)]
+            payload: String,
+        }
+        let parsed: PortBody = match serde_json::from_slice(&body) {
+            Ok(b) => b,
+            Err(_) => return (StatusCode::BAD_REQUEST, "bad body").into_response(),
+        };
+        // Authenticate by the COOKIE sid ONLY (same rule as event_handler) —
+        // never trust a body-supplied session id.
+        let sid = match sid_from_cookie(&headers) {
+            Some(s) => s,
+            None => {
+                return (
+                    StatusCode::NOT_FOUND,
+                    [(axum::http::HeaderName::from_static("x-ipe-web"), "1")],
+                    SESSION_LOST_BODY,
+                )
+                    .into_response();
+            }
+        };
+        // The session must exist (a live Web session) for the frame to have a
+        // destination; an unknown sid is the same session-lost 404 the event
+        // path returns.
+        match st.store.get(&sid).await {
+            Some(store::StoreHit::Web(_)) => {}
+            _ => {
+                return (
+                    StatusCode::NOT_FOUND,
+                    [(axum::http::HeaderName::from_static("x-ipe-web"), "1")],
+                    SESSION_LOST_BODY,
+                )
+                    .into_response();
+            }
+        }
+        // Fail-closed boundary gate: reject an oversized / malformed /
+        // over-nested frame BEFORE delivering it. A rejected frame is dropped
+        // whole (200 ack, nothing delivered) — the client is never trusted, and
+        // a bad frame is not an error the browser must retry.
+        #[cfg(all(feature = "json", feature = "tokio"))]
+        {
+            use crate::seal_codec::{SealLimits, seal_boundary_check};
+            if seal_boundary_check(&parsed.payload, SealLimits::default()).is_ok() {
+                // Parse at the delivery boundary: an invalid/empty sid has no
+                // registry entry and cannot be represented as a SessionId.
+                if let Some(port_sid) = crate::js_port::SessionId::parse(&sid) {
+                    crate::js_port::deliver_inbound_for(&port_sid, parsed.payload);
+                }
+            }
+        }
+        (
+            StatusCode::OK,
+            [
+                (axum::http::header::CONTENT_TYPE, "application/json"),
+                (axum::http::HeaderName::from_static("x-ipe-web"), "1"),
+            ],
+            "{\"ok\":true}",
+        )
+            .into_response()
+    }
+
+    // ── POST /_ipe/debug/scrub ────────────────────────────────────────
+    // Session-scoped time-travel scrub endpoint. Registered only when the
+    // `debugger` feature is active. The CSRF middleware (wrapped around
+    // the whole router) already validates `X-Ipe-Csrf` before this handler
+    // runs; the handler itself only needs to authenticate the session.
+    //
+    // Request body: `{"index": N}` — reconstruct model at retained step N.
+    // Response: `{"body": "<html>"}` — the view rendered at step N.
+    // Out-of-range N is clamped to the last retained step. No Cmd is fired.
+    // The recorded history is never mutated — reconstruct is a pure re-fold.
+    #[cfg(feature = "debugger")]
+    pub(super) async fn scrub_handler<Model, Msg, FInit, FUpdate, FView, FSubs>(
+        State(st): State<WebState<Model, Msg, FInit, FUpdate, FView, FSubs>>,
+        headers: axum::http::HeaderMap,
+        axum::Json(body): axum::Json<serde_json::Value>,
+    ) -> axum::response::Response
+    where
+        Model: Clone + PartialEq + Send + 'static,
+        Msg: Clone + Send + std::fmt::Debug + 'static,
+        FInit: Send + Sync + 'static,
+        FUpdate: Fn(Msg, Model) -> (Model, crate::tea::IpeCmd<Msg>) + Send + Sync + 'static,
+        FView: Fn(Model) -> crate::html::Html<Msg> + Send + Sync + 'static,
+        FSubs: Send + Sync + 'static,
+    {
+        use axum::response::IntoResponse;
+        let sid = match sid_from_cookie(&headers) {
+            Some(s) => s,
+            None => {
+                return (axum::http::StatusCode::UNAUTHORIZED, "no session").into_response();
+            }
+        };
+        let handle = match st.store.get(&sid).await {
+            Some(store::StoreHit::Web(h)) => h,
+            _ => {
+                return (axum::http::StatusCode::NOT_FOUND, "session not found").into_response();
+            }
+        };
+        let requested_n = body
+            .get("index")
+            .and_then(|v| v.as_u64())
+            .map(|n| n as usize)
+            .unwrap_or(0);
+        let model_at_n = {
+            let e = handle.lock().unwrap_or_else(|e| e.into_inner());
+            let total = e.history.len();
+            let n = requested_n.min(total.saturating_sub(1));
+            e.history.reconstruct(n, &|m, mdl| (*st.update)(m, mdl))
+        };
+        let model = match model_at_n {
+            Some(m) => m,
+            None => {
+                return (axum::http::StatusCode::NOT_FOUND, "step out of range").into_response();
+            }
+        };
+        let mut tree = (st.view)(model);
+        assign_ipe_ids(&mut tree, "r");
+        style_inject::apply_style_injections(&mut tree);
+        let html_body = render_html(&tree);
+        let resp_json = serde_json::json!({ "body": html_body });
+        (
+            axum::http::StatusCode::OK,
+            [(axum::http::header::CONTENT_TYPE, "application/json")],
+            resp_json.to_string(),
+        )
+            .into_response()
+    }
+}
+
 /// Shared server setup for `web_app` / `web_app_routed`: nested HTTP
 /// handlers (`page` / `sse_handler` / `event_handler`), router + bind/serve.
 /// The only per-entry difference (the `route_resolver`) lives on `state`.
@@ -1731,1033 +2513,342 @@ where
     FView: Fn(Model) -> Html<Msg> + Send + Sync + 'static,
     FSubs: Fn(Model) -> IpeSub<Msg> + Send + Sync + 'static,
 {
+    // Background TTL eviction (Go memoryStore.cleanupLoop parity): sweep
+    // idle-expired sessions every 60 s. Persistent backends also prune their
+    // checkpoint table in `sweep`.
+    {
+        let store = state.store.clone();
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(std::time::Duration::from_secs(60));
+            loop {
+                tick.tick().await;
+                store.sweep().await;
+            }
+        });
+    }
+
+    // Enable the telemetry SQLite spill when
+    // IPE_CONSOLE_DB_PATH is set — the console child reads it via the
+    // hub kernels. db-gated; a no-op for live-without-db apps. Enabled
+    // BEFORE the console child spawns so early telemetry lands in the spill
+    // the child will read.
+    #[cfg(feature = "db")]
+    crate::telemetry_spill::enable_from_env().await;
+
+    // Observability export pipelines: federation push to a parent ingest
+    // (IPE_PARENT_URL) and remote-hub OTLP push (IPE_CONSOLE_HUB).
+    // Both env-gated + inert by default. Only available when `http_client`
+    // is active: these pipelines make outbound HTTP calls via reqwest.
+    #[cfg(feature = "http_client")]
+    push_exporter::enable_from_env().await;
+    #[cfg(feature = "http_client")]
+    hub_exporter::enable_from_env().await;
+
+    // Console precedence: try the pre-built console child +
+    // reverse-proxy; fall back to the in-process console when the binary is
+    // absent / spawn fails / readiness times out / the gate is closed.
+    // Decided HERE (before the router is built) so both the proxy routes and
+    // the in-process console routes sit under the same `track` middleware,
+    // and the two never collide on `/_ipe/console`.
+    // Only when `http_client` is active: the console proxy uses reqwest for
+    // the reverse-proxy path. Without it, always use the in-process console.
+    #[cfg(feature = "http_client")]
+    let use_console_proxy = console_proxy::ensure_console_proxy().await;
+
+    // Cloned for the shutdown path's dev-only reload push — the router's
+    // `.with_state(state)` takes ownership of `state` below.
+    let shutdown_store = state.store.clone();
+
+    #[cfg(feature = "http_client")]
+    let console_proxy_flag = use_console_proxy;
+    #[cfg(not(feature = "http_client"))]
+    let console_proxy_flag = false;
+
+    let app =
+        build_web_router::<Model, Msg, FInit, FUpdate, FView, FSubs>(state, console_proxy_flag);
+
+    // IPE_WEB_PORT (deprecated alias: IPE_LIVE_PORT); default 8000.
+    let port: i64 = crate::system::read_env_var_renamed("IPE_WEB_PORT", "IPE_LIVE_PORT")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(8000);
+    let addr = format!("0.0.0.0:{port}");
+    let listener = match tokio::net::TcpListener::bind(&addr).await {
+        Ok(l) => l,
+        Err(e) => return IpeResult::Err(format!("Web.app: bind {addr}: {e}").into()),
+    };
+    // Bind-address line (stderr, Rust-specific — carries the 0.0.0.0 bind).
+    eprintln!("[ipe.web] listening on http://{addr}");
+    // Go-parity user-facing line (stdout, `fmt.Printf("Ipe.Web listening on
+    // :%d\n", port)` — live.go:3546).
+    println!("Ipe.Web listening on :{port}");
+    // Graceful shutdown (Go parity — live.go:3503): trap SIGINT/SIGTERM,
+    // print the shutdown line, drain in-flight requests, and return cleanly so
+    // the IpeTask resolves Ok → the generated entry exits 0 (NOT 130). A
+    // SECOND signal force-exits 130 via the watchdog inside web_shutdown_signal.
+    match axum::serve(listener, app)
+        .with_graceful_shutdown(web_shutdown_signal(shutdown_store))
+        .await
+    {
+        Ok(()) => ok_res(()),
+        Err(e) => IpeResult::Err(format!("Web.app: serve: {e}").into()),
+    }
+}
+
+/// Assemble the fully-layered axum `Router` for a live web app WITHOUT
+/// binding a listener. `serve_web` binds this router on the standalone port;
+/// the mount path (`Server.mountApp`) nests the same router under a path
+/// prefix on the shared server port. `use_console_proxy` is decided by the
+/// caller so this stays feature-clean (the caller passes `false` when
+/// `http_client` is off).
+pub(crate) fn build_web_router<Model, Msg, FInit, FUpdate, FView, FSubs>(
+    state: WebState<Model, Msg, FInit, FUpdate, FView, FSubs>,
+    // Read only when `http_client` is active (the console-proxy arm); the
+    // in-process console path ignores it, so it is unused without that feature.
+    #[cfg_attr(not(feature = "http_client"), allow(unused_variables))] use_console_proxy: bool,
+) -> axum::Router
+where
+    Model: Clone + PartialEq + Send + 'static,
+    Msg: Clone + Send + std::fmt::Debug + crate::stringify::IpeStringify + 'static,
+    FInit: Fn(req::WebReq) -> (Model, IpeCmd<Msg>) + Send + Sync + 'static,
+    FUpdate: Fn(Msg, Model) -> (Model, IpeCmd<Msg>) + Send + Sync + 'static,
+    FView: Fn(Model) -> Html<Msg> + Send + Sync + 'static,
+    FSubs: Fn(Model) -> IpeSub<Msg> + Send + Sync + 'static,
+{
     use axum::Router;
-    use axum::extract::State;
-    use axum::http::StatusCode;
-    use axum::response::{IntoResponse, Response};
     use axum::routing::{get, post};
 
-    {
-        // ── GET page (root + any path) ────────────────────────────────────
-        async fn page<Model, Msg, FInit, FUpdate, FView, FSubs>(
-            State(st): State<WebState<Model, Msg, FInit, FUpdate, FView, FSubs>>,
-            method: axum::http::Method,
-            uri: axum::http::Uri,
-            headers: axum::http::HeaderMap,
-        ) -> Response
-        where
-            Model: Clone + PartialEq + Send + 'static,
-            // Debug: the GET handler creates a session and spawns drive_session,
-            // which needs the bound for the ipe_web_msg_seconds{name} label.
-            // IpeStringify: the debugger overlay renders message labels via
-            // `ipe_show` so `Secret`-bearing fields are structurally redacted.
-            // Generated Msg types always satisfy both bounds.
-            Msg: Clone + Send + std::fmt::Debug + crate::stringify::IpeStringify + 'static,
-            FInit: Fn(req::WebReq) -> (Model, IpeCmd<Msg>) + Send + Sync + 'static,
-            FUpdate: Fn(Msg, Model) -> (Model, IpeCmd<Msg>) + Send + Sync + 'static,
-            FView: Fn(Model) -> Html<Msg> + Send + Sync + 'static,
-            FSubs: Fn(Model) -> IpeSub<Msg> + Send + Sync + 'static,
-        {
-            // Cookie-based session lifecycle (Go store.Get on every GET):
-            //   * Web hit  → reuse the in-process session; re-apply routing for
-            //                 this GET's path + re-render (no new driver).
-            //   * Cold hit  → a persisted model (post-restart / different replica);
-            //                 hydrate a fresh driver seeded with it (no init).
-            //   * miss      → init a new session.
-            let cookie_sid = sid_from_cookie(&headers);
-            // CSRF double-submit token: reuse the browser's existing well-formed
-            // per-app CSRF cookie (so a reload keeps the same token), else mint a
-            // fresh one. `page_response` sets the cookie + injects the value into
-            // the page JS; the client echoes it back in the `X-Ipê-Csrf` header.
-            let csrf_tok =
-                csrf::cookie_value(&headers, &csrf::csrf_cookie_name_for(&web_base_path()))
-                    .filter(|t| csrf::token_is_well_formed(t))
-                    .unwrap_or_else(csrf::gen_token);
+    // Body-size cap on /_ipe/event: mirrors Go's http.MaxBytesReader
+    // (runtime-go/rt/live.go:3915). axum's DefaultBodyLimit applies
+    // before the handler sees the bytes, so an over-sized payload is
+    // rejected at the extract layer with 413 Payload Too Large.
+    let event_route = post(handlers::event_handler::<Model, Msg, FInit, FUpdate, FView, FSubs>)
+        .layer(axum::extract::DefaultBodyLimit::max(web_max_body_bytes()));
 
-            // Go parity (handleInitial): unrouted browser-noise paths 404 (or
-            // serve from the static root) BEFORE any session work — they must
-            // never run `init` (double-init race against the real `GET /`) and
-            // never touch an existing session (see the routed guards below).
-            let routed = (st.route_matched)(uri.path());
-            if !routed && is_browser_noise_path(uri.path()) {
-                if let Some(resp) = serve_noise_from_static_root(uri.path()).await {
-                    return resp;
-                }
-                return (StatusCode::NOT_FOUND, "404 page not found").into_response();
-            }
+    // Inbound `Ipe.Js` port route: same body-size cap as `/_ipe/event`, so an
+    // over-sized port frame is rejected at the extract layer (413) before the
+    // handler's own seal-boundary budget even runs.
+    let port_route = post(handlers::port_handler::<Model, Msg, FInit, FUpdate, FView, FSubs>)
+        .layer(axum::extract::DefaultBodyLimit::max(web_max_body_bytes()));
 
-            let hit = match cookie_sid.as_ref() {
-                Some(s) => st.store.get(s).await.map(|h| (s.clone(), h)),
-                None => None,
-            };
-
-            // Go parity (handleInitial): an unrouted GET against an EXISTING
-            // session (live or persisted) 404s WITHOUT touching it. Re-routing
-            // here would write the `notFound` page into the model and rebuild
-            // the handler index from that view, orphaning every handler on the
-            // page the browser is still showing — the next event POST (form
-            // submit, click, input) would silently resolve to nothing.
-            if !routed && hit.is_some() {
-                return (StatusCode::NOT_FOUND, "404 page not found").into_response();
-            }
-
-            let (sid, model, cmd0) = match hit {
-                Some((sid, store::StoreHit::Web(handle))) => {
-                    // sid is carried from the cookie lookup; the "hit but no sid"
-                    // state is unrepresentable.
-                    #[cfg_attr(not(feature = "debugger"), allow(unused_variables))]
-                    let (body, history_labels, history_total) = {
-                        let mut e = handle.lock().unwrap_or_else(|e| e.into_inner());
-                        e.model = (st.route_resolver)(e.model.clone(), uri.path());
-                        let mut tree = (st.view)(e.model.clone());
-                        assign_ipe_ids(&mut tree, "r");
-                        style_inject::apply_style_injections(&mut tree);
-                        e.index = build_index(&tree);
-                        e.last_view = tree.clone();
-                        let body = render_html(&tree);
-                        #[cfg(feature = "debugger")]
-                        let labels: Vec<String> = e.history.labels();
-                        #[cfg(not(feature = "debugger"))]
-                        let labels: Vec<String> = Vec::new();
-                        let total = labels.len();
-                        (body, labels, total)
-                    };
-                    st.store.set(&sid, handle).await; // touch last-seen
-                    #[cfg(feature = "debugger")]
-                    {
-                        let base = web_base_path();
-                        let overlay = crate::debugger::server::overlay_html(
-                            &history_labels,
-                            history_total,
-                            &base,
-                        );
-                        return page_response_with_overlay(
-                            &sid, &body, &overlay, &csrf_tok, &headers,
-                        );
-                    }
-                    #[cfg(not(feature = "debugger"))]
-                    return page_response(&sid, &body, &csrf_tok, &headers);
-                }
-                Some((sid, store::StoreHit::Cold(m))) => {
-                    // A returning user with a valid sid cookie → not new attack
-                    // volume, so NOT rejected; but count its driver so the slot it
-                    // gets below is paired (decremented on the driver's exit).
-                    st.session_count.fetch_add(1, Ordering::SeqCst);
-                    (sid, (st.route_resolver)(m, uri.path()), IpeCmd::None)
-                }
-                None => {
-                    // Admission control (cookieless = brand-new session = the
-                    // attack surface). Reserve a slot atomically: fetch_add-then-test
-                    // avoids the load-then-add TOCTOU where N concurrent GETs all
-                    // pass at cap-1. ALWAYS reserve (so the slot built below is
-                    // paired 1:1 with a decrement); only the rejection is gated on
-                    // cap>0 (0 = unlimited opt-out). Over cap → roll back + 503.
-                    let cap = max_sessions();
-                    let reserved = st.session_count.fetch_add(1, Ordering::SeqCst);
-                    if cap > 0 && reserved >= cap {
-                        st.session_count.fetch_sub(1, Ordering::SeqCst);
-                        return (
-                            StatusCode::SERVICE_UNAVAILABLE,
-                            [(axum::http::header::RETRY_AFTER, "2")],
-                            "server at session capacity",
-                        )
-                            .into_response();
-                    }
-                    // Build the request context (params from routing — empty when
-                    // unrouted) and init a fresh model. The param_resolver is
-                    // model-independent, breaking the init↔routing cycle.
-                    let params = (st.param_resolver)(uri.path());
-                    let req = req::web_req(&method, &uri, &headers, params);
-                    let (m, c) = (st.init)(req);
-                    // Session fixation guard: a store MISS means this sid is NOT a
-                    // known session, so NEVER adopt the client-supplied cookie value
-                    // — always mint a fresh sid. (A HIT path keeps cookie_sid.)
-                    let s = new_sid();
-                    (s, (st.route_resolver)(m, uri.path()), c)
-                }
-            };
-
-            let mut tree = (st.view)(model.clone());
-            assign_ipe_ids(&mut tree, "r");
-            style_inject::apply_style_injections(&mut tree);
-            let index = build_index(&tree);
-            let body = render_html(&tree);
-
-            // Bounded per-session Msg queue: cap at 1024 to prevent a fast
-            // client from growing the queue without bound (per-session memory
-            // DoS). On overflow events are dropped with a warn (see
-            // event_handler). Go serialises dispatch under sess.mu instead of
-            // a channel — no Go bound to match; 1024 is far above any
-            // legitimate burst of user-driven events.
-            let (msg_tx, msg_rx) = mpsc::channel::<Msg>(1024);
-            #[cfg(feature = "debugger")]
-            let history_init = crate::debugger::RecordBuffer::new(
-                model.clone(),
-                crate::debugger::DEFAULT_HISTORY_CAP,
-            );
-            let entry = Arc::new(Mutex::new(SessionEntry {
-                model,
-                last_view: tree,
-                index,
-                seq: 0,
-                sse_tx: None,
-                msg_tx: msg_tx.clone(),
-                #[cfg(feature = "debugger")]
-                history: history_init,
-            }));
-            st.store.set(&sid, entry.clone()).await;
-
-            // The admission slot for this driver (reserved by the Cold/None arm
-            // above); its Drop decrements session_count when the driver exits.
-            let slot = SessionSlot {
-                count: st.session_count.clone(),
-            };
-            // Spawn the per-session driver with a WEAK entry ref (the store +
-            // any SSE connection are the strong holders) so the driver is mortal:
-            // it exits once the session is evicted and unconnected, releasing the
-            // slot. The local strong `entry` drops at this handler's return,
-            // leaving the store (+ future SSE) as the only strong holders.
-            tokio::spawn(drive_session(
-                Arc::downgrade(&entry),
-                msg_rx,
-                msg_tx.clone(),
-                st.update.clone(),
-                st.view.clone(),
-                st.subs.clone(),
-                st.store.clone(),
-                sid.clone(),
-                slot,
-            ));
-            // Fire init's Cmd into the loop (None for a cold-restored session).
-            run_cmd(cmd0, &msg_tx, &sid);
-
-            #[cfg(feature = "debugger")]
-            {
-                let base = web_base_path();
-                let overlay = crate::debugger::server::overlay_html(&[], 0, &base);
-                return page_response_with_overlay(&sid, &body, &overlay, &csrf_tok, &headers);
-            }
-            #[cfg(not(feature = "debugger"))]
-            page_response(&sid, &body, &csrf_tok, &headers)
-        }
-
-        // ── GET /_ipe/sse ─────────────────────────────────────────────────
-        async fn sse_handler<Model, Msg, FInit, FUpdate, FView, FSubs>(
-            State(st): State<WebState<Model, Msg, FInit, FUpdate, FView, FSubs>>,
-            axum::extract::Query(qs): axum::extract::Query<
-                std::collections::HashMap<String, String>,
-            >,
-            headers: axum::http::HeaderMap,
-        ) -> Response
-        where
-            Model: Clone + Send + 'static,
-            Msg: Clone + Send + 'static,
-            FInit: Send + Sync + 'static,
-            FUpdate: Send + Sync + 'static,
-            FView: Fn(Model) -> Html<Msg> + Send + Sync + 'static,
-            FSubs: Send + Sync + 'static,
-        {
-            let sid = sid_from_cookie(&headers);
-            let entry = match &sid {
-                Some(s) => match st.store.get(s).await {
-                    Some(store::StoreHit::Web(h)) => Some(h),
-                    _ => None,
-                },
-                None => None,
-            };
-            let entry = match entry {
-                Some(e) => e,
-                // X-Ipê-Web: 1 lets the client distinguish a genuine session-lost
-                // 404 (reload to recover) from a wedged proxy (client.js probes for
-                // exactly this header — l1481/l1530).
-                None => {
-                    return (
-                        StatusCode::NOT_FOUND,
-                        [(axum::http::HeaderName::from_static("x-ipe-web"), "1")],
-                        SESSION_LOST_BODY,
-                    )
-                        .into_response();
-                }
-            };
-
-            // Reconnect reconciliation: the client sends
-            // `?path=<encodeURIComponent(location.pathname)>` on every (re)open,
-            // so after a bfcache Back/Forward, reload, or full-page navigation the
-            // server knows which URL the browser is actually displaying.
-            //
-            // If the path param is present AND matches a declared route, apply
-            // `route_resolver` to reconcile the model's page to that URL before the
-            // resync render — preventing the stale-page bounce where the server's
-            // model still thinks the user is on page B while the browser has
-            // navigated back to page A.
-            //
-            // Absent param (older cached client) or an unroutable path (browser
-            // noise, unknown URL) falls through to the current behaviour unchanged.
-            // Idempotent when the tab is already on the page its URL names: the
-            // resolver applied to the already-matching route is a no-op.
-            //
-            // Sub-app base-path trimming: the client sends the raw
-            // `location.pathname` which includes any reverse-proxy prefix; strip the
-            // base before matching so mounted sub-apps reconcile against their
-            // own route table, not the root path.
-            if let Some(raw_path) = qs.get("path") {
-                // Sanitise: accept only paths (must start with `/`), reject anything
-                // with `?` or `#` to avoid confusing the route matcher with query
-                // strings or fragments the client should not be sending here.
-                let client_path = raw_path.trim();
-                let is_valid_path = client_path.starts_with('/')
-                    && !client_path.contains('?')
-                    && !client_path.contains('#');
-                if is_valid_path {
-                    let base = web_base_path();
-                    // Strip the sub-app base prefix so the remaining path is
-                    // root-relative within this app's own route table.
-                    let route_path = if base.is_empty() {
-                        client_path
-                    } else {
-                        client_path.strip_prefix(&base).unwrap_or(client_path)
-                    };
-                    // Only reconcile when the path matches a declared route —
-                    // unknown paths (404 territory) fall through unchanged.
-                    if (st.route_matched)(route_path) {
-                        let mut g = entry.lock().unwrap_or_else(|e| e.into_inner());
-                        g.model = (st.route_resolver)(g.model.clone(), route_path);
-                        // Keep last_view in sync with the reconciled model so the
-                        // resync render below reflects the correct page. The tree
-                        // MUST carry ipe-ids: the resync frame replaces the whole
-                        // DOM on the client, and an unstamped tree renders every
-                        // event element without `ipe-id`/`data-ipe-hid`, so each
-                        // click posts an empty handlerId the server can't resolve.
-                        // Stamp + rebuild the handler index exactly as the page and
-                        // update render paths do, so ids stay consistent across all
-                        // three render sites.
-                        let mut tree = (st.view)(g.model.clone());
-                        assign_ipe_ids(&mut tree, "r");
-                        style_inject::apply_style_injections(&mut tree);
-                        g.index = build_index(&tree);
-                        g.last_view = tree;
-                    }
-                }
-            }
-
-            let (tx, rx) = sse::channel();
-            {
-                entry.lock().unwrap_or_else(|e| e.into_inner()).sse_tx = Some(tx.clone());
-            }
-
-            // Bind this session's `Ipe.Js` outbound port sink to THIS SSE
-            // connection: every `js_send` whose origin is this sid is forwarded to
-            // the browser as an `event: port` frame over the same stream that
-            // carries DOM patches (mirroring how the custom-element served-widget
-            // transport delivers per-session). The sink is keyed by sid in the port
-            // registry, so a frame can only ever reach the session that produced it
-            // — never another session's stream. `try_send` is non-blocking (this
-            // sink runs on the synchronous Cmd-dispatch path): a full SSE buffer
-            // drops the one frame rather than blocking the dispatch loop, the same
-            // fire-and-forget contract the port carries client-side.
-            #[cfg(all(feature = "json", feature = "tokio"))]
-            if let Some(port_sid) = sid.as_deref().and_then(crate::js_port::SessionId::parse) {
-                let port_tx = tx.clone();
-                crate::js_port::register_out_sink_for(
-                    &port_sid,
-                    std::sync::Arc::new(move |encoded: &str| {
-                        let _ = port_tx.try_send(SsePatch(sse::frame("port", encoded)));
-                    }),
-                );
-            }
-
-            // Metrics (Go parity: ipe_web_sse_connections_total /
-            // ipe_web_sessions_active). Count the connection and mark the session
-            // active; the gauge is decremented when the response body stream is
-            // dropped on disconnect (the SessionGauge guard below).
-            crate::telemetry::metric_inc("ipe_web_sse_connections_total", &[], 1);
-            crate::telemetry::metric_add_gauge("ipe_web_sessions_active", &[], 1);
-
-            // Immediate hello + ~2KB proxy-buffer padding comment, then a 15s
-            // heartbeat keepalive (Go parity: live.go SSE handshake).
-            let _ = tx
-                .send(SsePatch(format!(": {}\n\n", " ".repeat(2048))))
-                .await;
-            // Go-parity hello payload (live.go ~5486): `{"v":1,"sid":...,"ts":<ms>}`.
-            // Reaching here means `entry` exists ⇒ the cookie sid was a live session,
-            // so `sid` is Some; the impossible None degrades to an empty sid (the
-            // client already holds its sid via window.__IPE_SID — the body is
-            // confirmatory). The sid is hex (new_sid) ⇒ JSON-safe without escaping.
-            let hello_sid = sid.as_deref().unwrap_or("");
-            let hello_ts = chrono::Utc::now().timestamp_millis();
-            let _ = tx
-                .send(SsePatch(sse::frame(
-                    "hello",
-                    &format!("{{\"v\":1,\"sid\":\"{hello_sid}\",\"ts\":{hello_ts}}}"),
-                )))
-                .await;
-
-            // Reconnect-resync (Go parity: handleSSE full-body frame, live.go:5498).
-            // A session restored from the store on a cold hit — or any process
-            // restart / `ipe watch` rebuild / redeploy paired with a persistent
-            // store — has no live subscriptions from the previous process, so
-            // nothing pushes until the next user Msg. Render the current view once
-            // and ship it as a full-body `event: patch` frame; the client consumes
-            // `{seq, body}` → __ipePatch full replace (client.js:1318). No globalSeq
-            // field → the client's broadcast-dedup guard (globalSeq>0) can never
-            // drop this authoritative, idempotent frame. Bump seq under the same
-            // lock the event path uses so it stays monotonic vs later patches; drop
-            // the guard before the await (never hold a std Mutex across .await).
-            //
-            // When the reconnect reconciliation above ran, the model and last_view
-            // were already updated; the render here picks up the reconciled state.
-            let resync = {
-                let mut g = entry.lock().unwrap_or_else(|e| e.into_inner());
-                g.seq += 1;
-                let html = render_html(&g.last_view);
-                serde_json::json!({ "seq": g.seq, "body": html }).to_string()
-            };
-            let _ = tx.send(SsePatch(sse::frame("patch", &resync))).await;
-            {
-                let tx = tx.clone();
-                tokio::spawn(async move {
-                    loop {
-                        tokio::time::sleep(std::time::Duration::from_secs(15)).await;
-                        if tx
-                            .send(SsePatch(sse::frame("heartbeat", "{}")))
-                            .await
-                            .is_err()
-                        {
-                            break;
-                        }
-                    }
-                });
-            }
-
-            // Drop guard tied to the stream lifetime: when the client disconnects
-            // (axum drops the response body) or the channel closes, the unfold
-            // state — and this guard — drops, decrementing the active-sessions
-            // gauge exactly once.
-            struct SessionGauge;
-            impl Drop for SessionGauge {
-                fn drop(&mut self) {
-                    crate::telemetry::metric_add_gauge("ipe_web_sessions_active", &[], -1);
-                }
-            }
-            // Pin the STRONG entry Arc into the stream state for the connection's
-            // whole life. This is load-bearing: the driver now holds only a Weak
-            // ref, so without this an idle-but-SSE-connected (watch-only) session
-            // — one receiving Cmd.publish / Sub.every broadcasts but sending no
-            // user Msgs, hence never written-through to refresh store last-seen —
-            // would be TTL-evicted, its last strong ref dropped, and its driver
-            // would exit mid-stream. Holding the strong Arc here keeps it (and its
-            // driver) alive exactly as long as the client stays connected; on
-            // disconnect axum drops the body → this Arc releases.
-            let body_stream = futures_util::stream::unfold(
-                (rx, SessionGauge, entry),
-                |(mut rx, guard, entry)| async move {
-                    rx.recv().await.map(|SsePatch(s)| {
-                        (
-                            Ok::<_, std::io::Error>(axum::body::Bytes::from(s)),
-                            (rx, guard, entry),
-                        )
-                    })
-                },
-            );
-            match Response::builder()
-                .status(StatusCode::OK)
-                .header(axum::http::header::CONTENT_TYPE, "text/event-stream")
-                .header(axum::http::header::CACHE_CONTROL, "no-cache")
-                .header("x-accel-buffering", "no")
-                .body(axum::body::Body::from_stream(body_stream))
-            {
-                Ok(r) => r.into_response(),
-                // Headers/status are all literals, so this never fails; total
-                // fallback per the no-runtime-errors rule.
-                Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
-            }
-        }
-
-        // ── POST /_ipe/event ──────────────────────────────────────────────
-        async fn event_handler<Model, Msg, FInit, FUpdate, FView, FSubs>(
-            State(st): State<WebState<Model, Msg, FInit, FUpdate, FView, FSubs>>,
-            headers: axum::http::HeaderMap,
-            body: axum::body::Bytes,
-        ) -> Response
-        where
-            Model: Clone + Send + 'static,
-            Msg: Clone + Send + 'static,
-            FInit: Send + Sync + 'static,
-            FUpdate: Send + Sync + 'static,
-            FView: Send + Sync + 'static,
-            FSubs: Send + Sync + 'static,
-        {
-            let parsed: EventBody = match serde_json::from_slice(&body) {
-                Ok(b) => b,
-                Err(_) => return (StatusCode::BAD_REQUEST, "bad body").into_response(),
-            };
-            // Authenticate the target session by the COOKIE sid ONLY — never the
-            // body-supplied `sessionId`. Trusting a body id lets a caller act on
-            // ANY session by naming it (an auth-bypass that, paired with a
-            // guessable sid, was a hijack path). A legitimate browser always has
-            // the HttpOnly session cookie by the time an event fires (the page
-            // GET set it). No cookie → no session.
-            let _ = &parsed.session_id; // body field retained for wire-compat; not trusted for auth
-            let sid = match sid_from_cookie(&headers) {
-                Some(s) => s,
-                None => {
-                    return (
-                        StatusCode::NOT_FOUND,
-                        [(axum::http::HeaderName::from_static("x-ipe-web"), "1")],
-                        SESSION_LOST_BODY,
-                    )
-                        .into_response();
-                }
-            };
-            let entry = match st.store.get(&sid).await {
-                Some(store::StoreHit::Web(h)) => Some(h),
-                _ => None,
-            };
-            let entry = match entry {
-                Some(e) => e,
-                // X-Ipê-Web: 1 lets the client distinguish a genuine session-lost
-                // 404 (reload to recover) from a wedged proxy (client.js probes for
-                // exactly this header — l1481/l1530).
-                None => {
-                    return (
-                        StatusCode::NOT_FOUND,
-                        [(axum::http::HeaderName::from_static("x-ipe-web"), "1")],
-                        SESSION_LOST_BODY,
-                    )
-                        .into_response();
-                }
-            };
-
-            let hid = if !parsed.handler_id.is_empty() {
-                parsed.handler_id
-            } else {
-                parsed.id
-            };
-            // Event name: explicit `event` override, else the `msg` marker
-            // (render_html sets it to the event name), else default to click.
-            let event = if !parsed.event.is_empty() {
-                parsed.event
-            } else if !parsed.msg.is_empty() {
-                parsed.msg
-            } else {
-                "click".to_string()
-            };
-
-            let (msg, seq) = {
-                let e = entry.lock().unwrap_or_else(|e| e.into_inner());
-                if event == "submit" {
-                    // args[0] is the form-data object {name: value, …}.
-                    let fd: FormData = parsed
-                        .args
-                        .first()
-                        .and_then(|v| v.as_object())
-                        .map(|o| {
-                            o.iter()
-                                .map(|(k, v)| (k.clone(), value_to_string(v)))
-                                .collect()
-                        })
-                        .unwrap_or_default();
-                    (e.index.resolve_form(&hid, &event, fd), e.seq)
-                } else {
-                    let args: Vec<String> = parsed.args.iter().map(value_to_string).collect();
-                    (e.index.resolve(&hid, &event, &args), e.seq)
-                }
-            };
-            if let Some(m) = msg {
-                let tx = {
-                    entry
-                        .lock()
-                        .unwrap_or_else(|e| e.into_inner())
-                        .msg_tx
-                        .clone()
-                };
-                // try_send is non-blocking; on a full queue drop the event and
-                // return 429 so the client can back off (Go parity: Go
-                // serialises under sess.mu and drops the handler if the
-                // session is gone; no client-side queue bound to match — we
-                // choose 429 over silent drop so the browser retry loop fires).
-                if let Err(e) = tx.try_send(m) {
-                    eprintln!(
-                        "[ipe.live] event_handler: session msg queue full or closed; dropping event ({})",
-                        e
-                    );
-                    return (StatusCode::TOO_MANY_REQUESTS, "event queue full").into_response();
-                }
-            }
-            // Real patches flow over SSE from the driver; ack with an empty list.
-            // X-Ipê-Web: 1 marks this as a genuine Ipe.Web response (the client
-            // treats a 200 WITHOUT it as a wedged-proxy signal).
-            (
-                StatusCode::OK,
-                [
-                    (axum::http::header::CONTENT_TYPE, "application/json"),
-                    (axum::http::HeaderName::from_static("x-ipe-web"), "1"),
-                ],
-                format!("{{\"seq\":{seq},\"patches\":[]}}"),
-            )
-                .into_response()
-        }
-
-        // ── POST /_ipe/port ───────────────────────────────────────────────
-        // The `Ipe.Js` inbound port route: a browser→server port frame. Runs the
-        // SAME trust gate as `/_ipe/event` — the CSRF middleware validates the
-        // mutating POST, and the target session is authenticated by the session
-        // COOKIE sid ONLY (never a body-supplied id), so a caller cannot address
-        // another session's port by naming it. The raw payload is checked
-        // fail-closed through the bounded seal boundary (byte + depth budget);
-        // an oversized/malformed/over-nested frame is DROPPED WHOLE here, and only
-        // an accepted frame is delivered to THIS session's inbound channel — never
-        // any other session's. The per-subscriber typed seal decode still runs in
-        // `js_subscribe`, so a well-formed-but-wrong-type frame is dropped there.
-        async fn port_handler<Model, Msg, FInit, FUpdate, FView, FSubs>(
-            State(st): State<WebState<Model, Msg, FInit, FUpdate, FView, FSubs>>,
-            headers: axum::http::HeaderMap,
-            body: axum::body::Bytes,
-        ) -> Response
-        where
-            Model: Clone + Send + 'static,
-            Msg: Clone + Send + 'static,
-            FInit: Send + Sync + 'static,
-            FUpdate: Send + Sync + 'static,
-            FView: Send + Sync + 'static,
-            FSubs: Send + Sync + 'static,
-        {
-            #[derive(serde::Deserialize)]
-            struct PortBody {
-                /// The raw seal wire string the browser sent (`JSON.stringify` of
-                /// the developer's port value). Decoded fail-closed downstream.
-                #[serde(default)]
-                payload: String,
-            }
-            let parsed: PortBody = match serde_json::from_slice(&body) {
-                Ok(b) => b,
-                Err(_) => return (StatusCode::BAD_REQUEST, "bad body").into_response(),
-            };
-            // Authenticate by the COOKIE sid ONLY (same rule as event_handler) —
-            // never trust a body-supplied session id.
-            let sid = match sid_from_cookie(&headers) {
-                Some(s) => s,
-                None => {
-                    return (
-                        StatusCode::NOT_FOUND,
-                        [(axum::http::HeaderName::from_static("x-ipe-web"), "1")],
-                        SESSION_LOST_BODY,
-                    )
-                        .into_response();
-                }
-            };
-            // The session must exist (a live Web session) for the frame to have a
-            // destination; an unknown sid is the same session-lost 404 the event
-            // path returns.
-            match st.store.get(&sid).await {
-                Some(store::StoreHit::Web(_)) => {}
-                _ => {
-                    return (
-                        StatusCode::NOT_FOUND,
-                        [(axum::http::HeaderName::from_static("x-ipe-web"), "1")],
-                        SESSION_LOST_BODY,
-                    )
-                        .into_response();
-                }
-            }
-            // Fail-closed boundary gate: reject an oversized / malformed /
-            // over-nested frame BEFORE delivering it. A rejected frame is dropped
-            // whole (200 ack, nothing delivered) — the client is never trusted, and
-            // a bad frame is not an error the browser must retry.
-            #[cfg(all(feature = "json", feature = "tokio"))]
-            {
-                use crate::seal_codec::{SealLimits, seal_boundary_check};
-                if seal_boundary_check(&parsed.payload, SealLimits::default()).is_ok() {
-                    // Parse at the delivery boundary: an invalid/empty sid has no
-                    // registry entry and cannot be represented as a SessionId.
-                    if let Some(port_sid) = crate::js_port::SessionId::parse(&sid) {
-                        crate::js_port::deliver_inbound_for(&port_sid, parsed.payload);
-                    }
-                }
-            }
-            (
-                StatusCode::OK,
-                [
-                    (axum::http::header::CONTENT_TYPE, "application/json"),
-                    (axum::http::HeaderName::from_static("x-ipe-web"), "1"),
-                ],
-                "{\"ok\":true}",
-            )
-                .into_response()
-        }
-
-        // Background TTL eviction (Go memoryStore.cleanupLoop parity): sweep
-        // idle-expired sessions every 60 s. Persistent backends also prune their
-        // checkpoint table in `sweep`.
-        {
-            let store = state.store.clone();
-            tokio::spawn(async move {
-                let mut tick = tokio::time::interval(std::time::Duration::from_secs(60));
-                loop {
-                    tick.tick().await;
-                    store.sweep().await;
-                }
-            });
-        }
-
-        // Enable the telemetry SQLite spill when
-        // IPE_CONSOLE_DB_PATH is set — the console child reads it via the
-        // hub kernels. db-gated; a no-op for live-without-db apps. Enabled
-        // BEFORE the console child spawns so early telemetry lands in the spill
-        // the child will read.
-        #[cfg(feature = "db")]
-        crate::telemetry_spill::enable_from_env().await;
-
-        // Observability export pipelines: federation push to a parent ingest
-        // (IPE_PARENT_URL) and remote-hub OTLP push (IPE_CONSOLE_HUB).
-        // Both env-gated + inert by default. Only available when `http_client`
-        // is active: these pipelines make outbound HTTP calls via reqwest.
-        #[cfg(feature = "http_client")]
-        push_exporter::enable_from_env().await;
-        #[cfg(feature = "http_client")]
-        hub_exporter::enable_from_env().await;
-
-        // Console precedence: try the pre-built console child +
-        // reverse-proxy; fall back to the in-process console when the binary is
-        // absent / spawn fails / readiness times out / the gate is closed.
-        // Decided HERE (before the router is built) so both the proxy routes and
-        // the in-process console routes sit under the same `track` middleware,
-        // and the two never collide on `/_ipe/console`.
-        // Only when `http_client` is active: the console proxy uses reqwest for
-        // the reverse-proxy path. Without it, always use the in-process console.
-        #[cfg(feature = "http_client")]
-        let use_console_proxy = console_proxy::ensure_console_proxy().await;
-
-        // Body-size cap on /_ipe/event: mirrors Go's http.MaxBytesReader
-        // (runtime-go/rt/live.go:3915). axum's DefaultBodyLimit applies
-        // before the handler sees the bytes, so an over-sized payload is
-        // rejected at the extract layer with 413 Payload Too Large.
-        let event_route = post(event_handler::<Model, Msg, FInit, FUpdate, FView, FSubs>)
-            .layer(axum::extract::DefaultBodyLimit::max(web_max_body_bytes()));
-
-        // Inbound `Ipe.Js` port route: same body-size cap as `/_ipe/event`, so an
-        // over-sized port frame is rejected at the extract layer (413) before the
-        // handler's own seal-boundary budget even runs.
-        let port_route = post(port_handler::<Model, Msg, FInit, FUpdate, FView, FSubs>)
-            .layer(axum::extract::DefaultBodyLimit::max(web_max_body_bytes()));
-
-        // Content-addressed client JS asset route. The URL is computed once at
-        // startup from SHA-256(CLIENT_JS) so the path changes when the file
-        // changes, making `Cache-Control: immutable` safe. This route is CSRF-
-        // exempt (GET; the CSRF middleware only checks mutating verbs) and open
-        // to all (it's a static public asset). It is registered BEFORE the
-        // catch-all `/*path` route so it is matched first.
-        let client_js_route_path = client_js_path(); // e.g. "/_ipe/client.a1b2c3d4e5f6a7b8.js"
-        async fn serve_client_js() -> impl axum::response::IntoResponse {
-            use axum::http::header;
-            (
-                [
-                    (
-                        header::CONTENT_TYPE,
-                        "application/javascript; charset=utf-8",
-                    ),
-                    (header::CACHE_CONTROL, "public, max-age=31536000, immutable"),
-                ],
-                CLIENT_JS,
-            )
-        }
-
-        // Serve one content-addressed widget asset / glue module. Same static
-        // immutable discipline as `serve_client_js`; the exact bytes here are what
-        // the page's SRI pins, so integrity is verified by the browser.
-        fn serve_widget_js(body: &'static str) -> impl axum::response::IntoResponse {
-            use axum::http::header;
-            (
-                [
-                    (
-                        header::CONTENT_TYPE,
-                        "application/javascript; charset=utf-8",
-                    ),
-                    (header::CACHE_CONTROL, "public, max-age=31536000, immutable"),
-                ],
-                body,
-            )
-        }
-
-        // ── POST /_ipe/debug/scrub ────────────────────────────────────────
-        // Session-scoped time-travel scrub endpoint. Registered only when the
-        // `debugger` feature is active. The CSRF middleware (wrapped around
-        // the whole router) already validates `X-Ipe-Csrf` before this handler
-        // runs; the handler itself only needs to authenticate the session.
-        //
-        // Request body: `{"index": N}` — reconstruct model at retained step N.
-        // Response: `{"body": "<html>"}` — the view rendered at step N.
-        // Out-of-range N is clamped to the last retained step. No Cmd is fired.
-        // The recorded history is never mutated — reconstruct is a pure re-fold.
-        #[cfg(feature = "debugger")]
-        async fn scrub_handler<Model, Msg, FInit, FUpdate, FView, FSubs>(
-            State(st): State<WebState<Model, Msg, FInit, FUpdate, FView, FSubs>>,
-            headers: axum::http::HeaderMap,
-            axum::Json(body): axum::Json<serde_json::Value>,
-        ) -> axum::response::Response
-        where
-            Model: Clone + PartialEq + Send + 'static,
-            Msg: Clone + Send + std::fmt::Debug + 'static,
-            FInit: Send + Sync + 'static,
-            FUpdate: Fn(Msg, Model) -> (Model, crate::tea::IpeCmd<Msg>) + Send + Sync + 'static,
-            FView: Fn(Model) -> crate::html::Html<Msg> + Send + Sync + 'static,
-            FSubs: Send + Sync + 'static,
-        {
-            use axum::response::IntoResponse;
-            let sid = match sid_from_cookie(&headers) {
-                Some(s) => s,
-                None => {
-                    return (axum::http::StatusCode::UNAUTHORIZED, "no session").into_response();
-                }
-            };
-            let handle = match st.store.get(&sid).await {
-                Some(store::StoreHit::Web(h)) => h,
-                _ => {
-                    return (axum::http::StatusCode::NOT_FOUND, "session not found")
-                        .into_response();
-                }
-            };
-            let requested_n = body
-                .get("index")
-                .and_then(|v| v.as_u64())
-                .map(|n| n as usize)
-                .unwrap_or(0);
-            let model_at_n = {
-                let e = handle.lock().unwrap_or_else(|e| e.into_inner());
-                let total = e.history.len();
-                let n = requested_n.min(total.saturating_sub(1));
-                e.history.reconstruct(n, &|m, mdl| (*st.update)(m, mdl))
-            };
-            let model = match model_at_n {
-                Some(m) => m,
-                None => {
-                    return (axum::http::StatusCode::NOT_FOUND, "step out of range")
-                        .into_response();
-                }
-            };
-            let mut tree = (st.view)(model);
-            assign_ipe_ids(&mut tree, "r");
-            style_inject::apply_style_injections(&mut tree);
-            let html_body = render_html(&tree);
-            let resp_json = serde_json::json!({ "body": html_body });
-            (
-                axum::http::StatusCode::OK,
-                [(axum::http::header::CONTENT_TYPE, "application/json")],
-                resp_json.to_string(),
-            )
-                .into_response()
-        }
-
-        // Cloned for the shutdown path's dev-only reload push — the router's
-        // `.with_state(state)` takes ownership of `state` below.
-        let shutdown_store = state.store.clone();
-
-        let router = Router::new()
-            .route(
-                "/_ipe/sse",
-                get(sse_handler::<Model, Msg, FInit, FUpdate, FView, FSubs>),
-            )
-            .route("/_ipe/event", event_route)
-            .route("/_ipe/port", port_route)
-            .route(&client_js_route_path, get(serve_client_js));
-        // The `Ipe.Js` browser port surface (`window.ipe`), served
-        // content-addressed with SRI — the same static, immutable discipline as
-        // the client core and widget glue. A GET of fixed bytes (no user input),
-        // so it is CSRF-exempt by method and open. Registered before the page
-        // catch-all so the glue URL hits its static handler.
-        #[cfg(feature = "widget-assets")]
-        let router = router.route(
-            &crate::js_port_glue::port_glue_path(),
-            get(|| async { serve_widget_js(crate::js_port_glue::port_glue_js()) }),
-        );
-        #[cfg(feature = "debugger")]
-        let router = router.route(
-            "/_ipe/debug/scrub",
-            post(scrub_handler::<Model, Msg, FInit, FUpdate, FView, FSubs>),
-        );
-        let mut router = router
-            // Observability surface (Go parity — observability.go).
-            .route("/_ipe/healthz", get(observability::healthz))
-            .route("/_ipe/readyz", get(observability::readyz))
-            .route("/_ipe/buildinfo", get(observability::buildinfo))
-            .route("/_ipe/metrics", get(observability::metrics))
-            // Observability federation receiver stays on the parent regardless
-            // of console mode (sub-apps push telemetry here). Body-capped (reuses
-            // the /_ipe/event limit) so an unbounded ingest POST can't exhaust
-            // memory before the JSON parse.
-            .route(
-                "/_ipe/observability/ingest",
-                post(console::ingest)
-                    .layer(axum::extract::DefaultBodyLimit::max(web_max_body_bytes())),
-            );
-
-        // When `http_client` is active and the pre-built console binary is
-        // present, the proxy replaces the in-process console: a child process is
-        // spawned and all `/_ipe/console/*` traffic is forwarded to it via
-        // reqwest. The child logs its own `session store: …` + `reverse-proxy
-        // ready` lines, so the parent does not duplicate the inline-mount log.
-        #[cfg(feature = "http_client")]
-        if use_console_proxy {
-            router = console_proxy::proxy_routes(router);
-        }
-
-        // The in-process console (`/_ipe/console` + `/_ipe/console/api/*`) is
-        // reqwest-free and mounts under `web` alone — no `http_client` required.
-        // A web app without an outbound HTTP kernel still serves the developer
-        // dashboard. The proxy override above takes precedence when active: when
-        // the proxy is live (`use_console_proxy` true) it owns `/_ipe/console`,
-        // so we skip this block to avoid duplicate route registration.
-        let proxy_active = {
-            #[cfg(feature = "http_client")]
-            {
-                use_console_proxy
-            }
-            #[cfg(not(feature = "http_client"))]
-            {
-                false
-            }
-        };
-        if !proxy_active && console::gate_allows() {
-            eprintln!("{}", store::memory_store_log_line(web_ttl()));
-            eprintln!(
-                "[ipe.console] inline console mounted as Ipe.Web sub-app at /_ipe/console mode={}",
-                console::console_auth_mode_label()
-            );
-            router = router
-                .route("/_ipe/console", get(console::console_html))
-                .route("/_ipe/console/api/overview", get(console::api_overview))
-                .route("/_ipe/console/api/logs", get(console::api_logs))
-                .route("/_ipe/console/api/errors", get(console::api_errors))
-                .route("/_ipe/console/api/traces", get(console::api_traces))
-                .route(
-                    "/_ipe/console/api/metrics-summary",
-                    get(console::api_metrics_summary),
-                );
-        }
-        // The console proxy needs `http_client` (outbound reqwest). The
-        // in-process console is served under `web` whenever the mount gate
-        // allows, so a web app without an outbound HTTP kernel still gets
-        // `/_ipe/console`.
-
-        // Custom-element (`Ui.widget`) assets: one content-addressed route per
-        // registered author module + one for the generated registration glue.
-        // Each serves a `&'static str` (the bytes interned in the process-global
-        // registry at startup) with the same `immutable` discipline as the client
-        // asset. Registered BEFORE the `/*path` page catch-all so a widget URL
-        // hits its static handler, not the page handler. The routes are static
-        // public GETs (CSRF-exempt, open) — the served bytes are the exact bytes
-        // the page's SRI pins, so a tampered asset makes the browser refuse the
-        // module. A widget-free program registers nothing here (no extra routes).
-        if widget_assets::has_widgets() {
-            let base = web_base_path();
-            for asset in widget_assets::registered() {
-                let path = widget_assets::widget_asset_path(&asset.content);
-                let content: &'static str = &asset.content;
-                router = router.route(&path, get(move || async move { serve_widget_js(content) }));
-            }
-            let glue_path = widget_assets::glue_path(&base, widget_assets::WidgetTransport::Server);
-            // The glue body folds in the base-prefixed author URLs, so it is
-            // computed once here for the process (base is stable at startup) and
-            // leaked to `'static` for the handler — a one-time, bounded allocation
-            // sized by the program's widget count, never per-request.
-            let glue_body: &'static str = Box::leak(
-                widget_assets::glue_js(&base, widget_assets::WidgetTransport::Server)
-                    .into_boxed_str(),
-            );
-            router = router.route(
-                &glue_path,
-                get(move || async move { serve_widget_js(glue_body) }),
-            );
-        }
-
-        // package.ipe `[web] static` (baked as IPE_WEB_STATIC_DIR) → serve files at
-        // /static/* via ServeDir. MUST be added before the `/*path` page catch-all
-        // so a /static/<file> request hits ServeDir, not the page handler (which
-        // would return HTML). ServeDir blocks `..` path traversal by construction
-        // (percent-decodes first, so `%2e%2e` is caught too). NOTE: like Go's
-        // http.FileServer it FOLLOWS symlinks inside the dir — the dir is
-        // author-controlled (package.ipe [web] static), so that is the intended
-        // contract, NOT a confinement guarantee. Absent/empty → no static mount.
-        // IPE_WEB_STATIC_DIR (deprecated alias: IPE_LIVE_STATIC_DIR).
-        if let Some(dir) =
-            crate::system::read_env_var_renamed("IPE_WEB_STATIC_DIR", "IPE_LIVE_STATIC_DIR")
-                .ok()
-                .filter(|d| !d.is_empty())
-        {
-            router = router.nest_service("/static", tower_http::services::ServeDir::new(dir));
-        }
-
-        let app: Router = router
-            .route("/", get(page::<Model, Msg, FInit, FUpdate, FView, FSubs>))
-            .route(
-                "/*path",
-                get(page::<Model, Msg, FInit, FUpdate, FView, FSubs>),
-            )
-            // Layer order (axum: last `.layer` = outermost): CSRF is INNER of
-            // observability::track so a rejected CSRF POST still gets counted +
-            // access-logged (Go parity — CSRF sits inside the observability mw).
-            .layer(axum::middleware::from_fn(csrf::csrf_middleware))
-            // Per-request panic recovery (Go parity — its handlers run under a
-            // defer/recover that returns 500 instead of crashing the worker;
-            // rt.go:3463 etc.). Symmetric with Ipe.Http.Server (server.rs). The
-            // Rust thesis is that well-typed Ipê can't panic, so this is the
-            // defense-in-depth FLOOR, not the foundation: a handler / csrf-mw
-            // panic becomes a 500 instead of an unwound tokio task that drops the
-            // connection with no response. Placed INNER of `track` (and OUTER of
-            // csrf + the route handlers) so the converted 500 returns through
-            // track's `next.run().await` normally — track still counts +
-            // access-logs + histograms it as status 500, matching Go (whose
-            // recover is innermost; the outer middleware observes the 500). If it
-            // were outermost the panic would unwind through track, skipping its
-            // post-`next.run` metering. The custom responder classifies + logs the
-            // panic SERVER-SIDE (errId, via core::panic_500_body) and returns a 500
-            // carrying ONLY the errId — never the panic message (no info leak).
-            // Symmetric with Ipe.Http.Server (the body shape is shared in `core`;
-            // the Web router can't reference `server.rs` — a Web-only generated
-            // project doesn't include it).
-            .layer(tower_http::catch_panic::CatchPanicLayer::custom(
-                |err: Box<dyn std::any::Any + Send + 'static>| {
-                    use axum::response::IntoResponse;
-                    (
-                        axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-                        [(axum::http::header::CONTENT_TYPE, "application/json")],
-                        crate::core::panic_500_body(&*err),
-                    )
-                        .into_response()
-                },
-            ))
-            .layer(axum::middleware::from_fn(observability::track))
-            .with_state(state);
-
-        pubsub::mark_web_running();
-
-        // IPE_WEB_PORT (deprecated alias: IPE_LIVE_PORT); default 8000.
-        let port: i64 = crate::system::read_env_var_renamed("IPE_WEB_PORT", "IPE_LIVE_PORT")
-            .ok()
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(8000);
-        let addr = format!("0.0.0.0:{port}");
-        let listener = match tokio::net::TcpListener::bind(&addr).await {
-            Ok(l) => l,
-            Err(e) => return IpeResult::Err(format!("Web.app: bind {addr}: {e}").into()),
-        };
-        // Bind-address line (stderr, Rust-specific — carries the 0.0.0.0 bind).
-        eprintln!("[ipe.web] listening on http://{addr}");
-        // Go-parity user-facing line (stdout, `fmt.Printf("Ipe.Web listening on
-        // :%d\n", port)` — live.go:3546).
-        println!("Ipe.Web listening on :{port}");
-        // Graceful shutdown (Go parity — live.go:3503): trap SIGINT/SIGTERM,
-        // print the shutdown line, drain in-flight requests, and return cleanly so
-        // the IpeTask resolves Ok → the generated entry exits 0 (NOT 130). A
-        // SECOND signal force-exits 130 via the watchdog inside web_shutdown_signal.
-        match axum::serve(listener, app)
-            .with_graceful_shutdown(web_shutdown_signal(shutdown_store))
-            .await
-        {
-            Ok(()) => ok_res(()),
-            Err(e) => IpeResult::Err(format!("Web.app: serve: {e}").into()),
-        }
+    // Content-addressed client JS asset route. The URL is computed once at
+    // startup from SHA-256(CLIENT_JS) so the path changes when the file
+    // changes, making `Cache-Control: immutable` safe. This route is CSRF-
+    // exempt (GET; the CSRF middleware only checks mutating verbs) and open
+    // to all (it's a static public asset). It is registered BEFORE the
+    // catch-all `/*path` route so it is matched first.
+    let client_js_route_path = client_js_path(); // e.g. "/_ipe/client.a1b2c3d4e5f6a7b8.js"
+    async fn serve_client_js() -> impl axum::response::IntoResponse {
+        use axum::http::header;
+        (
+            [
+                (
+                    header::CONTENT_TYPE,
+                    "application/javascript; charset=utf-8",
+                ),
+                (header::CACHE_CONTROL, "public, max-age=31536000, immutable"),
+            ],
+            CLIENT_JS,
+        )
     }
+
+    // Serve one content-addressed widget asset / glue module. Same static
+    // immutable discipline as `serve_client_js`; the exact bytes here are what
+    // the page's SRI pins, so integrity is verified by the browser.
+    fn serve_widget_js(body: &'static str) -> impl axum::response::IntoResponse {
+        use axum::http::header;
+        (
+            [
+                (
+                    header::CONTENT_TYPE,
+                    "application/javascript; charset=utf-8",
+                ),
+                (header::CACHE_CONTROL, "public, max-age=31536000, immutable"),
+            ],
+            body,
+        )
+    }
+
+    let router = Router::new()
+        .route(
+            "/_ipe/sse",
+            get(handlers::sse_handler::<Model, Msg, FInit, FUpdate, FView, FSubs>),
+        )
+        .route("/_ipe/event", event_route)
+        .route("/_ipe/port", port_route)
+        .route(&client_js_route_path, get(serve_client_js));
+    // The `Ipe.Js` browser port surface (`window.ipe`), served
+    // content-addressed with SRI — the same static, immutable discipline as
+    // the client core and widget glue. A GET of fixed bytes (no user input),
+    // so it is CSRF-exempt by method and open. Registered before the page
+    // catch-all so the glue URL hits its static handler.
+    #[cfg(feature = "widget-assets")]
+    let router = router.route(
+        &crate::js_port_glue::port_glue_path(),
+        get(|| async { serve_widget_js(crate::js_port_glue::port_glue_js()) }),
+    );
+    #[cfg(feature = "debugger")]
+    let router = router.route(
+        "/_ipe/debug/scrub",
+        post(handlers::scrub_handler::<Model, Msg, FInit, FUpdate, FView, FSubs>),
+    );
+    let mut router = router
+        // Observability surface (Go parity — observability.go).
+        .route("/_ipe/healthz", get(observability::healthz))
+        .route("/_ipe/readyz", get(observability::readyz))
+        .route("/_ipe/buildinfo", get(observability::buildinfo))
+        .route("/_ipe/metrics", get(observability::metrics))
+        // Observability federation receiver stays on the parent regardless
+        // of console mode (sub-apps push telemetry here). Body-capped (reuses
+        // the /_ipe/event limit) so an unbounded ingest POST can't exhaust
+        // memory before the JSON parse.
+        .route(
+            "/_ipe/observability/ingest",
+            post(console::ingest).layer(axum::extract::DefaultBodyLimit::max(web_max_body_bytes())),
+        );
+
+    // When `http_client` is active and the pre-built console binary is
+    // present, the proxy replaces the in-process console: a child process is
+    // spawned and all `/_ipe/console/*` traffic is forwarded to it via
+    // reqwest. The child logs its own `session store: …` + `reverse-proxy
+    // ready` lines, so the parent does not duplicate the inline-mount log.
+    #[cfg(feature = "http_client")]
+    if use_console_proxy {
+        router = console_proxy::proxy_routes(router);
+    }
+
+    // The in-process console (`/_ipe/console` + `/_ipe/console/api/*`) is
+    // reqwest-free and mounts under `web` alone — no `http_client` required.
+    // A web app without an outbound HTTP kernel still serves the developer
+    // dashboard. The proxy override above takes precedence when active: when
+    // the proxy is live (`use_console_proxy` true) it owns `/_ipe/console`,
+    // so we skip this block to avoid duplicate route registration.
+    let proxy_active = {
+        #[cfg(feature = "http_client")]
+        {
+            use_console_proxy
+        }
+        #[cfg(not(feature = "http_client"))]
+        {
+            false
+        }
+    };
+    if !proxy_active && console::gate_allows() {
+        eprintln!("{}", store::memory_store_log_line(web_ttl()));
+        eprintln!(
+            "[ipe.console] inline console mounted as Ipe.Web sub-app at /_ipe/console mode={}",
+            console::console_auth_mode_label()
+        );
+        router = router
+            .route("/_ipe/console", get(console::console_html))
+            .route("/_ipe/console/api/overview", get(console::api_overview))
+            .route("/_ipe/console/api/logs", get(console::api_logs))
+            .route("/_ipe/console/api/errors", get(console::api_errors))
+            .route("/_ipe/console/api/traces", get(console::api_traces))
+            .route(
+                "/_ipe/console/api/metrics-summary",
+                get(console::api_metrics_summary),
+            );
+    }
+    // The console proxy needs `http_client` (outbound reqwest). The
+    // in-process console is served under `web` whenever the mount gate
+    // allows, so a web app without an outbound HTTP kernel still gets
+    // `/_ipe/console`.
+
+    // Custom-element (`Ui.widget`) assets: one content-addressed route per
+    // registered author module + one for the generated registration glue.
+    // Each serves a `&'static str` (the bytes interned in the process-global
+    // registry at startup) with the same `immutable` discipline as the client
+    // asset. Registered BEFORE the `/*path` page catch-all so a widget URL
+    // hits its static handler, not the page handler. The routes are static
+    // public GETs (CSRF-exempt, open) — the served bytes are the exact bytes
+    // the page's SRI pins, so a tampered asset makes the browser refuse the
+    // module. A widget-free program registers nothing here (no extra routes).
+    if widget_assets::has_widgets() {
+        let base = web_base_path();
+        for asset in widget_assets::registered() {
+            let path = widget_assets::widget_asset_path(&asset.content);
+            let content: &'static str = &asset.content;
+            router = router.route(&path, get(move || async move { serve_widget_js(content) }));
+        }
+        let glue_path = widget_assets::glue_path(&base, widget_assets::WidgetTransport::Server);
+        // The glue body folds in the base-prefixed author URLs, so it is
+        // computed once here for the process (base is stable at startup) and
+        // leaked to `'static` for the handler — a one-time, bounded allocation
+        // sized by the program's widget count, never per-request.
+        let glue_body: &'static str = Box::leak(
+            widget_assets::glue_js(&base, widget_assets::WidgetTransport::Server).into_boxed_str(),
+        );
+        router = router.route(
+            &glue_path,
+            get(move || async move { serve_widget_js(glue_body) }),
+        );
+    }
+
+    // package.ipe `[web] static` (baked as IPE_WEB_STATIC_DIR) → serve files at
+    // /static/* via ServeDir. MUST be added before the `/*path` page catch-all
+    // so a /static/<file> request hits ServeDir, not the page handler (which
+    // would return HTML). ServeDir blocks `..` path traversal by construction
+    // (percent-decodes first, so `%2e%2e` is caught too). NOTE: like Go's
+    // http.FileServer it FOLLOWS symlinks inside the dir — the dir is
+    // author-controlled (package.ipe [web] static), so that is the intended
+    // contract, NOT a confinement guarantee. Absent/empty → no static mount.
+    // IPE_WEB_STATIC_DIR (deprecated alias: IPE_LIVE_STATIC_DIR).
+    if let Some(dir) =
+        crate::system::read_env_var_renamed("IPE_WEB_STATIC_DIR", "IPE_LIVE_STATIC_DIR")
+            .ok()
+            .filter(|d| !d.is_empty())
+    {
+        router = router.nest_service("/static", tower_http::services::ServeDir::new(dir));
+    }
+
+    let app: Router = router
+        .route(
+            "/",
+            get(handlers::page::<Model, Msg, FInit, FUpdate, FView, FSubs>),
+        )
+        .route(
+            "/*path",
+            get(handlers::page::<Model, Msg, FInit, FUpdate, FView, FSubs>),
+        )
+        // Layer order (axum: last `.layer` = outermost): CSRF is INNER of
+        // observability::track so a rejected CSRF POST still gets counted +
+        // access-logged (Go parity — CSRF sits inside the observability mw).
+        .layer(axum::middleware::from_fn(csrf::csrf_middleware))
+        // Per-request panic recovery (Go parity — its handlers run under a
+        // defer/recover that returns 500 instead of crashing the worker;
+        // rt.go:3463 etc.). Symmetric with Ipe.Http.Server (server.rs). The
+        // Rust thesis is that well-typed Ipê can't panic, so this is the
+        // defense-in-depth FLOOR, not the foundation: a handler / csrf-mw
+        // panic becomes a 500 instead of an unwound tokio task that drops the
+        // connection with no response. Placed INNER of `track` (and OUTER of
+        // csrf + the route handlers) so the converted 500 returns through
+        // track's `next.run().await` normally — track still counts +
+        // access-logs + histograms it as status 500, matching Go (whose
+        // recover is innermost; the outer middleware observes the 500). If it
+        // were outermost the panic would unwind through track, skipping its
+        // post-`next.run` metering. The custom responder classifies + logs the
+        // panic SERVER-SIDE (errId, via core::panic_500_body) and returns a 500
+        // carrying ONLY the errId — never the panic message (no info leak).
+        // Symmetric with Ipe.Http.Server (the body shape is shared in `core`;
+        // the Web router can't reference `server.rs` — a Web-only generated
+        // project doesn't include it).
+        .layer(tower_http::catch_panic::CatchPanicLayer::custom(
+            |err: Box<dyn std::any::Any + Send + 'static>| {
+                use axum::response::IntoResponse;
+                (
+                    axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                    [(axum::http::header::CONTENT_TYPE, "application/json")],
+                    crate::core::panic_500_body(&*err),
+                )
+                    .into_response()
+            },
+        ))
+        .layer(axum::middleware::from_fn(observability::track))
+        .with_state(state);
+
+    pubsub::mark_web_running();
+    app
 }
 
 /// Read the session cookie from request headers. Uses the base-path-aware

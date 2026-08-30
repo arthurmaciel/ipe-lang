@@ -76,8 +76,9 @@ pub fn emit_web_call(
         // (routes + notFound + set_page); single-page apps take `web_app`.
         // `Web.embed` builds the same `WebApp` leaf from the same six-field cfg
         // as `Web.app` — it shares this emit path exactly. The only difference is
-        // intent: an `embed`'d handle is destined for `Server.mountApp` rather
-        // than top-level serving. Both produce `WebApp(web_app(...))`.
+        // the handle kind: `Web.app` → `WebAppKind::Standalone` (binds its own
+        // listener); `Web.embed` → `WebAppKind::Mountable` (carries a router
+        // builder for `Server.mountApp` to nest on the shared port).
         KernelFn::WebApp | KernelFn::WebEmbed => {
             let [cfg_e] = args else {
                 return Err(Diagnostic::CompilerBug {
@@ -96,7 +97,8 @@ pub fn emit_web_call(
                         .into(),
                 });
             };
-            emit_web_app_inner(ctx, fields, indent, child, generics)
+            let mountable = matches!(k, KernelFn::WebEmbed);
+            emit_web_app_inner(ctx, fields, indent, child, generics, mountable)
         }
 
         // ── Web.appRouted — vestigial alias of `Web.app` ─────────────────
@@ -122,7 +124,7 @@ pub fn emit_web_call(
                         .into(),
                 });
             };
-            emit_web_app_inner(ctx, fields, indent, child, generics)
+            emit_web_app_inner(ctx, fields, indent, child, generics, false)
         }
 
         // ── Web.appWith settings cfg ─────────────────────────────────────
@@ -150,7 +152,8 @@ pub fn emit_web_call(
                 });
             };
             let settings_s = emit_expr_at(ctx, settings_e, indent, child, generics)?;
-            let Some(app_s) = emit_web_app_inner(ctx, fields, indent, child, generics)? else {
+            let Some(app_s) = emit_web_app_inner(ctx, fields, indent, child, generics, false)?
+            else {
                 return Ok(None);
             };
             // `app_s` is already wrapped in `WebApp(...)` by `emit_web_app_inner`.
@@ -383,6 +386,11 @@ fn emit_web_app_inner(
     indent: usize,
     child: u16,
     generics: GenericScope,
+    // `true` for `Web.embed` — build a `WebAppKind::Mountable` handle carrying
+    // BOTH the standalone `serve` task AND a router-builder for `Server.mountApp`
+    // to nest. `false` for `Web.app` — a `WebAppKind::Standalone` bind-your-own-
+    // listener handle.
+    mountable: bool,
 ) -> DResult<Option<String>> {
     let init_e = lookup_field(ctx, fields, "init")?;
     let update_e = lookup_field(ctx, fields, "update")?;
@@ -491,9 +499,23 @@ fn emit_web_app_inner(
             child,
             generics,
         )?;
+        if mountable {
+            // A routed `Web.embed` needs a routed mount router-builder
+            // (`web_embed_router_routed`), not yet implemented. Reject at emit —
+            // fail-closed, never a mis-emit. A single-page `Web.embed` mounts
+            // today; a routed one is a follow-up.
+            return Err(Diagnostic::CompilerBug {
+                where_: "ipe_backend_rust::emit_web_call::WebEmbed",
+                detail: "Web.embed of a routed app (Model with a `page` field) is \
+                         not yet supported for Server.mountApp; embed a single-page \
+                         Web app, or serve the routed app standalone with Web.app"
+                    .into(),
+            });
+        }
         return Ok(Some(format!(
             "{{ {tag_const} \
-             ipe_runtime::tea::WebApp(ipe_runtime::web::web_app_routed(\
+             ipe_runtime::tea::WebApp(ipe_runtime::tea::WebAppKind::Standalone(\
+             ipe_runtime::web::web_app_routed(\
              {init_s}, \
              {update_s}, \
              {view_s}, \
@@ -504,7 +526,7 @@ fn emit_web_app_inner(
              ::std::env::var(\"IPE_LIVE_STORE\").unwrap_or_else(|_| \"memory\".to_string()), \
              ::std::env::var(\"IPE_LIVE_STORE_PATH\").unwrap_or_else(|_| ::std::string::String::new()), \
              IPE_WEB_MODEL_SCHEMA_TAG\
-             )) }}"
+             ))) }}"
         )));
     }
 
@@ -513,17 +535,36 @@ fn emit_web_app_inner(
     //
     // The store kind and path come from env at call time so a single binary can
     // switch stores without recompilation (`IPE_LIVE_STORE` / `IPE_LIVE_STORE_PATH`).
+    // The four callbacks + store args are shared by the standalone `web_app`
+    // task and (for `Web.embed`) the `web_embed_router` mount builder.
+    let store_args = "::std::env::var(\"IPE_LIVE_STORE\").unwrap_or_else(|_| \"memory\".to_string()), \
+         ::std::env::var(\"IPE_LIVE_STORE_PATH\").unwrap_or_else(|_| ::std::string::String::new()), \
+         IPE_WEB_MODEL_SCHEMA_TAG";
+    let serve_call = format!(
+        "ipe_runtime::web::web_app({init_s}, {update_s}, {view_s}, {subs_s}, {store_args})"
+    );
+    if mountable {
+        // `Web.embed`: carry both the standalone task (top-level `run_blocking`)
+        // and the router builder (`Server.mountApp`). Callbacks are emitted a
+        // second time for the builder — each `emit_web_fn` produces a named `fn`
+        // item / pure closure, so re-emitting is a fresh reference, not a move.
+        let init_s2 = emit_web_fn(ctx, init_e, indent, child, generics)?;
+        let update_s2 = emit_web_fn(ctx, update_e, indent, child, generics)?;
+        let view_raw_s2 = emit_web_fn(ctx, view_e, indent, child, generics)?;
+        let view_s2 = wrap_view(&view_raw_s2);
+        let subs_s2 = emit_web_fn(ctx, subs_e, indent, child, generics)?;
+        let router_call = format!(
+            "ipe_runtime::web::web_embed_router({init_s2}, {update_s2}, {view_s2}, {subs_s2}, {store_args})"
+        );
+        return Ok(Some(format!(
+            "{{ {tag_const} \
+             ipe_runtime::tea::WebApp(ipe_runtime::tea::WebAppKind::Mountable {{ \
+             serve: {serve_call}, router: {router_call} }}) }}"
+        )));
+    }
     Ok(Some(format!(
         "{{ {tag_const} \
-         ipe_runtime::tea::WebApp(ipe_runtime::web::web_app(\
-         {init_s}, \
-         {update_s}, \
-         {view_s}, \
-         {subs_s}, \
-         ::std::env::var(\"IPE_LIVE_STORE\").unwrap_or_else(|_| \"memory\".to_string()), \
-         ::std::env::var(\"IPE_LIVE_STORE_PATH\").unwrap_or_else(|_| ::std::string::String::new()), \
-         IPE_WEB_MODEL_SCHEMA_TAG\
-         )) }}"
+         ipe_runtime::tea::WebApp(ipe_runtime::tea::WebAppKind::Standalone({serve_call})) }}"
     )))
 }
 

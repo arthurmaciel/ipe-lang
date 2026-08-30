@@ -132,12 +132,25 @@ where
     }
 }
 
-/// Discriminated union over the two possible route targets — replaces the
+/// A `Server.mountApp` target: the mounted web app's router-builder, kept
+/// behind `Arc<Mutex<Option<..>>>` so `RouteTarget`/`ServerRoute` stay `Clone`
+/// (the builder is `FnOnce`, taken exactly once when `server_listen` nests it).
+/// A second nest of the same route (a clone) finds `None` and skips — inert, no
+/// panic. The `web` feature gates it because the builder produces an `axum`
+/// router the mount nests; a server built without `web` never sees one.
+#[cfg(feature = "web")]
+type MountCell = Arc<std::sync::Mutex<Option<crate::tea::MountBuilder>>>;
+
+/// Discriminated union over the possible route targets — replaces the
 /// two `Option` fields so both-None is unrepresentable.
 #[derive(Clone)]
 enum RouteTarget {
     Handler(ErasedHandler),
     Static(String),
+    /// `Server.mountApp prefix webApp`: nest the embedded web app's router
+    /// under `path` (the prefix) on the shared server port.
+    #[cfg(feature = "web")]
+    MountWeb(MountCell),
 }
 
 /// Ipe.Http.Server.Route (opaque). Non-generic — see ErasedHandler.
@@ -248,6 +261,27 @@ pub fn server_static(path: String, dir: String) -> ServerRoute {
         method: "GET".to_string(),
         path,
         target: RouteTarget::Static(dir),
+    }
+}
+
+/// `Server.mountApp : String -> WebApp -> Route` — mount a `Web.embed` handle
+/// at the `prefix` path into the shared server Router. The embedded app runs on
+/// the SAME listener as the sibling `Server.get`/`post` routes (one port). The
+/// `WebApp` arg is a `Web.embed` handle carrying a router-builder; the type
+/// system (`mountApp : String -> WebApp -> Route`) guarantees only a `WebApp`
+/// reaches here, so a wrong-shape app is already a compile error.
+///
+/// A `Web.app` (standalone) handle would carry no mount builder (`None`); that
+/// is unreachable for well-typed source that reached `mountApp` via `Web.embed`,
+/// but is handled fail-closed anyway (the route becomes inert — it nests
+/// nothing — never a panic).
+#[cfg(feature = "web")]
+pub fn server_mount_app(prefix: String, app: crate::tea::WebApp) -> ServerRoute {
+    let cell: MountCell = Arc::new(std::sync::Mutex::new(app.into_mount_builder()));
+    ServerRoute {
+        method: "MOUNT".to_string(),
+        path: prefix,
+        target: RouteTarget::MountWeb(cell),
     }
 }
 
@@ -1042,6 +1076,22 @@ pub fn server_listen<E: From<String> + Send + 'static>(
                 }
                 RouteTarget::Handler(h) => {
                     app = app.route(&r.path, method_router(&r.method, h));
+                }
+                // `Server.mountApp`: build the embedded web app's router scoped
+                // to the prefix, then nest it under that prefix on this same
+                // listener (one port). The builder is taken once; a duplicate
+                // (a cloned route) finds `None` and is skipped — inert.
+                #[cfg(feature = "web")]
+                RouteTarget::MountWeb(cell) => {
+                    let builder = cell
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .take();
+                    if let Some(build) = builder {
+                        let prefix = strip_trailing_slash(&r.path);
+                        let sub = build(prefix.clone()).await;
+                        app = app.nest(&prefix, sub);
+                    }
                 }
             }
         }
