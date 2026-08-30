@@ -54,7 +54,12 @@ pub const STDLIB_MODULE_QUALIFIERS: &[(&[&str], &str)] = &[
     // — never both (`compiled_vs_kernel_qualifier_disjoint`), so it stays out.
     (&["Ipe", "List"], "List"),
     (&["Ipe", "Maybe"], "Maybe"),
-    (&["Ipe", "Result"], "Result"),
+    // NOTE — `Ipe.Result` is DELIBERATELY absent: it is a COMPILED-SOURCE
+    // Layer-3 module (registered in `ipe::stdlib::COMPILED_STD_MODULES`). Its
+    // members are point-free `Ffi.kernel "Result_*"` aliases that
+    // `detect_kernel_alias` routes to the registered `Result*` `StdlibKernel`
+    // variants. A module is EITHER a kernel qualifier here OR compiled-source
+    // — never both (`compiled_vs_kernel_qualifier_disjoint`), so it stays out.
     (&["Ipe", "Error"], "Error"),
     (&["Ipe", "Math"], "Math"),
     // NOTE — `Ipe.Bitwise` is DELIBERATELY absent: it is a COMPILED-SOURCE
@@ -860,24 +865,15 @@ impl Env {
                     "isNothing",
                 ],
             ),
-            (
-                "Result",
-                &[
-                    "withDefault",
-                    "map",
-                    "andThen",
-                    "mapError",
-                    "map2",
-                    "map3",
-                    "map4",
-                    "map5",
-                    "andMap",
-                    "combine",
-                    "traverse",
-                    "toMaybe",
-                    "fromMaybe",
-                ],
-            ),
+            // NOTE — `Ipe.Result` is DELIBERATELY absent: it is a
+            // COMPILED-SOURCE Layer-3 module. Its members are point-free
+            // `Ffi.kernel "Result_*"` aliases — no kernel qualifier members to
+            // register here. A module is EITHER a kernel qualifier here OR
+            // compiled-source — never both
+            // (`compiled_vs_kernel_qualifier_disjoint`), so it stays out.
+            // `Ipe.Result` re-exports the builtin `Result(..)` type + ctors
+            // via its `exposing` list; ambient `Ok`/`Err` builtins remain
+            // accessible with no import.
             // `Ipe.Error` — the real `Error ErrorKind ErrorInfo` ADT.
             // Message constructors + nullary constructors + `toString`
             // render + `withMessage` modifier + `isRetryable` classification +

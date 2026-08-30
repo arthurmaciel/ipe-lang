@@ -26,7 +26,13 @@ pub struct StdModule {
 const BASICS: &str = include_str!("../Ipe/Basics.ipe");
 /// `Ipe.Maybe` — combinators over the `Maybe` ADT.
 const MAYBE: &str = include_str!("../Ipe/Maybe.ipe");
-/// `Ipe.Result` — combinators over the `Result` ADT.
+/// `Ipe.Result` — combinators over the `Result` ADT, compiled-source Layer-3.
+///
+/// Every member is a point-free `Ffi.kernel "Result_*"` alias resolved by
+/// `detect_kernel_alias` to a registered `Result*` `StdlibKernel` variant
+/// (`ipe_runtime::result::*`). Registered in [`COMPILED_STD_MODULES`] (NOT
+/// `MODULES`); NOT in `STDLIB_MODULE_QUALIFIERS`, so the disjointness
+/// invariant holds.
 const RESULT: &str = include_str!("../Ipe/Result.ipe");
 /// `Ipe.List` — list combinators.
 const LIST: &str = include_str!("../Ipe/List.ipe");
@@ -259,10 +265,15 @@ pub const MODULES: &[StdModule] = &[
         name: "Ipe.Maybe",
         source: MAYBE,
     },
-    StdModule {
-        name: "Ipe.Result",
-        source: RESULT,
-    },
+    // NOTE — `Ipe.Result` is DELIBERATELY absent: it is a COMPILED-SOURCE
+    // Layer-3 module (registered in `COMPILED_STD_MODULES`). Its members are
+    // point-free `Ffi.kernel "Result_*"` aliases that `detect_kernel_alias`
+    // routes to the registered `Result*` `StdlibKernel` variants. The
+    // `Result` type name and `Ok`/`Err` constructors remain ambient builtins;
+    // `Ipe.Result` re-exports them via `Result(..)` in its `exposing` list so
+    // `import Ipe.Result exposing (Result(..))` still works. A module is
+    // EITHER a parse-fixture entry here OR compiled-source — never both
+    // (`compiled_vs_kernel_qualifier_disjoint`).
     StdModule {
         name: "Ipe.List",
         source: LIST,
@@ -690,6 +701,17 @@ pub const COMPILED_STD_MODULES: &[CompiledStdModule] = &[
     CompiledStdModule {
         dotted: "Ipe.Tuple",
         source: TUPLE,
+    },
+    // Ipe.Result — Layer-3 source; every member is a point-free
+    // `Ffi.kernel "Result_*"` alias resolved by `detect_kernel_alias` to the
+    // registered `Result*` kernels (`ipe_runtime::result::*`). The `Result`
+    // type name and `Ok`/`Err` constructors are ambient builtins; the module
+    // re-exports them via `Result(..)` so
+    // `import Ipe.Result exposing (Result(..))` works. Disjoint from
+    // `STDLIB_MODULE_QUALIFIERS` (no `"Result"` entry there).
+    CompiledStdModule {
+        dotted: "Ipe.Result",
+        source: RESULT,
     },
     // Ipe.Bitwise — Layer-3 source; every member is a point-free
     // `Ffi.kernel "Bitwise_*"` alias resolved by `detect_kernel_alias` to the

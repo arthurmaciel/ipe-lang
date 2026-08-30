@@ -1,4 +1,4 @@
--- | Ipe.Result — combinators over the Result ADT.
+-- | Ipe.Result — combinators over the Result ADT (Layer-3 compiled source).
 --
 -- A `Result e a` is either `Ok a` (success carrying a value) or `Err e`
 -- (failure carrying an error). It is the typed alternative to exceptions:
@@ -10,28 +10,32 @@
 -- success value, `andThen` chains a step that may itself fail, `mapError`
 -- translates the error side, and `combine` collects a list of results.
 --
+-- Each member is a point-free `Ffi.kernel "Result_<member>"` alias resolved
+-- by `detect_kernel_alias` to the registered `Result*` `StdlibKernel`
+-- variant (`ipe_runtime::result::*`).
+--
+-- The `Result` type name and `Ok`/`Err` constructors are ambient builtins;
+-- this module re-exports them via `Result(..)` so
+-- `import Ipe.Result exposing (Result(..))` works.
+--
 -- See also: `Ipe.Maybe` (absence without an error), `Ipe.Task` (async
 -- operations that may fail with `Error`).
-
--- The Result ADT itself (`Result e a`, `Ok`, `Err` ctors) remains
--- kernel-anchored so the type system and runtime IpeResult representation
--- stay in lockstep.
---
--- Partial-resolution at call sites (where the surrounding function is
--- itself polymorphic in `e` or `a`) is handled by `coerceCallArgsAt`
--- forcing explicit `any(e)` widening so generic inference stays
--- consistent across all argument positions in one call.
 module Ipe.Result exposing
-    ( withDefault
+    ( Result(..)
+    , withDefault
     , map
     , andThen
     , mapError
     , map2, map3, map4, map5
     , andMap
     , combine
+    , traverse
     , toMaybe
     , fromMaybe
     )
+
+
+import Ipe.Ffi as Ffi
 
 
 {-| `withDefault fallback result` — the success value, or `fallback` if `Err`.
@@ -43,10 +47,7 @@ withDefault "" (Err "bad") --> ""
 ```
 -}
 withDefault : a -> Result b a -> a
-withDefault def r =
-    case r of
-        Ok x -> x
-        Err _ -> def
+withDefault = Ffi.kernel "Result_withDefault"
 
 
 {-| `map f result` — apply `f` to the `Ok` value; `Err` passes through unchanged.
@@ -58,10 +59,7 @@ map String.fromInt (Ok 7) --> Ok "7"
 ```
 -}
 map : (a -> b) -> Result c a -> Result c b
-map fn r =
-    case r of
-        Ok x -> Ok (fn x)
-        Err e -> Err e
+map = Ffi.kernel "Result_map"
 
 
 {-| `andThen f result` — feed the `Ok` value to `f`; `Err` passes through.
@@ -73,10 +71,7 @@ andThen (\n -> if n > 0 then Ok n else Err "negative") (Err "prior") --> Err "pr
 ```
 -}
 andThen : (a -> Result b c) -> Result b a -> Result b c
-andThen fn r =
-    case r of
-        Ok x -> fn x
-        Err e -> Err e
+andThen = Ffi.kernel "Result_andThen"
 
 
 {-| `mapError f result` — apply `f` to the `Err` value; `Ok` passes through.
@@ -88,10 +83,7 @@ mapError (\_ -> "unknown") (Err "network timeout") --> Err "unknown"
 ```
 -}
 mapError : (a -> b) -> Result a c -> Result b c
-mapError fn r =
-    case r of
-        Ok x -> Ok x
-        Err e -> Err (fn e)
+mapError = Ffi.kernel "Result_mapError"
 
 
 {-| `map2 f ra rb` — combine two `Ok` values with `f`; first `Err` wins.
@@ -103,13 +95,7 @@ map2 (\a b -> a ++ b) (Ok "hello") (Ok " world") --> Ok "hello world"
 ```
 -}
 map2 : (a -> b -> c) -> Result d a -> Result d b -> Result d c
-map2 fn ra rb =
-    case ra of
-        Ok a ->
-            case rb of
-                Ok b -> Ok (fn a b)
-                Err e -> Err e
-        Err e -> Err e
+map2 = Ffi.kernel "Result_map2"
 
 
 {-| `map3 f ra rb rc` — combine three `Ok` values with `f`; first `Err` wins.
@@ -120,16 +106,7 @@ map3 (\a b c -> a + b + c) (Ok 1) (Err "x") (Ok 3) --> Err "x"
 ```
 -}
 map3 : (a -> b -> c -> d) -> Result e a -> Result e b -> Result e c -> Result e d
-map3 fn ra rb rc =
-    case ra of
-        Ok a ->
-            case rb of
-                Ok b ->
-                    case rc of
-                        Ok c -> Ok (fn a b c)
-                        Err e -> Err e
-                Err e -> Err e
-        Err e -> Err e
+map3 = Ffi.kernel "Result_map3"
 
 
 {-| `map4 f ra rb rc rd` — combine four `Ok` values with `f`; first `Err` wins.
@@ -140,19 +117,7 @@ map4 (\a b c d -> a + b + c + d) (Ok 1) (Err "x") (Ok 3) (Ok 4) --> Err "x"
 ```
 -}
 map4 : (a -> b -> c -> d -> e) -> Result f a -> Result f b -> Result f c -> Result f d -> Result f e
-map4 fn ra rb rc rd =
-    case ra of
-        Ok a ->
-            case rb of
-                Ok b ->
-                    case rc of
-                        Ok c ->
-                            case rd of
-                                Ok d -> Ok (fn a b c d)
-                                Err e -> Err e
-                        Err e -> Err e
-                Err e -> Err e
-        Err e -> Err e
+map4 = Ffi.kernel "Result_map4"
 
 
 {-| `map5 f ra rb rc rd re` — combine five `Ok` values with `f`; first `Err` wins.
@@ -163,22 +128,7 @@ map5 (\a b c d e -> a + b + c + d + e) (Ok 1) (Ok 2) (Err "x") (Ok 4) (Ok 5) -->
 ```
 -}
 map5 : (a -> b -> c -> d -> e -> f) -> Result g a -> Result g b -> Result g c -> Result g d -> Result g e -> Result g f
-map5 fn ra rb rc rd re =
-    case ra of
-        Ok a ->
-            case rb of
-                Ok b ->
-                    case rc of
-                        Ok c ->
-                            case rd of
-                                Ok d ->
-                                    case re of
-                                        Ok e -> Ok (fn a b c d e)
-                                        Err err -> Err err
-                                Err err -> Err err
-                        Err err -> Err err
-                Err err -> Err err
-        Err err -> Err err
+map5 = Ffi.kernel "Result_map5"
 
 
 {-| `andMap ra rfn` — apply the function inside `rfn` to the value inside `ra`.
@@ -190,13 +140,7 @@ andMap (Ok 10) (Err "no fn") --> Err "no fn"
 ```
 -}
 andMap : Result c a -> Result c (a -> b) -> Result c b
-andMap ra rfn =
-    case rfn of
-        Ok fn ->
-            case ra of
-                Ok a -> Ok (fn a)
-                Err e -> Err e
-        Err e -> Err e
+andMap = Ffi.kernel "Result_andMap"
 
 
 {-| `combine results` — collect a list of `Result`s into a `Result` of list;
@@ -209,23 +153,20 @@ combine [] --> Ok []
 ```
 -}
 combine : List (Result b a) -> Result b (List a)
-combine results =
-    combineHelp results []
+combine = Ffi.kernel "Result_combine"
 
 
-combineHelp results acc =
-    case results of
-        [] -> Ok (reverseHelp acc [])
-        (r :: rest) ->
-            case r of
-                Ok x -> combineHelp rest (x :: acc)
-                Err e -> Err e
+{-| `traverse f list` — map each element to a `Result`, collecting successes;
+short-circuits on the first `Err`.
 
-
-reverseHelp list acc =
-    case list of
-        [] -> acc
-        (x :: rest) -> reverseHelp rest (x :: acc)
+```ipe
+traverse (\n -> if n > 0 then Ok n else Err "negative") [ 1, 2, 3 ] --> Ok [ 1, 2, 3 ]
+traverse (\n -> if n > 0 then Ok n else Err "negative") [ 1, -2, 3 ] --> Err "negative"
+traverse (\n -> if n > 0 then Ok n else Err "negative") [] --> Ok []
+```
+-}
+traverse : (a -> Result c b) -> List a -> Result c (List b)
+traverse = Ffi.kernel "Result_traverse"
 
 
 {-| `toMaybe result` — `Just` the `Ok` value, or `Nothing` on `Err`.
@@ -236,10 +177,7 @@ toMaybe (Err "oops") --> Nothing
 ```
 -}
 toMaybe : Result a b -> Maybe b
-toMaybe r =
-    case r of
-        Ok x -> Just x
-        Err _ -> Nothing
+toMaybe = Ffi.kernel "Result_toMaybe"
 
 
 {-| `fromMaybe err maybe` — `Ok` the `Just` value, or `Err err` on `Nothing`.
@@ -251,7 +189,4 @@ fromMaybe 0 (Just 99) --> Ok 99
 ```
 -}
 fromMaybe : a -> Maybe b -> Result a b
-fromMaybe err m =
-    case m of
-        Just x -> Ok x
-        Nothing -> Err err
+fromMaybe = Ffi.kernel "Result_fromMaybe"
