@@ -49,7 +49,9 @@ use ipe_ir::{ModPath, Module, Program, Target};
 fn resolve_runtime() -> Option<PathBuf> {
     if let Ok(dir) = std::env::var("IPE_RUNTIME_DIR") {
         let p = PathBuf::from(dir);
-        if p.is_dir() {
+        // Accept only if the dir contains actual runtime source files, not a
+        // parent directory whose only child is a `src/` subdirectory.
+        if p.is_dir() && p.join("log.rs").is_file() {
             return Some(p);
         }
     }
