@@ -677,6 +677,14 @@ const STD_UI_EVENTS: &str = include_str!("../Ipe/Ui/Events.ipe");
 /// `STDLIB_MODULE_QUALIFIERS`, so the disjointness invariant holds.
 const LOG: &str = include_str!("../Ipe/Log.ipe");
 
+/// `Ipe.Level` — the `LogLevel` severity-tag ADT constructors (`debug` / `info`
+/// / `warn` / `error`).  Each member is a point-free `Ffi.kernel "Level_*"`
+/// alias resolved by `detect_kernel_alias` to the registered `Level*`
+/// `StdlibKernel` variants.  Registered in [`COMPILED_STD_MODULES`] (NOT
+/// `MODULES`); NOT in `STDLIB_MODULE_QUALIFIERS`, so the
+/// `compiled_vs_kernel_qualifier_disjoint` invariant holds.
+const LEVEL: &str = include_str!("../Ipe/Level.ipe");
+
 /// Every compiled-source stdlib module, keyed by its dotted import name.
 ///
 /// Disjoint from [`MODULES`] (parse fixtures) and from `ipe_canon`'s
@@ -1010,6 +1018,15 @@ pub const COMPILED_STD_MODULES: &[CompiledStdModule] = &[
     CompiledStdModule {
         dotted: "Ipe.Log",
         source: LOG,
+    },
+    // Ipe.Level — `LogLevel` severity-tag ADT constructors (`debug` / `info` /
+    // `warn` / `error`).  Each member is a point-free `Ffi.kernel "Level_*"`
+    // alias resolved by `detect_kernel_alias` to the registered `Level*`
+    // `StdlibKernel` variants.  Disjoint from `STDLIB_MODULE_QUALIFIERS` (no
+    // `"Level"` entry there), so the invariant holds.
+    CompiledStdModule {
+        dotted: "Ipe.Level",
+        source: LEVEL,
     },
 ];
 
