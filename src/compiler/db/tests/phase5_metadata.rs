@@ -79,9 +79,9 @@ fn root_of(db: &IpeDatabase, files: &[(&[&str], SourceFile)]) -> SourceRoot {
 }
 
 /// Like [`root_of`] but also injects the transitive closure of compiled-source
-/// stdlib modules (e.g. `Ipe.Time`) that the user files import.
+/// stdlib modules (e.g. `Ipe.Io`, `Ipe.Time`) that the user files import.
 ///
-/// Kernel-qualifier modules (`Ipe.Io`, `Ipe.String`, …) resolve from the
+/// Kernel-qualifier modules (`Ipe.String`, `Ipe.Task`, …) resolve from the
 /// canon catalog without source injection — only compiled-source modules need
 /// this. Each injected file carries [`ModuleOrigin::EmbeddedStdlib`] so canon
 /// accepts the `Ipe.*` namespace without an IPE-N0025 rejection.
@@ -230,7 +230,7 @@ fn program_metadata_excludes_unreached_function() {
         main = Io.println (String.fromInt live)\n";
     let (db, _log) = logged_db();
     let entry = file(&db, &["Entry"], ENTRY_WITH_DEAD_CODE);
-    let root = root_of(&db, &[(&["Entry"], entry)]);
+    let root = root_with_std(&db, &[(&["Entry"], entry)]);
 
     let program = ipe_db::lower_program(&db, root, entry).expect("must lower");
     let meta = ipe_db::program_metadata(&db, root, entry).expect("must compute metadata");
@@ -274,7 +274,7 @@ fn program_metadata_reachability_is_transitive() {
         main = Io.println (String.fromInt mid)\n";
     let (db, _log) = logged_db();
     let entry = file(&db, &["Entry"], CHAIN);
-    let root = root_of(&db, &[(&["Entry"], entry)]);
+    let root = root_with_std(&db, &[(&["Entry"], entry)]);
 
     let program = ipe_db::lower_program(&db, root, entry).expect("must lower");
     let meta = ipe_db::program_metadata(&db, root, entry).expect("must compute metadata");
