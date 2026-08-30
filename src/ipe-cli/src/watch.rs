@@ -160,6 +160,9 @@ pub struct WatchOptions {
     /// Optional lifecycle observer — see [`WatchEvent`]. `None` on the CLI
     /// path.
     pub on_event: Option<Arc<dyn Fn(WatchEvent) + Send + Sync>>,
+    /// Suppress progress chatter — only warnings and errors are printed.
+    /// Passes `-q` to cargo and skips the lifecycle status lines.
+    pub quiet: bool,
 }
 
 impl WatchOptions {
@@ -174,6 +177,7 @@ impl WatchOptions {
             restart_timeouts: ipe_watch::RestartTimeouts::default(),
             cargo_path: PathBuf::from("cargo"),
             on_event: None,
+            quiet: false,
         }
     }
 }
@@ -568,14 +572,16 @@ fn run_inner(
 
     let scope = ipe_watch::WatchScope::build(&root_dir, &entry_dir)
         .map_err(|e| CliError::UsageOwned(e.to_string()))?;
-    eprintln!(
-        "{}",
-        crate::style::gutter(&format!(
-            "[ipe watch] watching {} ({} source files)",
-            scope.root().display(),
-            scope.file_count()
-        ))
-    );
+    if !opts.quiet {
+        eprintln!(
+            "{}",
+            crate::style::gutter(&format!(
+                "[ipe watch] watching {} ({} source files)",
+                scope.root().display(),
+                scope.file_count()
+            ))
+        );
+    }
 
     let (raw_tx, raw_rx) = mpsc::channel::<PathBuf>();
     let mut watcher = {
@@ -954,21 +960,30 @@ fn run_inner(
                         // here means "watch is slow" is never misattributed
                         // to the salsa layer, which already ran in
                         // milliseconds by the time this line prints.
-                        if generation == 1 {
-                            eprintln!(
-                                "{}",
-                                crate::style::gutter(
-                                    "[ipe watch] cold build (first run) — this can take a while…"
-                                )
-                            );
-                        } else {
-                            eprintln!("{}", crate::style::gutter("[ipe watch] rebuilding…"));
+                        if !opts.quiet {
+                            if generation == 1 {
+                                eprintln!(
+                                    "{}",
+                                    crate::style::gutter(
+                                        "[ipe watch] building (first run — compiling \
+                                         dependencies, this is the slow one)…"
+                                    )
+                                );
+                            } else {
+                                eprintln!(
+                                    "{}",
+                                    crate::style::gutter(
+                                        "[ipe watch] change detected — rebuilding…"
+                                    )
+                                );
+                            }
                         }
                         match spawn_cargo_build(
                             &opts.cargo_path,
                             &opts.out_dir,
                             generation,
                             evt_tx.clone(),
+                            opts.quiet,
                         ) {
                             Ok(child) => cargo_child = Some(child),
                             Err(e) => eprintln!(
@@ -1018,7 +1033,7 @@ fn run_inner(
                             readiness,
                             opts.restart_timeouts,
                         );
-                        report_restart_outcome(&outcome);
+                        report_restart_outcome(&outcome, opts.quiet);
                         emit(
                             opts,
                             WatchEvent::Restarted {
@@ -1144,14 +1159,18 @@ fn warn_if_memory_store() {
     }
 }
 
-fn report_restart_outcome(outcome: &ipe_watch::RestartOutcome) {
+fn report_restart_outcome(outcome: &ipe_watch::RestartOutcome, quiet: bool) {
     match outcome {
         ipe_watch::RestartOutcome::Spawned => {
-            eprintln!("{}", crate::style::gutter("[ipe watch] app is up"));
+            if !quiet {
+                eprintln!("{}", crate::style::gutter("[ipe watch] app started"));
+            }
         }
         ipe_watch::RestartOutcome::UnchangedBinary => {}
         ipe_watch::RestartOutcome::Restarted => {
-            eprintln!("{}", crate::style::gutter("[ipe watch] app restarted"));
+            if !quiet {
+                eprintln!("{}", crate::style::gutter("[ipe watch] app reloaded"));
+            }
         }
         ipe_watch::RestartOutcome::RespawnedLastGood { broken } => eprintln!(
             "{}",
@@ -1217,6 +1236,7 @@ fn spawn_cargo_build(
     out_dir: &Path,
     generation: u64,
     evt_tx: mpsc::Sender<OrchestratorEvent>,
+    quiet: bool,
 ) -> std::io::Result<Arc<std::sync::Mutex<Child>>> {
     let mut cmd = Command::new(cargo_path);
     cmd.arg("build")
@@ -1224,6 +1244,12 @@ fn spawn_cargo_build(
         .current_dir(out_dir)
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
+    if quiet {
+        cmd.arg("-q");
+    } else {
+        // Force colour + the progress bar through the pipe when our stderr is a terminal.
+        crate::force_cargo_terminal_ui(&mut cmd);
+    }
     let mut child = cmd.spawn()?;
 
     // Take the pipes now, before the `Child` moves behind the shared lock —
@@ -1236,7 +1262,10 @@ fn spawn_cargo_build(
     let shared_for_waiter = Arc::clone(&shared);
 
     let stdout_reader = thread::spawn(move || read_all(stdout));
-    let stderr_reader = thread::spawn(move || read_all(stderr));
+    // Relay stderr live so the user sees cargo's progress bar and compiler
+    // messages as they arrive, while still capturing the full text for the
+    // failure diagnostic (CargoOutcome::Red carries it).
+    let stderr_reader = thread::spawn(move || relay_and_capture_stderr(stderr));
 
     thread::spawn(move || {
         let status = loop {
@@ -1287,6 +1316,32 @@ fn read_all(pipe: Option<impl std::io::Read>) -> String {
         let _ = s.read_to_string(&mut buf);
     }
     buf
+}
+
+/// Relay `cargo`'s stderr live to our own stderr (so the user sees the progress
+/// bar and compiler messages as they arrive) and simultaneously accumulate the
+/// full text for the failure diagnostic. Uses the same chunk boundary as
+/// [`crate::read_progress_chunk`] so carriage-return progress-bar frames flow
+/// through without buffering until the next newline.
+fn relay_and_capture_stderr(pipe: Option<impl std::io::Read>) -> String {
+    use std::io::{BufReader, Write as _};
+    let mut captured = String::new();
+    let Some(reader) = pipe else { return captured };
+    let mut reader = BufReader::new(reader);
+    let mut chunk = String::new();
+    loop {
+        chunk.clear();
+        match crate::read_progress_chunk(&mut reader, &mut chunk) {
+            Ok(0) => break,
+            Ok(_) => {
+                eprint!("{chunk}");
+                let _ = std::io::stderr().flush();
+                captured.push_str(&chunk);
+            }
+            Err(_) => break,
+        }
+    }
+    captured
 }
 
 /// Whether a non-success exit status looks like "killed by us" (a signal

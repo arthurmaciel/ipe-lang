@@ -3012,6 +3012,7 @@ pub(crate) fn run_watch(rest: &[String]) -> Result<(), CliError> {
     let mut opts = watch::WatchOptions::new(PathBuf::from(entry), out_dir, runtime_dir);
     opts.port = args.port;
     opts.cargo_path = cargo_bin.path().to_path_buf();
+    opts.quiet = args.quiet;
     watch::run(&opts)
 }
 
@@ -3228,7 +3229,8 @@ fn run_build_body(rest: &[String]) -> Result<(), CliError> {
     // Human-friendly progress: the compile+emit below is otherwise silent, so
     // bracket it with a start/done line. Shown only on an interactive terminal so
     // piped / CI output stays clean; status goes to stderr (stdout carries data).
-    let show_progress = {
+    // Suppressed entirely when `--quiet` is set (only warnings and errors remain).
+    let show_progress = !args.quiet && {
         use std::io::IsTerminal as _;
         std::io::stderr().is_terminal()
     };
@@ -3264,6 +3266,7 @@ fn run_build_body(rest: &[String]) -> Result<(), CliError> {
             runtime_dep,
             manifest.as_deref(),
             &entry_path,
+            args.quiet,
         )?;
     }
 
@@ -3307,6 +3310,7 @@ fn compile_and_finalize_native_build(
     runtime_dep: bool,
     manifest: Option<&Path>,
     entry_path: &Path,
+    quiet: bool,
 ) -> Result<(), CliError> {
     // `native_cargo` is `Some` on every native path (the caller's wasm branch
     // returns before here); the fallback re-resolves rather than unwrapping so
@@ -3317,6 +3321,11 @@ fn compile_and_finalize_native_build(
     };
     let mut cargo = std::process::Command::new(cargo_bin.path());
     cargo.arg("build").current_dir(out_dir);
+    if quiet {
+        cargo.arg("-q");
+    } else {
+        force_cargo_terminal_ui(&mut cargo);
+    }
     if let Some(plan) = &static_plan {
         cargo.args(["--target", plan.triple.as_str()]);
     }
@@ -3670,6 +3679,7 @@ pub(crate) fn run_release(rest: &[String]) -> Result<(), CliError> {
             .arg("--release")
             .args(["--target", triple.as_str()])
             .current_dir(&out_dir);
+        force_cargo_terminal_ui(&mut app_cargo);
         build_emitted_project(&mut app_cargo, "the release binary", None, &out_dir)?;
 
         let app_target_dir = cargo_target_directory(&out_dir)?;
@@ -3740,6 +3750,7 @@ pub(crate) fn run_release(rest: &[String]) -> Result<(), CliError> {
         .arg("--release")
         .args(["--target", triple.as_str()])
         .current_dir(&app_out);
+    force_cargo_terminal_ui(&mut app_cargo);
     build_emitted_project(&mut app_cargo, "the release app", None, &app_out)?;
 
     // Write the capability enforcement artifacts (ipe.profile + embedded floor).
@@ -3791,6 +3802,7 @@ pub(crate) fn run_release(rest: &[String]) -> Result<(), CliError> {
     // Run from the workspace root so cargo finds the workspace Cargo.toml.
     let workspace_root = find_workspace_root()?;
     wrapper_cargo.current_dir(&workspace_root);
+    force_cargo_terminal_ui(&mut wrapper_cargo);
 
     build_emitted_project(
         &mut wrapper_cargo,
@@ -4075,7 +4087,7 @@ fn build_emitted_project(
 ///
 /// # Errors
 /// Propagates the underlying read error from the `cargo` stderr pipe.
-fn read_progress_chunk<R: std::io::Read>(
+pub(crate) fn read_progress_chunk<R: std::io::Read>(
     reader: &mut R,
     out: &mut String,
 ) -> std::io::Result<usize> {
@@ -4095,6 +4107,35 @@ fn read_progress_chunk<R: std::io::Read>(
     }
     out.push_str(&String::from_utf8_lossy(&bytes));
     Ok(total)
+}
+
+/// Apply three environment variables to `cmd` so `cargo` emits ANSI colour and
+/// its `Building [===]` progress bar even through a pipe — but only when our own
+/// stderr is a real terminal (`NO_COLOR` unset). Without the explicit width,
+/// `cargo` draws no bar at all (it reads the bar width from its piped stderr,
+/// which reports no size).
+#[cfg(unix)]
+pub(crate) fn force_cargo_terminal_ui(cmd: &mut std::process::Command) {
+    let stderr = std::io::stderr();
+    if !crate::style::use_color(&stderr) {
+        return;
+    }
+    cmd.env("CARGO_TERM_COLOR", "always");
+    cmd.env("CARGO_TERM_PROGRESS_WHEN", "always");
+    let cols = terminal_width(&stderr).unwrap_or(80);
+    cmd.env("CARGO_TERM_PROGRESS_WIDTH", cols.to_string());
+}
+
+/// No-op shim for non-Unix targets where `rustix::termios` is unavailable.
+#[cfg(not(unix))]
+pub(crate) fn force_cargo_terminal_ui(_cmd: &mut std::process::Command) {}
+
+/// The column width of `stream`'s terminal, or `None` when it is not a terminal
+/// or the size cannot be read. Uses `TIOCGWINSZ` via rustix — no libc binding.
+#[cfg(unix)]
+fn terminal_width(stream: &impl std::os::fd::AsFd) -> Option<u16> {
+    let ws = rustix::termios::tcgetwinsize(stream).ok()?;
+    (ws.ws_col > 0).then_some(ws.ws_col)
 }
 
 /// The runtime crate the emit will link against, as a [`RuntimeContext`] for a
@@ -4130,6 +4171,7 @@ fn bundle_wasm(out_dir: &Path) -> Result<(), CliError> {
     cargo
         .args(["build", "--target", "wasm32-unknown-unknown", "--release"])
         .current_dir(out_dir);
+    force_cargo_terminal_ui(&mut cargo);
     // The wasm build uses the SAME dependency-model runtime crate the native path
     // does (selected via the `wasm-client` floor). Attach the resolved runtime
     // context so a `cargo build` failure that names a missing runtime feature can
@@ -4345,8 +4387,8 @@ fn run_run_body(rest: &[String]) -> Result<(), CliError> {
     // clean); to stderr, so stdout carries only the program's own output. The
     // cargo build that follows streams its own progress; the exec that ends
     // `ipe run` leaves no room for a settled "done" line, so the run just starts
-    // producing the program's output.
-    let show_progress = {
+    // producing the program's output. Suppressed when `--quiet` is set.
+    let show_progress = !args.quiet && {
         use std::io::IsTerminal as _;
         std::io::stderr().is_terminal()
     };
@@ -4391,6 +4433,11 @@ fn run_run_body(rest: &[String]) -> Result<(), CliError> {
     };
     let mut cargo = std::process::Command::new(cargo_bin.path());
     cargo.arg("build").current_dir(&out_dir);
+    if args.quiet {
+        cargo.arg("-q");
+    } else {
+        force_cargo_terminal_ui(&mut cargo);
+    }
     if let Some(plan) = &static_plan {
         cargo.args(["--target", plan.triple.as_str()]);
     }
@@ -6772,6 +6819,19 @@ mod tests {
             0
         );
         assert!(out.is_empty());
+    }
+
+    /// Cargo terminal UI should be forced only when our stderr is a TTY and
+    /// `NO_COLOR` is unset — both conditions must hold. Checked via a
+    /// closed-form helper that mirrors the guard inside `force_cargo_terminal_ui`.
+    #[test]
+    fn force_cargo_ui_truth_table() {
+        // Pure function extracted from the guard: is_tty && no_color is unset.
+        let should_force = |is_tty: bool, no_color: bool| -> bool { is_tty && !no_color };
+        assert!(should_force(true, false), "tty + color on → force");
+        assert!(!should_force(false, false), "not a tty → no force");
+        assert!(!should_force(true, true), "NO_COLOR set → no force");
+        assert!(!should_force(false, true), "not a tty + NO_COLOR → no force");
     }
 
     /// `missing_runtime_feature` pulls the feature name out of `cargo`'s

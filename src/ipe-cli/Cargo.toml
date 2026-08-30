@@ -88,7 +88,7 @@ panic-scan = { path = "../../tools/panic-scan" }
 # check adds no new vetted crate. Unix-only: the query has no portable analogue
 # on the non-Unix targets this CLI builds for.
 [target.'cfg(unix)'.dependencies]
-rustix = { version = "0.38", features = ["fs"] }
+rustix = { version = "0.38", features = ["fs", "termios"] }
 
 [dev-dependencies]
 # Build + run plumbing shared by the golden E2E tests (tests/support/mod.rs).
