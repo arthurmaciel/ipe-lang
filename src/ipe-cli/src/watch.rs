@@ -174,7 +174,7 @@ impl WatchOptions {
             runtime_dir,
             port: 8000,
             debounce: ipe_watch::DebounceConfig::default(),
-            restart_timeouts: ipe_watch::RestartTimeouts::default(),
+            restart_timeouts: ipe_watch::RestartTimeouts::for_dev_watch(),
             cargo_path: PathBuf::from("cargo"),
             on_event: None,
             quiet: false,
@@ -422,7 +422,8 @@ enum OrchestratorEvent {
 /// slack for the cargo-kill waiter's poll loop, the compile worker's salsa
 /// unwind, and the coalesce thread's join — all of which are themselves
 /// individually bounded and normally complete in well under a second once
-/// shutdown starts.
+/// shutdown starts (the dev-watch `graceful_stop`,
+/// [`ipe_watch::RestartTimeouts::for_dev_watch`], is a fraction of a second).
 const SHUTDOWN_WAIT_BUDGET: Duration = Duration::from_secs(20);
 
 /// Delay before retrying a cycle whose `resolve_project_sources` call
