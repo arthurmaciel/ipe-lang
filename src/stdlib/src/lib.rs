@@ -256,10 +256,6 @@ pub const MODULES: &[StdModule] = &[
         source: BASICS,
     },
     StdModule {
-        name: "Ipe.Result",
-        source: RESULT,
-    },
-    StdModule {
         name: "Ipe.List",
         source: LIST,
     },
@@ -696,6 +692,15 @@ pub const COMPILED_STD_MODULES: &[CompiledStdModule] = &[
     CompiledStdModule {
         dotted: "Ipe.Maybe",
         source: MAYBE,
+    },
+    // Ipe.Result — Layer-3 source; every member is a point-free
+    // `Ffi.kernel "Result_*"` alias resolved by `detect_kernel_alias` to the
+    // registered `Result*` kernels (`ipe_runtime::result::*`). The `Result`
+    // type and `Ok`/`Err` constructors remain ambient builtins.
+    // Disjoint from `STDLIB_MODULE_QUALIFIERS` (no `"Result"` entry there).
+    CompiledStdModule {
+        dotted: "Ipe.Result",
+        source: RESULT,
     },
     // Ipe.Bitwise — Layer-3 source; every member is a point-free
     // `Ffi.kernel "Bitwise_*"` alias resolved by `detect_kernel_alias` to the
