@@ -1,0 +1,50 @@
+module Main exposing (main)
+
+import Ipe.Trace as Trace
+import Ipe.Debug as Debug
+import Ipe.String as String
+import Ipe.Task as Task
+import Ipe.Io as Io
+
+
+-- `Ipe.Trace` groups a unit of work into a named span; `Ipe.Debug.log` is the
+-- development print. Three ideas:
+--   • `Trace.span name task` wraps a Task WITHOUT changing its result: the value
+--     (or error) flows through untouched, plus a span in the trace tree. Spans
+--     are opt-in output (gated by IPE_TRACE), so a wrapped program behaves
+--     identically whether or not tracing is on.
+--   • `Trace.event` marks a point in time on the active span; `Trace.attr`
+--     annotates it with a `key = value`. Both are `Task Error ()` you sequence.
+--   • `Debug.log label value` prints `"label: value"` to stderr and returns the
+--     value UNCHANGED, so you can drop it into an expression without rewiring it.
+
+
+-- The steps of a checkout, each a small Task returning a running subtotal.
+reserveStock : Int -> Task Error Int
+reserveStock qty =
+    Task.succeed (Debug.log "reserved" qty)
+
+
+chargeCard : Int -> Task Error Int
+chargeCard qty =
+    Task.succeed (qty * 1000)
+
+
+-- The whole flow wrapped in one named span. The `event` and `attr` calls record
+-- points on it; the returned total is exactly what the inner pipeline produced.
+checkout : Int -> Task Error Int
+checkout qty =
+    Trace.span "checkout"
+        (do
+            Trace.event "reserve-start"
+            reserved <- reserveStock qty
+            Trace.attr "sku" "widget-42"
+            total <- chargeCard reserved
+            Task.succeed total
+        )
+
+
+main =
+    do
+        cents <- checkout 3
+        Io.println ("checkout total (cents): " ++ String.fromInt cents)
