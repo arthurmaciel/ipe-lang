@@ -990,3 +990,121 @@ fn csrf_cookie_secure_when_env_production_regardless_of_tls_signal() -> Result<(
 
     Ok(())
 }
+
+/// Shape-model §10 flagship: a declarative `Server` that mounts a `Web.embed`'d
+/// single-page Web app under `/app` AND serves a plain `GET /api` route — BOTH
+/// on one listener (one port). The embedded app is a value produced by
+/// `Web.embed` and mounted by `Server.mountApp`; the whole program's `main` is a
+/// `Server.listen` Task (a Program, not a Web shape).
+const IPE_SERVER_MOUNTS_WEB_PROGRAM: &str = r#"module Main exposing (main)
+
+import Ipe.Tea.Web as Web
+import Ipe.Ui as Ui
+import Ipe.Tea.Web.Cmd
+import Ipe.Tea.Web.Sub
+import Ipe.String
+import Ipe.Http.Server as Server
+import Ipe.Maybe
+import Ipe.System
+import Ipe.Task
+
+
+type Msg
+    = Increment
+
+
+type alias Model =
+    { count : Int }
+
+
+init : a -> ( Model, Cmd Msg )
+init _req =
+    ( { count = 0 }, Cmd.none )
+
+
+update : Msg -> Model -> ( Model, Cmd Msg )
+update msg model =
+    case msg of
+        Increment ->
+            ( { model | count = model.count + 1 }, Cmd.none )
+
+
+view : Model -> Element Msg
+view model =
+    Ui.text (String.fromInt model.count)
+
+
+subscriptions : Model -> Sub Msg
+subscriptions _model =
+    Sub.none
+
+
+main : Task Error ()
+main =
+    let port = Maybe.withDefault 8080 (String.toInt (System.getenvOr "IPE_SERVER_PORT" "8080"))
+    in
+    Server.listen port
+        [ Server.mountApp "/app"
+            (Web.embed
+                { init = init
+                , update = update
+                , view = view
+                , subscriptions = subscriptions
+                , routes = []
+                , notFound = Increment
+                }
+            )
+        , Server.get "/api" (\_req -> Task.succeed (Server.json "{\"ok\":true}"))
+        ]
+"#;
+
+/// THE SEAL for shape-model §9/§10: a `Server` mounts a `Web.embed`'d web app
+/// and serves a sibling `GET /api` route, both on ONE port. Proves end to end
+/// that the `ipe`-accepted program's emitted Rust `cargo build`s, the binary
+/// binds one listener, and BOTH surfaces answer on it: `/api` returns the JSON
+/// handler's body, and the mounted `/app/` returns the embedded web app's HTML
+/// page (a live-session bootstrap, not a 404) — the two are served by the
+/// SAME axum router the mount nests under `/app`.
+///
+/// # Errors
+///
+/// Propagates any pipeline, build, spawn, or HTTP error as a test error.
+#[test]
+fn server_mounts_web_app_and_api_on_one_port() -> Result<(), BoxError> {
+    if std::env::var("IPE_E2E").is_err() {
+        return Ok(());
+    }
+    let test_name = "server_mounts_web_app_and_api_on_one_port";
+
+    let exe = compile_and_build(test_name, IPE_SERVER_MOUNTS_WEB_PROGRAM)?;
+    let port = pick_ephemeral_port()?;
+    let _guard = spawn_and_wait_ready(test_name, &exe, port)?;
+
+    let addr = format!("127.0.0.1:{port}");
+
+    // The sibling plain route answers with the JSON handler's body.
+    let api_body = http_get(test_name, &addr, "/api")?;
+    assert_eq!(
+        api_body, "{\"ok\":true}",
+        "{test_name}: /api handler body wrong\n--- actual ---\n{api_body}"
+    );
+
+    // The mounted web app answers under its prefix on the SAME port. A live web
+    // page bootstrap is HTML (it embeds the client asset + a session cookie), so
+    // the response is non-empty HTML — NOT a 404 (which the JSON `/api` handler
+    // or an unmounted path would give). We assert it looks like an HTML document
+    // rather than pinning the full page bytes (which carry a per-build asset
+    // hash + a fresh session id).
+    let app_slash = http_get(test_name, &addr, "/app/")?;
+    let app_noslash = http_get(test_name, &addr, "/app")?;
+    let is_html =
+        |b: &str| b.contains("<!DOCTYPE html>") || b.contains("<html") || b.contains("<body");
+    assert!(
+        is_html(&app_slash) || is_html(&app_noslash),
+        "{test_name}: mounted /app did not return an HTML page (embedded web app not served on the shared port?)\n--- /app/ (first 300) ---\n{}\n--- /app (first 300) ---\n{}",
+        &app_slash.chars().take(300).collect::<String>(),
+        &app_noslash.chars().take(300).collect::<String>()
+    );
+
+    Ok(())
+}

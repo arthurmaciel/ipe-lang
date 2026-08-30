@@ -1066,6 +1066,13 @@ pub fn server_listen<E: From<String> + Send + 'static>(
 ) -> IpeTask<E, ()> {
     Box::pin(async move {
         let mut app: axum::Router = axum::Router::new();
+        // At most ONE mounted web app per server: the embedded app's cookie /
+        // CSRF / asset paths are scoped through the process-wide base path
+        // (`IPE_WEB_BASE_PATH`), so a SECOND mount at a different prefix would
+        // silently mis-scope the first. Reject the second fail-closed (before
+        // bind) rather than serve a subtly broken session/CSRF surface.
+        #[cfg(feature = "web")]
+        let mut web_mounted = false;
         for r in routes {
             match r.target {
                 RouteTarget::Static(dir) => {
@@ -1083,6 +1090,16 @@ pub fn server_listen<E: From<String> + Send + 'static>(
                 // (a cloned route) finds `None` and is skipped — inert.
                 #[cfg(feature = "web")]
                 RouteTarget::MountWeb(cell) => {
+                    if web_mounted {
+                        return IpeResult::Err(
+                            "Server.mountApp: at most one Web app may be mounted per server \
+                             (the embedded app's cookie/CSRF/asset paths are scoped through one \
+                             process-wide base path); mount a single Web app, or serve additional \
+                             apps as separate servers"
+                                .to_string()
+                                .into(),
+                        );
+                    }
                     let builder = cell
                         .lock()
                         .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -1091,6 +1108,7 @@ pub fn server_listen<E: From<String> + Send + 'static>(
                         let prefix = strip_trailing_slash(&r.path);
                         let sub = build(prefix.clone()).await;
                         app = app.nest(&prefix, sub);
+                        web_mounted = true;
                     }
                 }
             }
