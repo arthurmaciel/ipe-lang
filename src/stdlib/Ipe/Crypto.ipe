@@ -145,8 +145,9 @@ type Key = Key
 -- hex representation instead, or use a typed constant-time check).
 type Mac = Mac
 
--- | Parse a hex-encoded or raw string into a `Key`.  Returns
--- `Nothing` if the byte length is wrong for any supported algorithm.
+-- | Parse a hex-encoded or raw string into a `Key`.  Returns `Nothing`
+-- for an empty key; a wrong-length key for a given algorithm fails closed
+-- at that algorithm's boundary (e.g. AEAD requires a 32-byte key).
 keyFromString : String -> Maybe Key
 keyFromString = Ffi.kernel "Key_fromString"
 
