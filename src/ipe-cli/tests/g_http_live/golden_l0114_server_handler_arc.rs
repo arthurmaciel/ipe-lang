@@ -67,8 +67,7 @@ fn server_handler_lambda_boxes_with_arc_not_box() {
         built.err()
     );
 
-    let main_rs = std::fs::read_to_string(out.join("src").join("main.rs"))
-        .expect("emitted src/main.rs must exist");
+    let main_rs = crate::support::read_all_emitted_src(&out);
 
     assert!(
         main_rs.contains("Arc::new(move |"),
@@ -121,8 +120,7 @@ fn ws_on_error_callback_boxes_with_arc_not_box() {
         built.err()
     );
 
-    let main_rs = std::fs::read_to_string(out.join("src").join("main.rs"))
-        .expect("emitted src/main.rs must exist");
+    let main_rs = crate::support::read_all_emitted_src(&out);
 
     // `callee_name` (`emit_expr.rs`) emits every top-level function reference
     // as an absolute `crate::`-qualified path (closes the E0618 local-shadow

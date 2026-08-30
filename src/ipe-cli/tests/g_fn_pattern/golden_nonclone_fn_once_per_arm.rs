@@ -51,7 +51,7 @@ fn i193_nonclone_fn_once_per_arm_rejected() {
          (was IPE-L0127 under the Box-only carrier): {built:?}"
     );
 
-    let emitted = std::fs::read_to_string(out.join("src").join("main.rs")).unwrap_or_default();
+    let emitted = crate::support::read_all_emitted_src(&out);
     assert!(
         emitted.contains("::std::sync::Arc<dyn Fn"),
         "the promoted param must carry the `Arc<dyn Fn>` rebind — its absence \

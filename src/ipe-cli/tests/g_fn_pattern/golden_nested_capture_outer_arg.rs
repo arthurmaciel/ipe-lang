@@ -66,28 +66,27 @@ fn i199_ipec_accepts_and_hoists() {
         built.err()
     );
 
-    let emitted = std::fs::read_to_string(out.join("src").join("main.rs"))
-        .expect("emitted main.rs must exist");
+    let emitted = crate::support::read_all_emitted_src(&out);
 
     // Shape A (`recordAction`): `label` captured into the nested Task.andThen
     // closure AND consumed by the outer by-value `fakeExec label` arg → at least
     // one `.clone()`.
     assert!(
         emitted.contains("label.clone()"),
-        "reused `label` must have at least one `.clone()`; got:\n{emitted}"
+        "reused `label` must have at least one `.clone()`; got emitted user source:\n{emitted}"
     );
     // Shape B (`runPipeline`): `conn` captured across the pipeline eta-lambda AND
     // the auto-forced `let _ = println … in recordAction conn` TaskSeq
     // continuation.
     assert!(
         emitted.contains("conn.clone()"),
-        "reused `conn` must have at least one `.clone()`; got:\n{emitted}"
+        "reused `conn` must have at least one `.clone()`; got emitted user source:\n{emitted}"
     );
     // Shape C (`listItems`): the `rows` lambda param used by value in both
     // branches → a clone on the non-last use.
     assert!(
         emitted.contains("rows.clone()"),
-        "multi-use `rows` lambda param must have at least one `.clone()`; got:\n{emitted}"
+        "multi-use `rows` lambda param must have at least one `.clone()`; got emitted user source:\n{emitted}"
     );
 }
 

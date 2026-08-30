@@ -56,8 +56,7 @@ fn i225_depth0_no_overclone_ipec_accepts_lean() {
         built.err()
     );
 
-    let emitted = std::fs::read_to_string(out.join("src").join("main.rs"))
-        .expect("emitted main.rs must exist");
+    let emitted = crate::support::read_all_emitted_src(&out);
 
     // The over-clone signature: a spurious depth-0 `move |eta_0|` closure that
     // captured `msg`. Post-fix `eta_0` is a plain value binding, so no
@@ -65,14 +64,14 @@ fn i225_depth0_no_overclone_ipec_accepts_lean() {
     assert!(
         !emitted.contains("move |eta_0"),
         "depth-0 pipeline stage must be a plain `let` value, not a spurious \
-         over-clone `move |eta_0|` closure; got:\n{emitted}"
+         over-clone `move |eta_0|` closure; got emitted user source:\n{emitted}"
     );
     // `eta_0` still exists — but as a value binding, confirming the stage
     // lowered leanly rather than being elided entirely.
     assert!(
         emitted.contains("let eta_0"),
         "the pipeline stage should lower to a plain `let eta_0` value binding; \
-         got:\n{emitted}"
+         got emitted user source:\n{emitted}"
     );
 }
 

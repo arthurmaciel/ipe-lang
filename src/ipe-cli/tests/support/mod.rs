@@ -198,6 +198,14 @@ pub fn normalize_runtime_dep_path(manifest: &str) -> String {
 /// `Cargo.toml` surfaces as a `Cargo.toml` mismatch — a genuine finding to fix
 /// at root (refresh the stale manifest), not a helper bug to route around.
 ///
+/// **Bless mode:** if `IPE_BLESS=1` is set in the environment, instead of
+/// asserting, the function writes every emitted file into `golden_dir` (creating
+/// parent directories as needed), normalizing `Cargo.toml`'s machine-specific
+/// runtime path to [`RUNTIME_PATH_PLACEHOLDER`] before writing so the golden
+/// stays portable across machines; stale `ipe_mods/*.rs` files that the emitted
+/// set no longer contains are deleted; then returns without asserting. Use to
+/// regenerate golden files after an intentional emit change.
+///
 /// # Panics
 ///
 /// Fails the calling test (via `assert!`) if any compared file is
@@ -213,19 +221,18 @@ pub fn assert_emitted_project_matches_golden_dir(emitted_out: &Path, golden_dir:
         "main.rs".to_owned(),
         emitted_out.join("src").join("main.rs"),
     )];
-    if golden_dir.join("Cargo.toml").is_file() {
+    if golden_dir.join("Cargo.toml").is_file() || emitted_out.join("Cargo.toml").is_file() {
         pairs.push(("Cargo.toml".to_owned(), emitted_out.join("Cargo.toml")));
     }
 
-    // Per-Ipê-module split files: when the emitted
-    // project splits into `src/ipe_mods/<mod>.rs`, each is compared byte-for-byte
-    // against `<golden_dir>/ipe_mods/<mod>.rs`. The comparison is SYMMETRIC —
-    // the union of the emitted set and the golden set is walked, so an emitted
-    // file the golden lacks (under-checked-in) AND a golden file the split no
-    // longer emits (stale/over-checked-in) both fail loudly, mirroring
-    // `prune_orphaned_files`'s manifest-is-authoritative discipline. A program
-    // that collapses to a single file (the §3.3 Spine-collapse invariant) has
-    // no `ipe_mods/` on EITHER side, so this adds nothing for those goldens.
+    // Per-Ipê-module split files: when the emitted project splits into
+    // `src/ipe_mods/<mod>.rs`, each is compared byte-for-byte against
+    // `<golden_dir>/ipe_mods/<mod>.rs`. The comparison is SYMMETRIC — the
+    // union of the emitted set and the golden set is walked, so an emitted file
+    // the golden lacks (under-checked-in) AND a golden file the split no longer
+    // emits (stale/over-checked-in) both fail loudly. A program that collapses
+    // to a single file (the §3.3 Spine-collapse invariant) has no `ipe_mods/`
+    // on EITHER side, so this adds nothing for those goldens.
     let mut ipe_mod_names: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     for dir in [
         emitted_out.join("src").join("ipe_mods"),
@@ -249,23 +256,83 @@ pub fn assert_emitted_project_matches_golden_dir(emitted_out: &Path, golden_dir:
         ));
     }
 
-    let mut mismatches = Vec::new();
-    for (rel, emitted_path) in &pairs {
-        let want_path = golden_dir.join(rel);
-        // The dependency-model `Cargo.toml` carries a machine-specific absolute
-        // runtime path; normalize it to the golden's placeholder before the
-        // byte-compare so the blessed manifest stays portable. Every other
-        // emitted file (and the vendored/wasm manifest) is compared verbatim.
-        let normalize = |text: String| -> String {
-            if rel == "Cargo.toml" {
+    // Bless mode: write all emitted files into the golden dir and return.
+    if std::env::var_os("IPE_BLESS").is_some() {
+        // Collect the emitted ipe_mods names so we can prune stale golden files.
+        let emitted_mod_names: std::collections::BTreeSet<String> = {
+            let emitted_mods_dir = emitted_out.join("src").join("ipe_mods");
+            if let Ok(entries) = std::fs::read_dir(&emitted_mods_dir) {
+                entries
+                    .filter_map(Result::ok)
+                    .filter_map(|e| {
+                        let p = e.path();
+                        if p.extension().is_some_and(|x| x == "rs") {
+                            p.file_name()
+                                .and_then(|n| n.to_str())
+                                .map(str::to_owned)
+                        } else {
+                            None
+                        }
+                    })
+                    .collect()
+            } else {
+                std::collections::BTreeSet::new()
+            }
+        };
+
+        for (rel, emitted_path) in &pairs {
+            let Ok(text) = std::fs::read_to_string(emitted_path) else {
+                continue; // emitted file absent — nothing to bless
+            };
+            let blessed = if rel == "Cargo.toml" {
                 normalize_runtime_dep_path(&text)
             } else {
                 text
+            };
+            let dest = golden_dir.join(rel);
+            if let Some(parent) = dest.parent() {
+                let _ = std::fs::create_dir_all(parent);
             }
-        };
+            std::fs::write(&dest, blessed).unwrap_or_else(|e| {
+                panic!("IPE_BLESS: failed to write golden {}: {e}", dest.display())
+            });
+        }
+
+        // Prune stale golden ipe_mods/*.rs that the emitted set no longer contains.
+        let golden_mods_dir = golden_dir.join("ipe_mods");
+        if let Ok(entries) = std::fs::read_dir(&golden_mods_dir) {
+            for entry in entries.filter_map(Result::ok) {
+                let path = entry.path();
+                if path.extension().is_some_and(|x| x == "rs") {
+                    let name = path
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .map(str::to_owned)
+                        .unwrap_or_default();
+                    if !emitted_mod_names.contains(&name) {
+                        let _ = std::fs::remove_file(&path);
+                    }
+                }
+            }
+        }
+
+        return; // bless done — skip assertion
+    }
+
+    let normalize = |rel: &str, text: String| -> String {
+        if rel == "Cargo.toml" {
+            normalize_runtime_dep_path(&text)
+        } else {
+            text
+        }
+    };
+
+    let mut mismatches = Vec::new();
+    for (rel, emitted_path) in &pairs {
+        let want_path = golden_dir.join(rel);
         match (
             std::fs::read_to_string(&want_path),
-            std::fs::read_to_string(emitted_path).map(normalize),
+            std::fs::read_to_string(emitted_path).map(|t| normalize(rel, t)),
         ) {
             (Ok(want_text), Ok(got_text)) if want_text == got_text => {}
             (Ok(want_text), Ok(got_text)) => mismatches.push(format!(

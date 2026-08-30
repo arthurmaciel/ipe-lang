@@ -67,15 +67,14 @@ fn i218_clone_relay_ipec_accepts() {
         built.err()
     );
 
-    let emitted = std::fs::read_to_string(out.join("src").join("main.rs"))
-        .expect("emitted main.rs must exist");
+    let emitted = crate::support::read_all_emitted_src(&out);
 
     // The shared-capture `insertRow` fn must be pre-cloned (Arc::clone shadow)
     // at least once so no `move` closure moves it out of an `Fn` env.
     assert!(
         emitted.contains("insertRow.clone()"),
         "reused shared-capture `insertRow` must have at least one `.clone()` \
-         in emitted Rust; got:\n{emitted}"
+         in emitted user source; got:\n{emitted}"
     );
 }
 
