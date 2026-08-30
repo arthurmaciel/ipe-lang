@@ -1,0 +1,66 @@
+module Main exposing (main)
+
+import Ipe.Char as Char
+import Ipe.String as String
+import Ipe.Io as Io
+
+
+-- A Caesar-shift cipher — rotate each letter by N places — exercising the three
+-- ideas most `Ipe.Char` code turns on:
+--   • A Char is a Unicode CODE POINT, an integer rune underneath. `Char.toCode`
+--     and `Char.fromCode` are the bridge to arithmetic on characters — shifting a
+--     letter is arithmetic on its code point relative to 'A' or 'a'.
+--   • Classification predicates (`isUpper`, `isLower`, `isDigit`, ...) are the
+--     building blocks: you decide what a character IS, then act. Here only letters
+--     shift; digits, spaces, and punctuation pass through untouched.
+--   • Case matters to the arithmetic: upper- and lower-case letters live in
+--     different code-point ranges, so each is shifted relative to its own base.
+
+
+-- Shift one character by `n` places within its case's 26-letter range, wrapping
+-- around with `modBy`. A non-letter is returned unchanged. The whole operation is
+-- code-point arithmetic: subtract the base to get 0..25, add and wrap, add back.
+shiftChar : Int -> Char -> Char
+shiftChar n c =
+    if Char.isUpper c then
+        rotate n (Char.toCode 'A') c
+
+    else if Char.isLower c then
+        rotate n (Char.toCode 'a') c
+
+    else
+        c
+
+
+rotate : Int -> Int -> Char -> Char
+rotate n base c =
+    let
+        offset =
+            Char.toCode c - base
+    in
+    Char.fromCode (base + modBy 26 (offset + n))
+
+
+-- Encipher a whole string. `String.map` applies the per-character shift across the
+-- text and reassembles a new String — the letters move, everything else stays put.
+encipher : Int -> String -> String
+encipher n text =
+    String.map (shiftChar n) text
+
+
+main =
+    let
+        message =
+            "Attack at Dawn! (07:00)"
+
+        secret =
+            encipher 3 message
+
+        -- Deciphering is the inverse shift: 26 - 3 brings each letter back.
+        recovered =
+            encipher (26 - 3) secret
+    in
+    do
+        Io.println ("plain:     " ++ message)
+        Io.println ("shift +3:  " ++ secret)
+        Io.println ("recovered: " ++ recovered)
