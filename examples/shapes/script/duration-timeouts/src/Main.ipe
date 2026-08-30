@@ -1,0 +1,61 @@
+module Main exposing (main)
+
+import Ipe.Duration as Duration
+import Ipe.Task as Task
+import Ipe.List as List
+import Ipe.String as String
+import Ipe.Io as Io
+
+
+-- Build a timeout schedule from unit-explicit spans, exercising the three ideas
+-- most `Ipe.Duration` code turns on:
+--   • The constructors NAME their unit at the call site — `millis`, `seconds`,
+--     `minutes`. A bare `5` can never be silently misread as the wrong unit,
+--     because you always write which unit the `5` is.
+--   • `Duration` is OPAQUE and non-negative: every constructor clamps a negative
+--     input to zero, so a "minus-five-seconds timeout" is not a representable
+--     value. The type is a proof of non-negativity.
+--   • The raw milliseconds a runtime kernel needs are recovered EXPLICITLY with
+--     `toMillis`, only at the boundary — not scattered through the program as
+--     nameless integers.
+
+
+-- A named span keeps its unit visible where a caller reads it. `seconds 30` says
+-- what it means; a bare `30000` would not.
+type alias Stage =
+    { label : String
+    , budget : Duration.Duration
+    }
+
+
+schedule : List Stage
+schedule =
+    [ { label = "connect", budget = Duration.seconds 5 }
+    , { label = "handshake", budget = Duration.millis 750 }
+    , { label = "download", budget = Duration.minutes 2 }
+    , { label = "cleanup", budget = Duration.seconds (0 - 3) } -- clamps to zero
+    ]
+
+
+-- Render a stage with its span recovered to milliseconds at the boundary — the one
+-- place a `Duration` becomes a raw number the runtime can use.
+render : Stage -> String
+render stage =
+    String.padRight 10 ' ' stage.label
+        ++ String.fromInt (Duration.toMillis stage.budget)
+        ++ " ms"
+
+
+-- The whole schedule's budget is the sum of its spans, in milliseconds.
+totalMillis : List Stage -> Int
+totalMillis stages =
+    List.foldl (\stage acc -> acc + Duration.toMillis stage.budget) 0 stages
+
+
+main =
+    do
+        Io.println "Timeout schedule:"
+        List.map (\s -> Io.println ("  " ++ render s)) schedule
+            |> Task.sequence
+            |> Task.map (\_ -> ())
+        Io.println ("total budget: " ++ String.fromInt (totalMillis schedule) ++ " ms")
