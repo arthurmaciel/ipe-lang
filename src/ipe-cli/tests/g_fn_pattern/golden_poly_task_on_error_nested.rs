@@ -79,8 +79,17 @@ fn poly_task_on_error_nested_green() {
     // generic over the helper's own type param (T1), never `JsonVal`. This
     // is exactly the SEAL-violating shape this closes — assert it here so a
     // future regression fails even when IPE_E2E is not set (CI-cheap gate).
-    let main_rs = std::fs::read_to_string(out.join("src").join("main.rs"))
+    // Collect all emitted Rust; compiled-source stdlib imports split user code
+    // into src/ipe_mods/ipe_mod_main.rs alongside src/main.rs.
+    let mut main_rs = std::fs::read_to_string(out.join("src").join("main.rs"))
         .expect("emitted main.rs must exist after a successful ipe build");
+    let mod_main = out
+        .join("src")
+        .join("ipe_mods")
+        .join("ipe_mod_main.rs");
+    if let Ok(extra) = std::fs::read_to_string(&mod_main) {
+        main_rs.push_str(&extra);
+    }
     assert!(
         main_rs.contains("fn main_with_error_reporting<T1"),
         "withErrorReporting must lower to a generic Rust fn over T1; got:\n{main_rs}"

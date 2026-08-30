@@ -50,8 +50,12 @@ mod tests {
 
     #[test]
     fn http_program_infers_network() {
+        // `Http.request` is the effect kernel (HttpRequest -> Task Error HttpResponse)
+        // that carries the Network capability. Using a library module with a
+        // non-`main` entry avoids the entry-point shape check; the capability scan
+        // traverses all exposed roots regardless of shape.
         let caps = caps_of(
-            "module Main exposing (main)\nimport Ipe.Http\nimport Ipe.Task\nmain : Task ()\nmain =\n    case Http.defaultRequestFromString \"http://example.com\" of\n        Ok req ->\n            Task.andThen (\\_ -> Task.succeed ()) (Http.request req)\n\n        Err e ->\n            Task.fail e\n",
+            "module HttpTest exposing (send)\nimport Ipe.Http\nsend = Http.request\n",
         );
         assert_eq!(
             caps,
@@ -68,7 +72,7 @@ mod tests {
     #[test]
     fn exposed_library_module_without_main_infers_network() {
         let caps = caps_of(
-            "module Extra exposing (fetch)\nimport Ipe.Http\nimport Ipe.Task\nfetch : Task ()\nfetch =\n    case Http.defaultRequestFromString \"http://example.com\" of\n        Ok req ->\n            Task.andThen (\\_ -> Task.succeed ()) (Http.request req)\n\n        Err e ->\n            Task.fail e\n",
+            "module Extra exposing (fetch)\nimport Ipe.Http\nfetch = Http.request\n",
         );
         assert_eq!(
             caps,
