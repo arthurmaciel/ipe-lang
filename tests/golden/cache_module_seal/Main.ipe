@@ -1,6 +1,7 @@
 module Main exposing (main)
 
 import Ipe.Cache as Cache
+import Ipe.Duration as Duration
 import Ipe.Io as Io
 import Ipe.String
 import Ipe.Task
@@ -18,7 +19,7 @@ cfg : Cache.CacheCfg
 cfg =
     Cache.defaultCfg
         |> Cache.withMaxEntries 64
-        |> Cache.withTTL 0
+        |> Cache.withTTL Duration.zero
 
 
 main =

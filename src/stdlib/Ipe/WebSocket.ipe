@@ -66,6 +66,7 @@ import Ipe.Ffi as Ffi
 import Ipe.Bytes exposing (Bytes)
 import Ipe.Error exposing (Error)
 import Ipe.Task as Task
+import Ipe.Duration as Duration exposing (Duration)
 
 
 -- | Opaque handle to an open WebSocket.  The wrapped `Int` is the
@@ -125,17 +126,20 @@ withHeaders headers cfg =
     { cfg | headers = headers }
 
 
--- | Override the handshake timeout in milliseconds (default 30000).
-withTimeout : Int -> WebSocketCfg -> WebSocketCfg
-withTimeout ms cfg =
-    { cfg | timeout = ms }
+-- | Override the handshake timeout (default 30 s).  Takes a typed
+-- `Ipe.Duration` (e.g. `Duration.seconds 30`); the raw milliseconds are
+-- unwrapped into the transport DTO for the runtime.
+withTimeout : Duration -> WebSocketCfg -> WebSocketCfg
+withTimeout timeout cfg =
+    { cfg | timeout = Duration.toMillis timeout }
 
 
--- | Override the ping interval in milliseconds (default 30000).
--- Pass 0 to disable application-level pings entirely.
-withPingInterval : Int -> WebSocketCfg -> WebSocketCfg
-withPingInterval ms cfg =
-    { cfg | pingInterval = ms }
+-- | Override the ping interval (default 30 s).  Takes a typed `Ipe.Duration`;
+-- `Duration.zero` disables application-level pings entirely.  The raw
+-- milliseconds are unwrapped into the transport DTO for the runtime.
+withPingInterval : Duration -> WebSocketCfg -> WebSocketCfg
+withPingInterval interval cfg =
+    { cfg | pingInterval = Duration.toMillis interval }
 
 
 -- | Internal — direct kernel alias.  Returns a bare `Task Error Int`;

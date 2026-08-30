@@ -246,10 +246,12 @@ succeed "ready" --> Task Error String
 
 ## `withBaseMs`
 
-`withBaseMs ms policy` — set the base delay in milliseconds.
+`withBaseMs base policy` — set the base retry delay.  Takes a typed
+`Ipe.Duration` (unit named at the call site); the raw milliseconds are unwrapped
+for the runtime policy kernel.
 
 ```ipe
-withBaseMs 250 (exponentialBackoff 3 100) --> RetryPolicy e
+withBaseMs (Duration.millis 250) (exponentialBackoff 3 100) --> RetryPolicy e
 ```
 
 ## `withJitter`

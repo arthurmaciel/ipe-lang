@@ -1,0 +1,66 @@
+-- | Ipe.Duration — an opaque, unit-explicit time span (Layer 3 Ipe source).
+--
+-- A `Duration` replaces the bare millisecond `Int` that timeouts, delays,
+-- intervals, retry backoff, and cache TTLs used to take.  The ONLY ways to
+-- build one name their unit at the call site — `millis`, `seconds`,
+-- `minutes` — so a number can never be silently misread as the wrong unit,
+-- and the raw milliseconds a runtime kernel needs is recovered explicitly
+-- with `toMillis`.
+--
+-- Every constructor clamps a negative input to zero: a duration is a
+-- non-negative span, and a "minus-five-seconds timeout" is not a
+-- representable value.  `zero` is the total identity span.
+module Ipe.Duration exposing
+    ( Duration
+    , millis
+    , seconds
+    , minutes
+    , zero
+    , toMillis
+    )
+
+
+-- | An opaque, non-negative time span carried as whole milliseconds.  The
+-- constructor is NOT exported, so a `Duration` is a proof of non-negativity.
+type Duration
+    = Duration Int
+
+
+-- | `millis n` — a span of `n` milliseconds.  A negative `n` clamps to `0`.
+millis : Int -> Duration
+millis n =
+    if n < 0 then
+        Duration 0
+
+    else
+        Duration n
+
+
+-- | `seconds n` — a span of `n` seconds.  A negative `n` clamps to `0`; an `n`
+-- so large that `n * 1000` would overflow `Int` (i64) saturates to the largest
+-- representable span rather than wrapping.
+seconds : Int -> Duration
+seconds n =
+    millis (clamp 0 9223372036854775 n * 1000)
+
+
+-- | `minutes n` — a span of `n` minutes.  A negative `n` clamps to `0`; an `n`
+-- so large that `n * 60000` would overflow `Int` (i64) saturates to the largest
+-- representable span rather than wrapping.
+minutes : Int -> Duration
+minutes n =
+    millis (clamp 0 153722867280912 n * 60000)
+
+
+-- | The zero span (`0` ms).  A total value.
+zero : Duration
+zero =
+    Duration 0
+
+
+-- | `toMillis d` — recover the whole-millisecond span for the runtime boundary.
+toMillis : Duration -> Int
+toMillis d =
+    case d of
+        Duration ms ->
+            ms

@@ -1959,17 +1959,17 @@ type Cond row
 -- `frag` is the accumulated `WHERE` fragment: each `where` lowers its `Cond` to
 -- an audited `SqlFragment` EAGERLY (parse-don't-validate — the store is in hand,
 -- so every column is validated against the store's own columns at that moment)
--- and conjoins it. `orderings` carries each ordering column as
--- `(name, isNumeric, ascending)`, `isNumeric` resolved from the store's column
--- type when the ordering is added, so the raw-row sort compares numerically for
--- `CInt` / `CReal` columns without re-consulting the store. `poison` holds the
--- first fail-closed error (an unknown column named by a `where` leaf or an
--- ordering); a poisoned query issues no SQL and fails at the terminal step.
+-- and conjoins it. `orderings` carries each ordering column as an `OrderKey`
+-- `(name, cellType, dir)`, `cellType` resolved from the store's column type when
+-- the ordering is added, so the raw-row sort compares numerically for `CInt` /
+-- `CReal` columns without re-consulting the store. `poison` holds the first
+-- fail-closed error (an unknown column named by a `where` leaf or an ordering);
+-- a poisoned query issues no SQL and fails at the terminal step.
 type Query a
     = Query
         { store : Store a
         , frag : Maybe SqlFragment
-        , orderings : List ( String, Bool, Bool )
+        , orderings : List OrderKey
         , lim : Maybe Int
         , off : Maybe Int
         , poison : Maybe Error
@@ -2454,7 +2454,7 @@ not cond =
 --         |> Store.orderAsc "name"
 orderAsc : String -> Query a -> Query a
 orderAsc col q =
-    addOrdering col True q
+    addOrdering col Ascending q
 
 
 -- | `orderDesc col q` — order `q`'s rows by `col` descending.
@@ -2465,11 +2465,11 @@ orderAsc col q =
 --         |> Store.orderDesc "age"
 orderDesc : String -> Query a -> Query a
 orderDesc col q =
-    addOrdering col False q
+    addOrdering col Descending q
 
 
-addOrdering : String -> Bool -> Query a -> Query a
-addOrdering col ascending q =
+addOrdering : String -> SortDir -> Query a -> Query a
+addOrdering col dir q =
     case q of
         Query r ->
             case r.store of
@@ -2489,7 +2489,7 @@ addOrdering col ascending q =
                             Query
                                 { store = r.store
                                 , frag = r.frag
-                                , orderings = r.orderings ++ [ ( col, isNumericType colType, ascending ) ]
+                                , orderings = r.orderings ++ [ ( col, cellTypeOf colType, dir ) ]
                                 , lim = r.lim
                                 , off = r.off
                                 , poison = r.poison
@@ -2586,12 +2586,29 @@ queryFrag maybeFrag =
             trueFragment
 
 
+-- Whether a raw-row cell is compared as a number or as text. Replaces a bare
+-- `Bool` so the ordering key is self-documenting and the two ordering flags can
+-- never be swapped.
+type CellType
+    = NumericCell
+    | TextCell
+
+
+-- The sort direction for an ordering key. Replaces a bare `Bool` so `Ascending`
+-- / `Descending` reads at the call site instead of a positional `True` / `False`.
+type SortDir
+    = Ascending
+    | Descending
+
+
 -- The ordering key a raw sort needs: the column NAME (to read the cell), whether
--- its store column type is numeric (for a numeric-aware compare), and the
--- ascending flag. Carries no `ColType`, so the `Query` record it lives on
--- references only built-in types.
+-- its store column type is compared numerically (`CellType`), and the sort
+-- direction (`SortDir`). The two named sum types replace the old positional
+-- `( String, Bool, Bool )` so a mis-ordered flag pair is unrepresentable.
+-- Carries no `ColType`, so the `Query` record it lives on references only
+-- built-in and this module's own types.
 type alias OrderKey =
-    ( String, Bool, Bool )
+    ( String, CellType, SortDir )
 
 
 -- | `toMaybe conn q` — run `q` and decode the FIRST matching row (after ordering
@@ -3598,30 +3615,32 @@ orderRowsWith orderings rows =
 sortByOrdering : OrderKey -> List Row -> List Row
 sortByOrdering ordering rows =
     case ordering of
-        ( col, numeric, ascending ) ->
-            List.sortWith (\a b -> cellCompare numeric ascending col a b) rows
+        ( col, cellType, dir ) ->
+            List.sortWith (\a b -> cellCompare cellType dir col a b) rows
 
 
-cellCompare : Bool -> Bool -> String -> Row -> Row -> Order
-cellCompare numeric ascending col a b =
+cellCompare : CellType -> SortDir -> String -> Row -> Row -> Order
+cellCompare cellType dir col a b =
     let
         base =
-            compareCells numeric (rowCell col a) (rowCell col b)
+            compareCells cellType (rowCell col a) (rowCell col b)
     in
-    if ascending then
-        base
+    case dir of
+        Ascending ->
+            base
 
-    else
-        flipOrder base
+        Descending ->
+            flipOrder base
 
 
-compareCells : Bool -> String -> String -> Order
-compareCells numeric x y =
-    if numeric then
-        compareNumeric x y
+compareCells : CellType -> String -> String -> Order
+compareCells cellType x y =
+    case cellType of
+        NumericCell ->
+            compareNumeric x y
 
-    else
-        compare x y
+        TextCell ->
+            compare x y
 
 
 compareNumeric : String -> String -> Order
@@ -3634,26 +3653,29 @@ compareNumeric x y =
             compare x y
 
 
-isNumericType : ColType -> Bool
-isNumericType colType =
+-- Map a store column type to the `CellType` a raw-row sort compares by:
+-- `CInt` / `CReal` (and a nullable wrapper over either) compare numerically;
+-- every other column type compares as text.
+cellTypeOf : ColType -> CellType
+cellTypeOf colType =
     case colType of
         CInt ->
-            True
+            NumericCell
 
         CReal ->
-            True
+            NumericCell
 
         CNull inner ->
-            isNumericType inner
+            cellTypeOf inner
 
         CText ->
-            False
+            TextCell
 
         CBool ->
-            False
+            TextCell
 
         CBlob ->
-            False
+            TextCell
 
 
 flipOrder : Order -> Order

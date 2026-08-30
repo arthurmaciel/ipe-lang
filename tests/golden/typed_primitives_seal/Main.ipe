@@ -1,0 +1,84 @@
+module Main exposing (main)
+
+import Ipe.Io as Io
+import Ipe.String as String
+import Ipe.Net as Net
+import Ipe.Duration as Duration
+import Ipe.ByteSize as ByteSize
+import Ipe.Result as Result exposing (Result(..))
+
+
+-- SEAL positive: each typed-primitive newtype is constructed through its parse
+-- boundary and read back through its `toX` accessor. `Net.fromInt` also proves
+-- the runtime refusals: an out-of-range port and the `0` sentinel are `Err`.
+--   #1422 (masked-numeric: Port / Duration / ByteSize)
+
+
+portLine : String
+portLine =
+    case Net.fromInt 8080 of
+        Ok p ->
+            "port " ++ String.fromInt (Net.toInt p)
+
+        Err _ ->
+            "port ERR"
+
+
+portRejectHigh : String
+portRejectHigh =
+    case Net.fromInt 70000 of
+        Ok _ ->
+            "high UNEXPECTED-OK"
+
+        Err _ ->
+            "high rejected"
+
+
+portRejectZero : String
+portRejectZero =
+    case Net.fromInt 0 of
+        Ok _ ->
+            "zero UNEXPECTED-OK"
+
+        Err _ ->
+            "zero rejected"
+
+
+durLine : String
+durLine =
+    "dur "
+        ++ String.fromInt (Duration.toMillis (Duration.seconds 30))
+        ++ " "
+        ++ String.fromInt (Duration.toMillis (Duration.minutes 2))
+
+
+byteLine : String
+byteLine =
+    "bytes "
+        ++ String.fromInt (ByteSize.toBytes (ByteSize.mib 10))
+        ++ " "
+        ++ String.fromInt (ByteSize.toBytes (ByteSize.kib 4))
+
+
+-- Overflow-safety: an `n` that would overflow `Int` (i64) when scaled by the
+-- unit multiplier saturates to the largest representable value rather than
+-- wrapping (no negative, no panic).
+satLine : String
+satLine =
+    "sat "
+        ++ String.fromInt (Duration.toMillis (Duration.minutes 99999999999999999))
+        ++ " "
+        ++ String.fromInt (ByteSize.toBytes (ByteSize.mib 99999999999999))
+
+
+main =
+    Io.println
+        (String.join "\n"
+            [ portLine
+            , portRejectHigh
+            , portRejectZero
+            , durLine
+            , byteLine
+            , satLine
+            ]
+        )

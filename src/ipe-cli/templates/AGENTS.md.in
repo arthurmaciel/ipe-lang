@@ -359,6 +359,9 @@ app code.
 | `Regex` | `Ipe.Regex` | match, find, findAll, replace, split |
 | `Char` | `Ipe.Char` | isAlpha, isDigit, isLower, isUpper, toUpper, toLower |
 | `Path` | `Ipe.Path` | base, dir, ext, isAbsolute |
+| `Net` | `Ipe.Net` | opaque `Port` (range-validated TCP/UDP port). `fromInt : Int -> Result Error Port` (rejects outside `1..65535`, incl. `0`), `toInt`, `min`/`max`. Used by `Email.withSmtpPort` + `Db.Dsn.build`. |
+| `Duration` | `Ipe.Duration` | opaque, unit-explicit time span. `millis`/`seconds`/`minutes : Int -> Duration` (clamp negatives to 0), `zero`, `toMillis`. Used by `Time.sleep`/`Time.every`, `WebSocket.withTimeout`/`withPingInterval`, `Task.withBaseMs`, `Cache.withTTL`. |
+| `ByteSize` | `Ipe.ByteSize` | opaque, unit-explicit byte quantity. `bytes`/`kib`/`mib : Int -> ByteSize` (binary units; clamp negatives to 0), `zero`, `toBytes`. Used by `Cache.withMaxBytes`. |
 | `Crypto` | `Ipe.Crypto` | sha256, sha512, sha1, md5, hmacSha256, hmacSha512, rsaSha256Sign, rsaSha256Verify, constantTimeEqual (pure); aesGcmEncrypt/Decrypt, chacha20Encrypt/Decrypt, aesKeyFromPassword, chachaKeyFromPassword (Result Error String, symmetric encryption/AEAD); randomBytes, randomToken (Task, entropy) |
 | `Bytes` | `Ipe.Bytes` | empty, length, isEmpty, fromString/toString (UTF-8 lossy via Maybe), fromHex/toHex, fromBase64/toBase64, append, slice |
 | `Jwt` | `Ipe.Jwt` | encode, decode (HS256+RS256, sig+`exp`/`nbf` checked); `hs256`/`rs256` algos; `claims` builder — issuer/subject/audience/expiresAt/notBefore/issuedAt/jwtId/withClaim |
@@ -374,12 +377,12 @@ app code.
 
 | Module | Path | Key functions |
 |---|---|---|
-| `Task` | `Ipe.Task` | succeed, fail, map, andThen, perform, sequence, parallel, lazy, run, fromResult, andThenResult, mapError, onError; **retryWith** + `RetryPolicy e` + `BackoffStrategy` ADT (Linear \| LinearWithJitter \| Exponential \| ExponentialWithJitter). Build via linearBackoff/exponentialBackoff/defaultRetryPolicy; decorate via withJitter/withMaxAttempts/withBaseMs/withRetryOn. |
+| `Task` | `Ipe.Task` | succeed, fail, map, andThen, perform, sequence, parallel, lazy, run, fromResult, andThenResult, mapError, onError; **retryWith** + `RetryPolicy e` + `BackoffStrategy` ADT (Linear \| LinearWithJitter \| Exponential \| ExponentialWithJitter). Build via linearBackoff/exponentialBackoff/defaultRetryPolicy; decorate via withJitter/withMaxAttempts/withBaseMs (`Ipe.Duration`)/withRetryOn. |
 | `Cmd` | `Ipe.Tea.<Shape>.Cmd` | Shape-scoped (`Ipe.Tea.Web.Cmd` / `Ipe.Tea.WebView.Cmd` / `Ipe.Tea.Terminal.Cmd`); importing another shape's `Cmd` in an app is rejected (IPE-N0035). none, batch, perform, map, publish (echo-by-default pub/sub from update return), publishNoEcho (opt-out echo) |
 | `Sub` | `Ipe.Tea.<Shape>.Sub` | Shape-scoped (`Ipe.Tea.Web.Sub` / `Ipe.Tea.WebView.Sub` / `Ipe.Tea.Terminal.Sub`); wrong-shape import rejected (IPE-N0035). none, every, batch, map, subscribeTopic (pub/sub receive) |
 | `PubSub` | `Ipe.PubSub` | publish (Task-shaped, callable wherever a broadcast bus runs — a Web-app process, or `Err` in a plain CLI; complements `Ipe.Tea.Web.PubSub.publish`), publishNoEcho (Task-shaped no-echo) |
 | `Tea.Web.PubSub` | `Ipe.Tea.Web.PubSub` | publish, publishNoEcho (Cmd-shaped, returned from a Web `update`), subscribeTopic (Sub-shaped, declared in `subscriptions`) — the TEA-loop broadcast surface (importing it marks the module a TEA app) |
-| `Time` | `Ipe.Time` | now, sleep, every, unixMillis, format/formatISO8601/formatRFC3339/formatHTTP, addMillis, diffMillis, timeString |
+| `Time` | `Ipe.Time` | now, sleep (`Ipe.Duration`), every (`Ipe.Duration`), unixMillis, format/formatISO8601/formatRFC3339/formatHTTP, addMillis, diffMillis, timeString |
 | `Ipe.Time` | `Ipe.Time` | IANA zones, addMonths/Years (month-end CLAMPED), dayOfWeek (ISO Mon=1..Sun=7), weekOfYear (ISO 8601), startOfDay/Week/Month/Year, diffDays/Hours/Minutes/Seconds; `*Utc` infallible companions (`dayOfWeekUtc`/`startOfDayUtc`/`yearUtc`/etc — `Int -> Int`, plug "UTC" at call site). |
 | `Random` | `Ipe.Random` | int, float, range, choice, shuffle, weighted (entropy-backed); seed, seededInt, seededFloat, seededChoice (deterministic) |
 | `Http` | `Ipe.Http` | get, post, request (custom method/headers/body/timeout via `HttpRequest`), defaultRequest/withMethod/withHeader/withTimeout/withBody builders, parseQuery; typed `HttpResponse = { status : Int, body : String, headers : Dict String String }` |
@@ -399,7 +402,7 @@ app code.
 | `Console` | `Ipe.Web.Console` | `Identity` type alias (`{ subject, email, claims : Dict String String }`) for optional row-poly `consoleAuth : Request -> Task Error (Maybe Identity)` field on `Web.app` cfg. |
 | `RateLimit` | `Ipe.Http.RateLimit` | allow |
 | `WebSocket` | `Ipe.WebSocket` (client) + `Ipe.Http.Server.WebSocket` (server) | Bidirectional sockets. Client: `connect`/`connectWith`/`send`/`sendBinary`/`close`/`closeWithCode` (Task-tier) + `onOpen`/`onMessage`/`onClose`/`onError` (Sub-tier). Server: `upgrade` (returns from a Ipe.Http.Server handler) + `sendToClient`/`sendBinaryToClient`/`broadcast`/`closeClient`. Server production gate: empty `originPatterns` returns 403 when `ENV=production`. |
-| `Cache` | `Ipe.Cache` | LRU+TTL in-memory cache, `Cache k v` parametric on key+value. `CacheCfg` w/ `defaultCfg` + `withMaxEntries`/`withTTL`/`withMaxBytes`. `new`/`get`/`put`/`remove`/`clear`/`size`/`stats`. |
+| `Cache` | `Ipe.Cache` | LRU+TTL in-memory cache, `Cache k v` parametric on key+value. `CacheCfg` w/ `defaultCfg` + `withMaxEntries` (Int) / `withTTL` (`Ipe.Duration`; `Duration.zero` disables) / `withMaxBytes` (`Ipe.ByteSize`; `ByteSize.zero` disables). `new`/`get`/`put`/`remove`/`clear`/`size`/`stats`. |
 | `Email` | `Ipe.Email` | Resend/SES/SendGrid/SMTP under one `EmailProvider` ADT. `EmailMessage`+`Attachment` records w/ `defaultMessage { from, to, subject }` + `with*` builders (`withCc`/`withBcc`/`withTextBody`/`withHtmlBody`/`withAttachment`/`withReplyTo`). `Email.send provider msg : Task Error String`. |
 | `Compression` | `Ipe.Compression` | `gzip`/`gunzip` (RFC 1952) + `zstdCompress`/`zstdDecompress` (RFC 8478). Operates on `String` (Bytes alias). |
 | `Csv` | `Ipe.Csv` | `parse`/`parseWithDelimiter` (returns `Csv = { header, rows }`), `encode`/`encodeWithDelimiter` (RFC 4180 quoting), `parseStreamFromFile`. |
