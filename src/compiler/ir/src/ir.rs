@@ -2127,7 +2127,7 @@ pub enum RuntimeFeatureId {
     Decimal,
     /// `regex` — the `ipe_runtime::regex_kernel::Regex` compiled-pattern handle.
     Regex,
-    /// `csv` — the `ipe_runtime::csv::CsvDoc` document record.
+    /// `csv_kernel` — the `ipe_runtime::csv::CsvDoc` document record.
     Csv,
     /// `cache_kernel` — the `ipe_runtime::cache::{CacheCfg, CacheStats}` records.
     CacheKernel,
@@ -2167,7 +2167,7 @@ impl RuntimeFeatureId {
             Self::Secret => "secret",
             Self::Decimal => "decimal",
             Self::Regex => "regex",
-            Self::Csv => "csv",
+            Self::Csv => "csv_kernel",
             Self::CacheKernel => "cache_kernel",
             Self::WebsocketClient => "websocket_client",
             Self::Email => "email",
