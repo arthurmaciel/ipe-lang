@@ -22,7 +22,16 @@ pub struct StdModule {
     pub source: &'static str,
 }
 
-/// `Ipe.Basics` — `identity` / `always` / `not` / `fst` / `snd` / `clamp`.
+/// `Ipe.Basics` — the implicit Tier-A prelude, compiled-source Layer-3.
+///
+/// Every member is a point-free `Ffi.kernel "Basics_*"` alias resolved by
+/// `ipe_canon::resolve::detect_kernel_alias` to a registered `Basics*`
+/// `StdlibKernel` variant (`ipe_runtime::basics::*`). Registered in
+/// [`COMPILED_STD_MODULES`] (NOT `MODULES`); NOT in `STDLIB_MODULE_QUALIFIERS`,
+/// so the disjointness invariant holds. The Tier-A ambient surface (bare
+/// `identity`/`not`/`always`/… without `import Ipe.Basics`) is preserved via
+/// `ipe_canon::env::Env::install_builtin_vars`, which still routes those names
+/// to the same kernel registry entries.
 const BASICS: &str = include_str!("../Ipe/Basics.ipe");
 /// `Ipe.Maybe` — combinators over the `Maybe` ADT.
 const MAYBE: &str = include_str!("../Ipe/Maybe.ipe");
@@ -251,10 +260,12 @@ const STD_MARKDOWN: &str = include_str!("../Ipe/Markdown.ipe");
 
 /// Every embedded `Ipe` module, keyed by its dotted import name.
 pub const MODULES: &[StdModule] = &[
-    StdModule {
-        name: "Ipe.Basics",
-        source: BASICS,
-    },
+    // NOTE — `Ipe.Basics` is DELIBERATELY absent: it is a COMPILED-SOURCE
+    // Layer-3 module (registered in `COMPILED_STD_MODULES`). Its members are
+    // point-free `Ffi.kernel "Basics_*"` aliases resolved by
+    // `detect_kernel_alias` to the registered `Basics*` `StdlibKernel`
+    // variants. A module is EITHER a parse-test fixture here OR compiled-source
+    // — never both (`compiled_vs_kernel_qualifier_disjoint`), so it stays out.
     StdModule {
         name: "Ipe.Maybe",
         source: MAYBE,
@@ -683,6 +694,16 @@ const STD_UI_EVENTS: &str = include_str!("../Ipe/Ui/Events.ipe");
 /// Disjoint from [`MODULES`] (parse fixtures) and from `ipe_canon`'s
 /// `STDLIB_MODULE_QUALIFIERS` (kernel qualifiers) — see the module comment.
 pub const COMPILED_STD_MODULES: &[CompiledStdModule] = &[
+    // Ipe.Basics — Tier-A prelude, Layer-3 source; every member is a point-free
+    // `Ffi.kernel "Basics_*"` alias resolved by `detect_kernel_alias` to the
+    // registered `Basics*` kernels (`ipe_runtime::basics::*`). Disjoint from
+    // `STDLIB_MODULE_QUALIFIERS` (no `"Basics"` entry there). The ambient
+    // unqualified surface (`identity`/`not`/`always`/…) is preserved by
+    // `ipe_canon::env::Env::install_builtin_vars`.
+    CompiledStdModule {
+        dotted: "Ipe.Basics",
+        source: BASICS,
+    },
     CompiledStdModule {
         dotted: "Ipe.Palette",
         source: PALETTE,
@@ -1019,11 +1040,24 @@ mod tests {
         }
     }
 
-    /// `Ipe.Basics` resolves to its embedded source; the removed `Ipe.Prelude`
-    /// alias does not resolve to anything (no backward-compatible mapping).
+    /// `Ipe.Basics` resolves as a compiled-source module (NOT via the legacy
+    /// parse-test `MODULES` fixture); the removed `Ipe.Prelude` alias does not
+    /// resolve to anything (no backward-compatible mapping).
     #[test]
     fn basics_resolves_and_prelude_is_gone() {
-        assert_eq!(source("Ipe.Basics"), Some(BASICS));
+        let basics_segs: Vec<String> = vec!["Ipe".to_owned(), "Basics".to_owned()];
+        assert_eq!(
+            compiled_std_source_segments(&basics_segs),
+            Some(BASICS),
+            "Ipe.Basics must be reachable as a compiled-source module"
+        );
+        // Not in the legacy MODULES fixture — a module is either compiled-source
+        // or a parse-test fixture, never both.
+        assert_eq!(
+            source("Ipe.Basics"),
+            None,
+            "Ipe.Basics must NOT appear in MODULES (parse-test fixtures)"
+        );
         assert_eq!(source("Ipe.Prelude"), None);
     }
 
