@@ -23,11 +23,11 @@
 
 **Ipê**, pronounced [/ip'e/](https://ipa-reader.com/?text=%09ip%E2%80%B2e&voice=Vitoria), is a "thick-barked" [tree](https://en.wikipedia.org/wiki/Handroanthus_serratifolius) native from South and Central Americas. 
 
-The Ipê programming language aims to be community-centered.  Check out our [principles](https://github.com/arthurmaciel/ipe-lang/blob/main/PRINCIPLES.md) to understand more about our social and technical values.
-
-It pairs [Elm](https://elm-lang.org/)'s syntax with part of [Sky lang](https://sky-lang.org/)'s batteries-included
-standard library - effect system and application framework that turn a pure-functional language into a full-stack one.
+The Ipê programming language pairs [Elm](https://elm-lang.org/)'s syntax with part of [Sky lang](https://sky-lang.org/)'s batteries-included
+standard library - the effect system and application framework that turn a pure-functional language into a full-stack one.
 It compiles to Rust.
+
+Ipê aims to be community-centered. Check out our [principles](https://github.com/arthurmaciel/ipe-lang/blob/main/PRINCIPLES.md) to understand more about our social and technical values.
 
 Installation:
 ```sh
