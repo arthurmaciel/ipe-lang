@@ -16455,6 +16455,27 @@ impl<'a> Lowerer<'a> {
             )
     }
 
+    /// is `(home, name)` a kernel-implicit stream/WebSocket opaque handle —
+    /// `StreamWriter` / `WebSocketServer` / `WebSocketServerCfg`?
+    ///
+    /// Each is minted only by an `Ipe.Http.Server.Stream` / `…WebSocket` kernel
+    /// with the empty home (`ipe_types::constrain` builds `sw()` / `wsh()` /
+    /// `wscfg()` with `module: Vec::new()`), so the runtime-`IrType` mapping keys
+    /// on that empty home alone. These names are NOT reserved (they sit in
+    /// `EXTRA_BUILTIN_TYPE_NAMES`), so a user `type StreamWriter = …` is legal and
+    /// is keyed in `enum_variants` under its own home; the empty-home guard lets
+    /// that user union fall through to the program-enum guard and win by its own
+    /// identity, instead of being hijacked to the opaque runtime handle (an
+    /// `ipe`-exit-0-then-cargo-fail SEAL break where the emitted param names the
+    /// unemitted runtime type).
+    fn is_stream_ws_opaque_con(&self, home: &[Symbol], name: Symbol) -> bool {
+        home.is_empty()
+            && matches!(
+                self.interner.resolve(name),
+                Some("StreamWriter" | "WebSocketServer" | "WebSocketServerCfg")
+            )
+    }
+
     fn lower_enum(&self, u: &canon::Union) -> DResult<EnumDef> {
         // `Ipe.Db.Store.Cond row` carries a PHANTOM `row` (no constructor holds a
         // `row` value — it ties the predicate to the store's row at the
@@ -18201,8 +18222,13 @@ impl<'a> Lowerer<'a> {
                     })
                 }
                 // `StreamWriter` — opaque server-side stream writer handle.
-                // Mirrors `ir_type_from_ty`'s "StreamWriter" arm.
-                "StreamWriter" => Ok(IrType::StreamWriter),
+                // Mirrors `ir_type_from_ty`'s "StreamWriter" arm. Home-guarded on
+                // the empty kernel home so a user `type StreamWriter = …` (keyed
+                // under its own home) falls through to the program-enum guard and
+                // wins by its own identity.
+                "StreamWriter" if self.is_stream_ws_opaque_con(home, *name) => {
+                    Ok(IrType::StreamWriter)
+                }
                 // `Ipe.Email.EmailProvider` — opaque ADT backed by the runtime
                 // enum. Home-guarded — mirrors `ir_type_from_ty`'s arm.
                 "EmailProvider" if self.is_email_provider_con(home, *name) => {
@@ -18219,10 +18245,18 @@ impl<'a> Lowerer<'a> {
                 // the synthesised record here — mirrors how the type-checker's
                 // `normalize_annotation_ty` expands the same name.
                 "Migration" => Ok(self.migration_record_ir()),
-                // `WebSocketServer` — opaque per-peer WsHandle.
-                "WebSocketServer" => Ok(IrType::WebSocketServer),
-                // `WebSocketServerCfg` — opaque WsServerCfg<IpeError>.
-                "WebSocketServerCfg" => Ok(IrType::WebSocketServerCfg),
+                // `WebSocketServer` — opaque per-peer WsHandle. Home-guarded on
+                // the empty kernel home (twin of `StreamWriter`) so a user
+                // `type WebSocketServer = …` wins by its own identity.
+                "WebSocketServer" if self.is_stream_ws_opaque_con(home, *name) => {
+                    Ok(IrType::WebSocketServer)
+                }
+                // `WebSocketServerCfg` — opaque WsServerCfg<IpeError>. Home-guarded
+                // on the empty kernel home (twin of `StreamWriter`) so a user
+                // `type WebSocketServerCfg = …` wins by its own identity.
+                "WebSocketServerCfg" if self.is_stream_ws_opaque_con(home, *name) => {
+                    Ok(IrType::WebSocketServerCfg)
+                }
                 // `WebRoute page` is parametric on the page type it builds:
                 // a bare `WebRoute` annotation cannot
                 // type-check (the solver's `WebRoute` Con carries exactly one
@@ -19281,8 +19315,13 @@ impl<'a> Lowerer<'a> {
                 }
                 "Route" if self.is_server_opaque_con(module, *name) => Ok(IrType::ServerRoute),
                 "Cookie" if self.is_server_opaque_con(module, *name) => Ok(IrType::ServerCookie),
-                // `StreamWriter` — opaque stream writer handle.
-                "StreamWriter" => Ok(IrType::StreamWriter),
+                // `StreamWriter` — opaque stream writer handle. Home-guarded on
+                // the empty kernel home (twin of `ir_type_from_canon`): a solved
+                // `type StreamWriter = …` carries its own module home and falls
+                // through to the program-enum guard below.
+                "StreamWriter" if self.is_stream_ws_opaque_con(module, *name) => {
+                    Ok(IrType::StreamWriter)
+                }
                 // `Ipe.Email.EmailProvider` — opaque ADT backed by the runtime
                 // enum. Home-guarded (`["Std","Email"]`) so a user `type
                 // EmailProvider` with a different home falls through to the
@@ -19297,10 +19336,18 @@ impl<'a> Lowerer<'a> {
                 // `ir_type_from_canon`'s "Migration" arm (defensive; the solved
                 // type of a migration value is normally a `Ty::Record`).
                 "Migration" => Ok(self.migration_record_ir()),
-                // `WebSocketServer` — opaque per-peer WsHandle.
-                "WebSocketServer" => Ok(IrType::WebSocketServer),
-                // `WebSocketServerCfg` — opaque WsServerCfg<IpeError>.
-                "WebSocketServerCfg" => Ok(IrType::WebSocketServerCfg),
+                // `WebSocketServer` — opaque per-peer WsHandle. Home-guarded on
+                // the empty kernel home (twin of `ir_type_from_canon`) so a solved
+                // user `type WebSocketServer = …` wins by its own identity.
+                "WebSocketServer" if self.is_stream_ws_opaque_con(module, *name) => {
+                    Ok(IrType::WebSocketServer)
+                }
+                // `WebSocketServerCfg` — opaque WsServerCfg<IpeError>. Home-guarded
+                // on the empty kernel home (twin of `ir_type_from_canon`) so a
+                // solved user `type WebSocketServerCfg = …` wins by its own identity.
+                "WebSocketServerCfg" if self.is_stream_ws_opaque_con(module, *name) => {
+                    Ok(IrType::WebSocketServerCfg)
+                }
                 // ── Ipe.Ui / Ipe.Html parametric type constructors ────────
                 // Mirror of `ir_type_from_canon` (which handles user-written
                 // type ANNOTATIONS).  This path handles SOLVED types from the
