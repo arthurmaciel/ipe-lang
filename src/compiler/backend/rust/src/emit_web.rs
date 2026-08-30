@@ -74,7 +74,11 @@ pub fn emit_web_call(
         // The six-field cfg scheme. `emit_web_app_inner` branches
         // on the Model's `page` field: routed apps take `web_app_routed`
         // (routes + notFound + set_page); single-page apps take `web_app`.
-        KernelFn::WebApp => {
+        // `Web.embed` builds the same `WebApp` leaf from the same six-field cfg
+        // as `Web.app` — it shares this emit path exactly. The only difference is
+        // intent: an `embed`'d handle is destined for `Server.mountApp` rather
+        // than top-level serving. Both produce `WebApp(web_app(...))`.
+        KernelFn::WebApp | KernelFn::WebEmbed => {
             let [cfg_e] = args else {
                 return Err(Diagnostic::CompilerBug {
                     where_: "ipe_backend_rust::emit_web_call::WebApp",
