@@ -196,7 +196,7 @@ fn resolve_imports_shape() {
     let b = file(
         &db,
         &["B"],
-        "module B exposing (b)\n\nimport A exposing (visible)\nimport Ipe.String\n\nb = visible\n",
+        "module B exposing (b)\n\nimport A exposing (visible)\nimport Ipe.Io\n\nb = visible\n",
     );
     let root = root_of(&db, &[(&["A"], a), (&["B"], b)]);
 
@@ -208,7 +208,7 @@ fn resolve_imports_shape() {
     let expected = vec![
         (vec!["A".to_owned()], ImportResolution::Resolved(a)),
         (
-            vec!["Ipe".to_owned(), "String".to_owned()],
+            vec!["Ipe".to_owned(), "Io".to_owned()],
             ImportResolution::Unresolved,
         ),
     ];

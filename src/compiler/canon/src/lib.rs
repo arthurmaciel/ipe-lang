@@ -378,6 +378,7 @@ mod tests {
         assert!(m.is_some(), "golden");
         let Some(m) = m else { return };
 
+        // ── main body: Io.println "done" ────────────────────────────────────
         let def = find_def(&m, &i, "main");
         assert!(
             matches!(def, Some(Def::Untyped { .. })),
@@ -387,7 +388,7 @@ mod tests {
             return;
         };
 
-        // main = Io.println (String.fromInt (update Increment 0))
+        // main body is a call to Io.println (a kernel).
         let outer = as_call(body);
         assert!(
             matches!(outer, Some((Expr_::VarKernel { .. }, _))),
@@ -408,70 +409,38 @@ mod tests {
         assert_eq!(i.resolve(*name), Some("println"));
         assert_eq!(outer_args.len(), 1);
 
-        // String.fromInt → VarKernel { String, fromInt }.
+        // The single arg is the string literal "done".
         let Some(arg0) = outer_args.first() else {
             return;
         };
-        let mid = as_call(arg0);
         assert!(
-            matches!(mid, Some((Expr_::VarKernel { .. }, _))),
-            "arg is a call to a kernel"
+            matches!(&arg0.value, Expr_::Str(_)),
+            "println arg is a string literal"
         );
-        let Some((
-            Expr_::VarKernel {
-                id: _,
-                module,
-                name,
-            },
-            mid_args,
-        )) = mid
-        else {
-            return;
-        };
-        assert_eq!(i.resolve(*module), Some("String"));
-        assert_eq!(i.resolve(*name), Some("fromInt"));
 
-        // update Increment 0 → VarTopLevel update applied to VarCtor + Int.
-        let Some(mid0) = mid_args.first() else { return };
-        let inner = as_call(mid0);
-        assert!(
-            matches!(inner, Some((Expr_::VarTopLevel { .. }, _))),
-            "arg is a call to a top-level"
-        );
-        let Some((Expr_::VarTopLevel { module, name }, inner_args)) = inner else {
+        // ── update body: case with PCtor patterns ───────────────────────────
+        let upd_def = find_def(&m, &i, "update");
+        let Some(Def::Typed { body: upd_body, .. }) = upd_def else {
             return;
         };
-        assert_eq!(module.first().and_then(|&s| i.resolve(s)), Some("Main"));
-        assert_eq!(i.resolve(*name), Some("update"));
-        assert_eq!(inner_args.len(), 2);
+        let Expr_::Case(_, branches) = &upd_body.value else {
+            assert!(false_marker(), "update body is a case");
+            return;
+        };
 
-        // `Increment` used as a value → VarCtor of Main.Msg.
-        let Some(ctor_arg) = inner_args.first() else {
+        // First arm pattern is `Increment` — PCtor of Main.Msg.
+        let Some(first_branch) = branches.first() else {
             return;
         };
-        assert!(
-            matches!(&ctor_arg.value, Expr_::VarCtor { .. }),
-            "Increment is a ctor value"
-        );
-        let Expr_::VarCtor {
-            type_name,
-            name,
-            index,
-            home,
-        } = &ctor_arg.value
+        let Pattern_::PCtor { type_name, name, index, home, .. } = &first_branch.pat.value
         else {
+            assert!(false_marker(), "first arm pattern is PCtor");
             return;
         };
         assert_eq!(i.resolve(*type_name), Some("Msg"));
         assert_eq!(i.resolve(*name), Some("Increment"));
         assert_eq!(*index, 0);
         assert_eq!(home.first().and_then(|&s| i.resolve(s)), Some("Main"));
-
-        // `0` literal.
-        assert!(matches!(
-            inner_args.get(1).map(|a| &a.value),
-            Some(Expr_::Int(0))
-        ));
     }
 
     #[test]
@@ -618,7 +587,8 @@ mod tests {
 
     #[test]
     fn unknown_qualifier_is_unknown_module() {
-        let err = canon_err("module Main exposing (main)\n\nmain = Strng.fromInt\n");
+        // `Chrar` is one transposition from the `Char` kernel qualifier.
+        let err = canon_err("module Main exposing (main)\n\nmain = Chrar.fromCode\n");
         let Some(Diagnostic::Name {
             msg:
                 NameError::UnknownModule {
@@ -631,19 +601,19 @@ mod tests {
             assert!(false_marker(), "expected UnknownModule");
             return;
         };
-        assert_eq!(&*qualifier, "Strng");
+        assert_eq!(&*qualifier, "Chrar");
         assert!(
-            suggestions.iter().any(|s| &**s == "String"),
-            "should suggest `String`, got {suggestions:?}"
+            suggestions.iter().any(|s| &**s == "Char"),
+            "should suggest `Char`, got {suggestions:?}"
         );
     }
 
     #[test]
     fn known_qualifier_missing_member_is_no_such_member() {
-        // `fromInr` is one edit (substitution) from the `String` member
-        // `fromInt`.
+        // `fromCodz` is one edit (substitution) from the `Char` member
+        // `fromCode`.
         let err =
-            canon_err("module Main exposing (main)\nimport Ipe.String\n\nmain = String.fromInr\n");
+            canon_err("module Main exposing (main)\nimport Ipe.Char\n\nmain = Char.fromCodz\n");
         let Some(Diagnostic::Name {
             msg:
                 NameError::NoSuchMember {
@@ -657,24 +627,24 @@ mod tests {
             assert!(false_marker(), "expected NoSuchMember");
             return;
         };
-        assert_eq!(&*module, "String");
-        assert_eq!(&*member, "fromInr");
+        assert_eq!(&*module, "Char");
+        assert_eq!(&*member, "fromCodz");
         assert!(
-            suggestions.iter().any(|s| &**s == "fromInt"),
-            "should suggest `fromInt`, got {suggestions:?}"
+            suggestions.iter().any(|s| &**s == "fromCode"),
+            "should suggest `fromCode`, got {suggestions:?}"
         );
     }
 
-    /// A bare `import Ipe.Strng` names no stdlib module. It must be rejected AT
+    /// A bare `import Ipe.Chaar` names no stdlib module. It must be rejected AT
     /// the import with IPE-N0020 (`ModuleNotFound`) and a did-you-mean to
-    /// `Ipe.String`, never silently dropped — even though the typo'd name is
+    /// `Ipe.Char`, never silently dropped — even though the typo'd name is
     /// otherwise unused. Reverting the import-existence gate makes this program
     /// canonicalise clean, so the test fails on mutation.
     #[test]
     fn unknown_ipe_stdlib_import_is_module_not_found() {
         // The body is a plain literal so the ONLY possible diagnostic is the
         // bogus import — with the gate reverted the program canonicalises clean.
-        let err = canon_module_err("module Main exposing (main)\nimport Ipe.Strng\n\nmain = 0\n");
+        let err = canon_module_err("module Main exposing (main)\nimport Ipe.Chaar\n\nmain = 0\n");
         let Some(Diagnostic::Name {
             msg: NameError::ModuleNotFound { name, suggestions },
             ..
@@ -686,10 +656,10 @@ mod tests {
             );
             return;
         };
-        assert_eq!(&*name, "Ipe.Strng");
+        assert_eq!(&*name, "Ipe.Chaar");
         assert!(
-            suggestions.iter().any(|s| &**s == "Ipe.String"),
-            "should suggest `Ipe.String`, got {suggestions:?}"
+            suggestions.iter().any(|s| &**s == "Ipe.Char"),
+            "should suggest `Ipe.Char`, got {suggestions:?}"
         );
     }
 
@@ -700,7 +670,7 @@ mod tests {
     #[test]
     fn unknown_ipe_stdlib_exposing_import_is_module_not_found() {
         let err = canon_module_err(
-            "module Main exposing (main)\nimport Ipe.Strng exposing (toUpper)\n\nmain = 0\n",
+            "module Main exposing (main)\nimport Ipe.Chaar exposing (isAlpha)\n\nmain = 0\n",
         );
         let Some(Diagnostic::Name {
             msg: NameError::ModuleNotFound { name, suggestions },
@@ -713,10 +683,10 @@ mod tests {
             );
             return;
         };
-        assert_eq!(&*name, "Ipe.Strng");
+        assert_eq!(&*name, "Ipe.Chaar");
         assert!(
-            suggestions.iter().any(|s| &**s == "Ipe.String"),
-            "should suggest `Ipe.String`, got {suggestions:?}"
+            suggestions.iter().any(|s| &**s == "Ipe.Char"),
+            "should suggest `Ipe.Char`, got {suggestions:?}"
         );
     }
 
@@ -781,13 +751,13 @@ mod tests {
         assert_eq!(&*qualifier, "Widgets");
     }
 
-    /// ADR 0047 Tier C: a KNOWN stdlib qualifier (`String`) used with no
-    /// `import Ipe.String` is the teachable must-import diagnostic (IPE-N0034)
+    /// ADR 0047 Tier C: a KNOWN stdlib qualifier (`Char`) used with no
+    /// `import Ipe.Char` fires the teachable must-import diagnostic (IPE-N0034)
     /// naming the exact module to add — NOT a silent resolve against the
     /// pre-installed catalog, and NOT the generic unknown-module error.
     #[test]
     fn tier_c_known_unimported_qualifier_demands_its_import() {
-        let err = canon_err("module Main exposing (main)\n\nmain = String.fromInt 0\n");
+        let err = canon_err("module Main exposing (main)\n\nmain = Char.fromCode 0\n");
         let Some(Diagnostic::Name {
             msg:
                 NameError::StdlibImportRequired {
@@ -800,18 +770,17 @@ mod tests {
             assert!(false_marker(), "expected StdlibImportRequired (IPE-N0034)");
             return;
         };
-        assert_eq!(&*qualifier, "String");
-        assert_eq!(&*import_path, "Ipe.String");
+        assert_eq!(&*qualifier, "Char");
+        assert_eq!(&*import_path, "Ipe.Char");
     }
 
-    /// The counterpart to the gate: WITH `import Ipe.String`, the same qualified
+    /// The counterpart to the gate: WITH `import Ipe.Char`, the same qualified
     /// use resolves — so the diagnostic fires strictly on the missing import,
     /// never on a real, imported stdlib module.
     #[test]
     fn tier_c_qualifier_resolves_once_its_module_is_imported() {
-        let opt = canon_src(
-            "module Main exposing (main)\nimport Ipe.String\n\nmain = String.fromInt 0\n",
-        );
+        let opt =
+            canon_src("module Main exposing (main)\nimport Ipe.Char\n\nmain = Char.fromCode 0\n");
         assert!(
             opt.is_some(),
             "a Tier-C qualifier must resolve once its module is imported"
@@ -2429,13 +2398,13 @@ mod tests {
         // anti-drift protection the old subset gate gave, now over the explicit
         // reserved variant instead of a `None` inside `Kernel`.
         //
-        // `String.toChar` — no runtime fn; ambiguous Char-vs-Maybe-Char
-        // semantics. Documented in
-        // `src/ipe-cli/tests/golden_core_stdlib.rs`'s header. It fails closed at
-        // type-check with IPE-L0108 (`kernel function not available yet`)
-        // because a `ReservedKernel` lowers to `VarKernel { id: None, .. }`.
+        // The allowlist is intentionally empty: `("String", "toChar")` which was
+        // previously the sole entry is no longer registered in `qual_vars` because
+        // `Ipe.String` is now a compiled-source module (not a kernel qualifier).
+        // Any future reserved entry must be added here with a comment explaining
+        // why it deliberately lacks a `StdlibKernel` variant.
         let reserved_allowlist: std::collections::BTreeSet<(&str, &str)> =
-            std::iter::once(("String", "toChar")).collect();
+            std::collections::BTreeSet::new();
         let reserved_actual = reserved_kernel_members(&env.qual_vars, &interner);
         assert_eq!(
             reserved_actual, reserved_allowlist,
@@ -3824,17 +3793,17 @@ mod tests {
 
     #[test]
     fn embedded_stdlib_own_kernel_import_not_gated_n0034() {
-        // A compiled-source module (`Ipe.Money`-like) that imports `Ipe.String`
-        // and uses `String.fromInt` must NOT fire IPE-N0034 — the module's
-        // own `import Ipe.String as String` satisfies the Tier-C gate.
+        // A compiled-source module (`Ipe.Money`-like) that imports `Ipe.Char`
+        // and uses `Char.fromCode` must NOT fire IPE-N0034 — the module's
+        // own `import Ipe.Char as Char` satisfies the Tier-C gate.
         let src = "module Ipe.Money exposing (show)\n\
-             import Ipe.String as String\n\
-             show : Int -> String\n\
-             show n = String.fromInt n\n";
+             import Ipe.Char as Char\n\
+             show : Int -> Char\n\
+             show n = Char.fromCode n\n";
         let res = canon_with_origin(src, ModuleOrigin::EmbeddedStdlib);
         assert!(
             res.is_ok(),
-            "EmbeddedStdlib module's own `import Ipe.String` must satisfy the Tier-C gate \
+            "EmbeddedStdlib module's own `import Ipe.Char` must satisfy the Tier-C gate \
              (no IPE-N0034): {:?}",
             res.err()
         );
@@ -3842,11 +3811,11 @@ mod tests {
 
     #[test]
     fn user_module_without_import_still_fires_n0034() {
-        // Mirror test: a USER module using `String.fromInt` without the import
+        // Mirror test: a USER module using `Char.fromCode` without the import
         // must STILL fire N0034 — the EmbeddedStdlib exemption above must not
         // accidentally relax the gate for ordinary user code.
         let err = canon_with_origin(
-            "module Main exposing (main)\nmain = String.fromInt 0\n",
+            "module Main exposing (main)\nmain = Char.fromCode 0\n",
             ModuleOrigin::User,
         );
         assert!(
