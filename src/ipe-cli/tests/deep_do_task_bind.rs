@@ -63,10 +63,18 @@ fn deep_do_task_bind_emit_is_linear() {
         built.err()
     );
 
-    // Read the emitted main.rs and assert the fix is in effect.
+    // Read all emitted Rust sources; compiled-source stdlib imports split
+    // user code into src/ipe_mods/ipe_mod_main.rs alongside src/main.rs.
     let emitted_rs = emit_dir.join("src").join("main.rs");
-    let content = std::fs::read_to_string(&emitted_rs)
+    let mut content = std::fs::read_to_string(&emitted_rs)
         .expect("emitted main.rs must exist after a successful build");
+    let mod_main = emit_dir
+        .join("src")
+        .join("ipe_mods")
+        .join("ipe_mod_main.rs");
+    if let Ok(extra) = std::fs::read_to_string(&mod_main) {
+        content.push_str(&extra);
+    }
 
     // The old emit path produced `let __ipe_fn: Box<dyn Fn…> = Box::new(…)` for
     // every Task.andThen continuation. The fix produces `Box::new(move |…| …)` directly.
