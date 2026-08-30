@@ -86,6 +86,14 @@ const DEBUG: &str = include_str!("../Ipe/Debug.ipe");
 /// `MODULES`); NOT in `STDLIB_MODULE_QUALIFIERS`, so the disjointness
 /// invariant holds.
 const TIME: &str = include_str!("../Ipe/Time.ipe");
+/// `Ipe.Decimal` — arbitrary-precision decimal arithmetic, compiled-source Layer-3.
+///
+/// Every member is a point-free `Ffi.kernel "Decimal_*"` alias resolved by
+/// `ipe_canon::resolve::detect_kernel_alias` to a registered `Decimal*`
+/// `StdlibKernel` variant (`ipe_runtime::decimal::*`). Registered in
+/// [`COMPILED_STD_MODULES`] (NOT `MODULES`); NOT in `STDLIB_MODULE_QUALIFIERS`,
+/// so the disjointness invariant holds.
+const DECIMAL: &str = include_str!("../Ipe/Decimal.ipe");
 /// `Ipe.System` — process / environment effect kernels.
 const SYSTEM: &str = include_str!("../Ipe/System.ipe");
 /// `Ipe.Random` — entropy-backed and seeded randomness, compiled-source Layer-3.
@@ -738,6 +746,14 @@ pub const COMPILED_STD_MODULES: &[CompiledStdModule] = &[
     CompiledStdModule {
         dotted: "Ipe.Char",
         source: CHAR,
+    },
+    // Ipe.Decimal — Layer-3 source; every member is a point-free
+    // `Ffi.kernel "Decimal_*"` alias resolved by `detect_kernel_alias` to the
+    // registered `Decimal*` kernels (`ipe_runtime::decimal::*`). Disjoint from
+    // `STDLIB_MODULE_QUALIFIERS` (no `"Decimal"` entry there after migration).
+    CompiledStdModule {
+        dotted: "Ipe.Decimal",
+        source: DECIMAL,
     },
     CompiledStdModule {
         dotted: "Ipe.Random",
