@@ -1,0 +1,57 @@
+module Main exposing (main)
+
+import Ipe.Net as Net
+import Ipe.Result as Result
+import Ipe.Task as Task
+import Ipe.List as List
+import Ipe.String as String
+import Ipe.Io as Io
+
+
+-- Validate candidate port numbers at the boundary, exercising the three ideas
+-- most `Ipe.Net` code turns on:
+--   • `Port` is OPAQUE — the only constructor is `Net.fromInt`, which REJECTS
+--     anything outside `1..65535` (0 is the reserved "no port" sentinel, not
+--     dialable). A value of type `Port` is PROOF its number is in range.
+--   • Connection surfaces (`Db.Dsn.build`, `Email.SmtpConfig`) take a `Port`, not
+--     a bare `Int`. So an out-of-range or zero port is a construction-time error,
+--     never a value that reaches a live socket.
+--   • `Net.min` and `Net.max` are TOTAL known-valid ports — handy as the seed for
+--     `Result.withDefault` when falling back to a compile-time-safe default.
+
+
+-- Candidate ports from, say, a config file: some valid, some not. `fromInt` is the
+-- single gate — each becomes `Ok Port` or a typed `Err`.
+candidates : List Int
+candidates =
+    [ 443, 8080, 0, 70000, 22, -1 ]
+
+
+-- Describe one candidate. A valid one yields a `Port` whose number we recover with
+-- `toInt` only at the boundary; an invalid one is rejected here and cannot flow on.
+describe : Int -> String
+describe n =
+    case Net.fromInt n of
+
+        Ok port ->
+            String.fromInt n ++ "  ->  ok (Port " ++ String.fromInt (Net.toInt port) ++ ")"
+
+        Err _ ->
+            String.fromInt n ++ "  ->  REJECTED (out of 1..65535)"
+
+
+-- A config default built through the same gate: an unset/invalid value falls back
+-- to `Net.min`, a total known-valid port, so `configPort` is always a real `Port`.
+configPort : Int -> Net.Port
+configPort raw =
+    Result.withDefault Net.min (Net.fromInt raw)
+
+
+main =
+    do
+        Io.println "Port validation:"
+        List.map (\n -> Io.println ("  " ++ describe n)) candidates
+            |> Task.sequence
+            |> Task.map (\_ -> ())
+        Io.println ("default from 0 falls back to port " ++ String.fromInt (Net.toInt (configPort 0)))
+        Io.println ("default from 5432 keeps port " ++ String.fromInt (Net.toInt (configPort 5432)))
