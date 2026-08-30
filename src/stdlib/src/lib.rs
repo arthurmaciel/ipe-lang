@@ -30,7 +30,14 @@ const MAYBE: &str = include_str!("../Ipe/Maybe.ipe");
 const RESULT: &str = include_str!("../Ipe/Result.ipe");
 /// `Ipe.List` — list combinators.
 const LIST: &str = include_str!("../Ipe/List.ipe");
-/// `Ipe.String` — string combinators.
+/// `Ipe.String` — string combinators, compiled-source Layer-3.
+///
+/// Every member is a point-free `Ffi.kernel "String_*"` alias resolved by
+/// `ipe_canon::resolve::detect_kernel_alias` to a registered `String*`
+/// `StdlibKernel` variant. Registered in [`COMPILED_STD_MODULES`] (NOT
+/// `MODULES`); NOT in `STDLIB_MODULE_QUALIFIERS`, so the disjointness invariant
+/// holds. The module also re-exports the `String` builtin type via the
+/// `build_module_exports` reserved-builtin-type path.
 const STRING: &str = include_str!("../Ipe/String.ipe");
 /// `Ipe.Char` — single-character helpers.
 const CHAR: &str = include_str!("../Ipe/Char.ipe");
@@ -260,10 +267,6 @@ pub const MODULES: &[StdModule] = &[
     StdModule {
         name: "Ipe.List",
         source: LIST,
-    },
-    StdModule {
-        name: "Ipe.String",
-        source: STRING,
     },
     StdModule {
         name: "Ipe.Char",
@@ -700,6 +703,15 @@ pub const COMPILED_STD_MODULES: &[CompiledStdModule] = &[
     CompiledStdModule {
         dotted: "Ipe.Bitwise",
         source: BITWISE,
+    },
+    // Ipe.String — Layer-3 source; every member is a point-free
+    // `Ffi.kernel "String_*"` alias resolved by `detect_kernel_alias` to the
+    // registered `String*` kernels. Also re-exports the `String` builtin type
+    // via the reserved-builtin-type path in `build_module_exports`. Disjoint
+    // from `STDLIB_MODULE_QUALIFIERS` (no `"String"` entry there).
+    CompiledStdModule {
+        dotted: "Ipe.String",
+        source: STRING,
     },
     // Ipe.Debug — Layer-3 source; every member is a point-free
     // `Ffi.kernel "Debug_*"` alias resolved by `detect_kernel_alias` to the

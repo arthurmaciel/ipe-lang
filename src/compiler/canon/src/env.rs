@@ -45,7 +45,14 @@ use crate::resolve::ModuleOrigin;
 pub const STDLIB_MODULE_QUALIFIERS: &[(&[&str], &str)] = &[
     // ── Ipe.* pure + effect modules ────────────────────────────────────
     (&["Ipe", "Basics"], "Basics"),
-    (&["Ipe", "String"], "String"),
+    // NOTE — `Ipe.String` is DELIBERATELY absent: it is a COMPILED-SOURCE
+    // Layer-3 module (registered in `ipe::stdlib::COMPILED_STD_MODULES`). Its
+    // members are point-free `Ffi.kernel "String_*"` aliases that
+    // `detect_kernel_alias` routes to the registered `String*` `StdlibKernel`
+    // variants. The `String` builtin type is re-exported via the
+    // `build_module_exports` reserved-builtin-type path. A module is EITHER a
+    // kernel qualifier here OR compiled-source — never both
+    // (`compiled_vs_kernel_qualifier_disjoint`), so it stays out.
     (&["Ipe", "Char"], "Char"),
     (&["Ipe", "List"], "List"),
     (&["Ipe", "Maybe"], "Maybe"),
@@ -720,71 +727,14 @@ impl Env {
     /// etc. resolve without an explicit `import String`.
     #[allow(clippy::too_many_lines)] // declarative table — extracting a helper would obscure the data
     fn install_prelude_qualifiers(&mut self, interner: &mut Interner) -> DResult<()> {
+        // NOTE — `Ipe.String` is DELIBERATELY absent from this catalog: it is a
+        // COMPILED-SOURCE Layer-3 module (registered in
+        // `ipe::stdlib::COMPILED_STD_MODULES`), so its whole surface resolves
+        // from `Ipe/String.ipe` — the `Ffi.kernel "String_*"` aliases — not from
+        // this kernel-qualifier catalog. A module is EITHER a kernel qualifier
+        // here OR compiled-source — never both
+        // (`compiled_vs_kernel_qualifier_disjoint`), so `"String"` stays out.
         const QUALIFIERS: &[(&str, &[&str])] = &[
-            (
-                "String",
-                &[
-                    // ── Arity-1 kernels ───────────────────────────────────
-                    "length",
-                    "reverse",
-                    "isEmpty",
-                    "toUpper",
-                    "toLower",
-                    "toUpperIn",
-                    "toLowerIn",
-                    "casefold",
-                    "trim",
-                    "trimStart",
-                    "trimEnd",
-                    "toInt",
-                    "fromInt",
-                    "toFloat",
-                    "fromFloat",
-                    "fromChar",
-                    "fromList",
-                    "concat",
-                    "words",
-                    "lines",
-                    "toList",
-                    "isEmail",
-                    "isUrl",
-                    // ── Arity-2 kernels ───────────────────────────────────
-                    "append",
-                    "split",
-                    "join",
-                    "contains",
-                    "startsWith",
-                    "endsWith",
-                    "equalFold",
-                    "repeat",
-                    "dropLeft",
-                    "dropRight",
-                    // ── Arity-3 kernels ───────────────────────────────────
-                    "replace",
-                    "slice",
-                    "padLeft",
-                    "padRight",
-                    // ── Haystack-first pure-Ipê aliases (compile from source) ──
-                    "containsIn",
-                    "startsWithIn",
-                    "endsWithIn",
-                    // ── Char-level navigation + fold family ───────────────
-                    "left",
-                    "right",
-                    "cons",
-                    "uncons",
-                    "pad",
-                    "indexes",
-                    "map",
-                    "filter",
-                    "foldl",
-                    "foldr",
-                    "any",
-                    "all",
-                    // ── Legacy entry kept for compatibility ───────────────
-                    "toChar",
-                ],
-            ),
             (
                 "Char",
                 &[
