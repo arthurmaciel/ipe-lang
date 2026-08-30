@@ -69,7 +69,13 @@ pub const STDLIB_MODULE_QUALIFIERS: &[(&[&str], &str)] = &[
     (&["Ipe", "Maybe"], "Maybe"),
     (&["Ipe", "Result"], "Result"),
     (&["Ipe", "Error"], "Error"),
-    (&["Ipe", "Math"], "Math"),
+    // NOTE — `Ipe.Math` is DELIBERATELY absent: it is a COMPILED-SOURCE
+    // Layer-3 module (registered in `ipe::stdlib::COMPILED_STD_MODULES`). Its
+    // members are point-free `Ffi.kernel "Math_*"` aliases that
+    // `detect_kernel_alias` routes to the registered `Math*` `StdlibKernel`
+    // variants (`ipe_runtime::math::*`). A module is EITHER a kernel qualifier
+    // here OR compiled-source — never both
+    // (`compiled_vs_kernel_qualifier_disjoint`), so it stays out.
     // NOTE — `Ipe.Bitwise` is DELIBERATELY absent: it is a COMPILED-SOURCE
     // Layer-3 module (registered in `ipe::stdlib::COMPILED_STD_MODULES`). Its
     // members are point-free `Ffi.kernel "Bitwise_*"` aliases that
@@ -909,59 +915,10 @@ impl Env {
             // separate qualifier from `Log` because `Log.debug`/`Log.info`/… are
             // already the logging kernels; `Level.debug`/… are the severity tags.
             ("Level", &["debug", "info", "warn", "error"]),
-            // `Ipe.Math` — `min` / `max` are polymorphic `a -> a -> a`
-            // (Elm `Basics.min`/`max` semantics). Wired in the lowerer to the
-            // runtime's generic compare. All other Math kernels have concrete
-            // monomorphic types (abs : Int->Int, sqrt : Float->Float, etc.).
-            (
-                "Math",
-                &[
-                    "min",
-                    "max",
-                    // constants
-                    "pi",
-                    "e",
-                    "phi",
-                    "sqrt2",
-                    "inf",
-                    "nan",
-                    // arity-1 Float→Bool
-                    "isNaN",
-                    // arity-1 Int→Int
-                    "abs",
-                    // arity-1 Float→Float
-                    "sqrt",
-                    "cbrt",
-                    "exp",
-                    "exp2",
-                    "log",
-                    "log2",
-                    "log10",
-                    "sin",
-                    "cos",
-                    "tan",
-                    "asin",
-                    "acos",
-                    "atan",
-                    "sinh",
-                    "cosh",
-                    "tanh",
-                    "asinh",
-                    "acosh",
-                    "atanh",
-                    // arity-1 Float→Int
-                    "floor",
-                    "ceil",
-                    "round",
-                    "trunc",
-                    // arity-2 Float→Float→Float
-                    "pow",
-                    "hypot",
-                    "atan2",
-                    "mod",
-                    "remainder",
-                ],
-            ),
+            // NOTE — `Ipe.Math` is DELIBERATELY absent from this catalog: it is a
+            // COMPILED-SOURCE Layer-3 module (`ipe::stdlib::COMPILED_STD_MODULES`).
+            // Its members are point-free `Ffi.kernel "Math_*"` aliases reached via
+            // `detect_kernel_alias`, not through this kernel-qualifier table.
             // `Ipe.Bitwise` is DELIBERATELY absent: it is COMPILED-SOURCE
             // (`ipe::stdlib::COMPILED_STD_MODULES`), so its whole surface resolves
             // from `Ipe/Bitwise.ipe` — the `Ffi.kernel "Bitwise_*"` aliases —
