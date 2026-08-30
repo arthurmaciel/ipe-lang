@@ -1,11 +1,11 @@
-| map `{ a: 1, b: 2 }` | `map[a:1 b:2]` | keys sorted alphabetically //! Property-based tests for the Ipê Rust runtime.
+//! Property-based tests for the Ipê Rust runtime.
 
 use ipe_runtime_rust::*;
 use proptest::prelude::*;
 
-| map `{ a: 1, b: 2 }` | `map[a:1 b:2]` | keys sorted alphabetically // ═══════════════════════════════════════════════════════════════════
-| map `{ a: 1, b: 2 }` | `map[a:1 b:2]` | keys sorted alphabetically // Core types — direct from the runtime
-| map `{ a: 1, b: 2 }` | `map[a:1 b:2]` | keys sorted alphabetically // ═══════════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════════
+// Core types — direct from the runtime
+// ═══════════════════════════════════════════════════════════════════
 
 proptest! {
     #[test]
@@ -35,9 +35,9 @@ proptest! {
     }
 }
 
-| map `{ a: 1, b: 2 }` | `map[a:1 b:2]` | keys sorted alphabetically // ═══════════════════════════════════════════════════════════════════
-| map `{ a: 1, b: 2 }` | `map[a:1 b:2]` | keys sorted alphabetically // String operations
-| map `{ a: 1, b: 2 }` | `map[a:1 b:2]` | keys sorted alphabetically // ═══════════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════════
+// String operations
+// ═══════════════════════════════════════════════════════════════════
 
 proptest! {
     #[test]
@@ -67,9 +67,9 @@ proptest! {
     }
 }
 
-| map `{ a: 1, b: 2 }` | `map[a:1 b:2]` | keys sorted alphabetically // ═══════════════════════════════════════════════════════════════════
-| map `{ a: 1, b: 2 }` | `map[a:1 b:2]` | keys sorted alphabetically // Task combinators (require tokio feature)
-| map `{ a: 1, b: 2 }` | `map[a:1 b:2]` | keys sorted alphabetically // ═══════════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════════
+// Task combinators (require tokio feature)
+// ═══════════════════════════════════════════════════════════════════
 
 #[cfg(feature = "tokio")]
 mod task_tests {
@@ -107,14 +107,14 @@ mod task_tests {
         assert!(run(t).is_err());
     }
 
-| map `{ a: 1, b: 2 }` | `map[a:1 b:2]` | keys sorted alphabetically     // `System.getenv : String -> Task Error String`. Regression guard: it MUST
-| map `{ a: 1, b: 2 }` | `map[a:1 b:2]` | keys sorted alphabetically     // return a `IpeTask` (not a bare `String`), or it fails to type-check in any
-| map `{ a: 1, b: 2 }` | `map[a:1 b:2]` | keys sorted alphabetically     // `Task.andThen`/`Task.run` position — and an unset var MUST short-circuit
-| map `{ a: 1, b: 2 }` | `map[a:1 b:2]` | keys sorted alphabetically     // with `Err` (returning `Err` on missing var), not `Ok("")`,
-| map `{ a: 1, b: 2 }` | `map[a:1 b:2]` | keys sorted alphabetically     // so a chained Task fails identically on both backends.
+    // `System.getenv : String -> Task Error String`. Regression guard: it MUST
+    // return a `IpeTask` (not a bare `String`), or it fails to type-check in any
+    // `Task.andThen`/`Task.run` position — and an unset var MUST short-circuit
+    // with `Err` (matching the `System_getenv` ErrNotFound), not `Ok("")`,
+    // so a chained Task fails identically on both backends.
     #[test]
     fn system_getenv_present_is_ok() {
-| map `{ a: 1, b: 2 }` | `map[a:1 b:2]` | keys sorted alphabetically         // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
+        // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
         unsafe { std::env::set_var("IPE_TEST_GETENV_PRESENT", "hello") };
         let t: IpeTask<IpeError, String> =
             system_getenv::<IpeError>("IPE_TEST_GETENV_PRESENT".to_string());
@@ -123,23 +123,23 @@ mod task_tests {
 
     #[test]
     fn system_getenv_unset_is_err() {
-| map `{ a: 1, b: 2 }` | `map[a:1 b:2]` | keys sorted alphabetically         // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
+        // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
         unsafe { std::env::remove_var("IPE_TEST_GETENV_UNSET_XYZ_42") };
         let t: IpeTask<IpeError, String> =
             system_getenv::<IpeError>("IPE_TEST_GETENV_UNSET_XYZ_42".to_string());
         assert!(run(t).is_err());
     }
 
-| map `{ a: 1, b: 2 }` | `map[a:1 b:2]` | keys sorted alphabetically     // System.getenvInt / getenvBool / getArg — parity semantics (unset → Err
-| map `{ a: 1, b: 2 }` | `map[a:1 b:2]` | keys sorted alphabetically     // NotFound; non-int / non-bool → Err Ffi; getArg indexes the FULL arg vector
-| map `{ a: 1, b: 2 }` | `map[a:1 b:2]` | keys sorted alphabetically     // and is out-of-range → Ok Nothing, never Err).
+    // System.getenvInt / getenvBool / getArg — golden-verified semantics (unset → Err
+    // NotFound; non-int / non-bool → Err Ffi; getArg indexes the FULL arg vector
+    // and is out-of-range → Ok Nothing, never Err).
     #[test]
     fn system_getenv_int_ok_and_errs() {
-| map `{ a: 1, b: 2 }` | `map[a:1 b:2]` | keys sorted alphabetically         // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
+        // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
         unsafe { std::env::set_var("IPE_TEST_INT_OK", "42") };
-| map `{ a: 1, b: 2 }` | `map[a:1 b:2]` | keys sorted alphabetically         // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
+        // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
         unsafe { std::env::set_var("IPE_TEST_INT_BAD", "abc") };
-| map `{ a: 1, b: 2 }` | `map[a:1 b:2]` | keys sorted alphabetically         // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
+        // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
         unsafe { std::env::remove_var("IPE_TEST_INT_UNSET") };
         assert_eq!(
             run(system_getenv_int::<IpeError>("IPE_TEST_INT_OK".to_string())),
@@ -161,13 +161,13 @@ mod task_tests {
 
     #[test]
     fn system_getenv_bool_truthy_falsy_unset() {
-| map `{ a: 1, b: 2 }` | `map[a:1 b:2]` | keys sorted alphabetically         // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
+        // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
         unsafe { std::env::set_var("IPE_TEST_BOOL_T", "yes") };
-| map `{ a: 1, b: 2 }` | `map[a:1 b:2]` | keys sorted alphabetically         // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
+        // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
         unsafe { std::env::set_var("IPE_TEST_BOOL_F", "0") };
-| map `{ a: 1, b: 2 }` | `map[a:1 b:2]` | keys sorted alphabetically         // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
+        // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
         unsafe { std::env::set_var("IPE_TEST_BOOL_BAD", "maybe") };
-| map `{ a: 1, b: 2 }` | `map[a:1 b:2]` | keys sorted alphabetically         // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
+        // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
         unsafe { std::env::remove_var("IPE_TEST_BOOL_UNSET") };
         assert_eq!(
             run(system_getenv_bool::<IpeError>(
@@ -197,7 +197,7 @@ mod task_tests {
 
     #[test]
     fn system_get_arg_in_and_out_of_range() {
-| map `{ a: 1, b: 2 }` | `map[a:1 b:2]` | keys sorted alphabetically         // index 0 is the program name (the test binary) — always present.
+        // index 0 is the program name (the test binary) — always present.
         assert!(matches!(
             run(system_get_arg::<IpeError>(0)),
             IpeResult::Ok(IpeMaybe::Just(_))
@@ -213,9 +213,9 @@ mod task_tests {
     }
 }
 
-| map `{ a: 1, b: 2 }` | `map[a:1 b:2]` | keys sorted alphabetically // ═══════════════════════════════════════════════════════════════════
-| map `{ a: 1, b: 2 }` | `map[a:1 b:2]` | keys sorted alphabetically // JSON encode/decode (require json feature)
-| map `{ a: 1, b: 2 }` | `map[a:1 b:2]` | keys sorted alphabetically // ═══════════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════════
+// JSON encode/decode (require json feature)
+// ═══════════════════════════════════════════════════════════════════
 
 #[cfg(feature = "json")]
 mod json_tests {
@@ -249,9 +249,9 @@ mod json_tests {
     }
 }
 
-| map `{ a: 1, b: 2 }` | `map[a:1 b:2]` | keys sorted alphabetically // ═══════════════════════════════════════════════════════════════════
-| map `{ a: 1, b: 2 }` | `map[a:1 b:2]` | keys sorted alphabetically // Standalone tests (not property-based, but useful signals)
-| map `{ a: 1, b: 2 }` | `map[a:1 b:2]` | keys sorted alphabetically // ═══════════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════════
+// Standalone tests (not property-based, but useful signals)
+// ═══════════════════════════════════════════════════════════════════
 
 #[test]
 fn string_is_empty_true() {
@@ -272,12 +272,12 @@ fn string_to_lower_upper_consistent() {
     assert_eq!(lower_upper, lower);
 }
 
-| map `{ a: 1, b: 2 }` | `map[a:1 b:2]` | keys sorted alphabetically // ═══════════════════════════════════════════════════════════════════
-| map `{ a: 1, b: 2 }` | `map[a:1 b:2]` | keys sorted alphabetically // Byte-sequence FFI coercion helpers
-| map `{ a: 1, b: 2 }` | `map[a:1 b:2]` | keys sorted alphabetically // ═══════════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════════
+// Byte-sequence FFI coercion helpers
+// ═══════════════════════════════════════════════════════════════════
 
 proptest! {
-| map `{ a: 1, b: 2 }` | `map[a:1 b:2]` | keys sorted alphabetically     // to_u8_vec then widen back is identity on in-range bytes.
+    // to_u8_vec then widen back is identity on in-range bytes.
     #[test]
     fn byte_vec_roundtrip(xs in proptest::collection::vec(0u8..=255, 0..64)) {
         let as_i64: Vec<i64> = xs.iter().map(|&b| i64::from(b)).collect();
@@ -285,7 +285,7 @@ proptest! {
         prop_assert_eq!(from_u8_slice(&xs), as_i64);
     }
 
-| map `{ a: 1, b: 2 }` | `map[a:1 b:2]` | keys sorted alphabetically     // to_u8_array succeeds iff the input length matches N; never panics.
+    // to_u8_array succeeds iff the input length matches N; never panics.
     #[test]
     fn to_u8_array_len_checked(xs in proptest::collection::vec(0i64..256, 0..40)) {
         let r: IpeResult<String, [u8; 16]> = to_u8_array(&xs);
@@ -296,7 +296,7 @@ proptest! {
         }
     }
 
-| map `{ a: 1, b: 2 }` | `map[a:1 b:2]` | keys sorted alphabetically     /// `to_array` succeeds exactly when input length matches N, never panics.
+    /// `to_array` succeeds exactly when input length matches N, never panics.
     #[test]
     fn to_array_len_checked(xs in proptest::collection::vec(proptest::prelude::any::<i64>(), 0..16usize)) {
         const N: usize = 8;
@@ -314,21 +314,21 @@ proptest! {
     }
 }
 
-| map `{ a: 1, b: 2 }` | `map[a:1 b:2]` | keys sorted alphabetically // ═══════════════════════════════════════════════════════════════════
-| map `{ a: 1, b: 2 }` | `map[a:1 b:2]` | keys sorted alphabetically // Ipe.Email SMTP transport (require email feature) — deterministic error
-| map `{ a: 1, b: 2 }` | `map[a:1 b:2]` | keys sorted alphabetically // paths. The positive path (delivery to a local SMTP catcher) is verified
-| map `{ a: 1, b: 2 }` | `map[a:1 b:2]` | keys sorted alphabetically // out-of-band; here we lock in that the lettre-backed send_smtp is TOTAL:
-| map `{ a: 1, b: 2 }` | `map[a:1 b:2]` | keys sorted alphabetically // bad config / bad address surface a clean Err, never a panic.
-| map `{ a: 1, b: 2 }` | `map[a:1 b:2]` | keys sorted alphabetically // ═══════════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════════
+// Ipe.Email SMTP transport (require email feature) — deterministic error
+// paths. The positive path (delivery to a local SMTP catcher) is verified
+// out-of-band; here we lock in that the lettre-backed send_smtp is TOTAL:
+// bad config / bad address surface a clean Err, never a panic.
+// ═══════════════════════════════════════════════════════════════════
 
 #[cfg(feature = "email")]
 mod email_smtp_tests {
     use ipe_runtime_rust::*;
 
     fn addr(s: &str) -> EmailAddress {
-| map `{ a: 1, b: 2 }` | `map[a:1 b:2]` | keys sorted alphabetically         // Tests use known-valid addresses; construct directly via the private
-| map `{ a: 1, b: 2 }` | `map[a:1 b:2]` | keys sorted alphabetically         // field to avoid the parse overhead.  In production Ipê source, the
-| map `{ a: 1, b: 2 }` | `map[a:1 b:2]` | keys sorted alphabetically         // ONLY path is `parseAddress`.
+        // Tests use known-valid addresses; construct directly via the private
+        // field to avoid the parse overhead.  In production Ipê source, the
+        // ONLY path is `parseAddress`.
         match email_address_parse(s.to_owned()) {
             IpeMaybe::Just(a) => a,
             IpeMaybe::Nothing => panic!("test helper: {:?} is not a valid address", s),
@@ -364,8 +364,8 @@ mod email_smtp_tests {
 
     #[test]
     fn smtp_unreachable_host_is_err() {
-| map `{ a: 1, b: 2 }` | `map[a:1 b:2]` | keys sorted alphabetically         // Port 2599 on localhost is (almost certainly) not listening;
-| map `{ a: 1, b: 2 }` | `map[a:1 b:2]` | keys sorted alphabetically         // the send must fail rather than hang.
+        // Port 2599 on localhost is (almost certainly) not listening;
+        // the send must fail rather than hang.
         let cfg = SmtpConfig {
             host: "127.0.0.1".to_string(),
             port: 2599,
