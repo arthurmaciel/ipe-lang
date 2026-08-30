@@ -3162,6 +3162,75 @@ mod tests {
     }
 
     #[test]
+    fn tui_app_importing_web_cmd_sub_is_rejected_n0035() {
+        // The canonical-facing `Tui.app` re-exports the `Terminal.appScreen`
+        // entry, so its app shape folds to `Terminal`. Importing another shape's
+        // `Sub` (`Ipe.Tea.Web.Sub`) has no denotation in a terminal app and must
+        // fail closed (IPE-N0035) — the `canonical_shape` fold admits only the
+        // terminal-family surfaces, never `Web` / `WebView`.
+        let src = "module Main exposing (main)\n\
+                   import Ipe.Tea.Tui as Tui\n\
+                   import Ipe.Tea.Web.Sub as Sub\n\n\
+                   cfg = 0\n\n\
+                   main = Tui.app cfg\n";
+        assert!(
+            matches!(
+                canon_module_err(src),
+                Some(Diagnostic::Name {
+                    msg: NameError::WrongShapeCmdSub(_),
+                    ..
+                })
+            ),
+            "a `Tui.app` importing `Ipe.Tea.Web.Sub` must be rejected IPE-N0035"
+        );
+    }
+
+    #[test]
+    fn web_app_importing_tui_cmd_sub_is_rejected_n0035() {
+        // The reverse direction: a `Web.app` importing the terminal-family
+        // `Ipe.Tea.Tui.Sub` must also fail closed. The fold folds only the
+        // imported segment; a `Web` app never folds to `Terminal`.
+        let src = "module Main exposing (main)\n\
+                   import Ipe.Tea.Web as Web\n\
+                   import Ipe.Tea.Tui.Sub as Sub\n\n\
+                   cfg = 0\n\n\
+                   main = Web.app cfg\n";
+        assert!(
+            matches!(
+                canon_module_err(src),
+                Some(Diagnostic::Name {
+                    msg: NameError::WrongShapeCmdSub(_),
+                    ..
+                })
+            ),
+            "a `Web.app` importing `Ipe.Tea.Tui.Sub` must be rejected IPE-N0035"
+        );
+    }
+
+    #[test]
+    fn cli_app_importing_tui_cmd_sub_is_admitted() {
+        // `Tui` and `Cli` are the two drive axes of the one terminal shape, so
+        // both fold to `Terminal`: a `Cli.app` may import `Ipe.Tea.Tui.Sub`. The
+        // cross-shape gate (IPE-N0035) must NOT fire here.
+        let src = "module Main exposing (main)\n\
+                   import Ipe.Tea.Cli as Cli\n\
+                   import Ipe.Tea.Tui.Sub as Sub\n\n\
+                   cfg = 0\n\n\
+                   main = Cli.app cfg\n";
+        assert!(
+            !matches!(
+                canon_module_err(src),
+                Some(Diagnostic::Name {
+                    msg: NameError::WrongShapeCmdSub(_),
+                    ..
+                })
+            ),
+            "a `Cli.app` importing the terminal-family `Ipe.Tea.Tui.Sub` must be \
+             admitted — both fold to the one `Terminal` shape"
+        );
+    }
+
+    #[test]
     fn plain_task_main_branching_on_a_value_is_not_a_shape_choice() {
         // A script's `main` is ONE shape (Script) no matter what its `Task`
         // computes: branching on a value inside a `Task Error ()` `main` selects a

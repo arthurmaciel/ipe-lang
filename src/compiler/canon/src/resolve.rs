@@ -1477,6 +1477,11 @@ fn thread_config_into_entry(
 /// (a plain `Task`) is a Program. Kept in lockstep with the app-entry rows of
 /// `env::QUALIFIERS` (`Web.app`/`appRouted`, `Terminal.appScreen`/`appLines`,
 /// `WebView.app`).
+///
+/// Keyed on the CANONICAL kernel `(module, name)` a resolved `VarKernel` carries.
+/// The canonical-facing `Tui.app` / `Cli.app` re-export the `Terminal` entries
+/// (via `env::CROSS_QUALIFIER_MEMBERS`), so their resolved `VarKernel` is already
+/// `("Terminal", "appScreen"|"appLines")` and matches here without its own row.
 const TEA_APP_ENTRIES: &[(&str, &str)] = &[
     ("Web", "app"),
     ("Web", "appRouted"),
@@ -1485,6 +1490,18 @@ const TEA_APP_ENTRIES: &[(&str, &str)] = &[
     ("Terminal", "appLines"),
     ("WebView", "app"),
 ];
+
+/// The canonical shape name for a `Ipe.Tea.<Shape>` surface segment. Most shapes
+/// name themselves; the two terminal drive-axis surfaces (`Tui` / `Cli`) both
+/// fold onto the one `Terminal` shape, so their shape-scoped `Cmd` / `Sub`
+/// imports are admissible in a terminal app. An unrecognised segment maps to
+/// itself, so a genuine cross-shape import still fails the gate.
+fn canonical_shape(surface: &str) -> &str {
+    match surface {
+        "Tui" | "Cli" => "Terminal",
+        other => other,
+    }
+}
 
 /// IPE-N0045: reject a `main` that selects its shape at run time.
 ///
@@ -1735,10 +1752,12 @@ fn main_head_is_tea_entry(body: &canon::Expr, interner: &Interner) -> bool {
     }
 }
 
-/// The TEA shape a `main` proves from its entry kernel: the third segment of the
-/// `Ipe.Tea.<Shape>` path a user imports `Cmd` / `Sub` from. `Terminal`'s two
-/// drive axes (`appScreen` / `appLines`) share the one `Terminal` shape name, so
-/// both map here to `"Terminal"`.
+/// The CANONICAL TEA shape a `main` proves from its entry kernel. The value is
+/// the shape a user's `Ipe.Tea.<Shape>.{Cmd,Sub}` import must fold onto (via
+/// [`canonical_shape`]) to be admissible. The terminal shape's drive axes —
+/// whether reached as `Terminal.appScreen`/`appLines` or the canonical-facing
+/// `Tui.app`/`Cli.app` (which re-export those kernels) — all resolve to the one
+/// `"Terminal"` shape here.
 ///
 /// Returns `None` when `main` is not a shape-entry app — the cross-shape gate
 /// then does not apply (a plain-`main` Program importing `Ipe.Tea.*` is already
@@ -1807,10 +1826,10 @@ fn check_cross_shape_cmd_sub_gate(
     let Some(app_shape) = app_shape else {
         return Ok(());
     };
-    let Some(app_shape_sym) = interner.lookup(app_shape) else {
-        return Ok(());
-    };
 
+    // The gate compares CANONICAL shapes: the `Tui` / `Cli` surface segments both
+    // fold onto `Terminal`, so a terminal app may import either surface's `Cmd` /
+    // `Sub`. `app_shape` is already canonical (proven from the entry kernel).
     for imp in &m.imports {
         // `Ipe.Tea.<Shape>.{Cmd,Sub}`: exactly four segments, `Ipe . Tea . Shape . Cmd|Sub`.
         let [first, second, shape, leaf] = imp.name.value.as_slice() else {
@@ -1822,12 +1841,12 @@ fn check_cross_shape_cmd_sub_gate(
         if *leaf != cmd_sym && *leaf != sub_sym {
             continue;
         }
-        if *shape == app_shape_sym {
-            continue; // the app's own shape — admissible.
-        }
         let Some(imported_shape) = interner.resolve(*shape) else {
             continue;
         };
+        if canonical_shape(imported_shape) == app_shape {
+            continue; // the app's own shape (after folding surface aliases) — admissible.
+        }
         let leaf_name = if *leaf == cmd_sym { "Cmd" } else { "Sub" };
         return Err(Diagnostic::Name {
             span: imp.name.span,

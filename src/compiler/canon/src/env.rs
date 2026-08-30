@@ -138,6 +138,15 @@ pub const STDLIB_MODULE_QUALIFIERS: &[(&[&str], &str)] = &[
     // a plain-`main` Program that imports one is rejected (IPE-N0033).
     (&["Ipe", "Tea", "Web"], "Web"),
     (&["Ipe", "Tea", "Terminal"], "Terminal"),
+    // `Ipe.Tea.Tui` / `Ipe.Tea.Cli` — the canonical-facing surface over the one
+    // terminal TEA shape's two drive axes. `Tui.app` re-exports the full-screen
+    // `Terminal.appScreen` entry (view=Element, `onKey`); `Cli.app` re-exports
+    // the line-oriented `Terminal.appLines` entry (view=String, `onLine`). Their
+    // members re-export the canonical `Terminal` kernels (see
+    // `CROSS_QUALIFIER_MEMBERS`), so every lower.rs `("Terminal", …)` arm is
+    // unchanged.
+    (&["Ipe", "Tea", "Tui"], "Tui"),
+    (&["Ipe", "Tea", "Cli"], "Cli"),
     (&["Ipe", "Tea", "WebView"], "WebView"),
     // `Ipe.Tea.Web.PubSub` — the Web-shape-scoped TEA-side broadcast surface:
     // `publish` / `publishNoEcho` (Cmd forms, fired from `update`) and
@@ -156,6 +165,10 @@ pub const STDLIB_MODULE_QUALIFIERS: &[(&[&str], &str)] = &[
     (&["Ipe", "Tea", "Web", "Sub"], "TeaWebSub"),
     (&["Ipe", "Tea", "Terminal", "Cmd"], "TeaTerminalCmd"),
     (&["Ipe", "Tea", "Terminal", "Sub"], "TeaTerminalSub"),
+    (&["Ipe", "Tea", "Tui", "Cmd"], "TeaTuiCmd"),
+    (&["Ipe", "Tea", "Tui", "Sub"], "TeaTuiSub"),
+    (&["Ipe", "Tea", "Cli", "Cmd"], "TeaCliCmd"),
+    (&["Ipe", "Tea", "Cli", "Sub"], "TeaCliSub"),
     (&["Ipe", "Tea", "WebView", "Cmd"], "TeaWebViewCmd"),
     (&["Ipe", "Tea", "WebView", "Sub"], "TeaWebViewSub"),
     // ── Effect stdlib modules ───────────────────────────────────────────────
@@ -167,6 +180,17 @@ pub const STDLIB_MODULE_QUALIFIERS: &[(&[&str], &str)] = &[
     (&["Ipe", "Http", "Stream"], "HttpStream"),
     // Ipe.Http.Server.WebSocket (12 kernels).
     (&["Ipe", "Http", "Server", "WebSocket"], "Ws"),
+    // ── Ipe.Server.* — the canonical-facing server namespace ─────────────────
+    // Additional import paths onto the existing server canonicals (path→canonical
+    // is many-to-one), so `import Ipe.Server.Http as Server` reaches the same
+    // members as `import Ipe.Http.Server`. lower.rs is untouched: the canonical
+    // qualifier symbols are unchanged.
+    (&["Ipe", "Server"], "Server"),
+    (&["Ipe", "Server", "Http"], "Server"),
+    (&["Ipe", "Server", "Middleware"], "Middleware"),
+    (&["Ipe", "Server", "RateLimit"], "RateLimit"),
+    (&["Ipe", "Server", "Stream"], "Stream"),
+    (&["Ipe", "Server", "WebSocket"], "Ws"),
 ];
 
 /// The dot-joined import paths of every kernel stdlib module (e.g. `Ipe.String`,
@@ -1362,6 +1386,11 @@ impl Env {
             ("TeaWebPubSub", "publish", "Cmd", "publish"),
             ("TeaWebPubSub", "publishNoEcho", "Cmd", "publishNoEcho"),
             ("TeaWebPubSub", "subscribeTopic", "Sub", "subscribeTopic"),
+            // `Tui.app` / `Cli.app` re-export the two terminal entry kernels. The
+            // VarHome carries the canonical `Terminal` module + `appScreen` /
+            // `appLines` name, so lower.rs's `("Terminal", …)` arms fire unchanged.
+            ("Tui", "app", "Terminal", "appScreen"),
+            ("Cli", "app", "Terminal", "appLines"),
         ];
 
         // ── Shape-scoped `Cmd` / `Sub` re-exports ─────────────────────────────
@@ -1378,6 +1407,10 @@ impl Env {
             ("TeaWebSub", "Sub"),
             ("TeaTerminalCmd", "Cmd"),
             ("TeaTerminalSub", "Sub"),
+            ("TeaTuiCmd", "Cmd"),
+            ("TeaTuiSub", "Sub"),
+            ("TeaCliCmd", "Cmd"),
+            ("TeaCliSub", "Sub"),
             ("TeaWebViewCmd", "Cmd"),
             ("TeaWebViewSub", "Sub"),
         ];
@@ -1403,6 +1436,10 @@ impl Env {
             // ── Ipe.Tea.<Shape> shape aliases (ADR 0048) ──────────────────────
             ("Ipe.Tea.Web", "Web"),
             ("Ipe.Tea.Terminal", "Terminal"),
+            // `Tui` / `Cli` are populated by `CROSS_QUALIFIER_MEMBERS` (which runs
+            // before this alias loop), so these copies pick up their `app` member.
+            ("Ipe.Tea.Tui", "Tui"),
+            ("Ipe.Tea.Cli", "Cli"),
             ("Ipe.Tea.WebView", "WebView"),
             ("Ipe.Log", "Log"),
             // ── Effect stdlib module aliases ──────────────────────────────────────
@@ -1411,6 +1448,13 @@ impl Env {
             ("Ipe.Http.Stream", "HttpStream"),
             // Ipe.Http.Server.WebSocket alias.
             ("Ipe.Http.Server.WebSocket", "Ws"),
+            // ── Ipe.Server.* aliases onto the existing server canonicals ──────
+            ("Ipe.Server", "Server"),
+            ("Ipe.Server.Http", "Server"),
+            ("Ipe.Server.Middleware", "Middleware"),
+            ("Ipe.Server.RateLimit", "RateLimit"),
+            ("Ipe.Server.Stream", "Stream"),
+            ("Ipe.Server.WebSocket", "Ws"),
             // Ipe.Ui.Input sub-module.
             ("Ipe.Ui.Input", "Input"),
             // Ipe.Ui.Lazy sub-module.
