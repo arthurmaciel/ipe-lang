@@ -1,4 +1,4 @@
--- | Ipe.Http — outbound HTTP client (Layer 3 Ipe source, M5b).
+-- | Ipe.Http — outbound HTTP client.
 --
 -- `get` / `post` / `request` are effects (Task Error HttpResponse). The
 -- runtime (`ipe_runtime::http_client`) is the PARSE boundary: it validates

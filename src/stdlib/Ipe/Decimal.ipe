@@ -1,4 +1,4 @@
--- | Ipe.Decimal — arbitrary-precision decimal arithmetic (Layer 3 Ipe source).
+-- | Ipe.Decimal — arbitrary-precision decimal arithmetic.
 --
 -- `Decimal` is an opaque arbitrary-precision decimal value backed by
 -- `ipe_runtime::decimal::Decimal` (wrapping `rust_decimal::Decimal`).

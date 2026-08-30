@@ -1,4 +1,4 @@
--- | Ipe.Web.Head — typed `<head>` helpers for Ipe.Web per-page injection (v0.15.58+).
+-- | Ipe.Web.Head — typed `<head>` helpers for Ipe.Web per-page injection.
 module Ipe.Web.Head exposing
     ( title
     , meta

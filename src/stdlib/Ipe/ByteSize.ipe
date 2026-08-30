@@ -1,4 +1,4 @@
--- | Ipe.ByteSize — an opaque, unit-explicit byte quantity (Layer 3 Ipe source).
+-- | Ipe.ByteSize — an opaque, unit-explicit byte quantity.
 --
 -- A `ByteSize` replaces the bare byte-count `Int` that resource caps took —
 -- `File.readFileLimit`'s read ceiling and `Cache.withMaxBytes`'s size cap.

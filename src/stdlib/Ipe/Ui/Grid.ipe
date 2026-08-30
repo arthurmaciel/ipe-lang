@@ -1,4 +1,4 @@
--- | Ipe.Ui.Grid — explicit CSS-grid track lists for `Ipe.Ui` (v0.15.57+).
+-- | Ipe.Ui.Grid — explicit CSS-grid track lists for `Ipe.Ui`.
 --
 -- Typed `Track` ADT (`fr / px / auto / minContent / maxContent /
 -- minmax / repeat / repeatAutoFit / repeatAutoFill`) + `columns`

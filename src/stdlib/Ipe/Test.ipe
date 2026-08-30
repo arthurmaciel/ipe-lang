@@ -1,12 +1,8 @@
 -- | Ipe.Test — lightweight in-process test framework.
 --
--- A port of the Haskell-backend `ipe-stdlib/Ipe/Test.ipe`.
---
--- SIMPLIFICATIONS vs the reference:
---  - `filterMap` replaced by `concatMap` (both semantically equivalent
---    for this use-case; the stdlib does not yet export `filterMap`).
---  - `summarise` returns a `Task` so its report print stays inside the Task
---    discipline; `runMain` sequences it before exiting.
+-- `filterMap` is replaced by `concatMap` (semantically equivalent for
+-- this use-case). `summarise` returns a `Task` so its report print stays
+-- inside the Task discipline; `runMain` sequences it before exiting.
 --
 -- All top-level bindings are fully annotated (compiled-source
 -- discipline — annotation-driven generalisation; no whole-program

@@ -1,4 +1,4 @@
--- | Ipe.Log — structured observability kernels (Layer 3 Ipe source).
+-- | Ipe.Log — structured observability kernels.
 --
 -- Four severity levels — `debug` / `info` / `warn` / `error` — write a
 -- single-line message to the structured log.  The `*With` variants attach

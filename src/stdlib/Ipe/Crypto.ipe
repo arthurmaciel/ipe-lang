@@ -1,6 +1,6 @@
--- | Ipe.Crypto — cryptographic primitives (Layer 3 Ipe source).
+-- | Ipe.Crypto — cryptographic primitives.
 --
--- All functions are aliased to the runtime kernel via Stage 4 `Ffi.kernel`.
+-- All functions are aliased to runtime kernels via `Ffi.kernel`.
 -- Security notes:
 --   * `constantTimeEqual` stays constant-time (backed by `subtle`).
 --   * AEAD functions (`aesGcmEncrypt`, `chacha20Encrypt`) use a fresh

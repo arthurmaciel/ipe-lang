@@ -1,8 +1,6 @@
--- | Ipe.Math — pure numeric helpers (Layer 3 Ipe source).
+-- | Ipe.Math — pure numeric helpers.
 --
--- Every function aliased to its runtime kernel via Stage 4
--- `Ffi.kernel`.  See `ipe-stdlib/Ipe/Core/String.ipe` for the
--- migration pattern.
+-- Every function is aliased to a runtime kernel via `Ffi.kernel`.
 module Ipe.Math exposing
     ( abs, min, max
     , sqrt, pow, log, log2, log10
@@ -110,8 +108,8 @@ atan : Float -> Float
 atan = Ffi.kernel "Math_atan"
 
 
--- atan2 y x — quadrant-aware arctangent. Matches Go's math.Atan2
--- (y first, x second), distinct from atan which is unary.
+-- atan2 y x — quadrant-aware arctangent (y first, x second),
+-- distinct from atan which is unary.
 atan2 : Float -> Float -> Float
 atan2 = Ffi.kernel "Math_atan2"
 
@@ -146,7 +144,7 @@ atanh = Ffi.kernel "Math_atanh"
 -- ─── Modulo + remainder ────────────────────────────────────────────
 
 
--- Float modulo. Result has the sign of the dividend (Go's math.Mod).
+-- Float modulo. Result has the sign of the dividend.
 mod : Float -> Float -> Float
 mod = Ffi.kernel "Math_mod"
 

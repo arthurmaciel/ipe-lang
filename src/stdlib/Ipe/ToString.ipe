@@ -1,4 +1,4 @@
--- | Ipe.ToString — naming-consistency surface (v0.15.48+).
+-- | Ipe.ToString — naming-consistency surface.
 --
 -- Thin aliases to the canonical kernels in their home modules;
 -- the purpose is editor + `ipe doc` discoverability so callers can
