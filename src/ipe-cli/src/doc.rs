@@ -2299,12 +2299,22 @@ fn extract_doc_examples(module_name: &str, src: &str) -> Vec<Example> {
             let content_start = block_body[after_open..]
                 .find('\n')
                 .map_or(block_body.len(), |nl| after_open + nl + 1);
+            // The rest of the opening fence line is the info string. A `skip`
+            // there (e.g. ` ```ipe ipe:skip `) marks a documentation-only example
+            // — shown to the reader but exempt from the type-check, for snippets
+            // that need context this gate cannot supply (e.g. a cross-module
+            // import the synthetic example module does not inject).
+            let fence_info = block_body[after_open..content_start].trim();
             // Find the closing fence.
             let Some(close_fence_rel) = block_body[content_start..].find(FENCE_CLOSE) else {
                 fence_search = after_open;
                 continue;
             };
             let content_end = content_start + close_fence_rel;
+            if fence_info.contains("skip") {
+                fence_search = content_end + FENCE_CLOSE.len();
+                continue;
+            }
             let raw_body = block_body[content_start..content_end].trim_end_matches('\n');
 
             example_idx += 1;
