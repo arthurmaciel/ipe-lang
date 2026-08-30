@@ -2948,6 +2948,7 @@ const fn ir_type_is_record_shape_leaf(ty: &IrType) -> bool {
             | IrType::ServerCookie
             | IrType::StreamWriter
             | IrType::HttpRequest
+            | IrType::HttpStatusCode
             | IrType::Regex
             | IrType::WebSocketServer
             | IrType::WebSocketServerCfg
@@ -3073,6 +3074,8 @@ fn collect_record_shapes(
         | IrType::StreamWriter
         // `HttpRequest` is an opaque handle — no record shape.
         | IrType::HttpRequest
+        // `StatusCode` is a plain newtype — no record shape.
+        | IrType::HttpStatusCode
         // `Regex` is an opaque compiled-pattern handle — no record shape.
         | IrType::Regex
         // `WsHandle` / `WsServerCfg` are opaque handles — no record shape.
@@ -3239,6 +3242,8 @@ fn type_reaches_enum(
         | IrType::StreamWriter
         // `HttpRequest` is a pointer-sized opaque handle — no size cycle.
         | IrType::HttpRequest
+        // `StatusCode` is a plain `i64` newtype — no size cycle.
+        | IrType::HttpStatusCode
         // `Regex` is a pointer-sized opaque handle — no size cycle.
         | IrType::Regex
         // `WsHandle` / `WsServerCfg` are opaque handles — no size cycle.
@@ -3363,6 +3368,8 @@ fn contains_generic(ty: &IrType) -> bool {
         | IrType::StreamWriter
         // `HttpRequest` is monomorphic — no generic parameters.
         | IrType::HttpRequest
+        // `StatusCode` is monomorphic — no generic parameters.
+        | IrType::HttpStatusCode
         // `Regex` is a monomorphic opaque handle — no generic parameters.
         | IrType::Regex
         // `WsHandle` / `WsServerCfg` are monomorphic — no generic parameters.
@@ -3508,6 +3515,8 @@ fn collect_generics(ty: &IrType, out: &mut Vec<Symbol>) {
         | IrType::StreamWriter
         // `HttpRequest` is monomorphic — no generics to collect.
         | IrType::HttpRequest
+        // `StatusCode` is monomorphic — no generics to collect.
+        | IrType::HttpStatusCode
         // `Regex` is a monomorphic opaque handle — no generics to collect.
         | IrType::Regex
         // `WsHandle` / `WsServerCfg` are monomorphic — no generics to collect.
@@ -3866,6 +3875,8 @@ fn match_template(
         | IrType::StreamWriter
         // `HttpRequest` is a monomorphic opaque handle.
         | IrType::HttpRequest
+        // `StatusCode` is a monomorphic `i64` newtype.
+        | IrType::HttpStatusCode
         // `Regex` is a monomorphic opaque handle.
         | IrType::Regex
         // `WsHandle` / `WsServerCfg` are monomorphic opaque handles.

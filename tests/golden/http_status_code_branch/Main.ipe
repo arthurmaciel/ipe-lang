@@ -1,0 +1,37 @@
+module Main exposing (main)
+
+import Ipe.Http.StatusCode as StatusCode
+import Ipe.Io as Io
+import Ipe.String
+
+
+main =
+    let
+        codes =
+            [ StatusCode.fromInt 200
+            , StatusCode.fromInt 404
+            , StatusCode.fromInt 500
+            , StatusCode.fromInt 503
+            ]
+
+        classify sc =
+            if StatusCode.isServerError sc then
+                "server-error"
+
+            else if StatusCode.isClientError sc then
+                "client-error"
+
+            else if StatusCode.isSuccess sc then
+                "success"
+
+            else
+                "other"
+
+        lines =
+            List.map
+                (\sc ->
+                    String.fromInt (StatusCode.toInt sc) ++ ":" ++ classify sc
+                )
+                codes
+    in
+    Io.println (String.join "\n" lines)

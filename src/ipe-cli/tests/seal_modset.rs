@@ -380,6 +380,36 @@ fn revoke_session_arity3_builds() {
     );
 }
 
+// ── StatusCode opaque newtype SEAL ──────────────────────────────────────────
+
+/// A program that calls `StatusCode.fromInt`, `StatusCode.toInt`, and the five
+/// classification predicates must emit AND cargo-build.  The `HttpStatusCode`
+/// runtime newtype is in `http_client.rs` which is re-exported by `mod.rs` via
+/// `pub use http_client::*`; a missing append or a missing `pub use` causes
+/// E0412/E0425 at cargo build (ipe exits 0 — the SEAL breach class).
+const STATUS_CODE_SURFACE: &str = "module Main exposing (main)\n\
+    import Ipe.Http.StatusCode as StatusCode\n\
+    import Ipe.Io as Io\n\
+    import Ipe.String as String\n\
+    main =\n\
+    \x20   let\n\
+    \x20       sc = StatusCode.fromInt 200\n\
+    \x20       n  = StatusCode.toInt sc\n\
+    \x20       ok = StatusCode.isSuccess sc\n\
+    \x20   in\n\
+    \x20   if ok then Io.println (String.fromInt n)\n\
+    \x20   else Io.println \"err\"\n";
+
+#[test]
+fn status_code_surface_builds() {
+    if skip() {
+        return;
+    }
+    emit_and_build("status_code_surface", STATUS_CODE_SURFACE).expect(
+        "StatusCode surface must cargo-build (HttpStatusCode must be re-exported by the runtime)",
+    );
+}
+
 /// The runtime source tree must resolve for every shape above — a smoke check
 /// that fails loudly (rather than silently skipping) when the tree moved.
 #[test]

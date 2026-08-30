@@ -183,13 +183,57 @@ fn http_default_request_emits_without_signature_consumer() {
         built.err()
     );
 
-    let main_rs = std::fs::read_to_string(out.join("src").join("main.rs"))
-        .expect("emitted src/main.rs must exist");
+    // The per-module split may emit the call into ipe_mods/ipe_mod_main.rs
+    // rather than main.rs directly; read ALL emitted Rust source files.
+    let emitted = crate::support::read_all_emitted_src(&out);
     assert!(
-        main_rs.contains("http_default_request_from_string"),
+        emitted.contains("http_default_request_from_string"),
         "the typed-target builder must lower to a call to the runtime fn \
          `http_default_request_from_string` (which performs the fail-closed \
          scheme narrowing and constructs the canonical HttpRequest), not an \
-         inline struct literal.\n--- src/main.rs ---\n{main_rs}"
+         inline struct literal.\n--- emitted src ---\n{emitted}"
+    );
+}
+
+// ── StatusCode opaque newtype ─────────────────────────────────────────────────
+
+/// Branching on `StatusCode.isServerError` / `isClientError` / `isSuccess`:
+/// the emitted binary must classify 200/404/500/503 correctly.  Go-parity
+/// oracle.
+#[test]
+fn http_status_code_branch() {
+    assert_runs_and_matches_oracle("http_status_code_branch");
+}
+
+/// `StatusCode.toInt (StatusCode.fromInt n) == n` for representative values:
+/// verifies the opaque round-trip at the emit level without an E2E binary run.
+/// The emitted `src/main.rs` must mention `HttpStatusCode` (the runtime type).
+#[test]
+fn http_status_code_emits_runtime_type() {
+    if std::env::var("IPE_E2E").is_err() {
+        return;
+    }
+    let root = repo_root();
+    let entry = golden_dir(&root, "http_status_code_branch").join("Main.ipe");
+    let out = std::env::temp_dir().join("ipec_http_statuscode_emit");
+    let _ = std::fs::remove_dir_all(&out);
+
+    let Ok(runtime) = ipe::resolve_runtime() else {
+        return;
+    };
+
+    let built = ipe::build(&entry, &out, &runtime);
+    assert!(
+        built.is_ok(),
+        "ipe build must succeed for http_status_code_branch; got: {:?}",
+        built.err()
+    );
+
+    // The per-module split may emit the type into ipe_mods/; read all emitted src.
+    let emitted = crate::support::read_all_emitted_src(&out);
+    assert!(
+        emitted.contains("HttpStatusCode"),
+        "emitted source must reference the runtime type `HttpStatusCode`; \
+         the opaque newtype must not dissolve into a plain i64.\n--- emitted src ---\n{emitted}"
     );
 }

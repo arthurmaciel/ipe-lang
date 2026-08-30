@@ -747,6 +747,17 @@ const STD_DURATION: &str = include_str!("../Ipe/Duration.ipe");
 /// disjointness invariant holds.
 const STD_BYTESIZE: &str = include_str!("../Ipe/ByteSize.ipe");
 
+/// `Ipe.Http.StatusCode` — the opaque, total HTTP response status code
+/// newtype (compiled source).
+///
+/// Pure Ipê: defines `type StatusCode = StatusCode Int` and pattern-matches it
+/// in `toInt`; the constructor is NOT exported, so `fromInt` (total — every
+/// integer a server can send is representable) is the only way in. Classification
+/// predicates (`isSuccess`, `isRedirect`, …) and named conveniences
+/// (`ok`, `notFound`, …) replace hand-rolled numeric guards. No `Ffi.kernel`
+/// call. Not in `STDLIB_MODULE_QUALIFIERS`, so the disjointness invariant holds.
+const STD_HTTP_STATUS_CODE: &str = include_str!("../Ipe/Http/StatusCode.ipe");
+
 /// Every compiled-source stdlib module, keyed by its dotted import name.
 ///
 /// Disjoint from [`MODULES`] (parse fixtures) and from `ipe_canon`'s
@@ -767,6 +778,14 @@ pub const COMPILED_STD_MODULES: &[CompiledStdModule] = &[
     CompiledStdModule {
         dotted: "Ipe.ByteSize",
         source: STD_BYTESIZE,
+    },
+    // Ipe.Http.StatusCode — opaque, total HTTP status-code newtype.
+    // Pure Ipê: `StatusCode Int` constructor unexported; `fromInt` (total) is
+    // the only constructor. Classification predicates + named conveniences.
+    // Not in `STDLIB_MODULE_QUALIFIERS`, so the disjointness invariant holds.
+    CompiledStdModule {
+        dotted: "Ipe.Http.StatusCode",
+        source: STD_HTTP_STATUS_CODE,
     },
     CompiledStdModule {
         dotted: "Ipe.Tuple",

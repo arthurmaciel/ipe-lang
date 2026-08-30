@@ -1718,6 +1718,31 @@ fn type_record_update_on_builtin() {
 }
 
 // ===========================================================================
+// Http.StatusCode type boundary
+// ===========================================================================
+
+/// Passing a raw `Int` where a `StatusCode` is required must be a type
+/// mismatch (IPE-T0001), not a silent coercion. Locks the opaque-newtype
+/// boundary for `Ipe.Http.StatusCode`.
+///
+/// The signature uses the module-qualified form `StatusCode.StatusCode`
+/// (inner constructor name) — but since the constructor is unexported,
+/// the type is named via the module alias: `StatusCode` resolves through
+/// the `as StatusCode` import. A cleaner probe is via a call-site mismatch:
+/// pass a raw `Int` where `fromInt` returns `StatusCode`.
+#[test]
+fn status_code_raw_int_rejected() {
+    let src = format!(
+        "{HEAD}import Ipe.Http.StatusCode as StatusCode\n\
+         import Ipe.Io as Io\n\
+         check : StatusCode.StatusCode -> String\n\
+         check _ = \"ok\"\n\
+         main =\n    Io.println (check 200)\n"
+    );
+    assert_rejected("status_code_raw_int", &src, "IPE-T0001");
+}
+
+// ===========================================================================
 // Effect boundary + secret + event-handler gates
 // ===========================================================================
 

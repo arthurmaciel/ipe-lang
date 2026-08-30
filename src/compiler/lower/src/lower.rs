@@ -2317,6 +2317,7 @@ fn ir_type_mentions(ty: &IrType, leaf: &impl Fn(&IrType) -> bool) -> bool {
         | IrType::TokenSource
         | IrType::StreamWriter
         | IrType::HttpRequest
+        | IrType::HttpStatusCode
         | IrType::WebSocketServer
         | IrType::WebSocketServerCfg
         | IrType::WebReq
@@ -2398,7 +2399,10 @@ fn ir_type_mentions_sqlvalue(ty: &IrType, sqlvalue: Symbol, sqlfield: Symbol) ->
 /// for the client surface.
 fn ir_type_mentions_http(ty: &IrType) -> bool {
     ir_type_mentions(ty, &|t| {
-        matches!(t, IrType::HttpRequest | IrType::HttpMethod)
+        matches!(
+            t,
+            IrType::HttpRequest | IrType::HttpMethod | IrType::HttpStatusCode
+        )
     })
 }
 
@@ -2898,6 +2902,8 @@ fn ir_contains_fun(ty: &IrType) -> bool {
         | IrType::StreamWriter
         // `HttpRequest` is an opaque handle — not a function type.
         | IrType::HttpRequest
+        // `StatusCode` is a plain newtype — not a function type.
+        | IrType::HttpStatusCode
         // `Regex` is an opaque compiled-pattern handle — not a function type.
         | IrType::Regex
         // `WsHandle` / `WsServerCfg` are opaque handles — not function types.
@@ -3112,6 +3118,7 @@ fn clone_class(env: CloneEnv<'_>, t: &IrType) -> CloneClass {
         | IrType::ServerRoute
         | IrType::ServerCookie
         | IrType::HttpRequest
+        | IrType::HttpStatusCode
         // `Regex` is `#[derive(Clone)]` (no Copy — wraps an `Arc<regex::Regex>`).
         | IrType::Regex
         | IrType::WebSocketServerCfg
@@ -6184,6 +6191,7 @@ fn ir_type_mentions_generic(ty: &IrType, tv: Symbol) -> bool {
         | IrType::ServerCookie
         | IrType::StreamWriter
         | IrType::HttpRequest
+        | IrType::HttpStatusCode
         | IrType::Regex
         | IrType::WebSocketServer
         | IrType::WebSocketServerCfg
@@ -6308,6 +6316,7 @@ fn ir_type_generic_in_decoder(ty: &IrType, tv: Symbol) -> bool {
         | IrType::ServerCookie
         | IrType::StreamWriter
         | IrType::HttpRequest
+        | IrType::HttpStatusCode
         | IrType::Regex
         | IrType::WebSocketServer
         | IrType::WebSocketServerCfg
@@ -6424,6 +6433,7 @@ fn ir_type_generic_reaches_bare(ty: &IrType, tv: Symbol) -> bool {
         | IrType::ServerCookie
         | IrType::StreamWriter
         | IrType::HttpRequest
+        | IrType::HttpStatusCode
         | IrType::Regex
         | IrType::WebSocketServer
         | IrType::WebSocketServerCfg
@@ -11605,6 +11615,7 @@ const fn ir_type_label(ty: &IrType) -> &'static str {
         IrType::Locale => "Locale",
         IrType::StreamWriter => "StreamWriter",
         IrType::HttpRequest => "HttpRequest",
+        IrType::HttpStatusCode => "StatusCode",
         IrType::WebSocketServer => "WebSocketServer",
         IrType::WebSocketServerCfg => "WebSocketServerCfg",
         IrType::WebReq => "WebReq",
@@ -13627,6 +13638,7 @@ impl<'a> Lowerer<'a> {
             | IrType::ServerCookie
             | IrType::StreamWriter
             | IrType::HttpRequest
+            | IrType::HttpStatusCode
             | IrType::Regex
             | IrType::WebSocketServer
             | IrType::WebSocketServerCfg
@@ -18213,6 +18225,9 @@ impl<'a> Lowerer<'a> {
                 // annotation `HttpRequest` maps directly to the runtime type via
                 // this opaque variant.
                 "HttpRequest" => Ok(IrType::HttpRequest),
+                // `StatusCode` — opaque HTTP response status code from
+                // `Ipe.Http.StatusCode`. Mirrors the `ir_type_from_ty` arm.
+                "StatusCode" => Ok(IrType::HttpStatusCode),
                 // `Ipe.Db.Migration` — the record alias `{ name : String,
                 // sql : String }` (reference `Ipe/Db.ipe:237`). Annotated
                 // directly (`migrations : List Db.Migration`), so expand it to
@@ -19293,6 +19308,11 @@ impl<'a> Lowerer<'a> {
                 // `HttpRequest` — opaque HTTP request descriptor.
                 // Mirrors `ir_type_from_canon`'s "HttpRequest" arm.
                 "HttpRequest" => Ok(IrType::HttpRequest),
+                // `StatusCode` — opaque HTTP response status code from
+                // `Ipe.Http.StatusCode`. Folds to the runtime newtype so the
+                // backend emits `HttpStatusCode` (a plain `i64` wrapper) rather
+                // than the synthesised enum name.
+                "StatusCode" => Ok(IrType::HttpStatusCode),
                 // `Ipe.Db.Migration` record alias — mirrors
                 // `ir_type_from_canon`'s "Migration" arm (defensive; the solved
                 // type of a migration value is normally a `Ty::Record`).
@@ -29105,6 +29125,7 @@ fn collect_ir_generic_syms(ty: &IrType, out: &mut BTreeSet<Symbol>) {
         | IrType::ServerCookie
         | IrType::StreamWriter
         | IrType::HttpRequest
+        | IrType::HttpStatusCode
         | IrType::Regex
         | IrType::WebSocketServer
         | IrType::WebSocketServerCfg
@@ -31586,6 +31607,7 @@ mod tests {
             | ipe_ir::IrType::ServerCookie
             | ipe_ir::IrType::StreamWriter
             | ipe_ir::IrType::HttpRequest
+            | ipe_ir::IrType::HttpStatusCode
             | ipe_ir::IrType::Regex
             | ipe_ir::IrType::WebSocketServer
             | ipe_ir::IrType::WebSocketServerCfg

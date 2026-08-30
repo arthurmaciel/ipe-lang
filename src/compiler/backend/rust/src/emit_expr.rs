@@ -1606,11 +1606,13 @@ fn emit_http_call(
     let resp_name = &resp_struct.name;
 
     // Build the task_map conversion closure shared by all three variants.
-    // The closure is a pure field-for-field move — soundness note: all
-    // fields are owned (String / i64 / HashMap), no borrows, no boxing.
+    // `r.status` is the raw `i64` from the runtime; wrap it in the opaque
+    // `HttpStatusCode` newtype at this boundary — the only place the raw
+    // integer escapes the runtime into user-visible Ipê types.
     let conv = format!(
         "|r: ipe_runtime::HttpResponse| {resp_name} {{ \
-         body: r.body, headers: r.headers, status: r.status }}"
+         body: r.body, headers: r.headers, \
+         status: ipe_runtime::HttpStatusCode(r.status) }}"
     );
 
     match k {

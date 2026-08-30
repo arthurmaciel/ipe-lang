@@ -48,6 +48,29 @@ use std::collections::HashMap;
 #[cfg(not(target_arch = "wasm32"))]
 use super::ssrf::{resolve_first_non_private_addr, ssrf_check_url, ssrf_deny_private_enabled};
 
+/// Ipe.Http.StatusCode — opaque, total HTTP response status-code newtype.
+///
+/// Wraps the raw `i64` a server sends.  `fromInt` (total — every integer a
+/// server can send is representable) is the only public constructor; the
+/// struct is exported so the emitted `task_map` closure can construct it via
+/// `HttpStatusCode(r.status)`.  `toInt` recovers the raw value.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct HttpStatusCode(pub i64);
+
+impl HttpStatusCode {
+    /// Wrap any integer `n` a server can send.  Total: every value is valid.
+    #[must_use]
+    pub fn from_int(n: i64) -> Self {
+        HttpStatusCode(n)
+    }
+
+    /// Recover the raw integer for logging or forwarding.
+    #[must_use]
+    pub fn to_int(self) -> i64 {
+        self.0
+    }
+}
+
 /// Ipe.Http.HttpResponse — field names/types match the Ipê record alias.
 #[derive(Clone, Debug)]
 pub struct HttpResponse {

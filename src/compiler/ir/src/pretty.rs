@@ -158,6 +158,8 @@ fn ir_type_name_at(interner: &Interner, ty: &IrType, depth: u16) -> String {
         IrType::StreamWriter => "StreamWriter".to_owned(),
         // HTTP request handle (opaque, structural record folded to this variant).
         IrType::HttpRequest => "HttpRequest".to_owned(),
+        // HTTP response status code (opaque newtype over i64).
+        IrType::HttpStatusCode => "StatusCode".to_owned(),
         // Ipe.Regex compiled-pattern handle (opaque).
         IrType::Regex => "Regex".to_owned(),
         // Ipe.Http.Server.WebSocket opaque handles.

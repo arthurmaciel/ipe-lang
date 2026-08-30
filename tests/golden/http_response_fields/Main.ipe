@@ -7,7 +7,9 @@ module Main exposing (main)
 --   the url field is readable off the Ok branch.
 -- * A local HttpResponse record literal (same {body, headers, status} shape
 --   the task_map targets) proves field access compiles for the response side.
+-- * StatusCode.toInt recovers the raw integer from the opaque status field.
 import Ipe.Http as Http
+import Ipe.Http.StatusCode as StatusCode
 import Ipe.Dict as Dict
 import Ipe.Io as Io
 import Ipe.Maybe
@@ -25,7 +27,7 @@ main =
                     "blocked"
 
         resp =
-            { status = 200
+            { status = StatusCode.fromInt 200
             , body = "ok"
             , headers = Dict.fromList [ ( "X-Test", "1" ) ]
             }
@@ -35,7 +37,7 @@ main =
     Io.println
         (String.join "\n"
             [ reqUrl
-            , String.fromInt resp.status
+            , String.fromInt (StatusCode.toInt resp.status)
             , resp.body
             , headerVal
             ]

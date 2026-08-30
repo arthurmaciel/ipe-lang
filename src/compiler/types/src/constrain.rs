@@ -217,6 +217,9 @@ struct Builtins {
     http_f_headers: Symbol,
     /// `"status"` — `HttpResponse` only.
     http_f_status: Symbol,
+    /// `"StatusCode"` — the `Ipe.Http.StatusCode.StatusCode` type constructor
+    /// used as the type of `HttpResponse.status`.
+    http_status_code: Symbol,
     /// `"method"` — `HttpRequest` only.
     http_f_method: Symbol,
     /// `"HttpMethod"` — the `Ipe.Http.HttpMethod` ADT type constructor.
@@ -819,6 +822,7 @@ impl Builtins {
             http_f_body: interner.intern("body")?,
             http_f_headers: interner.intern("headers")?,
             http_f_status: interner.intern("status")?,
+            http_status_code: interner.intern("StatusCode")?,
             server_f_content_type: interner.intern("contentType")?,
             migration_f_name: interner.intern("name")?,
             migration_f_sql: interner.intern("sql")?,
@@ -3029,16 +3033,16 @@ impl<'a> Builder<'a> {
                     req_fields.insert(self.builtins.http_f_url, string());
                     Ok(Ty::Record(req_fields, RowTail::Closed))
                 } else if args.is_empty() && self.interner.resolve(name) == Some("HttpResponse") {
-                    // `HttpResponse` is a stdlib type alias for `{ body : String,
-                    // headers : Dict String String, status : Int }`.  Expand for the
-                    // same reason as `HttpRequest` above.
+                    // `HttpResponse` is a stdlib type alias for
+                    // `{ body : String, headers : Dict String String,
+                    //    status : StatusCode }`.
                     let mk = |n: Symbol| Ty::Con {
                         module: Vec::new(),
                         name: n,
                         args: Vec::new(),
                     };
                     let string = || mk(self.builtins.string);
-                    let int = || mk(self.builtins.int);
+                    let status_code = || mk(self.builtins.http_status_code);
                     let dict = |k: Ty, v: Ty| Ty::Con {
                         module: Vec::new(),
                         name: self.builtins.dict,
@@ -3047,7 +3051,7 @@ impl<'a> Builder<'a> {
                     let mut resp_fields = BTreeMap::new();
                     resp_fields.insert(self.builtins.http_f_body, string());
                     resp_fields.insert(self.builtins.http_f_headers, dict(string(), string()));
-                    resp_fields.insert(self.builtins.http_f_status, int());
+                    resp_fields.insert(self.builtins.http_f_status, status_code());
                     Ok(Ty::Record(resp_fields, RowTail::Closed))
                 } else if args.is_empty() && self.interner.resolve(name) == Some("Response") {
                     // `Ipe.Http.Server.Response` is a record alias
@@ -5291,12 +5295,17 @@ impl<'a> Builder<'a> {
             name: self.builtins.live_route_con,
             args: vec![page],
         };
-        // `HttpResponse = { body : String, headers : Dict String String, status : Int }`
+        // `HttpResponse = { body : String, headers : Dict String String, status : StatusCode }`
+        let status_code_ty = || Ty::Con {
+            module: Vec::new(),
+            name: self.builtins.http_status_code,
+            args: Vec::new(),
+        };
         let http_response = || {
             let mut resp_fields = BTreeMap::new();
             resp_fields.insert(self.builtins.http_f_body, string());
             resp_fields.insert(self.builtins.http_f_headers, dict(string(), string()));
-            resp_fields.insert(self.builtins.http_f_status, int());
+            resp_fields.insert(self.builtins.http_f_status, status_code_ty());
             Ty::Record(resp_fields, RowTail::Closed)
         };
         // `HttpMethod` — the closed ADT (`Get | Post | Put | Delete | Patch |

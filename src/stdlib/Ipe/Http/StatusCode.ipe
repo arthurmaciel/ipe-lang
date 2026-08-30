@@ -1,0 +1,208 @@
+-- | Ipe.Http.StatusCode — opaque HTTP response status code.
+--
+-- A `StatusCode` wraps the numeric code a server sends.  The parse boundary
+-- is total: any integer a server can send is representable, so `fromInt` never
+-- fails.  Classification (`isSuccess`, `isRedirect`, …) and a small set of
+-- named conveniences replace hand-rolled `>= 200 && < 300` guards and magic
+-- numbers.
+--
+-- `toInt` recovers the raw code at the runtime boundary (e.g. for logging or
+-- forwarding).  The constructor is NOT exported — a `StatusCode` is obtained
+-- either through `fromInt` or from `HttpResponse.status`.
+module Ipe.Http.StatusCode exposing
+    ( StatusCode
+    , fromInt
+    , toInt
+    , isInformational
+    , isSuccess
+    , isRedirect
+    , isClientError
+    , isServerError
+    , ok
+    , created
+    , noContent
+    , movedPermanently
+    , notModified
+    , badRequest
+    , unauthorized
+    , forbidden
+    , notFound
+    , methodNotAllowed
+    , conflict
+    , unprocessableEntity
+    , tooManyRequests
+    , internalServerError
+    , badGateway
+    , serviceUnavailable
+    , gatewayTimeout
+    )
+
+
+-- | An opaque HTTP response status code.  The constructor is NOT exported, so a
+-- `StatusCode` is a proof that it came from `fromInt` or from the HTTP client.
+type StatusCode
+    = StatusCode Int
+
+
+-- | `fromInt n` — wrap any integer `n` a server can send.  Total: every value
+-- is a valid `StatusCode` (the parse boundary never rejects).
+fromInt : Int -> StatusCode
+fromInt n =
+    StatusCode n
+
+
+-- | `toInt sc` — recover the raw integer for logging or forwarding.
+toInt : StatusCode -> Int
+toInt sc =
+    case sc of
+        StatusCode n ->
+            n
+
+
+-- | `isInformational sc` — `True` when the code is in `100..=199`.
+isInformational : StatusCode -> Bool
+isInformational sc =
+    let
+        n = toInt sc
+    in
+    n >= 100 && n <= 199
+
+
+-- | `isSuccess sc` — `True` when the code is in `200..=299`.
+isSuccess : StatusCode -> Bool
+isSuccess sc =
+    let
+        n = toInt sc
+    in
+    n >= 200 && n <= 299
+
+
+-- | `isRedirect sc` — `True` when the code is in `300..=399`.
+isRedirect : StatusCode -> Bool
+isRedirect sc =
+    let
+        n = toInt sc
+    in
+    n >= 300 && n <= 399
+
+
+-- | `isClientError sc` — `True` when the code is in `400..=499`.
+isClientError : StatusCode -> Bool
+isClientError sc =
+    let
+        n = toInt sc
+    in
+    n >= 400 && n <= 499
+
+
+-- | `isServerError sc` — `True` when the code is in `500..=599`.
+isServerError : StatusCode -> Bool
+isServerError sc =
+    let
+        n = toInt sc
+    in
+    n >= 500 && n <= 599
+
+
+-- Named conveniences — the codes a handler most commonly branches on.
+
+-- | `200 OK`
+ok : StatusCode
+ok =
+    StatusCode 200
+
+
+-- | `201 Created`
+created : StatusCode
+created =
+    StatusCode 201
+
+
+-- | `204 No Content`
+noContent : StatusCode
+noContent =
+    StatusCode 204
+
+
+-- | `301 Moved Permanently`
+movedPermanently : StatusCode
+movedPermanently =
+    StatusCode 301
+
+
+-- | `304 Not Modified`
+notModified : StatusCode
+notModified =
+    StatusCode 304
+
+
+-- | `400 Bad Request`
+badRequest : StatusCode
+badRequest =
+    StatusCode 400
+
+
+-- | `401 Unauthorized`
+unauthorized : StatusCode
+unauthorized =
+    StatusCode 401
+
+
+-- | `403 Forbidden`
+forbidden : StatusCode
+forbidden =
+    StatusCode 403
+
+
+-- | `404 Not Found`
+notFound : StatusCode
+notFound =
+    StatusCode 404
+
+
+-- | `405 Method Not Allowed`
+methodNotAllowed : StatusCode
+methodNotAllowed =
+    StatusCode 405
+
+
+-- | `409 Conflict`
+conflict : StatusCode
+conflict =
+    StatusCode 409
+
+
+-- | `422 Unprocessable Entity`
+unprocessableEntity : StatusCode
+unprocessableEntity =
+    StatusCode 422
+
+
+-- | `429 Too Many Requests`
+tooManyRequests : StatusCode
+tooManyRequests =
+    StatusCode 429
+
+
+-- | `500 Internal Server Error`
+internalServerError : StatusCode
+internalServerError =
+    StatusCode 500
+
+
+-- | `502 Bad Gateway`
+badGateway : StatusCode
+badGateway =
+    StatusCode 502
+
+
+-- | `503 Service Unavailable`
+serviceUnavailable : StatusCode
+serviceUnavailable =
+    StatusCode 503
+
+
+-- | `504 Gateway Timeout`
+gatewayTimeout : StatusCode
+gatewayTimeout =
+    StatusCode 504

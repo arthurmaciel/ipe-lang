@@ -181,6 +181,8 @@ const TAG_WEB_APP: u8 = 79;
 const TAG_WEBVIEW_APP: u8 = 80;
 const TAG_TUI_APP: u8 = 81;
 const TAG_CLI_APP: u8 = 82;
+// HTTP response status code (non-serde, never a Model field; present for exhaustiveness).
+const TAG_HTTP_STATUS_CODE: u8 = 83;
 /// Fuel exhaustion marker — distinct from every variant tag.
 const TAG_FUEL_EXHAUSTED: u8 = 0xFF;
 
@@ -213,6 +215,7 @@ fn hash_ty(ctx: &EmitCtx, ty: &IrType, h: &mut Sha256, fuel: u32) -> DResult<()>
         IrType::ServerCookie => h.update([TAG_SERVER_COOKIE]),
         IrType::StreamWriter => h.update([TAG_STREAM_WRITER]),
         IrType::HttpRequest => h.update([TAG_HTTP_REQUEST]),
+        IrType::HttpStatusCode => h.update([TAG_HTTP_STATUS_CODE]),
         IrType::WebSocketServer => h.update([TAG_WEBSOCKET_SERVER]),
         IrType::WebSocketServerCfg => h.update([TAG_WEBSOCKET_SERVER_CFG]),
         IrType::WebReq => h.update([TAG_LIVE_REQ]),

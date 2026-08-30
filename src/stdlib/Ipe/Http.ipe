@@ -47,6 +47,7 @@ module Ipe.Http exposing
     , HttpRequest
     , HttpResponse
     , RedirectPolicy(..)
+    , StatusCode
     , defaultRequest
     , defaultRequestFromString
     , get
@@ -67,6 +68,7 @@ module Ipe.Http exposing
 import Ipe.Dict exposing (Dict)
 import Ipe.Error as Error exposing (Error)
 import Ipe.Ffi as Ffi
+import Ipe.Http.StatusCode as StatusCode exposing (StatusCode)
 import Ipe.Maybe exposing (Maybe)
 import Ipe.Url as Url exposing (Url)
 
@@ -98,7 +100,7 @@ type RedirectPolicy
 
 
 type alias HttpResponse =
-    { status : Int, body : String, headers : Dict String String }
+    { status : StatusCode, body : String, headers : Dict String String }
 
 
 type alias HttpRequest =

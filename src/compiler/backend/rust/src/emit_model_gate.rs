@@ -258,6 +258,8 @@ fn leaf_of_bounded(ctx: &EmitCtx, ty: &IrType, app: AppShape, fuel: u32) -> Mode
         | IrType::StreamWriter
         // `HttpRequest` is an opaque handle — not a valid Model leaf.
         | IrType::HttpRequest
+        // `StatusCode` is a response-boundary value — not a valid Model leaf.
+        | IrType::HttpStatusCode
         // `Regex` is an opaque compiled-pattern handle (not serde) — not a
         // valid Model leaf.
         | IrType::Regex

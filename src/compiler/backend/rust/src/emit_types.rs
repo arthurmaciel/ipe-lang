@@ -408,6 +408,8 @@ pub fn render_type(ctx: &EmitCtx, ty: &IrType, generics: GenericScope) -> DResul
         IrType::StreamWriter => "StreamWriter".to_owned(),
         // HTTP request handle — re-exported from ipe_runtime::http.
         IrType::HttpRequest => "HttpRequest".to_owned(),
+        // HTTP response status code — re-exported from ipe_runtime::http_client.
+        IrType::HttpStatusCode => "HttpStatusCode".to_owned(),
         // Ipe.Http.Server.WebSocket opaque handles.
         IrType::WebSocketServer => "WsHandle".to_owned(),
         IrType::WebSocketServerCfg => "WsServerCfg<IpeError>".to_owned(),

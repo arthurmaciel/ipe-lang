@@ -1148,6 +1148,14 @@ pub enum IrType {
     /// that pass the value to `http_stream_open` / `http_request` kernels see
     /// the correct runtime type.  Never stored in a Ipe.Web Model.
     HttpRequest,
+    /// `StatusCode` — opaque HTTP response status code from `Ipe.Http.StatusCode`.
+    /// Renders as `ipe_runtime::HttpStatusCode`.
+    ///
+    /// Wraps the raw `i64` status integer from the runtime `HttpResponse.status`
+    /// field.  The backend emit closure wraps `r.status` in `HttpStatusCode(r.status)`
+    /// at the `task_map` boundary.  Derivable, clone, serde-capable (plain newtype
+    /// over `i64`).
+    HttpStatusCode,
     // ── Ipe.Http.Server.WebSocket opaque type handles ──────────────────
     /// `WebSocketServer` — opaque per-peer WebSocket handle.  Renders as
     /// `WsHandle`.
@@ -1844,6 +1852,11 @@ pub fn ir_type_is_derivable(
         | IrType::StreamWriter
         // `HttpRequest` is an opaque handle — not fully derivable.
         | IrType::HttpRequest
+        // `StatusCode` is a plain newtype over `i64` — derives PartialEq/Eq/Hash
+        // but NOT PartialOrd/Ord (no ordering semantics for status codes), so not
+        // fully derivable in the sense the gate requires (which includes Ord/Hash
+        // for BTreeMap keys).  Treat as non-derivable to be safe.
+        | IrType::HttpStatusCode
         // `Regex` is an opaque compiled-pattern handle — Clone + Debug but the
         // inner `regex::Regex` has no PartialEq, so not fully derivable.
         | IrType::Regex
@@ -2002,6 +2015,8 @@ pub fn ir_type_is_serde(ty: &IrType, enum_serde: &impl Fn(&ModPath, Symbol) -> b
         | IrType::StreamWriter
         // `HttpRequest` is an opaque handle; not serde.
         | IrType::HttpRequest
+        // `StatusCode` wraps a response code — not a serialisable Model field.
+        | IrType::HttpStatusCode
         // `Regex` is an opaque compiled-pattern handle; `regex::Regex` is not
         // serde, so a `Regex` never round-trips through a session store.
         | IrType::Regex
@@ -2187,6 +2202,8 @@ pub fn carrier_is_clone(ty: &IrType) -> bool {
         | IrType::ServerCookie
         | IrType::StreamWriter
         | IrType::HttpRequest
+        // `StatusCode` is a plain `i64` newtype — `Copy` + `Clone`.
+        | IrType::HttpStatusCode
         // `Regex` wraps an `Arc<regex::Regex>` — clone is a refcount bump.
         | IrType::Regex
         | IrType::WebSocketServer

@@ -934,6 +934,7 @@ const fn ir_type_display_name(ty: &IrType) -> &'static str {
         IrType::ServerCookie => "Cookie",
         IrType::StreamWriter => "StreamWriter",
         IrType::HttpRequest => "HttpRequest",
+        IrType::HttpStatusCode => "StatusCode",
         // Ipe.Http.Server.WebSocket opaque handles.
         IrType::WebSocketServer => "WebSocketServer",
         IrType::WebSocketServerCfg => "WebSocketServerCfg",
