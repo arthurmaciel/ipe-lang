@@ -47,7 +47,13 @@ pub const STDLIB_MODULE_QUALIFIERS: &[(&[&str], &str)] = &[
     (&["Ipe", "Basics"], "Basics"),
     (&["Ipe", "String"], "String"),
     (&["Ipe", "Char"], "Char"),
-    (&["Ipe", "List"], "List"),
+    // NOTE — `Ipe.List` is DELIBERATELY absent: it is a COMPILED-SOURCE
+    // Layer-3 module (registered in `ipe::stdlib::COMPILED_STD_MODULES`). Its
+    // pure members compile from Ipê; the eleven kernel-backed members are
+    // point-free `Ffi.kernel "List_*"` aliases that `detect_kernel_alias`
+    // routes to the registered `List*` `StdlibKernel` variants. A module is
+    // EITHER a kernel qualifier here OR compiled-source — never both
+    // (`compiled_vs_kernel_qualifier_disjoint`), so it stays out.
     (&["Ipe", "Maybe"], "Maybe"),
     (&["Ipe", "Result"], "Result"),
     (&["Ipe", "Error"], "Error"),
@@ -791,52 +797,12 @@ impl Env {
                     "isOctDigit",
                 ],
             ),
-            (
-                "List",
-                &[
-                    "map",
-                    "filter",
-                    "foldl",
-                    "foldr",
-                    "length",
-                    "head",
-                    "tail",
-                    "take",
-                    "drop",
-                    "append",
-                    "concat",
-                    "concatMap",
-                    "indexedMap",
-                    "reverse",
-                    "member",
-                    "any",
-                    "all",
-                    "find",
-                    "range",
-                    "zip",
-                    "isEmpty",
-                    "cons",
-                    // ── List batch ───────────────────────────────────────────
-                    "filterMap",
-                    "sortBy",
-                    "sort",
-                    "sortWith",
-                    "singleton",
-                    "repeat",
-                    "sum",
-                    "product",
-                    "maximum",
-                    "minimum",
-                    "unique",
-                    "intersperse",
-                    "partition",
-                    "unzip",
-                    "map2",
-                    "map3",
-                    "map4",
-                    "map5",
-                ],
-            ),
+            // NOTE — `Ipe.List` is DELIBERATELY absent from this catalog: it is
+            // a COMPILED-SOURCE module. Its members resolve via the ordinary
+            // compiled-source dependency graph (pure Ipê) or via `detect_kernel_alias`
+            // (`sort`/`singleton`/`repeat`/`product`/`intersperse`/`partition`/
+            // `unzip`/`map2`–`map5`). A kernel-qualifier catalog entry would
+            // conflict with the compiled-source resolution path.
             (
                 "Maybe",
                 &[

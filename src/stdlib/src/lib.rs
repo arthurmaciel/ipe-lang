@@ -28,7 +28,16 @@ const BASICS: &str = include_str!("../Ipe/Basics.ipe");
 const MAYBE: &str = include_str!("../Ipe/Maybe.ipe");
 /// `Ipe.Result` — combinators over the `Result` ADT.
 const RESULT: &str = include_str!("../Ipe/Result.ipe");
-/// `Ipe.List` — list combinators.
+/// `Ipe.List` — list combinators, compiled-source Layer-3.
+///
+/// Pure members (`map`/`filter`/`foldl`/… and the reverse-accumulator helpers)
+/// are implemented directly in Ipê.  The eleven kernel-backed members
+/// (`sort`/`singleton`/`repeat`/`product`/`intersperse`/`partition`/`unzip`/
+/// `map2`–`map5`) are point-free `Ffi.kernel "List_*"` aliases resolved by
+/// `ipe_canon::resolve::detect_kernel_alias` to the registered `List*`
+/// `StdlibKernel` variants (`ipe_runtime::list::*`).  Registered in
+/// [`COMPILED_STD_MODULES`] (NOT `MODULES`); NOT in `STDLIB_MODULE_QUALIFIERS`,
+/// so the disjointness invariant holds.
 const LIST: &str = include_str!("../Ipe/List.ipe");
 /// `Ipe.String` — string combinators.
 const STRING: &str = include_str!("../Ipe/String.ipe");
@@ -244,10 +253,6 @@ pub const MODULES: &[StdModule] = &[
     StdModule {
         name: "Ipe.Result",
         source: RESULT,
-    },
-    StdModule {
-        name: "Ipe.List",
-        source: LIST,
     },
     StdModule {
         name: "Ipe.String",
@@ -704,6 +709,16 @@ pub const COMPILED_STD_MODULES: &[CompiledStdModule] = &[
     CompiledStdModule {
         dotted: "Ipe.Debug",
         source: DEBUG,
+    },
+    // Ipe.List — Layer-3 source; pure members compile from Ipê; the eleven
+    // kernel-backed members (`sort`/`singleton`/`repeat`/`product`/
+    // `intersperse`/`partition`/`unzip`/`map2`–`map5`) are point-free
+    // `Ffi.kernel "List_*"` aliases resolved by `detect_kernel_alias` to the
+    // registered `List*` kernels (`ipe_runtime::list::*`). Disjoint from
+    // `STDLIB_MODULE_QUALIFIERS` (no `"List"` entry there).
+    CompiledStdModule {
+        dotted: "Ipe.List",
+        source: LIST,
     },
     CompiledStdModule {
         dotted: "Ipe.Random",
