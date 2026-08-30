@@ -75,7 +75,13 @@ const CRYPTO: &str = include_str!("../Ipe/Crypto.ipe");
 const BITWISE: &str = include_str!("../Ipe/Bitwise.ipe");
 /// `Ipe.Task` — Task combinator surface.
 const TASK: &str = include_str!("../Ipe/Task.ipe");
-/// `Ipe.Io` — standard-I/O effect kernels.
+/// `Ipe.Io` — standard-I/O effect kernels, compiled-source Layer-3.
+///
+/// Every member is a point-free `Ffi.kernel "Io_*"` alias resolved by
+/// `ipe_canon::resolve::detect_kernel_alias` to a registered `Io*`
+/// `StdlibKernel` variant (`ipe_runtime::io::*`). Registered in
+/// [`COMPILED_STD_MODULES`] (NOT `MODULES`); NOT in `STDLIB_MODULE_QUALIFIERS`,
+/// so the disjointness invariant holds.
 const IO: &str = include_str!("../Ipe/Io.ipe");
 /// `Ipe.Debug` — development-only escape hatch, compiled-source Layer-3.
 ///
@@ -289,10 +295,6 @@ pub const MODULES: &[StdModule] = &[
     StdModule {
         name: "Ipe.Task",
         source: TASK,
-    },
-    StdModule {
-        name: "Ipe.Io",
-        source: IO,
     },
     StdModule {
         name: "Ipe.System",
@@ -754,6 +756,14 @@ pub const COMPILED_STD_MODULES: &[CompiledStdModule] = &[
     CompiledStdModule {
         dotted: "Ipe.Char",
         source: CHAR,
+    },
+    // Ipe.Io — Layer-3 source; every member is a point-free
+    // `Ffi.kernel "Io_*"` alias resolved by `detect_kernel_alias` to the
+    // registered `Io*` kernels (`ipe_runtime::io::*`). Disjoint from
+    // `STDLIB_MODULE_QUALIFIERS` (no `"Io"` entry there).
+    CompiledStdModule {
+        dotted: "Ipe.Io",
+        source: IO,
     },
     CompiledStdModule {
         dotted: "Ipe.Random",
