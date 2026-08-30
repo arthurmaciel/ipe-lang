@@ -1,0 +1,94 @@
+module Main exposing (main)
+
+import Ipe.Math as Math
+import Ipe.List as List
+import Ipe.String as String
+import Ipe.Io as Io
+
+
+-- Measure the total length of a 2-D path and report it, exercising the two
+-- ideas most `Ipe.Math` code turns on:
+--   • Float in, Float out — `hypot`, `sqrt`, `pow` all live in Float; the
+--     rounding functions (`floor`/`ceil`/`round`/`trunc`) are the bridge back to
+--     `Int`, and they differ only in DIRECTION.
+--   • NaN is a Float value, not an error and not equal to itself. `sqrt` of a
+--     negative is `NaN`; you detect it with `Math.isNaN`, never with `==`.
+
+
+type alias Point =
+    { x : Float
+    , y : Float
+    }
+
+
+-- A path whose segments are two legs plus a non-integer diagonal, so the total
+-- length is fractional and the four rounding directions differ.
+path : List Point
+path =
+    [ { x = 0.0, y = 0.0 }
+    , { x = 3.0, y = 0.0 }
+    , { x = 3.0, y = 2.0 }
+    , { x = 0.0, y = 0.0 }
+    ]
+
+
+-- Straight-line distance between two points. `Math.hypot dx dy` is
+-- `sqrt (dx^2 + dy^2)` computed without intermediate overflow — the idiomatic
+-- way to get a 2-D distance.
+distance : Point -> Point -> Float
+distance a b =
+    Math.hypot (b.x - a.x) (b.y - a.y)
+
+
+-- Total path length: sum the distance of each adjacent pair. `List.map2` zips
+-- the path with its own tail to form the segments, then `List.sum` adds them.
+totalLength : List Point -> Float
+totalLength points =
+    case points of
+
+        _ :: rest ->
+            List.map2 distance points rest
+                |> List.sum
+
+        [] ->
+            0.0
+
+
+-- The four Float -> Int rounding functions, side by side, so their directions
+-- are visible on one value.
+roundingReport : Float -> String
+roundingReport v =
+    String.join "  "
+        [ "floor=" ++ String.fromInt (Math.floor v)
+        , "ceil=" ++ String.fromInt (Math.ceil v)
+        , "round=" ++ String.fromInt (Math.round v)
+        , "trunc=" ++ String.fromInt (Math.trunc v)
+        ]
+
+
+-- NaN is detected structurally: `sqrt (-1)` is `NaN`, and `Math.isNaN` is the
+-- only correct test — `NaN == NaN` is `False`, so an equality check would miss
+-- it entirely.
+sqrtReport : Float -> String
+sqrtReport v =
+    let
+        r =
+            Math.sqrt v
+    in
+    if Math.isNaN r then
+        "sqrt " ++ String.fromFloat v ++ " = NaN (no real root)"
+
+    else
+        "sqrt " ++ String.fromFloat v ++ " = " ++ String.fromFloat r
+
+
+main =
+    let
+        len =
+            totalLength path
+    in
+    do
+        Io.println ("path length: " ++ String.fromFloat len)
+        Io.println ("rounded: " ++ roundingReport len)
+        Io.println (sqrtReport 2.0)
+        Io.println (sqrtReport (0.0 - 1.0))

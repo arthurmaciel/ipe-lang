@@ -28,6 +28,7 @@ cross-link where topics meet.
   encodings](encoding.md) (base64/URL/hex), [Bytes](bytes.md) (raw octets).
 - **Files and configuration** — [Files](file.md) (typed paths, effects as tasks),
   [Configuration](config.md) (typed TOML/YAML/JSON decoders), [CSV](csv.md).
+- **Numbers** — [Math](math.md) (roots, trig, rounding, NaN).
 
 ## Reference and lookup
 
