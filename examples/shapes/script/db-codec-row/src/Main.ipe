@@ -1,0 +1,106 @@
+module Main exposing (main)
+
+import Ipe.Codec as Codec exposing (Codec)
+import Ipe.Db.Codec as DbCodec
+import Ipe.Dict as Dict exposing (Dict)
+import Ipe.Result as Result exposing (Result(..))
+import Ipe.String as String
+import Ipe.Io as Io
+
+
+-- `Ipe.Db.Codec` is the seam where ONE `Codec a` becomes a database row and
+-- back. The same codec that drives the JSON round-trip also declares the
+-- columns, binds the writes, and decodes the reads — one source of truth for
+-- the wire form, the column shape, and the stored row. Three ideas:
+--   • `codecFromRow` rebuilds a value from a row's cells through the codec's OWN
+--     decoder — no second decoder is written, so the row read cannot drift from
+--     the JSON read.
+--   • Schema drift is fail-closed: a row missing a declared column, or a cell
+--     that is not the declared shape, is a typed `Err`, never a wrong value.
+--   • A codec whose shape is not a record has no columns to name, so it is
+--     rejected with a typed error rather than a guess.
+
+
+type alias User =
+    { id : String
+    , age : Int
+    , active : Bool
+    }
+
+
+-- `Codec.auto` reads the columns from a named, annotated record witness: the
+-- field names snake_cased become the column names (`id`, `age`, `active`).
+blankUser : User
+blankUser =
+    { id = "", age = 0, active = False }
+
+
+userCodec : Codec User
+userCodec =
+    Codec.auto blankUser
+
+
+-- A database row is a `Dict String String` of cell text keyed by column name.
+-- Every cell is a string; the codec parses each into its declared type.
+sampleRow : Dict String String
+sampleRow =
+    Dict.fromList
+        [ ( "id", "u-42" )
+        , ( "age", "30" )
+        , ( "active", "1" )
+        ]
+
+
+-- A row missing the required `age` column — schema drift the read must reject.
+missingAgeRow : Dict String String
+missingAgeRow =
+    Dict.fromList
+        [ ( "id", "u-7" )
+        , ( "active", "0" )
+        ]
+
+
+-- A row whose `age` cell is not an integer — a bad cell the read must reject.
+badAgeRow : Dict String String
+badAgeRow =
+    Dict.fromList
+        [ ( "id", "u-9" )
+        , ( "age", "thirty" )
+        , ( "active", "1" )
+        ]
+
+
+-- Read a row through the codec and describe the outcome. On success the value
+-- is a real `User` the rest of the program can use; on drift it is a typed Err.
+readRow : Dict String String -> String
+readRow row =
+    case DbCodec.codecFromRow userCodec row of
+        Ok user ->
+            String.concat
+                [ "Ok User { id = "
+                , user.id
+                , ", age = "
+                , String.fromInt user.age
+                , ", active = "
+                , boolText user.active
+                , " }"
+                ]
+
+        Err _ ->
+            "rejected (schema drift — fail-closed)"
+
+
+boolText : Bool -> String
+boolText b =
+    if b then
+        "True"
+
+    else
+        "False"
+
+
+main =
+    do
+        Io.println ("well-formed row -> " ++ readRow sampleRow)
+        Io.println ("missing column  -> " ++ readRow missingAgeRow)
+        Io.println ("bad cell type   -> " ++ readRow badAgeRow)

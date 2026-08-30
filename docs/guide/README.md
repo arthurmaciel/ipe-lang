@@ -35,7 +35,8 @@ cross-link where topics meet.
   encodings](encoding.md) (base64/URL/hex), [Bytes](bytes.md) (raw octets),
   [Compression](compression.md) (gzip/zstd over bytes).
 - **Serialization** — [Codec](codec.md) (one bidirectional codec for JSON and
-  storage; the round-trip law by construction).
+  storage; the round-trip law by construction), [Database codecs](db-codec.md)
+  (that one codec as a database row and back).
 - **Files and configuration** — [Files](file.md) (typed paths, effects as tasks),
   [Configuration](config.md) (typed TOML/YAML/JSON decoders), [CSV](csv.md).
 - **Numbers and magnitudes** — [Math](math.md) (roots, trig, rounding, NaN),
