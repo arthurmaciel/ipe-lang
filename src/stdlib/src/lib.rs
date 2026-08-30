@@ -256,10 +256,6 @@ pub const MODULES: &[StdModule] = &[
         source: BASICS,
     },
     StdModule {
-        name: "Ipe.Maybe",
-        source: MAYBE,
-    },
-    StdModule {
         name: "Ipe.Result",
         source: RESULT,
     },
@@ -690,6 +686,16 @@ pub const COMPILED_STD_MODULES: &[CompiledStdModule] = &[
     CompiledStdModule {
         dotted: "Ipe.Tuple",
         source: TUPLE,
+    },
+    // Ipe.Maybe — Layer-3 source; every member is a point-free
+    // `Ffi.kernel "Maybe_*"` alias resolved by `detect_kernel_alias` to the
+    // registered `Maybe*` kernels (`ipe_runtime::maybe::*`). The `Maybe` type
+    // and its `Just`/`Nothing` constructors remain kernel-anchored (reserved
+    // builtin type). Disjoint from `STDLIB_MODULE_QUALIFIERS` (no `"Maybe"`
+    // entry there once the qualifier row is removed).
+    CompiledStdModule {
+        dotted: "Ipe.Maybe",
+        source: MAYBE,
     },
     // Ipe.Bitwise — Layer-3 source; every member is a point-free
     // `Ffi.kernel "Bitwise_*"` alias resolved by `detect_kernel_alias` to the
