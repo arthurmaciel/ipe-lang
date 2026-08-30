@@ -31,7 +31,10 @@ cross-link where topics meet.
   missing), [Result](result.md) (a failure that carries a reason), [Tasks](task.md)
   (effects as values, sequenced and recovered).
 - **Text and binary** — [Regular expressions](regex.md), [Text
-  encodings](encoding.md) (base64/URL/hex), [Bytes](bytes.md) (raw octets).
+  encodings](encoding.md) (base64/URL/hex), [Bytes](bytes.md) (raw octets),
+  [Compression](compression.md) (gzip/zstd over bytes).
+- **Serialization** — [Codec](codec.md) (one bidirectional codec for JSON and
+  storage; the round-trip law by construction).
 - **Files and configuration** — [Files](file.md) (typed paths, effects as tasks),
   [Configuration](config.md) (typed TOML/YAML/JSON decoders), [CSV](csv.md).
 - **Numbers and magnitudes** — [Math](math.md) (roots, trig, rounding, NaN),
