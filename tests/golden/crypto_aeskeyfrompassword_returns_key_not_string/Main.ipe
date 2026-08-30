@@ -1,0 +1,12 @@
+module Main exposing (main)
+
+import Ipe.Io as Io
+import Ipe.Crypto as Crypto
+
+-- Type-error fixture: `aesKeyFromPassword` returns an opaque `Key`, never a raw
+-- `String`.  Treating the derived key as a `String` (here printing it) must be
+-- a compile error, so a derived key can only flow into a `Key`-typed sink and
+-- can never leak into logs or be mistaken for arbitrary text.
+
+main =
+    Io.println (Crypto.aesKeyFromPassword "password" "salt")

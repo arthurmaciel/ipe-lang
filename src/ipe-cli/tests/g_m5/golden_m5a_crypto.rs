@@ -157,19 +157,16 @@ fn crypto_random_token() {
     assert_runs_and_matches_oracle("crypto_random_token");
 }
 
-// ── String-as-key type-error seal ────────────────────────────────────────────
+// ── String-as-key type-error seals ───────────────────────────────────────────
 
-/// Passing a bare `String` where `Crypto.hmacSha256` expects a `Key` is a
-/// compile-time type error — the `Key` newtype makes message-as-key impossible.
-#[test]
-fn crypto_hmac_string_key_is_type_error() {
+/// Compile `tests/golden/<name>/Main.ipe` and assert `ipe` REJECTS it — the
+/// program passes a bare `String` where a typed `Key` is required (or treats a
+/// derived `Key` as a `String`), which must be a compile-time type error.  Not
+/// gated on `IPE_E2E`: rejection happens at type-check, before any emit/build.
+fn assert_rejected(name: &str) {
     let root = repo_root();
-    let entry = root
-        .join("tests")
-        .join("golden")
-        .join("crypto_hmac_string_key_rejected")
-        .join("Main.ipe");
-    let out = std::env::temp_dir().join("ipec_crypto_hmac_string_key_rejected");
+    let entry = golden_dir(&root, name).join("Main.ipe");
+    let out = std::env::temp_dir().join(format!("ipec_{name}"));
     let _ = std::fs::remove_dir_all(&out);
     let Ok(runtime) = ipe::resolve_runtime() else {
         return; // runtime unresolvable — skip.
@@ -177,6 +174,56 @@ fn crypto_hmac_string_key_is_type_error() {
     let built = ipe::build(&entry, &out, &runtime);
     assert!(
         built.is_err(),
-        "hmacSha256 with a bare String key must be rejected, but ipe accepted it: {built:?}"
+        "{name}: a raw-String-key crypto call must be a type error, but ipe accepted it: {built:?}"
     );
+}
+
+/// Passing a bare `String` where `Crypto.hmacSha256` expects a `Key` is a
+/// compile-time type error — the `Key` newtype makes message-as-key impossible.
+#[test]
+fn crypto_hmac_string_key_is_type_error() {
+    assert_rejected("crypto_hmac_string_key_rejected");
+}
+
+/// `aesGcmEncrypt` requires a `Key`; a bare `String` in the key position is a
+/// compile-time type error, so plaintext/password-as-key is unrepresentable.
+#[test]
+fn crypto_aesgcm_encrypt_string_key_is_type_error() {
+    assert_rejected("crypto_aesgcm_encrypt_string_key_rejected");
+}
+
+/// `aesGcmDecrypt` requires a `Key`; a bare `String` in the key position is a
+/// compile-time type error.
+#[test]
+fn crypto_aesgcm_decrypt_string_key_is_type_error() {
+    assert_rejected("crypto_aesgcm_decrypt_string_key_rejected");
+}
+
+/// `chacha20Encrypt` requires a `Key`; a bare `String` in the key position is a
+/// compile-time type error.
+#[test]
+fn crypto_chacha20_encrypt_string_key_is_type_error() {
+    assert_rejected("crypto_chacha20_encrypt_string_key_rejected");
+}
+
+/// `chacha20Decrypt` requires a `Key`; a bare `String` in the key position is a
+/// compile-time type error.
+#[test]
+fn crypto_chacha20_decrypt_string_key_is_type_error() {
+    assert_rejected("crypto_chacha20_decrypt_string_key_rejected");
+}
+
+/// `aesKeyFromPassword` returns an opaque `Key`, never a raw `String`; using the
+/// derived value as a `String` is a compile-time type error, so a derived key
+/// cannot leak into logs or flow into a `String`-typed sink.
+#[test]
+fn crypto_aeskeyfrompassword_returns_key_not_string() {
+    assert_rejected("crypto_aeskeyfrompassword_returns_key_not_string");
+}
+
+/// `chachaKeyFromPassword` returns an opaque `Key`, never a raw `String`; using
+/// the derived value as a `String` is a compile-time type error.
+#[test]
+fn crypto_chachakeyfrompassword_returns_key_not_string() {
+    assert_rejected("crypto_chachakeyfrompassword_returns_key_not_string");
 }

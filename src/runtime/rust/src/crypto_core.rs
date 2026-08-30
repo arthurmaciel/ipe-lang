@@ -77,19 +77,35 @@ impl crate::stringify::IpeStringify for Mac {
     }
 }
 
-/// `Key.fromString : String -> Key` — construction boundary: promotes any
-/// `String` to a typed key role. The byte content is opaque; the role is
-/// distinct.
-#[must_use]
-pub fn crypto_key_from_string(s: String) -> Key {
+/// Crate-internal raw promotion of a `String` to a `Key`, with no validation.
+/// The ONLY sanctioned no-check path — the password-derivation kernels use it
+/// on PBKDF2 output (always a valid 32-byte blob). Public construction goes
+/// through `crypto_key_from_string` / `crypto_key_from_bytes`, which validate.
+/// Gated to `crypto`: its only callers are the password-derivation kernels,
+/// which are `crypto`-only, so it is absent (not dead) in a `crypto-core`-only build.
+#[cfg(feature = "crypto")]
+pub(crate) fn crypto_key_promote(s: String) -> Key {
     Key(s)
 }
 
-/// `Key.fromBytes : String -> Key` — alias for `fromString` when the caller
-/// holds a byte-string (Ipê `Bytes` is `String`). Identical semantics.
+/// `Key.fromString : String -> Maybe Key` — construction boundary: parse a
+/// candidate key `String` into a typed `Key`. An empty key is rejected
+/// (`Nothing`) — it is a valid key for no algorithm — so a caller cannot forge
+/// an empty-keyed MAC or cipher. The byte content is otherwise opaque; the role
+/// is distinct.
 #[must_use]
-pub fn crypto_key_from_bytes(s: String) -> Key {
-    Key(s)
+pub fn crypto_key_from_string(s: String) -> IpeMaybe<Key> {
+    if s.is_empty() {
+        return IpeMaybe::Nothing;
+    }
+    IpeMaybe::Just(Key(s))
+}
+
+/// `Key.fromBytes : String -> Maybe Key` — the byte-string construction
+/// boundary (Ipê `Bytes` is `String`). Same validation as `fromString`.
+#[must_use]
+pub fn crypto_key_from_bytes(s: String) -> IpeMaybe<Key> {
+    crypto_key_from_string(s)
 }
 
 /// `Mac.toHex : Mac -> String` — the single extraction boundary: recover the
@@ -101,8 +117,8 @@ pub fn crypto_mac_to_hex(m: Mac) -> String {
 }
 
 /// Crate-internal `Key` unwrap — the sibling `crypto` module's typed AEAD
-/// wrappers (`aesGcmEncryptKey` / `chacha20EncryptKey` / …) recover the raw key
-/// blob to forward to the `String`-keyed AEAD primitives. `pub(crate)` so the
+/// wrappers (`crypto_aes_gcm_encrypt_key` / `crypto_chacha20_encrypt_key` / …)
+/// recover the raw key blob to forward to the AEAD primitives. `pub(crate)` so the
 /// opaque key material still cannot escape the runtime crate. Gated to its sole
 /// (feature-gated) consumer now that the `crypto_core` floor compiles without
 /// the heavy `crypto` feature.
@@ -502,6 +518,16 @@ pub fn ipe_crypto_rsa_sha256_sign(
 mod tests_core {
     use super::*;
 
+    // Extract the `Key` from a `crypto_key_from_string`/`_bytes` construction in
+    // tests that pass a known non-empty key (always `Just`). A `Nothing` is a
+    // test-setup error and fails the test rather than silently skipping.
+    fn key_of(m: IpeMaybe<Key>) -> Key {
+        match m {
+            IpeMaybe::Just(k) => k,
+            IpeMaybe::Nothing => panic!("test key construction returned Nothing"),
+        }
+    }
+
     const EMPTY_SHA256: &str = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
     const EMPTY_SHA512: &str = "cf83e1357eefb8bdf1542850d66d8007d620e4050b5715dc83f4a921d36ce9ce47d0d13c5d85f2b0ff8318d2877eec2f63b931bd47417a81a538327af927da3e";
     const ABC_SHA256: &str = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
@@ -608,7 +634,7 @@ TsgxkiXH9sjXrPHT1hXn2tKCv9MkR8MD1Ndh6jo7inBZUK0YG7H6Jx0CAwEAAQ==
     #[test]
     fn typed_key_and_mac_round_trip() {
         let raw_key: String = (0..20).map(|_| '\u{000b}').collect();
-        let key = crypto_key_from_string(raw_key);
+        let key = key_of(crypto_key_from_string(raw_key));
         let mac = crypto_hmac_sha256_key(key, "Hi There".to_string());
         // RFC 4231 test vector 1 — same value as the String-typed variant
         assert_eq!(
@@ -622,8 +648,8 @@ TsgxkiXH9sjXrPHT1hXn2tKCv9MkR8MD1Ndh6jo7inBZUK0YG7H6Jx0CAwEAAQ==
     #[test]
     fn key_from_bytes_same_as_key_from_string() {
         let raw: String = (0..20).map(|_| '\u{000b}').collect();
-        let k1 = crypto_key_from_string(raw.clone());
-        let k2 = crypto_key_from_bytes(raw);
+        let k1 = key_of(crypto_key_from_string(raw.clone()));
+        let k2 = key_of(crypto_key_from_bytes(raw));
         let mac1 = crypto_hmac_sha256_key(k1, "data".to_string());
         let mac2 = crypto_hmac_sha256_key(k2, "data".to_string());
         assert_eq!(crypto_mac_to_hex(mac1), crypto_mac_to_hex(mac2));
@@ -632,7 +658,7 @@ TsgxkiXH9sjXrPHT1hXn2tKCv9MkR8MD1Ndh6jo7inBZUK0YG7H6Jx0CAwEAAQ==
     /// `Key`'s `Debug` impl MUST redact key material — never "<key-bytes>".
     #[test]
     fn key_debug_is_redacted() {
-        let key = crypto_key_from_string("supersecret".to_string());
+        let key = key_of(crypto_key_from_string("supersecret".to_string()));
         let debug_str = format!("{:?}", key);
         assert_eq!(debug_str, "<key>", "Key Debug must redact to '<key>'");
         assert!(
@@ -645,7 +671,7 @@ TsgxkiXH9sjXrPHT1hXn2tKCv9MkR8MD1Ndh6jo7inBZUK0YG7H6Jx0CAwEAAQ==
     #[test]
     fn role_swap_types_are_distinct() {
         // Verify at runtime that Key != Mac (they are separate newtypes).
-        let key = crypto_key_from_string("k".to_string());
+        let key = key_of(crypto_key_from_string("k".to_string()));
         let mac = crypto_hmac_sha256_key(key, "m".to_string());
         // mac_to_hex is the ONLY extraction path for a Mac
         let hex = crypto_mac_to_hex(mac);
@@ -662,9 +688,9 @@ TsgxkiXH9sjXrPHT1hXn2tKCv9MkR8MD1Ndh6jo7inBZUK0YG7H6Jx0CAwEAAQ==
     #[test]
     fn mac_eq_reflexive_and_distinguishing() {
         let raw_key: String = (0..32).map(|_| 'k').collect();
-        let key_a = crypto_key_from_string(raw_key.clone());
-        let key_b = crypto_key_from_string(raw_key.clone());
-        let key_c = crypto_key_from_string(raw_key);
+        let key_a = key_of(crypto_key_from_string(raw_key.clone()));
+        let key_b = key_of(crypto_key_from_string(raw_key.clone()));
+        let key_c = key_of(crypto_key_from_string(raw_key));
         let mac_same_1 = crypto_hmac_sha256_key(key_a, "message".to_string());
         let mac_same_2 = crypto_hmac_sha256_key(key_b, "message".to_string());
         let mac_diff = crypto_hmac_sha256_key(key_c, "different-message".to_string());
@@ -683,9 +709,9 @@ TsgxkiXH9sjXrPHT1hXn2tKCv9MkR8MD1Ndh6jo7inBZUK0YG7H6Jx0CAwEAAQ==
     #[test]
     fn mac_eq_consistent_with_ct_bytes_eq() {
         let raw_key: String = (0..32).map(|_| 'm').collect();
-        let key_1 = crypto_key_from_string(raw_key.clone());
-        let key_2 = crypto_key_from_string(raw_key.clone());
-        let key_3 = crypto_key_from_string(raw_key);
+        let key_1 = key_of(crypto_key_from_string(raw_key.clone()));
+        let key_2 = key_of(crypto_key_from_string(raw_key.clone()));
+        let key_3 = key_of(crypto_key_from_string(raw_key));
         let mac1 = crypto_hmac_sha256_key(key_1, "data".to_string());
         let mac2 = crypto_hmac_sha256_key(key_2, "data".to_string());
         let mac3 = crypto_hmac_sha256_key(key_3, "other".to_string());
@@ -713,9 +739,9 @@ TsgxkiXH9sjXrPHT1hXn2tKCv9MkR8MD1Ndh6jo7inBZUK0YG7H6Jx0CAwEAAQ==
     /// equal, different-content keys do not.
     #[test]
     fn key_eq_via_ct_bytes_eq() {
-        let k1 = crypto_key_from_string("secret-key".to_string());
-        let k2 = crypto_key_from_string("secret-key".to_string());
-        let k3 = crypto_key_from_string("different-key".to_string());
+        let k1 = key_of(crypto_key_from_string("secret-key".to_string()));
+        let k2 = key_of(crypto_key_from_string("secret-key".to_string()));
+        let k3 = key_of(crypto_key_from_string("different-key".to_string()));
         assert_eq!(k1, k2, "same-content keys must be equal");
         assert_ne!(k1, k3, "different-content keys must be unequal");
     }
@@ -803,18 +829,18 @@ TsgxkiXH9sjXrPHT1hXn2tKCv9MkR8MD1Ndh6jo7inBZUK0YG7H6Jx0CAwEAAQ==
 
         let n: u64 = 50_000;
         let mac_ref_1: crate::crypto_core::Mac = {
-            let k = crypto_key_from_string(raw.clone());
+            let k = key_of(crypto_key_from_string(raw.clone()));
             crypto_hmac_sha256_key(k, "msg".to_string())
         };
         let mac_all_wrong: crate::crypto_core::Mac = {
             // Construct a Mac with the wrong bytes via round-trip (only legal path).
             // We use a key that produces the all_wrong pattern if possible;
             // otherwise accept any distinct tag.
-            let k = crypto_key_from_string("wrong-key".to_string());
+            let k = key_of(crypto_key_from_string("wrong-key".to_string()));
             crypto_hmac_sha256_key(k, "msg".to_string())
         };
         let mac_prefix: crate::crypto_core::Mac = {
-            let k = crypto_key_from_string(raw.clone());
+            let k = key_of(crypto_key_from_string(raw.clone()));
             crypto_hmac_sha256_key(k, "msg2".to_string())
         };
 

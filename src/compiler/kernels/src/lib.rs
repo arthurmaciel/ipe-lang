@@ -2694,10 +2694,11 @@ pub enum StdlibKernel {
     EmailSend,
 
     // ── Ipe.Crypto typed-key newtypes ─────────────────────────────────
-    // Additive Layer-3 API that wraps raw `String` keys / MACs in opaque
-    // role-typed newtypes.  The existing bare-`String` kernels remain unchanged
-    // (backward-compatible); these new kernels carry `Key`/`Mac` runtime
-    // types from `ipe_runtime::crypto`.  All are Pure (no side-effect).
+    // Opaque role-typed newtypes carrying `Key`/`Mac` runtime types from
+    // `ipe_runtime::crypto`.  All are Pure (no side-effect).  The AEAD and
+    // key-derivation kernels themselves require/return `Key` (see the raw
+    // `CryptoAesGcmEncrypt` etc. entries above) — there is no bare-`String`-key
+    // spelling for encrypt/decrypt/derive.
     /// `Key.fromString : String -> Key` — the ONLY constructor; parse boundary.
     CryptoKeyFromString,
     /// `Key.fromBytes : String -> Key` — construction boundary for byte-string callers.
@@ -2708,18 +2709,6 @@ pub enum StdlibKernel {
     CryptoHmacSha256WithKey,
     /// `Crypto.hmacSha512WithKey : Key -> String -> Mac` — typed HMAC-SHA512.
     CryptoHmacSha512WithKey,
-    /// `Crypto.aesKeyFromPasswordKey : String -> String -> Key` — typed key derivation.
-    CryptoAesKeyFromPasswordKey,
-    /// `Crypto.chachaKeyFromPasswordKey : String -> String -> Key` — typed key derivation.
-    CryptoChachaKeyFromPasswordKey,
-    /// `Crypto.aesGcmEncryptKey : Key -> String -> Result Error String` — typed AEAD encrypt.
-    CryptoAesGcmEncryptKey,
-    /// `Crypto.aesGcmDecryptKey : Key -> String -> Result Error String` — typed AEAD decrypt.
-    CryptoAesGcmDecryptKey,
-    /// `Crypto.chacha20EncryptKey : Key -> String -> Result Error String` — typed AEAD encrypt.
-    CryptoChacha20EncryptKey,
-    /// `Crypto.chacha20DecryptKey : Key -> String -> Result Error String` — typed AEAD decrypt.
-    CryptoChacha20DecryptKey,
 
     // ── Ipe.Email.EmailAddress — typed parse-don't-validate boundary ───
     // Additive API: `EmailAddress.parse` is the only constructor; downstream
@@ -3227,31 +3216,47 @@ impl StdlibKernel {
             // (`ipe_aes_gcm_encrypt(key, plaintext)` etc.) prepends/strips a
             // fresh random nonce internally, so — unlike the Go backend which
             // took an explicit nonce/AAD arg — there is no third argument.
-            Self::CryptoAesGcmEncrypt => {
-                d("Crypto", "aesGcmEncrypt", 2, Pure, "ipe_aes_gcm_encrypt")
-            }
-            Self::CryptoAesGcmDecrypt => {
-                d("Crypto", "aesGcmDecrypt", 2, Pure, "ipe_aes_gcm_decrypt")
-            }
-            Self::CryptoChacha20Encrypt => {
-                d("Crypto", "chacha20Encrypt", 2, Pure, "ipe_chacha20_encrypt")
-            }
-            Self::CryptoChacha20Decrypt => {
-                d("Crypto", "chacha20Decrypt", 2, Pure, "ipe_chacha20_decrypt")
-            }
+            Self::CryptoAesGcmEncrypt => d(
+                "Crypto",
+                "aesGcmEncrypt",
+                2,
+                Pure,
+                "ipe_aes_gcm_encrypt_key",
+            ),
+            Self::CryptoAesGcmDecrypt => d(
+                "Crypto",
+                "aesGcmDecrypt",
+                2,
+                Pure,
+                "ipe_aes_gcm_decrypt_key",
+            ),
+            Self::CryptoChacha20Encrypt => d(
+                "Crypto",
+                "chacha20Encrypt",
+                2,
+                Pure,
+                "ipe_chacha20_encrypt_key",
+            ),
+            Self::CryptoChacha20Decrypt => d(
+                "Crypto",
+                "chacha20Decrypt",
+                2,
+                Pure,
+                "ipe_chacha20_decrypt_key",
+            ),
             Self::CryptoAesKeyFromPassword => d(
                 "Crypto",
                 "aesKeyFromPassword",
                 2,
                 Pure,
-                "crypto_aes_key_from_password",
+                "crypto_aes_key_from_password_key",
             ),
             Self::CryptoChachaKeyFromPassword => d(
                 "Crypto",
                 "chachaKeyFromPassword",
                 2,
                 Pure,
-                "crypto_chacha_key_from_password",
+                "crypto_chacha_key_from_password_key",
             ),
             Self::CryptoRandomBytes => d("Crypto", "randomBytes", 1, Pure, "crypto_random_bytes"),
             Self::CryptoRandomToken => d("Crypto", "randomToken", 1, Pure, "crypto_random_token"),
@@ -4498,48 +4503,6 @@ impl StdlibKernel {
                 Pure,
                 "crypto_hmac_sha512_key",
             ),
-            Self::CryptoAesKeyFromPasswordKey => d(
-                "Crypto",
-                "aesKeyFromPasswordKey",
-                2,
-                Pure,
-                "crypto_aes_key_from_password_key",
-            ),
-            Self::CryptoChachaKeyFromPasswordKey => d(
-                "Crypto",
-                "chachaKeyFromPasswordKey",
-                2,
-                Pure,
-                "crypto_chacha_key_from_password_key",
-            ),
-            Self::CryptoAesGcmEncryptKey => d(
-                "Crypto",
-                "aesGcmEncryptKey",
-                2,
-                Pure,
-                "crypto_aes_gcm_encrypt_key",
-            ),
-            Self::CryptoAesGcmDecryptKey => d(
-                "Crypto",
-                "aesGcmDecryptKey",
-                2,
-                Pure,
-                "crypto_aes_gcm_decrypt_key",
-            ),
-            Self::CryptoChacha20EncryptKey => d(
-                "Crypto",
-                "chacha20EncryptKey",
-                2,
-                Pure,
-                "crypto_chacha20_encrypt_key",
-            ),
-            Self::CryptoChacha20DecryptKey => d(
-                "Crypto",
-                "chacha20DecryptKey",
-                2,
-                Pure,
-                "crypto_chacha20_decrypt_key",
-            ),
             // ── Ipe.Email.EmailAddress ─────────────────────────────────
             Self::EmailAddressParse => d("EmailAddress", "parse", 1, Pure, "email_address_parse"),
             Self::EmailAddressToString => d(
@@ -5698,12 +5661,6 @@ impl StdlibKernel {
         Self::CryptoMacToHex,
         Self::CryptoHmacSha256WithKey,
         Self::CryptoHmacSha512WithKey,
-        Self::CryptoAesKeyFromPasswordKey,
-        Self::CryptoChachaKeyFromPasswordKey,
-        Self::CryptoAesGcmEncryptKey,
-        Self::CryptoAesGcmDecryptKey,
-        Self::CryptoChacha20EncryptKey,
-        Self::CryptoChacha20DecryptKey,
         // ── Ipe.Email.EmailAddress ─────────────────────────────────────
         Self::EmailAddressParse,
         Self::EmailAddressToString,
@@ -7164,6 +7121,8 @@ impl StdlibKernel {
         const LOCALE_TO_STRING_TO_STRING: TyShape =
             TyShape::Fun(&LOCALE, &TyShape::Fun(&STRING, &STRING));
         // Crypto typed-key.
+        const MAYBE_CRYPTO_KEY: TyShape = TyShape::Con(BuiltinTag::Maybe, &[CRYPTO_KEY]);
+        const STRING_TO_MAYBE_CRYPTO_KEY: TyShape = TyShape::Fun(&STRING, &MAYBE_CRYPTO_KEY);
         const STRING_TO_CRYPTO_KEY: TyShape = TyShape::Fun(&STRING, &CRYPTO_KEY);
         const CRYPTO_MAC_TO_STRING: TyShape = TyShape::Fun(&CRYPTO_MAC, &STRING);
         const STRING_TO_CRYPTO_MAC: TyShape = TyShape::Fun(&STRING, &CRYPTO_MAC);
@@ -8360,10 +8319,7 @@ impl StdlibKernel {
             | Self::MoneySymbol
             | Self::MoneyCurrencyName => Some(&STRING_TO_STRING),
             Self::StringFromChar | Self::CharToLower | Self::CharToUpper => Some(&CHAR_TO_STRING),
-            Self::StringAppend
-            | Self::SystemGetenvOr
-            | Self::CryptoAesKeyFromPassword
-            | Self::CryptoChachaKeyFromPassword => Some(&STRING_TO_STRING_TO_STRING),
+            Self::StringAppend | Self::SystemGetenvOr => Some(&STRING_TO_STRING_TO_STRING),
             Self::StringContains
             | Self::StringStartsWith
             | Self::StringEndsWith
@@ -8813,23 +8769,23 @@ impl StdlibKernel {
             Self::StringToUpperIn | Self::StringToLowerIn => Some(&LOCALE_TO_STRING_TO_STRING),
 
             // ── Crypto typed-key newtypes + AEAD/HMAC/sign. ──
-            Self::CryptoKeyFromString | Self::CryptoKeyFromBytes => Some(&STRING_TO_CRYPTO_KEY),
+            Self::CryptoKeyFromString | Self::CryptoKeyFromBytes => {
+                Some(&STRING_TO_MAYBE_CRYPTO_KEY)
+            }
             Self::CryptoMacToHex => Some(&CRYPTO_MAC_TO_STRING),
             Self::CryptoHmacSha256WithKey | Self::CryptoHmacSha512WithKey => {
                 Some(&CRYPTO_KEY_TO_STRING_TO_CRYPTO_MAC)
             }
-            Self::CryptoAesKeyFromPasswordKey | Self::CryptoChachaKeyFromPasswordKey => {
+            // Key-derivation returns a typed `Key`.
+            Self::CryptoAesKeyFromPassword | Self::CryptoChachaKeyFromPassword => {
                 Some(&STRING_TO_STRING_TO_CRYPTO_KEY)
             }
-            Self::CryptoAesGcmEncryptKey
-            | Self::CryptoAesGcmDecryptKey
-            | Self::CryptoChacha20EncryptKey
-            | Self::CryptoChacha20DecryptKey => Some(&CRYPTO_KEY_TO_STRING_TO_RESULT_ERR_STRING),
-            Self::CryptoRsaSha256Sign
-            | Self::CryptoAesGcmEncrypt
+            // AEAD requires a typed `Key` in the key role.
+            Self::CryptoAesGcmEncrypt
             | Self::CryptoAesGcmDecrypt
             | Self::CryptoChacha20Encrypt
-            | Self::CryptoChacha20Decrypt => Some(&STRING_TO_STRING_TO_RESULT_ERR_STRING),
+            | Self::CryptoChacha20Decrypt => Some(&CRYPTO_KEY_TO_STRING_TO_RESULT_ERR_STRING),
+            Self::CryptoRsaSha256Sign => Some(&STRING_TO_STRING_TO_RESULT_ERR_STRING),
             Self::CryptoRandomBytes | Self::CryptoRandomToken => Some(&INT_TO_TASK_STRING_LEAF),
 
             // ── Jwt (raw + builder). ──
@@ -10534,12 +10490,6 @@ impl StdlibKernel {
             | Self::CryptoMacToHex
             | Self::CryptoHmacSha256WithKey
             | Self::CryptoHmacSha512WithKey
-            | Self::CryptoAesKeyFromPasswordKey
-            | Self::CryptoChachaKeyFromPasswordKey
-            | Self::CryptoAesGcmEncryptKey
-            | Self::CryptoAesGcmDecryptKey
-            | Self::CryptoChacha20EncryptKey
-            | Self::CryptoChacha20DecryptKey
             // ── Ipe.Email.EmailAddress ─────────────────────────────────
             | Self::EmailAddressParse
             | Self::EmailAddressToString
@@ -11398,16 +11348,10 @@ impl StdlibKernel {
                 | Self::CryptoRsaSha256Verify
                 | Self::CryptoAesGcmEncrypt
                 | Self::CryptoAesGcmDecrypt
-                | Self::CryptoAesGcmEncryptKey
-                | Self::CryptoAesGcmDecryptKey
                 | Self::CryptoChacha20Encrypt
                 | Self::CryptoChacha20Decrypt
-                | Self::CryptoChacha20EncryptKey
-                | Self::CryptoChacha20DecryptKey
                 | Self::CryptoAesKeyFromPassword
                 | Self::CryptoChachaKeyFromPassword
-                | Self::CryptoAesKeyFromPasswordKey
-                | Self::CryptoChachaKeyFromPasswordKey
         )
     }
 

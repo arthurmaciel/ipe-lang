@@ -1,0 +1,15 @@
+module Main exposing (main)
+
+import Ipe.Io as Io
+import Ipe.Crypto as Crypto
+
+-- Type-error fixture: `chacha20Encrypt` requires a `Key` in the key position.
+-- Passing a bare `String` where the key belongs must be a compile error.
+
+main =
+    case Crypto.chacha20Encrypt "not-a-key" "plaintext" of
+        Ok ciphertext ->
+            Io.println ciphertext
+
+        Err _ ->
+            Io.println "encrypt-failed"
