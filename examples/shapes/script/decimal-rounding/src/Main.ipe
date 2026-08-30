@@ -1,0 +1,62 @@
+module Main exposing (main)
+
+import Ipe.Decimal as Decimal exposing (Decimal)
+import Ipe.Result as Result
+import Ipe.Task as Task
+import Ipe.Io as Io
+
+
+-- Arbitrary-precision decimal arithmetic, exercising the three ideas `Ipe.Decimal`
+-- turns on:
+--   • A `Decimal` from a STRING is exact — `0.1 + 0.2` is `0.3`, not the binary
+--     `0.30000000000000004` a `Float` gives.
+--   • Division that could divide by zero returns `Result Error Decimal`, so the
+--     failure is a value, never a runtime trap.
+--   • Rounding is EXPLICIT: banker's rounding (`round`, half-to-even) and
+--     half-away-from-zero (`roundHalfUp`) are separate functions, because which one
+--     you want is a real decision, not a default.
+
+
+-- Parse a decimal or fall back to zero. `fromString` returns `Result`, so a
+-- malformed literal is a typed failure at the boundary, not a silent NaN.
+dec : String -> Decimal
+dec s =
+    Decimal.fromString s |> Result.withDefault Decimal.zero
+
+
+-- `0.1 + 0.2` is exactly `0.3` — the classic float trap, avoided.
+exactSum : String
+exactSum =
+    Decimal.add (dec "0.1") (dec "0.2")
+        |> Decimal.toString
+
+
+-- Safe division: `div` returns `Result`, so dividing by zero is an `Err` value.
+safeDivide : Decimal -> Decimal -> String
+safeDivide a b =
+    case Decimal.div a b of
+        Ok q ->
+            Decimal.toStringFixed 4 q
+
+        Err _ ->
+            "<undefined: division by zero>"
+
+
+-- The same value rounded two ways at 0 places: 2.5 → 2 (banker's, to even) vs
+-- 2.5 → 3 (half away from zero).
+roundingContrast : String
+roundingContrast =
+    let
+        half =
+            dec "2.5"
+    in
+    "banker's " ++ Decimal.toString (Decimal.round 0 half)
+        ++ ", half-up " ++ Decimal.toString (Decimal.roundHalfUp 0 half)
+
+
+main =
+    do
+        Io.println ("0.1 + 0.2 = " ++ exactSum ++ " (exact, not 0.3000…04)")
+        Io.println ("10 / 3 = " ++ safeDivide (dec "10") (dec "3"))
+        Io.println ("10 / 0 = " ++ safeDivide (dec "10") (dec "0"))
+        Io.println ("round 2.5 → " ++ roundingContrast)
