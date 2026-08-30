@@ -1,0 +1,75 @@
+module Main exposing (main)
+
+import Ipe.Task as Task
+import Ipe.Error as Error exposing (Error)
+import Ipe.String as String
+import Ipe.Io as Io
+
+
+-- A tiny deploy runner that chains dependent steps, exercising the three ideas
+-- most `Ipe.Task` code turns on:
+--   • A Task is a DESCRIPTION of an effect, not the effect. Building one runs
+--     nothing; the runtime is the single place work actually happens. `main` is
+--     the one task the runtime runs.
+--   • `do` (sugar over `andThen`) sequences DEPENDENT steps top to bottom, and the
+--     first failure short-circuits — the rest of the chain is skipped automatically.
+--   • The error channel is a typed, matchable `Error`. `onError` catches a failed
+--     task and decides what to do, so recovery is ordinary composition, not a
+--     separate exception mechanism.
+
+
+-- Each step is a Task that can fail on the typed Error channel. `check` succeeds
+-- with a log line when the predicate holds, and fails with a classified Error when
+-- it does not — the failure is a value, built at the call site.
+check : String -> Bool -> Task Error String
+check label ok =
+    if ok then
+        Task.succeed ("ok   — " ++ label)
+
+    else
+        Task.fail (Error.invalidInput ("failed — " ++ label))
+
+
+-- The happy path: three dependent steps in a `do` block. Each `<-` binds the
+-- previous step's success; if any step FAILS, the `<-` short-circuits and the
+-- steps below never run. Read it top to bottom — that is the whole point of `do`
+-- over a nested `andThen` pyramid.
+deploy : Bool -> Task Error String
+deploy migrationsOk =
+    do
+        build <- check "build compiled" True
+        _ <- Io.println ("  " ++ build)
+        migrated <- check "migrations applied" migrationsOk
+        _ <- Io.println ("  " ++ migrated)
+        released <- check "traffic shifted" True
+        _ <- Io.println ("  " ++ released)
+        Task.succeed "deploy succeeded"
+
+
+-- Run one deploy attempt and report it. `Task.onError` catches a failure on the
+-- typed channel and turns it into a recovery task — here, an announced rollback —
+-- so a failed deploy becomes a clean "rolled back" result instead of a crash.
+attempt : String -> Bool -> Task Error ()
+attempt name migrationsOk =
+    do
+        _ <- Io.println (name ++ ":")
+        outcome <-
+            deploy migrationsOk
+                |> Task.onError rollback
+        Io.println ("  => " ++ outcome)
+
+
+rollback : Error -> Task Error String
+rollback err =
+    do
+        _ <- Io.println ("  ! " ++ Error.toString err)
+        _ <- Io.println "  rolling back"
+        Task.succeed "rolled back"
+
+
+-- `main` is itself a Task — the ONE the runtime runs. Everything above only
+-- described work; nothing happened until here.
+main =
+    do
+        _ <- attempt "green deploy" True
+        attempt "bad deploy" False

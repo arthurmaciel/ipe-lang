@@ -474,6 +474,7 @@ pub fn render_type(ctx: &EmitCtx, ty: &IrType, generics: GenericScope) -> DResul
             match ctor {
                 UiCtor::Html => format!("ipe_runtime::html::Html<{m}>"),
                 UiCtor::Element => format!("ipe_runtime::ui::element::Element<{m}>"),
+                UiCtor::Cells => format!("ipe_runtime::tui::CellsView<{m}>"),
                 UiCtor::UiAttribute => format!("ipe_runtime::ui::element::Attribute<{m}>"),
                 UiCtor::HtmlAttribute => format!("ipe_runtime::html::Attribute<{m}>"),
                 UiCtor::HtmlEvent => format!("ipe_runtime::html::Event<{m}>"),

@@ -7,10 +7,15 @@
 --     random nonce on every call; the nonce is prepended to the
 --     ciphertext so `decrypt` can recover it.
 --   * Key/secret material is never logged.
---   * `Key` and `Mac` enforce role at compile time: `hmacSha256` and
---     `hmacSha512` require a `Key`; passing a bare `String` (e.g. a
---     plaintext message) where a key is expected is a compile error.
---     Construct a `Key` via `keyFromString` or `keyFromBytes`.
+--   * `Key` and `Mac` enforce role at compile time.  Every key-consuming
+--     function — `hmacSha256`, `hmacSha512`, `aesGcmEncrypt`/`Decrypt`,
+--     `chacha20Encrypt`/`Decrypt` — requires a `Key`; passing a bare `String`
+--     (e.g. a plaintext message or a password) where a key is expected is a
+--     compile error, so key/message role confusion is unrepresentable.
+--     `aesKeyFromPassword`/`chachaKeyFromPassword` return a `Key`, never a raw
+--     `String`.  Construct a `Key` via `keyFromString`, `keyFromBytes`, or a
+--     password-derivation function; there is no way to encrypt or derive with a
+--     bare `String` key.
 module Ipe.Crypto exposing
     ( sha256, sha512, sha1, md5
     , rsaSha256Sign, rsaSha256Verify
@@ -26,12 +31,6 @@ module Ipe.Crypto exposing
     , macToHex
     , hmacSha256
     , hmacSha512
-    , aesGcmEncryptKey
-    , aesGcmDecryptKey
-    , chacha20EncryptKey
-    , chacha20DecryptKey
-    , aesKeyFromPasswordKey
-    , chachaKeyFromPasswordKey
     )
 
 
@@ -84,26 +83,41 @@ constantTimeEqual = Ffi.kernel "Crypto_constantTimeEqual"
 
 
 -- ── AEAD symmetric encryption ─────────────────────────────────────────────────
+--
+-- Every AEAD entry point requires a typed `Key` in the key role.  A bare
+-- `String` (a message, a password, a plaintext) is a compile error where a
+-- `Key` is expected, so key/message role confusion is unrepresentable.  A fresh
+-- random nonce is generated per call and prepended to the ciphertext.
 
-aesGcmEncrypt : String -> String -> Result Error String
+-- | `aesGcmEncrypt key plaintext` — AES-256-GCM encrypt with a typed `Key`.
+aesGcmEncrypt : Key -> String -> Result Error String
 aesGcmEncrypt = Ffi.kernel "Crypto_aesGcmEncrypt"
 
-aesGcmDecrypt : String -> String -> Result Error String
+-- | `aesGcmDecrypt key ciphertext` — AES-256-GCM decrypt with a typed `Key`.
+aesGcmDecrypt : Key -> String -> Result Error String
 aesGcmDecrypt = Ffi.kernel "Crypto_aesGcmDecrypt"
 
-chacha20Encrypt : String -> String -> Result Error String
+-- | `chacha20Encrypt key plaintext` — ChaCha20-Poly1305 encrypt with a typed `Key`.
+chacha20Encrypt : Key -> String -> Result Error String
 chacha20Encrypt = Ffi.kernel "Crypto_chacha20Encrypt"
 
-chacha20Decrypt : String -> String -> Result Error String
+-- | `chacha20Decrypt key ciphertext` — ChaCha20-Poly1305 decrypt with a typed `Key`.
+chacha20Decrypt : Key -> String -> Result Error String
 chacha20Decrypt = Ffi.kernel "Crypto_chacha20Decrypt"
 
 
 -- ── Key derivation ────────────────────────────────────────────────────────────
+--
+-- Password-based derivation returns a typed `Key`, never a raw `String`, so a
+-- derived key can only flow into a `Key`-typed sink (AEAD/HMAC), never be
+-- mistaken for arbitrary text.
 
-aesKeyFromPassword : String -> String -> String
+-- | Derive an AES-256 `Key` from a password + salt string.
+aesKeyFromPassword : String -> String -> Key
 aesKeyFromPassword = Ffi.kernel "Crypto_aesKeyFromPassword"
 
-chachaKeyFromPassword : String -> String -> String
+-- | Derive a ChaCha20 `Key` from a password + salt string.
+chachaKeyFromPassword : String -> String -> Key
 chachaKeyFromPassword = Ffi.kernel "Crypto_chachaKeyFromPassword"
 
 
@@ -131,8 +145,9 @@ type Key = Key
 -- hex representation instead, or use a typed constant-time check).
 type Mac = Mac
 
--- | Parse a hex-encoded or raw string into a `Key`.  Returns
--- `Nothing` if the byte length is wrong for any supported algorithm.
+-- | Parse a hex-encoded or raw string into a `Key`.  Returns `Nothing`
+-- for an empty key; a wrong-length key for a given algorithm fails closed
+-- at that algorithm's boundary (e.g. AEAD requires a 32-byte key).
 keyFromString : String -> Maybe Key
 keyFromString = Ffi.kernel "Key_fromString"
 
@@ -143,33 +158,3 @@ keyFromBytes = Ffi.kernel "Key_fromBytes"
 -- | Render a `Mac` as a lowercase hex string for storage or display.
 macToHex : Mac -> String
 macToHex = Ffi.kernel "Mac_toHex"
-
-
--- ── Typed AEAD ───────────────────────────────────────────────────────────────
-
--- | `aesGcmEncryptKey key plaintext` — AES-256-GCM encrypt with a typed `Key`.
-aesGcmEncryptKey : Key -> String -> Result Error String
-aesGcmEncryptKey = Ffi.kernel "Crypto_aesGcmEncryptKey"
-
--- | `aesGcmDecryptKey key ciphertext` — AES-256-GCM decrypt with a typed `Key`.
-aesGcmDecryptKey : Key -> String -> Result Error String
-aesGcmDecryptKey = Ffi.kernel "Crypto_aesGcmDecryptKey"
-
--- | `chacha20EncryptKey key plaintext` — ChaCha20-Poly1305 encrypt with a typed `Key`.
-chacha20EncryptKey : Key -> String -> Result Error String
-chacha20EncryptKey = Ffi.kernel "Crypto_chacha20EncryptKey"
-
--- | `chacha20DecryptKey key ciphertext` — ChaCha20-Poly1305 decrypt with a typed `Key`.
-chacha20DecryptKey : Key -> String -> Result Error String
-chacha20DecryptKey = Ffi.kernel "Crypto_chacha20DecryptKey"
-
-
--- ── Typed key derivation ──────────────────────────────────────────────────────
-
--- | Derive an AES-256 `Key` from a password + salt string.
-aesKeyFromPasswordKey : String -> String -> Key
-aesKeyFromPasswordKey = Ffi.kernel "Crypto_aesKeyFromPasswordKey"
-
--- | Derive a ChaCha20 `Key` from a password + salt string.
-chachaKeyFromPasswordKey : String -> String -> Key
-chachaKeyFromPasswordKey = Ffi.kernel "Crypto_chachaKeyFromPasswordKey"

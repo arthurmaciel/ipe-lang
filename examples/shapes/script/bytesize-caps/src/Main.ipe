@@ -1,0 +1,52 @@
+module Main exposing (main)
+
+import Ipe.ByteSize as ByteSize
+import Ipe.Task as Task
+import Ipe.List as List
+import Ipe.String as String
+import Ipe.Io as Io
+
+
+-- Build resource caps from unit-explicit byte quantities, exercising the three
+-- ideas most `Ipe.ByteSize` code turns on:
+--   • The constructors NAME their unit at the call site — `bytes`, `kib`, `mib`.
+--     A `10` meaning ten mebibytes can never be silently read as ten bytes,
+--     because you always write which unit the `10` is. Units are binary
+--     (`kib` = 1024 bytes, `mib` = 1024 * 1024 bytes).
+--   • `ByteSize` is OPAQUE and non-negative: every constructor clamps a negative
+--     input to zero, so a negative ceiling is not a representable cap. The type is
+--     a proof of non-negativity.
+--   • The raw byte count a runtime kernel needs (a read limit, a cache cap) is
+--     recovered EXPLICITLY with `toBytes`, only at the boundary.
+
+
+type alias Cap =
+    { resource : String
+    , limit : ByteSize.ByteSize
+    }
+
+
+caps : List Cap
+caps =
+    [ { resource = "upload", limit = ByteSize.mib 10 }
+    , { resource = "avatar", limit = ByteSize.kib 256 }
+    , { resource = "token", limit = ByteSize.bytes 512 }
+    , { resource = "unset", limit = ByteSize.bytes (0 - 1) } -- clamps to zero
+    ]
+
+
+-- Render a cap with its size recovered to raw bytes at the boundary — the one
+-- place a `ByteSize` becomes a number the runtime kernel can enforce.
+render : Cap -> String
+render cap =
+    String.padRight 8 ' ' cap.resource
+        ++ String.fromInt (ByteSize.toBytes cap.limit)
+        ++ " bytes"
+
+
+main =
+    do
+        Io.println "Resource caps:"
+        List.map (\c -> Io.println ("  " ++ render c)) caps
+            |> Task.sequence
+            |> Task.map (\_ -> ())

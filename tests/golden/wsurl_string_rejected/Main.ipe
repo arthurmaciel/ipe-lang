@@ -1,0 +1,12 @@
+module Main exposing (main)
+
+import Ipe.Io as Io
+import Ipe.WebSocket as WebSocket
+
+
+-- Negative: passing a bare String to WebSocket.connect is a type error.
+-- connect : WsUrl -> Task Error WebSocket, not String -> ...
+
+main =
+    WebSocket.connect "wss://echo.example.com"
+        |> (\_ -> Io.println "should not compile")

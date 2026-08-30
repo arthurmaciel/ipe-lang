@@ -265,6 +265,11 @@ pub const RESERVED_BUILTIN_TYPES: &[&str] = &[
     "RevocationMode",
     "Html",
     "Element",
+    // `Ipe.Ui.Cells`'s Tui-only view type `Cells msg`. Reserved so a user
+    // `type Cells …` cannot shadow the builtin and defeat the shape-gate that
+    // prevents Web/Cli builders from appearing in a `view : M -> Cells Msg`
+    // function. Built only through `Ipe.Ui.Cells.*` kernels.
+    "Cells",
     "Attribute",
     "Event",
     "Length",

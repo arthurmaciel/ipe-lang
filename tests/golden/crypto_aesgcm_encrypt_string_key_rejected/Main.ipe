@@ -1,0 +1,17 @@
+module Main exposing (main)
+
+import Ipe.Io as Io
+import Ipe.Crypto as Crypto
+
+-- Type-error fixture: `aesGcmEncrypt` requires a `Key` in the key position.
+-- Passing a bare `String` (here the literal `"not-a-key"`, but it could just as
+-- easily be a plaintext message or a password) must be a compile error, so
+-- key/message role confusion is unrepresentable.
+
+main =
+    case Crypto.aesGcmEncrypt "not-a-key" "plaintext" of
+        Ok ciphertext ->
+            Io.println ciphertext
+
+        Err _ ->
+            Io.println "encrypt-failed"

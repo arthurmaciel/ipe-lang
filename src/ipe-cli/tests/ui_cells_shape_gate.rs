@@ -136,12 +136,14 @@ main =
         }
 "#;
 
-/// `Ui.cells` inside a `Terminal.appScreen` view — must be ACCEPTED (the raw
-/// cell grid is a terminal primitive; this is the shape it belongs to).
+/// `Cells.cells` inside a `Terminal.appScreen` view — must be ACCEPTED (the raw
+/// cell grid is a terminal primitive; this is the shape it belongs to). A Tui
+/// view is `Cells Msg`, so the grid island is built with `Cells.cells`.
 const TERMINAL_UI_CELLS: &str = r#"module Main exposing (main)
 
 import Ipe.Tea.Terminal as Terminal
-import Ipe.Ui as Ui
+import Ipe.Ui.Cells as Cells
+import Ipe.Ui.Cells exposing (Cells)
 import Ipe.Tea.Terminal.Cmd
 import Ipe.Tea.Terminal.Sub
 
@@ -159,11 +161,11 @@ update msg model =
         NoOp ->
             ( model, Cmd.none )
 
-view : Model -> Element Msg
+view : Model -> Cells Msg
 view _model =
-    Ui.column []
-        [ Ui.text "grid:"
-        , Ui.cells [ [ '4', '8' ], [ '6', '9' ] ]
+    Cells.column []
+        [ Cells.text "grid:"
+        , Cells.cells [ [ '4', '8' ], [ '6', '9' ] ]
         ]
 
 subscriptions : Model -> Sub Msg
@@ -196,9 +198,70 @@ fn webview_view_with_ui_cells_is_rejected() -> Result<(), BoxError> {
     assert_rejected_with("webview_ui_cells", WEBVIEW_UI_CELLS, "IPE-L0132")
 }
 
-/// Non-regression control: `Ui.cells` under `Terminal.appScreen` is the shape
-/// it belongs to and must compile cleanly (ipe-0).
+/// Non-regression control: `Cells.cells` under `Terminal.appScreen` is the
+/// shape it belongs to and must compile cleanly (ipe-0).
 #[test]
 fn terminal_view_with_ui_cells_is_accepted() -> Result<(), BoxError> {
     assert_accepted("terminal_ui_cells", TERMINAL_UI_CELLS)
+}
+
+/// `Ui.cells` in a `Terminal.appLines` (Cli shape) view.
+///
+/// `Terminal.appLines` requires `view : Model -> String`. `Ui.cells` returns
+/// `Element msg`, which is incompatible with `String`. The type checker
+/// rejects the program with IPE-T0001 (type mismatch) before the backend
+/// shape gate (IPE-L0153) is reached. The shape gate is defense-in-depth:
+/// unreachable helper functions containing `Ui.cells` are eliminated by dead
+/// code analysis before emission, so the gate fires only if the type system
+/// is bypassed (e.g., programmatic IR construction). This test confirms
+/// the type-level rejection.
+const CLI_UI_CELLS: &str = r"module Main exposing (main)
+
+import Ipe.Tea.Terminal as Terminal
+import Ipe.Ui as Ui
+
+type Msg = NoOp
+
+type alias Model = { count : Int }
+
+init : () -> ( Model, Cmd Msg )
+init _unit =
+    ( { count = 0 }, Cmd.none )
+
+update : Msg -> Model -> ( Model, Cmd Msg )
+update msg model =
+    case msg of
+        NoOp ->
+            ( model, Cmd.none )
+
+view : Model -> String
+view _model =
+    Ui.cells [ [ 'h', 'i' ] ]
+
+subscriptions : Model -> Sub Msg
+subscriptions _model =
+    Sub.none
+
+onLine : String -> Msg
+onLine _line =
+    NoOp
+
+main =
+    Terminal.appLines
+        { init = init, update = update, view = view
+        , subscriptions = subscriptions, onLine = onLine
+        }
+";
+
+/// `Ui.cells` in a `Terminal.appLines` view is rejected because the type checker
+/// rejects `Element msg` where `String` is required (IPE-T0001). The backend
+/// shape gate (IPE-L0153) is defense-in-depth for paths that bypass type
+/// inference.
+#[test]
+fn cli_view_with_ui_cells_is_rejected() -> Result<(), BoxError> {
+    match compile("cli_ui_cells", CLI_UI_CELLS)? {
+        Ok(()) => Err("cli_ui_cells: expected a type or shape error, but ipec succeeded".into()),
+        Err(ipe::CliError::Pipeline { .. }) => Ok(()),
+        Err(other) => Err(format!("cli_ui_cells: unexpected error: {other:?}").into()),
+    }
 }

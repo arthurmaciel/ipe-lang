@@ -1,0 +1,127 @@
+module Main exposing (main)
+
+import Ipe.Url as Url
+import Ipe.Url.Parser as Parser
+import Ipe.Task as Task
+import Ipe.Maybe as Maybe
+import Ipe.List as List
+import Ipe.String as String
+import Ipe.Io as Io
+
+
+-- Match request URLs into a typed `Page`, exercising the three ideas most
+-- `Ipe.Url.Parser` code turns on:
+--   • A pattern matches an ALREADY-PARSED `Url`, never a raw string. The `Url`
+--     seal guarantees the address was validated; the parser splits its path and
+--     query once, over the typed value.
+--   • Patterns are PURE DATA built from `s` / `int` / `string` / `slash` (`</>`)
+--     / `withQuery`. `parse` is TOTAL: a full match yields `Just` ordered
+--     captures, anything else yields `Nothing` — never a partial or ambiguous match.
+--   • Page CONSTRUCTORS are applied in ordinary code — a `case` chain over the
+--     `parse` results reads the captures with `firstInt` / `firstString` /
+--     `firstQuery`. The pattern carries data; you build the page.
+
+
+type Page
+    = Home
+    | BlogPost Int
+    | UserProfile String
+    | Search (Maybe String)
+    | NotFound
+
+
+-- Try each pattern in turn and build the matching `Page` from its captures. The
+-- first pattern to `parse` to `Just` wins; an unmatched URL falls through to
+-- `NotFound`. Each arm reads only the captures its pattern produced.
+page : Url.Url -> Page
+page url =
+    case Parser.parse (Parser.slash (Parser.s "blog") Parser.int) url of
+
+        Just caps ->
+            BlogPost (Maybe.withDefault 0 (Parser.firstInt caps))
+
+        Nothing ->
+            pageUser url
+
+
+pageUser : Url.Url -> Page
+pageUser url =
+    case Parser.parse (Parser.slash (Parser.s "user") Parser.string) url of
+
+        Just caps ->
+            UserProfile (Maybe.withDefault "?" (Parser.firstString caps))
+
+        Nothing ->
+            pageSearch url
+
+
+pageSearch : Url.Url -> Page
+pageSearch url =
+    case Parser.parse (Parser.withQuery (Parser.s "search") (Parser.query "q")) url of
+
+        Just caps ->
+            Search (Parser.firstQuery caps)
+
+        Nothing ->
+            pageHome url
+
+
+pageHome : Url.Url -> Page
+pageHome url =
+    case Parser.parse Parser.top url of
+
+        Just _ ->
+            Home
+
+        Nothing ->
+            NotFound
+
+
+render : Page -> String
+render r =
+    case r of
+
+        Home ->
+            "Home"
+
+        BlogPost id ->
+            "BlogPost " ++ String.fromInt id
+
+        UserProfile name ->
+            "UserProfile " ++ name
+
+        Search q ->
+            "Search " ++ Maybe.withDefault "(none)" q
+
+        NotFound ->
+            "NotFound"
+
+
+-- Parse a raw path into a `Url` (against a fixed base) and match it to a page.
+dispatch : String -> String
+dispatch rawPath =
+    case Url.fromString ("https://app.example.com" ++ rawPath) of
+
+        Ok url ->
+            rawPath ++ "  ->  " ++ render (page url)
+
+        Err _ ->
+            rawPath ++ "  ->  (invalid url)"
+
+
+paths : List String
+paths =
+    [ "/"
+    , "/blog/42"
+    , "/user/alice"
+    , "/search?q=shoes"
+    , "/nope/here"
+    ]
+
+
+main =
+    do
+        Io.println "Routing:"
+        List.map (\p -> Io.println ("  " ++ dispatch p)) paths
+            |> Task.sequence
+            |> Task.map (\_ -> ())

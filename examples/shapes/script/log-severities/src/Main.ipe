@@ -1,0 +1,28 @@
+module Main exposing (main)
+
+import Ipe.Log as Log
+import Ipe.Task as Task
+import Ipe.Io as Io
+
+
+-- `Ipe.Log` writes structured, single-line log records at four severities.
+-- Three ideas:
+--   • The severity is chosen by the FUNCTION you call — `Log.debug` / `info` /
+--     `warn` / `error` — so every record carries a level, never a bare string.
+--   • Each write is a `Task Error ()`: logging is an effect sequenced in the
+--     Task discipline, not a hidden side effect scattered through pure code.
+--   • The `*With` variants attach an ordered list of typed context values
+--     alongside the message, so structured fields ride with the line.
+--
+-- The minimum severity is set per-app with `Log.level` (a `Setting`) in an app's
+-- settings list — that path belongs to a running Web/Terminal app, so this
+-- script just exercises the writes themselves.
+
+
+main =
+    do
+        Log.info "service starting"
+        Log.debug "config loaded from defaults"
+        Log.warn "cache warm-up skipped"
+        Log.infoWith "request handled" [ "GET", "/health", "200" ]
+        Io.println "done — four log records emitted above"

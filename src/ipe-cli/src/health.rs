@@ -1324,19 +1324,29 @@ fn apply_fixes(report: &Report, consent: Consent, stream: &impl IsTerminal) {
     for check in fixable {
         let Some(fix) = &check.fix else { continue };
         print!("{}", style::gutter(&fix_bullet(check, fix, p)));
+        // The question hangs a blank line below the preview and sits at the
+        // body column (one level deeper than the bullet) so it reads as the last
+        // line of the fix, not a new item.
         let apply = match consent {
             Consent::All => true,
-            Consent::Interactive => ask(&format!("{FIX_INDENT}Apply?")) == Answer::Yes,
+            Consent::Interactive => ask(&format!("\n{FIX_BODY_INDENT}Apply?")) == Answer::Yes,
         };
         if !apply {
             print!("{}", style::gutter(&format!("{FIX_BODY_INDENT}skipped.\n")));
             continue;
         }
+        // The outcome leads with the status glyph — green ✓ on success, red ✗ on
+        // failure — so the applied/failed edit is legible at a glance.
         match apply_one(fix) {
             Ok(outcome) => {
                 print!(
                     "{}",
-                    style::gutter(&format!("{FIX_BODY_INDENT}{outcome}\n"))
+                    style::gutter(&format!(
+                        "{FIX_BODY_INDENT}{}{}{} {outcome}\n",
+                        p.green,
+                        style::glyph::OK,
+                        p.reset
+                    ))
                 );
             }
             Err(e) => {
@@ -1346,7 +1356,12 @@ fn apply_fixes(report: &Report, consent: Consent, stream: &impl IsTerminal) {
                 // the apply outcome).
                 print!(
                     "{}",
-                    style::gutter(&format!("{FIX_BODY_INDENT}could not apply: {e}\n"))
+                    style::gutter(&format!(
+                        "{FIX_BODY_INDENT}{}{}{} could not apply: {e}\n",
+                        p.red,
+                        style::glyph::FAIL,
+                        p.reset
+                    ))
                 );
             }
         }

@@ -9,6 +9,7 @@ module Main exposing (main)
 -- doc for the fixed bug).
 
 import Ipe.String as String
+import Ipe.Url as Url
 import Ipe.WebSocket as WS exposing (WebSocketMessage(..))
 import Ipe.Tea.Web exposing (app)
 import Ipe.Tea.Web.Cmd as Cmd
@@ -44,6 +45,24 @@ type alias Model =
     }
 
 
+-- | Build the WsUrl for the local echo server.  Using `case` here keeps the
+-- compile-time connection valid: if the URL string ever changes to a non-ws
+-- scheme the `Err` branch will surface at runtime rather than silently connect.
+echoUrl : Maybe WS.WsUrl
+echoUrl =
+    case Url.fromString "ws://127.0.0.1:8033/ws" of
+        Ok u ->
+            case WS.url u of
+                Ok wsUrl ->
+                    Just wsUrl
+
+                Err _ ->
+                    Nothing
+
+        Err _ ->
+            Nothing
+
+
 init : a -> ( Model, Cmd Msg )
 init _req =
     ( { sock = Nothing, status = "disconnected", lastFrame = "(none)" }
@@ -55,9 +74,14 @@ update : Msg -> Model -> ( Model, Cmd Msg )
 update msg model =
     case msg of
         Connect ->
-            ( { model | status = "connecting..." }
-            , Cmd.perform (WS.connect "ws://127.0.0.1:8033/ws") Connected
-            )
+            case echoUrl of
+                Just wsUrl ->
+                    ( { model | status = "connecting..." }
+                    , Cmd.perform (WS.connect wsUrl) Connected
+                    )
+
+                Nothing ->
+                    ( { model | status = "bad server URL" }, Cmd.none )
 
         Connected (Ok sock) ->
             ( { model | sock = Just sock, status = "connected (waiting for onOpen)" }, Cmd.none )

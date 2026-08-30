@@ -1,0 +1,33 @@
+module Main exposing (main)
+
+import Ipe.Io as Io
+import Ipe.String as String
+import Ipe.Duration as Duration
+import Ipe.Time.Timestamp as Timestamp
+
+
+-- Positive: Timestamp arithmetic composes with Duration.
+
+base : Timestamp.Timestamp
+base =
+    Timestamp.fromUnixMillis 1000000
+
+
+shifted : Timestamp.Timestamp
+shifted =
+    Timestamp.add (Duration.seconds 30) base
+
+
+delta : Duration.Duration
+delta =
+    Timestamp.diff shifted base
+
+
+main =
+    Io.println
+        (String.join "\n"
+            [ "base " ++ String.fromInt (Timestamp.toUnixMillis base)
+            , "shifted " ++ String.fromInt (Timestamp.toUnixMillis shifted)
+            , "delta " ++ String.fromInt (Duration.toMillis delta)
+            ]
+        )

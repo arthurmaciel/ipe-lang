@@ -1,0 +1,59 @@
+module Main exposing (main)
+
+import Ipe.Bytes as Bytes
+import Ipe.Maybe as Maybe exposing (Maybe(..))
+import Ipe.String as String
+import Ipe.Io as Io
+
+
+-- Work with a raw byte buffer. The load-bearing idea: `Bytes` is a DISTINCT type
+-- from `String`, not an alias. A `String` is always valid UTF-8; `Bytes` is any
+-- sequence of octets. So the two conversions are asymmetric:
+--   • `Bytes.fromString` is TOTAL — every string has a UTF-8 byte encoding.
+--   • `Bytes.toString` returns `Maybe String` — an arbitrary buffer might not be
+--     valid UTF-8, so decoding can come up `Nothing`.
+-- Everything binary — hashes, ciphertext, images — lives in `Bytes`, never in a
+-- `String` that would corrupt it.
+
+
+message : String
+message =
+    "café ☕"
+
+
+-- Encode the message to bytes, then show what the buffer looks like in the two
+-- transport encodings `Bytes` provides. `toHex`/`toBase64` are total: any buffer
+-- has a hex and base64 form.
+main =
+    let
+        buffer =
+            Bytes.fromString message
+
+        -- A window into the buffer: the first four bytes. `slice` clamps
+        -- out-of-range indices, so it can never index out of bounds.
+        head4 =
+            Bytes.slice 0 4 buffer
+    in
+    do
+        Io.println ("message: " ++ message)
+        Io.println ("byte length: " ++ String.fromInt (Bytes.length buffer))
+        Io.println ("hex: " ++ Bytes.toHex buffer)
+        Io.println ("base64: " ++ Bytes.toBase64 buffer)
+        Io.println ("first 4 bytes (hex): " ++ Bytes.toHex head4)
+        Io.println ("round-trip: " ++ decodeText buffer)
+        Io.println ("truncated multibyte decode: " ++ decodeText head4)
+
+
+-- Decode bytes back to text. `toString` is `Maybe String`: a buffer that is not
+-- valid UTF-8 yields `Nothing`, which we render explicitly rather than pretend it
+-- succeeded. Slicing four bytes out of "café ☕" cuts through a multi-byte
+-- character, so that window is NOT valid UTF-8 — the `Nothing` case is real.
+decodeText : Bytes -> String
+decodeText buffer =
+    case Bytes.toString buffer of
+
+        Just text ->
+            "\"" ++ text ++ "\""
+
+        Nothing ->
+            "(not valid UTF-8)"

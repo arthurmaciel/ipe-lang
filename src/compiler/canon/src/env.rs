@@ -823,15 +823,11 @@ impl Env {
                     "chachaKeyFromPassword",
                     "randomBytes",
                     "randomToken",
-                    // typed-key variants (additive, §6.11)
+                    // Typed HMAC kernels; the AEAD/key-derivation entry points
+                    // above already require/return the typed `Key`, so there is
+                    // no separate bare-`String`-key spelling to register.
                     "hmacSha256WithKey",
                     "hmacSha512WithKey",
-                    "aesGcmEncryptKey",
-                    "aesGcmDecryptKey",
-                    "chacha20EncryptKey",
-                    "chacha20DecryptKey",
-                    "aesKeyFromPasswordKey",
-                    "chachaKeyFromPasswordKey",
                 ],
             ),
             // `Ipe.Secret` — opaque secret-string wrapper.
@@ -1383,6 +1379,13 @@ impl Env {
         // members, which aggregate two canonical kernel families (`Cmd` + `Sub`).
         const CROSS_QUALIFIER_MEMBERS: &[(&str, &str, &str, &str)] = &[
             // (new_qualifier, member_name, canonical_qualifier, canonical_name)
+            // `Crypto`'s typed-key surface: the `Key` constructors and the `Mac`
+            // extractor are canonical `Key.*` / `Mac.*` kernels, re-exported under
+            // the `Crypto` qualifier so `Crypto.keyFromBytes` / `Crypto.macToHex`
+            // resolve off a plain `import Ipe.Crypto`.
+            ("Crypto", "keyFromString", "Key", "fromString"),
+            ("Crypto", "keyFromBytes", "Key", "fromBytes"),
+            ("Crypto", "macToHex", "Mac", "toHex"),
             ("TeaWebPubSub", "publish", "Cmd", "publish"),
             ("TeaWebPubSub", "publishNoEcho", "Cmd", "publishNoEcho"),
             ("TeaWebPubSub", "subscribeTopic", "Sub", "subscribeTopic"),

@@ -1,0 +1,63 @@
+module Main exposing (main)
+
+import Ipe.Compression as Compression
+import Ipe.Bytes as Bytes exposing (Bytes)
+import Ipe.List as List
+import Ipe.Maybe as Maybe
+import Ipe.String as String
+import Ipe.Task as Task
+import Ipe.Io as Io
+
+
+-- gzip round-trip, exercising the ideas `Ipe.Compression` turns on:
+--   • Compression is CPU work, so every entry is a `Task Error Bytes` — sequenced
+--     with `<-`, runnable through `Task.parallel`, and failing (on corrupt input)
+--     as a typed `Err` rather than a crash.
+--   • It operates on `Bytes` (arbitrary octets), not `String` — convert at the
+--     boundary with `Bytes.fromString` / `Bytes.toString`.
+--   • gunzip(gzip(x)) recovers x exactly — a lossless round-trip.
+
+
+-- A compressible payload: the same line repeated, so gzip has real redundancy to
+-- squeeze out.
+original : Bytes
+original =
+    Bytes.fromString (String.repeat 40 "the quick brown fox\n")
+
+
+-- Compress, report the ratio, decompress, and confirm the bytes came back
+-- identical. Each `<-` binds the success of a compression Task.
+main =
+    do
+        compressed <- Compression.gzip original
+        restored <- Compression.gunzip compressed
+        Io.println
+            ("original "
+                ++ String.fromInt (Bytes.length original)
+                ++ " bytes -> gzip "
+                ++ String.fromInt (Bytes.length compressed)
+                ++ " bytes"
+            )
+        Io.println
+            ("round-trip recovers the original: "
+                ++ boolText (Bytes.length restored == Bytes.length original)
+            )
+        Io.println ("first line back: " ++ firstLine restored)
+
+
+firstLine : Bytes -> String
+firstLine bytes =
+    Bytes.toString bytes
+        |> Maybe.withDefault ""
+        |> String.split "\n"
+        |> List.head
+        |> Maybe.withDefault "<empty>"
+
+
+boolText : Bool -> String
+boolText b =
+    if b then
+        "yes"
+
+    else
+        "no"

@@ -1,0 +1,63 @@
+module Main exposing (main)
+
+import Ipe.File as File
+import Ipe.Path as Path exposing (Path)
+import Ipe.Task as Task
+import Ipe.Error exposing (Error)
+import Ipe.List as List
+import Ipe.String as String
+import Ipe.Io as Io
+
+
+-- A tiny scratchpad: create a fresh temp directory, write two notes into it,
+-- read one back, and list the directory. Every filesystem call is a
+-- `Task Error _`, so the `do` block sequences them top to bottom, threading the
+-- success values with `<-`. Every path is a typed `Ipe.Path.Path`, built by
+-- `Path.fromString` — the one place a raw string is checked for `..` traversal
+-- and NUL bytes — so no unvalidated string reaches a syscall.
+
+
+main =
+    do
+        -- `File.tempDir` returns the new directory's absolute path as a String.
+        dir <- File.tempDir "scratchpad"
+        Io.println ("scratch dir: " ++ dir)
+
+        -- Build validated paths under it. `toPath` lifts the `Result` from
+        -- `Path.fromString` into the task chain with `Task.fromResult`, so a
+        -- bad path fails the whole task rather than slipping through.
+        notePath <- toPath (dir ++ "/note.txt")
+        todoPath <- toPath (dir ++ "/todo.txt")
+
+        -- Write two files. `writeFile` overwrites; both return `Task Error ()`.
+        File.writeFile notePath "remember to water the plants\n"
+        File.writeFile todoPath "- ship the docs\n- rest\n"
+
+        -- Read one back and print it.
+        contents <- File.readFile notePath
+        Io.println ("note.txt says: " ++ String.trim contents)
+
+        -- Confirm existence through the typed path, and list the directory.
+        present <- File.exists todoPath
+        Io.println ("todo.txt exists: " ++ boolText present)
+
+        dirPath <- toPath dir
+        entries <- File.readDir dirPath
+        Io.println ("entries: " ++ String.join ", " (List.sort entries))
+
+
+-- The parse-don't-validate boundary: a raw string becomes a `Path` or the task
+-- fails. `Task.fromResult` turns the `Ok`/`Err` of `Path.fromString` into a
+-- task success/failure, so downstream steps only ever see a validated `Path`.
+toPath : String -> Task Error Path
+toPath raw =
+    Task.fromResult (Path.fromString raw)
+
+
+boolText : Bool -> String
+boolText b =
+    if b then
+        "yes"
+
+    else
+        "no"

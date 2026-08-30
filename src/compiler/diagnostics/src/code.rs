@@ -473,6 +473,11 @@ code! {
     /// let-bound, or passed as a value); it is legal only as a saturated one-argument
     /// call so every argument passes the committed-literal seal gate
     IPE_L0151 = "IPE-L0151", "`Secret.fromString` must be applied directly to its argument", "IPE-L0151";
+    /// `Ui.cells` (a terminal character-grid builder) was used in a Cli
+    /// (`Terminal.appLines`) program. A Cli view returns `String` (line output),
+    /// so a character grid has no denotation there. Use `Terminal.appScreen` for
+    /// a full-screen cell-grid app.
+    IPE_L0153 = "IPE-L0153", "Ui.cells is terminal-screen-only and not available in the Cli shape", "IPE-L0153";
     /// expression nests too deeply for the backend
     IPE_L0200 = "IPE-L0200", "expression nests too deeply for the backend", "IPE-L0200";
 

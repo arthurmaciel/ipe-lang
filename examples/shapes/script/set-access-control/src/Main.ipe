@@ -1,0 +1,111 @@
+module Main exposing (main)
+
+import Ipe.Set as Set
+import Ipe.List as List
+import Ipe.String as String
+import Ipe.Io as Io
+
+
+-- A role-based access check built entirely on set algebra. Each role grants a
+-- set of permissions; a user's *effective* permissions are the UNION of the
+-- roles they hold; an action names the permissions it REQUIRES. Access is a
+-- subset test, expressed as `diff`: the required permissions that are NOT
+-- effective. If that difference is empty, nothing is missing, so access is
+-- granted. Sets make the "unique, unordered, membership-first" shape of a
+-- permission collection unrepresentable as anything else.
+
+
+-- The permissions a single role grants. `Set.fromList` de-duplicates as it
+-- builds, so a role listed with a repeat still holds each permission once.
+roleGrants : String -> Set String
+roleGrants role =
+    case role of
+
+        "viewer" ->
+            Set.fromList [ "read" ]
+
+        "editor" ->
+            Set.fromList [ "read", "write" ]
+
+        "admin" ->
+            Set.fromList [ "read", "write", "delete", "grant" ]
+
+        _ ->
+            Set.empty
+
+
+-- A user's effective permissions: fold the roles they hold into one set with
+-- `Set.union`. `List.foldl` threads the growing set as its accumulator — the
+-- immutable stand-in for a mutable "add each role's grants" loop.
+effectivePermissions : List String -> Set String
+effectivePermissions roles =
+    List.foldl mergeRole Set.empty roles
+
+
+mergeRole : String -> Set String -> Set String
+mergeRole role acc =
+    Set.union acc (roleGrants role)
+
+
+-- The core check. `Set.diff required effective` is exactly the permissions the
+-- action needs but the user lacks; if that set `isEmpty`, access is granted.
+-- The subset relation never has to be spelled out by hand — it falls out of the
+-- difference being empty.
+missingFor : Set String -> Set String -> Set String
+missingFor required effective =
+    Set.diff required effective
+
+
+-- Report one access decision for an action requiring `required`, given a user
+-- who holds `roles`.
+decide : String -> List String -> Set String -> String
+decide action roles required =
+    let
+        effective =
+            effectivePermissions roles
+
+        missing =
+            missingFor required effective
+    in
+    if Set.isEmpty missing then
+        action ++ ": GRANTED"
+
+    else
+        action ++ ": DENIED (missing " ++ showSet missing ++ ")"
+
+
+-- Turn a set into a stable, readable string. Iteration order is unspecified, so
+-- sort the elements first; a report a human reads must not depend on hash order.
+showSet : Set String -> String
+showSet s =
+    s
+        |> Set.toList
+        |> List.sort
+        |> String.join ", "
+
+
+main =
+    let
+        alice =
+            [ "editor" ]
+
+        bob =
+            [ "viewer", "editor" ]
+
+        readAction =
+            Set.fromList [ "read" ]
+
+        deleteAction =
+            Set.fromList [ "read", "delete" ]
+
+        -- The permissions common to the viewer and admin roles, via
+        -- `Set.intersect`: what every one of those roles can always do.
+        sharedFloor =
+            Set.intersect (roleGrants "viewer") (roleGrants "admin")
+    in
+    do
+        Io.println (decide "alice reads" alice readAction)
+        Io.println (decide "alice deletes" alice deleteAction)
+        Io.println (decide "bob reads" bob readAction)
+        Io.println ("viewer∩admin floor: " ++ showSet sharedFloor)
+        Io.println ("alice's permission count: " ++ String.fromInt (Set.size (effectivePermissions alice)))

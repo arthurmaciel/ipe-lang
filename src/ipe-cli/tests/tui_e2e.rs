@@ -1,5 +1,5 @@
-//! End-to-end tests for `Ipe.Terminal` `appScreen` — `Ui.column`,
-//! `Ui.el`, `Ui.text`, and `String.fromInt`.
+//! End-to-end tests for `Ipe.Terminal` `appScreen` — `Cells.column`,
+//! `Cells.el`, `Cells.text`, and `String.fromInt`.
 //!
 //! Non-E2E tests (no `IPE_E2E` required):
 //! - `tui_onkey_record_typechecks` — ipe-level regression for the `onKey :
@@ -54,13 +54,15 @@
 /// scheme; it would unify `var(1)` (the msg type variable) with
 /// `String -> Msg` which conflicts with its use in `update`/`subscriptions`.
 ///
-/// Note: `view` returns `Element Msg` (NOT wrapped in `Ui.layout` → `Html Msg`
-/// like Ipe.Web).  The Tui runtime renders the Element tree directly to ANSI
+/// Note: `view` returns `Cells Msg` (the Tui-only structured view type, NOT
+/// wrapped in `Ui.layout` → `Html Msg` like Ipe.Web).  The Tui runtime
+/// unwraps the `CellsView` and renders its Element tree directly to ANSI
 /// cells; there is no HTML step.
 const IPE_TUI_COUNTER: &str = r"module Main exposing (main)
 
 import Ipe.Tea.Terminal as Terminal
-import Ipe.Ui as Ui
+import Ipe.Ui.Cells as Cells
+import Ipe.Ui.Cells exposing (Cells)
 import Ipe.Tea.Terminal.Cmd
 import Ipe.String
 import Ipe.Tea.Terminal.Sub
@@ -85,10 +87,10 @@ update msg model =
         NoOp ->
             ( model, Cmd.none )
 
-view : Model -> Element Msg
+view : Model -> Cells Msg
 view model =
-    Ui.column []
-        [ Ui.el [] (Ui.text (String.fromInt model.count)) ]
+    Cells.column []
+        [ Cells.el [] (Cells.text (String.fromInt model.count)) ]
 
 subscriptions : Model -> Sub Msg
 subscriptions _model =

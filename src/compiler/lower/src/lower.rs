@@ -2363,14 +2363,11 @@ fn ir_type_mentions(ty: &IrType, leaf: &impl Fn(&IrType) -> bool) -> bool {
 /// used-check must include the TYPES, not just the kernels; otherwise
 /// `ServerResponse` is referenced but undefined (E0412 — a SEAL breach).
 fn ir_type_mentions_server(ty: &IrType) -> bool {
+    // The `server`-gated opaque handles all map to `RuntimeFeatureId::Server` in
+    // the SSOT; routing through it keeps this view total and drift-free (a new
+    // `server`-gated leaf is detected here the day its requirement is declared).
     ir_type_mentions(ty, &|t| {
-        matches!(
-            t,
-            IrType::ServerRequest
-                | IrType::ServerResponse
-                | IrType::ServerRoute
-                | IrType::ServerCookie
-        )
+        ipe_ir::ir_type_feature_requirement(t) == Some(ipe_ir::RuntimeFeatureId::Server)
     })
 }
 
@@ -2398,7 +2395,7 @@ fn ir_type_mentions_sqlvalue(ty: &IrType, sqlvalue: Symbol, sqlfield: Symbol) ->
 /// for the client surface.
 fn ir_type_mentions_http(ty: &IrType) -> bool {
     ir_type_mentions(ty, &|t| {
-        matches!(t, IrType::HttpRequest | IrType::HttpMethod)
+        ipe_ir::ir_type_feature_requirement(t) == Some(ipe_ir::RuntimeFeatureId::HttpClient)
     })
 }
 
@@ -2410,7 +2407,9 @@ fn ir_type_mentions_http(ty: &IrType) -> bool {
 /// still references the type in emitted code, and the module (and its `csv`
 /// dependency) must be present. Mirrors [`ir_type_mentions_http`].
 fn ir_type_mentions_csv(ty: &IrType) -> bool {
-    ir_type_mentions(ty, &|t| matches!(t, IrType::CsvDoc))
+    ir_type_mentions(ty, &|t| {
+        ipe_ir::ir_type_feature_requirement(t) == Some(ipe_ir::RuntimeFeatureId::Csv)
+    })
 }
 
 /// `true` when `ty` mentions the `Ipe.Cache` config record `CacheCfg`
@@ -2426,7 +2425,9 @@ fn ir_type_mentions_csv(ty: &IrType) -> bool {
 /// separately by [`ir_type_mentions_cache_handle`] (which needs the interner to
 /// resolve its `Ipe.Cache.Cache` identity). Mirrors [`ir_type_mentions_csv`].
 fn ir_type_mentions_cache(ty: &IrType) -> bool {
-    ir_type_mentions(ty, &|t| matches!(t, IrType::CacheCfg | IrType::CacheStats))
+    ir_type_mentions(ty, &|t| {
+        ipe_ir::ir_type_feature_requirement(t) == Some(ipe_ir::RuntimeFeatureId::CacheKernel)
+    })
 }
 
 /// `true` when `ty` mentions the opaque `Ipe.Cache` handle enum — an
@@ -2496,7 +2497,9 @@ fn ir_type_mentions_http_stream(ty: &IrType, interner: &Interner) -> bool {
 /// `Algorithm` also folds to `IrType::Secret` (see the JWT `Algorithm` alias),
 /// so this guard covers it too. Mirrors [`ir_type_mentions_csv`].
 fn ir_type_mentions_secret(ty: &IrType) -> bool {
-    ir_type_mentions(ty, &|t| matches!(t, IrType::Secret))
+    ir_type_mentions(ty, &|t| {
+        ipe_ir::ir_type_feature_requirement(t) == Some(ipe_ir::RuntimeFeatureId::Secret)
+    })
 }
 
 /// `true` when `ty` mentions the `Ipe.Decimal` opaque type `Decimal`, defined in
@@ -2511,7 +2514,9 @@ fn ir_type_mentions_secret(ty: &IrType) -> bool {
 /// alone would emit that reference with no module in scope (E0433 — a SEAL
 /// breach). Mirrors [`ir_type_mentions_secret`].
 fn ir_type_mentions_decimal(ty: &IrType) -> bool {
-    ir_type_mentions(ty, &|t| matches!(t, IrType::Decimal))
+    ir_type_mentions(ty, &|t| {
+        ipe_ir::ir_type_feature_requirement(t) == Some(ipe_ir::RuntimeFeatureId::Decimal)
+    })
 }
 
 /// `true` when `ty` mentions `Json` (`IrType::Json`, rendered `JsonVal`) or a
@@ -2524,7 +2529,25 @@ fn ir_type_mentions_decimal(ty: &IrType) -> bool {
 /// even when it calls no `Json.*` kernel (a decoder forwarded as a parameter) —
 /// the type-mention guard the fail-closed `uses_json` requires.
 fn ir_type_mentions_json(ty: &IrType) -> bool {
-    ir_type_mentions(ty, &|t| matches!(t, IrType::Json | IrType::Decoder(_)))
+    ir_type_mentions(ty, &|t| {
+        ipe_ir::ir_type_feature_requirement(t) == Some(ipe_ir::RuntimeFeatureId::Json)
+    })
+}
+
+/// `true` when `ty` mentions the `Ipe.Url` opaque type `Url`, rendered
+/// `ipe_runtime::url::Url` (feature-gated on `url`). A stdlib type can EMBED a
+/// `Url` field (`{ src : Url }`) and be brought into a program by a plain import
+/// with no `Url` KERNEL call, so a program that only NAMES a `Url` value in a
+/// signature, record field, or enum-variant payload still emits a
+/// `ipe_runtime::url::Url` reference resolved through the gated module — dropping
+/// `url` on the call-site flag alone leaves that reference dangling (E0433 — the
+/// breach this closes). Routed through the [`ipe_ir::ir_type_feature_requirement`]
+/// SSOT so the leaf can never again be silently un-gated. Mirrors
+/// [`ir_type_mentions_secret`].
+fn ir_type_mentions_url(ty: &IrType) -> bool {
+    ir_type_mentions(ty, &|t| {
+        ipe_ir::ir_type_feature_requirement(t) == Some(ipe_ir::RuntimeFeatureId::Url)
+    })
 }
 
 /// Does any [`IrType`] occurring ANYWHERE in `expr` satisfy `pred`?
@@ -10497,8 +10520,10 @@ struct KernelUsage {
     principal: bool,
     /// Any Ipe.Web kernel.
     web: bool,
-    /// Any Ipe.Tui kernel.
+    /// Any Ipe.Tui kernel (`Terminal.appScreen`).
     tui: bool,
+    /// Any Ipe.Console kernel (`Terminal.appLines`).
+    console: bool,
     /// Any Ipe.WebView kernel.
     webview: bool,
     /// Any outbound `Ipe.WebSocket` client kernel — gates the
@@ -10581,6 +10606,7 @@ impl KernelUsage {
             && self.auth
             && self.web
             && self.tui
+            && self.console
             && self.webview
             && self.websocket
             && self.email
@@ -10628,6 +10654,7 @@ impl KernelUsage {
         self.principal |= matches!(k, KernelFn::AuthSubject);
         self.web |= k.is_web();
         self.tui |= k.is_tui();
+        self.console |= k.is_console();
         self.webview |= k.is_webview();
         self.websocket |= k.is_websocket_client();
         self.email |= matches!(k, KernelFn::EmailSend);
@@ -15848,17 +15875,19 @@ impl<'a> Lowerer<'a> {
         let uses_jwt = kernel_usage.jwt;
 
         // detect `Ipe.Url` usage — any `Url.fromString` / `toString` / `scheme` /
-        // `host` / `port` / `path` / `query` / `fragment` / `buildQuery` kernel.
-        // The backend uses this flag to declare `url` in the emitted
+        // `host` / `port` / `path` / `query` / `fragment` / `buildQuery` kernel,
+        // OR any emittable type position that mentions the `Url` opaque type. The
+        // backend uses this flag to declare `url` in the emitted
         // `ipe_runtime/mod.rs` and add the `url` crate (with its `idna` → ICU4X
-        // subtree). No type-mention guard is needed: the opaque `Url` type has a
-        // single constructor (`Url.fromString`), itself a `Url` kernel, so a
-        // program holding a `Url` value has necessarily called one — a signature
-        // can never mention `Url` without a call site setting this flag. The
-        // `http_client` / `ws_client` surfaces also parse with the `url` crate, so
-        // the backend force-declares `url` under
-        // `uses_url || reaches_http_client || uses_websocket`.
-        let uses_url = kernel_usage.url;
+        // subtree). The type-mention guard is REQUIRED: a stdlib type can EMBED a
+        // `Url` field and be brought in by a plain import with no `Url` KERNEL
+        // call, so a program that only NAMES a `Url` value still emits a
+        // `ipe_runtime::url::Url` reference — omitting the guard drops the module
+        // with the reference left dangling (E0433). The `http_client` / `ws_client`
+        // surfaces also parse with the `url` crate, so the backend force-declares
+        // `url` under `uses_url || reaches_http_client || uses_websocket`.
+        let uses_url = kernel_usage.url
+            || program_type_mentions(&funcs, &records, &types_ir, &ir_type_mentions_url);
 
         // detect Ipe.Ui / Ipe.Html / Ipe.Web / Ipe.Tui / Ipe.WebView usage.
         // TUI runtime files (tui/app.rs, tui/layout.rs, tui/focus.rs) import
@@ -15868,6 +15897,7 @@ impl<'a> Lowerer<'a> {
         // trigger `uses_tui_shape`) and never calls `Ui.layout`/`Ui.layoutWith`
         // (kernels that trigger `uses_ui`).
         let uses_tui_shape = kernel_usage.tui;
+        let uses_console_shape = kernel_usage.console;
         let uses_ui = kernel_usage.ui || uses_tui_shape;
         let uses_web = kernel_usage.web;
         let uses_webview = kernel_usage.webview;
@@ -15950,6 +15980,7 @@ impl<'a> Lowerer<'a> {
             uses_ui,
             uses_web,
             uses_tui: uses_tui_shape,
+            uses_console: uses_console_shape,
             uses_webview,
             uses_css: uses_css_leaf,
             uses_auth,
@@ -16452,6 +16483,27 @@ impl<'a> Lowerer<'a> {
             && matches!(
                 self.interner.resolve(name),
                 Some("WebApp" | "WebViewApp" | "TuiApp" | "CliApp")
+            )
+    }
+
+    /// is `(home, name)` a kernel-implicit stream/WebSocket opaque handle —
+    /// `StreamWriter` / `WebSocketServer` / `WebSocketServerCfg`?
+    ///
+    /// Each is minted only by an `Ipe.Http.Server.Stream` / `…WebSocket` kernel
+    /// with the empty home (`ipe_types::constrain` builds `sw()` / `wsh()` /
+    /// `wscfg()` with `module: Vec::new()`), so the runtime-`IrType` mapping keys
+    /// on that empty home alone. These names are NOT reserved (they sit in
+    /// `EXTRA_BUILTIN_TYPE_NAMES`), so a user `type StreamWriter = …` is legal and
+    /// is keyed in `enum_variants` under its own home; the empty-home guard lets
+    /// that user union fall through to the program-enum guard and win by its own
+    /// identity, instead of being hijacked to the opaque runtime handle (an
+    /// `ipe`-exit-0-then-cargo-fail SEAL break where the emitted param names the
+    /// unemitted runtime type).
+    fn is_stream_ws_opaque_con(&self, home: &[Symbol], name: Symbol) -> bool {
+        home.is_empty()
+            && matches!(
+                self.interner.resolve(name),
+                Some("StreamWriter" | "WebSocketServer" | "WebSocketServerCfg")
             )
     }
 
@@ -18125,6 +18177,22 @@ impl<'a> Lowerer<'a> {
                         msg: Box::new(msg),
                     })
                 }
+                // `Cells msg` — a Tui-only structured view type.
+                "Cells" if args.len() == 1 => {
+                    let msg = self.ir_ui_msg_from_canon(
+                        args.first().ok_or_else(|| {
+                            bug(
+                                "ipe_lower::ir_type_from_canon",
+                                "Cells applied without its message type",
+                            )
+                        })?,
+                        generics,
+                    )?;
+                    Ok(IrType::Ui {
+                        ctor: UiCtor::Cells,
+                        msg: Box::new(msg),
+                    })
+                }
                 // `Attribute msg` — a Ipe.Ui / Ipe.Html attribute.  Mirrors the
                 // `ir_type_from_ty` "Attribute" arm: `Attribute` exists in BOTH
                 // `Ipe.Ui` and `Ipe.Html`, disambiguated by the `home` path
@@ -18201,8 +18269,13 @@ impl<'a> Lowerer<'a> {
                     })
                 }
                 // `StreamWriter` — opaque server-side stream writer handle.
-                // Mirrors `ir_type_from_ty`'s "StreamWriter" arm.
-                "StreamWriter" => Ok(IrType::StreamWriter),
+                // Mirrors `ir_type_from_ty`'s "StreamWriter" arm. Home-guarded on
+                // the empty kernel home so a user `type StreamWriter = …` (keyed
+                // under its own home) falls through to the program-enum guard and
+                // wins by its own identity.
+                "StreamWriter" if self.is_stream_ws_opaque_con(home, *name) => {
+                    Ok(IrType::StreamWriter)
+                }
                 // `Ipe.Email.EmailProvider` — opaque ADT backed by the runtime
                 // enum. Home-guarded — mirrors `ir_type_from_ty`'s arm.
                 "EmailProvider" if self.is_email_provider_con(home, *name) => {
@@ -18219,10 +18292,18 @@ impl<'a> Lowerer<'a> {
                 // the synthesised record here — mirrors how the type-checker's
                 // `normalize_annotation_ty` expands the same name.
                 "Migration" => Ok(self.migration_record_ir()),
-                // `WebSocketServer` — opaque per-peer WsHandle.
-                "WebSocketServer" => Ok(IrType::WebSocketServer),
-                // `WebSocketServerCfg` — opaque WsServerCfg<IpeError>.
-                "WebSocketServerCfg" => Ok(IrType::WebSocketServerCfg),
+                // `WebSocketServer` — opaque per-peer WsHandle. Home-guarded on
+                // the empty kernel home (twin of `StreamWriter`) so a user
+                // `type WebSocketServer = …` wins by its own identity.
+                "WebSocketServer" if self.is_stream_ws_opaque_con(home, *name) => {
+                    Ok(IrType::WebSocketServer)
+                }
+                // `WebSocketServerCfg` — opaque WsServerCfg<IpeError>. Home-guarded
+                // on the empty kernel home (twin of `StreamWriter`) so a user
+                // `type WebSocketServerCfg = …` wins by its own identity.
+                "WebSocketServerCfg" if self.is_stream_ws_opaque_con(home, *name) => {
+                    Ok(IrType::WebSocketServerCfg)
+                }
                 // `WebRoute page` is parametric on the page type it builds:
                 // a bare `WebRoute` annotation cannot
                 // type-check (the solver's `WebRoute` Con carries exactly one
@@ -19281,8 +19362,13 @@ impl<'a> Lowerer<'a> {
                 }
                 "Route" if self.is_server_opaque_con(module, *name) => Ok(IrType::ServerRoute),
                 "Cookie" if self.is_server_opaque_con(module, *name) => Ok(IrType::ServerCookie),
-                // `StreamWriter` — opaque stream writer handle.
-                "StreamWriter" => Ok(IrType::StreamWriter),
+                // `StreamWriter` — opaque stream writer handle. Home-guarded on
+                // the empty kernel home (twin of `ir_type_from_canon`): a solved
+                // `type StreamWriter = …` carries its own module home and falls
+                // through to the program-enum guard below.
+                "StreamWriter" if self.is_stream_ws_opaque_con(module, *name) => {
+                    Ok(IrType::StreamWriter)
+                }
                 // `Ipe.Email.EmailProvider` — opaque ADT backed by the runtime
                 // enum. Home-guarded (`["Std","Email"]`) so a user `type
                 // EmailProvider` with a different home falls through to the
@@ -19297,10 +19383,18 @@ impl<'a> Lowerer<'a> {
                 // `ir_type_from_canon`'s "Migration" arm (defensive; the solved
                 // type of a migration value is normally a `Ty::Record`).
                 "Migration" => Ok(self.migration_record_ir()),
-                // `WebSocketServer` — opaque per-peer WsHandle.
-                "WebSocketServer" => Ok(IrType::WebSocketServer),
-                // `WebSocketServerCfg` — opaque WsServerCfg<IpeError>.
-                "WebSocketServerCfg" => Ok(IrType::WebSocketServerCfg),
+                // `WebSocketServer` — opaque per-peer WsHandle. Home-guarded on
+                // the empty kernel home (twin of `ir_type_from_canon`) so a solved
+                // user `type WebSocketServer = …` wins by its own identity.
+                "WebSocketServer" if self.is_stream_ws_opaque_con(module, *name) => {
+                    Ok(IrType::WebSocketServer)
+                }
+                // `WebSocketServerCfg` — opaque WsServerCfg<IpeError>. Home-guarded
+                // on the empty kernel home (twin of `ir_type_from_canon`) so a
+                // solved user `type WebSocketServerCfg = …` wins by its own identity.
+                "WebSocketServerCfg" if self.is_stream_ws_opaque_con(module, *name) => {
+                    Ok(IrType::WebSocketServerCfg)
+                }
                 // ── Ipe.Ui / Ipe.Html parametric type constructors ────────
                 // Mirror of `ir_type_from_canon` (which handles user-written
                 // type ANNOTATIONS).  This path handles SOLVED types from the
@@ -19342,6 +19436,21 @@ impl<'a> Lowerer<'a> {
                     )?;
                     Ok(IrType::Ui {
                         ctor: UiCtor::Element,
+                        msg: Box::new(msg),
+                    })
+                }
+                "Cells" if args.len() == 1 => {
+                    let msg = self.ir_type_from_ty_ui_msg(
+                        args.first().ok_or_else(|| {
+                            bug(
+                                "ipe_lower::ir_type_from_ty",
+                                "Cells applied without its message type",
+                            )
+                        })?,
+                        span,
+                    )?;
+                    Ok(IrType::Ui {
+                        ctor: UiCtor::Cells,
                         msg: Box::new(msg),
                     })
                 }
@@ -24894,6 +25003,8 @@ impl<'a> Lowerer<'a> {
             Callee::Kernel(
                 // `Ui.none : Element msg`
                 KernelFn::UiNone
+                // `UiCells.none : Cells msg`
+                | KernelFn::UiCellsNone
                 // `Ui.fill : Length`
                 | KernelFn::UiFill
                 // `Ui.content : Length`
@@ -25011,6 +25122,10 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::UiHtml
                 // `Ui.cells : List (List Char) -> Element msg`
                 | KernelFn::UiCells
+                // `UiCells.text : String -> Cells msg`
+                | KernelFn::UiCellsText
+                // `UiCells.cells : List (List Char) -> Cells msg`
+                | KernelFn::UiCellsCells
                 // ── Ui attribute builders — arity 1 ──────────────────────
                 // `Ui.spacing : Int -> Attribute msg`
                 | KernelFn::UiSpacing
@@ -25270,7 +25385,13 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::UiOnPseudo
                 // `Store.select` — arity 2 (projection lambda, joined), intercepted
                 // at lowering; this is only the defensive fallback count.
-                | KernelFn::StoreSelect,
+                | KernelFn::StoreSelect
+                // `UiCells.el : List (Attribute msg) -> Cells msg -> Cells msg`
+                | KernelFn::UiCellsEl
+                // `UiCells.row : List (Attribute msg) -> List (Cells msg) -> Cells msg`
+                | KernelFn::UiCellsRow
+                // `UiCells.column : List (Attribute msg) -> List (Cells msg) -> Cells msg`
+                | KernelFn::UiCellsColumn,
             ) => Ok(2),
             // Arity 3: `Ui.rgb r g b`, `Html.node tag attrs children`,
             //          `Ui.breakpoint query attrs element`.
@@ -25616,14 +25737,7 @@ impl<'a> Lowerer<'a> {
             // `String.toUpperIn`/`toLowerIn` are arity-2.
             Callee::Kernel(KernelFn::StringToUpperIn | KernelFn::StringToLowerIn) => Ok(2),
             Callee::Kernel(
-                KernelFn::CryptoHmacSha256WithKey
-                | KernelFn::CryptoHmacSha512WithKey
-                | KernelFn::CryptoAesKeyFromPasswordKey
-                | KernelFn::CryptoChachaKeyFromPasswordKey
-                | KernelFn::CryptoAesGcmEncryptKey
-                | KernelFn::CryptoAesGcmDecryptKey
-                | KernelFn::CryptoChacha20EncryptKey
-                | KernelFn::CryptoChacha20DecryptKey,
+                KernelFn::CryptoHmacSha256WithKey | KernelFn::CryptoHmacSha512WithKey,
             ) => Ok(2),
             Callee::Func(id) => {
                 let idx = usize::try_from(id.as_raw()).unwrap_or(usize::MAX);
@@ -26555,6 +26669,13 @@ impl<'a> Lowerer<'a> {
                     ("Ui", "html") => Ok(Callee::Kernel(KernelFn::UiHtml)),
                     ("Ui", "cells") => Ok(Callee::Kernel(KernelFn::UiCells)),
                     ("Ui", "widget") => Ok(Callee::Kernel(KernelFn::UiWidget)),
+                    // ── Ipe.Ui.Cells builders ─────────────────────────────
+                    ("UiCells", "none") => Ok(Callee::Kernel(KernelFn::UiCellsNone)),
+                    ("UiCells", "text") => Ok(Callee::Kernel(KernelFn::UiCellsText)),
+                    ("UiCells", "el") => Ok(Callee::Kernel(KernelFn::UiCellsEl)),
+                    ("UiCells", "row") => Ok(Callee::Kernel(KernelFn::UiCellsRow)),
+                    ("UiCells", "column") => Ok(Callee::Kernel(KernelFn::UiCellsColumn)),
+                    ("UiCells", "cells") => Ok(Callee::Kernel(KernelFn::UiCellsCells)),
                     // Retained container / tagged-element primitives — the layout
                     // and flow builders are pure Ipê over these in `Ipe/Ui.ipe`.
                     ("Ui", "node") => Ok(Callee::Kernel(KernelFn::UiNode)),
@@ -29648,12 +29769,6 @@ mod tests {
         KernelFn::CryptoMacToHex,
         KernelFn::CryptoHmacSha256WithKey,
         KernelFn::CryptoHmacSha512WithKey,
-        KernelFn::CryptoAesKeyFromPasswordKey,
-        KernelFn::CryptoChachaKeyFromPasswordKey,
-        KernelFn::CryptoAesGcmEncryptKey,
-        KernelFn::CryptoAesGcmDecryptKey,
-        KernelFn::CryptoChacha20EncryptKey,
-        KernelFn::CryptoChacha20DecryptKey,
         // Ipe.Email.EmailAddress — compiled-source Layer-3 module.
         KernelFn::EmailAddressParse,
         KernelFn::EmailAddressToString,

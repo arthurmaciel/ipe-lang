@@ -1,0 +1,66 @@
+module Main exposing (main)
+
+import Ipe.Uuid as Uuid
+import Ipe.Task as Task
+import Ipe.List as List
+import Ipe.String as String
+import Ipe.Maybe as Maybe
+import Ipe.Io as Io
+
+
+-- Mint identifiers for new records, exercising the three ideas most `Ipe.Uuid`
+-- code turns on:
+--   • Generation draws entropy, so `v4`/`v7` are EFFECTS — they return a
+--     `Task Error String`, the same tier as reading the clock. You run them; you
+--     do not compute them.
+--   • `v4` is fully random; `v7` is time-ordered — its leading bits are a
+--     timestamp, so v7 IDs minted in sequence sort into creation order. Pick v7
+--     when you want database keys that cluster by insertion time.
+--   • `parse` is PURE validation: it checks a string is a well-formed UUID and
+--     returns `Nothing` for garbage — the typed boundary for IDs arriving from
+--     outside.
+
+
+-- Mint three time-ordered IDs in sequence. Because v7 embeds a timestamp, IDs
+-- created later compare greater — `List.sort` recovers creation order.
+mintBatch : Task Error (List String)
+mintBatch =
+    Task.sequence
+        [ Uuid.v7 ()
+        , Uuid.v7 ()
+        , Uuid.v7 ()
+        ]
+
+
+-- Every canonical UUID is 36 characters (32 hex digits + 4 dashes); a batch is
+-- well-formed when all three parse and the sort is stable — facts that hold for
+-- ANY entropy, so this example is deterministic despite the randomness.
+allValid : List String -> Bool
+allValid ids =
+    List.all (\id -> Maybe.isJust (Uuid.parse id)) ids
+
+
+isOrdered : List String -> Bool
+isOrdered ids =
+    List.sort ids == ids
+
+
+main =
+    do
+        ids <- mintBatch
+        randomId <- Uuid.v4 ()
+        Io.println ("minted " ++ String.fromInt (List.length ids) ++ " v7 ids")
+        Io.println ("all 36 chars: " ++ yesNo (List.all (\id -> String.length id == 36) ids))
+        Io.println ("all parse as UUIDs: " ++ yesNo (allValid ids))
+        Io.println ("v7 batch in creation order: " ++ yesNo (isOrdered ids))
+        Io.println ("a v4 id also parses: " ++ yesNo (Maybe.isJust (Uuid.parse randomId)))
+        Io.println ("rejects 'not-a-uuid': " ++ yesNo (Maybe.isNothing (Uuid.parse "not-a-uuid")))
+
+
+yesNo : Bool -> String
+yesNo b =
+    if b then
+        "yes"
+
+    else
+        "no"

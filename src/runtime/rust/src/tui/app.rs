@@ -15,7 +15,7 @@ use super::super::core::{IpeResult, IpeTask, ok_res};
 use super::super::debugger::tui::TuiDebugger;
 use super::super::stringify::IpeStringify;
 use super::super::tea::{CliEvent, IpeCmd, IpeSub, SubManager, cli_run_cmd};
-use super::super::ui::Element;
+use super::CellsView;
 use super::focus::{
     Focusable, InputRegistry, clamp_focus, edit_input, ensure_focus_visible, extract_click_msg,
     extract_input_msg, extract_msg_named, hit_test, parse_mouse,
@@ -424,11 +424,11 @@ fn render_and_paint<Model, Msg, FView>(
 where
     Model: Clone,
     Msg: Clone,
-    FView: Fn(Model) -> Element<Msg>,
+    FView: Fn(Model) -> CellsView<Msg>,
 {
     let (cols, rows) = term_size();
     let (_f1, fs1, content_h) = render_with_focus(
-        &view(model.clone()),
+        &view(model.clone()).into_element(),
         cols,
         rows,
         *focus_idx,
@@ -438,7 +438,7 @@ where
     *focus_idx = clamp_focus(*focus_idx, fs1.len());
     *scroll_y = ensure_focus_visible(&fs1, *focus_idx, *scroll_y, rows, content_h);
     let (frame, fs2, _) = render_with_focus(
-        &view(model.clone()),
+        &view(model.clone()).into_element(),
         cols,
         rows,
         *focus_idx,
@@ -449,15 +449,14 @@ where
     fs2
 }
 
-/// `Terminal.appScreen` — terminal TEA driver for a `view : Model -> Element msg`. The
-/// `Ipe.Ui` Element is the SAME structured tree Ipe.Web renders to HTML; here it
-/// is laid out to ANSI cells by walking the typed attributes (`tui::layout`), and
-/// `Ipe.Ui.Input.*` widgets become focusables: Tab / Shift-Tab (and Up/Down on a
-/// non-input focus) cycle focus; typing edits the focused text input (dispatching
-/// its `onInput`); Enter/Space activates a button or toggles a checkbox/radio;
-/// the view auto-scrolls to keep the focused element on screen. Ctrl-keys and any
-/// unhandled key fall through to the user's `onKey`. Mouse, multiline cursor
-/// movement, and word-jumps are a follow-on.
+/// `Terminal.appScreen` — terminal TEA driver for a `view : Model -> Cells msg`.
+/// The `Cells msg` value wraps the same structured `Element` tree that `Ipe.Web`
+/// renders; here it is laid out to ANSI cells by walking the typed attributes
+/// (`tui::layout`), and `Ipe.Ui.Input.*` widgets become focusables. Tab /
+/// Shift-Tab cycle focus; typing edits the focused text input (dispatching its
+/// `onInput`); Enter/Space activates a button or toggles a checkbox/radio; the
+/// view auto-scrolls to keep the focused element on screen. Ctrl-keys and any
+/// unhandled key fall through to the user's `onKey`.
 #[allow(clippy::type_complexity, clippy::too_many_lines, unused_assignments)]
 pub fn tui_app_ui<Model, Msg, E, FInit, FUpdate, FView, FSubs, FOnKey>(
     init: FInit,
@@ -472,7 +471,7 @@ where
     Msg: Clone + Send + IpeStringify + 'static,
     FInit: Fn(()) -> (Model, IpeCmd<Msg>) + Send + 'static,
     FUpdate: Fn(Msg, Model) -> (Model, IpeCmd<Msg>) + Send + Sync + 'static,
-    FView: Fn(Model) -> Element<Msg> + Send + 'static,
+    FView: Fn(Model) -> CellsView<Msg> + Send + 'static,
     FSubs: Fn(Model) -> IpeSub<Msg> + Send + 'static,
     FOnKey: Fn(String, String) -> Msg + Send + 'static,
 {
@@ -594,7 +593,7 @@ where
                             if press && (btn == 64 || btn == 65) {
                                 let (cols, rows) = term_size();
                                 let (_f, _fs, content_h) = render_with_focus(
-                                    &view(model.clone()),
+                                    &view(model.clone()).into_element(),
                                     cols,
                                     rows,
                                     focus_idx,
@@ -608,7 +607,7 @@ where
                                     (scroll_y + 3).min(max_scroll)
                                 };
                                 let (frame, fs, _) = render_with_focus(
-                                    &view(model.clone()),
+                                    &view(model.clone()).into_element(),
                                     cols,
                                     rows,
                                     focus_idx,

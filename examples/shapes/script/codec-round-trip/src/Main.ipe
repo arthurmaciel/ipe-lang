@@ -1,0 +1,82 @@
+module Main exposing (main)
+
+import Ipe.Codec as Codec exposing (Codec)
+import Ipe.Result as Result
+import Ipe.List as List
+import Ipe.String as String
+import Ipe.Task as Task
+import Ipe.Io as Io
+
+
+-- A `Codec a` bundles an encoder and a decoder in ONE value, so encode and decode
+-- cannot drift apart. Three ideas:
+--   • The round-trip law holds by construction: `fromJson c (toJson c x) == Ok x`,
+--     because `toJson` and `fromJson` read the SAME codec.
+--   • Composite codecs are built from scalars: `Codec.list Codec.int` is a codec
+--     for `List Int` derived from the `Int` codec — no separate encoder written.
+--   • `enum` is fail-closed: an unknown wire tag decodes to `Err`, never a
+--     silently-wrong constructor.
+
+
+type Priority
+    = Low
+    | High
+
+
+priorityEq : Priority -> Priority -> Bool
+priorityEq a b =
+    a == b
+
+
+priorityCodec : Codec Priority
+priorityCodec =
+    Codec.enum priorityEq [ ( Low, "low" ), ( High, "high" ) ]
+
+
+-- A composite codec, derived from the scalar `Int` codec.
+numbersCodec : Codec (List Int)
+numbersCodec =
+    Codec.list Codec.int
+
+
+-- Round-trip: encode to JSON, decode back, compare to the original.
+roundTripNumbers : List Int -> String
+roundTripNumbers xs =
+    let
+        json =
+            Codec.toJson numbersCodec xs
+
+        back =
+            Codec.fromJson numbersCodec json
+    in
+    "encoded " ++ json ++ " ; decoded == original: " ++ boolText (back == Ok xs)
+
+
+-- Decoding an unknown enum tag is a typed Err — fail-closed.
+decodePriority : String -> String
+decodePriority json =
+    case Codec.fromJson priorityCodec json of
+        Ok Low ->
+            "Low"
+
+        Ok High ->
+            "High"
+
+        Err _ ->
+            "rejected (unknown tag — fail-closed)"
+
+
+boolText : Bool -> String
+boolText b =
+    if b then
+        "yes"
+
+    else
+        "no"
+
+
+main =
+    do
+        Io.println (roundTripNumbers [ 3, 1, 4, 1, 5 ])
+        Io.println ("decode \"high\" -> " ++ decodePriority "\"high\"")
+        Io.println ("decode \"urgent\" -> " ++ decodePriority "\"urgent\"")

@@ -1,0 +1,118 @@
+module Main exposing (main)
+
+import Ipe.Result as Result exposing (Result(..))
+import Ipe.String as String
+import Ipe.Io as Io
+
+
+-- Parse a raw signup form into a typed `Account`, using `Result` as the typed
+-- alternative to exceptions. Each field has its own parser returning
+-- `Result String field`; `Result.map3` combines the three into an `Account`
+-- only when ALL succeed, and reports the first failure otherwise. Downstream
+-- code that holds an `Account` knows every field already passed its check —
+-- that is parse, don't validate: the raw strings never reach it.
+
+
+-- The typed target. An `Account` cannot be constructed from raw strings; it can
+-- only be assembled from already-parsed fields, so its existence is proof the
+-- input was valid.
+type alias Account =
+    { username : String
+    , age : Int
+    , email : String
+    }
+
+
+-- A raw form as it arrives: three untyped strings.
+type alias RawForm =
+    { username : String
+    , age : String
+    , email : String
+    }
+
+
+-- Field parser: a non-empty username of at most 20 characters.
+parseUsername : String -> Result String String
+parseUsername raw =
+    let
+        name =
+            String.trim raw
+    in
+    if String.isEmpty name then
+        Err "username is required"
+
+    else if String.length name > 20 then
+        Err "username must be 20 characters or fewer"
+
+    else
+        Ok name
+
+
+-- Field parser: an age that is a number in a sane human range. `String.toInt`
+-- returns `Maybe Int`; `Result.fromMaybe` turns the absent case into a typed
+-- error, then `andThen` chains the range check.
+parseAge : String -> Result String Int
+parseAge raw =
+    String.toInt (String.trim raw)
+        |> Result.fromMaybe "age must be a whole number"
+        |> Result.andThen inHumanRange
+
+
+inHumanRange : Int -> Result String Int
+inHumanRange n =
+    if n >= 13 && n <= 120 then
+        Ok n
+
+    else
+        Err "age must be between 13 and 120"
+
+
+-- Field parser: an email, checked by the stdlib's `String.isEmail`.
+parseEmail : String -> Result String String
+parseEmail raw =
+    let
+        addr =
+            String.trim raw
+    in
+    if String.isEmail addr then
+        Ok addr
+
+    else
+        Err "email is not a valid address"
+
+
+-- The whole form parse. `Result.map3` applies the `Account` constructor to the
+-- three parsed fields; the first `Err` short-circuits, so a bad field's message
+-- is what the caller sees. No field-order boilerplate, no nested `case`.
+parseForm : RawForm -> Result String Account
+parseForm form =
+    Result.map3 Account
+        (parseUsername form.username)
+        (parseAge form.age)
+        (parseEmail form.email)
+
+
+-- Turn a parse outcome into a line to print.
+report : RawForm -> String
+report form =
+    case parseForm form of
+
+        Ok account ->
+            "OK: "
+                ++ account.username
+                ++ " <"
+                ++ account.email
+                ++ "> age "
+                ++ String.fromInt account.age
+
+        Err message ->
+            "REJECTED: " ++ message
+
+
+main =
+    do
+        Io.println (report { username = "ada", age = "36", email = "ada@example.com" })
+        Io.println (report { username = "  ", age = "36", email = "ada@example.com" })
+        Io.println (report { username = "grace", age = "twelve", email = "grace@example.com" })
+        Io.println (report { username = "linus", age = "9", email = "linus@example.com" })
+        Io.println (report { username = "dennis", age = "70", email = "not-an-email" })

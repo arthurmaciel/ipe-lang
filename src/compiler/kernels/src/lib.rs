@@ -358,6 +358,10 @@ pub enum BuiltinTag {
     /// `Element` — the `Ipe.Ui` element constructor `Element msg`, applied to the
     /// message type.
     UiElement,
+    /// `Cells` — the Tui-only view type constructor `Cells msg`. Distinct from
+    /// `Element msg`; produced exclusively by `Ipe.Ui.Cells.*` builders and
+    /// consumed only by `Terminal.appScreen`'s view field.
+    Cells,
     /// `CustomElement` — the JS-widget boundary constructor `CustomElement down up`,
     /// applied to its sealed down-state and up-event types. Empty-module
     /// (unqualified); an opaque handle produced only by the reserved `customElement`
@@ -1735,6 +1739,23 @@ pub enum StdlibKernel {
     /// `Ui.cells : List (List Char) -> Element msg` — a raw terminal cell grid
     /// embedded as an island inside an `Ipe.Ui` view under `Terminal.appScreen`.
     UiCells,
+    /// `UiCells.none : Cells msg` — empty cell, matching `Ui.none` but returns
+    /// `Cells msg`.
+    UiCellsNone,
+    /// `UiCells.text : String -> Cells msg` — a text leaf returning `Cells msg`.
+    UiCellsText,
+    /// `UiCells.el : List (Attribute msg) -> Cells msg -> Cells msg` — a single
+    /// child wrapper returning `Cells msg`.
+    UiCellsEl,
+    /// `UiCells.row : List (Attribute msg) -> List (Cells msg) -> Cells msg` — a
+    /// horizontal layout row returning `Cells msg`.
+    UiCellsRow,
+    /// `UiCells.column : List (Attribute msg) -> List (Cells msg) -> Cells msg` —
+    /// a vertical layout column returning `Cells msg`.
+    UiCellsColumn,
+    /// `UiCells.cells : List (List Char) -> Cells msg` — a raw character-grid
+    /// island inside a `Cells`-typed Tui view.
+    UiCellsCells,
     /// `Ui.widget : CustomElement down up -> down -> (up -> msg) -> Element msg` —
     /// the one view node that places a typed JS custom-element widget. The
     /// `CustomElement` handle is opaque; its transport is not yet shipped, so a
@@ -2694,10 +2715,11 @@ pub enum StdlibKernel {
     EmailSend,
 
     // ── Ipe.Crypto typed-key newtypes ─────────────────────────────────
-    // Additive Layer-3 API that wraps raw `String` keys / MACs in opaque
-    // role-typed newtypes.  The existing bare-`String` kernels remain unchanged
-    // (backward-compatible); these new kernels carry `Key`/`Mac` runtime
-    // types from `ipe_runtime::crypto`.  All are Pure (no side-effect).
+    // Opaque role-typed newtypes carrying `Key`/`Mac` runtime types from
+    // `ipe_runtime::crypto`.  All are Pure (no side-effect).  The AEAD and
+    // key-derivation kernels themselves require/return `Key` (see the raw
+    // `CryptoAesGcmEncrypt` etc. entries above) — there is no bare-`String`-key
+    // spelling for encrypt/decrypt/derive.
     /// `Key.fromString : String -> Key` — the ONLY constructor; parse boundary.
     CryptoKeyFromString,
     /// `Key.fromBytes : String -> Key` — construction boundary for byte-string callers.
@@ -2708,18 +2730,6 @@ pub enum StdlibKernel {
     CryptoHmacSha256WithKey,
     /// `Crypto.hmacSha512WithKey : Key -> String -> Mac` — typed HMAC-SHA512.
     CryptoHmacSha512WithKey,
-    /// `Crypto.aesKeyFromPasswordKey : String -> String -> Key` — typed key derivation.
-    CryptoAesKeyFromPasswordKey,
-    /// `Crypto.chachaKeyFromPasswordKey : String -> String -> Key` — typed key derivation.
-    CryptoChachaKeyFromPasswordKey,
-    /// `Crypto.aesGcmEncryptKey : Key -> String -> Result Error String` — typed AEAD encrypt.
-    CryptoAesGcmEncryptKey,
-    /// `Crypto.aesGcmDecryptKey : Key -> String -> Result Error String` — typed AEAD decrypt.
-    CryptoAesGcmDecryptKey,
-    /// `Crypto.chacha20EncryptKey : Key -> String -> Result Error String` — typed AEAD encrypt.
-    CryptoChacha20EncryptKey,
-    /// `Crypto.chacha20DecryptKey : Key -> String -> Result Error String` — typed AEAD decrypt.
-    CryptoChacha20DecryptKey,
 
     // ── Ipe.Email.EmailAddress — typed parse-don't-validate boundary ───
     // Additive API: `EmailAddress.parse` is the only constructor; downstream
@@ -3227,31 +3237,47 @@ impl StdlibKernel {
             // (`ipe_aes_gcm_encrypt(key, plaintext)` etc.) prepends/strips a
             // fresh random nonce internally, so — unlike the the backend which
             // took an explicit nonce/AAD arg — there is no third argument.
-            Self::CryptoAesGcmEncrypt => {
-                d("Crypto", "aesGcmEncrypt", 2, Pure, "ipe_aes_gcm_encrypt")
-            }
-            Self::CryptoAesGcmDecrypt => {
-                d("Crypto", "aesGcmDecrypt", 2, Pure, "ipe_aes_gcm_decrypt")
-            }
-            Self::CryptoChacha20Encrypt => {
-                d("Crypto", "chacha20Encrypt", 2, Pure, "ipe_chacha20_encrypt")
-            }
-            Self::CryptoChacha20Decrypt => {
-                d("Crypto", "chacha20Decrypt", 2, Pure, "ipe_chacha20_decrypt")
-            }
+            Self::CryptoAesGcmEncrypt => d(
+                "Crypto",
+                "aesGcmEncrypt",
+                2,
+                Pure,
+                "ipe_aes_gcm_encrypt_key",
+            ),
+            Self::CryptoAesGcmDecrypt => d(
+                "Crypto",
+                "aesGcmDecrypt",
+                2,
+                Pure,
+                "ipe_aes_gcm_decrypt_key",
+            ),
+            Self::CryptoChacha20Encrypt => d(
+                "Crypto",
+                "chacha20Encrypt",
+                2,
+                Pure,
+                "ipe_chacha20_encrypt_key",
+            ),
+            Self::CryptoChacha20Decrypt => d(
+                "Crypto",
+                "chacha20Decrypt",
+                2,
+                Pure,
+                "ipe_chacha20_decrypt_key",
+            ),
             Self::CryptoAesKeyFromPassword => d(
                 "Crypto",
                 "aesKeyFromPassword",
                 2,
                 Pure,
-                "crypto_aes_key_from_password",
+                "crypto_aes_key_from_password_key",
             ),
             Self::CryptoChachaKeyFromPassword => d(
                 "Crypto",
                 "chachaKeyFromPassword",
                 2,
                 Pure,
-                "crypto_chacha_key_from_password",
+                "crypto_chacha_key_from_password_key",
             ),
             Self::CryptoRandomBytes => d("Crypto", "randomBytes", 1, Pure, "crypto_random_bytes"),
             Self::CryptoRandomToken => d("Crypto", "randomToken", 1, Pure, "crypto_random_token"),
@@ -3708,6 +3734,13 @@ impl StdlibKernel {
             Self::UiText => d("Ui", "text", 1, Ui, "ui_text_"),
             Self::UiHtml => d("Ui", "html", 1, Ui, "ui_html_"),
             Self::UiCells => d("Ui", "cells", 1, Ui, "ui_cells_"),
+            // ── Ipe.Ui.Cells Cells-typed builders ────────────────────────
+            Self::UiCellsNone => d("UiCells", "none", 0, Ui, "cells_none_"),
+            Self::UiCellsText => d("UiCells", "text", 1, Ui, "cells_text_"),
+            Self::UiCellsEl => d("UiCells", "el", 2, Ui, "cells_el_"),
+            Self::UiCellsRow => d("UiCells", "row", 2, Ui, "cells_row_"),
+            Self::UiCellsColumn => d("UiCells", "column", 2, Ui, "cells_column_"),
+            Self::UiCellsCells => d("UiCells", "cells", 1, Ui, "cells_cells_"),
             Self::UiWidget => d("Ui", "widget", 3, Ui, "ui_widget_"),
             Self::UiNode => d("Ui", "node", 3, Ui, "ui_node_"),
             Self::UiTaggedNode => d("Ui", "taggedNode", 4, Ui, "ui_tagged_node_"),
@@ -4498,48 +4531,6 @@ impl StdlibKernel {
                 Pure,
                 "crypto_hmac_sha512_key",
             ),
-            Self::CryptoAesKeyFromPasswordKey => d(
-                "Crypto",
-                "aesKeyFromPasswordKey",
-                2,
-                Pure,
-                "crypto_aes_key_from_password_key",
-            ),
-            Self::CryptoChachaKeyFromPasswordKey => d(
-                "Crypto",
-                "chachaKeyFromPasswordKey",
-                2,
-                Pure,
-                "crypto_chacha_key_from_password_key",
-            ),
-            Self::CryptoAesGcmEncryptKey => d(
-                "Crypto",
-                "aesGcmEncryptKey",
-                2,
-                Pure,
-                "crypto_aes_gcm_encrypt_key",
-            ),
-            Self::CryptoAesGcmDecryptKey => d(
-                "Crypto",
-                "aesGcmDecryptKey",
-                2,
-                Pure,
-                "crypto_aes_gcm_decrypt_key",
-            ),
-            Self::CryptoChacha20EncryptKey => d(
-                "Crypto",
-                "chacha20EncryptKey",
-                2,
-                Pure,
-                "crypto_chacha20_encrypt_key",
-            ),
-            Self::CryptoChacha20DecryptKey => d(
-                "Crypto",
-                "chacha20DecryptKey",
-                2,
-                Pure,
-                "crypto_chacha20_decrypt_key",
-            ),
             // ── Ipe.Email.EmailAddress ─────────────────────────────────
             Self::EmailAddressParse => d("EmailAddress", "parse", 1, Pure, "email_address_parse"),
             Self::EmailAddressToString => d(
@@ -5229,6 +5220,13 @@ impl StdlibKernel {
         Self::UiText,
         Self::UiHtml,
         Self::UiCells,
+        // Ipe.Ui.Cells Cells-typed builders
+        Self::UiCellsNone,
+        Self::UiCellsText,
+        Self::UiCellsEl,
+        Self::UiCellsRow,
+        Self::UiCellsColumn,
+        Self::UiCellsCells,
         Self::UiWidget,
         Self::UiNode,
         Self::UiTaggedNode,
@@ -5698,12 +5696,6 @@ impl StdlibKernel {
         Self::CryptoMacToHex,
         Self::CryptoHmacSha256WithKey,
         Self::CryptoHmacSha512WithKey,
-        Self::CryptoAesKeyFromPasswordKey,
-        Self::CryptoChachaKeyFromPasswordKey,
-        Self::CryptoAesGcmEncryptKey,
-        Self::CryptoAesGcmDecryptKey,
-        Self::CryptoChacha20EncryptKey,
-        Self::CryptoChacha20DecryptKey,
         // ── Ipe.Email.EmailAddress ─────────────────────────────────────
         Self::EmailAddressParse,
         Self::EmailAddressToString,
@@ -7164,6 +7156,8 @@ impl StdlibKernel {
         const LOCALE_TO_STRING_TO_STRING: TyShape =
             TyShape::Fun(&LOCALE, &TyShape::Fun(&STRING, &STRING));
         // Crypto typed-key.
+        const MAYBE_CRYPTO_KEY: TyShape = TyShape::Con(BuiltinTag::Maybe, &[CRYPTO_KEY]);
+        const STRING_TO_MAYBE_CRYPTO_KEY: TyShape = TyShape::Fun(&STRING, &MAYBE_CRYPTO_KEY);
         const STRING_TO_CRYPTO_KEY: TyShape = TyShape::Fun(&STRING, &CRYPTO_KEY);
         const CRYPTO_MAC_TO_STRING: TyShape = TyShape::Fun(&CRYPTO_MAC, &STRING);
         const STRING_TO_CRYPTO_MAC: TyShape = TyShape::Fun(&STRING, &CRYPTO_MAC);
@@ -7560,6 +7554,19 @@ impl StdlibKernel {
         const LIST_UI_ELEM_A: TyShape = TyShape::Con(BuiltinTag::List, &[UI_ELEM_A]);
         const LIST_HTML_A: TyShape = TyShape::Con(BuiltinTag::List, &[HTML_A]);
         const LIST_HTML_ATTR_A: TyShape = TyShape::Con(BuiltinTag::List, &[HTML_ATTR_A]);
+        // `Cells msg` (var(0) = msg), and derived forms for `Ipe.Ui.Cells` builders.
+        const CELLS_A: TyShape = TyShape::Con(BuiltinTag::Cells, &[A]);
+        const LIST_CELLS_A: TyShape = TyShape::Con(BuiltinTag::List, &[CELLS_A]);
+        // `String -> Cells msg`
+        const STRING_TO_CELLS_A: TyShape = TyShape::Fun(&STRING, &CELLS_A);
+        // `List (Attribute msg) -> Cells msg -> Cells msg` (el)
+        const CELLS_A_TO_CELLS_A: TyShape = TyShape::Fun(&CELLS_A, &CELLS_A);
+        const CELLS_EL: TyShape = TyShape::Fun(&LIST_UI_ATTR_A, &CELLS_A_TO_CELLS_A);
+        // `List (Attribute msg) -> List (Cells msg) -> Cells msg` (row / column)
+        const LIST_CELLS_A_TO_CELLS_A: TyShape = TyShape::Fun(&LIST_CELLS_A, &CELLS_A);
+        const CELLS_CONTAINER: TyShape = TyShape::Fun(&LIST_UI_ATTR_A, &LIST_CELLS_A_TO_CELLS_A);
+        // `List (List Char) -> Cells msg` (cells)
+        const LIST_LIST_CHAR_TO_CELLS_A: TyShape = TyShape::Fun(&LIST_LIST_CHAR, &CELLS_A);
 
         // ── Ipe.Ui element / layout arrows. ──
         // `layout : List (Attribute msg) -> Element msg -> Html msg`.
@@ -7943,6 +7950,8 @@ impl StdlibKernel {
         const A_TO_TUPLE: TyShape = TyShape::Fun(&A, &TUPLE_A_CMD_B);
         const UPDATE_FN: TyShape = TyShape::Fun(&B, &A_TO_TUPLE);
         const VIEW_ELEM_FN: TyShape = TyShape::Fun(&A, &UI_ELEM_B);
+        const CELLS_B: TyShape = TyShape::Con(BuiltinTag::Cells, &[B]);
+        const VIEW_CELLS_FN: TyShape = TyShape::Fun(&A, &CELLS_B);
         const VIEW_STRING_FN: TyShape = TyShape::Fun(&A, &STRING);
         const SUBS_FN: TyShape = TyShape::Fun(&A, &SUB_B);
         const LIST_WEB_ROUTE_C: TyShape = TyShape::Con(BuiltinTag::List, &[WEB_ROUTE_C]);
@@ -7971,7 +7980,7 @@ impl StdlibKernel {
             fields: &[
                 (FieldTag::AppInit, &UNIT_TO_TUPLE),
                 (FieldTag::AppUpdate, &UPDATE_FN),
-                (FieldTag::AppView, &VIEW_ELEM_FN),
+                (FieldTag::AppView, &VIEW_CELLS_FN),
                 (FieldTag::AppSubscriptions, &SUBS_FN),
                 (FieldTag::TerminalOnKey, &ON_KEY_FN),
             ],
@@ -8360,10 +8369,7 @@ impl StdlibKernel {
             | Self::MoneySymbol
             | Self::MoneyCurrencyName => Some(&STRING_TO_STRING),
             Self::StringFromChar | Self::CharToLower | Self::CharToUpper => Some(&CHAR_TO_STRING),
-            Self::StringAppend
-            | Self::SystemGetenvOr
-            | Self::CryptoAesKeyFromPassword
-            | Self::CryptoChachaKeyFromPassword => Some(&STRING_TO_STRING_TO_STRING),
+            Self::StringAppend | Self::SystemGetenvOr => Some(&STRING_TO_STRING_TO_STRING),
             Self::StringContains
             | Self::StringStartsWith
             | Self::StringEndsWith
@@ -8813,23 +8819,23 @@ impl StdlibKernel {
             Self::StringToUpperIn | Self::StringToLowerIn => Some(&LOCALE_TO_STRING_TO_STRING),
 
             // ── Crypto typed-key newtypes + AEAD/HMAC/sign. ──
-            Self::CryptoKeyFromString | Self::CryptoKeyFromBytes => Some(&STRING_TO_CRYPTO_KEY),
+            Self::CryptoKeyFromString | Self::CryptoKeyFromBytes => {
+                Some(&STRING_TO_MAYBE_CRYPTO_KEY)
+            }
             Self::CryptoMacToHex => Some(&CRYPTO_MAC_TO_STRING),
             Self::CryptoHmacSha256WithKey | Self::CryptoHmacSha512WithKey => {
                 Some(&CRYPTO_KEY_TO_STRING_TO_CRYPTO_MAC)
             }
-            Self::CryptoAesKeyFromPasswordKey | Self::CryptoChachaKeyFromPasswordKey => {
+            // Key-derivation returns a typed `Key`.
+            Self::CryptoAesKeyFromPassword | Self::CryptoChachaKeyFromPassword => {
                 Some(&STRING_TO_STRING_TO_CRYPTO_KEY)
             }
-            Self::CryptoAesGcmEncryptKey
-            | Self::CryptoAesGcmDecryptKey
-            | Self::CryptoChacha20EncryptKey
-            | Self::CryptoChacha20DecryptKey => Some(&CRYPTO_KEY_TO_STRING_TO_RESULT_ERR_STRING),
-            Self::CryptoRsaSha256Sign
-            | Self::CryptoAesGcmEncrypt
+            // AEAD requires a typed `Key` in the key role.
+            Self::CryptoAesGcmEncrypt
             | Self::CryptoAesGcmDecrypt
             | Self::CryptoChacha20Encrypt
-            | Self::CryptoChacha20Decrypt => Some(&STRING_TO_STRING_TO_RESULT_ERR_STRING),
+            | Self::CryptoChacha20Decrypt => Some(&CRYPTO_KEY_TO_STRING_TO_RESULT_ERR_STRING),
+            Self::CryptoRsaSha256Sign => Some(&STRING_TO_STRING_TO_RESULT_ERR_STRING),
             Self::CryptoRandomBytes | Self::CryptoRandomToken => Some(&INT_TO_TASK_STRING_LEAF),
 
             // ── Jwt (raw + builder). ──
@@ -9045,6 +9051,12 @@ impl StdlibKernel {
             Self::UiText => Some(&STRING_TO_UI_ELEM_A),
             Self::UiHtml => Some(&HTML_A_TO_UI_ELEM_A),
             Self::UiCells => Some(&LIST_LIST_CHAR_TO_UI_ELEM_A),
+            // ── Ipe.Ui.Cells Cells-typed builders. ──
+            Self::UiCellsNone => Some(&CELLS_A),
+            Self::UiCellsText => Some(&STRING_TO_CELLS_A),
+            Self::UiCellsEl => Some(&CELLS_EL),
+            Self::UiCellsRow | Self::UiCellsColumn => Some(&CELLS_CONTAINER),
+            Self::UiCellsCells => Some(&LIST_LIST_CHAR_TO_CELLS_A),
             Self::UiWidget => Some(&UI_WIDGET),
             Self::UiNode => Some(&UI_NODE),
             Self::UiTaggedNode => Some(&UI_TAGGED_NODE),
@@ -10124,6 +10136,12 @@ impl StdlibKernel {
             | Self::UiText
             | Self::UiHtml
             | Self::UiCells
+            | Self::UiCellsNone
+            | Self::UiCellsText
+            | Self::UiCellsEl
+            | Self::UiCellsRow
+            | Self::UiCellsColumn
+            | Self::UiCellsCells
             | Self::UiNode
             | Self::UiTaggedNode
             | Self::UiButton
@@ -10534,12 +10552,6 @@ impl StdlibKernel {
             | Self::CryptoMacToHex
             | Self::CryptoHmacSha256WithKey
             | Self::CryptoHmacSha512WithKey
-            | Self::CryptoAesKeyFromPasswordKey
-            | Self::CryptoChachaKeyFromPasswordKey
-            | Self::CryptoAesGcmEncryptKey
-            | Self::CryptoAesGcmDecryptKey
-            | Self::CryptoChacha20EncryptKey
-            | Self::CryptoChacha20DecryptKey
             // ── Ipe.Email.EmailAddress ─────────────────────────────────
             | Self::EmailAddressParse
             | Self::EmailAddressToString
@@ -11398,16 +11410,10 @@ impl StdlibKernel {
                 | Self::CryptoRsaSha256Verify
                 | Self::CryptoAesGcmEncrypt
                 | Self::CryptoAesGcmDecrypt
-                | Self::CryptoAesGcmEncryptKey
-                | Self::CryptoAesGcmDecryptKey
                 | Self::CryptoChacha20Encrypt
                 | Self::CryptoChacha20Decrypt
-                | Self::CryptoChacha20EncryptKey
-                | Self::CryptoChacha20DecryptKey
                 | Self::CryptoAesKeyFromPassword
                 | Self::CryptoChachaKeyFromPassword
-                | Self::CryptoAesKeyFromPasswordKey
-                | Self::CryptoChachaKeyFromPasswordKey
         )
     }
 
@@ -11691,6 +11697,12 @@ impl StdlibKernel {
                 | Self::UiText
                 | Self::UiHtml
                 | Self::UiCells
+                | Self::UiCellsNone
+                | Self::UiCellsText
+                | Self::UiCellsEl
+                | Self::UiCellsRow
+                | Self::UiCellsColumn
+                | Self::UiCellsCells
                 | Self::UiWidget
                 | Self::UiNode
                 | Self::UiTaggedNode

@@ -1,0 +1,64 @@
+module Main exposing (main)
+
+import Ipe.Encoding as Encoding
+import Ipe.Result as Result exposing (Result(..))
+import Ipe.Io as Io
+
+
+-- Round-trip a value through three text encodings — base64, percent (URL), and
+-- hex — and back. The shape to hold onto: every ENCODER is total
+-- (`String -> String`, it cannot fail), but every DECODER returns
+-- `Result Error String`, because the bytes it is handed might be malformed.
+-- Decoding is a parse boundary; encoding is not.
+
+
+payload : String
+payload =
+    "user=ada&note=café ☕"
+
+
+-- One labelled round-trip line: encode, then decode, then report whether the
+-- decoded value matches the original. The decode is the fallible half, so the
+-- report threads its `Result`.
+roundTrip : String -> (String -> String) -> (String -> Result Error String) -> String
+roundTrip label encode decode =
+    let
+        encoded =
+            encode payload
+
+        verdict =
+            case decode encoded of
+
+                Ok back ->
+                    if back == payload then
+                        "round-trips"
+
+                    else
+                        "MISMATCH"
+
+                Err _ ->
+                    "decode failed"
+    in
+    label ++ ": " ++ encoded ++ "  (" ++ verdict ++ ")"
+
+
+-- What happens when a decoder meets malformed input: not a crash, but an `Err`
+-- the caller must handle. "!!!" is not valid base64.
+badDecode : String
+badDecode =
+    case Encoding.base64Decode "!!!" of
+
+        Ok _ ->
+            "unexpectedly decoded"
+
+        Err _ ->
+            "rejected malformed base64 (Err, not a crash)"
+
+
+main =
+    do
+        Io.println ("original: " ++ payload)
+        Io.println (roundTrip "base64" Encoding.base64Encode Encoding.base64Decode)
+        Io.println (roundTrip "url   " Encoding.urlEncode Encoding.urlDecode)
+        Io.println (roundTrip "hex   " Encoding.hexEncode Encoding.hexDecode)
+        Io.println ("malformed: " ++ badDecode)

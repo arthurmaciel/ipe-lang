@@ -1,15 +1,17 @@
 -- | Ipe.Time -- clock + formatting + parsing.
 --
--- Clock reads (`now`, `unixMillis`) return `Task Error Int` (the
--- value is the milliseconds since the Unix epoch).  Pure helpers
--- (`format*`, `timeString`, `addMillis`, `diffMillis`) work on the
--- integer millisecond value directly.  `sleep` and `every` take a typed
--- `Ipe.Duration` span; `every` is the Ipe.Web / Ipe.Tui subscription helper that
--- emits a `Sub msg` once per interval.
+-- Clock reads (`now`, `unixMillis`) return a typed `Ipe.Time.Timestamp` (an
+-- opaque millisecond-since-epoch instant).  Pure helpers (`format*`,
+-- `timeString`) take a `Timestamp`.  Arithmetic helpers (`add`, `diff`)
+-- compose `Timestamp` with `Ipe.Duration` — the only span type: invalid
+-- arithmetic (adding two instants, subtracting a format-width from a clock
+-- read) is a compile-time type error.  `sleep` and `every` continue to take a
+-- typed `Ipe.Duration` span.
 module Ipe.Time exposing
     ( now, unixMillis, sleep
     , timeString
     , format, formatHTTP, formatISO8601, formatRFC3339
+    , add, diff
     , addMillis, diffMillis
     , every
     , isLeapYear, daysInMonth
@@ -18,18 +20,34 @@ module Ipe.Time exposing
 
 import Ipe.Ffi as Ffi
 import Ipe.Error exposing (Error)
+import Ipe.Task as Task
 import Ipe.Duration as Duration exposing (Duration)
+import Ipe.Time.Timestamp as Timestamp exposing (Timestamp)
 
 
 -- Clock + sleep
 
 
-now : () -> Task Error Int
-now = Ffi.kernel "Time_now"
+-- | Private kernel: returns raw milliseconds since the Unix epoch.
+nowMillisKernel : () -> Task Error Int
+nowMillisKernel = Ffi.kernel "Time_now"
 
 
-unixMillis : () -> Task Error Int
-unixMillis = Ffi.kernel "Time_unixMillis"
+-- | `now ()` — the current instant.
+now : () -> Task Error Timestamp
+now =
+    \u -> Task.map Timestamp.fromUnixMillis (nowMillisKernel u)
+
+
+-- | Private kernel: returns raw milliseconds since the Unix epoch.
+unixMillisKernel : () -> Task Error Int
+unixMillisKernel = Ffi.kernel "Time_unixMillis"
+
+
+-- | `unixMillis ()` — the current instant (alias for `now`).
+unixMillis : () -> Task Error Timestamp
+unixMillis =
+    \u -> Task.map Timestamp.fromUnixMillis (unixMillisKernel u)
 
 
 -- | `sleep span` -- resolve after `span` elapses.  Takes a typed
@@ -47,35 +65,93 @@ sleepKernel = Ffi.kernel "Time_sleep"
 -- Pure formatting
 
 
-timeString : Int -> String
-timeString = Ffi.kernel "Time_timeString"
+timeStringKernel : Int -> String
+timeStringKernel = Ffi.kernel "Time_timeString"
 
 
-format : String -> Int -> String
-format = Ffi.kernel "Time_format"
+-- | `timeString t` — format `t` as a human-readable local-time string.
+timeString : Timestamp -> String
+timeString t =
+    timeStringKernel (Timestamp.toUnixMillis t)
 
 
-formatHTTP : Int -> String
-formatHTTP = Ffi.kernel "Time_formatHTTP"
+formatKernel : String -> Int -> String
+formatKernel = Ffi.kernel "Time_format"
 
 
-formatISO8601 : Int -> String
-formatISO8601 = Ffi.kernel "Time_formatISO8601"
+-- | `format pattern t` — format `t` using a strftime-style `pattern`.
+format : String -> Timestamp -> String
+format pattern t =
+    formatKernel pattern (Timestamp.toUnixMillis t)
 
 
-formatRFC3339 : Int -> String
-formatRFC3339 = Ffi.kernel "Time_formatRFC3339"
+formatHTTPKernel : Int -> String
+formatHTTPKernel = Ffi.kernel "Time_formatHTTP"
+
+
+-- | `formatHTTP t` — format `t` as an HTTP-date string (RFC 7231).
+formatHTTP : Timestamp -> String
+formatHTTP t =
+    formatHTTPKernel (Timestamp.toUnixMillis t)
+
+
+formatISO8601Kernel : Int -> String
+formatISO8601Kernel = Ffi.kernel "Time_formatISO8601"
+
+
+-- | `formatISO8601 t` — format `t` as an ISO 8601 string.
+formatISO8601 : Timestamp -> String
+formatISO8601 t =
+    formatISO8601Kernel (Timestamp.toUnixMillis t)
+
+
+formatRFC3339Kernel : Int -> String
+formatRFC3339Kernel = Ffi.kernel "Time_formatRFC3339"
+
+
+-- | `formatRFC3339 t` — format `t` as an RFC 3339 string.
+formatRFC3339 : Timestamp -> String
+formatRFC3339 t =
+    formatRFC3339Kernel (Timestamp.toUnixMillis t)
 
 
 -- Arithmetic
 
 
-addMillis : Int -> Int -> Int
-addMillis = Ffi.kernel "Time_addMillis"
+-- | `add span t` — shift instant `t` forward by `span`.
+add : Duration -> Timestamp -> Timestamp
+add span t =
+    Timestamp.add span t
 
 
-diffMillis : Int -> Int -> Int
-diffMillis = Ffi.kernel "Time_diffMillis"
+-- | `diff a b` — the `Duration` from instant `b` to instant `a`.  Clamped to
+-- zero when `b` is after `a`.
+diff : Timestamp -> Timestamp -> Duration
+diff a b =
+    Timestamp.diff a b
+
+
+addMillisKernel : Int -> Int -> Int
+addMillisKernel = Ffi.kernel "Time_addMillis"
+
+
+-- | `addMillis ms t` — shift instant `t` by `ms` raw milliseconds.  Prefer
+-- `add (Duration.millis ms)` for new code; this is provided for callers that
+-- already hold a raw millisecond delta.
+addMillis : Int -> Timestamp -> Timestamp
+addMillis ms t =
+    Timestamp.fromUnixMillis (addMillisKernel ms (Timestamp.toUnixMillis t))
+
+
+diffMillisKernel : Int -> Int -> Int
+diffMillisKernel = Ffi.kernel "Time_diffMillis"
+
+
+-- | `diffMillis a b` — raw milliseconds from instant `b` to instant `a`.
+-- Prefer `Duration.toMillis (diff a b)` for new code.
+diffMillis : Timestamp -> Timestamp -> Int
+diffMillis a b =
+    diffMillisKernel (Timestamp.toUnixMillis a) (Timestamp.toUnixMillis b)
 
 
 -- Subscriptions
