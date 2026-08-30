@@ -15,7 +15,6 @@ use super::super::core::{IpeResult, IpeTask, ok_res};
 use super::super::debugger::tui::TuiDebugger;
 use super::super::stringify::IpeStringify;
 use super::super::tea::{CliEvent, IpeCmd, IpeSub, SubManager, cli_run_cmd};
-use super::super::ui::Element;
 use super::CellsView;
 use super::focus::{
     Focusable, InputRegistry, clamp_focus, edit_input, ensure_focus_visible, extract_click_msg,
