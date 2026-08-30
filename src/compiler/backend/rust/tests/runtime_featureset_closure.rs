@@ -70,7 +70,7 @@ use std::path::{Path, PathBuf};
 use ipe_backend::Backend;
 use ipe_backend_rust::RustBackend;
 use ipe_intern::Interner;
-use ipe_ir::{ModPath, Module, Program};
+use ipe_ir::{EnumDef, IrType, ModPath, Module, Program, TypeDef, Variant};
 
 /// The flag space, identical to `runtime_modset_closure.rs`: bit `i` sets
 /// `uses_*` flag `i`. The two SEALs share one flag layout so the featureset
@@ -949,6 +949,340 @@ fn ssot_selects_a_meaningful_subset_of_the_universe() {
         assert!(
             union.contains(expect),
             "SSOT sweep never selected the dependency-bearing feature `{expect}`: {union:?}"
+        );
+    }
+}
+
+// ── TYPE-INJECTED SEAL — the closure ranges over emitted TYPES, not just flags ─
+//
+// The flag-mask sweep above never models a TYPE-ONLY program: a program whose
+// only signal is a feature-gated `IrType` leaf in a value position (an enum
+// payload / record field / signature) with NO kernel call and NO `uses_*` flag
+// set. That is exactly the blind spot the `Url` / `ImageSrc` and Http
+// `StatusCode` breaches walked through — a type mention that should have selected
+// a feature but did not. This section closes it: for EVERY gated leaf it builds a
+// flags-off program that merely NAMES the leaf, emits it, and asserts the leaf's
+// feature is selected and the resulting mask is closed. Static, O(leaves), no
+// cargo.
+
+/// Every gated `IrType` leaf paired with the runtime cargo feature its emitted
+/// Rust form requires — the type-side SEAL's coverage set. One entry per gated
+/// leaf (the `crypto_core`/`db`/`server`/`http_client`/`web` leaves collapse to
+/// one representative each; the transitive walk covers the rest). A gated leaf
+/// added to `ir_type_feature_requirement` without an entry here still passes its
+/// own arm's closure check via the generic sweep, but SHOULD be added so the
+/// per-leaf assertion names it.
+fn gated_leaf_cases() -> Vec<(IrType, &'static str)> {
+    vec![
+        (IrType::Url, "url"),
+        (IrType::Secret, "secret"),
+        (IrType::Decimal, "decimal"),
+        (IrType::Regex, "regex"),
+        (IrType::Json, "json"),
+        (IrType::Decoder(Box::new(IrType::Int)), "json"),
+        (IrType::CsvDoc, "csv_kernel"),
+        (IrType::CacheCfg, "cache_kernel"),
+        (IrType::CacheStats, "cache_kernel"),
+        (IrType::WebSocketClientCfg, "websocket_client"),
+        (IrType::EmailMessage, "email"),
+        (IrType::EmailProvider, "email"),
+        (IrType::EmailAddress, "email"),
+        (IrType::CryptoKey, "crypto-core"),
+        (IrType::CryptoMac, "crypto-core"),
+        // The driver alias `db-sqlite` (default driver) resolves to include `db`,
+        // which gates the `db`/`dsn`/`external_conn` modules these leaves render.
+        (IrType::SqlFragment, "db"),
+        (IrType::Dsn, "db"),
+        (IrType::Connection, "db"),
+        (IrType::ServerRequest, "server"),
+        (IrType::StreamWriter, "server"),
+        (IrType::AuthConfig, "server"),
+        (IrType::HttpRequest, "http_client"),
+        (IrType::HttpMethod, "http_client"),
+        (IrType::WebReq, "web"),
+        (IrType::WebRoute(Box::new(IrType::Unit)), "web"),
+    ]
+}
+
+/// A single-module program whose ONLY signal is `field_ty` sitting in an enum
+/// variant's payload — every `uses_*` flag is OFF, no kernel is called. This is
+/// the exact type-only shape the flag sweep never models. If the feature closure
+/// still selects `field_ty`'s feature, it did so from the emitted TYPE, not a
+/// flag — the property under test.
+#[allow(clippy::expect_used)] // test scaffolding: interning a fixed literal cannot fail
+fn type_only_program(
+    interner: &mut Interner,
+    main: ipe_intern::Symbol,
+    field_ty: IrType,
+) -> Program {
+    let holder = interner.intern("Holder").expect("intern Holder");
+    let mk = interner.intern("Mk").expect("intern Mk");
+    let module = Module {
+        name: ModPath(vec![main]),
+        types: vec![TypeDef::Enum(EnumDef {
+            name: holder,
+            home: ModPath(vec![main]),
+            variants: vec![Variant {
+                name: mk,
+                fields: vec![field_ty],
+            }],
+            type_params: vec![],
+        })],
+        funcs: vec![],
+        entry: None,
+        records: vec![],
+        uses_tea: false,
+        uses_server: false,
+        uses_ui: false,
+        uses_web: false,
+        uses_tui: false,
+        uses_webview: false,
+        uses_css: false,
+        uses_auth: false,
+        uses_principal: false,
+        uses_websocket: false,
+        uses_email: false,
+        uses_time: false,
+        uses_env_public: false,
+        uses_http: false,
+        uses_config: false,
+        uses_compression: false,
+        uses_csv: false,
+        uses_cache: false,
+        uses_encoding: false,
+        uses_regex: false,
+        uses_uuid: false,
+        uses_random: false,
+        uses_log: false,
+        uses_decimal: false,
+        uses_char_category: false,
+        uses_crypto_core: false,
+        uses_secret: false,
+        uses_json: false,
+        uses_crypto: false,
+        uses_jwt: false,
+        uses_url: false,
+        uses_debug: false,
+        uses_ffi: false,
+        uses_async_runtime: false,
+    };
+    Program {
+        imports_unsafe_submodule: false,
+        modules: vec![module],
+    }
+}
+
+/// For EVERY gated leaf, a type-only program (the leaf in an enum payload, all
+/// flags off, no kernel) must select the leaf's feature (derived from the emitted
+/// TYPE by construction) AND resolve + close: the selected set is declared,
+/// resolves closed, and every emitted `ipe_runtime::<mod>::` reference is
+/// cfg-satisfied. This is Direction D (static) ranging over TYPES — the blind
+/// spot the flag sweep never modelled.
+#[test]
+#[allow(clippy::expect_used)] // test scaffolding
+fn type_only_program_selects_leaf_feature() {
+    let fx = load_fixtures();
+    for (leaf, feature) in gated_leaf_cases() {
+        let mut interner = Interner::new();
+        let main = interner.intern("Main").expect("intern Main");
+        let prog = type_only_program(&mut interner, main, leaf.clone());
+        let selected = RustBackend::new(&interner)
+            .runtime_feature_names(&prog)
+            .expect("runtime_feature_names for a type-only program");
+        // The full per-program closure obligation: declared, resolves closed,
+        // every emitted reference cfg-satisfied — against the real runtime crate.
+        for feat in &selected {
+            assert!(
+                fx.table.contains_key(*feat),
+                "type-only program for `{leaf:?}` selected undeclared feature `{feat}`"
+            );
+        }
+        let resolved = resolve_features(&selected, &fx.table);
+        // The leaf's feature must be cfg-satisfiable — present in the RESOLVED
+        // closure. A driver alias (`db-sqlite`) resolves to include its base
+        // (`db`), so checking the resolved set is exactly the cfg-satisfaction
+        // question, not a name-equality accident.
+        assert!(
+            resolved.contains(feature),
+            "type-only SEAL breach: a program whose only signal is `{leaf:?}` in \
+             an enum payload (no kernel, no flag) must make `{feature}` — the \
+             feature its emitted Rust form requires — cfg-satisfiable, but the \
+             selected set {selected:?} resolves to {resolved:?}. This is the \
+             `Url`/`ImageSrc` blind spot: a gated type emitted without its feature \
+             (E0433)."
+        );
+        let emitted = RustBackend::new(&interner)
+            .emit(&prog)
+            .expect("emit type-only program");
+        for text in emitted.files.values() {
+            if !text.is_empty() {
+                for m in referenced_runtime_modules(text) {
+                    let gate = fx.gates.get(&m).cloned().unwrap_or(Cfg::Always);
+                    assert!(
+                        gate.eval(&resolved),
+                        "type-only SEAL breach: program for `{leaf:?}` emits \
+                         `ipe_runtime::{m}::…` gated behind {gate:?}, UNSATISFIED \
+                         by {selected:?} (resolved {resolved:?})"
+                    );
+                }
+            }
+        }
+    }
+}
+
+/// The `Ipe.Ui.ImageSrc` mechanism proof, minimised: a stdlib-style type that
+/// EMBEDS a `Url` in a record field, carried in an enum payload, with NO `Url`
+/// kernel call and NO flag set. WITHOUT the type-closure fold this emits
+/// `ipe_runtime::url::Url` with the `url` feature off (the reverted breach); WITH
+/// it the `url` feature is forced from the embedded type. `#1530` re-lands the
+/// full `ImageSrc`; this proves the hole is closed by construction.
+#[test]
+#[allow(clippy::expect_used)] // test scaffolding
+fn image_src_mechanism_forces_url() {
+    let mut interner = Interner::new();
+    let main = interner.intern("Main").expect("intern Main");
+    let src = interner.intern("src").expect("intern src");
+    // `type ImageSrc = Mk { src : Url }` — a Url embedded in a record field, no
+    // Url kernel anywhere.
+    let record = IrType::Record(std::iter::once((src, IrType::Url)).collect());
+    let prog = type_only_program(&mut interner, main, record);
+    let selected = RustBackend::new(&interner)
+        .runtime_feature_names(&prog)
+        .expect("features");
+    assert!(
+        selected.contains(&"url"),
+        "ImageSrc mechanism: a type embedding `Url` with no `Url` kernel call \
+         MUST force the `url` feature (the reverted breach) — selected {selected:?}"
+    );
+    // And it emits the gated path the feature covers — proving the reference the
+    // feature must satisfy is really there.
+    let emitted = RustBackend::new(&interner).emit(&prog).expect("emit");
+    let names_url = emitted
+        .files
+        .values()
+        .any(|t| t.contains("ipe_runtime::url::Url"));
+    assert!(
+        names_url,
+        "the emitted crate must name `ipe_runtime::url::Url` (the reference `url` \
+         gates) — otherwise the proof is vacuous"
+    );
+}
+
+/// Fail-closed proof for the type-injected coverage check: forcing a gated leaf's
+/// selected feature OFF must leave its emitted `ipe_runtime::<mod>::` reference
+/// UNCOVERED. The analogue of `prelude_reference_gap_fails_closed` for the
+/// type-only path — a regression that treats an unsatisfied gate as satisfied, or
+/// that silently drops the type-closure fold, trips here.
+#[test]
+#[allow(clippy::expect_used)] // test scaffolding
+fn type_only_coverage_fails_closed() {
+    let fx = load_fixtures();
+    let mut interner = Interner::new();
+    let main = interner.intern("Main").expect("intern Main");
+    // A `Url`-in-payload program: emits `ipe_runtime::url::Url`, gated `url`.
+    let prog = type_only_program(&mut interner, main, IrType::Url);
+    let backend = RustBackend::new(&interner);
+    let emitted = backend.emit(&prog).expect("emit");
+    let full = backend.runtime_feature_names(&prog).expect("features");
+    assert!(
+        full.contains(&"url"),
+        "precondition: a `Url`-typed program selects `url`; got {full:?}"
+    );
+    // Drop `url` — the mutated set must NOT cover the emitted `url` reference.
+    let mutated: Vec<&str> = full.into_iter().filter(|f| *f != "url").collect();
+    let resolved = resolve_features(&mutated, &fx.table);
+    let mut saw_ref = false;
+    let mut uncovered = false;
+    for text in emitted.files.values() {
+        for m in referenced_runtime_modules(text) {
+            if m == "url" {
+                saw_ref = true;
+                let gate = fx.gates.get("url").cloned().unwrap_or(Cfg::Always);
+                if !gate.eval(&resolved) {
+                    uncovered = true;
+                }
+            }
+        }
+    }
+    assert!(
+        saw_ref,
+        "a `Url`-typed program must emit at least one `ipe_runtime::url::…` reference"
+    );
+    assert!(
+        uncovered,
+        "fail-closed proof: dropping `url` must leave the emitted \
+         `ipe_runtime::url::…` reference UNCOVERED — the type-only coverage check \
+         would have a false negative otherwise"
+    );
+}
+
+/// The type-closure neither UNDER- nor OVER-selects: a spread check. A pure-CLI
+/// program (a bare enum of primitives) pulls no url/web/db/server feature; a
+/// `Url`-typed program pulls `url` but not `web`/`db`/`server`; a `ServerRequest`-
+/// typed program pulls `server` but not `url`/`db`. This guards against a fold
+/// that leaks unrelated features into every project (bloat) as much as one that
+/// drops a needed feature (breach).
+#[test]
+#[allow(clippy::expect_used)] // test scaffolding
+fn type_closure_selects_exactly_the_needed_features() {
+    let mut interner = Interner::new();
+    let main = interner.intern("Main").expect("intern Main");
+
+    // Pure-CLI: an enum of primitives selects NOTHING gated.
+    let cli = type_only_program(
+        &mut interner,
+        main,
+        IrType::Tuple(vec![IrType::Int, IrType::Str, IrType::Bool]),
+    );
+    let cli_f = RustBackend::new(&interner)
+        .runtime_feature_names(&cli)
+        .expect("features");
+    for reject in [
+        "url",
+        "web",
+        "server",
+        "db",
+        "http_client",
+        "secret",
+        "json",
+    ] {
+        assert!(
+            !cli_f.contains(&reject),
+            "over-selection: a pure-CLI (primitive) type-only program must not pull \
+             `{reject}`: {cli_f:?}"
+        );
+    }
+
+    // `Url`-typed: `url` yes; web/db/server no.
+    let url = type_only_program(&mut interner, main, IrType::Url);
+    let url_f = RustBackend::new(&interner)
+        .runtime_feature_names(&url)
+        .expect("features");
+    assert!(
+        url_f.contains(&"url"),
+        "a Url-typed program selects `url`: {url_f:?}"
+    );
+    for reject in ["web", "db", "server", "http_client"] {
+        assert!(
+            !url_f.contains(&reject),
+            "over-selection: a bare `Url`-typed program must not pull `{reject}`: {url_f:?}"
+        );
+    }
+
+    // `ServerRequest`-typed: `server` yes; url/db no.
+    let server = type_only_program(&mut interner, main, IrType::ServerRequest);
+    let server_f = RustBackend::new(&interner)
+        .runtime_feature_names(&server)
+        .expect("features");
+    assert!(
+        server_f.contains(&"server"),
+        "a ServerRequest-typed program selects `server`: {server_f:?}"
+    );
+    for reject in ["url", "db"] {
+        assert!(
+            !server_f.contains(&reject),
+            "over-selection: a bare `ServerRequest`-typed program must not pull \
+             `{reject}`: {server_f:?}"
         );
     }
 }
