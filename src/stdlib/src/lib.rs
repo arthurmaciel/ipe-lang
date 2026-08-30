@@ -1091,11 +1091,20 @@ mod tests {
         }
     }
 
-    /// `Ipe.Basics` resolves to its embedded source; the removed `Ipe.Prelude`
-    /// alias does not resolve to anything (no backward-compatible mapping).
+    /// `Ipe.Basics` is now a compiled-source module (`COMPILED_STD_MODULES`),
+    /// not a parse-fixture module (`MODULES`). `source()` (which searches `MODULES`)
+    /// returns `None`; `compiled_std_source_segments` finds it. The removed
+    /// `Ipe.Prelude` alias still resolves to nothing.
     #[test]
     fn basics_resolves_and_prelude_is_gone() {
-        assert_eq!(source("Ipe.Basics"), Some(BASICS));
+        // Basics moved to compiled-source — not in the MODULES parse-fixture table.
+        assert_eq!(source("Ipe.Basics"), None);
+        // But it IS in COMPILED_STD_MODULES.
+        let basics_segs: Vec<String> = ["Ipe", "Basics"].iter().map(|s| (*s).to_owned()).collect();
+        assert!(
+            is_compiled_source_segments(&basics_segs),
+            "Ipe.Basics must be a compiled-source module"
+        );
         assert_eq!(source("Ipe.Prelude"), None);
     }
 
@@ -1214,8 +1223,12 @@ mod tests {
         assert!(is_compiled_source_segments(&palette));
         assert!(compiled_std_source_segments(&palette).is_some());
 
+        // `Ipe.Log` is now a compiled-source module.
         let log = vec!["Ipe".to_owned(), "Log".to_owned()];
-        assert!(!is_compiled_source_segments(&log), "Ipe.Log is a kernel");
+        assert!(
+            is_compiled_source_segments(&log),
+            "Ipe.Log is compiled-source"
+        );
 
         let nope = vec!["Ipe".to_owned(), "Nope".to_owned()];
         assert!(!is_compiled_source_segments(&nope));
