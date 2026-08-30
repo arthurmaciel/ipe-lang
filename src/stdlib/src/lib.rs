@@ -66,6 +66,17 @@ const CRYPTO: &str = include_str!("../Ipe/Crypto.ipe");
 /// [`COMPILED_STD_MODULES`] (NOT `MODULES`); NOT in `STDLIB_MODULE_QUALIFIERS`,
 /// so the disjointness invariant holds.
 const BITWISE: &str = include_str!("../Ipe/Bitwise.ipe");
+/// `Ipe.Error` — the structured `Error` / `ErrorKind` / `ErrorDetails` ADT,
+/// compiled-source Layer-3.
+///
+/// Every member is a point-free `Ffi.kernel "Error_*"` alias resolved by
+/// `ipe_canon::resolve::detect_kernel_alias` to a registered `Error*`
+/// `StdlibKernel` variant. `Error` / `ErrorKind` / `ErrorDetails` are
+/// reserved builtin types; no `type` declaration is needed — the module
+/// re-exports the kernel-implicit names via `exposing (Error(..), …)`.
+/// Registered in [`COMPILED_STD_MODULES`] (NOT `MODULES`); NOT in
+/// `STDLIB_MODULE_QUALIFIERS`, so the disjointness invariant holds.
+const ERROR: &str = include_str!("../Ipe/Error.ipe");
 /// `Ipe.Task` — Task combinator surface.
 const TASK: &str = include_str!("../Ipe/Task.ipe");
 /// `Ipe.Io` — standard-I/O effect kernels.
@@ -698,6 +709,16 @@ pub const COMPILED_STD_MODULES: &[CompiledStdModule] = &[
     CompiledStdModule {
         dotted: "Ipe.Bitwise",
         source: BITWISE,
+    },
+    // Ipe.Error — Layer-3 source; every member is a point-free
+    // `Ffi.kernel "Error_*"` alias resolved by `detect_kernel_alias` to the
+    // registered `Error*` kernels. `Error` / `ErrorKind` / `ErrorDetails` are
+    // kernel-implicit reserved builtin types; the module re-exports them as
+    // type-only exposures. Disjoint from `STDLIB_MODULE_QUALIFIERS` (no
+    // `"Error"` entry there after migration).
+    CompiledStdModule {
+        dotted: "Ipe.Error",
+        source: ERROR,
     },
     // Ipe.Debug — Layer-3 source; every member is a point-free
     // `Ffi.kernel "Debug_*"` alias resolved by `detect_kernel_alias` to the
