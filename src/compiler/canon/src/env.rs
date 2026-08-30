@@ -78,8 +78,12 @@ pub const STDLIB_MODULE_QUALIFIERS: &[(&[&str], &str)] = &[
     (&["Ipe", "Json", "Decode", "Pipeline"], "JsonDecP"),
     (&["Ipe", "Task"], "Task"),
     (&["Ipe", "Io"], "Io"),
-    // `Ipe.Debug` — development-only `Debug.log` escape hatch (kernel-only).
-    (&["Ipe", "Debug"], "Debug"),
+    // NOTE — `Ipe.Debug` is DELIBERATELY absent: it is a COMPILED-SOURCE
+    // Layer-3 module (registered in `ipe::stdlib::COMPILED_STD_MODULES`). Its
+    // members are point-free `Ffi.kernel "Debug_*"` aliases that
+    // `detect_kernel_alias` routes to the registered `Debug*` `StdlibKernel`
+    // variants. A module is EITHER a kernel qualifier here OR compiled-source
+    // — never both (`compiled_vs_kernel_qualifier_disjoint`), so it stays out.
     (&["Ipe", "Time"], "Time"),
     (&["Ipe", "System"], "System"),
     // NOTE — `Ipe.Random` is DELIBERATELY absent: it is a COMPILED-SOURCE
@@ -1250,8 +1254,9 @@ impl Env {
                     "eprintln",
                 ],
             ),
-            // `Ipe.Debug` — dev-only escape hatch.
-            ("Debug", &["log", "todo", "explain"]),
+            // NOTE — `Ipe.Debug` is DELIBERATELY absent from this catalog:
+            // it is a compiled-source module; its `Debug_*` kernels are
+            // reached via `detect_kernel_alias`, not the qualifier table.
             // `Ipe.Time` — time effects + TEA tick subscription.
             (
                 "Time",
