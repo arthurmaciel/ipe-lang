@@ -1,0 +1,150 @@
+module Main exposing (main)
+
+import Ipe.Dict as Dict exposing (Dict)
+import Ipe.List as List
+import Ipe.Maybe as Maybe exposing (Maybe(..))
+import Ipe.String as String
+import Ipe.Tuple as Tuple
+import Ipe.Task as Task
+import Ipe.Io as Io
+
+
+-- A checkout tally built on a `Dict`. A scanner emits a flat stream of SKUs
+-- (with repeats); we tally how many of each, join that against a price book,
+-- and print a receipt. Two `Dict` idioms carry the whole program:
+--   • `Dict.update` folds the repeat-heavy scan into per-SKU counts in one pass,
+--     upserting a running count without a "does the key exist yet?" branch.
+--   • `Dict.get` returns `Maybe`, so a scanned SKU absent from the price book is
+--     a value the type forces us to handle — never a crash, never a silent zero.
+
+
+-- The price book: SKU -> price in cents. `Dict.fromList` builds it; a later
+-- pair with the same key would overwrite an earlier one.
+priceBook : Dict String Int
+priceBook =
+    Dict.fromList
+        [ ( "APPLE", 60 )
+        , ( "BREAD", 250 )
+        , ( "MILK", 180 )
+        ]
+
+
+-- The raw scan: one SKU per scan event, repeats and all.
+scan : List String
+scan =
+    [ "APPLE", "MILK", "APPLE", "BREAD", "APPLE", "MILK", "GUM" ]
+
+
+-- Tally counts per SKU. `List.foldl` walks the scan once, threading the growing
+-- `Dict` as its accumulator; `Dict.update` bumps the count for one SKU, treating
+-- an absent key (`Nothing`) as a fresh count of 1.
+counts : List String -> Dict String Int
+counts skus =
+    List.foldl bump Dict.empty skus
+
+
+bump : String -> Dict String Int -> Dict String Int
+bump sku tally =
+    Dict.update sku increment tally
+
+
+increment : Maybe Int -> Maybe Int
+increment current =
+    case current of
+
+        Nothing ->
+            Just 1
+
+        Just n ->
+            Just (n + 1)
+
+
+-- One receipt line for a (SKU, quantity) pair. The price lookup is a `Dict.get`,
+-- which is `Maybe Int`: a SKU with no price (here, "GUM") takes the `Nothing`
+-- branch and is flagged rather than silently priced at zero.
+--
+-- The price is looked up FIRST — `priced sku` reads `sku` and never returns it —
+-- and the label reads `sku` from the tuple's own field. That keeps each read of
+-- `sku` in a single position and sidesteps a codegen move-after-use bug when one
+-- binding is reused after a kernel call — see
+-- github.com/arthurmaciel/ipe-lang/issues/1526.
+lineItem : ( String, Int ) -> String
+lineItem pair =
+    let
+        qty =
+            Tuple.second pair
+
+        label =
+            String.padRight 8 ' ' (Tuple.first pair) ++ "x" ++ String.fromInt qty ++ "  "
+    in
+    case priced pair of
+
+        Just cents ->
+            label ++ money (cents * qty)
+
+        Nothing ->
+            label ++ "(no price on file)"
+
+
+-- The price for a (SKU, _) pair, or `Nothing` if the SKU is not in the book.
+priced : ( String, Int ) -> Maybe Int
+priced pair =
+    Dict.get (Tuple.first pair) priceBook
+
+
+-- The grand total, in cents. Only priced items contribute; an unpriced SKU adds
+-- nothing. `Dict.get ... |> Maybe.withDefault 0` collapses the absent case to a
+-- zero contribution for the arithmetic, after `lineItem` has already surfaced it.
+subtotal : Dict String Int -> Int
+subtotal tally =
+    List.foldl addLine 0 (Dict.toList tally)
+
+
+addLine : ( String, Int ) -> Int -> Int
+addLine ( sku, qty ) running =
+    let
+        cents =
+            Dict.get sku priceBook |> Maybe.withDefault 0
+    in
+    running + (cents * qty)
+
+
+-- Format a cent amount as dollars.
+money : Int -> String
+money cents =
+    "$" ++ String.fromInt (cents // 100) ++ "." ++ pad2 (modBy 100 cents)
+
+
+pad2 : Int -> String
+pad2 n =
+    String.padLeft 2 '0' (String.fromInt n)
+
+
+main =
+    let
+        tally =
+            counts scan
+    in
+    do
+        Io.println "Receipt"
+        Io.println "-------"
+        printLines (rows tally)
+        Io.println "-------"
+        Io.println ("Total   " ++ money (subtotal tally))
+
+
+-- (SKU, qty) rows, sorted by SKU so the receipt reads the same every run —
+-- `Dict.toList` order is unspecified.
+rows : Dict String Int -> List ( String, Int )
+rows tally =
+    tally
+        |> Dict.toList
+        |> List.sortBy Tuple.first
+
+
+printLines : List ( String, Int ) -> Task Error ()
+printLines items =
+    items
+        |> List.map (\item -> Io.println (lineItem item))
+        |> Task.sequence
+        |> Task.map (\_ -> ())
