@@ -109,7 +109,13 @@ pub const STDLIB_MODULE_QUALIFIERS: &[(&[&str], &str)] = &[
     (&["Ipe", "Json", "Encode"], "JsonEnc"),
     (&["Ipe", "Json", "Decode"], "JsonDec"),
     (&["Ipe", "Json", "Decode", "Pipeline"], "JsonDecP"),
-    (&["Ipe", "Task"], "Task"),
+    // NOTE — `Ipe.Task` is DELIBERATELY absent: it is a COMPILED-SOURCE
+    // Layer-3 module (registered in `ipe::stdlib::COMPILED_STD_MODULES`). Its
+    // members are point-free `Ffi.kernel "Task_*"` aliases that
+    // `detect_kernel_alias` routes to the registered `Task*` `StdlibKernel`
+    // variants, plus pure Ipê (`BackoffStrategy` / `RetryPolicy`). A module is
+    // EITHER a kernel qualifier here OR compiled-source — never both
+    // (`compiled_vs_kernel_qualifier_disjoint`), so it stays out.
     // NOTE — `Ipe.Io` is DELIBERATELY absent: it is a COMPILED-SOURCE
     // Layer-3 module (registered in `ipe::stdlib::COMPILED_STD_MODULES`). Its
     // members are point-free `Ffi.kernel "Io_*"` aliases that
@@ -1079,43 +1085,9 @@ impl Env {
                     "decode",
                 ],
             ),
-            // `Ipe.Task` — Task combinators + retry surface + BackoffStrategy constructors.
-            (
-                "Task",
-                &[
-                    "succeed",
-                    "fail",
-                    "map",
-                    "map2",
-                    "map3",
-                    "map4",
-                    "map5",
-                    "attempt",
-                    "andThen",
-                    "mapError",
-                    "onError",
-                    "fromResult",
-                    "andThenResult",
-                    "sequence",
-                    "parallel",
-                    "lazy",
-                    // retry surface
-                    "retryWith",
-                    "linearBackoff",
-                    "exponentialBackoff",
-                    "withJitter",
-                    "retryOn",
-                    "withRetryOn",
-                    "defaultRetryPolicy",
-                    "withMaxAttempts",
-                    "withBaseMs",
-                    // BackoffStrategy constructors
-                    "Linear",
-                    "LinearWithJitter",
-                    "Exponential",
-                    "ExponentialWithJitter",
-                ],
-            ),
+            // NOTE — `Ipe.Task` is DELIBERATELY absent from this catalog:
+            // it is a compiled-source module; its `Task_*` kernels are
+            // reached via `detect_kernel_alias`, not the qualifier table.
             // NOTE — `Ipe.Io` is DELIBERATELY absent from this catalog:
             // it is a compiled-source module; its `Io_*` kernels are
             // reached via `detect_kernel_alias`, not the qualifier table.
