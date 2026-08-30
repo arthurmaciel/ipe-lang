@@ -17,8 +17,9 @@ const VIRTUAL_PATH: &str = "/ipe-lsp-protocol-test/Main.ipe";
 const CLEAN: &str = "module Main exposing (main)\n\nimport Ipe.Io as Io\nimport Ipe.String as String\n\nmain : Task Error ()\nmain =\n    Io.println (String.fromInt 1)\n";
 const TYPE_ERROR: &str = "module Main exposing (main)\n\nmain : Int\nmain = \"nope\"\n";
 
-/// Resolves a single-module virtual project from the open buffer — the
-/// filesystem never participates.
+/// Resolves a single-module virtual project from the open buffer, injecting
+/// all compiled-source stdlib modules so `Ipe.Io`, `Ipe.String`, etc. resolve
+/// — mirroring the production pattern in `ipe_lsp_server`.
 struct FixtureLoader;
 
 impl ProjectLoader for FixtureLoader {
@@ -37,6 +38,20 @@ impl ProjectLoader for FixtureLoader {
                 origin: ModuleOrigin::User,
             },
         );
+        for module in ipe_stdlib::COMPILED_STD_MODULES {
+            let path: Vec<String> = module.dotted.split('.').map(str::to_owned).collect();
+            files.insert(
+                path,
+                LoadedFile {
+                    path: std::path::PathBuf::from(format!(
+                        "<stdlib>/{}.ipe",
+                        module.dotted.replace('.', "/")
+                    )),
+                    text: module.source.to_owned(),
+                    origin: ModuleOrigin::EmbeddedStdlib,
+                },
+            );
+        }
         Ok(LoadedProject {
             files,
             entry_module: vec!["Main".to_owned()],

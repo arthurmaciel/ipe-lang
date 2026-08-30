@@ -62,8 +62,7 @@ fn i190_ipec_accepts_and_bounds_fn_static() {
         built.err()
     );
 
-    let emitted = std::fs::read_to_string(out.join("src").join("main.rs"))
-        .expect("emitted main.rs must exist");
+    let emitted = crate::support::read_all_emitted_src(&out);
 
     // The `link`-shaped function's generic gains the `'static` bound (prepended
     // before the trait bounds) so the boxed generic mapper callback coerces to
@@ -71,7 +70,7 @@ fn i190_ipec_accepts_and_bounds_fn_static() {
     assert!(
         emitted.contains("main_link_node<T1: 'static + Clone>"),
         "the generic that flows into the boxed `+ 'static` mapper callback must \
-         carry the leading `'static` lifetime bound (#190); got main.rs:\n{emitted}"
+         carry the leading `'static` lifetime bound (#190); got emitted user source:\n{emitted}"
     );
     // The boxed mapper slot the bound serves. (Every boxed first-class fn value
     // carries `+ Send + Sync + 'static` so a user callback can forward into the
@@ -87,7 +86,7 @@ fn i190_ipec_accepts_and_bounds_fn_static() {
             "Box<dyn Fn((String, String)) -> ipe_runtime::html::Attribute<T1> + Send + Sync + 'static>"
         )),
         "the mapper callback must box into a `+ Send + Sync + 'static` trait object (#190/#184); got \
-         main.rs:\n{emitted}"
+         emitted user source:\n{emitted}"
     );
 }
 

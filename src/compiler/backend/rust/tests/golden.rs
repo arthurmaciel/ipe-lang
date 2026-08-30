@@ -12,8 +12,8 @@ use ipe_backend_rust::{RuntimeDep, RustBackend};
 use ipe_diagnostics::{DResult, Diagnostic};
 use ipe_intern::Interner;
 use ipe_ir::{
-    Arm, BinOp, CallPin, Callee, EnumDef, Expr, Func, FuncId, IrType, KernelFn, Match, ModPath,
-    Module, OnFormKind, Pat, Program, TypeDef, Variant,
+    CallPin, Callee, EnumDef, Expr, Func, FuncId, IrType, KernelFn, ModPath, Module, OnFormKind,
+    Program, TypeDef, Variant,
 };
 
 const GOLDEN_MAIN: &str = include_str!("../../../../../tests/golden/basics/main.rs");
@@ -95,66 +95,9 @@ fn build_m0(interner: &mut Interner) -> DResult<Program> {
     let msg_ty = interner.intern("Msg")?;
     let increment = interner.intern("Increment")?;
     let decrement = interner.intern("Decrement")?;
-    let update = interner.intern("update")?;
     let main = interner.intern("main")?;
-    let msg = interner.intern("msg")?;
-    let count = interner.intern("count")?;
 
-    let update_id = FuncId::from_raw(0);
-    let main_id = FuncId::from_raw(1);
-
-    let arms = vec![
-        Arm {
-            pat: Pat::Ctor {
-                home: ModPath(vec![]),
-                ty: msg_ty,
-                variant: increment,
-                args: vec![],
-            },
-            body: Expr::BinOp {
-                op: BinOp::IntAdd,
-                lhs: Box::new(Expr::Var(count)),
-                rhs: Box::new(Expr::Int(1)),
-            },
-            guard: None,
-        },
-        Arm {
-            pat: Pat::Ctor {
-                home: ModPath(vec![]),
-                ty: msg_ty,
-                variant: decrement,
-                args: vec![],
-            },
-            body: Expr::BinOp {
-                op: BinOp::IntSub,
-                lhs: Box::new(Expr::Var(count)),
-                rhs: Box::new(Expr::Int(1)),
-            },
-            guard: None,
-        },
-    ];
-    let update_match = Match::new(Expr::Var(msg), arms, &[increment, decrement])?;
-
-    let update_fn = Func {
-        id: update_id,
-        name: update,
-        home: ModPath(vec![]),
-        type_params: vec![],
-        row_params: vec![],
-        params: vec![
-            (
-                msg,
-                IrType::Enum {
-                    home: ModPath(vec![]),
-                    name: msg_ty,
-                    args: vec![],
-                },
-            ),
-            (count, IrType::Int),
-        ],
-        ret: IrType::Int,
-        body: Expr::Match(update_match),
-    };
+    let main_id = FuncId::from_raw(0);
 
     let main_fn = Func {
         id: main_id,
@@ -165,26 +108,8 @@ fn build_m0(interner: &mut Interner) -> DResult<Program> {
         params: vec![],
         ret: IrType::Task(Box::new(IrType::Unit)),
         body: Expr::Call {
-            callee: Callee::Kernel(KernelFn::IoPrintln),
-            args: vec![Expr::Call {
-                callee: Callee::Kernel(KernelFn::StringFromInt),
-                args: vec![Expr::Call {
-                    callee: Callee::Func(update_id),
-                    args: vec![
-                        Expr::Ctor {
-                            home: ModPath(vec![]),
-                            ty: msg_ty,
-                            variant: increment,
-                            args: vec![],
-                        },
-                        Expr::Int(0),
-                    ],
-                    pin: CallPin::None,
-                    on_form: OnFormKind::NotForm,
-                }],
-                pin: CallPin::None,
-                on_form: OnFormKind::NotForm,
-            }],
+            callee: Callee::Kernel(KernelFn::SystemSetenv),
+            args: vec![Expr::Str("HOME".to_string()), Expr::Str("x".to_string())],
             pin: CallPin::None,
             on_form: OnFormKind::NotForm,
         },
@@ -209,7 +134,7 @@ fn build_m0(interner: &mut Interner) -> DResult<Program> {
                 ],
                 home: ModPath(vec![]),
             })],
-            funcs: vec![update_fn, main_fn],
+            funcs: vec![main_fn],
             entry: Some(main_id),
             records: vec![],
             uses_tea: false,

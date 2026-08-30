@@ -73,15 +73,14 @@ fn i189_ipec_accepts_and_clones_reused_generic() {
         built.err()
     );
 
-    let emitted = std::fs::read_to_string(out.join("src").join("main.rs"))
-        .expect("emitted main.rs must exist");
+    let emitted = crate::support::read_all_emitted_src(&out);
 
     // The reused generic param `x` must carry a `Clone` bound (the invariant
     // that makes the inserted `.clone()` type-check).
     let sig_line = emitted.lines().find(|l| l.contains("fn main_dup<"));
     assert!(
         sig_line.is_some(),
-        "emitted must define `main_dup`; got main.rs:\n{emitted}"
+        "emitted user source must define `main_dup`; got:\n{emitted}"
     );
     let sig_line = sig_line.unwrap_or_default();
     assert!(
@@ -95,7 +94,7 @@ fn i189_ipec_accepts_and_clones_reused_generic() {
     assert!(
         emitted.contains("basics_to_string(x.clone())"),
         "the reused generic param must be `.clone()`d on its non-final use \
-         (#189); got main.rs:\n{emitted}"
+         (#189); got emitted user source:\n{emitted}"
     );
 }
 

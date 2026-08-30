@@ -67,20 +67,19 @@ fn i177_ipec_accepts_and_bounds_fn_not_struct() {
         built.err()
     );
 
-    let emitted = std::fs::read_to_string(out.join("src").join("main.rs"))
-        .expect("emitted main.rs must exist");
+    let emitted = crate::support::read_all_emitted_src(&out);
 
     // The decoder function's wildcard-`any` generic gains the `IpeRow` bound so
     // its `db_get_string(_, &payload)` body type-checks (E0277 half).
     assert!(
         emitted.contains("ipe_runtime::db::IpeRow"),
         "the wildcard-`any` decoder function must carry the `IpeRow` bound so \
-         its `db_get_string` body type-checks (#177); got main.rs:\n{emitted}"
+         its `db_get_string` body type-checks (#177); got emitted user source:\n{emitted}"
     );
     assert!(
-        emitted.contains("pub fn main_decode_row<T1: Clone + ipe_runtime::db::IpeRow>"),
+        emitted.contains("fn main_decode_row<T1: Clone + ipe_runtime::db::IpeRow>"),
         "the bound belongs on the decoder FUNCTION's generic param, not \
-         elsewhere (#177); got main.rs:\n{emitted}"
+         elsewhere (#177); got emitted user source:\n{emitted}"
     );
 
     // The record struct itself MUST stay unbounded — it is reused in non-row

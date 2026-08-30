@@ -641,6 +641,9 @@ fn main() {
     }
 }
 
+#[path = "ipe_mods/ipe_mod_ipe_task.rs"]
+mod ipe_mod_ipe_task;
+pub(crate) use ipe_mod_ipe_task::*;
 #[path = "ipe_mods/ipe_mod_ipe_db_dsn.rs"]
 mod ipe_mod_ipe_db_dsn;
 pub(crate) use ipe_mod_ipe_db_dsn::*;

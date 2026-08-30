@@ -28,9 +28,25 @@ const BASICS: &str = include_str!("../Ipe/Basics.ipe");
 const MAYBE: &str = include_str!("../Ipe/Maybe.ipe");
 /// `Ipe.Result` — combinators over the `Result` ADT.
 const RESULT: &str = include_str!("../Ipe/Result.ipe");
-/// `Ipe.List` — list combinators.
+/// `Ipe.List` — list combinators, compiled-source Layer-3.
+///
+/// Pure members (`map`/`filter`/`foldl`/… and the reverse-accumulator helpers)
+/// are implemented directly in Ipê.  The eleven kernel-backed members
+/// (`sort`/`singleton`/`repeat`/`product`/`intersperse`/`partition`/`unzip`/
+/// `map2`–`map5`) are point-free `Ffi.kernel "List_*"` aliases resolved by
+/// `ipe_canon::resolve::detect_kernel_alias` to the registered `List*`
+/// `StdlibKernel` variants (`ipe_runtime::list::*`).  Registered in
+/// [`COMPILED_STD_MODULES`] (NOT `MODULES`); NOT in `STDLIB_MODULE_QUALIFIERS`,
+/// so the disjointness invariant holds.
 const LIST: &str = include_str!("../Ipe/List.ipe");
-/// `Ipe.String` — string combinators.
+/// `Ipe.String` — string combinators, compiled-source Layer-3.
+///
+/// Every member is a point-free `Ffi.kernel "String_*"` alias resolved by
+/// `ipe_canon::resolve::detect_kernel_alias` to a registered `String*`
+/// `StdlibKernel` variant. Registered in [`COMPILED_STD_MODULES`] (NOT
+/// `MODULES`); NOT in `STDLIB_MODULE_QUALIFIERS`, so the disjointness invariant
+/// holds. The module also re-exports the `String` builtin type via the
+/// `build_module_exports` reserved-builtin-type path.
 const STRING: &str = include_str!("../Ipe/String.ipe");
 /// `Ipe.Char` — single-character helpers, compiled-source Layer-3.
 ///
@@ -40,7 +56,13 @@ const STRING: &str = include_str!("../Ipe/String.ipe");
 /// [`COMPILED_STD_MODULES`] (NOT `MODULES`); NOT in `STDLIB_MODULE_QUALIFIERS`,
 /// so the disjointness invariant holds.
 const CHAR: &str = include_str!("../Ipe/Char.ipe");
-/// `Ipe.Dict` — string-keyed associative map.
+/// `Ipe.Dict` — string-keyed associative map, compiled-source Layer-3.
+///
+/// Every member is a point-free `Ffi.kernel "Dict_*"` alias resolved by
+/// `ipe_canon::resolve::detect_kernel_alias` to a registered `Dict*`
+/// `StdlibKernel` variant. Registered in [`COMPILED_STD_MODULES`] (NOT
+/// `MODULES`); NOT in `STDLIB_MODULE_QUALIFIERS`, so the disjointness
+/// invariant holds.
 const DICT: &str = include_str!("../Ipe/Dict.ipe");
 /// `Ipe.Set` — unordered set of unique elements, compiled-source Layer-3.
 ///
@@ -66,9 +88,22 @@ const CRYPTO: &str = include_str!("../Ipe/Crypto.ipe");
 /// [`COMPILED_STD_MODULES`] (NOT `MODULES`); NOT in `STDLIB_MODULE_QUALIFIERS`,
 /// so the disjointness invariant holds.
 const BITWISE: &str = include_str!("../Ipe/Bitwise.ipe");
-/// `Ipe.Task` — Task combinator surface.
+/// `Ipe.Task` — Task combinator surface, compiled-source Layer-3.
+///
+/// Members are either point-free `Ffi.kernel "Task_*"` aliases resolved by
+/// `ipe_canon::resolve::detect_kernel_alias` to registered `Task*`
+/// `StdlibKernel` variants (`ipe_runtime::task::*`), or pure Ipê over those
+/// aliases (`BackoffStrategy` type definition, `RetryPolicy` type alias).
+/// Registered in [`COMPILED_STD_MODULES`] (NOT `MODULES`); NOT in
+/// `STDLIB_MODULE_QUALIFIERS`, so the disjointness invariant holds.
 const TASK: &str = include_str!("../Ipe/Task.ipe");
-/// `Ipe.Io` — standard-I/O effect kernels.
+/// `Ipe.Io` — standard-I/O effect kernels, compiled-source Layer-3.
+///
+/// Every member is a point-free `Ffi.kernel "Io_*"` alias resolved by
+/// `ipe_canon::resolve::detect_kernel_alias` to a registered `Io*`
+/// `StdlibKernel` variant (`ipe_runtime::io::*`). Registered in
+/// [`COMPILED_STD_MODULES`] (NOT `MODULES`); NOT in `STDLIB_MODULE_QUALIFIERS`,
+/// so the disjointness invariant holds.
 const IO: &str = include_str!("../Ipe/Io.ipe");
 /// `Ipe.Debug` — development-only escape hatch, compiled-source Layer-3.
 ///
@@ -78,6 +113,15 @@ const IO: &str = include_str!("../Ipe/Io.ipe");
 /// `MODULES`); NOT in `STDLIB_MODULE_QUALIFIERS`, so the disjointness
 /// invariant holds.
 const DEBUG: &str = include_str!("../Ipe/Debug.ipe");
+/// `Ipe.Uuid` — UUID generation and parsing, compiled-source Layer-3.
+///
+/// `v4` and `v7` are point-free `Ffi.kernel "Uuid_v4"` / `"Uuid_v7"` aliases
+/// resolved by `ipe_canon::resolve::detect_kernel_alias` to the registered
+/// `UuidV4` / `UuidV7` `StdlibKernel` variants (`ipe_runtime::uuid_kernel::*`).
+/// `parse` resolves to `UuidParse` likewise. Registered in
+/// [`COMPILED_STD_MODULES`] (NOT `MODULES`); NOT in `STDLIB_MODULE_QUALIFIERS`,
+/// so the disjointness invariant holds.
+const UUID: &str = include_str!("../Ipe/Uuid.ipe");
 /// `Ipe.Time` — clock + formatting + calendar helpers, compiled-source Layer-3.
 ///
 /// Every member is a point-free `Ffi.kernel "Time_*"` alias resolved by
@@ -86,6 +130,14 @@ const DEBUG: &str = include_str!("../Ipe/Debug.ipe");
 /// `MODULES`); NOT in `STDLIB_MODULE_QUALIFIERS`, so the disjointness
 /// invariant holds.
 const TIME: &str = include_str!("../Ipe/Time.ipe");
+/// `Ipe.Decimal` — arbitrary-precision decimal arithmetic, compiled-source Layer-3.
+///
+/// Every member is a point-free `Ffi.kernel "Decimal_*"` alias resolved by
+/// `ipe_canon::resolve::detect_kernel_alias` to a registered `Decimal*`
+/// `StdlibKernel` variant (`ipe_runtime::decimal::*`). Registered in
+/// [`COMPILED_STD_MODULES`] (NOT `MODULES`); NOT in `STDLIB_MODULE_QUALIFIERS`,
+/// so the disjointness invariant holds.
+const DECIMAL: &str = include_str!("../Ipe/Decimal.ipe");
 /// `Ipe.System` — process / environment effect kernels.
 const SYSTEM: &str = include_str!("../Ipe/System.ipe");
 /// `Ipe.Random` — entropy-backed and seeded randomness, compiled-source Layer-3.
@@ -97,6 +149,14 @@ const SYSTEM: &str = include_str!("../Ipe/System.ipe");
 /// [`COMPILED_STD_MODULES`] (NOT `MODULES`); NOT in `STDLIB_MODULE_QUALIFIERS`,
 /// so the disjointness invariant holds.
 const RANDOM: &str = include_str!("../Ipe/Random.ipe");
+/// `Ipe.Encoding` — text encoding helpers (base64 / URL / hex), compiled-source Layer-3.
+///
+/// Every member is a point-free `Ffi.kernel "Encoding_*"` alias resolved by
+/// `ipe_canon::resolve::detect_kernel_alias` to a registered `Encoding*`
+/// `StdlibKernel` variant (`ipe_runtime::encoding::*`). Registered in
+/// [`COMPILED_STD_MODULES`] (NOT `MODULES`); NOT in `STDLIB_MODULE_QUALIFIERS`,
+/// so the disjointness invariant holds.
+const ENCODING: &str = include_str!("../Ipe/Encoding.ipe");
 /// `Ipe.File` — file-system effect kernels.
 const FILE: &str = include_str!("../Ipe/File.ipe");
 /// `Ipe.Http` — outbound HTTP client kernels + pure builders.
@@ -252,28 +312,12 @@ const STD_MARKDOWN: &str = include_str!("../Ipe/Markdown.ipe");
 /// Every embedded `Ipe` module, keyed by its dotted import name.
 pub const MODULES: &[StdModule] = &[
     StdModule {
-        name: "Ipe.List",
-        source: LIST,
-    },
-    StdModule {
-        name: "Ipe.String",
-        source: STRING,
-    },
-    StdModule {
-        name: "Ipe.Dict",
-        source: DICT,
+        name: "Ipe.Char",
+        source: CHAR,
     },
     StdModule {
         name: "Ipe.Crypto",
         source: CRYPTO,
-    },
-    StdModule {
-        name: "Ipe.Task",
-        source: TASK,
-    },
-    StdModule {
-        name: "Ipe.Io",
-        source: IO,
     },
     StdModule {
         name: "Ipe.System",
@@ -656,6 +700,18 @@ const STD_TRACE: &str = include_str!("../Ipe/Trace.ipe");
 /// module pay no ICU4X dependency cost.
 const LOCALE: &str = include_str!("../Ipe/Locale.ipe");
 
+/// `Ipe.Math` — numeric helpers, compiled-source Layer-3.
+///
+/// Every member is a point-free `Ffi.kernel "Math_*"` alias resolved by
+/// `ipe_canon::resolve::detect_kernel_alias` to a registered `Math*`
+/// `StdlibKernel` variant (`ipe_runtime::math::*`). Registered in
+/// [`COMPILED_STD_MODULES`] (NOT `MODULES`); NOT in `STDLIB_MODULE_QUALIFIERS`,
+/// so the disjointness invariant holds.
+const MATH: &str = include_str!("../Ipe/Math.ipe");
+const LOG: &str = include_str!("../Ipe/Log.ipe");
+const LEVEL: &str = include_str!("../Ipe/Level.ipe");
+const ERROR: &str = include_str!("../Ipe/Error.ipe");
+
 /// `Ipe.Ui.Events` — pure Ipê re-exports of `Ipe.Ui` event helpers (compiled source).
 ///
 /// Pure Ipê; no Ffi.kernel calls.  RESOLVES (ipe-0 AND cargo-0): the
@@ -665,35 +721,6 @@ const LOCALE: &str = include_str!("../Ipe/Locale.ipe");
 /// §B-UiEventsFnArg.
 /// Not in `STDLIB_MODULE_QUALIFIERS` so disjointness invariant holds.
 const STD_UI_EVENTS: &str = include_str!("../Ipe/Ui/Events.ipe");
-
-/// `Ipe.Log` — structured observability kernels (Layer-3 Ipê source).
-///
-/// Four severity levels — `debug` / `info` / `warn` / `error` — write a
-/// single-line message to the structured log. Each member is a point-free
-/// `Ffi.kernel "Log_*"` alias resolved by `detect_kernel_alias` to the
-/// registered `Log*` `StdlibKernel` variants. `Log.level` takes a `LogLevel`
-/// from `Ipe.Level` and produces a cross-shape `Setting a` value.
-/// Registered in [`COMPILED_STD_MODULES`] (NOT `MODULES`); NOT in
-/// `STDLIB_MODULE_QUALIFIERS`, so the disjointness invariant holds.
-const LOG: &str = include_str!("../Ipe/Log.ipe");
-
-/// `Ipe.Level` — the `LogLevel` severity-tag ADT constructors (`debug` / `info`
-/// / `warn` / `error`).  Each member is a point-free `Ffi.kernel "Level_*"`
-/// alias resolved by `detect_kernel_alias` to the registered `Level*`
-/// `StdlibKernel` variants.  Registered in [`COMPILED_STD_MODULES`] (NOT
-/// `MODULES`); NOT in `STDLIB_MODULE_QUALIFIERS`, so the
-/// `compiled_vs_kernel_qualifier_disjoint` invariant holds.
-const LEVEL: &str = include_str!("../Ipe/Level.ipe");
-
-/// `Ipe.Error` — the structured `Error` type (Layer-3 Ipê source).
-///
-/// `Error` / `ErrorKind` / `ErrorDetails` are reserved builtin types;
-/// the module re-exports them via `Error(..)` / `ErrorKind(..)` /
-/// `ErrorDetails(..)` and provides every constructor + inspector as a
-/// point-free `Ffi.kernel "Error_*"` alias. Registered in
-/// [`COMPILED_STD_MODULES`] (NOT `MODULES`); NOT in
-/// `STDLIB_MODULE_QUALIFIERS`, so the disjointness invariant holds.
-const ERROR: &str = include_str!("../Ipe/Error.ipe");
 
 /// Every compiled-source stdlib module, keyed by its dotted import name.
 ///
@@ -708,36 +735,6 @@ pub const COMPILED_STD_MODULES: &[CompiledStdModule] = &[
         dotted: "Ipe.Tuple",
         source: TUPLE,
     },
-    // Ipe.Basics — Layer-3 source (Tier-A auto-import, the implicit prelude).
-    // Every member is a point-free `Ffi.kernel "Basics_*"` alias resolved by
-    // `detect_kernel_alias` to the registered `Basics*` kernels. The ambient
-    // unqualified surface (`identity`/`not`/…) is preserved by
-    // `install_builtin_vars`, which routes those names to the same kernel
-    // registry entries independently of `STDLIB_MODULE_QUALIFIERS`.
-    // Disjoint from `STDLIB_MODULE_QUALIFIERS` (no `"Basics"` entry there).
-    CompiledStdModule {
-        dotted: "Ipe.Basics",
-        source: BASICS,
-    },
-    // Ipe.Maybe — Layer-3 source; every member is a point-free
-    // `Ffi.kernel "Maybe_*"` alias resolved by `detect_kernel_alias` to the
-    // registered `Maybe*` kernels (`ipe_runtime::maybe::*`). The `Maybe` type
-    // and its `Just`/`Nothing` constructors remain kernel-anchored (reserved
-    // builtin type). Disjoint from `STDLIB_MODULE_QUALIFIERS` (no `"Maybe"`
-    // entry there once the qualifier row is removed).
-    CompiledStdModule {
-        dotted: "Ipe.Maybe",
-        source: MAYBE,
-    },
-    // Ipe.Result — Layer-3 source; every member is a point-free
-    // `Ffi.kernel "Result_*"` alias resolved by `detect_kernel_alias` to the
-    // registered `Result*` kernels (`ipe_runtime::result::*`). The `Result`
-    // type and `Ok`/`Err` constructors remain ambient builtins.
-    // Disjoint from `STDLIB_MODULE_QUALIFIERS` (no `"Result"` entry there).
-    CompiledStdModule {
-        dotted: "Ipe.Result",
-        source: RESULT,
-    },
     // Ipe.Bitwise — Layer-3 source; every member is a point-free
     // `Ffi.kernel "Bitwise_*"` alias resolved by `detect_kernel_alias` to the
     // registered `Bitwise*` kernels (`ipe_runtime::bitwise::*`). Disjoint from
@@ -746,6 +743,23 @@ pub const COMPILED_STD_MODULES: &[CompiledStdModule] = &[
         dotted: "Ipe.Bitwise",
         source: BITWISE,
     },
+    // Ipe.String — Layer-3 source; every member is a point-free
+    // `Ffi.kernel "String_*"` alias resolved by `detect_kernel_alias` to the
+    // registered `String*` kernels. Also re-exports the `String` builtin type
+    // via the reserved-builtin-type path in `build_module_exports`. Disjoint
+    // from `STDLIB_MODULE_QUALIFIERS` (no `"String"` entry there).
+    CompiledStdModule {
+        dotted: "Ipe.String",
+        source: STRING,
+    },
+    // Ipe.Encoding — Layer-3 source; every member is a point-free
+    // `Ffi.kernel "Encoding_*"` alias resolved by `detect_kernel_alias` to the
+    // registered `Encoding*` kernels (`ipe_runtime::encoding::*`). Disjoint from
+    // `STDLIB_MODULE_QUALIFIERS` (no `"Encoding"` entry there).
+    CompiledStdModule {
+        dotted: "Ipe.Encoding",
+        source: ENCODING,
+    },
     // Ipe.Debug — Layer-3 source; every member is a point-free
     // `Ffi.kernel "Debug_*"` alias resolved by `detect_kernel_alias` to the
     // registered `Debug*` kernels (`ipe_runtime::debug::*`). Disjoint from
@@ -753,6 +767,15 @@ pub const COMPILED_STD_MODULES: &[CompiledStdModule] = &[
     CompiledStdModule {
         dotted: "Ipe.Debug",
         source: DEBUG,
+    },
+    // Ipe.Uuid — Layer-3 source; `v4`/`v7`/`parse` are point-free
+    // `Ffi.kernel "Uuid_*"` aliases resolved by `detect_kernel_alias` to the
+    // registered `UuidV4`/`UuidV7`/`UuidParse` kernels
+    // (`ipe_runtime::uuid_kernel::*`). Disjoint from `STDLIB_MODULE_QUALIFIERS`
+    // (no `"Uuid"` entry there).
+    CompiledStdModule {
+        dotted: "Ipe.Uuid",
+        source: UUID,
     },
     // Ipe.Time — Layer-3 source; every member is a point-free
     // `Ffi.kernel "Time_*"` alias resolved by `detect_kernel_alias` to the
@@ -785,6 +808,49 @@ pub const COMPILED_STD_MODULES: &[CompiledStdModule] = &[
     CompiledStdModule {
         dotted: "Ipe.Char",
         source: CHAR,
+    },
+    // Ipe.Io — Layer-3 source; every member is a point-free
+    // `Ffi.kernel "Io_*"` alias resolved by `detect_kernel_alias` to the
+    // registered `Io*` kernels (`ipe_runtime::io::*`). Disjoint from
+    // `STDLIB_MODULE_QUALIFIERS` (no `"Io"` entry there).
+    CompiledStdModule {
+        dotted: "Ipe.Io",
+        source: IO,
+    },
+    // Ipe.Dict — Layer-3 source; every member is a point-free
+    // `Ffi.kernel "Dict_*"` alias resolved by `detect_kernel_alias` to the
+    // registered `Dict*` kernels (`ipe_runtime::dict::*`). Disjoint from
+    // `STDLIB_MODULE_QUALIFIERS` (no `"Dict"` entry there).
+    CompiledStdModule {
+        dotted: "Ipe.Dict",
+        source: DICT,
+    },
+    // Ipe.List — Layer-3 source; pure members compile from Ipê; the eleven
+    // kernel-backed members (`sort`/`singleton`/`repeat`/`product`/
+    // `intersperse`/`partition`/`unzip`/`map2`–`map5`) are point-free
+    // `Ffi.kernel "List_*"` aliases resolved by `detect_kernel_alias` to the
+    // registered `List*` kernels (`ipe_runtime::list::*`). Disjoint from
+    // `STDLIB_MODULE_QUALIFIERS` (no `"List"` entry there).
+    CompiledStdModule {
+        dotted: "Ipe.List",
+        source: LIST,
+    },
+    // Ipe.Task — Layer-3 source; members are either point-free
+    // `Ffi.kernel "Task_*"` aliases resolved by `detect_kernel_alias` to the
+    // registered `Task*` kernels (`ipe_runtime::task::*`), or pure Ipê over
+    // those aliases (`BackoffStrategy` / `RetryPolicy`). Disjoint from
+    // `STDLIB_MODULE_QUALIFIERS` (no `"Task"` entry there).
+    CompiledStdModule {
+        dotted: "Ipe.Task",
+        source: TASK,
+    },
+    // Ipe.Decimal — Layer-3 source; every member is a point-free
+    // `Ffi.kernel "Decimal_*"` alias resolved by `detect_kernel_alias` to the
+    // registered `Decimal*` kernels (`ipe_runtime::decimal::*`). Disjoint from
+    // `STDLIB_MODULE_QUALIFIERS` (no `"Decimal"` entry there after migration).
+    CompiledStdModule {
+        dotted: "Ipe.Decimal",
+        source: DECIMAL,
     },
     CompiledStdModule {
         dotted: "Ipe.Random",
@@ -1021,27 +1087,35 @@ pub const COMPILED_STD_MODULES: &[CompiledStdModule] = &[
         dotted: "Ipe.Locale",
         source: LOCALE,
     },
-    // Ipe.Log — Layer-3 source; `info`/`debug`/`warn`/`error` and their
-    // `*With` variants are point-free `Ffi.kernel "Log_*"` aliases resolved by
-    // `detect_kernel_alias` to the registered `Log*` kernels. `level` is
-    // likewise. Disjoint from `STDLIB_MODULE_QUALIFIERS` (no `"Log"` entry there).
+    // Ipe.Math — Layer-3 source; every member is a point-free
+    // `Ffi.kernel "Math_*"` alias resolved by `detect_kernel_alias` to the
+    // registered `Math*` kernels (`ipe_runtime::math::*`). Disjoint from
+    // `STDLIB_MODULE_QUALIFIERS` (no `"Math"` entry there), so the invariant
+    // holds.
+    CompiledStdModule {
+        dotted: "Ipe.Math",
+        source: MATH,
+    },
+    CompiledStdModule {
+        dotted: "Ipe.Basics",
+        source: BASICS,
+    },
+    CompiledStdModule {
+        dotted: "Ipe.Maybe",
+        source: MAYBE,
+    },
+    CompiledStdModule {
+        dotted: "Ipe.Result",
+        source: RESULT,
+    },
     CompiledStdModule {
         dotted: "Ipe.Log",
         source: LOG,
     },
-    // Ipe.Level — `LogLevel` severity-tag ADT constructors (`debug` / `info` /
-    // `warn` / `error`).  Each member is a point-free `Ffi.kernel "Level_*"`
-    // alias resolved by `detect_kernel_alias` to the registered `Level*`
-    // `StdlibKernel` variants.  Disjoint from `STDLIB_MODULE_QUALIFIERS` (no
-    // `"Level"` entry there), so the invariant holds.
     CompiledStdModule {
         dotted: "Ipe.Level",
         source: LEVEL,
     },
-    // Ipe.Error — Layer-3 source; constructors/inspectors are point-free
-    // `Ffi.kernel "Error_*"` aliases. `Error` / `ErrorKind` / `ErrorDetails`
-    // are reserved builtin types re-exported via `exposing`. Disjoint from
-    // `STDLIB_MODULE_QUALIFIERS` (no `"Error"` entry there).
     CompiledStdModule {
         dotted: "Ipe.Error",
         source: ERROR,
@@ -1091,20 +1165,11 @@ mod tests {
         }
     }
 
-    /// `Ipe.Basics` is now a compiled-source module (`COMPILED_STD_MODULES`),
-    /// not a parse-fixture module (`MODULES`). `source()` (which searches `MODULES`)
-    /// returns `None`; `compiled_std_source_segments` finds it. The removed
-    /// `Ipe.Prelude` alias still resolves to nothing.
+    /// `Ipe.Basics` resolves to its embedded source; the removed `Ipe.Prelude`
+    /// alias does not resolve to anything (no backward-compatible mapping).
     #[test]
     fn basics_resolves_and_prelude_is_gone() {
-        // Basics moved to compiled-source — not in the MODULES parse-fixture table.
-        assert_eq!(source("Ipe.Basics"), None);
-        // But it IS in COMPILED_STD_MODULES.
-        let basics_segs: Vec<String> = ["Ipe", "Basics"].iter().map(|s| (*s).to_owned()).collect();
-        assert!(
-            is_compiled_source_segments(&basics_segs),
-            "Ipe.Basics must be a compiled-source module"
-        );
+        assert_eq!(source("Ipe.Basics"), Some(BASICS));
         assert_eq!(source("Ipe.Prelude"), None);
     }
 
@@ -1223,12 +1288,8 @@ mod tests {
         assert!(is_compiled_source_segments(&palette));
         assert!(compiled_std_source_segments(&palette).is_some());
 
-        // `Ipe.Log` is now a compiled-source module.
         let log = vec!["Ipe".to_owned(), "Log".to_owned()];
-        assert!(
-            is_compiled_source_segments(&log),
-            "Ipe.Log is compiled-source"
-        );
+        assert!(!is_compiled_source_segments(&log), "Ipe.Log is a kernel");
 
         let nope = vec!["Ipe".to_owned(), "Nope".to_owned()];
         assert!(!is_compiled_source_segments(&nope));

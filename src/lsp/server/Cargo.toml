@@ -17,5 +17,8 @@ crossbeam-channel = "0.5"
 # `Cancelled::catch` around worker-thread query demands.
 salsa = "=0.27.2"
 
+[dev-dependencies]
+ipe_stdlib = { path = "../../stdlib" }
+
 [lints]
 workspace = true

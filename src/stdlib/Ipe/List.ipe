@@ -1,4 +1,4 @@
--- | `Ipe.List` — transform, filter, and combine lists.
+-- | `Ipe.List` — transform, filter, and combine lists (compiled-source Layer-3).
 --
 -- A `List a` is an ordered sequence of values that all share the type `a`:
 -- `[ 1, 2, 3 ]` is a `List Int`, `[ "a", "b" ]` a `List String`. Lists are
@@ -8,10 +8,11 @@
 --
 -- The functions divide into a few families: shape (`isEmpty`, `length`,
 -- `reverse`), taking apart (`head`, `tail`, `take`, `drop`), building up
--- (`cons`, `append`, `concat`, `range`), element-wise transforms (`map`,
--- `filter`, `filterMap`, `indexedMap`), searching (`member`, `find`, `any`,
--- `all`), folding to a single value (`foldl`, `foldr`, `sum`, `maximum`,
--- `minimum`), and ordering (`sortBy`, `sortWith`, `unique`).
+-- (`cons`, `singleton`, `repeat`, `append`, `concat`, `range`), element-wise
+-- transforms (`map`, `filter`, `filterMap`, `indexedMap`), searching
+-- (`member`, `find`, `any`, `all`), folding to a single value (`foldl`,
+-- `foldr`, `sum`, `product`, `maximum`, `minimum`), and ordering (`sortBy`,
+-- `sortWith`, `sort`, `unique`).
 --
 -- Functions that might not find an answer return a `Ipe.Maybe`: `head []` is
 -- `Nothing`, `head [ 1, 2 ]` is `Just 1`. That is how the type system forces a
@@ -27,17 +28,20 @@
 --     -- == [ 4, 8 ]
 --
 -- See also: `Ipe.Maybe`, `Ipe.Dict` (key-value lookup), `Ipe.Set`.
-
--- The reference bodies below document the Elm-matching semantics of each
--- member; the executable implementations are the native kernels resolved by
--- the `List` qualifier, so this source is parsed for its surface and
--- doc-comments but is not itself the compiled implementation.
+--
+-- Every member is a point-free `Ffi.kernel` alias resolved by
+-- `detect_kernel_alias` to a registered `List*` `StdlibKernel` variant
+-- (`ipe_runtime::list::*`). The type constraints (`comparable`, `number`)
+-- are enforced by the type-checker at the call site.
 module Ipe.List exposing
-    ( isEmpty
+    ( List
+    , isEmpty
     , length
     , head
     , tail
     , cons
+    , singleton
+    , repeat
     , reverse
     , take
     , drop
@@ -58,894 +62,280 @@ module Ipe.List exposing
     , filterMap
     , sortBy
     , sortWith
+    , sort
     , sum
+    , product
     , maximum
     , minimum
     , unique
+    , intersperse
+    , partition
+    , unzip
+    , map2
+    , map3
+    , map4
+    , map5
     )
 
 
--- | `map f list` — apply `f` to every element, giving a new list of the
--- results in the same order. The list's length is unchanged; only the values
--- (and possibly their type) change.
---
--- Example:
---
---     List.map (\n -> n * 2) [ 1, 2, 3 ] == [ 2, 4, 6 ]
---     List.map String.fromInt [ 1, 2 ] == [ "1", "2" ]
-{-| `map f list` — apply `f` to every element, producing a new list of the
-same length.
+import Ipe.Ffi as Ffi
 
-```ipe
-map (\n -> n * 2) [ 1, 2, 3 ] --> [ 2, 4, 6 ]
-map String.fromInt [ 10, 20 ] --> [ "10", "20" ]
-```
+
+-- | `map f list` — apply `f` to every element, giving a new list of the
+-- results in the same order. The list's length is unchanged.
+{-| `map f list` — apply `f` to every element, giving a new list of results in the same order.
 -}
 map : (a -> b) -> List a -> List b
-map fn list =
-    mapHelp fn list []
+map = Ffi.kernel "List_map"
 
 
-mapHelp fn list acc =
-    case list of
-
-        [] ->
-            reverseHelp acc []
-
-        x :: rest ->
-            mapHelp fn rest (fn x :: acc)
-
-
--- | `filter keep list` — keep only the elements for which `keep` returns
--- `True`, preserving their order.
---
--- Example:
---
---     List.filter (\n -> n > 2) [ 1, 2, 3, 4 ] == [ 3, 4 ]
---     List.filter (\n -> modBy 2 n == 0) [ 1, 2, 3, 4 ] == [ 2, 4 ]
-{-| `filter keep list` — keep only elements for which `keep` returns `True`.
-
-```ipe
-filter (\n -> n > 2) [ 1, 2, 3, 4 ] --> [ 3, 4 ]
-filter (\n -> modBy 2 n == 0) [ 1, 2, 3, 4 ] --> [ 2, 4 ]
-```
+-- | `filter keep list` — keep only the elements for which `keep` returns `True`,
+-- preserving their order.
+{-| `filter keep list` — keep only the elements for which `keep` returns `True`.
 -}
 filter : (a -> Bool) -> List a -> List a
-filter pred list =
-    filterHelp pred list []
+filter = Ffi.kernel "List_filter"
 
 
-filterHelp pred list acc =
-    case list of
-
-        [] ->
-            reverseHelp acc []
-
-        x :: rest ->
-            filterHelp
-                pred
-                rest
-                (if pred x then
-                    x :: acc
-
-                else
-                    acc)
-
-
--- | `any test list` — `True` if `test` returns `True` for at least one
--- element; `False` for the empty list. Stops at the first match.
---
--- Example:
---
---     List.any (\n -> n > 3) [ 1, 2, 3, 4 ] == True
---     List.any (\n -> n > 3) [ 1, 2, 3 ] == False
-{-| `any test list` — `True` if `test` returns `True` for at least one element.
-
-```ipe
-any (\n -> n > 3) [ 1, 2, 3, 4 ] --> True
-any (\n -> n > 3) [ 1, 2, 3 ] --> False
-any (\n -> n > 3) [] --> False
-```
--}
-any : (a -> Bool) -> List a -> Bool
-any pred list =
-    case list of
-
-        [] ->
-            False
-
-        x :: rest ->
-            if pred x then
-                True
-
-            else
-                any pred rest
-
-
--- | `all test list` — `True` if `test` returns `True` for every element;
--- `True` for the empty list (there is nothing to violate it). Stops at the
--- first element that fails.
---
--- Example:
---
---     List.all (\n -> n > 0) [ 1, 2, 3 ] == True
---     List.all (\n -> n > 0) [ 1, -1, 3 ] == False
-{-| `all test list` — `True` if `test` returns `True` for every element.
-
-```ipe
-all (\n -> n > 0) [ 1, 2, 3 ] --> True
-all (\n -> n > 0) [ 1, -1, 3 ] --> False
-all (\n -> n > 0) [] --> True
-```
--}
-all : (a -> Bool) -> List a -> Bool
-all pred list =
-    case list of
-
-        [] ->
-            True
-
-        x :: rest ->
-            if pred x then
-                all pred rest
-
-            else
-                False
-
-
--- | `find test list` — `Just` the first element for which `test` returns
--- `True`, or `Nothing` if none do.
---
--- Example:
---
---     List.find (\n -> n > 2) [ 1, 2, 3, 4 ] == Just 3
---     List.find (\n -> n > 9) [ 1, 2, 3 ] == Nothing
-{-| `find test list` — `Just` the first element satisfying `test`, or `Nothing`.
-
-```ipe
-find (\n -> n > 2) [ 1, 2, 3, 4 ] --> Just 3
-find (\n -> n > 9) [ 1, 2, 3 ] --> Nothing
-find (\s -> String.length s > 3) [ "hi", "hello", "hey" ] --> Just "hello"
-```
--}
-find : (a -> Bool) -> List a -> Maybe a
-find pred list =
-    case list of
-
-        [] ->
-            Nothing
-
-        x :: rest ->
-            if pred x then
-                Just x
-
-            else
-                find pred rest
-
-
--- | `foldl step initial list` — reduce the list to a single value, applying
--- `step element accumulator` from the LEFT (first element first). The
--- accumulator starts at `initial`.
---
--- `foldl` is the general tool the specific folds (`sum`, `maximum`) are built
--- from: anything that walks a list building up one result can be a `foldl`.
---
--- Example:
---
---     List.foldl (\x acc -> x + acc) 0 [ 1, 2, 3 ] == 6
---     List.foldl (\x acc -> x :: acc) [] [ 1, 2, 3 ] == [ 3, 2, 1 ]
+-- | `foldl step initial list` — reduce from the left; `step element accumulator`.
 {-| `foldl step initial list` — reduce from the left; `step element accumulator`.
-
-```ipe
-foldl (\x acc -> x + acc) 0 [ 1, 2, 3 ] --> 6
-foldl (\x acc -> String.append acc x) "" [ "a", "b", "c" ] --> "abc"
-```
 -}
 foldl : (a -> b -> b) -> b -> List a -> b
-foldl fn acc list =
-    case list of
-
-        [] ->
-            acc
-
-        x :: rest ->
-            foldl fn (fn x acc) rest
+foldl = Ffi.kernel "List_foldl"
 
 
--- | `foldr step initial list` — reduce the list to a single value, applying
--- `step element accumulator` from the RIGHT (last element first). The
--- accumulator starts at `initial`.
---
--- Folding from the right with `::` rebuilds the list unchanged, which makes
--- `foldr` the natural fold for anything that constructs a new list in order.
---
--- Example:
---
---     List.foldr (\x acc -> x :: acc) [] [ 1, 2, 3 ] == [ 1, 2, 3 ]
---     List.foldr (\x acc -> x + acc) 0 [ 1, 2, 3 ] == 6
+-- | `foldr step initial list` — reduce from the right; `step element accumulator`.
 {-| `foldr step initial list` — reduce from the right; `step element accumulator`.
-
-```ipe
-foldr (\x acc -> x :: acc) [] [ 1, 2, 3 ] --> [ 1, 2, 3 ]
-foldr (\x acc -> x + acc) 0 [ 1, 2, 3 ] --> 6
-```
 -}
 foldr : (a -> b -> b) -> b -> List a -> b
-foldr fn acc list =
-    foldl (\x a -> fn x a) acc (reverseHelp list [])
-
-
--- | `concatMap f list` — apply `f`, which returns a list, to every element,
--- and flatten all the resulting lists into one. `List.concatMap f xs` is
--- `List.concat (List.map f xs)` in a single pass.
---
--- Example:
---
---     List.concatMap (\n -> [ n, n ]) [ 1, 2 ] == [ 1, 1, 2, 2 ]
---     List.concatMap (\n -> List.range 1 n) [ 1, 3 ] == [ 1, 1, 2, 3 ]
-{-| `concatMap f list` — apply `f` to each element and flatten the results.
-
-```ipe
-concatMap (\n -> [ n, n ]) [ 1, 2 ] --> [ 1, 1, 2, 2 ]
-concatMap (\n -> List.range 1 n) [ 1, 3 ] --> [ 1, 1, 2, 3 ]
-```
--}
-concatMap : (a -> List b) -> List a -> List b
-concatMap fn list =
-    reverseHelp (concatMapHelp fn list []) []
-
-
--- Private tail-recursive worker for `concatMap`. No explicit signature: an
--- explicit one over-constrains inference at polymorphic call sites.
-concatMapHelp fn list acc =
-    case list of
-
-        [] ->
-            acc
-
-        x :: rest ->
-            concatMapHelp fn rest (reverseHelp (fn x) acc)
-
-
--- | `indexedMap f list` — like `map`, but `f` also receives each element's
--- position, starting at 0: `f index element`.
---
--- Example:
---
---     List.indexedMap (\i x -> ( i, x )) [ "a", "b" ] == [ ( 0, "a" ), ( 1, "b" ) ]
---     List.indexedMap (\i x -> i + x) [ 10, 20, 30 ] == [ 10, 21, 32 ]
-{-| `indexedMap f list` — like `map` but `f` also receives each element's index.
-
-```ipe
-indexedMap (\i x -> ( i, x )) [ "a", "b", "c" ] --> [ ( 0, "a" ), ( 1, "b" ), ( 2, "c" ) ]
-indexedMap (\i x -> i + x) [ 10, 20, 30 ] --> [ 10, 21, 32 ]
-```
--}
-indexedMap : (Int -> a -> b) -> List a -> List b
-indexedMap fn list =
-    indexedMapHelp fn 0 list []
-
-
--- Private tail-recursive worker for `indexedMap`. The explicit signature is
--- load-bearing: without it the accumulator would be inferred too loosely.
-indexedMapHelp : (Int -> a -> b) -> Int -> List a -> List b -> List b
-indexedMapHelp fn i list acc =
-    case list of
-
-        [] ->
-            reverseHelp acc []
-
-        x :: rest ->
-            indexedMapHelp fn (i + 1) rest (fn i x :: acc)
-
-
--- | `isEmpty list` — `True` if the list has no elements. Equivalent to
--- `List.length list == 0`, but does not walk the whole list.
---
--- Example:
---
---     List.isEmpty [] == True
---     List.isEmpty [ 1 ] == False
-{-| `isEmpty list` — `True` if the list has no elements.
-
-```ipe
-isEmpty [] --> True
-isEmpty [ 1 ] --> False
-isEmpty [ "a", "b" ] --> False
-```
--}
-isEmpty : List a -> Bool
-isEmpty list =
-    case list of
-
-        [] ->
-            True
-
-        _ ->
-            False
+foldr = Ffi.kernel "List_foldr"
 
 
 -- | `length list` — the number of elements in the list.
---
--- Example:
---
---     List.length [ 1, 2, 3 ] == 3
---     List.length [] == 0
-{-| `length list` — the number of elements.
-
-```ipe
-length [ 1, 2, 3 ] --> 3
-length [] --> 0
-length [ "a", "b" ] --> 2
-```
+{-| `length list` — the number of elements in the list.
 -}
 length : List a -> Int
-length list =
-    lengthHelp list 0
+length = Ffi.kernel "List_length"
 
 
-lengthHelp : List a -> Int -> Int
-lengthHelp list n =
-    case list of
-
-        [] ->
-            n
-
-        _ :: rest ->
-            lengthHelp rest (n + 1)
-
-
--- | `head list` — `Just` the first element, or `Nothing` if the list is
--- empty. The empty case is why the result is a `Maybe`: there is no first
--- element to return.
---
--- Example:
---
---     List.head [ 1, 2, 3 ] == Just 1
---     List.head [] == Nothing
+-- | `head list` — `Just` the first element, or `Nothing` if empty.
 {-| `head list` — `Just` the first element, or `Nothing` if empty.
-
-```ipe
-head [ 1, 2, 3 ] --> Just 1
-head [] --> Nothing
-head [ "only" ] --> Just "only"
-```
 -}
 head : List a -> Maybe a
-head list =
-    case list of
-
-        [] ->
-            Nothing
-
-        x :: _ ->
-            Just x
+head = Ffi.kernel "List_head"
 
 
--- | `tail list` — `Just` the list with its first element removed, or
--- `Nothing` if the list is empty.
---
--- Example:
---
---     List.tail [ 1, 2, 3 ] == Just [ 2, 3 ]
---     List.tail [] == Nothing
+-- | `tail list` — `Just` the list without its first element, or `Nothing` if empty.
 {-| `tail list` — `Just` the list without its first element, or `Nothing` if empty.
-
-```ipe
-tail [ 1, 2, 3 ] --> Just [ 2, 3 ]
-tail [] --> Nothing
-tail [ 42 ] --> Just []
-```
 -}
 tail : List a -> Maybe (List a)
-tail list =
-    case list of
-
-        [] ->
-            Nothing
-
-        _ :: rest ->
-            Just rest
+tail = Ffi.kernel "List_tail"
 
 
--- | `cons x list` — a new list with `x` added at the front. The named form of
--- the `::` operator (`x :: list`).
---
--- Example:
---
---     List.cons 1 [ 2, 3 ] == [ 1, 2, 3 ]
-{-| `cons x list` — prepend `x` to the list; the named form of `x :: list`.
-
-```ipe
-cons 1 [ 2, 3 ] --> [ 1, 2, 3 ]
-cons "a" [ "b", "c" ] --> [ "a", "b", "c" ]
-cons 0 [] --> [ 0 ]
-```
--}
-cons : a -> List a -> List a
-cons x list =
-    x :: list
-
-
--- | `reverse list` — the list with its elements in the opposite order.
---
--- Example:
---
---     List.reverse [ 1, 2, 3 ] == [ 3, 2, 1 ]
-{-| `reverse list` — the list in reverse order.
-
-```ipe
-reverse [ 1, 2, 3 ] --> [ 3, 2, 1 ]
-reverse [] --> []
-reverse [ "a" ] --> [ "a" ]
-```
--}
-reverse : List a -> List a
-reverse list =
-    reverseHelp list []
-
-
-reverseHelp : List a -> List a -> List a
-reverseHelp list acc =
-    case list of
-
-        [] ->
-            acc
-
-        x :: rest ->
-            reverseHelp rest (x :: acc)
-
-
--- | `take n list` — the first `n` elements, or the whole list when it is
--- shorter than `n`. A zero or negative `n` gives `[]`.
---
--- Example:
---
---     List.take 2 [ 1, 2, 3, 4 ] == [ 1, 2 ]
---     List.take 9 [ 1, 2 ] == [ 1, 2 ]
---     List.take 0 [ 1, 2 ] == []
-{-| `take n list` — the first `n` elements; the whole list when shorter than `n`.
-
-```ipe
-take 2 [ 1, 2, 3, 4 ] --> [ 1, 2 ]
-take 9 [ 1, 2 ] --> [ 1, 2 ]
-take 0 [ 1, 2 ] --> []
-```
--}
-take : Int -> List a -> List a
-take n list =
-    takeHelp n list []
-
-
-takeHelp n list acc =
-    if n <= 0 then
-        reverseHelp acc []
-
-    else
-        case list of
-
-            [] ->
-                reverseHelp acc []
-
-            x :: rest ->
-                takeHelp (n - 1) rest (x :: acc)
-
-
--- | `drop n list` — the list with its first `n` elements removed, or `[]`
--- when it is shorter than `n`. A zero or negative `n` leaves the list
--- unchanged. Together, `take n list` and `drop n list` split a list in two.
---
--- Example:
---
---     List.drop 2 [ 1, 2, 3, 4 ] == [ 3, 4 ]
---     List.drop 9 [ 1, 2 ] == []
-{-| `drop n list` — the list without its first `n` elements.
-
-```ipe
-drop 2 [ 1, 2, 3, 4 ] --> [ 3, 4 ]
-drop 9 [ 1, 2 ] --> []
-drop 0 [ 1, 2 ] --> [ 1, 2 ]
-```
--}
-drop : Int -> List a -> List a
-drop n list =
-    if n <= 0 then
-        list
-
-    else
-        case list of
-
-            [] ->
-                []
-
-            _ :: rest ->
-                drop (n - 1) rest
-
-
--- | `append xs ys` — a new list with all of `xs` followed by all of `ys`.
--- The `++` operator is the same operation (`xs ++ ys`).
---
--- Example:
---
---     List.append [ 1, 2 ] [ 3, 4 ] == [ 1, 2, 3, 4 ]
---     List.append [] [ 1 ] == [ 1 ]
-{-| `append xs ys` — all of `xs` followed by all of `ys`.
-
-```ipe
-append [ 1, 2 ] [ 3, 4 ] --> [ 1, 2, 3, 4 ]
-append [] [ 1 ] --> [ 1 ]
-append [ "a" ] [ "b", "c" ] --> [ "a", "b", "c" ]
-```
--}
-append : List a -> List a -> List a
-append xs ys =
-    appendHelp (reverseHelp xs []) ys
-
-
--- Private helper for `append`: cons each element of the reversed prefix
--- `revXs` onto `ys`, reconstructing the original left-to-right order.
-appendHelp revXs ys =
-    case revXs of
-
-        [] ->
-            ys
-
-        x :: rest ->
-            appendHelp rest (x :: ys)
-
-
--- | `concat lists` — flatten a list of lists into one, preserving order.
---
--- Example:
---
---     List.concat [ [ 1, 2 ], [ 3 ], [ 4, 5 ] ] == [ 1, 2, 3, 4, 5 ]
---     List.concat [ [], [ 1 ], [] ] == [ 1 ]
-{-| `concat lists` — flatten a list of lists into one list.
-
-```ipe
-concat [ [ 1, 2 ], [ 3 ], [ 4, 5 ] ] --> [ 1, 2, 3, 4, 5 ]
-concat [ [], [ 1 ], [] ] --> [ 1 ]
-concat [] --> []
-```
--}
-concat : List (List a) -> List a
-concat lists =
-    concatHelp lists []
-
-
-concatHelp lists acc =
-    case lists of
-
-        [] ->
-            reverseHelp acc []
-
-        xs :: rest ->
-            concatHelp rest (appendReverseOnto xs acc)
-
-
--- Private helper for `concat`: cons each element of `xs` onto `acc` in
--- reverse order.
-appendReverseOnto xs acc =
-    case xs of
-
-        [] ->
-            acc
-
-        x :: rest ->
-            appendReverseOnto rest (x :: acc)
-
-
--- | `member x list` — `True` if `x` is equal to some element of the list.
--- Works for any type whose values can be compared with `==`.
---
--- Example:
---
---     List.member 2 [ 1, 2, 3 ] == True
---     List.member 9 [ 1, 2, 3 ] == False
+-- | `member x list` — `True` if `x` equals any element of `list`.
 {-| `member x list` — `True` if `x` equals any element of `list`.
-
-```ipe
-member 2 [ 1, 2, 3 ] --> True
-member 9 [ 1, 2, 3 ] --> False
-member "b" [ "a", "b", "c" ] --> True
-```
 -}
 member : a -> List a -> Bool
-member x list =
-    case list of
-
-        [] ->
-            False
-
-        y :: rest ->
-            if x == y then
-                True
-
-            else
-                member x rest
+member = Ffi.kernel "List_member"
 
 
--- | `range lo hi` — the ascending list of integers from `lo` to `hi`,
--- inclusive. When `lo > hi` the result is `[]`.
---
--- Example:
---
---     List.range 1 5 == [ 1, 2, 3, 4, 5 ]
---     List.range 3 3 == [ 3 ]
---     List.range 5 1 == []
+-- | `range lo hi` — ascending integers from `lo` to `hi` inclusive.
 {-| `range lo hi` — ascending integers from `lo` to `hi` inclusive.
-
-```ipe
-range 1 5 --> [ 1, 2, 3, 4, 5 ]
-range 3 3 --> [ 3 ]
-range 5 1 --> []
-```
 -}
 range : Int -> Int -> List Int
-range lo hi =
-    rangeHelp lo hi []
+range = Ffi.kernel "List_range"
 
 
--- Private tail-recursive worker for `range`.
-rangeHelp : Int -> Int -> List Int -> List Int
-rangeHelp lo hi acc =
-    if lo > hi then
-        reverseHelp acc []
-
-    else
-        rangeHelp (lo + 1) hi (lo :: acc)
+-- | `reverse list` — the list in reverse order.
+{-| `reverse list` — the list in reverse order.
+-}
+reverse : List a -> List a
+reverse = Ffi.kernel "List_reverse"
 
 
--- | `zip xs ys` — pair up elements from two lists position by position,
--- stopping at the end of the shorter one. The result is a list of tuples.
---
--- Example:
---
---     List.zip [ 1, 2, 3 ] [ "a", "b" ] == [ ( 1, "a" ), ( 2, "b" ) ]
---     List.zip [] [ 1 ] == []
+-- | `append xs ys` — all of `xs` followed by all of `ys`; the named form of `xs ++ ys`.
+{-| `append xs ys` — all of `xs` followed by all of `ys`.
+-}
+append : List a -> List a -> List a
+append = Ffi.kernel "List_append"
+
+
+-- | `concat lists` — flatten a list of lists into one list.
+{-| `concat lists` — flatten a list of lists into one list.
+-}
+concat : List (List a) -> List a
+concat = Ffi.kernel "List_concat"
+
+
+-- | `take n list` — the first `n` elements; the whole list when shorter than `n`.
+{-| `take n list` — the first `n` elements; the whole list when shorter than `n`.
+-}
+take : Int -> List a -> List a
+take = Ffi.kernel "List_take"
+
+
+-- | `drop n list` — the list without its first `n` elements.
+{-| `drop n list` — the list without its first `n` elements.
+-}
+drop : Int -> List a -> List a
+drop = Ffi.kernel "List_drop"
+
+
+-- | `zip xs ys` — pair elements position-by-position, stopping at the shorter list.
 {-| `zip xs ys` — pair elements position-by-position, stopping at the shorter list.
-
-```ipe
-zip [ 1, 2, 3 ] [ "a", "b" ] --> [ ( 1, "a" ), ( 2, "b" ) ]
-zip [] [ 1 ] --> []
-zip [ 10, 20 ] [ True, False ] --> [ ( 10, True ), ( 20, False ) ]
-```
 -}
 zip : List a -> List b -> List ( a, b )
-zip xs ys =
-    zipHelp xs ys []
+zip = Ffi.kernel "List_zip"
 
 
--- The explicit signature on this private worker is load-bearing: the
--- tuple-typed accumulator would otherwise be inferred too loosely, so the
--- annotation pins it to keep the tail-recursive lowering in constant stack.
-zipHelp : List a -> List b -> List ( a, b ) -> List ( a, b )
-zipHelp xs ys acc =
-    case xs of
-
-        [] ->
-            reverseHelp acc []
-
-        x :: xRest ->
-            case ys of
-
-                [] ->
-                    reverseHelp acc []
-
-                y :: yRest ->
-                    zipHelp xRest yRest (( x, y ) :: acc)
+-- | `cons x list` — prepend `x` to the list; the named form of `x :: list`.
+{-| `cons x list` — prepend `x` to the list; the named form of `x :: list`.
+-}
+cons : a -> List a -> List a
+cons = Ffi.kernel "List_cons"
 
 
--- | `filterMap f list` — apply `f`, which returns a `Maybe`, to every element
--- and keep only the `Just` payloads, in order. It maps and filters in one
--- pass: a step that both transforms an element and may reject it.
---
--- Example:
---
---     List.filterMap (\n -> if n > 2 then Just (n * 10) else Nothing) [ 1, 2, 3, 4 ]
---     -- == [ 30, 40 ]
---     List.filterMap String.toInt [ "1", "x", "3" ] == [ 1, 3 ]
+-- | `isEmpty list` — `True` if the list has no elements.
+{-| `isEmpty list` — `True` if the list has no elements.
+-}
+isEmpty : List a -> Bool
+isEmpty = Ffi.kernel "List_isEmpty"
+
+
+-- | `concatMap f list` — apply `f` to each element and flatten the results.
+{-| `concatMap f list` — apply `f` to each element and flatten the results.
+-}
+concatMap : (a -> List b) -> List a -> List b
+concatMap = Ffi.kernel "List_concatMap"
+
+
+-- | `indexedMap f list` — like `map` but `f` also receives each element's index.
+{-| `indexedMap f list` — like `map` but `f` also receives each element's index.
+-}
+indexedMap : (Int -> a -> b) -> List a -> List b
+indexedMap = Ffi.kernel "List_indexedMap"
+
+
+-- | `any test list` — `True` if `test` returns `True` for at least one element.
+{-| `any test list` — `True` if `test` returns `True` for at least one element.
+-}
+any : (a -> Bool) -> List a -> Bool
+any = Ffi.kernel "List_any"
+
+
+-- | `all test list` — `True` if `test` returns `True` for every element.
+{-| `all test list` — `True` if `test` returns `True` for every element.
+-}
+all : (a -> Bool) -> List a -> Bool
+all = Ffi.kernel "List_all"
+
+
+-- | `find test list` — `Just` the first element satisfying `test`, or `Nothing`.
+{-| `find test list` — `Just` the first element satisfying `test`, or `Nothing`.
+-}
+find : (a -> Bool) -> List a -> Maybe a
+find = Ffi.kernel "List_find"
+
+
+-- | `filterMap f list` — apply `f` to each element, keeping only `Just` payloads.
 {-| `filterMap f list` — apply `f` to each element, keeping only `Just` payloads.
-
-```ipe
-filterMap String.toInt [ "1", "x", "3" ] --> [ 1, 3 ]
-filterMap (\n -> if n > 2 then Just (n * 10) else Nothing) [ 1, 2, 3, 4 ] --> [ 30, 40 ]
-```
 -}
 filterMap : (a -> Maybe b) -> List a -> List b
-filterMap fn list =
-    foldr
-        (\x acc ->
-            case fn x of
-
-                Just y ->
-                    y :: acc
-
-                Nothing ->
-                    acc)
-        []
-        list
+filterMap = Ffi.kernel "List_filterMap"
 
 
--- | `sortWith compare list` — sort using a comparison function
--- `compare a b : Order` that returns `LT`, `EQ`, or `GT`. The sort is stable:
--- elements that compare `EQ` keep their input order. Use it when the ordering
--- is more than a simple key — for example, sorting by one field then another.
---
--- Example:
---
---     List.sortWith (\a b -> compare a b) [ 3, 1, 2 ] == [ 1, 2, 3 ]
---     -- descending: flip the arguments
---     List.sortWith (\a b -> compare b a) [ 3, 1, 2 ] == [ 3, 2, 1 ]
-{-| `sortWith cmp list` — stable sort using a comparison function returning `Order`.
-
-```ipe
-sortWith (\a b -> compare a b) [ 3, 1, 2 ] --> [ 1, 2, 3 ]
-sortWith (\a b -> compare b a) [ 3, 1, 2 ] --> [ 3, 2, 1 ]
-```
--}
-sortWith : (a -> a -> Order) -> List a -> List a
-sortWith cmp list =
-    foldr (insertWith cmp) [] list
-
-
-insertWith cmp x sorted =
-    case sorted of
-
-        [] ->
-            [ x ]
-
-        y :: rest ->
-            case cmp x y of
-
-                GT ->
-                    y :: insertWith cmp x rest
-
-                _ ->
-                    x :: y :: rest
-
-
--- | `sortBy key list` — sort ascending by comparing `key element` rather than
--- the element itself. Stable: equal keys keep their input order. This is the
--- common case — sort records by one of their fields.
---
--- Example:
---
---     List.sortBy String.length [ "ccc", "a", "bb" ] == [ "a", "bb", "ccc" ]
---     -- sort records by a field
---     List.sortBy .age [ { age = 30 }, { age = 21 } ] == [ { age = 21 }, { age = 30 } ]
-{-| `sortBy key list` — stable ascending sort comparing `key element`.
-
-```ipe
-sortBy String.length [ "ccc", "a", "bb" ] --> [ "a", "bb", "ccc" ]
-sortBy (\n -> -n) [ 1, 3, 2 ] --> [ 3, 2, 1 ]
-```
+-- | `sortBy key list` — stable ascending sort comparing `key element`.
+{-| `sortBy key list` — stable ascending sort by `key element`.
 -}
 sortBy : (a -> b) -> List a -> List a
-sortBy keyFn list =
-    sortWith (\a b -> compare (keyFn a) (keyFn b)) list
+sortBy = Ffi.kernel "List_sortBy"
 
 
--- | `sum list` — add all the elements together; `sum [] == 0`.
---
--- Example:
---
---     List.sum [ 1, 2, 3, 4 ] == 10
---     List.sum [] == 0
+-- | `sort list` — stable ascending sort by natural order. Requires a comparable element.
+sort : List a -> List a
+sort = Ffi.kernel "List_sort"
+
+
+-- | `sortWith cmp list` — stable sort using a comparison function returning `Order`.
+{-| `sortWith cmp list` — stable sort using a comparison function returning `Order`.
+-}
+sortWith : (a -> a -> Order) -> List a -> List a
+sortWith = Ffi.kernel "List_sortWith"
+
+
+-- | `singleton x` — the one-element list `[ x ]`.
+singleton : a -> List a
+singleton = Ffi.kernel "List_singleton"
+
+
+-- | `repeat n x` — a list with `n` copies of `x`; `[]` when `n <= 0`.
+repeat : Int -> a -> List a
+repeat = Ffi.kernel "List_repeat"
+
+
+-- | `sum list` — the sum of all elements; `0` for the empty list.
 {-| `sum list` — the sum of all elements; `0` for the empty list.
-
-```ipe
-sum [ 1, 2, 3, 4 ] --> 10
-sum [] --> 0
-sum [ 10, -3 ] --> 7
-```
 -}
 sum : List a -> a
-sum list =
-    foldl (\x acc -> x + acc) 0 list
+sum = Ffi.kernel "List_sum"
 
 
--- | `maximum list` — `Just` the largest element, or `Nothing` when the list
--- is empty. The `Maybe` is what makes the empty case explicit: there is no
--- largest element of nothing.
---
--- Example:
---
---     List.maximum [ 3, 1, 4, 1, 5 ] == Just 5
---     List.maximum [ 7 ] == Just 7
+-- | `product list` — the multiplicative fold; `1` for the empty list.
+product : List a -> a
+product = Ffi.kernel "List_product"
+
+
+-- | `maximum list` — `Just` the largest element, or `Nothing` if empty.
 {-| `maximum list` — `Just` the largest element, or `Nothing` if empty.
-
-```ipe
-maximum [ 3, 1, 4, 1, 5 ] --> Just 5
-maximum [ 7 ] --> Just 7
-maximum [] --> Nothing
-```
 -}
 maximum : List a -> Maybe a
-maximum list =
-    case list of
-
-        [] ->
-            Nothing
-
-        x :: rest ->
-            foldl
-                (\y acc ->
-                    if y > acc then
-                        y
-
-                    else
-                        acc)
-                x
-                rest
-                |> Just
+maximum = Ffi.kernel "List_maximum"
 
 
--- | `minimum list` — `Just` the smallest element, or `Nothing` when the list
--- is empty.
---
--- Example:
---
---     List.minimum [ 3, 1, 4, 1, 5 ] == Just 1
---     List.minimum [ 7 ] == Just 7
+-- | `minimum list` — `Just` the smallest element, or `Nothing` if empty.
 {-| `minimum list` — `Just` the smallest element, or `Nothing` if empty.
-
-```ipe
-minimum [ 3, 1, 4, 1, 5 ] --> Just 1
-minimum [ 7 ] --> Just 7
-minimum [] --> Nothing
-```
 -}
 minimum : List a -> Maybe a
-minimum list =
-    case list of
-
-        [] ->
-            Nothing
-
-        x :: rest ->
-            foldl
-                (\y acc ->
-                    if y < acc then
-                        y
-
-                    else
-                        acc)
-                x
-                rest
-                |> Just
+minimum = Ffi.kernel "List_minimum"
 
 
--- | `unique list` — the list with duplicates removed, keeping the first
--- occurrence of each element and its position. Uses `==`, so it works for any
--- type whose values can be compared for equality.
---
--- Example:
---
---     List.unique [ 1, 2, 2, 3, 1 ] == [ 1, 2, 3 ]
---     List.unique [ "a", "a", "b" ] == [ "a", "b" ]
+-- | `unique list` — remove duplicates, keeping first occurrence of each element.
 {-| `unique list` — remove duplicates, keeping first occurrence of each element.
-
-```ipe
-unique [ 1, 2, 2, 3, 1 ] --> [ 1, 2, 3 ]
-unique [ "a", "a", "b" ] --> [ "a", "b" ]
-unique [] --> []
-```
 -}
 unique : List a -> List a
-unique list =
-    uniqueHelp list [] []
+unique = Ffi.kernel "List_unique"
 
 
-uniqueHelp list seen acc =
-    case list of
+-- | `intersperse sep list` — place `sep` between each adjacent pair of elements.
+intersperse : a -> List a -> List a
+intersperse = Ffi.kernel "List_intersperse"
 
-        [] ->
-            reverseHelp acc []
 
-        x :: rest ->
-            if member x seen then
-                uniqueHelp rest seen acc
+-- | `partition pred list` — split into `( keep, reject )` preserving order.
+partition : (a -> Bool) -> List a -> ( List a, List a )
+partition = Ffi.kernel "List_partition"
 
-            else
-                uniqueHelp rest (x :: seen) (x :: acc)
+
+-- | `unzip pairs` — split a list of pairs into two parallel lists.
+unzip : List ( a, b ) -> ( List a, List b )
+unzip = Ffi.kernel "List_unzip"
+
+
+-- | `map2 f xs ys` — combine two lists element-wise; stops at the shorter.
+map2 : (a -> b -> r) -> List a -> List b -> List r
+map2 = Ffi.kernel "List_map2"
+
+
+-- | `map3 f xs ys zs` — combine three lists element-wise; stops at the shortest.
+map3 : (a -> b -> c -> r) -> List a -> List b -> List c -> List r
+map3 = Ffi.kernel "List_map3"
+
+
+-- | `map4 f` — combine four lists element-wise; stops at the shortest.
+map4 : (a -> b -> c -> d -> r) -> List a -> List b -> List c -> List d -> List r
+map4 = Ffi.kernel "List_map4"
+
+
+-- | `map5 f` — combine five lists element-wise; stops at the shortest.
+map5 : (a -> b -> c -> d -> e -> r) -> List a -> List b -> List c -> List d -> List e -> List r
+map5 = Ffi.kernel "List_map5"

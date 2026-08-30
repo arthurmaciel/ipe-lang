@@ -52,8 +52,14 @@ fn i193_taskseq_ipec_accepts() {
         built.err()
     );
 
-    let emitted = std::fs::read_to_string(out.join("src").join("main.rs"))
+    // Collect all emitted Rust; compiled-source stdlib imports split user code
+    // into src/ipe_mods/ipe_mod_main.rs alongside src/main.rs.
+    let mut emitted = std::fs::read_to_string(out.join("src").join("main.rs"))
         .expect("emitted main.rs must exist");
+    let mod_main = out.join("src").join("ipe_mods").join("ipe_mod_main.rs");
+    if let Ok(extra) = std::fs::read_to_string(&mod_main) {
+        emitted.push_str(&extra);
+    }
 
     // `conn` is used in both the TaskSeq lambda and the tail — at least one
     // clone must be emitted.

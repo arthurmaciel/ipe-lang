@@ -52,8 +52,7 @@ fn i222_match_arm_ipec_accepts_and_relays() {
         built.err()
     );
 
-    let emitted = std::fs::read_to_string(out.join("src").join("main.rs"))
-        .expect("emitted main.rs must exist");
+    let emitted = crate::support::read_all_emitted_src(&out);
 
     // The relay: a pre-clone shadow `let name = name.clone()` sits at the
     // intermediate boundary before the inner lambda so `name` is not moved out
@@ -61,7 +60,7 @@ fn i222_match_arm_ipec_accepts_and_relays() {
     assert!(
         emitted.contains("let name = name.clone()"),
         "arm-bound `name` read once through two boundaries must get a \
-         per-boundary clone relay; got:\n{emitted}"
+         per-boundary clone relay; got emitted user source:\n{emitted}"
     );
 }
 

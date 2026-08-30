@@ -476,7 +476,7 @@ mod tests {
         assert!(main.params.is_empty());
         assert_eq!(main.ret, IrType::Task(Box::new(IrType::Unit)));
 
-        // main = Io.println (String.fromInt (update Increment 0))
+        // main = System.setenv "HOME" "x"
         assert!(
             matches!(&main.body, Expr::Call { .. }),
             "main body is a call"
@@ -484,32 +484,12 @@ mod tests {
         let Expr::Call { callee, args, .. } = &main.body else {
             return;
         };
-        assert_eq!(*callee, Callee::Kernel(KernelFn::IoPrintln));
-        assert_eq!(args.len(), 1);
+        assert_eq!(*callee, Callee::Kernel(KernelFn::SystemSetenv));
+        assert_eq!(args.len(), 2);
 
-        let Some(Expr::Call {
-            callee: c1,
-            args: a1,
-            ..
-        }) = args.first()
-        else {
-            return;
-        };
-        assert_eq!(*c1, Callee::Kernel(KernelFn::StringFromInt));
-
-        // inner: update Increment 0 → Callee::Func.
-        let Some(Expr::Call {
-            callee: c2,
-            args: a2,
-            ..
-        }) = a1.first()
-        else {
-            return;
-        };
-        assert!(matches!(c2, Callee::Func(_)));
-        assert_eq!(a2.len(), 2);
-        assert!(matches!(a2.first(), Some(Expr::Ctor { .. })));
-        assert!(matches!(a2.get(1), Some(Expr::Int(0))));
+        // Both args are string literals.
+        assert!(matches!(args.first(), Some(Expr::Str(_))));
+        assert!(matches!(args.get(1), Some(Expr::Str(_))));
     }
 
     /// Lower a free-standing module and return the body of `which`.

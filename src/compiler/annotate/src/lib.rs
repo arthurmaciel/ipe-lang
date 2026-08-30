@@ -395,37 +395,37 @@ mod tests {
 
     #[test]
     fn kernel_vs_user_function_distinct() {
-        // `identity` is a top-level user function; `List.map` calls a kernel.
-        let src = "module Main exposing (main)\n\nimport Ipe.List as List\n\nidentity : Int -> Int\nidentity x = x\n\nmain : List Int\nmain =\n    List.map identity [1, 2, 3]\n";
+        // `defaultVal` is a top-level user function; `Maybe.withDefault` calls a kernel.
+        let src = "module Main exposing (main)\n\nimport Ipe.Maybe as Maybe\n\ndefaultVal : Int\ndefaultVal = 0\n\nmain : Int\nmain =\n    Maybe.withDefault defaultVal (Just 1)\n";
         let (syntax, mut interner) = parse(src);
         let canon_mod = canon(&syntax, &mut interner);
         let tokens = annotate(&syntax, &canon_mod, src, &interner);
 
-        // `identity` call site in `List.map identity [...]` must be Function.
-        let list_map_pos = src.rfind("List.map").expect("List.map present");
-        let identity_pos = src[list_map_pos..]
-            .find("identity")
-            .map(|r| list_map_pos + r);
-        if let Some(pos) = identity_pos {
+        // `defaultVal` call site in `Maybe.withDefault defaultVal …` must be Function.
+        let kernel_pos = src
+            .rfind("Maybe.withDefault")
+            .expect("Maybe.withDefault present");
+        let user_pos = src[kernel_pos..].find("defaultVal").map(|r| kernel_pos + r);
+        if let Some(pos) = user_pos {
             let tok = tokens.iter().find(|t| t.byte_start as usize == pos);
             if let Some(t) = tok {
                 assert_eq!(
                     t.class,
                     TokenClass::Function,
-                    "user 'identity' is Function at call site"
+                    "user 'defaultVal' is Function at call site"
                 );
             }
         }
 
-        // The kernel call `List.map` should produce a Kernel token.
+        // The kernel call `Maybe.withDefault` should produce a Kernel token.
         let kernel_toks = by_class(&tokens, TokenClass::Kernel);
-        let list_map_tok = kernel_toks.iter().find(|t| {
+        let kernel_tok = kernel_toks.iter().find(|t| {
             let slice = text_of(src, t);
-            slice == "map" || slice == "List.map"
+            slice == "withDefault" || slice == "Maybe.withDefault"
         });
         assert!(
-            list_map_tok.is_some(),
-            "List.map produces a Kernel-classified token"
+            kernel_tok.is_some(),
+            "Maybe.withDefault produces a Kernel-classified token"
         );
     }
 
@@ -444,8 +444,8 @@ mod tests {
 
     #[test]
     fn qualified_call_def_resolves_to_kernel() {
-        // `List.map` def must be DefKey::Kernel { module: "List", name: "map" }.
-        let src = "module Main exposing (main)\n\nimport Ipe.List as List\n\nmain : List Int\nmain =\n    List.map identity [1, 2, 3]\n\nidentity : Int -> Int\nidentity x = x\n";
+        // `Maybe.withDefault` def must be DefKey::Kernel { module: "Maybe", name: "withDefault" }.
+        let src = "module Main exposing (main)\n\nimport Ipe.Maybe as Maybe\n\nmain : Int\nmain =\n    Maybe.withDefault 0 (Just 1)\n";
         let (syntax, mut interner) = parse(src);
         let canon_mod = canon(&syntax, &mut interner);
         let tokens = annotate(&syntax, &canon_mod, src, &interner);
@@ -453,15 +453,15 @@ mod tests {
         let kernel_toks = by_class(&tokens, TokenClass::Kernel);
         let map_tok = kernel_toks
             .iter()
-            .find(|t| text_of(src, t) == "map" || text_of(src, t) == "List.map")
-            .expect("List.map token found");
+            .find(|t| text_of(src, t) == "withDefault" || text_of(src, t) == "Maybe.withDefault")
+            .expect("Maybe.withDefault token found");
         assert_eq!(
             map_tok.def,
             Some(DefKey::Kernel {
-                module: "List".to_string(),
-                name: "map".to_string(),
+                module: "Maybe".to_string(),
+                name: "withDefault".to_string(),
             }),
-            "List.map resolves to the List.map kernel def",
+            "Maybe.withDefault resolves to the Maybe.withDefault kernel def",
         );
     }
 

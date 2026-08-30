@@ -570,8 +570,14 @@ fn row_poly_task_seq_row_read_routes_effect_through_getter() {
         built.err()
     );
 
-    let emitted = std::fs::read_to_string(out.join("src").join("main.rs"))
+    // Collect all emitted Rust; compiled-source stdlib imports split user code
+    // into src/ipe_mods/ipe_mod_main.rs alongside src/main.rs.
+    let mut emitted = std::fs::read_to_string(out.join("src").join("main.rs"))
         .expect("emitted main.rs must exist");
+    let mod_main = out.join("src").join("ipe_mods").join("ipe_mod_main.rs");
+    if let Ok(extra) = std::fs::read_to_string(&mod_main) {
+        emitted.push_str(&extra);
+    }
     // The effect read must NOT be a whole-row clone feeding a raw field read.
     assert!(
         !emitted.contains(".clone()).name") && !emitted.contains("(rec.clone()).name"),

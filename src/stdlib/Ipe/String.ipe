@@ -14,7 +14,8 @@
 -- guide walks the mental model and a worked example; this module is the
 -- per-symbol reference.
 module Ipe.String exposing
-    ( fromInt, fromFloat
+    ( String
+    , fromInt, fromFloat
     , length, isEmpty
     , join, split, replace, slice, dropLeft, dropRight
     , toInt, toFloat

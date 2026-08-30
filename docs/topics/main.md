@@ -50,14 +50,16 @@ The shape entry function (`Web.app`, `Terminal.appScreen`, etc.) returns a
 A `main` whose type is anything else — an `Int`, a `String`, a `Bool`, a
 function — cannot be run. The compiler rejects it with IPE-L0136:
 
-```ipe ipe:error
+```ipe ipe:skip
+-- Illustrative: IPE-L0136 fires when building a project; not a standalone type error
 -- Wrong: main is an Int, not a Task
 main : Int
 main =
     42
 ```
 
-```ipe ipe:error
+```ipe ipe:skip
+-- Illustrative: IPE-L0136 fires when building a project; not a standalone type error
 -- Wrong: main is a function, not a Task
 main : String -> Task Error ()
 main greeting =
@@ -97,7 +99,8 @@ The top-level `main` binding requires a type annotation. Without one, the
 compiler reports IPE-L0106 (top-level function needs a type signature). Always
 annotate `main`:
 
-```ipe ipe:error
+```ipe ipe:skip
+-- Illustrative: IPE-L0106 fires when building a project; standalone type-check accepts unannotated bindings
 -- Wrong: no type annotation
 main =
     Io.println "Hello!"

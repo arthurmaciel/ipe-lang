@@ -35,6 +35,53 @@ use ipe_db::{BuildConfig, IpeDatabase, ModuleOrigin, SourceFile, SourceRoot};
 const DEP_A: &str = "module A exposing (visible)\n\nvisible = 1\n";
 const ENTRY: &str = "module Main exposing (main)\n\nimport Ipe.Io as Io\nimport Ipe.String as String\nimport A exposing (visible)\n\nmain : Task Error ()\nmain =\n    Io.println (String.fromInt visible)\n";
 
+/// Inject the transitive closure of compiled-source stdlib modules that the
+/// given file map's sources import into both `file_map` and `sources`.
+/// Only modules absent from `file_map` are added; user modules already
+/// present are left untouched.
+fn inject_stdlib_closure(
+    db: &IpeDatabase,
+    file_map: &mut BTreeMap<Vec<String>, SourceFile>,
+    sources: &mut BTreeMap<Vec<String>, (PathBuf, String)>,
+) {
+    use std::collections::VecDeque;
+
+    let mut work: VecDeque<Vec<String>> = VecDeque::new();
+
+    // Seed from every import in the already-present user files.
+    for sf in file_map.values() {
+        for imp in ipe_db::extract_imports_from_source(sf.text(db)) {
+            if ipe_stdlib::is_compiled_source_segments(&imp) && !file_map.contains_key(&imp) {
+                work.push_back(imp);
+            }
+        }
+    }
+
+    while let Some(path) = work.pop_front() {
+        if file_map.contains_key(&path) {
+            continue;
+        }
+        let Some(source) = ipe_stdlib::compiled_std_source_segments(&path) else {
+            continue;
+        };
+        let sf = SourceFile::new(
+            db,
+            path.clone(),
+            source.to_owned(),
+            ModuleOrigin::EmbeddedStdlib,
+        );
+        let pb = PathBuf::from(format!("<stdlib>/{}.ipe", path.join("/")));
+        file_map.insert(path.clone(), sf);
+        sources.insert(path.clone(), (pb, source.to_owned()));
+
+        for imp in ipe_db::extract_imports_from_source(source) {
+            if ipe_stdlib::is_compiled_source_segments(&imp) && !file_map.contains_key(&imp) {
+                work.push_back(imp);
+            }
+        }
+    }
+}
+
 #[test]
 fn compile_worker_is_cancelled_by_a_concurrent_input_edit() {
     let (first_exec_tx, first_exec_rx) = mpsc::channel::<()>();
@@ -52,10 +99,19 @@ fn compile_worker_is_cancelled_by_a_concurrent_input_edit() {
     let main_path = vec!["Main".to_owned()];
     let a_file = SourceFile::new(&db, a_path.clone(), DEP_A.to_owned(), ModuleOrigin::User);
     let main_file = SourceFile::new(&db, main_path.clone(), ENTRY.to_owned(), ModuleOrigin::User);
-    let root = SourceRoot::new(
-        &db,
-        BTreeMap::from([(a_path.clone(), a_file), (main_path.clone(), main_file)]),
-    );
+
+    let mut file_map: BTreeMap<Vec<String>, SourceFile> =
+        BTreeMap::from([(a_path.clone(), a_file), (main_path.clone(), main_file)]);
+    let mut sources: BTreeMap<Vec<String>, (PathBuf, String)> = BTreeMap::from([
+        (a_path, (PathBuf::from("<test>/A.ipe"), DEP_A.to_owned())),
+        (
+            main_path.clone(),
+            (PathBuf::from("<test>/Main.ipe"), ENTRY.to_owned()),
+        ),
+    ]);
+    inject_stdlib_closure(&db, &mut file_map, &mut sources);
+    let root = SourceRoot::new(&db, file_map);
+
     let config = BuildConfig::new(
         &db,
         ipe_backend_rust::DbDriver::Sqlite,
@@ -67,13 +123,6 @@ fn compile_worker_is_cancelled_by_a_concurrent_input_edit() {
         None,
         false,
         String::new(),
-    );
-
-    let mut sources: BTreeMap<Vec<String>, (PathBuf, String)> = BTreeMap::new();
-    sources.insert(a_path, (PathBuf::from("<test>/A.ipe"), DEP_A.to_owned()));
-    sources.insert(
-        main_path.clone(),
-        (PathBuf::from("<test>/Main.ipe"), ENTRY.to_owned()),
     );
 
     let db_worker = db.clone();
@@ -128,10 +177,19 @@ fn the_same_fixture_compiles_cleanly_without_a_concurrent_edit() {
     let main_path = vec!["Main".to_owned()];
     let a_file = SourceFile::new(&db, a_path.clone(), DEP_A.to_owned(), ModuleOrigin::User);
     let main_file = SourceFile::new(&db, main_path.clone(), ENTRY.to_owned(), ModuleOrigin::User);
-    let root = SourceRoot::new(
-        &db,
-        BTreeMap::from([(a_path.clone(), a_file), (main_path.clone(), main_file)]),
-    );
+
+    let mut file_map: BTreeMap<Vec<String>, SourceFile> =
+        BTreeMap::from([(a_path.clone(), a_file), (main_path.clone(), main_file)]);
+    let mut sources: BTreeMap<Vec<String>, (PathBuf, String)> = BTreeMap::from([
+        (a_path, (PathBuf::from("<test>/A.ipe"), DEP_A.to_owned())),
+        (
+            main_path.clone(),
+            (PathBuf::from("<test>/Main.ipe"), ENTRY.to_owned()),
+        ),
+    ]);
+    inject_stdlib_closure(&db, &mut file_map, &mut sources);
+    let root = SourceRoot::new(&db, file_map);
+
     let config = BuildConfig::new(
         &db,
         ipe_backend_rust::DbDriver::Sqlite,
@@ -143,13 +201,6 @@ fn the_same_fixture_compiles_cleanly_without_a_concurrent_edit() {
         None,
         false,
         String::new(),
-    );
-
-    let mut sources: BTreeMap<Vec<String>, (PathBuf, String)> = BTreeMap::new();
-    sources.insert(a_path, (PathBuf::from("<test>/A.ipe"), DEP_A.to_owned()));
-    sources.insert(
-        main_path.clone(),
-        (PathBuf::from("<test>/Main.ipe"), ENTRY.to_owned()),
     );
 
     let result =

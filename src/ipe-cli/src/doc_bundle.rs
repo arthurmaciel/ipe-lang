@@ -414,13 +414,11 @@ fn parse_markdown_file(
 ) -> Result<ParsedMarkdown, BundleError> {
     let (front_matter_str, body_start) = if raw.starts_with("---\n") || raw.starts_with("---\r\n") {
         let after_open = raw.find('\n').map_or(raw.len(), |i| i + 1);
-        raw[after_open..].find("\n---").map_or((None, 0), |rel| {
+        raw[after_open..].find("\n---\n").map_or((None, 0), |rel| {
             let fm_end = after_open + rel;
-            let body_start_rel = raw[after_open + rel..].find('\n').map_or(0, |i| i + 1);
-            (
-                Some(&raw[after_open..fm_end]),
-                after_open + rel + body_start_rel,
-            )
+            // Skip the full closing `\n---\n` (5 bytes) to land on the content.
+            let close_len = "\n---\n".len();
+            (Some(&raw[after_open..fm_end]), after_open + rel + close_len)
         })
     } else {
         (None, 0)

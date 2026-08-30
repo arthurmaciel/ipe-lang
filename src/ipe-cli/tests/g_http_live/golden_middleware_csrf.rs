@@ -46,11 +46,10 @@ fn middleware_with_csrf_emits_wrapped_handler() {
         "#63: Middleware.withCsrf-wrapped route must be ipe-0, got: {:?}",
         result.err(),
     );
-    let main_rs = std::fs::read_to_string(out_dir().join("src").join("main.rs"))
-        .expect("emitted main.rs must exist");
+    let main_rs = crate::support::read_all_emitted_src(&out_dir());
     assert!(
         main_rs.contains("middleware_with_csrf("),
-        "#63: emitted main.rs must call middleware_with_csrf(...)\n{main_rs}",
+        "#63: emitted user source must call middleware_with_csrf(...)\n{main_rs}",
     );
 }
 
