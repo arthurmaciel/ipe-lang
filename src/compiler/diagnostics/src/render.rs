@@ -1834,7 +1834,7 @@ const fn web_shape_label(app: AppShape) -> &'static str {
     match app {
         AppShape::Web => "Web",
         AppShape::WebView => "WebView",
-        AppShape::TerminalScreen | AppShape::TerminalLines => "Web/WebView",
+        AppShape::Tui | AppShape::Cli => "Web/WebView",
     }
 }
 

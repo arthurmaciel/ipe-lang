@@ -110,7 +110,7 @@ fn emit_console_inner(
         crate::emit_model_gate::check_admissible_model(
             ctx,
             model_ty,
-            ipe_diagnostics::AppShape::TerminalLines,
+            ipe_diagnostics::AppShape::Cli,
         )?;
     }
 

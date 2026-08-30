@@ -140,7 +140,7 @@ fn emit_tui_inner(
         crate::emit_model_gate::check_admissible_model(
             ctx,
             model_ty,
-            ipe_diagnostics::AppShape::TerminalScreen,
+            ipe_diagnostics::AppShape::Tui,
         )?;
     }
 
@@ -150,7 +150,7 @@ fn emit_tui_inner(
         crate::emit_model_gate::check_admissible_msg(
             ctx,
             msg_ty,
-            ipe_diagnostics::AppShape::TerminalScreen,
+            ipe_diagnostics::AppShape::Tui,
         )?;
     }
 
