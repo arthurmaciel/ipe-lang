@@ -57,9 +57,9 @@ fn to_string_int_matches_go_percent_v() {
 fn to_string_float_matches_go_percent_v() {
     "42.5"
     assert_eq!(basics_to_string(42.5f64), "42.5");
-    // Go `%v` == strconv.FormatFloat(f,'g',-1,64): cuts to scientific at exp >= 6
-    // and for infinities/NaN. The `IpeStringify` f64 impl reproduces this; the
-    // former `Display` path did NOT (it printed "1000000" / "inf").
+    // `'g'` format: cuts to scientific at exp >= 6 and for infinities/NaN.
+    // The `IpeStringify` f64 impl reproduces this; the former `Display` path
+    // did NOT (it printed "1000000" / "inf").
     assert_eq!(basics_to_string(1e6f64), "1e+06");
     assert_eq!(basics_to_string(f64::INFINITY), "+Inf");
 }
