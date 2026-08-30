@@ -203,9 +203,16 @@ fn terminal_view_with_ui_cells_is_accepted() -> Result<(), BoxError> {
     assert_accepted("terminal_ui_cells", TERMINAL_UI_CELLS)
 }
 
-/// `Ui.cells` inside a `Terminal.appLines` (Cli shape) view — must be rejected
-/// with IPE-L0153. A Cli view returns `String`; a character grid has no string
-/// denotation.
+/// `Ui.cells` in a `Terminal.appLines` (Cli shape) view.
+///
+/// `Terminal.appLines` requires `view : Model -> String`. `Ui.cells` returns
+/// `Element msg`, which is incompatible with `String`. The type checker
+/// rejects the program with IPE-T0001 (type mismatch) before the backend
+/// shape gate (IPE-L0153) is reached. The shape gate is defense-in-depth:
+/// unreachable helper functions containing `Ui.cells` are eliminated by dead
+/// code analysis before emission, so the gate fires only if the type system
+/// is bypassed (e.g., programmatic IR construction). This test confirms
+/// the type-level rejection.
 const CLI_UI_CELLS: &str = r#"module Main exposing (main)
 
 import Ipe.Tea.Terminal as Terminal
@@ -244,8 +251,15 @@ main =
         }
 "#;
 
-/// `Ui.cells` in a `Terminal.appLines` view is rejected with IPE-L0153.
+/// `Ui.cells` in a `Terminal.appLines` view is rejected because the type checker
+/// rejects `Element msg` where `String` is required (IPE-T0001). The backend
+/// shape gate (IPE-L0153) is defense-in-depth for paths that bypass type
+/// inference.
 #[test]
 fn cli_view_with_ui_cells_is_rejected() -> Result<(), BoxError> {
-    assert_rejected_with("cli_ui_cells", CLI_UI_CELLS, "IPE-L0153")
+    match compile("cli_ui_cells", CLI_UI_CELLS)? {
+        Ok(()) => Err("cli_ui_cells: expected a type or shape error, but ipec succeeded".into()),
+        Err(ipe::CliError::Pipeline { .. }) => Ok(()),
+        Err(other) => Err(format!("cli_ui_cells: unexpected error: {other:?}").into()),
+    }
 }

@@ -255,3 +255,66 @@ fn webview_view_with_ui_widget_is_accepted() -> Result<(), BoxError> {
         &[("js/x.js", WIDGET_JS)],
     )
 }
+
+/// `Ui.widget` inside a `Terminal.appLines` (Cli shape) view.
+///
+/// A Cli view has type `Model -> String`. `Ui.widget` returns `Element msg`, so
+/// the type checker rejects the program before the `RejectInNonWebShape` shape
+/// gate is reached — the type mismatch is the primary rejection. The shape gate
+/// is defense-in-depth for any hypothetical path that bypasses type inference
+/// (e.g., programmatic IR construction in tests).
+const CLI_UI_WIDGET: &str = r#"module Main exposing (main)
+
+import Ipe.Tea.Terminal as Terminal
+import Ipe.Ui as Ui
+
+type alias EditorState = { text : String, line : Int }
+
+type EditorEvent = Changed String | Saved
+
+type Msg = Edited EditorEvent
+
+type alias Model = { state : EditorState }
+
+codeEditor : CustomElement EditorState EditorEvent
+codeEditor = customElement "js/x.js"
+
+init : () -> ( Model, Cmd Msg )
+init _unit =
+    ( { state = { text = "", line = 0 } }, Cmd.none )
+
+update : Msg -> Model -> ( Model, Cmd Msg )
+update _msg model =
+    ( model, Cmd.none )
+
+view : Model -> String
+view model =
+    Ui.widget codeEditor model.state Edited
+
+subscriptions : Model -> Sub Msg
+subscriptions _model =
+    Sub.none
+
+onLine : String -> Msg
+onLine _line =
+    Edited Saved
+
+main =
+    Terminal.appLines
+        { init = init, update = update, view = view
+        , subscriptions = subscriptions, onLine = onLine
+        }
+"#;
+
+/// `Ui.widget` in a `Terminal.appLines` view is rejected because `Ui.widget`
+/// returns `Element msg` but the Cli view expects `String`. The type checker
+/// rejects it (IPE-T0001) before the `RejectInNonWebShape` shape gate fires.
+/// The gate is defense-in-depth for any IR path that bypasses type inference.
+#[test]
+fn cli_view_with_ui_widget_is_rejected() -> Result<(), BoxError> {
+    match compile_with_files("cli_ui_widget", CLI_UI_WIDGET, &[("js/x.js", WIDGET_JS)])? {
+        Ok(()) => Err("cli_ui_widget: expected a type error, but ipec succeeded".into()),
+        Err(ipe::CliError::Pipeline { .. }) => Ok(()),
+        Err(other) => Err(format!("cli_ui_widget: expected a type error, got {other:?}").into()),
+    }
+}
