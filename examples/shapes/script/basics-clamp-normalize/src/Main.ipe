@@ -1,0 +1,65 @@
+module Main exposing (main)
+
+import Ipe.List as List
+import Ipe.String as String
+import Ipe.Task as Task
+import Ipe.Io as Io
+
+
+-- Exercise the implicit prelude (`Ipe.Basics`): the handful of names that are in
+-- scope in EVERY module with no import. Three ideas carry most prelude code:
+--   • `clamp lo hi x` pins a value into a range — the fail-closed way to admit an
+--     out-of-bounds reading without an `if lo <= x && x <= hi` ladder.
+--   • `compare a b : Order` is the ONE ordering primitive; `List.sortWith` and the
+--     `min`/`max` helpers are all phrased in terms of it.
+--   • `toString` renders any value for a human, without a per-type printer import.
+
+
+type alias Reading =
+    { sensor : String, celsius : Int }
+
+
+-- A thermostat only trusts readings in [ -40, 125 ]. `clamp` pins each into that
+-- band, so a spurious spike or a stuck-low sensor becomes a boundary value rather
+-- than poisoning the average — the conservative, in-range outcome by construction.
+normalize : Reading -> Reading
+normalize reading =
+    { reading | celsius = clamp (negate 40) 125 reading.celsius }
+
+
+-- `compare` returns an `Order`; sorting coldest-first is one `sortWith` over it.
+byTemp : Reading -> Reading -> Order
+byTemp a b =
+    compare a.celsius b.celsius
+
+
+render : Reading -> String
+render reading =
+    String.padRight 8 ' ' reading.sensor ++ toString reading.celsius ++ " C"
+
+
+main =
+    let
+        raw =
+            [ { sensor = "attic", celsius = 240 }
+            , { sensor = "cellar", celsius = negate 70 }
+            , { sensor = "hall", celsius = 21 }
+            ]
+
+        normalized =
+            List.map normalize raw
+                |> List.sortWith byTemp
+
+        coldest =
+            List.foldl (\r acc -> min acc r.celsius) 125 normalized
+
+        warmest =
+            List.foldl (\r acc -> max acc r.celsius) (negate 40) normalized
+    in
+    do
+        Io.println "Sensor readings (clamped to [-40, 125], coldest first):"
+        List.map render normalized
+            |> List.map (\line -> Io.println ("  " ++ line))
+            |> Task.sequence
+            |> Task.map (always ())
+        Io.println ("Range: " ++ toString coldest ++ " C .. " ++ toString warmest ++ " C")

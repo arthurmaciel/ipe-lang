@@ -20,6 +20,8 @@ Each teaches the *mental model* of one module through a worked, runnable example
 then links to the per-symbol `ipe doc` reference. Read the one you need; they
 cross-link where topics meet.
 
+- **The prelude** — [Basics](basics.md) (the auto-imported helpers: `clamp`,
+  `compare`, `toString`, `min`/`max`).
 - **Core data** — [Lists](list.md) (ordered sequences, folds, pipelines),
   [Strings](string.md) (text and the parse boundary), [Characters](char.md)
   (code points, classification), [Tuples](tuple.md) (anonymous pairs).
