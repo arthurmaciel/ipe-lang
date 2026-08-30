@@ -497,6 +497,18 @@ const STD_UI_TRANSFORM: &str = include_str!("../Ipe/Ui/Transform.ipe");
 /// Unblocks `26-ui-showcase` (IPE-N0004: Ipe.Ui.Animation — Animation.attribute).
 const STD_UI_ANIMATION: &str = include_str!("../Ipe/Ui/Animation.ipe");
 
+/// `Ipe.Ui.Cells` — Tui-only view builders that produce `Cells msg`.
+///
+/// `Cells msg` is a newtype distinct from `Element msg`; it is produced
+/// exclusively by the six builders here (`none` / `text` / `cells` /
+/// `el` / `row` / `column`) and consumed only by `Terminal.appScreen`'s
+/// `view` field.  Using these builders inside a Web/Cli shape is a
+/// compile-time type error because the type checker sees `Cells msg`
+/// where `Element msg` is expected.
+///
+/// Not in `STDLIB_MODULE_QUALIFIERS` so disjointness invariant holds.
+const STD_UI_CELLS: &str = include_str!("../Ipe/Ui/Cells.ipe");
+
 /// `Ipe.Codec` — one invariant codec that drives the JSON direction.
 ///
 /// Pure Ipê source: defines the `Codec a` nominal union (an encoder plus a
@@ -964,6 +976,10 @@ pub const COMPILED_STD_MODULES: &[CompiledStdModule] = &[
     CompiledStdModule {
         dotted: "Ipe.Ui.Animation",
         source: STD_UI_ANIMATION,
+    },
+    CompiledStdModule {
+        dotted: "Ipe.Ui.Cells",
+        source: STD_UI_CELLS,
     },
     CompiledStdModule {
         dotted: "Ipe.Codec",

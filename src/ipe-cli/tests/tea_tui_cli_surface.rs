@@ -36,7 +36,8 @@ fn assert_accepted(test_name: &str, source: &str) -> Result<(), BoxError> {
 const TUI_APP: &str = r#"module Main exposing (main)
 
 import Ipe.Tea.Tui as Tui
-import Ipe.Ui as Ui
+import Ipe.Ui.Cells as Cells
+import Ipe.Ui.Cells exposing (Cells)
 import Ipe.Tea.Tui.Cmd
 import Ipe.Tea.Tui.Sub
 
@@ -54,9 +55,9 @@ update : Msg -> Model -> ( Model, Cmd Msg )
 update _msg model =
     ( model, Cmd.none )
 
-view : Model -> Element Msg
+view : Model -> Cells Msg
 view _model =
-    Ui.text "hello"
+    Cells.text "hello"
 
 subscriptions : Model -> Sub Msg
 subscriptions _model =

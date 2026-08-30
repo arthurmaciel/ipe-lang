@@ -168,6 +168,7 @@ fn ir_type_name_at(interner: &Interner, ty: &IrType, depth: u16) -> String {
             let ctor_name = match ctor {
                 UiCtor::Html => "Html",
                 UiCtor::Element => "Element",
+                UiCtor::Cells => "Cells",
                 UiCtor::UiAttribute => "Ui.Attribute",
                 UiCtor::HtmlAttribute => "Html.Attribute",
                 UiCtor::HtmlEvent => "Html.Event",
