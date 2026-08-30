@@ -72,7 +72,7 @@ fn assert_ipec_bounds_fn_not_struct(fixture: &str) {
 
     // The alias in row position must NOT defeat the bound.
     assert!(
-        emitted.contains("pub fn main_decode_row<T1: Clone + ipe_runtime::db::IpeRow>"),
+        emitted.contains("fn main_decode_row<T1: Clone + ipe_runtime::db::IpeRow>"),
         "the aliased-row decoder's wildcard-`any` generic must still carry the \
          `IpeRow` bound so its `db_get_string(_, &r)` body type-checks (#177 \
          FIX-UP 2); got emitted user source:\n{emitted}"

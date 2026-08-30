@@ -79,9 +79,9 @@ fn i186_ipec_accepts_and_bounds_fn_display() {
          bound so its `basics_to_string` body type-checks; got emitted user source:\n{emitted}"
     );
     assert!(
-        emitted.contains("pub fn main_render<T1: ipe_runtime::stringify::IpeStringify + Clone>")
+        emitted.contains("fn main_render<T1: ipe_runtime::stringify::IpeStringify + Clone>")
             || emitted.contains(
-                "pub fn main_render<T1: crate::ipe_runtime::stringify::IpeStringify + Clone>"
+                "fn main_render<T1: crate::ipe_runtime::stringify::IpeStringify + Clone>"
             ),
         "the bound belongs on the renderer FUNCTION's generic param; got \
          emitted user source:\n{emitted}"

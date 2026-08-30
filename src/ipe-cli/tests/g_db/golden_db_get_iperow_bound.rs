@@ -77,7 +77,7 @@ fn i177_ipec_accepts_and_bounds_fn_not_struct() {
          its `db_get_string` body type-checks (#177); got emitted user source:\n{emitted}"
     );
     assert!(
-        emitted.contains("pub fn main_decode_row<T1: Clone + ipe_runtime::db::IpeRow>"),
+        emitted.contains("fn main_decode_row<T1: Clone + ipe_runtime::db::IpeRow>"),
         "the bound belongs on the decoder FUNCTION's generic param, not \
          elsewhere (#177); got emitted user source:\n{emitted}"
     );

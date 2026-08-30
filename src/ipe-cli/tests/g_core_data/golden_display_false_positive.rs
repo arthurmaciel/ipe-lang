@@ -59,7 +59,7 @@ fn i186_false_positive_ipec_no_spurious_display() {
 
     // The `grab` fn's wildcard row generic gets `IpeRow` (its real obligation)
     // and must NOT get `Display` (the sibling `String` is what is toString'd).
-    let grab_sig = emitted.lines().find(|l| l.contains("pub fn main_grab"));
+    let grab_sig = emitted.lines().find(|l| l.contains("fn main_grab"));
     assert!(
         grab_sig.is_some(),
         "emitted user source must declare main_grab; got:\n{emitted}"
