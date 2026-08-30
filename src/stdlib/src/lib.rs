@@ -32,7 +32,13 @@ const RESULT: &str = include_str!("../Ipe/Result.ipe");
 const LIST: &str = include_str!("../Ipe/List.ipe");
 /// `Ipe.String` — string combinators.
 const STRING: &str = include_str!("../Ipe/String.ipe");
-/// `Ipe.Char` — single-character helpers.
+/// `Ipe.Char` — single-character helpers, compiled-source Layer-3.
+///
+/// Every member is a point-free `Ffi.kernel "Char_*"` alias resolved by
+/// `ipe_canon::resolve::detect_kernel_alias` to a registered `Char*`
+/// `StdlibKernel` variant (`ipe_runtime::char::*`). Registered in
+/// [`COMPILED_STD_MODULES`] (NOT `MODULES`); NOT in `STDLIB_MODULE_QUALIFIERS`,
+/// so the disjointness invariant holds.
 const CHAR: &str = include_str!("../Ipe/Char.ipe");
 /// `Ipe.Dict` — string-keyed associative map.
 const DICT: &str = include_str!("../Ipe/Dict.ipe");
@@ -264,10 +270,6 @@ pub const MODULES: &[StdModule] = &[
     StdModule {
         name: "Ipe.String",
         source: STRING,
-    },
-    StdModule {
-        name: "Ipe.Char",
-        source: CHAR,
     },
     StdModule {
         name: "Ipe.Dict",
@@ -728,6 +730,14 @@ pub const COMPILED_STD_MODULES: &[CompiledStdModule] = &[
     CompiledStdModule {
         dotted: "Ipe.Bytes",
         source: BYTES,
+    },
+    // Ipe.Char — Layer-3 source; every member is a point-free
+    // `Ffi.kernel "Char_*"` alias resolved by `detect_kernel_alias` to the
+    // registered `Char*` kernels (`ipe_runtime::char::*`). Disjoint from
+    // `STDLIB_MODULE_QUALIFIERS` (no `"Char"` entry there).
+    CompiledStdModule {
+        dotted: "Ipe.Char",
+        source: CHAR,
     },
     CompiledStdModule {
         dotted: "Ipe.Random",
