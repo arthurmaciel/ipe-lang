@@ -308,6 +308,12 @@ pub struct Module {
     /// Set by `ipe_lower` when any call site resolves to a
     /// `KernelFn::is_tui()` variant.
     pub uses_tui: bool,
+    /// `true` when the lowerer detected the `Ipe.Terminal` line-oriented
+    /// app-entry (`Terminal.appLines`) in the module's function bodies.
+    ///
+    /// Set by `ipe_lower` when any call site resolves to a
+    /// `KernelFn::is_console()` variant.
+    pub uses_console: bool,
     /// `true` when the lowerer detected at least one `Ipe.WebView`
     /// kernel call (`Webview.app`) in the module's function bodies.
     ///
@@ -1172,6 +1178,7 @@ pub enum IrType {
     /// |--------------------------|----------------------------------------------|
     /// | `UiCtor::Html`           | `ipe_runtime::html::Html<M>`                 |
     /// | `UiCtor::Element`        | `ipe_runtime::ui::element::Element<M>`       |
+    /// | `UiCtor::Cells`          | `ipe_runtime::tui::CellsView<M>`             |
     /// | `UiCtor::UiAttribute`    | `ipe_runtime::ui::element::Attribute<M>`     |
     /// | `UiCtor::HtmlAttribute`  | `ipe_runtime::html::Attribute<M>`            |
     /// | `UiCtor::HtmlEvent`      | `ipe_runtime::html::Event<M>`                |
@@ -1637,6 +1644,10 @@ pub enum UiCtor {
     Html,
     /// `Element msg` — a Ipe.Ui layout element (`ipe_runtime::ui::element::Element<M>`).
     Element,
+    /// `Cells msg` — a Tui-only structured view (`ipe_runtime::tui::CellsView<M>`).
+    /// Produced exclusively by `Ipe.Ui.Cells.*` builders; the type is distinct from
+    /// `Element msg` so Web-only constructs cannot appear inside a Tui view.
+    Cells,
     /// `Attribute msg` from `Ipe.Ui` — a layout attribute (`ipe_runtime::ui::element::Attribute<M>`).
     UiAttribute,
     /// `Attribute msg` from `Ipe.Html` / `Ipe.Html.Attributes` —
@@ -1802,6 +1813,7 @@ pub fn ir_type_is_derivable(
                 ctor,
                 UiCtor::Html
                     | UiCtor::Element
+                    | UiCtor::Cells
                     | UiCtor::UiAttribute
                     | UiCtor::Label
                     | UiCtor::Placeholder
@@ -4653,6 +4665,7 @@ mod tests {
                 uses_ui: false,
                 uses_web: false,
                 uses_tui: false,
+                uses_console: false,
                 uses_webview: false,
                 uses_css: false,
                 uses_auth: false,
@@ -5184,6 +5197,7 @@ mod serde_persistence_tests {
                 uses_ui: false,
                 uses_web: false,
                 uses_tui: false,
+                uses_console: false,
                 uses_webview: false,
                 uses_css: false,
                 uses_auth: false,
@@ -5275,6 +5289,7 @@ mod serde_persistence_tests {
                 uses_ui: false,
                 uses_web: false,
                 uses_tui: false,
+                uses_console: false,
                 uses_webview: false,
                 uses_css: false,
                 uses_auth: false,

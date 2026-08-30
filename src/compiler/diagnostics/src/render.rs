@@ -637,6 +637,10 @@ fn lower_prose(msg: &LowerError) -> String {
             "`Ui.cells` paints a terminal character grid, so it has no meaning in a browser app."
                 .to_string()
         }
+        LowerError::UiCellsInCliShape(_) => {
+            "`Ui.cells` paints a terminal character grid, so it has no meaning in a Cli (line-oriented) app."
+                .to_string()
+        }
         LowerError::UiWidgetInNonWebShape => {
             "`Ui.widget` mounts a browser custom element, so it has no meaning in a terminal app."
                 .to_string()
@@ -1699,9 +1703,16 @@ fn lower_label(msg: &LowerError) -> String {
         LowerError::UiCellsInWebShape(app) => format!(
             "`Ui.cells` is terminal-only; not available in the {} shape — it paints a \
              raw character grid directly to the terminal and has no browser rendering. \
-             Use it only under `Terminal.appScreen` / `Terminal.appLines`",
+             Use it only under `Terminal.appScreen`",
             web_shape_label(*app)
         ),
+        LowerError::UiCellsInCliShape(_) => {
+            "`Ui.cells` is terminal-screen-only; not available in the Cli shape — a \
+             Cli view returns `String` (line output) and has no character-grid surface. \
+             Use `Terminal.appScreen` for a full-screen cell-grid app, or format the \
+             content as a `String` for line output"
+                .to_string()
+        }
         LowerError::UiWidgetInNonWebShape => {
             "`Ui.widget` is browser-only; not available outside a Web/WebView shape — its \
              up-event handler is carried over the seal codec, which exists only in a \

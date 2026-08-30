@@ -10520,8 +10520,10 @@ struct KernelUsage {
     principal: bool,
     /// Any Ipe.Web kernel.
     web: bool,
-    /// Any Ipe.Tui kernel.
+    /// Any Ipe.Tui kernel (`Terminal.appScreen`).
     tui: bool,
+    /// Any Ipe.Console kernel (`Terminal.appLines`).
+    console: bool,
     /// Any Ipe.WebView kernel.
     webview: bool,
     /// Any outbound `Ipe.WebSocket` client kernel — gates the
@@ -10604,6 +10606,7 @@ impl KernelUsage {
             && self.auth
             && self.web
             && self.tui
+            && self.console
             && self.webview
             && self.websocket
             && self.email
@@ -10651,6 +10654,7 @@ impl KernelUsage {
         self.principal |= matches!(k, KernelFn::AuthSubject);
         self.web |= k.is_web();
         self.tui |= k.is_tui();
+        self.console |= k.is_console();
         self.webview |= k.is_webview();
         self.websocket |= k.is_websocket_client();
         self.email |= matches!(k, KernelFn::EmailSend);
@@ -15893,6 +15897,7 @@ impl<'a> Lowerer<'a> {
         // trigger `uses_tui_shape`) and never calls `Ui.layout`/`Ui.layoutWith`
         // (kernels that trigger `uses_ui`).
         let uses_tui_shape = kernel_usage.tui;
+        let uses_console_shape = kernel_usage.console;
         let uses_ui = kernel_usage.ui || uses_tui_shape;
         let uses_web = kernel_usage.web;
         let uses_webview = kernel_usage.webview;
@@ -15975,6 +15980,7 @@ impl<'a> Lowerer<'a> {
             uses_ui,
             uses_web,
             uses_tui: uses_tui_shape,
+            uses_console: uses_console_shape,
             uses_webview,
             uses_css: uses_css_leaf,
             uses_auth,
@@ -18171,6 +18177,22 @@ impl<'a> Lowerer<'a> {
                         msg: Box::new(msg),
                     })
                 }
+                // `Cells msg` — a Tui-only structured view type.
+                "Cells" if args.len() == 1 => {
+                    let msg = self.ir_ui_msg_from_canon(
+                        args.first().ok_or_else(|| {
+                            bug(
+                                "ipe_lower::ir_type_from_canon",
+                                "Cells applied without its message type",
+                            )
+                        })?,
+                        generics,
+                    )?;
+                    Ok(IrType::Ui {
+                        ctor: UiCtor::Cells,
+                        msg: Box::new(msg),
+                    })
+                }
                 // `Attribute msg` — a Ipe.Ui / Ipe.Html attribute.  Mirrors the
                 // `ir_type_from_ty` "Attribute" arm: `Attribute` exists in BOTH
                 // `Ipe.Ui` and `Ipe.Html`, disambiguated by the `home` path
@@ -19414,6 +19436,21 @@ impl<'a> Lowerer<'a> {
                     )?;
                     Ok(IrType::Ui {
                         ctor: UiCtor::Element,
+                        msg: Box::new(msg),
+                    })
+                }
+                "Cells" if args.len() == 1 => {
+                    let msg = self.ir_type_from_ty_ui_msg(
+                        args.first().ok_or_else(|| {
+                            bug(
+                                "ipe_lower::ir_type_from_ty",
+                                "Cells applied without its message type",
+                            )
+                        })?,
+                        span,
+                    )?;
+                    Ok(IrType::Ui {
+                        ctor: UiCtor::Cells,
                         msg: Box::new(msg),
                     })
                 }
@@ -24966,6 +25003,8 @@ impl<'a> Lowerer<'a> {
             Callee::Kernel(
                 // `Ui.none : Element msg`
                 KernelFn::UiNone
+                // `UiCells.none : Cells msg`
+                | KernelFn::UiCellsNone
                 // `Ui.fill : Length`
                 | KernelFn::UiFill
                 // `Ui.content : Length`
@@ -25083,6 +25122,10 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::UiHtml
                 // `Ui.cells : List (List Char) -> Element msg`
                 | KernelFn::UiCells
+                // `UiCells.text : String -> Cells msg`
+                | KernelFn::UiCellsText
+                // `UiCells.cells : List (List Char) -> Cells msg`
+                | KernelFn::UiCellsCells
                 // ── Ui attribute builders — arity 1 ──────────────────────
                 // `Ui.spacing : Int -> Attribute msg`
                 | KernelFn::UiSpacing
@@ -25342,7 +25385,13 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::UiOnPseudo
                 // `Store.select` — arity 2 (projection lambda, joined), intercepted
                 // at lowering; this is only the defensive fallback count.
-                | KernelFn::StoreSelect,
+                | KernelFn::StoreSelect
+                // `UiCells.el : List (Attribute msg) -> Cells msg -> Cells msg`
+                | KernelFn::UiCellsEl
+                // `UiCells.row : List (Attribute msg) -> List (Cells msg) -> Cells msg`
+                | KernelFn::UiCellsRow
+                // `UiCells.column : List (Attribute msg) -> List (Cells msg) -> Cells msg`
+                | KernelFn::UiCellsColumn,
             ) => Ok(2),
             // Arity 3: `Ui.rgb r g b`, `Html.node tag attrs children`,
             //          `Ui.breakpoint query attrs element`.
@@ -26620,6 +26669,13 @@ impl<'a> Lowerer<'a> {
                     ("Ui", "html") => Ok(Callee::Kernel(KernelFn::UiHtml)),
                     ("Ui", "cells") => Ok(Callee::Kernel(KernelFn::UiCells)),
                     ("Ui", "widget") => Ok(Callee::Kernel(KernelFn::UiWidget)),
+                    // ── Ipe.Ui.Cells builders ─────────────────────────────
+                    ("UiCells", "none") => Ok(Callee::Kernel(KernelFn::UiCellsNone)),
+                    ("UiCells", "text") => Ok(Callee::Kernel(KernelFn::UiCellsText)),
+                    ("UiCells", "el") => Ok(Callee::Kernel(KernelFn::UiCellsEl)),
+                    ("UiCells", "row") => Ok(Callee::Kernel(KernelFn::UiCellsRow)),
+                    ("UiCells", "column") => Ok(Callee::Kernel(KernelFn::UiCellsColumn)),
+                    ("UiCells", "cells") => Ok(Callee::Kernel(KernelFn::UiCellsCells)),
                     // Retained container / tagged-element primitives — the layout
                     // and flow builders are pure Ipê over these in `Ipe/Ui.ipe`.
                     ("Ui", "node") => Ok(Callee::Kernel(KernelFn::UiNode)),

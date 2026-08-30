@@ -239,6 +239,14 @@ pub const fn ui_call_shape(k: KernelFn) -> Option<UiEmitPlan> {
             1,
             Guard::RejectInWebShape,
         ),
+        // ── Ipe.Ui.Cells Cells-typed builders. No shape guard: the type system
+        // rejects `Cells msg` where `Element msg` is expected (IPE-T0001).
+        KernelFn::UiCellsNone => pos("ipe_runtime::tui::cells_none_", 0),
+        KernelFn::UiCellsText => pos("ipe_runtime::tui::cells_text_", 1),
+        KernelFn::UiCellsEl => pos("ipe_runtime::tui::cells_el_", 2),
+        KernelFn::UiCellsRow => pos("ipe_runtime::tui::cells_row_", 2),
+        KernelFn::UiCellsColumn => pos("ipe_runtime::tui::cells_column_", 2),
+        KernelFn::UiCellsCells => pos("ipe_runtime::tui::cells_cells_", 1),
         // `Ui.widget ce state on_up` — the server-driven custom-element node.
         // A bespoke arm, not a plain positional call: `ui_widget_`'s handler
         // parameter carries `F: Fn(Up) -> M + Send + Sync + 'static`, which the
@@ -637,9 +645,10 @@ mod tests {
         }
     }
 
-    /// The web-shape guard set is exactly the kernels with no browser
-    /// denotation. A new terminal-only widget that forgets the seal fails here
-    /// rather than silently rendering wrong under a web shape.
+    /// The web-shape guard set is exactly `UiCells` — the one kernel that
+    /// produces `Element msg` but has no browser denotation. The `UiCells*`
+    /// builders produce `Cells msg`; misuse is caught at the type level
+    /// (IPE-T0001) rather than by a runtime guard.
     #[test]
     fn reject_in_web_shape_guard_is_exactly_ui_cells() {
         for &k in KernelFn::ALL {

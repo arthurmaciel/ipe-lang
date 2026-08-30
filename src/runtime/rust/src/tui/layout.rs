@@ -756,7 +756,65 @@ fn walk_attrs<M>(attrs: &[Attribute<M>], inherited: Style) -> Walked {
                     _ => None, // left / justify → flush-left
                 }
             }
-            _ => {}
+            // Width / height are extracted by `width_length` / `height_length`
+            // before this loop and stored in `w.width` / `w.height` above.
+            Attribute::AttrWidth(_) | Attribute::AttrHeight(_) => {}
+            // Nearby overlays (tooltips, dropdowns) have no terminal surface.
+            Attribute::AttrNearby(_, _) => {}
+            // Accessibility label — no terminal equivalent in cell renderer.
+            Attribute::AttrDescribe(_) => {}
+            // NoAttribute is a no-op sentinel from the Ipê runtime.
+            Attribute::NoAttribute => {}
+            // Web-only: HTML class attribute, no terminal equivalent.
+            Attribute::AttrClass(_) => {}
+            // HTML event handler — collected separately for input/button nodes
+            // via `collect_events`; silently ignored on non-input layout nodes.
+            Attribute::AttrEvent(_) => {}
+            // HTML arbitrary attribute escape hatch; no terminal surface.
+            Attribute::AttrAttribute(_, _) => {}
+            // CSS font-size in px — terminal cell size is fixed; ignored.
+            Attribute::AttrFontSize(_) => {}
+            // CSS font-family — terminal font is set by the emulator; ignored.
+            Attribute::AttrFontFamily(_) => {}
+            // CSS letter-spacing — no terminal equivalent.
+            Attribute::AttrFontLetterSpacing(_) => {}
+            // CSS word-spacing — no terminal equivalent.
+            Attribute::AttrFontWordSpacing(_) => {}
+            // Web-only: background image URL, no terminal equivalent.
+            Attribute::AttrBgImage(_) => {}
+            // Web-only: CSS gradient, no terminal equivalent.
+            Attribute::AttrBgGradient(_) => {}
+            // Web-only: box-shadow (noted above at AttrBorderRounded arm).
+            Attribute::AttrBorderShadow(_, _, _, _, _) => {}
+            // Web-only: inset box-shadow, no terminal equivalent.
+            Attribute::AttrBorderInsetShadow(_, _, _, _, _) => {}
+            // Web-only: pointer cursor, no terminal equivalent.
+            Attribute::AttrPointer => {}
+            // Web-only: Debug.explain visual outline, no terminal equivalent.
+            Attribute::AttrExplain => {}
+            // Web-only: CSS overflow property, no terminal equivalent.
+            Attribute::AttrOverflow(_, _) => {}
+            // Web-only: CSS hover/focus/active pseudo-class rules, no terminal equivalent.
+            Attribute::AttrPseudoRule(_, _) => {}
+            // Web-only: CSS transition animation, no terminal equivalent.
+            Attribute::AttrTransition(_, _) => {}
+            // Web-only: CSS @keyframes animation, no terminal equivalent.
+            Attribute::AttrAnimation(_, _, _, _) => {}
+            // A `Ui.style` key with no terminal meaning (not one of the `__*`
+            // layout markers or `border-style` handled above) has no cell surface.
+            Attribute::AttrStyle(_, _) => {}
+            // A sub-bold font weight (< 600) is rendered as normal weight — a
+            // terminal cell has only the bold/normal SGR distinction.
+            Attribute::AttrFontWeight(_) => {}
+            // A text-decoration value the terminal has no glyph for (handled
+            // decorations are matched above with a guard).
+            Attribute::AttrFontDecoration(_) => {}
+            // A zero/absent border width draws no frame.
+            Attribute::AttrBorderWidth(_) => {}
+            // A zero-sum per-side border width draws no frame.
+            Attribute::AttrBorderWidthEach(_, _, _, _) => {}
+            // A zero/absent rounded radius leaves the frame square.
+            Attribute::AttrBorderRounded(_) => {}
         }
     }
     if border_width > 0 {
@@ -1004,7 +1062,47 @@ fn render_input<M: Clone>(
         match a {
             Attribute::AttrBgColor(c) => style.bg = bg_of(c),
             Attribute::AttrFontColor(c) => style.fg = Some(color_of(c)),
-            _ => {}
+            // All other attrs are handled by walk_attrs or are not applicable
+            // to the input's own style fold (events go through collect_events;
+            // layout attrs are consumed by the parent walk_attrs call).
+            Attribute::NoAttribute
+            | Attribute::AttrWidth(_)
+            | Attribute::AttrHeight(_)
+            | Attribute::AttrAlignX(_)
+            | Attribute::AttrAlignY(_)
+            | Attribute::AttrNearby(_, _)
+            | Attribute::AttrPadding(_, _, _, _)
+            | Attribute::AttrSpacing(_)
+            | Attribute::AttrStyle(_, _)
+            | Attribute::AttrDescribe(_)
+            | Attribute::AttrClass(_)
+            | Attribute::AttrEvent(_)
+            | Attribute::AttrAttribute(_, _)
+            | Attribute::AttrFontSize(_)
+            | Attribute::AttrFontFamily(_)
+            | Attribute::AttrFontWeight(_)
+            | Attribute::AttrFontItalic
+            | Attribute::AttrFontUnderline
+            | Attribute::AttrFontDecoration(_)
+            | Attribute::AttrFontLetterSpacing(_)
+            | Attribute::AttrFontWordSpacing(_)
+            | Attribute::AttrFontAlign(_)
+            | Attribute::AttrBgImage(_)
+            | Attribute::AttrBgGradient(_)
+            | Attribute::AttrBorderWidth(_)
+            | Attribute::AttrBorderWidthEach(_, _, _, _)
+            | Attribute::AttrBorderColor(_)
+            | Attribute::AttrBorderRounded(_)
+            | Attribute::AttrBorderStyle(_)
+            | Attribute::AttrBorderShadow(_, _, _, _, _)
+            | Attribute::AttrBorderInsetShadow(_, _, _, _, _)
+            | Attribute::AttrPointer
+            | Attribute::AttrExplain
+            | Attribute::AttrOverflow(_, _)
+            | Attribute::AttrPseudoRule(_, _)
+            | Attribute::AttrTransition(_, _)
+            | Attribute::AttrGridTracks(_, _)
+            | Attribute::AttrAnimation(_, _, _, _) => {}
         }
     }
     // A `<textarea>` carries no `type` attr; mark it "textarea" so the cursor

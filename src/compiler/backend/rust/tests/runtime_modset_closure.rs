@@ -144,6 +144,10 @@ fn module_for_mask(name: ipe_intern::Symbol, mask: u32) -> Module {
         uses_ui,
         uses_web: f(3),
         uses_tui,
+        // Fixed false: the Cli (`Terminal.appLines`) surface is outside this
+        // flag-closure matrix (no dedicated mask bit); its manifest closure is
+        // exercised by the Tui bit above.
+        uses_console: false,
         uses_webview: f(5),
         uses_css: f(6),
         uses_auth: f(7),

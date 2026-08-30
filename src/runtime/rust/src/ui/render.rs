@@ -511,17 +511,11 @@ fn render_element_depth<M: Clone>(elem: Element<M>, depth: usize) -> Html<M> {
         Element::Empty => Html::HText(String::new()),
         Element::Text(s) => Html::HText(s),
         Element::Raw(html) => html,
-        // `Ui.cells` is terminal-only and is rejected before reaching the Web
-        // backend (see the shape admissibility gate). This total fallback keeps
-        // the match exhaustive: degrade the grid to its text rows.
-        Element::Cells(grid) => {
-            let text = grid
-                .into_iter()
-                .map(|row| row.into_iter().collect::<String>())
-                .collect::<Vec<_>>()
-                .join("\n");
-            Html::HText(text)
-        }
+        // Compile-time shape gates (IPE-L0132 / IPE-L0153) prevent `Cells` from
+        // reaching a Web or Cli render, so this arm is unreachable through the
+        // normal pipeline. If a direct Rust construction routes cells here, drop
+        // to empty text rather than abort — a missing subtree beats a panic.
+        Element::Cells(_grid) => Html::HText(String::new()),
         Element::Node(desc, attrs, kids) => {
             render_node_as(tag_for_description(&desc), &attrs, kids, depth)
         }
