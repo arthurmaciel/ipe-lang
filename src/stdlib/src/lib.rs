@@ -666,6 +666,17 @@ const LOCALE: &str = include_str!("../Ipe/Locale.ipe");
 /// Not in `STDLIB_MODULE_QUALIFIERS` so disjointness invariant holds.
 const STD_UI_EVENTS: &str = include_str!("../Ipe/Ui/Events.ipe");
 
+/// `Ipe.Log` — structured observability kernels (Layer-3 Ipê source).
+///
+/// Four severity levels — `debug` / `info` / `warn` / `error` — write a
+/// single-line message to the structured log. Each member is a point-free
+/// `Ffi.kernel "Log_*"` alias resolved by `detect_kernel_alias` to the
+/// registered `Log*` `StdlibKernel` variants. `Log.level` takes a `LogLevel`
+/// from `Ipe.Level` and produces a cross-shape `Setting a` value.
+/// Registered in [`COMPILED_STD_MODULES`] (NOT `MODULES`); NOT in
+/// `STDLIB_MODULE_QUALIFIERS`, so the disjointness invariant holds.
+const LOG: &str = include_str!("../Ipe/Log.ipe");
+
 /// Every compiled-source stdlib module, keyed by its dotted import name.
 ///
 /// Disjoint from [`MODULES`] (parse fixtures) and from `ipe_canon`'s
@@ -991,6 +1002,14 @@ pub const COMPILED_STD_MODULES: &[CompiledStdModule] = &[
     CompiledStdModule {
         dotted: "Ipe.Locale",
         source: LOCALE,
+    },
+    // Ipe.Log — Layer-3 source; `info`/`debug`/`warn`/`error` and their
+    // `*With` variants are point-free `Ffi.kernel "Log_*"` aliases resolved by
+    // `detect_kernel_alias` to the registered `Log*` kernels. `level` is
+    // likewise. Disjoint from `STDLIB_MODULE_QUALIFIERS` (no `"Log"` entry there).
+    CompiledStdModule {
+        dotted: "Ipe.Log",
+        source: LOG,
     },
 ];
 

@@ -1,0 +1,73 @@
+-- | Ipe.Log — structured observability kernels (Layer 3 Ipe source).
+--
+-- Four severity levels — `debug` / `info` / `warn` / `error` — write a
+-- single-line message to the structured log.  The `*With` variants attach
+-- an ordered list of typed context values alongside the message.
+--
+-- `Log.level` is the runtime-config front door for the minimum log
+-- severity.  It takes a `LogLevel` constructor from `Ipe.Level`
+-- (`Level.debug` / `Level.info` / `Level.warn` / `Level.error`) and
+-- produces a cross-shape `Setting a` value for inclusion in an app's
+-- settings list.
+--
+-- Line printing to stdout / stderr lives in `Ipe.Io` (`Io.println` /
+-- `Io.eprintln`), not here.
+module Ipe.Log exposing
+    ( info, debug, warn, error
+    , infoWith, debugWith, warnWith, errorWith
+    , level
+    )
+
+
+import Ipe.Ffi as Ffi
+
+
+-- | Emit an info-severity log line.
+info : String -> Task Error ()
+info = Ffi.kernel "Log_info"
+
+
+-- | Emit a debug-severity log line.
+debug : String -> Task Error ()
+debug = Ffi.kernel "Log_debug"
+
+
+-- | Emit a warn-severity log line.
+warn : String -> Task Error ()
+warn = Ffi.kernel "Log_warn"
+
+
+-- | Emit an error-severity log line.
+error : String -> Task Error ()
+error = Ffi.kernel "Log_error"
+
+
+-- | Emit an info-severity log line with a list of typed context values.
+infoWith : String -> List a -> Task Error ()
+infoWith = Ffi.kernel "Log_infoWith"
+
+
+-- | Emit a debug-severity log line with a list of typed context values.
+debugWith : String -> List a -> Task Error ()
+debugWith = Ffi.kernel "Log_debugWith"
+
+
+-- | Emit a warn-severity log line with a list of typed context values.
+warnWith : String -> List a -> Task Error ()
+warnWith = Ffi.kernel "Log_warnWith"
+
+
+-- | Emit an error-severity log line with a list of typed context values.
+errorWith : String -> List a -> Task Error ()
+errorWith = Ffi.kernel "Log_errorWith"
+
+
+-- | Set the minimum log severity for the application.  Takes a `LogLevel`
+-- constructor from `Ipe.Level` and returns a cross-shape `Setting a` for
+-- use in an app's settings list.
+--
+--     import Ipe.Level as Level
+--
+--     Web.appWith [ Log.level Level.warn ] { ... }
+level : LogLevel -> Setting a
+level = Ffi.kernel "Log_level"
