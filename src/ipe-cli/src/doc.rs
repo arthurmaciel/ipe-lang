@@ -592,13 +592,8 @@ fn strip_front_matter(text: &str) -> &str {
     let Some(rest) = text.strip_prefix("---\n") else {
         return text;
     };
-    // Find the closing delimiter.
-    if let Some(close_pos) = rest.find("\n---\n") {
-        &rest[close_pos + "\n---\n".len()..]
-    } else {
-        // No closing delimiter — return original text unchanged.
-        text
-    }
+    rest.find("\n---\n")
+        .map_or(text, |pos| &rest[pos + "\n---\n".len()..])
 }
 
 /// Language construct pages embedded at compile time from `docs/constructs/`.
