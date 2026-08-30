@@ -60,7 +60,14 @@ const CRYPTO: &str = include_str!("../Ipe/Crypto.ipe");
 /// [`COMPILED_STD_MODULES`] (NOT `MODULES`); NOT in `STDLIB_MODULE_QUALIFIERS`,
 /// so the disjointness invariant holds.
 const BITWISE: &str = include_str!("../Ipe/Bitwise.ipe");
-/// `Ipe.Task` — Task combinator surface.
+/// `Ipe.Task` — Task combinator surface, compiled-source Layer-3.
+///
+/// Members are either point-free `Ffi.kernel "Task_*"` aliases resolved by
+/// `ipe_canon::resolve::detect_kernel_alias` to registered `Task*`
+/// `StdlibKernel` variants (`ipe_runtime::task::*`), or pure Ipê over those
+/// aliases (`BackoffStrategy` type definition, `RetryPolicy` type alias).
+/// Registered in [`COMPILED_STD_MODULES`] (NOT `MODULES`); NOT in
+/// `STDLIB_MODULE_QUALIFIERS`, so the disjointness invariant holds.
 const TASK: &str = include_str!("../Ipe/Task.ipe");
 /// `Ipe.Io` — standard-I/O effect kernels.
 const IO: &str = include_str!("../Ipe/Io.ipe");
@@ -276,10 +283,6 @@ pub const MODULES: &[StdModule] = &[
     StdModule {
         name: "Ipe.Crypto",
         source: CRYPTO,
-    },
-    StdModule {
-        name: "Ipe.Task",
-        source: TASK,
     },
     StdModule {
         name: "Ipe.Io",
@@ -728,6 +731,15 @@ pub const COMPILED_STD_MODULES: &[CompiledStdModule] = &[
     CompiledStdModule {
         dotted: "Ipe.Bytes",
         source: BYTES,
+    },
+    // Ipe.Task — Layer-3 source; members are either point-free
+    // `Ffi.kernel "Task_*"` aliases resolved by `detect_kernel_alias` to the
+    // registered `Task*` kernels (`ipe_runtime::task::*`), or pure Ipê over
+    // those aliases (`BackoffStrategy` / `RetryPolicy`). Disjoint from
+    // `STDLIB_MODULE_QUALIFIERS` (no `"Task"` entry there).
+    CompiledStdModule {
+        dotted: "Ipe.Task",
+        source: TASK,
     },
     CompiledStdModule {
         dotted: "Ipe.Random",
