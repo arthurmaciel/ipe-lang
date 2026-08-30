@@ -238,9 +238,9 @@ where
 /// Server.api : String -> (Request -> Task Error Response) -> Route
 ///
 /// `spec` is "METHOD /path" (e.g. "POST /v1/generate"); an omitted method
-/// matches any verb. Implements `Server_api`. The CSRF-exemption Go performs
-/// (`WithoutCsrf`) is a browser-session / double-submit concern from Ipe.Web
-/// with no analogue on the Rust HTTP server, so it has no effect here.
+/// matches any verb. The CSRF exemption (`WithoutCsrf`) is a browser-session /
+/// double-submit concern from Ipe.Web with no analogue on the Rust HTTP server,
+/// so it has no effect here.
 pub fn server_api<E, H>(spec: String, h: H) -> ServerRoute
 where
     E: Send + 'static,
@@ -781,7 +781,7 @@ fn parse_query(q: Option<&str>) -> HashMap<String, String> {
             let k = it.next().unwrap_or("");
             let v = it.next().unwrap_or("");
             // Repeated keys keep the FIRST value — consistent with
-            // http_client::http_parse_query and the Go runtime's parseQuery.
+            // http_client::http_parse_query.
             out.entry(urldecode(k)).or_insert_with(|| urldecode(v));
         }
     }
@@ -815,10 +815,8 @@ fn parse_cookies(header: &str, out: &mut HashMap<String, String>) {
 
 /// Build the Ipê `ServerRequest` from the axum request. Returns `Err(status)`
 /// when the request must be rejected before the handler runs — currently only
-/// `Err(413)` for an oversize body (`http.MaxBytesReader` →
-/// `WriteHeader(413)`, rt.go:7738). The previous code collapsed an oversize
-/// (and any body read error) into an empty body via `.unwrap_or_default()`,
-/// silently handing the handler `""` instead of refusing the request.
+/// `Err(413)` for an oversize body. Rejecting here ensures handlers never
+/// receive a silently-truncated body.
 async fn build_request(
     req: axum::extract::Request,
 ) -> Result<(ServerRequest, Option<axum::extract::ws::WebSocketUpgrade>), u16> {
@@ -961,23 +959,18 @@ fn to_axum_response(r: ServerResponse) -> axum::response::Response {
     for cookie_v in &r.cookies {
         builder = builder.header("set-cookie", cookie_v.as_str());
     }
-    // Safe-by-default security headers (setSecurityHeaders on the
-    // server path, rt.go:7838) — applied only when the handler hasn't already
-    // set them, so an explicit handler override wins (mirrors  `if h.Get
-    // (...) == ""`). Values are env/static (no request-derived strings → no
-    // header-injection surface).
+    // Safe-by-default security headers — applied only when the handler hasn't
+    // already set them, so an explicit handler override wins. Values are
+    // env/static (no request-derived strings → no header-injection surface).
     for (name, value) in crate::telemetry::security_headers() {
         if !r.headers.keys().any(|k| k.eq_ignore_ascii_case(name)) {
             builder = builder.header(name, value);
         }
     }
-    // Dev-only "🔍 Console" banner injection (rt.go server dispatch
-    // tail — injectDevBanner(devBannerHTML()) for every text/html response).
+    // Dev-only "🔍 Console" banner injection for every text/html response.
     // Runs on the buffered body only; streaming responses returned above via
-    // serve_streaming_sentinel bypass this (same as Go, where streams skip the
-    // buffered fmt.Fprint path). Effective content-type = the handler's override
-    // header when present, else r.contentType (mirrors the has_ct_header
-    // resolution used to emit the content-type above).
+    // serve_streaming_sentinel bypass this. Effective content-type = the
+    // handler's override header when present, else r.contentType.
     let effective_ct: String = if has_ct_header {
         r.headers
             .iter()
@@ -1114,7 +1107,7 @@ pub fn server_listen<E: From<String> + Send + 'static>(
             }
         }
         // Ipê doctrine: a panicking handler returns 500, never crashes the
-        // process (mirrors the Go runtime's per-handler recover()). The custom
+        // process. The custom
         // responder classifies + logs the panic SERVER-SIDE (errId) and returns a
         // 500 carrying ONLY the errId — never the panic message (no info leak).
         let app = app.layer(tower_http::catch_panic::CatchPanicLayer::custom(
@@ -2192,8 +2185,8 @@ fn csrf_set_cookie_value(token: &str, request_is_https: bool) -> String {
 }
 
 /// Middleware.withCsrf : Handler -> Handler. Double-submit-cookie CSRF guard
-/// for `Ipe.Http.Server` routes (Go/upstream-audit parity: `__Host-ipe_csrf`
-/// cookie, safe methods set/refresh it, unsafe methods require cookie ==
+/// for `Ipe.Http.Server` routes (`__Host-ipe_csrf` cookie, safe methods
+/// set/refresh it, unsafe methods require cookie ==
 /// `X-Csrf-Token` header via constant-time compare, 403 on any
 /// mismatch/missing value).
 ///
@@ -2461,8 +2454,7 @@ mod tests {
 
     #[tokio::test]
     async fn to_axum_response_leaves_non_html_untouched() {
-        // JSON / plain-text responses never get the banner (Go: the HasPrefix
-        // "text/html" gate excludes them).
+        // JSON / plain-text responses never get the banner (only text/html).
         let ipe = server_json(r#"{"ok":true}"#.to_string());
         let out = axum_body_string(to_axum_response(ipe)).await;
         assert_eq!(out, r#"{"ok":true}"#, "non-html body must be verbatim");

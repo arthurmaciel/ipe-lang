@@ -19,13 +19,12 @@
 //! `Ipe.File` kernels take a `Path` and never re-validate — the type is the
 //! proof. [`path_to_string`] is the single un-parse back to the raw `String`.
 //!
-//! The lexical engine (`clean`) is a faithful port of Go `path/filepath`
-//! rather than a wrapper over `std::path`, which is OS-tagged and diverges from
-//! Go on trailing slashes, repeated separators, and dotfiles. The Rust
-//! backend's equivalence target runs on Linux, so Unix `filepath` semantics are
-//! implemented exactly there; on Windows the same engine is driven with the
-//! Windows separator set (`\` and `/`) and volume-prefix parsing so the
-//! traversal check is not `\`-bypassable (see [`clean_with`]).
+//! The lexical engine (`clean`) implements Unix `filepath` semantics directly
+//! rather than wrapping `std::path`, which is OS-tagged and diverges on
+//! trailing slashes, repeated separators, and dotfiles. On Windows the same
+//! engine is driven with the Windows separator set (`\` and `/`) and
+//! volume-prefix parsing so the traversal check is not `\`-bypassable (see
+//! [`clean_with`]).
 //!
 //! # Trust model — what `Path` does and does NOT guarantee
 //!
@@ -176,7 +175,7 @@ fn clean(path: &str) -> String {
     clean_with(path, WINDOWS)
 }
 
-/// `Ipe.Path.base : Path -> String` — Go `filepath.Base` (Unix).
+/// `Ipe.Path.base : Path -> String` (Unix semantics).
 /// "" → "."; all-slashes → "/"; else the final element with trailing slashes
 /// stripped.
 #[must_use]
@@ -205,7 +204,7 @@ pub fn path_base(p: Path) -> String {
     stripped.get(i..).unwrap_or("").to_string()
 }
 
-/// `Ipe.Path.dir : Path -> String` — Go `filepath.Dir` (Unix).
+/// `Ipe.Path.dir : Path -> String` (Unix semantics).
 /// All but the last element, then `Clean`ed: "" / "foo" → "."; "/" → "/";
 /// "/foo/bar" → "/foo"; "/foo/" → "/foo"; "a//b" → "a".
 #[must_use]
@@ -221,9 +220,9 @@ pub fn path_dir(p: Path) -> String {
     clean(path.get(..i).unwrap_or(""))
 }
 
-/// `Ipe.Path.ext : Path -> String` — Go `filepath.Ext` (Unix).
+/// `Ipe.Path.ext : Path -> String` (Unix semantics).
 /// The suffix from the LAST `.` in the final path element (including the dot),
-/// or "" when the final element has no dot. `filepath.Ext(".bashrc")` → ".bashrc".
+/// or "" when the final element has no dot. `".bashrc"` → `".bashrc"`.
 #[must_use]
 pub fn path_ext(p: Path) -> String {
     let path = p.0;
@@ -240,8 +239,7 @@ pub fn path_ext(p: Path) -> String {
     String::new()
 }
 
-/// `Ipe.Path.isAbsolute : Path -> Bool` — Go `filepath.IsAbs` (Unix):
-/// an absolute path begins with `/`.
+/// `Ipe.Path.isAbsolute : Path -> Bool`: an absolute path begins with `/`.
 #[must_use]
 pub fn path_is_absolute(p: Path) -> bool {
     p.0.as_bytes().first() == Some(&SEP)
@@ -285,7 +283,7 @@ mod tests {
 
     #[test]
     fn rooted_dotdot_cannot_escape_and_is_accepted() {
-        // Go `Clean` stops `..` at the root, so a rooted path is always safe.
+        // `Clean` stops `..` at the root, so a rooted path is always safe.
         assert_eq!(path_to_string(mk("/a/../../b")), "/b");
     }
 
@@ -453,10 +451,8 @@ mod tests {
     }
 
     #[test]
-    fn unix_clean_agrees_with_go_path_clean_on_a_dotdot_corpus() {
-        // `clean_with(_, false)` must match Go `path.Clean` so a glued-dot
-        // regression cannot slip past the escape check. Reference values are Go
-        // `path.Clean` outputs.
+    fn unix_clean_dotdot_corpus() {
+        // `clean_with(_, false)` correctness for dotdot traversal paths.
         for (input, want) in [
             ("../..", "../.."),
             ("../../../etc/passwd", "../../../etc/passwd"),

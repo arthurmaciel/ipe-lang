@@ -95,35 +95,32 @@ pub fn time_time_string(ms: i64) -> String {
 }
 
 /// `Time.addMillis : Int -> Int -> Int` — pure integer addition.
-/// Go: `return AsInt(ms) + AsInt(delta)`. Args order: delta first, ms second
-/// (matches the Ipê sig `addMillis : Int -> Int -> Int`, called
-/// `Time.addMillis delta ms`).
+/// Args order: delta first, ms second (matches the Ipê sig
+/// `addMillis : Int -> Int -> Int`, called `Time.addMillis delta ms`).
 #[must_use]
 pub fn time_add_millis(delta: i64, ms: i64) -> i64 {
     ms.saturating_add(delta)
 }
 
 /// `Time.diffMillis : Int -> Int -> Int` — `later - earlier`.
-/// Go: `return AsInt(later) - AsInt(earlier)`. Args: (later, earlier).
+/// Args: (later, earlier).
 #[must_use]
 pub fn time_diff_millis(later: i64, earlier: i64) -> i64 {
     later.saturating_sub(earlier)
 }
 
-/// `Time.format : String -> Int -> String` — custom standard layout.
-/// Go uses `t.UTC().Format(layout)`. We map the Go reference-time layout to
-/// chrono's strftime format. Ipe exposes the Go layout directly
-/// ("2006-01-02 15:04:05"), so we translate the Go reference time tokens.
-/// Fallback to a best-effort strftime for unrecognised tokens (matches the
-/// open-ended nature of  `t.Format`).
+/// `Time.format : String -> Int -> String` — custom timestamp layout.
+/// Accepts the `2006-01-02 15:04:05` reference-time token format and
+/// translates it to chrono strftime internally. Falls back to a best-effort
+/// strftime render for any unrecognised tokens.
 #[must_use]
 pub fn time_format(layout: String, ms: i64) -> String {
     use chrono::{TimeZone, Utc};
     let Some(dt) = Utc.timestamp_millis_opt(ms).single() else {
         return String::new();
     };
-    // Translate Go reference-time placeholders to chrono strftime.
-    //  reference time: Mon Jan 2 15:04:05 MST 2006 (= 2006-01-02 15:04:05).
+    // Translate reference-time placeholders to chrono strftime.
+    // Reference time: Mon Jan 2 15:04:05 MST 2006 (= 2006-01-02 15:04:05).
     let strfmt = layout
         .replace("2006", "%Y")
         .replace("01", "%m")
@@ -152,8 +149,7 @@ pub fn time_format(layout: String, ms: i64) -> String {
 }
 
 /// `Time.formatHTTP : Int -> String` — HTTP date header format.
-/// Go: `t.UTC().Format(http.TimeFormat)` → "Mon, 02 Jan 2006 15:04:05 GMT".
-/// chrono's `%a, %d %b %Y %H:%M:%S GMT` produces byte-identical output.
+/// Produces "Mon, 02 Jan 2006 15:04:05 GMT" (RFC 7231 / HTTP-date).
 #[must_use]
 pub fn time_format_http(ms: i64) -> String {
     use chrono::{TimeZone, Utc};
@@ -163,9 +159,8 @@ pub fn time_format_http(ms: i64) -> String {
     }
 }
 
-/// `Time.formatRFC3339 : Int -> String` — RFC 3339 / ISO 8601 with nanoseconds.
-/// Go: `t.UTC().Format(time.RFC3339Nano)` → "2006-01-02T15:04:05.999999999Z".
-/// chrono's `to_rfc3339` produces RFC 3339 with sub-second precision when non-zero.
+/// `Time.formatRFC3339 : Int -> String` — RFC 3339 / ISO 8601 timestamp.
+/// Sub-second precision is included when non-zero.
 #[must_use]
 pub fn time_format_rfc3339(ms: i64) -> String {
     use chrono::{TimeZone, Utc};
