@@ -574,10 +574,7 @@ fn row_poly_task_seq_row_read_routes_effect_through_getter() {
     // into src/ipe_mods/ipe_mod_main.rs alongside src/main.rs.
     let mut emitted = std::fs::read_to_string(out.join("src").join("main.rs"))
         .expect("emitted main.rs must exist");
-    let mod_main = out
-        .join("src")
-        .join("ipe_mods")
-        .join("ipe_mod_main.rs");
+    let mod_main = out.join("src").join("ipe_mods").join("ipe_mod_main.rs");
     if let Ok(extra) = std::fs::read_to_string(&mod_main) {
         emitted.push_str(&extra);
     }

@@ -402,10 +402,10 @@ mod tests {
         let tokens = annotate(&syntax, &canon_mod, src, &interner);
 
         // `defaultVal` call site in `Maybe.withDefault defaultVal …` must be Function.
-        let kernel_pos = src.rfind("Maybe.withDefault").expect("Maybe.withDefault present");
-        let user_pos = src[kernel_pos..]
-            .find("defaultVal")
-            .map(|r| kernel_pos + r);
+        let kernel_pos = src
+            .rfind("Maybe.withDefault")
+            .expect("Maybe.withDefault present");
+        let user_pos = src[kernel_pos..].find("defaultVal").map(|r| kernel_pos + r);
         if let Some(pos) = user_pos {
             let tok = tokens.iter().find(|t| t.byte_start as usize == pos);
             if let Some(t) = tok {

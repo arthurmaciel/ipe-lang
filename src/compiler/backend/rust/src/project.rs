@@ -3053,7 +3053,8 @@ pub fn emit_spine(ctx: &EmitCtx, program: &Program) -> DResult<String> {
                 .any(|f| f.id == eid && matches!(f.ret, IrType::CliApp))
         })
     });
-    let uses_shape_app_leaf_flagged = ctx.uses_web || ctx.uses_tui || ctx.uses_webview || uses_cli_app;
+    let uses_shape_app_leaf_flagged =
+        ctx.uses_web || ctx.uses_tui || ctx.uses_webview || uses_cli_app;
     if uses_shape_app_leaf_flagged && ctx.target == ipe_ir::Target::Native {
         let replaced = out.replacen(SHAPE_APP_BLOCK_ON_ANCHOR, SHAPE_APP_RUN_BLOCKING, 1);
         if replaced == out {

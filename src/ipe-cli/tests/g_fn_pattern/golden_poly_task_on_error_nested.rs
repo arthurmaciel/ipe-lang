@@ -83,10 +83,7 @@ fn poly_task_on_error_nested_green() {
     // into src/ipe_mods/ipe_mod_main.rs alongside src/main.rs.
     let mut main_rs = std::fs::read_to_string(out.join("src").join("main.rs"))
         .expect("emitted main.rs must exist after a successful ipe build");
-    let mod_main = out
-        .join("src")
-        .join("ipe_mods")
-        .join("ipe_mod_main.rs");
+    let mod_main = out.join("src").join("ipe_mods").join("ipe_mod_main.rs");
     if let Ok(extra) = std::fs::read_to_string(&mod_main) {
         main_rs.push_str(&extra);
     }

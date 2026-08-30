@@ -432,7 +432,13 @@ mod tests {
         let Some(first_branch) = branches.first() else {
             return;
         };
-        let Pattern_::PCtor { type_name, name, index, home, .. } = &first_branch.pat.value
+        let Pattern_::PCtor {
+            type_name,
+            name,
+            index,
+            home,
+            ..
+        } = &first_branch.pat.value
         else {
             assert!(false_marker(), "first arm pattern is PCtor");
             return;

@@ -54,9 +54,8 @@ mod tests {
         // that carries the Network capability. Using a library module with a
         // non-`main` entry avoids the entry-point shape check; the capability scan
         // traverses all exposed roots regardless of shape.
-        let caps = caps_of(
-            "module HttpTest exposing (send)\nimport Ipe.Http\nsend = Http.request\n",
-        );
+        let caps =
+            caps_of("module HttpTest exposing (send)\nimport Ipe.Http\nsend = Http.request\n");
         assert_eq!(
             caps,
             Some(std::collections::BTreeSet::from([Capability::Network]))
@@ -71,9 +70,8 @@ mod tests {
     /// audit's sibling-capability check relies on.
     #[test]
     fn exposed_library_module_without_main_infers_network() {
-        let caps = caps_of(
-            "module Extra exposing (fetch)\nimport Ipe.Http\nfetch = Http.request\n",
-        );
+        let caps =
+            caps_of("module Extra exposing (fetch)\nimport Ipe.Http\nfetch = Http.request\n");
         assert_eq!(
             caps,
             Some(std::collections::BTreeSet::from([Capability::Network]))
