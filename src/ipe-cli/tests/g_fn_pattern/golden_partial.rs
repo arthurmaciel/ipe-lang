@@ -19,8 +19,8 @@
 //! returned closure → `3`. `applyTwice (add 1) 5` passes the partial `add 1` as
 //! a first-class function and applies it twice: `add 1 (add 1 5)` → `7`. The
 //! entry prints `p + o + h = 5 + 3 + 7 = 15`. Running the the toolchain inside
-//! `cargo test` is impractical (it needs the the `ipe` binary plus a Go
-//! toolchain), so the hand-computed value is the in-test oracle, documented here
+//! `cargo test` is impractical (it needs the full `ipe` toolchain),
+//! so the hand-computed value is the in-test oracle, documented here
 //! against the equivalent command.
 
 use std::path::{Path, PathBuf};
@@ -64,7 +64,7 @@ fn emits_byte_identical_main_rs() {
 }
 
 /// Full spine: compile, build the emitted Cargo project, run it, and assert the
-/// partial/over-application arithmetic prints `15` — the same value the Go
+/// partial/over-application arithmetic prints `15` — the same value the golden
 /// backend produces. Gated on `IPE_E2E=1` so the default `cargo test` stays
 /// fast.
 #[test]

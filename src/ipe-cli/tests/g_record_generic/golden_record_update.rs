@@ -6,7 +6,7 @@
 //! Verified: the reference compiler at
 //! `/home/arthur/Documentos/comp/ipe/out/ipe` compiles + runs the SAME
 //! `Main.ipe` to stdout `43\n`, exit 0 in a temp dir (so the
-//! Go build artifacts never touch the reference tree):
+//! build artifacts never touch the reference tree):
 //!
 //! ```text
 //! $ cd "$(mktemp -d)" && ipe run Main.ipe   
@@ -17,8 +17,8 @@
 //! `q.x + p.y = 43` — proving the update replaced `x` (41) and left `p`
 //! untouched (`p.y = 2`). The `end_to_end_*` test below asserts the Rust
 //! backend reaches the identical `43`. Running the the toolchain inside
-//! `cargo test` is impractical (it needs the the `ipe` binary plus a Go
-//! toolchain), so the hand-verified value is the in-test oracle, documented
+//! `cargo test` is impractical (it needs the full `ipe` toolchain),
+//! so the hand-verified value is the in-test oracle, documented
 //! here against the equivalent command.
 
 use std::path::{Path, PathBuf};

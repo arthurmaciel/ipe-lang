@@ -46,7 +46,7 @@ fn emits_byte_identical_main_rs() {
     );
 }
 
-/// Full spine: compile, build, run, assert stdout `2` — the Go-backend value.
+/// Full spine: compile, build, run, assert stdout `2` — the verified output.
 /// Gated on `IPE_E2E=1` so the default `cargo test` stays fast.
 #[test]
 fn end_to_end_builds_and_prints_two() {

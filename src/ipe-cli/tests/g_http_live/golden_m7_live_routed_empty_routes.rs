@@ -143,7 +143,7 @@ main =
 
 /// `Web.app` with a NON-EMPTY `routes` list but Model has
 /// no `page` field.  The golden oracle (`tools/oracle/bin/ipe`) compiles this fine
-/// (Go's `applyRoute` calls `RecordUpdate(model, {"Page": page})` which is a
+/// (the runtime"Page": page})` which is a
 /// silent no-op when the `Page` field is absent).  This shape must compile on
 /// the non-routed path, matching the reference.
 ///
@@ -482,7 +482,7 @@ fn non_routed_with_nonempty_routes_compiles() {
     assert!(
         result.is_ok(),
         "#153 regression: Web.app with non-empty routes but no `page` field \
-         must compile on the non-routed path (Go oracle accepts this shape), \
+         must compile on the non-routed path (accepted shape), \
          got: {:?}",
         result.err(),
     );

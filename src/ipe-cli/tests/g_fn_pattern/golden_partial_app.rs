@@ -1,7 +1,7 @@
 //! IPE-L0110 seal — partial + over-application of a first-class function
 //! VALUE. `ipe` must emit `main.rs` byte-identical to the checked-in golden,
 //! and (behind `IPE_E2E=1`) the emitted project must build and print
-//! `6\n33\n103\n`, exit 0 — the same values the Go reference produces.
+//! `6\n33\n103\n`, exit 0 — the same values (hand-verified).
 //!
 //! The named-callee path already eta-expands a partial application (`add 2` ->
 //! `\n -> add(2, n)`). This fixture pins the VALUE path: the reference

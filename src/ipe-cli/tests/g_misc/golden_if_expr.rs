@@ -15,7 +15,7 @@
 //! `absVal (0 - 7) = 7` (the `n < 0` branch negates); `classify 5 = 1` (the
 //! leading `n > 0` branch); `classify (0 - 3) = 2` (the `else if n < 0`
 //! branch); the entry's `total = 7 + 1 + 2 = 10`. The `end_to_end_*` test
-//! below asserts the Rust backend reaches the identical `10`. Running the Go
+//! below asserts the Rust backend reaches the identical `10`. Running the golden
 //! toolchain inside `cargo test` is impractical (it needs the the compiler `ipe`
 //! binary plus a the toolchain), so the hand-computed value is the in-test
 //! oracle, documented here against the equivalent command.

@@ -9,13 +9,13 @@
 //! soundness floor for bounded generics: ipe accepting a program it cannot
 //! lower to compiling Rust is forbidden.
 //!
-//! For the `Number` case the Go reference rejects the same program too (its
+//! For the `Number` case the golden reference rejects the same program too (its
 //! `Number` constraint is not satisfied by `Bool`); the codes differ but both
 //! fail closed.
 //!
-//! The `Equatable`-at-a-function case is a *justified divergence* from Go: the
-//! the backend lowers generic equality to a runtime reflect-based `rt.Eq`, which
-//! quietly accepts a function argument (returning `false`). The Rust backend
+//! The `Equatable`-at-a-function case is a *sanctioned divergence*: a prior
+//! backend lowered generic equality to a reflect-based path that quietly accepts a
+//! function argument (returning `false`). The Rust backend
 //! instead lowers `==` to the static `PartialEq` operator, which Rust never
 //! derives for a function — so emitting it would fail `cargo`. ipe therefore
 //! rejects equality instantiated at a function type here (IPE-T0014) rather than

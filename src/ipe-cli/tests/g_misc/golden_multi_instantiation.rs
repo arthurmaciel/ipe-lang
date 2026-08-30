@@ -19,7 +19,7 @@
 //! Verified: the reference compiler at
 //! `/home/arthur/Documentos/comp/ipe/out/ipe` compiles + runs the SAME
 //! `Main.ipe` to stdout `42\n`, exit 0 in a temp dir (so the
-//! Go build artifacts never touch the reference tree):
+//! build artifacts never touch the reference tree):
 //!
 //! ```text
 //! $ cd "$(mktemp -d)" && ipe run Main.ipe   

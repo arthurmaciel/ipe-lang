@@ -14,7 +14,7 @@
 //! cyclic enum-payload edge (the whole tuple, `ChainNode(Box<(MainChain, i64)>)`),
 //! balanced by `Box::new` at construction and a deref at pattern binding.
 //!
-//! Note: the Go reference parser does NOT accept a tuple type as a constructor
+//! Note: the reference parser does NOT accept a tuple type as a constructor
 //! payload, so there is no golden oracle for this exact source — `ipec` accepts a
 //! superset here. The in-test hand-computed `5` is the oracle, and the gate's
 //! load-bearing assertion is that the emitted crate BUILDS (no E0072) and runs,

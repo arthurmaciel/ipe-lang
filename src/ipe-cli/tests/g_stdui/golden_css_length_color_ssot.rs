@@ -9,7 +9,7 @@
 //!
 //! Shared shapes covered:
 //! - `Length`: `Px n`, `Vh n`, `Vw n`.
-//! - `Color`: `Rgba r g b a` (alpha via the Go-`'g'`-format float rule:
+//! - `Color`: `Rgba r g b a` (alpha via the shortest-decimal float rule:
 //!   `1.0` → `"1"`, `0.5` → `"0.5"`, `0.0` → `"0"`).
 //!
 //! Out of scope: `Fill`/`Content`/`Min`/`Max` are layout-intent lengths in

@@ -94,7 +94,7 @@ fn ex10_live_component_exits_zero() {
 ///    emitted; (b) when `split_typed_sig` returns `IrType::Generic(any_sym)`
 ///    for the return position, the lowerer substitutes the body expression's
 ///    solved concrete type from `self.types.regions[(home, body.span)]` instead.
-///    This mirrors the Haskell compiler's `Instantiate.fromAnnotation` gate
+///    This mirrors the compiler's `Instantiate.fromAnnotation` gate
 ///    which filters `"any"` out before treating free vars as polymorphic.
 #[test]
 fn ex19_ipeforum_exits_zero() {

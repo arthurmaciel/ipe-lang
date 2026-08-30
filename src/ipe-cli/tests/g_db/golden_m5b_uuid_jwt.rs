@@ -55,9 +55,9 @@
 //! * `jwt_rs256_roundtrip` — `encodeRs256` (PKCS#8 RSA-2048) then
 //!   `decodeRs256` (SPKI public key) round-trips.  Output: `"ok"`.
 //! * `jwt_hs256_bytes` — prints the HS256 token; asserted byte-identical to
-//!   the captured Go token.
+//!   the canonical captured token.
 //! * `jwt_rs256_bytes` — prints the RS256 token; asserted byte-identical to
-//!   the captured Go token (RS256/PKCS#1 v1.5 is deterministic).
+//!   the canonical captured token (RS256/PKCS#1 v1.5 is deterministic).
 //!
 //! Run:
 //!

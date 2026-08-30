@@ -1,6 +1,6 @@
 //! Parenthesised field-access gate: `(expr).field`.
 //! Field access on a *non-identifier* atom — a parenthesised expression — must
-//! parse as a postfix `.field` access, matching the Go reference. `ipec` must
+//! parse as a postfix `.field` access, matching the golden reference. `ipec` must
 //! emit `main.rs` byte-identical to the checked-in golden, and (behind
 //! `IPE_E2E=1`) the emitted project must build and print `42`.
 //!
@@ -16,7 +16,7 @@
 //!
 //! Verified: the reference compiler at
 //! `/home/arthur/Documentos/comp/ipe/out/ipe` compiles + runs the SAME
-//! `Main.ipe` to stdout `42\n`, exit 0 — hand-verified in a temp dir (so the Go
+//! `Main.ipe` to stdout `42\n`, exit 0 — hand-verified in a temp dir (so the golden
 //! build artifacts never touch the reference tree):
 //!
 //! ```text
@@ -64,7 +64,7 @@ fn emits_byte_identical_main_rs() {
 }
 
 /// Full spine: compile, build the emitted Cargo project, run it, and assert the
-/// parenthesised field-access program prints `42` — the same value the Go
+/// parenthesised field-access program prints `42` — the same value the golden
 /// backend produces. Gated on `IPE_E2E=1` so the default `cargo test` stays
 /// fast.
 #[test]

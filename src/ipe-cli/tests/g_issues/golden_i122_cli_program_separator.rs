@@ -1,15 +1,15 @@
 //! oracle parity check for `Terminal.appLines`'s view printer. A
 //! `view` that doesn't append its own trailing newline gets renders glued
 //! together with NOTHING in between, and exactly ONE trailing newline after
-//! the event loop exits. This matches `runtime-go/rt/cli.go`'s
+//! the event loop exits. This matches the runtime's
 //! `cliPrintView` contract byte-for-byte: it "writes the result to stdout
 //! WITHOUT a trailing newline (the user's prompt formatting decides whether
 //! to add one)".
 //!
 //! Forcing a newline after every render would break `examples/shapes/terminal/simple-counter`'s
 //! REPL-prompt UX (`view` returns `"count=... > "` with no trailing newline so
-//! the cursor stays on the prompt line) and diverge from the Go reference.
-//! This test asserts the CORRECT (Go-parity) glued-together behavior so
+//! the cursor stays on the prompt line) and diverge from the golden reference.
+//! This test asserts the CORRECT (golden-verified) glued-together behavior so
 //! a future "fix" doesn't reintroduce that divergence.
 //!
 //! Gated on `IPE_E2E=1`. Run:
@@ -55,7 +55,7 @@ fn console_app_glues_consecutive_renders_matching_go_oracle() {
     );
 
     assert_eq!(outcome.exit_code, Some(0));
-    // Go-parity: renders glue together (view supplies no separator of its
+    // golden-verified: renders glue together (view supplies no separator of its
     // own), with exactly ONE trailing newline after the loop exits.
     let expected = "lines: 0lines: 1lines: 2\n";
     assert_eq!(

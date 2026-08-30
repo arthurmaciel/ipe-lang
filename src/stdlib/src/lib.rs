@@ -1,8 +1,7 @@
 //! The embedded Ipê standard-library source (`Ipe.*`).
 //!
 //! `ipe` is self-contained: the foundational `Ipe` modules are compiled
-//! into the binary as their original Ipe source (a port of the Haskell
-//! compiler's Template-Haskell embedding of `ipe-stdlib/`). The checked-in copies
+//! into the binary as their original Ipe source. The checked-in copies
 //! under `crates/ipec/stdlib/Ipe/Core/` are byte-identical to the upstream
 //! `ipe-stdlib` sources; embedding a copy (rather than `include_str!`-ing an
 //! out-of-repo path) keeps the build portable and the toolchain hermetic.
@@ -563,7 +562,7 @@ const STD_DB_STORE_UNSAFE: &str = include_str!("../Ipe/Db/Store/Unsafe.ipe");
 ///
 /// Compiled pure-Ipê source: defines the `Money` / `Currency` ADTs and
 /// pattern-matches their own constructors.  All `Ffi.callPure` calls from
-/// the upstream Haskell stdlib have been replaced with pure Ipe
+/// the original `Ffi.callPure` calls have been replaced with pure Ipe
 /// case-expressions / recursions.  The FX rate registry is stubbed.
 /// Not in `STDLIB_MODULE_QUALIFIERS` so disjointness invariant holds.
 /// Unblocks `00-standard-libs` (N0004: Ipe.Money).
@@ -614,12 +613,9 @@ const IPE_CORE_ENV: &str = include_str!("../Ipe/Env.ipe");
 ///
 /// Defines `type Cache k v = Cache Int` ADT.  RESOLVES (ipe-0 AND
 /// cargo-0): the seven `Cache_*` kernels are registered
-/// (`ipe_runtime::cache::*`; a faithful port of the reference's Go+Rust cache
-/// kernels).  The opaque `Cache k v` is backed by the non-generic runtime
-/// `IpeCacheHandle` (the phantom `k`/`v` are dropped, mirroring the reference's
-/// `runtimeOpaqueTypes` mapping); `CacheCfg` / the `stats` return record fold to
-/// the runtime `CacheCfg` / `CacheStats` structs (mirroring the reference's
-/// struct-alias registry).
+/// (`ipe_runtime::cache::*`).  The opaque `Cache k v` is backed by the non-generic
+/// runtime `IpeCacheHandle` (the phantom `k`/`v` are dropped); `CacheCfg` / the
+/// `stats` return record fold to the runtime `CacheCfg` / `CacheStats` structs.
 /// Not in `STDLIB_MODULE_QUALIFIERS` so disjointness invariant holds.
 const STD_CACHE: &str = include_str!("../Ipe/Cache.ipe");
 

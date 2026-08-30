@@ -102,7 +102,7 @@ fn tco_value_param_double_use_compiles_and_computes() {
     assert_eq!(out.stdout.trim(), "13");
 }
 
-// ── Go-parity byte-diff — proves TCO is value-preserving, not just non-crashing ──
+// ── golden-verified byte-diff — proves TCO is value-preserving, not just non-crashing ──
 
 /// `tco_count_small` (`count 1000 0` → `1000`) matches the cached golden oracle. The
 /// 2,000,000-iter run is reserved for the constant-stack proof above; a small N

@@ -10,10 +10,10 @@
 //!
 //! ## Oracle provenance
 //!
-//! All three goldens are TRUE Go-parity goldens (`oracle_divergence = false`):
+//! All three goldens are TRUE golden-verified goldens (`oracle_divergence = false`):
 //! the the reference compiler compiled the identical `Main.ipe` and produced the
 //! captured `expected_go.txt`.  The test asserts byte-identity of stdout with
-//! the Go output.
+//! the cached output.
 //!
 //! ## Golden catalogue
 //!
@@ -79,7 +79,7 @@ fn build_run(name: &str) -> (PathBuf, crate::support::RunOutcome) {
     (dir, outcome)
 }
 
-/// Compile/build/run the golden and assert its stdout matches the cached Go
+/// Compile/build/run the golden and assert its stdout matches the cached
 /// oracle. Gated on `IPE_E2E=1`.
 fn assert_runs_and_matches_oracle(name: &str) {
     if std::env::var("IPE_E2E").is_err() {
@@ -94,7 +94,7 @@ fn assert_runs_and_matches_oracle(name: &str) {
 
 /// `Http.parseQuery "a=1&b=two%20words&a=ignored&c"` — first-key-wins,
 /// percent-decodes spaces, empty-value for bare key.  Output: 3 `key=value`
-/// lines (sorted by `Dict.toList`).  Go-parity oracle.
+/// lines (sorted by `Dict.toList`).  golden-verified oracle.
 #[test]
 fn http_parse_query() {
     assert_runs_and_matches_oracle("http_parse_query");
@@ -127,7 +127,7 @@ fn http_method_match() {
 
 /// Construct `{ status = 200, body = "ok", headers = Dict.fromList […] }`
 /// and read back fields.  Proves the `{body, headers, status}` fieldset
-/// synthesises and that `Dict.get` inside `.headers` resolves.  Go-parity
+/// synthesises and that `Dict.get` inside `.headers` resolves.  golden-verified
 /// oracle.
 #[test]
 fn http_response_fields() {

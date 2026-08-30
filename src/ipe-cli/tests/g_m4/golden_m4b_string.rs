@@ -2,7 +2,7 @@
 //! and run with golden parity (rune-correct, byte-for-byte output match).
 //!
 //! Surfaces the full `Ipe.String` and `Ipe.Char` kernel sets,
-//! mirroring the Go runtime's `String_*` / `Char_*` helpers. Key semantic
+//! mirroring the runtime's `String_*` / `Char_*` helpers. Key semantic
 //! invariants verified here:
 //!
 //! * `String.toUpper "hi"` → `"HI"` — ASCII toUpper.
@@ -109,7 +109,7 @@ fn string_drop_left_unicode_rune_based() {
 
 // ── Char.toUpper ──────────────────────────────────────────────────────────────
 
-/// `Char.toUpper 'a'` → `"A"`. Returns a single-rune String (Go kernel shape).
+/// `Char.toUpper 'a'` → `"A"`. Returns a single-rune String.
 #[test]
 fn char_to_upper_ascii() {
     assert_runs_and_matches_oracle("char_to_upper");
@@ -131,24 +131,24 @@ fn char_is_alpha_ascii_x() {
     assert_runs_and_matches_oracle("char_is_alpha");
 }
 
-// ── Predicate Go-parity edges (exact General_Category, not Rust's broader std) ──
+// ── Predicate golden-verified edges (exact General_Category, not Rust's broader std) ──
 
-/// `Char.isDigit '²'` → `False`. U+00B2 SUPERSCRIPT TWO is category No, not Nd;
-/// Go's `unicode.IsDigit` rejects it (Rust's `char::is_numeric` would accept).
+/// `Char.isDigit '²'` → `False`. U+00B2 SUPERSCRIPT TWO is category No, not Nd
+/// (Rust's `char::is_numeric` would accept it, but Ipê uses the stricter Nd gate).
 #[test]
 fn char_is_digit_superscript_two_is_false() {
     assert_runs_and_matches_oracle("char_is_digit_superscript");
 }
 
 /// `Char.isLower 'ª'` → `False`. U+00AA FEMININE ORDINAL INDICATOR is category
-/// Lo (with the `Other_Lowercase` property); Go's `unicode.IsLower` rejects it
+/// Lo (with the `Other_Lowercase` property); Ipê rejects it
 /// (Rust's `char::is_lowercase` would accept via `Other_Lowercase`).
 #[test]
 fn char_is_lower_feminine_ordinal_is_false() {
     assert_runs_and_matches_oracle("char_is_lower_ordinal");
 }
 
-// ── String.split "" — rune split, no boundary sentinels (Go strings.Split) ─────
+// ── String.split "" — rune split, no boundary sentinels ──────────────────────
 
 /// `String.split "" "abc" |> List.length` → `3` (one segment per rune; no
 /// leading/trailing "" entries that Rust's `str::split("")` would emit).

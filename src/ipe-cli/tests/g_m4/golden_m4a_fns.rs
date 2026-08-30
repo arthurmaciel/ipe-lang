@@ -1,6 +1,6 @@
 //! Stdlib-functions parity gate: the kernel-anchored `Ipe.List`,
-//! `Ipe.Maybe`, and `Ipe.Result` combinators compile and run with Go
-//! parity.
+//! `Ipe.Maybe`, and `Ipe.Result` combinators compile and run with
+//! golden-verified output.
 //!
 //! The `List` type + literals + `::`, the `Maybe` / `Result` /
 //! `Bool` builtins, and cons/list patterns are covered elsewhere. This gate

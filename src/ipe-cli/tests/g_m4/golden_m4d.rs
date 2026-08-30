@@ -9,8 +9,8 @@
 //!
 //! Set golden tests exercise the `Set` kernel family:
 //!
-//! * `Set.member`                    → `True` (`oracle_divergence` = true — Go's
-//!   `Set_member` panics on `rt.IpeSet`; ipe output is the reference)
+//! * `Set.member`                    → `True` (`oracle_divergence` = true — see
+//!   `set_member_divergence`; ipe output is the reference)
 //! * Set union / diff / intersect / dedup sizes → `4 1 2 3` (golden parity)
 //!
 //! Every test is gated on `IPE_E2E=1`; without it the test returns early. Run:
@@ -91,8 +91,8 @@ fn dict_keys_count() {
 
 /// `Set.member 3 (Set.fromList [1, 2, 3])` → `True`.
 ///
-/// `oracle_divergence` = true — Go's `Set_member` panics at runtime on
-/// `rt.IpeSet`; ipe's correct output (`True`) is the reference.
+/// `oracle_divergence` = true — `Set_member` panicked in the prior backend;
+/// ipe's correct output (`True`) is the reference.
 #[test]
 fn set_member_present() {
     assert_runs_and_matches_oracle("set_member");

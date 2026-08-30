@@ -149,8 +149,8 @@ fn compile_and_build(test_name: &str, ipe_source: &str) -> Result<std::path::Pat
 ///
 /// After the fix, the scheme PINS the key-event argument to the closed
 /// record `{ kind : String, value : String }` (the the compiler reference types it
-/// `any -> msg` and Go fails at runtime on non-KeyEvent handlers; we fail at
-/// compile time — same sanctioned tightening as the Model / Msg gates).
+/// `any -> msg` but we fail at compile time — same sanctioned tightening as
+/// the Model / Msg gates).
 /// The emitter generates a bridging wrapper:
 ///
 /// ```text

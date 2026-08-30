@@ -11,8 +11,7 @@
 //! * `prec_vs_arith`  — `2 + 3 |> String.fromInt` groups `+` first → `"5"`.
 //! * `mixed_append`   — `"a" ++ "b" |> String.toUpper` groups `++` first → `"AB"`.
 //!
-//! Verified output: `oracle_divergence = false` for all five — the Go
-//! backend produces identical stdout (`3`, `3`, `3`, `5`, `AB`).
+//! Verified output: `oracle_divergence = false` for all five ...//! backend produces identical stdout (`3`, `3`, `3`, `5`, `AB`).
 
 use std::path::{Path, PathBuf};
 

@@ -1,7 +1,7 @@
 //! Regression — `Ipe.Test.runMain` must print the pass/fail SUMMARY line
-//! to stdout, matching the Go reference.
+//! to stdout, matching the golden reference.
 //!
-//! The Go/the compiler reference `Ipe.Test.summarise` prints exactly one line,
+//! `Ipe.Test.summarise` prints exactly one line,
 //! `"<pass> passed, <fail> failed (<total> total)"`, before `runMain` picks the
 //! exit code. The Rust fork's `summarise` was simplified to a pure predicate
 //! with NO output, so a `Test.runMain tests` program (e.g. example
