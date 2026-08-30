@@ -8224,8 +8224,7 @@ impl StdlibKernel {
         // `Server.mountApp : String -> WebApp -> ServerRoute` — nominal `WebApp`
         // in the second slot is the §9 type gate: only a `Web.embed`/`Web.app`
         // handle mounts; a `TuiApp`/`CliApp`/`WebViewApp` is rejected at unify.
-        const WEB_APP_LEAF_TO_SERVER_ROUTE: TyShape =
-            TyShape::Fun(&WEB_APP_LEAF, &SERVER_ROUTE);
+        const WEB_APP_LEAF_TO_SERVER_ROUTE: TyShape = TyShape::Fun(&WEB_APP_LEAF, &SERVER_ROUTE);
         const MOUNT_APP: TyShape = TyShape::Fun(&STRING, &WEB_APP_LEAF_TO_SERVER_ROUTE);
         const TERMINAL_APP_SCREEN: TyShape = TyShape::Fun(&TERMINAL_SCREEN_CFG, &TUI_APP_LEAF);
         const TERMINAL_APP_LINES: TyShape = TyShape::Fun(&TERMINAL_LINES_CFG, &CLI_APP_LEAF);
