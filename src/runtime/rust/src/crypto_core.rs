@@ -81,6 +81,9 @@ impl crate::stringify::IpeStringify for Mac {
 /// The ONLY sanctioned no-check path — the password-derivation kernels use it
 /// on PBKDF2 output (always a valid 32-byte blob). Public construction goes
 /// through `crypto_key_from_string` / `crypto_key_from_bytes`, which validate.
+/// Gated to `crypto`: its only callers are the password-derivation kernels,
+/// which are `crypto`-only, so it is absent (not dead) in a `crypto-core`-only build.
+#[cfg(feature = "crypto")]
 pub(crate) fn crypto_key_promote(s: String) -> Key {
     Key(s)
 }
