@@ -54,6 +54,9 @@ cross-link where topics meet.
   password read).
 - **Content and markup** — [HTML](html.md) (typed element trees, XSS-safe by
   construction), [Markdown](markdown.md) (a typed block tree, no raw HTML).
+- **Instrumentation and delivery** — [Analytics](analytics.md) (consent-gated,
+  PII-safe event tracking), [Email](email.md) (provider-abstract send with sealed
+  credentials).
 
 ## Reference and lookup
 

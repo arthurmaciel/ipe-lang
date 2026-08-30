@@ -1,0 +1,59 @@
+module Main exposing (main)
+
+import Ipe.Analytics as Analytics exposing (Config, ConsentState(..), PropValue(..))
+import Ipe.Json.Encode as Encode
+import Ipe.Task as Task
+import Ipe.Io as Io
+
+
+-- `Ipe.Analytics` is a consent-gated, PII-safe analytics surface. Three security
+-- properties are enforced by construction, not by discipline:
+--   • Consent is fail-closed: `track` DROPS the event and succeeds silently on
+--     `Pending` or `Denied`. There is no branch that emits without proof of
+--     `Granted` consent.
+--   • PII is a distinct type, never a bare String. A `PPii` prop serialises as
+--     "[redacted]" unconditionally — the plaintext is sealed and has no path
+--     back out on this module's surface.
+--   • Money is lossless: a `PMoney` prop encodes as an exact decimal string, not
+--     a lossy Float.
+--
+-- The config is an explicit value threaded through the program — there is no
+-- mutable global. Build it with `defaultConfig` (which starts in the fail-closed
+-- `Pending` state) and set consent with `setConsent`.
+
+
+-- Show what one prop value serialises to. The PII branch never reveals the
+-- wrapped plaintext — it always renders the redacted sentinel.
+showProp : String -> PropValue -> String
+showProp name value =
+    name ++ " -> " ++ Encode.encode 0 (Analytics.encodePropValue value)
+
+
+-- A config in each consent state, over the development stderr sink.
+configWith : ConsentState -> Config
+configWith state =
+    Analytics.defaultConfig Analytics.Stderr
+        |> Analytics.setConsent state
+
+
+-- `track` returns a Task in every state; only `Granted` reaches the sink. On
+-- `Pending` / `Denied` the returned Task succeeds without emitting.
+trackOnce : ConsentState -> Task Error ()
+trackOnce state =
+    Analytics.track (configWith state)
+        "checkout"
+        (Analytics.props [ ( "plan", PText "pro" ) ])
+
+
+main =
+    do
+        -- PII is redacted at the only serialisation path; money stays exact.
+        Io.println (showProp "email" (PPii (Analytics.pii "alice@example.com")))
+        Io.println (showProp "plan" (PText "pro"))
+        Io.println (showProp "seats" (PInt 5))
+        -- Consent is fail-closed: the Granted event emits to stderr; the Pending
+        -- and Denied events are dropped, and their Tasks still succeed.
+        _ <- trackOnce Granted
+        _ <- trackOnce Pending
+        _ <- trackOnce Denied
+        Io.println "consent-gated track: Granted emitted; Pending and Denied dropped"
