@@ -61,6 +61,11 @@ cross-link where topics meet.
   SEO tags), [Console authentication](web-console.md) (gate the embedded console
   with the app's own auth), [Pub/sub](pubsub.md) (in-process typed broadcast),
   [Browser ports](js.md) (the typed Ipê↔JS seam).
+- **Escape hatches** — the surfaces that bypass a safe default behind a disclosed
+  `unsafe` capability: [the unsafe database surface](db-unsafe.md) (raw SQL,
+  untyped column reads), [the secret-reveal hatch](secret-unsafe.md) (un-seal a
+  `Secret` to a bare `String`). Reach for these only for a residual the safe
+  surface cannot express.
 
 ## Reference and lookup
 
