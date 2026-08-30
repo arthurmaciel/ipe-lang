@@ -129,7 +129,10 @@ pub const STDLIB_MODULE_QUALIFIERS: &[(&[&str], &str)] = &[
     (&["Ipe", "Http", "Middleware"], "Middleware"),
     (&["Ipe", "Http", "RateLimit"], "RateLimit"),
     // ── Ipe.* modules ───────────────────────────────────────────────────────
-    (&["Ipe", "Log"], "Log"),
+    // `Ipe.Log` is DELIBERATELY absent: it is COMPILED-SOURCE
+    // (`ipe::stdlib::COMPILED_STD_MODULES`), so its whole surface resolves
+    // from `Ipe/Log.ipe` — the `Ffi.kernel "Log_*"` aliases — not from this
+    // kernel-qualifier catalog.
     // `Ipe.Cmd` / `Ipe.Sub` are DELIBERATELY absent: the canonical `Cmd` / `Sub`
     // kernel qualifiers are compiler/runtime internals, not user-importable
     // modules. `Cmd` / `Sub` are shape-specific, so user code reaches them
@@ -923,27 +926,10 @@ impl Env {
                     "stripStyleClose",
                 ],
             ),
-            // `Ipe.Log` — qualified form (`import Ipe.Log as Log`).
-            // `info`/`debug`/`warn`/`error` are backed; the `*With`
-            // variants take Stringify-bounded attrs and stay fail-closed
-            // (IPE-L0108) until the Stringify obligation is added.
-            // `Log` is observability-only — line printing lives in `Ipe.Io`
-            // (`Io.println` / `Io.eprintln`).
-            (
-                "Log",
-                &[
-                    "info",
-                    "debug",
-                    "warn",
-                    "error",
-                    "infoWith",
-                    "debugWith",
-                    "warnWith",
-                    "errorWith",
-                    // Runtime-config front door — `Log.level : LogLevel -> Setting a`.
-                    "level",
-                ],
-            ),
+            // `Ipe.Log` is DELIBERATELY absent: it is COMPILED-SOURCE
+            // (`ipe::stdlib::COMPILED_STD_MODULES`), so its whole surface resolves
+            // from `Ipe/Log.ipe` — the `Ffi.kernel "Log_*"` aliases — not from
+            // this kernel-qualifier catalog.
             // `Ipe.App` — runtime-config front door. `fromEnv` seals an env var
             // into a `Secret` (the ONLY way to get a config secret);
             // `fromEnvRequired` is its fail-closed variant (a missing/empty var
@@ -1842,7 +1828,8 @@ impl Env {
             ("Ipe.Tea.Web", "Web"),
             ("Ipe.Tea.Terminal", "Terminal"),
             ("Ipe.Tea.WebView", "WebView"),
-            ("Ipe.Log", "Log"),
+            // `Ipe.Log` is DELIBERATELY absent: it is COMPILED-SOURCE; members
+            // resolve through source-dep injection, not a qualifier alias.
             // ── Effect stdlib module aliases ──────────────────────────────────────
             ("Ipe.Auth", "Auth"),
             ("Ipe.Http.Server.Stream", "Stream"),

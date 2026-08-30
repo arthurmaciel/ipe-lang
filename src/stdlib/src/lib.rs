@@ -668,6 +668,16 @@ const STD_TRACE: &str = include_str!("../Ipe/Trace.ipe");
 /// module pay no ICU4X dependency cost.
 const LOCALE: &str = include_str!("../Ipe/Locale.ipe");
 
+/// `Ipe.Log` — structured observability kernels, compiled-source Layer-3.
+///
+/// Every member is a point-free `Ffi.kernel "Log_*"` alias resolved by
+/// `ipe_canon::resolve::detect_kernel_alias` to a registered `Log*`
+/// `StdlibKernel` variant (`ipe_runtime::log::*`). `Log_level` routes to
+/// `LogLevelSetting` (runtime-config, not the log runtime module).
+/// Registered in [`COMPILED_STD_MODULES`] (NOT `MODULES`); NOT in
+/// `STDLIB_MODULE_QUALIFIERS`, so the disjointness invariant holds.
+const LOG: &str = include_str!("../Ipe/Log.ipe");
+
 /// `Ipe.Ui.Events` — pure Ipê re-exports of `Ipe.Ui` event helpers (compiled source).
 ///
 /// Pure Ipê; no Ffi.kernel calls.  RESOLVES (ipe-0 AND cargo-0): the
@@ -974,6 +984,17 @@ pub const COMPILED_STD_MODULES: &[CompiledStdModule] = &[
         dotted: "Ipe.Locale",
         source: LOCALE,
     },
+    // Ipe.Log — Layer-3 source; the eight log-emission kernels (`Log_info` /
+    // `Log_debug` / `Log_warn` / `Log_error` and their `*With` variants) plus
+    // `Log_level` (the runtime-config `LogLevel -> Setting a` front door) are
+    // point-free `Ffi.kernel "Log_*"` aliases resolved by `detect_kernel_alias`
+    // to the registered `Log*` / `LogLevelSetting` kernels.  Disjoint from
+    // `STDLIB_MODULE_QUALIFIERS` (the `("Ipe.Log", "Log")` entry is DELIBERATELY
+    // absent from that table), so the disjointness invariant holds.
+    CompiledStdModule {
+        dotted: "Ipe.Log",
+        source: LOG,
+    },
 ];
 
 /// The embedded Ipê source for a compiled-source stdlib module named by its path
@@ -1143,7 +1164,8 @@ mod tests {
         assert!(compiled_std_source_segments(&palette).is_some());
 
         let log = vec!["Ipe".to_owned(), "Log".to_owned()];
-        assert!(!is_compiled_source_segments(&log), "Ipe.Log is a kernel");
+        assert!(is_compiled_source_segments(&log), "Ipe.Log is compiled-source");
+        assert!(compiled_std_source_segments(&log).is_some());
 
         let nope = vec!["Ipe".to_owned(), "Nope".to_owned()];
         assert!(!is_compiled_source_segments(&nope));
