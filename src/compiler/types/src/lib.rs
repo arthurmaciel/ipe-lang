@@ -2744,7 +2744,7 @@ mod tests {
         assert!(solved.is_ok(), "inference must succeed");
         let Ok(solved) = solved else { return };
 
-        // main = System.unsetenv (String.fromInt (update Increment 0))
+        // main = System.setenv "HOME" "x"
         let main_def = m
             .defs
             .iter()
@@ -2762,29 +2762,29 @@ mod tests {
             return;
         };
 
-        // Outer call: System.unsetenv … : Task ()
+        // Outer call: (System.setenv "HOME") "x" : Task ()
         let outer = as_call(body);
         assert!(outer.is_some(), "main body is a call");
-        let Some((_unsetenv, outer_args)) = outer else {
+        let Some((_setenv_partial, outer_args)) = outer else {
             return;
         };
-        let unsetenv_region = solved.regions.get(&(main_home.clone(), body.span));
+        let setenv_region = solved.regions.get(&(main_home.clone(), body.span));
         assert!(
             matches!(
-                unsetenv_region,
+                setenv_region,
                 Some(Ty::Con { name, args, .. })
                     if i.resolve(*name) == Some("Task") && args.as_slice() == [Ty::Unit]
             ),
-            "unsetenv region must be Task (): {unsetenv_region:?}"
+            "setenv region must be Task (): {setenv_region:?}"
         );
 
-        // The arg is the string literal "done" : String
+        // The outer arg is the string literal "x" : String
         let Some(str_arg) = outer_args.first() else {
             return;
         };
         assert!(
             matches!(&str_arg.value, canon::Expr_::Str(_)),
-            "println arg is a string literal"
+            "setenv outer arg is a string literal"
         );
         assert_eq!(
             solved

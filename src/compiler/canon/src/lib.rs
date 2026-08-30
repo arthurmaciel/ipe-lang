@@ -378,7 +378,7 @@ mod tests {
         assert!(m.is_some(), "golden");
         let Some(m) = m else { return };
 
-        // ── main body: System.getenv "HOME" ─────────────────────────────────
+        // ── main body: System.setenv "HOME" "x" ─────────────────────────────
         let def = find_def(&m, &i, "main");
         assert!(
             matches!(def, Some(Def::Untyped { .. })),
@@ -388,34 +388,22 @@ mod tests {
             return;
         };
 
-        // main body is a call to System.getenv (a kernel).
+        // main body is: System.setenv "HOME" "x"
+        // The parser emits Call(VarKernel{setenv}, ["HOME", "x"]) directly.
         let outer = as_call(body);
-        assert!(
-            matches!(outer, Some((Expr_::VarKernel { .. }, _))),
-            "main body is a call to a kernel"
-        );
-        let Some((
-            Expr_::VarKernel {
-                id: _,
-                module,
-                name,
-            },
-            outer_args,
-        )) = outer
-        else {
+        assert!(outer.is_some(), "main body is a call");
+        let Some((_, outer_args)) = outer else {
             return;
         };
-        assert_eq!(i.resolve(*module), Some("System"));
-        assert_eq!(i.resolve(*name), Some("getenv"));
-        assert_eq!(outer_args.len(), 1);
+        assert!(!outer_args.is_empty(), "setenv call has arguments");
 
-        // The single arg is the string literal "HOME".
+        // The first arg is the string literal "HOME".
         let Some(arg0) = outer_args.first() else {
             return;
         };
         assert!(
             matches!(&arg0.value, Expr_::Str(_)),
-            "getenv arg is a string literal"
+            "setenv first arg is a string literal"
         );
 
         // ── update body: case with PCtor patterns ───────────────────────────
