@@ -147,11 +147,7 @@ fn emit_tui_inner(
     // seal: gate the Msg type against `tui_app`'s Clone+Send bound.
     // Same derivable predicate as Web — Msg is never persisted.
     if let Some(msg_ty) = crate::emit_model_gate::msg_ty_of_update(update_e) {
-        crate::emit_model_gate::check_admissible_msg(
-            ctx,
-            msg_ty,
-            ipe_diagnostics::AppShape::Tui,
-        )?;
+        crate::emit_model_gate::check_admissible_msg(ctx, msg_ty, ipe_diagnostics::AppShape::Tui)?;
     }
 
     let init_s = emit_tui_fn(ctx, init_e, indent, child, generics)?;
