@@ -3043,9 +3043,17 @@ pub fn emit_spine(ctx: &EmitCtx, program: &Program) -> DResult<String> {
     // is already correct from the IR. Only the epilogue's `fn main` body needs
     // updating: swap `block_on(ipe_main())` for `ipe_main().run_blocking()`.
     //
-    // CliApp does not set a shape flag in EmitCtx; it is handled by the
-    // content-scan in the single-file path only.
-    let uses_shape_app_leaf_flagged = ctx.uses_web || ctx.uses_tui || ctx.uses_webview;
+    // `CliApp` does not set a shape flag in `EmitCtx`, so it cannot be detected
+    // via the flag-based path used by Web/Tui/WebView. Instead, check whether
+    // any module's entry function returns `IrType::CliApp` directly from the IR.
+    let uses_cli_app = program.modules.iter().any(|m| {
+        m.entry.is_some_and(|eid| {
+            m.funcs
+                .iter()
+                .any(|f| f.id == eid && matches!(f.ret, IrType::CliApp))
+        })
+    });
+    let uses_shape_app_leaf_flagged = ctx.uses_web || ctx.uses_tui || ctx.uses_webview || uses_cli_app;
     if uses_shape_app_leaf_flagged && ctx.target == ipe_ir::Target::Native {
         let replaced = out.replacen(SHAPE_APP_BLOCK_ON_ANCHOR, SHAPE_APP_RUN_BLOCKING, 1);
         if replaced == out {
