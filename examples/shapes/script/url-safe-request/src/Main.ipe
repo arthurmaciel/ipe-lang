@@ -1,0 +1,78 @@
+module Main exposing (main)
+
+import Ipe.Url as Url
+import Ipe.Task as Task
+import Ipe.Maybe as Maybe
+import Ipe.String as String
+import Ipe.List as List
+import Ipe.Io as Io
+
+
+-- Validate outbound URLs and build a safe query string, exercising the three
+-- ideas most `Ipe.Url` code turns on:
+--   • `Url` is OPAQUE — the only constructor is `Url.fromString`, which parses and
+--     REJECTS a scheme-less, relative, or malformed string. So a value of type
+--     `Url` is PROOF it was validated; a bad URL cannot even be built.
+--   • The accessors (`scheme`, `host`, `port`, ...) take a `Url`, never a raw
+--     `String`. A scheme-confused or unparseable address can therefore never reach
+--     an outbound request — the type stops it at construction.
+--   • `Url.buildQuery` percent-encodes every key AND value, so a metacharacter in
+--     a value (`&`, `=`, space, `#`) cannot split off a new parameter. Injection
+--     safety is the default, not something a caller must remember.
+
+
+-- A mix of good and bad candidate URLs. `fromString` turns each into a
+-- `Result Error Url`: the valid ones become opaque `Url`s, the rest are rejected
+-- with a typed error — none of them can be used as a URL without passing here.
+candidates : List String
+candidates =
+    [ "https://api.example.com:8443/v1/users"
+    , "http://example.com/search"
+    , "/relative/path"
+    , "not a url at all"
+    , "ftp://files.example.com/data"
+    ]
+
+
+-- Describe one candidate: either its parsed parts, or the rejection. `fromString`
+-- is the single gate; downstream code only ever sees a validated `Url`.
+describe : String -> String
+describe raw =
+    case Url.fromString raw of
+
+        Ok url ->
+            raw
+                ++ "  ->  scheme="
+                ++ Url.scheme url
+                ++ " host="
+                ++ Maybe.withDefault "?" (Url.host url)
+                ++ " port="
+                ++ Maybe.withDefault "-" (Maybe.map String.fromInt (Url.port url))
+
+        Err _ ->
+            raw ++ "  ->  REJECTED"
+
+
+-- A query string built from raw, attacker-controlled values. `buildQuery`
+-- percent-encodes each one, so the `&`-and-`=` in the second value stay INSIDE
+-- that value instead of forging an `admin=true` parameter.
+searchQuery : String
+searchQuery =
+    Url.buildQuery
+        [ ( "q", "red shoes" )
+        , ( "note", "a&admin=true" )
+        ]
+
+
+main =
+    do
+        Io.println "URL validation:"
+        List.map (\c -> Io.println ("  " ++ describe c)) candidates
+            |> printAll
+        Io.println ("safe query: " ++ searchQuery)
+
+
+printAll : List (Task Error ()) -> Task Error ()
+printAll tasks =
+    Task.sequence tasks
+        |> Task.map (\_ -> ())

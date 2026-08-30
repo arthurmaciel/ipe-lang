@@ -20,15 +20,26 @@ Each teaches the *mental model* of one module through a worked, runnable example
 then links to the per-symbol `ipe doc` reference. Read the one you need; they
 cross-link where topics meet.
 
+- **Core data** — [Lists](list.md) (ordered sequences, folds, pipelines),
+  [Strings](string.md) (text and the parse boundary), [Characters](char.md)
+  (code points, classification), [Tuples](tuple.md) (anonymous pairs).
 - **Collections** — [Sets](set.md) (unique, unordered, membership),
   [Dictionaries](dict.md) (a value per key).
-- **Absence and failure** — [Maybe](maybe.md) (a value that might be missing),
-  [Result](result.md) (a failure that carries a reason).
+- **Absence, failure, and effects** — [Maybe](maybe.md) (a value that might be
+  missing), [Result](result.md) (a failure that carries a reason), [Tasks](task.md)
+  (effects as values, sequenced and recovered).
 - **Text and binary** — [Regular expressions](regex.md), [Text
   encodings](encoding.md) (base64/URL/hex), [Bytes](bytes.md) (raw octets).
 - **Files and configuration** — [Files](file.md) (typed paths, effects as tasks),
   [Configuration](config.md) (typed TOML/YAML/JSON decoders), [CSV](csv.md).
-- **Numbers** — [Math](math.md) (roots, trig, rounding, NaN).
+- **Numbers and magnitudes** — [Math](math.md) (roots, trig, rounding, NaN),
+  [Durations](duration.md) (unit-explicit time spans), [Byte sizes](bytesize.md)
+  (unit-explicit byte quantities).
+- **Randomness and identifiers** — [Randomness](random.md) (entropy vs seeded),
+  [UUIDs](uuid.md) (random and time-ordered ids).
+- **Addressing and routing** — [URLs](url.md) (typed, validated),
+  [URL routing](url-parser.md) (typed route patterns), [Network
+  primitives](net.md) (range-validated ports).
 
 ## Reference and lookup
 

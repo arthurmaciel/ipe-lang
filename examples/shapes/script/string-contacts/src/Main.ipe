@@ -1,0 +1,92 @@
+module Main exposing (main)
+
+import Ipe.String as String
+import Ipe.List as List
+import Ipe.Maybe as Maybe
+import Ipe.Tuple as Tuple
+import Ipe.Task as Task
+import Ipe.Io as Io
+
+
+-- Normalise a block of raw "Name <email>" contact lines into a clean roster,
+-- exercising the three ideas most `Ipe.String` code turns on:
+--   • A String is immutable UTF-8 — every function returns a NEW string, so
+--     normalising a line is a pipeline of transforms, never an in-place edit.
+--   • Parsers return a `Maybe`, not a crash: `String.toInt`, `String.isEmail`,
+--     and friends push the un-parsable case into the type for the caller to
+--     handle at the boundary.
+--   • `split` and `join` are inverses. The idiom for "reshape delimited text" is
+--     split → map each piece → join back — you rarely index characters by hand.
+
+
+type alias Contact =
+    { name : String
+    , email : String
+    }
+
+
+raw : String
+raw =
+    String.join "\n"
+        [ "  Ada Lovelace <Ada@Example.COM> "
+        , "Grace Hopper <grace@navy.mil>"
+        , "no-email-here"
+        , "Alan Turing <not-an-email>"
+        ]
+
+
+-- Parse one line into a `Contact`, or `Nothing` if it is not a well-formed entry.
+-- `String.indexes` finds the `<`/`>` delimiter positions (each a `Maybe Int`);
+-- `Maybe.map2` combines them, then `andThen` slices, trims, lowercases, and
+-- validates. Every step returns a new string — the raw line is never mutated, and
+-- an unparsable line falls out as `Nothing` rather than crashing.
+parseLine : String -> Maybe Contact
+parseLine line =
+    Maybe.map2 Tuple.pair
+        (List.head (String.indexes "<" line))
+        (List.head (String.indexes ">" line))
+        |> Maybe.andThen (\( open, close ) -> toContact line open close)
+
+
+toContact : String -> Int -> Int -> Maybe Contact
+toContact line open close =
+    let
+        name =
+            String.trim (String.left open line)
+
+        email =
+            String.slice (open + 1) close line
+                |> String.trim
+                |> String.toLower
+    in
+    if String.isEmpty name || not (String.isEmail email) then
+        Nothing
+
+    else
+        Just { name = name, email = email }
+
+
+-- The whole roster: split the block into lines, parse each, and keep only the
+-- successes. `filterMap` drops every `Nothing` in one pass.
+roster : String -> List Contact
+roster block =
+    String.lines block
+        |> List.filterMap parseLine
+
+
+-- Render a contact as "Name <email>", rebuilt from the parsed, normalised fields.
+render : Contact -> String
+render contact =
+    contact.name ++ " <" ++ contact.email ++ ">"
+
+
+main =
+    let
+        people =
+            roster raw
+    in
+    do
+        Io.println ("parsed " ++ String.fromInt (List.length people) ++ " contacts:")
+        List.map (\c -> Io.println ("  " ++ render c)) people
+            |> Task.sequence
+            |> Task.map (\_ -> ())

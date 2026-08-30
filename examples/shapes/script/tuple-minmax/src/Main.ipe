@@ -1,0 +1,64 @@
+module Main exposing (main)
+
+import Ipe.Tuple as Tuple
+import Ipe.List as List
+import Ipe.String as String
+import Ipe.Io as Io
+
+
+-- Find the coldest and warmest reading in one pass and report them, exercising the
+-- three ideas most `Ipe.Tuple` code turns on:
+--   • A pair `( a, b )` is an ANONYMOUS, positional bundle — the right shape for a
+--     transient "two things together" (a min-and-max, a key-and-value, a
+--     zip element). When the two things are a lasting domain concept, a record
+--     with named fields is the better home; a pair is for the passing case.
+--   • `mapFirst`, `mapSecond`, and `mapBoth` transform a pair's components in
+--     place, without unpacking and rebuilding it.
+--   • `Tuple.pair` is a plain constructor function, so it slots straight into
+--     combinators that want a two-argument builder.
+
+
+readings : List Float
+readings =
+    [ 18.5, 22.1, 15.0, 19.8, 27.3, 14.2, 21.0 ]
+
+
+-- Fold the list into a running ( minimum, maximum ). The pair is the accumulator —
+-- exactly the transient two-things bundle a tuple is for. `Tuple.mapBoth` updates
+-- both components at once: shrink the min, grow the max, in one step.
+extremes : List Float -> Maybe ( Float, Float )
+extremes xs =
+    case xs of
+
+        first :: rest ->
+            List.foldl widen ( first, first ) rest
+                |> Just
+
+        [] ->
+            Nothing
+
+
+widen : Float -> ( Float, Float ) -> ( Float, Float )
+widen x range =
+    Tuple.mapBoth (min x) (max x) range
+
+
+-- Format a ( low, high ) pair. `Tuple.first`/`Tuple.second` read the components
+-- positionally — no field names, because the pair is a passing value, not a type.
+report : ( Float, Float ) -> String
+report range =
+    "coldest "
+        ++ String.fromFloat (Tuple.first range)
+        ++ "°C, warmest "
+        ++ String.fromFloat (Tuple.second range)
+        ++ "°C"
+
+
+main =
+    case extremes readings of
+
+        Just range ->
+            Io.println (report range)
+
+        Nothing ->
+            Io.println "no readings"

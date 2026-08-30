@@ -1,0 +1,162 @@
+module Main exposing (main)
+
+import Ipe.List as List
+import Ipe.String as String
+import Ipe.Task as Task
+import Ipe.Io as Io
+
+
+-- Turn a flat list of match results into a ranked standings table, exercising the
+-- three ideas most `Ipe.List` code turns on:
+--   • Lists are immutable — you never mutate one in place, you TRANSFORM it into a
+--     new one. Every step below is a pipeline stage that hands a fresh list on.
+--   • `foldl` is the general reducer: it collapses a whole list to one value
+--     (here, a running table of points) by threading an accumulator left to right.
+--   • `filterMap` is filter-and-map in one pass — it keeps only the `Just` results,
+--     dropping the `Nothing`s — so "select and transform" is a single traversal.
+
+
+type alias Match =
+    { home : String
+    , away : String
+    , homeGoals : Int
+    , awayGoals : Int
+    }
+
+
+type alias Standing =
+    { team : String
+    , points : Int
+    , played : Int
+    }
+
+
+season : List Match
+season =
+    [ { home = "Lions", away = "Bears", homeGoals = 2, awayGoals = 1 }
+    , { home = "Wolves", away = "Lions", homeGoals = 0, awayGoals = 0 }
+    , { home = "Bears", away = "Wolves", homeGoals = 3, awayGoals = 1 }
+    , { home = "Lions", away = "Wolves", homeGoals = 1, awayGoals = 2 }
+    , { home = "Bears", away = "Lions", homeGoals = 1, awayGoals = 1 }
+    ]
+
+
+-- Award points for one team in one match: 3 for a win, 1 for a draw, 0 for a loss.
+pointsFor : Int -> Int -> Int
+pointsFor scored conceded =
+    if scored > conceded then
+        3
+
+    else if scored == conceded then
+        1
+
+    else
+        0
+
+
+-- Fold the whole season into a standings table. `foldl` threads the accumulator
+-- (`table`) through every match; each match credits both teams. `creditTeam`
+-- returns a NEW table rather than editing one — that is the immutable model in
+-- action: no shared mutable state, so the fold is just a pure left-to-right sum.
+standings : List Match -> List Standing
+standings matches =
+    List.foldl addMatch [] matches
+        |> List.sortWith byRank
+
+
+addMatch : Match -> List Standing -> List Standing
+addMatch match table =
+    table
+        |> creditTeam match.home (pointsFor match.homeGoals match.awayGoals)
+        |> creditTeam match.away (pointsFor match.awayGoals match.homeGoals)
+
+
+-- Add a team's points into the table, creating its row if this is its first match.
+-- `List.partition` splits the table into (this team's row, everyone else) so the
+-- update is a pure rebuild — the classic immutable "change one element" move.
+-- The tuple is destructured irrefutably, then we branch on the matched component;
+-- matching a refutable element inside the tuple pattern directly is issue #1532.
+creditTeam : String -> Int -> List Standing -> List Standing
+creditTeam team earned table =
+    let
+        ( mine, rest ) =
+            List.partition (\row -> row.team == team) table
+    in
+    case mine of
+
+        row :: _ ->
+            { row | points = row.points + earned, played = row.played + 1 } :: rest
+
+        [] ->
+            { team = team, points = earned, played = 1 } :: rest
+
+
+-- Rank order: most points first, then alphabetically to break ties. `sortWith`
+-- takes a full comparator returning an `Order`, so a compound key is one function.
+byRank : Standing -> Standing -> Order
+byRank a b =
+    case compare b.points a.points of
+
+        EQ ->
+            compare a.team b.team
+
+        LT ->
+            LT
+
+        GT ->
+            GT
+
+
+-- Render one row, numbered by its rank. `indexedMap` hands each row its position.
+renderRow : Int -> Standing -> String
+renderRow index row =
+    String.join " "
+        [ String.padLeft 2 ' ' (String.fromInt (index + 1)) ++ "."
+        , String.padRight 8 ' ' row.team
+        , String.padLeft 2 ' ' (String.fromInt row.points) ++ " pts"
+        , "(" ++ String.fromInt row.played ++ " played)"
+        ]
+
+
+-- The names of the teams tied for the top score. `filterMap` fuses the test and
+-- the extraction into one traversal: it keeps only the rows that return `Just`,
+-- dropping every `Nothing`, so "select then transform" is a single pass.
+leaderNames : List Standing -> Int -> List String
+leaderNames table topPoints =
+    List.filterMap
+        (\row ->
+            if row.points == topPoints then
+                Just row.team
+
+            else
+                Nothing
+        )
+        table
+
+
+-- Print every ranked row. `indexedMap` numbers the rows, `List.map Io.println`
+-- turns each into a print task, and `Task.sequence` runs them in order — the
+-- standard way to fan a list of values out to a list of effects.
+printTable : List Standing -> Task Error ()
+printTable table =
+    List.indexedMap renderRow table
+        |> List.map Io.println
+        |> Task.sequence
+        |> Task.map (\_ -> ())
+
+
+main =
+    let
+        table =
+            standings season
+
+        topPoints =
+            List.foldl (\row best -> max best row.points) 0 table
+
+        leaders =
+            leaderNames table topPoints
+    in
+    do
+        Io.println "Standings"
+        printTable table
+        Io.println ("Leaders: " ++ String.join ", " leaders)
