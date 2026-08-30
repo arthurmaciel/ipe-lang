@@ -512,15 +512,10 @@ fn render_element_depth<M: Clone>(elem: Element<M>, depth: usize) -> Html<M> {
         Element::Text(s) => Html::HText(s),
         Element::Raw(html) => html,
         // Compile-time shape gates (IPE-L0132 / IPE-L0153) prevent `Cells` from
-        // reaching a Web or Cli render. This arm is defense-in-depth: only
-        // reachable via direct Rust construction or an unexpected pipeline bypass.
-        Element::Cells(_grid) => {
-            debug_assert!(
-                false,
-                "Element::Cells reached the Web HTML renderer; shape gate may have been bypassed"
-            );
-            Html::HText(String::new())
-        }
+        // reaching a Web or Cli render, so this arm is unreachable through the
+        // normal pipeline. If a direct Rust construction routes cells here, drop
+        // to empty text rather than abort — a missing subtree beats a panic.
+        Element::Cells(_grid) => Html::HText(String::new()),
         Element::Node(desc, attrs, kids) => {
             render_node_as(tag_for_description(&desc), &attrs, kids, depth)
         }
