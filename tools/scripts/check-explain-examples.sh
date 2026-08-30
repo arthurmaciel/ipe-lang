@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
-# Doctest-style gate for Ipê explain pages (ADR 0059).
+# Doctest-style gate for Ipê doc pages (ADR 0059).
 #
 # Scans every fenced Ipê code block in:
-#   src/compiler/diagnostics/explain/*.md
+#   docs/constructs/*.md
+#   docs/topics/*.md
 #
 # and compiles each one with `ipe type-check`, failing if any block that is
 # expected to compile does not — ensuring a reader can copy any example and
@@ -35,16 +36,22 @@
 # EXIT
 #   0 — all expected-compile blocks compile; all ipe:error blocks fail
 #   1 — at least one block failed its expectation
-#   2 — setup error (missing ipe binary, missing explain dir)
+#   2 — setup error (missing ipe binary, missing docs dirs)
 #
 set -euo pipefail
 
 source "$(dirname "$0")/lib/env.sh"
 
-EXPLAIN_DIR="$REPO/src/compiler/diagnostics/explain"
+CONSTRUCTS_DIR="$REPO/docs/constructs"
+TOPICS_DIR="$REPO/docs/topics"
 
-if [ ! -d "$EXPLAIN_DIR" ]; then
-    echo "ERROR: explain dir not found: $EXPLAIN_DIR" >&2
+if [ ! -d "$CONSTRUCTS_DIR" ]; then
+    echo "ERROR: constructs dir not found: $CONSTRUCTS_DIR" >&2
+    exit 2
+fi
+
+if [ ! -d "$TOPICS_DIR" ]; then
+    echo "ERROR: topics dir not found: $TOPICS_DIR" >&2
     exit 2
 fi
 
@@ -53,9 +60,10 @@ if [ ! -x "$IPE_BIN" ]; then
     exit 2
 fi
 
-echo "=== Ipê explain-page example gate ==="
-echo "    explain dir: $EXPLAIN_DIR"
-echo "    ipe binary:  $IPE_BIN"
+echo "=== Ipê doc-page example gate ==="
+echo "    constructs dir: $CONSTRUCTS_DIR"
+echo "    topics dir:     $TOPICS_DIR"
+echo "    ipe binary:     $IPE_BIN"
 echo
 
 # Temporary directory for generated snippet files; cleaned on exit.
@@ -99,7 +107,9 @@ infer_imports() {
     return 0
 }
 
-for md_file in "$EXPLAIN_DIR"/*.md; do
+for md_file in "$CONSTRUCTS_DIR"/*.md "$TOPICS_DIR"/*.md; do
+    # Skip README pages — they are navigation aids, not teaching pages.
+    [ "$(basename "$md_file")" = "README.md" ] && continue
     page="$(basename "$md_file" .md)"
     block_idx=0
 
@@ -194,5 +204,5 @@ if [ "${#failed[@]}" -gt 0 ]; then
 fi
 
 echo
-echo "=== VERDICT: PASS — all $((ok + error_as_expected)) checked blocks meet their expectation ==="
+echo "=== VERDICT: PASS — all $((ok + error_as_expected)) checked blocks meet their expectation (constructs + topics) ==="
 exit 0
