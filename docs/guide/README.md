@@ -28,8 +28,9 @@ cross-link where topics meet.
 - **Collections** — [Sets](set.md) (unique, unordered, membership),
   [Dictionaries](dict.md) (a value per key).
 - **Absence, failure, and effects** — [Maybe](maybe.md) (a value that might be
-  missing), [Result](result.md) (a failure that carries a reason), [Tasks](task.md)
-  (effects as values, sequenced and recovered).
+  missing), [Result](result.md) (a failure that carries a reason), [Error](error.md)
+  (the structured, classified failure type), [Tasks](task.md) (effects as values,
+  sequenced and recovered).
 - **Text and binary** — [Regular expressions](regex.md), [Text
   encodings](encoding.md) (base64/URL/hex), [Bytes](bytes.md) (raw octets),
   [Compression](compression.md) (gzip/zstd over bytes).

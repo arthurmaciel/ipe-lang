@@ -1,0 +1,50 @@
+module Main exposing (main)
+
+import Ipe.Error as Error exposing (Error)
+import Ipe.List as List
+import Ipe.Task as Task
+import Ipe.Io as Io
+
+
+-- Classify failures and decide a retry, exercising the ideas `Ipe.Error` turns on:
+--   • `Error` is a STRUCTURED value, not a string: each constructor tags the KIND
+--     of failure (`network`, `invalidInput`, `timeout`, …) at construction time.
+--   • `isRetryable` reads that tag, so a policy ("retry transient failures") is one
+--     query on the type, not a fragile substring match on a message.
+--   • `toString` renders "<Kind>: <message>" for a log line without leaking the
+--     structured details.
+
+
+-- A few representative failures a client might see.
+samples : List Error
+samples =
+    [ Error.network "connection reset"
+    , Error.invalidInput "port must be 1..65535"
+    , Error.timeout
+    , Error.notFound
+    , Error.unavailable "upstream draining"
+    ]
+
+
+-- The retry decision is one `isRetryable` on the structured error — no parsing of
+-- the message text. Transient kinds (network / timeout / unavailable) retry.
+policyLine : Error -> String
+policyLine err =
+    let
+        verdict =
+            if Error.isRetryable err then
+                "RETRY"
+
+            else
+                "FAIL "
+    in
+    verdict ++ " " ++ Error.toString err
+
+
+main =
+    do
+        Io.println "Failure -> retry policy (by error kind, not message text):"
+        List.map policyLine samples
+            |> List.map (\line -> Io.println ("  " ++ line))
+            |> Task.sequence
+            |> Task.map (always ())
