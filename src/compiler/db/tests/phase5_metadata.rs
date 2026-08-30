@@ -230,7 +230,7 @@ fn program_metadata_excludes_unreached_function() {
         main = Io.println (String.fromInt live)\n";
     let (db, _log) = logged_db();
     let entry = file(&db, &["Entry"], ENTRY_WITH_DEAD_CODE);
-    let root = root_of(&db, &[(&["Entry"], entry)]);
+    let root = root_with_std(&db, &[(&["Entry"], entry)]);
 
     let program = ipe_db::lower_program(&db, root, entry).expect("must lower");
     let meta = ipe_db::program_metadata(&db, root, entry).expect("must compute metadata");
@@ -274,7 +274,7 @@ fn program_metadata_reachability_is_transitive() {
         main = Io.println (String.fromInt mid)\n";
     let (db, _log) = logged_db();
     let entry = file(&db, &["Entry"], CHAIN);
-    let root = root_of(&db, &[(&["Entry"], entry)]);
+    let root = root_with_std(&db, &[(&["Entry"], entry)]);
 
     let program = ipe_db::lower_program(&db, root, entry).expect("must lower");
     let meta = ipe_db::program_metadata(&db, root, entry).expect("must compute metadata");

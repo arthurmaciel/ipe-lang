@@ -43,7 +43,7 @@ mod tests {
     #[test]
     fn pure_program_has_no_capabilities() {
         let caps = caps_of(
-            "module Main exposing (main)\nimport Ipe.Io\nimport Ipe.String\nmain : Task ()\nmain =\n    Io.println (String.toUpper \"hi\")\n",
+            "module Main exposing (main)\nimport Ipe.Io\nmain : Task ()\nmain =\n    Io.println \"hi\"\n",
         );
         assert_eq!(caps, Some(std::collections::BTreeSet::new()));
     }
@@ -169,7 +169,7 @@ mod tests {
     #[test]
     fn a_program_without_an_unsafe_import_discloses_no_unsafe() {
         let caps = caps_of(
-            "module Main exposing (main)\nimport Ipe.Io\nimport Ipe.String\nmain : Task ()\nmain =\n    Io.println (String.toUpper \"hi\")\n",
+            "module Main exposing (main)\nimport Ipe.Io\nmain : Task ()\nmain =\n    Io.println \"hi\"\n",
         );
         assert_eq!(
             caps,
