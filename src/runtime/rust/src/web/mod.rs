@@ -2575,6 +2575,16 @@ where
     let addr = format!("0.0.0.0:{port}");
     let listener = match tokio::net::TcpListener::bind(&addr).await {
         Ok(l) => l,
+        Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => {
+            return IpeResult::Err(
+                format!(
+                    "port {port} is already in use — another application is bound to it.\n\
+                     Set a different port with the IPE_WEB_PORT environment variable, e.g.:\n\
+                     IPE_WEB_PORT=8123 ipe run"
+                )
+                .into(),
+            );
+        }
         Err(e) => return IpeResult::Err(format!("Web.app: bind {addr}: {e}").into()),
     };
     // Bind-address line (stderr, Rust-specific — carries the 0.0.0.0 bind).
@@ -3868,5 +3878,23 @@ mod security_env_alias_tests {
 
         // Restore default.
         assert_eq!(web_max_body_bytes(), DEFAULT);
+    }
+}
+
+#[cfg(test)]
+mod bind_error_tests {
+    /// The port-taken error message must name `IPE_WEB_PORT` and use an 8xxx example port.
+    #[test]
+    fn addr_in_use_message_contains_ipe_web_port_and_example_port() {
+        let port: i64 = 8000;
+        let msg = format!(
+            "port {port} is already in use — another application is bound to it.
+\
+             Set a different port with the IPE_WEB_PORT environment variable, e.g.:
+\
+             IPE_WEB_PORT=8123 ipe run"
+        );
+        assert!(msg.contains("IPE_WEB_PORT"), "message names the env var");
+        assert!(msg.contains("8123"), "example port is in the 8xxx range");
     }
 }

@@ -260,7 +260,7 @@ fn main() {
     match block_on(ipe_main()) {
         IpeResult::Ok(_) => (),
         IpeResult::Err(e) => {
-            eprintln!("{:?}", e);
+            ipe_runtime::core::eprint_task_error(&e.to_string());
             std::process::exit(1);
         }
     }
