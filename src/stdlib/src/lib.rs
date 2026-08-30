@@ -312,18 +312,6 @@ const STD_MARKDOWN: &str = include_str!("../Ipe/Markdown.ipe");
 /// Every embedded `Ipe` module, keyed by its dotted import name.
 pub const MODULES: &[StdModule] = &[
     StdModule {
-        name: "Ipe.Basics",
-        source: BASICS,
-    },
-    StdModule {
-        name: "Ipe.Maybe",
-        source: MAYBE,
-    },
-    StdModule {
-        name: "Ipe.Result",
-        source: RESULT,
-    },
-    StdModule {
         name: "Ipe.Char",
         source: CHAR,
     },
@@ -720,6 +708,9 @@ const LOCALE: &str = include_str!("../Ipe/Locale.ipe");
 /// [`COMPILED_STD_MODULES`] (NOT `MODULES`); NOT in `STDLIB_MODULE_QUALIFIERS`,
 /// so the disjointness invariant holds.
 const MATH: &str = include_str!("../Ipe/Math.ipe");
+const LOG: &str = include_str!("../Ipe/Log.ipe");
+const LEVEL: &str = include_str!("../Ipe/Level.ipe");
+const ERROR: &str = include_str!("../Ipe/Error.ipe");
 
 /// `Ipe.Ui.Events` — pure Ipê re-exports of `Ipe.Ui` event helpers (compiled source).
 ///
@@ -1105,6 +1096,30 @@ pub const COMPILED_STD_MODULES: &[CompiledStdModule] = &[
         dotted: "Ipe.Math",
         source: MATH,
     },
+    CompiledStdModule {
+        dotted: "Ipe.Basics",
+        source: BASICS,
+    },
+    CompiledStdModule {
+        dotted: "Ipe.Maybe",
+        source: MAYBE,
+    },
+    CompiledStdModule {
+        dotted: "Ipe.Result",
+        source: RESULT,
+    },
+    CompiledStdModule {
+        dotted: "Ipe.Log",
+        source: LOG,
+    },
+    CompiledStdModule {
+        dotted: "Ipe.Level",
+        source: LEVEL,
+    },
+    CompiledStdModule {
+        dotted: "Ipe.Error",
+        source: ERROR,
+    },
 ];
 
 /// The embedded Ipê source for a compiled-source stdlib module named by its path
@@ -1154,7 +1169,14 @@ mod tests {
     /// alias does not resolve to anything (no backward-compatible mapping).
     #[test]
     fn basics_resolves_and_prelude_is_gone() {
-        assert_eq!(source("Ipe.Basics"), Some(BASICS));
+        // `Ipe.Basics` migrated to compiled-source: no longer a `MODULES`
+        // parse-fixture, so `source` returns `None`; its text is reached through
+        // the compiled-source table.
+        assert_eq!(source("Ipe.Basics"), None);
+        assert!(is_compiled_source_segments(&[
+            "Ipe".to_owned(),
+            "Basics".to_owned()
+        ]));
         assert_eq!(source("Ipe.Prelude"), None);
     }
 
@@ -1274,7 +1296,10 @@ mod tests {
         assert!(compiled_std_source_segments(&palette).is_some());
 
         let log = vec!["Ipe".to_owned(), "Log".to_owned()];
-        assert!(!is_compiled_source_segments(&log), "Ipe.Log is a kernel");
+        assert!(
+            is_compiled_source_segments(&log),
+            "Ipe.Log is compiled-source"
+        );
 
         let nope = vec!["Ipe".to_owned(), "Nope".to_owned()];
         assert!(!is_compiled_source_segments(&nope));

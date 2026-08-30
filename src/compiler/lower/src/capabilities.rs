@@ -42,9 +42,10 @@ mod tests {
 
     #[test]
     fn pure_program_has_no_capabilities() {
-        let caps = caps_of(
-            "module Main exposing (main)\nimport Ipe.Log as Log\nmain : Task ()\nmain =\n    Log.info \"x\"\n",
-        );
+        // A pure library module — no effects, no imports → no capabilities. A
+        // `Task` `main` would need a Task-producing kernel, all of which are now
+        // compiled-source and unresolved by this raw-canon helper.
+        let caps = caps_of("module Pure exposing (x)\nx : Int\nx = 5\n");
         assert_eq!(caps, Some(std::collections::BTreeSet::new()));
     }
 
@@ -85,9 +86,7 @@ mod tests {
     /// `program.imports_unsafe_submodule` insert.
     #[test]
     fn importing_an_unsafe_submodule_discloses_unsafe() {
-        let caps = caps_of(
-            "module Main exposing (main)\nimport Ipe.Log as Log\nimport Ipe.Db.Unsafe\nmain : Task ()\nmain =\n    Log.info \"x\"\n",
-        );
+        let caps = caps_of("module Lib exposing (x)\nimport Ipe.Db.Unsafe\nx : Int\nx = 5\n");
         assert!(
             caps.as_ref()
                 .is_some_and(|c| c.contains(&Capability::Unsafe)),
@@ -104,9 +103,7 @@ mod tests {
     /// negative-suite full-pipeline test, which injects the compiled stdlib.)
     #[test]
     fn importing_ipe_html_unsafe_discloses_unsafe() {
-        let caps = caps_of(
-            "module Main exposing (main)\nimport Ipe.Log as Log\nimport Ipe.Html.Unsafe\nmain : Task ()\nmain =\n    Log.info \"x\"\n",
-        );
+        let caps = caps_of("module Lib exposing (x)\nimport Ipe.Html.Unsafe\nx : Int\nx = 5\n");
         assert!(
             caps.as_ref()
                 .is_some_and(|c| c.contains(&Capability::Unsafe)),
@@ -120,9 +117,7 @@ mod tests {
     /// raw-script boundary specifically.
     #[test]
     fn importing_ipe_web_head_unsafe_discloses_unsafe() {
-        let caps = caps_of(
-            "module Main exposing (main)\nimport Ipe.Log as Log\nimport Ipe.Web.Head.Unsafe\nmain : Task ()\nmain =\n    Log.info \"x\"\n",
-        );
+        let caps = caps_of("module Lib exposing (x)\nimport Ipe.Web.Head.Unsafe\nx : Int\nx = 5\n");
         assert!(
             caps.as_ref()
                 .is_some_and(|c| c.contains(&Capability::Unsafe)),
@@ -138,9 +133,7 @@ mod tests {
     /// capability-neutral negative-suite test).
     #[test]
     fn importing_ipe_secret_unsafe_discloses_unsafe() {
-        let caps = caps_of(
-            "module Main exposing (main)\nimport Ipe.Log as Log\nimport Ipe.Secret.Unsafe\nmain : Task ()\nmain =\n    Log.info \"x\"\n",
-        );
+        let caps = caps_of("module Lib exposing (x)\nimport Ipe.Secret.Unsafe\nx : Int\nx = 5\n");
         assert!(
             caps.as_ref()
                 .is_some_and(|c| c.contains(&Capability::Unsafe)),
@@ -158,9 +151,7 @@ mod tests {
         // The import is the load-bearing part: `caps_of` uses the kernel-qualifier
         // path, which gates on `import Ipe.Secret` (no `.Unsafe`), not on which
         // `Secret.*` member is called.
-        let caps = caps_of(
-            "module Main exposing (main)\nimport Ipe.Log as Log\nimport Ipe.Secret\nmain : Task ()\nmain =\n    Log.info \"x\"\n",
-        );
+        let caps = caps_of("module Lib exposing (x)\nimport Ipe.Secret\nx : Int\nx = 5\n");
         assert!(
             caps.as_ref()
                 .is_some_and(|c| !c.contains(&Capability::Unsafe)),
@@ -173,9 +164,7 @@ mod tests {
     /// firing `unsafe` unconditionally — the default path must be untouched.
     #[test]
     fn a_program_without_an_unsafe_import_discloses_no_unsafe() {
-        let caps = caps_of(
-            "module Main exposing (main)\nimport Ipe.Log as Log\nmain : Task ()\nmain =\n    Log.info \"x\"\n",
-        );
+        let caps = caps_of("module Lib exposing (x)\nx : Int\nx = 5\n");
         assert_eq!(
             caps,
             Some(std::collections::BTreeSet::new()),
@@ -186,16 +175,15 @@ mod tests {
     /// The `Unsafe` segment is matched at the END of a dotted `Ipe.<M>.Unsafe`
     /// path, not anywhere: an unrelated stdlib import whose name merely contains
     /// no trailing `Unsafe` segment does not trip the disclosure. A bare
-    /// `import Ipe.Html` (a safe surface) discloses nothing.
+    /// A plain (non-`.Unsafe`) stdlib import discloses nothing on the `unsafe`
+    /// axis.
     #[test]
     fn a_plain_stdlib_import_is_not_mistaken_for_unsafe() {
-        let caps = caps_of(
-            "module Main exposing (main)\nimport Ipe.Log as Log\nimport Ipe.Html\nmain : Task ()\nmain =\n    Log.info \"x\"\n",
-        );
+        let caps = caps_of("module Lib exposing (x)\nimport Ipe.Http\nx : Int\nx = 5\n");
         assert!(
             caps.as_ref()
                 .is_some_and(|c| !c.contains(&Capability::Unsafe)),
-            "a plain `import Ipe.Html` must not disclose `unsafe`, got {caps:?}"
+            "a plain `import Ipe.Http` must not disclose `unsafe`, got {caps:?}"
         );
     }
 

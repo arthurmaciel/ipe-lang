@@ -92,6 +92,7 @@ Each module listed below links to a detail page with full doc-strings and exampl
 | `map5` | `map5 f ra rb rc rd re` — combine five `Ok` values with `f`; first `Err` wins. |
 | `mapError` | `mapError f result` — apply `f` to the `Err` value; `Ok` passes through. |
 | `toMaybe` | `toMaybe result` — `Just` the `Ok` value, or `Nothing` on `Err`. |
+| `traverse` | `traverse f list` — map each element to a `Result`, collecting successes; |
 | `withDefault` | `withDefault fallback result` — the success value, or `fallback` if `Err`. |
 
 ## String

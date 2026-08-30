@@ -78,10 +78,6 @@ pub const STDLIB_MODULE_QUALIFIERS: &[(&[&str], &str)] = &[
     //   Ipe.Regex              Regex_*
     //
     // ── Ipe.* pure + effect modules (kernel qualifiers) ────────────────────
-    (&["Ipe", "Basics"], "Basics"),
-    (&["Ipe", "Maybe"], "Maybe"),
-    (&["Ipe", "Result"], "Result"),
-    (&["Ipe", "Error"], "Error"),
     (&["Ipe", "Crypto"], "Crypto"),
     // `Ipe.Secret` — opaque secret-string wrapper.
     (&["Ipe", "Secret"], "Secret"),
@@ -104,7 +100,6 @@ pub const STDLIB_MODULE_QUALIFIERS: &[(&[&str], &str)] = &[
     (&["Ipe", "Http", "Middleware"], "Middleware"),
     (&["Ipe", "Http", "RateLimit"], "RateLimit"),
     // ── Ipe.* modules ───────────────────────────────────────────────────────
-    (&["Ipe", "Log"], "Log"),
     // `Ipe.Cmd` / `Ipe.Sub` are DELIBERATELY absent: the canonical `Cmd` / `Sub`
     // kernel qualifiers are compiler/runtime internals, not user-importable
     // modules. `Cmd` / `Sub` are shape-specific, so user code reaches them
@@ -122,7 +117,6 @@ pub const STDLIB_MODULE_QUALIFIERS: &[(&[&str], &str)] = &[
     // (`adminToken` / `ingestToken` / `metricsToken`). A kernel qualifier (its
     // members build `Setting` values), so it stays out of `COMPILED_STD_MODULES`.
     (&["Ipe", "Console"], "Console"),
-    (&["Ipe", "Level"], "Level"),
     (&["Ipe", "Db", "Decode"], "Db.Decode"),
     (&["Ipe", "Db", "Sql"], "Sql"), // SqlFragment builder
     // `Ipe.Ui.*` sub-qualifiers: Ipe.Ui itself is compiled-source (see the
@@ -705,68 +699,11 @@ impl Env {
         // Html.Attributes, Path, Regex.
         // Their kernels are reached via `detect_kernel_alias`, not this table.
         const QUALIFIERS: &[(&str, &[&str])] = &[
-            (
-                "Maybe",
-                &[
-                    "withDefault",
-                    "map",
-                    "andThen",
-                    "map2",
-                    "map3",
-                    "map4",
-                    "map5",
-                    "andMap",
-                    "combine",
-                    "isJust",
-                    "isNothing",
-                ],
-            ),
-            (
-                "Result",
-                &[
-                    "withDefault",
-                    "map",
-                    "andThen",
-                    "mapError",
-                    "map2",
-                    "map3",
-                    "map4",
-                    "map5",
-                    "andMap",
-                    "combine",
-                    "traverse",
-                    "toMaybe",
-                    "fromMaybe",
-                ],
-            ),
             // `Ipe.Error` — the real `Error ErrorKind ErrorInfo` ADT.
             // Message constructors + nullary constructors + `toString`
             // render + `withMessage` modifier + `isRetryable` classification +
             // `withDetails` modifier (attaches the
             // `ErrorDetails` union to `ErrorInfo.details : Maybe ErrorDetails`).
-            (
-                "Error",
-                &[
-                    "unexpected",
-                    "invalidInput",
-                    "io",
-                    "network",
-                    "ffi",
-                    "decode",
-                    "conflict",
-                    "unavailable",
-                    "timeout",
-                    "notFound",
-                    "permissionDenied",
-                    "toString",
-                    "withMessage",
-                    "isRetryable",
-                    "withDetails",
-                    "kind",
-                    "message",
-                    "kindName",
-                ],
-            ),
             // `Ipe.CssSafety` — the Ipe.Css leaf security kernels: four
             // `String -> Maybe String` parsers (`safeValue`/`safePropName`/
             // `safeSelector` gate declarations/selectors at construction;
@@ -790,21 +727,6 @@ impl Env {
             // (IPE-L0108) until the Stringify obligation is added.
             // `Log` is observability-only — line printing lives in `Ipe.Io`
             // (`Io.println` / `Io.eprintln`).
-            (
-                "Log",
-                &[
-                    "info",
-                    "debug",
-                    "warn",
-                    "error",
-                    "infoWith",
-                    "debugWith",
-                    "warnWith",
-                    "errorWith",
-                    // Runtime-config front door — `Log.level : LogLevel -> Setting a`.
-                    "level",
-                ],
-            ),
             // `Ipe.App` — runtime-config front door. `fromEnv` seals an env var
             // into a `Secret` (the ONLY way to get a config secret);
             // `fromEnvRequired` is its fail-closed variant (a missing/empty var
@@ -820,14 +742,6 @@ impl Env {
             // `Ipe.Level` — the `LogLevel` constructors `Log.level` takes. A
             // separate qualifier from `Log` because `Log.debug`/`Log.info`/… are
             // already the logging kernels; `Level.debug`/… are the severity tags.
-            ("Level", &["debug", "info", "warn", "error"]),
-            (
-                "Basics",
-                &[
-                    "identity", "always", "not", "toString", "modBy", "clamp", "fst", "snd",
-                    "compare", "negate", "abs", "sqrt", "min", "max",
-                ],
-            ),
             // `Ipe.Json.Encode` — JSON encoder.
             (
                 "JsonEnc",

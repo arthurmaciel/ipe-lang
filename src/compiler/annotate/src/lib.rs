@@ -395,37 +395,37 @@ mod tests {
 
     #[test]
     fn kernel_vs_user_function_distinct() {
-        // `defaultVal` is a top-level user function; `Maybe.withDefault` calls a kernel.
-        let src = "module Main exposing (main)\n\nimport Ipe.Maybe as Maybe\n\ndefaultVal : Int\ndefaultVal = 0\n\nmain : Int\nmain =\n    Maybe.withDefault defaultVal (Just 1)\n";
+        // `seed` is a top-level user function; `Crypto.sha256` calls a kernel.
+        // (A security module stays kernel-qualifier; a compiled-source stdlib
+        // module would not resolve in this raw-canon test.)
+        let src = "module Main exposing (main)\n\nimport Ipe.Crypto as Crypto\n\nseed : String\nseed = \"x\"\n\nmain : String\nmain =\n    Crypto.sha256 seed\n";
         let (syntax, mut interner) = parse(src);
         let canon_mod = canon(&syntax, &mut interner);
         let tokens = annotate(&syntax, &canon_mod, src, &interner);
 
-        // `defaultVal` call site in `Maybe.withDefault defaultVal …` must be Function.
-        let kernel_pos = src
-            .rfind("Maybe.withDefault")
-            .expect("Maybe.withDefault present");
-        let user_pos = src[kernel_pos..].find("defaultVal").map(|r| kernel_pos + r);
+        // `seed` call site in `Crypto.sha256 seed` must be Function.
+        let kernel_pos = src.rfind("Crypto.sha256").expect("Crypto.sha256 present");
+        let user_pos = src[kernel_pos..].find("seed").map(|r| kernel_pos + r);
         if let Some(pos) = user_pos {
             let tok = tokens.iter().find(|t| t.byte_start as usize == pos);
             if let Some(t) = tok {
                 assert_eq!(
                     t.class,
                     TokenClass::Function,
-                    "user 'defaultVal' is Function at call site"
+                    "user 'seed' is Function at call site"
                 );
             }
         }
 
-        // The kernel call `Maybe.withDefault` should produce a Kernel token.
+        // The kernel call `Crypto.sha256` should produce a Kernel token.
         let kernel_toks = by_class(&tokens, TokenClass::Kernel);
         let kernel_tok = kernel_toks.iter().find(|t| {
             let slice = text_of(src, t);
-            slice == "withDefault" || slice == "Maybe.withDefault"
+            slice == "sha256" || slice == "Crypto.sha256"
         });
         assert!(
             kernel_tok.is_some(),
-            "Maybe.withDefault produces a Kernel-classified token"
+            "Crypto.sha256 produces a Kernel-classified token"
         );
     }
 
@@ -444,8 +444,8 @@ mod tests {
 
     #[test]
     fn qualified_call_def_resolves_to_kernel() {
-        // `Maybe.withDefault` def must be DefKey::Kernel { module: "Maybe", name: "withDefault" }.
-        let src = "module Main exposing (main)\n\nimport Ipe.Maybe as Maybe\n\nmain : Int\nmain =\n    Maybe.withDefault 0 (Just 1)\n";
+        // `Crypto.sha256` def must be DefKey::Kernel { module: "Crypto", name: "sha256" }.
+        let src = "module Main exposing (main)\n\nimport Ipe.Crypto as Crypto\n\nmain : String\nmain =\n    Crypto.sha256 \"x\"\n";
         let (syntax, mut interner) = parse(src);
         let canon_mod = canon(&syntax, &mut interner);
         let tokens = annotate(&syntax, &canon_mod, src, &interner);
@@ -453,15 +453,15 @@ mod tests {
         let kernel_toks = by_class(&tokens, TokenClass::Kernel);
         let map_tok = kernel_toks
             .iter()
-            .find(|t| text_of(src, t) == "withDefault" || text_of(src, t) == "Maybe.withDefault")
-            .expect("Maybe.withDefault token found");
+            .find(|t| text_of(src, t) == "sha256" || text_of(src, t) == "Crypto.sha256")
+            .expect("Crypto.sha256 token found");
         assert_eq!(
             map_tok.def,
             Some(DefKey::Kernel {
-                module: "Maybe".to_string(),
-                name: "withDefault".to_string(),
+                module: "Crypto".to_string(),
+                name: "sha256".to_string(),
             }),
-            "Maybe.withDefault resolves to the Maybe.withDefault kernel def",
+            "Crypto.sha256 resolves to the Crypto.sha256 kernel def",
         );
     }
 

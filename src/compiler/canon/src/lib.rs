@@ -560,9 +560,11 @@ mod tests {
 
     #[test]
     fn suggestions_sorted_by_distance_then_name() {
-        // Several `Maybe` members sit at equal edit distance from
-        // `ma`; assert the rendered list is `(distance, name)`-sorted.
-        let err = canon_err("module Main exposing (main)\nimport Ipe.Maybe\n\nmain = Maybe.ma\n");
+        // Several `Crypto` members sit at equal edit distance from `sha`; assert
+        // the rendered list is `(distance, name)`-sorted. A security module stays
+        // kernel-qualifier; a compiled-source module would not resolve here.
+        let err =
+            canon_err("module Main exposing (main)\nimport Ipe.Crypto\n\nmain = Crypto.sha\n");
         let Some(Diagnostic::Name {
             msg: NameError::NoSuchMember { suggestions, .. },
             ..
@@ -573,7 +575,7 @@ mod tests {
         };
         let keys: Vec<(usize, String)> = suggestions
             .iter()
-            .map(|s| (test_levenshtein("ma", s), s.to_string()))
+            .map(|s| (test_levenshtein("sha", s), s.to_string()))
             .collect();
         let mut sorted = keys.clone();
         sorted.sort();
