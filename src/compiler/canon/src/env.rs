@@ -59,7 +59,12 @@ pub const STDLIB_MODULE_QUALIFIERS: &[(&[&str], &str)] = &[
     // variants. A module is EITHER a kernel qualifier here OR compiled-source
     // — never both (`compiled_vs_kernel_qualifier_disjoint`), so it stays out.
     (&["Ipe", "Dict"], "Dict"),
-    (&["Ipe", "Set"], "Set"),
+    // NOTE — `Ipe.Set` is DELIBERATELY absent: it is a COMPILED-SOURCE
+    // Layer-3 module (registered in `ipe::stdlib::COMPILED_STD_MODULES`). Its
+    // members are point-free `Ffi.kernel "Set_*"` aliases that
+    // `detect_kernel_alias` routes to the registered `Set*` `StdlibKernel`
+    // variants. A module is EITHER a kernel qualifier here OR compiled-source
+    // — never both (`compiled_vs_kernel_qualifier_disjoint`), so it stays out.
     (&["Ipe", "Bytes"], "Bytes"),
     (&["Ipe", "Encoding"], "Encoding"),
     (&["Ipe", "Crypto"], "Crypto"),
@@ -1049,29 +1054,9 @@ impl Env {
                     "update",
                 ],
             ),
-            // `Ipe.Set` — set kernels.
-            (
-                "Set",
-                &[
-                    "empty",
-                    "size",
-                    "insert",
-                    "remove",
-                    "member",
-                    "toList",
-                    "fromList",
-                    "union",
-                    "intersect",
-                    "diff",
-                    "isEmpty",
-                    "singleton",
-                    "foldl",
-                    "foldr",
-                    "map",
-                    "filter",
-                    "partition",
-                ],
-            ),
+            // NOTE — `Ipe.Set` is DELIBERATELY absent from this catalog:
+            // it is a compiled-source module; its `Set_*` kernels are
+            // reached via `detect_kernel_alias`, not the qualifier table.
             // `Ipe.Bytes` — byte-buffer kernels.
             (
                 "Bytes",
