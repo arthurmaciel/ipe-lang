@@ -115,17 +115,14 @@ pub(crate) fn crypto_key_reveal(key: Key) -> String {
     key.0
 }
 
-// `Crypto.randomBytes : Int -> Task Error String`. Go returns the entropy as a
-// LOWERCASE HEX string (rt.go ~l6543: `hex.EncodeToString(b)`), NOT a byte list —
-// the Ipê signature is `String`, so the Rust side must return a hex `String` too.
-// (A prior `Vec<i64>` return diverged from both the Ipê type and Go: a Ipê call
-// site treating the result as a String/Bytes mismatched at codegen.)
+// `Crypto.randomBytes : Int -> Task Error String`. Returns entropy as a
+// LOWERCASE HEX string — the Ipê signature is `String`, so the Rust side
+// must return a hex `String` (not a byte list).
 #[cfg(not(target_arch = "wasm32"))]
 pub fn crypto_random_bytes<E: From<String> + Send + 'static>(n: i64) -> IpeTask<E, String> {
     Box::pin(async move {
-        // SECURITY: Mirror the spec exactly: reject size <= 0 || size > 1024
-        // (rt.go ~l6536: `if size <= 0 || size > 1024 { return ErrInvalidInput }`)
-        // to prevent unbounded attacker-controlled allocation (DoS vector).
+        // SECURITY: reject size <= 0 || size > 1024 to prevent unbounded
+        // attacker-controlled allocation (DoS vector).
         if n <= 0 || n > 1024 {
             return IpeResult::Err(
                 "Crypto.randomBytes: size must be 1..1024"
@@ -150,8 +147,8 @@ pub fn crypto_random_bytes<E: From<String> + Send + 'static>(n: i64) -> IpeTask<
 /// `js` backend (Q3: "`Random.*` / `Crypto.randomBytes` | SUBSTITUTE |
 /// `crypto.getRandomValues`") — no `aes-gcm`/`OsRng` dependency pulled into
 /// the bundle just for entropy. Same size guard + hex encoding as the native
-/// arm (Go-oracle parity is a native-only contract, but the size guard is a
-/// real DoS control worth keeping on both targets).
+/// arm — same size guard + hex encoding as the native arm; the size guard is a
+/// real DoS control on both targets.
 #[cfg(target_arch = "wasm32")]
 pub fn crypto_random_bytes<E: From<String> + 'static>(n: i64) -> IpeTask<E, String> {
     Box::pin(async move {
@@ -226,16 +223,14 @@ fn base64url_no_pad(buf: &[u8]) -> String {
     out
 }
 
-// `Crypto.randomToken : Int -> Task Error String`. Go returns URL-safe base64
-// WITHOUT padding (rt.go ~l6560: `base64.RawURLEncoding.EncodeToString(b)`) — the
-// `-_` alphabet, no `=` pad. Width `n` is bytes of ENTROPY; the returned string is
-// longer (ceil(n*4/3) chars). (A prior hex encoding diverged from  base64.)
+// `Crypto.randomToken : Int -> Task Error String`. Returns URL-safe base64
+// WITHOUT padding — the `-_` alphabet, no `=` pad. Width `n` is bytes of
+// ENTROPY; the returned string is longer (ceil(n*4/3) chars).
 #[cfg(not(target_arch = "wasm32"))]
 pub fn crypto_random_token<E: From<String> + Send + 'static>(n: i64) -> IpeTask<E, String> {
     Box::pin(async move {
-        // SECURITY: Mirror the spec exactly: reject size <= 0 || size > 1024
-        // (rt.go ~l6553: `if size <= 0 || size > 1024 { return ErrInvalidInput }`)
-        // to prevent unbounded attacker-controlled allocation (DoS vector).
+        // SECURITY: reject size <= 0 || size > 1024 to prevent unbounded
+        // attacker-controlled allocation (DoS vector).
         if n <= 0 || n > 1024 {
             return IpeResult::Err(
                 "Crypto.randomToken: size must be 1..1024"
@@ -393,9 +388,8 @@ pub fn crypto_hmac_sha512(key: String, msg: String) -> String {
 /// Ipê `rsaSha256Sign : String -> String -> Result Error String`
 /// Sign `msg` with the PKCS#1 v1.5 SHA-256 RSA scheme using `key_pem`.
 /// Accepts PKCS#1 (`-----BEGIN RSA PRIVATE KEY-----`) and PKCS#8
-/// (`-----BEGIN PRIVATE KEY-----`) PEM private keys — mirrors the spec
-/// (rt.go ~l6472: tries ParsePKCS1PrivateKey then ParsePKCS8PrivateKey).
-/// Returns standard-base64-encoded signature (base64.StdEncoding, rt.go ~l6488).
+/// (`-----BEGIN PRIVATE KEY-----`) PEM private keys (tries PKCS#8 first, then
+/// PKCS#1). Returns a standard-base64-encoded signature (with padding).
 #[cfg(feature = "crypto")]
 pub fn crypto_rsa_sha256_sign<E: From<String>>(
     key_pem: String,
@@ -434,16 +428,15 @@ pub fn crypto_rsa_sha256_sign<E: From<String>>(
             return IpeResult::Err(format!("Crypto.rsaSha256Sign: signing failed: {}", e).into());
         }
     };
-    // Go returns base64.StdEncoding (standard base64, with padding) — match exactly.
+    // Standard base64 (with `=` padding).
     IpeResult::Ok(STANDARD.encode(signature.to_bytes()))
 }
 
 /// Ipê `rsaSha256Verify : String -> String -> String -> Bool`
 /// (pemPublicKey, msg, base64Signature). Returns `false` on any failure — never panics.
 /// Accepts SPKI/PKIX public keys (`-----BEGIN PUBLIC KEY-----`, the common openssl form)
-/// and PKCS#1 public keys (`-----BEGIN RSA PUBLIC KEY-----`) — mirrors the spec
-/// (rt.go ~l6500: tries ParsePKIXPublicKey then ParsePKCS1PublicKey).
-/// Signature is standard-base64 (base64.StdEncoding, rt.go ~l6511).
+/// and PKCS#1 public keys (`-----BEGIN RSA PUBLIC KEY-----`; tries PKIX first,
+/// then PKCS#1). Signature is standard base64 (with padding).
 #[cfg(feature = "crypto")]
 pub fn crypto_rsa_sha256_verify(key_pem: String, msg: String, sig_b64: String) -> bool {
     use base64::{Engine, engine::general_purpose::STANDARD};
@@ -465,7 +458,7 @@ pub fn crypto_rsa_sha256_verify(key_pem: String, msg: String, sig_b64: String) -
             }
         },
     };
-    // Go decodes with base64.StdEncoding (standard base64, with padding) — match exactly.
+    // Standard base64 (with `=` padding).
     let sig_bytes = match STANDARD.decode(sig_b64.as_bytes()) {
         Ok(b) => b,
         Err(_) => return false,

@@ -34,7 +34,7 @@ pub enum Attribute<M> {
 /// Variant names mirror the Ipê stdlib `Ipe.Html.Attributes.Event` ADT
 /// (`OnMsg | OnString | OnBool | OnForm`). `OnString`/`OnBool` carry
 /// `Arc<dyn Fn(..) -> msg>` (not bare fn pointers) so the handler can be a
-/// CAPTURING closure — exactly as the Go backend allows. A faithful Ipe.Web
+/// CAPTURING closure, supporting `\s -> toMsg (parse s default)` patterns. A faithful Ipe.Web
 /// app's `onChange = \s -> toMsg (parse s default)` captures locals; a bare
 /// fn-pointer field rejected that. Bare ctors / non-capturing fns coerce into
 /// `Arc::new` fine; capturing closures box into the trait object.
@@ -166,8 +166,7 @@ pub(crate) fn is_void(tag: &str) -> bool {
 /// Render an `Html` tree to an HTML string. Text is HTML-escaped; Raw is
 /// emitted verbatim; void elements self-close with no children; event
 /// handlers emit a `data-ipe-on="<space-separated event names>"` marker
-/// attribute that the browser client reads to bind listeners. Mirrors Go
-/// `renderVNode`.
+/// attribute that the browser client reads to bind listeners.
 #[must_use]
 pub fn render_html<M>(node: &Html<M>) -> String {
     let mut s = String::new();
@@ -211,8 +210,8 @@ pub(crate) fn render_into_raw_text<M>(node: &Html<M>, s: &mut String) {
 
 // `select_value`: when this node renders as a direct child of a `<select>` that
 // carries a value, the chosen value is threaded here so the matching `<option>`
-// flips `selected` (Go renderVNode, live.go:432-453). `raw_text`: set when the
-// parent is `<script>`/`<style>` so HText children emit verbatim — see SECURITY.
+// flips `selected`. `raw_text`: set when the parent is `<script>`/`<style>` so
+// HText children emit verbatim — see SECURITY.
 #[allow(clippy::too_many_lines)]
 fn render_into_ctx<M>(
     node: &Html<M>,
@@ -249,7 +248,7 @@ fn render_into_ctx<M>(
         Html::HRaw(r) => s.push_str(r),
         Html::HElement(tag, attrs, kids) => {
             // Html.doctype wraps children in a pseudo-element; emit a literal
-            // `<!DOCTYPE html>` then the children directly (Go live.go:303-312).
+            // `<!DOCTYPE html>` then the children directly.
             // Handled BEFORE the name gate because `!doctype-wrapper` contains a
             // `!`. The doctype string is a fixed literal and the wrapper's own
             // tag/attrs are never interpolated → not an injection vector; the
@@ -272,8 +271,7 @@ fn render_into_ctx<M>(
             // Collect regular + bool attrs into (key, value) pairs, then sort
             // by key —  renderVNode emits from a map under sort.Strings, so
             // matching byte-for-byte requires the same alphabetical order. A
-            // BoolAttr renders as `k="true"` (Go stores it as the string "true"
-            // in n.Attrs), NOT a bare `k`.
+            // BoolAttr renders as `k="true"` (the string "true"), NOT a bare `k`.
             let mut pairs: Vec<(&str, String)> = vec![];
             let mut events: Vec<&str> = vec![];
             let mut ipe_id: Option<&str> = None;
@@ -342,7 +340,7 @@ fn render_into_ctx<M>(
             // every browser (and a server re-render would wipe the user's text). So
             // strip the `value` attr here for both, and (textarea only) splice it
             // back as escaped text content after the open tag when there are no
-            // explicit children. Mirrors Go `renderVNode` (live.go).
+            // explicit children.
             let mut textarea_value: Option<String> = None;
             if (tag == "textarea" || tag == "select")
                 && let Some(pos) = pairs.iter().position(|(k, _)| *k == "value")
@@ -352,8 +350,8 @@ fn render_into_ctx<M>(
             }
             // <option selected> flip: when rendered as a direct child of a
             // <select> with a value, set `selected` on the value-matching option
-            // and drop any stale `selected` otherwise (Go renderVNode, copy-
-            // don't-mutate). We touch only the local `pairs`, never the caller's
+            // and drop any stale `selected` otherwise (copy-don't-mutate).
+            // We touch only the local `pairs`, never the caller's
             // tree (it is the diff baseline — mutating it would corrupt the next
             // diff). Added before the sort so byte order matches  map+sort.
             if tag == "option"
@@ -403,8 +401,8 @@ fn render_into_ctx<M>(
                     // File/image meta-events arrive already `ipe-`-prefixed
                     // (`ipe-image`/`ipe-file`); the client's upload driver reads
                     // them via the `data-ipe-ev-<name>` HTML5 data-attribute
-                    // convention, while plain DOM events keep `ipe-<name>` (Go
-                    // live.go:395-405). Emitting `ipe-ipe-image` made the driver
+                    // convention, while plain DOM events keep `ipe-<name>`.
+                    // Emitting `ipe-ipe-image` made the driver
                     // lookup miss, so uploads never fired. `ev` is already
                     // name-gated (events.retain above), so both keys are safe.
                     let key = if ev.starts_with("ipe-") {
@@ -497,9 +495,8 @@ fn escape_text(t: &str) -> String {
 }
 
 fn escape_attr(t: &str) -> String {
-    // `"` → `&#34;` (NOT `&quot;`) to match  html.EscapeString byte-for-byte
-    // (GOROOT/src/html/escape.go uses the numeric entity). Both are valid HTML;
-    // the numeric form is what the Go renderer emits, so equiv tests byte-compare.
+    // `"` → `&#34;` (NOT `&quot;`); both are valid HTML but the numeric entity
+    // is required for byte-exact equivalence tests.
     escape_html(t, true)
 }
 
@@ -727,8 +724,7 @@ pub(crate) fn safe_patch_attr<'a>(name: &'a str, value: &'a str) -> Option<(&'a 
 /// two structurally different subtrees never share an id at the same positional
 /// depth, and the optional `:{key}` disambiguator (from an explicit `ipe-key`
 /// attribute, or implicit from `name` on form-bearing tags) lets keyed list items
-/// and named form fields keep identity across reorder. Mirrors Go `assignIpeIDs`
-/// / `ipeIDKey` (``).
+/// and named form fields keep identity across reorder.
 pub fn assign_ipe_ids<M>(node: &mut Html<M>, path: &str) {
     assign_ipe_ids_depth(node, path, 0);
 }
@@ -761,7 +757,6 @@ fn assign_ipe_ids_depth<M>(node: &mut Html<M>, path: &str, depth: usize) {
 /// Stable disambiguator for an element, or `None`. Priority: an explicit
 /// `ipe-key` attribute (set by `Html.keyed`), then `name` on form-bearing tags.
 /// Any matched value is sanitised so it can't corrupt the ipe-id grammar.
-/// Mirrors Go `ipeIDKey`.
 fn ipe_id_key<M>(tag: &str, attrs: &[Attribute<M>]) -> Option<String> {
     if let Some(k) = attr_value(attrs, "ipe-key")
         && !k.is_empty()
@@ -788,7 +783,6 @@ fn attr_value<'a, M>(attrs: &'a [Attribute<M>], key: &str) -> Option<&'a str> {
 
 /// Replace anything outside `[A-Za-z0-9_-]` with `_`. Prevents the key from
 /// breaking ipe-id parsing, CSS selector escaping, or HTML attribute quoting.
-/// Mirrors Go `sanitiseIpeIDKey`.
 fn sanitise_ipe_id_key(s: &str) -> String {
     s.chars()
         .map(|c| {
@@ -1027,8 +1021,8 @@ pub fn html_attr_to_string_<M>(attr: Attribute<M>) -> String {
 // ─── IpeStringify for the Html runtime types ────────────────────────────────
 // Same rationale as the Ipe.Ui impls in ui/element.rs: a codegen-emitted
 // `ipe_show` recurses into every field, so an Html/Attribute/Event a generated
-// type can hold must impl the trait (else E0599). No Go `%v` analogue worth
-// matching; a stable type-tag placeholder is total and never recurses into `M`.
+// type can hold must impl the trait (else E0599). A stable type-tag placeholder
+// is total and never recurses into `M`.
 impl<M> crate::stringify::IpeStringify for Html<M> {
     fn ipe_show(&self) -> String {
         "<html>".to_string()
@@ -1076,7 +1070,7 @@ mod tests {
         let s = render_html(&t);
         assert!(s.contains(r#"<div class="x" ipe-id="r">"#), "{s}");
         // Attrs are sorted alphabetically; BoolAttr renders as `k="true"`; void
-        // elements self-close — all to match Go renderVNode.
+        // elements self-close.
         assert!(
             s.contains(r#"<input disabled="true" ipe-id="r_0_input" value="a&lt;b" />"#),
             "{s}"
