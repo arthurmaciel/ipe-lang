@@ -1,0 +1,95 @@
+module Main exposing (main)
+
+import Ipe.Config as Config exposing (Decoder)
+import Ipe.Result as Result exposing (Result(..))
+import Ipe.String as String
+import Ipe.Io as Io
+
+
+-- Decode an untyped TOML document into a typed `AppConfig` record with a
+-- `Decoder`. A decoder DESCRIBES how to pull a value of a given type out of a
+-- config document; running it either yields the fully-typed value or a single
+-- typed `Err`. The record can only exist if every field decoded, so downstream
+-- code that holds an `AppConfig` never re-checks the raw document — parse, don't
+-- validate, at the config boundary.
+
+
+type alias AppConfig =
+    { host : String
+    , port : Int
+    , debug : Bool
+    , tags : List String
+    }
+
+
+-- The decoder is built from field decoders combined with `map4`. Each `field`
+-- says "at this key, expect this type"; `at` drills into a nested table. If any
+-- field is missing or the wrong type, the whole decode is one `Err` naming the
+-- problem — never a half-filled record.
+configDecoder : Decoder AppConfig
+configDecoder =
+    Config.map4 AppConfig
+        (Config.at [ "server", "host" ] Config.string)
+        (Config.at [ "server", "port" ] Config.int)
+        (Config.field "debug" Config.bool)
+        (Config.field "tags" (Config.list Config.string))
+
+
+-- A well-formed document.
+validToml : String
+validToml =
+    String.join "\n"
+        [ "debug = true"
+        , "tags = [\"web\", \"api\"]"
+        , ""
+        , "[server]"
+        , "host = \"0.0.0.0\""
+        , "port = 8080"
+        ]
+
+
+-- A document with the wrong type for `port` (a string where an int is expected).
+brokenToml : String
+brokenToml =
+    String.join "\n"
+        [ "debug = true"
+        , "tags = []"
+        , ""
+        , "[server]"
+        , "host = \"0.0.0.0\""
+        , "port = \"not-a-number\""
+        ]
+
+
+report : String -> String -> String
+report label toml =
+    case Config.decodeToml toml configDecoder of
+
+        Ok cfg ->
+            label
+                ++ ": OK "
+                ++ cfg.host
+                ++ ":"
+                ++ String.fromInt cfg.port
+                ++ " debug="
+                ++ boolText cfg.debug
+                ++ " tags="
+                ++ String.join "," cfg.tags
+
+        Err _ ->
+            label ++ ": rejected (typed decode error)"
+
+
+boolText : Bool -> String
+boolText b =
+    if b then
+        "on"
+
+    else
+        "off"
+
+
+main =
+    do
+        Io.println (report "valid " validToml)
+        Io.println (report "broken" brokenToml)
