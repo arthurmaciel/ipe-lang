@@ -800,6 +800,21 @@ fn walk_attrs<M>(attrs: &[Attribute<M>], inherited: Style) -> Walked {
             Attribute::AttrTransition(_, _) => {}
             // Web-only: CSS @keyframes animation, no terminal equivalent.
             Attribute::AttrAnimation(_, _, _, _) => {}
+            // A `Ui.style` key with no terminal meaning (not one of the `__*`
+            // layout markers or `border-style` handled above) has no cell surface.
+            Attribute::AttrStyle(_, _) => {}
+            // A sub-bold font weight (< 600) is rendered as normal weight — a
+            // terminal cell has only the bold/normal SGR distinction.
+            Attribute::AttrFontWeight(_) => {}
+            // A text-decoration value the terminal has no glyph for (handled
+            // decorations are matched above with a guard).
+            Attribute::AttrFontDecoration(_) => {}
+            // A zero/absent border width draws no frame.
+            Attribute::AttrBorderWidth(_) => {}
+            // A zero-sum per-side border width draws no frame.
+            Attribute::AttrBorderWidthEach(_, _, _, _) => {}
+            // A zero/absent rounded radius leaves the frame square.
+            Attribute::AttrBorderRounded(_) => {}
         }
     }
     if border_width > 0 {

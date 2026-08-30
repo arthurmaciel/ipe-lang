@@ -594,7 +594,7 @@ where
                             if press && (btn == 64 || btn == 65) {
                                 let (cols, rows) = term_size();
                                 let (_f, _fs, content_h) = render_with_focus(
-                                    &view(model.clone()),
+                                    &view(model.clone()).into_element(),
                                     cols,
                                     rows,
                                     focus_idx,
@@ -608,7 +608,7 @@ where
                                     (scroll_y + 3).min(max_scroll)
                                 };
                                 let (frame, fs, _) = render_with_focus(
-                                    &view(model.clone()),
+                                    &view(model.clone()).into_element(),
                                     cols,
                                     rows,
                                     focus_idx,

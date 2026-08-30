@@ -48,27 +48,6 @@ fn compile_with_files(
     Ok(ipe::build(&entry, &out_dir, &runtime))
 }
 
-/// Assert compilation failed with the given diagnostic code (fail-closed, an
-/// `ipe`-time diagnostic — never a `cargo` failure or a panic).
-fn assert_rejected_with(
-    test_name: &str,
-    source: &str,
-    extra: &[(&str, &str)],
-    expected_code: &str,
-) -> Result<(), BoxError> {
-    match compile_with_files(test_name, source, extra)? {
-        Ok(()) => Err(format!("{test_name}: expected {expected_code}, but ipec succeeded").into()),
-        Err(ipe::CliError::Pipeline { diag, .. }) => {
-            assert_eq!(
-                diag.code().as_str(),
-                expected_code,
-                "{test_name}: wrong diagnostic code"
-            );
-            Ok(())
-        }
-        Err(other) => Err(format!("{test_name}: expected {expected_code}, got {other:?}").into()),
-    }
-}
 
 /// Assert compilation succeeded (ipe-0).
 fn assert_accepted(test_name: &str, source: &str, extra: &[(&str, &str)]) -> Result<(), BoxError> {
