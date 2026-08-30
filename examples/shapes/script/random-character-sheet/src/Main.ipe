@@ -1,0 +1,92 @@
+module Main exposing (main)
+
+import Ipe.Random.Generator as Gen
+import Ipe.List as List
+import Ipe.String as String
+import Ipe.Io as Io
+
+
+-- Roll a reproducible character sheet, exercising the three ideas most
+-- `Ipe.Random` code turns on:
+--   • Two tiers. Entropy-backed draws (`Random.int`, `Random.float`) read the OS
+--     RNG and so are effects — they return a `Task`. The SEEDED tier here is pure:
+--     a `Generator a` is a plain step `Seed -> ( value, nextSeed )`, and the same
+--     starting seed reproduces the same sequence every run — ideal for tests and
+--     content generation.
+--   • The seed must be THREADED, never reused. Each draw returns the NEXT seed;
+--     feeding that forward is what makes the stream advance. The combinators
+--     (`map2`, `map3`, `listOf`) thread it for you so you cannot accidentally draw
+--     the same value twice.
+--   • `Seed` is opaque — the raw PRNG state cannot leak into your code, so the
+--     only thing you can do with a seed is thread it, which is exactly right.
+
+
+type alias Sheet =
+    { strength : Int
+    , dexterity : Int
+    , wisdom : Int
+    , hitDice : List Int
+    }
+
+
+-- One ability score: the classic "4d6, drop nothing" simplified to a single
+-- 3..18 draw. `Gen.int 3 18` IS a generator — a `Seed -> ( Int, nextSeed )`.
+ability : Gen.Seed -> ( Int, Gen.Seed )
+ability =
+    Gen.int 3 18
+
+
+-- The whole sheet from one seed. `map3` threads the seed through three ability
+-- draws and combines them; then `listOf` draws six hit-dice, continuing from the
+-- seed the abilities left off at. Every draw hands the next seed to the next —
+-- there is no way to reuse a seed by accident.
+rollSheet : Gen.Seed -> Sheet
+rollSheet seed0 =
+    let
+        ( abilities, seed1 ) =
+            Gen.map3 (\s d w -> { strength = s, dexterity = d, wisdom = w })
+                ability
+                ability
+                ability
+                seed0
+
+        ( dice, _ ) =
+            Gen.listOf 6 (Gen.int 1 8) seed1
+    in
+    { strength = abilities.strength
+    , dexterity = abilities.dexterity
+    , wisdom = abilities.wisdom
+    , hitDice = dice
+    }
+
+
+render : Sheet -> String
+render sheet =
+    String.join "\n"
+        [ "  STR " ++ String.fromInt sheet.strength
+        , "  DEX " ++ String.fromInt sheet.dexterity
+        , "  WIS " ++ String.fromInt sheet.wisdom
+        , "  hit dice: " ++ String.join " " (List.map String.fromInt sheet.hitDice)
+        ]
+
+
+main =
+    let
+        -- The SAME starting seed reproduces the SAME sheet — that is the point of
+        -- the seeded tier. A different seed rolls a different character.
+        sheetA =
+            rollSheet (Gen.initialSeed 42)
+
+        sheetAgain =
+            rollSheet (Gen.initialSeed 42)
+
+        sheetB =
+            rollSheet (Gen.initialSeed 99)
+    in
+    do
+        Io.println "seed 42:"
+        Io.println (render sheetA)
+        Io.println "seed 42 again (identical):"
+        Io.println (render sheetAgain)
+        Io.println "seed 99 (different):"
+        Io.println (render sheetB)
