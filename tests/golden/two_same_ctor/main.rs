@@ -132,9 +132,6 @@ pub fn task_run<A: Send + 'static>(t: IpeTask<A>) -> IpeResult<IpeError, A> {
 pub fn io_read_line(_: ()) -> IpeTask<String> {
     ipe_runtime::io::io_read_line(())
 }
-pub fn io_read_secret(prompt: String) -> IpeTask<String> {
-    ipe_runtime::io::io_read_secret(prompt)
-}
 pub fn io_write_stdout(s: String) -> IpeTask<()> {
     ipe_runtime::io::io_write_stdout(s)
 }

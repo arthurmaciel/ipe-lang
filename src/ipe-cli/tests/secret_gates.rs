@@ -160,3 +160,19 @@ fn secret_from_string_concatop_literal_is_rejected() {
         ipe_diagnostics::IPE_L0150,
     );
 }
+
+/// `secret <- Io.readSecret "…" ; Io.println secret` — `Io.readSecret` now yields
+/// an opaque `Secret`, not a bare `String`. Printing the bound `Secret` in the
+/// clear (`Io.println` wants a `String`) must be REJECTED at ipe compile time
+/// with `IPE-T0001` (`String` vs `Secret`), fail-closed — never accepted and
+/// left to leak the plaintext at runtime. The whole point of the typed result:
+/// a freshly-read password reaches stdout/a log only through an explicit
+/// `Secret.use` / `Secret.reveal`, never implicitly.
+#[test]
+fn io_read_secret_used_as_string_is_rejected() {
+    assert_gate(
+        "secret_io_read_as_string_rejected",
+        "secret_io_read_as_string_rejected_emit",
+        ipe_diagnostics::IPE_T0001,
+    );
+}

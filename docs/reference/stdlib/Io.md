@@ -10,3 +10,8 @@ Write a prompt to stdout, then read one line from stdin with terminal echo
 suppressed — a password read. The prior terminal mode is always restored, even
 if the read fails. On a non-tty stdin this behaves as a plain line read.
 
+The line is returned as an opaque `Secret`, not a bare `String`: the plaintext
+is reachable only through the scoped `Secret.use` (or `Secret.reveal`) API, so a
+freshly-read secret cannot flow into a log, an error, or a serialized payload by
+accident. Consume it with `Secret.use secret (\plain -> …)`.
+

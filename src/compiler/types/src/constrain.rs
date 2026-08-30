@@ -5824,8 +5824,12 @@ impl<'a> Builder<'a> {
             K::FileRemove | K::FileMkdirAll | K::FileDelete => fun(path(), task_unit()),
             // () -> Task String
             K::IoReadLine | K::SystemCwd => fun(Ty::Unit, task(string())),
-            // prompt String -> Task String (echo-suppressed line read)
-            K::IoReadSecret => fun(string(), task(string())),
+            // prompt String -> Task Secret (echo-suppressed line read). The line
+            // is sealed into the opaque `Secret` at the read boundary — never a
+            // bare `String` — so a freshly-read password cannot flow into a log,
+            // error, or serialized payload by accident; consume it via
+            // `Secret.use` / `Secret.reveal`.
+            K::IoReadSecret => fun(string(), task(secret())),
             // ── Debug (dev-only) ──
             // `Debug.log : String -> a -> a`. BASE scheme only; the argument /
             // result share `var(0)`, which carries the STRINGIFY obligation
