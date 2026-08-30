@@ -96,7 +96,13 @@ pub const STDLIB_MODULE_QUALIFIERS: &[(&[&str], &str)] = &[
     // — never both (`compiled_vs_kernel_qualifier_disjoint`), so it stays out.
     (&["Ipe", "Encoding"], "Encoding"),
     (&["Ipe", "Crypto"], "Crypto"),
-    (&["Ipe", "Uuid"], "Uuid"),
+    // NOTE — `Ipe.Uuid` is DELIBERATELY absent: it is a COMPILED-SOURCE
+    // Layer-3 module (registered in `ipe::stdlib::COMPILED_STD_MODULES`). Its
+    // members are point-free `Ffi.kernel "Uuid_*"` aliases that
+    // `detect_kernel_alias` routes to the registered `UuidV4`/`UuidV7`/
+    // `UuidParse` `StdlibKernel` variants. A module is EITHER a kernel
+    // qualifier here OR compiled-source — never both
+    // (`compiled_vs_kernel_qualifier_disjoint`), so it stays out.
     // `Ipe.Secret` — opaque secret-string wrapper.
     (&["Ipe", "Secret"], "Secret"),
     // `Ipe.CssSafety` — the Ipe.Css leaf security kernels. This
@@ -1045,9 +1051,13 @@ impl Env {
                     "chachaKeyFromPasswordKey",
                 ],
             ),
-            // `Ipe.Uuid` — UUID generation and parsing.
-            // `v4` and `v7` are arity-0 (bare value); `parse` is arity-1.
-            ("Uuid", &["v4", "v7", "parse"]),
+            // NOTE — `Ipe.Uuid` is DELIBERATELY absent from this catalog: it is a
+            // COMPILED-SOURCE Layer-3 module whose members (`v4`/`v7`/`parse`) are
+            // point-free `Ffi.kernel "Uuid_*"` aliases in
+            // `src/stdlib/Ipe/Uuid.ipe`, routed by `detect_kernel_alias` to the
+            // registered `UuidV4`/`UuidV7`/`UuidParse` `StdlibKernel` variants.
+            // Adding it here would violate the `compiled_vs_kernel_qualifier_disjoint`
+            // invariant.
             // `Ipe.Secret` — opaque secret-string wrapper.
             // `fromString` is the seal; `use` is the scoped consume (apply a
             // function to the plaintext, return its result); `redacted` is the

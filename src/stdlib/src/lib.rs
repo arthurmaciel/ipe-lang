@@ -113,6 +113,15 @@ const IO: &str = include_str!("../Ipe/Io.ipe");
 /// `MODULES`); NOT in `STDLIB_MODULE_QUALIFIERS`, so the disjointness
 /// invariant holds.
 const DEBUG: &str = include_str!("../Ipe/Debug.ipe");
+/// `Ipe.Uuid` — UUID generation and parsing, compiled-source Layer-3.
+///
+/// `v4` and `v7` are point-free `Ffi.kernel "Uuid_v4"` / `"Uuid_v7"` aliases
+/// resolved by `ipe_canon::resolve::detect_kernel_alias` to the registered
+/// `UuidV4` / `UuidV7` `StdlibKernel` variants (`ipe_runtime::uuid_kernel::*`).
+/// `parse` resolves to `UuidParse` likewise. Registered in
+/// [`COMPILED_STD_MODULES`] (NOT `MODULES`); NOT in `STDLIB_MODULE_QUALIFIERS`,
+/// so the disjointness invariant holds.
+const UUID: &str = include_str!("../Ipe/Uuid.ipe");
 /// `Ipe.Time` — clock + formatting + calendar helpers, compiled-source Layer-3.
 ///
 /// Every member is a point-free `Ffi.kernel "Time_*"` alias resolved by
@@ -734,6 +743,15 @@ pub const COMPILED_STD_MODULES: &[CompiledStdModule] = &[
     CompiledStdModule {
         dotted: "Ipe.Debug",
         source: DEBUG,
+    },
+    // Ipe.Uuid — Layer-3 source; `v4`/`v7`/`parse` are point-free
+    // `Ffi.kernel "Uuid_*"` aliases resolved by `detect_kernel_alias` to the
+    // registered `UuidV4`/`UuidV7`/`UuidParse` kernels
+    // (`ipe_runtime::uuid_kernel::*`). Disjoint from `STDLIB_MODULE_QUALIFIERS`
+    // (no `"Uuid"` entry there).
+    CompiledStdModule {
+        dotted: "Ipe.Uuid",
+        source: UUID,
     },
     // Ipe.Time — Layer-3 source; every member is a point-free
     // `Ffi.kernel "Time_*"` alias resolved by `detect_kernel_alias` to the
