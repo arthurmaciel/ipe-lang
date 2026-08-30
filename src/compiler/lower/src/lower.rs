@@ -26803,12 +26803,11 @@ impl<'a> Lowerer<'a> {
                     ("Host", "allInterfaces") => Ok(Callee::Kernel(KernelFn::HostAllInterfaces)),
                     ("Host", "envDriven") => Ok(Callee::Kernel(KernelFn::HostEnvDriven)),
                     ("Log", "level") => Ok(Callee::Kernel(KernelFn::LogLevelSetting)),
-                    // `Level.*` — the `LogLevel` constructors (a separate
-                    // qualifier from the `Log.*` logging kernels).
-                    ("Level", "debug") => Ok(Callee::Kernel(KernelFn::LevelDebug)),
-                    ("Level", "info") => Ok(Callee::Kernel(KernelFn::LevelInfo)),
-                    ("Level", "warn") => Ok(Callee::Kernel(KernelFn::LevelWarn)),
-                    ("Level", "error") => Ok(Callee::Kernel(KernelFn::LevelError)),
+                    // `Level.*` arms removed: `Ipe.Level` is now a compiled-source
+                    // module; its kernels are reached exclusively through
+                    // `Ffi.kernel "Level_*"` aliases (fast path, `id = Some`).
+                    // They are in `REGISTRY_ONLY_ALLOWLIST` so the
+                    // `decl_equiv_legacy_match` test skips them.
                     ("Db", "url") => Ok(Callee::Kernel(KernelFn::DbUrlSetting)),
                     ("Console", "adminToken") => Ok(Callee::Kernel(KernelFn::ConsoleAdminToken)),
                     ("Console", "ingestToken") => Ok(Callee::Kernel(KernelFn::ConsoleIngestToken)),
@@ -29577,6 +29576,13 @@ mod tests {
         // compiled-source module name, never a legacy `QUALIFIERS` entry), so
         // no legacy `lower_callee` arm exists.
         KernelFn::EnvPublic,
+        // Ipe.Level — compiled-source module; the `LogLevel` constructors are
+        // reached exclusively through `Ffi.kernel "Level_*"` aliases, never a
+        // legacy `QUALIFIERS` entry.
+        KernelFn::LevelDebug,
+        KernelFn::LevelInfo,
+        KernelFn::LevelWarn,
+        KernelFn::LevelError,
         // Ipe.Email
         KernelFn::EmailSend,
         // Ipe.Crypto typed-key newtypes — compiled-source Layer-3 module; every

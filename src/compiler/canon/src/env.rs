@@ -147,7 +147,13 @@ pub const STDLIB_MODULE_QUALIFIERS: &[(&[&str], &str)] = &[
     // (`adminToken` / `ingestToken` / `metricsToken`). A kernel qualifier (its
     // members build `Setting` values), so it stays out of `COMPILED_STD_MODULES`.
     (&["Ipe", "Console"], "Console"),
-    (&["Ipe", "Level"], "Level"),
+    // NOTE — `Ipe.Level` is DELIBERATELY absent: it is a COMPILED-SOURCE
+    // Layer-3 module (registered in `ipe::stdlib::COMPILED_STD_MODULES`). Its
+    // members are point-free `Ffi.kernel "Level_*"` aliases that
+    // `detect_kernel_alias` routes to the registered `Level*` `StdlibKernel`
+    // variants (`LevelDebug` / `LevelInfo` / `LevelWarn` / `LevelError`). A
+    // module is EITHER a kernel qualifier here OR compiled-source — never both
+    // (`compiled_vs_kernel_qualifier_disjoint`), so it stays out.
     (&["Ipe", "Db", "Decode"], "Db.Decode"),
     (&["Ipe", "Db", "Sql"], "Sql"), // SqlFragment builder
     // `Ipe.Ui` is COMPILED-SOURCE (see `COMPILED_STD_MODULES`), not a kernel
@@ -956,10 +962,11 @@ impl Env {
             // `Ipe.Host` — the host-bind setting builder plus the `HostMode`
             // constructors it takes.
             ("Host", &["bind", "loopback", "allInterfaces", "envDriven"]),
-            // `Ipe.Level` — the `LogLevel` constructors `Log.level` takes. A
-            // separate qualifier from `Log` because `Log.debug`/`Log.info`/… are
-            // already the logging kernels; `Level.debug`/… are the severity tags.
-            ("Level", &["debug", "info", "warn", "error"]),
+            // NOTE — `Ipe.Level` (`LogLevel` constructors) is DELIBERATELY absent:
+            // it is a COMPILED-SOURCE module (`ipe::stdlib::COMPILED_STD_MODULES`);
+            // its members resolve via `Ffi.kernel "Level_*"` aliases, not the
+            // qualifier table.  Removing it here keeps the
+            // `compiled_vs_kernel_qualifier_disjoint` invariant.
             // `Ipe.Math` — `min` / `max` are polymorphic `a -> a -> a`
             // (Elm `Basics.min`/`max` semantics). Wired in the lowerer to the
             // runtime's generic compare. All other Math kernels have concrete

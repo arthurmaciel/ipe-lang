@@ -1,0 +1,36 @@
+-- | Ipe.Level — the `LogLevel` severity-tag ADT (Layer 3 Ipê source).
+--
+-- `LogLevel` is a reserved builtin type: its nullary constructors
+-- (`debug` / `info` / `warn` / `error`) are the ONLY source of
+-- `LogLevel` values.  Pass one to `Log.level` to configure the
+-- runtime log severity.
+--
+-- Each member is aliased to its kernel via the Stage-4 `Ffi.kernel`
+-- mechanism; the resolver maps `"Level_<member>"` to the registered
+-- `Level<Member>` `StdlibKernel` variant.
+module Ipe.Level exposing
+    ( debug, info, warn, error
+    )
+
+
+import Ipe.Ffi as Ffi
+
+
+-- | Debug severity — the lowest level; verbose diagnostic output.
+debug : LogLevel
+debug = Ffi.kernel "Level_debug"
+
+
+-- | Info severity — normal operational messages.
+info : LogLevel
+info = Ffi.kernel "Level_info"
+
+
+-- | Warn severity — recoverable unexpected conditions.
+warn : LogLevel
+warn = Ffi.kernel "Level_warn"
+
+
+-- | Error severity — failures that require attention.
+error : LogLevel
+error = Ffi.kernel "Level_error"

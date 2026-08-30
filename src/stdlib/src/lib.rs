@@ -668,6 +668,14 @@ const STD_TRACE: &str = include_str!("../Ipe/Trace.ipe");
 /// module pay no ICU4X dependency cost.
 const LOCALE: &str = include_str!("../Ipe/Locale.ipe");
 
+/// `Ipe.Level` — the `LogLevel` severity-tag ADT constructors (`debug` / `info`
+/// / `warn` / `error`).  Each member is a point-free `Ffi.kernel "Level_*"`
+/// alias resolved by `detect_kernel_alias` to the registered `Level*`
+/// `StdlibKernel` variants.  Registered in [`COMPILED_STD_MODULES`] (NOT
+/// `MODULES`); NOT in `STDLIB_MODULE_QUALIFIERS`, so the
+/// `compiled_vs_kernel_qualifier_disjoint` invariant holds.
+const LEVEL: &str = include_str!("../Ipe/Level.ipe");
+
 /// `Ipe.Ui.Events` — pure Ipê re-exports of `Ipe.Ui` event helpers (compiled source).
 ///
 /// Pure Ipê; no Ffi.kernel calls.  RESOLVES (ipe-0 AND cargo-0): the
@@ -973,6 +981,15 @@ pub const COMPILED_STD_MODULES: &[CompiledStdModule] = &[
     CompiledStdModule {
         dotted: "Ipe.Locale",
         source: LOCALE,
+    },
+    // Ipe.Level — `LogLevel` severity-tag ADT constructors (`debug` / `info` /
+    // `warn` / `error`).  Each member is a point-free `Ffi.kernel "Level_*"`
+    // alias resolved by `detect_kernel_alias` to the registered `Level*`
+    // `StdlibKernel` variants.  Disjoint from `STDLIB_MODULE_QUALIFIERS` (no
+    // `"Level"` entry there), so the invariant holds.
+    CompiledStdModule {
+        dotted: "Ipe.Level",
+        source: LEVEL,
     },
 ];
 
