@@ -138,6 +138,25 @@ impl Default for RestartTimeouts {
     }
 }
 
+impl RestartTimeouts {
+    /// The timeouts a live-reload dev watch uses. `ipe watch` is a DEV-only loop,
+    /// so the stop is aggressive: no drain grace. The old server holds the port
+    /// the rebuilt one must bind, and every millisecond draining it is latency on
+    /// the critical path from save to reloaded app; a mid-flight dev request is
+    /// worth nothing next to reload speed. A zero grace means SIGTERM followed
+    /// immediately by SIGKILL — the port is freed at once. The readiness budget
+    /// stays generous so a slow first serve is not misjudged as broken, and the
+    /// readiness poll is tightened so "up" is detected the instant it binds.
+    #[must_use]
+    pub fn for_dev_watch() -> Self {
+        Self {
+            graceful_stop: Duration::from_millis(0),
+            poll_interval: Duration::from_millis(15),
+            ..Self::default()
+        }
+    }
+}
+
 /// The result of one `apply_green` call — what actually happened, for
 /// logging/UX.
 ///
