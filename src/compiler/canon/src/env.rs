@@ -46,7 +46,12 @@ pub const STDLIB_MODULE_QUALIFIERS: &[(&[&str], &str)] = &[
     // ── Ipe.* pure + effect modules ────────────────────────────────────
     (&["Ipe", "Basics"], "Basics"),
     (&["Ipe", "String"], "String"),
-    (&["Ipe", "Char"], "Char"),
+    // NOTE — `Ipe.Char` is DELIBERATELY absent: it is a COMPILED-SOURCE
+    // Layer-3 module (registered in `ipe::stdlib::COMPILED_STD_MODULES`). Its
+    // members are point-free `Ffi.kernel "Char_*"` aliases that
+    // `detect_kernel_alias` routes to the registered `Char*` `StdlibKernel`
+    // variants. A module is EITHER a kernel qualifier here OR compiled-source
+    // — never both (`compiled_vs_kernel_qualifier_disjoint`), so it stays out.
     (&["Ipe", "List"], "List"),
     (&["Ipe", "Maybe"], "Maybe"),
     (&["Ipe", "Result"], "Result"),
@@ -790,22 +795,9 @@ impl Env {
                     "toChar",
                 ],
             ),
-            (
-                "Char",
-                &[
-                    "isAlpha",
-                    "isDigit",
-                    "isLower",
-                    "isUpper",
-                    "toLower",
-                    "toUpper",
-                    "toCode",
-                    "fromCode",
-                    "isAlphaNum",
-                    "isHexDigit",
-                    "isOctDigit",
-                ],
-            ),
+            // NOTE — `Ipe.Char` is DELIBERATELY absent from this catalog:
+            // it is a compiled-source module; its `Char_*` kernels are
+            // reached via `detect_kernel_alias`, not the qualifier table.
             (
                 "List",
                 &[
