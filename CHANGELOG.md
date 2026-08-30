@@ -10,6 +10,25 @@ Entries below the header are maintained by
 section is generated from Conventional Commit messages and prepended when the
 standing release pull request is merged.
 
+## [0.1.72](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.1.71...ipe-v0.1.72) (2026-08-30)
+
+
+### Features
+
+* **stdlib:** make-invalid-states-unrepresentable — HeadingLevel ADT + typed Head URLs (§D-10, §C-7) ([#1511](https://github.com/arthurmaciel/ipe-lang/issues/1511)) ([e40522d](https://github.com/arthurmaciel/ipe-lang/commit/e40522d57a41268e9da4d0bb02b1d70783ee147b))
+* **stdlib:** typed-primitive newtypes Port/Duration/ByteSize + de-Bool cellCompare ([#1422](https://github.com/arthurmaciel/ipe-lang/issues/1422), [#1428](https://github.com/arthurmaciel/ipe-lang/issues/1428)) ([#1507](https://github.com/arthurmaciel/ipe-lang/issues/1507)) ([a8619d7](https://github.com/arthurmaciel/ipe-lang/commit/a8619d7d8406ea0730e3da4fe88d805790cb6ed5))
+
+
+### Bug Fixes
+
+* **io,secret:** Io.readSecret returns an opaque Secret, not plaintext String ([#1462](https://github.com/arthurmaciel/ipe-lang/issues/1462)) ([#1506](https://github.com/arthurmaciel/ipe-lang/issues/1506)) ([9a3c733](https://github.com/arthurmaciel/ipe-lang/commit/9a3c73336025fde0d6c7b53948dc60082dba6693))
+* **lower:** home-guard kernel-implicit opaque type names against user shadows ([#1516](https://github.com/arthurmaciel/ipe-lang/issues/1516)) ([b6862cf](https://github.com/arthurmaciel/ipe-lang/commit/b6862cfcd50e5c0b81a9b91f6dd660ead71ae508))
+
+
+### Performance Improvements
+
+* **watch:** aggressive dev-watch stop — zero SIGTERM grace (instant SIGKILL) frees the port immediately on reload; tighter readiness poll ([#1513](https://github.com/arthurmaciel/ipe-lang/issues/1513)) ([8b0db66](https://github.com/arthurmaciel/ipe-lang/commit/8b0db66768f2f4dab7049865e957a9db4de8cb8a))
+
 ## [0.1.71](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.1.70...ipe-v0.1.71) (2026-08-30)
 
 
