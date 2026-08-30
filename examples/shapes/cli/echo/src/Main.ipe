@@ -1,0 +1,85 @@
+module Main exposing (main)
+
+{-|
+A line-oriented TEA echo over the canonical `Cli.app` surface.
+
+`Cli.app` re-exports the terminal `appLines` entry: the `view` renders a
+`String` prompt, and the `onLine` callback maps each stdin line to a `Msg`.
+Each non-empty line is echoed back and counted.
+
+Type a line and press Enter to echo it; `q` (or Ctrl-D) quits.
+-}
+
+import Ipe.String as String
+import Ipe.System as System
+import Ipe.Task as Task
+import Ipe.Tea.Cli as Cli
+import Ipe.Tea.Cli.Cmd as Cmd
+import Ipe.Tea.Cli.Sub as Sub
+
+
+type Msg
+    = Echo String
+    | Quit
+    | NoOp
+
+
+type alias Model =
+    { count : Int
+    , last : String
+    }
+
+
+init : () -> ( Model, Cmd Msg )
+init _unit =
+    ( { count = 0, last = "" }, Cmd.none )
+
+
+update : Msg -> Model -> ( Model, Cmd Msg )
+update msg model =
+    case msg of
+        Echo line ->
+            ( { count = model.count + 1, last = line }, Cmd.none )
+
+        Quit ->
+            ( model, Cmd.perform (System.exit 0) (\_ -> NoOp) )
+
+        NoOp ->
+            ( model, Cmd.none )
+
+
+view : Model -> String
+view model =
+    "echoed "
+        ++ String.fromInt model.count
+        ++ " ["
+        ++ model.last
+        ++ "] > "
+
+
+subscriptions : Model -> Sub Msg
+subscriptions _model =
+    Sub.none
+
+
+onLine : String -> Msg
+onLine line =
+    case String.trim line of
+        "q" ->
+            Quit
+
+        "" ->
+            NoOp
+
+        trimmed ->
+            Echo trimmed
+
+
+main =
+    Cli.app
+        { init = init
+        , update = update
+        , view = view
+        , subscriptions = subscriptions
+        , onLine = onLine
+        }
