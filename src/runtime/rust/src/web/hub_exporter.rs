@@ -6,16 +6,15 @@
 //! application/json`), bearer-authenticated via `IPE_CONSOLE_HUB_TOKEN`. A
 //! batch that fails to push is kept in a bounded in-memory **spool** and retried
 //! on the next tick, so a transient hub outage never drops telemetry on the
-//! floor. Mirrors Go's `exporter.go` + `exporter_spool.go`.
+//! floor; transient hub outages never drop telemetry.
 //!
-//! Go parity note: OTLP defines a JSON encoding over HTTP (the protobuf field
-//! names as JSON keys) — Go's HubExporter uses exactly that, so the Rust
-//! exporter speaks OTLP without a protobuf dependency.
+//! OTLP/JSON over HTTP (the protobuf field names as JSON keys); no protobuf
+//! dependency required.
 //!
-//! Spool backend: in-memory (bounded) here — covers transient outages + retry.
-//! File-spool restart-durability (`IPE_CONSOLE_SPOOL_MODE=file`, Go's
-//! `exporter_spool.go`, env knobs `IPE_CONSOLE_SPOOL_*`) is a parity extension
-//! the in-memory backend does not provide; those env knobs are not read.
+//! Spool backend: in-memory (bounded) — covers transient outages + retry.
+//! File-spool restart-durability (`IPE_CONSOLE_SPOOL_MODE=file`,
+//! env knobs `IPE_CONSOLE_SPOOL_*`) is not yet implemented; those env
+//! knobs are not read.
 //!
 //! `live`-gated. Best-effort, no panic vectors: bounded offer queue (drop on
 //! full), push failures fall back to the spool, the spool itself is bounded
@@ -28,7 +27,7 @@ use tokio::sync::mpsc;
 
 /// Hub OTLP collector base URL — presence enables the exporter.
 const HUB_ENV: &str = "IPE_CONSOLE_HUB";
-/// Bearer token (Go requires ≥32 bytes; we refuse a shorter one).
+/// Bearer token (must be ≥32 bytes; shorter tokens are refused).
 const TOKEN_ENV: &str = "IPE_CONSOLE_HUB_TOKEN";
 /// Flush cadence (ms).
 const INTERVAL_ENV: &str = "IPE_CONSOLE_BATCH_INTERVAL_MS";
@@ -41,9 +40,9 @@ const MIN_INTERVAL_MS: u64 = 100;
 const MIN_TOKEN_BYTES: usize = 32;
 /// Max batches held in the retry spool before the oldest is evicted.
 const SPOOL_MAX_BATCHES: usize = 256;
-/// Total bytes of spooled batch JSON before the oldest is evicted (Go parity:
-/// `IPE_CONSOLE_SPOOL_MAX_BYTES` default 100 MB). Bounds the spool by size, not
-/// just by batch count — a single batch can be large.
+/// Total bytes of spooled batch JSON before the oldest is evicted
+/// (`IPE_CONSOLE_SPOOL_MAX_BYTES` default 100 MB). Bounds the spool by size
+/// as well as by batch count — a single batch can be large.
 const SPOOL_MAX_BYTES: usize = 100 * 1024 * 1024;
 /// Max accumulated entries (logs + spans) held between flushes before an early
 /// flush is forced. Bounds the in-memory accumulator by count rather than only
@@ -72,7 +71,7 @@ pub(crate) enum Entry {
 static SENDER: OnceLock<mpsc::Sender<Entry>> = OnceLock::new();
 
 /// Enable the remote-hub OTLP exporter from env. No-op unless `IPE_CONSOLE_HUB`
-/// is set. Refuses a too-short token (Go parity). Idempotent; call once at boot.
+/// is set. Refuses a too-short token (< 32 bytes). Idempotent; call once at boot.
 pub async fn enable_from_env() {
     // Trim ONCE so the URL we validate is the exact one we push to. A
     // leading-whitespace value (" https://hub") otherwise passes the scheme

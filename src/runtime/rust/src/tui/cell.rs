@@ -38,8 +38,8 @@ impl Default for Cell {
     }
 }
 
-/// Map a control byte to a space — total (mirrors Go's `sanitiseRune`). C0
-/// controls (< 0x20), DEL (0x7f), and C1 controls (0x80..=0x9f) become ' '.
+/// Map a control byte to a space — total. C0 controls (< 0x20), DEL (0x7f),
+/// and C1 controls (0x80..=0x9f) become ' '.
 pub fn sanitize_rune(c: char) -> char {
     let u = c as u32;
     if u < 0x20 || u == 0x7f || (0x80..=0x9f).contains(&u) {

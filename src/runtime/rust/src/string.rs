@@ -1,7 +1,5 @@
 //! Ipe.String kernel — the single home for the String runtime surface.
 //!
-//! Argument order matches the Go runtime's typed kernels
-//! (runtime-go/rt/rt.go: `String_replace` / `String_startsWith` / etc.).
 
 use super::IpeMaybe;
 
@@ -82,8 +80,8 @@ pub fn string_to_float(s: String) -> IpeMaybe<f64> {
 pub fn string_from_char(c: char) -> String {
     c.to_string()
 }
-/// `String.slice : Int -> Int -> String -> String`. Char(rune)-indexed with
-/// negative-index-from-end + clamping — parity with Go's `String_sliceT`.
+/// `String.slice : Int -> Int -> String -> String`. Unicode-codepoint-indexed
+/// with negative-index-from-end + clamping.
 #[must_use]
 pub fn string_slice(start: i64, end: i64, s: String) -> String {
     let runes: Vec<char> = s.chars().collect();
@@ -127,37 +125,26 @@ pub fn string_right(n: i64, s: String) -> String {
         .map(|r| r.iter().collect())
         .unwrap_or_default()
 }
-/// `String.fromFloat : Float -> String`.
+/// `String.fromFloat : Float -> String` — `'g'`-mode shortest-round-trip float.
 ///
-/// A faithful port of Go's `strconv.FormatFloat(f, 'g', -1, 64)` — the exact
-/// spelling the Go reference's typed codegen routes `String.fromFloat` to
-/// (`runtime-go/rt/rt.go` `String_fromFloatT`). We mirror it byte-for-byte
-/// because the example sweep diffs Rust stdout against the Go oracle.
+/// Chooses positional form when the decimal exponent lands in `[-4, 6)` and
+/// exponent form otherwise (`'g'`'s `eprec = 6` rule). Non-finite values render
+/// as `+Inf` / `-Inf` / `NaN`; negative zero renders as `"-0"`.
 ///
 /// WHY a hand-written helper: Rust's `{}` never uses exponent form and `{:e}`
-/// always does, so neither can express `'g'`'s rule on its own. `'g'` chooses
-/// positional (`%f`) form when the decimal exponent lands in `[-4, 6)` and
-/// exponent (`%e`) form otherwise — the same `eprec = 6` shortest-mode cut Go's
-/// `internal/strconv` `formatDigits` applies. Verified against Go 1.26.2
-/// `strconv.FormatFloat(f,'g',-1,64)` == `fmt %v`: `1e6` -> `1e+06`, `1e15` ->
-/// `1e+15`, `999999` -> `999999` (see reference-audit.md item 27 for the oracle
-/// probe). The `../ipe` reference uses 21 here, which diverges from the Go
-/// oracle on every `1e6..1e20` value. Non-finite values take Go's
-/// `+Inf` / `-Inf` / `NaN` spellings.
-///
-/// We obtain the *shortest round-trip* significant digits + scientific exponent
-/// from `{:e}` (Rust's std formatter picks the same canonical shortest decimal
-/// as Go's Dragonbox), then re-render under `'g'`'s positional-vs-exponent rule.
+/// always does; neither expresses `'g'`'s conditional rule on its own. Obtains
+/// the shortest round-trip digits + scientific exponent from `{:e}`, then
+/// re-renders under the positional-vs-exponent decision.
 #[must_use]
 pub fn string_from_float(f: f64) -> String {
-    // Non-finite: Go's strconv spells these with a sign on the infinities.
+    // Non-finite: infinities carry a sign (`+Inf` / `-Inf`).
     if f.is_nan() {
         return "NaN".to_string();
     }
     if f.is_infinite() {
         return if f < 0.0 { "-Inf" } else { "+Inf" }.to_string();
     }
-    // Negative zero must keep its sign ("-0"), matching Go; `is_sign_negative`
+    // Negative zero must keep its sign ("-0"); `is_sign_negative`
     // is the only check that distinguishes -0.0 from +0.0.
     let neg = f.is_sign_negative();
     if f == 0.0 {
@@ -176,15 +163,13 @@ pub fn string_from_float(f: f64) -> String {
     // Significant digits with the radix point removed: e.g. "1.256" -> "1256".
     let digits: String = mantissa.chars().filter(|c| *c != '.').collect();
 
-    // Go's `decimalSlice`: digit count and decimal-point position. The value is
-    // `digits * 10^(dp - nd)`; `{:e}` puts one digit before the point, so the
-    // point sits one place right of the leading digit: `dp = sci_exp + 1`.
+    // Digit count and decimal-point position: the value is `digits * 10^(dp - nd)`;
+    // `{:e}` puts one digit before the point, so `dp = sci_exp + 1`.
     let dp = sci_exp + 1;
-    let exp = dp - 1; // the exponent Go tests against, == sci_exp
+    let exp = dp - 1; // the exponent `'g'` tests against, == sci_exp
 
-    // Go's `'g'` rule (shortest mode): positional `%f` form for an exponent in
-    // `[-4, 6)`, exponent `%e` form otherwise. `!(-4..6).contains` spells the
-    // `exp < -4 || exp >= 6` test the reference applies.
+    // `'g'` rule (shortest mode): positional `%f` for an exponent in `[-4, 6)`,
+    // exponent `%e` otherwise.
     if (-4..6).contains(&exp) {
         fmt_g_positional(neg, &digits, dp)
     } else {
@@ -192,8 +177,8 @@ pub fn string_from_float(f: f64) -> String {
     }
 }
 
-/// `'g'`'s `%e` rendering (Go `fmtE`, shortest mode): `d[.ddd]e±NN`, with the
-/// sign always present and at least two exponent digits (`1e-05`, `1e+21`).
+/// `'g'`'s `%e` rendering (shortest mode): `d[.ddd]e±NN`, with the sign always
+/// present and at least two exponent digits (`1e-05`, `1e+21`).
 fn fmt_g_exponent(neg: bool, digits: &str, exp: i32) -> String {
     let mut out = String::new();
     if neg {
@@ -212,15 +197,15 @@ fn fmt_g_exponent(neg: bool, digits: &str, exp: i32) -> String {
     let (sign, mag) = if exp < 0 { ('-', -exp) } else { ('+', exp) };
     out.push(sign);
     if mag < 10 {
-        // Pad to the two-digit minimum Go always emits.
+        // Pad to the two-digit minimum exponent width.
         out.push('0');
     }
     out.push_str(&mag.to_string());
     out
 }
 
-/// `'g'`'s `%f` rendering (Go `fmtF`, shortest mode): `ddd[.ddd]`, padding the
-/// integer part with zeros (`1500`) and reading fraction digits past the point.
+/// `'g'`'s `%f` rendering (shortest mode): `ddd[.ddd]`, padding the integer
+/// part with zeros (`1500`) and reading fraction digits past the point.
 fn fmt_g_positional(neg: bool, digits: &str, dp: i32) -> String {
     let bytes = digits.as_bytes();
     let nd = bytes.len() as i32;
@@ -260,13 +245,12 @@ fn fmt_g_positional(neg: bool, digits: &str, dp: i32) -> String {
     }
     out
 }
-/// `String.split : String -> String -> List String`. Go's `strings.Split`
-/// semantics (`String_splitT`): a non-empty separator splits on each
-/// occurrence (`s.split(&sep)`), while an EMPTY separator splits `s` into its
-/// individual runes with NO leading/trailing empty sentinels — and
-/// `split("", "")` yields the empty list. Rust's `str::split("")` instead emits
-/// boundary "" entries (`["", "a", …, ""]`), so the empty-sep case is handled
-/// by rune iteration to match Go exactly.
+/// `String.split : String -> String -> List String`. A non-empty separator
+/// splits on each occurrence; an EMPTY separator splits `s` into individual
+/// Unicode codepoints with NO leading/trailing empty sentinels — and
+/// `split("", "")` yields the empty list. Rust's `str::split("")` emits
+/// boundary `""` entries, so the empty-sep case is handled by codepoint
+/// iteration.
 #[must_use]
 pub fn string_split(sep: String, s: String) -> Vec<String> {
     if sep.is_empty() {
@@ -288,7 +272,7 @@ pub fn string_words(s: String) -> Vec<String> {
         .collect()
 }
 
-// ── String kernels with Go-typed argument order ──
+// ── String kernels ──
 
 /// Ipê `replace : String -> String -> String -> String`.
 /// Replaces all occurrences of `old` with `new_` in `s`.
@@ -347,11 +331,8 @@ pub fn string_repeat(n: i64, s: String) -> String {
     s.repeat(n as usize)
 }
 
-// ── Go-parity kernels ──────────────────────────────
-
 /// `String.concat : List String -> String`
 /// Concatenates a list of strings with no separator.
-/// Go parity: `String_concat` in rt.go — simple sequential `WriteString`.
 #[must_use]
 pub fn string_concat(parts: Vec<String>) -> String {
     let mut out = String::new();
@@ -363,18 +344,15 @@ pub fn string_concat(parts: Vec<String>) -> String {
 
 /// `String.casefold : String -> String`
 /// Unicode-aware case-fold for locale-neutral case-insensitive comparison.
-/// Go parity: `String_casefold` in `stdlib_extra.go` — uses `strings.ToLower`
-/// (Unicode-aware lowercasing). We mirror that with `to_lowercase()` which
-/// performs full Unicode case folding (NFC-lowercased Unicode scalar values).
+/// Uses `to_lowercase()` which performs full Unicode case folding.
 #[must_use]
 pub fn string_casefold(s: String) -> String {
     s.to_lowercase()
 }
 
 /// `String.dropLeft : Int -> String -> String`
-/// Drops the first `n` characters (runes). Elm semantics:
-///   negative n → s unchanged; n >= length → "".
-/// Go parity: `String_dropLeft` in rt.go — rune-slice based.
+/// Drops the first `n` codepoints. Elm semantics:
+/// negative n → s unchanged; n >= length → "".
 #[must_use]
 pub fn string_drop_left(n: i64, s: String) -> String {
     if n <= 0 {
@@ -390,9 +368,8 @@ pub fn string_drop_left(n: i64, s: String) -> String {
 }
 
 /// `String.dropRight : Int -> String -> String`
-/// Drops the last `n` characters (runes). Elm semantics:
-///   negative n → s unchanged; n >= length → "".
-/// Go parity: `String_dropRight` in rt.go — rune-slice based.
+/// Drops the last `n` codepoints. Elm semantics:
+/// negative n → s unchanged; n >= length → "".
 #[must_use]
 pub fn string_drop_right(n: i64, s: String) -> String {
     if n <= 0 {
@@ -411,17 +388,14 @@ pub fn string_drop_right(n: i64, s: String) -> String {
 
 /// `String.equalFold : String -> String -> Bool`
 /// Case-insensitive Unicode-aware string equality.
-/// Go parity: `String_equalFold` in `stdlib_extra.go` — `strings.EqualFold`.
 #[must_use]
 pub fn string_equal_fold(a: String, b: String) -> bool {
-    // `to_lowercase()` is the same transform used in `string_casefold`,
-    // matching Go's `strings.EqualFold` semantics (Unicode case-fold).
+    // `to_lowercase()` is the same transform used in `string_casefold`.
     a.to_lowercase() == b.to_lowercase()
 }
 
 /// `String.fromList : List Char -> String`
 /// Concatenates a list of `Char` values into a UTF-8 string.
-/// Go parity: `String_fromList` in rt.go — per-element rune → `WriteRune`.
 #[must_use]
 pub fn string_from_list(chars: Vec<char>) -> String {
     chars.into_iter().collect()
@@ -429,20 +403,14 @@ pub fn string_from_list(chars: Vec<char>) -> String {
 
 /// `String.isEmail : String -> Bool`
 /// RFC 5322 syntactic check. Does NOT verify the mailbox exists.
-/// Go parity: `String_isEmail` in validate.go — `mail.ParseAddress` then
-///   checks that the parsed address equals the raw input (no name component)
-///   and that it contains "@".
-/// We replicate the same rules with a simple structural check:
+/// Structural validation rules:
 ///   - exactly one "@" not at the start or end
 ///   - local part non-empty
 ///   - domain part non-empty and contains at least one "."
-///
-/// This intentionally stays as tight as Go's check (no regex crate needed).
+/// (No regex crate needed for this level of validation.)
 #[must_use]
 pub fn string_is_email(s: String) -> bool {
-    // Reject anything that parses with a name component: Go only accepts
-    // bare "user@host" (no "Name <user@host>" wrapping).
-    // Simple structural validation mirroring net/mail.ParseAddress behaviour.
+    // Only bare "user@host" is accepted — no "Name <user@host>" wrapping.
     let s = s.trim();
     if s.is_empty() || s.starts_with('<') || s.contains(' ') {
         return false;
@@ -485,9 +453,8 @@ pub fn string_is_email(s: String) -> bool {
 // the `regex` feature, exactly like an `Ipe.Regex` kernel.
 
 /// `String.padLeft : Int -> Char -> String -> String`
-/// Pads `s` on the left with `ch` until `s` is at least `n` rune-characters
-/// wide. If `s` is already `n` or more characters wide, returns it unchanged.
-/// Go parity: `String_padLeft` in rt.go — rune-count loop, `padChar` for ch.
+/// Pads `s` on the left with `ch` until `s` is at least `n` Unicode codepoints
+/// wide. Returns `s` unchanged when already `n` or more codepoints wide.
 #[must_use]
 pub fn string_pad_left(n: i64, ch: char, s: String) -> String {
     if n <= 0 {
@@ -512,9 +479,8 @@ pub fn string_pad_left(n: i64, ch: char, s: String) -> String {
 }
 
 /// `String.padRight : Int -> Char -> String -> String`
-/// Pads `s` on the right with `ch` until `s` is at least `n` rune-characters
-/// wide. If `s` is already `n` or more characters wide, returns it unchanged.
-/// Go parity: `String_padRight` in rt.go — rune-count loop, `padChar` for ch.
+/// Pads `s` on the right with `ch` until `s` is at least `n` Unicode codepoints
+/// wide. Returns `s` unchanged when already `n` or more codepoints wide.
 #[must_use]
 pub fn string_pad_right(n: i64, ch: char, s: String) -> String {
     if n <= 0 {
@@ -539,8 +505,7 @@ pub fn string_pad_right(n: i64, ch: char, s: String) -> String {
 }
 
 /// `String.toList : String -> List Char`
-/// Decomposes a string into its Unicode code points (chars).
-/// Go parity: `String_toList` in rt.go — `for _, r := range str`.
+/// Decomposes a string into its Unicode code points.
 #[must_use]
 pub fn string_to_list(s: String) -> Vec<char> {
     s.chars().collect()
@@ -655,23 +620,21 @@ pub fn string_all(pred: impl Fn(char) -> bool, s: String) -> bool {
 }
 
 /// `String.trimStart : String -> String`
-/// Removes leading Unicode whitespace. Matches Go's `unicodeIsSpace` set
-/// (includes NBSP, various space categories, BOM).
-/// Go parity: `String_trimStart` in `stdlib_extra.go` — `strings.TrimLeftFunc`.
+/// Removes leading Unicode whitespace (includes NBSP, various space categories,
+/// BOM — see `unicode_is_space`).
 pub fn string_trim_start(s: String) -> String {
     s.trim_start_matches(unicode_is_space).to_string()
 }
 
 /// `String.trimEnd : String -> String`
 /// Removes trailing Unicode whitespace. Same whitespace set as `trimStart`.
-/// Go parity: `String_trimEnd` in `stdlib_extra.go` — `strings.TrimRightFunc`.
 pub fn string_trim_end(s: String) -> String {
     s.trim_end_matches(unicode_is_space).to_string()
 }
 
-/// Mirrors Go's `unicodeIsSpace` (`stdlib_extra.go)`: covers ASCII whitespace,
-/// NBSP (U+00A0), general-category Zs (U+2000–U+200A), line/paragraph
-/// separators (U+2028/U+2029), ideographic space (U+3000), and BOM (U+FEFF).
+/// Whitespace predicate: covers ASCII whitespace, NBSP (U+00A0), general-
+/// category Zs (U+2000–U+200A), line/paragraph separators (U+2028/U+2029),
+/// ideographic space (U+3000), and BOM (U+FEFF).
 fn unicode_is_space(c: char) -> bool {
     matches!(
         c,
@@ -744,9 +707,8 @@ mod tests {
         assert_eq!(string_repeat(-1, "ab".into()), "");
     }
 
-    // string_from_float — byte-for-byte parity with Go's
-    // strconv.FormatFloat(f, 'g', -1, 64). Ground-truth values captured from
-    // the Go oracle (`String.fromFloat` typed path) and `go run` on strconv.
+    // string_from_float — `'g'`-mode shortest-round-trip (FormatFloat 'g' -1 64
+    // semantics). Ground-truth expected values from reference-audit.md.
     #[test]
     fn ff_small_exponent() {
         assert_eq!(string_from_float(0.00001), "1e-05");
@@ -788,9 +750,8 @@ mod tests {
         assert_eq!(string_from_float(1e5), "100000");
     }
     #[test]
-    fn ff_go_g_threshold_is_six_not_twentyone() {
-        // Discriminates Go's flat exp>=6 cut from the reference's 21. Oracle:
-        // Go 1.26.2 strconv.FormatFloat(f,'g',-1,64) (see reference-audit.md item 27).
+    fn ff_g_threshold_is_six_not_twentyone() {
+        // The `'g'` threshold is exp>=6 (reference-audit.md item 27).
         assert_eq!(string_from_float(999_999.0), "999999"); // exp 5 positional
         assert_eq!(string_from_float(1_000_001.0), "1.000001e+06"); // exp 6 scientific
         assert_eq!(string_from_float(1e15), "1e+15"); // 21 would print 16 zeros
@@ -826,11 +787,10 @@ mod tests {
     }
 
     // ── Elm behaviour verdicts (float formatting) ─────────────────────────────
-    // `String.fromFloat` follows Go's `strconv.FormatFloat(f,'g',-1,64)` shape,
-    // the correctness anchor the example sweep diffs against. Where that shape
-    // diverges from Elm's JS `String(f)`, the divergence is recorded in
-    // `docs/topics/elm-coverage/behaviour-verdicts.md` (verdict: keep-ours). These
-    // tests pin the exact points of agreement and divergence.
+    // `String.fromFloat` uses `'g'`-mode shortest-round-trip formatting. Where
+    // that diverges from Elm's JS `String(f)`, the divergence is recorded in
+    // `docs/topics/elm-coverage/behaviour-verdicts.md` (verdict: keep-ours).
+    // These tests pin the exact points of agreement and divergence.
 
     // Agrees with Elm: an integral float drops its fraction.
     #[test]
@@ -845,15 +805,15 @@ mod tests {
         assert_eq!(string_from_float(0.1 + 0.2), "0.30000000000000004");
     }
 
-    // Diverges from Elm: Go's 'g' pads the exponent to two digits (`1e-07`);
-    // Elm's JS `String(1e-7)` yields `1e-7`. Go parity wins (documented).
+    // Diverges from Elm: the exponent is padded to two digits (`1e-07`);
+    // Elm's JS `String(1e-7)` yields `1e-7`. Ipê keeps two-digit exponents (documented).
     #[test]
     fn verdict_small_exponent_is_two_digit_padded_unlike_elm() {
         assert_eq!(string_from_float(1e-7), "1e-07");
     }
 
-    // Diverges from Elm: Go keeps negative zero's sign (`-0`); Elm's JS
-    // `String(-0)` collapses it to `0`. Go parity wins (documented).
+    // Diverges from Elm: negative zero keeps its sign (`-0`); Elm's JS
+    // `String(-0)` collapses it to `0`. Ipê keeps the sign (documented).
     #[test]
     fn verdict_negative_zero_keeps_sign_unlike_elm() {
         assert_eq!(string_from_float(-0.0), "-0");
@@ -1103,7 +1063,7 @@ mod tests {
         assert_eq!(string_trim_end(String::new()), "");
     }
 
-    // string_split — Go strings.Split parity
+    // string_split
     #[test]
     fn test_split_nonempty_sep() {
         assert_eq!(

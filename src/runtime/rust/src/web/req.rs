@@ -1,10 +1,7 @@
-//! `WebReq` — the typed request context passed to a Ipe.Web `init`.
+//! `WebReq` — the typed request context passed to an `Ipe.Web` `init`.
 //!
-//! Mirrors the modern Go `req` record: `req.path` / `req.query` /
-//! `req.method` are strings; `req.params` / `req.headers` / `req.cookies` are
-//! `Dict String String`. (Go's older heterogeneous-Dict form — `Dict.get "path"
-//! req` over a `map[string]any` — doesn't port to Rust's no-`any` runtime, so
-//! the Rust backend uses the typed-record form only.)
+//! `req.path` / `req.query` / `req.method` are strings;
+//! `req.params` / `req.headers` / `req.cookies` are `Dict String String`.
 
 use crate::dict::IpeDict;
 

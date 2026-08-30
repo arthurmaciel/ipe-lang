@@ -21,7 +21,7 @@ fn buffer_capacity() -> usize {
         .unwrap_or(DEFAULT)
 }
 
-/// Bounded buffer (Go default 16, configurable via `IPE_WEB_SSE_BUFFER`). The
+/// Bounded buffer (default 16, configurable via `IPE_WEB_SSE_BUFFER`). The
 /// current caller in mod.rs `.await`s on send, so this channel BLOCKS (applies
 /// TCP backpressure) when full rather than dropping — it does not implement the
 /// drop-oldest + `ipe_web_sse_drops_total` behaviour. hello/heartbeat framing
