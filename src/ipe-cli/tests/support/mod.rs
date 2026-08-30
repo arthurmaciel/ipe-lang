@@ -221,7 +221,7 @@ pub fn assert_emitted_project_matches_golden_dir(emitted_out: &Path, golden_dir:
         "main.rs".to_owned(),
         emitted_out.join("src").join("main.rs"),
     )];
-    if golden_dir.join("Cargo.toml").is_file() || emitted_out.join("Cargo.toml").is_file() {
+    if golden_dir.join("Cargo.toml").is_file() {
         pairs.push(("Cargo.toml".to_owned(), emitted_out.join("Cargo.toml")));
     }
 

@@ -7,7 +7,6 @@ Each module listed below links to a detail page with full doc-strings and exampl
 ## Modules
 
 - [Io](#io)
-- [List](#list)
 - [Maybe](#maybe)
 - [Result](#result)
 - [String](#string)
@@ -20,42 +19,6 @@ Each module listed below links to a detail page with full doc-strings and exampl
 | Symbol | Summary |
 |--------|----------|
 | `readSecret` | Write a prompt to stdout, then read one line from stdin with terminal echo |
-
-## List
-
-[Full reference](stdlib/List.md)
-
-| Symbol | Summary |
-|--------|----------|
-| `all` | `all test list` — `True` if `test` returns `True` for every element. |
-| `any` | `any test list` — `True` if `test` returns `True` for at least one element. |
-| `append` | `append xs ys` — all of `xs` followed by all of `ys`. |
-| `concat` | `concat lists` — flatten a list of lists into one list. |
-| `concatMap` | `concatMap f list` — apply `f` to each element and flatten the results. |
-| `cons` | `cons x list` — prepend `x` to the list; the named form of `x :: list`. |
-| `drop` | `drop n list` — the list without its first `n` elements. |
-| `filter` | `filter keep list` — keep only elements for which `keep` returns `True`. |
-| `filterMap` | `filterMap f list` — apply `f` to each element, keeping only `Just` payloads. |
-| `find` | `find test list` — `Just` the first element satisfying `test`, or `Nothing`. |
-| `foldl` | `foldl step initial list` — reduce from the left; `step element accumulator`. |
-| `foldr` | `foldr step initial list` — reduce from the right; `step element accumulator`. |
-| `head` | `head list` — `Just` the first element, or `Nothing` if empty. |
-| `indexedMap` | `indexedMap f list` — like `map` but `f` also receives each element's index. |
-| `isEmpty` | `isEmpty list` — `True` if the list has no elements. |
-| `length` | `length list` — the number of elements. |
-| `map` | `map f list` — apply `f` to every element, producing a new list of the |
-| `maximum` | `maximum list` — `Just` the largest element, or `Nothing` if empty. |
-| `member` | `member x list` — `True` if `x` equals any element of `list`. |
-| `minimum` | `minimum list` — `Just` the smallest element, or `Nothing` if empty. |
-| `range` | `range lo hi` — ascending integers from `lo` to `hi` inclusive. |
-| `reverse` | `reverse list` — the list in reverse order. |
-| `sortBy` | `sortBy key list` — stable ascending sort comparing `key element`. |
-| `sortWith` | `sortWith cmp list` — stable sort using a comparison function returning `Order`. |
-| `sum` | `sum list` — the sum of all elements; `0` for the empty list. |
-| `tail` | `tail list` — `Just` the list without its first element, or `Nothing` if empty. |
-| `take` | `take n list` — the first `n` elements; the whole list when shorter than `n`. |
-| `unique` | `unique list` — remove duplicates, keeping first occurrence of each element. |
-| `zip` | `zip xs ys` — pair elements position-by-position, stopping at the shorter list. |
 
 ## Maybe
 
