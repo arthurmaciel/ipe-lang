@@ -197,7 +197,13 @@ pub const STDLIB_MODULE_QUALIFIERS: &[(&[&str], &str)] = &[
     (&["Ipe", "Ui", "Input"], "Input"),
     (&["Ipe", "Ui", "Lazy"], "Lazy"),
     (&["Ipe", "Ui", "Keyed"], "Keyed"), // ipe-key diff identity
-    (&["Ipe", "Decimal"], "Decimal"),   // arbitrary-precision decimal arithmetic
+    // NOTE — `Ipe.Decimal` is DELIBERATELY absent: it is a COMPILED-SOURCE
+    // Layer-3 module (registered in `ipe::stdlib::COMPILED_STD_MODULES`). Its
+    // members are point-free `Ffi.kernel "Decimal_*"` aliases that
+    // `detect_kernel_alias` routes to the registered `Decimal*` `StdlibKernel`
+    // variants (`ipe_runtime::decimal::*`). A module is EITHER a kernel
+    // qualifier here OR compiled-source — never both
+    // (`compiled_vs_kernel_qualifier_disjoint`), so it stays out.
     // `Ipe.Html` and `Ipe.Html.Attributes` are COMPILED-SOURCE (see
     // `COMPILED_STD_MODULES`), not kernel qualifiers: their element/attribute
     // builders are pure Ipê over the retained `node`/`voidNode` /
@@ -1563,52 +1569,11 @@ impl Env {
             ("Stream", &["stream", "emit", "finish", "withContentType"]),
             // Ipe.Http.Stream — client-side HTTP streaming (fail-closed).
             ("HttpStream", &["open", "forEachChunk", "close", "chunks"]),
-            // Ipe.Decimal — arbitrary-precision decimal arithmetic.
-            (
-                "Decimal",
-                &[
-                    "zero",
-                    "one",
-                    "oneHundred",
-                    "fromString",
-                    "fromInt",
-                    "fromFloat",
-                    "fromMinor",
-                    "toString",
-                    "toStringFixed",
-                    "toFloat",
-                    "toInt",
-                    "toMinor",
-                    "add",
-                    "sub",
-                    "mul",
-                    "div",
-                    "mod",
-                    "neg",
-                    "abs",
-                    "floor",
-                    "ceil",
-                    "round",
-                    "roundHalfUp",
-                    "truncate",
-                    "compare",
-                    "eq",
-                    "neq",
-                    "lt",
-                    "lte",
-                    "gt",
-                    "gte",
-                    "min",
-                    "max",
-                    "isZero",
-                    "isPositive",
-                    "isNegative",
-                    "percentOf",
-                    "addPercent",
-                    "subPercent",
-                    "formatWith",
-                ],
-            ),
+            // Ipe.Decimal — DELIBERATELY absent: migrated to compiled-source
+            // `Ipe/Decimal.ipe` (COMPILED_STD_MODULES). Every member reaches its
+            // kernel via `Ffi.kernel "Decimal_*"`, so this catalog block is no
+            // longer needed here.
+            //
             // Ipe.Http.Server.WebSocket (12 kernels).
             (
                 "Ws",
@@ -1729,8 +1694,9 @@ impl Env {
             ("Ipe.Ui.Lazy", "Lazy"),
             // Ipe.Ui.Keyed sub-module.
             ("Ipe.Ui.Keyed", "Keyed"),
-            // Ipe.Decimal — arbitrary-precision decimal arithmetic.
-            ("Ipe.Decimal", "Decimal"),
+            // Ipe.Decimal — DELIBERATELY absent: migrated to compiled-source
+            // `Ipe/Decimal.ipe`. The `Ffi.kernel "Decimal_*"` aliases in that
+            // module reach every kernel directly; no qualifier alias is needed.
         ];
 
         // Build stdlib_index FIRST so every `kernel_home` call below can look
