@@ -1,0 +1,29 @@
+module Main exposing (main)
+
+import Ipe.Io as Io
+import Ipe.WebSocket as WebSocket
+import Ipe.Url as Url
+import Ipe.Result as Result exposing (Result(..))
+
+
+-- SEAL positive: building a WsUrl from a wss:// URL succeeds and
+-- defaultCfg accepts it.
+
+main =
+    let
+        parsed = Url.fromString "wss://echo.example.com/ws"
+    in
+    case parsed of
+        Ok u ->
+            case WebSocket.url u of
+                Ok wsUrl ->
+                    let
+                        cfg = WebSocket.defaultCfg wsUrl
+                    in
+                    Io.println ("wss ok url=" ++ cfg.url)
+
+                Err _ ->
+                    Io.println "UNEXPECTED-ERR"
+
+        Err _ ->
+            Io.println "url parse failed"

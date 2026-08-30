@@ -10,9 +10,13 @@
 -- /response with no incremental body Http.get is the right tool;
 -- this is for the long-lived bidirectional case.
 --
+-- URLs must be `ws://` or `wss://` (prefer `wss://` for encrypted
+-- connections).  Build a `WsUrl` via `WebSocket.url` — a plain
+-- `String` or an `http://` URL is a type error.
+--
 -- Lifecycle:
 --
---  1. `Cmd.perform (WebSocket.connect "wss://…") Connected` — kick
+--  1. `Cmd.perform (WebSocket.connect wsUrl) Connected` — kick
 --     off the handshake.  The runtime returns a `WebSocket` once the
 --     handshake completes (no message wait).
 --
@@ -45,6 +49,9 @@ module Ipe.WebSocket exposing
     ( WebSocket(..)
     , WebSocketMessage(..)
     , CloseCode(..)
+    , WsUrl
+    , url
+    , toUrl
     , WebSocketCfg
     , defaultCfg
     , withHeaders
@@ -67,6 +74,8 @@ import Ipe.Bytes exposing (Bytes)
 import Ipe.Error exposing (Error)
 import Ipe.Task as Task
 import Ipe.Duration as Duration exposing (Duration)
+import Ipe.Url as Url exposing (Url)
+import Ipe.Result exposing (Result(..))
 
 
 -- | Opaque handle to an open WebSocket.  The wrapped `Int` is the
@@ -94,12 +103,41 @@ type CloseCode
     | Custom Int
 
 
+-- | An opaque WebSocket URL.  The ONLY way to build one is `WebSocket.url`,
+-- which accepts a `Ipe.Url.Url` and rejects any scheme other than `ws` or
+-- `wss`.  A non-WebSocket URL is a construction-time `Err`, never a value
+-- that reaches a live socket.  Prefer `wss://` for encrypted connections.
+type WsUrl
+    = WsUrl Url
+
+
+-- | `url u` — the parse-don't-validate seal for WebSocket URLs.  Returns `Ok`
+-- when `u`'s scheme is `"ws"` or `"wss"`, otherwise `Err`.
+url : Url -> Result Error WsUrl
+url u =
+    let
+        s = Url.scheme u
+    in
+    if s == "ws" || s == "wss" then
+        Ok (WsUrl u)
+
+    else
+        Err (Error.invalidInput "Ipe.WebSocket.url: scheme must be ws or wss")
+
+
+-- | `toUrl wsUrl` — recover the underlying `Url` (e.g. to read the host).
+toUrl : WsUrl -> Url
+toUrl w =
+    case w of
+        WsUrl u ->
+            u
+
+
 -- | Connect configuration record for `connectWith`.
 --
--- v0.15.46 stdlib convention: every typed record ships with a
--- `default` constructor + `with*` builder helpers so adding new
--- fields in future releases doesn't break downstream record
--- literals.
+-- Every typed record ships with a `default` constructor + `with*` builder
+-- helpers so adding new fields in future releases doesn't break downstream
+-- record literals.
 type alias WebSocketCfg =
     { url : String
     , headers : List ( String, String )
@@ -110,9 +148,9 @@ type alias WebSocketCfg =
 
 -- | Default WebSocketCfg.  All-defaults values.  Override fields
 -- with the `with*` builder helpers.
-defaultCfg : String -> WebSocketCfg
-defaultCfg url =
-    { url = url
+defaultCfg : WsUrl -> WebSocketCfg
+defaultCfg w =
+    { url = Url.toString (toUrl w)
     , headers = []
     , timeout = 30000
     , pingInterval = 30000
@@ -149,12 +187,14 @@ connectRaw =
     Ffi.kernel "WebSocket_connect"
 
 
--- | `connect url` — open a new WebSocket to `url` (typically
--- `ws://…` or `wss://…`).  The Task resolves once the handshake
--- completes; frames flow via `onMessage` after that.
-connect : String -> Task Error WebSocket
-connect url =
-    Task.map WebSocket (connectRaw url)
+-- | `connect wsUrl` — open a new WebSocket to `wsUrl` (`ws://` or `wss://`).
+-- The `WsUrl` constructor rejects any other scheme at construction time, so
+-- a non-WebSocket address is a type error, never a runtime surprise.  The
+-- Task resolves once the handshake completes; frames flow via `onMessage`
+-- after that.
+connect : WsUrl -> Task Error WebSocket
+connect w =
+    Task.map WebSocket (connectRaw (Url.toString (toUrl w)))
 
 
 -- | Internal — direct kernel alias for the typed-record cfg form.

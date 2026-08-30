@@ -1,0 +1,27 @@
+module Main exposing (main)
+
+import Ipe.Io as Io
+import Ipe.WebSocket as WebSocket
+import Ipe.Url as Url
+import Ipe.Result as Result exposing (Result(..))
+
+
+-- Negative: an http:// URL passed to WebSocket.url returns Err at the
+-- boundary (not a compile-time type error here since Result is used);
+-- also demonstrates that connect takes WsUrl not String.
+
+main =
+    let
+        parsed = Url.fromString "http://example.com"
+    in
+    case parsed of
+        Ok u ->
+            case WebSocket.url u of
+                Ok _ ->
+                    Io.println "UNEXPECTED-OK"
+
+                Err _ ->
+                    Io.println "http rejected"
+
+        Err _ ->
+            Io.println "url parse failed"
