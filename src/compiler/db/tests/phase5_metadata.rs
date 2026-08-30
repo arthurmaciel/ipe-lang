@@ -78,6 +78,59 @@ fn root_of(db: &IpeDatabase, files: &[(&[&str], SourceFile)]) -> SourceRoot {
     )
 }
 
+/// Like [`root_of`] but also injects the transitive closure of compiled-source
+/// stdlib modules (e.g. `Ipe.Time`) that the user files import.
+///
+/// Kernel-qualifier modules (`Ipe.Io`, `Ipe.String`, …) resolve from the
+/// canon catalog without source injection — only compiled-source modules need
+/// this. Each injected file carries [`ModuleOrigin::EmbeddedStdlib`] so canon
+/// accepts the `Ipe.*` namespace without an IPE-N0025 rejection.
+fn root_with_std(db: &IpeDatabase, files: &[(&[&str], SourceFile)]) -> SourceRoot {
+    use std::collections::{BTreeMap, VecDeque};
+
+    let mut file_map: BTreeMap<Vec<String>, SourceFile> = files
+        .iter()
+        .map(|(path, f)| (path.iter().map(|s| (*s).to_owned()).collect(), *f))
+        .collect();
+
+    // Seed worklist from every compiled-source import across the user files.
+    let mut work: VecDeque<Vec<String>> = VecDeque::new();
+    for sf in file_map.values() {
+        for imp in ipe_db::extract_imports_from_source(sf.text(db)) {
+            if ipe_stdlib::is_compiled_source_segments(&imp) {
+                work.push_back(imp);
+            }
+        }
+    }
+
+    // BFS: inject each compiled-source module once, then enqueue its own
+    // compiled-source imports (kernel imports inside an embedded module are
+    // skipped — they stay qualifier-resolved).
+    while let Some(path) = work.pop_front() {
+        if file_map.contains_key(&path) {
+            continue;
+        }
+        let Some(source) = ipe_stdlib::compiled_std_source_segments(&path) else {
+            continue;
+        };
+        let sf = SourceFile::new(
+            db,
+            path.clone(),
+            source.to_owned(),
+            ModuleOrigin::EmbeddedStdlib,
+        );
+        file_map.insert(path.clone(), sf);
+
+        for imp in ipe_db::extract_imports_from_source(source) {
+            if ipe_stdlib::is_compiled_source_segments(&imp) && !file_map.contains_key(&imp) {
+                work.push_back(imp);
+            }
+        }
+    }
+
+    SourceRoot::new(db, file_map)
+}
+
 const DEP_A: &str = "module A exposing (visible)\n\nvisible = 1\n\nhidden = 2\n";
 const DEP_A_BODY_EDIT: &str = "module A exposing (visible)\n\nvisible = 1\n\nhidden = 3\n";
 const IMPORTER_B: &str = "module B exposing (b)\n\nimport A exposing (visible)\n\nb = visible\n";
@@ -263,7 +316,7 @@ fn unreached_kernel_call_does_not_set_module_flag() {
         main = Io.println \"hi\"\n";
     let (db, _log) = logged_db();
     let entry = file(&db, &["Entry"], DEAD_TIME_CALL);
-    let root = root_of(&db, &[(&["Entry"], entry)]);
+    let root = root_with_std(&db, &[(&["Entry"], entry)]);
 
     let program = ipe_db::lower_program(&db, root, entry).expect("must lower");
     let module = program
@@ -297,7 +350,7 @@ fn reached_kernel_call_sets_module_flag() {
         \x20   Io.println (if leap then \"leap\" else \"not\")\n";
     let (db, _log) = logged_db();
     let entry = file(&db, &["Entry"], LIVE_TIME_CALL);
-    let root = root_of(&db, &[(&["Entry"], entry)]);
+    let root = root_with_std(&db, &[(&["Entry"], entry)]);
 
     let program = ipe_db::lower_program(&db, root, entry).expect("must lower");
     let module = program
