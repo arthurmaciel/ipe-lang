@@ -42,6 +42,9 @@ cross-link where topics meet.
 - **Addressing and routing** — [URLs](url.md) (typed, validated),
   [URL routing](url-parser.md) (typed route patterns), [Network
   primitives](net.md) (range-validated ports).
+- **The process and the terminal** — [System](system.md) (arguments, environment,
+  working directory, exit), [Standard I/O](io.md) (stdout/stderr/stdin, the
+  password read).
 
 ## Reference and lookup
 
