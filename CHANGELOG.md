@@ -10,6 +10,31 @@ Entries below the header are maintained by
 section is generated from Conventional Commit messages and prepended when the
 standing release pull request is merged.
 
+## [0.1.71](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.1.70...ipe-v0.1.71) (2026-08-30)
+
+
+### Features
+
+* **canon:** static-pin main's shape — reject a runtime-branched entry (IPE-N0045) ([#1502](https://github.com/arthurmaciel/ipe-lang/issues/1502)) ([85aa4a4](https://github.com/arthurmaciel/ipe-lang/commit/85aa4a4ab9d2c2c8bc3a7d45f3b4b5cf25203e5c))
+* **canon:** terminal split — Ipe.Tea.Tui/Cli surface + Ipe.Server.* namespace (§14.3) ([#1505](https://github.com/arthurmaciel/ipe-lang/issues/1505)) ([190a883](https://github.com/arthurmaciel/ipe-lang/commit/190a883571c7cc665b74d093bac9569df95dbd77))
+* **db:** arithmetic projection operators + rename CoalesceOperand-&gt;ProjectionOperand ([#1463](https://github.com/arthurmaciel/ipe-lang/issues/1463)) ([3dd35e6](https://github.com/arthurmaciel/ipe-lang/commit/3dd35e66faeac4e67fb123c0bcf13b986a6574d3)), closes [#1401](https://github.com/arthurmaciel/ipe-lang/issues/1401)
+* **secret:** ban committed string literals in Secret.fromString (IPE-L0150) ([#1469](https://github.com/arthurmaciel/ipe-lang/issues/1469)) ([d19d40c](https://github.com/arthurmaciel/ipe-lang/commit/d19d40cd25a0f7e64600f4e0fbe3fa22729c6f7b))
+* **shape:** Web.embed + Server.mountApp — mount a web app into a server on one port (§6/§9) ([#1503](https://github.com/arthurmaciel/ipe-lang/issues/1503)) ([f810bcd](https://github.com/arthurmaciel/ipe-lang/commit/f810bcdff0d67e848593dcd9f40f63fd5b7bc2a9))
+* **stdlib:** migrate 6 tail modules to compiled-source (Maybe/Result/Basics/Log/Level/Error) ([#1500](https://github.com/arthurmaciel/ipe-lang/issues/1500)) ([5a458fa](https://github.com/arthurmaciel/ipe-lang/commit/5a458fa84d6b92713b35ce605f36ba5c05357ab1))
+* **stdlib:** migrate 9 modules to compiled-source (String/Io/Dict/List/Task/Uuid/Decimal/Encoding/Math) ([#1493](https://github.com/arthurmaciel/ipe-lang/issues/1493)) ([23c4171](https://github.com/arthurmaciel/ipe-lang/commit/23c417112e6f4c265efc63ff5d8398b5c6434a15))
+* **stdlib:** migrate Ipe.Bitwise from kernel-qualifier to compiled-source ([#1466](https://github.com/arthurmaciel/ipe-lang/issues/1466)) ([2028d11](https://github.com/arthurmaciel/ipe-lang/commit/2028d11f0e123d850aaa3ffdde17bc0167d430cc))
+* **stdlib:** migrate Ipe.Bytes to compiled-source (Refs [#1447](https://github.com/arthurmaciel/ipe-lang/issues/1447)) ([#1480](https://github.com/arthurmaciel/ipe-lang/issues/1480)) ([28087e5](https://github.com/arthurmaciel/ipe-lang/commit/28087e5e22d6938590de2749ae5e1f9316c1d7a8))
+* **stdlib:** migrate Ipe.Char to compiled-source (Refs [#1460](https://github.com/arthurmaciel/ipe-lang/issues/1460)) ([#1481](https://github.com/arthurmaciel/ipe-lang/issues/1481)) ([6a28959](https://github.com/arthurmaciel/ipe-lang/commit/6a28959ace9b206f6e39f5e01ea574e778ff6f6b))
+* **stdlib:** migrate Ipe.Debug to compiled-source (Refs [#1458](https://github.com/arthurmaciel/ipe-lang/issues/1458)) ([#1473](https://github.com/arthurmaciel/ipe-lang/issues/1473)) ([0e268c4](https://github.com/arthurmaciel/ipe-lang/commit/0e268c4884f4408bea722aa73c549812d3709f8f))
+* **stdlib:** migrate Ipe.Set to compiled-source (Refs [#1449](https://github.com/arthurmaciel/ipe-lang/issues/1449)) ([#1479](https://github.com/arthurmaciel/ipe-lang/issues/1479)) ([46c079c](https://github.com/arthurmaciel/ipe-lang/commit/46c079c3c0ba39e18f97644ce14e6dddd99f8261))
+* **stdlib:** migrate Ipe.Time to compiled-source ([#1451](https://github.com/arthurmaciel/ipe-lang/issues/1451)) ([#1474](https://github.com/arthurmaciel/ipe-lang/issues/1474)) ([1ac154c](https://github.com/arthurmaciel/ipe-lang/commit/1ac154c72dabde6836c0078eafac8e8d5fa096f6))
+
+
+### Bug Fixes
+
+* **cli:** ipe watch resolves the runtime like build, not eject ([#1498](https://github.com/arthurmaciel/ipe-lang/issues/1498)) ([5688d3d](https://github.com/arthurmaciel/ipe-lang/commit/5688d3d5e2f46c86ae2d888203a48c804c72e8ea))
+* **regen-goldens:** normalise runtime dep path to placeholder on write ([#1467](https://github.com/arthurmaciel/ipe-lang/issues/1467)) ([#1504](https://github.com/arthurmaciel/ipe-lang/issues/1504)) ([f46bba8](https://github.com/arthurmaciel/ipe-lang/commit/f46bba82a8b9e03d5c44e21108cfb6075154c2fc))
+
 ## [0.1.70](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.1.69...ipe-v0.1.70) (2026-08-28)
 
 
