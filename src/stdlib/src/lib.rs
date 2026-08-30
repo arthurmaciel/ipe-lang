@@ -274,10 +274,6 @@ pub const MODULES: &[StdModule] = &[
         source: DICT,
     },
     StdModule {
-        name: "Ipe.Bytes",
-        source: BYTES,
-    },
-    StdModule {
         name: "Ipe.Crypto",
         source: CRYPTO,
     },
@@ -724,6 +720,14 @@ pub const COMPILED_STD_MODULES: &[CompiledStdModule] = &[
     CompiledStdModule {
         dotted: "Ipe.Set",
         source: SET,
+    },
+    // Ipe.Bytes — Layer-3 source; every member is a point-free
+    // `Ffi.kernel "Bytes_*"` alias resolved by `detect_kernel_alias` to the
+    // registered `Bytes*` kernels (`ipe_runtime::bytes::*`). Disjoint from
+    // `STDLIB_MODULE_QUALIFIERS` (no `"Bytes"` entry there).
+    CompiledStdModule {
+        dotted: "Ipe.Bytes",
+        source: BYTES,
     },
     CompiledStdModule {
         dotted: "Ipe.Random",
