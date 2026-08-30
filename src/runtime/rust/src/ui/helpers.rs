@@ -433,7 +433,7 @@ pub fn ui_background_image_<M>(s: String) -> Attribute<M> {
 ///
 /// Renders `background-image: linear-gradient(<angle>deg, <c1> <p1>%, …);`
 /// via the existing `AttrBgGradient` runtime variant (already rendered by
-/// `render.rs`'s `build_style_string`). Float formatting matches 
+/// `render.rs`'s `build_style_string`). Float formatting matches
 /// `String.fromFloat` via the shared `string_from_float` kernel (parity with
 /// the `../ipe` reference's `String.fromFloat angle` / `String.fromFloat pct`).
 #[must_use]

@@ -172,7 +172,7 @@ pub fn crypto_random_bytes<E: From<String> + 'static>(n: i64) -> IpeTask<E, Stri
     })
 }
 
-/// Lowercase hex encoding, byte-order + nibble-order identical to 
+/// Lowercase hex encoding, byte-order + nibble-order identical to
 /// `hex.EncodeToString` (high nibble first, then low). Total: the `& 0x0f` index
 /// is always < 16 so `.get` never falls back.
 fn hex_lower(buf: &[u8]) -> String {
@@ -185,7 +185,7 @@ fn hex_lower(buf: &[u8]) -> String {
     out
 }
 
-/// URL-safe base64 WITHOUT padding, byte-identical to 
+/// URL-safe base64 WITHOUT padding, byte-identical to
 /// `base64.RawURLEncoding.EncodeToString` — the `-_` alphabet, no `=` pad. Inline
 /// (not the `base64` crate) so the `crypto_core` floor carries no
 /// unconditional codec-crate reference: `crypto_random_token` is emitted in every

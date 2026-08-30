@@ -263,7 +263,7 @@ pub fn math_mod(x: f64, y: f64) -> f64 {
 /// The result satisfies `x = n*y + remainder` where `n` is the nearest integer
 /// to `x/y` (rounded half-to-even), so `|remainder| <= |y|/2`.
 ///
-/// Uses fmod-based argument reduction (a direct port of 
+/// Uses fmod-based argument reduction (a direct port of
 /// `math.Remainder`) so it stays exact for large-magnitude operands. A naive
 /// `x - (x / y).round_ties_even() * y` loses precision once `|x/y|` exceeds
 /// 2^53 (the quotient rounds away the low integer bits), diverging from the

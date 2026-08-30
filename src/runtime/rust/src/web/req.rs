@@ -17,7 +17,7 @@ pub fn web_req(
     let mut hdrs: IpeDict<String> = IpeDict::new();
     for (k, v) in headers.iter() {
         if let Ok(val) = v.to_str() {
-            // First-value-wins on duplicate header keys, matching 
+            // First-value-wins on duplicate header keys, matching
             // `headersToDict` (`vs[0]`). axum yields multi-valued headers in
             // arrival order, so the first `iter()` entry is the first value.
             hdrs.entry(crate::http_header::canonical_header(k.as_str()))

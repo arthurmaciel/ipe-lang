@@ -1,5 +1,4 @@
-//! Session stores — the `SessionStore` abstraction + backends, mirroring 
-//! ``.
+//! Session stores — the `SessionStore` abstraction + backends.
 //!
 //! A session's LIVE state (the tokio driver, SSE channel, rebuilt `HandlerIndex`)
 //! is always per-process. A persistent backend additionally keeps a serialized
@@ -494,7 +493,7 @@ fn redis_key(sid: &str) -> String {
 /// out of sync). Expiry is the server's job; there's no sweep loop for the
 /// persisted side. A `mem_cache` keeps the same-process live handle (owns the
 /// driver) so a hit on the originating replica reuses it. `addr` is a full
-/// `redis://[:pass@]host:port/db` URL or a bare `host:port`. Mirrors 
+/// `redis://[:pass@]host:port/db` URL or a bare `host:port`. Mirrors
 /// `redisStore` plus the H24 schema-tag gate.
 #[cfg(feature = "redis_store")]
 pub struct RedisStore<Model, Msg> {

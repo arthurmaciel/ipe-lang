@@ -424,7 +424,7 @@ fn render_into_ctx<M>(
             s.push('>');
             // Textarea value-as-content : write the captured value as
             // escaped text content. Explicit children take precedence (a user who
-            // wrote `textarea [] [ text "hi" ]` keeps that), matching 
+            // wrote `textarea [] [ text "hi" ]` keeps that), matching
             // `isTextarea && value != "" && len(children) == 0` guard.
             if tag == "textarea"
                 && let Some(v) = &textarea_value

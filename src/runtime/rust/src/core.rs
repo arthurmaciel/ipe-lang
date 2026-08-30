@@ -51,7 +51,7 @@ pub fn str_err<E: From<String>>(s: &str) -> E {
 /// [B8 SECURITY — load-bearing] The foreign error's raw `Debug` is NEVER
 /// surfaced to the Ipê side. A real network/auth client error (a reqwest/hyper
 /// transport failure, a stripe API error) can echo the request URL, request
-/// headers, a bearer token, or an API key in its `Debug`. So we follow 
+/// headers, a bearer token, or an API key in its `Debug`. So we follow
 /// two-level error pattern: the raw `Debug` detail is logged SERVER-SIDE under a
 /// fresh correlation id (operators can trace it), and ONLY a fixed generic
 /// message carrying that id is returned to Ipê (`Error.toString` shows
@@ -412,7 +412,7 @@ impl<T> IpeMaybe<T> {
     }
 }
 
-// `Nothing` is the natural zero of an absent `Maybe`, mirroring 
+// `Nothing` is the natural zero of an absent `Maybe`, mirroring
 // `json.Unmarshal` decoding a missing nullable field to nil. This MANUAL impl
 // (the derive would demand `T: Default`, which a `IpeMaybe<NonDefault>` field
 // cannot satisfy) lets a form-target record carrying a `Maybe X` field qualify
@@ -1083,7 +1083,7 @@ impl Drop for RecursionGuard {
 }
 
 // ===========================================
-// Synchronous-panic gate 
+// Synchronous-panic gate
 // ===========================================
 // The generated `fn main()` installs this FIRST so any panic that escapes the
 // synchronous Ipê path — a div-by-zero (`a / 0`), an index-out-of-range, an

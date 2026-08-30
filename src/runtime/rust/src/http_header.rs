@@ -75,7 +75,7 @@ pub(crate) fn origin_host_mismatch(origin: &str, host: &str) -> bool {
 mod tests {
     use super::{canonical_header, origin_host_mismatch};
 
-    /// Well-formed header names — byte-identical to 
+    /// Well-formed header names — byte-identical to
     /// `textproto.CanonicalMIMEHeaderKey`.
     #[test]
     fn canonical_header_matches_go_canonical_mime_key() {

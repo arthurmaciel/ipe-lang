@@ -278,8 +278,7 @@ async fn fetch_one_routed<'q>(pool: &Db, query: DbQuery<'q>) -> Result<DbRow, sq
 /// so a bool-first probe silently stole `qty = 7` and rendered it `"true"`.
 /// Postgres `BOOL` and SQLite `BOOLEAN` report a boolean type name; a SQLite
 /// INTEGER cell reports `INTEGER` (its runtime storage class) even when it was
-/// bound from a Rust `bool` — which matches the the spec, whose driver returns
-/// `int64` for those cells.
+/// bound from a Rust `bool` — the driver returns `int64` for those cells.
 fn column_is_boolean(row: &DbRow, i: usize) -> bool {
     row.columns()
         .get(i)
@@ -440,7 +439,7 @@ pub fn db_decode_string<E: From<String> + 'static>(col: String) -> Decoder<E, St
 /// `DbDec.int col` — read column `col` as an Int (i64).
 /// Accepts: JSON Number, or a String representation of an integer or decimal
 /// (e.g. "42", "3.0" → 3). NULL → Err. Parse failure → Err.
-/// Matches  DbDec_int truthy table (int/int64/float64/string forms).
+/// Matches `DbDec_int` truthy table (int/int64/float64/string forms).
 pub fn db_decode_int<E: From<String> + 'static>(col: String) -> Decoder<E, i64> {
     // Parse-don't-validate: a float source (JSON float or decimal string) is
     // truncated toward zero to an `Int`, but a magnitude past the `i64` range is
@@ -479,7 +478,7 @@ pub fn db_decode_int<E: From<String> + 'static>(col: String) -> Decoder<E, i64> 
                     },
                 },
                 JsonVal::String(s) => {
-                    // Accept "42" or "3.0" (decimal truncation ).
+                    // Accept "42" or "3.0" (decimal truncation toward zero).
                     if let Ok(i) = s.parse::<i64>() {
                         return decode_ok(i);
                     }
@@ -497,7 +496,7 @@ pub fn db_decode_int<E: From<String> + 'static>(col: String) -> Decoder<E, i64> 
 }
 
 /// `DbDec.float col` — read column `col` as a Float (f64).
-/// Matches  DbDec_float truthy table (float64/int/int64/string forms).
+/// Matches `DbDec_float` truthy table (float64/int/int64/string forms).
 pub fn db_decode_float<E: From<String> + 'static>(col: String) -> Decoder<E, f64> {
     decode_field(
         col.clone(),
@@ -530,7 +529,7 @@ pub fn db_decode_float<E: From<String> + 'static>(col: String) -> Decoder<E, f64
 }
 
 /// `DbDec.bool col` — read column `col` as a Bool.
-/// Truthy table (
+/// Truthy table:
 ///   true  ← "true" | "TRUE" | "True" | "t" | "T" | "1" | JSON true  | int 1  | int64 1
 ///   false ← "false"| "FALSE"| "False"| "f" | "F" | "0" | JSON false | int 0  | int64 0
 /// NULL or unrecognised string → Err.
@@ -711,10 +710,10 @@ pub fn db_decode_bytes<E: From<String> + 'static>(col: String) -> Decoder<E, Vec
 ///
 /// Uses `inner.fields` (the `Decoder` struct's `{run, fields}` metadata) to
 /// determine which columns the inner decoder reads.
-/// This is the Rust equivalent of  `DbDec_nullable` which gates on
+/// This is the Rust equivalent of `DbDec_nullable` which gates on
 /// `inner.cols`.
 ///
-/// NULL-gate logic (
+/// NULL-gate logic:
 /// - If `inner.fields` is non-empty: check each named field in the row
 ///   `JsonVal::Object`. If ANY field is `JsonVal::Null` or absent →
 ///   `Ok(Nothing)`. Only when all fields are present + non-null do we
@@ -771,7 +770,7 @@ pub fn db_decode_nullable<E: From<String> + 'static, T: Send + 'static>(
 /// documentation-only here — `fieldDec` already names its column via `decode_field`.
 ///
 /// Totality: missing column or decode error → Err propagated; no panic/unwrap.
-/// Matches  `DbDec_required` which delegates to `DbDec_andMap(fieldDec, ctorDec)`.
+/// Matches `DbDec_required` which delegates to `DbDec_andMap(fieldDec, ctorDec)`.
 pub fn db_decode_required<E: From<String> + 'static, A: 'static + Send, B: 'static + Send>(
     _col: String,
     field_dec: Decoder<E, A>,
@@ -792,7 +791,7 @@ pub fn db_decode_required<E: From<String> + 'static, A: 'static + Send, B: 'stat
 /// Then `decode_and_map` applies the ctor.
 ///
 /// Totality: NULL/absent → Ok(fallback); present but bad type → Err; ctor Err → Err.
-/// Matches  `DbDec_optional`.
+/// Matches `DbDec_optional`.
 pub fn db_decode_optional<
     E: From<String> + 'static,
     A: Clone + 'static + Send + Sync,
@@ -1235,17 +1234,17 @@ fn migrate_checksum(sql: &str) -> String {
 ///   ONE transaction (via the single-connection `db_with_transaction`), so a
 ///   failure rolls back only that migration and a re-run resumes from it.
 ///
-/// Trust model (
+/// Trust model: the migration SQL is compile-time app source the
 /// developer ships — it is run verbatim via `db_exec_raw` (arbitrary DDL is the
 /// point). Only the ledger bookkeeping crosses into bound-parameter territory
 /// (the INSERT binds name/checksum/applied_at — never string-interpolated).
 ///
-/// Single-deployer assumption ( The
+/// Single-deployer assumption: not concurrency-safe by design. The
 /// `name TEXT PRIMARY KEY` ledger column is the backstop — a racing double-apply
 /// loses the INSERT to a PK violation inside its own tx, which rolls back, so
 /// there is no partial-corruption window.
 ///
-/// DB-ops mode (parity with  `Db_migrateApply`): when the `IPE_DB_OP` env var
+/// DB-ops mode (`Db_migrateApply`): when the `IPE_DB_OP` env var
 /// is set — the CLI `ipe db status` / `ipe db migrate --backend rust` sets it — the
 /// task PRINTS a human report and `process::exit`s instead of returning, so the
 /// surrounding app never starts serving:
@@ -1433,7 +1432,8 @@ pub fn db_migrate_apply<E: Send + From<String> + 'static>(
             }
         }
 
-        // 4. `migrate` op mode — print the summary, then exit.         if op == "migrate" {
+        // 4. `migrate` op mode — print the summary, then exit.
+        if op == "migrate" {
             if out.is_empty() {
                 println!("db: schema already up to date — 0 migrations applied");
             } else {
@@ -2084,7 +2084,7 @@ pub fn db_with_transaction<E: Send + From<String> + 'static, A: Send + 'static>(
 //   StdDbSqlValue::SqlBool(b)     → SqlParam::Bool(b)
 //   StdDbSqlValue::SqlBytes(s)    → SqlParam::Bytes(s.into_bytes())
 //   StdDbSqlValue::SqlDecimal(d)  → SqlParam::Text(d.to_string())  (lossless)
-//   StdDbSqlValue::SqlTime(ms)    → SqlParam::Int(ms)  (Unix millis, 
+//   StdDbSqlValue::SqlTime(ms)    → SqlParam::Int(ms)  (Unix millis,
 //   StdDbSqlValue::SqlMoney(m)    → SqlParam::Text("ISO_CODE AMOUNT")  (see note)
 //   StdDbSqlValue::SqlNull(inner) → SqlParam::Null(Box::new(inner.into_sql_param()))
 //
@@ -4203,7 +4203,7 @@ mod tests {
     #[test]
     fn migrate_checksum_is_lowercase_sha256_hex_matching_go() {
         // G4 pin: the ledger checksum is a cross-backend DB contract. This value
-        // is `sha256hex("SELECT 1;")` — identical to 
+        // is `sha256hex("SELECT 1;")` — identical to
         // fmt.Sprintf("%x", sha256.Sum256([]byte("SELECT 1;"))). A future hasher
         // swap that broke cross-backend ledger interop would fail HERE.
         assert_eq!(

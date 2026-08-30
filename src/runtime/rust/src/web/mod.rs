@@ -2782,7 +2782,7 @@ where
     // /static/* via ServeDir. MUST be added before the `/*path` page catch-all
     // so a /static/<file> request hits ServeDir, not the page handler (which
     // would return HTML). ServeDir blocks `..` path traversal by construction
-    // (percent-decodes first, so `%2e%2e` is caught too). NOTE: like 
+    // (percent-decodes first, so `%2e%2e` is caught too). NOTE: like
     // http.FileServer it FOLLOWS symlinks inside the dir — the dir is
     // author-controlled (package.ipe [web] static), so that is the intended
     // contract, NOT a confinement guarantee. Absent/empty → no static mount.

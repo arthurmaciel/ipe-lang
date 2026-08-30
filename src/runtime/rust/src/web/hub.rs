@@ -61,7 +61,7 @@ use std::time::Duration;
 tokio::task_local! {
     /// The tenant-scope prefix in effect for the current request, when the
     /// session carries a `tenant` claim. Unset (→ "") outside a tenant-scoped
-    /// session — every service is in-scope in that case (matches 
+    /// session — every service is in-scope in that case (matches
     /// `tenantPrefixForSession` returning "" when the session has no tenant
     /// claim).
     static TENANT_PREFIX: String;
@@ -116,7 +116,7 @@ fn reject_cross_tenant_svc(svc: &str, tenant_prefix: &str) -> Result<String, ()>
 /// Strip SQL `LIKE` wildcard characters (`%`, `_`) out of a tenant prefix
 /// before it is used to build a `LIKE 'prefix%'` pattern — a tenant identifier
 /// containing either character would otherwise WIDEN its own scope (e.g. a
-/// tenant literally named `%` would match every service). Mirrors 
+/// tenant literally named `%` would match every service). Mirrors
 /// `escapeLikePrefix` (strips rather than backslash-escapes, since tenant
 /// identifiers are short alphanumeric-with-dashes slugs, not arbitrary user
 /// text where preserving the literal character matters).

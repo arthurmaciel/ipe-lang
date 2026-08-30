@@ -192,7 +192,7 @@ pub fn sub_every<M>(ms: i64, msg: M) -> IpeSub<M> {
     IpeSub::Every { ms, msg }
 }
 
-/// Time.every : Int -> msg -> Sub msg — alias of `Sub.every` (matches 
+/// Time.every : Int -> msg -> Sub msg — alias of `Sub.every` (matches
 /// `Time_every`, which delegates to `Sub_every`). The `Time_every` kernel name
 /// lowers to this.
 pub fn time_every<M>(ms: i64, msg: M) -> IpeSub<M> {

@@ -1216,7 +1216,7 @@ fn ws_send_buffer() -> usize {
         .unwrap_or(256)
 }
 
-/// Heartbeat interval for WebSocket Ping frames.  Mirrors 
+/// Heartbeat interval for WebSocket Ping frames.  Mirrors
 /// `wsDefaultPingInterval = 30s` (``).
 /// Override via `IPE_WS_HEARTBEAT` (seconds, must be > 0).
 fn ws_heartbeat_secs() -> u64 {
@@ -1278,7 +1278,7 @@ async fn ws_loop<E: From<String> + Send + 'static>(
         .insert(id, tx);
     let _ = (cfg.onConnect)(WsHandle::WebSocketServer(id)).await;
     // Heartbeat: send a Ping every `ws_heartbeat_secs()` seconds to keep the
-    // connection alive through proxies and detect silent drops.  Mirrors 
+    // connection alive through proxies and detect silent drops.  Mirrors
     // `wsDefaultPingInterval = 30s` + `wsPingTimeout = 10s` pattern in
     // ``.  axum auto-replies to incoming Pong
     // frames on our behalf, so we only need to send the Ping here.

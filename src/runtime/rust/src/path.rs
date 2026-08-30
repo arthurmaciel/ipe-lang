@@ -62,7 +62,7 @@ const WINDOWS: bool = false;
 const WINDOWS: bool = true;
 
 /// The canonical separator emitted in a cleaned path (all input separators
-/// normalise to this): `/` on Unix, `\` on Windows, 
+/// normalise to this): `/` on Unix, `\` on Windows,
 const SEP: u8 = if WINDOWS { b'\\' } else { b'/' };
 
 /// `Ipe.Path`'s opaque, validated newtype. See the module doc for the

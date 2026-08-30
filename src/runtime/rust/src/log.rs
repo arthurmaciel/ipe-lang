@@ -51,7 +51,7 @@ fn log_json() -> bool {
 
 /// Current UTC instant in  `time.RFC3339Nano` layout
 /// (`2006-01-02T15:04:05.999999999Z07:00`): nanosecond precision with trailing
-/// zeros trimmed, UTC rendered as `Z`. Matches 
+/// zeros trimmed, UTC rendered as `Z`. Matches
 /// `now.UTC().Format(time.RFC3339Nano)`.
 #[cfg(not(target_arch = "wasm32"))]
 fn rfc3339_nano_now() -> String {

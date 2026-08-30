@@ -69,7 +69,7 @@ pub(crate) fn lcg_next() -> u64 {
     }
 }
 
-// ── Deterministic seeded PRNG (splitmix64) — byte-for-byte parity with 
+// ── Deterministic seeded PRNG (splitmix64) — byte-for-byte parity with
 //    seedStep / Random_seededInt/Float/Choice (). Pure. ──
 
 fn seed_step(z_in: i64) -> i64 {
@@ -147,7 +147,7 @@ pub fn random_float<E: Send + 'static>(lo: f64, hi: f64) -> IpeTask<E, f64> {
     Box::pin(async move {
         lcg_init();
         // Uniform float in [lo, hi) — matches the stdlib contract
-        // `float : Float -> Float -> Task Error Float` and 
+        // `float : Float -> Float -> Task Error Float` and
         // `Random_floatT` (lo + Float64()*(hi-lo)).
         // Unit draw is the 53-bit mantissa trick → [0, 1); never
         // `/ u64::MAX` (which rounds to 1.0 and could emit `hi`,

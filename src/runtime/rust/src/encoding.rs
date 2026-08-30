@@ -7,7 +7,7 @@ use super::IpeResult;
 use base64::{Engine, engine::general_purpose::STANDARD as B64};
 use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, percent_decode_str, utf8_percent_encode};
 
-/// The set of bytes `urlEncode` percent-encodes, matching 
+/// The set of bytes `urlEncode` percent-encodes, matching
 /// `url.QueryEscape` (`encodeQueryComponent`): every byte is escaped EXCEPT
 /// the ASCII alphanumerics and the four unreserved marks `-` `_` `.` `~`
 /// (RFC 3986 §2.3). Space is handled separately (`%20` → `+`) below.
@@ -72,7 +72,7 @@ pub(crate) fn form_url_decode(s: &str) -> String {
 
 /// Ipê `base64Encode : String -> String` — encodes the input's UTF-8 bytes
 /// )`). Non-ASCII
-/// 
+///
 #[must_use]
 pub fn base64_encode(s: String) -> String {
     B64.encode(s.as_bytes())
@@ -120,7 +120,7 @@ pub fn url_decode<E: From<String>>(s: String) -> IpeResult<E, String> {
 }
 
 /// Ipê `hexEncode : String -> String` — encodes the input's UTF-8 bytes
-/// )`). Non-ASCII 
+/// )`). Non-ASCII
 /// than truncating codepoints > 255.
 #[must_use]
 pub fn encoding_hex_encode(s: String) -> String {

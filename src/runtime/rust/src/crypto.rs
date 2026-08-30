@@ -28,7 +28,7 @@ use super::*;
 pub use crate::crypto_core::*;
 
 /// SECURITY (parity-locked): `sha1` and `md5` below are COLLISION-BROKEN and are
-/// exposed ONLY as named checksum/interop hashes, matching the 
+/// exposed ONLY as named checksum/interop hashes, matching the
 /// surface. They MUST NOT be used as a security primitive (password hashing,
 /// signatures, integrity against an adversary) — those paths use SHA-256/512 +
 /// HMAC + bcrypt/PBKDF2 elsewhere in this module. Removing them would break

@@ -305,7 +305,7 @@ mod tests {
     }
 
     // Regression: a panicking handler must become a 500 (not an unwound, dropped
-    // connection) AND still be counted by `track` as status 500 — the 
+    // connection) AND still be counted by `track` as status 500 — the
     // contract for the new `CatchPanicLayer` placed INNER of `track` in the
     // Ipe.Web router. Well-typed Ipê can't panic (the no-panic thesis), so this
     // defense-in-depth floor can only be exercised from a test handler that
