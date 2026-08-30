@@ -250,7 +250,12 @@ succeed "ready" --> Task Error String
 `Ipe.Duration` (unit named at the call site); the raw milliseconds are unwrapped
 for the runtime policy kernel.
 
-```ipe
+The example is `ipe:skip`-exempt from the doc-example type-check: it names the
+cross-module `Duration.millis`, which needs `import Ipe.Duration` — an import the
+doc-example checker does not inject (it brings only the documenting module's
+exports into an example's scope, not its own imports).
+
+```ipe ipe:skip
 withBaseMs (Duration.millis 250) (exponentialBackoff 3 100) --> RetryPolicy e
 ```
 
