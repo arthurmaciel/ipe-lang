@@ -23,7 +23,7 @@
 //! by the Go backend (`not enough arguments in call to wrap` — the same
 //! local-fn-value partial-application arity gap this promotion closes), so its
 //! `4` is the hand-computed language-semantics value; accepting the shape is a
-//! recorded strictly-better divergence (`misc/docs/divergences-from-sky.md`).
+//! recorded strictly-better divergence.
 
 use std::path::{Path, PathBuf};
 

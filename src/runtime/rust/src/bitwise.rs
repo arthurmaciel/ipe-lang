@@ -4,7 +4,7 @@
 //! integers. Elm's `Bitwise` is specified on 32-bit ints (JavaScript's `| 0`
 //! coercion); Ipê's wider `Int` means `complement` and `shiftRightZfBy` cover
 //! the full 64-bit width rather than wrapping at 32 bits — a sanctioned
-//! divergence recorded in `misc/docs/divergences-from-elm.md`.
+//! sanctioned divergence from Elm's 32-bit spec.
 //!
 //! Shift amounts are masked to `0..=63` (`& 63`) before shifting: a raw Rust
 //! shift by `>= 64` is undefined-behaviour-adjacent (it panics in debug, is

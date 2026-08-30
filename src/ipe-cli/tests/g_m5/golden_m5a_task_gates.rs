@@ -66,7 +66,7 @@ fn task_bad_error_channel_is_ipe_t0001() {
 /// `Ipe.Task.ipe:33` annotation (`fail : Error -> Task Error a`), so the
 /// mismatch is caught at `ipe` type-check time. This also pins the
 /// divergence from upstream Ipe's polymorphic `fail : e -> Task e a`
-/// (`misc/docs/divergences-from-sky.md`, "`Task` error-channel scheme is
+/// (sanctioned divergence: "`Task` error-channel scheme is
 /// monomorphic") — a future "restore Elm-parity polymorphism" change cannot
 /// silently reopen the ill-typed-emission hole without confronting this test.
 #[test]

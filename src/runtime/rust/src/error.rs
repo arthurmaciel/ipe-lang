@@ -15,7 +15,7 @@
 //! project-local synthesized struct, not this module's concrete
 //! `IpeErrorInfo`/`IpePanicInfo`/`IpeTypeInfo` — the same limitation
 //! `ErrorInfo` itself already had before this pass; see
-//! `misc/docs/divergences-from-sky.md`'s `B-ErrorADT` entry).
+//! the `B-ErrorADT` sanctioned divergence).
 //!
 //! Backed by `builtin_runtime_enum` (mirrors `Order`/`IpeOrder`):
 //! `Error`'s sole constructor shares its name with the type

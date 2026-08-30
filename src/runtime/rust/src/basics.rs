@@ -28,7 +28,7 @@ pub fn basics_mod_by(divisor: i64, n: i64) -> i64 {
 /// Sanctioned divergence from the Ipe/Go backend: Go's `Basics_compareT`
 /// returns `-1 / 0 / 1` as a plain `int`.  The Rust backend returns a typed
 /// enum so pattern-match on `LT / EQ / GT` is sound and exhaustive without
-/// an extra range-check.  See `misc/docs/divergences-from-sky.md §B-compare`.
+/// an extra range-check.  Sanctioned divergence §B-compare.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[repr(u8)]
@@ -207,7 +207,7 @@ impl IpeWrappingMul for f64 {
 /// Saturating negation — used only by `basics_abs`, NOT by `basics_negate`.
 ///
 /// `abs` saturates at `i64::MAX` for `i64::MIN` (deliberate divergence from
-/// Go; see `misc/docs/divergences-from-sky.md`). `negate` uses `IpeWrappingNeg`
+/// Go; deliberate divergence). `negate` uses `IpeWrappingNeg`
 /// instead (wrapping contract, not saturating).
 pub trait SaturatingNeg: Sized {
     #[must_use]
@@ -231,7 +231,7 @@ impl SaturatingNeg for f64 {
 /// comparison without a clone. Matches Go's `Basics_abs` semantics, with the
 /// no-panic rule taking precedence at `i64::MIN` (Go's `int64` overflow wraps
 /// silently to `i64::MIN` itself; Rust saturates to `i64::MAX` instead of
-/// wrapping to a NEGATIVE "absolute value" — see `misc/docs/divergences-from-sky.md`).
+/// wrapping to a NEGATIVE "absolute value" — deliberate divergence).
 pub fn basics_abs<T: PartialOrd + SaturatingNeg + Copy + Default>(x: T) -> T {
     let zero = T::default();
     if x < zero { x.saturating_neg() } else { x }
