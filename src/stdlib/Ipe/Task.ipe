@@ -16,7 +16,8 @@
 -- The Task guide walks the mental model and a worked example; this module is the
 -- per-symbol reference.
 module Ipe.Task exposing
-    ( succeed, fail
+    ( Task
+    , succeed, fail
     , map, map2, map3, map4, map5
     , andThen
     , attempt
@@ -246,19 +247,19 @@ type BackoffStrategy
 
 {-| The `Linear` backoff-strategy constructor. -}
 Linear : BackoffStrategy
-Linear = Ffi.kernel "Task_backoffLinear"
+Linear = Ffi.kernel "Task_Linear"
 
 {-| The `LinearWithJitter` backoff-strategy constructor. -}
 LinearWithJitter : BackoffStrategy
-LinearWithJitter = Ffi.kernel "Task_backoffLinearWithJitter"
+LinearWithJitter = Ffi.kernel "Task_LinearWithJitter"
 
 {-| The `Exponential` backoff-strategy constructor. -}
 Exponential : BackoffStrategy
-Exponential = Ffi.kernel "Task_backoffExponential"
+Exponential = Ffi.kernel "Task_Exponential"
 
 {-| The `ExponentialWithJitter` backoff-strategy constructor. -}
 ExponentialWithJitter : BackoffStrategy
-ExponentialWithJitter = Ffi.kernel "Task_backoffExponentialWithJitter"
+ExponentialWithJitter = Ffi.kernel "Task_ExponentialWithJitter"
 
 {-| Retry configuration for `retryWith`, built with the `linearBackoff` /
 `exponentialBackoff` constructors and refined with the `with*` combinators.
