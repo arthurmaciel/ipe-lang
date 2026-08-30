@@ -22,7 +22,8 @@
 -- first slot is a real Int — closing the long-standing Limitation
 -- #10 soundness hole.
 module Ipe.Dict exposing
-    ( empty
+    ( Dict
+    , empty
     , singleton
     , isEmpty, size
     , insert, update, get, remove, member
