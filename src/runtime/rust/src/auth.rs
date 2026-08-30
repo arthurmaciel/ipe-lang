@@ -35,7 +35,7 @@ fn dummy_bcrypt_hash() -> &'static str {
 // ─── Pure crypto kernels ──────────────────────────────────────────────
 
 /// Ipê `hashPassword : String -> Result Error String`. Bcrypt with default
-/// cost 12 (
+/// cost 12.
 pub fn auth_hash_password<E: From<String>>(pw: String) -> IpeResult<E, String> {
     auth_hash_password_cost(pw, 12)
 }

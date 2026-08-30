@@ -142,8 +142,8 @@ pub async fn api_metrics_summary() -> impl IntoResponse {
     (StatusCode::OK, [json_ct()], body)
 }
 
-/// Production auth gate for the console + metrics surface (
-/// `productionFromEnv` + `IPE_CONSOLE_AUTH`). Returns `Some(response)` when the
+/// Production auth gate for the console + metrics surface
+/// (`productionFromEnv` + `IPE_CONSOLE_AUTH`). Returns `Some(response)` when the
 /// request must be REFUSED. `IPE_CONSOLE_AUTH=off` → 404 (surface declared absent).
 /// In production (ENV/IPE_ENV non-dev) a `Bearer` admin token is required
 /// (`IPE_ADMIN_TOKEN`, legacy `IPE_CONSOLE_TOKEN`) — 401 otherwise. Dev mode (the
