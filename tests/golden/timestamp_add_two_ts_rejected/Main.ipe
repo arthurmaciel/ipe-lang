@@ -1,0 +1,28 @@
+module Main exposing (main)
+
+import Ipe.Io as Io
+import Ipe.Duration as Duration
+import Ipe.Time.Timestamp as Timestamp
+
+
+-- Negative: adding two Timestamps where a Duration is required is a type error.
+-- Timestamp.add expects (Duration -> Timestamp -> Timestamp); passing two
+-- Timestamps conflates instant with span.
+
+base : Timestamp.Timestamp
+base =
+    Timestamp.fromUnixMillis 1000000
+
+
+other : Timestamp.Timestamp
+other =
+    Timestamp.fromUnixMillis 2000000
+
+
+bad : Timestamp.Timestamp
+bad =
+    Timestamp.add other base
+
+
+main =
+    Io.println "should not compile"

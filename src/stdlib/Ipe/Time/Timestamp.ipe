@@ -1,0 +1,58 @@
+-- | Ipe.Time.Timestamp — an opaque instant in time (Layer 3 Ipe source).
+--
+-- A `Timestamp` represents a single point in time as milliseconds since the
+-- Unix epoch.  The ONLY way to build one is `fromUnixMillis` (any `Int` is a
+-- valid instant); the raw millisecond value is recovered for runtime kernels
+-- via `toUnixMillis`.
+--
+-- Because `Timestamp` and `Ipe.Duration` are distinct types, adding two
+-- instants together or subtracting a format-width from a clock read are
+-- type errors — only the operations that make semantic sense compile:
+-- `add` shifts an instant by a span; `diff` measures the span between two
+-- instants.
+module Ipe.Time.Timestamp exposing
+    ( Timestamp
+    , fromUnixMillis
+    , toUnixMillis
+    , add
+    , diff
+    )
+
+
+import Ipe.Duration as Duration exposing (Duration)
+
+
+-- | An opaque instant carried as whole milliseconds since the Unix epoch.
+-- The constructor is NOT exported, so no raw `Int` can accidentally stand in
+-- for a `Timestamp`.
+type Timestamp
+    = Timestamp Int
+
+
+-- | `fromUnixMillis ms` — the only `Timestamp` constructor.  Total: every `Int`
+-- represents a valid instant (negative values are instants before the epoch).
+fromUnixMillis : Int -> Timestamp
+fromUnixMillis ms =
+    Timestamp ms
+
+
+-- | `toUnixMillis t` — recover the raw millisecond value for runtime kernels.
+toUnixMillis : Timestamp -> Int
+toUnixMillis t =
+    case t of
+        Timestamp ms ->
+            ms
+
+
+-- | `add span t` — shift instant `t` forward by `span`.  A negative span
+-- (which `Duration` prevents by clamping to zero) results in `t` unchanged.
+add : Duration -> Timestamp -> Timestamp
+add span t =
+    Timestamp (toUnixMillis t + Duration.toMillis span)
+
+
+-- | `diff a b` — the `Duration` from instant `b` to instant `a`.  The result
+-- is clamped to zero when `b` is after `a` (preserving `Duration` non-negativity).
+diff : Timestamp -> Timestamp -> Duration
+diff a b =
+    Duration.millis (toUnixMillis a - toUnixMillis b)

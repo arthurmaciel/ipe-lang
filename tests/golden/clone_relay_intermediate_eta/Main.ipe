@@ -2,37 +2,33 @@ module Main exposing (main)
 
 import Ipe.Task as Task
 import Ipe.Time as Time
+import Ipe.Time.Timestamp as Timestamp
 import Ipe.Io as Io
 import Ipe.String
 
 
--- #218 SEAL breach: a let-bound function (`insertRow`) read ONLY at
--- lambda-nesting depth >= 2, through a pipeline-synthesized intermediate `move`
--- closure (`|> Task.andThen (\ts -> insertRow x ts)`) whose callback also
--- captures a NON-Copy enclosing-lambda param (`x : String`).
+-- SEAL: a let-bound function (`insertRow`) read ONLY at lambda-nesting depth
+-- >= 2, through a pipeline-synthesized intermediate `move` closure
+-- (`|> Task.andThen (\ts -> insertRow x ts)`) whose callback also captures a
+-- NON-Copy enclosing-lambda param (`x : String`).
 --
--- `needs_shared_capture` promotes `insertRow` to a `SharedLambda`
--- (`Arc<dyn Fn>`); the pipeline stage synthesizes a real intermediate closure
--- via `eta_expand_partial` because the non-Copy `x` pre-clone wrap defeats the
+-- `needs_shared_capture` promotes `insertRow` to a `SharedLambda`; the
+-- pipeline stage synthesizes a real intermediate closure via
+-- `eta_expand_partial` because the non-Copy `x` pre-clone wrap defeats the
 -- direct-call collapse. `wrap_shared_lambda_if_needed` used to decide
 -- `needs_wrap` on the PRE-recursion body via the lambda-opaque
--- `sym_referenced_directly`, so the intermediate closure — which reaches
--- `insertRow` only through a DEEPER lambda — never got its pre-clone and
--- move-captured `insertRow` out of the enclosing `Fn` env → E0507.
---
--- Pre-fix: ipec-0 but cargo E0507 "cannot move out of `insertRow`, a captured
--- variable in an `Fn` closure". Post-fix: recurse FIRST, decide on the
--- processed body — the pre-clone relays outward through every boundary.
+-- `sym_referenced_directly`, so the intermediate closure never got its
+-- pre-clone and move-captured `insertRow` out of the enclosing `Fn` env.
 save : String -> Task Error Int
 save n =
     let
-        insertRow x ts =
-            Task.succeed (String.length x + String.length n + ts)
+        insertRow x ms =
+            Task.succeed (String.length x + String.length n + ms)
 
         writeAll x =
             Task.succeed x
                 |> Task.andThen (\_ -> Time.unixMillis ())
-                |> Task.andThen (\ts -> insertRow x ts)
+                |> Task.andThen (\ts -> insertRow x (Timestamp.toUnixMillis ts))
     in
     Task.succeed "seed" |> Task.andThen writeAll
 
