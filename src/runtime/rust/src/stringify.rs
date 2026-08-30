@@ -1,29 +1,26 @@
 //! `IpeStringify` — the total Ipê value stringifier.
 //!
 //! Backs `Basics.errorToString` (and `Ipe.Test.debugShow`, which is just
-//! `errorToString v`).  `Basics_errorToString` returns a `String`
-//! verbatim, an `error`'s `.Error()` message, and `fmt.Sprintf("%v", v)`
-//! for everything else. The Rust backend mirrors `%v` EXACTLY but TOTALLY:
-//! every type reachable from a generic `errorToString` call implements this
-//! trait (runtime primitives below; every codegen-emitted record/ADT gets a
-//! `IpeStringify` impl from `src/Ipê/Generate/Rust/Builder/Emitter.hs`).
+//! `errorToString v`). Every type reachable from a generic `errorToString`
+//! call implements this trait (runtime primitives below; every codegen-emitted
+//! record/ADT gets an `IpeStringify` impl from the compiler's emitter).
 //!
 //! Why a trait, not `Debug`: `Debug` QUOTES a `String` (`"hi"`), diverging
-//! from  unquoted `hi`. A `Display` re-bind is not total (no codegen type
-//! emits `Display`). `IpeStringify` is the total, Go-faithful middle path.
+//! from unquoted `hi`. A `Display` re-bind is not total (no codegen type
+//! emits `Display`). `IpeStringify` is the total middle path.
 //!
 //! Totality contract: `ipe_show` NEVER panics — no `unwrap`/`expect`/indexing.
-//! A type with no meaningful `%v` analogue (function-typed fields) renders a
+//! A type with no meaningful string analogue (function-typed fields) renders a
 //! best-effort placeholder rather than failing.
 //!
-//! Go `%v` reference (verified against the Go toolchain):
-//! - `"hi"` -> `hi`            (string: unquoted)
-//! - `42` / `true` / `42.5`    -> Display
-//! - `[]int{1,2,3}`            -> `[1 2 3]`   (space-separated, NOT comma)
-//! - `[][]int{{1,2},{3,4}}`    -> `[[1 2] [3 4]]`
-//! - `T2{1,"a"}` (Ipê tuple)   -> `{1 a}`     (space-separated, no field names)
-//! - `R{1,"x"}` (Ipê record)   -> `{1 x}`     (fields in _fieldIndex order)
-//! - `map[string]int{...}`     -> `map[a:1 b:2]` (keys SORTED, space-separated)
+//! Rendering conventions:
+//! - String: unquoted (`"hi"` → `hi`)
+//! - Numbers/Bool: Display
+//! - List: space-separated in brackets (`[1 2 3]`)
+//! - Nested list: `[[1 2] [3 4]]`
+//! - Tuple: space-separated in braces (`{1 a}`)
+//! - Record: fields in `_fieldIndex` order, space-separated in braces
+//! - Dict: `map[k1:v1 k2:v2]` with keys SORTED, space-separated
 
 use crate::core::{IpeMaybe, IpeResult};
 use std::collections::HashMap;
@@ -68,8 +65,8 @@ pub trait IpeStringify {
 pub struct Wrap<T>(pub T);
 
 /// Higher-priority arm: a `Wrap<&T>` where `T: IpeStringify` renders via the
-/// trait (Go-`%v`-faithful — String unquoted, nested generated types via their
-/// own impl). Selected with ZERO autoref, so it beats the `Debug` fallback.
+/// trait (String unquoted, nested generated types via their own impl). Selected
+/// with ZERO autoref, so it beats the `Debug` fallback.
 #[doc(hidden)]
 pub trait ViaIpeStringify {
     fn dispatch(&self) -> String;
@@ -97,7 +94,7 @@ impl<T: core::fmt::Debug> ViaDebug for &Wrap<T> {
 // ─── Scalars ────────────────────────────────────────────────────────────────
 
 impl IpeStringify for String {
-    // Go: a String returns verbatim (UNQUOTED). This is the primary fix.
+    // A String returns verbatim (UNQUOTED).
     fn ipe_show(&self) -> String {
         self.clone()
     }
@@ -122,9 +119,9 @@ impl IpeStringify for f64 {
     // for the non-finite values. Rust's `f64::to_string` matches  `%f`
     // branch exactly (42.5 -> "42.5", 1.0 -> "1", 0.0001 -> "0.0001"), but
     // diverges on infinities (`inf`/`-inf`) and never emits exponent form
-    // (1e21 -> "1000000000000000000000" instead of  "1e+21"). Bridge the
+    // (1e21 -> "1000000000000000000000" instead of "1e+21"). Bridge the
     // gap totally: handle the non-finite cases, then reformat Rust's shortest
-    // scientific output to  `%g`-`%e` shape only when Go would use it.
+    // scientific output to `%g`-`%e` shape when needed.
     fn ipe_show(&self) -> String {
         let f = *self;
         if f.is_nan() {
@@ -137,13 +134,10 @@ impl IpeStringify for f64 {
         // no `+` and no zero-padding on the exponent (e.g. "1e21", "1.5e-5").
         let sci = format!("{f:e}");
         match sci.split_once('e') {
-            // Go uses exponent form iff exp < -4 || exp >= 6 (Go `'g'`
-            // shortest-mode cut), same threshold as string_from_float (see
-            // string.rs). Verified against Go 1.26.2 `fmt %v` ==
-            // `strconv.FormatFloat(f,'g',-1,64)`: 1e6 -> "1e+06", 1e15 ->
+            // Exponent form iff exp < -4 || exp >= 6 (shortest-mode cut, same
+            // as `strconv.FormatFloat(f,'g',-1,64)`): 1e6 -> "1e+06", 1e15 ->
             // "1e+15", 999999 -> "999999" (see reference-audit.md item 27 for
-            // the oracle probe). The `../ipe` reference uses 21 here, which
-            // diverges from the the spec on every 1e6..1e20 value.
+            // the oracle probe).
             Some((mantissa, exp_str)) => match exp_str.parse::<i32>() {
                 Ok(exp) if !(-4..6).contains(&exp) => {
                     //  `%e` exponent: explicit sign, minimum two digits.
@@ -193,7 +187,7 @@ impl<T: IpeStringify + ?Sized> IpeStringify for Box<T> {
 // ─── Lists ───────────────────────────────────────────────────────────────────
 
 impl<T: IpeStringify> IpeStringify for Vec<T> {
-    // Go slice `%v`: `[a b c]` — space-separated, square brackets, empty -> `[]`.
+    // List: space-separated, square brackets, empty -> `[]`.
     fn ipe_show(&self) -> String {
         let parts: Vec<String> = self.iter().map(IpeStringify::ipe_show).collect();
         format!("[{}]", parts.join(" "))
@@ -210,7 +204,7 @@ impl<T: IpeStringify> IpeStringify for [T] {
 // ─── Maps ────────────────────────────────────────────────────────────────────
 
 impl<K: IpeStringify + Ord, V: IpeStringify> IpeStringify for HashMap<K, V> {
-    // Go map `%v`: `map[k1:v1 k2:v2]` with keys SORTED, space-separated.
+    // Dict: `map[k1:v1 k2:v2]` with keys SORTED, space-separated.
     fn ipe_show(&self) -> String {
         let mut entries: Vec<(&K, &V)> = self.iter().collect();
         entries.sort_by(|a, b| a.0.cmp(b.0));
@@ -262,10 +256,7 @@ where
 // ─── Ipê core ADTs ───────────────────────────────────────────────────────────
 
 impl<T: IpeStringify> IpeStringify for IpeMaybe<T> {
-    // Go renders a Ipê `Maybe` (a flattened-struct ADT) with a leaked layout
-    // (`{tag payload}` + zero-init inactive fields) that a Rust enum cannot
-    // reproduce. Best-effort, total, and human-useful: `Just <v>` / `Nothing`.
-    // Documented residual: NOT byte-identical to  ADT `%v` (see module doc).
+    // Best-effort, total, human-useful: `Just <v>` / `Nothing`.
     fn ipe_show(&self) -> String {
         match self {
             IpeMaybe::Just(v) => format!("Just {}", v.ipe_show()),
@@ -307,18 +298,16 @@ impl IpeStringify for crate::decimal::Decimal {
 // form was an E0433 `unresolved crate serde_json` on default features).
 #[cfg(feature = "json")]
 impl IpeStringify for serde_json::Value {
-    // Best-effort, total: the compact JSON text. Not  flattened-struct `%v`
-    // layout (a JSON value has no Go-struct analogue), but human-useful and never
-    // panics. `to_string` on serde_json::Value is infallible.
+    // Best-effort, total: compact JSON text — human-useful and never panics.
+    // `to_string` on `serde_json::Value` is infallible.
     fn ipe_show(&self) -> String {
         self.to_string()
     }
 }
 
 // NB: `IpeError` is `type IpeError = String` (see config.rs), so it stringifies
-// through the `String` impl above — rendering its message verbatim, exactly
-// like  `error.Error()` branch in `Basics_errorToString`. No separate impl
-// is needed (and a separate one would conflict with the `String` impl).
+// through the `String` impl above — rendering its message verbatim. No separate
+// impl is needed (and a separate one would conflict with the `String` impl).
 
 #[cfg(test)]
 mod tests {
@@ -355,9 +344,8 @@ mod tests {
 
     #[test]
     fn float_go_v_parity() {
-        // Byte-for-byte parity with Go `fmt %v` == `strconv.FormatFloat(f,'g',-1,64)`.
-        // Oracle: Go 1.26.2 `go run probe.go` (see reference-audit.md item 27). The cut
-        // to scientific notation is a FLAT decimal-exponent >= 6 (and < -4), NOT 21.
+        // `strconv.FormatFloat(f,'g',-1,64)` format. The cut to scientific
+        // notation is a FLAT decimal-exponent >= 6 (and < -4), NOT 21.
         // Positional class (exp in [-4, 6)):
         assert_eq!(99999.0f64.ipe_show(), "99999"); // exp 4
         assert_eq!(1e5f64.ipe_show(), "100000"); // exp 5
@@ -373,7 +361,7 @@ mod tests {
         assert_eq!(1e21f64.ipe_show(), "1e+21");
         // Scientific class (exp <= -5):
         assert_eq!(1e-5f64.ipe_show(), "1e-05");
-        // Negative zero (shared positional branch): Go true -0.0 -> "-0".
+        // Negative zero: -0.0 -> "-0".
         assert_eq!((-0.0f64).ipe_show(), "-0");
         // Non-finite (shared branch):
         assert_eq!(f64::INFINITY.ipe_show(), "+Inf");
@@ -463,7 +451,7 @@ mod tests {
     }
 
     // (c) A generated-style struct whose impl renders fields via the dispatch:
-    // its String field renders unquoted INSIDE the `{...}` Go-`%v` wrap.
+    // its String field renders unquoted INSIDE the `{...}` wrap.
     struct GenStruct {
         name: String,
         debug_only: OnlyDebug,

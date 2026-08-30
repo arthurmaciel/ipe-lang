@@ -80,38 +80,38 @@ pub fn ipe_int_mul(a: i64, b: i64) -> i64 {
 
 /// Integer division for Ipê's `//` operator.
 ///
-/// Parity target: Ipê-Go `rt.IntDiv` (``).
+/// Integer division for Ipê's `//` operator.
 ///
 /// Two cases the bare Rust `a / b` cannot handle on `i64`:
 ///
-/// 1. `b == 0` — Rust panics "attempt to divide by zero"; Ipê-Go also panics
-///    (`panic("rt.IntDiv: integer division by zero")`), classified as
-///    `DivisionByZero` by the top-level recover and exits 101. We reproduce
-///    the **panic** deliberately (not a silent 0): a `panic!` here carries the
-///    standard "attempt to divide by zero" message so the process's panic
-///    handler classifies it identically (`exit 101, empty stdout`), matching
-///    the `intdiv_by_zero_aborts_exit_101` golden.
+/// 1. `b == 0` — Rust panics "attempt to divide by zero", which is classified
+///    as `DivisionByZero` and exits 101. We reproduce the **panic** deliberately
+///    (not a silent 0): a `panic!` here carries the standard "attempt to divide
+///    by zero" message so the process's panic handler classifies it identically
+///    (`exit 101, empty stdout`), matching the `intdiv_by_zero_aborts_exit_101`
+///    golden.
 ///
 ///    NOTE: Elm's `5 // 0 == 0` (returns 0) is a different design choice and
-///    is **not** this port's target. Diverging from Ipê-Go to Elm-0 requires
-///    an explicit `sanctioned.divergence` marker — never an implementer's call.
+///    is **not** this port's target. Diverging from Ipê integer division to
+///    Elm-0 requires an explicit `sanctioned.divergence` marker — never an
+///    implementer's call.
 ///
 /// 2. `i64::MIN / -1` — Rust panics "attempt to divide with overflow" even
 ///    when `overflow-checks = false`, because this is an unconditional hardware
-///    trap on x86-64. Ipê-Go uses two's-complement Go integer arithmetic and
-///    returns `i64::MIN` (wraps silently). `wrapping_div` reproduces that.
+///    trap on x86-64. Ipê uses two's-complement integer arithmetic and returns
+///    `i64::MIN` (wraps silently). `wrapping_div` reproduces that.
 ///
 /// For every other `(a, b)` pair the result is identical to `a / b` (truncate
-/// toward zero — Go spec, Elm spec, Rust `wrapping_div` all agree).
+/// toward zero — Elm spec, Rust `wrapping_div`).
 ///
 /// # Panics
 ///
-/// Panics when `b == 0`, mirroring the Ipê integer division-by-zero abort.
+/// Panics when `b == 0`, triggering the Ipê integer division-by-zero abort.
 //
 // `clippy::panic` is suppressed here deliberately: this panic IS the
-// DivisionByZero abort that Ipê-Go models. The lint exists to prevent
-// accidental panics; this is a classified, tested, intentional one. The
-// `intdiv_by_zero_aborts_exit_101` golden verifies exit 101 / empty stdout.
+// DivisionByZero abort. The lint exists to prevent accidental panics; this is
+// a classified, tested, intentional one. The `intdiv_by_zero_aborts_exit_101`
+// golden verifies exit 101 / empty stdout.
 #[allow(clippy::panic)]
 #[must_use]
 pub fn ipe_int_div(a: i64, b: i64) -> i64 {
@@ -120,11 +120,10 @@ pub fn ipe_int_div(a: i64, b: i64) -> i64 {
     a.wrapping_div(b)
 }
 
-// CONTRACT (documented deliberately): `min`/`max` use a real
-// `PartialOrd` compare. For floats this tracks the TYPED Go path (`Math_minT`),
-// NOT  polymorphic any-path (which routes floats through `AsInt` and compares
-// truncated ints) — the typed compare is the correct one. NaN tie-break is fixed
-// and total: `min(NaN, x)` / `max(NaN, x)` return the SECOND argument (`<=`/`>=`
+// CONTRACT (documented deliberately): `min`/`max` use a real `PartialOrd`
+// compare on the typed values — not a polymorphic any-path that routes floats
+// through `AsInt` and compares truncated ints. NaN tie-break is fixed and
+// total: `min(NaN, x)` / `max(NaN, x)` return the SECOND argument (`<=`/`>=`
 // is false for any NaN), never panic.
 pub fn math_min<T: PartialOrd>(a: T, b: T) -> T {
     if a <= b { a } else { b }
@@ -142,12 +141,10 @@ pub fn math_pow(base: f64, exp: f64) -> f64 {
     base.powf(exp)
 }
 
-// CONTRACT (documented deliberately): the `as i64` float→int
-// casts SATURATE by Rust's definition — NaN → 0, +∞ → i64::MAX, −∞ → i64::MIN,
-// out-of-range finite → the nearest bound. This is TOTAL (never panics/UB) and is
-// the deliberate contract;  `int64(math.Floor(x))` on the same extreme inputs
-// is implementation-defined (not a well-defined parity target), so we pin the
-// safe saturating behaviour rather than chase undefined Go output.
+// CONTRACT (documented deliberately): the `as i64` float→int casts SATURATE
+// by Rust's definition — NaN → 0, +∞ → i64::MAX, −∞ → i64::MIN, out-of-range
+// finite → the nearest bound. This is TOTAL (never panics/UB) and is the
+// deliberate contract, pinning safe saturating behaviour for all edge inputs.
 #[must_use]
 pub fn math_floor(x: f64) -> i64 {
     x.floor() as i64
@@ -398,7 +395,6 @@ mod tests {
 
     #[test]
     fn test_math_phi() {
-        // Go: math.Phi = 1.618033988749895
         let phi = math_phi();
         assert!((phi - 1.618_033_988_749_895_f64).abs() < 1e-14);
     }
@@ -437,7 +433,6 @@ mod tests {
     // 1.5 is exactly representable; these are the exact the spec values.
     #[allow(clippy::float_cmp)]
     fn test_math_mod() {
-        // Go: math.Mod(5.5, 2.0) = 1.5  (sign of dividend)
         assert_eq!(math_mod(5.5, 2.0), 1.5);
         assert_eq!(math_mod(-5.5, 2.0), -1.5); // sign of dividend
         assert_eq!(math_mod(5.5, -2.0), 1.5);
@@ -445,7 +440,6 @@ mod tests {
 
     #[test]
     fn test_math_remainder() {
-        // Go: math.Remainder(5.5, 2.0) = -0.5  (IEEE 754 balanced)
         let r = math_remainder(5.5, 2.0);
         assert!((r - (-0.5_f64)).abs() < 1e-14, "expected -0.5, got {r}");
         // round_ties_even: x/y = 2.75 → nearest even integer = 2, so 5.5 - 2*2.0 = 1.5
