@@ -2240,9 +2240,8 @@ pub enum StdlibKernel {
     // ── Ipe.Ui.Lazy ────────────────────────────────────────────────────
     /// `Lazy.lazy : (a -> Element msg) -> a -> Element msg`
     ///
-    /// **Eager in v1.** Ipê's Go runtime memoises the subtree; Ipê evaluates
-    /// immediately (no keyed LRU available before the TEA diff layer).  The
-    /// divergence is recorded in `misc/docs/divergences-from-sky.md` §B-Lazy.
+    /// **Eager in v1.** The Rust runtime evaluates immediately — no keyed LRU
+    /// memoisation before the TEA diff layer is available yet.
     LazyLazy,
     /// `Lazy.lazy2 : (a -> b -> Element msg) -> a -> b -> Element msg` (eager)
     LazyLazy2,

@@ -11,10 +11,9 @@
 -- `Just` its ordered captures, an unmatched `Url` yields `Nothing`, never a
 -- partial or ambiguous match.
 --
--- Divergence from `elm/url` (recorded in `misc/docs/divergences-from-elm.md`): Elm
--- threads a continuation FUNCTION through the parser to build the route value
--- INSIDE the parser (`</>` / `<?>` / `map` / `oneOf` over a function-carrying
--- `Parser a b`).  The Rust backend stores a function value only in a union
+-- Sanctioned divergence from Elm/url: Elm threads a continuation FUNCTION
+-- through the parser to build the route value INSIDE the parser (`</>`
+-- / `<?>` / `map` / `oneOf` over a function-carrying `Parser a b`).  The Rust backend stores a function value only in a union
 -- payload — never a record field (IPE-L0107), never forwarded through a closure
 -- capture (IPE-L0126), and never in a list walked by value (a non-`Clone`
 -- element forces a clone) — so a router that carries builders through a

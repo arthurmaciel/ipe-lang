@@ -209,10 +209,9 @@ pub fn emit_web_call(
 ///
 /// * Anything else — fail CLOSED (see the final arm).
 ///
-/// Parity note: the reference backend assumes all payloads are String
-/// (`ExprEmitter.hs:1823`). The type-directed path is a sanctioned divergence —
-/// strictly safer (catches Int/Float/Bool mismatches at compile time instead
-/// of emitting E0308). See `misc/docs/divergences-from-sky.md` §B-route-param.
+/// Parity note: the type-directed path is a sanctioned divergence — strictly
+/// safer because it catches `Int`/`Float`/`Bool` payload-type mismatches at
+/// compile time instead of emitting E0308.
 fn emit_web_route(
     ctx: &EmitCtx,
     args: &[Expr],
@@ -543,9 +542,9 @@ fn emit_web_app_inner(
 /// | `Bool`    | `params.get({i})?.parse::<bool>().ok()?` |
 /// | other     | compile-time error (unsupported payload type) |
 ///
-/// This is a sanctioned divergence from the Go/Haskell reference, which assumes
-/// all route payloads are `String` and silently substitutes zero-values on
-/// decode failure. See `misc/docs/divergences-from-sky.md §B-route-param`.
+/// This is a sanctioned divergence: a route payload that fails to decode into
+/// the declared type returns `None` (fall-through to `not_found`) rather than
+/// silently substituting a zero-value.
 fn route_param_get(field_ty: &IrType, i: usize) -> DResult<String> {
     Ok(match field_ty {
         IrType::Str => format!("params.get({i}).cloned()?"),

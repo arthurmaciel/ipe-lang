@@ -9,8 +9,8 @@ Much of the standard library is wired as native kernels by default. Every native
 function enlarges the audited/attack surface and the recompile cost: adding a
 currency to `Money` today rebuilds the compiler, because the currency table is a
 Rust `match`. Two independent analyses converged on the same dividing line — the
-stdlib placement note (`misc/stdlib-kernel-vs-library.md`) from the `Money`
-example, and the UI-emit-split design (§3) from the `Ui`/`Html` builders, whose
+`Money` currency-table case (a per-module placement study) and the UI-emit-split
+design (§3) from the `Ui`/`Html` builders, whose
 "does the kernel buy a speedup? no" measurement showed the builders are cold
 allocation, not a throughput primitive. This ADR makes that line a decision and
 adds two refinements surfaced in review.
@@ -79,9 +79,7 @@ just data and only rendering is a defense.
   ubiquitous and stay native until benchmarked; only their cold formatting/
   display helpers are candidates. The types themselves stay core.
 
-Supersedes `misc/stdlib-kernel-vs-library.md` (promote its per-module table under
-this decision; reclassify `CssSafety` from package to native per the
-security-defense test, and audit `Markdown`→HTML and `Path` for the same).
+This decision supersedes the earlier per-module placement study; it promotes that study's conclusions here, reclassifies `CssSafety` from package to native per the security-defense test, and extends the audit to `Markdown`→HTML and `Path`.
 
 ## Conventions
 

@@ -20,10 +20,9 @@ onClick m = Ui.onClick m
 -- Divergence from upstream Ipe: the Rust `Ui.onSubmit` kernel is
 -- `(a -> msg) -> Attribute msg` — it takes a form-decoder function
 -- (the typed-record-arg pattern `onSubmit DoSignIn`, where
--- `DoSignIn : LoginForm -> Msg`). Upstream Ipe's `onSubmit` is the
--- permissive `a -> Attribute b`; this re-export mirrors the Rust
--- kernel's function-arg contract so the wrapper type-checks against
--- it (recorded in misc/docs/divergences-from-sky.md).
+-- `DoSignIn : LoginForm -> Msg`). The permissive `a -> Attribute b` form is
+-- not used here; this re-export mirrors the Rust kernel's function-arg
+-- contract so the wrapper type-checks against it.
 onSubmit : (a -> msg) -> Ui.Attribute msg
 onSubmit m = Ui.onSubmit m
 

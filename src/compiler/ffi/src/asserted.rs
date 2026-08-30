@@ -4,8 +4,7 @@
 //! and emits its two artifacts — the `Rust.Ffi` interface module and the
 //! `_bindings.rs` shim region.
 //!
-//! The discipline (design §5.2 of `misc/docs/internals/design/ffi-to-rust.md`): the
-//! escape hatch skips ceremony, never soundness. The path is a parsed
+//! The discipline: the escape hatch skips ceremony, never soundness. The path is a parsed
 //! [`ipe_canon::asserted::AssertedPath`], never text; the signature may only
 //! name carriers the boundary already admits; the shim carries the asserted
 //! types verbatim under the **exact-carrier rule** — this module never calls

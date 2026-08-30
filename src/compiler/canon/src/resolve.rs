@@ -6712,10 +6712,9 @@ fn resolve_simple_interp_ref(
     // `String.fromInt 54` and prints "54". This must precede the `.`-split
     // below, else a float like `1.5` is mis-parsed as `Access(1, 5)`.
     //
-    // Divergence from ../ipe: `resolveInterpolationRef` lacks literal handling
-    // and would surface `54` as a `VarLocal` → naming error. Recognising the
-    // literal is strictly better (a well-typed program compiles instead of
-    // ICE-ing). Recorded in misc/docs/divergences-from-sky.md.
+    // Sanctioned divergence: recognising numeric literals inside string
+    // interpolation (`\{54}`) is strictly better — a well-typed program
+    // compiles instead of ICE-ing on a spurious naming error.
     if s.starts_with(|c: char| c.is_ascii_digit()) {
         if let Ok(n) = s.parse::<i64>() {
             return Ok(Located::new(span, canon::Expr_::Int(n)));

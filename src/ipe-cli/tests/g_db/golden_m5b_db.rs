@@ -613,11 +613,9 @@ fn db_find_by_field() {
 /// scheme, `ipe_lower` arity-1 dispatch, `ipe_backend_rust` standard-path
 /// emit, `ipe_ir` pretty-print.
 ///
-/// Sanctioned divergence (tagged `divergence`, not `sanctioned`): the Rust
-/// backend's `Db.Decode.money` returns `Decoder (Decimal, String)`, not the
-/// Go backend's `Decoder Money` — `Money`/`Currency` are project-generated
-/// Rust types unnameable from the shared runtime crate. See
-/// `misc/docs/divergences-from-sky.md` (`B-DbDecMoney`).
+/// Sanctioned divergence: the Rust backend's `Db.Decode.money` returns
+/// `Decoder (Decimal, String)` — `Money`/`Currency` are project-generated
+/// Rust types unnameable from the shared runtime crate.
 #[test]
 fn db_decode_money() {
     assert_runs_and_matches_oracle("db_decode_money");

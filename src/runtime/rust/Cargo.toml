@@ -55,7 +55,8 @@ lettre = { version = "0.11", default-features = false, features = ["builder", "h
 # `rustls-tls-webpki-roots`: enables `MaybeTlsStream::Rustls` so `wss://`
 # connections use the same rustls backend as reqwest/sqlx/lettre — no native
 # TLS dependency added. The `native-tls` feature is deliberately NOT listed;
-# see `misc/docs/divergences-from-sky.md §B-WS-TLS` for the rationale.
+# rustls is the sole TLS backend to keep the trust store and cipher-suite
+# selection uniform across all network subsystems.
 tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"], optional = true }
 futures-util = { version = "0.3", optional = true }
 # The floor types (`IpeMaybe`/`IpeResult` in `core.rs`, the `IpeError` family in

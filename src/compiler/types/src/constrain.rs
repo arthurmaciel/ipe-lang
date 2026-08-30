@@ -6619,8 +6619,8 @@ impl<'a> Builder<'a> {
             // pair. Deliberately NOT `Decoder Money`: `Money`/`Currency` are
             // project-generated types unnameable from this crate (see
             // `docs/adr/0013-multi-driver-db-compile-time-selection.md`) — a
-            // recorded divergence from the Go backend's `Decoder Money`,
-            // documented in `misc/docs/divergences-from-sky.md`.
+            // sanctioned divergence; `Decoder (Decimal, String)` is the
+            // representable alternative.
             K::DbDecMoney => fun(string(), dec(tuple2(decimal(), string()))),
             // `Db.Decode.decimal : String -> Decoder Decimal` — reads an exact-decimal
             // TEXT column. FIRST_SCHEMED (Ipê-new, no legacy oracle).
@@ -7271,13 +7271,12 @@ impl<'a> Builder<'a> {
 
             // Ui.breakpoint + Breakpoint constants.
             //
-            // Sanctioned divergence from Ipê Go: `Breakpoint` is typed as
-            // `String` in the Rust port rather than as a distinct opaque type
-            // (see `misc/docs/divergences-from-sky.md` §B-Breakpoint).  Users cannot
-            // fabricate arbitrary `Breakpoint` values because all constructors
-            // (`mobile`, `tablet`, …) are kernels whose schemes return `string()`;
-            // the only type-safety gap vs. the Go backend is that a plain `String`
-            // literal would also unify — an accepted limitation.
+            // Sanctioned divergence: `Breakpoint` is typed as `String` rather
+            // than as a distinct opaque type.  Users cannot fabricate arbitrary
+            // `Breakpoint` values because all constructors (`mobile`,
+            // `tablet`, …) are kernels whose schemes return `string()`; the only
+            // type-safety gap is that a plain `String` literal would also unify —
+            // an accepted limitation.
             //
             // `Ui.breakpoint : String -> List (Attribute msg) -> Element msg -> Element msg`
             // `Ui.mediaQuery : String -> List (Attribute msg) -> Element msg -> Element msg`
