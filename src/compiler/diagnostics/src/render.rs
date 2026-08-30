@@ -482,6 +482,11 @@ fn name_prose(msg: &NameError) -> String {
              which kind of `main` you meant."
                 .to_string()
         }
+        NameError::RuntimeBranchedMain => {
+            "This `main` decides at run time which kind of app it is, but that has to be \
+             decided up front — one `main`, one shape."
+                .to_string()
+        }
         NameError::WrongShapeCmdSub(_) => {
             "This `Cmd` / `Sub` belongs to a different app shape than the one you're building."
                 .to_string()
@@ -1396,6 +1401,16 @@ fn name_label(msg: &NameError) -> Option<String> {
              `Terminal.appLines` / `WebView.app`), or drop the `{module}` import \
              if this is a Program"
         )),
+        NameError::RuntimeBranchedMain => Some(
+            "`main`'s head is an `if` / `case` whose branches are different app \
+             entries, so which shape this program is would be decided at run time; \
+             a program's shape is pinned by the entry head at compile time, not \
+             chosen from a value. Commit `main` to one shape entry (`Web.app` / \
+             `Terminal.appScreen` / `Terminal.appLines` / `WebView.app`), and put \
+             any run-time choice inside that shape (in its `init` / `update`), or \
+             — for a plain program — make `main` a `Task Error ()`"
+                .to_string(),
+        ),
         NameError::WrongShapeCmdSub(m) => Some(format!(
             "`{}` is the {} shape's `Cmd` / `Sub`, but this \
              is a {} app; import `{}` instead",

@@ -1282,6 +1282,7 @@ pub fn canonicalise_module_in_project(
     // `Ipe.Web.Console` helpers are static and never import a shape, and only
     // USER modules are subject to the Program/TEA distinction.
     if origin == ModuleOrigin::User {
+        check_main_not_runtime_branched(&canon_mod, interner)?;
         check_program_tea_import_gate(m, &canon_mod, interner)?;
         check_cross_shape_cmd_sub_gate(m, &canon_mod, interner)?;
         // Thread a sibling top-level `config` binding into the app entry
@@ -1484,6 +1485,112 @@ const TEA_APP_ENTRIES: &[(&str, &str)] = &[
     ("Terminal", "appLines"),
     ("WebView", "app"),
 ];
+
+/// IPE-N0045: reject a `main` that selects its shape at run time.
+///
+/// A program's shape is pinned by the head of `main` at compile time (§ static
+/// pinning): `main = Web.app …` is a web app, `main = Terminal.appScreen …` a
+/// terminal app, a `Task Error ()` `main` a script. It is never chosen from a
+/// value, so a `main` whose head — after peeling application / `let` / `\… ->`,
+/// exactly as the shape classifier peels it — is an `if` or `case` with a branch
+/// that reaches an app entry is a run-time shape choice, refused here.
+///
+/// Only a branch that reaches a shape entry trips this. A plain program whose
+/// `main` is a `Task` computed through an `if` / `case` (no branch heads on an
+/// app entry) is a normal script and passes — the branch selects a *value*, not
+/// a *shape*. This runs before [`check_program_tea_import_gate`] so a
+/// shape-branching `main` gets this precise diagnostic rather than the coarser
+/// Program-imports-a-shape one.
+///
+/// # Errors
+/// [`Diagnostic::Name`] (IPE-N0045) at the branching head when `main` selects a
+/// shape at run time.
+fn check_main_not_runtime_branched(canon_mod: &canon::Module, interner: &Interner) -> DResult<()> {
+    let Some(main_sym) = interner.lookup("main") else {
+        return Ok(()); // `main` never interned → this module cannot name one.
+    };
+    let Some(main_def) = canon_mod.defs.iter().find(|d| d.name().value == main_sym) else {
+        return Ok(()); // helper module with no `main` — not an entry.
+    };
+    let body = match main_def {
+        canon::Def::Untyped { body, .. } | canon::Def::Typed { body, .. } => body,
+    };
+    // Peel to the head the shape classifier reads, keeping the located node so a
+    // rejection blames the branching head itself.
+    let mut node = body;
+    loop {
+        match &node.value {
+            canon::Expr_::Call(callee, _) => node = callee,
+            canon::Expr_::Lambda(_, inner) | canon::Expr_::Let(_, inner) => node = inner,
+            canon::Expr_::If(arms, else_) => {
+                let any_shape = arms
+                    .iter()
+                    .map(|(_, branch)| branch)
+                    .chain(std::iter::once(else_.as_ref()))
+                    .any(|branch| branch_head_reaches_tea_entry(branch, interner));
+                return if any_shape {
+                    Err(Diagnostic::Name {
+                        span: node.span,
+                        msg: NameError::RuntimeBranchedMain,
+                    })
+                } else {
+                    Ok(())
+                };
+            }
+            canon::Expr_::Case(_, branches) => {
+                let any_shape = branches
+                    .iter()
+                    .any(|b| branch_head_reaches_tea_entry(&b.body, interner));
+                return if any_shape {
+                    Err(Diagnostic::Name {
+                        span: node.span,
+                        msg: NameError::RuntimeBranchedMain,
+                    })
+                } else {
+                    Ok(())
+                };
+            }
+            _ => return Ok(()),
+        }
+    }
+}
+
+/// Does a branch of `main`'s `if` / `case` head-reach a TEA app entry?
+///
+/// Peels the same forms as the shape classifier (application / `let` / `\… ->`)
+/// and, for a nested `if` / `case`, recurses into every sub-branch — so
+/// `if a then Web.app c else if b then Cli … else …` is caught at any depth. A
+/// branch whose head is a plain expression (a `Task`, a value) reaches no entry
+/// and does not, on its own, mark the `main` a shape choice.
+fn branch_head_reaches_tea_entry(branch: &canon::Expr, interner: &Interner) -> bool {
+    let mut node = branch;
+    loop {
+        match &node.value {
+            canon::Expr_::Call(callee, _) => node = callee,
+            canon::Expr_::Lambda(_, inner) | canon::Expr_::Let(_, inner) => node = inner,
+            canon::Expr_::If(arms, else_) => {
+                return arms
+                    .iter()
+                    .map(|(_, inner)| inner)
+                    .chain(std::iter::once(else_.as_ref()))
+                    .any(|inner| branch_head_reaches_tea_entry(inner, interner));
+            }
+            canon::Expr_::Case(_, sub) => {
+                return sub
+                    .iter()
+                    .any(|b| branch_head_reaches_tea_entry(&b.body, interner));
+            }
+            canon::Expr_::VarKernel { module, name, .. } => {
+                let (Some(m), Some(n)) = (interner.resolve(*module), interner.resolve(*name))
+                else {
+                    return false;
+                };
+                return TEA_APP_ENTRIES.contains(&(m, n));
+            }
+            _ => return false,
+        }
+    }
+}
 
 /// IPE-N0033: reject a Program (plain-`main` module) that imports any
 /// `Ipe.Tea.*` shape module.

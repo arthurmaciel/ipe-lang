@@ -3096,6 +3096,94 @@ mod tests {
     }
 
     #[test]
+    fn main_branching_between_shapes_is_rejected_n0045() {
+        // A `main` whose head is an `if` choosing between two app entries selects
+        // its shape at run time — refused (static pinning). This precise gate
+        // fires ahead of the coarser IPE-N0033 import contradiction.
+        let src = "module Main exposing (main)\n\
+                   import Ipe.Tea.Web as Web\n\
+                   import Ipe.Tea.Terminal as Terminal\n\n\
+                   flag = True\n\
+                   cfg = 0\n\n\
+                   main =\n    if flag then\n        Web.app cfg\n    else\n        Terminal.appScreen cfg\n";
+        assert!(
+            matches!(
+                canon_module_err(src),
+                Some(Diagnostic::Name {
+                    msg: NameError::RuntimeBranchedMain,
+                    ..
+                })
+            ),
+            "a `main` that picks its shape from an `if` must be rejected IPE-N0045"
+        );
+    }
+
+    #[test]
+    fn main_case_branching_to_a_shape_entry_is_rejected_n0045() {
+        // The `case` head is the other run-time shape choice; one branch reaching
+        // an app entry is enough to make the shape a value, so it is refused.
+        let src = "module Main exposing (main)\n\
+                   import Ipe.Tea.Web as Web\n\n\
+                   mode = 0\n\
+                   cfg = 0\n\n\
+                   main =\n    case mode of\n        first ->\n            Web.app cfg\n";
+        assert!(
+            matches!(
+                canon_module_err(src),
+                Some(Diagnostic::Name {
+                    msg: NameError::RuntimeBranchedMain,
+                    ..
+                })
+            ),
+            "a `main` that picks its shape from a `case` must be rejected IPE-N0045"
+        );
+    }
+
+    #[test]
+    fn main_nested_if_reaching_a_shape_entry_is_rejected_n0045() {
+        // The branch peeler recurses, so an app entry nested in an `else if` is
+        // still caught — the shape choice cannot hide one level down.
+        let src = "module Main exposing (main)\n\
+                   import Ipe.Tea.Web as Web\n\n\
+                   a = True\n\
+                   b = True\n\
+                   cfg = 0\n\n\
+                   main =\n    if a then\n        Web.app cfg\n    else if b then\n        Web.app cfg\n    else\n        Web.app cfg\n";
+        assert!(
+            matches!(
+                canon_module_err(src),
+                Some(Diagnostic::Name {
+                    msg: NameError::RuntimeBranchedMain,
+                    ..
+                })
+            ),
+            "an app entry nested under `else if` must still be rejected IPE-N0045"
+        );
+    }
+
+    #[test]
+    fn plain_task_main_branching_on_a_value_is_not_a_shape_choice() {
+        // A script's `main` is ONE shape (Script) no matter what its `Task`
+        // computes: branching on a value inside a `Task Error ()` `main` selects a
+        // value, not a shape, and must NOT trip IPE-N0045.
+        let src = "module Main exposing (main)\n\
+                   import Ipe.Io as Io\n\n\
+                   flag = True\n\n\
+                   main =\n    if flag then\n        Io.println \"a\"\n    else\n        Io.println \"b\"\n";
+        assert!(
+            !matches!(
+                canon_module_err(src),
+                Some(Diagnostic::Name {
+                    msg: NameError::RuntimeBranchedMain,
+                    ..
+                })
+            ),
+            "a plain `Task`-valued `main` branching on a value is a script, not a \
+             run-time shape choice — it must NOT trip IPE-N0045"
+        );
+    }
+
+    #[test]
     fn helper_submodule_without_main_importing_tea_shape_is_not_gated_n0033() {
         // The Program/TEA distinction is only about an ENTRY module (one that
         // defines `main`). A helper submodule with no `main` that imports
