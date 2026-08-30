@@ -55,8 +55,8 @@ showDivision a b =
 Use a custom `type` for your error, not `String`. A `String` error loses
 the structure that lets callers handle each failure mode differently:
 
-```ipe ipe:error
--- Too weak: callers cannot distinguish error kinds
+```ipe ipe:skip
+-- Illustrative anti-pattern: compiles, but callers cannot distinguish error kinds
 safeDivide : Int -> Int -> Result String Int
 safeDivide a b =
     if b == 0 then Err "division by zero" else Ok (a // b)

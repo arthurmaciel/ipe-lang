@@ -75,7 +75,8 @@ decision, not a limitation to work around. The reason: if behaviour can differ
 because a function stored in a field differs, you need to track which function
 is there — and that tracking is exactly what a union type does, more safely:
 
-```ipe ipe:error
+```ipe ipe:skip
+-- Illustrative: IPE-L0107 (function in record field) is a project-build gate, not a standalone type error
 -- Wrong: function in a record field
 type alias Handler =
     { onEvent : String -> String }
