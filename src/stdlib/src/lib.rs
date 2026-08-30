@@ -66,7 +66,13 @@ const IO: &str = include_str!("../Ipe/Io.ipe");
 /// `MODULES`); NOT in `STDLIB_MODULE_QUALIFIERS`, so the disjointness
 /// invariant holds.
 const DEBUG: &str = include_str!("../Ipe/Debug.ipe");
-/// `Ipe.Time` — time effect kernels.
+/// `Ipe.Time` — clock + formatting + calendar helpers, compiled-source Layer-3.
+///
+/// Every member is a point-free `Ffi.kernel "Time_*"` alias resolved by
+/// `ipe_canon::resolve::detect_kernel_alias` to a registered `Time*`
+/// `StdlibKernel` variant. Registered in [`COMPILED_STD_MODULES`] (NOT
+/// `MODULES`); NOT in `STDLIB_MODULE_QUALIFIERS`, so the disjointness
+/// invariant holds.
 const TIME: &str = include_str!("../Ipe/Time.ipe");
 /// `Ipe.System` — process / environment effect kernels.
 const SYSTEM: &str = include_str!("../Ipe/System.ipe");
@@ -280,10 +286,6 @@ pub const MODULES: &[StdModule] = &[
     StdModule {
         name: "Ipe.Io",
         source: IO,
-    },
-    StdModule {
-        name: "Ipe.Time",
-        source: TIME,
     },
     StdModule {
         name: "Ipe.System",
@@ -704,6 +706,14 @@ pub const COMPILED_STD_MODULES: &[CompiledStdModule] = &[
     CompiledStdModule {
         dotted: "Ipe.Debug",
         source: DEBUG,
+    },
+    // Ipe.Time — Layer-3 source; every member is a point-free
+    // `Ffi.kernel "Time_*"` alias resolved by `detect_kernel_alias` to the
+    // registered `Time*` kernels. Disjoint from `STDLIB_MODULE_QUALIFIERS`
+    // (no `"Time"` entry there).
+    CompiledStdModule {
+        dotted: "Ipe.Time",
+        source: TIME,
     },
     CompiledStdModule {
         dotted: "Ipe.Random",
