@@ -160,6 +160,9 @@ pub struct WatchOptions {
     /// Optional lifecycle observer — see [`WatchEvent`]. `None` on the CLI
     /// path.
     pub on_event: Option<Arc<dyn Fn(WatchEvent) + Send + Sync>>,
+    /// Suppress progress chatter — only warnings and errors are printed.
+    /// Passes `-q` to cargo and skips the lifecycle status lines.
+    pub quiet: bool,
 }
 
 impl WatchOptions {
@@ -174,6 +177,7 @@ impl WatchOptions {
             restart_timeouts: ipe_watch::RestartTimeouts::default(),
             cargo_path: PathBuf::from("cargo"),
             on_event: None,
+            quiet: false,
         }
     }
 }
@@ -182,6 +186,33 @@ fn emit(opts: &WatchOptions, event: WatchEvent) {
     if let Some(cb) = &opts.on_event {
         cb(event);
     }
+}
+
+/// Render a watch lifecycle line with 2-space gutter and optional colour.
+/// `role` selects the semantic colour: `Info`, `Success`, or `Failure`.
+#[derive(Clone, Copy)]
+enum WatchRole {
+    /// Informational status: building, watching, change detected.
+    Info,
+    /// A successful outcome: app started, app reloaded.
+    Success,
+    /// A failure outcome: build failed, readiness failed.
+    Failure,
+}
+
+fn watch_line(text: &str, role: WatchRole) -> String {
+    let p = crate::style::Palette::for_stream(&std::io::stderr());
+    let (colour, glyph, reset) = match role {
+        WatchRole::Info => (p.dim, "", p.reset),
+        WatchRole::Success => (p.green, "", p.reset),
+        WatchRole::Failure => (p.red, crate::style::glyph::FAIL, p.reset),
+    };
+    let prefix = if glyph.is_empty() {
+        format!("{colour}{}{reset}", crate::style::GUTTER)
+    } else {
+        format!("{}{colour}{glyph}{reset} ", crate::style::GUTTER)
+    };
+    format!("{prefix}{text}")
 }
 
 /// One resolved project snapshot — the ingredients [`compile_modules`]
@@ -568,14 +599,19 @@ fn run_inner(
 
     let scope = ipe_watch::WatchScope::build(&root_dir, &entry_dir)
         .map_err(|e| CliError::UsageOwned(e.to_string()))?;
-    eprintln!(
-        "{}",
-        crate::style::gutter(&format!(
-            "[ipe watch] watching {} ({} source files)",
-            scope.root().display(),
-            scope.file_count()
-        ))
-    );
+    if !opts.quiet {
+        eprintln!(
+            "{}",
+            watch_line(
+                &format!(
+                    "[ipe watch] watching {} ({} source files)",
+                    scope.root().display(),
+                    scope.file_count()
+                ),
+                WatchRole::Info
+            )
+        );
+    }
 
     let (raw_tx, raw_rx) = mpsc::channel::<PathBuf>();
     let mut watcher = {
@@ -703,9 +739,10 @@ fn run_inner(
             }) {
                 eprintln!(
                     "{}",
-                    crate::style::gutter(&format!(
-                        "[ipe watch] warning: could not install SIGTERM handler: {e}"
-                    ))
+                    watch_line(
+                        &format!("[ipe watch] warning: could not install SIGTERM handler: {e}"),
+                        WatchRole::Info
+                    )
                 );
             }
         }
@@ -771,7 +808,10 @@ fn run_inner(
                 let resolved = match resolve_project_sources(&opts.entry, None) {
                     Ok(r) => r,
                     Err(e) => {
-                        eprintln!("{}", crate::style::gutter(&format!("[ipe watch] {e}")));
+                        eprintln!(
+                            "{}",
+                            watch_line(&format!("[ipe watch] {e}"), WatchRole::Failure)
+                        );
                         // This cycle's `generation` bump and cargo-kill
                         // already happened above, so without a scheduled
                         // retry the save that triggered this cycle is lost
@@ -795,7 +835,10 @@ fn run_inner(
                     Err(e) => {
                         eprintln!(
                             "{}",
-                            crate::style::gutter(&format!("[ipe watch] FFI catalog error: {e}"))
+                            watch_line(
+                                &format!("[ipe watch] FFI catalog error: {e}"),
+                                WatchRole::Failure
+                            )
                         );
                         continue;
                     }
@@ -921,9 +964,12 @@ fn run_inner(
                     CompileOutcome::Red(msg) => {
                         eprintln!(
                             "{}",
-                            crate::style::gutter(&format!(
-                                "[ipe watch] build failed (last-good binary stays up):\n{msg}"
-                            ))
+                            watch_line(
+                                &format!(
+                                    "[ipe watch] build failed (last-good binary stays up):\n{msg}"
+                                ),
+                                WatchRole::Failure
+                            )
                         );
                         emit(opts, WatchEvent::CompileFailed { generation: g });
                     }
@@ -940,9 +986,10 @@ fn run_inner(
                         ) {
                             eprintln!(
                                 "{}",
-                                crate::style::gutter(&format!(
-                                    "[ipe watch] failed to write emitted project: {e}"
-                                ))
+                                watch_line(
+                                    &format!("[ipe watch] failed to write emitted project: {e}"),
+                                    WatchRole::Failure
+                                )
                             );
                             continue;
                         }
@@ -954,28 +1001,40 @@ fn run_inner(
                         // here means "watch is slow" is never misattributed
                         // to the salsa layer, which already ran in
                         // milliseconds by the time this line prints.
-                        if generation == 1 {
-                            eprintln!(
-                                "{}",
-                                crate::style::gutter(
-                                    "[ipe watch] cold build (first run) — this can take a while…"
-                                )
-                            );
-                        } else {
-                            eprintln!("{}", crate::style::gutter("[ipe watch] rebuilding…"));
+                        if !opts.quiet {
+                            if generation == 1 {
+                                eprintln!(
+                                    "{}",
+                                    watch_line(
+                                        "[ipe watch] building (first run — compiling \
+                                         dependencies, this is the slow one)…",
+                                        WatchRole::Info
+                                    )
+                                );
+                            } else {
+                                eprintln!(
+                                    "{}",
+                                    watch_line(
+                                        "[ipe watch] change detected — rebuilding…",
+                                        WatchRole::Info
+                                    )
+                                );
+                            }
                         }
                         match spawn_cargo_build(
                             &opts.cargo_path,
                             &opts.out_dir,
                             generation,
                             evt_tx.clone(),
+                            opts.quiet,
                         ) {
                             Ok(child) => cargo_child = Some(child),
                             Err(e) => eprintln!(
                                 "{}",
-                                crate::style::gutter(&format!(
-                                    "[ipe watch] cannot start cargo build: {e}"
-                                ))
+                                watch_line(
+                                    &format!("[ipe watch] cannot start cargo build: {e}"),
+                                    WatchRole::Failure
+                                )
                             ),
                         }
                     }
@@ -997,9 +1056,13 @@ fn run_inner(
                     CargoOutcome::Red(msg) => {
                         eprintln!(
                             "{}",
-                            crate::style::gutter(&format!(
-                                "[ipe watch] cargo build failed (last-good binary stays up):\n{msg}"
-                            ))
+                            watch_line(
+                                &format!(
+                                    "[ipe watch] cargo build failed (last-good binary stays \
+                                     up):\n{msg}"
+                                ),
+                                WatchRole::Failure
+                            )
                         );
                         emit(opts, WatchEvent::CargoFailed { generation: g });
                     }
@@ -1018,7 +1081,7 @@ fn run_inner(
                             readiness,
                             opts.restart_timeouts,
                         );
-                        report_restart_outcome(&outcome);
+                        report_restart_outcome(&outcome, opts.quiet);
                         emit(
                             opts,
                             WatchEvent::Restarted {
@@ -1135,31 +1198,45 @@ fn warn_if_memory_store() {
     if std::env::var("IPE_LIVE_STORE").as_deref() == Ok("memory") {
         eprintln!(
             "{}",
-            crate::style::gutter(
+            watch_line(
                 "[ipe watch] warning: IPE_LIVE_STORE=memory is set — session state will NOT \
                  survive a watch-triggered restart. Unset it (watch defaults to sqlite) or set \
-                 IPE_LIVE_STORE=sqlite explicitly to keep your session across rebuilds."
+                 IPE_LIVE_STORE=sqlite explicitly to keep your session across rebuilds.",
+                WatchRole::Info
             )
         );
     }
 }
 
-fn report_restart_outcome(outcome: &ipe_watch::RestartOutcome) {
+fn report_restart_outcome(outcome: &ipe_watch::RestartOutcome, quiet: bool) {
     match outcome {
         ipe_watch::RestartOutcome::Spawned => {
-            eprintln!("{}", crate::style::gutter("[ipe watch] app is up"));
+            if !quiet {
+                eprintln!(
+                    "{}",
+                    watch_line("[ipe watch] app started", WatchRole::Success)
+                );
+            }
         }
         ipe_watch::RestartOutcome::UnchangedBinary => {}
         ipe_watch::RestartOutcome::Restarted => {
-            eprintln!("{}", crate::style::gutter("[ipe watch] app restarted"));
+            if !quiet {
+                eprintln!(
+                    "{}",
+                    watch_line("[ipe watch] app reloaded", WatchRole::Success)
+                );
+            }
         }
         ipe_watch::RestartOutcome::RespawnedLastGood { broken } => eprintln!(
             "{}",
-            crate::style::gutter(&format!(
-                "[ipe watch] new binary failed its readiness probe ({}); kept the previous \
-                 last-good binary running instead",
-                broken.display()
-            ))
+            watch_line(
+                &format!(
+                    "[ipe watch] new binary failed its readiness probe ({}); kept the previous \
+                     last-good binary running instead",
+                    broken.display()
+                ),
+                WatchRole::Failure
+            )
         ),
         ipe_watch::RestartOutcome::NothingRunning {
             broken,
@@ -1167,14 +1244,17 @@ fn report_restart_outcome(outcome: &ipe_watch::RestartOutcome) {
         } => {
             eprintln!(
                 "{}",
-                crate::style::gutter(&format!(
-                    "[ipe watch] new binary failed its readiness probe ({}); no previous \
-                     last-good binary could be brought up{}",
-                    broken.display(),
-                    last_good_error
-                        .as_ref()
-                        .map_or_else(String::new, |e| format!(" ({e})"))
-                ))
+                watch_line(
+                    &format!(
+                        "[ipe watch] new binary failed its readiness probe ({}); no previous \
+                         last-good binary could be brought up{}",
+                        broken.display(),
+                        last_good_error
+                            .as_ref()
+                            .map_or_else(String::new, |e| format!(" ({e})"))
+                    ),
+                    WatchRole::Failure
+                )
             );
         }
     }
@@ -1217,6 +1297,7 @@ fn spawn_cargo_build(
     out_dir: &Path,
     generation: u64,
     evt_tx: mpsc::Sender<OrchestratorEvent>,
+    quiet: bool,
 ) -> std::io::Result<Arc<std::sync::Mutex<Child>>> {
     let mut cmd = Command::new(cargo_path);
     cmd.arg("build")
@@ -1224,6 +1305,12 @@ fn spawn_cargo_build(
         .current_dir(out_dir)
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
+    if quiet {
+        cmd.arg("-q");
+    } else {
+        // Force colour + the progress bar through the pipe when our stderr is a terminal.
+        crate::force_cargo_terminal_ui(&mut cmd);
+    }
     let mut child = cmd.spawn()?;
 
     // Take the pipes now, before the `Child` moves behind the shared lock —
@@ -1236,7 +1323,10 @@ fn spawn_cargo_build(
     let shared_for_waiter = Arc::clone(&shared);
 
     let stdout_reader = thread::spawn(move || read_all(stdout));
-    let stderr_reader = thread::spawn(move || read_all(stderr));
+    // Relay stderr live so the user sees cargo's progress bar and compiler
+    // messages as they arrive, while still capturing the full text for the
+    // failure diagnostic (CargoOutcome::Red carries it).
+    let stderr_reader = thread::spawn(move || relay_and_capture_stderr(stderr));
 
     thread::spawn(move || {
         let status = loop {
@@ -1287,6 +1377,31 @@ fn read_all(pipe: Option<impl std::io::Read>) -> String {
         let _ = s.read_to_string(&mut buf);
     }
     buf
+}
+
+/// Relay `cargo`'s stderr live to our own stderr (so the user sees the progress
+/// bar and compiler messages as they arrive) and simultaneously accumulate the
+/// full text for the failure diagnostic. Uses the same chunk boundary as
+/// [`crate::read_progress_chunk`] so carriage-return progress-bar frames flow
+/// through without buffering until the next newline.
+fn relay_and_capture_stderr(pipe: Option<impl std::io::Read>) -> String {
+    use std::io::{BufReader, Write as _};
+    let mut captured = String::new();
+    let Some(reader) = pipe else { return captured };
+    let mut reader = BufReader::new(reader);
+    let mut chunk = String::new();
+    loop {
+        chunk.clear();
+        match crate::read_progress_chunk(&mut reader, &mut chunk) {
+            Ok(0) | Err(_) => break,
+            Ok(_) => {
+                eprint!("{chunk}");
+                let _ = std::io::stderr().flush();
+                captured.push_str(&chunk);
+            }
+        }
+    }
+    captured
 }
 
 /// Whether a non-success exit status looks like "killed by us" (a signal

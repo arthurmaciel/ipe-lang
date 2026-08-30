@@ -1136,6 +1136,16 @@ pub fn server_listen<E: From<String> + Send + 'static>(
         let addr = format!("{}:{}", host, port);
         let listener = match tokio::net::TcpListener::bind(&addr).await {
             Ok(l) => l,
+            Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => {
+                return IpeResult::Err(
+                    format!(
+                        "port {port} is already in use — another application is bound to it.\n\
+                         Set a different port with the IPE_WEB_PORT environment variable, e.g.:\n\
+                         IPE_WEB_PORT=8123 ipe run"
+                    )
+                    .into(),
+                );
+            }
             Err(e) => return IpeResult::Err(format!("Server.listen: bind {}: {}", addr, e).into()),
         };
         eprintln!("[ipe.http.server] listening on http://{}", addr);

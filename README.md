@@ -336,7 +336,10 @@ The emitted `.cargo/config.toml` sets `+crt-static` automatically; no extra
 `rustc` + linking. 
 
 A failed emitted-crate compile is a non-zero `ipe` exit with a
-named build-failure diagnostic, never a silent success. 
+named build-failure diagnostic, never a silent success.
+
+Pass `-q` / `--quiet` to `ipe build`, `ipe run`, or `ipe watch` to suppress
+progress chatter and only print warnings and errors (useful in scripts and CI).
 
 Optional per-machine tools — a compilation cache
 ([sccache](https://github.com/mozilla/sccache)), a fast linker

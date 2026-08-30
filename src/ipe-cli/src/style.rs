@@ -176,6 +176,30 @@ pub fn use_color(stream: &impl IsTerminal) -> bool {
     stream.is_terminal() && std::env::var_os("NO_COLOR").is_none()
 }
 
+/// The version banner printed at the start of `ipe build`, `ipe run`, and
+/// `ipe watch` in human (default) output mode — NOT under `--plain`, `--json`,
+/// or `--quiet`.
+///
+/// Includes a leading blank line, the 2-space gutter, and the URL so it is
+/// immediately identifiable in a session. Coloured when `use_color` is true for
+/// stderr; plain otherwise.
+#[must_use]
+pub fn command_header(use_color: bool) -> String {
+    let version = env!("CARGO_PKG_VERSION");
+    let p = Palette::select(use_color);
+    format!(
+        "\n{GUTTER}{}{}{} - v{} - {}{}{}\n",
+        p.yellow, "Ipê language", p.reset, version, p.dim, REPO_URL, p.reset,
+    )
+}
+
+/// Print the version banner to stderr, respecting the terminal / `NO_COLOR`
+/// state of stderr. Called at the start of human-mode commands.
+pub fn print_command_header() {
+    let colored = use_color(&std::io::stderr());
+    eprint!("{}", command_header(colored));
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -199,6 +223,30 @@ mod tests {
         assert!(report_bugs_footer().ends_with("/issues."));
         assert!(header_line("9.9.9").contains(REPO_URL));
         assert!(header_line("9.9.9").contains("v9.9.9"));
+    }
+
+    #[test]
+    fn command_header_has_leading_newline_gutter_version_and_url() {
+        let h = command_header(false);
+        // Starts with a blank line so the banner breathes at the top of output.
+        assert!(h.starts_with('\n'), "banner has leading newline");
+        // The 2-space gutter is present.
+        assert!(h.contains(GUTTER), "banner has gutter");
+        // The runtime version is embedded dynamically.
+        assert!(
+            h.contains(env!("CARGO_PKG_VERSION")),
+            "banner carries crate version"
+        );
+        // The canonical project URL is present.
+        assert!(h.contains(REPO_URL), "banner carries repo URL");
+        // The plain variant has no ANSI escapes.
+        assert!(!h.contains('\x1b'), "plain banner has no ANSI");
+    }
+
+    #[test]
+    fn command_header_colour_mode_has_ansi() {
+        let h = command_header(true);
+        assert!(h.contains('\x1b'), "colour banner carries ANSI");
     }
 
     #[test]

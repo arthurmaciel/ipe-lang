@@ -375,6 +375,10 @@ pub enum BuildMode {
 }
 
 /// Fully-parsed `ipe build` arguments.
+// Four independent one-of-two CLI switches (`fix`, `accept_risks`, `debugger`,
+// `quiet`) each maps naturally to a bool; a two-variant enum or state machine
+// would obscure their independence rather than clarify it.
+#[allow(clippy::struct_excessive_bools)]
 pub struct BuildArgs {
     /// The positional entry (`None` → project-aware default).
     pub entry: Option<String>,
@@ -397,6 +401,8 @@ pub struct BuildArgs {
     /// `--json` — emit each diagnostic as a stable JSON object instead of the
     /// human-readable, decorated layout.
     pub format: OutputFormat,
+    /// `-q` / `--quiet` — suppress progress chatter; only warnings and errors.
+    pub quiet: bool,
 }
 
 /// Parse `ipe build`'s argument tail.
@@ -421,6 +427,7 @@ pub fn parse_build(rest: &[String]) -> Result<BuildArgs, CliError> {
     let mut fix = false;
     let mut accept_risks = false;
     let mut debugger = false;
+    let mut quiet = false;
     let mut static_flags = StaticFlags::default();
     let mut format: Option<OutputFormat> = None;
     while let Some(flag) = it.next() {
@@ -447,6 +454,7 @@ pub fn parse_build(rest: &[String]) -> Result<BuildArgs, CliError> {
             "--fix" => fix = true,
             "--accept-risks" => accept_risks = true,
             "--debugger" => debugger = true,
+            "-q" | "--quiet" => quiet = true,
             other => {
                 return Err(usage_unknown_flag("build", other));
             }
@@ -523,6 +531,7 @@ pub fn parse_build(rest: &[String]) -> Result<BuildArgs, CliError> {
         debugger,
         mode,
         format: format.unwrap_or_default(),
+        quiet,
     })
 }
 
@@ -549,6 +558,8 @@ pub struct RunArgs {
     /// `--json` — emit each diagnostic as a stable JSON object instead of the
     /// human-readable, decorated layout.
     pub format: OutputFormat,
+    /// `-q` / `--quiet` — suppress progress chatter; only warnings and errors.
+    pub quiet: bool,
 }
 
 /// Parse `ipe run`'s argument tail.
@@ -580,6 +591,7 @@ pub fn parse_run(rest: &[String]) -> Result<RunArgs, CliError> {
     let mut runtime: Option<String> = None;
     let mut accept_risks = false;
     let mut debugger = false;
+    let mut quiet = false;
     let mut static_flags = StaticFlags::default();
     let mut format: Option<OutputFormat> = None;
     while let Some(flag) = it.next() {
@@ -604,6 +616,7 @@ pub fn parse_run(rest: &[String]) -> Result<RunArgs, CliError> {
             )?,
             "--accept-risks" => accept_risks = true,
             "--debugger" => debugger = true,
+            "-q" | "--quiet" => quiet = true,
             other => {
                 return Err(usage_unknown_flag("run", other));
             }
@@ -626,6 +639,7 @@ pub fn parse_run(rest: &[String]) -> Result<RunArgs, CliError> {
         debugger,
         bin_args,
         format: format.unwrap_or_default(),
+        quiet,
     })
 }
 
@@ -855,6 +869,8 @@ pub struct WatchArgs {
     pub runtime: Option<String>,
     /// `--port <n>` — the parsed, in-range port (default 8000).
     pub port: u16,
+    /// `-q` / `--quiet` — suppress progress chatter; only warnings and errors.
+    pub quiet: bool,
 }
 
 /// Parse `ipe watch`'s argument tail. `--port` is parsed into a `u16` at this
@@ -869,6 +885,7 @@ pub fn parse_watch(rest: &[String]) -> Result<WatchArgs, CliError> {
     let mut out: Option<String> = None;
     let mut runtime: Option<String> = None;
     let mut port: Option<u16> = None;
+    let mut quiet = false;
     while let Some(flag) = it.next() {
         match flag.as_str() {
             "--out" => set_once(
@@ -890,6 +907,7 @@ pub fn parse_watch(rest: &[String]) -> Result<WatchArgs, CliError> {
                 })?;
                 set_once(&mut port, parsed, "--port", "watch")?;
             }
+            "-q" | "--quiet" => quiet = true,
             other => {
                 return Err(usage_unknown_flag("watch", other));
             }
@@ -901,6 +919,7 @@ pub fn parse_watch(rest: &[String]) -> Result<WatchArgs, CliError> {
         out,
         runtime,
         port: port.unwrap_or(8000),
+        quiet,
     })
 }
 
