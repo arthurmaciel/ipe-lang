@@ -88,16 +88,46 @@ place effects run.
 The shape guides show the exact `Cmd`, `subscriptions`, and `view` types for
 each kind of program, since they differ by shape.
 
+## The starting state: `init`
+
+Before the first event the runtime needs a starting `Model`, usually with a
+`Cmd` to run at once (load data, read the clock). That is **`init`**. Its
+argument is context the runtime hands *in* at startup, and it is fixed by shape:
+
+- **Web** — `init : WebReq -> ( Model, Cmd Msg )`. `WebReq` is the per-session
+  request (URL, route, headers): different for every visitor, reachable no other
+  way, so the runtime passes it in.
+- **WebView, Terminal** — `init : () -> ( Model, Cmd Msg )`. There is no
+  per-session context to hand in; anything ambient (window size, args, the
+  environment) is read directly through [`Ipe.System`](../modules/Ipe.System.md).
+
+Unlike Elm, Ipê has no startup `flags` — a native program reaches its
+environment directly rather than receiving it at boot. **Which way the data
+flows** tells you where each thing belongs:
+
+| flows | is | e.g. |
+|---|---|---|
+| runtime → program (in, at start) | `init`'s argument | `WebReq` |
+| program → runtime (set once) | a config field | a WebView's `window`, `title` |
+| program → runtime (during the loop) | a `Cmd` | change the title, resize, fetch |
+
+An *output* — which window to open — never goes in `init`'s *input* slot; it is
+config.
+
 ## Choosing a shape
 
-The same four-part structure drives every interactive Ipê program; the *shape*
-determines where it runs and what `view` produces:
+The four parts drive every interactive program; the shape sets where it runs and
+what `view` produces. The `init` argument and `view` differ by shape:
 
-- **Web** (`ipe doc Web`) — server-driven web applications.
-- **WebView** (`ipe doc WebView`) — native desktop windows.
-- **Terminal** (`ipe doc Terminal`) — full-screen or line-oriented terminal apps.
-- **Program** — for a script or one-shot tool with no state loop, write a plain
-  `main` instead of TEA (see [getting started](getting-started.md)).
+| shape | `init` | `view` |
+|---|---|---|
+| **Web** (`ipe doc Web`) — server-driven web | `WebReq -> …` | `Model -> Element Msg` |
+| **WebView** (`ipe doc WebView`) — native window | `() -> …` | `Model -> Element Msg` (+ `window`, `title`) |
+| **Terminal** (`ipe doc Terminal`) — full-screen / lines | `() -> …` | `Model -> Element Msg` or `Model -> String` |
+
+`update` is always `Msg -> Model -> ( Model, Cmd Msg )` and `subscriptions`
+`Model -> Sub Msg`. A script or one-shot tool with no state loop is not TEA —
+write a plain `main` (see [getting started](getting-started.md)).
 
 ## Where to go next
 
