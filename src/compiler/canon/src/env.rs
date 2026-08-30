@@ -82,7 +82,12 @@ pub const STDLIB_MODULE_QUALIFIERS: &[(&[&str], &str)] = &[
     (&["Ipe", "Json", "Decode"], "JsonDec"),
     (&["Ipe", "Json", "Decode", "Pipeline"], "JsonDecP"),
     (&["Ipe", "Task"], "Task"),
-    (&["Ipe", "Io"], "Io"),
+    // NOTE — `Ipe.Io` is DELIBERATELY absent: it is a COMPILED-SOURCE
+    // Layer-3 module (registered in `ipe::stdlib::COMPILED_STD_MODULES`). Its
+    // members are point-free `Ffi.kernel "Io_*"` aliases that
+    // `detect_kernel_alias` routes to the registered `Io*` `StdlibKernel`
+    // variants. A module is EITHER a kernel qualifier here OR compiled-source
+    // — never both (`compiled_vs_kernel_qualifier_disjoint`), so it stays out.
     // NOTE — `Ipe.Debug` is DELIBERATELY absent: it is a COMPILED-SOURCE
     // Layer-3 module (registered in `ipe::stdlib::COMPILED_STD_MODULES`). Its
     // members are point-free `Ffi.kernel "Debug_*"` aliases that
@@ -1231,19 +1236,9 @@ impl Env {
                     "ExponentialWithJitter",
                 ],
             ),
-            // `Ipe.Io` — I/O effects. `println`/`eprintln` write a line
-            // (message + trailing newline) to stdout/stderr respectively.
-            (
-                "Io",
-                &[
-                    "readLine",
-                    "readSecret",
-                    "writeStdout",
-                    "writeStderr",
-                    "println",
-                    "eprintln",
-                ],
-            ),
+            // NOTE — `Ipe.Io` is DELIBERATELY absent from this catalog:
+            // it is a compiled-source module; its `Io_*` kernels are
+            // reached via `detect_kernel_alias`, not the qualifier table.
             // NOTE — `Ipe.Debug` is DELIBERATELY absent from this catalog:
             // it is a compiled-source module; its `Debug_*` kernels are
             // reached via `detect_kernel_alias`, not the qualifier table.
