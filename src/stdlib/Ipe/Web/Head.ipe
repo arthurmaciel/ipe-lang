@@ -45,12 +45,12 @@ module Ipe.Web.Head exposing
 --     headFor model =
 --         [ Head.title (titleFor model.page)
 --         , Head.meta "description" (descriptionFor model.page)
---         , Head.canonical (canonicalFor model.page)
+--         , Head.canonical (canonicalUrlFor model.page)  -- canonicalUrlFor : Page -> Url
 --         , Head.metaProperty "og:title" (titleFor model.page)
 --         , Head.metaProperty "og:image" "https://example.com/og.png"
 --         , Head.metaProperty "og:type" "website"
 --         , Head.themeColor "#1a1a2e"
---         , Head.rss "/rss.xml" "Site Blog"
+--         , Head.rss feedUrl "Site Blog"  -- feedUrl : Url
 --         ]
 --
 -- The verbatim JSON-LD `<script>` hatch lives in `Ipe.Web.Head.Unsafe`
@@ -67,6 +67,7 @@ module Ipe.Web.Head exposing
 import Ipe.List as List
 import Ipe.Html as Html exposing (Html)
 import Ipe.Html.Attributes as Attr exposing (Attribute)
+import Ipe.Url as Url exposing (Url)
 
 
 -- ─── Title ──────────────────────────────────────────────────────
@@ -128,14 +129,18 @@ pairToAttr pair =
 -- ─── Convenience shortcuts ──────────────────────────────────────
 
 
--- canonical href — emits `<link rel="canonical" href="…">`. Tell
+-- canonical url — emits `<link rel="canonical" href="…">`. Tell
 -- search engines which URL is authoritative for this page (when
 -- the same content is reachable via multiple URLs).
-canonical : String -> Html msg
-canonical href =
+--
+-- Takes a validated `Ipe.Url.Url` so the href is guaranteed to be an
+-- absolute, scheme-valid URL — a bare `String` could silently produce a
+-- `javascript:` or relative href in the canonical tag.
+canonical : Url -> Html msg
+canonical url =
     Html.link
         [ Attr.attribute "rel" "canonical"
-        , Attr.attribute "href" href
+        , Attr.attribute "href" (Url.toString url)
         ]
 
 
@@ -147,15 +152,18 @@ themeColor color =
     meta "theme-color" color
 
 
--- rss href title — emits `<link rel="alternate" type="application/
--- rss+xml" href="…" title="…">`. Feed readers + browsers discover
--- a site's RSS feed via this link. Pair with an actual feed
+-- rss feedUrl feedTitle — emits `<link rel="alternate"
+-- type="application/rss+xml" href="…" title="…">`. Feed readers + browsers
+-- discover a site's RSS feed via this link. Pair with an actual feed
 -- endpoint (Ipe.Http.Server `Server.get "/rss.xml" rssHandler`).
-rss : String -> String -> Html msg
-rss href feedTitle =
+--
+-- Takes a validated `Ipe.Url.Url` for the feed href — ensures the link
+-- points at a real absolute URL, not a relative path or arbitrary string.
+rss : Url -> String -> Html msg
+rss feedUrl feedTitle =
     Html.link
         [ Attr.attribute "rel" "alternate"
         , Attr.attribute "type" "application/rss+xml"
-        , Attr.attribute "href" href
+        , Attr.attribute "href" (Url.toString feedUrl)
         , Attr.attribute "title" feedTitle
         ]

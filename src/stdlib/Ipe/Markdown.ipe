@@ -40,6 +40,7 @@
 module Ipe.Markdown exposing
     ( render, renderInline
     , parseBlocks, parseSpans
+    , HeadingLevel(..)
     , Block(..), Span(..)
     )
 
@@ -72,9 +73,21 @@ renderInline line =
 
 -- ─── Block ADT ──────────────────────────────────────────────────────────────
 
+-- The six Markdown heading levels. Every `HeaderBlock` carries exactly one of
+-- these constructors — levels 0, 7, negative values, and arbitrary integers are
+-- not representable, so a caller's `case` branch is always exhaustive by level.
+type HeadingLevel
+    = H1
+    | H2
+    | H3
+    | H4
+    | H5
+    | H6
+
+
 -- A block is one paragraph-shaped chunk of a markdown document.
 type Block
-    = HeaderBlock Int String
+    = HeaderBlock HeadingLevel String
     | ParaBlock String
     | CodeBlock String
     | BulletBlock (List String)
@@ -111,27 +124,27 @@ blocksFromLines lines =
                     RuleBlock :: blocksFromLines rest
 
                 else if String.startsWith "###### " l then
-                    HeaderBlock 6 (String.slice 7 (String.length l) l)
+                    HeaderBlock H6 (String.slice 7 (String.length l) l)
                         :: blocksFromLines rest
 
                 else if String.startsWith "##### " l then
-                    HeaderBlock 5 (String.slice 6 (String.length l) l)
+                    HeaderBlock H5 (String.slice 6 (String.length l) l)
                         :: blocksFromLines rest
 
                 else if String.startsWith "#### " l then
-                    HeaderBlock 4 (String.slice 5 (String.length l) l)
+                    HeaderBlock H4 (String.slice 5 (String.length l) l)
                         :: blocksFromLines rest
 
                 else if String.startsWith "### " l then
-                    HeaderBlock 3 (String.slice 4 (String.length l) l)
+                    HeaderBlock H3 (String.slice 4 (String.length l) l)
                         :: blocksFromLines rest
 
                 else if String.startsWith "## " l then
-                    HeaderBlock 2 (String.slice 3 (String.length l) l)
+                    HeaderBlock H2 (String.slice 3 (String.length l) l)
                         :: blocksFromLines rest
 
                 else if String.startsWith "# " l then
-                    HeaderBlock 1 (String.slice 2 (String.length l) l)
+                    HeaderBlock H1 (String.slice 2 (String.length l) l)
                         :: blocksFromLines rest
 
                 else if String.startsWith "```" l then
@@ -575,28 +588,26 @@ renderBlock b =
                 )
 
 
-renderHeader : Int -> String -> Element msg
+renderHeader : HeadingLevel -> String -> Element msg
 renderHeader level text =
     let
         size =
-            if level == 1 then
-                22
-
-            else if level == 2 then
-                18
-
-            else if level == 3 then
-                16
-
-            else
-                14
+            case level of
+                H1 -> 22
+                H2 -> 18
+                H3 -> 16
+                H4 -> 14
+                H5 -> 14
+                H6 -> 14
 
         weight =
-            if level <= 3 then
-                Font.bold
-
-            else
-                Font.semiBold
+            case level of
+                H1 -> Font.bold
+                H2 -> Font.bold
+                H3 -> Font.bold
+                H4 -> Font.semiBold
+                H5 -> Font.semiBold
+                H6 -> Font.semiBold
     in
         Ui.el
             [ Font.size size, weight ]
