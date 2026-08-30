@@ -1317,11 +1317,8 @@ fn native_runtime_bindings(reach: PreludeReach) -> DResult<String> {
     // module is `secret`-gated in the dependency model, so keeping the wrapper
     // would name an absent `Secret` type (E0433).
     if !reach.secret {
-        filtered = drop_prelude_section(
-            &filtered,
-            "// ── Io secret kernels",
-            "// ── System kernels",
-        )?;
+        filtered =
+            drop_prelude_section(&filtered, "// ── Io secret kernels", "// ── System kernels")?;
     }
 
     // `Log` — the eight `log_*` wrappers (the only static-prelude references to
