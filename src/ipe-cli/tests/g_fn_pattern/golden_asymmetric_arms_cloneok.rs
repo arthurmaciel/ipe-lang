@@ -80,8 +80,7 @@ fn i193_ipec_accepts_asymmetric_arms() {
         built.err()
     );
 
-    let emitted = std::fs::read_to_string(out.join("src").join("main.rs"))
-        .expect("emitted main.rs must exist");
+    let emitted = crate::support::read_all_emitted_src(&out);
 
     // The tail `label` must appear as a bare move (last overall use) — NOT cloned.
     // If the per-arm snapshot under-restores `remaining`, the tail use sees
@@ -95,11 +94,11 @@ fn i193_ipec_accepts_asymmetric_arms() {
     // the function compiles (ipe-0 above).
     assert!(
         emitted.contains("format_tag"),
-        "emitted main.rs must contain the format_tag function"
+        "emitted user source must contain the format_tag function"
     );
     assert!(
         emitted.contains("format_tag2"),
-        "emitted main.rs must contain the format_tag2 function"
+        "emitted user source must contain the format_tag2 function"
     );
 
     // Both arm orderings must be present.
@@ -136,15 +135,13 @@ fn i193_idempotent() {
     let b2 = ipe::build_with_sibling_discovery(&entry, &out2, &runtime);
     assert!(b2.is_ok(), "pass 2 must succeed: {:?}", b2.err());
 
-    let main1 = std::fs::read_to_string(out1.join("src").join("main.rs"))
-        .expect("pass-1 main.rs must exist");
-    let main2 = std::fs::read_to_string(out2.join("src").join("main.rs"))
-        .expect("pass-2 main.rs must exist");
+    let main1 = crate::support::read_all_emitted_src(&out1);
+    let main2 = crate::support::read_all_emitted_src(&out2);
 
     assert_eq!(
         main1, main2,
         "two independent builds of asymmetric_arms_cloneok must produce \
-         byte-identical main.rs (idempotence); first diff found above"
+         byte-identical emitted user source (idempotence); first diff found above"
     );
 }
 

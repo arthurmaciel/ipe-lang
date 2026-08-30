@@ -210,16 +210,9 @@ pub fn file_rename(src: ipe_runtime::path::Path, dst: ipe_runtime::path::Path) -
     ipe_runtime::file::file_rename(src, dst)
 }
 
-pub fn main_update(msg: MainMsg, count: i64) -> i64 {
-    let _ipe_recursion_guard = crate::recursion_guard();
-    match msg {
-        MainMsg::Increment => ipe_runtime::math::ipe_int_add(count, 1),
-        MainMsg::Decrement => ipe_runtime::math::ipe_int_sub(count, 1),
-    }
-}
 pub fn ipe_main() -> IpeTask<()> {
     let _ipe_recursion_guard = crate::recursion_guard();
-    io_println(string_from_int(crate::main_update(MainMsg::Increment, 0)))
+    system_setenv("HOME".to_string(), "x".to_string())
 }
 
 // Ffi.kernel polyfill — should be unreachable in Rust target;

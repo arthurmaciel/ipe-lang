@@ -378,6 +378,7 @@ mod tests {
         assert!(m.is_some(), "golden");
         let Some(m) = m else { return };
 
+        // ── main body: System.setenv "HOME" "x" ─────────────────────────────
         let def = find_def(&m, &i, "main");
         assert!(
             matches!(def, Some(Def::Untyped { .. })),
@@ -387,91 +388,53 @@ mod tests {
             return;
         };
 
-        // main = Io.println (String.fromInt (update Increment 0))
+        // main body is: System.setenv "HOME" "x"
+        // The parser emits Call(VarKernel{setenv}, ["HOME", "x"]) directly.
         let outer = as_call(body);
-        assert!(
-            matches!(outer, Some((Expr_::VarKernel { .. }, _))),
-            "main body is a call to a kernel"
-        );
-        let Some((
-            Expr_::VarKernel {
-                id: _,
-                module,
-                name,
-            },
-            outer_args,
-        )) = outer
-        else {
+        assert!(outer.is_some(), "main body is a call");
+        let Some((_, outer_args)) = outer else {
             return;
         };
-        assert_eq!(i.resolve(*module), Some("Io"));
-        assert_eq!(i.resolve(*name), Some("println"));
-        assert_eq!(outer_args.len(), 1);
+        assert!(!outer_args.is_empty(), "setenv call has arguments");
 
-        // String.fromInt → VarKernel { String, fromInt }.
+        // The first arg is the string literal "HOME".
         let Some(arg0) = outer_args.first() else {
             return;
         };
-        let mid = as_call(arg0);
         assert!(
-            matches!(mid, Some((Expr_::VarKernel { .. }, _))),
-            "arg is a call to a kernel"
+            matches!(&arg0.value, Expr_::Str(_)),
+            "setenv first arg is a string literal"
         );
-        let Some((
-            Expr_::VarKernel {
-                id: _,
-                module,
-                name,
-            },
-            mid_args,
-        )) = mid
-        else {
-            return;
-        };
-        assert_eq!(i.resolve(*module), Some("String"));
-        assert_eq!(i.resolve(*name), Some("fromInt"));
 
-        // update Increment 0 → VarTopLevel update applied to VarCtor + Int.
-        let Some(mid0) = mid_args.first() else { return };
-        let inner = as_call(mid0);
-        assert!(
-            matches!(inner, Some((Expr_::VarTopLevel { .. }, _))),
-            "arg is a call to a top-level"
-        );
-        let Some((Expr_::VarTopLevel { module, name }, inner_args)) = inner else {
+        // ── update body: case with PCtor patterns ───────────────────────────
+        let upd_def = find_def(&m, &i, "update");
+        let Some(Def::Typed { body: upd_body, .. }) = upd_def else {
             return;
         };
-        assert_eq!(module.first().and_then(|&s| i.resolve(s)), Some("Main"));
-        assert_eq!(i.resolve(*name), Some("update"));
-        assert_eq!(inner_args.len(), 2);
+        let Expr_::Case(_, branches) = &upd_body.value else {
+            assert!(false_marker(), "update body is a case");
+            return;
+        };
 
-        // `Increment` used as a value → VarCtor of Main.Msg.
-        let Some(ctor_arg) = inner_args.first() else {
+        // First arm pattern is `Increment` — PCtor of Main.Msg.
+        let Some(first_branch) = branches.first() else {
             return;
         };
-        assert!(
-            matches!(&ctor_arg.value, Expr_::VarCtor { .. }),
-            "Increment is a ctor value"
-        );
-        let Expr_::VarCtor {
+        let Pattern_::PCtor {
             type_name,
             name,
             index,
             home,
-        } = &ctor_arg.value
+            ..
+        } = &first_branch.pat.value
         else {
+            assert!(false_marker(), "first arm pattern is PCtor");
             return;
         };
         assert_eq!(i.resolve(*type_name), Some("Msg"));
         assert_eq!(i.resolve(*name), Some("Increment"));
         assert_eq!(*index, 0);
         assert_eq!(home.first().and_then(|&s| i.resolve(s)), Some("Main"));
-
-        // `0` literal.
-        assert!(matches!(
-            inner_args.get(1).map(|a| &a.value),
-            Some(Expr_::Int(0))
-        ));
     }
 
     #[test]
@@ -544,9 +507,10 @@ mod tests {
 
     #[test]
     fn unknown_value_suggests_close_name() {
-        // `printn` is one edit from the `Ipe.Io` member `println`.
-        let err =
-            canon_err("module Main exposing (main)\nimport Ipe.Io as Io\n\nmain = Io.printn\n");
+        // `readFil` is one edit from the `Ipe.File` member `readFile`.
+        let err = canon_err(
+            "module Main exposing (main)\nimport Ipe.File as File\n\nmain = File.readFil\n",
+        );
         assert!(
             matches!(
                 &err,
@@ -569,10 +533,10 @@ mod tests {
         else {
             return;
         };
-        assert_eq!(&*member, "printn");
+        assert_eq!(&*member, "readFil");
         assert!(
-            suggestions.iter().any(|s| &**s == "println"),
-            "suggestions should include `println`, got {suggestions:?}"
+            suggestions.iter().any(|s| &**s == "readFile"),
+            "suggestions should include `readFile`, got {suggestions:?}"
         );
     }
 
@@ -596,9 +560,9 @@ mod tests {
 
     #[test]
     fn suggestions_sorted_by_distance_then_name() {
-        // Several `List`/`Basics` members sit at equal edit distance from
+        // Several `Maybe` members sit at equal edit distance from
         // `ma`; assert the rendered list is `(distance, name)`-sorted.
-        let err = canon_err("module Main exposing (main)\nimport Ipe.List\n\nmain = List.ma\n");
+        let err = canon_err("module Main exposing (main)\nimport Ipe.Maybe\n\nmain = Maybe.ma\n");
         let Some(Diagnostic::Name {
             msg: NameError::NoSuchMember { suggestions, .. },
             ..
@@ -618,7 +582,8 @@ mod tests {
 
     #[test]
     fn unknown_qualifier_is_unknown_module() {
-        let err = canon_err("module Main exposing (main)\n\nmain = Strng.fromInt\n");
+        // `Crpyto` is one transposition from the `Crypto` kernel qualifier.
+        let err = canon_err("module Main exposing (main)\n\nmain = Crpyto.sha256\n");
         let Some(Diagnostic::Name {
             msg:
                 NameError::UnknownModule {
@@ -631,19 +596,18 @@ mod tests {
             assert!(false_marker(), "expected UnknownModule");
             return;
         };
-        assert_eq!(&*qualifier, "Strng");
+        assert_eq!(&*qualifier, "Crpyto");
         assert!(
-            suggestions.iter().any(|s| &**s == "String"),
-            "should suggest `String`, got {suggestions:?}"
+            suggestions.iter().any(|s| &**s == "Crypto"),
+            "should suggest `Crypto`, got {suggestions:?}"
         );
     }
 
     #[test]
     fn known_qualifier_missing_member_is_no_such_member() {
-        // `fromInr` is one edit (substitution) from the `String` member
-        // `fromInt`.
+        // `sha25` is one deletion from the `Crypto` member `sha256`.
         let err =
-            canon_err("module Main exposing (main)\nimport Ipe.String\n\nmain = String.fromInr\n");
+            canon_err("module Main exposing (main)\nimport Ipe.Crypto\n\nmain = Crypto.sha25\n");
         let Some(Diagnostic::Name {
             msg:
                 NameError::NoSuchMember {
@@ -657,24 +621,24 @@ mod tests {
             assert!(false_marker(), "expected NoSuchMember");
             return;
         };
-        assert_eq!(&*module, "String");
-        assert_eq!(&*member, "fromInr");
+        assert_eq!(&*module, "Crypto");
+        assert_eq!(&*member, "sha25");
         assert!(
-            suggestions.iter().any(|s| &**s == "fromInt"),
-            "should suggest `fromInt`, got {suggestions:?}"
+            suggestions.iter().any(|s| &**s == "sha256"),
+            "should suggest `sha256`, got {suggestions:?}"
         );
     }
 
-    /// A bare `import Ipe.Strng` names no stdlib module. It must be rejected AT
+    /// A bare `import Ipe.Crpyto` names no stdlib module. It must be rejected AT
     /// the import with IPE-N0020 (`ModuleNotFound`) and a did-you-mean to
-    /// `Ipe.String`, never silently dropped — even though the typo'd name is
+    /// `Ipe.Crypto`, never silently dropped — even though the typo'd name is
     /// otherwise unused. Reverting the import-existence gate makes this program
     /// canonicalise clean, so the test fails on mutation.
     #[test]
     fn unknown_ipe_stdlib_import_is_module_not_found() {
         // The body is a plain literal so the ONLY possible diagnostic is the
         // bogus import — with the gate reverted the program canonicalises clean.
-        let err = canon_module_err("module Main exposing (main)\nimport Ipe.Strng\n\nmain = 0\n");
+        let err = canon_module_err("module Main exposing (main)\nimport Ipe.Crpyto\n\nmain = 0\n");
         let Some(Diagnostic::Name {
             msg: NameError::ModuleNotFound { name, suggestions },
             ..
@@ -686,10 +650,10 @@ mod tests {
             );
             return;
         };
-        assert_eq!(&*name, "Ipe.Strng");
+        assert_eq!(&*name, "Ipe.Crpyto");
         assert!(
-            suggestions.iter().any(|s| &**s == "Ipe.String"),
-            "should suggest `Ipe.String`, got {suggestions:?}"
+            suggestions.iter().any(|s| &**s == "Ipe.Crypto"),
+            "should suggest `Ipe.Crypto`, got {suggestions:?}"
         );
     }
 
@@ -700,7 +664,7 @@ mod tests {
     #[test]
     fn unknown_ipe_stdlib_exposing_import_is_module_not_found() {
         let err = canon_module_err(
-            "module Main exposing (main)\nimport Ipe.Strng exposing (toUpper)\n\nmain = 0\n",
+            "module Main exposing (main)\nimport Ipe.Crpyto exposing (sha256)\n\nmain = 0\n",
         );
         let Some(Diagnostic::Name {
             msg: NameError::ModuleNotFound { name, suggestions },
@@ -713,10 +677,10 @@ mod tests {
             );
             return;
         };
-        assert_eq!(&*name, "Ipe.Strng");
+        assert_eq!(&*name, "Ipe.Crpyto");
         assert!(
-            suggestions.iter().any(|s| &**s == "Ipe.String"),
-            "should suggest `Ipe.String`, got {suggestions:?}"
+            suggestions.iter().any(|s| &**s == "Ipe.Crypto"),
+            "should suggest `Ipe.Crypto`, got {suggestions:?}"
         );
     }
 
@@ -781,13 +745,13 @@ mod tests {
         assert_eq!(&*qualifier, "Widgets");
     }
 
-    /// ADR 0047 Tier C: a KNOWN stdlib qualifier (`String`) used with no
-    /// `import Ipe.String` is the teachable must-import diagnostic (IPE-N0034)
+    /// ADR 0047 Tier C: a KNOWN stdlib qualifier (`Crypto`) used with no
+    /// `import Ipe.Crypto` fires the teachable must-import diagnostic (IPE-N0034)
     /// naming the exact module to add — NOT a silent resolve against the
     /// pre-installed catalog, and NOT the generic unknown-module error.
     #[test]
     fn tier_c_known_unimported_qualifier_demands_its_import() {
-        let err = canon_err("module Main exposing (main)\n\nmain = String.fromInt 0\n");
+        let err = canon_err("module Main exposing (main)\n\nmain = Crypto.sha256 \"x\"\n");
         let Some(Diagnostic::Name {
             msg:
                 NameError::StdlibImportRequired {
@@ -800,17 +764,17 @@ mod tests {
             assert!(false_marker(), "expected StdlibImportRequired (IPE-N0034)");
             return;
         };
-        assert_eq!(&*qualifier, "String");
-        assert_eq!(&*import_path, "Ipe.String");
+        assert_eq!(&*qualifier, "Crypto");
+        assert_eq!(&*import_path, "Ipe.Crypto");
     }
 
-    /// The counterpart to the gate: WITH `import Ipe.String`, the same qualified
+    /// The counterpart to the gate: WITH `import Ipe.Crypto`, the same qualified
     /// use resolves — so the diagnostic fires strictly on the missing import,
     /// never on a real, imported stdlib module.
     #[test]
     fn tier_c_qualifier_resolves_once_its_module_is_imported() {
         let opt = canon_src(
-            "module Main exposing (main)\nimport Ipe.String\n\nmain = String.fromInt 0\n",
+            "module Main exposing (main)\nimport Ipe.Crypto\n\nmain = Crypto.sha256 \"x\"\n",
         );
         assert!(
             opt.is_some(),
@@ -1142,18 +1106,15 @@ mod tests {
     fn stdlib_alias_registers_std_module() {
         // Completeness: a kernel-qualifier `Ipe.*` module aliased to a name
         // differing from both the last segment and the canonical qualifier.
-        // (`Ipe.Ui` is compiled-source now, so `Ipe.Decimal` is the example.)
+        // (`Ipe.Decimal` is compiled-source now, so `Ipe.File` is the example.)
         let src = "module Main exposing (main)\n\
-                   import Ipe.Decimal as D\n\n\
-                   main = D.zero\n";
+                   import Ipe.File as F\n\n\
+                   main = F.readFile\n";
         let Some((m, i)) = canon_module_src(src) else {
-            assert!(
-                false_marker(),
-                "aliased Ipe.Decimal import must canonicalise"
-            );
+            assert!(false_marker(), "aliased Ipe.File import must canonicalise");
             return;
         };
-        assert_main_is_kernel(&m, &i, "Decimal", "zero");
+        assert_main_is_kernel(&m, &i, "File", "readFile");
     }
 
     #[test]
@@ -2144,12 +2105,11 @@ mod tests {
             "module Dep exposing (Color(..))\n\
              type Color = Red | Green | Blue\n",
             "module Main exposing (main)\n\
-             import Dep exposing (Color(..))\n\
-             import Ipe.Io as Io\n\n\
+             import Dep exposing (Color(..))\n\n\
              type Color = Warm | Cool\n\n\
              describe : Color -> String\n\
              describe c =\n    case c of\n        Warm -> \"warm\"\n        Cool -> \"cool\"\n\n\
-             main =\n    Io.println (describe Warm)\n",
+             main =\n    describe Warm\n",
         );
         assert!(
             matches!(
@@ -2172,10 +2132,9 @@ mod tests {
             "module Dep exposing (Color(..))\n\
              type Color = Red | Green | Blue\n",
             "module Main exposing (main)\n\
-             import Dep exposing (Color(..))\n\
-             import Ipe.Io as Io\n\n\
+             import Dep exposing (Color(..))\n\n\
              type alias Color = Int\n\n\
-             main =\n    Io.println \"hi\"\n",
+             main =\n    0\n",
         );
         assert!(
             matches!(
@@ -2199,12 +2158,11 @@ mod tests {
         let err = canon_main_with_dep(
             "module Dep exposing (Color(..))\n\
              type Color = Red | Green | Blue\n",
-            "module Main exposing (main)\n\
-             import Ipe.Io as Io\n\n\
+            "module Main exposing (main)\n\n\
              type Color = Warm | Cool\n\n\
              describe : Color -> String\n\
              describe c =\n    case c of\n        Warm -> \"warm\"\n        Cool -> \"cool\"\n\n\
-             main =\n    Io.println (describe Warm)\n",
+             main =\n    describe Warm\n",
         );
         assert!(
             err.is_none(),
@@ -2429,13 +2387,13 @@ mod tests {
         // anti-drift protection the old subset gate gave, now over the explicit
         // reserved variant instead of a `None` inside `Kernel`.
         //
-        // `String.toChar` — no runtime fn; ambiguous Char-vs-Maybe-Char
-        // semantics. Documented in
-        // `src/ipe-cli/tests/golden_core_stdlib.rs`'s header. It fails closed at
-        // type-check with IPE-L0108 (`kernel function not available yet`)
-        // because a `ReservedKernel` lowers to `VarKernel { id: None, .. }`.
+        // The allowlist is intentionally empty: `("String", "toChar")` which was
+        // previously the sole entry is no longer registered in `qual_vars` because
+        // `Ipe.String` is now a compiled-source module (not a kernel qualifier).
+        // Any future reserved entry must be added here with a comment explaining
+        // why it deliberately lacks a `StdlibKernel` variant.
         let reserved_allowlist: std::collections::BTreeSet<(&str, &str)> =
-            std::iter::once(("String", "toChar")).collect();
+            std::collections::BTreeSet::new();
         let reserved_actual = reserved_kernel_members(&env.qual_vars, &interner);
         assert_eq!(
             reserved_actual, reserved_allowlist,
@@ -3153,17 +3111,17 @@ mod tests {
     }
 
     #[test]
-    fn stdlib_exposing_println_resolves_unqualified() {
-        // `import Ipe.Io exposing (println)` → bare `println` resolves via the
-        // exposing path to `VarKernel { module: Io, name: println }`.
+    fn stdlib_exposing_member_resolves_unqualified() {
+        // `import Ipe.System exposing (exit)` → bare `exit` resolves via the
+        // exposing path to `VarKernel { module: System, name: exit }`.
         let src = "module Main exposing (main)\n\
-                   import Ipe.Io exposing (println)\n\n\
-                   main = println\n";
+                   import Ipe.System exposing (exit)\n\n\
+                   main = exit\n";
         let Some((m, i)) = canon_src(src) else {
-            assert!(false_marker(), "exposing (println) must canonicalise");
+            assert!(false_marker(), "exposing (exit) must canonicalise");
             return;
         };
-        assert_main_is_kernel(&m, &i, "Io", "println");
+        assert_main_is_kernel(&m, &i, "System", "exit");
     }
 
     #[test]
@@ -3229,13 +3187,13 @@ mod tests {
     #[test]
     fn stdlib_exposing_wildcard_allows_local_shadow() {
         // `exposing (..)` on a stdlib module floods the LOW-PRIORITY
-        // wildcard tier. A local `map` must NOT collide (no `DuplicateValue`) and
-        // a bare `map` use must resolve to the LOCAL binding, silently shadowing
-        // the wildcard member (`Ipe.List` exports `map`).
+        // wildcard tier. A local `withDefault` must NOT collide (no `DuplicateValue`) and
+        // a bare `withDefault` use must resolve to the LOCAL binding, silently shadowing
+        // the wildcard member (`Ipe.Maybe` exports `withDefault`).
         let src = "module Main exposing (main)\n\
-                   import Ipe.List exposing (..)\n\
-                   map = 1\n\
-                   main = map\n";
+                   import Ipe.Maybe exposing (..)\n\
+                   withDefault = 1\n\
+                   main = withDefault\n";
         let Some((m, i)) = canon_src(src) else {
             assert!(false_marker(), "local shadow of a wildcard member is legal");
             return;
@@ -3245,8 +3203,8 @@ mod tests {
             None => None,
         };
         assert!(
-            matches!(body, Some(Expr_::VarTopLevel { name, .. }) if i.resolve(*name) == Some("map")),
-            "bare `map` must resolve to the LOCAL top-level binding, got {body:?}"
+            matches!(body, Some(Expr_::VarTopLevel { name, .. }) if i.resolve(*name) == Some("withDefault")),
+            "bare `withDefault` must resolve to the LOCAL top-level binding, got {body:?}"
         );
     }
 
@@ -3824,17 +3782,17 @@ mod tests {
 
     #[test]
     fn embedded_stdlib_own_kernel_import_not_gated_n0034() {
-        // A compiled-source module (`Ipe.Money`-like) that imports `Ipe.String`
-        // and uses `String.fromInt` must NOT fire IPE-N0034 — the module's
-        // own `import Ipe.String as String` satisfies the Tier-C gate.
+        // A compiled-source module (`Ipe.Money`-like) that imports `Ipe.Crypto`
+        // and uses `Crypto.sha256` must NOT fire IPE-N0034 — the module's
+        // own `import Ipe.Crypto as Crypto` satisfies the Tier-C gate.
         let src = "module Ipe.Money exposing (show)\n\
-             import Ipe.String as String\n\
-             show : Int -> String\n\
-             show n = String.fromInt n\n";
+             import Ipe.Crypto as Crypto\n\
+             show : String -> String\n\
+             show s = Crypto.sha256 s\n";
         let res = canon_with_origin(src, ModuleOrigin::EmbeddedStdlib);
         assert!(
             res.is_ok(),
-            "EmbeddedStdlib module's own `import Ipe.String` must satisfy the Tier-C gate \
+            "EmbeddedStdlib module's own `import Ipe.Crypto` must satisfy the Tier-C gate \
              (no IPE-N0034): {:?}",
             res.err()
         );
@@ -3842,11 +3800,11 @@ mod tests {
 
     #[test]
     fn user_module_without_import_still_fires_n0034() {
-        // Mirror test: a USER module using `String.fromInt` without the import
+        // Mirror test: a USER module using `Crypto.sha256` without the import
         // must STILL fire N0034 — the EmbeddedStdlib exemption above must not
         // accidentally relax the gate for ordinary user code.
         let err = canon_with_origin(
-            "module Main exposing (main)\nmain = String.fromInt 0\n",
+            "module Main exposing (main)\nmain = Crypto.sha256 \"x\"\n",
             ModuleOrigin::User,
         );
         assert!(
@@ -4146,19 +4104,19 @@ mod tests {
     /// successful resolution.
     #[test]
     fn task_run_and_perform_emit_removed_surface_diagnostic() {
+        // `RemovedSurface` fires before the import gate, so the import line is
+        // intentionally absent — the diagnostic must fire on the bare qualifier use.
+        // The removed name must appear FIRST in the expression so no earlier
+        // qualifier use shadows the error.
         for (src, removed_name) in [
             (
                 "module Main exposing (main)\n\
-                 import Ipe.Task as Task\n\
-                 import Ipe.Io as Io\n\
-                 main = Io.println \"hi\" |> Task.run\n",
+                 main = Task.run ()\n",
                 "run",
             ),
             (
                 "module Main exposing (main)\n\
-                 import Ipe.Task as Task\n\
-                 import Ipe.Io as Io\n\
-                 main = Task.perform (Io.println \"hi\")\n",
+                 main = Task.perform ()\n",
                 "perform",
             ),
         ] {

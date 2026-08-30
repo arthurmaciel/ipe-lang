@@ -1,0 +1,34 @@
+-- | Ipe.Uuid — UUID generation and parsing (Layer 3 Ipê source).
+--
+-- `v4` and `v7` draw fresh entropy on each call, so they return
+-- `Task Error String` — the same effect tier as `Time.now ()`.
+-- `parse` is pure: it validates an existing string without drawing
+-- entropy and returns `Nothing` when the input is not a well-formed
+-- UUID.
+module Ipe.Uuid exposing
+    ( v4, v7, parse
+    )
+
+
+import Ipe.Error exposing (Error)
+import Ipe.Ffi as Ffi
+
+
+-- | `v4 ()` — generate a random UUID (version 4) as a canonical
+-- lowercase hyphenated string (`xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx`).
+v4 : () -> Task Error String
+v4 = Ffi.kernel "Uuid_v4"
+
+
+-- | `v7 ()` — generate a time-ordered UUID (version 7) as a canonical
+-- lowercase hyphenated string. Monotonically increasing within a
+-- millisecond on the same node.
+v7 : () -> Task Error String
+v7 = Ffi.kernel "Uuid_v7"
+
+
+-- | `parse s` — validate that `s` is a well-formed UUID string in any
+-- standard textual form.  Returns `Just s` on success, `Nothing` on
+-- any malformed input.
+parse : String -> Maybe String
+parse = Ffi.kernel "Uuid_parse"

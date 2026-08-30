@@ -1,6 +1,5 @@
 module Main exposing (main)
-import Ipe.Io as Io
-import Ipe.String
+import Ipe.System as System
 
 type Msg = Increment | Decrement
 
@@ -11,4 +10,4 @@ update msg count =
         Decrement -> count - 1
 
 main =
-    Io.println (String.fromInt (update Increment 0))
+    System.setenv "HOME" "x"

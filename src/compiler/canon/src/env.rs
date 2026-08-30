@@ -43,42 +43,46 @@ use crate::resolve::ModuleOrigin;
 /// Only real `Ipe.*` module paths belong here — the first segment must
 /// be `Ipe`, matching the guard in `resolve::register_stdlib_import_aliases`.
 pub const STDLIB_MODULE_QUALIFIERS: &[(&[&str], &str)] = &[
-    // ── Ipe.* pure + effect modules ────────────────────────────────────
+    // ── Compiled-source exclusions (NOT kernel qualifiers) ─────────────────
+    //
+    // The modules listed below are compiled-source Layer-3 modules registered in
+    // `ipe::stdlib::COMPILED_STD_MODULES`.  A module is EITHER a kernel qualifier
+    // here OR compiled-source — never both (`compiled_vs_kernel_qualifier_disjoint`).
+    // Their members reach kernels via `Ffi.kernel "X_*"` aliases resolved by
+    // `detect_kernel_alias`, so they must stay out of this table.
+    //
+    //   Absent module          Kernel family / note
+    //   ─────────────────────  ────────────────────────────────────────────────
+    //   Ipe.String             String_*   (also re-exports the String builtin type)
+    //   Ipe.Char               Char_*
+    //   Ipe.List               List_*  + pure Ipê members
+    //   Ipe.Math               Math_*
+    //   Ipe.Bitwise            Bitwise_*
+    //   Ipe.Dict               Dict_*   (also re-exports the Dict builtin type)
+    //   Ipe.Set                Set_*
+    //   Ipe.Bytes              Bytes_*
+    //   Ipe.Encoding           Encoding_*
+    //   Ipe.Uuid               UuidV4 / UuidV7 / UuidParse
+    //   Ipe.Task               Task_*  + pure Ipê (BackoffStrategy / RetryPolicy)
+    //                          (also re-exports the Task builtin type)
+    //   Ipe.Io                 Io_*
+    //   Ipe.Debug              Debug_*
+    //   Ipe.Time               Time_*
+    //   Ipe.Random             Random_*  + pure Ipê (range, seeded helpers, Seed)
+    //   Ipe.Decimal            Decimal_*  (also re-exports the Decimal builtin type)
+    //   Ipe.Css                Css_*  + pure Ipê layout builders
+    //   Ipe.Ui                 Ui_*   + pure Ipê layout builders
+    //   Ipe.Html               Html element/attr builders over node/voidNode
+    //   Ipe.Html.Attributes    Html attribute builders
+    //   Ipe.Path               Path_*
+    //   Ipe.Regex              Regex_*
+    //
+    // ── Ipe.* pure + effect modules (kernel qualifiers) ────────────────────
     (&["Ipe", "Basics"], "Basics"),
-    (&["Ipe", "String"], "String"),
-    // NOTE — `Ipe.Char` is DELIBERATELY absent: it is a COMPILED-SOURCE
-    // Layer-3 module (registered in `ipe::stdlib::COMPILED_STD_MODULES`). Its
-    // members are point-free `Ffi.kernel "Char_*"` aliases that
-    // `detect_kernel_alias` routes to the registered `Char*` `StdlibKernel`
-    // variants. A module is EITHER a kernel qualifier here OR compiled-source
-    // — never both (`compiled_vs_kernel_qualifier_disjoint`), so it stays out.
-    (&["Ipe", "List"], "List"),
     (&["Ipe", "Maybe"], "Maybe"),
     (&["Ipe", "Result"], "Result"),
     (&["Ipe", "Error"], "Error"),
-    (&["Ipe", "Math"], "Math"),
-    // NOTE — `Ipe.Bitwise` is DELIBERATELY absent: it is a COMPILED-SOURCE
-    // Layer-3 module (registered in `ipe::stdlib::COMPILED_STD_MODULES`). Its
-    // members are point-free `Ffi.kernel "Bitwise_*"` aliases that
-    // `detect_kernel_alias` routes to the registered `Bitwise*` `StdlibKernel`
-    // variants. A module is EITHER a kernel qualifier here OR compiled-source
-    // — never both (`compiled_vs_kernel_qualifier_disjoint`), so it stays out.
-    (&["Ipe", "Dict"], "Dict"),
-    // NOTE — `Ipe.Set` is DELIBERATELY absent: it is a COMPILED-SOURCE
-    // Layer-3 module (registered in `ipe::stdlib::COMPILED_STD_MODULES`). Its
-    // members are point-free `Ffi.kernel "Set_*"` aliases that
-    // `detect_kernel_alias` routes to the registered `Set*` `StdlibKernel`
-    // variants. A module is EITHER a kernel qualifier here OR compiled-source
-    // — never both (`compiled_vs_kernel_qualifier_disjoint`), so it stays out.
-    // NOTE — `Ipe.Bytes` is DELIBERATELY absent: it is a COMPILED-SOURCE
-    // Layer-3 module (registered in `ipe::stdlib::COMPILED_STD_MODULES`). Its
-    // members are point-free `Ffi.kernel "Bytes_*"` aliases that
-    // `detect_kernel_alias` routes to the registered `Bytes*` `StdlibKernel`
-    // variants. A module is EITHER a kernel qualifier here OR compiled-source
-    // — never both (`compiled_vs_kernel_qualifier_disjoint`), so it stays out.
-    (&["Ipe", "Encoding"], "Encoding"),
     (&["Ipe", "Crypto"], "Crypto"),
-    (&["Ipe", "Uuid"], "Uuid"),
     // `Ipe.Secret` — opaque secret-string wrapper.
     (&["Ipe", "Secret"], "Secret"),
     // `Ipe.CssSafety` — the Ipe.Css leaf security kernels. This
@@ -91,39 +95,10 @@ pub const STDLIB_MODULE_QUALIFIERS: &[(&[&str], &str)] = &[
     (&["Ipe", "Json", "Encode"], "JsonEnc"),
     (&["Ipe", "Json", "Decode"], "JsonDec"),
     (&["Ipe", "Json", "Decode", "Pipeline"], "JsonDecP"),
-    (&["Ipe", "Task"], "Task"),
-    (&["Ipe", "Io"], "Io"),
-    // NOTE — `Ipe.Debug` is DELIBERATELY absent: it is a COMPILED-SOURCE
-    // Layer-3 module (registered in `ipe::stdlib::COMPILED_STD_MODULES`). Its
-    // members are point-free `Ffi.kernel "Debug_*"` aliases that
-    // `detect_kernel_alias` routes to the registered `Debug*` `StdlibKernel`
-    // variants. A module is EITHER a kernel qualifier here OR compiled-source
-    // — never both (`compiled_vs_kernel_qualifier_disjoint`), so it stays out.
-    // NOTE — `Ipe.Time` is DELIBERATELY absent: it is a COMPILED-SOURCE
-    // Layer-3 module (registered in `ipe::stdlib::COMPILED_STD_MODULES`). Its
-    // members are point-free `Ffi.kernel "Time_*"` aliases that
-    // `detect_kernel_alias` routes to the registered `Time*` `StdlibKernel`
-    // variants. A module is EITHER a kernel qualifier here OR compiled-source
-    // — never both (`compiled_vs_kernel_qualifier_disjoint`), so it stays out.
     (&["Ipe", "System"], "System"),
-    // NOTE — `Ipe.Random` is DELIBERATELY absent: it is a COMPILED-SOURCE
-    // Layer-3 module (registered in `ipe::stdlib::COMPILED_STD_MODULES`). Its
-    // members are point-free `Ffi.kernel "Random_*"` aliases that
-    // `detect_kernel_alias` routes to the registered `Random*` `StdlibKernel`
-    // variants, plus pure Ipê wrappers (`range`, the seeded helpers, the opaque
-    // `Seed` ADT). A module is EITHER a kernel qualifier here OR compiled-source
-    // — never both (`compiled_vs_kernel_qualifier_disjoint`), so it stays out.
     (&["Ipe", "File"], "File"),
     (&["Ipe", "Process"], "Process"),
     (&["Ipe", "Http"], "Http"),
-    // NOTE — `Ipe.Path` and `Ipe.Regex` are DELIBERATELY
-    // absent here. They are COMPILED-SOURCE Layer-3 modules (registered in
-    // `ipe::stdlib::COMPILED_STD_MODULES`): their members are point-free
-    // `Ffi.kernel "Path_*"` / `"Regex_*"` aliases that `detect_kernel_alias`
-    // routes to the registered pure `Path*` / `Regex*` `StdlibKernel` variants
-    // (runtime: `ipe_runtime::{path,regex_kernel}::*`). A module is EITHER a
-    // kernel qualifier here OR compiled-source — never both
-    // (`compiled_vs_kernel_qualifier_disjoint`), so these stay out of this table.
     // ── Ipe.Http.* server surface ───────────────────────────────────────────
     (&["Ipe", "Http", "Server"], "Server"),
     (&["Ipe", "Http", "Middleware"], "Middleware"),
@@ -150,11 +125,8 @@ pub const STDLIB_MODULE_QUALIFIERS: &[(&[&str], &str)] = &[
     (&["Ipe", "Level"], "Level"),
     (&["Ipe", "Db", "Decode"], "Db.Decode"),
     (&["Ipe", "Db", "Sql"], "Sql"), // SqlFragment builder
-    // `Ipe.Ui` is COMPILED-SOURCE (see `COMPILED_STD_MODULES`), not a kernel
-    // qualifier: its layout builders are pure Ipê over the retained
-    // `node`/`taggedNode` primitives, every other member a `Ffi.kernel "Ui_*"`
-    // alias. The disjointness invariant forbids it here. The `Ipe.Ui.*`
-    // sub-qualifiers below stay native.
+    // `Ipe.Ui.*` sub-qualifiers: Ipe.Ui itself is compiled-source (see the
+    // exclusion table above); these leaf sub-qualifiers are kernel qualifiers.
     (&["Ipe", "Ui", "Background"], "Background"),
     (&["Ipe", "Ui", "Border"], "Border"),
     (&["Ipe", "Ui", "Font"], "Font"),
@@ -162,13 +134,8 @@ pub const STDLIB_MODULE_QUALIFIERS: &[(&[&str], &str)] = &[
     (&["Ipe", "Ui", "Input"], "Input"),
     (&["Ipe", "Ui", "Lazy"], "Lazy"),
     (&["Ipe", "Ui", "Keyed"], "Keyed"), // ipe-key diff identity
-    (&["Ipe", "Decimal"], "Decimal"),   // arbitrary-precision decimal arithmetic
-    // `Ipe.Html` and `Ipe.Html.Attributes` are COMPILED-SOURCE (see
-    // `COMPILED_STD_MODULES`), not kernel qualifiers: their element/attribute
-    // builders are pure Ipê over the retained `node`/`voidNode` /
-    // `attribute`/`boolAttribute`/`noAttr` primitives (and the native
-    // serialiser), reached via `Ffi.kernel "Html_*"` / `"Attr_*"` aliases. The
-    // disjointness invariant forbids either here.
+    // `Ipe.Html` / `Ipe.Html.Attributes` are compiled-source (see exclusion table
+    // above); `Ipe.Html.Events` is a kernel qualifier and stays in this table.
     (&["Ipe", "Html", "Events"], "Event"),
     // ── Ipe.Tea.<Shape> managed-update-loop shapes (ADR 0048) ────────────────
     // The four TEA shapes live under `Ipe.Tea.*`; the canonical short qualifier
@@ -730,120 +697,14 @@ impl Env {
     /// etc. resolve without an explicit `import String`.
     #[allow(clippy::too_many_lines)] // declarative table — extracting a helper would obscure the data
     fn install_prelude_qualifiers(&mut self, interner: &mut Interner) -> DResult<()> {
+        // Compiled-source modules absent from QUALIFIERS (enforced by
+        // `compiled_vs_kernel_qualifier_disjoint`; see the exclusion table in
+        // `STDLIB_MODULE_QUALIFIERS` for the full list and per-module rationale):
+        // String, Char, List, Math, Bitwise, Dict, Set, Bytes, Encoding,
+        // Uuid, Task, Io, Debug, Time, Random, Decimal, Css, Ui, Html,
+        // Html.Attributes, Path, Regex.
+        // Their kernels are reached via `detect_kernel_alias`, not this table.
         const QUALIFIERS: &[(&str, &[&str])] = &[
-            (
-                "String",
-                &[
-                    // ── Arity-1 kernels ───────────────────────────────────
-                    "length",
-                    "reverse",
-                    "isEmpty",
-                    "toUpper",
-                    "toLower",
-                    "toUpperIn",
-                    "toLowerIn",
-                    "casefold",
-                    "trim",
-                    "trimStart",
-                    "trimEnd",
-                    "toInt",
-                    "fromInt",
-                    "toFloat",
-                    "fromFloat",
-                    "fromChar",
-                    "fromList",
-                    "concat",
-                    "words",
-                    "lines",
-                    "toList",
-                    "isEmail",
-                    "isUrl",
-                    // ── Arity-2 kernels ───────────────────────────────────
-                    "append",
-                    "split",
-                    "join",
-                    "contains",
-                    "startsWith",
-                    "endsWith",
-                    "equalFold",
-                    "repeat",
-                    "dropLeft",
-                    "dropRight",
-                    // ── Arity-3 kernels ───────────────────────────────────
-                    "replace",
-                    "slice",
-                    "padLeft",
-                    "padRight",
-                    // ── Haystack-first pure-Ipê aliases (compile from source) ──
-                    "containsIn",
-                    "startsWithIn",
-                    "endsWithIn",
-                    // ── Char-level navigation + fold family ───────────────
-                    "left",
-                    "right",
-                    "cons",
-                    "uncons",
-                    "pad",
-                    "indexes",
-                    "map",
-                    "filter",
-                    "foldl",
-                    "foldr",
-                    "any",
-                    "all",
-                    // ── Legacy entry kept for compatibility ───────────────
-                    "toChar",
-                ],
-            ),
-            // NOTE — `Ipe.Char` is DELIBERATELY absent from this catalog:
-            // it is a compiled-source module; its `Char_*` kernels are
-            // reached via `detect_kernel_alias`, not the qualifier table.
-            (
-                "List",
-                &[
-                    "map",
-                    "filter",
-                    "foldl",
-                    "foldr",
-                    "length",
-                    "head",
-                    "tail",
-                    "take",
-                    "drop",
-                    "append",
-                    "concat",
-                    "concatMap",
-                    "indexedMap",
-                    "reverse",
-                    "member",
-                    "any",
-                    "all",
-                    "find",
-                    "range",
-                    "zip",
-                    "isEmpty",
-                    "cons",
-                    // ── List batch ───────────────────────────────────────────
-                    "filterMap",
-                    "sortBy",
-                    "sort",
-                    "sortWith",
-                    "singleton",
-                    "repeat",
-                    "sum",
-                    "product",
-                    "maximum",
-                    "minimum",
-                    "unique",
-                    "intersperse",
-                    "partition",
-                    "unzip",
-                    "map2",
-                    "map3",
-                    "map4",
-                    "map5",
-                ],
-            ),
             (
                 "Maybe",
                 &[
@@ -960,113 +821,11 @@ impl Env {
             // separate qualifier from `Log` because `Log.debug`/`Log.info`/… are
             // already the logging kernels; `Level.debug`/… are the severity tags.
             ("Level", &["debug", "info", "warn", "error"]),
-            // `Ipe.Math` — `min` / `max` are polymorphic `a -> a -> a`
-            // (Elm `Basics.min`/`max` semantics). Wired in the lowerer to the
-            // runtime's generic compare. All other Math kernels have concrete
-            // monomorphic types (abs : Int->Int, sqrt : Float->Float, etc.).
-            (
-                "Math",
-                &[
-                    "min",
-                    "max",
-                    // constants
-                    "pi",
-                    "e",
-                    "phi",
-                    "sqrt2",
-                    "inf",
-                    "nan",
-                    // arity-1 Float→Bool
-                    "isNaN",
-                    // arity-1 Int→Int
-                    "abs",
-                    // arity-1 Float→Float
-                    "sqrt",
-                    "cbrt",
-                    "exp",
-                    "exp2",
-                    "log",
-                    "log2",
-                    "log10",
-                    "sin",
-                    "cos",
-                    "tan",
-                    "asin",
-                    "acos",
-                    "atan",
-                    "sinh",
-                    "cosh",
-                    "tanh",
-                    "asinh",
-                    "acosh",
-                    "atanh",
-                    // arity-1 Float→Int
-                    "floor",
-                    "ceil",
-                    "round",
-                    "trunc",
-                    // arity-2 Float→Float→Float
-                    "pow",
-                    "hypot",
-                    "atan2",
-                    "mod",
-                    "remainder",
-                ],
-            ),
-            // `Ipe.Bitwise` is DELIBERATELY absent: it is COMPILED-SOURCE
-            // (`ipe::stdlib::COMPILED_STD_MODULES`), so its whole surface resolves
-            // from `Ipe/Bitwise.ipe` — the `Ffi.kernel "Bitwise_*"` aliases —
-            // not from this kernel-qualifier catalog.
             (
                 "Basics",
                 &[
                     "identity", "always", "not", "toString", "modBy", "clamp", "fst", "snd",
                     "compare", "negate", "abs", "sqrt", "min", "max",
-                ],
-            ),
-            // `Ipe.Dict` — associative map kernels.
-            (
-                "Dict",
-                &[
-                    "empty",
-                    "isEmpty",
-                    "size",
-                    "insert",
-                    "get",
-                    "remove",
-                    "member",
-                    "keys",
-                    "values",
-                    "toList",
-                    "fromList",
-                    "map",
-                    "foldl",
-                    "union",
-                    "singleton",
-                    "foldr",
-                    "filter",
-                    "partition",
-                    "intersect",
-                    "diff",
-                    "update",
-                ],
-            ),
-            // NOTE — `Ipe.Set` is DELIBERATELY absent from this catalog:
-            // it is a compiled-source module; its `Set_*` kernels are
-            // reached via `detect_kernel_alias`, not the qualifier table.
-            // NOTE — `Ipe.Bytes` is DELIBERATELY absent from this catalog:
-            // it is a compiled-source module; its `Bytes_*` kernels are
-            // reached via `detect_kernel_alias`, not the qualifier table.
-            // `Ipe.Encoding` — text encoding helpers.
-            (
-                "Encoding",
-                &[
-                    "base64Encode",
-                    "base64Decode",
-                    "urlEncode",
-                    "urlDecode",
-                    "hexEncode",
-                    "hexDecode",
                 ],
             ),
             // `Ipe.Json.Encode` — JSON encoder.
@@ -1137,9 +896,6 @@ impl Env {
                     "chachaKeyFromPasswordKey",
                 ],
             ),
-            // `Ipe.Uuid` — UUID generation and parsing.
-            // `v4` and `v7` are arity-0 (bare value); `parse` is arity-1.
-            ("Uuid", &["v4", "v7", "parse"]),
             // `Ipe.Secret` — opaque secret-string wrapper.
             // `fromString` is the seal; `use` is the scoped consume (apply a
             // function to the plaintext, return its result); `redacted` is the
@@ -1177,62 +933,6 @@ impl Env {
                     "decode",
                 ],
             ),
-            // `Ipe.Task` — Task combinators + retry surface + BackoffStrategy constructors.
-            (
-                "Task",
-                &[
-                    "succeed",
-                    "fail",
-                    "map",
-                    "map2",
-                    "map3",
-                    "map4",
-                    "map5",
-                    "attempt",
-                    "andThen",
-                    "mapError",
-                    "onError",
-                    "fromResult",
-                    "andThenResult",
-                    "sequence",
-                    "parallel",
-                    "lazy",
-                    // retry surface
-                    "retryWith",
-                    "linearBackoff",
-                    "exponentialBackoff",
-                    "withJitter",
-                    "retryOn",
-                    "withRetryOn",
-                    "defaultRetryPolicy",
-                    "withMaxAttempts",
-                    "withBaseMs",
-                    // BackoffStrategy constructors
-                    "Linear",
-                    "LinearWithJitter",
-                    "Exponential",
-                    "ExponentialWithJitter",
-                ],
-            ),
-            // `Ipe.Io` — I/O effects. `println`/`eprintln` write a line
-            // (message + trailing newline) to stdout/stderr respectively.
-            (
-                "Io",
-                &[
-                    "readLine",
-                    "readSecret",
-                    "writeStdout",
-                    "writeStderr",
-                    "println",
-                    "eprintln",
-                ],
-            ),
-            // NOTE — `Ipe.Debug` is DELIBERATELY absent from this catalog:
-            // it is a compiled-source module; its `Debug_*` kernels are
-            // reached via `detect_kernel_alias`, not the qualifier table.
-            // NOTE — `Ipe.Time` is DELIBERATELY absent from this catalog:
-            // it is a compiled-source module; its `Time_*` kernels are
-            // reached via `detect_kernel_alias`, not the qualifier table.
             // `Ipe.System` — system effects.
             (
                 "System",
@@ -1601,21 +1301,8 @@ impl Env {
             ("Lazy", &["lazy", "lazy2", "lazy3", "lazy4", "lazy5"]),
             // ── Ipe.Ui.Keyed — ipe-key for diff identity ─────────────────────────
             ("Keyed", &["column", "row"]),
-            // NOTE — `Html` (`Ipe.Html`) is DELIBERATELY absent: it is a
-            // COMPILED-SOURCE Layer-3 module (`COMPILED_STD_MODULES`). Its element
-            // builders are pure Ipê over the retained `node`/`voidNode` primitives,
-            // and the native serialiser (`render`/`escapeHtml`/`escapeAttr`/
-            // `attrToString`/`renderStatic`) is re-exposed there through
-            // `Ffi.kernel "Html_*"` aliases, which `detect_kernel_alias` routes to
-            // the retained `Html*` kernels via `stdlib_index` — no prelude-qualifier
-            // install needed (mirrors `Path` / `Url` / `Regex`).
-            // NOTE — `Attr` (`Ipe.Html.Attributes`) is DELIBERATELY absent: it is
-            // a COMPILED-SOURCE Layer-3 module (`COMPILED_STD_MODULES`). Its three
-            // retained primitives are reached through the point-free
-            // `Ffi.kernel "Attr_attribute"` / `"Attr_boolAttribute"` / `"Attr_noAttr"`
-            // aliases, which `detect_kernel_alias` routes to the `HtmlAttribute` /
-            // `HtmlBoolAttribute` / `HtmlNoAttr` kernels via `stdlib_index` — no
-            // prelude-qualifier install needed (mirrors `Path` / `Url` / `Regex`).
+            // `Ipe.Html` and `Ipe.Html.Attributes` are compiled-source (see exclusion
+            // table in `STDLIB_MODULE_QUALIFIERS`); `Ipe.Html.Events` is a kernel qualifier.
             // ── Ipe.Html.Events alias ─────────────────────────────────────────────
             (
                 "Event",
@@ -1689,52 +1376,11 @@ impl Env {
             ("Stream", &["stream", "emit", "finish", "withContentType"]),
             // Ipe.Http.Stream — client-side HTTP streaming (fail-closed).
             ("HttpStream", &["open", "forEachChunk", "close", "chunks"]),
-            // Ipe.Decimal — arbitrary-precision decimal arithmetic.
-            (
-                "Decimal",
-                &[
-                    "zero",
-                    "one",
-                    "oneHundred",
-                    "fromString",
-                    "fromInt",
-                    "fromFloat",
-                    "fromMinor",
-                    "toString",
-                    "toStringFixed",
-                    "toFloat",
-                    "toInt",
-                    "toMinor",
-                    "add",
-                    "sub",
-                    "mul",
-                    "div",
-                    "mod",
-                    "neg",
-                    "abs",
-                    "floor",
-                    "ceil",
-                    "round",
-                    "roundHalfUp",
-                    "truncate",
-                    "compare",
-                    "eq",
-                    "neq",
-                    "lt",
-                    "lte",
-                    "gt",
-                    "gte",
-                    "min",
-                    "max",
-                    "isZero",
-                    "isPositive",
-                    "isNegative",
-                    "percentOf",
-                    "addPercent",
-                    "subPercent",
-                    "formatWith",
-                ],
-            ),
+            // Ipe.Decimal — DELIBERATELY absent: migrated to compiled-source
+            // `Ipe/Decimal.ipe` (COMPILED_STD_MODULES). Every member reaches its
+            // kernel via `Ffi.kernel "Decimal_*"`, so this catalog block is no
+            // longer needed here.
+            //
             // Ipe.Http.Server.WebSocket (12 kernels).
             (
                 "Ws",
@@ -1855,8 +1501,9 @@ impl Env {
             ("Ipe.Ui.Lazy", "Lazy"),
             // Ipe.Ui.Keyed sub-module.
             ("Ipe.Ui.Keyed", "Keyed"),
-            // Ipe.Decimal — arbitrary-precision decimal arithmetic.
-            ("Ipe.Decimal", "Decimal"),
+            // Ipe.Decimal — DELIBERATELY absent: migrated to compiled-source
+            // `Ipe/Decimal.ipe`. The `Ffi.kernel "Decimal_*"` aliases in that
+            // module reach every kernel directly; no qualifier alias is needed.
         ];
 
         // Build stdlib_index FIRST so every `kernel_home` call below can look

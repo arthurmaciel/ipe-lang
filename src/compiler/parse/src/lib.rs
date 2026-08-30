@@ -205,10 +205,10 @@ mod tests {
                     && items.first().is_some_and(|e| matches!(e.value, Exposed::Value(_)))
         ));
 
-        // Two imports: `Ipe.Io as Io` and `Ipe.String`. (Basics/Tier-B are
-        // ambient, so no open prelude import is needed; but the Tier-C
-        // `String.fromInt` in `main` requires its `import Ipe.String`.)
-        assert_eq!(m.imports.len(), 2);
+        // One import: `Ipe.System as System`. The kernel-qualifier `Ipe.System`
+        // resolves without a compiled-source injection, making it suitable as
+        // the shared parse fixture.
+        assert_eq!(m.imports.len(), 1);
         let seg_names = |imp: &ipe_syntax::Import| -> Vec<&str> {
             imp.name
                 .value
@@ -217,13 +217,9 @@ mod tests {
                 .collect()
         };
         if let Some(imp) = m.imports.first() {
-            assert_eq!(seg_names(imp), ["Ipe", "Io"]);
-            assert_eq!(imp.alias.and_then(|s| i.resolve(s)), Some("Io"));
+            assert_eq!(seg_names(imp), ["Ipe", "System"]);
+            assert_eq!(imp.alias.and_then(|s| i.resolve(s)), Some("System"));
             assert!(matches!(&imp.exposing.value, Exposing::List(items) if items.is_empty()));
-        }
-        if let Some(imp) = m.imports.get(1) {
-            assert_eq!(seg_names(imp), ["Ipe", "String"]);
-            assert_eq!(imp.alias, None);
         }
 
         // One union: Msg { Increment, Decrement }.
@@ -286,8 +282,8 @@ mod tests {
             }
         }
 
-        // `main`: no patterns, no annotation, nested Call body whose callee is the
-        // qualified `Io.println` (a `VarQual`).
+        // `main`: no patterns, no annotation, Call body whose callee is the
+        // qualified `System.setenv` (a `VarQual`) applied to two string literals.
         let main = find_value(&m, &i, "main");
         assert!(main.is_some(), "main value present");
         if let Some(mval) = main {
@@ -296,13 +292,18 @@ mod tests {
             assert!(
                 matches!(&mval.body.value, Expr_::Call(c, _) if matches!(c.value, Expr_::VarQual(_, _)))
             );
-            if let Expr_::Call(_, args) = &mval.body.value {
-                assert_eq!(args.len(), 1);
-                // The single argument is itself a Call (String.fromInt (...)).
+            if let Expr_::Call(callee, args) = &mval.body.value {
+                assert_eq!(args.len(), 2, "System.setenv takes two string arguments");
+                // Both arguments are string literals.
                 assert!(
-                    args.first()
-                        .is_some_and(|a| matches!(a.value, Expr_::Call(_, _)))
+                    args.iter().all(|a| matches!(a.value, Expr_::Str(_))),
+                    "both args must be string literals"
                 );
+                // Callee is System.setenv.
+                if let Expr_::VarQual(qsym, nsym) = callee.value {
+                    assert_eq!(i.resolve(qsym), Some("System"));
+                    assert_eq!(i.resolve(nsym), Some("setenv"));
+                }
             }
         }
     }
@@ -315,22 +316,18 @@ mod tests {
         let Ok(m) = result else { return };
         let main = find_value(&m, &i, "main");
         assert!(main.is_some(), "main present");
-        // main = Io.println (String.fromInt (update Increment 0))
-        let inner = main.and_then(|mv| match &mv.body.value {
-            Expr_::Call(_, outer_args) => outer_args.first(),
-            _ => None,
-        });
-        let qual = inner.and_then(|arg0| match &arg0.value {
-            Expr_::Call(inner_callee, _) => Some(&inner_callee.value),
+        // main = System.setenv "HOME" "x" — the callee is directly a VarQual.
+        let callee_val = main.and_then(|mv| match &mv.body.value {
+            Expr_::Call(callee, _) => Some(&callee.value),
             _ => None,
         });
         assert!(
-            qual.is_some_and(|q| matches!(
+            callee_val.is_some_and(|q| matches!(
                 q,
                 Expr_::VarQual(qsym, nsym)
-                    if i.resolve(*qsym) == Some("String") && i.resolve(*nsym) == Some("fromInt")
+                    if i.resolve(*qsym) == Some("System") && i.resolve(*nsym) == Some("setenv")
             )),
-            "expected String.fromInt VarQual, got {qual:?}"
+            "expected System.setenv VarQual, got {callee_val:?}"
         );
     }
 

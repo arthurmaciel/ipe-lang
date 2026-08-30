@@ -55,15 +55,14 @@ fn i186_false_positive_ipec_no_spurious_display() {
         built.err()
     );
 
-    let emitted = std::fs::read_to_string(out.join("src").join("main.rs"))
-        .expect("emitted main.rs must exist");
+    let emitted = crate::support::read_all_emitted_src(&out);
 
     // The `grab` fn's wildcard row generic gets `IpeRow` (its real obligation)
     // and must NOT get `Display` (the sibling `String` is what is toString'd).
-    let grab_sig = emitted.lines().find(|l| l.contains("pub fn main_grab"));
+    let grab_sig = emitted.lines().find(|l| l.contains("fn main_grab"));
     assert!(
         grab_sig.is_some(),
-        "emitted main.rs must declare main_grab; got:\n{emitted}"
+        "emitted user source must declare main_grab; got:\n{emitted}"
     );
     let grab_sig = grab_sig.unwrap_or_default();
     assert!(

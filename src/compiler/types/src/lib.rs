@@ -2531,14 +2531,19 @@ mod tests {
         let src = concat!(
             "module Main exposing (main)\n",
             "\n",
-            "import Ipe.List as List\n",
-            "\n",
             "type alias Item = { value : Int }\n",
+            "\n",
+            "foldl fn acc list =\n",
+            "    case list of\n",
+            "        [] ->\n",
+            "            acc\n",
+            "        x :: rest ->\n",
+            "            foldl fn (fn x acc) rest\n",
             "\n",
             "setItems xs model = { model | items = xs }\n",
             "\n",
             "getSum model =\n",
-            "    List.foldl (\\x acc -> x.value + acc) 0 model.items\n",
+            "    foldl (\\x acc -> x.value + acc) 0 model.items\n",
             "\n",
             "main =\n",
             "    let\n",
@@ -2739,7 +2744,7 @@ mod tests {
         assert!(solved.is_ok(), "inference must succeed");
         let Ok(solved) = solved else { return };
 
-        // main = Io.println (String.fromInt (update Increment 0))
+        // main = System.setenv "HOME" "x"
         let main_def = m
             .defs
             .iter()
@@ -2757,52 +2762,38 @@ mod tests {
             return;
         };
 
-        // Outer call: println … : Task ()
+        // Outer call: (System.setenv "HOME") "x" : Task ()
         let outer = as_call(body);
         assert!(outer.is_some(), "main body is a call");
-        let Some((_println, outer_args)) = outer else {
+        let Some((_setenv_partial, outer_args)) = outer else {
             return;
         };
-        let println_region = solved.regions.get(&(main_home.clone(), body.span));
+        let setenv_region = solved.regions.get(&(main_home.clone(), body.span));
         assert!(
             matches!(
-                println_region,
+                setenv_region,
                 Some(Ty::Con { name, args, .. })
                     if i.resolve(*name) == Some("Task") && args.as_slice() == [Ty::Unit]
             ),
-            "println region must be Task (): {println_region:?}"
+            "setenv region must be Task (): {setenv_region:?}"
         );
 
-        // String.fromInt … : String
-        let Some(from_int_call) = outer_args.first() else {
+        // The outer arg is the string literal "x" : String
+        let Some(str_arg) = outer_args.first() else {
             return;
         };
-        let mid = as_call(from_int_call);
-        assert!(mid.is_some(), "fromInt call");
-        let Some((_from_int, mid_args)) = mid else {
-            return;
-        };
+        assert!(
+            matches!(&str_arg.value, canon::Expr_::Str(_)),
+            "setenv outer arg is a string literal"
+        );
         assert_eq!(
             solved
                 .regions
-                .get(&(main_home.clone(), from_int_call.span))
+                .get(&(main_home.clone(), str_arg.span))
                 .and_then(|t| ty_con_name(t, &i))
                 .as_deref(),
-            Some("String")
-        );
-
-        // update Increment 0 : Int
-        let Some(update_call) = mid_args.first() else {
-            return;
-        };
-        assert!(as_call(update_call).is_some(), "update call");
-        assert_eq!(
-            solved
-                .regions
-                .get(&(main_home.clone(), update_call.span))
-                .and_then(|t| ty_con_name(t, &i))
-                .as_deref(),
-            Some("Int")
+            Some("String"),
+            "string literal region must be String"
         );
     }
 
@@ -3428,10 +3419,9 @@ mod tests {
         // builtin has no user-writable record-update form. It must be the
         // dedicated `BuiltinRecordUpdate` (IPE-T0017) naming the type.
         let src = "module Main exposing (main)\n\
-                   import Ipe.Io as Io\n\
                    f : PanicInfo -> PanicInfo\n\
                    f p =\n    { p | message = \"x\" }\n\
-                   main =\n    Io.println \"never\"\n";
+                   main =\n    0\n";
         let parsed = canon_src(src);
         assert!(
             parsed.is_some(),

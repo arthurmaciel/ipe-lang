@@ -69,7 +69,7 @@ fn emission_preserves_the_load_bearing_shapes() {
     };
     let built = ipe::build(&entry, &out, &runtime);
     assert!(built.is_ok(), "build failed: {:?}", built.err());
-    let src = std::fs::read_to_string(out.join("src").join("main.rs")).expect("main.rs");
+    let src = crate::support::read_all_emitted_src(&out);
 
     // `\_ ->` / `f _ =` stay warning-clean under the preamble.
     assert!(
@@ -77,8 +77,11 @@ fn emission_preserves_the_load_bearing_shapes() {
         "preamble must keep #![allow(unused …)] so `\\_ ->` is warning-clean"
     );
     // A wildcard param emits NO destructure — just an unused synthetic binder.
+    // Visibility is `pub(crate)` when in a split module file, `pub` in
+    // single-file emit; match the function signature without the visibility
+    // keyword so the assertion holds under both layouts.
     assert!(
-        src.contains("pub fn main_ignore_arg(arg_0: i64) -> i64 {"),
+        src.contains("fn main_ignore_arg(arg_0: i64) -> i64 {"),
         "wildcard def param → fresh unused binder, no destructure:\n{src}"
     );
     // A record param recovers its COMPLETE field set from the solved type.

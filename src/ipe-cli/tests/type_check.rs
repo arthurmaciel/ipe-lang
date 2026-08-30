@@ -172,8 +172,8 @@ fn check_caret_matches_build_for_unresolved_import_in_dependency() -> TestResult
 
 /// `ipe type-check` must frame a stdlib-qualifier-without-import diagnostic against
 /// the dependency module that owns it, caret under the qualifier — identical to
-/// `ipe build`. The fixture uses `Math.abs` in `src/Lib/Calc.ipe` without
-/// importing `Ipe.Math`.
+/// `ipe build`. The fixture uses `Crypto.sha256` in `src/Lib/Calc.ipe` without
+/// importing `Ipe.Crypto`.
 #[test]
 fn check_caret_matches_build_for_missing_qualifier_in_dependency() -> TestResult {
     let entry = fixture("multi_missing_qualifier/src/Main.ipe");
@@ -187,11 +187,11 @@ fn check_caret_matches_build_for_missing_qualifier_in_dependency() -> TestResult
         .ok_or_else(|| format!("check report has no snippet band:\n{check_err}"))?;
     assert!(
         loc.contains("Lib/Calc.ipe:8:21"),
-        "caret must land on the `Math` usage in the dependency, got location `{loc}`"
+        "caret must land on the `Crypto` usage in the dependency, got location `{loc}`"
     );
     assert!(
         caret.contains("^^^^^^^^"),
-        "the caret must underline `Math`, got:\n{caret}"
+        "the caret must underline `Crypto`, got:\n{caret}"
     );
 
     if let Some(build_err) = build_stderr(&entry) {
