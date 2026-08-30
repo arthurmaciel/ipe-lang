@@ -14,6 +14,21 @@ at the top and follow the links; each page assumes only the ones before it.
 4. [The Elm Architecture](the-elm-architecture.md) — how a program that reacts
    to input over time is structured.
 
+## Standard-library guides
+
+Each teaches the *mental model* of one module through a worked, runnable example,
+then links to the per-symbol `ipe doc` reference. Read the one you need; they
+cross-link where topics meet.
+
+- **Collections** — [Sets](set.md) (unique, unordered, membership),
+  [Dictionaries](dict.md) (a value per key).
+- **Absence and failure** — [Maybe](maybe.md) (a value that might be missing),
+  [Result](result.md) (a failure that carries a reason).
+- **Text and binary** — [Regular expressions](regex.md), [Text
+  encodings](encoding.md) (base64/URL/hex), [Bytes](bytes.md) (raw octets).
+- **Files and configuration** — [Files](file.md) (typed paths, effects as tasks),
+  [Configuration](config.md) (typed TOML/YAML/JSON decoders), [CSV](csv.md).
+
 ## Reference and lookup
 
 - [Glossary](glossary.md) — every term of art, defined once.
