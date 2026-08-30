@@ -1111,10 +1111,7 @@ mod tests {
                    import Ipe.File as F\n\n\
                    main = F.readFile\n";
         let Some((m, i)) = canon_module_src(src) else {
-            assert!(
-                false_marker(),
-                "aliased Ipe.File import must canonicalise"
-            );
+            assert!(false_marker(), "aliased Ipe.File import must canonicalise");
             return;
         };
         assert_main_is_kernel(&m, &i, "File", "readFile");
