@@ -262,11 +262,24 @@ const HTML: &str = include_str!("../Ipe/Html.ipe");
 /// member (`layout`/`spacing`/`button`/`link`/`image`/the `on*` events/the
 /// security-gated `mediaQuery`/`breakpoint`/`onPseudo`/the `desc*` roles/…)
 /// stays native and is re-aliased here through the same mechanism, so its
-/// bespoke emit arm is unchanged. The `Ipe.Ui.*` sub-modules (Background/Border/
-/// Font/Region/Input/Lazy/Keyed) stay native kernel qualifiers. Registered in
-/// [`COMPILED_STD_MODULES`] (NOT `MODULES`); NOT in `STDLIB_MODULE_QUALIFIERS`,
-/// so the disjointness invariant holds.
+/// bespoke emit arm is unchanged. `image` is wrapped: it takes a typed
+/// `ImageSrc` and calls `imageKernel` with `ImageSrc.toAttributeValue` at the
+/// boundary, so the `Ui_image` kernel still receives a plain `String`. The
+/// `Ipe.Ui.*` sub-modules (Background/Border/Font/Region/Input/Lazy/Keyed)
+/// stay native kernel qualifiers. Registered in [`COMPILED_STD_MODULES`] (NOT
+/// `MODULES`); NOT in `STDLIB_MODULE_QUALIFIERS`, so the disjointness invariant
+/// holds.
 const UI: &str = include_str!("../Ipe/Ui.ipe");
+
+/// `Ipe.Ui.ImageSrc` — a closed-sum typed image source (compiled source).
+///
+/// Pure Ipê: defines `type ImageSrc = FromUrl Url | FromData { mime, base64 }`
+/// and pattern-matches in `toAttributeValue`. The constructor is NOT exported;
+/// `url : Url -> ImageSrc` and `data : { mime, base64 } -> ImageSrc` are the
+/// only ways in. `Ipe.Ui.image` wraps the `Ui_image` kernel and maps through
+/// `toAttributeValue` at the boundary. Not in `STDLIB_MODULE_QUALIFIERS`, so
+/// the disjointness invariant holds.
+const STD_UI_IMAGE_SRC: &str = include_str!("../Ipe/Ui/ImageSrc.ipe");
 /// `Ipe.Regex` — RE2 regex helpers, compiled-source Layer-3.
 ///
 /// The members are point-free `Ffi.kernel "Regex_*"` aliases resolved by the
@@ -738,6 +751,18 @@ const STD_NET: &str = include_str!("../Ipe/Net.ipe");
 /// `STDLIB_MODULE_QUALIFIERS`, so the disjointness invariant holds.
 const STD_DURATION: &str = include_str!("../Ipe/Duration.ipe");
 
+/// `Ipe.Time.Timestamp` — the opaque instant-in-time newtype (compiled source).
+///
+/// Pure Ipê: defines `type Timestamp = Timestamp Int` (milliseconds since the
+/// Unix epoch) and pattern-matches it in `toUnixMillis`; the constructor is
+/// NOT exported, so `fromUnixMillis` is the only way in. Arithmetic composes
+/// with `Ipe.Duration`: `add : Duration -> Timestamp -> Timestamp` and
+/// `diff : Timestamp -> Timestamp -> Duration`. The `Time_*` runtime kernels
+/// keep their `Int` signatures; the `Ipe.Time` wrapper maps `Timestamp`
+/// to/from the raw integer at the boundary. Not in `STDLIB_MODULE_QUALIFIERS`,
+/// so the disjointness invariant holds.
+const STD_TIME_TIMESTAMP: &str = include_str!("../Ipe/Time/Timestamp.ipe");
+
 /// `Ipe.ByteSize` — the opaque, unit-explicit `ByteSize` newtype (compiled source).
 ///
 /// Pure Ipê: defines `type ByteSize = ByteSize Int` (bytes) and pattern-matches
@@ -763,6 +788,13 @@ pub const COMPILED_STD_MODULES: &[CompiledStdModule] = &[
     CompiledStdModule {
         dotted: "Ipe.Duration",
         source: STD_DURATION,
+    },
+    // Ipe.Time.Timestamp — opaque instant newtype; pure Ipê over a raw `Int`
+    // epoch-millis carrier. Composes with `Ipe.Duration` for typed arithmetic.
+    // The `Time_*` runtime kernels keep their `Int` signatures.
+    CompiledStdModule {
+        dotted: "Ipe.Time.Timestamp",
+        source: STD_TIME_TIMESTAMP,
     },
     CompiledStdModule {
         dotted: "Ipe.ByteSize",
@@ -1093,9 +1125,17 @@ pub const COMPILED_STD_MODULES: &[CompiledStdModule] = &[
     // Ipe.Ui — Layer-3 source; the layout builders are pure Ipê over the retained
     // `Ffi.kernel "Ui_node"` / `"Ui_taggedNode"` primitives, with every other
     // member re-aliased to its unchanged native kernel (`ipe_runtime::ui::*`).
+    // `image` wraps `imageKernel` with `ImageSrc.toAttributeValue` at the boundary.
     CompiledStdModule {
         dotted: "Ipe.Ui",
         source: UI,
+    },
+    // Ipe.Ui.ImageSrc — closed-sum typed image source; pure Ipê.
+    // `url : Url -> ImageSrc` and `data : {mime,base64} -> ImageSrc` are the
+    // only constructors. `toAttributeValue` exits at the `Ui_image` boundary.
+    CompiledStdModule {
+        dotted: "Ipe.Ui.ImageSrc",
+        source: STD_UI_IMAGE_SRC,
     },
     // Ipe.Markdown — pure Ipê markdown→Ui renderer; no kernel calls.
     CompiledStdModule {

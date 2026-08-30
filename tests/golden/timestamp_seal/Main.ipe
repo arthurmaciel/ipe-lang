@@ -1,0 +1,28 @@
+module Main exposing (main)
+
+import Ipe.Io as Io
+import Ipe.String as String
+import Ipe.Duration as Duration
+import Ipe.Time.Timestamp as Timestamp
+
+
+-- SEAL: a program using Timestamp arithmetic compiles and runs correctly.
+
+advance : Timestamp.Timestamp -> Timestamp.Timestamp
+advance t =
+    Timestamp.add (Duration.seconds 30) t
+
+
+main =
+    let
+        t0 = Timestamp.fromUnixMillis 0
+        t1 = advance t0
+        d = Timestamp.diff t1 t0
+    in
+    Io.println
+        (String.join " "
+            [ String.fromInt (Timestamp.toUnixMillis t0)
+            , String.fromInt (Timestamp.toUnixMillis t1)
+            , String.fromInt (Duration.toMillis d)
+            ]
+        )
