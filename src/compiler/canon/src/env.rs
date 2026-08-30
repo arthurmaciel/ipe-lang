@@ -1057,6 +1057,7 @@ impl Env {
                     "any",
                     "api",
                     "static",
+                    "mountApp",
                     "listen",
                     "text",
                     "json",
@@ -1241,6 +1242,7 @@ impl Env {
                 &[
                     "app",
                     "appRouted",
+                    "embed",
                     "appWith",
                     "route",
                     "csrf",

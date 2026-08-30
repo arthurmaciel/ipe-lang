@@ -1654,12 +1654,50 @@ fn check_program_tea_import_gate(
         return Ok(());
     }
 
+    // A declarative `Ipe.Http.Server` program (`main = Server.listen …`) may
+    // legitimately import `Ipe.Tea.Web` to build a mountable web app with
+    // `Web.embed` and mount it via `Server.mountApp` on the shared server port
+    // (shape-model §9). Such a `main` head-calls `Server.listen`, not a TEA
+    // shape entry, so it would otherwise trip this gate; exempt it. The embedded
+    // app is a VALUE consumed by the Server, not the module's own app shape.
+    if main_head_is_server_listen(
+        match main_def {
+            canon::Def::Untyped { body, .. } | canon::Def::Typed { body, .. } => body,
+        },
+        interner,
+    ) {
+        return Ok(());
+    }
+
     Err(Diagnostic::Name {
         span: tea_import.name.span,
         msg: NameError::ProgramImportsTeaShape {
             module: path_to_dot_string(interner, &tea_import.name.value),
         },
     })
+}
+
+/// Does this `main` body head-call `Server.listen` — the declarative
+/// `Ipe.Http.Server` entry? Same head-peeling as [`main_head_is_tea_entry`]. A
+/// Server program that embeds a web app (`Web.embed` + `Server.mountApp`) is a
+/// Program at the module level, not a TEA app, so it is exempt from the
+/// `Ipe.Tea.*`-import gate (IPE-N0033).
+fn main_head_is_server_listen(body: &canon::Expr, interner: &Interner) -> bool {
+    let mut node = body;
+    loop {
+        match &node.value {
+            canon::Expr_::Call(callee, _) => node = callee,
+            canon::Expr_::Lambda(_, inner) | canon::Expr_::Let(_, inner) => node = inner,
+            canon::Expr_::VarKernel { module, name, .. } => {
+                let (Some(m), Some(n)) = (interner.resolve(*module), interner.resolve(*name))
+                else {
+                    return false;
+                };
+                return m == "Server" && n == "listen";
+            }
+            _ => return false,
+        }
+    }
 }
 
 /// Does this `main` body head-call a TEA shape entry ([`TEA_APP_ENTRIES`])?

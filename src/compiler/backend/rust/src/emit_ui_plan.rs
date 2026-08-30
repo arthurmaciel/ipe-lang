@@ -493,6 +493,7 @@ pub const fn ui_call_shape(k: KernelFn) -> Option<UiEmitPlan> {
         // ── Shape-router delegations ──────────────────────────────────────
         KernelFn::WebApp
         | KernelFn::WebAppRouted
+        | KernelFn::WebEmbed
         | KernelFn::WebAppWith
         | KernelFn::WebRoute
         | KernelFn::WebRenderStatic => delegate(UiDelegate::Web),
