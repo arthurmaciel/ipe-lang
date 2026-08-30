@@ -36,7 +36,13 @@ const STRING: &str = include_str!("../Ipe/String.ipe");
 const CHAR: &str = include_str!("../Ipe/Char.ipe");
 /// `Ipe.Dict` — string-keyed associative map.
 const DICT: &str = include_str!("../Ipe/Dict.ipe");
-/// `Ipe.Set` — unordered set of unique elements.
+/// `Ipe.Set` — unordered set of unique elements, compiled-source Layer-3.
+///
+/// Every member is a point-free `Ffi.kernel "Set_*"` alias resolved by
+/// `ipe_canon::resolve::detect_kernel_alias` to a registered `Set*`
+/// `StdlibKernel` variant (`ipe_runtime::set::*`). Registered in
+/// [`COMPILED_STD_MODULES`] (NOT `MODULES`); NOT in `STDLIB_MODULE_QUALIFIERS`,
+/// so the disjointness invariant holds.
 const SET: &str = include_str!("../Ipe/Set.ipe");
 /// `Ipe.Bytes` — arbitrary byte buffer, distinct from `String`.
 ///
@@ -266,10 +272,6 @@ pub const MODULES: &[StdModule] = &[
     StdModule {
         name: "Ipe.Dict",
         source: DICT,
-    },
-    StdModule {
-        name: "Ipe.Set",
-        source: SET,
     },
     StdModule {
         name: "Ipe.Bytes",
@@ -714,6 +716,14 @@ pub const COMPILED_STD_MODULES: &[CompiledStdModule] = &[
     CompiledStdModule {
         dotted: "Ipe.Time",
         source: TIME,
+    },
+    // Ipe.Set — Layer-3 source; every member is a point-free
+    // `Ffi.kernel "Set_*"` alias resolved by `detect_kernel_alias` to the
+    // registered `Set*` kernels (`ipe_runtime::set::*`). Disjoint from
+    // `STDLIB_MODULE_QUALIFIERS` (no `"Set"` entry there).
+    CompiledStdModule {
+        dotted: "Ipe.Set",
+        source: SET,
     },
     CompiledStdModule {
         dotted: "Ipe.Random",
