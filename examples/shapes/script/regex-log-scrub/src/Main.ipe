@@ -1,0 +1,117 @@
+module Main exposing (main)
+
+import Ipe.Regex as Regex
+import Ipe.Result as Result exposing (Result(..))
+import Ipe.List as List
+import Ipe.Task as Task
+import Ipe.Io as Io
+
+
+-- Scrub sensitive values out of log lines before they are stored. A pattern is
+-- `compile`d ONCE — turning an invalid pattern into a typed `Err` at that single
+-- point — and the compiled `Regex` is then reused across every line for
+-- `replace` (redact emails), `findAll` (collect leaked tokens for an audit), and
+-- `match` (flag lines that still look risky). RE2 syntax: linear-time matching,
+-- no catastrophic backtracking on adversarial input.
+
+
+-- The raw log the scrubber runs over.
+logLines : List String
+logLines =
+    [ "user ada@example.com logged in"
+    , "token=abc123DEF456 issued for grace@example.org"
+    , "healthcheck ok"
+    , "reset link sent to linus@example.net token=zzz999"
+    ]
+
+
+-- A rule pairs a compiled pattern with the text that replaces each match. The
+-- `Regex` is opaque and already-valid, so no rule can carry a broken pattern.
+type alias Rule =
+    { pattern : Regex
+    , replacement : String
+    }
+
+
+-- Compile every rule ONCE, at the boundary. `Result.combine` collects the list
+-- of `Result`s into a single `Result` of the list, short-circuiting on the first
+-- pattern that fails to compile — so a typo in any pattern is one observable
+-- error here, never a silent no-match later.
+rules : Result Error (List Rule)
+rules =
+    Result.combine
+        [ compileRule "[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+" "[email]"
+        , compileRule "token=[A-Za-z0-9]+" "token=[redacted]"
+        ]
+
+
+compileRule : String -> String -> Result Error Rule
+compileRule pattern replacement =
+    Regex.compile pattern
+        |> Result.map (\re -> { pattern = re, replacement = replacement })
+
+
+-- Apply one rule to a line with `Regex.replace`: every match becomes the rule's
+-- replacement text.
+applyRule : Rule -> String -> String
+applyRule rule line =
+    Regex.replace rule.pattern rule.replacement line
+
+
+-- Scrub a line by folding every rule over it.
+scrub : List Rule -> String -> String
+scrub ruleList line =
+    List.foldl applyRule line ruleList
+
+
+-- Collect the raw tokens a line leaked, for an audit trail, with `findAll` —
+-- every non-overlapping match of the token pattern, in order.
+leakedTokens : Rule -> String -> List String
+leakedTokens tokenRule line =
+    Regex.findAll tokenRule.pattern line
+
+
+main =
+    case rules of
+
+        Err _ ->
+            Io.eprintln "a scrub pattern failed to compile"
+
+        Ok ruleList ->
+            do
+                Io.println "Scrubbed log:"
+                printScrubbed ruleList
+                Io.println ""
+                printAudit ruleList
+
+
+printScrubbed : List Rule -> Task Error ()
+printScrubbed ruleList =
+    logLines
+        |> List.map (\line -> Io.println ("  " ++ scrub ruleList line))
+        |> Task.sequence
+        |> Task.map (\_ -> ())
+
+
+-- The audit uses the SECOND rule (the token pattern) to list every token seen
+-- across the whole log — a `findAll` per line, flattened.
+printAudit : List Rule -> Task Error ()
+printAudit ruleList =
+    case List.drop 1 ruleList of
+
+        tokenRule :: _ ->
+            do
+                Io.println "Leaked tokens (pre-scrub):"
+                printTokens tokenRule
+
+        [] ->
+            Io.println "no token rule"
+
+
+printTokens : Rule -> Task Error ()
+printTokens tokenRule =
+    logLines
+        |> List.concatMap (leakedTokens tokenRule)
+        |> List.map (\t -> Io.println ("  " ++ t))
+        |> Task.sequence
+        |> Task.map (\_ -> ())

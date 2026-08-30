@@ -1,0 +1,62 @@
+module Main exposing (main)
+
+import Ipe.Csv as Csv exposing (Csv)
+import Ipe.Result as Result exposing (Result(..))
+import Ipe.List as List
+import Ipe.Maybe as Maybe exposing (Maybe(..))
+import Ipe.String as String
+import Ipe.Io as Io
+
+
+-- Parse a CSV export, keep only the shipped orders, and re-encode. The shape to
+-- hold onto: `Csv.parse` is a PARSE BOUNDARY — it returns `Result Error Csv`,
+-- turning a malformed document into one typed error rather than a ragged,
+-- half-parsed table. Past that boundary the data is a typed `Csv` record
+-- (`header : List String`, `rows : List (List String)`) you transform with
+-- ordinary list functions, then `Csv.encode` quotes cells correctly on the way
+-- back out (RFC 4180) — so you never hand-roll comma-joining and never mis-quote
+-- a value that itself contains a comma.
+
+
+export : String
+export =
+    String.join "\n"
+        [ "id,customer,status,total"
+        , "1,Ada,shipped,42.00"
+        , "2,Grace,pending,17.50"
+        , "3,Linus,shipped,8.99"
+        , "4,\"Doe, Jane\",cancelled,0.00"
+        ]
+
+
+-- Keep only rows whose `status` column is "shipped". The status is the 3rd
+-- column (index 2); `elementAt` reads it safely as a `Maybe`, so a short/ragged
+-- row simply does not match rather than crashing on a missing cell.
+shippedOnly : Csv -> Csv
+shippedOnly csv =
+    Csv.withRows (List.filter isShipped csv.rows) csv
+
+
+isShipped : List String -> Bool
+isShipped row =
+    elementAt 2 row == Just "shipped"
+
+
+-- Safe positional access: the n-th element of a list as a `Maybe`. `List.drop`
+-- then `List.head` never indexes out of bounds.
+elementAt : Int -> List a -> Maybe a
+elementAt n xs =
+    List.head (List.drop n xs)
+
+
+main =
+    case Csv.parse export of
+
+        Err _ ->
+            Io.eprintln "the CSV export was malformed"
+
+        Ok csv ->
+            do
+                Io.println ("parsed rows: " ++ String.fromInt (List.length csv.rows))
+                Io.println "shipped orders re-encoded:"
+                Io.println (Csv.encode (shippedOnly csv))
