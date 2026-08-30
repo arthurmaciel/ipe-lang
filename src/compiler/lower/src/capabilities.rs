@@ -43,7 +43,7 @@ mod tests {
     #[test]
     fn pure_program_has_no_capabilities() {
         let caps = caps_of(
-            "module Main exposing (main)\nimport Ipe.Task as Task\nmain : Task ()\nmain =\n    Task.succeed ()\n",
+            "module Main exposing (main)\nimport Ipe.Log as Log\nmain : Task ()\nmain =\n    Log.info \"x\"\n",
         );
         assert_eq!(caps, Some(std::collections::BTreeSet::new()));
     }
@@ -86,7 +86,7 @@ mod tests {
     #[test]
     fn importing_an_unsafe_submodule_discloses_unsafe() {
         let caps = caps_of(
-            "module Main exposing (main)\nimport Ipe.Task as Task\nimport Ipe.Db.Unsafe\nmain : Task ()\nmain =\n    Task.succeed ()\n",
+            "module Main exposing (main)\nimport Ipe.Log as Log\nimport Ipe.Db.Unsafe\nmain : Task ()\nmain =\n    Log.info \"x\"\n",
         );
         assert!(
             caps.as_ref()
@@ -105,7 +105,7 @@ mod tests {
     #[test]
     fn importing_ipe_html_unsafe_discloses_unsafe() {
         let caps = caps_of(
-            "module Main exposing (main)\nimport Ipe.Task as Task\nimport Ipe.Html.Unsafe\nmain : Task ()\nmain =\n    Task.succeed ()\n",
+            "module Main exposing (main)\nimport Ipe.Log as Log\nimport Ipe.Html.Unsafe\nmain : Task ()\nmain =\n    Log.info \"x\"\n",
         );
         assert!(
             caps.as_ref()
@@ -121,7 +121,7 @@ mod tests {
     #[test]
     fn importing_ipe_web_head_unsafe_discloses_unsafe() {
         let caps = caps_of(
-            "module Main exposing (main)\nimport Ipe.Task as Task\nimport Ipe.Web.Head.Unsafe\nmain : Task ()\nmain =\n    Task.succeed ()\n",
+            "module Main exposing (main)\nimport Ipe.Log as Log\nimport Ipe.Web.Head.Unsafe\nmain : Task ()\nmain =\n    Log.info \"x\"\n",
         );
         assert!(
             caps.as_ref()
@@ -139,7 +139,7 @@ mod tests {
     #[test]
     fn importing_ipe_secret_unsafe_discloses_unsafe() {
         let caps = caps_of(
-            "module Main exposing (main)\nimport Ipe.Task as Task\nimport Ipe.Secret.Unsafe\nmain : Task ()\nmain =\n    Task.succeed ()\n",
+            "module Main exposing (main)\nimport Ipe.Log as Log\nimport Ipe.Secret.Unsafe\nmain : Task ()\nmain =\n    Log.info \"x\"\n",
         );
         assert!(
             caps.as_ref()
@@ -159,7 +159,7 @@ mod tests {
         // path, which gates on `import Ipe.Secret` (no `.Unsafe`), not on which
         // `Secret.*` member is called.
         let caps = caps_of(
-            "module Main exposing (main)\nimport Ipe.Task as Task\nimport Ipe.Secret\nmain : Task ()\nmain =\n    Task.succeed ()\n",
+            "module Main exposing (main)\nimport Ipe.Log as Log\nimport Ipe.Secret\nmain : Task ()\nmain =\n    Log.info \"x\"\n",
         );
         assert!(
             caps.as_ref()
@@ -174,7 +174,7 @@ mod tests {
     #[test]
     fn a_program_without_an_unsafe_import_discloses_no_unsafe() {
         let caps = caps_of(
-            "module Main exposing (main)\nimport Ipe.Task as Task\nmain : Task ()\nmain =\n    Task.succeed ()\n",
+            "module Main exposing (main)\nimport Ipe.Log as Log\nmain : Task ()\nmain =\n    Log.info \"x\"\n",
         );
         assert_eq!(
             caps,
@@ -190,7 +190,7 @@ mod tests {
     #[test]
     fn a_plain_stdlib_import_is_not_mistaken_for_unsafe() {
         let caps = caps_of(
-            "module Main exposing (main)\nimport Ipe.Task as Task\nimport Ipe.Html\nmain : Task ()\nmain =\n    Task.succeed ()\n",
+            "module Main exposing (main)\nimport Ipe.Log as Log\nimport Ipe.Html\nmain : Task ()\nmain =\n    Log.info \"x\"\n",
         );
         assert!(
             caps.as_ref()
