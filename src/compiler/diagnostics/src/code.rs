@@ -375,7 +375,7 @@ code! {
     /// `Web.app` routes list is non-empty but Model has no `page` field.
     ///
     /// The routes are forwarded to the non-routed runtime path and never update the
-    /// Model. Emitted as a **warning** (Go's `applyRoute` silently no-ops the same
+    /// Model. Emitted as a **warning** (`applyRoute` silently no-ops the same
     /// shape, so this compiles) to flag the likely mis-named routed-page field.
     IPE_L0124 = "IPE-L0124", "`Web.app` routes list is non-empty but Model has no `page` field", "IPE-L0124";
     /// inadmissible Msg type in a Web/Terminal/WebView app.

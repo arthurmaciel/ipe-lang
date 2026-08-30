@@ -571,7 +571,7 @@ impl BoundSet {
     /// AND named tvars alike: every concrete Ipê type the caller substitutes is
     /// `'static` (emitted values never borrow), so `T: 'static` is satisfied by
     /// every real instantiation — no caller-side failure, matching the reference
-    /// (Go boxes with no lifetime concern). NOT a new SEAL violation: it only
+    /// (no lifetime concern). NOT a new SEAL violation: it only
     /// relocates the pre-existing E0310 from the callee body to a bound that
     /// makes acceptance-by-`ipe` prove the box coercion type-checks.
     const STATIC: u16 = 1 << 13;
@@ -1055,16 +1055,16 @@ pub enum IrType {
     /// its value type. Renders as the runtime's `HashMap<K, V>` (backed by
     /// `std::collections::HashMap`). Distinct from a user [`IrType::Enum`] so
     /// the backend maps it to the shared runtime representation. Key iteration
-    /// is sorted for determinism on the Rust backend (Go iterates map-order).
+    /// is sorted for determinism (map iteration order is unstable).
     Dict(Box<Self>, Box<Self>),
     /// The built-in `Set a` unordered-set type, carrying its element type.
     /// Renders as the runtime's `BTreeSet<A>` (backed by
     /// `std::collections::BTreeSet`). Iteration is sorted on the Rust backend
-    /// (Go uses an unordered internal map) — a conforming strengthening.
+    /// (map order is unstable) — a conforming strengthening.
     Set(Box<Self>),
     /// The built-in `Bytes` type — an arbitrary byte buffer.
     ///
-    /// Divergence from Ipê: Ipê defines `type alias Bytes = String` (Go's
+    /// Divergence from Ipê: Ipê defines `type alias Bytes = String` (
     /// `string` is a byte sequence, making the alias cost-free). Rust's
     /// `String` is UTF-8 constrained; mapping `Bytes` to `String` would be
     /// unsound for non-UTF-8 binary payloads. Ipê-Rust makes `Bytes` a
@@ -1230,7 +1230,7 @@ pub enum IrType {
     /// via the `builtin_runtime_enum` path in the backend (no synthetic
     /// `EnumDef` is injected — the enum lives entirely in the runtime crate).
     ///
-    /// Sanctioned divergence from Ipê/Go: Go's `Basics_compareT` returns an
+    /// Sanctioned divergence: `Basics_compareT` returns an
     /// `int` (-1/0/1).  The Rust backend uses a typed enum for sound exhaustive
     /// pattern matching without a range-check.
     Order,
@@ -1383,7 +1383,7 @@ pub enum IrType {
     /// `Path.fromString`, which normalises the path and REJECTS a NUL byte or a
     /// `..` traversal escape, so an unvalidated string can never reach a
     /// filesystem syscall. This closes the raw-`String`-path injection surface
-    /// (the Haskell `FilePath = String` anti-pattern).
+    /// (the the compiler `FilePath = String` anti-pattern).
     ///
     /// Renders as `ipe_runtime::path::Path` (a `#[derive(Clone)]` newtype around
     /// a cleaned `String`; `Debug`/`PartialEq`/`Eq` are safe — a path is not a
@@ -2707,7 +2707,7 @@ impl CallPin {
     /// turbofish.
     ///
     /// The concrete default types (`i64` / `String` / `IpeError`) mirror the
-    /// Go/Haskell reference's polymorphic-kernel defaults: a genuinely
+    /// polymorphic-kernel defaults: a genuinely
     /// unconstrained parameter has no observable effect on behaviour (the value
     /// is discarded / the collection is empty / the task never yields), so any
     /// inhabited default is sound — `i64` and `String` are the reference's

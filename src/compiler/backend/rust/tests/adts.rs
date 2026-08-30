@@ -14,7 +14,7 @@
 //!   boxes its self-edge fields so the Rust enum stays finite-sized, and balances
 //!   that with `Box::new` at construction and a deref at pattern binding.
 //!
-//! Behavioural-parity oracle: the Go reference compiler at
+//! Behavioural-parity oracle: the the reference compiler at
 //! `/home/arthur/Documentos/comp/ipe/out/ipe` compiles + runs the
 //! shape-equivalent programs
 //!
@@ -636,7 +636,7 @@ fn recursive_enum_boxes_self_edges() -> DResult<()> {
 }
 
 /// Full spine: build the `Maybe Int` IR, emit, vendor the runtime, `cargo build`,
-/// run, and assert `5` — the Go-backend value for `unwrap (Just 5)`. The
+/// run, and assert `5` — the expected value for `unwrap (Just 5)`. The
 /// soundness-floor regression for a value laundered through a generic payload.
 #[test]
 fn end_to_end_generic_maybe_prints_five() -> DResult<()> {
@@ -707,9 +707,9 @@ fn build_and_assert(
     assert_eq!(
         String::from_utf8_lossy(&output.stdout),
         expected,
-        "ADT program output must match the Go oracle"
+        "ADT program output must match golden"
     );
-    assert!(output.status.success(), "exit 0, matching the Go oracle");
+    assert!(output.status.success(), "exit 0");
     let _ = std::fs::remove_dir_all(out.join("target"));
     Ok(())
 }

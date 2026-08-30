@@ -24,7 +24,7 @@ use crate::resolve::ModuleOrigin;
 /// This is the single source of truth consulted by the canonicaliser when it
 /// registers a user's `import Ipe.… as Alias` (or the Elm last-segment default)
 /// so the alias resolves to the same kernel members as the canonical qualifier.
-/// It is the Rust-port counterpart of the upstream Haskell
+/// It is the Rust-port counterpart of the upstream the compiler
 /// `Ipe.Canonicalise.Environment.staticKernelModules` (path → canonical name).
 ///
 /// Two invariants keep this table from drifting out of sync with the qualifier

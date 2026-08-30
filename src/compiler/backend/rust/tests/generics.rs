@@ -8,7 +8,7 @@
 //! distinct concrete types (`Int` and `Bool`) resolves to the ONE generic
 //! function, which Rust monomorphises.
 //!
-//! Behavioural-parity oracle: the Go reference compiler at
+//! Behavioural-parity oracle: the the reference compiler at
 //! `/home/arthur/Documentos/comp/ipe/out/ipe` compiles + runs the
 //! equivalent program
 //!
@@ -21,7 +21,7 @@
 //!     in Io.println (String.fromInt (if flag then n + 2 else n))
 //! ```
 //!
-//! to stdout `42\n`, exit 0 (hand-verified in a temp dir; the Go backend emits
+//! to stdout `42\n`, exit 0 (hand-verified in a temp dir; the the backend emits
 //! the matching `func identity[T1 any](x T1) T1`, confirming the `a` → `T1`
 //! naming convention). The `end_to_end_*` test (gated on `IPE_E2E=1`) drives
 //! the hand-built IR through the Rust backend, builds the emitted crate, and
@@ -404,8 +404,7 @@ fn emits_super_typed_bound_clauses() -> DResult<()> {
 }
 
 /// Full spine: build the generic IR, emit the Cargo project, vendor the runtime,
-/// `cargo build`, run, and assert the program prints `42` — the value the Go
-/// backend produces for the equivalent program. Gated on `IPE_E2E=1` so the
+/// `cargo build`, run, and assert the program prints `42` — the expected value/// backend produces for the equivalent program. Gated on `IPE_E2E=1` so the
 /// default `cargo test` stays fast and offline.
 #[test]
 fn end_to_end_builds_and_prints_forty_two() -> DResult<()> {
@@ -454,9 +453,9 @@ fn end_to_end_builds_and_prints_forty_two() -> DResult<()> {
     assert_eq!(
         String::from_utf8_lossy(&output.stdout),
         "42\n",
-        "generic program prints 42 (Go-backend parity)"
+        "generic program prints 42"
     );
-    assert!(output.status.success(), "exit 0, matching the Go oracle");
+    assert!(output.status.success(), "exit 0");
     let _ = std::fs::remove_dir_all(out.join("target"));
     Ok(())
 }

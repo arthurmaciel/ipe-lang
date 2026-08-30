@@ -895,7 +895,7 @@ pub enum StdlibKernel {
     /// `compare : comparable -> comparable -> Order` — three-way comparison.
     ///
     /// Returns `LT` / `EQ` / `GT` (a typed Rust enum on the Rust backend;
-    /// `-1 / 0 / 1` int on the Go/Ipê backend — sanctioned divergence).
+    /// `-1 / 0 / 1` int — sanctioned divergence).
     /// The `comparable` (`Ord`) constraint is enforced via `constrain_var_kernel`.
     BasicsCompare,
     // ── end Basics numerics ──────────────────────────────────────────
@@ -2262,7 +2262,7 @@ pub enum StdlibKernel {
     // ── Ipe.Ui.Lazy ────────────────────────────────────────────────────
     /// `Lazy.lazy : (a -> Element msg) -> a -> Element msg`
     ///
-    /// **Eager in v1.** Ipê's Go runtime memoises the subtree; Ipê evaluates
+    /// **Eager in v1.** Ipê's the runtime memoises the subtree; Ipê evaluates
     /// immediately (no keyed LRU available before the TEA diff layer).  The
     /// Sanctioned divergence §B-Lazy.
     LazyLazy,
@@ -3225,7 +3225,7 @@ impl StdlibKernel {
             ),
             // AEAD arity is 2 (key, plaintext/ciphertext): the Rust runtime
             // (`ipe_aes_gcm_encrypt(key, plaintext)` etc.) prepends/strips a
-            // fresh random nonce internally, so — unlike the Go backend which
+            // fresh random nonce internally, so — unlike the the backend which
             // took an explicit nonce/AAD arg — there is no third argument.
             Self::CryptoAesGcmEncrypt => {
                 d("Crypto", "aesGcmEncrypt", 2, Pure, "ipe_aes_gcm_encrypt")

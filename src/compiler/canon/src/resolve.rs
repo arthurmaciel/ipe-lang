@@ -20,7 +20,7 @@ use crate::env::{CtorHome, Env, VarHome, WildcardOrigin};
 /// error; the list is `(Levenshtein, name)`-sorted so the closest comes first.
 const MAX_SUGGESTIONS: usize = 3;
 
-/// The inclusive edit-distance ceiling for a suggestion. Mirrors the Haskell
+/// The inclusive edit-distance ceiling for a suggestion. Mirrors the the compiler
 /// reference (`Ipe.Canonicalise.Module.suggestQualifier`): beyond two edits a
 /// "did you mean" is more misleading than helpful, so silence wins.
 const SUGGESTION_MAX_DISTANCE: usize = 2;
@@ -682,7 +682,7 @@ const STDLIB_DEFINABLE_UI_TYPES: &[&str] = &[
 /// bare reserved builtin (no source declaration — it is a qualifier-only kernel
 /// module). `Ipe.Config` is a compiled-source module that `exposing (Decoder)`
 /// and re-declares `type Decoder a = Decoder` to put the name in its export set,
-/// exactly as the Go/Haskell reference does — Config's decoders and JSON's share
+/// exactly — Config's decoders and JSON's share
 /// one carrier, differing only in the parse front-end.
 ///
 /// Unlike [`STDLIB_DEFINABLE_UI_TYPES`] (below-guard nullary names that must
@@ -3824,7 +3824,7 @@ fn synthesize_record_alias_ctors(
         // per the upstream Elm / Ipe rules: the TYPE namespace (`type alias`) and
         // the CONSTRUCTOR namespace (`type … = Ctor | …`) are distinct.
         //
-        // The upstream Haskell (`Ipe.Canonicalise.Module.registerAliases`) inserts
+        // The upstream the compiler (`Ipe.Canonicalise.Module.registerAliases`) inserts
         // the alias name into `_vars` via `Map.insert` without ANY check against
         // `_ctors` — the two occupy separate namespaces and coexist peacefully.
         //
@@ -5363,9 +5363,9 @@ enum Assoc {
 
 /// The precedence (higher binds tighter) and associativity of `op`.
 ///
-/// Mirror of the Haskell reference `Ipe.Parse.Symbol.precedence` for the
+/// Mirror of the the compiler reference `Ipe.Parse.Symbol.precedence` for the
 /// core operator set; any operator outside the set defaults to `9 L` exactly
-/// as the Haskell catch-all does.
+/// as the the compiler catch-all does.
 const fn op_precedence(op: &str) -> (i32, Assoc) {
     match op.as_bytes() {
         b"*" | b"/" | b"//" | b"%" => (7, Assoc::Left),
@@ -5396,7 +5396,7 @@ const fn op_precedence(op: &str) -> (i32, Assoc) {
 /// `Ipe.Canonicalise.Expression.canonicaliseBinops`), reading each operator's
 /// precedence + associativity from [`op_precedence`].
 ///
-/// Unlike the Haskell parser — which nests `Src.Binops` pairwise and so needs a
+/// Unlike the the compiler parser — which nests `Src.Binops` pairwise and so needs a
 /// flattening pre-pass — the Rust parser already emits one flat chain per
 /// syntactic level. A `Binop` *operand* therefore only ever arises from an
 /// explicit parenthesised group, which must stay atomic; we never re-flatten
@@ -5596,7 +5596,7 @@ fn resolve_op_func(op: Symbol, interner: &mut Interner) -> DResult<Symbol> {
         Some("||") => Some("or"),
         Some("++") => Some("append"),
         // Unknown operators map to their own name under Basics, matching the
-        // Haskell fall-through (`_ -> Can.VarKernel "Basics" op`).
+        // the compiler fall-through (`_ -> Can.VarKernel "Basics" op`).
         _ => None,
     };
     // The immutable borrow above ends here, so interning is now permitted.
@@ -6671,7 +6671,7 @@ fn rank_suggestions<'a>(typo: &str, candidates: impl Iterator<Item = &'a str>) -
 /// Iterative Levenshtein edit distance over Unicode scalar values, computed
 /// with two rolling rows and no indexing (the `indexing_slicing` lint is
 /// denied workspace-wide). Ipê identifiers are short ASCII names, so the
-/// O(n·m) cost is negligible. Mirrors the Haskell reference's `levenshtein`.
+/// O(n·m) cost is negligible. Mirrors the the compiler reference's `levenshtein`.
 fn levenshtein(a: &str, b: &str) -> usize {
     let b_chars: Vec<char> = b.chars().collect();
     // Row 0: cost of deleting every prefix of `b` (i.e. inserting into empty a).
@@ -6802,7 +6802,7 @@ fn chunk_to_expr(
     match chunk {
         Chunk::Lit(s) => Ok(Located::new(span, canon::Expr_::Str(s))),
         Chunk::Interp(body) => {
-            // Trim leading/trailing whitespace, matching the Haskell
+            // Trim leading/trailing whitespace, matching the the compiler
             // `dropWhile (== ' ') (reverse (dropWhile …))`.
             let trimmed = body.trim();
             let resolved = resolve_interp_ref(trimmed, span, env, interner)?;

@@ -699,7 +699,7 @@ fn render_fn_once_chain(
 /// A payload-carrying and/or generic enum gains tuple-variant payloads, a
 /// `<T1, …>` clause on the enum and its impl, and `IpeStringify` arms that bind
 /// each payload field and render it through the total autoref dispatch — mirroring
-/// the Go-reference Rust backend's `ipeStringifyEnumImpl`:
+/// `ipeStringifyEnumImpl`:
 /// ```text
 /// #[derive(Clone, Debug, PartialEq)]
 /// pub enum MainMaybe<T1> {
@@ -917,8 +917,8 @@ fn emit_enum_variant_lines_and_arms(
             }
             variant_lines.push(format!("    {vn}({}),", field_types.join(", ")));
             let placeholders = vec!["{}"; variant.fields.len()].join(" ");
-            // Go `%v`-style: `Vname <f0> <f1> …` (variant name, then space-
-            // separated fields). Matches the Go-reference `ipeStringifyEnumImpl`.
+            // `Vname <f0> <f1> …` (variant name, then space-
+            // separated fields). Matches `ipeStringifyEnumImpl`.
             // The arm head `            {name}::{vn}(binders) => ` sits at block
             // indent 12; `render_stringify_enum_arm` lays the `format!` tail out in
             // `rustfmt`'s inline / block-wrap / delimiter-break tiers.
@@ -1038,7 +1038,7 @@ fn impl_header(bounds: &str, trait_name: &str, ty: &str) -> String {
 /// }
 /// ```
 ///
-/// The `ipe_show` body mirrors the Go reference's `%v` rendering of a struct
+/// The `ipe_show` body mirrors the the reference's `%v` rendering of a struct
 /// (`{f0 f1 ...}`, fields space-separated in declared order, no field names) so
 /// stringifying a record reads identically across the two backends. Each field
 /// renders through the runtime's total autoref `Wrap(..).dispatch()` shim, which
@@ -1122,7 +1122,7 @@ pub fn emit_record_struct(ctx: &EmitCtx, rec: &RecordStruct) -> DResult<String> 
         )
     };
 
-    // Go `%v` of a struct: `{v0 v1 ...}` — N space-separated `{}` placeholders
+    // Stringify of a struct: `{v0 v1 ...}` — N space-separated `{}` placeholders
     // wrapped in literal braces. With zero fields the rendering is just `{}`.
     //
     // The `format!` body is laid out natively (not hand-inlined then handed to

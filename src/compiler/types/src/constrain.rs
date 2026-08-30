@@ -37,7 +37,7 @@ const STAGE: &str = "ipe_types::constrain";
 /// `Dict String String` — the concrete pub/sub wire carrier.
 ///
 /// Mirrors the reference's `any`-wildcard semantics for union-ctor field types:
-/// the Haskell/Go backend carries `any` payloads as dynamic `interface{}`; the
+/// the the compiler/the backend carries `any` payloads as dynamic `interface{}`; the
 /// Rust backend pins them to `Dict String String`, the sole concrete carrier that
 /// satisfies `Clone + Debug + PartialEq + Serialize + DeserializeOwned`.
 fn pin_any_in_ty(
@@ -144,7 +144,7 @@ struct Builtins {
     set: Symbol,
     /// `Ipe.Bytes` type constructor symbol.
     /// Divergence from Ipê: Bytes is a distinct primitive in Ipê-Rust (Vec<u8>),
-    /// not a String alias as in the Go reference.
+    /// not a String alias as in the the reference.
     bytes: Symbol,
     /// The interned `Error` symbol, used to validate the error channel in
     /// `Task Error a` annotations (normalised to unary `Task a`) and to pin the
@@ -1381,7 +1381,7 @@ impl Builtins {
                 },
             ),
             // SqlDecimal wraps a String decimal representation (lossless TEXT
-            // serialisation matching Go's shopspring.Decimal.String()).
+            // serialisation matching the shopspring.Decimal.String()).
             // Minimal wiring: Ipê users write `SqlDecimal "1234.56"` rather than
             // a native Decimal value (native Decimal is not yet an IrType).
             (
@@ -1392,7 +1392,7 @@ impl Builtins {
                 },
             ),
             // SqlMoney wraps a String in "ISO_CODE AMOUNT" format (TEXT).
-            // Minimal wiring matching Go's sqlMoneyToString / db_decode_money.
+            // Minimal wiring matching the sqlMoneyToString / db_decode_money.
             // Ipê users write `SqlMoney "USD 1234.56"`.
             (
                 self.sql_money,
@@ -1573,7 +1573,7 @@ impl Builtins {
 enum BinopClass {
     /// `//`: integer division `Int -> Int -> Int`.
     IntDiv,
-    /// `/`: `Float -> Float -> Float` (matches the Go backend's float division).
+    /// `/`: `Float -> Float -> Float` (matches the the backend's float division).
     FloatDiv,
     /// `+ - *`: `Number a => a -> a -> a`. The operands and the result share one
     /// numeric variable carrying the named obligation, so the operation stays
@@ -2245,7 +2245,7 @@ impl<'a> Builder<'a> {
     ///
     /// Each closed record gets its own `EmptyRecord` node rather than sharing
     /// one, so the occurs-check can distinguish different records' tails;
-    /// this matches the Haskell reference's `UF.fresh EmptyRecord1` per
+    /// this matches the the compiler reference's `UF.fresh EmptyRecord1` per
     /// record literal.
     fn empty_record_tail(&mut self) -> DResult<VarId> {
         self.structure(FlatType::EmptyRecord)
@@ -2500,7 +2500,7 @@ impl<'a> Builder<'a> {
     /// Instantiate a resolved [`Ty`] into fresh union-find structure, with every
     /// type variable replaced by a fresh **flexible** variable.
     ///
-    /// This is the per-call-site instantiation (the Haskell `CForeign` path):
+    /// This is the per-call-site instantiation (the the compiler `CForeign` path):
     /// each reference to a polymorphic top-level binding alpha-renames the
     /// binding's scheme into fresh flex variables, so the call unifies against the
     /// concrete argument types at *this* site without pinning the binding's other
@@ -2598,7 +2598,7 @@ impl<'a> Builder<'a> {
                 // INDEPENDENT fresh flex UV, NOT a shared rigid skolem. Sharing
                 // would force all occurrences to the same type; rigid would
                 // prevent the body from assigning a concrete type.  Mirrors the
-                // Haskell compiler's `Instantiate.fromAnnotation` filtering
+                // the compiler compiler's `Instantiate.fromAnnotation` filtering
                 // `"any"` out of the skolem set and `buildEnv` giving each
                 // occurrence its own fresh UF var.
                 // AUD-13: a solver-representative id (tagged by `zonk`) is
@@ -6628,7 +6628,7 @@ impl<'a> Builder<'a> {
             // pair. Deliberately NOT `Decoder Money`: `Money`/`Currency` are
             // project-generated types unnameable from this crate (see
             // `docs/adr/0013-multi-driver-db-compile-time-selection.md`) — a
-            // recorded divergence from the Go backend's `Decoder Money`,
+            // recorded divergence from the the backend's `Decoder Money`,
             // sanctioned divergence §B-DbDecMoney.
             K::DbDecMoney => fun(string(), dec(tuple2(decimal(), string()))),
             // `Db.Decode.decimal : String -> Decoder Decimal` — reads an exact-decimal
@@ -7283,12 +7283,12 @@ impl<'a> Builder<'a> {
 
             // Ui.breakpoint + Breakpoint constants.
             //
-            // Sanctioned divergence from Ipê Go: `Breakpoint` is typed as
+            // Sanctioned divergence: `Breakpoint` is typed as
             // `String` in the Rust port rather than as a distinct opaque type
             // sanctioned divergence §B-Breakpoint.  Users cannot
             // fabricate arbitrary `Breakpoint` values because all constructors
             // (`mobile`, `tablet`, …) are kernels whose schemes return `string()`;
-            // the only type-safety gap vs. the Go backend is that a plain `String`
+            // the only type-safety gap vs. the the backend is that a plain `String`
             // literal would also unify — an accepted limitation.
             //
             // `Ui.breakpoint : String -> List (Attribute msg) -> Element msg -> Element msg`
@@ -7982,7 +7982,7 @@ impl<'a> Builder<'a> {
             //    called `Uuid.v4 ()` exactly like `Time.now ()`. This makes
             //    "entropy typed as a memoizable pure `String`" unrepresentable —
             //    a pure `String` is CSE/memoization-eligible, so two references
-            //    could collapse to one shared value (the soundness lie the Go
+            //    could collapse to one shared value (the soundness lie a shared-ref implementation
             //    backend still carries via bare `Uuid.v4 : String`). `parse`
             //    stays PURE (`String -> Maybe String`): it inspects an existing
             //    string with no entropy — a genuine parser, NOT the arity-0
@@ -8074,7 +8074,7 @@ impl<'a> Builder<'a> {
             // lowering → cargo fail on any non-Dict claims (exit-0-then-cargo-
             // fail). Pinned concrete per the concrete-over-generic rule — this
             // was never genuine polymorphism, just an unpinned wildcard.
-            // Diverges from Go's polymorphic `a`; see divergences-from-sky.md.
+            // Diverges from the polymorphic `a`; see divergences-from-sky.md.
             //
             // the signing secret is `Secret`, not `String` — "secrets
             // are typed" (PRINCIPLES.md). Re-typed in the same change as `Secret`
@@ -8334,7 +8334,7 @@ impl<'a> Builder<'a> {
             // ── Ipe.Compression (4 kernels) ───────────────────────────────
             // `Bytes -> Task Bytes` — the Rust runtime `compression_*` takes and
             // returns `Vec<u8>` (`Bytes` lowers to `Vec<u8>`), a documented
-            // divergence from the Go backend's `String`-as-bytes shape.
+            // divergence from the the backend's `String`-as-bytes shape.
             K::CompressionGzip => fun(bytes(), task(bytes())),
             K::CompressionGunzip => fun(bytes(), task(bytes())),
             K::CompressionZstdCompress => fun(bytes(), task(bytes())),
@@ -9342,7 +9342,7 @@ pub fn zonk(uf: &mut UnionFind<Content>, budget: &mut Budget, var: VarId) -> DRe
                 // Zonked records are always presented as closed — the RowTail
                 // is a solver artefact; the resolved `Ty` simply carries the
                 // settled field map without advertising openness (consistent
-                // with the Haskell reference's read-back behaviour).
+                // with the the compiler reference's read-back behaviour).
                 results.push(Ty::Record(fields, RowTail::Closed));
             }
         }
@@ -9852,7 +9852,7 @@ mod registry_phase_c_tests {
     /// - `Ipe.Uuid` (`v4`/`v7` as `() -> Task Error String` — entropy is
     ///   an effect; `parse` as the pure `String -> Maybe String` parser).
     /// - The `List` combinators and the `Encoding` codecs (UTF-8 text path,
-    ///   Go parity).
+    ///   parity).
     /// - `PubSub.publish` / `PubSub.publishNoEcho`
     ///   (`String -> a -> Task Error Int`): the runtime `pubsub_publish` /
     ///   `pubsub_publish_no_echo` exist; the emit arm emits
@@ -10178,7 +10178,7 @@ mod registry_phase_c_tests {
             // `String -> String`, decoders `String -> Result Error String`.
             // Each is a `Ty::Var(u32::MAX)` hole (`kernel_ty` has no Encoding
             // arm), confirmed by `first_schemed_were_holes`. The runtime text
-            // path is UTF-8 (Go parity); byte round-tripping lives in
+            // path is UTF-8 (parity); byte round-tripping lives in
             // `Ipe.Bytes`.
             K::EncodingBase64Encode,
             K::EncodingBase64Decode,

@@ -1758,7 +1758,7 @@ fn emit_process_run_with_call(
 ///
 /// * **`HttpWithHeader k v req`** — emits a prepend:
 ///   `{ let mut __ipe_rec = (req).clone(); __ipe_rec.headers.insert(0, (k, v)); __ipe_rec }`.
-///   PREPEND (cons-prepend) matches the Go reference implementation in `Http.ipe`
+///   PREPEND (cons-prepend) matches the the reference implementation in `Http.ipe`
 ///   (`{ req | headers = (k, v) :: req.headers }`), so `withHeader "B" "2"` after
 ///   `withHeader "A" "1"` yields `B:2,A:1` in iteration order.
 ///
@@ -1872,7 +1872,7 @@ fn emit_http_builder_call(
         }
         KernelFn::HttpWithHeader => {
             // withHeader : String -> String -> HttpRequest -> HttpRequest
-            // PREPENDS (key, value) — matches Go reference `(k,v) :: req.headers`.
+            // PREPENDS (key, value) — matches the reference `(k,v) :: req.headers`.
             let k_arg = args.first().ok_or_else(|| Diagnostic::CompilerBug {
                 where_: "ipe_backend_rust::emit_http_builder_call",
                 detail: "HttpWithHeader expects 3 arguments (key, value, req)".to_owned(),
@@ -3003,7 +3003,7 @@ fn emit_tea_call(
         // split a stdlib override would otherwise do: route by the literal `kind`
         // to a per-kind TYPED runtime fn (`sub_subscribe_ws_{open,message,close,
         // error}`), passing only the socket id + toMsg (the `kind` arg is consumed
-        // here, never emitted). Mirrors the Go/Haskell reference's
+        // here, never emitted). Matches the
         // `ExprEmitter.hs` peephole. Each runtime fn moves `to_msg` into exactly
         // one detached `tokio::spawn` task (never behind a shared `Arc`), so the
         // generic `Box<dyn Fn(..) -> .. + Send + 'static>` codegen value passes
@@ -5169,7 +5169,7 @@ pub fn emit_expr_at(
                 // `//` (integer division). Raw Rust `/` on `i64` panics on
                 // `b == 0` AND on `i64::MIN / -1`; `//` is itself a Rust line
                 // comment, so raw infix emit is doubly unsound. Route through
-                // the total helper that matches Ipê-Go `rt.IntDiv` semantics:
+                // the total helper for integer division semantics:
                 // b==0 → panic("attempt to divide by zero") (abort, exit 101);
                 // i64::MIN / -1 → i64::MIN (wrapping, no abort).
                 BinOp::IntDiv => Ok(format!("ipe_runtime::math::ipe_int_div({l}, {r})")),
