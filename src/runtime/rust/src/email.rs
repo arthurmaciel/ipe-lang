@@ -10,7 +10,7 @@
 //! Field names match the Ipê aliases verbatim (camelCase `textBody` /
 //! `htmlBody` / `replyTo` / `mimeType` — hence the non_snake_case allow).
 //!
-//! Networking parity with Go: Resend + SendGrid + SES (v2, SigV4) over HTTPS.
+//! Providers: Resend + SendGrid + SES (v2, SigV4) over HTTPS.
 //! SMTP goes through the `lettre` transport (opportunistic/required STARTTLS or
 //! implicit TLS on 465), completing the provider surface.
 //!
@@ -30,9 +30,9 @@ type HmacSha256 = Hmac<Sha256>;
 /// `Ipe.Email.EmailAddress` — an opaque, parse-validated email address.
 ///
 /// The ONLY constructor is [`email_address_parse`] which returns `None` for
-/// any string that fails the structural check mirroring `String.isEmail`
-/// (same rules the Go backend uses: `user@domain.tld`, no name component, no
-/// embedded spaces). A bare `String` can NEVER silently coerce to this type —
+/// any string that fails the structural check: `user@domain.tld`, no name
+/// component, no embedded spaces. A bare `String` can NEVER silently coerce to
+/// this type —
 /// passing `"not-an-email"` where an `EmailAddress` is expected is a Ipê
 /// type error, not a silent send failure.
 ///
@@ -625,12 +625,11 @@ fn civil_from_days(z: i64) -> (i64, i64, i64) {
 
 // ──────────────────── SMTP (lettre) ────────────────────
 
-/// `Ipe.Email.send (Smtp cfg) msg` — SMTP transport via `lettre`, matching the Go
-/// backend's `smtp.SendMail` posture: connect to host:port, **opportunistic
-/// STARTTLS** (upgrade to TLS when the server advertises it, plaintext otherwise
-/// — identical security posture to  stdlib), PLAIN auth when a user is
-/// configured. lettre's builder assembles standards-compliant MIME (text/html
-/// alternative + attachments); not byte-identical to  hand-rolled wire, but
+/// `Ipe.Email.send (Smtp cfg) msg` — SMTP transport via `lettre`: connect to
+/// host:port, **opportunistic STARTTLS** (upgrade to TLS when the server
+/// advertises it, plaintext otherwise), PLAIN auth when a user is configured.
+/// lettre's builder assembles standards-compliant MIME (text/html alternative
+/// + attachments); not byte-identical to a hand-rolled wire, but
 /// the delivered message (from/to/cc/bcc/reply-to/subject/body/attachments) is
 /// equivalent. A local plaintext catcher (no STARTTLS advertised) is reachable
 /// via the opportunistic fallback, which is how this is verified.
@@ -680,8 +679,7 @@ async fn send_smtp<E: From<String>>(cfg: &SmtpConfig, m: &EmailMessage) -> IpeRe
     builder = builder.subject(m.subject.clone());
 
     // Body: text/html alternative when both are set, else a single part. lettre
-    // rejects an empty body, so an all-empty message sends a single space (Go
-    // tolerates an empty body — closest equivalent).
+    // rejects an empty body, so an all-empty message sends a single space.
     let content: MultiPart = match (m.textBody.is_empty(), m.htmlBody.is_empty()) {
         (false, false) => MultiPart::alternative()
             .singlepart(SinglePart::plain(m.textBody.clone()))
@@ -715,8 +713,8 @@ async fn send_smtp<E: From<String>>(cfg: &SmtpConfig, m: &EmailMessage) -> IpeRe
     // credentials are configured a network MITM that strips the STARTTLS
     // advertisement would otherwise harvest user/pass under opportunistic mode.
     // So: port 465 → implicit TLS (Wrapper); credentials set → STARTTLS REQUIRED
-    // (no cleartext fallback); no credentials → opportunistic (Go smtp.SendMail
-    // parity for an unauthenticated relay, nothing secret to leak).
+    // (no cleartext fallback); no credentials → opportunistic STARTTLS
+    // (unauthenticated relay — nothing secret to leak).
     let tls = match TlsParameters::new(cfg.host.clone()) {
         Ok(t) => t,
         Err(e) => return IpeResult::Err(format!("email.send/Smtp: tls: {}", e).into()),

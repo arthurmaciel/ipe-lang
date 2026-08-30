@@ -237,9 +237,9 @@ pub fn dev_console_banner(base: &str) -> String {
     )
 }
 
-/// Insert `banner` just before the LAST case-insensitive `</body>` tag (Go
-/// parity: `injectDevBanner`, `dev_banner.go`). Falls back to appending when no
-/// `</body>` is present (body-only fragments). An empty banner is a no-op.
+/// Insert `banner` just before the LAST case-insensitive `</body>` tag.
+/// Falls back to appending when no `</body>` is present (body-only fragments).
+/// An empty banner is a no-op.
 #[must_use]
 pub fn inject_dev_banner(body: &str, banner: &str) -> String {
     if banner.is_empty() {
@@ -295,7 +295,7 @@ pub fn frame_ancestors() -> Option<&'static str> {
 
 /// Safe-by-default security response headers (`setSecurityHeaders`,
 /// live.go:3557 — applied on both the Ipe.Web page path and the Ipe.Http.Server
-/// response path, rt.go:7838). Returned as owned `(name, value)` pairs so each
+/// response path, ). Returned as owned `(name, value)` pairs so each
 /// caller splices them into its response builder only when the header is unset
 /// (an explicit handler override wins).
 #[must_use]
@@ -307,7 +307,7 @@ pub fn security_headers() -> Vec<(&'static str, String)> {
             "referrer-policy",
             "strict-origin-when-cross-origin".to_string(),
         ),
-        // Beyond Go: deny powerful features by default for a server-rendered app.
+        // Deny powerful features by default for a server-rendered app.
         (
             "permissions-policy",
             "geolocation=(), microphone=(), camera=(), payment=()".to_string(),
@@ -849,7 +849,7 @@ mod tests {
             padding:6px 10px;text-decoration:none;\
             box-shadow:0 2px 8px rgba(0,0,0,0.4);\">\
             &#128269; Console</a>";
-        assert_eq!(b, expected, "dev console banner must byte-match Go");
+        assert_eq!(b, expected, "dev console banner must match golden");
         assert!(
             !b.contains('🔍'),
             "must use the &#128269; entity, not a literal emoji"
@@ -872,7 +872,7 @@ mod tests {
 
     #[test]
     fn inject_dev_banner_case_insensitive_body_tag() {
-        // Go lower-cases the body before LastIndex("</body>").
+        // Case-insensitive `</body>` search (lower-cased before index).
         let body = "<HTML><BODY>x</BODY></HTML>";
         let out = inject_dev_banner(body, "<B>");
         assert_eq!(out, "<HTML><BODY>x<B></BODY></HTML>");

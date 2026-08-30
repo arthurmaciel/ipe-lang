@@ -1,13 +1,11 @@
-// Log helpers — Go-format parity for `Ipe.Log.*`.
+// Log helpers for `Ipe.Log.*`.
 //
-// The plain + JSON line shapes mirror ``'s `logEmit`
-// byte-for-byte (modulo the genuinely-nondeterministic timestamp):
-//
+// Line shapes:
 //   plain:  <RFC3339Nano-UTC> <LEVEL> <message>[ key=value …]   (level UPPER)
 //   json:   {"level":"<level>","msg":"<message>","time":"<ts>"}  (level lower,
-//           keys alphabetically sorted to match  json.Marshal of a map)
+//           keys alphabetically sorted)
 //
-// Stream routing 
+// Stream routing
 // `IPE_LOG_LEVEL` gates output (debug < info < warn < error; default info);
 // `IPE_LOG_FORMAT=json` switches to the JSON shape. Each line is also mirrored
 // into the telemetry ring (the Ipê Console reads it).
@@ -71,8 +69,7 @@ fn rfc3339_nano_now() -> String {
 /// Browser substitute: `chrono::Utc::now()` has no denotation on
 /// `wasm32-unknown-unknown` without the extra `wasmbind` feature this target
 /// does not carry. `Date.now()` (via `js_sys`) gives millisecond, not
-/// nanosecond, precision — an accepted divergence: this line feeds
-/// `console.*`, never the Go-oracle byte-diff the native format is pinned to.
+/// nanosecond, precision — millisecond granularity is acceptable here.
 #[cfg(all(target_arch = "wasm32", feature = "wasm-client"))]
 fn rfc3339_nano_now() -> String {
     js_sys::Date::new_0().to_iso_string().into()
@@ -164,7 +161,7 @@ fn sanitise_log_msg(msg: &str) -> std::borrow::Cow<'_, str> {
     std::borrow::Cow::Owned(out)
 }
 
-/// The Go `logEmit` core: gate on the threshold, mirror into the telemetry ring,
+/// The  core: gate on the threshold, mirror into the telemetry ring,
 /// then write the plain or JSON line to the correct stream. `level` is the
 /// numeric severity; `level_name` is the lowercase token (`info` / `warn` / …).
 fn log_emit(level: i32, level_name: &str, msg: &str) {
@@ -174,10 +171,8 @@ fn log_emit(level: i32, level_name: &str, msg: &str) {
     super::telemetry::record_log(level_name, msg);
     let to_stderr = level >= LOG_LEVEL_WARN;
     if log_json() {
-        // Go marshals a map[string]any → keys sorted alphabetically:
-        // level, msg, time (no attrs are surfaced to JSON fields today —
-        // the *With variants flatten into the message, matching 
-        // plain-driver behaviour for the List-element call shape).
+        // Keys sorted alphabetically: level, msg, time. No attrs are surfaced
+        // to JSON fields today — the *With variants flatten into the message.
         let line = format!(
             "{{\"level\":{},\"msg\":{},\"time\":{}}}",
             json_str(level_name),
@@ -217,8 +212,8 @@ pub fn log_info<E: Send + 'static>(msg: String) -> IpeTask<E, ()> {
 // `Log.*With : String -> List a -> Task` is polymorphic in the attr element
 // (Ipê callers pass a flat `List String` — `["errId", id]` — OR a key/value
 // `List (String, String)` — `[("errId", id), …]`). The attrs slot is generic
-// over its element type `A`, bounded by `IpeStringify` — the TOTAL Go-`%v`
-// stringifier every Ipê-representable type implements (String unquoted, tuples
+// over its element type `A`, bounded by `IpeStringify` — the total stringifier
+// every Ipê-representable type implements (String unquoted, tuples
 // as `{k v}`, generated records/ADTs via their codegen-emitted impl). A plain
 // `Display` bound is insufficient: tuples + generated types don't implement
 // `Display`, so it fails to compile (E0277) at any tuple/record call site.
