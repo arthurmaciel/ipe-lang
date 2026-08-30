@@ -740,6 +740,74 @@ fn canon_custom_element_definition_reserved() {
     assert_rejected("canon_custom_element_def", &src, "IPE-N0026");
 }
 
+/// The `Ipe.Server` opaque nominals (`Request` / `Response` / `Route` /
+/// `Cookie`) are reserved: each lowers to a fixed runtime `IrType`
+/// (`ServerRequest` / …) by a bare-name arm that sits above the lowerer's
+/// program-enum guard, so a user `type Route = …` — accepted — would be
+/// silently mis-lowered to the opaque handle, an `ipe`-exit-0-then-cargo-fail.
+/// Reservation refuses the shadow at canon (IPE-N0026); the lowerer's empty-home
+/// guard is the independent second gate. This pins the refusal for every name.
+#[test]
+fn canon_server_request_definition_reserved() {
+    let src = format!("{HEAD}type Request = R\nmain = 1\n");
+    assert_rejected("canon_server_request_def", &src, "IPE-N0026");
+}
+
+#[test]
+fn canon_server_response_definition_reserved() {
+    let src = format!("{HEAD}type Response = R\nmain = 1\n");
+    assert_rejected("canon_server_response_def", &src, "IPE-N0026");
+}
+
+#[test]
+fn canon_server_route_definition_reserved() {
+    let src = format!("{HEAD}type Route = R\nmain = 1\n");
+    assert_rejected("canon_server_route_def", &src, "IPE-N0026");
+}
+
+#[test]
+fn canon_server_cookie_definition_reserved() {
+    let src = format!("{HEAD}type Cookie = C\nmain = 1\n");
+    assert_rejected("canon_server_cookie_def", &src, "IPE-N0026");
+}
+
+/// The shape app-leaf names (`WebApp` / `WebViewApp` / `TuiApp` / `CliApp`) are
+/// deliberately NOT reserved — a user program may soundly declare
+/// `type WebApp = …` and use it, and the lowerer's empty-home guard keeps that
+/// user union winning over the opaque runtime leaf (see the `ipe_lower`
+/// `opaque_home_guard` static goldens). Here we pin the CONTRAPOSITIVE at the
+/// full-pipeline level: such a program is ACCEPTED (exit 0), never refused —
+/// proving the guard does not over-reserve a legitimate user name.
+#[test]
+fn shape_leaf_user_type_webapp_compiles() {
+    let src = format!(
+        "{HEAD}import Ipe.Io as Io\n\
+         type WebApp = W\n\
+         tag : WebApp -> Int\n\
+         tag w =\n\
+         \x20   0\n\
+         main : Task Error ()\n\
+         main =\n\
+         \x20   Io.println \"ok\"\n"
+    );
+    assert_compiles("shape_leaf_user_webapp", &src);
+}
+
+#[test]
+fn shape_leaf_user_type_tuiapp_compiles() {
+    let src = format!(
+        "{HEAD}import Ipe.Io as Io\n\
+         type TuiApp = T\n\
+         tag : TuiApp -> Int\n\
+         tag t =\n\
+         \x20   0\n\
+         main : Task Error ()\n\
+         main =\n\
+         \x20   Io.println \"ok\"\n"
+    );
+    assert_compiles("shape_leaf_user_tuiapp", &src);
+}
+
 /// A `CustomElement down up` annotation whose two parameters are plain, closed
 /// value types (here two primitives) TYPE-RESOLVES at canon — the arity and SEAL
 /// gates pass — and, with the WP4 transport shipped, now LOWERS to the opaque

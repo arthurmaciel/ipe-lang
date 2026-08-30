@@ -16419,6 +16419,42 @@ impl<'a> Lowerer<'a> {
             )
     }
 
+    /// is `(home, name)` a kernel-implicit opaque `Ipe.Server` nominal —
+    /// `Request` / `Response` / `Route` / `Cookie`?
+    ///
+    /// The genuine server type is minted only by a `Server` kernel and carries
+    /// the empty home (`module: Vec::new()` in `ipe_types::constrain`), so the
+    /// mapping to the runtime `IrType` fires ONLY on that empty-home identity.
+    /// A user union of the same name (`type Route = …`) is keyed in
+    /// `enum_variants` under its own module home; guarding on the empty home lets
+    /// it fall through to the program-enum path and win by its own identity —
+    /// the second, independent gate behind `RESERVED_BUILTIN_TYPES` (IPE-N0026),
+    /// so no single missed check can silently map a user type to the opaque.
+    fn is_server_opaque_con(&self, home: &[Symbol], name: Symbol) -> bool {
+        home.is_empty()
+            && matches!(
+                self.interner.resolve(name),
+                Some("Request" | "Response" | "Route" | "Cookie")
+            )
+    }
+
+    /// is `(home, name)` a shape app-leaf opaque —
+    /// `WebApp` / `WebViewApp` / `TuiApp` / `CliApp`?
+    ///
+    /// Each leaf is produced only by a shape kernel (`Web.app`,
+    /// `Terminal.appScreen`, …) with the empty home, so the runtime-`IrType`
+    /// mapping keys on the empty home alone. These names are NOT reserved, so a
+    /// user `type WebApp = …` is legal and is keyed in `enum_variants` under its
+    /// own home; the empty-home guard lets that user union fall through and win,
+    /// instead of being hijacked to the opaque runtime leaf.
+    fn is_shape_app_leaf_con(&self, home: &[Symbol], name: Symbol) -> bool {
+        home.is_empty()
+            && matches!(
+                self.interner.resolve(name),
+                Some("WebApp" | "WebViewApp" | "TuiApp" | "CliApp")
+            )
+    }
+
     fn lower_enum(&self, u: &canon::Union) -> DResult<EnumDef> {
         // `Ipe.Db.Store.Cond row` carries a PHANTOM `row` (no constructor holds a
         // `row` value — it ties the predicate to the store's row at the
@@ -18014,10 +18050,14 @@ impl<'a> Lowerer<'a> {
                 // Opaque server types — users may annotate handlers with
                 // `Request -> Task Error Response` (via `exposing (Request, Response)`)
                 // or route lists with `List Route`.  Mirrors `ir_type_from_ty`.
-                "Request" => Ok(IrType::ServerRequest),
-                "Response" => Ok(IrType::ServerResponse),
-                "Route" => Ok(IrType::ServerRoute),
-                "Cookie" => Ok(IrType::ServerCookie),
+                // Home-guarded on the empty kernel home so a user `type Route = …`
+                // (keyed under its own home) falls through to the program-enum
+                // guard below and wins by its own identity — defence-in-depth
+                // behind the `RESERVED_BUILTIN_TYPES` canon gate.
+                "Request" if self.is_server_opaque_con(home, *name) => Ok(IrType::ServerRequest),
+                "Response" if self.is_server_opaque_con(home, *name) => Ok(IrType::ServerResponse),
+                "Route" if self.is_server_opaque_con(home, *name) => Ok(IrType::ServerRoute),
+                "Cookie" if self.is_server_opaque_con(home, *name) => Ok(IrType::ServerCookie),
                 // `Cmd msg` / `Sub msg` — TEA command and subscription types.
                 // Users may write annotations like
                 // `myCmd : Cmd Int`.
@@ -18136,11 +18176,15 @@ impl<'a> Lowerer<'a> {
                 }
                 // Ipe.Web opaque types in annotations (mirrors `ir_type_from_ty`).
                 "WebReq" => Ok(IrType::WebReq),
-                // Shape app-leaf opaque types in annotations.
-                "WebApp" => Ok(IrType::WebApp),
-                "WebViewApp" => Ok(IrType::WebViewApp),
-                "TuiApp" => Ok(IrType::TuiApp),
-                "CliApp" => Ok(IrType::CliApp),
+                // Shape app-leaf opaque types in annotations. Home-guarded on the
+                // empty kernel home: these names are NOT reserved, so a user
+                // `type WebApp = …` is legal and keyed in `enum_variants` under
+                // its own home — the guard lets that user union fall through and
+                // win instead of being hijacked to the opaque runtime leaf.
+                "WebApp" if self.is_shape_app_leaf_con(home, *name) => Ok(IrType::WebApp),
+                "WebViewApp" if self.is_shape_app_leaf_con(home, *name) => Ok(IrType::WebViewApp),
+                "TuiApp" if self.is_shape_app_leaf_con(home, *name) => Ok(IrType::TuiApp),
+                "CliApp" if self.is_shape_app_leaf_con(home, *name) => Ok(IrType::CliApp),
                 // Built-in ADTs that are never in `enum_variants` at lowering time
                 // (either no synthetic EnumDef injection, or injected after functions
                 // are lowered). All map to `IrType::Enum { home: [] }` directly.
@@ -19228,10 +19272,15 @@ impl<'a> Lowerer<'a> {
                 // `IrType` variants so the backend emits the runtime names
                 // (`ServerRequest`, `ServerResponse`, `ServerRoute`,
                 // `ServerCookie`) without synthesising record structs.
-                "Request" => Ok(IrType::ServerRequest),
-                "Response" => Ok(IrType::ServerResponse),
-                "Route" => Ok(IrType::ServerRoute),
-                "Cookie" => Ok(IrType::ServerCookie),
+                // Home-guarded on the empty kernel home (twin of
+                // `ir_type_from_canon`): a solved `type Route = …` carries its own
+                // module home and falls through to the program-enum guard below.
+                "Request" if self.is_server_opaque_con(module, *name) => Ok(IrType::ServerRequest),
+                "Response" if self.is_server_opaque_con(module, *name) => {
+                    Ok(IrType::ServerResponse)
+                }
+                "Route" if self.is_server_opaque_con(module, *name) => Ok(IrType::ServerRoute),
+                "Cookie" if self.is_server_opaque_con(module, *name) => Ok(IrType::ServerCookie),
                 // `StreamWriter` — opaque stream writer handle.
                 "StreamWriter" => Ok(IrType::StreamWriter),
                 // `Ipe.Email.EmailProvider` — opaque ADT backed by the runtime
@@ -19489,10 +19538,13 @@ impl<'a> Lowerer<'a> {
                 // ── Ipe.Web opaque types ─────────────────────────────────
                 "WebReq" => Ok(IrType::WebReq),
                 // ── Shape opaque app leaves ───────────────────────────────
-                "WebApp" => Ok(IrType::WebApp),
-                "WebViewApp" => Ok(IrType::WebViewApp),
-                "TuiApp" => Ok(IrType::TuiApp),
-                "CliApp" => Ok(IrType::CliApp),
+                // Below the `enum_variants` guard AND home-guarded on the empty
+                // kernel home, so a user `type WebApp = …` wins by its own
+                // identity at both gates (twin of `ir_type_from_canon`).
+                "WebApp" if self.is_shape_app_leaf_con(module, *name) => Ok(IrType::WebApp),
+                "WebViewApp" if self.is_shape_app_leaf_con(module, *name) => Ok(IrType::WebViewApp),
+                "TuiApp" if self.is_shape_app_leaf_con(module, *name) => Ok(IrType::TuiApp),
+                "CliApp" if self.is_shape_app_leaf_con(module, *name) => Ok(IrType::CliApp),
                 // `WebRoute page` — the route descriptor produced by
                 // `Web.route`, parametric on the page type it builds.
                 // The solver's `WebRoute` Con always carries exactly one
