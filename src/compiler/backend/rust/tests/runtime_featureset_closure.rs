@@ -1009,6 +1009,7 @@ fn gated_leaf_cases() -> Vec<(IrType, &'static str)> {
 /// the exact type-only shape the flag sweep never models. If the feature closure
 /// still selects `field_ty`'s feature, it did so from the emitted TYPE, not a
 /// flag — the property under test.
+#[allow(clippy::expect_used)] // test scaffolding: interning a fixed literal cannot fail
 fn type_only_program(
     interner: &mut Interner,
     main: ipe_intern::Symbol,
@@ -1072,13 +1073,13 @@ fn type_only_program(
 }
 
 /// For EVERY gated leaf, a type-only program (the leaf in an enum payload, all
-/// flags off, no kernel) must:
-///   1. select the leaf's feature (derived from the emitted TYPE by construction);
-///   2. resolve + close: the selected set is declared, resolves closed, and every
-///      emitted `ipe_runtime::<mod>::` reference is cfg-satisfied.
-/// This is Direction D (static) ranging over TYPES — the blind spot the flag
-/// sweep never modelled.
+/// flags off, no kernel) must select the leaf's feature (derived from the emitted
+/// TYPE by construction) AND resolve + close: the selected set is declared,
+/// resolves closed, and every emitted `ipe_runtime::<mod>::` reference is
+/// cfg-satisfied. This is Direction D (static) ranging over TYPES — the blind
+/// spot the flag sweep never modelled.
 #[test]
+#[allow(clippy::expect_used)] // test scaffolding
 fn type_only_program_selects_leaf_feature() {
     let fx = load_fixtures();
     for (leaf, feature) in gated_leaf_cases() {
@@ -1136,6 +1137,7 @@ fn type_only_program_selects_leaf_feature() {
 /// it the `url` feature is forced from the embedded type. `#1530` re-lands the
 /// full `ImageSrc`; this proves the hole is closed by construction.
 #[test]
+#[allow(clippy::expect_used)] // test scaffolding
 fn image_src_mechanism_forces_url() {
     let mut interner = Interner::new();
     let main = interner.intern("Main").expect("intern Main");
@@ -1172,6 +1174,7 @@ fn image_src_mechanism_forces_url() {
 /// type-only path — a regression that treats an unsatisfied gate as satisfied, or
 /// that silently drops the type-closure fold, trips here.
 #[test]
+#[allow(clippy::expect_used)] // test scaffolding
 fn type_only_coverage_fails_closed() {
     let fx = load_fixtures();
     let mut interner = Interner::new();
@@ -1220,6 +1223,7 @@ fn type_only_coverage_fails_closed() {
 /// that leaks unrelated features into every project (bloat) as much as one that
 /// drops a needed feature (breach).
 #[test]
+#[allow(clippy::expect_used)] // test scaffolding
 fn type_closure_selects_exactly_the_needed_features() {
     let mut interner = Interner::new();
     let main = interner.intern("Main").expect("intern Main");
@@ -1233,7 +1237,15 @@ fn type_closure_selects_exactly_the_needed_features() {
     let cli_f = RustBackend::new(&interner)
         .runtime_feature_names(&cli)
         .expect("features");
-    for reject in ["url", "web", "server", "db", "http_client", "secret", "json"] {
+    for reject in [
+        "url",
+        "web",
+        "server",
+        "db",
+        "http_client",
+        "secret",
+        "json",
+    ] {
         assert!(
             !cli_f.contains(&reject),
             "over-selection: a pure-CLI (primitive) type-only program must not pull \
@@ -1246,7 +1258,10 @@ fn type_closure_selects_exactly_the_needed_features() {
     let url_f = RustBackend::new(&interner)
         .runtime_feature_names(&url)
         .expect("features");
-    assert!(url_f.contains(&"url"), "a Url-typed program selects `url`: {url_f:?}");
+    assert!(
+        url_f.contains(&"url"),
+        "a Url-typed program selects `url`: {url_f:?}"
+    );
     for reject in ["web", "db", "server", "http_client"] {
         assert!(
             !url_f.contains(&reject),

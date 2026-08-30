@@ -1749,22 +1749,21 @@ impl<'a> EmitCtx<'a> {
         // walk (which routes the SAME SSOT), so a missed wiring in either side is
         // covered by the other.
         let type_reqs = program_type_feature_requirements(program);
-        use ipe_ir::RuntimeFeatureId as Fid;
-        let has = |f: Fid| type_reqs.contains(&f);
-        let uses_json = uses_json || has(Fid::Json);
-        let uses_url = uses_url || has(Fid::Url);
-        let uses_secret = uses_secret || has(Fid::Secret);
-        let uses_decimal = uses_decimal || has(Fid::Decimal);
-        let uses_regex = uses_regex || has(Fid::Regex);
-        let uses_csv = uses_csv || has(Fid::Csv);
-        let uses_cache = uses_cache || has(Fid::CacheKernel);
-        let uses_websocket = uses_websocket || has(Fid::WebsocketClient);
-        let uses_email = uses_email || has(Fid::Email);
-        let uses_crypto_core = uses_crypto_core || has(Fid::CryptoCore);
-        let uses_db = uses_db || has(Fid::Db);
-        let uses_server = uses_server || has(Fid::Server);
-        let uses_http = uses_http || has(Fid::HttpClient);
-        let uses_web = uses_web || has(Fid::Web);
+        let has = |f: ipe_ir::RuntimeFeatureId| type_reqs.contains(&f);
+        let uses_json = uses_json || has(ipe_ir::RuntimeFeatureId::Json);
+        let uses_url = uses_url || has(ipe_ir::RuntimeFeatureId::Url);
+        let uses_secret = uses_secret || has(ipe_ir::RuntimeFeatureId::Secret);
+        let uses_decimal = uses_decimal || has(ipe_ir::RuntimeFeatureId::Decimal);
+        let uses_regex = uses_regex || has(ipe_ir::RuntimeFeatureId::Regex);
+        let uses_csv = uses_csv || has(ipe_ir::RuntimeFeatureId::Csv);
+        let uses_cache = uses_cache || has(ipe_ir::RuntimeFeatureId::CacheKernel);
+        let uses_websocket = uses_websocket || has(ipe_ir::RuntimeFeatureId::WebsocketClient);
+        let uses_email = uses_email || has(ipe_ir::RuntimeFeatureId::Email);
+        let uses_crypto_core = uses_crypto_core || has(ipe_ir::RuntimeFeatureId::CryptoCore);
+        let uses_db = uses_db || has(ipe_ir::RuntimeFeatureId::Db);
+        let uses_server = uses_server || has(ipe_ir::RuntimeFeatureId::Server);
+        let uses_http = uses_http || has(ipe_ir::RuntimeFeatureId::HttpClient);
+        let uses_web = uses_web || has(ipe_ir::RuntimeFeatureId::Web);
         // A type-only reach that flips a reactor surface (`web` / `server` /
         // `db` / `http` / `websocket` / `email`) must also force the reactor
         // spine — the same surfaces the kernel-side union force above — or the
@@ -2983,6 +2982,7 @@ impl<'a> EmitCtx<'a> {
 /// `program_type_mentions`), the fold ranges over every emitted type — the
 /// property that makes "a gated type emitted without its feature" unrepresentable
 /// (the `Url`/`ImageSrc` breach class).
+#[allow(clippy::too_many_lines)] // one arm per IrType variant, deliberately exhaustive
 fn collect_type_feature_requirements(ty: &IrType, out: &mut BTreeSet<ipe_ir::RuntimeFeatureId>) {
     if let Some(req) = ipe_ir::ir_type_feature_requirement(ty) {
         out.insert(req);
@@ -3113,7 +3113,7 @@ fn program_type_feature_requirements(program: &Program) -> BTreeSet<ipe_ir::Runt
             }
             collect_type_feature_requirements(&func.ret, &mut out);
             for row in &func.row_params {
-                for (_, ty) in &row.fields {
+                for ty in row.fields.values() {
                     collect_type_feature_requirements(ty, &mut out);
                 }
             }

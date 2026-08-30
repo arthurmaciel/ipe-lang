@@ -2181,8 +2181,10 @@ impl RuntimeFeatureId {
 }
 
 /// The runtime cargo feature a single [`IrType`] leaf's emitted Rust form
-/// requires — the total, wildcard-free single source of truth that makes "a
-/// feature-gated type emitted without its feature" unrepresentable.
+/// requires.
+///
+/// The total, wildcard-free single source of truth that makes "a feature-gated
+/// type emitted without its feature" unrepresentable.
 ///
 /// This is the exact shape of [`ir_type_is_derivable`]: an exhaustive `match`
 /// over every [`IrType`] variant with NO wildcard arm. A leaf whose emitted Rust
@@ -3744,11 +3746,17 @@ mod tests {
             (IrType::Decimal, RuntimeFeatureId::Decimal),
             (IrType::Regex, RuntimeFeatureId::Regex),
             (IrType::Json, RuntimeFeatureId::Json),
-            (IrType::Decoder(Box::new(IrType::Int)), RuntimeFeatureId::Json),
+            (
+                IrType::Decoder(Box::new(IrType::Int)),
+                RuntimeFeatureId::Json,
+            ),
             (IrType::CsvDoc, RuntimeFeatureId::Csv),
             (IrType::CacheCfg, RuntimeFeatureId::CacheKernel),
             (IrType::CacheStats, RuntimeFeatureId::CacheKernel),
-            (IrType::WebSocketClientCfg, RuntimeFeatureId::WebsocketClient),
+            (
+                IrType::WebSocketClientCfg,
+                RuntimeFeatureId::WebsocketClient,
+            ),
             (IrType::EmailMessage, RuntimeFeatureId::Email),
             (IrType::EmailAddress, RuntimeFeatureId::Email),
             (IrType::EmailProvider, RuntimeFeatureId::Email),
@@ -3763,7 +3771,10 @@ mod tests {
             (IrType::HttpRequest, RuntimeFeatureId::HttpClient),
             (IrType::HttpMethod, RuntimeFeatureId::HttpClient),
             (IrType::WebReq, RuntimeFeatureId::Web),
-            (IrType::WebRoute(Box::new(IrType::Unit)), RuntimeFeatureId::Web),
+            (
+                IrType::WebRoute(Box::new(IrType::Unit)),
+                RuntimeFeatureId::Web,
+            ),
         ];
         for (ty, want) in cases {
             assert_eq!(
