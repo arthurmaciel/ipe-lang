@@ -106,7 +106,7 @@ fn subset_access_ipec_accepts_and_resolves_superset_struct() {
 /// cargo-0 ∧ run-0: the emitted project actually compiles and prints the
 /// field it read. Gated on `IPE_E2E=1` — matches the reference compiler's
 /// own output for the identical shape (proof-matrix row P2: "accept; prints
-/// `Ada`"), hand-verified against `ipe v0.16.29`.
+/// `Ada`"), hand-verified against `the prior compiler`.
 #[test]
 fn subset_access_cargo_builds_and_prints_ada() {
     if std::env::var("IPE_E2E").is_err() {
@@ -189,7 +189,7 @@ fn subset_pattern_ipec_accepts_and_completes_superset_pattern() {
 /// values read through both subset patterns. Gated on `IPE_E2E=1` — matches
 /// the reference compiler's own output for the identical shapes
 /// (proof-matrix rows P5 "prints (same)" and P7 "prints `Ada, Bo`"),
-/// hand-verified against `ipe v0.16.29` for this combined fixture
+/// hand-verified against `the prior compiler` for this combined fixture
 /// (`Iri: Ada, Bo`).
 #[test]
 fn subset_pattern_cargo_builds_and_prints_iri_ada_bo() {

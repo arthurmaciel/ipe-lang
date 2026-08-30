@@ -1062,7 +1062,7 @@ pub fn db_query<E: Send + From<String> + 'static>(
     })
 }
 
-// ─── Typed-parameter exec/query ( v0.16.26 `List SqlValue`) ────────────────
+// ─── Typed-parameter exec/query (`List SqlValue`) ──────────────────────────
 //
 // `Db.exec`/`Db.query` are `Db -> String -> List a -> Task ...`. With `a = String`
 // the params route through `db_exec`/`db_query` above (Vec<String>). With

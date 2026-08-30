@@ -20,7 +20,7 @@
 //! then cargo-fail.
 //!
 //! Note on the golden oracle: the the reference compiler (`/usr/local/bin/ipe`,
-//! v0.16.29) fails this exact shape — its codegen emitted code that `go build`
+//! ) fails this exact shape — its codegen emitted code that `go build`
 //! rejects (`invalid operation: cannot call f (variable of interface type any):
 //! any is not a function`), captured in `oracle.meta` as a upstream-failure
 //! divergence (`oracle_divergence = true`) by the `refresh-oracle` tool. So the

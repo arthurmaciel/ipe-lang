@@ -2954,8 +2954,7 @@ mod tests {
 
     /// Test matrix item 1: a cross-module untyped helper used at two
     /// DIFFERENT concrete types from two DIFFERENT importers must be
-    /// accepted (empirically matches `ipe v0.16.29`'s observable semantics —
-    /// see the fix spec's decision record).
+    /// accepted (see the fix spec's decision record).
     #[test]
     fn untyped_binding_generalizes_across_cross_module_uses() {
         let mid = (
@@ -5155,7 +5154,7 @@ mod tests {
     /// home module* — every same-module reference shares one variable, so
     /// using it at two different concrete types from within its own module is
     /// a sound rejection, exactly matching the reference `ipe` compiler's
-    /// `CLocal` semantics (empirically verified against `ipe v0.16.29`; see
+    /// `CLocal` semantics (see
     /// `docs/adr/0008-untyped-binding-module-boundary-generalization.md`). A
     /// CROSS-module use at two different types IS accepted — see
     /// [`untyped_binding_generalizes_across_cross_module_uses`]. To get

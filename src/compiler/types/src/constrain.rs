@@ -6125,7 +6125,7 @@ impl<'a> Builder<'a> {
             // `exec`/`query`/`queryDecode` accept `List a` (polymorphic) — any
             // Ipê type that can be bound as a SQL parameter: `List String`,
             // `List Int`, `List Float`, `List Bool`, or `List SqlValue` (typed
-            // mixed-type binding introduced in v0.16.26).  The emitter routes all
+            // mixed-type binding).  The emitter routes all
             // three to `db_exec_params` / `db_query_params` /
             // `db_query_decode_params`, converting elements via
             // `ipe_runtime::db::SqlParam::from` which is implemented for every
