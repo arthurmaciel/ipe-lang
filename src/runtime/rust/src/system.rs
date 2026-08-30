@@ -533,8 +533,9 @@ fn process_run_with_impl<E: Send + From<String> + 'static>(
 /// driver that puts the terminal/process into a state needing restoration (the
 /// Ipe.Tui driver: raw mode + alternate screen + hidden cursor + mouse reporting)
 /// registers its idempotent teardown here; `system_exit` runs it BEFORE
-/// `process::exit`. Mirrors Go's `System_exit` → `tuiTeardown()` → `os.Exit`.
-/// A plain `fn()` keeps the boundary clean — `system` (always compiled) never
+/// `process::exit`. The hook runs teardown before process termination, so RAII-
+/// bypassed cleanup (terminal restore, cursor reset) completes before the OS reclaims
+/// the process. A plain `fn()` keeps the boundary clean — `system` (always compiled) never
 /// references the feature-gated `tui`/crossterm; the TUI provides the function.
 static EXIT_HOOK: std::sync::OnceLock<fn()> = std::sync::OnceLock::new();
 
@@ -565,11 +566,11 @@ pub fn system_exit(code: i64) -> ! {
 /// Task, or `Err` when unset. Returning a `IpeTask` (not a bare `String`) is
 /// required for parity: `getenv` is Task-typed in the stdlib, so a bare `String`
 /// fails to type-check in any `Task.andThen`/`Task.run` position. Returning `Err`
-/// on unset (rather than `Ok("")`) mirrors Go's `System_getenv` `ErrNotFound`
-/// short-circuit so a chained Task fails identically on both backends. The
+/// on unset (rather than `Ok("")`) fails the Task at the call site, so a
+/// chained `Task.andThen` short-circuits on a missing variable. The
 /// string-based error follows `system_cwd`'s convention — the generic `E` bound
-/// can only build `From<String>`, so the kind is coarser than Go's typed
-/// `NotFound` (shared limitation with `system_cwd`). NOTE: `getenvOr` stays a bare
+/// can only build `From<String>`, so the error kind is a plain string (shared
+/// limitation with `system_cwd`). NOTE: `getenvOr` stays a bare
 /// `String` (the default plugs the missing case at the call site).
 #[must_use]
 pub fn system_getenv<E: Send + From<String> + 'static>(key: String) -> IpeTask<E, String> {
@@ -588,10 +589,9 @@ pub fn system_getenv_or(key: String, default: String) -> String {
     read_env_var(&key).unwrap_or(default)
 }
 
-/// `System.getenvInt key : String -> Task Error Int`. Unset → `Err` (Go's
-/// `ErrNotFound`); set-but-not-an-int → `Err` (Go's `ErrFfi`). The string-based error
-/// follows the generic-`E` convention (coarser than Go's typed kinds; shared with
-/// `getenv`/`cwd`).
+/// `System.getenvInt key : String -> Task Error Int`. Unset → `Err` (variable not
+/// set); set-but-not-an-int → `Err` (parse failure). The string-based error
+/// follows the generic-`E` convention (shared with `getenv`/`cwd`).
 #[must_use]
 pub fn system_getenv_int<E: Send + From<String> + 'static>(key: String) -> IpeTask<E, i64> {
     Box::pin(async move {
@@ -613,9 +613,9 @@ pub fn system_getenv_int<E: Send + From<String> + 'static>(key: String) -> IpeTa
     })
 }
 
-/// `System.getenvBool key : String -> Task Error Bool`. Matches Go's truthy/falsy
-/// table: `true/yes/1/on/y/t` → true; `false/no/0/off/n/f`/empty → false; unset →
-/// `Err` (`NotFound`); anything else → `Err` (not-a-bool).
+/// `System.getenvBool key : String -> Task Error Bool`. Accepted truthy values:
+/// `true/yes/1/on/y/t` → true; `false/no/0/off/n/f`/empty → false; unset →
+/// `Err` (variable not set); anything else → `Err` (not a valid bool).
 #[must_use]
 pub fn system_getenv_bool<E: Send + From<String> + 'static>(key: String) -> IpeTask<E, bool> {
     Box::pin(async move {
@@ -636,9 +636,9 @@ pub fn system_getenv_bool<E: Send + From<String> + 'static>(key: String) -> IpeT
 }
 
 /// `System.getArg n : Int -> Task Error (Maybe String)`. Indexes the FULL arg
-/// vector to match Go's `System_getArg` (`os.Args[n]` — index 0 is the program
-/// name, UNLIKE `System.args` which skips it); out-of-range / negative →
-/// `Ok Nothing`. Never `Err` (mirrors Go).
+/// vector (`std::env::args()`), where index 0 is the program name (unlike
+/// `System.args`, which skips it); out-of-range or negative → `Ok Nothing`.
+/// Never `Err`.
 #[must_use]
 pub fn system_get_arg<E: Send + 'static>(n: i64) -> IpeTask<E, IpeMaybe<String>> {
     Box::pin(async move {
