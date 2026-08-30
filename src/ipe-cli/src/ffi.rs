@@ -1758,14 +1758,15 @@ fn ffi_vocabulary_source(manifest_path: &Path) -> PathBuf {
     manifest_path.to_path_buf()
 }
 
-/// Returns an error if `text` contains a legacy `[[rust.define.*]]` TOML table,
-/// directing the user to `ipe migrate config` to convert it to `foreign` declarations.
+/// Returns an error if `text` contains a legacy `[[rust.define.*]]` TOML table.
+///
+/// `[[rust.define.*]]` is no longer supported; declare FFI types via `foreign`
+/// in `src/Ffi/<Crate>.ipe` instead.
 fn reject_legacy_define_tables(text: &str) -> Result<(), CliError> {
     if text.contains("[[rust.define.") {
         return Err(CliError::Usage(
             "[[rust.define.*]] is no longer supported — \
-             run `ipe migrate config` to convert your FFI definitions \
-             to `foreign` declarations in `src/Ffi/<Crate>.ipe`",
+             declare FFI types via `foreign` in `src/Ffi/<Crate>.ipe`",
         ));
     }
     Ok(())
@@ -2425,281 +2426,6 @@ pub(crate) fn to_snake_case(s: &str) -> String {
         }
     }
     out
-}
-
-/// Extract the manifest's `[[rust.define.closure]]` array-of-tables entries.
-///
-/// Used by `ipe migrate config` to read legacy toml define blocks and render
-/// equivalent `foreign` declarations. New code should declare FFI types via
-/// `foreign` in `src/Ffi/<Crate>.ipe` instead.
-pub(crate) fn rust_define_closures_from_manifest(text: &str) -> Vec<ManifestDefineClosure> {
-    let mut in_table = false;
-    let mut out: Vec<ManifestDefineClosure> = Vec::new();
-    let mut cur: Option<(String, String, String)> = None; // (crate, name, signature)
-    let flush = |cur: &mut Option<(String, String, String)>,
-                 out: &mut Vec<ManifestDefineClosure>| {
-        if let Some((krate, name, signature)) = cur.take()
-            && !name.is_empty()
-            && !signature.is_empty()
-        {
-            out.push(ManifestDefineClosure {
-                krate,
-                name,
-                signature,
-            });
-        }
-    };
-    for line in text.lines() {
-        let line = line.trim();
-        if line.starts_with('[') {
-            flush(&mut cur, &mut out);
-            in_table = line == "[[rust.define.closure]]" || line == "[[\"rust.define.closure\"]]";
-            if in_table {
-                cur = Some((String::new(), String::new(), String::new()));
-            }
-            continue;
-        }
-        if !in_table || line.is_empty() || line.starts_with('#') {
-            continue;
-        }
-        let Some((k, v)) = line.split_once('=') else {
-            continue;
-        };
-        let key = k.trim().trim_matches('"');
-        let value = v.trim().trim_matches('"').to_owned();
-        if let Some((krate, name, signature)) = cur.as_mut() {
-            match key {
-                "crate" => *krate = value,
-                "name" => *name = value,
-                "signature" => *signature = value,
-                _ => {}
-            }
-        }
-    }
-    flush(&mut cur, &mut out);
-    out
-}
-
-/// Extract the manifest's `[[rust.define.struct]]` array-of-tables entries.
-///
-/// Used by `ipe migrate config` to read legacy toml define blocks and render
-/// equivalent `foreign` declarations. New code should declare FFI types via
-/// `foreign` in `src/Ffi/<Crate>.ipe` instead.
-pub(crate) fn rust_define_structs_from_manifest(text: &str) -> Vec<ManifestDefineStruct> {
-    #[derive(Default)]
-    struct Acc {
-        krate: String,
-        ctor: String,
-        name: String,
-        fields: Vec<(String, String)>,
-        derives: Vec<String>,
-    }
-    let mut in_table = false;
-    let mut out: Vec<ManifestDefineStruct> = Vec::new();
-    let mut cur: Option<Acc> = None;
-    let flush = |cur: &mut Option<Acc>, out: &mut Vec<ManifestDefineStruct>| {
-        if let Some(a) = cur.take()
-            && !a.name.is_empty()
-            && !a.fields.is_empty()
-        {
-            let ctor = if a.ctor.is_empty() {
-                format!("{}_new", to_snake_case(&a.name))
-            } else {
-                a.ctor
-            };
-            out.push(ManifestDefineStruct {
-                krate: a.krate,
-                ctor,
-                struct_name: a.name,
-                fields: a.fields,
-                derives: a.derives,
-            });
-        }
-    };
-    for line in text.lines() {
-        let line = line.trim();
-        if line.starts_with('[') {
-            flush(&mut cur, &mut out);
-            in_table = line == "[[rust.define.struct]]" || line == "[[\"rust.define.struct\"]]";
-            if in_table {
-                cur = Some(Acc::default());
-            }
-            continue;
-        }
-        if !in_table || line.is_empty() || line.starts_with('#') {
-            continue;
-        }
-        let Some((k, v)) = line.split_once('=') else {
-            continue;
-        };
-        let key = k.trim().trim_matches('"');
-        let value = v.trim();
-        let Some(a) = cur.as_mut() else { continue };
-        match key {
-            "crate" => value.trim_matches('"').clone_into(&mut a.krate),
-            "ctor" => value.trim_matches('"').clone_into(&mut a.ctor),
-            "name" => value.trim_matches('"').clone_into(&mut a.name),
-            "derives" => {
-                if let Some(body) = value.strip_prefix('[').and_then(|r| r.strip_suffix(']')) {
-                    a.derives = body
-                        .split(',')
-                        .map(|s| s.trim().trim_matches('"').to_owned())
-                        .filter(|s| !s.is_empty())
-                        .collect();
-                }
-            }
-            "fields" => {
-                if let Some(body) = value.strip_prefix('{').and_then(|r| r.strip_suffix('}')) {
-                    a.fields = parse_inline_field_table(body);
-                }
-            }
-            _ => {}
-        }
-    }
-    flush(&mut cur, &mut out);
-    out
-}
-
-/// Extract the manifest's `[[rust.define.enum]]` array-of-tables entries.
-///
-/// Used by `ipe migrate config` to read legacy toml define blocks and render
-/// equivalent `foreign` declarations. New code should declare FFI types via
-/// `foreign` in `src/Ffi/<Crate>.ipe` instead.
-pub(crate) fn rust_define_enums_from_manifest(text: &str) -> Vec<ManifestDefineEnum> {
-    #[derive(Default)]
-    struct Acc {
-        krate: String,
-        ctor: String,
-        name: String,
-        variants: Vec<(String, Vec<String>)>,
-        derives: Vec<String>,
-    }
-    let mut in_table = false;
-    let mut out: Vec<ManifestDefineEnum> = Vec::new();
-    let mut cur: Option<Acc> = None;
-    let flush = |cur: &mut Option<Acc>, out: &mut Vec<ManifestDefineEnum>| {
-        if let Some(a) = cur.take()
-            && !a.name.is_empty()
-            && !a.variants.is_empty()
-        {
-            let ctor = if a.ctor.is_empty() {
-                format!("{}_new", to_snake_case(&a.name))
-            } else {
-                a.ctor
-            };
-            out.push(ManifestDefineEnum {
-                krate: a.krate,
-                ctor,
-                enum_name: a.name,
-                variants: a.variants,
-                derives: a.derives,
-            });
-        }
-    };
-    for line in text.lines() {
-        let line = line.trim();
-        if line.starts_with('[') {
-            flush(&mut cur, &mut out);
-            in_table = line == "[[rust.define.enum]]" || line == "[[\"rust.define.enum\"]]";
-            if in_table {
-                cur = Some(Acc::default());
-            }
-            continue;
-        }
-        if !in_table || line.is_empty() || line.starts_with('#') {
-            continue;
-        }
-        let Some((k, v)) = line.split_once('=') else {
-            continue;
-        };
-        let key = k.trim().trim_matches('"');
-        let value = v.trim();
-        let Some(a) = cur.as_mut() else { continue };
-        match key {
-            "crate" => value.trim_matches('"').clone_into(&mut a.krate),
-            "ctor" => value.trim_matches('"').clone_into(&mut a.ctor),
-            "name" => value.trim_matches('"').clone_into(&mut a.name),
-            "derives" => {
-                if let Some(body) = value.strip_prefix('[').and_then(|r| r.strip_suffix(']')) {
-                    a.derives = body
-                        .split(',')
-                        .map(|s| s.trim().trim_matches('"').to_owned())
-                        .filter(|s| !s.is_empty())
-                        .collect();
-                }
-            }
-            "variants" => {
-                if let Some(body) = value.strip_prefix('{').and_then(|r| r.strip_suffix('}')) {
-                    a.variants = parse_inline_variant_table(body);
-                }
-            }
-            _ => {}
-        }
-    }
-    flush(&mut cur, &mut out);
-    out
-}
-
-/// Parse a `define.enum` inline `variants` table body into
-/// `(variant-name, payload-carrier-spellings)` pairs, bracket-aware so a `,`
-/// inside a `[...]` payload list does not split the variant.
-fn parse_inline_variant_table(body: &str) -> Vec<(String, Vec<String>)> {
-    let mut out: Vec<(String, Vec<String>)> = Vec::new();
-    let mut depth = 0_i32;
-    let mut start = 0_usize;
-    let mut segments: Vec<&str> = Vec::new();
-    for (i, c) in body.char_indices() {
-        match c {
-            '[' => depth += 1,
-            ']' => depth -= 1,
-            ',' if depth == 0 => {
-                if let Some(seg) = body.get(start..i) {
-                    segments.push(seg);
-                }
-                start = i + 1;
-            }
-            _ => {}
-        }
-    }
-    if let Some(seg) = body.get(start..) {
-        segments.push(seg);
-    }
-    for seg in segments {
-        let Some((k, v)) = seg.split_once('=') else {
-            continue;
-        };
-        let name = k.trim().trim_matches('"').to_owned();
-        if name.is_empty() {
-            continue;
-        }
-        let v = v.trim();
-        let payload = v
-            .strip_prefix('[')
-            .and_then(|r| r.strip_suffix(']'))
-            .map(|inner| {
-                inner
-                    .split(',')
-                    .map(|s| s.trim().trim_matches('"').to_owned())
-                    .filter(|s| !s.is_empty())
-                    .collect::<Vec<String>>()
-            })
-            .unwrap_or_default();
-        out.push((name, payload));
-    }
-    out
-}
-
-/// Parse a `define.struct` inline `fields` table body into
-/// `(field-name, carrier-spelling)` pairs, in declaration order.
-fn parse_inline_field_table(body: &str) -> Vec<(String, String)> {
-    body.split(',')
-        .filter_map(|pair| {
-            let (k, v) = pair.split_once('=')?;
-            let name = k.trim().trim_matches('"').to_owned();
-            let ty = v.trim().trim_matches('"').to_owned();
-            (!name.is_empty() && !ty.is_empty()).then_some((name, ty))
-        })
-        .collect()
 }
 
 /// Whether a `[[rust.define.*]]` entry keyed by `entry_crate` attaches to
@@ -3846,44 +3572,6 @@ version = \"1\"
     }
 
     #[test]
-    fn manifest_define_enum_reads_variants_and_defaults_the_ctor() {
-        let text = "[rust.dependencies]\niced = \"=0.12.1\"\n\n\
-                    [[rust.define.enum]]\n\
-                    name = \"Message\"\n\
-                    variants = { Increment = [], Decrement = [], SetValue = [\"i64\"] }\n\
-                    derives = [\"Clone\"]\n";
-        let enums = rust_define_enums_from_manifest(text);
-        assert_eq!(
-            enums,
-            vec![ManifestDefineEnum {
-                krate: String::new(),
-                // Ctor defaults to `<snake(name)>_new`.
-                ctor: "message_new".to_owned(),
-                enum_name: "Message".to_owned(),
-                variants: vec![
-                    ("Increment".to_owned(), vec![]),
-                    ("Decrement".to_owned(), vec![]),
-                    ("SetValue".to_owned(), vec!["i64".to_owned()]),
-                ],
-                derives: vec!["Clone".to_owned()],
-            }]
-        );
-    }
-
-    #[test]
-    fn manifest_define_enum_multi_payload_split_is_bracket_aware() {
-        // A `,` inside a payload list must NOT split the variant.
-        let vars = parse_inline_variant_table("Tick = [], Move = [\"i64\", \"i64\"]");
-        assert_eq!(
-            vars,
-            vec![
-                ("Tick".to_owned(), vec![]),
-                ("Move".to_owned(), vec!["i64".to_owned(), "i64".to_owned()]),
-            ]
-        );
-    }
-
-    #[test]
     fn manifest_rust_dependencies_inline_table_carries_pin_and_features() {
         let text = "[rust.dependencies]\n\
                     async-stripe-checkout = { version = \"=1.0.0-rc.6\", features = [\"checkout_session\"] }\n\
@@ -4234,40 +3922,6 @@ version = \"1\"
     }
 
     #[test]
-    fn manifest_define_closure_array_of_tables_parses() {
-        let text = "[rust.dependencies]\ndemo = \"1\"\n\n\
-                    [[rust.define.closure]]\n\
-                    crate = \"demo\"\n\
-                    name = \"update_fn\"\n\
-                    signature = \"Fn(Int, Bool) -> Int + Send + Sync + 'static\"\n\n\
-                    [[rust.define.closure]]\n\
-                    name = \"draw_fn\"\n\
-                    signature = \"Fn(Int) -> Bool + Send + Sync + 'static\"\n";
-        assert_eq!(
-            rust_define_closures_from_manifest(text),
-            vec![
-                ManifestDefineClosure {
-                    krate: "demo".to_owned(),
-                    name: "update_fn".to_owned(),
-                    signature: "Fn(Int, Bool) -> Int + Send + Sync + 'static".to_owned(),
-                },
-                ManifestDefineClosure {
-                    krate: String::new(),
-                    name: "draw_fn".to_owned(),
-                    signature: "Fn(Int) -> Bool + Send + Sync + 'static".to_owned(),
-                },
-            ]
-        );
-    }
-
-    #[test]
-    fn a_define_closure_missing_name_or_signature_is_dropped_not_half_merged() {
-        let text = "[[rust.define.closure]]\nname = \"no_sig\"\n\n\
-                    [[rust.define.closure]]\nsignature = \"Fn(Int) -> Int\"\n";
-        assert!(rust_define_closures_from_manifest(text).is_empty());
-    }
-
-    #[test]
     fn merge_injects_a_matching_closure_as_a_synthetic_function() {
         let doc = "{\"pkg\":\"demo\",\"name\":\"demo\",\"functions\":[]}";
         let closures = vec![ManifestDefineClosure {
@@ -4329,120 +3983,6 @@ version = \"1\"
         assert!(merge_provides(doc, "demo", &closures, &[], &[], false).is_err());
         // sole_dep = true ⇒ it attaches to the one crate.
         assert!(merge_provides(doc, "demo", &closures, &[], &[], true).is_ok());
-    }
-
-    /// The manifest→adapter SEAL: a `[[rust.define.closure]]` declared in an
-    /// `ipe.toml` flows through the CLI merge glue, then the driver's `PkgInfo`
-    /// decode, and emits the closure-adapter wrapper Rust — the same path
-    /// `ipe rust install` drives, minus the sandbox/inspector spawn. Without the
-    /// merge glue the declared closure never becomes an emitted adapter.
-    #[test]
-    fn a_manifest_define_closure_produces_the_emitted_adapter() {
-        let manifest = "[rust.dependencies]\ndemo = \"1\"\n\n\
-                        [[rust.define.closure]]\n\
-                        name = \"apply_fn\"\n\
-                        signature = \"Fn(Int) -> Int + Send + Sync + 'static\"\n";
-        let closures = rust_define_closures_from_manifest(manifest);
-        let sole_dep = rust_dependencies_from_manifest(manifest).len() <= 1;
-        let inspection = "{\"pkg\":\"demo\",\"name\":\"demo\",\"version\":\"0.1.0\",\
-                          \"functions\":[],\"errors\":[]}";
-        let merged =
-            merge_provides(inspection, "demo", &closures, &[], &[], sole_dep).expect("merges");
-        let pkg = ipe_ffi::pkginfo::PkgInfo::decode_json(&merged).expect("merged doc decodes");
-        let bindings = ipe_ffi::bindings::emit_bindings(&pkg);
-        assert!(
-            bindings.contains(
-                "pub fn demo_apply_fn(__ipe_fn: Box<dyn Fn(i64) -> i64 + Send + Sync + 'static>)"
-            ),
-            "the manifest-declared closure must emit its adapter wrapper:\n{bindings}"
-        );
-        assert!(
-            pkg.dropped().is_empty(),
-            "a well-formed define entry over-drops nothing"
-        );
-    }
-
-    #[test]
-    fn manifest_define_struct_array_of_tables_parses() {
-        let text = "[rust.dependencies]\ndemo = \"1\"\n\n\
-                    [[rust.define.struct]]\n\
-                    crate = \"demo\"\n\
-                    name = \"Counter\"\n\
-                    derives = [\"Default\", \"Clone\"]\n\
-                    fields = { value = \"i64\", tag = \"String\" }\n\n\
-                    [[rust.define.struct]]\n\
-                    name = \"Point\"\n\
-                    fields = { x = \"i64\" }\n";
-        assert_eq!(
-            rust_define_structs_from_manifest(text),
-            vec![
-                ManifestDefineStruct {
-                    krate: "demo".to_owned(),
-                    ctor: "counter_new".to_owned(),
-                    struct_name: "Counter".to_owned(),
-                    fields: vec![
-                        ("value".to_owned(), "i64".to_owned()),
-                        ("tag".to_owned(), "String".to_owned()),
-                    ],
-                    derives: vec!["Default".to_owned(), "Clone".to_owned()],
-                },
-                ManifestDefineStruct {
-                    krate: String::new(),
-                    ctor: "point_new".to_owned(),
-                    struct_name: "Point".to_owned(),
-                    fields: vec![("x".to_owned(), "i64".to_owned())],
-                    derives: Vec::new(),
-                },
-            ]
-        );
-    }
-
-    #[test]
-    fn a_define_struct_missing_name_or_fields_is_dropped() {
-        let text = "[[rust.define.struct]]\nname = \"NoFields\"\n\n\
-                    [[rust.define.struct]]\nfields = { x = \"i64\" }\n";
-        assert!(rust_define_structs_from_manifest(text).is_empty());
-    }
-
-    #[test]
-    fn an_explicit_ctor_name_overrides_the_snake_default() {
-        let text = "[[rust.define.struct]]\n\
-                    name = \"Counter\"\n\
-                    ctor = \"mk_counter\"\n\
-                    fields = { value = \"i64\" }\n";
-        let parsed = rust_define_structs_from_manifest(text);
-        assert_eq!(parsed.first().expect("one entry").ctor, "mk_counter");
-    }
-
-    /// The manifest→constructor SEAL: a `[[rust.define.struct]]` declared in an
-    /// `ipe.toml` flows through the CLI merge glue, the driver's `PkgInfo`
-    /// decode, and emits the struct definition + constructor wrapper — the same
-    /// path `ipe rust install` drives, minus the sandbox/inspector spawn.
-    #[test]
-    fn a_manifest_define_struct_produces_the_emitted_definition_and_ctor() {
-        let manifest = "[rust.dependencies]\ndemo = \"1\"\n\n\
-                        [[rust.define.struct]]\n\
-                        name = \"Counter\"\n\
-                        derives = [\"Default\", \"Clone\"]\n\
-                        fields = { value = \"i64\" }\n";
-        let structs = rust_define_structs_from_manifest(manifest);
-        let sole_dep = rust_dependencies_from_manifest(manifest).len() <= 1;
-        let inspection = "{\"pkg\":\"demo\",\"name\":\"demo\",\"version\":\"0.1.0\",\
-                          \"functions\":[],\"errors\":[]}";
-        let merged =
-            merge_provides(inspection, "demo", &[], &structs, &[], sole_dep).expect("merges");
-        let pkg = ipe_ffi::pkginfo::PkgInfo::decode_json(&merged).expect("merged doc decodes");
-        let bindings = ipe_ffi::bindings::emit_bindings(&pkg);
-        assert!(bindings.contains("#[derive(Clone, Default)]"), "{bindings}");
-        assert!(bindings.contains("pub struct Counter {"), "{bindings}");
-        assert!(
-            bindings.contains("pub fn demo_counter_new(arg0: i64) -> Counter {"),
-            "the manifest-declared struct must emit its ctor wrapper:\n{bindings}"
-        );
-        assert!(
-            pkg.dropped().is_empty(),
-            "a well-formed define.struct over-drops nothing"
-        );
     }
 
     #[test]
@@ -4611,31 +4151,6 @@ version = \"1\"
 
     // ── foreign-declaration lift tests ──────────────────────────────────────
 
-    /// Parse a `foreign` source snippet and lift exactly one `ForeignDefine`
-    /// from it, failing the test if parsing or lifting fails.
-    fn lift_one(src: &str) -> ForeignDefine {
-        let mut interner = ipe_intern::Interner::new();
-        let module = ipe_parse::parse_module(src, &mut interner)
-            .expect("parse_module should not fail for a well-formed snippet");
-        assert_eq!(
-            module.foreigns.len(),
-            1,
-            "test snippet must contain exactly one `foreign` declaration"
-        );
-        let reader = ForeignReader {
-            interner: &interner,
-            src,
-            file: std::path::Path::new("<test>"),
-        };
-        let foreign = module
-            .foreigns
-            .first()
-            .expect("test snippet must contain exactly one `foreign` declaration");
-        reader
-            .lift_foreign(foreign)
-            .expect("lift_foreign should not fail for a valid declaration")
-    }
-
     /// Parse a `foreign` source snippet and expect lifting to fail, returning
     /// the error message for further assertions.
     fn lift_one_err(src: &str) -> String {
@@ -4655,66 +4170,6 @@ version = \"1\"
             .lift_foreign(foreign)
             .expect_err("lift_foreign should fail for an invalid declaration")
             .to_string()
-    }
-
-    /// A `foreign` struct declaration lifts into the same `ManifestDefineStruct`
-    /// the equivalent `[[rust.define.struct]]` TOML entry produces.
-    ///
-    /// Layout note: `foreign Counter =` places `Counter` at column 9 (1-indexed).
-    /// Body lines must be at column > 9, so we use 10-space indentation.
-    #[test]
-    fn foreign_struct_lifts_to_manifest_define_struct() {
-        // 10 spaces of indent so body col (11) > name col (9).
-        // Record fields use `=` (value syntax), not `:` (type syntax).
-        let src = "module Main exposing (..)\n\nforeign Counter =\n          Ffi.crate \"my-crate\"\n          |> Ffi.struct { value = Int }\n          |> Ffi.derives [ Ffi.clone, Ffi.debug ]\n";
-        // The TOML reader uses `fields = { field = "Carrier" }` inline table syntax.
-        let toml = r#"
-[[rust.define.struct]]
-crate = "my-crate"
-name = "Counter"
-fields = { value = "Int" }
-derives = ["Clone", "Debug"]
-"#;
-        let lifted = lift_one(src);
-        let toml_structs = rust_define_structs_from_manifest(toml);
-        assert_eq!(
-            toml_structs.len(),
-            1,
-            "TOML fixture must parse to exactly one struct"
-        );
-        assert_eq!(
-            lifted,
-            ForeignDefine::Struct(toml_structs.into_iter().next().unwrap()),
-            "lifted struct must be byte-identical to the TOML path"
-        );
-    }
-
-    /// A `foreign` enum declaration lifts to the same `ManifestDefineEnum` the
-    /// equivalent `[[rust.define.enum]]` TOML entry produces.
-    #[test]
-    fn foreign_enum_lifts_to_manifest_define_enum() {
-        // 10 spaces of indent so body col (11) > name col (9).
-        let src = "module Main exposing (..)\n\nforeign Msg =\n          Ffi.crate \"my-crate\"\n          |> Ffi.enum [ Ffi.variant \"Increment\" [], Ffi.variant \"Decrement\" [] ]\n          |> Ffi.derives [ Ffi.clone, Ffi.debug ]\n";
-        // The TOML reader uses `variants = { Variant = [payloads] }` inline table.
-        let toml = r#"
-[[rust.define.enum]]
-crate = "my-crate"
-name = "Msg"
-variants = { Increment = [], Decrement = [] }
-derives = ["Clone", "Debug"]
-"#;
-        let lifted = lift_one(src);
-        let toml_enums = rust_define_enums_from_manifest(toml);
-        assert_eq!(
-            toml_enums.len(),
-            1,
-            "TOML fixture must parse to exactly one enum"
-        );
-        assert_eq!(
-            lifted,
-            ForeignDefine::Enum(toml_enums.into_iter().next().unwrap()),
-            "lifted enum must be byte-identical to the TOML path"
-        );
     }
 
     /// An invalid carrier in a `foreign` struct field is rejected with a span
@@ -4795,7 +4250,7 @@ derives = ["Clone", "Debug"]
     }
 
     #[test]
-    fn legacy_define_tables_are_rejected_with_migration_hint() {
+    fn legacy_define_tables_are_rejected() {
         let toml_with_define = r#"
 [package]
 name = "my-pkg"
@@ -4812,8 +4267,8 @@ fields = { value = "i64" }
             "diagnostic must say what is rejected: {msg}"
         );
         assert!(
-            msg.contains("ipe migrate config"),
-            "diagnostic must point to the migration command: {msg}"
+            msg.contains("foreign"),
+            "diagnostic must point to the replacement surface: {msg}"
         );
     }
 

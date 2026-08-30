@@ -412,19 +412,6 @@ const COMMANDS: &[Command] = &[
         ],
     },
     Command {
-        name: "migrate",
-        run: crate::migrate::run_migrate,
-        summary: "Migrate project configuration into the Ipê-native format.",
-        args: "config",
-        args_desc: "The `config` subcommand renders the current project's legacy ipe.toml into an \
-                    equivalent package.ipe. Any [[rust.define.*]] blocks are converted to `foreign` \
-                    declarations and written to src/Ffi/<Crate>.ipe. The ipe.toml is left in place.",
-        options: &[Opt {
-            flag: "[--force]",
-            desc: "overwrite an existing package.ipe",
-        }],
-    },
-    Command {
         name: "login",
         run: crate::login::run_login,
         summary: "Authorize ipe with GitHub (device flow) and store a publish token.",
@@ -606,7 +593,6 @@ const SECTIONS: &[Section] = &[
             "diff",
             "fix",
             "eject",
-            "migrate",
             "upgrade",
             "version",
         ],

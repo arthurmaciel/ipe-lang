@@ -2,9 +2,9 @@
 //! topological sort.
 //!
 //! `package.ipe` is the sole project manifest the toolchain discovers and
-//! builds. `ipe.toml` is read only by `ipe migrate config`, which converts it to
-//! a `package.ipe`; its minimal-subset line-scanner ([`parse_toml_manifest`])
-//! lives here as that converter's input reader.
+//! builds. A legacy `ipe.toml` is not accepted as a project manifest;
+//! [`migration_pending`] detects that case so callers can surface
+//! [`MIGRATE_CONFIG_HINT`] instead of a silent fallback.
 //!
 //! # Discovery
 //!
@@ -160,55 +160,6 @@ pub fn is_denylisted_public_env_name(name: &str) -> bool {
         || upper.ends_with("_PASSWORD")
 }
 
-/// Validate `[wasm] publicEnv` against [`is_denylisted_public_env_name`].
-///
-/// # Errors
-/// [`CliError::UsageOwned`] naming the first denylisted entry found.
-fn validate_public_env(names: &[String]) -> Result<(), CliError> {
-    for name in names {
-        if is_denylisted_public_env_name(name) {
-            return Err(CliError::UsageOwned(format!(
-                "ipe.toml: [wasm] publicEnv lists {name:?}, which matches the secret-name \
-                 denylist (*_SECRET / *_TOKEN / *_KEY / *_PASSWORD / DATABASE_URL / the \
-                 internal IPE_* namespace) — a secret environment variable can never be \
-                 allowlisted into the public wasm bundle, allowlisted or not"
-            )));
-        }
-    }
-    Ok(())
-}
-
-/// Parse a TOML string array `["a", "b", "c"]` — the one array shape both
-/// `[wasm] publicEnv` and `[capabilities] declared` need. `context` names the
-/// section in any error (`"[wasm] publicEnv"`). Each element must be a
-/// double-quoted string; whitespace around commas/brackets is tolerated. Not a
-/// general TOML array parser (this file's `ipe.toml` reader is a deliberately
-/// minimal line parser, not a full TOML implementation — see the module doc).
-fn parse_string_array(context: &str, raw: &str) -> Result<Vec<String>, CliError> {
-    let trimmed = raw.trim();
-    let Some(inner) = trimmed.strip_prefix('[').and_then(|s| s.strip_suffix(']')) else {
-        return Err(CliError::UsageOwned(format!(
-            "ipe.toml: {context} must be a `[\"NAME\", …]` array, got: {raw}"
-        )));
-    };
-    let inner = inner.trim();
-    if inner.is_empty() {
-        return Ok(Vec::new());
-    }
-    inner
-        .split(',')
-        .map(|item| {
-            let item = item.trim();
-            let unquoted = item.strip_prefix('"').and_then(|s| s.strip_suffix('"'));
-            unquoted.map(str::to_owned).ok_or_else(|| {
-                CliError::UsageOwned(format!(
-                    "ipe.toml: {context} entry must be a quoted string, got: {item}"
-                ))
-            })
-        })
-        .collect()
-}
-
 /// A discovered Ipê source file with its resolved module path.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct DiscoveredModule {
@@ -269,59 +220,6 @@ pub struct RustDep {
     pub features: Vec<String>,
 }
 
-// ---------------------------------------------------------------------------
-// Manifest parsing
-// ---------------------------------------------------------------------------
-
-/// Parse a `[database] driver = "…"` value. Recognises `"sqlite"` (also the
-/// default when the section/key is absent) and `"postgres"` / `"postgresql"`.
-/// Any other value is a hard error naming the bad value — silently falling
-/// back to sqlite on a typo (`"postgre"`, `"postgress"`) would build a project
-/// the user believes targets Postgres but that actually runs against a local
-/// `SQLite` file, a correctness footgun worse than a loud rejection.
-///
-/// # Errors
-/// [`CliError::UsageOwned`] naming the unrecognised value.
-fn parse_db_driver(s: &str) -> Result<ipe_backend_rust::DbDriver, CliError> {
-    match s {
-        "sqlite" => Ok(ipe_backend_rust::DbDriver::Sqlite),
-        "postgres" | "postgresql" => Ok(ipe_backend_rust::DbDriver::Postgres),
-        other => Err(CliError::UsageOwned(format!(
-            "ipe.toml: [database] driver = {other:?} is not supported \
-             (expected \"sqlite\" or \"postgres\")"
-        ))),
-    }
-}
-
-/// The raw per-section values a single line-scan of a `ipe.toml` collects,
-/// before they are turned into the typed [`ProjectManifest`] fields. Splitting
-/// the scan out keeps [`parse_manifest`] a straight assembly of typed values.
-#[derive(Default)]
-struct RawManifest {
-    name: Option<String>,
-    version_str: Option<String>,
-    src_rel: Option<String>,
-    driver_str: Option<String>,
-    rust_static: Option<String>,
-    rust_target: Option<String>,
-    rust_allocator: Option<String>,
-    rust_allow_slow: Option<String>,
-    rust_c_free: Option<String>,
-    wasm_mode: Option<String>,
-    wasm_entry: Option<String>,
-    wasm_mount: Option<String>,
-    wasm_public_env: Vec<String>,
-    wasm_opt_level: Option<String>,
-    dependencies: BTreeMap<String, IpeDep>,
-    rust_dependencies: BTreeMap<String, RustDep>,
-    /// `true` when the manifest contains a `[rust.wrapper]` section, regardless
-    /// of what keys the section holds. Set by the scanner on the section header
-    /// itself — no key is required.
-    has_rust_wrapper: bool,
-    capabilities: BTreeSet<Capability>,
-    capabilities_accept: BTreeSet<Capability>,
-}
-
 /// Whether a manifest section-header line names the `[rust.wrapper]` table.
 ///
 /// Both the bare and the quoted spellings are accepted. This is the single
@@ -331,133 +229,18 @@ pub(crate) fn is_rust_wrapper_header(line: &str) -> bool {
     line == "[rust.wrapper]" || line == "[\"rust.wrapper\"]"
 }
 
-/// Scan a `ipe.toml`'s lines once, collecting each recognised section's raw
-/// values. `name` may sit at the top level (Ipê's own examples) or under
-/// `[project]`; unrecognised sections and keys are ignored (forward-compatible).
-///
-/// # Errors
-/// [`CliError::UsageOwned`] when a `[dependencies]`, `[capabilities]`, or
-/// `[wasm] publicEnv` value is malformed.
-fn scan_raw_manifest(text: &str) -> Result<RawManifest, CliError> {
-    let mut raw = RawManifest::default();
-    let mut section = "";
-    for line in text.lines().map(str::trim) {
-        if line.starts_with('#') || line.is_empty() {
-            continue;
-        }
-        if line.starts_with('[') {
-            section = match line {
-                "[project]" | "[source]" | "[database]" | "[rust]" | "[wasm]"
-                | "[dependencies]" | "[capabilities]" => line,
-                // Both spellings of the FFI crate tables are accepted, the same
-                // as the `ipe rust install` reader.
-                "[rust.dependencies]" | "[\"rust.dependencies\"]" => "[rust.dependencies]",
-                h if is_rust_wrapper_header(h) => {
-                    raw.has_rust_wrapper = true;
-                    "other"
-                }
-                _ => "other",
-            };
-            continue;
-        }
-        let Some((key, val)) = line.split_once('=') else {
-            continue;
-        };
-        let key = key.trim();
-        let raw_val = val.trim();
-        let val = raw_val.trim_matches('"');
-        match (section, key) {
-            ("" | "[project]", "name") => raw.name = Some(val.to_owned()),
-            ("" | "[project]", "version") => raw.version_str = Some(val.to_owned()),
-            ("[source]", "root") => raw.src_rel = Some(val.to_owned()),
-            ("[database]", "driver") => raw.driver_str = Some(val.to_owned()),
-            ("[rust]", "static") => raw.rust_static = Some(val.to_owned()),
-            ("[rust]", "target") => raw.rust_target = Some(val.to_owned()),
-            ("[rust]", "allocator") => raw.rust_allocator = Some(val.to_owned()),
-            ("[rust]", "allowSlowAllocator") => raw.rust_allow_slow = Some(val.to_owned()),
-            ("[rust]", "cFree") => raw.rust_c_free = Some(val.to_owned()),
-            ("[wasm]", "mode") => raw.wasm_mode = Some(val.to_owned()),
-            ("[wasm]", "entry") => raw.wasm_entry = Some(val.to_owned()),
-            ("[wasm]", "mount") => raw.wasm_mount = Some(val.to_owned()),
-            ("[wasm]", "publicEnv") => {
-                raw.wasm_public_env = parse_string_array("[wasm] publicEnv", raw_val)?;
-            }
-            ("[wasm]", "optLevel") => raw.wasm_opt_level = Some(val.to_owned()),
-            ("[dependencies]", dep) => {
-                raw.dependencies
-                    .insert(dep.to_owned(), parse_ipe_dep(dep, raw_val)?);
-            }
-            ("[rust.dependencies]", dep) => {
-                raw.rust_dependencies
-                    .insert(dep.to_owned(), parse_rust_dep(raw_val));
-            }
-            ("[capabilities]", "declared") => {
-                raw.capabilities = parse_capabilities(raw_val)?;
-            }
-            ("[capabilities]", "accept") => {
-                raw.capabilities_accept = parse_capabilities(raw_val)?;
-            }
-            // An unknown key inside a recognised section is not silently
-            // dropped: a mis-typed key in a known section is lost without
-            // this warning. Unknown SECTIONS map to `"other"` and are still
-            // silently skipped (forward-compatible).
-            (sec, k) if sec != "other" => {
-                eprintln!(
-                    "ipe.toml: warning: unrecognised key `{k}` in section `{sec}` — \
-                     this key will not be migrated (check for a typo)"
-                );
-            }
-            _ => {}
-        }
-    }
-    Ok(raw)
-}
-
-/// Parse a `ipe.toml` file and return a [`ProjectManifest`].
-///
-/// The format recognised:
-/// ```toml
-/// [project]
-/// name = "my-app"
-///
-/// [database]
-/// driver = "sqlite"   # or "postgres" — defaults to "sqlite" when absent
-///
-/// [dependencies]              # Ipê packages (SP3 resolves them)
-/// http  = "^1.2"              # from the index, by semver requirement
-/// mylib = { git = "…", rev = "…" }
-/// local = { path = "../local" }
-///
-/// [rust.dependencies]         # crates.io crates bound via `ipe rust`
-/// uuid = "1.10"
-///
-/// [capabilities]              # the author-declared capability set
-/// declared = ["network", "clock"]
-/// ```
-/// Lines that start with `#` are comments and are ignored. Unrecognised
-/// sections and keys are ignored (forward-compatible). Every section is
-/// optional; absent sections yield empty maps / sets.
-///
-/// # Errors
-/// [`CliError::Io`] if the file cannot be read; [`CliError::Usage`] if the
-/// manifest is malformed or the `src/` directory does not exist;
-/// [`CliError::UsageOwned`] if `[database] driver` names an unsupported value, a
-/// dependency version requirement is malformed, or a capability is unknown.
-/// The name of the manifest `ipe migrate config` reads as its input.
+/// The filename of the legacy TOML manifest (`ipe.toml`).
 pub const IPE_TOML: &str = "ipe.toml";
 
-/// The clear, actionable diagnostic for an `ipe.toml`-only directory.
-///
-/// `ipe.toml` is no longer a project manifest; `ipe migrate config` produces the
-/// `package.ipe` the toolchain reads.
-pub const MIGRATE_CONFIG_HINT: &str = "no package.ipe in this directory (found a legacy ipe.toml); run `ipe migrate config` to \
-     convert it to package.ipe";
+/// The diagnostic for a directory that carries a legacy `ipe.toml` but no `package.ipe`.
+pub const MIGRATE_CONFIG_HINT: &str = "no package.ipe in this directory (found a legacy ipe.toml — package.ipe is the project \
+     manifest the toolchain reads)";
 
 /// Locate a project's `package.ipe` manifest inside `dir`.
 ///
 /// `package.ipe` is the sole project manifest the toolchain discovers. A bare
-/// `ipe.toml` is not a manifest here — [`migration_pending`] detects that case
-/// so a caller can surface [`MIGRATE_CONFIG_HINT`] instead of a silent fallback.
+/// `ipe.toml` is not a manifest — [`migration_pending`] detects that case so a
+/// caller can surface [`MIGRATE_CONFIG_HINT`] instead of a silent fallback.
 ///
 /// Returns the `package.ipe` path when the directory carries one, else `None`.
 #[must_use]
@@ -469,9 +252,9 @@ pub fn manifest_in_dir(dir: &Path) -> Option<PathBuf> {
     None
 }
 
-/// Whether `dir` carries a legacy `ipe.toml` but no `package.ipe` — the one
-/// case where a caller should report [`MIGRATE_CONFIG_HINT`] rather than treat
-/// the directory as manifest-free.
+/// Whether `dir` carries a legacy `ipe.toml` but no `package.ipe` — the case
+/// where a caller should report [`MIGRATE_CONFIG_HINT`] rather than treat the
+/// directory as manifest-free.
 #[must_use]
 pub fn migration_pending(dir: &Path) -> bool {
     !dir.join(crate::package_manifest::PACKAGE_IPE).is_file() && dir.join(IPE_TOML).is_file()
@@ -480,8 +263,7 @@ pub fn migration_pending(dir: &Path) -> bool {
 /// Parse a project `package.ipe` manifest into a [`ProjectManifest`].
 ///
 /// `package.ipe` is read syntactically (never evaluated) by the Ipê-native
-/// reader. `ipe.toml` is not a project manifest and is not accepted here; it is
-/// read only by `ipe migrate config` via [`parse_toml_manifest`].
+/// reader. A path to a legacy `ipe.toml` is rejected with [`MIGRATE_CONFIG_HINT`].
 ///
 /// # Errors
 /// [`CliError::Io`] if the file cannot be read; [`CliError::Usage`] /
@@ -489,7 +271,7 @@ pub fn migration_pending(dir: &Path) -> bool {
 /// driver, a bad version or dependency, an unknown capability, a denylisted
 /// `publicEnv` name, a missing source root); [`CliError::Pipeline`] when the
 /// source does not parse; and [`CliError::UsageOwned`] when the path is not a
-/// `package.ipe` (a legacy `ipe.toml` supplied directly to a build entry point).
+/// `package.ipe`.
 pub fn parse_manifest(manifest_path: &Path) -> Result<ProjectManifest, CliError> {
     if manifest_path.file_name().and_then(|n| n.to_str())
         == Some(crate::package_manifest::PACKAGE_IPE)
@@ -500,145 +282,6 @@ pub fn parse_manifest(manifest_path: &Path) -> Result<ProjectManifest, CliError>
         "{}: not a package.ipe manifest. {MIGRATE_CONFIG_HINT}",
         manifest_path.display()
     )))
-}
-
-/// Parse an `ipe.toml` manifest via the minimal line-scanner. This is the input
-/// reader for `ipe migrate config`, which converts a legacy `ipe.toml` into a
-/// `package.ipe` — the only path on which an `ipe.toml` is still read.
-///
-/// # Errors
-/// [`CliError::Io`] if the file cannot be read; [`CliError::Usage`] /
-/// [`CliError::UsageOwned`] for a malformed or invalid manifest.
-pub(crate) fn parse_toml_manifest(manifest_path: &Path) -> Result<ProjectManifest, CliError> {
-    let root = manifest_path
-        .parent()
-        .map_or_else(|| PathBuf::from("."), Path::to_path_buf);
-
-    let text = crate::io_bounded::read_to_string_capped(
-        manifest_path,
-        crate::io_bounded::MANIFEST_READ_CAP,
-    )?;
-
-    let raw = scan_raw_manifest(&text)?;
-
-    validate_public_env(&raw.wasm_public_env)?;
-    let wasm = WasmConfig {
-        mode: raw.wasm_mode,
-        entry: raw.wasm_entry,
-        mount: raw.wasm_mount,
-        public_env: raw.wasm_public_env,
-        opt_level: raw.wasm_opt_level,
-    };
-
-    let name = raw
-        .name
-        .ok_or(CliError::Usage("ipe.toml: missing a `name = \"…\"` entry"))?;
-
-    // Parse, don't validate: a declared version becomes a typed `semver::Version`
-    // here, so a malformed `version = "…"` is a hard manifest-parse error rather
-    // than a surprise the enforced-semver check hits later.
-    let version = raw
-        .version_str
-        .map(|v| {
-            semver::Version::parse(&v).map_err(|e| {
-                CliError::UsageOwned(format!(
-                    "ipe.toml: `version = \"{v}\"` is not valid semver: {e}"
-                ))
-            })
-        })
-        .transpose()?;
-
-    let src_rel_raw = raw.src_rel.as_deref().unwrap_or("src");
-    let src_root_contained = crate::contained_path::ContainedRelPath::parse(&root, src_rel_raw)
-        .map_err(|reason| CliError::PathEscape {
-            raw: src_rel_raw.to_owned(),
-            reason,
-        })?;
-    let src_root = src_root_contained.resolved().to_path_buf();
-    if !src_root.is_dir() {
-        return Err(CliError::Usage(
-            "ipe.toml: the source root directory does not exist",
-        ));
-    }
-
-    let driver = match raw.driver_str {
-        Some(s) => parse_db_driver(&s)?,
-        None => ipe_backend_rust::DbDriver::Sqlite,
-    };
-
-    // Parse, don't validate: the `[rust]` values become typed request fields
-    // here, so a typo'd allocator or bool is a hard error at manifest-parse
-    // time — the same posture as `[database] driver` above.
-    let static_request = crate::build_plan::StaticRequestLayer {
-        static_build: raw
-            .rust_static
-            .map(|v| crate::build_plan::parse_bool("ipe.toml: [rust] static", &v))
-            .transpose()?,
-        target: raw.rust_target,
-        allocator: raw
-            .rust_allocator
-            .map(|v| crate::build_plan::AllocatorChoice::parse(&v))
-            .transpose()?,
-        allow_slow_allocator: raw
-            .rust_allow_slow
-            .map(|v| crate::build_plan::parse_bool("ipe.toml: [rust] allowSlowAllocator", &v))
-            .transpose()?,
-        c_free: raw
-            .rust_c_free
-            .map(|v| crate::build_plan::parse_bool("ipe.toml: [rust] cFree", &v))
-            .transpose()?,
-    };
-
-    Ok(ProjectManifest {
-        name,
-        version,
-        root,
-        src_root,
-        driver,
-        static_request,
-        wasm,
-        dependencies: raw.dependencies,
-        rust_dependencies: raw.rust_dependencies,
-        capabilities: raw.capabilities,
-        capabilities_accept: raw.capabilities_accept,
-        has_rust_wrapper: raw.has_rust_wrapper,
-    })
-}
-
-/// Parse one `[dependencies]` value into a typed [`IpeDep`]. A bare string is a
-/// semver requirement (index dependency); an inline table with a `git` or `path`
-/// key is the corresponding escape.
-///
-/// Parse, don't validate: an index version requirement is turned into a
-/// [`semver::VersionReq`] here, so a malformed version is a manifest-parse error
-/// naming `dep`, never a resolution-time surprise.
-///
-/// # Errors
-/// [`CliError::UsageOwned`] on a malformed version requirement, an inline table
-/// missing both `git` and `path`, or an unrecognised value shape.
-fn parse_ipe_dep(dep: &str, raw_val: &str) -> Result<IpeDep, CliError> {
-    if let Some(body) = raw_val
-        .strip_prefix('{')
-        .and_then(|rest| rest.strip_suffix('}'))
-    {
-        if let Some(url) = inline_table_string(body, "git") {
-            let rev = inline_table_string(body, "rev");
-            return Ok(IpeDep::Git { url, rev });
-        }
-        if let Some(path) = inline_table_string(body, "path") {
-            return Ok(IpeDep::Path(PathBuf::from(path)));
-        }
-        return Err(CliError::UsageOwned(format!(
-            "ipe.toml: [dependencies] {dep} inline table must carry a `git` or `path` key"
-        )));
-    }
-    let version = raw_val.trim_matches('"');
-    let req = version.parse::<semver::VersionReq>().map_err(|e| {
-        CliError::UsageOwned(format!(
-            "ipe.toml: [dependencies] {dep} = {version:?} is not a valid version requirement: {e}"
-        ))
-    })?;
-    Ok(IpeDep::Index(req))
 }
 
 /// Render an [`IpeDep`] as the TOML value it is written as under
@@ -779,102 +422,6 @@ fn key_of(trimmed: &str) -> Option<&str> {
         return None;
     }
     trimmed.split_once('=').map(|(k, _)| k.trim())
-}
-
-/// Parse one `[rust.dependencies]` value into a [`RustDep`]. A bare string is a
-/// version requirement; an inline table carries an optional `version` and
-/// `features` list.
-fn parse_rust_dep(raw_val: &str) -> RustDep {
-    let inline_body = raw_val
-        .strip_prefix('{')
-        .and_then(|rest| rest.strip_suffix('}'));
-    inline_body.map_or_else(
-        || RustDep {
-            version: raw_val.trim_matches('"').to_owned(),
-            features: Vec::new(),
-        },
-        |body| RustDep {
-            version: inline_table_string(body, "version").unwrap_or_default(),
-            features: inline_table_string_array(body, "features"),
-        },
-    )
-}
-
-/// Parse the `[capabilities] declared = ["…", …]` array into a typed set, via
-/// [`Capability::from_str`]. An unknown capability name is a loud, named error —
-/// a typo can never become a silently-dropped capability the sandbox then fails
-/// to enforce.
-///
-/// # Errors
-/// [`CliError::UsageOwned`] naming an unrecognised capability, or a malformed
-/// array.
-fn parse_capabilities(raw_val: &str) -> Result<BTreeSet<Capability>, CliError> {
-    let names = parse_string_array("[capabilities] declared", raw_val)?;
-    let mut set = BTreeSet::new();
-    for name in names {
-        let cap = name
-            .parse::<Capability>()
-            .map_err(|e| CliError::UsageOwned(format!("ipe.toml: [capabilities] {e}")))?;
-        set.insert(cap);
-    }
-    Ok(set)
-}
-
-/// Read `key = "value"` out of an inline-table body (`git = "…"`, `version =
-/// "…"`). Whole-word key match, so `version` never matches inside a longer key.
-fn inline_table_string(body: &str, key: &str) -> Option<String> {
-    let at = find_inline_key(body, key)?;
-    let rest = body.get(at..)?;
-    let (_, after_eq) = rest.split_once('=')?;
-    let after_quote = after_eq.trim_start().strip_prefix('"')?;
-    after_quote.split_once('"').map(|(v, _)| v.to_owned())
-}
-
-/// Read `key = ["a", "b"]` out of an inline-table body.
-fn inline_table_string_array(body: &str, key: &str) -> Vec<String> {
-    let Some(at) = find_inline_key(body, key) else {
-        return Vec::new();
-    };
-    let Some(rest) = body.get(at..) else {
-        return Vec::new();
-    };
-    let Some((_, after_eq)) = rest.split_once('=') else {
-        return Vec::new();
-    };
-    let Some(after_bracket) = after_eq.trim_start().strip_prefix('[') else {
-        return Vec::new();
-    };
-    let Some((inner, _)) = after_bracket.split_once(']') else {
-        return Vec::new();
-    };
-    inner
-        .split(',')
-        .map(|s| s.trim().trim_matches('"').to_owned())
-        .filter(|s| !s.is_empty())
-        .collect()
-}
-
-/// The byte offset of `key` as a whole word in an inline-table body, so a short
-/// key (`rev`) never matches inside a longer one.
-fn find_inline_key(body: &str, key: &str) -> Option<usize> {
-    let bytes = body.as_bytes();
-    let mut from = 0;
-    while let Some(rel) = body.get(from..)?.find(key) {
-        let at = from + rel;
-        let before_ok = at == 0
-            || bytes
-                .get(at.wrapping_sub(1))
-                .is_none_or(|b| !b.is_ascii_alphanumeric() && *b != b'_');
-        let after = at + key.len();
-        let after_ok = bytes
-            .get(after)
-            .is_none_or(|b| !b.is_ascii_alphanumeric() && *b != b'_');
-        if before_ok && after_ok {
-            return Some(at);
-        }
-        from = at + key.len();
-    }
-    None
 }
 
 // ---------------------------------------------------------------------------
@@ -1158,98 +705,6 @@ pub use ipe_db::extract_imports_from_source;
 mod tests {
     use super::*;
 
-    /// Write a minimal `ipe.toml` + `src/Main.ipe` under a fresh temp dir and
-    /// return the manifest path, for exercising the `ipe migrate config` input
-    /// reader ([`parse_toml_manifest`]). `database_section` is spliced in
-    /// verbatim (empty string → no `[database]` section at all).
-    fn write_manifest(test_name: &str, database_section: &str) -> PathBuf {
-        let tmp = std::env::temp_dir().join(format!("ipec_project_{test_name}"));
-        let _ = fs::remove_dir_all(&tmp);
-        let src = tmp.join("src");
-        fs::create_dir_all(&src).expect("create src/");
-        fs::write(
-            src.join("Main.ipe"),
-            "module Main exposing (main)\nmain = 0\n",
-        )
-        .expect("write Main.ipe");
-        let toml_path = tmp.join("ipe.toml");
-        fs::write(
-            &toml_path,
-            format!("[project]\nname = \"test\"\n{database_section}"),
-        )
-        .expect("write ipe.toml");
-        toml_path
-    }
-
-    /// No `[database]` section at all →
-    /// the manifest defaults to `DbDriver::Sqlite`, matching the documented
-    /// `ipe.toml` schema default.
-    #[test]
-    fn parse_manifest_no_database_section_defaults_to_sqlite() {
-        let toml_path = write_manifest("no_db_section", "");
-        let manifest = parse_toml_manifest(&toml_path).expect("manifest must parse");
-        assert_eq!(manifest.driver, ipe_backend_rust::DbDriver::Sqlite);
-        let _ = fs::remove_dir_all(toml_path.parent().expect("has parent"));
-    }
-
-    #[test]
-    fn parse_manifest_explicit_sqlite_driver() {
-        let toml_path = write_manifest("explicit_sqlite", "[database]\ndriver = \"sqlite\"\n");
-        let manifest = parse_toml_manifest(&toml_path).expect("manifest must parse");
-        assert_eq!(manifest.driver, ipe_backend_rust::DbDriver::Sqlite);
-        let _ = fs::remove_dir_all(toml_path.parent().expect("has parent"));
-    }
-
-    #[test]
-    fn parse_manifest_postgres_driver() {
-        let toml_path = write_manifest("postgres", "[database]\ndriver = \"postgres\"\n");
-        let manifest = parse_toml_manifest(&toml_path).expect("manifest must parse");
-        assert_eq!(manifest.driver, ipe_backend_rust::DbDriver::Postgres);
-        let _ = fs::remove_dir_all(toml_path.parent().expect("has parent"));
-    }
-
-    #[test]
-    fn parse_manifest_postgresql_alias_driver() {
-        let toml_path = write_manifest("postgresql_alias", "[database]\ndriver = \"postgresql\"\n");
-        let manifest = parse_toml_manifest(&toml_path).expect("manifest must parse");
-        assert_eq!(manifest.driver, ipe_backend_rust::DbDriver::Postgres);
-        let _ = fs::remove_dir_all(toml_path.parent().expect("has parent"));
-    }
-
-    /// An unsupported `driver` value must be a loud, named error — NOT a
-    /// silent fallback to sqlite (a silent fallback would build a project the
-    /// user believes targets `driver = "mysql"` but that actually runs
-    /// against a local `SQLite` file).
-    #[test]
-    fn parse_manifest_unsupported_driver_is_a_named_error() {
-        let toml_path = write_manifest("unsupported_driver", "[database]\ndriver = \"mysql\"\n");
-        let err = parse_toml_manifest(&toml_path).expect_err("mysql driver must be rejected");
-        let msg = err.to_string();
-        assert!(
-            msg.contains("mysql"),
-            "error must name the unsupported value: {msg}"
-        );
-        let _ = fs::remove_dir_all(toml_path.parent().expect("has parent"));
-    }
-
-    /// An unrecognised key in a known section must NOT return a hard error —
-    /// the scanner emits a warning to stderr and continues. Known keys in
-    /// the same section must still be parsed correctly (the warning is
-    /// non-fatal). An unknown SECTION is still silently skipped.
-    #[test]
-    fn scan_raw_manifest_warns_on_unknown_key_in_known_section() {
-        let toml_body = "[project]\nname = \"test\"\ntypoKey = \"ignored\"\n\
-                         [database]\ndriver = \"postgres\"\nunknownDbKey = \"x\"\n\
-                         [unknown-section]\nfoo = \"bar\"\n";
-        let raw = scan_raw_manifest(toml_body).expect("unknown keys must not be hard errors");
-        assert_eq!(raw.name.as_deref(), Some("test"), "name key still parsed");
-        assert_eq!(
-            raw.driver_str.as_deref(),
-            Some("postgres"),
-            "known key alongside unknown key still parsed"
-        );
-    }
-
     #[test]
     fn is_module_segment_rules() {
         assert!(is_module_segment("Main"));
@@ -1438,55 +893,6 @@ import String
         assert!(result.is_err(), "A ↔ B cycle must be detected");
     }
 
-    // ── [wasm] section (M5) ──────────────────────────────────────────────
-
-    #[test]
-    fn no_wasm_section_defaults_to_empty_config() {
-        let toml_path = write_manifest("no_wasm_section", "");
-        let manifest = parse_toml_manifest(&toml_path).expect("manifest must parse");
-        assert_eq!(manifest.wasm, WasmConfig::default());
-    }
-
-    #[test]
-    fn wasm_section_parses_every_field() {
-        let toml_path = write_manifest(
-            "wasm_full_section",
-            "[wasm]\n\
-             mode = \"spa\"\n\
-             entry = \"src/Client.ipe\"\n\
-             mount = \"#app\"\n\
-             publicEnv = [\"API_BASE_URL\", \"APP_VERSION\"]\n\
-             optLevel = \"z\"\n",
-        );
-        let manifest = parse_toml_manifest(&toml_path).expect("manifest must parse");
-        assert_eq!(manifest.wasm.mode.as_deref(), Some("spa"));
-        assert_eq!(manifest.wasm.entry.as_deref(), Some("src/Client.ipe"));
-        assert_eq!(manifest.wasm.mount.as_deref(), Some("#app"));
-        assert_eq!(
-            manifest.wasm.public_env,
-            vec!["API_BASE_URL".to_owned(), "APP_VERSION".to_owned()]
-        );
-        assert_eq!(manifest.wasm.opt_level.as_deref(), Some("z"));
-    }
-
-    /// `IPE_AUTH_TOKEN_SECRET` can be neither read (no `System.getenv`
-    /// denotation for wasm — Layer 1) nor allowlisted: listing it in
-    /// `[wasm] publicEnv` is a BUILD error at `ipe.toml` parse time, never a
-    /// silently-dropped entry and never a runtime-only refusal.
-    #[test]
-    fn public_env_rejects_the_auth_secret_at_parse_time() {
-        let toml_path = write_manifest(
-            "wasm_secret_denied",
-            "[wasm]\npublicEnv = [\"IPE_AUTH_TOKEN_SECRET\"]\n",
-        );
-        let err = parse_toml_manifest(&toml_path).expect_err("a secret name must be rejected");
-        let msg = err.to_string();
-        assert!(
-            msg.contains("IPE_AUTH_TOKEN_SECRET"),
-            "error must name the offending entry: {msg}"
-        );
-    }
-
     #[test]
     fn public_env_rejects_every_denylisted_pattern() {
         for denied in [
@@ -1512,119 +918,6 @@ import String
                 "{allowed} must NOT match the secret-name denylist"
             );
         }
-        let toml_path = write_manifest(
-            "wasm_safe_public_env",
-            "[wasm]\npublicEnv = [\"API_BASE_URL\"]\n",
-        );
-        parse_toml_manifest(&toml_path).expect("an ordinary config name must parse cleanly");
-    }
-
-    #[test]
-    fn absent_sections_leave_the_new_maps_empty() {
-        // Back-compat: a manifest with none of the SP2 sections parses with
-        // empty dependency maps and capability set.
-        let toml_path = write_manifest("sp2_absent", "");
-        let m = parse_toml_manifest(&toml_path).expect("bare manifest must parse");
-        assert!(m.dependencies.is_empty());
-        assert!(m.rust_dependencies.is_empty());
-        assert!(m.capabilities.is_empty());
-        let _ = fs::remove_dir_all(toml_path.parent().expect("has parent"));
-    }
-
-    #[test]
-    fn parses_index_git_and_path_dependencies() {
-        let section = "[dependencies]\n\
-             http = \"^1.2\"\n\
-             mylib = { git = \"https://example.com/mylib.git\", rev = \"abc123\" }\n\
-             local = { path = \"../local\" }\n";
-        let toml_path = write_manifest("sp2_deps", section);
-        let m = parse_toml_manifest(&toml_path).expect("dependency section must parse");
-        let http = m.dependencies.get("http");
-        assert!(
-            matches!(http, Some(IpeDep::Index(req)) if req.matches(&semver::Version::new(1, 5, 0))),
-            "http should be an Index dep admitting 1.5, got {http:?}"
-        );
-        assert_eq!(
-            m.dependencies.get("mylib"),
-            Some(&IpeDep::Git {
-                url: "https://example.com/mylib.git".to_owned(),
-                rev: Some("abc123".to_owned()),
-            })
-        );
-        assert_eq!(
-            m.dependencies.get("local"),
-            Some(&IpeDep::Path(PathBuf::from("../local")))
-        );
-        let _ = fs::remove_dir_all(toml_path.parent().expect("has parent"));
-    }
-
-    #[test]
-    fn parses_rust_dependencies_bare_and_inline_table() {
-        let section = "[rust.dependencies]\n\
-             uuid = \"1.10\"\n\
-             stripe = { version = \"=1.0.0\", features = [\"blocking\", \"webhooks\"] }\n";
-        let toml_path = write_manifest("sp2_rust_deps", section);
-        let m = parse_toml_manifest(&toml_path).expect("rust.dependencies must parse");
-        let uuid = m.rust_dependencies.get("uuid").expect("uuid present");
-        assert_eq!(uuid.version, "1.10");
-        assert!(uuid.features.is_empty());
-        let stripe = m.rust_dependencies.get("stripe").expect("stripe present");
-        assert_eq!(stripe.version, "=1.0.0");
-        assert_eq!(stripe.features, vec!["blocking", "webhooks"]);
-        let _ = fs::remove_dir_all(toml_path.parent().expect("has parent"));
-    }
-
-    #[test]
-    fn parses_capabilities_into_a_typed_set() {
-        let toml_path = write_manifest(
-            "sp2_caps",
-            "[capabilities]\ndeclared = [\"network\", \"clock\"]\n",
-        );
-        let m = parse_toml_manifest(&toml_path).expect("capabilities must parse");
-        assert_eq!(
-            m.capabilities,
-            BTreeSet::from([Capability::Network, Capability::Clock])
-        );
-        let _ = fs::remove_dir_all(toml_path.parent().expect("has parent"));
-    }
-
-    #[test]
-    fn parses_the_capabilities_accept_token_into_its_own_set() {
-        // `accept` is distinct from `declared`: it records durable pre-acceptance
-        // of a disclosed risk (the `.Unsafe`-import acknowledgment), not the
-        // package's own effects.
-        let toml_path = write_manifest(
-            "sp2_caps_accept",
-            "[capabilities]\ndeclared = [\"network\"]\naccept = [\"unsafe\"]\n",
-        );
-        let m = parse_toml_manifest(&toml_path).expect("capabilities must parse");
-        assert_eq!(m.capabilities, BTreeSet::from([Capability::Network]));
-        assert_eq!(m.capabilities_accept, BTreeSet::from([Capability::Unsafe]));
-        let _ = fs::remove_dir_all(toml_path.parent().expect("has parent"));
-    }
-
-    #[test]
-    fn an_unknown_capability_is_a_named_error() {
-        let toml_path = write_manifest("sp2_bad_cap", "[capabilities]\ndeclared = [\"netwrok\"]\n");
-        let err =
-            parse_toml_manifest(&toml_path).expect_err("a typo'd capability must be rejected");
-        assert!(
-            err.to_string().contains("netwrok"),
-            "the error must name the bad capability: {err}"
-        );
-        let _ = fs::remove_dir_all(toml_path.parent().expect("has parent"));
-    }
-
-    #[test]
-    fn a_malformed_version_req_is_a_named_error() {
-        let toml_path = write_manifest("sp2_bad_ver", "[dependencies]\nhttp = \"not a version\"\n");
-        let err =
-            parse_toml_manifest(&toml_path).expect_err("a malformed version must be rejected");
-        assert!(
-            err.to_string().contains("http"),
-            "the error must name the offending dependency: {err}"
-        );
-        let _ = fs::remove_dir_all(toml_path.parent().expect("has parent"));
     }
 
     // ── WasmConfig::implies_wasm_target ──────────────────────────────────────
@@ -1800,10 +1093,6 @@ import String
 
     #[test]
     fn parse_manifest_rejects_a_legacy_ipe_toml_path() {
-        // A legacy ipe.toml supplied directly to a build entry point is refused
-        // with the migration hint; it is not a project manifest the toolchain
-        // reads. The toml reader itself stays reachable via `parse_toml_manifest`
-        // for `ipe migrate config`.
         let root = discovery_dir(
             "reject_toml",
             None,
@@ -1814,18 +1103,9 @@ import String
         let err = parse_manifest(&root.join("ipe.toml"))
             .expect_err("an ipe.toml path is not a package.ipe manifest");
         assert!(
-            err.to_string().contains("ipe migrate config"),
-            "the refusal must point at `ipe migrate config`: {err}"
+            err.to_string().contains("legacy ipe.toml"),
+            "the refusal must mention legacy ipe.toml: {err}"
         );
-
-        // The same file still reads through the migrate input reader.
-        let m = parse_toml_manifest(&root.join("ipe.toml")).expect("migrate reader loads it");
-        assert_eq!(m.name, "legacy");
-        assert_eq!(
-            m.version,
-            Some(semver::Version::parse("2.1.0").expect("semver"))
-        );
-        assert_eq!(m.driver, ipe_backend_rust::DbDriver::Postgres);
         let _ = fs::remove_dir_all(&root);
     }
 }
