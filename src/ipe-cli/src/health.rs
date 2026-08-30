@@ -42,7 +42,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use crate::cli_args::OutputFormat;
-use crate::{CliError, runtime_embed, style, toolchain};
+use crate::{CliError, runtime_embed, scratch::ScratchDir, style, toolchain};
 
 /// Whether a check passed, warns, is a hard miss, or cannot be known.
 ///
@@ -193,9 +193,34 @@ fn home_dir() -> Option<PathBuf> {
         .filter(|p| !p.as_os_str().is_empty())
 }
 
+/// The value a [`ConfigEdit`] sets — a string or a string array.
+///
+/// The distinction matters because `toml_edit` writes them as different TOML
+/// constructs: `key = "value"` vs `key = ["a", "b"]`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ConfigValue {
+    /// A plain TOML string value.
+    Str(String),
+    /// A TOML array of strings.
+    StrList(Vec<String>),
+}
+
+impl ConfigValue {
+    /// A compact display for the fix preview (`+` diff-add line).
+    fn display(&self) -> String {
+        match self {
+            Self::Str(s) => format!("{s:?}"),
+            Self::StrList(elems) => {
+                let inner: Vec<String> = elems.iter().map(|s| format!("{s:?}")).collect();
+                format!("[{}]", inner.join(", "))
+            }
+        }
+    }
+}
+
 /// A structured, format-preserving edit to one config file.
 ///
-/// The edit is expressed as a dotted key and a string value, not raw text: the
+/// The edit is expressed as a dotted key and a typed value, not raw text: the
 /// applier parses the existing document, sets exactly that key (preserving every
 /// other line, comment, and layout), and writes it back. `rationale` is shown in
 /// the preview so the user knows why the key is being set.
@@ -205,8 +230,8 @@ pub struct ConfigEdit {
     pub target: ConfigTarget,
     /// The dotted TOML key path (e.g. `build.rustc-wrapper`).
     pub key: Vec<&'static str>,
-    /// The string value to set the key to.
-    pub value: String,
+    /// The value to set the key to.
+    pub value: ConfigValue,
     /// A one-line reason, shown in the preview.
     pub rationale: &'static str,
 }
@@ -520,58 +545,286 @@ fn check_runtime() -> Check {
     }
 }
 
-/// A fast linker (`mold` preferred, then `lld`). When present but not yet
-/// configured, offer the `~/.cargo/config.toml` linker snippet.
+/// A fast linker (`mold` preferred, then `lld`, then `ld.gold`).
+///
+/// The check order:
+/// 1. Already configured in `~/.cargo/config.toml` → `Ok`, nothing to do.
+/// 2. A linker is on PATH AND passes a link probe → offer the `rustflags` fix.
+/// 3. A linker is on PATH but fails the probe → report found-but-rejected
+///    (neutral; never offer a fix that would break the user's builds).
+/// 4. Nothing found → suggest installation.
 fn check_linker() -> Check {
-    let mold = which_on_path("mold");
-    let lld = which_on_path("ld.lld").or_else(|| which_on_path("lld"));
-    match (mold, lld) {
-        (Some(path), _) => Check {
+    // 1. Already configured: the `rustflags` key for the host target is present
+    //    in `~/.cargo/config.toml` and contains a `-fuse-ld=` flag.
+    if linker_already_configured() {
+        return Check {
             group: Group::Linker,
-            id: "mold",
+            id: "linker",
             status: Status::Ok,
-            detail: format!("mold found at {}", path.display()),
-            suggestion: Some(
-                "configure it as the linker in ~/.cargo/config.toml for faster links".to_owned(),
-            ),
-            fix: Some(Fix::ConfigEdit(linker_edit("mold"))),
-        },
-        (None, Some(path)) => Check {
-            group: Group::Linker,
-            id: "lld",
-            status: Status::Ok,
-            detail: format!("lld found at {}", path.display()),
-            suggestion: Some(
-                "configure it as the linker in ~/.cargo/config.toml for faster links".to_owned(),
-            ),
-            fix: Some(Fix::ConfigEdit(linker_edit("lld"))),
-        },
-        (None, None) => Check {
-            group: Group::Linker,
-            id: "mold",
-            status: Status::Warn,
-            detail: "no fast linker (mold or lld) found — links use the default linker".to_owned(),
-            suggestion: Some(installer_hint(
-                "mold",
-                "a fast linker that cuts native link time",
-            )),
+            detail: "fast linker already configured in ~/.cargo/config.toml".to_owned(),
+            suggestion: None,
             fix: None,
-        },
+        };
+    }
+
+    // 2 & 3. Probe candidates in fastest-first order.
+    let candidates: &[&str] = &["mold", "ld.lld", "lld", "ld.gold"];
+    for name in candidates {
+        let id: &'static str = match *name {
+            "mold" => "mold",
+            "ld.lld" | "lld" => "lld",
+            "ld.gold" | "gold" => "gold",
+            _ => "linker",
+        };
+        let flag_name: &'static str = match *name {
+            "mold" => "mold",
+            "ld.lld" | "lld" => "lld",
+            "ld.gold" | "gold" => "gold",
+            _ => name,
+        };
+        let Some(path) = which_on_path(name) else {
+            continue;
+        };
+        match probe_linker(flag_name) {
+            LinkerProbeResult::Accepted => {
+                return Check {
+                    group: Group::Linker,
+                    id,
+                    status: Status::Ok,
+                    detail: format!(
+                        "{name} found at {} — not yet configured for native builds",
+                        path.display()
+                    ),
+                    suggestion: Some(
+                        "configure it in ~/.cargo/config.toml to halve native link time".to_owned(),
+                    ),
+                    fix: Some(Fix::ConfigEdit(linker_edit(flag_name))),
+                };
+            }
+            LinkerProbeResult::Rejected => {
+                return Check {
+                    group: Group::Linker,
+                    id,
+                    status: Status::Warn,
+                    detail: format!(
+                        "{name} found at {} but the toolchain rejected -fuse-ld={flag_name} — \
+                         the current compiler cannot use it",
+                        path.display()
+                    ),
+                    suggestion: Some(
+                        "upgrade your compiler toolchain or install a newer version of the linker"
+                            .to_owned(),
+                    ),
+                    fix: None,
+                };
+            }
+        }
+    }
+
+    // 4. Nothing found.
+    Check {
+        group: Group::Linker,
+        id: "linker",
+        status: Status::Warn,
+        detail: "no fast linker (mold, lld, or gold) found — links use the default linker"
+            .to_owned(),
+        suggestion: Some(installer_hint(
+            "mold",
+            "a fast linker that cuts native link time",
+        )),
+        fix: None,
     }
 }
 
-/// The `~/.cargo/config.toml` edit that wires a fast linker for the host target.
+/// Whether a fast linker is already wired in `~/.cargo/config.toml` for the
+/// host target: the `rustflags` array at `[target.<triple>]` contains a
+/// `-fuse-ld=` argument.
+fn linker_already_configured() -> bool {
+    let Ok(path) = cargo_config_path() else {
+        return false;
+    };
+    let Ok(text) =
+        crate::io_bounded::read_to_string_capped(&path, crate::io_bounded::SMALL_FILE_READ_CAP)
+    else {
+        return false;
+    };
+    let Ok(doc) = text.parse::<toml_edit::DocumentMut>() else {
+        return false;
+    };
+    let triple = host_target_triple();
+    // Walk target.<triple>.rustflags; accept either a string or an array.
+    let Some(target_table) = doc.get("target").and_then(|t| t.get(triple)) else {
+        return false;
+    };
+    let Some(flags) = target_table.get("rustflags") else {
+        return false;
+    };
+    // String variant: `rustflags = "-fuse-ld=mold -C …"`
+    if let Some(s) = flags.as_str() {
+        return s.contains("-fuse-ld=");
+    }
+    // Array variant (the form we write): `rustflags = ["-C", "link-arg=-fuse-ld=mold"]`
+    if let Some(arr) = flags.as_array() {
+        return arr
+            .iter()
+            .any(|v| v.as_str().is_some_and(|s| s.contains("-fuse-ld=")));
+    }
+    false
+}
+
+/// Outcome of a toolchain-level linker probe.
+enum LinkerProbeResult {
+    /// The toolchain accepted `-fuse-ld=<name>` and linked successfully.
+    Accepted,
+    /// The linker is on PATH but the toolchain rejected or errored the flag.
+    Rejected,
+}
+
+/// Probe whether the Rust toolchain accepts `-Clink-arg=-fuse-ld=<name>` by
+/// linking a trivial program in a temporary directory.
 ///
-/// `mold` runs via `clang -fuse-ld=mold`; `lld` via `-fuse-ld=lld`. The key is
-/// the host target's `rustflags`, so only local native builds are affected.
-fn linker_edit(which: &'static str) -> ConfigEdit {
+/// The probe result is cached under `$IPE_HOME/linker-probe.toml` keyed on the
+/// linker name and the `rustc -vV` release string, so repeated `ipe health`
+/// runs cost nothing after the first.
+fn probe_linker(name: &str) -> LinkerProbeResult {
+    let cache_key = rustc_version_string();
+    if let Some(result) = read_probe_cache(name, cache_key.as_deref()) {
+        return result;
+    }
+    let result = run_link_probe(name);
+    write_probe_cache(name, cache_key.as_deref(), &result);
+    result
+}
+
+/// The `rustc -vV` release line, used as the cache invalidation key. `None`
+/// when `rustc` is not on PATH or its output cannot be parsed.
+fn rustc_version_string() -> Option<String> {
+    let out = Command::new("rustc").arg("-vV").output().ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let text = String::from_utf8(out.stdout).ok()?;
+    // The "release:" line uniquely identifies the toolchain version.
+    text.lines()
+        .find(|l| l.starts_with("release:"))
+        .map(str::to_owned)
+}
+
+/// Run the actual link probe: feed `fn main(){}` to `rustc` with
+/// `-Clink-arg=-fuse-ld=<name>` and return whether it exits 0.
+///
+/// The artifact lands in a `ScratchDir` that is removed on drop, so no debris
+/// reaches the project tree or the shared target.
+fn run_link_probe(name: &str) -> LinkerProbeResult {
+    // A ScratchDir gives us an unpredictably-named, exclusively-created, mode-
+    // 0700 directory that is removed when the guard drops — no predictable path,
+    // no race on the temp name, no leftover artifacts.
+    let Ok(scratch) = ScratchDir::new("ipe-linker-probe") else {
+        return LinkerProbeResult::Rejected;
+    };
+    let out_path = scratch.child("probe");
+    let out = Command::new("rustc")
+        .args([
+            "-",
+            "--edition=2021",
+            &format!("-Clink-arg=-fuse-ld={name}"),
+            "-o",
+            &out_path.to_string_lossy(),
+        ])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .and_then(|mut child| {
+            if let Some(mut stdin) = child.stdin.take() {
+                use std::io::Write as _;
+                let _ = stdin.write_all(b"fn main(){}");
+            }
+            child.wait()
+        });
+    // `scratch` drops here, removing the directory and the probe artifact.
+    match out {
+        Ok(status) if status.success() => LinkerProbeResult::Accepted,
+        _ => LinkerProbeResult::Rejected,
+    }
+}
+
+/// The path of the linker-probe cache file: `$IPE_HOME/linker-probe.toml`.
+fn probe_cache_path() -> Option<PathBuf> {
+    runtime_embed::ipe_home()
+        .ok()
+        .map(|h| h.join("linker-probe.toml"))
+}
+
+/// Read a cached probe result for `(name, toolchain_key)`. Returns `None` when
+/// the cache is absent, unreadable, or the entry's toolchain key has changed
+/// (toolchain upgrade → re-probe).
+fn read_probe_cache(name: &str, toolchain_key: Option<&str>) -> Option<LinkerProbeResult> {
+    let path = probe_cache_path()?;
+    let text =
+        crate::io_bounded::read_to_string_capped(&path, crate::io_bounded::SMALL_FILE_READ_CAP)
+            .ok()?;
+    let doc: toml::Table = text.parse().ok()?;
+    let entry = doc.get(name)?.as_table()?;
+    // If the cached entry carries a toolchain key that differs from the running
+    // toolchain, the cache is stale — fall through to re-probe.
+    let cached_key = entry.get("toolchain").and_then(|v| v.as_str());
+    if cached_key != toolchain_key {
+        return None;
+    }
+    if entry.get("accepted")?.as_bool()? {
+        Some(LinkerProbeResult::Accepted)
+    } else {
+        Some(LinkerProbeResult::Rejected)
+    }
+}
+
+/// Write a probe result to the cache. Failures are silently ignored: a missing
+/// cache only costs a re-probe on the next run; a caching error must not fail
+/// `ipe health`.
+fn write_probe_cache(name: &str, toolchain_key: Option<&str>, result: &LinkerProbeResult) {
+    let Some(path) = probe_cache_path() else {
+        return;
+    };
+    let accepted = matches!(result, LinkerProbeResult::Accepted);
+    // Read the existing cache (if any) so we preserve other linkers' entries.
+    let existing =
+        crate::io_bounded::read_to_string_capped(&path, crate::io_bounded::SMALL_FILE_READ_CAP)
+            .unwrap_or_default();
+    let mut doc = existing
+        .parse::<toml_edit::DocumentMut>()
+        .unwrap_or_default();
+    let entry = doc
+        .entry(name)
+        .or_insert_with(|| toml_edit::Item::Table(toml_edit::Table::new()));
+    if let Some(t) = entry.as_table_mut() {
+        t.insert("accepted", toml_edit::value(accepted));
+        if let Some(key) = toolchain_key {
+            t.insert("toolchain", toml_edit::value(key));
+        }
+    }
+    if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let _ = std::fs::write(&path, doc.to_string());
+}
+
+/// The `~/.cargo/config.toml` edit that wires a fast linker for the host
+/// target via a `rustflags` array. The `rustflags` approach works with the
+/// default `gcc`/`cc` linker driver — no `clang` dependency — and is the
+/// mechanism proven to halve native link time.
+fn linker_edit(flag_name: &'static str) -> ConfigEdit {
     ConfigEdit {
         target: ConfigTarget::Cargo,
-        key: vec!["target", host_target_triple(), "linker"],
-        value: "clang".to_owned(),
-        rationale: match which {
-            "mold" => "use clang+mold to link native builds faster",
-            _ => "use clang+lld to link native builds faster",
+        key: vec!["target", host_target_triple(), "rustflags"],
+        value: ConfigValue::StrList(vec![
+            "-C".to_owned(),
+            format!("link-arg=-fuse-ld={flag_name}"),
+        ]),
+        rationale: match flag_name {
+            "mold" => "pass -fuse-ld=mold to the linker for faster native builds",
+            "lld" => "pass -fuse-ld=lld to the linker for faster native builds",
+            _ => "pass -fuse-ld to the linker for faster native builds",
         },
     }
 }
@@ -591,7 +844,7 @@ fn check_cache() -> Check {
             fix: Some(Fix::ConfigEdit(ConfigEdit {
                 target: ConfigTarget::Cargo,
                 key: vec!["build", "rustc-wrapper"],
-                value: "sccache".to_owned(),
+                value: ConfigValue::Str("sccache".to_owned()),
                 rationale: "cache Rust compilations across builds with sccache",
             })),
         },
@@ -1140,7 +1393,7 @@ struct FixChange {
 fn fix_change(fix: &Fix) -> FixChange {
     match fix {
         Fix::ConfigEdit(edit) => FixChange {
-            change: format!("{} = {:?}", edit.key.join("."), edit.value),
+            change: format!("{} = {}", edit.key.join("."), edit.value.display()),
             file: Some(config_path_label(edit.target)),
         },
         Fix::Install(install) => match &install.method {
@@ -1196,9 +1449,12 @@ fn apply_one(fix: &Fix) -> Result<String, CliError> {
                 path: setup.target_dir.clone(),
                 source: e,
             })?;
-            let value = setup.target_dir.display().to_string();
+            let value = ConfigValue::Str(setup.target_dir.display().to_string());
             apply_config_edit(&path, &["build", "target-dir"], &value)?;
-            Ok(format!("shared target configured at {value}"))
+            Ok(format!(
+                "shared target configured at {}",
+                setup.target_dir.display()
+            ))
         }
     }
 }
@@ -1229,22 +1485,21 @@ fn run_install(argv: &[String]) -> Result<(), CliError> {
 
 /// Set a dotted key in a TOML config file, format-preserving and idempotent:
 /// - Parse the existing document (empty when the file is absent).
-/// - If the key already holds the requested value, do nothing (idempotent).
+/// - If the key already holds exactly the requested value, do nothing.
 /// - Otherwise back up the current file to a numbered sibling
 ///   (`config.toml.bak`, `.bak.1`, …), set exactly that key (every other line,
 ///   comment, and layout preserved), and write the result atomically.
 /// - Re-parse what was written; if it does not parse, roll the backup back so
 ///   the user is never left with a broken config.
 ///
-/// A conflicting existing value (the key is set to something else) is NOT
-/// silently overwritten in place: the numbered backup captures the prior state
-/// first, so the change is always reversible.
+/// A conflicting existing value is NOT silently overwritten in place: the
+/// numbered backup captures the prior state first, so the change is reversible.
 ///
 /// # Errors
 /// [`CliError::Io`] on a filesystem failure; [`CliError::UsageOwned`] when the
 /// existing file does not parse as TOML (the command will not blindly overwrite
 /// a file it cannot understand).
-fn apply_config_edit(path: &Path, key: &[&str], value: &str) -> Result<(), CliError> {
+fn apply_config_edit(path: &Path, key: &[&str], value: &ConfigValue) -> Result<(), CliError> {
     let existing = match crate::io_bounded::read_to_string_capped(
         path,
         crate::io_bounded::SMALL_FILE_READ_CAP,
@@ -1265,7 +1520,7 @@ fn apply_config_edit(path: &Path, key: &[&str], value: &str) -> Result<(), CliEr
 
     // Idempotent: if the key already holds exactly this value, no write, no
     // backup — running health twice changes nothing.
-    if dotted_str(&doc, key).as_deref() == Some(value) {
+    if dotted_value_matches(&doc, key, value) {
         return Ok(());
     }
 
@@ -1309,19 +1564,31 @@ fn apply_config_edit(path: &Path, key: &[&str], value: &str) -> Result<(), CliEr
     }
 }
 
-/// Read a dotted string key from a parsed document, or `None` when absent / not
-/// a string.
-fn dotted_str(doc: &toml_edit::DocumentMut, key: &[&str]) -> Option<String> {
+/// Whether the dotted key in `doc` already holds exactly `value` (idempotency
+/// check). Handles both string and string-array values.
+fn dotted_value_matches(doc: &toml_edit::DocumentMut, key: &[&str], value: &ConfigValue) -> bool {
     let mut item = doc.as_item();
     for segment in key {
-        item = item.get(segment)?;
+        let Some(next) = item.get(segment) else {
+            return false;
+        };
+        item = next;
     }
-    item.as_str().map(str::to_owned)
+    match value {
+        ConfigValue::Str(s) => item.as_str() == Some(s.as_str()),
+        ConfigValue::StrList(elems) => item.as_array().is_some_and(|arr| {
+            arr.len() == elems.len()
+                && arr
+                    .iter()
+                    .zip(elems)
+                    .all(|(a, b)| a.as_str() == Some(b.as_str()))
+        }),
+    }
 }
 
-/// Set a dotted string key on a document, creating intermediate tables as
-/// needed and preserving every unrelated line.
-fn set_dotted(doc: &mut toml_edit::DocumentMut, key: &[&str], value: &str) {
+/// Set a dotted key on a document, creating intermediate tables as needed and
+/// preserving every unrelated line. Supports both string and string-array values.
+fn set_dotted(doc: &mut toml_edit::DocumentMut, key: &[&str], value: &ConfigValue) {
     let Some((last, parents)) = key.split_last() else {
         return;
     };
@@ -1345,7 +1612,18 @@ fn set_dotted(doc: &mut toml_edit::DocumentMut, key: &[&str], value: &str) {
             None => return,
         }
     }
-    table.insert(last, toml_edit::value(value));
+    match value {
+        ConfigValue::Str(s) => {
+            table.insert(last, toml_edit::value(s.as_str()));
+        }
+        ConfigValue::StrList(elems) => {
+            let mut arr = toml_edit::Array::new();
+            for elem in elems {
+                arr.push(elem.as_str());
+            }
+            table.insert(last, toml_edit::value(arr));
+        }
+    }
 }
 
 /// Back up `contents` to the first free numbered sibling of `path`
@@ -1557,7 +1835,8 @@ mod tests {
 
         // First edit: sets the key, preserves the comment + the sibling key,
         // and writes a numbered backup of the prior file.
-        apply_config_edit(&cfg, &["build", "rustc-wrapper"], "sccache").expect("first edit");
+        let val = ConfigValue::Str("sccache".to_owned());
+        apply_config_edit(&cfg, &["build", "rustc-wrapper"], &val).expect("first edit");
         let after = std::fs::read_to_string(&cfg).expect("read");
         assert!(after.contains("# my config"), "comment preserved");
         assert!(after.contains("jobs = 4"), "sibling key preserved");
@@ -1566,7 +1845,7 @@ mod tests {
         assert!(backup.exists(), "prior file backed up");
 
         // Second, identical edit: idempotent — no change, no new backup.
-        apply_config_edit(&cfg, &["build", "rustc-wrapper"], "sccache").expect("idempotent");
+        apply_config_edit(&cfg, &["build", "rustc-wrapper"], &val).expect("idempotent");
         assert!(
             !dir.path().join("config.toml.bak.1").exists(),
             "idempotent edit writes no second backup"
@@ -1577,7 +1856,8 @@ mod tests {
     fn config_edit_on_absent_file_creates_it_without_a_backup() {
         let dir = TempDir::new("absent");
         let cfg = dir.path().join("config.toml");
-        apply_config_edit(&cfg, &["build", "target-dir"], "/tmp/shared").expect("create");
+        let val = ConfigValue::Str("/tmp/shared".to_owned());
+        apply_config_edit(&cfg, &["build", "target-dir"], &val).expect("create");
         let text = std::fs::read_to_string(&cfg).expect("read");
         assert!(text.contains("target-dir = \"/tmp/shared\""));
         assert!(
@@ -1591,12 +1871,119 @@ mod tests {
         let dir = TempDir::new("broken");
         let cfg = dir.path().join("config.toml");
         std::fs::write(&cfg, "this is not = = toml [[[").expect("seed");
-        let err = apply_config_edit(&cfg, &["build", "x"], "y");
+        let val = ConfigValue::Str("y".to_owned());
+        let err = apply_config_edit(&cfg, &["build", "x"], &val);
         assert!(matches!(err, Err(CliError::UsageOwned(_))));
         // The broken file is left untouched — never overwritten.
         assert_eq!(
             std::fs::read_to_string(&cfg).expect("read"),
             "this is not = = toml [[["
+        );
+    }
+
+    #[test]
+    fn config_edit_str_list_writes_toml_array_and_is_idempotent() {
+        let dir = TempDir::new("strlist");
+        let cfg = dir.path().join("config.toml");
+        let val = ConfigValue::StrList(vec!["-C".to_owned(), "link-arg=-fuse-ld=mold".to_owned()]);
+        apply_config_edit(
+            &cfg,
+            &["target", "x86_64-unknown-linux-gnu", "rustflags"],
+            &val,
+        )
+        .expect("create");
+        let text = std::fs::read_to_string(&cfg).expect("read");
+        assert!(text.contains("rustflags"), "rustflags key must be present");
+        assert!(
+            text.contains("-fuse-ld=mold"),
+            "the fuse-ld flag must appear in the written TOML"
+        );
+
+        // Idempotent: a second identical edit writes no backup.
+        apply_config_edit(
+            &cfg,
+            &["target", "x86_64-unknown-linux-gnu", "rustflags"],
+            &val,
+        )
+        .expect("idempotent");
+        assert!(
+            !dir.path().join("config.toml.bak.1").exists(),
+            "idempotent array edit writes no second backup"
+        );
+    }
+
+    #[test]
+    fn linker_edit_emits_rustflags_array_not_linker_key() {
+        let edit = linker_edit("mold");
+        // The key must target rustflags, not linker.
+        assert_eq!(edit.key.last(), Some(&"rustflags"), "key must be rustflags");
+        // The value must be a string array containing the fuse-ld flag.
+        assert!(
+            matches!(&edit.value, ConfigValue::StrList(_)),
+            "linker_edit must use ConfigValue::StrList, got: {:?}",
+            edit.value
+        );
+        if let ConfigValue::StrList(elems) = &edit.value {
+            assert!(
+                elems.iter().any(|e| e.contains("-fuse-ld=mold")),
+                "rustflags array must contain -fuse-ld=mold, got: {elems:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn probe_rejected_linker_offers_no_fix() {
+        // Simulate a probe rejection: a linker name that no toolchain has.
+        let result = run_link_probe("__ipe_test_nonexistent_linker__");
+        assert!(
+            matches!(result, LinkerProbeResult::Rejected),
+            "a nonexistent linker must be rejected by the probe"
+        );
+    }
+
+    #[test]
+    fn probe_cache_round_trips_accepted_and_rejected() {
+        let dir = TempDir::new("probe_cache");
+        // Temporarily redirect probe cache to the temp dir.
+        let cache_path = dir.path().join("linker-probe.toml");
+
+        // Write an Accepted entry for "mold" under a fake toolchain key.
+        {
+            let mut doc = toml_edit::DocumentMut::new();
+            let entry = doc
+                .entry("mold")
+                .or_insert_with(|| toml_edit::Item::Table(toml_edit::Table::new()));
+            if let Some(t) = entry.as_table_mut() {
+                t.insert("accepted", toml_edit::value(true));
+                t.insert("toolchain", toml_edit::value("release: 1.99.0"));
+            }
+            std::fs::write(&cache_path, doc.to_string()).expect("write cache");
+        }
+
+        // Read back via the raw TOML parse to confirm the round-trip.
+        let text = std::fs::read_to_string(&cache_path).expect("read cache");
+        let doc: toml::Table = text.parse().expect("parse cache");
+        let entry = doc
+            .get("mold")
+            .and_then(|v| v.as_table())
+            .expect("mold entry");
+        assert_eq!(
+            entry.get("accepted").and_then(toml::Value::as_bool),
+            Some(true),
+            "accepted=true must round-trip"
+        );
+        assert_eq!(
+            entry.get("toolchain").and_then(toml::Value::as_str),
+            Some("release: 1.99.0"),
+            "toolchain key must round-trip"
+        );
+
+        // A different toolchain key means stale cache (None returned).
+        let entry_wrong_key = entry.get("toolchain").and_then(toml::Value::as_str);
+        assert_ne!(
+            entry_wrong_key,
+            Some("release: 2.00.0"),
+            "a different toolchain key is stale"
         );
     }
 
@@ -1647,7 +2034,7 @@ mod tests {
             fix: Some(Fix::ConfigEdit(ConfigEdit {
                 target: ConfigTarget::Cargo,
                 key: vec!["build", "rustc-wrapper"],
-                value: "sccache".to_owned(),
+                value: ConfigValue::Str("sccache".to_owned()),
                 rationale: "cache builds",
             })),
         };
