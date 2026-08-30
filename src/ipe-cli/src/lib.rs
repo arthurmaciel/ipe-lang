@@ -2996,10 +2996,15 @@ pub(crate) fn run_watch(rest: &[String]) -> Result<(), CliError> {
     let out_dir = args
         .out
         .map_or_else(|| PathBuf::from("out").join("rust"), PathBuf::from);
-    let runtime_dir = match args.runtime {
-        Some(r) => PathBuf::from(r),
-        None => resolve_runtime()?,
-    };
+    // Watch is always a native dependency-model dev build (it never vendors the
+    // runtime tree, nor targets wasm), so — like `ipe build` on its default path
+    // — it must NOT require the vendored runtime source subtree. It resolves the
+    // dependency crate root itself via `runtime_embed::resolve` once the loop
+    // starts (see `watch::run`); the vendored tree is honoured only when passed
+    // explicitly with `--runtime`. Requiring `resolve_runtime` up front made
+    // `ipe watch` fail to locate the runtime in an installed checkout where the
+    // vendored subtree is absent but the dependency crate root resolves fine.
+    let runtime_dir = resolve_vendored_runtime_dir(args.runtime, false)?;
 
     // Fail closed before the watch loop starts: `ipe watch` rebuilds with cargo
     // on every change, so a missing toolchain is reported once, up front, with
@@ -6664,6 +6669,30 @@ mod tests {
             "error: no matching package named `foo` found; updating registry index"
         ));
         assert!(!is_registry_unreachable("error[E0433]: cannot find crate"));
+    }
+
+    #[test]
+    fn vendored_runtime_dir_is_required_only_when_vendoring() {
+        // The dependency-model path (default `ipe build`/`run`, and `ipe watch`)
+        // never vendors the runtime source tree — it reaches the runtime as a
+        // crate dependency — so it must resolve to an empty sentinel WITHOUT
+        // demanding a runtime dir. Requiring the vendored tree here is what made
+        // `ipe watch` fail to locate the runtime in an installed checkout.
+        assert_eq!(
+            resolve_vendored_runtime_dir(None, false).ok(),
+            Some(PathBuf::new()),
+        );
+        // An explicit `--runtime` is honoured verbatim, vendoring or not — so the
+        // vendoring path (e.g. `ipe eject`) resolves a runtime dir even when the
+        // ambient vendored tree is absent.
+        assert_eq!(
+            resolve_vendored_runtime_dir(Some("/opt/ipe-runtime".to_owned()), false).ok(),
+            Some(PathBuf::from("/opt/ipe-runtime")),
+        );
+        assert_eq!(
+            resolve_vendored_runtime_dir(Some("/opt/ipe-runtime".to_owned()), true).ok(),
+            Some(PathBuf::from("/opt/ipe-runtime")),
+        );
     }
 
     #[test]
