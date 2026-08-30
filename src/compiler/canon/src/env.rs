@@ -43,77 +43,46 @@ use crate::resolve::ModuleOrigin;
 /// Only real `Ipe.*` module paths belong here — the first segment must
 /// be `Ipe`, matching the guard in `resolve::register_stdlib_import_aliases`.
 pub const STDLIB_MODULE_QUALIFIERS: &[(&[&str], &str)] = &[
-    // ── Ipe.* pure + effect modules ────────────────────────────────────
+    // ── Compiled-source exclusions (NOT kernel qualifiers) ─────────────────
+    //
+    // The modules listed below are compiled-source Layer-3 modules registered in
+    // `ipe::stdlib::COMPILED_STD_MODULES`.  A module is EITHER a kernel qualifier
+    // here OR compiled-source — never both (`compiled_vs_kernel_qualifier_disjoint`).
+    // Their members reach kernels via `Ffi.kernel "X_*"` aliases resolved by
+    // `detect_kernel_alias`, so they must stay out of this table.
+    //
+    //   Absent module          Kernel family / note
+    //   ─────────────────────  ────────────────────────────────────────────────
+    //   Ipe.String             String_*   (also re-exports the String builtin type)
+    //   Ipe.Char               Char_*
+    //   Ipe.List               List_*  + pure Ipê members
+    //   Ipe.Math               Math_*
+    //   Ipe.Bitwise            Bitwise_*
+    //   Ipe.Dict               Dict_*   (also re-exports the Dict builtin type)
+    //   Ipe.Set                Set_*
+    //   Ipe.Bytes              Bytes_*
+    //   Ipe.Encoding           Encoding_*
+    //   Ipe.Uuid               UuidV4 / UuidV7 / UuidParse
+    //   Ipe.Task               Task_*  + pure Ipê (BackoffStrategy / RetryPolicy)
+    //                          (also re-exports the Task builtin type)
+    //   Ipe.Io                 Io_*
+    //   Ipe.Debug              Debug_*
+    //   Ipe.Time               Time_*
+    //   Ipe.Random             Random_*  + pure Ipê (range, seeded helpers, Seed)
+    //   Ipe.Decimal            Decimal_*  (also re-exports the Decimal builtin type)
+    //   Ipe.Css                Css_*  + pure Ipê layout builders
+    //   Ipe.Ui                 Ui_*   + pure Ipê layout builders
+    //   Ipe.Html               Html element/attr builders over node/voidNode
+    //   Ipe.Html.Attributes    Html attribute builders
+    //   Ipe.Path               Path_*
+    //   Ipe.Regex              Regex_*
+    //
+    // ── Ipe.* pure + effect modules (kernel qualifiers) ────────────────────
     (&["Ipe", "Basics"], "Basics"),
-    // NOTE — `Ipe.String` is DELIBERATELY absent: it is a COMPILED-SOURCE
-    // Layer-3 module (registered in `ipe::stdlib::COMPILED_STD_MODULES`). Its
-    // members are point-free `Ffi.kernel "String_*"` aliases that
-    // `detect_kernel_alias` routes to the registered `String*` `StdlibKernel`
-    // variants. The `String` builtin type is re-exported via the
-    // `build_module_exports` reserved-builtin-type path. A module is EITHER a
-    // kernel qualifier here OR compiled-source — never both
-    // (`compiled_vs_kernel_qualifier_disjoint`), so it stays out.
-    // NOTE — `Ipe.Char` is DELIBERATELY absent: it is a COMPILED-SOURCE
-    // Layer-3 module (registered in `ipe::stdlib::COMPILED_STD_MODULES`). Its
-    // members are point-free `Ffi.kernel "Char_*"` aliases that
-    // `detect_kernel_alias` routes to the registered `Char*` `StdlibKernel`
-    // variants. A module is EITHER a kernel qualifier here OR compiled-source
-    // — never both (`compiled_vs_kernel_qualifier_disjoint`), so it stays out.
-    // NOTE — `Ipe.List` is DELIBERATELY absent: it is a COMPILED-SOURCE
-    // Layer-3 module (registered in `ipe::stdlib::COMPILED_STD_MODULES`). Its
-    // pure members compile from Ipê; the eleven kernel-backed members are
-    // point-free `Ffi.kernel "List_*"` aliases that `detect_kernel_alias`
-    // routes to the registered `List*` `StdlibKernel` variants. A module is
-    // EITHER a kernel qualifier here OR compiled-source — never both
-    // (`compiled_vs_kernel_qualifier_disjoint`), so it stays out.
     (&["Ipe", "Maybe"], "Maybe"),
     (&["Ipe", "Result"], "Result"),
     (&["Ipe", "Error"], "Error"),
-    // NOTE — `Ipe.Math` is DELIBERATELY absent: it is a COMPILED-SOURCE
-    // Layer-3 module (registered in `ipe::stdlib::COMPILED_STD_MODULES`). Its
-    // members are point-free `Ffi.kernel "Math_*"` aliases that
-    // `detect_kernel_alias` routes to the registered `Math*` `StdlibKernel`
-    // variants (`ipe_runtime::math::*`). A module is EITHER a kernel qualifier
-    // here OR compiled-source — never both
-    // (`compiled_vs_kernel_qualifier_disjoint`), so it stays out.
-    // NOTE — `Ipe.Bitwise` is DELIBERATELY absent: it is a COMPILED-SOURCE
-    // Layer-3 module (registered in `ipe::stdlib::COMPILED_STD_MODULES`). Its
-    // members are point-free `Ffi.kernel "Bitwise_*"` aliases that
-    // `detect_kernel_alias` routes to the registered `Bitwise*` `StdlibKernel`
-    // variants. A module is EITHER a kernel qualifier here OR compiled-source
-    // — never both (`compiled_vs_kernel_qualifier_disjoint`), so it stays out.
-    // NOTE — `Ipe.Dict` is DELIBERATELY absent: it is a COMPILED-SOURCE
-    // Layer-3 module (registered in `ipe::stdlib::COMPILED_STD_MODULES`). Its
-    // members are point-free `Ffi.kernel "Dict_*"` aliases that
-    // `detect_kernel_alias` routes to the registered `Dict*` `StdlibKernel`
-    // variants. A module is EITHER a kernel qualifier here OR compiled-source
-    // — never both (`compiled_vs_kernel_qualifier_disjoint`), so it stays out.
-    // NOTE — `Ipe.Set` is DELIBERATELY absent: it is a COMPILED-SOURCE
-    // Layer-3 module (registered in `ipe::stdlib::COMPILED_STD_MODULES`). Its
-    // members are point-free `Ffi.kernel "Set_*"` aliases that
-    // `detect_kernel_alias` routes to the registered `Set*` `StdlibKernel`
-    // variants. A module is EITHER a kernel qualifier here OR compiled-source
-    // — never both (`compiled_vs_kernel_qualifier_disjoint`), so it stays out.
-    // NOTE — `Ipe.Bytes` is DELIBERATELY absent: it is a COMPILED-SOURCE
-    // Layer-3 module (registered in `ipe::stdlib::COMPILED_STD_MODULES`). Its
-    // members are point-free `Ffi.kernel "Bytes_*"` aliases that
-    // `detect_kernel_alias` routes to the registered `Bytes*` `StdlibKernel`
-    // variants. A module is EITHER a kernel qualifier here OR compiled-source
-    // — never both (`compiled_vs_kernel_qualifier_disjoint`), so it stays out.
-    // NOTE — `Ipe.Encoding` is DELIBERATELY absent: it is a COMPILED-SOURCE
-    // Layer-3 module (registered in `ipe::stdlib::COMPILED_STD_MODULES`). Its
-    // members are point-free `Ffi.kernel "Encoding_*"` aliases that
-    // `detect_kernel_alias` routes to the registered `Encoding*` `StdlibKernel`
-    // variants. A module is EITHER a kernel qualifier here OR compiled-source
-    // — never both (`compiled_vs_kernel_qualifier_disjoint`), so it stays out.
     (&["Ipe", "Crypto"], "Crypto"),
-    // NOTE — `Ipe.Uuid` is DELIBERATELY absent: it is a COMPILED-SOURCE
-    // Layer-3 module (registered in `ipe::stdlib::COMPILED_STD_MODULES`). Its
-    // members are point-free `Ffi.kernel "Uuid_*"` aliases that
-    // `detect_kernel_alias` routes to the registered `UuidV4`/`UuidV7`/
-    // `UuidParse` `StdlibKernel` variants. A module is EITHER a kernel
-    // qualifier here OR compiled-source — never both
-    // (`compiled_vs_kernel_qualifier_disjoint`), so it stays out.
     // `Ipe.Secret` — opaque secret-string wrapper.
     (&["Ipe", "Secret"], "Secret"),
     // `Ipe.CssSafety` — the Ipe.Css leaf security kernels. This
@@ -126,50 +95,10 @@ pub const STDLIB_MODULE_QUALIFIERS: &[(&[&str], &str)] = &[
     (&["Ipe", "Json", "Encode"], "JsonEnc"),
     (&["Ipe", "Json", "Decode"], "JsonDec"),
     (&["Ipe", "Json", "Decode", "Pipeline"], "JsonDecP"),
-    // NOTE — `Ipe.Task` is DELIBERATELY absent: it is a COMPILED-SOURCE
-    // Layer-3 module (registered in `ipe::stdlib::COMPILED_STD_MODULES`). Its
-    // members are point-free `Ffi.kernel "Task_*"` aliases that
-    // `detect_kernel_alias` routes to the registered `Task*` `StdlibKernel`
-    // variants, plus pure Ipê (`BackoffStrategy` / `RetryPolicy`). A module is
-    // EITHER a kernel qualifier here OR compiled-source — never both
-    // (`compiled_vs_kernel_qualifier_disjoint`), so it stays out.
-    // NOTE — `Ipe.Io` is DELIBERATELY absent: it is a COMPILED-SOURCE
-    // Layer-3 module (registered in `ipe::stdlib::COMPILED_STD_MODULES`). Its
-    // members are point-free `Ffi.kernel "Io_*"` aliases that
-    // `detect_kernel_alias` routes to the registered `Io*` `StdlibKernel`
-    // variants. A module is EITHER a kernel qualifier here OR compiled-source
-    // — never both (`compiled_vs_kernel_qualifier_disjoint`), so it stays out.
-    // NOTE — `Ipe.Debug` is DELIBERATELY absent: it is a COMPILED-SOURCE
-    // Layer-3 module (registered in `ipe::stdlib::COMPILED_STD_MODULES`). Its
-    // members are point-free `Ffi.kernel "Debug_*"` aliases that
-    // `detect_kernel_alias` routes to the registered `Debug*` `StdlibKernel`
-    // variants. A module is EITHER a kernel qualifier here OR compiled-source
-    // — never both (`compiled_vs_kernel_qualifier_disjoint`), so it stays out.
-    // NOTE — `Ipe.Time` is DELIBERATELY absent: it is a COMPILED-SOURCE
-    // Layer-3 module (registered in `ipe::stdlib::COMPILED_STD_MODULES`). Its
-    // members are point-free `Ffi.kernel "Time_*"` aliases that
-    // `detect_kernel_alias` routes to the registered `Time*` `StdlibKernel`
-    // variants. A module is EITHER a kernel qualifier here OR compiled-source
-    // — never both (`compiled_vs_kernel_qualifier_disjoint`), so it stays out.
     (&["Ipe", "System"], "System"),
-    // NOTE — `Ipe.Random` is DELIBERATELY absent: it is a COMPILED-SOURCE
-    // Layer-3 module (registered in `ipe::stdlib::COMPILED_STD_MODULES`). Its
-    // members are point-free `Ffi.kernel "Random_*"` aliases that
-    // `detect_kernel_alias` routes to the registered `Random*` `StdlibKernel`
-    // variants, plus pure Ipê wrappers (`range`, the seeded helpers, the opaque
-    // `Seed` ADT). A module is EITHER a kernel qualifier here OR compiled-source
-    // — never both (`compiled_vs_kernel_qualifier_disjoint`), so it stays out.
     (&["Ipe", "File"], "File"),
     (&["Ipe", "Process"], "Process"),
     (&["Ipe", "Http"], "Http"),
-    // NOTE — `Ipe.Path` and `Ipe.Regex` are DELIBERATELY
-    // absent here. They are COMPILED-SOURCE Layer-3 modules (registered in
-    // `ipe::stdlib::COMPILED_STD_MODULES`): their members are point-free
-    // `Ffi.kernel "Path_*"` / `"Regex_*"` aliases that `detect_kernel_alias`
-    // routes to the registered pure `Path*` / `Regex*` `StdlibKernel` variants
-    // (runtime: `ipe_runtime::{path,regex_kernel}::*`). A module is EITHER a
-    // kernel qualifier here OR compiled-source — never both
-    // (`compiled_vs_kernel_qualifier_disjoint`), so these stay out of this table.
     // ── Ipe.Http.* server surface ───────────────────────────────────────────
     (&["Ipe", "Http", "Server"], "Server"),
     (&["Ipe", "Http", "Middleware"], "Middleware"),
@@ -196,11 +125,8 @@ pub const STDLIB_MODULE_QUALIFIERS: &[(&[&str], &str)] = &[
     (&["Ipe", "Level"], "Level"),
     (&["Ipe", "Db", "Decode"], "Db.Decode"),
     (&["Ipe", "Db", "Sql"], "Sql"), // SqlFragment builder
-    // `Ipe.Ui` is COMPILED-SOURCE (see `COMPILED_STD_MODULES`), not a kernel
-    // qualifier: its layout builders are pure Ipê over the retained
-    // `node`/`taggedNode` primitives, every other member a `Ffi.kernel "Ui_*"`
-    // alias. The disjointness invariant forbids it here. The `Ipe.Ui.*`
-    // sub-qualifiers below stay native.
+    // `Ipe.Ui.*` sub-qualifiers: Ipe.Ui itself is compiled-source (see the
+    // exclusion table above); these leaf sub-qualifiers are kernel qualifiers.
     (&["Ipe", "Ui", "Background"], "Background"),
     (&["Ipe", "Ui", "Border"], "Border"),
     (&["Ipe", "Ui", "Font"], "Font"),
@@ -208,19 +134,8 @@ pub const STDLIB_MODULE_QUALIFIERS: &[(&[&str], &str)] = &[
     (&["Ipe", "Ui", "Input"], "Input"),
     (&["Ipe", "Ui", "Lazy"], "Lazy"),
     (&["Ipe", "Ui", "Keyed"], "Keyed"), // ipe-key diff identity
-    // NOTE — `Ipe.Decimal` is DELIBERATELY absent: it is a COMPILED-SOURCE
-    // Layer-3 module (registered in `ipe::stdlib::COMPILED_STD_MODULES`). Its
-    // members are point-free `Ffi.kernel "Decimal_*"` aliases that
-    // `detect_kernel_alias` routes to the registered `Decimal*` `StdlibKernel`
-    // variants (`ipe_runtime::decimal::*`). A module is EITHER a kernel
-    // qualifier here OR compiled-source — never both
-    // (`compiled_vs_kernel_qualifier_disjoint`), so it stays out.
-    // `Ipe.Html` and `Ipe.Html.Attributes` are COMPILED-SOURCE (see
-    // `COMPILED_STD_MODULES`), not kernel qualifiers: their element/attribute
-    // builders are pure Ipê over the retained `node`/`voidNode` /
-    // `attribute`/`boolAttribute`/`noAttr` primitives (and the native
-    // serialiser), reached via `Ffi.kernel "Html_*"` / `"Attr_*"` aliases. The
-    // disjointness invariant forbids either here.
+    // `Ipe.Html` / `Ipe.Html.Attributes` are compiled-source (see exclusion table
+    // above); `Ipe.Html.Events` is a kernel qualifier and stays in this table.
     (&["Ipe", "Html", "Events"], "Event"),
     // ── Ipe.Tea.<Shape> managed-update-loop shapes (ADR 0048) ────────────────
     // The four TEA shapes live under `Ipe.Tea.*`; the canonical short qualifier
@@ -782,23 +697,14 @@ impl Env {
     /// etc. resolve without an explicit `import String`.
     #[allow(clippy::too_many_lines)] // declarative table — extracting a helper would obscure the data
     fn install_prelude_qualifiers(&mut self, interner: &mut Interner) -> DResult<()> {
-        // NOTE — `Ipe.String` is DELIBERATELY absent from this catalog: it is a
-        // COMPILED-SOURCE Layer-3 module (registered in
-        // `ipe::stdlib::COMPILED_STD_MODULES`), so its whole surface resolves
-        // from `Ipe/String.ipe` — the `Ffi.kernel "String_*"` aliases — not from
-        // this kernel-qualifier catalog. A module is EITHER a kernel qualifier
-        // here OR compiled-source — never both
-        // (`compiled_vs_kernel_qualifier_disjoint`), so `"String"` stays out.
+        // Compiled-source modules absent from QUALIFIERS (enforced by
+        // `compiled_vs_kernel_qualifier_disjoint`; see the exclusion table in
+        // `STDLIB_MODULE_QUALIFIERS` for the full list and per-module rationale):
+        // String, Char, List, Math, Bitwise, Dict, Set, Bytes, Encoding,
+        // Uuid, Task, Io, Debug, Time, Random, Decimal, Css, Ui, Html,
+        // Html.Attributes, Path, Regex.
+        // Their kernels are reached via `detect_kernel_alias`, not this table.
         const QUALIFIERS: &[(&str, &[&str])] = &[
-            // NOTE — `Ipe.Char` is DELIBERATELY absent from this catalog:
-            // it is a compiled-source module; its `Char_*` kernels are
-            // reached via `detect_kernel_alias`, not the qualifier table.
-            // NOTE — `Ipe.List` is DELIBERATELY absent from this catalog: it is
-            // a COMPILED-SOURCE module. Its members resolve via the ordinary
-            // compiled-source dependency graph (pure Ipê) or via `detect_kernel_alias`
-            // (`sort`/`singleton`/`repeat`/`product`/`intersperse`/`partition`/
-            // `unzip`/`map2`–`map5`). A kernel-qualifier catalog entry would
-            // conflict with the compiled-source resolution path.
             (
                 "Maybe",
                 &[
@@ -915,14 +821,6 @@ impl Env {
             // separate qualifier from `Log` because `Log.debug`/`Log.info`/… are
             // already the logging kernels; `Level.debug`/… are the severity tags.
             ("Level", &["debug", "info", "warn", "error"]),
-            // NOTE — `Ipe.Math` is DELIBERATELY absent from this catalog: it is a
-            // COMPILED-SOURCE Layer-3 module (`ipe::stdlib::COMPILED_STD_MODULES`).
-            // Its members are point-free `Ffi.kernel "Math_*"` aliases reached via
-            // `detect_kernel_alias`, not through this kernel-qualifier table.
-            // `Ipe.Bitwise` is DELIBERATELY absent: it is COMPILED-SOURCE
-            // (`ipe::stdlib::COMPILED_STD_MODULES`), so its whole surface resolves
-            // from `Ipe/Bitwise.ipe` — the `Ffi.kernel "Bitwise_*"` aliases —
-            // not from this kernel-qualifier catalog.
             (
                 "Basics",
                 &[
@@ -930,18 +828,6 @@ impl Env {
                     "compare", "negate", "abs", "sqrt", "min", "max",
                 ],
             ),
-            // NOTE — `Ipe.Dict` is DELIBERATELY absent from this catalog:
-            // it is a compiled-source module; its `Dict_*` kernels are
-            // reached via `detect_kernel_alias`, not the qualifier table.
-            // NOTE — `Ipe.Set` is DELIBERATELY absent from this catalog:
-            // it is a compiled-source module; its `Set_*` kernels are
-            // reached via `detect_kernel_alias`, not the qualifier table.
-            // NOTE — `Ipe.Bytes` is DELIBERATELY absent from this catalog:
-            // it is a compiled-source module; its `Bytes_*` kernels are
-            // reached via `detect_kernel_alias`, not the qualifier table.
-            // NOTE — `Ipe.Encoding` is DELIBERATELY absent from this catalog:
-            // it is a compiled-source module; its `Encoding_*` kernels are
-            // reached via `detect_kernel_alias`, not the qualifier table.
             // `Ipe.Json.Encode` — JSON encoder.
             (
                 "JsonEnc",
@@ -1010,13 +896,6 @@ impl Env {
                     "chachaKeyFromPasswordKey",
                 ],
             ),
-            // NOTE — `Ipe.Uuid` is DELIBERATELY absent from this catalog: it is a
-            // COMPILED-SOURCE Layer-3 module whose members (`v4`/`v7`/`parse`) are
-            // point-free `Ffi.kernel "Uuid_*"` aliases in
-            // `src/stdlib/Ipe/Uuid.ipe`, routed by `detect_kernel_alias` to the
-            // registered `UuidV4`/`UuidV7`/`UuidParse` `StdlibKernel` variants.
-            // Adding it here would violate the `compiled_vs_kernel_qualifier_disjoint`
-            // invariant.
             // `Ipe.Secret` — opaque secret-string wrapper.
             // `fromString` is the seal; `use` is the scoped consume (apply a
             // function to the plaintext, return its result); `redacted` is the
@@ -1054,18 +933,6 @@ impl Env {
                     "decode",
                 ],
             ),
-            // NOTE — `Ipe.Task` is DELIBERATELY absent from this catalog:
-            // it is a compiled-source module; its `Task_*` kernels are
-            // reached via `detect_kernel_alias`, not the qualifier table.
-            // NOTE — `Ipe.Io` is DELIBERATELY absent from this catalog:
-            // it is a compiled-source module; its `Io_*` kernels are
-            // reached via `detect_kernel_alias`, not the qualifier table.
-            // NOTE — `Ipe.Debug` is DELIBERATELY absent from this catalog:
-            // it is a compiled-source module; its `Debug_*` kernels are
-            // reached via `detect_kernel_alias`, not the qualifier table.
-            // NOTE — `Ipe.Time` is DELIBERATELY absent from this catalog:
-            // it is a compiled-source module; its `Time_*` kernels are
-            // reached via `detect_kernel_alias`, not the qualifier table.
             // `Ipe.System` — system effects.
             (
                 "System",
@@ -1434,21 +1301,8 @@ impl Env {
             ("Lazy", &["lazy", "lazy2", "lazy3", "lazy4", "lazy5"]),
             // ── Ipe.Ui.Keyed — ipe-key for diff identity ─────────────────────────
             ("Keyed", &["column", "row"]),
-            // NOTE — `Html` (`Ipe.Html`) is DELIBERATELY absent: it is a
-            // COMPILED-SOURCE Layer-3 module (`COMPILED_STD_MODULES`). Its element
-            // builders are pure Ipê over the retained `node`/`voidNode` primitives,
-            // and the native serialiser (`render`/`escapeHtml`/`escapeAttr`/
-            // `attrToString`/`renderStatic`) is re-exposed there through
-            // `Ffi.kernel "Html_*"` aliases, which `detect_kernel_alias` routes to
-            // the retained `Html*` kernels via `stdlib_index` — no prelude-qualifier
-            // install needed (mirrors `Path` / `Url` / `Regex`).
-            // NOTE — `Attr` (`Ipe.Html.Attributes`) is DELIBERATELY absent: it is
-            // a COMPILED-SOURCE Layer-3 module (`COMPILED_STD_MODULES`). Its three
-            // retained primitives are reached through the point-free
-            // `Ffi.kernel "Attr_attribute"` / `"Attr_boolAttribute"` / `"Attr_noAttr"`
-            // aliases, which `detect_kernel_alias` routes to the `HtmlAttribute` /
-            // `HtmlBoolAttribute` / `HtmlNoAttr` kernels via `stdlib_index` — no
-            // prelude-qualifier install needed (mirrors `Path` / `Url` / `Regex`).
+            // `Ipe.Html` and `Ipe.Html.Attributes` are compiled-source (see exclusion
+            // table in `STDLIB_MODULE_QUALIFIERS`); `Ipe.Html.Events` is a kernel qualifier.
             // ── Ipe.Html.Events alias ─────────────────────────────────────────────
             (
                 "Event",
