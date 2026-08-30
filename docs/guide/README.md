@@ -37,6 +37,8 @@ cross-link where topics meet.
 - **Numbers and magnitudes** — [Math](math.md) (roots, trig, rounding, NaN),
   [Durations](duration.md) (unit-explicit time spans), [Byte sizes](bytesize.md)
   (unit-explicit byte quantities).
+- **Exact quantities and money** — [Decimal](decimal.md) (arbitrary-precision
+  decimal arithmetic), [Money](money.md) (currency-typed amounts, fair splits).
 - **Randomness and identifiers** — [Randomness](random.md) (entropy vs seeded),
   [UUIDs](uuid.md) (random and time-ordered ids).
 - **Addressing and routing** — [URLs](url.md) (typed, validated),

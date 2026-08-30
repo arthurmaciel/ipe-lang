@@ -1,0 +1,85 @@
+module Main exposing (main)
+
+import Ipe.Money as Money exposing (Money, Currency(..))
+import Ipe.Decimal as Decimal
+import Ipe.Result as Result
+import Ipe.List as List
+import Ipe.String as String
+import Ipe.Task as Task
+import Ipe.Io as Io
+
+
+-- Split a restaurant bill three ways, exercising the ideas `Ipe.Money` turns on:
+--   • A `Money` carries its currency in the type, so adding USD to EUR is a typed
+--     `Err`, never a silently-wrong number.
+--   • `Money.allocate n` splits a value into n parts that sum back to the input
+--     EXACTLY — no lost or invented cent — with the residue distributed fairly.
+--   • Percentages (`addPercent`) are exact decimal arithmetic, not float drift.
+
+
+-- A $100.00 bill, plus an 18% tip, split three ways.
+bill : Money
+bill =
+    Money.fromMajor USD 100
+
+
+tipRate : Decimal.Decimal
+tipRate =
+    Decimal.fromInt 18
+
+
+-- The bill with tip added: `addPercent` on the Decimal amount, wrapped back into
+-- USD. Exact decimal arithmetic — 18% of $100.00 is $18.00, not $17.9999…
+withTip : Money
+withTip =
+    Money.mul (Decimal.fromString "1.18" |> Result.withDefault Decimal.one) bill
+
+
+renderShare : Int -> Money -> String
+renderShare i share =
+    "  diner " ++ String.fromInt (i + 1) ++ ": " ++ Money.format share
+
+
+-- `allocate` guarantees the parts sum to the input, so re-summing them recovers
+-- the total exactly — the invariant `sumOf` verifies below.
+main =
+    let
+        shares =
+            Money.allocate 3 withTip
+
+        resummed =
+            Money.sumOf USD shares
+
+        -- Adding a Money in a DIFFERENT currency is a typed error, not a bad sum.
+        crossCurrency =
+            Money.add bill (Money.fromMajor EUR 50)
+    in
+    do
+        Io.println ("Bill + 18% tip: " ++ Money.format withTip)
+        Io.println "Split 3 ways (parts sum to the total exactly):"
+        List.indexedMap renderShare shares
+            |> List.map Io.println
+            |> Task.sequence
+            |> Task.map (always ())
+        Io.println (reSumLine resummed)
+        Io.println (crossLine crossCurrency)
+
+
+reSumLine : Result Error Money -> String
+reSumLine result =
+    case result of
+        Ok total ->
+            "Re-summed shares: " ++ Money.format total
+
+        Err _ ->
+            "Re-summed shares: <currency mismatch>"
+
+
+crossLine : Result Error Money -> String
+crossLine result =
+    case result of
+        Ok m ->
+            "USD + EUR: " ++ Money.format m
+
+        Err _ ->
+            "USD + EUR: rejected (currency mismatch — a typed Err, not a bad number)"
