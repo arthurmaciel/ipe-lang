@@ -44,7 +44,15 @@ use crate::resolve::ModuleOrigin;
 /// be `Ipe`, matching the guard in `resolve::register_stdlib_import_aliases`.
 pub const STDLIB_MODULE_QUALIFIERS: &[(&[&str], &str)] = &[
     // ── Ipe.* pure + effect modules ────────────────────────────────────
-    (&["Ipe", "Basics"], "Basics"),
+    // NOTE — `Ipe.Basics` is DELIBERATELY absent: it is a COMPILED-SOURCE
+    // Layer-3 module (registered in `ipe::stdlib::COMPILED_STD_MODULES`). Its
+    // members are point-free `Ffi.kernel "Basics_*"` aliases that
+    // `detect_kernel_alias` routes to the registered `Basics*` `StdlibKernel`
+    // variants. A module is EITHER a kernel qualifier here OR compiled-source
+    // — never both (`compiled_vs_kernel_qualifier_disjoint`), so it stays out.
+    // The Tier-A ambient surface (bare `identity`/`not`/`always`/…) is
+    // preserved by `Env::install_builtin_vars`, which routes those names to
+    // the same kernel registry entries independently of this table.
     (&["Ipe", "String"], "String"),
     // NOTE — `Ipe.Char` is DELIBERATELY absent: it is a COMPILED-SOURCE
     // Layer-3 module (registered in `ipe::stdlib::COMPILED_STD_MODULES`). Its
@@ -1008,13 +1016,13 @@ impl Env {
             // (`ipe::stdlib::COMPILED_STD_MODULES`), so its whole surface resolves
             // from `Ipe/Bitwise.ipe` — the `Ffi.kernel "Bitwise_*"` aliases —
             // not from this kernel-qualifier catalog.
-            (
-                "Basics",
-                &[
-                    "identity", "always", "not", "toString", "modBy", "clamp", "fst", "snd",
-                    "compare", "negate", "abs", "sqrt", "min", "max",
-                ],
-            ),
+            // NOTE — `Ipe.Basics` is DELIBERATELY absent from this catalog:
+            // it is a compiled-source module; its `Basics_*` kernels are
+            // reached via `detect_kernel_alias` (through the `Ffi.kernel
+            // "Basics_*"` aliases in `Ipe/Basics.ipe`), not the qualifier
+            // table. The ambient unqualified surface (`identity`/`not`/…) is
+            // preserved by `install_builtin_vars`, which routes those names
+            // to the same kernel registry entries independently of QUALIFIERS.
             // `Ipe.Dict` — associative map kernels.
             (
                 "Dict",

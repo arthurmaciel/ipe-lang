@@ -1,8 +1,11 @@
--- | Ipe.Basics — non-numeric basics, the implicit prelude.
+-- | Ipe.Basics — the implicit prelude (Tier-A auto-import, compiled source).
 --
--- Each binding routes to its runtime kernel via `Ffi.kernel`. `clamp` is
--- polymorphic over any comparable type; the type-checker's `Comparable`
--- obligation rejects a function or record argument before it monomorphises.
+-- Each binding routes to its runtime kernel via `Ffi.kernel`. Polymorphic
+-- members with ordering or numeric obligations (`clamp`, `min`, `max`,
+-- `negate`, `abs`, `compare`) carry the bound implicitly — the type-checker's
+-- `Comparable`/`Number` obligation rejects a function or record argument
+-- before it monomorphises. `toString` carries the `Stringify` bound;
+-- `sqrt` is monomorphically `Float -> Float`.
 module Ipe.Basics exposing
     ( identity
     , always
@@ -10,6 +13,14 @@ module Ipe.Basics exposing
     , fst
     , snd
     , clamp
+    , toString
+    , modBy
+    , negate
+    , abs
+    , sqrt
+    , min
+    , max
+    , compare
     )
 
 
@@ -38,3 +49,35 @@ snd = Ffi.kernel "Basics_snd"
 
 clamp : a -> a -> a -> a
 clamp = Ffi.kernel "Basics_clamp"
+
+
+toString : a -> String
+toString = Ffi.kernel "Basics_toString"
+
+
+modBy : Int -> Int -> Int
+modBy = Ffi.kernel "Basics_modBy"
+
+
+negate : a -> a
+negate = Ffi.kernel "Basics_negate"
+
+
+abs : a -> a
+abs = Ffi.kernel "Basics_abs"
+
+
+sqrt : Float -> Float
+sqrt = Ffi.kernel "Basics_sqrt"
+
+
+min : a -> a -> a
+min = Ffi.kernel "Basics_min"
+
+
+max : a -> a -> a
+max = Ffi.kernel "Basics_max"
+
+
+compare : a -> a -> Order
+compare = Ffi.kernel "Basics_compare"

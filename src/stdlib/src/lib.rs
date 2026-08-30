@@ -252,10 +252,6 @@ const STD_MARKDOWN: &str = include_str!("../Ipe/Markdown.ipe");
 /// Every embedded `Ipe` module, keyed by its dotted import name.
 pub const MODULES: &[StdModule] = &[
     StdModule {
-        name: "Ipe.Basics",
-        source: BASICS,
-    },
-    StdModule {
         name: "Ipe.List",
         source: LIST,
     },
@@ -682,6 +678,17 @@ pub const COMPILED_STD_MODULES: &[CompiledStdModule] = &[
     CompiledStdModule {
         dotted: "Ipe.Tuple",
         source: TUPLE,
+    },
+    // Ipe.Basics — Layer-3 source (Tier-A auto-import, the implicit prelude).
+    // Every member is a point-free `Ffi.kernel "Basics_*"` alias resolved by
+    // `detect_kernel_alias` to the registered `Basics*` kernels. The ambient
+    // unqualified surface (`identity`/`not`/…) is preserved by
+    // `install_builtin_vars`, which routes those names to the same kernel
+    // registry entries independently of `STDLIB_MODULE_QUALIFIERS`.
+    // Disjoint from `STDLIB_MODULE_QUALIFIERS` (no `"Basics"` entry there).
+    CompiledStdModule {
+        dotted: "Ipe.Basics",
+        source: BASICS,
     },
     // Ipe.Maybe — Layer-3 source; every member is a point-free
     // `Ffi.kernel "Maybe_*"` alias resolved by `detect_kernel_alias` to the
