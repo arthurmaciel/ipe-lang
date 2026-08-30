@@ -1,0 +1,73 @@
+module Main exposing (main)
+
+import Ipe.Maybe as Maybe exposing (Maybe(..))
+import Ipe.Dict as Dict exposing (Dict)
+import Ipe.String as String
+import Ipe.Io as Io
+
+
+-- Resolve a user's display theme through a chain of lookups, any of which may
+-- come up empty: user -> their settings row -> the "theme" key. Each step is a
+-- `Dict.get` returning `Maybe`, and `Maybe.andThen` threads them: if any link is
+-- absent, the whole chain is `Nothing` and the later steps never run. A final
+-- `Maybe.withDefault` supplies the fallback. No nested `case`, no null checks.
+
+
+-- Which settings row each user id points at.
+userSettings : Dict String String
+userSettings =
+    Dict.fromList
+        [ ( "u1", "profile-a" )
+        , ( "u2", "profile-b" )
+        , ( "u3", "profile-missing" )
+        ]
+
+
+-- Each settings row is a small key/value store. "profile-a" sets a theme;
+-- "profile-b" exists but has no theme; "profile-missing" is not a real row.
+settingsRows : Dict String (Dict String String)
+settingsRows =
+    Dict.fromList
+        [ ( "profile-a", Dict.fromList [ ( "theme", "dark" ), ( "lang", "en" ) ] )
+        , ( "profile-b", Dict.fromList [ ( "lang", "pt" ) ] )
+        ]
+
+
+-- The chain. `Dict.get userId` is a `Maybe String` (the settings id); `andThen`
+-- feeds that id into the row lookup, itself a `Maybe`; a second `andThen` reads
+-- the "theme" key. Any `Nothing` along the way short-circuits the rest.
+lookupTheme : String -> Maybe String
+lookupTheme userId =
+    Dict.get userId userSettings
+        |> Maybe.andThen (\rowId -> Dict.get rowId settingsRows)
+        |> Maybe.andThen (\row -> Dict.get "theme" row)
+
+
+-- Resolve to a concrete theme, defaulting when any link was absent.
+themeFor : String -> String
+themeFor userId =
+    lookupTheme userId
+        |> Maybe.withDefault "system"
+
+
+-- A short report line. `Maybe.map` decorates a present value without touching
+-- the absent case, which `withDefault` then fills in — the read-only mirror of
+-- the `andThen` chain above.
+describe : String -> String
+describe userId =
+    let
+        resolved =
+            lookupTheme userId
+                |> Maybe.map (\theme -> "theme=" ++ theme)
+                |> Maybe.withDefault "no theme set, using system"
+    in
+    userId ++ ": " ++ resolved
+
+
+main =
+    do
+        Io.println (describe "u1")
+        Io.println (describe "u2")
+        Io.println (describe "u3")
+        Io.println (describe "ghost")
+        Io.println ("effective theme for u2: " ++ themeFor "u2")
