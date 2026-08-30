@@ -3,6 +3,7 @@ module Main exposing (main)
 import Ipe.Io as Io
 import Ipe.String
 import Ipe.Task as Task
+import Ipe.Duration as Duration
 
 
 -- SEAL positive: `RetryPolicy` builder functions return the correct strategy.
@@ -23,7 +24,7 @@ main =
         p4 = Task.withJitter p2
         p5 = Task.defaultRetryPolicy
         p6 = Task.withMaxAttempts 5 p5
-        p7 = Task.withBaseMs 200 p2
+        p7 = Task.withBaseMs (Duration.millis 200) p2
     in
     Task.andThen
         (\_ ->

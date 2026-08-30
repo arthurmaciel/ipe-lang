@@ -45,6 +45,8 @@ import Ipe.Ffi as Ffi
 import Ipe.Error exposing (Error)
 import Ipe.Maybe exposing (Maybe(..))
 import Ipe.Task as Task
+import Ipe.Duration as Duration exposing (Duration)
+import Ipe.ByteSize as ByteSize exposing (ByteSize)
 
 
 -- | Opaque handle to a cache.  The wrapped `Int` is the runtime's
@@ -78,19 +80,23 @@ withMaxEntries n cfg =
     { cfg | maxEntries = n }
 
 
--- | Override the per-entry TTL in milliseconds.  `0` disables TTL.
--- Expired entries are pruned on next access (lazy expiration).
-withTTL : Int -> CacheCfg -> CacheCfg
-withTTL ms cfg =
-    { cfg | ttlMs = ms }
+-- | Override the per-entry TTL as an `Ipe.Duration` (e.g. `Duration.seconds
+-- 60`).  `Duration.zero` disables TTL.  Expired entries are pruned on next
+-- access (lazy expiration).  The raw millisecond count is unwrapped here for the
+-- runtime `CacheCfg` fold.
+withTTL : Duration -> CacheCfg -> CacheCfg
+withTTL ttl cfg =
+    { cfg | ttlMs = Duration.toMillis ttl }
 
 
--- | Override the approximate byte cap.  Reserved for v0.16+ — the
--- v0.15.47 LRU is entry-count-bounded only; byte tracking lands
--- when the runtime gains per-value size accounting.
-withMaxBytes : Int -> CacheCfg -> CacheCfg
-withMaxBytes n cfg =
-    { cfg | maxBytes = n }
+-- | Override the approximate byte cap as an `Ipe.ByteSize` (e.g. `ByteSize.mib
+-- 8`).  `ByteSize.zero` disables the byte cap.  Reserved for v0.16+ — the
+-- entry-count LRU is byte-unaware today; byte tracking lands when the runtime
+-- gains per-value size accounting.  The raw byte count is unwrapped here for the
+-- runtime `CacheCfg` fold.
+withMaxBytes : ByteSize -> CacheCfg -> CacheCfg
+withMaxBytes cap cfg =
+    { cfg | maxBytes = ByteSize.toBytes cap }
 
 
 -- | Internal — direct kernel alias returning the raw cache id.

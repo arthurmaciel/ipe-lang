@@ -187,7 +187,7 @@ Each module listed below links to a detail page with full doc-strings and exampl
 | `retryWith` | `retryWith policy task` — run `task`, retrying according to `policy` whenever |
 | `sequence` | `sequence tasks` — run a list of tasks one after another, collecting their |
 | `succeed` | `succeed value` — a task that runs no effect and settles with `value`. The |
-| `withBaseMs` | `withBaseMs ms policy` — set the base delay in milliseconds. |
+| `withBaseMs` | `withBaseMs base policy` — set the base retry delay.  Takes a typed |
 | `withJitter` | `withJitter policy` — upgrade the policy's strategy to its jitter variant: |
 | `withMaxAttempts` | `withMaxAttempts n policy` — set the maximum number of attempts. |
 | `withRetryOn` | `withRetryOn pred policy` — an alias for `retryOn` with the same semantics and |

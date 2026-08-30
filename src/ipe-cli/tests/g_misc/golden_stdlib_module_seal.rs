@@ -353,12 +353,13 @@ fn csv_builds_and_runs() {
 const CACHE_MAIN: &str = "module Main exposing (main)\n\
     import Ipe.Task as Task\n\
     import Ipe.Io as Io\n\
-    import Ipe.Cache as Cache\n\n\
+    import Ipe.Cache as Cache\n\
+    import Ipe.Duration as Duration\n\n\
 import Ipe.Maybe
     program : Task Error String\n\
     program =\n\
     \x20   let\n\
-    \x20       cfg = Cache.defaultCfg |> Cache.withMaxEntries 64 |> Cache.withTTL 30000\n\
+    \x20       cfg = Cache.defaultCfg |> Cache.withMaxEntries 64 |> Cache.withTTL (Duration.millis 30000)\n\
     \x20   in\n\
     \x20   Cache.new cfg\n\
     \x20       |> Task.andThen\n\

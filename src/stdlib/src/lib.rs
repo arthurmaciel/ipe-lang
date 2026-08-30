@@ -720,6 +720,33 @@ const ERROR: &str = include_str!("../Ipe/Error.ipe");
 /// Not in `STDLIB_MODULE_QUALIFIERS` so disjointness invariant holds.
 const STD_UI_EVENTS: &str = include_str!("../Ipe/Ui/Events.ipe");
 
+/// `Ipe.Net` — the opaque, range-validated `Port` newtype (compiled source).
+///
+/// Pure Ipê: defines `type Port = Port Int` and pattern-matches it in `toInt`;
+/// the constructor is unexported, so `fromInt` (the `1..65535` parse boundary,
+/// building its `Err` through `Ipe.Error.invalidInput`) is the only way in.
+/// No `Ffi.kernel` call. Not in `STDLIB_MODULE_QUALIFIERS`, so the disjointness
+/// invariant holds.
+const STD_NET: &str = include_str!("../Ipe/Net.ipe");
+
+/// `Ipe.Duration` — the opaque, unit-explicit `Duration` newtype (compiled source).
+///
+/// Pure Ipê: defines `type Duration = Duration Int` (whole milliseconds) and
+/// pattern-matches it in `toMillis`; the constructor is unexported, so the
+/// unit-named constructors (`millis`/`seconds`/`minutes`, each clamping a
+/// negative to zero) are the only way in. No `Ffi.kernel` call. Not in
+/// `STDLIB_MODULE_QUALIFIERS`, so the disjointness invariant holds.
+const STD_DURATION: &str = include_str!("../Ipe/Duration.ipe");
+
+/// `Ipe.ByteSize` — the opaque, unit-explicit `ByteSize` newtype (compiled source).
+///
+/// Pure Ipê: defines `type ByteSize = ByteSize Int` (bytes) and pattern-matches
+/// it in `toBytes`; the constructor is unexported, so the unit-named
+/// constructors (`bytes`/`kib`/`mib`, each clamping a negative to zero) are the
+/// only way in. No `Ffi.kernel` call. Not in `STDLIB_MODULE_QUALIFIERS`, so the
+/// disjointness invariant holds.
+const STD_BYTESIZE: &str = include_str!("../Ipe/ByteSize.ipe");
+
 /// Every compiled-source stdlib module, keyed by its dotted import name.
 ///
 /// Disjoint from [`MODULES`] (parse fixtures) and from `ipe_canon`'s
@@ -728,6 +755,18 @@ pub const COMPILED_STD_MODULES: &[CompiledStdModule] = &[
     CompiledStdModule {
         dotted: "Ipe.Palette",
         source: PALETTE,
+    },
+    CompiledStdModule {
+        dotted: "Ipe.Net",
+        source: STD_NET,
+    },
+    CompiledStdModule {
+        dotted: "Ipe.Duration",
+        source: STD_DURATION,
+    },
+    CompiledStdModule {
+        dotted: "Ipe.ByteSize",
+        source: STD_BYTESIZE,
     },
     CompiledStdModule {
         dotted: "Ipe.Tuple",

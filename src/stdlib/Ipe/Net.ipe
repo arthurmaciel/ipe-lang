@@ -1,0 +1,63 @@
+-- | Ipe.Net — typed network primitives (Layer 3 Ipe source).
+--
+-- `Port` is an opaque TCP/UDP port number.  The ONLY way to build one is
+-- `fromInt`, which REJECTS any value outside the valid `1..65535` range (0 is
+-- the reserved "no port" sentinel and is not a dialable port, so it is
+-- rejected too).  Because a `Port` is validated at construction, every
+-- connection surface that used to take a bare `Int` — `Email.SmtpConfig.port`,
+-- `Db.Dsn.build` — now takes a `Port`, so an out-of-range or zero port is a
+-- construction-time `Err`, never a value that reaches a live socket.
+--
+-- Recover the raw number at the runtime boundary with `toInt`.
+module Ipe.Net exposing
+    ( Port
+    , fromInt
+    , toInt
+    , min
+    , max
+    )
+
+
+import Ipe.Error as Error exposing (Error)
+import Ipe.Result exposing (Result(..))
+
+
+-- | An opaque, range-validated TCP/UDP port.  Construct only via `fromInt`.
+-- The constructor is NOT exported, so a `Port` is a proof that its wrapped
+-- value is in `1..65535`.
+type Port
+    = Port Int
+
+
+-- | `fromInt n` — the parse-don't-validate seal: the only `Port` constructor.
+-- Returns `Ok` when `n` is in `1..65535`, otherwise `Err` (a port of 0, a
+-- negative, or a value above 65535 is not a dialable port).
+fromInt : Int -> Result Error Port
+fromInt n =
+    if n >= 1 && n <= 65535 then
+        Ok (Port n)
+
+    else
+        Err (Error.invalidInput "Ipe.Net.Port: port out of range (expected 1..65535)")
+
+
+-- | `toInt port` — recover the raw port number for the runtime boundary.
+toInt : Port -> Int
+toInt p =
+    case p of
+        Port n ->
+            n
+
+
+-- | The smallest valid port (`1`).  A total value — useful as the seed for
+-- `Result.withDefault` when a compile-time-known-valid literal (e.g. a default
+-- config port) is built through `fromInt`.
+min : Port
+min =
+    Port 1
+
+
+-- | The largest valid port (`65535`).  A total value.
+max : Port
+max =
+    Port 65535

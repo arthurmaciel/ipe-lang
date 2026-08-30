@@ -74,6 +74,8 @@ import Ipe.Ffi as Ffi
 import Ipe.Error exposing (Error)
 import Ipe.Bytes exposing (Bytes)
 import Ipe.Secret
+import Ipe.Net as Net exposing (Port)
+import Ipe.Result as Result
 
 
 -- | A single email message.
@@ -120,6 +122,12 @@ type alias SesConfig =
 
 
 -- | SMTP transport: host + port + creds.  The `pass` is a sealed `Secret`.
+--
+-- The `port` field is a raw `Int` because it is the kernel-transport
+-- serialisation the runtime `Email_send` reads directly.  Do NOT set it via a
+-- record literal — the validated entry point is `withSmtpPort`, which takes a
+-- range-checked `Ipe.Net.Port` and unwraps it here, so an out-of-range port
+-- cannot reach the transport.
 type alias SmtpConfig =
     { host : String
     , port : Int
@@ -249,16 +257,26 @@ withSesSecret secret cfg =
 defaultSmtpConfig : String -> SmtpConfig
 defaultSmtpConfig host =
     { host = host
-    , port = 587
+    , port = Net.toInt submissionPort
     , user = ""
     , pass = Secret.fromString ""
     }
 
 
--- | `withSmtpPort 465 cfg` — replace the SMTP port.
-withSmtpPort : Int -> SmtpConfig -> SmtpConfig
+-- | The SMTP submission port (587) as a validated `Port`.  `Net.fromInt 587`
+-- always succeeds; `Net.min` is the never-taken `withDefault` seed.
+submissionPort : Port
+submissionPort =
+    Net.fromInt 587 |> Result.withDefault Net.min
+
+
+-- | `withSmtpPort (Net.fromInt 465 |> Result.withDefault Net.min) cfg` — replace
+-- the SMTP port with a range-validated `Ipe.Net.Port`.  An out-of-range port is
+-- a construction-time `Err` on the `Net.fromInt` boundary, so it can never reach
+-- this setter (and thus never the transport).
+withSmtpPort : Port -> SmtpConfig -> SmtpConfig
 withSmtpPort port cfg =
-    { cfg | port = port }
+    { cfg | port = Net.toInt port }
 
 
 -- | `withSmtpUser "user" cfg` — replace the SMTP username.

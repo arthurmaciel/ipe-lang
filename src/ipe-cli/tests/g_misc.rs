@@ -88,6 +88,8 @@ mod golden_test_summary_line_219;
 mod golden_time_format_arith;
 #[path = "g_misc/golden_tree.rs"]
 mod golden_tree;
+#[path = "g_misc/golden_typed_primitives_seal.rs"]
+mod golden_typed_primitives_seal;
 #[path = "g_misc/golden_unit_pattern.rs"]
 mod golden_unit_pattern;
 #[path = "g_misc/golden_update_base_after_move.rs"]

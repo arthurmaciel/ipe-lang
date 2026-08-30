@@ -39,6 +39,8 @@ import Ipe.Ffi as Ffi
 import Ipe.Error exposing (Error)
 import Ipe.Result as Result
 import Ipe.Task exposing (Task)
+import Ipe.Net as Net exposing (Port)
+import Ipe.Maybe exposing (Maybe(..))
 
 
 -- ── Types ─────────────────────────────────────────────────────────────────────
@@ -81,7 +83,7 @@ parse =
 build :
     { driver : Driver
     , host : String
-    , port : Int
+    , port : Port
     , database : String
     , user : String
     , password : Secret
@@ -92,7 +94,7 @@ build parts =
     buildKernel
         (driverTag parts.driver)
         parts.host
-        parts.port
+        (Net.toInt parts.port)
         parts.database
         parts.user
         parts.password
@@ -122,9 +124,20 @@ host =
     Ffi.kernel "Db.Dsn_host"
 
 
--- | `port dsn` — the port (`0` for sqlite).
-port : Dsn -> Int
-port =
+-- | `port dsn` — the network port as a validated `Ipe.Net.Port`, or `Nothing`
+-- for a file-backed sqlite descriptor (which has no port; the kernel returns the
+-- `0` sentinel, which `Net.fromInt` rejects, yielding `Nothing`).  A network
+-- descriptor always carries a `1..65535` port, so `Net.fromInt` re-proves the
+-- range the kernel already enforced at construction.
+port : Dsn -> Maybe Port
+port dsn =
+    Result.toMaybe (Net.fromInt (portRaw dsn))
+
+
+-- Internal — the raw kernel port (`0` for sqlite).  Never exported; the only
+-- public reader is `port`, which wraps it into a validated `Maybe Port`.
+portRaw : Dsn -> Int
+portRaw =
     Ffi.kernel "Db.Dsn_port"
 
 

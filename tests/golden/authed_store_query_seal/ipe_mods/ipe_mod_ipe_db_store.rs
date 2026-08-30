@@ -218,6 +218,32 @@ impl<T1: IpeStringify + std::fmt::Debug + 'static> IpeStringify for IpeDbStoreQu
     }
 }
 #[derive(Clone, Debug, PartialEq)]
+pub(crate) enum IpeDbStoreCellType {
+    NumericCell,
+    TextCell,
+}
+impl IpeStringify for IpeDbStoreCellType {
+    fn ipe_show(&self) -> String {
+        match self {
+            IpeDbStoreCellType::NumericCell => "NumericCell".to_string(),
+            IpeDbStoreCellType::TextCell => "TextCell".to_string(),
+        }
+    }
+}
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum IpeDbStoreSortDir {
+    Ascending,
+    Descending,
+}
+impl IpeStringify for IpeDbStoreSortDir {
+    fn ipe_show(&self) -> String {
+        match self {
+            IpeDbStoreSortDir::Ascending => "Ascending".to_string(),
+            IpeDbStoreSortDir::Descending => "Descending".to_string(),
+        }
+    }
+}
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) enum IpeDbStoreOrder {
     Asc,
     Desc,

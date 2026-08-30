@@ -3,8 +3,9 @@
 -- Clock reads (`now`, `unixMillis`) return `Task Error Int` (the
 -- value is the milliseconds since the Unix epoch).  Pure helpers
 -- (`format*`, `timeString`, `addMillis`, `diffMillis`) work on the
--- integer millisecond value directly.  `every` is the Ipe.Web /
--- Ipe.Tui subscription helper that emits a `Sub msg` every N ms.
+-- integer millisecond value directly.  `sleep` and `every` take a typed
+-- `Ipe.Duration` span; `every` is the Ipe.Web / Ipe.Tui subscription helper that
+-- emits a `Sub msg` once per interval.
 module Ipe.Time exposing
     ( now, unixMillis, sleep
     , timeString
@@ -17,6 +18,7 @@ module Ipe.Time exposing
 
 import Ipe.Ffi as Ffi
 import Ipe.Error exposing (Error)
+import Ipe.Duration as Duration exposing (Duration)
 
 
 -- Clock + sleep
@@ -30,8 +32,16 @@ unixMillis : () -> Task Error Int
 unixMillis = Ffi.kernel "Time_unixMillis"
 
 
-sleep : Int -> Task Error ()
-sleep = Ffi.kernel "Time_sleep"
+-- | `sleep span` -- resolve after `span` elapses.  Takes a typed
+-- `Ipe.Duration` (e.g. `Duration.seconds 2`); the raw milliseconds are unwrapped
+-- for the runtime kernel.
+sleep : Duration -> Task Error ()
+sleep span =
+    sleepKernel (Duration.toMillis span)
+
+
+sleepKernel : Int -> Task Error ()
+sleepKernel = Ffi.kernel "Time_sleep"
 
 
 -- Pure formatting
@@ -71,10 +81,16 @@ diffMillis = Ffi.kernel "Time_diffMillis"
 -- Subscriptions
 
 
--- | `every intervalMillis msg` -- Ipe.Web / Ipe.Tui subscription
--- that emits `msg` every `intervalMillis` milliseconds.
-every : Int -> msg -> Sub msg
-every = Ffi.kernel "Time_every"
+-- | `every interval msg` -- Ipe.Web / Ipe.Tui subscription that emits `msg` once
+-- per `interval`.  Takes a typed `Ipe.Duration` (e.g. `Duration.seconds 1`); the
+-- raw milliseconds are unwrapped for the runtime kernel.
+every : Duration -> msg -> Sub msg
+every interval msg =
+    everyKernel (Duration.toMillis interval) msg
+
+
+everyKernel : Int -> msg -> Sub msg
+everyKernel = Ffi.kernel "Time_every"
 
 
 -- Pure calendar helpers

@@ -38,6 +38,7 @@ module Ipe.Task exposing
 
 
 import Ipe.Ffi as Ffi
+import Ipe.Duration as Duration exposing (Duration)
 
 
 -- ── Construction ─────────────────────────────────────────────────────────────
@@ -349,14 +350,26 @@ withMaxAttempts 4 (exponentialBackoff 3 100) --> RetryPolicy e
 withMaxAttempts : Int -> RetryPolicy e -> RetryPolicy e
 withMaxAttempts = Ffi.kernel "Task_withMaxAttempts"
 
-{-| `withBaseMs ms policy` — set the base delay in milliseconds.
+{-| `withBaseMs base policy` — set the base retry delay.  Takes a typed
+`Ipe.Duration` (unit named at the call site); the raw milliseconds are unwrapped
+for the runtime policy kernel.
 
-```ipe
-withBaseMs 250 (exponentialBackoff 3 100) --> RetryPolicy e
+The example is `ipe:skip`-exempt from the doc-example type-check: it names the
+cross-module `Duration.millis`, which needs `import Ipe.Duration` — an import the
+doc-example checker does not inject (it brings only the documenting module's
+exports into an example's scope, not its own imports).
+
+```ipe ipe:skip
+withBaseMs (Duration.millis 250) (exponentialBackoff 3 100) --> RetryPolicy e
 ```
 -}
-withBaseMs : Int -> RetryPolicy e -> RetryPolicy e
-withBaseMs = Ffi.kernel "Task_withBaseMs"
+withBaseMs : Duration -> RetryPolicy e -> RetryPolicy e
+withBaseMs base policy =
+    withBaseMsKernel (Duration.toMillis base) policy
+
+
+withBaseMsKernel : Int -> RetryPolicy e -> RetryPolicy e
+withBaseMsKernel = Ffi.kernel "Task_withBaseMs"
 
 {-| `retryWith policy task` — run `task`, retrying according to `policy` whenever
 it fails. The task succeeds on the first attempt that settles `Ok`; it fails with

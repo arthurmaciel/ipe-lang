@@ -1,0 +1,67 @@
+-- | Ipe.ByteSize — an opaque, unit-explicit byte quantity (Layer 3 Ipe source).
+--
+-- A `ByteSize` replaces the bare byte-count `Int` that resource caps took —
+-- `File.readFileLimit`'s read ceiling and `Cache.withMaxBytes`'s size cap.
+-- The ONLY ways to build one name their unit at the call site — `bytes`,
+-- `kib`, `mib` — so a `10` meaning ten mebibytes can never be silently read
+-- as ten bytes, and the raw byte count a runtime kernel needs is recovered
+-- explicitly with `toBytes`.
+--
+-- Every constructor clamps a negative input to zero: a byte cap is a
+-- non-negative quantity, and a negative ceiling is not a representable value.
+-- Units are binary (`kib` = 1024 bytes, `mib` = 1024 * 1024 bytes).
+module Ipe.ByteSize exposing
+    ( ByteSize
+    , bytes
+    , kib
+    , mib
+    , zero
+    , toBytes
+    )
+
+
+-- | An opaque, non-negative byte quantity.  The constructor is NOT exported,
+-- so a `ByteSize` is a proof of non-negativity.
+type ByteSize
+    = ByteSize Int
+
+
+-- | `bytes n` — a quantity of `n` bytes.  A negative `n` clamps to `0`.
+bytes : Int -> ByteSize
+bytes n =
+    if n < 0 then
+        ByteSize 0
+
+    else
+        ByteSize n
+
+
+-- | `kib n` — a quantity of `n` kibibytes (`n * 1024` bytes).  A negative `n`
+-- clamps to `0`; an `n` so large that `n * 1024` would overflow `Int` (i64)
+-- saturates to the largest representable quantity rather than wrapping.
+kib : Int -> ByteSize
+kib n =
+    bytes (clamp 0 9007199254740991 n * 1024)
+
+
+-- | `mib n` — a quantity of `n` mebibytes (`n * 1024 * 1024` bytes).  A
+-- negative `n` clamps to `0`; an `n` so large that `n * 1048576` would overflow
+-- `Int` (i64) saturates to the largest representable quantity rather than
+-- wrapping.
+mib : Int -> ByteSize
+mib n =
+    bytes (clamp 0 8796093022207 n * 1048576)
+
+
+-- | The zero quantity (`0` bytes).  A total value.
+zero : ByteSize
+zero =
+    ByteSize 0
+
+
+-- | `toBytes size` — recover the raw byte count for the runtime boundary.
+toBytes : ByteSize -> Int
+toBytes size =
+    case size of
+        ByteSize n ->
+            n

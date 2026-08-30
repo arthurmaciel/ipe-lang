@@ -175,7 +175,7 @@ pub struct RecDatabaseDriverHostPasswordPortTlsUser {
     driver: IpeDbDsnDriver,
     host: String,
     password: ipe_runtime::secret::Secret,
-    port: i64,
+    port: IpeNetPort,
     tls: IpeDbDsnTlsMode,
     user: String,
 }
@@ -313,7 +313,7 @@ pub struct RecFragLimOffOrderingsPoisonStore<T1: 'static> {
     frag: IpeMaybe<ipe_runtime::db::SqlFragment>,
     lim: IpeMaybe<i64>,
     off: IpeMaybe<i64>,
-    orderings: Vec<(String, bool, bool)>,
+    orderings: Vec<(String, IpeDbStoreCellType, IpeDbStoreSortDir)>,
     poison: IpeMaybe<ipe_runtime::error::IpeError>,
     store: IpeDbStoreStore<T1>,
 }
@@ -634,9 +634,15 @@ fn main() {
     }
 }
 
+#[path = "ipe_mods/ipe_mod_ipe_duration.rs"]
+mod ipe_mod_ipe_duration;
+pub(crate) use ipe_mod_ipe_duration::*;
 #[path = "ipe_mods/ipe_mod_ipe_task.rs"]
 mod ipe_mod_ipe_task;
 pub(crate) use ipe_mod_ipe_task::*;
+#[path = "ipe_mods/ipe_mod_ipe_net.rs"]
+mod ipe_mod_ipe_net;
+pub(crate) use ipe_mod_ipe_net::*;
 #[path = "ipe_mods/ipe_mod_ipe_db_dsn.rs"]
 mod ipe_mod_ipe_db_dsn;
 pub(crate) use ipe_mod_ipe_db_dsn::*;
