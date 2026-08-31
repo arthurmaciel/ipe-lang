@@ -1520,7 +1520,7 @@ fn is_ipe_web_project(emitted: &ipe_backend::EmittedProject) -> bool {
 /// establishes) be driven by `--port` exactly like a Ipe.Web app is.
 ///
 /// Also provides the watch-scoped half of session continuity —
-/// default the dev session store to `sqlite` (persisted under `out_dir`,
+/// default the dev session store to `file` (persisted under `out_dir`,
 /// confined to the emit tree's parent so the emit→cargo bridge's
 /// `src/`-only prune pass never touches it) unless the caller's OWN
 /// environment already configures `IPE_WEB_STORE`, in which case that
@@ -1538,14 +1538,22 @@ fn child_env(port: u16, out_dir: &Path, hot_token: Option<&str>) -> Vec<(String,
         env.push(("IPE_WATCH_HOT_TOKEN".to_owned(), tok.to_owned()));
     }
     if std::env::var("IPE_WEB_STORE").is_err() {
-        env.push(("IPE_WEB_STORE".to_owned(), "sqlite".to_owned()));
-        let db_path = out_dir
+        // `file`, not `sqlite`: a plain `Web.app` reaches no DB kernel, so the
+        // emitted crate carries no `db` feature and the sqlite store compiles
+        // out (it would silently degrade to an in-memory store that does NOT
+        // survive a rebuild — no Model handoff). The `file` store rides the
+        // `web` feature every web build already has, reusing the same
+        // schema-tagged checkpoint codec, so the blue-green swap can rehydrate
+        // the Model. Confined to the emit tree's parent so the `src/`-only
+        // prune pass never touches it.
+        env.push(("IPE_WEB_STORE".to_owned(), "file".to_owned()));
+        let store_path = out_dir
             .parent()
             .unwrap_or(out_dir)
-            .join(".ipe-watch-sessions.db");
+            .join(".ipe-watch-sessions.json");
         env.push((
             "IPE_WEB_STORE_PATH".to_owned(),
-            db_path.to_string_lossy().into_owned(),
+            store_path.to_string_lossy().into_owned(),
         ));
     }
     // A dev rebuild is down for seconds (the cargo relink dominates), so widen
@@ -1694,8 +1702,8 @@ fn warn_if_memory_store() {
             "{}",
             watch_line(
                 "[ipe watch] warning: IPE_WEB_STORE=memory is set — session state will NOT \
-                 survive a watch-triggered restart. Unset it (watch defaults to sqlite) or set \
-                 IPE_WEB_STORE=sqlite explicitly to keep your session across rebuilds.",
+                 survive a watch-triggered restart. Unset it (watch defaults to a file-backed \
+                 store) or set IPE_WEB_STORE=file explicitly to keep your session across rebuilds.",
                 WatchRole::Info
             )
         );
