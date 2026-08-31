@@ -1,0 +1,98 @@
+module Main exposing (main)
+
+import Ipe.WebSocket as WebSocket
+import Ipe.Url as Url
+import Ipe.Duration as Duration
+import Ipe.Error exposing (Error)
+import Ipe.Result as Result exposing (Result(..))
+import Ipe.Maybe as Maybe
+import Ipe.String as String
+import Ipe.List as List
+import Ipe.Task as Task
+import Ipe.Io as Io
+
+
+-- Seal WebSocket targets and build a connect configuration without opening a
+-- socket, exercising the ideas most `Ipe.WebSocket` code turns on:
+--   • A `WsUrl` is a proof of scheme. The only constructor, `WebSocket.url`,
+--     takes an already-validated `Ipe.Url.Url` and returns `Ok` only when the
+--     scheme is `ws` or `wss`; anything else is a typed `Err`. A non-WebSocket
+--     address can never reach `connect`.
+--   • The connect config is a typed record with builder helpers. Start from
+--     `WebSocket.defaultCfg wsUrl`, then override with `withHeaders` /
+--     `withTimeout` / `withPingInterval`. Timeouts are typed `Ipe.Duration`
+--     values, not raw milliseconds.
+--   • Two parse boundaries compose: `Url.fromString` rejects a malformed URL,
+--     then `WebSocket.url` narrows the scheme — each failure is a typed `Err`.
+
+
+-- Seal a raw string into a `WsUrl`: first `Url.fromString`, then the ws/wss
+-- scheme narrowing. Either boundary can reject with a typed error.
+seal : String -> Result Error WebSocket.WsUrl
+seal raw =
+    Url.fromString raw
+        |> Result.andThen WebSocket.url
+
+
+-- Describe the outcome of sealing a candidate: the sealed host, or the rejection.
+describe : String -> String
+describe raw =
+    case seal raw of
+
+        Ok wsUrl ->
+            raw
+                ++ "  ->  sealed host="
+                ++ Maybe.withDefault "?" (Url.host (WebSocket.toUrl wsUrl))
+
+        Err _ ->
+            raw ++ "  ->  REJECTED"
+
+
+-- Candidates: an encrypted wss URL, a plain ws URL, and two wrong schemes.
+candidates : List String
+candidates =
+    [ "wss://feed.example.com/stream"
+    , "ws://localhost:8080/echo"
+    , "https://example.com/not-a-socket"
+    , "not a url at all"
+    ]
+
+
+-- Build a connect config for a sealed URL: custom auth header, a 10 s handshake
+-- timeout, and a 15 s ping cadence. Nothing connects — the config is a value.
+configFor : WebSocket.WsUrl -> WebSocket.WebSocketCfg
+configFor wsUrl =
+    WebSocket.defaultCfg wsUrl
+        |> WebSocket.withHeaders [ ( "authorization", "Bearer token" ) ]
+        |> WebSocket.withTimeout (Duration.seconds 10)
+        |> WebSocket.withPingInterval (Duration.seconds 15)
+
+
+main =
+    do
+        Io.println "url sealing:"
+        List.map (\c -> Io.println ("  " ++ describe c)) candidates
+            |> printAll
+        case seal "wss://feed.example.com/stream" of
+
+            Ok wsUrl ->
+                let
+                    cfg =
+                        configFor wsUrl
+                in
+                Io.println
+                    ("config: timeout="
+                        ++ String.fromInt cfg.timeout
+                        ++ "ms ping="
+                        ++ String.fromInt cfg.pingInterval
+                        ++ "ms"
+                    )
+
+            Err _ ->
+                Io.eprintln "the feed URL did not seal"
+
+
+printAll : List (Task Error ()) -> Task Error ()
+printAll tasks =
+    Task.sequence tasks
+        |> Task.map (\_ -> ())

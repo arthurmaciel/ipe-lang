@@ -1,0 +1,73 @@
+module Main exposing (main)
+
+import Ipe.Css as Css
+import Ipe.Io as Io
+
+
+-- Build a stylesheet with the typed CSS DSL, exercising the three ideas most
+-- `Ipe.Css` code turns on:
+--   • Declarations are OPAQUE and gated at CONSTRUCTION. `CssProp` and `CssRule`
+--     have no public constructor — a length comes from `Css.px`, a colour from
+--     `Css.hex`, a rule from `Css.rule` — and every value is scanned when it is
+--     built, so a rendered stylesheet is provably post-scan.
+--   • A value that fails policy DROPS rather than emitting a broken declaration.
+--     A selector the sanitizer rejects yields `CssRuleDropped`, which renders as
+--     the empty string — never a half-written rule that could break out of the
+--     `<style>` sink.
+--   • The typed builders are the safe default. You never hand-format a
+--     `"color: red"` string; you write `Css.color (Css.hex "#e2e8f0")`, and the
+--     renderer joins the declarations for you.
+
+
+-- One rule: a selector plus a list of typed declarations. The colour and lengths
+-- are typed values, not strings — the DSL formats them into a valid rule.
+card : Css.CssRule
+card =
+    Css.rule ".card"
+        [ Css.background (Css.hex "#1a1a2e")
+        , Css.color (Css.hex "#e2e8f0")
+        , Css.padding (Css.px 16)
+        , Css.borderRadius (Css.px 8)
+        , Css.fontSize (Css.rem 1.0)
+        ]
+
+
+-- A responsive rule nested in a media query. `Css.media` parses the query
+-- through the same selector grammar, so a malformed query drops the block
+-- rather than emitting an unterminated at-rule.
+wideCard : Css.CssRule
+wideCard =
+    Css.media "screen and (min-width: 640px)"
+        [ Css.rule ".card" [ Css.padding (Css.px 32) ] ]
+
+
+-- A rule built from an unsafe selector. The sanitizer rejects it, so the whole
+-- rule becomes `CssRuleDropped` and renders as nothing — the injection attempt
+-- cannot reach the output.
+injected : Css.CssRule
+injected =
+    Css.rule ".card { } </style><script>alert(1)</script>"
+        [ Css.color (Css.hex "#ff0000") ]
+
+
+-- `Css.stylesheet` renders a list of rules to one string, finishing through the
+-- breakout floor. The dropped rule contributes nothing.
+sheet : String
+sheet =
+    Css.stylesheet [ card, wideCard, injected ]
+
+
+-- `Css.styles` renders a list of declarations as one inline `style="..."` value.
+inline : String
+inline =
+    Css.styles
+        [ Css.display Css.Flex
+        , Css.gap (Css.px 12)
+        ]
+
+
+main =
+    do
+        Io.println "stylesheet:"
+        Io.println sheet
+        Io.println ("inline: " ++ inline)

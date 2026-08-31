@@ -1,0 +1,92 @@
+module Main exposing (main)
+
+-- | ui-layout — building a view with `Ipe.Ui` layout primitives.
+--
+-- `Ipe.Ui` is the element/attribute surface a `Ipe.Tea.Web` view returns. You
+-- describe a page as a tree of typed `Element msg` values — `row`, `column`,
+-- `el`, `text`, `button` — with a list of typed `Attribute msg` on each. The
+-- ideas this example turns on:
+--   • Layout is composition, not markup. `row` and `column` place their children
+--     along an axis; `el` wraps a single child. You nest them to build structure,
+--     never hand-writing tags.
+--   • Attributes are typed values, not CSS strings. `spacing`, `padding`, and
+--     `width` take `Int`/`Length` values; colours come from `Ui.rgb`. The runtime
+--     renders them safely — a value cannot smuggle raw style into the page.
+--   • Events carry your `Msg`. `Ui.onClick Increment` attaches a typed message to
+--     a button; when it fires, the TEA loop routes it through `update`.
+
+
+import Ipe.Tea.Web as Web
+import Ipe.Ui as Ui
+import Ipe.Tea.Web.Cmd as Cmd
+import Ipe.Tea.Web.Sub as Sub
+import Ipe.String as String
+
+
+type Msg
+    = Increment
+    | Decrement
+
+
+type alias Model =
+    { count : Int }
+
+
+init : a -> ( Model, Cmd Msg )
+init _req =
+    ( { count = 0 }, Cmd.none )
+
+
+update : Msg -> Model -> ( Model, Cmd Msg )
+update msg model =
+    case msg of
+
+        Increment ->
+            ( { model | count = model.count + 1 }, Cmd.none )
+
+        Decrement ->
+            ( { model | count = model.count - 1 }, Cmd.none )
+
+
+subscriptions : Model -> Sub Msg
+subscriptions _model =
+    Sub.none
+
+
+-- The view is a tree of typed elements. `column` stacks the heading and the
+-- counter row with `spacing`; the inner `row` places the two buttons and the
+-- live count side by side. Colours and padding are typed attributes, not raw
+-- CSS. Each button carries a typed `Msg` via `onClick`.
+view : Model -> Element Msg
+view model =
+    Ui.column
+        [ Ui.spacing 16
+        , Ui.padding 24
+        ]
+        [ Ui.el
+            [ Ui.style "font-weight" "bold" ]
+            (Ui.text "Counter")
+        , Ui.row
+            [ Ui.spacing 12 ]
+            [ Ui.button
+                [ Ui.padding 8, Ui.onClick Decrement ]
+                { onPress = Just Decrement, label = Ui.text "-" }
+            , Ui.el
+                [ Ui.style "color" (Ui.colorCss (Ui.rgb 30 30 60)) ]
+                (Ui.text (String.fromInt model.count))
+            , Ui.button
+                [ Ui.padding 8, Ui.onClick Increment ]
+                { onPress = Just Increment, label = Ui.text "+" }
+            ]
+        ]
+
+
+main =
+    Web.app
+        { init = init
+        , update = update
+        , view = view
+        , subscriptions = subscriptions
+        , routes = []
+        , notFound = Increment
+        }

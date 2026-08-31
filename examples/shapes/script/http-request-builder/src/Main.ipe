@@ -1,0 +1,90 @@
+module Main exposing (main)
+
+import Ipe.Http as Http
+import Ipe.Error exposing (Error)
+import Ipe.Result as Result exposing (Result(..))
+import Ipe.Maybe as Maybe exposing (Maybe(..))
+import Ipe.Dict as Dict
+import Ipe.List as List
+import Ipe.Task as Task
+import Ipe.Io as Io
+
+
+-- Assemble and inspect outbound HTTP requests without sending one, exercising the
+-- three ideas most `Ipe.Http` code turns on:
+--   • The request TARGET is a typed, scheme-narrowed value, not a raw string.
+--     `Http.defaultRequestFromString` runs the one URL parse and then rejects any
+--     scheme that is not `http`/`https` — so a `file:` or `ftp:` target is a typed
+--     `Err` at construction, never a request that reaches the network.
+--   • `HttpMethod` is a closed set. `Http.methodFromString` is the single parse
+--     boundary for an inbound verb string; an unknown verb is `Nothing`, never a
+--     silent default.
+--   • `Http.parseQuery` decodes a query string into a `Dict`, percent-decoding
+--     each key and value and keeping the first of any duplicate key — the result
+--     is a typed map, not a re-splittable string.
+
+
+-- Build a request from a raw string target. `defaultRequestFromString` is the
+-- MARKED boundary: it parses the URL once and narrows the scheme, returning a
+-- `Result`. The `with*` builders then refine the typed request purely.
+buildRequest : String -> Result Error Http.HttpRequest
+buildRequest raw =
+    Http.defaultRequestFromString raw
+        |> Result.map (Http.withMethod Http.Post)
+        |> Result.map (Http.withHeader "content-type" "application/json")
+        |> Result.map (Http.withBody "{\"ok\":true}")
+
+
+-- Describe the outcome of building a request: the assembled method + target, or
+-- the rejection. A non-http(s) scheme never yields a request value.
+describe : String -> String
+describe raw =
+    case buildRequest raw of
+
+        Ok req ->
+            raw ++ "  ->  " ++ Http.methodToString req.method ++ " " ++ req.url
+
+        Err _ ->
+            raw ++ "  ->  REJECTED"
+
+
+-- Candidate targets: two valid http(s) URLs and two rejected schemes.
+targets : List String
+targets =
+    [ "https://api.example.com/v1/orders"
+    , "http://example.com/health"
+    , "ftp://files.example.com/data"
+    , "file:///etc/passwd"
+    ]
+
+
+-- Parse an inbound verb string at the single typed boundary.
+methodLabel : String -> String
+methodLabel raw =
+    case Http.methodFromString raw of
+
+        Just m ->
+            raw ++ " -> " ++ Http.methodToString m
+
+        Nothing ->
+            raw ++ " -> (unknown verb)"
+
+
+main =
+    do
+        Io.println "request assembly:"
+        List.map (\t -> Io.println ("  " ++ describe t)) targets
+            |> printAll
+        Io.println ("method parse: " ++ methodLabel "get")
+        Io.println ("method parse: " ++ methodLabel "TRACE")
+        Io.println
+            ("query q = "
+                ++ Maybe.withDefault "?"
+                    (Dict.get "q" (Http.parseQuery "?q=red%20shoes&page=2"))
+            )
+
+
+printAll : List (Task Error ()) -> Task Error ()
+printAll tasks =
+    Task.sequence tasks
+        |> Task.map (\_ -> ())
