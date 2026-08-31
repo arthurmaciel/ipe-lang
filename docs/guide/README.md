@@ -14,6 +14,12 @@ at the top and follow the links; each page assumes only the ones before it.
 4. [The Elm Architecture](the-elm-architecture.md) — how a program that reacts
    to input over time is structured.
 
+## Tooling
+
+- [Faster builds](faster-builds.md) — a fast linker (mold/lld), sccache, a
+  shared build target, and dev-profile flags; what `ipe health` configures and
+  how to apply each step manually.
+
 ## Standard-library guides
 
 Each teaches the *mental model* of one module through a worked, runnable example,

@@ -119,6 +119,8 @@ verified example.
   value, and how `Maybe` and `Result` make absence and failure explicit.
 - [The Elm Architecture](the-elm-architecture.md) — how a program that reacts
   to input over time (a web page, a terminal UI) is structured.
+- [Faster builds](faster-builds.md) — a fast linker, sccache, and dev-profile
+  flags that cut compile time; run `ipe health` to apply most of it in one step.
 - [Glossary](glossary.md) — every term of art, defined once.
 - [Module reference](../modules/README.md) — every `Ipe.*` module, generated
   from its source doc-strings.
