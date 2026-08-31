@@ -20,7 +20,7 @@
 //!
 //! It never touches the cached behavioural oracle (`expected.txt`,
 //! `expected_go.txt`, `oracle.meta` — those belong to the oracle-refresh tool),
-//! the Ipê sources (`Main.ipe`, `src/*.ipe`, `ipe.toml`), or the reference
+//! the Ipê sources (`Main.ipe`, `package.ipe`, `src/*.ipe`), or the reference
 //! `ipe_runtime/` tree.
 //!
 //! Usage:
@@ -186,14 +186,18 @@ fn regenerate_one(dir: &Path, out: &Path, runtime: &Path) -> Result<usize, Strin
     Ok(rewritten)
 }
 
-/// Run the compiler's emit path for one golden. A golden carrying an `ipe.toml`
-/// is a multi-module project ([`ipe::build_project`]); otherwise it is a
-/// single-file program built from `Main.ipe` ([`ipe::build`]) — exactly the
-/// two shapes the golden harness compiles.
+/// Run the compiler's emit path for one golden. A golden carrying a
+/// `package.ipe` or legacy `ipe.toml` manifest is a multi-module project
+/// ([`ipe::build_project`]); otherwise it is a single-file program built from
+/// `Main.ipe` ([`ipe::build`]) — exactly the two shapes the golden harness
+/// compiles.
 fn emit_golden(dir: &Path, out: &Path, runtime: &Path) -> Result<(), String> {
-    let manifest = dir.join("ipe.toml");
-    let result = if manifest.is_file() {
-        ipe::build_project(&manifest, out, runtime)
+    let package_ipe = dir.join("package.ipe");
+    let ipe_toml = dir.join("ipe.toml");
+    let result = if package_ipe.is_file() {
+        ipe::build_project(&package_ipe, out, runtime)
+    } else if ipe_toml.is_file() {
+        ipe::build_project(&ipe_toml, out, runtime)
     } else {
         ipe::build(&dir.join("Main.ipe"), out, runtime)
     };
