@@ -64,13 +64,18 @@
 //! an injected drift (a feature dropped from a reference's gate) MUST make the
 //! coverage check fail.
 
+mod seal_e2e;
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use ipe_backend::Backend;
 use ipe_backend_rust::RustBackend;
+use ipe_diagnostics::DResult;
 use ipe_intern::Interner;
-use ipe_ir::{ModPath, Module, Program};
+use ipe_ir::{
+    CallPin, Callee, Expr, Func, FuncId, IrType, KernelFn, ModPath, Module, OnFormKind, Program,
+};
 
 /// The flag space, identical to `runtime_modset_closure.rs`: bit `i` sets
 /// `uses_*` flag `i`. The two SEALs share one flag layout so the featureset
@@ -1089,4 +1094,123 @@ fn uses_email_selects_email_feature() {
         "a uses_email program must select the `email` runtime feature; \
          got {features:?}"
     );
+}
+
+/// SEAL (E2E): a program that calls only `Email.parseAddress` (no `Email.send`)
+/// must produce a crate that `cargo build`s successfully. The regression class:
+/// the lowerer previously set `uses_email` only for `EmailSend`, so a
+/// `parseAddress`-only program emitted an `ipe_runtime::email::*` reference
+/// without enabling the `email` cargo feature, causing a `cargo build` failure
+/// after `ipe` exited 0.
+///
+/// The IR here represents the lowerer's output — `uses_email` is `true` because
+/// the lowerer detected `KernelFn::EmailAddressParse`. The SEAL proves the
+/// emitted crate (Cargo.toml + mod.rs) satisfies cargo's feature resolution.
+///
+/// Gated on `IPE_E2E=1`; skipped in offline / unit-test-only runs.
+#[test]
+fn email_parse_address_only_cargo_builds() -> DResult<()> {
+    if std::env::var("IPE_E2E").is_err() {
+        return Ok(());
+    }
+    let Some(runtime) = seal_e2e::resolve_runtime() else {
+        return Ok(());
+    };
+
+    let mut interner = Interner::new();
+    let main_mod = interner.intern("Main")?;
+    let main_sym = interner.intern("main")?;
+    let s_sym = interner.intern("s")?;
+
+    // `helper s = Email.parseAddress s` — exercises the kernel without EmailSend.
+    let helper_sym = interner.intern("helper")?;
+    let helper_fn = Func {
+        id: FuncId::from_raw(0),
+        name: helper_sym,
+        home: ModPath(vec![main_mod]),
+        type_params: vec![],
+        row_params: vec![],
+        params: vec![(s_sym, IrType::Str)],
+        ret: IrType::Maybe(Box::new(IrType::EmailAddress)),
+        body: Expr::Call {
+            callee: Callee::Kernel(KernelFn::EmailAddressParse),
+            args: vec![Expr::Var(s_sym)],
+            pin: CallPin::None,
+            on_form: OnFormKind::NotForm,
+        },
+    };
+
+    // `main = Io.println ""` — a minimal valid Task entry.
+    let main_fn = Func {
+        id: FuncId::from_raw(1),
+        name: main_sym,
+        home: ModPath(vec![main_mod]),
+        type_params: vec![],
+        row_params: vec![],
+        params: vec![],
+        ret: IrType::Task(Box::new(IrType::Unit)),
+        body: Expr::Call {
+            callee: Callee::Kernel(KernelFn::IoPrintln),
+            args: vec![Expr::Str(String::new())],
+            pin: CallPin::None,
+            on_form: OnFormKind::NotForm,
+        },
+    };
+
+    // Module with uses_email: true (set by the lowerer upon seeing EmailAddressParse).
+    let prog = Program {
+        imports_unsafe_submodule: false,
+        modules: vec![Module {
+            name: ModPath(vec![main_mod]),
+            types: vec![],
+            funcs: vec![helper_fn, main_fn],
+            entry: Some(FuncId::from_raw(1)),
+            records: vec![],
+            uses_tea: false,
+            uses_server: false,
+            uses_ui: false,
+            uses_web: false,
+            uses_tui: false,
+            uses_console: false,
+            uses_webview: false,
+            uses_css: false,
+            uses_auth: false,
+            uses_principal: false,
+            uses_websocket: false,
+            uses_http: false,
+            uses_config: false,
+            uses_compression: false,
+            uses_csv: false,
+            uses_cache: false,
+            uses_encoding: false,
+            uses_regex: false,
+            uses_uuid: false,
+            uses_random: false,
+            uses_log: false,
+            uses_decimal: false,
+            uses_char_category: false,
+            uses_crypto_core: false,
+            uses_secret: false,
+            uses_json: false,
+            uses_crypto: false,
+            uses_jwt: false,
+            uses_url: false,
+            uses_debug: false,
+            uses_ffi: false,
+            uses_email: true,
+            uses_locale: false,
+            uses_time: false,
+            uses_env_public: false,
+            uses_async_runtime: false,
+        }],
+    };
+
+    let emitted = RustBackend::new(&interner).emit(&prog)?;
+    let status = seal_e2e::vendor_and_run(&emitted, &runtime, "ipe_email_parse_only_e2e", "build")?;
+    assert!(
+        matches!(&status, Ok(s) if s.success()),
+        "an Email.parseAddress-only (no Email.send) program must cargo build; \
+         email feature must be enabled by uses_email=true: {status:?}"
+    );
+    Ok(())
 }

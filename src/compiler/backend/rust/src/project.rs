@@ -568,19 +568,20 @@ const RUNTIME_MOD_RS_TEA_APPEND: &str = "pub mod tea;\npub use tea::*;\n";
 /// `server.rs` and `server_stream.rs` are gated by the `server` Cargo feature
 /// in the runtime source. The generated Cargo.toml's default features include
 /// `"server"` when these lines are appended. `http_stream.rs` is NOT included
-/// here — it is declared separately when the program reaches the outbound HTTP
-/// client (`reaches_http_client`), keeping reqwest out of web apps that make
-/// no outbound HTTP calls.
+/// here — it is declared only when the program uses `Ipe.Http.Stream` kernels
+/// (`uses_http`), keeping reqwest out of web apps that make no outbound HTTP
+/// calls AND keeping `tea.rs` out of email-only programs.
 const RUNTIME_MOD_RS_SERVER_APPEND: &str = "pub mod server;\npub use server::*;\n\
     pub mod server_stream;\npub use server_stream::*;\n";
 
-/// Lines appended to `ipe_runtime/mod.rs` when the program reaches the
-/// outbound HTTP client (`reaches_http_client`).
+/// Lines appended to `ipe_runtime/mod.rs` when the program uses `Ipe.Http.Stream`
+/// (`uses_http`).
 ///
 /// `http_stream.rs` (the client-side streaming reader for `Ipe.Http.Stream`)
-/// calls `crate::http_client::ssrf_apply` + `method_to_reqwest`, so it must
-/// be declared alongside `http_client` — not bundled with the server surface.
-/// A server/web program that makes no outbound HTTP calls never declares it.
+/// calls `crate::http_client::ssrf_apply` + `method_to_reqwest`, so `http_client`
+/// must be declared first (via `RUNTIME_MOD_RS_HTTP_CLIENT_APPEND`). It is NOT
+/// declared for `uses_email`-only programs, which reach `http_client` only for
+/// SSRF validation in `email.rs`, not for streaming.
 const RUNTIME_MOD_RS_HTTP_STREAM_APPEND: &str = "pub mod http_stream;\npub use http_stream::*;\n";
 
 // ── Ipe.Http — outbound HTTP client ─────────────────────────────────────────
@@ -2597,6 +2598,18 @@ fn assemble_project_files(
         }
         if uses_http_client {
             mod_rs.push_str(RUNTIME_MOD_RS_HTTP_CLIENT_APPEND);
+        }
+        // `http_stream.rs` (the Ipe.Http.Stream surface: streaming response bodies +
+        // `sub_subscribe_stream`) calls `crate::http_client::ssrf_apply` and
+        // `method_to_reqwest`, so `http_client` must be declared first. But it is NOT
+        // needed by the email surface (`uses_email`) even though that also
+        // `reaches_http_client` — email only calls `http_client::ssrf_apply` from
+        // `email.rs`, not from `http_stream.rs`. Separating the two prevents
+        // `tea.rs`'s `IpeSub<M>` (pulled in via `http_stream`'s `use super::*`) from
+        // being compiled into email-only programs that have no TEA surface, which
+        // would require `tea.rs` itself to be declared and triggers an `IpeTask<A,()>`
+        // alias conflict in the vendored emit model.
+        if ctx.uses_http {
             mod_rs.push_str(RUNTIME_MOD_RS_HTTP_STREAM_APPEND);
         }
         if uses_http_client || ctx.uses_websocket || ctx.uses_db {
@@ -2654,7 +2667,8 @@ fn assemble_project_files(
         // `tea` must be declared whenever any included module's `use crate::tea`
         // closure references it — NOT only when user code names a TEA kernel
         // directly. Every appended module that imports `IpeCmd`/`IpeSub` forces it:
-        //   • `uses_server` → `http_stream.rs` (`use super::*;` → `IpeSub`);
+        //   • `uses_http` → `http_stream.rs` (`use super::*;` pulls `IpeSub`
+        //     through the glob; `sub_subscribe_stream` returns `IpeSub<M>`);
         //   • `uses_websocket` → `ws_client.rs`'s `sub_subscribe_ws_*` (`IpeSub<M>`);
         //   • `uses_web` → `web/mod.rs` + `web/pubsub.rs` (`use crate::tea::{IpeCmd, IpeSub}`);
         //   • `uses_tui` → `tui/app.rs` (`use super::super::tea::{…, IpeCmd, IpeSub, …}`);
@@ -2666,6 +2680,7 @@ fn assemble_project_files(
         // This is the transitive-closure invariant: any module a declared module
         // depends on MUST itself be declared (same rule as `http_header`).
         if ctx.uses_tea
+            || ctx.uses_http
             || ctx.uses_server
             || ctx.uses_websocket
             || ctx.uses_web
