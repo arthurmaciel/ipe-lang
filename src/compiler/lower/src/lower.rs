@@ -2519,6 +2519,38 @@ fn ir_type_mentions_decimal(ty: &IrType) -> bool {
     })
 }
 
+/// `true` when `ty` mentions any `Ipe.Email` runtime type (`EmailAddress`,
+/// `EmailMessage`, `EmailAttachment`, `EmailSesConfig`, `EmailSmtpConfig`, or
+/// `EmailProvider`) anywhere in its structure. These types are defined in
+/// `email.rs`, which the emitter appends to `ipe_runtime/mod.rs` only when
+/// `uses_email` is set. A program that names any of them in a signature, record
+/// field, or enum payload — without calling `Email.send` or any `EmailAddress`
+/// kernel — still emits a reference the module's `pub use email::*` glob must
+/// satisfy. Mirrors [`ir_type_mentions_secret`].
+fn ir_type_mentions_email(ty: &IrType) -> bool {
+    ir_type_mentions(ty, &|t| {
+        matches!(
+            t,
+            IrType::EmailAddress
+                | IrType::EmailMessage
+                | IrType::EmailAttachment
+                | IrType::EmailSesConfig
+                | IrType::EmailSmtpConfig
+                | IrType::EmailProvider
+        )
+    })
+}
+
+/// `true` when `ty` mentions the `Ipe.Locale` opaque type (`IrType::Locale`,
+/// rendered `ipe_runtime::locale::Locale`). The `locale.rs` module is not
+/// declared in the base `mod.rs` template; a program that names `Locale` in
+/// any emittable type position emits a reference resolved only when the module
+/// is declared and the `locale` Cargo feature is enabled. Mirrors
+/// [`ir_type_mentions_secret`].
+fn ir_type_mentions_locale(ty: &IrType) -> bool {
+    ir_type_mentions(ty, &|t| matches!(t, IrType::Locale))
+}
+
 /// `true` when `ty` mentions `Json` (`IrType::Json`, rendered `JsonVal`) or a
 /// `Decoder<T>` (`IrType::Decoder`, rendered `Decoder<…>`) anywhere in its
 /// structure — the two types the fixed prelude aliases against the `json` runtime
@@ -10534,8 +10566,13 @@ struct KernelUsage {
     /// feature and the `chrono-tz` dependency (the IANA-zone calendar surface).
     /// `chrono` core is gated by `time-core`/`log`. `Time.every` is TEA, tracked by `tea`.
     time: bool,
-    /// The `Ipe.Email` `Email.send` kernel.
+    /// Any `Ipe.Email` kernel (`Email.send`, `EmailAddress.parse`,
+    /// `EmailAddress.toString`) — gates the `email` runtime module.
     email: bool,
+    /// Any `Ipe.Locale` kernel (`Locale.fromTag`, `Locale.toTag`,
+    /// `String.toUpperIn`, `String.toLowerIn`) — gates the `locale` runtime
+    /// module and the `locale` Cargo feature (`icu_casemap`/`icu_locale_core`).
+    locale: bool,
     /// The `Ipe.Env` `Env.public` kernel — gates emitting the per-project
     /// `env_public.rs` (built from `package.ipe`'s `[wasm] publicEnv` allowlist).
     env_public: bool,
@@ -10610,6 +10647,7 @@ impl KernelUsage {
             && self.webview
             && self.websocket
             && self.email
+            && self.locale
             && self.time
             && self.env_public
             && self.debug
@@ -10657,7 +10695,17 @@ impl KernelUsage {
         self.console |= k.is_console();
         self.webview |= k.is_webview();
         self.websocket |= k.is_websocket_client();
-        self.email |= matches!(k, KernelFn::EmailSend);
+        self.email |= matches!(
+            k,
+            KernelFn::EmailSend | KernelFn::EmailAddressParse | KernelFn::EmailAddressToString
+        );
+        self.locale |= matches!(
+            k,
+            KernelFn::LocaleFromTag
+                | KernelFn::LocaleToTag
+                | KernelFn::StringToUpperIn
+                | KernelFn::StringToLowerIn
+        );
         self.time |= k.is_time();
         self.env_public |= matches!(k, KernelFn::EnvPublic);
         self.debug |= k.is_dev_only();
@@ -15915,10 +15963,26 @@ impl<'a> Lowerer<'a> {
         // principal;` to the emitted `ipe_runtime/mod.rs` so the opaque
         // `Principal` type + `principal_subject` accessor resolve.
         let uses_principal = kernel_usage.principal;
-        // detect `Ipe.Email` `Email.send` usage — the backend uses this flag to
-        // append `pub mod email; pub use email::*;` to the emitted
-        // `ipe_runtime/mod.rs` and to add the `lettre` dependency.
-        let uses_email = kernel_usage.email;
+        // detect `Ipe.Email` usage — any `Email.send` / `EmailAddress.parse` /
+        // `EmailAddress.toString` kernel call, OR any emittable type position that
+        // mentions an `Ipe.Email` runtime type (`EmailAddress`, `EmailMessage`,
+        // `EmailProvider`, etc.). The backend uses this flag to append `pub mod
+        // email; pub use email::*;` to the emitted `ipe_runtime/mod.rs` and to add
+        // the `lettre` dependency. The type-mention guard is required: a program
+        // that names `EmailAddress` in a signature without calling any email kernel
+        // still emits a `ipe_runtime::email::EmailAddress` reference resolved only
+        // through the `pub use email::*` glob — dropping the module declaration
+        // leaves that reference dangling (E0433 — a SEAL breach).
+        let uses_email = kernel_usage.email
+            || program_type_mentions(&funcs, &records, &types_ir, &ir_type_mentions_email);
+        // detect `Ipe.Locale` usage — any `Locale.fromTag` / `Locale.toTag` /
+        // `String.toUpperIn` / `String.toLowerIn` kernel call, OR any emittable
+        // type position that mentions `IrType::Locale`. The backend uses this flag
+        // to append `pub mod locale; pub use locale::*;` and to enable the `locale`
+        // Cargo feature (`icu_casemap` + `icu_locale_core`). Without the feature,
+        // `locale_from_tag` compiles but always returns `Nothing`.
+        let uses_locale = kernel_usage.locale
+            || program_type_mentions(&funcs, &records, &types_ir, &ir_type_mentions_locale);
         // detect non-TEA `Ipe.Time` kernel usage — the backend enables the
         // `time` Cargo feature and adds the `chrono-tz` dependency (the IANA-zone
         // calendar surface); a program that reaches no Time kernel drops the
@@ -15987,6 +16051,7 @@ impl<'a> Lowerer<'a> {
             uses_principal,
             uses_websocket,
             uses_email,
+            uses_locale,
             uses_time,
             uses_env_public,
             uses_debug,
