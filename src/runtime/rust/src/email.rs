@@ -629,8 +629,8 @@ fn civil_from_days(z: i64) -> (i64, i64, i64) {
 /// host:port, **opportunistic STARTTLS** (upgrade to TLS when the server
 /// advertises it, plaintext otherwise), PLAIN auth when a user is configured.
 /// lettre's builder assembles standards-compliant MIME (text/html alternative
-/// + attachments); not byte-identical to a hand-rolled wire, but
-/// the delivered message (from/to/cc/bcc/reply-to/subject/body/attachments) is
+/// plus attachments); not byte-identical to a hand-rolled wire, but the
+/// delivered message (from/to/cc/bcc/reply-to/subject/body/attachments) is
 /// equivalent. A local plaintext catcher (no STARTTLS advertised) is reachable
 /// via the opportunistic fallback, which is how this is verified.
 async fn send_smtp<E: From<String>>(cfg: &SmtpConfig, m: &EmailMessage) -> IpeResult<E, String> {

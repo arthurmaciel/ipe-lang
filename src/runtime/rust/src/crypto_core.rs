@@ -313,8 +313,17 @@ pub fn crypto_sha512(s: String) -> String {
     result.iter().map(|b| format!("{:02x}", b)).collect()
 }
 
-/// Ipê `hmacSha256 : String -> String -> String` (key, message → hex tag).
-pub fn crypto_hmac_sha256(key: String, msg: String) -> String {
+/// Raw-String-key HMAC-SHA-256 (key, message → hex tag). `pub(crate)`, NOT a
+/// public runtime API and NOT registered as a kernel: the only sanctioned caller
+/// is `jwt::jwt_encode_hs256`, which owns its own `secret: String` boundary (a
+/// 32-byte-minimum floor, RFC 7518 §3.2). Ipê's `Crypto.hmacSha256` binds the
+/// typed-`Key` variant [`crypto_hmac_sha256_key`]; there is no bare-`String`-key
+/// HMAC spelling reachable from Ipê source or from outside this crate, so a
+/// caller cannot supply confusable/untyped key material through this door.
+/// Gated to its sole (feature-gated) consumer — `jwt` implies `crypto`, so
+/// under `crypto` alone (no `jwt`) this function is absent, not dead.
+#[cfg(feature = "jwt")]
+pub(crate) fn crypto_hmac_sha256(key: String, msg: String) -> String {
     use hmac::{Hmac, Mac};
     use sha2::Sha256;
     type HmacSha256 = Hmac<Sha256>;
@@ -376,29 +385,6 @@ pub fn crypto_hmac_sha512_key(key: Key, msg: String) -> Mac {
         .map(|b| format!("{b:02x}"))
         .collect();
     Mac(hex)
-}
-
-/// Ipê `hmacSha512 : String -> String -> String`.
-pub fn crypto_hmac_sha512(key: String, msg: String) -> String {
-    use hmac::{Hmac, Mac};
-    use sha2::Sha512;
-    type HmacSha512 = Hmac<Sha512>;
-    // STRUCTURALLY-DEAD Err: `Hmac<D>::new_from_slice` pads/hashes any key
-    // internally and returns `Ok` unconditionally, so `InvalidLength` is never
-    // produced. Kept as a LOUD `.expect`, not eliminated: threading a Result through
-    // this pure `String -> String` kernel makes callers handle a never-occurring Err
-    // whose mishandling is a wrong hash, and an infallible-by-type ctor would
-    // reimplement key prep (a security regression). See the ledger for the full verdict.
-    // IPE-RUST-AUDIT:ACCEPTED (Arthur Maciel) — structurally-dead HMAC InvalidLength; a loud .expect is safer than a dead Result Err a caller can mishandle into a wrong MAC [ledger #1]
-    #[allow(clippy::expect_used)]
-    let mut mac =
-        HmacSha512::new_from_slice(key.as_bytes()).expect("Hmac<Sha512> accepts any key length");
-    mac.update(msg.as_bytes());
-    mac.finalize()
-        .into_bytes()
-        .iter()
-        .map(|b| format!("{:02x}", b))
-        .collect()
 }
 
 /// Ipê `rsaSha256Sign : String -> String -> Result Error String`
@@ -541,17 +527,35 @@ mod tests_core {
         "b0344c61d8db38535ca8afceaf0bf12b881dc200c9833da726e9376c2e32cff7";
     const HMAC_SHA512_RFC1: &str = "87aa7cdea5ef619d4ff0b4241a1d6cb02379f4e2ce4ec2787ad0b30545e17cdedaa833b7d6b8a702038b274eaea3f4e4be9d914eeb61f1702e696c203a126854";
 
+    // Raw-String-key HMAC-SHA-256 is the JWT-internal signer (`pub(crate)`, not a
+    // kernel, `cfg(jwt)`). This holds it to the RFC 4231 vector so the JWT signing
+    // path stays correct; the typed-`Key` HMAC vectors are checked separately below.
+    #[cfg(feature = "jwt")]
     #[test]
     fn test_hmac_sha256_rfc4231() {
         let key: String = (0..20).map(|_| '\u{000b}').collect();
         assert_eq!(
-            crypto_hmac_sha256(key.clone(), "Hi There".to_string()),
+            crypto_hmac_sha256(key, "Hi There".to_string()),
             HMAC_SHA256_RFC1
         );
-        assert_eq!(
-            crypto_hmac_sha512(key, "Hi There".to_string()),
-            HMAC_SHA512_RFC1
+    }
+
+    // Typed-`Key` HMAC against the RFC 4231 vectors — the ONLY HMAC key path
+    // reachable from Ipê. Proves both digests round-trip through the `Key`
+    // boundary (there is no raw-`String`-key HMAC-SHA-512 spelling at all).
+    #[test]
+    fn test_hmac_typed_key_rfc4231() {
+        let raw_key: String = (0..20).map(|_| '\u{000b}').collect();
+        let mac256 = crypto_hmac_sha256_key(
+            key_of(crypto_key_from_string(raw_key.clone())),
+            "Hi There".to_string(),
         );
+        assert_eq!(crypto_mac_to_hex(mac256), HMAC_SHA256_RFC1);
+        let mac512 = crypto_hmac_sha512_key(
+            key_of(crypto_key_from_string(raw_key)),
+            "Hi There".to_string(),
+        );
+        assert_eq!(crypto_mac_to_hex(mac512), HMAC_SHA512_RFC1);
     }
 
     #[cfg(feature = "crypto")]

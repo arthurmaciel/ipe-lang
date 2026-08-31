@@ -58,6 +58,50 @@ fn type_error_program_exits_nonzero_with_the_diagnostic() -> TestResult {
     Ok(())
 }
 
+/// SECURITY: the raw-`String`-key crypto path is unrepresentable. `Ipe.Crypto`
+/// exposes no bare-`String`-key entry point — every keyed operation requires the
+/// typed `Key`. Passing a plaintext `String` where `hmacSha256` expects a `Key`
+/// (the key/message confusion the typed `Key` was built to eliminate) is a
+/// compile-time TYPE MISMATCH, not a silent wrong MAC. Negative proof that a
+/// program supplying a raw `String` in the key role does not compile.
+#[test]
+fn crypto_raw_string_key_is_a_type_error() -> TestResult {
+    let (ok, _, stderr) = run_ipe(&[
+        "type-check",
+        &fixture("crypto_raw_key_is_type_error.ipe").to_string_lossy(),
+    ])?;
+    assert!(
+        !ok,
+        "passing a bare String where a Crypto.Key is expected must NOT type-check"
+    );
+    assert!(
+        stderr.contains("IPE-T0001") && stderr.contains("TYPE MISMATCH"),
+        "the rendered key/message role-confusion diagnostic must be shown, got:\n{stderr}"
+    );
+    Ok(())
+}
+
+/// SECURITY: the typed-`Key` path type-checks. A `Key` built once at the parse
+/// boundary (`keyFromString`) flows into both `hmacSha256` and the AEAD
+/// `aesGcmEncrypt` — the only sanctioned way to supply key material. This is the
+/// positive counterpart to `crypto_raw_string_key_is_a_type_error`.
+#[test]
+fn crypto_typed_key_path_type_checks() -> TestResult {
+    let (ok, stdout, stderr) = run_ipe(&[
+        "type-check",
+        &fixture("crypto_typed_key_ok.ipe").to_string_lossy(),
+    ])?;
+    assert!(
+        ok,
+        "the typed-Key crypto path must type-check, got stderr:\n{stderr}"
+    );
+    assert!(
+        stdout.contains("type-checks"),
+        "a clean check prints a friendly success message, got:\n{stdout}"
+    );
+    Ok(())
+}
+
 /// A program importing `Ipe.Test` — a compiled-source stdlib module that
 /// declares its own `Test` type — must resolve through injection and type-check,
 /// exactly as `ipe build` would. A bare single-module path fails name
