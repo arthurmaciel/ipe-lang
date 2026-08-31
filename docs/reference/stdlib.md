@@ -1092,7 +1092,7 @@ Ipe.Html.Attributes — HTML attribute builders.
 | Export | Summary |
 |--------|----------|
 | `attribute` | `attribute key value` — a plain `key="value"` HTML attribute. The one |
-| `boolAttribute` | `boolAttribute key on` — a boolean HTML attribute (emitted bare when `on` |
+| `boolAttribute` | `boolAttribute key on` — a boolean HTML attribute. When `on` is `True`, |
 | `noAttr` | `noAttr` — the identity attribute (renders nothing). Makes "no attribute" a |
 | `class` | (no summary) |
 | `id` | (no summary) |
