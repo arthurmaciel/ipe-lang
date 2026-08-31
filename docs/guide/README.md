@@ -82,8 +82,10 @@ cross-link where topics meet.
   untyped column reads), [the unsafe Store surface](db-store-unsafe.md)
   (string-named columns for a dynamic table), [the unsafe HTML
   surface](html-unsafe.md) (raw markup / inline `<script>` past the escaper),
-  [the secret-reveal hatch](secret-unsafe.md) (un-seal a `Secret` to a bare
-  `String`). Reach for these only for a residual the safe surface cannot express.
+  [the unsafe page-head surface](web-head-unsafe.md) (a verbatim JSON-LD
+  `<script>` block), [the secret-reveal hatch](secret-unsafe.md) (un-seal a
+  `Secret` to a bare `String`). Reach for these only for a residual the safe
+  surface cannot express.
 - **Caching** — [Cache](cache.md) (bounded, in-memory LRU with optional TTL; a
   miss is a `Maybe`, not a failure).
 - **Observability** — [Logging](log.md) (structured, levelled log records),
