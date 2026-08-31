@@ -4,7 +4,19 @@
 
 [Back to stdlib index](../stdlib.md)
 
+Ipe.Io — standard-I/O effect kernels.
+
+## `readLine`
+
+```ipe
+readLine : () -> Task Error String
+```
+
 ## `readSecret`
+
+```ipe
+readSecret : String -> Task Error Secret
+```
 
 Write a prompt to stdout, then read one line from stdin with terminal echo
 suppressed — a password read. The prior terminal mode is always restored, even
@@ -14,4 +26,28 @@ The line is returned as an opaque `Secret`, not a bare `String`: the plaintext
 is reachable only through the scoped `Secret.use` (or `Secret.reveal`) API, so a
 freshly-read secret cannot flow into a log, an error, or a serialized payload by
 accident. Consume it with `Secret.use secret (\plain -> …)`.
+
+## `writeStdout`
+
+```ipe
+writeStdout : String -> Task Error ()
+```
+
+## `writeStderr`
+
+```ipe
+writeStderr : String -> Task Error ()
+```
+
+## `println`
+
+```ipe
+println : String -> Task Error ()
+```
+
+## `eprintln`
+
+```ipe
+eprintln : String -> Task Error ()
+```
 

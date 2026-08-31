@@ -4,6 +4,242 @@
 
 [Back to stdlib index](../stdlib.md)
 
+`Ipe.Task` — describe an effect as a value, then compose effects.
+
+A `Task Error a` is a description of work that, when the runtime runs it,
+either succeeds with an `a` or fails with an `Error` on the implicit error
+channel. Building a task performs nothing; the runtime is the single place an
+effect happens. `Error` is a typed, matchable value, never a bare `String`.
+
+The combinators fall into families: construction (`succeed`, `fail`),
+transformation (`map`, `map2`..`map5`, `andThen`), the error channel
+(`mapError`, `onError`), `Result` bridges (`fromResult`, `andThenResult`),
+concurrency (`sequence`, `parallel`), deferral (`lazy`), and a retry policy
+(`RetryPolicy` with `linearBackoff` / `exponentialBackoff` and the `with*`
+refinements, applied by `retryWith`). Two or more chained `andThen` steps read
+best as a `do` block.
+
+The Task guide walks the mental model and a worked example; this module is the
+per-symbol reference.
+
+## `succeed`
+
+```ipe
+succeed : a -> Task Error a
+```
+
+`succeed value` — a task that runs no effect and settles with `value`. The
+starting point of a pipeline, and the way a pure value enters the task world.
+
+```ipe
+succeed 1 --> Task Error Int
+succeed "ready" --> Task Error String
+```
+
+## `fail`
+
+```ipe
+fail : Error -> Task Error a
+```
+
+`fail err` — a task that settles with `err` on the implicit error channel, so
+downstream `map`/`andThen` steps are skipped until an `onError` handles it.
+
+```ipe
+(\err -> fail err) --> Error -> Task Error a
+```
+
+## `map`
+
+```ipe
+map : (a -> b) -> Task Error a -> Task Error b
+```
+
+`map f task` — transform a task's success value with `f`, leaving the error
+channel untouched. `f` runs only if the task succeeds.
+
+```ipe
+map (\n -> n + 1) (succeed 1) --> Task Error Int
+map String.fromInt (succeed 42) --> Task Error String
+```
+
+## `map2`
+
+```ipe
+map2 : (a -> b -> c) -> Task Error a -> Task Error b -> Task Error c
+```
+
+`map2`..`map5` — combine 2..5 independent tasks with an N-ary function.
+Effects run in argument order; an early failure short-circuits, so a later task's
+effects never fire. Use when effect order matters even though the values are
+independent — for concurrency use `parallel`.
+
+```ipe
+map2 (\a b -> a + b) (succeed 2) (succeed 3) --> Task Error Int
+```
+
+## `map3`
+
+```ipe
+map3 : (a -> b -> c -> d) -> Task Error a -> Task Error b -> Task Error c -> Task Error d
+```
+
+`map3 f a b c` — combine three independent tasks with a three-argument
+function; effects run in argument order.
+
+```ipe
+map3 (\a b c -> a + b + c) (succeed 1) (succeed 2) (succeed 3) --> Task Error Int
+```
+
+## `map4`
+
+```ipe
+map4 : (a -> b -> c -> d -> e) -> Task Error a -> Task Error b -> Task Error c -> Task Error d -> Task Error e
+```
+
+`map4 f a b c d` — combine four independent tasks with a four-argument
+function; effects run in argument order.
+
+```ipe
+map4 (\a b c d -> a + b + c + d) (succeed 1) (succeed 2) (succeed 3) (succeed 4) --> Task Error Int
+```
+
+## `map5`
+
+```ipe
+map5 : (a -> b -> c -> d -> e -> f) -> Task Error a -> Task Error b -> Task Error c -> Task Error d -> Task Error e -> Task Error f
+```
+
+`map5 f a b c d e` — combine five independent tasks with a five-argument
+function; effects run in argument order.
+
+```ipe
+map5 (\a b c d e -> a + b + c + d + e) (succeed 1) (succeed 2) (succeed 3) (succeed 4) (succeed 5) --> Task Error Int
+```
+
+## `andThen`
+
+```ipe
+andThen : (a -> Task Error b) -> Task Error a -> Task Error b
+```
+
+`andThen next task` — run `task`, then feed its success value to `next` to
+produce the following task. This is sequencing: each step may depend on the
+previous result. Two or more `andThen` chains read best as a `do` block.
+
+```ipe
+andThen (\n -> succeed (n * 2)) (succeed 5) --> Task Error Int
+```
+
+## `attempt`
+
+```ipe
+attempt : (Result Error a -> msg) -> Task Error a -> Cmd msg
+```
+
+`attempt toMsg task` — run `task` as a `Cmd`, mapping its settled `Result`
+into a message. The Task-to-`Cmd` bridge that fires a task from a TEA `update`;
+pairs with `Cmd.perform`.
+
+```ipe
+attempt (\result -> result) (succeed 1) --> Cmd (Result Error Int)
+```
+
+## `mapError`
+
+```ipe
+mapError : (Error -> Error) -> Task Error a -> Task Error a
+```
+
+`mapError f task` — transform the error a task fails with, leaving a success
+untouched. Use it to translate a low-level error into one your caller expects.
+
+```ipe
+mapError (\err -> err) (succeed 5) --> Task Error Int
+```
+
+## `onError`
+
+```ipe
+onError : (Error -> Task Error a) -> Task Error a -> Task Error a
+```
+
+`onError recover task` — if `task` fails, run `recover` on the error to
+produce a fallback task; a success passes straight through. This is the task-level
+`catch`: recover, retry, or re-raise with a better error.
+
+```ipe
+onError (\err -> succeed 0) (succeed 5) --> Task Error Int
+```
+
+## `fromResult`
+
+```ipe
+fromResult : Result Error a -> Task Error a
+```
+
+`fromResult result` — lift a `Result` into a task: `Ok` becomes a success,
+`Err` a failure. The bridge from pure fallible code into a task pipeline.
+
+```ipe
+fromResult (Ok 3) --> Task Error Int
+```
+
+## `andThenResult`
+
+```ipe
+andThenResult : (a -> Result Error b) -> Task Error a -> Task Error b
+```
+
+`andThenResult step task` — like `andThen`, but `step` returns a plain
+`Result`; an `Err` fails the task. Use it to weave a pure validation into a task
+chain without wrapping each step in `fromResult`.
+
+```ipe
+andThenResult (\n -> Ok (n + 1)) (succeed 5) --> Task Error Int
+```
+
+## `sequence`
+
+```ipe
+sequence : List (Task Error a) -> Task Error (List a)
+```
+
+`sequence tasks` — run a list of tasks one after another, collecting their
+results into a list in order. The first failure short-circuits the rest.
+
+```ipe
+sequence [ succeed 1, succeed 2, succeed 3 ] --> Task Error (List Int)
+```
+
+## `parallel`
+
+```ipe
+parallel : List (Task Error a) -> Task Error (List a)
+```
+
+`parallel tasks` — run a list of tasks concurrently, collecting their results
+in the original order. Latency is the slowest task, not the sum. The first
+failure short-circuits.
+
+```ipe
+parallel [ succeed 1, succeed 2, succeed 3 ] --> Task Error (List Int)
+```
+
+## `lazy`
+
+```ipe
+lazy : (() -> Task Error a) -> Task Error a
+```
+
+`lazy makeTask` — defer building a task until it is run, by wrapping it in a
+`() -> Task …` thunk. Use it to break a self-referential (recursive) task
+definition, or to avoid constructing a task that a branch may never take.
+
+```ipe
+lazy (\_ -> succeed 1) --> Task Error Int
+```
+
 ## `BackoffStrategy`
 
 The four backoff strategies available to `RetryPolicy`.
@@ -14,22 +250,6 @@ The four backoff strategies available to `RetryPolicy`.
   - `ExponentialWithJitter` — exponential delay with random jitter added.
 
 Use `withJitter` to upgrade a base strategy to its jitter variant.
-
-## `Exponential`
-
-The `Exponential` backoff-strategy constructor.
-
-## `ExponentialWithJitter`
-
-The `ExponentialWithJitter` backoff-strategy constructor.
-
-## `Linear`
-
-The `Linear` backoff-strategy constructor.
-
-## `LinearWithJitter`
-
-The `LinearWithJitter` backoff-strategy constructor.
 
 ## `RetryPolicy`
 
@@ -43,84 +263,11 @@ Fields:
   - `shouldRetry` — predicate; `True` means retry on this error.
   - `strategy` — the backoff strategy controlling delay growth and jitter.
 
-## `andThen`
-
-`andThen next task` — run `task`, then feed its success value to `next` to
-produce the following task. This is sequencing: each step may depend on the
-previous result. Two or more `andThen` chains read best as a `do` block.
-
-```ipe
-andThen (\n -> succeed (n * 2)) (succeed 5) --> Task Error Int
-```
-
-## `andThenResult`
-
-`andThenResult step task` — like `andThen`, but `step` returns a plain
-`Result`; an `Err` fails the task. Use it to weave a pure validation into a task
-chain without wrapping each step in `fromResult`.
-
-```ipe
-andThenResult (\n -> Ok (n + 1)) (succeed 5) --> Task Error Int
-```
-
-## `attempt`
-
-`attempt toMsg task` — run `task` as a `Cmd`, mapping its settled `Result`
-into a message. The Task-to-`Cmd` bridge that fires a task from a TEA `update`;
-pairs with `Cmd.perform`.
-
-```ipe
-attempt (\result -> result) (succeed 1) --> Cmd (Result Error Int)
-```
-
-## `defaultRetryPolicy`
-
-`defaultRetryPolicy` — a sensible starting policy: 3 attempts, 500 ms
-exponential back-off with jitter, retry on all errors. Refine it with the `with*`
-combinators.
-
-```ipe
-withMaxAttempts 5 defaultRetryPolicy --> RetryPolicy e
-```
-
-## `exponentialBackoff`
-
-`exponentialBackoff maxAttempts baseMs` — a policy whose delay doubles each
-attempt (`baseMs * 2^(attempt-1)`); retries on every error.
-
-```ipe
-exponentialBackoff 5 100 --> RetryPolicy e
-```
-
-## `fail`
-
-`fail err` — a task that settles with `err` on the implicit error channel, so
-downstream `map`/`andThen` steps are skipped until an `onError` handles it.
-
-```ipe
-(\err -> fail err) --> Error -> Task Error a
-```
-
-## `fromResult`
-
-`fromResult result` — lift a `Result` into a task: `Ok` becomes a success,
-`Err` a failure. The bridge from pure fallible code into a task pipeline.
-
-```ipe
-fromResult (Ok 3) --> Task Error Int
-```
-
-## `lazy`
-
-`lazy makeTask` — defer building a task until it is run, by wrapping it in a
-`() -> Task …` thunk. Use it to break a self-referential (recursive) task
-definition, or to avoid constructing a task that a branch may never take.
-
-```ipe
-lazy (\_ -> succeed 1) --> Task Error Int
-```
-
 ## `linearBackoff`
+
+```ipe
+linearBackoff : Int -> Int -> RetryPolicy e
+```
 
 `linearBackoff maxAttempts delayMs` — a constant-delay policy that retries on
 every error.
@@ -129,132 +276,24 @@ every error.
 linearBackoff 3 200 --> RetryPolicy e
 ```
 
-## `map`
-
-`map f task` — transform a task's success value with `f`, leaving the error
-channel untouched. `f` runs only if the task succeeds.
+## `exponentialBackoff`
 
 ```ipe
-map (\n -> n + 1) (succeed 1) --> Task Error Int
-map String.fromInt (succeed 42) --> Task Error String
+exponentialBackoff : Int -> Int -> RetryPolicy e
 ```
 
-## `map2`
-
-`map2`..`map5` — combine 2..5 independent tasks with an N-ary function.
-Effects run in argument order; an early failure short-circuits, so a later task's
-effects never fire. Use when effect order matters even though the values are
-independent — for concurrency use `parallel`.
+`exponentialBackoff maxAttempts baseMs` — a policy whose delay doubles each
+attempt (`baseMs * 2^(attempt-1)`); retries on every error.
 
 ```ipe
-map2 (\a b -> a + b) (succeed 2) (succeed 3) --> Task Error Int
-```
-
-## `map3`
-
-`map3 f a b c` — combine three independent tasks with a three-argument
-function; effects run in argument order.
-
-```ipe
-map3 (\a b c -> a + b + c) (succeed 1) (succeed 2) (succeed 3) --> Task Error Int
-```
-
-## `map4`
-
-`map4 f a b c d` — combine four independent tasks with a four-argument
-function; effects run in argument order.
-
-```ipe
-map4 (\a b c d -> a + b + c + d) (succeed 1) (succeed 2) (succeed 3) (succeed 4) --> Task Error Int
-```
-
-## `map5`
-
-`map5 f a b c d e` — combine five independent tasks with a five-argument
-function; effects run in argument order.
-
-```ipe
-map5 (\a b c d e -> a + b + c + d + e) (succeed 1) (succeed 2) (succeed 3) (succeed 4) (succeed 5) --> Task Error Int
-```
-
-## `mapError`
-
-`mapError f task` — transform the error a task fails with, leaving a success
-untouched. Use it to translate a low-level error into one your caller expects.
-
-```ipe
-mapError (\err -> err) (succeed 5) --> Task Error Int
-```
-
-## `onError`
-
-`onError recover task` — if `task` fails, run `recover` on the error to
-produce a fallback task; a success passes straight through. This is the task-level
-`catch`: recover, retry, or re-raise with a better error.
-
-```ipe
-onError (\err -> succeed 0) (succeed 5) --> Task Error Int
-```
-
-## `parallel`
-
-`parallel tasks` — run a list of tasks concurrently, collecting their results
-in the original order. Latency is the slowest task, not the sum. The first
-failure short-circuits.
-
-```ipe
-parallel [ succeed 1, succeed 2, succeed 3 ] --> Task Error (List Int)
-```
-
-## `retryOn`
-
-`retryOn pred policy` — replace the policy's `shouldRetry` predicate so it
-retries only on the errors `pred` selects.
-
-```ipe
-retryOn (\err -> True) (exponentialBackoff 3 100) --> RetryPolicy Error
-```
-
-## `retryWith`
-
-`retryWith policy task` — run `task`, retrying according to `policy` whenever
-it fails. The task succeeds on the first attempt that settles `Ok`; it fails with
-the last error once the attempts are exhausted.
-
-```ipe
-retryWith defaultRetryPolicy (succeed 1) --> Task Error Int
-```
-
-## `sequence`
-
-`sequence tasks` — run a list of tasks one after another, collecting their
-results into a list in order. The first failure short-circuits the rest.
-
-```ipe
-sequence [ succeed 1, succeed 2, succeed 3 ] --> Task Error (List Int)
-```
-
-## `succeed`
-
-`succeed value` — a task that runs no effect and settles with `value`. The
-starting point of a pipeline, and the way a pure value enters the task world.
-
-```ipe
-succeed 1 --> Task Error Int
-succeed "ready" --> Task Error String
-```
-
-## `withBaseMs`
-
-`withBaseMs base policy` — set the base retry delay.  Takes a typed
-`Ipe.Duration` (unit named at the call site); the raw milliseconds are unwrapped
-for the runtime policy kernel.
-
-```ipe
-withBaseMs (Duration.millis 250) (exponentialBackoff 3 100) --> RetryPolicy e
+exponentialBackoff 5 100 --> RetryPolicy e
 ```
 
 ## `withJitter`
+
+```ipe
+withJitter : RetryPolicy e -> RetryPolicy e
+```
 
 `withJitter policy` — upgrade the policy's strategy to its jitter variant:
 `Linear` becomes `LinearWithJitter`, `Exponential` becomes `ExponentialWithJitter`.
@@ -264,7 +303,51 @@ Already-jittered strategies are unchanged.
 withJitter (exponentialBackoff 5 100) --> RetryPolicy e
 ```
 
+## `retryOn`
+
+```ipe
+retryOn : (e -> Bool) -> RetryPolicy e -> RetryPolicy e
+```
+
+`retryOn pred policy` — replace the policy's `shouldRetry` predicate so it
+retries only on the errors `pred` selects.
+
+```ipe
+retryOn (\err -> True) (exponentialBackoff 3 100) --> RetryPolicy Error
+```
+
+## `withRetryOn`
+
+```ipe
+withRetryOn : (e -> Bool) -> RetryPolicy e -> RetryPolicy e
+```
+
+`withRetryOn pred policy` — an alias for `retryOn` with the same semantics and
+a more pipeline-friendly name.
+
+```ipe
+withRetryOn (\err -> True) (exponentialBackoff 3 100) --> RetryPolicy Error
+```
+
+## `defaultRetryPolicy`
+
+```ipe
+defaultRetryPolicy : RetryPolicy e
+```
+
+`defaultRetryPolicy` — a sensible starting policy: 3 attempts, 500 ms
+exponential back-off with jitter, retry on all errors. Refine it with the `with*`
+combinators.
+
+```ipe
+withMaxAttempts 5 defaultRetryPolicy --> RetryPolicy e
+```
+
 ## `withMaxAttempts`
+
+```ipe
+withMaxAttempts : Int -> RetryPolicy e -> RetryPolicy e
+```
 
 `withMaxAttempts n policy` — set the maximum number of attempts.
 
@@ -272,12 +355,31 @@ withJitter (exponentialBackoff 5 100) --> RetryPolicy e
 withMaxAttempts 4 (exponentialBackoff 3 100) --> RetryPolicy e
 ```
 
-## `withRetryOn`
-
-`withRetryOn pred policy` — an alias for `retryOn` with the same semantics and
-a more pipeline-friendly name.
+## `withBaseMs`
 
 ```ipe
-withRetryOn (\err -> True) (exponentialBackoff 3 100) --> RetryPolicy Error
+withBaseMs : Duration -> RetryPolicy e -> RetryPolicy e
+```
+
+`withBaseMs base policy` — set the base retry delay.  Takes a typed
+`Ipe.Duration` (unit named at the call site); the raw milliseconds are unwrapped
+for the runtime policy kernel.
+
+```ipe
+withBaseMs (Duration.millis 250) (exponentialBackoff 3 100) --> RetryPolicy e
+```
+
+## `retryWith`
+
+```ipe
+retryWith : RetryPolicy Error -> Task Error a -> Task Error a
+```
+
+`retryWith policy task` — run `task`, retrying according to `policy` whenever
+it fails. The task succeeds on the first attempt that settles `Ok`; it fails with
+the last error once the attempts are exhausted.
+
+```ipe
+retryWith defaultRetryPolicy (succeed 1) --> Task Error Int
 ```
 

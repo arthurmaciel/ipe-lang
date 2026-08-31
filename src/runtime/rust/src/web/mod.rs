@@ -325,18 +325,18 @@ mod island_escape_tests {
 /// through the response pipeline and is outside the scope of this change.
 /// Server-side client-config templating: read the `IPE_WEB_*` tuning env vars
 /// and emit the `window.__IPE_*` assignments the client (`client.js`) reads
-/// with a hardcoded fallback. `IPE_LIVE_*` names are accepted as deprecated
-/// aliases. Malformed values fall back to the default; never panics.
+/// with a hardcoded fallback. Malformed values fall back to the default; never
+/// panics.
 fn web_client_config_js() -> String {
-    fn num(new_var: &str, old_var: &str, default: u64) -> u64 {
-        crate::system::read_env_var_renamed(new_var, old_var)
+    fn num(var: &str, default: u64) -> u64 {
+        crate::system::read_env_var(var)
             .ok()
             .and_then(|s| s.trim().parse::<u64>().ok())
             .unwrap_or(default)
     }
-    // IPE_WEB_BANNER / IPE_LIVE_BANNER: off/0/false → disabled; anything else → on.
+    // IPE_WEB_BANNER: off/0/false → disabled; anything else → on.
     let banner = !matches!(
-        crate::system::read_env_var_renamed("IPE_WEB_BANNER", "IPE_LIVE_BANNER")
+        crate::system::read_env_var("IPE_WEB_BANNER")
             .ok()
             .map(|s| s.trim().to_ascii_lowercase()),
         Some(ref v) if v == "off" || v == "0" || v == "false"
@@ -353,33 +353,14 @@ fn web_client_config_js() -> String {
          window.__IPE_HEARTBEAT_TTL_MS={};\
          window.__IPE_MSG_RECONNECTING=\"Reconnecting…\";\
          window.__IPE_MSG_OFFLINE=\"Connection lost — refresh to retry\";",
-        num("IPE_WEB_RETRY_BASE_MS", "IPE_LIVE_RETRY_BASE_MS", 500),
-        num("IPE_WEB_RETRY_MAX_MS", "IPE_LIVE_RETRY_MAX_MS", 16000),
-        num(
-            "IPE_WEB_RETRY_MAX_ATTEMPTS",
-            "IPE_LIVE_RETRY_MAX_ATTEMPTS",
-            10
-        ),
-        // New vars: `IPE_WEB_*` only. Unlike the renamed ones above they never
-        // existed under the old `IPE_LIVE_*` name, so there is no deprecated
-        // alias to honour — the same name for both keys reads it once.
-        num("IPE_WEB_RETRY_FAST_MS", "IPE_WEB_RETRY_FAST_MS", 200),
-        num(
-            "IPE_WEB_RETRY_FAST_WINDOW_MS",
-            "IPE_WEB_RETRY_FAST_WINDOW_MS",
-            3000
-        ),
-        num("IPE_WEB_QUEUE_MAX", "IPE_LIVE_QUEUE_MAX", 50),
-        num(
-            "IPE_WEB_HELLO_TIMEOUT_MS",
-            "IPE_LIVE_HELLO_TIMEOUT_MS",
-            8000
-        ),
-        num(
-            "IPE_WEB_HEARTBEAT_TTL_MS",
-            "IPE_LIVE_HEARTBEAT_TTL_MS",
-            35000
-        ),
+        num("IPE_WEB_RETRY_BASE_MS", 500),
+        num("IPE_WEB_RETRY_MAX_MS", 16000),
+        num("IPE_WEB_RETRY_MAX_ATTEMPTS", 10),
+        num("IPE_WEB_RETRY_FAST_MS", 200),
+        num("IPE_WEB_RETRY_FAST_WINDOW_MS", 3000),
+        num("IPE_WEB_QUEUE_MAX", 50),
+        num("IPE_WEB_HELLO_TIMEOUT_MS", 8000),
+        num("IPE_WEB_HEARTBEAT_TTL_MS", 35000),
     )
 }
 
@@ -614,9 +595,9 @@ impl<Model, Msg, FInit, FUpdate, FView, FSubs> Clone
 /// Max concurrent Web-session drivers (admission control). 0 = unlimited
 /// (opt-out). Default 50_000 — far above any single-instance real load, low
 /// enough to bound memory under a session-creation flood.
-/// Env `IPE_WEB_MAX_SESSIONS` (deprecated alias: `IPE_LIVE_MAX_SESSIONS`).
+/// Env `IPE_WEB_MAX_SESSIONS`.
 fn max_sessions() -> usize {
-    crate::system::read_env_var_renamed("IPE_WEB_MAX_SESSIONS", "IPE_LIVE_MAX_SESSIONS")
+    crate::system::read_env_var("IPE_WEB_MAX_SESSIONS")
         .ok()
         .and_then(|v| v.parse::<usize>().ok())
         .unwrap_or(50_000)
@@ -998,18 +979,15 @@ fn cookie_path_for(base: &str) -> String {
     }
 }
 
-/// Normalised sub-app base path, read from `IPE_WEB_BASE_PATH` (deprecated
-/// alias: `IPE_LIVE_BASE_PATH`). Empty when unset (root-mounted app). When set
-/// (this app runs as a reverse-proxied sub-app — e.g. the bundled console
-/// mounted at `/_ipe/console`), the value is threaded into `render_page_full`
-/// so the client JS prefixes `/_ipe/event` + `/_ipe/sse` with it. The browser
-/// reaches this child only through the parent proxy, which strips the prefix
-/// before forwarding — so the child's own router stays root-relative.
+/// Normalised sub-app base path, read from `IPE_WEB_BASE_PATH`. Empty when
+/// unset (root-mounted app). When set (this app runs as a reverse-proxied
+/// sub-app — e.g. the bundled console mounted at `/_ipe/console`), the value
+/// is threaded into `render_page_full` so the client JS prefixes `/_ipe/event`
+/// + `/_ipe/sse` with it. The browser reaches this child only through the
+/// parent proxy, which strips the prefix before forwarding — so the child's own
+/// router stays root-relative.
 pub(super) fn web_base_path() -> String {
-    normalise_base_path(
-        &crate::system::read_env_var_renamed("IPE_WEB_BASE_PATH", "IPE_LIVE_BASE_PATH")
-            .unwrap_or_default(),
-    )
+    normalise_base_path(&crate::system::read_env_var("IPE_WEB_BASE_PATH").unwrap_or_default())
 }
 
 /// The active session cookie name (read AND write must agree, so both
@@ -1201,12 +1179,11 @@ fn page_response_with_overlay(
     resp
 }
 
-/// Maximum request body bytes for `/_ipe/event`: `IPE_WEB_MAX_BODY_BYTES`
-/// (deprecated alias: `IPE_LIVE_MAX_BODY_BYTES`), default 5 MiB
-/// (5 << 20 = 5 242 880). The default covers `Event.onFile` /
+/// Maximum request body bytes for `/_ipe/event`: `IPE_WEB_MAX_BODY_BYTES`,
+/// default 5 MiB (5 << 20 = 5 242 880). The default covers `Event.onFile` /
 /// `Event.onImage` data-URL payloads; override for larger file uploads.
 fn web_max_body_bytes() -> usize {
-    crate::system::read_env_var_renamed("IPE_WEB_MAX_BODY_BYTES", "IPE_LIVE_MAX_BODY_BYTES")
+    crate::system::read_env_var("IPE_WEB_MAX_BODY_BYTES")
         .ok()
         .and_then(|s| s.trim().parse::<usize>().ok())
         .filter(|&n| n > 0)
@@ -1241,10 +1218,10 @@ mod web_max_body_bytes_tests {
 }
 
 /// Session idle-TTL under the one config precedence `env > setting-in-code >
-/// fallback`: `IPE_WEB_TTL` (deprecated alias `IPE_LIVE_TTL`) wins, else an
-/// installed `Web.sessionTtl` setting, else the default 1800 (30 min).
+/// fallback`: `IPE_WEB_TTL` wins, else an installed `Web.sessionTtl` setting,
+/// else the default 1800 (30 min).
 fn web_ttl() -> std::time::Duration {
-    let secs = crate::system::read_env_var_renamed("IPE_WEB_TTL", "IPE_LIVE_TTL")
+    let secs = crate::system::read_env_var("IPE_WEB_TTL")
         .ok()
         .and_then(|s| parse_duration_secs(&s))
         .or_else(crate::app_config::resolve_session_ttl_override)
@@ -1302,16 +1279,13 @@ fn parse_duration_secs(raw: &str) -> Option<u64> {
 /// 15 s, otherwise idle) would hang the drain forever. This window lets ordinary
 /// in-flight requests finish, then force-exits 0 so SSE clients are dropped
 /// (the browser banner flips to "Reconnecting…").
-/// Tunable via `IPE_WEB_SHUTDOWN_GRACE_MS` (deprecated alias:
-/// `IPE_LIVE_SHUTDOWN_GRACE_MS`; default 1500 ms; 0 = exit at once).
+/// Tunable via `IPE_WEB_SHUTDOWN_GRACE_MS` (default 1500 ms; 0 = exit at
+/// once).
 fn shutdown_grace() -> std::time::Duration {
-    let ms = crate::system::read_env_var_renamed(
-        "IPE_WEB_SHUTDOWN_GRACE_MS",
-        "IPE_LIVE_SHUTDOWN_GRACE_MS",
-    )
-    .ok()
-    .and_then(|s| s.parse::<u64>().ok())
-    .unwrap_or(1500);
+    let ms = crate::system::read_env_var("IPE_WEB_SHUTDOWN_GRACE_MS")
+        .ok()
+        .and_then(|s| s.parse::<u64>().ok())
+        .unwrap_or(1500);
     std::time::Duration::from_millis(ms)
 }
 
@@ -1730,8 +1704,8 @@ fn is_browser_noise_path(p: &str) -> bool {
 /// as `Err` → `None` → 404.
 async fn serve_noise_from_static_root(path: &str) -> Option<axum::response::Response> {
     use axum::response::IntoResponse;
-    // IPE_WEB_STATIC_DIR (deprecated alias: IPE_LIVE_STATIC_DIR).
-    let dir = crate::system::read_env_var_renamed("IPE_WEB_STATIC_DIR", "IPE_LIVE_STATIC_DIR")
+    // IPE_WEB_STATIC_DIR: a non-empty value mounts the named directory at /static.
+    let dir = crate::system::read_env_var("IPE_WEB_STATIC_DIR")
         .ok()
         .filter(|d| !d.is_empty())?;
     let rel = path.trim_start_matches('/');
@@ -2562,8 +2536,8 @@ where
     let app =
         build_web_router::<Model, Msg, FInit, FUpdate, FView, FSubs>(state, console_proxy_flag);
 
-    // IPE_WEB_PORT (deprecated alias: IPE_LIVE_PORT); default 8000.
-    let port: i64 = crate::system::read_env_var_renamed("IPE_WEB_PORT", "IPE_LIVE_PORT")
+    // IPE_WEB_PORT: default 8000.
+    let port: i64 = crate::system::read_env_var("IPE_WEB_PORT")
         .ok()
         .and_then(|s| s.parse().ok())
         .unwrap_or(8000);
@@ -2797,11 +2771,10 @@ where
     // http.FileServer it FOLLOWS symlinks inside the dir — the dir is
     // author-controlled (package.ipe [web] static), so that is the intended
     // contract, NOT a confinement guarantee. Absent/empty → no static mount.
-    // IPE_WEB_STATIC_DIR (deprecated alias: IPE_LIVE_STATIC_DIR).
-    if let Some(dir) =
-        crate::system::read_env_var_renamed("IPE_WEB_STATIC_DIR", "IPE_LIVE_STATIC_DIR")
-            .ok()
-            .filter(|d| !d.is_empty())
+    // IPE_WEB_STATIC_DIR: non-empty value mounts the named directory at /static.
+    if let Some(dir) = crate::system::read_env_var("IPE_WEB_STATIC_DIR")
+        .ok()
+        .filter(|d| !d.is_empty())
     {
         router = router.nest_service("/static", tower_http::services::ServeDir::new(dir));
     }
@@ -3277,8 +3250,6 @@ mod admission_control_tests {
     fn max_sessions_parsing() {
         // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
         unsafe { std::env::remove_var("IPE_WEB_MAX_SESSIONS") };
-        // SAFETY: test-only env mutation.
-        unsafe { std::env::remove_var("IPE_LIVE_MAX_SESSIONS") };
         assert_eq!(max_sessions(), 50_000);
         // SAFETY: test-only env mutation.
         unsafe { std::env::set_var("IPE_WEB_MAX_SESSIONS", "7") };
@@ -3700,125 +3671,70 @@ mod recursion_session_isolation_tests {
     }
 }
 
-/// Alias and default preservation for the three security-critical env vars.
+/// Env-var coverage for the security-critical `IPE_WEB_*` settings.
 ///
-/// Each test covers three cases:
-///   (a) new `IPE_WEB_*` name takes effect,
-///   (b) deprecated `IPE_LIVE_*` alias still takes effect when new name is absent,
-///   (c) unset → unchanged default behavior.
+/// Each test covers: (a) the `IPE_WEB_*` name takes effect, (b) unset →
+/// unchanged default behavior.
 ///
 /// These are env-mutating tests and must not run in parallel — they use
 /// `std::env::set_var`/`remove_var` which are unsafe in Rust 2024 (see the
 /// ENV_LOCK rationale in system.rs). Each test cleans up after itself.
 #[cfg(test)]
-mod security_env_alias_tests {
+mod security_env_tests {
 
     // ── IPE_WEB_CSRF_ORIGIN_CHECK ─────────────────────────────────────────────
     //
     // `origin_check_enabled()` is memoized in a `OnceLock`, so we cannot test
     // it via the production `origin_mismatch` path in the same process run. We
-    // instead test the env-read layer directly: `read_env_var_renamed` returns
-    // the new name first, falls back to the old name, and returns `Err` when
-    // neither is set.
+    // test the env-read layer directly via `read_env_var`.
 
     #[test]
     fn csrf_origin_check_new_name_takes_effect() {
         // SAFETY: test-only env mutation.
         unsafe { std::env::remove_var("IPE_WEB_CSRF_ORIGIN_CHECK") };
-        // SAFETY: test-only env mutation.
-        unsafe { std::env::remove_var("IPE_LIVE_CSRF_ORIGIN_CHECK") };
 
-        // (a) new name → "on"
+        // (a) set → "on"
         // SAFETY: test-only env mutation.
         unsafe { std::env::set_var("IPE_WEB_CSRF_ORIGIN_CHECK", "on") };
         assert_eq!(
-            crate::system::read_env_var_renamed(
-                "IPE_WEB_CSRF_ORIGIN_CHECK",
-                "IPE_LIVE_CSRF_ORIGIN_CHECK",
-            )
-            .as_deref(),
+            crate::system::read_env_var("IPE_WEB_CSRF_ORIGIN_CHECK").as_deref(),
             Ok("on"),
             "IPE_WEB_CSRF_ORIGIN_CHECK must be read"
         );
         // SAFETY: test-only env mutation.
         unsafe { std::env::remove_var("IPE_WEB_CSRF_ORIGIN_CHECK") };
 
-        // (b) deprecated alias → "on" (new name absent)
-        // SAFETY: test-only env mutation.
-        unsafe { std::env::set_var("IPE_LIVE_CSRF_ORIGIN_CHECK", "on") };
-        assert_eq!(
-            crate::system::read_env_var_renamed(
-                "IPE_WEB_CSRF_ORIGIN_CHECK",
-                "IPE_LIVE_CSRF_ORIGIN_CHECK",
-            )
-            .as_deref(),
-            Ok("on"),
-            "IPE_LIVE_CSRF_ORIGIN_CHECK alias must still work"
-        );
-        // SAFETY: test-only env mutation.
-        unsafe { std::env::remove_var("IPE_LIVE_CSRF_ORIGIN_CHECK") };
-
-        // (c) neither set → Err (origin check stays OFF — secure default)
+        // (b) unset → Err (origin check stays OFF — secure default)
         assert!(
-            crate::system::read_env_var_renamed(
-                "IPE_WEB_CSRF_ORIGIN_CHECK",
-                "IPE_LIVE_CSRF_ORIGIN_CHECK",
-            )
-            .is_err(),
+            crate::system::read_env_var("IPE_WEB_CSRF_ORIGIN_CHECK").is_err(),
             "unset → Err; origin check defaults to OFF"
         );
     }
 
     // ── IPE_WEB_FRAME_ANCESTORS ───────────────────────────────────────────────
     //
-    // `frame_ancestors()` is also memoized in a `OnceLock`. We test the env-read
-    // layer: new name wins, alias works, unset → empty (→ `None` in production).
+    // `frame_ancestors()` is memoized in a `OnceLock`. We test the env-read
+    // layer: set → value, unset → Err (→ `None` in production).
 
     #[test]
     fn frame_ancestors_new_name_takes_effect() {
         // SAFETY: test-only env mutation.
         unsafe { std::env::remove_var("IPE_WEB_FRAME_ANCESTORS") };
-        // SAFETY: test-only env mutation.
-        unsafe { std::env::remove_var("IPE_LIVE_FRAME_ANCESTORS") };
 
-        // (a) new name
+        // (a) set → value
         // SAFETY: test-only env mutation.
         unsafe { std::env::set_var("IPE_WEB_FRAME_ANCESTORS", "https://app.example.com") };
         assert_eq!(
-            crate::system::read_env_var_renamed(
-                "IPE_WEB_FRAME_ANCESTORS",
-                "IPE_LIVE_FRAME_ANCESTORS",
-            )
-            .as_deref(),
+            crate::system::read_env_var("IPE_WEB_FRAME_ANCESTORS").as_deref(),
             Ok("https://app.example.com"),
             "IPE_WEB_FRAME_ANCESTORS must be read"
         );
         // SAFETY: test-only env mutation.
         unsafe { std::env::remove_var("IPE_WEB_FRAME_ANCESTORS") };
 
-        // (b) deprecated alias
-        // SAFETY: test-only env mutation.
-        unsafe { std::env::set_var("IPE_LIVE_FRAME_ANCESTORS", "https://app.example.com") };
-        assert_eq!(
-            crate::system::read_env_var_renamed(
-                "IPE_WEB_FRAME_ANCESTORS",
-                "IPE_LIVE_FRAME_ANCESTORS",
-            )
-            .as_deref(),
-            Ok("https://app.example.com"),
-            "IPE_LIVE_FRAME_ANCESTORS alias must still work"
-        );
-        // SAFETY: test-only env mutation.
-        unsafe { std::env::remove_var("IPE_LIVE_FRAME_ANCESTORS") };
-
-        // (c) neither set → Err; frame_ancestors() would return None (no CSP
-        // change, cookies stay SameSite=Lax — the secure default for same-origin).
+        // (b) unset → Err; frame_ancestors() returns None (same-origin mode).
         assert!(
-            crate::system::read_env_var_renamed(
-                "IPE_WEB_FRAME_ANCESTORS",
-                "IPE_LIVE_FRAME_ANCESTORS",
-            )
-            .is_err(),
+            crate::system::read_env_var("IPE_WEB_FRAME_ANCESTORS").is_err(),
             "unset → Err; frame_ancestors defaults to None (same-origin mode)"
         );
     }
@@ -3829,14 +3745,12 @@ mod security_env_alias_tests {
     // we can test the production function directly.
 
     #[test]
-    fn web_max_body_bytes_new_name_alias_and_default() {
+    fn web_max_body_bytes_new_name_and_default() {
         use super::web_max_body_bytes;
         const DEFAULT: usize = 5 << 20;
 
         // SAFETY: test-only env mutation.
         unsafe { std::env::remove_var("IPE_WEB_MAX_BODY_BYTES") };
-        // SAFETY: test-only env mutation.
-        unsafe { std::env::remove_var("IPE_LIVE_MAX_BODY_BYTES") };
 
         // (c) unset → default (5 MiB); a rename bug that silently zeros this
         // would reject all /_ipe/event POSTs.
@@ -3846,7 +3760,7 @@ mod security_env_alias_tests {
             "unset → 5 MiB default must be preserved"
         );
 
-        // (a) new name takes effect
+        // Set → override takes effect.
         // SAFETY: test-only env mutation.
         unsafe { std::env::set_var("IPE_WEB_MAX_BODY_BYTES", "8192") };
         assert_eq!(
@@ -3856,17 +3770,6 @@ mod security_env_alias_tests {
         );
         // SAFETY: test-only env mutation.
         unsafe { std::env::remove_var("IPE_WEB_MAX_BODY_BYTES") };
-
-        // (b) deprecated alias still works when new name is absent
-        // SAFETY: test-only env mutation.
-        unsafe { std::env::set_var("IPE_LIVE_MAX_BODY_BYTES", "4096") };
-        assert_eq!(
-            web_max_body_bytes(),
-            4096,
-            "deprecated alias IPE_LIVE_MAX_BODY_BYTES must still work"
-        );
-        // SAFETY: test-only env mutation.
-        unsafe { std::env::remove_var("IPE_LIVE_MAX_BODY_BYTES") };
 
         // Restore default.
         assert_eq!(web_max_body_bytes(), DEFAULT);

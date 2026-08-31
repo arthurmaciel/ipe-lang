@@ -22,10 +22,28 @@ use std::time::{Duration, Instant};
 /// A settled batch of distinct changed paths — the coalescer's output. Empty
 /// batches are never emitted (a batch always represents at least one
 /// observed, in-scope, non-duplicate event).
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct Batch {
     pub changed_paths: BTreeSet<PathBuf>,
+    /// The instant the FIRST raw event of this batch arrived — the true start
+    /// of the debounce/settle window. `None` only on a manually-constructed
+    /// batch (never on one the loop emits). The orchestrator subtracts this
+    /// from the batch's arrival time to measure settle latency (edit → settled)
+    /// under `IPE_WATCH_TIMING`; it is otherwise unused, so `PartialEq`/`Eq`
+    /// deliberately exclude it (two batches with the same paths are equal).
+    pub first_event_at: Option<Instant>,
 }
+
+// `first_event_at` is a wall-clock probe, not part of a batch's identity; two
+// batches carrying the same changed paths are equal regardless of when their
+// windows opened. Hand-implemented so tests can compare batches by paths alone.
+impl PartialEq for Batch {
+    fn eq(&self, other: &Self) -> bool {
+        self.changed_paths == other.changed_paths
+    }
+}
+
+impl Eq for Batch {}
 
 /// Tunable coalescing windows.
 ///
@@ -107,6 +125,7 @@ pub fn coalesce_loop(raw_rx: &Receiver<PathBuf>, out_tx: &Sender<Batch>, cfg: De
             if out_tx
                 .send(Batch {
                     changed_paths: pending,
+                    first_event_at: Some(batch_started),
                 })
                 .is_err()
             {

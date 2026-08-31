@@ -7,11 +7,11 @@ fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     match ipe::run_cli(&args) {
         Ok(()) => ExitCode::SUCCESS,
-        // `--check --exit-code` carries a numeric code outside the 0/1 range —
-        // the only way to deliver it is `std::process::exit`. The status line
-        // was already printed by `run_upgrade`; nothing more to do here.
+        // `--check --exit-code` carries a git-style numeric code (10/0/2); the
+        // status line was already printed by `run_upgrade`. Deliver it as the
+        // process exit code — `ExitCode` renders any byte, so no abrupt exit.
         Err(ipe::CliError::UpgradeCheckExit { code }) => {
-            std::process::exit(code);
+            ExitCode::from(u8::try_from(code).unwrap_or(2))
         }
         // These variants render their own complete screen — a full help page, a
         // gate report, or a self-guttered environment message — so the `ipe: `

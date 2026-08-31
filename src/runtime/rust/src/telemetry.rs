@@ -266,10 +266,9 @@ pub fn inject_dev_banner(body: &str, banner: &str) -> String {
 }
 
 /// `Some(value)` when responses run in cross-origin-iframe mode
-/// (`IPE_WEB_FRAME_ANCESTORS` set; deprecated alias: `IPE_LIVE_FRAME_ANCESTORS`).
-/// Snapshotted once into a `OnceLock` so env is read only once (eliminates the
-/// TOCTOU window where a dynamic env mutation could split the cookie name / CSP
-/// framing decision within a single request).
+/// (`IPE_WEB_FRAME_ANCESTORS` set). Snapshotted once into a `OnceLock` so env
+/// is read only once (eliminates the TOCTOU window where a dynamic env mutation
+/// could split the cookie name / CSP framing decision within a single request).
 ///
 /// Lives here (the always-compiled telemetry module) rather than under `web`
 /// so the Ipe.Http.Server path (`server.rs`) can reach it too — the `web`
@@ -284,7 +283,7 @@ pub fn frame_ancestors() -> Option<&'static str> {
         // splitting); NUL is rejected by header encoders. The remaining
         // `frame-ancestors` source-list grammar is the operator's
         // responsibility — we only close the response-splitting vector.
-        crate::system::read_env_var_renamed("IPE_WEB_FRAME_ANCESTORS", "IPE_LIVE_FRAME_ANCESTORS")
+        crate::system::read_env_var("IPE_WEB_FRAME_ANCESTORS")
             .unwrap_or_default()
             .chars()
             .filter(|c| !matches!(c, '\r' | '\n' | '\0'))

@@ -12,6 +12,7 @@ module Ipe.Time exposing
     , timeString
     , format, formatHTTP, formatISO8601, formatRFC3339
     , add, diff
+    , fromMillis, toMillis
     , addMillis, diffMillis
     , every
     , isLeapYear, daysInMonth
@@ -129,6 +130,20 @@ add span t =
 diff : Timestamp -> Timestamp -> Duration
 diff a b =
     Timestamp.diff a b
+
+
+-- | `fromMillis ms` — build a `Timestamp` from raw milliseconds since the Unix
+-- epoch.  Convenience alias for `Ipe.Time.Timestamp.fromUnixMillis`.
+fromMillis : Int -> Timestamp
+fromMillis ms =
+    Timestamp.fromUnixMillis ms
+
+
+-- | `toMillis t` — recover the raw millisecond value from a `Timestamp`.
+-- Convenience alias for `Ipe.Time.Timestamp.toUnixMillis`.
+toMillis : Timestamp -> Int
+toMillis t =
+    Timestamp.toUnixMillis t
 
 
 addMillisKernel : Int -> Int -> Int

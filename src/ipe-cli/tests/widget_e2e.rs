@@ -171,7 +171,7 @@ fn spawn_and_wait_ready(
     port: u16,
 ) -> Result<ProcessGuard, BoxError> {
     let mut child = Command::new(exe)
-        .env("IPE_LIVE_PORT", port.to_string())
+        .env("IPE_WEB_PORT", port.to_string())
         // Disable the double-submit CSRF check so raw-socket POSTs work (the
         // client-side CSRF wiring is exercised structurally in the glue; here we
         // drive the wire directly). The up-event path is otherwise identical.

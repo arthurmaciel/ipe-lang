@@ -2,193 +2,2225 @@
 
 # Standard library
 
-Each module listed below links to a detail page with full doc-strings and examples. Symbols without a doc-string are omitted from this index.
+Each module listed below links to a detail page with the full documentation and signature for every export.
 
 ## Modules
 
+- [Analytics](#analytics)
+- [Basics](#basics)
+- [Bitwise](#bitwise)
+- [ByteSize](#bytesize)
+- [Bytes](#bytes)
+- [Cache](#cache)
+- [Char](#char)
+- [Codec](#codec)
+- [Compression](#compression)
+- [Config](#config)
+- [Crypto](#crypto)
+- [Css](#css)
+- [Csv](#csv)
+- [Db.Codec](#dbcodec)
+- [Db.Dsn](#dbdsn)
+- [Db.Store](#dbstore)
+- [Db.Store.Unsafe](#dbstoreunsafe)
+- [Db.Unsafe](#dbunsafe)
+- [Debug](#debug)
+- [Decimal](#decimal)
+- [Dict](#dict)
+- [Duration](#duration)
+- [Email](#email)
+- [Encoding](#encoding)
+- [Env](#env)
+- [Error](#error)
+- [File](#file)
+- [Html](#html)
+- [Html.Attributes](#htmlattributes)
+- [Html.Unsafe](#htmlunsafe)
+- [Http](#http)
 - [Io](#io)
+- [Js](#js)
+- [Level](#level)
 - [List](#list)
+- [Locale](#locale)
+- [Log](#log)
+- [Markdown](#markdown)
+- [Math](#math)
 - [Maybe](#maybe)
+- [Money](#money)
+- [Net](#net)
+- [Palette](#palette)
+- [Path](#path)
+- [Process](#process)
+- [PubSub](#pubsub)
+- [Random](#random)
+- [Random.Generator](#randomgenerator)
+- [Regex](#regex)
 - [Result](#result)
+- [Secret.Unsafe](#secretunsafe)
+- [Set](#set)
 - [String](#string)
+- [System](#system)
 - [Task](#task)
+- [Test](#test)
+- [Time](#time)
+- [Time.Timestamp](#timetimestamp)
+- [ToString](#tostring)
+- [Trace](#trace)
+- [Tuple](#tuple)
+- [Ui](#ui)
+- [Ui.Animation](#uianimation)
+- [Ui.Cells](#uicells)
+- [Ui.Chart](#uichart)
+- [Ui.Events](#uievents)
+- [Ui.Grid](#uigrid)
+- [Ui.Responsive](#uiresponsive)
+- [Ui.Transform](#uitransform)
+- [Ui.Transition](#uitransition)
+- [Url](#url)
+- [Url.Parser](#urlparser)
+- [Uuid](#uuid)
+- [Web.Console](#webconsole)
+- [Web.Head](#webhead)
+- [Web.Head.Unsafe](#webheadunsafe)
+- [WebSocket](#websocket)
+
+## Analytics
+
+[Full reference](stdlib/Analytics.md)
+
+Ipe.Analytics — typed, consent-gated product analytics.
+
+| Export | Summary |
+|--------|----------|
+| `ConsentState` | The three possible consent states. `track` / `trackEvent` are |
+| `Sink` | Where serialised event lines go. |
+| `PropValue` | A typed analytics property value. Every branch serialises safely: |
+| `Props` | A bag of named property values for an event or identity. |
+| `Pii` | An opaque PII-tagged string. Cannot be serialised directly — the sink |
+| `pii` | Wrap a plaintext string as a `Pii` value. The wrapped string is sealed |
+| `noProps` | An empty `Props`. |
+| `props` | Build a `Props` from a list of `(name, value)` pairs. |
+| `defaultConfig` | A `Config` starting in the `Pending` state (fail-closed default) with no |
+| `setConsent` | Replace the consent state in a `Config`. |
+| `identify` | Record the user's identity and optional trait properties. |
+| `track` | `track cfg eventName eventProps` — emit a named event with a property bag. |
+| `eventsStore` | The typed `Store AnalyticsEvent`. Built from `analyticsEventCodec`, so its |
+| `persist` | `persist db store cfg eventName eventProps` — persist a named event with a |
+| `persistEvent` | `persistEvent db store cfg codec event eventProps` — persist an event |
+| `totals` | `totals db store` — the total count of persisted events. |
+| `uniqueUsers` | `uniqueUsers db store` — the count of distinct `userId` values in the |
+| `eventCounts` | `eventCounts db store` — a dictionary mapping each event name to the |
+| `encodePropValue` | Encode one `PropValue` to a JSON `Value`. `PPii` → `"[redacted]"`, |
+
+## Basics
+
+[Full reference](stdlib/Basics.md)
+
+Ipe.Basics — the implicit prelude (Tier-A auto-import, compiled source).
+
+| Export | Summary |
+|--------|----------|
+| `identity` | (no summary) |
+| `always` | (no summary) |
+| `not` | (no summary) |
+| `fst` | (no summary) |
+| `snd` | (no summary) |
+| `clamp` | (no summary) |
+| `toString` | (no summary) |
+| `modBy` | (no summary) |
+| `negate` | (no summary) |
+| `abs` | (no summary) |
+| `sqrt` | (no summary) |
+| `min` | (no summary) |
+| `max` | (no summary) |
+| `compare` | (no summary) |
+
+## Bitwise
+
+[Full reference](stdlib/Bitwise.md)
+
+Ipe.Bitwise — bitwise operations on `Int`.
+
+| Export | Summary |
+|--------|----------|
+| `and` | Bitwise AND. |
+| `or` | Bitwise OR. |
+| `xor` | Bitwise XOR. |
+| `complement` | Bitwise complement (flip every bit). |
+| `shiftLeftBy` | Arithmetic left shift.  `shiftLeftBy offset n` shifts `n` left by |
+| `shiftRightBy` | Arithmetic (sign-preserving) right shift. |
+| `shiftRightZfBy` | Zero-fill (logical) right shift: the sign bit is not replicated. |
+
+## ByteSize
+
+[Full reference](stdlib/ByteSize.md)
+
+Ipe.ByteSize — an opaque, unit-explicit byte quantity.
+
+| Export | Summary |
+|--------|----------|
+| `ByteSize` | An opaque, non-negative byte quantity.  The constructor is NOT exported, |
+| `bytes` | `bytes n` — a quantity of `n` bytes.  A negative `n` clamps to `0`. |
+| `kib` | `kib n` — a quantity of `n` kibibytes (`n * 1024` bytes).  A negative `n` |
+| `mib` | `mib n` — a quantity of `n` mebibytes (`n * 1024 * 1024` bytes).  A |
+| `zero` | The zero quantity (`0` bytes).  A total value. |
+| `toBytes` | `toBytes size` — recover the raw byte count for the runtime boundary. |
+
+## Bytes
+
+[Full reference](stdlib/Bytes.md)
+
+| Export | Summary |
+|--------|----------|
+| `empty` | The empty byte buffer (zero bytes). |
+| `length` | The number of bytes in the buffer. |
+| `isEmpty` | True when the buffer contains no bytes. |
+| `fromString` | UTF-8-encode a Ipe `String` into a `Bytes` buffer. |
+| `toString` | UTF-8-decode a `Bytes` buffer into a Ipe `String`. |
+| `fromHex` | Decode a hexadecimal string into bytes. |
+| `toHex` | Hex-encode a byte buffer (lowercase output, two hex digits per byte). |
+| `fromBase64` | Standard (RFC 4648) base-64 decode. |
+| `toBase64` | Standard (RFC 4648) base-64 encode. |
+| `append` | Concatenate two byte buffers. |
+| `slice` | `slice start end bytes` — return bytes in the half-open interval |
+
+## Cache
+
+[Full reference](stdlib/Cache.md)
+
+Ipe.Cache — in-memory LRU + TTL cache.
+
+| Export | Summary |
+|--------|----------|
+| `Cache` | Opaque handle to a cache.  The wrapped `Int` is the runtime's |
+| `CacheCfg` | Configuration record for `new`.  All-defaults via `defaultCfg`; |
+| `defaultCfg` | Default cache config: 1024 entries, no TTL, no byte cap. |
+| `withMaxEntries` | Override the max number of entries.  Triggers LRU eviction when |
+| `withTTL` | Override the per-entry TTL as an `Ipe.Duration` (e.g. `Duration.seconds |
+| `withMaxBytes` | Override the approximate byte cap as an `Ipe.ByteSize` (e.g. `ByteSize.mib |
+| `new` | `new cfg` — create a new cache.  Resolves once the underlying |
+| `get` | `get cache key` — look up `key` in `cache`.  Returns |
+| `put` | `put cache key value` — insert (or update) `key → value`.  May |
+| `remove` | `remove cache key` — delete `key`.  Idempotent — missing keys |
+| `clear` | `clear cache` — purge every entry.  Stats counters keep their |
+| `size` | `size cache` — current entry count (after lazy expiration). |
+| `stats` | `stats cache` — running totals of `{ hits, misses, evictions }` |
+
+## Char
+
+[Full reference](stdlib/Char.md)
+
+Ipe.Char — single-character helpers.
+
+| Export | Summary |
+|--------|----------|
+| `isAlpha` | (no summary) |
+| `isDigit` | (no summary) |
+| `isLower` | (no summary) |
+| `isUpper` | (no summary) |
+| `isAlphaNum` | A letter or a digit (`isAlpha` or `isDigit`). |
+| `isHexDigit` | An ASCII hexadecimal digit (`0-9`, `a-f`, `A-F`). |
+| `isOctDigit` | An ASCII octal digit (`0-7`). |
+| `toLower` | (no summary) |
+| `toUpper` | (no summary) |
+| `toCode` | Unicode code-point conversion. |
+| `fromCode` | (no summary) |
+
+## Codec
+
+[Full reference](stdlib/Codec.md)
+
+Ipe.Codec — one invariant codec that drives BOTH the JSON direction and the
+
+| Export | Summary |
+|--------|----------|
+| `Codec` | An invariant codec for `a`: an encoder to a JSON `Value`, a decoder factory |
+| `ColType` | The dialect-neutral column type a codec maps to. The `Ipe.Db` layer maps |
+| `Shape` | A codec's structural shape. `SRecord` is a record whose top-level scalar |
+| `shape` | The codec's structural `Shape` — its DB column list (`SRecord`), single |
+| `columnOf` | The column type a record FIELD contributes to an `SRecord`. A scalar field |
+| `toValue` | The encoder half applied: `a` to a JSON `Value` node. |
+| `toJson` | Encode `a` to a compact JSON string. |
+| `fromJson` | Decode a JSON string back to `a`, or a typed `Error` on malformed input or |
+| `fromJsonSafe` | The untrusted-input door: reject input longer than `maxChars` BEFORE |
+| `string` | JSON string ⇄ `String`. One `CText` column. |
+| `int` | JSON integer ⇄ `Int`. A non-integral number is rejected, never truncated. |
+| `bool` | JSON boolean ⇄ `Bool`. One `CBool` column. |
+| `float` | JSON number ⇄ `Float`. One `CReal` column. Prefer `decimal`/`money` for |
+| `decimal` | Exact decimal ⇄ a JSON STRING, LOSSLESS. The value encodes through |
+| `money` | Exact money ⇄ a JSON STRING carrying both the amount and the ISO currency |
+| `map` | Adapt a `Codec a` to a `Codec b` given a BIJECTION `a <-> b`. Both |
+| `list` | `list elem` — a JSON array of `elem`s ⇄ `List a`. The element encoder is |
+| `maybe` | `maybe elem` — JSON `null` ⇄ `Nothing`, any other value ⇄ `Just`. On |
+| `dict` | `dict value` — a JSON object whose values are `value`s ⇄ `Dict String a`. |
+| `enum` | `enum eq pairs` — a nullary enum ⇄ a readable JSON string, driven by one |
+| `Variant` | One arm of a `taggedUnion`: it carries BOTH directions for one constructor, |
+| `taggedUnion` | `taggedUnion variants` — a data-carrying ADT ⇄ a tagged JSON array |
+| `var0` | A nullary variant: the tag alone, no payload. Encodes to `["Tag"]`. |
+| `var1` | A one-argument variant. `project` recognises this arm and yields its |
+| `var2` | A two-argument variant. |
+| `var3` | A three-argument variant. |
+
+## Compression
+
+[Full reference](stdlib/Compression.md)
+
+Ipe.Compression — gzip + zstd compression.
+
+| Export | Summary |
+|--------|----------|
+| `gzip` | `gzip bytes` — RFC 1952 gzip-compress.  Output is a complete |
+| `gunzip` | `gunzip bytes` — RFC 1952 gzip-decompress.  Fails on truncated |
+| `zstdCompress` | `zstdCompress bytes` — Zstandard (RFC 8478) compress at the |
+| `zstdDecompress` | `zstdDecompress bytes` — Zstandard decompress.  Fails on |
+
+## Config
+
+[Full reference](stdlib/Config.md)
+
+Ipe.Config — typed TOML/YAML/JSON decoders.
+
+| Export | Summary |
+|--------|----------|
+| `Decoder` | Opaque decoder.  Construct with the combinators below. |
+| `string` | (no summary) |
+| `int` | (no summary) |
+| `float` | (no summary) |
+| `bool` | (no summary) |
+| `nullable` | `nullable decoder` — like `decoder`, but `Nothing` on null / |
+| `field` | `field name decoder` — decode the named field at the current |
+| `at` | `at path decoder` — drill into nested fields.  `at ["db", |
+| `list` | (no summary) |
+| `index` | `index n decoder` — decode the n-th element of an array. Fails on |
+| `keyValuePairs` | `keyValuePairs decoder` — decode every entry of an object into a list of |
+| `dict` | `dict decoder` — decode an object into a `Dict String a`, applying |
+| `succeed` | (no summary) |
+| `fail` | (no summary) |
+| `map` | (no summary) |
+| `map2` | `map2`..`map8` — combine 2..8 decoders over the SAME value with an N-ary |
+| `map3` | (no summary) |
+| `map4` | (no summary) |
+| `map5` | (no summary) |
+| `map6` | (no summary) |
+| `map7` | (no summary) |
+| `map8` | (no summary) |
+| `andThen` | (no summary) |
+| `oneOf` | `oneOf decoders` — try each decoder in order, returning the first that |
+| `maybe` | `maybe decoder` — succeed with `Just` when `decoder` matches, else `Nothing` |
+| `decodeToml` | Run a decoder against a TOML document. |
+| `decodeYaml` | Run a decoder against a YAML document. |
+| `decodeJson` | Run a decoder against a JSON document.  Alias for |
+| `loadFromFile` | `loadFromFile path decoder` — read `path` (a validated `Path`, |
+
+## Crypto
+
+[Full reference](stdlib/Crypto.md)
+
+Ipe.Crypto — cryptographic primitives.
+
+| Export | Summary |
+|--------|----------|
+| `sha256` | (no summary) |
+| `sha512` | (no summary) |
+| `sha1` | (no summary) |
+| `md5` | (no summary) |
+| `rsaSha256Sign` | (no summary) |
+| `rsaSha256Verify` | (no summary) |
+| `constantTimeEqual` | (no summary) |
+| `aesGcmEncrypt` | `aesGcmEncrypt key plaintext` — AES-256-GCM encrypt with a typed `Key`. |
+| `aesGcmDecrypt` | `aesGcmDecrypt key ciphertext` — AES-256-GCM decrypt with a typed `Key`. |
+| `chacha20Encrypt` | `chacha20Encrypt key plaintext` — ChaCha20-Poly1305 encrypt with a typed `Key`. |
+| `chacha20Decrypt` | `chacha20Decrypt key ciphertext` — ChaCha20-Poly1305 decrypt with a typed `Key`. |
+| `aesKeyFromPassword` | Derive an AES-256 `Key` from a password + salt string. |
+| `chachaKeyFromPassword` | Derive a ChaCha20 `Key` from a password + salt string. |
+| `randomBytes` | (no summary) |
+| `randomToken` | (no summary) |
+| `Key` | An opaque cryptographic key.  Construct only via `keyFromString` |
+| `Mac` | An opaque message authentication code (HMAC output).  Inspect via |
+| `keyFromString` | Parse a hex-encoded or raw string into a `Key`.  Returns `Nothing` |
+| `keyFromBytes` | Parse raw bytes (as Ipe `String`/`Bytes`) into a `Key`. |
+| `macToHex` | Render a `Mac` as a lowercase hex string for storage or display. |
+| `hmacSha256` | `hmacSha256 key message` — HMAC-SHA-256.  Returns a typed `Mac`. |
+| `hmacSha512` | `hmacSha512 key message` — HMAC-SHA-512.  Returns a typed `Mac`. |
+
+## Css
+
+[Full reference](stdlib/Css.md)
+
+| Export | Summary |
+|--------|----------|
+| `CssProp` | (no summary) |
+| `CssRule` | (no summary) |
+| `Length` | (no summary) |
+| `Color` | (no summary) |
+| `Opacity` | (no summary) |
+| `Display` | (no summary) |
+| `Position` | (no summary) |
+| `TextAlign` | (no summary) |
+| `Cursor` | (no summary) |
+| `FlexDirection` | (no summary) |
+| `FlexWrap` | (no summary) |
+| `Align` | (no summary) |
+| `FontWeight` | (no summary) |
+| `FontStyle` | (no summary) |
+| `Overflow` | (no summary) |
+| `WhiteSpace` | (no summary) |
+| `BoxSizing` | (no summary) |
+| `PointerEvents` | (no summary) |
+| `TextDecoration` | (no summary) |
+| `BorderStyle` | (no summary) |
+| `lengthToString` | (no summary) |
+| `colorToString` | (no summary) |
+| `floatStr` | (no summary) |
+| `opacityOf` | (no summary) |
+| `opaque` | (no summary) |
+| `opacityToString` | (no summary) |
+| `px` | (no summary) |
+| `rem` | (no summary) |
+| `em` | (no summary) |
+| `pct` | (no summary) |
+| `vh` | (no summary) |
+| `vw` | (no summary) |
+| `ch` | (no summary) |
+| `fr` | (no summary) |
+| `num` | (no summary) |
+| `zero` | (no summary) |
+| `auto` | (no summary) |
+| `lengthRaw` | (no summary) |
+| `calc` | (no summary) |
+| `minmax` | (no summary) |
+| `hex` | (no summary) |
+| `rgb` | (no summary) |
+| `rgba` | (no summary) |
+| `hsl` | (no summary) |
+| `hsla` | (no summary) |
+| `transparent` | (no summary) |
+| `currentColor` | (no summary) |
+| `colorRaw` | (no summary) |
+| `deg` | (no summary) |
+| `ms` | (no summary) |
+| `sec` | (no summary) |
+| `rotate` | (no summary) |
+| `scale` | (no summary) |
+| `scaleXY` | (no summary) |
+| `translateX` | (no summary) |
+| `translateY` | (no summary) |
+| `translate` | (no summary) |
+| `skewX` | (no summary) |
+| `skewY` | (no summary) |
+| `cssVar` | (no summary) |
+| `cssVarOr` | (no summary) |
+| `linearGradient` | (no summary) |
+| `repeat` | (no summary) |
+| `shadow` | (no summary) |
+| `none` | (no summary) |
+| `systemFont` | (no summary) |
+| `monoFont` | (no summary) |
+| `property` | (no summary) |
+| `rawProp` | (no summary) |
+| `defineVar` | (no summary) |
+| `important` | (no summary) |
+| `width` | (no summary) |
+| `height` | (no summary) |
+| `maxWidth` | (no summary) |
+| `minWidth` | (no summary) |
+| `maxHeight` | (no summary) |
+| `minHeight` | (no summary) |
+| `fontSize` | (no summary) |
+| `lineHeight` | (no summary) |
+| `letterSpacing` | (no summary) |
+| `padding` | (no summary) |
+| `paddingTop` | (no summary) |
+| `paddingBottom` | (no summary) |
+| `paddingLeft` | (no summary) |
+| `paddingRight` | (no summary) |
+| `padding2` | (no summary) |
+| `padding4` | (no summary) |
+| `margin` | (no summary) |
+| `marginTop` | (no summary) |
+| `marginBottom` | (no summary) |
+| `marginLeft` | (no summary) |
+| `marginRight` | (no summary) |
+| `margin2` | (no summary) |
+| `margin4` | (no summary) |
+| `gap` | (no summary) |
+| `rowGap` | (no summary) |
+| `columnGap` | (no summary) |
+| `borderRadius` | (no summary) |
+| `borderRadius4` | (no summary) |
+| `top` | (no summary) |
+| `bottom` | (no summary) |
+| `left` | (no summary) |
+| `right` | (no summary) |
+| `color` | (no summary) |
+| `background` | (no summary) |
+| `backgroundColor` | (no summary) |
+| `borderColor` | (no summary) |
+| `display` | (no summary) |
+| `position` | (no summary) |
+| `textAlign` | (no summary) |
+| `cursor` | (no summary) |
+| `flexDirection` | (no summary) |
+| `flexWrap` | (no summary) |
+| `justifyContent` | (no summary) |
+| `alignItems` | (no summary) |
+| `alignContent` | (no summary) |
+| `fontWeight` | (no summary) |
+| `fontStyle` | (no summary) |
+| `overflow` | (no summary) |
+| `overflowX` | (no summary) |
+| `overflowY` | (no summary) |
+| `whiteSpace` | (no summary) |
+| `boxSizing` | (no summary) |
+| `pointerEvents` | (no summary) |
+| `textDecoration` | (no summary) |
+| `border` | (no summary) |
+| `borderTop` | (no summary) |
+| `borderBottom` | (no summary) |
+| `borderLeft` | (no summary) |
+| `borderRight` | (no summary) |
+| `borderStyle` | (no summary) |
+| `borderWidth` | (no summary) |
+| `fontFamily` | (no summary) |
+| `transition` | (no summary) |
+| `transitionProp` | (no summary) |
+| `transitionDuration` | (no summary) |
+| `transitionTimingFunction` | (no summary) |
+| `transform` | (no summary) |
+| `animation` | (no summary) |
+| `boxShadow` | (no summary) |
+| `shadows` | (no summary) |
+| `outline` | (no summary) |
+| `outlineOffset` | (no summary) |
+| `backgroundImage` | (no summary) |
+| `backgroundSize` | (no summary) |
+| `backgroundPosition` | (no summary) |
+| `backgroundRepeat` | (no summary) |
+| `filter` | (no summary) |
+| `backdropFilter` | (no summary) |
+| `flex` | (no summary) |
+| `flexGrow` | (no summary) |
+| `flexShrink` | (no summary) |
+| `flexBasis` | (no summary) |
+| `gridTemplateColumns` | (no summary) |
+| `gridTemplateRows` | (no summary) |
+| `gridColumn` | (no summary) |
+| `gridRow` | (no summary) |
+| `gridGap` | (no summary) |
+| `zIndex` | (no summary) |
+| `opacity` | (no summary) |
+| `content` | (no summary) |
+| `textTransform` | (no summary) |
+| `visibility` | (no summary) |
+| `objectFit` | (no summary) |
+| `objectPosition` | (no summary) |
+| `listStyle` | (no summary) |
+| `listStyleType` | (no summary) |
+| `listStylePosition` | (no summary) |
+| `verticalAlign` | (no summary) |
+| `userSelect` | (no summary) |
+| `wordBreak` | (no summary) |
+| `borderCollapse` | (no summary) |
+| `clear` | (no summary) |
+| `float` | (no summary) |
+| `borderSpacing` | (no summary) |
+| `rule` | (no summary) |
+| `media` | (no summary) |
+| `keyframes` | (no summary) |
+| `frame` | (no summary) |
+| `raw` | (no summary) |
+| `renderProp` | (no summary) |
+| `renderRule` | (no summary) |
+| `stylesheet` | (no summary) |
+| `styles` | (no summary) |
+
+## Csv
+
+[Full reference](stdlib/Csv.md)
+
+Ipe.Csv — CSV encode + decode.
+
+| Export | Summary |
+|--------|----------|
+| `Csv` | A parsed CSV document. |
+| `defaultCsv` | `defaultCsv` — empty CSV document (no header, no rows).  Builder |
+| `withHeader` | `withHeader ["id", "email"] csv` — replace the header row. |
+| `withRows` | `withRows [["1", "a@example.com"], ["2", "b@example.com"]] csv` |
+| `parse` | `parse text` — parse `text` as comma-delimited CSV.  The first |
+| `parseWithDelimiter` | `parseWithDelimiter delim text` — like `parse` but with a |
+| `encode` | `encode csv` — encode `csv` back to a comma-delimited string. |
+| `encodeWithDelimiter` | `encodeWithDelimiter delim csv` — like `encode` but with a |
+| `parseStreamFromFile` | `parseStreamFromFile path` — stream-read a CSV file at the |
+
+## Db.Codec
+
+[Full reference](stdlib/Db.Codec.md)
+
+Ipe.Db.Codec — the seam that turns one `Ipe.Codec.Codec a` into a database
+
+| Export | Summary |
+|--------|----------|
+| `codecToBinds` | Project a value through its codec to the `(column, SqlValue)` binds a row |
+| `codecFromRow` | Rebuild a value from a database row through its codec. Each column declared |
+| `toSqlValue` | Project a SCALAR-shaped value through its codec to one bound `SqlValue`. |
+
+## Db.Dsn
+
+[Full reference](stdlib/Db.Dsn.md)
+
+Ipe.Db.Dsn — a typed, opaque database connection descriptor
+
+| Export | Summary |
+|--------|----------|
+| `Driver` | The closed set of drivers the runtime can describe — exactly the two the |
+| `TlsMode` | The transport-security posture. `Require` is the secure default when a DSN |
+| `parse` | `parse raw` — THE seal from a full DSN URL string. Returns `Err` on any |
+| `build` | `build parts` — THE seal from typed parts, running the SAME validators as |
+| `driver` | `driver dsn` — the descriptor's driver. |
+| `host` | `host dsn` — the host component (`""` for a file-backed sqlite descriptor). |
+| `database` | `database dsn` — the database name (or file path, for sqlite). |
+| `user` | `user dsn` — the connection user (`""` when none). |
+| `tls` | `tls dsn` — the descriptor's transport posture. |
+| `redacted` | `redacted dsn` — a credential-free, human-readable rendering. The password is |
+| `open` | `open dsn` — connect a parsed `Dsn` to a live, read-only external database. |
+| `close` | `close conn` — return the connection's pool. Total and idempotent over either |
+
+## Db.Store
+
+[Full reference](stdlib/Db.Store.md)
+
+Ipe.Db.Store — typed, injection-safe persistence over the audited `Ipe.Db`.
+
+| Export | Summary |
+|--------|----------|
+| `Draft` | A table under construction: its schema is known but its access intent is |
+| `Store` | One classified, queryable table whose schema, reads, and writes derive from |
+| `Column` | One typed column: its (validated) name and its abstract type for the |
+| `ColumnSpec` | A DB-only fact the record type cannot express: primary key, serial |
+| `IndexSpec` | A declarative performance index over one or more of the store's columns. |
+| `Row` | A row read back from the database: every column keyed by its name, values |
+| `validSqlIdent` | `validSqlIdent name` — accept `name` as an SQL identifier, or reject it. |
+| `column` | `column name colType` — a column of an explicit `ColType`. The name is |
+| `textColumn` | A `CText` column. |
+| `intColumn` | A `CInt` column. |
+| `floatColumn` | A `CReal` column. |
+| `boolColumn` | A `CBool` column. |
+| `fromCodec` | `fromCodec table codec` — build a `Draft` from a record codec, or fail |
+| `fromColumns` | `fromColumns table columns` — the raw-column escape: build a `Draft Row` |
+| `rowCodec` | `rowCodec columns` — the `Codec Row` a raw-column store uses: a record |
+| `public` | `public draft` — classify `draft` as a world-readable, world-writable table |
+| `primaryKey` | Mark the accessor-named column the primary key. The lowering intercept |
+| `serial` | Mark the accessor-named column DB-assigned (serial). `insert` omits it so |
+| `unique` | Mark the accessor-named column unique. |
+| `defaultNow` | Mark the accessor-named column DB-stamped with the current time on insert. |
+| `defaultText` | `defaultText accessor value store` — give the accessor-named column a |
+| `defaultInt` | `defaultInt accessor value store` — give the accessor-named column a |
+| `touchOnUpdate` | Mark the accessor-named column a DB-stamped updated-at column. Like |
+| `primaryKeyNamed` | (no summary) |
+| `serialNamed` | (no summary) |
+| `uniqueNamed` | (no summary) |
+| `defaultNowNamed` | (no summary) |
+| `defaultTextNamed` | (no summary) |
+| `defaultIntNamed` | (no summary) |
+| `touchOnUpdateNamed` | (no summary) |
+| `index` | `index columns draft` — declare a non-unique performance index over one or |
+| `indexNamed` | `indexNamed name columns draft` — declare a non-unique performance index |
+| `tableName` | The store's current table name (reflects any `renameTable` ops applied). |
+| `columnNames` | The store's current column names, in declaration order (reflects any |
+| `createSql` | `createSql store` — the `CREATE TABLE` DDL for the store, or `Err`. Every |
+| `readText` | Read a column as a `String`. A missing column is a typed `Err`. |
+| `readInt` | Read a column as an `Int`. A missing or non-integer column is a typed `Err`. |
+| `readBool` | Read a column as a `Bool`. The stored form is SQLite's `0` / `1` integer |
+| `readFloat` | Read a column as a `Float`. A missing or non-numeric column is a typed |
+| `insert` | `insert conn store row` — insert one row and return its generated id. The |
+| `insertReturning` | `insertReturning conn store row` — insert one row and return the stored row |
+| `all` | `all conn store` — read every row and decode each through the store's |
+| `get` | `get conn store keyValue` — read the single row whose primary key equals |
+| `delete` | `delete conn store keyValue` — delete the row whose primary key equals |
+| `findWhere` | `findWhere conn store cond` — read the rows matching `cond` and decode each |
+| `create` | `create conn store` — create the store's table if it does not exist, via |
+| `allOn` | `allOn conn store` — read every row from an external connection and decode |
+| `getOn` | `getOn conn store keyValue` — read the single row whose primary key equals |
+| `findWhereOn` | `findWhereOn conn store cond` — read the rows matching `cond` from an |
+| `update` | `update conn store row` — update the row whose primary key matches `row`'s |
+| `updateWhere` | `updateWhere conn store cond row` — set every non-DB-filled, non-key column |
+| `deleteWhere` | `deleteWhere conn store cond` — delete every row matching `cond` and return |
+| `findBy` | `findBy conn store col value` — read every row whose `col` equals `value`, |
+| `renameColumn` | `renameColumn from to store` — record a column rename in the store's |
+| `renameTable` | `renameTable to store` — record a table rename in the store's schema-op |
+| `migrations` | `migrations store` — fold the store's schema-op log to the ordered list of |
+| `noopRenameError` | `noopRenameError` — the error returned by `migrations` when a rename op has |
+| `Cond` | A typed `WHERE` predicate over a `Store row`'s rows. The `row` parameter |
+| `CompareOp` | A comparison operator carried by a query leaf. A typed ADT, not a stringly |
+| `Query` | A filtered, ordered, paginated read over a `Store a`, decoded through the |
+| `query` | `query store` — begin a read over `store` with no filter, ordering, or |
+| `eq` | `eq accessor value` — the rows where the record column named by the field |
+| `eqBy` | `eqBy codec accessor value` — the accessor-typed equality leaf for an ENUM |
+| `neq` | `neq accessor value` — the rows where the column named by `accessor` is |
+| `neqBy` | `neqBy codec accessor value` — the accessor-typed not-equal leaf for an |
+| `gt` | `gt accessor value` — the rows where the column named by `accessor` is |
+| `gtBy` | `gtBy codec accessor value` — the accessor-typed greater-than leaf for an |
+| `gte` | `gte accessor value` — the rows where the column named by `accessor` is |
+| `gteBy` | `gteBy codec accessor value` — the accessor-typed greater-than-or-equal |
+| `lt` | `lt accessor value` — the rows where the column named by `accessor` is |
+| `ltBy` | `ltBy codec accessor value` — the accessor-typed less-than leaf for an |
+| `lte` | `lte accessor value` — the rows where the column named by `accessor` is |
+| `lteBy` | `lteBy codec accessor value` — the accessor-typed less-than-or-equal leaf |
+| `like` | `like accessor pattern` — the rows where the `String` column named by |
+| `isNull` | `isNull accessor` — the rows where the column named by `accessor` is SQL |
+| `notNull` | `notNull accessor` — the rows where the column named by `accessor` is NOT |
+| `inList` | `inList accessor values` — the rows where the column named by `accessor` |
+| `inListBy` | `inListBy codec accessor values` — the accessor-typed IN-list leaf for an |
+| `and` | `and conds` — the rows matching EVERY condition in `conds`. An empty list |
+| `or` | `or conds` — the rows matching ANY condition in `conds`. An empty list |
+| `not` | `not cond` — the rows NOT matching `cond`. |
+| `orderAsc` | `orderAsc col q` — order `q`'s rows by `col` ascending. Repeated ordering |
+| `orderDesc` | `orderDesc col q` — order `q`'s rows by `col` descending. |
+| `limit` | `limit n q` — keep at most `n` rows (applied after ordering). A negative or |
+| `offset` | `offset n q` — skip the first `n` rows (applied after ordering, before |
+| `toList` | `toList conn q` — run `q` and decode every matching row through the store's |
+| `toMaybe` | `toMaybe conn q` — run `q` and decode the FIRST matching row (after ordering |
+| `count` | `count conn q` — run `q`'s filter and return how many rows match. Ordering |
+| `Order` | Sort direction for `orderByLeft` / `orderByRight`. `Asc` sorts the join |
+| `Joined` | An inner join of two stores on key equality, decoded through each store's |
+| `join` | `join storeA .keyA storeB .keyB` — begin an inner join of `storeA` and |
+| `joinNamed` | The lowered form of `join`: each accessor `.field` has already been turned |
+| `joinFilterLeft` | `joinFilterLeft cond joined` — restrict the join to rows whose LEFT side |
+| `joinFilterRight` | `joinFilterRight cond joined` — restrict the join to rows whose RIGHT side |
+| `orderByLeft` | `orderByLeft accessor order joined` — sort the join result by a column from |
+| `orderByRight` | `orderByRight accessor order joined` — sort the join result by a column from |
+| `orderByLeftNamed` | Lowered form of `orderByLeft`: the accessor has already been turned into its |
+| `orderByRightNamed` | Lowered form of `orderByRight`: symmetric to `orderByLeftNamed` but uses |
+| `joinToList` | `joinToList conn joined` — run the join and return each matched pair, both |
+| `joinToMaybe` | `joinToMaybe conn joined` — run the join and decode the FIRST matched pair, |
+| `joinCount` | `joinCount conn joined` — run the join's filter and return how many pairs |
+| `Select` | A column projection over a join, returned as the typed `row` by |
+| `select` | `select (\( left, right ) -> projection) joined` — project specific columns |
+| `selectNamed` | The lowered form of `select`: the lambda has already been read into the |
+| `literal` | `literal value` — inside a `Store.select` projection lambda, binds `value` |
+| `upper` | `upper col` — inside a `Store.select` projection lambda, applies SQL |
+| `lower` | `lower col` — symmetric counterpart to `upper`: applies SQL `LOWER(…)` to |
+| `coalesce` | `coalesce left right` — inside a `Store.select` projection lambda, emits |
+| `add` | `add left right` — inside a `Store.select` projection lambda, emits |
+| `sub` | `sub left right` — subtraction counterpart to `add`: emits `(a - b) AS pN`. |
+| `mul` | `mul left right` — multiplication counterpart to `add`: emits |
+| `selectToList` | `selectToList db sel` — run the projection and return the projected `row` |
+| `selectToMaybe` | `selectToMaybe db sel` — run the projection and return the FIRST projected |
+| `Policy` | An opaque row-security policy: a conjunction of `Rule`s over a store's |
+| `Secured` | An opaque secured store: a `Store a` paired with a validated `Policy`. The |
+| `unrestricted` | `unrestricted` — the policy that allows all rows (an explicit empty |
+| `publicRead` | `publicRead` — a policy of one public-read rule: reads are unrestricted while |
+| `ownerColumn` | `ownerColumn accessor` — a policy of one owner-column rule over the |
+| `immutable` | `immutable accessor` — a policy of one immutable-column rule over the |
+| `andPolicy` | `andPolicy a b` — the conjunction of two policies (their rules concatenated). |
+| `secured` | `secured policy draft` — classify `draft` by attaching `policy`, or fail |
+| `ownerColumnNamed` | (no summary) |
+| `immutableNamed` | (no summary) |
+| `allAs` | `allAs principal db secured` — read every row the policy admits for |
+| `getAs` | `getAs principal db secured keyValue` — read the single row whose primary |
+| `insertAs` | `insertAs principal db secured row` — insert `row`, forcing every |
+| `updateAs` | `updateAs principal db secured row` — update the row whose primary key |
+| `deleteAs` | `deleteAs principal db secured keyValue` — delete the row whose primary key |
+
+## Db.Store.Unsafe
+
+[Full reference](stdlib/Db.Store.Unsafe.md)
+
+Ipe.Db.Store.Unsafe — the raw, string-named query leaves and column-spec
+
+| Export | Summary |
+|--------|----------|
+| `eq` | `eq col value` — the rows where `col` equals `value`. `value` binds as a |
+| `neq` | `neq col value` — the rows where `col` differs from `value`. |
+| `gt` | `gt col value` — the rows where `col` is greater than `value`. |
+| `gte` | `gte col value` — the rows where `col` is greater than or equal to `value`. |
+| `lt` | `lt col value` — the rows where `col` is less than `value`. |
+| `lte` | `lte col value` — the rows where `col` is less than or equal to `value`. |
+| `like` | `like col pattern` — the rows where `col` matches the SQL `LIKE` `pattern`. |
+| `isNull` | `isNull col` — the rows where `col` is SQL `NULL`. |
+| `notNull` | `notNull col` — the rows where `col` is not SQL `NULL`. |
+| `inList` | `inList col values` — the rows where `col` is one of `values`; each value |
+| `primaryKey` | `primaryKey col draft` — mark the string-named `col` the primary key. |
+| `serial` | `serial col draft` — mark the string-named `col` DB-assigned (serial), so |
+| `unique` | `unique col draft` — mark the string-named `col` unique. |
+| `defaultNow` | `defaultNow col draft` — mark the string-named `col` DB-stamped with the |
+| `touchOnUpdate` | `touchOnUpdate col draft` — mark the string-named `col` a DB-stamped |
+| `defaultText` | `defaultText col value draft` — give the string-named `col` a DB-level |
+| `defaultInt` | `defaultInt col value draft` — give the string-named `col` a DB-level |
+
+## Db.Unsafe
+
+[Full reference](stdlib/Db.Unsafe.md)
+
+Ipe.Db.Unsafe — the raw-SQL and untyped-column-read escape hatches for
+
+| Export | Summary |
+|--------|----------|
+| `unsafeExecRaw` | `unsafeExecRaw conn sql` — run verbatim, caller-authored SQL. No validator |
+| `unsafeQuery` | `unsafeQuery conn sql binds` — the query TEXT is caller-authored verbatim; |
+| `unsafeGetString` | `unsafeGetString key row` — read column `key` as a `String`, bypassing the |
+| `unsafeGetInt` | `unsafeGetInt key row` — read column `key` as an `Int`, bypassing the typed |
+| `unsafeGetBool` | `unsafeGetBool key row` — read column `key` as a `Bool`, bypassing the typed |
+| `unsafeGetField` | `unsafeGetField key row` — read column `key` as an untyped string field, |
+| `unsafeFragment` | `unsafeFragment s` — mint a `SqlFragment` from `s` verbatim, WITHOUT the |
+| `unsafeExecRawOn` | `unsafeExecRawOn conn sql` — run verbatim, caller-authored SQL against an |
+
+## Debug
+
+[Full reference](stdlib/Debug.md)
+
+Ipe.Debug — development-only escape hatches.
+
+| Export | Summary |
+|--------|----------|
+| `log` | `log label value` — print `"label: value"` to stderr, return `value`. |
+| `todo` | `todo note` — mark an unfinished code path. |
+| `explain` | `explain` — draw visible outlines on an element and all its descendants. |
+
+## Decimal
+
+[Full reference](stdlib/Decimal.md)
+
+Ipe.Decimal — arbitrary-precision decimal arithmetic.
+
+| Export | Summary |
+|--------|----------|
+| `zero` | The additive identity. |
+| `one` | The multiplicative identity. |
+| `oneHundred` | The value 100. |
+| `fromString` | Parse a decimal from its string representation. |
+| `fromInt` | Convert an `Int` to a `Decimal` exactly. |
+| `fromFloat` | Convert a `Float` to a `Decimal`.  Subject to the same precision limits as |
+| `fromMinor` | Construct a `Decimal` from a minor-unit integer and a scale. |
+| `toString` | Render the decimal as a plain decimal string (no thousands separators). |
+| `toStringFixed` | Render with a fixed number of decimal places. |
+| `toFloat` | Convert to the nearest `Float`.  May lose precision. |
+| `toInt` | Truncate to an `Int` (towards zero). |
+| `toMinor` | Return the minor-unit integer at the given scale. |
+| `add` | Add two decimals. |
+| `sub` | Subtract the second decimal from the first. |
+| `mul` | Multiply two decimals. |
+| `div` | Divide the first decimal by the second.  Returns `Err` on division by zero. |
+| `mod` | Remainder of dividing the first decimal by the second.  Returns `Err` on |
+| `neg` | Negate a decimal. |
+| `abs` | Absolute value. |
+| `floor` | Round down to the nearest integer-valued decimal (towards negative infinity). |
+| `ceil` | Round up to the nearest integer-valued decimal (towards positive infinity). |
+| `round` | Round to `n` decimal places using banker's rounding (round-half-to-even). |
+| `roundHalfUp` | Round to `n` decimal places always rounding 0.5 away from zero. |
+| `truncate` | Truncate to `n` decimal places (towards zero, no rounding). |
+| `compare` | Total ordering: `compare a b` returns a negative `Int` if `a < b`, zero if |
+| `eq` | Decimal equality. |
+| `neq` | Decimal inequality. |
+| `lt` | Strict less-than. |
+| `lte` | Less-than-or-equal. |
+| `gt` | Strict greater-than. |
+| `gte` | Greater-than-or-equal. |
+| `min` | The smaller of two decimals. |
+| `max` | The larger of two decimals. |
+| `isZero` | True when the decimal equals zero. |
+| `isPositive` | True when the decimal is strictly greater than zero. |
+| `isNegative` | True when the decimal is strictly less than zero. |
+| `percentOf` | `percentOf pct base` — the value of `pct`% of `base`. |
+| `addPercent` | `addPercent pct base` — `base` increased by `pct`%. |
+| `subPercent` | `subPercent pct base` — `base` decreased by `pct`%. |
+| `formatWith` | `formatWith thousandsSep decimalSep places value` — locale-style formatting. |
+
+## Dict
+
+[Full reference](stdlib/Dict.md)
+
+Ipe.Dict — string-keyed associative map.
+
+| Export | Summary |
+|--------|----------|
+| `empty` | The empty dictionary. |
+| `singleton` | `singleton k v` — a dictionary with the single binding `k → v`. |
+| `isEmpty` | `True` when the dictionary contains no entries. |
+| `size` | Number of key/value pairs. |
+| `insert` | `insert k v d` — bind `k → v`, replacing any prior value. |
+| `update` | `update k fn d` — apply `fn` to the current value at `k` (`Just`/`Nothing`); |
+| `get` | `get k d` — look up `k`; `Nothing` if absent. |
+| `remove` | `remove k d` — drop `k`'s binding; no-op if absent. |
+| `member` | `member k d` — `True` iff `k` is bound in `d`. |
+| `keys` | All keys in the dictionary (unsorted). |
+| `values` | All values in the dictionary (unsorted). |
+| `toList` | `toList d` — every (key, value) pair as a list of tuples. |
+| `fromList` | `fromList pairs` — build a dictionary from a list of tuples. |
+| `map` | `map fn d` — apply `fn k v` to every entry, building a new |
+| `foldl` | `foldl fn acc d` — accumulate over every entry. |
+| `foldr` | `foldr fn acc d` — accumulate over every entry in descending key order. |
+| `union` | `union a b` — merge two dictionaries. `a`'s bindings win on |
+| `filter` | `filter pred d` — keep only entries for which `pred k v` holds. |
+| `partition` | `partition pred d` — split into (satisfying, not-satisfying). |
+| `intersect` | `intersect a b` — keep `a`'s entries whose key also appears in `b`. |
+| `diff` | `diff a b` — keep `a`'s entries whose key does NOT appear in `b`. |
+
+## Duration
+
+[Full reference](stdlib/Duration.md)
+
+Ipe.Duration — an opaque, unit-explicit time span.
+
+| Export | Summary |
+|--------|----------|
+| `Duration` | An opaque, non-negative time span carried as whole milliseconds.  The |
+| `millis` | `millis n` — a span of `n` milliseconds.  A negative `n` clamps to `0`. |
+| `seconds` | `seconds n` — a span of `n` seconds.  A negative `n` clamps to `0`; an `n` |
+| `minutes` | `minutes n` — a span of `n` minutes.  A negative `n` clamps to `0`; an `n` |
+| `zero` | The zero span (`0` ms).  A total value. |
+| `toMillis` | `toMillis d` — recover the whole-millisecond span for the runtime boundary. |
+
+## Email
+
+[Full reference](stdlib/Email.md)
+
+Ipe.Email — provider-abstract email send.
+
+| Export | Summary |
+|--------|----------|
+| `EmailMessage` | A single email message. |
+| `Attachment` | A file attachment.  `content` carries the raw bytes as `Bytes` |
+| `EmailProvider` | The provider to send through.  Pass explicitly to `send`.  The Resend and |
+| `SesConfig` | SES auth: region + credentials.  The access-key id (`key`) identifies the |
+| `SmtpConfig` | SMTP transport: host + port + creds.  The `pass` is a sealed `Secret`. |
+| `defaultMessage` | Construct a baseline message with the three required fields |
+| `defaultAttachment` | `defaultAttachment "report.pdf"` — Attachment named with empty |
+| `withMimeType` | `withMimeType "application/pdf" att` — replace the MIME type. |
+| `withContent` | `withContent bytes att` — replace the attachment body bytes. |
+| `defaultSesConfig` | `defaultSesConfig "us-east-1"` — SesConfig with the region set; |
+| `withSesKey` | `withSesKey "AKIA..." cfg` — replace the SES access-key id (the IAM |
+| `withSesSecret` | `withSesSecret (Secret.fromString "...") cfg` — replace the SES secret |
+| `defaultSmtpConfig` | `defaultSmtpConfig "smtp.example.com"` — SmtpConfig with host |
+| `withSmtpPort` | `withSmtpPort (Net.fromInt 465 \|> Result.withDefault Net.min) cfg` — replace |
+| `withSmtpUser` | `withSmtpUser "user" cfg` — replace the SMTP username. |
+| `withSmtpPass` | `withSmtpPass (Secret.fromString "...") cfg` — replace the SMTP password. |
+| `withCc` | Override CC. |
+| `withBcc` | Override BCC. |
+| `withTextBody` | Override the plain-text body. |
+| `withHtmlBody` | Override the HTML body.  Most providers fall back to textBody |
+| `withAttachment` | Append one attachment.  Call repeatedly for multiple files. |
+| `withReplyTo` | Override Reply-To. |
+| `send` | `send provider message` — submit the message to the chosen provider. |
+| `EmailAddress` | An opaque, validated email address.  Construct only via `parseAddress`. |
+| `parseAddress` | Parse-don't-validate: attempt to parse a string as an RFC 5322 address. |
+| `addressToString` | Render an `EmailAddress` back to its canonical string form. |
+
+## Encoding
+
+[Full reference](stdlib/Encoding.md)
+
+Ipe.Encoding — text encoding helpers.
+
+| Export | Summary |
+|--------|----------|
+| `base64Encode` | Base64-encode a string (RFC 4648 standard alphabet, with padding). |
+| `base64Decode` | Base64-decode a string. |
+| `urlEncode` | Percent-encode a string for use in a URL component (RFC 3986). |
+| `urlDecode` | Percent-decode a URL-encoded string. |
+| `hexEncode` | Hex-encode a string (lowercase output, two hex digits per byte). |
+| `hexDecode` | Hex-decode a string. |
+
+## Env
+
+[Full reference](stdlib/Env.md)
+
+Ipe.Env — build-time-embedded public config.
+
+| Export | Summary |
+|--------|----------|
+| `public` | `public key` — the build-time-embedded value for `key`, or `Nothing` |
+
+## Error
+
+[Full reference](stdlib/Error.md)
+
+Ipe.Error — the structured `Error` type (Layer-3 Ipe source).
+
+| Export | Summary |
+|--------|----------|
+| `unexpected` | Construct an `Error` with kind `Unexpected` and the given message. |
+| `invalidInput` | Construct an `Error` with kind `InvalidInput` and the given message. |
+| `io` | Construct an `Error` with kind `Io` and the given message. |
+| `network` | Construct an `Error` with kind `Network` and the given message. |
+| `ffi` | Construct an `Error` with kind `Ffi` and the given message. |
+| `decode` | Construct an `Error` with kind `Decode` and the given message. |
+| `conflict` | Construct an `Error` with kind `Conflict` and the given message. |
+| `unavailable` | Construct an `Error` with kind `Unavailable` and the given message. |
+| `timeout` | Canonical `Error` with kind `Timeout` and a fixed message. |
+| `notFound` | Canonical `Error` with kind `NotFound` and a fixed message. |
+| `permissionDenied` | Canonical `Error` with kind `PermissionDenied` and a fixed message. |
+| `toString` | Render an `Error` as `"<Kind>: <message>"`. |
+| `withMessage` | Replace the message carried by an `Error`, preserving its kind and details. |
+| `isRetryable` | `True` when the error kind is retryable: `Timeout`, `Network`, or |
+| `withDetails` | Attach an `ErrorDetails` value to an `Error`. |
+| `kind` | Extract the `ErrorKind` classification tag from an `Error`. |
+| `message` | Extract the bare message string from an `Error`. |
+| `kindName` | Stable lowercase label of an `ErrorKind` (the same prefix `toString` uses). |
+
+## File
+
+[Full reference](stdlib/File.md)
+
+Ipe.File -- filesystem I/O.
+
+| Export | Summary |
+|--------|----------|
+| `readFile` | (no summary) |
+| `readFileLimit` | (no summary) |
+| `readFileBytes` | Read raw bytes as a list of Int.  Use for binary content |
+| `writeFile` | `writeFile path content` -- overwrites the file. |
+| `append` | `append path content` -- appends to the end of the file |
+| `exists` | (no summary) |
+| `remove` | (no summary) |
+| `mkdirAll` | `mkdirAll path` -- like `mkdir -p`.  Creates every intermediate |
+| `readDir` | (no summary) |
+| `isDir` | (no summary) |
+| `walk` | `walk root` -- recursively walk `root`, returning the absolute path of |
+| `walkMatching` | `walkMatching root pred` -- like `walk`, but only includes files for |
+| `tempFile` | `tempFile prefix` -- create a uniquely-named file in the system |
+| `tempDir` | `tempDir prefix` -- create a uniquely-named directory in the |
+| `copy` | (no summary) |
+| `rename` | (no summary) |
+
+## Html
+
+[Full reference](stdlib/Html.md)
+
+Ipe.Html — HTML element builders.
+
+| Export | Summary |
+|--------|----------|
+| `node` | `node tag attrs children` — a container element `<tag …>children</tag>`. |
+| `voidNode` | `voidNode tag attrs` — a childless void element `<tag …>` (self-closed by |
+| `text` | `text s` — an escaped text node. The value is escaped at the render sink, |
+| `doctype` | `doctype children` — wraps children in the document `<!DOCTYPE html>` |
+| `titleNode` | `titleNode s` — `<title>` wrapping a raw string directly. |
+| `styleNode` | `styleNode attrs css` — a `<style>` element whose CSS body is |
+| `render` | `render html` — serialise an `Html` tree to a `String`, escaping text and |
+| `renderStatic` | `renderStatic view model` — render a `model -> Html msg` view once to a |
+| `toString` | `toString html` — an alias of `render`. |
+| `escapeHtml` | `escapeHtml s` — escape a string for safe inclusion in text content. |
+| `escapeAttr` | `escapeAttr s` — escape a string for safe inclusion in an attribute value. |
+| `attrToString` | `attrToString attr` — serialise a single `Attribute` to its ` key="value"` |
+| `htmlRender` | `htmlRender` — pipeline-readable spelling of `render`. |
+| `htmlEscapeText` | `htmlEscapeText` — pipeline-readable spelling of `escapeHtml`. |
+| `htmlEscapeAttr` | `htmlEscapeAttr` — pipeline-readable spelling of `escapeAttr`. |
+| `htmlAttrToString` | `htmlAttrToString` — pipeline-readable spelling of `attrToString`. |
+| `div` | (no summary) |
+| `span` | (no summary) |
+| `p` | (no summary) |
+| `a` | (no summary) |
+| `button` | (no summary) |
+| `form` | (no summary) |
+| `label` | (no summary) |
+| `nav` | (no summary) |
+| `section` | (no summary) |
+| `article` | (no summary) |
+| `header` | (no summary) |
+| `footer` | (no summary) |
+| `main` | (no summary) |
+| `aside` | (no summary) |
+| `ul` | (no summary) |
+| `ol` | (no summary) |
+| `li` | (no summary) |
+| `table` | (no summary) |
+| `thead` | (no summary) |
+| `tbody` | (no summary) |
+| `tfoot` | (no summary) |
+| `tr` | (no summary) |
+| `th` | (no summary) |
+| `td` | (no summary) |
+| `textarea` | (no summary) |
+| `select` | (no summary) |
+| `option` | (no summary) |
+| `pre` | (no summary) |
+| `code` | (no summary) |
+| `strong` | (no summary) |
+| `em` | (no summary) |
+| `small` | (no summary) |
+| `fieldset` | (no summary) |
+| `legend` | (no summary) |
+| `blockquote` | (no summary) |
+| `figure` | (no summary) |
+| `figcaption` | (no summary) |
+| `details` | (no summary) |
+| `summary` | (no summary) |
+| `dialog` | (no summary) |
+| `video` | (no summary) |
+| `audio` | (no summary) |
+| `canvas` | (no summary) |
+| `iframe` | (no summary) |
+| `progress` | (no summary) |
+| `meter` | (no summary) |
+| `script` | (no summary) |
+| `h1` | (no summary) |
+| `h2` | (no summary) |
+| `h3` | (no summary) |
+| `h4` | (no summary) |
+| `h5` | (no summary) |
+| `h6` | (no summary) |
+| `img` | (no summary) |
+| `input` | (no summary) |
+| `br` | (no summary) |
+| `hr` | (no summary) |
+| `meta` | (no summary) |
+| `link` | (no summary) |
+| `area` | (no summary) |
+| `base` | (no summary) |
+| `col` | (no summary) |
+| `embed` | (no summary) |
+| `source` | (no summary) |
+| `track` | (no summary) |
+| `wbr` | (no summary) |
+| `body` | (no summary) |
+| `htmlNode` | `htmlNode` — the root `<html>` element. |
+| `headNode` | `headNode` — the `<head>` element. |
+| `title` | (no summary) |
+| `headerNode` | (no summary) |
+| `codeNode` | (no summary) |
+| `mainNode` | (no summary) |
+| `footerNode` | (no summary) |
+| `linkNode` | (no summary) |
+
+## Html.Attributes
+
+[Full reference](stdlib/Html.Attributes.md)
+
+Ipe.Html.Attributes — HTML attribute builders.
+
+| Export | Summary |
+|--------|----------|
+| `attribute` | `attribute key value` — a plain `key="value"` HTML attribute. The one |
+| `boolAttribute` | `boolAttribute key on` — a boolean HTML attribute. When `on` is `True`, |
+| `noAttr` | `noAttr` — the identity attribute (renders nothing). Makes "no attribute" a |
+| `class` | (no summary) |
+| `id` | (no summary) |
+| `href` | (no summary) |
+| `src` | (no summary) |
+| `alt` | (no summary) |
+| `value` | (no summary) |
+| `name` | (no summary) |
+| `placeholder` | (no summary) |
+| `type_` | `type_` — the `type` attribute (`type` is an Ipê keyword-adjacent spelling). |
+| `for_` | `for_` — the `for` attribute (`for` is an Ipê keyword). |
+| `style` | (no summary) |
+| `title` | (no summary) |
+| `autocomplete` | (no summary) |
+| `checked` | (no summary) |
+| `disabled` | (no summary) |
+| `readonly` | (no summary) |
+| `required` | (no summary) |
+| `multiple` | (no summary) |
+| `selected` | (no summary) |
+| `autofocus` | (no summary) |
+| `tabindex` | `tabindex n` — the `tabindex` attribute, rendered as its decimal string. |
+| `rows` | `rows n` — the `<textarea>` `rows` attribute, rendered as its decimal |
+
+## Html.Unsafe
+
+[Full reference](stdlib/Html.Unsafe.md)
+
+Ipe.Html.Unsafe — the trusted-HTML / inline-script escape hatch.
+
+| Export | Summary |
+|--------|----------|
+| `unsafeRaw` | `unsafeRaw s` — an UN-escaped raw HTML node. The `unsafe` prefix names the |
+| `unsafeScript` | `unsafeScript body` — an inline `<script>` element whose JavaScript body is |
+
+## Http
+
+[Full reference](stdlib/Http.md)
+
+Ipe.Http — outbound HTTP client.
+
+| Export | Summary |
+|--------|----------|
+| `HttpMethod` | Closed set of HTTP methods.  Use constructors directly in client code; |
+| `HttpRequest` | (no summary) |
+| `HttpResponse` | (no summary) |
+| `RedirectPolicy` | Redirect behaviour for an outbound request.  `NoRedirects` prevents all |
+| `defaultRequest` | `defaultRequest url` — the primary request constructor. Takes an |
+| `defaultRequestFromString` | `defaultRequestFromString raw` — the MARKED parse-at-the-boundary helper |
+| `get` | `get url` — outbound GET. Takes an already-sealed typed `Url` (parsed once |
+| `methodFromString` | `methodFromString s` — the single typed parse boundary for inbound method |
+| `methodToString` | `methodToString m` — the canonical uppercase string for `m` |
+| `parseQuery` | (no summary) |
+| `post` | `post url body` — outbound POST. Takes an already-sealed typed `Url` (see |
+| `request` | (no summary) |
+| `withBody` | (no summary) |
+| `withHeader` | (no summary) |
+| `withMethod` | (no summary) |
+| `withRedirects` | Set the redirect policy for a request.  `withRedirects NoRedirects` |
+| `withTimeout` | (no summary) |
+| `withUrl` | `withUrl url req` — retarget an existing request to a typed `Url`. Like |
 
 ## Io
 
 [Full reference](stdlib/Io.md)
 
-| Symbol | Summary |
+Ipe.Io — standard-I/O effect kernels.
+
+| Export | Summary |
 |--------|----------|
+| `readLine` | (no summary) |
 | `readSecret` | Write a prompt to stdout, then read one line from stdin with terminal echo |
+| `writeStdout` | (no summary) |
+| `writeStderr` | (no summary) |
+| `println` | (no summary) |
+| `eprintln` | (no summary) |
+
+## Js
+
+[Full reference](stdlib/Js.md)
+
+Ipe.Js — the raw typed transport across the Ipê↔JS seam (ports).
+
+| Export | Summary |
+|--------|----------|
+| `send` | `send payload` — an outbound one-shot imperative effect, Ipê → JS |
+| `subscribe` | `subscribe decoder toMsg` — an inbound intent stream, JS → Ipê, wired in |
+
+## Level
+
+[Full reference](stdlib/Level.md)
+
+Ipe.Level — the `LogLevel` severity-tag ADT.
+
+| Export | Summary |
+|--------|----------|
+| `debug` | Debug severity — the lowest level; verbose diagnostic output. |
+| `info` | Info severity — normal operational messages. |
+| `warn` | Warn severity — recoverable unexpected conditions. |
+| `error` | Error severity — failures that require attention. |
 
 ## List
 
 [Full reference](stdlib/List.md)
 
-| Symbol | Summary |
+`Ipe.List` — transform, filter, and combine lists (compiled-source Layer-3).
+
+| Export | Summary |
 |--------|----------|
-| `all` | `all test list` — `True` if `test` returns `True` for every element. |
-| `any` | `any test list` — `True` if `test` returns `True` for at least one element. |
+| `isEmpty` | `isEmpty list` — `True` if the list has no elements. |
+| `length` | `length list` — the number of elements in the list. |
+| `head` | `head list` — `Just` the first element, or `Nothing` if empty. |
+| `tail` | `tail list` — `Just` the list without its first element, or `Nothing` if empty. |
+| `cons` | `cons x list` — prepend `x` to the list; the named form of `x :: list`. |
+| `singleton` | `singleton x` — the one-element list `[ x ]`. |
+| `repeat` | `repeat n x` — a list with `n` copies of `x`; `[]` when `n <= 0`. |
+| `reverse` | `reverse list` — the list in reverse order. |
+| `take` | `take n list` — the first `n` elements; the whole list when shorter than `n`. |
+| `drop` | `drop n list` — the list without its first `n` elements. |
 | `append` | `append xs ys` — all of `xs` followed by all of `ys`. |
 | `concat` | `concat lists` — flatten a list of lists into one list. |
-| `concatMap` | `concatMap f list` — apply `f` to each element and flatten the results. |
-| `cons` | `cons x list` — prepend `x` to the list; the named form of `x :: list`. |
-| `drop` | `drop n list` — the list without its first `n` elements. |
+| `member` | `member x list` — `True` if `x` equals any element of `list`. |
+| `range` | `range lo hi` — ascending integers from `lo` to `hi` inclusive. |
+| `zip` | `zip xs ys` — pair elements position-by-position, stopping at the shorter list. |
+| `map` | `map f list` — apply `f` to every element, giving a new list of results in the same order. |
 | `filter` | `filter keep list` — keep only the elements for which `keep` returns `True`. |
-| `filterMap` | `filterMap f list` — apply `f` to each element, keeping only `Just` payloads. |
+| `any` | `any test list` — `True` if `test` returns `True` for at least one element. |
+| `all` | `all test list` — `True` if `test` returns `True` for every element. |
 | `find` | `find test list` — `Just` the first element satisfying `test`, or `Nothing`. |
 | `foldl` | `foldl step initial list` — reduce from the left; `step element accumulator`. |
 | `foldr` | `foldr step initial list` — reduce from the right; `step element accumulator`. |
-| `head` | `head list` — `Just` the first element, or `Nothing` if empty. |
+| `concatMap` | `concatMap f list` — apply `f` to each element and flatten the results. |
 | `indexedMap` | `indexedMap f list` — like `map` but `f` also receives each element's index. |
-| `isEmpty` | `isEmpty list` — `True` if the list has no elements. |
-| `length` | `length list` — the number of elements in the list. |
-| `map` | `map f list` — apply `f` to every element, giving a new list of results in the same order. |
-| `maximum` | `maximum list` — `Just` the largest element, or `Nothing` if empty. |
-| `member` | `member x list` — `True` if `x` equals any element of `list`. |
-| `minimum` | `minimum list` — `Just` the smallest element, or `Nothing` if empty. |
-| `range` | `range lo hi` — ascending integers from `lo` to `hi` inclusive. |
-| `reverse` | `reverse list` — the list in reverse order. |
+| `filterMap` | `filterMap f list` — apply `f` to each element, keeping only `Just` payloads. |
 | `sortBy` | `sortBy key list` — stable ascending sort by `key element`. |
 | `sortWith` | `sortWith cmp list` — stable sort using a comparison function returning `Order`. |
+| `sort` | `sort list` — stable ascending sort by natural order. Requires a comparable element. |
 | `sum` | `sum list` — the sum of all elements; `0` for the empty list. |
-| `tail` | `tail list` — `Just` the list without its first element, or `Nothing` if empty. |
-| `take` | `take n list` — the first `n` elements; the whole list when shorter than `n`. |
+| `product` | `product list` — the multiplicative fold; `1` for the empty list. |
+| `maximum` | `maximum list` — `Just` the largest element, or `Nothing` if empty. |
+| `minimum` | `minimum list` — `Just` the smallest element, or `Nothing` if empty. |
 | `unique` | `unique list` — remove duplicates, keeping first occurrence of each element. |
-| `zip` | `zip xs ys` — pair elements position-by-position, stopping at the shorter list. |
+| `intersperse` | `intersperse sep list` — place `sep` between each adjacent pair of elements. |
+| `partition` | `partition pred list` — split into `( keep, reject )` preserving order. |
+| `unzip` | `unzip pairs` — split a list of pairs into two parallel lists. |
+| `map2` | `map2 f xs ys` — combine two lists element-wise; stops at the shorter. |
+| `map3` | `map3 f xs ys zs` — combine three lists element-wise; stops at the shortest. |
+| `map4` | `map4 f` — combine four lists element-wise; stops at the shortest. |
+| `map5` | `map5 f` — combine five lists element-wise; stops at the shortest. |
+
+## Locale
+
+[Full reference](stdlib/Locale.md)
+
+Ipe.Locale — opaque BCP-47 locale handle + locale-aware case mapping.
+
+| Export | Summary |
+|--------|----------|
+| `Locale` | An opaque, parse-validated BCP-47 locale. |
+| `fromTag` | `fromTag tag` — attempt to parse `tag` as a BCP-47 language tag. |
+| `toTag` | `toTag locale` — recover the BCP-47 tag string from a `Locale`. |
+
+## Log
+
+[Full reference](stdlib/Log.md)
+
+Ipe.Log — structured observability kernels.
+
+| Export | Summary |
+|--------|----------|
+| `info` | Emit an info-severity log line. |
+| `debug` | Emit a debug-severity log line. |
+| `warn` | Emit a warn-severity log line. |
+| `error` | Emit an error-severity log line. |
+| `infoWith` | Emit an info-severity log line with a list of typed context values. |
+| `debugWith` | Emit a debug-severity log line with a list of typed context values. |
+| `warnWith` | Emit a warn-severity log line with a list of typed context values. |
+| `errorWith` | Emit an error-severity log line with a list of typed context values. |
+| `level` | Set the minimum log severity for the application.  Takes a `LogLevel` |
+
+## Markdown
+
+[Full reference](stdlib/Markdown.md)
+
+Ipe.Markdown — render markdown source to `Ipe.Ui` Element trees.
+
+| Export | Summary |
+|--------|----------|
+| `render` | (no summary) |
+| `renderInline` | (no summary) |
+| `parseBlocks` | (no summary) |
+| `parseSpans` | (no summary) |
+| `HeadingLevel` | (no summary) |
+| `Block` | (no summary) |
+| `Span` | (no summary) |
+
+## Math
+
+[Full reference](stdlib/Math.md)
+
+Ipe.Math — pure numeric helpers.
+
+| Export | Summary |
+|--------|----------|
+| `abs` | (no summary) |
+| `min` | (no summary) |
+| `max` | (no summary) |
+| `sqrt` | (no summary) |
+| `pow` | (no summary) |
+| `log` | (no summary) |
+| `log2` | (no summary) |
+| `log10` | (no summary) |
+| `exp` | (no summary) |
+| `exp2` | (no summary) |
+| `cbrt` | (no summary) |
+| `hypot` | (no summary) |
+| `floor` | (no summary) |
+| `ceil` | (no summary) |
+| `round` | (no summary) |
+| `trunc` | (no summary) |
+| `sin` | (no summary) |
+| `cos` | (no summary) |
+| `tan` | (no summary) |
+| `asin` | (no summary) |
+| `acos` | (no summary) |
+| `atan` | (no summary) |
+| `atan2` | (no summary) |
+| `sinh` | (no summary) |
+| `cosh` | (no summary) |
+| `tanh` | (no summary) |
+| `asinh` | (no summary) |
+| `acosh` | (no summary) |
+| `atanh` | (no summary) |
+| `mod` | (no summary) |
+| `remainder` | (no summary) |
+| `pi` | (no summary) |
+| `e` | (no summary) |
+| `phi` | (no summary) |
+| `sqrt2` | (no summary) |
+| `inf` | (no summary) |
+| `nan` | (no summary) |
+| `isNaN` | (no summary) |
 
 ## Maybe
 
 [Full reference](stdlib/Maybe.md)
 
-| Symbol | Summary |
+The `Maybe` type and its `Just` / `Nothing` constructors are kernel-anchored
+
+| Export | Summary |
 |--------|----------|
-| `andMap` | `andMap ma mfn` — apply the function inside `mfn` to the value inside `ma`; |
-| `andThen` | `andThen f maybe` — feed the value inside a `Just` to `f`; `Nothing` passes |
-| `combine` | `combine maybes` — turn a `List (Maybe a)` into a `Maybe (List a)`; `Nothing` |
-| `isJust` | `isJust maybe` — `True` when the `Maybe` holds a value. |
-| `isNothing` | `isNothing maybe` — `True` when the `Maybe` is absent. |
+| `withDefault` | `withDefault fallback maybe` — the value inside a `Just`, or `fallback` |
 | `map` | `map f maybe` — apply `f` to the value inside a `Just`, leaving `Nothing` |
+| `andThen` | `andThen f maybe` — feed the value inside a `Just` to `f`; `Nothing` passes |
 | `map2` | `map2 f ma mb` — combine two `Maybe` values with `f`; `Just` only when both |
 | `map3` | `map3 f ma mb mc` — combine three `Maybe` values with `f`; `Just` only when |
 | `map4` | `map4 f ma mb mc md` — combine four `Maybe` values with `f`; `Just` only |
 | `map5` | `map5 f ma mb mc md me` — combine five `Maybe` values with `f`; `Just` only |
-| `withDefault` | `withDefault fallback maybe` — the value inside a `Just`, or `fallback` |
+| `andMap` | `andMap ma mfn` — apply the function inside `mfn` to the value inside `ma`; |
+| `combine` | `combine maybes` — turn a `List (Maybe a)` into a `Maybe (List a)`; `Nothing` |
+| `isJust` | `isJust maybe` — `True` when the `Maybe` holds a value. |
+| `isNothing` | `isNothing maybe` — `True` when the `Maybe` is absent. |
+
+## Money
+
+[Full reference](stdlib/Money.md)
+
+Ipe.Money — currency-typed Money on `Ipe.Decimal`.
+
+| Export | Summary |
+|--------|----------|
+| `Money` | (no summary) |
+| `Currency` | (no summary) |
+| `fromMinor` | (no summary) |
+| `fromMajor` | (no summary) |
+| `fromString` | (no summary) |
+| `zero` | (no summary) |
+| `zeroOf` | (no summary) |
+| `amount` | (no summary) |
+| `currency` | (no summary) |
+| `currencyCode` | (no summary) |
+| `add` | Add two Money values. Returns `Err` when the currencies differ — a |
+| `sub` | Subtract two Money values. Returns `Err` when the currencies differ — a |
+| `mul` | Multiply by a scalar (Decimal). Currency carries through. |
+| `allocate` | Allocate a Money value across N parts as evenly as possible, with any |
+| `sumOf` | Sum a list of Money values for a given currency. Returns `Err` if any |
+| `neg` | (no summary) |
+| `abs` | (no summary) |
+| `eq` | (no summary) |
+| `neq` | (no summary) |
+| `lt` | (no summary) |
+| `lte` | (no summary) |
+| `gt` | (no summary) |
+| `gte` | (no summary) |
+| `compare` | (no summary) |
+| `isZero` | (no summary) |
+| `isPositive` | (no summary) |
+| `isNegative` | (no summary) |
+| `format` | Default symbol-prefixed form: "$12.34", "¥1234" (JPY). The amount is |
+| `formatWithCode` | ISO-code suffix form: "12.34 USD". Preferred for B2B. Same |
+| `toMinor` | Integer-cents representation, for DB persistence. |
+| `percentOf` | (no summary) |
+| `addPercent` | (no summary) |
+| `subPercent` | (no summary) |
+| `minorUnits` | Number of decimal places for the currency's minor unit. |
+| `symbol` | Common currency symbol. |
+| `currencyName` | Human-readable currency name. |
+| `knownCurrency` | True for every named Currency variant (USD, JPY, BTC, …). |
+| `isKnownCode` | Check whether an ISO 4217 code string is a recognised currency, via the |
+| `parseCurrency` | Parse an ISO 4217 currency code string into a `Currency`. |
+| `setRate` | Register an FX rate. Rejects a non-positive rate; auto-registers the |
+| `getRate` | Look up a registered rate (identity for from == to; missing → Err). |
+| `hasRate` | (no summary) |
+| `clearRates` | Drop every registered rate (test / admin). |
+| `convert` | Convert Money to a target currency using the registered rate. |
+
+## Net
+
+[Full reference](stdlib/Net.md)
+
+Ipe.Net — typed network primitives.
+
+| Export | Summary |
+|--------|----------|
+| `Port` | An opaque, range-validated TCP/UDP port.  Construct only via `fromInt`. |
+| `fromInt` | `fromInt n` — the parse-don't-validate seal: the only `Port` constructor. |
+| `toInt` | `toInt port` — recover the raw port number for the runtime boundary. |
+| `min` | The smallest valid port (`1`).  A total value — useful as the seed for |
+| `max` | The largest valid port (`65535`).  A total value. |
+
+## Palette
+
+[Full reference](stdlib/Palette.md)
+
+| Export | Summary |
+|--------|----------|
+| `Shade` | (no summary) |
+| `toHex` | (no summary) |
+| `Spacing` | (no summary) |
+| `spacingPx` | (no summary) |
+
+## Path
+
+[Full reference](stdlib/Path.md)
+
+Ipe.Path — typed, validated filesystem paths.
+
+| Export | Summary |
+|--------|----------|
+| `fromString` | `fromString raw` — the parse-don't-validate seal: the only `Path` |
+| `toString` | `toString path` — recover the cleaned path string. |
+| `base` | `base path` — the final path component. |
+| `dir` | `dir path` — everything but the final component. |
+| `ext` | `ext path` — the file extension (with the dot), or "". |
+| `isAbsolute` | `isAbsolute path` — does the path start from the root? |
+
+## Process
+
+[Full reference](stdlib/Process.md)
+
+Ipe.Process — run child processes with NO shell.
+
+| Export | Summary |
+|--------|----------|
+| `run` | `run cmd argv` — run `cmd` with the argument vector `argv`, no shell. |
+| `runWith` | `runWith cfg` — run a child process with per-child options. |
+| `runInPty` | `runInPty cfg` — run a child under a real pseudo-terminal. |
+
+## PubSub
+
+[Full reference](stdlib/PubSub.md)
+
+Ipe.PubSub — Task-shaped publish, callable wherever a bus runs.
+
+| Export | Summary |
+|--------|----------|
+| `Topic` | Phantom topic handle.  The type parameter `a` is the payload type shared |
+| `topic` | `topic name` — create a typed topic handle from a plain topic-name string. |
+| `publish` | `publish t payload` — broadcast `payload` on topic `t` to every Ipe.Web |
+| `publishNoEcho` | `publishNoEcho t payload` — Task-shaped publish that sets the broker's |
+
+## Random
+
+[Full reference](stdlib/Random.md)
+
+Ipe.Random — entropy-driven and seeded random helpers (compiled-source
+
+| Export | Summary |
+|--------|----------|
+| `int` | Uniform random integer in `[lo, hi]` inclusive on BOTH ends. |
+| `float` | Uniform random float in `[lo, hi)` (lo inclusive, hi exclusive). |
+| `range` | Alias for `int` with a more obvious name when used in pipelines. |
+| `choice` | Pick one element from a list uniformly at random.  Returns |
+| `shuffle` | Fisher-Yates shuffle.  Returns a new list with the same |
+| `weighted` | Weighted random pick.  Each tuple is `(weight, value)`.  Weights |
+| `Seed` | Opaque PRNG state.  Threaded through every seeded call. |
+| `seed` | `seed n` -- construct a starting seed from an `Int`.  Identical |
+| `seededInt` | `seededInt s lo hi` -- uniform integer in `[lo, hi]` inclusive, |
+| `seededFloat` | `seededFloat s` -- uniform float in `[0, 1)`, returning the value |
+| `seededChoice` | `seededChoice s list` -- pick one element from a list, returning |
+
+## Random.Generator
+
+[Full reference](stdlib/Random.Generator.md)
+
+Ipe.Random.Generator — composable, seeded, reproducible random
+
+| Export | Summary |
+|--------|----------|
+| `Generator` | A recipe for a random value of type `a`: a pure step from one seed to a |
+| `Seed` | Opaque PRNG state, threaded through every draw. |
+| `initialSeed` | Construct a starting seed from an `Int`.  Identical inputs reproduce |
+| `int` | Uniform integer generator over `[lo, hi]`, inclusive on both ends. |
+| `float` | Uniform float generator over `[lo, hi)` (lo inclusive, hi exclusive). |
+| `map` | Draw from a generator and transform the value. |
+| `map2` | Draw from two generators in turn and combine their values. |
+| `map3` | Draw from three generators in turn and combine their values. |
+| `andThen` | Draw a value, then use it to choose the next generator to draw from. |
+| `listOf` | Draw a list of `n` values from a generator.  A non-positive `n` yields |
+| `pair` | Draw a pair, one component from each generator. |
+
+## Regex
+
+[Full reference](stdlib/Regex.md)
+
+Ipe.Regex — RE2 regex helpers.
+
+| Export | Summary |
+|--------|----------|
+| `compile` | `compile pattern` — parse `pattern` into a reusable `Regex`.  An invalid |
+| `match` | `match re s` — does the compiled pattern match anywhere in `s`? |
+| `find` | `find re s` — first match (Nothing if no match). |
+| `findAll` | `findAll re s` — every non-overlapping match in order. |
+| `replace` | `replace re replacement s` — replace every match with `replacement`. |
+| `split` | `split re s` — split on every match. |
 
 ## Result
 
 [Full reference](stdlib/Result.md)
 
-| Symbol | Summary |
+Ipe.Result — combinators over the Result ADT (Layer-3 compiled source).
+
+| Export | Summary |
 |--------|----------|
-| `andMap` | `andMap ra rfn` — apply the function inside `rfn` to the value inside `ra`. |
-| `andThen` | `andThen f result` — feed the `Ok` value to `f`; `Err` passes through. |
-| `combine` | `combine results` — collect a list of `Result`s into a `Result` of list; |
-| `fromMaybe` | `fromMaybe err maybe` — `Ok` the `Just` value, or `Err err` on `Nothing`. |
+| `withDefault` | `withDefault fallback result` — the success value, or `fallback` if `Err`. |
 | `map` | `map f result` — apply `f` to the `Ok` value; `Err` passes through unchanged. |
+| `andThen` | `andThen f result` — feed the `Ok` value to `f`; `Err` passes through. |
+| `mapError` | `mapError f result` — apply `f` to the `Err` value; `Ok` passes through. |
 | `map2` | `map2 f ra rb` — combine two `Ok` values with `f`; first `Err` wins. |
 | `map3` | `map3 f ra rb rc` — combine three `Ok` values with `f`; first `Err` wins. |
 | `map4` | `map4 f ra rb rc rd` — combine four `Ok` values with `f`; first `Err` wins. |
 | `map5` | `map5 f ra rb rc rd re` — combine five `Ok` values with `f`; first `Err` wins. |
-| `mapError` | `mapError f result` — apply `f` to the `Err` value; `Ok` passes through. |
-| `toMaybe` | `toMaybe result` — `Just` the `Ok` value, or `Nothing` on `Err`. |
+| `andMap` | `andMap ra rfn` — apply the function inside `rfn` to the value inside `ra`. |
+| `combine` | `combine results` — collect a list of `Result`s into a `Result` of list; |
 | `traverse` | `traverse f list` — map each element to a `Result`, collecting successes; |
-| `withDefault` | `withDefault fallback result` — the success value, or `fallback` if `Err`. |
+| `toMaybe` | `toMaybe result` — `Just` the `Ok` value, or `Nothing` on `Err`. |
+| `fromMaybe` | `fromMaybe err maybe` — `Ok` the `Just` value, or `Err err` on `Nothing`. |
+
+## Secret.Unsafe
+
+[Full reference](stdlib/Secret.Unsafe.md)
+
+Ipe.Secret.Unsafe — the raw secret-reveal escape hatch for `Ipe.Secret`
+
+| Export | Summary |
+|--------|----------|
+| `unsafeReveal` | `unsafeReveal s` — un-seal a `Secret` into its raw plaintext `String`. The |
+
+## Set
+
+[Full reference](stdlib/Set.md)
+
+Ipe.Set — unordered set of unique elements.
+
+| Export | Summary |
+|--------|----------|
+| `empty` | The empty set. |
+| `size` | Number of distinct elements. |
+| `isEmpty` | `True` when the set has no elements. |
+| `singleton` | `singleton x` — the one-element set `{x}`. |
+| `insert` | `insert x s` — add `x` to `s`. No-op if already present. |
+| `remove` | `remove x s` — drop `x` from `s`. No-op if absent. |
+| `member` | `member x s` — `True` iff `x` is in `s`. |
+| `toList` | All elements in the set (unsorted). |
+| `fromList` | Build a set from a list, de-duplicating along the way. |
+| `union` | `union a b` — every element in `a` OR `b`. |
+| `intersect` | `intersect a b` — every element in BOTH `a` and `b`. |
+| `diff` | `diff a b` — every element in `a` BUT NOT in `b`. |
+| `foldl` | `foldl fn acc s` — fold over the elements in ascending order. |
+| `foldr` | `foldr fn acc s` — fold over the elements in descending order. |
+| `map` | `map fn s` — apply `fn` to every element; duplicate results collapse. |
+| `filter` | `filter pred s` — keep only elements satisfying `pred`. |
+| `partition` | `partition pred s` — split into (satisfying, not-satisfying). |
 
 ## String
 
 [Full reference](stdlib/String.md)
 
-| Symbol | Summary |
+`Ipe.String` — build, slice, search, and transform text.
+
+| Export | Summary |
 |--------|----------|
-| `all` | `all pred s` — `True` if `pred` holds for every character. |
-| `any` | `any pred s` — `True` if `pred` holds for at least one character. |
-| `append` | `append s1 s2` — concatenate two strings; `s1` followed by `s2`. |
-| `casefold` | `casefold s` — case-fold `s` for case-insensitive comparison. |
-| `concat` | `concat strings` — join a list of strings into one. |
-| `cons` | `cons c s` — prepend character `c` to string `s`. |
-| `contains` | `contains needle haystack` — `True` when `needle` appears inside `haystack`. |
-| `containsIn` | `containsIn needle haystack` — `True` when `needle` appears in `haystack`. |
+| `fromInt` | `fromInt n` — the decimal string representation of an integer. |
+| `fromFloat` | `fromFloat n` — the string representation of a float. |
+| `length` | `length s` — the number of Unicode code points in `s`. |
+| `isEmpty` | `isEmpty s` — `True` when `s` is the empty string. |
+| `join` | `join sep strings` — join a list of strings with `sep` between each pair. |
+| `split` | `split sep s` — split `s` on every occurrence of `sep`. |
+| `replace` | `replace from to s` — replace every occurrence of `from` in `s` with `to`. |
+| `slice` | `slice start end s` — characters from index `start` to `end` (exclusive). |
 | `dropLeft` | `dropLeft n s` — remove the first `n` characters; `""` when `n >= length`. |
 | `dropRight` | `dropRight n s` — remove the last `n` characters; `""` when `n >= length`. |
+| `toInt` | `toInt s` — parse `s` as a decimal integer; `Nothing` if not valid. |
+| `toFloat` | `toFloat s` — parse `s` as a floating-point number; `Nothing` if not valid. |
+| `toUpper` | `toUpper s` — convert all letters in `s` to upper case. |
+| `toLower` | `toLower s` — convert all letters in `s` to lower case. |
+| `trim` | `trim s` — remove leading and trailing whitespace. |
+| `trimStart` | `trimStart s` — remove leading whitespace only. |
+| `trimEnd` | `trimEnd s` — remove trailing whitespace only. |
+| `toUpperIn` | `toUpperIn locale s` — locale-sensitive upper-case conversion. |
+| `toLowerIn` | `toLowerIn locale s` — locale-sensitive lower-case conversion. |
+| `reverse` | `reverse s` — the string with its characters in reverse order. |
+| `append` | `append s1 s2` — concatenate two strings; `s1` followed by `s2`. |
+| `concat` | `concat strings` — join a list of strings into one. |
+| `contains` | `contains needle haystack` — `True` when `needle` appears inside `haystack`. |
+| `startsWith` | `startsWith prefix s` — `True` when `s` begins with `prefix`. |
 | `endsWith` | `endsWith suffix s` — `True` when `s` ends with `suffix`. |
+| `containsIn` | `containsIn needle haystack` — `True` when `needle` appears in `haystack`. |
+| `startsWithIn` | `startsWithIn prefix haystack` — `True` when `haystack` starts with `prefix`. |
 | `endsWithIn` | `endsWithIn suffix haystack` — `True` when `haystack` ends with `suffix`. |
+| `casefold` | `casefold s` — case-fold `s` for case-insensitive comparison. |
 | `equalFold` | `equalFold s1 s2` — case-insensitive equality comparison. |
+| `isEmail` | `isEmail s` — `True` when `s` looks like a valid email address. |
+| `isUrl` | `isUrl s` — `True` when `s` looks like a valid URL. |
+| `words` | `words s` — split `s` into words on whitespace boundaries. |
+| `lines` | `lines s` — split `s` into lines on newline boundaries. |
+| `fromChar` | `fromChar c` — a one-character string from a `Char`. |
+| `toList` | `toList s` — convert `s` to a list of characters. |
+| `fromList` | `fromList chars` — build a `String` from a list of characters. |
+| `repeat` | `repeat n s` — concatenate `s` with itself `n` times. |
+| `padLeft` | `padLeft n c s` — left-pad `s` with character `c` to width `n`. |
+| `padRight` | `padRight n c s` — right-pad `s` with character `c` to width `n`. |
+| `left` | `left n s` — the first `n` characters; `""` when `n <= 0`. |
+| `right` | `right n s` — the last `n` characters; `""` when `n <= 0`. |
+| `cons` | `cons c s` — prepend character `c` to string `s`. |
+| `uncons` | `uncons s` — split off the first character and the rest; `Nothing` on `""`. |
+| `pad` | `pad n ch s` — centre-pad `s` to width `n` with character `ch`. |
+| `indexes` | `indexes sub s` — list of start indices where `sub` appears in `s`. |
+| `map` | `map fn s` — transform each character of `s` with `fn`. |
 | `filter` | `filter pred s` — keep only characters satisfying `pred`. |
 | `foldl` | `foldl fn acc s` — reduce `s` character-by-character from the left. |
 | `foldr` | `foldr fn acc s` — reduce `s` character-by-character from the right. |
-| `fromChar` | `fromChar c` — a one-character string from a `Char`. |
-| `fromFloat` | `fromFloat n` — the string representation of a float. |
-| `fromInt` | `fromInt n` — the decimal string representation of an integer. |
-| `fromList` | `fromList chars` — build a `String` from a list of characters. |
-| `indexes` | `indexes sub s` — list of start indices where `sub` appears in `s`. |
-| `isEmail` | `isEmail s` — `True` when `s` looks like a valid email address. |
-| `isEmpty` | `isEmpty s` — `True` when `s` is the empty string. |
-| `isUrl` | `isUrl s` — `True` when `s` looks like a valid URL. |
-| `join` | `join sep strings` — join a list of strings with `sep` between each pair. |
-| `left` | `left n s` — the first `n` characters; `""` when `n <= 0`. |
-| `length` | `length s` — the number of Unicode code points in `s`. |
-| `lines` | `lines s` — split `s` into lines on newline boundaries. |
-| `map` | `map fn s` — transform each character of `s` with `fn`. |
-| `pad` | `pad n ch s` — centre-pad `s` to width `n` with character `ch`. |
-| `padLeft` | `padLeft n c s` — left-pad `s` with character `c` to width `n`. |
-| `padRight` | `padRight n c s` — right-pad `s` with character `c` to width `n`. |
-| `repeat` | `repeat n s` — concatenate `s` with itself `n` times. |
-| `replace` | `replace from to s` — replace every occurrence of `from` in `s` with `to`. |
-| `reverse` | `reverse s` — the string with its characters in reverse order. |
-| `right` | `right n s` — the last `n` characters; `""` when `n <= 0`. |
-| `slice` | `slice start end s` — characters from index `start` to `end` (exclusive). |
-| `split` | `split sep s` — split `s` on every occurrence of `sep`. |
-| `startsWith` | `startsWith prefix s` — `True` when `s` begins with `prefix`. |
-| `startsWithIn` | `startsWithIn prefix haystack` — `True` when `haystack` starts with `prefix`. |
-| `toFloat` | `toFloat s` — parse `s` as a floating-point number; `Nothing` if not valid. |
-| `toInt` | `toInt s` — parse `s` as a decimal integer; `Nothing` if not valid. |
-| `toList` | `toList s` — convert `s` to a list of characters. |
-| `toLower` | `toLower s` — convert all letters in `s` to lower case. |
-| `toLowerIn` | `toLowerIn locale s` — locale-sensitive lower-case conversion. |
-| `toUpper` | `toUpper s` — convert all letters in `s` to upper case. |
-| `toUpperIn` | `toUpperIn locale s` — locale-sensitive upper-case conversion. |
-| `trim` | `trim s` — remove leading and trailing whitespace. |
-| `trimEnd` | `trimEnd s` — remove trailing whitespace only. |
-| `trimStart` | `trimStart s` — remove leading whitespace only. |
-| `uncons` | `uncons s` — split off the first character and the rest; `Nothing` on `""`. |
-| `words` | `words s` — split `s` into words on whitespace boundaries. |
+| `any` | `any pred s` — `True` if `pred` holds for at least one character. |
+| `all` | `all pred s` — `True` if `pred` holds for every character. |
+
+## System
+
+[Full reference](stdlib/System.md)
+
+Ipe.System -- process environment + args + termination
+
+| Export | Summary |
+|--------|----------|
+| `args` | (no summary) |
+| `getArg` | `getArg n` -- zero-indexed positional arg lookup.  `Nothing` |
+| `getenv` | (no summary) |
+| `getenvOr` | `getenvOr key default` -- returns the env value if present, |
+| `getenvInt` | (no summary) |
+| `getenvBool` | (no summary) |
+| `setenv` | (no summary) |
+| `unsetenv` | (no summary) |
+| `cwd` | (no summary) |
+| `getcwd` | Alias for `cwd` -- kept for backward compatibility. |
+| `loadEnv` | Load environment variables from a `.env`-formatted file at the |
+| `exit` | Terminate the process with the given exit code.  Polymorphic |
 
 ## Task
 
 [Full reference](stdlib/Task.md)
 
-| Symbol | Summary |
+`Ipe.Task` — describe an effect as a value, then compose effects.
+
+| Export | Summary |
 |--------|----------|
-| `BackoffStrategy` | The four backoff strategies available to `RetryPolicy`. |
-| `Exponential` | The `Exponential` backoff-strategy constructor. |
-| `ExponentialWithJitter` | The `ExponentialWithJitter` backoff-strategy constructor. |
-| `Linear` | The `Linear` backoff-strategy constructor. |
-| `LinearWithJitter` | The `LinearWithJitter` backoff-strategy constructor. |
-| `RetryPolicy` | Retry configuration for `retryWith`, built with the `linearBackoff` / |
-| `andThen` | `andThen next task` — run `task`, then feed its success value to `next` to |
-| `andThenResult` | `andThenResult step task` — like `andThen`, but `step` returns a plain |
-| `attempt` | `attempt toMsg task` — run `task` as a `Cmd`, mapping its settled `Result` |
-| `defaultRetryPolicy` | `defaultRetryPolicy` — a sensible starting policy: 3 attempts, 500 ms |
-| `exponentialBackoff` | `exponentialBackoff maxAttempts baseMs` — a policy whose delay doubles each |
+| `succeed` | `succeed value` — a task that runs no effect and settles with `value`. The |
 | `fail` | `fail err` — a task that settles with `err` on the implicit error channel, so |
-| `fromResult` | `fromResult result` — lift a `Result` into a task: `Ok` becomes a success, |
-| `lazy` | `lazy makeTask` — defer building a task until it is run, by wrapping it in a |
-| `linearBackoff` | `linearBackoff maxAttempts delayMs` — a constant-delay policy that retries on |
 | `map` | `map f task` — transform a task's success value with `f`, leaving the error |
 | `map2` | `map2`..`map5` — combine 2..5 independent tasks with an N-ary function. |
 | `map3` | `map3 f a b c` — combine three independent tasks with a three-argument |
 | `map4` | `map4 f a b c d` — combine four independent tasks with a four-argument |
 | `map5` | `map5 f a b c d e` — combine five independent tasks with a five-argument |
+| `andThen` | `andThen next task` — run `task`, then feed its success value to `next` to |
+| `attempt` | `attempt toMsg task` — run `task` as a `Cmd`, mapping its settled `Result` |
 | `mapError` | `mapError f task` — transform the error a task fails with, leaving a success |
 | `onError` | `onError recover task` — if `task` fails, run `recover` on the error to |
-| `parallel` | `parallel tasks` — run a list of tasks concurrently, collecting their results |
-| `retryOn` | `retryOn pred policy` — replace the policy's `shouldRetry` predicate so it |
-| `retryWith` | `retryWith policy task` — run `task`, retrying according to `policy` whenever |
+| `fromResult` | `fromResult result` — lift a `Result` into a task: `Ok` becomes a success, |
+| `andThenResult` | `andThenResult step task` — like `andThen`, but `step` returns a plain |
 | `sequence` | `sequence tasks` — run a list of tasks one after another, collecting their |
-| `succeed` | `succeed value` — a task that runs no effect and settles with `value`. The |
-| `withBaseMs` | `withBaseMs base policy` — set the base retry delay.  Takes a typed |
+| `parallel` | `parallel tasks` — run a list of tasks concurrently, collecting their results |
+| `lazy` | `lazy makeTask` — defer building a task until it is run, by wrapping it in a |
+| `BackoffStrategy` | The four backoff strategies available to `RetryPolicy`. |
+| `RetryPolicy` | Retry configuration for `retryWith`, built with the `linearBackoff` / |
+| `linearBackoff` | `linearBackoff maxAttempts delayMs` — a constant-delay policy that retries on |
+| `exponentialBackoff` | `exponentialBackoff maxAttempts baseMs` — a policy whose delay doubles each |
 | `withJitter` | `withJitter policy` — upgrade the policy's strategy to its jitter variant: |
-| `withMaxAttempts` | `withMaxAttempts n policy` — set the maximum number of attempts. |
+| `retryOn` | `retryOn pred policy` — replace the policy's `shouldRetry` predicate so it |
 | `withRetryOn` | `withRetryOn pred policy` — an alias for `retryOn` with the same semantics and |
+| `defaultRetryPolicy` | `defaultRetryPolicy` — a sensible starting policy: 3 attempts, 500 ms |
+| `withMaxAttempts` | `withMaxAttempts n policy` — set the maximum number of attempts. |
+| `withBaseMs` | `withBaseMs base policy` — set the base retry delay.  Takes a typed |
+| `retryWith` | `retryWith policy task` — run `task`, retrying according to `policy` whenever |
+
+## Test
+
+[Full reference](stdlib/Test.md)
+
+| Export | Summary |
+|--------|----------|
+| `Test` | (no summary) |
+| `TestResult` | (no summary) |
+| `test` | (no summary) |
+| `suite` | (no summary) |
+| `pass` | (no summary) |
+| `fail` | (no summary) |
+| `equal` | (no summary) |
+| `notEqual` | (no summary) |
+| `ok` | (no summary) |
+| `err` | (no summary) |
+| `expectErr` | Pass when `result` is an `Err` classified as `expected`. Reports the actual |
+| `isTrue` | (no summary) |
+| `isFalse` | (no summary) |
+| `kindName` | Render an `ErrorKind` as its stable variant name (`"Io"`, `"Network"`, …). |
+| `run` | (no summary) |
+| `runWithPrefix` | (no summary) |
+| `summarise` | (no summary) |
+| `runMain` | (no summary) |
+
+## Time
+
+[Full reference](stdlib/Time.md)
+
+Ipe.Time -- clock + formatting + parsing.
+
+| Export | Summary |
+|--------|----------|
+| `now` | `now ()` — the current instant. |
+| `unixMillis` | `unixMillis ()` — the current instant (alias for `now`). |
+| `sleep` | `sleep span` -- resolve after `span` elapses.  Takes a typed |
+| `timeString` | `timeString t` — format `t` as a human-readable local-time string. |
+| `format` | `format pattern t` — format `t` using a strftime-style `pattern`. |
+| `formatHTTP` | `formatHTTP t` — format `t` as an HTTP-date string (RFC 7231). |
+| `formatISO8601` | `formatISO8601 t` — format `t` as an ISO 8601 string. |
+| `formatRFC3339` | `formatRFC3339 t` — format `t` as an RFC 3339 string. |
+| `add` | `add span t` — shift instant `t` forward by `span`. |
+| `diff` | `diff a b` — the `Duration` from instant `b` to instant `a`.  Clamped to |
+| `fromMillis` | `fromMillis ms` — build a `Timestamp` from raw milliseconds since the Unix |
+| `toMillis` | `toMillis t` — recover the raw millisecond value from a `Timestamp`. |
+| `addMillis` | `addMillis ms t` — shift instant `t` by `ms` raw milliseconds.  Prefer |
+| `diffMillis` | `diffMillis a b` — raw milliseconds from instant `b` to instant `a`. |
+| `every` | `every interval msg` -- Ipe.Web / Ipe.Tui subscription that emits `msg` once |
+| `isLeapYear` | `isLeapYear year` — True when `year` is a leap year. |
+| `daysInMonth` | `daysInMonth year month` — number of days in `month` of `year`. |
+
+## Time.Timestamp
+
+[Full reference](stdlib/Time.Timestamp.md)
+
+Ipe.Time.Timestamp — an opaque instant in time (Layer 3 Ipe source).
+
+| Export | Summary |
+|--------|----------|
+| `Timestamp` | An opaque instant carried as whole milliseconds since the Unix epoch. |
+| `fromUnixMillis` | `fromUnixMillis ms` — the only `Timestamp` constructor.  Total: every `Int` |
+| `toUnixMillis` | `toUnixMillis t` — recover the raw millisecond value for runtime kernels. |
+| `add` | `add span t` — shift instant `t` forward by `span`.  A negative span |
+| `diff` | `diff a b` — the `Duration` from instant `b` to instant `a`.  The result |
+
+## ToString
+
+[Full reference](stdlib/ToString.md)
+
+Ipe.ToString — naming-consistency surface.
+
+| Export | Summary |
+|--------|----------|
+| `fromInt` | (no summary) |
+| `fromFloat` | (no summary) |
+| `fromBool` | (no summary) |
+
+## Trace
+
+[Full reference](stdlib/Trace.md)
+
+Ipe.Trace — opt-in distributed-tracing spans.
+
+| Export | Summary |
+|--------|----------|
+| `span` | Wrap a Task in a named child span.  The Task's value flows |
+| `event` | Record an instantaneous, named event on the current span |
+| `attr` | Annotate the current span with a `key = value` string |
+
+## Tuple
+
+[Full reference](stdlib/Tuple.md)
+
+Ipe.Tuple — helpers for 2-tuples (pairs).
+
+| Export | Summary |
+|--------|----------|
+| `first` | Extract the first component of a pair. |
+| `second` | Extract the second component of a pair. |
+| `pair` | Build a pair from its two components. |
+| `mapFirst` | Transform the first component of a pair. |
+| `mapSecond` | Transform the second component of a pair. |
+| `mapBoth` | Transform both components of a pair, each with its own function. |
+
+## Ui
+
+[Full reference](stdlib/Ui.md)
+
+Ipe.Ui — element / attribute / colour / layout surface.
+
+| Export | Summary |
+|--------|----------|
+| `node` | `node desc attrs children` — a container `Element` carrying a role |
+| `taggedNode` | `taggedNode tag desc attrs children` — a tag-fixed `Element`. |
+| `layout` | `layout attrs element` — render a root `Element` to `Html`. |
+| `layoutWith` | `layoutWith { wrapperAttrs, rootAttrs } element` — `layout` with explicit |
+| `none` | `none` — the empty `Element`. |
+| `text` | `text s` — a text `Element`. |
+| `html` | `html h` — embed raw `Html` inside a `Ui` view. |
+| `cells` | `cells grid` — a raw terminal cell grid (one inner list per row). |
+| `widget` | `widget handle state onEvent` — place a typed JS custom-element widget. |
+| `el` | `el attrs child` — a single-child container. |
+| `row` | `row attrs children` — a horizontal container (`__row` marker). |
+| `column` | `column attrs children` — a vertical container (`__col` marker). |
+| `wrappedRow` | `wrappedRow attrs children` — a wrapping horizontal container. |
+| `grid` | `grid attrs children` — a CSS-grid container. |
+| `paragraph` | `paragraph attrs children` — a `<p>` with inline-flow children. |
+| `textColumn` | `textColumn attrs children` — a `<section>` block of paragraphs. |
+| `form` | `form attrs children` — a `<form>` container. |
+| `input` | `input attrs` — an `<input>` void element. |
+| `button` | `button attrs { onPress, label }` — a `<button>` with an optional press msg. |
+| `link` | `link attrs { url, label }` — an `<a href=…>` link. |
+| `image` | `image attrs { src, description }` — an `<img src=… alt=…>`. |
+| `spacing` | (no summary) |
+| `padding` | (no summary) |
+| `paddingXY` | (no summary) |
+| `paddingEach` | (no summary) |
+| `width` | (no summary) |
+| `height` | (no summary) |
+| `centerX` | (no summary) |
+| `centerY` | (no summary) |
+| `alignLeft` | (no summary) |
+| `alignRight` | (no summary) |
+| `alignTop` | (no summary) |
+| `alignBottom` | (no summary) |
+| `pointer` | (no summary) |
+| `clip` | (no summary) |
+| `clipX` | (no summary) |
+| `clipY` | (no summary) |
+| `scrollbars` | (no summary) |
+| `scrollbarX` | (no summary) |
+| `scrollbarY` | (no summary) |
+| `gridColumns` | (no summary) |
+| `above` | (no summary) |
+| `below` | (no summary) |
+| `onLeft` | (no summary) |
+| `onRight` | (no summary) |
+| `inFront` | (no summary) |
+| `behind` | (no summary) |
+| `onClick` | (no summary) |
+| `onSubmit` | (no summary) |
+| `onInput` | (no summary) |
+| `onChange` | (no summary) |
+| `onFocus` | (no summary) |
+| `onBlur` | (no summary) |
+| `onMouseOver` | (no summary) |
+| `onMouseOut` | (no summary) |
+| `onKeyDown` | (no summary) |
+| `onKeyUp` | (no summary) |
+| `onBool` | (no summary) |
+| `onFile` | (no summary) |
+| `htmlAttribute` | (no summary) |
+| `mediaQuery` | (no summary) |
+| `breakpoint` | (no summary) |
+| `aspectRatio` | (no summary) |
+| `aspectRatioWH` | (no summary) |
+| `square` | (no summary) |
+| `widescreen` | (no summary) |
+| `cinemascope` | (no summary) |
+| `name` | (no summary) |
+| `style` | (no summary) |
+| `transition` | (no summary) |
+| `gridTracks` | (no summary) |
+| `animate` | (no summary) |
+| `onPseudo` | (no summary) |
+| `hover` | (no summary) |
+| `focus` | (no summary) |
+| `focusVisible` | (no summary) |
+| `active` | (no summary) |
+| `disabled` | (no summary) |
+| `mobile` | (no summary) |
+| `tablet` | (no summary) |
+| `desktop` | (no summary) |
+| `darkMode` | (no summary) |
+| `lightMode` | (no summary) |
+| `reducedMotion` | (no summary) |
+| `px` | (no summary) |
+| `fill` | (no summary) |
+| `fillPortion` | (no summary) |
+| `content` | (no summary) |
+| `shrink` | (no summary) |
+| `minimum` | (no summary) |
+| `maximum` | (no summary) |
+| `vh` | (no summary) |
+| `vw` | (no summary) |
+| `rgb` | (no summary) |
+| `rgba` | (no summary) |
+| `white` | (no summary) |
+| `black` | (no summary) |
+| `transparent` | (no summary) |
+| `colorCss` | (no summary) |
+| `describe` | (no summary) |
+| `descMain` | (no summary) |
+| `descNavigation` | (no summary) |
+| `descContentInfo` | (no summary) |
+| `descComplementary` | (no summary) |
+| `descLivePolite` | (no summary) |
+| `descLiveAssertive` | (no summary) |
+| `descHeading` | (no summary) |
+| `descLabel` | (no summary) |
+
+## Ui.Animation
+
+[Full reference](stdlib/Ui.Animation.md)
+
+Ipe.Ui.Animation — typed CSS keyframe animations for `Ipe.Ui`.
+
+| Export | Summary |
+|--------|----------|
+| `Iterations` | (no summary) |
+| `FillMode` | (no summary) |
+| `Spec` | (no summary) |
+| `defaultSpec` | `defaultSpec "fadeIn"` — Spec with sensible defaults: 300ms |
+| `withDuration` | `withDuration 500 spec` — replace the duration in milliseconds. |
+| `withEasing` | `withEasing easeOut spec` — replace the easing curve. |
+| `withDelay` | `withDelay 100 spec` — replace the delay before animation starts. |
+| `withIterations` | `withIterations infinite spec` — replace the iteration count. |
+| `withFillMode` | `withFillMode forwards spec` — replace the post-animation state. |
+| `withRespectReducedMotion` | `withRespectReducedMotion False spec` — opt out of the prefers- |
+| `withKeyframes` | `withKeyframes [(0, [Transform.opacity (Css.opacityOf 0.0)]), (100, [Transform.opacity (Css.opacityOf 1.0)])] spec` |
+| `once` | (no summary) |
+| `infinite` | (no summary) |
+| `times` | (no summary) |
+| `none` | (no summary) |
+| `forwards` | (no summary) |
+| `backwards` | (no summary) |
+| `both` | (no summary) |
+| `linear` | (no summary) |
+| `easeIn` | (no summary) |
+| `easeOut` | (no summary) |
+| `easeInOut` | (no summary) |
+| `cubicBezier` | (no summary) |
+| `iterationsToCss` | (no summary) |
+| `fillModeToCss` | (no summary) |
+| `easingToCss` | (no summary) |
+| `attribute` | (no summary) |
+| `buildShorthandTail` | (no summary) |
+| `buildKeyframesBody` | (no summary) |
+
+## Ui.Cells
+
+[Full reference](stdlib/Ui.Cells.md)
+
+Ipe.Ui.Cells — Tui-only view builders producing `Cells msg`.
+
+| Export | Summary |
+|--------|----------|
+| `none` | An empty cell view — renders nothing. |
+| `text` | `text str` — a single line of text. |
+| `cells` | `cells grid` — a raw terminal cell grid.  Each inner list is one row |
+| `el` | `el attrs child` — wrap a single `Cells msg` child with attributes. |
+| `row` | `row attrs children` — lay out `Cells msg` children horizontally. |
+| `column` | `column attrs children` — lay out `Cells msg` children vertically. |
+
+## Ui.Chart
+
+[Full reference](stdlib/Ui.Chart.md)
+
+Ipe.Ui.Chart — typed chart primitives for `Ipe.Ui`.
+
+| Export | Summary |
+|--------|----------|
+| `Cfg` | (no summary) |
+| `defaultCfg` | (no summary) |
+| `withWidth` | (no summary) |
+| `withHeight` | (no summary) |
+| `withColor` | (no summary) |
+| `withTitle` | (no summary) |
+| `withYRange` | (no summary) |
+| `withGridLines` | (no summary) |
+| `Series` | (no summary) |
+| `series` | (no summary) |
+| `withSeriesColor` | (no summary) |
+| `withSeriesLabel` | (no summary) |
+| `Point` | (no summary) |
+| `line` | (no summary) |
+| `area` | (no summary) |
+| `bar` | (no summary) |
+| `sparkline` | (no summary) |
+| `heatmap` | (no summary) |
+
+## Ui.Events
+
+[Full reference](stdlib/Ui.Events.md)
+
+Ipe.Ui.Events — re-exports of event helpers (onClick / onSubmit / onInput) for `Ipe.Ui`.
+
+| Export | Summary |
+|--------|----------|
+| `onClick` | (no summary) |
+| `onSubmit` | (no summary) |
+| `onInput` | (no summary) |
+
+## Ui.Grid
+
+[Full reference](stdlib/Ui.Grid.md)
+
+Ipe.Ui.Grid — explicit CSS-grid track lists for `Ipe.Ui`.
+
+| Export | Summary |
+|--------|----------|
+| `Track` | (no summary) |
+| `fr` | (no summary) |
+| `px` | (no summary) |
+| `auto` | (no summary) |
+| `minContent` | (no summary) |
+| `maxContent` | (no summary) |
+| `minmax` | (no summary) |
+| `repeat` | (no summary) |
+| `repeatAutoFit` | (no summary) |
+| `repeatAutoFill` | (no summary) |
+| `trackToCss` | (no summary) |
+| `tracksToCss` | (no summary) |
+| `tracks` | (no summary) |
+| `columns` | (no summary) |
+| `rows` | (no summary) |
+
+## Ui.Responsive
+
+[Full reference](stdlib/Ui.Responsive.md)
+
+Ipe.Ui.Responsive — device-class detection + breakpoint helpers for `Ipe.Ui`.
+
+| Export | Summary |
+|--------|----------|
+| `DeviceClass` | (no summary) |
+| `classifyDevice` | (no summary) |
+| `deviceClassToString` | (no summary) |
+| `mobile` | (no summary) |
+| `tablet` | (no summary) |
+| `desktop` | (no summary) |
+| `bigDesktop` | (no summary) |
+
+## Ui.Transform
+
+[Full reference](stdlib/Ui.Transform.md)
+
+| Export | Summary |
+|--------|----------|
+| `translateX` | (no summary) |
+| `translateY` | (no summary) |
+| `translate` | (no summary) |
+| `scale` | (no summary) |
+| `scaleXY` | (no summary) |
+| `rotate` | (no summary) |
+| `skewX` | (no summary) |
+| `skewY` | (no summary) |
+| `opacity` | (no summary) |
+| `Prop` | (no summary) |
+| `propsToCss` | (no summary) |
+| `propsToCssProps` | (no summary) |
+
+## Ui.Transition
+
+[Full reference](stdlib/Ui.Transition.md)
+
+Ipe.Ui.Transition — typed CSS transitions for `Ipe.Ui`.
+
+| Export | Summary |
+|--------|----------|
+| `Step` | (no summary) |
+| `Easing` | (no summary) |
+| `property` | (no summary) |
+| `duration` | (no summary) |
+| `delay` | (no summary) |
+| `easing` | (no summary) |
+| `linear` | (no summary) |
+| `easeIn` | (no summary) |
+| `easeOut` | (no summary) |
+| `easeInOut` | (no summary) |
+| `cubicBezier` | (no summary) |
+| `buildShorthand` | (no summary) |
+| `easingToCss` | (no summary) |
+| `defaultProperty` | (no summary) |
+| `defaultDuration` | (no summary) |
+| `defaultEasing` | (no summary) |
+| `attribute` | (no summary) |
+| `attributeUnsafe` | (no summary) |
+
+## Url
+
+[Full reference](stdlib/Url.md)
+
+Ipe.Url — typed, validated URLs.
+
+| Export | Summary |
+|--------|----------|
+| `fromString` | `fromString raw` — the parse-don't-validate seal: the only `Url` |
+| `toString` | `toString url` — recover the serialized URL string. |
+| `scheme` | `scheme url` — the URL's scheme (`"https"`, `"http"`, …), always present. |
+| `host` | `host url` — the host component, or `Nothing` for a hostless scheme |
+| `path` | `path url` — the path component. |
+| `query` | `query url` — the raw query string (without the leading `?`), or `Nothing`. |
+| `fragment` | `fragment url` — the fragment (without the leading `#`), or `Nothing`. |
+| `buildQuery` | `buildQuery pairs` — the injection-safe query-string builder. Every key and |
+
+## Url.Parser
+
+[Full reference](stdlib/Url.Parser.md)
+
+| Export | Summary |
+|--------|----------|
+| `Pattern` | A route pattern: the ordered path matchers plus the query keys to read. |
+| `Query` | A query matcher: the key to read.  `query` names it; `withQuery` attaches |
+| `Captures` | The captures a matched pattern yields, positionally: every `CaptureString` |
+| `string` | `string` — capture one path segment as a `String`. |
+| `int` | `int` — capture one path segment as an `Int`.  A non-integer segment does |
+| `s` | (no summary) |
+| `slash` | `slash before after` — sequence two path patterns (`elm/url`'s `</>`): |
+| `top` | `top` — match the root: contribute nothing and consume no segment.  The |
+| `withQuery` | `withQuery pattern queryKey` — attach a query matcher (`elm/url`'s `<?>`) to |
+| `query` | (no summary) |
+| `parse` | (no summary) |
+| `firstString` | (no summary) |
+| `firstInt` | The first `Int` capture of a match, or `Nothing` when the pattern captured |
+| `firstQuery` | The first query capture of a match: `Just Nothing` is not distinguished |
+
+## Uuid
+
+[Full reference](stdlib/Uuid.md)
+
+Ipe.Uuid — UUID generation and parsing.
+
+| Export | Summary |
+|--------|----------|
+| `v4` | `v4 ()` — generate a random UUID (version 4) as a canonical |
+| `v7` | `v7 ()` — generate a time-ordered UUID (version 7) as a canonical |
+| `parse` | `parse s` — validate that `s` is a well-formed UUID string in any |
+
+## Web.Console
+
+[Full reference](stdlib/Web.Console.md)
+
+Ipe.Web.Console — types exposed for the optional `consoleAuth`
+
+| Export | Summary |
+|--------|----------|
+| `Identity` | Identity returned by the `consoleAuth` callback when access is |
+| `defaultIdentity` | `defaultIdentity "user-42"` — Identity with empty email + claims. |
+| `withEmail` | `withEmail "alice@example.com" id` — replace the audit email. |
+| `withClaim` | `withClaim "role" "admin" id` — add a single RBAC claim. |
+| `withClaims` | `withClaims (Dict.fromList [("role", "admin"), ("tier", "pro")]) id` |
+
+## Web.Head
+
+[Full reference](stdlib/Web.Head.md)
+
+Ipe.Web.Head — typed `<head>` helpers for Ipe.Web per-page injection.
+
+| Export | Summary |
+|--------|----------|
+| `title` | (no summary) |
+| `meta` | (no summary) |
+| `metaProperty` | (no summary) |
+| `link` | (no summary) |
+| `canonical` | (no summary) |
+| `themeColor` | (no summary) |
+| `rss` | (no summary) |
+
+## Web.Head.Unsafe
+
+[Full reference](stdlib/Web.Head.Unsafe.md)
+
+Ipe.Web.Head.Unsafe — the verbatim JSON-LD `<script>` injection hatch for
+
+| Export | Summary |
+|--------|----------|
+| `unsafeJsonLd` | `unsafeJsonLd body` — emit `<script type="application/ld+json">…</script>` |
+
+## WebSocket
+
+[Full reference](stdlib/WebSocket.md)
+
+Ipe.WebSocket — outbound WebSocket client.
+
+| Export | Summary |
+|--------|----------|
+| `WebSocket` | Opaque handle to an open WebSocket.  The wrapped `Int` is the |
+| `WebSocketMessage` | One incoming frame from the peer. |
+| `CloseCode` | A WebSocket close code.  Either one of the standard symbolic |
+| `WsUrl` | An opaque WebSocket URL.  The ONLY way to build one is `WebSocket.url`, |
+| `url` | `url u` — the parse-don't-validate seal for WebSocket URLs.  Returns `Ok` |
+| `toUrl` | `toUrl wsUrl` — recover the underlying `Url` (e.g. to read the host). |
+| `WebSocketCfg` | Connect configuration record for `connectWith`. |
+| `defaultCfg` | Default WebSocketCfg.  All-defaults values.  Override fields |
+| `withHeaders` | Override the HTTP headers (e.g. Authorization) sent on the |
+| `withTimeout` | Override the handshake timeout (default 30 s).  Takes a typed |
+| `withPingInterval` | Override the ping interval (default 30 s).  Takes a typed `Ipe.Duration`; |
+| `connect` | `connect wsUrl` — open a new WebSocket to `wsUrl` (`ws://` or `wss://`). |
+| `connectWith` | `connectWith cfg` — connect with custom headers / timeout / |
+| `send` | `send sock text` — write a text frame.  Blocks up to 30 s if |
+| `sendBinary` | `sendBinary sock bytes` — write a binary frame.  Takes `Bytes` |
+| `close` | `close sock` — release the connection (sends a Normal close |
+| `closeWithCode` | `closeWithCode code reason sock` — release the connection with |
+| `onOpen` | `onOpen sock msg` — dispatch `msg` once the socket is connected. |
+| `onMessage` | `onMessage sock toMsg` — dispatch `toMsg event` for every |
+| `onClose` | `onClose sock toMsg` — dispatch `toMsg closeCode` when the |
+| `onError` | `onError sock toMsg` — dispatch `toMsg err` on a network / |
 

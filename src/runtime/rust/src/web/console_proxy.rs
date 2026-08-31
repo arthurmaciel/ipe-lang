@@ -88,12 +88,8 @@ pub fn console_bin_path() -> Option<std::path::PathBuf> {
 pub fn spawn_console(child_port: u16, store: &str, child_collects: bool) -> Option<()> {
     let bin = console_bin_path()?;
     let mut cmd = Command::new(&bin);
-    // Set both new and deprecated names so older pre-built console binaries
-    // (which may only know the IPE_LIVE_* names) still work.
     cmd.env("IPE_WEB_PORT", child_port.to_string())
-        .env("IPE_LIVE_PORT", child_port.to_string())
         .env("IPE_WEB_BASE_PATH", "/_ipe/console")
-        .env("IPE_LIVE_BASE_PATH", "/_ipe/console")
         // Belt-and-braces: suppress the child's own console auto-mount + banner.
         .env("IPE_CONSOLE_EMBED", "off")
         .kill_on_drop(true);
