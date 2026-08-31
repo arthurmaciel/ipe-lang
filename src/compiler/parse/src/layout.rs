@@ -1,7 +1,7 @@
 //! Column-based layout helpers.
 //!
-//! Ipe (like Elm and Haskell) uses indentation-significant layout. Rather than
-//! splice synthetic `{`/`;`/`}` tokens into the stream (the classic Haskell
+//! Ipe (like Elm and the compiler) uses indentation-significant layout. Rather than
+//! splice synthetic `{`/`;`/`}` tokens into the stream (the classic the compiler
 //! layout algorithm in `Ipe.Parse.Space`), the parser keeps the raw token
 //! stream and decides block membership from each token's column relative to a
 //! *threshold* column established by the enclosing construct.

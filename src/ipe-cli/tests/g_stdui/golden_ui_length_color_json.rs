@@ -15,7 +15,7 @@
 //!   (keys in the list order given to `object`)
 //!
 //! Asserts on semantic substrings rather than an exact HTML oracle: the Ipe.Ui
-//! HTML skeleton is a sanctioned Go-divergence (see `tests/golden/stdui`),
+//! HTML skeleton is a sanctioned sanctioned-divergence (see `tests/golden/stdui`),
 //! but the CSS fragments emitted for `Length` / `Color` values and the compact
 //! JSON line are byte-stable and are what this slice actually exercises.
 //!

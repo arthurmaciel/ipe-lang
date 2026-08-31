@@ -24,7 +24,7 @@
 //! The alias case IS exhaustive (a binder matches anything), so its emitted
 //! crate builds and runs: `end_to_end_alias_binds_whole_value` (gated on
 //! `IPE_E2E=1`) drives the hand-built IR through the Rust backend and asserts
-//! `7`, matching the Go reference compiler at
+//! `7`, matching the the reference compiler at
 //! `/home/arthur/Documentos/comp/ipe/out/ipe` on the shape-equivalent
 //!
 //! ```text
@@ -439,7 +439,7 @@ fn alias_subpattern_renders_binding_with_subpattern() -> DResult<()> {
 }
 
 /// Full spine: build the alias `Wrap` IR, emit, vendor the runtime, `cargo
-/// build`, run, and assert `7` — the Go-backend value for `f (MkWrap 7)` where
+/// build`, run, and assert `7` — the expected value for `f (MkWrap 7)` where
 /// the `as` binder rebinds the whole matched payload. Gated on `IPE_E2E=1`.
 #[test]
 fn end_to_end_alias_binds_whole_value() -> DResult<()> {
@@ -500,9 +500,9 @@ fn build_and_assert(
     assert_eq!(
         String::from_utf8_lossy(&output.stdout),
         expected,
-        "alias-pattern program output must match the Go oracle"
+        "alias-pattern program output must match golden"
     );
-    assert!(output.status.success(), "exit 0, matching the Go oracle");
+    assert!(output.status.success(), "exit 0");
     let _ = std::fs::remove_dir_all(out.join("target"));
     Ok(())
 }

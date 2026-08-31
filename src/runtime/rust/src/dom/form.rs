@@ -61,7 +61,7 @@ mod tests {
 
     // NB: form-target structs gain `#[derive(Default)] #[serde(default)]` in
     // codegen (Emitter.hs) so a missing form field decodes to the field's zero
-    // value — Go json.Unmarshal parity. These test structs mirror that.
+    // value. These test structs mirror that.
     #[derive(serde::Deserialize, Default, PartialEq, Debug)]
     #[serde(default)]
     struct Creds {
@@ -83,8 +83,8 @@ mod tests {
             })
         );
 
-        // Go json.Unmarshal parity: a form with NEITHER field still decodes —
-        // each field falls to its zero value — so the Msg dispatches (Some).
+        // A form with NEITHER field still decodes — each field falls to its
+        // zero value (via `#[serde(default)]`) — so the Msg dispatches (Some).
         let empty = FormData::new();
         let r2: Option<Creds> = decode_form_or_warn(empty);
         assert_eq!(
@@ -96,8 +96,7 @@ mod tests {
         );
     }
 
-    // The contract record: a String + an i64. Exercises the three cases the
-    // Go json.Unmarshal parity demands.
+    // The contract record: a String + an i64. Exercises the three decode cases.
     #[derive(serde::Deserialize, Default, PartialEq, Debug)]
     #[serde(default)]
     struct RunPayload {
@@ -136,7 +135,7 @@ mod tests {
     #[test]
     fn decode_form_genuine_coercion_failure_still_none() {
         // A non-numeric string into an i64 field is a GENUINE type error — it
-        // must still fail (None + warn), unchanged from Go (json.Unmarshal also
+        // must still fail (None + warn), unchanged.Unmarshal also
         // errors on a malformed number). Only MISSING-field stopped being a
         // failure; present-but-malformed stays a failure.
         let mut bad = FormData::new();
@@ -188,8 +187,7 @@ mod tests {
             })
         );
 
-        // Go json.Unmarshal parity: missing `password` → "" (zero value), Ok —
-        // the form-target struct's `#[serde(default)]` supplies it.
+        // Missing `password` → "" (zero value via `#[serde(default)]`), Ok.
         let mut partial = FormData::new();
         partial.insert("email".to_string(), "a@b.c".to_string()); // missing password
         let r2: Result<Creds, String> = decode_form(partial);
@@ -206,7 +204,7 @@ mod tests {
     // (`note : Maybe String` → `IpeMaybe<String>`) is idiomatic. The codegen
     // `#[derive(Default)]` on this struct requires `IpeMaybe<T>: Default`, which
     // `impl Default for IpeMaybe` (= `Nothing`) supplies, so a MISSING `note`
-    // decodes to `Nothing` (the missing-field leniency, Go's `json.Unmarshal`
+    // decodes to `Nothing` (the missing-field leniency,  `json.Unmarshal`
     // nil parity).
     //
     // NB on a PRESENT value: `IpeMaybe` derives serde's default (externally-
@@ -229,7 +227,7 @@ mod tests {
     fn decode_form_maybe_field_missing_is_nothing() {
         use crate::core::IpeMaybe;
 
-        // `note` absent → Nothing (Go decodes a missing nullable to nil), decode
+        // `note` absent → Nothing , decode
         // SUCCEEDS, Msg dispatches. This relies on the struct's
         // `#[derive(Default)]` (which needs `IpeMaybe<T>: Default`, else E0277).
         let mut without_note = FormData::new();

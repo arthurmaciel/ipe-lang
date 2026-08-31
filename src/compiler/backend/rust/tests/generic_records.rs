@@ -11,7 +11,7 @@
 //!   ONE generic struct and renders `RecValue<i64>` at the use site,
 //! * monomorphic records emit no `<..>` clause.
 //!
-//! Behavioural-parity oracle: the Go reference compiler at
+//! Behavioural-parity oracle: the the reference compiler at
 //! `/home/arthur/Documentos/comp/ipe/out/ipe` compiles + runs the
 //! equivalent program
 //!
@@ -404,8 +404,7 @@ fn monomorphic_record_stays_byte_identical() -> DResult<()> {
 }
 
 /// Full spine: build the generic-record IR, emit the project, vendor the runtime,
-/// `cargo build`, run, and assert the program prints `42` — the value the Go
-/// backend produces. Gated on `IPE_E2E=1` so the default `cargo test` stays fast.
+/// `cargo build`, run, and assert the program prints `42` — the expected value/// backend produces. Gated on `IPE_E2E=1` so the default `cargo test` stays fast.
 #[test]
 fn end_to_end_builds_and_prints_forty_two() -> DResult<()> {
     if std::env::var("IPE_E2E").is_err() {
@@ -453,9 +452,9 @@ fn end_to_end_builds_and_prints_forty_two() -> DResult<()> {
     assert_eq!(
         String::from_utf8_lossy(&output.stdout),
         "42\n",
-        "generic-record program prints 42 (Go-backend parity)"
+        "generic-record program prints 42"
     );
-    assert!(output.status.success(), "exit 0, matching the Go oracle");
+    assert!(output.status.success(), "exit 0");
     let _ = std::fs::remove_dir_all(out.join("target"));
     Ok(())
 }

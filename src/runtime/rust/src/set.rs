@@ -1,7 +1,7 @@
 //! `Ipe.Set` kernels backed by `std::collections::BTreeSet<A>`.
 //!
 //! Ipê's `Set` is keyed on `comparable` values (Int, String, …), all of which
-//! are `Ord` in Rust — so `BTreeSet<A>` is the natural backing. Go's runtime
+//! are `Ord` in Rust — so `BTreeSet<A>` is the natural backing.  runtime
 //! Set is a `map[string]any` (unordered iteration), so Ipê guarantees no
 //! particular Set order; `BTreeSet`'s sorted iteration is a CONFORMING and
 //! strictly MORE deterministic choice (same rationale as `Dict.keys` returning

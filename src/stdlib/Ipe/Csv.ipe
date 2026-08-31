@@ -1,4 +1,4 @@
--- | Ipe.Csv — CSV encode + decode (Layer 3 Ipe source).
+-- | Ipe.Csv — CSV encode + decode.
 --
 -- Operates on whole-CSV documents in memory via the `Csv` record:
 -- a `List String` header and a `List (List String)` body.  The
@@ -7,8 +7,6 @@
 --
 -- Delimiter handling: `parse` / `encode` use ',' by default.  Use
 -- `parseWithDelimiter` / `encodeWithDelimiter` for ';', '\\t', etc.
---
--- v0.15.47.
 module Ipe.Csv exposing
     ( Csv
     , defaultCsv

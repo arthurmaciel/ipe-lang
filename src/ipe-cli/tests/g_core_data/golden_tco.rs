@@ -8,7 +8,7 @@
 //! `loop { … continue }`, keeping the stack constant.
 //!
 //! TCO is value-preserving, not merely non-crashing: every regression pairs a
-//! value assertion (and the parity fixtures also byte-diff the Go oracle).
+//! value assertion (and the parity fixtures also byte-diff the golden oracle).
 //!
 //! Every test is gated on `IPE_E2E=1`; without it the test returns early. Run:
 //!
@@ -102,11 +102,11 @@ fn tco_value_param_double_use_compiles_and_computes() {
     assert_eq!(out.stdout.trim(), "13");
 }
 
-// ── Go-parity byte-diff — proves TCO is value-preserving, not just non-crashing ──
+// ── golden-verified byte-diff — proves TCO is value-preserving, not just non-crashing ──
 
-/// `tco_count_small` (`count 1000 0` → `1000`) matches the cached Go oracle. The
+/// `tco_count_small` (`count 1000 0` → `1000`) matches the cached golden oracle. The
 /// 2,000,000-iter run is reserved for the constant-stack proof above; a small N
-/// keeps the Go oracle fast.
+/// keeps the golden oracle fast.
 #[test]
 fn tco_count_small_matches_go_oracle() {
     if !e2e_enabled() {
@@ -123,7 +123,7 @@ fn tco_count_small_matches_go_oracle() {
     );
 }
 
-/// `tco_swap` matches the cached Go oracle.
+/// `tco_swap` matches the cached golden oracle.
 #[test]
 fn tco_swap_matches_go_oracle() {
     if !e2e_enabled() {
@@ -136,7 +136,7 @@ fn tco_swap_matches_go_oracle() {
     crate::support::assert_go_parity("tco_swap", &golden_dir(&root, "tco_swap"), &out.stdout);
 }
 
-/// `tco_double_use` matches the cached Go oracle.
+/// `tco_double_use` matches the cached golden oracle.
 #[test]
 fn tco_double_use_matches_go_oracle() {
     if !e2e_enabled() {

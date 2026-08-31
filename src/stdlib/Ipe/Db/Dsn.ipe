@@ -1,5 +1,5 @@
 -- | Ipe.Db.Dsn — a typed, opaque database connection descriptor
--- (parse-don't-validate, Layer 3 Ipe source).
+-- (parse-don't-validate,).
 --
 -- `Dsn` is opaque and reserved: the ONLY ways to obtain one are `parse` (from a
 -- full DSN URL string) and `build` (from typed parts). Both run the SAME

@@ -1,5 +1,5 @@
 -- | Ipe.Web.Console — types exposed for the optional `consoleAuth`
--- field on `Web.app` cfg (v0.16.0+).
+-- field on `Web.app` cfg.
 --
 -- The `consoleAuth` callback is row-polymorphic, optional, and has
 -- shape `Request -> Task Error (Maybe Identity)`.  When the framework
@@ -20,7 +20,7 @@ module Ipe.Web.Console exposing
     )
 
 -- | Ipe.Web.Console — types exposed for the optional `consoleAuth`
--- field on `Web.app` cfg (v0.16.0).
+-- field on `Web.app` cfg.
 --
 -- The `consoleAuth` callback is row-polymorphic, optional, and has
 -- shape:
@@ -67,10 +67,10 @@ module Ipe.Web.Console exposing
 --             , consoleAuth = identifyAdmin
 --             }
 --
--- The `claims` Dict is reserved for v0.16.5 RBAC integration
+-- The `claims` Dict is reserved for future RBAC integration
 -- (custom-attribute predicates against console actions). Pass
--- `Dict.empty` today if you have no extra attributes — the framework
--- will treat any non-empty Identity as authorised in v0.16.0.
+-- `Dict.empty` if you have no extra attributes — the framework
+-- will treat any non-empty Identity as authorised.
 
 
 import Ipe.Dict as Dict exposing (Dict)
@@ -80,7 +80,7 @@ import Ipe.Dict as Dict exposing (Dict)
 -- permitted. `subject` is the user's stable identifier (GitHub
 -- login / email / database UUID). `email` is surfaced separately
 -- so the audit log line is human-scannable. `claims` carries any
--- extra attributes the v0.16.5 RBAC layer will consult.
+-- extra attributes the RBAC layer will consult.
 type alias Identity =
     { subject : String
     , email : String
@@ -89,7 +89,7 @@ type alias Identity =
 
 
 -- | `defaultIdentity "user-42"` — Identity with empty email + claims.
--- Builder chain stays source-compat when v0.16.5+ adds optional fields.
+-- Builder chain stays source-compat when future releases add optional fields.
 defaultIdentity : String -> Identity
 defaultIdentity subject =
     { subject = subject

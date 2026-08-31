@@ -1,10 +1,10 @@
-//! Ipe.Ui style-marker injection — Rust port of Go's `applyStyleInjections`
+//! Ipe.Ui style-marker injection — Rust port of  `applyStyleInjections`
 //! (live.go:872-1110).
 //!
 //! The shared `Ipe.Ui` stdlib emits `data-ipe-{mq,pc,tr,anim}-*` marker
 //! *attributes* on elements for `Ui.breakpoint` / `Ui.mediaQuery`,
 //! `Background.hoverColor` / `Ui.onPseudo`, `Transition.attribute`, and
-//! `Animation.attribute`. The Go backend consumes them into ipe-id-scoped
+//! `Animation.attribute`, consumed into ipe-id-scoped
 //! `<style>` blocks; without this pass the Rust backend rendered the markers
 //! inert and produced zero CSS, so hover / breakpoint / media-query /
 //! transition / animation were entirely dead.
@@ -27,7 +27,7 @@
 //! selector cannot be broken out of either.
 //!
 //! Idempotent: a second run finds the markers already stripped and is a no-op
-//! (matches Go's idempotency contract), a belt-and-braces against a missed
+//! (matches  idempotency contract), a belt-and-braces against a missed
 //! call site.
 
 use crate::html::{Attribute, Html, is_void};
@@ -54,9 +54,9 @@ const ALL_MARKERS: &[&str] = &[
     "data-ipe-anim-rules",
 ];
 
-/// Run every style-marker pass over the tree in Go's fixed order. Call
+/// Run every style-marker pass over the tree in  fixed order. Call
 /// immediately after `assign_ipe_ids`, on the SAME tree that becomes both the
-/// render output AND the diff baseline (Go applies it before render + before
+/// render output AND the diff baseline (applied before render + before
 /// storing the tree, so the diff compares two already-injected trees and never
 /// sees a marker-attr-vs-style-child asymmetry → no spurious replace).
 /// Hard recursion-depth bound for the style-injection tree walk — same rationale
@@ -304,7 +304,7 @@ fn build_pc<M>(ipe_id: &str, attrs: &[Attribute<M>]) -> String {
 }
 
 /// Wire-format pseudo-class tag → (selector, hover-gated). Keep in lock-step
-/// with `pseudoClassTag` in Ipe.Ui.ipe / Go's `pseudoSelectorForTag`.
+/// with `pseudoClassTag` in Ipe.Ui.ipe /  `pseudoSelectorForTag`.
 fn pseudo_selector_for_tag(tag: &str) -> Option<(&'static str, bool)> {
     match tag {
         "h" => Some((":hover", true)),
@@ -412,7 +412,7 @@ fn build_anim<M>(ipe_id: &str, attrs: &[Attribute<M>]) -> String {
 
 /// ipe-id (`r.0.2#div`) → CSS-safe ident suffix (`r_0_2_div`) for @keyframes
 /// names. Structural separators map to `_`; anything else outside the CSS-ident
-/// charset is dropped (Go's `ipeIDToCSSIdent`).
+/// charset is dropped ( `ipeIDToCSSIdent`).
 fn ipe_id_to_css_ident(s: &str) -> String {
     s.chars()
         .filter_map(|c| match c {
@@ -424,7 +424,7 @@ fn ipe_id_to_css_ident(s: &str) -> String {
 }
 
 /// Strip chars that would break a CSS `@keyframes` ident (non-ident → `_`); a
-/// leading digit is illegal so prefix `_` (Go's `sanitiseAnimationName`).
+/// leading digit is illegal so prefix `_` ( `sanitiseAnimationName`).
 fn sanitise_animation_name(s: &str) -> String {
     if s.is_empty() {
         return String::new();

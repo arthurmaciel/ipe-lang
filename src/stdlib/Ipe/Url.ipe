@@ -1,4 +1,4 @@
--- | Ipe.Url — typed, validated URLs (Layer 3 Ipe source).
+-- | Ipe.Url — typed, validated URLs.
 --
 -- `Url` is opaque: the ONLY way to build one is `fromString`, which parses the
 -- raw string (the SAME parser the runtime SSRF guard uses) and REJECTS a

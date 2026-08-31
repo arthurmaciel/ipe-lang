@@ -4,7 +4,7 @@
 //! * [`Ty`] — the *resolved*, immutable, canonical type read back after the
 //!   solver settles. This is what [`crate::SolvedTypes`] hands to the lowerer.
 //! * [`Content`] / [`FlatType`] — the *solver-level* descriptors stored inside
-//!   union-find nodes during inference (mirrors Haskell `Content` / `FlatType`,
+//!   union-find nodes during inference (mirrors the compiler `Content` / `FlatType`,
 //!   narrowed to the supported lattice: functions, type-constructor
 //!   applications, and unit; no records / tuples / aliases / super-types yet).
 //!
@@ -149,7 +149,7 @@ pub const fn is_solver_var(raw: u32) -> bool {
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum RowTail {
     /// Closed record — no extension variable; the field set is exact.
-    /// Corresponds to `Nothing` on the Haskell `TRecord` / `EmptyRecord1`
+    /// Corresponds to `Nothing` on the the compiler `TRecord` / `EmptyRecord1`
     /// at the solver level.
     Closed,
     /// Open record — extra fields are absorbed by the row variable whose raw
@@ -401,7 +401,7 @@ pub enum Content {
     /// An unconstrained (flexible) inference variable.
     Flex,
     /// A *rigid* (skolem) variable minted from a user annotation's type variable
-    /// while checking that binding's body. Mirrors Haskell `Content.RigidVar`.
+    /// while checking that binding's body. Mirrors the compiler `Content.RigidVar`.
     ///
     /// A rigid variable may unify with a flexible one (the flex adopts it), but
     /// never with a concrete [`FlatType`] nor with a *different* rigid — so a body
@@ -430,7 +430,7 @@ pub enum Content {
 }
 
 /// A concrete type structure whose children are union-find variables (so
-/// unification can refine them in place). Mirrors Haskell `FlatType`.
+/// unification can refine them in place). Mirrors the compiler `FlatType`.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum FlatType {
     /// Function `arg -> result`.

@@ -34,7 +34,7 @@ pub enum Attribute<M> {
 /// Variant names mirror the Ipê stdlib `Ipe.Html.Attributes.Event` ADT
 /// (`OnMsg | OnString | OnBool | OnForm`). `OnString`/`OnBool` carry
 /// `Arc<dyn Fn(..) -> msg>` (not bare fn pointers) so the handler can be a
-/// CAPTURING closure — exactly as the Go backend allows. A faithful Ipe.Web
+/// CAPTURING closure, supporting `\s -> toMsg (parse s default)` patterns. A faithful Ipe.Web
 /// app's `onChange = \s -> toMsg (parse s default)` captures locals; a bare
 /// fn-pointer field rejected that. Bare ctors / non-capturing fns coerce into
 /// `Arc::new` fine; capturing closures box into the trait object.
@@ -166,8 +166,7 @@ pub(crate) fn is_void(tag: &str) -> bool {
 /// Render an `Html` tree to an HTML string. Text is HTML-escaped; Raw is
 /// emitted verbatim; void elements self-close with no children; event
 /// handlers emit a `data-ipe-on="<space-separated event names>"` marker
-/// attribute that the browser client reads to bind listeners. Mirrors Go
-/// `renderVNode`.
+/// attribute that the browser client reads to bind listeners.
 #[must_use]
 pub fn render_html<M>(node: &Html<M>) -> String {
     let mut s = String::new();
@@ -211,8 +210,8 @@ pub(crate) fn render_into_raw_text<M>(node: &Html<M>, s: &mut String) {
 
 // `select_value`: when this node renders as a direct child of a `<select>` that
 // carries a value, the chosen value is threaded here so the matching `<option>`
-// flips `selected` (Go renderVNode, live.go:432-453). `raw_text`: set when the
-// parent is `<script>`/`<style>` so HText children emit verbatim — see SECURITY.
+// flips `selected`. `raw_text`: set when the parent is `<script>`/`<style>` so
+// HText children emit verbatim — see SECURITY.
 #[allow(clippy::too_many_lines)]
 fn render_into_ctx<M>(
     node: &Html<M>,
@@ -249,7 +248,7 @@ fn render_into_ctx<M>(
         Html::HRaw(r) => s.push_str(r),
         Html::HElement(tag, attrs, kids) => {
             // Html.doctype wraps children in a pseudo-element; emit a literal
-            // `<!DOCTYPE html>` then the children directly (Go live.go:303-312).
+            // `<!DOCTYPE html>` then the children directly.
             // Handled BEFORE the name gate because `!doctype-wrapper` contains a
             // `!`. The doctype string is a fixed literal and the wrapper's own
             // tag/attrs are never interpolated → not an injection vector; the
@@ -270,14 +269,13 @@ fn render_into_ctx<M>(
             s.push('<');
             s.push_str(tag);
             // Collect regular + bool attrs into (key, value) pairs, then sort
-            // by key — Go's renderVNode emits from a map under sort.Strings, so
+            // by key —  renderVNode emits from a map under sort.Strings, so
             // matching byte-for-byte requires the same alphabetical order. A
-            // BoolAttr renders as `k="true"` (Go stores it as the string "true"
-            // in n.Attrs), NOT a bare `k`.
+            // BoolAttr renders as `k="true"` (the string "true"), NOT a bare `k`.
             let mut pairs: Vec<(&str, String)> = vec![];
             let mut events: Vec<&str> = vec![];
             let mut ipe_id: Option<&str> = None;
-            // Multi-valued attribute merge — mirrors Go `HtmlToVNode`
+            // Multi-valued attribute merge
             // (live.go ~L161-185). `class` is HTML's space-separated and
             // `style` HTML's semicolon-separated multi-valued attribute: an
             // element carrying BOTH a Ipe.Ui-computed inline `style` (from
@@ -286,11 +284,11 @@ fn render_into_ctx<M>(
             // `style="…computed…; z-index: 5"`, not two `style="…"`
             // attributes (the browser keeps only the first → the user's
             // declarations are silently dropped). The Rust attribute list
-            // never went through Go's map accumulation, so we fold the merge
+            // never went through  map accumulation, so we fold the merge
             // here at collection time. First-seen value keeps its position
             // (Ipe.Ui composes the computed style first); later values append
             // so a user style declared last can override. Every other key is
-            // last-wins (two `href`/`value` ⇒ override, matching Go's map set).
+            // last-wins (two `href`/`value` ⇒ override, matching  map set).
             for a in attrs {
                 match a {
                     Attribute::Attr(k, v) => {
@@ -342,7 +340,7 @@ fn render_into_ctx<M>(
             // every browser (and a server re-render would wipe the user's text). So
             // strip the `value` attr here for both, and (textarea only) splice it
             // back as escaped text content after the open tag when there are no
-            // explicit children. Mirrors Go `renderVNode` (live.go).
+            // explicit children.
             let mut textarea_value: Option<String> = None;
             if (tag == "textarea" || tag == "select")
                 && let Some(pos) = pairs.iter().position(|(k, _)| *k == "value")
@@ -352,10 +350,10 @@ fn render_into_ctx<M>(
             }
             // <option selected> flip: when rendered as a direct child of a
             // <select> with a value, set `selected` on the value-matching option
-            // and drop any stale `selected` otherwise (Go renderVNode, copy-
-            // don't-mutate). We touch only the local `pairs`, never the caller's
+            // and drop any stale `selected` otherwise (copy-don't-mutate).
+            // We touch only the local `pairs`, never the caller's
             // tree (it is the diff baseline — mutating it would corrupt the next
-            // diff). Added before the sort so byte order matches Go's map+sort.
+            // diff). Added before the sort so byte order matches  map+sort.
             if tag == "option"
                 && let Some(sv) = select_value
             {
@@ -385,7 +383,7 @@ fn render_into_ctx<M>(
             // value the EVENT NAME so the server can tell click from submit
             // (the client doesn't send the event type otherwise) — the handler
             // resolves by (ipe-id, event). `data-ipe-on` is kept for parity
-            // with Go's render.
+            // with  render.
             // Event names are emitted unescaped as both the `data-ipe-on` value
             // and the `ipe-<ev>` attribute key — an unsafe name injects markup.
             // Drop any that aren't valid HTML names.
@@ -403,8 +401,8 @@ fn render_into_ctx<M>(
                     // File/image meta-events arrive already `ipe-`-prefixed
                     // (`ipe-image`/`ipe-file`); the client's upload driver reads
                     // them via the `data-ipe-ev-<name>` HTML5 data-attribute
-                    // convention, while plain DOM events keep `ipe-<name>` (Go
-                    // live.go:395-405). Emitting `ipe-ipe-image` made the driver
+                    // convention, while plain DOM events keep `ipe-<name>`.
+                    // Emitting `ipe-ipe-image` made the driver
                     // lookup miss, so uploads never fired. `ev` is already
                     // name-gated (events.retain above), so both keys are safe.
                     let key = if ev.starts_with("ipe-") {
@@ -424,9 +422,9 @@ fn render_into_ctx<M>(
                 return;
             }
             s.push('>');
-            // Textarea value-as-content (Go parity): write the captured value as
+            // Textarea value-as-content : write the captured value as
             // escaped text content. Explicit children take precedence (a user who
-            // wrote `textarea [] [ text "hi" ]` keeps that), matching Go's
+            // wrote `textarea [] [ text "hi" ]` keeps that), matching
             // `isTextarea && value != "" && len(children) == 0` guard.
             if tag == "textarea"
                 && let Some(v) = &textarea_value
@@ -437,7 +435,7 @@ fn render_into_ctx<M>(
             }
             // <script>/<style> emit text children verbatim (rawBody); a
             // <select> threads its value to option children for the `selected`
-            // flip. Both reset for deeper descendants (Go parity).
+            // flip. Both reset for deeper descendants .
             let raw_body = tag == "script" || tag == "style";
             let child_select_value = if tag == "select" {
                 textarea_value.as_deref().filter(|v| !v.is_empty())
@@ -490,16 +488,15 @@ fn render_into_ctx<M>(
 }
 
 fn escape_text(t: &str) -> String {
-    // The single quote `'` is escaped too — Go's html.EscapeString covers the
+    // The single quote `'` is escaped too —  html.EscapeString covers the
     // full `& ' < > "` set, and a missed `'` is an attribute-breakout XSS hole
     // when the result lands in a single-quoted attr.
     escape_html(t, false)
 }
 
 fn escape_attr(t: &str) -> String {
-    // `"` → `&#34;` (NOT `&quot;`) to match Go's html.EscapeString byte-for-byte
-    // (GOROOT/src/html/escape.go uses the numeric entity). Both are valid HTML;
-    // the numeric form is what the Go renderer emits, so equiv tests byte-compare.
+    // `"` → `&#34;` (NOT `&quot;`); both are valid HTML but the numeric entity
+    // is required for byte-exact equivalence tests.
     escape_html(t, true)
 }
 
@@ -721,14 +718,13 @@ pub(crate) fn safe_patch_attr<'a>(name: &'a str, value: &'a str) -> Option<(&'a 
 
 /// Stamp every `HElement` (not HText/HRaw) with a stable `ipe-id` attribute derived
 /// from its path. Idempotent: an existing ipe-id is overwritten with the same
-/// value. HText/HRaw nodes are unaddressable (Go parity).
+/// value. HText/HRaw nodes are unaddressable .
 ///
 /// Each non-root segment is `{path}_{idx}_{tag}[:{key}]` — the embedded tag means
 /// two structurally different subtrees never share an id at the same positional
 /// depth, and the optional `:{key}` disambiguator (from an explicit `ipe-key`
 /// attribute, or implicit from `name` on form-bearing tags) lets keyed list items
-/// and named form fields keep identity across reorder. Mirrors Go `assignIpeIDs`
-/// / `ipeIDKey` (`runtime-go/rt/live.go`).
+/// and named form fields keep identity across reorder.
 pub fn assign_ipe_ids<M>(node: &mut Html<M>, path: &str) {
     assign_ipe_ids_depth(node, path, 0);
 }
@@ -761,7 +757,6 @@ fn assign_ipe_ids_depth<M>(node: &mut Html<M>, path: &str, depth: usize) {
 /// Stable disambiguator for an element, or `None`. Priority: an explicit
 /// `ipe-key` attribute (set by `Html.keyed`), then `name` on form-bearing tags.
 /// Any matched value is sanitised so it can't corrupt the ipe-id grammar.
-/// Mirrors Go `ipeIDKey`.
 fn ipe_id_key<M>(tag: &str, attrs: &[Attribute<M>]) -> Option<String> {
     if let Some(k) = attr_value(attrs, "ipe-key")
         && !k.is_empty()
@@ -788,7 +783,6 @@ fn attr_value<'a, M>(attrs: &'a [Attribute<M>], key: &str) -> Option<&'a str> {
 
 /// Replace anything outside `[A-Za-z0-9_-]` with `_`. Prevents the key from
 /// breaking ipe-id parsing, CSS selector escaping, or HTML attribute quoting.
-/// Mirrors Go `sanitiseIpeIDKey`.
 fn sanitise_ipe_id_key(s: &str) -> String {
     s.chars()
         .map(|c| {
@@ -984,7 +978,7 @@ pub fn html_on_raw_fixed_<M>(_name: String, _msg: M) -> Attribute<M> {
 
 /// `Ffi.callPure "htmlEscapeText"` — HTML-escape a string for text content.
 /// Routes through the same escaper as render so the escape set (`& ' < > "`,
-/// matching Go's html.EscapeString for the text subset) can never drift.
+/// matching  html.EscapeString for the text subset) can never drift.
 #[must_use]
 pub fn html_escape_text_(s: String) -> String {
     escape_text(&s)
@@ -1027,8 +1021,8 @@ pub fn html_attr_to_string_<M>(attr: Attribute<M>) -> String {
 // ─── IpeStringify for the Html runtime types ────────────────────────────────
 // Same rationale as the Ipe.Ui impls in ui/element.rs: a codegen-emitted
 // `ipe_show` recurses into every field, so an Html/Attribute/Event a generated
-// type can hold must impl the trait (else E0599). No Go `%v` analogue worth
-// matching; a stable type-tag placeholder is total and never recurses into `M`.
+// type can hold must impl the trait (else E0599). A stable type-tag placeholder
+// is total and never recurses into `M`.
 impl<M> crate::stringify::IpeStringify for Html<M> {
     fn ipe_show(&self) -> String {
         "<html>".to_string()
@@ -1076,7 +1070,7 @@ mod tests {
         let s = render_html(&t);
         assert!(s.contains(r#"<div class="x" ipe-id="r">"#), "{s}");
         // Attrs are sorted alphabetically; BoolAttr renders as `k="true"`; void
-        // elements self-close — all to match Go renderVNode.
+        // elements self-close.
         assert!(
             s.contains(r#"<input disabled="true" ipe-id="r_0_input" value="a&lt;b" />"#),
             "{s}"
@@ -1145,7 +1139,7 @@ mod tests {
         // (padding/background/border) AND a user `Ui.htmlAttribute "style" V`
         // adds another. The renderer MUST merge both into ONE `style="…"` —
         // emitting two `style="…"` attrs makes the browser keep only the first,
-        // silently dropping the user's declarations. Go parity (live.go ~L176).
+        // silently dropping the user's declarations. (live.go ~L176).
         let computed = "padding: 8px; background-color: rgb(255, 102, 0)";
         let t: Html<()> = Html::HElement(
             "div".into(),
@@ -1212,7 +1206,7 @@ mod tests {
     #[test]
     fn textarea_value_renders_as_content_not_attr() {
         // <textarea value="…"> renders EMPTY in browsers — the value must become
-        // the text content. Go parity (live.go renderVNode). Ipe.Ui.Input.multiline
+        // the text content. (live.go renderVNode). Ipe.Ui.Input.multiline
         // sets a `value` attr; the renderer must move it into the body.
         let t: Html<()> = Html::HElement(
             "textarea".into(),
@@ -1272,7 +1266,7 @@ mod tests {
     fn single_quote_is_escaped_everywhere() {
         // A `'` in attr/text/kernel output must become `&#39;` so a value placed
         // in a single-quoted attribute can't break out (XSS) and the escape set
-        // matches Go's html.EscapeString.
+        // matches  html.EscapeString.
         assert_eq!(escape_text("it's <b>"), "it&#39;s &lt;b&gt;");
         assert_eq!(escape_attr("a'\"b"), "a&#39;&#34;b");
         assert_eq!(html_escape_text_("x'y".to_string()), "x&#39;y");
@@ -1543,7 +1537,7 @@ mod tests {
         assert!(render_html(&raw).contains("<b>trusted</b>"));
     }
 
-    // ── Snapshot port of ../ipe fixture `69-html-render-parity` (Go parity) ────
+    // ── Snapshot port of ../ipe fixture `69-html-render-parity`  ────
     #[test]
     fn fixture69_render_parity() {
         // <select value="b"> flips `selected` onto the matching <option>, NOT the

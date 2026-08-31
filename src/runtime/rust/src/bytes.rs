@@ -1,6 +1,6 @@
 //! `Ipe.Bytes` kernels — arbitrary byte buffer (`Vec<u8>`).
 //!
-//! Divergence from Ipê: Ipê defines `type alias Bytes = String` (Go's `string`
+//! Divergence from Ipê: Ipê defines `type alias Bytes = String` ( `string`
 //! is a byte sequence, making the alias cost-free). Rust's `String` is
 //! constrained to valid UTF-8; mapping `Bytes` to `String` would be unsound for
 //! non-UTF-8 binary payloads. Ipê-Rust makes `Bytes` a distinct primitive

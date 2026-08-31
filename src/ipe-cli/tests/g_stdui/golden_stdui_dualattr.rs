@@ -10,9 +10,9 @@
 //!
 //! ## Oracle provenance
 //!
-//! This is a DIVERGENCE golden (`oracle_divergence = true`).  The Go reference
+//! This is a DIVERGENCE golden (`oracle_divergence = true`).  The reference
 //! compiler emits a different HTML skeleton.  `expected_go.txt` therefore holds
-//! ipe's OWN output — the Rust-backend correct rendering — rather than the Go
+//! ipe's OWN output — the Rust-backend correct rendering — rather than the golden
 //! oracle.  The divergence is documented in
 //! `tests/golden/stdui_dualattr/sanctioned.divergence`.
 //!

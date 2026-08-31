@@ -1,4 +1,4 @@
--- | Ipe.Duration — an opaque, unit-explicit time span (Layer 3 Ipe source).
+-- | Ipe.Duration — an opaque, unit-explicit time span.
 --
 -- A `Duration` replaces the bare millisecond `Int` that timeouts, delays,
 -- intervals, retry backoff, and cache TTLs used to take.  The ONLY ways to

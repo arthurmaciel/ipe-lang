@@ -94,8 +94,8 @@ pub fn dict_is_empty<K, V>(d: HashMap<K, V>) -> bool {
 }
 
 /// `Dict.union : Dict k v -> Dict k v -> Dict k v`.
-/// Left-biased: `a`'s bindings win on collision (matches Go's `Dict_union` —
-/// Go inserts `mb` first then `ma` overwrites, so `ma` wins).
+/// Left-biased: `a`'s bindings win on collision (matches  `Dict_union` —
+/// `mb` is inserted first then `ma` overwrites, so `ma` wins).
 #[must_use]
 pub fn dict_union<K: Hash + Eq + Clone, V: Clone>(
     a: HashMap<K, V>,
@@ -130,7 +130,7 @@ where
 
 /// `Dict.foldl : (k -> v -> a -> a) -> a -> Dict k v -> a`.
 /// Accumulates over every entry in **sorted-key order** (matches Ipê's
-/// `_fieldIndex`/sorted-key iteration contract; Go's `Dict_foldl` iterates
+/// `_fieldIndex`/sorted-key iteration contract;  `Dict_foldl` iterates
 /// map-order but the sorted-key guarantee is a Rust-backend strengthening that
 /// matches `dict_keys` / `dict_values` / `dict_to_list` / `dict_map` here).
 pub fn dict_foldl<K: Ord + Hash + Eq, V, A, F>(f: F, acc: A, d: HashMap<K, V>) -> A

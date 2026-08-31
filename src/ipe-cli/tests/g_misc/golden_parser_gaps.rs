@@ -8,16 +8,15 @@
 //!
 //! Each single-file positive compiles `tests/golden/<name>/Main.ipe` through
 //! `ipe`, builds the emitted Rust project in the shared cargo target, runs it,
-//! and checks stdout against the cached Go oracle (`oracle.meta` +
-//! `expected_go.txt`). All three carry `oracle_divergence = false` — the Go
-//! reference compiler produces byte-identical stdout, captured via
+//! and checks stdout against the cached golden oracle (`oracle.meta` +
+//! `expected_go.txt`). All three carry `oracle_divergence = false` ...//! reference compiler produces byte-identical stdout, captured via
 //! `refresh-oracle`.
 //!
 //! * `intdiv` — `//` integer division. `20 // 2` → `10` and `(-7) // 2` →
-//!   `-3` (truncation toward zero, Go + Elm parity; a floor-division backend
+//!   `-3` (truncation toward zero, Elm parity; a floor-division backend
 //!   would give `-4`). Output: `"10 -3"`.
 //! * `intdiv_minint` — F6 regression: `i64::MIN // -1`. Raw Rust `/`
-//!   panics here unconditionally (signed-overflow hardware trap); Ipê-Go
+//!   panics here unconditionally (signed-overflow hardware trap); Ipê
 //!   returns `i64::MIN` (two's-complement wrap). `ipe_int_div` reproduces this
 //!   via `wrapping_div`. Output: `"-9223372036854775808"`, exit 0.
 //! * `let_fn` — a let-bound *function* (`inc n = n + 1`) applied inside the
@@ -31,9 +30,9 @@
 //!
 //! * `mm_qualtype` — `Lib` exposes `type Box a = Box a`; `Main` annotates a
 //!   binding with the *qualified* type name `Lib.Box Int` and unwraps it.
-//!   Output: `"42"` (Go-verified). Multi-module goldens keep their source under
+//!   Output: `"42"` (hand-verified). Multi-module goldens keep their source under
 //!   `src/`, so the single-file oracle-cache layout does not apply; the run
-//!   asserts the literal Go-verified stdout instead.
+//!   asserts the literal hand-verified stdout instead.
 //!
 //! ## Negatives (assert the exact `IPE-*` diagnostic / runtime classification)
 //!
@@ -43,7 +42,7 @@
 //!   binary and checking the exit code (gated on `IPE_E2E`).
 //! * `blockcomment_unterminated` — a `{-` that is never closed → `IPE-P0017`
 //!   (unterminated block comment). This is a sanctioned stricter behaviour: the
-//!   Go oracle leniently swallows the unterminated comment to EOF and builds an
+//!   golden oracle leniently swallows the unterminated comment to EOF and builds an
 //!   empty program, so there is no oracle to diff — the diagnostic code is the
 //!   assertion.
 //! * `mm_neg_qualtype_unknownmod` — an annotation referencing `Bogus.Box`, a
@@ -94,7 +93,7 @@ fn assert_single_oracle(name: &str) {
 
     let outcome = crate::support::build_and_run_emitted(name, &out);
     crate::support::assert_go_parity(name, &dir, &outcome.stdout);
-    assert_eq!(outcome.exit_code, Some(0), "exit 0, matching the Go oracle");
+    assert_eq!(outcome.exit_code, Some(0), "exit 0");
 }
 
 #[test]
@@ -113,7 +112,7 @@ fn blockcomment_builds_and_matches_oracle() {
 }
 
 // ---------------------------------------------------------------------------
-// Multi-module positive: build_project → run → literal Go-verified stdout.
+// Multi-module positive: build_project → run → literal hand-verified stdout.
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -134,7 +133,7 @@ fn qualtype_project_builds_and_prints_42() {
     );
 
     let outcome = crate::support::build_and_run_emitted(name, &out);
-    // Go-verified reference: `unbox (Box 42)` prints `42`. Multi-module goldens
+    // hand-verified reference: `unbox (Box 42)` prints `42`. Multi-module goldens
     // store source under `src/`, so the single-file oracle cache does not apply.
     assert_eq!(
         outcome.stdout, "42\n",
@@ -178,10 +177,10 @@ fn intdiv_by_zero_aborts_exit_101() {
 /// F6 regression — `i64::MIN // -1` must NOT panic.
 ///
 /// Raw Rust `/` on `i64` panics here unconditionally (signed-overflow hardware
-/// trap, present even with `overflow-checks = false`). Ipê-Go `rt.IntDiv` uses
-/// two's-complement arithmetic and returns `i64::MIN`. The fix routes
-/// `BinOp::IntDiv` through `ipe_runtime::math::ipe_int_div(a, b)` which calls
-/// `a.wrapping_div(b)` for non-zero divisors, reproducing Go's result.
+/// trap, present even with `overflow-checks = false`). Ipê uses two's-complement
+/// arithmetic and returns `i64::MIN`. The fix routes `BinOp::IntDiv` through
+/// `ipe_runtime::math::ipe_int_div(a, b)` which calls `a.wrapping_div(b)` for
+/// non-zero divisors.
 #[test]
 fn intdiv_minint_by_neg1_does_not_panic() {
     assert_single_oracle("intdiv_minint");

@@ -2,13 +2,13 @@
 //!
 //! Walks the shared `ipe_runtime::ui::Element` tree (the SAME tree Ipe.Web
 //! renders to HTML) and lays it out to terminal cells by reading the TYPED
-//! attributes directly — never CSS. Mirrors Go's `tui_ui.go`. Recognises the
+//! attributes directly — never CSS. Recognises the
 //! `Ipe.Ui.Input.*` widgets (`TaggedNode "input"/"textarea"/"button"` carrying
 //! `AttrAttribute "type"/"value"/"placeholder"` + `AttrEvent`), collects them as
 //! focusables in tab order, renders the focused one with a buffer + cursor, and
 //! reports their positions for scroll-into-view.
 //!
-//! Logical-pixel canvas (Go parity): a design surface (default 1280×720) maps to
+//! Logical-pixel canvas : a design surface (default 1280×720) maps to
 //! the live terminal cell grid via `pxPerCell`.
 //!
 //! Scope: column / row / el / text / button + colour + spacing + padding + bold;
@@ -28,14 +28,14 @@ const CANVAS_H: usize = 720;
 /// `Ui.vh` / `Ui.fillPortion` take an arbitrary Ipê `Int`, so a resolved cell
 /// count must be clamped before it reaches a `.repeat()` / Vec allocation or a
 /// fill loop — otherwise a well-typed Ipe.Tui view can request an OOM / capacity
-/// panic. 100_000 is far above any real terminal (Go's tui cap is 50_000).
+/// panic. 100_000 is far above any real terminal.
 const MAX_CELLS: usize = 100_000;
 
 /// Slack factor applied on top of the live terminal row count when clamping
 /// pad/gap row allocations. A pad block taller than a few screens serves no
 /// display purpose; its area (rows × width) is the OOM vector. The factor of 4
 /// permits scroll-region padding without permitting a 100k-row block on a
-/// 24-row terminal. Matches Go's terminal-proportional cap model.
+/// 24-row terminal.
 const PAD_ROW_SLACK: usize = 4;
 
 /// Cap a pad/gap row count terminal-proportionally. Used at every allocation
@@ -175,7 +175,7 @@ struct Walked {
     height: Option<Length>,
     style: Style,
     /// `__grid` marker present (`Ui.grid`). Children flow row-major into auto-flow
-    /// columns sized off `grid_min_px` (Go's `box.gridLayout`).
+    /// columns sized off `grid_min_px` (`Ui.gridColumns`).
     is_grid: bool,
     /// `__paragraph` / `__textcolumn` marker (`Ui.paragraph` / `Ui.textColumn`).
     /// Text children are joined + word-wrapped to the available width.
@@ -201,7 +201,7 @@ struct Walked {
 }
 
 /// A border frame's `(colour, style)`. The colour is `None` when only width (no
-/// `Border.color`) was given — glyphs then keep the inherited fg, matching Go's
+/// `Border.color`) was given — glyphs then keep the inherited fg
 /// `drawBorder` (which sets the glyph fg only when the border colour is set). The
 /// style string is one of `solid` / `dashed` / `dotted` (anything else → solid).
 /// `(colour, style, (top, right, bottom, left) present-flags)`. The per-side flags
@@ -209,10 +209,9 @@ struct Walked {
 /// a full box (audit #6); `Border.width` sets all four.
 type BorderSpec = (Option<(u8, u8, u8)>, String, (bool, bool, bool, bool));
 
-/// The root element's `Background.color`, if it sets one — the page background Go
-/// paints across the whole frame rect (`fillRect` on the root box). `None` when the
-/// root carries no bg (then nothing is backfilled and blank cells stay terminal-
-/// default, matching Go's empty `newCellGrid`). Only the OUTERMOST node's bg is the
+/// The root element's `Background.color`, if it sets one — the page background
+/// painted across the whole frame rect. `None` when the root carries no bg
+/// (blank cells stay terminal-default). Only the OUTERMOST node's bg is the
 /// page fill; a child's bg belongs to that child's own box.
 fn root_bg<M>(view: &Element<M>) -> Option<(u8, u8, u8)> {
     let attrs = match view {
@@ -299,10 +298,8 @@ fn fill_spec(l: &Length, canvas: Canvas) -> Option<FillSpec> {
 }
 
 /// Resolve a NON-fill width `Length` to explicit cells given the available width.
-/// `None` → content-sized (the caller measures children). Mirrors Go's
-/// `resolveLengthCells` on the x-axis, EXCEPT `Min`/`Max` bounds are correctly
-/// converted px→cells (the Go path returns the raw px as cells — a latent bug;
-/// the Tui surface is not byte-gated against Go, so Rust does the right thing).
+/// `None` → content-sized (the caller measures children). `Min`/`Max` bounds
+/// are correctly converted px→cells.
 /// The fixed pixel height of `attrs` (`Ui.height (Ui.px n)`) in CELLS, when set.
 /// Only `Px` yields a fixed row count (the multiline-textarea case); Fill/Content
 /// auto-size and return `None`.
@@ -434,9 +431,8 @@ impl Block {
         }
     }
     /// Constrain every line to EXACTLY `w` cells, filling the slack with the input
-    /// TRACK (`░` in `track_fg` over `bg`) instead of plain spaces — mirrors Go's
-    /// `paintInputBufferAdvanced`, which paints a shaded track across the whole
-    /// field so its bounds stay visible even when empty. Real content (clipped to
+    /// TRACK (`░` in `track_fg` over `bg`) instead of plain spaces. The shaded
+    /// track makes field bounds visible even when empty. Real content (clipped to
     /// `w`) stays painted over the track. The cursor run keeps its own style.
     fn fill_input_track(&mut self, w: usize, bg: Option<(u8, u8, u8)>, track_fg: (u8, u8, u8)) {
         let track_run = |n: usize| Run {
@@ -489,25 +485,19 @@ impl Block {
             }
         }
     }
-    /// Backfill the root element's background across the WHOLE frame rect, the way
-    /// Go's `paintBox` fills the root box's rect with `box.bg` via `fillRect`
-    /// BEFORE any child paints (`tui_ui.go` ~2418). The run model has no
-    /// "paint underneath" step, so a gap / padding / trailing cell that no child
-    /// covered is left with the default (terminal) background instead of the root
-    /// bg — the 6-trailing-column + inter-gap divergence the styled-cell-grid
-    /// equivalence test caught.
+    /// Backfill the root element's background across the WHOLE frame rect.
+    /// The run model has no "paint underneath" step, so a gap / padding /
+    /// trailing cell that no child covered is left with the default (terminal)
+    /// background instead of the root bg.
     ///
-    /// Faithful equivalent: every cell whose bg is still unset (`None`) sits on the
-    /// root box's fill in Go, so it takes `root_bg`. A cell that ALREADY carries a
-    /// bg was painted by its owning box (a header / card / input with its own
-    /// `Background.color`) and is left untouched.
+    /// Every cell whose bg is still unset (`None`) takes `root_bg`. A cell
+    /// that ALREADY carries a bg was painted by its owning box (a header / card
+    /// / input with its own `Background.color`) and is left untouched.
     ///
-    /// `fill_to_edge` extends each line to the full `cols` width with `root_bg` —
-    /// Go's root box width is `innerMaxW == cols` ONLY when the root carries no
-    /// explicit width, so the page background reaches the right edge. A root with an
-    /// explicit narrower width (`Ui.width (px/vw …)`) fills only to its own width
-    /// and the trailing columns stay terminal-default (Go's `fillRect` covers just
-    /// `box.width`). Total — no index/panic.
+    /// `fill_to_edge` extends each line to the full `cols` width with `root_bg`
+    /// so the page background reaches the right edge. A root with an explicit
+    /// narrower width (`Ui.width (px/vw …)`) fills only to its own width and
+    /// trailing columns stay terminal-default. Total — no index/panic.
     fn backfill_root_bg(&mut self, cols: usize, root_bg: (u8, u8, u8), fill_to_edge: bool) {
         let fill_style = Style {
             bg: Some(root_bg),
@@ -536,8 +526,8 @@ impl Block {
     }
 
     /// Reverse-video the single display cell at `(line, col)` — the text-input
-    /// cursor (Go renders the cursor as `grid[cur].reverse`, never an inserted
-    /// glyph). Rebuilds the line one char at a time, flagging the char at display
+    /// cursor (rendered as reverse-video, never an inserted glyph). Rebuilds
+    /// the line one char at a time, flagging the char at display
     /// column `col` (or appending a reverse space if the cursor sits past the
     /// content). Adjacent same-style chars re-coalesce into runs. Total — uses
     /// iterators + `.get`, never indexes or unwraps.
@@ -622,13 +612,13 @@ fn bg_of(c: &Color) -> Option<(u8, u8, u8)> {
     if *a <= 0.0 { None } else { Some(color_of(c)) }
 }
 
-/// Clamp-add `delta` to a channel (Go's `lighten`). Saturating — no overflow.
+/// Clamp-add `delta` to a channel. Saturating — no overflow.
 fn lighten(c: u8, delta: i64) -> u8 {
     (c as i64 + delta).clamp(0, 255) as u8
 }
 
 /// The input track foreground: dim grey when the input has no bg, else the bg
-/// lightened by 38 (Go's `paintInputBufferAdvanced` trackFg rule). The `░` shade
+/// lightened by 38 (the `paintInputBufferAdvanced` trackFg rule). The `░` shade
 /// glyph rendered in this fg gives the field a visible groove.
 fn input_track_fg(bg: Option<(u8, u8, u8)>) -> (u8, u8, u8) {
     match bg {
@@ -666,7 +656,7 @@ fn walk_attrs<M>(attrs: &[Attribute<M>], inherited: Style) -> Walked {
         font_align: None,
     };
     // Border accumulates across two attrs (width gate + colour); style defaults
-    // to "solid". A frame is drawn only when width > 0 (Go: borderWidth sum > 0).
+    // to "solid". A frame is drawn only when width > 0 (borderWidth sum > 0).
     let mut border_width = 0i64;
     let mut border_color: Option<Color> = None;
     let mut border_style = String::from("solid");
@@ -704,7 +694,7 @@ fn walk_attrs<M>(attrs: &[Attribute<M>], inherited: Style) -> Walked {
             Attribute::AttrFontColor(c) => w.style.fg = Some(color_of(c)),
             Attribute::AttrBgColor(c) => w.style.bg = bg_of(c),
             Attribute::AttrFontWeight(n) if *n >= 600 => w.style.bold = true,
-            // Typography SGR (Go parity — tui_ui.go cellStyleSGR emits 3/4/9).
+            // Typography SGR .
             Attribute::AttrFontItalic => w.style.italic = true,
             Attribute::AttrFontUnderline => w.style.underline = true,
             Attribute::AttrFontDecoration(s) if s == "underline" => w.style.underline = true,
@@ -712,7 +702,7 @@ fn walk_attrs<M>(attrs: &[Attribute<M>], inherited: Style) -> Walked {
             Attribute::AttrFontDecoration(s) if s == "line-through" || s == "strike" => {
                 w.style.strike = true
             }
-            // Border frame (Go: drawBorder — solid/dashed/dotted box). Width is
+            // Border frame (drawBorder — solid/dashed/dotted box). Width is
             // taken as present/absent (the frame is always 1 cell each side in the
             // terminal regardless of CSS px); colour + style drive the glyphs.
             Attribute::AttrBorderWidth(n) if *n > 0 => {
@@ -1055,8 +1045,7 @@ fn render_input<M: Clone>(
     // Fold the input's OWN visual attrs (Background.color / Font.color) on top of
     // the inherited style. An input is a leaf `TaggedNode` dispatched straight to
     // this fn, so its attrs were never walked by a parent — without this, the
-    // input's `Background.color` track / text colour is silently dropped (Go reads
-    // box.bg from the input's own attrs in `boxOwnStyle`).
+    // input's `Background.color` track / text colour is silently dropped.
     let mut style = inherited;
     for a in attrs {
         match a {
@@ -1140,7 +1129,7 @@ fn render_input<M: Clone>(
     let focused = idx == ctx.focus_idx;
 
     // The text-input cursor, as `(line, col)` to reverse-video AFTER the track
-    // fill (so a cursor past the content lands on a track cell, like Go). `None`
+    // fill (so a cursor past the content lands on a track cell, ). `None`
     // for non-text / unfocused inputs.
     let mut cursor_marker: Option<(usize, usize)> = None;
     let mut block: Block = match input_type.as_str() {
@@ -1215,13 +1204,12 @@ fn render_input<M: Clone>(
         _ => {
             // Text-like input (incl. textarea): sync the edit buffer to the model's
             // value, then render it (or placeholder). The cursor is a REVERSE-VIDEO
-            // cell over the underlying char/track (Go's paintInputBufferAdvanced
-            // sets grid[cur].reverse), NOT a glyph insert — so it doesn't shift the
-            // track and the field is byte-identical to Go in a text dump.
+            // cell over the underlying char/track, NOT a glyph insert — so it
+            // doesn't shift the track.
             ctx.inputs.sync_value(idx, &value);
             let st = ctx.inputs.get(idx);
             let masked = input_type == "password";
-            let run_style = style; // field is NOT whole-reversed (Go: only the cell)
+            let run_style = style; // field is NOT whole-reversed (only the cursor cell)
             let cursor_cell: Option<(usize, usize)> = if masked {
                 // Masked single line: content hidden as bullets; cursor tracks the
                 // EDIT position (st.cursor), not always the end — Left/Home/Ctrl-Left
@@ -1275,7 +1263,7 @@ fn render_input<M: Clone>(
             };
             // Stash the cursor cell so it's applied AFTER the track fill (the track
             // pads the line out, so reversing a cell past current content lands on a
-            // track ░ — exactly Go's reverse-over-track cursor).
+            // track ░ — exactly the reverse-over-track cursor).
             cursor_marker = cursor_cell;
             block
         }
@@ -1283,13 +1271,12 @@ fn render_input<M: Clone>(
     // Honour `Ui.width` on a text-like field so it renders at a fixed/fill width.
     // checkbox / radio are glyph-only (no track); range owns its slider track.
     // Text-like inputs (text / password / email / search / textarea) paint a SHADED
-    // TRACK across their full width (Go's paintInputBufferAdvanced) so the field
+    // TRACK across their full width (the paintInputBufferAdvanced) so the field
     // bounds stay visible even when empty — dim grey when no bg, else the bg
     // lightened by 38; real content + cursor paint over the track.
     let is_text_like = !matches!(input_type.as_str(), "checkbox" | "radio" | "range");
     // Border frame spec — a bordered input draws a REAL 1-cell box (correct
-    // Ipe.Ui: Border.width > 0 ⇒ a frame). Suppressing the frame (a Go-mirror)
-    // so the border only widens the track would show no border.
+    // Ipe.Ui: Border.width > 0 ⇒ a frame).
     let mut bw = 0i64;
     let mut bcolor: Option<Color> = None;
     let mut bsty = String::from("solid");
@@ -1570,7 +1557,7 @@ fn render_node<M: Clone>(
             }
             let content_avail = node_content_avail(avail_w, &w, ctx.canvas);
             // Paragraph / textColumn: join the element's text content and
-            // word-wrap to the available width (Go's isParagraph/isTextColumn
+            // word-wrap to the available width (the isParagraph/isTextColumn
             // branch in layoutElement, ~1474-1518). Each wrapped line is one
             // Text run; textColumn inserts a blank line between child paragraphs.
             let mut inner = if w.is_paragraph || w.is_text_column {
@@ -1601,10 +1588,10 @@ fn render_node<M: Clone>(
                     lines.push(Vec::new());
                 }
                 let mut block = Block { lines };
-                // Go's paragraph/textColumn box width is `wrapW` (= the full
+                // the paragraph/textColumn box width is `wrapW` (= the full
                 // available content width when unsized), and its bg fills that whole
                 // rect via `fillRect`. So a bg-carrying paragraph paints every
-                // wrapped line out to `wrap_w`, not just to the text — matching Go's
+                // wrapped line out to `wrap_w`, not just to the text —
                 // wide page-card fill (the styled-cell-grid `232837×41` divergence).
                 if w.style.bg.is_some() {
                     block.set_width(wrap_w, w.style.bg);
@@ -1735,11 +1722,10 @@ fn render_node<M: Clone>(
                 }
             }
             let padded = apply_padding(inner, &w, ctx.canvas, w.style);
-            // Border frame (Go's drawBorder): wrap the padded block in a 1-cell
-            // box. The frame consumes 1 cell on each side of the OUTER block, so
-            // the border sits outside the padding ring (Go insets children by
-            // padding + borderWidth; here padding is already applied, the frame
-            // adds the border ring outside it).
+            // Border frame: wrap the padded block in a 1-cell box. The frame
+            // consumes 1 cell on each side of the OUTER block, sitting outside
+            // the padding ring (padding already applied; frame adds the border
+            // ring outside it).
             let host = apply_border(padded, &w, w.style);
             // Nearby overlays (Ui.above/below/onLeft/onRight/inFront/behind) — were
             // silently dropped (audit #12/#16). Place each relative to the host:
@@ -1790,8 +1776,8 @@ fn html_text<M>(h: &Html<M>) -> String {
     }
 }
 
-/// Extract the concatenated text content of an element subtree (Go's
-/// `extractTextContent` — flattens every `Text` leaf, space-joining nested ones).
+/// Extract the concatenated text content of an element subtree: flattens
+/// every `Text` leaf, space-joining nested ones.
 fn extract_text<M>(el: &Element<M>) -> String {
     let _depth = match DepthGuard::enter() {
         Some(g) => g,
@@ -1809,8 +1795,8 @@ fn extract_text<M>(el: &Element<M>) -> String {
     }
 }
 
-/// Word-wrap `text` to `width` cells. Mirrors Go's `wrapText`/`wrapParagraph`
-/// (tui_wrap.go): soft-break on whitespace runs, hard-break (char chunks) only
+/// Word-wrap `text` to `width` cells: soft-break on whitespace runs,
+/// hard-break (char chunks) only
 /// for words longer than the line; embedded `'\n'` forces a break. Always ≥ 1
 /// line. Total + bounds-checked — no panics.
 fn wrap_text(text: &str, width: usize) -> Vec<String> {
@@ -1865,8 +1851,8 @@ fn wrap_paragraph_into(text: &str, width: usize, out: &mut Vec<String>) {
     }
 }
 
-/// Split a long word into chunks of at most `width` display cells (Go's
-/// `hardBreakChunks`). Char-counted, total.
+/// Split a long word into chunks of at most `width` display cells.
+/// Char-counted, total.
 fn hard_break_chunks(word: &str, width: usize, out: &mut Vec<String>) {
     if width == 0 || word.is_empty() {
         out.push(word.to_string());
@@ -1888,7 +1874,7 @@ fn hard_break_chunks(word: &str, width: usize, out: &mut Vec<String>) {
     }
 }
 
-/// Grid layout (Go's `gridLayout` branch, ~2518-2549). `grid_min_px` (from
+/// Grid layout (the `gridLayout` branch, ~2518-2549). `grid_min_px` (from
 /// `Ui.gridColumns N`) → min column cells; `ncols = avail / min` (≥1); cells flow
 /// row-major into `ncols` per row, each column padded to `col_width`; rows stack
 /// vertically with the spacing gap. Focusable hits are shifted to absolute coords.
@@ -1921,7 +1907,7 @@ fn render_grid<M: Clone>(
         .collect();
 
     // Chunk row-major into rows of `ncols`, hstack each row (no inter-cell gap —
-    // each cell is padded to col_width, matching Go's `x = innerCol + col*colWidth`),
+    // each cell is padded to col_width, matching `x = innerCol + col*colWidth`),
     // vstack the rows with the spacing gap.
     let mut rows: Vec<Rendered> = Vec::new();
     for chunk in cells.chunks(ncols.max(1)) {
@@ -1931,12 +1917,11 @@ fn render_grid<M: Clone>(
                 block: r.block.clone(),
                 hits: r.hits.clone(),
             };
-            // Pad the cell to col_width with the CELL's OWN bg, not the grid's — Go
-            // gives each grid cell box `width = colWidth` and fills it with that
-            // cell's `box.bg` (`60 50 80` here), so the padding to col_width carries
-            // the cell colour, not the grid background (the `3c3250×30` contiguous
-            // fill the styled-cell-grid test expects). Fall back to the grid's bg
-            // for a cell that declares none.
+            // Pad the cell to col_width with the CELL's OWN bg, not the grid's:
+            // the padding carries the cell colour so `Background.color` fills the
+            // full column-width slot (the `3c3250×30` contiguous fill the
+            // styled-cell-grid test expects). Fall back to the grid's bg for a
+            // cell that declares none.
             let cell_bg = cell_block_bg(&r2.block).or(w.style.bg);
             r2.block.set_width(col_width, cell_bg);
             sized.push(r2);
@@ -2022,10 +2007,10 @@ fn cell_block_bg(block: &Block) -> Option<(u8, u8, u8)> {
     block.lines.iter().flatten().find_map(|run| run.style.bg)
 }
 
-/// Wrap a rendered block in a 1-cell border frame (Go's `drawBorder`). The frame
-/// is only drawn when `w.border` is set AND the block is ≥ 2×2 (Go's `w<2||h<2`
-/// guard). Corners ┌┐└┘, edges ─│ per style; the border colour (when set)
-/// overrides the glyph fg. Hits + content shift down/right by 1.
+/// Wrap a rendered block in a 1-cell border frame. The frame is only drawn when
+/// `w.border` is set AND the block is ≥ 2×2. Corners ┌┐└┘, edges ─│ per
+/// style; the border colour (when set) overrides the glyph fg. Hits + content
+/// shift down/right by 1.
 fn apply_border(inner: Rendered, w: &Walked, self_style: Style) -> Rendered {
     match &w.border {
         Some(spec) => frame_rendered(inner, spec, self_style),
@@ -2108,8 +2093,8 @@ fn frame_rendered(inner: Rendered, spec: &BorderSpec, self_style: Style) -> Rend
     Rendered { block, hits }
 }
 
-/// Box-drawing glyphs `(hor, vert, tl, tr, bl, br)` for a border style. Mirrors
-/// Go's `borderGlyphs`: dashed ┄┆, dotted ┈┊, everything else solid ─│.
+/// Box-drawing glyphs `(hor, vert, tl, tr, bl, br)` for a border style:
+/// dashed ┄┆, dotted ┈┊, rounded ╭╮╰╯, everything else solid ─│.
 fn border_glyphs(
     style: &str,
 ) -> (
@@ -2500,9 +2485,8 @@ fn emit_block(block: &Block, cols: usize, scroll_y: usize, rows: usize) -> Strin
     // first — NOT a trailing CRLF after the last visible row. A trailing CRLF on a
     // full-height frame (visible lines == terminal rows) advances the cursor past
     // the bottom row and scrolls the whole screen up by one, dropping the top row
-    // (the root padding) and diverging from Go on the very first paint (Go
-    // positions each row absolutely and never trails a newline). `paint()` issues
-    // ESC[2J + home first, so a leading-separator model lands every row correctly.
+    // (the root padding). `paint()` issues ESC[2J + home first, so a
+    // leading-separator model lands every row correctly.
     for (i, line) in block.lines.iter().skip(scroll_y).take(rows).enumerate() {
         if i > 0 {
             out.push_str("\r\n");
@@ -2557,14 +2541,13 @@ pub fn render_with_focus<M: Clone>(
     };
     let mut rendered = render_node(view, Style::default(), &mut ctx, cols);
     // Backfill the root element's page background across the full frame rect — the
-    // gap / padding / trailing cells no child covered take the root bg (Go paints
-    // the root box's rect first via `fillRect`, then children on top). Without this
-    // the page background stops at the content's right edge + inter-element gaps
-    // read as terminal-default (the styled-cell-grid equivalence divergence).
+    // gap / padding / trailing cells no child covered take the root bg. Without
+    // this the page background stops at the content's right edge + inter-element
+    // gaps read as terminal-default.
     if let Some(bg) = root_bg(view) {
         // The page bg reaches the right edge only when the root box spans the full
         // width — i.e. it has no explicit width, or a width that resolves to the
-        // whole frame (Go: root `width == innerMaxW == cols`). An explicitly
+        // whole frame (root `width == innerMaxW == cols`). An explicitly
         // NARROWER root (px / vw / a capped max / capped fill) fills only its own
         // resolved width; the trailing columns stay terminal-default.
         let fill_to_edge = match root_width(view) {
@@ -2815,7 +2798,7 @@ mod tests {
             "both visual lines render: {frame:?}"
         );
         assert!(a < c, "first line above second: {frame:?}");
-        // Cursor is a reverse-video cell (Go parity), not an inserted glyph.
+        // Cursor is a reverse-video cell , not an inserted glyph.
         assert!(
             frame.contains("\x1b[7"),
             "reverse-video cursor present (focused): {frame:?}"
@@ -2923,8 +2906,7 @@ mod tests {
 
     #[test]
     fn focused_empty_input_has_no_glyph_just_reverse_track() {
-        // A focused empty text input shows a reverse-video track cell (Go), not a
-        // ▏ glyph.
+        // A focused empty text input shows a reverse-video track cell, not a ▏ glyph.
         let inp: Element<()> = Element::TaggedNode(
             "input".into(),
             Description::NoDescription,
@@ -3034,8 +3016,8 @@ mod tests {
     #[test]
     fn frame_has_no_trailing_newline() {
         // A full-height frame must NOT end with CRLF — a trailing newline on the
-        // bottom row scrolls the screen up one (drops the top row, diverges from
-        // Go on first paint). Build a frame with as many lines as terminal rows.
+        // bottom row scrolls the screen up one (drops the top row). Build a frame
+        // with as many lines as terminal rows.
         let kids: Vec<Element<()>> = (0..10)
             .map(|i| node(vec![], vec![Element::Text(format!("r{i}"))]))
             .collect();
@@ -3052,10 +3034,10 @@ mod tests {
 
     #[test]
     fn root_bg_fills_full_width_and_gaps() {
-        // Go paints the root box's bg across the WHOLE frame rect, so trailing
-        // columns + inter-element gaps the content didn't cover read as the page
-        // bg, not terminal-default. A root column (bg set, no explicit width) with
-        // a child narrower than the frame must still paint bg to the right edge.
+        // The root box's bg fills the WHOLE frame rect, so trailing columns +
+        // inter-element gaps the content didn't cover read as the page bg, not
+        // terminal-default. A root column (bg set, no explicit width) with a
+        // child narrower than the frame must still paint bg to the right edge.
         let t: Element<()> = node(
             vec![Attribute::AttrBgColor(rgb(18, 22, 38))],
             vec![node(vec![], vec![Element::Text("x".into())])],
@@ -3078,7 +3060,7 @@ mod tests {
 
     #[test]
     fn root_bg_none_leaves_cells_default() {
-        // No root bg → nothing is backfilled (matches Go's empty cell grid); the
+        // No root bg → nothing is backfilled (matches the empty cell grid); the
         // frame carries no 48;2 background SGR at all.
         let t: Element<()> = node(vec![], vec![node(vec![], vec![Element::Text("x".into())])]);
         let frame = element_to_cells(&t, 20, 3);
@@ -3090,9 +3072,9 @@ mod tests {
 
     #[test]
     fn grid_cell_bg_fills_column_not_grid_bg() {
-        // Go fills each grid cell to col_width with that CELL's own bg. A grid with
-        // a page bg whose cells carry a different bg must show the CELL bg across
-        // each column (contiguous), not the grid bg between content + col edge.
+        // Each grid cell is padded to col_width with that CELL's own bg. A grid
+        // with a page bg whose cells carry a different bg must show the CELL bg
+        // across each column (contiguous), not the grid bg between content + edge.
         let cell = |s: &str| -> Element<()> {
             node(
                 vec![Attribute::AttrBgColor(rgb(60, 50, 80))],
@@ -3120,7 +3102,7 @@ mod tests {
     #[test]
     fn paragraph_bg_fills_wrap_width() {
         // A bg-carrying paragraph paints every wrapped line out to the wrap width
-        // (Go's paragraph box width = wrapW), not just to the text.
+        // (the paragraph box width = wrapW), not just to the text.
         let t: Element<()> = node(
             vec![
                 Attribute::AttrStyle("__paragraph".into(), "true".into()),

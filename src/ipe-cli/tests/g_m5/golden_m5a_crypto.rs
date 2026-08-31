@@ -9,7 +9,7 @@
 //! ## Golden catalogue
 //!
 //! * `crypto_sha_hash` — `sha256` / `sha512` / `sha1` / `md5` of `"abc"`;
-//!   known standard test vectors; byte-parity with Go.
+//!   known standard test vectors; byte-identical output.
 //!
 //! * `crypto_hmac` — `hmacSha256` / `hmacSha512` (typed, `Key` argument) with
 //!   RFC 4231 case-1 key (`0x0b × 20` via `keyFromBytes`) and message `"Hi
@@ -81,7 +81,7 @@ fn assert_runs_and_matches_oracle(name: &str) {
 
 /// `Crypto.sha256 "abc"` → the standard SHA-256 hex digest; likewise for
 /// sha512, sha1, and md5.  All four values are well-known test vectors and are
-/// byte-for-byte identical to what Go's `crypto/sha256` etc. produce.
+/// byte-for-byte identical to the well-known test vectors.
 #[test]
 fn crypto_sha_hash() {
     assert_runs_and_matches_oracle("crypto_sha_hash");
@@ -91,8 +91,8 @@ fn crypto_sha_hash() {
 
 /// `Crypto.hmacSha256 key "Hi There"` and `Crypto.hmacSha512 key "Hi There"`
 /// with the RFC 4231 test-case-1 key (`0x0b` × 20, constructed via
-/// `Crypto.keyFromBytes`) produce the standard known MAC values; byte-parity
-/// with Go.
+/// `Crypto.keyFromBytes`) produce the standard known MAC values (RFC 4231
+/// test vectors).
 #[test]
 fn crypto_hmac() {
     assert_runs_and_matches_oracle("crypto_hmac");

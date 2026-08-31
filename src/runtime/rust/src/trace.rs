@@ -1,6 +1,6 @@
 // Ipe.Trace — opt-in app-level tracing spans / events / attributes.
 //
-// Mirrors the contract from the Go runtime: `span name task` runs `task` and
+// `span name task` runs `task` and
 // returns its result UNCHANGED (the value/error flow through untouched), plus a
 // span around it; `event` / `attr` mark a point / annotate the active span.
 // Output is opt-in via IPE_TRACE (off by default → zero noise), but the wrapped
@@ -64,7 +64,7 @@ pub fn trace_event<E: Send + 'static>(name: String) -> IpeTask<E, ()> {
 }
 
 // Trace.attr : String -> String -> Task Error ()
-// Keys are namespaced under `ipe.trace.` to match the Go runtime.
+// Keys are namespaced under `ipe.trace.`.
 pub fn trace_attr<E: Send + 'static>(key: String, value: String) -> IpeTask<E, ()> {
     Box::pin(async move {
         if trace_enabled() {

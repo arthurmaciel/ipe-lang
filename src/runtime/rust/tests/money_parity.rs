@@ -1,10 +1,10 @@
-//! Go≡Rust parity fixtures for Ipe.Money kernels.
+//! Parity fixtures for Ipe.Money kernels.
 //!
-//! Every assertion mirrors the Go oracle in
-//! `runtime-go/rt/money_kernel.go` and associated tests.
+//! Every assertion is the golden oracle in
+//! the runtime test suite and associated tests.
 //!
 //! Divergence note: `rust_decimal` is 96-bit fixed-precision vs
-//! Go's shopspring arbitrary-precision. Within normal monetary
+//! shopspring arbitrary-precision. Within normal monetary
 //! ranges (< 10^15 major units, ≤ 28 significant digits) values are
 //! bit-identical. Non-terminating fractions (1/3 etc.) may diverge
 //! beyond 28 digits — documented as a neutral platform difference.
@@ -28,7 +28,7 @@ fn d(s: &str) -> ipe_runtime_rust::decimal::Decimal {
 
 #[test]
 fn minor_units_match_go() {
-    // Go oracle: currencyTable in money_kernel.go
+    // the golden oracle: currencyTable in money_kernel.go
     assert_eq!(money_minor_units("USD".to_string()), 2);
     assert_eq!(money_minor_units("EUR".to_string()), 2);
     assert_eq!(money_minor_units("GBP".to_string()), 2);
@@ -36,24 +36,24 @@ fn minor_units_match_go() {
     assert_eq!(money_minor_units("KRW".to_string()), 0);
     assert_eq!(money_minor_units("BHD".to_string()), 3);
     assert_eq!(money_minor_units("BTC".to_string()), 8);
-    // Crypto minor units mirror the Go oracle: ETH=18, USDT=6, USDC=6.
+    // Crypto minor units mirror the golden oracle: ETH=18, USDT=6, USDC=6.
     assert_eq!(money_minor_units("ETH".to_string()), 18);
     assert_eq!(money_minor_units("USDT".to_string()), 6);
     assert_eq!(money_minor_units("USDC".to_string()), 6);
-    // Unknown code falls back to 2 (Go: `lookupCurrency` fallback {Minor: 2})
+    // Unknown code falls back to 2 (`lookupCurrency` fallback: Minor=2)
     assert_eq!(money_minor_units("XYZ".to_string()), 2);
 }
 
 #[test]
 fn symbol_matches_go() {
-    // Go oracle: Money_symbol
+    // the golden oracle: Money_symbol
     assert_eq!(money_symbol("USD".to_string()), "$");
     assert_eq!(money_symbol("EUR".to_string()), "€");
     assert_eq!(money_symbol("GBP".to_string()), "£");
     assert_eq!(money_symbol("JPY".to_string()), "¥");
     assert_eq!(money_symbol("INR".to_string()), "₹");
     assert_eq!(money_symbol("BTC".to_string()), "₿");
-    // Unknown code: Go returns the code itself as the symbol
+    // Unknown code: returns the code itself as the symbol
     assert_eq!(money_symbol("XYZ".to_string()), "XYZ");
     // Lowercase input normalised before lookup
     assert_eq!(money_symbol("usd".to_string()), "$");
@@ -61,7 +61,7 @@ fn symbol_matches_go() {
 
 #[test]
 fn is_known_currency_matches_go() {
-    // Go oracle: Money_isKnownCurrency
+    // the golden oracle: Money_isKnownCurrency
     assert!(money_is_known_currency("USD".to_string()));
     assert!(money_is_known_currency("EUR".to_string()));
     assert!(money_is_known_currency("JPY".to_string()));
@@ -74,7 +74,7 @@ fn is_known_currency_matches_go() {
 
 #[test]
 fn format_matches_go() {
-    // Go oracle: Money_format → info.Symbol + d.Abs().StringFixed(places)
+    // the golden oracle: Money_format → info.Symbol + d.Abs().StringFixed(places)
     // USD: 2 dp, symbol "$"
     assert_eq!(money_format("USD".to_string(), d("12.34")), "$12.34");
     // JPY: 0 dp, symbol "¥"
@@ -91,7 +91,7 @@ fn format_matches_go() {
 
 #[test]
 fn format_with_code_matches_go() {
-    // Go oracle: Money_formatWithCode → "<fixed> <UPPER_CODE>"
+    // the golden oracle: Money_formatWithCode → "<fixed> <UPPER_CODE>"
     assert_eq!(
         money_format_with_code("USD".to_string(), d("12.34")),
         "12.34 USD"
@@ -115,7 +115,7 @@ fn format_with_code_matches_go() {
 
 // ── GOLDEN: Money.allocate of 100 into 3 parts ─────────────────────────────
 //
-// Go oracle (money_kernel_test.go TestMoney_Allocate_SumExact):
+// the golden oracle (money_kernel_test.go TestMoney_Allocate_SumExact):
 //   allocate(places=2, parts=3, amount=100) = [33.34, 33.33, 33.33]
 //   sum = 100.00 exactly (fair split — first slot carries the extra cent)
 
@@ -151,7 +151,7 @@ fn allocate_100_into_3_parts_golden() {
 
 #[test]
 fn allocate_sum_exact_for_various_splits() {
-    // Go parity: any allocation must sum to the original amount.
+    // golden-verified: any allocation must sum to the original amount.
     let cases: &[(&str, i64, i64)] = &[
         ("100", 2, 3),  // 3-way split of 100
         ("1", 2, 3),    // 1.00 into 3 → 0.34, 0.33, 0.33
@@ -179,7 +179,7 @@ fn allocate_sum_exact_for_various_splits() {
 
 #[test]
 fn allocate_zero_and_negative_parts_return_empty() {
-    // Go parity: parts ≤ 0 → empty list
+    // golden-verified: parts ≤ 0 → empty list
     assert!(money_allocate(2, 0, d("100")).is_empty());
     assert!(money_allocate(2, -1, d("100")).is_empty());
 }
@@ -188,7 +188,7 @@ fn allocate_zero_and_negative_parts_return_empty() {
 //
 // Ipê: `Money.add (Money.fromMajor USD 10) (Money.fromMajor USD 5.50)
 //        |> Money.format`
-// Go parity: Dec.add(10.00, 5.50) = 15.50 → format("USD", 15.50) = "$15.50"
+// golden-verified: Dec.add(10.00, 5.50) = 15.50 → format("USD", 15.50) = "$15.50"
 
 #[test]
 fn money_add_and_format_golden() {
@@ -196,7 +196,7 @@ fn money_add_and_format_golden() {
     let a = d("10.00");
     let b = d("5.50");
     let total = decimal_add(a, b);
-    // Go oracle: format("USD", 15.50) = "$15.50"
+    // the golden oracle: format("USD", 15.50) = "$15.50"
     assert_eq!(money_format("USD".to_string(), total), "$15.50");
 
     // Integer add: 10 + 5 = 15 → "$15.00" (2 dp for USD)
@@ -243,7 +243,7 @@ fn fx_rate_round_trip_matches_go() {
         assert_eq!(decimal_to_string(v), "0.92");
     }
 
-    // Same-currency always returns 1 (Go: `if from == to { return 1, true }`)
+    // Same-currency always returns 1
     let same: IpeResult<IpeError, ipe_runtime_rust::decimal::Decimal> =
         money_get_rate("USD".to_string(), "USD".to_string());
     assert!(same.is_ok());
@@ -264,7 +264,7 @@ fn fx_auto_inverse_rate_capped_to_16_dp_matches_go() {
     let _g = rate_test_lock();
     let _: IpeResult<IpeError, ()> = money_clear_rates(());
 
-    // setRate USD→EUR = 3 ⇒ auto-inverse EUR→USD = 1/3. Go derives the inverse
+    // setRate USD→EUR = 3 ⇒ auto-inverse EUR→USD = 1/3. the implementation derives the inverse
     // with shopspring's `Div` (DivisionPrecision = 16, half-away-from-zero), so
     // getRate of the inverse pair is sixteen 3s — Ipê-Rust caps identically.
     let set: IpeResult<IpeError, ()> = money_set_rate("USD".to_string(), "EUR".to_string(), d("3"));
@@ -291,7 +291,7 @@ fn fx_auto_inverse_rate_capped_to_16_dp_matches_go() {
 fn set_rate_zero_and_negative_rejected_matches_go() {
     let _g = rate_test_lock();
     let _: IpeResult<IpeError, ()> = money_clear_rates(());
-    // Go oracle: "rate must be positive" → Err on zero or negative
+    // the golden oracle: "rate must be positive" → Err on zero or negative
     let r: IpeResult<IpeError, ()> = money_set_rate("USD".to_string(), "EUR".to_string(), d("0"));
     assert!(r.is_err(), "setRate(0) must fail");
     let r2: IpeResult<IpeError, ()> =

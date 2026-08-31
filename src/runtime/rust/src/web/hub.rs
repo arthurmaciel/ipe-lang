@@ -19,12 +19,12 @@
 //!
 //! A missing/unreadable spill file, a SQL error, or a JSON-decode miss degrades
 //! to an **empty result** plus a structured `warn` — never `?`-into-panic, never
-//! `unwrap`/`expect`/indexing. This mirrors Go's `getHubStore() == nil → Ok([])`
-//! path (`runtime-go/rt/hub/bridge.go`). The kernel owns both the SELECT and the
+//! `unwrap`/`expect`/indexing. This implements `getHubStore() == nil → Ok([])`
+//! path (`/bridge.go`). The kernel owns both the SELECT and the
 //! `Value` shape, so a producer/consumer schema mismatch cannot arise.
 //!
-//! Ground truth (read-only): `runtime-go/rt/hub/store.go` (schema + queries) and
-//! `runtime-go/rt/hub/bridge.go` (row → console-record field derivation).
+//! Ground truth (read-only): `/store.go` (schema + queries) and
+//! `/bridge.go` (row → console-record field derivation).
 
 use super::super::core::{IpeResult, IpeTask, ok_res, str_err};
 use serde::de::DeserializeOwned;
@@ -38,15 +38,11 @@ use std::time::Duration;
 
 // ─── Tenant-prefix SQL enforcement ─────────────────────────────────────────
 //
-// Direct port of the Go reference's `HubStoreReaderWithTenant` gate
-// (`../ipe/runtime-go/rt/hub_bridge.go`'s `tenantPrefixForSession` /
-// `rejectCrossTenantSvc`, `../ipe/runtime-go/rt/hub/store.go`'s
-// `LogFilter.TenantPrefix` / `escapeLikePrefix`). This module builds the full
+// Tenant-prefix SQL enforcement gate: this module builds the full
 // CONSUMER side (SQL-layer `LIKE`-prefix scoping + the `reject_cross_tenant_svc`
 // gate + the task-local plumbing to carry a tenant prefix through a request) —
-// fully real and fully enforced, testable in isolation exactly like Go's own
-// unit tests (which use a hand-constructed session with a `Claims` map, not a
-// live `consoleAuth` callback).
+// fully real and fully enforced, testable in isolation with a hand-constructed
+// session carrying a `Claims` map, not a live `consoleAuth` callback.
 //
 // What is NOT wired here (tracked as a follow-up, not a silent gap): the
 // PRODUCER side — deriving a tenant prefix from a live session's authenticated
@@ -65,7 +61,7 @@ use std::time::Duration;
 tokio::task_local! {
     /// The tenant-scope prefix in effect for the current request, when the
     /// session carries a `tenant` claim. Unset (→ "") outside a tenant-scoped
-    /// session — every service is in-scope in that case (matches Go's
+    /// session — every service is in-scope in that case (matches
     /// `tenantPrefixForSession` returning "" when the session has no tenant
     /// claim).
     static TENANT_PREFIX: String;
@@ -102,7 +98,7 @@ fn current_tenant_prefix() -> String {
 /// MUST refuse with an `Err`, never silently drop the tenant filter and fall
 /// through to an unscoped read.
 ///
-/// Direct port of Go's `rejectCrossTenantSvc` (`hub_bridge.go`).
+/// Direct port of  `rejectCrossTenantSvc` (`hub_bridge.go`).
 fn reject_cross_tenant_svc(svc: &str, tenant_prefix: &str) -> Result<String, ()> {
     if tenant_prefix.is_empty() {
         return Ok(svc.to_string());
@@ -120,7 +116,7 @@ fn reject_cross_tenant_svc(svc: &str, tenant_prefix: &str) -> Result<String, ()>
 /// Strip SQL `LIKE` wildcard characters (`%`, `_`) out of a tenant prefix
 /// before it is used to build a `LIKE 'prefix%'` pattern — a tenant identifier
 /// containing either character would otherwise WIDEN its own scope (e.g. a
-/// tenant literally named `%` would match every service). Mirrors Go's
+/// tenant literally named `%` would match every service). Mirrors
 /// `escapeLikePrefix` (strips rather than backslash-escapes, since tenant
 /// identifiers are short alphanumeric-with-dashes slugs, not arbitrary user
 /// text where preserving the literal character matters).
@@ -128,7 +124,7 @@ fn escape_like_prefix(p: &str) -> String {
     p.chars().filter(|&c| c != '%' && c != '_').collect()
 }
 
-/// Default per-table read cap (Go `hub/bridge.go` uses 200 for logs/metrics).
+/// Default per-table read cap (200 for logs/metrics).
 const LOG_LIMIT: i64 = 200;
 
 /// The console's `LogFilter` shape (serde-mirrors `StateLogFilter`). Kernels
@@ -152,8 +148,7 @@ struct HubLogFilter {
 }
 
 /// Re-serialize any `F: Serialize` filter into `HubLogFilter`; a shape mismatch
-/// degrades to the default (no filtering) — never a panic. Mirrors the Go
-/// bridge's `json.Unmarshal` of the forwarded filter.
+/// degrades to the default (no filtering) — never a panic.
 fn decode_filter<F: Serialize>(filter: F) -> HubLogFilter {
     serde_json::to_value(filter)
         .ok()
@@ -162,7 +157,7 @@ fn decode_filter<F: Serialize>(filter: F) -> HubLogFilter {
 }
 
 /// The store applies an `=` level filter, so only "exactly one level toggled"
-/// is expressible; zero or 2+ → no filter. Mirror of Go `pickSingleLevel`.
+/// is expressible; zero or 2+ → no filter.
 fn pick_single_level(f: &HubLogFilter) -> Option<&'static str> {
     let mut chosen = None;
     let mut count = 0;
@@ -209,8 +204,8 @@ fn tenant_like_clause(sql: &mut String, tenant_prefix: &str) -> Option<String> {
     Some(format!("{}%", escape_like_prefix(tenant_prefix)))
 }
 
-/// Build the `LogEntry`-shaped JSON array (Go `toHubLogRow` + the client-side
-/// query/session filters in `QueryLogsJSON`). `service` empty → no service
+/// Build the `LogEntry`-shaped JSON array applying query/session filters.
+/// `service` empty → no service
 /// scoping. `tenant_prefix` empty → no tenant scoping (every service
 /// in-scope); non-empty → additionally requires `service_name LIKE
 /// '<prefix>%'`. Returns an empty array on any open/SQL failure.
@@ -278,7 +273,7 @@ async fn read_logs_value(
             continue;
         }
         let attr = |k: &str| attrs.get(k).cloned().unwrap_or_default();
-        // Derive status/latency from the log's attrs (Go `toHubLogRow` parity) —
+        // Derive status/latency from the log's attrs —
         // the writer carries `status` / `latency_ms` keys (the same `latency_ms`
         // `aggregate_service_stat` reads). Missing/unparseable → 0.0.
         let status = attrs
@@ -378,7 +373,7 @@ const METRIC_LIMIT: i64 = 200;
 const TRACE_LIMIT: i64 = 100;
 const ERROR_LIMIT: i64 = 500;
 
-/// Build the `MetricRow`-shaped JSON array (Go `QueryMetricsJSON`). `labels` is
+/// Build the `MetricRow`-shaped JSON array. `labels` is
 /// the attrs map rendered `k=v, k=v` (keys sorted for stable output); `sum`/
 /// `count` are 0 (the spill doesn't carry histogram aggregates yet).
 /// `tenant_prefix` empty → no tenant scoping; see [`tenant_like_clause`].
@@ -429,7 +424,7 @@ async fn read_metrics_value(db_path: &str, service: &str, tenant_prefix: &str) -
 }
 
 /// Milliseconds between two RFC3339 timestamps; 0 when either is empty or
-/// unparseable (total — never panics). Mirrors Go's zero-guarded `Sub`.
+/// unparseable (total — never panics). Implements zero-guarded `Sub`.
 fn duration_ms(start: &str, end: &str) -> f64 {
     if start.is_empty() || end.is_empty() {
         return 0.0;
@@ -443,7 +438,7 @@ fn duration_ms(start: &str, end: &str) -> f64 {
     }
 }
 
-/// Build the `TraceRow`-shaped JSON array (Go `QuerySpansJSON`). `kind`=service,
+/// Build the `TraceRow`-shaped JSON array. `kind`=service,
 /// `durationMs` from start/end, `status` from attrs. `tenant_prefix` empty →
 /// no tenant scoping; see [`tenant_like_clause`].
 async fn read_traces_value(db_path: &str, service: &str, tenant_prefix: &str) -> Value {
@@ -492,7 +487,7 @@ async fn read_traces_value(db_path: &str, service: &str, tenant_prefix: &str) ->
     Value::Array(out)
 }
 
-/// Build the `ErrorRow`-shaped JSON array (Go `QueryErrorsJSON`): error-level
+/// Build the `ErrorRow`-shaped JSON array: error-level
 /// logs grouped by message → `{count, message}`, descending by count for a
 /// stable, useful order. `tenant_prefix` empty → no tenant scoping; see
 /// [`tenant_like_clause`].
@@ -675,8 +670,8 @@ async fn count_table(pool: &SqlitePool, table: TelemetryTable) -> i64 {
     }
 }
 
-/// `Hub_readOverview : String -> Task Error Overview`. Go `Hub_readOverview`:
-/// a default Overview with the live row counts spliced in.
+/// `Hub_readOverview : String -> Task Error Overview`: a default Overview
+/// with the live row counts spliced in.
 pub fn hub_read_overview<E, A>(db_path: String) -> IpeTask<E, A>
 where
     E: Send + From<String> + 'static,
@@ -717,14 +712,14 @@ where
     Box::pin(async move { decode_one(json!({ "subject": "", "email": "", "claims": {} })) })
 }
 
-// — ServiceStats aggregation (Go `aggregateServiceStat`) —
+// — ServiceStats aggregation —
 
 const STATS_WINDOW_SECS: i64 = 60;
 const STATS_BUCKET_COUNT: usize = 30;
 const STATS_ROW_CAP: i64 = 10_000;
 
 /// Nearest-rank p-th percentile; 0 for empty input (= "no observations", not
-/// "zero latency"). Mirror of Go `percentile`.
+/// "zero latency").
 fn percentile(vals: &[f64], p: f64) -> f64 {
     if vals.is_empty() {
         return 0.0;
@@ -751,7 +746,7 @@ fn classify_status(error_rate: f64) -> &'static str {
 }
 
 /// Parse an attr value string ("3.14"/"42") to f64; `None` (skip the
-/// observation) on empty/unparseable. Mirror of Go `parseFloatAttr`.
+/// observation) on empty/unparseable.
 fn parse_float_attr(raw: &str) -> Option<f64> {
     if raw.is_empty() {
         None
@@ -779,8 +774,8 @@ fn parse_ms(rfc: &str) -> Option<i64> {
 }
 
 /// Aggregate one service's last-60 s telemetry into the ServiceStat JSON shape.
-/// Go `aggregateServiceStat`. Window-filters in Rust (RFC3339-parse robust
-/// against writer/reader time-format drift); all slice access is checked.
+/// Window-filters via RFC3339 parse (robust against writer/reader time-format
+/// drift); all slice access is checked.
 async fn aggregate_service_stat(pool: &SqlitePool, svc: &str) -> Value {
     let now_ms = chrono::Utc::now().timestamp_millis();
     let since_ms = now_ms - STATS_WINDOW_SECS * 1000;
@@ -947,7 +942,7 @@ fn sanitize_log(s: &str) -> String {
 
 /// Open the telemetry spill read-only. `None` (never an error) when the path is
 /// empty or the file can't be opened — callers map that to an empty result so a
-/// fresh/absent DB renders as "no telemetry yet", exactly like the Go bridge.
+/// fresh/absent DB renders as "no telemetry yet" — a graceful empty result.
 async fn open_spill(db_path: &str) -> Option<SqlitePool> {
     if db_path.is_empty() {
         return None;
@@ -985,8 +980,7 @@ async fn open_spill(db_path: &str) -> Option<SqlitePool> {
 }
 
 /// `Hub_listServices : String -> Task Error (List String)` — distinct
-/// service_name across all three telemetry tables, sorted. Go ref:
-/// `hub/store.go:676` (`Services`).
+/// service_name across all three telemetry tables, sorted.
 pub fn hub_list_services<E: Send + From<String> + 'static>(
     db_path: String,
 ) -> IpeTask<E, Vec<String>> {
@@ -1425,7 +1419,7 @@ mod tests {
 
     #[test]
     fn reject_cross_tenant_svc_table() {
-        // Ported from the Go reference's TestRejectCrossTenantSvc table.
+        // Cross-tenant rejection spec table.
         assert_eq!(reject_cross_tenant_svc("", "tenant-"), Ok(String::new()));
         assert_eq!(
             reject_cross_tenant_svc("tenant-foo", "tenant-"),

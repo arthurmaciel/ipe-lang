@@ -192,7 +192,7 @@ pub fn sub_every<M>(ms: i64, msg: M) -> IpeSub<M> {
     IpeSub::Every { ms, msg }
 }
 
-/// Time.every : Int -> msg -> Sub msg — alias of `Sub.every` (matches Go's
+/// Time.every : Int -> msg -> Sub msg — alias of `Sub.every` (matches
 /// `Time_every`, which delegates to `Sub_every`). The `Time_every` kernel name
 /// lowers to this.
 pub fn time_every<M>(ms: i64, msg: M) -> IpeSub<M> {
@@ -348,7 +348,7 @@ impl<M: Clone + Send + 'static> SubManager<M> {
                 }
                 let tx = self.tx.clone();
                 let dur = std::time::Duration::from_millis(ms as u64);
-                // First tick after `ms` (sleep-loop, matching Go's time.After).
+                // First tick after `ms` (sleep-loop, matching  time.After).
                 let h = tokio::spawn(async move {
                     loop {
                         tokio::time::sleep(dur).await;
@@ -534,9 +534,9 @@ where
         // Fallible writes (NOT print!/println!, which panic on a broken pipe).
         //
         // A render must NOT force a trailing "\n": that would diverge from the
-        // Go oracle. `runtime-go/rt/cli.go`'s `cliPrintView` is explicit that
+        // the spec. ``'s `cliPrintView` is explicit that
         // it "writes the result to stdout WITHOUT a trailing newline (the
-        // user's prompt formatting decides whether to add one)" — Go only ever
+        // user's prompt formatting decides whether to add one)" — runtime only ever
         // appends ONE newline, at `fmt.Println()` after the event loop exits
         // (same as here). This is intentional REPL-prompt design:
         // `examples/shapes/terminal/simple-counter`'s `view` returns

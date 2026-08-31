@@ -98,9 +98,9 @@ fn i189_ipec_accepts_and_clones_reused_generic() {
     );
 }
 
-/// cargo-0 ∧ run-0 ∧ Go-parity: the emitted project actually compiles with
+/// cargo-0 ∧ run-0 ∧ golden-verified: the emitted project actually compiles with
 /// `rustc` (no E0382), prints the two instantiations, and its stdout matches the
-/// cached Go oracle. Gated on `IPE_E2E=1` — a real `cargo build`, the only check
+/// cached golden oracle. Gated on `IPE_E2E=1` — a real `cargo build`, the only check
 /// that would have caught the original SEAL violation (E0382, `ipe build`
 /// clean).
 #[test]

@@ -729,7 +729,7 @@ var __ipeReconnectSince = 0;
 // the IPE_WEB_RETRY_* / IPE_WEB_QUEUE_MAX env vars.
 function __ipePostEvent(body) {
   // Phase 1.2 — attach the per-session CSRF token. The server-side
-  // middleware (runtime-go/rt/csrf_middleware.go) rejects POSTs
+  // middleware () rejects POSTs
   // without a matching X-Ipe-Csrf / __ipe_csrf cookie pair. Empty
   // token means CSRF is disabled at the runtime level (package.ipe
   // [security] csrf = false) — header omitted, middleware skipped.

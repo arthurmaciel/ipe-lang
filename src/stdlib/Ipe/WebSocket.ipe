@@ -135,9 +135,9 @@ toUrl w =
 
 -- | Connect configuration record for `connectWith`.
 --
--- Every typed record ships with a `default` constructor + `with*` builder
--- helpers so adding new fields in future releases doesn't break downstream
--- record literals.
+-- Every typed record ships with a `default` constructor + `with*`
+-- builder helpers so adding new fields in future releases doesn't
+-- break downstream record literals.
 type alias WebSocketCfg =
     { url : String
     , headers : List ( String, String )

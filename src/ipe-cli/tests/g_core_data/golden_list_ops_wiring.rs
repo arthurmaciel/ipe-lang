@@ -19,7 +19,7 @@
 //! resolution path, and the two HOFs (`concatMap`/`indexedMap`) would trip the
 //! `cannot infer T2` cross-module inference hole under pure-Ipê anyway.
 //!
-//! This golden exercises all nine in one program, hitting the Elm/Go edge
+//! This golden exercises all nine in one program, hitting the Elm edge
 //! semantics (negative/over-length `take`/`drop`, `zip` truncating to the
 //! shorter operand, empty `concat`). Gated on `IPE_E2E=1` (emitted-project
 //! cargo build/run). Run: `IPE_E2E=1 cargo test --test golden_list_ops_wiring`.
@@ -59,7 +59,7 @@ fn e2e_enabled() -> bool {
     std::env::var("IPE_E2E").is_ok()
 }
 
-/// All nine newly-wired List ops compile and produce Elm/Go-parity output.
+/// All nine newly-wired List ops compile and produce Elm/golden-verified output.
 #[test]
 fn list_ops_wiring_runs_with_parity() {
     if !e2e_enabled() {

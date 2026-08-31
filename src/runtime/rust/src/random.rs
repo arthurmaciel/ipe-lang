@@ -2,7 +2,7 @@
 //
 // SECURITY INVARIANT — this module is a NON-CRYPTOGRAPHIC PRNG (a 64-bit LCG
 // seeded from the wall clock), implementing Ipê's `Random.*` surface with the
-// SAME contract as the Go backend's `math/rand`. Its output is fully predictable
+// SAME contract as the  `math/rand`. Its output is fully predictable
 // and MUST NEVER back a secret, token, session id, nonce, salt, or any value an
 // attacker must not guess. Every security-bearing draw in this runtime already
 // uses the OS CSPRNG (`OsRng` / `getrandom`) instead:
@@ -69,8 +69,8 @@ pub(crate) fn lcg_next() -> u64 {
     }
 }
 
-// ── Deterministic seeded PRNG (splitmix64) — byte-for-byte parity with Go's
-//    seedStep / Random_seededInt/Float/Choice (runtime-go/rt/rt.go). Pure. ──
+// ── Deterministic seeded PRNG (splitmix64) — byte-for-byte parity with
+//    seedStep / Random_seededInt/Float/Choice (). Pure. ──
 
 fn seed_step(z_in: i64) -> i64 {
     let mut z = (z_in as u64).wrapping_add(0x9E37_79B9_7F4A_7C15);
@@ -120,7 +120,7 @@ pub fn random_seeded_choice<T: Clone>(s: i64, items: Vec<T>) -> (IpeMaybe<T>, i6
 pub fn random_int<E: Send + 'static>(lo: i64, hi: i64) -> IpeTask<E, i64> {
     Box::pin(async move {
         lcg_init();
-        // Inclusive [lo, hi] semantics matching Go's `mrand.Intn(hi-lo+1)`.
+        // Inclusive [lo, hi] semantics matching  `mrand.Intn(hi-lo+1)`.
         // Do the modulo in u64 and add to lo so the result can never fall below
         // lo (the previous `lcg_next() as i64 % range` produced negative
         // remainders → out-of-range draws). `wrapping_*`/u64 width avoid the
@@ -147,13 +147,13 @@ pub fn random_float<E: Send + 'static>(lo: f64, hi: f64) -> IpeTask<E, f64> {
     Box::pin(async move {
         lcg_init();
         // Uniform float in [lo, hi) — matches the stdlib contract
-        // `float : Float -> Float -> Task Error Float` and Go's
+        // `float : Float -> Float -> Task Error Float` and
         // `Random_floatT` (lo + Float64()*(hi-lo)).
         // Unit draw is the 53-bit mantissa trick → [0, 1); never
         // `/ u64::MAX` (which rounds to 1.0 and could emit `hi`,
         // breaking the half-open upper bound).
         let unit = (lcg_next() >> 11) as f64 / (1u64 << 53) as f64;
-        // Degenerate bounds: Go silently returns a value < lo when
+        // Degenerate bounds: returns a value < lo when
         // hi < lo. We clamp to lo instead (sound, no negative-range
         // footgun) — same defensive choice as random_int's `hi < lo`
         // guard above.
@@ -178,7 +178,7 @@ pub fn random_choice<E: Send + From<String> + 'static>(items: Vec<String>) -> Ip
 
 /// `Random.choice : List a -> Task Error (Maybe a)` (kernel name `Random_choiceMaybe`).
 /// Returns `Ok Nothing` on empty list, `Ok (Just elem)` otherwise — never Err.
-/// Matches Go's `Random_choiceMaybe` which uses `Ok(makeMaybeNothing())` /
+/// Matches  `Random_choiceMaybe` which uses `Ok(makeMaybeNothing())` /
 /// `Ok(makeMaybeJust(...))`.
 #[must_use]
 pub fn random_choice_maybe<E: Send + 'static, T: Clone + Send + 'static>(
@@ -201,7 +201,7 @@ pub fn random_choice_maybe<E: Send + 'static, T: Clone + Send + 'static>(
 }
 
 /// `Random.shuffle : List a -> Task Error (List a)` — Fisher-Yates.
-/// Matches Go's `Random_shuffle` which uses `mrand.Shuffle` over a copy of
+/// Matches  `Random_shuffle` which uses `mrand.Shuffle` over a copy of
 /// the list (input not mutated).
 #[must_use]
 pub fn random_shuffle<E: Send + 'static, T: Clone + Send + 'static>(
@@ -224,7 +224,7 @@ pub fn random_shuffle<E: Send + 'static, T: Clone + Send + 'static>(
 /// `Random.weighted : List (Float, a) -> Task Error (Maybe a)`.
 /// Each tuple is `(weight, value)`; picks proportionally by weight. Non-positive
 /// weights are skipped. Returns `Ok Nothing` when every weight is ≤ 0 or the
-/// list is empty — matches Go's `Random_weighted`.
+/// list is empty — matches  `Random_weighted`.
 #[must_use]
 pub fn random_weighted<E: Send + 'static, T: Clone + Send + 'static>(
     items: Vec<(f64, T)>,
@@ -250,7 +250,7 @@ pub fn random_weighted<E: Send + 'static, T: Clone + Send + 'static>(
                 return ok_res(IpeMaybe::Just((*v).clone()));
             }
         }
-        // Floating-point rounding fallthrough — return last (matches Go's fallthrough).
+        // Floating-point rounding fallthrough — return last (matches  fallthrough).
         let last = positive.last().map(|(_, v)| (*v).clone());
         match last {
             Some(v) => ok_res(IpeMaybe::Just(v)),

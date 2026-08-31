@@ -1,6 +1,5 @@
-//! Ipe.Decimal kernels. Mirrors the Go runtime's `decimal_kernel.go` (built
-//! on shopspring/decimal); we use `rust_decimal::Decimal` which has compatible
-//! precision (96-bit mantissa + scale).
+//! `Ipe.Decimal` kernels — arbitrary-precision decimal arithmetic backed by
+//! `rust_decimal::Decimal` (96-bit mantissa + scale).
 
 use super::IpeResult;
 use rust_decimal::{Decimal as RD, prelude::FromPrimitive};
@@ -76,9 +75,8 @@ pub fn decimal_to_string_fixed(places: i64, d: Decimal) -> String {
     // so a huge `places` (e.g. 1e9) would only force a multi-GB allocation for
     // trailing zeros. Cap the format width to keep the kernel bounded.
     let p = places.clamp(0, i64::from(RD::MAX_SCALE)) as u32;
-    // Go oracle: shopspring StringFixed calls Round (half-away-from-zero), NOT
-    // RoundBank (banker's).  Use MidpointAwayFromZero to match Go byte-for-byte
-    // at tie values (e.g. "2.545" at 2 dp → "2.55" in Go).
+    // Use half-away-from-zero rounding (not banker's rounding) so tie values
+    // (e.g. "2.545" at 2 dp → "2.55") behave as expected by callers.
     let r =
         d.0.round_dp_with_strategy(p, RoundingStrategy::MidpointAwayFromZero);
     format!("{:.*}", p as usize, r)
@@ -129,9 +127,8 @@ pub fn decimal_to_minor(scale: i64, d: Decimal) -> i64 {
 // Arithmetic
 
 // Saturating arithmetic: rust_decimal's std ops panic on 96-bit mantissa
-// overflow; the Go oracle (shopspring/big.Int-backed) never overflows.
 // On overflow we saturate toward the mathematically correct signed extreme
-// rather than panicking — documented divergence only at values near ±7.9e28.
+// rather than panicking — only observable at values near ±7.9e28.
 #[must_use]
 pub fn decimal_add(a: Decimal, b: Decimal) -> Decimal {
     Decimal(a.0.checked_add(b.0).unwrap_or_else(|| {
@@ -181,10 +178,9 @@ pub fn decimal_div<E: From<String>>(a: Decimal, b: Decimal) -> IpeResult<E, Deci
             RD::MIN
         }
     });
-    // Cap the quotient to 16 decimal places, matching Go's shopspring/decimal
-    // DivisionPrecision = 16 (its `Div` is `DivRound(…, 16)` with half-away-from-
-    // zero rounding). Exact fractions with ≤16 dp are unaffected; non-terminating
-    // quotients (1/3, 2/3, 1/7, …) round to 16 dp exactly as shopspring does.
+    // Cap the quotient to 16 decimal places with half-away-from-zero rounding.
+    // Exact fractions with ≤16 dp are unaffected; non-terminating quotients
+    // (1/3, 2/3, 1/7, …) round at 16 dp.
     IpeResult::Ok(Decimal(
         quotient.round_dp_with_strategy(16, RoundingStrategy::MidpointAwayFromZero),
     ))
@@ -345,9 +341,8 @@ pub fn decimal_format_with(grp_sep: String, dec_sep: String, places: i64, d: Dec
     // so a huge `places` only inflates the format-width allocation (DoS) without
     // adding precision.
     let p = places.clamp(0, i64::from(RD::MAX_SCALE)) as u32;
-    // Go oracle: formatWith calls StringFixed which uses Round (half-away-from-
-    // zero), NOT RoundBank (banker's).  Use MidpointAwayFromZero so tie values
-    // (e.g. "2.545" at 2 dp → "2.55") match Go byte-for-byte.
+    // Use half-away-from-zero rounding (not banker's rounding) so tie values
+    // (e.g. "2.545" at 2 dp → "2.55") behave as expected.
     let rounded = if p > 0 {
         d.0.round_dp_with_strategy(p, RoundingStrategy::MidpointAwayFromZero)
     } else {

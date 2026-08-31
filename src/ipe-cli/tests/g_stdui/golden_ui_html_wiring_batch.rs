@@ -12,7 +12,7 @@
 //! ## Oracle provenance
 //!
 //! `oracle_divergence = true` — this is a brand-new Rust-only kernel batch
-//! with no Go reference behaviour to diff against structurally (the CSS/HTML
+//! with no reference behaviour to diff against structurally (the CSS/HTML
 //! shape is verified by direct assertions below, matching the semantics
 //! documented in `../ipe`'s `Ipe.Ui.ipe` / `Ipe.Html.ipe` source, not a cached
 //! oracle file).

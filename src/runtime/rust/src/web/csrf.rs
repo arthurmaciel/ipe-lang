@@ -1,16 +1,15 @@
 //! Ipe.Web CSRF protection + security response headers.
 //!
-//! Mirror of Go's `csrf_middleware.go` (double-submit cookie) + `setSecurityHeaders`
-//! (live.go), with a few hardening additions over the Go oracle:
-//!   - the `__ipe_csrf` cookie is `SameSite=Strict` + `Secure` (in production /
+//! Double-submit cookie CSRF protection + security response headers.
+//!
+//!   - The `__ipe_csrf` cookie is `SameSite=Strict` + `Secure` (in production /
 //!     frame-ancestors mode) — SameSite=Strict is itself a strong CSRF defense,
-//!     the double-submit token is belt-and-suspenders;
-//!   - an OPT-IN `Origin`/`Host` same-origin check (`IPE_WEB_CSRF_ORIGIN_CHECK=on`;
+//!     the double-submit token is belt-and-suspenders.
+//!   - An OPT-IN `Origin`/`Host` same-origin check (`IPE_WEB_CSRF_ORIGIN_CHECK=on`;
 //!     deprecated alias: `IPE_LIVE_CSRF_ORIGIN_CHECK`) for same-origin deployments
 //!     that want a third layer (off by default so it can't break reverse-proxied
-//!     setups where the proxy rewrites `Host`);
-//!   - `X-Content-Type-Options: nosniff` + a restrictive `Permissions-Policy`
-//!     beyond Go's header set.
+//!     setups where the proxy rewrites `Host`).
+//!   - `X-Content-Type-Options: nosniff` + a restrictive `Permissions-Policy`.
 //!
 //! The Ipe.Web client POSTs JSON to `/_ipe/event` with an `X-Ipe-Csrf` header
 //! (never a form body), so the middleware validates header-vs-cookie WITHOUT
@@ -22,7 +21,7 @@ use axum::response::{IntoResponse, Response};
 
 /// Per-app CSRF cookie name derived from the sub-app base path.
 ///
-/// Hardening BEYOND Go: when cookies are Secure (production / TLS /
+/// When cookies are Secure (production / TLS /
 /// frame-ancestors), use the `__Host-` prefix — the browser then refuses any
 /// `Set-Cookie` carrying a `Domain=` attribute, which blocks the
 /// sibling-subdomain cookie-fixation vector. `__Host-` MANDATES
@@ -57,7 +56,7 @@ pub fn csrf_cookie_name_for(base: &str) -> String {
     }
 }
 
-/// The header the client echoes the token in (Go parity: `X-Ipê-Csrf`).
+/// The header the client echoes the CSRF token in (`X-Ipê-Csrf`).
 pub const CSRF_HEADER: &str = "x-ipe-csrf";
 
 /// Whether CSRF protection is on, under the one config precedence with a
@@ -89,7 +88,7 @@ pub fn csrf_enabled() -> bool {
 pub use crate::telemetry::{frame_ancestors, security_headers};
 
 /// Whether to mark cookies `Secure`. Production (or frame-ancestors mode, which
-/// is always HTTPS) → Secure. Mirrors Go's `r.TLS != nil || X-Forwarded-Proto`.
+/// is always HTTPS) → Secure (env `IPE_WEB_SECURE` or `X-Forwarded-Proto: https`).
 ///
 /// Snapshotted once into a `OnceLock` on first call (env is stable at process
 /// start; eliminates per-request `getenv` + the TOCTOU race between
@@ -166,8 +165,8 @@ pub fn csrf_set_cookie(token: &str, base: &str) -> String {
     }
 }
 
-/// Paths exempt from CSRF validation (Go parity: `isObservabilityPath` + the
-/// console prefix + SSE). GET/HEAD/OPTIONS are exempt by method, separately.
+/// Paths exempt from CSRF validation (observability paths, console prefix,
+/// SSE). GET/HEAD/OPTIONS are exempt by method, separately.
 pub fn is_exempt_path(path: &str) -> bool {
     matches!(
         path,

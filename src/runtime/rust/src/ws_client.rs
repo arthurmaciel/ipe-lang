@@ -581,7 +581,7 @@ fn subscribe_events(socket_id: i64) -> Option<tokio::sync::broadcast::Receiver<W
 // respawns every sub on each update, but a broadcast has no replay, so a
 // re-spawned receiver would miss frames sent during the gap. So the real
 // listener is spawned DETACHED (not the handle the SubManager tracks) the first
-// time, and re-subscribes are no-ops — matching Go's "subsequent re-subscriptions
+// time, and re-subscribes are no-ops — matching  "subsequent re-subscriptions
 // are no-ops". The emit callback funnels into the loop channel, stable for the
 // program's lifetime.
 #[derive(Clone, Copy, Eq, PartialEq, Hash, Debug)]

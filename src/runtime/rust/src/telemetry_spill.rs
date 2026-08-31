@@ -5,7 +5,7 @@
 //! background batcher task. The bundled console child reads that
 //! same file through the `hub_*` kernels — so this module + `live/hub.rs`
 //! are the two halves of one data layer. Schema = the **hub schema**
-//! (`runtime-go/rt/hub/store.go`) the hub read kernels expect, NOT Go's per-app
+//! (`/store.go`) the hub read kernels expect, NOT  per-app
 //! `persist.go` schema; the Rust embedded console uses one schema end-to-end.
 //!
 //! ## Tokio-free core (the load-bearing constraint)
@@ -19,7 +19,7 @@
 //! ## No panic vectors / never poisons the hot path
 //!
 //! `offer_*` is a non-blocking `try_send`; a full queue drops the entry (the
-//! observability surface must never block or panic the request path — Go parity).
+//! observability surface must never block or panic the request path.
 //! Pool-open / schema / write failures degrade to an `eprintln` warn; the in-RAM
 //! sink keeps serving. No `unwrap`/`expect`/indexing in any reachable path.
 
@@ -27,13 +27,13 @@ use sqlx::SqlitePool;
 use std::sync::OnceLock;
 use tokio::sync::mpsc;
 
-/// Env var that turns the spill on (Go parity).
+/// Env var that turns the spill on .
 const SPILL_ENV: &str = "IPE_CONSOLE_DB_PATH";
 /// Service-name env (the hub schema groups by `service_name`).
 const SERVICE_ENV: &str = "IPE_SERVICE_NAME";
 /// Bounded queue depth (~1 s of telemetry at peak; overflow drops + warns).
 const QUEUE_CAP: usize = 1024;
-/// Retention: logs/spans older than this are pruned hourly (Go: 24 h).
+/// Retention: logs/spans older than this are pruned hourly .
 const RETENTION_HOURS: i64 = 24;
 
 /// Hub schema (the columns `live/hub.rs` reads). Created on enable.

@@ -24,8 +24,8 @@
 //!
 //! ## Oracle provenance
 //!
-//! The Go reference (`ipe dev`) does not expose `Html.htmlRender` and exits 1 on
-//! this source, so there is no Go-parity assertion here. The test asserts the
+//! The reference (`ipe dev`) does not expose `Html.htmlRender` and exits 1 on
+//! this source, so there is no golden-verified assertion here. The test asserts the
 //! emitted Rust compiles (`cargo build` exit 0 — enforced inside
 //! `build_and_run_emitted`) and the binary runs (exit 0) and renders the four
 //! Input controls.

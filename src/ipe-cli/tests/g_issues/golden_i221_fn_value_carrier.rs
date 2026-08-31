@@ -1,7 +1,7 @@
 //! Fn-value `Arc`-carrier promotion — three shapes the position-typed carrier
 //! model dissolves (otherwise rejected, or silently cargo-broken).
 //! Each fixture must emit `main.rs` byte-identical to its checked-in golden,
-//! and (behind `IPE_E2E=1`) the emitted project must build and print the Go
+//! and (behind `IPE_E2E=1`) the emitted project must build and print the golden
 //! reference's value, exit 0.
 //!
 //! | Fixture | Shape | Without promotion |
@@ -17,10 +17,10 @@
 //! `Box<dyn Fn>` slots and `impl Fn` kernels are still satisfied — every other
 //! binding keeps the lean `Box` carrier.
 //!
-//! Behavioural-parity oracle: the Go reference toolchain compiles and runs
+//! Verified: the reference toolchain compiles and runs
 //! `fn_value_reuse_promoted` (`47`) and `fn_param_capture_promoted`
 //! (`13`) to the asserted stdout. `fn_capture_eta_promoted` is REJECTED
-//! by the Go backend (`not enough arguments in call to wrap` — the same
+//! by the the backend (`not enough arguments in call to wrap` — the same
 //! local-fn-value partial-application arity gap this promotion closes), so its
 //! `4` is the hand-computed language-semantics value; accepting the shape is a
 //! recorded strictly-better divergence.
@@ -72,8 +72,8 @@ fn assert_e2e_prints(name: &str, want_stdout: &str) {
     assert!(built.is_ok(), "build failed: {:?}", built.err());
 
     let outcome = crate::support::build_and_run_emitted(name, &out);
-    assert_eq!(outcome.stdout, want_stdout, "must match the Go oracle");
-    assert_eq!(outcome.exit_code, Some(0), "exit 0, matching the Go oracle");
+    assert_eq!(outcome.stdout, want_stdout, "must match the golden output");
+    assert_eq!(outcome.exit_code, Some(0), "exit 0");
 }
 
 #[test]
