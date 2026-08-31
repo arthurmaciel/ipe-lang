@@ -1,31 +1,13 @@
--- | Ipe.Locale — opaque BCP-47 locale handle + locale-aware case mapping.
+-- | Ipe.Locale — opaque BCP-47 locale handle for locale-aware text operations.
 --
--- Default `String.toUpper`/`toLower`/`casefold` remain locale-independent —
--- they are correct for most scripts.  This module adds an explicit-locale
--- surface for the cases where language context changes the result.
+-- `Locale.fromTag` is the single constructor; it returns `Nothing` for any
+-- string that is not a structurally valid BCP-47 tag — an invalid tag is a
+-- typed absence, never a silent default.  The locale-aware case functions
+-- (`String.toUpperIn`, `String.toLowerIn`) live on `Ipe.String` and take a
+-- `Locale` produced here.
 --
--- The classic example: in Turkish and Azerbaijani, the lowercase dotted `i`
--- uppercases to capital dotted `İ` (U+0130), NOT to the ASCII `I` that the
--- locale-independent path produces.  Similarly, capital `I` lowercases to
--- dotless `ı` (U+0131).
---
--- A `Locale` is opaque and can only be constructed via `fromTag`.  An invalid
--- BCP-47 tag is a typed absence (`Nothing`), never a silent default.
---
--- Example:
---
---     import Ipe.Locale as Locale
---
---     turkishLocale : Maybe Locale
---     turkishLocale = Locale.fromTag "tr"
---
---     -- "i" → "İ"  (correct Turkish uppercase)
---     example : String
---     example =
---         case turkishLocale of
---             Just tr -> String.toUpperIn tr "i"
---             Nothing -> String.toUpper "i"   -- fallback
---
+-- For the mental model, worked example, and design rationale see the Locales
+-- guide in the project documentation.
 module Ipe.Locale exposing
     ( Locale
     , fromTag
