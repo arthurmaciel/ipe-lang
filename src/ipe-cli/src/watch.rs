@@ -406,10 +406,15 @@ pub(crate) fn resolve_project_sources(
             sources.insert(m.module_path.clone(), (m.path.clone(), src));
         }
         let cargo_name = ipe_backend_rust::sanitize_cargo_name(&manifest.name);
+        // The entry defaults to `["Main"]`; a `programs` manifest routes its
+        // (default) program's declared entry file through instead. Named
+        // multi-program selection is a reported residual — see
+        // `misc/docs/package-programs-design.md`.
+        let entry_path = manifest.resolved_entry()?;
         return Ok(ResolvedProject {
             sources,
             discovered,
-            entry_path: vec!["Main".to_owned()],
+            entry_path,
             blame_path: manifest_path,
             db_driver: manifest.driver,
             wasm_public_env: manifest.wasm.public_env,

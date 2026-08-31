@@ -2772,7 +2772,37 @@ pub fn build_project_with_options(
         sources.insert(m.module_path.clone(), (m.path.clone(), src));
     }
 
-    let entry_path = vec!["Main".to_owned()];
+    // A library package (declares `exposedModules`, has no runnable entry —
+    // neither a `programs` stage nor a `src/Main.ipe`) has nothing to emit. Refuse
+    // with a clean, honest message directing the author to `ipe type-check`
+    // (which analyses the public surface) rather than the internal
+    // missing-entry error a bogus `["Main"]` entry would raise downstream.
+    let entry_path = manifest.resolved_entry()?;
+    if manifest.default_program().is_none()
+        && !manifest.exposed_modules.is_empty()
+        && !sources.contains_key(&entry_path)
+    {
+        return Err(CliError::Usage(
+            "this is a library package (it declares `exposedModules` and no runnable program) — \
+             there is no entry to build. Use `ipe type-check` to verify its public surface, or \
+             add a `Package.programs [ … ]` stage to declare a runnable entry",
+        ));
+    }
+    // The emit epilogue's fixed `fn main` calls `ipe_main`, which the backend
+    // names only for a `main` in module `Main`. A `programs`-declared entry in a
+    // non-`Main` module type-checks (analysis honours the declared entry) but the
+    // emit's main-symbol naming does not yet thread through a per-program entry,
+    // so emitting a non-`Main` program entry would miscompile. Refuse cleanly and
+    // point at the working analysis path rather than emit a broken crate.
+    if entry_path != ["Main".to_owned()] {
+        return Err(CliError::UsageOwned(format!(
+            "program entry module `{}` is not yet buildable — a declared `programs` entry outside \
+             module `Main` type-checks (`ipe type-check`) but native emission still assumes a \
+             `Main` entry. Name the entry file `Main.ipe`, or track the multi-program emit \
+             follow-up",
+            entry_path.join(".")
+        )));
+    }
 
     // Fold in the manifest-derived fields: `[wasm] publicEnv`, hydrate mode,
     // and the project name (sanitized to a valid Cargo package name). The
@@ -5549,10 +5579,38 @@ fn resolve_analysis_entry(path: &Path) -> Result<PathBuf, CliError> {
     match manifest {
         Some(m) => {
             let parsed = project::parse_manifest(&m)?;
-            Ok(parsed.src_root.join("Main.ipe"))
+            Ok(analysis_root_of(&parsed))
         }
         None => Ok(path.to_path_buf()),
     }
+}
+
+/// The source file `ipe type-check` uses as its analysis root for a manifest
+/// project.
+///
+/// An application uses `<src_root>/Main.ipe`. A library (a manifest declaring
+/// `exposedModules` with no `src/Main.ipe` and no runnable program) has no
+/// `main` to check, so its analysis root is its first exposed module's file —
+/// checking the public surface is a library's meaningful verification. The
+/// declared-program entry (when a `programs` stage names one) takes precedence
+/// via [`ProjectManifest::resolved_entry`]'s module path, mapped back to a file
+/// under the source root.
+fn analysis_root_of(parsed: &project::ProjectManifest) -> PathBuf {
+    let main = parsed.src_root.join("Main.ipe");
+    if main.is_file() {
+        return main;
+    }
+    // No Main: prefer a declared program's entry file, else the first exposed
+    // module's file. Fall back to `Main.ipe` (the caller surfaces a clean
+    // missing-entry diagnostic) when the manifest names neither.
+    if let Some(program) = parsed.default_program() {
+        return parsed.src_root.join(&program.entry);
+    }
+    if let Some(module) = parsed.exposed_modules.first() {
+        let rel: PathBuf = module.split('.').collect();
+        return parsed.src_root.join(rel).with_extension("ipe");
+    }
+    main
 }
 
 /// `ipe type-check [<path>]` — type-check a program and stop. Runs the same
@@ -8601,6 +8659,71 @@ pub mod web {
             !out.exists(),
             "the refusal must fire before any project tree is written"
         );
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn analysis_root_prefers_main_then_program_then_exposed() {
+        // An application with a src/Main.ipe uses it as the analysis root.
+        let app = std::env::temp_dir().join("ipe_analysis_root_app");
+        let _ = fs::remove_dir_all(&app);
+        let app_src = app.join("src");
+        fs::create_dir_all(&app_src).expect("create src/");
+        fs::write(
+            app.join("package.ipe"),
+            "module Package exposing (package)\n\n\npackage =\n    Package.named \"app\"\n",
+        )
+        .expect("pkg");
+        fs::write(
+            app_src.join("Main.ipe"),
+            "module Main exposing (main)\nmain = 0\n",
+        )
+        .expect("main");
+        let app_manifest = project::parse_manifest(&app.join("package.ipe")).expect("app parses");
+        assert_eq!(analysis_root_of(&app_manifest), app_src.join("Main.ipe"));
+        let _ = fs::remove_dir_all(&app);
+
+        // A library (exposedModules, no Main) uses its first exposed module's file.
+        let lib = std::env::temp_dir().join("ipe_analysis_root_lib");
+        let _ = fs::remove_dir_all(&lib);
+        let lib_src = lib.join("src");
+        fs::create_dir_all(&lib_src).expect("create src/");
+        fs::write(lib.join("package.ipe"), "module Package exposing (package)\n\n\npackage =\n    Package.named \"lib\"\n        |> Package.exposedModules [ \"Core.Utils\" ]\n").expect("pkg");
+        // src/ must exist for the manifest reader's source-root check; the module
+        // file itself need not exist for the pure path derivation under test.
+        let lib_manifest = project::parse_manifest(&lib.join("package.ipe")).expect("lib parses");
+        assert_eq!(
+            analysis_root_of(&lib_manifest),
+            lib_src.join("Core").join("Utils.ipe")
+        );
+        let _ = fs::remove_dir_all(&lib);
+    }
+
+    #[test]
+    fn build_refuses_a_pure_library_with_a_clean_message() {
+        let tmp = std::env::temp_dir().join("ipe_build_refuse_library");
+        let _ = fs::remove_dir_all(&tmp);
+        let src = tmp.join("src");
+        fs::create_dir_all(&src).expect("create src/");
+        fs::write(
+            tmp.join("package.ipe"),
+            "module Package exposing (package)\n\n\npackage =\n    Package.named \"lib\"\n        |> Package.exposedModules [ \"Core\" ]\n",
+        )
+        .expect("pkg");
+        fs::write(src.join("Core.ipe"), "module Core exposing (x)\nx = 0\n").expect("core");
+
+        let out = tmp.join("out");
+        let result = build_project_with_options(
+            &tmp.join("package.ipe"),
+            &out,
+            Path::new("."),
+            BuildOptions::from_env(),
+        );
+        assert!(
+            matches!(&result, Err(CliError::Usage(msg)) if msg.contains("library package")),
+            "a pure library must be refused with a clean library message: {result:?}"
+        );
+        assert!(!out.exists(), "the refusal fires before any emit");
         let _ = fs::remove_dir_all(&tmp);
     }
 
