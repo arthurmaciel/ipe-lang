@@ -920,6 +920,23 @@ pub static ENV_VARS: &[EnvVar] = &[
         class: Class::Tunable,
     },
     EnvVar {
+        name: "IPE_WEB_STORE",
+        default: "memory",
+        purpose: "Session-store backend for the web server: `memory` (per-process, \
+                  lost on restart) or `sqlite` (persisted to `IPE_WEB_STORE_PATH`). \
+                  `ipe watch` selects `sqlite` so a rebuild preserves live sessions.",
+        subsystem: Subsystem::Web,
+        class: Class::Tunable,
+    },
+    EnvVar {
+        name: "IPE_WEB_STORE_PATH",
+        default: "unset (temp file)",
+        purpose: "Filesystem path for the `sqlite` session store. Ignored when \
+                  `IPE_WEB_STORE` is `memory`. Unset uses a per-process temporary file.",
+        subsystem: Subsystem::Web,
+        class: Class::Tunable,
+    },
+    EnvVar {
         name: "IPE_WEB_TTL",
         default: "1800 (30 min)",
         purpose: "Session idle TTL. Accepts seconds (`1800`) or duration strings \
@@ -1022,16 +1039,16 @@ mod tests {
         // Collect subsystem-buckets in the order they appear.
         let mut last: Option<(&str, Subsystem)> = None;
         for v in ENV_VARS {
-            if let Some((prev_name, prev_sub)) = last {
-                if v.subsystem == prev_sub {
-                    assert!(
-                        v.name >= prev_name,
-                        "ENV_VARS: within subsystem {:?}, '{}' must come after '{}' (alphabetical)",
-                        v.subsystem,
-                        v.name,
-                        prev_name,
-                    );
-                }
+            if let Some((prev_name, prev_sub)) = last
+                && v.subsystem == prev_sub
+            {
+                assert!(
+                    v.name >= prev_name,
+                    "ENV_VARS: within subsystem {:?}, '{}' must come after '{}' (alphabetical)",
+                    v.subsystem,
+                    v.name,
+                    prev_name,
+                );
             }
             last = Some((v.name, v.subsystem));
         }
@@ -1051,8 +1068,7 @@ mod tests {
         for name in EXCLUDED_NAMES {
             assert!(
                 !registered.contains(name),
-                "EXCLUDED_NAMES: '{}' also appears in ENV_VARS — remove it from one",
-                name,
+                "EXCLUDED_NAMES: '{name}' also appears in ENV_VARS — remove it from one",
             );
         }
     }

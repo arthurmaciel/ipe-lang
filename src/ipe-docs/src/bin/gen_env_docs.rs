@@ -288,13 +288,10 @@ mod tests {
     #[test]
     fn committed_env_md_matches_generator() {
         let path = workspace_path("docs/reference/env.md");
-        let committed = std::fs::read_to_string(&path).unwrap_or_else(|e| {
-            panic!(
-                "cannot read {}: {e}\n\
-                 Run `cargo run -p ipe_docs --bin gen-env-docs` to generate it.",
-                path.display()
-            )
-        });
+        let committed = std::fs::read_to_string(&path).expect(
+            "cannot read docs/reference/env.md; \
+             run `cargo run -p ipe_docs --bin gen-env-docs` to generate it",
+        );
         let generated = render_env_docs(ENV_VARS);
         assert_eq!(
             committed, generated,

@@ -196,6 +196,8 @@ Every `IPE_*` variable the runtime, CLI, and compiler read. The table is grouped
 | `IPE_WEB_SHUTDOWN_GRACE_MS` | 1500 | Grace period (ms) between receiving SIGTERM and closing active connections. Allows in-flight requests to complete. Set to `0` for immediate shutdown. Deprecated alias: `IPE_LIVE_SHUTDOWN_GRACE_MS`. | `Tunable` |
 | `IPE_WEB_SSE_BUFFER` | 16 | SSE channel buffer capacity per session (clamped 1–1024). A full buffer applies TCP backpressure rather than dropping events. Deprecated alias: `IPE_LIVE_SSE_BUFFER`. | `Tunable` |
 | `IPE_WEB_STATIC_DIR` | unset | Directory served at `/static/*`. Populated from `package.ipe [web] static`. Path traversal is blocked by construction. Deprecated alias: `IPE_LIVE_STATIC_DIR`. | `Tunable` |
+| `IPE_WEB_STORE` | memory | Session-store backend for the web server: `memory` (per-process, lost on restart) or `sqlite` (persisted to `IPE_WEB_STORE_PATH`). `ipe watch` selects `sqlite` so a rebuild preserves live sessions. | `Tunable` |
+| `IPE_WEB_STORE_PATH` | unset (temp file) | Filesystem path for the `sqlite` session store. Ignored when `IPE_WEB_STORE` is `memory`. Unset uses a per-process temporary file. | `Tunable` |
 | `IPE_WEB_TTL` | 1800 (30 min) | Session idle TTL. Accepts seconds (`1800`) or duration strings (`30m`, `1h`). Takes precedence over `Web.sessionTtl`. Deprecated alias: `IPE_LIVE_TTL`. | `Tunable` |
 
 ## WebSocket
