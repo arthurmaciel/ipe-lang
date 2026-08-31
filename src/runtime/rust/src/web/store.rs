@@ -13,6 +13,33 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 
+/// Hard ceiling on a decoded checkpoint body (bincode-side). A persisted blob's
+/// length prefix is attacker-influenceable at the storage boundary (a corrupt /
+/// crafted at-rest row); an unbounded decoder would `with_capacity(huge)` on an
+/// absurd prefix and OOM before erroring. The shared bounded codec turns any
+/// length beyond this into a clean decode error (→ `None`, the same fail-soft
+/// miss path a corrupt blob always took), never an allocation spike
+/// (PRINCIPLES §3: a decode of an absurd length is turned back). 64 MiB is far
+/// above any realistic serialized Model yet far below a memory-pressure risk.
+#[cfg(any(feature = "db", feature = "redis_store", feature = "web"))]
+const MAX_CHECKPOINT_BYTES: u64 = 64 * 1024 * 1024;
+
+/// The single bincode codec every `decode_checkpoint` sibling routes through —
+/// one bounded decode boundary ([`MAX_CHECKPOINT_BYTES`]). The option chain
+/// (`fixint`, little-endian, `allow_trailing_bytes`) is EXACTLY what
+/// `bincode::serialize`/`deserialize` use, so it is byte-compatible with every
+/// already-persisted blob (and with `encode_checkpoint`'s `bincode::serialize`);
+/// the only addition is `.with_limit(N)`, so a body claiming more than the cap
+/// errors cleanly BEFORE any `with_capacity` allocation.
+#[cfg(any(feature = "db", feature = "redis_store", feature = "web"))]
+fn checkpoint_codec() -> impl bincode::Options {
+    use bincode::Options as _;
+    bincode::DefaultOptions::new()
+        .with_fixint_encoding()
+        .allow_trailing_bytes()
+        .with_limit(MAX_CHECKPOINT_BYTES)
+}
+
 /// Wire-format epoch for the Model schema tag (H24). Must equal the
 /// backend's `emit_model_schema::WIRE_EPOCH` — the epoch is folded into the
 /// compile-time `IPE_WEB_MODEL_SCHEMA_TAG` each generated Ipe.Web binary
@@ -56,7 +83,10 @@ fn decode_checkpoint<Model: serde::de::DeserializeOwned>(
         return None;
     }
     let body = framed.get(32..)?;
-    bincode::deserialize(body).ok()
+    // Bounded decode: a crafted length prefix beyond MAX_CHECKPOINT_BYTES errors
+    // here (→ None) rather than pre-allocating a huge buffer.
+    use bincode::Options as _;
+    checkpoint_codec().deserialize(body).ok()
 }
 
 /// The in-process live session (owns its driver goroutine + SSE channel).
@@ -224,12 +254,37 @@ impl<Model, Msg> FileStore<Model, Msg> {
     /// retries the whole map. Writes to a sibling temp file then renames, so a
     /// crash mid-write never leaves a truncated map a later `new` would fail to
     /// parse (and thus silently drop every session).
+    ///
+    /// On unix the temp file is created `0600` (owner-only) BEFORE any bytes are
+    /// written, so the checkpoint map — which may hold Model secrets — is never
+    /// world-readable, not even momentarily. The rename carries the mode to the
+    /// final path (rename preserves the inode's permissions).
     fn persist(&self, disk: &HashMap<String, (String, i64)>) {
+        use std::io::Write as _;
         let Ok(json) = serde_json::to_string(disk) else {
             return;
         };
         let tmp = self.path.with_extension("tmp");
-        if std::fs::write(&tmp, json.as_bytes()).is_ok() {
+        let mut opts = std::fs::OpenOptions::new();
+        opts.write(true).create(true).truncate(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt as _;
+            opts.mode(0o600);
+        }
+        let Ok(mut file) = opts.open(&tmp) else {
+            return;
+        };
+        // `OpenOptions::mode` applies only when the file is freshly created; a
+        // pre-existing temp (a prior crashed write) keeps its old mode. Set it
+        // explicitly so the map is ALWAYS 0600 before it holds any secret.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            let _ = file.set_permissions(std::fs::Permissions::from_mode(0o600));
+        }
+        if file.write_all(json.as_bytes()).is_ok() && file.flush().is_ok() {
+            drop(file);
             let _ = std::fs::rename(&tmp, &self.path);
         }
     }
@@ -791,72 +846,158 @@ where
     }
 }
 
-/// Select a backend from `[live] store`, falling back to
-/// memory on any error — never crash. The `Model: Serialize` bound is for the
-/// persistent backends; memory needs none, but a single signature keeps the
-/// codegen call uniform (it derives serde on the model when emitting this).
-/// `schema_tag` (the compile-time Model schema fingerprint, H24) is forwarded
-/// to the persistent backends only — memory never round-trips through bytes.
+/// The session-store backend an operator asked for, parsed ONCE from the raw
+/// `IPE_WEB_STORE` string into a closed set. Parsing is where the
+/// prod-fail-closed decision lives: a backend whose feature this build lacks is
+/// a [`StoreConfigError`], never a silent swap to a different backend. Making
+/// "operator asked for sqlite, silently got file" unrepresentable means there is
+/// no variant that stands for "asked-for-X-serving-Y"; a request this build
+/// cannot honour does not parse.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StoreBackend {
+    Memory,
+    /// The sqlx-free on-disk checkpoint map (the `ipe watch` dev-handoff store).
+    File,
+    Sqlite,
+    Postgres,
+    Redis,
+}
+
+/// A requested backend this build cannot serve — a fail-closed startup error,
+/// carrying the operator-facing message.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StoreConfigError(pub String);
+
+impl std::fmt::Display for StoreConfigError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for StoreConfigError {}
+
+impl StoreBackend {
+    /// Parse `IPE_WEB_STORE`. `sqlite`/`postgres` require the `db` feature;
+    /// `redis` requires `redis_store`. A request this build cannot honour is a
+    /// hard error (fail-closed), NEVER a silent downgrade — the operator asked
+    /// for a persisted, possibly-remote store; quietly serving a different one
+    /// (or losing state) is the failure mode this closes. An unrecognised value
+    /// falls back to `memory` (the historical default for a typo / unset).
+    ///
+    /// Dev (`ipe watch`) is unaffected: it sets `IPE_WEB_STORE=file` explicitly,
+    /// which every web build honours; it never asks for `sqlite`.
+    fn parse(kind: &str) -> Result<StoreBackend, StoreConfigError> {
+        match kind {
+            "memory" => Ok(StoreBackend::Memory),
+            "file" => Ok(StoreBackend::File),
+            "sqlite" => {
+                if cfg!(feature = "db") {
+                    Ok(StoreBackend::Sqlite)
+                } else {
+                    Err(StoreConfigError(
+                        "IPE_WEB_STORE=sqlite requested but this build has no `db` \
+                         feature; build with `db` or set IPE_WEB_STORE=file|memory"
+                            .to_string(),
+                    ))
+                }
+            }
+            "postgres" => {
+                if cfg!(feature = "db") {
+                    Ok(StoreBackend::Postgres)
+                } else {
+                    Err(StoreConfigError(
+                        "IPE_WEB_STORE=postgres requested but this build has no `db` \
+                         feature; build with `db` or set IPE_WEB_STORE=file|memory"
+                            .to_string(),
+                    ))
+                }
+            }
+            "redis" => {
+                if cfg!(feature = "redis_store") {
+                    Ok(StoreBackend::Redis)
+                } else {
+                    Err(StoreConfigError(
+                        "IPE_WEB_STORE=redis requested but this build has no \
+                         `redis_store` feature; build with `redis_store` or set \
+                         IPE_WEB_STORE=file|memory"
+                            .to_string(),
+                    ))
+                }
+            }
+            _ => Ok(StoreBackend::Memory),
+        }
+    }
+}
+
+/// Select a backend from the parsed `IPE_WEB_STORE`. A backend this build cannot
+/// serve is a fail-closed [`StoreConfigError`] (surfaced by the caller as a task
+/// error → stderr + exit 1, or a 503 mount route), NEVER a silent swap. A
+/// persistent backend that parses but fails to *connect* at runtime (a dead DB
+/// / bad URL) still degrades to memory — that is an environment fault, not an
+/// operator mis-request, and matches the prior best-effort posture. The
+/// `Model: Serialize` bound is for the persistent backends; memory needs none,
+/// but a single signature keeps the codegen call uniform (it derives serde on
+/// the model when emitting this). `schema_tag` (the compile-time Model schema
+/// fingerprint, H24) is forwarded to the persistent backends only — memory
+/// never round-trips through bytes.
 pub async fn choose_store<Model, Msg>(
     kind: &str,
     path: &str,
     ttl: Duration,
     schema_tag: [u8; 32],
-) -> Arc<dyn SessionStore<Model, Msg>>
+) -> Result<Arc<dyn SessionStore<Model, Msg>>, StoreConfigError>
 where
     Model: serde::Serialize + serde::de::DeserializeOwned + Clone + Send + Sync + 'static,
     Msg: Send + Sync + 'static,
 {
-    #[cfg(feature = "db")]
-    if kind == "sqlite" {
-        match SqliteStore::new(path, ttl, schema_tag).await {
+    let backend = StoreBackend::parse(kind)?;
+    match backend {
+        #[cfg(feature = "db")]
+        StoreBackend::Sqlite => match SqliteStore::new(path, ttl, schema_tag).await {
             Ok(s) => {
                 eprintln!("[ipe.live] session store: sqlite @ {path}");
-                return Arc::new(s);
+                return Ok(Arc::new(s));
             }
             Err(e) => {
                 eprintln!("[ipe.live] sqlite store unavailable ({e}); falling back to memory")
             }
-        }
-    }
-    #[cfg(feature = "db")]
-    if kind == "postgres" {
-        match PostgresStore::new(path, ttl, schema_tag).await {
+        },
+        #[cfg(feature = "db")]
+        StoreBackend::Postgres => match PostgresStore::new(path, ttl, schema_tag).await {
             Ok(s) => {
                 eprintln!("[ipe.live] session store: postgres");
-                return Arc::new(s);
+                return Ok(Arc::new(s));
             }
             Err(e) => {
                 eprintln!("[ipe.live] postgres store unavailable ({e}); falling back to memory")
             }
-        }
-    }
-    #[cfg(feature = "redis_store")]
-    if kind == "redis" {
-        match RedisStore::new(path, ttl, schema_tag).await {
+        },
+        #[cfg(feature = "redis_store")]
+        StoreBackend::Redis => match RedisStore::new(path, ttl, schema_tag).await {
             Ok(s) => {
                 eprintln!("[ipe.live] session store: redis");
-                return Arc::new(s);
+                return Ok(Arc::new(s));
             }
-            Err(e) => eprintln!("[ipe.live] redis store unavailable ({e}); falling back to memory"),
+            Err(e) => {
+                eprintln!("[ipe.live] redis store unavailable ({e}); falling back to memory")
+            }
+        },
+        #[cfg(feature = "web")]
+        StoreBackend::File => {
+            eprintln!("[ipe.live] session store: file @ {path}");
+            return Ok(Arc::new(FileStore::new(path, ttl, schema_tag)));
         }
+        // A parsed-but-feature-absent persistent backend is impossible
+        // (`parse` fail-closes it); this arm catches `Memory` and — in a build
+        // that parsed a persistent backend but whose feature cfg is off for
+        // THIS arm's match (e.g. `File` without `web`) — falls to memory.
+        _ => {}
     }
-    // The sqlx-free persistent store: rides the `web` feature every web build
-    // already carries, so a plain `Web.app` (no `db` feature) can still persist
-    // a checkpoint across a process swap — the `ipe watch` blue-green Model
-    // handoff path. Selected explicitly (`file`) or when `sqlite` was requested
-    // but this build has no `db` feature to honour it (the common dev case),
-    // so the handoff degrades to `file` rather than silently to `memory`.
-    #[cfg(feature = "web")]
-    if kind == "file" || (kind == "sqlite" && !cfg!(feature = "db")) {
-        eprintln!("[ipe.live] session store: file @ {path}");
-        return Arc::new(FileStore::new(path, ttl, schema_tag));
-    }
-    let _ = (kind, path, schema_tag);
+    let _ = (path, schema_tag);
     // Memory store logs with a timestamp + human-readable TTL duration;
     // persistent backends log bare lines above (no duration needed).
     eprintln!("{}", memory_store_log_line(ttl));
-    Arc::new(MemoryStore::new(ttl))
+    Ok(Arc::new(MemoryStore::new(ttl)))
 }
 
 /// Produces the `[ipe.live] session store: memory (ttl=…)` startup log line,
@@ -1557,5 +1698,116 @@ mod tests {
             s.get("idle").await.is_none(),
             "idle session should be evicted"
         );
+    }
+
+    /// Bounded decode: a framed blob whose bincode length prefix claims a body
+    /// far larger than MAX_CHECKPOINT_BYTES decodes to `None` cleanly — the
+    /// bounded codec errors on the oversized length instead of `with_capacity`
+    /// on an absurd size. A `Vec<u8>` is the shape whose bincode is a bare
+    /// 8-byte little-endian length prefix, so a crafted prefix directly probes
+    /// the allocation boundary.
+    #[cfg(any(feature = "db", feature = "redis_store", feature = "web"))]
+    #[test]
+    fn decode_checkpoint_rejects_an_oversized_length_prefix_without_oom() {
+        use base64::{Engine as _, engine::general_purpose::STANDARD as B64};
+        // framed = tag(32) ++ bincode(Vec<u8>): the body is an 8-byte LE length
+        // then that many bytes. Claim ~4 GiB but supply no bytes — an unbounded
+        // decoder would try to reserve ~4 GiB; the bounded one errors first.
+        let mut framed = Vec::new();
+        framed.extend_from_slice(&TEST_TAG);
+        framed.extend_from_slice(&(4_000_000_000_u64).to_le_bytes());
+        let blob = B64.encode(&framed);
+        let decoded: Option<Vec<u8>> = decode_checkpoint(&TEST_TAG, &blob);
+        assert!(
+            decoded.is_none(),
+            "an oversized length prefix must decode to None, never OOM"
+        );
+    }
+
+    /// A within-limit blob still round-trips — the bound rejects only absurd
+    /// lengths, not legitimate payloads (guards against an over-tight cap).
+    #[cfg(any(feature = "db", feature = "redis_store", feature = "web"))]
+    #[test]
+    fn decode_checkpoint_accepts_a_within_limit_body() {
+        let payload: Vec<u8> = vec![1, 2, 3, 4, 5];
+        let blob = encode_checkpoint(&TEST_TAG, &payload);
+        assert!(blob.is_some(), "encoding a small Vec<u8> cannot fail");
+        if let Some(blob) = blob {
+            let decoded: Option<Vec<u8>> = decode_checkpoint(&TEST_TAG, &blob);
+            assert_eq!(decoded, Some(payload));
+        }
+    }
+
+    /// Prod fail-closed: `IPE_WEB_STORE=sqlite` in a build WITHOUT the `db`
+    /// feature is a hard config error at store selection — never a silent
+    /// `FileStore`. Only meaningful when `db` is absent; a `db` build parses
+    /// `sqlite` to the real backend, exercised by the other tests.
+    #[cfg(all(feature = "web", not(feature = "db")))]
+    #[tokio::test]
+    async fn choose_store_fails_closed_on_prod_sqlite_without_db_feature() {
+        let r = choose_store::<i32, ()>("sqlite", "", Duration::from_secs(60), TEST_TAG).await;
+        let err = r.err();
+        assert!(
+            err.is_some(),
+            "a sqlite request without `db` must fail closed, not serve a store"
+        );
+        if let Some(StoreConfigError(msg)) = err {
+            assert!(
+                msg.contains("sqlite") && msg.contains("db"),
+                "the error must name the missing feature: {msg:?}"
+            );
+        }
+    }
+
+    /// The dev path is untouched: `file` always parses to a real `FileStore`,
+    /// and `memory`/unknown still yield a memory store (never an error).
+    #[cfg(feature = "web")]
+    #[tokio::test]
+    async fn choose_store_honours_file_and_memory_without_error() {
+        let path = std::env::temp_dir().join(format!("ipetest_choose_{}.json", std::process::id()));
+        let p = path.to_string_lossy().into_owned();
+        let _ = std::fs::remove_file(&p);
+        assert!(
+            choose_store::<i32, ()>("file", &p, Duration::from_secs(60), TEST_TAG)
+                .await
+                .is_ok(),
+            "dev `file` must select a store, never fail closed"
+        );
+        assert!(
+            choose_store::<i32, ()>("memory", "", Duration::from_secs(60), TEST_TAG)
+                .await
+                .is_ok()
+        );
+        assert!(
+            choose_store::<i32, ()>("totally-unknown", "", Duration::from_secs(60), TEST_TAG)
+                .await
+                .is_ok(),
+            "an unrecognised value falls back to memory, not an error"
+        );
+        let _ = std::fs::remove_file(&p);
+    }
+
+    /// 0600 perms: the file store's on-disk map is owner-only on unix — a
+    /// session blob may hold Model secrets and must never be world-readable.
+    #[cfg(all(feature = "web", unix))]
+    #[tokio::test]
+    async fn file_store_map_is_owner_only_0600() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let path = std::env::temp_dir().join(format!("ipetest_perms_{}.json", std::process::id()));
+        let p = path.to_string_lossy().into_owned();
+        let _ = std::fs::remove_file(&p);
+        let s: FileStore<i32, ()> = FileStore::new(&p, Duration::from_secs(60), TEST_TAG);
+        s.set("s1", handle_i32(42)).await;
+        let meta = std::fs::metadata(&p);
+        assert!(
+            meta.is_ok(),
+            "the map file must exist after a write: {:?}",
+            meta.as_ref().err()
+        );
+        if let Ok(meta) = meta {
+            let mode = meta.permissions().mode() & 0o777;
+            assert_eq!(mode, 0o600, "the session map must be 0600 (owner-only)");
+        }
+        let _ = std::fs::remove_file(&p);
     }
 }

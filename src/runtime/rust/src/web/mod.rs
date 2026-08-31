@@ -1581,9 +1581,20 @@ where
     FSubs: Fn(Model) -> IpeSub<Msg> + Send + Sync + 'static,
 {
     Box::pin(async move {
-        let store =
-            store::choose_store::<Model, Msg>(&store_kind, &store_path, web_ttl(), schema_tag)
-                .await;
+        // A fail-closed store config (e.g. prod `IPE_WEB_STORE=sqlite` in a
+        // build with no `db` feature) surfaces as a task error → stderr + exit
+        // 1, never a silent downgrade to a different backend.
+        let store = match store::choose_store::<Model, Msg>(
+            &store_kind,
+            &store_path,
+            web_ttl(),
+            schema_tag,
+        )
+        .await
+        {
+            Ok(s) => s,
+            Err(e) => return IpeResult::Err(e.to_string().into()),
+        };
         let state = WebState {
             store,
             init: Arc::new(init),
@@ -1647,9 +1658,22 @@ where
                     std::env::set_var("IPE_WEB_BASE_PATH", &base);
                 }
             }
-            let store =
-                store::choose_store::<Model, Msg>(&store_kind, &store_path, web_ttl(), schema_tag)
-                    .await;
+            // A mount has no task-error channel (it yields a `Router`, not an
+            // `IpeTask`), so an unhonourable store config fails closed as a
+            // router that answers every path with 503 + the operator message —
+            // never a silent downgrade to a different backend and never a mount
+            // that quietly serves real sessions on the wrong store.
+            let store = match store::choose_store::<Model, Msg>(
+                &store_kind,
+                &store_path,
+                web_ttl(),
+                schema_tag,
+            )
+            .await
+            {
+                Ok(s) => s,
+                Err(e) => return fail_closed_router(e.to_string()),
+            };
             let state = WebState {
                 store,
                 init: Arc::new(init),
@@ -1665,6 +1689,25 @@ where
             // `serve_web` task's result), so `build_web_router` carries no `E`.
             build_web_router::<Model, Msg, FInit, FUpdate, FView, FSubs>(state, false)
         }) as std::pin::Pin<Box<dyn std::future::Future<Output = axum::Router> + Send>>
+    })
+}
+
+/// A router that answers EVERY path with `503 Service Unavailable` + a plain
+/// message. Used when a mounted `Web.embed` cannot honour its store config
+/// (fail-closed): the mount stays reachable enough to report the fault, but
+/// never serves a real session on a silently-degraded store. The startup fault
+/// is logged once here too, so an operator sees it even without hitting a path.
+#[cfg(feature = "web")]
+fn fail_closed_router(message: String) -> axum::Router {
+    eprintln!("[ipe.live] mounted web app disabled: {message}");
+    axum::Router::new().fallback(move || {
+        let message = message.clone();
+        async move {
+            (
+                axum::http::StatusCode::SERVICE_UNAVAILABLE,
+                format!("session store misconfigured: {message}"),
+            )
+        }
     })
 }
 
@@ -1717,9 +1760,18 @@ where
             Arc::new(move |path| route::match_params(&routes_for_params, path));
         let route_matched: RouteMatched =
             Arc::new(move |path| route::matches_any(&routes_for_match, path));
-        let store =
-            store::choose_store::<Model, Msg>(&store_kind, &store_path, web_ttl(), schema_tag)
-                .await;
+        // Fail-closed on an unhonourable store config (see `web_app`).
+        let store = match store::choose_store::<Model, Msg>(
+            &store_kind,
+            &store_path,
+            web_ttl(),
+            schema_tag,
+        )
+        .await
+        {
+            Ok(s) => s,
+            Err(e) => return IpeResult::Err(e.to_string().into()),
+        };
         let state = WebState {
             store,
             init: Arc::new(init),
