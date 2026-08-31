@@ -1012,6 +1012,26 @@ const RUNTIME_MOD_RS_UI_APPEND: &str =
 /// (`E0428`).
 const RUNTIME_MOD_RS_CSS_APPEND: &str = "pub mod css_safety;\npub mod css;\npub use css::*;\n";
 
+/// Lines appended to `ipe_runtime/mod.rs` when any render-capable shape is
+/// active (`uses_ui || uses_tui || uses_web || uses_webview`).
+///
+/// `seal_codec.rs` is a dependency of `ui/widget.rs` (via
+/// `use crate::seal_codec::{SealLimits, seal_decode_serde}` under
+/// `#[cfg(feature = "json")]`) and of `web/mod.rs` (via
+/// `use crate::seal_codec::{SealLimits, seal_boundary_check}` under
+/// `#[cfg(all(feature = "json", feature = "tokio"))]`). Both gates are
+/// satisfied for every emitted render-capable program (the vendored template's
+/// `default = ["json"]` keeps the `json` feature on; `tui`/`web`/`webview`
+/// shapes also enable `tokio`). Without this append those imports fail with
+/// E0432 (`unresolved import crate::seal_codec`) at `cargo build` despite
+/// `ipe` exiting 0 — the module-set SEAL breach this constant closes.
+///
+/// Pushed BEFORE [`RUNTIME_MOD_RS_CSS_APPEND`] (and therefore before
+/// [`RUNTIME_MOD_RS_UI_APPEND`]) because `seal_codec.rs` is a leaf with no
+/// runtime-module deps of its own, and correctness requires it to be declared
+/// before the modules that import it.
+const RUNTIME_MOD_RS_SEAL_CODEC_APPEND: &str = "pub mod seal_codec;\n";
+
 // ── Ipe.Tui / Ipe.Tui ───────────────────────────────────────────────────────
 
 /// Lines appended to `ipe_runtime/mod.rs` when the program uses Ipe.Tui /
@@ -2748,6 +2768,15 @@ fn assemble_project_files(
         // `http_header` is part of the base `mod.rs` (the base `http_client`
         // module depends on it), so it needs no conditional append here — see
         // the note at the top of this file.
+        // `seal_codec` is a leaf dep of `ui/widget.rs` and `web/mod.rs`; must
+        // be declared before those modules are compiled. Guarded on the same
+        // condition as the UI append — any render-capable shape activates the
+        // imports. Appended AT MOST ONCE regardless of how many render surfaces
+        // are active (e.g. a Tui+Web program must not emit a duplicate
+        // `pub mod seal_codec;` — E0428).
+        if ctx.uses_ui || ctx.uses_tui || ctx.uses_web || ctx.uses_webview {
+            mod_rs.push_str(RUNTIME_MOD_RS_SEAL_CODEC_APPEND);
+        }
         // Ipe.Css leaf security kernels — declared for any render-capable
         // program (`uses_ui`, whose html/ui/live runtime modules import
         // `css_safety`) OR a pure-`Ipe.Css` program (`uses_css`, no render
