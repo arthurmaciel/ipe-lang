@@ -1251,7 +1251,7 @@ Ipe.Level — the `LogLevel` severity-tag ADT.
 
 [Full reference](stdlib/Locale.md)
 
-Ipe.Locale — opaque BCP-47 locale handle + locale-aware case mapping.
+Ipe.Locale — opaque BCP-47 locale handle for locale-aware text operations.
 
 | Export | Summary |
 |--------|----------|
