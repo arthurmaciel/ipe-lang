@@ -35,7 +35,8 @@ cross-link where topics meet.
   encodings](encoding.md) (base64/URL/hex), [Bytes](bytes.md) (raw octets),
   [Compression](compression.md) (gzip/zstd over bytes).
 - **Serialization** — [Codec](codec.md) (one bidirectional codec for JSON and
-  storage; the round-trip law by construction).
+  storage; the round-trip law by construction), [Database codecs](db-codec.md)
+  (that one codec as a database row and back).
 - **Files and configuration** — [Files](file.md) (typed paths, effects as tasks),
   [Configuration](config.md) (typed TOML/YAML/JSON decoders), [CSV](csv.md).
 - **Numbers and magnitudes** — [Math](math.md) (roots, trig, rounding, NaN),
@@ -53,6 +54,18 @@ cross-link where topics meet.
   password read).
 - **Content and markup** — [HTML](html.md) (typed element trees, XSS-safe by
   construction), [Markdown](markdown.md) (a typed block tree, no raw HTML).
+- **Instrumentation and delivery** — [Analytics](analytics.md) (consent-gated,
+  PII-safe event tracking), [Email](email.md) (provider-abstract send with sealed
+  credentials).
+- **Web application surfaces** — [Page head](web-head.md) (typed `<head>` /
+  SEO tags), [Console authentication](web-console.md) (gate the embedded console
+  with the app's own auth), [Pub/sub](pubsub.md) (in-process typed broadcast),
+  [Browser ports](js.md) (the typed Ipê↔JS seam).
+- **Escape hatches** — the surfaces that bypass a safe default behind a disclosed
+  `unsafe` capability: [the unsafe database surface](db-unsafe.md) (raw SQL,
+  untyped column reads), [the secret-reveal hatch](secret-unsafe.md) (un-seal a
+  `Secret` to a bare `String`). Reach for these only for a residual the safe
+  surface cannot express.
 - **Caching** — [Cache](cache.md) (bounded, in-memory LRU with optional TTL; a
   miss is a `Maybe`, not a failure).
 - **Observability** — [Logging](log.md) (structured, levelled log records),

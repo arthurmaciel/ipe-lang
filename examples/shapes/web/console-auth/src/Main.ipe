@@ -1,0 +1,79 @@
+module Main exposing (main)
+
+-- | console-auth — gating the embedded console with the app's own auth.
+--
+-- A `Ipe.Tea.Web` app can supply an optional
+-- `consoleAuth : Request -> Task Error (Maybe Identity)` field on its `Web.app`
+-- cfg. When the framework gates the embedded console in app-mode, it runs the
+-- callback per request BEFORE mounting console routes: `Nothing` → 403 plus a
+-- structured audit log; `Just identity` → the request continues and the identity
+-- rides the console session cookie and is attached to telemetry for audit.
+--
+-- Reach for this when the app already has an SSO / session middleware: thread it
+-- into `consoleAuth` and the console inherits the same auth surface — no second
+-- token to provision. `Ipe.Web.Console` provides the `Identity` builders so the
+-- record stays source-compatible as future fields are added.
+
+
+import Ipe.Tea.Web as Web
+import Ipe.Web.Console as Console exposing (Identity)
+import Ipe.Ui as Ui
+import Ipe.Tea.Web.Cmd as Cmd
+import Ipe.Tea.Web.Sub as Sub
+import Ipe.Task as Task
+import Ipe.Maybe exposing (Maybe(..))
+
+
+type Msg
+    = Ignored
+
+
+type alias Model =
+    {}
+
+
+init : a -> ( Model, Cmd.Cmd Msg )
+init _req =
+    ( {}, Cmd.none )
+
+
+update : Msg -> Model -> ( Model, Cmd.Cmd Msg )
+update _msg model =
+    ( model, Cmd.none )
+
+
+subscriptions : Model -> Sub.Sub Msg
+subscriptions _model =
+    Sub.none
+
+
+-- The console auth gate. A real app would read a session from the request; here
+-- the identity is built with the `Ipe.Web.Console` builders — `defaultIdentity`
+-- plus `withEmail` / `withClaim` keep the record source-compatible. Returning
+-- `Nothing` would deny with a 403 + audit log.
+identify : Request -> Task Error (Maybe Identity)
+identify _req =
+    Task.succeed
+        (Just
+            (Console.defaultIdentity "user-42"
+                |> Console.withEmail "alice@example.com"
+                |> Console.withClaim "role" "admin"
+            )
+        )
+
+
+view : Model -> Element Msg
+view _model =
+    Ui.text "console gated by the app's own auth"
+
+
+main =
+    Web.app
+        { init = init
+        , update = update
+        , view = view
+        , subscriptions = subscriptions
+        , routes = []
+        , notFound = Ignored
+        , consoleAuth = identify
+        }
