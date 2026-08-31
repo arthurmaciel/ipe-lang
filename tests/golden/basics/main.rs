@@ -30,20 +30,6 @@ type IpeString = String;
 // USER TYPES
 // ===========================================
 
-#[derive(Clone, Debug, PartialEq)]
-pub enum MainMsg {
-    Increment,
-    Decrement,
-}
-impl IpeStringify for MainMsg {
-    fn ipe_show(&self) -> String {
-        match self {
-            MainMsg::Increment => "Increment".to_string(),
-            MainMsg::Decrement => "Decrement".to_string(),
-        }
-    }
-}
-
 pub use ipe_runtime::error::IpeError;
 pub fn str_err(s: &str) -> IpeError {
     IpeError::unexpected(s.to_string())

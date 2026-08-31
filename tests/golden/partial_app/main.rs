@@ -193,6 +193,58 @@ pub fn file_rename(src: ipe_runtime::path::Path, dst: ipe_runtime::path::Path) -
     ipe_runtime::file::file_rename(src, dst)
 }
 
+pub fn main_f(a: i64) -> Box<dyn Fn(i64, i64) -> i64 + Send + Sync + 'static> {
+    let _ipe_recursion_guard = crate::recursion_guard();
+    {
+        let __ipe_fn: Box<dyn Fn(i64, i64) -> i64 + Send + Sync + 'static> =
+            Box::new(move |b: i64, c: i64| -> i64 {
+                ipe_runtime::math::ipe_int_add(ipe_runtime::math::ipe_int_add(a, b), c)
+            });
+        __ipe_fn
+    }
+}
+pub fn main_add3(a: i64, b: i64, c: i64) -> i64 {
+    let _ipe_recursion_guard = crate::recursion_guard();
+    ipe_runtime::math::ipe_int_add(ipe_runtime::math::ipe_int_add(a, b), c)
+}
+pub fn ipe_main() -> IpeTask<()> {
+    let _ipe_recursion_guard = crate::recursion_guard();
+    ({
+        let g = crate::main_f(1i64);
+        ({
+            let h = {
+                let __ipe_fn: Box<dyn Fn(i64) -> i64 + Send + Sync + 'static> =
+                    Box::new(move |eta_0: i64| -> i64 { (g)(2i64, eta_0) });
+                __ipe_fn
+            };
+            ({
+                let boundPartial = (h)(3i64);
+                ({
+                    let overPartial = ({
+                        let eta_0: i64 = 3i64;
+                        (crate::main_f(10i64))(20i64, eta_0)
+                    });
+                    ({
+                        let pipePartial = ({
+                            let eta_0: i64 = 100i64;
+                            crate::main_add3(1i64, 2i64, eta_0)
+                        });
+                        task_and_then(
+                            io_println(string_from_int(boundPartial)),
+                            Box::new(move |_| {
+                                task_and_then(
+                                    io_println(string_from_int(overPartial)),
+                                    Box::new(move |_| io_println(string_from_int(pipePartial))),
+                                )
+                            }),
+                        )
+                    })
+                })
+            })
+        })
+    })
+}
+
 // Ffi.kernel polyfill — should be unreachable in Rust target;
 // the codegen routes Ffi.kernel calls directly, but some construction
 // paths (e.g. inline let-bindings of Ffi.kernel) leave a residual call.
@@ -227,13 +279,3 @@ fn main() {
         }
     }
 }
-
-#[path = "ipe_mods/ipe_mod_ipe_duration.rs"]
-mod ipe_mod_ipe_duration;
-pub(crate) use ipe_mod_ipe_duration::*;
-#[path = "ipe_mods/ipe_mod_ipe_task.rs"]
-mod ipe_mod_ipe_task;
-pub(crate) use ipe_mod_ipe_task::*;
-#[path = "ipe_mods/ipe_mod_main.rs"]
-mod ipe_mod_main;
-pub(crate) use ipe_mod_main::*;

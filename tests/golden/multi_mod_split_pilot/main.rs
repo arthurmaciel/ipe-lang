@@ -366,12 +366,6 @@ fn main() {
     }
 }
 
-#[path = "ipe_mods/ipe_mod_ipe_duration.rs"]
-mod ipe_mod_ipe_duration;
-pub(crate) use ipe_mod_ipe_duration::*;
-#[path = "ipe_mods/ipe_mod_ipe_task.rs"]
-mod ipe_mod_ipe_task;
-pub(crate) use ipe_mod_ipe_task::*;
 #[path = "ipe_mods/ipe_mod_lib.rs"]
 mod ipe_mod_lib;
 pub(crate) use ipe_mod_lib::*;

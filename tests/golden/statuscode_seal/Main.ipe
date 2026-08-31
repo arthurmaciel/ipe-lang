@@ -1,0 +1,68 @@
+module Main exposing (main)
+
+import Ipe.Http.StatusCode as StatusCode
+import Ipe.Io as Io
+import Ipe.String as String
+import Ipe.ToString as ToString
+
+
+-- SEAL: Ipe.Http.StatusCode round-trips + classifiers.
+-- Proves the compiled-source module resolves, emits, builds, and runs.
+
+
+okLine : String
+okLine =
+    let
+        sc =
+            StatusCode.fromInt 200
+    in
+    "code=" ++ String.fromInt (StatusCode.code sc) ++ " ok=" ++ ToString.fromBool (StatusCode.isSuccess sc)
+
+
+redirectLine : String
+redirectLine =
+    let
+        sc =
+            StatusCode.fromInt 301
+    in
+    "code=" ++ String.fromInt (StatusCode.code sc) ++ " redirect=" ++ ToString.fromBool (StatusCode.isRedirect sc)
+
+
+clientLine : String
+clientLine =
+    let
+        sc =
+            StatusCode.fromInt 404
+    in
+    "code=" ++ String.fromInt (StatusCode.code sc) ++ " client=" ++ ToString.fromBool (StatusCode.isClientError sc)
+
+
+serverLine : String
+serverLine =
+    let
+        sc =
+            StatusCode.fromInt 500
+    in
+    "code=" ++ String.fromInt (StatusCode.code sc) ++ " server=" ++ ToString.fromBool (StatusCode.isServerError sc)
+
+
+-- Classifiers are mutually exclusive: 200 is NOT a redirect/client/server error.
+negLine : String
+negLine =
+    let
+        sc =
+            StatusCode.fromInt 200
+    in
+    "neg=" ++ ToString.fromBool (StatusCode.isRedirect sc || StatusCode.isClientError sc || StatusCode.isServerError sc)
+
+
+main =
+    Io.println
+        (String.join "\n"
+            [ okLine
+            , redirectLine
+            , clientLine
+            , serverLine
+            , negLine
+            ]
+        )

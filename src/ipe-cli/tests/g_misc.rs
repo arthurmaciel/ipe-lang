@@ -58,6 +58,8 @@ mod golden_ffi_kernel_alias_seal;
 mod golden_ffi_nonclone_handle_reuse_seal;
 #[path = "g_misc/golden_harness_coverage.rs"]
 mod golden_harness_coverage;
+#[path = "g_misc/golden_http_statuscode_imagesrc_seal.rs"]
+mod golden_http_statuscode_imagesrc_seal;
 #[path = "g_misc/golden_if_expr.rs"]
 mod golden_if_expr;
 #[path = "g_misc/golden_l0105_refutable_gates.rs"]

@@ -37,6 +37,7 @@ Each module listed below links to a detail page with the full documentation and 
 - [Html.Attributes](#htmlattributes)
 - [Html.Unsafe](#htmlunsafe)
 - [Http](#http)
+- [Http.StatusCode](#httpstatuscode)
 - [Io](#io)
 - [Js](#js)
 - [Level](#level)
@@ -73,6 +74,7 @@ Each module listed below links to a detail page with the full documentation and 
 - [Ui.Chart](#uichart)
 - [Ui.Events](#uievents)
 - [Ui.Grid](#uigrid)
+- [Ui.ImageSrc](#uiimagesrc)
 - [Ui.Responsive](#uiresponsive)
 - [Ui.Transform](#uitransform)
 - [Ui.Transition](#uitransition)
@@ -1159,6 +1161,22 @@ Ipe.Http — outbound HTTP client.
 | `withTimeout` | (no summary) |
 | `withUrl` | `withUrl url req` — retarget an existing request to a typed `Url`. Like |
 
+## Http.StatusCode
+
+[Full reference](stdlib/Http.StatusCode.md)
+
+Ipe.Http.StatusCode — a typed HTTP response status code (Layer 3 Ipe source).
+
+| Export | Summary |
+|--------|----------|
+| `StatusCode` | An opaque HTTP status code.  Any received integer is valid; the constructor |
+| `fromInt` | `fromInt n` — wrap any `Int` as a `StatusCode`.  Total: every integer is a |
+| `code` | `code sc` — recover the raw integer for logging, comparison, or forwarding. |
+| `isSuccess` | `isSuccess sc` — true when the code is in the 2xx range (200–299). |
+| `isRedirect` | `isRedirect sc` — true when the code is in the 3xx range (300–399). |
+| `isClientError` | `isClientError sc` — true when the code is in the 4xx range (400–499). |
+| `isServerError` | `isServerError sc` — true when the code is in the 5xx range (500–599). |
+
 ## Io
 
 [Full reference](stdlib/Io.md)
@@ -1843,7 +1861,7 @@ Ipe.Ui — element / attribute / colour / layout surface.
 | `input` | `input attrs` — an `<input>` void element. |
 | `button` | `button attrs { onPress, label }` — a `<button>` with an optional press msg. |
 | `link` | `link attrs { url, label }` — an `<a href=…>` link. |
-| `image` | `image attrs { src, description }` — an `<img src=… alt=…>`. |
+| `image` | `image attrs { src, description }` — an `<img src=… alt=…>`.  `src` is a |
 | `spacing` | (no summary) |
 | `padding` | (no summary) |
 | `paddingXY` | (no summary) |
@@ -2047,6 +2065,19 @@ Ipe.Ui.Grid — explicit CSS-grid track lists for `Ipe.Ui`.
 | `tracks` | (no summary) |
 | `columns` | (no summary) |
 | `rows` | (no summary) |
+
+## Ui.ImageSrc
+
+[Full reference](stdlib/Ui.ImageSrc.md)
+
+Ipe.Ui.ImageSrc — a typed image source (Layer 3 Ipe source).
+
+| Export | Summary |
+|--------|----------|
+| `ImageSrc` | An opaque image source: either a remote URL or an inline data URI. |
+| `url` | `url u` — a remote image identified by a validated `Ipe.Url.Url`. |
+| `data` | `data { mime, base64 }` — an inline image from base64-encoded bytes. |
+| `toAttributeValue` | `toAttributeValue src` — the string for an HTML `src` attribute. |
 
 ## Ui.Responsive
 

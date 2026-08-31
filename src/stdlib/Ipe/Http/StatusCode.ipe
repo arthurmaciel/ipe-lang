@@ -1,0 +1,93 @@
+-- | Ipe.Http.StatusCode — a typed HTTP response status code (Layer 3 Ipe source).
+--
+-- A `StatusCode` wraps the raw integer code returned by `HttpResponse.status`.
+-- Any received integer is a valid status code (the set is open: servers may
+-- return non-standard codes), so there is no rejection boundary — `fromInt` is
+-- always `Ok` by construction.  The typed wrapper prevents treating a status
+-- code as an arbitrary integer (arithmetic, string formatting) while still
+-- giving safe classification access.
+--
+-- Build from a raw `Int` with `fromInt`; recover the raw value with `code`.
+-- Use the four classifiers (`isSuccess`, `isRedirect`, `isClientError`,
+-- `isServerError`) to branch on the status class without touching the raw number.
+--
+-- Typical use inside an `Ipe.Http` callback:
+--
+--     case Http.statusCode resp of
+--         sc ->
+--             if StatusCode.isSuccess sc then
+--                 -- handle 2xx
+--             else if StatusCode.isClientError sc then
+--                 -- handle 4xx
+--             else
+--                 ...
+module Ipe.Http.StatusCode exposing
+    ( StatusCode
+    , fromInt
+    , code
+    , isSuccess
+    , isRedirect
+    , isClientError
+    , isServerError
+    )
+
+
+-- | An opaque HTTP status code.  Any received integer is valid; the constructor
+-- is NOT exported so a bare `Int` cannot accidentally be used as a `StatusCode`.
+type StatusCode
+    = StatusCode Int
+
+
+-- | `fromInt n` — wrap any `Int` as a `StatusCode`.  Total: every integer is a
+-- valid status code (no rejection, no `Result`).
+fromInt : Int -> StatusCode
+fromInt n =
+    StatusCode n
+
+
+-- | `code sc` — recover the raw integer for logging, comparison, or forwarding.
+code : StatusCode -> Int
+code sc =
+    case sc of
+        StatusCode n ->
+            n
+
+
+-- | `isSuccess sc` — true when the code is in the 2xx range (200–299).
+isSuccess : StatusCode -> Bool
+isSuccess sc =
+    let
+        n =
+            code sc
+    in
+    n >= 200 && n <= 299
+
+
+-- | `isRedirect sc` — true when the code is in the 3xx range (300–399).
+isRedirect : StatusCode -> Bool
+isRedirect sc =
+    let
+        n =
+            code sc
+    in
+    n >= 300 && n <= 399
+
+
+-- | `isClientError sc` — true when the code is in the 4xx range (400–499).
+isClientError : StatusCode -> Bool
+isClientError sc =
+    let
+        n =
+            code sc
+    in
+    n >= 400 && n <= 499
+
+
+-- | `isServerError sc` — true when the code is in the 5xx range (500–599).
+isServerError : StatusCode -> Bool
+isServerError sc =
+    let
+        n =
+            code sc
+    in
+    n >= 500 && n <= 599
