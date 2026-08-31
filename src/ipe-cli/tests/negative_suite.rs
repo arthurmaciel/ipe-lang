@@ -1619,6 +1619,20 @@ fn type_non_exhaustive_case() {
     assert_rejected("type_non_exhaustive", &src, "IPE-T0010");
 }
 
+/// A tuple `case` whose arms use refutable list-pattern columns is still
+/// exhaustiveness-checked: dropping the empty-list possibility on a
+/// `( List Int, List Int )` scrutinee is non-exhaustive. The lowerer synthesises
+/// a literal-tuple scrutinee for such cases, but exhaustiveness (IPE-T0010) runs
+/// BEFORE lowering, so the missing `([], _)` branch is rejected, never emitted.
+#[test]
+fn type_non_exhaustive_tuple_refutable_column() {
+    let src = format!(
+        "{HEAD}firstOrNothing : ( List Int, List Int ) -> Int\n\
+         firstOrNothing pair =\n    case pair of\n        ( [ x ], _ ) -> x\n"
+    );
+    assert_rejected("type_non_exhaustive_tuple_refutable", &src, "IPE-T0010");
+}
+
 /// A `case` over a Prelude built-in ADT (`ErrorKind` NESTED under `Maybe`) that
 /// omits variants must be caught as non-exhaustive at `ipe` time (IPE-T0010),
 /// not slip to cargo as E0004. Guards CO-TYPES-001 — `types::exhaust` must
