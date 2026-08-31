@@ -29,9 +29,10 @@ specialises.
 boolAttribute : String -> Bool -> Attribute msg
 ```
 
-`boolAttribute key on` — a boolean HTML attribute (emitted bare when `on`
-is `True`, omitted otherwise). The one bool-valued `Attribute` constructor
-every fixed-key bool builder below specialises.
+`boolAttribute key on` — a boolean HTML attribute. When `on` is `True`,
+renders as `key="true"`; when `False`, the attribute is omitted entirely.
+The one bool-valued `Attribute` constructor every fixed-key bool builder
+below specialises.
 
 ## `noAttr`
 
