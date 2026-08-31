@@ -135,6 +135,45 @@ fn web_fixture_image(description: &str) -> String {
     )
 }
 
+/// A `Web.app` whose view carries a direct `Ipe.Css` value literal reaching the
+/// `CssSafety.safeValue` sanitizer — the one `Ipe.Css` value sink that lowers to
+/// Rust. `safeValue "<value>"` is a direct literal, so under the flag it hoists
+/// into the view's `LiteralTable` while the runtime `safe_value` wrapper is kept
+/// (re-sanitize-on-read). Its sanitized result is rendered into a `data-css`
+/// attribute so an HTTP read confirms the served CSS value. A marker text
+/// confirms the app is up.
+fn web_fixture_css(value: &str) -> String {
+    format!(
+        "module Main exposing (main)\n\n\
+         import Ipe.Tea.Web as Web\n\
+         import Ipe.Ui as Ui\n\
+         import Ipe.Tea.Web.Cmd\n\
+         import Ipe.Tea.Web.Sub\n\
+         import Ipe.CssSafety exposing (safeValue)\n\
+         import Ipe.Maybe as Maybe\n\n\
+         type alias Model = {{ count : Int }}\n\n\
+         type Msg = Noop\n\n\
+         init : a -> ( Model, Cmd Msg )\n\
+         init _req =\n    \
+             ( {{ count = 0 }}, Cmd.none )\n\n\
+         update : Msg -> Model -> ( Model, Cmd Msg )\n\
+         update _msg model =\n    \
+             ( model, Cmd.none )\n\n\
+         view : Model -> Element Msg\n\
+         view _model =\n    \
+             Ui.column [ Ui.htmlAttribute \"data-css\" (Maybe.withDefault \"none\" (safeValue \"{value}\")) ]\n        \
+                 [ Ui.text \"marker\" ]\n\n\
+         subscriptions : Model -> Sub Msg\n\
+         subscriptions _model =\n    \
+             Sub.none\n\n\
+         main =\n    \
+             Web.app\n        \
+                 {{ init = init, update = update, view = view, subscriptions = subscriptions\n        \
+                 , routes = [], notFound = Noop\n        \
+                 }}\n",
+    )
+}
+
 fn fresh_dirs(tag: &str) -> Result<(PathBuf, PathBuf), BoxError> {
     let base = std::env::temp_dir().join(format!(
         "watch_hot_{tag}_{}_{}",
@@ -602,6 +641,103 @@ fn image_alt_edit_hot_swaps_without_rebuild() -> Result<(), BoxError> {
     assert!(
         restarted,
         "a structural edit (added text node) must recompile and restart onto a new binary"
+    );
+    assert!(
+        wait_for(Duration::from_secs(10), || {
+            sink.count_restarted() > restarts_before_struct
+        }),
+        "a structural edit must recompile and restart (a new Restarted event)"
+    );
+
+    stop_and_join(&handle, join)
+}
+
+/// SEAL for the `Ipe.Css` value slice: a web view carrying a direct
+/// `CssSafety.safeValue` literal cold-builds and serves under the flag (proving
+/// the hoisted `safe_value(__ipe_lit.get(N))` emit cargo-compiles), the served
+/// sanitized value is byte-identical to the flag-off form (dev == prod), and a
+/// css-value edit hot-swaps without a rebuild while a structural edit recompiles.
+#[test]
+#[cfg(target_os = "linux")]
+fn css_value_edit_hot_swaps_and_is_byte_identical() -> Result<(), BoxError> {
+    if std::env::var("IPE_E2E").is_err() {
+        eprintln!("skipping (set IPE_E2E=1 to run)");
+        return Ok(());
+    }
+    // SAFETY: single-threaded at this point (no watch thread spawned yet), and no
+    // other code in this isolated test process reads or writes this var.
+    unsafe {
+        std::env::set_var("IPE_WATCH_HOT_APPEARANCE", "1");
+    }
+
+    let (ipe_dir, out_dir) = fresh_dirs("css")?;
+    write_main(&ipe_dir, &web_fixture_css("16px"))?;
+
+    let sink = EventSink::default();
+    let port = 19174;
+    let (join, handle) = start_watch(&ipe_dir.join("Main.ipe"), &out_dir, port, &sink)?;
+
+    assert!(
+        wait_for_serving(port, Duration::from_mins(4)),
+        "the flag-on cold build of a Css-value view must serve (hoisted safe_value compiles)"
+    );
+    assert!(
+        wait_for(Duration::from_secs(10), || sink.count_restarted() >= 1),
+        "the cold build must record its initial Restarted event"
+    );
+    // dev == prod: the served sanitized value is exactly the source literal (the
+    // sanitizer keeps benign bytes), identical to what a flag-off build renders.
+    assert!(
+        http_get_body(port).is_some_and(|b| b.contains("data-css=\"16px\"")),
+        "the served CSS value must be the sanitized source literal (byte-identical)"
+    );
+    let pid_before = server_pid(port).ok_or("server PID must be discoverable after cold build")?;
+    let restarts_before = sink.count_restarted();
+
+    // ── Css-value edit: 16px -> 24px. Appearance-only ⇒ hot-swap, no rebuild. ──
+    write_main(&ipe_dir, &web_fixture_css("24px"))?;
+    let swap_start = Instant::now();
+    let hot_swapped = wait_for(Duration::from_secs(20), || sink.count_hot_swapped() > 0);
+    assert!(
+        hot_swapped,
+        "a Css-value edit must be hot-swapped (AppearanceHotSwapped), not recompiled"
+    );
+    std::thread::sleep(Duration::from_secs(2));
+    assert_eq!(
+        sink.count_restarted(),
+        restarts_before,
+        "a hot-swapped Css-value edit must NOT restart the app (no cargo rebuild)"
+    );
+    assert_eq!(
+        server_pid(port),
+        Some(pid_before),
+        "a hot-swapped Css-value edit must leave the SAME server process running"
+    );
+    assert!(
+        http_get_body(port).is_some_and(|b| b.contains("marker")),
+        "the app must keep serving after the Css-value hot-swap"
+    );
+    eprintln!(
+        "[measure] Css value 16px->24px hot-swap round-trip: {} ms (no cargo, no restart)",
+        swap_start.elapsed().as_millis()
+    );
+
+    // ── Structural edit: add an element. Logic ⇒ recompile + restart. ──
+    let restarts_before_struct = sink.count_restarted();
+    write_main(
+        &ipe_dir,
+        &web_fixture_css("24px").replace(
+            "Ui.text \"marker\" ]",
+            "Ui.text \"marker\", Ui.text \"added\" ]",
+        ),
+    )?;
+    let restarted = wait_for(Duration::from_mins(2), || {
+        server_pid(port).is_some_and(|pid| pid != pid_before)
+            && http_get_body(port).is_some_and(|b| b.contains("added"))
+    });
+    assert!(
+        restarted,
+        "a structural edit (added element) must recompile and restart onto a new binary"
     );
     assert!(
         wait_for(Duration::from_secs(10), || {

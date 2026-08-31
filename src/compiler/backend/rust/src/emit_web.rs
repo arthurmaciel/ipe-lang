@@ -1884,27 +1884,110 @@ mod hot_appearance_tests {
         Ok(())
     }
 
-    /// `Ipe.Css` is deferred: its value sanitizer `CssSafety.safeValue` is a
-    /// `Pure` kernel emitted through the generic kernel-call path, not this
-    /// UI-plan hoist site, so it does NOT hoist here (it recompiles) — and the
-    /// registry has no dead arm for it. The selector sanitizer stays out
-    /// permanently (a selector is structure, not appearance). Wiring the generic
-    /// path is a distinct guardian-gated follow-up.
+    /// `Ipe.Css`'s value sanitizer `CssSafety.safeValue` is a `Pure` kernel, so
+    /// it emits on the generic kernel-call path, NOT the UI-plan positional hoist
+    /// site — hence it carries no registry arm (an arm would be dead). Its
+    /// appearance hot-swap is wired at the generic path instead: a direct SAFE
+    /// literal hoists into the view's table while the runtime `safe_value`
+    /// wrapper is preserved (re-sanitize-on-read). Conformance: the baked default
+    /// is the original bytes (the policy keeps them on success), so flag-on and
+    /// flag-off render byte-identically through the same `safe_value` call.
     #[test]
-    fn css_kernels_are_not_appearance_hoist_consumers() -> DResult<()> {
+    fn css_safe_value_hoists_through_generic_path() -> DResult<()> {
         let mut interner = Interner::new();
         let (program, view) = one_view_program(
             &mut interner,
             str_arg_call(KernelFn::CssSafetySafeValue, "16px"),
         )?;
-        let on = emit_view(&interner, &program, &view, true)?;
+        let off = emit_view(&interner, &program, &view, false)?;
         assert!(
-            !on.contains("__ipe_lit"),
-            "the Css value sanitizer must not hoist through the UI-plan path (deferred), got:\n{on}"
+            !off.contains("__ipe_lit"),
+            "flag-off emit must introduce no literal table, got:\n{off}"
         );
+        assert!(
+            off.contains("safe_value(\"16px\""),
+            "flag-off emit must carry the direct sanitizer call, got:\n{off}"
+        );
+        let on = emit_view(&interner, &program, &view, true)?;
+        // The baked default is the ORIGINAL safe bytes (dev == prod) …
+        assert!(
+            on.contains(&format!("from_defaults(&[{:?}])", "16px")),
+            "flag-on emit must bake the safe value as a default, got:\n{on}"
+        );
+        // … read back inside the preserved `safe_value(…)` wrapper, so the slot
+        // is re-sanitized at render — the hoist cannot bypass CssSafety.
+        assert!(
+            on.contains("safe_value(__ipe_lit.get(0).to_string())"),
+            "the hoisted value must be read INSIDE the safe_value wrapper, got:\n{on}"
+        );
+        // The registry arm stays empty (positional-site hoist would be dead).
         assert!(
             crate::emit_ui_plan::appearance_literal_args(KernelFn::CssSafetySafeValue).is_empty(),
             "the Css value sanitizer must carry no dead registry arm"
+        );
+        Ok(())
+    }
+
+    /// REFUSAL (load-bearing): an UN-sanitized CSS value can never reach the
+    /// literal table. The hoist decision runs the SAME `ipe_kernels` policy the
+    /// runtime sanitizer runs; a value the policy rejects (`expression(…)`) is
+    /// NOT hoisted — it falls to the generic tail `safe_value("expression(…)")`,
+    /// which the runtime drops. So the table holds only sanitized values, even
+    /// with the flag ON.
+    #[test]
+    fn css_unsafe_value_never_reaches_the_table() -> DResult<()> {
+        let mut interner = Interner::new();
+        let (program, view) = one_view_program(
+            &mut interner,
+            str_arg_call(KernelFn::CssSafetySafeValue, "expression(alert(1))"),
+        )?;
+        let on = emit_view(&interner, &program, &view, true)?;
+        assert!(
+            !on.contains("__ipe_lit"),
+            "an unsafe CSS value must NOT hoist into the table (flag on), got:\n{on}"
+        );
+        assert!(
+            on.contains("safe_value(\"expression(alert(1))\""),
+            "the unsafe value must emit directly for the runtime to drop, got:\n{on}"
+        );
+        Ok(())
+    }
+
+    /// A Model-dependent (non-literal) CSS value never hoists — only a direct
+    /// string literal is hoist-eligible, so a computed value falls to recompile.
+    #[test]
+    fn css_model_dependent_value_does_not_hoist() -> DResult<()> {
+        let mut interner = Interner::new();
+        // `CssSafety.safeValue (String.toUpper "x")` — the argument is a computed
+        // call, not a direct literal, so it is not hoist-eligible.
+        let body = Expr::Call {
+            callee: Callee::Kernel(KernelFn::CssSafetySafeValue),
+            args: vec![str_arg_call(KernelFn::StringToUpper, "x")],
+            pin: CallPin::None,
+            on_form: OnFormKind::NotForm,
+        };
+        let (program, view) = one_view_program(&mut interner, body)?;
+        let on = emit_view(&interner, &program, &view, true)?;
+        assert!(
+            !on.contains("__ipe_lit"),
+            "a Model-dependent CSS value must not hoist (flag on), got:\n{on}"
+        );
+        Ok(())
+    }
+
+    /// The selector sanitizer (`safeSelector`) is structure, not appearance — it
+    /// never hoists, on any path, and carries no registry arm.
+    #[test]
+    fn css_selector_is_never_an_appearance_hoist_consumer() -> DResult<()> {
+        let mut interner = Interner::new();
+        let (program, view) = one_view_program(
+            &mut interner,
+            str_arg_call(KernelFn::CssSafetySafeSelector, ".card"),
+        )?;
+        let on = emit_view(&interner, &program, &view, true)?;
+        assert!(
+            !on.contains("__ipe_lit"),
+            "a CSS selector must never hoist (structure, not appearance), got:\n{on}"
         );
         assert!(
             crate::emit_ui_plan::appearance_literal_args(KernelFn::CssSafetySafeSelector)

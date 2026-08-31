@@ -1482,7 +1482,8 @@ pub fn call_has_kernel_special_case(
                 || emit_db_call(ctx, callee, args, indent, child, generics)?.is_some()
                 || emit_tea_call(ctx, callee, args, indent, child, generics)?.is_some()
                 || emit_server_call(ctx, callee, args, indent, child, generics)?.is_some()
-                || emit_ui_call(ctx, callee, args, on_form, indent, child, generics)?.is_some(),
+                || emit_ui_call(ctx, callee, args, on_form, indent, child, generics)?.is_some()
+                || emit_css_value_call(ctx, callee, args, indent, child, generics)?.is_some(),
         )
     })();
     ctx.exit_probe();
@@ -3625,6 +3626,81 @@ fn emit_arc_callback_field(
     Ok(format!("{{ {prefix}{arc} }}"))
 }
 
+/// Appearance hot-swap for the one `Ipe.Css` value that reaches Rust: the value
+/// sanitizer `CssSafety.safeValue : String -> Maybe String`, emitted as
+/// `safe_value(<arg>)` on the generic kernel-call path (it is a `Pure` kernel,
+/// not UI-family, so it never reaches the UI-plan positional hoist site).
+///
+/// When the argument is a **direct string literal** in a web build with hoisting
+/// armed, and the literal passes the SHARED CSS-value safety policy
+/// (`ipe_kernels::css_value_is_safe` — the exact decision the runtime sanitizer
+/// makes), the literal is hoisted into the per-view [`LiteralTable`] and the call
+/// becomes `safe_value(__ipe_lit.get(N).to_string())`. Two independent
+/// guarantees keep this as safe as the direct emit:
+///
+/// 1. **Sanitize-before-hoist.** Only a literal the shared policy ACCEPTS is
+///    baked; an unsafe literal returns `None` here and falls to the generic tail
+///    (`safe_value("expression(…)")`, which the runtime drops) — so an
+///    un-sanitized value can never reach the table.
+/// 2. **Re-sanitize-on-read.** The `safe_value(…)` wrapper is preserved verbatim,
+///    so the runtime re-runs the identical policy on whatever the slot holds —
+///    the baked default OR a dev-pushed patch. A hot-swapped value is therefore
+///    gated exactly as a compiled one; the hoist can never bypass `CssSafety`.
+///
+/// Because the policy keeps the caller's ORIGINAL bytes on success, the baked
+/// default is byte-identical to the direct literal, so a prod build (never
+/// patched) renders exactly as the direct emit — dev == prod. Returns `None`
+/// (falls through to the generic tail, byte-identical) for any non-web build,
+/// hoisting-disarmed context, non-literal argument, or unsafe literal.
+///
+/// The selector sanitizer (`safeSelector`) is deliberately absent: a selector is
+/// structure (what a rule targets), not an appearance value, and never hoists.
+fn emit_css_value_call(
+    ctx: &EmitCtx,
+    callee: &Callee,
+    args: &[Expr],
+    indent: usize,
+    child: u16,
+    generics: GenericScope,
+) -> DResult<Option<String>> {
+    let Callee::Kernel(k @ KernelFn::CssSafetySafeValue) = callee else {
+        return Ok(None);
+    };
+    // Only applies to a single direct string literal in a web build; every other
+    // shape (a non-literal / Model-dependent value, a non-web build) returns
+    // `None` so the generic tail emits it exactly as before.
+    let [arg_expr @ Expr::Str(s)] = args else {
+        return Ok(None);
+    };
+    if !ctx.uses_web {
+        return Ok(None);
+    }
+    // Sanitize-before-hoist: only a value the shared policy accepts is
+    // hoist-eligible. An unsafe literal returns `None` so the generic tail emits
+    // `safe_value(<lit>)` verbatim (the runtime drops it) — the table can hold
+    // only sanitized values.
+    if !ipe_kernels::css_value_is_safe(s) {
+        return Ok(None);
+    }
+    let name = kernel_name(*k);
+    // The `safe_value(…)` wrapper is preserved in BOTH forms, so the runtime
+    // re-runs the identical policy on whatever the argument evaluates to (a baked
+    // default OR a dev-pushed patch) — the hoist cannot bypass `CssSafety`.
+    //
+    // Returning `Some` for the applicable case (even when hoisting is disarmed)
+    // keeps this a stable "special case": the classifier
+    // ([`call_has_kernel_special_case`]) probes with hoisting suppressed, so a
+    // hoist-conditional `None` would mis-route the real emit. When disarmed (flag
+    // off, no active body, or inside a `move` closure) the direct literal is
+    // emitted, byte-identical to the generic tail.
+    if let Some(slot) = ctx.hoist_style_literal(s) {
+        Ok(Some(format!("{name}(__ipe_lit.get({slot}).to_string())")))
+    } else {
+        let arg = emit_expr_at(ctx, arg_expr, indent, child, generics)?;
+        Ok(Some(format!("{name}({arg})")))
+    }
+}
+
 /// Handle `Ipe.Ui` / `Ipe.Html` kernel calls.
 ///
 /// Two steps: [`ui_call_shape`] classifies the kernel into a pure
@@ -5528,6 +5604,16 @@ pub fn emit_expr_at(
                 // Ipe.Ui / Ipe.Html / Ipe.Web / Ipe.Tui / Ipe.WebView kernels.
                 if let Some(result) =
                     emit_ui_call(ctx, callee, args, *on_form, indent, child, generics)?
+                {
+                    return Ok(result);
+                }
+                // Ipe.Css value sanitizer (`CssSafety.safeValue`): hoist a direct
+                // safe literal into the view's appearance literal table for the
+                // dev hot-swap, keeping the runtime `safe_value` wrapper so the
+                // slot is always re-sanitized. `None` for anything else → the
+                // generic tail emits `safe_value(<arg>)` unchanged.
+                if let Some(result) =
+                    emit_css_value_call(ctx, callee, args, indent, child, generics)?
                 {
                     return Ok(result);
                 }

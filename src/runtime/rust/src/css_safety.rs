@@ -822,4 +822,39 @@ mod tests {
             );
         }
     }
+
+    /// SSOT anti-drift: the backend hoists a direct `CssSafety.safeValue` literal
+    /// for dev appearance hot-swap iff `ipe_kernels::css_value_is_safe` accepts
+    /// it, and this runtime sanitizer is the authoritative gate the hoisted slot
+    /// is re-run through. Both MUST agree on every value, or a hoisted value could
+    /// be less-gated than a compiled one. This test pins that equivalence across
+    /// the benign + adversarial vectors the value gate is tested on.
+    #[test]
+    fn value_policy_agrees_with_shared_kernel_policy() {
+        for v in [
+            // benign — accepted by both
+            "#ff6600",
+            "8px",
+            "rgba(0,0,0,0.2)",
+            "1px solid #ccc",
+            "translateX(100px)",
+            // adversarial — rejected by both
+            "expression(alert(1))",
+            "0; background:url(javascript:alert(1))",
+            "red</style><script>alert(1)</script>",
+            "url( javascript:alert(1))",
+            "\\65 xpression(alert(1))",
+            "behavior:url(x.htc)",
+            "-moz-binding:url(x)",
+            "a { color: red }",
+            "@import url(x)",
+        ] {
+            assert_eq!(
+                SafeCssValue::parse(v).is_some(),
+                ipe_kernels::css_value_is_safe(v),
+                "runtime SafeCssValue and shared css_value_is_safe disagree on {v:?} \
+                 — the hoist gate and the render gate must be one policy"
+            );
+        }
+    }
 }
