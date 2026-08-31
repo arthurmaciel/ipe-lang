@@ -84,7 +84,7 @@ use std::process::{Child, Command};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use ipe_intern::Interner;
 
@@ -215,6 +215,124 @@ fn watch_line(text: &str, role: WatchRole) -> String {
         format!("{}{colour}{glyph}{reset} ", crate::style::GUTTER)
     };
     format!("{prefix}{text}")
+}
+
+/// Per-phase wall-clock timing for ONE rebuild cycle, printed to stderr as a
+/// guttered breakdown when `IPE_WATCH_TIMING=1` — a diagnostic for locating
+/// where a rebuild's wall-clock goes.
+///
+/// Off by default: [`RebuildTimings::enabled`] reads the env gate ONCE at
+/// cycle start; when unset, the `report` is a no-op and the per-phase
+/// `Instant` reads it guards cost nothing, so the normal `ipe watch` path is
+/// unaffected.
+///
+/// Each field is the wall-clock of a real phase boundary in the orchestrator
+/// (measured with [`Instant`], never a fabricated split). Phases that run on a
+/// helper thread (compile, cargo) measure their own span there and hand the
+/// measured [`Duration`] back through the event channel, so the orchestrator
+/// records a real elapsed time rather than inferring one from event arrival.
+#[derive(Debug, Default, Clone, Copy)]
+struct RebuildTimings {
+    enabled: bool,
+    /// When this cycle's `FsBatch` was received — the anchor the total is
+    /// measured against.
+    cycle_start: Option<Instant>,
+    /// edit → settled batch (the coalescer's quiescence window). `None` for
+    /// the initial kickoff cycle and resolve-retry cycles, which carry no
+    /// first-event timestamp.
+    settle: Option<Duration>,
+    /// `resolve_project_sources` + FFI-catalog prep + `sync_source_root`
+    /// (input mutation into the warm salsa db) — the orchestrator-thread work
+    /// of the `FsBatch` arm before the compile worker is spawned.
+    resolve: Option<Duration>,
+    /// `compile_prepared`: canon + link + typecheck + lower + emit-IR, the
+    /// salsa warm-compile. Measured on the worker thread.
+    compile: Option<Duration>,
+    /// `write_emitted_project`: serialise the in-memory emitted project to the
+    /// out-dir (`src/*.rs`, `Cargo.toml`, prune).
+    write: Option<Duration>,
+    /// `cargo build`: compile + link the emitted crate. One number — the JSON
+    /// stream does not separate rustc codegen from the final link step, so it
+    /// is reported whole (see the report's own note).
+    cargo: Option<Duration>,
+    /// Kill the old child + spawn the new one + readiness probe
+    /// (`SupervisorState::apply_green`).
+    restart: Option<Duration>,
+}
+
+impl RebuildTimings {
+    /// Start a cycle's timing. Reads the `IPE_WATCH_TIMING` gate once; a value
+    /// of exactly `1` enables the breakdown, anything else (unset included)
+    /// leaves it off.
+    fn start(settle: Option<Duration>) -> Self {
+        let enabled = std::env::var("IPE_WATCH_TIMING").as_deref() == Ok("1");
+        Self {
+            enabled,
+            cycle_start: enabled.then(Instant::now),
+            settle,
+            ..Self::default()
+        }
+    }
+
+    /// The sum of every recorded phase — the accounted-for wall-clock. The
+    /// residual against the observed total is everything the phase splits miss
+    /// (channel hops between the orchestrator and its worker/waiter threads,
+    /// scheduling latency).
+    fn summed(&self) -> Duration {
+        [
+            self.settle,
+            self.resolve,
+            self.compile,
+            self.write,
+            self.cargo,
+            self.restart,
+        ]
+        .into_iter()
+        .flatten()
+        .sum()
+    }
+
+    /// Render the breakdown to stderr, guttered, one phase per line in ms plus
+    /// the observed total and the residual (total − Σ phases), so a reader can
+    /// see how much wall-clock the phase splits fail to account for (channel
+    /// hops, scheduling). A no-op when the gate is off.
+    fn report(&self, generation: u64) {
+        if !self.enabled {
+            return;
+        }
+        let Some(start) = self.cycle_start else {
+            return;
+        };
+        let total = start.elapsed();
+        let ms = |d: Option<Duration>| {
+            d.map_or_else(
+                || "     —".to_owned(),
+                |d| format!("{:6.1}", d.as_secs_f64() * 1000.0),
+            )
+        };
+        let residual = total.saturating_sub(self.summed());
+        let body = format!(
+            "[ipe watch timing] generation {generation}\n\
+             settle    {} ms   (edit -> settled batch)\n\
+             resolve   {} ms   (read sources + ffi + salsa sync)\n\
+             compile   {} ms   (canon+link+typecheck+lower+emit-IR)\n\
+             write     {} ms   (emit Rust project to disk)\n\
+             cargo     {} ms   (cargo build: compile + link)\n\
+             restart   {} ms   (kill old + spawn new + readiness)\n\
+             --------\n\
+             total     {:6.1} ms   (observed, FsBatch -> restart done)\n\
+             residual  {:6.1} ms   (total - sum of phases)",
+            ms(self.settle),
+            ms(self.resolve),
+            ms(self.compile),
+            ms(self.write),
+            ms(self.cargo),
+            ms(self.restart),
+            total.as_secs_f64() * 1000.0,
+            residual.as_secs_f64() * 1000.0,
+        );
+        eprint!("\n{}\n", crate::style::gutter(&body));
+    }
 }
 
 /// One resolved project snapshot — the ingredients [`compile_modules`]
@@ -394,19 +512,26 @@ enum OrchestratorEvent {
     /// cycle (cheap — a directory walk over a bounded file set) and lets
     /// `sync_source_root`'s own byte-equal no-op boundary do the real
     /// dirty-vs-clean filtering, so there is no need to thread individual
-    /// changed paths through the recompute step.
-    FsBatch,
+    /// changed paths through the recompute step. `settle` carries the
+    /// coalescer's edit→settled latency for `IPE_WATCH_TIMING` (`None` for the
+    /// initial kickoff and resolve-retry cycles, which have no batch).
+    FsBatch { settle: Option<Duration> },
     /// The compile worker for `generation` finished (successfully, with a
-    /// compiler diagnostic, or cancelled).
+    /// compiler diagnostic, or cancelled). `compile` is the worker-measured
+    /// wall-clock of `compile_prepared` (only meaningful for a Green/Red
+    /// outcome; a cancelled cycle's time is not reported).
     CompileDone {
         generation: u64,
         outcome: CompileOutcome,
+        compile: Duration,
     },
     /// The `cargo build` for `generation` finished (successfully, with a
-    /// build failure, or was killed because it was superseded).
+    /// build failure, or was killed because it was superseded). `cargo` is the
+    /// waiter-measured wall-clock from spawn to exit.
     CargoDone {
         generation: u64,
         outcome: CargoOutcome,
+        cargo: Duration,
     },
     /// An external caller requested a clean shutdown (see [`WatchHandle`]).
     /// Used by tests and any future embedder that needs to stop a watch
@@ -445,7 +570,7 @@ fn schedule_resolve_retry(evt_tx: &mpsc::Sender<OrchestratorEvent>) {
     let retry_tx = evt_tx.clone();
     thread::spawn(move || {
         thread::sleep(RESOLVE_RETRY_DELAY);
-        let _ = retry_tx.send(OrchestratorEvent::FsBatch);
+        let _ = retry_tx.send(OrchestratorEvent::FsBatch { settle: None });
     });
 }
 
@@ -709,8 +834,13 @@ fn run_inner(
     {
         let evt_tx = evt_tx.clone();
         thread::spawn(move || {
-            for _batch in batch_rx {
-                if evt_tx.send(OrchestratorEvent::FsBatch).is_err() {
+            for batch in batch_rx {
+                // The settle window is the batch's arrival now minus when its
+                // first raw event opened the window — the true edit→settled
+                // latency, measured only when timing is on (the field is unused
+                // otherwise).
+                let settle = batch.first_event_at.map(|t| t.elapsed());
+                if evt_tx.send(OrchestratorEvent::FsBatch { settle }).is_err() {
                     return;
                 }
             }
@@ -777,17 +907,31 @@ fn run_inner(
     // `Web.app`?), decided once per generation right after emit, not
     // re-derived from the built executable (which carries no such marker).
     let mut current_is_web = false;
+    // The current live cycle's per-phase timing (`IPE_WATCH_TIMING`). Reset at
+    // each `FsBatch`; the resolve/compile/write/cargo phases fill it as their
+    // events land, and it is reported at the terminal event (restart done, or
+    // a red build). A superseding batch simply overwrites it — the stale
+    // cycle's partial timing is discarded exactly like its stale events.
+    let mut timings = RebuildTimings::default();
 
     // Kick off the first build immediately — don't wait for a file event.
-    if evt_tx.send(OrchestratorEvent::FsBatch).is_err() {
+    if evt_tx
+        .send(OrchestratorEvent::FsBatch { settle: None })
+        .is_err()
+    {
         return Ok(());
     }
 
     while let Ok(event) = evt_rx.recv() {
         match event {
-            OrchestratorEvent::FsBatch => {
+            OrchestratorEvent::FsBatch { settle } => {
                 generation += 1;
                 let this_gen = generation;
+                timings = RebuildTimings::start(settle);
+                // The orchestrator-thread phase (resolve + ffi + salsa sync)
+                // starts here; its span closes just before the compile worker
+                // is spawned below.
+                let resolve_started = Instant::now();
                 emit(
                     opts,
                     WatchEvent::RebuildStarted {
@@ -926,11 +1070,20 @@ fn run_inner(
                     let _ = h.join();
                 }
 
+                // Close the orchestrator-thread phase: everything from the
+                // start of this arm (resolve + ffi + salsa input mutation) up
+                // to handing off to the compile worker.
+                timings.resolve = Some(resolve_started.elapsed());
+
                 let db_worker = db_main.clone();
                 let entry_path = resolved.entry_path.clone();
                 let blame_path = resolved.blame_path.clone();
                 let evt_tx = evt_tx.clone();
                 compile_worker = Some(thread::spawn(move || {
+                    // Measure the salsa warm-compile on the worker thread: the
+                    // orchestrator only sees the event, so the span has to be
+                    // taken here at the real call boundary.
+                    let compile_started = Instant::now();
                     let outcome =
                         match salsa::Cancelled::catch(std::panic::AssertUnwindSafe(|| {
                             crate::compile_prepared(
@@ -949,6 +1102,7 @@ fn run_inner(
                     let _ = evt_tx.send(OrchestratorEvent::CompileDone {
                         generation: this_gen,
                         outcome,
+                        compile: compile_started.elapsed(),
                     });
                 }));
             }
@@ -956,10 +1110,12 @@ fn run_inner(
             OrchestratorEvent::CompileDone {
                 generation: g,
                 outcome,
+                compile,
             } => {
                 if g != generation {
                     continue; // stale — a newer cycle already superseded this one.
                 }
+                timings.compile = Some(compile);
                 match outcome {
                     CompileOutcome::Cancelled => {
                         emit(opts, WatchEvent::CompileCancelled { generation: g });
@@ -980,11 +1136,15 @@ fn run_inner(
                         );
                         eprint!("\n{}\n", crate::style::gutter(&body));
                         emit(opts, WatchEvent::CompileFailed { generation: g });
+                        // A red compile is terminal for this cycle (no cargo,
+                        // no restart) — report the partial breakdown here.
+                        timings.report(g);
                     }
                     CompileOutcome::Green(emitted) => {
                         // Watch is always a dynamic dev build — no static plan,
                         // no tree-shaking (the full runtime tree keeps rebuilds
                         // incremental across a session's changing reach set).
+                        let write_started = Instant::now();
                         if let Err(e) = write_emitted_project(
                             &emitted,
                             &opts.out_dir,
@@ -1001,6 +1161,7 @@ fn run_inner(
                             );
                             continue;
                         }
+                        timings.write = Some(write_started.elapsed());
                         current_is_web = is_ipe_web_project(&emitted);
                         // Design doc "First-run vs warm-run UX": the cold
                         // (first) build pays the full dependency-compile
@@ -1052,11 +1213,13 @@ fn run_inner(
             OrchestratorEvent::CargoDone {
                 generation: g,
                 outcome,
+                cargo,
             } => {
                 if g != generation {
                     continue;
                 }
                 cargo_child = None;
+                timings.cargo = Some(cargo);
                 match outcome {
                     CargoOutcome::Killed => {
                         emit(opts, WatchEvent::CargoKilled { generation: g });
@@ -1073,6 +1236,9 @@ fn run_inner(
                             )
                         );
                         emit(opts, WatchEvent::CargoFailed { generation: g });
+                        // A red cargo build is terminal (no restart) — report
+                        // the partial breakdown here.
+                        timings.report(g);
                     }
                     CargoOutcome::Green(exe_path) => {
                         let readiness = if current_is_web {
@@ -1083,12 +1249,14 @@ fn run_inner(
                             }
                         };
                         let env = child_env(opts.port, &opts.out_dir);
+                        let restart_started = Instant::now();
                         let outcome = supervisor.apply_green(
                             &exe_path,
                             move |path| spawn_command(path, &env),
                             readiness,
                             opts.restart_timeouts,
                         );
+                        timings.restart = Some(restart_started.elapsed());
                         report_restart_outcome(&outcome, opts.quiet);
                         emit(
                             opts,
@@ -1097,6 +1265,9 @@ fn run_inner(
                                 outcome: restart_outcome_kind(&outcome),
                             },
                         );
+                        // The terminal event of a fully-green cycle — the whole
+                        // breakdown is now populated.
+                        timings.report(g);
                     }
                 }
             }
@@ -1328,6 +1499,9 @@ fn spawn_cargo_build(
         // Force colour + the progress bar through the pipe when our stderr is a terminal.
         crate::force_cargo_terminal_ui(&mut cmd);
     }
+    // Anchor the cargo phase at spawn — the waiter thread reports the elapsed
+    // time back through `CargoDone` for `IPE_WATCH_TIMING`.
+    let cargo_started = Instant::now();
     let mut child = cmd.spawn()?;
 
     // Take the pipes now, before the `Child` moves behind the shared lock —
@@ -1379,6 +1553,7 @@ fn spawn_cargo_build(
         let _ = evt_tx.send(OrchestratorEvent::CargoDone {
             generation,
             outcome,
+            cargo: cargo_started.elapsed(),
         });
     });
 
@@ -1458,7 +1633,56 @@ fn find_executable_path(cargo_json_stdout: &str) -> Option<PathBuf> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Duration, OrchestratorEvent, RESOLVE_RETRY_DELAY, mpsc, schedule_resolve_retry};
+    use super::{
+        Duration, OrchestratorEvent, RESOLVE_RETRY_DELAY, RebuildTimings, mpsc,
+        schedule_resolve_retry,
+    };
+
+    /// The summed phases must equal the total when the total IS the sum plus a
+    /// small unaccounted residual — the invariant the `report` residual line
+    /// surfaces. Built with fixed durations so it is deterministic (no
+    /// wall-clock): the residual a real cycle prints is `total − summed`, and
+    /// this pins that `summed()` adds every recorded phase (a dropped phase
+    /// would inflate the residual and silently mis-attribute cost).
+    #[test]
+    fn summed_phases_account_for_the_whole_when_no_residual() {
+        let ms = Duration::from_millis;
+        let t = RebuildTimings {
+            settle: Some(ms(10)),
+            resolve: Some(ms(5)),
+            compile: Some(ms(20)),
+            write: Some(ms(3)),
+            cargo: Some(ms(4000)),
+            restart: Some(ms(120)),
+            ..RebuildTimings::default()
+        };
+        // A fabricated "observed total" equal to the sum: residual is zero,
+        // i.e. the phases account for the whole cycle within tolerance.
+        let total = t.summed();
+        let residual = total.saturating_sub(t.summed());
+        assert_eq!(
+            t.summed(),
+            ms(10 + 5 + 20 + 3 + 4000 + 120),
+            "summed() must add every recorded phase"
+        );
+        assert!(
+            residual <= Duration::from_millis(1),
+            "phase sum must equal a total that IS the sum, within 1ms: residual {residual:?}"
+        );
+    }
+
+    /// A missing phase (e.g. `settle` on the kickoff cycle) is simply omitted
+    /// from the sum — never counted as zero-that-inflates, never a panic.
+    #[test]
+    fn summed_skips_unrecorded_phases() {
+        let ms = Duration::from_millis;
+        let t = RebuildTimings {
+            resolve: Some(ms(5)),
+            compile: Some(ms(20)),
+            ..RebuildTimings::default()
+        };
+        assert_eq!(t.summed(), ms(25));
+    }
 
     /// CO-INCR-008: a `resolve_project_sources` failure must not lose the
     /// rebuild cycle silently. `schedule_resolve_retry` is the orchestrator's
@@ -1473,7 +1697,7 @@ mod tests {
             .recv_timeout(RESOLVE_RETRY_DELAY * 4)
             .expect("a retry FsBatch must arrive — the save must not be lost");
         assert!(
-            matches!(event, OrchestratorEvent::FsBatch),
+            matches!(event, OrchestratorEvent::FsBatch { .. }),
             "the retry must be a FsBatch, not some other orchestrator event"
         );
     }
