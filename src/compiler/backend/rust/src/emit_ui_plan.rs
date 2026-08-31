@@ -241,6 +241,68 @@ pub const fn style_literal_arg_positions(k: KernelFn) -> &'static [usize] {
     }
 }
 
+/// The `Int`-valued style-kernel allowlist for dev appearance hot-swap.
+///
+/// The typed analogue of [`style_literal_arg_positions`]: a literal `Int`
+/// passed *directly* to one of these kernels, in one of the returned argument
+/// positions, is an inert numeric **style value** — a padding/spacing amount, a
+/// font/border size, a length, or an `rgb`/`rgba` colour channel — that feeds
+/// rendering and depends on no `Model` value and no control flow. These are the
+/// dominant appearance edits (`padding 12 -> 16`, a colour channel tweak).
+///
+/// Only the plain-positional style kernels appear here. The per-corner variants
+/// (`Ui.paddingEach`, `Border.widthEach`) build their call through a bespoke
+/// native emitter, not the positional-hoist path, so they are covered by a later
+/// step rather than silently listed and never hoisted.
+///
+/// The table stays `String`-only: an eligible `Int` literal `n` is hoisted as
+/// its canonical decimal string (`n.to_string()`) — exactly the numeric constant
+/// the style ultimately renders — and the call site reads it back via
+/// `get(idx).parse::<i64>().unwrap_or(n)`. The baked default parses to the same
+/// `i64`, so the built `Attribute`/`Color` and its rendered CSS are identical to
+/// the direct emit (dev == prod); the total `unwrap_or` fallback is the original
+/// literal, so a stale or malformed patch can never change the built value type
+/// or panic.
+///
+/// Returned positions are 0-based indices into the kernel's direct arguments. A
+/// kernel absent from this table has no `Int`-hoist-eligible position. `Length`
+/// and `Color` kernels whose arg is a *nested call* (`Ui.px n`, `Ui.rgb r g b`)
+/// are covered by hoisting the inner `Int` args of that call, not the outer
+/// kernel — the outer arg is not a direct literal and is correctly excluded.
+pub const fn style_int_literal_arg_positions(k: KernelFn) -> &'static [usize] {
+    match k {
+        // Single-`Int` style kernels: a spacing/padding amount, a font/border
+        // size, or a `Length` constructor carrying pixels (`Ui.px n`,
+        // `Ui.fillPortion n`).
+        KernelFn::UiSpacing
+        | KernelFn::UiPadding
+        | KernelFn::FontSize
+        | KernelFn::BorderWidth
+        | KernelFn::BorderRounded
+        | KernelFn::UiPx
+        | KernelFn::UiFillPortion => &[0],
+        KernelFn::UiPaddingXY => &[0, 1],
+        // Colour channels (`Int` 0..=255) of an `rgb`/`rgba` literal. `rgba`'s
+        // alpha (position 3) is a `Float`, handled by the float allowlist.
+        KernelFn::UiRgb | KernelFn::UiRgba => &[0, 1, 2],
+        _ => &[],
+    }
+}
+
+/// The `Float`-valued style-kernel allowlist for dev appearance hot-swap.
+///
+/// The `Float` sibling of [`style_int_literal_arg_positions`]. Currently the one
+/// entry is an `rgba` alpha channel: a literal `Float` colour opacity. Hoisted
+/// as its `String.fromFloat`-canonical string and read back via
+/// `get(idx).parse::<f64>().unwrap_or(f)`, same dev == prod / total-fallback
+/// guarantees as the `Int` path.
+pub const fn style_float_literal_arg_positions(k: KernelFn) -> &'static [usize] {
+    match k {
+        KernelFn::UiRgba => &[3],
+        _ => &[],
+    }
+}
+
 /// Classify one kernel into its emit plan.
 ///
 /// Returns `None` for a non-UI-family kernel, preserving the caller's

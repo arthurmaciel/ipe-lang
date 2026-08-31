@@ -1456,4 +1456,190 @@ mod hot_appearance_tests {
         );
         Ok(())
     }
+
+    // ── Typed style values (Int / Float — padding, colour channels) ───────────
+
+    /// `Ui.padding 16` — a single hoist-eligible typed `Int` style literal.
+    fn padding_call(n: i64) -> Expr {
+        Expr::Call {
+            callee: Callee::Kernel(KernelFn::UiPadding),
+            args: vec![Expr::Int(n)],
+            pin: CallPin::None,
+            on_form: OnFormKind::NotForm,
+        }
+    }
+
+    /// A `padding` literal with the flag OFF emits the direct `i64` argument and
+    /// no table — byte-identical to today's typed-style emit.
+    #[test]
+    fn typed_padding_flag_off_emits_direct_int() -> DResult<()> {
+        let mut interner = Interner::new();
+        let (program, view) = one_view_program(&mut interner, padding_call(16))?;
+        let out = emit_view(&interner, &program, &view, false)?;
+        assert!(
+            out.contains("ui_padding_(16i64)"),
+            "flag-off emit must carry the direct i64 literal, got:\n{out}"
+        );
+        assert!(
+            !out.contains("__ipe_lit"),
+            "flag-off emit must introduce no literal table, got:\n{out}"
+        );
+        Ok(())
+    }
+
+    /// With the flag ON a `padding` literal hoists: the table bakes the canonical
+    /// decimal string and the call site reads it back via a total `parse` whose
+    /// fallback is the original literal — so the built `Attribute` and its CSS are
+    /// identical to the direct emit (dev == prod), and no patch can panic.
+    #[test]
+    fn typed_padding_flag_on_hoists_and_reparses() -> DResult<()> {
+        let mut interner = Interner::new();
+        let (program, view) = one_view_program(&mut interner, padding_call(16))?;
+        let out = emit_view(&interner, &program, &view, true)?;
+        assert!(
+            out.contains(
+                "let __ipe_lit = ipe_runtime::web::LiteralTable::from_defaults(&[\"16\"]);"
+            ),
+            "flag-on emit must bake the canonical decimal string as the default, got:\n{out}"
+        );
+        assert!(
+            out.contains("ui_padding_(__ipe_lit.get(0).parse::<i64>().unwrap_or(16i64))"),
+            "the hoisted padding must read its slot and re-parse with the literal fallback, \
+             got:\n{out}"
+        );
+        Ok(())
+    }
+
+    /// Conformance: the flag-ON baked default is the canonical decimal string of
+    /// the source `Int`, and the `unwrap_or` fallback is the same literal — both
+    /// parse to the identical `i64`, so reading the slot yields the exact value
+    /// the direct emit passed. A mis-tag would surface as a default or fallback
+    /// that differs from the source literal, caught here.
+    #[test]
+    fn typed_padding_baked_default_matches_source_int() -> DResult<()> {
+        let mut interner = Interner::new();
+        let (program, view) = one_view_program(&mut interner, padding_call(12))?;
+        let out = emit_view(&interner, &program, &view, true)?;
+        assert!(
+            out.contains("from_defaults(&[\"12\"])"),
+            "the baked default must be the source int's canonical string, got:\n{out}"
+        );
+        assert!(
+            out.contains(".unwrap_or(12i64)"),
+            "the total fallback must be the source literal, got:\n{out}"
+        );
+        Ok(())
+    }
+
+    /// `Ui.rgb 255 0 0` — every colour channel is a hoist-eligible `Int`, so all
+    /// three hoist into consecutive slots, canonical strings in emit order, each
+    /// read back with its own literal fallback.
+    #[test]
+    fn typed_rgb_channels_all_hoist() -> DResult<()> {
+        let mut interner = Interner::new();
+        let call = Expr::Call {
+            callee: Callee::Kernel(KernelFn::UiRgb),
+            args: vec![Expr::Int(255), Expr::Int(0), Expr::Int(0)],
+            pin: CallPin::None,
+            on_form: OnFormKind::NotForm,
+        };
+        let (program, view) = one_view_program(&mut interner, call)?;
+        let out = emit_view(&interner, &program, &view, true)?;
+        assert!(
+            out.contains(
+                "let __ipe_lit = ipe_runtime::web::LiteralTable::from_defaults(&[\"255\", \"0\", \"0\"]);"
+            ),
+            "all three colour channels must bake as ordered canonical strings, got:\n{out}"
+        );
+        let expected = "ui_rgb_(\
+            __ipe_lit.get(0).parse::<i64>().unwrap_or(255i64), \
+            __ipe_lit.get(1).parse::<i64>().unwrap_or(0i64), \
+            __ipe_lit.get(2).parse::<i64>().unwrap_or(0i64))";
+        assert!(
+            out.contains(expected),
+            "each channel must read its slot and re-parse with the literal fallback, got:\n{out}"
+        );
+        Ok(())
+    }
+
+    // ── Refusal gaps (guardian-flagged on Step 1): the constant-only + closure
+    //    fences must hold for the typed path too. ──────────────────────────────
+
+    /// A `Model`-dependent typed style value — `Ui.padding` applied to a bound
+    /// variable rather than a literal — is logic, not data. It must NOT hoist:
+    /// only a direct `Expr::Int` is constant, so the `Var` argument emits
+    /// directly and the table stays empty.
+    #[test]
+    fn model_dependent_typed_style_does_not_hoist() -> DResult<()> {
+        let mut interner = Interner::new();
+        let amount = interner.intern("amount")?;
+        let call = Expr::Call {
+            callee: Callee::Kernel(KernelFn::UiPadding),
+            args: vec![Expr::Var(amount)],
+            pin: CallPin::None,
+            on_form: OnFormKind::NotForm,
+        };
+        let (program, view) = one_view_program(&mut interner, call)?;
+        let out = emit_view(&interner, &program, &view, true)?;
+        assert!(
+            !out.contains("__ipe_lit"),
+            "a Model-dependent (non-literal) style value must not hoist, got:\n{out}"
+        );
+        Ok(())
+    }
+
+    /// A typed style literal inside a `move` lambda body must NOT hoist into the
+    /// outer view's table: the closure captures `__ipe_lit` by move, so hoisting
+    /// there would bind a table the enclosing scope never introduced. The closure
+    /// fence suppresses hoisting for the whole lambda body; the literal emits
+    /// directly.
+    #[test]
+    fn typed_style_inside_move_lambda_does_not_hoist() -> DResult<()> {
+        let mut interner = Interner::new();
+        let ignored = interner.intern("_evt")?;
+        // `\_evt -> Ui.padding 16` — the style literal lives in the lambda body.
+        let body = Expr::Lambda {
+            params: vec![(ignored, IrType::Int)],
+            ret: IrType::Ui {
+                ctor: UiCtor::UiAttribute,
+                msg: Box::new(IrType::Int),
+            },
+            body: Box::new(padding_call(16)),
+        };
+        let (program, view) = one_view_program(&mut interner, body)?;
+        let out = emit_view(&interner, &program, &view, true)?;
+        assert!(
+            !out.contains("__ipe_lit"),
+            "a style literal inside a move closure must not hoist into the outer table, got:\n{out}"
+        );
+        assert!(
+            out.contains("ui_padding_(16i64)"),
+            "the fenced literal must emit directly, got:\n{out}"
+        );
+        Ok(())
+    }
+
+    /// A non-web shape never hoists the typed path either (the `LiteralTable` is a
+    /// web-runtime type): a `padding` literal stays the direct `i64` emit.
+    #[test]
+    fn typed_style_non_web_shape_does_not_hoist() -> DResult<()> {
+        let mut interner = Interner::new();
+        let (mut program, view) = one_view_program(&mut interner, padding_call(16))?;
+        let module = program
+            .modules
+            .first_mut()
+            .expect("the one-view program has a module");
+        module.uses_web = false;
+        module.uses_tui = true;
+        let out = emit_view(&interner, &program, &view, true)?;
+        assert!(
+            !out.contains("__ipe_lit"),
+            "a non-web shape must not hoist the typed path, got:\n{out}"
+        );
+        assert!(
+            out.contains("ui_padding_(16i64)"),
+            "a non-web shape keeps the direct i64 literal, got:\n{out}"
+        );
+        Ok(())
+    }
 }
