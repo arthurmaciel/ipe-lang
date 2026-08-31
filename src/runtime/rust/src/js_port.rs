@@ -469,6 +469,7 @@ mod tests {
         }
 
         // Parse a test sid string — all test sids are valid hex by construction.
+        #[allow(clippy::expect_used)]
         fn test_sid(raw: &str) -> SessionId {
             SessionId::parse(raw).expect("test sid must be valid hex")
         }

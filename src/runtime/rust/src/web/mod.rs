@@ -984,10 +984,10 @@ fn cookie_path_for(base: &str) -> String {
 /// Normalised sub-app base path, read from `IPE_WEB_BASE_PATH`. Empty when
 /// unset (root-mounted app). When set (this app runs as a reverse-proxied
 /// sub-app — e.g. the bundled console mounted at `/_ipe/console`), the value
-/// is threaded into `render_page_full` so the client JS prefixes `/_ipe/event`
-/// + `/_ipe/sse` with it. The browser reaches this child only through the
-/// parent proxy, which strips the prefix before forwarding — so the child's own
-/// router stays root-relative.
+/// is threaded into `render_page_full` so the client JS prefixes both the
+/// `/_ipe/event` and `/_ipe/sse` paths with it. The browser reaches this child
+/// only through the parent proxy, which strips the prefix before forwarding —
+/// so the child's own router stays root-relative.
 pub(super) fn web_base_path() -> String {
     normalise_base_path(&crate::system::read_env_var("IPE_WEB_BASE_PATH").unwrap_or_default())
 }
