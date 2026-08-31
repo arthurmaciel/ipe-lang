@@ -17,6 +17,10 @@ native kernels, so each bespoke emit arm is preserved. The `Ipe.Ui.*`
 sub-modules (Background / Border / Font / Region / Input / Lazy / Keyed) are
 separate native qualifiers, untouched here.
 
+`image` takes a typed `ImageSrc` (either `ImageSrc.url` for a remote image
+or `ImageSrc.data` for an inline data URI) rather than a raw `String`.
+Build an `ImageSrc` via `Ipe.Ui.ImageSrc.url` or `Ipe.Ui.ImageSrc.data`.
+
 ## `node`
 
 ```ipe
@@ -187,10 +191,12 @@ link : List (Attribute msg) -> { url : String, label : Element msg } -> Element 
 ## `image`
 
 ```ipe
-image : List (Attribute msg) -> { src : String, description : String } -> Element msg
+image : List (Attribute msg) -> { src : ImageSrc, description : String } -> Element msg
 ```
 
-`image attrs { src, description }` — an `<img src=… alt=…>`.
+`image attrs { src, description }` — an `<img src=… alt=…>`.  `src` is a
+typed `ImageSrc` — either a validated URL (`ImageSrc.url`) or an inline data
+URI (`ImageSrc.data { mime, base64 }`).  A bare `String` is a type error.
 
 ## `spacing`
 

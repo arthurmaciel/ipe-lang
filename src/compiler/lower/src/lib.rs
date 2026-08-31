@@ -385,11 +385,33 @@ mod tests {
         assert_eq!(module.entry, Some(main.id));
     }
 
+    // A `Msg` enum reached from `main` (via `toLabel`), so dead-type elimination
+    // keeps it — the declaration-order lock below needs a *live* enum, since a
+    // dead one is correctly pruned from the lowered module.
+    const LIVE_ENUM: &str = "module Main exposing (main)\n\
+         import Ipe.System as System\n\
+         \n\
+         type Msg = Increment | Decrement\n\
+         \n\
+         toLabel : Msg -> String\n\
+         toLabel msg =\n\
+         \x20   case msg of\n\
+         \x20       Increment -> \"inc\"\n\
+         \x20       Decrement -> \"dec\"\n\
+         \n\
+         main =\n\
+         \x20   System.setenv \"M\" (toLabel Increment)\n";
+
     #[test]
     fn lowers_msg_enum_in_declaration_order() {
-        let opt = lower_golden();
-        assert!(opt.is_some(), "golden");
-        let Some((program, i)) = opt else { return };
+        let mut i = Interner::new();
+        let opt = ipe_parse::parse_module(LIVE_ENUM, &mut i)
+            .ok()
+            .and_then(|s| ipe_canon::canonicalise(&s, &mut i).ok())
+            .and_then(|m| ipe_types::infer(&m, &mut i).ok().map(|t| (m, t)))
+            .and_then(|(m, t)| lower(&m, &t, &mut i, "", "").ok());
+        assert!(opt.is_some(), "live-enum module must lower");
+        let Some(program) = opt else { return };
         let Some(module) = program.modules.first() else {
             return;
         };
