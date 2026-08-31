@@ -1293,6 +1293,8 @@ mod process_run_with_tests {
 mod process_run_in_pty_tests {
     use super::*;
 
+    // Test-only runtime builder: a current-thread runtime cannot fail to build here.
+    #[allow(clippy::unwrap_used)]
     fn block<T>(fut: impl std::future::Future<Output = T>) -> T {
         tokio::runtime::Builder::new_current_thread()
             .enable_all()
