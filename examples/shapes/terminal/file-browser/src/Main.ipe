@@ -1,9 +1,9 @@
 module Main exposing (main)
 
--- A keyboard-driven directory browser over `Terminal.appScreen`. The runtime
--- walks a typed `Ipe.Ui` `Element` tree and paints it to terminal cells; inside
--- that structured view sits a raw `Ui.cells` island — a hexdump of the selected
--- file's first bytes, painted character by character.
+-- A keyboard-driven directory browser over `Terminal.appScreen`. The view is a
+-- typed `Ipe.Ui.Cells` `Cells` tree that the runtime paints to terminal cells;
+-- inside that structured view sits a raw `Cells.cells` island — a hexdump of the
+-- selected file's first bytes, painted character by character.
 --
 -- Keys:
 --     Up / k       move the selection up
@@ -13,8 +13,8 @@ module Main exposing (main)
 --
 -- `File.readDir` lists the working directory once at startup; selecting a file
 -- performs `File.readFileBytes` as a `Task`, and its settled bytes are rendered
--- as the `Ui.cells` grid. `Ui.cells` is terminal-only: this same program in the
--- Web or WebView shape would be rejected at compile time (IPE-L0132).
+-- as the `Cells.cells` grid. `Cells msg` is terminal-only: this same view in the
+-- Web or WebView shape would fail to type-check (a Web view returns `Element`).
 
 import Ipe.String as String
 import Ipe.System as System
@@ -26,7 +26,8 @@ import Ipe.Tea.Terminal.Cmd as Cmd
 import Ipe.Tea.Terminal.Sub as Sub
 import Ipe.List as List
 import Ipe.Ui as Ui
-import Ipe.Ui exposing (Element)
+import Ipe.Ui.Cells as Cells
+import Ipe.Ui.Cells exposing (Cells)
 import Ipe.Ui.Font as Font
 
 
@@ -46,7 +47,7 @@ type alias Model =
     , status : String
 
     -- The selected file's first bytes, or an empty list before anything is
-    -- opened. Rendered as the `Ui.cells` hexdump island.
+    -- opened. Rendered as the `Cells.cells` hexdump island.
     , bytes : List Int
     }
 
@@ -152,22 +153,22 @@ listAt index items =
     List.head (List.drop index items)
 
 
-view : Model -> Element Msg
+view : Model -> Cells Msg
 view model =
-    Ui.column [ Ui.spacing 12, Ui.padding 16 ]
-        [ Ui.el [ Font.bold ] (Ui.text "Ipê file browser")
-        , Ui.text model.status
-        , Ui.column [ Ui.spacing 2 ] (List.indexedMap (entryRow model.selected) model.entries)
-        , Ui.el [ Font.bold ] (Ui.text "hexdump:")
+    Cells.column [ Ui.spacing 12, Ui.padding 16 ]
+        [ Cells.el [ Font.bold ] (Cells.text "Ipê file browser")
+        , Cells.text model.status
+        , Cells.column [ Ui.spacing 2 ] (List.indexedMap (entryRow model.selected) model.entries)
+        , Cells.el [ Font.bold ] (Cells.text "hexdump:")
 
         -- The raw cell-grid island: a hexdump of the opened file's bytes,
         -- painted directly to the terminal.
-        , Ui.cells (hexdump model.bytes)
+        , Cells.cells (hexdump model.bytes)
         ]
 
 
 -- One directory entry, highlighted (a leading `>`) when it is the selection.
-entryRow : Int -> Int -> String -> Element Msg
+entryRow : Int -> Int -> String -> Cells Msg
 entryRow selected index name =
     let
         marker =
@@ -177,7 +178,7 @@ entryRow selected index name =
             else
                 "  "
     in
-    Ui.text (marker ++ name)
+    Cells.text (marker ++ name)
 
 
 -- ── Hexdump: List Int → List (List Char) ─────────────────────────────────────

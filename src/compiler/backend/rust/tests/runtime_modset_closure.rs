@@ -77,7 +77,7 @@ fn resolve_runtime() -> Option<PathBuf> {
 ///
 /// The proof is per-flag + monotone + composed (see module docs), NOT a
 /// `2^FLAG_COUNT` enumeration — it scales linearly.
-const FLAG_COUNT: usize = 29;
+const FLAG_COUNT: usize = 30;
 
 /// How many random full masks the backstop [`sampled_full_masks_are_closed`]
 /// checks, on top of the deterministic corners. Bounded so cost stays constant
@@ -144,6 +144,10 @@ fn module_for_mask(name: ipe_intern::Symbol, mask: u32) -> Module {
         uses_ui,
         uses_web: f(3),
         uses_tui,
+        // Fixed false: the Cli (`Terminal.appLines`) surface is outside this
+        // flag-closure matrix (no dedicated mask bit); its manifest closure is
+        // exercised by the Tui bit above.
+        uses_console: false,
         uses_webview: f(5),
         uses_css: f(6),
         uses_auth: f(7),
@@ -152,6 +156,9 @@ fn module_for_mask(name: ipe_intern::Symbol, mask: u32) -> Module {
         uses_principal: false,
         uses_websocket: f(8),
         uses_email: f(9),
+        // `uses_locale` is a pure surface (no reactor) — NOT in the async union.
+        // Gates `locale.rs` + the `locale` Cargo feature. Standalone leaf.
+        uses_locale: f(29),
         uses_time: false,
         uses_env_public: f(10),
         uses_http: f(11),

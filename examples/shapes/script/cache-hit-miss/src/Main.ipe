@@ -1,0 +1,75 @@
+module Main exposing (main)
+
+import Ipe.Cache as Cache exposing (Cache)
+import Ipe.Duration as Duration
+import Ipe.Maybe exposing (Maybe(..))
+import Ipe.String as String
+import Ipe.Task as Task
+import Ipe.Io as Io
+
+
+-- A `Cache k v` is a bounded, in-memory LRU store. Three ideas:
+--   • It is CONFIGURED, not defaulted: `Cache.new` takes a `CacheCfg` built from
+--     `defaultCfg` plus `with*` steps, so a bound is always chosen on purpose.
+--   • Keys and values are TYPED through phantom parameters: a `Cache String User`
+--     stores a `User` under a `String`, and the compiler holds you to that shape.
+--   • A miss is a VALUE, not a failure: `get` returns `Task Error (Maybe v)`, so
+--     `Nothing` (absent or evicted) is a case you handle, never an exception.
+--
+-- This cache stores string sessions; a value type of `Int` currently misses on
+-- read (arthurmaciel/ipe-lang#1536), so an integer counter is not modelled here.
+
+
+-- The cache is created once, then read and written through its handle. This one
+-- caps at two entries so the third `put` must evict the least-recently-used key.
+buildCache : Task Error (Cache String String)
+buildCache =
+    Cache.new
+        (Cache.defaultCfg
+            |> Cache.withMaxEntries 2
+            |> Cache.withTTL Duration.zero
+        )
+
+
+-- Render a `Maybe String` lookup as a hit or a miss.
+lookupText : String -> Maybe String -> String
+lookupText key found =
+    case found of
+        Just v ->
+            "hit  " ++ key ++ " -> " ++ v
+
+        Nothing ->
+            "miss " ++ key ++ " (absent or evicted)"
+
+
+main =
+    do
+        cache <- buildCache
+
+        -- Fill both slots, then read one back: a hit.
+        Cache.put cache "alice" "editor"
+        Cache.put cache "bob" "viewer"
+        alice <- Cache.get cache "alice"
+        Io.println (lookupText "alice" alice)
+
+        -- A third key forces LRU eviction of the least-recently-used entry.
+        Cache.put cache "carol" "admin"
+        bob <- Cache.get cache "bob"
+        Io.println (lookupText "bob" bob)
+
+        carol <- Cache.get cache "carol"
+        Io.println (lookupText "carol" carol)
+
+        -- `stats` reports running totals; `size` the current entry count.
+        n <- Cache.size cache
+        counters <- Cache.stats cache
+        Io.println
+            ("size "
+                ++ String.fromInt n
+                ++ " ; hits "
+                ++ String.fromInt counters.hits
+                ++ " misses "
+                ++ String.fromInt counters.misses
+                ++ " evictions "
+                ++ String.fromInt counters.evictions
+            )

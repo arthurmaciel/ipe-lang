@@ -44,6 +44,9 @@ fn opaque_leaf_ir(leaf: &str) -> Option<IrType> {
         "WebViewApp" => Some(IrType::WebViewApp),
         "TuiApp" => Some(IrType::TuiApp),
         "CliApp" => Some(IrType::CliApp),
+        "StreamWriter" => Some(IrType::StreamWriter),
+        "WebSocketServer" => Some(IrType::WebSocketServer),
+        "WebSocketServerCfg" => Some(IrType::WebSocketServerCfg),
         _ => None,
     }
 }
@@ -251,4 +254,40 @@ fn kernel_tuiapp_still_maps_to_opaque() {
 #[test]
 fn kernel_cliapp_still_maps_to_opaque() {
     assert_kernel_leaf_maps_to_opaque("CliApp");
+}
+
+// The kernel-implicit stream / WebSocket opaque handles (`StreamWriter` /
+// `WebSocketServer` / `WebSocketServerCfg`) share the shape leaves' hazard: a
+// bare-name arm above the `enum_variants` guard would hijack a user
+// `type StreamWriter = …` to the unemitted opaque runtime handle — an
+// `ipe`-exit-0-then-cargo-fail SEAL break. The same empty-home guard closes it.
+
+#[test]
+fn user_type_streamwriter_wins_over_opaque_handle() {
+    assert_user_union_wins("StreamWriter");
+}
+
+#[test]
+fn user_type_websocketserver_wins_over_opaque_handle() {
+    assert_user_union_wins("WebSocketServer");
+}
+
+#[test]
+fn user_type_websocketservercfg_wins_over_opaque_handle() {
+    assert_user_union_wins("WebSocketServerCfg");
+}
+
+#[test]
+fn kernel_streamwriter_still_maps_to_opaque() {
+    assert_kernel_leaf_maps_to_opaque("StreamWriter");
+}
+
+#[test]
+fn kernel_websocketserver_still_maps_to_opaque() {
+    assert_kernel_leaf_maps_to_opaque("WebSocketServer");
+}
+
+#[test]
+fn kernel_websocketservercfg_still_maps_to_opaque() {
+    assert_kernel_leaf_maps_to_opaque("WebSocketServerCfg");
 }

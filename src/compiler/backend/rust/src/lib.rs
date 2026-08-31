@@ -919,6 +919,11 @@ pub(crate) struct EmitCtx<'a> {
     /// app-entry kernel.  When set, the emitted project gains the `"tui"`
     /// Cargo feature and the tui module is wired into `ipe_runtime/mod.rs`.
     pub(crate) uses_tui: bool,
+    /// `true` when the program uses the `Ipe.Terminal` line-oriented app-entry
+    /// (`Terminal.appLines`). When set, the guard in `emit_ui_plan` rejects
+    /// `Ui.cells` with IPE-L0153 (a terminal cell grid has no string
+    /// denotation in a line-oriented Cli view).
+    pub(crate) uses_console: bool,
     /// `true` when the program uses at least one `Ipe.WebView` app-entry kernel.
     /// When set, the emitted project gains the `"webview"` Cargo feature
     /// (which transitively pulls `"live"`) and the main entry is switched to
@@ -956,6 +961,15 @@ pub(crate) struct EmitCtx<'a> {
     /// email::*;` to the emitted `ipe_runtime/mod.rs` and adds the `lettre`
     /// dependency to the emitted `Cargo.toml`.
     pub(crate) uses_email: bool,
+    /// `true` when the program uses at least one `Ipe.Locale` kernel
+    /// (`Locale.fromTag`, `Locale.toTag`, `String.toUpperIn`,
+    /// `String.toLowerIn`), or any emittable type position mentions
+    /// `IrType::Locale`. When set,
+    /// [`crate::project::assemble_project_files`] appends `pub mod locale; pub
+    /// use locale::*;` to the emitted `ipe_runtime/mod.rs` and enables the
+    /// `locale` Cargo feature (`icu_casemap` + `icu_locale_core`) so
+    /// `locale_from_tag` uses the ICU4X parse path.
+    pub(crate) uses_locale: bool,
     /// `true` when the program uses at least one non-TEA `Ipe.Time` kernel
     /// (`Time.now` / `unixMillis` / `sleep` / `timeString` / `isLeapYear` /
     /// `daysInMonth`). When set, [`crate::project::assemble_project_files`]
@@ -1679,11 +1693,12 @@ impl<'a> EmitCtx<'a> {
         // [`Self::reaches_url`], not here.
         let uses_url = program.modules.iter().any(|m| m.uses_url);
 
-        // detect Ipe.Ui / Ipe.Html / Ipe.Web / Ipe.Tui / Ipe.WebView usage.
-        let (uses_ui, uses_web, uses_tui, uses_webview) = (
+        // detect Ipe.Ui / Ipe.Html / Ipe.Web / Ipe.Tui / Ipe.Console / Ipe.WebView usage.
+        let (uses_ui, uses_web, uses_tui, uses_console, uses_webview) = (
             program.modules.iter().any(|m| m.uses_ui),
             program.modules.iter().any(|m| m.uses_web),
             program.modules.iter().any(|m| m.uses_tui),
+            program.modules.iter().any(|m| m.uses_console),
             program.modules.iter().any(|m| m.uses_webview),
         );
 
@@ -1694,8 +1709,10 @@ impl<'a> EmitCtx<'a> {
         let uses_auth = program.modules.iter().any(|m| m.uses_auth);
         // detect `Ipe.Auth.subject` usage (touches the opaque `Principal`).
         let uses_principal = program.modules.iter().any(|m| m.uses_principal);
-        // detect Ipe.Email kernel usage.
+        // detect Ipe.Email usage (kernel or type-mention).
         let uses_email = program.modules.iter().any(|m| m.uses_email);
+        // detect Ipe.Locale usage (kernel or type-mention).
+        let uses_locale = program.modules.iter().any(|m| m.uses_locale);
         // detect non-TEA Ipe.Time kernel usage — gates the `time` Cargo feature
         // and the `chrono-tz` dependency.
         let uses_time = program.modules.iter().any(|m| m.uses_time);
@@ -1736,6 +1753,47 @@ impl<'a> EmitCtx<'a> {
             || uses_tea
             || uses_email;
 
+        // Type-closure fold: derive the feature set from the emitted TYPES, not a
+        // per-kernel allowlist. Every gated `IrType` leaf reachable in the
+        // program's type declarations / signatures forces its feature through the
+        // IR-crate SSOT ([`ipe_ir::ir_type_feature_requirement`]), so a program
+        // that MENTIONS a gated type with no kernel call still selects that type's
+        // feature (the `Url`/`ImageSrc` and Http `StatusCode` breach class). This
+        // OR-folds each type-required feature into the corresponding `uses_*`
+        // flag; the reachability `reaches_*` unions then close over it as before.
+        // Fail-closed and idempotent: it can only ADD a feature the emit spells,
+        // never drop one, and unions redundantly with the lowerer's body-position
+        // walk (which routes the SAME SSOT), so a missed wiring in either side is
+        // covered by the other.
+        let type_reqs = program_type_feature_requirements(program);
+        let has = |f: ipe_ir::RuntimeFeatureId| type_reqs.contains(&f);
+        let uses_json = uses_json || has(ipe_ir::RuntimeFeatureId::Json);
+        let uses_url = uses_url || has(ipe_ir::RuntimeFeatureId::Url);
+        let uses_secret = uses_secret || has(ipe_ir::RuntimeFeatureId::Secret);
+        let uses_decimal = uses_decimal || has(ipe_ir::RuntimeFeatureId::Decimal);
+        let uses_regex = uses_regex || has(ipe_ir::RuntimeFeatureId::Regex);
+        let uses_csv = uses_csv || has(ipe_ir::RuntimeFeatureId::Csv);
+        let uses_cache = uses_cache || has(ipe_ir::RuntimeFeatureId::CacheKernel);
+        let uses_websocket = uses_websocket || has(ipe_ir::RuntimeFeatureId::WebsocketClient);
+        let uses_email = uses_email || has(ipe_ir::RuntimeFeatureId::Email);
+        let uses_crypto_core = uses_crypto_core || has(ipe_ir::RuntimeFeatureId::CryptoCore);
+        let uses_db = uses_db || has(ipe_ir::RuntimeFeatureId::Db);
+        let uses_server = uses_server || has(ipe_ir::RuntimeFeatureId::Server);
+        let uses_http = uses_http || has(ipe_ir::RuntimeFeatureId::HttpClient);
+        let uses_web = uses_web || has(ipe_ir::RuntimeFeatureId::Web);
+        // A type-only reach that flips a reactor surface (`web` / `server` /
+        // `db` / `http` / `websocket` / `email`) must also force the reactor
+        // spine — the same surfaces the kernel-side union force above — or the
+        // emitted crate links a runtime module that parks on tokio without the
+        // reactor. Fold the newly-forced surfaces back in, fail-closed.
+        let uses_async_runtime = uses_async_runtime
+            || uses_db
+            || uses_server
+            || uses_web
+            || uses_websocket
+            || uses_http
+            || uses_email;
+
         let mut ctx = Self {
             interner,
             uses_db,
@@ -1764,12 +1822,14 @@ impl<'a> EmitCtx<'a> {
             uses_ui,
             uses_web,
             uses_tui,
+            uses_console,
             uses_webview,
             uses_css,
             uses_auth,
             uses_principal,
             uses_websocket,
             uses_email,
+            uses_locale,
             uses_time,
             uses_ffi,
             ffi,
@@ -2926,6 +2986,170 @@ impl<'a> EmitCtx<'a> {
             .get(&id)
             .is_some_and(|idxs| idxs.contains(&idx))
     }
+}
+
+/// Fold every runtime-feature requirement a type's leaves declare into `out`, via
+/// the IR-crate SSOT [`ipe_ir::ir_type_feature_requirement`].
+///
+/// This is the type-side half of the feature closure: the selected feature set is
+/// the union of the per-leaf requirement over every [`IrType`] the emitter can
+/// spell. A carrier's own node requires nothing; its element leaves are reached by
+/// this total recursion (no wildcard arm — a new [`IrType`] variant is a compile
+/// error until it is descended here), so a gated leaf embedded anywhere in a
+/// program's TYPES forces its feature by construction. Composed with the lowerer's
+/// body-position walk (which routes the same SSOT through
+/// `program_type_mentions`), the fold ranges over every emitted type — the
+/// property that makes "a gated type emitted without its feature" unrepresentable
+/// (the `Url`/`ImageSrc` breach class).
+#[allow(clippy::too_many_lines)] // one arm per IrType variant, deliberately exhaustive
+fn collect_type_feature_requirements(ty: &IrType, out: &mut BTreeSet<ipe_ir::RuntimeFeatureId>) {
+    if let Some(req) = ipe_ir::ir_type_feature_requirement(ty) {
+        out.insert(req);
+    }
+    match ty {
+        // Non-carrier leaves: no nested `IrType` to descend.
+        IrType::Int
+        | IrType::Float
+        | IrType::Bool
+        | IrType::Str
+        | IrType::Char
+        | IrType::Unit
+        | IrType::Bytes
+        | IrType::Json
+        | IrType::Db
+        | IrType::Generic(_)
+        | IrType::RowGeneric(_)
+        | IrType::BackoffStrategy
+        | IrType::Order
+        | IrType::HttpMethod
+        | IrType::Decimal
+        | IrType::ErrorKind
+        | IrType::Error
+        | IrType::ErrorDetails
+        | IrType::ErrorInfo
+        | IrType::PanicInfo
+        | IrType::TypeInfo
+        | IrType::SqlFragment
+        | IrType::Secret
+        | IrType::Path
+        | IrType::Url
+        | IrType::Dsn
+        | IrType::Connection
+        | IrType::ConnReadOnly
+        | IrType::ConnReadWrite
+        | IrType::Setting
+        | IrType::ShapeWeb
+        | IrType::ShapeWebView
+        | IrType::ShapeTerminal
+        | IrType::Locale
+        | IrType::Principal
+        | IrType::ProcessRunWithCfg
+        | IrType::CacheCfg
+        | IrType::CacheStats
+        | IrType::WebSocketClientCfg
+        | IrType::CsvDoc
+        | IrType::CryptoKey
+        | IrType::CryptoMac
+        | IrType::EmailMessage
+        | IrType::EmailAttachment
+        | IrType::EmailSesConfig
+        | IrType::EmailSmtpConfig
+        | IrType::EmailProvider
+        | IrType::EmailAddress
+        | IrType::ServerRequest
+        | IrType::ServerResponse
+        | IrType::ServerRoute
+        | IrType::ServerCookie
+        | IrType::AuthConfig
+        | IrType::TokenSource
+        | IrType::StreamWriter
+        | IrType::HttpRequest
+        | IrType::WebSocketServer
+        | IrType::WebSocketServerCfg
+        | IrType::WebReq
+        | IrType::Regex
+        | IrType::WebApp
+        | IrType::WebViewApp
+        | IrType::TuiApp
+        | IrType::CliApp
+        | IrType::UiPlain(_) => {}
+        // Single-payload carriers.
+        IrType::Task(inner)
+        | IrType::Cmd(inner)
+        | IrType::Sub(inner)
+        | IrType::Decoder(inner)
+        | IrType::Maybe(inner)
+        | IrType::Set(inner)
+        | IrType::WebRoute(inner)
+        | IrType::Ui { msg: inner, .. }
+        | IrType::List(inner) => collect_type_feature_requirements(inner, out),
+        // Two-payload carriers.
+        IrType::Result(a, b) | IrType::Dict(a, b) | IrType::CustomElement { down: a, up: b } => {
+            collect_type_feature_requirements(a, out);
+            collect_type_feature_requirements(b, out);
+        }
+        // Function carriers, all three boxing families.
+        IrType::Fun(params, ret)
+        | IrType::SharedFun(params, ret)
+        | IrType::FnOnceChain(params, ret) => {
+            for p in params {
+                collect_type_feature_requirements(p, out);
+            }
+            collect_type_feature_requirements(ret, out);
+        }
+        IrType::Tuple(elems) => {
+            for e in elems {
+                collect_type_feature_requirements(e, out);
+            }
+        }
+        IrType::Record(fields) => {
+            for f in fields.values() {
+                collect_type_feature_requirements(f, out);
+            }
+        }
+        IrType::Enum { args, .. } => {
+            for a in args {
+                collect_type_feature_requirements(a, out);
+            }
+        }
+    }
+}
+
+/// The union of runtime-feature requirements declared by every [`IrType`] the
+/// emitter can spell in `program`'s TYPE declarations and signatures — the
+/// backend-side type-closure that closes the SEAL blind spot by construction (a
+/// gated type in an enum payload / record field / signature forces its feature
+/// even when no kernel is called and the lowerer's per-module flag was not set).
+/// It walks the same surfaces the record-shape prepass does (function params /
+/// return, `module.records`, enum-variant payloads); body-position type mentions
+/// are folded by the lowerer through the same SSOT.
+fn program_type_feature_requirements(program: &Program) -> BTreeSet<ipe_ir::RuntimeFeatureId> {
+    let mut out = BTreeSet::new();
+    for module in &program.modules {
+        for func in &module.funcs {
+            for (_, ty) in &func.params {
+                collect_type_feature_requirements(ty, &mut out);
+            }
+            collect_type_feature_requirements(&func.ret, &mut out);
+            for row in &func.row_params {
+                for ty in row.fields.values() {
+                    collect_type_feature_requirements(ty, &mut out);
+                }
+            }
+        }
+        for ty in &module.records {
+            collect_type_feature_requirements(ty, &mut out);
+        }
+        for ty in &module.types {
+            let TypeDef::Enum(def) = ty;
+            for variant in &def.variants {
+                for field_ty in &variant.fields {
+                    collect_type_feature_requirements(field_ty, &mut out);
+                }
+            }
+        }
+    }
+    out
 }
 
 /// True when `ty` is a monomorphic leaf that carries no record shape of its own
@@ -4252,12 +4476,14 @@ mod record_struct_namespace_tests {
                 uses_ui: false,
                 uses_web: false,
                 uses_tui: false,
+                uses_console: false,
                 uses_webview: false,
                 uses_css: false,
                 uses_auth: false,
                 uses_principal: false,
                 uses_websocket: false,
                 uses_email: false,
+                uses_locale: false,
                 uses_time: false,
                 uses_env_public: false,
                 uses_debug: false,
@@ -4355,12 +4581,14 @@ mod record_struct_namespace_tests {
                 uses_ui: false,
                 uses_web: false,
                 uses_tui: false,
+                uses_console: false,
                 uses_webview: false,
                 uses_css: false,
                 uses_auth: false,
                 uses_principal: false,
                 uses_websocket: false,
                 uses_email: false,
+                uses_locale: false,
                 uses_time: false,
                 uses_env_public: false,
                 uses_debug: false,
@@ -4438,12 +4666,14 @@ mod record_struct_namespace_tests {
                 uses_ui: false,
                 uses_web: false,
                 uses_tui: false,
+                uses_console: false,
                 uses_webview: false,
                 uses_css: false,
                 uses_auth: false,
                 uses_principal: false,
                 uses_websocket: false,
                 uses_email: false,
+                uses_locale: false,
                 uses_time: false,
                 uses_env_public: false,
                 uses_debug: false,

@@ -1,0 +1,113 @@
+module Main exposing (main)
+
+-- End-to-end proof that a secured `updateAs` honours an `immutable` policy
+-- column: an authenticated route mints a `Principal` (the sole minter is the
+-- fail-closed auth middleware) and its handler updates a secured store as that
+-- caller through `Store.updateAs`. The store's policy marks `.createdAt`
+-- immutable, so the update path drops that column from the SET — a caller can
+-- never change it after insert, even by supplying a new value in the record.
+--
+-- No live database or network is needed: `Task.onError` catches the connection
+-- failure and the route builder is only assembled, never served. The SEAL proof
+-- is that the emitted crate `cargo build`s under `IPE_E2E=1`, and the emitted
+-- `Ipe.Db.Store` module's `updateAs` routes its SET binds through the
+-- immutable-drop before building the UPDATE.
+
+
+import Ipe.Auth as Auth
+import Ipe.Codec as Codec exposing (Codec)
+import Ipe.Db as Db exposing (Db)
+import Ipe.Db.Store as Store exposing (Store, Secured)
+import Ipe.Error exposing (Error)
+import Ipe.Http.Server as Server
+import Ipe.Http.Server exposing (Request, Response)
+import Ipe.Io as Io
+import Ipe.Secret as Secret
+import Ipe.String as String
+import Ipe.System as System
+import Ipe.Task as Task exposing (Task)
+
+
+type alias Doc =
+    { author : String
+    , createdAt : String
+    , body : String
+    }
+
+
+blankDoc : Doc
+blankDoc =
+    { author = "", createdAt = "", body = "" }
+
+
+-- A `Codec.auto`-derived codec: its columns are `author` / `created_at` / `body`.
+docCodec : Codec Doc
+docCodec =
+    Codec.auto blankDoc
+
+
+-- Each row is owned by its `.author` (bound to the authenticated subject) and its
+-- `.createdAt` is immutable — fixed at insert, never changed by a later update.
+docPolicy : Store.Policy Doc
+docPolicy =
+    Store.ownerColumn .author
+        |> Store.andPolicy (Store.immutable .createdAt)
+
+
+securedDocs : Result Error (Secured Doc)
+securedDocs =
+    case Store.fromCodec "docs" docCodec of
+        Err e ->
+            Err e
+
+        Ok store ->
+            Store.secured docPolicy (Store.primaryKey .body store)
+
+
+-- The authed handler. The middleware has already verified the token and minted
+-- `principal`; `updateAs` writes only the row the policy admits for that caller,
+-- and never rewrites the immutable `created_at` column even though the record
+-- carries a value for it.
+handleUpdate : Request -> Auth.Principal -> Task Error Response
+handleUpdate req principal =
+    Task.onError
+        (\_ -> Task.succeed (Server.text "none"))
+        (Task.andThen
+            (\db ->
+                case securedDocs of
+                    Err _ ->
+                        Task.succeed (Server.text "policy-error")
+
+                    Ok secured ->
+                        Task.andThen
+                            (\n ->
+                                Task.succeed (Server.text (String.fromInt n))
+                            )
+                            (Store.updateAs principal
+                                db
+                                secured
+                                { author = "ignored", createdAt = "2999-01-01", body = "hello" }
+                            )
+            )
+            (Db.connect ())
+        )
+
+
+authCfg : Server.AuthConfig
+authCfg =
+    Server.authConfig
+        (Secret.fromString (System.getenvOr "SIGNING_KEY" "this-is-a-32-byte-or-longer-secret-key-value"))
+        Server.bearerToken
+
+
+main : Task Error ()
+main =
+    Task.onError
+        (\_ -> Io.println "db-store-immutable-update-seal")
+        (Task.andThen
+            (\_ -> Io.println "db-store-immutable-update-seal")
+            (Server.listen
+                8000
+                [ Server.putAuthed "/docs" authCfg handleUpdate ]
+            )
+        )

@@ -398,6 +398,27 @@ pub fn run_health(rest: &[String]) -> Result<(), CliError> {
     finish(&report)
 }
 
+/// Run the diagnostic checks and print the human report, then offer per-item
+/// fixes interactively — the same behaviour as `ipe health` on a terminal, but
+/// driven from another command rather than the CLI entry point.
+///
+/// Called by `ipe init` after scaffolding to let the user tune the toolchain in
+/// the same session. The caller is responsible for gating on TTY; this function
+/// never reads TTY state itself so the caller controls where the prompt appears.
+///
+/// # Errors
+/// Propagates any filesystem error from an accepted fix. A critical missing
+/// check returns [`CliError::HealthCritical`] so the caller can decide whether
+/// to treat it as fatal (the init wizard ignores it, matching `ipe health`'s
+/// non-zero exit only when invoked as a standalone command).
+pub(crate) fn run_health_inline() -> Result<(), CliError> {
+    let report = detect();
+    let stdout = std::io::stdout();
+    print!("{}", render_human(&report, &stdout));
+    apply_fixes(&report, Consent::Interactive, &stdout);
+    finish(&report)
+}
+
 /// The exit-code decision, printed as `Ok(())` / a typed failure. A critical
 /// missing check exits non-zero (so CI can gate); everything else is success.
 fn finish(report: &Report) -> Result<(), CliError> {
@@ -1324,19 +1345,29 @@ fn apply_fixes(report: &Report, consent: Consent, stream: &impl IsTerminal) {
     for check in fixable {
         let Some(fix) = &check.fix else { continue };
         print!("{}", style::gutter(&fix_bullet(check, fix, p)));
+        // The question hangs a blank line below the preview and sits at the
+        // body column (one level deeper than the bullet) so it reads as the last
+        // line of the fix, not a new item.
         let apply = match consent {
             Consent::All => true,
-            Consent::Interactive => ask(&format!("{FIX_INDENT}Apply?")) == Answer::Yes,
+            Consent::Interactive => ask(&format!("\n{FIX_BODY_INDENT}Apply?")) == Answer::Yes,
         };
         if !apply {
             print!("{}", style::gutter(&format!("{FIX_BODY_INDENT}skipped.\n")));
             continue;
         }
+        // The outcome leads with the status glyph — green ✓ on success, red ✗ on
+        // failure — so the applied/failed edit is legible at a glance.
         match apply_one(fix) {
             Ok(outcome) => {
                 print!(
                     "{}",
-                    style::gutter(&format!("{FIX_BODY_INDENT}{outcome}\n"))
+                    style::gutter(&format!(
+                        "{FIX_BODY_INDENT}{}{}{} {outcome}\n",
+                        p.green,
+                        style::glyph::OK,
+                        p.reset
+                    ))
                 );
             }
             Err(e) => {
@@ -1346,7 +1377,12 @@ fn apply_fixes(report: &Report, consent: Consent, stream: &impl IsTerminal) {
                 // the apply outcome).
                 print!(
                     "{}",
-                    style::gutter(&format!("{FIX_BODY_INDENT}could not apply: {e}\n"))
+                    style::gutter(&format!(
+                        "{FIX_BODY_INDENT}{}{}{} could not apply: {e}\n",
+                        p.red,
+                        style::glyph::FAIL,
+                        p.reset
+                    ))
                 );
             }
         }

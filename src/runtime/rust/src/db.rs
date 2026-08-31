@@ -6695,6 +6695,139 @@ mod tests {
         );
     }
 
+    /// The runtime contract the Ipê-side `Store.updateAs` relies on to enforce an
+    /// `immutable` policy column: `updateAs` drops every immutable column from the
+    /// SET (turns it into an OmitField), so the emitted UPDATE never names that
+    /// column. This test drives `db_update_where` exactly as the fixed `updateAs`
+    /// does — the immutable column omitted, a mutable column set, scoped by the
+    /// owner filter — and proves the immutable value is UNCHANGED while the mutable
+    /// value changes. The companion `update_where_sets_immutable_column_when_not_dropped`
+    /// proves the omission is load-bearing: were the column left in the SET (the
+    /// pre-fix behaviour), the value WOULD change. Together they show the drop is
+    /// what enforces immutability, not an incidental no-op.
+    #[tokio::test]
+    async fn update_where_omitting_immutable_column_leaves_it_unchanged() {
+        let db = fresh_db().await;
+        let _: IpeResult<String, i64> = db_exec_raw(
+            db.clone(),
+            "CREATE TABLE docs (body TEXT PRIMARY KEY, owner TEXT, stamped TEXT)".to_string(),
+        )
+        .await;
+        let _: IpeResult<String, i64> = db_exec_raw(
+            db.clone(),
+            "INSERT INTO docs (body, owner, stamped) VALUES ('doc1', 'alice', 'original')"
+                .to_string(),
+        )
+        .await;
+
+        // Exactly what the fixed `updateAs` emits for a policy of
+        // `ownerColumn owner |> andPolicy (immutable stamped)`: the SET carries
+        // the mutable `owner` (forced to the caller) but NOT `stamped` (dropped
+        // by `dropImmutableColumns`), scoped by pk AND the owner filter. The
+        // caller's attempt to set a new `stamped` value is simply absent.
+        let updated: IpeResult<String, i64> = db_update_where(
+            db.clone(),
+            "docs".to_string(),
+            vec![
+                (
+                    "owner".to_string(),
+                    Some(SqlParam::Text("alice".to_string())),
+                ),
+                ("stamped".to_string(), None), // OmitField — dropped by the immutable policy
+            ],
+            sql_and(
+                sql_eq(
+                    sql_column("body".to_string()),
+                    sql_param("doc1".to_string()),
+                ),
+                sql_eq(
+                    sql_column("owner".to_string()),
+                    sql_param("alice".to_string()),
+                ),
+            ),
+        )
+        .await;
+        assert!(
+            matches!(updated, IpeResult::Ok(1)),
+            "the owner-scoped update should affect exactly the caller's row: {updated:?}"
+        );
+
+        let rows: IpeResult<String, Vec<HashMap<String, String>>> = db_query_params(
+            db.clone(),
+            "SELECT stamped FROM docs WHERE body = ?".to_string(),
+            vec![SqlParam::Text("doc1".to_string())],
+        )
+        .await;
+        match rows {
+            IpeResult::Ok(v) => {
+                assert_eq!(v.len(), 1, "the row must still exist");
+                assert_eq!(
+                    v[0].get("stamped").map(String::as_str),
+                    Some("original"),
+                    "the immutable column MUST retain its insert-time value — a \
+                     dropped (OmitField) column is never written by an update"
+                );
+            }
+            other => panic!("read back failed: {other:?}"),
+        }
+    }
+
+    /// The load-bearing half of the immutable proof: if the immutable column were
+    /// NOT dropped (left as a SetField, the pre-fix behaviour), the same update
+    /// WOULD overwrite it. Demonstrates that the `dropImmutableColumns` omission in
+    /// `updateAs` is exactly what prevents the change — not an accident of the
+    /// runtime refusing it anyway.
+    #[tokio::test]
+    async fn update_where_sets_immutable_column_when_not_dropped() {
+        let db = fresh_db().await;
+        let _: IpeResult<String, i64> = db_exec_raw(
+            db.clone(),
+            "CREATE TABLE docs (body TEXT PRIMARY KEY, owner TEXT, stamped TEXT)".to_string(),
+        )
+        .await;
+        let _: IpeResult<String, i64> = db_exec_raw(
+            db.clone(),
+            "INSERT INTO docs (body, owner, stamped) VALUES ('doc1', 'alice', 'original')"
+                .to_string(),
+        )
+        .await;
+
+        // Same update, but with `stamped` left IN the SET (SetField). This is
+        // the outcome the fix prevents.
+        let updated: IpeResult<String, i64> = db_update_where(
+            db.clone(),
+            "docs".to_string(),
+            vec![(
+                "stamped".to_string(),
+                Some(SqlParam::Text("tampered".to_string())),
+            )],
+            sql_eq(
+                sql_column("body".to_string()),
+                sql_param("doc1".to_string()),
+            ),
+        )
+        .await;
+        assert!(matches!(updated, IpeResult::Ok(1)), "{updated:?}");
+
+        let rows: IpeResult<String, Vec<HashMap<String, String>>> = db_query_params(
+            db.clone(),
+            "SELECT stamped FROM docs WHERE body = ?".to_string(),
+            vec![SqlParam::Text("doc1".to_string())],
+        )
+        .await;
+        match rows {
+            IpeResult::Ok(v) => {
+                assert_eq!(
+                    v[0].get("stamped").map(String::as_str),
+                    Some("tampered"),
+                    "with the immutable column left in the SET it WOULD change — \
+                     confirming the drop is what enforces immutability"
+                );
+            }
+            other => panic!("read back failed: {other:?}"),
+        }
+    }
+
     /// `db_update_where` mirrors `db_update_fields`' guards on the WHERE-fragment
     /// path: an empty WHERE fragment is refused (no mass-update), a scoped update
     /// touches only the matching rows, and a SET value carrying SQL metacharacters

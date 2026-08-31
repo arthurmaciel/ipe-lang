@@ -860,6 +860,21 @@ const RUNTIME_MOD_RS_WEBSOCKET_APPEND: &str = "pub mod ws_client;\npub use ws_cl
 /// sufficient.
 const RUNTIME_MOD_RS_EMAIL_APPEND: &str = "pub mod email;\npub use email::*;\n";
 
+// ── Ipe.Locale ─────────────────────────────────────────────────────────
+
+/// Lines appended to `ipe_runtime/mod.rs` when the program uses the `Ipe.Locale`
+/// surface (`Locale.fromTag`, `Locale.toTag`, `String.toUpperIn`,
+/// `String.toLowerIn`), or any emittable type position mentions `IrType::Locale`.
+///
+/// `locale.rs` is in the runtime source tree (vendored into every emitted crate)
+/// but declared only on demand. The ICU4X parse path inside `locale.rs` is gated
+/// behind `#[cfg(feature = "locale")]`; the `locale_cargo_toml` surgery enables
+/// that feature and adds `icu_casemap` + `icu_locale_core` as optional deps.
+/// Under the dependency model the `locale` Cargo feature is propagated through
+/// `RuntimeFeature::Locale` (see `runtime_features.rs`), so no manifest surgery
+/// is needed on that path.
+const RUNTIME_MOD_RS_LOCALE_APPEND: &str = "pub mod locale;\npub use locale::*;\n";
+
 // ── Ipe.Env ────────────────────────────────────────────────────────────
 
 /// Lines appended to `ipe_runtime/mod.rs` when the program uses the `Ipe.Env`
@@ -1569,11 +1584,16 @@ pub fn emit_program(ctx: &EmitCtx, program: &Program) -> DResult<EmittedProject>
         // Empty (nothing pushed) when the program has no row annotation.
         out.push_str(&emit_row_witnesses(ctx, program)?);
 
-        // boundary-projection impl blocks.  When the program uses Db
+        // boundary-projection impl blocks.  When the program uses Db QUERY
         // kernels, the lowerer injected synthetic `SqlValue` / `SqlField`
-        // enums.  The Db call sites need to project Ipê ADT values to the
-        // runtime's concrete `SqlParam` / `Option<SqlParam>`.
-        if ctx.uses_db {
+        // enums, and the Db call sites project Ipê ADT values to the runtime's
+        // concrete `SqlParam` / `Option<SqlParam>`. Keyed on the injected enum's
+        // PRESENCE, not on `uses_db`: a program that only NAMES a `db`-gated type
+        // (`Dsn` / `Connection`) forces the `db` feature (for `dsn.rs` /
+        // `external_conn.rs`) through the type-closure fold without injecting a
+        // `SqlValue` enum, so there is no projection to emit — gating on
+        // `uses_db` would then reference an enum that does not exist.
+        if ctx.sqlvalue_rust_name.is_some() {
             out.push_str(&emit_db_projection_impls(ctx)?);
         }
 
@@ -2361,6 +2381,16 @@ fn assemble_project_files(
     } else {
         cargo_toml
     };
+    // Ipe.Locale: `locale.rs` is feature-gated behind `#[cfg(feature = "locale")]`
+    // for the ICU4X parse path. Promote the `locale` feature into `default` and
+    // add `icu_casemap` + `icu_locale_core` as optional deps only when the program
+    // reaches locale kernels or mentions `IrType::Locale`. The dep model handles
+    // this through `RuntimeFeature::Locale` (no manifest surgery needed there).
+    let cargo_toml = if ctx.uses_locale {
+        locale_cargo_toml(&cargo_toml)?
+    } else {
+        cargo_toml
+    };
     // Outbound HTTP client (`reqwest`): pulled in by a client kernel
     // (`uses_http`), the server surface (`http_stream.rs` calls `ssrf_apply`+
     // `method_to_reqwest`), or the email surface (`email.rs` calls
@@ -2685,9 +2715,13 @@ fn assemble_project_files(
         if ctx.uses_principal {
             mod_rs.push_str(RUNTIME_MOD_RS_REVOCATION_APPEND);
         }
-        // Ipe.Email — append email module when `Email.send` is used.
+        // Ipe.Email — append email module when any email kernel or type is used.
         if ctx.uses_email {
             mod_rs.push_str(RUNTIME_MOD_RS_EMAIL_APPEND);
+        }
+        // Ipe.Locale — append locale module when any locale kernel or type is used.
+        if ctx.uses_locale {
+            mod_rs.push_str(RUNTIME_MOD_RS_LOCALE_APPEND);
         }
         // Ipe.Env — append env_public module when `Env.public` is used. Not
         // vendored from the source tree (its content is project-specific);
@@ -4091,6 +4125,94 @@ fn email_cargo_toml(base: &str) -> DResult<String> {
     result.push_str(base.get(..anchor_pos).unwrap_or(""));
     result.push_str(&lettre_dep);
     result.push_str(base.get(anchor_pos..).unwrap_or(""));
+    Ok(result)
+}
+
+/// Build the locale-enabled vendored `Cargo.toml`.
+///
+/// Three mutations are needed (dep model uses the `locale` runtime feature
+/// instead, so this path applies only to the vendored fallback):
+///
+/// 1. Add `locale = ["dep:icu_casemap", "dep:icu_locale_core"]` to `[features]`
+///    so that `locale.rs`'s `#[cfg(feature = "locale")]` paths compile.
+/// 2. Promote `locale` into the `default` feature list so the emitted crate
+///    activates it without requiring an explicit `--features locale` flag.
+/// 3. Add `icu_casemap` and `icu_locale_core` as optional dependencies before
+///    `[profile.dev]`.
+///
+/// # Errors
+///
+/// Returns [`Diagnostic::CompilerBug`] if any expected anchor is absent — a
+/// golden-drift invariant violation (fail-loud, never a silent no-op).
+fn locale_cargo_toml(base: &str) -> DResult<String> {
+    const DEFAULT_PREFIX: &str = "default = [";
+    const FEATURES_ANCHOR: &str = "[features]";
+    const PROFILE_ANCHOR: &str = "[profile.dev]";
+
+    let icu_deps = format!(
+        "{} = {{ version = \"{}\", optional = true }}\n\
+         {} = {{ version = \"{}\", optional = true }}\n\n",
+        crate_specs::ICU_CASEMAP.name,
+        crate_specs::ICU_CASEMAP.version,
+        crate_specs::ICU_LOCALE_CORE.name,
+        crate_specs::ICU_LOCALE_CORE.version,
+    );
+
+    // Step 1 — promote `locale` into the `default = [...]` list.
+    let pfx = base
+        .find(DEFAULT_PREFIX)
+        .ok_or_else(|| Diagnostic::CompilerBug {
+            where_: "ipe_backend_rust::project::locale_cargo_toml",
+            detail: format!("Cargo.toml anchor {DEFAULT_PREFIX:?} not found — golden drifted"),
+        })?;
+    let search_from = pfx + DEFAULT_PREFIX.len();
+    let rel = base
+        .get(search_from..)
+        .and_then(|s| s.find(']'))
+        .ok_or_else(|| Diagnostic::CompilerBug {
+            where_: "ipe_backend_rust::project::locale_cargo_toml",
+            detail: "default feature list has no closing ']' — golden drifted".to_owned(),
+        })?;
+    let close = search_from + rel;
+    let mut step1 = String::with_capacity(base.len() + 128);
+    step1.push_str(base.get(..close).unwrap_or(""));
+    step1.push_str(r#", "locale""#);
+    step1.push_str(base.get(close..).unwrap_or(""));
+
+    // Step 2 — add the `locale` feature entry after `[features]`.
+    let locale_feature = "locale = [\"dep:icu_casemap\", \"dep:icu_locale_core\"]\n";
+    let features_pos = step1
+        .find(FEATURES_ANCHOR)
+        .ok_or_else(|| Diagnostic::CompilerBug {
+            where_: "ipe_backend_rust::project::locale_cargo_toml",
+            detail: format!("Cargo.toml anchor {FEATURES_ANCHOR:?} not found — golden drifted"),
+        })?;
+    let after_features = features_pos + FEATURES_ANCHOR.len();
+    // Insert the feature declaration right after the `[features]` header line.
+    let newline_pos = step1
+        .get(after_features..)
+        .and_then(|s| s.find('\n'))
+        .ok_or_else(|| Diagnostic::CompilerBug {
+            where_: "ipe_backend_rust::project::locale_cargo_toml",
+            detail: "no newline after [features] — golden drifted".to_owned(),
+        })?;
+    let insert_at = after_features + newline_pos + 1;
+    let mut step2 = String::with_capacity(step1.len() + locale_feature.len());
+    step2.push_str(step1.get(..insert_at).unwrap_or(""));
+    step2.push_str(locale_feature);
+    step2.push_str(step1.get(insert_at..).unwrap_or(""));
+
+    // Step 3 — add the optional ICU4X deps before `[profile.dev]`.
+    let anchor_pos = step2
+        .find(PROFILE_ANCHOR)
+        .ok_or_else(|| Diagnostic::CompilerBug {
+            where_: "ipe_backend_rust::project::locale_cargo_toml",
+            detail: format!("Cargo.toml anchor {PROFILE_ANCHOR:?} not found — golden drifted"),
+        })?;
+    let mut result = String::with_capacity(step2.len() + icu_deps.len());
+    result.push_str(step2.get(..anchor_pos).unwrap_or(""));
+    result.push_str(&icu_deps);
+    result.push_str(step2.get(anchor_pos..).unwrap_or(""));
     Ok(result)
 }
 

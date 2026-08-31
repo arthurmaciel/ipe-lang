@@ -9,6 +9,16 @@ var __ipeBannerEnabled = (window.__IPE_BANNER_ENABLED != null) ? window.__IPE_BA
 var __ipeRetryBaseMs = (window.__IPE_RETRY_BASE_MS != null) ? window.__IPE_RETRY_BASE_MS : 500;
 var __ipeRetryMaxMs = (window.__IPE_RETRY_MAX_MS != null) ? window.__IPE_RETRY_MAX_MS : 16000;
 var __ipeRetryMaxAttempts = (window.__IPE_RETRY_MAX_ATTEMPTS != null) ? window.__IPE_RETRY_MAX_ATTEMPTS : 10;
+// Fast-reconnect front phase: for the first __ipeRetryFastWindowMs after a
+// drop, retry on a short JITTERED constant interval (~__ipeRetryFastMs) so a
+// fast server restart or a transient blip reconnects almost immediately;
+// jitter spreads a mass reconnect so a recovering server is not
+// thundering-herded. Past the window we fall back to exponential backoff. The
+// window must outlast the expected outage: `ipe watch` injects a longer one
+// (a dev rebuild takes seconds) while the default stays short so a real prod
+// outage does not draw sustained fast retries.
+var __ipeRetryFastMs = (window.__IPE_RETRY_FAST_MS != null) ? window.__IPE_RETRY_FAST_MS : 200;
+var __ipeRetryFastWindowMs = (window.__IPE_RETRY_FAST_WINDOW_MS != null) ? window.__IPE_RETRY_FAST_WINDOW_MS : 3000;
 var __ipeEventQueueMax = (window.__IPE_EVENT_QUEUE_MAX != null) ? window.__IPE_EVENT_QUEUE_MAX : 50;
 var __ipeMsgReconnecting = (window.__IPE_MSG_RECONNECTING != null) ? window.__IPE_MSG_RECONNECTING : "Reconnecting…";
 var __ipeMsgOffline = (window.__IPE_MSG_OFFLINE != null) ? window.__IPE_MSG_OFFLINE : "Connection lost — refresh to retry";
@@ -711,6 +721,9 @@ function __ipeSend(msgName, args, handlerId, opts) {
 var __ipeEventQueue = [];
 var __ipeRetryTimer = null;
 var __ipeRetryAttempts = 0;
+// Epoch ms of the first retry in the current disconnect burst (0 = connected).
+// Bounds the fast-reconnect window; reset to 0 on a successful (re)connect.
+var __ipeReconnectSince = 0;
 // __ipeRetryBaseMs / __ipeRetryMaxMs / __ipeRetryMaxAttempts /
 // __ipeEventQueueMax are templated at the top of this script from
 // the IPE_WEB_RETRY_* / IPE_WEB_QUEUE_MAX env vars.
@@ -788,6 +801,7 @@ function __ipeOnPostSuccess() {
   // backoff state and drain queued events behind this one. If the
   // SSE was the trigger that drained the queue, this is a no-op.
   __ipeRetryAttempts = 0;
+  __ipeReconnectSince = 0;  // reopen the fast-reconnect window for the next drop
   if (__ipeRetryTimer !== null) {
     clearTimeout(__ipeRetryTimer);
     __ipeRetryTimer = null;
@@ -829,15 +843,37 @@ function __ipeShowReconnecting() {
     __ipeSetStatus("reconnecting", __ipeMsgReconnecting);
   }
 }
+// True while still inside the fast-reconnect window after a drop. Starts the
+// disconnect clock on first call. Fast-phase retries are NOT counted toward the
+// give-up cap, so the window always runs its full duration.
+function __ipeInFastReconnect() {
+  var now = (Date.now ? Date.now() : new Date().getTime());
+  if (__ipeReconnectSince === 0) __ipeReconnectSince = now;
+  return (now - __ipeReconnectSince) < __ipeRetryFastWindowMs;
+}
+// ±20% jitter, whole ms, never below 1 — spreads a mass reconnect so a
+// recovering server is not thundering-herded.
+function __ipeJitter(ms) {
+  return Math.max(1, Math.round(ms * (0.8 + Math.random() * 0.4)));
+}
+// Exponential backoff for the post-window phase: 500, 1000, 2000, … capped at
+// __ipeRetryMaxMs, jittered.
+function __ipeExpBackoffDelay() {
+  return __ipeJitter(Math.min(__ipeRetryBaseMs * Math.pow(2, __ipeRetryAttempts - 1), __ipeRetryMaxMs));
+}
 function __ipeScheduleRetry() {
   if (__ipeRetryTimer !== null) return;  // already pending
-  if (__ipeRetryAttempts >= __ipeRetryMaxAttempts) {
-    __ipeSetStatus("offline", __ipeMsgOffline);
-    return;
+  var delay;
+  if (__ipeInFastReconnect()) {
+    delay = __ipeJitter(__ipeRetryFastMs);  // fast phase — not counted toward give-up
+  } else {
+    if (__ipeRetryAttempts >= __ipeRetryMaxAttempts) {
+      __ipeSetStatus("offline", __ipeMsgOffline);
+      return;
+    }
+    __ipeRetryAttempts++;
+    delay = __ipeExpBackoffDelay();
   }
-  __ipeRetryAttempts++;
-  // 500, 1000, 2000, 4000, 8000, 16000, 16000, … (capped)
-  var delay = Math.min(__ipeRetryBaseMs * Math.pow(2, __ipeRetryAttempts - 1), __ipeRetryMaxMs);
   __ipeRetryTimer = setTimeout(function() {
     __ipeRetryTimer = null;
     __ipeDrainQueue();
@@ -1397,6 +1433,7 @@ function __ipeOpenSSE() {
       __ipeSetStatus("connected", "");
     }
     __ipeRetryAttempts = 0;
+    __ipeReconnectSince = 0;
     if (__ipeRetryTimer !== null) {
       clearTimeout(__ipeRetryTimer);
       __ipeRetryTimer = null;
@@ -1423,6 +1460,7 @@ function __ipeOpenSSE() {
         __ipeSetStatus("connected", "");
       }
       __ipeRetryAttempts = 0;
+      __ipeReconnectSince = 0;
       if (__ipeRetryTimer !== null) {
         clearTimeout(__ipeRetryTimer);
         __ipeRetryTimer = null;
@@ -1489,6 +1527,7 @@ function __ipeOpenSSE() {
         __ipeSetStatus("connected", "");
       }
       __ipeRetryAttempts = 0;
+      __ipeReconnectSince = 0;
       if (__ipeRetryTimer !== null) {
         clearTimeout(__ipeRetryTimer);
         __ipeRetryTimer = null;
@@ -1575,7 +1614,6 @@ function __ipeForceReopenSSE() {
   if (__ipeStatus === "connected") {
     __ipeSetStatus("reconnecting", __ipeMsgReconnecting);
   }
-  __ipeRetryAttempts++;
   // Session-loss probe: when the SSE is wedged (typically a server
   // restart with the memory store, or a package.ipe [live] store change
   // wiping the persistent session), no amount of reopen retries can
@@ -1589,13 +1627,19 @@ function __ipeForceReopenSSE() {
   // uncontrolled-input state that v0.11.7's preservation rules can't
   // bring back.
   __ipeProbeSessionLost();
-  if (__ipeRetryAttempts >= __ipeRetryMaxAttempts && __ipeStatus !== "offline") {
-    __ipeSetStatus("offline", __ipeMsgOffline);
-  }
   if (__ipeSseReopenTimer !== null) {
     clearTimeout(__ipeSseReopenTimer);
   }
-  var delay = Math.min(__ipeRetryBaseMs * Math.pow(2, __ipeRetryAttempts - 1), __ipeRetryMaxMs);
+  var delay;
+  if (__ipeInFastReconnect()) {
+    delay = __ipeJitter(__ipeRetryFastMs);  // fast phase — not counted toward give-up
+  } else {
+    __ipeRetryAttempts++;
+    if (__ipeRetryAttempts >= __ipeRetryMaxAttempts && __ipeStatus !== "offline") {
+      __ipeSetStatus("offline", __ipeMsgOffline);
+    }
+    delay = __ipeExpBackoffDelay();
+  }
   __ipeSseReopenTimer = setTimeout(function() {
     __ipeSseReopenTimer = null;
     __ipeOpenSSE();

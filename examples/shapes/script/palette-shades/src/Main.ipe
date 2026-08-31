@@ -1,0 +1,50 @@
+module Main exposing (main)
+
+import Ipe.Palette as Palette exposing (Shade(..), Spacing(..))
+import Ipe.List as List
+import Ipe.String as String
+import Ipe.Task as Task
+import Ipe.Io as Io
+
+
+-- `Ipe.Palette` is a small closed-ADT design-token module. Two ideas:
+--   • `Shade` is a CLOSED set of design tokens (`Dark` / `Light`); `toHex` maps
+--     each to its hex string. A `case` over a `Shade` is exhaustive — a new
+--     token would force every reader to handle it, so no token is silently
+--     unmapped.
+--   • `Spacing` wraps a raw pixel count in a NAMED type (`Sp Int`), so a spacing
+--     value can never be confused with a bare `Int` from somewhere else;
+--     `spacingPx` is the one place the raw number is recovered.
+
+
+-- Every `Shade` renders to its hex string. Because `Shade` is a closed union,
+-- listing its constructors here is exhaustive by construction.
+shadeRow : Shade -> String
+shadeRow shade =
+    shadeName shade ++ " -> " ++ Palette.toHex shade
+
+
+shadeName : Shade -> String
+shadeName shade =
+    case shade of
+        Dark ->
+            "Dark"
+
+        Light ->
+            "Light"
+
+
+-- A spacing scale, each step a named `Spacing`, recovered to pixels only here.
+scale : List Spacing
+scale =
+    [ Sp 4, Sp 8, Sp 16 ]
+
+
+main =
+    do
+        Io.println (shadeRow Dark)
+        Io.println (shadeRow Light)
+        Io.println
+            ("spacing px: "
+                ++ String.join ", " (List.map (\s -> String.fromInt (Palette.spacingPx s)) scale)
+            )

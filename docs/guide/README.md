@@ -35,10 +35,13 @@ cross-link where topics meet.
   encodings](encoding.md) (base64/URL/hex), [Bytes](bytes.md) (raw octets),
   [Compression](compression.md) (gzip/zstd over bytes).
 - **Serialization** — [Codec](codec.md) (one bidirectional codec for JSON and
-  storage; the round-trip law by construction).
+  storage; the round-trip law by construction), [Database codecs](db-codec.md)
+  (that one codec as a database row and back).
 - **Files and configuration** — [Files](file.md) (typed paths, effects as tasks),
+  [Paths](path.md) (opaque, traversal-safe filesystem paths),
   [Configuration](config.md) (typed TOML/YAML/JSON decoders), [CSV](csv.md).
 - **Numbers and magnitudes** — [Math](math.md) (roots, trig, rounding, NaN),
+  [Bitwise operations](bitwise.md) (an `Int` as a vector of bits),
   [Durations](duration.md) (unit-explicit time spans), [Byte sizes](bytesize.md)
   (unit-explicit byte quantities).
 - **Exact quantities and money** — [Decimal](decimal.md) (arbitrary-precision
@@ -50,9 +53,43 @@ cross-link where topics meet.
   primitives](net.md) (range-validated ports).
 - **The process and the terminal** — [System](system.md) (arguments, environment,
   working directory, exit), [Standard I/O](io.md) (stdout/stderr/stdin, the
-  password read).
+  password read), [Environment config](env.md) (build-time public config, wasm-safe),
+  [Subprocesses](process.md) (running a child process with no shell).
+- **Time and clocks** — [Time](time.md) (a typed instant, formatting, calendar
+  arithmetic over durations).
 - **Content and markup** — [HTML](html.md) (typed element trees, XSS-safe by
   construction), [Markdown](markdown.md) (a typed block tree, no raw HTML).
+- **Instrumentation and delivery** — [Analytics](analytics.md) (consent-gated,
+  PII-safe event tracking), [Email](email.md) (provider-abstract send with sealed
+  credentials).
+- **Web application surfaces** — [Page head](web-head.md) (typed `<head>` /
+  SEO tags), [Console authentication](web-console.md) (gate the embedded console
+  with the app's own auth), [Pub/sub](pubsub.md) (in-process typed broadcast),
+  [Browser ports](js.md) (the typed Ipê↔JS seam).
+- **Cryptography** — [Cryptography](crypto.md) (hashes, HMAC, AEAD, and the typed
+  `Key` that makes key/message confusion a compile error).
+- **Network and the web** — [HTTP client](http.md) (typed requests to a typed
+  `Url`, SSRF-guarded), [WebSockets](websocket.md) (long-lived bidirectional
+  frames on a typed `WsUrl`).
+- **Building interfaces** — [Interface elements](ui.md) (the `Element` tree:
+  layout, events, and accessibility roles), [Styling](css.md) (typed CSS values
+  and rules).
+- **Escape hatches** — the surfaces that bypass a safe default behind a disclosed
+  `unsafe` capability: [the unsafe database surface](db-unsafe.md) (raw SQL,
+  untyped column reads), [the secret-reveal hatch](secret-unsafe.md) (un-seal a
+  `Secret` to a bare `String`). Reach for these only for a residual the safe
+  surface cannot express.
+- **Caching** — [Cache](cache.md) (bounded, in-memory LRU with optional TTL; a
+  miss is a `Maybe`, not a failure).
+- **Observability** — [Logging](log.md) (structured, levelled log records),
+  [Log levels](level.md) (the `LogLevel` severity tag),
+  [Tracing](trace.md) (application-level spans + the `Debug` development hatches).
+- **Design tokens** — [Palette](palette.md) (closed token sets and named
+  magnitudes as types).
+- **Testing** — [Testing](test.md) (the in-process framework: tests as values,
+  assertions as results, exit-coded runs).
+- **Databases** — [Connection descriptors](dsn.md) (a typed, credential-safe
+  `Dsn`; parse-don't-validate at the connection boundary).
 
 ## Reference and lookup
 

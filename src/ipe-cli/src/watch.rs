@@ -1177,6 +1177,15 @@ fn child_env(port: u16, out_dir: &Path) -> Vec<(String, String)> {
             db_path.to_string_lossy().into_owned(),
         ));
     }
+    // A dev rebuild is down for seconds (the cargo relink dominates), so widen
+    // the browser's fast-reconnect window past its default to cover it: the page
+    // reconnects a fast-retry tick after the new server binds instead of waiting
+    // out an exponential-backoff interval. The caller's own value wins.
+    if std::env::var("IPE_WEB_RETRY_FAST_WINDOW_MS").is_err()
+        && std::env::var("IPE_LIVE_RETRY_FAST_WINDOW_MS").is_err()
+    {
+        env.push(("IPE_WEB_RETRY_FAST_WINDOW_MS".to_owned(), "8000".to_owned()));
+    }
     env
 }
 

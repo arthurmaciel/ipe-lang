@@ -77,7 +77,7 @@ use ipe_ir::{ModPath, Module, Program};
 /// closure covers exactly the programs the module closure does. The proof is
 /// per-flag + monotone + composed (see the module docs), NOT a `2^FLAG_COUNT`
 /// enumeration — it scales to a far larger flag count in linear time.
-const FLAG_COUNT: usize = 29;
+const FLAG_COUNT: usize = 30;
 
 /// How many random full masks the backstop [`sampled_full_masks_are_closed`]
 /// exercises, on top of the deterministic corners. Bounded so the sample cost
@@ -165,6 +165,7 @@ fn module_for_mask(name: ipe_intern::Symbol, mask: u32) -> Module {
         uses_ui,
         uses_web: f(3),
         uses_tui,
+        uses_console: false,
         uses_webview: f(5),
         uses_css: f(6),
         uses_auth: f(7),
@@ -173,6 +174,10 @@ fn module_for_mask(name: ipe_intern::Symbol, mask: u32) -> Module {
         uses_principal: false,
         uses_websocket: f(8),
         uses_email: f(9),
+        // `uses_locale` is a pure surface (no reactor) — NOT in the async union.
+        // It gates `locale.rs` + the `locale` Cargo feature (`icu_casemap` +
+        // `icu_locale_core`). A standalone leaf here.
+        uses_locale: f(29),
         uses_time: false,
         uses_env_public: f(10),
         uses_http: f(11),
@@ -951,4 +956,137 @@ fn ssot_selects_a_meaningful_subset_of_the_universe() {
             "SSOT sweep never selected the dependency-bearing feature `{expect}`: {union:?}"
         );
     }
+}
+
+/// A program whose module only has `uses_locale = true` (set here directly,
+/// as it would be after the lowerer detects `IrType::Locale` in a type
+/// position) must select the `locale` runtime feature, so `locale_from_tag`
+/// reaches the ICU4X parse path and `locale.rs` compiles.
+///
+/// The lowerer half — that `IrType::Locale` in any emittable position sets
+/// `uses_locale` — is covered by the `ipe_lower` test suite.
+#[test]
+fn uses_locale_selects_locale_feature() {
+    let mut interner = Interner::new();
+    let main = interner.intern("Main").expect("intern Main");
+    let prog = Program {
+        imports_unsafe_submodule: false,
+        modules: vec![Module {
+            name: ModPath(vec![main]),
+            types: vec![],
+            funcs: vec![],
+            entry: None,
+            records: vec![],
+            uses_tea: false,
+            uses_server: false,
+            uses_ui: false,
+            uses_web: false,
+            uses_tui: false,
+            uses_console: false,
+            uses_webview: false,
+            uses_css: false,
+            uses_auth: false,
+            uses_principal: false,
+            uses_websocket: false,
+            uses_http: false,
+            uses_config: false,
+            uses_compression: false,
+            uses_csv: false,
+            uses_cache: false,
+            uses_encoding: false,
+            uses_regex: false,
+            uses_uuid: false,
+            uses_random: false,
+            uses_log: false,
+            uses_decimal: false,
+            uses_char_category: false,
+            uses_crypto_core: false,
+            uses_secret: false,
+            uses_json: false,
+            uses_crypto: false,
+            uses_jwt: false,
+            uses_url: false,
+            uses_debug: false,
+            uses_ffi: false,
+            uses_email: false,
+            uses_locale: true,
+            uses_time: false,
+            uses_env_public: false,
+            uses_async_runtime: false,
+        }],
+    };
+    let features = RustBackend::new(&interner)
+        .runtime_feature_names(&prog)
+        .expect("runtime_feature_names");
+    assert!(
+        features.contains(&"locale"),
+        "a uses_locale program must select the `locale` runtime feature; \
+         got {features:?}"
+    );
+}
+
+/// A program whose module only has `uses_email = true` must select the
+/// `email` runtime feature so the generated `mod.rs` declares
+/// `pub mod email` and all email types resolve at `cargo build` time.
+///
+/// The lowerer half — that all email kernels and `IrType::EmailAddress` set
+/// `uses_email` — is covered by the `ipe_lower` test suite.
+#[test]
+fn uses_email_selects_email_feature() {
+    let mut interner = Interner::new();
+    let main = interner.intern("Main").expect("intern Main");
+    let prog = Program {
+        imports_unsafe_submodule: false,
+        modules: vec![Module {
+            name: ModPath(vec![main]),
+            types: vec![],
+            funcs: vec![],
+            entry: None,
+            records: vec![],
+            uses_tea: false,
+            uses_server: false,
+            uses_ui: false,
+            uses_web: false,
+            uses_tui: false,
+            uses_console: false,
+            uses_webview: false,
+            uses_css: false,
+            uses_auth: false,
+            uses_principal: false,
+            uses_websocket: false,
+            uses_http: false,
+            uses_config: false,
+            uses_compression: false,
+            uses_csv: false,
+            uses_cache: false,
+            uses_encoding: false,
+            uses_regex: false,
+            uses_uuid: false,
+            uses_random: false,
+            uses_log: false,
+            uses_decimal: false,
+            uses_char_category: false,
+            uses_crypto_core: false,
+            uses_secret: false,
+            uses_json: false,
+            uses_crypto: false,
+            uses_jwt: false,
+            uses_url: false,
+            uses_debug: false,
+            uses_ffi: false,
+            uses_email: true,
+            uses_locale: false,
+            uses_time: false,
+            uses_env_public: false,
+            uses_async_runtime: false,
+        }],
+    };
+    let features = RustBackend::new(&interner)
+        .runtime_feature_names(&prog)
+        .expect("runtime_feature_names");
+    assert!(
+        features.contains(&"email"),
+        "a uses_email program must select the `email` runtime feature; \
+         got {features:?}"
+    );
 }
