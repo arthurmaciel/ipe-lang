@@ -10,6 +10,36 @@ Entries below the header are maintained by
 section is generated from Conventional Commit messages and prepended when the
 standing release pull request is merged.
 
+## [0.1.74](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.1.73...ipe-v0.1.74) (2026-08-31)
+
+
+### Features
+
+* **cli:** idempotent ipe upgrade + health integration ([#1550](https://github.com/arthurmaciel/ipe-lang/issues/1550)) ([#1577](https://github.com/arthurmaciel/ipe-lang/issues/1577)) ([5b33f3f](https://github.com/arthurmaciel/ipe-lang/commit/5b33f3fe7275c506894ccc78bfda92587b0077ca))
+* **docs:** ipe doc IPE_&lt;VAR&gt; resolves env vars from ENV_VARS ([#1593](https://github.com/arthurmaciel/ipe-lang/issues/1593)) ([#1601](https://github.com/arthurmaciel/ipe-lang/issues/1601)) ([850f3f1](https://github.com/arthurmaciel/ipe-lang/commit/850f3f145d57e81a8eb9cf319e2a3ce4b65f1eb7))
+* **manifest:** package.ipe programs/exposedModules + ipe init --lib ([#1598](https://github.com/arthurmaciel/ipe-lang/issues/1598)) ([8a3bbd1](https://github.com/arthurmaciel/ipe-lang/commit/8a3bbd1515c23da3ff229bc8151221e9c9f34275))
+* **playground:** one-command setup + CI gate (closes [#317](https://github.com/arthurmaciel/ipe-lang/issues/317)) ([#1596](https://github.com/arthurmaciel/ipe-lang/issues/1596)) ([aa734cc](https://github.com/arthurmaciel/ipe-lang/commit/aa734ccdc70596c93e1cc64ed3895cffed2ffd35))
+* **process:** Process.runInPty — pty-backed child runner via rustix pty ([#1579](https://github.com/arthurmaciel/ipe-lang/issues/1579)) ([0f50e24](https://github.com/arthurmaciel/ipe-lang/commit/0f50e24541a9432a09495bc02a98c6044fed5e6b))
+* **stdlib:** typed Http.StatusCode + Ui.ImageSrc ([#1522](https://github.com/arthurmaciel/ipe-lang/issues/1522), [#1530](https://github.com/arthurmaciel/ipe-lang/issues/1530)) ([#1564](https://github.com/arthurmaciel/ipe-lang/issues/1564)) ([badc28c](https://github.com/arthurmaciel/ipe-lang/commit/badc28cbb3b280b9faf8125560037d9eca270382))
+* **time:** fromMillis/toMillis at Ipe.Time surface + Timestamp/Duration type-safety proof ([#1587](https://github.com/arthurmaciel/ipe-lang/issues/1587)) ([#1595](https://github.com/arthurmaciel/ipe-lang/issues/1595)) ([e672e2b](https://github.com/arthurmaciel/ipe-lang/commit/e672e2bba45f8336abae09a3af53b42249f83d88))
+* **watch:** per-phase rebuild timing behind IPE_WATCH_TIMING ([#1590](https://github.com/arthurmaciel/ipe-lang/issues/1590)) ([f924b3e](https://github.com/arthurmaciel/ipe-lang/commit/f924b3ecc390b2a19b44b298170939b8895d904f))
+* **web-runtime:** LiteralTable primitive + dev==prod conformance (perf Step 2 groundwork) ([#1600](https://github.com/arthurmaciel/ipe-lang/issues/1600)) ([9d0d84a](https://github.com/arthurmaciel/ipe-lang/commit/9d0d84a51b2f745713943516cd25712fd6f77efa))
+
+
+### Bug Fixes
+
+* **cache:** suffix every Ipe Int literal with i64 — fixes Cache.get miss on Int values ([#1551](https://github.com/arthurmaciel/ipe-lang/issues/1551)) ([ad47223](https://github.com/arthurmaciel/ipe-lang/commit/ad47223d7d57686a9eec6bc5ebb923ba721b88ac))
+* **docs:** read -- | line doc-comments so all 77 stdlib modules get a reference page ([#1572](https://github.com/arthurmaciel/ipe-lang/issues/1572)) ([#1585](https://github.com/arthurmaciel/ipe-lang/issues/1585)) ([4361232](https://github.com/arthurmaciel/ipe-lang/commit/4361232b6d52671d4065426fc1f573dfc443a880))
+* **docs:** regenerate stdlib reference for reworded boolAttribute doc-comment ([7b17c66](https://github.com/arthurmaciel/ipe-lang/commit/7b17c66ca787c0f1da671ab0fcb329ae9afcf9d9))
+* **emit:** email-only programs no longer pull http_stream+tea into vendored crate ([#1545](https://github.com/arthurmaciel/ipe-lang/issues/1545)) ([#1576](https://github.com/arthurmaciel/ipe-lang/issues/1576)) ([7d8c143](https://github.com/arthurmaciel/ipe-lang/commit/7d8c1430883c5b19ae656353975bdc9ec8228bd0))
+* **file:** readFileLimit takes ByteSize instead of bare Int (IPE-[#1422](https://github.com/arthurmaciel/ipe-lang/issues/1422)) ([#1574](https://github.com/arthurmaciel/ipe-lang/issues/1574)) ([46f4cdb](https://github.com/arthurmaciel/ipe-lang/commit/46f4cdb444b35b0c9cb5b9021ee328e2023f81e0))
+* **html-attrs:** correct boolAttribute doc and scrub internal comment reference-impl names ([#1582](https://github.com/arthurmaciel/ipe-lang/issues/1582)) ([59d967b](https://github.com/arthurmaciel/ipe-lang/commit/59d967b8be2e8f042343603c0b917077036fc520))
+* **modset:** append seal_codec for render-capable shapes (closes [#1581](https://github.com/arthurmaciel/ipe-lang/issues/1581)) ([#1597](https://github.com/arthurmaciel/ipe-lang/issues/1597)) ([fe68d3d](https://github.com/arthurmaciel/ipe-lang/commit/fe68d3d566cbf38dcfe054a20a9f7c79d253ec45))
+* **regen-goldens:** drive build_project for multi-module package.ipe fixtures ([#1566](https://github.com/arthurmaciel/ipe-lang/issues/1566)) ([#1567](https://github.com/arthurmaciel/ipe-lang/issues/1567)) ([2e4442a](https://github.com/arthurmaciel/ipe-lang/commit/2e4442a9b0cb8072c958ddcd908f7587ea6cb3fc))
+* **runtime:** drop crate:: qualifier on IpeTask in tea.rs app-handle fields ([#1549](https://github.com/arthurmaciel/ipe-lang/issues/1549)) ([#1580](https://github.com/arthurmaciel/ipe-lang/issues/1580)) ([f060c9d](https://github.com/arthurmaciel/ipe-lang/commit/f060c9dba0fdd1374431c918da667edce6d0bdf3))
+* **upgrade:** return ExitCode not process::exit (unbreak main panic-scan) ([#1583](https://github.com/arthurmaciel/ipe-lang/issues/1583)) ([80f9a90](https://github.com/arthurmaciel/ipe-lang/commit/80f9a90c8594777b733e01dd85ac75d5deff3c29))
+* **watch:** frame the build-failed diagnostic and soften red to light yellow ([#1571](https://github.com/arthurmaciel/ipe-lang/issues/1571)) ([2df51e3](https://github.com/arthurmaciel/ipe-lang/commit/2df51e315e79582b8fbd14c0d06a2d17ebbfd69a))
+
 ## [0.1.73](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.1.72...ipe-v0.1.73) (2026-08-31)
 
 
