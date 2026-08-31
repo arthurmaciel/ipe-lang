@@ -961,6 +961,15 @@ pub(crate) struct EmitCtx<'a> {
     /// email::*;` to the emitted `ipe_runtime/mod.rs` and adds the `lettre`
     /// dependency to the emitted `Cargo.toml`.
     pub(crate) uses_email: bool,
+    /// `true` when the program uses at least one `Ipe.Locale` kernel
+    /// (`Locale.fromTag`, `Locale.toTag`, `String.toUpperIn`,
+    /// `String.toLowerIn`), or any emittable type position mentions
+    /// `IrType::Locale`. When set,
+    /// [`crate::project::assemble_project_files`] appends `pub mod locale; pub
+    /// use locale::*;` to the emitted `ipe_runtime/mod.rs` and enables the
+    /// `locale` Cargo feature (`icu_casemap` + `icu_locale_core`) so
+    /// `locale_from_tag` uses the ICU4X parse path.
+    pub(crate) uses_locale: bool,
     /// `true` when the program uses at least one non-TEA `Ipe.Time` kernel
     /// (`Time.now` / `unixMillis` / `sleep` / `timeString` / `isLeapYear` /
     /// `daysInMonth`). When set, [`crate::project::assemble_project_files`]
@@ -1700,8 +1709,10 @@ impl<'a> EmitCtx<'a> {
         let uses_auth = program.modules.iter().any(|m| m.uses_auth);
         // detect `Ipe.Auth.subject` usage (touches the opaque `Principal`).
         let uses_principal = program.modules.iter().any(|m| m.uses_principal);
-        // detect Ipe.Email kernel usage.
+        // detect Ipe.Email usage (kernel or type-mention).
         let uses_email = program.modules.iter().any(|m| m.uses_email);
+        // detect Ipe.Locale usage (kernel or type-mention).
+        let uses_locale = program.modules.iter().any(|m| m.uses_locale);
         // detect non-TEA Ipe.Time kernel usage — gates the `time` Cargo feature
         // and the `chrono-tz` dependency.
         let uses_time = program.modules.iter().any(|m| m.uses_time);
@@ -1818,6 +1829,7 @@ impl<'a> EmitCtx<'a> {
             uses_principal,
             uses_websocket,
             uses_email,
+            uses_locale,
             uses_time,
             uses_ffi,
             ffi,
@@ -4471,6 +4483,7 @@ mod record_struct_namespace_tests {
                 uses_principal: false,
                 uses_websocket: false,
                 uses_email: false,
+                uses_locale: false,
                 uses_time: false,
                 uses_env_public: false,
                 uses_debug: false,
@@ -4575,6 +4588,7 @@ mod record_struct_namespace_tests {
                 uses_principal: false,
                 uses_websocket: false,
                 uses_email: false,
+                uses_locale: false,
                 uses_time: false,
                 uses_env_public: false,
                 uses_debug: false,
@@ -4659,6 +4673,7 @@ mod record_struct_namespace_tests {
                 uses_principal: false,
                 uses_websocket: false,
                 uses_email: false,
+                uses_locale: false,
                 uses_time: false,
                 uses_env_public: false,
                 uses_debug: false,

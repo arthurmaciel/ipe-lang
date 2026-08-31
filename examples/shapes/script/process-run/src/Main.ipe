@@ -1,0 +1,39 @@
+module Main exposing (main)
+
+import Ipe.Process as Process
+import Ipe.String as String
+import Ipe.Task as Task
+import Ipe.Io as Io
+import Ipe.Maybe exposing (Maybe(..))
+
+
+-- `Ipe.Process` runs a child process with NO shell. The command and its
+-- arguments are passed as a direct argument vector — never through `sh -c` — so
+-- a caller-controlled argument can never be reinterpreted as shell syntax. Three
+-- ideas:
+--   • `Process.run cmd argv` succeeds with the child's stdout; a non-zero exit or
+--     a spawn failure is a typed Task `Error`.
+--   • `Process.runWith cfg` is the richer form: it captures exit code, stdout, and
+--     stderr independently, and treats a non-zero exit as a NORMAL result (in
+--     `exitCode`) — only a spawn failure fails the Task.
+--   • Arguments are literal. `runWith` below passes `$HOME` as a plain string; it
+--     is echoed verbatim, never expanded, because there is no shell to expand it.
+
+
+main =
+    do
+        -- The simple form: capture stdout of a successful command.
+        greeting <- Process.run "echo" [ "hello", "from", "a", "child" ]
+        Io.println ("run -> " ++ String.trim greeting)
+
+        -- The rich form: an argument that LOOKS like a shell variable is passed
+        -- literally, and a non-zero exit is a normal result, not a failure.
+        result <-
+            Process.runWith
+                { command = "printf"
+                , args = [ "%s\n", "$HOME is not expanded" ]
+                , cwd = Nothing
+                , env = []
+                }
+        Io.println ("exit=" ++ String.fromInt result.exitCode)
+        Io.println ("stdout -> " ++ String.trim result.stdout)

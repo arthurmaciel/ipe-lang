@@ -348,6 +348,8 @@ fn web_client_config_js() -> String {
          window.__IPE_RETRY_BASE_MS={};\
          window.__IPE_RETRY_MAX_MS={};\
          window.__IPE_RETRY_MAX_ATTEMPTS={};\
+         window.__IPE_RETRY_FAST_MS={};\
+         window.__IPE_RETRY_FAST_WINDOW_MS={};\
          window.__IPE_EVENT_QUEUE_MAX={};\
          window.__IPE_HELLO_TIMEOUT_MS={};\
          window.__IPE_HEARTBEAT_TTL_MS={};\
@@ -359,6 +361,15 @@ fn web_client_config_js() -> String {
             "IPE_WEB_RETRY_MAX_ATTEMPTS",
             "IPE_LIVE_RETRY_MAX_ATTEMPTS",
             10
+        ),
+        // New vars: `IPE_WEB_*` only. Unlike the renamed ones above they never
+        // existed under the old `IPE_LIVE_*` name, so there is no deprecated
+        // alias to honour — the same name for both keys reads it once.
+        num("IPE_WEB_RETRY_FAST_MS", "IPE_WEB_RETRY_FAST_MS", 200),
+        num(
+            "IPE_WEB_RETRY_FAST_WINDOW_MS",
+            "IPE_WEB_RETRY_FAST_WINDOW_MS",
+            3000
         ),
         num("IPE_WEB_QUEUE_MAX", "IPE_LIVE_QUEUE_MAX", 50),
         num(

@@ -1,0 +1,10 @@
+{
+    "kind": "cli",
+    "steps": [
+        {
+            "args": [],
+            "expectExit": 0,
+            "expectStdoutContains": ["2024-02-29T12:00:00", "2024-02-29T14:00:00", "window span: 120 minutes", "leap year: yes", "Feb 2024 has 29 days"]
+        }
+    ]
+}

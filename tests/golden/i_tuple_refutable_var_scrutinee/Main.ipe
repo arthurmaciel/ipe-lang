@@ -1,0 +1,79 @@
+module Main exposing (main)
+
+import Ipe.List as List
+import Ipe.Io as Io
+import Ipe.String
+
+
+-- Issue #1532 — a multi-arm `case` on a NON-literal tuple scrutinee whose
+-- arms use DIRECT list / cons column patterns. Before the fix this was
+-- rejected with IPE-L0115. The lowerer now synthesises a literal-tuple
+-- scrutinee by destructuring the variable into fresh element temps, enabling
+-- the coerced-column backend path.
+--
+-- Shape 1: the exact issue example — `List.partition` result matched with a
+-- list-pattern column and a variable catch-all.
+type alias Row =
+    { team : String
+    , points : Int
+    , played : Int
+    }
+
+
+addPoints : String -> Int -> List Row -> List Row
+addPoints team earned table =
+    case List.partition (\row -> row.team == team) table of
+        ( [ row ], rest ) ->
+            { row | points = row.points + earned } :: rest
+
+        ( _, rest ) ->
+            { team = team, points = earned, played = 1 } :: rest
+
+
+-- Shape 2: cons-pattern column (`x :: xs`) on a variable scrutinee.
+zipSumVar : ( List Int, List Int ) -> List Int -> List Int
+zipSumVar pair acc =
+    case pair of
+        ( a :: xrest, b :: yrest ) ->
+            zipSumVar ( xrest, yrest ) (acc ++ [ a + b ])
+
+        ( _, _ ) ->
+            acc
+
+
+-- Shape 3: singleton list column on a variable scrutinee — fall-through to
+-- the second arm when the list has more than one element.
+firstOrZero : ( List Int, String ) -> Int
+firstOrZero pair =
+    case pair of
+        ( [ x ], _ ) ->
+            x
+
+        ( _, _ ) ->
+            0
+
+
+main =
+    let
+        table =
+            [ { team = "A", points = 10, played = 3 }
+            , { team = "B", points = 5, played = 2 }
+            ]
+
+        updated =
+            addPoints "A" 3 table
+
+        updatedLen =
+            List.length updated
+
+        zipped =
+            List.length (zipSumVar ( [ 1, 2, 3 ], [ 10, 20, 30 ] ) [])
+
+        s1 =
+            firstOrZero ( [ 42 ], "hi" )
+
+        s2 =
+            firstOrZero ( [ 1, 2 ], "bye" )
+    in
+    -- updatedLen = 2, zipped = 3, s1 = 42, s2 = 0  → total = 47
+    Io.println (String.fromInt (updatedLen + zipped + s1 + s2))

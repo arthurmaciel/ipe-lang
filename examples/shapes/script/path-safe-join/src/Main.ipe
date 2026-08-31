@@ -1,0 +1,59 @@
+module Main exposing (main)
+
+import Ipe.Path as Path exposing (Path)
+import Ipe.String as String
+import Ipe.Io as Io
+
+
+-- Parse, don't validate, for filesystem paths. `Path` is opaque: the only way to
+-- build one is `Path.fromString`, which normalises separators and REJECTS a NUL
+-- byte or a `..` traversal escape. A value of type `Path` is therefore proof that
+-- it is a clean, in-root path — so every `Ipe.File` entry point takes a `Path`,
+-- never a raw `String`, and an unvalidated string can never reach a syscall.
+
+
+-- On a parsed `Path`, the accessors are total: `base`, `dir`, `ext`, and
+-- `isAbsolute` each read a component with no re-checking, because the value is
+-- already known clean. A traversal attack or NUL byte fails at `fromString`.
+describe : String -> String
+describe raw =
+    case Path.fromString raw of
+
+        Ok path ->
+            String.join "  "
+                [ Path.toString path
+                , "base=" ++ Path.base path
+                , "ext=" ++ ext path
+                , "abs=" ++ boolString (Path.isAbsolute path)
+                ]
+
+        Err _ ->
+            raw ++ "  ->  REJECTED (traversal or NUL)"
+
+
+ext : Path -> String
+ext path =
+    case Path.ext path of
+
+        "" ->
+            "(none)"
+
+        e ->
+            e
+
+
+boolString : Bool -> String
+boolString b =
+    if b then
+        "yes"
+
+    else
+        "no"
+
+
+main =
+    do
+        Io.println (describe "uploads/report.csv")
+        Io.println (describe "uploads/../../etc/passwd")
+        Io.println (describe "/var/log/app.log")
+        Io.println (describe "notes")

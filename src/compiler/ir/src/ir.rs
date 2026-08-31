@@ -363,15 +363,31 @@ pub struct Module {
     /// ws_client::*;` to the emitted `ipe_runtime/mod.rs` — the `ws_client`
     /// runtime module is feature-gated and NOT part of the base module set.
     pub uses_websocket: bool,
-    /// `true` when the lowerer detected the `Ipe.Email` `Email.send` kernel call
-    /// in the module's function bodies.
+    /// `true` when the lowerer detected at least one `Ipe.Email` kernel call
+    /// (`Email.send`, `EmailAddress.parse`, `EmailAddress.toString`) in the
+    /// module's function bodies, OR any emittable type position that mentions
+    /// an `Ipe.Email` runtime type (`EmailAddress`, `EmailMessage`, `EmailProvider`,
+    /// etc.).
     ///
-    /// Set by `ipe_lower` when a call site resolves to `KernelFn::EmailSend`.
     /// The backend reads this flag to decide whether to append `pub mod email;
     /// pub use email::*;` to the emitted `ipe_runtime/mod.rs` and to add the
-    /// `lettre` dependency (the only extra crate `email.rs` needs beyond the
-    /// base manifest) to the emitted `Cargo.toml`.
+    /// `lettre` dependency to the emitted `Cargo.toml`. The type-mention guard
+    /// is required: a program that only names `EmailAddress` in a signature
+    /// (without calling `Email.send`) still emits a reference to
+    /// `ipe_runtime::email::EmailAddress`, which resolves only when the module
+    /// is declared.
     pub uses_email: bool,
+    /// `true` when the lowerer detected at least one `Ipe.Locale` kernel call
+    /// (`Locale.fromTag`, `Locale.toTag`, `String.toUpperIn`, `String.toLowerIn`)
+    /// in the module's function bodies, OR any emittable type position that
+    /// mentions `IrType::Locale`.
+    ///
+    /// The backend reads this flag to append `pub mod locale; pub use locale::*;`
+    /// to the emitted `ipe_runtime/mod.rs` and to enable the `locale` Cargo
+    /// feature (`icu_casemap` + `icu_locale_core`). Without the feature,
+    /// `locale_from_tag` compiles but always returns `Nothing`; the type-mention
+    /// guard ensures the module is declared whenever the type appears.
+    pub uses_locale: bool,
     /// `true` when the lowerer detected at least one non-TEA `Ipe.Time` kernel
     /// call (`Time.now` / `unixMillis` / `sleep` / `timeString` / `isLeapYear` /
     /// `daysInMonth`) in the module's function bodies.
@@ -4672,6 +4688,7 @@ mod tests {
                 uses_principal: false,
                 uses_websocket: false,
                 uses_email: false,
+                uses_locale: false,
                 uses_time: false,
                 uses_env_public: false,
                 uses_debug: false,
@@ -5204,6 +5221,7 @@ mod serde_persistence_tests {
                 uses_principal: false,
                 uses_websocket: false,
                 uses_email: false,
+                uses_locale: false,
                 uses_time: false,
                 uses_env_public: false,
                 uses_debug: false,
@@ -5296,6 +5314,7 @@ mod serde_persistence_tests {
                 uses_principal: false,
                 uses_websocket: false,
                 uses_email: false,
+                uses_locale: false,
                 uses_time: false,
                 uses_env_public: false,
                 uses_debug: false,
