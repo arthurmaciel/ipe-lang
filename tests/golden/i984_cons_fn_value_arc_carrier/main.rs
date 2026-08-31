@@ -198,11 +198,11 @@ pub fn ipe_main() -> IpeTask<()> {
     ({
         let f = {
             let __ipe_fn: Box<dyn Fn(i64) -> i64 + Send + Sync + 'static> =
-                Box::new(move |n: i64| -> i64 { ipe_runtime::math::ipe_int_add(n, 1) });
+                Box::new(move |n: i64| -> i64 { ipe_runtime::math::ipe_int_add(n, 1i64) });
             __ipe_fn
         };
         ({
-            let items = vec![1, 2, 3];
+            let items = vec![1i64, 2i64, 3i64];
             ({
                 let result = ({
                     let g = {
@@ -239,7 +239,7 @@ pub fn ipe_main() -> IpeTask<()> {
                                 Vec::<::std::sync::Arc<dyn Fn(i64) -> i64 + Send + Sync + 'static>>::new(),
                             );
                             ({
-                                let applied = (g)(42);
+                                let applied = (g)(42i64);
                                 ipe_runtime::math::ipe_int_add(
                                     ipe_runtime::math::ipe_int_add(applied, list_sum(mapped)),
                                     list_length(gs),

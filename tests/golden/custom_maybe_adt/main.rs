@@ -210,13 +210,13 @@ pub fn file_rename(src: ipe_runtime::path::Path, dst: ipe_runtime::path::Path) -
 pub fn main_unwrap(m: MainOpt<i64>) -> i64 {
     let _ipe_recursion_guard = crate::recursion_guard();
     match m {
-        MainOpt::Som(x) => ipe_runtime::math::ipe_int_add(x, 1),
-        MainOpt::Non => 0,
+        MainOpt::Som(x) => ipe_runtime::math::ipe_int_add(x, 1i64),
+        MainOpt::Non => 0i64,
     }
 }
 pub fn ipe_main() -> IpeTask<()> {
     let _ipe_recursion_guard = crate::recursion_guard();
-    io_println(string_from_int(crate::main_unwrap(MainOpt::Som(41))))
+    io_println(string_from_int(crate::main_unwrap(MainOpt::Som(41i64))))
 }
 
 // Ffi.kernel polyfill — should be unreachable in Rust target;

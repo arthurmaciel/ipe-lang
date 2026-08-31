@@ -215,14 +215,14 @@ pub fn main_apply<
 pub fn ipe_main() -> IpeTask<()> {
     let _ipe_recursion_guard = crate::recursion_guard();
     ({
-        let n = crate::main_identity(40);
+        let n = crate::main_identity(40i64);
         ({
-            let flag = crate::main_identity((1 == 1));
+            let flag = crate::main_identity((1i64 == 1i64));
             ({
-                let c = crate::main_const(2, (5 == 5));
+                let c = crate::main_const(2i64, (5i64 == 5i64));
                 ({
                     let r = crate::main_apply(
-                        move |k: i64| -> i64 { ipe_runtime::math::ipe_int_add(k, 0) },
+                        move |k: i64| -> i64 { ipe_runtime::math::ipe_int_add(k, 0i64) },
                         (if flag {
                             ipe_runtime::math::ipe_int_add(n, c)
                         } else {

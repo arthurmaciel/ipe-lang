@@ -198,10 +198,10 @@ pub fn ipe_main() -> IpeTask<()> {
     io_println(string_from_int(list_length(list_filter(
         {
             let __ipe_fn: Box<dyn Fn(i64) -> bool + Send + Sync + 'static> =
-                Box::new(move |x: i64| -> bool { (x > 2) });
+                Box::new(move |x: i64| -> bool { (x > 2i64) });
             __ipe_fn
         },
-        vec![1, 2, 3, 4],
+        vec![1i64, 2i64, 3i64, 4i64],
     ))))
 }
 

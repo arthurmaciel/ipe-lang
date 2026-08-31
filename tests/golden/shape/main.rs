@@ -217,7 +217,7 @@ pub fn main_area(s: MainShape) -> i64 {
     let _ipe_recursion_guard = crate::recursion_guard();
     match s {
         MainShape::Circle(r) => {
-            ipe_runtime::math::ipe_int_mul(ipe_runtime::math::ipe_int_mul(r, r), 3)
+            ipe_runtime::math::ipe_int_mul(ipe_runtime::math::ipe_int_mul(r, r), 3i64)
         }
         MainShape::Rect(w, h) => ipe_runtime::math::ipe_int_mul(w, h),
     }
@@ -225,8 +225,8 @@ pub fn main_area(s: MainShape) -> i64 {
 pub fn ipe_main() -> IpeTask<()> {
     let _ipe_recursion_guard = crate::recursion_guard();
     io_println(string_from_int(ipe_runtime::math::ipe_int_add(
-        crate::main_area(MainShape::Rect(4, 5)),
-        crate::main_area(MainShape::Circle(2)),
+        crate::main_area(MainShape::Rect(4i64, 5i64)),
+        crate::main_area(MainShape::Circle(2i64)),
     )))
 }
 

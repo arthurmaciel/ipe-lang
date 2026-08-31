@@ -215,7 +215,7 @@ pub fn main_wrap<T1: Clone>(value: T1) -> T1 {
 }
 pub fn ipe_main() -> IpeTask<()> {
     let _ipe_recursion_guard = crate::recursion_guard();
-    io_println(string_from_int(crate::main_wrap(7)))
+    io_println(string_from_int(crate::main_wrap(7i64)))
 }
 
 // Ffi.kernel polyfill — should be unreachable in Rust target;

@@ -211,10 +211,10 @@ pub fn file_rename(src: ipe_runtime::path::Path, dst: ipe_runtime::path::Path) -
 pub fn ipe_main() -> IpeTask<()> {
     let _ipe_recursion_guard = crate::recursion_guard();
     ({
-        let p = RecXY { x: 1, y: 2 };
+        let p = RecXY { x: 1i64, y: 2i64 };
         ({
             let q = {
-                let __ipe_upd_0 = 41;
+                let __ipe_upd_0 = 41i64;
                 let mut __ipe_rec = p.clone();
                 __ipe_rec.x = __ipe_upd_0;
                 __ipe_rec

@@ -209,7 +209,7 @@ pub fn main_combine(pair: (i64, i64)) -> i64 {
 }
 pub fn ipe_main() -> IpeTask<()> {
     let _ipe_recursion_guard = crate::recursion_guard();
-    io_println(string_from_int(crate::main_combine((10, 3))))
+    io_println(string_from_int(crate::main_combine((10i64, 3i64))))
 }
 
 // Ffi.kernel polyfill — should be unreachable in Rust target;

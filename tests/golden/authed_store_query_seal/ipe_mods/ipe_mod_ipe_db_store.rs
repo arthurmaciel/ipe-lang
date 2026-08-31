@@ -368,25 +368,25 @@ pub(crate) fn user_ipe_db_store_valid_ident_char(c: char) -> bool {
 }
 pub(crate) fn user_ipe_db_store_is_ascii_digit(code: i64) -> bool {
     let _ipe_recursion_guard = crate::recursion_guard();
-    ((code >= 48) && (code <= 57))
+    ((code >= 48i64) && (code <= 57i64))
 }
 pub(crate) fn user_ipe_db_store_is_ascii_upper(code: i64) -> bool {
     let _ipe_recursion_guard = crate::recursion_guard();
-    ((code >= 65) && (code <= 90))
+    ((code >= 65i64) && (code <= 90i64))
 }
 pub(crate) fn user_ipe_db_store_is_ascii_lower(code: i64) -> bool {
     let _ipe_recursion_guard = crate::recursion_guard();
-    ((code >= 97) && (code <= 122))
+    ((code >= 97i64) && (code <= 122i64))
 }
 pub(crate) fn user_ipe_db_store_underscore_code() -> i64 {
     let _ipe_recursion_guard = crate::recursion_guard();
     static CELL: std::sync::OnceLock<i64> = std::sync::OnceLock::new();
-    CELL.get_or_init(|| 95).clone()
+    CELL.get_or_init(|| 95i64).clone()
 }
 pub(crate) fn user_ipe_db_store_dot_code() -> i64 {
     let _ipe_recursion_guard = crate::recursion_guard();
     static CELL: std::sync::OnceLock<i64> = std::sync::OnceLock::new();
-    CELL.get_or_init(|| 46).clone()
+    CELL.get_or_init(|| 46i64).clone()
 }
 pub(crate) fn user_ipe_db_store_column(name: String, colType: IpeCodecColType) -> IpeDbStoreColumn {
     let _ipe_recursion_guard = crate::recursion_guard();
@@ -534,8 +534,8 @@ pub(crate) fn user_ipe_db_store_has_column(columns: Vec<IpeDbStoreColumn>, name:
 pub(crate) fn user_ipe_db_store_always_true() -> ipe_runtime::db::SqlFragment {
     let _ipe_recursion_guard = crate::recursion_guard();
     sql_eq(
-        sql_param(MainSqlValue::SqlInt(1)),
-        sql_param(MainSqlValue::SqlInt(1)),
+        sql_param(MainSqlValue::SqlInt(1i64)),
+        sql_param(MainSqlValue::SqlInt(1i64)),
     )
 }
 pub(crate) fn user_ipe_db_store_decode_rows<T1: 'static + Send + Sync + Clone>(

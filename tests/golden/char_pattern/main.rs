@@ -196,9 +196,9 @@ pub fn file_rename(src: ipe_runtime::path::Path, dst: ipe_runtime::path::Path) -
 pub fn main_grade(c: char) -> i64 {
     let _ipe_recursion_guard = crate::recursion_guard();
     match c {
-        'a' => 1,
-        'b' => 2,
-        _ => 0,
+        'a' => 1i64,
+        'b' => 2i64,
+        _ => 0i64,
     }
 }
 pub fn ipe_main() -> IpeTask<()> {

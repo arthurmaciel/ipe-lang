@@ -239,7 +239,7 @@ pub fn main_apply(c: RecCountFormatLabelOnChange) -> String {
 pub fn ipe_main() -> IpeTask<()> {
     let _ipe_recursion_guard = crate::recursion_guard();
     io_println(crate::main_apply(RecCountFormatLabelOnChange {
-        count: 3,
+        count: 3i64,
         format: {
             let __ipe_fn: ::std::sync::Arc<dyn Fn(i64) -> String + Send + Sync + 'static> =
                 Arc::new(string_from_int);

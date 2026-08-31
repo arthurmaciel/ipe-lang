@@ -259,12 +259,13 @@ pub fn ipe_main() -> IpeTask<()> {
     let _ipe_recursion_guard = crate::recursion_guard();
     io_println(string_from_int(list_sum(crate::main_run(
         MainCodec::Codec({
-            let __ipe_fn: ::std::sync::Arc<dyn Fn(i64) -> i64 + Send + Sync + 'static> = ::std::sync::Arc::new(
-                move |n: i64| -> i64 { ipe_runtime::math::ipe_int_add(n, 1) },
-            );
+            let __ipe_fn: ::std::sync::Arc<dyn Fn(i64) -> i64 + Send + Sync + 'static> =
+                ::std::sync::Arc::new(move |n: i64| -> i64 {
+                    ipe_runtime::math::ipe_int_add(n, 1i64)
+                });
             __ipe_fn
         }),
-        vec![1, 2, 3],
+        vec![1i64, 2i64, 3i64],
     ))))
 }
 

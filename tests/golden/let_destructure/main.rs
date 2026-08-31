@@ -211,7 +211,7 @@ pub fn main_tuple_parts() -> i64 {
     static CELL: std::sync::OnceLock<i64> = std::sync::OnceLock::new();
     CELL.get_or_init(|| {
         ({
-            let (a, b) = (40, 2);
+            let (a, b) = (40i64, 2i64);
             ipe_runtime::math::ipe_int_add(a, b)
         })
     })
@@ -222,7 +222,7 @@ pub fn main_record_part() -> i64 {
     static CELL: std::sync::OnceLock<i64> = std::sync::OnceLock::new();
     CELL.get_or_init(|| {
         ({
-            let RecX { x, .. } = RecX { x: 42 };
+            let RecX { x, .. } = RecX { x: 42i64 };
             x
         })
     })

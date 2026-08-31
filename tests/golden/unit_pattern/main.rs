@@ -195,7 +195,7 @@ pub fn file_rename(src: ipe_runtime::path::Path, dst: ipe_runtime::path::Path) -
 
 pub fn main_use_unit(u: ()) -> i64 {
     let _ipe_recursion_guard = crate::recursion_guard();
-    7
+    7i64
 }
 pub fn ipe_main() -> IpeTask<()> {
     let _ipe_recursion_guard = crate::recursion_guard();

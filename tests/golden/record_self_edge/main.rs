@@ -226,7 +226,7 @@ pub fn file_rename(src: ipe_runtime::path::Path, dst: ipe_runtime::path::Path) -
 pub fn main_sum_r(c: MainRChain) -> i64 {
     let _ipe_recursion_guard = crate::recursion_guard();
     match c {
-        MainRChain::REnd => 0,
+        MainRChain::REnd => 0i64,
         MainRChain::RNode(rec) => {
             let rec = *rec;
             ipe_runtime::math::ipe_int_add((rec.clone()).val, crate::main_sum_r((rec).rest.clone()))
@@ -239,9 +239,9 @@ pub fn ipe_main() -> IpeTask<()> {
         Box::new(RecRestVal {
             rest: MainRChain::RNode(Box::new(RecRestVal {
                 rest: MainRChain::REnd,
-                val: 2,
+                val: 2i64,
             })),
-            val: 3,
+            val: 3i64,
         }),
     ))))
 }

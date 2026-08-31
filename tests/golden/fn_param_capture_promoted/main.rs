@@ -238,11 +238,11 @@ pub fn ipe_main() -> IpeTask<()> {
     io_println(string_from_int(crate::main_compose2(
         {
             let __ipe_fn: Box<dyn Fn(i64) -> i64 + Send + Sync + 'static> =
-                Box::new(move |n: i64| -> i64 { ipe_runtime::math::ipe_int_add(n, 5) });
+                Box::new(move |n: i64| -> i64 { ipe_runtime::math::ipe_int_add(n, 5i64) });
             __ipe_fn
         },
-        1,
-        2,
+        1i64,
+        2i64,
     )))
 }
 

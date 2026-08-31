@@ -17,24 +17,24 @@ pub(crate) fn main_add3(a: i64, b: i64, c: i64) -> i64 {
 pub(crate) fn ipe_main() -> IpeTask<()> {
     let _ipe_recursion_guard = crate::recursion_guard();
     ({
-        let g = crate::main_f(1);
+        let g = crate::main_f(1i64);
         ({
             let h = {
                 let __ipe_fn: Box<dyn Fn(i64) -> i64 + Send + Sync + 'static> =
-                    Box::new(move |eta_0: i64| -> i64 { (g)(2, eta_0) });
+                    Box::new(move |eta_0: i64| -> i64 { (g)(2i64, eta_0) });
                 __ipe_fn
             };
             ({
-                let boundPartial = (h)(3);
+                let boundPartial = (h)(3i64);
                 ({
                     let overPartial = ({
-                        let eta_0: i64 = 3;
-                        (crate::main_f(10))(20, eta_0)
+                        let eta_0: i64 = 3i64;
+                        (crate::main_f(10i64))(20i64, eta_0)
                     });
                     ({
                         let pipePartial = ({
-                            let eta_0: i64 = 100;
-                            crate::main_add3(1, 2, eta_0)
+                            let eta_0: i64 = 100i64;
+                            crate::main_add3(1i64, 2i64, eta_0)
                         });
                         task_and_then(
                             io_println(string_from_int(boundPartial)),

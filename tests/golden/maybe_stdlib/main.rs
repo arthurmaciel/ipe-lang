@@ -197,12 +197,12 @@ pub fn main_unwrap(m: IpeMaybe<i64>) -> i64 {
     let _ipe_recursion_guard = crate::recursion_guard();
     match m {
         IpeMaybe::Just(n) => n,
-        IpeMaybe::Nothing => 0,
+        IpeMaybe::Nothing => 0i64,
     }
 }
 pub fn ipe_main() -> IpeTask<()> {
     let _ipe_recursion_guard = crate::recursion_guard();
-    io_println(string_from_int(crate::main_unwrap(IpeMaybe::Just(42))))
+    io_println(string_from_int(crate::main_unwrap(IpeMaybe::Just(42i64))))
 }
 
 // Ffi.kernel polyfill — should be unreachable in Rust target;

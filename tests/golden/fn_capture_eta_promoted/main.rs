@@ -208,7 +208,7 @@ pub fn ipe_main() -> IpeTask<()> {
                     + 'static,
             > = ::std::sync::Arc::new(
                 move |f: Box<dyn Fn(i64) -> i64 + Send + Sync + 'static>, x: i64| -> i64 {
-                    ipe_runtime::math::ipe_int_add((f)(x), 1)
+                    ipe_runtime::math::ipe_int_add((f)(x), 1i64)
                 },
             );
             __ipe_fn
@@ -244,7 +244,7 @@ pub fn ipe_main() -> IpeTask<()> {
                 }
             });
             ({
-                let r = (guarded)(1, 2);
+                let r = (guarded)(1i64, 2i64);
                 io_println(string_from_int(r))
             })
         })

@@ -206,12 +206,14 @@ pub fn main_f(a: i64) -> Box<dyn Fn(i64, i64) -> i64 + Send + Sync + 'static> {
 pub fn ipe_main() -> IpeTask<()> {
     let _ipe_recursion_guard = crate::recursion_guard();
     ({
-        let h = crate::main_f(1);
+        let h = crate::main_f(1i64);
         ({
-            let exact = (h)(2, 3);
+            let exact = (h)(2i64, 3i64);
             ({
-                let over = (crate::main_f(1))(2, 3);
-                io_println(string_from_int((if (exact == over) { exact } else { 0 })))
+                let over = (crate::main_f(1i64))(2i64, 3i64);
+                io_println(string_from_int(
+                    (if (exact == over) { exact } else { 0i64 }),
+                ))
             })
         })
     })

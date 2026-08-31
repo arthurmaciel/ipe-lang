@@ -196,19 +196,19 @@ pub fn file_rename(src: ipe_runtime::path::Path, dst: ipe_runtime::path::Path) -
 pub fn ipe_main() -> IpeTask<()> {
     let _ipe_recursion_guard = crate::recursion_guard();
     ({
-        let a = bitwise_and(12, 10);
+        let a = bitwise_and(12i64, 10i64);
         ({
-            let o = bitwise_or(12, 10);
+            let o = bitwise_or(12i64, 10i64);
             ({
-                let x = bitwise_xor(12, 10);
+                let x = bitwise_xor(12i64, 10i64);
                 ({
-                    let c = bitwise_complement(0);
+                    let c = bitwise_complement(0i64);
                     ({
-                        let sl = bitwise_shift_left_by(2, 3);
+                        let sl = bitwise_shift_left_by(2i64, 3i64);
                         ({
-                            let sr = bitwise_shift_right_by(2, 12);
+                            let sr = bitwise_shift_right_by(2i64, 12i64);
                             ({
-                                let szf = bitwise_shift_right_zf_by(2, 12);
+                                let szf = bitwise_shift_right_zf_by(2i64, 12i64);
                                 io_println(string_join(" ".to_string(), vec![
                                     string_from_int(a),
                                     string_from_int(o),
@@ -256,7 +256,7 @@ fn main() {
     match block_on(ipe_main()) {
         IpeResult::Ok(_) => (),
         IpeResult::Err(e) => {
-            eprintln!("{:?}", e);
+            ipe_runtime::core::eprint_task_error(&e.to_string());
             std::process::exit(1);
         }
     }

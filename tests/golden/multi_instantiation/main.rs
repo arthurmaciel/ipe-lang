@@ -217,12 +217,12 @@ pub fn main_unwrap<T1: Clone>(r: RecValue<T1>) -> T1 {
 pub fn ipe_main() -> IpeTask<()> {
     let _ipe_recursion_guard = crate::recursion_guard();
     ({
-        let n = crate::main_unwrap(crate::main_wrap(40));
+        let n = crate::main_unwrap(crate::main_wrap(40i64));
         ({
-            let flag = crate::main_unwrap(crate::main_wrap((1 == 1)));
+            let flag = crate::main_unwrap(crate::main_wrap((1i64 == 1i64)));
             io_println(string_from_int(
                 (if flag {
-                    ipe_runtime::math::ipe_int_add(n, 2)
+                    ipe_runtime::math::ipe_int_add(n, 2i64)
                 } else {
                     n
                 }),

@@ -214,17 +214,17 @@ pub fn ipe_main() -> IpeTask<()> {
     ({
         let f = {
             let __ipe_fn: Box<dyn Fn(i64) -> i64 + Send + Sync + 'static> =
-                Box::new(move |eta_0: i64| -> i64 { crate::main_add(2, eta_0) });
+                Box::new(move |eta_0: i64| -> i64 { crate::main_add(2i64, eta_0) });
             __ipe_fn
         };
         ({
-            let p = (f)(3);
+            let p = (f)(3i64);
             ({
-                let o = (crate::main_over(1))(2);
+                let o = (crate::main_over(1i64))(2i64);
                 ({
                     let h = crate::main_apply_twice(
-                        move |eta_0: i64| -> i64 { crate::main_add(1, eta_0) },
-                        5,
+                        move |eta_0: i64| -> i64 { crate::main_add(1i64, eta_0) },
+                        5i64,
                     );
                     io_println(string_from_int(ipe_runtime::math::ipe_int_add(
                         ipe_runtime::math::ipe_int_add(p, o),
