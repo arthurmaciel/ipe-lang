@@ -145,7 +145,6 @@ const TAG_SECRET: u8 = 46;
 const TAG_CACHE_CFG: u8 = 47;
 const TAG_CACHE_STATS: u8 = 48;
 const TAG_CSV_DOC: u8 = 49;
-const TAG_WEBSOCKET_CLIENT_CFG: u8 = 50;
 const TAG_EMAIL_MESSAGE: u8 = 50;
 const TAG_EMAIL_ATTACHMENT: u8 = 51;
 const TAG_EMAIL_SES_CONFIG: u8 = 52;
@@ -183,6 +182,7 @@ const TAG_TUI_APP: u8 = 81;
 const TAG_CLI_APP: u8 = 82;
 // `ProcessRunInPtyCfg` — kernel-boundary non-serde input record for `Ipe.Process.runInPty`.
 const TAG_PROCESS_RUN_IN_PTY_CFG: u8 = 83;
+const TAG_WEBSOCKET_CLIENT_CFG: u8 = 84;
 /// Fuel exhaustion marker — distinct from every variant tag.
 const TAG_FUEL_EXHAUSTED: u8 = 0xFF;
 
@@ -819,5 +819,132 @@ mod tests {
              an error or a hang: {result:?}"
         );
         Ok(())
+    }
+
+    /// Every domain tag (including the fuel-exhaustion marker) must be
+    /// pairwise-distinct: a shared value would let two `IrType` kinds fold
+    /// identically into the structural hash, collapsing the reject-on-mismatch
+    /// property this tag table exists for. Any future duplicate fails here.
+    #[test]
+    #[allow(clippy::too_many_lines)] // one row per tag, deliberately exhaustive
+    fn every_domain_tag_is_pairwise_distinct() {
+        use super::{
+            TAG_AUTH_CONFIG, TAG_BACKOFF_STRATEGY, TAG_BOOL, TAG_BYTES, TAG_CACHE_CFG,
+            TAG_CACHE_STATS, TAG_CHAR, TAG_CLI_APP, TAG_CMD, TAG_CONN_READONLY, TAG_CONN_READWRITE,
+            TAG_CONNECTION, TAG_CRYPTO_KEY, TAG_CRYPTO_MAC, TAG_CSV_DOC, TAG_CUSTOM_ELEMENT,
+            TAG_DB, TAG_DECIMAL, TAG_DECODER, TAG_DICT, TAG_DSN, TAG_EMAIL_ADDRESS,
+            TAG_EMAIL_ATTACHMENT, TAG_EMAIL_MESSAGE, TAG_EMAIL_PROVIDER, TAG_EMAIL_SES_CONFIG,
+            TAG_EMAIL_SMTP_CONFIG, TAG_ENUM, TAG_ERROR, TAG_ERROR_DETAILS, TAG_ERROR_INFO,
+            TAG_ERROR_KIND, TAG_FLOAT, TAG_FN_ONCE_CHAIN, TAG_FUEL_EXHAUSTED, TAG_FUN, TAG_GENERIC,
+            TAG_HTTP_METHOD, TAG_HTTP_REQUEST, TAG_INT, TAG_JSON, TAG_LIST, TAG_LIVE_REQ,
+            TAG_LIVE_ROUTE, TAG_LOCALE, TAG_MAYBE, TAG_ORDER, TAG_PANIC_INFO, TAG_PATH,
+            TAG_PRINCIPAL, TAG_PROCESS_RUN_IN_PTY_CFG, TAG_PROCESS_RUN_WITH_CFG, TAG_RECORD,
+            TAG_REGEX, TAG_RESULT, TAG_ROW_GENERIC, TAG_SECRET, TAG_SERVER_COOKIE,
+            TAG_SERVER_REQUEST, TAG_SERVER_RESPONSE, TAG_SERVER_ROUTE, TAG_SET, TAG_SETTING,
+            TAG_SHAPE_TERMINAL, TAG_SHAPE_WEB, TAG_SHAPE_WEBVIEW, TAG_SHARED_FUN, TAG_SQL_FRAGMENT,
+            TAG_STR, TAG_STREAM_WRITER, TAG_SUB, TAG_TASK, TAG_TOKEN_SOURCE, TAG_TUI_APP,
+            TAG_TUPLE, TAG_TYPE_INFO, TAG_UI, TAG_UI_PLAIN, TAG_UNIT, TAG_URL, TAG_WEB_APP,
+            TAG_WEBSOCKET_CLIENT_CFG, TAG_WEBSOCKET_SERVER, TAG_WEBSOCKET_SERVER_CFG,
+            TAG_WEBVIEW_APP,
+        };
+
+        let tags: &[(&str, u8)] = &[
+            ("TAG_INT", TAG_INT),
+            ("TAG_FLOAT", TAG_FLOAT),
+            ("TAG_STR", TAG_STR),
+            ("TAG_BOOL", TAG_BOOL),
+            ("TAG_CHAR", TAG_CHAR),
+            ("TAG_UNIT", TAG_UNIT),
+            ("TAG_MAYBE", TAG_MAYBE),
+            ("TAG_LIST", TAG_LIST),
+            ("TAG_RESULT", TAG_RESULT),
+            ("TAG_DICT", TAG_DICT),
+            ("TAG_SET", TAG_SET),
+            ("TAG_TUPLE", TAG_TUPLE),
+            ("TAG_RECORD", TAG_RECORD),
+            ("TAG_ENUM", TAG_ENUM),
+            ("TAG_FUN", TAG_FUN),
+            ("TAG_FN_ONCE_CHAIN", TAG_FN_ONCE_CHAIN),
+            ("TAG_GENERIC", TAG_GENERIC),
+            ("TAG_TASK", TAG_TASK),
+            ("TAG_BYTES", TAG_BYTES),
+            ("TAG_JSON", TAG_JSON),
+            ("TAG_DECODER", TAG_DECODER),
+            ("TAG_DB", TAG_DB),
+            ("TAG_CMD", TAG_CMD),
+            ("TAG_SUB", TAG_SUB),
+            ("TAG_SERVER_REQUEST", TAG_SERVER_REQUEST),
+            ("TAG_SERVER_RESPONSE", TAG_SERVER_RESPONSE),
+            ("TAG_SERVER_ROUTE", TAG_SERVER_ROUTE),
+            ("TAG_SERVER_COOKIE", TAG_SERVER_COOKIE),
+            ("TAG_STREAM_WRITER", TAG_STREAM_WRITER),
+            ("TAG_HTTP_REQUEST", TAG_HTTP_REQUEST),
+            ("TAG_WEBSOCKET_SERVER", TAG_WEBSOCKET_SERVER),
+            ("TAG_WEBSOCKET_SERVER_CFG", TAG_WEBSOCKET_SERVER_CFG),
+            ("TAG_UI", TAG_UI),
+            ("TAG_UI_PLAIN", TAG_UI_PLAIN),
+            ("TAG_LIVE_REQ", TAG_LIVE_REQ),
+            ("TAG_LIVE_ROUTE", TAG_LIVE_ROUTE),
+            ("TAG_ORDER", TAG_ORDER),
+            ("TAG_DECIMAL", TAG_DECIMAL),
+            ("TAG_ERROR_KIND", TAG_ERROR_KIND),
+            ("TAG_ERROR", TAG_ERROR),
+            ("TAG_ERROR_DETAILS", TAG_ERROR_DETAILS),
+            ("TAG_ERROR_INFO", TAG_ERROR_INFO),
+            ("TAG_PANIC_INFO", TAG_PANIC_INFO),
+            ("TAG_TYPE_INFO", TAG_TYPE_INFO),
+            ("TAG_SQL_FRAGMENT", TAG_SQL_FRAGMENT),
+            ("TAG_SECRET", TAG_SECRET),
+            ("TAG_CACHE_CFG", TAG_CACHE_CFG),
+            ("TAG_CACHE_STATS", TAG_CACHE_STATS),
+            ("TAG_CSV_DOC", TAG_CSV_DOC),
+            ("TAG_EMAIL_MESSAGE", TAG_EMAIL_MESSAGE),
+            ("TAG_EMAIL_ATTACHMENT", TAG_EMAIL_ATTACHMENT),
+            ("TAG_EMAIL_SES_CONFIG", TAG_EMAIL_SES_CONFIG),
+            ("TAG_EMAIL_SMTP_CONFIG", TAG_EMAIL_SMTP_CONFIG),
+            ("TAG_EMAIL_PROVIDER", TAG_EMAIL_PROVIDER),
+            ("TAG_SHARED_FUN", TAG_SHARED_FUN),
+            ("TAG_PATH", TAG_PATH),
+            ("TAG_REGEX", TAG_REGEX),
+            ("TAG_HTTP_METHOD", TAG_HTTP_METHOD),
+            ("TAG_CRYPTO_KEY", TAG_CRYPTO_KEY),
+            ("TAG_CRYPTO_MAC", TAG_CRYPTO_MAC),
+            ("TAG_EMAIL_ADDRESS", TAG_EMAIL_ADDRESS),
+            ("TAG_URL", TAG_URL),
+            ("TAG_LOCALE", TAG_LOCALE),
+            ("TAG_ROW_GENERIC", TAG_ROW_GENERIC),
+            ("TAG_DSN", TAG_DSN),
+            ("TAG_CONNECTION", TAG_CONNECTION),
+            ("TAG_CONN_READONLY", TAG_CONN_READONLY),
+            ("TAG_CONN_READWRITE", TAG_CONN_READWRITE),
+            ("TAG_PRINCIPAL", TAG_PRINCIPAL),
+            ("TAG_AUTH_CONFIG", TAG_AUTH_CONFIG),
+            ("TAG_TOKEN_SOURCE", TAG_TOKEN_SOURCE),
+            ("TAG_SETTING", TAG_SETTING),
+            ("TAG_SHAPE_WEB", TAG_SHAPE_WEB),
+            ("TAG_SHAPE_WEBVIEW", TAG_SHAPE_WEBVIEW),
+            ("TAG_SHAPE_TERMINAL", TAG_SHAPE_TERMINAL),
+            ("TAG_CUSTOM_ELEMENT", TAG_CUSTOM_ELEMENT),
+            ("TAG_PROCESS_RUN_WITH_CFG", TAG_PROCESS_RUN_WITH_CFG),
+            ("TAG_BACKOFF_STRATEGY", TAG_BACKOFF_STRATEGY),
+            ("TAG_WEB_APP", TAG_WEB_APP),
+            ("TAG_WEBVIEW_APP", TAG_WEBVIEW_APP),
+            ("TAG_TUI_APP", TAG_TUI_APP),
+            ("TAG_CLI_APP", TAG_CLI_APP),
+            ("TAG_PROCESS_RUN_IN_PTY_CFG", TAG_PROCESS_RUN_IN_PTY_CFG),
+            ("TAG_WEBSOCKET_CLIENT_CFG", TAG_WEBSOCKET_CLIENT_CFG),
+            ("TAG_FUEL_EXHAUSTED", TAG_FUEL_EXHAUSTED),
+        ];
+
+        for (i, &(name_a, val_a)) in tags.iter().enumerate() {
+            for &(name_b, val_b) in tags.iter().skip(i + 1) {
+                assert_ne!(
+                    val_a, val_b,
+                    "domain tags {name_a} and {name_b} share value {val_a}; \
+                     every TAG_* constant must be distinct so two IrType kinds \
+                     can never fold identically into the structural hash"
+                );
+            }
+        }
     }
 }
