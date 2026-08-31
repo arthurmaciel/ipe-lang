@@ -1,0 +1,30 @@
+module Main exposing (main)
+
+import Ipe.Io as Io
+import Ipe.String as String
+import Ipe.Time as Time
+import Ipe.Duration as Duration
+
+
+-- Round-trip proof: Time.fromMillis >> Time.toMillis is identity.
+-- Also verifies Time.add / Time.diff laws at the Ipe.Time surface.
+
+epochMs : Int
+epochMs =
+    1000000
+
+
+main =
+    let
+        ts = Time.fromMillis epochMs
+        roundTrip = Time.toMillis ts
+        shifted = Time.add (Duration.seconds 5) ts
+        delta = Time.diff shifted ts
+    in
+    Io.println
+        (String.join "\n"
+            [ "roundtrip " ++ String.fromInt roundTrip
+            , "shifted " ++ String.fromInt (Time.toMillis shifted)
+            , "delta " ++ String.fromInt (Duration.toMillis delta)
+            ]
+        )

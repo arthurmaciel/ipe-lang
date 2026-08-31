@@ -1,0 +1,104 @@
+name: playground
+
+# Gate: build the playground bundle (ipe-wasm) + jail-runner and run the
+# sandbox security tests so a change that breaks either fails CI.
+#
+# Trigger strategy (mirrors the wasm-floor job in ci.yml):
+#   • On PRs: only when playground-relevant paths change (off the required
+#     path for unrelated PRs).
+#   • On push to main/master and nightly: always.
+#
+# Two jobs:
+#   1. build  — cargo build -p ipe-wasm --target wasm32-unknown-unknown and
+#               cargo build -p playground-jail-runner.  Verifies the bundle
+#               and jail-runner compile end-to-end.
+#   2. sandbox-tests — cargo nextest run -p playground-jail-runner, which
+#               includes sandbox_security.rs (gated by IPE_PLAYGROUND_E2E=1
+#               when bwrap is available on the runner).
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  merge_group:
+  schedule:
+    - cron: '37 4 * * *'   # nightly, offset from ci.yml
+  workflow_dispatch: {}
+
+concurrency:
+  group: playground-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' || github.event_name == 'merge_group' }}
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+
+jobs:
+  # Path filter: skip on PRs that touch nothing playground-relevant.
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      playground: ${{ steps.filter.outputs.playground }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            playground:
+              - 'examples/wasm/language-playground/**'
+              - 'src/wasm/**'
+              - 'src/compiler/sandbox/**'
+              - '.github/workflows/playground.yml'
+
+  # Build the wasm bundle and the jail-runner binary. This is the primary rot
+  # guard: a compile break here fails fast without needing bwrap on the runner.
+  build:
+    runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.playground == 'true' || github.event_name != 'pull_request'
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: mozilla-actions/sccache-action@v0.0.9
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build ipe-wasm (wasm32-unknown-unknown)
+        run: cargo build -p ipe-wasm --target wasm32-unknown-unknown --release
+
+      - name: Build playground-jail-runner
+        run: cargo build -p playground-jail-runner
+
+  # Run the jail-runner unit tests and, when bwrap is available, the full
+  # sandbox security proofs (IPE_PLAYGROUND_E2E=1).
+  sandbox-tests:
+    runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.playground == 'true' || github.event_name != 'pull_request'
+    timeout-minutes: 20
+    env:
+      IPE_RUNTIME_DIR: ${{ github.workspace }}/src/runtime/rust/src
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: mozilla-actions/sccache-action@v0.0.9
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@nextest
+
+      - name: Install bubblewrap
+        run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends bubblewrap
+
+      - name: Build ipe (needed by sandbox_security.rs emit helpers)
+        run: cargo build -p ipe
+
+      - name: Run jail-runner tests (unit + sandbox security proofs)
+        env:
+          IPE_BIN: ${{ github.workspace }}/target/debug/ipe
+          IPE_PLAYGROUND_E2E: "1"
+        run: cargo nextest run -p playground-jail-runner --profile ci
