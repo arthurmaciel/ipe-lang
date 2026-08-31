@@ -426,15 +426,15 @@ fn let_if_and_extended_binops_emit_total_rust() -> DResult<()> {
     // key semantic fragments rather than a single-line snapshot.
     // Int `*` emits via the wrapping helper; Float `/` stays infix.
     assert!(
-        out.contains("let x = ipe_runtime::math::ipe_int_mul(n, 2);"),
+        out.contains("let x = ipe_runtime::math::ipe_int_mul(n, 2i64);"),
         "let binding not emitted:\n{out}"
     );
     assert!(
-        out.contains("(if ((x >= 10) && (x != 0))"),
+        out.contains("(if ((x >= 10i64) && (x != 0i64))"),
         "if condition not emitted:\n{out}"
     );
     assert!(
-        out.contains("(x / 2)") && out.contains("ipe_runtime::math::ipe_int_add(x, 1)"),
+        out.contains("(x / 2i64)") && out.contains("ipe_runtime::math::ipe_int_add(x, 1i64)"),
         "if branches not emitted:\n{out}"
     );
     Ok(())
@@ -466,7 +466,7 @@ fn tuple_type_and_expr_emit_as_rust_tuples() -> DResult<()> {
         out.contains("-> (i64, i64)"),
         "tuple return type did not emit:\n{out}"
     );
-    assert!(out.contains("(n, 1)"), "tuple expr did not emit:\n{out}");
+    assert!(out.contains("(n, 1i64)"), "tuple expr did not emit:\n{out}");
     Ok(())
 }
 

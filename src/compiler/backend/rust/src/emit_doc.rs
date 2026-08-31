@@ -2775,7 +2775,7 @@ mod tests {
             let scope = GenericScope::new(&[]);
             let doc = build_doc(ctx, &expr, 0, 0, scope).expect("build_doc");
             let rendered = render(&doc, RenderConfig::default());
-            assert_eq!(rendered, "(if a { 1 } else { 2 })");
+            assert_eq!(rendered, "(if a { 1i64 } else { 2i64 })");
         });
     }
 
@@ -3523,7 +3523,7 @@ mod tests {
                 args: vec![Expr::Int(1)],
             };
             let got = render_let_stmt(ctx, &expr);
-            let expected = "let z = ({\n        let x: i64 = 1;\n        x\n    })";
+            let expected = "let z = ({\n        let x: i64 = 1i64;\n        x\n    })";
             assert_eq!(
                 got, expected,
                 "\n--- got ---\n{got}\n--- want ---\n{expected}"
@@ -3677,7 +3677,7 @@ mod tests {
             // The string emitter's flat form is already the rustfmt-canonical
             // inline shape (`Name { a: 1, b: 2 }`), so the render matches it.
             assert_eq!(render(&doc, RenderConfig::default()), string);
-            assert!(string.ends_with(" { a: 1, b: 2 }"), "got {string}");
+            assert!(string.ends_with(" { a: 1i64, b: 2i64 }"), "got {string}");
         });
     }
 
@@ -3723,7 +3723,7 @@ mod tests {
                 fields: vec![(sym(&fx, 0), Expr::Int(9))],
             };
             let got = render_let_stmt(ctx, &expr);
-            let expected = "let z = {\n        let __ipe_upd_0 = 9;\n        let mut __ipe_rec = c;\n        __ipe_rec.a = __ipe_upd_0;\n        __ipe_rec\n    }";
+            let expected = "let z = {\n        let __ipe_upd_0 = 9i64;\n        let mut __ipe_rec = c;\n        __ipe_rec.a = __ipe_upd_0;\n        __ipe_rec\n    }";
             assert_eq!(
                 got, expected,
                 "\n--- got ---\n{got}\n--- want ---\n{expected}"
@@ -3743,7 +3743,7 @@ mod tests {
                 fields: vec![(sym(&fx, 0), Expr::Int(9)), (sym(&fx, 1), Expr::Int(8))],
             };
             let got = render_let_stmt(ctx, &expr);
-            let expected = "let z = {\n        let __ipe_upd_0 = 9;\n        let __ipe_upd_1 = 8;\n        let mut __ipe_rec = c;\n        __ipe_rec.a = __ipe_upd_0;\n        __ipe_rec.b = __ipe_upd_1;\n        __ipe_rec\n    }";
+            let expected = "let z = {\n        let __ipe_upd_0 = 9i64;\n        let __ipe_upd_1 = 8i64;\n        let mut __ipe_rec = c;\n        __ipe_rec.a = __ipe_upd_0;\n        __ipe_rec.b = __ipe_upd_1;\n        __ipe_rec\n    }";
             assert_eq!(
                 got, expected,
                 "\n--- got ---\n{got}\n--- want ---\n{expected}"
