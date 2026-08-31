@@ -113,6 +113,31 @@ const BARE: &str = "module Main exposing (main)\n\
     import Ipe.Io as Io\n\
     main = Io.println \"bare\"\n";
 
+/// Minimal `Terminal.appLines` (`CliApp` shape) program.
+///
+/// `Terminal.appLines` emits `ipe_runtime::tea::CliApp(console_app(...))`.
+/// The `fn main` epilogue must call `ipe_main().run_blocking()` rather than
+/// `block_on(ipe_main())` — `CliApp` is not an `IpeTask` and `block_on`
+/// does not accept it. A missing or misrouted epilogue switch produces E0277
+/// or E0308 at `cargo build` (ipe exit 0 — SEAL breach). This test is the
+/// always-run gate that catches that class without requiring a full `IPE_E2E`
+/// run of an actual interactive binary.
+const CLI_APP_LINES: &str = "module Main exposing (main)\n\
+    import Ipe.Tea.Terminal as Terminal\n\
+    import Ipe.Tea.Terminal.Cmd\n\
+    import Ipe.Tea.Terminal.Sub\n\
+    type Msg = Line String\n\
+    type alias Model = { count : Int }\n\
+    init _unit = ( { count = 0 }, Cmd.none )\n\
+    update msg model = case msg of\n\
+    \x20   Line _ -> ( { model | count = model.count + 1 }, Cmd.none )\n\
+    view _model = \"ok\"\n\
+    subscriptions _model = Sub.none\n\
+    onLine s = Line s\n\
+    main = Terminal.appLines\n\
+    \x20   { init = init, update = update, view = view\n\
+    \x20   , subscriptions = subscriptions, onLine = onLine }\n";
+
 /// Minimal Web TEA app that fires `Cmd.publish` from `update`. `cmd_publish`
 /// lives in `web::pubsub`; the Web shape must append the `web` runtime module
 /// (and, transitively, `tea`). A missing append surfaces as E0425 `cmd_publish`
@@ -236,6 +261,22 @@ fn bare_shape_builds() {
         return;
     }
     emit_and_build("bare", BARE).expect("bare shape must emit and cargo-build");
+}
+
+/// A `Terminal.appLines` program emits `ipe_runtime::tea::CliApp(console_app(...))`.
+/// The epilogue `fn main` must call `ipe_main().run_blocking()` — `CliApp` is
+/// not an `IpeTask`, so `block_on(ipe_main())` does not type-check (E0277/E0308).
+/// This test is the always-run gate for that SEAL class: a misrouted or missing
+/// epilogue switch causes a `cargo build` failure here despite `ipe` exiting 0.
+#[test]
+fn cli_app_lines_builds() {
+    if skip() {
+        return;
+    }
+    emit_and_build("cli_app_lines", CLI_APP_LINES).expect(
+        "Terminal.appLines must emit and cargo-build \
+         (ipe_main must return CliApp and fn main must call run_blocking, not block_on)",
+    );
 }
 
 #[test]
