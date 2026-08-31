@@ -10,6 +10,27 @@ Entries below the header are maintained by
 section is generated from Conventional Commit messages and prepended when the
 standing release pull request is merged.
 
+## [0.1.73](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.1.72...ipe-v0.1.73) (2026-08-31)
+
+
+### Features
+
+* **cli:** add a blocking HTTP client and the version_check unit ([#1547](https://github.com/arthurmaciel/ipe-lang/issues/1547)) ([ea3191d](https://github.com/arthurmaciel/ipe-lang/commit/ea3191d8b16c4dcb20eeb09b0a56087dc735556a))
+* **init:** offer health check in interactive wizard mode ([#1553](https://github.com/arthurmaciel/ipe-lang/issues/1553)) ([06ff2c9](https://github.com/arthurmaciel/ipe-lang/commit/06ff2c99658660b331c5bedc0a024a407c1704d9)), closes [#1515](https://github.com/arthurmaciel/ipe-lang/issues/1515)
+* **seal:** type-driven runtime-feature closure — a gated type is unemittable without its feature ([#1542](https://github.com/arthurmaciel/ipe-lang/issues/1542)) ([4a319b7](https://github.com/arthurmaciel/ipe-lang/commit/4a319b7ad20c2c5a301cdf70460c67b93227dae9))
+* **web:** jittered fast-reconnect window so a restart reattaches promptly ([#1554](https://github.com/arthurmaciel/ipe-lang/issues/1554)) ([cb07a54](https://github.com/arthurmaciel/ipe-lang/commit/cb07a548826a75629a883712aed1d0b460cb2ed6))
+
+
+### Bug Fixes
+
+* **db:** enforce Store immutable policy in updateAs (row-level auth) ([#1556](https://github.com/arthurmaciel/ipe-lang/issues/1556)) ([a6134ee](https://github.com/arthurmaciel/ipe-lang/commit/a6134ee64a8c9fe968fd6ab0c42b80f268a1fdbc))
+* **doc:** inject a module's own imports into its doc-example context ([#1525](https://github.com/arthurmaciel/ipe-lang/issues/1525)) ([#1544](https://github.com/arthurmaciel/ipe-lang/issues/1544)) ([7d6e87d](https://github.com/arthurmaciel/ipe-lang/commit/7d6e87d76990bbc9591761b1239e95f00c2c377a))
+* **email+locale:** extend uses_email to all email kernels+types; add uses_locale end-to-end ([#1555](https://github.com/arthurmaciel/ipe-lang/issues/1555)) ([df8825b](https://github.com/arthurmaciel/ipe-lang/commit/df8825b9cb685387f3ac0ec0801e123b698fa197))
+* **lower:** home-guard StreamWriter/WebSocketServer/WebSocketServerCfg opaque names ([#1464](https://github.com/arthurmaciel/ipe-lang/issues/1464)) ([#1543](https://github.com/arthurmaciel/ipe-lang/issues/1543)) ([88ef035](https://github.com/arthurmaciel/ipe-lang/commit/88ef035905c1a141c2e57001e1f0d919ccc3b3c7))
+* **lower:** move-ownership discipline on destructure-parameter components (SEAL borrow track) ([#1560](https://github.com/arthurmaciel/ipe-lang/issues/1560)) ([361c43a](https://github.com/arthurmaciel/ipe-lang/commit/361c43ad705bcbaa6cb24108160681a1cab2f0c2))
+* **lower:** support refutable tuple-pattern columns on a non-literal scrutinee ([#1532](https://github.com/arthurmaciel/ipe-lang/issues/1532)) ([#1558](https://github.com/arthurmaciel/ipe-lang/issues/1558)) ([9cd04c7](https://github.com/arthurmaciel/ipe-lang/commit/9cd04c70cb8074764de82390bc82c5717e0a32ea))
+* **test:** set uses_console in the type-only feature-closure Module ([#1552](https://github.com/arthurmaciel/ipe-lang/issues/1552)) ([1fa7aee](https://github.com/arthurmaciel/ipe-lang/commit/1fa7aee63afbbb75208b6bd63f488fbd341bda62))
+
 ## [0.1.72](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.1.71...ipe-v0.1.72) (2026-08-30)
 
 
