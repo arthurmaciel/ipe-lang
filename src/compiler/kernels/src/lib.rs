@@ -13173,6 +13173,40 @@ mod tests {
         }
     }
 
+    /// `is_json()` covers every kernel whose runtime denotation carries or
+    /// decodes a JSON `Value` / `Decoder<E, T>` — spanning five qualifier
+    /// families (`JsonEnc`, `JsonDec`, `JsonDecP`, `Config`, `Db.Decode`) and
+    /// three cross-family outliers (`Db.queryDecode`, `Server.json`,
+    /// `Jwt.withClaim`). Both directions are asserted: a new Json/Config/Db
+    /// decoder the predicate forgets drops the `json`/`config` runtime surface
+    /// the emitted crate needs (E0433), and a wrongly claimed kernel pulls it
+    /// into a program that never touches JSON.
+    #[test]
+    fn json_predicate_tracks_json_family_kernels() {
+        for k in StdlibKernel::ALL {
+            let qual = k.decl().qualifier;
+            // Five qualifier families whose every member belongs to the JSON
+            // value / decoder surface, plus the three cross-family outliers
+            // that carry a `Value` or `Decoder` argument.
+            let is_json_family = matches!(
+                qual,
+                "JsonEnc" | "JsonDec" | "JsonDecP" | "Config" | "Db.Decode"
+            ) || matches!(
+                k,
+                StdlibKernel::DbQueryDecode | StdlibKernel::ServerJson | StdlibKernel::JwtWithClaim
+            );
+            assert_eq!(
+                k.is_json(),
+                is_json_family,
+                "{k:?} (qualifier {qual:?}): is_json()={} but json-family membership={} — \
+                 a JSON-using program would drop the decoder surface it needs or a \
+                 non-JSON program would pull it",
+                k.is_json(),
+                is_json_family,
+            );
+        }
+    }
+
     /// The `WasmClient` allowlist is default-deny: every server-effect family
     /// is denied and the pure floor + render surface is allowed.
     #[test]

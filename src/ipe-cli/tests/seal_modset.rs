@@ -421,6 +421,54 @@ fn revoke_session_arity3_builds() {
     );
 }
 
+/// Minimal `Tui.app` program — the vendored emit path must include `seal_codec`
+/// in the emitted `ipe_runtime/mod.rs`.
+///
+/// `ui/widget.rs` unconditionally imports `crate::seal_codec` under
+/// `#[cfg(feature = "json")]`, and the vendored template always enables `json`
+/// (default feature). Without `pub mod seal_codec;` in the emitted `mod.rs`
+/// the emitted crate fails with E0432 (`unresolved import crate::seal_codec`)
+/// at `cargo build` despite `ipe` exiting 0 — the SEAL breach this test gates.
+const TUI_APP: &str = "module Main exposing (main)\n\
+    import Ipe.Tea.Tui as Tui\n\
+    import Ipe.Ui.Cells as Cells\n\
+    import Ipe.Ui.Cells exposing (Cells)\n\
+    import Ipe.Tea.Tui.Cmd\n\
+    import Ipe.Tea.Tui.Sub\n\
+    type Msg = NoOp\n\
+    type alias Model = { count : Int }\n\
+    type alias KeyEvent = { kind : String, value : String }\n\
+    init : () -> ( Model, Cmd Msg )\n\
+    init _unit = ( { count = 0 }, Cmd.none )\n\
+    update : Msg -> Model -> ( Model, Cmd Msg )\n\
+    update _msg model = ( model, Cmd.none )\n\
+    view : Model -> Cells Msg\n\
+    view _model = Cells.text \"hello\"\n\
+    subscriptions : Model -> Sub Msg\n\
+    subscriptions _model = Sub.none\n\
+    onKey : KeyEvent -> Msg\n\
+    onKey _event = NoOp\n\
+    main = Tui.app { init = init, update = update, view = view\n\
+    \x20            , subscriptions = subscriptions, onKey = onKey }\n";
+
+/// Under the vendored emit model a `Tui.app` program must cargo-build.
+///
+/// The Tui shape appends `pub mod ui;` to the emitted `ipe_runtime/mod.rs`.
+/// `ui/widget.rs` imports `crate::seal_codec` under `#[cfg(feature = "json")]`
+/// (always enabled). Without `pub mod seal_codec;` also appended the emitted
+/// crate fails with E0432 at `cargo build` despite `ipe` exiting 0.  This test
+/// is the authoritative gate for that SEAL class on the Tui shape.
+#[test]
+fn tui_app_vendored_builds() {
+    if skip() {
+        return;
+    }
+    emit_and_build_vendored("tui_app_vendored", TUI_APP).expect(
+        "Tui.app must cargo-build under the vendored emit model \
+         (seal_codec must be declared in ipe_runtime/mod.rs — was E0432)",
+    );
+}
+
 /// The runtime source tree must resolve for every shape above — a smoke check
 /// that fails loudly (rather than silently skipping) when the tree moved.
 #[test]

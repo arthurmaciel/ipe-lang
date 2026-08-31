@@ -114,10 +114,12 @@ pub fn crypto_aes_gcm_decrypt_key<E: From<String>>(
     crypto_aes_gcm_decrypt(crate::crypto_core::crypto_key_reveal(key), encoded)
 }
 
-// Internal String-keyed AES-256-GCM core — reached only through the typed
-// `crypto_aes_gcm_encrypt_key` wrapper; the Ipê surface exposes no bare-String key.
+// Internal String-keyed AES-256-GCM core — `pub(crate)`, reached only through the
+// typed `crypto_aes_gcm_encrypt_key` wrapper (which unwraps a `Key`). Not a public
+// runtime API and not a kernel: the raw-String-key path cannot be reached from Ipê
+// source or from outside this crate, so no caller can supply untyped key material.
 #[cfg(not(target_arch = "wasm32"))]
-pub fn crypto_aes_gcm_encrypt<E: From<String>>(
+pub(crate) fn crypto_aes_gcm_encrypt<E: From<String>>(
     key: String,
     plaintext: String,
 ) -> IpeResult<E, String> {
@@ -149,10 +151,10 @@ pub fn crypto_aes_gcm_encrypt<E: From<String>>(
     }
 }
 
-// Internal String-keyed AES-256-GCM core — reached only through the typed
-// `crypto_aes_gcm_decrypt_key` wrapper.
+// Internal String-keyed AES-256-GCM core — `pub(crate)`, reached only through the
+// typed `crypto_aes_gcm_decrypt_key` wrapper. No bare-String-key path escapes the crate.
 #[cfg(not(target_arch = "wasm32"))]
-pub fn crypto_aes_gcm_decrypt<E: From<String>>(
+pub(crate) fn crypto_aes_gcm_decrypt<E: From<String>>(
     key: String,
     encoded: String,
 ) -> IpeResult<E, String> {
@@ -215,10 +217,10 @@ pub fn crypto_chacha20_decrypt_key<E: From<String>>(
     crypto_chacha20_decrypt(crate::crypto_core::crypto_key_reveal(key), encoded)
 }
 
-// Internal String-keyed ChaCha20-Poly1305 core — reached only through the typed
-// `crypto_chacha20_encrypt_key` wrapper.
+// Internal String-keyed ChaCha20-Poly1305 core — `pub(crate)`, reached only through
+// the typed `crypto_chacha20_encrypt_key` wrapper. No bare-String-key path escapes the crate.
 #[cfg(not(target_arch = "wasm32"))]
-pub fn crypto_chacha20_encrypt<E: From<String>>(
+pub(crate) fn crypto_chacha20_encrypt<E: From<String>>(
     key: String,
     plaintext: String,
 ) -> IpeResult<E, String> {
@@ -248,10 +250,10 @@ pub fn crypto_chacha20_encrypt<E: From<String>>(
     }
 }
 
-// Internal String-keyed ChaCha20-Poly1305 core — reached only through the typed
-// `crypto_chacha20_decrypt_key` wrapper.
+// Internal String-keyed ChaCha20-Poly1305 core — `pub(crate)`, reached only through
+// the typed `crypto_chacha20_decrypt_key` wrapper. No bare-String-key path escapes the crate.
 #[cfg(not(target_arch = "wasm32"))]
-pub fn crypto_chacha20_decrypt<E: From<String>>(
+pub(crate) fn crypto_chacha20_decrypt<E: From<String>>(
     key: String,
     encoded: String,
 ) -> IpeResult<E, String> {
@@ -294,10 +296,13 @@ pub fn crypto_chacha20_decrypt<E: From<String>>(
     }
 }
 
-// Crypto.aesKeyFromPassword : String -> String -> String
 // PBKDF2-HMAC-SHA256, 100k iters, 32-byte key, returned base64-encoded.
+// `pub(crate)`, NOT a public runtime API or kernel: it returns a raw `String`,
+// so it is reached only through the typed `_key` variants below, which promote
+// the PBKDF2 output into an opaque `Key`. There is no bare-`String`-key
+// derivation spelling reachable from Ipê source or from outside this crate.
 #[cfg(not(target_arch = "wasm32"))]
-pub fn crypto_aes_key_from_password(password: String, salt: String) -> String {
+pub(crate) fn crypto_aes_key_from_password(password: String, salt: String) -> String {
     use base64::{Engine, engine::general_purpose::STANDARD};
     let mut key = [0u8; AEAD_KEY_BYTES];
     pbkdf2::pbkdf2_hmac::<sha2::Sha256>(

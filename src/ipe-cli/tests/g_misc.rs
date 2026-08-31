@@ -88,6 +88,14 @@ mod golden_stdlib_module_seal;
 mod golden_test_summary_line_219;
 #[path = "g_misc/golden_time_format_arith.rs"]
 mod golden_time_format_arith;
+#[path = "g_misc/golden_time_from_to_millis.rs"]
+mod golden_time_from_to_millis;
+#[path = "g_misc/golden_timestamp_arithmetic.rs"]
+mod golden_timestamp_arithmetic;
+#[path = "g_misc/golden_timestamp_seal.rs"]
+mod golden_timestamp_seal;
+#[path = "g_misc/golden_timestamp_type_safety.rs"]
+mod golden_timestamp_type_safety;
 #[path = "g_misc/golden_tree.rs"]
 mod golden_tree;
 #[path = "g_misc/golden_typed_primitives_seal.rs"]
