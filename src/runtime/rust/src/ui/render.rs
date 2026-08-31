@@ -1349,6 +1349,61 @@ mod tests {
         }
     }
 
+    /// SECURITY (appearance-hot-swap sink preservation): a `Background.image`
+    /// URL that reaches its sink from a dev-patched `LiteralTable` slot must be
+    /// neutralised byte-identically to the same URL baked as a direct literal.
+    /// The hoist changes only WHERE the String originates (a `get(idx)` read
+    /// versus a baked literal); the render sink (`AttrBgImage` →
+    /// `is_dangerous_url_scheme` plus a composed-`url(..)` `SafeCssValue` scan) is
+    /// a pure function of the String, so a dev-patched URL meets the identical
+    /// wall a baked one does and cannot reach a less-sanitised sink (dev == prod).
+    /// Vectors exercise the `javascript:` / non-media `data:` scheme, a `</style>`
+    /// or `@import` breakout, and hex/whitespace evasion.
+    #[cfg(feature = "web")] // `LiteralTable` (the dev-patch read path) is web-shape only
+    #[test]
+    fn bg_image_dev_patched_url_is_neutralised_identically_to_baked() {
+        use crate::ui::helpers::ui_background_image_;
+        use crate::web::LiteralTable;
+
+        let vectors = [
+            "javascript:alert(1)",
+            "  JaVaScRiPt:alert(1)",             // whitespace + case evasion
+            "data:text/html,<script>x</script>", // non-media data: URI
+            "x) } @import url(//evil/x.css) ; a(",
+            "x)</style><script>alert(1)</script>",
+            "\\6a avascript:alert(1)", // CSS hex-escape evasion
+        ];
+        for vector in vectors {
+            // Direct/baked path: the helper wraps the raw literal String.
+            let baked = build_style_string(std::slice::from_ref(&ui_background_image_::<TestMsg>(
+                vector.to_owned(),
+            )));
+            // Hoisted/dev-patched path: the SAME helper wraps a String read back
+            // from a patched table slot — the exact emitted read shape.
+            let mut table = LiteralTable::from_defaults(&["placeholder.png"]);
+            table.apply_patch(&[(0, vector.to_owned())]);
+            let patched = build_style_string(std::slice::from_ref(
+                &ui_background_image_::<TestMsg>(table.get(0).to_owned()),
+            ));
+
+            assert_eq!(
+                baked, patched,
+                "dev-patched URL must render identically to the baked literal \
+                 (one sink, dev == prod) for vector {vector:?}"
+            );
+            // And the shared sink actually neutralises the payload in both.
+            assert!(
+                !patched.to_ascii_lowercase().contains("javascript:")
+                    && !patched.to_ascii_lowercase().contains("data:text/html")
+                    && !patched.contains("</style")
+                    && !patched.contains("@import")
+                    && !patched.contains('}'),
+                "adversarial URL must be neutralised at the sink, got {patched:?} \
+                 for vector {vector:?}"
+            );
+        }
+    }
+
     #[test]
     fn multiple_pseudo_rules_merge_into_one_marker() {
         // #113 spec §1.4: two pseudo-class sugars on ONE element must merge

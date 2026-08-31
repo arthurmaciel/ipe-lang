@@ -1182,6 +1182,51 @@ mod tests {
         );
     }
 
+    /// SECURITY (appearance-hot-swap sink preservation, raw-CSS kernel): a
+    /// `Ui.animate` keyframes body / shorthand tail that reaches the live
+    /// `build_anim` sink from a dev-patched `LiteralTable` slot must be
+    /// neutralised byte-identically to the same value baked as a direct literal.
+    /// The hoist changes only WHERE the String originates; the sink
+    /// (`sink_safe_keyframes_body` on the body, `SafeCssValue` on the tail,
+    /// `sanitise_animation_name` on the name, `strip_style_close` belt-and-braces)
+    /// is a pure function of the marker String, so dev == prod. Vectors probe the
+    /// `}`/`@import`/`</style>` breakout and whitespace evasion of the body.
+    #[test]
+    fn animate_dev_patched_body_is_neutralised_identically_to_baked() {
+        use crate::web::LiteralTable;
+
+        // The marker the stdlib emits for `Ui.animate` is
+        // `name||tail||body||respect`; the body is the position-2 String this
+        // slice hoists. Each vector is an adversarial BODY.
+        let bodies = [
+            "0% { opacity: 0 } } body { display:none } @import url(//evil/x.css) {",
+            "0% { opacity: 0 } </style><script>alert(1)</script>",
+            "0% { opacity: 0 }   }   [x]{color:red",
+        ];
+        for body in bodies {
+            let baked_marker = format!("anim||300ms ease||{body}||1");
+            let baked = build_anim("r.0#div", &[attr("data-ipe-anim-rules", &baked_marker)]);
+
+            // Dev-patched path: the body is read back from a patched table slot,
+            // the exact emitted read shape, then encoded into the same marker.
+            let mut table = LiteralTable::from_defaults(&["0% { opacity: 0 } 100% { opacity: 1 }"]);
+            table.apply_patch(&[(0, body.to_owned())]);
+            let patched_marker = format!("anim||300ms ease||{}||1", table.get(0));
+            let patched = build_anim("r.0#div", &[attr("data-ipe-anim-rules", &patched_marker)]);
+
+            assert_eq!(
+                baked, patched,
+                "dev-patched keyframes body must render identically to the baked \
+                 literal (one sink, dev == prod) for body {body:?}"
+            );
+            // The sink drops the whole entry fail-closed on a breakout body.
+            assert_eq!(
+                patched, "",
+                "adversarial keyframes body must drop fail-closed at the sink for {body:?}"
+            );
+        }
+    }
+
     #[test]
     fn idempotent_second_run_adds_no_duplicate_style() {
         let mut tree: Html<()> = Html::HElement(

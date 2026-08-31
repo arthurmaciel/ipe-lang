@@ -372,6 +372,57 @@ pub const fn appearance_literal_args(k: KernelFn) -> &'static [(usize, LitKind)]
         // for a direct or hoisted string, so baked == direct holds.
         KernelFn::HtmlStyleNode => &[(1, Str)],
 
+        // ── Ipe.Ui — raw-CSS / URL appearance values (direct String) ──────
+        // Each String below is inert appearance data whose ONLY neutralisation
+        // lives at the render sink, keyed on the built `Attribute` variant and a
+        // pure function of the String bytes (`render::build_style_string` +
+        // `web::style_inject`'s `build_tr` / `build_anim`). Hoisting changes only
+        // WHERE the bytes originate — a `LiteralTable` slot read via
+        // `__ipe_lit.get(N)` versus a baked literal — never WHICH sink processes
+        // them: the emitted read is the SAME runtime-helper call on the slot
+        // (`ui_background_image_(__ipe_lit.get(N).to_string())`), so the identical
+        // `SafeCssValue` / `is_dangerous_url_scheme` / `sink_safe_keyframes_body`
+        // gate runs on a dev-patched value exactly as on the compiled one. Baked
+        // default == direct emit == dev-patched value: one sink, dev == prod —
+        // the same argument that admits `Font.family` and the `Html.styleNode`
+        // body. Every position here is a direct `String`; the trailing `bool`
+        // structural args (`respect`) are excluded — they carry no appearance
+        // value and gate reduced-motion behaviour, which is logic, not data.
+        //
+        // `Background.image : String -> Attribute msg` — the URL (position 0),
+        // rendered as `background-image: url(<s>)`. The URL sink is the strictest
+        // one here, and it stays strict on the hoisted read: `AttrBgImage`'s sink
+        // rejects a `javascript:` / `vbscript:` / non-media `data:` scheme
+        // (`is_dangerous_url_scheme`) AND breakout-scans the COMPOSED `url(<s>)`
+        // through `SafeCssValue` (a `)`/`;`/`}`/`@import`/`</style>` breakout is
+        // dropped). Both gates are pure over the String, so a dev-patched URL
+        // meets the identical wall a baked one does — no path lets a patched value
+        // reach the sink less sanitised than the compiled default.
+        KernelFn::BackgroundImage => &[(0, Str)],
+        // `Ui.transition : String -> Bool -> Attribute msg` — the raw CSS
+        // `transition` shorthand (position 0). Position 1 is the `respect`
+        // reduced-motion flag (`bool`, structural — excluded). The shorthand goes
+        // through `SafeCssValue` at both the render sink and the live `build_tr`
+        // injector, identically for a baked or hoisted string.
+        KernelFn::UiTransitionRaw => &[(0, Str)],
+        // `Ui.gridTracks : String -> String -> Attribute msg` — the raw CSS grid
+        // `cols` (position 0) and `rows` (position 1). Both are style *values* on
+        // fixed property names (`grid-template-columns` / `-rows`), each gated by
+        // `SafeCssValue` at the render sink — a pure function of the String, so
+        // baked == hoisted.
+        KernelFn::UiGridTracksRaw => &[(0, Str), (1, Str)],
+        // `Ui.animate : String -> String -> String -> Bool -> Attribute msg` —
+        // the keyframe-animation `name` (position 0), the animation shorthand TAIL
+        // (position 1), and the `@keyframes` BODY (position 2). Position 3 is the
+        // `respect` reduced-motion flag (`bool`, structural — excluded). The live
+        // `build_anim` sink re-derives the effective `@keyframes` name through
+        // `sanitise_animation_name`, gates the tail through `SafeCssValue`, and
+        // gates the body through `sink_safe_keyframes_body` (a `}`/`@import`/
+        // `</style>` breakout drops the entry fail-closed) — each gate a pure
+        // function of the String, so a dev-patched value is neutralised identically
+        // to the baked one.
+        KernelFn::UiAnimateRaw => &[(0, Str), (1, Str), (2, Str)],
+
         // ── Ipe.Css — hoisted on the generic path, not this positional site ─
         // `Ipe.Css` is compiled pure Ipê; its one free-string appearance sink
         // that reaches a Rust kernel is the value sanitizer
@@ -1035,7 +1086,6 @@ pub const fn appearance_literal_args(k: KernelFn) -> &'static [(usize, LitKind)]
         | KernelFn::UiTransparent
         | KernelFn::UiColorCss
         | KernelFn::BackgroundColor
-        | KernelFn::BackgroundImage
         | KernelFn::BorderColor
         | KernelFn::BorderWidthEach
         | KernelFn::BorderShadow
@@ -1109,9 +1159,6 @@ pub const fn appearance_literal_args(k: KernelFn) -> &'static [(usize, LitKind)]
         | KernelFn::UiSquare
         | KernelFn::UiWidescreen
         | KernelFn::UiCinemascope
-        | KernelFn::UiTransitionRaw
-        | KernelFn::UiGridTracksRaw
-        | KernelFn::UiAnimateRaw
         | KernelFn::UiBreakpoint
         | KernelFn::UiMediaQuery
         | KernelFn::UiMobile
