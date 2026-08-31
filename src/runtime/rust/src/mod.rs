@@ -548,6 +548,12 @@ pub use web::*;
 #[cfg(all(target_arch = "wasm32", feature = "wasm-client", not(feature = "web")))]
 pub mod web {
     pub mod route;
+    // The appearance literal table is pure std data (a `Vec<String>`), so it
+    // compiles on wasm32 with no extra dependency. Expose it through the lean
+    // web shell too, so a browser-WASM web-shape build resolves
+    // `ipe_runtime::web::LiteralTable` exactly as a native web-shape build does.
+    pub mod literal_table;
+    pub use literal_table::LiteralTable;
 }
 
 pub mod ffi_polyfills;

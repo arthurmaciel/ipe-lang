@@ -239,6 +239,7 @@ fn collect_files(
 /// deliberately unhashed, matching [`ipe_db::SourceFile`]'s own input shape
 /// (module path + text + origin; never the on-disk path).
 #[must_use]
+#[allow(clippy::too_many_arguments)] // a content-address key over every emit-affecting input
 pub fn compute_project_key(
     sources: &BTreeMap<Vec<String>, (PathBuf, String)>,
     injected: &BTreeSet<Vec<String>>,
@@ -247,12 +248,20 @@ pub fn compute_project_key(
     target: ipe_ir::Target,
     wasm_public_env: &[String],
     production: bool,
+    hot_appearance: bool,
 ) -> String {
     let mut hasher = Sha256::new();
     update_len_prefixed(&mut hasher, KEY_TAG);
     // The target changes the emitted manifest/entry shape — a native-keyed
     // entry must never serve a wasm build (or vice versa).
     update_len_prefixed(&mut hasher, format!("{target:?}").as_bytes());
+
+    // The dev-only appearance hot-swap flag changes the emitted view (style
+    // literals routed through a `LiteralTable`), so a flag-on emit must never be
+    // served from a flag-off cache entry, or vice versa. Keying on it keeps the
+    // two disjoint; for a program with no hoist-eligible literal the emitted
+    // bytes are identical either way and the extra bit only costs a cold entry.
+    hasher.update([u8::from(hot_appearance)]);
 
     // `ipe release` rejects any `Debug.*` use (IPE-L0140), so its outcome
     // differs from a development build for a Debug-using program (error vs
@@ -613,6 +622,7 @@ mod tests {
             ipe_ir::Target::Native,
             &[],
             false,
+            false,
         );
         let b = compute_project_key(
             &sources,
@@ -621,6 +631,7 @@ mod tests {
             DbDriver::Sqlite,
             ipe_ir::Target::Native,
             &[],
+            false,
             false,
         );
         assert_eq!(a, b, "same inputs must hash to the same key");
@@ -637,6 +648,7 @@ mod tests {
             ipe_ir::Target::Native,
             &[],
             false,
+            false,
         );
         if let Some(main) = sources.get_mut(&vec!["Main".to_owned()]) {
             main.1.push_str("\n-- comment\n");
@@ -648,6 +660,7 @@ mod tests {
             DbDriver::Sqlite,
             ipe_ir::Target::Native,
             &[],
+            false,
             false,
         );
         assert_ne!(base, edited, "a body edit must change the key");
@@ -664,6 +677,7 @@ mod tests {
             ipe_ir::Target::Native,
             &[],
             false,
+            false,
         );
         let postgres = compute_project_key(
             &sources,
@@ -672,6 +686,7 @@ mod tests {
             DbDriver::Postgres,
             ipe_ir::Target::Native,
             &[],
+            false,
             false,
         );
         assert_ne!(sqlite, postgres, "the SQL driver is part of the key");
@@ -693,6 +708,7 @@ mod tests {
             ipe_ir::Target::Native,
             &[],
             false,
+            false,
         );
         let prod = compute_project_key(
             &sources,
@@ -702,8 +718,38 @@ mod tests {
             ipe_ir::Target::Native,
             &[],
             true,
+            false,
         );
         assert_ne!(dev, prod, "the production flag is part of the key");
+    }
+
+    /// The dev appearance hot-swap flag routes style literals through a
+    /// `LiteralTable`, changing the emitted view — so a flag-on build must never
+    /// be served a flag-off cached project, or vice versa.
+    #[test]
+    fn key_changes_with_hot_appearance() {
+        let (sources, injected) = sample_sources();
+        let off = compute_project_key(
+            &sources,
+            &injected,
+            &entry(),
+            DbDriver::Sqlite,
+            ipe_ir::Target::Native,
+            &[],
+            false,
+            false,
+        );
+        let on = compute_project_key(
+            &sources,
+            &injected,
+            &entry(),
+            DbDriver::Sqlite,
+            ipe_ir::Target::Native,
+            &[],
+            false,
+            true,
+        );
+        assert_ne!(off, on, "the hot-appearance flag is part of the key");
     }
 
     /// `[wasm] publicEnv` only affects the final emit stage (the generated
@@ -722,6 +768,7 @@ mod tests {
             ipe_ir::Target::Native,
             &[],
             false,
+            false,
         );
         let with_allowlist = compute_project_key(
             &sources,
@@ -730,6 +777,7 @@ mod tests {
             DbDriver::Sqlite,
             ipe_ir::Target::Native,
             &["API_BASE_URL".to_owned()],
+            false,
             false,
         );
         assert_ne!(
@@ -749,6 +797,7 @@ mod tests {
             ipe_ir::Target::Native,
             &[],
             false,
+            false,
         );
         let b = compute_project_key(
             &sources,
@@ -757,6 +806,7 @@ mod tests {
             DbDriver::Sqlite,
             ipe_ir::Target::Native,
             &[],
+            false,
             false,
         );
         assert_ne!(a, b, "the entry module path is part of the key");
@@ -772,6 +822,7 @@ mod tests {
             DbDriver::Sqlite,
             ipe_ir::Target::Native,
             &[],
+            false,
             false,
         );
 
@@ -791,6 +842,7 @@ mod tests {
             ipe_ir::Target::Native,
             &[],
             false,
+            false,
         );
         assert_ne!(base, with_extra, "adding a module must change the key");
 
@@ -805,6 +857,7 @@ mod tests {
             DbDriver::Sqlite,
             ipe_ir::Target::Native,
             &[],
+            false,
             false,
         );
         assert_ne!(
@@ -832,6 +885,7 @@ mod tests {
             ipe_ir::Target::Native,
             &[],
             false,
+            false,
         );
         let b = compute_project_key(
             &sources,
@@ -840,6 +894,7 @@ mod tests {
             DbDriver::Sqlite,
             ipe_ir::Target::Native,
             &[],
+            false,
             false,
         );
         assert_ne!(a, b, "the trust-origin flag is part of the key");
@@ -868,6 +923,7 @@ mod tests {
             ipe_ir::Target::Native,
             &[],
             false,
+            false,
         );
         let b = compute_project_key(
             &right,
@@ -876,6 +932,7 @@ mod tests {
             DbDriver::Sqlite,
             ipe_ir::Target::Native,
             &[],
+            false,
             false,
         );
         assert_ne!(a, b, "differently-segmented module paths must not collide");

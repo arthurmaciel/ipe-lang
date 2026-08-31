@@ -1161,6 +1161,14 @@ pub struct BuildConfig {
     /// fixed `"ipe-app"`. An empty string signals "use the `ipe-app` default".
     #[returns(ref)]
     pub cargo_name: String,
+    /// `true` when the dev-only `IPE_WATCH_HOT_APPEARANCE` flag is set. Threaded
+    /// to [`ipe_backend_rust::RustBackend::with_hot_appearance`], which routes
+    /// style-value literals through a per-view `LiteralTable` for appearance
+    /// hot-swap. Lives on `BuildConfig` (not `SourceRoot`) so toggling it re-runs
+    /// only the emit demand, never lower/typecheck. Read from the environment
+    /// once by the CLI when the config is built; default off ⇒ byte-identical
+    /// emit.
+    pub hot_appearance: bool,
 }
 
 /// The memoized result of emitting the linked, lowered program to Rust
@@ -1244,6 +1252,7 @@ pub fn emit_project(
     let runtime_dep = config.runtime_dep(db).clone();
     let debugger = config.debugger(db);
     let cargo_name = config.cargo_name(db).clone();
+    let hot_appearance = config.hot_appearance(db);
     let interner = db.interner().lock();
     ipe_backend_rust::RustBackend::new(&interner)
         .with_db_driver(driver)
@@ -1254,6 +1263,7 @@ pub fn emit_project(
         .with_runtime_dep(runtime_dep)
         .with_debugger(debugger)
         .with_project_name(&cargo_name)
+        .with_hot_appearance(hot_appearance)
         .emit(&program)
         .map(Arc::new)
         .map_err(|d| (d, Vec::new()))
@@ -1337,6 +1347,7 @@ pub fn emit_spine_file(
     let wasm_public_env = config.wasm_public_env(db).clone();
     let wasm_hydrate_mode = config.wasm_hydrate_mode(db);
     let runtime_dep = config.runtime_dep(db).clone();
+    let hot_appearance = config.hot_appearance(db);
     let interner = db.interner().lock();
     ipe_backend_rust::RustBackend::new(&interner)
         .with_db_driver(driver)
@@ -1345,6 +1356,7 @@ pub fn emit_spine_file(
         .with_wasm_public_env(wasm_public_env)
         .with_wasm_hydrate_mode(wasm_hydrate_mode)
         .with_runtime_dep(runtime_dep)
+        .with_hot_appearance(hot_appearance)
         .emit_spine(&program)
         .map(Arc::new)
         .map_err(|d| (d, Vec::new()))
@@ -1376,6 +1388,7 @@ pub fn emit_rust_file<'db>(
     let ffi = config.ffi(db).clone();
     let target = config.target(db);
     let runtime_dep = config.runtime_dep(db).clone();
+    let hot_appearance = config.hot_appearance(db);
     let home = file.home(db);
     let interner = db.interner().lock();
     ipe_backend_rust::RustBackend::new(&interner)
@@ -1383,6 +1396,7 @@ pub fn emit_rust_file<'db>(
         .with_ffi(ffi)
         .with_target(target)
         .with_runtime_dep(runtime_dep)
+        .with_hot_appearance(hot_appearance)
         .emit_module_file(&program, &home)
         .map(Arc::new)
         .map_err(|d| (d, Vec::new()))
@@ -1450,6 +1464,7 @@ pub fn emit_manifest(
     let wasm_hydrate_mode = config.wasm_hydrate_mode(db);
     let runtime_dep = config.runtime_dep(db).clone();
     let debugger = config.debugger(db);
+    let hot_appearance = config.hot_appearance(db);
     let interner = db.interner().lock();
     ipe_backend_rust::RustBackend::new(&interner)
         .with_db_driver(driver)
@@ -1459,6 +1474,7 @@ pub fn emit_manifest(
         .with_wasm_hydrate_mode(wasm_hydrate_mode)
         .with_runtime_dep(runtime_dep)
         .with_debugger(debugger)
+        .with_hot_appearance(hot_appearance)
         .assemble_split_manifest(&program, &spine, &module_texts)
         .map(Arc::new)
         .map_err(|d| (d, Vec::new()))

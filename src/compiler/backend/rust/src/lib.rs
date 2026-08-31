@@ -35,6 +35,7 @@ mod runtime_features;
 mod rust_file;
 pub mod static_build;
 
+use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 
 use ipe_backend::{Backend, EmittedProject};
@@ -198,6 +199,10 @@ pub struct RustBackend<'a> {
     /// `[package] name`. Empty string signals "use the safe fallback
     /// `ipe-app`" — set via [`Self::with_project_name`].
     cargo_name: String,
+    /// `true` when the dev-only `IPE_WATCH_HOT_APPEARANCE` flag is set. Routes
+    /// style-value literals through a per-view `LiteralTable` for appearance
+    /// hot-swap. Set via [`Self::with_hot_appearance`]; default off.
+    hot_appearance: bool,
 }
 
 /// Convert an arbitrary `package.ipe` name value into a valid Cargo package
@@ -332,6 +337,7 @@ impl<'a> RustBackend<'a> {
             runtime_dep: None,
             debugger: false,
             cargo_name: String::new(),
+            hot_appearance: false,
         }
     }
 
@@ -369,6 +375,17 @@ impl<'a> RustBackend<'a> {
     #[must_use]
     pub const fn with_debugger(mut self, debugger: bool) -> Self {
         self.debugger = debugger;
+        self
+    }
+
+    /// Enable the dev-only appearance hot-swap emit: style-value literals passed
+    /// directly to an allowlisted `Ui.*` style kernel are hoisted into a per-view
+    /// `LiteralTable` (baked defaults = the source values) and emitted as
+    /// `__ipe_lit.get(N)` reads. Set from `IPE_WATCH_HOT_APPEARANCE`. Default off,
+    /// in which case the emit is byte-identical to the direct-literal form.
+    #[must_use]
+    pub const fn with_hot_appearance(mut self, hot_appearance: bool) -> Self {
+        self.hot_appearance = hot_appearance;
         self
     }
 
@@ -444,6 +461,7 @@ impl<'a> RustBackend<'a> {
             self.runtime_dep.clone(),
             self.debugger,
             self.cargo_name.clone(),
+            self.hot_appearance,
         )?;
         project::emit_spine(&ctx, program)
     }
@@ -469,6 +487,7 @@ impl<'a> RustBackend<'a> {
             self.runtime_dep.clone(),
             self.debugger,
             self.cargo_name.clone(),
+            self.hot_appearance,
         )
     }
 
@@ -494,6 +513,7 @@ impl<'a> RustBackend<'a> {
             self.runtime_dep.clone(),
             self.debugger,
             self.cargo_name.clone(),
+            self.hot_appearance,
         )?;
         Ok(runtime_features::runtime_features(&ctx).as_feature_names())
     }
@@ -519,6 +539,7 @@ impl<'a> RustBackend<'a> {
             self.runtime_dep.clone(),
             self.debugger,
             self.cargo_name.clone(),
+            self.hot_appearance,
         )?;
         project::emit_module_file(
             &ctx,
@@ -559,6 +580,7 @@ impl<'a> RustBackend<'a> {
             self.runtime_dep.clone(),
             self.debugger,
             self.cargo_name.clone(),
+            self.hot_appearance,
         )?;
         project::assemble_split_manifest(&ctx, program, spine_text, module_texts)
     }
@@ -606,6 +628,7 @@ impl Backend for RustBackend<'_> {
             self.runtime_dep.clone(),
             self.debugger,
             self.cargo_name.clone(),
+            self.hot_appearance,
         )?;
         project::emit_program(&ctx, program)
     }
@@ -682,6 +705,35 @@ pub(crate) struct RecordStruct {
     /// (SEAL break). `is_derivable ⇒ is_clone` (a `CDPeq` type is `Clone`), so
     /// the two flags never disagree in the derivable direction.
     pub is_clone: bool,
+}
+
+/// Per-function scratch for the dev appearance hot-swap emit (Step 1).
+///
+/// A function body is emitted with a fresh accumulator: each hoisted style
+/// literal appends its source value to `defaults` and takes the returned index
+/// as its `LiteralTable` slot. After the body is rendered, a non-empty
+/// `defaults` triggers a `let __ipe_lit = LiteralTable::from_defaults(&[…]);`
+/// prologue whose baked defaults are exactly those source values — so a read of
+/// `__ipe_lit.get(N)` is indistinguishable from the direct literal (dev == prod).
+///
+/// `closure_depth` fences the hoist to the function body's top emission level:
+/// a `move` closure captures `__ipe_lit` by move, so hoisting inside one would
+/// contend with the binding's other uses. Literals inside a lambda body emit
+/// directly (unchanged) — conservative and sound, covering the dominant
+/// top-level view-style case.
+#[derive(Default)]
+struct LiteralAccum {
+    /// Whether a function body is currently being emitted with hoisting armed.
+    active: bool,
+    /// Emission nesting inside `move` closures; hoisting fires only at depth 0.
+    closure_depth: u32,
+    /// Nesting inside a discard-only *probe* emit (the shape/width predicate that
+    /// re-runs an emitter to decide a layout, throwing the result away). A probe
+    /// must not append to the table — the real emit does that — or the literal
+    /// would be counted twice. Hoisting is suppressed while this is non-zero.
+    probe_depth: u32,
+    /// The hoisted literals' source values, in emit order — the table defaults.
+    defaults: Vec<String>,
 }
 
 /// Shared emission context: the interner plus the precomputed Ipê → Rust name
@@ -1131,6 +1183,16 @@ pub(crate) struct EmitCtx<'a> {
     /// "<cargo_name>"` into the emitted `Cargo.toml`. Defaults to `"ipe-app"`
     /// when no project name is supplied.
     pub(crate) cargo_name: String,
+    /// `true` when `IPE_WATCH_HOT_APPEARANCE` is set — the dev-only flag that
+    /// routes style-value literals through a per-view [`ipe_runtime::web::LiteralTable`]
+    /// so a `view` appearance edit can hot-swap without recompiling. Default off:
+    /// with the flag unset the emit is byte-identical to the direct-literal form.
+    pub(crate) hot_appearance: bool,
+    /// Per-function accumulator for hoisted style literals, reset at the start of
+    /// each function body (see [`LiteralAccum`]). Interior-mutable so the emit,
+    /// which threads `&EmitCtx`, can append a literal's slot without an added
+    /// parameter on every emit function.
+    lit_accum: RefCell<LiteralAccum>,
 }
 
 /// Is an enum variant payload field type `Clone`, consulting the whole-program
@@ -1202,6 +1264,7 @@ impl<'a> EmitCtx<'a> {
         runtime_dep: Option<RuntimeDep>,
         debugger: bool,
         cargo_name: String,
+        hot_appearance: bool,
     ) -> DResult<Self> {
         let mut enum_names: BTreeMap<(ModPath, Symbol), String> = BTreeMap::new();
         let mut variant_fields: BTreeMap<(ModPath, Symbol, Symbol), Vec<IrType>> = BTreeMap::new();
@@ -1856,6 +1919,8 @@ impl<'a> EmitCtx<'a> {
             record_structs,
             record_by_fieldset,
             cargo_name,
+            hot_appearance,
+            lit_accum: RefCell::new(LiteralAccum::default()),
         };
         // Resolve the `HydrationState` type name through the same renderer the
         // emitted `main_from_hydration_state` signature uses, so the wasm-hydrate
@@ -1895,6 +1960,74 @@ impl<'a> EmitCtx<'a> {
             }
         }
         Ok(None)
+    }
+
+    /// Arm the per-function literal accumulator for a fresh function body and
+    /// return the previous accumulator state so the caller can restore it after
+    /// the body is emitted. Only meaningful under [`Self::hot_appearance`]; when
+    /// the flag is off it is a cheap no-op reset that stays inert (nothing ever
+    /// hoists), keeping the emit byte-identical to the direct-literal form.
+    fn begin_function_literals(&self) -> LiteralAccum {
+        std::mem::replace(
+            &mut *self.lit_accum.borrow_mut(),
+            LiteralAccum {
+                active: self.hot_appearance,
+                closure_depth: 0,
+                probe_depth: 0,
+                defaults: Vec::new(),
+            },
+        )
+    }
+
+    /// Finish the current function body: take its accumulated style-literal
+    /// defaults (in emit order) and restore the previous accumulator. An empty
+    /// vector means nothing was hoisted, so the caller emits no table prologue.
+    fn end_function_literals(&self, previous: LiteralAccum) -> Vec<String> {
+        let finished = std::mem::replace(&mut *self.lit_accum.borrow_mut(), previous);
+        finished.defaults
+    }
+
+    /// Enter a `move`-closure body: hoisting is fenced off inside a closure
+    /// because it captures `__ipe_lit` by move. Balanced by [`Self::exit_closure`].
+    fn enter_closure(&self) {
+        self.lit_accum.borrow_mut().closure_depth += 1;
+    }
+
+    /// Leave a `move`-closure body, re-enabling top-level hoisting once every
+    /// enclosing closure has been left. Saturating so an unbalanced call can
+    /// never underflow (it would only, at worst, leave hoisting fenced off).
+    fn exit_closure(&self) {
+        let mut accum = self.lit_accum.borrow_mut();
+        accum.closure_depth = accum.closure_depth.saturating_sub(1);
+    }
+
+    /// Enter a discard-only probe emit: hoisting is suppressed so the probe does
+    /// not append a literal the real emit will append again. Balanced by
+    /// [`Self::exit_probe`].
+    fn enter_probe(&self) {
+        self.lit_accum.borrow_mut().probe_depth += 1;
+    }
+
+    /// Leave a probe emit, re-enabling hoisting once every enclosing probe has
+    /// been left. Saturating against an unbalanced call.
+    fn exit_probe(&self) {
+        let mut accum = self.lit_accum.borrow_mut();
+        accum.probe_depth = accum.probe_depth.saturating_sub(1);
+    }
+
+    /// Hoist a style-value literal into the current function's table, returning
+    /// its slot index. `None` when hoisting is not armed (flag off, no active
+    /// body, or inside a `move` closure) — the caller then emits the literal
+    /// directly. The baked default is exactly `value`, so a read of the returned
+    /// slot renders identically to the direct literal (dev == prod).
+    fn hoist_style_literal(&self, value: &str) -> Option<usize> {
+        let mut accum = self.lit_accum.borrow_mut();
+        if !accum.active || accum.closure_depth != 0 || accum.probe_depth != 0 {
+            return None;
+        }
+        let idx = accum.defaults.len();
+        accum.defaults.push(value.to_owned());
+        Some(idx)
     }
 
     /// Is `home` a driver-generated FFI interface module (`Rust.*`)? The
@@ -4429,6 +4562,7 @@ mod record_struct_namespace_tests {
     /// synthesises a struct with the SAME Rust name — a real, constructible
     /// collision, not a hedged placeholder.
     #[test]
+    #[allow(clippy::too_many_lines)] // one exhaustive collision-construction fixture
     fn record_struct_colliding_with_enum_name_fails_closed() -> DResult<()> {
         let mut interner = Interner::new();
         let rec_mod = interner.intern("Rec")?;
@@ -4516,6 +4650,7 @@ mod record_struct_namespace_tests {
             None,
             false,
             String::new(),
+            false,
         )?;
         assert_eq!(ctx.record_structs().len(), 1);
         assert_eq!(
@@ -4618,6 +4753,7 @@ mod record_struct_namespace_tests {
             None,
             false,
             String::new(),
+            false,
         )?;
         ctx.assert_record_structs_disjoint_from_type_namespace(&BTreeSet::new())
     }
@@ -4703,6 +4839,7 @@ mod record_struct_namespace_tests {
             None,
             false,
             String::new(),
+            false,
         )?;
 
         let colliding: BTreeSet<Symbol> = [snake, camel].into_iter().collect();

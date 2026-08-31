@@ -896,6 +896,16 @@ pub fn runtime_dep_from_env() -> bool {
     !std::env::var("IPE_RUNTIME_VENDORED").is_ok_and(|v| v == "1")
 }
 
+/// Whether the dev-only appearance hot-swap emit is enabled.
+///
+/// Read from `IPE_WATCH_HOT_APPEARANCE`. Set (to any non-empty value other than
+/// `0`) to route style-value literals through a per-view `LiteralTable`. Default
+/// off, so an ordinary build emits byte-identically to the direct-literal form.
+#[must_use]
+pub fn hot_appearance_enabled() -> bool {
+    std::env::var("IPE_WATCH_HOT_APPEARANCE").is_ok_and(|v| !v.is_empty() && v != "0")
+}
+
 impl BuildOptions {
     /// The default build options with the emit model resolved from the
     /// environment (dependency-model by default; vendored under
@@ -1425,6 +1435,7 @@ fn compile_modules_observed(
         options.target,
         &options.wasm_public_env,
         options.production,
+        hot_appearance_enabled(),
     );
     let epoch = cache_dir.and_then(|_| cache::derive_epoch());
     if let (Some(root), Some(epoch)) = (cache_dir, epoch.as_deref())
@@ -1490,6 +1501,7 @@ fn compile_modules_observed(
                     .with_runtime_dep(runtime_dep.clone())
                     .with_debugger(options.debugger)
                     .with_project_name(&options.cargo_name)
+                    .with_hot_appearance(hot_appearance_enabled())
                     .emit(&program)
             };
             if let Ok(emitted) = emit_result {
@@ -1543,6 +1555,7 @@ fn compile_modules_observed(
         runtime_dep,
         options.debugger,
         options.cargo_name.clone(),
+        hot_appearance_enabled(),
     );
 
     let emitted = match compile_prepared(&db, source_root, &sources, entry_path, blame_path, config)

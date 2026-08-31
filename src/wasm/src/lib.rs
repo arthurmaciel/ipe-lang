@@ -130,6 +130,8 @@ fn compile_inner(source: &str) -> Result<ipe_backend::EmittedProject, String> {
         // The browser playground does not expose `--debugger`; never record.
         false,
         String::new(),
+        // The browser playground is not the dev watch loop; no appearance hoist.
+        false,
     );
 
     // Per-module canonicalisation in dep-first order — purely for BLAME

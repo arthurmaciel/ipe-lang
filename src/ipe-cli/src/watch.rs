@@ -1063,6 +1063,7 @@ fn run_inner(
                         // `ipe watch` does not expose `--debugger`; never record.
                         false,
                         resolved.cargo_name.clone(),
+                        crate::hot_appearance_enabled(),
                     );
                     config = Some(cfg);
                     cfg
