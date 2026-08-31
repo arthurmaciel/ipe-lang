@@ -210,6 +210,43 @@ fn web_fixture_css(value: &str) -> String {
     )
 }
 
+/// A `Web.app` whose view carries a `Ui.gridTracks cols rows` — two direct raw
+/// CSS String literals (`grid-template-columns` / `-rows` values) that each hoist
+/// into the per-view `LiteralTable` under the flag. The raw-CSS value sink
+/// (`SafeCssValue` on each axis) is a pure function of the String, so a hoisted
+/// slot read neutralises identically to the baked literal. A marker text confirms
+/// the app is up.
+fn web_fixture_grid(cols: &str, rows: &str) -> String {
+    format!(
+        "module Main exposing (main)\n\n\
+         import Ipe.Tea.Web as Web\n\
+         import Ipe.Ui as Ui\n\
+         import Ipe.Tea.Web.Cmd\n\
+         import Ipe.Tea.Web.Sub\n\
+         import Ipe.String\n\n\
+         type alias Model = {{ count : Int }}\n\n\
+         type Msg = Noop\n\n\
+         init : a -> ( Model, Cmd Msg )\n\
+         init _req =\n    \
+             ( {{ count = 0 }}, Cmd.none )\n\n\
+         update : Msg -> Model -> ( Model, Cmd Msg )\n\
+         update _msg model =\n    \
+             ( model, Cmd.none )\n\n\
+         view : Model -> Element Msg\n\
+         view _model =\n    \
+             Ui.column [ Ui.gridTracks \"{cols}\" \"{rows}\" ]\n        \
+                 [ Ui.text \"marker\" ]\n\n\
+         subscriptions : Model -> Sub Msg\n\
+         subscriptions _model =\n    \
+             Sub.none\n\n\
+         main =\n    \
+             Web.app\n        \
+                 {{ init = init, update = update, view = view, subscriptions = subscriptions\n        \
+                 , routes = [], notFound = Noop\n        \
+                 }}\n",
+    )
+}
+
 fn fresh_dirs(tag: &str) -> Result<(PathBuf, PathBuf), BoxError> {
     let base = std::env::temp_dir().join(format!(
         "watch_hot_{tag}_{}_{}",
@@ -662,6 +699,103 @@ fn numeric_weight_edit_hot_swaps_without_rebuild() -> Result<(), BoxError> {
     write_main(
         &ipe_dir,
         &web_fixture_weight(700, "\n        , Ui.text \"added\""),
+    )?;
+    let restarted = wait_for(Duration::from_mins(2), || {
+        server_pid(port).is_some_and(|pid| pid != pid_before)
+            && http_get_body(port).is_some_and(|b| b.contains("added"))
+    });
+    assert!(
+        restarted,
+        "a structural edit (added element) must recompile and restart onto a new binary"
+    );
+    assert!(
+        wait_for(Duration::from_secs(10), || {
+            sink.count_restarted() > restarts_before_struct
+        }),
+        "a structural edit must recompile and restart (a new Restarted event)"
+    );
+
+    stop_and_join(&handle, join)
+}
+
+/// SEAL for the raw-CSS appearance slice: a web view carrying a direct
+/// `Ui.gridTracks cols rows` cold-builds and serves under the flag (proving the
+/// hoisted `ui_grid_tracks_raw_(__ipe_lit.get(N).to_string(), …)` emit
+/// cargo-compiles), a raw-CSS value edit hot-swaps without a rebuild — the same
+/// no-cargo, no-restart outcome the other appearance surfaces produce — while a
+/// structural edit recompiles. The raw-CSS value sink (`SafeCssValue`) is a pure
+/// function of the String, so the hoisted read is neutralised identically to the
+/// baked literal (dev == prod).
+#[test]
+#[cfg(target_os = "linux")]
+fn grid_tracks_edit_hot_swaps_without_rebuild() -> Result<(), BoxError> {
+    if std::env::var("IPE_E2E").is_err() {
+        eprintln!("skipping (set IPE_E2E=1 to run)");
+        return Ok(());
+    }
+    // SAFETY: single-threaded here (no watch thread spawned yet); nextest isolates
+    // this process, so the var neither races nor leaks.
+    unsafe {
+        std::env::set_var("IPE_WATCH_HOT_APPEARANCE", "1");
+    }
+
+    let (ipe_dir, out_dir) = fresh_dirs("grid")?;
+    write_main(&ipe_dir, &web_fixture_grid("1fr 1fr", "auto"))?;
+
+    let sink = EventSink::default();
+    let port = 19176;
+    let (join, handle) = start_watch(&ipe_dir.join("Main.ipe"), &out_dir, port, &sink)?;
+
+    assert!(
+        wait_for_serving(port, Duration::from_mins(4)),
+        "the flag-on cold build of a raw-CSS gridTracks view must serve (hoisted \
+         ui_grid_tracks_raw_ compiles)"
+    );
+    assert!(
+        wait_for(Duration::from_secs(10), || sink.count_restarted() >= 1),
+        "the cold build must record its initial Restarted event"
+    );
+    let pid_before = server_pid(port).ok_or("server PID must be discoverable after cold build")?;
+    let restarts_before = sink.count_restarted();
+
+    // ── Raw-CSS value edit: cols "1fr 1fr" -> "2fr 1fr". Appearance-only. ──
+    write_main(&ipe_dir, &web_fixture_grid("2fr 1fr", "auto"))?;
+    let swap_start = Instant::now();
+    let hot_swapped = wait_for(Duration::from_secs(20), || sink.count_hot_swapped() > 0);
+    assert!(
+        hot_swapped,
+        "a raw-CSS gridTracks value edit must be hot-swapped (AppearanceHotSwapped), \
+         not recompiled"
+    );
+    std::thread::sleep(Duration::from_secs(2));
+    assert_eq!(
+        sink.count_restarted(),
+        restarts_before,
+        "a hot-swapped raw-CSS value edit must NOT restart the app (no cargo rebuild)"
+    );
+    assert_eq!(
+        server_pid(port),
+        Some(pid_before),
+        "a hot-swapped raw-CSS value edit must leave the SAME server process running"
+    );
+    assert!(
+        http_get_body(port).is_some_and(|b| b.contains("marker")),
+        "the app must keep serving after the raw-CSS hot-swap"
+    );
+    eprintln!(
+        "[measure] gridTracks cols 1fr 1fr->2fr 1fr hot-swap round-trip: {} ms \
+         (no cargo, no restart)",
+        swap_start.elapsed().as_millis()
+    );
+
+    // ── Structural edit: add an element. Logic ⇒ recompile + restart. ──
+    let restarts_before_struct = sink.count_restarted();
+    write_main(
+        &ipe_dir,
+        &web_fixture_grid("2fr 1fr", "auto").replace(
+            "Ui.text \"marker\" ]",
+            "Ui.text \"marker\", Ui.text \"added\" ]",
+        ),
     )?;
     let restarted = wait_for(Duration::from_mins(2), || {
         server_pid(port).is_some_and(|pid| pid != pid_before)
