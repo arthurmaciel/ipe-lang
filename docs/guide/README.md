@@ -60,7 +60,8 @@ cross-link where topics meet.
   arithmetic over durations), [Timestamp](timestamp.md) (the opaque instant type:
   shift by a span, measure the span between two).
 - **Content and markup** — [HTML](html.md) (typed element trees, XSS-safe by
-  construction), [Markdown](markdown.md) (a typed block tree, no raw HTML).
+  construction), [HTML attributes](html-attributes.md) (fixed-key builders, boolean
+  attributes as `Bool`), [Markdown](markdown.md) (a typed block tree, no raw HTML).
 - **Instrumentation and delivery** — [Analytics](analytics.md) (consent-gated,
   PII-safe event tracking), [Email](email.md) (provider-abstract send with sealed
   credentials).
@@ -79,9 +80,10 @@ cross-link where topics meet.
 - **Escape hatches** — the surfaces that bypass a safe default behind a disclosed
   `unsafe` capability: [the unsafe database surface](db-unsafe.md) (raw SQL,
   untyped column reads), [the unsafe Store surface](db-store-unsafe.md)
-  (string-named columns for a dynamic table), [the secret-reveal
-  hatch](secret-unsafe.md) (un-seal a `Secret` to a bare `String`). Reach for these
-  only for a residual the safe surface cannot express.
+  (string-named columns for a dynamic table), [the unsafe HTML
+  surface](html-unsafe.md) (raw markup / inline `<script>` past the escaper),
+  [the secret-reveal hatch](secret-unsafe.md) (un-seal a `Secret` to a bare
+  `String`). Reach for these only for a residual the safe surface cannot express.
 - **Caching** — [Cache](cache.md) (bounded, in-memory LRU with optional TTL; a
   miss is a `Maybe`, not a failure).
 - **Observability** — [Logging](log.md) (structured, levelled log records),
