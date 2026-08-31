@@ -362,12 +362,12 @@ pub enum CliError {
     UpgradeFeedUnreachable,
     /// `ipe upgrade --check --exit-code` resolved the action and must exit
     /// with a numeric code that is neither SUCCESS nor FAILURE (e.g. 10 for
-    /// "upgrade available"). Carries the code so `main` can call
-    /// [`std::process::exit`] with it after printing nothing (the status line
-    /// was already printed by `run_upgrade`).
+    /// "upgrade available"). Carries the code so `main` can return it as an
+    /// `ExitCode` after printing nothing (the status line was already printed
+    /// by `run_upgrade`).
     UpgradeCheckExit {
-        /// The exit code to pass to `std::process::exit` (10 = available,
-        /// 0 = up to date, 2 = unreachable).
+        /// The process exit code (10 = available, 0 = up to date,
+        /// 2 = unreachable).
         code: i32,
     },
 }
