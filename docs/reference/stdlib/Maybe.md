@@ -4,17 +4,44 @@
 
 [Back to stdlib index](../stdlib.md)
 
-## `andMap`
+The `Maybe` type and its `Just` / `Nothing` constructors are kernel-anchored
+so the type system and the runtime representation stay in lockstep; each
+combinator below is a point-free `Ffi.kernel` alias to its registered
+runtime implementation.
 
-`andMap ma mfn` — apply the function inside `mfn` to the value inside `ma`;
-`Nothing` if either is absent.
+## `withDefault`
 
 ```ipe
-andMap (Just 10) (Just (\n -> n + 1)) --> Just 11
-andMap Nothing (Just (\n -> n + 1)) --> Nothing
+withDefault : a -> Maybe a -> a
+```
+
+`withDefault fallback maybe` — the value inside a `Just`, or `fallback`
+when the `Maybe` is `Nothing`.
+
+```ipe
+withDefault 0 (Just 5) --> 5
+withDefault 0 Nothing --> 0
+```
+
+## `map`
+
+```ipe
+map : (a -> b) -> Maybe a -> Maybe b
+```
+
+`map f maybe` — apply `f` to the value inside a `Just`, leaving `Nothing`
+untouched.
+
+```ipe
+map (\n -> n + 1) (Just 4) --> Just 5
+map (\n -> n + 1) Nothing --> Nothing
 ```
 
 ## `andThen`
+
+```ipe
+andThen : (a -> Maybe b) -> Maybe a -> Maybe b
+```
 
 `andThen f maybe` — feed the value inside a `Just` to `f`; `Nothing` passes
 straight through.
@@ -25,45 +52,11 @@ andThen (\n -> if n > 0 then Just n else Nothing) (Just 0) --> Nothing
 andThen (\n -> if n > 0 then Just n else Nothing) Nothing --> Nothing
 ```
 
-## `combine`
-
-`combine maybes` — turn a `List (Maybe a)` into a `Maybe (List a)`; `Nothing`
-if any element is absent.
-
-```ipe
-combine [ Just 1, Just 2, Just 3 ] --> Just [ 1, 2, 3 ]
-combine [ Just 1, Nothing, Just 3 ] --> Nothing
-```
-
-## `isJust`
-
-`isJust maybe` — `True` when the `Maybe` holds a value.
-
-```ipe
-isJust (Just 0) --> True
-isJust Nothing --> False
-```
-
-## `isNothing`
-
-`isNothing maybe` — `True` when the `Maybe` is absent.
-
-```ipe
-isNothing Nothing --> True
-isNothing (Just 0) --> False
-```
-
-## `map`
-
-`map f maybe` — apply `f` to the value inside a `Just`, leaving `Nothing`
-untouched.
-
-```ipe
-map (\n -> n + 1) (Just 4) --> Just 5
-map (\n -> n + 1) Nothing --> Nothing
-```
-
 ## `map2`
+
+```ipe
+map2 : (a -> b -> c) -> Maybe a -> Maybe b -> Maybe c
+```
 
 `map2 f ma mb` — combine two `Maybe` values with `f`; `Just` only when both
 are present.
@@ -75,6 +68,10 @@ map2 (\a b -> a + b) (Just 2) Nothing --> Nothing
 
 ## `map3`
 
+```ipe
+map3 : (a -> b -> c -> d) -> Maybe a -> Maybe b -> Maybe c -> Maybe d
+```
+
 `map3 f ma mb mc` — combine three `Maybe` values with `f`; `Just` only when
 all three are present.
 
@@ -84,6 +81,10 @@ map3 (\a b c -> a + b + c) (Just 1) Nothing (Just 3) --> Nothing
 ```
 
 ## `map4`
+
+```ipe
+map4 : (a -> b -> c -> d -> e) -> Maybe a -> Maybe b -> Maybe c -> Maybe d -> Maybe e
+```
 
 `map4 f ma mb mc md` — combine four `Maybe` values with `f`; `Just` only
 when all four are present.
@@ -95,6 +96,10 @@ map4 (\a b c d -> a + b + c + d) (Just 1) Nothing (Just 3) (Just 4) --> Nothing
 
 ## `map5`
 
+```ipe
+map5 : (a -> b -> c -> d -> e -> f) -> Maybe a -> Maybe b -> Maybe c -> Maybe d -> Maybe e -> Maybe f
+```
+
 `map5 f ma mb mc md me` — combine five `Maybe` values with `f`; `Just` only
 when all five are present.
 
@@ -103,13 +108,57 @@ map5 (\a b c d e -> a + b + c + d + e) (Just 1) (Just 2) (Just 3) (Just 4) (Just
 map5 (\a b c d e -> a + b + c + d + e) (Just 1) Nothing (Just 3) (Just 4) (Just 5) --> Nothing
 ```
 
-## `withDefault`
-
-`withDefault fallback maybe` — the value inside a `Just`, or `fallback`
-when the `Maybe` is `Nothing`.
+## `andMap`
 
 ```ipe
-withDefault 0 (Just 5) --> 5
-withDefault 0 Nothing --> 0
+andMap : Maybe a -> Maybe (a -> b) -> Maybe b
+```
+
+`andMap ma mfn` — apply the function inside `mfn` to the value inside `ma`;
+`Nothing` if either is absent.
+
+```ipe
+andMap (Just 10) (Just (\n -> n + 1)) --> Just 11
+andMap Nothing (Just (\n -> n + 1)) --> Nothing
+```
+
+## `combine`
+
+```ipe
+combine : List (Maybe a) -> Maybe (List a)
+```
+
+`combine maybes` — turn a `List (Maybe a)` into a `Maybe (List a)`; `Nothing`
+if any element is absent.
+
+```ipe
+combine [ Just 1, Just 2, Just 3 ] --> Just [ 1, 2, 3 ]
+combine [ Just 1, Nothing, Just 3 ] --> Nothing
+```
+
+## `isJust`
+
+```ipe
+isJust : Maybe a -> Bool
+```
+
+`isJust maybe` — `True` when the `Maybe` holds a value.
+
+```ipe
+isJust (Just 0) --> True
+isJust Nothing --> False
+```
+
+## `isNothing`
+
+```ipe
+isNothing : Maybe a -> Bool
+```
+
+`isNothing maybe` — `True` when the `Maybe` is absent.
+
+```ipe
+isNothing Nothing --> True
+isNothing (Just 0) --> False
 ```
 

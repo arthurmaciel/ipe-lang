@@ -4,86 +4,139 @@
 
 [Back to stdlib index](../stdlib.md)
 
-## `all`
+`Ipe.String` — build, slice, search, and transform text.
 
-`all pred s` — `True` if `pred` holds for every character.
+A `String` is immutable UTF-8 text; every function here returns a NEW string
+rather than changing its argument. The functions cluster into families:
+construction (`fromInt`, `fromChar`, `repeat`), shape (`length`, `isEmpty`),
+combining (`join`, `append`, `concat`), splitting (`split`, `words`, `lines`),
+slicing (`slice`, `left`, `right`, `dropLeft`, `padLeft`), case
+(`toUpper`, `toLower`, and the locale-aware `*In` / `casefold` variants),
+searching (`contains`, `startsWith`, `indexes`), parsing (`toInt`, `toFloat`,
+`isEmail`, `isUrl`), and character-wise transforms (`map`, `filter`, `foldl`).
+
+Parsers return an `Ipe.Maybe`: `toInt "12"` is `Just 12`, `toInt "x"` is
+`Nothing` — so a caller handles the un-parsable case in the type. The String
+guide walks the mental model and a worked example; this module is the
+per-symbol reference.
+
+## `fromInt`
 
 ```ipe
-all Char.isAlpha "hello" --> True
-all Char.isAlpha "hello1" --> False
-all (\_ -> True) "" --> True
+fromInt : Int -> String
 ```
 
-## `any`
-
-`any pred s` — `True` if `pred` holds for at least one character.
+`fromInt n` — the decimal string representation of an integer.
 
 ```ipe
-any Char.isDigit "abc3" --> True
-any Char.isDigit "abc" --> False
-any (\_ -> True) "" --> False
+fromInt 42 --> "42"
+fromInt (-7) --> "-7"
+fromInt 0 --> "0"
 ```
 
-## `append`
-
-`append s1 s2` — concatenate two strings; `s1` followed by `s2`.
+## `fromFloat`
 
 ```ipe
-append "hello" " world" --> "hello world"
-append "" "abc" --> "abc"
-append "foo" "" --> "foo"
+fromFloat : Float -> String
 ```
 
-## `casefold`
-
-`casefold s` — case-fold `s` for case-insensitive comparison.
+`fromFloat n` — the string representation of a float.
 
 ```ipe
-casefold "HELLO" --> "hello"
-casefold "Straße" --> "strasse"
+fromFloat 3.14 --> "3.14"
+fromFloat (-0.5) --> "-0.5"
 ```
 
-## `concat`
-
-`concat strings` — join a list of strings into one.
+## `length`
 
 ```ipe
-concat [ "hello", " ", "world" ] --> "hello world"
-concat [] --> ""
-concat [ "a", "b", "c" ] --> "abc"
+length : String -> Int
 ```
 
-## `cons`
-
-`cons c s` — prepend character `c` to string `s`.
+`length s` — the number of Unicode code points in `s`.
 
 ```ipe
-cons 'h' "ello" --> "hello"
-cons 'x' "" --> "x"
+length "hello" --> 5
+length "" --> 0
+length "café" --> 4
 ```
 
-## `contains`
-
-`contains needle haystack` — `True` when `needle` appears inside `haystack`.
+## `isEmpty`
 
 ```ipe
-contains "ell" "hello" --> True
-contains "xyz" "hello" --> False
-contains "" "anything" --> True
+isEmpty : String -> Bool
 ```
 
-## `containsIn`
-
-`containsIn needle haystack` — `True` when `needle` appears in `haystack`.
-Haystack-first for pipeline use.
+`isEmpty s` — `True` when `s` is the empty string.
 
 ```ipe
-containsIn "world" "hello world" --> True
-containsIn "xyz" "hello" --> False
-"hello world" |> containsIn "world" --> True
+isEmpty "" --> True
+isEmpty "a" --> False
+isEmpty "  " --> False
+```
+
+## `join`
+
+```ipe
+join : String -> List String -> String
+```
+
+`join sep strings` — join a list of strings with `sep` between each pair.
+
+```ipe
+join ", " [ "a", "b", "c" ] --> "a, b, c"
+join "-" [ "year", "month", "day" ] --> "year-month-day"
+join "" [ "hello", "world" ] --> "helloworld"
+```
+
+## `split`
+
+```ipe
+split : String -> String -> List String
+```
+
+`split sep s` — split `s` on every occurrence of `sep`.
+
+```ipe
+split "," "a,b,c" --> [ "a", "b", "c" ]
+split "/" "/api/users" --> [ "", "api", "users" ]
+split "x" "no match" --> [ "no match" ]
+```
+
+## `replace`
+
+```ipe
+replace : String -> String -> String -> String
+```
+
+`replace from to s` — replace every occurrence of `from` in `s` with `to`.
+
+```ipe
+replace "o" "0" "foo bar" --> "f00 bar"
+replace "  " " " "too  many  spaces" --> "too many spaces"
+replace "x" "y" "no match" --> "no match"
+```
+
+## `slice`
+
+```ipe
+slice : Int -> Int -> String -> String
+```
+
+`slice start end s` — characters from index `start` to `end` (exclusive).
+Negative indices count from the end.
+
+```ipe
+slice 0 5 "hello world" --> "hello"
+slice 6 11 "hello world" --> "world"
+slice (-5) (-1) "hello world" --> "worl"
 ```
 
 ## `dropLeft`
+
+```ipe
+dropLeft : Int -> String -> String
+```
 
 `dropLeft n s` — remove the first `n` characters; `""` when `n >= length`.
 
@@ -95,6 +148,10 @@ dropLeft 9 "hi" --> ""
 
 ## `dropRight`
 
+```ipe
+dropRight : Int -> String -> String
+```
+
 `dropRight n s` — remove the last `n` characters; `""` when `n >= length`.
 
 ```ipe
@@ -103,7 +160,203 @@ dropRight 0 "hello" --> "hello"
 dropRight 9 "hi" --> ""
 ```
 
+## `toInt`
+
+```ipe
+toInt : String -> Maybe Int
+```
+
+`toInt s` — parse `s` as a decimal integer; `Nothing` if not valid.
+
+```ipe
+toInt "42" --> Just 42
+toInt "-7" --> Just -7
+toInt "abc" --> Nothing
+```
+
+## `toFloat`
+
+```ipe
+toFloat : String -> Maybe Float
+```
+
+`toFloat s` — parse `s` as a floating-point number; `Nothing` if not valid.
+
+```ipe
+toFloat "3.14" --> Just 3.14
+toFloat "-0.5" --> Just -0.5
+toFloat "abc" --> Nothing
+```
+
+## `toUpper`
+
+```ipe
+toUpper : String -> String
+```
+
+`toUpper s` — convert all letters in `s` to upper case.
+
+```ipe
+toUpper "hello" --> "HELLO"
+toUpper "Café" --> "CAFÉ"
+```
+
+## `toLower`
+
+```ipe
+toLower : String -> String
+```
+
+`toLower s` — convert all letters in `s` to lower case.
+
+```ipe
+toLower "HELLO" --> "hello"
+toLower "Café" --> "café"
+```
+
+## `trim`
+
+```ipe
+trim : String -> String
+```
+
+`trim s` — remove leading and trailing whitespace.
+
+```ipe
+trim "  hello  " --> "hello"
+trim "\t hi \n" --> "hi"
+trim "no space" --> "no space"
+```
+
+## `trimStart`
+
+```ipe
+trimStart : String -> String
+```
+
+`trimStart s` — remove leading whitespace only.
+
+```ipe
+trimStart "  hello  " --> "hello  "
+trimStart "  hi" --> "hi"
+```
+
+## `trimEnd`
+
+```ipe
+trimEnd : String -> String
+```
+
+`trimEnd s` — remove trailing whitespace only.
+
+```ipe
+trimEnd "  hello  " --> "  hello"
+trimEnd "hi  " --> "hi"
+```
+
+## `toUpperIn`
+
+```ipe
+toUpperIn : Locale -> String -> String
+```
+
+`toUpperIn locale s` — locale-sensitive upper-case conversion.
+
+```ipe
+import Ipe.Locale as Locale
+
+Maybe.withDefault (toUpper "istanbul") (Maybe.map (\tr -> toUpperIn tr "istanbul") (Locale.fromTag "tr")) --> "İSTANBUL"
+```
+
+## `toLowerIn`
+
+```ipe
+toLowerIn : Locale -> String -> String
+```
+
+`toLowerIn locale s` — locale-sensitive lower-case conversion.
+
+```ipe
+import Ipe.Locale as Locale
+
+Maybe.withDefault (toLower "ISTANBUL") (Maybe.map (\tr -> toLowerIn tr "ISTANBUL") (Locale.fromTag "tr")) --> "istanbul"
+```
+
+## `reverse`
+
+```ipe
+reverse : String -> String
+```
+
+`reverse s` — the string with its characters in reverse order.
+
+```ipe
+reverse "hello" --> "olleh"
+reverse "" --> ""
+reverse "abcde" --> "edcba"
+```
+
+## `append`
+
+```ipe
+append : String -> String -> String
+```
+
+`append s1 s2` — concatenate two strings; `s1` followed by `s2`.
+
+```ipe
+append "hello" " world" --> "hello world"
+append "" "abc" --> "abc"
+append "foo" "" --> "foo"
+```
+
+## `concat`
+
+```ipe
+concat : List String -> String
+```
+
+`concat strings` — join a list of strings into one.
+
+```ipe
+concat [ "hello", " ", "world" ] --> "hello world"
+concat [] --> ""
+concat [ "a", "b", "c" ] --> "abc"
+```
+
+## `contains`
+
+```ipe
+contains : String -> String -> Bool
+```
+
+`contains needle haystack` — `True` when `needle` appears inside `haystack`.
+
+```ipe
+contains "ell" "hello" --> True
+contains "xyz" "hello" --> False
+contains "" "anything" --> True
+```
+
+## `startsWith`
+
+```ipe
+startsWith : String -> String -> Bool
+```
+
+`startsWith prefix s` — `True` when `s` begins with `prefix`.
+
+```ipe
+startsWith "he" "hello" --> True
+startsWith "lo" "hello" --> False
+startsWith "" "hello" --> True
+```
+
 ## `endsWith`
+
+```ipe
+endsWith : String -> String -> Bool
+```
 
 `endsWith suffix s` — `True` when `s` ends with `suffix`.
 
@@ -113,7 +366,40 @@ endsWith "he" "hello" --> False
 endsWith "" "hello" --> True
 ```
 
+## `containsIn`
+
+```ipe
+containsIn : String -> String -> Bool
+```
+
+`containsIn needle haystack` — `True` when `needle` appears in `haystack`.
+Haystack-first for pipeline use.
+
+```ipe
+containsIn "world" "hello world" --> True
+containsIn "xyz" "hello" --> False
+"hello world" |> containsIn "world" --> True
+```
+
+## `startsWithIn`
+
+```ipe
+startsWithIn : String -> String -> Bool
+```
+
+`startsWithIn prefix haystack` — `True` when `haystack` starts with `prefix`.
+
+```ipe
+startsWithIn "/api" "/api/users" --> True
+startsWithIn "/v2" "/api/users" --> False
+"/api/users" |> startsWithIn "/api" --> True
+```
+
 ## `endsWithIn`
+
+```ipe
+endsWithIn : String -> String -> Bool
+```
 
 `endsWithIn suffix haystack` — `True` when `haystack` ends with `suffix`.
 
@@ -123,7 +409,24 @@ endsWithIn ".jpg" "image.png" --> False
 "image.png" |> endsWithIn ".png" --> True
 ```
 
+## `casefold`
+
+```ipe
+casefold : String -> String
+```
+
+`casefold s` — case-fold `s` for case-insensitive comparison.
+
+```ipe
+casefold "HELLO" --> "hello"
+casefold "Straße" --> "strasse"
+```
+
 ## `equalFold`
+
+```ipe
+equalFold : String -> String -> Bool
+```
 
 `equalFold s1 s2` — case-insensitive equality comparison.
 
@@ -133,82 +436,11 @@ equalFold "Hello" "world" --> False
 equalFold "ABC" "abc" --> True
 ```
 
-## `filter`
-
-`filter pred s` — keep only characters satisfying `pred`.
-
-```ipe
-filter (\c -> c /= ' ') "hello world" --> "helloworld"
-filter Char.isAlpha "a1b2c3" --> "abc"
-```
-
-## `foldl`
-
-`foldl fn acc s` — reduce `s` character-by-character from the left.
-
-```ipe
-foldl (\c acc -> acc + 1) 0 "hello" --> 5
-foldl (\c acc -> String.cons c acc) "" "abc" --> "cba"
-```
-
-## `foldr`
-
-`foldr fn acc s` — reduce `s` character-by-character from the right.
-
-```ipe
-foldr (\c acc -> String.cons c acc) "" "abc" --> "abc"
-foldr (\c acc -> acc + 1) 0 "hello" --> 5
-```
-
-## `fromChar`
-
-`fromChar c` — a one-character string from a `Char`.
-
-```ipe
-fromChar 'A' --> "A"
-fromChar '\n' --> "\n"
-```
-
-## `fromFloat`
-
-`fromFloat n` — the string representation of a float.
-
-```ipe
-fromFloat 3.14 --> "3.14"
-fromFloat (-0.5) --> "-0.5"
-```
-
-## `fromInt`
-
-`fromInt n` — the decimal string representation of an integer.
-
-```ipe
-fromInt 42 --> "42"
-fromInt (-7) --> "-7"
-fromInt 0 --> "0"
-```
-
-## `fromList`
-
-`fromList chars` — build a `String` from a list of characters.
-
-```ipe
-fromList [ 'h', 'i' ] --> "hi"
-fromList [] --> ""
-fromList [ 'a', 'b', 'c' ] --> "abc"
-```
-
-## `indexes`
-
-`indexes sub s` — list of start indices where `sub` appears in `s`.
-
-```ipe
-indexes "l" "hello" --> [ 2, 3 ]
-indexes "x" "hello" --> []
-indexes "o" "foo boo" --> [ 2, 6 ]
-```
-
 ## `isEmail`
+
+```ipe
+isEmail : String -> Bool
+```
 
 `isEmail s` — `True` when `s` looks like a valid email address.
 
@@ -217,17 +449,11 @@ isEmail "user@example.com" --> True
 isEmail "not-an-email" --> False
 ```
 
-## `isEmpty`
-
-`isEmpty s` — `True` when `s` is the empty string.
+## `isUrl`
 
 ```ipe
-isEmpty "" --> True
-isEmpty "a" --> False
-isEmpty "  " --> False
+isUrl : String -> Bool
 ```
-
-## `isUrl`
 
 `isUrl s` — `True` when `s` looks like a valid URL.
 
@@ -236,37 +462,25 @@ isUrl "https://example.com" --> True
 isUrl "not a url" --> False
 ```
 
-## `join`
-
-`join sep strings` — join a list of strings with `sep` between each pair.
+## `words`
 
 ```ipe
-join ", " [ "a", "b", "c" ] --> "a, b, c"
-join "-" [ "year", "month", "day" ] --> "year-month-day"
-join "" [ "hello", "world" ] --> "helloworld"
+words : String -> List String
 ```
 
-## `left`
-
-`left n s` — the first `n` characters; `""` when `n <= 0`.
+`words s` — split `s` into words on whitespace boundaries.
 
 ```ipe
-left 3 "hello" --> "hel"
-left 0 "hello" --> ""
-left 9 "hi" --> "hi"
-```
-
-## `length`
-
-`length s` — the number of Unicode code points in `s`.
-
-```ipe
-length "hello" --> 5
-length "" --> 0
-length "café" --> 4
+words "hello world" --> [ "hello", "world" ]
+words "  foo  bar  " --> [ "foo", "bar" ]
+words "" --> []
 ```
 
 ## `lines`
+
+```ipe
+lines : String -> List String
+```
 
 `lines s` — split `s` into lines on newline boundaries.
 
@@ -276,25 +490,66 @@ lines "only one" --> [ "only one" ]
 lines "" --> [ "" ]
 ```
 
-## `map`
-
-`map fn s` — transform each character of `s` with `fn`.
+## `fromChar`
 
 ```ipe
-map (\c -> if c == 'a' then 'x' else c) "banana" --> "bxnxnx"
-map (\c -> if c == 'e' then 'a' else c) "hello" --> "hallo"
+fromChar : Char -> String
 ```
 
-## `pad`
-
-`pad n ch s` — centre-pad `s` to width `n` with character `ch`.
+`fromChar c` — a one-character string from a `Char`.
 
 ```ipe
-pad 7 '.' "hello" --> ".hello."
-pad 3 ' ' "hello" --> "hello"
+fromChar 'A' --> "A"
+fromChar '\n' --> "\n"
+```
+
+## `toList`
+
+```ipe
+toList : String -> List Char
+```
+
+`toList s` — convert `s` to a list of characters.
+
+```ipe
+toList "abc" --> [ 'a', 'b', 'c' ]
+toList "" --> []
+toList "hi" --> [ 'h', 'i' ]
+```
+
+## `fromList`
+
+```ipe
+fromList : List Char -> String
+```
+
+`fromList chars` — build a `String` from a list of characters.
+
+```ipe
+fromList [ 'h', 'i' ] --> "hi"
+fromList [] --> ""
+fromList [ 'a', 'b', 'c' ] --> "abc"
+```
+
+## `repeat`
+
+```ipe
+repeat : Int -> String -> String
+```
+
+`repeat n s` — concatenate `s` with itself `n` times.
+
+```ipe
+repeat 3 "ab" --> "ababab"
+repeat 0 "abc" --> ""
+repeat 1 "x" --> "x"
 ```
 
 ## `padLeft`
+
+```ipe
+padLeft : Int -> Char -> String -> String
+```
 
 `padLeft n c s` — left-pad `s` with character `c` to width `n`.
 
@@ -306,6 +561,10 @@ padLeft 2 '-' "abc" --> "abc"
 
 ## `padRight`
 
+```ipe
+padRight : Int -> Char -> String -> String
+```
+
 `padRight n c s` — right-pad `s` with character `c` to width `n`.
 
 ```ipe
@@ -313,37 +572,25 @@ padRight 5 '.' "hi" --> "hi..."
 padRight 3 ' ' "abc" --> "abc"
 ```
 
-## `repeat`
-
-`repeat n s` — concatenate `s` with itself `n` times.
+## `left`
 
 ```ipe
-repeat 3 "ab" --> "ababab"
-repeat 0 "abc" --> ""
-repeat 1 "x" --> "x"
+left : Int -> String -> String
 ```
 
-## `replace`
-
-`replace from to s` — replace every occurrence of `from` in `s` with `to`.
+`left n s` — the first `n` characters; `""` when `n <= 0`.
 
 ```ipe
-replace "o" "0" "foo bar" --> "f00 bar"
-replace "  " " " "too  many  spaces" --> "too many spaces"
-replace "x" "y" "no match" --> "no match"
-```
-
-## `reverse`
-
-`reverse s` — the string with its characters in reverse order.
-
-```ipe
-reverse "hello" --> "olleh"
-reverse "" --> ""
-reverse "abcde" --> "edcba"
+left 3 "hello" --> "hel"
+left 0 "hello" --> ""
+left 9 "hi" --> "hi"
 ```
 
 ## `right`
+
+```ipe
+right : Int -> String -> String
+```
 
 `right n s` — the last `n` characters; `""` when `n <= 0`.
 
@@ -353,144 +600,24 @@ right 0 "hello" --> ""
 right 9 "hi" --> "hi"
 ```
 
-## `slice`
-
-`slice start end s` — characters from index `start` to `end` (exclusive).
-Negative indices count from the end.
+## `cons`
 
 ```ipe
-slice 0 5 "hello world" --> "hello"
-slice 6 11 "hello world" --> "world"
-slice (-5) (-1) "hello world" --> "worl"
+cons : Char -> String -> String
 ```
 
-## `split`
-
-`split sep s` — split `s` on every occurrence of `sep`.
+`cons c s` — prepend character `c` to string `s`.
 
 ```ipe
-split "," "a,b,c" --> [ "a", "b", "c" ]
-split "/" "/api/users" --> [ "", "api", "users" ]
-split "x" "no match" --> [ "no match" ]
-```
-
-## `startsWith`
-
-`startsWith prefix s` — `True` when `s` begins with `prefix`.
-
-```ipe
-startsWith "he" "hello" --> True
-startsWith "lo" "hello" --> False
-startsWith "" "hello" --> True
-```
-
-## `startsWithIn`
-
-`startsWithIn prefix haystack` — `True` when `haystack` starts with `prefix`.
-
-```ipe
-startsWithIn "/api" "/api/users" --> True
-startsWithIn "/v2" "/api/users" --> False
-"/api/users" |> startsWithIn "/api" --> True
-```
-
-## `toFloat`
-
-`toFloat s` — parse `s` as a floating-point number; `Nothing` if not valid.
-
-```ipe
-toFloat "3.14" --> Just 3.14
-toFloat "-0.5" --> Just -0.5
-toFloat "abc" --> Nothing
-```
-
-## `toInt`
-
-`toInt s` — parse `s` as a decimal integer; `Nothing` if not valid.
-
-```ipe
-toInt "42" --> Just 42
-toInt "-7" --> Just -7
-toInt "abc" --> Nothing
-```
-
-## `toList`
-
-`toList s` — convert `s` to a list of characters.
-
-```ipe
-toList "abc" --> [ 'a', 'b', 'c' ]
-toList "" --> []
-toList "hi" --> [ 'h', 'i' ]
-```
-
-## `toLower`
-
-`toLower s` — convert all letters in `s` to lower case.
-
-```ipe
-toLower "HELLO" --> "hello"
-toLower "Café" --> "café"
-```
-
-## `toLowerIn`
-
-`toLowerIn locale s` — locale-sensitive lower-case conversion.
-
-```ipe
-import Ipe.Locale as Locale
-
-Maybe.withDefault (toLower "ISTANBUL") (Maybe.map (\tr -> toLowerIn tr "ISTANBUL") (Locale.fromTag "tr")) --> "istanbul"
-```
-
-## `toUpper`
-
-`toUpper s` — convert all letters in `s` to upper case.
-
-```ipe
-toUpper "hello" --> "HELLO"
-toUpper "Café" --> "CAFÉ"
-```
-
-## `toUpperIn`
-
-`toUpperIn locale s` — locale-sensitive upper-case conversion.
-
-```ipe
-import Ipe.Locale as Locale
-
-Maybe.withDefault (toUpper "istanbul") (Maybe.map (\tr -> toUpperIn tr "istanbul") (Locale.fromTag "tr")) --> "İSTANBUL"
-```
-
-## `trim`
-
-`trim s` — remove leading and trailing whitespace.
-
-```ipe
-trim "  hello  " --> "hello"
-trim "\t hi \n" --> "hi"
-trim "no space" --> "no space"
-```
-
-## `trimEnd`
-
-`trimEnd s` — remove trailing whitespace only.
-
-```ipe
-trimEnd "  hello  " --> "  hello"
-trimEnd "hi  " --> "hi"
-```
-
-## `trimStart`
-
-`trimStart s` — remove leading whitespace only.
-
-```ipe
-trimStart "  hello  " --> "hello  "
-trimStart "  hi" --> "hi"
+cons 'h' "ello" --> "hello"
+cons 'x' "" --> "x"
 ```
 
 ## `uncons`
+
+```ipe
+uncons : String -> Maybe ( Char, String )
+```
 
 `uncons s` — split off the first character and the rest; `Nothing` on `""`.
 
@@ -500,13 +627,110 @@ uncons "" --> Nothing
 uncons "x" --> Just ( 'x', "" )
 ```
 
-## `words`
-
-`words s` — split `s` into words on whitespace boundaries.
+## `pad`
 
 ```ipe
-words "hello world" --> [ "hello", "world" ]
-words "  foo  bar  " --> [ "foo", "bar" ]
-words "" --> []
+pad : Int -> Char -> String -> String
+```
+
+`pad n ch s` — centre-pad `s` to width `n` with character `ch`.
+
+```ipe
+pad 7 '.' "hello" --> ".hello."
+pad 3 ' ' "hello" --> "hello"
+```
+
+## `indexes`
+
+```ipe
+indexes : String -> String -> List Int
+```
+
+`indexes sub s` — list of start indices where `sub` appears in `s`.
+
+```ipe
+indexes "l" "hello" --> [ 2, 3 ]
+indexes "x" "hello" --> []
+indexes "o" "foo boo" --> [ 2, 6 ]
+```
+
+## `map`
+
+```ipe
+map : (Char -> Char) -> String -> String
+```
+
+`map fn s` — transform each character of `s` with `fn`.
+
+```ipe
+map (\c -> if c == 'a' then 'x' else c) "banana" --> "bxnxnx"
+map (\c -> if c == 'e' then 'a' else c) "hello" --> "hallo"
+```
+
+## `filter`
+
+```ipe
+filter : (Char -> Bool) -> String -> String
+```
+
+`filter pred s` — keep only characters satisfying `pred`.
+
+```ipe
+filter (\c -> c /= ' ') "hello world" --> "helloworld"
+filter Char.isAlpha "a1b2c3" --> "abc"
+```
+
+## `foldl`
+
+```ipe
+foldl : (Char -> b -> b) -> b -> String -> b
+```
+
+`foldl fn acc s` — reduce `s` character-by-character from the left.
+
+```ipe
+foldl (\c acc -> acc + 1) 0 "hello" --> 5
+foldl (\c acc -> String.cons c acc) "" "abc" --> "cba"
+```
+
+## `foldr`
+
+```ipe
+foldr : (Char -> b -> b) -> b -> String -> b
+```
+
+`foldr fn acc s` — reduce `s` character-by-character from the right.
+
+```ipe
+foldr (\c acc -> String.cons c acc) "" "abc" --> "abc"
+foldr (\c acc -> acc + 1) 0 "hello" --> 5
+```
+
+## `any`
+
+```ipe
+any : (Char -> Bool) -> String -> Bool
+```
+
+`any pred s` — `True` if `pred` holds for at least one character.
+
+```ipe
+any Char.isDigit "abc3" --> True
+any Char.isDigit "abc" --> False
+any (\_ -> True) "" --> False
+```
+
+## `all`
+
+```ipe
+all : (Char -> Bool) -> String -> Bool
+```
+
+`all pred s` — `True` if `pred` holds for every character.
+
+```ipe
+all Char.isAlpha "hello" --> True
+all Char.isAlpha "hello1" --> False
+all (\_ -> True) "" --> True
 ```
 
