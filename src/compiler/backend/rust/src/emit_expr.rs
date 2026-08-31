@@ -1464,6 +1464,7 @@ pub fn call_has_kernel_special_case(
     if emit_json_decoder_call(ctx, callee, args, indent, child, generics)?.is_some()
         || emit_http_call(ctx, callee, args, indent, child, generics)?.is_some()
         || emit_process_run_with_call(ctx, callee, args, indent, child, generics)?.is_some()
+        || emit_process_run_in_pty_call(ctx, callee, args, indent, child, generics)?.is_some()
         || emit_http_builder_call(ctx, callee, args, indent, child, generics)?.is_some()
         || emit_task_retry_call(ctx, callee, args, indent, child, generics)?.is_some()
         || emit_db_call(ctx, callee, args, indent, child, generics)?.is_some()
@@ -1736,6 +1737,59 @@ fn emit_process_run_with_call(
     Ok(Some(format!(
         "task_map(Box::new({conv}), \
          ipe_runtime::system::process_run_with::<IpeError>({cfg_s}))"
+    )))
+}
+
+/// `process_run_in_pty` in the runtime returns `ipe_runtime::system::ProcessPtyOutput`
+/// (fields `exitCode`, `output`), while emitted user code treats the result as the
+/// synthesised record struct for `{ exitCode, output }`. A `task_map` closure
+/// converts one to the other at the call site — same Design B as
+/// [`emit_process_run_with_call`].
+///
+/// Returns `None` for any other callee.
+#[inline(never)]
+fn emit_process_run_in_pty_call(
+    ctx: &EmitCtx,
+    callee: &Callee,
+    args: &[Expr],
+    indent: usize,
+    child: u16,
+    generics: GenericScope,
+) -> DResult<Option<String>> {
+    let Callee::Kernel(KernelFn::ProcessRunInPty) = callee else {
+        return Ok(None);
+    };
+
+    // Resolve the synthesised struct name for the `{ exitCode, output }` field
+    // set. Fields are sorted alphabetically: exitCode < output.
+    let resp_key: Vec<String> = vec!["exitCode".to_owned(), "output".to_owned()];
+    let resp_struct =
+        ctx.record_struct_by_key(&resp_key, None)
+            .map_err(|_| Diagnostic::CompilerBug {
+                where_: "ipe_backend_rust::emit_process_run_in_pty_call",
+                detail: "no synthesised struct for ProcessPtyOutput fieldset \
+                     {exitCode, output}; the lowerer must surface the \
+                     runInPty return record type before emission"
+                    .to_owned(),
+            })?;
+    let resp_name = &resp_struct.name;
+
+    // Build the task_map conversion closure: pure field-for-field move.
+    // All fields are owned (i64 / String), no borrows, no boxing.
+    let conv = format!(
+        "|__r: ipe_runtime::system::ProcessPtyOutput| {resp_name} {{ \
+         exitCode: __r.exitCode, output: __r.output }}"
+    );
+
+    let cfg_arg = args.first().ok_or_else(|| Diagnostic::CompilerBug {
+        where_: "ipe_backend_rust::emit_process_run_in_pty_call",
+        detail: "ProcessRunInPty expects exactly 1 argument (cfg record)".to_owned(),
+    })?;
+    let cfg_s = emit_expr_at(ctx, cfg_arg, indent, child, generics)?;
+
+    Ok(Some(format!(
+        "task_map(Box::new({conv}), \
+         ipe_runtime::system::process_run_in_pty::<IpeError>({cfg_s}))"
     )))
 }
 
@@ -5316,6 +5370,14 @@ pub fn emit_expr_at(
                 {
                     return Ok(result);
                 }
+                // Process.runInPty returns `ProcessPtyOutput` (runtime struct); a
+                // task_map closure converts it to the synthesised user record struct
+                // for `{ exitCode, output }` — same Design B as Process.runWith.
+                if let Some(result) =
+                    emit_process_run_in_pty_call(ctx, callee, args, indent, child, generics)?
+                {
+                    return Ok(result);
+                }
                 // Http builder kernels: Http.defaultRequest / Http.withMethod /
                 // Http.withTimeout / Http.withBody / Http.withHeader emit inline
                 // struct construction or clone-and-reassign record updates.
@@ -7000,6 +7062,13 @@ const HTTP_REQUEST_FIELDS: &[&str] = &["body", "headers", "method", "redirects",
 /// `ipe_lower::lower::PROCESS_RUN_WITH_CFG_FIELDS`.
 const PROCESS_RUN_WITH_CFG_FIELDS: &[&str] = &["args", "command", "cwd", "env"];
 
+/// the sorted `Ipe.Process.runInPty` config field-name set — a record literal
+/// with exactly these names (and no registered synthesised struct, because the
+/// lowerer folded the shape to `IrType::ProcessRunInPtyCfg`) constructs the
+/// runtime `ipe_runtime::system::ProcessRunInPtyCfg` struct. Kept in sync with
+/// `ipe_lower::lower::PROCESS_RUN_IN_PTY_CFG_FIELDS`.
+const PROCESS_RUN_IN_PTY_CFG_FIELDS: &[&str] = &["args", "cols", "command", "cwd", "env", "rows"];
+
 /// the sorted `Ipe.Cache.CacheCfg` field-name set — a record literal with
 /// exactly these names (and no registered synthesised struct, because the
 /// lowerer folded the shape to `IrType::CacheCfg`) constructs the runtime
@@ -7141,6 +7210,15 @@ pub fn record_struct_name(
                     .iter()
                     .zip(PROCESS_RUN_WITH_CFG_FIELDS.iter())
                     .all(|(a, b)| a.as_str() == *b);
+            // same fall-through as `ProcessRunWithCfg` — a `ProcessRunInPtyCfg`-shaped
+            // literal has no registered struct (folded to
+            // `IrType::ProcessRunInPtyCfg`), so it constructs the runtime
+            // `ProcessRunInPtyCfg` (re-exported bare via the glob).
+            let is_process_run_in_pty_cfg = sorted.len() == PROCESS_RUN_IN_PTY_CFG_FIELDS.len()
+                && sorted
+                    .iter()
+                    .zip(PROCESS_RUN_IN_PTY_CFG_FIELDS.iter())
+                    .all(|(a, b)| a.as_str() == *b);
             // same fall-through as HttpRequest — a `CacheCfg`-shaped literal
             // has no registered struct (folded to `IrType::CacheCfg`), so it
             // constructs the runtime `CacheCfg` (re-exported bare via the glob).
@@ -7191,6 +7269,8 @@ pub fn record_struct_name(
                 "HttpRequest".to_owned()
             } else if is_process_run_with_cfg {
                 "ProcessRunWithCfg".to_owned()
+            } else if is_process_run_in_pty_cfg {
+                "ProcessRunInPtyCfg".to_owned()
             } else if is_cache_cfg {
                 "CacheCfg".to_owned()
             } else if is_csv_doc {

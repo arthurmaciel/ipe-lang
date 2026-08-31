@@ -528,6 +528,267 @@ fn process_run_with_impl<E: Send + From<String> + 'static>(
     })
 }
 
+/// `ProcessRunInPtyCfg` — the Ipê record `{ command, args, cwd, env, cols, rows }`
+/// lowered to a plain Rust struct. Owned values let the closure move into
+/// `run_blocking` without a borrow lifetime. The emitter constructs this directly
+/// (same pattern as [`ProcessRunWithCfg`]).
+///
+/// Field names match the Ipê record keys verbatim.
+pub struct ProcessRunInPtyCfg {
+    pub command: String,
+    pub args: Vec<String>,
+    /// `Nothing` → inherit the parent cwd; `Just(p)` → set the child's cwd.
+    pub cwd: IpeMaybe<String>,
+    /// Per-child env overrides as `(key, value)` pairs.
+    pub env: Vec<(String, String)>,
+    /// Terminal width in columns; clamped into `u16` for the `winsize`.
+    pub cols: i64,
+    /// Terminal height in rows; clamped into `u16` for the `winsize`.
+    pub rows: i64,
+}
+
+/// The structured result of a `runInPty` spawn: the child's exit code and the
+/// combined stream read from the pty master until the child exits. Exposed as a
+/// `pub struct` so the emitter constructs the return record directly (same pattern
+/// as [`ProcessRunOutput`]).
+#[allow(non_snake_case)]
+pub struct ProcessPtyOutput {
+    pub exitCode: i64,
+    pub output: String,
+}
+
+/// `Ipe.Process.runInPty cfg` — run a child under a real pseudo-terminal, so a
+/// TUI child sees `isatty(stdout) == true`, sizes to `cols`×`rows`, and emits
+/// terminal control sequences. Returns the child's exit code and the combined
+/// output read from the pty master until EOF, bounded by the same capture ceiling
+/// as `Process.run` (`IPE_PROCESS_OUTPUT_MAX`, default 16 MiB) — a child that
+/// floods the pty past the ceiling is an `Err`, never an unbounded allocation.
+///
+/// SECURITY: same `subprocess` capability gate as `Process.run` — the pty is an
+/// implementation detail of running a child, not a new external reach. Every
+/// fallible pty/spawn/read step maps to a typed `Err` (fail closed); no path
+/// panics or hangs.
+///
+/// Unix-only: the pty surface (`openpt`/`grantpt`/`unlockpt`/`ptsname`) has no
+/// meaning on non-unix targets, where this returns an honest unsupported `Err`
+/// rather than a silent no-op. The blocking spawn+read+wait is offloaded via
+/// `run_blocking` so a long-running child cannot stall the tokio worker thread.
+#[must_use]
+pub fn process_run_in_pty<E: Send + From<String> + 'static>(
+    cfg: ProcessRunInPtyCfg,
+) -> IpeTask<E, ProcessPtyOutput> {
+    process_run_in_pty_impl(cfg, process_output_ceiling())
+}
+
+#[must_use]
+fn process_run_in_pty_impl<E: Send + From<String> + 'static>(
+    cfg: ProcessRunInPtyCfg,
+    cap: u64,
+) -> IpeTask<E, ProcessPtyOutput> {
+    Box::pin(async move {
+        match run_blocking(move || process_run_in_pty_sync(cfg, cap)).await {
+            Ok(out) => ok_res(out),
+            Err(e) => IpeResult::Err(str_err(&e)),
+        }
+    })
+}
+
+/// Non-unix fallback: the pty surface is unavailable, so fail closed with an
+/// honest unsupported `Err` (never a silent success or no-op). Gated so the unix
+/// body — which references `rustix::pty` — is the only code compiled where the
+/// surface exists.
+#[cfg(not(unix))]
+fn process_run_in_pty_sync(
+    _cfg: ProcessRunInPtyCfg,
+    _cap: u64,
+) -> Result<ProcessPtyOutput, String> {
+    Err("Process.runInPty is only supported on Unix targets".to_owned())
+}
+
+/// Spawn `cfg.command cfg.args` under a freshly allocated pseudo-terminal, sized
+/// to `cfg.cols`×`cfg.rows`, with the child's stdin/stdout/stderr all connected to
+/// the pty replica. Reads the master to EOF into a buffer bounded by `cap` (a read
+/// past the ceiling is an `Err`), then reaps the child via [`ChildGuard`].
+///
+/// Every fallible syscall maps to a typed `Err`:
+/// - `openpt` (allocate the master) → `Err` on no-free-pty / EPERM.
+/// - `grantpt` / `unlockpt` (grant + unlock the replica) → `Err` on failure.
+/// - `ptsname` (resolve the replica path) → `Err` on failure.
+/// - `open` (open the replica) → `Err` on failure.
+/// - `tcsetwinsize` (set the window size) → `Err` on failure.
+/// - `try_clone` (per-stdio replica handle) → `Err` on failure.
+/// - `spawn` (start the child) → `Err` on failure.
+/// - the master-read thread `join`/read → `Err` on panic or IO error.
+/// - `wait` (reap) → `Err` on failure.
+///
+/// No `unsafe`: rustix's `pty`/`termios` wrappers and `std`'s `Stdio::from`
+/// (fd → owned stdio) cover every step. The child's stdin also reads the pty
+/// replica, so a child reading input blocks on the pty (EOF once the master is
+/// closed) rather than the parent's stdin.
+#[cfg(unix)]
+fn process_run_in_pty_sync(cfg: ProcessRunInPtyCfg, cap: u64) -> Result<ProcessPtyOutput, String> {
+    use std::io::Read as _;
+    use std::process::{Command, Stdio};
+
+    let cmd = &cfg.command;
+
+    // Allocate the pty master with O_RDWR | O_NOCTTY (the parent must not acquire
+    // the pty as its controlling terminal). `OpenptFlags::CLOEXEC` — keeping the
+    // master out of the child's fd table — is only defined by rustix on
+    // Linux/FreeBSD/NetBSD; where it is absent the master is simply left
+    // inheritable (the child receives the replica as its stdio, never the master
+    // handle by name), so its inheritance is inert.
+    let openpt_flags = {
+        let base = rustix::pty::OpenptFlags::RDWR | rustix::pty::OpenptFlags::NOCTTY;
+        #[cfg(any(target_os = "linux", target_os = "freebsd", target_os = "netbsd"))]
+        {
+            base | rustix::pty::OpenptFlags::CLOEXEC
+        }
+        #[cfg(not(any(target_os = "linux", target_os = "freebsd", target_os = "netbsd")))]
+        {
+            base
+        }
+    };
+    let master =
+        rustix::pty::openpt(openpt_flags).map_err(|e| format!("{cmd}: pty openpt failed: {e}"))?;
+
+    // Grant + unlock the replica side, then resolve its filesystem path.
+    rustix::pty::grantpt(&master).map_err(|e| format!("{cmd}: pty grantpt failed: {e}"))?;
+    rustix::pty::unlockpt(&master).map_err(|e| format!("{cmd}: pty unlockpt failed: {e}"))?;
+    let replica_name = rustix::pty::ptsname(&master, Vec::new())
+        .map_err(|e| format!("{cmd}: pty ptsname failed: {e}"))?;
+
+    // Open the replica the child will inherit as its stdio. O_NOCTTY: the child
+    // acquires the controlling terminal via `setsid` semantics of process
+    // separation, not by this open (the parent must not become the session leader).
+    let replica = rustix::fs::open(
+        replica_name.as_c_str(),
+        rustix::fs::OFlags::RDWR | rustix::fs::OFlags::NOCTTY,
+        rustix::fs::Mode::empty(),
+    )
+    .map_err(|e| format!("{cmd}: pty replica open failed: {e}"))?;
+
+    // Size the pty. Clamp the caller's cols/rows into the kernel's `u16` window
+    // fields (a negative or over-large value is clamped to the representable
+    // range rather than wrapping). ws_xpixel/ws_ypixel are 0 (unused).
+    let winsize = rustix::termios::Winsize {
+        ws_row: clamp_u16(cfg.rows),
+        ws_col: clamp_u16(cfg.cols),
+        ws_xpixel: 0,
+        ws_ypixel: 0,
+    };
+    rustix::termios::tcsetwinsize(&replica, winsize)
+        .map_err(|e| format!("{cmd}: pty tcsetwinsize failed: {e}"))?;
+
+    // Each of the child's three stdio slots needs its own owned handle to the
+    // replica (each `Stdio::from` consumes one). Clone the replica fd twice; the
+    // original covers the third.
+    let replica_out = replica
+        .try_clone()
+        .map_err(|e| format!("{cmd}: pty replica dup failed: {e}"))?;
+    let replica_err = replica
+        .try_clone()
+        .map_err(|e| format!("{cmd}: pty replica dup failed: {e}"))?;
+
+    let mut builder = Command::new(cmd);
+    builder
+        .args(&cfg.args)
+        .stdin(Stdio::from(replica))
+        .stdout(Stdio::from(replica_out))
+        .stderr(Stdio::from(replica_err));
+
+    if let IpeMaybe::Just(dir) = &cfg.cwd {
+        builder.current_dir(dir);
+    }
+    for (k, v) in &cfg.env {
+        // Same key/value guard as `process_run_with_sync` / `locked_set_var`.
+        if k.is_empty() || k.contains('=') || k.contains('\0') || v.contains('\0') {
+            continue;
+        }
+        builder.env(k, v);
+    }
+
+    let child = builder.spawn().map_err(|e| format!("{cmd}: {e}"))?;
+    let mut guard = ChildGuard(Some(child));
+
+    // Close the parent's replica handles by dropping the `Command`: it retains
+    // ownership of the three `Stdio`-wrapped replica fds after `spawn` (spawn
+    // dup'd them into the child, but the parent's originals stay open until the
+    // `Command` is dropped). Once ONLY the child holds replica ends open, reading
+    // the master returns EOF when the child exits — otherwise the parent's own
+    // open replica keeps the master readable forever, and the read below hangs.
+    drop(builder);
+
+    // Read the master to end-of-stream on a dedicated thread, bounded by `cap + 1`
+    // so a flooding child cannot allocate without bound. `File::from` takes
+    // ownership of the master fd; the reader thread owns it for its lifetime.
+    //
+    // On Linux, once the child (the last replica holder) closes the replica, a
+    // read of the master returns `EIO` rather than a clean `Ok(0)` EOF — this is
+    // the documented pty-master end-of-stream signal, not a real IO fault. Treat
+    // `EIO` (and an interrupted `EINTR`) as end-of-stream; any OTHER error is a
+    // genuine failure and propagates. The manual loop enforces the `cap + 1`
+    // ceiling on peak allocation regardless.
+    let mut master_file = std::fs::File::from(master);
+    let limit = cap.saturating_add(1);
+    let read_handle: std::thread::JoinHandle<std::io::Result<Vec<u8>>> =
+        std::thread::spawn(move || {
+            let mut buf = Vec::new();
+            let mut chunk = [0u8; 8192];
+            loop {
+                let filled = u64::try_from(buf.len()).unwrap_or(u64::MAX);
+                if filled >= limit {
+                    break;
+                }
+                match master_file.read(&mut chunk) {
+                    Ok(0) => break,
+                    Ok(n) => {
+                        // Never grow past `limit`: take only up to the ceiling.
+                        let room = usize::try_from(limit - filled).unwrap_or(usize::MAX);
+                        let take = n.min(room);
+                        buf.extend_from_slice(chunk.get(..take).unwrap_or(&[]));
+                    }
+                    Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
+                    // `EIO` on a pty master = the replica side closed = EOF.
+                    Err(e) if e.raw_os_error() == Some(5) => break,
+                    Err(e) => return Err(e),
+                }
+            }
+            Ok(buf)
+        });
+
+    let combined = read_handle
+        .join()
+        .map_err(|_| format!("{cmd}: pty read thread panicked"))?
+        .map_err(|e| format!("{cmd}: pty read failed: {e}"))?;
+
+    if combined.len() as u64 > cap {
+        // `guard`'s `Drop` kills + reaps the still-running child on this bail.
+        return Err(format!(
+            "{cmd}: pty output exceeds the {cap}-byte capture ceiling \
+             (raise IPE_PROCESS_OUTPUT_MAX)"
+        ));
+    }
+
+    let status = guard.wait().map_err(|e| format!("{cmd}: {e}"))?;
+
+    #[allow(non_snake_case)]
+    Ok(ProcessPtyOutput {
+        exitCode: i64::from(status.code().unwrap_or(-1)),
+        output: String::from_utf8_lossy(&combined).into_owned(),
+    })
+}
+
+/// Clamp an `i64` terminal dimension into the kernel `winsize`'s `u16` field: a
+/// negative value becomes 0, an over-large value saturates at `u16::MAX`. Keeps a
+/// caller-supplied `cols`/`rows` from wrapping into a nonsense window size.
+#[cfg(unix)]
+fn clamp_u16(n: i64) -> u16 {
+    // `clamp` bounds `n` into `[0, u16::MAX]`, so the value is exactly
+    // representable and `try_from` cannot fail; the fallback keeps it cast-free.
+    u16::try_from(n.clamp(0, i64::from(u16::MAX))).unwrap_or(u16::MAX)
+}
+
 /// Process-exit cleanup hook. `std::process::exit` (what `System.exit` lowers to)
 /// bypasses Drop, so an RAII guard's destructor never runs on that path. A backend
 /// driver that puts the terminal/process into a state needing restoration (the
@@ -1048,6 +1309,109 @@ mod process_run_with_tests {
             }
             IpeResult::Err(e) => panic!("unexpected error: {e}"),
         }
+    }
+}
+
+#[cfg(all(test, feature = "tokio", unix))]
+mod process_run_in_pty_tests {
+    use super::*;
+
+    fn block<T>(fut: impl std::future::Future<Output = T>) -> T {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(fut)
+    }
+
+    fn pty_cfg(command: &str, args: &[&str]) -> ProcessRunInPtyCfg {
+        ProcessRunInPtyCfg {
+            command: command.to_owned(),
+            args: args.iter().map(|s| (*s).to_owned()).collect(),
+            cwd: IpeMaybe::Nothing,
+            env: Vec::new(),
+            cols: 80,
+            rows: 24,
+        }
+    }
+
+    /// A child that checks `isatty(stdout)` reports "tty" under the pty. The
+    /// same probe run under plain `Process.run` (piped stdio) reports "notty" —
+    /// so the pty path really connects a terminal, not a pipe.
+    #[test]
+    fn child_sees_a_tty_under_pty_but_not_under_plain_run() {
+        // `test -t 1` is true exactly when stdout is a terminal.
+        let probe = "if [ -t 1 ]; then echo tty; else echo notty; fi";
+
+        let pty_res: IpeResult<String, ProcessPtyOutput> =
+            block(process_run_in_pty::<String>(pty_cfg("sh", &["-c", probe])));
+        match pty_res {
+            IpeResult::Ok(out) => assert!(
+                out.output.contains("tty") && !out.output.contains("notty"),
+                "child under a pty must see a tty; got {:?}",
+                out.output
+            ),
+            IpeResult::Err(e) => panic!("pty run unexpectedly failed: {e}"),
+        }
+
+        let plain_res: IpeResult<String, String> = block(process_run::<String>(
+            "sh".to_owned(),
+            vec!["-c".to_owned(), probe.to_owned()],
+        ));
+        match plain_res {
+            IpeResult::Ok(text) => assert!(
+                text.contains("notty"),
+                "child under piped stdio must NOT see a tty; got {text:?}"
+            ),
+            IpeResult::Err(e) => panic!("plain run unexpectedly failed: {e}"),
+        }
+    }
+
+    /// Exit code propagates: a child that exits 7 surfaces `exitCode == 7`.
+    #[test]
+    fn exit_code_propagates() {
+        let res: IpeResult<String, ProcessPtyOutput> = block(process_run_in_pty::<String>(
+            pty_cfg("sh", &["-c", "exit 7"]),
+        ));
+        match res {
+            IpeResult::Ok(out) => assert_eq!(out.exitCode, 7, "exit code must propagate"),
+            IpeResult::Err(e) => panic!("pty run unexpectedly failed: {e}"),
+        }
+    }
+
+    /// A flooding child hits the output ceiling and fails the Task — no
+    /// unbounded allocation / OOM. Uses the internal cap-threaded helper so the
+    /// test pins a small ceiling without touching the process-global env var.
+    #[test]
+    fn flooding_child_hits_the_output_cap() {
+        let res: IpeResult<String, ProcessPtyOutput> = block(process_run_in_pty_impl::<String>(
+            ProcessRunInPtyCfg {
+                command: "sh".to_owned(),
+                // Emit far more than the 8-byte ceiling below.
+                args: vec!["-c".to_owned(), "printf 'x%.0s' $(seq 1 4096)".to_owned()],
+                cwd: IpeMaybe::Nothing,
+                env: Vec::new(),
+                cols: 80,
+                rows: 24,
+            },
+            8,
+        ));
+        assert!(
+            matches!(res, IpeResult::Err(_)),
+            "output far exceeding an 8-byte ceiling must fail the Task"
+        );
+    }
+
+    /// A non-existent binary fails the Task (spawn failure), never a hang.
+    #[test]
+    fn nonexistent_binary_fails_task() {
+        let res: IpeResult<String, ProcessPtyOutput> = block(process_run_in_pty::<String>(
+            pty_cfg("ipe-does-not-exist-xyz", &[]),
+        ));
+        assert!(
+            matches!(res, IpeResult::Err(_)),
+            "spawn failure must fail the Task"
+        );
     }
 }
 

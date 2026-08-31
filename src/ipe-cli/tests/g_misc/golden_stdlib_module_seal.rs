@@ -241,6 +241,38 @@ fn process_builds_and_runs() {
     seal_module("process", PROCESS_MAIN, "SEALED");
 }
 
+// ── Ipe.Process.runInPty — run a child under a real pseudo-terminal ──────
+// The child checks `isatty(stdout)` (`[ -t 1 ]`): under the pty it is a
+// terminal, so it prints `PTY_TTY`. Under a plain pipe (`Process.run`) the same
+// probe would print `PTY_NOTTY`, so a green seal proves the pty path attaches a
+// terminal. A resolution/scheme/emit regression fails at `_resolves_and_emits`.
+const PROCESS_PTY_MAIN: &str = "module Main exposing (main)\n\
+    import Ipe.Task as Task\n\
+    import Ipe.Io as Io\n\
+    import Ipe.Process as Process\n\n\
+    run : Task Error { exitCode : Int, output : String }\n\
+    run =\n\
+    \x20   Process.runInPty\n\
+    \x20       { command = \"sh\"\n\
+    \x20       , args = [ \"-c\", \"if [ -t 1 ]; then printf PTY_TTY; else printf PTY_NOTTY; fi\" ]\n\
+    \x20       , cwd = Nothing\n\
+    \x20       , env = []\n\
+    \x20       , cols = 80\n\
+    \x20       , rows = 24\n\
+    \x20       }\n\n\
+    main =\n\
+    \x20   Task.andThen (\\r -> Io.println r.output) run\n";
+
+#[test]
+fn process_run_in_pty_resolves_and_emits() {
+    let _ = compile_module_probe("process_pty", PROCESS_PTY_MAIN);
+}
+
+#[test]
+fn process_run_in_pty_builds_and_runs() {
+    seal_module("process_pty", PROCESS_PTY_MAIN, "PTY_TTY");
+}
+
 // ── Arity-0 effect kernel applied to unit ──────────────────────────────
 // An arity-0 kernel whose scheme is `() -> Task Error a` (e.g. `Uuid.v4`) is
 // called with an explicit `()`. We only need it to RESOLVE + EMIT — a runtime
