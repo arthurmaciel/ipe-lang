@@ -1,0 +1,58 @@
+module Main exposing (main)
+
+import Ipe.Time as Time
+import Ipe.Time.Timestamp as Timestamp
+import Ipe.Duration as Duration
+import Ipe.String as String
+import Ipe.Io as Io
+
+
+-- `Ipe.Time` separates the effect of reading the clock from the pure work of
+-- formatting and arithmetic. Three ideas:
+--   • A `Timestamp` is an opaque instant (milliseconds since the epoch). Reading
+--     the clock (`Time.now`) is a `Task`; here we pin a FIXED instant with
+--     `Timestamp.fromUnixMillis` so the output is deterministic.
+--   • Arithmetic composes a `Timestamp` with a `Ipe.Duration` — the only span
+--     type. `Time.add` shifts an instant by a duration; `Time.diff` returns the
+--     duration between two instants. Adding two instants is a type error.
+--   • The calendar helpers (`isLeapYear`, `daysInMonth`) are pure `Int` maths,
+--     and the UTC formatters (`formatISO8601`, `formatRFC3339`) render an instant
+--     the same way everywhere, independent of the local timezone.
+
+
+-- A fixed instant pinned in milliseconds since the Unix epoch, so the output is
+-- reproducible: it falls on the leap day of a leap year, at noon UTC.
+launch : Timestamp.Timestamp
+launch =
+    Timestamp.fromUnixMillis 1709208000000
+
+
+-- A deadline two hours after the instant above. `Ipe.Duration` is non-negative
+-- by design, so spans move an instant forward; `Time.add` shifts `launch` by it.
+deadline : Timestamp.Timestamp
+deadline =
+    Time.add (Duration.minutes 120) launch
+
+
+main =
+    do
+        Io.println ("launch   (ISO 8601): " ++ Time.formatISO8601 launch)
+        Io.println ("deadline (RFC 3339): " ++ Time.formatRFC3339 deadline)
+        Io.println
+            ("window span: "
+                ++ String.fromInt (Duration.toMillis (Time.diff deadline launch) // 60000)
+                ++ " minutes"
+            )
+        Io.println
+            ("2024 is a leap year: " ++ boolString (Time.isLeapYear 2024))
+        Io.println
+            ("Feb 2024 has " ++ String.fromInt (Time.daysInMonth 2024 2) ++ " days")
+
+
+boolString : Bool -> String
+boolString b =
+    if b then
+        "yes"
+
+    else
+        "no"
