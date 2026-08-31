@@ -79,6 +79,22 @@ check the rest of the app already runs — one identity surface, not two.
 
 [principles]: ../../PRINCIPLES.md
 
+## Configuration
+
+Several env vars control the embedded developer console. Use `ipe doc <VAR>` for
+the full entry on any of them.
+
+| Variable | Default | Effect |
+|----------|---------|--------|
+| `IPE_ADMIN_TOKEN` | unset | Bearer token for console access in production. |
+| `IPE_CONSOLE_AUTH` | auto | Auth mode: `token` or `off` (dev only). |
+| `IPE_CONSOLE_EMBED` | auto (on in dev) | Set to `off` to disable the embedded console. |
+| `IPE_CONSOLE_HUB` | unset | Base URL of a remote Ipê Hub OTLP collector. |
+| `IPE_DEV_BANNER` | auto (on in dev) | Set to `off` to suppress the dev-mode banner. |
+
+See the [**Console** subsystem](../reference/env.md#console) in the
+environment variable reference.
+
 ## References
 
 - **Per-symbol reference:** `ipe doc Ipe.Web.Console` — the `Identity` record and

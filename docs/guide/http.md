@@ -81,6 +81,20 @@ value to leak downstream, only a `Nothing` at the one parse point.
 
 [principles]: ../../PRINCIPLES.md
 
+## Configuration
+
+Two env vars tune the HTTP client at runtime. Use `ipe doc <VAR>` to read the
+full entry for any of them.
+
+| Variable | Default | Effect |
+|----------|---------|--------|
+| `IPE_HTTP_MAX_BODY_BYTES` | 33554432 (32 MiB) | Cap on outbound response bodies. |
+| `IPE_HTTP_DENY_PRIVATE` | auto (on in production) | Block SSRF-vector private/loopback targets. |
+| `IPE_HTTP_BIND` | auto | Override the server bind address. |
+
+All vars are in the **HTTP client** subsystem of the
+[environment variable reference](../reference/env.md#http-client).
+
 ## References
 
 - **Per-symbol reference:** `ipe doc Ipe.Http` — every function with its

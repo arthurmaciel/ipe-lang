@@ -87,6 +87,18 @@ into source.
 
 [principles]: ../../PRINCIPLES.md
 
+## Configuration
+
+One env var controls email delivery in non-production environments.
+Use `ipe doc IPE_EMAIL_DRY_RUN` for the full entry.
+
+| Variable | Default | Effect |
+|----------|---------|--------|
+| `IPE_EMAIL_DRY_RUN` | unset (false) | Skip SMTP delivery and return a synthetic message ID. |
+
+See the [**Email** subsystem](../reference/env.md#email) in the
+environment variable reference.
+
 ## References
 
 - **Per-symbol reference:** `ipe doc Ipe.Email` — `send`, `parseAddress` /

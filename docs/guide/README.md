@@ -31,7 +31,8 @@ cross-link where topics meet.
   render-to-`String` functions under one prefix).
 - **Core data** — [Lists](list.md) (ordered sequences, folds, pipelines),
   [Strings](string.md) (text and the parse boundary), [Characters](char.md)
-  (code points, classification), [Tuples](tuple.md) (anonymous pairs).
+  (code points, classification), [Tuples](tuple.md) (anonymous pairs),
+  [Locales](locale.md) (opaque BCP-47 handle for locale-aware text operations).
 - **Collections** — [Sets](set.md) (unique, unordered, membership),
   [Dictionaries](dict.md) (a value per key).
 - **Absence, failure, and effects** — [Maybe](maybe.md) (a value that might be

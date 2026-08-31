@@ -94,6 +94,18 @@ construction, and guarantees the output parses back to the same rows.
 
 [principles]: ../../PRINCIPLES.md
 
+## Configuration
+
+Two env vars tune CSV limits at runtime. Use `ipe doc <VAR>` for the full entry.
+
+| Variable | Default | Effect |
+|----------|---------|--------|
+| `IPE_CSV_MAX_ROWS` | 10000000 (10 M) | Maximum rows parsed from a single CSV input. |
+| `IPE_CSV_SANITIZE_FORMULAS` | unset (false) | Prefix formula-injection characters in output to block spreadsheet injection. |
+
+See the [**CSV** subsystem](../reference/env.md#csv) in the
+environment variable reference.
+
 ## References
 
 - **Per-symbol reference:** `ipe doc Ipe.Csv` — every function with its signature.

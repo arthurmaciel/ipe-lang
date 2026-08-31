@@ -1,0 +1,87 @@
+module Main exposing (main)
+
+import Ipe.Locale as Locale
+import Ipe.String as String
+import Ipe.Maybe as Maybe
+import Ipe.Task as Task
+import Ipe.Io as Io
+
+
+-- `Ipe.Locale` is the explicit-locale surface for case mapping.  The default
+-- `String.toUpper`/`toLower` are locale-independent and correct for most
+-- scripts, but some languages change the result: in Turkish and Azerbaijani
+-- lowercase dotted `i` uppercases to `İ` (capital dotted I, U+0130), NOT
+-- the ASCII `I` that the locale-independent path produces.  Similarly,
+-- capital `I` lowercases to `ı` (dotless i, U+0131).
+--
+-- A `Locale` is opaque: the only constructor is `Locale.fromTag`, which
+-- parses a BCP-47 tag and returns `Nothing` for an invalid one.  An invalid
+-- tag is therefore a typed absence — it can never silently become a default
+-- locale.
+
+
+-- Parse two locales at the single boundary, then compare their upper-casing.
+-- `showCase` folds the `Maybe Locale` to describe the result.
+showCase : String -> String -> String
+showCase tag word =
+    case Locale.fromTag tag of
+
+        Just locale ->
+            tag
+                ++ ": toUpperIn \""
+                ++ word
+                ++ "\" = \""
+                ++ String.toUpperIn locale word
+                ++ "\""
+
+        Nothing ->
+            tag ++ ": invalid BCP-47 tag"
+
+
+showLower : String -> String -> String
+showLower tag word =
+    case Locale.fromTag tag of
+
+        Just locale ->
+            tag
+                ++ ": toLowerIn \""
+                ++ word
+                ++ "\" = \""
+                ++ String.toLowerIn locale word
+                ++ "\""
+
+        Nothing ->
+            tag ++ ": invalid BCP-47 tag"
+
+
+-- Show the rejected tag path so readers can see `fromTag` returns `Nothing`
+-- on nonsense input rather than silently falling back.
+showInvalid : String -> String
+showInvalid tag =
+    case Locale.fromTag tag of
+
+        Just _ ->
+            tag ++ ": (unexpectedly parsed)"
+
+        Nothing ->
+            tag ++ ": not a valid BCP-47 tag (Nothing)"
+
+
+-- locale-independent default, for contrast
+localeIndependentUpper : String -> String
+localeIndependentUpper word =
+    "default toUpper \"" ++ word ++ "\" = \"" ++ String.toUpper word ++ "\""
+
+
+-- The program sequences three IO steps in a `do` block.  Each `<-` binds
+-- the result of the previous step; all three must succeed for `main` to
+-- succeed.  The runtime is the single place any of this actually runs.
+main =
+    do
+        _ <- Io.println "-- locale-aware case mapping (Turkish-i demo) --"
+        _ <- Io.println (localeIndependentUpper "istanbul")
+        _ <- Io.println (showCase "tr" "istanbul")
+        _ <- Io.println (showCase "en" "istanbul")
+        _ <- Io.println (showLower "tr" "ISTANBUL")
+        _ <- Io.println (showLower "en" "ISTANBUL")
+        Io.println (showInvalid "!!invalid!!")

@@ -48,6 +48,10 @@ pub enum EntryKind {
     /// An `ipe` CLI command (sourced from the `COMMANDS` registry via the
     /// caller-injected [`CommandInfo`] slice).
     Command,
+    /// A runtime environment variable (sourced from the `ENV_VARS` registry in
+    /// `ipe_docs::env_vars`). Keys match the variable name exactly, e.g.
+    /// `IPE_WEB_PORT`.
+    EnvVar,
 }
 
 /// A resolved documentation entry.
@@ -67,6 +71,7 @@ pub struct Entry {
     /// - `Construct`: the stem of the `docs/constructs/<name>.md` file, e.g.
     ///   `case`.
     /// - `Command`: the command name, e.g. `version`.
+    /// - `EnvVar`: the variable name, e.g. `IPE_WEB_PORT`.
     pub source_key: String,
     /// The raw documentation text from the SSOT.
     pub text: String,
@@ -95,7 +100,7 @@ pub struct Index {
 }
 
 impl Index {
-    /// Build the index from all four SSOTs.
+    /// Build the index from all five SSOTs.
     ///
     /// - `explain_dir`: path to `src/compiler/diagnostics/explain/`
     /// - `content_dir`: path to `docs/constructs/`
@@ -116,6 +121,7 @@ impl Index {
         builder.add_diagnostics(explain_dir)?;
         builder.add_constructs(content_dir)?;
         builder.add_commands(commands);
+        builder.add_env_vars();
         Ok(builder.finish())
     }
 
@@ -128,6 +134,7 @@ impl Index {
     /// - `IPE-L0107` — a diagnostic code.
     /// - `case`, `do` — a construct or glossary term.
     /// - `version`, `build` — a CLI command.
+    /// - `IPE_WEB_PORT`, `IPE_LOG_LEVEL` — a runtime environment variable.
     #[must_use]
     pub fn resolve(&self, key: &str) -> Option<&Entry> {
         self.entries.get(key)
@@ -384,6 +391,32 @@ impl IndexBuilder {
             self.entries.insert(cmd.name.to_owned(), entry);
         }
     }
+
+    /// Index every entry from the [`env_vars::ENV_VARS`] registry as an
+    /// [`EntryKind::EnvVar`] entry.
+    ///
+    /// Each variable is registered under its exact name (e.g. `IPE_WEB_PORT`).
+    /// The text field contains a formatted summary of the variable's name,
+    /// default, purpose, subsystem, and class — all fields sourced from the
+    /// single [`env_vars::EnvVar`] SSOT; no prose is authored here.
+    pub fn add_env_vars(&mut self) {
+        for var in env_vars::ENV_VARS {
+            let text = format!(
+                "Name:      {}\nDefault:   {}\nSubsystem: {}\nClass:     {}\n\n{}",
+                var.name,
+                var.default,
+                var.subsystem.display(),
+                var.class.badge(),
+                var.purpose,
+            );
+            let entry = Entry {
+                kind: EntryKind::EnvVar,
+                source_key: var.name.to_owned(),
+                text,
+            };
+            self.entries.insert(var.name.to_owned(), entry);
+        }
+    }
 }
 
 impl Default for IndexBuilder {
@@ -590,6 +623,45 @@ mod tests {
     }
 
     #[test]
+    fn resolve_env_var_ipe_web_port() {
+        let mut builder = super::IndexBuilder::new();
+        builder.add_env_vars();
+        let idx = builder.finish();
+        let entry = idx
+            .resolve("IPE_WEB_PORT")
+            .expect("IPE_WEB_PORT must resolve");
+        assert_eq!(entry.kind, EntryKind::EnvVar);
+        assert_eq!(entry.source_key, "IPE_WEB_PORT");
+        assert!(
+            entry.text.contains("8000"),
+            "text should include the default value"
+        );
+        assert!(
+            entry.text.contains("Web server"),
+            "text should name the subsystem"
+        );
+        assert!(
+            entry.text.contains("TCP port"),
+            "text should describe the purpose"
+        );
+    }
+
+    #[test]
+    fn resolve_env_var_secret_class() {
+        let mut builder = super::IndexBuilder::new();
+        builder.add_env_vars();
+        let idx = builder.finish();
+        let entry = idx
+            .resolve("IPE_AUTH_TOKEN_SECRET")
+            .expect("IPE_AUTH_TOKEN_SECRET must resolve");
+        assert_eq!(entry.kind, EntryKind::EnvVar);
+        assert!(
+            entry.text.contains("Secret"),
+            "class badge must appear in text"
+        );
+    }
+
+    #[test]
     fn resolve_unknown_key_returns_none() {
         let idx = build_index();
         assert!(
@@ -648,6 +720,7 @@ mod tests {
                 EntryKind::Diagnostic => "diagnostic",
                 EntryKind::Construct => "construct",
                 EntryKind::Command => "command",
+                EntryKind::EnvVar => "env-var",
             };
             let body = format!(
                 "<h1>{} <span class=\"kind-badge\">{kind_label}</span></h1>\n",
