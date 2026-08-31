@@ -20,6 +20,7 @@ module Ipe.File exposing
 import Ipe.Ffi as Ffi
 import Ipe.Error exposing (Error)
 import Ipe.Path exposing (Path)
+import Ipe.ByteSize as ByteSize exposing (ByteSize)
 
 
 -- Read
@@ -29,10 +30,18 @@ readFile : Path -> Task Error String
 readFile = Ffi.kernel "File_readFile"
 
 
--- | `readFileLimit path maxBytes` -- read at most `maxBytes` from
--- the file.  Useful to cap memory on untrusted-size inputs.
-readFileLimit : Path -> Int -> Task Error String
-readFileLimit = Ffi.kernel "File_readFileLimit"
+-- `readFileLimit path cap` — read at most `cap` bytes from the file.
+-- Use `ByteSize.mib 10` or `ByteSize.bytes n` to name the unit at the
+-- call site and prevent silent unit confusion (a bare `Int` of 10 could
+-- mean 10 bytes or 10 MiB). Returns `Err` when the file exceeds the
+-- ceiling; useful to cap memory on untrusted-size inputs.
+readFileLimit : Path -> ByteSize -> Task Error String
+readFileLimit path cap =
+    readFileLimitKernel path (ByteSize.toBytes cap)
+
+
+readFileLimitKernel : Path -> Int -> Task Error String
+readFileLimitKernel = Ffi.kernel "File_readFileLimit"
 
 
 -- | Read raw bytes as a list of Int.  Use for binary content
