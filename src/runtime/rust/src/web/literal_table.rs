@@ -99,4 +99,59 @@ mod tests {
         assert_eq!(t.get(1), "b");
         assert_eq!(t.get(2), "C");
     }
+
+    // Load-bearing dev == prod conformance at the mechanism level: a view whose
+    // appearance literals (style value, attribute string, static text) are read
+    // from a baked-default `LiteralTable` renders byte-identically to the same
+    // view with those literals written directly. This is the property the whole
+    // appearance-hot-swap transform rests on — reading `get(idx)` on the baked
+    // defaults is indistinguishable from the direct literal, so prod (which only
+    // ever holds the defaults) renders exactly what a direct emit would.
+    #[test]
+    fn baked_default_table_renders_identically_to_direct_literals() {
+        use crate::html::{Attribute, Html, render_html};
+
+        // A representative view: an element carrying a style attribute value and
+        // a plain attribute string, wrapping a static text node — the three
+        // appearance-literal kinds in Step 2's scope.
+        fn view_direct() -> Html<()> {
+            Html::HElement(
+                "div".to_string(),
+                vec![
+                    Attribute::Attr("style".to_string(), "padding: 12px".to_string()),
+                    Attribute::Attr("class".to_string(), "card".to_string()),
+                ],
+                vec![Html::HText("Hello".to_string())],
+            )
+        }
+
+        fn view_tabled(t: &LiteralTable) -> Html<()> {
+            Html::HElement(
+                "div".to_string(),
+                vec![
+                    Attribute::Attr("style".to_string(), t.get(0).to_string()),
+                    Attribute::Attr("class".to_string(), t.get(1).to_string()),
+                ],
+                vec![Html::HText(t.get(2).to_string())],
+            )
+        }
+
+        let table = LiteralTable::from_defaults(&["padding: 12px", "card", "Hello"]);
+
+        let direct = render_html(&view_direct());
+        let tabled = render_html(&view_tabled(&table));
+        assert_eq!(
+            direct, tabled,
+            "baked-default table must render byte-identically to direct literals (dev == prod)"
+        );
+
+        // And an appearance edit — a patch swapping the style value — changes
+        // only that literal in the render, with no recompile and no other drift.
+        let mut patched = table;
+        patched.apply_patch(&[(0, "padding: 16px".to_string())]);
+        let patched_render = render_html(&view_tabled(&patched));
+        assert!(patched_render.contains("padding: 16px"));
+        assert!(patched_render.contains("Hello"));
+        assert!(patched_render.contains(r#"class="card""#));
+    }
 }
