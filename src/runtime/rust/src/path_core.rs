@@ -107,8 +107,8 @@ const fn is_sep(c: u8, windows: bool) -> bool {
 
 /// Length in bytes of the leading VOLUME name of `path` under Windows rules.
 ///
-/// `0` on Unix, where no path element is ever consumed as a volume. Ported
-///.volumeNameLen`. Recognised prefixes:
+/// `0` on Unix, where no path element is ever consumed as a volume. Recognised
+/// prefixes:
 /// * `\\?\…` / `\\.\…` — verbatim / device namespaces (consume up to the next
 ///   separator after the namespace tag);
 /// * `\\server\share` — a UNC root (both the server and the share component);

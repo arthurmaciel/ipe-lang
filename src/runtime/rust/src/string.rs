@@ -403,10 +403,12 @@ pub fn string_from_list(chars: Vec<char>) -> String {
 
 /// `String.isEmail : String -> Bool`
 /// RFC 5322 syntactic check. Does NOT verify the mailbox exists.
+///
 /// Structural validation rules:
-///   - exactly one "@" not at the start or end
-///   - local part non-empty
-///   - domain part non-empty and contains at least one "."
+/// - exactly one "@" not at the start or end
+/// - local part non-empty
+/// - domain part non-empty and contains at least one "."
+///
 /// (No regex crate needed for this level of validation.)
 #[must_use]
 pub fn string_is_email(s: String) -> bool {
