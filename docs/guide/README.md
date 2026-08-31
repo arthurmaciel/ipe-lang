@@ -93,7 +93,8 @@ cross-link where topics meet.
   [Tracing](trace.md) (application-level spans + the `Debug` development hatches).
 - **Design tokens and layout** — [Palette](palette.md) (closed token sets and
   named magnitudes as types), [Grid tracks](grid.md) (typed CSS grid track lists,
-  rendered to a `grid-template` string).
+  rendered to a `grid-template` string), [Transforms](transform.md) (typed CSS
+  transforms, rendered to a `transform` declaration).
 - **Testing** — [Testing](test.md) (the in-process framework: tests as values,
   assertions as results, exit-coded runs).
 - **Databases** — [Connection descriptors](dsn.md) (a typed, credential-safe
