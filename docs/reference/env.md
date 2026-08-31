@@ -47,6 +47,7 @@ Every `IPE_*` variable the runtime, CLI, and compiler read. The table is grouped
 | `IPE_TARGET` | unset (native) | Cross-compilation target triple, e.g. `wasm32-unknown-unknown` or `aarch64-unknown-linux-musl`. Set to `wasm` as a shorthand for `wasm32-unknown-unknown`. | `Tunable` |
 | `IPE_VERSION` | dev | Compiler version baked in by CI (`option_env!`). Surfaced at `GET /_ipe/buildinfo` and used to locate the cached console binary. Not read at runtime via `env::var`. | `Tunable` |
 | `IPE_WATCH_HOT_APPEARANCE` | unset (off) | Set to any non-empty value other than `0` to enable dev-loop appearance hot-swap: an `ipe watch` edit to a style literal is pushed to the browser without a rebuild. Dev-only; no effect on a release build. | `Tunable` |
+| `IPE_WATCH_HOT_TOKEN` | unset | Per-process control token for the dev-only appearance-hot-swap endpoint. `ipe watch` sets it and sends it as `X-Ipe-Hot-Token`; a request whose token does not constant-time-match is refused. Dev-only; the endpoint is never mounted in a release build. | `Secret` |
 | `IPE_WATCH_TIMING` | unset (off) | Set to `1` or `true` to print a per-phase `ipe watch` rebuild breakdown (emit, cargo, restart, reconnect) to stderr. Dev-loop instrumentation; has no effect outside `ipe watch`. | `Tunable` |
 
 ## Console

@@ -237,6 +237,16 @@ pub static ENV_VARS: &[EnvVar] = &[
         class: Class::Tunable,
     },
     EnvVar {
+        name: "IPE_WATCH_HOT_TOKEN",
+        default: "unset",
+        purpose: "Per-process control token for the dev-only appearance-hot-swap \
+                  endpoint. `ipe watch` sets it and sends it as `X-Ipe-Hot-Token`; a \
+                  request whose token does not constant-time-match is refused. \
+                  Dev-only; the endpoint is never mounted in a release build.",
+        subsystem: Subsystem::Build,
+        class: Class::Secret,
+    },
+    EnvVar {
         name: "IPE_WATCH_TIMING",
         default: "unset (off)",
         purpose: "Set to `1` or `true` to print a per-phase `ipe watch` rebuild \
