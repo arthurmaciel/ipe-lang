@@ -10955,6 +10955,320 @@ fn reachable_func_ids(
     reachable
 }
 
+/// Walk an [`IrType`] tree, recording every user-enum nominal identity
+/// (`(home, name)`) and every closed record shape it structurally reaches into
+/// the two accumulators.
+///
+/// Used by the type-level dead-declaration prune: an enum whose identity is
+/// never reached from a surviving function signature/body — nor transitively
+/// from a reached record/enum — is a dead declaration, and a closed record
+/// shape reached the same way is a dead struct. Both accumulate here so the
+/// prune's fixpoint can close over the same reachability the emitter walks.
+fn collect_ir_type_refs(
+    ty: &IrType,
+    enums: &mut BTreeSet<(ModPath, Symbol)>,
+    records: &mut Vec<IrType>,
+) {
+    // Drive the total, exhaustive [`ir_type_mentions`] traversal — which already
+    // recurses into EVERY inner-type-carrying variant (`Cmd`/`Sub`/`Ui`/`Dict`/
+    // `WebRoute`/`CustomElement`/…) — with a `leaf` that only records and never
+    // short-circuits. Sharing that single walker means a new `IrType` variant is
+    // covered here the moment `ir_type_mentions` covers it: an enum nested inside
+    // `Html Msg` or `Cmd Msg` can never be silently missed (which would drop its
+    // declaration and `enum_name`-ICE at emit).
+    let cell = std::cell::RefCell::new((enums, records));
+    ir_type_mentions(ty, &|t| {
+        let mut acc = cell.borrow_mut();
+        let (enums, records) = &mut *acc;
+        match t {
+            IrType::Enum { home, name, .. } => {
+                enums.insert((home.clone(), *name));
+            }
+            IrType::Record(_) if !records.contains(t) => {
+                records.push(t.clone());
+            }
+            _ => {}
+        }
+        false
+    });
+}
+
+/// Drop every user-declared enum in `types_ir` and every collected record shape
+/// in `records` that no SURVIVING function reaches — directly through a
+/// signature/body/row-field type, or transitively through another reached
+/// record/enum.
+///
+/// Runs on the emitted-binary model only (mirrors [`reachable_func_ids`]'s
+/// `prune_dead` guard): pruning is seeded from the reachable functions, so a
+/// declaration kept alive ONLY by an already-pruned dead function is itself
+/// dropped. This is what makes a transitively-imported stdlib type (e.g.
+/// `Ipe.Ui.ImageSrc` pulled in by `import Ipe.Ui` but never used) leave no enum
+/// behind — the same dead-code discipline the function prune already applies,
+/// extended to the type-declaration namespace so an unused module contributes
+/// no emitted home at all.
+///
+/// Fail-closed toward OVER-keeping: the closure adds a declaration on any
+/// mention, and the synthetic (usage-injected) enums are appended AFTER this
+/// prune, so a kept declaration can never reference a dropped one — no
+/// exit-0-then-cargo-fail (E0412) can arise from an under-kept type.
+fn prune_dead_type_decls(funcs: &[Func], types_ir: &mut Vec<TypeDef>, records: &mut Vec<IrType>) {
+    // Seed the reachable sets from every surviving function's type positions:
+    // ret / params / row-generic fields / body — the same surface
+    // `func_type_mentions` scans, walked here to accumulate rather than test.
+    let mut reachable_enums: BTreeSet<(ModPath, Symbol)> = BTreeSet::new();
+    let mut reachable_records: Vec<IrType> = Vec::new();
+    for f in funcs {
+        collect_ir_type_refs(&f.ret, &mut reachable_enums, &mut reachable_records);
+        for (_, t) in &f.params {
+            collect_ir_type_refs(t, &mut reachable_enums, &mut reachable_records);
+        }
+        for r in &f.row_params {
+            for t in r.fields.values() {
+                collect_ir_type_refs(t, &mut reachable_enums, &mut reachable_records);
+            }
+        }
+        collect_body_ir_type_refs(&f.body, &mut reachable_enums, &mut reachable_records);
+    }
+
+    // Index the user enum defs by nominal identity for the fixpoint descent.
+    let enum_by_id: BTreeMap<(ModPath, Symbol), &EnumDef> = types_ir
+        .iter()
+        .map(|td| match td {
+            TypeDef::Enum(e) => ((e.home.clone(), e.name), e),
+        })
+        .collect();
+
+    // Fixpoint: expand through the variant fields of every reached enum until
+    // the reachable set stops growing. `collect_ir_type_refs` already descends
+    // record fields (and pushes nested records) as it walks, so a reached enum's
+    // record-typed payload is followed in one call; the only expansion left to
+    // drive here is enum-to-enum through variant fields. Membership grows
+    // monotonically, so tracking the processed-enum set terminates the loop.
+    let mut processed: BTreeSet<(ModPath, Symbol)> = BTreeSet::new();
+    loop {
+        let pending: Vec<(ModPath, Symbol)> = reachable_enums
+            .iter()
+            .filter(|id| !processed.contains(id))
+            .cloned()
+            .collect();
+        if pending.is_empty() {
+            break;
+        }
+        for id in pending {
+            processed.insert(id.clone());
+            if let Some(def) = enum_by_id.get(&id) {
+                for v in &def.variants {
+                    for fty in &v.fields {
+                        collect_ir_type_refs(fty, &mut reachable_enums, &mut reachable_records);
+                    }
+                }
+            }
+        }
+    }
+
+    // Retain only reached declarations. Records are keyed structurally.
+    types_ir.retain(|td| match td {
+        TypeDef::Enum(e) => reachable_enums.contains(&(e.home.clone(), e.name)),
+    });
+    let keep: std::collections::HashSet<&IrType> = reachable_records.iter().collect();
+    records.retain(|r| keep.contains(r));
+}
+
+/// Walk an [`Expr`] body, recording into the accumulators every user-enum
+/// identity and record shape it reaches — the body-side counterpart of
+/// [`collect_ir_type_refs`] over signature types.
+///
+/// Two reference kinds keep a type alive from a body:
+///
+/// * a **type-carrying slot** (`Record { ty }`, `FuncValue { ty }`, a lambda's
+///   param/return types, a field-access `field_ty`, a list `elem`) — walked
+///   through [`collect_ir_type_refs`], exactly the surface
+///   [`collect_body_record_shapes`] surfaces so no body-local record is dropped;
+/// * a **constructor / pattern head** (`Expr::Ctor` / `Pat::Ctor`) — a value
+///   built or matched by naming a variant, which carries no `IrType` slot yet
+///   forces the enum's declaration to be emitted. Missing this arm is an
+///   UNDER-prune: `toString (Circle 5)` names no `Shape` type in a signature,
+///   so the enum would be dropped and the emitter would `enum_name`-ICE.
+///
+/// The match is exhaustive over `Expr` (mirroring [`scan_kernel_usage`]) so a
+/// new variant is a compile error here, never a silently missed reference.
+fn collect_body_ir_type_refs(
+    expr: &Expr,
+    enums: &mut BTreeSet<(ModPath, Symbol)>,
+    records: &mut Vec<IrType>,
+) {
+    collect_node_head_type_refs(expr, enums, records);
+    collect_child_ir_type_refs(expr, enums, records);
+}
+
+/// The type references carried DIRECTLY by one [`Expr`] node — its own
+/// type-carrying slots plus a constructor-head enum identity — without
+/// descending into child expressions (the caller drives recursion). Split from
+/// [`collect_body_ir_type_refs`] purely to keep each half within the line
+/// budget; together they cover the same surface.
+fn collect_node_head_type_refs(
+    expr: &Expr,
+    enums: &mut BTreeSet<(ModPath, Symbol)>,
+    records: &mut Vec<IrType>,
+) {
+    {
+        let cell = std::cell::RefCell::new((&mut *enums, &mut *records));
+        let slot = |ty: &IrType| {
+            let mut acc = cell.borrow_mut();
+            let (enums, records) = &mut *acc;
+            collect_ir_type_refs(ty, enums, records);
+        };
+        match expr {
+            Expr::List { elem, .. } => slot(elem),
+            Expr::Access { field_ty, .. } => slot(field_ty),
+            Expr::Lambda { params, ret, .. } | Expr::SharedLambda { params, ret, .. } => {
+                for (_, t) in params {
+                    slot(t);
+                }
+                slot(ret);
+            }
+            Expr::FuncValue { ty, .. } => slot(ty),
+            Expr::TailLoop { params, .. } => {
+                for (_, t) in params {
+                    slot(t);
+                }
+            }
+            Expr::Record { ty: Some(t), .. } => slot(t),
+            _ => {}
+        }
+    }
+    if let Expr::Ctor { home, ty, .. } = expr {
+        enums.insert((home.clone(), *ty));
+    }
+}
+
+/// Recurse into every child expression (and match-arm pattern) of one [`Expr`]
+/// node, collecting each child's type references. The recursion half of
+/// [`collect_body_ir_type_refs`]; the exhaustive match makes a new `Expr`
+/// variant a compile error rather than a silently unvisited child.
+fn collect_child_ir_type_refs(
+    expr: &Expr,
+    enums: &mut BTreeSet<(ModPath, Symbol)>,
+    records: &mut Vec<IrType>,
+) {
+    // Recurse into every child expression (and match-arm patterns).
+    match expr {
+        Expr::Call { args, .. } | Expr::Ctor { args, .. } | Expr::TailRecur { args } => {
+            for a in args {
+                collect_body_ir_type_refs(a, enums, records);
+            }
+        }
+        Expr::Apply { func, args } => {
+            collect_body_ir_type_refs(func, enums, records);
+            for a in args {
+                collect_body_ir_type_refs(a, enums, records);
+            }
+        }
+        Expr::Let { value, body, .. } | Expr::Destructure { value, body, .. } => {
+            collect_body_ir_type_refs(value, enums, records);
+            collect_body_ir_type_refs(body, enums, records);
+        }
+        Expr::If { cond, then_, else_ } => {
+            collect_body_ir_type_refs(cond, enums, records);
+            collect_body_ir_type_refs(then_, enums, records);
+            collect_body_ir_type_refs(else_, enums, records);
+        }
+        Expr::Match(m) => {
+            collect_body_ir_type_refs(m.scrutinee(), enums, records);
+            for arm in m.arms() {
+                collect_pat_ir_type_refs(&arm.pat, enums);
+                if let Some(guard) = &arm.guard {
+                    collect_body_ir_type_refs(guard, enums, records);
+                }
+                collect_body_ir_type_refs(&arm.body, enums, records);
+            }
+        }
+        Expr::Lambda { body, .. }
+        | Expr::SharedLambda { body, .. }
+        | Expr::TailLoop { body, .. } => collect_body_ir_type_refs(body, enums, records),
+        Expr::Cons { head, tail } => {
+            collect_body_ir_type_refs(head, enums, records);
+            collect_body_ir_type_refs(tail, enums, records);
+        }
+        Expr::ListIndexClone { list, .. } | Expr::ListLenCheck { list, .. } => {
+            collect_body_ir_type_refs(list, enums, records);
+        }
+        Expr::Tuple(elems) | Expr::List { items: elems, .. } => {
+            for e in elems {
+                collect_body_ir_type_refs(e, enums, records);
+            }
+        }
+        Expr::Record { fields, .. } => {
+            for (_, v) in fields {
+                collect_body_ir_type_refs(v, enums, records);
+            }
+        }
+        Expr::Access { record, .. } => collect_body_ir_type_refs(record, enums, records),
+        Expr::Update { record, fields } => {
+            collect_body_ir_type_refs(record, enums, records);
+            for (_, v) in fields {
+                collect_body_ir_type_refs(v, enums, records);
+            }
+        }
+        Expr::BinOp { lhs, rhs, .. } => {
+            collect_body_ir_type_refs(lhs, enums, records);
+            collect_body_ir_type_refs(rhs, enums, records);
+        }
+        Expr::TaskSeq { effect, rest } => {
+            collect_body_ir_type_refs(effect, enums, records);
+            collect_body_ir_type_refs(rest, enums, records);
+        }
+        // Leaves — no child expression, no further type reference.
+        Expr::FuncValue { .. }
+        | Expr::Int(_)
+        | Expr::Bool(_)
+        | Expr::Float(_)
+        | Expr::Str(_)
+        | Expr::PathLit(_)
+        | Expr::CustomElementRef { .. }
+        | Expr::Char(_)
+        | Expr::Unit
+        | Expr::CloneVar(_)
+        | Expr::Var(_) => {}
+    }
+}
+
+/// Record every user-enum identity a pattern names in a constructor head,
+/// recursing through every sub-pattern position — the pattern-side counterpart
+/// of the `Expr::Ctor` arm in [`collect_body_ir_type_refs`]. A `case s of Empty
+/// -> …` names the `Shape` enum with no `IrType` slot, so a scan that skipped
+/// patterns would under-prune the matched enum.
+fn collect_pat_ir_type_refs(pat: &Pat, enums: &mut BTreeSet<(ModPath, Symbol)>) {
+    match pat {
+        Pat::Ctor { home, ty, args, .. } => {
+            enums.insert((home.clone(), *ty));
+            for p in args {
+                collect_pat_ir_type_refs(p, enums);
+            }
+        }
+        Pat::Tuple(ps) | Pat::Or(ps) => {
+            for p in ps {
+                collect_pat_ir_type_refs(p, enums);
+            }
+        }
+        Pat::Record(fields) => {
+            for (_, p) in fields {
+                collect_pat_ir_type_refs(p, enums);
+            }
+        }
+        Pat::Slice { prefix, rest } => {
+            for p in prefix {
+                collect_pat_ir_type_refs(p, enums);
+            }
+            if let Some(p) = rest {
+                collect_pat_ir_type_refs(p, enums);
+            }
+        }
+        Pat::Alias(inner, _) => collect_pat_ir_type_refs(inner, enums),
+        Pat::Wildcard | Pat::Var(_) | Pat::Bool(_) | Pat::Char(_) | Pat::Str(_) | Pat::Int(_) => {}
+    }
+}
+
 /// Record every kernel callee reachable from `expr` into `usage`.
 ///
 /// Traversal shape mirrors the former per-family walkers exactly: `Call` /
@@ -15885,6 +16199,21 @@ impl<'a> Lowerer<'a> {
             for func in &funcs {
                 collect_body_record_shapes(&func.body, &mut records, &mut seen);
             }
+        }
+
+        // Type-level dead-declaration elimination — the declaration-namespace
+        // counterpart of the reachable-`FuncId` prune above. A user enum or a
+        // collected record shape reached by NO surviving function (only by an
+        // already-pruned dead one, or by a transitively-imported-but-unused
+        // stdlib module) is dropped, so an unused type leaves no emitted Rust
+        // item and no extra module home. Gated on `prune_dead` for the same
+        // reason the function prune is: only the real emitted-binary entry has a
+        // trustworthy root set; the package-capability audit keeps everything.
+        // Runs BEFORE the usage-flag scans and the synthetic-type injections, so
+        // a dropped type stops forcing its runtime feature and the injected
+        // enums (appended below) can never reference a pruned declaration.
+        if prune_dead {
+            prune_dead_type_decls(&funcs, &mut types_ir, &mut records);
         }
 
         let sqlvalue_sym = self.builtins.sqlvalue;

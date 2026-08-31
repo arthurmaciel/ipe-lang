@@ -59,23 +59,6 @@ impl<T1: IpeStringify + std::fmt::Debug + 'static> IpeStringify for IpeCodecCode
         }
     }
 }
-pub(crate) enum IpeCodecVariant<T1: 'static> {
-    Variant(RecDecodeMatchTag<T1>),
-}
-impl<T1: Clone + 'static> Clone for IpeCodecVariant<T1> {
-    fn clone(&self) -> Self {
-        match self {
-            IpeCodecVariant::Variant(p0) => IpeCodecVariant::Variant(p0.clone()),
-        }
-    }
-}
-impl<T1: IpeStringify + std::fmt::Debug + 'static> IpeStringify for IpeCodecVariant<T1> {
-    fn ipe_show(&self) -> String {
-        match self {
-            IpeCodecVariant::Variant(_) => format!("Variant {}", "<fn>"),
-        }
-    }
-}
 pub(crate) fn user_ipe_codec_shape<T1: Clone>(codec: IpeCodecCodec<T1>) -> IpeCodecShape {
     let _ipe_recursion_guard = crate::recursion_guard();
     match codec {
