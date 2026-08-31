@@ -638,10 +638,10 @@ pub struct WebApp(pub WebAppKind);
 ///   server port (one listener).
 #[cfg(not(target_arch = "wasm32"))]
 pub enum WebAppKind {
-    Standalone(crate::IpeTask<crate::error::IpeError, ()>),
+    Standalone(IpeTask<crate::error::IpeError, ()>),
     #[cfg(feature = "web")]
     Mountable {
-        serve: crate::IpeTask<crate::error::IpeError, ()>,
+        serve: IpeTask<crate::error::IpeError, ()>,
         router: MountBuilder,
     },
 }
@@ -678,7 +678,7 @@ impl WebApp {
 /// Backed by a boxed `IpeTask<IpeError, ()>`; run via `run_blocking` on the
 /// current thread (tao/Cocoa mandates the process main thread on macOS).
 #[cfg(not(target_arch = "wasm32"))]
-pub struct WebViewApp(pub crate::IpeTask<crate::error::IpeError, ()>);
+pub struct WebViewApp(pub IpeTask<crate::error::IpeError, ()>);
 
 #[cfg(not(target_arch = "wasm32"))]
 impl WebViewApp {
@@ -691,7 +691,7 @@ impl WebViewApp {
 /// Opaque app handle returned by `Terminal.appScreen`.
 /// Backed by a boxed `IpeTask<IpeError, ()>`; run via `run_blocking`.
 #[cfg(not(target_arch = "wasm32"))]
-pub struct TuiApp(pub crate::IpeTask<crate::error::IpeError, ()>);
+pub struct TuiApp(pub IpeTask<crate::error::IpeError, ()>);
 
 #[cfg(not(target_arch = "wasm32"))]
 impl TuiApp {
@@ -704,7 +704,7 @@ impl TuiApp {
 /// Opaque app handle returned by `Terminal.appLines`.
 /// Backed by a boxed `IpeTask<IpeError, ()>`; run via `run_blocking`.
 #[cfg(not(target_arch = "wasm32"))]
-pub struct CliApp(pub crate::IpeTask<crate::error::IpeError, ()>);
+pub struct CliApp(pub IpeTask<crate::error::IpeError, ()>);
 
 #[cfg(not(target_arch = "wasm32"))]
 impl CliApp {
