@@ -302,6 +302,48 @@ pub const fn appearance_literal_args(k: KernelFn) -> &'static [(usize, LitKind)]
         // `rgba`: three `Int` channels plus a `Float` alpha (opacity).
         KernelFn::UiRgba => &[(0, Int), (1, Int), (2, Int), (3, Float)],
 
+        // ── Ipe.Ui — direct numeric appearance scalars ────────────────────
+        // Each kernel's marked position is a *direct* `Int`/`Float` scalar the
+        // style renders inertly, read back through the total
+        // `parse::<T>().unwrap_or(<literal>)` path (the `FontSize`/`UiRgb`
+        // precedent). A sibling `Length`/`Color`/`Vec` argument is a *nested*
+        // call, never a direct literal — its inner literal hoists through its
+        // own kernel's arm — so it is left unmarked here.
+        //
+        // `Font.weight : Int -> Attribute msg` — the numeric weight (100..900).
+        KernelFn::FontWeight
+        // `Font.hoverSize : Int -> Attribute msg` — the hover font-size in px.
+        | KernelFn::FontHoverSize
+        // `Border.hoverWidth : Int -> Attribute msg` — hover border width (px).
+        | KernelFn::BorderHoverWidth
+        // `Border.hoverRounded : Int -> Attribute msg` — hover radius (px).
+        | KernelFn::BorderHoverRounded
+        // `Ui.vh : Int -> Length` — a viewport-height percentage.
+        | KernelFn::UiVh
+        // `Ui.vw : Int -> Length` — a viewport-width percentage.
+        | KernelFn::UiVw => &[(0, Int)],
+        // `Font.letterSpacing : Float -> Attribute msg` — spacing in em.
+        KernelFn::FontLetterSpacing
+        // `Font.wordSpacing : Float -> Attribute msg` — spacing in em.
+        | KernelFn::FontWordSpacing
+        // `Ui.aspectRatio : Float -> Attribute msg` — the width/height ratio.
+        | KernelFn::UiAspectRatio => &[(0, Float)],
+        // `Ui.aspectRatioWH : Int -> Int -> Attribute msg` — width and height
+        // integers of the ratio; both are direct inert numbers.
+        KernelFn::UiAspectRatioWH => &[(0, Int), (1, Int)],
+        // `Border.glow : Int -> Color -> Attribute msg` — mark only the blur
+        // radius (position 0); the colour (position 1) is a nested `Color`.
+        KernelFn::BorderGlow => &[(0, Int)],
+        // `Ui.minimum : Int -> Length -> Length` — mark only the bound (position
+        // 0); the wrapped `Length` (position 1) is a nested call.
+        KernelFn::UiMinimum
+        // `Ui.maximum : Int -> Length -> Length` — same shape as `minimum`.
+        | KernelFn::UiMaximum => &[(0, Int)],
+        // `Background.linearGradient : Float -> List (Float, Color) -> Attribute msg`
+        // — mark only the angle (position 0); the stops list (position 1) is a
+        // nested `Vec` whose inner literals are not direct arguments here.
+        KernelFn::BackgroundLinearGradient => &[(0, Float)],
+
         // ── Ipe.Ui — attribute values + static text (String) ──────────────
         // `Ui.text : String -> Element msg` — a static text node's content. The
         // runtime escapes it at render, identically for a direct or hoisted
@@ -988,21 +1030,15 @@ pub const fn appearance_literal_args(k: KernelFn) -> &'static [(usize, LitKind)]
         | KernelFn::UiFill
         | KernelFn::UiContent
         | KernelFn::UiShrink
-        | KernelFn::UiVh
-        | KernelFn::UiVw
-        | KernelFn::UiMinimum
-        | KernelFn::UiMaximum
         | KernelFn::UiWhite
         | KernelFn::UiBlack
         | KernelFn::UiTransparent
         | KernelFn::UiColorCss
         | KernelFn::BackgroundColor
         | KernelFn::BackgroundImage
-        | KernelFn::BackgroundLinearGradient
         | KernelFn::BorderColor
         | KernelFn::BorderWidthEach
         | KernelFn::BorderShadow
-        | KernelFn::BorderGlow
         | KernelFn::BorderInnerShadow
         | KernelFn::FontColor
         | KernelFn::FontBold
@@ -1073,8 +1109,6 @@ pub const fn appearance_literal_args(k: KernelFn) -> &'static [(usize, LitKind)]
         | KernelFn::UiSquare
         | KernelFn::UiWidescreen
         | KernelFn::UiCinemascope
-        | KernelFn::UiAspectRatio
-        | KernelFn::UiAspectRatioWH
         | KernelFn::UiTransitionRaw
         | KernelFn::UiGridTracksRaw
         | KernelFn::UiAnimateRaw
@@ -1102,9 +1136,6 @@ pub const fn appearance_literal_args(k: KernelFn) -> &'static [(usize, LitKind)]
         | KernelFn::BorderHoverColor
         | KernelFn::BorderFocusColor
         | KernelFn::BorderActiveColor
-        | KernelFn::BorderHoverWidth
-        | KernelFn::BorderHoverRounded
-        | KernelFn::FontWeight
         | KernelFn::FontSemiBold
         | KernelFn::FontRegular
         | KernelFn::FontLight
@@ -1113,8 +1144,6 @@ pub const fn appearance_literal_args(k: KernelFn) -> &'static [(usize, LitKind)]
         | KernelFn::FontUnderline
         | KernelFn::FontNoDecoration
         | KernelFn::FontLineThrough
-        | KernelFn::FontLetterSpacing
-        | KernelFn::FontWordSpacing
         | KernelFn::FontAlignLeft
         | KernelFn::FontAlignRight
         | KernelFn::FontAlignCenter
@@ -1127,7 +1156,6 @@ pub const fn appearance_literal_args(k: KernelFn) -> &'static [(usize, LitKind)]
         | KernelFn::FontFocusColor
         | KernelFn::FontActiveColor
         | KernelFn::FontDisabledColor
-        | KernelFn::FontHoverSize
         | KernelFn::TerminalAppLines
         | KernelFn::AuthHashPassword
         | KernelFn::AuthHashPasswordCost

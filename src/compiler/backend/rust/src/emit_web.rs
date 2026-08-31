@@ -1562,6 +1562,50 @@ mod hot_appearance_tests {
         Ok(())
     }
 
+    /// `Ui.minimum 100 (Ui.px 200)` — a kernel whose direct scalar (position 0)
+    /// is hoist-eligible while its second argument is a *nested* `Length` call.
+    /// Only the direct bound hoists here; the nested `Ui.px` literal hoists
+    /// through its own arm into the next slot, and the outer `ui_minimum_` call
+    /// wraps the nested call directly — so the emit is well-formed for a real
+    /// mixed-argument kernel (the direct `i64` read parses back to the source).
+    #[test]
+    fn mixed_direct_and_nested_kernel_hoists_only_direct_scalar() -> DResult<()> {
+        let mut interner = Interner::new();
+        let call = Expr::Call {
+            callee: Callee::Kernel(KernelFn::UiMinimum),
+            args: vec![
+                Expr::Int(100),
+                Expr::Call {
+                    callee: Callee::Kernel(KernelFn::UiPx),
+                    args: vec![Expr::Int(200)],
+                    pin: CallPin::None,
+                    on_form: OnFormKind::NotForm,
+                },
+            ],
+            pin: CallPin::None,
+            on_form: OnFormKind::NotForm,
+        };
+        let (program, view) = one_view_program(&mut interner, call)?;
+        let out = emit_view(&interner, &program, &view, true)?;
+        // The direct bound and the nested `Ui.px` literal each occupy their own
+        // slot, in emit order.
+        assert!(
+            out.contains("from_defaults(&[\"100\", \"200\"])"),
+            "the direct bound and the nested px literal must bake as ordered defaults, got:\n{out}"
+        );
+        // The outer bound reads slot 0; the nested px reads slot 1 inside the
+        // directly-emitted `ui_px_` call.
+        assert!(
+            out.contains("ui_minimum_(__ipe_lit.get(0).parse::<i64>().unwrap_or(100i64), "),
+            "the direct bound must read its slot and re-parse with the literal fallback, got:\n{out}"
+        );
+        assert!(
+            out.contains("ui_px_(__ipe_lit.get(1).parse::<i64>().unwrap_or(200i64))"),
+            "the nested px call must emit directly, its own literal hoisted, got:\n{out}"
+        );
+        Ok(())
+    }
+
     // ── Refusal gaps (guardian-flagged on Step 1): the constant-only + closure
     //    fences must hold for the typed path too. ──────────────────────────────
 
