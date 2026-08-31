@@ -31,6 +31,7 @@ pub mod ffi;
 pub mod fmt;
 pub mod health;
 pub mod help;
+pub mod hot_classify;
 pub mod index;
 pub mod init;
 pub mod io_bounded;

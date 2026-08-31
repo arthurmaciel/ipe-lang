@@ -166,6 +166,13 @@ pub fn csrf_set_cookie(token: &str, base: &str) -> String {
 
 /// Paths exempt from CSRF validation (observability paths, console prefix,
 /// SSE). GET/HEAD/OPTIONS are exempt by method, separately.
+///
+/// `/_ipe/hot-appearance` is exempt because it is not a browser-driven POST: it
+/// is a server-to-server call from the `ipe watch` process, authenticated by its
+/// own per-process `X-Ipe-Hot-Token` (a stronger control here than the
+/// browser-oriented CSRF cookie, which the watch does not hold). The route is
+/// mounted only under the dev overlay gate, so it does not exist at all in a
+/// production build — there is nothing to exempt there.
 pub fn is_exempt_path(path: &str) -> bool {
     matches!(
         path,
@@ -175,6 +182,7 @@ pub fn is_exempt_path(path: &str) -> bool {
             | "/_ipe/buildinfo"
             | "/_ipe/sse"
             | "/_ipe/observability/ingest"
+            | "/_ipe/hot-appearance"
     ) || path == "/_ipe/console"
         || path.starts_with("/_ipe/console/")
 }
@@ -282,6 +290,16 @@ mod tests {
     fn pair_valid_matching_well_formed_accepted() {
         let tok = well_formed_tok();
         assert!(csrf_pair_valid(&tok, &tok));
+    }
+
+    // The dev-only appearance-hot-swap POST is CSRF-exempt: it carries its own
+    // `X-Ipe-Hot-Token` control instead of the browser CSRF cookie. An ordinary
+    // app POST stays subject to CSRF.
+    #[test]
+    fn hot_appearance_is_csrf_exempt_but_ordinary_posts_are_not() {
+        assert!(is_exempt_path("/_ipe/hot-appearance"));
+        assert!(!is_exempt_path("/_ipe/event"));
+        assert!(!is_exempt_path("/_ipe/port"));
     }
 
     // csrf_pair_valid: matching but malformed pair (too short, not 64-hex) → rejected.

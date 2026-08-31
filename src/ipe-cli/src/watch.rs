@@ -123,6 +123,11 @@ pub enum WatchEvent {
         generation: u64,
         outcome: RestartOutcomeKind,
     },
+    /// `generation`'s edit was classified appearance-only and hot-swapped into
+    /// the running app via a `LiteralTable` patch — no cargo rebuild, no restart.
+    /// `views` is the number of edited views patched. Only fires under
+    /// `IPE_WATCH_HOT_APPEARANCE`.
+    AppearanceHotSwapped { generation: u64, views: usize },
 }
 
 /// A test/observability-friendly mirror of [`ipe_watch::RestartOutcome`].
@@ -951,6 +956,24 @@ fn run_inner(
     // `Web.app`?), decided once per generation right after emit, not
     // re-derived from the built executable (which carries no such marker).
     let mut current_is_web = false;
+    // The emit of the currently-RUNNING binary, kept only under the appearance
+    // hot-swap flag. The classifier diffs each new emit against this to decide
+    // AppearanceOnly (push a table patch, skip cargo) vs Logic (recompile). It is
+    // updated ONLY when a recompile is actually launched (Logic path / first
+    // build) — never on an appearance push, because the running binary still
+    // bakes THESE defaults (they key the runtime overlay), so chained style edits
+    // each diff against the same running baseline. `None` until the first emit,
+    // or whenever the flag is off.
+    let mut running_emitted: Option<Arc<ipe_backend::EmittedProject>> = None;
+    // The per-session control token that authenticates a `/_ipe/hot-appearance`
+    // POST. Minted once here (when the flag is on) and injected into every
+    // spawned child via `child_env` as `IPE_WATCH_HOT_TOKEN`, so only this watch
+    // process can drive a live appearance patch of the app it launched.
+    let hot_token: Option<String> = if crate::hot_appearance_enabled() {
+        Some(mint_hot_token())
+    } else {
+        None
+    };
     // The current live cycle's per-phase timing (`IPE_WATCH_TIMING`). Reset at
     // each `FsBatch`; the resolve/compile/write/cargo phases fill it as their
     // events land, and it is reported at the terminal event (restart done, or
@@ -1186,6 +1209,46 @@ fn run_inner(
                         timings.report(g);
                     }
                     CompileOutcome::Green(emitted) => {
+                        // Appearance hot-swap: if the flag is on and we already
+                        // have a running binary, classify this emit against it.
+                        // An AppearanceOnly delta (only hoisted style-literal
+                        // VALUES moved) is pushed as a `LiteralTable` patch to the
+                        // running app and skips cargo entirely — the sub-second
+                        // path. Anything else is Logic and recompiles below. The
+                        // classifier is conservative by construction: a logic
+                        // change perturbs the emitted Rust outside a defaults
+                        // array, forcing Logic (see `hot_classify`).
+                        if let (Some(tok), Some(running)) =
+                            (hot_token.as_deref(), running_emitted.as_ref())
+                        {
+                            match crate::hot_classify::classify(running, &emitted) {
+                                crate::hot_classify::Classification::AppearanceOnly(patches) => {
+                                    // The running binary is unchanged, so
+                                    // `running_emitted` stays the baseline. Push
+                                    // each edited view's patch and skip cargo.
+                                    let pushed = push_appearance_patches(
+                                        opts.port, tok, &patches, opts.quiet,
+                                    );
+                                    if pushed {
+                                        emit(
+                                            opts,
+                                            WatchEvent::AppearanceHotSwapped {
+                                                generation: g,
+                                                views: patches.len(),
+                                            },
+                                        );
+                                        timings.report(g);
+                                        continue;
+                                    }
+                                    // A push failure (app not reachable) is a soft
+                                    // miss: fall through to a normal recompile so
+                                    // the edit still lands.
+                                }
+                                crate::hot_classify::Classification::Logic => {
+                                    // Recompile below.
+                                }
+                            }
+                        }
                         // Watch is always a dynamic dev build — no static plan,
                         // no tree-shaking (the full runtime tree keeps rebuilds
                         // incremental across a session's changing reach set).
@@ -1207,6 +1270,13 @@ fn run_inner(
                             continue;
                         }
                         timings.write = Some(write_started.elapsed());
+                        // This emit is about to be compiled into the new running
+                        // binary, so it becomes the classifier's baseline for the
+                        // next edit (only relevant under the flag; cheap to keep
+                        // unconditionally).
+                        if hot_token.is_some() {
+                            running_emitted = Some(emitted.clone());
+                        }
                         current_is_web = is_ipe_web_project(&emitted);
                         // Design doc "First-run vs warm-run UX": the cold
                         // (first) build pays the full dependency-compile
@@ -1323,10 +1393,13 @@ fn run_inner(
                                 }
                             };
                             let out_dir = opts.out_dir.clone();
+                            let tok = hot_token.clone();
                             supervisor.apply_green_behind_proxy(
                                 &exe_path,
                                 internal_port,
-                                move |path, port| spawn_command(path, &child_env(port, &out_dir)),
+                                move |path, port| {
+                                    spawn_command(path, &child_env(port, &out_dir, tok.as_deref()))
+                                },
                                 readiness,
                                 opts.restart_timeouts,
                                 |ready_port| proxy.set_upstream(ready_port),
@@ -1339,7 +1412,7 @@ fn run_inner(
                                     grace: Duration::from_millis(300),
                                 }
                             };
-                            let env = child_env(opts.port, &opts.out_dir);
+                            let env = child_env(opts.port, &opts.out_dir, hot_token.as_deref());
                             supervisor.apply_green(
                                 &exe_path,
                                 move |path| spawn_command(path, &env),
@@ -1453,11 +1526,17 @@ fn is_ipe_web_project(emitted: &ipe_backend::EmittedProject) -> bool {
 /// environment already configures `IPE_WEB_STORE`, in which case that
 /// choice is respected verbatim (and warned about when it is exactly
 /// `memory` — see `warn_if_memory_store`, called once at watch startup).
-fn child_env(port: u16, out_dir: &Path) -> Vec<(String, String)> {
+fn child_env(port: u16, out_dir: &Path, hot_token: Option<&str>) -> Vec<(String, String)> {
     let mut env = vec![
         ("IPE_WEB_PORT".to_owned(), port.to_string()),
         ("IPE_SERVER_PORT".to_owned(), port.to_string()),
     ];
+    // Under appearance hot-swap, hand the running app the per-session control
+    // token so its `/_ipe/hot-appearance` endpoint accepts patches from THIS
+    // watch (and nothing else). Absent ⇒ the endpoint fails closed.
+    if let Some(tok) = hot_token {
+        env.push(("IPE_WATCH_HOT_TOKEN".to_owned(), tok.to_owned()));
+    }
     if std::env::var("IPE_WEB_STORE").is_err() {
         env.push(("IPE_WEB_STORE".to_owned(), "sqlite".to_owned()));
         let db_path = out_dir
@@ -1477,6 +1556,121 @@ fn child_env(port: u16, out_dir: &Path) -> Vec<(String, String)> {
         env.push(("IPE_WEB_RETRY_FAST_WINDOW_MS".to_owned(), "8000".to_owned()));
     }
     env
+}
+
+/// Mint a per-session control token for the `/_ipe/hot-appearance` endpoint.
+///
+/// The token authenticates a live appearance patch: only this watch process
+/// knows it (it is injected into the child's env and never printed), so even a
+/// dev server bound to `0.0.0.0` cannot be driven by a LAN peer. Primary source
+/// is the OS CSPRNG (`/dev/urandom`); if that is unavailable, a SHA-256 mix of
+/// several process-unique entropy sources is used so the token is never a fixed
+/// or trivially-guessable value. Rendered as lowercase hex.
+fn mint_hot_token() -> String {
+    use sha2::{Digest as _, Sha256};
+    use std::io::Read as _;
+
+    let mut buf = [0u8; 32];
+    if let Ok(mut f) = std::fs::File::open("/dev/urandom")
+        && f.read_exact(&mut buf).is_ok()
+    {
+        return hex::encode(buf);
+    }
+    // Fallback: hash a mix of process-unique, hard-to-predict values. Not a
+    // CSPRNG, but never a constant — and the endpoint is dev-only and
+    // fail-closed regardless.
+    let mut h = Sha256::new();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_nanos());
+    h.update(now.to_le_bytes());
+    h.update(std::process::id().to_le_bytes());
+    h.update(format!("{:?}", std::thread::current().id()).as_bytes());
+    // A heap-allocation address adds ASLR entropy across runs.
+    let probe = Box::new(0u8);
+    h.update((std::ptr::from_ref::<u8>(&probe).addr()).to_le_bytes());
+    hex::encode(h.finalize())
+}
+
+/// POST every edited view's appearance patch to the running app's
+/// `/_ipe/hot-appearance` endpoint, authenticated with the session control
+/// token. Returns `true` only if every patch was accepted (HTTP 200), so a
+/// caller can fall back to a full recompile on any miss. An empty patch list is
+/// a no-op success (a whitespace-only edit the emitter normalised away).
+fn push_appearance_patches(
+    port: u16,
+    token: &str,
+    patches: &[crate::hot_classify::ViewPatch],
+    quiet: bool,
+) -> bool {
+    for vp in patches {
+        let body = serde_json::json!({
+            "defaults": vp.defaults,
+            "patch": vp.patch,
+        })
+        .to_string();
+        if !matches!(post_hot_appearance(port, token, &body), Ok(true)) {
+            if !quiet {
+                eprintln!(
+                    "{}",
+                    watch_line(
+                        "[ipe watch] appearance hot-swap push failed — falling back to a \
+                         full rebuild",
+                        WatchRole::Info
+                    )
+                );
+            }
+            return false;
+        }
+    }
+    if !quiet {
+        eprintln!(
+            "{}",
+            watch_line(
+                "[ipe watch] appearance edit hot-swapped (no rebuild)",
+                WatchRole::Info
+            )
+        );
+    }
+    true
+}
+
+/// Send one `POST /_ipe/hot-appearance` to loopback `port` over a raw HTTP/1.1
+/// connection, returning `Ok(true)` on a `200 OK` status line. Loopback-only and
+/// dev-only, so a minimal blocking request (no client crate, no keep-alive) is
+/// sufficient; a short connect/read timeout keeps a dead app from stalling the
+/// watch loop.
+///
+/// # Errors
+/// An I/O error if the connection cannot be made or the exchange fails.
+fn post_hot_appearance(port: u16, token: &str, body: &str) -> std::io::Result<bool> {
+    use std::io::{Read as _, Write as _};
+    use std::net::TcpStream;
+    let addr = std::net::SocketAddr::from((std::net::Ipv4Addr::LOCALHOST, port));
+    let mut stream = TcpStream::connect_timeout(&addr, Duration::from_millis(500))?;
+    stream.set_read_timeout(Some(Duration::from_millis(1500)))?;
+    stream.set_write_timeout(Some(Duration::from_millis(1500)))?;
+    let req = format!(
+        "POST /_ipe/hot-appearance HTTP/1.1\r\n\
+         Host: 127.0.0.1:{port}\r\n\
+         X-Ipe-Hot-Token: {token}\r\n\
+         Content-Type: application/json\r\n\
+         Content-Length: {len}\r\n\
+         Connection: close\r\n\r\n{body}",
+        len = body.len(),
+    );
+    stream.write_all(req.as_bytes())?;
+    stream.flush()?;
+    let mut resp = Vec::new();
+    // Read only the status line's worth; the body is empty (`OK`) either way.
+    let mut chunk = [0u8; 256];
+    if let Ok(n) = stream.read(&mut chunk)
+        && let Some(head) = chunk.get(..n)
+    {
+        resp.extend_from_slice(head);
+    }
+    let head = String::from_utf8_lossy(&resp);
+    Ok(head.starts_with("HTTP/1.1 200"))
 }
 
 fn spawn_command(exe_path: &Path, env: &[(String, String)]) -> Command {
