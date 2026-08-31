@@ -1,0 +1,12 @@
+module Main exposing (main)
+
+import Ipe.Crypto as Crypto
+import Ipe.Io as Io
+
+-- SECURITY: `Crypto.hmacSha256` takes a typed `Key`, never a bare `String`.
+-- Passing a plaintext `String` in the key role — the classic key/message
+-- confusion — must be a compile error, not a silent wrong MAC. There is no
+-- raw-`String`-key HMAC spelling to fall back to.
+main : Task ()
+main =
+    Io.println (Crypto.macToHex (Crypto.hmacSha256 "not-a-key" "message"))

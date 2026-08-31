@@ -1,0 +1,35 @@
+module Main exposing (main)
+
+import Ipe.Crypto as Crypto
+import Ipe.Io as Io
+
+-- SECURITY: the typed-`Key` path. A `Key` is built once at the parse boundary
+-- (`keyFromString : String -> Maybe Key`); every keyed operation — `hmacSha256`
+-- and the AEAD encrypt/decrypt pair — then consumes that `Key`, so the key
+-- material is never a confusable bare `String` at a call site. This program
+-- must type-check.
+sign : Crypto.Key -> String -> String
+sign key message =
+    Crypto.macToHex (Crypto.hmacSha256 key message)
+
+seal : Crypto.Key -> String -> Result Error String
+seal key plaintext =
+    Crypto.aesGcmEncrypt key plaintext
+
+report : Crypto.Key -> String
+report key =
+    case seal key "message" of
+        Ok _ ->
+            sign key "message"
+
+        Err _ ->
+            "encryption failed"
+
+main : Task ()
+main =
+    case Crypto.keyFromString "s3cret-signing-key" of
+        Just key ->
+            Io.println (report key)
+
+        Nothing ->
+            Io.println "empty key rejected at the boundary"
