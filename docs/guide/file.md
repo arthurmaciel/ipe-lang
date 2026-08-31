@@ -94,6 +94,19 @@ place that performs it, so purity holds everywhere else.
 
 [principles]: ../../PRINCIPLES.md
 
+## Configuration
+
+Two env vars set the per-call byte ceilings for file and process I/O.
+Use `ipe doc <VAR>` for the full entry.
+
+| Variable | Default | Effect |
+|----------|---------|--------|
+| `IPE_FILE_READ_MAX` | 16777216 (16 MiB) | Maximum bytes read by `File.read*` in a single call. |
+| `IPE_PROCESS_OUTPUT_MAX` | 16777216 (16 MiB) | Maximum bytes buffered from a subprocess's stdout or stderr. |
+
+See the [**File** subsystem](../reference/env.md#file) in the
+environment variable reference.
+
 ## References
 
 - **Per-symbol reference:** `ipe doc Ipe.File` and `ipe doc Ipe.Path` — every

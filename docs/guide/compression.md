@@ -80,6 +80,18 @@ guarantee the whole module exists to provide.
 
 [principles]: ../../PRINCIPLES.md
 
+## Configuration
+
+One env var sets the decompression safety ceiling. Use `ipe doc IPE_DECOMPRESS_MAX_BYTES`
+to read the full entry.
+
+| Variable | Default | Effect |
+|----------|---------|--------|
+| `IPE_DECOMPRESS_MAX_BYTES` | 268435456 (256 MiB) | Maximum bytes a single decompress call may produce. |
+
+See the [**Compression** subsystem](../reference/env.md#compression) in the
+environment variable reference.
+
 ## References
 
 - **Per-symbol reference:** `ipe doc Ipe.Compression` — every function with a
