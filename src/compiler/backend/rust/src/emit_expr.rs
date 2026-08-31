@@ -17,8 +17,8 @@ use crate::EmitCtx;
 use crate::doc::Doc;
 use crate::emit_types::{GenericScope, render_type};
 use crate::emit_ui_plan::{
-    ArgPlan, Guard, NativeUiEmit, UiDelegate, UiEmitPlan, style_float_literal_arg_positions,
-    style_int_literal_arg_positions, style_literal_arg_positions, ui_call_shape,
+    ArgPlan, Guard, LitKind, NativeUiEmit, UiDelegate, UiEmitPlan, appearance_literal_args,
+    ui_call_shape,
 };
 use crate::naming::kernel_name;
 use crate::render::{RenderConfig, render_seeded};
@@ -3696,59 +3696,55 @@ fn emit_ui_plan(
                     ),
                 });
             }
-            // Appearance hot-swap (style slice): when the kernel is an
-            // allowlisted style kernel and this argument sits in a hoist-eligible
-            // position AND is a direct literal, route it through the per-view
-            // `LiteralTable` instead of emitting the literal inline. The table is
-            // a web-runtime type, so this fires only in a web shape;
-            // `hoist_style_literal` further fences it to a function body's top
-            // level (never inside a `move` closure) and only when hoisting is
-            // armed. Every other argument — and the whole call with the flag off —
-            // emits exactly as before.
+            // Appearance hot-swap: when this argument sits in a hoist-eligible
+            // position of the appearance-literal registry AND is a direct literal
+            // of the registered kind, route it through the per-view
+            // `LiteralTable` instead of emitting the literal inline. The registry
+            // (`appearance_literal_args`) is the single SSOT across every
+            // appearance-only surface — `Ipe.Ui` style/attribute/text values,
+            // `Ipe.Html`, `Ipe.Css`. The table is a web-runtime type, so this
+            // fires only in a web shape; `hoist_style_literal` further fences it
+            // to a function body's top level (never inside a `move` closure) and
+            // only when hoisting is armed. Every other argument — and the whole
+            // call with the flag off — emits exactly as before.
             //
-            // Three literal kinds hoist, each keyed by its own positional
-            // allowlist. A `String` value bakes as itself and reads back as a
-            // `String`. A typed `Int`/`Float` value bakes as its canonical
-            // decimal string (the numeric constant the style renders) and reads
-            // back through `parse::<T>().unwrap_or(<literal>)` — the baked default
-            // parses to the identical value, so the built `Attribute`/`Color` and
-            // its CSS are byte-identical to the direct emit (dev == prod); the
-            // total `unwrap_or` fallback is the original literal, so a stale or
-            // malformed patch can neither panic nor change the built value.
-            let (str_positions, int_positions, float_positions) = if ctx.uses_web {
-                (
-                    style_literal_arg_positions(k),
-                    style_int_literal_arg_positions(k),
-                    style_float_literal_arg_positions(k),
-                )
+            // Each entry names its literal kind. A `Str` value bakes as itself
+            // and reads back as a `String`. A typed `Int`/`Float` value bakes as
+            // its canonical decimal string (the numeric constant the style
+            // renders) and reads back through `parse::<T>().unwrap_or(<literal>)`
+            // — the baked default parses to the identical value, so the built
+            // node/`Attribute`/`Color` and its rendered HTML/CSS are byte-identical
+            // to the direct emit (dev == prod); the total `unwrap_or` fallback is
+            // the original literal, so a stale or malformed patch can neither
+            // panic nor change the built value.
+            let positions: &[(usize, LitKind)] = if ctx.uses_web {
+                appearance_literal_args(k)
             } else {
-                (&[][..], &[][..], &[][..])
+                &[]
             };
             let mut rendered = Vec::with_capacity(args.len());
             for (i, a) in args.iter().enumerate() {
-                let hoisted = if str_positions.contains(&i)
-                    && let Expr::Str(s) = a
-                    && let Some(slot) = ctx.hoist_style_literal(s)
-                {
-                    Some(format!("__ipe_lit.get({slot}).to_string()"))
-                } else if int_positions.contains(&i)
-                    && let Expr::Int(n) = a
-                    && let Some(slot) = ctx.hoist_style_literal(&n.to_string())
-                {
-                    Some(format!(
-                        "__ipe_lit.get({slot}).parse::<i64>().unwrap_or({n}i64)"
-                    ))
-                } else if float_positions.contains(&i)
-                    && let Expr::Float(f) = a
-                    && f.is_finite()
-                    && let Some(slot) = ctx.hoist_style_literal(&format!("{f}"))
-                {
-                    Some(format!(
-                        "__ipe_lit.get({slot}).parse::<f64>().unwrap_or({})",
-                        float_literal(*f)
-                    ))
-                } else {
-                    None
+                let kind = positions
+                    .iter()
+                    .find_map(|&(pos, kind)| (pos == i).then_some(kind));
+                let hoisted = match (kind, a) {
+                    (Some(LitKind::Str), Expr::Str(s)) => ctx
+                        .hoist_style_literal(s)
+                        .map(|slot| format!("__ipe_lit.get({slot}).to_string()")),
+                    (Some(LitKind::Int), Expr::Int(n)) => {
+                        ctx.hoist_style_literal(&n.to_string()).map(|slot| {
+                            format!("__ipe_lit.get({slot}).parse::<i64>().unwrap_or({n}i64)")
+                        })
+                    }
+                    (Some(LitKind::Float), Expr::Float(f)) if f.is_finite() => {
+                        ctx.hoist_style_literal(&format!("{f}")).map(|slot| {
+                            format!(
+                                "__ipe_lit.get({slot}).parse::<f64>().unwrap_or({})",
+                                float_literal(*f)
+                            )
+                        })
+                    }
+                    _ => None,
                 };
                 match hoisted {
                     Some(read) => rendered.push(read),

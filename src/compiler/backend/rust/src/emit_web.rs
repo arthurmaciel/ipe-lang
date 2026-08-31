@@ -1642,4 +1642,324 @@ mod hot_appearance_tests {
         );
         Ok(())
     }
+
+    // ── Widened surface: attribute values, static text, Html, Css (Step 5/5b) ──
+    //
+    // Every kind below is a `String`-valued appearance position marked in the
+    // single `appearance_literal_args` registry. The hoist and read shape is the
+    // same one the style-string surface uses (`get(N).to_string()`); the runtime
+    // helper escapes/sanitises the passed `String` at render, identically for a
+    // direct or a hoisted literal, so the baked default renders byte-identically
+    // to the direct emit (dev == prod). Each kind gets: a flag-off direct-literal
+    // assertion, a flag-on hoist+conformance assertion, and — where the value can
+    // be `Model`-dependent — a refusal that a non-literal does not hoist.
+
+    /// A single-`String`-arg kernel whose only argument is a literal `value`.
+    fn str_arg_call(k: KernelFn, value: &str) -> Expr {
+        Expr::Call {
+            callee: Callee::Kernel(k),
+            args: vec![Expr::Str(value.to_string())],
+            pin: CallPin::None,
+            on_form: OnFormKind::NotForm,
+        }
+    }
+
+    /// A two-`String`-arg kernel (`key`, `value`) — the generic-attribute shape.
+    fn key_value_call(k: KernelFn, key: &str, value: &str) -> Expr {
+        Expr::Call {
+            callee: Callee::Kernel(k),
+            args: vec![Expr::Str(key.to_string()), Expr::Str(value.to_string())],
+            pin: CallPin::None,
+            on_form: OnFormKind::NotForm,
+        }
+    }
+
+    /// Assert that `body` hoists exactly `defaults` (in order) with the flag ON,
+    /// and emits none of them inline with the flag OFF — the flag-off/flag-on
+    /// byte-identical + conformance pair, for a `String`-valued surface.
+    fn assert_str_hoist(
+        interner: &Interner,
+        program: &Program,
+        view: &Func,
+        defaults: &[&str],
+        direct_off_marker: &str,
+    ) -> DResult<()> {
+        let off = emit_view(interner, program, view, false)?;
+        assert!(
+            !off.contains("__ipe_lit"),
+            "flag-off emit must introduce no literal table, got:\n{off}"
+        );
+        assert!(
+            off.contains(direct_off_marker),
+            "flag-off emit must carry the direct literal {direct_off_marker:?}, got:\n{off}"
+        );
+        let on = emit_view(interner, program, view, true)?;
+        let baked = defaults
+            .iter()
+            .map(|d| format!("{d:?}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        assert!(
+            on.contains(&format!("from_defaults(&[{baked}])")),
+            "flag-on emit must bake {defaults:?} as ordered defaults (dev == prod), got:\n{on}"
+        );
+        for slot in 0..defaults.len() {
+            assert!(
+                on.contains(&format!("__ipe_lit.get({slot}).to_string()")),
+                "slot {slot} must be read back as a String, got:\n{on}"
+            );
+        }
+        Ok(())
+    }
+
+    /// `Ui.text "Hello"` — a static text node's content hoists as a string value.
+    #[test]
+    fn ui_text_node_hoists() -> DResult<()> {
+        let mut interner = Interner::new();
+        let (program, view) =
+            one_view_program(&mut interner, str_arg_call(KernelFn::UiText, "Hello"))?;
+        assert_str_hoist(&interner, &program, &view, &["Hello"], "ui_text_(\"Hello\"")
+    }
+
+    /// A static text literal with a character that HTML-escapes (`<`) still bakes
+    /// verbatim: the runtime `ui_text_` escapes the passed `String` at render, so
+    /// a direct and a hoisted `"a < b"` render identically (baked == direct).
+    #[test]
+    fn ui_text_escaping_baked_equals_direct() -> DResult<()> {
+        let mut interner = Interner::new();
+        let (program, view) =
+            one_view_program(&mut interner, str_arg_call(KernelFn::UiText, "a < b"))?;
+        let on = emit_view(&interner, &program, &view, true)?;
+        // The baked default is the raw source string, byte-identical to the direct
+        // `Expr::Str` emit; escaping happens once, inside the runtime helper.
+        assert!(
+            on.contains(&format!("from_defaults(&[{:?}])", "a < b")),
+            "the text default must be the raw source string (escaping is a runtime \
+             concern), got:\n{on}"
+        );
+        Ok(())
+    }
+
+    /// A `Model`-dependent text node — `Ui.text` applied to a bound variable —
+    /// is logic, not data, and must NOT hoist.
+    #[test]
+    fn model_dependent_text_does_not_hoist() -> DResult<()> {
+        let mut interner = Interner::new();
+        let label = interner.intern("label")?;
+        let call = Expr::Call {
+            callee: Callee::Kernel(KernelFn::UiText),
+            args: vec![Expr::Var(label)],
+            pin: CallPin::None,
+            on_form: OnFormKind::NotForm,
+        };
+        let (program, view) = one_view_program(&mut interner, call)?;
+        let out = emit_view(&interner, &program, &view, true)?;
+        assert!(
+            !out.contains("__ipe_lit"),
+            "a Model-dependent text node must not hoist, got:\n{out}"
+        );
+        Ok(())
+    }
+
+    /// `Ui.name "widget-id"` — an attribute *value* hoists.
+    #[test]
+    fn ui_name_attr_value_hoists() -> DResult<()> {
+        let mut interner = Interner::new();
+        let (program, view) =
+            one_view_program(&mut interner, str_arg_call(KernelFn::UiName, "widget-id"))?;
+        assert_str_hoist(
+            &interner,
+            &program,
+            &view,
+            &["widget-id"],
+            "ui_name_(\"widget-id\"",
+        )
+    }
+
+    /// `Ui.htmlAttribute "class" "card"` — only the *value* (position 1) hoists;
+    /// the *key* (position 0) is structural and stays inline.
+    #[test]
+    fn ui_html_attribute_hoists_value_not_key() -> DResult<()> {
+        let mut interner = Interner::new();
+        let (program, view) = one_view_program(
+            &mut interner,
+            key_value_call(KernelFn::UiHtmlAttribute, "class", "card"),
+        )?;
+        let on = emit_view(&interner, &program, &view, true)?;
+        assert!(
+            on.contains(&format!("from_defaults(&[{:?}])", "card")),
+            "only the attribute value must bake as a default, got:\n{on}"
+        );
+        assert!(
+            on.contains("ui_html_attribute_(\"class\".to_string(), __ipe_lit.get(0).to_string())"),
+            "the key must stay a direct literal and the value read its slot, got:\n{on}"
+        );
+        assert!(
+            !on.contains(&format!("from_defaults(&[{:?}, {:?}])", "class", "card"))
+                && !on.contains(&format!("from_defaults(&[{:?}", "class")),
+            "the attribute key must never be hoisted, got:\n{on}"
+        );
+        Ok(())
+    }
+
+    /// `Html.text "Hi"` — an `Ipe.Html` static text node hoists.
+    #[test]
+    fn html_text_node_hoists() -> DResult<()> {
+        let mut interner = Interner::new();
+        let (program, view) =
+            one_view_program(&mut interner, str_arg_call(KernelFn::HtmlTextNode, "Hi"))?;
+        assert_str_hoist(
+            &interner,
+            &program,
+            &view,
+            &["Hi"],
+            "html_text_node_(\"Hi\"",
+        )
+    }
+
+    /// `Html.titleNode "Home"` — the `<title>` text hoists.
+    #[test]
+    fn html_title_node_hoists() -> DResult<()> {
+        let mut interner = Interner::new();
+        let (program, view) =
+            one_view_program(&mut interner, str_arg_call(KernelFn::HtmlTitleNode, "Home"))?;
+        assert_str_hoist(
+            &interner,
+            &program,
+            &view,
+            &["Home"],
+            "html_title_node_(\"Home\"",
+        )
+    }
+
+    /// `Attr.attribute "data-x" "1"` — the `Ipe.Html` generic attribute hoists
+    /// only its *value* (position 1); the *key* (position 0) stays inline.
+    #[test]
+    fn html_attribute_hoists_value_not_key() -> DResult<()> {
+        let mut interner = Interner::new();
+        let (program, view) = one_view_program(
+            &mut interner,
+            key_value_call(KernelFn::HtmlAttribute, "data-x", "1"),
+        )?;
+        let on = emit_view(&interner, &program, &view, true)?;
+        assert!(
+            on.contains(&format!("from_defaults(&[{:?}])", "1")),
+            "only the attribute value must bake as a default, got:\n{on}"
+        );
+        assert!(
+            on.contains("html_named_attr_(\"data-x\".to_string(), __ipe_lit.get(0).to_string())"),
+            "the key must stay a direct literal and the value read its slot, got:\n{on}"
+        );
+        Ok(())
+    }
+
+    /// `Html.styleNode [] ".card color red"` — the inline CSS *body* (position 1)
+    /// hoists; the attribute-list argument (position 0) is not a literal.
+    #[test]
+    fn html_style_node_body_hoists() -> DResult<()> {
+        let mut interner = Interner::new();
+        let empty_attrs = Expr::List {
+            elem: IrType::Ui {
+                ctor: UiCtor::HtmlAttribute,
+                msg: Box::new(IrType::Int),
+            },
+            items: vec![],
+        };
+        let call = Expr::Call {
+            callee: Callee::Kernel(KernelFn::HtmlStyleNode),
+            args: vec![empty_attrs, Expr::Str(".card color red".to_string())],
+            pin: CallPin::None,
+            on_form: OnFormKind::NotForm,
+        };
+        let (program, view) = one_view_program(&mut interner, call)?;
+        let on = emit_view(&interner, &program, &view, true)?;
+        assert!(
+            on.contains(&format!("from_defaults(&[{:?}])", ".card color red")),
+            "the inline CSS body must bake as a default, got:\n{on}"
+        );
+        assert!(
+            on.contains("__ipe_lit.get(0).to_string()"),
+            "the CSS body must read its slot, got:\n{on}"
+        );
+        Ok(())
+    }
+
+    /// `Ipe.Css` is deferred: its value sanitizer `CssSafety.safeValue` is a
+    /// `Pure` kernel emitted through the generic kernel-call path, not this
+    /// UI-plan hoist site, so it does NOT hoist here (it recompiles) — and the
+    /// registry has no dead arm for it. The selector sanitizer stays out
+    /// permanently (a selector is structure, not appearance). Wiring the generic
+    /// path is a distinct guardian-gated follow-up.
+    #[test]
+    fn css_kernels_are_not_appearance_hoist_consumers() -> DResult<()> {
+        let mut interner = Interner::new();
+        let (program, view) = one_view_program(
+            &mut interner,
+            str_arg_call(KernelFn::CssSafetySafeValue, "16px"),
+        )?;
+        let on = emit_view(&interner, &program, &view, true)?;
+        assert!(
+            !on.contains("__ipe_lit"),
+            "the Css value sanitizer must not hoist through the UI-plan path (deferred), got:\n{on}"
+        );
+        assert!(
+            crate::emit_ui_plan::appearance_literal_args(KernelFn::CssSafetySafeValue).is_empty(),
+            "the Css value sanitizer must carry no dead registry arm"
+        );
+        assert!(
+            crate::emit_ui_plan::appearance_literal_args(KernelFn::CssSafetySafeSelector)
+                .is_empty(),
+            "the Css selector sanitizer must never be an appearance-hoist consumer"
+        );
+        Ok(())
+    }
+
+    /// The widened `String` surface stays fenced by the same closure guard as the
+    /// style surface: an attribute value inside a `move` lambda must NOT hoist
+    /// into the outer view's table.
+    #[test]
+    fn widened_value_inside_move_lambda_does_not_hoist() -> DResult<()> {
+        let mut interner = Interner::new();
+        let ignored = interner.intern("_evt")?;
+        let body = Expr::Lambda {
+            params: vec![(ignored, IrType::Int)],
+            ret: IrType::Ui {
+                ctor: UiCtor::UiAttribute,
+                msg: Box::new(IrType::Int),
+            },
+            body: Box::new(str_arg_call(KernelFn::UiName, "x")),
+        };
+        let (program, view) = one_view_program(&mut interner, body)?;
+        let out = emit_view(&interner, &program, &view, true)?;
+        assert!(
+            !out.contains("__ipe_lit"),
+            "a value inside a move closure must not hoist into the outer table, got:\n{out}"
+        );
+        Ok(())
+    }
+
+    /// The widened surface never hoists in a non-web shape (the `LiteralTable` is
+    /// a web-runtime type): a `Ui.text` literal stays the direct string emit.
+    #[test]
+    fn widened_value_non_web_shape_does_not_hoist() -> DResult<()> {
+        let mut interner = Interner::new();
+        let (mut program, view) =
+            one_view_program(&mut interner, str_arg_call(KernelFn::UiText, "Hello"))?;
+        let module = program
+            .modules
+            .first_mut()
+            .expect("the one-view program has a module");
+        module.uses_web = false;
+        module.uses_tui = true;
+        let out = emit_view(&interner, &program, &view, true)?;
+        assert!(
+            !out.contains("__ipe_lit"),
+            "a non-web shape must not hoist the widened surface, got:\n{out}"
+        );
+        assert!(
+            out.contains("ui_text_(\"Hello\".to_string())"),
+            "a non-web shape keeps the direct string literal, got:\n{out}"
+        );
+        Ok(())
+    }
 }

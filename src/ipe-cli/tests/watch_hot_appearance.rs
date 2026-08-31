@@ -64,6 +64,40 @@ fn web_fixture(padding: u32, extra_text: &str) -> String {
     )
 }
 
+/// A `Web.app` whose view carries a hoistable **attribute value** (`Ui.name`)
+/// and a **static text** node whose content is `text` — both widened
+/// appearance-literal kinds (Step 5). A marker text confirms the app is up.
+fn web_fixture_attr_text(name: &str, text: &str) -> String {
+    format!(
+        "module Main exposing (main)\n\n\
+         import Ipe.Tea.Web as Web\n\
+         import Ipe.Ui as Ui\n\
+         import Ipe.Tea.Web.Cmd\n\
+         import Ipe.Tea.Web.Sub\n\
+         import Ipe.String\n\n\
+         type alias Model = {{ count : Int }}\n\n\
+         type Msg = Noop\n\n\
+         init : a -> ( Model, Cmd Msg )\n\
+         init _req =\n    \
+             ( {{ count = 0 }}, Cmd.none )\n\n\
+         update : Msg -> Model -> ( Model, Cmd Msg )\n\
+         update _msg model =\n    \
+             ( model, Cmd.none )\n\n\
+         view : Model -> Element Msg\n\
+         view _model =\n    \
+             Ui.column [ Ui.name \"{name}\" ]\n        \
+                 [ Ui.text \"marker\", Ui.text \"{text}\" ]\n\n\
+         subscriptions : Model -> Sub Msg\n\
+         subscriptions _model =\n    \
+             Sub.none\n\n\
+         main =\n    \
+             Web.app\n        \
+                 {{ init = init, update = update, view = view, subscriptions = subscriptions\n        \
+                 , routes = [], notFound = Noop\n        \
+                 }}\n",
+    )
+}
+
 fn fresh_dirs(tag: &str) -> Result<(PathBuf, PathBuf), BoxError> {
     let base = std::env::temp_dir().join(format!(
         "watch_hot_{tag}_{}_{}",
@@ -312,6 +346,131 @@ fn style_edit_hot_swaps_without_rebuild_and_structural_edit_recompiles() -> Resu
     );
     // The `Restarted` event lands just after the new binary answers HTTP; wait for
     // it to settle before asserting the count grew (same readiness-vs-event race).
+    assert!(
+        wait_for(Duration::from_secs(10), || {
+            sink.count_restarted() > restarts_before_struct
+        }),
+        "a structural edit must recompile and restart (a new Restarted event)"
+    );
+
+    stop_and_join(&handle, join)
+}
+
+/// The widened surface (Step 5): an **attribute-value** edit and a **text-value**
+/// edit each hot-swap without a rebuild, exactly like the style-value path, while
+/// a structural add still recompiles. Records both round-trips (Step 6 preview).
+#[test]
+#[cfg(target_os = "linux")]
+// E2E harness: three sequential edit round-trips (attribute, text, structural) in
+// one live watch session — the length is the scenario, not incidental complexity.
+#[allow(clippy::too_many_lines)]
+fn attribute_and_text_edits_hot_swap_without_rebuild() -> Result<(), BoxError> {
+    if std::env::var("IPE_E2E").is_err() {
+        eprintln!("skipping (set IPE_E2E=1 to run)");
+        return Ok(());
+    }
+    // SAFETY: single-threaded here (no watch thread spawned yet); nextest isolates
+    // this process, so the var neither races nor leaks.
+    unsafe {
+        std::env::set_var("IPE_WATCH_HOT_APPEARANCE", "1");
+    }
+
+    let (ipe_dir, out_dir) = fresh_dirs("attrtext")?;
+    write_main(&ipe_dir, &web_fixture_attr_text("card", "Hello"))?;
+
+    let sink = EventSink::default();
+    let port = 19172;
+    let (join, handle) = start_watch(&ipe_dir.join("Main.ipe"), &out_dir, port, &sink)?;
+
+    assert!(
+        wait_for_serving(port, Duration::from_mins(4)),
+        "initial cold build must serve the web app"
+    );
+    assert!(
+        wait_for(Duration::from_secs(10), || sink.count_restarted() >= 1),
+        "the cold build must record its initial Restarted event"
+    );
+    let pid_before = server_pid(port).ok_or("server PID must be discoverable after cold build")?;
+
+    // ── Attribute-value edit: name "card" -> "panel". Appearance-only. ──
+    let restarts_before_attr = sink.count_restarted();
+    let hot_before_attr = sink.count_hot_swapped();
+    write_main(&ipe_dir, &web_fixture_attr_text("panel", "Hello"))?;
+    let attr_start = Instant::now();
+    let attr_swapped = wait_for(Duration::from_secs(20), || {
+        sink.count_hot_swapped() > hot_before_attr
+    });
+    let attr_elapsed = attr_start.elapsed();
+    assert!(
+        attr_swapped,
+        "an attribute-value edit must be hot-swapped, not recompiled"
+    );
+    std::thread::sleep(Duration::from_secs(2));
+    assert_eq!(
+        sink.count_restarted(),
+        restarts_before_attr,
+        "a hot-swapped attribute edit must NOT restart the app"
+    );
+    assert_eq!(
+        server_pid(port),
+        Some(pid_before),
+        "a hot-swapped attribute edit must leave the SAME server process running"
+    );
+    eprintln!(
+        "[measure] attribute name card->panel hot-swap round-trip: {} ms (no cargo, no restart)",
+        attr_elapsed.as_millis()
+    );
+
+    // ── Text-value edit: text "Hello" -> "Goodbye". Appearance-only. ──
+    let restarts_before_text = sink.count_restarted();
+    let hot_before_text = sink.count_hot_swapped();
+    write_main(&ipe_dir, &web_fixture_attr_text("panel", "Goodbye"))?;
+    let text_start = Instant::now();
+    let text_swapped = wait_for(Duration::from_secs(20), || {
+        sink.count_hot_swapped() > hot_before_text
+    });
+    let text_elapsed = text_start.elapsed();
+    assert!(
+        text_swapped,
+        "a text-value edit must be hot-swapped, not recompiled"
+    );
+    std::thread::sleep(Duration::from_secs(2));
+    assert_eq!(
+        sink.count_restarted(),
+        restarts_before_text,
+        "a hot-swapped text edit must NOT restart the app"
+    );
+    assert_eq!(
+        server_pid(port),
+        Some(pid_before),
+        "a hot-swapped text edit must leave the SAME server process running"
+    );
+    assert!(
+        http_get_body(port).is_some_and(|b| b.contains("marker")),
+        "the app must keep serving after the text hot-swap"
+    );
+    eprintln!(
+        "[measure] text Hello->Goodbye hot-swap round-trip: {} ms (no cargo, no restart)",
+        text_elapsed.as_millis()
+    );
+
+    // ── Structural edit: add a third text node. Logic ⇒ recompile + restart. ──
+    let restarts_before_struct = sink.count_restarted();
+    write_main(
+        &ipe_dir,
+        &web_fixture_attr_text("panel", "Goodbye").replace(
+            "Ui.text \"Goodbye\" ]",
+            "Ui.text \"Goodbye\", Ui.text \"added\" ]",
+        ),
+    )?;
+    let restarted = wait_for(Duration::from_mins(2), || {
+        server_pid(port).is_some_and(|pid| pid != pid_before)
+            && http_get_body(port).is_some_and(|b| b.contains("added"))
+    });
+    assert!(
+        restarted,
+        "a structural edit (added text node) must recompile and restart onto a new binary"
+    );
     assert!(
         wait_for(Duration::from_secs(10), || {
             sink.count_restarted() > restarts_before_struct
