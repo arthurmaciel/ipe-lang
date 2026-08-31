@@ -59,6 +59,87 @@ fn web_fixture(marker: &str) -> String {
     )
 }
 
+/// A `Ipe.Web` app whose `Model` is `{ count : Int }`, incremented once per
+/// `Sub.every` tick, with the live count rendered as the literal text
+/// `count=<N>` so a `GET /` can read the running Model's state. `marker` is
+/// rendered too so a probe can tell which binary is live. Used by the Model-
+/// handoff E2E: after a few ticks the count is > 0 and write-through-
+/// checkpointed to the shared session store, so a rebuild that rehydrates the
+/// Model (rather than resetting to `init`'s `count = 0`) is observable.
+fn ticker_fixture(marker: &str) -> String {
+    format!(
+        "module Main exposing (main)\n\n\
+         import Ipe.Tea.Web as Web\n\
+         import Ipe.Ui as Ui\n\
+         import Ipe.String as String\n\
+         import Ipe.Tea.Web.Cmd as Cmd\n\
+         import Ipe.Tea.Web.Sub as Sub\n\n\
+         type Msg = Tick\n\n\
+         type alias Model = {{ count : Int }}\n\n\
+         init : a -> ( Model, Cmd Msg )\n\
+         init _req = ( {{ count = 0 }}, Cmd.none )\n\n\
+         update : Msg -> Model -> ( Model, Cmd Msg )\n\
+         update _msg model = ( {{ model | count = model.count + 1 }}, Cmd.none )\n\n\
+         subscriptions : Model -> Sub Msg\n\
+         subscriptions _model = Sub.every 100 Tick\n\n\
+         view : Model -> Element Msg\n\
+         view model =\n    \
+             Ui.column [ Ui.spacing 8 ]\n        \
+                 [ Ui.el [] (Ui.text \"{marker}\")\n        \
+                 , Ui.el [] (Ui.text (String.concat [ \"count=\", String.fromInt model.count ]))\n        \
+                 ]\n\n\
+         main =\n    \
+             Web.app\n        \
+                 {{ init = init\n        \
+                 , update = update\n        \
+                 , view = view\n        \
+                 , subscriptions = subscriptions\n        \
+                 , routes = []\n        \
+                 , notFound = Tick\n        \
+                 }}\n"
+    )
+}
+
+/// A structurally DIFFERENT Model (`{ count : Int, label : String }`) so its
+/// compile-time schema tag differs from [`ticker_fixture`]'s. A session
+/// checkpointed under the old tag must be REJECTED before deserialize and the
+/// new binary must come up cleanly at `init` — never rehydrate a mismatched
+/// Model. `notFound = Tick` keeps the single-Msg shape.
+fn changed_model_fixture(marker: &str) -> String {
+    format!(
+        "module Main exposing (main)\n\n\
+         import Ipe.Tea.Web as Web\n\
+         import Ipe.Ui as Ui\n\
+         import Ipe.String as String\n\
+         import Ipe.Tea.Web.Cmd as Cmd\n\
+         import Ipe.Tea.Web.Sub as Sub\n\n\
+         type Msg = Tick\n\n\
+         type alias Model = {{ count : Int, label : String }}\n\n\
+         init : a -> ( Model, Cmd Msg )\n\
+         init _req = ( {{ count = 0, label = \"fresh\" }}, Cmd.none )\n\n\
+         update : Msg -> Model -> ( Model, Cmd Msg )\n\
+         update _msg model = ( {{ model | count = model.count + 1 }}, Cmd.none )\n\n\
+         subscriptions : Model -> Sub Msg\n\
+         subscriptions _model = Sub.every 100 Tick\n\n\
+         view : Model -> Element Msg\n\
+         view model =\n    \
+             Ui.column [ Ui.spacing 8 ]\n        \
+                 [ Ui.el [] (Ui.text \"{marker}\")\n        \
+                 , Ui.el [] (Ui.text (String.concat [ \"count=\", String.fromInt model.count ]))\n        \
+                 , Ui.el [] (Ui.text model.label)\n        \
+                 ]\n\n\
+         main =\n    \
+             Web.app\n        \
+                 {{ init = init\n        \
+                 , update = update\n        \
+                 , view = view\n        \
+                 , subscriptions = subscriptions\n        \
+                 , routes = []\n        \
+                 , notFound = Tick\n        \
+                 }}\n"
+    )
+}
+
 fn fresh_dirs(tag: &str) -> Result<(PathBuf, PathBuf), BoxError> {
     let base = std::env::temp_dir().join(format!(
         "watch_bg_{tag}_{}_{}",
@@ -147,6 +228,114 @@ fn get_body_keepalive(stream: &mut TcpStream) -> Option<String> {
         let _ = reader.read_to_end(&mut body);
         Some(String::from_utf8_lossy(&body).into_owned())
     }
+}
+
+/// A `GET /` on a fresh connection that returns BOTH the body and every
+/// `Set-Cookie` value the server sent — the session-continuity E2E needs the
+/// `ipe_sid` cookie so a later request can present it and be recognised as the
+/// SAME session (rehydrating the checkpointed Model rather than minting a new
+/// one). Optionally sends a `Cookie:` header (the previously-captured session
+/// cookie) so the request is attributed to an existing session.
+fn get_with_cookies(port: u16, send_cookie: Option<&str>) -> Option<(String, Vec<String>)> {
+    let addr = format!("127.0.0.1:{port}").parse().ok()?;
+    let mut stream = TcpStream::connect_timeout(&addr, Duration::from_millis(500)).ok()?;
+    stream.set_read_timeout(Some(Duration::from_secs(5))).ok()?;
+    let req = send_cookie.map_or_else(
+        || "GET / HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n".to_string(),
+        |cookie| {
+            format!(
+                "GET / HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\nCookie: {cookie}\r\n\r\n"
+            )
+        },
+    );
+    stream.write_all(req.as_bytes()).ok()?;
+    let mut reader = BufReader::new(stream);
+    let mut cookies = Vec::new();
+    let mut content_length: Option<usize> = None;
+    let mut chunked = false;
+    let mut first = true;
+    let mut status_ok = false;
+    loop {
+        let mut line = String::new();
+        let n = reader.read_line(&mut line).ok()?;
+        if n == 0 {
+            return None;
+        }
+        if first {
+            status_ok = line.starts_with("HTTP/1.1 2") || line.starts_with("HTTP/1.0 2");
+            first = false;
+        } else {
+            let lower = line.to_ascii_lowercase();
+            if let Some(v) = lower.strip_prefix("set-cookie:") {
+                // Keep only the `name=value` pair (before the first `;`).
+                let raw = line.get("set-cookie:".len()..).unwrap_or("").trim();
+                let pair = raw.split(';').next().unwrap_or("").trim().to_string();
+                if !pair.is_empty() {
+                    cookies.push(pair);
+                }
+                let _ = v;
+            } else if let Some(v) = lower.strip_prefix("content-length:") {
+                content_length = v.trim().parse().ok();
+            } else if lower.starts_with("transfer-encoding:") && lower.contains("chunked") {
+                chunked = true;
+            }
+        }
+        if line == "\r\n" || line == "\n" {
+            break;
+        }
+    }
+    if !status_ok {
+        return Some((String::new(), cookies));
+    }
+    let body = if let Some(len) = content_length {
+        let mut b = vec![0u8; len];
+        reader.read_exact(&mut b).ok()?;
+        String::from_utf8_lossy(&b).into_owned()
+    } else if chunked {
+        // Read chunks until the terminating 0-chunk; sufficient for the small
+        // fixture page this test serves.
+        let mut out = String::new();
+        loop {
+            let mut size_line = String::new();
+            if reader.read_line(&mut size_line).ok()? == 0 {
+                break;
+            }
+            let hex = size_line.split(';').next().unwrap_or("").trim();
+            let size = usize::from_str_radix(hex, 16).unwrap_or(0);
+            if size == 0 {
+                break;
+            }
+            let mut chunk = vec![0u8; size];
+            reader.read_exact(&mut chunk).ok()?;
+            out.push_str(&String::from_utf8_lossy(&chunk));
+            let mut crlf = String::new();
+            let _ = reader.read_line(&mut crlf);
+        }
+        out
+    } else {
+        let mut b = Vec::new();
+        let _ = reader
+            .get_mut()
+            .set_read_timeout(Some(Duration::from_millis(500)));
+        let _ = reader.read_to_end(&mut b);
+        String::from_utf8_lossy(&b).into_owned()
+    };
+    Some((body, cookies))
+}
+
+/// Extract the `ipe_sid=<value>` session cookie (dev / plain-HTTP name) from a
+/// captured `Set-Cookie` list. Returns the full `name=value` pair ready to send
+/// back in a `Cookie:` header.
+fn session_cookie(cookies: &[String]) -> Option<String> {
+    cookies.iter().find(|c| c.starts_with("ipe_sid=")).cloned()
+}
+
+/// Parse the `count=<N>` the fixtures render into the page body.
+fn rendered_count(body: &str) -> Option<i64> {
+    let idx = body.find("count=")? + "count=".len();
+    let rest = body.get(idx..)?;
+    let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
+    digits.parse().ok()
 }
 
 /// Poll a FRESH connection to `port` until `GET /` serves a body containing
@@ -350,6 +539,177 @@ fn bluegreen_rebuild_keeps_the_client_connection_alive() -> Result<(), BoxError>
     assert!(
         second.as_deref().is_some_and(|b| b.contains("MARKER-V2")),
         "the surviving socket must serve the NEW binary after cutover: {second:?}"
+    );
+
+    stop_and_join(&handle, join)
+}
+
+/// Wait (on fresh cookie-bearing probes) until the SAME session's rendered
+/// `count` reaches at least `min`, or `timeout` elapses. Returns the last
+/// observed count. Used both to let a session tick up before a rebuild and to
+/// confirm the rehydrated session after one.
+fn wait_for_count_at_least(port: u16, cookie: &str, min: i64, timeout: Duration) -> Option<i64> {
+    let deadline = Instant::now() + timeout;
+    let mut last = None;
+    while Instant::now() < deadline {
+        if let Some((body, _)) = get_with_cookies(port, Some(cookie))
+            && let Some(c) = rendered_count(&body)
+        {
+            last = Some(c);
+            if c >= min {
+                return Some(c);
+            }
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    last
+}
+
+/// The Model-handoff proof: an edit + blue-green rebuild preserves the running
+/// Model rather than resetting it to `init`.
+///
+/// A `Sub.every` ticker fixture increments `count` and write-through-
+/// checkpoints it to the shared dev session store on every commit. The test
+/// mints a session (capturing its `ipe_sid` cookie), lets the count tick well
+/// past `init`'s `0`, then edits + rebuilds behind the proxy (Model TYPE
+/// unchanged → same schema tag). Presenting the SAME cookie to the NEW binary
+/// must rehydrate the checkpointed Model (`count` preserved, > 0), while a
+/// FRESH cookieless request still gets a brand-new `init` session (`count`
+/// starting at 0) — proving handoff restores the returning session without
+/// breaking new-session init.
+#[test]
+fn bluegreen_rebuild_preserves_the_model_across_the_swap() -> Result<(), BoxError> {
+    if std::env::var("IPE_E2E").is_err() {
+        eprintln!("skipping (set IPE_E2E=1 to run)");
+        return Ok(());
+    }
+    let (ipe_dir, out_dir) = fresh_dirs("handoff")?;
+    write_main(&ipe_dir, &ticker_fixture("HANDOFF-V1"))?;
+
+    let port = 19173;
+    let (join, handle) = start_watch(&ipe_dir.join("Main.ipe"), &out_dir, port, true)?;
+    assert!(
+        wait_for_marker(port, "HANDOFF-V1", Duration::from_mins(5)),
+        "cold build must serve v1 through the blue-green proxy"
+    );
+
+    // Mint a session and capture its sid cookie.
+    let (_body, cookies) = get_with_cookies(port, None)
+        .ok_or_else(|| -> BoxError { "initial GET must succeed".into() })?;
+    let cookie = session_cookie(&cookies)
+        .ok_or_else(|| -> BoxError { "server must set an ipe_sid cookie".into() })?;
+
+    // Let this session tick up (count > 0) so the checkpoint is non-init.
+    let before = wait_for_count_at_least(port, &cookie, 3, Duration::from_secs(20))
+        .ok_or_else(|| -> BoxError { "session count must advance past init".into() })?;
+    assert!(
+        before >= 3,
+        "pre-rebuild count must be > init's 0: {before}"
+    );
+
+    // Edit + rebuild behind the proxy — Model TYPE unchanged (same schema tag).
+    write_main(&ipe_dir, &ticker_fixture("HANDOFF-V2"))?;
+    assert!(
+        wait_for_marker(port, "HANDOFF-V2", Duration::from_mins(3)),
+        "the rebuild must cut over to v2 behind the proxy"
+    );
+
+    // THE ASSERTION: the SAME session, presented to the NEW binary, comes up
+    // with its PRESERVED Model (count carried across, never reset to 0). The
+    // ticker keeps running, so assert strictly > 0 (preserved), not an exact
+    // value.
+    let after = wait_for_count_at_least(port, &cookie, 1, Duration::from_secs(20))
+        .ok_or_else(|| -> BoxError { "rehydrated session must render a count".into() })?;
+    assert!(
+        after >= 1,
+        "the new binary must rehydrate the preserved Model (count > 0), not reset to init's 0: \
+         got {after}"
+    );
+
+    // Control: a FRESH cookieless session still inits at 0 (handoff didn't
+    // break new-session init — the very first read of a new session, before any
+    // tick, is init's 0).
+    let (fresh_body, fresh_cookies) = get_with_cookies(port, None)
+        .ok_or_else(|| -> BoxError { "fresh GET must succeed".into() })?;
+    assert!(
+        session_cookie(&fresh_cookies).is_some_and(|c| c != cookie),
+        "a cookieless GET must mint a DISTINCT new session"
+    );
+    assert_eq!(
+        rendered_count(&fresh_body),
+        Some(0),
+        "a brand-new session must start at init's count=0: {fresh_body:?}"
+    );
+
+    stop_and_join(&handle, join)
+}
+
+/// The clean-reset half of the handoff: when the Model TYPE changes between the
+/// old and new binary, the checkpoint's schema tag differs, so the store
+/// REJECTS it before deserialize and the returning session falls back to a
+/// fresh `init` — never a crash, never a torn/mismatched Model.
+///
+/// The old binary uses `{ count : Int }`; the rebuild uses
+/// `{ count : Int, label : String }` (a distinct structural shape → distinct
+/// compile-time schema tag). Presenting the old session's cookie to the new
+/// binary must yield a clean init (`count=0`) and the new field's rendered
+/// `label`, with the server healthy throughout.
+#[test]
+fn bluegreen_rebuild_resets_cleanly_on_model_type_change() -> Result<(), BoxError> {
+    if std::env::var("IPE_E2E").is_err() {
+        eprintln!("skipping (set IPE_E2E=1 to run)");
+        return Ok(());
+    }
+    let (ipe_dir, out_dir) = fresh_dirs("reset")?;
+    write_main(&ipe_dir, &ticker_fixture("RESET-V1"))?;
+
+    let port = 19174;
+    let (join, handle) = start_watch(&ipe_dir.join("Main.ipe"), &out_dir, port, true)?;
+    assert!(
+        wait_for_marker(port, "RESET-V1", Duration::from_mins(5)),
+        "cold build must serve v1 through the blue-green proxy"
+    );
+
+    let (_body, cookies) = get_with_cookies(port, None)
+        .ok_or_else(|| -> BoxError { "initial GET must succeed".into() })?;
+    let cookie = session_cookie(&cookies)
+        .ok_or_else(|| -> BoxError { "server must set an ipe_sid cookie".into() })?;
+
+    // Tick the old session up so its checkpoint is decidedly non-init — the
+    // whole point is that this state is DISCARDED, not carried into the wrong
+    // shape.
+    let before = wait_for_count_at_least(port, &cookie, 3, Duration::from_secs(20))
+        .ok_or_else(|| -> BoxError { "session count must advance past init".into() })?;
+    assert!(before >= 3, "pre-rebuild count must be > 0: {before}");
+
+    // Edit + rebuild with a STRUCTURALLY DIFFERENT Model (extra `label` field
+    // → different schema tag).
+    write_main(&ipe_dir, &changed_model_fixture("RESET-V2"))?;
+    assert!(
+        wait_for_marker(port, "RESET-V2", Duration::from_mins(3)),
+        "the rebuild must cut over to the changed-Model v2 behind the proxy"
+    );
+
+    // THE ASSERTION: the SAME cookie against the NEW binary is served cleanly
+    // (no crash — the socket answers, the new `label` field renders) and starts
+    // FRESH at init's count=0 (the mismatched checkpoint was rejected, not
+    // deserialized into the wrong shape). The first read of the reset session
+    // is before any tick, so it is exactly 0.
+    let (body, _) = get_with_cookies(port, Some(&cookie))
+        .ok_or_else(|| -> BoxError { "server must answer after a Model-type change".into() })?;
+    assert!(
+        body.contains("RESET-V2"),
+        "the new (changed-Model) binary must serve a healthy page: {body:?}"
+    );
+    assert!(
+        body.contains("fresh"),
+        "the new Model's `label` field must render (clean init, right shape): {body:?}"
+    );
+    assert_eq!(
+        rendered_count(&body),
+        Some(0),
+        "a Model-type change must reset to init's count=0, never rehydrate the mismatched \
+         checkpoint: {body:?}"
     );
 
     stop_and_join(&handle, join)

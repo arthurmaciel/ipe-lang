@@ -26,7 +26,7 @@ pub const WEB_MODEL_SCHEMA_WIRE_VERSION: &str = "ipe-live-model-schema-v1";
 /// backend (base64 never emits NUL / invalid UTF-8, so no `ALTER TABLE` or
 /// BYTEA migration is ever needed). `None` when serialization fails (the
 /// caller skips the checkpoint write, same as the old JSON path's `if let Ok`).
-#[cfg(any(feature = "db", feature = "redis_store"))]
+#[cfg(any(feature = "db", feature = "redis_store", feature = "web"))]
 fn encode_checkpoint<Model: serde::Serialize>(
     schema_tag: &[u8; 32],
     model: &Model,
@@ -44,7 +44,7 @@ fn encode_checkpoint<Model: serde::Serialize>(
 /// EVERY failure (bad base64 — including a pre-Stage-C JSON row —, short
 /// blob, foreign tag, corrupt body) is `None`: the same fail-soft
 /// drop-session/fresh-`init` path H22 guarantees, never a panic.
-#[cfg(any(feature = "db", feature = "redis_store"))]
+#[cfg(any(feature = "db", feature = "redis_store", feature = "web"))]
 fn decode_checkpoint<Model: serde::de::DeserializeOwned>(
     schema_tag: &[u8; 32],
     blob: &str,
@@ -162,6 +162,173 @@ impl<Model: Send + 'static, Msg: Send + 'static> SessionStore<Model, Msg>
             .map(|(h, _)| h.clone())
             .collect()
     }
+}
+
+// ─── File store — persistent checkpoint with NO sqlx, for the dev handoff ────
+
+/// A dependency-light persistent store: a `mem_cache` of live handles (same
+/// process, owns the driver) PLUS a single on-disk JSON map (`sid → framed
+/// checkpoint blob`) so a checkpoint survives a process swap WITHOUT pulling in
+/// sqlx/redis. This is what makes `ipe watch`'s blue-green Model handoff work
+/// for a plain `Web.app` — such an app reaches no DB kernel, so the emitted
+/// crate carries no `db` feature and the sqlite store compiles out; this store
+/// rides the `web` feature every web build already has (`base64` + `bincode` +
+/// `serde`), reusing the SAME `encode_checkpoint`/`decode_checkpoint` codec and
+/// the SAME H24 schema-tag reject-before-deserialize gate as the sqlite/redis
+/// backends. A structurally different (Model-type-changed) checkpoint is
+/// rejected before deserialize → fail-soft fresh `init`, never a torn Model.
+///
+/// The on-disk map is the whole file rewritten on each mutation — bounded and
+/// simple, matched to a DEV loop's low session count, not a production store.
+#[cfg(feature = "web")]
+pub struct FileStore<Model, Msg> {
+    /// Path to the JSON map file (`sid → blob`).
+    path: std::path::PathBuf,
+    /// The persisted `sid → framed-checkpoint-blob` map, mirrored in memory and
+    /// rewritten to `path` on every mutation. `last_seen` (unix secs) rides
+    /// alongside for idle-TTL eviction.
+    disk: Mutex<HashMap<String, (String, i64)>>,
+    /// Live same-process handles (own the running driver + SSE channel).
+    mem_cache: RwLock<SessionMap<Model, Msg>>,
+    ttl: Duration,
+    /// The live process's Model schema tag (H24) — a stored blob whose leading
+    /// tag differs is rejected identically to "no row" (fresh `init`).
+    schema_tag: [u8; 32],
+}
+
+#[cfg(feature = "web")]
+impl<Model, Msg> FileStore<Model, Msg> {
+    /// Open (or create) the map at `path`, loading any existing checkpoints.
+    /// A missing / unreadable / malformed file starts empty — never an error,
+    /// never a panic: a dev handoff that cannot read a stale map simply begins
+    /// fresh (the same fail-soft posture the whole store family keeps).
+    #[must_use]
+    pub fn new(path: &str, ttl: Duration, schema_tag: [u8; 32]) -> Self {
+        let path = std::path::PathBuf::from(path);
+        let disk = std::fs::read_to_string(&path)
+            .ok()
+            .and_then(|s| serde_json::from_str::<HashMap<String, (String, i64)>>(&s).ok())
+            .unwrap_or_default();
+        FileStore {
+            path,
+            disk: Mutex::new(disk),
+            mem_cache: RwLock::new(HashMap::new()),
+            ttl,
+            schema_tag,
+        }
+    }
+
+    /// Atomically rewrite the on-disk map from `disk`. Best-effort: a write
+    /// failure (e.g. a transient FS error) leaves the in-memory map as the
+    /// source of truth for this process and is never fatal — the next mutation
+    /// retries the whole map. Writes to a sibling temp file then renames, so a
+    /// crash mid-write never leaves a truncated map a later `new` would fail to
+    /// parse (and thus silently drop every session).
+    fn persist(&self, disk: &HashMap<String, (String, i64)>) {
+        let Ok(json) = serde_json::to_string(disk) else {
+            return;
+        };
+        let tmp = self.path.with_extension("tmp");
+        if std::fs::write(&tmp, json.as_bytes()).is_ok() {
+            let _ = std::fs::rename(&tmp, &self.path);
+        }
+    }
+}
+
+#[cfg(feature = "web")]
+#[async_trait]
+impl<Model, Msg> SessionStore<Model, Msg> for FileStore<Model, Msg>
+where
+    Model: serde::Serialize + serde::de::DeserializeOwned + Clone + Send + Sync + 'static,
+    Msg: Send + Sync + 'static,
+{
+    async fn get(&self, sid: &str) -> Option<StoreHit<Model, Msg>> {
+        // Same-process live handle wins (owns the running driver).
+        let cached = {
+            let mut w = self.mem_cache.write().unwrap_or_else(|e| e.into_inner());
+            w.get_mut(sid).map(|(h, seen)| {
+                *seen = Instant::now();
+                h.clone()
+            })
+        };
+        if let Some(h) = cached {
+            return Some(StoreHit::Web(h));
+        }
+        // Cold: decode the persisted checkpoint. The leading 32-byte tag is
+        // compared BEFORE deserialization (H24) — a mismatch (Model-type
+        // change), a corrupt blob, or a missing entry all take the same
+        // fail-soft miss path.
+        let blob = {
+            let disk = self.disk.lock().unwrap_or_else(|e| e.into_inner());
+            disk.get(sid).map(|(b, _)| b.clone())
+        }?;
+        let model: Model = decode_checkpoint(&self.schema_tag, &blob)?;
+        Some(StoreHit::Cold(model))
+    }
+    async fn set(&self, sid: &str, handle: SessionHandle<Model, Msg>) {
+        let model = handle
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .model
+            .clone();
+        self.mem_cache
+            .write()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(sid.to_string(), (handle, Instant::now()));
+        if let Some(blob) = encode_checkpoint(&self.schema_tag, &model) {
+            let mut disk = self.disk.lock().unwrap_or_else(|e| e.into_inner());
+            disk.insert(sid.to_string(), (blob, file_now_secs()));
+            self.persist(&disk);
+        }
+    }
+    async fn delete(&self, sid: &str) {
+        self.mem_cache
+            .write()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(sid);
+        let mut disk = self.disk.lock().unwrap_or_else(|e| e.into_inner());
+        if disk.remove(sid).is_some() {
+            self.persist(&disk);
+        }
+    }
+    async fn sweep(&self) {
+        let cutoff =
+            file_now_secs().saturating_sub(i64::try_from(self.ttl.as_secs()).unwrap_or(i64::MAX));
+        {
+            let mut disk = self.disk.lock().unwrap_or_else(|e| e.into_inner());
+            let before = disk.len();
+            disk.retain(|_, (_, seen)| *seen >= cutoff);
+            if disk.len() != before {
+                self.persist(&disk);
+            }
+        }
+        // Bound the in-RAM handle cache by idle-TTL too (session-DoS guard).
+        let now = Instant::now();
+        let ttl = self.ttl;
+        self.mem_cache
+            .write()
+            .unwrap_or_else(|e| e.into_inner())
+            .retain(|_, (_, seen)| now.duration_since(*seen) <= ttl);
+    }
+    async fn web_sessions(&self) -> Vec<SessionHandle<Model, Msg>> {
+        self.mem_cache
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .values()
+            .map(|(h, _)| h.clone())
+            .collect()
+    }
+}
+
+/// Current unix time in whole seconds, saturating (never panics on a clock
+/// before the epoch). The `web`-feature file store's own time helper — the
+/// sqlx stores' `now_secs` is `#[cfg(feature = "db")]` and unavailable here.
+#[cfg(feature = "web")]
+fn file_now_secs() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| i64::try_from(d.as_secs()).unwrap_or(i64::MAX))
+        .unwrap_or(0)
 }
 
 // Used only by the sqlx-backed Sqlite/Postgres session stores (all
@@ -674,6 +841,17 @@ where
             Err(e) => eprintln!("[ipe.live] redis store unavailable ({e}); falling back to memory"),
         }
     }
+    // The sqlx-free persistent store: rides the `web` feature every web build
+    // already carries, so a plain `Web.app` (no `db` feature) can still persist
+    // a checkpoint across a process swap — the `ipe watch` blue-green Model
+    // handoff path. Selected explicitly (`file`) or when `sqlite` was requested
+    // but this build has no `db` feature to honour it (the common dev case),
+    // so the handoff degrades to `file` rather than silently to `memory`.
+    #[cfg(feature = "web")]
+    if kind == "file" || (kind == "sqlite" && !cfg!(feature = "db")) {
+        eprintln!("[ipe.live] session store: file @ {path}");
+        return Arc::new(FileStore::new(path, ttl, schema_tag));
+    }
     let _ = (kind, path, schema_tag);
     // Memory store logs with a timestamp + human-readable TTL duration;
     // persistent backends log bare lines above (no duration needed).
@@ -788,7 +966,7 @@ mod tests {
     }
 
     // A SessionEntry<i32, ()> with a given model, for the checkpoint tests.
-    #[cfg(any(feature = "db", feature = "redis_store"))]
+    #[cfg(any(feature = "db", feature = "redis_store", feature = "web"))]
     fn handle_i32(model: i32) -> SessionHandle<i32, ()> {
         let (tx, _rx) = channel::<()>(1);
         let tree: Html<()> = Html::HText(String::new());
@@ -809,7 +987,7 @@ mod tests {
     }
 
     /// A fixed tag for tests that only exercise same-schema behaviour.
-    #[cfg(any(feature = "db", feature = "redis_store"))]
+    #[cfg(any(feature = "db", feature = "redis_store", feature = "web"))]
     const TEST_TAG: [u8; 32] = [7u8; 32];
 
     /// Restart survival: a store writes a checkpoint, a FRESH store over the same
@@ -1291,6 +1469,75 @@ mod tests {
         assert_eq!(s.web_sessions().await.len(), 1);
         s.delete(&cold_sid).await;
         s.delete(&web_sid).await;
+    }
+
+    /// File-store restart survival: a store writes a checkpoint, a FRESH store
+    /// over the same file (empty mem-cache) decodes it as a `Cold` model — the
+    /// dev-handoff persistence path, with NO sqlx.
+    #[cfg(feature = "web")]
+    #[tokio::test]
+    async fn file_store_checkpoint_survives_restart() {
+        let path = std::env::temp_dir().join(format!("ipetest_file_{}.json", std::process::id()));
+        let p = path.to_str().unwrap();
+        let _ = std::fs::remove_file(p);
+        {
+            let s: FileStore<i32, ()> = FileStore::new(p, Duration::from_secs(60), TEST_TAG);
+            s.set("s1", handle_i32(42)).await;
+            assert!(matches!(s.get("s1").await, Some(StoreHit::Web(_))));
+        }
+        {
+            // "rebuild": a new store, empty mem-cache → decodes the checkpoint.
+            let s: FileStore<i32, ()> = FileStore::new(p, Duration::from_secs(60), TEST_TAG);
+            let cold = matches!(s.get("s1").await, Some(StoreHit::Cold(42)));
+            assert!(
+                cold,
+                "expected Cold(42) after a rebuild: the checkpoint must survive on disk"
+            );
+        }
+        let _ = std::fs::remove_file(p);
+    }
+
+    /// H24 for the file store: a checkpoint written under a DIFFERENT Model
+    /// schema tag (a Model-type change across a rebuild) is REJECTED before
+    /// deserialize — `get()` returns `None` (fresh `init`), never a torn Model.
+    #[cfg(feature = "web")]
+    #[tokio::test]
+    async fn file_store_rejects_a_row_written_by_a_different_schema_tag() {
+        let path =
+            std::env::temp_dir().join(format!("ipetest_fileh24_{}.json", std::process::id()));
+        let p = path.to_str().unwrap();
+        let _ = std::fs::remove_file(p);
+        {
+            let s: FileStore<i32, ()> = FileStore::new(p, Duration::from_secs(60), [0xAA; 32]);
+            s.set("s1", handle_i32(42)).await;
+        }
+        {
+            // "rebuild with a changed Model": same file, different tag.
+            let s: FileStore<i32, ()> = FileStore::new(p, Duration::from_secs(60), [0xBB; 32]);
+            assert!(
+                s.get("s1").await.is_none(),
+                "a foreign-schema checkpoint must be rejected before deserialize"
+            );
+        }
+        let _ = std::fs::remove_file(p);
+    }
+
+    /// A malformed / truncated on-disk map does NOT crash `new` — it starts
+    /// empty (fail-soft), so a dev handoff over a corrupt map begins fresh
+    /// rather than faulting.
+    #[cfg(feature = "web")]
+    #[tokio::test]
+    async fn file_store_starts_empty_on_a_corrupt_map() {
+        let path =
+            std::env::temp_dir().join(format!("ipetest_filecorrupt_{}.json", std::process::id()));
+        let p = path.to_str().unwrap();
+        std::fs::write(p, b"{ this is not valid json").unwrap();
+        let s: FileStore<i32, ()> = FileStore::new(p, Duration::from_secs(60), TEST_TAG);
+        assert!(
+            s.get("anything").await.is_none(),
+            "a corrupt map must yield an empty store, not a panic"
+        );
+        let _ = std::fs::remove_file(p);
     }
 
     #[tokio::test]

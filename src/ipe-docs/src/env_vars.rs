@@ -952,16 +952,19 @@ pub static ENV_VARS: &[EnvVar] = &[
         name: "IPE_WEB_STORE",
         default: "memory",
         purpose: "Session-store backend for the web server: `memory` (per-process, \
-                  lost on restart) or `sqlite` (persisted to `IPE_WEB_STORE_PATH`). \
-                  `ipe watch` selects `sqlite` so a rebuild preserves live sessions.",
+                  lost on restart), `file` (persisted to `IPE_WEB_STORE_PATH`, no \
+                  database dependency), or `sqlite` (persisted, requires the `db` \
+                  feature). `ipe watch` selects `file` so a rebuild preserves live \
+                  sessions even for a plain web app; a `sqlite` request degrades to \
+                  `file` when the build has no `db` feature.",
         subsystem: Subsystem::Web,
         class: Class::Tunable,
     },
     EnvVar {
         name: "IPE_WEB_STORE_PATH",
         default: "unset (temp file)",
-        purpose: "Filesystem path for the `sqlite` session store. Ignored when \
-                  `IPE_WEB_STORE` is `memory`. Unset uses a per-process temporary file.",
+        purpose: "Filesystem path for the `file` or `sqlite` session store. Ignored \
+                  when `IPE_WEB_STORE` is `memory`. Unset uses a per-process temporary file.",
         subsystem: Subsystem::Web,
         class: Class::Tunable,
     },
