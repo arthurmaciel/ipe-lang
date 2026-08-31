@@ -211,6 +211,36 @@ const fn delegate(to: UiDelegate) -> UiEmitPlan {
     native(NativeUiEmit::Delegate(to))
 }
 
+/// The style-kernel allowlist for dev appearance hot-swap (Step 1, style slice).
+///
+/// A literal passed *directly* to one of these kernels, in one of the returned
+/// argument positions, is an inert **style-value** string — a font family or a
+/// raw CSS property/value — that feeds rendering and depends on no `Model`
+/// value and no control flow. Under `IPE_WATCH_HOT_APPEARANCE` such a literal is
+/// hoisted into a per-view [`ipe_runtime::web::LiteralTable`] so a dev edit can
+/// swap it as data. Every entry is a plain positional `Ui.*` style kernel whose
+/// named positions carry a `String`; the surface is style values only — not the
+/// attribute, text, layout-structure, or non-style-string kernels.
+///
+/// Returned positions are 0-based indices into the kernel's direct arguments.
+/// A kernel absent from this table has no hoist-eligible position.
+///
+/// The set is deliberately narrow and self-documenting: widening it (attribute
+/// strings, static text) is a later, separately measured step behind its own
+/// conformance coverage.
+pub const fn style_literal_arg_positions(k: KernelFn) -> &'static [usize] {
+    match k {
+        // `Font.family : String -> Attribute msg` — the font family list, a
+        // pure style value (`ui_font_family_(family: String)`).
+        KernelFn::FontFamily => &[0],
+        // `Ui.style : String -> String -> Attribute msg` — a raw CSS
+        // property/value pair (`ui_style_(property, value)`). Both are inert
+        // style strings baked as table defaults.
+        KernelFn::UiStyle => &[0, 1],
+        _ => &[],
+    }
+}
+
 /// Classify one kernel into its emit plan.
 ///
 /// Returns `None` for a non-UI-family kernel, preserving the caller's

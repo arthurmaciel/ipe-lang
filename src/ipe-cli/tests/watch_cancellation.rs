@@ -123,6 +123,7 @@ fn compile_worker_is_cancelled_by_a_concurrent_input_edit() {
         None,
         false,
         String::new(),
+        false,
     );
 
     let db_worker = db.clone();
@@ -201,6 +202,7 @@ fn the_same_fixture_compiles_cleanly_without_a_concurrent_edit() {
         None,
         false,
         String::new(),
+        false,
     );
 
     let result =

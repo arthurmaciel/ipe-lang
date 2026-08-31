@@ -16,7 +16,10 @@ use ipe_ir::{
 use crate::EmitCtx;
 use crate::doc::Doc;
 use crate::emit_types::{GenericScope, render_type};
-use crate::emit_ui_plan::{ArgPlan, Guard, NativeUiEmit, UiDelegate, UiEmitPlan, ui_call_shape};
+use crate::emit_ui_plan::{
+    ArgPlan, Guard, NativeUiEmit, UiDelegate, UiEmitPlan, style_literal_arg_positions,
+    ui_call_shape,
+};
 use crate::naming::kernel_name;
 use crate::render::{RenderConfig, render_seeded};
 
@@ -1461,17 +1464,29 @@ pub fn call_has_kernel_special_case(
     if !matches!(callee, Callee::Kernel(_)) {
         return Ok(false);
     }
-    if emit_json_decoder_call(ctx, callee, args, indent, child, generics)?.is_some()
-        || emit_http_call(ctx, callee, args, indent, child, generics)?.is_some()
-        || emit_process_run_with_call(ctx, callee, args, indent, child, generics)?.is_some()
-        || emit_process_run_in_pty_call(ctx, callee, args, indent, child, generics)?.is_some()
-        || emit_http_builder_call(ctx, callee, args, indent, child, generics)?.is_some()
-        || emit_task_retry_call(ctx, callee, args, indent, child, generics)?.is_some()
-        || emit_db_call(ctx, callee, args, indent, child, generics)?.is_some()
-        || emit_tea_call(ctx, callee, args, indent, child, generics)?.is_some()
-        || emit_server_call(ctx, callee, args, indent, child, generics)?.is_some()
-        || emit_ui_call(ctx, callee, args, on_form, indent, child, generics)?.is_some()
-    {
+    // These `emit_*_call` invocations are discard-only *probes* — their emitted
+    // text is thrown away; only whether they fire matters. Suppress style-literal
+    // hoisting for the duration so a probe does not append a literal the real
+    // emit will append again (which would double-count it in the view's table).
+    ctx.enter_probe();
+    let probe: DResult<bool> = (|| {
+        Ok(
+            emit_json_decoder_call(ctx, callee, args, indent, child, generics)?.is_some()
+                || emit_http_call(ctx, callee, args, indent, child, generics)?.is_some()
+                || emit_process_run_with_call(ctx, callee, args, indent, child, generics)?
+                    .is_some()
+                || emit_process_run_in_pty_call(ctx, callee, args, indent, child, generics)?
+                    .is_some()
+                || emit_http_builder_call(ctx, callee, args, indent, child, generics)?.is_some()
+                || emit_task_retry_call(ctx, callee, args, indent, child, generics)?.is_some()
+                || emit_db_call(ctx, callee, args, indent, child, generics)?.is_some()
+                || emit_tea_call(ctx, callee, args, indent, child, generics)?.is_some()
+                || emit_server_call(ctx, callee, args, indent, child, generics)?.is_some()
+                || emit_ui_call(ctx, callee, args, on_form, indent, child, generics)?.is_some(),
+        )
+    })();
+    ctx.exit_probe();
+    if probe? {
         return Ok(true);
     }
     // `Dict.get` clones its dict arg — the generic tail would drop the `.clone()`.
@@ -3681,9 +3696,33 @@ fn emit_ui_plan(
                     ),
                 });
             }
+            // Appearance hot-swap (style slice): when the kernel is an
+            // allowlisted style kernel and this argument sits in a hoist-eligible
+            // position AND is a direct string literal, route it through the
+            // per-view `LiteralTable` instead of emitting the literal inline. The
+            // table is a web-runtime type, so this fires only in a web shape;
+            // `hoist_style_literal` further fences it to a function body's top
+            // level (never inside a `move` closure). Every other argument — and
+            // the whole call with the flag off — emits exactly as before.
+            let hoist_positions = if ctx.uses_web {
+                style_literal_arg_positions(k)
+            } else {
+                &[]
+            };
             let mut rendered = Vec::with_capacity(args.len());
-            for a in args {
-                rendered.push(emit_expr_at(ctx, a, indent, child, generics)?);
+            for (i, a) in args.iter().enumerate() {
+                let hoisted = if hoist_positions.contains(&i)
+                    && let Expr::Str(s) = a
+                    && let Some(slot) = ctx.hoist_style_literal(s)
+                {
+                    Some(format!("__ipe_lit.get({slot}).to_string()"))
+                } else {
+                    None
+                };
+                match hoisted {
+                    Some(read) => rendered.push(read),
+                    None => rendered.push(emit_expr_at(ctx, a, indent, child, generics)?),
+                }
             }
             return Ok(format!("{path}({})", rendered.join(", ")));
         }
@@ -7702,7 +7741,14 @@ pub fn emit_lambda_unboxed(
         ));
     }
     let ret_s = render_type(ctx, ret, generics)?;
-    let body_s = emit_expr_at(ctx, body, indent, child, generics)?;
+    // This is a `move` closure: it captures `__ipe_lit` by move, so a style
+    // literal inside its body must NOT hoist into the enclosing view's table
+    // (it would contend with the binding's other uses). Fence hoisting off for
+    // the closure body; literals within emit directly, unchanged.
+    ctx.enter_closure();
+    let body_result = emit_expr_at(ctx, body, indent, child, generics);
+    ctx.exit_closure();
+    let body_s = body_result?;
     Ok(format!(
         "move |{}| -> {ret_s} {{ {body_s} }}",
         parts.join(", ")
@@ -8184,6 +8230,14 @@ pub fn emit_func_vis(ctx: &EmitCtx, func: &Func, vis_prefix: &str) -> DResult<St
     // falls through), so it unifies with any `-> R` — no `break value`. A
     // non-`TailLoop` body (the common case) routes to the ordinary value emitter,
     // which is exhaustive and fail-closed for any stray TCO node.
+    // Arm the per-function style-literal accumulator for this body. Under
+    // `hot_appearance` an allowlisted style literal emitted below hoists into
+    // this function's table; with the flag off it stays inert and nothing hoists,
+    // so the emitted body is byte-identical to the direct-literal form. The
+    // previous accumulator is restored after the body is rendered so nested
+    // function emission (a lambda that itself emits a helper `fn`) does not leak
+    // its slots into this frame's table.
+    let saved_literals = ctx.begin_function_literals();
     let body = if ipe_main_wrap_unit {
         // Wrap the synchronous body so ipe_main returns IpeTask<()>; the
         // body's own (unit) value is discarded, only its side effects matter.
@@ -8255,6 +8309,14 @@ pub fn emit_func_vis(ctx: &EmitCtx, func: &Func, vis_prefix: &str) -> DResult<St
         body
     };
 
+    // Close the accumulator and, if any style literal hoisted, prepend the
+    // per-view table binding. Its baked defaults are exactly the hoisted source
+    // values in emit order, so `__ipe_lit.get(N)` reads render byte-identically
+    // to the direct literals (dev == prod). Empty ⇒ no prologue ⇒ byte-identical
+    // to the flag-off body.
+    let hoisted = ctx.end_function_literals(saved_literals);
+    let lit_prologue = literal_table_prologue(&hoisted);
+
     let signature = render_fn_signature(vis_prefix, &name, &generic_clause, &params, &ret);
     // Recursion guard prologue: one RAII line at the top of every user function
     // body converts an uncatchable native stack-overflow abort (unbounded direct,
@@ -8267,8 +8329,27 @@ pub fn emit_func_vis(ctx: &EmitCtx, func: &Func, vis_prefix: &str) -> DResult<St
     // guard outside its `loop`, so a tail-recursive function pays it once at entry
     // (§tail-call exemption). See `ipe_runtime::core::recursion_guard`.
     Ok(format!(
-        "{signature} {{\n    let _ipe_recursion_guard = crate::recursion_guard();\n    {body}\n}}\n"
+        "{signature} {{\n    let _ipe_recursion_guard = crate::recursion_guard();\n    {lit_prologue}{body}\n}}\n"
     ))
+}
+
+/// The per-view `LiteralTable` binding for a function whose body hoisted style
+/// literals, or the empty string when none did.
+///
+/// Each default is rendered with the same `{:?}` Rust-string escaping a direct
+/// `Expr::Str` uses, so the baked default is byte-for-byte the source value and
+/// a `__ipe_lit.get(N)` read is indistinguishable from the direct literal. The
+/// binding is emitted immediately after the recursion guard, in scope for every
+/// hoisted read in the body.
+fn literal_table_prologue(defaults: &[String]) -> String {
+    if defaults.is_empty() {
+        return String::new();
+    }
+    let rendered: Vec<String> = defaults.iter().map(|d| format!("{d:?}")).collect();
+    format!(
+        "let __ipe_lit = ipe_runtime::web::LiteralTable::from_defaults(&[{}]);\n    ",
+        rendered.join(", ")
+    )
 }
 
 /// Is `ty` a value type that a top-level CAF may share through a `static`

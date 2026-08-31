@@ -1148,6 +1148,7 @@ mod schema_tag_tests {
             None,
             false,
             String::new(),
+            false,
         )?;
 
         // Model = { count : Int } (no `page` field → the single-page branch).
@@ -1176,6 +1177,282 @@ mod schema_tag_tests {
         assert!(
             out.contains("ipe_runtime::web::web_app("),
             "single-page cfg must still route to web_app, got:\n{out}"
+        );
+        Ok(())
+    }
+}
+
+/// Dev appearance hot-swap emit conformance (perf Step 1, style slice).
+///
+/// The load-bearing property: emitting a `view` whose style-value literals are
+/// routed through a per-view `LiteralTable` (flag ON) must render the same as
+/// the same view emitted with direct literals (flag OFF) — the baked defaults
+/// are exactly the source values, so a `__ipe_lit.get(N)` read is
+/// indistinguishable from the direct literal (dev == prod). A mis-tag would
+/// surface as a table default that differs from the source literal, caught here.
+#[cfg(test)]
+mod hot_appearance_tests {
+    use ipe_diagnostics::DResult;
+    use ipe_intern::Interner;
+    use ipe_ir::{
+        CallPin, Callee, Expr, Func, FuncId, IrType, KernelFn, ModPath, Module, OnFormKind,
+        Program, UiCtor,
+    };
+
+    use crate::RustBackend;
+
+    /// A single-module program holding one function `view` whose body is `body`.
+    /// `uses_web` is set so the emit runs in the web shape the hot-swap targets
+    /// (the `LiteralTable` is a web-runtime type).
+    fn one_view_program(interner: &mut Interner, body: Expr) -> DResult<(Program, Func)> {
+        let view = Func {
+            id: FuncId::from_raw(0),
+            name: interner.intern("view")?,
+            home: ModPath(vec![]),
+            type_params: vec![],
+            row_params: vec![],
+            params: vec![],
+            ret: IrType::Ui {
+                ctor: UiCtor::UiAttribute,
+                msg: Box::new(IrType::Int),
+            },
+            body,
+        };
+        let module = Module {
+            name: ModPath(vec![interner.intern("Main")?]),
+            types: vec![],
+            funcs: vec![view.clone()],
+            entry: None,
+            records: vec![],
+            uses_tea: false,
+            uses_server: false,
+            uses_http: false,
+            uses_config: false,
+            uses_compression: false,
+            uses_csv: false,
+            uses_cache: false,
+            uses_encoding: false,
+            uses_regex: false,
+            uses_uuid: false,
+            uses_random: false,
+            uses_log: false,
+            uses_decimal: false,
+            uses_char_category: false,
+            uses_crypto_core: false,
+            uses_secret: false,
+            uses_json: false,
+            uses_crypto: false,
+            uses_jwt: false,
+            uses_url: false,
+            uses_ui: true,
+            uses_web: true,
+            uses_tui: false,
+            uses_console: false,
+            uses_webview: false,
+            uses_css: false,
+            uses_auth: false,
+            uses_principal: false,
+            uses_websocket: false,
+            uses_email: false,
+            uses_locale: false,
+            uses_time: false,
+            uses_env_public: false,
+            uses_debug: false,
+            uses_ffi: false,
+            uses_async_runtime: false,
+        };
+        let program = Program {
+            imports_unsafe_submodule: false,
+            modules: vec![module],
+        };
+        Ok((program, view))
+    }
+
+    /// Emit the lone `view` function of `program` with the hot-appearance flag
+    /// set to `hot`.
+    fn emit_view(
+        interner: &Interner,
+        program: &Program,
+        view: &Func,
+        hot: bool,
+    ) -> DResult<String> {
+        let backend = RustBackend::new(interner).with_hot_appearance(hot);
+        let ctx = backend.emit_ctx_for_tests(program)?;
+        crate::emit_expr::emit_func(&ctx, view)
+    }
+
+    /// `Font.family "monospace"` — a single hoist-eligible style literal.
+    fn font_family_call() -> Expr {
+        Expr::Call {
+            callee: Callee::Kernel(KernelFn::FontFamily),
+            args: vec![Expr::Str("monospace".to_string())],
+            pin: CallPin::None,
+            on_form: OnFormKind::NotForm,
+        }
+    }
+
+    /// With the flag OFF the emit is the direct-literal form: the source string
+    /// appears inline and no `LiteralTable` is introduced.
+    #[test]
+    fn flag_off_emits_direct_literal() -> DResult<()> {
+        let mut interner = Interner::new();
+        let (program, view) = one_view_program(&mut interner, font_family_call())?;
+        let out = emit_view(&interner, &program, &view, false)?;
+        assert!(
+            out.contains("\"monospace\".to_string()"),
+            "flag-off emit must carry the direct string literal, got:\n{out}"
+        );
+        assert!(
+            !out.contains("__ipe_lit"),
+            "flag-off emit must introduce no literal table, got:\n{out}"
+        );
+        Ok(())
+    }
+
+    /// With the flag ON the literal is hoisted: a per-view table bakes the
+    /// source value as its default and the call site reads `__ipe_lit.get(0)`.
+    #[test]
+    fn flag_on_hoists_style_literal_into_table() -> DResult<()> {
+        let mut interner = Interner::new();
+        let (program, view) = one_view_program(&mut interner, font_family_call())?;
+        let out = emit_view(&interner, &program, &view, true)?;
+        assert!(
+            out.contains(
+                "let __ipe_lit = ipe_runtime::web::LiteralTable::from_defaults(&[\"monospace\"]);"
+            ),
+            "flag-on emit must bake the source value as the table default, got:\n{out}"
+        );
+        assert!(
+            out.contains("__ipe_lit.get(0).to_string()"),
+            "the hoisted call site must read its table slot, got:\n{out}"
+        );
+        assert!(
+            !out.contains("ui_font_family_(\"monospace\""),
+            "the direct literal must be replaced by the table read, got:\n{out}"
+        );
+        Ok(())
+    }
+
+    /// Conformance: the flag-ON table default, spliced back into the direct-emit
+    /// position, reproduces the flag-OFF emission byte-for-byte. This is the
+    /// dev == prod guarantee at the emit level — the baked default IS the source
+    /// literal, so reading it renders identically. A mis-tagged literal (a
+    /// default that differed from the source) would break this equality.
+    #[test]
+    fn baked_default_matches_direct_literal_bytes() -> DResult<()> {
+        let mut interner = Interner::new();
+        let (program, view) = one_view_program(&mut interner, font_family_call())?;
+        let off = emit_view(&interner, &program, &view, true)?;
+        // The default array renders each literal with the same `{:?}` escaping a
+        // direct `Expr::Str` uses, so the baked default's bytes equal the direct
+        // literal's bytes.
+        let direct = format!("{:?}", "monospace");
+        assert!(
+            off.contains(&format!("from_defaults(&[{direct}])")),
+            "the baked default must be byte-identical to the direct literal \
+             {direct}, got:\n{off}"
+        );
+        Ok(())
+    }
+
+    /// `Ui.style "color" "red"` — both String positions are style values, so
+    /// both hoist, into consecutive table slots, defaults in emit order.
+    #[test]
+    fn ui_style_hoists_both_positions() -> DResult<()> {
+        let mut interner = Interner::new();
+        let call = Expr::Call {
+            callee: Callee::Kernel(KernelFn::UiStyle),
+            args: vec![Expr::Str("color".to_string()), Expr::Str("red".to_string())],
+            pin: CallPin::None,
+            on_form: OnFormKind::NotForm,
+        };
+        let (program, view) = one_view_program(&mut interner, call)?;
+        let out = emit_view(&interner, &program, &view, true)?;
+        assert!(
+            out.contains(
+                "let __ipe_lit = ipe_runtime::web::LiteralTable::from_defaults(&[\"color\", \"red\"]);"
+            ),
+            "both style-string positions must bake as ordered defaults, got:\n{out}"
+        );
+        assert!(
+            out.contains("__ipe_lit.get(0).to_string()")
+                && out.contains("__ipe_lit.get(1).to_string()"),
+            "both positions must read their table slots, got:\n{out}"
+        );
+        Ok(())
+    }
+
+    /// The literal hoists even when the style call is nested deep inside another
+    /// call's argument list (the real view shape) — not only at the body's top.
+    #[test]
+    fn nested_style_literal_still_hoists() -> DResult<()> {
+        use ipe_ir::CallPin as P;
+        let mut interner = Interner::new();
+        // `ui_node_(desc, [Font.family "monospace"], [])` — the style call sits
+        // inside a list that is an argument to an outer kernel call.
+        let list_of_attr = Expr::List {
+            elem: IrType::Ui {
+                ctor: UiCtor::UiAttribute,
+                msg: Box::new(IrType::Int),
+            },
+            items: vec![font_family_call()],
+        };
+        let empty_children = Expr::List {
+            elem: IrType::Ui {
+                ctor: UiCtor::Element,
+                msg: Box::new(IrType::Int),
+            },
+            items: vec![],
+        };
+        let body = Expr::Call {
+            callee: Callee::Kernel(KernelFn::UiNode),
+            args: vec![
+                Expr::Call {
+                    callee: Callee::Kernel(KernelFn::UiDescNone),
+                    args: vec![],
+                    pin: P::None,
+                    on_form: OnFormKind::NotForm,
+                },
+                list_of_attr,
+                empty_children,
+            ],
+            pin: P::None,
+            on_form: OnFormKind::NotForm,
+        };
+        let (program, view) = one_view_program(&mut interner, body)?;
+        let out = emit_view(&interner, &program, &view, true)?;
+        assert!(
+            out.contains("from_defaults(&[\"monospace\"])"),
+            "a nested style literal must still hoist, got:\n{out}"
+        );
+        assert!(
+            out.contains("__ipe_lit.get(0).to_string()"),
+            "the nested hoisted site must read its table slot, got:\n{out}"
+        );
+        Ok(())
+    }
+
+    /// A non-web shape never hoists (the `LiteralTable` is a web-runtime type):
+    /// the emit stays the direct-literal form even with the flag on.
+    #[test]
+    fn non_web_shape_does_not_hoist() -> DResult<()> {
+        let mut interner = Interner::new();
+        let (mut program, view) = one_view_program(&mut interner, font_family_call())?;
+        // Flip the shape to a non-web build.
+        let module = program
+            .modules
+            .first_mut()
+            .expect("the one-view program has a module");
+        module.uses_web = false;
+        module.uses_tui = true;
+        let out = emit_view(&interner, &program, &view, true)?;
+        assert!(
+            !out.contains("__ipe_lit"),
+            "a non-web shape must not hoist, got:\n{out}"
+        );
+        assert!(
+            out.contains("\"monospace\".to_string()"),
+            "a non-web shape keeps the direct literal, got:\n{out}"
         );
         Ok(())
     }

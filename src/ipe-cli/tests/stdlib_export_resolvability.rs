@@ -72,6 +72,7 @@ fn compile_main(main: &str) -> Result<(), String> {
         None,
         false,
         String::new(),
+        false,
     );
     ipe::compile_prepared(
         &db,
