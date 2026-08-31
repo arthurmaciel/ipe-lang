@@ -104,6 +104,20 @@ fn assert_accepted(name: &str, source: &str, expected_stdout: &str) {
     }
 }
 
+/// Emit `source` and return the emitted `src/main.rs` text, or `None` if
+/// scratch/runtime setup is unavailable (the test then skips its assertions).
+/// Used by the move-after-use SEAL tests to prove exactly WHICH reads clone —
+/// a behavioural pass alone cannot distinguish "cloned correctly" from
+/// "over-cloned", and over-cloning a single-use or `Copy` binding is an
+/// Efficiency regression the SEAL's cargo-green gate would silently accept.
+fn emit_main_rs(name: &str, source: &str) -> Option<String> {
+    let entry = write_single(name, source)?;
+    let out = out_dir(name);
+    let runtime = ipe::resolve_runtime().ok()?;
+    ipe::build(&entry, &out, &runtime).ok()?;
+    std::fs::read_to_string(out.join("src").join("main.rs")).ok()
+}
+
 /// Assert that a multi-file project is ACCEPTED by `ipe` and — under `IPE_E2E` —
 /// that the emitted crate `cargo build`s. Cross-module gates (e.g. mod-ident
 /// folding) can only be exercised through the sibling-discovery path.
@@ -364,4 +378,107 @@ fn dict_insert_function_value_builds_and_runs() {
         \x20           x\n\
         main = Io.println (String.fromInt (apply \"double\" (apply \"inc\" 20)))\n";
     assert_accepted("dict_insert_fn_value", src, "42\n");
+}
+
+// ===========================================================================
+// Move-after-use (E0382) on a DESTRUCTURE-PARAMETER component reused after a
+// consuming kernel call. A tuple parameter (`( sku, qty )`) lowers to a whole-
+// argument binder plus a `let (sku, qty) = arg_0` prologue; the whole-argument
+// binder already rides the move-ownership discipline, but its components did
+// not — so `Dict.get sku …` MOVED `sku`, then a later `String.padRight … sku`
+// used it after the move. `ipe` accepted (exit 0) then the emitted crate failed
+// `cargo build` — a SEAL breach in the BORROW class.
+// ===========================================================================
+
+/// A `String` tuple-param component used as a `Dict.get` key (a consuming
+/// kernel argument) and THEN reused in a later arm. Pre-fix the scrutinee's
+/// `sku` moved and the arm's `sku` used-after-move (E0382). The fix clones the
+/// non-final (scrutinee) read and moves the final (per-arm) one. Runs to the
+/// padded-then-appended receipt line.
+#[test]
+fn destructure_param_reused_after_kernel_call_builds_and_runs() {
+    let src = "module Main exposing (main)\n\
+        import Ipe.Io as Io\n\
+        import Ipe.Dict as Dict\n\
+        import Ipe.String as String\n\
+        priceBook : Dict.Dict String Int\n\
+        priceBook =\n\
+        \x20   Dict.fromList [ ( \"abc\", 100 ) ]\n\
+        lineItem : ( String, Int ) -> String\n\
+        lineItem ( sku, qty ) =\n\
+        \x20   case Dict.get sku priceBook of\n\
+        \x20       Just cents ->\n\
+        \x20           String.padRight 8 ' ' sku ++ \"x\" ++ String.fromInt qty\n\
+        \n\
+        \x20       Nothing ->\n\
+        \x20           sku ++ \" (no price)\"\n\
+        main = Io.println (lineItem ( \"abc\", 2 ))\n";
+    assert_accepted("destructure_param_reused_after_kernel", src, "abc     x2\n");
+}
+
+/// No-over-clone proof for the fix. The emitted `line_item` must clone `sku`
+/// EXACTLY at its non-final (scrutinee) read and leave the arm reads bare, and
+/// the `Copy` `i64` component `qty` must NEVER clone. Asserting on the emitted
+/// text is the only way to catch an over-clone: it still cargo-builds and runs
+/// correctly (so the SEAL/behaviour gates stay green) yet regresses Efficiency
+/// by deep-copying a `String`/scalar that a bare move would have served.
+#[test]
+fn destructure_param_clone_is_minimal_not_over_cloned() {
+    let src = "module Main exposing (main)\n\
+        import Ipe.Io as Io\n\
+        import Ipe.Dict as Dict\n\
+        import Ipe.String as String\n\
+        priceBook : Dict.Dict String Int\n\
+        priceBook =\n\
+        \x20   Dict.fromList [ ( \"abc\", 100 ) ]\n\
+        lineItem : ( String, Int ) -> String\n\
+        lineItem ( sku, qty ) =\n\
+        \x20   case Dict.get sku priceBook of\n\
+        \x20       Just cents ->\n\
+        \x20           String.padRight 8 ' ' sku ++ \"x\" ++ String.fromInt qty\n\
+        \n\
+        \x20       Nothing ->\n\
+        \x20           sku ++ \" (no price)\"\n\
+        main = Io.println (lineItem ( \"abc\", 2 ))\n";
+    let Some(emitted) = emit_main_rs("destructure_param_minimal_clone", src) else {
+        return; // scratch/runtime unavailable — skip
+    };
+    // Exactly one `.clone()` on `sku` — the non-final (scrutinee) read.
+    let sku_clones = emitted.matches("sku.clone()").count();
+    assert_eq!(
+        sku_clones, 1,
+        "expected exactly one sku.clone() (the non-final scrutinee read), \
+         got {sku_clones} — over-clone (Efficiency regression) or under-clone \
+         (E0382). Emitted:\n{emitted}"
+    );
+    // The `Copy` `i64` component `qty` must never clone.
+    assert!(
+        !emitted.contains("qty.clone()"),
+        "a Copy i64 component was cloned — a spurious .clone() on a scalar. \
+         Emitted:\n{emitted}"
+    );
+}
+
+/// A single-use `String` tuple-param component must MOVE (no `.clone()`). This
+/// pins the last-use liveness: the sole read is the last read, so it stays a
+/// bare move — the discipline must not blanket-clone every component.
+#[test]
+fn single_use_destructure_param_moves_without_clone() {
+    let src = "module Main exposing (main)\n\
+        import Ipe.Io as Io\n\
+        import Ipe.String as String\n\
+        shout : ( String, Int ) -> String\n\
+        shout ( word, _n ) =\n\
+        \x20   String.toUpper word\n\
+        main = Io.println (shout ( \"hi\", 0 ))\n";
+    let Some(emitted) = emit_main_rs("single_use_destructure_param", src) else {
+        return;
+    };
+    assert!(
+        !emitted.contains("word.clone()"),
+        "a single-use String component was cloned — the last (only) use must \
+         move, not clone. Emitted:\n{emitted}"
+    );
+    // And it must still accept + run correctly.
+    assert_accepted("single_use_destructure_param_run", src, "HI\n");
 }

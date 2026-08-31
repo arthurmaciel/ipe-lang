@@ -16987,14 +16987,7 @@ impl<'a> Lowerer<'a> {
                     self.with_promotable_fn_binders(param_syms, || self.lower_expr(body));
                 *self.current_poly_tvars.borrow_mut() = saved_poly_tvars;
                 self.fn_is_async.set(prev_async);
-                let mut lowered_body = body_result?;
-                for (binder_sym, binder_pat) in prologue.into_iter().rev() {
-                    lowered_body = Expr::Destructure {
-                        binder: binder_pat,
-                        value: Box::new(Expr::Var(binder_sym)),
-                        body: Box::new(lowered_body),
-                    };
-                }
+                let mut lowered_body = self.fold_param_prologues(prologue, body_result?, body)?;
                 // Param-position wildcard-`any` region substitution — the SEAL
                 // dual of the return substitution above. A bare-`any` parameter
                 // freshens to `IrType::Generic(any_sym)` in `split_typed_sig`.
@@ -17411,16 +17404,8 @@ impl<'a> Lowerer<'a> {
                     if let Some(saved) = saved_poly_tvars {
                         *self.current_poly_tvars.borrow_mut() = saved;
                     }
-                    let mut lowered_body = body_result?;
-                    // Fold destructuring prologues outermost-first (reverse)
-                    // so the first parameter's destructure is the outer binding.
-                    for (binder_sym, binder_pat) in prologue.into_iter().rev() {
-                        lowered_body = Expr::Destructure {
-                            binder: binder_pat,
-                            value: Box::new(Expr::Var(binder_sym)),
-                            body: Box::new(lowered_body),
-                        };
-                    }
+                    let mut lowered_body =
+                        self.fold_param_prologues(prologue, body_result?, body)?;
                     // Same move-ownership discipline as the Typed path above —
                     // one `apply_param_move_ownership` per param (see that call
                     // site and the fn doc for the collapsed-branch rationale).
@@ -18807,6 +18792,55 @@ impl<'a> Lowerer<'a> {
         }
         reject_nonclone_value_reuse(self.clone_env(), sym, ir_ty, &body, span)?;
         apply_move_ownership(self.clone_env(), sym, ir_ty, body, span)
+    }
+
+    /// Fold the tuple/record destructuring `prologue` of a function's parameters
+    /// over `lowered_body`, applying the shared move-ownership discipline to
+    /// every component the prologue patterns bind.
+    ///
+    /// A destructuring parameter (`f ( a, b ) = …`) lowers to a fresh binder
+    /// holding the whole argument plus a `Destructure` prologue that opens it
+    /// (`let (a, b) = arg_0 in …`). The `arg_0` binder itself already rides
+    /// `apply_param_move_ownership`, but its bound components (`a`, `b`) are
+    /// their own binder kind — a component reused after being moved into a prior
+    /// sub-expression (`Dict.get a d` then `f a`) is an E0382 the whole-argument
+    /// discipline cannot see. Route each component through the ONE shared
+    /// [`apply_move_ownership`] entry point, resolving each component's IR type
+    /// from its first use-site span in the (canon) `body` — the identical rule
+    /// `build_destructure_or_decoder_thunk` uses for a body-level destructure. An
+    /// unused component has no use-site span and is left bare.
+    fn fold_param_prologues(
+        &self,
+        prologue: Vec<ParamPrologue>,
+        mut lowered_body: Expr,
+        body: &canon::Expr,
+    ) -> DResult<Expr> {
+        // Fold OUTERMOST-first (reverse) so the first parameter's destructure is
+        // the outer binding — matching the original open-coded fold order.
+        for (binder_sym, binder_pat) in prologue.into_iter().rev() {
+            let mut bound: BTreeSet<Symbol> = BTreeSet::new();
+            pat_bound_symbols(&binder_pat, &mut bound);
+            for sym in &bound {
+                if let Some(span) = find_first_varlocal_span(*sym, body)
+                    && let Some(ty) = self.region_ty(span)
+                    && let Ok(comp_ir_ty) = self.ir_type_from_ty(ty, span)
+                {
+                    lowered_body = apply_move_ownership(
+                        self.clone_env(),
+                        *sym,
+                        &comp_ir_ty,
+                        lowered_body,
+                        span,
+                    )?;
+                }
+            }
+            lowered_body = Expr::Destructure {
+                binder: binder_pat,
+                value: Box::new(Expr::Var(binder_sym)),
+                body: Box::new(lowered_body),
+            };
+        }
+        Ok(lowered_body)
     }
 
     /// Lower an anonymous function `\p0 p1 ... -> body` into [`Expr::Lambda`].
