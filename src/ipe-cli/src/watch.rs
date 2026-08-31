@@ -146,7 +146,7 @@ pub struct WatchOptions {
     pub entry: PathBuf,
     pub out_dir: PathBuf,
     pub runtime_dir: PathBuf,
-    /// The port injected as `IPE_LIVE_PORT` for the spawned child and probed
+    /// The port injected as `IPE_WEB_PORT` for the spawned child and probed
     /// for `/_ipe/readyz` when the emitted project is detected as a
     /// Ipe.Web app. Harmless (ignored) for every other app shape.
     pub port: u16,
@@ -1155,7 +1155,7 @@ fn is_ipe_web_project(emitted: &ipe_backend::EmittedProject) -> bool {
 
 /// Build the child process's environment.
 ///
-/// Sets both `IPE_LIVE_PORT` and `IPE_SERVER_PORT` to the SAME configured
+/// Sets both `IPE_WEB_PORT` and `IPE_SERVER_PORT` to the SAME configured
 /// port — harmless (ignored) for whichever app shape didn't ask for it, and
 /// what lets a `Ipe.Http.Server` fixture that reads `IPE_SERVER_PORT` (the
 /// convention this repo's own `server_e2e.rs` test suite already
@@ -1165,22 +1165,22 @@ fn is_ipe_web_project(emitted: &ipe_backend::EmittedProject) -> bool {
 /// default the dev session store to `sqlite` (persisted under `out_dir`,
 /// confined to the emit tree's parent so the emit→cargo bridge's
 /// `src/`-only prune pass never touches it) unless the caller's OWN
-/// environment already configures `IPE_LIVE_STORE`, in which case that
+/// environment already configures `IPE_WEB_STORE`, in which case that
 /// choice is respected verbatim (and warned about when it is exactly
 /// `memory` — see `warn_if_memory_store`, called once at watch startup).
 fn child_env(port: u16, out_dir: &Path) -> Vec<(String, String)> {
     let mut env = vec![
-        ("IPE_LIVE_PORT".to_owned(), port.to_string()),
+        ("IPE_WEB_PORT".to_owned(), port.to_string()),
         ("IPE_SERVER_PORT".to_owned(), port.to_string()),
     ];
-    if std::env::var("IPE_LIVE_STORE").is_err() {
-        env.push(("IPE_LIVE_STORE".to_owned(), "sqlite".to_owned()));
+    if std::env::var("IPE_WEB_STORE").is_err() {
+        env.push(("IPE_WEB_STORE".to_owned(), "sqlite".to_owned()));
         let db_path = out_dir
             .parent()
             .unwrap_or(out_dir)
             .join(".ipe-watch-sessions.db");
         env.push((
-            "IPE_LIVE_STORE_PATH".to_owned(),
+            "IPE_WEB_STORE_PATH".to_owned(),
             db_path.to_string_lossy().into_owned(),
         ));
     }
@@ -1188,9 +1188,7 @@ fn child_env(port: u16, out_dir: &Path) -> Vec<(String, String)> {
     // the browser's fast-reconnect window past its default to cover it: the page
     // reconnects a fast-retry tick after the new server binds instead of waiting
     // out an exponential-backoff interval. The caller's own value wins.
-    if std::env::var("IPE_WEB_RETRY_FAST_WINDOW_MS").is_err()
-        && std::env::var("IPE_LIVE_RETRY_FAST_WINDOW_MS").is_err()
-    {
+    if std::env::var("IPE_WEB_RETRY_FAST_WINDOW_MS").is_err() {
         env.push(("IPE_WEB_RETRY_FAST_WINDOW_MS".to_owned(), "8000".to_owned()));
     }
     env
@@ -1212,13 +1210,13 @@ fn spawn_command(exe_path: &Path, env: &[(String, String)]) -> Command {
 /// plain function (not `Result`) so call sites don't need to thread an
 /// unused error channel.
 fn warn_if_memory_store() {
-    if std::env::var("IPE_LIVE_STORE").as_deref() == Ok("memory") {
+    if std::env::var("IPE_WEB_STORE").as_deref() == Ok("memory") {
         eprintln!(
             "{}",
             watch_line(
-                "[ipe watch] warning: IPE_LIVE_STORE=memory is set — session state will NOT \
+                "[ipe watch] warning: IPE_WEB_STORE=memory is set — session state will NOT \
                  survive a watch-triggered restart. Unset it (watch defaults to sqlite) or set \
-                 IPE_LIVE_STORE=sqlite explicitly to keep your session across rebuilds.",
+                 IPE_WEB_STORE=sqlite explicitly to keep your session across rebuilds.",
                 WatchRole::Info
             )
         );

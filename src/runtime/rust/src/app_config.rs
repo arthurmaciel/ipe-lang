@@ -468,14 +468,13 @@ const fn csrf_enabled_from(
 }
 
 /// The installed `Web.sessionTtl` seconds, if a setting set one and no
-/// `IPE_WEB_TTL`/`IPE_LIVE_TTL` env override applies. `None` means keep
-/// resolving (env present, or no setting). A non-positive setting value is
-/// ignored (fail-closed to the caller's default rather than a zero/negative TTL
-/// that would expire every session immediately). `env > setting-in-code >
-/// fallback`.
+/// `IPE_WEB_TTL` env override applies. `None` means keep resolving (env
+/// present, or no setting). A non-positive setting value is ignored
+/// (fail-closed to the caller's default rather than a zero/negative TTL that
+/// would expire every session immediately). `env > setting-in-code > fallback`.
 #[must_use]
 pub fn resolve_session_ttl_override() -> Option<u64> {
-    let env_present = crate::system::read_env_var_renamed("IPE_WEB_TTL", "IPE_LIVE_TTL").is_ok();
+    let env_present = crate::system::read_env_var("IPE_WEB_TTL").is_ok();
     session_ttl_from(
         env_present,
         INSTALLED.get().and_then(|c| c.session_ttl_secs),

@@ -7,14 +7,14 @@ pub struct SsePatch(pub String);
 pub type SseTx = mpsc::Sender<SsePatch>;
 pub type SseRx = mpsc::Receiver<SsePatch>;
 
-/// Buffer capacity, honouring `IPE_WEB_SSE_BUFFER` (deprecated alias:
-/// `IPE_LIVE_SSE_BUFFER`; clamped to `[1, 1024]`, default 16). Parse failures
-/// and out-of-range values fall back to the clamp/default.
+/// Buffer capacity, honouring `IPE_WEB_SSE_BUFFER` (clamped to `[1, 1024]`,
+/// default 16). Parse failures and out-of-range values fall back to the
+/// clamp/default.
 fn buffer_capacity() -> usize {
     const DEFAULT: usize = 16;
     const MIN: usize = 1;
     const MAX: usize = 1024;
-    crate::system::read_env_var_renamed("IPE_WEB_SSE_BUFFER", "IPE_LIVE_SSE_BUFFER")
+    crate::system::read_env_var("IPE_WEB_SSE_BUFFER")
         .ok()
         .and_then(|s| s.trim().parse::<usize>().ok())
         .map(|n| n.clamp(MIN, MAX))
