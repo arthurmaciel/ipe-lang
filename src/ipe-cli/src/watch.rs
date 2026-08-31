@@ -1777,6 +1777,60 @@ const fn restart_outcome_kind(outcome: &ipe_watch::RestartOutcome) -> RestartOut
 }
 
 /// Spawn `cargo build --message-format=json` in `out_dir` and a companion
+/// Opt-out env gate for the dev-loop incremental rebuild path. When set to any
+/// value other than `0`, `ipe watch` keeps the machine's normal build
+/// configuration (sccache wrapper, non-incremental) for the emitted-app rebuild
+/// instead of the fast incremental path.
+const NO_INCREMENTAL_ENV: &str = "IPE_WATCH_NO_INCREMENTAL";
+
+/// Configure a watch-mode `cargo build` for the fast dev inner loop: turn on
+/// per-crate incremental codegen and take sccache out of the picture for this
+/// child only.
+///
+/// Why both, together: a machine-level `~/.cargo/config.toml` commonly wires
+/// `build.rustc-wrapper = "sccache"` with `build.incremental = false` (sccache
+/// cannot cache incremental crates, so the two are mutually exclusive). That
+/// global setting overrides the emitted crate's default dev profile, so every
+/// `ipe watch` rebuild re-codegens the whole app crate — including the vendored
+/// runtime module tree compiled inside it — from scratch. Setting
+/// `CARGO_INCREMENTAL=1` and clearing the rustc wrapper in THIS child's
+/// environment (rather than relying on the global config) restores incremental
+/// codegen for the app crate, which is a pure win for the warm view/update-body
+/// edit loop and behaviour-identical (incremental changes codegen partitioning,
+/// not program semantics — enforced by the clean-vs-incremental parity gate).
+///
+/// Scope: only the watch child is affected. `ipe build` (release / clean / CI)
+/// keeps the machine's sccache configuration untouched, since it never calls
+/// this. Registry dependencies are compiled as their own crates and are never
+/// incremental regardless, so a warm session pays their compile once and reuses
+/// it from the persistent per-project `out_dir/target` across rebuilds and
+/// across watch restarts.
+///
+/// Opt out with [`NO_INCREMENTAL_ENV`] to restore the machine's normal build
+/// configuration for the emitted-app rebuild.
+///
+/// The opt-out decision is read once at the call site and threaded in as
+/// `opt_out`, keeping the env-to-`Command` mapping a pure function.
+fn apply_dev_incremental_env(cmd: &mut Command, opt_out: bool) {
+    if opt_out {
+        return;
+    }
+    cmd.env("CARGO_INCREMENTAL", "1");
+    // Clear BOTH wrapper hooks so a machine-level `rustc-wrapper = "sccache"`
+    // (which forces non-incremental) does not defeat the incremental request.
+    // Empty string, not `remove_env`: cargo reads the wrapper from its resolved
+    // config, so an empty override in the child env is what actually disables it
+    // — removing the var alone would let the config value win.
+    cmd.env("RUSTC_WRAPPER", "");
+    cmd.env("RUSTC_WORKSPACE_WRAPPER", "");
+}
+
+/// Read a boolean opt-out/opt-in env gate: true when the variable is set to any
+/// value other than empty or `0`.
+fn env_flag_on(name: &str) -> bool {
+    std::env::var(name).is_ok_and(|v| !v.is_empty() && v != "0")
+}
+
 /// waiter thread that reports completion (or "killed — superseded")
 /// through `evt_tx`, tagged with `generation`. Returns a shared handle the
 /// orchestrator can `.kill()` from a DIFFERENT thread while the waiter is
@@ -1807,6 +1861,7 @@ fn spawn_cargo_build(
         .current_dir(out_dir)
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
+    apply_dev_incremental_env(&mut cmd, env_flag_on(NO_INCREMENTAL_ENV));
     if quiet {
         cmd.arg("-q");
     } else {
@@ -1948,9 +2003,90 @@ fn find_executable_path(cargo_json_stdout: &str) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::{
-        Duration, OrchestratorEvent, RESOLVE_RETRY_DELAY, RebuildTimings, mpsc,
-        schedule_resolve_retry,
+        Command, Duration, OrchestratorEvent, RESOLVE_RETRY_DELAY, RebuildTimings,
+        apply_dev_incremental_env, env_flag_on, mpsc, schedule_resolve_retry,
     };
+    use std::ffi::OsStr;
+
+    /// Collect a `Command`'s env overrides as owned strings, resolving the
+    /// override VALUE (`None` means "remove from the child env"). Lets a test
+    /// assert exactly which vars `apply_dev_incremental_env` set and to what.
+    fn env_overrides(cmd: &Command) -> Vec<(String, Option<String>)> {
+        cmd.get_envs()
+            .map(|(k, v)| {
+                (
+                    k.to_string_lossy().into_owned(),
+                    v.map(|v| v.to_string_lossy().into_owned()),
+                )
+            })
+            .collect()
+    }
+
+    fn override_for<'a>(
+        env: &'a [(String, Option<String>)],
+        key: &str,
+    ) -> Option<&'a Option<String>> {
+        env.iter().find(|(k, _)| k == key).map(|(_, v)| v)
+    }
+
+    /// The default watch path (opt-out off) requests incremental codegen AND
+    /// clears both rustc wrapper hooks in the child env, so a machine-level
+    /// `rustc-wrapper = "sccache"` (which forces non-incremental) cannot defeat
+    /// the incremental build. The clear is an EMPTY override, not a removal —
+    /// cargo reads the wrapper from its resolved config, so only an empty value
+    /// in the child env actually disables it.
+    #[test]
+    fn dev_incremental_env_enables_incremental_and_clears_wrapper() {
+        let mut cmd = Command::new(OsStr::new("cargo"));
+        apply_dev_incremental_env(&mut cmd, false);
+        let env = env_overrides(&cmd);
+        assert_eq!(
+            override_for(&env, "CARGO_INCREMENTAL"),
+            Some(&Some("1".to_owned())),
+            "watch must request incremental codegen"
+        );
+        assert_eq!(
+            override_for(&env, "RUSTC_WRAPPER"),
+            Some(&Some(String::new())),
+            "watch must clear RUSTC_WRAPPER to an empty value (disables sccache)"
+        );
+        assert_eq!(
+            override_for(&env, "RUSTC_WORKSPACE_WRAPPER"),
+            Some(&Some(String::new())),
+            "watch must clear RUSTC_WORKSPACE_WRAPPER too"
+        );
+    }
+
+    /// With the opt-out on, the watch build inherits the machine's normal build
+    /// configuration: no incremental request, no wrapper override.
+    #[test]
+    fn dev_incremental_env_opt_out_leaves_env_untouched() {
+        let mut cmd = Command::new(OsStr::new("cargo"));
+        apply_dev_incremental_env(&mut cmd, true);
+        let env = env_overrides(&cmd);
+        assert!(
+            override_for(&env, "CARGO_INCREMENTAL").is_none(),
+            "opt-out must not request incremental"
+        );
+        assert!(
+            override_for(&env, "RUSTC_WRAPPER").is_none(),
+            "opt-out must not touch the rustc wrapper"
+        );
+    }
+
+    /// The env flag reader treats an unset variable as off — the safe default
+    /// for the incremental opt-out. (Set/`0`/non-empty branches are exercised
+    /// without mutating process env, which the workspace lints forbid.)
+    #[test]
+    fn env_flag_reader_treats_unset_as_off() {
+        // A non-`IPE_`-prefixed name no other code sets (so it is reliably
+        // unset in the test process, and the env-docs scanner does not treat it
+        // as an undocumented `IPE_*` variable).
+        assert!(
+            !env_flag_on("WATCH_FLAG_READER_DEFINITELY_UNSET_PROBE"),
+            "an unset flag must read as off"
+        );
+    }
 
     /// The summed phases must equal the total when the total IS the sum plus a
     /// small unaccounted residual — the invariant the `report` residual line
