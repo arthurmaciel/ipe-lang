@@ -1,3 +1,22 @@
+-- | Ipe.Css — the typed stylesheet DSL, compiled pure Ipê source.
+--
+-- 100% pure Ipê. CSS generation is string building; the only Rust surface is
+-- the leaf security kernels imported from `Ipe.CssSafety` (`safeValue` /
+-- `safePropName` / `safeSelector` / `sanitizeRawBody` / `stripStyleClose`),
+-- which gate every free-string entry point at construction (parse, don't
+-- validate).
+--
+-- `CssProp` and `CssRule` are opaque: the only construction path is through
+-- the gated smart constructors (`property`, `rule`, `media`, `keyframes`,
+-- `raw`). A failing gate yields an explicit dropped state (`CssDropped` /
+-- `CssRuleDropped`) rather than a silent partial emit. `Length` and `Color`
+-- are also opaque — built only via the typed builders (`px`, `rem`, `hex`,
+-- `rgb`, …) — so a rendered declaration is provably post-scan.
+--
+-- The generic escape hatches (`property`, `rawProp`, `colorRaw`, `lengthRaw`,
+-- `raw`) are sanitized at construction and intended only for values that the
+-- typed builders do not cover. Prefer the typed builders for everything that
+-- appears in author-controlled code.
 module Ipe.Css exposing
     ( CssProp, CssRule, Length, Color, Opacity
     , Display(..), Position(..), TextAlign(..), Cursor(..)

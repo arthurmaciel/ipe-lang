@@ -170,6 +170,8 @@ Ipe.ByteSize — an opaque, unit-explicit byte quantity.
 
 [Full reference](stdlib/Bytes.md)
 
+Ipe.Bytes — raw byte buffers for binary data.
+
 | Export | Summary |
 |--------|----------|
 | `empty` | The empty byte buffer (zero bytes). |
@@ -346,6 +348,8 @@ Ipe.Crypto — cryptographic primitives.
 ## Css
 
 [Full reference](stdlib/Css.md)
+
+Ipe.Css — the typed stylesheet DSL, compiled pure Ipê source.
 
 | Export | Summary |
 |--------|----------|
@@ -1427,6 +1431,8 @@ Ipe.Net — typed network primitives.
 
 [Full reference](stdlib/Palette.md)
 
+Ipe.Palette — colour shades and spacing values.
+
 | Export | Summary |
 |--------|----------|
 | `Shade` | (no summary) |
@@ -2061,6 +2067,8 @@ Ipe.Ui.Responsive — device-class detection + breakpoint helpers for `Ipe.Ui`.
 ## Ui.Transform
 
 [Full reference](stdlib/Ui.Transform.md)
+
+Ipe.Ui.Transform — typed transform and opacity properties for animation keyframes.
 
 | Export | Summary |
 |--------|----------|
