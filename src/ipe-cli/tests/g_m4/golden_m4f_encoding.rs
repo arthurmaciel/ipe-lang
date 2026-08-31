@@ -8,7 +8,7 @@
 //!   `"hello"` → `"aGVsbG8="` → `"hello"` → `"aGVsbG8= hello"`.
 //!   (`encoding_base64`)
 //!
-//! * `Encoding.urlEncode` / `Encoding.urlDecode` roundtrip (QueryEscape
+//! * `Encoding.urlEncode` / `Encoding.urlDecode` roundtrip (`QueryEscape`
 //!   semantics: space → `+`, `&` → `%26`):
 //!   `"a b&c"` → `"a+b%26c"` → `"a b&c"` → `"a+b%26c a b&c"`.
 //!   (`encoding_url`)
@@ -100,7 +100,7 @@ fn encoding_base64_roundtrip() {
 
 // ── urlEncode + urlDecode ────────────────────────────────────────────────────
 
-/// `Encoding.urlEncode "a b&c"` → `"a+b%26c"` (QueryEscape: space → `+`);
+/// `Encoding.urlEncode "a b&c"` → `"a+b%26c"` (`QueryEscape`: space → `+`);
 /// `Encoding.urlDecode "a+b%26c"` → `Ok "a b&c"`.  Output: `"a+b%26c a b&c"`.
 #[test]
 fn encoding_url_roundtrip() {

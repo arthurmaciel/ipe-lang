@@ -141,11 +141,9 @@ main =
         }
 ";
 
-/// `Web.app` with a NON-EMPTY `routes` list but Model has
-/// no `page` field.  The golden oracle (`tools/oracle/bin/ipe`) compiles this fine
-/// (the runtime"Page": page})` which is a
-/// silent no-op when the `Page` field is absent).  This shape must compile on
-/// the non-routed path, matching the reference.
+/// `Web.app` with a NON-EMPTY `routes` list but a Model with no `page` field.
+/// A routed update against such a Model is a silent no-op, so this shape must
+/// still compile on the non-routed path.
 ///
 /// Shape mirrors `examples/24-tui-kitchen-sink` (single nullary route, no
 /// `page` field in Model).

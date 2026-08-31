@@ -15,10 +15,10 @@
 //! * The Rust backend emits `sqlx` + `sqlx-sqlite` for database access.
 //! * The row type the runtime returns from `Db.query` is
 //!   `Vec<HashMap<String, String>>`.
-//! * Connection management for `sqlite::memory:` pools uses async sqlx
-//!   pooling (serialised-mode SQLite).
+//! * Connection management for `sqlite::memory:` pools uses async `sqlx`
+//!   pooling (serialised-mode `SQLite`).
 //!
-//! Running this `Main.ipe` end-to-end would require the full SQLite
+//! Running this `Main.ipe` end-to-end would require the full `SQLite`
 //! toolchain and would produce byte-identical output, but is not part of
 //! the automated oracle-capture workflow (the oracle tool runs on this machine).
 //! The cached expected is Ipê's own verified output.
