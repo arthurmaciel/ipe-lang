@@ -189,7 +189,7 @@ fn sigterm(pid: u32) -> Result<(), BoxError> {
 }
 
 /// Same `/proc`-based black-box PID discovery `watch_integration.rs` uses:
-/// the supervised child carries `IPE_LIVE_PORT=<port>` in its environment
+/// the supervised child carries `IPE_WEB_PORT=<port>` in its environment
 /// (injected by `watch::child_env`), unique to this test's port.
 #[cfg(target_os = "linux")]
 fn find_pid_by_environ_kv(key: &str, value: &str) -> Option<u32> {
@@ -287,7 +287,7 @@ fn watch_shuts_down_the_supervised_child_on_sigterm_to_only_the_ipe_process() ->
         let _ = ipe_proc.wait();
         return Err("initial cold build+spawn must serve v1 within budget".into());
     }
-    let child_pid = find_pid_by_environ_kv("IPE_LIVE_PORT", &port.to_string())
+    let child_pid = find_pid_by_environ_kv("IPE_WEB_PORT", &port.to_string())
         .ok_or("the supervised child must be discoverable via /proc once v1 is serving")?;
 
     sigterm(ipe_proc.id())?;
@@ -426,7 +426,7 @@ fn double_sigterm_after_forwarder_consumed_is_silently_absorbed_use_sigkill() ->
         let _ = ipe_proc.wait();
         return Err("initial cold build+spawn must serve v1 within budget".into());
     }
-    let child_pid = find_pid_by_environ_kv("IPE_LIVE_PORT", &port.to_string())
+    let child_pid = find_pid_by_environ_kv("IPE_WEB_PORT", &port.to_string())
         .ok_or("the supervised child must be discoverable via /proc once v1 is serving")?;
 
     // First SIGTERM: starts the documented graceful teardown (bounded

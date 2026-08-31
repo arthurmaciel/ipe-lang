@@ -559,8 +559,8 @@ fn emit_routed_web_leaf(
          {routes_s}, \
          {not_found_s}, \
          {set_page}, \
-         ::std::env::var(\"IPE_LIVE_STORE\").unwrap_or_else(|_| \"memory\".to_string()), \
-         ::std::env::var(\"IPE_LIVE_STORE_PATH\").unwrap_or_else(|_| ::std::string::String::new()), \
+         ::std::env::var(\"IPE_WEB_STORE\").unwrap_or_else(|_| \"memory\".to_string()), \
+         ::std::env::var(\"IPE_WEB_STORE_PATH\").unwrap_or_else(|_| ::std::string::String::new()), \
          IPE_WEB_MODEL_SCHEMA_TAG\
          ))) }}"
     )))
@@ -591,8 +591,8 @@ fn emit_single_page_web_leaf(
     child: u16,
     generics: GenericScope,
 ) -> DResult<Option<String>> {
-    let store_args = "::std::env::var(\"IPE_LIVE_STORE\").unwrap_or_else(|_| \"memory\".to_string()), \
-         ::std::env::var(\"IPE_LIVE_STORE_PATH\").unwrap_or_else(|_| ::std::string::String::new()), \
+    let store_args = "::std::env::var(\"IPE_WEB_STORE\").unwrap_or_else(|_| \"memory\".to_string()), \
+         ::std::env::var(\"IPE_WEB_STORE_PATH\").unwrap_or_else(|_| ::std::string::String::new()), \
          IPE_WEB_MODEL_SCHEMA_TAG";
     let serve_call = format!(
         "ipe_runtime::web::web_app({init_s}, {update_s}, {view_s}, {subs_s}, {store_args})"
@@ -967,6 +967,8 @@ const fn ir_type_display_name(ty: &IrType) -> &'static str {
         IrType::EmailProvider => "EmailProvider",
         // `ProcessRunWithCfg` — kernel-boundary non-serde input record; not a web-surface type.
         IrType::ProcessRunWithCfg => "ProcessRunWithCfg",
+        // `ProcessRunInPtyCfg` — kernel-boundary non-serde input record; not a web-surface type.
+        IrType::ProcessRunInPtyCfg => "ProcessRunInPtyCfg",
         // Typed-key newtypes.
         IrType::CryptoKey => "Key",
         IrType::CryptoMac => "Mac",

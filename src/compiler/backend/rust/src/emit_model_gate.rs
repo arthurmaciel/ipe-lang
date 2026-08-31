@@ -285,9 +285,11 @@ fn leaf_of_bounded(ctx: &EmitCtx, ty: &IrType, app: AppShape, fuel: u32) -> Mode
         | IrType::EmailSesConfig
         | IrType::EmailSmtpConfig
         | IrType::EmailProvider
-        // `ProcessRunWithCfg` is a kernel-boundary non-serde input record — not a
-        // valid Model leaf, same classification as the Email/Cache cfg types.
+        // `ProcessRunWithCfg` / `ProcessRunInPtyCfg` are kernel-boundary non-serde
+        // input records — not valid Model leaves, same classification as the
+        // Email/Cache cfg types.
         | IrType::ProcessRunWithCfg
+        | IrType::ProcessRunInPtyCfg
         // Typed-key newtypes are not serde — a `Key`/`Mac`/`EmailAddress` in a
         // Web Model would be a compile-time IPE-L0120.
         | IrType::CryptoKey

@@ -955,6 +955,10 @@ fn canon_ty_is_list_of_attachment(ty: &canon::Type, interner: &Interner) -> bool
 /// Folds to `IrType::ProcessRunWithCfg`.
 const PROCESS_RUN_WITH_CFG_FIELDS: &[&str] = &["args", "command", "cwd", "env"];
 
+/// `ProcessRunInPtyCfg` — sorted field NAMES `{ args, cols, command, cwd, env,
+/// rows }`. Folds to `IrType::ProcessRunInPtyCfg`.
+const PROCESS_RUN_IN_PTY_CFG_FIELDS: &[&str] = &["args", "cols", "command", "cwd", "env", "rows"];
+
 /// Is `ty` the built-in `Path` — an empty-module, arg-less `Con` named `Path`?
 fn ty_is_path(ty: &Ty, interner: &Interner) -> bool {
     matches!(ty, Ty::Con { module, name, args }
@@ -1027,6 +1031,62 @@ fn is_process_run_with_cfg_canon_shape(
                 && canon_ty_is_string(cmd_ty, interner)
                 && canon_ty_is_maybe_path(cwd_ty, interner)
                 && canon_ty_matches_http_field(env_ty, HttpFieldTy::StrPairList, interner)
+    )
+}
+
+/// Does `fields` match the `ProcessRunInPtyCfg` shape — `{ args : List String,
+/// cols : Int, command : String, cwd : Maybe Path, env : List (String, String),
+/// rows : Int }`? Sorts `fields` in place. Sorted order: args, cols, command,
+/// cwd, env, rows.
+#[allow(clippy::similar_names)] // `cmd_n`/`cwd_n`/`cols_n` differ by one char — unavoidable given field names
+fn is_process_run_in_pty_cfg_shape(fields: &mut [(&str, &Ty)], interner: &Interner) -> bool {
+    if fields.len() != PROCESS_RUN_IN_PTY_CFG_FIELDS.len() {
+        return false;
+    }
+    fields.sort_unstable_by_key(|(name, _)| *name);
+    matches!(
+        fields,
+        [(args_n, args_ty), (cols_n, cols_ty), (cmd_n, cmd_ty), (cwd_n, cwd_ty), (env_n, env_ty), (rows_n, rows_ty)]
+            if *args_n == "args"
+                && *cols_n == "cols"
+                && *cmd_n == "command"
+                && *cwd_n == "cwd"
+                && *env_n == "env"
+                && *rows_n == "rows"
+                && ty_is_list_of_string(args_ty, 1, interner)
+                && ty_is_int(cols_ty, interner)
+                && ty_is_string(cmd_ty, interner)
+                && ty_is_maybe_path(cwd_ty, interner)
+                && ty_matches_http_field(env_ty, HttpFieldTy::StrPairList, interner)
+                && ty_is_int(rows_ty, interner)
+    )
+}
+
+/// The [`canon::Type`] twin of [`is_process_run_in_pty_cfg_shape`].
+#[allow(clippy::similar_names)] // `cmd_n`/`cwd_n`/`cols_n` differ by one char — unavoidable given field names
+fn is_process_run_in_pty_cfg_canon_shape(
+    fields: &mut [(&str, &canon::Type)],
+    interner: &Interner,
+) -> bool {
+    if fields.len() != PROCESS_RUN_IN_PTY_CFG_FIELDS.len() {
+        return false;
+    }
+    fields.sort_unstable_by_key(|(name, _)| *name);
+    matches!(
+        fields,
+        [(args_n, args_ty), (cols_n, cols_ty), (cmd_n, cmd_ty), (cwd_n, cwd_ty), (env_n, env_ty), (rows_n, rows_ty)]
+            if *args_n == "args"
+                && *cols_n == "cols"
+                && *cmd_n == "command"
+                && *cwd_n == "cwd"
+                && *env_n == "env"
+                && *rows_n == "rows"
+                && canon_ty_is_list_of_string(args_ty, 1, interner)
+                && canon_ty_is_int(cols_ty, interner)
+                && canon_ty_is_string(cmd_ty, interner)
+                && canon_ty_is_maybe_path(cwd_ty, interner)
+                && canon_ty_matches_http_field(env_ty, HttpFieldTy::StrPairList, interner)
+                && canon_ty_is_int(rows_ty, interner)
     )
 }
 
@@ -2297,6 +2357,7 @@ fn ir_type_mentions(ty: &IrType, leaf: &impl Fn(&IrType) -> bool) -> bool {
         | IrType::Locale
         | IrType::Principal
         | IrType::ProcessRunWithCfg
+        | IrType::ProcessRunInPtyCfg
         | IrType::CacheCfg
         | IrType::CacheStats
         | IrType::WebSocketClientCfg
@@ -3002,6 +3063,7 @@ fn ir_contains_fun(ty: &IrType) -> bool {
         // Process-run-with cfg + Cache config / stats + Csv document are plain
         // data records — no function.
         | IrType::ProcessRunWithCfg
+        | IrType::ProcessRunInPtyCfg
         | IrType::CacheCfg
         | IrType::WebSocketClientCfg
         | IrType::CacheStats
@@ -3173,6 +3235,7 @@ fn clone_class(env: CloneEnv<'_>, t: &IrType) -> CloneClass {
         // Process-run-with cfg + Cache config / stats + Csv document runtime
         // structs are `Clone` (no `Copy`).
         | IrType::ProcessRunWithCfg
+        | IrType::ProcessRunInPtyCfg
         | IrType::CacheCfg
         | IrType::WebSocketClientCfg
         | IrType::CacheStats
@@ -6271,6 +6334,7 @@ fn ir_type_mentions_generic(ty: &IrType, tv: Symbol) -> bool {
         // Process-run-with cfg + Cache config / stats + Csv document are
         // non-parametric — mention no type var.
         | IrType::ProcessRunWithCfg
+        | IrType::ProcessRunInPtyCfg
         | IrType::CacheCfg
         | IrType::WebSocketClientCfg
         | IrType::CacheStats
@@ -6391,6 +6455,7 @@ fn ir_type_generic_in_decoder(ty: &IrType, tv: Symbol) -> bool {
         | IrType::ShapeWebView
         | IrType::ShapeTerminal
         | IrType::ProcessRunWithCfg
+        | IrType::ProcessRunInPtyCfg
         | IrType::CacheCfg
         | IrType::WebSocketClientCfg
         | IrType::CacheStats
@@ -6507,6 +6572,7 @@ fn ir_type_generic_reaches_bare(ty: &IrType, tv: Symbol) -> bool {
         | IrType::ShapeWebView
         | IrType::ShapeTerminal
         | IrType::ProcessRunWithCfg
+        | IrType::ProcessRunInPtyCfg
         | IrType::CacheCfg
         | IrType::WebSocketClientCfg
         | IrType::CacheStats
@@ -11656,6 +11722,7 @@ const fn ir_type_label(ty: &IrType) -> &'static str {
         IrType::Path => "Path",
         IrType::Regex => "Regex",
         IrType::ProcessRunWithCfg => "ProcessRunWithCfg",
+        IrType::ProcessRunInPtyCfg => "ProcessRunInPtyCfg",
         IrType::CacheCfg => "CacheCfg",
         IrType::CacheStats => "CacheStats",
         IrType::WebSocketClientCfg => "WebSocketClientCfg",
@@ -13830,6 +13897,7 @@ impl<'a> Lowerer<'a> {
             | IrType::ShapeWebView
             | IrType::ShapeTerminal
             | IrType::ProcessRunWithCfg
+            | IrType::ProcessRunInPtyCfg
             | IrType::CacheCfg
             | IrType::WebSocketClientCfg
             | IrType::CacheStats
@@ -18758,6 +18826,11 @@ impl<'a> Lowerer<'a> {
                 if is_process_run_with_cfg_canon_shape(&mut named_fields, self.interner) {
                     return Ok(IrType::ProcessRunWithCfg);
                 }
+                // fold the nominal Ipe.Process.runInPty input record annotation
+                // shape to `IrType::ProcessRunInPtyCfg` — twin of the solved-Ty fold.
+                if is_process_run_in_pty_cfg_canon_shape(&mut named_fields, self.interner) {
+                    return Ok(IrType::ProcessRunInPtyCfg);
+                }
                 // fold the two nominal Ipe.Cache record shapes (annotation
                 // path — e.g. `newRaw : CacheCfg -> …` / `statsRaw : … -> Task
                 // Error { hits, misses, evictions }`) — twin of the solved-Ty fold.
@@ -20034,6 +20107,13 @@ impl<'a> Lowerer<'a> {
                 // `Rec…` struct would mismatch (E0308).
                 if is_process_run_with_cfg_shape(&mut named_fields, self.interner) {
                     return Ok(IrType::ProcessRunWithCfg);
+                }
+                // fold the nominal Ipe.Process.runInPty input record shape to
+                // the runtime `ProcessRunInPtyCfg` struct — same rationale as
+                // runWith: `process_run_in_pty` takes it, so a synthesised
+                // `Rec…` struct would mismatch (E0308).
+                if is_process_run_in_pty_cfg_shape(&mut named_fields, self.interner) {
+                    return Ok(IrType::ProcessRunInPtyCfg);
                 }
                 // fold the two nominal Ipe.Cache record shapes to their
                 // runtime structs (CacheCfg / CacheStats) — same rationale as
@@ -24599,6 +24679,8 @@ impl<'a> Lowerer<'a> {
                 // ── Process arity-1 ─────────────────────────────────────
                 // `ProcessRunWith` : { args, command, cwd, env } -> Task Error { exitCode, stdout, stderr }
                 | KernelFn::ProcessRunWith
+                // `ProcessRunInPty` : { args, command, cwd, env, cols, rows } -> Task Error { exitCode, output }
+                | KernelFn::ProcessRunInPty
                 // ── Http arity-1 ────────────────────────────────────────
                 // `HttpGet` : String -> Task Error HttpResponse
                 // `HttpRequest` : HttpRequest -> Task Error HttpResponse
@@ -26638,6 +26720,7 @@ impl<'a> Lowerer<'a> {
                     ("File", "walkMatching") => Ok(Callee::Kernel(KernelFn::FileWalkMatching)),
                     ("Process", "run") => Ok(Callee::Kernel(KernelFn::ProcessRun)),
                     ("Process", "runWith") => Ok(Callee::Kernel(KernelFn::ProcessRunWith)),
+                    ("Process", "runInPty") => Ok(Callee::Kernel(KernelFn::ProcessRunInPty)),
                     // ── Http kernels ────────────────────────────────────
                     ("Http", "get") => Ok(Callee::Kernel(KernelFn::HttpGet)),
                     ("Http", "post") => Ok(Callee::Kernel(KernelFn::HttpPost)),
@@ -29644,6 +29727,7 @@ fn collect_ir_generic_syms(ty: &IrType, out: &mut BTreeSet<Symbol>) {
         // Process-run-with cfg + Cache config / stats + Csv document are
         // non-parametric — no generic syms.
         | IrType::ProcessRunWithCfg
+        | IrType::ProcessRunInPtyCfg
         | IrType::CacheCfg
         | IrType::WebSocketClientCfg
         | IrType::CacheStats
@@ -32124,6 +32208,7 @@ mod tests {
             | ipe_ir::IrType::ShapeWebView
             | ipe_ir::IrType::ShapeTerminal
             | ipe_ir::IrType::ProcessRunWithCfg
+            | ipe_ir::IrType::ProcessRunInPtyCfg
             | ipe_ir::IrType::CacheCfg
             | ipe_ir::IrType::WebSocketClientCfg
             | ipe_ir::IrType::CacheStats

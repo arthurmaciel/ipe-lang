@@ -223,7 +223,7 @@ impl SupervisorState {
     /// Advance the state machine on a GREEN build. `candidate_path` is the
     /// freshly built artifact; `spawn` constructs the `Command` to launch
     /// WHATEVER path it is given (the caller owns env/args, e.g. the port
-    /// and `IPE_LIVE_STORE` injection); `readiness` and `timeouts` govern
+    /// and `IPE_WEB_STORE` injection); `readiness` and `timeouts` govern
     /// the readiness gate.
     ///
     /// `spawn` takes the path as a PARAMETER (rather than the caller
@@ -404,7 +404,7 @@ fn stop_gracefully(child: &mut Child, grace: Duration) {
 /// Takes `cmd` BY VALUE (not `&Command`): `std::process::Command` has no
 /// `Clone` impl and no public accessor for its configured argv/envs, so the
 /// only sound way to spawn a fully-configured command (port env vars,
-/// `IPE_LIVE_STORE`, …) without silently dropping that configuration is to
+/// `IPE_WEB_STORE`, …) without silently dropping that configuration is to
 /// consume the one, already-built `Command` the caller hands in. Every call
 /// site therefore builds a FRESH `Command` per spawn attempt (`apply_green`
 /// calls the caller's `spawn` factory for the candidate, and

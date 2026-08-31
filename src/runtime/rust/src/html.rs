@@ -269,15 +269,14 @@ fn render_into_ctx<M>(
             s.push('<');
             s.push_str(tag);
             // Collect regular + bool attrs into (key, value) pairs, then sort
-            // by key —  renderVNode emits from a map under sort.Strings, so
-            // matching byte-for-byte requires the same alphabetical order. A
-            // BoolAttr renders as `k="true"` (the string "true"), NOT a bare `k`.
+            // by key — alphabetical order matches the byte-exact output expected
+            // by golden tests. A BoolAttr renders as `k="true"` (the string
+            // "true"), NOT a bare `k`.
             let mut pairs: Vec<(&str, String)> = vec![];
             let mut events: Vec<&str> = vec![];
             let mut ipe_id: Option<&str> = None;
-            // Multi-valued attribute merge
-            // (live.go ~L161-185). `class` is HTML's space-separated and
-            // `style` HTML's semicolon-separated multi-valued attribute: an
+            // Multi-valued attribute merge: `class` is HTML's space-separated
+            // and `style` HTML's semicolon-separated multi-valued attribute: an
             // element carrying BOTH a Ipe.Ui-computed inline `style` (from
             // padding/background/border attrs) AND a user
             // `Ui.htmlAttribute "style" "z-index: 5"` must emit ONE merged
@@ -841,8 +840,8 @@ pub fn html_named_attr_<M>(key: String, val: String) -> Attribute<M> {
 }
 
 /// `Ipe.Html.Attributes.{checked,disabled,…}` and the generic
-/// `boolAttribute k b` — a boolean HTML attribute (emitted bare when `true`,
-/// omitted when `false`, per the render sink's `BoolAttr` handling).
+/// `boolAttribute k b` — a boolean HTML attribute. Renders as `key="true"`
+/// when `on` is `true`; omitted when `false` (via the `BoolAttr` render path).
 #[must_use]
 pub fn html_bool_named_attr_<M>(key: String, on: bool) -> Attribute<M> {
     Attribute::BoolAttr(key, on)
@@ -1139,7 +1138,7 @@ mod tests {
         // (padding/background/border) AND a user `Ui.htmlAttribute "style" V`
         // adds another. The renderer MUST merge both into ONE `style="…"` —
         // emitting two `style="…"` attrs makes the browser keep only the first,
-        // silently dropping the user's declarations. (live.go ~L176).
+        // silently dropping the user's declarations.
         let computed = "padding: 8px; background-color: rgb(255, 102, 0)";
         let t: Html<()> = Html::HElement(
             "div".into(),
@@ -1206,7 +1205,7 @@ mod tests {
     #[test]
     fn textarea_value_renders_as_content_not_attr() {
         // <textarea value="…"> renders EMPTY in browsers — the value must become
-        // the text content. (live.go renderVNode). Ipe.Ui.Input.multiline
+        // the text content. Ipe.Ui.Input.multiline
         // sets a `value` attr; the renderer must move it into the body.
         let t: Html<()> = Html::HElement(
             "textarea".into(),

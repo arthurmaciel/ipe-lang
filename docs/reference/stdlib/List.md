@@ -4,119 +4,359 @@
 
 [Back to stdlib index](../stdlib.md)
 
-## `all`
+`Ipe.List` — transform, filter, and combine lists (compiled-source Layer-3).
 
-`all test list` — `True` if `test` returns `True` for every element.
+A `List a` is an ordered sequence of values that all share the type `a`:
+`[ 1, 2, 3 ]` is a `List Int`, `[ "a", "b" ]` a `List String`. Lists are
+immutable — every function here returns a NEW list rather than changing its
+argument — so the same list can be shared freely without one caller's
+transformation affecting another's.
 
-## `any`
+The functions divide into a few families: shape (`isEmpty`, `length`,
+`reverse`), taking apart (`head`, `tail`, `take`, `drop`), building up
+(`cons`, `singleton`, `repeat`, `append`, `concat`, `range`), element-wise
+transforms (`map`, `filter`, `filterMap`, `indexedMap`), searching
+(`member`, `find`, `any`, `all`), folding to a single value (`foldl`,
+`foldr`, `sum`, `product`, `maximum`, `minimum`), and ordering (`sortBy`,
+`sortWith`, `sort`, `unique`).
 
-`any test list` — `True` if `test` returns `True` for at least one element.
+Functions that might not find an answer return a `Ipe.Maybe`: `head []` is
+`Nothing`, `head [ 1, 2 ]` is `Just 1`. That is how the type system forces a
+caller to handle the empty case before using a first element.
 
-## `append`
+Example:
 
-`append xs ys` — all of `xs` followed by all of `ys`.
+    import Ipe.List as List
 
-## `concat`
+    -- The even numbers, doubled.
+    List.filter (\n -> modBy 2 n == 0) [ 1, 2, 3, 4 ]
+        |> List.map (\n -> n * 2)
+    -- == [ 4, 8 ]
 
-`concat lists` — flatten a list of lists into one list.
+See also: `Ipe.Maybe`, `Ipe.Dict` (key-value lookup), `Ipe.Set`.
 
-## `concatMap`
-
-`concatMap f list` — apply `f` to each element and flatten the results.
-
-## `cons`
-
-`cons x list` — prepend `x` to the list; the named form of `x :: list`.
-
-## `drop`
-
-`drop n list` — the list without its first `n` elements.
-
-## `filter`
-
-`filter keep list` — keep only the elements for which `keep` returns `True`.
-
-## `filterMap`
-
-`filterMap f list` — apply `f` to each element, keeping only `Just` payloads.
-
-## `find`
-
-`find test list` — `Just` the first element satisfying `test`, or `Nothing`.
-
-## `foldl`
-
-`foldl step initial list` — reduce from the left; `step element accumulator`.
-
-## `foldr`
-
-`foldr step initial list` — reduce from the right; `step element accumulator`.
-
-## `head`
-
-`head list` — `Just` the first element, or `Nothing` if empty.
-
-## `indexedMap`
-
-`indexedMap f list` — like `map` but `f` also receives each element's index.
+Every member is a point-free `Ffi.kernel` alias resolved by
+`detect_kernel_alias` to a registered `List*` `StdlibKernel` variant
+(`ipe_runtime::list::*`). The type constraints (`comparable`, `number`)
+are enforced by the type-checker at the call site.
 
 ## `isEmpty`
+
+```ipe
+isEmpty : List a -> Bool
+```
 
 `isEmpty list` — `True` if the list has no elements.
 
 ## `length`
 
+```ipe
+length : List a -> Int
+```
+
 `length list` — the number of elements in the list.
 
-## `map`
+## `head`
 
-`map f list` — apply `f` to every element, giving a new list of results in the same order.
+```ipe
+head : List a -> Maybe a
+```
 
-## `maximum`
+`head list` — `Just` the first element, or `Nothing` if empty.
 
-`maximum list` — `Just` the largest element, or `Nothing` if empty.
+## `tail`
 
-## `member`
+```ipe
+tail : List a -> Maybe (List a)
+```
 
-`member x list` — `True` if `x` equals any element of `list`.
+`tail list` — `Just` the list without its first element, or `Nothing` if empty.
 
-## `minimum`
+## `cons`
 
-`minimum list` — `Just` the smallest element, or `Nothing` if empty.
+```ipe
+cons : a -> List a -> List a
+```
 
-## `range`
+`cons x list` — prepend `x` to the list; the named form of `x :: list`.
 
-`range lo hi` — ascending integers from `lo` to `hi` inclusive.
+## `singleton`
+
+```ipe
+singleton : a -> List a
+```
+
+`singleton x` — the one-element list `[ x ]`.
+
+## `repeat`
+
+```ipe
+repeat : Int -> a -> List a
+```
+
+`repeat n x` — a list with `n` copies of `x`; `[]` when `n <= 0`.
 
 ## `reverse`
 
+```ipe
+reverse : List a -> List a
+```
+
 `reverse list` — the list in reverse order.
 
+## `take`
+
+```ipe
+take : Int -> List a -> List a
+```
+
+`take n list` — the first `n` elements; the whole list when shorter than `n`.
+
+## `drop`
+
+```ipe
+drop : Int -> List a -> List a
+```
+
+`drop n list` — the list without its first `n` elements.
+
+## `append`
+
+```ipe
+append : List a -> List a -> List a
+```
+
+`append xs ys` — all of `xs` followed by all of `ys`.
+
+## `concat`
+
+```ipe
+concat : List (List a) -> List a
+```
+
+`concat lists` — flatten a list of lists into one list.
+
+## `member`
+
+```ipe
+member : a -> List a -> Bool
+```
+
+`member x list` — `True` if `x` equals any element of `list`.
+
+## `range`
+
+```ipe
+range : Int -> Int -> List Int
+```
+
+`range lo hi` — ascending integers from `lo` to `hi` inclusive.
+
+## `zip`
+
+```ipe
+zip : List a -> List b -> List ( a, b )
+```
+
+`zip xs ys` — pair elements position-by-position, stopping at the shorter list.
+
+## `map`
+
+```ipe
+map : (a -> b) -> List a -> List b
+```
+
+`map f list` — apply `f` to every element, giving a new list of results in the same order.
+
+## `filter`
+
+```ipe
+filter : (a -> Bool) -> List a -> List a
+```
+
+`filter keep list` — keep only the elements for which `keep` returns `True`.
+
+## `any`
+
+```ipe
+any : (a -> Bool) -> List a -> Bool
+```
+
+`any test list` — `True` if `test` returns `True` for at least one element.
+
+## `all`
+
+```ipe
+all : (a -> Bool) -> List a -> Bool
+```
+
+`all test list` — `True` if `test` returns `True` for every element.
+
+## `find`
+
+```ipe
+find : (a -> Bool) -> List a -> Maybe a
+```
+
+`find test list` — `Just` the first element satisfying `test`, or `Nothing`.
+
+## `foldl`
+
+```ipe
+foldl : (a -> b -> b) -> b -> List a -> b
+```
+
+`foldl step initial list` — reduce from the left; `step element accumulator`.
+
+## `foldr`
+
+```ipe
+foldr : (a -> b -> b) -> b -> List a -> b
+```
+
+`foldr step initial list` — reduce from the right; `step element accumulator`.
+
+## `concatMap`
+
+```ipe
+concatMap : (a -> List b) -> List a -> List b
+```
+
+`concatMap f list` — apply `f` to each element and flatten the results.
+
+## `indexedMap`
+
+```ipe
+indexedMap : (Int -> a -> b) -> List a -> List b
+```
+
+`indexedMap f list` — like `map` but `f` also receives each element's index.
+
+## `filterMap`
+
+```ipe
+filterMap : (a -> Maybe b) -> List a -> List b
+```
+
+`filterMap f list` — apply `f` to each element, keeping only `Just` payloads.
+
 ## `sortBy`
+
+```ipe
+sortBy : (a -> b) -> List a -> List a
+```
 
 `sortBy key list` — stable ascending sort by `key element`.
 
 ## `sortWith`
 
+```ipe
+sortWith : (a -> a -> Order) -> List a -> List a
+```
+
 `sortWith cmp list` — stable sort using a comparison function returning `Order`.
+
+## `sort`
+
+```ipe
+sort : List a -> List a
+```
+
+`sort list` — stable ascending sort by natural order. Requires a comparable element.
 
 ## `sum`
 
+```ipe
+sum : List a -> a
+```
+
 `sum list` — the sum of all elements; `0` for the empty list.
 
-## `tail`
+## `product`
 
-`tail list` — `Just` the list without its first element, or `Nothing` if empty.
+```ipe
+product : List a -> a
+```
 
-## `take`
+`product list` — the multiplicative fold; `1` for the empty list.
 
-`take n list` — the first `n` elements; the whole list when shorter than `n`.
+## `maximum`
+
+```ipe
+maximum : List a -> Maybe a
+```
+
+`maximum list` — `Just` the largest element, or `Nothing` if empty.
+
+## `minimum`
+
+```ipe
+minimum : List a -> Maybe a
+```
+
+`minimum list` — `Just` the smallest element, or `Nothing` if empty.
 
 ## `unique`
 
+```ipe
+unique : List a -> List a
+```
+
 `unique list` — remove duplicates, keeping first occurrence of each element.
 
-## `zip`
+## `intersperse`
 
-`zip xs ys` — pair elements position-by-position, stopping at the shorter list.
+```ipe
+intersperse : a -> List a -> List a
+```
+
+`intersperse sep list` — place `sep` between each adjacent pair of elements.
+
+## `partition`
+
+```ipe
+partition : (a -> Bool) -> List a -> ( List a, List a )
+```
+
+`partition pred list` — split into `( keep, reject )` preserving order.
+
+## `unzip`
+
+```ipe
+unzip : List ( a, b ) -> ( List a, List b )
+```
+
+`unzip pairs` — split a list of pairs into two parallel lists.
+
+## `map2`
+
+```ipe
+map2 : (a -> b -> r) -> List a -> List b -> List r
+```
+
+`map2 f xs ys` — combine two lists element-wise; stops at the shorter.
+
+## `map3`
+
+```ipe
+map3 : (a -> b -> c -> r) -> List a -> List b -> List c -> List r
+```
+
+`map3 f xs ys zs` — combine three lists element-wise; stops at the shortest.
+
+## `map4`
+
+```ipe
+map4 : (a -> b -> c -> d -> r) -> List a -> List b -> List c -> List d -> List r
+```
+
+`map4 f` — combine four lists element-wise; stops at the shortest.
+
+## `map5`
+
+```ipe
+map5 : (a -> b -> c -> d -> e -> r) -> List a -> List b -> List c -> List d -> List e -> List r
+```
+
+`map5 f` — combine five lists element-wise; stops at the shortest.
 

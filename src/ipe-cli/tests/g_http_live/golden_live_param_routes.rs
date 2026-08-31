@@ -288,7 +288,7 @@ fn param_route_solo_cargo_builds_and_delivers_param() {
     };
 
     let mut child = std::process::Command::new(&exe)
-        .env("IPE_LIVE_PORT", port.to_string())
+        .env("IPE_WEB_PORT", port.to_string())
         .env("IPE_CSRF", "off")
         // No embedded dev console: the console child is irrelevant here and
         // its own `listening on` log line would race the readiness check.

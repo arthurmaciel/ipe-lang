@@ -1,18 +1,21 @@
 //! Generator for `docs/reference/stdlib.md` and `docs/reference/stdlib/<Module>.md`.
 //!
-//! Reads the `ipe_docs` index (built from the stdlib veneers) and renders two
-//! doc surfaces:
+//! Reads the stdlib documentation extracted from the embedded `.ipe` sources
+//! (via [`ipe_docs::stdlib_docs`]) and renders two doc surfaces:
 //!
-//! - `docs/reference/stdlib.md` — the index: every module with a one-line summary for
-//!   each documented symbol, cross-linked to its detail page.
-//! - `docs/reference/stdlib/<Module>.md` — one page per module that has at
-//!   least one documented symbol: each symbol's full doc-string body.
+//! - `docs/reference/stdlib.md` — the index: every module cross-linked to its
+//!   detail page, with a one-line summary for each documented export.
+//! - `docs/reference/stdlib/<Module>.md` — one page *per module* (every exposed
+//!   stdlib module, not only those with block doc-strings): the module-level
+//!   header, then each export with its signature and documentation body.
 //!
-//! Content comes exclusively from the `ipe_docs` index (doc-strings parsed from
-//! the `.ipe` veneers). No prose is authored here beyond structural headings.
+//! Content comes exclusively from the `.ipe` sources — module headers,
+//! `-- |` / `{-| … -}` doc bodies, and `name : Type` signature lines, relayed
+//! verbatim. No prose is authored here beyond structural headings.
 //!
-//! The generator is deterministic: modules and symbols are sorted
-//! alphabetically so the same index always produces byte-identical output.
+//! The generator is deterministic: modules are sorted by short name and
+//! exports keep their source order, so the same sources always produce
+//! byte-identical output.
 //!
 //! # Usage
 //!
@@ -25,12 +28,11 @@
 
 #![forbid(unsafe_code)]
 
-use std::collections::BTreeMap;
 use std::fmt::Write as FmtWrite;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use ipe_docs::{EntryKind, Index};
+use ipe_docs::stdlib_docs::{ModuleDoc, all_module_docs};
 
 fn main() -> ExitCode {
     match run() {
@@ -45,118 +47,75 @@ fn main() -> ExitCode {
 fn run() -> Result<(), String> {
     let repo_root = find_repo_root()?;
 
-    let explain_dir = repo_root.join("src/compiler/diagnostics/explain");
-    let content_dir = repo_root.join("docs/constructs");
+    let modules = all_module_docs();
 
-    let index = Index::build(&explain_dir, &content_dir, &[])
-        .map_err(|e| format!("index build failed: {e}"))?;
-
-    let module_map = collect_modules(&index);
-
-    let stdlib_md = render_stdlib_index(&module_map);
+    let stdlib_md = render_stdlib_index(&modules);
     write_file(&repo_root.join("docs/reference/stdlib.md"), &stdlib_md)?;
 
     let detail_dir = repo_root.join("docs/reference/stdlib");
     create_dir_all(&detail_dir)?;
 
-    for (module_name, symbols) in &module_map {
-        let detail = render_module_detail(module_name, symbols);
-        let file_name = module_file_name(module_name);
+    for module in &modules {
+        let detail = render_module_detail(module);
+        let file_name = module_file_name(&module.short);
         write_file(&detail_dir.join(&file_name), &detail)?;
     }
 
     Ok(())
 }
 
-// ── Module map ────────────────────────────────────────────────────────────────
-
-/// A documented symbol: its short name and doc-string body.
-struct SymbolDoc {
-    /// The symbol name within the module (e.g. `map`).
-    name: String,
-    /// Full doc-string body from the index.
-    body: String,
-}
-
-/// Collect all modules that have at least one documented symbol from the index.
-///
-/// Returns a `BTreeMap` keyed by short module name (`List`, `Maybe`, …) in
-/// ascending sort order. Each value is the list of documented symbols for that
-/// module, sorted by symbol name.
-fn collect_modules(index: &Index) -> BTreeMap<String, Vec<SymbolDoc>> {
-    let mut map: BTreeMap<String, Vec<SymbolDoc>> = BTreeMap::new();
-
-    for key in index.keys() {
-        let Some(entry) = index.resolve(key) else {
-            continue;
-        };
-        if entry.kind != EntryKind::Symbol {
-            continue;
-        }
-        // Use the fully-qualified key form (`Ipe.List.map`) to avoid processing
-        // each symbol twice (both the short and fq forms resolve to the same entry).
-        if !key.starts_with("Ipe.") {
-            continue;
-        }
-        // key is `Ipe.<Module...>.<sym>` — strip the leading `Ipe.` prefix and
-        // split off the last `.`-separated segment as the symbol name.
-        let without_prefix = key.strip_prefix("Ipe.").unwrap_or(key);
-        let Some(dot_pos) = without_prefix.rfind('.') else {
-            continue;
-        };
-        let short_module = &without_prefix[..dot_pos];
-        let sym_name = &without_prefix[dot_pos + 1..];
-
-        let sym = SymbolDoc {
-            name: sym_name.to_owned(),
-            body: entry.text.clone(),
-        };
-        map.entry(short_module.to_owned()).or_default().push(sym);
-    }
-
-    // Sort each module's symbol list by name for deterministic output.
-    for syms in map.values_mut() {
-        syms.sort_by(|a, b| a.name.cmp(&b.name));
-    }
-
-    map
-}
-
 // ── Renderers ─────────────────────────────────────────────────────────────────
 
-/// Render `docs/reference/stdlib.md`: a module-by-module index with one-line symbol summaries.
-fn render_stdlib_index(module_map: &BTreeMap<String, Vec<SymbolDoc>>) -> String {
+/// Render `docs/reference/stdlib.md`: a module-by-module index with one-line
+/// export summaries.
+fn render_stdlib_index(modules: &[ModuleDoc]) -> String {
     let mut out = String::new();
 
     // Header comment — tells readers (and CI) this file is generated.
     out.push_str("<!-- Generated by gen-stdlib-docs. Do not edit by hand. -->\n\n");
     out.push_str("# Standard library\n\n");
     out.push_str(
-        "Each module listed below links to a detail page with full \
-         doc-strings and examples. Symbols without a doc-string are \
-         omitted from this index.\n\n",
+        "Each module listed below links to a detail page with the full \
+         documentation and signature for every export.\n\n",
     );
 
     // Table of contents: one line per module.
     out.push_str("## Modules\n\n");
-    for module_name in module_map.keys() {
-        let anchor = module_anchor(module_name);
-        let _ = writeln!(out, "- [{module_name}](#{anchor})");
+    for module in modules {
+        let anchor = module_anchor(&module.short);
+        let _ = writeln!(out, "- [{}](#{anchor})", module.short);
     }
     out.push('\n');
 
     // Per-module sections.
-    for (module_name, symbols) in module_map {
-        let detail_link = format!("stdlib/{}", module_file_name(module_name));
-        let _ = writeln!(out, "## {module_name}\n");
+    for module in modules {
+        let detail_link = format!("stdlib/{}", module_file_name(&module.short));
+        let _ = writeln!(out, "## {}\n", module.short);
         let _ = writeln!(out, "[Full reference]({detail_link})\n");
 
-        // Symbol table: name | one-line summary.
-        out.push_str("| Symbol | Summary |\n");
+        if let Some(doc) = &module.module_doc {
+            let _ = writeln!(out, "{}\n", one_line_summary(doc));
+        }
+
+        if module.exports.is_empty() {
+            out.push_str("_No exports._\n\n");
+            continue;
+        }
+
+        // Export table: name | one-line summary.
+        out.push_str("| Export | Summary |\n");
         out.push_str("|--------|----------|\n");
-        for sym in symbols {
-            let summary = one_line_summary(&sym.body);
-            let _ = writeln!(out, "| `{}` | {} |", sym.name, summary);
+        for export in &module.exports {
+            let summary = export
+                .doc
+                .as_deref()
+                .map_or("(no summary)", one_line_summary);
+            let _ = writeln!(
+                out,
+                "| `{}` | {} |",
+                export.name,
+                escape_table_cell(summary)
+            );
         }
         out.push('\n');
     }
@@ -164,19 +123,29 @@ fn render_stdlib_index(module_map: &BTreeMap<String, Vec<SymbolDoc>>) -> String 
     out
 }
 
-/// Render `docs/reference/stdlib/<Module>.md`: full doc-strings per symbol.
-fn render_module_detail(module_name: &str, symbols: &[SymbolDoc]) -> String {
+/// Render `docs/reference/stdlib/<Module>.md`: the module header, then every
+/// export with its signature and documentation body.
+fn render_module_detail(module: &ModuleDoc) -> String {
     let mut out = String::new();
 
     out.push_str("<!-- Generated by gen-stdlib-docs. Do not edit by hand. -->\n\n");
-    let _ = writeln!(out, "# `{module_name}`\n");
+    let _ = writeln!(out, "# `{}`\n", module.short);
     out.push_str("[Back to stdlib index](../stdlib.md)\n\n");
 
-    for sym in symbols {
-        let _ = writeln!(out, "## `{}`\n", sym.name);
-        // Emit the full doc-string body as-is (it is already Markdown).
-        out.push_str(sym.body.trim_end());
+    if let Some(doc) = &module.module_doc {
+        out.push_str(doc.trim_end());
         out.push_str("\n\n");
+    }
+
+    for export in &module.exports {
+        let _ = writeln!(out, "## `{}`\n", export.name);
+        if let Some(sig) = &export.signature {
+            let _ = writeln!(out, "```ipe\n{}\n```\n", sig.trim_end());
+        }
+        if let Some(doc) = &export.doc {
+            out.push_str(doc.trim_end());
+            out.push_str("\n\n");
+        }
     }
 
     out
@@ -192,6 +161,12 @@ fn one_line_summary(body: &str) -> &str {
         .map(str::trim)
         .find(|l| !l.is_empty())
         .unwrap_or("(no summary)")
+}
+
+/// Escape a one-line summary for use inside a Markdown table cell: a literal
+/// `|` would otherwise start a new column.
+fn escape_table_cell(summary: &str) -> String {
+    summary.replace('|', "\\|")
 }
 
 /// Convert a short module name (`List`, `Html.Attributes`) to a GitHub Markdown
@@ -292,85 +267,77 @@ mod tests {
     }
 
     #[test]
-    fn collect_modules_sorted() {
-        // Build a minimal index with two modules to confirm BTreeMap order.
-        use ipe_docs::IndexBuilder;
-
-        // No explain/content dirs needed — we just check stdlib symbols.
-        let mut builder = IndexBuilder::new();
-        builder.add_stdlib().expect("stdlib must index cleanly");
-        builder
-            .add_compiled_stdlib()
-            .expect("compiled stdlib must index cleanly");
-        let index = builder.finish();
-
-        let map = collect_modules(&index);
-        // The map must be non-empty (we have many documented stdlib modules).
-        assert!(!map.is_empty(), "module map must not be empty");
-
-        // Keys must be sorted.
-        let keys: Vec<&str> = map.keys().map(String::as_str).collect();
-        let mut sorted = keys.clone();
-        sorted.sort_unstable();
-        assert_eq!(keys, sorted, "module map keys must be in sorted order");
-
-        // Each module's symbols must be sorted.
-        for (module, syms) in &map {
-            let names: Vec<&str> = syms.iter().map(|s| s.name.as_str()).collect();
-            let mut sorted_names = names.clone();
-            sorted_names.sort_unstable();
-            assert_eq!(
-                names, sorted_names,
-                "{module}: symbol list must be in sorted order"
-            );
-        }
+    fn escape_table_cell_escapes_pipe() {
+        assert_eq!(escape_table_cell("a | b"), "a \\| b");
+        assert_eq!(escape_table_cell("no pipe"), "no pipe");
     }
 
     #[test]
-    fn render_stdlib_index_contains_known_module() {
-        use ipe_docs::IndexBuilder;
-        let mut builder = IndexBuilder::new();
-        builder.add_stdlib().expect("stdlib must index cleanly");
-        builder
-            .add_compiled_stdlib()
-            .expect("compiled stdlib must index cleanly");
-        let index = builder.finish();
-        let map = collect_modules(&index);
-        let rendered = render_stdlib_index(&map);
+    fn stdlib_index_covers_every_module() {
+        let modules = all_module_docs();
+        let rendered = render_stdlib_index(&modules);
 
-        // The generated file carries the sentinel comment.
         assert!(
             rendered.contains("Generated by gen-stdlib-docs"),
             "stdlib.md must carry the generated-file sentinel"
         );
-        // At least one known module heading appears.
+        // Every module must appear as a section heading and a TOC link.
+        for module in &modules {
+            let heading = format!("## {}\n", module.short);
+            assert!(
+                rendered.contains(&heading),
+                "stdlib.md must contain a `{}` section",
+                module.short
+            );
+        }
+        // A `-- |`-style module (Http) must now be present, not just the
+        // block-doc six.
         assert!(
-            rendered.contains("## Maybe"),
-            "stdlib.md must contain a Maybe section"
+            rendered.contains("## Http\n"),
+            "stdlib.md must contain an Http section"
         );
     }
 
     #[test]
-    fn render_module_detail_contains_symbol() {
-        use ipe_docs::IndexBuilder;
-        let mut builder = IndexBuilder::new();
-        builder.add_stdlib().expect("stdlib must index cleanly");
-        builder
-            .add_compiled_stdlib()
-            .expect("compiled stdlib must index cleanly");
-        let index = builder.finish();
-        let map = collect_modules(&index);
-
-        let maybe_syms = map.get("Maybe").expect("Maybe module must be in the map");
-        let detail = render_module_detail("Maybe", maybe_syms);
+    fn module_detail_renders_signature_and_doc() {
+        let modules = all_module_docs();
+        let http = modules
+            .iter()
+            .find(|m| m.short == "Http")
+            .expect("Http module present");
+        let detail = render_module_detail(http);
 
         assert!(
             detail.contains("Generated by gen-stdlib-docs"),
             "detail page must carry the generated-file sentinel"
         );
         assert!(
-            detail.contains("## `withDefault`"),
-            "Maybe detail page must document withDefault"
+            detail.contains("## `get`"),
+            "Http detail page must document the `get` export"
         );
+        assert!(
+            detail.contains("```ipe"),
+            "Http detail page must render export signatures in a code fence"
+        );
+    }
+
+    #[test]
+    fn undocumented_module_still_gets_a_detail_page() {
+        // A synthetic module with an undocumented export must still render a
+        // page listing that export by name (a sparse page beats no page).
+        let module = ModuleDoc {
+            dotted: "Ipe.Blank".to_owned(),
+            short: "Blank".to_owned(),
+            module_doc: None,
+            exports: vec![ipe_docs::stdlib_docs::ExportDoc {
+                name: "thing".to_owned(),
+                signature: Some("thing : Int".to_owned()),
+                doc: None,
+            }],
+        };
+        let detail = render_module_detail(&module);
+        assert!(detail.contains("# `Blank`"));
+        assert!(detail.contains("## `thing`"));
+        assert!(detail.contains("thing : Int"));
     }
 }

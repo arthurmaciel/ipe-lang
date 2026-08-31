@@ -688,6 +688,13 @@ pub enum FieldTag {
     ProcessStdout,
     /// `"stderr"` — `Process.runWith` output: the child's captured standard error.
     ProcessStderr,
+    /// `"cols"` — `Process.runInPty` input: the pty window width in columns.
+    ProcessCols,
+    /// `"rows"` — `Process.runInPty` input: the pty window height in rows.
+    ProcessRows,
+    /// `"output"` — `Process.runInPty` output: the combined stream read from the
+    /// pty master until the child exits.
+    ProcessOutput,
 }
 
 /// The whole kernel "row" as one descriptor.
@@ -1359,6 +1366,7 @@ pub enum StdlibKernel {
     // ── Process ───────────────────────────────────────────────────────────────
     ProcessRun,
     ProcessRunWith,
+    ProcessRunInPty,
     // ── Http ────────────────────────────────────────────────────────────────
     HttpGet,
     HttpPost,
@@ -3439,6 +3447,7 @@ impl StdlibKernel {
             // ── Process ───────────────────────────────────────────────────────
             Self::ProcessRun => d("Process", "run", 2, Pure, "process_run"),
             Self::ProcessRunWith => d("Process", "runWith", 1, Pure, "process_run_with"),
+            Self::ProcessRunInPty => d("Process", "runInPty", 1, Pure, "process_run_in_pty"),
             // ── Http ────────────────────────────────────────────────────────
             Self::HttpGet => d("Http", "get", 1, Pure, "http_get"),
             Self::HttpPost => d("Http", "post", 2, Pure, "http_post"),
@@ -5037,6 +5046,7 @@ impl StdlibKernel {
         // Process
         Self::ProcessRun,
         Self::ProcessRunWith,
+        Self::ProcessRunInPty,
         // Http
         Self::HttpGet,
         Self::HttpPost,
@@ -6679,6 +6689,33 @@ impl StdlibKernel {
             TyShape::Con(BuiltinTag::Task, &[PROCESS_RUN_WITH_OUTPUT]);
         const PROCESS_RUN_WITH: TyShape =
             TyShape::Fun(&PROCESS_RUN_WITH_INPUT, &TASK_PROCESS_OUTPUT);
+        // `{ command, args, cwd, env, cols, rows } -> Task { exitCode, output }`
+        // (process.runInPty). Input fields in ascending resolved-symbol (intern)
+        // order: `rows` shares the earlier-interned `csv` `"rows"` symbol so it
+        // sorts first; the rest are first-interned in the Process block in the
+        // order command < args < cwd < env < cols.
+        const PROCESS_RUN_IN_PTY_INPUT: TyShape = TyShape::Record {
+            fields: &[
+                (FieldTag::ProcessRows, &INT),
+                (FieldTag::ProcessCommand, &STRING),
+                (FieldTag::ProcessArgs, &LIST_STRING),
+                (FieldTag::ProcessCwd, &MAYBE_PATH),
+                (FieldTag::ProcessEnv, &LIST_TUPLE_SS),
+                (FieldTag::ProcessCols, &INT),
+            ],
+            tail: RowTailShape::Closed,
+        };
+        const PROCESS_RUN_IN_PTY_OUTPUT: TyShape = TyShape::Record {
+            fields: &[
+                (FieldTag::ProcessExitCode, &INT),
+                (FieldTag::ProcessOutput, &STRING),
+            ],
+            tail: RowTailShape::Closed,
+        };
+        const TASK_PROCESS_PTY_OUTPUT: TyShape =
+            TyShape::Con(BuiltinTag::Task, &[PROCESS_RUN_IN_PTY_OUTPUT]);
+        const PROCESS_RUN_IN_PTY: TyShape =
+            TyShape::Fun(&PROCESS_RUN_IN_PTY_INPUT, &TASK_PROCESS_PTY_OUTPUT);
         // `Path -> Task (List String)` (file.readDir).
         const PATH_TO_TASK_LIST_STRING: TyShape = TyShape::Fun(&PATH, &TASK_LIST_STRING);
         // `Path -> Int -> Task String` (file.readFileLimit).
@@ -8688,6 +8725,7 @@ impl StdlibKernel {
             Self::RandomWeighted => Some(&RANDOM_WEIGHTED),
             Self::ProcessRun => Some(&PROCESS_RUN),
             Self::ProcessRunWith => Some(&PROCESS_RUN_WITH),
+            Self::ProcessRunInPty => Some(&PROCESS_RUN_IN_PTY),
 
             // ── Json.Decode / Db.Decode / Config — the shared `Decoder a`
             //    carrier families. ──
@@ -9652,7 +9690,9 @@ impl StdlibKernel {
             | Self::SystemGetenvBool
             | Self::SystemSetenv
             | Self::SystemUnsetenv => Some(Capability::Env),
-            Self::ProcessRun | Self::ProcessRunWith => Some(Capability::Subprocess),
+            Self::ProcessRun | Self::ProcessRunWith | Self::ProcessRunInPty => {
+                Some(Capability::Subprocess)
+            }
             // `Ui.widget` places a browser custom-element widget: its reachable
             // presence means the program serves author-written JS that runs in
             // the page with full DOM authority. That shipped-JS surface is a
@@ -13148,6 +13188,7 @@ mod tests {
             StdlibKernel::FileReadFile,
             StdlibKernel::ProcessRun,
             StdlibKernel::ProcessRunWith,
+            StdlibKernel::ProcessRunInPty,
             StdlibKernel::SystemGetenv,
             StdlibKernel::SystemExit,
             StdlibKernel::ServerListen,
