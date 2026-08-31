@@ -227,6 +227,16 @@ pub static ENV_VARS: &[EnvVar] = &[
         class: Class::Tunable,
     },
     EnvVar {
+        name: "IPE_WATCH_HOT_APPEARANCE",
+        default: "unset (off)",
+        purpose: "Set to any non-empty value other than `0` to enable dev-loop \
+                  appearance hot-swap: an `ipe watch` edit to a style literal is \
+                  pushed to the browser without a rebuild. Dev-only; no effect on a \
+                  release build.",
+        subsystem: Subsystem::Build,
+        class: Class::Tunable,
+    },
+    EnvVar {
         name: "IPE_WATCH_TIMING",
         default: "unset (off)",
         purpose: "Set to `1` or `true` to print a per-phase `ipe watch` rebuild \
