@@ -4,6 +4,16 @@
 
 [Back to stdlib index](../stdlib.md)
 
+Ipe.Ui.Transform — typed transform and opacity properties for animation keyframes.
+
+Each builder returns a `Prop` value that the animation renderer lowers to one
+CSS property:value pair inside a `@keyframes` block. Multiple transform
+helpers on the same keyframe are merged into a single `transform:` rule
+(e.g. `translateY(10px) scale(0.95)`); `opacity` emits as a separate property.
+
+Use these helpers inside `Ui.animate` keyframes only — they produce `Prop`
+values, not `Attribute msg` values, and have no effect on a plain element.
+
 ## `translateX`
 
 ```ipe
