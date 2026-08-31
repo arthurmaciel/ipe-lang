@@ -13,7 +13,8 @@ the real program output back.
 |---|---|
 | `index.html` | the three-pane UI (Ipê source \| emitted Rust \| program output) |
 | `pkg/` | git-ignored wasm-bindgen output the page loads |
-| `build/` | an Ipê program that builds `ipe-wasm` and regenerates `pkg/` |
+| `setup/` | one-command setup: wasm bundle + jail-runner + offline cache warm |
+| `build/` | Ipê program that rebuilds only the wasm bundle (`pkg/`) |
 | `server/` | an `Ipe.Http.Server` app (static files + `POST /run`) |
 | `jail-runner/` | a Rust workspace member: the sandboxed build+run harness |
 
@@ -21,20 +22,22 @@ the real program output back.
 
 - The `ipe` compiler binary (build from this repo: `cargo build -p ipe`).
 - For `POST /run`: `bwrap`, `timeout`, `prlimit` (the jail primitives).
-- Only when rebuilding the browser bundle: the `wasm32-unknown-unknown`
-  rustup target and a matching `wasm-bindgen` CLI.
+- The `wasm32-unknown-unknown` rustup target and a matching `wasm-bindgen` CLI
+  (the setup program probes for these and prints install hints if missing).
 
-## Build the browser bundle
+## Setup (one command)
 
 ```sh
-cd examples/wasm/language-playground/build
+cd examples/wasm/language-playground/setup
 ipe run
 ```
 
-`build/src/Main.ipe` probes for `git`/`cargo`/`rustup`/`wasm-bindgen` (styled
-install hints, non-zero exit on a missing tool), adds the wasm target, builds
-`ipe-wasm` for `wasm32-unknown-unknown` (release), runs `wasm-bindgen` into
-`../pkg/`, and prints the server run hint.
+`setup/src/Main.ipe` runs the full setup in one step:
+probes prerequisites (`git`/`cargo`/`rustup`/`wasm-bindgen`),
+builds `ipe-wasm` for `wasm32-unknown-unknown` (release),
+runs `wasm-bindgen` into `../pkg/`, builds `playground-jail-runner`,
+and pre-warms the offline dependency cache.
+Styled install hints and a non-zero exit on any missing tool.
 
 ## Run
 
@@ -47,9 +50,25 @@ This starts the Ipê server (`Ipe.Http.Server`, port 8000), which serves the
 playground root and `/pkg` statically and answers `POST /run`. Open
 http://localhost:8000.
 
-The first `POST /run` needs the warm cargo cache. Provision it once with:
+## Rebuild the bundle only
+
+If you change `ipe-wasm` and only need to regenerate `pkg/` (skipping the
+jail-runner rebuild and prewarm):
 
 ```sh
+cd examples/wasm/language-playground/build
+ipe run
+```
+
+## Manual steps (reference)
+
+The one-command setup above runs these steps in sequence:
+
+```sh
+# 1. Build the wasm bundle
+cd examples/wasm/language-playground/build && ipe run
+
+# 2. Build the jail-runner and warm the offline cache
 cargo build -p playground-jail-runner
 # warm cache defaults to $IPE_PLAYGROUND_WARM_DIR or ~/.cache/ipe/playground-warm
 $(cargo metadata --format-version 1 --no-deps | jq -r '.target_directory')/debug/jail-runner prewarm
