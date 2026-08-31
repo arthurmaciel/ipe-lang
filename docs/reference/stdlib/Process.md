@@ -18,6 +18,12 @@ stderr independently, supports a per-child working directory and environment
 overrides, and treats a non-zero exit as a NORMAL result (carried in
 `exitCode`) rather than a Task failure. Only a spawn failure fails the Task.
 
+`Process.runInPty` runs the child under a real pseudo-terminal instead of
+piped stdio, so a TUI/interactive child sees `isatty == true`, sizes to the
+given `cols`×`rows`, and emits terminal control sequences. It captures the
+combined pty stream and the exit code. Unix-only (a non-unix target fails the
+Task with an unsupported error); same `subprocess` capability as `run`.
+
 This is a server-only capability (`subprocess`): it is DEFAULT-DENIED under
 `--target wasm` (a browser bundle has no process surface), and a program
 that runs a child process is tagged with the `subprocess` capability so a
@@ -56,4 +62,31 @@ A non-zero exit is a NORMAL result carried in `exitCode`; only a spawn
 failure (e.g. the executable does not exist) fails the Task.
 `stdout` and `stderr` are each captured independently (no pipe-deadlock
 risk) and bounded by `IPE_PROCESS_OUTPUT_MAX` (default 16 MiB per stream).
+
+## `runInPty`
+
+```ipe
+runInPty :
+```
+
+`runInPty cfg` — run a child under a real pseudo-terminal.
+
+Unlike `run`/`runWith` (which give the child piped stdio), `runInPty`
+connects the child's stdin/stdout/stderr to a pseudo-terminal, so a TUI
+child sees `isatty(stdout) == true`, sizes itself to `cols`×`rows`, and
+emits cursor/color control sequences. `output` is the combined stream read
+from the pty master until the child exits.
+
+The `cfg` record:
+
+  - `command` / `args` / `cwd` / `env` — as in `runWith` (no shell; each
+    `args` element is a literal `argv` entry).
+  - `cols` / `rows` — the pty window size in columns and rows.
+
+Captured `output` is bounded (`IPE_PROCESS_OUTPUT_MAX`, default 16 MiB); a
+child that floods the pty past the ceiling fails the Task rather than
+allocating without bound. This is the same `subprocess` capability as `run`
+(the pty is an implementation detail of running a child, not a new reach).
+
+Unix-only: on a non-unix target the Task fails with an `unsupported` error.
 

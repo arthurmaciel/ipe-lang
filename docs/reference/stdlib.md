@@ -967,7 +967,7 @@ Ipe.File -- filesystem I/O.
 | Export | Summary |
 |--------|----------|
 | `readFile` | (no summary) |
-| `readFileLimit` | `readFileLimit path maxBytes` -- read at most `maxBytes` from |
+| `readFileLimit` | (no summary) |
 | `readFileBytes` | Read raw bytes as a list of Int.  Use for binary content |
 | `writeFile` | `writeFile path content` -- overwrites the file. |
 | `append` | `append path content` -- appends to the end of the file |
@@ -1459,6 +1459,7 @@ Ipe.Process — run child processes with NO shell.
 |--------|----------|
 | `run` | `run cmd argv` — run `cmd` with the argument vector `argv`, no shell. |
 | `runWith` | `runWith cfg` — run a child process with per-child options. |
+| `runInPty` | `runInPty cfg` — run a child under a real pseudo-terminal. |
 
 ## PubSub
 

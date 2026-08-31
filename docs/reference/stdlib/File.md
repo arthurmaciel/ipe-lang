@@ -23,11 +23,8 @@ readFile : Path -> Task Error String
 ## `readFileLimit`
 
 ```ipe
-readFileLimit : Path -> Int -> Task Error String
+readFileLimit : Path -> ByteSize -> Task Error String
 ```
-
-`readFileLimit path maxBytes` -- read at most `maxBytes` from
-the file.  Useful to cap memory on untrusted-size inputs.
 
 ## `readFileBytes`
 
