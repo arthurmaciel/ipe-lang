@@ -21,7 +21,8 @@ then links to the per-symbol `ipe doc` reference. Read the one you need; they
 cross-link where topics meet.
 
 - **The prelude** — [Basics](basics.md) (the auto-imported helpers: `clamp`,
-  `compare`, `toString`, `min`/`max`).
+  `compare`, `toString`, `min`/`max`), [ToString](tostring.md) (the primitive
+  render-to-`String` functions under one prefix).
 - **Core data** — [Lists](list.md) (ordered sequences, folds, pipelines),
   [Strings](string.md) (text and the parse boundary), [Characters](char.md)
   (code points, classification), [Tuples](tuple.md) (anonymous pairs).
@@ -56,7 +57,8 @@ cross-link where topics meet.
   password read), [Environment config](env.md) (build-time public config, wasm-safe),
   [Subprocesses](process.md) (running a child process with no shell).
 - **Time and clocks** — [Time](time.md) (a typed instant, formatting, calendar
-  arithmetic over durations).
+  arithmetic over durations), [Timestamp](timestamp.md) (the opaque instant type:
+  shift by a span, measure the span between two).
 - **Content and markup** — [HTML](html.md) (typed element trees, XSS-safe by
   construction), [Markdown](markdown.md) (a typed block tree, no raw HTML).
 - **Instrumentation and delivery** — [Analytics](analytics.md) (consent-gated,
@@ -76,9 +78,10 @@ cross-link where topics meet.
   and rules).
 - **Escape hatches** — the surfaces that bypass a safe default behind a disclosed
   `unsafe` capability: [the unsafe database surface](db-unsafe.md) (raw SQL,
-  untyped column reads), [the secret-reveal hatch](secret-unsafe.md) (un-seal a
-  `Secret` to a bare `String`). Reach for these only for a residual the safe
-  surface cannot express.
+  untyped column reads), [the unsafe Store surface](db-store-unsafe.md)
+  (string-named columns for a dynamic table), [the secret-reveal
+  hatch](secret-unsafe.md) (un-seal a `Secret` to a bare `String`). Reach for these
+  only for a residual the safe surface cannot express.
 - **Caching** — [Cache](cache.md) (bounded, in-memory LRU with optional TTL; a
   miss is a `Maybe`, not a failure).
 - **Observability** — [Logging](log.md) (structured, levelled log records),
@@ -89,7 +92,8 @@ cross-link where topics meet.
 - **Testing** — [Testing](test.md) (the in-process framework: tests as values,
   assertions as results, exit-coded runs).
 - **Databases** — [Connection descriptors](dsn.md) (a typed, credential-safe
-  `Dsn`; parse-don't-validate at the connection boundary).
+  `Dsn`; parse-don't-validate at the connection boundary), [Store](db-store.md)
+  (a typed table derived from one codec; injection-safe, deny-by-default access).
 
 ## Reference and lookup
 
