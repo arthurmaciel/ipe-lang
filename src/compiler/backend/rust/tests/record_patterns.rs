@@ -88,6 +88,7 @@ fn program(name: Symbol, funcs: Vec<Func>, entry: Option<FuncId>) -> Program {
             uses_principal: false,
             uses_websocket: false,
             uses_email: false,
+            uses_locale: false,
             uses_time: false,
             uses_env_public: false,
             uses_debug: false,

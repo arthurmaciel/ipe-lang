@@ -79,6 +79,17 @@ pub const LETTRE: CrateSpec = CrateSpec {
     name: "lettre",
     version: "0.11",
 };
+// `icu_casemap` and `icu_locale_core`: locale-aware case mapping behind the
+// `locale` cargo feature. The dep-model runtime pulls them transitively via
+// `features = ["locale"]`; the vendored escape hatch adds them here.
+pub const ICU_CASEMAP: CrateSpec = CrateSpec {
+    name: "icu_casemap",
+    version: "2.2",
+};
+pub const ICU_LOCALE_CORE: CrateSpec = CrateSpec {
+    name: "icu_locale_core",
+    version: "2.2",
+};
 pub const REQWEST: CrateSpec = CrateSpec {
     name: "reqwest",
     version: "0.12",
@@ -185,6 +196,8 @@ pub const ALL: &[CrateSpec] = &[
     TAO,
     TOKIO_TUNGSTENITE,
     LETTRE,
+    ICU_CASEMAP,
+    ICU_LOCALE_CORE,
     REQWEST,
     TOML,
     SERDE_YAML,
@@ -220,7 +233,7 @@ mod tests {
             assert!(!spec.name.is_empty(), "empty crate name in ALL");
             assert!(!spec.version.is_empty(), "empty version for {}", spec.name);
         }
-        assert_eq!(ALL.len(), 32, "expected 32 surgery-emitted crate specs");
+        assert_eq!(ALL.len(), 34, "expected 34 surgery-emitted crate specs");
     }
 
     /// Extract the version from a Cargo dependency value: `"0.4"` or
