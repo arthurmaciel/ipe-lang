@@ -212,11 +212,11 @@ pub fn ipe_main() -> IpeTask<()> {
     ({
         let m = RecActionCount {
             action: io_println("hello".to_string()),
-            count: 0,
+            count: 0i64,
         };
         ({
             let m2 = {
-                let __ipe_upd_0 = 1;
+                let __ipe_upd_0 = 1i64;
                 let mut __ipe_rec = m;
                 __ipe_rec.count = __ipe_upd_0;
                 __ipe_rec

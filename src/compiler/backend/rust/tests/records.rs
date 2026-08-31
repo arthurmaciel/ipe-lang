@@ -245,7 +245,7 @@ fn synthesises_struct_literal_access_and_update() -> DResult<()> {
     );
     // Literal → struct literal.
     assert!(
-        out.contains("RecXY { x: a, y: 2 }"),
+        out.contains("RecXY { x: a, y: 2i64 }"),
         "record literal not emitted as struct literal:\n{out}"
     );
     // Update → bind-then-move-and-reassign block (no struct name needed).
@@ -253,7 +253,7 @@ fn synthesises_struct_literal_access_and_update() -> DResult<()> {
     // so a field value may read the base. Rustfmt spreads the block across lines;
     // assert the stable key fragments.
     assert!(
-        out.contains("let __ipe_upd_0 = 5;")
+        out.contains("let __ipe_upd_0 = 5i64;")
             && out.contains("let mut __ipe_rec = p;")
             && out.contains("__ipe_rec.x = __ipe_upd_0;")
             && out.contains("__ipe_rec"),
@@ -440,7 +440,7 @@ fn distinct_shapes_sharing_a_field_set_emit_two_structs() -> DResult<()> {
     // The two literals resolve to their two distinct structs (no collision onto
     // one name), so both a `1` and a `"hi"` field construction appear.
     assert!(
-        out.contains("{ x: 1 }"),
+        out.contains("{ x: 1i64 }"),
         "the Int literal must construct the Int struct:\n{out}"
     );
     assert!(

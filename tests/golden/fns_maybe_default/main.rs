@@ -195,7 +195,10 @@ pub fn file_rename(src: ipe_runtime::path::Path, dst: ipe_runtime::path::Path) -
 
 pub fn ipe_main() -> IpeTask<()> {
     let _ipe_recursion_guard = crate::recursion_guard();
-    io_println(string_from_int(maybe_with_default(0, IpeMaybe::Just(5))))
+    io_println(string_from_int(maybe_with_default(
+        0i64,
+        IpeMaybe::Just(5i64),
+    )))
 }
 
 // Ffi.kernel polyfill — should be unreachable in Rust target;

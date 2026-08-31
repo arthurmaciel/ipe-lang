@@ -200,7 +200,7 @@ fn tuple_subpattern_in_ctor_arm_renders() -> DResult<()> {
         "tuple-field construction must use ctor wrapper; got:\n{src}"
     );
     assert!(
-        src.contains("3,") && src.contains("4,"),
+        src.contains("3i64") && src.contains("4i64"),
         "tuple literal elements missing from ctor construction; got:\n{src}"
     );
     Ok(())

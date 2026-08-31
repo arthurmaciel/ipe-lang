@@ -196,17 +196,17 @@ pub fn file_rename(src: ipe_runtime::path::Path, dst: ipe_runtime::path::Path) -
 pub fn ipe_main() -> IpeTask<()> {
     let _ipe_recursion_guard = crate::recursion_guard();
     io_println(string_from_int(maybe_with_default(
-        0,
+        0i64,
         ipe_maybe_and_then(
-            ipe_maybe_map(IpeMaybe::Just(5), {
+            ipe_maybe_map(IpeMaybe::Just(5i64), {
                 let __ipe_fn: Box<dyn Fn(i64) -> i64 + Send + Sync + 'static> =
-                    Box::new(move |x: i64| -> i64 { ipe_runtime::math::ipe_int_mul(x, 10) });
+                    Box::new(move |x: i64| -> i64 { ipe_runtime::math::ipe_int_mul(x, 10i64) });
                 __ipe_fn
             }),
             {
                 let __ipe_fn: Box<dyn Fn(i64) -> IpeMaybe<i64> + Send + Sync + 'static> =
                     Box::new(move |x: i64| -> IpeMaybe<i64> {
-                        IpeMaybe::Just(ipe_runtime::math::ipe_int_add(x, 1))
+                        IpeMaybe::Just(ipe_runtime::math::ipe_int_add(x, 1i64))
                     });
                 __ipe_fn
             },

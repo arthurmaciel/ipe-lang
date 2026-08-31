@@ -203,7 +203,7 @@ pub fn main_classify(n: i64) -> String {
 }
 pub fn ipe_main() -> IpeTask<()> {
     let _ipe_recursion_guard = crate::recursion_guard();
-    io_println(crate::main_classify(1))
+    io_println(crate::main_classify(1i64))
 }
 
 // Ffi.kernel polyfill — should be unreachable in Rust target;

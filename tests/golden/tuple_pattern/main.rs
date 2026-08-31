@@ -212,7 +212,7 @@ pub fn main_pair_sum() -> i64 {
     static CELL: std::sync::OnceLock<i64> = std::sync::OnceLock::new();
     CELL.get_or_init(|| {
         ({
-            let (a, b) = (1, 2);
+            let (a, b) = (1i64, 2i64);
             ipe_runtime::math::ipe_int_add(a, b)
         })
     })
@@ -221,7 +221,10 @@ pub fn main_pair_sum() -> i64 {
 pub fn ipe_main() -> IpeTask<()> {
     let _ipe_recursion_guard = crate::recursion_guard();
     io_println(string_from_int(ipe_runtime::math::ipe_int_add(
-        ipe_runtime::math::ipe_int_add(crate::main_fst((41, 99)), crate::main_snd((7, 2))),
+        ipe_runtime::math::ipe_int_add(crate::main_fst((41i64, 99i64)), crate::main_snd((
+            7i64,
+            2i64,
+        ))),
         crate::main_pair_sum(),
     )))
 }

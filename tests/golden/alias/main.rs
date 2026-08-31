@@ -196,7 +196,7 @@ pub fn file_rename(src: ipe_runtime::path::Path, dst: ipe_runtime::path::Path) -
 pub fn main_f(n: i64) -> i64 {
     let _ipe_recursion_guard = crate::recursion_guard();
     match n {
-        0 => 0,
+        0 => 0i64,
         __ipe_arm_alias_0 => {
             let k = __ipe_arm_alias_0;
             let m = k.clone();
@@ -206,7 +206,7 @@ pub fn main_f(n: i64) -> i64 {
 }
 pub fn ipe_main() -> IpeTask<()> {
     let _ipe_recursion_guard = crate::recursion_guard();
-    io_println(string_from_int(crate::main_f(7)))
+    io_println(string_from_int(crate::main_f(7i64)))
 }
 
 // Ffi.kernel polyfill — should be unreachable in Rust target;

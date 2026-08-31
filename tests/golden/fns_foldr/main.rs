@@ -201,8 +201,8 @@ pub fn ipe_main() -> IpeTask<()> {
                 Box::new(move |x: i64, a: i64| -> i64 { ipe_runtime::math::ipe_int_sub(x, a) });
             __ipe_fn
         },
-        0,
-        vec![1, 2, 3],
+        0i64,
+        vec![1i64, 2i64, 3i64],
     )))
 }
 

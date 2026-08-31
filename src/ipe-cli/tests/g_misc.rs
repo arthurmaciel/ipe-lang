@@ -30,6 +30,8 @@ mod golden_basics;
 mod golden_cache_handle_seal;
 #[path = "g_misc/golden_cache_handle_task_reuse.rs"]
 mod golden_cache_handle_task_reuse;
+#[path = "g_misc/golden_cache_int_get.rs"]
+mod golden_cache_int_get;
 #[path = "g_misc/golden_cache_module_seal.rs"]
 mod golden_cache_module_seal;
 #[path = "g_misc/golden_cli_program_seal.rs"]

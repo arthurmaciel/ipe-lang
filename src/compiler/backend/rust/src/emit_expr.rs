@@ -5109,7 +5109,12 @@ pub fn emit_expr_at(
     }
     let child = depth + 1;
     match expr {
-        Expr::Int(n) => Ok(n.to_string()),
+        // Ipe `Int` is Rust `i64`; suffix every integer literal so the type is
+        // explicit even when rustc cannot infer it from context alone (e.g. a
+        // polymorphic value argument whose type parameter is not constrained by
+        // the return type — as in `Cache.put cache key 42` where `T2` is only
+        // constrained by the stored value, not the result).
+        Expr::Int(n) => Ok(format!("{n}i64")),
         // A float literal renders as an f64-typed Rust literal. A whole-number
         // value keeps its decimal point (`3.0`) so Rust never types it as an
         // integer; see [`float_literal`].

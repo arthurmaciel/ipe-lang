@@ -1,0 +1,37 @@
+module Main exposing (main)
+
+import Ipe.Cache as Cache
+import Ipe.Io as Io
+import Ipe.Maybe exposing (Maybe(..))
+import Ipe.String
+import Ipe.Task as Task
+
+-- Regression for `Cache.get` returning `Nothing` when the value type is `Int`.
+--
+-- The root cause was that `Expr::Int(n)` emitted bare Rust integer literals
+-- (`42`) with no type suffix, so Rust inferred `i32` (the default integer
+-- type) at the `Cache.put` call site. `Cache.get` then tried
+-- `downcast_ref::<i64>()` and always failed — a permanent miss even though
+-- the entry was present and `Cache.size` reported it as stored.
+--
+-- The fix emits `{n}i64`, anchoring every Ipe `Int` literal to `i64` so the
+-- stored and retrieved types always match.
+main =
+    Task.andThen
+        (\cache ->
+            Task.andThen
+                (\_ ->
+                    Task.andThen
+                        (\result ->
+                            case result of
+                                Nothing ->
+                                    Io.println "FAIL: Int miss"
+
+                                Just n ->
+                                    Io.println ("int=" ++ String.fromInt n)
+                        )
+                        (Cache.get cache "key")
+                )
+                (Cache.put cache "key" 42)
+        )
+        (Cache.new Cache.defaultCfg)

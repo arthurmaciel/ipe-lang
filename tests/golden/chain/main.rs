@@ -197,11 +197,11 @@ pub fn ipe_main() -> IpeTask<()> {
     let _ipe_recursion_guard = crate::recursion_guard();
     io_println(string_from_int(list_length(
         ({
-            let eta_0: Vec<i64> = vec![1, 2, 3];
+            let eta_0: Vec<i64> = vec![1i64, 2i64, 3i64];
             list_map_consume(
                 {
                     let __ipe_fn: Box<dyn Fn(i64) -> i64 + Send + Sync + 'static> =
-                        Box::new(move |x: i64| -> i64 { ipe_runtime::math::ipe_int_add(x, 1) });
+                        Box::new(move |x: i64| -> i64 { ipe_runtime::math::ipe_int_add(x, 1i64) });
                     __ipe_fn
                 },
                 eta_0,

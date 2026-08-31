@@ -211,15 +211,15 @@ pub fn main_f(oo: MainOpt<MainOpt<i64>>) -> i64 {
     let _ipe_recursion_guard = crate::recursion_guard();
     match oo {
         MainOpt::Som(MainOpt::Som(x)) => x,
-        MainOpt::Som(MainOpt::Non) => 7,
-        MainOpt::Non => 3,
+        MainOpt::Som(MainOpt::Non) => 7i64,
+        MainOpt::Non => 3i64,
     }
 }
 pub fn ipe_main() -> IpeTask<()> {
     let _ipe_recursion_guard = crate::recursion_guard();
     io_println(string_from_int(ipe_runtime::math::ipe_int_add(
         ipe_runtime::math::ipe_int_add(
-            crate::main_f(MainOpt::Som(MainOpt::Som(42))),
+            crate::main_f(MainOpt::Som(MainOpt::Som(42i64))),
             crate::main_f(MainOpt::Som(MainOpt::Non)),
         ),
         crate::main_f(MainOpt::Non),

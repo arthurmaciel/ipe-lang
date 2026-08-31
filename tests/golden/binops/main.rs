@@ -196,8 +196,8 @@ pub fn file_rename(src: ipe_runtime::path::Path, dst: ipe_runtime::path::Path) -
 pub fn ipe_main() -> IpeTask<()> {
     let _ipe_recursion_guard = crate::recursion_guard();
     io_println(string_from_int(ipe_runtime::math::ipe_int_sub(
-        ipe_runtime::math::ipe_int_add(2, ipe_runtime::math::ipe_int_mul(3, 4)),
-        1,
+        ipe_runtime::math::ipe_int_add(2i64, ipe_runtime::math::ipe_int_mul(3i64, 4i64)),
+        1i64,
     )))
 }
 
