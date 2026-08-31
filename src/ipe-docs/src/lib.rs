@@ -19,6 +19,7 @@
 //! Entry point: [`Index::build`].
 
 pub mod render;
+pub mod stdlib_docs;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -226,6 +227,11 @@ impl IndexBuilder {
                     &interner,
                 );
             }
+
+            // Fall back to raw-source `-- |` line docs for any export the AST
+            // pass did not attach a `{-| … -}` doc to. This covers the modules
+            // that use the line-comment documentation style.
+            index_line_docs(&mut self.entries, std_mod.name, short, std_mod.source);
         }
         Ok(())
     }
@@ -283,6 +289,8 @@ impl IndexBuilder {
                     &interner,
                 );
             }
+
+            index_line_docs(&mut self.entries, std_mod.dotted, short, std_mod.source);
         }
         Ok(())
     }
@@ -444,6 +452,42 @@ fn index_alias(
         return;
     };
     insert_symbol(entries, module_name, short, sym_name, &doc.body);
+}
+
+/// Index the `-- |` line-comment docs of a module's raw source.
+///
+/// For each documented export, register a `Symbol` entry (short + fq keys)
+/// *only when one is not already present* — an AST-derived `{-| … -}` doc
+/// takes precedence over a raw-source line doc for the same symbol.
+fn index_line_docs(
+    entries: &mut HashMap<String, Entry>,
+    module_name: &str,
+    short: &str,
+    source: &str,
+) {
+    let module = crate::stdlib_docs::extract_module_doc(module_name, source);
+
+    // Carry the module-level header into the `Module` entry's text when the
+    // module has one (the AST pass leaves it empty).
+    if let Some(module_doc) = &module.module_doc {
+        for key in [module_name, short] {
+            let Some(entry) = entries.get_mut(key) else {
+                continue;
+            };
+            if entry.kind == EntryKind::Module && entry.text.is_empty() {
+                entry.text.clone_from(module_doc);
+            }
+        }
+    }
+
+    for export in &module.exports {
+        let Some(doc) = &export.doc else { continue };
+        let fq_key = format!("{module_name}.{}", export.name);
+        if entries.contains_key(&fq_key) {
+            continue;
+        }
+        insert_symbol(entries, module_name, short, &export.name, doc);
+    }
 }
 
 /// Strip the leading `Ipe.` prefix from a module name.

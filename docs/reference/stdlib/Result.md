@@ -4,48 +4,48 @@
 
 [Back to stdlib index](../stdlib.md)
 
-## `andMap`
+Ipe.Result — combinators over the Result ADT (Layer-3 compiled source).
 
-`andMap ra rfn` — apply the function inside `rfn` to the value inside `ra`.
+A `Result e a` is either `Ok a` (success carrying a value) or `Err e`
+(failure carrying an error). It is the typed alternative to exceptions:
+a function that may fail returns a `Result`, and the caller must handle
+both outcomes before using the success value.
+
+The functions here let you transform, combine, and sequence `Result`
+values so you rarely need to `case` on them by hand: `map` changes the
+success value, `andThen` chains a step that may itself fail, `mapError`
+translates the error side, and `combine` collects a list of results.
+
+Each member is a point-free `Ffi.kernel "Result_<member>"` alias resolved
+by `detect_kernel_alias` to the registered `Result*` `StdlibKernel`
+variant (`ipe_runtime::result::*`).
+
+The `Result` type name and `Ok`/`Err` constructors are ambient builtins;
+this module re-exports them via `Result(..)` so
+`import Ipe.Result exposing (Result(..))` works.
+
+See also: `Ipe.Maybe` (absence without an error), `Ipe.Task` (async
+operations that may fail with `Error`).
+
+## `withDefault`
 
 ```ipe
-andMap (Ok 10) (Ok (\n -> n + 1)) --> Ok 11
-andMap (Err "no val") (Ok (\n -> n + 1)) --> Err "no val"
-andMap (Ok 10) (Err "no fn") --> Err "no fn"
+withDefault : a -> Result b a -> a
 ```
 
-## `andThen`
-
-`andThen f result` — feed the `Ok` value to `f`; `Err` passes through.
+`withDefault fallback result` — the success value, or `fallback` if `Err`.
 
 ```ipe
-andThen (\n -> if n > 0 then Ok n else Err "negative") (Ok 5) --> Ok 5
-andThen (\n -> if n > 0 then Ok n else Err "negative") (Ok (-1)) --> Err "negative"
-andThen (\n -> if n > 0 then Ok n else Err "negative") (Err "prior") --> Err "prior"
-```
-
-## `combine`
-
-`combine results` — collect a list of `Result`s into a `Result` of list;
-short-circuits on the first `Err`.
-
-```ipe
-combine [ Ok 1, Ok 2, Ok 3 ] --> Ok [ 1, 2, 3 ]
-combine [ Ok 1, Err "bad", Ok 3 ] --> Err "bad"
-combine [] --> Ok []
-```
-
-## `fromMaybe`
-
-`fromMaybe err maybe` — `Ok` the `Just` value, or `Err err` on `Nothing`.
-
-```ipe
-fromMaybe "missing" (Just 42) --> Ok 42
-fromMaybe "missing" Nothing --> Err "missing"
-fromMaybe 0 (Just 99) --> Ok 99
+withDefault 0 (Ok 42) --> 42
+withDefault 0 (Err "oops") --> 0
+withDefault "" (Err "bad") --> ""
 ```
 
 ## `map`
+
+```ipe
+map : (a -> b) -> Result c a -> Result c b
+```
 
 `map f result` — apply `f` to the `Ok` value; `Err` passes through unchanged.
 
@@ -55,7 +55,39 @@ map (\n -> n * 2) (Err "bad") --> Err "bad"
 map String.fromInt (Ok 7) --> Ok "7"
 ```
 
+## `andThen`
+
+```ipe
+andThen : (a -> Result b c) -> Result b a -> Result b c
+```
+
+`andThen f result` — feed the `Ok` value to `f`; `Err` passes through.
+
+```ipe
+andThen (\n -> if n > 0 then Ok n else Err "negative") (Ok 5) --> Ok 5
+andThen (\n -> if n > 0 then Ok n else Err "negative") (Ok (-1)) --> Err "negative"
+andThen (\n -> if n > 0 then Ok n else Err "negative") (Err "prior") --> Err "prior"
+```
+
+## `mapError`
+
+```ipe
+mapError : (a -> b) -> Result a c -> Result b c
+```
+
+`mapError f result` — apply `f` to the `Err` value; `Ok` passes through.
+
+```ipe
+mapError String.length (Err "bad") --> Err 3
+mapError String.length (Ok 42) --> Ok 42
+mapError (\_ -> "unknown") (Err "network timeout") --> Err "unknown"
+```
+
 ## `map2`
+
+```ipe
+map2 : (a -> b -> c) -> Result d a -> Result d b -> Result d c
+```
 
 `map2 f ra rb` — combine two `Ok` values with `f`; first `Err` wins.
 
@@ -67,6 +99,10 @@ map2 (\a b -> a ++ b) (Ok "hello") (Ok " world") --> Ok "hello world"
 
 ## `map3`
 
+```ipe
+map3 : (a -> b -> c -> d) -> Result e a -> Result e b -> Result e c -> Result e d
+```
+
 `map3 f ra rb rc` — combine three `Ok` values with `f`; first `Err` wins.
 
 ```ipe
@@ -75,6 +111,10 @@ map3 (\a b c -> a + b + c) (Ok 1) (Err "x") (Ok 3) --> Err "x"
 ```
 
 ## `map4`
+
+```ipe
+map4 : (a -> b -> c -> d -> e) -> Result f a -> Result f b -> Result f c -> Result f d -> Result f e
+```
 
 `map4 f ra rb rc rd` — combine four `Ok` values with `f`; first `Err` wins.
 
@@ -85,6 +125,10 @@ map4 (\a b c d -> a + b + c + d) (Ok 1) (Err "x") (Ok 3) (Ok 4) --> Err "x"
 
 ## `map5`
 
+```ipe
+map5 : (a -> b -> c -> d -> e -> f) -> Result g a -> Result g b -> Result g c -> Result g d -> Result g e -> Result g f
+```
+
 `map5 f ra rb rc rd re` — combine five `Ok` values with `f`; first `Err` wins.
 
 ```ipe
@@ -92,26 +136,40 @@ map5 (\a b c d e -> a + b + c + d + e) (Ok 1) (Ok 2) (Ok 3) (Ok 4) (Ok 5) --> Ok
 map5 (\a b c d e -> a + b + c + d + e) (Ok 1) (Ok 2) (Err "x") (Ok 4) (Ok 5) --> Err "x"
 ```
 
-## `mapError`
-
-`mapError f result` — apply `f` to the `Err` value; `Ok` passes through.
+## `andMap`
 
 ```ipe
-mapError String.length (Err "bad") --> Err 3
-mapError String.length (Ok 42) --> Ok 42
-mapError (\_ -> "unknown") (Err "network timeout") --> Err "unknown"
+andMap : Result c a -> Result c (a -> b) -> Result c b
 ```
 
-## `toMaybe`
-
-`toMaybe result` — `Just` the `Ok` value, or `Nothing` on `Err`.
+`andMap ra rfn` — apply the function inside `rfn` to the value inside `ra`.
 
 ```ipe
-toMaybe (Ok 42) --> Just 42
-toMaybe (Err "oops") --> Nothing
+andMap (Ok 10) (Ok (\n -> n + 1)) --> Ok 11
+andMap (Err "no val") (Ok (\n -> n + 1)) --> Err "no val"
+andMap (Ok 10) (Err "no fn") --> Err "no fn"
+```
+
+## `combine`
+
+```ipe
+combine : List (Result b a) -> Result b (List a)
+```
+
+`combine results` — collect a list of `Result`s into a `Result` of list;
+short-circuits on the first `Err`.
+
+```ipe
+combine [ Ok 1, Ok 2, Ok 3 ] --> Ok [ 1, 2, 3 ]
+combine [ Ok 1, Err "bad", Ok 3 ] --> Err "bad"
+combine [] --> Ok []
 ```
 
 ## `traverse`
+
+```ipe
+traverse : (a -> Result c b) -> List a -> Result c (List b)
+```
 
 `traverse f list` — map each element to a `Result`, collecting successes;
 short-circuits on the first `Err`.
@@ -122,13 +180,30 @@ traverse (\n -> if n > 0 then Ok n else Err "negative") [ 1, -2, 3 ] --> Err "ne
 traverse (\n -> if n > 0 then Ok n else Err "negative") [] --> Ok []
 ```
 
-## `withDefault`
-
-`withDefault fallback result` — the success value, or `fallback` if `Err`.
+## `toMaybe`
 
 ```ipe
-withDefault 0 (Ok 42) --> 42
-withDefault 0 (Err "oops") --> 0
-withDefault "" (Err "bad") --> ""
+toMaybe : Result a b -> Maybe b
+```
+
+`toMaybe result` — `Just` the `Ok` value, or `Nothing` on `Err`.
+
+```ipe
+toMaybe (Ok 42) --> Just 42
+toMaybe (Err "oops") --> Nothing
+```
+
+## `fromMaybe`
+
+```ipe
+fromMaybe : a -> Maybe b -> Result a b
+```
+
+`fromMaybe err maybe` — `Ok` the `Just` value, or `Err err` on `Nothing`.
+
+```ipe
+fromMaybe "missing" (Just 42) --> Ok 42
+fromMaybe "missing" Nothing --> Err "missing"
+fromMaybe 0 (Just 99) --> Ok 99
 ```
 
