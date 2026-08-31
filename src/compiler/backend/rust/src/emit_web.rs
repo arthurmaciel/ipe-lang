@@ -1962,4 +1962,186 @@ mod hot_appearance_tests {
         );
         Ok(())
     }
+
+    // ── Registry-driven enforcement ───────────────────────────────────────────
+    //
+    // The two tests below do NOT name kernels: they *iterate* the appearance
+    // registry, so every arm is proven by construction. A new arm added to
+    // `appearance_literal_args` is auto-covered here — there is no per-kernel
+    // hand-written test to forget. The per-kernel tests above stay as readable,
+    // pinned examples; these are the completeness net over the *whole* registry.
+
+    use crate::emit_ui_plan::{LitKind, appearance_literal_args};
+
+    /// The synthesised literal for a registry position of the given kind, paired
+    /// with the exact `String` the emitter bakes as that slot's default. Str bakes
+    /// itself; a typed `Int`/`Float` bakes its canonical decimal string — the read
+    /// path re-parses it, so the baked default must equal that canonical form.
+    fn arm_literal(kind: LitKind) -> (Expr, String) {
+        match kind {
+            // A value with a char that HTML-escapes, to prove escaping stays a
+            // runtime concern (the baked default is the raw source string).
+            LitKind::Str => (Expr::Str("a < b".to_string()), "a < b".to_string()),
+            LitKind::Int => (Expr::Int(37), "37".to_string()),
+            // A finite float (the emitter fences non-finite floats out of the hoist).
+            LitKind::Float => (Expr::Float(0.5), "0.5".to_string()),
+        }
+    }
+
+    /// Synthesise a minimal `Kernel(k)` call of `k`'s declared arity: each
+    /// registry-marked position carries a direct literal of its kind; every other
+    /// position carries an inert filler string. The call is the smallest emit that
+    /// exercises exactly this kernel's appearance positions, with the baked
+    /// defaults expected at each marked slot (in slot order).
+    fn synth_arm_call(k: KernelFn, positions: &[(usize, LitKind)]) -> (Expr, Vec<String>) {
+        let arity = usize::from(k.def().arity);
+        let mut args = Vec::with_capacity(arity);
+        let mut baked = Vec::new();
+        for i in 0..arity {
+            match positions
+                .iter()
+                .find_map(|&(pos, kind)| (pos == i).then_some(kind))
+            {
+                Some(kind) => {
+                    let (lit, default) = arm_literal(kind);
+                    args.push(lit);
+                    baked.push(default);
+                }
+                // An unmarked position is structural (an attribute key, a CSS
+                // selector, a list arg): a filler literal keeps the call well-formed
+                // for emit and must never itself hoist.
+                None => args.push(Expr::Str(format!("__unmarked{i}"))),
+            }
+        }
+        let call = Expr::Call {
+            callee: Callee::Kernel(k),
+            args,
+            pin: CallPin::None,
+            on_form: OnFormKind::NotForm,
+        };
+        (call, baked)
+    }
+
+    /// The registry's wired appearance arms: every `KernelFn` in `ALL` with a
+    /// non-empty `appearance_literal_args`. Iterating this is what makes each arm
+    /// auto-covered — the registry is the single source the tests read.
+    fn wired_appearance_arms() -> Vec<(KernelFn, &'static [(usize, LitKind)])> {
+        KernelFn::ALL
+            .iter()
+            .copied()
+            .filter_map(|k| {
+                let p = appearance_literal_args(k);
+                (!p.is_empty()).then_some((k, p))
+            })
+            .collect()
+    }
+
+    /// Registry-driven completeness/conformance: for EVERY appearance arm, a
+    /// minimal synthesised call emits flag-off with no table (direct literal) and
+    /// flag-on with each marked position baked as its slot default and read back
+    /// from `__ipe_lit` — the baked default is byte-identical to the source literal
+    /// (dev == prod). Derived from the registry, so no arm can exist unproven.
+    #[test]
+    fn every_registry_arm_hoists_and_conforms() -> DResult<()> {
+        let arms = wired_appearance_arms();
+        assert!(
+            !arms.is_empty(),
+            "the registry must have wired appearance arms to prove"
+        );
+        for (k, positions) in arms {
+            let mut interner = Interner::new();
+            let (call, baked) = synth_arm_call(k, positions);
+            let (program, view) = one_view_program(&mut interner, call)?;
+
+            let off = emit_view(&interner, &program, &view, false)?;
+            assert!(
+                !off.contains("__ipe_lit"),
+                "{k:?}: flag-off emit must introduce no literal table, got:\n{off}"
+            );
+
+            let on = emit_view(&interner, &program, &view, true)?;
+            let defaults = baked
+                .iter()
+                .map(|d| format!("{d:?}"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            assert!(
+                on.contains(&format!("from_defaults(&[{defaults}])")),
+                "{k:?}: flag-on emit must bake {baked:?} as ordered slot defaults \
+                 (dev == prod), got:\n{on}"
+            );
+            for slot in 0..baked.len() {
+                assert!(
+                    on.contains(&format!("__ipe_lit.get({slot})")),
+                    "{k:?}: marked slot {slot} must read its table entry, got:\n{on}"
+                );
+            }
+        }
+        Ok(())
+    }
+
+    /// Registry-driven refusal: for EVERY appearance arm, neither a `Model`-
+    /// dependent argument at a marked position nor a literal inside a `move` lambda
+    /// hoists. The first proves only a *direct literal* is data (a bound `Var` is
+    /// logic → recompile); the second proves the closure fence holds arm-wide. Both
+    /// iterate the registry, so a new arm is auto-fenced.
+    #[test]
+    fn every_registry_arm_refuses_model_dependent_and_lambda() -> DResult<()> {
+        let arms = wired_appearance_arms();
+        for (k, positions) in arms {
+            // (a) A `Model`-dependent (bound `Var`) arg at EVERY marked position is
+            // logic, not data — none of them may hoist, so the table stays absent.
+            // Every marked slot carries the `Var` (not just one) to prove a
+            // multi-position arm refuses at each of its positions independently.
+            {
+                let mut interner = Interner::new();
+                let dynamic = interner.intern("__model_value")?;
+                let arity = usize::from(k.def().arity);
+                let args = (0..arity)
+                    .map(|i| {
+                        if positions.iter().any(|&(pos, _)| pos == i) {
+                            Expr::Var(dynamic)
+                        } else {
+                            Expr::Str(format!("__unmarked{i}"))
+                        }
+                    })
+                    .collect();
+                let call = Expr::Call {
+                    callee: Callee::Kernel(k),
+                    args,
+                    pin: CallPin::None,
+                    on_form: OnFormKind::NotForm,
+                };
+                let (program, view) = one_view_program(&mut interner, call)?;
+                let out = emit_view(&interner, &program, &view, true)?;
+                assert!(
+                    !out.contains("__ipe_lit"),
+                    "{k:?}: a Model-dependent arg at a marked position must not hoist, got:\n{out}"
+                );
+            }
+            // (b) The whole call inside a `move` lambda body: the closure fence
+            // suppresses hoisting into the outer view's table.
+            {
+                let mut interner = Interner::new();
+                let ignored = interner.intern("_evt")?;
+                let (call, _) = synth_arm_call(k, positions);
+                let body = Expr::Lambda {
+                    params: vec![(ignored, IrType::Int)],
+                    ret: IrType::Ui {
+                        ctor: UiCtor::UiAttribute,
+                        msg: Box::new(IrType::Int),
+                    },
+                    body: Box::new(call),
+                };
+                let (program, view) = one_view_program(&mut interner, body)?;
+                let out = emit_view(&interner, &program, &view, true)?;
+                assert!(
+                    !out.contains("__ipe_lit"),
+                    "{k:?}: a literal inside a move lambda must not hoist into the outer table, \
+                     got:\n{out}"
+                );
+            }
+        }
+        Ok(())
+    }
 }
