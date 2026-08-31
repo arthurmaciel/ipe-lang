@@ -398,6 +398,27 @@ pub fn run_health(rest: &[String]) -> Result<(), CliError> {
     finish(&report)
 }
 
+/// Run the diagnostic checks and print the human report, then offer per-item
+/// fixes interactively — the same behaviour as `ipe health` on a terminal, but
+/// driven from another command rather than the CLI entry point.
+///
+/// Called by `ipe init` after scaffolding to let the user tune the toolchain in
+/// the same session. The caller is responsible for gating on TTY; this function
+/// never reads TTY state itself so the caller controls where the prompt appears.
+///
+/// # Errors
+/// Propagates any filesystem error from an accepted fix. A critical missing
+/// check returns [`CliError::HealthCritical`] so the caller can decide whether
+/// to treat it as fatal (the init wizard ignores it, matching `ipe health`'s
+/// non-zero exit only when invoked as a standalone command).
+pub(crate) fn run_health_inline() -> Result<(), CliError> {
+    let report = detect();
+    let stdout = std::io::stdout();
+    print!("{}", render_human(&report, &stdout));
+    apply_fixes(&report, Consent::Interactive, &stdout);
+    finish(&report)
+}
+
 /// The exit-code decision, printed as `Ok(())` / a typed failure. A critical
 /// missing check exits non-zero (so CI can gate); everything else is success.
 fn finish(report: &Report) -> Result<(), CliError> {
