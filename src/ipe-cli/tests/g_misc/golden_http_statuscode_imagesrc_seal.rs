@@ -1,0 +1,146 @@
+//! SEAL for `Ipe.Http.StatusCode` and `Ipe.Ui.ImageSrc`.
+//!
+//! `Ipe.Http.StatusCode` is a compiled-source opaque newtype over `Int`.
+//! `fromInt` is total; `code` recovers the integer; the four `is*` predicates
+//! classify 2xx/3xx/4xx/5xx ranges.  Pure Ipê, no feature gate.
+//!
+//! `Ipe.Ui.ImageSrc` is a compiled-source closed sum: `FromUrl Url | FromData {
+//! mime, base64 }`.  Because `FromUrl` embeds `Ipe.Url.Url`, any program that
+//! imports this module forces the `url` runtime feature via the type-driven SSOT
+//! (`ir_type_feature_requirement`) — without a single `Ffi.kernel` call.
+//!
+//! The frontend-accepts assertions run in the default gate.  Build-and-run proofs
+//! are `IPE_E2E`-gated, matching every other golden in this suite.
+
+use std::path::{Path, PathBuf};
+
+fn repo_root() -> PathBuf {
+    let joined = Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("..");
+    std::fs::canonicalize(&joined).unwrap_or(joined)
+}
+
+fn built_statuscode(root: &Path, out: &Path) -> Option<Result<(), ipe::CliError>> {
+    let entry = root
+        .join("tests")
+        .join("golden")
+        .join("statuscode_seal")
+        .join("Main.ipe");
+    let _ = std::fs::remove_dir_all(out);
+    let runtime = ipe::resolve_runtime().ok()?;
+    Some(ipe::build(&entry, out, &runtime))
+}
+
+fn built_imagesrc(root: &Path, out: &Path) -> Option<Result<(), ipe::CliError>> {
+    let entry = root
+        .join("tests")
+        .join("golden")
+        .join("imagesrc_seal")
+        .join("Main.ipe");
+    let _ = std::fs::remove_dir_all(out);
+    let runtime = ipe::resolve_runtime().ok()?;
+    Some(ipe::build(&entry, out, &runtime))
+}
+
+// ── Ipe.Http.StatusCode ──────────────────────────────────────────────────────
+
+/// Emit assertion: the frontend must accept a program that drives `StatusCode`
+/// through `fromInt`, `code`, and all four classifiers.
+#[test]
+fn statuscode_seal_emits() {
+    let root = repo_root();
+    let out = std::env::temp_dir().join("ipec_statuscode_seal_emit");
+    let Some(built) = built_statuscode(&root, &out) else {
+        return;
+    };
+    assert!(
+        built.is_ok(),
+        "statuscode_seal: must be accepted + emitted, got: {built:?}"
+    );
+}
+
+/// Load-bearing SEAL: under `IPE_E2E=1` the emitted crate must `cargo build`,
+/// run, and produce the pinned output (range probes + mutual-exclusion check).
+#[test]
+fn statuscode_seal_builds_and_runs() {
+    let root = repo_root();
+    let out = std::env::temp_dir().join("ipec_statuscode_seal_e2e");
+    let Some(built) = built_statuscode(&root, &out) else {
+        return;
+    };
+    assert!(
+        built.is_ok(),
+        "statuscode_seal: must be accepted, got: {built:?}"
+    );
+
+    if std::env::var("IPE_E2E").is_err() {
+        return;
+    }
+    let outcome = crate::support::build_and_run_emitted("statuscode_seal", &out);
+    assert_eq!(
+        outcome.exit_code,
+        Some(0),
+        "statuscode_seal: emitted crate must build and exit 0; stdout:\n{}",
+        outcome.stdout
+    );
+    let expected = "code=200 ok=True\n\
+                    code=301 redirect=True\n\
+                    code=404 client=True\n\
+                    code=500 server=True\n\
+                    neg=False";
+    assert_eq!(
+        outcome.stdout.trim(),
+        expected,
+        "statuscode_seal: round-trips and classifiers produced wrong output"
+    );
+}
+
+// ── Ipe.Ui.ImageSrc ─────────────────────────────────────────────────────────
+
+/// Emit assertion: the frontend must accept a program that constructs both
+/// `ImageSrc` variants and recovers the attribute-value string.
+#[test]
+fn imagesrc_seal_emits() {
+    let root = repo_root();
+    let out = std::env::temp_dir().join("ipec_imagesrc_seal_emit");
+    let Some(built) = built_imagesrc(&root, &out) else {
+        return;
+    };
+    assert!(
+        built.is_ok(),
+        "imagesrc_seal: must be accepted + emitted, got: {built:?}"
+    );
+}
+
+/// Load-bearing SEAL: under `IPE_E2E=1` the emitted crate must `cargo build`
+/// (proving the `url` feature is forced by the `Url`-embedding type), run, and
+/// produce the pinned output for both `FromUrl` and `FromData` variants.
+#[test]
+fn imagesrc_seal_builds_and_runs() {
+    let root = repo_root();
+    let out = std::env::temp_dir().join("ipec_imagesrc_seal_e2e");
+    let Some(built) = built_imagesrc(&root, &out) else {
+        return;
+    };
+    assert!(
+        built.is_ok(),
+        "imagesrc_seal: must be accepted, got: {built:?}"
+    );
+
+    if std::env::var("IPE_E2E").is_err() {
+        return;
+    }
+    let outcome = crate::support::build_and_run_emitted("imagesrc_seal", &out);
+    assert_eq!(
+        outcome.exit_code,
+        Some(0),
+        "imagesrc_seal: emitted crate must build and exit 0; stdout:\n{}",
+        outcome.stdout
+    );
+    let expected = "https://example.com/img.png\n\
+                    data:image/png;base64,abc123";
+    assert_eq!(
+        outcome.stdout.trim(),
+        expected,
+        "imagesrc_seal: FromUrl and FromData attribute-values produced wrong output"
+    );
+}

@@ -12,8 +12,7 @@ use ipe_backend_rust::{RuntimeDep, RustBackend};
 use ipe_diagnostics::{DResult, Diagnostic};
 use ipe_intern::Interner;
 use ipe_ir::{
-    CallPin, Callee, EnumDef, Expr, Func, FuncId, IrType, KernelFn, ModPath, Module, OnFormKind,
-    Program, TypeDef, Variant,
+    CallPin, Callee, Expr, Func, FuncId, IrType, KernelFn, ModPath, Module, OnFormKind, Program,
 };
 
 const GOLDEN_MAIN: &str = include_str!("../../../../../tests/golden/basics/main.rs");
@@ -82,19 +81,15 @@ fn dep_backend(interner: &Interner) -> RustBackend<'_> {
 
 /// Build the golden program:
 /// ```ipe
-/// type Msg = Increment | Decrement
-/// update msg count =
-///     case msg of
-///         Increment -> count + 1
-///         Decrement -> count - 1
-/// main = Io.println (String.fromInt (update Increment 0))
+/// main = System.setenv "HOME" "x"
 /// ```
+/// The `Msg` enum and `update` function `basics/Main.ipe` also declares are
+/// unreachable from `main`, so dead-code elimination drops them — the lowered
+/// program the full pipeline produces (and this hand-built mirror) carries only
+/// the live `main`.
 #[allow(clippy::too_many_lines)]
 fn build_m0(interner: &mut Interner) -> DResult<Program> {
     let main_mod = interner.intern("Main")?;
-    let msg_ty = interner.intern("Msg")?;
-    let increment = interner.intern("Increment")?;
-    let decrement = interner.intern("Decrement")?;
     let main = interner.intern("main")?;
 
     let main_id = FuncId::from_raw(0);
@@ -119,21 +114,7 @@ fn build_m0(interner: &mut Interner) -> DResult<Program> {
         imports_unsafe_submodule: false,
         modules: vec![Module {
             name: ModPath(vec![main_mod]),
-            types: vec![TypeDef::Enum(EnumDef {
-                name: msg_ty,
-                type_params: vec![],
-                variants: vec![
-                    Variant {
-                        name: increment,
-                        fields: vec![],
-                    },
-                    Variant {
-                        name: decrement,
-                        fields: vec![],
-                    },
-                ],
-                home: ModPath(vec![]),
-            })],
+            types: vec![],
             funcs: vec![main_fn],
             entry: Some(main_id),
             records: vec![],

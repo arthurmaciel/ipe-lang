@@ -10,6 +10,10 @@
 -- native kernels, so each bespoke emit arm is preserved. The `Ipe.Ui.*`
 -- sub-modules (Background / Border / Font / Region / Input / Lazy / Keyed) are
 -- separate native qualifiers, untouched here.
+--
+-- `image` takes a typed `ImageSrc` (either `ImageSrc.url` for a remote image
+-- or `ImageSrc.data` for an inline data URI) rather than a raw `String`.
+-- Build an `ImageSrc` via `Ipe.Ui.ImageSrc.url` or `Ipe.Ui.ImageSrc.data`.
 module Ipe.Ui exposing
     ( Element, Attribute, Length, Color, Description, HAlign, VAlign, Location, PseudoClass
     , node, taggedNode
@@ -37,6 +41,7 @@ module Ipe.Ui exposing
 
 
 import Ipe.Ffi as Ffi
+import Ipe.Ui.ImageSrc as ImageSrc exposing (ImageSrc)
 
 
 -- ── Retained native primitives ───────────────────────────────────────────────
@@ -119,9 +124,17 @@ link : List (Attribute msg) -> { url : String, label : Element msg } -> Element 
 link = Ffi.kernel "Ui_link"
 
 
--- | `image attrs { src, description }` — an `<img src=… alt=…>`.
-image : List (Attribute msg) -> { src : String, description : String } -> Element msg
-image = Ffi.kernel "Ui_image"
+-- | Private kernel: takes a raw `String` src for the `<img src=…>` attribute.
+imageKernel : List (Attribute msg) -> { src : String, description : String } -> Element msg
+imageKernel = Ffi.kernel "Ui_image"
+
+
+-- | `image attrs { src, description }` — an `<img src=… alt=…>`.  `src` is a
+-- typed `ImageSrc` — either a validated URL (`ImageSrc.url`) or an inline data
+-- URI (`ImageSrc.data { mime, base64 }`).  A bare `String` is a type error.
+image : List (Attribute msg) -> { src : ImageSrc, description : String } -> Element msg
+image attrs rec =
+    imageKernel attrs { src = ImageSrc.toAttributeValue rec.src, description = rec.description }
 
 
 -- ── Attribute builders. ──

@@ -169,54 +169,6 @@ impl IpeStringify for RecColTypeName {
         )
     }
 }
-#[derive(Clone, Debug, PartialEq)]
-pub struct RecDatabaseDriverHostPasswordPortTlsUser {
-    database: String,
-    driver: IpeDbDsnDriver,
-    host: String,
-    password: ipe_runtime::secret::Secret,
-    port: IpeNetPort,
-    tls: IpeDbDsnTlsMode,
-    user: String,
-}
-impl IpeStringify for RecDatabaseDriverHostPasswordPortTlsUser {
-    fn ipe_show(&self) -> String {
-        format!(
-            "{{{} {} {} {} {} {} {}}}",
-            (&ipe_runtime::stringify::Wrap(&self.database)).dispatch(),
-            (&ipe_runtime::stringify::Wrap(&self.driver)).dispatch(),
-            (&ipe_runtime::stringify::Wrap(&self.host)).dispatch(),
-            (&ipe_runtime::stringify::Wrap(&self.password)).dispatch(),
-            (&ipe_runtime::stringify::Wrap(&self.port)).dispatch(),
-            (&ipe_runtime::stringify::Wrap(&self.tls)).dispatch(),
-            (&ipe_runtime::stringify::Wrap(&self.user)).dispatch()
-        )
-    }
-}
-pub struct RecDecodeMatchTag<T1: 'static> {
-    decode: Decoder<T1>,
-    match_: ::std::sync::Arc<dyn Fn(T1) -> IpeMaybe<Vec<JsonVal>> + Send + Sync + 'static>,
-    tag: String,
-}
-impl<T1: Clone + 'static> Clone for RecDecodeMatchTag<T1> {
-    fn clone(&self) -> Self {
-        Self {
-            decode: self.decode.clone(),
-            match_: self.match_.clone(),
-            tag: self.tag.clone(),
-        }
-    }
-}
-impl<T1: IpeStringify + std::fmt::Debug + 'static> IpeStringify for RecDecodeMatchTag<T1> {
-    fn ipe_show(&self) -> String {
-        format!(
-            "{{{} {} {}}}",
-            "<fn>",
-            "<fn>",
-            (&ipe_runtime::stringify::Wrap(&self.tag)).dispatch()
-        )
-    }
-}
 pub struct RecEncMkDecShp<T1: 'static> {
     enc: ::std::sync::Arc<dyn Fn(T1) -> JsonVal + Send + Sync + 'static>,
     mkDec: ::std::sync::Arc<dyn Fn(Rec_) -> Decoder<T1> + Send + Sync + 'static>,
@@ -238,123 +190,6 @@ impl<T1: IpeStringify + std::fmt::Debug + 'static> IpeStringify for RecEncMkDecS
             "<fn>",
             "<fn>",
             (&ipe_runtime::stringify::Wrap(&self.shp)).dispatch()
-        )
-    }
-}
-#[derive(Clone, Debug, PartialEq)]
-pub struct RecExtraBindsFragJoinedAJoinedBLeftTableOrderPoisonProjectionsRightTable {
-    extraBinds: Vec<MainSqlValue>,
-    frag: ipe_runtime::db::SqlFragment,
-    joinedA: String,
-    joinedB: String,
-    leftTable: String,
-    order: IpeMaybe<(String, String, bool)>,
-    poison: IpeMaybe<ipe_runtime::error::IpeError>,
-    projections: Vec<MainProjectionTerm>,
-    rightTable: String,
-}
-impl IpeStringify for RecExtraBindsFragJoinedAJoinedBLeftTableOrderPoisonProjectionsRightTable {
-    fn ipe_show(&self) -> String {
-        format!(
-            "{{{} {} {} {} {} {} {} {} {}}}",
-            (&ipe_runtime::stringify::Wrap(&self.extraBinds)).dispatch(),
-            (&ipe_runtime::stringify::Wrap(&self.frag)).dispatch(),
-            (&ipe_runtime::stringify::Wrap(&self.joinedA)).dispatch(),
-            (&ipe_runtime::stringify::Wrap(&self.joinedB)).dispatch(),
-            (&ipe_runtime::stringify::Wrap(&self.leftTable)).dispatch(),
-            (&ipe_runtime::stringify::Wrap(&self.order)).dispatch(),
-            (&ipe_runtime::stringify::Wrap(&self.poison)).dispatch(),
-            (&ipe_runtime::stringify::Wrap(&self.projections)).dispatch(),
-            (&ipe_runtime::stringify::Wrap(&self.rightTable)).dispatch()
-        )
-    }
-}
-pub struct RecFragKeyAKeyBOrderPoisonStoreAStoreB<T1: 'static, T2: 'static> {
-    frag: ipe_runtime::db::SqlFragment,
-    keyA: String,
-    keyB: String,
-    order: IpeMaybe<(String, String, bool)>,
-    poison: IpeMaybe<ipe_runtime::error::IpeError>,
-    storeA: IpeDbStoreStore<T1>,
-    storeB: IpeDbStoreStore<T2>,
-}
-impl<T1: Clone + 'static, T2: Clone + 'static> Clone
-    for RecFragKeyAKeyBOrderPoisonStoreAStoreB<T1, T2>
-{
-    fn clone(&self) -> Self {
-        Self {
-            frag: self.frag.clone(),
-            keyA: self.keyA.clone(),
-            keyB: self.keyB.clone(),
-            order: self.order.clone(),
-            poison: self.poison.clone(),
-            storeA: self.storeA.clone(),
-            storeB: self.storeB.clone(),
-        }
-    }
-}
-impl<T1: IpeStringify + std::fmt::Debug + 'static, T2: IpeStringify + std::fmt::Debug + 'static> IpeStringify
-    for RecFragKeyAKeyBOrderPoisonStoreAStoreB<T1, T2>
-{
-    fn ipe_show(&self) -> String {
-        format!(
-            "{{{} {} {} {} {} {} {}}}",
-            (&ipe_runtime::stringify::Wrap(&self.frag)).dispatch(),
-            (&ipe_runtime::stringify::Wrap(&self.keyA)).dispatch(),
-            (&ipe_runtime::stringify::Wrap(&self.keyB)).dispatch(),
-            (&ipe_runtime::stringify::Wrap(&self.order)).dispatch(),
-            (&ipe_runtime::stringify::Wrap(&self.poison)).dispatch(),
-            "<fn>",
-            "<fn>"
-        )
-    }
-}
-pub struct RecFragLimOffOrderingsPoisonStore<T1: 'static> {
-    frag: IpeMaybe<ipe_runtime::db::SqlFragment>,
-    lim: IpeMaybe<i64>,
-    off: IpeMaybe<i64>,
-    orderings: Vec<(String, IpeDbStoreCellType, IpeDbStoreSortDir)>,
-    poison: IpeMaybe<ipe_runtime::error::IpeError>,
-    store: IpeDbStoreStore<T1>,
-}
-impl<T1: Clone + 'static> Clone for RecFragLimOffOrderingsPoisonStore<T1> {
-    fn clone(&self) -> Self {
-        Self {
-            frag: self.frag.clone(),
-            lim: self.lim.clone(),
-            off: self.off.clone(),
-            orderings: self.orderings.clone(),
-            poison: self.poison.clone(),
-            store: self.store.clone(),
-        }
-    }
-}
-impl<T1: IpeStringify + std::fmt::Debug + 'static> IpeStringify
-    for RecFragLimOffOrderingsPoisonStore<T1>
-{
-    fn ipe_show(&self) -> String {
-        format!(
-            "{{{} {} {} {} {} {}}}",
-            (&ipe_runtime::stringify::Wrap(&self.frag)).dispatch(),
-            (&ipe_runtime::stringify::Wrap(&self.lim)).dispatch(),
-            (&ipe_runtime::stringify::Wrap(&self.off)).dispatch(),
-            (&ipe_runtime::stringify::Wrap(&self.orderings)).dispatch(),
-            (&ipe_runtime::stringify::Wrap(&self.poison)).dispatch(),
-            "<fn>"
-        )
-    }
-}
-#[derive(Clone, Debug, PartialEq)]
-pub struct RecNameSql {
-    name: String,
-    sql: String,
-}
-impl IpeStringify for RecNameSql {
-    fn ipe_show(&self) -> String {
-        format!(
-            "{{{} {}}}",
-            (&ipe_runtime::stringify::Wrap(&self.name)).dispatch(),
-            (&ipe_runtime::stringify::Wrap(&self.sql)).dispatch()
         )
     }
 }
@@ -519,16 +354,6 @@ pub fn io_println(msg: String) -> IpeTask<()> {
 pub fn io_eprintln(msg: String) -> IpeTask<()> {
     ipe_runtime::io::io_eprintln(msg)
 }
-// ── Io secret kernels ──────────────────────────────────────────────────────
-// `Io.readSecret` returns the opaque `Secret`, so its wrapper hard-references
-// `ipe_runtime::secret::Secret`. That module is `secret`-gated in the dependency
-// model, so this wrapper is cut from the prelude for a program that reaches no
-// secret surface (`!reach.secret`) — the same drop the crypto/random/log
-// sections take. A program that reads a secret holds a `Secret`-typed value,
-// which turns the `secret` feature on and keeps this wrapper.
-pub fn io_read_secret(prompt: String) -> IpeTask<ipe_runtime::secret::Secret> {
-    ipe_runtime::io::io_read_secret(prompt)
-}
 // ── System kernels ─────────────────────────────────────────────────────────
 pub fn system_getenv(key: String) -> IpeTask<String> {
     ipe_runtime::system::system_getenv(key)
@@ -634,21 +459,6 @@ fn main() {
     }
 }
 
-#[path = "ipe_mods/ipe_mod_ipe_duration.rs"]
-mod ipe_mod_ipe_duration;
-pub(crate) use ipe_mod_ipe_duration::*;
-#[path = "ipe_mods/ipe_mod_ipe_task.rs"]
-mod ipe_mod_ipe_task;
-pub(crate) use ipe_mod_ipe_task::*;
-#[path = "ipe_mods/ipe_mod_ipe_net.rs"]
-mod ipe_mod_ipe_net;
-pub(crate) use ipe_mod_ipe_net::*;
-#[path = "ipe_mods/ipe_mod_ipe_db_dsn.rs"]
-mod ipe_mod_ipe_db_dsn;
-pub(crate) use ipe_mod_ipe_db_dsn::*;
-#[path = "ipe_mods/ipe_mod_ipe_money.rs"]
-mod ipe_mod_ipe_money;
-pub(crate) use ipe_mod_ipe_money::*;
 #[path = "ipe_mods/ipe_mod_ipe_codec.rs"]
 mod ipe_mod_ipe_codec;
 pub(crate) use ipe_mod_ipe_codec::*;

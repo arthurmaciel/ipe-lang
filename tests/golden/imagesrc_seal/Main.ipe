@@ -1,0 +1,45 @@
+module Main exposing (main)
+
+import Ipe.Io as Io
+import Ipe.Result as Result exposing (Result(..))
+import Ipe.String as String
+import Ipe.Ui.ImageSrc as ImageSrc
+import Ipe.Url as Url
+
+
+-- SEAL: Ipe.Ui.ImageSrc round-trips.
+-- Proves the compiled-source module resolves, emits, builds, and runs.
+-- The FromUrl variant embeds Url, which forces the `url` runtime feature
+-- automatically through the type-driven SSOT.
+
+
+urlLine : String
+urlLine =
+    case Url.fromString "https://example.com/img.png" of
+        Ok u ->
+            let
+                src =
+                    ImageSrc.url u
+            in
+            ImageSrc.toAttributeValue src
+
+        Err _ ->
+            "url ERR"
+
+
+dataLine : String
+dataLine =
+    let
+        src =
+            ImageSrc.data { mime = "image/png", base64 = "abc123" }
+    in
+    ImageSrc.toAttributeValue src
+
+
+main =
+    Io.println
+        (String.join "\n"
+            [ urlLine
+            , dataLine
+            ]
+        )

@@ -130,21 +130,6 @@ impl IpeStringify for IpeMoneyCurrency {
         }
     }
 }
-#[derive(Clone, Debug, PartialEq)]
-pub(crate) enum IpeMoneyMoney {
-    Money(ipe_runtime::decimal::Decimal, IpeMoneyCurrency),
-}
-impl IpeStringify for IpeMoneyMoney {
-    fn ipe_show(&self) -> String {
-        match self {
-            IpeMoneyMoney::Money(p0, p1) => format!(
-                "Money {} {}",
-                (&ipe_runtime::stringify::Wrap(p0)).dispatch(),
-                (&ipe_runtime::stringify::Wrap(p1)).dispatch()
-            ),
-        }
-    }
-}
 pub(crate) fn user_ipe_money_currency_code(c: IpeMoneyCurrency) -> String {
     let _ipe_recursion_guard = crate::recursion_guard();
     match c {
