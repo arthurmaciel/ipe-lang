@@ -772,6 +772,28 @@ const STD_TIME_TIMESTAMP: &str = include_str!("../Ipe/Time/Timestamp.ipe");
 /// disjointness invariant holds.
 const STD_BYTESIZE: &str = include_str!("../Ipe/ByteSize.ipe");
 
+/// `Ipe.Ui.ImageSrc` — typed image source closed-sum (compiled source).
+///
+/// Pure Ipê: defines `type ImageSrc = FromUrl Url | FromData { mime, base64 }`
+/// and the two constructors (`url`, `data`) plus `toAttributeValue`.  Because
+/// `FromUrl` embeds `Ipe.Url.Url` (a `url`-feature-gated `IrType::Url`), any
+/// program that names `ImageSrc` in a value position has the `url` runtime
+/// feature forced automatically by the type-driven SSOT
+/// (`ir_type_feature_requirement`).  Not in `STDLIB_MODULE_QUALIFIERS`, so the
+/// disjointness invariant holds.
+const STD_UI_IMAGE_SRC: &str = include_str!("../Ipe/Ui/ImageSrc.ipe");
+
+/// `Ipe.Http.StatusCode` — typed HTTP response status code (compiled source).
+///
+/// Pure Ipê: defines `type StatusCode = StatusCode Int` (unexported ctor) with
+/// `fromInt` (total, any `Int` is valid), `code` (raw integer recovery), and
+/// the four classifiers `isSuccess` / `isRedirect` / `isClientError` /
+/// `isServerError`.  `Ipe.Http.statusCode` wraps `HttpResponse.status` into
+/// this type at the API boundary — no runtime struct change required.  No
+/// `Ffi.kernel` call.  Not in `STDLIB_MODULE_QUALIFIERS`, so the disjointness
+/// invariant holds.
+const STD_HTTP_STATUS_CODE: &str = include_str!("../Ipe/Http/StatusCode.ipe");
+
 /// Every compiled-source stdlib module, keyed by its dotted import name.
 ///
 /// Disjoint from [`MODULES`] (parse fixtures) and from `ipe_canon`'s
@@ -1069,6 +1091,20 @@ pub const COMPILED_STD_MODULES: &[CompiledStdModule] = &[
     CompiledStdModule {
         dotted: "Ipe.Ui.Events",
         source: STD_UI_EVENTS,
+    },
+    // Ipe.Ui.ImageSrc — typed image source closed-sum; `FromUrl` embeds
+    // `Ipe.Url.Url`, so any program naming `ImageSrc` forces the `url` feature
+    // automatically through the type-driven SSOT.
+    CompiledStdModule {
+        dotted: "Ipe.Ui.ImageSrc",
+        source: STD_UI_IMAGE_SRC,
+    },
+    // Ipe.Http.StatusCode — typed HTTP status code over Int (opaque ctor,
+    // `fromInt` / `code` / `isSuccess` / `isRedirect` / `isClientError` /
+    // `isServerError`).  Pure Ipê; no Ffi.kernel calls.
+    CompiledStdModule {
+        dotted: "Ipe.Http.StatusCode",
+        source: STD_HTTP_STATUS_CODE,
     },
     // Ipe.Regex — Layer-3 source, `Ffi.kernel "Regex_*"` aliases route
     // to the registered pure `Regex*` kernels (`ipe_runtime::regex_kernel::*`).
