@@ -70,10 +70,16 @@ const COMMANDS: &[Command] = &[
         summary: "Scaffold a new Ipê project.",
         args: "[<name>]",
         args_desc: "The directory to create the project in (`.` for the current directory).",
-        options: &[Opt {
-            flag: "[--force]",
-            desc: "overwrite a non-empty target directory",
-        }],
+        options: &[
+            Opt {
+                flag: "[--force]",
+                desc: "overwrite a non-empty target directory",
+            },
+            Opt {
+                flag: "[--lib]",
+                desc: "scaffold a library package (exposedModules) instead of an application",
+            },
+        ],
     },
     Command {
         name: "build",

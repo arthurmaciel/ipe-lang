@@ -1,0 +1,14 @@
+# {name}
+
+An Ipê library scaffolded by `ipe init --lib`. `src/{module}.ipe` holds the
+library's public surface; `package.ipe`'s `exposedModules` names the modules a
+downstream consumer may import.
+
+Build it:
+
+```sh
+ipe build
+```
+
+Add more public modules under `src/` and list each in both the module's own
+`exposing (…)` clause and `package.ipe`'s `exposedModules`.

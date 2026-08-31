@@ -1,0 +1,11 @@
+module {module} exposing (greeting)
+
+import Ipe.String as String
+
+
+{-| The library's public greeting. Replace this with your own exports and list
+them in `exposing (…)` above and in `package.ipe`'s `exposedModules`.
+-}
+greeting : String -> String
+greeting name =
+    String.append "Hello from {name}, " name
