@@ -82,6 +82,7 @@ cross-link where topics meet.
 - **Caching** — [Cache](cache.md) (bounded, in-memory LRU with optional TTL; a
   miss is a `Maybe`, not a failure).
 - **Observability** — [Logging](log.md) (structured, levelled log records),
+  [Log levels](level.md) (the `LogLevel` severity tag),
   [Tracing](trace.md) (application-level spans + the `Debug` development hatches).
 - **Design tokens** — [Palette](palette.md) (closed token sets and named
   magnitudes as types).
