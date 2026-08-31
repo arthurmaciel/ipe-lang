@@ -11,6 +11,7 @@
 //!   diagnostic/<code>/index.html
 //!   construct/<name>/index.html
 //!   command/<name>/index.html
+//!   env-var/<name>/index.html
 //! ```
 //!
 //! Every code snippet is syntax-highlighted by feeding it through
@@ -104,6 +105,7 @@ fn generate(index: &Index, out_dir: &Path) -> Result<(), String> {
     let mut diagnostics: Vec<&Entry> = Vec::new();
     let mut constructs: Vec<&Entry> = Vec::new();
     let mut commands: Vec<&Entry> = Vec::new();
+    let mut env_vars: Vec<&Entry> = Vec::new();
 
     for key in sorted_keys(index) {
         let Some(entry) = index.resolve(key) else {
@@ -115,13 +117,21 @@ fn generate(index: &Index, out_dir: &Path) -> Result<(), String> {
             EntryKind::Diagnostic => diagnostics.push(entry),
             EntryKind::Construct => constructs.push(entry),
             EntryKind::Command => commands.push(entry),
+            EntryKind::EnvVar => env_vars.push(entry),
         }
         // Emit the per-entry page.
         emit_entry_page(out_dir, key, entry)?;
     }
 
     // Emit the index page.
-    let index_html = render_index(&modules, &symbols, &diagnostics, &constructs, &commands);
+    let index_html = render_index(
+        &modules,
+        &symbols,
+        &diagnostics,
+        &constructs,
+        &commands,
+        &env_vars,
+    );
     write_file(&out_dir.join("index.html"), &page("Index", &index_html))?;
 
     Ok(())
@@ -152,6 +162,7 @@ const fn page_path<'k>(key: &'k str, kind: &EntryKind) -> (&'static str, &'k str
         EntryKind::Diagnostic => ("diagnostic", key),
         EntryKind::Construct => ("construct", key),
         EntryKind::Command => ("command", key),
+        EntryKind::EnvVar => ("env-var", key),
     }
 }
 
@@ -243,6 +254,7 @@ fn render_index(
     diagnostics: &[&Entry],
     constructs: &[&Entry],
     commands: &[&Entry],
+    env_vars: &[&Entry],
 ) -> String {
     let mut out = String::from("<h1>Ipê documentation</h1>\n");
 
@@ -287,6 +299,16 @@ fn render_index(
         out.push_str("</ul>\n");
     }
 
+    if !env_vars.is_empty() {
+        out.push_str("<h2>Environment variables</h2>\n<ul class=\"index-list\">\n");
+        for e in env_vars {
+            let url = format!("/env-var/{}/", e.source_key);
+            let name = html_escape(&e.source_key);
+            let _ = writeln!(out, "<li><a href=\"{url}\">{name}</a></li>");
+        }
+        out.push_str("</ul>\n");
+    }
+
     if !symbols.is_empty() {
         out.push_str("<h2>Symbols</h2>\n<ul class=\"index-list\">\n");
         for e in symbols {
@@ -309,6 +331,7 @@ const fn kind_label(kind: &EntryKind) -> &'static str {
         EntryKind::Diagnostic => "diagnostic",
         EntryKind::Construct => "construct",
         EntryKind::Command => "command",
+        EntryKind::EnvVar => "env-var",
     }
 }
 
