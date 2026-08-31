@@ -4,7 +4,8 @@
 //! Wires the pipeline end to end: read a `.ipe` entry file, run it through
 //! [`ipe_parse`] → [`ipe_canon`] → [`ipe_types`] → [`ipe_lower`] → the
 //! [`ipe_backend_rust`] emitter, write the emitted Cargo project, and vendor the
-//! Ipe runtime module tree into it.
+//! Ipe runtime module tree into it (a port of the copy step in the Haskell
+//! compiler's `Ipe.Generate.Rust.Project`).
 //!
 //! Generated Rust projects do not depend on the runtime as a Cargo path crate;
 //! instead `main.rs` declares `mod ipe_runtime;` and the runtime sources are
@@ -361,12 +362,12 @@ pub enum CliError {
     UpgradeFeedUnreachable,
     /// `ipe upgrade --check --exit-code` resolved the action and must exit
     /// with a numeric code that is neither SUCCESS nor FAILURE (e.g. 10 for
-    /// "upgrade available"). Carries the code so `main` can call
-    /// [`std::process::exit`] with it after printing nothing (the status line
-    /// was already printed by `run_upgrade`).
+    /// "upgrade available"). Carries the code so `main` can return it as an
+    /// `ExitCode` after printing nothing (the status line was already printed
+    /// by `run_upgrade`).
     UpgradeCheckExit {
-        /// The exit code to pass to `std::process::exit` (10 = available,
-        /// 0 = up to date, 2 = unreachable).
+        /// The process exit code (10 = available, 0 = up to date,
+        /// 2 = unreachable).
         code: i32,
     },
 }
@@ -989,8 +990,10 @@ pub fn build_with_options(
 /// together — fixing IPE-N0020 for multi-file projects built via the
 /// file-path shorthand (`ipe build src/Main.ipe`).
 ///
-/// Probes the source root recursively and follows imports across sibling files
-/// before running the shared `compile_modules` core.
+/// This is the faithful port of Haskell's `Graph.discoverModulesMulti
+/// (sourceRoot : ...) entryPath` call in `Ipe.Build.Compile.hs`: it probes
+/// the source root recursively and follows imports across sibling files before
+/// running the shared `compile_modules` core.
 ///
 /// When the source directory contains only the entry file this function is
 /// byte-identical to `build` (single-module pipeline is the identity over
@@ -7463,8 +7466,9 @@ mod tests {
     }
 
     /// Generic records, end to end from SOURCE: parse → canon → infer → lower →
-    /// emit → `cargo build` → run, asserting the program prints `42` (hand-verified).
-    /// Gated on `IPE_E2E=1` so the default `cargo test` stays fast and
+    /// emit → `cargo build` → run, asserting the program prints `42` — the value
+    /// the Go reference backend produces for the same program (hand-verified in a
+    /// temp dir). Gated on `IPE_E2E=1` so the default `cargo test` stays fast and
     /// offline. Complements the backend crate's hand-built-IR e2e by exercising
     /// the whole frontend (record type annotations + generalisation + lowering).
     #[test]
@@ -7515,9 +7519,9 @@ mod tests {
         assert_eq!(
             String::from_utf8_lossy(&run.stdout),
             "42\n",
-            "generic-record program prints 42"
+            "generic-record program prints 42 (Go-backend parity)"
         );
-        assert!(run.status.success(), "exit 0");
+        assert!(run.status.success(), "exit 0, matching the Go oracle");
         let _ = std::fs::remove_dir_all(out.join("target"));
     }
 
