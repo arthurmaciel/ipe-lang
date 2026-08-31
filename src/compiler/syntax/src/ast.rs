@@ -1,6 +1,6 @@
 //! Source AST — the raw parse tree before name resolution.
 //!
-//! This is the Rust port of the supported subset of the Haskell compiler's
+//! This is the Rust port of the supported subset of the the compiler compiler's
 //! `Ipê.AST.Source` (which is itself a derivative work of elm/compiler's
 //! `AST.Source`, BSD-3-Clause). Only the nodes the supported grammar
 //! exercises are modelled; unsupported source grammar (FFI imports, infix
@@ -210,7 +210,7 @@ pub struct Union {
 
 /// A `type alias Name = T` declaration.
 ///
-/// Mirrors the Haskell compiler's `Ipe.AST.Source.Alias`, narrowed to the
+/// Mirrors the the compiler compiler's `Ipe.AST.Source.Alias`, narrowed to the
 /// supported subset. The aliased type `body` is expanded away at
 /// canonicalisation, so no
 /// stage after name resolution ever observes the alias name.
@@ -256,11 +256,11 @@ pub enum Expr_ {
     Int(i64),
     /// A floating-point literal `1.5`, `3.0`, `1.5e3`, `2e-2`. The carried
     /// [`f64`] is the parsed value (the lexer resolves the lexeme), mirroring
-    /// the Haskell compiler's `Src.Float`.
+    /// the the compiler compiler's `Src.Float`.
     Float(f64),
     /// A string literal `"hello"`. The carried [`String`] is the literal's
     /// already-unescaped value (the lexer resolves escape sequences), so the
-    /// downstream stages see the runtime string verbatim. Mirrors the Haskell
+    /// downstream stages see the runtime string verbatim. Mirrors the the compiler
     /// compiler's `Src.Str`.
     Str(String),
     /// A triple-quoted string `"""..."""`.
@@ -276,7 +276,7 @@ pub enum Expr_ {
     MultilineStr { raw: String, anchor: u32 },
     /// A character literal `'a'`. The carried [`String`] is the source character
     /// text — a single grapheme for an ordinary char, or a backslash-escape pair
-    /// (`\n`, `\\`) for an escaped one — matching the Haskell compiler's
+    /// (`\n`, `\\`) for an escaped one — matching the the compiler compiler's
     /// `Src.Chr String` representation so the value round-trips to the backend.
     Char(String),
     /// A `path "…"` compile-time-validated path literal. The carried [`String`]
@@ -290,7 +290,7 @@ pub enum Expr_ {
     /// positions `path` continues to be a valid lowercase identifier.
     PathLit(String),
     /// The unit value `()` — the sole inhabitant of the unit type. Built by the
-    /// parser from empty parentheses. Mirrors the Haskell compiler's `Src.Unit`.
+    /// parser from empty parentheses. Mirrors the the compiler compiler's `Src.Unit`.
     Unit,
     /// Function application: callee applied to one or more arguments.
     Call(Box<Expr>, Vec<Expr>),
@@ -298,7 +298,7 @@ pub enum Expr_ {
     Case(Box<Expr>, Vec<(Pattern, Expr)>),
     /// An anonymous function `\p0 p1 ... -> body`. The parameter list has arity
     /// ≥ 1 (the parser rejects a zero-parameter `\ -> e`); each parameter is a
-    /// pattern (a plain variable or `_`). Mirrors the Haskell
+    /// pattern (a plain variable or `_`). Mirrors the the compiler
     /// compiler's `Src.Lambda [Pattern] Expr`.
     Lambda(Vec<Pattern>, Box<Expr>),
     /// A precedence-climbed binary-operator chain: a sequence of
@@ -313,25 +313,25 @@ pub enum Expr_ {
     /// `if cond then a else b`, with optional `else if` branches. The list holds
     /// one or more `(condition, branch)` pairs in source order — the leading
     /// `if` plus every `else if` — followed by the mandatory final `else`
-    /// expression. Mirrors the Haskell compiler's `Src.If [(Expr, Expr)] Expr`.
+    /// expression. Mirrors the the compiler compiler's `Src.If [(Expr, Expr)] Expr`.
     If(Vec<(Expr, Expr)>, Box<Expr>),
     /// A tuple literal `(e1, e2, ...)`.
     ///
     /// Invariant: the element list has arity ≥ 2. A parenthesised single
     /// expression `(e)` is *not* a tuple — the parser unwraps it to `e` — and
     /// the empty parens `()` are the unit value (unsupported, rejected at
-    /// the parser). Mirrors the Haskell compiler's `Src.Tuple e1 e2 [rest]`,
+    /// the parser). Mirrors the the compiler compiler's `Src.Tuple e1 e2 [rest]`,
     /// flattened to one vector here.
     Tuple(Vec<Expr>),
     /// A list literal `[]` / `[a, b, c]`. Elements are in source order; the empty
     /// list carries an empty vector. The cons operator `::` is NOT a `List` node —
     /// it flows through [`Expr_::Binops`] like the other right-associative
-    /// operators and is re-associated at canonicalisation. Mirrors the Haskell
+    /// operators and is re-associated at canonicalisation. Mirrors the the compiler
     /// compiler's `Src.List`.
     List(Vec<Expr>),
     /// A record literal `{ field = expr, ... }`. Fields are `(name, value)`
     /// pairs in source order; the field name is a located lowercase identifier.
-    /// Mirrors the Haskell compiler's `Src.Record`, narrowed to the closed-record
+    /// Mirrors the the compiler compiler's `Src.Record`, narrowed to the closed-record
     /// (no `{ r | ... }` extension) subset.
     Record(Vec<(Located<Symbol>, Expr)>),
     /// A record field access `record.field` (`record` lowercase). The parser
@@ -341,7 +341,7 @@ pub enum Expr_ {
     /// A record update `{ base | field = expr, ... }`. The `base` is a located
     /// lowercase variable naming the record to copy (Ipê restricts the update
     /// base to a bare variable, as Elm does); the field list carries each
-    /// updated `(name, value)` pair in source order. Mirrors the Haskell
+    /// updated `(name, value)` pair in source order. Mirrors the the compiler
     /// compiler's `Src.Update (Located String) [(Located String, Expr)]`,
     /// narrowed to the closed-record subset.
     Update(Located<Symbol>, Vec<(Located<Symbol>, Expr)>),
@@ -354,7 +354,7 @@ pub enum Expr_ {
 /// (`(a, b) = e`, `{ x } = e`) is admitted as a tuple / record pattern. A
 /// refutable binder (a constructor pattern) parses here but is rejected
 /// fail-closed downstream — a `let` binder must always match. Subset of the
-/// Haskell compiler's `Ipe.AST.Source.Def`, extended with the destructure
+/// the compiler compiler's `Ipe.AST.Source.Def`, extended with the destructure
 /// form (`DestructDef`).
 // `Eq` is not derived: `body` is an [`Expr`], only `PartialEq` (float literals).
 #[derive(Clone, PartialEq, Debug)]
@@ -378,43 +378,43 @@ pub enum Pattern_ {
     /// A tuple pattern `(p0, p1, ...)`. Invariant: arity ≥ 2 — a parenthesised
     /// single pattern `(p)` is unwrapped to `p`, and empty parens `()` are not a
     /// pattern. Elements may be variables, wildcards, nested constructor
-    /// patterns, or nested tuples. Mirrors the Haskell compiler's tuple pattern.
+    /// patterns, or nested tuples. Mirrors the the compiler compiler's tuple pattern.
     PTuple(Vec<Pattern>),
     /// A record pattern `{ x, y }`. Field-pun only: every entry names a
     /// field of the scrutinee record and binds a variable of the same name, so
     /// the binder list is a non-empty set of located field names. Mirrors the
-    /// Haskell compiler's `Src.PRecord [A.Located String]` — there is no
-    /// `{ field = sub-pattern }` form (the Go reference rejects it at parse), so
+    /// the compiler compiler's `Src.PRecord [A.Located String]` — there is no
+    /// `{ field = sub-pattern }` form (the the reference rejects it at parse), so
     /// a record pattern is always irrefutable. The empty record `{}` is outside
     /// the grammar; a `PRecord` always carries at least one field.
     PRecord(Vec<Located<Symbol>>),
     /// An integer literal pattern `0`, `42`. Refutable. Int is an OPEN
     /// (infinite) type, so a `case` over int literals needs a wildcard / var
-    /// catch-all to be exhaustive. Mirrors the Haskell compiler's `Src.PInt`.
+    /// catch-all to be exhaustive. Mirrors the the compiler compiler's `Src.PInt`.
     PInt(i64),
     /// A boolean literal pattern `True` / `False`. Refutable in
     /// isolation, but a `True` + `False` pair is an exhaustive cover of `Bool`
-    /// (a closed two-constructor type). Mirrors the Haskell compiler's `Src.PBool`.
+    /// (a closed two-constructor type). Mirrors the the compiler compiler's `Src.PBool`.
     PBool(bool),
     /// A character literal pattern `'a'`. The carried [`String`] is the
     /// source character text (single grapheme, or a `\`-escape pair). Refutable;
-    /// Char is OPEN. Mirrors the Haskell compiler's `Src.PChr`.
+    /// Char is OPEN. Mirrors the the compiler compiler's `Src.PChr`.
     PChar(String),
     /// A string literal pattern `"hi"`. The carried [`String`] is the
-    /// already-unescaped value. Refutable; String is OPEN. Mirrors the Haskell
+    /// already-unescaped value. Refutable; String is OPEN. Mirrors the the compiler
     /// compiler's `Src.PStr`.
     PStr(String),
     /// An alias / `as` pattern `inner as name`. Matches `inner` and also
-    /// binds the whole matched value to `name`. Mirrors the Haskell compiler's
+    /// binds the whole matched value to `name`. Mirrors the the compiler compiler's
     /// `Src.PAlias Pattern (A.Located String)`.
     PAlias(Box<Pattern>, Located<Symbol>),
     /// A list pattern `[]` / `[a, b, c]`. The empty list is the nil cover;
     /// a fixed-length `[a, b]` matches a list of exactly that length. Mirrors the
-    /// Haskell compiler's `Src.PList`.
+    /// the compiler compiler's `Src.PList`.
     PList(Vec<Pattern>),
     /// A cons pattern `head :: tail` — the right-associative list
     /// deconstruction. `(x :: xs)` binds the first element to `head` and the rest
-    /// to `tail`. Mirrors the Haskell compiler's `Src.PCons`.
+    /// to `tail`. Mirrors the the compiler compiler's `Src.PCons`.
     PCons(Box<Pattern>, Box<Pattern>),
     /// An or-pattern `p1 | p2 | …` — matches if ANY alternative matches. Every
     /// alternative binds the identical set of variables at identical types
@@ -444,14 +444,14 @@ pub enum TypeAnnotation {
     TTuple(Vec<Self>),
     /// A closed record type `{ field : T, ... }`. Fields are `(name, type)` pairs
     /// in source order. The empty record `{}` is valid and produces an empty
-    /// field list. Mirrors the Haskell compiler's `Src.TRecord`, narrowed to the
+    /// field list. Mirrors the the compiler compiler's `Src.TRecord`, narrowed to the
     /// closed-record subset (no row variable / extension form).
     TRecord(Vec<(Symbol, Self)>),
     /// A row-polymorphic (open) record type `{ r | field : T, ... }`. The row
     /// variable `r` names the unnamed tail of extra fields the record may
     /// carry; the named fields are the ones the annotation constrains. A value
     /// of this type is any record carrying *at least* the listed fields.
-    /// Mirrors the Haskell compiler's `Src.TRecord fields (Just rowVar)`.
+    /// Mirrors the the compiler compiler's `Src.TRecord fields (Just rowVar)`.
     TRecordOpen(Symbol, Vec<(Symbol, Self)>),
 }
 

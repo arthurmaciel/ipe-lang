@@ -5,7 +5,8 @@
 //! and is NEVER erased or downcast — the only `dyn Any` is the broker-container
 //! indirection, which is correct by construction (a `Broker<T>` is only ever
 //! stored under `TypeId::of::<T>()`). This is the no-runtime-errors design from
-//! runtime-rust/AGENTS.md: a statically-typed broker, not Go's reflect registry.
+//! A statically-typed broker: no reflect-based dispatch, no type erasure on the
+//! payload path.
 
 use std::any::{Any, TypeId};
 use std::collections::HashMap;
@@ -145,7 +146,7 @@ fn web_running() -> bool {
 
 /// `PubSub.publish topic payload : Task Error Int` — callable from any context
 /// (raw handlers, post-init, scheduled jobs). Resolves to the subscriber count,
-/// or an error when no Web app is running in this process (Go's `Unavailable`).
+/// or an error when no Web app is running in this process (`Unavailable`).
 /// Server-side publishes carry an empty origin, so echo-default is a no-op.
 pub fn pubsub_publish<T, E>(topic: String, payload: T) -> IpeTask<E, i64>
 where

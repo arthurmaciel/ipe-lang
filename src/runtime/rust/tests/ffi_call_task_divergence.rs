@@ -1,7 +1,7 @@
 //! Locks the `ffi-call-task-dynamic-dispatch` divergence resolution.
 //!
-//! Go's `Ffi_callTask` (`runtime-go/rt/rt.go`) is a runtime *registry* lookup
-//! keyed by `fmt.Sprintf("%v", name)` over auto-generated Go-package FFI
+//! `Ffi_callTask` was a runtime *registry* lookup
+//! keyed by formatted name over FFI
 //! bindings — a string-named, effect-unknown, reflection/`any` dispatch path by
 //! construction. The Rust backend refuses that risk surface: the *dynamic* shape
 //! of `Ffi.callTask` / `Ffi.callPure` (non-literal kernel name or non-literal

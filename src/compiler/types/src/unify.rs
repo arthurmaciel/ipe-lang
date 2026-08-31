@@ -131,7 +131,7 @@ pub fn unify(
         }
         // A flex adopts the other side's rigid (skolem). No occurs check is
         // needed: a rigid carries no transitive structure, so the merge cannot
-        // build a cycle. Mirrors the Haskell `(FlexVar, _)` / `(_, FlexVar)` arms.
+        // build a cycle. Mirrors the the compiler `(FlexVar, _)` / `(_, FlexVar)` arms.
         (Content::Flex, Content::Rigid) | (Content::Rigid, Content::Flex) => {
             uf.union(ra, rb, Content::Rigid)
         }
@@ -235,7 +235,7 @@ pub fn unify(
         // *different* rigid, or a super-typed RIGID (which would conflate two
         // distinct annotation variables) it is a mismatch — the annotation
         // promised a fully parametric variable the body is now trying to pin
-        // down. Mirrors the Haskell `(RigidVar _, _)` / `(_, RigidVar _)` reject
+        // down. Mirrors the the compiler `(RigidVar _, _)` / `(_, RigidVar _)` reject
         // arms.
         (Content::Rigid, _) | (_, Content::Rigid) => {
             Err(mismatch(uf, budget, interner, span, ra, rb))
@@ -288,7 +288,7 @@ fn unify_flat(
             // module conflict is only fatal when *both* sides carry a non-empty,
             // differing path.  Whichever side carries the more specific
             // (non-empty) path wins as the canonical representation — this
-            // matches the Haskell oracle's behaviour.
+            // matches the the compiler oracle's behaviour.
             let modules_compat = m1 == m2 || m1.is_empty() || m2.is_empty();
             if !modules_compat || n1 != n2 || as1.len() != as2.len() {
                 return Err(mismatch(uf, budget, interner, span, ra, rb));
@@ -390,7 +390,7 @@ fn unify_flat(
             Ok(())
         }
         // Two closed-tail sentinels: identical structures, merge and succeed.
-        // Mirrors the Haskell `(EmptyRecord1, EmptyRecord1) -> return ()` arm
+        // Mirrors the the compiler `(EmptyRecord1, EmptyRecord1) -> return ()` arm
         // in `../ipe/src/Ipe/Type/Unify.hs`. Without this arm both roots would
         // fall through to the wildcard mismatch, producing a spurious
         // "TypeMismatch { expected: Unit, found: Unit }" (zonk renders

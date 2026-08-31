@@ -107,8 +107,8 @@ const fn is_sep(c: u8, windows: bool) -> bool {
 
 /// Length in bytes of the leading VOLUME name of `path` under Windows rules.
 ///
-/// `0` on Unix, where no path element is ever consumed as a volume. Ported
-/// from Go `path/filepath.volumeNameLen`. Recognised prefixes:
+/// `0` on Unix, where no path element is ever consumed as a volume. Recognised
+/// prefixes:
 /// * `\\?\…` / `\\.\…` — verbatim / device namespaces (consume up to the next
 ///   separator after the namespace tag);
 /// * `\\server\share` — a UNC root (both the server and the share component);
@@ -225,7 +225,7 @@ pub fn escapes_root(cleaned: &str, windows: bool) -> bool {
     all_dots && two_or_more
 }
 
-/// Faithful port of Go `path/filepath.Clean`, driven by the chosen separator set.
+/// Faithful port of , driven by the chosen separator set.
 ///
 /// `windows == true` selects the Windows separator set (`\` and `/`) plus
 /// volume-prefix parsing; `false` is Unix (`/` only, no volume). Split so both

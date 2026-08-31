@@ -1,4 +1,4 @@
--- | Ipe.Ui.Transition — typed CSS transitions for `Ipe.Ui` (v0.15.57+).
+-- | Ipe.Ui.Transition — typed CSS transitions for `Ipe.Ui`.
 --
 -- `Transition.attribute [property "background-color", duration 200,
 -- easing easeOut]` builds the CSS transition shorthand from typed

@@ -12,7 +12,7 @@
 //! main = Io.println (String.fromInt (sumTree (Node (Node Leaf 3 Leaf) 4 (Node Leaf 5 Leaf))))  -- 12
 //! ```
 //!
-//! Behavioural-parity oracle: the Go reference compiler at
+//! Verified: the reference compiler at
 //! `/home/arthur/Documentos/comp/ipe/out/ipe` compiles + runs the SAME
 //! `Main.ipe` to stdout `12\n`, exit 0 — hand-verified in a temp dir. The
 //! hand-computed `12` is the in-test oracle, and this is the soundness-floor
@@ -58,7 +58,7 @@ fn emits_byte_identical_main_rs() {
 }
 
 /// Full spine: compile, build the emitted Cargo project, run it, and assert the
-/// ADT program prints `42` — the same value the Go backend produces. Gated on
+/// ADT program prints `42` — the expected value. Gated on
 /// `IPE_E2E=1` so the default `cargo test` stays fast. This is the
 /// soundness-floor regression for a value laundered through a generic /
 /// payload-carrying enum.
@@ -85,5 +85,5 @@ fn end_to_end_builds_and_prints_twelve() {
         &repo_root().join("tests").join("golden").join("tree"),
         &outcome.stdout,
     );
-    assert_eq!(outcome.exit_code, Some(0), "exit 0, matching the Go oracle");
+    assert_eq!(outcome.exit_code, Some(0), "exit 0");
 }

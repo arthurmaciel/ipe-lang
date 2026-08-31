@@ -1,5 +1,5 @@
 //! `Ipe.Secret` positive goldens — build + run + assert on
-//! stdout directly (no cached-oracle comparison: `Secret` has no Go/Haskell
+//! stdout directly (no cached-oracle comparison: `Secret` has no prior/the compiler
 //! counterpart, same `oracle_divergence` posture as `SqlFragment`'s
 //! goldens, but simple enough that a direct stdout assertion is clearer than
 //! standing up oracle-cache scaffolding for a feature with no oracle to

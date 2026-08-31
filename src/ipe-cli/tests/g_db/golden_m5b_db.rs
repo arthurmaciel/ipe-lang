@@ -9,28 +9,25 @@
 //!
 //! ## Oracle provenance — why this is `oracle_divergence = true`
 //!
-//! The Go reference compiler and Ipê (the Rust backend) share the same Ipe
+//! The the reference compiler and Ipê (the Rust backend) share the same Ipe
 //! stdlib surface, but the backends diverge at the database layer:
 //!
-//! * Go emits `database/sql` + `mattn/go-sqlite3` (cgo); Ipê emits
-//!   `sqlx` + `sqlx-sqlite`.
-//! * The row type the Go runtime returns from `Db.query` is
-//!   `[]map[string]any`; Ipê returns `Vec<HashMap<String, String>>` —
-//!   identical shape, different concrete types.
-//! * Connection management for `sqlite::memory:` pools differs: Go's cgo `SQLite`
-//!   is compiled with `SQLITE_THREADSAFE=2` (serialised mode); sqlx uses async
-//!   connection pooling.
+//! * The Rust backend emits `sqlx` + `sqlx-sqlite` for database access.
+//! * The row type the runtime returns from `Db.query` is
+//!   `Vec<HashMap<String, String>>`.
+//! * Connection management for `sqlite::memory:` pools uses async `sqlx`
+//!   pooling (serialised-mode `SQLite`).
 //!
-//! Running this `Main.ipe` on the Go backend would require the full Go+cgo
-//! `SQLite` toolchain and would produce byte-identical output, but is not part of
+//! Running this `Main.ipe` end-to-end would require the full `SQLite`
+//! toolchain and would produce byte-identical output, but is not part of
 //! the automated oracle-capture workflow (the oracle tool runs on this machine).
 //! The cached expected is Ipê's own verified output.
 //!
-//! ## Byte-parity with Go IS proven — separately
+//! ## Byte-identical output IS verified — separately
 //!
 //! The `db_exec` golden inserts `"apple"` and `"banana"` with `SqlString` /
 //! `SqlInt` params and reads them back ordered by name. The output
-//! `"apple:5\nbanana:3\n"` is the only correct answer; the Go backend would
+//! `"apple:5\nbanana:3\n"` is the only correct answer; the the backend would
 //! produce identical bytes given the same Ipê source.
 //!
 //! ## Golden catalogue
@@ -149,7 +146,7 @@ fn assert_runs_and_matches_oracle(name: &str) {
 /// `Db.unsafeGetString` / `Db.unsafeGetInt` → `println`.
 /// Output: `"apple:5\nbanana:3"`.
 ///
-/// Recorded sanctioned divergence (Go+cgo `SQLite` vs Rust+sqlx): the Ipê source
+/// Recorded sanctioned divergence (the prior backend `SQLite` vs Rust+sqlx): the Ipê source
 /// produces identical output on both backends, but the oracle-capture toolchain
 /// only runs Ipê locally.
 #[test]
@@ -280,7 +277,7 @@ fn db_find_by_conditions() {
 /// combinators, never a hand-built string (see `db_findwhere_string_is_t0001`
 /// in `golden_m5b_db_gates.rs` for the negative side of this property).
 ///
-/// Sanctioned divergence: Ipê emits Rust+sqlx; `Db.findWhere` has no Go
+/// Sanctioned divergence: Ipê emits Rust+sqlx; `Db.findWhere` has no prior
 /// counterpart; oracle is Ipê's own output.
 #[test]
 fn db_find_where() {
@@ -304,7 +301,7 @@ fn db_find_where() {
 ///     `Err` through `validSqlIdent`), so the injection never reaches SQL.
 ///
 /// Sanctioned divergence: Ipê emits Rust+sqlx; `Ipe.Db.Store` is an Ipê-only
-/// addition with no Go counterpart; oracle is Ipê's own output.
+/// addition with no prior counterpart; oracle is Ipê's own output.
 #[test]
 fn db_store() {
     assert_runs_and_matches_oracle("db_store");
@@ -331,7 +328,7 @@ fn db_store() {
 ///     retrieved LITERALLY.
 ///
 /// Sanctioned divergence: Ipê emits Rust+sqlx; the query builder is an Ipê-only
-/// addition with no Go counterpart; oracle is Ipê's own output.
+/// addition with no prior counterpart; oracle is Ipê's own output.
 #[test]
 fn db_store_query() {
     assert_runs_and_matches_oracle("db_store_query");
@@ -355,7 +352,7 @@ fn db_store_query() {
 ///   injection:'; DROP TABLE products; --
 ///
 /// Sanctioned divergence: Ipê emits Rust+sqlx; `Ipe.Db.Store` is an Ipê-only
-/// addition with no Go counterpart; oracle is Ipê's own output.
+/// addition with no prior counterpart; oracle is Ipê's own output.
 #[test]
 fn db_store_to_maybe() {
     assert_runs_and_matches_oracle("db_store_to_maybe");
@@ -439,7 +436,7 @@ fn db_store_hof_pointfree() {
 /// validated `Sql.column` path.
 ///
 /// Sanctioned divergence: Ipê emits Rust+sqlx; `unsafeFragment` is an Ipê-only
-/// hatch with no Go counterpart; oracle is Ipê's own output.
+/// hatch with no prior counterpart; oracle is Ipê's own output.
 #[test]
 fn db_unsafe_fragment() {
     assert_runs_and_matches_oracle("db_unsafe_fragment");
@@ -450,7 +447,7 @@ fn db_unsafe_fragment() {
 /// `Db.unsafeQuery` confirms only `"gadget"` was removed → print
 /// `"1:sprocket,widget"`.
 ///
-/// Sanctioned divergence: Ipê emits Rust+sqlx; `Db.deleteWhere` has no Go
+/// Sanctioned divergence: Ipê emits Rust+sqlx; `Db.deleteWhere` has no prior
 /// counterpart; oracle is Ipê's own output.
 #[test]
 fn db_delete_where() {
@@ -485,7 +482,7 @@ fn db_store_where_mutations() {
 /// isNotNull, like, inList non-empty AND the empty-list `(1 = 0)` shortcut)
 /// through three `Db.findWhere` calls. Output: `"widget|0|gadget"`.
 ///
-/// Sanctioned divergence: Ipê emits Rust+sqlx; the `Sql.*` family has no Go
+/// Sanctioned divergence: Ipê emits Rust+sqlx; the `Sql.*` family has no prior
 /// counterpart; oracle is Ipê's own output.
 #[test]
 fn db_sql_combinators() {
@@ -615,7 +612,7 @@ fn db_find_by_field() {
 ///
 /// Sanctioned divergence (tagged `divergence`, not `sanctioned`): the Rust
 /// backend's `Db.Decode.money` returns `Decoder (Decimal, String)`, not the
-/// Go backend's `Decoder Money` — `Money`/`Currency` are project-generated
+/// the backend's `Decoder Money` — `Money`/`Currency` are project-generated
 /// Rust types unnameable from the shared runtime crate. See
 /// Sanctioned divergence `B-DbDecMoney`.
 #[test]

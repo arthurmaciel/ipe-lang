@@ -4,7 +4,7 @@
 //! this background exporter batches its logs + spans and POSTs them every
 //! `IPE_OBSERVABILITY_PUSH_INTERVAL_MS` (default 2000) to the parent's
 //! `/_ipe/observability/ingest` — the symmetric counterpart to the receiver in
-//! `live/console.rs`. Mirrors Go's `observability_push.go` (PushExporter).
+//! `live/console.rs`. Implements `observability_push.go` (PushExporter).
 //!
 //! `live`-gated (uses reqwest). Best-effort end to end: a bounded queue drops on
 //! overflow, POST failures warn + drop. The observability path must never block

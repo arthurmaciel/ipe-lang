@@ -1,4 +1,4 @@
--- | Ipe.Uuid — UUID generation and parsing (Layer 3 Ipê source).
+-- | Ipe.Uuid — UUID generation and parsing.
 --
 -- `v4` and `v7` draw fresh entropy on each call, so they return
 -- `Task Error String` — the same effect tier as `Time.now ()`.

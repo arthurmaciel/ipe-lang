@@ -1,15 +1,12 @@
--- | Ipe.Cache — in-memory LRU + TTL cache (Layer 3 Ipe source).
+-- | Ipe.Cache — in-memory LRU + TTL cache.
 --
 -- Bounded by entry count (`maxEntries`).  Optional TTL evicts on
 -- read; `0` disables.  Both keys and values are typed via phantom
 -- parameters — the runtime stringifies the key for the LRU map
 -- but the surface API stays parametric.
 --
--- v0.15.46 stdlib convention: every typed record ships with a
--- `defaultCfg` constructor + `with*` builder helpers so future
--- field additions don't break record literals.
---
--- v0.15.47.
+-- Every typed record ships with a `defaultCfg` constructor + `with*`
+-- builder helpers so future field additions don't break record literals.
 --
 -- Example:
 --

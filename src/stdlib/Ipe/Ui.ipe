@@ -1,4 +1,4 @@
--- | Ipe.Ui — element / attribute / colour / layout surface (Layer 3 Ipe source).
+-- | Ipe.Ui — element / attribute / colour / layout surface.
 --
 -- The layout builders (`el` / `row` / `column` / `wrappedRow` / `grid` /
 -- `paragraph` / `textColumn` / `form` / `input`) are ordinary Ipê over two

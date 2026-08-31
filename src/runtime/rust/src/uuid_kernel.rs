@@ -10,7 +10,7 @@
 //! `Uuid.v4 ()` exactly like `Time.now ()` / `Crypto.randomToken n`. This makes
 //! "entropy typed as a memoizable pure `String`" UNREPRESENTABLE: a pure
 //! `String` is eligible for CSE / memoization / reordering, so two `Uuid.v4`
-//! references could collapse to one shared value (the soundness lie the Go
+//! references could collapse to one shared value (the soundness lie a shared-ref implementation
 //! backend still carries via its bare `Uuid.v4 : String` shape). The generation
 //! runs INSIDE the returned future's body, so each `.run()` of the task
 //! re-evaluates and yields a distinct id — proved by the `v4_two_runs_differ`

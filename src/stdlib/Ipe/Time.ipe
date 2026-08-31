@@ -1,4 +1,4 @@
--- | Ipe.Time -- clock + formatting + parsing (Layer 3 Ipe source).
+-- | Ipe.Time -- clock + formatting + parsing.
 --
 -- Clock reads (`now`, `unixMillis`) return a typed `Ipe.Time.Timestamp` (an
 -- opaque millisecond-since-epoch instant).  Pure helpers (`format*`,

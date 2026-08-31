@@ -1,6 +1,6 @@
 //! Ipe.Http.Server.Stream — server-side streaming HTTP responses (chunked / SSE).
 //!
-//! Mirror of `runtime-go/rt/server_stream.go`. Where http_stream.rs reads an
+//! Mirror of ``. Where http_stream.rs reads an
 //! upstream body chunk-by-chunk, this writes a response body chunk-by-chunk to
 //! the client over a long-lived connection.
 //!
@@ -46,7 +46,7 @@ pub enum StreamWriter {
 }
 
 /// Handler with its Ipê error type E erased: the effect IS the emits, the
-/// IpeResult is discarded (parity with the Go dispatcher's `_ = task.await`).
+/// IpeResult is discarded (await`).
 type ErasedStreamHandler =
     Arc<dyn Fn(StreamWriter) -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + Sync>;
 
@@ -122,7 +122,7 @@ fn sentinel_nonce() -> &'static str {
         format!("{:016x}{:016x}", a, b)
     })
 }
-// Bounded channel — matches the Go runtime's streamChanBuffer (16). emit's
+// Bounded channel — matches the streamChanBuffer (16). emit's
 // `send().await` blocks when full → backpressure to the producer/relay.
 const STREAM_CHAN_BUFFER: usize = 16;
 

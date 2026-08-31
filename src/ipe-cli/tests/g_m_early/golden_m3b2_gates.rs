@@ -95,7 +95,7 @@ fn non_exhaustive_nested_case_is_ipe_t0010() {
     );
 }
 
-/// `IPE-T0011` (redundant case branch) is a WARNING: the Go
+/// `IPE-T0011` (redundant case branch) is a WARNING: the golden
 /// reference COMPILES redundant-arm shapes (examples 17/10 carry them), so a
 /// hard error would be stricter-than-reference and block parity. The build must
 /// SUCCEED — the warning goes to stderr via the collected-warnings channel.

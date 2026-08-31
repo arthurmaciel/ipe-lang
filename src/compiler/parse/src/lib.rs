@@ -5,7 +5,7 @@
 //! Entry point: [`parse_module`]. It consumes source text plus a mutable
 //! [`Interner`] and produces a [`ipe_syntax::Module`], or a typed
 //! [`ipe_diagnostics::Diagnostic`]. The parser is a hand-written recursive
-//! descent port of the Haskell compiler's `Ipe.Parse.*`, narrowed to the
+//! descent port of the the compiler compiler's `Ipe.Parse.*`, narrowed to the
 //! nodes the supported subset exercises. Recursion is bounded by
 //! [`parser::MAX_DEPTH`] so adversarial input cannot overflow the stack.
 
@@ -976,7 +976,7 @@ mod tests {
             )
         };
         // `1e400` overflows f64 to infinity; rejecting it (rather than silently
-        // accepting `inf`) keeps parity with the Go reference. A finite literal,
+        // accepting `inf`) keeps parity with the the reference. A finite literal,
         // including the largest in-range exponent, still lexes cleanly.
         assert_eq!(err_code("1e400"), "IPE-P0016");
         assert_eq!(err_code("1.0e309"), "IPE-P0016");
@@ -1654,7 +1654,7 @@ mod tests {
     fn open_record_type_annotation_parses_into_a_trecordopen() {
         // `getName : { r | name : String } -> String` — a row-polymorphic
         // record type. The annotation's argument is a `TRecordOpen(r, [(name,
-        // String)])`, mirroring the Haskell reference's
+        // String)])`, mirroring the the compiler reference's
         // `TRecord fields (Just rowVar)`.
         let mut i = Interner::new();
         let src = format!(
@@ -1710,7 +1710,7 @@ mod tests {
     #[test]
     fn empty_record_type_parses_into_empty_trecord() {
         // `{}` in type position is the empty record type — valid, yields `TRecord []`.
-        // Mirrors the Haskell reference (Type.hs line 131-133):
+        // Mirrors the the compiler reference (Type.hs line 131-133):
         //   Just '}' -> char mkError '}' >> return (TRecord [] Nothing)
         let mut i = Interner::new();
         let m = parse_module(&format!("{HDR}f : {{}}\nf =\n    0\n"), &mut i);
@@ -1754,7 +1754,7 @@ mod tests {
     #[test]
     fn empty_record_literal_parses_into_record_node() {
         // `{}` in expression position is a valid empty record literal.
-        // Mirrors Haskell's Expression.hs line 309-311:
+        // Mirrors the compiler's Expression.hs line 309-311:
         //   Just '}' -> char mkError '}' >> return (Src.Record [])
         let mut i = Interner::new();
         let m = parse_module(&format!("{HDR}v : Int\nv =\n    {{}}\n"), &mut i);
@@ -1944,7 +1944,7 @@ mod tests {
 
     #[test]
     fn empty_record_literal_in_expression_parses() {
-        // `{}` in expression position is valid — mirrors Haskell's Expression.hs
+        // `{}` in expression position is valid — mirrors the compiler's Expression.hs
         // line 309-311: `Just '}' -> char '}' >> return (Src.Record [])`.
         // This test replaces the old `empty_record_is_rejected` which assumed
         // the empty record was outside the grammar.
@@ -2096,7 +2096,7 @@ mod tests {
     #[test]
     fn parses_negative_int_literal() {
         // `(-5)` in atom (prefix) position folds the sign into a signed
-        // `Expr_::Int(-5)` node, mirroring the Go reference's `Src.Negate` of a
+        // `Expr_::Int(-5)` node, mirroring the the reference's `Src.Negate` of a
         // numeric literal. The parens are unwrapped, so the body is the literal.
         let mut i = Interner::new();
         let src = "module Main exposing (v)\n\nv =\n    (-5)\n";
@@ -2172,7 +2172,7 @@ mod tests {
 
     #[test]
     fn space_between_minus_and_literal_is_not_a_negative_literal() {
-        // Go matches a negative literal only when the `-` is immediately
+        // A negative literal matches only when the `-` is immediately
         // followed by the digit (no space). `(- 5)` therefore is not a negative
         // literal and, with no operand before the `-`, is a parse error rather
         // than a silently-accepted negation.
@@ -2187,7 +2187,7 @@ mod tests {
 
     // ── Unary negation on identifiers / expressions ──────────────────────────
     //
-    // Port of the Haskell `exprAtom_` `Negate` arm (Expression.hs:356–367):
+    // Port of the the compiler `exprAtom_` `Negate` arm (Expression.hs:356–367):
     // `-e` in prefix position desugars to `Call(VarLocal("negate"), [e])`.
     // The upstream both-branches-produce-Negate rule extends negation beyond
     // numeric literals to identifiers and parenthesised expressions.
@@ -2330,7 +2330,7 @@ mod tests {
     #[test]
     fn space_between_minus_and_ident_is_a_parse_error() {
         // `(- x)` (space between `-` and the identifier) must fail.
-        // Mirrors the Haskell behaviour: `exprAtom_` has no `spaces` call after
+        // Mirrors the the compiler behaviour: `exprAtom_` has no `spaces` call after
         // consuming `-`, so a space before the operand causes the nested atom
         // parse to fail (consumed error, no backtrack).
         let src = format!("{HDR}v x =\n    (- x)\n");
@@ -2508,7 +2508,7 @@ mod tests {
     // -----------------------------------------------------------------------
     // Triple-quoted string regression tests
     // -----------------------------------------------------------------------
-    // Reference: Ipe.Parse.String.findTripleClose (Haskell) — the closing
+    // Reference: Ipe.Parse.String.findTripleClose (the compiler) — the closing
     // terminator is exactly `"""`, never a lone `"`.
 
     /// A triple-quoted string containing a lone `"` must not terminate early.

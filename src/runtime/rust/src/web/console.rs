@@ -1,10 +1,10 @@
 //! Ipe Console — the operator dashboard mounted at `/_ipe/console`, plus the
-//! observability federation receiver. Mirrors Go's `console*.go` in-RAM tier:
+//! observability federation receiver. Implements `console*.go` in-RAM tier:
 //! a plain-HTML shell that polls JSON `/_ipe/console/api/*` endpoints backed by
 //! the `telemetry` ring buffers, and a `/_ipe/observability/ingest` POST that
 //! folds a sub-app's batched logs into the same rings.
 //!
-//! Unlike Go (which spawns the console as a child Ipe.Web process and reverse-
+//! Unlike the separate-process console path, this
 //! proxies it), the Rust console is served in-process directly off the Web
 //! router — no extra process, same data. No panic vectors.
 
@@ -132,7 +132,7 @@ pub async fn api_traces() -> impl IntoResponse {
 }
 
 /// `GET /_ipe/console/api/metrics-summary` — the parsed counter snapshot the
-/// dashboard renders (mirror of Go's parsed Prometheus summary).
+/// dashboard renders (mirror of  parsed Prometheus summary).
 pub async fn api_metrics_summary() -> impl IntoResponse {
     let body = format!(
         r#"{{"ipe_web_requests_total":{},"ipe_web_errors_total":{}}}"#,
@@ -142,14 +142,14 @@ pub async fn api_metrics_summary() -> impl IntoResponse {
     (StatusCode::OK, [json_ct()], body)
 }
 
-/// Production auth gate for the console + metrics surface (Go's
-/// `productionFromEnv` + `IPE_CONSOLE_AUTH`). Returns `Some(response)` when the
+/// Production auth gate for the console + metrics surface
+/// (`productionFromEnv` + `IPE_CONSOLE_AUTH`). Returns `Some(response)` when the
 /// request must be REFUSED. `IPE_CONSOLE_AUTH=off` → 404 (surface declared absent).
 /// In production (ENV/IPE_ENV non-dev) a `Bearer` admin token is required
 /// (`IPE_ADMIN_TOKEN`, legacy `IPE_CONSOLE_TOKEN`) — 401 otherwise. Dev mode (the
 /// default) is open and returns `None`.
 /// Does an `Authorization` header value authorize the admin surface? Accepts
-/// either `Bearer <tok>` OR `Basic base64(user:tok)` (Go parity: `hasAdminAuth`
+/// either `Bearer <tok>` OR `Basic base64(user:tok)` (`hasAdminAuth`
 /// honours both, the latter being the Prometheus `basic_auth` scrape path —
 /// any username, the password segment is the admin token). Both comparisons are
 /// constant-time (subtle::ct_eq). Total: every fallible step is Option/Result.
@@ -211,14 +211,14 @@ fn resolve_console_auth_mode() -> ConsoleAuthMode {
     }
 }
 
-/// The console-auth mode label, mirroring Go's `describeConsoleAuthMode`
+/// The console-auth mode label, mirroring  `describeConsoleAuthMode`
 /// (`console_auth_v2.go:149`) over `resolveConsoleAuthMode`'s env/production
 /// derivation. Used for the `[ipe.console] inline console mounted … mode=<m>`
-/// startup log (Go parity — `console.go:328`). Total: every branch is explicit.
+/// startup log . Total: every branch is explicit.
 ///
-/// Derivation (Go parity): `IPE_CONSOLE_AUTH` (case-insensitive, trimmed) selects
+/// Derivation : `IPE_CONSOLE_AUTH` (case-insensitive, trimmed) selects
 /// `off`/`token`/`app`; unset → `dev-open` in dev (the default) or `unset-prod`
-/// in production (`ENV`/`IPE_ENV` non-dev); any unknown value → `off` (Go refuses
+/// in production (`ENV`/`IPE_ENV` non-dev); any unknown value → `off` (refuses
 /// to silently widen to something more permissive).
 pub fn console_auth_mode_label() -> &'static str {
     resolve_console_auth_mode().label()
@@ -251,8 +251,7 @@ pub fn gate_blocked(headers: &axum::http::HeaderMap) -> Option<axum::response::R
     if !telemetry::production_from_env() {
         return None;
     }
-    // Admin-token source precedence mirrors Go: IPE_ADMIN_TOKEN, then the legacy
-    // aliases IPE_CONSOLE_TOKEN and IPE_METRICS_TOKEN (Go honours IPE_METRICS_TOKEN
+    // Admin-token source precedence     // aliases IPE_CONSOLE_TOKEN and IPE_METRICS_TOKEN (IPE_METRICS_TOKEN
     // as a back-compat alias — without it a prod operator who only set the legacy
     // var is locked out / forced to a weaker config).
     let want = crate::system::read_env_var("IPE_ADMIN_TOKEN")
@@ -291,13 +290,13 @@ pub fn gate_blocked(headers: &axum::http::HeaderMap) -> Option<axum::response::R
     if authed {
         None
     } else {
-        // Audit the denial (Go parity: `console.auth.denied` warn into the
+        // Audit the denial (`console.auth.denied` warn into the
         // telemetry ring) so an operator sees brute-force / probing attempts.
         telemetry::record_log(
             "warn",
             "console.auth.denied reason=bad-or-missing-credentials",
         );
-        // WWW-Authenticate so a Prometheus `basic_auth` scraper (Go parity:
+        // WWW-Authenticate so a Prometheus `basic_auth` scraper (:
         // HandleMetrics realm "ipe-metrics") gets a proper challenge instead of a
         // bare 401 it can't act on.
         Some(
@@ -316,7 +315,7 @@ pub fn gate_blocked(headers: &axum::http::HeaderMap) -> Option<axum::response::R
 /// them into the local rings. Malformed bodies are accepted as 204 (drop) rather
 /// than erroring — telemetry must never break the caller.
 ///
-/// Auth (Go parity): a shared secret in `X-Ipê-Ingest-Token`, constant-time
+/// Auth : a shared secret in `X-Ipê-Ingest-Token`, constant-time
 /// compared against `IPE_INGEST_TOKEN`. The Rust runtime does not yet spawn
 /// sub-apps (no auto-generated token to distribute), so the gate is enforced
 /// ONLY when an operator sets `IPE_INGEST_TOKEN` — unset leaves the endpoint open

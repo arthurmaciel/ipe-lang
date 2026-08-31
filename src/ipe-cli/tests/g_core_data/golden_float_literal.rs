@@ -17,14 +17,14 @@
 //!
 //! Each emitted `main.rs` must be byte-identical to the checked-in golden, and
 //! (behind `IPE_E2E=1`) the emitted project must build and print the value the
-//! Go reference compiler produces.
+//! the reference compiler produces.
 //!
-//! Behavioural-parity oracle: the Go reference compiler at
+//! Verified: the reference compiler at
 //! `/home/arthur/Documentos/comp/ipe/out/ipe` compiles + runs the SAME
 //! `Main.ipe` files to the same stdout:
 //!
 //! ```text
-//! $ ipe run Main.ipe   # Go backend
+//! $ ipe run Main.ipe
 //! 1.5            # float_literal
 //! 12.56          # float_area
 //! 1500           # float_compare
@@ -65,8 +65,8 @@ fn assert_byte_identical(name: &str) {
 }
 
 /// Full spine: compile, build the emitted Cargo project, run it, and assert its
-/// stdout matches the golden's CACHED Go oracle (`expected_go.txt`) via the
-/// staleness-gated `crate::support::assert_go_parity` — NO live Go run in this path.
+/// stdout matches the golden's CACHED golden oracle (`expected_go.txt`) via the
+/// staleness-gated `crate::support::assert_go_parity` — NO live oracle run in this path.
 /// Gated on `IPE_E2E=1` so the default `cargo test` stays fast.
 fn assert_runs_and_matches_oracle(name: &str) {
     if std::env::var("IPE_E2E").is_err() {
@@ -87,7 +87,7 @@ fn assert_runs_and_matches_oracle(name: &str) {
 
     let outcome = crate::support::build_and_run_emitted(name, &out);
     crate::support::assert_go_parity(name, &dir, &outcome.stdout);
-    assert_eq!(outcome.exit_code, Some(0), "exit 0, matching the Go oracle");
+    assert_eq!(outcome.exit_code, Some(0), "exit 0");
 }
 
 #[test]
@@ -117,7 +117,7 @@ fn float_division_builds_and_prints_one_point_five() {
 
 /// Exponent-branch parity floor: `String.fromFloat` of a sub-`1e-4` value and a
 /// `>= 1e21` value must render in `'g'` exponent form (`1e-05` / `1e+21`), the
-/// exact bytes the Go oracle produces. This guards against the float-to-string
+/// exact bytes the golden oracle produces. This guards against the float-to-string
 /// port regressing to exponent-free coverage only.
 #[test]
 fn float_exponent_branch_builds_and_prints_g_form() {

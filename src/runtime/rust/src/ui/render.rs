@@ -14,10 +14,9 @@
 //! - T5: `AttrBorderWidthEach(t,r,b,l)` uses `saturating_add` throughout.
 //!
 //! ### Design rationale
-//! `Ui.layout` emits an outer 100 vh flex-column wrapper (matching Ipê's Go
-//! runtime `runtime-go/rt/ui.go`) and the converted root element inside it.
-//! `Ui.layoutWith` additionally applies `wrapperAttrs` to the outer wrapper and
-//! `rootAttrs` to an intermediate flex root, mirroring `Ui.layoutWith`'s Go shape.
+//! `Ui.layout` emits an outer 100 vh flex-column wrapper and the converted root
+//! element inside it. `Ui.layoutWith` additionally applies `wrapperAttrs` to
+//! the outer wrapper and `rootAttrs` to an intermediate flex root.
 
 use super::super::css_safety::{SafeCssPropertyName, SafeCssValue};
 use super::super::html::{Attribute as HtmlAttribute, Html};
@@ -672,8 +671,7 @@ fn render_node_as<M: Clone>(
 /// `Ui.layout : List (Attribute msg) -> Element msg -> Html msg`
 ///
 /// Wraps the element in a full-viewport flex-column page wrapper, then renders
-/// the root element with the given root attributes applied. Mirrors the Ipê Go
-/// runtime's `layout` output shape.
+/// the root element with the given root attributes applied.
 #[must_use]
 pub fn ui_layout<M: Clone>(attrs: Vec<Attribute<M>>, elem: Element<M>) -> Html<M> {
     // Root element rendered with the caller's root attrs applied.
@@ -703,7 +701,7 @@ pub fn ui_layout<M: Clone>(attrs: Vec<Attribute<M>>, elem: Element<M>) -> Html<M
 /// (Attribute msg) } -> Element msg -> Html msg`
 ///
 /// Applies `wrapper_attrs` to the outer viewport div and `root_attrs` to the
-/// inner root element, mirroring `Ui.layoutWith`'s Go shape.
+/// inner root element.
 ///
 /// Called by the emitted code as
 /// `ipe_runtime::ui::render::ui_layout_with_vecs::<M>(wrapper, root, elem)`.
@@ -1039,10 +1037,9 @@ mod tests {
 
     #[test]
     fn ui_clip_x_y_render_single_axis_clip_not_hidden() {
-        // Go/Ipê reference: clipX = AttrOverflow "clip" "visible" (NOT "hidden"),
+        // clipX = AttrOverflow "clip" "visible" (NOT "hidden"),
         // clipY = AttrOverflow "visible" "clip". Distinct from `Ui.clip` (which
-        // uses "hidden" on both axes) — this is the exact semantics bug the
-        // design doc's clip family warns about.
+        // uses "hidden" on both axes).
         let attrs_x = vec![super::super::helpers::ui_clip_x_::<TestMsg>()];
         let html_x = ui_layout(attrs_x, Element::Empty);
         let sx = render_html(&html_x);
@@ -1062,9 +1059,9 @@ mod tests {
 
     #[test]
     fn ui_scrollbar_x_y_render_off_axis_hidden_not_visible() {
-        // Go/Ipê reference: scrollbarX = AttrOverflow "auto" "hidden" (off-axis
-        // hidden, NOT visible — a visible off-axis gets promoted to `auto` by
-        // CSS, producing an unwanted second scrollbar).
+        // scrollbarX = AttrOverflow "auto" "hidden" (off-axis hidden, NOT visible
+        // — a visible off-axis gets promoted to `auto` by CSS, producing an
+        // unwanted second scrollbar).
         let attrs_x = vec![super::super::helpers::ui_scrollbar_x_::<TestMsg>()];
         let html_x = ui_layout(attrs_x, Element::Empty);
         let sx = render_html(&html_x);

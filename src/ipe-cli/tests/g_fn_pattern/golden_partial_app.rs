@@ -1,7 +1,7 @@
 //! IPE-L0110 seal — partial + over-application of a first-class function
 //! VALUE. `ipe` must emit `main.rs` byte-identical to the checked-in golden,
 //! and (behind `IPE_E2E=1`) the emitted project must build and print
-//! `6\n33\n103\n`, exit 0 — the same values the Go reference produces.
+//! `6\n33\n103\n`, exit 0 — the same values (hand-verified).
 //!
 //! The named-callee path already eta-expands a partial application (`add 2` ->
 //! `\n -> add(2, n)`). This fixture pins the VALUE path: the reference
@@ -15,20 +15,20 @@
 //!   * over-application `(f 10 20) 3`   -> `33`  (10 + 20 + 3),
 //!   * pipe partial `100 |> add3 1 2`   -> `103` (1 + 2 + 100).
 //!
-//! Behavioural-parity oracle: the Go reference compiler at
+//! Verified: the reference compiler at
 //! `/home/arthur/Documentos/comp/ipe/out/ipe` compiles + runs the SAME
 //! `Main.ipe` to stdout `6\n33\n103\n`, exit 0:
 //!
 //! ```text
-//! $ ipe run tests/golden/partial_app/Main.ipe   # Go backend
+//! $ ipe run tests/golden/partial_app/Main.ipe
 //! 6
 //! 33
 //! 103
 //! ```
 //!
-//! Running the Haskell `ipe` toolchain inside `cargo test` is impractical, so
+//! Running the the compiler `ipe` toolchain inside `cargo test` is impractical, so
 //! the hand-computed values are the in-test oracle, documented here against the
-//! Go-equivalent command.
+//! equivalent command.
 
 use std::path::{Path, PathBuf};
 
@@ -68,7 +68,7 @@ fn emits_byte_identical_main_rs() {
 
 /// Full spine: compile, build the emitted Cargo project, run it, and assert the
 /// partial/over-application arithmetic prints `6\n33\n103` — the same values the
-/// Go backend produces. Gated on `IPE_E2E=1` so the default `cargo test` stays
+/// the backend produces. Gated on `IPE_E2E=1` so the default `cargo test` stays
 /// fast.
 #[test]
 fn end_to_end_builds_and_prints_partial_app_values() {
@@ -90,7 +90,7 @@ fn end_to_end_builds_and_prints_partial_app_values() {
     let outcome = crate::support::build_and_run_emitted("partial_app", &out);
     assert_eq!(
         outcome.stdout, "6\n33\n103\n",
-        "value partial + over + pipe partial application, matching the Go oracle"
+        "value partial + over + pipe partial application, matching golden"
     );
-    assert_eq!(outcome.exit_code, Some(0), "exit 0, matching the Go oracle");
+    assert_eq!(outcome.exit_code, Some(0), "exit 0");
 }

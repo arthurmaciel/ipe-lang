@@ -17,7 +17,7 @@
 //! `V`) are **correct by construction** — every op on a handle uses the same
 //! `(K, V)`, enforced by Ipê's opaque `Cache k v` — so neither can fail; a
 //! mismatch / missing handle degrades to a miss / no-op, never a panic. The same
-//! sanctioned-seam discipline as the pub/sub broker; strictly safer than Go's reflect
+//! sanctioned-seam discipline as the pub/sub broker; strictly safer than  reflect
 //! cache (the cast cannot fail). See the README `dyn Any` register.
 
 use super::*;

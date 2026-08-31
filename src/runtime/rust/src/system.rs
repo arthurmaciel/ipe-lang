@@ -682,7 +682,7 @@ pub fn system_cwd<E: Send + From<String> + 'static>(_: ()) -> IpeTask<E, String>
 }
 
 /// `System.getcwd : () -> Task Error String` — backward-compat alias for `cwd`.
-/// Go: `func System_getcwd(unit any) any { return System_cwd(unit) }`.
+/// Wraps `System_cwd` with a unit arg.
 #[must_use]
 pub fn system_getcwd<E: Send + From<String> + 'static>(unit: ()) -> IpeTask<E, String> {
     system_cwd(unit)

@@ -1,5 +1,5 @@
 //! Encoding kernels for Ipe.Encoding — base64 / url-percent / hex
-//! All fns mirror the Go runtime's `stdlib_extra.go` Encoding kernel behaviour
+//! All fns mirror the `stdlib_extra.go` Encoding kernel behaviour
 //! and the Ipê-side signatures declared in `ipe-stdlib/Ipê/Core/Encoding.ipe`.
 
 use super::IpeResult;
@@ -7,7 +7,7 @@ use super::IpeResult;
 use base64::{Engine, engine::general_purpose::STANDARD as B64};
 use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, percent_decode_str, utf8_percent_encode};
 
-/// The set of bytes `urlEncode` percent-encodes, matching Go's
+/// The set of bytes `urlEncode` percent-encodes, matching
 /// `url.QueryEscape` (`encodeQueryComponent`): every byte is escaped EXCEPT
 /// the ASCII alphanumerics and the four unreserved marks `-` `_` `.` `~`
 /// (RFC 3986 §2.3). Space is handled separately (`%20` → `+`) below.
@@ -21,8 +21,7 @@ const QUERY: &AsciiSet = &NON_ALPHANUMERIC
 //
 // TEXT path: the `Encoding.*` kernels below treat their `String` argument as
 // TEXT and go through its UTF-8 bytes (`s.as_bytes()` on encode,
-// `String::from_utf8` on decode) — byte-for-byte with the Go backend, which
-// encodes `[]byte(goString)` (UTF-8). This avoids silent truncation (`c as u8`
+// `String::from_utf8` on decode). This avoids silent truncation (`c as u8`
 // dropping every codepoint > 255) and makes `decode(encode s) == Ok s` for
 // every `String`. Non-ASCII goes through the correct UTF-8 bytes, not Latin-1.
 //
@@ -72,8 +71,8 @@ pub(crate) fn form_url_decode(s: &str) -> String {
 }
 
 /// Ipê `base64Encode : String -> String` — encodes the input's UTF-8 bytes
-/// (Go parity: `base64.StdEncoding.EncodeToString([]byte(s))`). Non-ASCII
-/// matches Go rather than silently truncating codepoints > 255.
+/// )`). Non-ASCII
+///
 #[must_use]
 pub fn base64_encode(s: String) -> String {
     B64.encode(s.as_bytes())
@@ -96,9 +95,9 @@ pub fn base64_decode<E: From<String>>(s: String) -> IpeResult<E, String> {
     }
 }
 
-/// Ipê `urlEncode : String -> String` — Go url.QueryEscape semantics: space
-/// becomes `+` (not %20); the ASCII unreserved set (`A-Za-z0-9` plus `-_.~`)
-/// is left verbatim; every other byte is percent-encoded.
+/// Ipê `urlEncode : String -> String` — space becomes `+` (not %20); the
+/// ASCII unreserved set (`A-Za-z0-9` plus `-_.~`) is left verbatim; every
+/// other byte is percent-encoded.
 #[must_use]
 pub fn url_encode(s: String) -> String {
     // QUERY encodes space as %20 (it is in the set); QueryEscape uses '+'.
@@ -121,7 +120,7 @@ pub fn url_decode<E: From<String>>(s: String) -> IpeResult<E, String> {
 }
 
 /// Ipê `hexEncode : String -> String` — encodes the input's UTF-8 bytes
-/// (Go parity: `hex.EncodeToString([]byte(s))`). Non-ASCII matches Go rather
+/// )`). Non-ASCII
 /// than truncating codepoints > 255.
 #[must_use]
 pub fn encoding_hex_encode(s: String) -> String {
@@ -237,10 +236,10 @@ mod tests {
         assert!(matches!(decoded, IpeResult::Ok(ref s) if s == "Hello, Ipe!"));
     }
 
-    // non-ASCII goes through UTF-8 (Go parity), not Latin-1 truncation.
+    // non-ASCII goes through UTF-8 , not Latin-1 truncation.
     #[test]
-    fn base64_hex_nonascii_match_go_utf8_bytes() {
-        // Go: base64/hex of []byte("café") = UTF-8 bytes 63 61 66 C3 A9.
+    fn base64_hex_nonascii_utf8_bytes() {
+        // base64/hex of "café" = UTF-8 bytes 63 61 66 C3 A9.
         assert_eq!(base64_encode("café".to_string()), "Y2Fmw6k=");
         assert_eq!(encoding_hex_encode("café".to_string()), "636166c3a9");
     }
@@ -274,7 +273,7 @@ mod tests {
     #[test]
     fn test_url_roundtrip() {
         let encoded = url_encode("hello world/foo?bar=baz&q=á".to_string());
-        assert!(encoded.contains('+')); // space -> '+' (Go QueryEscape)
+        assert!(encoded.contains('+')); // space -> '+'
         assert!(!encoded.contains("%20"));
         assert!(encoded.contains("%2F")); // slash
         let decoded: IpeResult<String, String> = url_decode(encoded);

@@ -1,5 +1,4 @@
--- | Ipe.Html.Unsafe — the trusted-HTML / inline-script escape hatch (Layer 3
--- Ipe source).
+-- | Ipe.Html.Unsafe — the trusted-HTML / inline-script escape hatch.
 --
 -- This submodule is the one home for the raw-HTML and inline-`<script>`
 -- injection surfaces. Importing it discloses the `unsafe` capability

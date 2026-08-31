@@ -8,7 +8,7 @@ pub mod cell;
 pub mod diff; // accessed qualified (tui::diff::diff) — `diff` collides with live's
 pub mod focus; // input registry + focusable model + key editing
 pub mod key;
-pub mod layout; // structured Element → ANSI cells (Go-parity)
+pub mod layout; // structured Element → ANSI cells
 pub use app::{tui_app, tui_app_ui};
 pub use cell::*;
 

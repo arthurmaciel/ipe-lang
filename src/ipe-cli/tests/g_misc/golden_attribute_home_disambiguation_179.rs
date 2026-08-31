@@ -28,7 +28,7 @@
 //!   the `Html.node` slot without a cast.
 //!
 //! `oracle_divergence = true` — the assertion is ipe's own correct render, not
-//! a Go oracle diff; the point is the Attribute NEWTYPE identity, which the Go
+//! a golden oracle diff; the point is the Attribute NEWTYPE identity, which the golden
 //! backend does not model.
 //!
 //! Run:

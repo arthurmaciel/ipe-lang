@@ -1,4 +1,4 @@
--- | Ipe.Net — typed network primitives (Layer 3 Ipe source).
+-- | Ipe.Net — typed network primitives.
 --
 -- `Port` is an opaque TCP/UDP port number.  The ONLY way to build one is
 -- `fromInt`, which REJECTS any value outside the valid `1..65535` range (0 is

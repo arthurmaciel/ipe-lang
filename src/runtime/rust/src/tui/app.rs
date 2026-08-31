@@ -48,7 +48,7 @@ static TUI_MOUSE: AtomicBool = AtomicBool::new(false);
 /// (clean break / panic unwind) OR the `System.exit` hook — the latter is the
 /// load-bearing path: `std::process::exit` bypasses Drop, so without the hook a
 /// `Cmd.perform (System.exit n)` quit would leave the TTY in raw mode + the
-/// alternate screen (needing `reset`). Mirrors Go's `tuiTeardown`. Never panics.
+/// alternate screen (needing `reset`). Implements `tuiTeardown`. Never panics.
 fn tui_teardown() {
     if !TUI_RESTORE_ACTIVE.swap(false, Ordering::SeqCst) {
         return; // already restored, or never entered
@@ -121,7 +121,7 @@ fn paint(frame: &str) {
 /// Fire `onBlur` for the previously-focused element + `onFocus` for the newly-
 /// focused one (when those events are bound), enqueuing each Msg on the event
 /// channel so it flows through the same `update` sequence as everything else.
-/// Mirrors Go's `tuiDispatchFocusChange`. A send failure (receiver gone) is
+/// Implements `tuiDispatchFocusChange`. A send failure (receiver gone) is
 /// ignored — the loop is tearing down anyway. No-op when focus didn't move.
 fn dispatch_focus_change<Msg: Clone + Send + 'static>(
     focusables: &[Focusable<Msg>],
@@ -153,7 +153,7 @@ fn term_size() -> (usize, usize) {
     // Fall back to 80×24 when the size can't be determined OR is reported as 0 in
     // either dimension (a pty with no winsize set / a non-interactive pipe reports
     // (0, 0); crossterm passes that through). Clamping a 0 to 1 — as the old code
-    // did — rendered a 1×1 canvas, i.e. an (almost) blank frame, diverging from Go
+    // did — rendered a 1×1 canvas, i.e. an (almost) blank frame, diverging
     // (which defaults to 80×24). Only a genuine non-zero size is honoured.
     match crossterm::terminal::size() {
         Ok((w, h)) if w > 0 && h > 0 => (w as usize, h as usize),
@@ -413,7 +413,7 @@ where
 
 /// Render the Element view (twice: discover focusables, then scroll-correct + the
 /// focus highlight) and paint it. Returns the focusables so the loop can dispatch
-/// their input/click Msgs. Mirrors Go's `renderElementFrameScroll` double pass.
+/// their input/click Msgs. Implements `renderElementFrameScroll` double pass.
 fn render_and_paint<Model, Msg, FView>(
     view: &FView,
     model: &Model,
@@ -628,7 +628,7 @@ where
                                     let old_focus = focus_idx;
                                     focus_idx = hit;
                                     // onBlur (old) + onFocus (new) on a click focus
-                                    // change — same as Tab nav (Go fires it on both).
+                                    // change — same as Tab nav .
                                     dispatch_focus_change(&focusables, old_focus, hit, &tx);
                                     let is_input =
                                         focusables.get(hit).map(|f| f.is_input).unwrap_or(false);
@@ -695,7 +695,7 @@ where
                                 &mut focus_idx,
                                 &mut scroll_y,
                             );
-                            // onBlur (old) + onFocus (new) — Go's tuiDispatchFocusChange.
+                            // onBlur (old) + onFocus (new) —  tuiDispatchFocusChange.
                             dispatch_focus_change(&focusables, old_focus, focus_idx, &tx);
                             continue;
                         }

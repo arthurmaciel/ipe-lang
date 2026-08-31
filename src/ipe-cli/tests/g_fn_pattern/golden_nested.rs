@@ -11,7 +11,7 @@
 //! `ipe` must emit `main.rs` byte-identical to the checked-in golden, and
 //! (behind `IPE_E2E=1`) the emitted project must build and print `83`.
 //!
-//! Behavioural-parity oracle: the Go reference compiler at
+//! Verified: the reference compiler at
 //! `/home/arthur/Documentos/comp/ipe/out/ipe` compiles + runs the SAME
 //! `Main.ipe` to stdout `83\n`, exit 0 — hand-verified in a temp dir. The
 //! hand-computed `3 + 5 + 42 + 33 = 83` is the in-test oracle.
@@ -56,7 +56,7 @@ fn emits_byte_identical_main_rs() {
 }
 
 /// Full spine: compile, build the emitted Cargo project, run it, and assert the
-/// program prints `83` — the same value the Go backend produces. Gated on
+/// program prints `83` — the expected value. Gated on
 /// `IPE_E2E=1` so the default `cargo test` stays fast. This is the soundness-floor
 /// Regression for record + nested pattern lowering.
 #[test]
@@ -82,5 +82,5 @@ fn end_to_end_builds_and_prints_eighty_three() {
         &repo_root().join("tests").join("golden").join("nested"),
         &outcome.stdout,
     );
-    assert_eq!(outcome.exit_code, Some(0), "exit 0, matching the Go oracle");
+    assert_eq!(outcome.exit_code, Some(0), "exit 0");
 }

@@ -34,16 +34,16 @@
 //! done
 //! ```
 //!
-//! ORACLE DIVERGENCE (`oracle_divergence = true`): the Go reference compiler
+//! ORACLE DIVERGENCE (`oracle_divergence = true`): the the reference compiler
 //! cannot produce a reference for this exact program — its `Error` module
-//! surface differs (Go requires `import Error`; the Rust port exposes the
-//! `Error.*` constructors as a prelude kernel qualifier) AND
-//! `Result.traverse` is not in the Go reference's `ipe-stdlib/Ipe/Core/Result.ipe`
+//! surface differs (the Rust port exposes the `Error.*` constructors as a
+//! prelude kernel qualifier) AND
+//! `Result.traverse` is not in the golden reference's `ipe-stdlib/Ipe/Core/Result.ipe`
 //! `exposing` list.  Both are pre-existing, sanctioned divergences; the cached
 //! expected output is ipe's own, per `docs/architecture/divergence-policy.md`.
 //! The load-bearing guarantee this gate enforces is the SEAL: well-typed use of
 //! these kernels emits cargo-buildable Rust that runs with the correct
-//! short-circuit semantics — NOT Go byte-parity.
+//! short-circuit semantics — NOT byte-parity-locked.
 //!
 //! Gated on `IPE_E2E=1`; without it the test returns early.  Run:
 //!

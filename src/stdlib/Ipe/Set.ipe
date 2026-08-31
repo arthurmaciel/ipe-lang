@@ -1,18 +1,16 @@
--- | Ipe.Set — unordered set of unique elements (Layer 3 Ipe source).
+-- | Ipe.Set — unordered set of unique elements.
 --
 -- Every function in this module is declared as a Ipe-source binding
--- aliased to a kernel via `Ffi.kernel "Set_<name>"`.  The Stage-4
--- compiler primitive rewrites every call site to the existing typed
--- kernel dispatch — so `Set.member x s` continues to emit
--- `rt.Set_member(x, s)` exactly as before, preserving the typed-
--- codegen guarantees the kernel-direct route already enjoyed.
+-- aliased to a kernel via `Ffi.kernel "Set_<name>"`.  The compiler
+-- rewrites every call site to typed kernel dispatch — so `Set.member x s`
+-- emits `rt.Set_member(x, s)`, preserving the typed-codegen guarantees
+-- the kernel-direct route already enjoyed.
 --
--- The Ipe-source layer exists for discoverability + Layer 3
--- conformance + so `ipe doc` shows a stable source location for
--- every entry.  The runtime bodies live in `runtime-go/rt/rt.go`
--- (`Set_*` helpers).
+-- The Ipe-source layer exists for discoverability so `ipe doc` shows a
+-- stable source location for every entry.  The runtime bodies live in
+-- the `ipe_runtime` crate (`Set_*` kernels).
 --
--- Internally a `Set a` is represented as a `map[string]struct{}` so
+-- Internally a `Set a` is represented by a stringified-key map so
 -- equality + hash semantics inherit Ipe's stringified-key contract
 -- (the same one Dict uses). Order of iteration is unspecified.
 module Ipe.Set exposing

@@ -28,10 +28,10 @@ use super::*;
 pub use crate::crypto_core::*;
 
 /// SECURITY (parity-locked): `sha1` and `md5` below are COLLISION-BROKEN and are
-/// exposed ONLY as named checksum/interop hashes, matching the Go backend's
+/// exposed ONLY as named checksum/interop hashes, matching the
 /// surface. They MUST NOT be used as a security primitive (password hashing,
 /// signatures, integrity against an adversary) — those paths use SHA-256/512 +
-/// HMAC + bcrypt/PBKDF2 elsewhere in this module. Removing them would break Go
+/// HMAC + bcrypt/PBKDF2 elsewhere in this module. Removing them would break
 /// parity; the hardening is this contract note. (Audit finding: low/weak-crypto.)
 ///
 /// Ipê `sha1 : String -> String` — hex-encoded SHA-1 digest.
@@ -56,9 +56,8 @@ pub fn crypto_md5(s: String) -> String {
 // Symmetric AEAD — AES-256-GCM + ChaCha20-Poly1305
 // ═══════════════════════════════════════════════════════════
 //
-// Output format mirrors the Go backend: base64( nonce[12] || ciphertext ||
-// tag[16] ) — a single opaque UTF-8 string. The 32-byte KEY, however, is
-// base64-encoded here (the Go backend passes raw bytes). Keys are opaque and
+// Output format // tag[16] ) — a single opaque UTF-8 string. The 32-byte KEY, however, is
+// base64-encoded here (raw bytes internally). Keys are opaque and
 // never cross the backend boundary, so this backend-local encoding is sound and
 // is what lets a PBKDF2-derived key (arbitrary bytes) live in a Rust `String`
 // (which must be valid UTF-8). aesKeyFromPassword emits the base64 form; the
@@ -66,7 +65,7 @@ pub fn crypto_md5(s: String) -> String {
 
 #[cfg(not(target_arch = "wasm32"))]
 const AEAD_KEY_BYTES: usize = 32;
-// PBKDF2-HMAC-SHA256 work factor. PINNED to the Go backend's value: a
+// PBKDF2-HMAC-SHA256 work factor. PINNED to the  value: a
 // password-derived key/blob produced on one backend must verify/decrypt on the
 // other, so this is a cross-backend interop contract, NOT a Rust-local knob.
 // It is below current OWASP guidance (≈600k for PBKDF2-SHA256); raising it is a
@@ -182,8 +181,8 @@ pub fn crypto_aes_gcm_decrypt<E: From<String>>(
         Err(e) => return IpeResult::Err(format!("Crypto.aesGcmDecrypt: {}", e).into()),
     };
     match cipher.decrypt(Nonce::from_slice(nonce_bytes), ct) {
-        // A Ipê String is UTF-8 by construction. Go's oracle returns string(pt)
-        // (Go strings are arbitrary bytes), but lossy-replacing invalid UTF-8 here
+        // A Ipê String is UTF-8 by construction.  oracle returns string(pt)
+        // , but lossy-replacing invalid UTF-8 here
         // would silently corrupt the plaintext. Reject non-UTF-8 plaintext with a
         // structured Err instead — total, and surfaces the mismatch at the boundary.
         Ok(pt) => match String::from_utf8(pt) {

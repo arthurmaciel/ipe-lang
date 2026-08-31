@@ -1,17 +1,15 @@
 //! Ipe.Tui — raw-byte key decoder.
 //!
 //! Pure: decodes one keypress from a raw terminal byte buffer into a
-//! `(TuiKey, consumed)` pair, byte-for-byte mirroring the Go backend's
-//! `tuiDecodeKey` (`runtime-go/rt/tui.go`) so `onKey` sees identical `kind` /
-//! `value` strings. No terminal I/O here — the `tui_app` loop reads raw stdin
-//! bytes and feeds them in. Total: every access is bounds-checked (`.get`),
-//! never panics or indexes out of bounds.
+//! `(TuiKey, consumed)` pair so `onKey` sees typed `kind` / `value` strings.
+//! No terminal I/O here — the `tui_app` loop reads raw stdin bytes and feeds
+//! them in. Total: every access is bounds-checked (`.get`), never panics.
 
-/// A decoded key. `kind` mirrors Go's set: `enter` / `tab` / `space` /
-/// `backspace` / `escape` / `up` / `down` / `left` / `right` / `home` / `end` /
-/// `delete` / `pageup` / `pagedown` / `fn` (value = number) / `mouse` /
-/// `paste-start` / `paste-end` / `ctrl` (value = letter) / `char` (value = the
-/// character) / `other` (value = raw bytes lossily).
+/// A decoded key. `kind` values: `enter` / `tab` / `space` / `backspace` /
+/// `escape` / `up` / `down` / `left` / `right` / `home` / `end` / `delete` /
+/// `pageup` / `pagedown` / `fn` (value = number) / `mouse` / `paste-start` /
+/// `paste-end` / `ctrl` (value = letter) / `char` (value = the character) /
+/// `other` (value = raw bytes lossily).
 #[derive(Clone, Debug, PartialEq, Default)]
 pub struct TuiKey {
     pub kind: String,
