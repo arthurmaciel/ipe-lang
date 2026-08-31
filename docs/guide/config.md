@@ -94,6 +94,19 @@ not a panic, malformed config cannot make the program fall over — the
 
 [principles]: ../../PRINCIPLES.md
 
+## Configuration
+
+Two env vars cap the size of config files the runtime will parse.
+Use `ipe doc <VAR>` for the full entry.
+
+| Variable | Default | Effect |
+|----------|---------|--------|
+| `IPE_CONFIG_MAX_BYTES` | 16777216 (16 MiB) | Maximum size of any config file loaded via `Config.load*`. |
+| `IPE_YAML_MAX_BYTES` | 16777216 (16 MiB) | Separate ceiling for YAML sources (`Config.loadYaml`). |
+
+See the [**Config** subsystem](../reference/env.md#config) in the
+environment variable reference.
+
 ## References
 
 - **Per-symbol reference:** `ipe doc Ipe.Config` — every combinator with a

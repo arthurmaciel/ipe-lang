@@ -98,6 +98,20 @@ without breaking existing call sites.
 
 [principles]: ../../PRINCIPLES.md
 
+## Configuration
+
+Three env vars tune WebSocket behaviour at runtime. Use `ipe doc <VAR>` for the
+full entry on any of them.
+
+| Variable | Default | Effect |
+|----------|---------|--------|
+| `IPE_WS_HEARTBEAT` | 30 | Ping interval (seconds); two missed responses disconnect the peer. |
+| `IPE_WS_MAX_MESSAGE_BYTES` | 1048576 (1 MiB) | Maximum message size for both client and server connections. |
+| `IPE_WS_SEND_BUFFER` | 256 | Per-connection outbound frame buffer depth. |
+
+See the [**WebSocket** subsystem](../reference/env.md#websocket) in the
+environment variable reference.
+
 ## References
 
 - **Per-symbol reference:** `ipe doc Ipe.WebSocket` — every function with its

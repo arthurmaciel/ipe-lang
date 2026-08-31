@@ -690,6 +690,9 @@ fn build_index() -> Result<Index, CliError> {
         .collect();
     builder.add_commands(&commands);
 
+    // Environment variables: sourced from the ENV_VARS registry (single SSOT).
+    builder.add_env_vars();
+
     Ok(builder.finish())
 }
 
@@ -991,6 +994,7 @@ fn render_doc_entry_json(entry: &ipe_docs::Entry) -> String {
         ipe_docs::EntryKind::Diagnostic => "diagnostic",
         ipe_docs::EntryKind::Construct => "construct",
         ipe_docs::EntryKind::Command => "command",
+        ipe_docs::EntryKind::EnvVar => "env-var",
     };
     format!(
         "{{\"kind\":{},\"key\":{},\"text\":{}}}\n",
@@ -1008,6 +1012,7 @@ fn render_doc_entry_human(entry: &ipe_docs::Entry, p: &crate::style::Palette) ->
         ipe_docs::EntryKind::Diagnostic => "diagnostic",
         ipe_docs::EntryKind::Construct => "construct",
         ipe_docs::EntryKind::Command => "command",
+        ipe_docs::EntryKind::EnvVar => "env-var",
     };
     let mut out = String::new();
     let _ = writeln!(
