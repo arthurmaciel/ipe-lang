@@ -1,0 +1,35 @@
+module Main exposing (main)
+
+import Ipe.ToString as ToString
+import Ipe.String as String
+import Ipe.Io as Io
+
+
+-- `Ipe.ToString` is a naming-consistency surface: one place to reach every
+-- primitive's "render this value to a String" without memorising which module
+-- owns each kernel. Two ideas:
+--   • `ToString.fromInt` / `fromFloat` / `fromBool` are thin aliases to the
+--     canonical renderers in their home modules — the same functions, gathered
+--     under one predictable prefix for discovery.
+--   • Rendering is total: every `Int`, `Float`, and `Bool` has a String form,
+--     so these never fail — no `Maybe`, no `Result` to unwrap.
+
+
+-- A one-line summary row, each field rendered through the matching `ToString`.
+row : String -> Int -> Float -> Bool -> String
+row label count ratio enabled =
+    String.concat
+        [ label
+        , ": count="
+        , ToString.fromInt count
+        , " ratio="
+        , ToString.fromFloat ratio
+        , " enabled="
+        , ToString.fromBool enabled
+        ]
+
+
+main =
+    do
+        Io.println (row "alpha" 3 0.75 True)
+        Io.println (row "beta" 128 1.5 False)

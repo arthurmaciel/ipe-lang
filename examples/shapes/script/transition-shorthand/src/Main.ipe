@@ -1,0 +1,32 @@
+module Main exposing (main)
+
+import Ipe.Ui.Transition as Transition exposing (Step)
+import Ipe.Io as Io
+
+
+-- `Ipe.Ui.Transition` describes a CSS transition as a list of typed `Step`
+-- values, then lowers them to the CSS `transition` shorthand. This example stays
+-- on that pure surface. Two ideas:
+--   • Each facet is a named `Step` builder: `property "opacity"`, `duration 200`
+--     (milliseconds), `delay 50`, `easing Transition.easeInOut`. You assemble the
+--     transition from labelled parts, not a positional shorthand string where the
+--     order of the numbers silently decides which is duration and which is delay.
+--   • `buildShorthand` renders the parts to the single CSS value, filling in
+--     defaults for any facet you leave out, and scans the result — a rejected
+--     value renders as the empty string, fail-closed, never an unchecked one.
+
+
+-- Fade in with a short delay and an ease-in-out curve.
+fade : List Step
+fade =
+    [ Transition.property "opacity"
+    , Transition.duration 200
+    , Transition.delay 50
+    , Transition.easing Transition.easeInOut
+    ]
+
+
+main =
+    do
+        Io.println "transition (shorthand value):"
+        Io.println ("  " ++ Transition.buildShorthand fade)

@@ -1,0 +1,32 @@
+module Main exposing (main)
+
+import Ipe.Ui.Animation as Animation
+import Ipe.Io as Io
+
+
+-- `Ipe.Ui.Animation` describes a CSS animation as a `Spec` value, built up with
+-- labelled `with*` refinements from a named default, then lowered to the CSS
+-- animation shorthand. This example stays on that pure surface. Two ideas:
+--   • The `Spec` is built by pipeline: `defaultSpec name` gives sensible
+--     defaults, and each `withDuration` / `withEasing` / `withIterations` /
+--     `withFillMode` overrides one facet. You never write a positional shorthand
+--     string; each facet is set by name.
+--   • Closed sets rule out typos. `iterations` is `once` / `infinite` /
+--     `times n`, and `fillMode` is `none` / `forwards` / `backwards` / `both` —
+--     typed constructors, not free strings, so an unknown value is a compile
+--     error.
+
+
+pulse : Animation.Spec
+pulse =
+    Animation.defaultSpec "pulse"
+        |> Animation.withDuration 600
+        |> Animation.withEasing Animation.easeInOut
+        |> Animation.withIterations Animation.infinite
+        |> Animation.withFillMode Animation.forwards
+
+
+main =
+    do
+        Io.println "animation shorthand tail (name is added by the render sink):"
+        Io.println ("  " ++ Animation.buildShorthandTail pulse)

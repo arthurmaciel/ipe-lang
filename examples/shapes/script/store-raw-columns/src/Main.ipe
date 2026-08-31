@@ -1,0 +1,76 @@
+module Main exposing (main)
+
+import Ipe.Db.Store as Store exposing (Store)
+import Ipe.Db.Store.Unsafe as StoreU
+import Ipe.Result as Result exposing (Result(..))
+import Ipe.Error exposing (Error)
+import Ipe.String as String
+import Ipe.Io as Io
+
+
+-- The safe `Ipe.Db.Store` surface names a column by an accessor literal
+-- (`Store.primaryKey .id`), checked against the row type at compile time. A
+-- DYNAMIC table — one built with `Store.fromColumns` rather than from a record
+-- codec — has no row type, so its columns can only be named by a bare string.
+-- Those string-named column-spec builders live in `Ipe.Db.Store.Unsafe`.
+--
+-- The "unsafe" here is NARROW, and worth being precise about:
+--   • It means a column is named by an UNCHECKED string instead of a
+--     compile-checked accessor — a typo in the string is caught at query time,
+--     not compile time.
+--   • It is NOT an injection hatch. Every string-named column is still validated
+--     against the store's own columns when the query or DDL is built, and every
+--     value still binds as a parameter, so a bad column fails closed and no value
+--     is ever interpolated.
+--   • Importing the module discloses the `unsafe` capability program-wide, so the
+--     narrower guarantee is visible in an audit before the program runs.
+
+
+-- A raw-column table: the columns are declared as data (no record type), so the
+-- primary key is named by the string "id" through the unsafe surface.
+events : Result Error (Store Store.Row)
+events =
+    Store.fromColumns "events"
+        [ Store.textColumn "id"
+        , Store.textColumn "kind"
+        , Store.intColumn "weight"
+        ]
+        |> Result.map (StoreU.primaryKey "id")
+        |> Result.map Store.public
+
+
+describeColumns : Result Error (Store Store.Row) -> String
+describeColumns result =
+    case result of
+        Ok store ->
+            "columns: " ++ String.join ", " (Store.columnNames store)
+
+        Err _ ->
+            "store rejected"
+
+
+-- A raw-column store with an invalid column identifier fails closed at
+-- construction — the bad name never reaches SQL.
+rejected : Result Error (Store Store.Row)
+rejected =
+    Store.fromColumns "events"
+        [ Store.textColumn "id"
+        , Store.textColumn "kind); drop table events --"
+        ]
+        |> Result.map Store.public
+
+
+outcome : Result Error (Store Store.Row) -> String
+outcome result =
+    case result of
+        Ok _ ->
+            "accepted"
+
+        Err _ ->
+            "rejected (invalid identifier — fail-closed)"
+
+
+main =
+    do
+        Io.println (describeColumns events)
+        Io.println ("bad column name -> " ++ outcome rejected)
