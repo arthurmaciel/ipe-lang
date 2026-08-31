@@ -1783,46 +1783,120 @@ const fn restart_outcome_kind(outcome: &ipe_watch::RestartOutcome) -> RestartOut
 /// instead of the fast incremental path.
 const NO_INCREMENTAL_ENV: &str = "IPE_WATCH_NO_INCREMENTAL";
 
-/// Configure a watch-mode `cargo build` for the fast dev inner loop: turn on
-/// per-crate incremental codegen and take sccache out of the picture for this
-/// child only.
+/// The build-acceleration strategy for one watch-mode `cargo build`, chosen from
+/// the target's warmth.
 ///
-/// Why both, together: a machine-level `~/.cargo/config.toml` commonly wires
-/// `build.rustc-wrapper = "sccache"` with `build.incremental = false` (sccache
-/// cannot cache incremental crates, so the two are mutually exclusive). That
-/// global setting overrides the emitted crate's default dev profile, so every
-/// `ipe watch` rebuild re-codegens the whole app crate — including the vendored
-/// runtime module tree compiled inside it — from scratch. Setting
-/// `CARGO_INCREMENTAL=1` and clearing the rustc wrapper in THIS child's
-/// environment (rather than relying on the global config) restores incremental
-/// codegen for the app crate, which is a pure win for the warm view/update-body
-/// edit loop and behaviour-identical (incremental changes codegen partitioning,
-/// not program semantics — enforced by the clean-vs-incremental parity gate).
+/// sccache and rustc-incremental are mutually exclusive (sccache refuses to cache
+/// an incremental crate) and they accelerate opposite halves of the loop: sccache
+/// caches whole *dependency* crates in a shared store — its win is the one-time
+/// cold compile of the registry deps the emitted app links; incremental caches at
+/// codegen-unit granularity within one warm target — its win is the per-edit
+/// rebuild of the app crate (the vendored runtime module tree compiled inside it).
+/// So the split that matters is *cold deps vs warm app*, not first-run vs later: a
+/// target whose deps are not yet built compiles under sccache, and every warm
+/// rebuild after that uses incremental. A machine-level
+/// `build.rustc-wrapper = "sccache"` + `build.incremental = false` would otherwise
+/// force every rebuild to re-codegen the whole app from scratch; the warm path
+/// overrides it in THIS child only.
 ///
-/// Scope: only the watch child is affected. `ipe build` (release / clean / CI)
-/// keeps the machine's sccache configuration untouched, since it never calls
-/// this. Registry dependencies are compiled as their own crates and are never
-/// incremental regardless, so a warm session pays their compile once and reuses
-/// it from the persistent per-project `out_dir/target` across rebuilds and
-/// across watch restarts.
+/// Behaviour-identical either way — incremental changes codegen partitioning, not
+/// program semantics (enforced by the clean-vs-incremental parity gate) — and
+/// scoped to the watch child: `ipe build` (release / clean / CI) never calls this.
+enum BuildAccel {
+    /// Explicit opt-out ([`NO_INCREMENTAL_ENV`]): leave the machine's build
+    /// configuration untouched for the emitted-app rebuild.
+    MachineDefault,
+    /// Cold target — an `sccache` wrapper for a fast one-time dependency compile.
+    /// Incremental is off (the two cannot coexist); the payoff is bounded to the
+    /// first build on a fresh target.
+    ColdSccache(PathBuf),
+    /// Warm target — per-crate incremental codegen, sccache taken out of the
+    /// picture for this child.
+    WarmIncremental,
+}
+
+/// The target directory this watch build will use: an inherited `CARGO_TARGET_DIR`
+/// wins, else cargo's default of `<out_dir>/target`.
+fn watch_target_dir(out_dir: &Path) -> PathBuf {
+    std::env::var_os("CARGO_TARGET_DIR").map_or_else(|| out_dir.join("target"), PathBuf::from)
+}
+
+/// Whether a resolved target directory already holds a compiled dependency
+/// library (a single `.rlib` under `debug/deps` — the registry crates the emitted
+/// app links). Fail-safe: any I/O error reads as no-rlib, so the worst case is one
+/// extra sccache-mode build, never a wrong-but-fast one. Pure in its argument —
+/// the ambient-env resolution lives in [`target_is_warm`].
+fn dir_has_dep_rlib(target_dir: &Path) -> bool {
+    let deps = target_dir.join("debug").join("deps");
+    let Ok(entries) = std::fs::read_dir(&deps) else {
+        return false;
+    };
+    entries
+        .flatten()
+        .any(|e| e.path().extension().is_some_and(|x| x == "rlib"))
+}
+
+/// A target is *warm* once it already holds compiled dependency libraries; a
+/// fresh (or pruned) target holds none. Resolves the target directory cargo will
+/// actually use (honouring an inherited `CARGO_TARGET_DIR`, exactly as the watch
+/// build will) and checks it for a dependency `.rlib`.
+fn target_is_warm(out_dir: &Path) -> bool {
+    dir_has_dep_rlib(&watch_target_dir(out_dir))
+}
+
+/// Locate an `sccache` executable on `PATH`, if the machine has one. sccache is
+/// optional: absent, a cold build simply falls back to the warm/incremental path
+/// — correct, only slower for the first compile.
+fn find_sccache() -> Option<PathBuf> {
+    let path = std::env::var_os("PATH")?;
+    std::env::split_paths(&path)
+        .flat_map(|dir| [dir.join("sccache"), dir.join("sccache.exe")])
+        .find(|p| p.is_file())
+}
+
+/// Pick the acceleration strategy for the next watch build from the opt-out gate
+/// and the target's warmth. A cold target with sccache available builds its deps
+/// under sccache; a warm target (or no sccache) uses incremental. Re-evaluated
+/// per build, so the cold sccache build's deps make the very next build warm and
+/// incremental — the one-time cold→warm transition the design intends.
 ///
-/// Opt out with [`NO_INCREMENTAL_ENV`] to restore the machine's normal build
-/// configuration for the emitted-app rebuild.
-///
-/// The opt-out decision is read once at the call site and threaded in as
-/// `opt_out`, keeping the env-to-`Command` mapping a pure function.
-fn apply_dev_incremental_env(cmd: &mut Command, opt_out: bool) {
+/// The decision is computed at the call site and passed to
+/// [`apply_build_accel_env`], keeping the env-to-`Command` mapping a pure function.
+fn choose_build_accel(out_dir: &Path, opt_out: bool) -> BuildAccel {
     if opt_out {
-        return;
+        return BuildAccel::MachineDefault;
     }
-    cmd.env("CARGO_INCREMENTAL", "1");
-    // Clear BOTH wrapper hooks so a machine-level `rustc-wrapper = "sccache"`
-    // (which forces non-incremental) does not defeat the incremental request.
-    // Empty string, not `remove_env`: cargo reads the wrapper from its resolved
-    // config, so an empty override in the child env is what actually disables it
-    // — removing the var alone would let the config value win.
-    cmd.env("RUSTC_WRAPPER", "");
-    cmd.env("RUSTC_WORKSPACE_WRAPPER", "");
+    match (target_is_warm(out_dir), find_sccache()) {
+        (false, Some(sccache)) => BuildAccel::ColdSccache(sccache),
+        _ => BuildAccel::WarmIncremental,
+    }
+}
+
+/// Map a [`BuildAccel`] onto a watch child's `cargo build` environment. Pure: the
+/// only inputs are the chosen strategy and the command.
+fn apply_build_accel_env(cmd: &mut Command, accel: &BuildAccel) {
+    match accel {
+        BuildAccel::MachineDefault => {}
+        BuildAccel::ColdSccache(sccache) => {
+            // sccache cannot cache an incremental crate, so incremental is off for
+            // this cold build. Wire the wrapper explicitly rather than trust the
+            // machine config, so the cold path works with or without a global
+            // sccache setting.
+            cmd.env("CARGO_INCREMENTAL", "0");
+            cmd.env("RUSTC_WRAPPER", sccache);
+            cmd.env("RUSTC_WORKSPACE_WRAPPER", "");
+        }
+        BuildAccel::WarmIncremental => {
+            cmd.env("CARGO_INCREMENTAL", "1");
+            // Clear BOTH wrapper hooks so a machine-level `rustc-wrapper = "sccache"`
+            // (which forces non-incremental) does not defeat the incremental
+            // request. Empty string, not `remove_env`: cargo reads the wrapper from
+            // its resolved config, so an empty override in the child env is what
+            // actually disables it — removing the var alone would let the config win.
+            cmd.env("RUSTC_WRAPPER", "");
+            cmd.env("RUSTC_WORKSPACE_WRAPPER", "");
+        }
+    }
 }
 
 /// Read a boolean opt-out/opt-in env gate: true when the variable is set to any
@@ -1861,7 +1935,8 @@ fn spawn_cargo_build(
         .current_dir(out_dir)
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
-    apply_dev_incremental_env(&mut cmd, env_flag_on(NO_INCREMENTAL_ENV));
+    let accel = choose_build_accel(out_dir, env_flag_on(NO_INCREMENTAL_ENV));
+    apply_build_accel_env(&mut cmd, &accel);
     if quiet {
         cmd.arg("-q");
     } else {
@@ -2003,10 +2078,12 @@ fn find_executable_path(cargo_json_stdout: &str) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::{
-        Command, Duration, OrchestratorEvent, RESOLVE_RETRY_DELAY, RebuildTimings,
-        apply_dev_incremental_env, env_flag_on, mpsc, schedule_resolve_retry,
+        BuildAccel, Command, Duration, OrchestratorEvent, RESOLVE_RETRY_DELAY, RebuildTimings,
+        apply_build_accel_env, choose_build_accel, dir_has_dep_rlib, env_flag_on, mpsc,
+        schedule_resolve_retry,
     };
     use std::ffi::OsStr;
+    use std::path::PathBuf;
 
     /// Collect a `Command`'s env overrides as owned strings, resolving the
     /// override VALUE (`None` means "remove from the child env"). Lets a test
@@ -2029,40 +2106,59 @@ mod tests {
         env.iter().find(|(k, _)| k == key).map(|(_, v)| v)
     }
 
-    /// The default watch path (opt-out off) requests incremental codegen AND
-    /// clears both rustc wrapper hooks in the child env, so a machine-level
-    /// `rustc-wrapper = "sccache"` (which forces non-incremental) cannot defeat
-    /// the incremental build. The clear is an EMPTY override, not a removal —
-    /// cargo reads the wrapper from its resolved config, so only an empty value
-    /// in the child env actually disables it.
+    /// The warm path requests incremental codegen AND clears both rustc wrapper
+    /// hooks in the child env, so a machine-level `rustc-wrapper = "sccache"`
+    /// (which forces non-incremental) cannot defeat the incremental build. The
+    /// clear is an EMPTY override, not a removal — cargo reads the wrapper from
+    /// its resolved config, so only an empty value in the child env disables it.
     #[test]
-    fn dev_incremental_env_enables_incremental_and_clears_wrapper() {
+    fn warm_accel_enables_incremental_and_clears_wrapper() {
         let mut cmd = Command::new(OsStr::new("cargo"));
-        apply_dev_incremental_env(&mut cmd, false);
+        apply_build_accel_env(&mut cmd, &BuildAccel::WarmIncremental);
         let env = env_overrides(&cmd);
         assert_eq!(
             override_for(&env, "CARGO_INCREMENTAL"),
             Some(&Some("1".to_owned())),
-            "watch must request incremental codegen"
+            "the warm path must request incremental codegen"
         );
         assert_eq!(
             override_for(&env, "RUSTC_WRAPPER"),
             Some(&Some(String::new())),
-            "watch must clear RUSTC_WRAPPER to an empty value (disables sccache)"
+            "the warm path must clear RUSTC_WRAPPER to an empty value (disables sccache)"
         );
         assert_eq!(
             override_for(&env, "RUSTC_WORKSPACE_WRAPPER"),
             Some(&Some(String::new())),
-            "watch must clear RUSTC_WORKSPACE_WRAPPER too"
+            "the warm path must clear RUSTC_WORKSPACE_WRAPPER too"
+        );
+    }
+
+    /// The cold path wires the `sccache` wrapper for a fast one-time dependency
+    /// compile and turns incremental OFF (the two are mutually exclusive).
+    #[test]
+    fn cold_accel_wires_sccache_and_disables_incremental() {
+        let sccache = PathBuf::from("/usr/bin/sccache");
+        let mut cmd = Command::new(OsStr::new("cargo"));
+        apply_build_accel_env(&mut cmd, &BuildAccel::ColdSccache(sccache.clone()));
+        let env = env_overrides(&cmd);
+        assert_eq!(
+            override_for(&env, "CARGO_INCREMENTAL"),
+            Some(&Some("0".to_owned())),
+            "the cold path must disable incremental (sccache cannot cache it)"
+        );
+        assert_eq!(
+            override_for(&env, "RUSTC_WRAPPER"),
+            Some(&Some(sccache.to_string_lossy().into_owned())),
+            "the cold path must wire the sccache wrapper explicitly"
         );
     }
 
     /// With the opt-out on, the watch build inherits the machine's normal build
     /// configuration: no incremental request, no wrapper override.
     #[test]
-    fn dev_incremental_env_opt_out_leaves_env_untouched() {
+    fn machine_default_accel_leaves_env_untouched() {
         let mut cmd = Command::new(OsStr::new("cargo"));
-        apply_dev_incremental_env(&mut cmd, true);
+        apply_build_accel_env(&mut cmd, &BuildAccel::MachineDefault);
         let env = env_overrides(&cmd);
         assert!(
             override_for(&env, "CARGO_INCREMENTAL").is_none(),
@@ -2072,6 +2168,46 @@ mod tests {
             override_for(&env, "RUSTC_WRAPPER").is_none(),
             "opt-out must not touch the rustc wrapper"
         );
+    }
+
+    /// The opt-out short-circuits to `MachineDefault` regardless of warmth, so a
+    /// user who opts out always gets the machine's normal build configuration.
+    #[test]
+    fn opt_out_chooses_machine_default() {
+        let dir = std::env::temp_dir();
+        assert!(
+            matches!(choose_build_accel(&dir, true), BuildAccel::MachineDefault),
+            "opt-out must choose MachineDefault"
+        );
+    }
+
+    /// Warmth detection over a resolved target directory: empty reads cold, a
+    /// `debug/deps` holding an `.rlib` reads warm. Drives the cold-sccache →
+    /// warm-incremental transition across a session. Tests the ambient-env-free
+    /// core so it is independent of the `CARGO_TARGET_DIR` the test harness sets.
+    #[test]
+    fn target_warmth_tracks_dep_rlibs() {
+        let target = std::env::temp_dir().join(format!(
+            "ipe_warmth_{}_{}",
+            std::process::id(),
+            RESOLVE_RETRY_DELAY.as_nanos()
+        ));
+        let deps = target.join("debug").join("deps");
+        // No target yet ⇒ cold.
+        assert!(!dir_has_dep_rlib(&target), "a fresh target must read cold");
+        std::fs::create_dir_all(&deps).expect("create deps dir");
+        // Deps dir exists but holds no rlib ⇒ still cold.
+        assert!(
+            !dir_has_dep_rlib(&target),
+            "an empty deps dir must still read cold"
+        );
+        std::fs::write(deps.join("libfoo-0000.rlib"), b"x").expect("write rlib");
+        // A compiled dependency library is present ⇒ warm.
+        assert!(
+            dir_has_dep_rlib(&target),
+            "a target with a dep rlib must read warm"
+        );
+        let _ = std::fs::remove_dir_all(&target);
     }
 
     /// The env flag reader treats an unset variable as off — the safe default
