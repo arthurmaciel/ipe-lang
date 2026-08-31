@@ -226,6 +226,15 @@ pub static ENV_VARS: &[EnvVar] = &[
         subsystem: Subsystem::Build,
         class: Class::Tunable,
     },
+    EnvVar {
+        name: "IPE_WATCH_TIMING",
+        default: "unset (off)",
+        purpose: "Set to `1` or `true` to print a per-phase `ipe watch` rebuild \
+                  breakdown (emit, cargo, restart, reconnect) to stderr. Dev-loop \
+                  instrumentation; has no effect outside `ipe watch`.",
+        subsystem: Subsystem::Build,
+        class: Class::Tunable,
+    },
     // ── Console ───────────────────────────────────────────────────────────────
     EnvVar {
         name: "IPE_ADMIN_TOKEN",
