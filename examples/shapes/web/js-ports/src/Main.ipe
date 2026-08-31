@@ -1,0 +1,86 @@
+module Main exposing (main)
+
+-- | js-ports — the typed Ipê↔JS seam (`Ipe.Js` ports).
+--
+-- Ports carry imperative effects and out-of-band data that have no place in the
+-- view tree. A port is not a new language construct: outbound is an ordinary
+-- `Cmd msg` (`Js.send`), inbound an ordinary `Sub msg` (`Js.subscribe`). One
+-- discipline governs every value crossing the seam — a concrete-ADT SEAL: a
+-- closed, monomorphic value type checked fail-closed at compile time. A function,
+-- a view value, an open row, or a `Secret` may NEVER cross.
+--
+-- The published surface is deliberately narrow:
+--   • `JsCmd` — the ONE outbound type. Build a value and hand it to `Js.send`.
+--   • The inbound decoder IS the security gate: the browser is untrusted, so
+--     every inbound value runs through the total, bounded seal decoder; a
+--     malformed or mismatched message is DROPPED whole, never a partial value.
+
+
+import Ipe.Tea.Web as Web
+import Ipe.Tea.Web.Cmd as Cmd
+import Ipe.Tea.Web.Sub as Sub
+import Ipe.Ui as Ui
+import Ipe.Js as Js
+import Ipe.Json.Decode as Decode
+import Ipe.String as String
+
+
+-- The ONE outbound published type — the whole outbound surface as a single
+-- auditable closed ADT. A per-effect helper (`chime = Js.send (Chime 1)`) keeps
+-- ergonomics over the one closed type.
+type JsCmd
+    = Chime Int
+
+
+type alias Model =
+    { lastTick : Int }
+
+
+-- The internal Msg is NOT published. The inbound port decodes a narrow value and
+-- folds it in through `Ticked` — the browser never gets to name every transition.
+type Msg
+    = Ring
+    | Ticked Int
+
+
+init : a -> ( Model, Cmd.Cmd Msg )
+init _req =
+    ( { lastTick = 0 }, Cmd.none )
+
+
+update : Msg -> Model -> ( Model, Cmd.Cmd Msg )
+update msg model =
+    case msg of
+        Ring ->
+            -- Outbound: hand a closed `JsCmd` value to the seam.
+            ( model, Js.send (Chime 1) )
+
+        Ticked k ->
+            ( { model | lastTick = k }, Cmd.none )
+
+
+-- Inbound: the decoder is the fail-closed gate. A value that does not decode to
+-- an Int is dropped whole; a decoded Int is folded in as `Ticked`.
+subscriptions : Model -> Sub.Sub Msg
+subscriptions _model =
+    Js.subscribe Decode.int Ticked
+
+
+view : Model -> Element Msg
+view model =
+    Ui.column []
+        [ Ui.button []
+            { onPress = Just Ring, label = Ui.text "Chime" }
+        , Ui.text ("last tick: " ++ String.fromInt model.lastTick)
+        ]
+
+
+main =
+    Web.app
+        { init = init
+        , update = update
+        , view = view
+        , subscriptions = subscriptions
+        , routes = []
+        , notFound = Ring
+        }

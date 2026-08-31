@@ -16,6 +16,8 @@ mod golden_tuple_multiarm_var_scrutinee;
 mod golden_tuple_nested_coerce_gate;
 #[path = "g_tuple/golden_tuple_pattern.rs"]
 mod golden_tuple_pattern;
+#[path = "g_tuple/golden_tuple_refutable_var_scrutinee.rs"]
+mod golden_tuple_refutable_var_scrutinee;
 #[path = "g_tuple/golden_tuple_self_edge.rs"]
 mod golden_tuple_self_edge;
 #[path = "g_tuple/golden_tuple_str_column_var_scrutinee.rs"]

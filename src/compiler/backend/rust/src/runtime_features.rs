@@ -60,6 +60,14 @@ pub enum RuntimeFeature {
     WebsocketClient,
     /// `email` — the SMTP transport (`uses_email`).
     Email,
+    /// `locale` — the ICU4X BCP-47 parse + locale-aware case mapping
+    /// (`icu_casemap` + `icu_locale_core`). Selected by `uses_locale`: any
+    /// `Locale.fromTag` / `Locale.toTag` / `String.toUpperIn` /
+    /// `String.toLowerIn` kernel call, or any type position that names
+    /// `IrType::Locale`. Without this feature `locale_from_tag` always returns
+    /// `Nothing` — the locale module compiles but the ICU4X parse body is gated
+    /// behind `#[cfg(feature = "locale")]`.
+    Locale,
     /// `http_client` — the reqwest outbound HTTP stack (`reaches_http_client()`:
     /// an HTTP kernel or the email surface, whose `email.rs` calls
     /// `http_client::ssrf_apply`). `http_stream.rs` (which calls
@@ -183,6 +191,7 @@ impl RuntimeFeature {
             Self::Webview => "webview",
             Self::WebsocketClient => "websocket_client",
             Self::Email => "email",
+            Self::Locale => "locale",
             Self::HttpClient => "http_client",
             Self::Url => "url",
             Self::Config => "config",
@@ -229,6 +238,7 @@ impl RuntimeFeatureSet {
 /// `assemble_project_files`, keyed to the SAME predicate — so the SSOT and the
 /// emitter can never disagree once the emit path reads this (the closure SEAL
 /// enforces that the referenced modules are covered).
+#[allow(clippy::too_many_lines)] // one insert per surface feature — the table is the point
 pub fn runtime_features(ctx: &EmitCtx) -> RuntimeFeatureSet {
     // Browser-WASM: the feature set is EXACTLY the `wasm-client` floor — nothing
     // unioned. This is the genuine wasm-specific divergence from the native
@@ -313,6 +323,11 @@ pub fn runtime_features(ctx: &EmitCtx) -> RuntimeFeatureSet {
     }
     if ctx.uses_email {
         set.insert(RuntimeFeature::Email);
+    }
+    // Locale: ICU4X BCP-47 parse + locale-aware case mapping. Without this
+    // feature `locale_from_tag` compiles but always returns `Nothing`.
+    if ctx.uses_locale {
+        set.insert(RuntimeFeature::Locale);
     }
 
     // Outbound HTTP client (reqwest): an HTTP kernel (`uses_http`) or the email
@@ -504,6 +519,7 @@ mod tests {
             uses_principal: false,
             uses_websocket: false,
             uses_email: false,
+            uses_locale: false,
             uses_time: false,
             uses_env_public: false,
             uses_http: false,

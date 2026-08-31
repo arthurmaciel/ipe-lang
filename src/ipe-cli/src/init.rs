@@ -14,8 +14,7 @@ use std::fmt::Write as _;
 use std::io::{IsTerminal as _, Write as _};
 use std::path::{Path, PathBuf};
 
-use crate::CliError;
-use crate::style;
+use crate::{CliError, health, style};
 
 /// `src/Main.ipe` — the working counter. No substitution: this is a complete
 /// program, byte-identical for every scaffolded project.
@@ -94,7 +93,16 @@ pub fn run_init(rest: &[String]) -> Result<(), CliError> {
     let fresh = is_fresh_target(&target_dir)?;
     if fresh || force {
         scaffold(&target_dir, &files)?;
-        print_next_steps(target, &project_name);
+        let interactive = should_offer_health_check(
+            std::io::stdin().is_terminal() && std::io::stdout().is_terminal(),
+            force,
+        );
+        print_next_steps(target, &project_name, interactive);
+        if interactive && prompt_yes_no("Verify your toolchain now?", true) {
+            // Ignore a critical-check exit from health inline: the scaffold
+            // succeeded; a missing Rust toolchain is shown by the report.
+            let _ = health::run_health_inline();
+        }
     } else {
         reconcile_existing(&target_dir, &files)?;
     }
@@ -283,13 +291,29 @@ fn write_file(path: &Path, contents: &str) -> Result<(), CliError> {
     })
 }
 
+/// Whether to offer the interactive `ipe health` check after scaffolding.
+///
+/// The offer appears only when the user is sitting at a terminal and did not
+/// request a non-interactive `--force` run. Non-TTY and forced runs print the
+/// static health tip instead.
+const fn should_offer_health_check(is_tty: bool, force: bool) -> bool {
+    is_tty && !force
+}
+
 /// Print the friendly next-steps message. When scaffolding in place (`.`), the
-/// `cd` step is omitted.
-fn print_next_steps(target_arg: &str, project_name: &str) {
+/// `cd` step is omitted. `interactive` controls whether the static `ipe health`
+/// tip is included: an interactive run replaces it with a live prompt, so the
+/// tip is omitted to avoid redundancy.
+fn print_next_steps(target_arg: &str, project_name: &str, interactive: bool) {
     let run_cmd = if target_arg == "." {
         "    ipe run".to_owned()
     } else {
         format!("    cd {target_arg} && ipe run")
+    };
+    let health_tip = if interactive {
+        String::new()
+    } else {
+        "\nTip: run  ipe health  to tune your toolchain for faster builds.\n".to_owned()
     };
     let body = format!(
         "Created Ipê project `{project_name}`.\n\
@@ -297,9 +321,8 @@ fn print_next_steps(target_arg: &str, project_name: &str) {
          Next steps:\n\
          {run_cmd}\n\
          \n\
-         Then open http://localhost:8000 and click the counter buttons.\n\
-         \n\
-         Tip: run  ipe health  to tune your toolchain for faster builds.\n"
+         Then open http://localhost:8000 and click the counter buttons.\
+         {health_tip}"
     );
     print!("{}", style::frame(&style::gutter(&body)));
 }
@@ -343,5 +366,26 @@ mod tests {
             !files.iter().any(|f| f.rel == Path::new("ipe.toml")),
             "init must not scaffold a legacy ipe.toml"
         );
+    }
+
+    // --- should_offer_health_check ---
+
+    #[test]
+    fn health_offer_requires_tty() {
+        // Non-TTY: never prompt, regardless of force.
+        assert!(!should_offer_health_check(false, false));
+        assert!(!should_offer_health_check(false, true));
+    }
+
+    #[test]
+    fn health_offer_suppressed_by_force() {
+        // --force is a non-interactive mode: no prompt even on a TTY.
+        assert!(!should_offer_health_check(true, true));
+    }
+
+    #[test]
+    fn health_offer_on_interactive_non_forced() {
+        // TTY + no --force: the one case that prompts.
+        assert!(should_offer_health_check(true, false));
     }
 }

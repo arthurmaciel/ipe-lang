@@ -1,0 +1,81 @@
+module Main exposing (main)
+
+import Ipe.Bitwise as Bitwise
+import Ipe.String as String
+import Ipe.Io as Io
+
+
+-- A permission set packed into the low bits of one `Int`. Each capability is a
+-- single-bit mask; a set of capabilities is their bitwise OR. `Bitwise` treats
+-- an `Int` as a fixed-width bit vector — the operations are total (no failure,
+-- no allocation) and read the same as the boolean algebra behind them.
+
+
+read : Int
+read =
+    Bitwise.shiftLeftBy 0 1
+
+
+write : Int
+write =
+    Bitwise.shiftLeftBy 1 1
+
+
+execute : Int
+execute =
+    Bitwise.shiftLeftBy 2 1
+
+
+-- Combine capabilities with OR: each mask sets its own bit, and OR unions them.
+grant : Int -> Int -> Int
+grant a b =
+    Bitwise.or a b
+
+
+-- Test membership with AND: the result is non-zero exactly when `flags` has
+-- every bit of `mask` set.
+has : Int -> Int -> Bool
+has mask flags =
+    Bitwise.and flags mask == mask
+
+
+-- Clear a capability: AND with the complement of its mask leaves every other
+-- bit untouched.
+revoke : Int -> Int -> Int
+revoke mask flags =
+    Bitwise.and flags (Bitwise.complement mask)
+
+
+describe : Int -> String
+describe flags =
+    String.join " "
+        [ label "read" (has read flags)
+        , label "write" (has write flags)
+        , label "exec" (has execute flags)
+        ]
+
+
+label : String -> Bool -> String
+label name on =
+    if on then
+        name
+
+    else
+        "-"
+
+
+main =
+    let
+        rw =
+            grant read write
+
+        rwx =
+            grant rw execute
+
+        dropped =
+            revoke write rwx
+    in
+    do
+        Io.println ("read|write   -> " ++ describe rw)
+        Io.println ("read|write|x -> " ++ describe rwx)
+        Io.println ("revoke write -> " ++ describe dropped)

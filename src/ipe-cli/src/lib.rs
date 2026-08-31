@@ -36,6 +36,7 @@ pub mod io_bounded;
 pub mod lockfile;
 pub mod login;
 mod lsp;
+pub mod net;
 pub mod package_manifest;
 pub mod pkg;
 pub mod progress;
@@ -48,6 +49,7 @@ pub mod scratch;
 pub mod style;
 pub mod toolchain;
 pub mod unsafe_ack;
+pub mod version_check;
 /// The embedded Ipê standard-library source now lives in the dependency-free
 /// [`ipe_stdlib`] leaf crate so the WebAssembly frontend can share one copy.
 /// Re-exported here so `crate::stdlib::…` call sites resolve unchanged.

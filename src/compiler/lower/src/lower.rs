@@ -2519,6 +2519,38 @@ fn ir_type_mentions_decimal(ty: &IrType) -> bool {
     })
 }
 
+/// `true` when `ty` mentions any `Ipe.Email` runtime type (`EmailAddress`,
+/// `EmailMessage`, `EmailAttachment`, `EmailSesConfig`, `EmailSmtpConfig`, or
+/// `EmailProvider`) anywhere in its structure. These types are defined in
+/// `email.rs`, which the emitter appends to `ipe_runtime/mod.rs` only when
+/// `uses_email` is set. A program that names any of them in a signature, record
+/// field, or enum payload — without calling `Email.send` or any `EmailAddress`
+/// kernel — still emits a reference the module's `pub use email::*` glob must
+/// satisfy. Mirrors [`ir_type_mentions_secret`].
+fn ir_type_mentions_email(ty: &IrType) -> bool {
+    ir_type_mentions(ty, &|t| {
+        matches!(
+            t,
+            IrType::EmailAddress
+                | IrType::EmailMessage
+                | IrType::EmailAttachment
+                | IrType::EmailSesConfig
+                | IrType::EmailSmtpConfig
+                | IrType::EmailProvider
+        )
+    })
+}
+
+/// `true` when `ty` mentions the `Ipe.Locale` opaque type (`IrType::Locale`,
+/// rendered `ipe_runtime::locale::Locale`). The `locale.rs` module is not
+/// declared in the base `mod.rs` template; a program that names `Locale` in
+/// any emittable type position emits a reference resolved only when the module
+/// is declared and the `locale` Cargo feature is enabled. Mirrors
+/// [`ir_type_mentions_secret`].
+fn ir_type_mentions_locale(ty: &IrType) -> bool {
+    ir_type_mentions(ty, &|t| matches!(t, IrType::Locale))
+}
+
 /// `true` when `ty` mentions `Json` (`IrType::Json`, rendered `JsonVal`) or a
 /// `Decoder<T>` (`IrType::Decoder`, rendered `Decoder<…>`) anywhere in its
 /// structure — the two types the fixed prelude aliases against the `json` runtime
@@ -10534,8 +10566,13 @@ struct KernelUsage {
     /// feature and the `chrono-tz` dependency (the IANA-zone calendar surface).
     /// `chrono` core is gated by `time-core`/`log`. `Time.every` is TEA, tracked by `tea`.
     time: bool,
-    /// The `Ipe.Email` `Email.send` kernel.
+    /// Any `Ipe.Email` kernel (`Email.send`, `EmailAddress.parse`,
+    /// `EmailAddress.toString`) — gates the `email` runtime module.
     email: bool,
+    /// Any `Ipe.Locale` kernel (`Locale.fromTag`, `Locale.toTag`,
+    /// `String.toUpperIn`, `String.toLowerIn`) — gates the `locale` runtime
+    /// module and the `locale` Cargo feature (`icu_casemap`/`icu_locale_core`).
+    locale: bool,
     /// The `Ipe.Env` `Env.public` kernel — gates emitting the per-project
     /// `env_public.rs` (built from `package.ipe`'s `[wasm] publicEnv` allowlist).
     env_public: bool,
@@ -10610,6 +10647,7 @@ impl KernelUsage {
             && self.webview
             && self.websocket
             && self.email
+            && self.locale
             && self.time
             && self.env_public
             && self.debug
@@ -10657,7 +10695,17 @@ impl KernelUsage {
         self.console |= k.is_console();
         self.webview |= k.is_webview();
         self.websocket |= k.is_websocket_client();
-        self.email |= matches!(k, KernelFn::EmailSend);
+        self.email |= matches!(
+            k,
+            KernelFn::EmailSend | KernelFn::EmailAddressParse | KernelFn::EmailAddressToString
+        );
+        self.locale |= matches!(
+            k,
+            KernelFn::LocaleFromTag
+                | KernelFn::LocaleToTag
+                | KernelFn::StringToUpperIn
+                | KernelFn::StringToLowerIn
+        );
         self.time |= k.is_time();
         self.env_public |= matches!(k, KernelFn::EnvPublic);
         self.debug |= k.is_dev_only();
@@ -12211,6 +12259,20 @@ pub struct Lowerer<'a> {
     /// Monotonic cursor into [`Self::nested_strlit_binders`], mirroring
     /// [`Self::param_cursor`]'s shape exactly.
     nested_strlit_cursor: Cell<usize>,
+    /// Pre-minted, collision-free element binders for the tuple-elem-rebind
+    /// synthesis — a multi-arm `case` on a NON-literal tuple scrutinee whose
+    /// arms use list / cons column patterns needs a synthesised literal-tuple
+    /// scrutinee so the coerced-column backend path can emit `.as_slice()`
+    /// coercions. The lowerer binds each tuple element to a fresh temp and
+    /// rewrites the match scrutinee to `( __telem_0, __telem_1, … )`. Sized
+    /// by [`count_tuple_elem_rebind_sites`] (an upper bound: the sum of
+    /// arities of every qualifying `case` in the module) and handed out through
+    /// [`Self::tuple_elem_cursor`] as a GLOBALLY-unique supply, mirroring
+    /// [`Self::param_binders`].
+    tuple_elem_binders: Vec<Symbol>,
+    /// Monotonic cursor into [`Self::tuple_elem_binders`], mirroring
+    /// [`Self::param_cursor`]'s shape exactly.
+    tuple_elem_cursor: Cell<usize>,
     /// Home module path of the def currently being lowered.  Set at the start of
     /// each [`Self::lower_def`] call; read by [`Self::region_ty`] to key the
     /// region map as `(home, span)` — matching the discriminant the constraint
@@ -13147,6 +13209,95 @@ pub fn count_nested_strlit_payload_sites(m: &canon::Module) -> usize {
         .sum()
 }
 
+/// Count the total number of fresh element binders needed for the tuple-elem
+/// rebind synthesis across the whole module.
+///
+/// The synthesis fires on a multi-arm `case` whose scrutinee is NOT a literal
+/// tuple AND whose arms have tuple heads with at least one DIRECT (top-level)
+/// `PList` / `PCons` column — the same shape [`Lowerer::col_needs_literal_tuple_path`]
+/// detects but restricted to direct columns so nested-tuple-column shapes (PROBE G)
+/// remain fail-closed. Each qualifying `case` needs one fresh binder per tuple
+/// position. This count is an upper bound; unused pool entries are never handed out.
+pub fn count_tuple_elem_rebind_sites(m: &canon::Module) -> usize {
+    /// A top-level (non-nested) column directly contains a list / cons leaf.
+    const fn top_col_needs_slice(pat: &canon::Pattern) -> bool {
+        matches!(
+            pat.value,
+            canon::Pattern_::PList(_) | canon::Pattern_::PCons(_, _)
+        )
+    }
+    fn walk_expr(e: &canon::Expr) -> usize {
+        match &e.value {
+            canon::Expr_::Let(bindings, body) => {
+                bindings.iter().map(|b| walk_expr(&b.body)).sum::<usize>() + walk_expr(body)
+            }
+            canon::Expr_::Case(scrut, branches) => {
+                let inner: usize =
+                    walk_expr(scrut) + branches.iter().map(|b| walk_expr(&b.body)).sum::<usize>();
+                // Only fire for non-literal-tuple scrutinees.
+                if matches!(scrut.value, canon::Expr_::Tuple(_)) {
+                    return inner;
+                }
+                // Find the tuple arity from the first tuple-head arm.
+                let arity = branches.iter().find_map(|br| match &br.pat.value {
+                    canon::Pattern_::PTuple(cols) => Some(cols.len()),
+                    _ => None,
+                });
+                let Some(arity) = arity else {
+                    return inner;
+                };
+                // Check whether any arm has a direct list / cons column.
+                let needs = branches.iter().any(|br| {
+                    let canon::Pattern_::PTuple(cols) = &br.pat.value else {
+                        return false;
+                    };
+                    cols.iter().any(top_col_needs_slice)
+                });
+                if needs { inner + arity } else { inner }
+            }
+            canon::Expr_::Lambda(_, body) => walk_expr(body),
+            canon::Expr_::Call(callee, args) => {
+                walk_expr(callee) + args.iter().map(walk_expr).sum::<usize>()
+            }
+            canon::Expr_::ForeignCall { args, .. } => args.iter().map(walk_expr).sum::<usize>(),
+            canon::Expr_::Binop { lhs, rhs, .. } => walk_expr(lhs) + walk_expr(rhs),
+            canon::Expr_::If(branches, else_expr) => {
+                branches
+                    .iter()
+                    .map(|(c, b)| walk_expr(c) + walk_expr(b))
+                    .sum::<usize>()
+                    + walk_expr(else_expr)
+            }
+            canon::Expr_::Tuple(elems) | canon::Expr_::List(elems) => {
+                elems.iter().map(walk_expr).sum()
+            }
+            canon::Expr_::Cons(head, tail) => walk_expr(head) + walk_expr(tail),
+            canon::Expr_::Record(fields) => fields.iter().map(|(_, v)| walk_expr(v)).sum(),
+            canon::Expr_::Access(record, _) => walk_expr(record),
+            canon::Expr_::Update(base, fields) => {
+                walk_expr(base) + fields.iter().map(|(_, v)| walk_expr(v)).sum::<usize>()
+            }
+            canon::Expr_::VarLocal(_)
+            | canon::Expr_::VarTopLevel { .. }
+            | canon::Expr_::VarKernel { .. }
+            | canon::Expr_::VarCtor { .. }
+            | canon::Expr_::Int(_)
+            | canon::Expr_::Float(_)
+            | canon::Expr_::Str(_)
+            | canon::Expr_::PathLit(_)
+            | canon::Expr_::CustomElementCtor(_)
+            | canon::Expr_::Char(_)
+            | canon::Expr_::Unit => 0,
+        }
+    }
+    m.defs
+        .iter()
+        .map(|d| match d {
+            canon::Def::Typed { body, .. } | canon::Def::Untyped { body, .. } => walk_expr(body),
+        })
+        .sum()
+}
+
 /// Every pre-minted, collision-free synthetic-symbol pool [`Lowerer::new`]
 /// needs — bundled into one argument so the constructor stays under
 /// clippy's arg-count ceiling. Each field is documented at its matching
@@ -13161,6 +13312,10 @@ pub struct SymbolPools {
     pub destructure_thunk_binders: Vec<Symbol>,
     pub nested_cons_binders: Vec<Symbol>,
     pub nested_strlit_binders: Vec<Symbol>,
+    /// One fresh symbol per element position in every synthesised literal-tuple
+    /// scrutinee — see [`count_tuple_elem_rebind_sites`] and
+    /// [`Lowerer::tuple_elem_binders`].
+    pub tuple_elem_binders: Vec<Symbol>,
 }
 
 /// `(params, prologue, ret, any_syms_minted, row_params)` —
@@ -13201,6 +13356,7 @@ impl<'a> Lowerer<'a> {
             destructure_thunk_binders,
             nested_cons_binders,
             nested_strlit_binders,
+            tuple_elem_binders,
         } = pools;
         let mut func_ids = BTreeMap::new();
         for (idx, def) in m.defs.iter().enumerate() {
@@ -13447,6 +13603,8 @@ impl<'a> Lowerer<'a> {
             nested_cons_cursor: Cell::new(0),
             nested_strlit_binders,
             nested_strlit_cursor: Cell::new(0),
+            tuple_elem_binders,
+            tuple_elem_cursor: Cell::new(0),
             current_home: std::cell::RefCell::new(Vec::new()),
             current_poly_tvars: std::cell::RefCell::new(BTreeMap::new()),
             fn_is_async: Cell::new(false),
@@ -13743,6 +13901,22 @@ impl<'a> Lowerer<'a> {
             )
         })?;
         self.nested_strlit_cursor.set(i + 1);
+        Ok(sym)
+    }
+
+    /// Hand out the next globally-unique tuple-element rebind binder from
+    /// [`Self::tuple_elem_binders`]. Mirrors [`Self::fresh_nested_cons_binder`]
+    /// exactly; sized by [`count_tuple_elem_rebind_sites`] (an upper bound),
+    /// so an overrun is an internal invariant violation, never an index panic.
+    fn fresh_tuple_elem_binder(&self) -> DResult<Symbol> {
+        let i = self.tuple_elem_cursor.get();
+        let sym = *self.tuple_elem_binders.get(i).ok_or_else(|| {
+            bug(
+                "ipe_lower::fresh_tuple_elem_binder",
+                "tuple-element rebind binder pool exhausted",
+            )
+        })?;
+        self.tuple_elem_cursor.set(i + 1);
         Ok(sym)
     }
 
@@ -15915,10 +16089,26 @@ impl<'a> Lowerer<'a> {
         // principal;` to the emitted `ipe_runtime/mod.rs` so the opaque
         // `Principal` type + `principal_subject` accessor resolve.
         let uses_principal = kernel_usage.principal;
-        // detect `Ipe.Email` `Email.send` usage — the backend uses this flag to
-        // append `pub mod email; pub use email::*;` to the emitted
-        // `ipe_runtime/mod.rs` and to add the `lettre` dependency.
-        let uses_email = kernel_usage.email;
+        // detect `Ipe.Email` usage — any `Email.send` / `EmailAddress.parse` /
+        // `EmailAddress.toString` kernel call, OR any emittable type position that
+        // mentions an `Ipe.Email` runtime type (`EmailAddress`, `EmailMessage`,
+        // `EmailProvider`, etc.). The backend uses this flag to append `pub mod
+        // email; pub use email::*;` to the emitted `ipe_runtime/mod.rs` and to add
+        // the `lettre` dependency. The type-mention guard is required: a program
+        // that names `EmailAddress` in a signature without calling any email kernel
+        // still emits a `ipe_runtime::email::EmailAddress` reference resolved only
+        // through the `pub use email::*` glob — dropping the module declaration
+        // leaves that reference dangling (E0433 — a SEAL breach).
+        let uses_email = kernel_usage.email
+            || program_type_mentions(&funcs, &records, &types_ir, &ir_type_mentions_email);
+        // detect `Ipe.Locale` usage — any `Locale.fromTag` / `Locale.toTag` /
+        // `String.toUpperIn` / `String.toLowerIn` kernel call, OR any emittable
+        // type position that mentions `IrType::Locale`. The backend uses this flag
+        // to append `pub mod locale; pub use locale::*;` and to enable the `locale`
+        // Cargo feature (`icu_casemap` + `icu_locale_core`). Without the feature,
+        // `locale_from_tag` compiles but always returns `Nothing`.
+        let uses_locale = kernel_usage.locale
+            || program_type_mentions(&funcs, &records, &types_ir, &ir_type_mentions_locale);
         // detect non-TEA `Ipe.Time` kernel usage — the backend enables the
         // `time` Cargo feature and adds the `chrono-tz` dependency (the IANA-zone
         // calendar surface); a program that reaches no Time kernel drops the
@@ -15987,6 +16177,7 @@ impl<'a> Lowerer<'a> {
             uses_principal,
             uses_websocket,
             uses_email,
+            uses_locale,
             uses_time,
             uses_env_public,
             uses_debug,
@@ -27566,6 +27757,112 @@ impl<'a> Lowerer<'a> {
         Ok(true)
     }
 
+    /// When a multi-arm `case` on a NON-literal tuple scrutinee has one or more
+    /// DIRECT (top-level) list / cons column patterns, the coerced-column path
+    /// is required but the scrutinee has no individual element expressions to
+    /// apply `.as_slice()` to. This method determines whether the synthesised
+    /// literal-tuple path applies and is sound.
+    ///
+    /// Returns `Some(arity)` when:
+    /// * the scrutinee is NOT a literal tuple,
+    /// * every arm head is a `PTuple` of `arity` OR an irrefutable `_` wildcard,
+    /// * at least one arm has a DIRECT (non-nested-tuple) `PList` / `PCons`
+    ///   column (the shape the synthesis targets),
+    /// * NO arm has a `PTuple` column (those require nested coercion, which is
+    ///   unsupported on the synthesised path — they stay fail-closed as PROBE G),
+    /// * and every list-binding column has a concrete (non-generic) element type
+    ///   (polymorphism gate, same as the literal-tuple path's per-column check,
+    ///   using the arm pattern's own span to look up the list type).
+    ///
+    /// Returns `None` when synthesis does not apply. Returns `Err` only on
+    /// the polymorphism gate (IPE-L0102), so the caller can surface it.
+    fn needs_tuple_elem_synthesis(
+        &self,
+        scrut: &canon::Expr,
+        branches: &[canon::CaseBranch],
+    ) -> DResult<Option<usize>> {
+        // Only for non-literal-tuple scrutinees.
+        if matches!(scrut.value, canon::Expr_::Tuple(_)) {
+            return Ok(None);
+        }
+        // Find the tuple arity from the first PTuple arm.
+        let arity = branches.iter().find_map(|br| match &br.pat.value {
+            canon::Pattern_::PTuple(cols) => Some(cols.len()),
+            _ => None,
+        });
+        let Some(arity) = arity else {
+            return Ok(None);
+        };
+        // All arms must be PTuple(arity) or PAnything.
+        let arms_ok = branches.iter().all(|br| match &br.pat.value {
+            canon::Pattern_::PTuple(cols) => cols.len() == arity,
+            canon::Pattern_::PAnything => true,
+            _ => false,
+        });
+        if !arms_ok {
+            return Ok(None);
+        }
+        // At least one arm must have a DIRECT (top-level) list / cons column.
+        let has_direct_list_col = branches.iter().any(|br| {
+            let canon::Pattern_::PTuple(cols) = &br.pat.value else {
+                return false;
+            };
+            cols.iter().any(|c| {
+                matches!(
+                    c.value,
+                    canon::Pattern_::PList(_) | canon::Pattern_::PCons(_, _)
+                )
+            })
+        });
+        if !has_direct_list_col {
+            return Ok(None);
+        }
+        // No arm may have a PTuple column: nested-tuple columns need their own
+        // coercion (unsupported — PROBE G stays fail-closed).
+        let has_nested_tuple_col = branches.iter().any(|br| {
+            let canon::Pattern_::PTuple(cols) = &br.pat.value else {
+                return false;
+            };
+            cols.iter()
+                .any(|c| matches!(c.value, canon::Pattern_::PTuple(_)))
+        });
+        if has_nested_tuple_col {
+            return Ok(None);
+        }
+        // Polymorphism gate: a column bound by a list / cons sub-pattern whose
+        // element type resolves to `IrType::Generic` cannot emit a `.clone()` /
+        // `.to_vec()` rebind soundly at the arm — reject it (IPE-L0102). Use the
+        // FIRST arm that has a list / cons pattern at each column; its pattern
+        // span carries the `Ty::List(elem)` type the checker recorded. The
+        // `col_binds` check matches the literal-tuple gate's `pat_binds_canon_value`
+        // condition: a purely structural list (`[] -> … ; _ :: _ -> …`) clones
+        // nothing and is exempt.
+        for col in 0..arity {
+            let first_list_col_span = branches.iter().find_map(|br| {
+                let canon::Pattern_::PTuple(cols) = &br.pat.value else {
+                    return None;
+                };
+                cols.get(col).and_then(|c| {
+                    if matches!(
+                        c.value,
+                        canon::Pattern_::PList(_) | canon::Pattern_::PCons(_, _)
+                    ) && Self::pat_binds_canon_value(&c.value)
+                    {
+                        Some(c.span)
+                    } else {
+                        None
+                    }
+                })
+            });
+            if let Some(span) = first_list_col_span
+                && matches!(self.list_elem_ir(span)?, IrType::Generic(_))
+            {
+                return Err(unsupported(span, Feature::Polymorphism));
+            }
+        }
+        Ok(Some(arity))
+    }
+
     /// Does this tuple COLUMN (or any structural sub-pattern nested inside it)
     /// contain a leaf — a list literal (`PList`) or a cons (`PCons`) — that ONLY
     /// the coerced-column (literal-tuple) path can lower soundly, so a variable
@@ -28466,6 +28763,75 @@ impl<'a> Lowerer<'a> {
             // other product shape (a record head, a non-literal-tuple scrutinee,
             // a whole-value catch-all binder) stays the tuple-pattern gap.
             if !self.tuple_case_supported(scrut, branches)? {
+                // A non-literal tuple scrutinee with DIRECT (top-level) list /
+                // cons columns cannot use the by-value whole path (which applies
+                // no `.as_slice()` coercion) but CAN be handled via synthesis:
+                // destructure the scrutinee into fresh element temps and build a
+                // synthetic literal-tuple scrutinee so the coerced-column backend
+                // path gets the element expressions it needs. The outer
+                // `Expr::Destructure` binds the original scrutinee once (no
+                // re-evaluation); the inner `Expr::Match` uses the synthesised
+                // `Expr::Tuple([Var(s0), Var(s1), …])` as its scrutinee, which
+                // the backend sees as a literal tuple and applies per-column
+                // `.as_slice()` coercions on. Shapes that do not satisfy the
+                // synthesis conditions (nested-tuple columns, record heads,
+                // irrefutable whole-value binders) remain fail-closed.
+                if let Some(arity) = self.needs_tuple_elem_synthesis(scrut, branches)? {
+                    // Mint one fresh binder per element position.
+                    let elem_syms: Vec<Symbol> = (0..arity)
+                        .map(|_| self.fresh_tuple_elem_binder())
+                        .collect::<DResult<_>>()?;
+                    // Pat::Tuple binder to destructure the scrutinee.
+                    let binder = Pat::Tuple(elem_syms.iter().copied().map(Pat::Var).collect());
+                    // Synthesised literal-tuple scrutinee for the inner match.
+                    let synth_scrut =
+                        Expr::Tuple(elem_syms.iter().copied().map(Expr::Var).collect());
+                    // Lower arms and build the match with the synthetic scrutinee.
+                    // Fall-through to the shared arm-lowering code below by setting
+                    // `synth_scrut_for_match` and letting the code path continue.
+                    // To avoid duplicating the 80-line arm-lowering block, we use
+                    // a local early-return after building the match inline here.
+                    let live_end_s = branches
+                        .iter()
+                        .position(|br| br.pat.value.is_irrefutable())
+                        .map_or(branches.len(), |i| i + 1);
+                    let branches_s = branches.get(..live_end_s).unwrap_or(branches);
+                    let arms_s = branches_s
+                        .iter()
+                        .map(|br| {
+                            let arm_pat = self.lower_arm_pat(&br.pat)?;
+                            let arm_syms = collect_arm_pat_pvars(&br.pat.value);
+                            let shared_before = self.shared_fn_reads.borrow().clone();
+                            self.register_shared_fn_arm_binders(scrut, &scrutinee, &br.pat);
+                            let mut arm_body = self
+                                .with_promotable_fn_binders(arm_syms.clone(), || {
+                                    self.lower_expr(&br.body)
+                                })?;
+                            *self.shared_fn_reads.borrow_mut() = shared_before;
+                            for sym in arm_syms {
+                                if let Some(span) = find_first_varlocal_span(sym, &br.body)
+                                    && let Some(ty) = self.region_ty(span)
+                                    && let Ok(ir_ty) = self.ir_type_from_ty(ty, span)
+                                {
+                                    arm_body = self
+                                        .apply_param_move_ownership(sym, &ir_ty, arm_body, span)?;
+                                }
+                            }
+                            Ok(Arm {
+                                pat: arm_pat,
+                                body: arm_body,
+                                guard: None,
+                            })
+                        })
+                        .collect::<DResult<Vec<_>>>()?;
+                    Self::gate_by_value_dispatch_needing_aliases(&arms_s, branches_s)?;
+                    let inner_match = Expr::Match(Match::new_flat(synth_scrut, arms_s)?);
+                    return Ok(Expr::Destructure {
+                        binder,
+                        value: Box::new(scrutinee),
+                        body: Box::new(inner_match),
+                    });
+                }
                 return Err(unsupported(first.pat.span, Feature::TuplePatternMatch));
             }
         }
@@ -29592,6 +29958,7 @@ mod tests {
                 destructure_thunk_binders: vec![],
                 nested_cons_binders: vec![],
                 nested_strlit_binders: vec![],
+                tuple_elem_binders: vec![],
             },
             &builtins,
             "",
@@ -29873,6 +30240,7 @@ mod tests {
                 destructure_thunk_binders: vec![],
                 nested_cons_binders: vec![],
                 nested_strlit_binders: vec![],
+                tuple_elem_binders: vec![],
             },
             &builtins,
             "",
@@ -29993,6 +30361,7 @@ mod tests {
                 destructure_thunk_binders: vec![],
                 nested_cons_binders: vec![],
                 nested_strlit_binders: vec![],
+                tuple_elem_binders: vec![],
             },
             &builtins,
             "",
@@ -31371,6 +31740,7 @@ mod tests {
                 destructure_thunk_binders: vec![],
                 nested_cons_binders: vec![],
                 nested_strlit_binders: vec![],
+                tuple_elem_binders: vec![],
             },
             &builtins,
             "",
@@ -31642,6 +32012,7 @@ mod tests {
                 destructure_thunk_binders: vec![],
                 nested_cons_binders: vec![],
                 nested_strlit_binders: vec![],
+                tuple_elem_binders: vec![],
             },
             &builtins,
             "",

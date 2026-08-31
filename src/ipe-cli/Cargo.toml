@@ -53,6 +53,11 @@ serde_json = "1"
 # `[dependencies]` version requirements in `ipe.toml` are parsed into typed
 # `semver::VersionReq` at manifest-parse time (parse, don't validate).
 semver = "1"
+# `ipe upgrade` / `ipe health` fetch the latest published release tag over HTTPS
+# (`src/net.rs`). A small blocking, pure-Rust client with the same rustls TLS
+# backend the runtime already uses — no `curl` subprocess, and no async runtime
+# pulled into the CLI for a single one-shot GET.
+ureq = { version = "2", default-features = false, features = ["tls"] }
 # The Tier-2 wrapper capability gate reads a wrapper crate's `Cargo.toml`
 # dependency tables STRUCTURALLY (parse, don't validate): a hand-rolled line
 # scan under-refuses on valid-but-unusual TOML (a trailing comment on a header,

@@ -1,0 +1,73 @@
+module Main exposing (main)
+
+import Ipe.Crypto as Crypto exposing (Key)
+import Ipe.String as String
+import Ipe.Io as Io
+import Ipe.Maybe exposing (Maybe(..))
+
+
+-- `Ipe.Crypto` makes key/message role confusion a compile error. Three ideas:
+--   • Hashes (`sha256`, `sha512`, ...) are pure `String -> String` — deterministic
+--     fingerprints, no key involved.
+--   • Every keyed operation requires a typed `Key`, not a bare `String`. You build
+--     a `Key` once, at the boundary, with `keyFromString`; passing a plaintext
+--     message where a `Key` is expected does not type-check, so a message can
+--     never be mistaken for a key.
+--   • Comparing a computed MAC against an expected one uses `constantTimeEqual`,
+--     never `==`: a byte-by-byte early-exit compare would leak, through timing,
+--     how much of the value matched.
+
+
+-- Build the signing key ONCE. `keyFromString` returns `Maybe Key` — an empty key
+-- is `Nothing` — so the fallible parse happens here, at the boundary, and every
+-- function downstream holds a real `Key`.
+signingKey : Maybe Key
+signingKey =
+    Crypto.keyFromString "s3cret-signing-key"
+
+
+-- Sign a message: HMAC-SHA-256 with the key, rendered as hex. Takes a `Key`, so
+-- it cannot be called with a bare string.
+sign : Key -> String -> String
+sign key message =
+    Crypto.macToHex (Crypto.hmacSha256 key message)
+
+
+-- Verify a presented signature against the freshly computed one, in constant
+-- time — the presented value is attacker-controlled, so the compare must not
+-- leak a prefix match through timing.
+verify : Key -> String -> String -> Bool
+verify key message presented =
+    Crypto.constantTimeEqual (sign key message) presented
+
+
+main =
+    do
+        Io.println ("sha256(hello): " ++ Crypto.sha256 "hello")
+
+        case signingKey of
+
+            Just key ->
+                let
+                    message =
+                        "transfer:alice->bob:100"
+
+                    signature =
+                        sign key message
+                in
+                do
+                    Io.println ("signature: " ++ signature)
+                    Io.println ("verify (correct): " ++ boolString (verify key message signature))
+                    Io.println ("verify (tampered): " ++ boolString (verify key message "deadbeef"))
+
+            Nothing ->
+                Io.eprintln "empty signing key"
+
+
+boolString : Bool -> String
+boolString b =
+    if b then
+        "accepted"
+
+    else
+        "rejected"
