@@ -1,0 +1,203 @@
+module Main exposing (main)
+
+import Ipe.Error exposing (Error)
+import Ipe.Io as Io
+import Ipe.Json.Decode as Json
+import Ipe.Process as Process
+import Ipe.String as String
+import Ipe.System as System
+import Ipe.Task as Task
+
+
+-- One-command playground setup.
+--
+-- Run from examples/wasm/language-playground/setup:
+--
+--     ipe run
+--
+-- This single program:
+--   1. Probes prerequisites (git, cargo, rustup, wasm-bindgen).
+--   2. Builds the in-browser wasm bundle (ipe-wasm → wasm-bindgen → pkg/).
+--   3. Builds the playground-jail-runner binary.
+--   4. Pre-warms the offline dependency cache so the first POST /run is instant.
+--
+-- After setup completes, start the playground server with:
+--
+--     cd ../server && ipe run
+--
+-- Every step uses a direct argv vector — no shell string interpolation.
+
+main : Task Error ()
+main =
+    setup
+        |> Task.onError reportFailure
+
+
+setup : Task Error ()
+setup =
+    probePrereqs
+        |> Task.andThen (\_ -> repoRoot)
+        |> Task.andThen buildBundle
+        |> Task.andThen buildJailRunner
+        |> Task.andThen prewarm
+        |> Task.andThen done
+
+
+probePrereqs : Task Error ()
+probePrereqs =
+    probeTool "git" "Install git: https://git-scm.com/downloads"
+        |> Task.andThen (\_ -> probeTool "cargo" "cargo ships with the Rust toolchain — install via rustup: https://rustup.rs")
+        |> Task.andThen (\_ -> probeTool "rustup" "Install rustup: https://rustup.rs")
+        |> Task.andThen (\_ -> probeTool "wasm-bindgen" "Install the wasm-bindgen CLI:  cargo install wasm-bindgen-cli --version 0.2.126")
+        |> Task.map (\_ -> ())
+
+
+probeTool : String -> String -> Task Error String
+probeTool tool installHint =
+    Process.run tool [ "--version" ]
+        |> Task.onError (\_ -> missingTool tool installHint)
+
+
+missingTool : String -> String -> Task Error a
+missingTool tool installHint =
+    do
+        Io.eprintln ""
+        Io.eprintln (tool ++ " was not found on your PATH.")
+        Io.eprintln installHint
+        Io.eprintln ("Re-run this script once " ++ tool ++ " is installed.")
+        Task.succeed (System.exit 1)
+
+
+repoRoot : Task Error String
+repoRoot =
+    Process.run "git" [ "rev-parse", "--show-toplevel" ]
+        |> Task.map String.trim
+
+
+playgroundDir : String -> String
+playgroundDir root =
+    root ++ "/examples/wasm/language-playground"
+
+
+addWasmTarget : String -> Task Error String
+addWasmTarget root =
+    Process.run "rustup" [ "target", "add", "wasm32-unknown-unknown" ]
+        |> Task.map (\_ -> root)
+
+
+buildWasmCrate : String -> Task Error String
+buildWasmCrate root =
+    do
+        Io.println "Building ipe-wasm for wasm32-unknown-unknown (release)…"
+        Process.run "cargo"
+            [ "build"
+            , "-p", "ipe-wasm"
+            , "--target", "wasm32-unknown-unknown"
+            , "--release"
+            , "--manifest-path", root ++ "/Cargo.toml"
+            ]
+            |> Task.map (\_ -> root)
+
+
+-- Ask cargo itself for the resolved target dir.  Respects CARGO_TARGET_DIR,
+-- any [build] target-dir in cargo config files, and the workspace default —
+-- the script never guesses.
+wasmPath : String -> Task Error String
+wasmPath root =
+    Process.run "cargo"
+        [ "metadata", "--format-version", "1"
+        , "--manifest-path", root ++ "/Cargo.toml"
+        ]
+        |> Task.andThen
+            (\out ->
+                case Json.decodeString (Json.field "target_directory" Json.string) out of
+                    Ok dir ->
+                        Task.succeed (dir ++ "/wasm32-unknown-unknown/release/ipe_wasm.wasm")
+
+                    Err err ->
+                        Task.fail (Error.unexpected ("could not read cargo metadata: " ++ Error.toString err)))
+
+
+bindGen : String -> Task Error String
+bindGen root =
+    wasmPath root
+        |> Task.andThen
+            (\wasm ->
+                do
+                    Io.println "Generating JS bindings with wasm-bindgen…"
+                    Process.run "wasm-bindgen"
+                        [ "--target", "web"
+                        , "--no-typescript"
+                        , "--out-dir", playgroundDir root ++ "/pkg"
+                        , "--out-name", "ipe_wasm"
+                        , wasm
+                        ]
+                        |> Task.map (\_ -> root))
+
+
+buildBundle : String -> Task Error String
+buildBundle root =
+    addWasmTarget root
+        |> Task.andThen buildWasmCrate
+        |> Task.andThen bindGen
+
+
+-- Ask cargo for the target directory, then build playground-jail-runner there.
+targetDir : String -> Task Error String
+targetDir root =
+    Process.run "cargo"
+        [ "metadata", "--format-version", "1"
+        , "--manifest-path", root ++ "/Cargo.toml"
+        ]
+        |> Task.andThen
+            (\out ->
+                case Json.decodeString (Json.field "target_directory" Json.string) out of
+                    Ok dir ->
+                        Task.succeed dir
+
+                    Err err ->
+                        Task.fail (Error.unexpected ("could not read cargo metadata: " ++ Error.toString err)))
+
+
+buildJailRunner : String -> Task Error String
+buildJailRunner root =
+    do
+        Io.println "Building playground-jail-runner…"
+        Process.run "cargo"
+            [ "build"
+            , "-p", "playground-jail-runner"
+            , "--manifest-path", root ++ "/Cargo.toml"
+            ]
+            |> Task.map (\_ -> root)
+
+
+prewarm : String -> Task Error String
+prewarm root =
+    targetDir root
+        |> Task.andThen
+            (\dir ->
+                do
+                    Io.println "Warming offline dependency cache (jail-runner prewarm)…"
+                    Process.run (dir ++ "/debug/jail-runner") [ "prewarm" ]
+                        |> Task.map (\_ -> root))
+
+
+done : String -> Task Error ()
+done root =
+    do
+        Io.println ""
+        Io.println "Setup complete."
+        Io.println ""
+        Io.println "Start the playground server:"
+        Io.println ("  cd " ++ playgroundDir root ++ "/server && ipe run")
+        Io.println ""
+        Io.println "Then open http://localhost:8000"
+        Task.succeed ()
+
+
+reportFailure : Error -> Task Error ()
+reportFailure err =
+    do
+        Io.eprintln ""
+        Io.eprintln ("Setup failed: " ++ Error.toString err)
+        Task.succeed (System.exit 1)
