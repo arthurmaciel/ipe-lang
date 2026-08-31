@@ -279,6 +279,13 @@ pub enum Fix {
     Install(Install),
     /// Configure the ipe-managed shared build target under `$IPE_HOME`.
     HomeSetup(SharedTargetSetup),
+    /// Run `ipe upgrade` to install the available newer release.
+    RunUpgrade {
+        /// The currently running version.
+        current: String,
+        /// The latest available version.
+        latest: String,
+    },
 }
 
 /// The shared-target setup.
@@ -453,24 +460,55 @@ fn detect() -> Report {
     Report { checks }
 }
 
-/// The running `ipe` version — reported as `Unknown` on purpose.
+/// Map a [`version_check::VersionCheck`] result to a health [`Check`].
 ///
-/// There is no release feed to compare the running binary against, so claiming
-/// "up to date" would be a fabrication. The honest answer names the running
-/// version and states that the up-to-date check is unavailable, with a pointer
-/// to the one shipped self-update command (`ipe upgrade`).
-fn check_ipe_version() -> Check {
-    Check {
-        group: Group::Toolchain,
-        id: "ipe",
-        status: Status::Unknown,
-        detail: format!(
-            "running ipe {} — cannot check for a newer release (no release feed to compare against)",
-            runtime_embed::COMPILER_VERSION
-        ),
-        suggestion: Some("run `ipe upgrade` to re-fetch the latest release installer".to_owned()),
-        fix: None,
+/// The pure conversion the test surface exercises without a network call.
+fn version_check_to_check(vc: &crate::version_check::VersionCheck) -> Check {
+    use crate::version_check::UpgradeAction;
+    let cur = vc.current.to_string();
+    match vc.action() {
+        UpgradeAction::UpToDate => Check {
+            group: Group::Toolchain,
+            id: "ipe",
+            status: Status::Ok,
+            detail: format!("ipe {cur} — up to date"),
+            suggestion: None,
+            fix: None,
+        },
+        UpgradeAction::Unreachable => Check {
+            group: Group::Toolchain,
+            id: "ipe",
+            status: Status::Unknown,
+            detail: format!("ipe {cur} — cannot check for a newer release (offline)"),
+            suggestion: None,
+            fix: None,
+        },
+        UpgradeAction::Available => {
+            let lat = vc
+                .latest
+                .as_ref()
+                .map(semver::Version::to_string)
+                .unwrap_or_default();
+            Check {
+                group: Group::Toolchain,
+                id: "ipe",
+                status: Status::Warn,
+                detail: format!("ipe {cur} — {lat} available"),
+                suggestion: None,
+                fix: Some(Fix::RunUpgrade {
+                    current: cur,
+                    latest: lat,
+                }),
+            }
+        }
     }
+}
+
+/// Compare the running `ipe` to the latest published release.
+///
+/// Calls the release feed; any network or parse failure ⇒ `Status::Unknown`.
+fn check_ipe_version() -> Check {
+    version_check_to_check(&crate::version_check::version_check())
 }
 
 /// `rustc` and `cargo` presence, reusing the toolchain resolver's
@@ -1446,6 +1484,10 @@ fn fix_change(fix: &Fix) -> FixChange {
             change: format!("build.target-dir = {:?}", setup.target_dir.display()),
             file: Some(config_path_label(ConfigTarget::IpeHome)),
         },
+        Fix::RunUpgrade { current, latest } => FixChange {
+            change: format!("run: ipe upgrade  ({current} \u{2192} {latest})"),
+            file: None,
+        },
     }
 }
 
@@ -1491,6 +1533,11 @@ fn apply_one(fix: &Fix) -> Result<String, CliError> {
                 "shared target configured at {}",
                 setup.target_dir.display()
             ))
+        }
+        Fix::RunUpgrade { latest, .. } => {
+            let command = format!("curl -fsSL {} | sh", crate::INSTALL_SH_URL);
+            crate::run_installer(&command)?;
+            Ok(format!("upgraded to {latest}"))
         }
     }
 }
@@ -1856,11 +1903,42 @@ mod tests {
     }
 
     #[test]
-    fn ipe_version_is_reported_unknown() {
-        let check = check_ipe_version();
-        assert_eq!(check.status, Status::Unknown);
-        assert!(check.fix.is_none(), "no fake install hook");
-        assert!(check.detail.contains(runtime_embed::COMPILER_VERSION));
+    fn health_reports_up_to_date_without_a_fix() {
+        let vc = crate::version_check::VersionCheck {
+            current: semver::Version::parse("0.1.72").expect("valid semver"),
+            latest: Some(semver::Version::parse("0.1.72").expect("valid semver")),
+            upgrade_available: false,
+            reached_feed: true,
+        };
+        let c = version_check_to_check(&vc);
+        assert!(matches!(c.status, Status::Ok));
+        assert!(c.fix.is_none());
+    }
+
+    #[test]
+    fn health_offers_a_fix_when_an_upgrade_is_available() {
+        let vc = crate::version_check::VersionCheck {
+            current: semver::Version::parse("0.1.72").expect("valid semver"),
+            latest: Some(semver::Version::parse("0.1.75").expect("valid semver")),
+            upgrade_available: true,
+            reached_feed: true,
+        };
+        let c = version_check_to_check(&vc);
+        assert!(c.fix.is_some());
+        assert!(matches!(c.status, Status::Warn));
+    }
+
+    #[test]
+    fn health_offline_is_unknown_no_fix() {
+        let vc = crate::version_check::VersionCheck {
+            current: semver::Version::parse("0.1.72").expect("valid semver"),
+            latest: None,
+            upgrade_available: false,
+            reached_feed: false,
+        };
+        let c = version_check_to_check(&vc);
+        assert!(matches!(c.status, Status::Unknown));
+        assert!(c.fix.is_none());
     }
 
     #[test]

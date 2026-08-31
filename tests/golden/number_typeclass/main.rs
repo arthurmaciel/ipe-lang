@@ -201,7 +201,7 @@ pub fn main_double<T1: ipe_runtime::basics::IpeWrappingAdd<Output = T1> + Copy +
 }
 pub fn ipe_main() -> IpeTask<()> {
     let _ipe_recursion_guard = crate::recursion_guard();
-    io_println(string_from_int(crate::main_double(21)))
+    io_println(string_from_int(crate::main_double(21i64)))
 }
 
 // Ffi.kernel polyfill — should be unreachable in Rust target;

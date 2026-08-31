@@ -211,7 +211,7 @@ pub fn file_rename(src: ipe_runtime::path::Path, dst: ipe_runtime::path::Path) -
 pub fn ipe_main() -> IpeTask<()> {
     let _ipe_recursion_guard = crate::recursion_guard();
     ({
-        let p = RecXY { x: 2, y: 40 };
+        let p = RecXY { x: 2i64, y: 40i64 };
         io_println(string_from_int(ipe_runtime::math::ipe_int_add(
             (p.clone()).x,
             (p).y,

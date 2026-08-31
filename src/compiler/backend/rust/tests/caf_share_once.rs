@@ -143,7 +143,7 @@ fn nullary_int_caf_is_wrapped_in_a_share_once_cell() -> DResult<()> {
         "CAF body is guarded by a OnceLock cell:\n{main_rs}"
     );
     assert!(
-        main_rs.contains("CELL.get_or_init(|| 42).clone()"),
+        main_rs.contains("CELL.get_or_init(|| 42i64).clone()"),
         "CAF body is evaluated once through get_or_init and cloned out:\n{main_rs}"
     );
     Ok(())

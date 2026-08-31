@@ -213,14 +213,17 @@ pub fn file_rename(src: ipe_runtime::path::Path, dst: ipe_runtime::path::Path) -
 pub fn main_depth(c: MainChain) -> i64 {
     let _ipe_recursion_guard = crate::recursion_guard();
     match c {
-        MainChain::ChainEnd => 0,
-        MainChain::ChainNode(_) => 5,
+        MainChain::ChainEnd => 0i64,
+        MainChain::ChainNode(_) => 5i64,
     }
 }
 pub fn ipe_main() -> IpeTask<()> {
     let _ipe_recursion_guard = crate::recursion_guard();
     io_println(string_from_int(crate::main_depth(MainChain::ChainNode(
-        Box::new((MainChain::ChainNode(Box::new((MainChain::ChainEnd, 3))), 2)),
+        Box::new((
+            MainChain::ChainNode(Box::new((MainChain::ChainEnd, 3i64))),
+            2i64,
+        )),
     ))))
 }
 

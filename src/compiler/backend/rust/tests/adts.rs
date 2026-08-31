@@ -451,7 +451,7 @@ fn generic_enum_def_construction_and_pattern_emit() -> DResult<()> {
     );
     // Construction `Just 5`.
     assert!(
-        out.contains("MainMaybe::Just(5)"),
+        out.contains("MainMaybe::Just(5i64)"),
         "construction not emitted:\n{out}"
     );
     // Pattern binding the payload to a variable.
@@ -460,7 +460,7 @@ fn generic_enum_def_construction_and_pattern_emit() -> DResult<()> {
         "payload var pattern not emitted:\n{out}"
     );
     assert!(
-        out.contains("MainMaybe::Nothing => 0,"),
+        out.contains("MainMaybe::Nothing => 0i64,"),
         "nullary pattern arm not emitted:\n{out}"
     );
     Ok(())
@@ -627,7 +627,7 @@ fn recursive_enum_boxes_self_edges() -> DResult<()> {
     // Construction wraps the self-edge arguments in Box::new; rustfmt splits long arg lists.
     assert!(
         out.contains(
-            "MainTree::Node(\n        Box::new(MainTree::Node(\n            Box::new(MainTree::Leaf),\n            3,\n            Box::new(MainTree::Leaf),\n        ))"
+            "MainTree::Node(\n        Box::new(MainTree::Node(\n            Box::new(MainTree::Leaf),\n            3i64,\n            Box::new(MainTree::Leaf),\n        ))"
         ),
         "construction must box self-edge args:\n{out}"
     );

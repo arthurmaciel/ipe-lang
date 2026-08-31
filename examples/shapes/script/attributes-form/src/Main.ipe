@@ -1,0 +1,52 @@
+module Main exposing (main)
+
+import Ipe.Html as Html exposing (Html)
+import Ipe.Html.Attributes as Attr
+import Ipe.Io as Io
+
+
+-- `Ipe.Html.Attributes` builds the attributes that go on an HTML element. It
+-- turns three ideas on:
+--   • Fixed-key builders. `Attr.class`, `Attr.id`, `Attr.type_`, `Attr.name`,
+--     `Attr.placeholder` take just the VALUE — the key is baked in, so a
+--     mistyped attribute name is not something you can write.
+--   • Boolean attributes are `Bool`, not strings. `Attr.required True` renders
+--     the attribute; `Attr.required False` omits it entirely. The presence of
+--     the attribute is driven by a `Bool`, so there is no stringly-typed
+--     `required="false"` that a browser would treat as present-and-true.
+--   • `Attr.noAttr` is the identity attribute — "no attribute here" as a
+--     first-class value, so a conditional can choose an attribute or nothing
+--     without a `Maybe` or a sentinel.
+
+
+-- A text input built from typed attribute builders. `autofocus` is chosen
+-- conditionally: when off, `noAttr` renders nothing at all.
+field : String -> String -> Bool -> Html msg
+field fieldName label focus =
+    Html.input
+        [ Attr.type_ "text"
+        , Attr.name fieldName
+        , Attr.id fieldName
+        , Attr.placeholder label
+        , Attr.required True
+        , if focus then
+            Attr.autofocus True
+
+          else
+            Attr.noAttr
+        ]
+
+
+loginForm : Html msg
+loginForm =
+    Html.form
+        [ Attr.class "login" ]
+        [ field "email" "you@example.com" True
+        , field "password" "password" False
+        ]
+
+
+main =
+    do
+        Io.println "Rendered form (required is driven by a Bool, autofocus omitted when off):"
+        Io.println (Html.render loginForm)

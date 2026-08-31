@@ -196,7 +196,7 @@ pub fn file_rename(src: ipe_runtime::path::Path, dst: ipe_runtime::path::Path) -
 pub fn main_sum(xs: Vec<i64>) -> i64 {
     let _ipe_recursion_guard = crate::recursion_guard();
     match (xs).as_slice() {
-        [] => 0,
+        [] => 0i64,
         [x, rest @ ..] => {
             let x = x.clone();
             let rest = rest.to_vec();
@@ -206,7 +206,7 @@ pub fn main_sum(xs: Vec<i64>) -> i64 {
 }
 pub fn ipe_main() -> IpeTask<()> {
     let _ipe_recursion_guard = crate::recursion_guard();
-    io_println(string_from_int(crate::main_sum(vec![1, 2, 3])))
+    io_println(string_from_int(crate::main_sum(vec![1i64, 2i64, 3i64])))
 }
 
 // Ffi.kernel polyfill — should be unreachable in Rust target;

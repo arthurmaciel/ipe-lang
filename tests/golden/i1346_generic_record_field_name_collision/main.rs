@@ -240,8 +240,8 @@ pub fn main_first_of_pair<T1: Clone>(value: T1) -> T1 {
 pub fn ipe_main() -> IpeTask<()> {
     let _ipe_recursion_guard = crate::recursion_guard();
     io_println(string_from_int(ipe_runtime::math::ipe_int_add(
-        crate::main_wrap_one(7),
-        crate::main_first_of_pair(3),
+        crate::main_wrap_one(7i64),
+        crate::main_first_of_pair(3i64),
     )))
 }
 

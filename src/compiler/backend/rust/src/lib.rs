@@ -739,15 +739,18 @@ pub(crate) struct EmitCtx<'a> {
     /// builders, `Http.parseQuery`) or mentions an `HttpRequest` / `HttpMethod`
     /// in a signature. When set, [`crate::project::assemble_project_files`]:
     ///
-    /// * declares `pub mod http_client; pub use http_client::*;` and
-    ///   `pub mod http_stream; pub use http_stream::*;` in the emitted
-    ///   `ipe_runtime/mod.rs`;
+    /// * declares `pub mod http_client; pub use http_client::*;` in the emitted
+    ///   `ipe_runtime/mod.rs` (shared with `uses_email` via `reaches_http_client`);
+    /// * declares `pub mod http_stream; pub use http_stream::*;` in the emitted
+    ///   `ipe_runtime/mod.rs` (exclusive to `uses_http` — NOT pulled in by
+    ///   `uses_email` alone, which only needs `http_client::ssrf_apply`);
     /// * adds the `reqwest` dependency to the emitted `Cargo.toml`;
     /// * keeps the `http_client` kernel-wrapper bindings in the emitted prelude.
     ///
     /// The `url` crate stays unconditional (it backs the always-present
     /// `Ipe.Url` and `ssrf` surfaces), so only the reqwest HTTP stack is gated.
-    /// `uses_email` also forces this on (`email.rs` calls `http_client::ssrf_apply`).
+    /// `uses_email` also forces `http_client` on (`email.rs` calls `ssrf_apply`),
+    /// but does NOT force `http_stream` (no streaming surface in email).
     /// Server/web/webview shapes without an outbound HTTP kernel omit reqwest.
     pub(crate) uses_http: bool,
     /// `true` when the program uses at least one `Ipe.Config` decoder that emits
@@ -3044,6 +3047,7 @@ fn collect_type_feature_requirements(ty: &IrType, out: &mut BTreeSet<ipe_ir::Run
         | IrType::Locale
         | IrType::Principal
         | IrType::ProcessRunWithCfg
+        | IrType::ProcessRunInPtyCfg
         | IrType::CacheCfg
         | IrType::CacheStats
         | IrType::WebSocketClientCfg
@@ -3192,6 +3196,7 @@ const fn ir_type_is_record_shape_leaf(ty: &IrType) -> bool {
             | IrType::Secret
             | IrType::Path
             | IrType::ProcessRunWithCfg
+            | IrType::ProcessRunInPtyCfg
             | IrType::CacheCfg
             | IrType::WebSocketClientCfg
             | IrType::CacheStats
@@ -3339,6 +3344,7 @@ fn collect_record_shapes(
         // Process-run-with cfg + Cache config / stats + Csv document fold to
         // nominal runtime structs — no structural record shape to synthesise.
         | IrType::ProcessRunWithCfg
+        | IrType::ProcessRunInPtyCfg
         | IrType::CacheCfg
         | IrType::WebSocketClientCfg
         | IrType::CacheStats
@@ -3514,6 +3520,7 @@ fn type_reaches_enum(
         // Process-run-with cfg + Cache config / stats + Csv document are
         // monomorphic runtime structs — no reachable enum edge to `target`.
         | IrType::ProcessRunWithCfg
+        | IrType::ProcessRunInPtyCfg
         | IrType::CacheCfg
         | IrType::WebSocketClientCfg
         | IrType::CacheStats
@@ -3628,6 +3635,7 @@ fn contains_generic(ty: &IrType) -> bool {
         // Process-run-with cfg + Cache config / stats + Csv document are
         // monomorphic — no generic parameters.
         | IrType::ProcessRunWithCfg
+        | IrType::ProcessRunInPtyCfg
         | IrType::CacheCfg
         | IrType::WebSocketClientCfg
         | IrType::CacheStats
@@ -3773,6 +3781,7 @@ fn collect_generics(ty: &IrType, out: &mut Vec<Symbol>) {
         // Process-run-with cfg + Cache config / stats + Csv document are
         // monomorphic — no generics to collect.
         | IrType::ProcessRunWithCfg
+        | IrType::ProcessRunInPtyCfg
         | IrType::CacheCfg
         | IrType::WebSocketClientCfg
         | IrType::CacheStats
@@ -4131,6 +4140,7 @@ fn match_template(
         // Process-run-with cfg + Cache config / stats + Csv document are
         // monomorphic runtime-struct leaves.
         | IrType::ProcessRunWithCfg
+        | IrType::ProcessRunInPtyCfg
         | IrType::CacheCfg
         | IrType::WebSocketClientCfg
         | IrType::CacheStats

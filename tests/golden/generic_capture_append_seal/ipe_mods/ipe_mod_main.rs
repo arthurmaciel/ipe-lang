@@ -43,7 +43,7 @@ pub(crate) fn ipe_main() -> IpeTask<()> {
                     > = Box::new(crate::main_read_int);
                     __ipe_fn
                 },
-                vec![1, 2, 3],
+                vec![1i64, 2i64, 3i64],
             ),
         ),
         Box::new(move |arg_0: ()| -> IpeTask<()> {

@@ -513,10 +513,32 @@ const COMMANDS: &[Command] = &[
         summary: "Self-update ipe to the latest release (re-runs the installer).",
         args: "",
         args_desc: "",
-        options: &[Opt {
-            flag: "[--dry-run]",
-            desc: "print the installer command without running it",
-        }],
+        options: &[
+            Opt {
+                flag: "[--check]",
+                desc: "report whether an upgrade is available, never install",
+            },
+            Opt {
+                flag: "[--check --exit-code]",
+                desc: "exit 10 = available, 0 = up-to-date, 2 = feed unreachable",
+            },
+            Opt {
+                flag: "[--yes|-y]",
+                desc: "skip the confirmation prompt (implied by non-TTY stdout)",
+            },
+            Opt {
+                flag: "[--dry-run]",
+                desc: "print the installer command without running it",
+            },
+            Opt {
+                flag: "[--plain]",
+                desc: "print one terse status line, flush-left (never prompts)",
+            },
+            Opt {
+                flag: "[--json]",
+                desc: "print the status as JSON (never prompts)",
+            },
+        ],
     },
     Command {
         name: "health",

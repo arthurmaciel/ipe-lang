@@ -195,28 +195,28 @@ pub fn file_rename(src: ipe_runtime::path::Path, dst: ipe_runtime::path::Path) -
 
 pub fn main_abs_val(n: i64) -> i64 {
     let _ipe_recursion_guard = crate::recursion_guard();
-    (if (n < 0) {
-        ipe_runtime::math::ipe_int_sub(0, n)
+    (if (n < 0i64) {
+        ipe_runtime::math::ipe_int_sub(0i64, n)
     } else {
         n
     })
 }
 pub fn main_classify(n: i64) -> i64 {
     let _ipe_recursion_guard = crate::recursion_guard();
-    (if (n > 0) {
-        1
+    (if (n > 0i64) {
+        1i64
     } else {
-        (if (n < 0) { 2 } else { 0 })
+        (if (n < 0i64) { 2i64 } else { 0i64 })
     })
 }
 pub fn ipe_main() -> IpeTask<()> {
     let _ipe_recursion_guard = crate::recursion_guard();
     ({
-        let a = crate::main_abs_val(ipe_runtime::math::ipe_int_sub(0, 7));
+        let a = crate::main_abs_val(ipe_runtime::math::ipe_int_sub(0i64, 7i64));
         ({
-            let b = crate::main_classify(5);
+            let b = crate::main_classify(5i64);
             ({
-                let c = crate::main_classify(ipe_runtime::math::ipe_int_sub(0, 3));
+                let c = crate::main_classify(ipe_runtime::math::ipe_int_sub(0i64, 3i64));
                 ({
                     let total = ipe_runtime::math::ipe_int_add(
                         ipe_runtime::math::ipe_int_add(a, b),

@@ -1,0 +1,41 @@
+module Main exposing (main)
+
+import Ipe.Ui.Responsive as Responsive
+import Ipe.String as String
+import Ipe.List as List
+import Ipe.Io as Io
+
+
+-- `Ipe.Ui.Responsive` classifies a viewport size into a `DeviceClass`, so a view
+-- branches on a small closed set (`Phone` / `Tablet` / `Desktop` / `BigDesktop`)
+-- instead of scattering raw pixel comparisons. Two ideas:
+--   • `classifyDevice` maps a viewport to one of four constructors at the
+--     standard breakpoints. The rest of the program pattern-matches the ADT, so
+--     the breakpoint thresholds live in ONE place, not repeated at every call.
+--   • `deviceClassToString` gives a stable tag (`"phone"`, `"tablet"`, …) for the
+--     cases where a string is more convenient than a full `case` — e.g. setting a
+--     CSS class name from the device.
+
+
+describe : Int -> String
+describe width =
+    let
+        deviceClass =
+            Responsive.classifyDevice { width = width, height = 800 }
+    in
+    String.concat
+        [ String.fromInt width
+        , "px -> "
+        , Responsive.deviceClassToString deviceClass
+        ]
+
+
+report : String
+report =
+    String.join "\n" (List.map describe [ 375, 768, 1440, 2560 ])
+
+
+main =
+    do
+        Io.println "viewport width -> device class:"
+        Io.println report

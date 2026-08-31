@@ -1,0 +1,87 @@
+module Main exposing (main)
+
+import Ipe.Db.Store as Store exposing (Store)
+import Ipe.Codec as Codec exposing (Codec)
+import Ipe.Result as Result exposing (Result(..))
+import Ipe.Error exposing (Error)
+import Ipe.String as String
+import Ipe.List as List
+import Ipe.Io as Io
+
+
+-- `Ipe.Db.Store` is a typed table whose schema, reads, and writes all derive
+-- from ONE `Codec a`. This example stays on the pure schema surface (no live
+-- database), which is enough to show the security model:
+--   • Identifiers are PARSED, not validated. `fromCodec` runs every table and
+--     column name through `validSqlIdent` and returns `Err` on the first bad
+--     one, so a built `Store` carries only accepted identifiers — an injection
+--     attempt in a name never reaches SQL.
+--   • Columns derive from the codec, so the DDL, the writes, and the reads all
+--     agree by construction — a field added or retyped changes one place.
+--   • Access is deny-by-default: `fromCodec` returns a `Draft` that has no read
+--     or write operation. Only `public` (an explicit, greppable, world-open
+--     declaration) or `secured` (policy-guarded) promotes it to a queryable
+--     `Store`. A table nobody classified is unqueryable by construction.
+
+
+type alias User =
+    { id : String
+    , name : String
+    , age : Int
+    }
+
+
+-- `Codec.auto` reads the columns from a named, annotated record witness: the
+-- field names become the column names (`id`, `name`, `age`).
+blankUser : User
+blankUser =
+    { id = "", name = "", age = 0 }
+
+
+userCodec : Codec User
+userCodec =
+    Codec.auto blankUser
+
+
+-- Build the table from the codec, name its primary key by accessor (checked
+-- against the row type at compile time), then classify it world-open.
+users : Result Error (Store User)
+users =
+    Store.fromCodec "users" userCodec
+        |> Result.map (\draft -> Store.primaryKey .id draft)
+        |> Result.map Store.public
+
+
+-- The column list a built store carries, derived from the codec — never drifts.
+describeColumns : Result Error (Store User) -> String
+describeColumns result =
+    case result of
+        Ok store ->
+            "columns: " ++ String.join ", " (Store.columnNames store)
+
+        Err _ ->
+            "store rejected"
+
+
+main =
+    do
+        Io.println (describeColumns users)
+        -- A well-formed identifier is accepted; an injection attempt is rejected
+        -- before any SQL is built.
+        Io.println
+            (String.concat
+                [ "validSqlIdent \"users\" -> "
+                , boolText (Store.validSqlIdent "users")
+                , " ; validSqlIdent \"users; drop table x\" -> "
+                , boolText (Store.validSqlIdent "users; drop table x")
+                ]
+            )
+
+
+boolText : Bool -> String
+boolText b =
+    if b then
+        "True"
+
+    else
+        "False"

@@ -195,11 +195,11 @@ pub fn file_rename(src: ipe_runtime::path::Path, dst: ipe_runtime::path::Path) -
 
 pub fn main_add_pair(p: (i64, i64)) -> i64 {
     let _ipe_recursion_guard = crate::recursion_guard();
-    (if (p == (20, 22)) { 42 } else { 0 })
+    (if (p == (20i64, 22i64)) { 42i64 } else { 0i64 })
 }
 pub fn ipe_main() -> IpeTask<()> {
     let _ipe_recursion_guard = crate::recursion_guard();
-    io_println(string_from_int(crate::main_add_pair((20, 22))))
+    io_println(string_from_int(crate::main_add_pair((20i64, 22i64))))
 }
 
 // Ffi.kernel polyfill — should be unreachable in Rust target;
