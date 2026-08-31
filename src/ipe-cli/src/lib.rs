@@ -354,6 +354,22 @@ pub enum CliError {
         /// path at which a symlink cycle was detected.
         detail: String,
     },
+    /// `ipe upgrade` (or `ipe health`) could not reach the release feed. This
+    /// is a transient, non-zero operational result — not a command misuse — so
+    /// it exits with no `--help` page and renders its own message. Carries
+    /// nothing: the human or machine output was already printed; this is only
+    /// the exit-code signal.
+    UpgradeFeedUnreachable,
+    /// `ipe upgrade --check --exit-code` resolved the action and must exit
+    /// with a numeric code that is neither SUCCESS nor FAILURE (e.g. 10 for
+    /// "upgrade available"). Carries the code so `main` can call
+    /// [`std::process::exit`] with it after printing nothing (the status line
+    /// was already printed by `run_upgrade`).
+    UpgradeCheckExit {
+        /// The exit code to pass to `std::process::exit` (10 = available,
+        /// 0 = up to date, 2 = unreachable).
+        code: i32,
+    },
 }
 
 impl From<toolchain::ToolchainMissing> for CliError {
@@ -518,8 +534,15 @@ impl std::fmt::Display for CliError {
                 style::GUTTER
             ),
             Self::EjectUnsupported { reason } => write!(f, "{}eject: {reason}", style::GUTTER),
-            // The JSON line was already written; nothing more to print.
-            Self::DiagnosticJsonEmitted => Ok(()),
+            // Both already wrote their final output; nothing more to display.
+            Self::DiagnosticJsonEmitted | Self::UpgradeCheckExit { .. } => Ok(()),
+            Self::UpgradeFeedUnreachable => write!(
+                f,
+                "{}{}{}  couldn't reach the release feed — check your connection",
+                style::GUTTER,
+                style::glyph::FAIL,
+                style::GUTTER
+            ),
             Self::FileTooLarge { path, max } => write!(
                 f,
                 "{}: file exceeds the {max}-byte read ceiling — \
@@ -6151,29 +6174,56 @@ pub(crate) fn run_version(rest: &[String]) -> Result<(), CliError> {
 pub const INSTALL_SH_URL: &str =
     "https://raw.githubusercontent.com/arthurmaciel/ipe-lang/main/install.sh";
 
-/// `ipe upgrade [--dry-run]` — self-update by re-running the release installer.
+/// `ipe upgrade` — self-update by re-running the release installer.
 ///
-/// Delegates to `install.sh` (the documented install path): it detects
-/// the platform, downloads the matching latest-release binary, and installs it
-/// over the current one — the same function and interface as a fresh install.
-/// Requires `sh` and `curl` (a POSIX host); `--dry-run` prints the command
-/// without running it.
+/// Checks the latest published release, then installs it when a newer one is
+/// available (and confirmed). `--dry-run` shows what would run without touching
+/// anything; `--check` reports only and never installs; `--yes`/`-y` or a
+/// non-TTY stdout skips the prompt; `--plain`/`--json` emit machine output and
+/// never prompt. `--check --exit-code` signals 10 (available), 0 (up-to-date),
+/// or 2 (feed unreachable) via the process exit code.
 ///
-/// The installer exits with code 2 when it finds no prebuilt binary for the
-/// requested version and platform (a transient condition — the release was
-/// tagged but CI is still building the artifacts). That distinct code lets the
-/// wrapper surface a clear, actionable message rather than a generic failure.
+/// The installer (`install.sh`) exits with code 2 when it finds no prebuilt
+/// binary; that distinct code surfaces as [`CliError::UpgradeNoPrebuilt`].
 ///
 /// # Errors
-/// [`CliError::UsageOwned`] on an unexpected argument or a non-POSIX host.
-/// [`CliError::UpgradeNoPrebuilt`] when the installer exits 2 (no binary yet).
-/// [`CliError::UsageOwned`] when the installer cannot be launched or exits with
-/// any other non-zero code.
+/// [`CliError::UsageOwned`] on an unknown flag or a non-POSIX host.
+/// [`CliError::UpgradeNoPrebuilt`] when the installer exits 2.
+/// [`CliError::UpgradeFeedUnreachable`] when the release feed is offline and
+/// `--check`/`--exit-code` are not in use.
+/// [`CliError::UpgradeCheckExit`] for `--check --exit-code` numeric signals.
+#[allow(clippy::too_many_lines)]
 pub fn run_upgrade(rest: &[String]) -> Result<(), CliError> {
+    use std::io::IsTerminal as _;
+
     let mut dry_run = false;
+    let mut yes = false;
+    let mut check = false;
+    let mut exit_code_flag = false;
+    let mut format: Option<cli_args::OutputFormat> = None;
+
     for arg in rest {
         match arg.as_str() {
             "--dry-run" => dry_run = true,
+            "--yes" | "-y" => yes = true,
+            "--check" => check = true,
+            "--exit-code" => exit_code_flag = true,
+            "--plain" => {
+                if format.is_some() {
+                    return Err(CliError::UsageOwned(
+                        "ipe upgrade: --plain and --json are mutually exclusive".to_owned(),
+                    ));
+                }
+                format = Some(cli_args::OutputFormat::Plain);
+            }
+            "--json" => {
+                if format.is_some() {
+                    return Err(CliError::UsageOwned(
+                        "ipe upgrade: --plain and --json are mutually exclusive".to_owned(),
+                    ));
+                }
+                format = Some(cli_args::OutputFormat::Json);
+            }
             other if other.starts_with('-') => {
                 return Err(cli_args::usage_unknown_flag("upgrade", other));
             }
@@ -6183,7 +6233,10 @@ pub fn run_upgrade(rest: &[String]) -> Result<(), CliError> {
         }
     }
 
+    let fmt = format.unwrap_or_default();
     let command = format!("curl -fsSL {INSTALL_SH_URL} | sh");
+
+    // --dry-run: show the installer command and stop — no version check needed.
     if dry_run {
         print!(
             "{}",
@@ -6191,6 +6244,122 @@ pub fn run_upgrade(rest: &[String]) -> Result<(), CliError> {
         );
         return Ok(());
     }
+
+    let vc = version_check::version_check();
+    let action = vc.action();
+
+    // --plain / --json: emit machine output and never prompt or install.
+    if fmt != cli_args::OutputFormat::Human {
+        print!("{}", render_upgrade(&vc, &action, false, fmt));
+        return match action {
+            version_check::UpgradeAction::Unreachable => Err(CliError::UpgradeFeedUnreachable),
+            _ => Ok(()),
+        };
+    }
+
+    // Human output: print the status line.
+    let stdout = std::io::stdout();
+    let p = style::Palette::for_stream(&stdout);
+    match action {
+        version_check::UpgradeAction::UpToDate => {
+            let v = vc.current.to_string();
+            print!(
+                "{}",
+                style::frame(&style::gutter(&format!(
+                    "{}{}{} ipe {v} — already the latest release",
+                    p.green,
+                    style::glyph::OK,
+                    p.reset
+                )))
+            );
+            if check && exit_code_flag {
+                return Err(CliError::UpgradeCheckExit {
+                    code: check_exit_code(&version_check::UpgradeAction::UpToDate),
+                });
+            }
+            return Ok(());
+        }
+        version_check::UpgradeAction::Unreachable => {
+            print!(
+                "{}",
+                style::frame(&style::gutter(&format!(
+                    "{}{}{}  couldn't reach the release feed — check your connection",
+                    p.red,
+                    style::glyph::FAIL,
+                    p.reset
+                )))
+            );
+            if check && exit_code_flag {
+                return Err(CliError::UpgradeCheckExit {
+                    code: check_exit_code(&version_check::UpgradeAction::Unreachable),
+                });
+            }
+            return Err(CliError::UpgradeFeedUnreachable);
+        }
+        version_check::UpgradeAction::Available => {
+            let cur = vc.current.to_string();
+            let lat = vc
+                .latest
+                .as_ref()
+                .map(semver::Version::to_string)
+                .unwrap_or_default();
+            print!(
+                "{}",
+                style::frame(&style::gutter(&format!(
+                    "{}?{}  ipe {cur} \u{2192} {lat} available",
+                    p.yellow, p.reset
+                )))
+            );
+            if check {
+                if exit_code_flag {
+                    return Err(CliError::UpgradeCheckExit {
+                        code: check_exit_code(&version_check::UpgradeAction::Available),
+                    });
+                }
+                return Ok(());
+            }
+        }
+    }
+
+    // Available + not --check: confirm then install.
+    let stdout_is_tty = stdout.is_terminal();
+    let should_prompt = fmt == cli_args::OutputFormat::Human && stdout_is_tty && !yes;
+    let confirmed = if should_prompt {
+        use std::io::Write as _;
+        print!(
+            "{}",
+            style::gutter(&format!("{}Upgrade now? [Y/n] ", style::GUTTER))
+        );
+        let _ = std::io::stdout().flush();
+        let mut line = String::new();
+        match std::io::stdin().read_line(&mut line) {
+            Ok(n) if n > 0 => {
+                matches!(line.trim().to_ascii_lowercase().as_str(), "" | "y" | "yes")
+            }
+            _ => false,
+        }
+    } else {
+        // Non-TTY stdout or --yes: treat as confirmed.
+        yes || !stdout_is_tty
+    };
+
+    if !confirmed {
+        return Ok(());
+    }
+
+    run_installer(&command)
+}
+
+/// Spawn the installer script and wait for it to finish.
+///
+/// The installer script exits 2 when no prebuilt binary exists for the current
+/// platform; any other non-zero exit is a generic failure.
+///
+/// # Errors
+/// [`CliError::UsageOwned`] when the host is not POSIX, the installer cannot
+/// be launched, or it exits with a non-zero code that is not 2.
+/// [`CliError::UpgradeNoPrebuilt`] when the installer exits 2.
+pub(crate) fn run_installer(command: &str) -> Result<(), CliError> {
     if cfg!(not(unix)) {
         return Err(CliError::UsageOwned(format!(
             "upgrade: not supported on this platform — run the installer manually:\n  {command}"
@@ -6204,7 +6373,7 @@ pub fn run_upgrade(rest: &[String]) -> Result<(), CliError> {
     let stage = progress::Stage::start(std::io::stderr(), "Launching the release installer…");
     let child = std::process::Command::new("sh")
         .arg("-c")
-        .arg(&command)
+        .arg(command)
         .spawn();
     let mut child = match child {
         Ok(child) => {
@@ -6232,9 +6401,6 @@ pub fn run_upgrade(rest: &[String]) -> Result<(), CliError> {
     // version and platform. Report it as a typed, operational failure — NOT
     // misuse — so the caller skips the `--help` page.
     if status.code() == Some(2) {
-        // The installer already printed the platform/version details; supply
-        // the same fields the Display impl needs so the Rust-side message is
-        // self-contained regardless of whether the script output was captured.
         let os = std::env::consts::OS;
         let arch = std::env::consts::ARCH;
         let platform = format!(
@@ -6260,6 +6426,83 @@ pub fn run_upgrade(rest: &[String]) -> Result<(), CliError> {
     Err(CliError::UsageOwned(
         "upgrade: the installer exited non-zero — nothing was changed".to_owned(),
     ))
+}
+
+/// The process exit code for `ipe upgrade --check --exit-code`, mirroring
+/// git's `--exit-code` convention.
+const fn check_exit_code(action: &version_check::UpgradeAction) -> i32 {
+    match action {
+        version_check::UpgradeAction::Available => 10,
+        version_check::UpgradeAction::UpToDate => 0,
+        version_check::UpgradeAction::Unreachable => 2,
+    }
+}
+
+/// Render the upgrade status in `--plain` or `--json` format.
+///
+/// `upgraded` is `true` when the installer was actually run this session,
+/// yielding `"action":"upgraded"` in JSON rather than `"checked"`.
+/// Neither format ever prompts.
+fn render_upgrade(
+    check: &version_check::VersionCheck,
+    action: &version_check::UpgradeAction,
+    upgraded: bool,
+    format: cli_args::OutputFormat,
+) -> String {
+    use cli_args::OutputFormat::{Json, Plain};
+    let cur = check.current.to_string();
+    let lat = check.latest.as_ref().map(semver::Version::to_string);
+    match format {
+        Json => {
+            let action_str = if upgraded {
+                "upgraded"
+            } else {
+                match action {
+                    version_check::UpgradeAction::UpToDate => "up-to-date",
+                    version_check::UpgradeAction::Available => "checked",
+                    version_check::UpgradeAction::Unreachable => "unreachable",
+                }
+            };
+            let lat_json = lat
+                .as_deref()
+                .map_or_else(|| "null".to_owned(), cli_args::json::string);
+            let obj = cli_args::json::object(&[
+                ("current", cli_args::json::string(&cur)),
+                ("latest", lat_json),
+                (
+                    "upgradeAvailable",
+                    if check.upgrade_available {
+                        "true".to_owned()
+                    } else {
+                        "false".to_owned()
+                    },
+                ),
+                (
+                    "reachedFeed",
+                    if check.reached_feed {
+                        "true".to_owned()
+                    } else {
+                        "false".to_owned()
+                    },
+                ),
+                ("action", cli_args::json::string(action_str)),
+            ]);
+            format!("{obj}\n")
+        }
+        Plain => match action {
+            version_check::UpgradeAction::UpToDate => format!("ipe {cur} up-to-date\n"),
+            version_check::UpgradeAction::Available => {
+                if upgraded {
+                    format!("ipe upgraded to {}\n", lat.unwrap_or_default())
+                } else {
+                    format!("ipe {cur} -> {} available\n", lat.unwrap_or_default())
+                }
+            }
+            version_check::UpgradeAction::Unreachable => "feed unreachable\n".to_owned(),
+        },
+        // Human format is handled directly in `run_upgrade`.
+        cli_args::OutputFormat::Human => String::new(),
+    }
 }
 
 /// Render the ipe version in the requested [`OutputFormat`].
@@ -8764,5 +9007,54 @@ pub mod web {
             matches!(&result, Err(CliError::Io { path, .. }) if path == &entry),
             "expected Err(CliError::Io) naming {entry:?}, got: {result:?}"
         );
+    }
+
+    #[test]
+    fn check_exit_code_is_git_style() {
+        use crate::version_check::UpgradeAction::*;
+        assert_eq!(super::check_exit_code(&Available), 10);
+        assert_eq!(super::check_exit_code(&UpToDate), 0);
+        assert_eq!(super::check_exit_code(&Unreachable), 2);
+    }
+
+    #[test]
+    fn upgrade_json_reports_available() {
+        use crate::version_check::{UpgradeAction, VersionCheck};
+        let vc = VersionCheck {
+            current: semver::Version::parse("0.1.72").expect("valid semver"),
+            latest: Some(semver::Version::parse("0.1.75").expect("valid semver")),
+            upgrade_available: true,
+            reached_feed: true,
+        };
+        let s = super::render_upgrade(
+            &vc,
+            &UpgradeAction::Available,
+            false,
+            crate::cli_args::OutputFormat::Json,
+        );
+        assert!(
+            s.contains("\"upgradeAvailable\":true"),
+            "upgradeAvailable: {s}"
+        );
+        assert!(s.contains("\"action\":\"checked\""), "action: {s}");
+        assert!(s.contains("\"latest\":\"0.1.75\""), "latest: {s}");
+    }
+
+    #[test]
+    fn upgrade_plain_is_flush_and_terse() {
+        use crate::version_check::{UpgradeAction, VersionCheck};
+        let vc = VersionCheck {
+            current: semver::Version::parse("0.1.72").expect("valid semver"),
+            latest: None,
+            upgrade_available: false,
+            reached_feed: false,
+        };
+        let s = super::render_upgrade(
+            &vc,
+            &UpgradeAction::Unreachable,
+            false,
+            crate::cli_args::OutputFormat::Plain,
+        );
+        assert_eq!(s, "feed unreachable\n");
     }
 }
