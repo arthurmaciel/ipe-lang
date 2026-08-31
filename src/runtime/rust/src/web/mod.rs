@@ -1342,6 +1342,81 @@ where
     }
 }
 
+/// Apply a dev appearance-hot-swap patch to every session THIS PROCESS serves,
+/// then re-render each session's `view(currentModel)` and push the resulting
+/// VDOM diff over the same SSE `patches` channel a normal `update` uses.
+///
+/// This is the running server's half of Step 2's live socket: the dev control
+/// path calls it with a table patch `[(idx, value)]` and the view's baked
+/// defaults signature. It registers the patch in the [`LiteralTable`] dev
+/// overlay, so a re-render of `view(model)` reads the patched literals — then it
+/// re-renders each live session from its *current* Model (never through
+/// `update`, so scroll/form/tab/counter state is preserved), diffs against the
+/// session's last view, and reuses the existing diff → SSE-push → DOM-patch
+/// machinery. One render semantics: the diff a hot-swap pushes is exactly the
+/// diff a full recompile-and-reconnect would have produced for the same edit.
+///
+/// Dev-only: gated by [`literal_table::dev_overlay_active`] (flag on AND
+/// non-production). When inactive it registers nothing and pushes no frame, so
+/// no appearance patch is ever observable in a production build.
+async fn apply_literal_patch_to_web_sessions<Model, Msg, FView>(
+    store: &Arc<dyn store::SessionStore<Model, Msg>>,
+    view: &Arc<FView>,
+    defaults: &[String],
+    patch: Vec<(usize, String)>,
+) where
+    Model: Clone + Send + 'static,
+    Msg: Clone + Send + 'static,
+    FView: Fn(Model) -> Html<Msg> + Send + Sync + 'static,
+{
+    if !literal_table::dev_overlay_active() {
+        return;
+    }
+    // Register first, so the re-render below reads the patched literals.
+    literal_table::register_dev_patch(defaults, patch);
+
+    for handle in store.web_sessions().await {
+        // Clone the current Model under a short lock; release before rendering.
+        // A hot-swap NEVER runs `update`, so the Model is carried through
+        // unchanged — this feeds the render its current input, it does not
+        // advance the app's state.
+        let model = {
+            handle
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .model
+                .clone()
+        };
+        let mut tree = view(model);
+        assign_ipe_ids(&mut tree, "r");
+        style_inject::apply_style_injections(&mut tree);
+
+        // Commit + diff under the entry lock, mirroring the driver's commit
+        // block: diff against last_view, then advance last_view/index/seq so the
+        // client's monotonic seq gate accepts the frame and the next real Msg
+        // diffs against this rendered view. The Model is deliberately left as-is.
+        let (patches, seq, sse) = {
+            let mut e = handle.lock().unwrap_or_else(|e| e.into_inner());
+            let patches = diff(&e.last_view, &tree);
+            e.last_view = tree.clone();
+            e.index = build_index(&tree);
+            e.seq += 1;
+            (patches, e.seq, e.sse_tx.clone())
+        };
+        if !patches.is_empty()
+            && let Some(sse) = sse
+        {
+            let env = PatchEnvelope {
+                global_seq: seq,
+                patches: &patches,
+            };
+            if let Ok(json) = serde_json::to_string(&env) {
+                let _ = sse.send(SsePatch(sse::frame("patches", &json))).await;
+            }
+        }
+    }
+}
+
 /// The H23 production gate over [`push_reload_to_web_sessions`]: in
 /// production (`ENV`/`IPE_ENV` set to a non-dev marker) the push path is
 /// UNREACHABLE — same one-`if` shape every other production gate in this
@@ -2310,6 +2385,79 @@ mod handlers {
             .into_response()
     }
 
+    // ── POST /_ipe/hot-appearance (dev-only) ──────────────────────────
+    // The running server's inbound leg of the appearance-hot-swap live socket.
+    // The `ipe watch` process (a SEPARATE process from the running app) computes
+    // an appearance-only table patch for an edited `view` and POSTs it here; the
+    // handler registers it and re-renders every live session's `view(currentModel)`,
+    // pushing the resulting VDOM diff over the existing SSE `patches` channel —
+    // no recompile, no reconnect, Model preserved.
+    //
+    // Dev-only surface, guarded three ways so it is inert in production:
+    //   1. The route is MOUNTED only when `dev_overlay_active()` (flag on AND
+    //      non-production), so in a production build it does not exist at all.
+    //   2. A per-process control token (`IPE_WATCH_HOT_TOKEN`) must match the
+    //      `X-Ipe-Hot-Token` header, so even on a `0.0.0.0`-bound dev server a
+    //      LAN peer without the token (set by the watch that launched the app)
+    //      cannot drive a re-render.
+    //   3. The body carries only inert leaf values `[(idx, value)]` + the view's
+    //      baked-defaults signature; the patch is applied through the total
+    //      `LiteralTable::apply_patch` (out-of-range indices ignored). No
+    //      handler, control flow, or Model-touching value can cross this path.
+    pub(super) async fn hot_appearance_handler<Model, Msg, FInit, FUpdate, FView, FSubs>(
+        State(st): State<WebState<Model, Msg, FInit, FUpdate, FView, FSubs>>,
+        headers: axum::http::HeaderMap,
+        body: axum::body::Bytes,
+    ) -> Response
+    where
+        Model: Clone + Send + 'static,
+        Msg: Clone + Send + 'static,
+        FInit: Send + Sync + 'static,
+        FUpdate: Send + Sync + 'static,
+        FView: Fn(Model) -> Html<Msg> + Send + Sync + 'static,
+        FSubs: Send + Sync + 'static,
+    {
+        // Defence in depth: even though the route is only mounted under the dev
+        // gate, re-check here so the handler is inert if ever reached otherwise.
+        if !literal_table::dev_overlay_active() {
+            return StatusCode::NOT_FOUND.into_response();
+        }
+        // Per-process control token. Absent token ⇒ the endpoint is unusable
+        // (fail closed), so a dev server with the flag set but no token minted
+        // cannot be driven by an untrusted caller.
+        let expected = crate::system::read_env_var("IPE_WATCH_HOT_TOKEN")
+            .ok()
+            .filter(|t| !t.is_empty());
+        let presented = headers
+            .get("x-ipe-hot-token")
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_owned);
+        match (expected, presented) {
+            (Some(exp), Some(got)) if crate::ct_eq::ct_bytes_eq(exp.as_bytes(), got.as_bytes()) => {
+            }
+            _ => return StatusCode::FORBIDDEN.into_response(),
+        }
+
+        #[derive(serde::Deserialize)]
+        struct HotPatchBody {
+            /// The edited view's baked-defaults signature (its literals in emit
+            /// order) — routes the patch to exactly that view's table.
+            #[serde(default)]
+            defaults: Vec<String>,
+            /// The appearance delta: `(index, new_value)` pairs.
+            #[serde(default)]
+            patch: Vec<(usize, String)>,
+        }
+        let parsed: HotPatchBody = match serde_json::from_slice(&body) {
+            Ok(b) => b,
+            Err(_) => return (StatusCode::BAD_REQUEST, "bad body").into_response(),
+        };
+
+        apply_literal_patch_to_web_sessions(&st.store, &st.view, &parsed.defaults, parsed.patch)
+            .await;
+        StatusCode::OK.into_response()
+    }
+
     // ── POST /_ipe/port ───────────────────────────────────────────────
     // The `Ipe.Js` inbound port route: a browser→server port frame. Runs the
     // SAME trust gate as `/_ipe/event` — the CSRF middleware validates the
@@ -2672,6 +2820,19 @@ where
         "/_ipe/debug/scrub",
         post(handlers::scrub_handler::<Model, Msg, FInit, FUpdate, FView, FSubs>),
     );
+    // Dev-only appearance-hot-swap control leg. MOUNTED only when the hot
+    // overlay is active (flag on AND non-production), so the route is entirely
+    // absent from a production build — an appearance patch cannot even be POSTed
+    // to a prod server. The handler additionally token-gates each request.
+    let router = if literal_table::dev_overlay_active() {
+        router.route(
+            "/_ipe/hot-appearance",
+            post(handlers::hot_appearance_handler::<Model, Msg, FInit, FUpdate, FView, FSubs>)
+                .layer(axum::extract::DefaultBodyLimit::max(web_max_body_bytes())),
+        )
+    } else {
+        router
+    };
     let mut router = router
         // Observability surface.
         .route("/_ipe/healthz", get(observability::healthz))
@@ -2934,6 +3095,173 @@ mod reload_push_tests {
             Some(v) => locked_set_var("IPE_ENV", &v),
             None => locked_remove_var("IPE_ENV"),
         }
+    }
+}
+
+#[cfg(test)]
+mod hot_appearance_push_tests {
+    //! Applying an appearance patch to the running app re-renders
+    //! `view(currentModel)` from the CURRENT Model (never through `update`) and
+    //! pushes the resulting VDOM diff over the existing SSE `patches` channel —
+    //! with the flag off, no frame is produced.
+    use super::*;
+    use crate::web::literal_table;
+    use crate::web::literal_table::overlay_test_lock as guard;
+    use crate::web::store::{MemoryStore, SessionHandle, SessionStore};
+    use std::time::Duration;
+
+    // The app view: an `i64` counter Model rendered into a div whose `style`
+    // reads the hot-swappable padding literal from a per-view `LiteralTable`.
+    // The counter appears as static text so the diff distinguishes a Model
+    // change (text) from an appearance change (style value).
+    const PADDING_DEFAULTS: &[&str] = &["padding: 12px"];
+    fn app_view(count: i64) -> Html<()> {
+        let t = LiteralTable::from_defaults(PADDING_DEFAULTS);
+        Html::HElement(
+            "div".to_string(),
+            vec![Attribute::Attr("style".to_string(), t.get(0).to_string())],
+            vec![Html::HText(format!("count: {count}"))],
+        )
+    }
+
+    fn session_with_current_view(count: i64, sse_tx: Option<SseTx>) -> SessionHandle<i64, ()> {
+        let mut tree = app_view(count);
+        assign_ipe_ids(&mut tree, "r");
+        style_inject::apply_style_injections(&mut tree);
+        let index = build_index(&tree);
+        let (msg_tx, _rx) = mpsc::channel::<()>(1);
+        Arc::new(Mutex::new(SessionEntry {
+            model: count,
+            last_view: tree,
+            index,
+            seq: 0,
+            sse_tx,
+            msg_tx,
+            #[cfg(feature = "debugger")]
+            history: crate::debugger::RecordBuffer::new(
+                count,
+                crate::debugger::DEFAULT_HISTORY_CAP,
+            ),
+        }))
+    }
+
+    fn parse_patch_frame(frame: &str) -> serde_json::Value {
+        // frame = "event: patches\ndata: <json>\n\n"; recover the json line.
+        let data = frame
+            .lines()
+            .find_map(|l| l.strip_prefix("data: "))
+            .expect("a patches frame carries a data line");
+        serde_json::from_str(data).expect("the patches frame data is JSON")
+    }
+
+    // Run an async test body on a fresh current-thread runtime while holding the
+    // process-global overlay guard in SYNC scope, so the guard never crosses an
+    // await point (the overlay statics are the shared state being serialised).
+    fn with_overlay_serialised<F: std::future::Future<Output = ()>>(body: impl FnOnce() -> F) {
+        let _g = guard();
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("current-thread runtime must build for the test");
+        rt.block_on(body());
+        literal_table::clear_dev_overlay_for_test();
+        literal_table::set_dev_overlay_active_for_test(None);
+    }
+
+    /// Flag ON: applying a padding patch to a running session re-renders from
+    /// the CURRENT Model and pushes a VDOM diff reflecting the new literal; the
+    /// Model is left unchanged (one render, no `update`).
+    #[test]
+    fn patch_re_renders_current_model_and_pushes_diff() {
+        with_overlay_serialised(|| async {
+            literal_table::set_dev_overlay_active_for_test(Some(true));
+            literal_table::clear_dev_overlay_for_test();
+
+            let store_impl: MemoryStore<i64, ()> = MemoryStore::new(Duration::from_secs(60));
+            let (sse_tx, mut sse_rx) = sse::channel();
+            // A non-initial Model, to prove the re-render uses the CURRENT Model.
+            store_impl
+                .set("live", session_with_current_view(7, Some(sse_tx)))
+                .await;
+            let store: Arc<dyn SessionStore<i64, ()>> = Arc::new(store_impl);
+            let view: Arc<fn(i64) -> Html<()>> = Arc::new(app_view);
+
+            let defaults: Vec<String> = PADDING_DEFAULTS.iter().map(|s| (*s).to_string()).collect();
+            apply_literal_patch_to_web_sessions(
+                &store,
+                &view,
+                &defaults,
+                vec![(0, "padding: 16px".to_string())],
+            )
+            .await;
+
+            let frame = sse_rx
+                .try_recv()
+                .expect("an SSE-attached session must receive a patches frame");
+            let json = parse_patch_frame(&frame.0);
+            let dump = json.to_string();
+            assert!(
+                dump.contains("padding: 16px"),
+                "the pushed diff must carry the new literal value: {dump}"
+            );
+            assert!(
+                !dump.contains("padding: 12px"),
+                "the old literal must be gone from the diff: {dump}"
+            );
+            // The diff is strictly flatter than a general VDOM diff: an
+            // appearance hot-swap touches only the style attribute value at a
+            // fixed id, never the text (the Model-derived `count: N`) or
+            // structure. The absence of a `text`/`html` patch is the proof the
+            // Model was NOT advanced — the re-render used the current Model,
+            // whose text is identical to last_view.
+            assert!(
+                !dump.contains("\"text\"") && !dump.contains("\"html\""),
+                "an appearance hot-swap emits only the value delta, no structure patch: {dump}"
+            );
+            let model_after = store
+                .get("live")
+                .await
+                .and_then(|hit| match hit {
+                    store::StoreHit::Web(h) => {
+                        Some(h.lock().unwrap_or_else(|e| e.into_inner()).model)
+                    }
+                    _ => None,
+                })
+                .expect("session still present");
+            assert_eq!(model_after, 7, "a hot-swap must not advance the Model");
+        });
+    }
+
+    /// Flag OFF: the apply path is inert — it registers nothing and pushes NO
+    /// frame, so no `literal-patch`-derived diff is ever produced.
+    #[test]
+    fn patch_is_inert_when_flag_off() {
+        with_overlay_serialised(|| async {
+            literal_table::set_dev_overlay_active_for_test(Some(false));
+            literal_table::clear_dev_overlay_for_test();
+
+            let store_impl: MemoryStore<i64, ()> = MemoryStore::new(Duration::from_secs(60));
+            let (sse_tx, mut sse_rx) = sse::channel();
+            store_impl
+                .set("live", session_with_current_view(3, Some(sse_tx)))
+                .await;
+            let store: Arc<dyn SessionStore<i64, ()>> = Arc::new(store_impl);
+            let view: Arc<fn(i64) -> Html<()>> = Arc::new(app_view);
+
+            let defaults: Vec<String> = PADDING_DEFAULTS.iter().map(|s| (*s).to_string()).collect();
+            apply_literal_patch_to_web_sessions(
+                &store,
+                &view,
+                &defaults,
+                vec![(0, "padding: 16px".to_string())],
+            )
+            .await;
+
+            assert!(
+                sse_rx.try_recv().is_err(),
+                "flag off: the apply path must push no frame at all"
+            );
+        });
     }
 }
 
