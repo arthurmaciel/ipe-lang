@@ -211,94 +211,136 @@ const fn delegate(to: UiDelegate) -> UiEmitPlan {
     native(NativeUiEmit::Delegate(to))
 }
 
-/// The style-kernel allowlist for dev appearance hot-swap (Step 1, style slice).
+/// The literal kind of an appearance-hoist-eligible argument position.
 ///
-/// A literal passed *directly* to one of these kernels, in one of the returned
-/// argument positions, is an inert **style-value** string — a font family or a
-/// raw CSS property/value — that feeds rendering and depends on no `Model`
-/// value and no control flow. Under `IPE_WATCH_HOT_APPEARANCE` such a literal is
-/// hoisted into a per-view [`ipe_runtime::web::LiteralTable`] so a dev edit can
-/// swap it as data. Every entry is a plain positional `Ui.*` style kernel whose
-/// named positions carry a `String`; the surface is style values only — not the
-/// attribute, text, layout-structure, or non-style-string kernels.
-///
-/// Returned positions are 0-based indices into the kernel's direct arguments.
-/// A kernel absent from this table has no hoist-eligible position.
-///
-/// The set is deliberately narrow and self-documenting: widening it (attribute
-/// strings, static text) is a later, separately measured step behind its own
-/// conformance coverage.
-pub const fn style_literal_arg_positions(k: KernelFn) -> &'static [usize] {
-    match k {
-        // `Font.family : String -> Attribute msg` — the font family list, a
-        // pure style value (`ui_font_family_(family: String)`).
-        KernelFn::FontFamily => &[0],
-        // `Ui.style : String -> String -> Attribute msg` — a raw CSS
-        // property/value pair (`ui_style_(property, value)`). Both are inert
-        // style strings baked as table defaults.
-        KernelFn::UiStyle => &[0, 1],
-        _ => &[],
-    }
+/// A `String`-valued position bakes and reads its value as a `String`; a typed
+/// `Int`/`Float` position bakes the value's canonical decimal string (the
+/// numeric constant the style ultimately renders) and reads it back through a
+/// total `parse::<T>().unwrap_or(<literal>)`. The `LiteralTable` stays
+/// `String`-only in every case — the read kind only decides how the emitted call
+/// site consumes the slot.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum LitKind {
+    /// A `String` value: bakes as itself, reads back as a `String`.
+    Str,
+    /// An `Int` value: bakes as its canonical decimal string, reads back through
+    /// `parse::<i64>().unwrap_or(<literal>)`.
+    Int,
+    /// A `Float` value: bakes as its `{}`-canonical string, reads back through
+    /// `parse::<f64>().unwrap_or(<literal>)`.
+    Float,
 }
 
-/// The `Int`-valued style-kernel allowlist for dev appearance hot-swap.
+/// The single declarative appearance-literal registry for dev appearance
+/// hot-swap — the one extension point across every appearance-only stdlib
+/// surface (`Ipe.Ui`, `Ipe.Html`, `Ipe.Css`, and any future one).
 ///
-/// The typed analogue of [`style_literal_arg_positions`]: a literal `Int`
-/// passed *directly* to one of these kernels, in one of the returned argument
-/// positions, is an inert numeric **style value** — a padding/spacing amount, a
-/// font/border size, a length, or an `rgb`/`rgba` colour channel — that feeds
-/// rendering and depends on no `Model` value and no control flow. These are the
-/// dominant appearance edits (`padding 12 -> 16`, a colour channel tweak).
+/// A literal passed *directly* to one of these kernels, in one of the returned
+/// `(arg_pos, kind)` positions, is **inert appearance data the compiled view
+/// consumes without branching on it** — a style value, an attribute *value*
+/// (never its key), a CSS property *value* (never a selector), or a static text
+/// node. Swapping it changes no node identity, no control flow, no handler, and
+/// no `Model`-dependent computation, so a value swap is a *complete* description
+/// of the edit. Under `IPE_WATCH_HOT_APPEARANCE` such a literal is hoisted into a
+/// per-view [`ipe_runtime::web::LiteralTable`] so a dev edit can swap it as data;
+/// the baked default is exactly the source value, so a prod build (never patched)
+/// renders exactly as the direct emit — one render semantics, dev == prod.
 ///
-/// Only the plain-positional style kernels appear here. The per-corner variants
-/// (`Ui.paddingEach`, `Border.widthEach`) build their call through a bespoke
-/// native emitter, not the positional-hoist path, so they are covered by a later
-/// step rather than silently listed and never hoisted.
+/// Returned positions are 0-based indices into the kernel's *direct* arguments. A
+/// kernel absent from this table has no hoist-eligible position, and an entry
+/// only ever fires on a *direct literal* of the matching kind in that position —
+/// a `Model`-dependent or computed argument emits directly and never hoists.
 ///
-/// The table stays `String`-only: an eligible `Int` literal `n` is hoisted as
-/// its canonical decimal string (`n.to_string()`) — exactly the numeric constant
-/// the style ultimately renders — and the call site reads it back via
-/// `get(idx).parse::<i64>().unwrap_or(n)`. The baked default parses to the same
-/// `i64`, so the built `Attribute`/`Color` and its rendered CSS are identical to
-/// the direct emit (dev == prod); the total `unwrap_or` fallback is the original
-/// literal, so a stale or malformed patch can never change the built value type
-/// or panic.
+/// **Safe by construction.** Every arm is guarded by the dev == prod conformance
+/// test (a baked-default render is byte-identical to the direct emit) and the
+/// conservative classifier (an unprovable edit recompiles). A mis-marked arm
+/// therefore either fails conformance or simply doesn't hoist — it can never
+/// hot-swap a logic change. The classifier needs no change per arm: it is
+/// emit-diff over the emitted value regions, already library-agnostic, so it
+/// hot-swaps whatever this registry hoists regardless of the source module.
 ///
-/// Returned positions are 0-based indices into the kernel's direct arguments. A
-/// kernel absent from this table has no `Int`-hoist-eligible position. `Length`
-/// and `Color` kernels whose arg is a *nested call* (`Ui.px n`, `Ui.rgb r g b`)
-/// are covered by hoisting the inner `Int` args of that call, not the outer
-/// kernel — the outer arg is not a direct literal and is correctly excluded.
-pub const fn style_int_literal_arg_positions(k: KernelFn) -> &'static [usize] {
+/// The rule for adding an arm: mark **only** a position that carries an
+/// appearance *value* — never a structural or key argument (an attribute *key*,
+/// a CSS *selector*, a tag name, a layout-structure arg). When unsure, leave it
+/// out; the recompile fallback is merely slower, a false "appearance" would be a
+/// correctness bug.
+///
+/// A `Length`/`Color` kernel whose arg is a *nested call* (`Ui.px n`,
+/// `Ui.rgb r g b`) is covered by hoisting the inner literal args of that call,
+/// not the outer kernel — the outer arg is not a direct literal and is correctly
+/// excluded. The per-corner variants (`Ui.paddingEach`, `Border.widthEach`) build
+/// their call through a bespoke native emitter, not the positional-hoist path, so
+/// they are absent here rather than silently listed and never hoisted.
+// One documented row per appearance kernel — arms that happen to share a body
+// (e.g. several generic-attribute kernels marking their value position) are kept
+// separate on purpose, each carrying its own kernel's signature and rationale.
+#[allow(clippy::match_same_arms)]
+pub const fn appearance_literal_args(k: KernelFn) -> &'static [(usize, LitKind)] {
+    use LitKind::{Float, Int, Str};
     match k {
+        // ── Ipe.Ui — style values (String) ────────────────────────────────
+        // `Font.family : String -> Attribute msg` — the font family list.
+        KernelFn::FontFamily => &[(0, Str)],
+        // `Ui.style : String -> String -> Attribute msg` — a raw CSS
+        // property/value pair; both are inert style strings.
+        KernelFn::UiStyle => &[(0, Str), (1, Str)],
+
+        // ── Ipe.Ui — style values (typed Int) ─────────────────────────────
         // Single-`Int` style kernels: a spacing/padding amount, a font/border
-        // size, or a `Length` constructor carrying pixels (`Ui.px n`,
-        // `Ui.fillPortion n`).
+        // size, or a `Length` constructor carrying pixels.
         KernelFn::UiSpacing
         | KernelFn::UiPadding
         | KernelFn::FontSize
         | KernelFn::BorderWidth
         | KernelFn::BorderRounded
         | KernelFn::UiPx
-        | KernelFn::UiFillPortion => &[0],
-        KernelFn::UiPaddingXY => &[0, 1],
-        // Colour channels (`Int` 0..=255) of an `rgb`/`rgba` literal. `rgba`'s
-        // alpha (position 3) is a `Float`, handled by the float allowlist.
-        KernelFn::UiRgb | KernelFn::UiRgba => &[0, 1, 2],
-        _ => &[],
-    }
-}
+        | KernelFn::UiFillPortion => &[(0, Int)],
+        KernelFn::UiPaddingXY => &[(0, Int), (1, Int)],
+        // Colour channels (`Int` 0..=255) of an `rgb` literal.
+        KernelFn::UiRgb => &[(0, Int), (1, Int), (2, Int)],
+        // `rgba`: three `Int` channels plus a `Float` alpha (opacity).
+        KernelFn::UiRgba => &[(0, Int), (1, Int), (2, Int), (3, Float)],
 
-/// The `Float`-valued style-kernel allowlist for dev appearance hot-swap.
-///
-/// The `Float` sibling of [`style_int_literal_arg_positions`]. Currently the one
-/// entry is an `rgba` alpha channel: a literal `Float` colour opacity. Hoisted
-/// as its `String.fromFloat`-canonical string and read back via
-/// `get(idx).parse::<f64>().unwrap_or(f)`, same dev == prod / total-fallback
-/// guarantees as the `Int` path.
-pub const fn style_float_literal_arg_positions(k: KernelFn) -> &'static [usize] {
-    match k {
-        KernelFn::UiRgba => &[3],
+        // ── Ipe.Ui — attribute values + static text (String) ──────────────
+        // `Ui.text : String -> Element msg` — a static text node's content. The
+        // runtime escapes it at render, identically for a direct or hoisted
+        // string, so baked == direct holds.
+        KernelFn::UiText => &[(0, Str)],
+        // `Ui.name : String -> Attribute msg` — the HTML `name=` attribute
+        // value (position 0 is the value; there is no separate key arg).
+        KernelFn::UiName => &[(0, Str)],
+        // `Ui.htmlAttribute : String -> String -> Attribute msg` — a generic
+        // `key value` attribute escape-hatch. Mark **only** the value
+        // (position 1); the key (position 0) is structural.
+        KernelFn::UiHtmlAttribute => &[(1, Str)],
+
+        // ── Ipe.Html — attribute values, style-attr body + static text ────
+        // `Html.text : String -> Html msg` — a static text node's content.
+        KernelFn::HtmlTextNode => &[(0, Str)],
+        // `Html.titleNode : String -> Html msg` — the `<title>` text.
+        KernelFn::HtmlTitleNode => &[(0, Str)],
+        // `Attr.attribute : String -> String -> Attribute msg` — a generic
+        // `key value` attribute. Mark **only** the value (position 1); the key
+        // (position 0) is structural.
+        KernelFn::HtmlAttribute => &[(1, Str)],
+        // `Html.styleNode : List Attr -> String -> Html msg` — the inline CSS
+        // body (position 1). Position 0 is the attribute list, not a literal.
+        // The runtime close-tag-neutralises the body at construction, identically
+        // for a direct or hoisted string, so baked == direct holds.
+        KernelFn::HtmlStyleNode => &[(1, Str)],
+
+        // ── Ipe.Css — deferred (a different emit path) ────────────────────
+        // `Ipe.Css` is compiled pure Ipê; its one free-string appearance sink
+        // that reaches a Rust kernel is the value sanitizer
+        // `CssSafety.safeValue : String -> String`. That kernel is `Pure`, not
+        // UI-family, so it is emitted through the generic kernel-call path, NOT
+        // this UI-plan positional hoist site — a registry arm here would be dead
+        // (listed but never hoisted). Wiring the generic path to consult this
+        // registry (and hoisting a *security* sanitizer's argument) is a distinct,
+        // guardian-gated follow-up; it is deliberately left to recompile here
+        // rather than silently listed. The selector sanitizer (`safeSelector`)
+        // stays out permanently: a selector changes what a rule targets — that is
+        // structure, not appearance.
         _ => &[],
     }
 }
