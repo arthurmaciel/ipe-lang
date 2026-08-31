@@ -977,10 +977,12 @@ pub static ENV_VARS: &[EnvVar] = &[
         default: "memory",
         purpose: "Session-store backend for the web server: `memory` (per-process, \
                   lost on restart), `file` (persisted to `IPE_WEB_STORE_PATH`, no \
-                  database dependency), or `sqlite` (persisted, requires the `db` \
-                  feature). `ipe watch` selects `file` so a rebuild preserves live \
-                  sessions even for a plain web app; a `sqlite` request degrades to \
-                  `file` when the build has no `db` feature.",
+                  database dependency), or `sqlite`/`postgres`/`redis` (persisted, \
+                  require the `db` or `redis_store` feature). `ipe watch` selects \
+                  `file` so a rebuild preserves live sessions even for a plain web \
+                  app. Requesting a backend the build lacks the feature for is a \
+                  fail-closed startup error, not a silent downgrade — build with the \
+                  feature or set `IPE_WEB_STORE=file|memory`.",
         subsystem: Subsystem::Web,
         class: Class::Tunable,
     },
