@@ -21,7 +21,8 @@ import Ipe.Tea.Tui as Tui
 import Ipe.Tea.Tui.Cmd as Cmd
 import Ipe.Tea.Tui.Sub as Sub
 import Ipe.Ui as Ui
-import Ipe.Ui exposing (Element)
+import Ipe.Ui.Cells as Cells
+import Ipe.Ui.Cells exposing (Cells)
 import Ipe.Ui.Font as Font
 
 
@@ -61,12 +62,12 @@ update msg model =
             ( model, Cmd.none )
 
 
-view : Model -> Element Msg
+view : Model -> Cells Msg
 view model =
-    Ui.column [ Ui.spacing 12, Ui.padding 16 ]
-        [ Ui.el [ Font.bold ] (Ui.text "Ipê tui counter")
-        , Ui.text ("count = " ++ String.fromInt model.count)
-        , Ui.text "(Up/k +, Down/j -, r reset, q quit)"
+    Cells.column [ Ui.spacing 12, Ui.padding 16 ]
+        [ Cells.el [ Font.bold ] (Cells.text "Ipê tui counter")
+        , Cells.text ("count = " ++ String.fromInt model.count)
+        , Cells.text "(Up/k +, Down/j -, r reset, q quit)"
         ]
 
 

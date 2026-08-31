@@ -308,6 +308,12 @@ pub struct Module {
     /// Set by `ipe_lower` when any call site resolves to a
     /// `KernelFn::is_tui()` variant.
     pub uses_tui: bool,
+    /// `true` when the lowerer detected the `Ipe.Terminal` line-oriented
+    /// app-entry (`Terminal.appLines`) in the module's function bodies.
+    ///
+    /// Set by `ipe_lower` when any call site resolves to a
+    /// `KernelFn::is_console()` variant.
+    pub uses_console: bool,
     /// `true` when the lowerer detected at least one `Ipe.WebView`
     /// kernel call (`Webview.app`) in the module's function bodies.
     ///
@@ -1172,6 +1178,7 @@ pub enum IrType {
     /// |--------------------------|----------------------------------------------|
     /// | `UiCtor::Html`           | `ipe_runtime::html::Html<M>`                 |
     /// | `UiCtor::Element`        | `ipe_runtime::ui::element::Element<M>`       |
+    /// | `UiCtor::Cells`          | `ipe_runtime::tui::CellsView<M>`             |
     /// | `UiCtor::UiAttribute`    | `ipe_runtime::ui::element::Attribute<M>`     |
     /// | `UiCtor::HtmlAttribute`  | `ipe_runtime::html::Attribute<M>`            |
     /// | `UiCtor::HtmlEvent`      | `ipe_runtime::html::Event<M>`                |
@@ -1637,6 +1644,10 @@ pub enum UiCtor {
     Html,
     /// `Element msg` — a Ipe.Ui layout element (`ipe_runtime::ui::element::Element<M>`).
     Element,
+    /// `Cells msg` — a Tui-only structured view (`ipe_runtime::tui::CellsView<M>`).
+    /// Produced exclusively by `Ipe.Ui.Cells.*` builders; the type is distinct from
+    /// `Element msg` so Web-only constructs cannot appear inside a Tui view.
+    Cells,
     /// `Attribute msg` from `Ipe.Ui` — a layout attribute (`ipe_runtime::ui::element::Attribute<M>`).
     UiAttribute,
     /// `Attribute msg` from `Ipe.Html` / `Ipe.Html.Attributes` —
@@ -1802,6 +1813,7 @@ pub fn ir_type_is_derivable(
                 ctor,
                 UiCtor::Html
                     | UiCtor::Element
+                    | UiCtor::Cells
                     | UiCtor::UiAttribute
                     | UiCtor::Label
                     | UiCtor::Placeholder
@@ -2098,6 +2110,238 @@ pub fn ir_type_is_serde(ty: &IrType, enum_serde: &impl Fn(&ModPath, Symbol) -> b
         IrType::Enum { home, name, args } => {
             enum_serde(home, *name) && args.iter().all(|a| ir_type_is_serde(a, enum_serde))
         }
+    }
+}
+
+/// A neutral runtime-feature identifier that an [`IrType`] leaf's emitted Rust
+/// form REQUIRES to compile.
+///
+/// This enum is the IR-crate half of the feature single-source-of-truth. It is
+/// deliberately provider-agnostic: it names only the runtime cargo features a
+/// *type mention* can force (the leaf renders to an `ipe_runtime::<module>` path
+/// the runtime crate `#[cfg(feature = …)]`-gates), NOT the kernel-call or
+/// build-mode features (`async`, `debugger`) that no type carries. The backend
+/// maps each variant to its concrete `RuntimeFeature` at the SSOT boundary
+/// ([`RuntimeFeatureId::feature_name`] is that exact cargo name), so the IR crate
+/// stays free of a backend dependency while the mapping remains a total function
+/// checked by rustc — a feature the runtime crate does not declare cannot be
+/// named, and a new gated leaf that forgets its requirement fails to compile in
+/// [`ir_type_feature_requirement`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum RuntimeFeatureId {
+    /// `json` — the `Value` (`JsonVal`) / `Decoder<T>` types.
+    Json,
+    /// `url` — the `ipe_runtime::url::Url` typed-URL newtype.
+    Url,
+    /// `secret` — the `ipe_runtime::secret::Secret` opaque secret.
+    Secret,
+    /// `decimal` — the `ipe_runtime::decimal::Decimal` newtype.
+    Decimal,
+    /// `regex` — the `ipe_runtime::regex_kernel::Regex` compiled-pattern handle.
+    Regex,
+    /// `csv_kernel` — the `ipe_runtime::csv::CsvDoc` document record.
+    Csv,
+    /// `cache_kernel` — the `ipe_runtime::cache::{CacheCfg, CacheStats}` records.
+    CacheKernel,
+    /// `websocket_client` — the `ipe_runtime::ws_client::WsClientCfg` record.
+    WebsocketClient,
+    /// `email` — the `ipe_runtime::email::*` message / attachment / config /
+    /// provider / address types.
+    Email,
+    /// `crypto-core` — the `ipe_runtime::crypto_core::{Key, Mac}` typed newtypes.
+    CryptoCore,
+    /// `db` — the `ipe_runtime::db`/`dsn`/`external_conn` types (`SqlFragment`,
+    /// `Dsn`, the external `Connection` handle).
+    Db,
+    /// `server` — the `ipe_runtime::server`/`server_stream` opaque handles
+    /// (`ServerRequest` / `ServerResponse` / `ServerRoute` / `ServerCookie` /
+    /// `AuthConfig` / `TokenSource` / `StreamWriter` / the WebSocket-server
+    /// handles).
+    Server,
+    /// `http_client` — the `ipe_runtime::http_client::{HttpRequest, HttpMethod}`
+    /// outbound-client types.
+    HttpClient,
+    /// `web` — the `ipe_runtime::web::{WebReq, route::Route}` app types.
+    Web,
+}
+
+impl RuntimeFeatureId {
+    /// The exact cargo feature name in `src/runtime/rust/Cargo.toml` this
+    /// identifier maps to. The backend's `RuntimeFeature::as_str` produces the
+    /// same string for the corresponding variant; the two are kept in step by the
+    /// featureset-closure SEAL, which resolves every selected name against the
+    /// runtime crate's declared `[features]` universe.
+    #[must_use]
+    pub const fn feature_name(self) -> &'static str {
+        match self {
+            Self::Json => "json",
+            Self::Url => "url",
+            Self::Secret => "secret",
+            Self::Decimal => "decimal",
+            Self::Regex => "regex",
+            Self::Csv => "csv_kernel",
+            Self::CacheKernel => "cache_kernel",
+            Self::WebsocketClient => "websocket_client",
+            Self::Email => "email",
+            Self::CryptoCore => "crypto-core",
+            Self::Db => "db",
+            Self::Server => "server",
+            Self::HttpClient => "http_client",
+            Self::Web => "web",
+        }
+    }
+}
+
+/// The runtime cargo feature a single [`IrType`] leaf's emitted Rust form
+/// requires.
+///
+/// The total, wildcard-free single source of truth that makes "a feature-gated
+/// type emitted without its feature" unrepresentable.
+///
+/// This is the exact shape of [`ir_type_is_derivable`]: an exhaustive `match`
+/// over every [`IrType`] variant with NO wildcard arm. A leaf whose emitted Rust
+/// names an `ipe_runtime::<module>` path the runtime crate `#[cfg(feature = …)]`-
+/// gates returns `Some(<that feature>)`; every ungated leaf returns `None`; every
+/// transparent carrier (`List` / `Maybe` / `Tuple` / record / enum / …) returns
+/// `None` at its own node — the CARRIER itself renders to an ungated `Vec` /
+/// `IpeMaybe` / tuple / user struct, and its element leaves are visited by the
+/// transitive walk the callers drive (`ir_type_mentions` in the lowerer, the
+/// backend's program-wide type fold). Folding those two — one requirement per
+/// leaf, unioned over every emitted type — yields the whole program's
+/// type-required feature set.
+///
+/// The `Url` breach this closes was precisely a gated leaf (`IrType::Url`,
+/// rendering `ipe_runtime::url::Url` behind `#[cfg(feature = "url")]`) with no
+/// feature predicate: the feature stayed off and the emit dangled (E0433) though
+/// `ipe` exited 0. Because this function is total and wildcard-free, a future
+/// gated leaf CANNOT be added without stating its feature here — the compile
+/// fails otherwise — so the class is closed by construction rather than by an
+/// authored per-feature predicate that may be forgotten.
+///
+/// A note on the phantom / erased markers (`ConnReadOnly` / `ShapeWeb` / …): they
+/// never render standalone, but their enclosing carrier (`Connection` / `Setting`)
+/// does; where the carrier is feature-gated the marker shares that gate, so the
+/// markers carry the same requirement as their carrier for a fail-closed union.
+#[must_use]
+#[allow(clippy::too_many_lines)] // one arm per IrType variant, deliberately exhaustive
+pub const fn ir_type_feature_requirement(ty: &IrType) -> Option<RuntimeFeatureId> {
+    match ty {
+        // ── `json` — the JSON value + decoder types ──────────────────────────
+        // A `Decoder<T>` node is itself a `json` mention (the `Decoder<T>` alias
+        // is gated); its inner type is visited by the transitive walk, not here.
+        IrType::Json | IrType::Decoder(_) => Some(RuntimeFeatureId::Json),
+        // ── `url` — the opaque validated URL newtype (the breach this closes) ──
+        IrType::Url => Some(RuntimeFeatureId::Url),
+        // ── `secret` — the opaque secret-string module ───────────────────────
+        IrType::Secret => Some(RuntimeFeatureId::Secret),
+        // ── `decimal` — `rust_decimal` newtype (Money carries it) ────────────
+        IrType::Decimal => Some(RuntimeFeatureId::Decimal),
+        // ── `regex` — the compiled-pattern handle ────────────────────────────
+        IrType::Regex => Some(RuntimeFeatureId::Regex),
+        // ── `csv` — the CSV document record ──────────────────────────────────
+        IrType::CsvDoc => Some(RuntimeFeatureId::Csv),
+        // ── `cache_kernel` — the cache config / stats records ────────────────
+        IrType::CacheCfg | IrType::CacheStats => Some(RuntimeFeatureId::CacheKernel),
+        // ── `websocket_client` — the WS-client connect-config record ─────────
+        IrType::WebSocketClientCfg => Some(RuntimeFeatureId::WebsocketClient),
+        // ── `email` — the Email message / attachment / config / provider set ─
+        IrType::EmailMessage
+        | IrType::EmailAttachment
+        | IrType::EmailSesConfig
+        | IrType::EmailSmtpConfig
+        | IrType::EmailProvider
+        | IrType::EmailAddress => Some(RuntimeFeatureId::Email),
+        // ── `crypto-core` — the typed Key / Mac newtypes ─────────────────────
+        IrType::CryptoKey | IrType::CryptoMac => Some(RuntimeFeatureId::CryptoCore),
+        // ── `db` — the Db query fragment + connection descriptors ────────────
+        // `SqlFragment` renders `ipe_runtime::db::SqlFragment`; `Dsn` /
+        // `Connection` render the `dsn` / `external_conn` modules; all three are
+        // `#[cfg(feature = "db")]`. The phantom access-mode markers never render
+        // standalone but share `Connection`'s gate (fail-closed).
+        IrType::SqlFragment
+        | IrType::Dsn
+        | IrType::Connection
+        | IrType::ConnReadOnly
+        | IrType::ConnReadWrite => Some(RuntimeFeatureId::Db),
+        // ── `server` — the opaque server-side handles ────────────────────────
+        IrType::ServerRequest
+        | IrType::ServerResponse
+        | IrType::ServerRoute
+        | IrType::ServerCookie
+        | IrType::AuthConfig
+        | IrType::TokenSource
+        | IrType::StreamWriter
+        | IrType::WebSocketServer
+        | IrType::WebSocketServerCfg => Some(RuntimeFeatureId::Server),
+        // ── `http_client` — the outbound-client request / method types ───────
+        // Both render behind `pub use http_client::*` (gated `http_client`).
+        IrType::HttpRequest | IrType::HttpMethod => Some(RuntimeFeatureId::HttpClient),
+        // ── `web` — the Live web app request + route types ───────────────────
+        IrType::WebReq | IrType::WebRoute(_) => Some(RuntimeFeatureId::Web),
+        // ── ungated leaves: primitives, always-compiled runtime types, and the
+        // transparent CARRIERS (their own node renders to an ungated container;
+        // element leaves are visited by the transitive walk, not here). ────────
+        IrType::Int
+        | IrType::Float
+        | IrType::Bool
+        | IrType::Str
+        | IrType::Char
+        | IrType::Unit
+        | IrType::Bytes
+        // `Db` (the app connection pool) is re-exported ungated; the `db`-gated
+        // reach is the `SqlFragment` / `Dsn` / `Connection` set above.
+        | IrType::Db
+        | IrType::BackoffStrategy
+        | IrType::Order
+        | IrType::ErrorKind
+        | IrType::Error
+        | IrType::ErrorDetails
+        | IrType::ErrorInfo
+        | IrType::PanicInfo
+        | IrType::TypeInfo
+        | IrType::Path
+        | IrType::Principal
+        // The runtime-config carrier + its phantom shape markers render to the
+        // always-compiled `app_config` module.
+        | IrType::Setting
+        | IrType::ShapeWeb
+        | IrType::ShapeWebView
+        | IrType::ShapeTerminal
+        // `Locale` renders to the always-compiled `locale` module.
+        | IrType::Locale
+        // `ProcessRunWithCfg` renders to the always-compiled `system` module.
+        | IrType::ProcessRunWithCfg
+        // The shape app leaves render to the always-compiled `tea` module.
+        | IrType::WebApp
+        | IrType::WebViewApp
+        | IrType::TuiApp
+        | IrType::CliApp
+        // The `Ipe.Ui` / `Ipe.Html` carriers render to the always-compiled
+        // `ui` / `html` modules; their message parameter is visited by the walk.
+        | IrType::Ui { .. }
+        | IrType::UiPlain(_)
+        // The widget handle renders to the always-compiled `ui::widget` module.
+        | IrType::CustomElement { .. }
+        // A generic / row generic is a pass-through type variable — its concrete
+        // instantiation's leaves are visited where it is applied, not here.
+        | IrType::Generic(_)
+        | IrType::RowGeneric(_)
+        // Transparent carriers + effect wrappers: the node renders to an ungated
+        // container / alias; the transitive walk visits the carried leaves.
+        | IrType::Task(_)
+        | IrType::Cmd(_)
+        | IrType::Sub(_)
+        | IrType::Maybe(_)
+        | IrType::List(_)
+        | IrType::Set(_)
+        | IrType::Result(_, _)
+        | IrType::Dict(_, _)
+        | IrType::Tuple(_)
+        | IrType::Record(_)
+        | IrType::Enum { .. }
+        | IrType::Fun(_, _)
+        | IrType::SharedFun(_, _)
+        | IrType::FnOnceChain(_, _) => None,
     }
 }
 
@@ -3499,6 +3743,119 @@ mod tests {
         Ok((ty, inc, dec))
     }
 
+    // ── ir_type_feature_requirement (Phase 1 SSOT) ─────────────────────────
+
+    /// Every gated leaf declares the exact runtime feature its emitted Rust
+    /// needs, and the `Url` breach leaf (`IrType::Url`) is covered — the whole
+    /// point of the total function. A regression that drops a leaf's arm fails
+    /// to compile (no wildcard), so this test pins the *mapping*, not the
+    /// totality (rustc enforces totality).
+    #[test]
+    fn gated_leaves_declare_their_feature() {
+        let cases: &[(IrType, RuntimeFeatureId)] = &[
+            (IrType::Url, RuntimeFeatureId::Url),
+            (IrType::Secret, RuntimeFeatureId::Secret),
+            (IrType::Decimal, RuntimeFeatureId::Decimal),
+            (IrType::Regex, RuntimeFeatureId::Regex),
+            (IrType::Json, RuntimeFeatureId::Json),
+            (
+                IrType::Decoder(Box::new(IrType::Int)),
+                RuntimeFeatureId::Json,
+            ),
+            (IrType::CsvDoc, RuntimeFeatureId::Csv),
+            (IrType::CacheCfg, RuntimeFeatureId::CacheKernel),
+            (IrType::CacheStats, RuntimeFeatureId::CacheKernel),
+            (
+                IrType::WebSocketClientCfg,
+                RuntimeFeatureId::WebsocketClient,
+            ),
+            (IrType::EmailMessage, RuntimeFeatureId::Email),
+            (IrType::EmailAddress, RuntimeFeatureId::Email),
+            (IrType::EmailProvider, RuntimeFeatureId::Email),
+            (IrType::CryptoKey, RuntimeFeatureId::CryptoCore),
+            (IrType::CryptoMac, RuntimeFeatureId::CryptoCore),
+            (IrType::SqlFragment, RuntimeFeatureId::Db),
+            (IrType::Dsn, RuntimeFeatureId::Db),
+            (IrType::Connection, RuntimeFeatureId::Db),
+            (IrType::ServerRequest, RuntimeFeatureId::Server),
+            (IrType::StreamWriter, RuntimeFeatureId::Server),
+            (IrType::AuthConfig, RuntimeFeatureId::Server),
+            (IrType::HttpRequest, RuntimeFeatureId::HttpClient),
+            (IrType::HttpMethod, RuntimeFeatureId::HttpClient),
+            (IrType::WebReq, RuntimeFeatureId::Web),
+            (
+                IrType::WebRoute(Box::new(IrType::Unit)),
+                RuntimeFeatureId::Web,
+            ),
+        ];
+        for (ty, want) in cases {
+            assert_eq!(
+                ir_type_feature_requirement(ty),
+                Some(*want),
+                "leaf {ty:?} must require feature {want:?}"
+            );
+        }
+    }
+
+    /// Ungated leaves and the transparent CARRIERS return `None` at their own
+    /// node (their element leaves are visited by the transitive walk, not here).
+    #[test]
+    fn ungated_leaves_and_carriers_require_nothing() {
+        let none: &[IrType] = &[
+            IrType::Int,
+            IrType::Str,
+            IrType::Bytes,
+            IrType::Db,
+            IrType::Order,
+            IrType::Error,
+            IrType::Path,
+            IrType::Principal,
+            IrType::Setting,
+            IrType::Locale,
+            IrType::TuiApp,
+            IrType::UiPlain(UiPlain::Color),
+            IrType::Generic(Symbol::from_raw(0)),
+            // Carriers: `Some` requirement only ever comes from carried leaves,
+            // reached by the walk, never from the carrier node itself.
+            IrType::List(Box::new(IrType::Url)),
+            IrType::Maybe(Box::new(IrType::Secret)),
+            IrType::Task(Box::new(IrType::Json)),
+            IrType::Tuple(vec![IrType::Url, IrType::Int]),
+        ];
+        for ty in none {
+            assert_eq!(
+                ir_type_feature_requirement(ty),
+                None,
+                "leaf/carrier {ty:?} must require no feature at its own node"
+            );
+        }
+    }
+
+    /// The neutral IR feature ids map to non-empty cargo feature names; the
+    /// featureset-closure SEAL proves each is in the runtime crate's declared
+    /// `[features]` universe.
+    #[test]
+    fn feature_ids_map_to_nonempty_names() {
+        for id in [
+            RuntimeFeatureId::Json,
+            RuntimeFeatureId::Url,
+            RuntimeFeatureId::Secret,
+            RuntimeFeatureId::Decimal,
+            RuntimeFeatureId::Regex,
+            RuntimeFeatureId::Csv,
+            RuntimeFeatureId::CacheKernel,
+            RuntimeFeatureId::WebsocketClient,
+            RuntimeFeatureId::Email,
+            RuntimeFeatureId::CryptoCore,
+            RuntimeFeatureId::Db,
+            RuntimeFeatureId::Server,
+            RuntimeFeatureId::HttpClient,
+            RuntimeFeatureId::Web,
+        ] {
+            assert!(!id.feature_name().is_empty(), "empty name for {id:?}");
+        }
+    }
+
     #[test]
     fn match_new_accepts_exhaustive_and_round_trips_debug() -> DResult<()> {
         let mut i = Interner::new();
@@ -4308,6 +4665,7 @@ mod tests {
                 uses_ui: false,
                 uses_web: false,
                 uses_tui: false,
+                uses_console: false,
                 uses_webview: false,
                 uses_css: false,
                 uses_auth: false,
@@ -4839,6 +5197,7 @@ mod serde_persistence_tests {
                 uses_ui: false,
                 uses_web: false,
                 uses_tui: false,
+                uses_console: false,
                 uses_webview: false,
                 uses_css: false,
                 uses_auth: false,
@@ -4930,6 +5289,7 @@ mod serde_persistence_tests {
                 uses_ui: false,
                 uses_web: false,
                 uses_tui: false,
+                uses_console: false,
                 uses_webview: false,
                 uses_css: false,
                 uses_auth: false,

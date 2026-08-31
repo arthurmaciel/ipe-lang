@@ -48,28 +48,6 @@ fn compile_with_files(
     Ok(ipe::build(&entry, &out_dir, &runtime))
 }
 
-/// Assert compilation failed with the given diagnostic code (fail-closed, an
-/// `ipe`-time diagnostic — never a `cargo` failure or a panic).
-fn assert_rejected_with(
-    test_name: &str,
-    source: &str,
-    extra: &[(&str, &str)],
-    expected_code: &str,
-) -> Result<(), BoxError> {
-    match compile_with_files(test_name, source, extra)? {
-        Ok(()) => Err(format!("{test_name}: expected {expected_code}, but ipec succeeded").into()),
-        Err(ipe::CliError::Pipeline { diag, .. }) => {
-            assert_eq!(
-                diag.code().as_str(),
-                expected_code,
-                "{test_name}: wrong diagnostic code"
-            );
-            Ok(())
-        }
-        Err(other) => Err(format!("{test_name}: expected {expected_code}, got {other:?}").into()),
-    }
-}
-
 /// Assert compilation succeeded (ipe-0).
 fn assert_accepted(test_name: &str, source: &str, extra: &[(&str, &str)]) -> Result<(), BoxError> {
     match compile_with_files(test_name, source, extra)? {
@@ -82,12 +60,15 @@ fn assert_accepted(test_name: &str, source: &str, extra: &[(&str, &str)]) -> Res
 /// at — its mere presence satisfies the build-time file-existence gate.
 const WIDGET_JS: &str = "export function mount(host, emit) { return {}; }\n";
 
-/// `Ui.widget` inside a `Terminal.appScreen` view — must be rejected with
-/// IPE-L0147 (a browser custom element has no seam in a terminal build).
+/// `Ui.widget` inside a `Terminal.appScreen` view — must be rejected. A Tui
+/// view is `Cells Msg`; `Ui.widget` returns `Element msg`, so the type checker
+/// rejects the program (a browser custom element has no seam in a terminal
+/// build, and no `Cells` denotation either).
 const TERMINAL_UI_WIDGET: &str = r#"module Main exposing (main)
 
 import Ipe.Tea.Terminal as Terminal
 import Ipe.Ui as Ui
+import Ipe.Ui.Cells exposing (Cells)
 import Ipe.Tea.Terminal.Cmd
 import Ipe.Tea.Terminal.Sub
 
@@ -110,7 +91,7 @@ update : Msg -> Model -> ( Model, Cmd Msg )
 update _msg model =
     ( model, Cmd.none )
 
-view : Model -> Element Msg
+view : Model -> Cells Msg
 view model =
     Ui.widget codeEditor model.state Edited
 
@@ -221,16 +202,23 @@ main =
 "#;
 
 /// A `Terminal.appScreen` view mounting `Ui.widget` is a browser-only node in a
-/// terminal build: rejected fail-closed with IPE-L0147, not a cargo failure or a
-/// panic (the emitted crate would otherwise trip rustc E0282).
+/// terminal build: rejected fail-closed at ipe time (not a cargo failure or a
+/// panic). A Tui view is `Cells Msg` and `Ui.widget` returns `Element msg`, so
+/// the type checker rejects it (IPE-T0001); the `RejectInNonWebShape` shape gate
+/// (IPE-L0147) is defense-in-depth for any path that bypasses type inference.
 #[test]
 fn terminal_view_with_ui_widget_is_rejected() -> Result<(), BoxError> {
-    assert_rejected_with(
+    match compile_with_files(
         "terminal_ui_widget",
         TERMINAL_UI_WIDGET,
         &[("js/x.js", WIDGET_JS)],
-        "IPE-L0147",
-    )
+    )? {
+        Ok(()) => Err("terminal_ui_widget: expected a type error, but ipec succeeded".into()),
+        Err(ipe::CliError::Pipeline { .. }) => Ok(()),
+        Err(other) => {
+            Err(format!("terminal_ui_widget: expected a type error, got {other:?}").into())
+        }
+    }
 }
 
 /// Non-regression control: `Ui.widget` under `Web.app` is the shape it belongs
@@ -254,4 +242,67 @@ fn webview_view_with_ui_widget_is_accepted() -> Result<(), BoxError> {
         WEBVIEW_UI_WIDGET,
         &[("js/x.js", WIDGET_JS)],
     )
+}
+
+/// `Ui.widget` inside a `Terminal.appLines` (Cli shape) view.
+///
+/// A Cli view has type `Model -> String`. `Ui.widget` returns `Element msg`, so
+/// the type checker rejects the program before the `RejectInNonWebShape` shape
+/// gate is reached — the type mismatch is the primary rejection. The shape gate
+/// is defense-in-depth for any hypothetical path that bypasses type inference
+/// (e.g., programmatic IR construction in tests).
+const CLI_UI_WIDGET: &str = r#"module Main exposing (main)
+
+import Ipe.Tea.Terminal as Terminal
+import Ipe.Ui as Ui
+
+type alias EditorState = { text : String, line : Int }
+
+type EditorEvent = Changed String | Saved
+
+type Msg = Edited EditorEvent
+
+type alias Model = { state : EditorState }
+
+codeEditor : CustomElement EditorState EditorEvent
+codeEditor = customElement "js/x.js"
+
+init : () -> ( Model, Cmd Msg )
+init _unit =
+    ( { state = { text = "", line = 0 } }, Cmd.none )
+
+update : Msg -> Model -> ( Model, Cmd Msg )
+update _msg model =
+    ( model, Cmd.none )
+
+view : Model -> String
+view model =
+    Ui.widget codeEditor model.state Edited
+
+subscriptions : Model -> Sub Msg
+subscriptions _model =
+    Sub.none
+
+onLine : String -> Msg
+onLine _line =
+    Edited Saved
+
+main =
+    Terminal.appLines
+        { init = init, update = update, view = view
+        , subscriptions = subscriptions, onLine = onLine
+        }
+"#;
+
+/// `Ui.widget` in a `Terminal.appLines` view is rejected because `Ui.widget`
+/// returns `Element msg` but the Cli view expects `String`. The type checker
+/// rejects it (IPE-T0001) before the `RejectInNonWebShape` shape gate fires.
+/// The gate is defense-in-depth for any IR path that bypasses type inference.
+#[test]
+fn cli_view_with_ui_widget_is_rejected() -> Result<(), BoxError> {
+    match compile_with_files("cli_ui_widget", CLI_UI_WIDGET, &[("js/x.js", WIDGET_JS)])? {
+        Ok(()) => Err("cli_ui_widget: expected a type error, but ipec succeeded".into()),
+        Err(ipe::CliError::Pipeline { .. }) => Ok(()),
+        Err(other) => Err(format!("cli_ui_widget: expected a type error, got {other:?}").into()),
+    }
 }

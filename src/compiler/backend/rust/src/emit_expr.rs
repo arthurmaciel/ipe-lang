@@ -3577,15 +3577,24 @@ fn emit_ui_plan(
     // to plain text, so it would ipe-succeed and silently render wrong. Reject
     // it here — the one point it is emitted — converting a wrong render into a
     // shape-keyed ipe error.
-    if plan.guard == Guard::RejectInWebShape && (ctx.uses_web || ctx.uses_webview) {
+    if plan.guard == Guard::RejectInWebShape
+        && (ctx.uses_web || ctx.uses_webview || ctx.uses_console)
+    {
         let app = if ctx.uses_webview {
             ipe_diagnostics::AppShape::WebView
-        } else {
+        } else if ctx.uses_web {
             ipe_diagnostics::AppShape::Web
+        } else {
+            ipe_diagnostics::AppShape::Cli
+        };
+        let msg = if ctx.uses_console {
+            LowerError::UiCellsInCliShape(app)
+        } else {
+            LowerError::UiCellsInWebShape(app)
         };
         return Err(Diagnostic::Lower {
             span: Span::DUMMY,
-            msg: LowerError::UiCellsInWebShape(app),
+            msg,
         });
     }
 

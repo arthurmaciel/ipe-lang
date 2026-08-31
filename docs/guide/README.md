@@ -66,6 +66,16 @@ cross-link where topics meet.
   untyped column reads), [the secret-reveal hatch](secret-unsafe.md) (un-seal a
   `Secret` to a bare `String`). Reach for these only for a residual the safe
   surface cannot express.
+- **Caching** — [Cache](cache.md) (bounded, in-memory LRU with optional TTL; a
+  miss is a `Maybe`, not a failure).
+- **Observability** — [Logging](log.md) (structured, levelled log records),
+  [Tracing](trace.md) (application-level spans + the `Debug` development hatches).
+- **Design tokens** — [Palette](palette.md) (closed token sets and named
+  magnitudes as types).
+- **Testing** — [Testing](test.md) (the in-process framework: tests as values,
+  assertions as results, exit-coded runs).
+- **Databases** — [Connection descriptors](dsn.md) (a typed, credential-safe
+  `Dsn`; parse-don't-validate at the connection boundary).
 
 ## Reference and lookup
 

@@ -332,6 +332,9 @@ struct Builtins {
     attribute: Symbol,
     /// `"Element"` — Ipe.Ui element type constructor `Element msg`.
     element: Symbol,
+    /// `"Cells"` — Tui-only view type constructor `Cells msg`. Distinct from
+    /// `Element msg`; produced by `Ipe.Ui.Cells.*` builders.
+    cells: Symbol,
     /// `"CustomElement"` — the JS-widget boundary type constructor
     /// `CustomElement down up`. Empty-module opaque handle; consumed only by the
     /// `Ui.widget` kernel scheme.
@@ -869,6 +872,7 @@ impl Builtins {
             // Ipe.Ui / Ipe.Html parametric type constructor symbols.
             attribute: interner.intern("Attribute")?,
             element: interner.intern("Element")?,
+            cells: interner.intern("Cells")?,
             custom_element: interner.intern("CustomElement")?,
             html_con: interner.intern("Html")?,
             length: interner.intern("Length")?,
@@ -4430,6 +4434,7 @@ impl<'a> Builder<'a> {
             // (`builtin_con_module`).
             BuiltinTag::UiAttribute | BuiltinTag::HtmlAttribute => self.builtins.attribute,
             BuiltinTag::UiElement => self.builtins.element,
+            BuiltinTag::Cells => self.builtins.cells,
             BuiltinTag::CustomElement => self.builtins.custom_element,
             BuiltinTag::Html => self.builtins.html_con,
             BuiltinTag::UiLength => self.builtins.length,
@@ -5166,6 +5171,11 @@ impl<'a> Builder<'a> {
         let elem_t = |m: Ty| Ty::Con {
             module: Vec::new(),
             name: self.builtins.element,
+            args: vec![m],
+        };
+        let cells_t = |m: Ty| Ty::Con {
+            module: Vec::new(),
+            name: self.builtins.cells,
             args: vec![m],
         };
         // `custom_element(down, up)` — the empty-home JS-widget boundary handle
@@ -6931,7 +6941,7 @@ impl<'a> Builder<'a> {
 
             // ── Ipe.Terminal full-screen app-entry (`appScreen`) ────────────────
             //
-            // `view : Model -> Element Msg`, driven by `onKey`. `onKey` is
+            // `view : Model -> Cells Msg`, driven by `onKey`. `onKey` is
             // REQUIRED because the runtime's `tui_app_ui` entry takes a concrete
             // `FOnKey: Fn(String, String) -> Msg` bound (no `Option` form), so a
             // `Msg` cannot be fabricated when the handler is absent.
@@ -6962,7 +6972,7 @@ impl<'a> Builder<'a> {
                         let mut m = BTreeMap::new();
                         m.insert(self.builtins.live_f_init, fun(Ty::Unit, tup.clone()));
                         m.insert(self.builtins.live_f_update, fun(var(1), fun(var(0), tup)));
-                        m.insert(self.builtins.live_f_view, fun(var(0), elem_t(var(1))));
+                        m.insert(self.builtins.live_f_view, fun(var(0), cells_t(var(1))));
                         m.insert(self.builtins.live_f_subscriptions, fun(var(0), sub(var(1))));
                         // onKey : { kind : String, value : String } -> msg (pinned).
                         m.insert(self.builtins.tui_f_on_key, fun(key_event, var(1)));
@@ -7151,6 +7161,20 @@ impl<'a> Builder<'a> {
             K::UiText => fun(string(), elem_t(var(0))),
             K::UiHtml => fun(html_t(var(0)), elem_t(var(0))),
             K::UiCells => fun(list(list(char())), elem_t(var(0))),
+            // Ipe.Ui.Cells Cells-typed builders.
+            K::UiCellsNone => cells_t(var(0)),
+            K::UiCellsText => fun(string(), cells_t(var(0))),
+            K::UiCellsCells => fun(list(list(char())), cells_t(var(0))),
+            // `UiCells.el : List (Attribute msg) -> Cells msg -> Cells msg`
+            K::UiCellsEl => fun(
+                list(attr(var(0))),
+                fun(cells_t(var(0)), cells_t(var(0))),
+            ),
+            // `UiCells.row/column : List (Attribute msg) -> List (Cells msg) -> Cells msg`
+            K::UiCellsRow | K::UiCellsColumn => fun(
+                list(attr(var(0))),
+                fun(list(cells_t(var(0))), cells_t(var(0))),
+            ),
             // `widget : CustomElement down up -> down -> (up -> msg) -> Element msg`
             // (msg = var(0), down = var(1), up = var(2)).
             K::UiWidget => fun(
@@ -10186,6 +10210,12 @@ mod registry_phase_c_tests {
             K::UiText,
             K::UiHtml,
             K::UiCells,
+            K::UiCellsNone,
+            K::UiCellsText,
+            K::UiCellsEl,
+            K::UiCellsRow,
+            K::UiCellsColumn,
+            K::UiCellsCells,
             K::UiWidget,
             // The container / tagged-element primitives (first-schemed — no
             // legacy). The layout / flow builders are pure Ipê over them.
