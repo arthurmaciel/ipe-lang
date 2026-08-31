@@ -38,8 +38,10 @@ cross-link where topics meet.
   storage; the round-trip law by construction), [Database codecs](db-codec.md)
   (that one codec as a database row and back).
 - **Files and configuration** — [Files](file.md) (typed paths, effects as tasks),
+  [Paths](path.md) (opaque, traversal-safe filesystem paths),
   [Configuration](config.md) (typed TOML/YAML/JSON decoders), [CSV](csv.md).
 - **Numbers and magnitudes** — [Math](math.md) (roots, trig, rounding, NaN),
+  [Bitwise operations](bitwise.md) (an `Int` as a vector of bits),
   [Durations](duration.md) (unit-explicit time spans), [Byte sizes](bytesize.md)
   (unit-explicit byte quantities).
 - **Exact quantities and money** — [Decimal](decimal.md) (arbitrary-precision
@@ -51,7 +53,10 @@ cross-link where topics meet.
   primitives](net.md) (range-validated ports).
 - **The process and the terminal** — [System](system.md) (arguments, environment,
   working directory, exit), [Standard I/O](io.md) (stdout/stderr/stdin, the
-  password read).
+  password read), [Environment config](env.md) (build-time public config, wasm-safe),
+  [Subprocesses](process.md) (running a child process with no shell).
+- **Time and clocks** — [Time](time.md) (a typed instant, formatting, calendar
+  arithmetic over durations).
 - **Content and markup** — [HTML](html.md) (typed element trees, XSS-safe by
   construction), [Markdown](markdown.md) (a typed block tree, no raw HTML).
 - **Instrumentation and delivery** — [Analytics](analytics.md) (consent-gated,
@@ -61,6 +66,14 @@ cross-link where topics meet.
   SEO tags), [Console authentication](web-console.md) (gate the embedded console
   with the app's own auth), [Pub/sub](pubsub.md) (in-process typed broadcast),
   [Browser ports](js.md) (the typed Ipê↔JS seam).
+- **Cryptography** — [Cryptography](crypto.md) (hashes, HMAC, AEAD, and the typed
+  `Key` that makes key/message confusion a compile error).
+- **Network and the web** — [HTTP client](http.md) (typed requests to a typed
+  `Url`, SSRF-guarded), [WebSockets](websocket.md) (long-lived bidirectional
+  frames on a typed `WsUrl`).
+- **Building interfaces** — [Interface elements](ui.md) (the `Element` tree:
+  layout, events, and accessibility roles), [Styling](css.md) (typed CSS values
+  and rules).
 - **Escape hatches** — the surfaces that bypass a safe default behind a disclosed
   `unsafe` capability: [the unsafe database surface](db-unsafe.md) (raw SQL,
   untyped column reads), [the secret-reveal hatch](secret-unsafe.md) (un-seal a
