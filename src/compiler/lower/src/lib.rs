@@ -167,6 +167,16 @@ pub fn lower(
     let nested_strlit_binders = interner
         .fresh_symbols("nstrlit_", nested_strlit_site_count)
         .map_err(homeless)?;
+    // One fresh binder per tuple-element position for the tuple-elem-rebind
+    // synthesis: a multi-arm `case` on a non-literal tuple scrutinee with
+    // direct list / cons columns is rewritten to bind the scrutinee's elements
+    // to fresh temps and construct a synthetic literal-tuple scrutinee, enabling
+    // the coerced-column backend path. Sized by `count_tuple_elem_rebind_sites`
+    // (an upper bound); same two-borrow ordering as `ncons_` / `nstrlit_` pools.
+    let tuple_elem_site_count = lower::count_tuple_elem_rebind_sites(m);
+    let tuple_elem_binders = interner
+        .fresh_symbols("telem_", tuple_elem_site_count)
+        .map_err(homeless)?;
     // The built-in `Maybe` / `Result` types + constructors are Prelude
     // built-ins (no `type` declaration), so the lowerer needs their symbols to
     // seed the variant-set / arity tables it would otherwise read from
@@ -271,6 +281,7 @@ pub fn lower(
             destructure_thunk_binders,
             nested_cons_binders,
             nested_strlit_binders,
+            tuple_elem_binders,
         },
         &builtins,
         source_path,
