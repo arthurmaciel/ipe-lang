@@ -4,6 +4,13 @@
 
 [Back to stdlib index](../stdlib.md)
 
+Ipe.Palette — colour shades and spacing values.
+
+Provides two small types used to pass colour and spacing tokens through the
+UI layer without relying on raw strings or integers. `Shade` is a two-variant
+dark/light enum; `Spacing` wraps an integer pixel value so callers cannot
+accidentally pass a raw `Int` where a spacing token is expected.
+
 ## `Shade`
 
 ## `toHex`

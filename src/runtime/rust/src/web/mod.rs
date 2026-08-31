@@ -10,6 +10,8 @@ pub mod sse;
 pub use crate::dom::form;
 pub use form::*;
 pub use sse::*;
+pub mod literal_table;
+pub use literal_table::LiteralTable;
 pub mod route;
 pub use route::*;
 pub mod console;

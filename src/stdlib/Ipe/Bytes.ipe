@@ -1,3 +1,13 @@
+-- | Ipe.Bytes — raw byte buffers for binary data.
+--
+-- `Bytes` is an opaque sequence of bytes, distinct from `String` (which is
+-- always valid UTF-8). Use this module when you need to work with arbitrary
+-- binary payloads: reading files, decoding network responses, or working with
+-- hex / base-64 encodings.
+--
+-- String ↔ Bytes conversions are always explicit: `fromString` UTF-8-encodes an
+-- Ipê `String` into bytes; `toString` UTF-8-decodes bytes back, returning
+-- `Just s` on success and `Nothing` when the buffer is not valid UTF-8.
 module Ipe.Bytes exposing
     ( Bytes
     , empty
