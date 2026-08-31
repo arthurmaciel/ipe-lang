@@ -257,6 +257,20 @@ pub static ENV_VARS: &[EnvVar] = &[
         class: Class::Secret,
     },
     EnvVar {
+        name: "IPE_WATCH_NO_INCREMENTAL",
+        default: "unset (incremental on)",
+        purpose: "Set to any non-empty value other than `0` to opt OUT of the \
+                  dev-loop incremental rebuild path: `ipe watch` normally builds the \
+                  emitted app with `CARGO_INCREMENTAL=1` and no rustc wrapper (so a \
+                  machine-level sccache config cannot force non-incremental), which \
+                  speeds the warm view/update-body edit loop and is \
+                  behaviour-identical. This restores the machine's normal build \
+                  configuration for the watch rebuild. Dev-only; no effect on `ipe \
+                  build` or a release build.",
+        subsystem: Subsystem::Build,
+        class: Class::Tunable,
+    },
+    EnvVar {
         name: "IPE_WATCH_TIMING",
         default: "unset (off)",
         purpose: "Set to `1` or `true` to print a per-phase `ipe watch` rebuild \
