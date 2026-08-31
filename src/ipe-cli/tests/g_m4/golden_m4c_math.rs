@@ -15,8 +15,8 @@
 //!        not meaningful on String)
 //!      * `Math.max "b" "a"` → `"b"`
 //!
-//! 2. **Go parity** — the rest. Here Ipê's output is the target, so the cached
-//!    oracle is the Go output (`oracle_divergence = false`) and Ipe must
+//! 2. **golden parity** — the rest. Here Ipê's output is the target, so the cached
+//!    oracle is the cached output (`oracle_divergence = false`) and Ipê must
 //!    match it byte-for-byte: `Math.min` / `Math.max` on `Int` (Ipê's `AsInt`
 //!    path gives the correct result for integers), `abs`, `sqrt` (incl. the
 //!    `sqrt (-1.0)` NaN domain edge), `pow`, `round` (half-away-from-zero, both
@@ -41,7 +41,7 @@ fn golden_dir(root: &Path, name: &str) -> PathBuf {
 }
 
 /// Compile `tests/golden/<name>/Main.ipe`, build the emitted Cargo project,
-/// run it, and assert its stdout matches the cached oracle (the Go reference
+/// run it, and assert its stdout matches the cached oracle (the golden reference
 /// for a parity case, or Ipê-Rust's own recorded output for a `divergence:`
 /// entry). Gated on `IPE_E2E=1`.
 fn assert_runs_and_matches_oracle(name: &str) {
@@ -66,7 +66,7 @@ fn assert_runs_and_matches_oracle(name: &str) {
     assert_eq!(outcome.exit_code, Some(0), "exit 0, matching the oracle");
 }
 
-// ── min / max — Int (TRUE Go parity: AsInt path is correct on integers) ───────
+// ── min / max — Int (TRUE golden parity: AsInt path is correct on integers) ───────
 
 /// `Math.min 3 7` → `3`.
 #[test]
@@ -145,7 +145,7 @@ fn math_pow() {
 
 // ── round — half-away-from-zero, both signs ───────────────────────────────────
 
-/// `Math.round 2.5` → `3`. Go `math.Round` rounds halves away from zero.
+/// `Math.round 2.5` → `3`. IEEE 754 round-half-away-from-zero rounds halves away from zero.
 #[test]
 fn math_round_half_away() {
     assert_runs_and_matches_oracle("math_round");
@@ -179,13 +179,13 @@ fn math_trunc_negative() {
 
 // ── mod vs remainder ──────────────────────────────────────────────────────────
 
-/// `Math.mod 7.0 3.0` → `1`. Modulo carrying the dividend's sign (Go `math.Mod`).
+/// `Math.mod 7.0 3.0` → `1`. Modulo carrying the dividend's sign (signed-dividend modulo).
 #[test]
 fn math_mod() {
     assert_runs_and_matches_oracle("math_mod");
 }
 
-/// `Math.remainder 7.0 3.0` → `1`. IEEE 754 remainder (Go `math.Remainder`).
+/// `Math.remainder 7.0 3.0` → `1`. IEEE 754 remainder semantics.
 #[test]
 fn math_remainder() {
     assert_runs_and_matches_oracle("math_remainder");

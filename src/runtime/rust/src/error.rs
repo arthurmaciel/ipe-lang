@@ -1,8 +1,7 @@
 //! Ipe.Error: the rich, typed `Error` ADT.
 //!
-//! Ported from the ancestor Go/Haskell design (`ipe-stdlib/Ipe/Core/Error.ipe`
-//! in the reference repo): `Error = Error ErrorKind ErrorInfo`, an 11-variant
-//! `ErrorKind` classification, message-carrying `ErrorInfo`, and the 5-variant
+//! `Error = Error ErrorKind ErrorInfo`, an 11-variant `ErrorKind`
+//! classification, message-carrying `ErrorInfo`, and the 5-variant
 //! `ErrorDetails` union (`FfiPanic`/`TypeMismatch`/`HttpStatus`/`JsonDecode`/
 //! `Custom`) carried optionally on `ErrorInfo.details : Maybe ErrorDetails`.
 //!

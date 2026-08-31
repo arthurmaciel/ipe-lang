@@ -2,7 +2,7 @@
 //!
 //! Target-neutral: the server builds it from the incoming HTTP parts
 //! (`web::req::web_req`), the browser-WASM client synthesises it from
-//! `location` + `document.cookie`. Fields mirror the Go `req` record.
+//! `location` + `document.cookie`. Fields mirror the  record.
 
 use crate::dict::IpeDict;
 

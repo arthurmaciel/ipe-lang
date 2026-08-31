@@ -1,4 +1,4 @@
--- | Ipe.Encoding — text encoding helpers (Layer 3 Ipe source).
+-- | Ipe.Encoding — text encoding helpers.
 --
 -- String-to-String codecs for base64, percent (URL), and hex encodings.
 -- Each encoder is total (`String -> String`); each decoder returns

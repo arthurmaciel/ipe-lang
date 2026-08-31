@@ -73,7 +73,7 @@ use super::*;
 /// LOAD-BEARING CONTRACT — `client.js` `__ipeProbeSessionLost` only triggers
 /// `window.location.reload()` (the SSE-reconnect recovery path) when a probe
 /// POST gets a 404 + `X-Ipê-Web: 1` AND the body CONTAINS the substring
-/// `"session not found"` (client.js l1481/l1530/l1536). Go's backend returns
+/// `"session not found"` (client.js l1481/l1530/l1536).  backend returns
 /// the same string; diverging it (the old `"no session"` body) silently broke
 /// recovery after a server restart — the browser shows "Reconnecting…" forever.
 /// Guarded by `session_lost_body_tests`.
@@ -81,10 +81,9 @@ const SESSION_LOST_BODY: &str = "session not found";
 
 // ─── Client assets ────────────────────────────────────────────────────────────
 
-/// The browser-side Ipe.Web client, extracted verbatim from Go's
-/// `liveJSWithCfgAndCsrfWithBase` template (runtime-go/rt/live.go:5853-7490).
-/// The 12 header `%`-verb lines are replaced with static literals;
-/// the two `%%` CSS escapes are un-escaped to `%`.
+/// The browser-side Ipe.Web client JS asset. The 12 header `%`-verb
+/// lines are replaced with static literals; the two `%%` CSS escapes are
+/// un-escaped to `%`.
 const CLIENT_JS: &str = include_str!("client.js");
 
 /// Content-addressing for the client asset: computed ONCE at first access via
@@ -121,7 +120,6 @@ pub fn client_js_path() -> String {
 }
 
 /// Minimal CSS reset injected into every Ipe.Web page.
-/// Ported verbatim from Go's `liveBaseCSS` (runtime-go/rt/live.go:3847-3858).
 const BASE_CSS: &str = concat!(
     "*,*::before,*::after{box-sizing:border-box}",
     "html,body{margin:0;padding:0;min-height:100%}",
@@ -302,7 +300,7 @@ mod island_escape_tests {
 }
 
 /// Full page wrap with the live client loaded as a cacheable external asset.
-/// Mirrors Go's live page render (runtime-go/rt/live.go:3788).
+/// Implements live page render
 ///
 /// `sid`  — session id (injected into the JS via `window.__IPE_SID`).
 /// `base` — sub-app base path, e.g. "" for root-mounted apps.
@@ -556,9 +554,9 @@ fn value_to_string(v: &serde_json::Value) -> String {
 type RouteResolver<Model> = Arc<dyn Fn(Model, &str) -> Model + Send + Sync>;
 /// Boxed param resolver: a GET path → the matched route's `:name`→value params.
 type ParamResolver = Arc<dyn Fn(&str) -> crate::dict::IpeDict<String> + Send + Sync>;
-/// Boxed route predicate: does a GET path match a declared route? (Go
-/// `matchAnyRoute` parity.) Gates the page handler's browser-noise 404 and
-/// the unrouted-GET-against-a-live-session 404 — see `page`.
+/// Boxed route predicate: does a GET path match a declared route?
+/// Gates the page handler's browser-noise 404 and the
+/// unrouted-GET-against-a-live-session 404 — see `page`.
 type RouteMatched = Arc<dyn Fn(&str) -> bool + Send + Sync>;
 
 /// Shared axum state: the session store + Arc'd TEA callbacks.
@@ -579,9 +577,9 @@ pub(crate) struct WebState<Model, Msg, FInit, FUpdate, FView, FSubs> {
     /// BEFORE calling `init`. `web_app` returns empty; `web_app_routed`
     /// captures the route table.
     param_resolver: ParamResolver,
-    /// Does a GET path match a declared route? (Go `matchAnyRoute` parity —
-    /// `web_app` treats only `/` as routed; `web_app_routed` captures the
-    /// route table.) An unrouted GET must never re-route a live session's
+    /// Does a GET path match a declared route? `web_app` treats only `/` as
+    /// routed; `web_app_routed` captures the route table. An unrouted GET must
+    /// never re-route a live session's
     /// model or rebuild its handler index: that wipes the handlers of the
     /// page the browser is showing, silently killing every subsequent event
     /// (form submits included).
@@ -660,16 +658,16 @@ fn run_cmd<Msg: Send + 'static>(cmd: IpeCmd<Msg>, tx: &Sender<Msg>, sid: &str) {
             });
         }
         IpeCmd::Publish(thunk) => {
-            // Inject this session's sid as the broadcast origin (Go parity:
+            // Inject this session's sid as the broadcast origin (
             // liveApp.Publish sets Origin = session.sid). Fire-and-forget.
             let _ = thunk(sid);
         }
     }
 }
 
-/// (Re-)spawn subscription tasks. Aborts the previous handles first (one model,
-/// re-evaluated each commit — Go tea_subs.go parity). When `subscriptions` is
-/// `Sub.none`, this is exercised mainly by the None arm.
+/// (Re-)spawn subscription tasks. Aborts the previous handles first (one model
+/// re-evaluated each commit). When `subscriptions` is `Sub.none`, this is
+/// exercised mainly by the None arm.
 fn spawn_subs<Msg: Clone + Send + 'static>(
     sub: IpeSub<Msg>,
     tx: &Sender<Msg>,
@@ -783,7 +781,7 @@ async fn drive_session<Model, Msg, FUpdate, FView, FSubs>(
         PortLifecycle(port_sid)
     };
 
-    // Initial subscriptions — Go parity (setupSubscriptions runs at session
+    // Initial subscriptions —
     // creation, before the first event; live.go:3729). Without this a
     // watch-only session never subscribes until it dispatches its own Msg, so a
     // pub/sub broadcast (or a Sub.every ticker) would never reach a freshly
@@ -840,7 +838,7 @@ async fn drive_session<Model, Msg, FUpdate, FView, FSubs>(
                 .model
                 .clone()
         };
-        // Msg-handling latency histogram (Go parity: ipe_web_msg_seconds{name},
+        // Msg-handling latency histogram (ipe_web_msg_seconds{name},
         // msg_logging.go). The `name` label is the BOUNDED Msg variant name
         // (finite cardinality), never a payload — see telemetry::variant_name.
         // Extracted BEFORE `update` consumes `msg`.
@@ -865,11 +863,11 @@ async fn drive_session<Model, Msg, FUpdate, FView, FSubs>(
         let (patches, seq, sse, noop) = {
             let mut e = strong.lock().unwrap_or_else(|e| e.into_inner());
             let patches = diff(&e.last_view, &tree);
-            // noop (Go parity: oldHash==newHash && cmdIsNone && err==nil). Here
+            // noop. Here
             // `e.model` STILL holds the OLD model (top-of-loop cloned it OUT; the
             // store isn't updated until the assignment below), so `e.model ==
             // next` is old==new — a STRUCTURAL equality (no hash-collision false
-            // noop, unlike Go's hash), computed with NO extra clone. The Rust
+            // noop, unlike  hash), computed with NO extra clone. The Rust
             // dispatch has no error channel, so the `err==nil` conjunct is always
             // true and is dropped.
             let noop = cmd_is_none && e.model == next;
@@ -882,7 +880,7 @@ async fn drive_session<Model, Msg, FUpdate, FView, FSubs>(
                 .record(msg_for_history, next.clone(), &|m, mdl| (*update)(m, mdl));
             (patches, e.seq, e.sse_tx.clone(), noop)
         };
-        // Msg counter (Go parity: ipe_web_msg_total{name,outcome,noop}). All
+        // Msg counter. All
         // labels bounded: name = finite variant set, outcome = "ok" (this path
         // has no error channel), noop ∈ {true,false}. Emitted OUTSIDE the entry
         // lock (no registry-lock-under-entry-lock nesting).
@@ -909,9 +907,9 @@ async fn drive_session<Model, Msg, FUpdate, FView, FSubs>(
         }
 
         // Write-through: checkpoint the committed model to the store (a touch
-        // for memory; a re-serialize for persistent backends — Go store.Set on
-        // every commit). Re-inserting an evicted-but-active session with a fresh
-        // last-seen is intended (Go parity): a session that processes a Msg is
+        // for memory; a re-serialize for persistent backends) on every commit.
+        // Re-inserting an evicted-but-active session with a fresh last-seen is
+        // intended: a session that processes a Msg is
         // alive. `strong` is dropped at the end of this iteration (block scope),
         // before the next select! park — never held across the await loop.
         store.set(&sid, strong.clone()).await;
@@ -960,8 +958,7 @@ fn normalise_base_path(raw: &str) -> String {
 /// `__Host-ipe_sid` in secure mode (production / frame-ancestors) else `ipe_sid`;
 /// for a sub-app a base-derived DISTINCT name so this child's session cookie can
 /// never clobber the PARENT app's `ipe_sid` (both would otherwise be `Path=/` and
-/// share the browser's cookie jar on the proxied paths). Go gives each sub-app a
-/// distinct `cookieName` for the same reason (live.go:2769).
+/// share the browser's cookie jar on the proxied paths).
 ///
 /// SECURITY (root, secure mode): the session cookie is the SOLE bearer credential
 /// (`sid_from_cookie` + `store.get` authorise every `/_ipe/event` + `/_ipe/sse`),
@@ -1115,7 +1112,7 @@ fn page_response(
     } else {
         "Lax"
     };
-    // Max-Age (Go parity, live.go ~5641): persist the cookie for the store TTL so a
+    // Max-Age: persist the cookie for the store TTL so a
     // tab-close doesn't drop a still-live server session. Without it the cookie is
     // session-scoped and the user loses state on tab close.
     let max_age = web_ttl().as_secs();
@@ -1142,7 +1139,7 @@ fn page_response(
     if let Ok(v) = axum::http::HeaderValue::from_str(&csrf_cookie) {
         h.append(axum::http::header::SET_COOKIE, v);
     }
-    // Security response headers (Go parity + hardening) — page GET only.
+    // Security response headers — page GET only.
     for (name, val) in csrf::security_headers() {
         if let Ok(v) = axum::http::HeaderValue::from_str(&val) {
             h.insert(axum::http::HeaderName::from_static(name), v);
@@ -1255,10 +1252,10 @@ fn web_ttl() -> std::time::Duration {
     std::time::Duration::from_secs(secs)
 }
 
-/// Parse a Go-style duration (Go parity for `IPE_WEB_TTL` / `[web] ttl`): a bare
-/// integer is seconds (legacy), otherwise one or more `<number><unit>` segments
-/// with units `h` / `m` / `s` (e.g. `30m`, `1h`, `24h`, `90s`, `1h30m`). Total: any
-/// malformed input returns `None` (caller falls back to the default) — never panics.
+/// Parse a duration string: a bare integer is seconds (legacy), otherwise one
+/// or more `<number><unit>` segments with units `h` / `m` / `s`
+/// (e.g. `30m`, `1h`, `24h`, `90s`, `1h30m`). Total: any malformed input
+/// returns `None` (caller falls back to the default) — never panics.
 fn parse_duration_secs(raw: &str) -> Option<u64> {
     let s = raw.trim();
     if s.is_empty() {
@@ -1299,15 +1296,12 @@ fn parse_duration_secs(raw: &str) -> Option<u64> {
     Some(total)
 }
 
-/// Graceful-drain grace window (Go parity for `srv.Close()`): how long the
-/// pure axum graceful drain is allowed before we force a CLEAN exit-0. Go does
-/// NOT drain — it calls `srv.Close()` which forcibly drops every connection
-/// (including the never-idle SSE streams) and returns immediately. axum's
-/// `with_graceful_shutdown` instead WAITS for every connection to finish, so an
-/// open SSE `EventSource` (heartbeat every 15 s, otherwise idle — it never
-/// completes) would hang the drain forever. This window lets ordinary in-flight
-/// requests finish, then force-exits 0 so SSE clients are dropped exactly as Go
-/// drops them (the browser banner flips to "Reconnecting…", same UX as a deploy).
+/// Graceful-drain grace window: how long the pure axum graceful drain is allowed
+/// before we force a CLEAN exit-0. axum's `with_graceful_shutdown` WAITS for
+/// every connection to finish, so an open SSE `EventSource` (heartbeat every
+/// 15 s, otherwise idle) would hang the drain forever. This window lets ordinary
+/// in-flight requests finish, then force-exits 0 so SSE clients are dropped
+/// (the browser banner flips to "Reconnecting…").
 /// Tunable via `IPE_WEB_SHUTDOWN_GRACE_MS` (deprecated alias:
 /// `IPE_LIVE_SHUTDOWN_GRACE_MS`; default 1500 ms; 0 = exit at once).
 fn shutdown_grace() -> std::time::Duration {
@@ -1392,15 +1386,13 @@ async fn maybe_push_reload_to_web_sessions<Model, Msg>(
 /// Await the FIRST shutdown signal (SIGINT or SIGTERM), then run the graceful
 /// teardown and return so axum's `with_graceful_shutdown` drains in-flight
 /// connections and the serve future resolves `Ok(())` (→ the IpeTask is `Ok` →
-/// the generated entry exits 0). Go parity: `live.go:3503` (the SIGINT/SIGTERM
-/// handler that prints the line, flips readyz, drains, then returns naturally).
+/// the generated entry exits 0).
 ///
 /// Two escapes guard against the drain hanging — both keep the no-panic thesis:
 ///  - A bounded grace timer that force-exits 0 (CLEAN) after `shutdown_grace()`,
-///    so a never-idle SSE stream can't wedge the process (Go's `srv.Close()`
-///    equivalent — it drops long-lived connections rather than waiting).
-///  - A SECOND signal (Ctrl-C twice) that force-exits 130 immediately (Go's
-///    nested `os.Exit(130)` escalation).
+///    so a never-idle SSE stream can't wedge the process (drops long-lived
+///    connections rather than waiting).
+///  - A SECOND signal (Ctrl-C twice) that force-exits 130 immediately.
 ///
 /// Robustness: a failed SIGTERM registration must NOT crash — it degrades to
 /// SIGINT-only (`ctrl_c`). On non-unix only `ctrl_c` is available.
@@ -1412,12 +1404,11 @@ where
     // First press: block until SIGINT or SIGTERM arrives.
     wait_for_term_or_int().await;
 
-    // Print to stdout (Go uses `fmt.Println`, which is stdout). The leading
-    // newline keeps the `^C` echo on its own line, matching Go.
+    // Print to stdout. The leading newline keeps the `^C` echo on its own line.
     println!("\nIpe.Web shutting down…");
 
     // Flip readyz → draining so orchestrators stop routing new traffic while
-    // in-flight requests finish (Go: `SetReady(false)`).
+    // in-flight requests finish.
     observability::mark_draining();
 
     // Dev-only proactive `event: reload` push to every locally-live SSE
@@ -1426,8 +1417,8 @@ where
     // instead of waiting out its reconnect backoff. Production-gated (H23).
     maybe_push_reload_to_web_sessions(&store).await;
 
-    // Tear down the console child (Go: `ShutdownSubApps`; here the pre-built
-    // console child, if one was spawned). Idempotent no-op when none exists.
+    // Tear down the console child, if one was spawned. Idempotent no-op when
+    // none exists.
     // Load-bearing: the child is tracked in a `static` whose `Drop`
     // (`kill_on_drop`) never runs on `process::exit`, so this explicit
     // `start_kill` is what prevents an orphan console child after a clean exit.
@@ -1442,12 +1433,11 @@ where
     // silently lose ≤1 batch-interval (~2 s default) of buffered telemetry.
     // `flush_exporters` sends a Flush sentinel to each active exporter and waits
     // a bounded 500 ms; it is best-effort (telemetry only, never user data) and
-    // never hangs shutdown. Go's `ShutdownTracing`/`RunShutdownHooks` are the
-    // equivalent path.
+    // never hangs shutdown.
 
     // Grace timer: force a CLEAN exit-0 after the window so a never-idle SSE
-    // connection can't hang the drain (Go's `srv.Close()` drops them outright).
-    // Spawned (not awaited) so we still return immediately and let the axum drain
+    // connection can't hang the drain. Spawned (not awaited) so we still return
+    // immediately and let the axum drain
     // win the race when there are no long-lived connections (the common case →
     // sub-window exit). Exit 0 keeps the IpeTask-Ok / exit-0 contract.
     tokio::spawn(async {
@@ -1462,8 +1452,7 @@ where
     });
 
     // Second press: a watchdog that force-exits 130 if the user hits Ctrl-C
-    // again while the drain is in progress (Go parity: the nested
-    // `<-sigCh; os.Exit(130)`). Spawned (not awaited).
+    // again while the drain is in progress. Spawned (not awaited).
     tokio::spawn(async {
         wait_for_term_or_int().await;
         eprintln!("Ipe.Web: forcing exit (second signal)");
@@ -1553,8 +1542,7 @@ where
             // No routing: GET serves the freshly-init'd model unchanged; no params.
             route_resolver: Arc::new(|m, _path| m),
             param_resolver: Arc::new(|_path| crate::dict::dict_empty()),
-            // Go `matchAnyRoute` parity: with no route table only `/` is a
-            // page URL.
+            // No route table: only `/` is a page URL.
             route_matched: Arc::new(|path| path == "/"),
             session_count: Arc::new(AtomicUsize::new(0)),
         };
@@ -1696,7 +1684,7 @@ where
     })
 }
 
-/// Go parity (live.go `isBrowserNoisePath`): a path a browser or crawler
+///go `isBrowserNoisePath`): a path a browser or crawler
 /// requests automatically (favicon, service-worker probe, source-map fetch,
 /// `.well-known` discovery, static asset by extension). When unrouted, these
 /// must never touch session state: they'd otherwise race the real `GET /`
@@ -1730,14 +1718,14 @@ fn is_browser_noise_path(p: &str) -> bool {
     .any(|ext| p.ends_with(ext))
 }
 
-/// Go parity (live.go `handleInitial`): serve an unrouted browser-noise file
+///go `handleInitial`): serve an unrouted browser-noise file
 /// from the static dir's ROOT when it exists there. Browsers always probe
 /// `/favicon.ico` (and friends) at the origin root, never under `/static/`,
 /// so without this shortcut an author with a configured static dir has no
 /// way to suppress the 404. `None` → the caller 404s.
 ///
 /// Security: the path is attacker-shaped. Any non-plain segment (empty, `.`,
-/// `..`) is rejected BEFORE the join — stricter than Go's `filepath.Clean`,
+/// `..`) is rejected BEFORE the join — stricter than  `filepath.Clean`,
 /// no traversal can escape the dir. A directory (or unreadable file) reads
 /// as `Err` → `None` → 404.
 async fn serve_noise_from_static_root(path: &str) -> Option<axum::response::Response> {
@@ -1817,7 +1805,7 @@ mod handlers {
         FView: Fn(Model) -> Html<Msg> + Send + Sync + 'static,
         FSubs: Fn(Model) -> IpeSub<Msg> + Send + Sync + 'static,
     {
-        // Cookie-based session lifecycle (Go store.Get on every GET):
+        // Cookie-based session lifecycle:
         //   * Web hit  → reuse the in-process session; re-apply routing for
         //                 this GET's path + re-render (no new driver).
         //   * Cold hit  → a persisted model (post-restart / different replica);
@@ -1832,7 +1820,7 @@ mod handlers {
             .filter(|t| csrf::token_is_well_formed(t))
             .unwrap_or_else(csrf::gen_token);
 
-        // Go parity (handleInitial): unrouted browser-noise paths 404 (or
+        //
         // serve from the static root) BEFORE any session work — they must
         // never run `init` (double-init race against the real `GET /`) and
         // never touch an existing session (see the routed guards below).
@@ -1849,7 +1837,7 @@ mod handlers {
             None => None,
         };
 
-        // Go parity (handleInitial): an unrouted GET against an EXISTING
+        //
         // session (live or persisted) 404s WITHOUT touching it. Re-routing
         // here would write the `notFound` page into the model and rebuild
         // the handler index from that view, orphaning every handler on the
@@ -1940,11 +1928,9 @@ mod handlers {
         let body = render_html(&tree);
 
         // Bounded per-session Msg queue: cap at 1024 to prevent a fast
-        // client from growing the queue without bound (per-session memory
-        // DoS). On overflow events are dropped with a warn (see
-        // event_handler). Go serialises dispatch under sess.mu instead of
-        // a channel — no Go bound to match; 1024 is far above any
-        // legitimate burst of user-driven events.
+        // client from growing the queue without bound (per-session memory DoS).
+        // On overflow events are dropped with a warn (see event_handler).
+        // 1024 is far above any legitimate burst of user-driven events.
         let (msg_tx, msg_rx) = mpsc::channel::<Msg>(1024);
         #[cfg(feature = "debugger")]
         let history_init =
@@ -2118,7 +2104,7 @@ mod handlers {
             );
         }
 
-        // Metrics (Go parity: ipe_web_sse_connections_total /
+        // Metrics (ipe_web_sse_connections_total /
         // ipe_web_sessions_active). Count the connection and mark the session
         // active; the gauge is decremented when the response body stream is
         // dropped on disconnect (the SessionGauge guard below).
@@ -2126,11 +2112,11 @@ mod handlers {
         crate::telemetry::metric_add_gauge("ipe_web_sessions_active", &[], 1);
 
         // Immediate hello + ~2KB proxy-buffer padding comment, then a 15s
-        // heartbeat keepalive (Go parity: live.go SSE handshake).
+        // heartbeat keepalive.
         let _ = tx
             .send(SsePatch(format!(": {}\n\n", " ".repeat(2048))))
             .await;
-        // Go-parity hello payload (live.go ~5486): `{"v":1,"sid":...,"ts":<ms>}`.
+        //  hello payload (live.go ~5486): `{"v":1,"sid":...,"ts":<ms>}`.
         // Reaching here means `entry` exists ⇒ the cookie sid was a live session,
         // so `sid` is Some; the impossible None degrades to an empty sid (the
         // client already holds its sid via window.__IPE_SID — the body is
@@ -2144,7 +2130,7 @@ mod handlers {
             )))
             .await;
 
-        // Reconnect-resync (Go parity: handleSSE full-body frame, live.go:5498).
+        // Reconnect-resync.
         // A session restored from the store on a cold hit — or any process
         // restart / `ipe watch` rebuild / redeploy paired with a persistent
         // store — has no live subscriptions from the previous process, so
@@ -2324,10 +2310,8 @@ mod handlers {
                     .clone()
             };
             // try_send is non-blocking; on a full queue drop the event and
-            // return 429 so the client can back off (Go parity: Go
-            // serialises under sess.mu and drops the handler if the
-            // session is gone; no client-side queue bound to match — we
-            // choose 429 over silent drop so the browser retry loop fires).
+            // return 429 so the client can back off (choosing 429 over silent
+            // drop so the browser retry loop fires).
             if let Err(e) = tx.try_send(m) {
                 eprintln!(
                     "[ipe.live] event_handler: session msg queue full or closed; dropping event ({})",
@@ -2524,7 +2508,7 @@ where
     FView: Fn(Model) -> Html<Msg> + Send + Sync + 'static,
     FSubs: Fn(Model) -> IpeSub<Msg> + Send + Sync + 'static,
 {
-    // Background TTL eviction (Go memoryStore.cleanupLoop parity): sweep
+    // Background TTL eviction : sweep
     // idle-expired sessions every 60 s. Persistent backends also prune their
     // checkpoint table in `sweep`.
     {
@@ -2600,10 +2584,10 @@ where
     };
     // Bind-address line (stderr, Rust-specific — carries the 0.0.0.0 bind).
     eprintln!("[ipe.web] listening on http://{addr}");
-    // Go-parity user-facing line (stdout, `fmt.Printf("Ipe.Web listening on
+    //  user-facing line (stdout, `fmt.Printf("Ipe.Web listening on
     // :%d\n", port)` — live.go:3546).
     println!("Ipe.Web listening on :{port}");
-    // Graceful shutdown (Go parity — live.go:3503): trap SIGINT/SIGTERM,
+    // Graceful shutdown: trap SIGINT/SIGTERM,
     // print the shutdown line, drain in-flight requests, and return cleanly so
     // the IpeTask resolves Ok → the generated entry exits 0 (NOT 130). A
     // SECOND signal force-exits 130 via the watchdog inside web_shutdown_signal.
@@ -2639,8 +2623,7 @@ where
     use axum::Router;
     use axum::routing::{get, post};
 
-    // Body-size cap on /_ipe/event: mirrors Go's http.MaxBytesReader
-    // (runtime-go/rt/live.go:3915). axum's DefaultBodyLimit applies
+    // Body-size cap on /_ipe/event. axum's DefaultBodyLimit applies
     // before the handler sees the bytes, so an over-sized payload is
     // rejected at the extract layer with 413 Payload Too Large.
     let event_route = post(handlers::event_handler::<Model, Msg, FInit, FUpdate, FView, FSubs>)
@@ -2714,7 +2697,7 @@ where
         post(handlers::scrub_handler::<Model, Msg, FInit, FUpdate, FView, FSubs>),
     );
     let mut router = router
-        // Observability surface (Go parity — observability.go).
+        // Observability surface.
         .route("/_ipe/healthz", get(observability::healthz))
         .route("/_ipe/readyz", get(observability::readyz))
         .route("/_ipe/buildinfo", get(observability::buildinfo))
@@ -2810,7 +2793,7 @@ where
     // /static/* via ServeDir. MUST be added before the `/*path` page catch-all
     // so a /static/<file> request hits ServeDir, not the page handler (which
     // would return HTML). ServeDir blocks `..` path traversal by construction
-    // (percent-decodes first, so `%2e%2e` is caught too). NOTE: like Go's
+    // (percent-decodes first, so `%2e%2e` is caught too). NOTE: like
     // http.FileServer it FOLLOWS symlinks inside the dir — the dir is
     // author-controlled (package.ipe [web] static), so that is the intended
     // contract, NOT a confinement guarantee. Absent/empty → no static mount.
@@ -2834,18 +2817,16 @@ where
         )
         // Layer order (axum: last `.layer` = outermost): CSRF is INNER of
         // observability::track so a rejected CSRF POST still gets counted +
-        // access-logged (Go parity — CSRF sits inside the observability mw).
+        // access-logged.
         .layer(axum::middleware::from_fn(csrf::csrf_middleware))
-        // Per-request panic recovery (Go parity — its handlers run under a
-        // defer/recover that returns 500 instead of crashing the worker;
-        // rt.go:3463 etc.). Symmetric with Ipe.Http.Server (server.rs). The
-        // Rust thesis is that well-typed Ipê can't panic, so this is the
-        // defense-in-depth FLOOR, not the foundation: a handler / csrf-mw
-        // panic becomes a 500 instead of an unwound tokio task that drops the
-        // connection with no response. Placed INNER of `track` (and OUTER of
+        // Per-request panic recovery: a handler or csrf-mw panic becomes a 500
+        // instead of an unwound tokio task that drops the connection with no
+        // response. Symmetric with Ipe.Http.Server (server.rs). The Rust thesis
+        // is that well-typed Ipê can't panic, so this is the defense-in-depth
+        // FLOOR, not the foundation. Placed INNER of `track` (and OUTER of
         // csrf + the route handlers) so the converted 500 returns through
         // track's `next.run().await` normally — track still counts +
-        // access-logs + histograms it as status 500, matching Go (whose
+        // access-logs + histograms it as status 500
         // recover is innermost; the outer middleware observes the 500). If it
         // were outermost the panic would unwind through track, skipping its
         // post-`next.run` metering. The custom responder classifies + logs the
@@ -2987,7 +2968,7 @@ mod dev_banner_tests {
 
     #[test]
     fn banner_byte_matches_go_dev_banner_markup() {
-        // Go parity (dev_banner.go devBannerHTML): same id, target/rel/title,
+        //go devBannerHTML): same id, target/rel/title,
         // monospace blue style, `&#128269;` ENTITY (not a literal emoji).
         let b = dev_console_banner("");
         let expected = "<a id=\"__ipe-dev-console\" href=\"/_ipe/console\" target=\"_blank\" \
@@ -2999,7 +2980,7 @@ mod dev_banner_tests {
             padding:6px 10px;text-decoration:none;\
             box-shadow:0 2px 8px rgba(0,0,0,0.4);\">\
             &#128269; Console</a>";
-        assert_eq!(b, expected, "dev console banner must byte-match Go");
+        assert_eq!(b, expected, "dev console banner must match golden");
         assert!(
             !b.contains("🔍"),
             "must use the &#128269; entity, not a literal emoji"
@@ -3018,7 +2999,7 @@ mod duration_parse_tests {
     use super::parse_duration_secs;
 
     #[test]
-    fn go_style_durations_and_bare_seconds() {
+    fn duration_formats_and_bare_seconds() {
         assert_eq!(parse_duration_secs("1800"), Some(1800)); // bare seconds (legacy)
         assert_eq!(parse_duration_secs("30m"), Some(1800));
         assert_eq!(parse_duration_secs("1h"), Some(3600));

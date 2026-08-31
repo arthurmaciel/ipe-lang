@@ -1,5 +1,5 @@
 //! `Ipe.Json.Decode` + `Ipe.Json.Decode.Pipeline` parity gate —
-//! JSON decoder combinators with byte-for-byte Go parity.
+//! JSON decoder combinators with byte-for-byte golden parity.
 //!
 //! Tests exercise the `JsonDec` and `JsonDecP` kernel families end-to-end:
 //!

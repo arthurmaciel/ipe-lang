@@ -3,7 +3,7 @@
 //! Always compiled (so `Ipe.Log.*` can feed it regardless of features); the
 //! Ipe.Web `console` module exposes it over HTTP. Bounded ring buffers (logs +
 //! errors) plus monotonic request/error counters. Mirrors the in-RAM tier of
-//! Go's console (`runtime-go/rt/console*.go`), minus the `SQLite` spill.
+//!  console (`*.go`), minus the `SQLite` spill.
 //!
 //! No panic vectors: a poisoned lock recovers via `into_inner()` (the data is
 //! plain records — a panic mid-push can't corrupt invariants); all reads/writes
@@ -156,7 +156,7 @@ pub fn spans_json(limit: usize) -> String {
     format!("[{}]", items.join(","))
 }
 
-/// Production gate (Go's `productionFromEnv`): `ENV` then `IPE_ENV`; unset OR a
+/// Production gate ( `productionFromEnv`): `ENV` then `IPE_ENV`; unset OR a
 /// dev marker (`dev`/`development`/`local`) → dev (false); anything else → true.
 #[must_use]
 pub fn production_from_env() -> bool {
@@ -176,15 +176,15 @@ pub fn production_from_env() -> bool {
 
 /// Floating "🔍 Console" link injected into every dev-mode `text/html` response
 /// — both the Ipe.Web page path and every buffered Ipe.Http.Server response
-/// (Go parity: `devBannerHTML`, `dev_banner.go`). Lives here (the always-compiled
+/// . Lives here (the always-compiled
 /// telemetry module) rather than under `live` so the server path (`server.rs`,
 /// where the `live` module is DCE'd out of server-only builds) can reach it too.
 ///
 /// Suppressed for a sub-app (`base` non-empty — e.g. the bundled console child
 /// itself; a console link inside the console is recursive), in production
 /// (`ENV`/`IPE_ENV` non-dev), when the banner is turned off (`IPE_DEV_BANNER=off|0`,
-/// Go parity), and when the console surface is disabled (`IPE_CONSOLE_EMBED=off`
-/// / `IPE_CONSOLE_AUTH=off`). The union of Go's and the live path's gates —
+/// ), and when the console surface is disabled (`IPE_CONSOLE_EMBED=off`
+/// / `IPE_CONSOLE_AUTH=off`). The union of  and the live path's gates —
 /// suppression only ever makes bodies match MORE often across odd configs, and
 /// the sweep's env (nothing set) hits the injecting path either way.
 ///
@@ -209,7 +209,7 @@ pub fn dev_console_banner(base: &str) -> String {
     {
         return String::new();
     }
-    // Byte-match Go's `devBannerHTML` (`dev_banner.go`): same id, target/rel/title,
+    // Byte-match  `devBannerHTML` (`dev_banner.go`): same id, target/rel/title,
     // monospace blue styling, and the `&#128269;` entity (NOT a literal emoji) so
     // both backends emit identical bytes. href honours `IPE_CONSOLE_URL` (default
     // `/_ipe/console`), attribute-escaped against a hostile env value.
@@ -237,9 +237,9 @@ pub fn dev_console_banner(base: &str) -> String {
     )
 }
 
-/// Insert `banner` just before the LAST case-insensitive `</body>` tag (Go
-/// parity: `injectDevBanner`, `dev_banner.go`). Falls back to appending when no
-/// `</body>` is present (body-only fragments). An empty banner is a no-op.
+/// Insert `banner` just before the LAST case-insensitive `</body>` tag.
+/// Falls back to appending when no `</body>` is present (body-only fragments).
+/// An empty banner is a no-op.
 #[must_use]
 pub fn inject_dev_banner(body: &str, banner: &str) -> String {
     if banner.is_empty() {
@@ -293,28 +293,28 @@ pub fn frame_ancestors() -> Option<&'static str> {
     if v.is_empty() { None } else { Some(v.as_str()) }
 }
 
-/// Safe-by-default security response headers (Go parity: `setSecurityHeaders`,
+/// Safe-by-default security response headers (`setSecurityHeaders`,
 /// live.go:3557 — applied on both the Ipe.Web page path and the Ipe.Http.Server
-/// response path, rt.go:7838). Returned as owned `(name, value)` pairs so each
+/// response path, ). Returned as owned `(name, value)` pairs so each
 /// caller splices them into its response builder only when the header is unset
 /// (an explicit handler override wins).
 #[must_use]
 pub fn security_headers() -> Vec<(&'static str, String)> {
     let mut h: Vec<(&'static str, String)> = vec![
-        // Go parity.
+        //
         ("x-content-type-options", "nosniff".to_string()),
         (
             "referrer-policy",
             "strict-origin-when-cross-origin".to_string(),
         ),
-        // Beyond Go: deny powerful features by default for a server-rendered app.
+        // Deny powerful features by default for a server-rendered app.
         (
             "permissions-policy",
             "geolocation=(), microphone=(), camera=(), payment=()".to_string(),
         ),
     ];
     // Framing: CSP frame-ancestors when an embed origin is configured, else
-    // X-Frame-Options: SAMEORIGIN (mutually exclusive, Go parity).
+    // X-Frame-Options: SAMEORIGIN (mutually exclusive
     match frame_ancestors() {
         Some(fa) => h.push(("content-security-policy", format!("frame-ancestors {fa}"))),
         None => h.push(("x-frame-options", "SAMEORIGIN".to_string())),
@@ -357,7 +357,7 @@ pub fn errors_total() -> u64 {
 }
 
 // ===========================================
-// Labeled metric registry + Prometheus exposition (Go parity:
+// Labeled metric registry + Prometheus exposition (:
 // telemetry/store.go + prometheus.go). Labeled counters + gauges + histograms
 // keyed by (name, sorted-labels), rendered as canonical 0.0.4 text — giving an
 // operator pointing Prometheus/Grafana at a Rust Ipê binary the full
@@ -395,7 +395,7 @@ enum MetricValue {
     },
 }
 
-/// Go's `BucketsLatency` (buckets.go) — hot-path latency seconds, 1ms…5s.
+///  `BucketsLatency` (buckets.go) — hot-path latency seconds, 1ms…5s.
 const LATENCY_BUCKETS: [f64; 8] = [0.001, 0.005, 0.010, 0.050, 0.100, 0.500, 1.0, 5.0];
 
 // `Mutex::new` + `BTreeMap::new` are const → a plain static, no OnceLock. BTree
@@ -449,7 +449,7 @@ pub fn metric_add_gauge(name: &str, labels: &[(&str, &str)], delta: i64) {
 
 /// Record a latency/duration `v` (seconds) into a labeled histogram (creating it
 /// with the `BucketsLatency` boundaries first). Cumulative: bumps every bucket
-/// whose boundary `>= v` (Go's `Observe`). Labels MUST be low-cardinality (see
+/// whose boundary `>= v` ( `Observe`). Labels MUST be low-cardinality (see
 /// `MetricKey.labels`) — callers pass `&[]` or a bounded class, NEVER a raw path.
 pub fn metric_observe(name: &str, labels: &[(&str, &str)], v: f64) {
     // Contract guard: a non-finite or negative observation would poison `_sum`
@@ -492,7 +492,7 @@ pub fn metric_observe(name: &str, labels: &[(&str, &str)], v: f64) {
 }
 
 /// Extract the BOUNDED variant name from a `Debug` value, for use as a
-/// low-cardinality metric label (e.g. `ipe_web_msg_seconds{name}` — Go parity
+/// low-cardinality metric label (e.g. `ipe_web_msg_seconds{name}`
 /// with `msg_logging.go`). Returns ONLY the leading Rust-identifier characters of
 /// the `{:?}` rendering — the enum variant name — and NEVER any payload field.
 ///
@@ -650,7 +650,7 @@ pub fn write_prom() -> String {
                 sum,
                 count,
             } => {
-                // Cumulative _bucket lines, then +Inf, _sum, _count (Go's
+                // Cumulative _bucket lines, then +Inf, _sum, _count (
                 // writeHistogram). buckets[i] already holds the cumulative count.
                 for (i, b) in boundaries.iter().enumerate() {
                     let c = buckets.get(i).copied().unwrap_or(0);
@@ -836,7 +836,7 @@ mod tests {
 
     #[test]
     fn dev_banner_byte_matches_go_dev_banner_markup() {
-        // Go parity (dev_banner.go devBannerHTML): same id, target/rel/title,
+        // (dev_banner.go devBannerHTML): same id, target/rel/title,
         // monospace blue style, `&#128269;` ENTITY (not a literal emoji). Default
         // test env is dev (ENV/IPE_ENV unset) → non-empty banner.
         let b = dev_console_banner("");
@@ -849,7 +849,7 @@ mod tests {
             padding:6px 10px;text-decoration:none;\
             box-shadow:0 2px 8px rgba(0,0,0,0.4);\">\
             &#128269; Console</a>";
-        assert_eq!(b, expected, "dev console banner must byte-match Go");
+        assert_eq!(b, expected, "dev console banner must match golden");
         assert!(
             !b.contains('🔍'),
             "must use the &#128269; entity, not a literal emoji"
@@ -872,7 +872,7 @@ mod tests {
 
     #[test]
     fn inject_dev_banner_case_insensitive_body_tag() {
-        // Go lower-cases the body before LastIndex("</body>").
+        // Case-insensitive `</body>` search (lower-cased before index).
         let body = "<HTML><BODY>x</BODY></HTML>";
         let out = inject_dev_banner(body, "<B>");
         assert_eq!(out, "<HTML><BODY>x<B></BODY></HTML>");

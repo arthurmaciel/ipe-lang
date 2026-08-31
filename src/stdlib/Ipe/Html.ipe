@@ -1,4 +1,4 @@
--- | Ipe.Html — HTML element builders (Layer 3 Ipe source).
+-- | Ipe.Html — HTML element builders.
 --
 -- Every element builder (`div` / `nav` / `table` / `br` / …) is ordinary Ipê
 -- over two retained native primitives: `node` (a container element) and

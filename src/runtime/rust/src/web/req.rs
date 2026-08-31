@@ -1,10 +1,7 @@
-//! `WebReq` — the typed request context passed to a Ipe.Web `init`.
+//! `WebReq` — the typed request context passed to an `Ipe.Web` `init`.
 //!
-//! Mirrors the modern Go `req` record: `req.path` / `req.query` /
-//! `req.method` are strings; `req.params` / `req.headers` / `req.cookies` are
-//! `Dict String String`. (Go's older heterogeneous-Dict form — `Dict.get "path"
-//! req` over a `map[string]any` — doesn't port to Rust's no-`any` runtime, so
-//! the Rust backend uses the typed-record form only.)
+//! `req.path` / `req.query` / `req.method` are strings;
+//! `req.params` / `req.headers` / `req.cookies` are `Dict String String`.
 
 use crate::dict::IpeDict;
 
@@ -20,7 +17,7 @@ pub fn web_req(
     let mut hdrs: IpeDict<String> = IpeDict::new();
     for (k, v) in headers.iter() {
         if let Ok(val) = v.to_str() {
-            // First-value-wins on duplicate header keys, matching Go's
+            // First-value-wins on duplicate header keys, matching
             // `headersToDict` (`vs[0]`). axum yields multi-valued headers in
             // arrival order, so the first `iter()` entry is the first value.
             hdrs.entry(crate::http_header::canonical_header(k.as_str()))

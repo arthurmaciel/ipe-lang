@@ -1,18 +1,16 @@
--- | Ipe.Dict — string-keyed associative map (Layer 3 Ipe source).
+-- | Ipe.Dict — string-keyed associative map.
 --
 -- Every function in this module is declared as a Ipe-source binding
--- aliased to a kernel via `Ffi.kernel "Dict_<name>"`.  The Stage-4
--- compiler primitive rewrites every call site to the existing typed
--- kernel dispatch — so `Dict.get "k" d` continues to emit
--- `rt.Dict_getT[V]("k", d)` exactly as before, preserving the
--- typed-codegen guarantees the kernel-direct route already enjoyed.
+-- aliased to a kernel via `Ffi.kernel "Dict_<name>"`.  The compiler
+-- rewrites every call site to typed kernel dispatch — so `Dict.get "k" d`
+-- emits the appropriate typed kernel, preserving the typed-codegen
+-- guarantees the kernel-direct route already enjoyed.
 --
--- The Ipe-source layer exists for discoverability + Layer 3
--- conformance + so `ipe doc` shows a stable source location for
--- every entry.  The runtime bodies live in `runtime-go/rt/rt.go`
--- (`Dict_*` helpers; the typed `Dict_*T[V]` variants live alongside).
+-- The Ipe-source layer exists for discoverability so `ipe doc` shows a
+-- stable source location for every entry.  The runtime bodies live in
+-- the `ipe_runtime` crate (`Dict_*` kernels).
 --
--- Key-type note: at runtime the underlying map is `map[string]V`,
+-- Key-type note: at runtime the underlying map uses stringified keys,
 -- so non-String keys are stringified on `fromList` and re-parsed on
 -- `toList`. For `Dict Int v` the round-trip is faithful (Int → "1" →
 -- 1); for floating-point keys the round-trip carries decimal-string

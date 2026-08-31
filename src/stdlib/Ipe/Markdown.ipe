@@ -1,5 +1,4 @@
--- | Ipe.Markdown — render markdown source to `Ipe.Ui` Element trees (Layer 3
--- Ipe source).
+-- | Ipe.Markdown — render markdown source to `Ipe.Ui` Element trees.
 --
 -- Direct render-to-Element (no HTML string round-trip) so styling inherits
 -- the surrounding theme (`Font.color`, `Background.color`, typography).

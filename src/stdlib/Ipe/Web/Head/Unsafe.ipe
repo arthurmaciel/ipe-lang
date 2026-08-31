@@ -1,5 +1,5 @@
 -- | Ipe.Web.Head.Unsafe — the verbatim JSON-LD `<script>` injection hatch for
--- `Ipe.Web.Head` (Layer 3 Ipe source).
+-- `Ipe.Web.Head`.
 --
 -- This submodule is the one home for the `<head>` member that bypasses HTML
 -- escaping into a scripting context. Importing it discloses the `unsafe`

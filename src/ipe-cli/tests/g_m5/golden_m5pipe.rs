@@ -11,8 +11,7 @@
 //! * `prec_vs_arith`  — `2 + 3 |> String.fromInt` groups `+` first → `"5"`.
 //! * `mixed_append`   — `"a" ++ "b" |> String.toUpper` groups `++` first → `"AB"`.
 //!
-//! Behavioural-parity oracle: `oracle_divergence = false` for all five — the Go
-//! backend produces identical stdout (`3`, `3`, `3`, `5`, `AB`).
+//! Verified output: `oracle_divergence = false` for all five ...//! backend produces identical stdout (`3`, `3`, `3`, `5`, `AB`).
 
 use std::path::{Path, PathBuf};
 
@@ -66,7 +65,7 @@ fn assert_runs_and_matches_oracle(name: &str) {
 
     let outcome = crate::support::build_and_run_emitted(name, &out);
     crate::support::assert_go_parity(name, &dir, &outcome.stdout);
-    assert_eq!(outcome.exit_code, Some(0), "exit 0, matching the Go oracle");
+    assert_eq!(outcome.exit_code, Some(0), "exit 0");
 }
 
 // ── byte-identical emit tests (always run) ────────────────────────────────────

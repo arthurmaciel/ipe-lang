@@ -1,8 +1,8 @@
 use crate::html::{Attribute, Html};
 use std::collections::HashMap;
 
-/// A single DOM patch emitted by `diff`. Field names mirror the Go `Patch` struct
-/// (JSON: `id`, `text`, `html`, `attrs`, `remove`) — see `runtime-go/rt/live.go`.
+/// A single DOM patch emitted by `diff` (JSON: `id`, `text`, `html`, `attrs`,
+/// `remove`).
 ///
 /// `diff` is in the always-compiled `dom` data path, but `Patch` is serialized
 /// only by the Web SSE wire / the browser-WASM sink — surfaces that imply the
@@ -19,7 +19,7 @@ pub struct Patch {
     #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
     pub html: Option<String>,
     /// Attribute delta: present key with non-empty value → set; empty value → remove.
-    /// Go convention: `""` means remove; `BoolAttr(k,true)` encodes as `{k:k}`.
+    /// Convention: `""` means remove; `BoolAttr(k,true)` encodes as `{k:k}`.
     #[cfg_attr(feature = "serde", serde(skip_serializing_if = "HashMap::is_empty"))]
     pub attrs: HashMap<String, String>,
     #[cfg_attr(feature = "serde", serde(skip_serializing_if = "std::ops::Not::not"))]
@@ -40,8 +40,7 @@ impl Patch {
 
 /// Structural diff between two `Html` trees that have already had `assign_ipe_ids`
 /// applied. Returns the minimal list of `Patch` operations needed to update the
-/// DOM from `old` to `new`. Faithful port of Go `diffNodes`
-/// (`runtime-go/rt/live.go`):
+/// DOM from `old` to `new`:
 /// - Matched-tag element pair: diff attributes + events, then children.
 /// - Tag/kind mismatch, child-count change, or any mixed-child text change:
 ///   whole-subtree `html` replace at the parent.
@@ -71,7 +70,7 @@ fn ipe_id<M>(n: &Html<M>) -> Option<&str> {
     None
 }
 
-/// Emit a whole-subtree innerHTML replace at `id` (Go: `Patch{ID, HTML}`).
+/// Emit a whole-subtree innerHTML replace at `id` .
 ///
 /// `parent_tag` is the tag of the element whose children are being replaced.
 /// When it is `"script"` or `"style"`, the rendered body is passed through the
@@ -103,7 +102,7 @@ fn diff_node_depth<M>(old: &Html<M>, new: &Html<M>, out: &mut Vec<Patch>, depth:
         _ => return,
     };
     // Patch id targets the element currently in the DOM — the OLD tree's id
-    // (Go parity: `old.IpeID`). Borrowed: `Patch::for_id` copies it only when
+    // . Borrowed: `Patch::for_id` copies it only when
     // a Patch is actually built, so an unchanged element pair allocates
     // nothing here (efficiency-audit §6 medium).
     let id: &str = ipe_id(old).unwrap_or("");
@@ -140,15 +139,15 @@ fn diff_node_depth<M>(old: &Html<M>, new: &Html<M>, out: &mut Vec<Patch>, depth:
         match (oc, nc) {
             (Html::HText(o), Html::HText(n)) => {
                 // Mixed-child text change → replace the whole subtree at the parent
-                // (Go parity: single-text is the fast path above; anything else is a
+                // (single-text is the fast path above; anything else is a
                 // parent html-replace).
                 if o != n {
                     push_html_replace(id, ot, nk, out);
                     return;
                 }
             }
-            // Raw-vs-raw: Go recurses (a no-op) — changed raw content is not
-            // patched. Match that quirk rather than emitting a spurious replace.
+            // Raw-vs-raw: changed raw content is not patched (no-op); avoid
+            // emitting a spurious replace.
             (Html::HRaw(_), Html::HRaw(_)) => {}
             (Html::HElement(t1, _, _), Html::HElement(t2, _, _)) if t1 == t2 => {
                 diff_node_depth(oc, nc, out, child_depth);
@@ -163,7 +162,7 @@ fn diff_node_depth<M>(old: &Html<M>, new: &Html<M>, out: &mut Vec<Patch>, depth:
 }
 
 /// Compute the attribute + event delta between `old` and `new`.
-/// Keys changed or added → new value. Keys removed → empty string (Go convention).
+/// Keys changed or added → new value. Keys removed → `""` (signals removal).
 /// `ipe-id` is excluded (never patched as an attribute).
 fn diff_attrs<M>(old: &[Attribute<M>], new: &[Attribute<M>], p: &mut Patch) {
     // Borrowed maps: cloning every key AND value of every element into two
@@ -181,7 +180,7 @@ fn diff_attrs<M>(old: &[Attribute<M>], new: &[Attribute<M>], p: &mut Patch) {
                     m.insert(k.as_str(), v.as_str());
                 }
                 Attribute::BoolAttr(k, true) => {
-                    // Go parity: live.go line 190 `vn.Attrs[k] = k`.
+                    // live.go line 190 `vn.Attrs[k] = k`.
                     // Key-as-value encodes a present boolean attr; "" is the remove sentinel only.
                     m.insert(k.as_str(), k.as_str());
                 }
@@ -198,7 +197,7 @@ fn diff_attrs<M>(old: &[Attribute<M>], new: &[Attribute<M>], p: &mut Patch) {
     }
     for k in om.keys() {
         if !nm.contains_key(k) {
-            // Signal removal with empty string (Go convention).
+            // Signal removal with empty string.
             insert_safe_attr(p, k, "");
         }
     }
@@ -217,11 +216,11 @@ fn insert_safe_attr(p: &mut Patch, key: &str, val: &str) {
     }
 }
 
-/// Event-handler delta. Mirrors Go `diffNodes`' Events block: an element gaining
-/// a handler emits `ipe-<event>` = `<event>` (the value the client posts back as
-/// `msg`, matching `render_html`) plus a fresh `data-ipe-hid`; an element losing a
-/// handler emits `ipe-<event>` = `""` (remove), and clears `data-ipe-hid` once the
-/// last handler is gone. Without this, toggling a handler leaves a stale listener
+/// Event-handler delta: an element gaining a handler emits `ipe-<event>` =
+/// `<event>` (the value the client posts back as `msg`, matching `render_html`)
+/// plus a fresh `data-ipe-hid`; an element losing a handler emits
+/// `ipe-<event>` = `""` (remove), and clears `data-ipe-hid` once the last
+/// handler is gone. Without this, toggling a handler leaves a stale listener
 /// marker and the user's gesture is silently dropped.
 fn diff_events<M>(old: &[Attribute<M>], new: &[Attribute<M>], p: &mut Patch) {
     let names = |xs: &[Attribute<M>]| -> Vec<String> {
@@ -414,7 +413,7 @@ mod tests {
         ids(&mut b);
         let p = diff(&a, &b);
         assert_eq!(p.len(), 1);
-        // Go parity: present BoolAttr encodes as {k: k}, NOT {k: ""}.
+        // present BoolAttr encodes as {k: k}, NOT {k: ""}.
         assert_eq!(
             p[0].attrs.get("disabled").map(String::as_str),
             Some("disabled")
@@ -463,8 +462,8 @@ mod tests {
 
     #[test]
     fn diff_mixed_child_text_change_replaces_parent() {
-        // Parent with [<span>, text]; the text child changes → Go emits a parent
-        // html-replace (the sole-text fast path doesn't apply to mixed children).
+        // Parent with [<span>, text]; the text child changes → parent html-replace
+        // (the sole-text fast path doesn't apply to mixed children).
         let mk = |t: &str| -> Html<()> {
             Html::HElement(
                 "div".into(),
@@ -520,7 +519,7 @@ mod tests {
         ids(&mut b);
         let p = diff(&a, &b);
         assert_eq!(p.len(), 1);
-        // Removal sentinel: empty string (Go convention).
+        // Removal sentinel: empty string.
         assert_eq!(p[0].attrs.get("disabled").map(String::as_str), Some(""));
     }
 

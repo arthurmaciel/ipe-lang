@@ -1,4 +1,4 @@
--- | Ipe.Trace — opt-in distributed-tracing spans (Layer 3 Ipe source).
+-- | Ipe.Trace — opt-in distributed-tracing spans.
 --
 -- Tier-1 spans (HTTP request, session load/save, Msg dispatch, DB /
 -- Auth / Http / File operations) are emitted AUTOMATICALLY by the

@@ -8,7 +8,7 @@
 //!   redundant-branch warning IPE-T0011.
 //!
 //! Each is driven through the full `ipe` pipeline and asserted to produce its
-//! exact code. The Go reference accepts a redundant branch silently; the Rust
+//! exact code. The reference accepts a redundant branch silently; the Rust
 //! backend is deliberately stricter (it reports IPE-T0011) — a documented,
 //! never-silently-wrong divergence.
 
@@ -55,7 +55,7 @@ fn non_exhaustive_int_case_is_ipe_t0010() {
     );
 }
 
-/// `IPE-T0011` is a WARNING (Go-reference parity — see the
+/// `IPE-T0011` is a WARNING (see the
 /// matching note in `golden_m3b2_gates`). The build must SUCCEED.
 #[test]
 fn redundant_branch_after_catch_all_is_ipe_t0011_warning_build_succeeds() {

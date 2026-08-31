@@ -14,7 +14,7 @@
 //! * the upstream-contract guard (a literal whose shape was never declared)
 //!   fails fast as a `CompilerBug`, never a silent mis-emit.
 //!
-//! Behavioural-parity oracle: the Go reference compiler at
+//! Behavioural-parity oracle: the the reference compiler at
 //! `/home/arthur/Documentos/comp/ipe/out/ipe` compiles + runs the
 //! field-set-equivalent program
 //!
@@ -227,7 +227,7 @@ fn synthesises_struct_literal_access_and_update() -> DResult<()> {
         ),
         "struct definition missing or wrong shape:\n{out}"
     );
-    // IpeStringify impl mirroring Go `%v` (`{v0 v1}`), in field order.
+    // IpeStringify impl: `{v0 v1}` in field order.
     // Rustfmt splits the format! call across lines; assert the stable fragments.
     assert!(
         out.contains("impl IpeStringify for RecXY {"),
@@ -560,7 +560,7 @@ fn end_to_end_distinct_shapes_cargo_check() -> DResult<()> {
 
 /// Full spine: build the canonical record IR, emit the Cargo project, vendor the
 /// runtime, `cargo build`, run, and assert the program prints `5` — the value
-/// the Go backend produces for the field-set-equivalent program. Gated on
+/// the the backend produces for the field-set-equivalent program. Gated on
 /// `IPE_E2E=1` so the default `cargo test` stays fast and offline.
 #[test]
 fn end_to_end_builds_and_prints_five() -> DResult<()> {
@@ -609,9 +609,9 @@ fn end_to_end_builds_and_prints_five() -> DResult<()> {
     assert_eq!(
         String::from_utf8_lossy(&output.stdout),
         "5\n",
-        "record program prints 5 (Go-backend parity)"
+        "record program prints 5"
     );
-    assert!(output.status.success(), "exit 0, matching the Go oracle");
+    assert!(output.status.success(), "exit 0");
     let _ = std::fs::remove_dir_all(out.join("target"));
     Ok(())
 }

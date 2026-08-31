@@ -19,8 +19,8 @@
 //!
 //! Each emitted `main.rs` must be byte-identical to the checked-in golden, and
 //! (behind `IPE_E2E=1`) the emitted project must build and print the value the
-//! Go reference compiler produces — captured in each golden's `expected_go.txt`
-//! / `oracle.meta` via the cached-oracle infra (no live Go in this gate).
+//! the reference compiler produces — captured in each golden's `expected_go.txt`
+//! / `oracle.meta` via the cached-oracle infra (no live in this gate).
 
 use std::path::{Path, PathBuf};
 
@@ -58,8 +58,8 @@ fn assert_byte_identical(name: &str) {
 }
 
 /// Full spine: compile, build the emitted Cargo project, run it, and assert its
-/// stdout matches the golden's CACHED Go oracle via the staleness-gated
-/// `crate::support::assert_go_parity` — NO live Go run. Gated on `IPE_E2E=1`.
+/// stdout matches the golden's CACHED golden oracle via the staleness-gated
+/// `crate::support::assert_go_parity` — NO live oracle run. Gated on `IPE_E2E=1`.
 fn assert_runs_and_matches_oracle(name: &str) {
     if std::env::var("IPE_E2E").is_err() {
         return;
@@ -79,7 +79,7 @@ fn assert_runs_and_matches_oracle(name: &str) {
 
     let outcome = crate::support::build_and_run_emitted(name, &out);
     crate::support::assert_go_parity(name, &dir, &outcome.stdout);
-    assert_eq!(outcome.exit_code, Some(0), "exit 0, matching the Go oracle");
+    assert_eq!(outcome.exit_code, Some(0), "exit 0");
 }
 
 #[test]

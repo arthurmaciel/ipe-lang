@@ -61,7 +61,7 @@ const KNOWN_DEAD_OR_EPILOGUE: &[&str] = &[
     "http_with_body",
     "http_with_header",
     "http_with_timeout",
-    // Go-parity builders — same inline clone-and-reassign emission.
+    // parity builders — same inline clone-and-reassign emission.
     "http_with_url",
     "http_with_redirects",
     // ── Dead: emit_expr's DbDefaultMigration arm emits the `Migration`

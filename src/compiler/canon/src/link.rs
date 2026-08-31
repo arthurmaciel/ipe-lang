@@ -7,7 +7,7 @@
 //! every module (in topological order, dep-first) into one synthetic module.
 //!
 //! The downstream type-checker, lowerer, and code-generator receive the merged
-//! module unchanged; they already emit qualified Go identifiers
+//! module unchanged; they already emit qualified identifiers
 //! (`Module_name`) from the `module` field of every `VarTopLevel` node.
 
 use std::collections::HashSet;
@@ -25,7 +25,7 @@ use crate::ast;
 ///
 /// The resulting module's `name` is set to `entry_name` (the path of the
 /// user's entry-point module). Downstream stages that key off `module.name`
-/// (e.g. the Go-codegen's package-name selection and Go `func main()` emission)
+/// (e.g. package-name selection and `main()` emission)
 /// continue to see the entry module's identity unchanged.
 ///
 /// # Correctness invariant

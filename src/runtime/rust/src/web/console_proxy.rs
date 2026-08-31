@@ -4,9 +4,8 @@
 //! Ipe.Web console**, spawned as a child process and reverse-proxied at
 //! `/_ipe/console/*`. The console binary is **pre-built at the user's `ipe build`
 //! time** into a shared cache — at runtime this module only `exec`s it,
-//! never builds. See `runtime-rust/README.md` §"Rust vs Go — divergent strategies"
-//! for why Rust takes the separate-process path Go abandoned (Go's subprocess
-//! OOM was a *runtime* `go build`, which a pre-built binary doesn't incur).
+//! never builds. The pre-built binary avoids the OOM risk a runtime-build would
+//! incur on memory-constrained hosts.
 //!
 //! This module: gate + spawn + lifecycle + the reverse-proxy handler.
 //!
@@ -41,8 +40,7 @@ const MAX_PROXY_BODY: usize = 16 * 1024 * 1024;
 const READY_TIMEOUT: Duration = Duration::from_secs(8);
 
 /// The spawned console child, tracked so the parent can kill it on shutdown
-/// (Go's `ShutdownSubApps` equivalent — Go deleted it when it went in-process;
-/// the separate-process Rust path needs it back to avoid an orphan child).
+/// to avoid an orphan child process.
 static CHILD: Mutex<Option<Child>> = Mutex::new(None);
 
 /// Resolve the pre-built console binary path: `IPE_CONSOLE_BIN`, else the
@@ -333,7 +331,7 @@ async fn wait_ready(port: u16, timeout: Duration) -> bool {
 
 /// Grab a free ephemeral loopback port by binding `:0` and reading the assigned
 /// port. `None` if the OS won't hand one out. (Small TOCTOU window between drop
-/// and the child's bind — same approach Go uses for sub-app ports.)
+/// and the child's bind.)
 fn pick_free_port() -> Option<u16> {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").ok()?;
     let port = listener.local_addr().ok()?.port();

@@ -1,4 +1,4 @@
--- | Ipe.File -- filesystem I/O (Layer 3 Ipe source).
+-- | Ipe.File -- filesystem I/O.
 --
 -- Every path argument is a typed `Ipe.Path.Path`, not a raw `String`: build
 -- one with `Path.fromString` (which rejects `..` traversal escapes and NUL

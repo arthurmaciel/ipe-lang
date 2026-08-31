@@ -14,8 +14,8 @@ responsibilities overlap and are mis-filed:
   it. One file cannot be both without shipping compiler internals into user
   projects.
 - `DEVELOPMENT.md` is agent-facing dev-ops that duplicates `PRINCIPLES.md`'s
-  mechanics (the two-tier gate, the write-boundary) and carries stale references
-  (`crates/`, the Go/Haskell `../ipe` oracle).
+  mechanics (the two-tier gate, the write-boundary) and carries stale
+  cross-repository references.
 - `PRINCIPLES.md` — the entrenched values/principles/rules — is diluted with
   operational procedure (two-tier-gate step lists, write-boundary paths,
   agent-lane rules) and stale reference-implementation citations.
@@ -51,8 +51,8 @@ Four documents, one purpose each; each fact lives in exactly one of them.
    operational procedure) move to `dev-ops.md`, leaving the *rule* plus a link.
    The stale reference-implementation citations are removed: the Correctness
    principle is restated on Ipê's own terms (deterministic output; deliberate
-   divergence documented, never silent) with no external "Go reference" oracle;
-   the `../ipe` READ-ONLY line, the `ipedex` reference, and `crates/` (now
+   divergence documented, never silent) with no external reference oracle;
+   the stale cross-repository read-only pointers, the `ipedex` reference, and `crates/` (now
    `src/compiler/`) are dropped. **The entrenched values and principles
    themselves are unchanged — they are eternity clauses; only mis-filed
    procedure and stale references are touched.**

@@ -1,4 +1,4 @@
--- | Ipe.Config — typed TOML/YAML/JSON decoders (Layer 3 Ipe source).
+-- | Ipe.Config — typed TOML/YAML/JSON decoders.
 --
 -- A `Decoder a` describes how to extract a value of type `a` from a
 -- config document.  Compose with `field` / `at` / `nullable` / `map`
@@ -7,8 +7,6 @@
 --
 -- Shape mirrors `Ipe.Json.Decode` — code that already does
 -- JSON decoding gets a consistent vocabulary for TOML and YAML.
---
--- v0.15.47.
 --
 -- Example:
 --

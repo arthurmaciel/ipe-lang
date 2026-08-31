@@ -2298,7 +2298,7 @@ main =
 /// event from the page the browser is actually showing (the form submit
 /// included) would resolve against the wrong index and be silently dropped.
 ///
-/// Go parity (live.go `handleInitial`): unrouted browser-noise paths 404
+/// golden parity (live.go `handleInitial`): unrouted browser-noise paths 404
 /// before touching session state; an unrouted GET against an existing
 /// session 404s without re-routing it.
 ///
@@ -2340,7 +2340,7 @@ fn live_unrouted_get_does_not_wipe_form_handlers() -> Result<(), BoxError> {
     let cookie_header = format!("ipe_sid={sid}");
 
     // ── Step 2: GET /favicon.ico with the session cookie ───────────────────
-    // The browser-noise probe. Must 404 (Go parity) and must NOT re-route
+    // The browser-noise probe. Must 404 (golden parity) and must NOT re-route
     // the session (asserted indirectly by steps 3–4 dispatching).
     let (noise_headers, _) = http_send(
         test_name,

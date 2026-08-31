@@ -1,5 +1,4 @@
-//! URL routing for `Web.app` — `Route<Page>` + matching, mirroring Go's
-//! `matchRoute` / `applyRouteWithParams` (runtime-go/rt/live.go).
+//! URL routing for `Web.app` — `Route<Page>` + matching.
 //!
 //! Each `Web.route pattern ctor` lowers (codegen peephole) to a `Route` whose
 //! `build` closure applies the captured `:param` strings to the page
@@ -40,8 +39,8 @@ impl<Page> Route<Page> {
     }
 }
 
-/// Split a URL/path into segments — Go `splitPath` parity: trim surrounding
-/// `/` (so `/a/b/` and `/a/b` match the same), empty → no segments.
+/// Split a URL/path into segments: trim surrounding `/` (so `/a/b/` and
+/// `/a/b` match the same), empty → no segments.
 fn split_path(p: &str) -> Vec<&str> {
     let t = p.trim_matches('/');
     if t.is_empty() {
@@ -51,9 +50,9 @@ fn split_path(p: &str) -> Vec<&str> {
     }
 }
 
-/// Match `path` against `pattern` (Go `matchRoute` parity): equal segment
-/// counts; a `:name` segment captures the corresponding path segment; a literal
-/// segment must equal it. Returns captured params in pattern order, or `None`.
+/// Match `path` against `pattern`: equal segment counts; a `:name` segment
+/// captures the corresponding path segment; a literal segment must equal it.
+/// Returns captured params in pattern order, or `None`.
 pub fn match_route(pattern: &str, path: &str) -> Option<Vec<String>> {
     let pat = split_path(pattern);
     let segs = split_path(path);
@@ -73,7 +72,7 @@ pub fn match_route(pattern: &str, path: &str) -> Option<Vec<String>> {
 
 /// First route (declaration order) whose pattern matches `path` AND whose
 /// builder successfully decodes all `:param` segments → its built page; else
-/// `not_found` (cloned). Go `applyRouteWithParams` parity.
+/// `not_found` (cloned).
 ///
 /// A route whose pattern matches but whose builder returns `None` (a `:param`
 /// segment failed to decode into the expected type, e.g. `"abc"` for an `Int`
@@ -91,7 +90,7 @@ pub fn match_routes<Page: Clone>(routes: &[Route<Page>], not_found: &Page, path:
     not_found.clone()
 }
 
-/// Go `matchAnyRoute` parity: does `path` match ANY declared route? With no
+/// Does `path` match ANY declared route? With no
 /// routes only `/` is a page URL (the single-page `Web.app` shape). The page
 /// handler uses this to keep unrouted GETs (browser noise like
 /// `/favicon.ico`, asset probes, unknown paths) from re-routing a live

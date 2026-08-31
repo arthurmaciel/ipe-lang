@@ -1,30 +1,22 @@
 //! Canonical HTTP header-name casing, shared by Ipe.Web and Ipe.Http.Server.
 //!
-//! Go stores request header names in canonical MIME case
-//! (`textproto.CanonicalMIMEHeaderKey`: `content-type` -> `Content-Type`,
-//! `x-ipe-web` -> `X-Ipê-Web`) and `r.Header.Get` canonicalises the lookup
-//! key, so a handler asking for either `"content-type"` or `"Content-Type"`
-//! resolves. hyper/axum expose request header names lower-cased, so the Rust
-//! runtime must re-derive the canonical form at the request boundary and use it
-//! for both storage and lookup. This module is the single source of truth for
-//! that transformation so the Web request builder and the Server request
-//! builder + `Server.header` lookup can never drift to two divergent casings.
+//! Canonical MIME case: `content-type` → `Content-Type`, `x-ipe-web` →
+//! `X-Ipe-Web`. hyper/axum expose request header names lower-cased, so the
+//! runtime re-derives the canonical form at the request boundary for both
+//! storage and lookup. This module is the single source of truth for that
+//! transformation so the Web and Server request builders never drift apart.
 
 /// Canonicalise a `-`-separated header name (`content-type` -> `Content-Type`).
 ///
 /// Upper-cases the first ASCII letter of each `-`-separated segment and
-/// lower-cases the rest, matching Go's `textproto.CanonicalMIMEHeaderKey` for
-/// every well-formed (valid-token) header name: valid token bytes are ASCII,
-/// only `-` triggers the next-uppercase in both implementations, and `_`/`.`/
-/// digits are non-triggers in both.
+/// lower-cases the rest. Only `-` triggers the next-uppercase; `_`/`.`/digits
+/// are non-triggers.
 ///
-/// Accepted divergence (see the parity test): Go returns the name **unchanged**
-/// when it contains a byte outside the header-token set (e.g. a space or a
-/// non-ASCII byte), whereas this always title-cases per segment. Such names
-/// cannot reach the request boundary — hyper/axum reject invalid header names
-/// on parse — and for `Server.header` lookups the observable result (Just /
-/// Nothing) is identical to Go regardless, because the canonical form is never
-/// surfaced to Ipê, only used to key an already-canonical map.
+/// Accepted divergence: a name containing bytes outside the header-token set
+/// (e.g. a space or non-ASCII byte) is always title-cased per segment, rather
+/// than returned unchanged. Such names cannot reach the request boundary —
+/// hyper/axum reject invalid header names on parse — so the divergence is
+/// unobservable in practice.
 pub(crate) fn canonical_header(k: &str) -> String {
     k.split('-')
         .map(|w| {
@@ -83,7 +75,7 @@ pub(crate) fn origin_host_mismatch(origin: &str, host: &str) -> bool {
 mod tests {
     use super::{canonical_header, origin_host_mismatch};
 
-    /// Well-formed header names — byte-identical to Go's
+    /// Well-formed header names — byte-identical to
     /// `textproto.CanonicalMIMEHeaderKey`.
     #[test]
     fn canonical_header_matches_go_canonical_mime_key() {
@@ -109,11 +101,10 @@ mod tests {
         }
     }
 
-    /// Invalid-token names are the accepted divergence: Go returns them
-    /// unchanged, we title-case them. These names cannot reach the request
-    /// boundary (hyper/axum reject them on parse), so the divergence is
-    /// unobservable in practice; this test pins our behaviour so any future
-    /// change to the canonicaliser is caught.
+    /// Invalid-token names are the accepted divergence: title-cased here.
+    /// These names cannot reach the request boundary (hyper/axum reject them
+    /// on parse), so the divergence is unobservable in practice; this test
+    /// pins the behaviour so any future change to the canonicaliser is caught.
     #[test]
     fn canonical_header_invalid_token_is_accepted_divergence() {
         assert_eq!(canonical_header("foo bar"), "Foo bar");

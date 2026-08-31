@@ -37,7 +37,7 @@ fn e2e_enabled() -> bool {
     std::env::var("IPE_E2E").is_ok()
 }
 
-/// `toString` on scalars compiles + runs (Go `%v`: bool lowercases).
+/// `toString` on scalars compiles + runs (debug format: bool lowercases).
 #[test]
 fn tostring_scalars_run() {
     if !e2e_enabled() {
@@ -76,7 +76,7 @@ fn tostring_record_and_adt_run() {
         out.exit_code,
         out.stdout
     );
-    // scalar `42`; record `{1 2}` (Go `%v`, `_fieldIndex` order); ADT payload
+    // scalar `42`; record `{1 2}` (debug format, `_fieldIndex` order); ADT payload
     // `Circle 5`; ADT nullary `Empty`.
     assert_eq!(out.stdout.trim(), "42 | {1 2} | Circle 5 | Empty");
 }

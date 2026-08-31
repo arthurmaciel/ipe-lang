@@ -4,8 +4,7 @@
 //! Wires the pipeline end to end: read a `.ipe` entry file, run it through
 //! [`ipe_parse`] → [`ipe_canon`] → [`ipe_types`] → [`ipe_lower`] → the
 //! [`ipe_backend_rust`] emitter, write the emitted Cargo project, and vendor the
-//! Ipe runtime module tree into it (a port of the copy step in the Haskell
-//! compiler's `Ipe.Generate.Rust.Project`).
+//! Ipe runtime module tree into it.
 //!
 //! Generated Rust projects do not depend on the runtime as a Cargo path crate;
 //! instead `main.rs` declares `mod ipe_runtime;` and the runtime sources are
@@ -967,10 +966,8 @@ pub fn build_with_options(
 /// together — fixing IPE-N0020 for multi-file projects built via the
 /// file-path shorthand (`ipe build src/Main.ipe`).
 ///
-/// This is the faithful port of Haskell's `Graph.discoverModulesMulti
-/// (sourceRoot : ...) entryPath` call in `Ipe.Build.Compile.hs`: it probes
-/// the source root recursively and follows imports across sibling files before
-/// running the shared `compile_modules` core.
+/// Probes the source root recursively and follows imports across sibling files
+/// before running the shared `compile_modules` core.
 ///
 /// When the source directory contains only the entry file this function is
 /// byte-identical to `build` (single-module pipeline is the identity over
@@ -7223,9 +7220,8 @@ mod tests {
     }
 
     /// Generic records, end to end from SOURCE: parse → canon → infer → lower →
-    /// emit → `cargo build` → run, asserting the program prints `42` — the value
-    /// the Go reference backend produces for the same program (hand-verified in a
-    /// temp dir). Gated on `IPE_E2E=1` so the default `cargo test` stays fast and
+    /// emit → `cargo build` → run, asserting the program prints `42` (hand-verified).
+    /// Gated on `IPE_E2E=1` so the default `cargo test` stays fast and
     /// offline. Complements the backend crate's hand-built-IR e2e by exercising
     /// the whole frontend (record type annotations + generalisation + lowering).
     #[test]
@@ -7276,9 +7272,9 @@ mod tests {
         assert_eq!(
             String::from_utf8_lossy(&run.stdout),
             "42\n",
-            "generic-record program prints 42 (Go-backend parity)"
+            "generic-record program prints 42"
         );
-        assert!(run.status.success(), "exit 0, matching the Go oracle");
+        assert!(run.status.success(), "exit 0");
         let _ = std::fs::remove_dir_all(out.join("target"));
     }
 

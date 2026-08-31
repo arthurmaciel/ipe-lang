@@ -1,4 +1,4 @@
--- | Ipe.Path — typed, validated filesystem paths (Layer 3 Ipe source).
+-- | Ipe.Path — typed, validated filesystem paths.
 --
 -- `Path` is opaque: the ONLY way to build one is `fromString`, which
 -- normalises the path and REJECTS a NUL byte or a `..` traversal escape.

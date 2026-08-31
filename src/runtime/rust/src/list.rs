@@ -390,10 +390,10 @@ pub fn list_find<T0: Clone>(f: impl Fn(T0) -> bool, list: Vec<T0>) -> IpeMaybe<T
     IpeMaybe::Nothing
 }
 
-// ── Sorting (mirrors Go's List_sort / List_sortBy; sortWith added for Rust) ──
+// ── Sorting (implements List_sort / List_sortBy; sortWith added for Rust) ──
 //
 // All three are STABLE (Rust's `Vec::sort_by` / `sort_by_key` are stable, matching
-// Go's `sort.SliceStable`). None can panic on well-typed input: ordering is total
+//  `sort.SliceStable`). None can panic on well-typed input: ordering is total
 // (`total_cmp` via `cmp_total`), so a NaN key never trips the `Ord` contract the
 // way a naive `partial_cmp().unwrap()` would.
 
@@ -575,7 +575,7 @@ mod tests {
         assert!(list_is_empty(Vec::<i64>::new()));
         assert!(!list_is_empty(vec![1]));
         assert_eq!(ipe_list_cons(0, vec![1, 2]), vec![0, 1, 2]);
-        // zip truncates to the shorter operand (Elm/Go parity).
+        // zip truncates to the shorter operand (Elm/).
         assert_eq!(list_zip(vec![1, 2, 3], vec![4, 5]), vec![(1, 4), (2, 5)]);
     }
 

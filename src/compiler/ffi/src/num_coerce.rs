@@ -12,7 +12,7 @@
 //! so they route through `try_from` — a bare `as` would truncate on 32-bit,
 //! which all-64-bit CI can never catch.
 //!
-//! Sanctioned divergence from the Go oracle: a value above `i64::MAX`
+//! Sanctioned divergence from the golden oracle: a value above `i64::MAX`
 //! saturates rather than wraps or errors (`oracle_divergence = true`; the
 //! clamp is total and documented, satisfying "no silent numeric coercion").
 

@@ -13,7 +13,7 @@ pub type JsonVal = serde_json::Value;
 ///     ∅ for leaf / combinator decoders (succeed, fail, string, int, …).
 ///     Named fields for `decode_field` and the `db_decode_*` primitives.
 ///     Union of inner fields for combinators (map2..5, and_map).
-///     This is the same concept as Go's `DbDecoder.cols` — used by `db_decode_nullable`
+///     Used by `db_decode_nullable`
 ///     to determine whether ALL the fields the inner decoder reads are NULL/absent
 ///     before delegating to the inner run.
 ///
@@ -75,20 +75,17 @@ pub fn decode_err_str<E: From<String>, T>(s: String) -> IpeResult<E, T> {
 pub fn json_enc_encode(indent: i64, val: JsonVal) -> String {
     // serde_json never fails on a well-formed Value; unwrap_or_default preserves
     // the total `encode : Int -> Value -> String` (pure, no Task wrapper).
-    // Mirrors Go: json.MarshalIndent(val, "", strings.Repeat(" ", n)) → indent=0
-    // compact, indent=N → N-space pretty.
+    // indent=0 → compact, indent=N → N-space pretty.
     //
-    // `GoFormatter` wraps the inner (compact or pretty) formatter and overrides
-    // exactly two hooks so the bytes match Go's `encoding/json`:
+    // `GoFormatter` wraps the inner formatter and overrides exactly two hooks:
     //   * string fragments are HTML-escaped (`<`,`>`,`&`,U+2028,U+2029), which
-    //     Go's marshaller does by default but serde_json does not;
-    //   * f64 values are reshaped to Go's floatEncoder format (decimal vs.
-    //     exponent threshold, `e±NN` exponent shape) rather than serde's Ryū form.
+    //     serde_json does not do by default;
+    //   * f64 values are reshaped (decimal vs. exponent threshold, `e±NN`
+    //     exponent shape) rather than serde's Ryū form.
     let mut buf = Vec::new();
     if indent > 0 {
-        // PrettyFormatter::with_indent honours the exact N-space indent that
-        // Go's json.MarshalIndent produces — `to_string_pretty` always emits
-        // 2 spaces and would diverge for indent ≠ 2.
+        // PrettyFormatter::with_indent honours the exact N-space indent;
+        // `to_string_pretty` always emits 2 spaces and would diverge for indent ≠ 2.
         //
         // Clamp the indent width: `indent` is attacker-supplyable (e.g. a value
         // threaded from request input), and an unbounded `str::repeat` would let
@@ -110,19 +107,13 @@ pub fn json_enc_encode(indent: i64, val: JsonVal) -> String {
     String::from_utf8(buf).unwrap_or_default()
 }
 
-/// Format an `f64` exactly as Go's `encoding/json` floatEncoder (bits=64) does.
-///
-/// Go selects exponent ('e') form only when the magnitude is `< 1e-6` or
-/// `>= 1e21`; every other finite value uses plain decimal ('f') form. Both forms
-/// use the shortest round-tripping digit sequence — which Rust's `Display` /
-/// `LowerExp` produce identically (the shortest correctly-rounded decimal is
-/// unique, so the digits agree with Go's `strconv.AppendFloat(.., -1, 64)`).
-/// Only the *shape* differs, and that is what this function normalises:
+/// Format an `f64` for JSON serialisation: exponent ('e') form only when the
+/// magnitude is `< 1e-6` or `>= 1e21`; every other finite value uses plain
+/// decimal ('f') form. Both forms use the shortest round-tripping digit sequence.
 ///   * 'f' form: `format!("{f}")` — Rust Display never emits an exponent.
-///   * 'e' form: reshape `format!("{f:e}")` into Go's `e±NN` exponent (`+`/`-`
-///     sign always present; positive exponents zero-padded to ≥2 digits;
-///     negative exponents printed with the minimum digits, matching Go's
-///     `e-0N` → `e-N` cleanup).
+///   * 'e' form: reshape `format!("{f:e}")` into `e±NN` exponent (`+`/`-` sign
+///     always present; positive exponents zero-padded to ≥2 digits; negative
+///     exponents use minimum digits — `e-0N` → `e-N`).
 fn go_format_f64(f: f64) -> String {
     if !f.is_finite() {
         // serde_json routes NaN/∞ to `write_null` before `write_f64`, so this
@@ -131,8 +122,8 @@ fn go_format_f64(f: f64) -> String {
         return "0".to_string();
     }
     let abs = f.abs();
-    // Go's threshold is `abs < 1e-6 || abs >= 1e21`; `!(1e-6..1e21).contains(&abs)`
-    // is the identical half-open complement (and the clippy-preferred spelling).
+    // Exponent form when `abs < 1e-6 || abs >= 1e21`; `!(1e-6..1e21).contains`
+    // is the half-open complement (clippy-preferred spelling).
     let use_exp = abs != 0.0 && !(1e-6..1e21).contains(&abs);
     if !use_exp {
         return format!("{f}");
@@ -150,10 +141,10 @@ fn go_format_f64(f: f64) -> String {
     }
 }
 
-/// A [`serde_json::ser::Formatter`] that wraps an inner formatter and matches
-/// Go's `encoding/json` byte output. Every structural / scalar method delegates
-/// to the inner formatter (so compact-vs-pretty layout is preserved); only
-/// `write_f64` and `write_string_fragment` are overridden for Go parity.
+/// A [`serde_json::ser::Formatter`] that wraps an inner formatter and produces
+/// JSON byte-compatible with Ipê's JSON encoder. Every structural / scalar
+/// method delegates to the inner formatter (preserving compact-vs-pretty
+/// layout); only `write_f64` and `write_string_fragment` are overridden.
 struct GoFormatter<F>(F);
 
 impl<F: serde_json::ser::Formatter> serde_json::ser::Formatter for GoFormatter<F> {
@@ -168,8 +159,8 @@ impl<F: serde_json::ser::Formatter> serde_json::ser::Formatter for GoFormatter<F
     where
         W: ?Sized + std::io::Write,
     {
-        // Go HTML-escapes these inside every JSON string (values AND keys) by
-        // default: `<`→<, `>`→>, `&`→&, and the JS line/paragraph
+        // HTML-escape inside every JSON string (values AND keys):
+        // `<`→<, `>`→>, `&`→&, and the JS line/paragraph
         // separators U+2028/U+2029. None of them can occur outside a string in
         // valid JSON, so escaping per-fragment is sufficient and exact.
         let bytes = fragment.as_bytes();
@@ -513,9 +504,8 @@ pub fn decode_field<E: From<String> + 'static, T: 'static + Send>(
 }
 
 /// `JsonDec.index : Int -> Decoder a -> Decoder a` — decode the n-th element
-/// of a JSON array. Out-of-bounds or non-array input is `Err`. Matches Go's
-/// `JsonDec_index` which checks `[]any` bounds and prepends `"[N]"` to error
-/// paths (we inline the path prefix in the error message for parity).
+/// of a JSON array. Out-of-bounds or non-array input is `Err`. The path prefix
+/// `"[N]"` is inlined in the error message.
 pub fn decode_index<E: From<String> + 'static, T: 'static + Send>(
     n: i64,
     decoder: Decoder<E, T>,
@@ -572,8 +562,8 @@ pub fn decode_list<E: From<String> + 'static, T: 'static + Send>(
                     match (d.run)(item) {
                         IpeResult::Ok(t) => out.push(t),
                         // Surface the REAL inner-element error rather than
-                        // collapsing it to a generic "decode error" — keeps the
-                        // diagnostic Go's `JsonDec.list` preserves.
+                        // collapsing it to a generic "decode error" — preserves
+                        // the per-element diagnostic.
                         IpeResult::Err(e) => return IpeResult::Err(e),
                     }
                 }
@@ -1018,8 +1008,7 @@ pub fn decode_one_of<E: From<String> + 'static, T: 'static + Send>(
     Decoder::new(
         Box::new(move |v| {
             // Try each branch; on total failure surface the LAST branch's real
-            // error rather than a generic "oneOf: no match" (Go's `oneOf`
-            // likewise reports the underlying failure).
+            // error rather than a generic "oneOf: no match".
             let mut last_err: Option<IpeResult<E, T>> = None;
             for d in &decoders {
                 let r = (d.run)(v);
@@ -1691,8 +1680,8 @@ pub fn decode_pipeline_optional<
     let def = default;
     Decoder::new(
         Box::new(move |v| {
-            // Elm/Go `optional` contract: the default is used ONLY when the field
-            // is genuinely ABSENT or null. A field that is PRESENT but fails to
+            // `optional` contract: the default is used ONLY when the field is
+            // genuinely ABSENT or null. A field that is PRESENT but fails to
             // decode (e.g. {"age":"x"} with an int decoder) must PROPAGATE the
             // decode error — swallowing it into the default would mask malformed
             // / adversarial input (a validation bypass).
@@ -1713,9 +1702,9 @@ pub fn decode_pipeline_optional<
 }
 
 /// `JsonDecP.requiredAt : List String -> Decoder a -> Decoder (a -> b) -> Decoder b`.
-/// Like `required` but walks a nested path before decoding. Matches Go's
-/// `JsonDecP_requiredAt` which iterates the `List String` path by successive
-/// `.get(key)` calls, hard-erroring on any missing segment or non-object node.
+/// Like `required` but walks a nested path before decoding. Iterates the
+/// `List String` path by successive `.get(key)` calls, hard-erroring on any
+/// missing segment or non-object node.
 pub fn decode_pipeline_required_at<E: From<String> + 'static, T: 'static, F: 'static>(
     path: Vec<String>,
     decoder: Decoder<E, T>,
@@ -1831,7 +1820,7 @@ mod optional_tests {
     #[test]
     fn optional_present_but_wrong_type_propagates_error() {
         // PRESENT-but-malformed field must PROPAGATE the decode error, not fall
-        // back to the default (Elm/Go `optional` contract).
+        // back to the default (`optional` contract).
         let dec = build();
         let v: JsonVal = serde_json::json!({ "age": "not-an-int" });
         assert!(
@@ -2088,10 +2077,9 @@ mod elm_behaviour_verdicts {
         ));
     }
 
-    // Verdict: keep-ours (documented divergence). JSON number rendering routes
-    // through the Go floatEncoder shape (`go_format_f64`), so integral floats
-    // drop the fraction (`1.0` -> `1`) and the shortest round-tripping digits
-    // are used (`0.1 + 0.2` -> `0.30000000000000004`), matching the Go oracle.
+    // Verdict: keep-ours (documented divergence). JSON number rendering drops
+    // the fraction for integral floats (`1.0` -> `1`) and uses shortest
+    // round-tripping digits (`0.1 + 0.2` -> `0.30000000000000004`).
     #[test]
     fn encode_float_integral_drops_fraction() {
         assert_eq!(json_enc_encode(0, json_enc_float(1.0)), "1");

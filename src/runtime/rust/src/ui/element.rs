@@ -4,7 +4,7 @@
 //! field-for-field**. They live in the runtime (not generated per-project) so
 //! that every backend — Ipe.Web (→ HTML), Ipe.Tui (→ ANSI cells), Ipe.WebView
 //! (→ native webview) — renders the SAME structured `Element` tree to its own
-//! target, exactly as the Go backend does (`runtime-go/rt/tui_ui.go` walks the
+//! target (`
 //! structured Element ADT directly; it never round-trips through CSS).
 //!
 //! The Rust codegen maps the Ipê `Ipe.Ui.*` types onto these via
@@ -236,7 +236,7 @@ pub enum Element<M> {
 // type (e.g. an Input config record) or an app Model carries them as a field:
 // the codegen-emitted `ipe_show` recurses into EVERY field, so each runtime type
 // a generated type can hold must impl the trait or the generated impl fails to
-// compile (E0599). These UI values have no Go `%v` analogue worth matching (and
+// compile (E0599). These UI values have no  analogue worth matching (and
 // no example stringifies one), so a stable type-tag placeholder is the total,
 // correct rendering — never panics, never recurses into the `M` payload.
 impl crate::stringify::IpeStringify for Color {
@@ -349,7 +349,7 @@ mod tests {
     // Cross-language SSOT equivalence: `Color::css` output must be byte-for-byte
     // identical to `Ipe.Css.colorToString` for the shared `Rgba` shape.
     //
-    // Alpha formatting: both sides use the Go-`'g'`-format float rule.
+    // Alpha formatting: uses the `'g'`-format float rule.
     // For `1.0` that yields `"1"` (no trailing `.0`); for `0.5` it yields `"0.5"`.
     // The `.ipe` side of this assertion is exercised by the
     // `golden_css_length_color_ssot` fixture in the `g_stdui` integration suite.
