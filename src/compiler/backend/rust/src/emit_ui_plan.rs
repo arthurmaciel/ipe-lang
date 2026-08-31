@@ -330,18 +330,21 @@ pub const fn appearance_literal_args(k: KernelFn) -> &'static [(usize, LitKind)]
         // for a direct or hoisted string, so baked == direct holds.
         KernelFn::HtmlStyleNode => &[(1, Str)],
 
-        // ── Ipe.Css — deferred (a different emit path) ────────────────────
+        // ── Ipe.Css — hoisted on the generic path, not this positional site ─
         // `Ipe.Css` is compiled pure Ipê; its one free-string appearance sink
         // that reaches a Rust kernel is the value sanitizer
-        // `CssSafety.safeValue : String -> String`. That kernel is `Pure`, not
-        // UI-family, so it is emitted through the generic kernel-call path, NOT
-        // this UI-plan positional hoist site — a registry arm here would be dead
-        // (listed but never hoisted). Wiring the generic path to consult this
-        // registry (and hoisting a *security* sanitizer's argument) is a distinct,
-        // guardian-gated follow-up; it is deliberately left to recompile here
-        // rather than silently listed. The selector sanitizer (`safeSelector`)
-        // stays out permanently: a selector changes what a rule targets — that is
-        // structure, not appearance.
+        // `CssSafety.safeValue : String -> Maybe String`. That kernel is `Pure`,
+        // not UI-family, so it is emitted through the generic kernel-call path,
+        // NOT this UI-plan positional hoist site — a registry arm here would be
+        // dead (listed but never hoisted), so it correctly carries none. Its
+        // appearance hot-swap is wired at the generic path instead
+        // (`emit_expr::emit_css_value_call`): a direct *safe* literal is hoisted
+        // through the SHARED `ipe_kernels::css_value_is_safe` policy and the
+        // runtime `safe_value` wrapper is preserved, so the slot is always
+        // re-sanitized — sanitize-before-hoist AND re-sanitize-on-read, dev ==
+        // prod. The selector sanitizer (`safeSelector`) stays out permanently: a
+        // selector changes what a rule targets — that is structure, not
+        // appearance.
         // ── Every other kernel — no appearance-hoist position (`&[]`) ─────
         // Exhaustive on purpose: NO `_` wildcard. A newly added `KernelFn`
         // variant lands in neither the appearance arms above nor this list, so

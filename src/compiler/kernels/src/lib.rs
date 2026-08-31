@@ -17,6 +17,9 @@
 mod capability;
 pub use capability::{Capability, ElementCapability, UnknownCapability};
 
+pub mod css_value_safety;
+pub use css_value_safety::css_value_is_safe;
+
 /// Classification of a kernel variant by which compiler / runtime subsystem
 /// owns its emission.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]
