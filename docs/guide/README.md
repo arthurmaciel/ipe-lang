@@ -95,7 +95,8 @@ cross-link where topics meet.
   named magnitudes as types), [Grid tracks](grid.md) (typed CSS grid track lists,
   rendered to a `grid-template` string), [Transforms](transform.md) (typed CSS
   transforms, rendered to a `transform` declaration), [Transitions](transition.md)
-  (typed transition steps, rendered to the CSS shorthand).
+  (typed transition steps, rendered to the CSS shorthand), [Animations](animation.md)
+  (a typed animation `Spec`, rendered to the CSS shorthand).
 - **Testing** — [Testing](test.md) (the in-process framework: tests as values,
   assertions as results, exit-coded runs).
 - **Databases** — [Connection descriptors](dsn.md) (a typed, credential-safe
