@@ -10,6 +10,33 @@ Entries below the header are maintained by
 section is generated from Conventional Commit messages and prepended when the
 standing release pull request is merged.
 
+## [0.1.75](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.1.74...ipe-v0.1.75) (2026-08-31)
+
+
+### Features
+
+* **dev-loop:** appearance-literal registry + widen to Ui attr/text + Html (appearance Steps 5/5b) ([#1616](https://github.com/arthurmaciel/ipe-lang/issues/1616)) ([e2f3863](https://github.com/arthurmaciel/ipe-lang/commit/e2f3863337634446c14ff93147a410087227cf66))
+* **dev-loop:** hoist Ui.image alt/src literals into appearance hot-swap ([#1624](https://github.com/arthurmaciel/ipe-lang/issues/1624)) ([ecedd32](https://github.com/arthurmaciel/ipe-lang/commit/ecedd32af398eaad912976ef85a01d1ab8119806))
+* **dev-loop:** live literal-patch endpoint — apply + re-render, Model-preserving (appearance Step 2) ([#1610](https://github.com/arthurmaciel/ipe-lang/issues/1610)) ([816e5ff](https://github.com/arthurmaciel/ipe-lang/commit/816e5ff876a938879a4e85b181f599cc12ed7bdd))
+* **dev-loop:** style-literal hoist into per-view LiteralTable (appearance hot-swap Step 1) ([#1604](https://github.com/arthurmaciel/ipe-lang/issues/1604)) ([11c3bd4](https://github.com/arthurmaciel/ipe-lang/commit/11c3bd4d3a3f6967c5531a402353eb2665b40356))
+* **dev-loop:** typed style-value literal hoist (padding/spacing/size + rgb channels) ([#1608](https://github.com/arthurmaciel/ipe-lang/issues/1608)) ([e15e862](https://github.com/arthurmaciel/ipe-lang/commit/e15e8624eec17c20e02aac0b7970af6845df252c))
+* **watch:** appearance hot-swap classifier — emit-diff picks style edits, pushes a live table patch, skips cargo ([#1615](https://github.com/arthurmaciel/ipe-lang/issues/1615)) ([9a2a6bd](https://github.com/arthurmaciel/ipe-lang/commit/9a2a6bde47044270bcfc7b1f37103c08cd33a801))
+* **watch:** dev blue-green Model handoff across the swap + sqlx-free file store ([#1606](https://github.com/arthurmaciel/ipe-lang/issues/1606) Step 2) ([#1612](https://github.com/arthurmaciel/ipe-lang/issues/1612)) ([486f416](https://github.com/arthurmaciel/ipe-lang/commit/486f416b009e0765157634121bfb534693e2d467))
+* **watch:** dev-only blue-green binary swap — zero socket-drop on rebuild ([#1606](https://github.com/arthurmaciel/ipe-lang/issues/1606) Step 1) ([#1609](https://github.com/arthurmaciel/ipe-lang/issues/1609)) ([1920fec](https://github.com/arthurmaciel/ipe-lang/commit/1920fecd48b5af8360f15b3e14b758b5966ed30e))
+* **watch:** extend appearance hot-swap to Ipe.Css values through the sanitizer ([#1626](https://github.com/arthurmaciel/ipe-lang/issues/1626)) ([4942cd2](https://github.com/arthurmaciel/ipe-lang/commit/4942cd20c958c127cb3f7033803d95c2cfa4d048))
+
+
+### Bug Fixes
+
+* **backend:** distinct model schema-tag per IrType kind + pairwise-distinctness test ([#1623](https://github.com/arthurmaciel/ipe-lang/issues/1623)) ([7957ada](https://github.com/arthurmaciel/ipe-lang/commit/7957ada8cd94faa2ba4885a05d496e08835252f7))
+* **clippy:** clear the db,web --all-targets leg — reword doc-list + allow unwrap/expect in test helpers ([#1622](https://github.com/arthurmaciel/ipe-lang/issues/1622)) ([0f58f6e](https://github.com/arthurmaciel/ipe-lang/commit/0f58f6e6a6d4d4538d976c2717f8f04579a27971))
+* **web/store:** fail-closed store config + bounded checkpoint decode + 0600 session map ([#1625](https://github.com/arthurmaciel/ipe-lang/issues/1625)) ([ace40d3](https://github.com/arthurmaciel/ipe-lang/commit/ace40d325710bae27645977fcfdedff3dba2c2ce))
+
+
+### Performance Improvements
+
+* **watch:** incremental sccache-free emitted-app rebuild for the dev inner loop ([#1617](https://github.com/arthurmaciel/ipe-lang/issues/1617)) ([#1618](https://github.com/arthurmaciel/ipe-lang/issues/1618)) ([dd27f3f](https://github.com/arthurmaciel/ipe-lang/commit/dd27f3f45ecb4850fd14c6b138a1fba55fb69735))
+
 ## [0.1.74](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.1.73...ipe-v0.1.74) (2026-08-31)
 
 
