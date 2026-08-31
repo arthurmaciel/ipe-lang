@@ -7,6 +7,12 @@ fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     match ipe::run_cli(&args) {
         Ok(()) => ExitCode::SUCCESS,
+        // `--check --exit-code` carries a numeric code outside the 0/1 range —
+        // the only way to deliver it is `std::process::exit`. The status line
+        // was already printed by `run_upgrade`; nothing more to do here.
+        Err(ipe::CliError::UpgradeCheckExit { code }) => {
+            std::process::exit(code);
+        }
         // These variants render their own complete screen — a full help page, a
         // gate report, or a self-guttered environment message — so the `ipe: `
         // prefix (which belongs to short one-line diagnostics) and the extra
@@ -24,6 +30,7 @@ fn main() -> ExitCode {
             | ipe::CliError::EmittedBuildFailed { .. }
             | ipe::CliError::HealthCritical
             | ipe::CliError::EjectUnsupported { .. }
+            | ipe::CliError::UpgradeFeedUnreachable
             // The JSON was already written to stderr; nothing more to print.
             | ipe::CliError::DiagnosticJsonEmitted),
         ) => {
