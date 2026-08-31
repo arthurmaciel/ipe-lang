@@ -416,6 +416,7 @@ pub fn render_type(ctx: &EmitCtx, ty: &IrType, generics: GenericScope) -> DResul
         // `ProcessRunWithCfg` — re-exported from ipe_runtime::system, bare via
         // the glob use.
         IrType::ProcessRunWithCfg => "ProcessRunWithCfg".to_owned(),
+        IrType::ProcessRunInPtyCfg => "ProcessRunInPtyCfg".to_owned(),
         IrType::CacheCfg => "CacheCfg".to_owned(),
         IrType::CacheStats => "CacheStats".to_owned(),
         // Ipe.WebSocket connect-config record — re-exported (feature-gated

@@ -914,8 +914,9 @@ impl Env {
             // `Ipe.Process` — subprocess execution with NO shell.
             // `run` : `String -> List String -> Task Error String`.
             // `runWith` : `{ command, args, cwd, env } -> Task Error { exitCode, stdout, stderr }`.
-            // Both are server-only (`subprocess` capability), default-denied under wasm.
-            ("Process", &["run", "runWith"]),
+            // `runInPty` : `{ command, args, cwd, env, cols, rows } -> Task Error { exitCode, output }`.
+            // All are server-only (`subprocess` capability), default-denied under wasm.
+            ("Process", &["run", "runWith", "runInPty"]),
             // `Ipe.Http` — outbound HTTP client.
             // `get` / `post` / `request` are effect kernels (Task Error
             // HttpResponse); `parseQuery` is a pure kernel (String -> Dict

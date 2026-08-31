@@ -967,6 +967,8 @@ const fn ir_type_display_name(ty: &IrType) -> &'static str {
         IrType::EmailProvider => "EmailProvider",
         // `ProcessRunWithCfg` — kernel-boundary non-serde input record; not a web-surface type.
         IrType::ProcessRunWithCfg => "ProcessRunWithCfg",
+        // `ProcessRunInPtyCfg` — kernel-boundary non-serde input record; not a web-surface type.
+        IrType::ProcessRunInPtyCfg => "ProcessRunInPtyCfg",
         // Typed-key newtypes.
         IrType::CryptoKey => "Key",
         IrType::CryptoMac => "Mac",

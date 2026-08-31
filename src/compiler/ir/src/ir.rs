@@ -1423,6 +1423,16 @@ pub enum IrType {
     /// in a Ipe.Web Model.
     ProcessRunWithCfg,
 
+    /// `Ipe.Process.runInPty`'s input record `{ command : String, args : List
+    /// String, cwd : Maybe Path, env : List (String, String), cols : Int, rows :
+    /// Int }`. Renders as `ipe_runtime::system::ProcessRunInPtyCfg`.
+    ///
+    /// The lowerer folds any solved / annotated record matching that exact
+    /// 6-field shape to this opaque variant (same mechanism as
+    /// [`IrType::ProcessRunWithCfg`]) so a `Process.runInPty`-call record literal
+    /// constructs the runtime struct the `process_run_in_pty` kernel takes.
+    ProcessRunInPtyCfg,
+
     /// `Ipe.Cache`'s configuration record `{ maxEntries : Int, ttlMs : Int,
     /// maxBytes : Int }`. Renders as `ipe_runtime::cache::CacheCfg`.
     ///
@@ -1781,9 +1791,10 @@ pub fn ir_type_is_derivable(
         // `Dsn` derives Clone; `Debug` is hand-written (redacting) — fully
         // derivable, not serde (carries a `Secret`).
         | IrType::Dsn
-        // Cache config / stats + Csv document + process-run-with config runtime
+        // Cache config / stats + Csv document + process-run config runtime
         // structs derive Clone+Debug+PartialEq.
         | IrType::ProcessRunWithCfg
+        | IrType::ProcessRunInPtyCfg
         | IrType::CacheCfg
         | IrType::WebSocketClientCfg
         | IrType::CacheStats
@@ -2044,10 +2055,11 @@ pub fn ir_type_is_serde(ty: &IrType, enum_serde: &impl Fn(&ModPath, Symbol) -> b
         // `ipe_runtime::dsn::Dsn` has no serde impl), so a Model field of type
         // `Dsn` is a compile-time IPE-L0120, same posture as `Url` / `Secret`.
         | IrType::Dsn
-        // Cache config / stats + Csv document + process-run-with config are
+        // Cache config / stats + Csv document + process-run config are
         // kernel-boundary data records — derivable (see `ir_type_is_derivable`)
         // but never persisted to a session store, so not serde.
         | IrType::ProcessRunWithCfg
+        | IrType::ProcessRunInPtyCfg
         | IrType::CacheCfg
         | IrType::WebSocketClientCfg
         | IrType::CacheStats
@@ -2309,8 +2321,10 @@ pub const fn ir_type_feature_requirement(ty: &IrType) -> Option<RuntimeFeatureId
         | IrType::ShapeTerminal
         // `Locale` renders to the always-compiled `locale` module.
         | IrType::Locale
-        // `ProcessRunWithCfg` renders to the always-compiled `system` module.
+        // `ProcessRunWithCfg` / `ProcessRunInPtyCfg` render to the
+        // always-compiled `system` module.
         | IrType::ProcessRunWithCfg
+        | IrType::ProcessRunInPtyCfg
         // The shape app leaves render to the always-compiled `tea` module.
         | IrType::WebApp
         | IrType::WebViewApp
@@ -2438,6 +2452,7 @@ pub fn carrier_is_clone(ty: &IrType) -> bool {
         | IrType::UiPlain(_)
         | IrType::WebReq
         | IrType::ProcessRunWithCfg
+        | IrType::ProcessRunInPtyCfg
         | IrType::CacheCfg
         | IrType::WebSocketClientCfg
         | IrType::CacheStats

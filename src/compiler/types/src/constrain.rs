@@ -523,6 +523,12 @@ struct Builtins {
     process_f_stdout: Symbol,
     /// `"stderr"` — `Process.runWith` output: captured standard error.
     process_f_stderr: Symbol,
+    /// `"cols"` — `Process.runInPty` input: pty window width in columns.
+    process_f_cols: Symbol,
+    /// `"rows"` — `Process.runInPty` input: pty window height in rows.
+    process_f_rows: Symbol,
+    /// `"output"` — `Process.runInPty` output: combined pty-master stream.
+    process_f_output: Symbol,
     // ── JWT builder opaque type constructor symbols (D-00) ────────────────────
     /// `"Claims"` — opaque JWT claims builder object.  Backed at runtime by
     /// `serde_json::Value` (a JSON object accumulator).  Used as the input /
@@ -986,6 +992,9 @@ impl Builtins {
             process_f_exit_code: interner.intern("exitCode")?,
             process_f_stdout: interner.intern("stdout")?,
             process_f_stderr: interner.intern("stderr")?,
+            process_f_cols: interner.intern("cols")?,
+            process_f_rows: interner.intern("rows")?,
+            process_f_output: interner.intern("output")?,
             // ── JWT builder opaque type constructor symbols (D-00) ──────────────
             jwt_claims: interner.intern("Claims")?,
             jwt_algorithm: interner.intern("Algorithm")?,
@@ -4546,6 +4555,9 @@ impl<'a> Builder<'a> {
             FieldTag::ProcessExitCode => self.builtins.process_f_exit_code,
             FieldTag::ProcessStdout => self.builtins.process_f_stdout,
             FieldTag::ProcessStderr => self.builtins.process_f_stderr,
+            FieldTag::ProcessCols => self.builtins.process_f_cols,
+            FieldTag::ProcessRows => self.builtins.process_f_rows,
+            FieldTag::ProcessOutput => self.builtins.process_f_output,
         }
     }
 
@@ -5919,6 +5931,28 @@ impl<'a> Builder<'a> {
                 output_fields.insert(self.builtins.process_f_exit_code, int());
                 output_fields.insert(self.builtins.process_f_stderr, string());
                 output_fields.insert(self.builtins.process_f_stdout, string());
+                let output_rec = Ty::Record(output_fields, RowTail::Closed);
+
+                fun(input_rec, task(output_rec))
+            }
+            // `runInPty : { command, args, cwd, env, cols, rows } -> Task { exitCode, output }`
+            // Records built via BTreeMap; iteration is by ascending symbol id.
+            K::ProcessRunInPty => {
+                let mut input_fields = BTreeMap::new();
+                input_fields.insert(self.builtins.process_f_command, string());
+                input_fields.insert(self.builtins.process_f_args, list(string()));
+                input_fields.insert(self.builtins.process_f_cwd, maybe(path()));
+                input_fields.insert(
+                    self.builtins.process_f_env,
+                    list(tuple2(string(), string())),
+                );
+                input_fields.insert(self.builtins.process_f_cols, int());
+                input_fields.insert(self.builtins.process_f_rows, int());
+                let input_rec = Ty::Record(input_fields, RowTail::Closed);
+
+                let mut output_fields = BTreeMap::new();
+                output_fields.insert(self.builtins.process_f_exit_code, int());
+                output_fields.insert(self.builtins.process_f_output, string());
                 let output_rec = Ty::Record(output_fields, RowTail::Closed);
 
                 fun(input_rec, task(output_rec))
@@ -10384,6 +10418,7 @@ mod registry_phase_c_tests {
             // ── Ipe.Process — subprocess execution (no shell) ──
             K::ProcessRun,
             K::ProcessRunWith,
+            K::ProcessRunInPty,
             // ── Ipe.Env — build-time-embedded public config ──
             K::EnvPublic,
             // ── Ipe.Ui.Region — all 8 landmark/live-region attrs ──

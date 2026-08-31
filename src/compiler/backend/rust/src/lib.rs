@@ -3032,6 +3032,7 @@ fn collect_type_feature_requirements(ty: &IrType, out: &mut BTreeSet<ipe_ir::Run
         | IrType::Locale
         | IrType::Principal
         | IrType::ProcessRunWithCfg
+        | IrType::ProcessRunInPtyCfg
         | IrType::CacheCfg
         | IrType::CacheStats
         | IrType::WebSocketClientCfg
@@ -3180,6 +3181,7 @@ const fn ir_type_is_record_shape_leaf(ty: &IrType) -> bool {
             | IrType::Secret
             | IrType::Path
             | IrType::ProcessRunWithCfg
+            | IrType::ProcessRunInPtyCfg
             | IrType::CacheCfg
             | IrType::WebSocketClientCfg
             | IrType::CacheStats
@@ -3327,6 +3329,7 @@ fn collect_record_shapes(
         // Process-run-with cfg + Cache config / stats + Csv document fold to
         // nominal runtime structs — no structural record shape to synthesise.
         | IrType::ProcessRunWithCfg
+        | IrType::ProcessRunInPtyCfg
         | IrType::CacheCfg
         | IrType::WebSocketClientCfg
         | IrType::CacheStats
@@ -3502,6 +3505,7 @@ fn type_reaches_enum(
         // Process-run-with cfg + Cache config / stats + Csv document are
         // monomorphic runtime structs — no reachable enum edge to `target`.
         | IrType::ProcessRunWithCfg
+        | IrType::ProcessRunInPtyCfg
         | IrType::CacheCfg
         | IrType::WebSocketClientCfg
         | IrType::CacheStats
@@ -3616,6 +3620,7 @@ fn contains_generic(ty: &IrType) -> bool {
         // Process-run-with cfg + Cache config / stats + Csv document are
         // monomorphic — no generic parameters.
         | IrType::ProcessRunWithCfg
+        | IrType::ProcessRunInPtyCfg
         | IrType::CacheCfg
         | IrType::WebSocketClientCfg
         | IrType::CacheStats
@@ -3761,6 +3766,7 @@ fn collect_generics(ty: &IrType, out: &mut Vec<Symbol>) {
         // Process-run-with cfg + Cache config / stats + Csv document are
         // monomorphic — no generics to collect.
         | IrType::ProcessRunWithCfg
+        | IrType::ProcessRunInPtyCfg
         | IrType::CacheCfg
         | IrType::WebSocketClientCfg
         | IrType::CacheStats
@@ -4119,6 +4125,7 @@ fn match_template(
         // Process-run-with cfg + Cache config / stats + Csv document are
         // monomorphic runtime-struct leaves.
         | IrType::ProcessRunWithCfg
+        | IrType::ProcessRunInPtyCfg
         | IrType::CacheCfg
         | IrType::WebSocketClientCfg
         | IrType::CacheStats

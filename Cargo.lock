@@ -2090,6 +2090,7 @@ dependencies = [
  "reqwest",
  "rsa",
  "rust_decimal",
+ "rustix 1.1.4",
  "serde",
  "serde_json",
  "serde_urlencoded",

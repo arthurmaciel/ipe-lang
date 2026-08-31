@@ -93,9 +93,11 @@ uuid = { version = "1", features = ["v4", "v7"] }
 bcrypt = "0.17"
 
 # Unix-only: `Io.readSecret` toggles terminal echo via termios (tcgetattr /
-# tcsetattr / isatty) in the vendored runtime's `io` module.
+# tcsetattr / isatty) in the vendored runtime's `io` module; `Process.runInPty`
+# allocates + sizes a pseudo-terminal via rustix's safe pty/termios wrappers.
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
+rustix = { version = "1", features = ["pty", "termios", "fs", "std"] }
 
 [profile.dev]
 debug = 0

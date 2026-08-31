@@ -175,6 +175,12 @@ tao = { version = "0.35", optional = true }
 # cfg(target_os = "linux").
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
+# `Ipe.Process.runInPty` allocates a pseudo-terminal (openpt / grantpt / unlockpt
+# / ptsname) and sizes it (tcsetwinsize) through rustix's safe `pty` + `termios`
+# wrappers — no hand-written `unsafe` FFI. Unix-only: the pty surface has no
+# meaning on non-unix targets, where the kernel returns an honest unsupported
+# `Err`. `fs` backs `open`ing the replica side; `std` re-exports `OwnedFd`.
+rustix = { version = "1", features = ["pty", "termios", "fs", "std"] }
 
 # tokio is native-only. Every tokio code path in this crate is already
 # `not(target_arch = "wasm32")`-gated at the use site (the wasm target drives
