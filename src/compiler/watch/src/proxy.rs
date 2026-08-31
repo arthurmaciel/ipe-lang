@@ -747,4 +747,80 @@ mod tests {
             "the kept-alive client socket routes to the NEW upstream after cutover"
         );
     }
+
+    /// A malformed request degrades EXACTLY its own connection and never the
+    /// accept loop — the standing pin for the "one bad connection can't take
+    /// the proxy down" guarantee. Two hostile connections are driven against a
+    /// live proxy: (1) a header block that runs past `MAX_REQUEST_HEADER_BYTES`
+    /// without ever terminating, and (2) a `Transfer-Encoding: chunked` body
+    /// with a non-hex (bad) chunk size. Each is expected to have its own
+    /// connection closed/errored by the proxy; then a THIRD, well-formed
+    /// request on a fresh connection must still be served cleanly — proving the
+    /// accept loop kept running throughout.
+    #[test]
+    fn a_malformed_request_degrades_only_its_own_connection() {
+        let upstream = spawn_fixed_upstream("CLEAN-OK");
+        let proxy = bind_proxy_on_free_port();
+        let proxy_port = proxy.port();
+        proxy.set_upstream(upstream);
+        let addr = SocketAddr::from(([127, 0, 0, 1], proxy_port));
+
+        // (1) Oversized header block: a valid request line, then header bytes
+        // that never reach the terminating blank line, pushed well past the
+        // 64 KiB cap. The proxy must reject (close) this connection rather than
+        // buffer unboundedly. `write_all` may itself error once the peer half-
+        // closes; either "write failed" or "read yields EOF" is an acceptable
+        // observation of the degrade — what matters is it does not hang and
+        // does not wedge the loop.
+        {
+            let mut bad = TcpStream::connect(addr).expect("connect for oversized header");
+            bad.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+            let _ = bad.write_all(b"GET / HTTP/1.1\r\nHost: 127.0.0.1\r\n");
+            let filler = vec![b'a'; MAX_REQUEST_HEADER_BYTES + 4096];
+            // A long header line with no CRLF: crosses the cap mid-line.
+            let _ = bad.write_all(b"X-Huge: ");
+            let _ = bad.write_all(&filler);
+            // Whether the write fully lands or errors, the connection must end
+            // (EOF) rather than serve a body — read to end and assert no
+            // upstream body leaked through.
+            let mut buf = Vec::new();
+            let _ = bad.read_to_end(&mut buf);
+            let text = String::from_utf8_lossy(&buf);
+            assert!(
+                !text.contains("CLEAN-OK"),
+                "an oversized-header connection must never be routed to the upstream: {text:?}"
+            );
+        }
+
+        // (2) Bad chunk size: a well-formed head declaring a chunked body, then
+        // a non-hex chunk-size line. `copy_chunked` must fail on the malformed
+        // size and close this connection — again, only this one.
+        {
+            let mut bad = TcpStream::connect(addr).expect("connect for bad chunk");
+            bad.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+            let _ = bad.write_all(
+                b"POST / HTTP/1.1\r\nHost: 127.0.0.1\r\nTransfer-Encoding: chunked\r\n\r\n",
+            );
+            // `zzzz` is not a hex chunk size — `u64::from_str_radix(.., 16)` fails.
+            let _ = bad.write_all(b"zzzz\r\n");
+            let mut buf = Vec::new();
+            let _ = bad.read_to_end(&mut buf);
+            let text = String::from_utf8_lossy(&buf);
+            assert!(
+                !text.contains("CLEAN-OK"),
+                "a bad-chunk-size connection must not be served an upstream body: {text:?}"
+            );
+        }
+
+        // (3) THE GUARANTEE: after both hostile connections, a fresh well-formed
+        // request is still served cleanly — the accept loop survived.
+        let mut good = TcpStream::connect(addr).expect("connect for the clean request");
+        good.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        let served = get_body_on(&mut good);
+        assert_eq!(
+            served.as_deref(),
+            Some("CLEAN-OK"),
+            "the accept loop must still serve a clean request after malformed ones: {served:?}"
+        );
+    }
 }
