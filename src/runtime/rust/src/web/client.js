@@ -26,13 +26,13 @@ var __ipeHelloTimeoutMs = (window.__IPE_HELLO_TIMEOUT_MS != null) ? window.__IPE
 var __ipeHeartbeatTtlMs = (window.__IPE_HEARTBEAT_TTL_MS != null) ? window.__IPE_HEARTBEAT_TTL_MS : 35000;
 
 // ── Input authority protocol state ───────────────────────────
-// See docs/ipelive/input-authority-protocol.md §Client state.
+// See docs/internals/web/input-authority-protocol.md §Client state.
 // Step 2 populates these counters + per-input table on every send
 // and response; Step 3 activates the patch filter that reads them;
 // Step 4 activates the stale-drop test against __ipeLastAppliedSeq.
 //
 // Cycle 3 P47 (pub/sub global+local seq split — see
-// docs/ipelive/pubsub-design.md §3.2): __ipeLastGlobalSeq is the
+// docs/internals/web/pubsub-design.md §3.2): __ipeLastGlobalSeq is the
 // app-wide broadcast counter. The server stamps it onto every
 // broadcast-derived SSE frame (event:patches OR event:patch); the
 // client dedupes against the largest value already applied so a
@@ -130,7 +130,7 @@ function __ipeIngestSeq(seq, ackInputs, globalSeq) {
 // always apply — pre-upgrade servers keep working.
 //
 // Cycle 3 P47 (pub/sub global+local seq split — see
-// docs/ipelive/pubsub-design.md §3.2): broadcast-derived frames also
+// docs/internals/web/pubsub-design.md §3.2): broadcast-derived frames also
 // carry an OPTIONAL globalSeq. If supplied AND already applied (i.e.
 // globalSeq > 0 && globalSeq <= __ipeLastGlobalSeq) the frame is
 // dropped — a replayed broadcast (e.g. an SSE reconnect re-delivering
@@ -184,7 +184,7 @@ function __ipeHandleResponse(seq, ackInputs, applyFn, globalSeq) {
 // no textarea content, no option[selected]). For these the user-
 // owned client state is canonical; we splice the live node across
 // the swap so the user's typing isn't blanked. See
-// docs/ipelive/input-authority-protocol.md §I6 (full-body
+// docs/internals/web/input-authority-protocol.md §I6 (full-body
 // preservation).
 function __ipePlaceholderUncontrolled(placeholder) {
   if (!placeholder) return false;
@@ -231,7 +231,7 @@ function __ipeFindPlaceholder(tmp, live) {
 //      (anything the server didn't render an authority attribute for).
 //      Without this, an unfocused password field gets recreated by the
 //      innerHTML swap and the user's typed secret is blanked — see
-//      Bug 2 in docs/ipelive/architecture.md §Input preservation.
+//      Bug 2 in docs/internals/web/architecture.md §Input preservation.
 // Used by both __ipePatch (full body) and __ipeApplyPatches (p.html
 // and large p.text patches).
 function __ipeReplaceHTMLPreservingFocus(container, newHTML) {
@@ -563,7 +563,7 @@ document.addEventListener("focusout", function(ev) {
 // navigates or closes the tab would normally be discarded — the
 // setTimeout is torn down with the page. These handlers flush
 // synchronously so the final keystroke always reaches the server.
-// See docs/ipelive/input-authority-protocol.md §I3.
+// See docs/internals/web/input-authority-protocol.md §I3.
 
 // __ipeCollectPendingBatch — snapshot every pending-debounce entry
 // into a batch array, bumping __ipeClientSeq per entry so each gets
@@ -676,7 +676,7 @@ window.addEventListener("beforeunload", __ipeFlushPendingBeacon);
 window.addEventListener("pagehide", __ipeFlushPendingBeacon);
 
 // ── Core send ────────────────────────────────────────────────
-// Wire format (see docs/ipelive/input-authority-protocol.md §Request):
+// Wire format (see docs/internals/web/input-authority-protocol.md §Request):
 //   {sessionId, seq, msg, args, handlerId, inputState?}
 //   * seq is client-monotonic — server uses it to match responses to
 //     the inputState snapshot that produced them.
@@ -907,7 +907,7 @@ function __ipeApplyPatches(patches) {
   // this patch cycle. The next user interaction (option click, blur)
   // triggers a fresh response and reconciliation. Sibling subtrees
   // and unrelated parts of the DOM apply normally — the dropdown is
-  // unaffected. See Bug 3 in docs/ipelive/architecture.md.
+  // unaffected. See Bug 3 in docs/internals/web/architecture.md.
   var openSel = (document.activeElement && document.activeElement.tagName === "SELECT")
       ? document.activeElement : null;
   for (var i = 0; i < patches.length; i++) {
@@ -1395,7 +1395,7 @@ function __ipeInjectStatusBanner() {
 // 'error', leaving the client silently wedged. The server now sends
 // an immediate 'hello' event and a periodic 'heartbeat'; the client
 // watchdog (below) treats absence of either as a wedge and force-
-// reconnects with backoff. See docs/ipelive/architecture.md
+// reconnects with backoff. See docs/internals/web/architecture.md
 // §SSE wedge detection.
 var __ipeSSE = null;
 var __ipeOpenAt = 0;          // ms timestamp of last EventSource.open

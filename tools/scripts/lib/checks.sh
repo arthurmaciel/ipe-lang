@@ -173,7 +173,7 @@ exercise_server() {
   local bin="$1" port="$2" log="$3" pid i code lp code2 ok="" run_dir abin
   abin="$(cd "$(dirname "$bin")" && pwd)/$(basename "$bin")"
   run_dir="$(mktemp -d "${TMPDIR:-/tmp}/ipe-serve.XXXXXX")"
-  ( cd "$run_dir" && exec env IPE_LIVE_PORT="$port" PORT="$port" "$abin" ) >"$log" 2>&1 </dev/null &
+  ( cd "$run_dir" && exec env IPE_WEB_PORT="$port" PORT="$port" "$abin" ) >"$log" 2>&1 </dev/null &
   pid=$!
   for i in $(seq 1 30); do
     kill -0 "$pid" 2>/dev/null || break
