@@ -97,6 +97,24 @@ diff : Timestamp -> Timestamp -> Duration
 `diff a b` — the `Duration` from instant `b` to instant `a`.  Clamped to
 zero when `b` is after `a`.
 
+## `fromMillis`
+
+```ipe
+fromMillis : Int -> Timestamp
+```
+
+`fromMillis ms` — build a `Timestamp` from raw milliseconds since the Unix
+epoch.  Convenience alias for `Ipe.Time.Timestamp.fromUnixMillis`.
+
+## `toMillis`
+
+```ipe
+toMillis : Timestamp -> Int
+```
+
+`toMillis t` — recover the raw millisecond value from a `Timestamp`.
+Convenience alias for `Ipe.Time.Timestamp.toUnixMillis`.
+
 ## `addMillis`
 
 ```ipe

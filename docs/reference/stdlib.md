@@ -1748,6 +1748,8 @@ Ipe.Time -- clock + formatting + parsing.
 | `formatRFC3339` | `formatRFC3339 t` — format `t` as an RFC 3339 string. |
 | `add` | `add span t` — shift instant `t` forward by `span`. |
 | `diff` | `diff a b` — the `Duration` from instant `b` to instant `a`.  Clamped to |
+| `fromMillis` | `fromMillis ms` — build a `Timestamp` from raw milliseconds since the Unix |
+| `toMillis` | `toMillis t` — recover the raw millisecond value from a `Timestamp`. |
 | `addMillis` | `addMillis ms t` — shift instant `t` by `ms` raw milliseconds.  Prefer |
 | `diffMillis` | `diffMillis a b` — raw milliseconds from instant `b` to instant `a`. |
 | `every` | `every interval msg` -- Ipe.Web / Ipe.Tui subscription that emits `msg` once |
