@@ -88,6 +88,139 @@ pub struct ProjectManifest {
     /// regenerate from an independent pinned source (there is no registry pin,
     /// rev, or hash for a local wrapper path — only the author's local source).
     pub has_rust_wrapper: bool,
+    /// The `programs` list: named build targets, each with its entry module file
+    /// and an optional declared shape. Empty when the manifest declares no
+    /// `Package.programs` stage — the entry then defaults to `Main` and the shape
+    /// is entirely compiler-inferred (`resolved_entry` returns `["Main"]`).
+    ///
+    /// A declared shape is VALIDATED against the compiler's inferred shape, never
+    /// used to override it (see `misc/docs/package-programs-design.md`).
+    pub programs: Vec<Program>,
+    /// The `exposedModules` list: a library package's public surface — the
+    /// modules a downstream consumer may import. Empty for an application
+    /// package (one that declares no `Package.exposedModules` stage).
+    pub exposed_modules: Vec<String>,
+}
+
+impl ProjectManifest {
+    /// The entry module path the build should compile, derived from `programs`.
+    ///
+    /// A manifest with no `programs` (or one whose sole/default program does not
+    /// override the entry) uses `["Main"]`. A single-program manifest routes that
+    /// program's declared entry-file through to a module path. A multi-program
+    /// manifest is not yet selectable by name at the CLI (the schema lands ahead
+    /// of the selection wiring); its default (the first) program's entry is used.
+    ///
+    /// # Errors
+    /// [`CliError::UsageOwned`] when a program's entry file does not map to a
+    /// valid module path (a non-module path segment).
+    pub fn resolved_entry(&self) -> Result<Vec<String>, CliError> {
+        let Some(program) = self.default_program() else {
+            return Ok(vec!["Main".to_owned()]);
+        };
+        entry_file_to_module_path(&program.entry)
+    }
+
+    /// The default program: the sole program of a single-program manifest, or the
+    /// first of a multi-program one (named-selection is a reported residual).
+    /// `None` when `programs` is empty.
+    #[must_use]
+    pub fn default_program(&self) -> Option<&Program> {
+        self.programs.first()
+    }
+}
+
+/// One `programs` entry: a named build target with its entry module file and an
+/// optional declared shape.
+///
+/// Modelled so an invalid combination is unrepresentable at the type level: the
+/// `shape` is a closed [`EntryShape`] enum (never a free string), and the entry
+/// is always present (defaulting to `Main.ipe` at read time when the builder
+/// omits it), so a program can never name a shape outside the vocabulary nor lack
+/// an entry.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Program {
+    /// The program's target name (from `Program.named "…"`).
+    pub name: String,
+    /// The entry module's source file, relative to the source root
+    /// (from `Program.entry "…"`; defaults to `Main.ipe`).
+    pub entry: String,
+    /// The declared shape, when the author asserts one (from `Program.shape
+    /// Shape.…`). `None` means "trust the compiler's inference". A declared shape
+    /// is validated against inference, never used to override it.
+    pub shape: Option<EntryShape>,
+}
+
+/// The closed set of program shapes an author may declare in a `package.ipe`
+/// `Program.shape Shape.…` stage.
+///
+/// The four-shape model: a `Web` server, a `WebView` desktop app, a `Terminal`
+/// app, or a plain `Program`.
+///
+/// Declared syntactically as a blessed `Shape.*` nullary constructor, so a typo
+/// is not a writable manifest at all rather than a runtime rejection.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EntryShape {
+    /// A `Web` server app (`Web.app` / `Web.appRouted` / `Web.appWith`).
+    Web,
+    /// A `WebView` desktop app.
+    WebView,
+    /// A `Terminal` app (`Tui.app` / `Console.app`).
+    Terminal,
+    /// A plain `Program` (a non-shape `main`).
+    Program,
+}
+
+impl EntryShape {
+    /// The wire spelling of this shape, as written after `Shape.` in a manifest.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Web => "web",
+            Self::WebView => "webView",
+            Self::Terminal => "terminal",
+            Self::Program => "program",
+        }
+    }
+}
+
+/// Map an entry-file string (relative to the source root, e.g. `Main.ipe` or
+/// `Client/App.ipe`) to its module path (`["Main"]`, `["Client", "App"]`).
+///
+/// The `.ipe` extension is stripped; each remaining path segment must be a valid
+/// Ipê module segment (`[A-Z][A-Za-z0-9_]*`). A path with a non-module segment or
+/// no segments at all is a manifest error, never a silently-dropped entry.
+///
+/// # Errors
+/// [`CliError::UsageOwned`] naming the offending entry file.
+fn entry_file_to_module_path(entry: &str) -> Result<Vec<String>, CliError> {
+    let rel = Path::new(entry);
+    let without_ext = rel.with_extension("");
+    let mut segments: Vec<String> = Vec::new();
+    for component in without_ext.components() {
+        let seg = match component {
+            std::path::Component::Normal(s) => s.to_str(),
+            _ => None,
+        };
+        let seg = seg.ok_or_else(|| {
+            CliError::UsageOwned(format!(
+                "package.ipe: program entry {entry:?} is not a valid entry file"
+            ))
+        })?;
+        if !is_module_segment(seg) {
+            return Err(CliError::UsageOwned(format!(
+                "package.ipe: program entry {entry:?} has a path segment {seg:?} that is not a \
+                 valid module name (segments must match [A-Z][A-Za-z0-9_]*)"
+            )));
+        }
+        segments.push(seg.to_owned());
+    }
+    if segments.is_empty() {
+        return Err(CliError::UsageOwned(format!(
+            "package.ipe: program entry {entry:?} names no module"
+        )));
+    }
+    Ok(segments)
 }
 
 /// `[wasm]` section of a `package.ipe` manifest (spec: `docs/adr/0042-wasm-client-target.md` Q6

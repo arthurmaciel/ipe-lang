@@ -44,7 +44,8 @@ use ipe_syntax::{Expr, Expr_, Module};
 
 use crate::CliError;
 use crate::project::{
-    Capability, IpeDep, ProjectManifest, RustDep, WasmConfig, is_denylisted_public_env_name,
+    Capability, EntryShape, IpeDep, Program, ProjectManifest, RustDep, WasmConfig,
+    is_denylisted_public_env_name,
 };
 
 /// The manifest filename read by this reader.
@@ -133,6 +134,8 @@ struct ManifestFields {
     capabilities_accept: BTreeSet<Capability>,
     wasm: WasmConfig,
     has_rust_wrapper: bool,
+    programs: Vec<crate::project::Program>,
+    exposed_modules: Vec<String>,
 }
 
 impl ManifestFields {
@@ -174,6 +177,8 @@ impl ManifestFields {
             capabilities: self.capabilities,
             capabilities_accept: self.capabilities_accept,
             has_rust_wrapper: self.has_rust_wrapper,
+            programs: self.programs,
+            exposed_modules: self.exposed_modules,
         })
     }
 }
@@ -361,6 +366,13 @@ impl Reader<'_> {
             }
             ("Package", "wasm") => {
                 fields.wasm = self.read_wasm(self.nth_arg(stage.span, name, args, 0)?)?;
+            }
+            ("Package", "programs") => {
+                fields.programs = self.read_programs(self.nth_arg(stage.span, name, args, 0)?)?;
+            }
+            ("Package", "exposedModules") => {
+                fields.exposed_modules =
+                    self.read_exposed_modules(self.nth_arg(stage.span, name, args, 0)?)?;
             }
             _ => {
                 return Err(self.reject(
@@ -742,6 +754,116 @@ impl Reader<'_> {
         Ok(wasm)
     }
 
+    /// Read the `Package.programs [ … ]` list into the typed [`Program`] vector.
+    /// Each element is a `Program.named "…"` head threaded through any number of
+    /// `|> Program.entry "…"` / `|> Program.shape Shape.…` refinements — the same
+    /// blessed-pipeline shape the rust-dependency and wrapper readers use.
+    fn read_programs(&self, expr: &Expr) -> Result<Vec<Program>, CliError> {
+        let mut programs = Vec::new();
+        let mut seen_names: BTreeSet<String> = BTreeSet::new();
+        for item in self.expect_list(expr)? {
+            let program = self.read_one_program(item)?;
+            if !seen_names.insert(program.name.clone()) {
+                return Err(self.reject(
+                    item.span,
+                    &format!(
+                        "duplicate program name {:?} — each `Program.named` must be unique",
+                        program.name
+                    ),
+                ));
+            }
+            programs.push(program);
+        }
+        Ok(programs)
+    }
+
+    /// Read one `Program.named name |> Program.entry file |> Program.shape …`
+    /// pipeline into a [`Program`]. `entry` defaults to `Main.ipe` when omitted;
+    /// `shape` is absent unless a `Program.shape` stage names one.
+    fn read_one_program(&self, expr: &Expr) -> Result<Program, CliError> {
+        let stages = self.linearise_pipeline(expr)?;
+        let mut name: Option<String> = None;
+        let mut entry: Option<String> = None;
+        let mut shape: Option<EntryShape> = None;
+        for stage in stages {
+            let (module, builder, args) = self.expect_blessed_call(stage)?;
+            match (module, builder) {
+                ("Program", "named") => {
+                    name = Some(self.expect_string(self.nth_arg(stage.span, builder, args, 0)?)?);
+                }
+                ("Program", "entry") => {
+                    entry = Some(self.expect_string(self.nth_arg(stage.span, builder, args, 0)?)?);
+                }
+                ("Program", "shape") => {
+                    shape = Some(self.read_shape(self.nth_arg(stage.span, builder, args, 0)?)?);
+                }
+                _ => {
+                    return Err(self.reject(
+                        stage.span,
+                        &format!(
+                            "`{module}.{builder}` is not a program builder — use `Program.named`, \
+                             `Program.entry`, and `Program.shape`"
+                        ),
+                    ));
+                }
+            }
+        }
+        let name = name.ok_or_else(|| {
+            self.reject(
+                expr.span,
+                "a program must begin with `Program.named \"<name>\"`",
+            )
+        })?;
+        Ok(Program {
+            name,
+            entry: entry.unwrap_or_else(|| "Main.ipe".to_owned()),
+            shape,
+        })
+    }
+
+    /// Read a `Program.shape` argument: one of the blessed shape constructors
+    /// `Shape.web` / `Shape.webView` / `Shape.terminal` / `Shape.program`, mapped
+    /// to its [`EntryShape`]. The closed vocabulary makes an out-of-set shape
+    /// unrepresentable rather than a runtime rejection.
+    fn read_shape(&self, expr: &Expr) -> Result<EntryShape, CliError> {
+        let (module, name) = self.expect_nullary(expr, "a program shape")?;
+        match (module, name) {
+            ("Shape", "web") => Ok(EntryShape::Web),
+            ("Shape", "webView") => Ok(EntryShape::WebView),
+            ("Shape", "terminal") => Ok(EntryShape::Terminal),
+            ("Shape", "program") => Ok(EntryShape::Program),
+            _ => Err(self.reject(
+                expr.span,
+                &format!(
+                    "`{module}.{name}` is not a shape — use `Shape.web`, `Shape.webView`, \
+                     `Shape.terminal`, or `Shape.program`"
+                ),
+            )),
+        }
+    }
+
+    /// Read the `Package.exposedModules [ "A", "B.C" ]` list of module-name string
+    /// literals into the library's public surface. Each name is validated as a
+    /// dotted sequence of module segments (`[A-Z][A-Za-z0-9_]*`), so a lowercase
+    /// or malformed name is a read-time error rather than an unresolvable export.
+    fn read_exposed_modules(&self, expr: &Expr) -> Result<Vec<String>, CliError> {
+        let mut modules = Vec::new();
+        for item in self.expect_list(expr)? {
+            let name = self.expect_string(item)?;
+            if !is_module_name(&name) {
+                return Err(self.reject(
+                    item.span,
+                    &format!(
+                        "`exposedModules` entry {name:?} is not a valid module name (dotted \
+                         segments each matching [A-Z][A-Za-z0-9_]*)"
+                    ),
+                ));
+            }
+            modules.push(name);
+        }
+        Ok(modules)
+    }
+
     /// The wasm mode named by a bare `Wasm.spa` / `Wasm.hydrate` nullary atom
     /// (not a call), or `None` for anything else.
     fn wasm_mode_atom(&self, expr: &Expr) -> Option<&'static str> {
@@ -842,6 +964,24 @@ fn capability_wire_name(builder: &str) -> &str {
         "customElement" => "custom-element",
         other => other,
     }
+}
+
+/// Whether `name` is a valid dotted Ipê module name: one or more `.`-separated
+/// segments, each starting with an ASCII uppercase letter and continuing with
+/// ASCII alphanumerics or `_`. An empty name or any malformed segment is invalid.
+fn is_module_name(name: &str) -> bool {
+    if name.is_empty() {
+        return false;
+    }
+    name.split('.').all(|segment| {
+        let mut chars = segment.chars();
+        match chars.next() {
+            Some(c) if c.is_ascii_uppercase() => {
+                chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+            }
+            _ => false,
+        }
+    })
 }
 
 /// The 1-based `(line, column)` of byte offset `off` in `src`. An out-of-range
@@ -1189,6 +1329,162 @@ mod tests {
         );
         let m = r.expect("allowed env must parse");
         assert_eq!(m.wasm.public_env, vec!["API_BASE_URL"]);
+    }
+
+    // ── programs / exposedModules ─────────────────────────────────────────────
+
+    #[test]
+    fn programs_and_exposed_modules_parse_into_the_typed_manifest() {
+        let source = format!(
+            "{HEADER}package =\n\
+             \x20   Package.named \"my-app\"\n\
+             \x20       |> Package.programs\n\
+             \x20           [ Program.named \"server\" |> Program.entry \"Main.ipe\" |> Program.shape Shape.web\n\
+             \x20           , Program.named \"cli\" |> Program.entry \"Cli/Main.ipe\" |> Program.shape Shape.terminal\n\
+             \x20           ]\n\
+             \x20       |> Package.exposedModules [ \"Core\", \"Core.Utils\" ]\n"
+        );
+        let m = read("programs_and_exposed", &source).expect("manifest must parse");
+
+        assert_eq!(
+            m.programs,
+            vec![
+                Program {
+                    name: "server".to_owned(),
+                    entry: "Main.ipe".to_owned(),
+                    shape: Some(EntryShape::Web),
+                },
+                Program {
+                    name: "cli".to_owned(),
+                    entry: "Cli/Main.ipe".to_owned(),
+                    shape: Some(EntryShape::Terminal),
+                },
+            ]
+        );
+
+        assert_eq!(m.exposed_modules, vec!["Core", "Core.Utils"]);
+
+        // The default program's entry resolves to a module path.
+        assert_eq!(m.resolved_entry().expect("entry"), vec!["Main".to_owned()]);
+    }
+
+    #[test]
+    fn program_entry_defaults_to_main_when_omitted() {
+        let source = format!(
+            "{HEADER}package =\n\
+             \x20   Package.named \"x\"\n\
+             \x20       |> Package.programs [ Program.named \"app\" ]\n"
+        );
+        let m = read("program_default_entry", &source).expect("manifest must parse");
+        assert_eq!(
+            m.programs,
+            vec![Program {
+                name: "app".to_owned(),
+                entry: "Main.ipe".to_owned(),
+                shape: None,
+            }]
+        );
+        assert_eq!(m.resolved_entry().expect("entry"), vec!["Main".to_owned()]);
+    }
+
+    #[test]
+    fn program_entry_routes_a_nested_module_path() {
+        let source = format!(
+            "{HEADER}package =\n\
+             \x20   Package.named \"x\"\n\
+             \x20       |> Package.programs [ Program.named \"app\" |> Program.entry \"Client/App.ipe\" ]\n"
+        );
+        let m = read("program_nested_entry", &source).expect("manifest must parse");
+        assert_eq!(
+            m.resolved_entry().expect("entry"),
+            vec!["Client".to_owned(), "App".to_owned()]
+        );
+    }
+
+    #[test]
+    fn no_programs_resolves_entry_to_main() {
+        let m = read(
+            "no_programs",
+            &format!("{HEADER}package =\n    Package.named \"x\"\n"),
+        )
+        .expect("manifest must parse");
+        assert!(m.programs.is_empty());
+        assert!(m.exposed_modules.is_empty());
+        assert_eq!(m.resolved_entry().expect("entry"), vec!["Main".to_owned()]);
+    }
+
+    #[test]
+    fn reject_unknown_shape_constructor() {
+        let r = read(
+            "reject_shape",
+            &format!(
+                "{HEADER}package =\n    Package.named \"x\"\n        |> Package.programs [ Program.named \"a\" |> Program.shape Shape.hologram ]\n"
+            ),
+        );
+        assert_rejected(&r);
+    }
+
+    #[test]
+    fn reject_duplicate_program_name() {
+        let r = read(
+            "reject_dup_program",
+            &format!(
+                "{HEADER}package =\n    Package.named \"x\"\n        |> Package.programs [ Program.named \"a\", Program.named \"a\" ]\n"
+            ),
+        );
+        assert_rejected(&r);
+    }
+
+    #[test]
+    fn reject_program_missing_name() {
+        let r = read(
+            "reject_program_no_name",
+            &format!(
+                "{HEADER}package =\n    Package.named \"x\"\n        |> Package.programs [ Program.entry \"Main.ipe\" ]\n"
+            ),
+        );
+        assert_rejected(&r);
+    }
+
+    #[test]
+    fn reject_lowercase_exposed_module() {
+        let r = read(
+            "reject_exposed_lower",
+            &format!(
+                "{HEADER}package =\n    Package.named \"x\"\n        |> Package.exposedModules [ \"core\" ]\n"
+            ),
+        );
+        assert_rejected(&r);
+    }
+
+    #[test]
+    fn reject_program_entry_with_lowercase_segment() {
+        // A program entry whose file maps to a non-module segment is a manifest
+        // error at entry-resolution time.
+        let m = read(
+            "reject_entry_lower",
+            &format!(
+                "{HEADER}package =\n    Package.named \"x\"\n        |> Package.programs [ Program.named \"a\" |> Program.entry \"lower/App.ipe\" ]\n"
+            ),
+        )
+        .expect("manifest itself parses");
+        assert!(
+            m.resolved_entry().is_err(),
+            "a lowercase entry segment must be rejected at entry resolution"
+        );
+    }
+
+    #[test]
+    fn is_module_name_rules() {
+        assert!(is_module_name("Core"));
+        assert!(is_module_name("Core.Utils"));
+        assert!(is_module_name("A.B.C2"));
+        assert!(is_module_name("My_Module"));
+        assert!(!is_module_name("core"));
+        assert!(!is_module_name(""));
+        assert!(!is_module_name("Core."));
+        assert!(!is_module_name("Core..Utils"));
+        assert!(!is_module_name("1Core"));
     }
 
     #[test]

@@ -17,12 +17,18 @@ use std::path::{Path, PathBuf};
 use crate::{CliError, health, style};
 
 /// `src/Main.ipe` — the working counter. No substitution: this is a complete
-/// program, byte-identical for every scaffolded project.
+/// program, byte-identical for every scaffolded application project.
 const MAIN_IPE: &str = include_str!("../templates/Main.ipe");
 
 /// Templates carrying a `{name}` hole filled from the project name.
 const PACKAGE_IPE: &str = include_str!("../templates/package.ipe.in");
 const README_MD: &str = include_str!("../templates/README.md.in");
+
+/// Library-scaffold templates (`ipe init --lib`), carrying `{name}` and
+/// `{module}` holes filled from the project name and its derived public module.
+const PACKAGE_LIB_IPE: &str = include_str!("../templates/package.lib.ipe.in");
+const LIB_IPE: &str = include_str!("../templates/Lib.ipe.in");
+const README_LIB_MD: &str = include_str!("../templates/README.lib.md.in");
 
 /// `.gitignore` — no substitution; the same ignore set fits every project.
 const GITIGNORE: &str = include_str!("../templates/gitignore.in");
@@ -72,9 +78,11 @@ enum FileAction {
 pub fn run_init(rest: &[String]) -> Result<(), CliError> {
     let mut target_arg: Option<String> = None;
     let mut force = false;
+    let mut lib = false;
     for arg in rest {
         match arg.as_str() {
             "--force" => force = true,
+            "--lib" => lib = true,
             flag if flag.starts_with('-') => {
                 return Err(crate::cli_args::usage_unknown_flag("init", flag));
             }
@@ -89,7 +97,11 @@ pub fn run_init(rest: &[String]) -> Result<(), CliError> {
     let target_dir = PathBuf::from(target);
     let project_name = project_name_for(&target_dir)?;
 
-    let files = managed_files(&project_name);
+    let files = if lib {
+        library_files(&project_name)
+    } else {
+        managed_files(&project_name)
+    };
     let fresh = is_fresh_target(&target_dir)?;
     if fresh || force {
         scaffold(&target_dir, &files)?;
@@ -97,7 +109,11 @@ pub fn run_init(rest: &[String]) -> Result<(), CliError> {
             std::io::stdin().is_terminal() && std::io::stdout().is_terminal(),
             force,
         );
-        print_next_steps(target, &project_name, interactive);
+        if lib {
+            print_next_steps_lib(target, &project_name);
+        } else {
+            print_next_steps(target, &project_name, interactive);
+        }
         if interactive && prompt_yes_no("Verify your toolchain now?", true) {
             // Ignore a critical-check exit from health inline: the scaffold
             // succeeded; a missing Rust toolchain is shown by the report.
@@ -135,6 +151,69 @@ fn managed_files(project_name: &str) -> Vec<ManagedFile> {
             content: AGENTS_MD.to_owned(),
         },
     ]
+}
+
+/// The complete set of files `ipe init --lib` writes: a library `package.ipe`
+/// declaring `exposedModules`, a public `src/<Module>.ipe`, a library README,
+/// and the shared `.gitignore` / `AGENTS.md`. The public module name is derived
+/// from the project name via [`module_name_for`].
+fn library_files(project_name: &str) -> Vec<ManagedFile> {
+    let module = module_name_for(project_name);
+    // `{name}` / `{module}` are template placeholders substituted by `.replace`,
+    // not `format!` arguments — the formatting-args lint's heuristic misreads the
+    // `{module}` literal here.
+    #[allow(clippy::literal_string_with_formatting_args)]
+    let fill = |template: &str| {
+        template
+            .replace("{name}", project_name)
+            .replace("{module}", &module)
+    };
+    vec![
+        ManagedFile {
+            rel: PathBuf::from("package.ipe"),
+            content: fill(PACKAGE_LIB_IPE),
+        },
+        ManagedFile {
+            rel: PathBuf::from("src").join(format!("{module}.ipe")),
+            content: fill(LIB_IPE),
+        },
+        ManagedFile {
+            rel: PathBuf::from("README.md"),
+            content: fill(README_LIB_MD),
+        },
+        ManagedFile {
+            rel: PathBuf::from(".gitignore"),
+            content: GITIGNORE.to_owned(),
+        },
+        ManagedFile {
+            rel: PathBuf::from("AGENTS.md"),
+            content: AGENTS_MD.to_owned(),
+        },
+    ]
+}
+
+/// Derive a valid single-segment Ipê module name from a project name.
+///
+/// The project name is split on non-alphanumeric boundaries; each run is
+/// upper-cased on its first letter and concatenated (`my-cool-lib` → `MyCoolLib`).
+/// A name that yields no usable segment (all punctuation, or a leading digit that
+/// leaves nothing) falls back to `Lib`, so the scaffolded module name is always a
+/// valid `[A-Z][A-Za-z0-9_]*` segment the manifest reader and compiler accept.
+fn module_name_for(project_name: &str) -> String {
+    let mut out = String::new();
+    for word in project_name.split(|c: char| !c.is_ascii_alphanumeric()) {
+        let mut chars = word.chars();
+        if let Some(first) = chars.next() {
+            out.push(first.to_ascii_uppercase());
+            out.extend(chars);
+        }
+    }
+    // Ensure the first character is an ASCII uppercase letter (a leading digit is
+    // not a valid module segment). Fall back to `Lib` when nothing usable remains.
+    match out.chars().next() {
+        Some(c) if c.is_ascii_uppercase() => out,
+        _ => "Lib".to_owned(),
+    }
 }
 
 /// Whether the target holds none of `init`'s footprint: no manifest
@@ -327,6 +406,25 @@ fn print_next_steps(target_arg: &str, project_name: &str, interactive: bool) {
     print!("{}", style::frame(&style::gutter(&body)));
 }
 
+/// Print the next-steps message for a freshly scaffolded library. A library has
+/// no `ipe run` UI; the guidance is to build it and add public modules.
+fn print_next_steps_lib(target_arg: &str, project_name: &str) {
+    let build_cmd = if target_arg == "." {
+        "    ipe build".to_owned()
+    } else {
+        format!("    cd {target_arg} && ipe build")
+    };
+    let body = format!(
+        "Created Ipê library `{project_name}`.\n\
+         \n\
+         Next steps:\n\
+         {build_cmd}\n\
+         \n\
+         Add public modules under src/ and list each in package.ipe's exposedModules.\n"
+    );
+    print!("{}", style::frame(&style::gutter(&body)));
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -357,6 +455,62 @@ mod tests {
         let parsed = crate::project::parse_manifest(&path).expect("scaffolded manifest re-parses");
         assert_eq!(parsed.name, "demo-app");
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn library_scaffold_manifest_declares_exposed_modules_and_re_parses() {
+        // `ipe init --lib` writes a `package.ipe` declaring `exposedModules`, and
+        // its content must be a valid manifest the syntactic reader accepts, with
+        // the derived public module in its exposed set.
+        let files = library_files("my-cool-lib");
+        let manifest = files
+            .iter()
+            .find(|f| f.rel == Path::new("package.ipe"))
+            .expect("init --lib writes a package.ipe");
+
+        // The public source module is scaffolded under src/ at the derived name.
+        assert!(
+            files
+                .iter()
+                .any(|f| f.rel == Path::new("src").join("MyCoolLib.ipe")),
+            "the public module src/MyCoolLib.ipe is scaffolded"
+        );
+        // No runnable Main.ipe for a library.
+        assert!(
+            !files
+                .iter()
+                .any(|f| f.rel == Path::new("src").join("Main.ipe")),
+            "a library does not scaffold a runnable src/Main.ipe"
+        );
+
+        let root = std::env::temp_dir().join("ipe_init_lib_roundtrip");
+        let _ = std::fs::remove_dir_all(&root);
+        let src = root.join("src");
+        std::fs::create_dir_all(&src).expect("create src/");
+        // The reader's source-root existence check needs src/ to exist.
+        let path = root.join("package.ipe");
+        std::fs::write(&path, &manifest.content).expect("write scaffolded package.ipe");
+
+        let parsed =
+            crate::project::parse_manifest(&path).expect("scaffolded lib manifest re-parses");
+        assert_eq!(parsed.name, "my-cool-lib");
+        assert_eq!(parsed.exposed_modules, vec!["MyCoolLib".to_owned()]);
+        assert!(
+            parsed.programs.is_empty(),
+            "a library declares no runnable programs"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn module_name_derivation_produces_a_valid_segment() {
+        assert_eq!(module_name_for("my-cool-lib"), "MyCoolLib");
+        assert_eq!(module_name_for("json"), "Json");
+        assert_eq!(module_name_for("ipe_http"), "IpeHttp");
+        assert_eq!(module_name_for("Already"), "Already");
+        // A name that yields no usable leading letter falls back to `Lib`.
+        assert_eq!(module_name_for("123"), "Lib");
+        assert_eq!(module_name_for("---"), "Lib");
     }
 
     #[test]
