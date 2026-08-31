@@ -124,10 +124,7 @@ fn get_body_keepalive(stream: &mut TcpStream) -> Option<String> {
         if first {
             status_ok = line.starts_with("HTTP/1.1 2") || line.starts_with("HTTP/1.0 2");
             first = false;
-        } else if let Some(v) = line
-            .to_ascii_lowercase()
-            .strip_prefix("content-length:")
-        {
+        } else if let Some(v) = line.to_ascii_lowercase().strip_prefix("content-length:") {
             content_length = v.trim().parse().ok();
         }
         if line == "\r\n" || line == "\n" {
@@ -248,7 +245,11 @@ fn run_measurement(bluegreen: bool, port: u16, tag: &str) -> Result<(), BoxError
         "cold build must serve M-0"
     );
 
-    let mode = if bluegreen { "proxy cutover" } else { "direct (drop+reconnect)" };
+    let mode = if bluegreen {
+        "proxy cutover"
+    } else {
+        "direct (drop+reconnect)"
+    };
     let mut tails = Vec::new();
     for i in 1..=3u32 {
         let old = format!("M-{}", i - 1);
@@ -256,12 +257,15 @@ fn run_measurement(bluegreen: bool, port: u16, tag: &str) -> Result<(), BoxError
         // Kick a background prober that measures the tail across the edit.
         let old_c = old.clone();
         let new_c = new.clone();
-        let prober =
-            std::thread::spawn(move || measure_rebuild_tail(port, &old_c, &new_c, Duration::from_mins(2)));
+        let prober = std::thread::spawn(move || {
+            measure_rebuild_tail(port, &old_c, &new_c, Duration::from_mins(2))
+        });
         // Give the prober a beat to establish the baseline, then edit.
         std::thread::sleep(Duration::from_millis(50));
         write_main(&ipe_dir, &web_fixture(&new))?;
-        let (tail, failed) = prober.join().map_err(|_| -> BoxError { "prober panicked".into() })?;
+        let (tail, failed) = prober
+            .join()
+            .map_err(|_| -> BoxError { "prober panicked".into() })?;
         eprintln!(
             "[measure] {mode:<26} rebuild {i}: tail = {:>7.1} ms, failed reconnect samples = {failed}",
             tail.as_secs_f64() * 1000.0
