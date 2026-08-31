@@ -1,5 +1,5 @@
 -- | Ipe.Db.Unsafe — the raw-SQL and untyped-column-read escape hatches for
--- `Ipe.Db` (Layer 3 Ipe source).
+-- `Ipe.Db`.
 --
 -- This submodule is the one home for the database members that bypass a
 -- security or type invariant of the safe default. Importing it discloses the

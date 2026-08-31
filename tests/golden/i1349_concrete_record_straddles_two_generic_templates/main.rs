@@ -242,7 +242,7 @@ pub fn main_concrete_scalar() -> i64 {
     static CELL: std::sync::OnceLock<i64> = std::sync::OnceLock::new();
     CELL.get_or_init(|| {
         ({
-            let r = RecQ { q: 100 };
+            let r = RecQ { q: 100i64 };
             (r).q
         })
     })
@@ -253,7 +253,7 @@ pub fn main_concrete_pair() -> i64 {
     static CELL: std::sync::OnceLock<i64> = std::sync::OnceLock::new();
     CELL.get_or_init(|| {
         ({
-            let r = RecQ2 { q: (40, 2) };
+            let r = RecQ2 { q: (40i64, 2i64) };
             ({
                 let (x, y) = (r).q.clone();
                 ipe_runtime::math::ipe_int_add(x, y)
@@ -266,7 +266,10 @@ pub fn ipe_main() -> IpeTask<()> {
     let _ipe_recursion_guard = crate::recursion_guard();
     io_println(string_from_int(ipe_runtime::math::ipe_int_add(
         ipe_runtime::math::ipe_int_add(
-            ipe_runtime::math::ipe_int_add(crate::main_wrap_one(1), crate::main_first_of_pair(2)),
+            ipe_runtime::math::ipe_int_add(
+                crate::main_wrap_one(1i64),
+                crate::main_first_of_pair(2i64),
+            ),
             crate::main_concrete_scalar(),
         ),
         crate::main_concrete_pair(),
@@ -295,7 +298,7 @@ pub fn list_map_consume<T0, T1>(f: impl Fn(T0) -> T1, list: Vec<T0>) -> Vec<T1> 
 // ===========================================
 
 fn main() {
-    // Synchronous-panic gate (Go parity: rt.LogPanicAndExit) —
+    // Synchronous-panic gate (parity: rt.LogPanicAndExit) —
     // classify an escaping panic (div-by-zero / index-OOB /
     // overflow) into a Ipe error + exit 1, not a raw Rust backtrace.
     ipe_runtime::core::install_panic_classifier();

@@ -239,7 +239,7 @@ pub fn main_apply(c: RecCountFormatLabelOnChange) -> String {
 pub fn ipe_main() -> IpeTask<()> {
     let _ipe_recursion_guard = crate::recursion_guard();
     io_println(crate::main_apply(RecCountFormatLabelOnChange {
-        count: 3,
+        count: 3i64,
         format: {
             let __ipe_fn: ::std::sync::Arc<dyn Fn(i64) -> String + Send + Sync + 'static> =
                 Arc::new(string_from_int);
@@ -276,7 +276,7 @@ pub fn list_map_consume<T0, T1>(f: impl Fn(T0) -> T1, list: Vec<T0>) -> Vec<T1> 
 // ===========================================
 
 fn main() {
-    // Synchronous-panic gate (Go parity: rt.LogPanicAndExit) —
+    // Synchronous-panic gate (parity: rt.LogPanicAndExit) —
     // classify an escaping panic (div-by-zero / index-OOB /
     // overflow) into a Ipe error + exit 1, not a raw Rust backtrace.
     ipe_runtime::core::install_panic_classifier();

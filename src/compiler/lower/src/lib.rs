@@ -4,7 +4,7 @@
 //! Entry point: [`lower`]. It consumes a name-resolved [`ipe_canon::ast::Module`]
 //! together with the [`ipe_types::SolvedTypes`] produced by inference and emits
 //! a backend-agnostic [`ipe_ir::Program`]. This is a faithful but narrowed port
-//! of the Haskell compiler's `Ipe.Build.Compile` lowering core plus
+//! of the the compiler compiler's `Ipe.Build.Compile` lowering core plus
 //! `Ipe.Build.LowerCtx`:
 //!
 //! * union declarations → [`ipe_ir::TypeDef::Enum`];
@@ -970,7 +970,7 @@ mod tests {
             ("a || b", BinOp::Or),
         ] {
             // Annotate to keep operand/result types concrete for each operator.
-            // `/` (fdiv) is Float-typed, matching the Go backend.
+            // `/` (fdiv) is Float-typed, matching the the backend.
             let sig = match want {
                 BinOp::IntSub => "f : Int -> Int -> Int",
                 BinOp::Div => "f : Float -> Float -> Float",

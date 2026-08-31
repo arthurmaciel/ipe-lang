@@ -20,7 +20,7 @@
 //!
 //! ## Oracle provenance
 //!
-//! Marked `oracle_divergence = true` (sanctioned): the Go reference compiler
+//! Marked `oracle_divergence = true` (sanctioned): the the reference compiler
 //! has no equivalent Rust TEA constructors; Ipê-Rust's own output is the
 //! authoritative reference.
 //!

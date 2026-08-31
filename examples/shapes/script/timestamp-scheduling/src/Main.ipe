@@ -1,0 +1,62 @@
+module Main exposing (main)
+
+import Ipe.Time.Timestamp as Timestamp exposing (Timestamp)
+import Ipe.Duration as Duration
+import Ipe.String as String
+import Ipe.Io as Io
+
+
+-- A `Timestamp` is an opaque instant — whole milliseconds since the Unix epoch,
+-- built only through `fromUnixMillis`. A `Duration` is a span. Keeping the two
+-- types distinct means only the operations that make sense compile:
+--   • `add span instant` shifts an instant forward by a span, giving a new
+--     instant. You cannot add two instants together — that is a type error, and
+--     rightly so: "3pm plus 4pm" has no meaning.
+--   • `diff later earlier` measures the span BETWEEN two instants, giving a
+--     `Duration`. The result is clamped to zero when the arguments are reversed,
+--     so a duration is never negative.
+--   • The constructor is not exported, so a bare `Int` can never be mistaken for
+--     an instant: an epoch millisecond count and a real timestamp are different
+--     types.
+
+
+-- A fixed reference instant (milliseconds since the epoch), so the run is
+-- deterministic without reading the wall clock.
+start : Timestamp
+start =
+    Timestamp.fromUnixMillis 1000000000000
+
+
+-- The instant one hour after `start`, computed by shifting it forward by a span.
+oneHourLater : Timestamp
+oneHourLater =
+    Timestamp.add (Duration.minutes 60) start
+
+
+-- The span between the two instants, measured back out as whole seconds.
+gapSeconds : Int
+gapSeconds =
+    Duration.toMillis (Timestamp.diff oneHourLater start) // 1000
+
+
+main =
+    do
+        Io.println
+            (String.concat
+                [ "start (unix ms): "
+                , String.fromInt (Timestamp.toUnixMillis start)
+                ]
+            )
+        Io.println
+            (String.concat
+                [ "one hour later:  "
+                , String.fromInt (Timestamp.toUnixMillis oneHourLater)
+                ]
+            )
+        Io.println
+            (String.concat
+                [ "gap between them: "
+                , String.fromInt gapSeconds
+                , " seconds"
+                ]
+            )

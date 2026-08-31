@@ -212,7 +212,7 @@ pub fn main_pair_sum() -> i64 {
     static CELL: std::sync::OnceLock<i64> = std::sync::OnceLock::new();
     CELL.get_or_init(|| {
         ({
-            let (a, b) = (1, 2);
+            let (a, b) = (1i64, 2i64);
             ipe_runtime::math::ipe_int_add(a, b)
         })
     })
@@ -221,7 +221,10 @@ pub fn main_pair_sum() -> i64 {
 pub fn ipe_main() -> IpeTask<()> {
     let _ipe_recursion_guard = crate::recursion_guard();
     io_println(string_from_int(ipe_runtime::math::ipe_int_add(
-        ipe_runtime::math::ipe_int_add(crate::main_fst((41, 99)), crate::main_snd((7, 2))),
+        ipe_runtime::math::ipe_int_add(crate::main_fst((41i64, 99i64)), crate::main_snd((
+            7i64,
+            2i64,
+        ))),
         crate::main_pair_sum(),
     )))
 }
@@ -248,7 +251,7 @@ pub fn list_map_consume<T0, T1>(f: impl Fn(T0) -> T1, list: Vec<T0>) -> Vec<T1> 
 // ===========================================
 
 fn main() {
-    // Synchronous-panic gate (Go parity: rt.LogPanicAndExit) —
+    // Synchronous-panic gate (parity: rt.LogPanicAndExit) —
     // classify an escaping panic (div-by-zero / index-OOB /
     // overflow) into a Ipe error + exit 1, not a raw Rust backtrace.
     ipe_runtime::core::install_panic_classifier();

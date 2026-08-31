@@ -211,7 +211,7 @@ pub fn main_tuple_parts() -> i64 {
     static CELL: std::sync::OnceLock<i64> = std::sync::OnceLock::new();
     CELL.get_or_init(|| {
         ({
-            let (a, b) = (40, 2);
+            let (a, b) = (40i64, 2i64);
             ipe_runtime::math::ipe_int_add(a, b)
         })
     })
@@ -222,7 +222,7 @@ pub fn main_record_part() -> i64 {
     static CELL: std::sync::OnceLock<i64> = std::sync::OnceLock::new();
     CELL.get_or_init(|| {
         ({
-            let RecX { x, .. } = RecX { x: 42 };
+            let RecX { x, .. } = RecX { x: 42i64 };
             x
         })
     })
@@ -258,7 +258,7 @@ pub fn list_map_consume<T0, T1>(f: impl Fn(T0) -> T1, list: Vec<T0>) -> Vec<T1> 
 // ===========================================
 
 fn main() {
-    // Synchronous-panic gate (Go parity: rt.LogPanicAndExit) —
+    // Synchronous-panic gate (parity: rt.LogPanicAndExit) —
     // classify an escaping panic (div-by-zero / index-OOB /
     // overflow) into a Ipe error + exit 1, not a raw Rust backtrace.
     ipe_runtime::core::install_panic_classifier();

@@ -243,14 +243,14 @@ pub fn main_box_sum(b: MainBox<(i64, i64)>) -> i64 {
     let _ipe_recursion_guard = crate::recursion_guard();
     match b {
         MainBox::Wrap((a, c)) => ipe_runtime::math::ipe_int_add(a, c),
-        MainBox::Empty => 0,
+        MainBox::Empty => 0i64,
     }
 }
 pub fn main_label(t: MainTree) -> i64 {
     let _ipe_recursion_guard = crate::recursion_guard();
     match t {
         MainTree::Node(_, x, _) => x,
-        MainTree::Leaf => 0,
+        MainTree::Leaf => 0i64,
     }
 }
 pub fn main_rec_sum(r: RecXY) -> i64 {
@@ -265,9 +265,9 @@ pub fn main_let_parts() -> i64 {
     static CELL: std::sync::OnceLock<i64> = std::sync::OnceLock::new();
     CELL.get_or_init(|| {
         ({
-            let (a, b) = (10, 20);
+            let (a, b) = (10i64, 20i64);
             ({
-                let RecXY { x, y, .. } = RecXY { x: 1, y: 2 };
+                let RecXY { x, y, .. } = RecXY { x: 1i64, y: 2i64 };
                 ipe_runtime::math::ipe_int_add(
                     ipe_runtime::math::ipe_int_add(ipe_runtime::math::ipe_int_add(a, b), x),
                     y,
@@ -282,14 +282,17 @@ pub fn ipe_main() -> IpeTask<()> {
     io_println(string_from_int(ipe_runtime::math::ipe_int_add(
         ipe_runtime::math::ipe_int_add(
             ipe_runtime::math::ipe_int_add(
-                crate::main_box_sum(MainBox::Wrap((1, 2))),
+                crate::main_box_sum(MainBox::Wrap((1i64, 2i64))),
                 crate::main_label(MainTree::Node(
                     Box::new(MainTree::Leaf),
-                    5,
+                    5i64,
                     Box::new(MainTree::Leaf),
                 )),
             ),
-            crate::main_rec_sum(RecXY { x: 20, y: 22 }),
+            crate::main_rec_sum(RecXY {
+                x: 20i64,
+                y: 22i64,
+            }),
         ),
         crate::main_let_parts(),
     )))
@@ -317,7 +320,7 @@ pub fn list_map_consume<T0, T1>(f: impl Fn(T0) -> T1, list: Vec<T0>) -> Vec<T1> 
 // ===========================================
 
 fn main() {
-    // Synchronous-panic gate (Go parity: rt.LogPanicAndExit) —
+    // Synchronous-panic gate (parity: rt.LogPanicAndExit) —
     // classify an escaping panic (div-by-zero / index-OOB /
     // overflow) into a Ipe error + exit 1, not a raw Rust backtrace.
     ipe_runtime::core::install_panic_classifier();

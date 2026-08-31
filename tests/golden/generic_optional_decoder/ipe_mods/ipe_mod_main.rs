@@ -45,7 +45,7 @@ pub(crate) fn main_json_int_result(s: String) -> IpeResult<ipe_runtime::error::I
                             + 'static,
                     > = Box::new(
                         move |eta_0: Decoder<Box<dyn FnOnce(i64) -> String + Send + 'static>>| -> Decoder<String> {
-                            crate::main_json_optional(cap_0.clone(), cap_1.clone(), 0, eta_0)
+                            crate::main_json_optional(cap_0.clone(), cap_1.clone(), 0i64, eta_0)
                         },
                     );
                     __ipe_fn
@@ -144,7 +144,7 @@ pub(crate) fn main_row_decoder() -> Decoder<String> {
                         + 'static,
                 > = Box::new(
                     move |eta_0: Decoder<Box<dyn FnOnce(i64) -> String + Send + 'static>>| -> Decoder<String> {
-                        crate::main_db_optional(cap_0.clone(), cap_1.clone(), 0, eta_0)
+                        crate::main_db_optional(cap_0.clone(), cap_1.clone(), 0i64, eta_0)
                     },
                 );
                 __ipe_fn
@@ -199,7 +199,7 @@ pub(crate) fn ipe_main() -> IpeTask<()> {
                                         "INSERT INTO people VALUES (?, ?)".to_string(),
                                         (vec![
                                             MainSqlValue::SqlString("Alice".to_string()),
-                                            MainSqlValue::SqlInt(30),
+                                            MainSqlValue::SqlInt(30i64),
                                         ])
                                         .into_iter()
                                         .map(::core::convert::Into::into)

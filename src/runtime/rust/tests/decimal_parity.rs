@@ -1,16 +1,15 @@
-//! Go≡Rust parity fixtures for Ipe.Decimal.
+//! Parity fixtures for Ipe.Decimal.
 //!
-//! Every assertion below was verified against the Go oracle
-//! (`runtime-go/rt/decimal_kernel_test.go` + manual `go test` runs with the
+//! Every assertion below was //! (the runtime test suite + manual `go test` runs with the
 //! same inputs).  The fixture is the discovery artefact: tests that pre-fail
-//! expose real divergences; passing tests anchor the exact Go-observable
+//! expose real divergences; passing tests anchor the exact golden-observable
 //! behaviour permanently.
 //!
-//! Division precision (FIXED to match Go — not a divergence): Go shopspring's
+//! Division precision (FIXED: shopspring's
 //! `Div` is `DivRound(…, DivisionPrecision)` with `DivisionPrecision = 16` and
 //! half-away-from-zero rounding.  `decimal_div` caps its quotient to 16 decimal
 //! places with `MidpointAwayFromZero` after the `checked_div`, so non-terminating
-//! fractions (1/3, 2/3, 1/7, 10/3, …) match Go exactly.  Exact fractions with
+//! fractions (1/3, 2/3, 1/7, 10/3, …) match reference output exactly.  Exact fractions with
 //! ≤16 dp are unaffected by the cap.  All money-scale cases stay bit-identical.
 
 // `decimal.rs` is behind the `decimal` feature, so this whole fixture is too.
@@ -45,7 +44,7 @@ fn div_ok(
 
 #[test]
 fn from_string_to_string_round_trip() {
-    // Go: `Decimal_fromString "3.14" |> Decimal_toString` = "3.14"
+    // Golden: `Decimal_fromString "3.14" |> Decimal_toString` = "3.14"
     assert_eq!(s(d("3.14")), "3.14");
     assert_eq!(s(d("0")), "0");
     assert_eq!(s(d("-99.999")), "-99.999");
@@ -53,13 +52,13 @@ fn from_string_to_string_round_trip() {
 
 #[test]
 fn from_int_to_string() {
-    // Go: `Decimal_fromInt 42 |> Decimal_toString` = "42"
+    // Golden: `Decimal_fromInt 42 |> Decimal_toString` = "42"
     assert_eq!(s(ipe_runtime_rust::decimal::decimal_from_int(42)), "42");
 }
 
 #[test]
 fn from_minor_round_trip() {
-    // Go: `Decimal_fromMinor 2 12345 |> Decimal_toString` = "123.45"
+    // Golden: `Decimal_fromMinor 2 12345 |> Decimal_toString` = "123.45"
     let dec = ipe_runtime_rust::decimal::decimal_from_minor(2, 12345);
     assert_eq!(s(dec), "123.45");
     // toMinor 2 123.45 = 12345
@@ -68,8 +67,8 @@ fn from_minor_round_trip() {
 
 #[test]
 fn to_string_normalises_trailing_zeros() {
-    // Go shopspring .String() trims trailing zeros (same as rust_decimal
-    // .normalize().to_string()).  The canonical oracle is the Go test.
+    // shopspring .String() trims trailing zeros (same as rust_decimal
+    // .normalize().to_string()).  The canonical oracle is the reference test.
     // "10.00" → "10",  "3.0" → "3",  "0.10" → "0.1"
     assert_eq!(s(d("10.00")), "10");
     assert_eq!(s(d("3.0")), "3");
@@ -80,7 +79,7 @@ fn to_string_normalises_trailing_zeros() {
 
 #[test]
 fn add_point_one_point_two_is_exactly_point_three() {
-    // Go oracle: `Decimal_add "0.1" "0.2" |> Decimal_toString` = "0.3"
+    // the golden oracle: `Decimal_add "0.1" "0.2" |> Decimal_toString` = "0.3"
     // NOT the IEEE-754 float result "0.30000000000000004".
     let sum = ipe_runtime_rust::decimal::decimal_add(d("0.1"), d("0.2"));
     assert_eq!(s(sum), "0.3");
@@ -132,9 +131,9 @@ fn div_exact_fraction() {
 
 #[test]
 fn div_precision_capped_to_16_dp_matches_go() {
-    // Go shopspring `Div` = `DivRound(…, 16)` (half-away-from-zero). Ipê-Rust
+    // shopspring `Div` = `DivRound(…, 16)` (half-away-from-zero). Ipê-Rust
     // caps `decimal_div` to 16 dp with MidpointAwayFromZero, so non-terminating
-    // quotients match the Go reference exactly.
+    // quotients match the reference exactly.
     // 1/3 = 0.3333… → 17th digit 3 rounds down → sixteen 3s.
     assert_eq!(s(div_ok(d("1"), d("3"))), "0.3333333333333333");
     // 2/3 = 0.6666… → 17th digit 6 rounds last digit up → …667.
@@ -169,11 +168,11 @@ fn neg_and_abs() {
     );
 }
 
-// ── Banker's rounding (Decimal.round matches Go RoundBank) ─────────────────
+// ── Banker's rounding (Decimal.round uses RoundBank) ─────────────────
 
 #[test]
 fn bankers_rounding_ties_go_to_even() {
-    // Go oracle: `Decimal_round 0 2.5` = "2" (nearest even = 2)
+    // the golden oracle: `Decimal_round 0 2.5` = "2" (nearest even = 2)
     assert_eq!(
         s(ipe_runtime_rust::decimal::decimal_round(0, d("2.5"))),
         "2",
@@ -197,11 +196,11 @@ fn bankers_rounding_ties_go_to_even() {
     );
 }
 
-// ── toStringFixed — Go StringFixed uses half-away-from-zero ─────────────────
+// ── toStringFixed — StringFixed uses half-away-from-zero ─────────────────
 
 #[test]
 fn to_string_fixed_adds_trailing_zeros() {
-    // Go: `Decimal_toStringFixed 2 3` = "3.00"
+    // Golden: `Decimal_toStringFixed 2 3` = "3.00"
     assert_eq!(
         ipe_runtime_rust::decimal::decimal_to_string_fixed(
             2,
@@ -218,17 +217,17 @@ fn to_string_fixed_adds_trailing_zeros() {
 
 #[test]
 fn to_string_fixed_uses_half_away_from_zero_not_bankers() {
-    // Go oracle: `Decimal_toStringFixed 2 (fromString "2.545")` = "2.55"
-    // Go's StringFixed calls Round which is half-away-from-zero.
+    // the golden oracle: `Decimal_toStringFixed 2 (fromString "2.545")` = "2.55"
+    // StringFixed calls Round which is half-away-from-zero.
     // The 3rd decimal is 5 (tie): half-away rounds UP to 2.55.
     // Banker's (MidpointNearestEven) would give "2.54" (4 is even → round down).
     assert_eq!(
         ipe_runtime_rust::decimal::decimal_to_string_fixed(2, d("2.545")),
         "2.55",
-        "toStringFixed must match Go StringFixed (half-away-from-zero), not banker's"
+        "toStringFixed must use half-away-from-zero (not banker's rounding)"
     );
     // `Decimal_toStringFixed 2 (fromString "2.535")` = "2.54"
-    // Go half-away: .535 tie → 2.54 (rounds up).
+    // half-away: .535 tie → 2.54 (rounds up).
     assert_eq!(
         ipe_runtime_rust::decimal::decimal_to_string_fixed(2, d("2.535")),
         "2.54",
@@ -240,7 +239,7 @@ fn to_string_fixed_uses_half_away_from_zero_not_bankers() {
 
 #[test]
 fn percent_of_basic() {
-    // Go: `Decimal_percentOf 10 100` = "10" (10% of 100)
+    // Golden: `Decimal_percentOf 10 100` = "10" (10% of 100)
     assert_eq!(
         s(ipe_runtime_rust::decimal::decimal_percent_of(
             d("10"),
@@ -248,7 +247,7 @@ fn percent_of_basic() {
         )),
         "10"
     );
-    // Go: `Decimal_percentOf 20 100` = "20"
+    // Golden: `Decimal_percentOf 20 100` = "20"
     assert_eq!(
         s(ipe_runtime_rust::decimal::decimal_percent_of(
             d("20"),
@@ -260,7 +259,7 @@ fn percent_of_basic() {
 
 #[test]
 fn percent_of_fractional_rounded_matches_go() {
-    // Go oracle: 8.875% of 99.99 = 8.8741125 → round 2 = "8.87"
+    // the golden oracle: 8.875% of 99.99 = 8.8741125 → round 2 = "8.87"
     // (8.8741125: 3rd decimal is 4, rounds DOWN, same in both banker's and half-away)
     let pct = d("8.875");
     let price = d("99.99");
@@ -271,7 +270,7 @@ fn percent_of_fractional_rounded_matches_go() {
 
 #[test]
 fn add_percent_and_sub_percent() {
-    // Go: `Decimal_addPercent 10 100` = "110"
+    // Golden: `Decimal_addPercent 10 100` = "110"
     assert_eq!(
         s(ipe_runtime_rust::decimal::decimal_add_percent(
             d("10"),
@@ -279,7 +278,7 @@ fn add_percent_and_sub_percent() {
         )),
         "110"
     );
-    // Go: `Decimal_subPercent 10 100` = "90"
+    // Golden: `Decimal_subPercent 10 100` = "90"
     assert_eq!(
         s(ipe_runtime_rust::decimal::decimal_sub_percent(
             d("10"),
@@ -289,11 +288,11 @@ fn add_percent_and_sub_percent() {
     );
 }
 
-// ── formatWith — Go formatWith uses StringFixed (half-away-from-zero) ────────
+// ── formatWith — formatWith uses StringFixed (half-away-from-zero) ────────
 
 #[test]
 fn format_with_us_locale() {
-    // Go oracle: `Decimal_formatWith "," "." 2 1234567.891` = "1,234,567.89"
+    // the golden oracle: `Decimal_formatWith "," "." 2 1234567.891` = "1,234,567.89"
     assert_eq!(
         ipe_runtime_rust::decimal::decimal_format_with(
             ",".to_string(),
@@ -307,7 +306,7 @@ fn format_with_us_locale() {
 
 #[test]
 fn format_with_eu_locale() {
-    // Go oracle: `Decimal_formatWith "." "," 2 1234567.891` = "1.234.567,89"
+    // the golden oracle: `Decimal_formatWith "." "," 2 1234567.891` = "1.234.567,89"
     assert_eq!(
         ipe_runtime_rust::decimal::decimal_format_with(
             ".".to_string(),
@@ -321,7 +320,7 @@ fn format_with_eu_locale() {
 
 #[test]
 fn format_with_fr_locale_zero_places() {
-    // Go oracle: `Decimal_formatWith " " "," 0 1234567.891` = "1 234 568"
+    // the golden oracle: `Decimal_formatWith " " "," 0 1234567.891` = "1 234 568"
     // 1234567.891 at 0 dp: .891 > .5 → rounds up → 1234568
     assert_eq!(
         ipe_runtime_rust::decimal::decimal_format_with(
@@ -336,8 +335,8 @@ fn format_with_fr_locale_zero_places() {
 
 #[test]
 fn format_with_uses_half_away_from_zero_not_bankers() {
-    // Go oracle: `Decimal_formatWith "" "." 2 (fromString "2.545")` = "2.55"
-    // Go's formatWith calls StringFixed which is half-away-from-zero.
+    // the golden oracle: `Decimal_formatWith "" "." 2 (fromString "2.545")` = "2.55"
+    // formatWith calls StringFixed which is half-away-from-zero.
     // Banker's (current Rust) would give "2.54".
     assert_eq!(
         ipe_runtime_rust::decimal::decimal_format_with(
@@ -347,7 +346,7 @@ fn format_with_uses_half_away_from_zero_not_bankers() {
             d("2.545")
         ),
         "2.55",
-        "formatWith must match Go StringFixed (half-away-from-zero)"
+        "formatWith must use half-away-from-zero"
     );
 }
 
@@ -355,7 +354,7 @@ fn format_with_uses_half_away_from_zero_not_bankers() {
 
 #[test]
 fn comparisons_match_go() {
-    // Go: `Decimal_compare 5 7` = -1, `compare 7 5` = 1, `compare 5 5` = 0
+    // Golden: `Decimal_compare 5 7` = -1, `compare 7 5` = 1, `compare 5 5` = 0
     assert_eq!(
         ipe_runtime_rust::decimal::decimal_compare(d("5"), d("7")),
         -1
@@ -406,7 +405,7 @@ fn sign_predicates_match_go() {
 
 #[test]
 fn round_half_up_matches_go() {
-    // Go: `Decimal_roundHalfUp 0 2.5` = "3" (half-away-from-zero)
+    // Golden: `Decimal_roundHalfUp 0 2.5` = "3" (half-away-from-zero)
     assert_eq!(
         s(ipe_runtime_rust::decimal::decimal_round_half_up(
             0,

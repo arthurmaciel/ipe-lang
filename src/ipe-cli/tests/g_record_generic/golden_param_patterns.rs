@@ -98,7 +98,7 @@ fn emission_preserves_the_load_bearing_shapes() {
     // Globally-unique binders: the lambda inside the body uses a DISTINCT name
     // (`arg_5`), never a shadowed reuse of a def param binder.
     assert!(
-        src.contains("move |arg_5: i64| -> i64 { 42 }"),
+        src.contains("move |arg_5: i64| -> i64 { 42i64 }"),
         "`\\_ ->` lambda → distinct fresh binder, no destructure:\n{src}"
     );
 }

@@ -200,8 +200,11 @@ pub fn main_first_or(d: i64, xs: Vec<i64>) -> i64 {
 pub fn ipe_main() -> IpeTask<()> {
     let _ipe_recursion_guard = crate::recursion_guard();
     io_println(string_from_int(crate::main_first_or(
-        7,
-        ipe_runtime::list::ipe_list_cons(1, ipe_runtime::list::ipe_list_cons(2, vec![3, 4, 5])),
+        7i64,
+        ipe_runtime::list::ipe_list_cons(
+            1i64,
+            ipe_runtime::list::ipe_list_cons(2i64, vec![3i64, 4i64, 5i64]),
+        ),
     )))
 }
 
@@ -227,7 +230,7 @@ pub fn list_map_consume<T0, T1>(f: impl Fn(T0) -> T1, list: Vec<T0>) -> Vec<T1> 
 // ===========================================
 
 fn main() {
-    // Synchronous-panic gate (Go parity: rt.LogPanicAndExit) —
+    // Synchronous-panic gate (parity: rt.LogPanicAndExit) —
     // classify an escaping panic (div-by-zero / index-OOB /
     // overflow) into a Ipe error + exit 1, not a raw Rust backtrace.
     ipe_runtime::core::install_panic_classifier();

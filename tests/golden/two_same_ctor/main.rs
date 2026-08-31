@@ -210,17 +210,17 @@ pub fn file_rename(src: ipe_runtime::path::Path, dst: ipe_runtime::path::Path) -
 pub fn main_classify(b: MainBox<i64>) -> i64 {
     let _ipe_recursion_guard = crate::recursion_guard();
     match b {
-        MainBox::Wrap(0) => 100,
+        MainBox::Wrap(0) => 100i64,
         MainBox::Wrap(n) => n,
-        MainBox::Empty => 9,
+        MainBox::Empty => 9i64,
     }
 }
 pub fn ipe_main() -> IpeTask<()> {
     let _ipe_recursion_guard = crate::recursion_guard();
     io_println(string_from_int(ipe_runtime::math::ipe_int_add(
         ipe_runtime::math::ipe_int_add(
-            crate::main_classify(MainBox::Wrap(0)),
-            crate::main_classify(MainBox::Wrap(5)),
+            crate::main_classify(MainBox::Wrap(0i64)),
+            crate::main_classify(MainBox::Wrap(5i64)),
         ),
         crate::main_classify(MainBox::Empty),
     )))
@@ -248,7 +248,7 @@ pub fn list_map_consume<T0, T1>(f: impl Fn(T0) -> T1, list: Vec<T0>) -> Vec<T1> 
 // ===========================================
 
 fn main() {
-    // Synchronous-panic gate (Go parity: rt.LogPanicAndExit) —
+    // Synchronous-panic gate (parity: rt.LogPanicAndExit) —
     // classify an escaping panic (div-by-zero / index-OOB /
     // overflow) into a Ipe error + exit 1, not a raw Rust backtrace.
     ipe_runtime::core::install_panic_classifier();

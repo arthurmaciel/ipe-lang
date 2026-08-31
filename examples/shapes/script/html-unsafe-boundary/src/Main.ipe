@@ -1,0 +1,43 @@
+module Main exposing (main)
+
+import Ipe.Html as Html exposing (Html)
+import Ipe.Html.Attributes as Attr
+import Ipe.Html.Unsafe as Unsafe
+import Ipe.Io as Io
+
+
+-- `Ipe.Html.Unsafe` is the one home for the raw-HTML escape hatch. The safe
+-- default, `Html.text`, escapes its content at the render sink, so untrusted
+-- input can never become live markup. `Unsafe.unsafeRaw` bypasses that escaping
+-- and emits its String verbatim. Two ideas:
+--   • The safe and unsafe paths sit side by side so the difference is visible:
+--     the SAME string, once through `Html.text` (escaped, inert) and once
+--     through `Unsafe.unsafeRaw` (verbatim, live).
+--   • The `unsafe` prefix names the risk at every call site, and importing the
+--     module discloses the `unsafe` capability program-wide, so a reviewer sees
+--     the raw sink before the program runs. Use it only for trusted,
+--     author-controlled content — never for request input.
+
+
+-- A snippet of trusted, author-written markup — a formatting fragment you wrote,
+-- not something a user typed. This is the ONLY kind of input `unsafeRaw` is for.
+trustedMarkup : String
+trustedMarkup =
+    "<em>featured</em>"
+
+
+-- The same string rendered both ways: `Html.text` escapes it to inert text;
+-- `Unsafe.unsafeRaw` emits it verbatim as live markup.
+comparison : Html msg
+comparison =
+    Html.div
+        [ Attr.class "compare" ]
+        [ Html.p [ Attr.class "safe" ] [ Html.text trustedMarkup ]
+        , Html.p [ Attr.class "raw" ] [ Unsafe.unsafeRaw trustedMarkup ]
+        ]
+
+
+main =
+    do
+        Io.println "Same string, escaped (safe) then verbatim (unsafe):"
+        Io.println (Html.render comparison)

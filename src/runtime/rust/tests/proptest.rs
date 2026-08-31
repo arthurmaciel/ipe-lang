@@ -110,7 +110,7 @@ mod task_tests {
     // `System.getenv : String -> Task Error String`. Regression guard: it MUST
     // return a `IpeTask` (not a bare `String`), or it fails to type-check in any
     // `Task.andThen`/`Task.run` position — and an unset var MUST short-circuit
-    // with `Err` (mirroring Go's `System_getenv` ErrNotFound), not `Ok("")`,
+    // with `Err` (matching the `System_getenv` ErrNotFound), not `Ok("")`,
     // so a chained Task fails identically on both backends.
     #[test]
     fn system_getenv_present_is_ok() {
@@ -130,7 +130,7 @@ mod task_tests {
         assert!(run(t).is_err());
     }
 
-    // System.getenvInt / getenvBool / getArg — Go-parity semantics (unset → Err
+    // System.getenvInt / getenvBool / getArg — golden-verified semantics (unset → Err
     // NotFound; non-int / non-bool → Err Ffi; getArg indexes the FULL arg vector
     // and is out-of-range → Ok Nothing, never Err).
     #[test]

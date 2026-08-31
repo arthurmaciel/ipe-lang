@@ -212,11 +212,11 @@ pub fn ipe_main() -> IpeTask<()> {
     ({
         let m = RecActionCount {
             action: io_println("hello".to_string()),
-            count: 0,
+            count: 0i64,
         };
         ({
             let m2 = {
-                let __ipe_upd_0 = ipe_runtime::math::ipe_int_add((m).count, 1);
+                let __ipe_upd_0 = ipe_runtime::math::ipe_int_add((m).count, 1i64);
                 let mut __ipe_rec = m;
                 __ipe_rec.count = __ipe_upd_0;
                 __ipe_rec
@@ -248,7 +248,7 @@ pub fn list_map_consume<T0, T1>(f: impl Fn(T0) -> T1, list: Vec<T0>) -> Vec<T1> 
 // ===========================================
 
 fn main() {
-    // Synchronous-panic gate (Go parity: rt.LogPanicAndExit) —
+    // Synchronous-panic gate (parity: rt.LogPanicAndExit) —
     // classify an escaping panic (div-by-zero / index-OOB /
     // overflow) into a Ipe error + exit 1, not a raw Rust backtrace.
     ipe_runtime::core::install_panic_classifier();

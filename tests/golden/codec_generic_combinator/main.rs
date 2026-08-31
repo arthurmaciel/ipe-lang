@@ -277,7 +277,7 @@ pub fn main_string_codec() -> MainCodec<String> {
 pub fn main_encode_list<T1: 'static + Clone>(codec: MainCodec<T1>, xs: Vec<T1>) -> String {
     let _ipe_recursion_guard = crate::recursion_guard();
     match codec {
-        MainCodec::Codec(r) => json_enc_encode(0, json_enc_list({
+        MainCodec::Codec(r) => json_enc_encode(0i64, json_enc_list({
             let __ipe_fn: Box<dyn Fn(T1) -> JsonVal + Send + Sync + 'static> = Box::new(move |eta_0: T1| -> JsonVal { (r).enc.clone()(eta_0) });
             __ipe_fn
         }, xs)),
@@ -311,7 +311,7 @@ pub fn main_report_strings(res: IpeResult<ipe_runtime::error::IpeError, Vec<Stri
 pub fn ipe_main() -> IpeTask<()> {
     let _ipe_recursion_guard = crate::recursion_guard();
     io_println(string_join(" ".to_string(), vec![
-        crate::main_encode_list(crate::main_int_codec(), vec![1, 2, 3]),
+        crate::main_encode_list(crate::main_int_codec(), vec![1i64, 2i64, 3i64]),
         crate::main_report_ints(crate::main_decode_list(
             crate::main_int_codec(),
             "[4,5,6]".to_string(),
@@ -349,7 +349,7 @@ pub fn list_map_consume<T0, T1>(f: impl Fn(T0) -> T1, list: Vec<T0>) -> Vec<T1> 
 // ===========================================
 
 fn main() {
-    // Synchronous-panic gate (Go parity: rt.LogPanicAndExit) —
+    // Synchronous-panic gate (parity: rt.LogPanicAndExit) —
     // classify an escaping panic (div-by-zero / index-OOB /
     // overflow) into a Ipe error + exit 1, not a raw Rust backtrace.
     ipe_runtime::core::install_panic_classifier();

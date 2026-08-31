@@ -14,6 +14,12 @@ at the top and follow the links; each page assumes only the ones before it.
 4. [The Elm Architecture](the-elm-architecture.md) — how a program that reacts
    to input over time is structured.
 
+## Tooling
+
+- [Faster builds](faster-builds.md) — a fast linker (mold/lld), sccache, a
+  shared build target, and dev-profile flags; what `ipe health` configures and
+  how to apply each step manually.
+
 ## Standard-library guides
 
 Each teaches the *mental model* of one module through a worked, runnable example,
@@ -21,7 +27,8 @@ then links to the per-symbol `ipe doc` reference. Read the one you need; they
 cross-link where topics meet.
 
 - **The prelude** — [Basics](basics.md) (the auto-imported helpers: `clamp`,
-  `compare`, `toString`, `min`/`max`).
+  `compare`, `toString`, `min`/`max`), [ToString](tostring.md) (the primitive
+  render-to-`String` functions under one prefix).
 - **Core data** — [Lists](list.md) (ordered sequences, folds, pipelines),
   [Strings](string.md) (text and the parse boundary), [Characters](char.md)
   (code points, classification), [Tuples](tuple.md) (anonymous pairs).
@@ -56,9 +63,11 @@ cross-link where topics meet.
   password read), [Environment config](env.md) (build-time public config, wasm-safe),
   [Subprocesses](process.md) (running a child process with no shell).
 - **Time and clocks** — [Time](time.md) (a typed instant, formatting, calendar
-  arithmetic over durations).
+  arithmetic over durations), [Timestamp](timestamp.md) (the opaque instant type:
+  shift by a span, measure the span between two).
 - **Content and markup** — [HTML](html.md) (typed element trees, XSS-safe by
-  construction), [Markdown](markdown.md) (a typed block tree, no raw HTML).
+  construction), [HTML attributes](html-attributes.md) (fixed-key builders, boolean
+  attributes as `Bool`), [Markdown](markdown.md) (a typed block tree, no raw HTML).
 - **Instrumentation and delivery** — [Analytics](analytics.md) (consent-gated,
   PII-safe event tracking), [Email](email.md) (provider-abstract send with sealed
   credentials).
@@ -76,7 +85,11 @@ cross-link where topics meet.
   and rules).
 - **Escape hatches** — the surfaces that bypass a safe default behind a disclosed
   `unsafe` capability: [the unsafe database surface](db-unsafe.md) (raw SQL,
-  untyped column reads), [the secret-reveal hatch](secret-unsafe.md) (un-seal a
+  untyped column reads), [the unsafe Store surface](db-store-unsafe.md)
+  (string-named columns for a dynamic table), [the unsafe HTML
+  surface](html-unsafe.md) (raw markup / inline `<script>` past the escaper),
+  [the unsafe page-head surface](web-head-unsafe.md) (a verbatim JSON-LD
+  `<script>` block), [the secret-reveal hatch](secret-unsafe.md) (un-seal a
   `Secret` to a bare `String`). Reach for these only for a residual the safe
   surface cannot express.
 - **Caching** — [Cache](cache.md) (bounded, in-memory LRU with optional TTL; a
@@ -84,12 +97,19 @@ cross-link where topics meet.
 - **Observability** — [Logging](log.md) (structured, levelled log records),
   [Log levels](level.md) (the `LogLevel` severity tag),
   [Tracing](trace.md) (application-level spans + the `Debug` development hatches).
-- **Design tokens** — [Palette](palette.md) (closed token sets and named
-  magnitudes as types).
+- **Design tokens and layout** — [Palette](palette.md) (closed token sets and
+  named magnitudes as types), [Grid tracks](grid.md) (typed CSS grid track lists,
+  rendered to a `grid-template` string), [Transforms](transform.md) (typed CSS
+  transforms, rendered to a `transform` declaration), [Transitions](transition.md)
+  (typed transition steps, rendered to the CSS shorthand), [Animations](animation.md)
+  (a typed animation `Spec`, rendered to the CSS shorthand),
+  [Responsive breakpoints](responsive.md) (a viewport size classified into a typed
+  `DeviceClass`).
 - **Testing** — [Testing](test.md) (the in-process framework: tests as values,
   assertions as results, exit-coded runs).
 - **Databases** — [Connection descriptors](dsn.md) (a typed, credential-safe
-  `Dsn`; parse-don't-validate at the connection boundary).
+  `Dsn`; parse-don't-validate at the connection boundary), [Store](db-store.md)
+  (a typed table derived from one codec; injection-safe, deny-by-default access).
 
 ## Reference and lookup
 

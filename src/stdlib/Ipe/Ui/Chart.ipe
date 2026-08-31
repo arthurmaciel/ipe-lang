@@ -1,4 +1,4 @@
--- | Ipe.Ui.Chart — typed chart primitives for `Ipe.Ui` (v0.16.0+).
+-- | Ipe.Ui.Chart — typed chart primitives for `Ipe.Ui`.
 --
 -- `line / area / bar / sparkline / heatmap` accept typed `Series`
 -- records (`{ label, color, points : List Point }`) and render to

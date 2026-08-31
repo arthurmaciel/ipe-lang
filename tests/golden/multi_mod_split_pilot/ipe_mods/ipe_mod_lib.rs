@@ -40,7 +40,7 @@ pub(crate) fn lib_seed_and_count() -> IpeTask<i64> {
                                         "INSERT INTO widgets (name, qty) VALUES (?, ?)".to_string(),
                                         (vec![
                                             MainSqlValue::SqlString("gear".to_string()),
-                                            MainSqlValue::SqlInt(4),
+                                            MainSqlValue::SqlInt(4i64),
                                         ])
                                         .into_iter()
                                         .map(::core::convert::Into::into)
@@ -54,7 +54,7 @@ pub(crate) fn lib_seed_and_count() -> IpeTask<i64> {
                                                     .to_string(),
                                                 (vec![
                                                     MainSqlValue::SqlString("cog".to_string()),
-                                                    MainSqlValue::SqlInt(2),
+                                                    MainSqlValue::SqlInt(2i64),
                                                 ])
                                                 .into_iter()
                                                 .map(::core::convert::Into::into)

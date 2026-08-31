@@ -1,13 +1,11 @@
 //! Ipe.Basics kernels: modBy + errorToString.
 //!
-//! Mirrors Go's runtime-go/rt/rt.go (`Basics_modByT`, etc.).
 
 /// Ipê `modBy : Int -> Int -> Int`. Divisor-first convention (Elm/pipeline order).
-/// Mirrors Go's `Basics_modByT` exactly:
 ///   - divisor == 0  → 0
 ///   - r = n % divisor; if r < 0 { r += divisor }
 ///
-/// Adjust fires ONLY when r < 0 (irrespective of divisor sign) — Go parity.
+/// Adjust fires ONLY when r < 0 (irrespective of divisor sign).
 ///
 /// Overflow guard: `i64::MIN % -1` is undefined behaviour in Rust debug/release
 /// (the mathematical result is 0).  `checked_rem` returns `None` for that case;
@@ -25,10 +23,8 @@ pub fn basics_mod_by(divisor: i64, n: i64) -> i64 {
 
 /// The result of Ipê's `Basics.compare` — a typed three-way comparison.
 ///
-/// Sanctioned divergence from the Ipe/Go backend: Go's `Basics_compareT`
-/// returns `-1 / 0 / 1` as a plain `int`.  The Rust backend returns a typed
-/// enum so pattern-match on `LT / EQ / GT` is sound and exhaustive without
-/// an extra range-check.  Sanctioned divergence §B-compare.
+/// Returns a typed enum so pattern-match on `LT / EQ / GT` is sound and
+/// exhaustive without a range-check. Sanctioned divergence §B-compare.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[repr(u8)]
@@ -40,12 +36,10 @@ pub enum IpeOrder {
 
 /// Ipê `compare : comparable -> comparable -> Order`.
 ///
-/// Mirrors Go's `Basics_compareT` semantics: `LT` when `a < b`, `GT` when
-/// `a > b`, `EQ` otherwise.  The `PartialOrd` bound is correct here: Ipê's
-/// `comparable` covers `Int`, `Float`, `String`, `Char`, `Bool` — all of
-/// which implement `PartialOrd` in Rust.  NaN-producing operations (`Float`)
-/// follow Rust's `PartialOrd` convention (NaN is unordered); Ipê does not
-/// expose a `Float` NaN literal so this is sound in practice.
+/// `LT` when `a < b`, `GT` when `a > b`, `EQ` otherwise. The `PartialOrd`
+/// bound covers Ipê's `comparable` types: `Int`, `Float`, `String`, `Char`,
+/// `Bool`. NaN-producing `Float` operations follow Rust's `PartialOrd`
+/// (NaN is unordered); Ipê exposes no `Float` NaN literal so this is sound.
 pub fn basics_compare<T: PartialOrd>(a: T, b: T) -> IpeOrder {
     if a < b {
         IpeOrder::LT
@@ -207,7 +201,7 @@ impl IpeWrappingMul for f64 {
 /// Saturating negation — used only by `basics_abs`, NOT by `basics_negate`.
 ///
 /// `abs` saturates at `i64::MAX` for `i64::MIN` (deliberate divergence from
-/// Go; deliberate divergence). `negate` uses `IpeWrappingNeg`
+/// wrapping behaviour). `negate` uses `IpeWrappingNeg`
 /// instead (wrapping contract, not saturating).
 pub trait SaturatingNeg: Sized {
     #[must_use]
@@ -228,10 +222,9 @@ impl SaturatingNeg for f64 {
 ///
 /// Uses `T::default()` as the zero sentinel (`0_i64` / `0.0_f64`), both of
 /// which satisfy `Default`. The `Copy` bound allows reusing `x` after the
-/// comparison without a clone. Matches Go's `Basics_abs` semantics, with the
-/// no-panic rule taking precedence at `i64::MIN` (Go's `int64` overflow wraps
-/// silently to `i64::MIN` itself; Rust saturates to `i64::MAX` instead of
-/// wrapping to a NEGATIVE "absolute value" — deliberate divergence).
+/// comparison without a clone. At `i64::MIN`, saturates to `i64::MAX` rather
+/// than wrapping to a NEGATIVE "absolute value" — deliberate divergence from
+/// two's-complement wrap (sanctioned; soundness over wrapping).
 pub fn basics_abs<T: PartialOrd + SaturatingNeg + Copy + Default>(x: T) -> T {
     let zero = T::default();
     if x < zero { x.saturating_neg() } else { x }
@@ -240,13 +233,11 @@ pub fn basics_abs<T: PartialOrd + SaturatingNeg + Copy + Default>(x: T) -> T {
 // ── end Basics numerics ──────────────────────────────────────────────
 
 /// Ipê `errorToString : a -> String` — universal Ipê stringifier.
-/// Used by Ipe.Test.debugShow and friends to render any Ipê value into
-/// a diagnostic string. Backed by the total `IpeStringify` trait, which
-/// mirrors Go's `Basics_errorToString` EXACTLY: a `String` renders UNQUOTED
-/// (`hi`, not `"hi"`), scalars render like `%v`, and slices/tuples/maps follow
-/// Go's space-separated layout. Every codegen-emitted record/ADT gets a
-/// `IpeStringify` impl (Emitter.hs), so the bound is always satisfiable —
-/// the generic `debugShow : a -> String` body type-checks and is total.
+/// Used by `Ipe.Test.debugShow` and friends to render any Ipê value into a
+/// diagnostic string. Backed by the total `IpeStringify` trait: a `String`
+/// renders UNQUOTED (`hi`, not `"hi"`), scalars render as their display form,
+/// and slices/tuples/maps use space-separated layout. Every codegen-emitted
+/// record/ADT gets an `IpeStringify` impl, so the bound is always satisfiable.
 pub fn basics_error_to_string<T: crate::stringify::IpeStringify>(v: T) -> String {
     v.ipe_show()
 }
@@ -257,23 +248,21 @@ pub fn basics_error_to_string<T: crate::stringify::IpeStringify>(v: T) -> String
 
 /// Ipê `Debug.toString` — the `{{expr}}` string-interpolation stringifier.
 /// Backed by the total `IpeStringify` trait: a `String` interpolates as itself
-/// (no surrounding quotes) and every value renders like Go's `%v`. Mirrors Go's
-/// `Debug_toString` (`String → s`, else `Sprintf("%v", …)`). Identical to
+/// (no surrounding quotes); other values use their display form. Identical to
 /// [`basics_to_string`] — the interpolation canonicaliser lowers `{{expr}}` to
 /// the same `Basics.toString` kernel.
 pub fn debug_to_string<T: crate::stringify::IpeStringify>(v: T) -> String {
     v.ipe_show()
 }
 
-/// Ipê `Basics.toString : a -> String` — Go's `fmt.Sprintf("%v", …)`. Backed by
-/// the total `IpeStringify` trait (the same path as [`basics_error_to_string`]),
-/// which mirrors Go's `%v` EXACTLY and TOTALLY: a `String` renders unquoted, a
-/// scalar renders like `%v`, and records / ADTs / lists / maps follow Go's
-/// space-separated struct/slice/map layout. Every scalar and every
-/// codegen-emitted record/ADT implements `IpeStringify` (Emitter.hs), so the
-/// bound is satisfiable for scalar, record, ADT, and generic call sites alike —
-/// there is no exit-0-then-cargo-fail composite hole (which a `Display` bound
-/// left open, since a composite has no `Display` impl).
+/// Ipê `Basics.toString : a -> String` — universal display stringifier.
+/// Backed by the total `IpeStringify` trait (the same path as
+/// [`basics_error_to_string`]): a `String` renders unquoted, a scalar renders
+/// as its display form, and records / ADTs / lists / maps use space-separated
+/// layout. Every scalar and every codegen-emitted record/ADT implements
+/// `IpeStringify`, so the bound is satisfiable at all call sites — there is no
+/// exit-0-then-cargo-fail composite hole (a `Display` bound would leave one,
+/// since composites have no `Display` impl).
 pub fn basics_to_string<T: crate::stringify::IpeStringify>(v: T) -> String {
     v.ipe_show()
 }
@@ -311,21 +300,19 @@ mod tests {
         assert_eq!(basics_mod_by(5, 10), 0);
     }
 
-    // Go parity: adjust fires only when r < 0.
+    // adjust fires only when r < 0.
     // positive divisor, positive dividend — no adjust needed.
     #[test]
     fn test_mod_by_pos_div_pos_n() {
         assert_eq!(basics_mod_by(3, 7), 1);
     }
-    // negative divisor, positive dividend — r > 0, no adjust (was wrong pre-fix).
-    // Go: 7 % -3 = 1; 1 >= 0 → no adjust → 1.
+    // negative divisor, positive dividend — r > 0, no adjust.
     #[test]
     fn test_mod_by_neg_divisor_pos_n() {
         assert_eq!(basics_mod_by(-3, 7), 1);
     }
     // negative divisor, negative dividend — r < 0 → adjust.
-    // Go: -7 % -3 = -1; -1 < 0 → -1 + (-3) = -4.  Wait — divisor=-3 so r+divisor=-4.
-    // Verify: Go does r += divisor → -1 + (-3) = -4.
+    // -7 % -3 = -1; -1 < 0 → -1 + (-3) = -4 (r += divisor).
     #[test]
     fn test_mod_by_neg_divisor_neg_n() {
         assert_eq!(basics_mod_by(-3, -7), -4);
@@ -340,12 +327,12 @@ mod tests {
     fn test_error_to_string_i64() {
         assert_eq!(basics_error_to_string(42i64), "42");
     }
-    // String renders UNQUOTED now (Go parity) — the primary fix.
+    // String renders UNQUOTED.
     #[test]
     fn test_error_to_string_string() {
         assert_eq!(basics_error_to_string("hi".to_string()), "hi");
     }
-    // Vec renders space-separated (Go's `%v`: `[1 2 3]`, NOT `[1, 2, 3]`).
+    // Vec renders space-separated (`[1 2 3]`, NOT `[1, 2, 3]`).
     #[test]
     fn test_error_to_string_vec() {
         assert_eq!(basics_error_to_string(vec![1i64, 2, 3]), "[1 2 3]");
@@ -429,7 +416,7 @@ mod tests {
         assert_eq!(basics_always(7i64, "discarded"), 7);
     }
 
-    // Basics.toString = Go's %v: Display-based, unquoted strings, clean scalars.
+    // Basics.toString: unquoted strings, clean scalars.
     #[test]
     fn test_to_string_int() {
         assert_eq!(basics_to_string(42i64), "42");

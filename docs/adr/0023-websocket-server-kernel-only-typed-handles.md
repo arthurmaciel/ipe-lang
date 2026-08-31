@@ -30,7 +30,7 @@ Rejected alternatives:
   with dedicated `IrType` variants.
 - **Untyped `Int` handles** — typed handles leverage the compiler's
   exhaustiveness checks and prevent handle/integer confusion.
-- **Go-style ~30 s blocking send** — bounded fail-fast is the architectural
+- **Long-blocking send (~30 s)** — bounded fail-fast is the architectural
   default; if overruled it is a 3-line adapter change.
 
 ## Consequences

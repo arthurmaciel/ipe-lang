@@ -196,13 +196,13 @@ pub fn file_rename(src: ipe_runtime::path::Path, dst: ipe_runtime::path::Path) -
 pub fn main_to_int(b: bool) -> i64 {
     let _ipe_recursion_guard = crate::recursion_guard();
     match b {
-        true => 1,
-        false => 0,
+        true => 1i64,
+        false => 0i64,
     }
 }
 pub fn ipe_main() -> IpeTask<()> {
     let _ipe_recursion_guard = crate::recursion_guard();
-    io_println(string_from_int(crate::main_to_int((0 == 0))))
+    io_println(string_from_int(crate::main_to_int((0i64 == 0i64))))
 }
 
 // Ffi.kernel polyfill — should be unreachable in Rust target;
@@ -227,7 +227,7 @@ pub fn list_map_consume<T0, T1>(f: impl Fn(T0) -> T1, list: Vec<T0>) -> Vec<T1> 
 // ===========================================
 
 fn main() {
-    // Synchronous-panic gate (Go parity: rt.LogPanicAndExit) —
+    // Synchronous-panic gate (parity: rt.LogPanicAndExit) —
     // classify an escaping panic (div-by-zero / index-OOB /
     // overflow) into a Ipe error + exit 1, not a raw Rust backtrace.
     ipe_runtime::core::install_panic_classifier();

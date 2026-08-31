@@ -1,9 +1,9 @@
 //! Ipe.Tui input / focus state — the runtime-managed editor model.
 //!
-//! Port of Go's `tui_ui.go` inputRegistry / focusable / tuiEditInput. The Rust
-//! version is cleaner than Go's reflection-based `eventPair` extraction: events
-//! are the concrete `html::Event<M>` (`OnString("input", fn(String)->M)` /
-//! `OnMsg("click", M)`), so dispatching a Msg is just applying the typed handler.
+//! Input / focus registry — tracks which element is focused, per-input edit
+//! buffers, and cursor state. Events are the concrete `html::Event<M>`
+//! (`OnString("input", fn(String)->M)` / `OnMsg("click", M)`), so dispatching
+//! a Msg is just applying the typed handler.
 //!
 //! Focus state (which element is focused, the per-input edit buffer + cursor) is
 //! hidden from user code: the renderer discovers focusables in tab order during
@@ -41,7 +41,7 @@ impl InputRegistry {
         self.inputs.entry(idx).or_default()
     }
     /// Sync the buffer from the rendered `value` attribute when the model changed
-    /// it out-from-under the editor (Go parity: `box.valueAttr != st.lastValueAttr`).
+    /// it out-from-under the editor (detects when `value` diverges from last render).
     pub fn sync_value(&mut self, idx: usize, value: &str) {
         let st = self.inputs.entry(idx).or_default();
         if value != st.last_value {
@@ -157,7 +157,7 @@ pub fn clamp_focus(idx: usize, n: usize) -> usize {
 }
 
 /// Adjust the vertical scroll so the focused element stays on screen, preserving
-/// the position when it's already visible (Go's `ensureFocusVisible`).
+/// the position when it's already visible.
 pub fn ensure_focus_visible<M>(
     focusables: &[Focusable<M>],
     idx: usize,

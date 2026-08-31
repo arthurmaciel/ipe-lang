@@ -1,4 +1,4 @@
--- | Ipe.Email — provider-abstract email send (Layer 3 Ipe source).
+-- | Ipe.Email — provider-abstract email send.
 --
 -- Supports Resend, AWS SES, SendGrid, and raw SMTP under one API.
 --

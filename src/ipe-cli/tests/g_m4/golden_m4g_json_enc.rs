@@ -1,5 +1,5 @@
 //! `Ipe.Json.Encode` parity gate — JSON encoder kernels with
-//! byte-for-byte Go parity.
+//! byte-for-byte golden parity.
 //!
 //! These golden tests exercise the `JsonEnc` kernel family end-to-end:
 //!
@@ -12,16 +12,14 @@
 //! * Same object at `encode 2` — 2-space pretty-print, keys in list order.
 //!   (`json_enc_object_pretty`)
 //!
-//! * Float encoding across Go's floatEncoder thresholds — `1.5`, `1e20`,
-//!   `1e-6`, `1.23e17` — plus `bool`/`null`.  Pins the decimal-vs-exponent
-//!   selection and `e±NN` shape against Go, where serde's Ryū default would
-//!   diverge (`1e20` → exponent form, etc.).
+//! * Float encoding thresholds — `1.5`, `1e20`, `1e-6`, `1.23e17` — plus
+//!   `bool`/`null`.  Pins the decimal-vs-exponent selection and `e±NN` shape
+//!   (serde's Ryū default would diverge: `1e20` → exponent form, etc.).
 //!   (`json_enc_float`)
 //!
 //! * `JsonEnc.string` over a value carrying `"`, `<`, `>`, `&`, U+2028, and
-//!   U+2029 — the full set Go's `encoding/json` HTML-escapes by default
-//!   (`\"`, `<`, `>`, `&`, `\\u2028`, `\\u2029`).  serde escapes
-//!   only `\"`, so this pins the HTML-escape pass.
+//!   U+2029 — HTML-escaped by default (`\"`, `<`, `>`, `&`, `\\u2028`,
+//!   `\\u2029`).  serde escapes only `\"`, so this pins the HTML-escape pass.
 //!   (`json_enc_escape`)
 //!
 //! Every test is gated on `IPE_E2E=1`; without it the test returns early.  Run:
@@ -85,7 +83,7 @@ fn json_enc_object_pretty() {
 
 // ── float + bool + null scalars ──────────────────────────────────────────────
 
-/// Floats across Go's floatEncoder thresholds: `1.5`, `1e20`, `1e-6`,
+/// Floats across the floatEncoder thresholds: `1.5`, `1e20`, `1e-6`,
 /// `1.23e17` (decimal form) + `bool`/`null`.  Output:
 /// `"1.5 100000000000000000000 0.000001 123000000000000000 true null"`.
 #[test]
@@ -95,7 +93,7 @@ fn json_enc_float_bool_null() {
 
 // ── string escaping ──────────────────────────────────────────────────────────
 
-/// `JsonEnc.string` over `"`, `<`, `>`, `&`, U+2028, U+2029.  Pins Go's
+/// `JsonEnc.string` over `"`, `<`, `>`, `&`, U+2028, U+2029.  Pins
 /// default HTML-escaping (`\"`, `<`, `>`, `&`, `\u2028`,
 /// `\u2029`) against `serde_json`, which escapes only `\"`.
 #[test]

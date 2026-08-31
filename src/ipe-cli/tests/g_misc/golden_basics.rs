@@ -1,5 +1,5 @@
 //! End-to-end gate: `ipe` must emit `main.rs` byte-identical to the
-//! Haskell-reference golden, and (behind `IPE_E2E=1`) the emitted project must
+//! the compiler-reference golden, and (behind `IPE_E2E=1`) the emitted project must
 //! build and print `1`.
 
 use std::path::{Path, PathBuf};
@@ -92,7 +92,7 @@ fn end_to_end_builds_and_prints_one() {
         &repo_root().join("tests").join("golden").join("basics"),
         &outcome.stdout,
     );
-    assert_eq!(outcome.exit_code, Some(0), "exit 0, matching the Go oracle");
+    assert_eq!(outcome.exit_code, Some(0), "exit 0");
 }
 
 /// A `CliError::Pipeline` must render as a coded, prose-first report — not a

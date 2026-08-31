@@ -1,4 +1,4 @@
--- | Ipe.Ui.Animation — typed CSS keyframe animations for `Ipe.Ui` (v0.15.57+).
+-- | Ipe.Ui.Animation — typed CSS keyframe animations for `Ipe.Ui`.
 --
 -- `Animation.attribute { name, duration, easing, delay, iterations,
 -- fillMode, respectReducedMotion, keyframes }` builds a keyframe

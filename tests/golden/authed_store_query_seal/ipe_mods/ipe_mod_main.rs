@@ -167,7 +167,7 @@ pub(crate) fn ipe_main() -> IpeTask<()> {
         },
         task_and_then(
             server_listen(
-                8000,
+                8000i64,
                 vec![server_get_authed(
                     "/my/docs".to_string(),
                     crate::main_auth_cfg(),

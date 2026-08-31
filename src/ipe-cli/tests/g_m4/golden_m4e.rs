@@ -13,11 +13,10 @@
 //! * `Bytes.slice` — half-open interval, clamp on out-of-bounds, empty on
 //!   zero-length range → `"656c6c 0 4"` (`bytes_slice`)
 //!
-//! All five goldens carry `oracle_divergence = true` because Ipê/Go defines
-//! `type alias Bytes = String` (the Go `string` type is a byte sequence, making
-//! the alias cost-free and correct in Go), while Ipê-Rust maps `Bytes` to
-//! `Vec<u8>` for proper lossless arbitrary-binary handling under Rust's
-//! UTF-8-constrained `String`. See `docs/architecture/divergence-policy.md`.
+//! All five goldens carry `oracle_divergence = true` because Ipê-Rust maps
+//! `Bytes` to `Vec<u8>` for proper lossless arbitrary-binary handling under
+//! Rust's UTF-8-constrained `String` (a sanctioned divergence). See
+//! `docs/architecture/divergence-policy.md`.
 //!
 //! Every test is gated on `IPE_E2E=1`; without it the test returns early. Run:
 //!

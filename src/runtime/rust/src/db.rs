@@ -278,8 +278,7 @@ async fn fetch_one_routed<'q>(pool: &Db, query: DbQuery<'q>) -> Result<DbRow, sq
 /// so a bool-first probe silently stole `qty = 7` and rendered it `"true"`.
 /// Postgres `BOOL` and SQLite `BOOLEAN` report a boolean type name; a SQLite
 /// INTEGER cell reports `INTEGER` (its runtime storage class) even when it was
-/// bound from a Rust `bool` — which matches the Go oracle, whose driver returns
-/// `int64` for those cells.
+/// bound from a Rust `bool` — the driver returns `int64` for those cells.
 fn column_is_boolean(row: &DbRow, i: usize) -> bool {
     row.columns()
         .get(i)
@@ -440,7 +439,7 @@ pub fn db_decode_string<E: From<String> + 'static>(col: String) -> Decoder<E, St
 /// `DbDec.int col` — read column `col` as an Int (i64).
 /// Accepts: JSON Number, or a String representation of an integer or decimal
 /// (e.g. "42", "3.0" → 3). NULL → Err. Parse failure → Err.
-/// Matches Go's DbDec_int truthy table (int/int64/float64/string forms).
+/// Matches `DbDec_int` truthy table (int/int64/float64/string forms).
 pub fn db_decode_int<E: From<String> + 'static>(col: String) -> Decoder<E, i64> {
     // Parse-don't-validate: a float source (JSON float or decimal string) is
     // truncated toward zero to an `Int`, but a magnitude past the `i64` range is
@@ -479,7 +478,7 @@ pub fn db_decode_int<E: From<String> + 'static>(col: String) -> Decoder<E, i64> 
                     },
                 },
                 JsonVal::String(s) => {
-                    // Accept "42" or "3.0" (decimal truncation like Go).
+                    // Accept "42" or "3.0" (decimal truncation toward zero).
                     if let Ok(i) = s.parse::<i64>() {
                         return decode_ok(i);
                     }
@@ -497,7 +496,7 @@ pub fn db_decode_int<E: From<String> + 'static>(col: String) -> Decoder<E, i64> 
 }
 
 /// `DbDec.float col` — read column `col` as a Float (f64).
-/// Matches Go's DbDec_float truthy table (float64/int/int64/string forms).
+/// Matches `DbDec_float` truthy table (float64/int/int64/string forms).
 pub fn db_decode_float<E: From<String> + 'static>(col: String) -> Decoder<E, f64> {
     decode_field(
         col.clone(),
@@ -530,7 +529,7 @@ pub fn db_decode_float<E: From<String> + 'static>(col: String) -> Decoder<E, f64
 }
 
 /// `DbDec.bool col` — read column `col` as a Bool.
-/// Truthy table (matches Go DbDec_bool):
+/// Truthy table:
 ///   true  ← "true" | "TRUE" | "True" | "t" | "T" | "1" | JSON true  | int 1  | int64 1
 ///   false ← "false"| "FALSE"| "False"| "f" | "F" | "0" | JSON false | int 0  | int64 0
 /// NULL or unrecognised string → Err.
@@ -711,10 +710,10 @@ pub fn db_decode_bytes<E: From<String> + 'static>(col: String) -> Decoder<E, Vec
 ///
 /// Uses `inner.fields` (the `Decoder` struct's `{run, fields}` metadata) to
 /// determine which columns the inner decoder reads.
-/// This is the Rust equivalent of Go's `DbDec_nullable` which gates on
+/// This is the Rust equivalent of `DbDec_nullable` which gates on
 /// `inner.cols`.
 ///
-/// NULL-gate logic (matches Go):
+/// NULL-gate logic:
 /// - If `inner.fields` is non-empty: check each named field in the row
 ///   `JsonVal::Object`. If ANY field is `JsonVal::Null` or absent →
 ///   `Ok(Nothing)`. Only when all fields are present + non-null do we
@@ -771,7 +770,7 @@ pub fn db_decode_nullable<E: From<String> + 'static, T: Send + 'static>(
 /// documentation-only here — `fieldDec` already names its column via `decode_field`.
 ///
 /// Totality: missing column or decode error → Err propagated; no panic/unwrap.
-/// Matches Go's `DbDec_required` which delegates to `DbDec_andMap(fieldDec, ctorDec)`.
+/// Matches `DbDec_required` which delegates to `DbDec_andMap(fieldDec, ctorDec)`.
 pub fn db_decode_required<E: From<String> + 'static, A: 'static + Send, B: 'static + Send>(
     _col: String,
     field_dec: Decoder<E, A>,
@@ -792,7 +791,7 @@ pub fn db_decode_required<E: From<String> + 'static, A: 'static + Send, B: 'stat
 /// Then `decode_and_map` applies the ctor.
 ///
 /// Totality: NULL/absent → Ok(fallback); present but bad type → Err; ctor Err → Err.
-/// Matches Go's `DbDec_optional`.
+/// Matches `DbDec_optional`.
 pub fn db_decode_optional<
     E: From<String> + 'static,
     A: Clone + 'static + Send + Sync,
@@ -1031,7 +1030,7 @@ pub fn db_exec<E: Send + From<String> + 'static>(
         // Same path as the structured kernels: `db_format_sql` adapts `?`
         // placeholders per backend, then bind positionally. sqlx owns the
         // escaping; a placeholder/param count mismatch surfaces as Err.
-        // `exec : ... -> Task Error Int` returns rows-affected (Go parity).
+        // `exec : ... -> Task Error Int` returns rows-affected .
         let final_sql = db_format_sql(sql);
         let mut q = sqlx::query(&final_sql);
         for p in params {
@@ -1062,7 +1061,7 @@ pub fn db_query<E: Send + From<String> + 'static>(
     })
 }
 
-// ─── Typed-parameter exec/query (Go's v0.16.26 `List SqlValue`) ────────────────
+// ─── Typed-parameter exec/query (`List SqlValue`) ──────────────────────────
 //
 // `Db.exec`/`Db.query` are `Db -> String -> List a -> Task ...`. With `a = String`
 // the params route through `db_exec`/`db_query` above (Vec<String>). With
@@ -1076,7 +1075,7 @@ pub fn db_query<E: Send + From<String> + 'static>(
 // `q.bind(String)`. Same `exec_routed`/`fetch_all_routed` (task-local
 // transaction-aware), same `db_format_sql` placeholder adaptation, same positional
 // binding — values are NEVER interpolated (sqlx owns escaping); the SQL string is
-// app-authored, exactly as in the String path and as in Go.
+// app-authored, exactly as in the String path and.
 
 pub fn db_exec_params<E: Send + From<String> + 'static>(
     conn: Db,
@@ -1089,7 +1088,7 @@ pub fn db_exec_params<E: Send + From<String> + 'static>(
         for p in params {
             q = bind_sql_param(q, p);
         }
-        // Rows-affected (Go parity), same as db_exec.
+        // Rows-affected , same as db_exec.
         match exec_routed(&conn, q).await {
             Ok(res) => ok_res(res.rows_affected() as i64),
             Err(e) => IpeResult::Err(ipe_err(&e)),
@@ -1195,7 +1194,7 @@ fn float_to_i64_or_default(field: &str, f: f64) -> i64 {
 }
 
 pub fn db_get_int<R: IpeRow>(field: String, row: &R) -> i64 {
-    // Align with db_decode_int / Go: accept "42" or a decimal string like
+    // Align with db_decode_int: accept "42" or a decimal string like
     // "3.0" (truncate to 3) before defaulting to 0.
     let s = row.ipe_get(&field);
     if let Ok(i) = s.parse::<i64>() {
@@ -1208,7 +1207,7 @@ pub fn db_get_int<R: IpeRow>(field: String, row: &R) -> i64 {
 }
 
 /// Lowercase sha256-hex of a migration's SQL text. This value is stored in the
-/// `_ipe_migrations` ledger and is a CROSS-BACKEND DB CONTRACT: the Go backend
+/// `_ipe_migrations` ledger and is a CROSS-BACKEND DB CONTRACT:
 /// records `fmt.Sprintf("%x", sha256.Sum256([]byte(stmt)))` (db_auth.go), so a
 /// database created/advanced by one backend must hash byte-identically under the
 /// other. Hence sha256, lowercase hex, over the exact statement bytes — never a
@@ -1222,8 +1221,8 @@ fn migrate_checksum(sql: &str) -> String {
 
 /// `migrate : Db -> List (String, String) -> Task Error (List String)` — apply
 /// forward-only schema migrations, recording each in the `_ipe_migrations`
-/// ledger so re-runs are idempotent. Go parity: `Db_migrateApply`'s library
-/// (Task-return) path in `runtime-go/rt/db_auth.go`.
+/// ledger so re-runs are idempotent. `Db_migrateApply`'s library
+/// (Task-return) path in ``.
 ///
 /// Per migration `(name, sql)`:
 /// - checksum = sha256-hex(sql).
@@ -1235,17 +1234,17 @@ fn migrate_checksum(sql: &str) -> String {
 ///   ONE transaction (via the single-connection `db_with_transaction`), so a
 ///   failure rolls back only that migration and a re-run resumes from it.
 ///
-/// Trust model (matches Go): the migration SQL is compile-time app source the
+/// Trust model: the migration SQL is compile-time app source the
 /// developer ships — it is run verbatim via `db_exec_raw` (arbitrary DDL is the
 /// point). Only the ledger bookkeeping crosses into bound-parameter territory
 /// (the INSERT binds name/checksum/applied_at — never string-interpolated).
 ///
-/// Single-deployer assumption (matches Go): not concurrency-safe by design. The
+/// Single-deployer assumption: not concurrency-safe by design. The
 /// `name TEXT PRIMARY KEY` ledger column is the backstop — a racing double-apply
 /// loses the INSERT to a PK violation inside its own tx, which rolls back, so
 /// there is no partial-corruption window.
 ///
-/// DB-ops mode (parity with Go's `Db_migrateApply`): when the `IPE_DB_OP` env var
+/// DB-ops mode (`Db_migrateApply`): when the `IPE_DB_OP` env var
 /// is set — the CLI `ipe db status` / `ipe db migrate --backend rust` sets it — the
 /// task PRINTS a human report and `process::exit`s instead of returning, so the
 /// surrounding app never starts serving:
@@ -1267,7 +1266,7 @@ pub fn db_migrate_apply<E: Send + From<String> + 'static>(
             .map(|v| v.trim().to_ascii_lowercase())
             .unwrap_or_default();
         // In `migrate` op mode an infra error prints context to stderr + exits 1;
-        // otherwise it is returned as a Task Err. Mirrors Go's `fail`.
+        // otherwise it is returned as a Task Err. Implements `fail`.
         macro_rules! db_op_fail {
             ($ctx:expr_2021, $err:expr_2021) => {{
                 if op == "migrate" {
@@ -1316,7 +1315,7 @@ pub fn db_migrate_apply<E: Send + From<String> + 'static>(
         }
 
         // 2b. `status` op mode — read-only report from `applied` × `migrations`,
-        //     then exit. Mirrors Go's `dbPrintMigrationStatus`.
+        //     then exit. Implements `dbPrintMigrationStatus`.
         if op == "status" {
             let (mut applied_n, mut pending_n, mut drift_n) = (0usize, 0usize, 0usize);
             // (mark, name, detail) per declared migration.
@@ -1433,7 +1432,7 @@ pub fn db_migrate_apply<E: Send + From<String> + 'static>(
             }
         }
 
-        // 4. `migrate` op mode — print the summary, then exit. Mirrors Go.
+        // 4. `migrate` op mode — print the summary, then exit.
         if op == "migrate" {
             if out.is_empty() {
                 println!("db: schema already up to date — 0 migrations applied");
@@ -1584,7 +1583,7 @@ pub fn db_insert_row<E: Send + From<String> + 'static>(
         );
         if DB_USES_RETURNING_ID {
             // Postgres has no LastInsertId — append `RETURNING id` and read the
-            // generated key (matches the Go backend's pgx path). `id` is
+            // generated key (matches the  pgx path). `id` is
             // BIGSERIAL (i64) by db_auto_id_column, but a user table may use
             // SERIAL (i32); try both, and surface a clear Err — never a
             // fabricated `0` — when the id column isn't integer-decodable at
@@ -1883,7 +1882,7 @@ pub fn db_query_decode<E: Send + From<String> + 'static, A: Send + 'static>(
     })
 }
 
-/// `queryDecode` with `List SqlValue` params (Go v0.16.26 mixed-type) — mirror of
+/// `queryDecode` with `List SqlValue` params  — mirror of
 /// `db_query_decode` binding each param via the total `bind_sql_param` instead of
 /// `q.bind(String)`. Codegen routes HERE when the params arg's solved element type
 /// is `SqlValue` (ExprEmitter `isSqlValueListArg`); a homogeneous `List String`
@@ -2085,12 +2084,12 @@ pub fn db_with_transaction<E: Send + From<String> + 'static, A: Send + 'static>(
 //   StdDbSqlValue::SqlBool(b)     → SqlParam::Bool(b)
 //   StdDbSqlValue::SqlBytes(s)    → SqlParam::Bytes(s.into_bytes())
 //   StdDbSqlValue::SqlDecimal(d)  → SqlParam::Text(d.to_string())  (lossless)
-//   StdDbSqlValue::SqlTime(ms)    → SqlParam::Int(ms)  (Unix millis, matches Go)
+//   StdDbSqlValue::SqlTime(ms)    → SqlParam::Int(ms)  (Unix millis,
 //   StdDbSqlValue::SqlMoney(m)    → SqlParam::Text("ISO_CODE AMOUNT")  (see note)
 //   StdDbSqlValue::SqlNull(inner) → SqlParam::Null(Box::new(inner.into_sql_param()))
 //
 // Money note: `StdMoneyMoney::Money(amount, currency)` is also generated; codegen
-// serialises it to "CODE AMOUNT" string (same as Go's sqlMoneyToString).  If
+// serialises it to "CODE AMOUNT" string (same as  sqlMoneyToString).  If
 // codegen cannot destructure Money (e.g. future Money redesign), the fallback is
 // SqlParam::Text(money_to_text) where money_to_text is emitted inline.
 //
@@ -2146,7 +2145,7 @@ pub enum SqlParam {
 // `ipe_backend_rust::project::emit_db_projection_impls`, delegating to the
 // existing `into_sql_param` inherent method.
 //
-// Go parity: Go's `database/sql` driver accepts `any` and type-switches at
+//  `database/sql` driver accepts `any` and type-switches at
 // runtime; here the conversion is statically resolved by the Rust type system.
 
 impl From<String> for SqlParam {
@@ -3812,7 +3811,7 @@ pub fn db_update_fields<E: Send + From<String> + 'static>(
 /// returned row via the `Decoder<E,A>` (using `row_to_json` — NULL-preserving).
 ///
 /// The `projection` string is caller-controlled but VALIDATED for injection
-/// safety (stricter than Go): it must be `"*"` or a comma-separated list of
+/// safety: it must be `"*"` or a comma-separated list of
 /// plain identifiers (`col` / `table.col`, chars `[A-Za-z0-9_.]` only). Arbitrary
 /// SQL expressions and `AS` aliases are intentionally REJECTED (`Err`), as is an
 /// empty projection.
@@ -4204,7 +4203,7 @@ mod tests {
     #[test]
     fn migrate_checksum_is_lowercase_sha256_hex_matching_go() {
         // G4 pin: the ledger checksum is a cross-backend DB contract. This value
-        // is `sha256hex("SELECT 1;")` — identical to Go's
+        // is `sha256hex("SELECT 1;")` — identical to
         // fmt.Sprintf("%x", sha256.Sum256([]byte("SELECT 1;"))). A future hasher
         // swap that broke cross-backend ledger interop would fail HERE.
         assert_eq!(
@@ -4613,7 +4612,7 @@ mod tests {
     #[tokio::test]
     async fn exec_query_params_bind_mixed_sqlvalue_types() {
         // db_exec_params / db_query_params bind the full SqlParam range (the
-        // Go `List SqlValue` mixed-type path) — Text/Int/Bool/Float/Null — and
+        //  mixed-type path) — Text/Int/Bool/Float/Null — and
         // round-trip through a SqlValue-param WHERE. `with_default` extracts the
         // Ok value (a wrong/Err result then fails the following assert).
         let db = fresh_db().await;

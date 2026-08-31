@@ -8,7 +8,7 @@
 //! source region (`regions`) — the latter being exactly what the type-directed
 //! lowerer reads to fill its `IrType` slots.
 //!
-//! The implementation is a faithful but narrowed port of the Haskell compiler's
+//! The implementation is a faithful but narrowed port of the the compiler compiler's
 //! `Ipe.Type.{Type,UnionFind,Unify,Solve}` + `Constrain.Expression`:
 //!
 //! * [`unionfind`] — `Vec`-backed weighted union-find (port of `UnionFind`).
@@ -62,7 +62,7 @@ use unionfind::{UnionFind, VarId};
 
 /// The result of inference: resolved types for bindings and for every region.
 ///
-/// Mirrors the Haskell `SolvedTypes` record's `_stEnv` + `_stRegions`. Both
+/// Mirrors the the compiler `SolvedTypes` record's `_stEnv` + `_stRegions`. Both
 /// maps are `BTreeMap`s so iteration is deterministic.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct SolvedTypes {
@@ -2309,7 +2309,7 @@ fn resolve_routed_web_checks(
             // Non-routed Model (no `page` field) BUT the program declared a
             // non-empty `routes` list: the routes are forwarded to the
             // non-routed runtime path and silently ignored. This compiles
-            // (matching the Go reference's `applyRoute` no-op), but it is
+            // (matching the the reference's `applyRoute` no-op), but it is
             // almost always a mistake — usually a mis-named `page` field. Emit
             // the IPE-L0124 warning at the `Web.app` span.
             //
@@ -2954,8 +2954,7 @@ mod tests {
 
     /// Test matrix item 1: a cross-module untyped helper used at two
     /// DIFFERENT concrete types from two DIFFERENT importers must be
-    /// accepted (empirically matches `ipe v0.16.29`'s observable semantics —
-    /// see the fix spec's decision record).
+    /// accepted (see the fix spec's decision record).
     #[test]
     fn untyped_binding_generalizes_across_cross_module_uses() {
         let mid = (
@@ -4264,7 +4263,7 @@ mod tests {
 
     /// IPE-L0124: a `Web.app` with a non-empty `routes` list
     /// whose Model has NO `page` field emits a **warning**, not an error. The
-    /// program still type-checks (Go's `applyRoute` no-ops the same shape); the
+    /// program still type-checks (`applyRoute` no-ops the same shape); the
     /// warning flags the likely mis-named routed-page field.
     ///
     /// Exercises `resolve_routed_web_checks` directly with a hand-built
@@ -5155,7 +5154,7 @@ mod tests {
     /// home module* — every same-module reference shares one variable, so
     /// using it at two different concrete types from within its own module is
     /// a sound rejection, exactly matching the reference `ipe` compiler's
-    /// `CLocal` semantics (empirically verified against `ipe v0.16.29`; see
+    /// `CLocal` semantics (see
     /// `docs/adr/0008-untyped-binding-module-boundary-generalization.md`). A
     /// CROSS-module use at two different types IS accepted — see
     /// [`untyped_binding_generalizes_across_cross_module_uses`]. To get

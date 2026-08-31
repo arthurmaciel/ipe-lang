@@ -238,11 +238,11 @@ pub fn ipe_main() -> IpeTask<()> {
     io_println(string_from_int(crate::main_compose2(
         {
             let __ipe_fn: Box<dyn Fn(i64) -> i64 + Send + Sync + 'static> =
-                Box::new(move |n: i64| -> i64 { ipe_runtime::math::ipe_int_add(n, 5) });
+                Box::new(move |n: i64| -> i64 { ipe_runtime::math::ipe_int_add(n, 5i64) });
             __ipe_fn
         },
-        1,
-        2,
+        1i64,
+        2i64,
     )))
 }
 
@@ -268,7 +268,7 @@ pub fn list_map_consume<T0, T1>(f: impl Fn(T0) -> T1, list: Vec<T0>) -> Vec<T1> 
 // ===========================================
 
 fn main() {
-    // Synchronous-panic gate (Go parity: rt.LogPanicAndExit) —
+    // Synchronous-panic gate (parity: rt.LogPanicAndExit) —
     // classify an escaping panic (div-by-zero / index-OOB /
     // overflow) into a Ipe error + exit 1, not a raw Rust backtrace.
     ipe_runtime::core::install_panic_classifier();

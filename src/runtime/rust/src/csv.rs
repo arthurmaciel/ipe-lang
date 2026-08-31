@@ -182,8 +182,8 @@ pub fn csv_encode(doc: CsvDoc) -> String {
 pub fn csv_encode_with_delimiter(delim: String, doc: CsvDoc) -> String {
     // Ipê's `encodeWithDelimiter` returns `String` (no Result), so on an
     // invalid delimiter we fall back to the standard comma rather than
-    // silently taking a partial/wrong byte. This matches Go's behaviour
-    // (the Go csv.Writer panics on a non-ASCII Comma — we degrade gracefully).
+    // silently taking a partial/wrong byte. This matches  behaviour
+    // (a non-ASCII Comma degrades gracefully).
     let byte = match validated_delimiter::<String>(&delim) {
         IpeResult::Ok(b) => b,
         IpeResult::Err(_) => b',',

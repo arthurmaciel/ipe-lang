@@ -24,7 +24,7 @@
 //! anchors every `List.x` to `VarHome::Kernel` unconditionally, so the kernel
 //! path is the only exit-0-safe wiring (see
 //! `docs/adr/0024-list-ops-kernel-wiring.md`). Those kernels are constant-
-//! stack too — strictly better than the O(N)-stack pure-Ipê recursion the Go
+//! stack too — strictly better than the O(N)-stack pure-Ipê recursion the golden
 //! backend uses — so the soundness thesis holds by a different mechanism. The
 //! pure-Ipe `List.ipe` bodies stay as the (currently unreached) upstream-parity
 //! reference for the eventual migration once typed-lambda lowering closes the

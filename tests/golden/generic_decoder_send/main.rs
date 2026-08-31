@@ -208,7 +208,7 @@ pub fn main_with_default<T1: 'static + Send + Sync + Clone>(
 pub fn ipe_main() -> IpeTask<()> {
     let _ipe_recursion_guard = crate::recursion_guard();
     ({
-        let intDec = crate::main_with_default(0, json_decode_int::<IpeError>());
+        let intDec = crate::main_with_default(0i64, json_decode_int::<IpeError>());
         ({
             let strDec = crate::main_with_default(
                 "none".to_string(),
@@ -223,8 +223,8 @@ pub fn ipe_main() -> IpeTask<()> {
                         ({
                             let r4 = decode_from_json_string(strDec, "null".to_string());
                             io_println(string_join(" ".to_string(), vec![
-                                string_from_int(result_with_default(0, r1)),
-                                string_from_int(result_with_default(0, r2)),
+                                string_from_int(result_with_default(0i64, r1)),
+                                string_from_int(result_with_default(0i64, r2)),
                                 result_with_default("none".to_string(), r3),
                                 result_with_default("none".to_string(), r4),
                             ]))
@@ -258,7 +258,7 @@ pub fn list_map_consume<T0, T1>(f: impl Fn(T0) -> T1, list: Vec<T0>) -> Vec<T1> 
 // ===========================================
 
 fn main() {
-    // Synchronous-panic gate (Go parity: rt.LogPanicAndExit) —
+    // Synchronous-panic gate (parity: rt.LogPanicAndExit) —
     // classify an escaping panic (div-by-zero / index-OOB /
     // overflow) into a Ipe error + exit 1, not a raw Rust backtrace.
     ipe_runtime::core::install_panic_classifier();

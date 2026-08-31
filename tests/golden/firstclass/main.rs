@@ -199,7 +199,7 @@ pub fn main_apply_twice<FN0: Fn(i64) -> i64 + Send + Sync + 'static>(f: FN0, x: 
 }
 pub fn main_inc(n: i64) -> i64 {
     let _ipe_recursion_guard = crate::recursion_guard();
-    ipe_runtime::math::ipe_int_add(n, 1)
+    ipe_runtime::math::ipe_int_add(n, 1i64)
 }
 pub fn main_make_inc(base: i64) -> Box<dyn Fn(i64) -> i64 + Send + Sync + 'static> {
     let _ipe_recursion_guard = crate::recursion_guard();
@@ -212,8 +212,8 @@ pub fn ipe_main() -> IpeTask<()> {
     let _ipe_recursion_guard = crate::recursion_guard();
     ({
         let a = crate::main_apply_twice(
-            move |n: i64| -> i64 { ipe_runtime::math::ipe_int_add(n, 3) },
-            1,
+            move |n: i64| -> i64 { ipe_runtime::math::ipe_int_add(n, 3i64) },
+            1i64,
         );
         ({
             let b = crate::main_apply_twice(
@@ -222,12 +222,12 @@ pub fn ipe_main() -> IpeTask<()> {
                         Box::new(crate::main_inc);
                     __ipe_fn
                 },
-                1,
+                1i64,
             );
             ({
-                let g = crate::main_make_inc(0);
+                let g = crate::main_make_inc(0i64);
                 ({
-                    let c = (g)(40);
+                    let c = (g)(40i64);
                     io_println(string_from_int(ipe_runtime::math::ipe_int_add(
                         ipe_runtime::math::ipe_int_add(a, b),
                         c,
@@ -260,7 +260,7 @@ pub fn list_map_consume<T0, T1>(f: impl Fn(T0) -> T1, list: Vec<T0>) -> Vec<T1> 
 // ===========================================
 
 fn main() {
-    // Synchronous-panic gate (Go parity: rt.LogPanicAndExit) —
+    // Synchronous-panic gate (parity: rt.LogPanicAndExit) —
     // classify an escaping panic (div-by-zero / index-OOB /
     // overflow) into a Ipe error + exit 1, not a raw Rust backtrace.
     ipe_runtime::core::install_panic_classifier();

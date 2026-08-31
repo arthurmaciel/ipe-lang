@@ -62,28 +62,25 @@ pub fn regex_replace(re: Regex, replacement: String, s: String) -> String {
 
 /// `Regex.split : Regex -> String -> List String` — split on every match.
 ///
-/// Mirrors Go's `regexp.Split(s, -1)` (split on every match) rather than
-/// Rust's `Regex::split`. The two diverge on zero-width matches: Go's Split
-/// skips the field a match would produce when that match ends at byte 0
-/// (`if match[1] != 0`), so a leading zero-width match at position 0 does NOT
-/// emit a leading empty string, while interior zero-width matches still split.
-/// Rust's `Regex::split` instead emits a leading empty for the same input.
+/// Splits on every non-overlapping match. Diverges from `Regex::split` on
+/// zero-width matches: a zero-width match ending at byte 0 does NOT emit a
+/// leading empty string, while interior zero-width matches still split.
+/// Implements this by tracking the start of the most recent match manually.
 #[must_use]
 pub fn regex_split(re: Regex, s: String) -> Vec<String> {
-    // Go special-cases a non-empty pattern against empty input as one empty
-    // field (`if len(re.expr) > 0 && len(s) == 0 { return []string{""} }`).
+    // A non-empty pattern against empty input yields one empty field.
     if !re.0.as_str().is_empty() && s.is_empty() {
         return vec![String::new()];
     }
     let mut out: Vec<String> = Vec::new();
     let mut beg: usize = 0;
-    // `end` tracks the START offset of the most recent match, mirroring Go's
-    // `end = match[0]`; the trailing field is suppressed when it reaches len(s).
+    // `end` tracks the START offset of the most recent match;
+    // the trailing field is suppressed when it reaches len(s).
     let mut end: usize = 0;
     for m in re.0.find_iter(&s) {
         end = m.start();
-        // Skip the field for a match ending at byte 0 (Go: `if match[1] != 0`)
-        // — drops the leading empty produced by a zero-width match at pos 0.
+        // Skip the field for a match ending at byte 0 — drops the leading
+        // empty produced by a zero-width match at position 0.
         if m.end() != 0 {
             out.push(s[beg..end].to_string());
         }
@@ -240,7 +237,7 @@ mod tests {
     }
     #[test]
     fn test_is_url_rejects_control_chars() {
-        // Embedded control bytes (NUL / ESC) → reject (XSS-link-gate parity with Go url.Parse).
+        // Embedded control bytes (NUL / ESC) → reject (XSS-link-gate).
         assert!(!string_is_url("http://exa\u{0}mple.com".into()));
         assert!(!string_is_url("https://e\u{1b}vil.com".into()));
     }

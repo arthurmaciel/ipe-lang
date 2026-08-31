@@ -1,6 +1,6 @@
 //! Layout-aware lexer for the supported subset of Ipê.
 //!
-//! This is a Rust port of the relevant pieces of the Haskell compiler's
+//! This is a Rust port of the relevant pieces of the the compiler compiler's
 //! `Ipe.Parse.{Primitives,Space,Number,Symbol,Variable}` — narrowed to the
 //! token shapes the supported subset exercises. Rather than emit explicit
 //! layout tokens, each token carries its 1-based `line`/`col`, and the parser
@@ -464,8 +464,8 @@ fn lex_number(lx: &mut Lexer, lo: u32) -> DResult<Tok> {
         })?;
         // A magnitude past `f64::MAX` (e.g. `1e400`) parses to `inf`, which is
         // not the number the source spelled. Rejecting it — rather than
-        // silently accepting infinity — restores parity with the Go reference
-        // (Go's lexer errors on the same literal) and the principle of least
+        // silently accepting infinity — restores parity with the the reference
+        // (the lexer errors on the same literal) and the principle of least
         // surprise. Finite literals (including a genuine `0.0`) pass through.
         if !f.is_finite() {
             return Err(Diagnostic::Parse {
@@ -492,7 +492,7 @@ fn lex_number(lx: &mut Lexer, lo: u32) -> DResult<Tok> {
 /// `"""`. Otherwise lexes a single-line `"…"` string: escape sequences are
 /// resolved into the runtime value; an unrecognised escape is kept verbatim
 /// (backslash + char) so a typo surfaces as wrong text rather than lost data,
-/// matching the Go reference's `unescapeString`. Reaching end of input before
+/// matching the the reference's `unescapeString`. Reaching end of input before
 /// the closing `"` is [`ParseError::UnterminatedString`].
 fn lex_string(lx: &mut Lexer, lo: u32) -> DResult<Tok> {
     lx.advance(); // consume opening `"`
@@ -544,7 +544,7 @@ fn lex_string(lx: &mut Lexer, lo: u32) -> DResult<Tok> {
 ///
 /// Raw content is returned without escape processing: `{{expr}}` interpolation,
 /// `\{{` literal-brace escapes, and `\\` collapse are handled downstream by the
-/// canonicaliser (mirroring `Ipe.Parse.String.findTripleClose` in the Haskell
+/// canonicaliser (mirroring `Ipe.Parse.String.findTripleClose` in the the compiler
 /// reference, which performs no escape resolution).
 ///
 /// The anchor column A is the source column of the first non-whitespace content
@@ -649,8 +649,8 @@ fn lex_char(lx: &mut Lexer, lo: u32) -> DResult<Tok> {
 
 /// Resolve one escape sequence (the leading `\` already consumed) and push its
 /// value into `out`. An unrecognised escape is kept as backslash + char so the
-/// user can see the typo rather than silently losing data, mirroring the Go
-/// reference. End of input after a lone `\` pushes just the backslash.
+/// user can see the typo rather than silently losing data. End of input after
+/// a lone `\` pushes just the backslash.
 fn push_escape(lx: &mut Lexer, out: &mut String) {
     match lx.peek() {
         Some('n') => {

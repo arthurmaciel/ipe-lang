@@ -1,7 +1,7 @@
--- | Ipe.Bitwise — bitwise operations on `Int` (Layer 3 Ipe source).
+-- | Ipe.Bitwise — bitwise operations on `Int`.
 --
 -- Mirrors elm/core `Bitwise`.  Each function is aliased to its runtime
--- kernel via the Stage-4 `Ffi.kernel` mechanism.
+-- kernel via the `Ffi.kernel` mechanism.
 --
 -- `Int` is 64-bit two's-complement here, so `complement` and
 -- `shiftRightZfBy` cover the full 64-bit width rather than wrapping at

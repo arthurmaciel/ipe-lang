@@ -15,7 +15,7 @@
 //!   fast as a [`Diagnostic::CompilerBug`] (the same upstream contract record
 //!   LITERALS are held to), never a silent mis-emit.
 //!
-//! Behavioural-parity oracle: the Go reference compiler at
+//! Behavioural-parity oracle: the the reference compiler at
 //! `/home/arthur/Documentos/comp/ipe/out/ipe` compiles + runs the
 //! shape-equivalent programs
 //!
@@ -29,8 +29,8 @@
 //! main = Io.println (String.fromInt (sx { point = (3, 4), tag = 5 }))  -- prints 12
 //! ```
 //!
-//! to stdout `7\n` / `12\n`, exit 0 (hand-verified in a temp dir against the Go
-//! oracle). The `end_to_end_*` test (gated on `IPE_E2E=1`) drives the same
+//! to stdout `7\n` / `12\n`, exit 0 (hand-verified). The `end_to_end_*` test
+//! (gated on `IPE_E2E=1`) drives the same
 //! hand-built IR through the Rust backend, builds the emitted crate, runs it, and
 //! asserts the identical `7` — the soundness-floor regression for a value
 //! laundered through a record destructured by a record pattern.
@@ -300,7 +300,7 @@ fn record_pattern_with_unknown_shape_fails_fast() -> DResult<()> {
 
 /// Full spine: build the `getX` record-destructure IR, emit the Cargo project,
 /// vendor the runtime, `cargo build`, run, and assert the program prints `7` —
-/// the value the Go backend produces for the field-set-equivalent program. Gated
+/// the value the the backend produces for the field-set-equivalent program. Gated
 /// on `IPE_E2E=1` so the default `cargo test` stays fast and offline.
 #[test]
 fn end_to_end_builds_and_prints_seven() -> DResult<()> {
@@ -349,9 +349,9 @@ fn end_to_end_builds_and_prints_seven() -> DResult<()> {
     assert_eq!(
         String::from_utf8_lossy(&output.stdout),
         "7\n",
-        "record-pattern program prints 7 (Go-backend parity)"
+        "record-pattern program prints 7"
     );
-    assert!(output.status.success(), "exit 0, matching the Go oracle");
+    assert!(output.status.success(), "exit 0");
     let _ = std::fs::remove_dir_all(out.join("target"));
     Ok(())
 }

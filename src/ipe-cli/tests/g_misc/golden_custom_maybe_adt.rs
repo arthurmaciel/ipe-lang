@@ -12,11 +12,11 @@
 //! main = Io.println (String.fromInt (unwrap (Som 41)))      -- prints 42
 //! ```
 //!
-//! Behavioural-parity oracle: the Go reference compiler at
+//! Verified: the reference compiler at
 //! `/home/arthur/Documentos/comp/ipe/out/ipe` compiles + runs the SAME
 //! `Main.ipe` to stdout `42\n`, exit 0 — hand-verified in a temp dir, where the
-//! Go backend emits the matching `MainOpt[T1 any]` enum and `MainOpt_Som(41)`
-//! construction. Running the Go toolchain inside `cargo test` is impractical, so
+//! the backend emits the matching `MainOpt[T1 any]` enum and `MainOpt_Som(41)`
+//! construction. Running the the toolchain inside `cargo test` is impractical, so
 //! the hand-computed `42` is the in-test oracle.
 
 use std::path::{Path, PathBuf};
@@ -60,7 +60,7 @@ fn emits_byte_identical_main_rs() {
 }
 
 /// Full spine: compile, build the emitted Cargo project, run it, and assert the
-/// ADT program prints `42` — the same value the Go backend produces. Gated on
+/// ADT program prints `42` — the expected value. Gated on
 /// `IPE_E2E=1` so the default `cargo test` stays fast. This is the
 /// soundness-floor regression for a value laundered through a generic /
 /// payload-carrying enum.
@@ -90,5 +90,5 @@ fn end_to_end_builds_and_prints_forty_two() {
             .join("custom_maybe_adt"),
         &outcome.stdout,
     );
-    assert_eq!(outcome.exit_code, Some(0), "exit 0, matching the Go oracle");
+    assert_eq!(outcome.exit_code, Some(0), "exit 0");
 }

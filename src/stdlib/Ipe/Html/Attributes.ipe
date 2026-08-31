@@ -1,4 +1,4 @@
--- | Ipe.Html.Attributes — HTML attribute builders (Layer 3 Ipe source).
+-- | Ipe.Html.Attributes — HTML attribute builders.
 --
 -- Every fixed-key builder (`class` / `id` / `checked` / …) is ordinary Ipê over
 -- the three retained native primitives `attribute` / `boolAttribute` / `noAttr`,

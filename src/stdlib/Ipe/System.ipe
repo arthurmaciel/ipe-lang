@@ -1,5 +1,5 @@
 -- | Ipe.System -- process environment + args + termination
--- (Layer 3 Ipe source).
+--.
 --
 -- Most reads / writes are effectful (`Task Error _`) since they
 -- touch process-global state that can change between invocations.

@@ -1,5 +1,5 @@
 //! Backlog the — the real `Error ErrorKind ErrorInfo` ADT (ported from
-//! the ancestor Go/Haskell design's `ipe-stdlib/Ipe/Core/Error.ipe`).
+//! the `ipe-stdlib/Ipe/Core/Error.ipe` design).
 //!
 //! Proves the whole pipeline end-to-end: construction (`Error.io`,
 //! `Error.timeout`), the ctor-scheme fix (pattern matching

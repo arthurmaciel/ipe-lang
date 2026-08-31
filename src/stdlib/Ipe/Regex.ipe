@@ -1,7 +1,7 @@
--- | Ipe.Regex — RE2 regex helpers (Layer 3 Ipe source).
+-- | Ipe.Regex — RE2 regex helpers.
 --
--- Patterns use Go's RE2 syntax (no backreferences, linear-time
--- matching).  A pattern is compiled ONCE with `compile`, which turns an
+-- Patterns use RE2 syntax (no backreferences, linear-time matching).
+-- A pattern is compiled ONCE with `compile`, which turns an
 -- invalid pattern into a typed `Err` — never a silent no-match.  Every
 -- operation then takes the compiled, opaque `Regex`, so an invalid pattern
 -- can never reach a match/find/replace/split as a false negative.

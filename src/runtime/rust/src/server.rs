@@ -238,9 +238,9 @@ where
 /// Server.api : String -> (Request -> Task Error Response) -> Route
 ///
 /// `spec` is "METHOD /path" (e.g. "POST /v1/generate"); an omitted method
-/// matches any verb. Mirrors Go's `Server_api`. The CSRF-exemption Go performs
-/// (`WithoutCsrf`) is a browser-session / double-submit concern from Ipe.Web
-/// with no analogue on the Rust HTTP server, so it has no effect here.
+/// matches any verb. The CSRF exemption (`WithoutCsrf`) is a browser-session /
+/// double-submit concern from Ipe.Web with no analogue on the Rust HTTP server,
+/// so it has no effect here.
 pub fn server_api<E, H>(spec: String, h: H) -> ServerRoute
 where
     E: Send + 'static,
@@ -650,7 +650,7 @@ pub fn server_with_header(k: String, v: String, mut r: ServerResponse) -> Server
     r
 }
 /// Ipê `redirect : String -> Response` — a 302 to `location`. Matches the Ipê
-/// kernel's one-arg contract and Go's `Server_redirectT` (status is hardcoded,
+/// kernel's one-arg contract and  `Server_redirectT` (status is hardcoded,
 /// not a parameter; use `withStatus` to override).
 pub fn server_redirect(location: String) -> ServerResponse {
     let mut r = resp(302, String::new(), "text/plain");
@@ -673,7 +673,7 @@ pub fn server_query_param(name: String, req: ServerRequest) -> IpeMaybe<String> 
     }
 }
 pub fn server_header(name: String, req: ServerRequest) -> IpeMaybe<String> {
-    // Go's `r.Header.Get` canonicalises the lookup key, so `Server.header
+    //  `r.Header.Get` canonicalises the lookup key, so `Server.header
     // "content-type"` and `"Content-Type"` both resolve. `build_request` stores
     // request headers under the same canonical key, so this lookup is
     // case-insensitive with respect to the caller's casing.
@@ -694,7 +694,7 @@ pub fn server_get_cookie(name: String, req: ServerRequest) -> IpeMaybe<String> {
 
 // These three are total (every well-formed request has a body, path, and
 // method — they are populated unconditionally by `build_request`), so they
-// return plain `String`, NOT `IpeMaybe<String>`. Go parity: Go's analogous
+// return plain `String`, NOT `IpeMaybe<String>`.  analogous
 // accessors return the raw parsed string values with no Maybe wrapper.
 pub fn server_body(req: ServerRequest) -> String {
     req.body
@@ -781,7 +781,7 @@ fn parse_query(q: Option<&str>) -> HashMap<String, String> {
             let k = it.next().unwrap_or("");
             let v = it.next().unwrap_or("");
             // Repeated keys keep the FIRST value — consistent with
-            // http_client::http_parse_query and the Go runtime's parseQuery.
+            // http_client::http_parse_query.
             out.entry(urldecode(k)).or_insert_with(|| urldecode(v));
         }
     }
@@ -815,10 +815,8 @@ fn parse_cookies(header: &str, out: &mut HashMap<String, String>) {
 
 /// Build the Ipê `ServerRequest` from the axum request. Returns `Err(status)`
 /// when the request must be rejected before the handler runs — currently only
-/// `Err(413)` for an oversize body (Go parity: `http.MaxBytesReader` →
-/// `WriteHeader(413)`, rt.go:7738). The previous code collapsed an oversize
-/// (and any body read error) into an empty body via `.unwrap_or_default()`,
-/// silently handing the handler `""` instead of refusing the request.
+/// `Err(413)` for an oversize body. Rejecting here ensures handlers never
+/// receive a silently-truncated body.
 async fn build_request(
     req: axum::extract::Request,
 ) -> Result<(ServerRequest, Option<axum::extract::ws::WebSocketUpgrade>), u16> {
@@ -834,8 +832,8 @@ async fn build_request(
             if k.as_str().eq_ignore_ascii_case("cookie") {
                 parse_cookies(s, &mut cookies);
             }
-            // Store under Go's canonical MIME casing (`content-type` ->
-            // `Content-Type`), aligning with Go's request-header storage and the
+            // Store under  canonical MIME casing (`content-type` ->
+            // `Content-Type`), aligning with  request-header storage and the
             // Ipe.Web path, so `server_header` (which canonicalises its lookup
             // key) matches any caller casing.
             headers.insert(
@@ -961,23 +959,18 @@ fn to_axum_response(r: ServerResponse) -> axum::response::Response {
     for cookie_v in &r.cookies {
         builder = builder.header("set-cookie", cookie_v.as_str());
     }
-    // Safe-by-default security headers (Go parity: setSecurityHeaders on the
-    // server path, rt.go:7838) — applied only when the handler hasn't already
-    // set them, so an explicit handler override wins (mirrors Go's `if h.Get
-    // (...) == ""`). Values are env/static (no request-derived strings → no
-    // header-injection surface).
+    // Safe-by-default security headers — applied only when the handler hasn't
+    // already set them, so an explicit handler override wins. Values are
+    // env/static (no request-derived strings → no header-injection surface).
     for (name, value) in crate::telemetry::security_headers() {
         if !r.headers.keys().any(|k| k.eq_ignore_ascii_case(name)) {
             builder = builder.header(name, value);
         }
     }
-    // Dev-only "🔍 Console" banner injection (Go parity: rt.go server dispatch
-    // tail — injectDevBanner(devBannerHTML()) for every text/html response).
+    // Dev-only "🔍 Console" banner injection for every text/html response.
     // Runs on the buffered body only; streaming responses returned above via
-    // serve_streaming_sentinel bypass this (same as Go, where streams skip the
-    // buffered fmt.Fprint path). Effective content-type = the handler's override
-    // header when present, else r.contentType (mirrors the has_ct_header
-    // resolution used to emit the content-type above).
+    // serve_streaming_sentinel bypass this. Effective content-type = the
+    // handler's override header when present, else r.contentType.
     let effective_ct: String = if has_ct_header {
         r.headers
             .iter()
@@ -987,7 +980,7 @@ fn to_axum_response(r: ServerResponse) -> axum::response::Response {
     } else {
         r.contentType.clone()
     };
-    // Prefix test matches Go's `strings.HasPrefix(ct, "text/html")` exactly:
+    // Prefix test matches  `strings.HasPrefix(ct, "text/html")` exactly:
     // case-sensitive, no trimming — Ipê's html builder always sets a lowercase
     // `text/html; charset=utf-8`, so this is the byte-parity comparison.
     let body = if effective_ct.starts_with("text/html") {
@@ -1114,7 +1107,7 @@ pub fn server_listen<E: From<String> + Send + 'static>(
             }
         }
         // Ipê doctrine: a panicking handler returns 500, never crashes the
-        // process (mirrors the Go runtime's per-handler recover()). The custom
+        // process. The custom
         // responder classifies + logs the panic SERVER-SIDE (errId) and returns a
         // 500 carrying ONLY the errId — never the panic message (no info leak).
         let app = app.layer(tower_http::catch_panic::CatchPanicLayer::custom(
@@ -1223,8 +1216,8 @@ fn ws_send_buffer() -> usize {
         .unwrap_or(256)
 }
 
-/// Heartbeat interval for WebSocket Ping frames.  Mirrors Go's
-/// `wsDefaultPingInterval = 30s` (`runtime-go/rt/server_websocket.go`).
+/// Heartbeat interval for WebSocket Ping frames.  Mirrors
+/// `wsDefaultPingInterval = 30s` (``).
 /// Override via `IPE_WS_HEARTBEAT` (seconds, must be > 0).
 fn ws_heartbeat_secs() -> u64 {
     crate::system::read_env_var("IPE_WS_HEARTBEAT")
@@ -1248,9 +1241,9 @@ tokio::task_local! {
     static WS_RESPONSE: std::cell::Cell<Option<axum::response::Response>>;
 }
 
-/// Resolve the configured per-message byte cap, mirroring Go's `SetReadLimit`:
+/// Resolve the configured per-message byte cap, mirroring  `SetReadLimit`:
 /// treat 0/negative as "unset" and apply the 1 MiB default
-/// (`wsDefaultMaxMessageBytes = 1 << 20` in `runtime-go/rt/websocket.go`).
+/// (`wsDefaultMaxMessageBytes = 1 << 20` in ``).
 /// `try_from` avoids a wrapping/truncating cast on a caller-controlled `i64`.
 /// Shared by `server_web_socket_upgrade` (framing-layer enforcement, applied
 /// to the `WebSocketUpgrade` builder before the frame is even buffered) and
@@ -1285,9 +1278,9 @@ async fn ws_loop<E: From<String> + Send + 'static>(
         .insert(id, tx);
     let _ = (cfg.onConnect)(WsHandle::WebSocketServer(id)).await;
     // Heartbeat: send a Ping every `ws_heartbeat_secs()` seconds to keep the
-    // connection alive through proxies and detect silent drops.  Mirrors Go's
+    // connection alive through proxies and detect silent drops.  Mirrors
     // `wsDefaultPingInterval = 30s` + `wsPingTimeout = 10s` pattern in
-    // `runtime-go/rt/server_websocket.go`.  axum auto-replies to incoming Pong
+    // ``.  axum auto-replies to incoming Pong
     // frames on our behalf, so we only need to send the Ping here.
     let mut heartbeat = tokio::time::interval(Duration::from_secs(ws_heartbeat_secs()));
     heartbeat.tick().await; // consume the immediate first tick
@@ -1451,7 +1444,7 @@ pub fn server_web_socket_upgrade<E: From<String> + Send + 'static>(
     cfg: WsServerCfg<E>,
 ) -> IpeTask<E, ServerResponse> {
     Box::pin(async move {
-        // Origin allowlist. Production with no patterns → reject (matches Go). With
+        // Origin allowlist. Production with no patterns → reject ( With
         // patterns set (any mode), the request's Origin must match one of them.
         if ws_production() && cfg.originPatterns.is_empty() {
             return ok_res(ws_resp(
@@ -1815,7 +1808,7 @@ mod ws_adapter_tests {
 
     // ── ws_heartbeat_secs env parsing ──────────────────────────────────
 
-    /// Default heartbeat interval is 30 s (Go parity: `wsDefaultPingInterval`).
+    /// Default heartbeat interval is 30 s .
     #[test]
     fn ws_heartbeat_default_is_30() {
         // Simulate what ws_heartbeat_secs() returns when the env var is absent.
@@ -2192,8 +2185,8 @@ fn csrf_set_cookie_value(token: &str, request_is_https: bool) -> String {
 }
 
 /// Middleware.withCsrf : Handler -> Handler. Double-submit-cookie CSRF guard
-/// for `Ipe.Http.Server` routes (Go/upstream-audit parity: `__Host-ipe_csrf`
-/// cookie, safe methods set/refresh it, unsafe methods require cookie ==
+/// for `Ipe.Http.Server` routes (`__Host-ipe_csrf` cookie, safe methods
+/// set/refresh it, unsafe methods require cookie ==
 /// `X-Csrf-Token` header via constant-time compare, 403 on any
 /// mismatch/missing value).
 ///
@@ -2442,7 +2435,7 @@ mod tests {
     #[tokio::test]
     async fn to_axum_response_injects_dev_banner_into_html_before_body_close() {
         // Default test env is dev (ENV/IPE_ENV unset), so the banner is emitted.
-        // Go parity: injectDevBanner runs on every text/html buffered response.
+        // injectDevBanner runs on every text/html buffered response.
         let ipe = server_html("<html><body><h1>hi</h1></body></html>".to_string());
         let out = axum_body_string(to_axum_response(ipe)).await;
         assert!(
@@ -2461,8 +2454,7 @@ mod tests {
 
     #[tokio::test]
     async fn to_axum_response_leaves_non_html_untouched() {
-        // JSON / plain-text responses never get the banner (Go: the HasPrefix
-        // "text/html" gate excludes them).
+        // JSON / plain-text responses never get the banner (only text/html).
         let ipe = server_json(r#"{"ok":true}"#.to_string());
         let out = axum_body_string(to_axum_response(ipe)).await;
         assert_eq!(out, r#"{"ok":true}"#, "non-html body must be verbatim");

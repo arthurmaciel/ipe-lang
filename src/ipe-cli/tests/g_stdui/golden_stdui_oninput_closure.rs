@@ -20,7 +20,7 @@
 //!
 //! ## Oracle provenance
 //!
-//! `oracle_divergence = true`: the Go reference compiler (`ipe dev`) does not
+//! `oracle_divergence = true`: the the reference compiler (`ipe dev`) does not
 //! expose `Html.htmlRender` and exits 1 on this source.  `expected_go.txt` holds
 //! ipe's own correct output — the Rust-backend HTML with the input event wired.
 //!

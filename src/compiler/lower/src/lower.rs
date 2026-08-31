@@ -1,7 +1,7 @@
 //! The lowering core: a name-resolved [`canon::Module`] plus its
 //! [`SolvedTypes`] become a backend-agnostic [`ipe_ir::Program`].
 //!
-//! This is the narrowed port of the Haskell compiler's `Ipe.Build.Compile`
+//! This is the narrowed port of the the compiler compiler's `Ipe.Build.Compile`
 //! lowering walk and `Ipe.Build.LowerCtx`. Every step is total, and failures
 //! split into two channels — never a panic, never a guess:
 //!
@@ -17101,7 +17101,7 @@ impl<'a> Lowerer<'a> {
                 // is the body expression's solved type, which IS the concrete return
                 // type after solving.
                 //
-                // The analogous gate in the Haskell compiler: `Instantiate.fromAnnotation`
+                // The analogous gate in the the compiler compiler: `Instantiate.fromAnnotation`
                 // filters `"any"` out before treating free vars as polymorphic;
                 // `buildEnv` gives each `any` occurrence a fresh flex UV that the body
                 // constrains to a concrete type.  The Rust port must do the same.
@@ -28889,7 +28889,7 @@ impl<'a> Lowerer<'a> {
         // Redundancy demotion: IPE-T0011 is a WARNING, so arms AFTER
         // an irrefutable catch-all can now reach lowering. They are provably
         // unreachable — the exhaustiveness pass already warned — so DROP them
-        // here (semantics-preserving; the Go reference compiles the same
+        // here (semantics-preserving; the the reference compiles the same
         // shape). Without the truncation `Match::new_flat`'s structural
         // backstop sees a non-trailing catch-all and raises a CompilerBug.
         //

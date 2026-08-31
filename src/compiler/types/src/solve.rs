@@ -16,7 +16,7 @@ use crate::ty::Content;
 use crate::unify::unify;
 use crate::unionfind::{UnionFind, VarId};
 
-/// Default cap on solver steps before bailing — matches the Haskell
+/// Default cap on solver steps before bailing — matches the the compiler
 /// `defaultSolverBudget`. Ordinary programs consume well under a thousand
 /// steps; the cap exists purely to bound adversarial blow-up.
 pub const DEFAULT_SOLVER_BUDGET: u64 = 5_000_000;
@@ -75,7 +75,7 @@ impl Budget {
         }
     }
 
-    /// Resolve the budget from the environment, mirroring the Haskell
+    /// Resolve the budget from the environment, mirroring the the compiler
     /// three-mode resolution (unset → default; `0` → disabled; `N` → absolute).
     /// A malformed value falls back to the default rather than failing the
     /// build — the budget is a guard rail, not a feature.

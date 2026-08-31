@@ -638,7 +638,7 @@ fn emit_single_page_web_leaf(
 /// | `Bool`    | `params.get({i})?.parse::<bool>().ok()?` |
 /// | other     | compile-time error (unsupported payload type) |
 ///
-/// This is a sanctioned divergence from the Go/Haskell reference, which assumes
+/// This is a sanctioned divergence, which assumes
 /// all route payloads are `String` and silently substitutes zero-values on
 /// decode failure. Sanctioned divergence §B-route-param.
 fn route_param_get(field_ty: &IrType, i: usize) -> DResult<String> {

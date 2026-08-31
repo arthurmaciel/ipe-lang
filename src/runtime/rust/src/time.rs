@@ -95,35 +95,32 @@ pub fn time_time_string(ms: i64) -> String {
 }
 
 /// `Time.addMillis : Int -> Int -> Int` — pure integer addition.
-/// Go: `return AsInt(ms) + AsInt(delta)`. Args order: delta first, ms second
-/// (matches the Ipê sig `addMillis : Int -> Int -> Int`, called
-/// `Time.addMillis delta ms`).
+/// Args order: delta first, ms second (matches the Ipê sig
+/// `addMillis : Int -> Int -> Int`, called `Time.addMillis delta ms`).
 #[must_use]
 pub fn time_add_millis(delta: i64, ms: i64) -> i64 {
     ms.saturating_add(delta)
 }
 
 /// `Time.diffMillis : Int -> Int -> Int` — `later - earlier`.
-/// Go: `return AsInt(later) - AsInt(earlier)`. Args: (later, earlier).
+/// Args: (later, earlier).
 #[must_use]
 pub fn time_diff_millis(later: i64, earlier: i64) -> i64 {
     later.saturating_sub(earlier)
 }
 
-/// `Time.format : String -> Int -> String` — custom Go-style layout.
-/// Go uses `t.UTC().Format(layout)`. We map the Go reference-time layout to
-/// chrono's strftime format. Ipe exposes the Go layout directly
-/// ("2006-01-02 15:04:05"), so we translate the Go reference time tokens.
-/// Fallback to a best-effort strftime for unrecognised tokens (matches the
-/// open-ended nature of Go's `t.Format`).
+/// `Time.format : String -> Int -> String` — custom timestamp layout.
+/// Accepts the `2006-01-02 15:04:05` reference-time token format and
+/// translates it to chrono strftime internally. Falls back to a best-effort
+/// strftime render for any unrecognised tokens.
 #[must_use]
 pub fn time_format(layout: String, ms: i64) -> String {
     use chrono::{TimeZone, Utc};
     let Some(dt) = Utc.timestamp_millis_opt(ms).single() else {
         return String::new();
     };
-    // Translate Go reference-time placeholders to chrono strftime.
-    // Go's reference time: Mon Jan 2 15:04:05 MST 2006 (= 2006-01-02 15:04:05).
+    // Translate reference-time placeholders to chrono strftime.
+    // Reference time: Mon Jan 2 15:04:05 MST 2006 (= 2006-01-02 15:04:05).
     let strfmt = layout
         .replace("2006", "%Y")
         .replace("01", "%m")
@@ -152,8 +149,7 @@ pub fn time_format(layout: String, ms: i64) -> String {
 }
 
 /// `Time.formatHTTP : Int -> String` — HTTP date header format.
-/// Go: `t.UTC().Format(http.TimeFormat)` → "Mon, 02 Jan 2006 15:04:05 GMT".
-/// chrono's `%a, %d %b %Y %H:%M:%S GMT` produces byte-identical output.
+/// Produces "Mon, 02 Jan 2006 15:04:05 GMT" (RFC 7231 / HTTP-date).
 #[must_use]
 pub fn time_format_http(ms: i64) -> String {
     use chrono::{TimeZone, Utc};
@@ -163,9 +159,8 @@ pub fn time_format_http(ms: i64) -> String {
     }
 }
 
-/// `Time.formatRFC3339 : Int -> String` — RFC 3339 / ISO 8601 with nanoseconds.
-/// Go: `t.UTC().Format(time.RFC3339Nano)` → "2006-01-02T15:04:05.999999999Z".
-/// chrono's `to_rfc3339` produces RFC 3339 with sub-second precision when non-zero.
+/// `Time.formatRFC3339 : Int -> String` — RFC 3339 / ISO 8601 timestamp.
+/// Sub-second precision is included when non-zero.
 #[must_use]
 pub fn time_format_rfc3339(ms: i64) -> String {
     use chrono::{TimeZone, Utc};
@@ -493,7 +488,7 @@ pub fn time_format_in_zone<E: From<String>>(
 }
 
 /// `Ipe.Time.formatISO8601 ms` — the UTC instant as an RFC3339 / ISO-8601
-/// string (Go parity: `t.UTC().Format(time.RFC3339)`). Infallible (`""` only on
+/// string .Format(time.RFC3339)`). Infallible (`""` only on
 /// an out-of-range timestamp).
 #[must_use]
 pub fn time_format_iso8601(ms: i64) -> String {
@@ -506,7 +501,7 @@ pub fn time_format_iso8601(ms: i64) -> String {
 // === advanced diff / fromParts / zone kernels ===
 
 /// `diffSeconds later earlier` — integer seconds between two epoch-ms timestamps.
-// Division truncates toward zero (Go parity; negative spans truncate toward
+// Division truncates toward zero (; negative spans truncate toward
 // zero too). `saturating_sub` avoids an overflow-panic on extreme epoch inputs.
 #[must_use]
 pub fn time_diff_seconds(later_ms: i64, earlier_ms: i64) -> i64 {
@@ -753,7 +748,7 @@ mod time_advanced_tests {
     #[test]
     fn test_format_http() {
         // 1970-01-01 00:00:00 UTC = epoch 0.
-        // Go's http.TimeFormat gives "Thu, 01 Jan 1970 00:00:00 GMT".
+        //  http.TimeFormat gives "Thu, 01 Jan 1970 00:00:00 GMT".
         let s = time_format_http(0);
         assert!(s.contains("1970"), "HTTP format for epoch 0: {s}");
         assert!(s.ends_with("GMT"), "HTTP format must end in GMT: {s}");

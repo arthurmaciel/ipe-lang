@@ -1,6 +1,5 @@
 //! Ipe.Money kernels — currency table + format / rate registry / allocate.
 //!
-//! Mirrors runtime-go/rt/money_kernel.go.
 //!
 //! The Ipê-side `Money` ADT carries a typed `Currency` enum + a `Decimal`
 //! amount. At the Ffi boundary, the wrappers in `ipe-stdlib/Std/Money.ipe`
@@ -166,8 +165,8 @@ pub fn money_format(code: String, amount: Decimal) -> String {
     let abs = if neg { -amount.0 } else { amount.0 };
     // Pre-ROUND to the target minor units before formatting. `format!("{:.*}")`
     // over a raw Decimal TRUNCATES when precision < scale (rust_decimal
-    // to_str_internal), so "12.345" at 2dp would render "12.34". Go's
-    // shopspring StringFixed/format use HALF-AWAY-FROM-ZERO, so "2.545" → "2.55".
+    // `to_str_internal`), so "12.345" at 2dp would render "12.34". Use
+    // HALF-AWAY-FROM-ZERO so "2.545" → "2.55".
     let rounded = abs.round_dp_with_strategy(minor, RoundingStrategy::MidpointAwayFromZero);
     let fixed = format!("{:.*}", minor as usize, rounded);
     if neg {
@@ -185,8 +184,8 @@ pub fn money_format_with_code(code: String, amount: Decimal) -> String {
         Some(c) => c.minor_units,
         None => 2,
     };
-    // Pre-ROUND (half-away-from-zero, Go parity) before formatting so the raw
-    // Decimal is not truncated when its scale exceeds the currency's minor units.
+    // Pre-ROUND (half-away-from-zero) before formatting so the raw Decimal is
+    // not truncated when its scale exceeds the currency's minor units.
     let rounded = amount
         .0
         .round_dp_with_strategy(minor, RoundingStrategy::MidpointAwayFromZero);
@@ -238,10 +237,10 @@ pub fn money_set_rate<E: From<String>>(
         // and the reverse pair does not already exist, skip the inverse insert so
         // the registry can never exceed MAX_RATES (was +1 per near-full pair).
         if map.len() < MAX_RATES || map.contains_key(&(to.clone(), from.clone())) {
-            // Cap the auto-inverse to 16 decimal places, matching Go shopspring's
-            // DivisionPrecision = 16. Without the cap a non-terminating inverse
-            // (e.g. 1/3) would carry rust_decimal's full mantissa precision and
-            // Money.getRate of the inverse pair would diverge from Go.
+            // Cap the auto-inverse to 16 decimal places. Without the cap a
+            // non-terminating inverse (e.g. 1/3) would carry rust_decimal's
+            // full mantissa precision, producing more digits than a caller
+            // would expect for a rate derived from its reciprocal.
             map.insert(
                 (to, from),
                 inv.round_dp_with_strategy(16, RoundingStrategy::MidpointAwayFromZero),
@@ -448,8 +447,8 @@ mod tests {
 
     #[test]
     fn test_money_format_rounds_half_away_from_zero() {
-        // CORRECTNESS regression: format must pre-ROUND to the currency's minor
-        // units (half-away-from-zero, Go shopspring parity), NOT truncate.
+        // CORRECTNESS: format must pre-ROUND to the currency's minor units
+        // (half-away-from-zero), NOT truncate.
         // "2.545" at 2dp → "2.55" (truncation would give "2.54").
         assert_eq!(money_format("USD".into(), d("2.545")), "$2.55");
         assert_eq!(money_format_with_code("USD".into(), d("2.545")), "2.55 USD");

@@ -200,11 +200,11 @@ pub fn main_max_of<T1: PartialOrd + Copy + Clone>(p: T1, q: T1) -> T1 {
 pub fn ipe_main() -> IpeTask<()> {
     let _ipe_recursion_guard = crate::recursion_guard();
     ({
-        let bigInt = crate::main_max_of(3, 7);
+        let bigInt = crate::main_max_of(3i64, 7i64);
         ({
             let bigChar = crate::main_max_of('a', 'z');
             ({
-                let bonus = (if (bigChar > 'y') { bigInt } else { 0 });
+                let bonus = (if (bigChar > 'y') { bigInt } else { 0i64 });
                 io_println(string_from_int(bonus))
             })
         })
@@ -233,7 +233,7 @@ pub fn list_map_consume<T0, T1>(f: impl Fn(T0) -> T1, list: Vec<T0>) -> Vec<T1> 
 // ===========================================
 
 fn main() {
-    // Synchronous-panic gate (Go parity: rt.LogPanicAndExit) —
+    // Synchronous-panic gate (parity: rt.LogPanicAndExit) —
     // classify an escaping panic (div-by-zero / index-OOB /
     // overflow) into a Ipe error + exit 1, not a raw Rust backtrace.
     ipe_runtime::core::install_panic_classifier();

@@ -217,14 +217,15 @@ pub fn main_ops() -> RecAddMul {
         add: {
             let __ipe_fn: ::std::sync::Arc<dyn Fn(i64) -> i64 + Send + Sync + 'static> =
                 ::std::sync::Arc::new(move |n: i64| -> i64 {
-                    ipe_runtime::math::ipe_int_add(n, 10)
+                    ipe_runtime::math::ipe_int_add(n, 10i64)
                 });
             __ipe_fn
         },
         mul: {
-            let __ipe_fn: ::std::sync::Arc<dyn Fn(i64) -> i64 + Send + Sync + 'static> = ::std::sync::Arc::new(
-                move |n: i64| -> i64 { ipe_runtime::math::ipe_int_mul(n, 3) },
-            );
+            let __ipe_fn: ::std::sync::Arc<dyn Fn(i64) -> i64 + Send + Sync + 'static> =
+                ::std::sync::Arc::new(move |n: i64| -> i64 {
+                    ipe_runtime::math::ipe_int_mul(n, 3i64)
+                });
             __ipe_fn
         },
     }
@@ -235,7 +236,7 @@ pub fn main_run(table: RecAddMul, x: i64) -> i64 {
 }
 pub fn ipe_main() -> IpeTask<()> {
     let _ipe_recursion_guard = crate::recursion_guard();
-    io_println(string_from_int(crate::main_run(crate::main_ops(), 4)))
+    io_println(string_from_int(crate::main_run(crate::main_ops(), 4i64)))
 }
 
 // Ffi.kernel polyfill — should be unreachable in Rust target;
@@ -260,7 +261,7 @@ pub fn list_map_consume<T0, T1>(f: impl Fn(T0) -> T1, list: Vec<T0>) -> Vec<T1> 
 // ===========================================
 
 fn main() {
-    // Synchronous-panic gate (Go parity: rt.LogPanicAndExit) —
+    // Synchronous-panic gate (parity: rt.LogPanicAndExit) —
     // classify an escaping panic (div-by-zero / index-OOB /
     // overflow) into a Ipe error + exit 1, not a raw Rust backtrace.
     ipe_runtime::core::install_panic_classifier();

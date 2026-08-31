@@ -9,7 +9,7 @@
 //! * the UNIT VALUE [`Expr::Unit`] — Ipê's `()` literal — emits the Rust unit
 //!   expression `()`, and [`IrType::Unit`] renders as `()`.
 //!
-//! Behavioural-parity oracle: the Go reference compiler at
+//! Behavioural-parity oracle: the the reference compiler at
 //! `/home/arthur/Documentos/comp/ipe/out/ipe` compiles + runs the
 //! shape-equivalent program
 //!
@@ -200,7 +200,7 @@ fn tuple_subpattern_in_ctor_arm_renders() -> DResult<()> {
         "tuple-field construction must use ctor wrapper; got:\n{src}"
     );
     assert!(
-        src.contains("3,") && src.contains("4,"),
+        src.contains("3i64") && src.contains("4i64"),
         "tuple literal elements missing from ctor construction; got:\n{src}"
     );
     Ok(())
@@ -284,7 +284,7 @@ fn unit_value_and_type_render() -> DResult<()> {
 }
 
 /// Full spine: build the `Wrap` IR, emit, vendor the runtime, `cargo build`,
-/// run, and assert `3` — the Go-backend value for `fstOf (MkWrap (3, 4))`. The
+/// run, and assert `3` — the expected value for `fstOf (MkWrap (3, 4))`. The
 /// soundness-floor regression for a value laundered through a tuple-carrying
 /// payload destructured by a tuple pattern. Gated on `IPE_E2E=1`.
 #[test]
@@ -346,9 +346,9 @@ fn build_and_assert(
     assert_eq!(
         String::from_utf8_lossy(&output.stdout),
         expected,
-        "tuple-pattern program output must match the Go oracle"
+        "tuple-pattern program output must match golden"
     );
-    assert!(output.status.success(), "exit 0, matching the Go oracle");
+    assert!(output.status.success(), "exit 0");
     let _ = std::fs::remove_dir_all(out.join("target"));
     Ok(())
 }

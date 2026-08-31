@@ -6,7 +6,7 @@
 //! parse tree) plus a mutable [`Interner`] and produces a name-resolved
 //! [`ast::Module`], or a typed [`ipe_diagnostics::Diagnostic`]. Every variable
 //! reference is classified — local binding, top-level binding, stdlib kernel,
-//! or data constructor — by porting the supported subset of the Haskell compiler's
+//! or data constructor — by porting the supported subset of the the compiler compiler's
 //! `Ipe.Canonicalise.{Module,Expression,Pattern,Type,Environment}`.
 
 pub mod asserted;
@@ -2775,7 +2775,7 @@ mod tests {
     fn record_alias_name_coinciding_with_data_ctor_is_allowed() {
         // A record alias whose name also names a data constructor is VALID: the
         // TYPE namespace (`type alias Foo`) and the CONSTRUCTOR namespace
-        // (`type Bar = Foo`) are distinct. The upstream Haskell (`registerAliases`)
+        // (`type Bar = Foo`) are distinct. The upstream the compiler (`registerAliases`)
         // inserts into `_vars` without checking `_ctors`, so both coexist.
         //
         // Previously this wrongly emitted IPE-N0010 (DuplicateValue). The fix

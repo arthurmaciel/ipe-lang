@@ -1,0 +1,6 @@
+module Package exposing (package)
+
+
+package =
+    Package.named "attributes-form"
+        |> Package.version "0.1.0"
