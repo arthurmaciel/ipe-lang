@@ -21,7 +21,7 @@ const fn json_ct() -> (header::HeaderName, &'static str) {
 ///
 /// Conditions that suppress the console mount:
 /// - sub-app context: the parent owns its own console; a nested app must not
-///   recursively mount one (`IPE_WEB_BASE_PATH` / deprecated `IPE_LIVE_BASE_PATH`);
+///   recursively mount one (`IPE_WEB_BASE_PATH`);
 /// - explicit opt-out via `IPE_CONSOLE_EMBED=off|0|false`;
 /// - `IPE_CONSOLE_AUTH=off` (operator declared surface absent);
 /// - production without an admin token (fail-closed — no silent open-to-world mount).
@@ -29,7 +29,7 @@ const fn json_ct() -> (header::HeaderName, &'static str) {
 /// This function is reqwest-free; it lives here so the mount decision is
 /// available regardless of whether `http_client` is compiled in.
 pub fn gate_allows() -> bool {
-    if crate::system::read_env_var_renamed("IPE_WEB_BASE_PATH", "IPE_LIVE_BASE_PATH")
+    if crate::system::read_env_var("IPE_WEB_BASE_PATH")
         .map(|v| !v.is_empty())
         .unwrap_or(false)
     {

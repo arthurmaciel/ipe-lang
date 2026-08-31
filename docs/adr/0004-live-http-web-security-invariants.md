@@ -76,8 +76,7 @@ the configured allowlist.
 
 ### 5. Environment byte-count floors must reject `0`
 
-`web_max_body_bytes()` read `IPE_WEB_MAX_BODY_BYTES` (deprecated alias:
-`IPE_LIVE_MAX_BODY_BYTES`) without a `> 0` filter, so setting it to `0`
+`web_max_body_bytes()` read `IPE_WEB_MAX_BODY_BYTES` without a `> 0` filter, so setting it to `0`
 made every `/_ipe/event` POST 413. It must
 `.filter(|&n| n > 0)` before falling back to the default, matching
 `server.rs::max_body()`. The env var is shared between the Ipe.Web event

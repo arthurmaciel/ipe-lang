@@ -177,7 +177,7 @@ fn stop_and_join(
 
 /// Find a live process whose `/proc/<pid>/environ` contains the exact
 /// `key=value` pair `ipe watch` injects into its supervised child's
-/// environment (`watch::child_env` sets `IPE_LIVE_PORT`/`IPE_SERVER_PORT`
+/// environment (`watch::child_env` sets `IPE_WEB_PORT`/`IPE_SERVER_PORT`
 /// to the configured port — see `watch.rs`). Matching on the environment
 /// rather than `cmdline`/the executable PATH is deliberate: the emitted
 /// binary's actual on-disk location depends on where `cargo build` puts it
@@ -364,11 +364,11 @@ fn dropping_a_watch_handle_without_stop_still_reaps_the_supervised_child() -> Re
         "initial cold build+spawn must serve v1"
     );
 
-    // `watch::child_env` sets `IPE_LIVE_PORT=<port>` in the supervised
+    // `watch::child_env` sets `IPE_WEB_PORT=<port>` in the supervised
     // child's own environment, unique to this test's port — a stronger
     // handle on the right PID than the executable's on-disk path (which
     // moves if the test-runner's own environment sets `CARGO_TARGET_DIR`).
-    let child_pid = find_pid_by_environ_kv("IPE_LIVE_PORT", &port.to_string())
+    let child_pid = find_pid_by_environ_kv("IPE_WEB_PORT", &port.to_string())
         .expect("the supervised child process must be discoverable via /proc once v1 is serving");
     assert!(
         pid_is_alive(child_pid),

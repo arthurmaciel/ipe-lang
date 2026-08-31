@@ -760,10 +760,9 @@ pub fn server_with_cookie(c: ServerCookie, mut r: ServerResponse) -> ServerRespo
 
 const DEFAULT_MAX_BODY: usize = 32 * 1024 * 1024; // 32 MiB
 
-/// Request-body cap. Overridable via `IPE_WEB_MAX_BODY_BYTES` (deprecated alias:
-/// `IPE_LIVE_MAX_BODY_BYTES`); falls back to 32 MiB.
+/// Request-body cap. Overridable via `IPE_WEB_MAX_BODY_BYTES`; falls back to 32 MiB.
 fn max_body() -> usize {
-    crate::system::read_env_var_renamed("IPE_WEB_MAX_BODY_BYTES", "IPE_LIVE_MAX_BODY_BYTES")
+    crate::system::read_env_var("IPE_WEB_MAX_BODY_BYTES")
         .ok()
         .and_then(|v| v.trim().parse::<usize>().ok())
         .filter(|&n| n > 0)
@@ -2628,10 +2627,7 @@ mod tests {
     fn max_body_env_override() {
         // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
         unsafe { std::env::remove_var("IPE_WEB_MAX_BODY_BYTES") };
-        // SAFETY: test-only env mutation.
-        unsafe { std::env::remove_var("IPE_LIVE_MAX_BODY_BYTES") };
         assert_eq!(max_body(), DEFAULT_MAX_BODY);
-        // New name takes effect.
         // SAFETY: test-only env mutation.
         unsafe { std::env::set_var("IPE_WEB_MAX_BODY_BYTES", "1024") };
         assert_eq!(max_body(), 1024);
@@ -2640,16 +2636,6 @@ mod tests {
         assert_eq!(max_body(), DEFAULT_MAX_BODY);
         // SAFETY: test-only env mutation.
         unsafe { std::env::remove_var("IPE_WEB_MAX_BODY_BYTES") };
-        // Deprecated alias still takes effect when new name is unset.
-        // SAFETY: test-only env mutation.
-        unsafe { std::env::set_var("IPE_LIVE_MAX_BODY_BYTES", "2048") };
-        assert_eq!(
-            max_body(),
-            2048,
-            "deprecated alias IPE_LIVE_MAX_BODY_BYTES must still work"
-        );
-        // SAFETY: test-only env mutation.
-        unsafe { std::env::remove_var("IPE_LIVE_MAX_BODY_BYTES") };
     }
 
     #[tokio::test]

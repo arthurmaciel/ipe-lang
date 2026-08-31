@@ -12,7 +12,7 @@
 //!    the shared Cargo target (`~/.cargo/config.toml`) lets axum/tokio/serde
 //!    compile once and be reused.
 //! 4. An ephemeral TCP port is reserved via `TcpListener::bind("0")` → drop.
-//! 5. The binary is spawned with `IPE_LIVE_PORT=<port>` and `IPE_CSRF=off`.
+//! 5. The binary is spawned with `IPE_WEB_PORT=<port>` and `IPE_CSRF=off`.
 //!    `IPE_CSRF=off` disables the double-submit cookie check so test GETs
 //!    exercise the full page render without cookie plumbing.
 //! 6. Readiness: reads the child's stderr until `[ipe.web] listening on`.
@@ -392,8 +392,7 @@ fn spawn_and_wait_ready(
     port: u16,
 ) -> Result<ProcessGuard, BoxError> {
     let mut child = Command::new(exe)
-        // Ipe.Web reads its port from IPE_LIVE_PORT (default 8000).
-        .env("IPE_LIVE_PORT", port.to_string())
+        .env("IPE_WEB_PORT", port.to_string())
         // Disable the double-submit CSRF check so raw TcpStream GETs work.
         .env("IPE_CSRF", "off")
         // Disable the dev console proxy. The console child binary is pre-built
