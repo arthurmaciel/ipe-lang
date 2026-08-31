@@ -1379,6 +1379,56 @@ pub const fn appearance_literal_args(k: KernelFn) -> &'static [(usize, LitKind)]
     }
 }
 
+/// The appearance-hoist-eligible **record-config fields** of a record-native UI
+/// kernel — the same declarative registry as [`appearance_literal_args`], but
+/// keyed by config-record *field name* rather than positional argument index.
+///
+/// A record-native kernel (`ArgPlan::Native`, e.g. `Ui.image`) builds its call
+/// from an inline `{ … }` config through [`crate::emit_expr::emit_cfg_record_call`],
+/// not the positional-hoist path, so `appearance_literal_args` never fires for it.
+/// This companion table names, per kernel, which config fields carry an inert
+/// **appearance value** the compiled view consumes without branching on it — so a
+/// *direct literal* in that field can be hoisted into the per-view
+/// [`ipe_runtime::web::LiteralTable`] and swapped as data, exactly as a positional
+/// appearance literal is.
+///
+/// **Safe by construction, identically to the positional registry.** An arm fires
+/// only on a direct literal of the named kind in the named field; a
+/// `Model`-dependent or computed field emits directly and never hoists. The baked
+/// default is exactly the source value, so a prod build (never patched) renders
+/// exactly as the direct emit — one render semantics, dev == prod — pinned by the
+/// same conformance test. The rule for adding a field is the positional rule: mark
+/// **only** a field carrying an appearance *value*, never a structural one; when
+/// unsure, leave it out (the recompile fallback is merely slower).
+///
+/// `Ui.image { src, description }` is the sole current entry. At this emit
+/// boundary both fields are plain `String` attribute values (`ui_image_` renders
+/// `<img src=… alt=…>`, escaping each identically at render), so both hoist as
+/// `Str`. `description` (the alt text) is unambiguously appearance. `src` is a
+/// plain-`String` attribute value here too — the emit contract carries no URL /
+/// data-URI validation on this path (the runtime helper only sets the `src`
+/// attribute) — so a hoisted literal `src` is exactly as validated as the compiled
+/// one (both unvalidated at this boundary); and were a typed validating `src`
+/// boundary to make the field a non-literal expression, the direct-literal guard
+/// would simply stop matching and the field would recompile, never hot-swap an
+/// unvalidated value.
+///
+/// A kernel absent here has no hoist-eligible config field; a positive `_ => &[]`
+/// default is correct because the exhaustive forcing lives in the positional
+/// [`appearance_literal_args`] / [`ui_call_shape`] classifiers — this table is a
+/// focused companion for the record-native cfg kernels, not a second exhaustive
+/// partition.
+pub const fn appearance_literal_record_fields(k: KernelFn) -> &'static [(&'static str, LitKind)] {
+    use LitKind::Str;
+    match k {
+        // `Ui.image : List (Attribute msg) -> { src : String, description : String }`
+        // — both fields are inert `<img>` attribute values (`src=`, `alt=`), each
+        // escaped identically at render, so both hoist as `Str`.
+        KernelFn::UiImage => &[("src", Str), ("description", Str)],
+        _ => &[],
+    }
+}
+
 /// Classify one kernel into its emit plan.
 ///
 /// Returns `None` for a non-UI-family kernel, preserving the caller's

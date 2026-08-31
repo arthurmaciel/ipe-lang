@@ -1963,6 +1963,231 @@ mod hot_appearance_tests {
         Ok(())
     }
 
+    // ── Record-native cfg fields: Ui.image { src, description } ────────────────
+    //
+    // `Ui.image` is a record-native kernel: it builds its call from an inline
+    // `{ src, description }` config through `emit_cfg_record_call`, NOT the
+    // positional-hoist path, so its appearance fields are named in the companion
+    // `appearance_literal_record_fields` registry. Both fields are inert `<img>`
+    // attribute values (`src=`, `alt=`), escaped identically at render, so a direct
+    // literal in either hoists as a `Str` and reads its slot byte-identically to the
+    // direct emit (dev == prod). The same fences hold: `Model`-dependent field →
+    // recompile; non-web shape → no table; inside a `move` lambda → no hoist.
+
+    /// A `Ui.image [<attrs>] { src = <src>, description = <description> }` call.
+    /// `attrs` is an empty attribute list; `src`/`description` are arbitrary field
+    /// value expressions so a test can supply a literal or a `Model`-dependent one.
+    fn image_call(
+        src_sym: ipe_intern::Symbol,
+        src: Expr,
+        desc_sym: ipe_intern::Symbol,
+        description: Expr,
+    ) -> Expr {
+        let attrs = Expr::List {
+            elem: IrType::Ui {
+                ctor: UiCtor::UiAttribute,
+                msg: Box::new(IrType::Int),
+            },
+            items: vec![],
+        };
+        let cfg = Expr::Record {
+            ty: None,
+            fields: vec![(src_sym, src), (desc_sym, description)],
+        };
+        Expr::Call {
+            callee: Callee::Kernel(KernelFn::UiImage),
+            args: vec![attrs, cfg],
+            pin: CallPin::None,
+            on_form: OnFormKind::NotForm,
+        }
+    }
+
+    /// Both `src` and `description` literals hoist, into consecutive slots in field
+    /// order (`src` first). Conformance: the baked defaults are the raw source
+    /// strings and each field local reads its slot as a `String`, so a prod build
+    /// (never patched) renders exactly as the direct emit.
+    #[test]
+    fn ui_image_src_and_description_hoist() -> DResult<()> {
+        let mut interner = Interner::new();
+        let src_sym = interner.intern("src")?;
+        let desc_sym = interner.intern("description")?;
+        let body = image_call(
+            src_sym,
+            Expr::Str("a.png".to_string()),
+            desc_sym,
+            Expr::Str("alt text".to_string()),
+        );
+        let (program, view) = one_view_program(&mut interner, body)?;
+        let off = emit_view(&interner, &program, &view, false)?;
+        assert!(
+            !off.contains("__ipe_lit"),
+            "flag-off emit must introduce no literal table, got:\n{off}"
+        );
+        assert!(
+            off.contains("\"a.png\".to_string()") && off.contains("\"alt text\".to_string()"),
+            "flag-off emit must carry both direct string literals, got:\n{off}"
+        );
+        let on = emit_view(&interner, &program, &view, true)?;
+        assert!(
+            on.contains(&format!(
+                "from_defaults(&[{:?}, {:?}])",
+                "a.png", "alt text"
+            )),
+            "both fields must bake as ordered defaults (src first), got:\n{on}"
+        );
+        assert!(
+            on.contains("__ipe_lit.get(0).to_string()")
+                && on.contains("__ipe_lit.get(1).to_string()"),
+            "each field must read back its table slot as a String, got:\n{on}"
+        );
+        Ok(())
+    }
+
+    /// A `description` literal with an HTML-escaping char bakes verbatim: the
+    /// runtime `ui_image_` sets it as the `alt` attribute value, escaped once at
+    /// render, so a direct and a hoisted `"a < b"` render identically (baked ==
+    /// direct). The same holds for `src` on this path (no URL/data-URI validation
+    /// happens at this emit boundary — the helper only sets the `src` attribute).
+    #[test]
+    fn ui_image_field_escaping_baked_equals_direct() -> DResult<()> {
+        let mut interner = Interner::new();
+        let src_sym = interner.intern("src")?;
+        let desc_sym = interner.intern("description")?;
+        let body = image_call(
+            src_sym,
+            Expr::Str("a.png".to_string()),
+            desc_sym,
+            Expr::Str("a < b".to_string()),
+        );
+        let (program, view) = one_view_program(&mut interner, body)?;
+        let on = emit_view(&interner, &program, &view, true)?;
+        assert!(
+            on.contains(&format!("from_defaults(&[{:?}, {:?}])", "a.png", "a < b")),
+            "the description default must be the raw source string (escaping is a \
+             runtime concern), got:\n{on}"
+        );
+        Ok(())
+    }
+
+    /// A `Model`-dependent `src` (a bound variable) is logic, not data: only the
+    /// `description` literal hoists, and it lands in slot 0 (the `src` field emits
+    /// directly and never occupies a slot).
+    #[test]
+    fn ui_image_model_dependent_src_does_not_hoist() -> DResult<()> {
+        let mut interner = Interner::new();
+        let src_sym = interner.intern("src")?;
+        let desc_sym = interner.intern("description")?;
+        let dynamic_src = interner.intern("dynSrc")?;
+        let body = image_call(
+            src_sym,
+            Expr::Var(dynamic_src),
+            desc_sym,
+            Expr::Str("alt text".to_string()),
+        );
+        let (program, view) = one_view_program(&mut interner, body)?;
+        let on = emit_view(&interner, &program, &view, true)?;
+        assert!(
+            on.contains(&format!("from_defaults(&[{:?}])", "alt text")),
+            "only the literal description must hoist (src is Model-dependent), got:\n{on}"
+        );
+        assert!(
+            on.contains("__ipe_lit.get(0).to_string()"),
+            "the description must read slot 0, got:\n{on}"
+        );
+        Ok(())
+    }
+
+    /// A `Model`-dependent `description` (a bound variable) does not hoist: only
+    /// the literal `src` does.
+    #[test]
+    fn ui_image_model_dependent_description_does_not_hoist() -> DResult<()> {
+        let mut interner = Interner::new();
+        let src_sym = interner.intern("src")?;
+        let desc_sym = interner.intern("description")?;
+        let dynamic_desc = interner.intern("dynDesc")?;
+        let body = image_call(
+            src_sym,
+            Expr::Str("a.png".to_string()),
+            desc_sym,
+            Expr::Var(dynamic_desc),
+        );
+        let (program, view) = one_view_program(&mut interner, body)?;
+        let on = emit_view(&interner, &program, &view, true)?;
+        assert!(
+            on.contains(&format!("from_defaults(&[{:?}])", "a.png")),
+            "only the literal src must hoist (description is Model-dependent), got:\n{on}"
+        );
+        Ok(())
+    }
+
+    /// A non-web shape never hoists the image fields (the `LiteralTable` is a
+    /// web-runtime type): both literals stay direct string emits.
+    #[test]
+    fn ui_image_non_web_shape_does_not_hoist() -> DResult<()> {
+        let mut interner = Interner::new();
+        let src_sym = interner.intern("src")?;
+        let desc_sym = interner.intern("description")?;
+        let body = image_call(
+            src_sym,
+            Expr::Str("a.png".to_string()),
+            desc_sym,
+            Expr::Str("alt text".to_string()),
+        );
+        let (mut program, view) = one_view_program(&mut interner, body)?;
+        let module = program
+            .modules
+            .first_mut()
+            .expect("the one-view program has a module");
+        module.uses_web = false;
+        module.uses_tui = true;
+        let out = emit_view(&interner, &program, &view, true)?;
+        assert!(
+            !out.contains("__ipe_lit"),
+            "a non-web shape must not hoist the image fields, got:\n{out}"
+        );
+        assert!(
+            out.contains("\"a.png\".to_string()") && out.contains("\"alt text\".to_string()"),
+            "a non-web shape keeps both direct string literals, got:\n{out}"
+        );
+        Ok(())
+    }
+
+    /// An image literal inside a `move` lambda must NOT hoist into the outer view's
+    /// table: the closure captures `__ipe_lit` by move, so the closure fence
+    /// suppresses hoisting for the whole lambda body; both fields emit directly.
+    #[test]
+    fn ui_image_inside_move_lambda_does_not_hoist() -> DResult<()> {
+        let mut interner = Interner::new();
+        let src_sym = interner.intern("src")?;
+        let desc_sym = interner.intern("description")?;
+        let ignored = interner.intern("_evt")?;
+        let image = image_call(
+            src_sym,
+            Expr::Str("a.png".to_string()),
+            desc_sym,
+            Expr::Str("alt text".to_string()),
+        );
+        let body = Expr::Lambda {
+            params: vec![(ignored, IrType::Int)],
+            ret: IrType::Ui {
+                ctor: UiCtor::Element,
+                msg: Box::new(IrType::Int),
+            },
+            body: Box::new(image),
+        };
+        let (program, view) = one_view_program(&mut interner, body)?;
+        let out = emit_view(&interner, &program, &view, true)?;
+        assert!(
+            !out.contains("__ipe_lit"),
+            "an image literal inside a move closure must not hoist into the outer table, got:\n{out}"
+        );
+        assert!(
+            out.contains("\"a.png\".to_string()") && out.contains("\"alt text\".to_string()"),
+            "the fenced image fields must emit directly, got:\n{out}"
+        );
+        Ok(())
+    }
+
     // ── Registry-driven enforcement ───────────────────────────────────────────
     //
     // The two tests below do NOT name kernels: they *iterate* the appearance
@@ -2139,6 +2364,179 @@ mod hot_appearance_tests {
                     !out.contains("__ipe_lit"),
                     "{k:?}: a literal inside a move lambda must not hoist into the outer table, \
                      got:\n{out}"
+                );
+            }
+        }
+        Ok(())
+    }
+
+    // ── Record-native cfg-field registry: self-enforcing net ───────────────────
+    //
+    // The companion `appearance_literal_record_fields` registry (keyed by cfg field
+    // name, for record-native kernels like `Ui.image`) gets the same construction
+    // proof as the positional registry: iterate it, synthesise a call whose marked
+    // fields carry direct literals, and prove each hoists + conforms with the flag
+    // on and none hoist with it off. A future record-native appearance field is
+    // auto-covered — no per-field hand-written test to forget.
+
+    use crate::emit_ui_plan::appearance_literal_record_fields;
+
+    /// The record-native kernels whose cfg records this test knows how to build,
+    /// paired with the field-value expression the emitter passes for each named
+    /// field. Extending `appearance_literal_record_fields` with a new kernel adds a
+    /// row here; the `Str`-only literal shape matches every field kind registered
+    /// today.
+    fn wired_record_field_arms() -> Vec<(KernelFn, &'static [(&'static str, LitKind)])> {
+        KernelFn::ALL
+            .iter()
+            .copied()
+            .filter_map(|k| {
+                let fields = appearance_literal_record_fields(k);
+                (!fields.is_empty()).then_some((k, fields))
+            })
+            .collect()
+    }
+
+    /// Build the minimal record-native call for `k` with every registered field a
+    /// direct `Str` literal, returning the call and the baked defaults (in field
+    /// order). Only `Ui.image` is record-native today; a new kernel needs its arm
+    /// here so the registry-driven net can synthesise it.
+    fn synth_record_field_call(
+        interner: &mut Interner,
+        k: KernelFn,
+        fields: &[(&str, LitKind)],
+    ) -> DResult<(Expr, Vec<String>)> {
+        let mut baked = Vec::with_capacity(fields.len());
+        let mut record_fields = Vec::with_capacity(fields.len());
+        for &(name, kind) in fields {
+            let sym = interner.intern(name)?;
+            let value = format!("__field_{name}");
+            // Every record field registered today is `Str`; the record-path hoist
+            // only handles `Str` literals. A future non-`Str` field kind needs both
+            // a hoist arm in `emit_cfg_record_call` and a distinct synth shape here.
+            debug_assert_eq!(kind, LitKind::Str, "only Str record fields are wired");
+            record_fields.push((sym, Expr::Str(value.clone())));
+            baked.push(value);
+        }
+        let call = match k {
+            KernelFn::UiImage => {
+                let attrs = Expr::List {
+                    elem: IrType::Ui {
+                        ctor: UiCtor::UiAttribute,
+                        msg: Box::new(IrType::Int),
+                    },
+                    items: vec![],
+                };
+                Expr::Call {
+                    callee: Callee::Kernel(k),
+                    args: vec![
+                        attrs,
+                        Expr::Record {
+                            ty: None,
+                            fields: record_fields,
+                        },
+                    ],
+                    pin: CallPin::None,
+                    on_form: OnFormKind::NotForm,
+                }
+            }
+            other => {
+                return Err(ipe_diagnostics::Diagnostic::CompilerBug {
+                    where_: "emit_web::synth_record_field_call",
+                    detail: format!("no record-native call builder for {other:?}"),
+                });
+            }
+        };
+        Ok((call, baked))
+    }
+
+    /// Every wired record-field arm hoists each registered field and conforms
+    /// (baked default == source, byte-identical), and none hoists with the flag off.
+    #[test]
+    fn every_record_field_arm_hoists_and_conforms() -> DResult<()> {
+        let arms = wired_record_field_arms();
+        assert!(
+            !arms.is_empty(),
+            "the record-field registry must have wired arms to prove"
+        );
+        for (k, fields) in arms {
+            let mut interner = Interner::new();
+            let (call, baked) = synth_record_field_call(&mut interner, k, fields)?;
+            let (program, view) = one_view_program(&mut interner, call)?;
+
+            let off = emit_view(&interner, &program, &view, false)?;
+            assert!(
+                !off.contains("__ipe_lit"),
+                "{k:?}: flag-off emit must introduce no literal table, got:\n{off}"
+            );
+
+            let on = emit_view(&interner, &program, &view, true)?;
+            let defaults = baked
+                .iter()
+                .map(|d| format!("{d:?}"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            assert!(
+                on.contains(&format!("from_defaults(&[{defaults}])")),
+                "{k:?}: flag-on emit must bake {baked:?} as ordered field defaults \
+                 (dev == prod), got:\n{on}"
+            );
+            for slot in 0..baked.len() {
+                assert!(
+                    on.contains(&format!("__ipe_lit.get({slot}).to_string()")),
+                    "{k:?}: field slot {slot} must read its table entry as a String, got:\n{on}"
+                );
+            }
+        }
+        Ok(())
+    }
+
+    /// Registry-driven refusal for the record-field arms: a `Model`-dependent field
+    /// at any marked position does not hoist, and the whole call inside a `move`
+    /// lambda does not hoist into the outer table.
+    #[test]
+    fn every_record_field_arm_refuses_model_dependent_and_lambda() -> DResult<()> {
+        for (k, fields) in wired_record_field_arms() {
+            // (a) Every marked field a bound `Var` — none may hoist.
+            {
+                let mut interner = Interner::new();
+                let dynamic = interner.intern("__model_value")?;
+                let (mut call, _) = synth_record_field_call(&mut interner, k, fields)?;
+                // Replace every cfg-record field value with a `Model`-dependent
+                // bound `Var` in place — a marked field that is no longer a direct
+                // literal must not hoist.
+                if let Expr::Call { args, .. } = &mut call
+                    && let Some(Expr::Record { fields: rec, .. }) = args.last_mut()
+                {
+                    for (_, value) in rec.iter_mut() {
+                        *value = Expr::Var(dynamic);
+                    }
+                }
+                let (program, view) = one_view_program(&mut interner, call)?;
+                let out = emit_view(&interner, &program, &view, true)?;
+                assert!(
+                    !out.contains("__ipe_lit"),
+                    "{k:?}: a Model-dependent field must not hoist, got:\n{out}"
+                );
+            }
+            // (b) The whole call inside a `move` lambda body.
+            {
+                let mut interner = Interner::new();
+                let ignored = interner.intern("_evt")?;
+                let (call, _) = synth_record_field_call(&mut interner, k, fields)?;
+                let body = Expr::Lambda {
+                    params: vec![(ignored, IrType::Int)],
+                    ret: IrType::Ui {
+                        ctor: UiCtor::Element,
+                        msg: Box::new(IrType::Int),
+                    },
+                    body: Box::new(call),
+                };
+                let (program, view) = one_view_program(&mut interner, body)?;
+                let out = emit_view(&interner, &program, &view, true)?;
+                assert!(
+                    !out.contains("__ipe_lit"),
+                    "{k:?}: a record-field literal inside a move lambda must not hoist, got:\n{out}"
                 );
             }
         }
