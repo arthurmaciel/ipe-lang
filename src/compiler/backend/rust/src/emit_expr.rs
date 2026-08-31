@@ -18,7 +18,7 @@ use crate::doc::Doc;
 use crate::emit_types::{GenericScope, render_type};
 use crate::emit_ui_plan::{
     ArgPlan, Guard, LitKind, NativeUiEmit, UiDelegate, UiEmitPlan, appearance_literal_args,
-    ui_call_shape,
+    appearance_literal_record_fields, ui_call_shape,
 };
 use crate::naming::kernel_name;
 use crate::render::{RenderConfig, render_seeded};
@@ -3367,6 +3367,20 @@ fn emit_server_call(
 /// so that bare move could run BEFORE an earlier use's `.clone()` (E0382 on
 /// `Ui.button`'s `{ onPress, label }`, whose stored order is `label` first
 /// but whose positional order passes `onPress` first).
+///
+/// Appearance hot-swap for record-native kernels: `hoist_fields` names the cfg
+/// fields (by Ipê source name + literal kind) whose *direct literal* is an inert
+/// appearance value — the [`appearance_literal_record_fields`] companion of the
+/// positional [`appearance_literal_args`] registry. When such a field is a direct
+/// literal AND the emit is a web shape (the `LiteralTable` is a web-runtime type),
+/// its value is hoisted into the per-view table and the field local reads its slot
+/// (`__ipe_lit.get(N).to_string()`) instead of the inline literal — the same hoist
+/// and read shape the positional path uses, so the baked default renders
+/// byte-identically to the direct emit (dev == prod). `hoist_style_literal` further
+/// fences hoisting to a function body's top level (never inside a `move` closure)
+/// and to the armed flag; a `Model`-dependent or computed field never matches the
+/// direct-literal guard and emits directly. A caller with no appearance field
+/// passes `&[]` and this path is inert.
 #[allow(clippy::too_many_arguments)] // one hoist site per cfg-record kernel; the args mirror emit_expr_at's
 fn emit_cfg_record_call(
     ctx: &EmitCtx,
@@ -3374,6 +3388,7 @@ fn emit_cfg_record_call(
     fields: &[(Symbol, Expr)],
     trailing: &[&Expr],
     positional_fields: &[&str],
+    hoist_fields: &[(&str, LitKind)],
     callee: &str,
     where_: &'static str,
     indent: usize,
@@ -3390,7 +3405,30 @@ fn emit_cfg_record_call(
     let mut local_of: Vec<(String, String)> = Vec::with_capacity(fields.len());
     for (i, (sym, fe)) in fields.iter().enumerate() {
         let fname = ctx.resolve_ident(*sym)?;
-        let rendered = emit_expr_at(ctx, fe, indent, child, generics)?;
+        // Appearance hot-swap: a registered appearance field holding a direct
+        // `Str` literal hoists into the per-view `LiteralTable` (web shape only),
+        // reading its slot exactly as the positional path does; every other field
+        // — and the whole call in a non-web shape or with the flag off — emits
+        // directly, byte-identically to before.
+        let hoisted = if ctx.uses_web {
+            hoist_fields
+                .iter()
+                .find(|&&(name, _)| name == fname)
+                .and_then(|&(_, kind)| match (kind, fe) {
+                    (LitKind::Str, Expr::Str(s)) => ctx
+                        .hoist_style_literal(s)
+                        .map(|slot| format!("__ipe_lit.get({slot}).to_string()")),
+                    // Only `Str` cfg fields are registered today; a non-`Str`
+                    // kind or a non-literal field emits directly (never hoists).
+                    _ => None,
+                })
+        } else {
+            None
+        };
+        let rendered = match hoisted {
+            Some(read) => read,
+            None => emit_expr_at(ctx, fe, indent, child, generics)?,
+        };
         let local = format!("__ui_f{i}");
         let _ = write!(hoist, "let {local} = {rendered}; ");
         local_of.push((fname.to_owned(), local));
@@ -3800,6 +3838,7 @@ fn emit_ui_plan(
                 fields,
                 &[elem_e],
                 &["wrapperAttrs", "rootAttrs"],
+                &[],
                 "ipe_runtime::ui::render::ui_layout_with_vecs",
                 "ipe_backend_rust::emit_ui_call::UiLayoutWith",
                 indent,
@@ -3849,6 +3888,7 @@ fn emit_ui_plan(
                 fields,
                 &[],
                 &["onPress", "label"],
+                &[],
                 "ipe_runtime::ui::helpers::ui_button_",
                 "ipe_backend_rust::emit_ui_call::UiButton",
                 indent,
@@ -3879,6 +3919,7 @@ fn emit_ui_plan(
                 fields,
                 &[],
                 &["url", "label"],
+                &[],
                 "ipe_runtime::ui::helpers::ui_link_",
                 "ipe_backend_rust::emit_ui_call::UiLink",
                 indent,
@@ -3909,6 +3950,11 @@ fn emit_ui_plan(
                 fields,
                 &[],
                 &["src", "description"],
+                // Appearance hot-swap: `src` and `description` are inert `<img>`
+                // attribute values; a direct literal in either hoists into the
+                // per-view `LiteralTable` (web shape only), read back as a
+                // `String` byte-identically to the direct emit.
+                appearance_literal_record_fields(KernelFn::UiImage),
                 "ipe_runtime::ui::helpers::ui_image_",
                 "ipe_backend_rust::emit_ui_call::UiImage",
                 indent,

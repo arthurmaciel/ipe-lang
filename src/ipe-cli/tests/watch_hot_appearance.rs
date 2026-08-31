@@ -98,6 +98,43 @@ fn web_fixture_attr_text(name: &str, text: &str) -> String {
     )
 }
 
+/// A `Web.app` whose view carries a `Ui.image { src, description }` whose
+/// `description` (alt text) is a hoistable record-native appearance field. A
+/// marker text confirms the app is up. Both `src` and `description` are direct
+/// string literals, so both hoist into the per-view `LiteralTable`.
+fn web_fixture_image(description: &str) -> String {
+    format!(
+        "module Main exposing (main)\n\n\
+         import Ipe.Tea.Web as Web\n\
+         import Ipe.Ui as Ui\n\
+         import Ipe.Tea.Web.Cmd\n\
+         import Ipe.Tea.Web.Sub\n\
+         import Ipe.String\n\n\
+         type alias Model = {{ count : Int }}\n\n\
+         type Msg = Noop\n\n\
+         init : a -> ( Model, Cmd Msg )\n\
+         init _req =\n    \
+             ( {{ count = 0 }}, Cmd.none )\n\n\
+         update : Msg -> Model -> ( Model, Cmd Msg )\n\
+         update _msg model =\n    \
+             ( model, Cmd.none )\n\n\
+         view : Model -> Element Msg\n\
+         view _model =\n    \
+             Ui.column []\n        \
+                 [ Ui.text \"marker\"\n        \
+                 , Ui.image [] {{ src = \"a.png\", description = \"{description}\" }}\n        \
+                 ]\n\n\
+         subscriptions : Model -> Sub Msg\n\
+         subscriptions _model =\n    \
+             Sub.none\n\n\
+         main =\n    \
+             Web.app\n        \
+                 {{ init = init, update = update, view = view, subscriptions = subscriptions\n        \
+                 , routes = [], notFound = Noop\n        \
+                 }}\n",
+    )
+}
+
 fn fresh_dirs(tag: &str) -> Result<(PathBuf, PathBuf), BoxError> {
     let base = std::env::temp_dir().join(format!(
         "watch_hot_{tag}_{}_{}",
@@ -461,6 +498,101 @@ fn attribute_and_text_edits_hot_swap_without_rebuild() -> Result<(), BoxError> {
         &web_fixture_attr_text("panel", "Goodbye").replace(
             "Ui.text \"Goodbye\" ]",
             "Ui.text \"Goodbye\", Ui.text \"added\" ]",
+        ),
+    )?;
+    let restarted = wait_for(Duration::from_mins(2), || {
+        server_pid(port).is_some_and(|pid| pid != pid_before)
+            && http_get_body(port).is_some_and(|b| b.contains("added"))
+    });
+    assert!(
+        restarted,
+        "a structural edit (added text node) must recompile and restart onto a new binary"
+    );
+    assert!(
+        wait_for(Duration::from_secs(10), || {
+            sink.count_restarted() > restarts_before_struct
+        }),
+        "a structural edit must recompile and restart (a new Restarted event)"
+    );
+
+    stop_and_join(&handle, join)
+}
+
+/// SEAL for the record-native `Ui.image` appearance surface: an alt-text
+/// (`description`) edit on a `Ui.image { src, description }` hot-swaps without a
+/// rebuild — the same no-cargo, no-restart outcome the positional appearance
+/// surfaces produce — while a structural add still recompiles. Proves the
+/// record-path hoist reaches the running app through the identical channel.
+#[test]
+#[cfg(target_os = "linux")]
+fn image_alt_edit_hot_swaps_without_rebuild() -> Result<(), BoxError> {
+    if std::env::var("IPE_E2E").is_err() {
+        eprintln!("skipping (set IPE_E2E=1 to run)");
+        return Ok(());
+    }
+    // SAFETY: single-threaded here (no watch thread spawned yet); nextest isolates
+    // this process, so the var neither races nor leaks.
+    unsafe {
+        std::env::set_var("IPE_WATCH_HOT_APPEARANCE", "1");
+    }
+
+    let (ipe_dir, out_dir) = fresh_dirs("image")?;
+    write_main(&ipe_dir, &web_fixture_image("a cat"))?;
+
+    let sink = EventSink::default();
+    let port = 19173;
+    let (join, handle) = start_watch(&ipe_dir.join("Main.ipe"), &out_dir, port, &sink)?;
+
+    assert!(
+        wait_for_serving(port, Duration::from_mins(4)),
+        "initial cold build must serve the web app with a Ui.image"
+    );
+    assert!(
+        wait_for(Duration::from_secs(10), || sink.count_restarted() >= 1),
+        "the cold build must record its initial Restarted event"
+    );
+    let pid_before = server_pid(port).ok_or("server PID must be discoverable after cold build")?;
+
+    // ── Alt-text edit: description "a cat" -> "a dog". Appearance-only. ──
+    let restarts_before_alt = sink.count_restarted();
+    let hot_before_alt = sink.count_hot_swapped();
+    write_main(&ipe_dir, &web_fixture_image("a dog"))?;
+    let alt_start = Instant::now();
+    let alt_swapped = wait_for(Duration::from_secs(20), || {
+        sink.count_hot_swapped() > hot_before_alt
+    });
+    let alt_elapsed = alt_start.elapsed();
+    assert!(
+        alt_swapped,
+        "an image alt-text edit must be hot-swapped, not recompiled"
+    );
+    std::thread::sleep(Duration::from_secs(2));
+    assert_eq!(
+        sink.count_restarted(),
+        restarts_before_alt,
+        "a hot-swapped image alt edit must NOT restart the app"
+    );
+    assert_eq!(
+        server_pid(port),
+        Some(pid_before),
+        "a hot-swapped image alt edit must leave the SAME server process running"
+    );
+    assert!(
+        http_get_body(port).is_some_and(|b| b.contains("marker")),
+        "the app must keep serving after the image hot-swap"
+    );
+    eprintln!(
+        "[measure] image alt a cat->a dog hot-swap round-trip: {} ms (no cargo, no restart)",
+        alt_elapsed.as_millis()
+    );
+
+    // ── Structural edit: add a text node. Logic ⇒ recompile + restart. ──
+    let restarts_before_struct = sink.count_restarted();
+    write_main(
+        &ipe_dir,
+        &web_fixture_image("a dog").replace(
+            "Ui.text \"marker\"\n        ,",
+            "Ui.text \"marker\", Ui.text \"added\"\n        ,",
         ),
     )?;
     let restarted = wait_for(Duration::from_mins(2), || {
