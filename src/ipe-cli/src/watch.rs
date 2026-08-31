@@ -163,6 +163,13 @@ pub struct WatchOptions {
     /// Suppress progress chatter — only warnings and errors are printed.
     /// Passes `-q` to cargo and skips the lifecycle status lines.
     pub quiet: bool,
+    /// DEV-ONLY blue-green cutover. When set, `ipe watch` puts a persistent
+    /// front proxy on `port` and runs each rebuilt binary behind it on a fresh
+    /// internal loopback port, cutting traffic over once the new binary passes
+    /// readiness — so a rebuild never drops the browser's connection. Off by
+    /// default (the direct-bind, kill-old-then-spawn-new path). Never compiled
+    /// into a release binary or an emitted app.
+    pub bluegreen: bool,
 }
 
 impl WatchOptions {
@@ -178,6 +185,7 @@ impl WatchOptions {
             cargo_path: PathBuf::from("cargo"),
             on_event: None,
             quiet: false,
+            bluegreen: false,
         }
     }
 }
@@ -900,6 +908,37 @@ fn run_inner(
     // mirrors how `ipe build` resolves it via `runtime_embed::resolve()`.
     let runtime_dep_root = crate::runtime_embed::resolve()?.root().to_path_buf();
 
+    // The DEV-ONLY blue-green front proxy. When enabled, it binds the user's
+    // port up front and holds it for the whole session; the app binaries run
+    // behind it on internal loopback ports and are cut over on readiness so a
+    // rebuild never drops the browser's connection. Bind failure is fatal here
+    // for the SAME reason a direct port-in-use is: the user asked for that
+    // port and it is unavailable.
+    let mut proxy: Option<ipe_watch::DevProxy> = if opts.bluegreen {
+        let bound = ipe_watch::DevProxy::bind(opts.port).map_err(|e| {
+            CliError::UsageOwned(format!(
+                "watch: cannot bind the blue-green proxy on port {}: {e}",
+                opts.port
+            ))
+        })?;
+        if !opts.quiet {
+            eprintln!(
+                "{}",
+                watch_line(
+                    &format!(
+                        "[ipe watch] blue-green proxy holding port {} (rebuilds cut over with no \
+                         dropped connection)",
+                        opts.port
+                    ),
+                    WatchRole::Info
+                )
+            );
+        }
+        Some(bound)
+    } else {
+        None
+    };
+
     let mut db_main = ipe_db::IpeDatabase::new();
     let mut source_root: Option<ipe_db::SourceRoot> = None;
     let mut config: Option<ipe_db::BuildConfig> = None;
@@ -1247,21 +1286,67 @@ fn run_inner(
                         timings.report(g);
                     }
                     CargoOutcome::Green(exe_path) => {
-                        let readiness = if current_is_web {
-                            ipe_watch::ReadinessCheck::HttpReadyz { port: opts.port }
-                        } else {
-                            ipe_watch::ReadinessCheck::AliveGrace {
-                                grace: Duration::from_millis(300),
-                            }
-                        };
-                        let env = child_env(opts.port, &opts.out_dir);
                         let restart_started = Instant::now();
-                        let outcome = supervisor.apply_green(
-                            &exe_path,
-                            move |path| spawn_command(path, &env),
-                            readiness,
-                            opts.restart_timeouts,
-                        );
+                        let outcome = if let Some(proxy) = proxy.as_ref() {
+                            // Blue-green: the new binary binds a FRESH internal
+                            // port behind the proxy; readiness is probed on
+                            // that internal port; on ready, the proxy cuts over
+                            // to it and the old binary is drained — the
+                            // user-facing port (held by the proxy) never stops
+                            // answering. A web app gets the precise
+                            // `/_ipe/readyz` probe; every other shape falls
+                            // back to a short alive-grace, exactly as the
+                            // direct path does.
+                            let internal_port = match free_loopback_port() {
+                                Ok(p) => p,
+                                Err(e) => {
+                                    eprintln!(
+                                        "{}",
+                                        watch_line(
+                                            &format!(
+                                                "[ipe watch] cannot allocate an internal port for \
+                                                 the blue-green cutover: {e}"
+                                            ),
+                                            WatchRole::Failure
+                                        )
+                                    );
+                                    continue;
+                                }
+                            };
+                            let readiness = if current_is_web {
+                                ipe_watch::ReadinessCheck::HttpReadyz {
+                                    port: internal_port,
+                                }
+                            } else {
+                                ipe_watch::ReadinessCheck::AliveGrace {
+                                    grace: Duration::from_millis(300),
+                                }
+                            };
+                            let out_dir = opts.out_dir.clone();
+                            supervisor.apply_green_behind_proxy(
+                                &exe_path,
+                                internal_port,
+                                move |path, port| spawn_command(path, &child_env(port, &out_dir)),
+                                readiness,
+                                opts.restart_timeouts,
+                                |ready_port| proxy.set_upstream(ready_port),
+                            )
+                        } else {
+                            let readiness = if current_is_web {
+                                ipe_watch::ReadinessCheck::HttpReadyz { port: opts.port }
+                            } else {
+                                ipe_watch::ReadinessCheck::AliveGrace {
+                                    grace: Duration::from_millis(300),
+                                }
+                            };
+                            let env = child_env(opts.port, &opts.out_dir);
+                            supervisor.apply_green(
+                                &exe_path,
+                                move |path| spawn_command(path, &env),
+                                readiness,
+                                opts.restart_timeouts,
+                            )
+                        };
                         timings.restart = Some(restart_started.elapsed());
                         report_restart_outcome(&outcome, opts.quiet);
                         emit(
@@ -1305,11 +1390,34 @@ fn run_inner(
         let _ = child.kill();
     }
     supervisor.shutdown(opts.restart_timeouts);
+    // Stop the front proxy AFTER the supervised child is down: it held the
+    // user's port for the whole session, so releasing it last means the port
+    // is answered until the very end of teardown rather than flapping.
+    if let Some(mut proxy) = proxy.take() {
+        proxy.shutdown();
+    }
     if let Some(h) = compile_worker {
         let _ = h.join();
     }
     let _ = coalesce_handle.join();
     Ok(())
+}
+
+/// Ask the OS for a free loopback TCP port by binding an ephemeral one and
+/// immediately dropping the listener, returning the port it chose.
+///
+/// A tiny race exists between releasing the port here and the spawned child
+/// binding it — acceptable for a DEV loop on loopback, and closed in practice
+/// because the child binds it within milliseconds and the blue-green readiness
+/// probe would catch (and INV-3-preserve against) a bind failure. Kept minimal
+/// deliberately: a robust production port lease is out of scope for a dev-only
+/// cutover.
+///
+/// # Errors
+/// An I/O error if no ephemeral port can be bound at all.
+fn free_loopback_port() -> std::io::Result<u16> {
+    let listener = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))?;
+    Ok(listener.local_addr()?.port())
 }
 
 /// Detection heuristic for readiness strategy: the backend's Ipe.Web entry

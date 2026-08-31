@@ -227,6 +227,16 @@ pub static ENV_VARS: &[EnvVar] = &[
         class: Class::Tunable,
     },
     EnvVar {
+        name: "IPE_WATCH_BLUEGREEN",
+        default: "unset (off)",
+        purpose: "Set to any non-empty value other than `0` to enable dev-loop \
+                  blue-green swaps: `ipe watch` holds the port behind a proxy and \
+                  cuts over to the rebuilt binary without dropping the browser \
+                  connection. Dev-only; no effect on a release build.",
+        subsystem: Subsystem::Build,
+        class: Class::Tunable,
+    },
+    EnvVar {
         name: "IPE_WATCH_HOT_APPEARANCE",
         default: "unset (off)",
         purpose: "Set to any non-empty value other than `0` to enable dev-loop \
