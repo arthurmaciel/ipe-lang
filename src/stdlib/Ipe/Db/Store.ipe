@@ -4479,8 +4479,11 @@ insertAs principal conn secured row =
 -- | `updateAs principal db secured row` — update the row whose primary key
 -- matches `row`, but only when the policy admits it for `principal`; the owner
 -- filter is AND-ed into the WHERE so a caller cannot update another principal's
--- row. Columns marked `Serial` / `DefaultNow` are omitted from the SET. A store
--- with no primary key, or a record missing its key column, fails closed.
+-- row. Columns marked `Serial` / `DefaultNow` are omitted from the SET, and so
+-- is every column the policy marks `Immutable`: an immutable column's client
+-- value is dropped from the SET, so the stored value cannot change after insert
+-- (the guarantee `immutable` promises). A store with no primary key, or a record
+-- missing its key column, fails closed.
 updateAs : Auth.Principal -> Db -> Secured a -> a -> Task Error Int
 updateAs principal conn secured row =
     case secured of
@@ -4504,7 +4507,10 @@ updateAs principal conn secured row =
                                         Just keyValue ->
                                             Db.updateWhere conn
                                                 r.table
-                                                (updateSetFields r.specs keyCol binds)
+                                                (updateSetFields r.specs
+                                                    keyCol
+                                                    (dropImmutableColumns policy binds)
+                                                )
                                                 (Sql.and
                                                     (keyEquals keyCol keyValue)
                                                     (policyFragment principal policy)
@@ -4532,6 +4538,40 @@ deleteAs principal conn secured keyValue =
                                     (keyEquals keyCol keyValue)
                                     (policyFragment principal policy)
                                 )
+
+
+-- Drop every column the policy marks `Immutable` from a codec projection, so an
+-- update never writes a new value into it — the stored value is fixed at insert.
+-- The bind is removed entirely (not set to its old value, which the update path
+-- does not have), so the column is absent from the SET and the database keeps its
+-- current value. `OwnerColumn` and `PublicRead` leave the binds unchanged.
+dropImmutableColumns : Policy a -> List ( String, SqlValue ) -> List ( String, SqlValue )
+dropImmutableColumns policy binds =
+    case policy of
+        Policy rules ->
+            List.filter (\pair -> Basics.not (ruleImmutablyDrops rules pair)) binds
+
+
+-- True when some `Immutable` rule in `rules` names the column this bind sets.
+ruleImmutablyDrops : List Rule -> ( String, SqlValue ) -> Bool
+ruleImmutablyDrops rules pair =
+    case pair of
+        ( name, _ ) ->
+            List.any (\rule -> ruleImmobilizes rule name) rules
+
+
+-- True when `rule` is an `Immutable` rule over `name`.
+ruleImmobilizes : Rule -> String -> Bool
+ruleImmobilizes rule name =
+    case rule of
+        Immutable col ->
+            col == name
+
+        OwnerColumn _ ->
+            False
+
+        PublicRead ->
+            False
 
 
 -- Force every `OwnerColumn` named by the policy to `principal`'s subject in a
