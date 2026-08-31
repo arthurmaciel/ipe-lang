@@ -1,0 +1,10 @@
+{
+    "kind": "cli",
+    "steps": [
+        {
+            "args": [],
+            "expectExit": 0,
+            "expectStdoutContains": ["base=report.csv", "REJECTED (traversal or NUL)", "abs=yes", "ext=(none)"]
+        }
+    ]
+}

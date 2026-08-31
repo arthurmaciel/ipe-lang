@@ -1,0 +1,10 @@
+{
+    "kind": "cli",
+    "steps": [
+        {
+            "args": [],
+            "expectExit": 0,
+            "expectStdoutContains": ["run -> hello from a child", "exit=0", "$HOME is not expanded"]
+        }
+    ]
+}
