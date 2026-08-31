@@ -361,6 +361,9 @@ fn style_edit_hot_swaps_without_rebuild_and_structural_edit_recompiles() -> Resu
 /// a structural add still recompiles. Records both round-trips (Step 6 preview).
 #[test]
 #[cfg(target_os = "linux")]
+// E2E harness: three sequential edit round-trips (attribute, text, structural) in
+// one live watch session — the length is the scenario, not incidental complexity.
+#[allow(clippy::too_many_lines)]
 fn attribute_and_text_edits_hot_swap_without_rebuild() -> Result<(), BoxError> {
     if std::env::var("IPE_E2E").is_err() {
         eprintln!("skipping (set IPE_E2E=1 to run)");
