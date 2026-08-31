@@ -205,7 +205,9 @@ fn watch_line(text: &str, role: WatchRole) -> String {
     let (colour, glyph, reset) = match role {
         WatchRole::Info => (p.dim, "", p.reset),
         WatchRole::Success => (p.green, "", p.reset),
-        WatchRole::Failure => (p.red, crate::style::glyph::FAIL, p.reset),
+        // A failed rebuild leaves the last-good binary running, so it is a soft
+        // warning, not a hard stop — a calm light yellow, never alarming red.
+        WatchRole::Failure => (p.bright_yellow, crate::style::glyph::FAIL, p.reset),
     };
     let prefix = if glyph.is_empty() {
         format!("{colour}{}{reset}", crate::style::GUTTER)
@@ -963,15 +965,20 @@ fn run_inner(
                         emit(opts, WatchEvent::CompileCancelled { generation: g });
                     }
                     CompileOutcome::Red(msg) => {
-                        eprintln!(
-                            "{}",
-                            watch_line(
-                                &format!(
-                                    "[ipe watch] build failed (last-good binary stays up):\n{msg}"
-                                ),
-                                WatchRole::Failure
-                            )
+                        // Frame the diagnostic like `ipe run`: a blank line
+                        // above, every line guttered two spaces (so the whole
+                        // report sits inset, not just the header), a blank line
+                        // below to set it off from the next watch line. Light
+                        // yellow, not red — the last-good binary stays up.
+                        let p = crate::style::Palette::for_stream(&std::io::stderr());
+                        let body = format!(
+                            "{}{} [ipe watch] build failed (last-good binary stays up):{}\n{}",
+                            p.bright_yellow,
+                            crate::style::glyph::FAIL,
+                            p.reset,
+                            msg.trim_end()
                         );
+                        eprint!("\n{}\n", crate::style::gutter(&body));
                         emit(opts, WatchEvent::CompileFailed { generation: g });
                     }
                     CompileOutcome::Green(emitted) => {
