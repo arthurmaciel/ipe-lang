@@ -344,6 +344,110 @@ impl SupervisorState {
         }
     }
 
+    /// Advance the state machine on a GREEN build in the BLUE-GREEN dev path:
+    /// the new binary is spawned on its OWN internal port, BEHIND the
+    /// persistent front proxy, so the old binary keeps serving (on its own
+    /// internal port) until the new one is ready. Only once the new binary
+    /// passes readiness is `cut_over` called (the caller flips the proxy's
+    /// upstream), and only THEN is the old binary drained — so the user-facing
+    /// port never stops answering and no client connection is dropped by a
+    /// port handoff.
+    ///
+    /// This is the deliberate inverse of [`apply_green`]'s stop-old-before-
+    /// spawn-new ordering (`apply_green` shares ONE fixed port, so the two
+    /// binaries cannot coexist; here they bind DIFFERENT internal ports and
+    /// overlap on purpose).
+    ///
+    /// `spawn` builds the launch `Command` for a given `(path, internal_port)`
+    /// — the caller owns the env (it injects `IPE_WEB_PORT=internal_port`, the
+    /// session-store path, …). `cut_over` is invoked with the ready internal
+    /// port EXACTLY ONCE, between "new binary ready" and "old binary drained".
+    ///
+    /// On readiness failure the new binary is discarded and the OLD one is
+    /// left running untouched (INV-3 at the type level — same guarantee a red
+    /// build gives): `self` stays `Running` with the old child, `cut_over` is
+    /// never called, and the proxy keeps pointing at the still-live old
+    /// upstream. Never panics; every I/O failure degrades to a
+    /// [`RestartOutcome`] variant, never an `unwrap`.
+    ///
+    /// [`apply_green`]: SupervisorState::apply_green
+    pub fn apply_green_behind_proxy(
+        &mut self,
+        candidate_path: &Path,
+        internal_port: u16,
+        spawn: impl Fn(&Path, u16) -> Command,
+        readiness: ReadinessCheck,
+        timeouts: RestartTimeouts,
+        cut_over: impl FnOnce(u16),
+    ) -> RestartOutcome {
+        let candidate_hash = match LastGoodBinary::hash(candidate_path) {
+            Ok(h) => h,
+            Err(e) => {
+                return RestartOutcome::NothingRunning {
+                    broken: candidate_path.to_path_buf(),
+                    last_good_error: Some(format!("cannot hash candidate: {e}")),
+                };
+            }
+        };
+
+        // Byte-identical binary already running → no restart, no churn (the
+        // proxy already points at it).
+        if let Self::Running { artifact, .. } = self
+            && artifact.content_hash == candidate_hash.content_hash
+        {
+            return RestartOutcome::UnchangedBinary;
+        }
+
+        let had_prior_running = matches!(self, Self::Running { .. });
+
+        // Spawn the NEW binary on its own internal port and await readiness —
+        // WITHOUT stopping the old one first (they hold different ports).
+        match spawn_and_await_ready(spawn(candidate_path, internal_port), readiness, timeouts) {
+            Ok(new_child) => {
+                // The new binary is ready. Flip the proxy's upstream to it —
+                // this is the zero-drop cutover: the user-facing port has been
+                // held by the proxy the whole time.
+                cut_over(internal_port);
+                // Drain the OLD binary: the proxy now routes to the new one,
+                // so nothing reaches the old port.
+                if let Self::Running { child, .. } = self {
+                    stop_gracefully(child, timeouts.graceful_stop);
+                }
+                *self = Self::Running {
+                    child: new_child,
+                    artifact: candidate_hash,
+                };
+                if had_prior_running {
+                    RestartOutcome::Restarted
+                } else {
+                    RestartOutcome::Spawned
+                }
+            }
+            Err(_readiness_failed) => {
+                // The new binary never became ready. Leave the OLD one exactly
+                // as it was (still `Running`, still routed to by the proxy):
+                // no cutover, no drain. This is the INV-3 guarantee — a build
+                // that produces a non-ready binary never disturbs the live
+                // one. When nothing was running before (first build failed
+                // readiness), report the double-failure floor.
+                if had_prior_running {
+                    RestartOutcome::RespawnedLastGood {
+                        broken: candidate_path.to_path_buf(),
+                    }
+                } else {
+                    *self = Self::NotRunning { last_good: None };
+                    RestartOutcome::NothingRunning {
+                        broken: candidate_path.to_path_buf(),
+                        last_good_error: Some(
+                            "new binary failed readiness and nothing was running to keep"
+                                .to_owned(),
+                        ),
+                    }
+                }
+            }
+        }
+    }
+
     /// Kill whatever is running (used on watcher shutdown — "the child
     /// process is killed when the watcher exits", AGENTS.md §3 / design doc
     /// "Timeout / hang bounding"). No-op on `NotRunning`.
@@ -718,6 +822,131 @@ mod tests {
         assert_eq!(
             respawned_hash, good_hash,
             "the respawned artifact must be the ORIGINAL good one, not the failed candidate"
+        );
+        state.shutdown(quick_timeouts());
+    }
+
+    /// The blue-green path cuts over ONLY after the new binary is ready — the
+    /// `cut_over` callback must fire exactly once, with the new internal port,
+    /// and the state must end `Running` on the new binary.
+    #[cfg(unix)]
+    #[test]
+    fn apply_green_behind_proxy_cuts_over_after_readiness() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicU16, Ordering};
+
+        let mut state = SupervisorState::fresh();
+        let cut_to = Arc::new(AtomicU16::new(0));
+        let cut_calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+
+        let spawn = |_path: &Path, _port: u16| {
+            let mut c = Command::new("/bin/sleep");
+            c.arg("5");
+            c
+        };
+
+        let internal = 41999;
+        let cut_to_cb = Arc::clone(&cut_to);
+        let cut_calls_cb = Arc::clone(&cut_calls);
+        let outcome = state.apply_green_behind_proxy(
+            Path::new("/bin/sleep"),
+            internal,
+            spawn,
+            ReadinessCheck::AliveImmediate,
+            quick_timeouts(),
+            move |port| {
+                cut_to_cb.store(port, Ordering::SeqCst);
+                cut_calls_cb.fetch_add(1, Ordering::SeqCst);
+            },
+        );
+        assert!(matches!(outcome, RestartOutcome::Spawned), "{outcome:?}");
+        assert!(state.is_running());
+        assert_eq!(
+            cut_calls.load(Ordering::SeqCst),
+            1,
+            "cut_over must fire exactly once on a ready cutover"
+        );
+        assert_eq!(
+            cut_to.load(Ordering::SeqCst),
+            internal,
+            "cut_over must be called with the new binary's internal port"
+        );
+        state.shutdown(quick_timeouts());
+    }
+
+    /// INV-3 for the blue-green path: when the new binary fails readiness the
+    /// OLD one is left untouched and the proxy is NEVER cut over — no dropped
+    /// connection, no torn state.
+    #[cfg(unix)]
+    #[test]
+    fn apply_green_behind_proxy_keeps_old_and_never_cuts_over_on_readiness_failure() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let mut state = SupervisorState::fresh();
+        let good_path = PathBuf::from("/bin/sleep");
+        let cut_calls = Arc::new(AtomicUsize::new(0));
+
+        // First, establish a running old binary via the same blue-green path.
+        let spawn_good = |_path: &Path, _port: u16| {
+            let mut c = Command::new("/bin/sleep");
+            c.arg("5");
+            c
+        };
+        let cc = Arc::clone(&cut_calls);
+        let first = state.apply_green_behind_proxy(
+            &good_path,
+            40001,
+            spawn_good,
+            ReadinessCheck::AliveImmediate,
+            quick_timeouts(),
+            move |_| {
+                cc.fetch_add(1, Ordering::SeqCst);
+            },
+        );
+        assert!(matches!(first, RestartOutcome::Spawned), "{first:?}");
+        let old_hash = match &state {
+            SupervisorState::Running { artifact, .. } => Some(artifact.content_hash),
+            SupervisorState::NotRunning { .. } => None,
+        }
+        .expect("expected Running after the initial blue-green spawn");
+        assert_eq!(cut_calls.load(Ordering::SeqCst), 1);
+
+        // Now a candidate whose spawn fails immediately (nonexistent binary) —
+        // readiness can never pass.
+        let dir = std::env::temp_dir().join(format!("ipe_watch_bg_fail_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let bad = dir.join("bad");
+        std::fs::write(&bad, b"distinct-bytes").unwrap();
+        let spawn_bad =
+            |_path: &Path, _port: u16| Command::new("/nonexistent/__ipe_watch_bg_bad__");
+        let cc2 = Arc::clone(&cut_calls);
+        let outcome = state.apply_green_behind_proxy(
+            &bad,
+            40002,
+            spawn_bad,
+            ReadinessCheck::AliveImmediate,
+            quick_timeouts(),
+            move |_| {
+                cc2.fetch_add(1, Ordering::SeqCst);
+            },
+        );
+        assert!(
+            matches!(outcome, RestartOutcome::RespawnedLastGood { .. }),
+            "a failed candidate reports the old binary is kept: {outcome:?}"
+        );
+        // The OLD binary is still running, unchanged, and NO extra cutover
+        // fired (still exactly the one from the initial spawn).
+        let now_hash = match &state {
+            SupervisorState::Running { artifact, .. } => Some(artifact.content_hash),
+            SupervisorState::NotRunning { .. } => None,
+        }
+        .expect("the old binary must stay Running after a failed candidate");
+        assert_eq!(now_hash, old_hash, "the old binary must be untouched");
+        assert_eq!(
+            cut_calls.load(Ordering::SeqCst),
+            1,
+            "a failed candidate must NEVER cut the proxy over"
         );
         state.shutdown(quick_timeouts());
     }

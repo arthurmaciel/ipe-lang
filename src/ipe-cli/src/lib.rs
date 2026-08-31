@@ -906,6 +906,19 @@ pub fn hot_appearance_enabled() -> bool {
     std::env::var("IPE_WATCH_HOT_APPEARANCE").is_ok_and(|v| !v.is_empty() && v != "0")
 }
 
+/// Whether the DEV-ONLY blue-green front proxy is enabled for `ipe watch`.
+///
+/// Read from `IPE_WATCH_BLUEGREEN`. Set (to any non-empty value other than
+/// `0`) to put a persistent proxy on the user's port and cut a rebuilt binary
+/// over behind it, so a rebuild never drops the browser's connection. Default
+/// off, so `ipe watch` keeps its direct-bind, kill-old-then-spawn-new
+/// behaviour unless opted in. This lever exists ONLY in `ipe watch`; it is
+/// never compiled into a release binary or an emitted app.
+#[must_use]
+pub fn bluegreen_enabled() -> bool {
+    std::env::var("IPE_WATCH_BLUEGREEN").is_ok_and(|v| !v.is_empty() && v != "0")
+}
+
 impl BuildOptions {
     /// The default build options with the emit model resolved from the
     /// environment (dependency-model by default; vendored under
@@ -3081,6 +3094,7 @@ pub(crate) fn run_watch(rest: &[String]) -> Result<(), CliError> {
     opts.port = args.port;
     opts.cargo_path = cargo_bin.path().to_path_buf();
     opts.quiet = args.quiet;
+    opts.bluegreen = bluegreen_enabled();
     // Version header: human mode only (not quiet, not piped).
     if !args.quiet {
         use std::io::IsTerminal as _;

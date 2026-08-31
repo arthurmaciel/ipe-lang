@@ -22,11 +22,16 @@
 //!   orchestrator's `run()` path (never `spawn()` — an in-process embedder's
 //!   SIGTERM disposition must not be touched) forwards into its shutdown
 //!   channel.
+//! - [`proxy`] — the DEV-ONLY blue-green front proxy: a persistent front that
+//!   holds the user's port while the app binary runs behind it on an internal
+//!   port, so a rebuild can cut traffic over to a freshly-ready binary without
+//!   dropping the browser's connection. Never in a release build.
 //!
 //! Decision record: `docs/adr/0032-salsa-incremental-compilation-phase1.md`.
 
 pub mod coalesce;
 pub mod process;
+pub mod proxy;
 pub mod scope;
 pub mod signal;
 
@@ -34,6 +39,7 @@ pub use coalesce::{Batch, DebounceConfig, coalesce_loop};
 pub use process::{
     LastGoodBinary, ReadinessCheck, RestartOutcome, RestartTimeouts, SupervisorState,
 };
+pub use proxy::DevProxy;
 pub use scope::{MAX_WATCHED_FILES, ScopeError, WatchScope, WatchedPath};
 #[cfg(unix)]
 pub use signal::install_sigterm_forwarder;
