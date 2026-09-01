@@ -231,6 +231,22 @@ handler is a change to the program's behaviour, so it recompiles as usual. The
 preview always runs the same code the shipped build does — a hot-swap shows
 exactly what a full rebuild of the same source would.
 
+### Build-status banner (dev only)
+
+For `Ipe.Tea.Web` apps, `ipe watch` surfaces build results directly in the
+browser via the existing status banner at the bottom of the page:
+
+- **Success** — a green "Reloaded ✓" toast appears briefly (auto-hides after
+  ~1.5 s) after the page reloads following a successful rebuild.
+- **Failure** — a red "Recompilation failed · &lt;first error line&gt;" banner
+  appears and stays pinned until the next successful build clears it. No reload
+  happens; the last-good binary keeps running.
+
+The banner is **dev-only**: it is never shown in production builds (the endpoint
+that pushes build status is not mounted when `production_from_env()` is true, and
+the banner states are only reachable via that endpoint). Disable the banner
+entirely with `IPE_WEB_BANNER=off`.
+
 See [Getting started](getting-started.md) for a first project, and
 [The Elm Architecture](the-elm-architecture.md) for the program model that
 `ipe watch` loops over.
