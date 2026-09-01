@@ -3774,19 +3774,22 @@ fn emit_ui_template(ctx: &EmitCtx, expr: &Expr) -> Option<String> {
     if !ctx.uses_web {
         return None;
     }
-    // Only a static `Ipe.Ui` ELEMENT node (`Ui.node` / `Ui.taggedNode`) is
-    // templated at the top level; a bare `Ui.text` leaf is already covered by
-    // the appearance-literal registry (`KernelFn::UiText`), so leaving it to
-    // that path keeps the leaf emit unchanged. A text/none/nested node inside a
-    // templated element is still absorbed into that element's template.
-    match expr {
-        Expr::Call {
-            callee: Callee::Kernel(KernelFn::UiNode | KernelFn::UiTaggedNode),
-            ..
-        } => {}
+    // Accept a direct element-node kernel call (`Ui.node` / `Ui.taggedNode`),
+    // or a structural wrapper func whose id is registered in the wrapper table.
+    // A bare `Ui.text` leaf is already covered by the appearance-literal
+    // registry (`KernelFn::UiText`), so leaving it to that path keeps the leaf
+    // emit unchanged. A text/none/nested node inside a templated element is
+    // still absorbed into that element's template.
+    let Expr::Call { callee, .. } = expr else {
+        return None;
+    };
+    match callee {
+        Callee::Kernel(KernelFn::UiNode | KernelFn::UiTaggedNode) => {}
+        Callee::Func(id) if ctx.ui_structural_wrappers.contains_key(id) => {}
         _ => return None,
     }
-    let template = crate::emit_ui_template::ui_template_of_expr(expr)?;
+    let template =
+        crate::emit_ui_template::ui_template_of_expr(expr, Some(&ctx.ui_structural_wrappers))?;
     let slot = ctx.hoist_style_literal(&template.to_json())?;
     Some(format!(
         "ipe_runtime::ui::template::materialize_ui_template_str(__ipe_lit.get({slot}))"
@@ -5609,6 +5612,19 @@ pub fn emit_expr_at(
             pin,
             on_form,
         } => {
+            // Structural wrapper hot-swap for `Ipe.Ui`: a `Callee::Func` whose
+            // id is a registered structural wrapper (`row` / `column` / …) and
+            // whose arguments are all static literals is hoisted here, BEFORE the
+            // kernel-only dispatch block below. This runs only when
+            // `IPE_WATCH_HOT_APPEARANCE` is armed (checked inside
+            // `emit_ui_template`); for non-web or flag-off builds it is a
+            // no-op `None` and falls through immediately.
+            if let Callee::Func(id) = callee
+                && ctx.ui_structural_wrappers.contains_key(id)
+                && let Some(result) = emit_ui_template(ctx, expr)
+            {
+                return Ok(result);
+            }
             // Kernel-dispatch special cases apply ONLY to `Callee::Kernel` —
             // every probe below starts with a `let Callee::Kernel(..) = callee
             // else { return Ok(None) }` gate, so a plain user-function call
