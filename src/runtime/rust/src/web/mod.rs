@@ -63,6 +63,7 @@ pub mod pubsub;
 // toggle, a setter) reduces to a `Transition` datum run by the compiled
 // `apply_transition` — one update semantics, dev == prod (see the module doc).
 pub mod transition;
+pub use transition::{Transition, apply_transition, apply_transition_hot};
 // Explicit re-export of ONLY the codegen-referenced kernel functions. A glob
 // (`pub use pubsub::*`) leaked the broker's `Event<T>` into this namespace,
 // colliding with the HTML `Event` enum re-exported below (`pub use …html::*`)
