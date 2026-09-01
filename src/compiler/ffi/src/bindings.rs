@@ -2630,7 +2630,9 @@ pub fn semver_major_field_from_version(arg0: ::semver::Version) -> i64 {
             "{out}"
         );
         assert!(
-            out.contains("match ffi_spawn_guarded(__fut).await { Ok(inner) => inner, Err(__e) => Err(__e) }"),
+            out.contains(
+                "match ffi_spawn_guarded(__fut).await { Ok(inner) => inner, Err(__e) => Err(__e) }"
+            ),
             "{out}"
         );
         assert!(!out.contains("std::process::abort()"), "{out}");

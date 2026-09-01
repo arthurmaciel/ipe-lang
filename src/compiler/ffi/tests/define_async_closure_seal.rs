@@ -75,7 +75,9 @@ fn async_result_adapter_emits_spawned_await_containment() {
     // The spawn + cancel-guard + join-error funnel is the single
     // `ffi_spawn_guarded` choke-point — the adapter cannot spawn unguarded.
     assert!(
-        out.contains("match ffi_spawn_guarded(__fut).await { Ok(inner) => inner, Err(__e) => Err(__e) }"),
+        out.contains(
+            "match ffi_spawn_guarded(__fut).await { Ok(inner) => inner, Err(__e) => Err(__e) }"
+        ),
         "{out}"
     );
     // A production-panic yields an immediate-error future; a poll-panic rides the
@@ -126,6 +128,7 @@ fn an_async_total_return_over_drops() {
 /// the future round-trips, a poll-panic folds to `Err`, and cancellation aborts
 /// the inner task (no side effect after drop).
 #[test]
+#[allow(clippy::too_many_lines)] // one linear E2E-crate assembly (manifest + runtime-glue stand-in + driver + build/run); splitting would scatter the fixture
 fn async_closure_adapter_builds_and_runs() {
     if std::env::var("IPE_E2E").is_err() {
         return;
