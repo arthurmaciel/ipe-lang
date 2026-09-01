@@ -51,6 +51,10 @@ pub mod req;
 pub use req::*;
 pub mod store;
 pub use store::*;
+// Additive-superset Model reconstruction: keeps a returning session's state
+// when the app's `Model` gains a new field (see the module doc). A pure,
+// self-contained decision + splice over a self-describing checkpoint body.
+pub mod additive;
 pub mod pubsub;
 // Explicit re-export of ONLY the codegen-referenced kernel functions. A glob
 // (`pub use pubsub::*`) leaked the broker's `Event<T>` into this namespace,
