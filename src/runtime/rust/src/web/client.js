@@ -1330,18 +1330,25 @@ window.addEventListener("popstate", function() {
 // ── Status banner (connection state) ─────────────────────────
 // Single bottom-pinned element rendered by the runtime (NOT by the
 // user's view) showing connection health. State machine:
-//   "connected"     → invisible
-//   "reconnecting"  → amber bar, "Reconnecting…" + attempt counter
-//   "offline"       → red bar, "Connection lost — refresh to retry"
-// State transitions land in commits 2 + 3; this commit just wires
-// the DOM + setter so the rest of the JS can flip states without
-// touching the HTML directly. Hidden via display:none until a real
-// reconnect attempt fires (no flicker on initial page load).
+//   "connected"      → invisible
+//   "reconnecting"   → amber bar, "Reconnecting…" + attempt counter
+//   "offline"        → red bar, "Connection lost — refresh to retry"
+//   "build-ok"       → green transient toast, "Reloaded ✓", auto-hides
+//   "build-failed"   → red sticky bar, persists until next green build
+// The two build-* states are dev-only; they are only ever entered via
+// an `ipe-build-status` SSE event or the sessionStorage reload flag —
+// neither fires in production, so prod emit is byte-identical.
 var __ipeStatus = "connected";          // current state
 var __ipeStatusEl = null;               // banner root, set on DOMContentLoaded
 var __ipeStatusMsgEl = null;            // text node child
 var __ipeStatusGraceTimer = null;       // 500ms anti-flicker timer
+var __ipeBuildOkTimer = null;           // auto-hide timer for build-ok toast
 function __ipeSetStatus(state, msg) {
+  // Cancel any pending build-ok auto-hide when switching to a different state.
+  if (__ipeBuildOkTimer !== null && state !== "build-ok") {
+    clearTimeout(__ipeBuildOkTimer);
+    __ipeBuildOkTimer = null;
+  }
   __ipeStatus = state;
   if (!__ipeStatusEl) return;           // banner not yet injected
   // Strip the previous state class, add the current one.
@@ -1353,6 +1360,25 @@ function __ipeSetStatus(state, msg) {
   if (__ipeStatusMsgEl && msg !== undefined) {
     __ipeStatusMsgEl.textContent = msg;
   }
+}
+
+// Show a transient green "Reloaded ✓" toast, then revert to connected.
+// prefers-reduced-motion: use a slightly longer hold, no fade (opacity
+// transition is on the element; we just flip states faster/slower).
+function __ipeShowBuildOk() {
+  if (!__ipeBannerEnabled) return;
+  if (__ipeBuildOkTimer !== null) {
+    clearTimeout(__ipeBuildOkTimer);
+    __ipeBuildOkTimer = null;
+  }
+  __ipeSetStatus("build-ok", "Reloaded ✓");
+  var reducedMotion = window.matchMedia &&
+    window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  var holdMs = reducedMotion ? 2000 : 1500;
+  __ipeBuildOkTimer = setTimeout(function() {
+    __ipeBuildOkTimer = null;
+    __ipeSetStatus("connected", "");
+  }, holdMs);
 }
 function __ipeInjectStatusBanner() {
   if (__ipeStatusEl) return;            // idempotent
@@ -1388,7 +1414,13 @@ function __ipeInjectStatusBanner() {
   style.textContent = "" +
     "#__ipe-status.ipe-status--connected{display:none}" +
     "#__ipe-status.ipe-status--reconnecting{background:#b45309}" +
-    "#__ipe-status.ipe-status--offline{background:#b91c1c}";
+    "#__ipe-status.ipe-status--offline{background:#b91c1c}" +
+    "#__ipe-status.ipe-status--build-ok{background:#166534}" +
+    "#__ipe-status.ipe-status--build-failed{background:#991b1b;pointer-events:auto;cursor:default}" +
+    "@media(prefers-color-scheme:dark){" +
+      "#__ipe-status.ipe-status--build-ok{background:#14532d}" +
+      "#__ipe-status.ipe-status--build-failed{background:#7f1d1d}" +
+    "}";
   document.head.appendChild(style);
   var msgEl = document.createElement("span");
   msgEl.className = "ipe-status__msg";
@@ -1680,6 +1712,23 @@ function __ipeOpenSSE() {
       __ipeSetStatus("reconnecting", __ipeMsgReconnecting);
     }, 500);
   });
+  // Dev-only build-status event: server pushes this when `ipe watch`
+  // reports a compile or cargo failure, and when a subsequent build
+  // succeeds. Only reachable when `ipe watch` is running; never
+  // triggered in production (the POST endpoint is not mounted there).
+  __ipeSSE.addEventListener("ipe-build-status", function(e) {
+    var data;
+    try { data = JSON.parse(e.data); } catch(_) { return; }
+    if (!data) return;
+    if (data.ok === false && typeof data.error === "string") {
+      __ipeSetStatus("build-failed", "Recompilation failed \xB7 " + data.error);
+    } else if (data.ok === true) {
+      // An appearance hot-swap that recovers from a prior failure: show the
+      // green toast to confirm the fix landed. A full-rebuild reload uses the
+      // sessionStorage path instead (page reloads before the SSE event lands).
+      __ipeShowBuildOk();
+    }
+  });
 }
 
 // __ipeForceReopenSSE — close the current EventSource and queue a
@@ -1769,6 +1818,8 @@ function __ipeProbeSessionLost() {
       if (window.console && console.warn) {
         console.warn("[ipe.live] server lost our session — reloading page to recover");
       }
+      // Signal the freshly-loaded page to show the build-ok toast.
+      try { sessionStorage.setItem("__ipe_reloaded", "1"); } catch(_) {}
       window.location.reload();
     });
   }).catch(function() {
@@ -1861,6 +1912,13 @@ document.addEventListener("visibilitychange", function() {
 function __ipeInit() {
   __ipeBindEvents(document);
   __ipeInjectStatusBanner();
+  // After a dev-mode session-recovery reload, show the green build-ok toast.
+  try {
+    if (sessionStorage.getItem("__ipe_reloaded") === "1") {
+      sessionStorage.removeItem("__ipe_reloaded");
+      __ipeShowBuildOk();
+    }
+  } catch(_) {}
 }
 if (document.readyState === "loading") {
   document.addEventListener("DOMContentLoaded", __ipeInit);

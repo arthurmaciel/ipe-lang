@@ -1,1 +1,1 @@
-<div style="display:flex;flex-direction:column;height:100vh;width:100%;overflow:hidden;padding:12px 12px 12px 12px"><div style="gap:6px"><div style="font-weight:700">lw</div></div></div>
+<div style="display:flex;flex-direction:column;height:100vh;width:100%;overflow:hidden;padding:12px 12px 12px 12px"><div style="gap:6px"><div style="font-weight:700;width:fit-content">lw</div></div></div>

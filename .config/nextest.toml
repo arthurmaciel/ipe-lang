@@ -46,7 +46,7 @@ heavy-server-e2e = { max-threads = 1 }
 cwd-mutating = { max-threads = 1 }
 
 [[profile.ci.overrides]]
-filter = 'binary(watch_sigterm) | binary(watch_integration) | binary(server_e2e) | binary(live_e2e) | binary(http_e2e) | binary(webview_e2e) | binary(test_command) | binary(verify)'
+filter = 'binary(watch_sigterm) | binary(watch_integration) | binary(watch_hot_appearance) | binary(watch_bluegreen) | binary(server_e2e) | binary(live_e2e) | binary(http_e2e) | binary(webview_e2e) | binary(test_command) | binary(verify)'
 test-group = 'heavy-server-e2e'
 
 [[profile.ci.overrides]]
@@ -61,7 +61,7 @@ filter = 'binary(clean_vs_incremental_parity) | binary(per_module_typecheck_pari
 slow-timeout = { period = "60s", terminate-after = 20 }
 
 [[profile.default.overrides]]
-filter = 'binary(watch_sigterm) | binary(watch_integration) | binary(server_e2e) | binary(live_e2e) | binary(http_e2e) | binary(webview_e2e) | binary(test_command) | binary(verify)'
+filter = 'binary(watch_sigterm) | binary(watch_integration) | binary(watch_hot_appearance) | binary(watch_bluegreen) | binary(server_e2e) | binary(live_e2e) | binary(http_e2e) | binary(webview_e2e) | binary(test_command) | binary(verify)'
 test-group = 'heavy-server-e2e'
 
 [[profile.default.overrides]]
