@@ -22,8 +22,20 @@ var __ipeRetryFastWindowMs = (window.__IPE_RETRY_FAST_WINDOW_MS != null) ? windo
 var __ipeEventQueueMax = (window.__IPE_EVENT_QUEUE_MAX != null) ? window.__IPE_EVENT_QUEUE_MAX : 50;
 var __ipeMsgReconnecting = (window.__IPE_MSG_RECONNECTING != null) ? window.__IPE_MSG_RECONNECTING : "Reconnecting…";
 var __ipeMsgOffline = (window.__IPE_MSG_OFFLINE != null) ? window.__IPE_MSG_OFFLINE : "Connection lost — refresh to retry";
+var __ipeMsgUpdated = (window.__IPE_MSG_UPDATED != null) ? window.__IPE_MSG_UPDATED : "updated ✓";
 var __ipeHelloTimeoutMs = (window.__IPE_HELLO_TIMEOUT_MS != null) ? window.__IPE_HELLO_TIMEOUT_MS : 8000;
 var __ipeHeartbeatTtlMs = (window.__IPE_HEARTBEAT_TTL_MS != null) ? window.__IPE_HEARTBEAT_TTL_MS : 35000;
+// Dev-watch blue-green cutover mode. Set by the `ipe watch` blue-green server
+// (IPE_WEB_SWAP_TOAST). When on, a reconnect is an expected rebuild cutover:
+// the amber "Reconnecting…" banner is suppressed during the brief fast-window
+// drop, and a successful reconnect greets the user with a small positive
+// "updated ✓" toast instead. A release / `ipe run` server leaves this false,
+// so the ordinary reconnect/offline chrome is unaffected in production.
+var __ipeSwapToast = (window.__IPE_SWAP_TOAST === true);
+// True once THIS page-life has seen a first `hello`. A later `hello` (or an
+// explicit `swapped` frame) is therefore a reconnect, not the initial open —
+// the swap toast greets only reconnects, never the first load.
+var __ipeHelloEverOk = false;
 
 // ── Input authority protocol state ───────────────────────────
 // See docs/internals/web/input-authority-protocol.md §Client state.
@@ -839,6 +851,11 @@ function __ipeOnPostFailure(body) {
 }
 function __ipeShowReconnecting() {
   if (__ipeStatus === "offline") return;
+  // Dev blue-green: a drop inside the fast-reconnect window is almost always a
+  // rebuild cutover, not an outage — stay quiet and let the "updated ✓" toast
+  // fire when the new binary answers. If the reconnect does NOT land inside the
+  // window (a genuine connection loss), we fall through to the amber banner.
+  if (__ipeSwapToast && __ipeInFastReconnect()) return;
   if (__ipeStatus === "connected") {
     __ipeSetStatus("reconnecting", __ipeMsgReconnecting);
   }
@@ -1382,6 +1399,54 @@ function __ipeInjectStatusBanner() {
   // Replay current state in case it changed before DOM was ready.
   __ipeSetStatus(__ipeStatus, "");
 }
+// ── Swap toast (dev blue-green cutover cue) ──────────────────
+// A brief, positive, non-blocking toast shown when the `ipe watch` blue-green
+// proxy has cut a rebuild over. It replaces the amber "Reconnecting…" banner
+// for the expected dev-rebuild case: appears, then auto-dismisses (~1.5s). It
+// is a SEPARATE element from the connection-status banner (which stays for a
+// genuine outage). Dev-only — never fires unless __ipeSwapToast is set, which a
+// release / `ipe run` server leaves false. aria-live polite for screen readers.
+var __ipeSwapToastEl = null;
+var __ipeSwapToastTimer = null;
+function __ipeShowSwapToast() {
+  if (!__ipeBannerEnabled) return;
+  if (!document.body) return;
+  var el = __ipeSwapToastEl;
+  if (!el) {
+    el = document.createElement("div");
+    el.id = "__ipe-swap-toast";
+    el.setAttribute("role", "status");
+    el.setAttribute("aria-live", "polite");
+    el.style.cssText = [
+      "position:fixed",
+      "left:50%",
+      "bottom:16px",
+      "transform:translateX(-50%)",
+      "padding:8px 16px",
+      "border-radius:6px",
+      "font:13px/1.4 -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif",
+      "color:#fff",
+      "background:#15803d",              // green — a positive cue
+      "box-shadow:0 2px 8px rgba(0,0,0,0.25)",
+      "z-index:2147483647",
+      "pointer-events:none",            // never intercept clicks
+      "transition:opacity 200ms",
+      "opacity:0"
+    ].join(";");
+    document.body.appendChild(el);
+    __ipeSwapToastEl = el;
+  }
+  el.textContent = __ipeMsgUpdated;
+  // Force a style flush so the opacity transition runs on re-show.
+  el.style.opacity = "0";
+  void el.offsetWidth;
+  el.style.opacity = "1";
+  if (__ipeSwapToastTimer !== null) clearTimeout(__ipeSwapToastTimer);
+  __ipeSwapToastTimer = setTimeout(function() {
+    __ipeSwapToastTimer = null;
+    if (__ipeSwapToastEl) __ipeSwapToastEl.style.opacity = "0";
+  }, 1500);
+}
 
 // ── Server-Sent Events ───────────────────────────────────────
 // Frame envelope since v0.9.3+: {seq, body, ackInputs?}. Falls back to
@@ -1429,6 +1494,11 @@ function __ipeOpenSSE() {
       clearTimeout(__ipeStatusGraceTimer);
       __ipeStatusGraceTimer = null;
     }
+    // Dev blue-green: a `hello` after a prior one is a rebuild cutover. Greet it
+    // with the positive toast rather than leaving the amber banner up. Guarded
+    // on __ipeSwapToast, so a production reconnect keeps the ordinary chrome.
+    if (__ipeSwapToast && __ipeHelloEverOk) __ipeShowSwapToast();
+    __ipeHelloEverOk = true;
     if (__ipeStatus !== "connected") {
       __ipeSetStatus("connected", "");
     }
@@ -1558,6 +1628,15 @@ function __ipeOpenSSE() {
       window.ipeOnReceive(e.data);
     }
   });
+  // Dev-watch blue-green cutover cue. The watch server sends this right after
+  // `hello` on every open when running behind the proxy. It is redundant with
+  // the hello-based reconnect detection above (kept as an explicit, named
+  // signal), so it is likewise gated on a PRIOR hello — the first-load frame
+  // draws nothing. Never emitted by a release / `ipe run` server.
+  __ipeSSE.addEventListener("swapped", function() {
+    __ipeLastSseAt = Date.now();
+    if (__ipeSwapToast && __ipeHelloEverOk) __ipeShowSwapToast();
+  });
   __ipeSSE.addEventListener("open", function() {
     // EventSource fired open — but we don't trust this alone, since a
     // proxy can rewrite a non-SSE 200 OK into something that fires
@@ -1593,6 +1672,11 @@ function __ipeOpenSSE() {
     __ipeStatusGraceTimer = setTimeout(function() {
       __ipeStatusGraceTimer = null;
       if (__ipeSSE && __ipeSSE.readyState === 1 && __ipeHelloOk) return;
+      // Dev blue-green: suppress the amber banner while still inside the
+      // fast-reconnect window — a rebuild cutover reconnects within it and the
+      // "updated ✓" toast takes over. A drop that outlasts the window is a real
+      // outage and still paints the banner.
+      if (__ipeSwapToast && __ipeInFastReconnect()) return;
       __ipeSetStatus("reconnecting", __ipeMsgReconnecting);
     }, 500);
   });
