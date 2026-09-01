@@ -7,8 +7,11 @@
 //!
 //! Soundness posture: every SYNC foreign call runs inside
 //! `std::panic::catch_unwind` (a foreign panic becomes a typed `Err`, never a
-//! process abort observed by well-typed Ipê); every ASYNC call runs inside
-//! `tokio::task::spawn`, whose `JoinError` is the equivalent panic boundary.
+//! process abort observed by well-typed Ipê); every ASYNC call runs through the
+//! single `ffi_spawn_guarded` choke-point, which spawns the foreign future,
+//! arms the `AbortOnDrop` cancel guard, and funnels the `JoinError` panic
+//! boundary as one indivisible step — so no async binding shape can spawn a
+//! foreign task without arming the guard.
 //! `catch_unwind` is sound only under `panic = "unwind"`, so the module top
 //! carries a `#[cfg(panic = "abort")] compile_error!` fence that fails the
 //! build on the *effective* panic strategy — a manifest text-scan
