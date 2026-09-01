@@ -23,7 +23,7 @@
 # QEMU-run) and the C-free (`--cfree`) axis (fail-closed refusal proof until the
 # pure-Rust dependency swaps land).
 # ─────────────────────────────────────────────────────────────────────────────
-name: static
+name: Static analysis
 
 # The `--static` musl proof (build + scratch-container run + advisory audit of
 # the frozen lockfile) is a slow gate — a POST-MERGE / nightly check, OFF the

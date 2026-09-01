@@ -4,11 +4,11 @@
 
 <br />
 
-[![CI](https://github.com/arthurmaciel/ipe-lang/actions/workflows/ci.yml/badge.svg)](https://github.com/arthurmaciel/ipe-lang/actions/workflows/ci.yml)
-[![admission-sandbox](https://github.com/arthurmaciel/ipe-lang/actions/workflows/admission-sandbox.yml/badge.svg)](https://github.com/arthurmaciel/ipe-lang/actions/workflows/admission-sandbox.yml)
-[![security](https://github.com/arthurmaciel/ipe-lang/actions/workflows/security.yml/badge.svg)](https://github.com/arthurmaciel/ipe-lang/actions/workflows/security.yml)
-[![static](https://github.com/arthurmaciel/ipe-lang/actions/workflows/static.yml/badge.svg)](https://github.com/arthurmaciel/ipe-lang/actions/workflows/static.yml)
-[![install-smoke](https://github.com/arthurmaciel/ipe-lang/actions/workflows/install-smoke.yml/badge.svg)](https://github.com/arthurmaciel/ipe-lang/actions/workflows/install-smoke.yml)
+[![CI: build, test, SEAL & E2E](https://github.com/arthurmaciel/ipe-lang/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/arthurmaciel/ipe-lang/actions/workflows/ci.yml)
+[![Runtime sandbox (seccomp · bubblewrap · Job Object)](https://github.com/arthurmaciel/ipe-lang/actions/workflows/admission-sandbox.yml/badge.svg?branch=main)](https://github.com/arthurmaciel/ipe-lang/actions/workflows/admission-sandbox.yml)
+[![Supply-chain security (cargo-deny · audit)](https://github.com/arthurmaciel/ipe-lang/actions/workflows/security.yml/badge.svg?branch=main)](https://github.com/arthurmaciel/ipe-lang/actions/workflows/security.yml)
+[![Static analysis](https://github.com/arthurmaciel/ipe-lang/actions/workflows/static.yml/badge.svg?branch=main)](https://github.com/arthurmaciel/ipe-lang/actions/workflows/static.yml)
+[![Install smoke test](https://github.com/arthurmaciel/ipe-lang/actions/workflows/install-smoke.yml/badge.svg?branch=main)](https://github.com/arthurmaciel/ipe-lang/actions/workflows/install-smoke.yml)
 
 
 # Ipê language

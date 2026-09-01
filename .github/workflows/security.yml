@@ -24,7 +24,7 @@
 # (advisories/licenses/registry provenance), orthogonal to Miri (UB in OUR
 # code's execution). Miri has its own scoped job in ci.yml.
 # ─────────────────────────────────────────────────────────────────────────────
-name: security
+name: Supply-chain security
 
 on:
   push:

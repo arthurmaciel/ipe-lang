@@ -5,7 +5,7 @@
 # fetch, so this runs post-merge, on a weekly schedule, and on any PR that touches
 # the installer. Advisory (not a required gate); it guards the install path from
 # silent rot across OSes.
-name: install-smoke
+name: Install smoke test
 
 on:
   push:
