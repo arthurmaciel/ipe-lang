@@ -1,1 +1,1 @@
-<div style="display:flex;flex-direction:column;height:100vh;width:100%;overflow:hidden"><div><div style="display:flex;flex-direction:column;gap:8px"><div style="font-weight:700;background-color:rgba(0,128,0,1)">ui-attr</div><div>html-node</div></div></div></div>
+<div style="display:flex;flex-direction:column;height:100vh;width:100%;overflow:hidden"><div><div style="display:flex;flex-direction:column;gap:8px;width:fit-content"><div style="font-weight:700;background-color:rgba(0,128,0,1);width:fit-content">ui-attr</div><div>html-node</div></div></div></div>

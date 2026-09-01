@@ -1,1 +1,1 @@
-<div style="display:flex;flex-direction:column;height:100vh;width:100%;overflow:hidden"><div><div data-ipe-on="input" ipe-input="input">input here</div></div></div>
+<div style="display:flex;flex-direction:column;height:100vh;width:100%;overflow:hidden"><div><div style="width:fit-content" data-ipe-on="input" ipe-input="input">input here</div></div></div>

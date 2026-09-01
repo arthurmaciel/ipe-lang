@@ -723,6 +723,21 @@ pub fn build_and_run_emitted_capturing_stderr(
 /// expected output cannot pass silently.
 #[allow(dead_code)] // exercised by goldens with a captured expected output
 pub fn assert_self_regression(golden_name: &str, golden_dir: &Path, ipe_stdout: &str) {
+    // Bless mode: overwrite `expected.txt` with the compiler's actual stdout
+    // instead of asserting. The counterpart to `IPE_BLESS` in the byte-diff
+    // golden path, so an intentional render change is re-captured with the same
+    // tooling — never hand-edited bytes.
+    if std::env::var_os("IPE_BLESS").is_some() {
+        let path = golden_dir.join(e2e_support::EXPECTED_FILE);
+        let wrote = std::fs::write(&path, ipe_stdout);
+        assert!(
+            wrote.is_ok(),
+            "IPE_BLESS: failed to write {}: {:?}",
+            path.display(),
+            wrote.err()
+        );
+        return;
+    }
     let expected = e2e_support::read_expected(golden_dir);
     assert!(
         expected.is_ok(),

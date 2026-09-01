@@ -4,11 +4,12 @@
 
 <br />
 
-[![CI: build, test, SEAL & E2E](https://github.com/arthurmaciel/ipe-lang/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/arthurmaciel/ipe-lang/actions/workflows/ci.yml)
-[![Runtime sandbox (seccomp · bubblewrap · Job Object)](https://github.com/arthurmaciel/ipe-lang/actions/workflows/admission-sandbox.yml/badge.svg?branch=main)](https://github.com/arthurmaciel/ipe-lang/actions/workflows/admission-sandbox.yml)
-[![Supply-chain security (cargo-deny · audit)](https://github.com/arthurmaciel/ipe-lang/actions/workflows/security.yml/badge.svg?branch=main)](https://github.com/arthurmaciel/ipe-lang/actions/workflows/security.yml)
-[![Static analysis](https://github.com/arthurmaciel/ipe-lang/actions/workflows/static.yml/badge.svg?branch=main)](https://github.com/arthurmaciel/ipe-lang/actions/workflows/static.yml)
-[![Install smoke test](https://github.com/arthurmaciel/ipe-lang/actions/workflows/install-smoke.yml/badge.svg?branch=main)](https://github.com/arthurmaciel/ipe-lang/actions/workflows/install-smoke.yml)
+[![Install](https://github.com/arthurmaciel/ipe-lang/actions/workflows/install-smoke.yml/badge.svg?branch=main)](https://github.com/arthurmaciel/ipe-lang/actions/workflows/install-smoke.yml)
+[![Build & test](https://github.com/arthurmaciel/ipe-lang/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/arthurmaciel/ipe-lang/actions/workflows/ci.yml)
+[![Sandbox](https://github.com/arthurmaciel/ipe-lang/actions/workflows/admission-sandbox.yml/badge.svg?branch=main)](https://github.com/arthurmaciel/ipe-lang/actions/workflows/admission-sandbox.yml)
+[![Supply-chain security](https://github.com/arthurmaciel/ipe-lang/actions/workflows/security.yml/badge.svg?branch=main)](https://github.com/arthurmaciel/ipe-lang/actions/workflows/security.yml)
+[![Static binaries](https://github.com/arthurmaciel/ipe-lang/actions/workflows/static.yml/badge.svg?branch=main)](https://github.com/arthurmaciel/ipe-lang/actions/workflows/static.yml)
+[![No-panic](https://github.com/arthurmaciel/ipe-lang/actions/workflows/panic-scan.yml/badge.svg?branch=main)](https://github.com/arthurmaciel/ipe-lang/actions/workflows/panic-scan.yml)
 
 
 # Ipê language
