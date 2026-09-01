@@ -396,11 +396,37 @@ fn specialize_whitelisted_call(
         if !is_whitelisted_func(func, interner) || func.params.len() != args.len() {
             return None;
         }
-        // Every argument must be a proven compile-time constant; otherwise the
-        // residual would carry a free (Model-dependent) sub-expression and must
-        // not specialize.
         let env = FoldEnv::new(funcs, interner);
+
+        // Scalar result: the whole call folds to a scalar constant (a
+        // `lengthToString` / `colorToString` / `easingToCss` builder returns a
+        // `String`). Replace the call outright with its compact direct literal —
+        // no body inlining, so no bloat.
+        let call = Expr::Call {
+            callee: callee.clone(),
+            args: args.to_vec(),
+            pin: ipe_ir::CallPin::None,
+            on_form: ipe_ir::OnFormKind::NotForm,
+        };
+        if let Some(lit) = fold_const(&call, &env).and_then(|c| c.to_literal_expr()) {
+            return Some(lit);
+        }
+
+        // Non-scalar result (an `Attribute` / element the builder constructs,
+        // e.g. `Animation.attribute`): the call itself has no scalar literal
+        // form, but inlining its body surfaces the inner appearance-kernel call
+        // whose SCALAR arguments then fold to direct literals. Only worth doing
+        // when every argument is a proven constant, so the inlined body is fully
+        // determined and carries no free (Model-dependent) sub-expression.
         if args.iter().any(|a| fold_const(a, &env).is_none()) {
+            return None;
+        }
+        // A tail-recursive builder body carries a `TailLoop` / `TailRecur` that
+        // is only valid in tail position; inlining it into a non-tail argument
+        // position would strand the `TailRecur` on the non-tail emit path
+        // (a `CompilerBug`). Such a body is never inlined — it recompiles,
+        // correctly, unfolded.
+        if body_has_tail_construct(&func.body) {
             return None;
         }
         let mut subst = BTreeMap::new();
@@ -413,6 +439,69 @@ fn specialize_whitelisted_call(
     // A kernel callee never specializes through this path (it has no user body
     // to inline); its appearance arguments fold via `fold_appearance_args`.
     None
+}
+
+/// Whether an expression contains a `TailLoop` or `TailRecur` anywhere — the
+/// tail-position-only constructs the lowerer's TCO rewrite introduces. A body
+/// carrying one cannot be inlined into a non-tail argument position, so
+/// [`specialize_whitelisted_call`] refuses it.
+fn body_has_tail_construct(expr: &Expr) -> bool {
+    match expr {
+        Expr::TailLoop { .. } | Expr::TailRecur { .. } => true,
+
+        Expr::Int(_)
+        | Expr::Bool(_)
+        | Expr::Float(_)
+        | Expr::Str(_)
+        | Expr::PathLit(_)
+        | Expr::CustomElementRef { .. }
+        | Expr::Char(_)
+        | Expr::Unit
+        | Expr::Var(_)
+        | Expr::CloneVar(_)
+        | Expr::FuncValue { .. } => false,
+
+        Expr::Ctor { args, .. } | Expr::Tuple(args) | Expr::Apply { args, .. } => {
+            args.iter().any(body_has_tail_construct)
+        }
+        Expr::List { items, .. } => items.iter().any(body_has_tail_construct),
+        Expr::BinOp { lhs, rhs, .. }
+        | Expr::Cons {
+            head: lhs,
+            tail: rhs,
+        } => body_has_tail_construct(lhs) || body_has_tail_construct(rhs),
+        Expr::Let { value, body, .. } | Expr::Destructure { value, body, .. } => {
+            body_has_tail_construct(value) || body_has_tail_construct(body)
+        }
+        Expr::If { cond, then_, else_ } => {
+            body_has_tail_construct(cond)
+                || body_has_tail_construct(then_)
+                || body_has_tail_construct(else_)
+        }
+        Expr::Match(m) => {
+            body_has_tail_construct(m.scrutinee())
+                || m.arms().iter().any(|a| {
+                    body_has_tail_construct(&a.body)
+                        || a.guard.as_ref().is_some_and(body_has_tail_construct)
+                })
+        }
+        Expr::ListIndexClone { list, .. } | Expr::ListLenCheck { list, .. } => {
+            body_has_tail_construct(list)
+        }
+        Expr::Record { fields, .. } => fields.iter().any(|(_, v)| body_has_tail_construct(v)),
+        Expr::Update { record, fields } => {
+            body_has_tail_construct(record)
+                || fields.iter().any(|(_, v)| body_has_tail_construct(v))
+        }
+        Expr::Access { record, .. } => body_has_tail_construct(record),
+        Expr::Lambda { body, .. } | Expr::SharedLambda { body, .. } => {
+            body_has_tail_construct(body)
+        }
+        Expr::TaskSeq { effect, rest } => {
+            body_has_tail_construct(effect) || body_has_tail_construct(rest)
+        }
+        Expr::Call { args, .. } => args.iter().any(body_has_tail_construct),
+    }
 }
 
 /// Substitute constant argument expressions for a set of parameter symbols
