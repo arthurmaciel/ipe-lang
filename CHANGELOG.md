@@ -10,6 +10,15 @@ Entries below the header are maintained by
 section is generated from Conventional Commit messages and prepended when the
 standing release pull request is merged.
 
+## [0.1.76](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.1.75...ipe-v0.1.76) (2026-08-31)
+
+
+### Features
+
+* **dev-loop:** hoist raw-CSS/URL string appearance values into hot-swap registry ([#1630](https://github.com/arthurmaciel/ipe-lang/issues/1630)) ([705cab6](https://github.com/arthurmaciel/ipe-lang/commit/705cab637ad730f59e3efad4bce70a2fdc190512))
+* **dev-loop:** hoist typed numeric Font/Border/Background/Ui appearance scalars into hot-swap registry ([#1628](https://github.com/arthurmaciel/ipe-lang/issues/1628)) ([66ff383](https://github.com/arthurmaciel/ipe-lang/commit/66ff3835132a4f508a4bcfc9f97f853ced51ca36))
+* **watch:** warmth-based build accel — sccache for a cold target's deps, incremental once warm ([#1629](https://github.com/arthurmaciel/ipe-lang/issues/1629)) ([3294e05](https://github.com/arthurmaciel/ipe-lang/commit/3294e058a570fc92ecbacc9cc41fd3c44acba8e1))
+
 ## [0.1.75](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.1.74...ipe-v0.1.75) (2026-08-31)
 
 
