@@ -171,6 +171,37 @@ fn materialize_at<M>(template: &Template, depth: usize) -> Html<M> {
     }
 }
 
+/// Decode a serialized [`Template`] and materialize it, through the dev overlay
+/// transport (a JSON string). The string front door to [`materialize_template`]:
+/// the emitted `view` reads its per-view slot (`__ipe_lit.get(N)`) and hands the
+/// baked-default-or-patched JSON here, so prod (baked default) and dev (patched
+/// slot) run the SAME materialize path — dev == prod by construction.
+///
+/// Fail-closed on hostile input, never a panic (the slot value crosses the
+/// untrusted dev overlay boundary):
+/// - a decode failure returns an inert empty text node (`Html::HText("")`);
+/// - an over-deep decoded template ([`Template::check_bounds`]) returns the same
+///   inert empty text node, so a decode cannot exhaust the stack at materialize.
+///
+/// Inert by construction: the [`Template`] type has no raw-markup and no handler
+/// variant, so no JSON — however adversarial — decodes into unescaped markup or
+/// logic. The produced [`Html`] carries only `HText` (escaped on render) and
+/// `Attribute::Attr` (name-gated + escaped on render).
+#[must_use]
+pub fn materialize_template_str<M>(json: &str) -> Html<M> {
+    // A malformed patch (or any non-`Template` JSON) degrades to an inert empty
+    // text node rather than crashing the render: the slot value is untrusted.
+    let Ok(template) = serde_json::from_str::<Template>(json) else {
+        return Html::HText(String::new());
+    };
+    // A decoded template may nest arbitrarily deep; refuse an over-deep tree
+    // (bounded by construction) before descending it.
+    if template.check_bounds().is_err() {
+        return Html::HText(String::new());
+    }
+    materialize_template(&template)
+}
+
 /// Build a [`Template`] from a static [`Html`] subtree — the inverse of
 /// [`materialize_template`]. Fail-closed (parse, don't validate): any node that
 /// is NOT provably static returns `None`, so a template is only ever built from
@@ -232,7 +263,7 @@ fn template_of_at<M>(node: &Html<M>, depth: usize) -> Option<Template> {
 mod tests {
     use super::{
         MAX_TEMPLATE_DEPTH, Template, TemplateAttr, TemplateError, materialize_template,
-        template_of,
+        materialize_template_str, template_of,
     };
     use crate::html::{Attribute, Html, render_html};
 
@@ -550,5 +581,126 @@ mod tests {
         // decode — there is no inert-data path to a raw node.
         let bogus = r#"{"Raw":"<script>evil()</script>"}"#;
         assert!(serde_json::from_str::<Template>(bogus).is_err());
+    }
+
+    // ── materialize_template_str: the string front door (dev overlay transport) ──
+
+    // dev == prod at the runtime level: the baked-default JSON string (what prod
+    // holds AND what the emitted `view` reads via `__ipe_lit.get(N)`) materializes
+    // byte-identically to rendering the original static subtree directly. This is
+    // the structural-hot-swap conformance the emit rests on.
+    #[test]
+    fn str_materialize_matches_direct_render() {
+        let subtree: Html<()> = Html::HElement(
+            "section".to_string(),
+            vec![Attribute::Attr("id".to_string(), "main".to_string())],
+            vec![
+                Html::HElement(
+                    "h1".to_string(),
+                    vec![],
+                    vec![Html::HText("Title".to_string())],
+                ),
+                Html::HElement(
+                    "p".to_string(),
+                    vec![Attribute::Attr("class".to_string(), "lead".to_string())],
+                    vec![Html::HText("Body".to_string())],
+                ),
+            ],
+        );
+        let template = template_of(&subtree).expect("templatable");
+        let json = serde_json::to_string(&template).expect("serialize");
+        // The baked default (prod) is exactly this JSON string.
+        let via_str: Html<()> = materialize_template_str(&json);
+        assert_eq!(
+            render_html(&via_str),
+            render_html(&subtree),
+            "materialize_template_str over the baked default must render byte-identically"
+        );
+    }
+
+    // A structural edit is a NEW JSON string in the same slot: adding a static
+    // child changes the string's bytes but nothing else. The str materializer
+    // renders the edited tree, so the runtime swap needs no structural machinery.
+    #[test]
+    fn str_materialize_reflects_a_structural_edit() {
+        let before: Html<()> = Html::HElement(
+            "ul".to_string(),
+            vec![],
+            vec![Html::HElement(
+                "li".to_string(),
+                vec![],
+                vec![Html::HText("one".to_string())],
+            )],
+        );
+        let after: Html<()> = Html::HElement(
+            "ul".to_string(),
+            vec![],
+            vec![
+                Html::HElement(
+                    "li".to_string(),
+                    vec![],
+                    vec![Html::HText("one".to_string())],
+                ),
+                Html::HElement(
+                    "li".to_string(),
+                    vec![],
+                    vec![Html::HText("two".to_string())],
+                ),
+            ],
+        );
+        let json_after = serde_json::to_string(&template_of(&after).unwrap()).unwrap();
+        // Swapping the slot's JSON (the patch) renders the added child.
+        let materialized: Html<()> = materialize_template_str(&json_after);
+        assert_eq!(render_html(&materialized), render_html(&after));
+        assert_ne!(render_html(&materialized), render_html(&before));
+    }
+
+    // A malformed slot value (a stale/hostile patch that is not a `Template`)
+    // degrades to an inert empty text node — never a panic, never raw markup.
+    #[test]
+    fn str_materialize_malformed_json_is_inert_empty() {
+        let out: Html<()> = materialize_template_str("this is not json");
+        assert_eq!(render_html(&out), "");
+        let bogus: Html<()> = materialize_template_str(r#"{"Raw":"<script>evil()</script>"}"#);
+        let rendered = render_html(&bogus);
+        assert!(!rendered.contains("<script>"), "no raw markup: {rendered}");
+        assert_eq!(rendered, "");
+    }
+
+    // A decoded template's text stays escaped through the string front door — no
+    // JSON payload yields a raw `<script>`.
+    #[test]
+    fn str_materialize_keeps_text_escaped() {
+        let json = r#"{"Text":"<script>alert(1)</script>"}"#;
+        let out: Html<()> = materialize_template_str(json);
+        let rendered = render_html(&out);
+        assert!(!rendered.contains("<script>"), "must stay escaped: {rendered}");
+        assert!(rendered.contains("&lt;script&gt;"));
+    }
+
+    // An over-deep decoded template is refused (bounded by construction): the str
+    // front door returns the inert empty node rather than descending a hostile
+    // deep tree. Built on a large-stack thread because SERIALISING a
+    // ceiling-deep template walks the native stack.
+    #[test]
+    fn str_materialize_over_deep_json_is_inert_empty() {
+        let handle = std::thread::Builder::new()
+            .stack_size(64 * 1024 * 1024)
+            .spawn(|| {
+                let mut node = Template::Text("x".to_string());
+                for _ in 0..(MAX_TEMPLATE_DEPTH + 10) {
+                    node = Template::Element {
+                        tag: "div".to_string(),
+                        attrs: vec![],
+                        children: vec![node],
+                    };
+                }
+                let json = serde_json::to_string(&node).expect("serialize deep");
+                let out: Html<()> = materialize_template_str(&json);
+                render_html(&out)
+            })
+            .expect("spawn");
+        let rendered = handle.join().expect("thread must not panic");
+        assert_eq!(rendered, "", "an over-deep decoded template is inert");
     }
 }
