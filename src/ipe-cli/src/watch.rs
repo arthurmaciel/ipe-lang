@@ -171,9 +171,12 @@ pub struct WatchOptions {
     /// DEV-ONLY blue-green cutover. When set, `ipe watch` puts a persistent
     /// front proxy on `port` and runs each rebuilt binary behind it on a fresh
     /// internal loopback port, cutting traffic over once the new binary passes
-    /// readiness — so a rebuild never drops the browser's connection. Off by
-    /// default (the direct-bind, kill-old-then-spawn-new path). Never compiled
-    /// into a release binary or an emitted app.
+    /// readiness — so a rebuild never drops the browser's connection. The CLI
+    /// path sets this on by default (see [`crate::bluegreen_enabled`]; opt out
+    /// with `IPE_WATCH_NO_BLUEGREEN`); the raw [`WatchOptions::new`] default is
+    /// off (the direct-bind, kill-old-then-spawn-new path) for a library caller
+    /// that has not chosen. Never compiled into a release binary or an emitted
+    /// app.
     pub bluegreen: bool,
 }
 
@@ -1398,7 +1401,10 @@ fn run_inner(
                                 &exe_path,
                                 internal_port,
                                 move |path, port| {
-                                    spawn_command(path, &child_env(port, &out_dir, tok.as_deref()))
+                                    spawn_command(
+                                        path,
+                                        &child_env(port, &out_dir, tok.as_deref(), true),
+                                    )
                                 },
                                 readiness,
                                 opts.restart_timeouts,
@@ -1412,7 +1418,8 @@ fn run_inner(
                                     grace: Duration::from_millis(300),
                                 }
                             };
-                            let env = child_env(opts.port, &opts.out_dir, hot_token.as_deref());
+                            let env =
+                                child_env(opts.port, &opts.out_dir, hot_token.as_deref(), false);
                             supervisor.apply_green(
                                 &exe_path,
                                 move |path| spawn_command(path, &env),
@@ -1526,11 +1533,23 @@ fn is_ipe_web_project(emitted: &ipe_backend::EmittedProject) -> bool {
 /// environment already configures `IPE_WEB_STORE`, in which case that
 /// choice is respected verbatim (and warned about when it is exactly
 /// `memory` — see `warn_if_memory_store`, called once at watch startup).
-fn child_env(port: u16, out_dir: &Path, hot_token: Option<&str>) -> Vec<(String, String)> {
+fn child_env(
+    port: u16,
+    out_dir: &Path,
+    hot_token: Option<&str>,
+    bluegreen: bool,
+) -> Vec<(String, String)> {
     let mut env = vec![
         ("IPE_WEB_PORT".to_owned(), port.to_string()),
         ("IPE_SERVER_PORT".to_owned(), port.to_string()),
     ];
+    // Blue-green cutover: tell the emitted server it runs behind the watch
+    // proxy so its client greets a reconnect with the positive "updated ✓"
+    // toast instead of the "Reconnecting…" banner. Only the blue-green path
+    // sets this; the direct-bind path (and any release build) leaves it unset.
+    if bluegreen {
+        env.push(("IPE_WEB_SWAP_TOAST".to_owned(), "1".to_owned()));
+    }
     // Under appearance hot-swap, hand the running app the per-session control
     // token so its `/_ipe/hot-appearance` endpoint accepts patches from THIS
     // watch (and nothing else). Absent ⇒ the endpoint fails closed.

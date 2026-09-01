@@ -343,8 +343,21 @@ fn web_client_config_js() -> String {
             .map(|s| s.trim().to_ascii_lowercase()),
         Some(ref v) if v == "off" || v == "0" || v == "false"
     );
+    // IPE_WEB_SWAP_TOAST: set (non-empty ≠ "0") ⇒ this process runs behind the
+    // dev-watch blue-green proxy, so a reconnect is an expected rebuild cutover,
+    // not an outage. The client then greets a reconnect with a brief positive
+    // "updated ✓" toast instead of the amber "Reconnecting…" banner. Only the
+    // `ipe watch` blue-green path sets this; a release/`ipe run` server never
+    // does, so the flag defaults off there.
+    let swap_toast = matches!(
+        crate::system::read_env_var("IPE_WEB_SWAP_TOAST")
+            .ok()
+            .map(|s| s.trim().to_string()),
+        Some(ref v) if !v.is_empty() && v != "0"
+    );
     format!(
         "window.__IPE_BANNER_ENABLED={banner};\
+         window.__IPE_SWAP_TOAST={swap_toast};\
          window.__IPE_RETRY_BASE_MS={};\
          window.__IPE_RETRY_MAX_MS={};\
          window.__IPE_RETRY_MAX_ATTEMPTS={};\
@@ -354,6 +367,7 @@ fn web_client_config_js() -> String {
          window.__IPE_HELLO_TIMEOUT_MS={};\
          window.__IPE_HEARTBEAT_TTL_MS={};\
          window.__IPE_MSG_RECONNECTING=\"Reconnecting…\";\
+         window.__IPE_MSG_UPDATED=\"updated ✓\";\
          window.__IPE_MSG_OFFLINE=\"Connection lost — refresh to retry\";",
         num("IPE_WEB_RETRY_BASE_MS", 500),
         num("IPE_WEB_RETRY_MAX_MS", 16000),
@@ -2232,6 +2246,21 @@ mod handlers {
                 &format!("{{\"v\":1,\"sid\":\"{hello_sid}\",\"ts\":{hello_ts}}}"),
             )))
             .await;
+
+        // Dev-watch blue-green cutover cue. When this process runs behind the
+        // watch proxy (`IPE_WEB_SWAP_TOAST` set), announce ourselves on every
+        // SSE open with a lightweight `swapped` frame. The client shows the
+        // brief positive "updated ✓" toast only when it is a RECONNECT (it
+        // already saw a prior `hello` this page-life), so a first page load is
+        // silent. A release / `ipe run` server never sets the env, so this
+        // frame is never emitted there.
+        if crate::system::read_env_var("IPE_WEB_SWAP_TOAST")
+            .ok()
+            .map(|s| s.trim().to_string())
+            .is_some_and(|v| !v.is_empty() && v != "0")
+        {
+            let _ = tx.send(SsePatch(sse::frame("swapped", "{}"))).await;
+        }
 
         // Reconnect-resync.
         // A session restored from the store on a cold hit — or any process

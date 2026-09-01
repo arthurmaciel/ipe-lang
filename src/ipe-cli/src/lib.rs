@@ -909,15 +909,40 @@ pub fn hot_appearance_enabled() -> bool {
 
 /// Whether the DEV-ONLY blue-green front proxy is enabled for `ipe watch`.
 ///
-/// Read from `IPE_WATCH_BLUEGREEN`. Set (to any non-empty value other than
-/// `0`) to put a persistent proxy on the user's port and cut a rebuilt binary
-/// over behind it, so a rebuild never drops the browser's connection. Default
-/// off, so `ipe watch` keeps its direct-bind, kill-old-then-spawn-new
-/// behaviour unless opted in. This lever exists ONLY in `ipe watch`; it is
-/// never compiled into a release binary or an emitted app.
+/// Default ON: `ipe watch` puts a persistent proxy on the user's port and cuts
+/// each rebuilt binary over behind it once it passes readiness, so a rebuild
+/// never drops the browser's connection (no "Reconnecting…" flash — the client
+/// gets a brief "updated ✓" toast instead). Opt out with `IPE_WATCH_NO_BLUEGREEN`
+/// (set to any non-empty value other than `0`) to fall back to the direct-bind,
+/// kill-old-then-spawn-new path. The legacy `IPE_WATCH_BLUEGREEN` still forces a
+/// choice when set (`0`/empty ⇒ off, anything else ⇒ on) and takes precedence
+/// over the default but yields to the opt-out. This lever exists ONLY in
+/// `ipe watch`; it is never compiled into a release binary or an emitted app.
 #[must_use]
 pub fn bluegreen_enabled() -> bool {
-    std::env::var("IPE_WATCH_BLUEGREEN").is_ok_and(|v| !v.is_empty() && v != "0")
+    bluegreen_from_env_values(
+        std::env::var("IPE_WATCH_NO_BLUEGREEN").ok().as_deref(),
+        std::env::var("IPE_WATCH_BLUEGREEN").ok().as_deref(),
+    )
+}
+
+/// The pure default-resolution behind [`bluegreen_enabled`], separated from the
+/// process-env read so it is unit-testable without mutating global state.
+///
+/// `no_bluegreen` / `bluegreen` are the respective env values (`None` = unset).
+/// Precedence: opt-out wins, then an explicit legacy choice, else default on.
+#[must_use]
+fn bluegreen_from_env_values(no_bluegreen: Option<&str>, bluegreen: Option<&str>) -> bool {
+    // Opt-out wins: a hard "never proxy" for a user who needs the direct bind.
+    if no_bluegreen.is_some_and(|v| !v.is_empty() && v != "0") {
+        return false;
+    }
+    // Then an explicit legacy choice, if any: `0`/empty off, else on.
+    if let Some(v) = bluegreen {
+        return !v.is_empty() && v != "0";
+    }
+    // Default on.
+    true
 }
 
 impl BuildOptions {
@@ -7061,6 +7086,32 @@ const fn diag_span(d: &Diagnostic) -> ipe_diagnostics::Span {
 mod tests {
     use super::*;
     use ipe_diagnostics::{NameError, Span};
+
+    #[test]
+    fn bluegreen_defaults_on_when_no_env_set() {
+        // No opt-out, no explicit choice → on (the new default).
+        assert!(bluegreen_from_env_values(None, None));
+    }
+
+    #[test]
+    fn bluegreen_opt_out_wins() {
+        // IPE_WATCH_NO_BLUEGREEN set (non-empty ≠ "0") → off, even if the legacy
+        // flag would force on.
+        assert!(!bluegreen_from_env_values(Some("1"), None));
+        assert!(!bluegreen_from_env_values(Some("anything"), Some("1")));
+        // "0"/empty opt-out is NOT an opt-out → the rest of the precedence runs.
+        assert!(bluegreen_from_env_values(Some("0"), None));
+        assert!(bluegreen_from_env_values(Some(""), None));
+    }
+
+    #[test]
+    fn bluegreen_explicit_legacy_choice_is_honoured() {
+        // Explicit IPE_WATCH_BLUEGREEN: "0"/empty off, anything else on.
+        assert!(!bluegreen_from_env_values(None, Some("0")));
+        assert!(!bluegreen_from_env_values(None, Some("")));
+        assert!(bluegreen_from_env_values(None, Some("1")));
+        assert!(bluegreen_from_env_values(None, Some("yes")));
+    }
 
     #[test]
     fn registry_unreachable_matches_network_signals_only() {
