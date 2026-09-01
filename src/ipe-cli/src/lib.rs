@@ -882,6 +882,13 @@ pub struct BuildOptions {
     /// release command does not expose this flag, so no production artifact can
     /// carry recorder code.
     pub debugger: bool,
+    /// `true` routes style-value literals through a per-view `LiteralTable` and
+    /// emits the `/_ipe/hot-appearance` endpoint, so an appearance-only source
+    /// edit hot-swaps in the running app instead of forcing a recompile. Set
+    /// ONLY by the `ipe watch` entry (from [`hot_appearance_enabled`]); the
+    /// `ipe build` / `ipe run` / `ipe release` entries leave it `false` so a
+    /// release artifact never carries hot-swap scaffolding. Default `false`.
+    pub hot_appearance: bool,
 }
 
 /// Select the emit model from the environment.
@@ -897,14 +904,36 @@ pub fn runtime_dep_from_env() -> bool {
     !std::env::var("IPE_RUNTIME_VENDORED").is_ok_and(|v| v == "1")
 }
 
-/// Whether the dev-only appearance hot-swap emit is enabled.
+/// Whether the dev-only appearance hot-swap emit is enabled for `ipe watch`.
 ///
-/// Read from `IPE_WATCH_HOT_APPEARANCE`. Set (to any non-empty value other than
-/// `0`) to route style-value literals through a per-view `LiteralTable`. Default
-/// off, so an ordinary build emits byte-identically to the direct-literal form.
+/// Default ON: `ipe watch` hot-swaps appearance-only edits (e.g. `Ui.spacing`)
+/// without a recompile out of the box. Opt out with `IPE_WATCH_NO_HOT_APPEARANCE`
+/// (set to any non-empty value other than `0`), which forces the plain
+/// direct-literal emit. `IPE_WATCH_HOT_APPEARANCE`, when set, is honoured
+/// explicitly (`0` or empty = off, anything else = on) and overrides the
+/// default; the opt-out takes precedence over it.
+///
+/// This lever exists ONLY in `ipe watch`. `ipe build` / `ipe run` / `ipe release`
+/// thread [`BuildOptions::hot_appearance`] `= false`, so a release artifact never
+/// carries hot-swap scaffolding regardless of these variables.
 #[must_use]
 pub fn hot_appearance_enabled() -> bool {
-    std::env::var("IPE_WATCH_HOT_APPEARANCE").is_ok_and(|v| !v.is_empty() && v != "0")
+    hot_appearance_from_env(
+        std::env::var("IPE_WATCH_NO_HOT_APPEARANCE").ok().as_deref(),
+        std::env::var("IPE_WATCH_HOT_APPEARANCE").ok().as_deref(),
+    )
+}
+
+/// Pure decision for [`hot_appearance_enabled`], over the two raw variable
+/// values (`None` = unset). Opt-out (`no_var`) wins; then an explicit
+/// `hot_var`; otherwise the default is on.
+#[must_use]
+fn hot_appearance_from_env(no_var: Option<&str>, hot_var: Option<&str>) -> bool {
+    let set = |v: Option<&str>| v.is_some_and(|s| !s.is_empty() && s != "0");
+    if set(no_var) {
+        return false;
+    }
+    hot_var.is_none_or(|v| !v.is_empty() && v != "0")
 }
 
 /// Whether the DEV-ONLY blue-green front proxy is enabled for `ipe watch`.
@@ -1474,7 +1503,7 @@ fn compile_modules_observed(
         options.target,
         &options.wasm_public_env,
         options.production,
-        hot_appearance_enabled(),
+        options.hot_appearance,
     );
     let epoch = cache_dir.and_then(|_| cache::derive_epoch());
     if let (Some(root), Some(epoch)) = (cache_dir, epoch.as_deref())
@@ -1540,7 +1569,7 @@ fn compile_modules_observed(
                     .with_runtime_dep(runtime_dep.clone())
                     .with_debugger(options.debugger)
                     .with_project_name(&options.cargo_name)
-                    .with_hot_appearance(hot_appearance_enabled())
+                    .with_hot_appearance(options.hot_appearance)
                     .emit(&program)
             };
             if let Ok(emitted) = emit_result {
@@ -1594,7 +1623,7 @@ fn compile_modules_observed(
         runtime_dep,
         options.debugger,
         options.cargo_name.clone(),
-        hot_appearance_enabled(),
+        options.hot_appearance,
     );
 
     let emitted = match compile_prepared(&db, source_root, &sources, entry_path, blame_path, config)
@@ -3366,6 +3395,9 @@ fn run_build_body(rest: &[String]) -> Result<BuildSuccess, CliError> {
         // Filled in by build_project_with_options once the manifest is parsed.
         cargo_name: String::new(),
         debugger: args.debugger,
+        // `ipe build` never emits appearance hot-swap scaffolding — that is a
+        // `ipe watch`-only dev affordance. A release artifact stays clean.
+        hot_appearance: false,
     };
 
     // Human-friendly progress: the compile+emit below is otherwise silent, so
@@ -3722,6 +3754,8 @@ pub(crate) fn run_release(rest: &[String]) -> Result<(), CliError> {
             cargo_name: String::new(),
             // The debugger is never enabled on a release build.
             debugger: false,
+            // A release build never carries appearance hot-swap scaffolding.
+            hot_appearance: false,
         };
         manifest.as_ref().map_or_else(
             || {
@@ -4524,6 +4558,9 @@ fn run_run_body(rest: &[String]) -> Result<(), CliError> {
         // Filled in by build_project_with_options once the manifest is parsed.
         cargo_name: String::new(),
         debugger: args.debugger,
+        // `ipe run` never emits appearance hot-swap scaffolding — that is a
+        // `ipe watch`-only dev affordance.
+        hot_appearance: false,
     };
 
     // Human-friendly progress: the compile+emit below is otherwise silent, so
@@ -7806,6 +7843,162 @@ main =
         );
 
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// The pure hot-appearance decision (over the two raw variable values):
+    /// default ON, the opt-out wins, and an explicit `IPE_WATCH_HOT_APPEARANCE`
+    /// is honoured. Exercises the logic without mutating process env.
+    #[test]
+    fn hot_appearance_defaults_on_and_honours_overrides() {
+        // Neither var set ⇒ on (the new default for `ipe watch`).
+        assert!(hot_appearance_from_env(None, None), "unset ⇒ default on");
+        // Opt-out set ⇒ off, regardless of the explicit var.
+        assert!(
+            !hot_appearance_from_env(Some("1"), None),
+            "IPE_WATCH_NO_HOT_APPEARANCE=1 ⇒ off"
+        );
+        assert!(
+            !hot_appearance_from_env(Some("anything"), Some("1")),
+            "opt-out wins over an explicit on"
+        );
+        // Opt-out empty / `0` does NOT opt out.
+        assert!(
+            hot_appearance_from_env(Some(""), None),
+            "empty opt-out is not an opt-out ⇒ still on"
+        );
+        assert!(
+            hot_appearance_from_env(Some("0"), None),
+            "`0` opt-out is not an opt-out ⇒ still on"
+        );
+        // Explicit `IPE_WATCH_HOT_APPEARANCE` is honoured when opt-out is absent.
+        assert!(
+            !hot_appearance_from_env(None, Some("0")),
+            "explicit `0` ⇒ off"
+        );
+        assert!(
+            !hot_appearance_from_env(None, Some("")),
+            "explicit empty ⇒ off"
+        );
+        assert!(
+            hot_appearance_from_env(None, Some("1")),
+            "explicit `1` ⇒ on"
+        );
+    }
+
+    /// A web app with a hoist-eligible style literal (`Ui.style "font-weight"
+    /// "bold"`). Used to prove the build-vs-watch emit difference.
+    const WEB_APP_WITH_STYLE: &str = "\
+module Main exposing (main)
+import Ipe.Tea.Web as Web
+import Ipe.Ui as Ui
+import Ipe.Tea.Web.Cmd as Cmd
+import Ipe.Tea.Web.Sub as Sub
+
+type Msg = Noop
+type alias Model = { count : Int }
+
+init : a -> ( Model, Cmd Msg )
+init _req = ( { count = 0 }, Cmd.none )
+
+update : Msg -> Model -> ( Model, Cmd Msg )
+update _msg model = ( model, Cmd.none )
+
+subscriptions : Model -> Sub Msg
+subscriptions _model = Sub.none
+
+view : Model -> Element Msg
+view _model =
+    Ui.el [ Ui.style \"font-weight\" \"bold\" ] (Ui.text \"Counter\")
+
+main =
+    Web.app
+        { init = init
+        , update = update
+        , view = view
+        , subscriptions = subscriptions
+        , routes = []
+        , notFound = Noop
+        }
+";
+
+    /// Emit `WEB_APP_WITH_STYLE` with an explicit `hot_appearance` and return the
+    /// CONCATENATED emitted Rust source (`src/main.rs` plus every per-module file
+    /// under `src/ipe_mods/`, where the `view` body actually lands), or `None`
+    /// when the runtime cannot be resolved (so the test is a no-op on a machine
+    /// without an installed runtime crate).
+    fn emit_web_app_source(hot_appearance: bool, tag: &str) -> Option<String> {
+        let runtime = resolve_runtime().ok()?;
+        let dir = std::env::temp_dir().join(format!("ipec_hot_appearance_{tag}"));
+        let _ = fs::remove_dir_all(&dir);
+        let entry = dir.join("Main.ipe");
+        fs::create_dir_all(&dir).ok()?;
+        fs::write(&entry, WEB_APP_WITH_STYLE).ok()?;
+        let out = dir.join("out");
+        let options = BuildOptions {
+            hot_appearance,
+            ..BuildOptions::from_env()
+        };
+        let built = build_with_sibling_discovery_with_options(&entry, &out, &runtime, options);
+        assert!(built.is_ok(), "web app must compile ({tag}): {built:?}");
+        // Walk `out/src` and concatenate every emitted `.rs` file: the view body
+        // (and thus any hoisted `__ipe_lit` table) lands in a per-module file
+        // under `src/ipe_mods/`, not in `src/main.rs`.
+        let src_dir = out.join("src");
+        let mut sources = String::new();
+        let mut stack = vec![src_dir];
+        while let Some(d) = stack.pop() {
+            let Ok(entries) = fs::read_dir(&d) else {
+                continue;
+            };
+            for e in entries.flatten() {
+                let p = e.path();
+                if p.is_dir() {
+                    stack.push(p);
+                } else if p.extension().and_then(|x| x.to_str()) == Some("rs")
+                    && let Ok(text) = fs::read_to_string(&p)
+                {
+                    sources.push_str(&text);
+                }
+            }
+        }
+        assert!(
+            !sources.is_empty(),
+            "emitted src/ must carry at least one .rs file ({tag})"
+        );
+        let _ = fs::remove_dir_all(&dir);
+        Some(sources)
+    }
+
+    /// PROD-CLEAN: a build-mode emit (`hot_appearance = false`, what `ipe build`
+    /// / `ipe run` / `ipe release` thread) carries NO hot-swap scaffolding — no
+    /// `LiteralTable` and no `/_ipe/hot-appearance` endpoint.
+    #[test]
+    fn build_mode_emit_carries_no_hot_swap_scaffolding() {
+        let Some(src) = emit_web_app_source(false, "build_clean") else {
+            return;
+        };
+        assert!(
+            !src.contains("__ipe_lit"),
+            "a build-mode emit must introduce no literal table, got:\n{src}"
+        );
+        assert!(
+            !src.contains("/_ipe/hot-appearance"),
+            "a build-mode emit must not mount the hot-appearance endpoint, got:\n{src}"
+        );
+    }
+
+    /// WATCH: a watch-mode emit (`hot_appearance = true`) DOES hoist the style
+    /// literal into the per-view `LiteralTable`, so an appearance edit can be
+    /// hot-swapped without a rebuild.
+    #[test]
+    fn watch_mode_emit_hoists_literal_table() {
+        let Some(src) = emit_web_app_source(true, "watch_hoist") else {
+            return;
+        };
+        assert!(
+            src.contains("__ipe_lit"),
+            "a watch-mode emit must hoist style literals into a table, got:\n{src}"
+        );
     }
 
     /// When no package.ipe exists in any parent directory, returns None.
