@@ -47,7 +47,13 @@ use crate::EmitCtx;
 /// when the tag framing / blob encoding itself changes shape (the
 /// `KEY_TAG`-style domain-separation convention), never for a Model change —
 /// the Model's own shape is covered by the structural hash.
-const WIRE_EPOCH: &str = "ipe-live-model-schema-v1";
+///
+/// `v2` carries a self-describing (field-keyed JSON) checkpoint body so a
+/// returning session can be spliced across a purely-additive Model change;
+/// `v1`'s positional body could not be. Folding the epoch into every tag means
+/// a `v1` checkpoint can never tag-match a `v2` binary, so an old-format blob
+/// is refused before deserialize rather than mis-decoded.
+const WIRE_EPOCH: &str = "ipe-live-model-schema-v2";
 
 /// SHA-256 structural fingerprint of `model_ty`, folded with the wire-format
 /// epoch constant. Two Models with the same field names, same field order
