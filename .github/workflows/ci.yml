@@ -1,4 +1,4 @@
-name: CI
+name: Build & test
 
 # GitHub-hosted runners (4-core/16GB, ephemeral) with matrix parallelism.
 #
