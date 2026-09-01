@@ -969,14 +969,25 @@ fn run_inner(
     // or whenever the flag is off.
     let mut running_emitted: Option<Arc<ipe_backend::EmittedProject>> = None;
     // The per-session control token that authenticates a `/_ipe/hot-appearance`
-    // POST. Minted once here (when the flag is on) and injected into every
-    // spawned child via `child_env` as `IPE_WATCH_HOT_TOKEN`, so only this watch
-    // process can drive a live appearance patch of the app it launched.
-    let hot_token: Option<String> = if crate::hot_appearance_enabled() {
-        Some(mint_hot_token())
-    } else {
-        None
-    };
+    // POST and a `/_ipe/watch/status` build-status POST. Minted once here and
+    // injected into every spawned child via `child_env` as `IPE_WATCH_HOT_TOKEN`,
+    // so only this watch process can drive either dev endpoint of the app it
+    // launched. Minted when EITHER the appearance hot-swap flag OR the browser
+    // build-status banner is on — the failure banner must reach the child even
+    // with appearance hot-swap off (the two endpoints gate independently on the
+    // server; the shared token arms only whichever route is actually mounted).
+    let hot_token: Option<String> =
+        if crate::hot_appearance_enabled() || crate::watch_banner_enabled() {
+            Some(mint_hot_token())
+        } else {
+            None
+        };
+    // The appearance hot-swap classifier and its running-emit baseline are armed
+    // ONLY by the appearance flag — never merely by the banner. The child's emit
+    // carries a `LiteralTable` overlay only under `hot_appearance_enabled()`
+    // (see the emit config), so a patch push against a banner-only build would
+    // target a binary with no overlay to patch.
+    let appearance_active = crate::hot_appearance_enabled();
     // The current live cycle's per-phase timing (`IPE_WATCH_TIMING`). Reset at
     // each `FsBatch`; the resolve/compile/write/cargo phases fill it as their
     // events land, and it is reported at the terminal event (restart done, or
@@ -1207,6 +1218,9 @@ fn run_inner(
                         );
                         eprint!("\n{}\n", crate::style::gutter(&body));
                         emit(opts, WatchEvent::CompileFailed { generation: g });
+                        if let Some(tok) = hot_token.as_deref() {
+                            post_watch_status(opts.port, tok, false, &first_error_line(&msg));
+                        }
                         // A red compile is terminal for this cycle (no cargo,
                         // no restart) — report the partial breakdown here.
                         timings.report(g);
@@ -1221,9 +1235,11 @@ fn run_inner(
                         // classifier is conservative by construction: a logic
                         // change perturbs the emitted Rust outside a defaults
                         // array, forcing Logic (see `hot_classify`).
-                        if let (Some(tok), Some(running)) =
-                            (hot_token.as_deref(), running_emitted.as_ref())
-                        {
+                        if let (true, Some(tok), Some(running)) = (
+                            appearance_active,
+                            hot_token.as_deref(),
+                            running_emitted.as_ref(),
+                        ) {
                             match crate::hot_classify::classify(running, &emitted) {
                                 crate::hot_classify::Classification::AppearanceOnly(patches) => {
                                     // The running binary is unchanged, so
@@ -1240,6 +1256,7 @@ fn run_inner(
                                                 views: patches.len(),
                                             },
                                         );
+                                        post_watch_status(opts.port, tok, true, "");
                                         timings.report(g);
                                         continue;
                                     }
@@ -1275,9 +1292,8 @@ fn run_inner(
                         timings.write = Some(write_started.elapsed());
                         // This emit is about to be compiled into the new running
                         // binary, so it becomes the classifier's baseline for the
-                        // next edit (only relevant under the flag; cheap to keep
-                        // unconditionally).
-                        if hot_token.is_some() {
+                        // next edit (only relevant under the appearance flag).
+                        if appearance_active {
                             running_emitted = Some(emitted.clone());
                         }
                         current_is_web = is_ipe_web_project(&emitted);
@@ -1354,6 +1370,9 @@ fn run_inner(
                             )
                         );
                         emit(opts, WatchEvent::CargoFailed { generation: g });
+                        if let Some(tok) = hot_token.as_deref() {
+                            post_watch_status(opts.port, tok, false, &first_error_line(&msg));
+                        }
                         // A red cargo build is terminal (no restart) — report
                         // the partial breakdown here.
                         timings.report(g);
@@ -1712,6 +1731,60 @@ fn spawn_command(exe_path: &Path, env: &[(String, String)]) -> Command {
         cmd.env(k, v);
     }
     cmd
+}
+
+/// Extract the first non-blank line from a compiler diagnostic, capped at
+/// 120 characters, for inclusion in the build-failed banner.
+fn first_error_line(msg: &str) -> String {
+    msg.lines()
+        .find(|l| !l.trim().is_empty())
+        .unwrap_or("")
+        .chars()
+        .take(120)
+        .collect()
+}
+
+/// POST `{ok, error}` to the child's dev-only `/_ipe/watch/status` endpoint.
+///
+/// Best-effort: silently ignores all errors. The child may not be running yet,
+/// or the endpoint may not be mounted (non-web app, banner disabled, etc.) —
+/// all of those are fine. A short connect+read timeout keeps a dead app from
+/// stalling the watch loop.
+fn post_watch_status(port: u16, token: &str, ok: bool, error: &str) {
+    // Build the JSON body without serde_json to avoid a new dependency.
+    // Escape only backslash and double-quote — the error string is already
+    // a first-line excerpt from compiler output (ASCII/UTF-8, no control chars
+    // that need JSON-escaping beyond those two).
+    let body = if ok {
+        r#"{"ok":true}"#.to_string()
+    } else {
+        let esc = error.replace('\\', "\\\\").replace('"', "\\\"");
+        format!(r#"{{"ok":false,"error":"{esc}"}}"#)
+    };
+    let _ = post_to_watch_status(port, token, &body);
+}
+
+/// Send one raw HTTP/1.1 POST to `/_ipe/watch/status`. Returns `Ok(())` when
+/// the server replied (any status); any I/O failure is silently discarded by
+/// the caller. Mirrors the structure of `post_hot_appearance`.
+fn post_to_watch_status(port: u16, token: &str, body: &str) -> std::io::Result<()> {
+    use std::io::Write as _;
+    use std::net::TcpStream;
+    let addr = std::net::SocketAddr::from((std::net::Ipv4Addr::LOCALHOST, port));
+    let mut stream = TcpStream::connect_timeout(&addr, Duration::from_millis(500))?;
+    stream.set_write_timeout(Some(Duration::from_millis(1500)))?;
+    let req = format!(
+        "POST /_ipe/watch/status HTTP/1.1\r\n\
+         Host: 127.0.0.1:{port}\r\n\
+         X-Ipe-Hot-Token: {token}\r\n\
+         Content-Type: application/json\r\n\
+         Content-Length: {len}\r\n\
+         Connection: close\r\n\r\n{body}",
+        len = body.len(),
+    );
+    stream.write_all(req.as_bytes())?;
+    stream.flush()?;
+    Ok(())
 }
 
 /// The `memory`-store warning: called once, at watch startup, so it is

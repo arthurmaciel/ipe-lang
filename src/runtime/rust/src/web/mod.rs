@@ -391,6 +391,28 @@ fn web_client_config_js() -> String {
     )
 }
 
+/// Whether the dev watch/status banner endpoint should be mounted.
+///
+/// True when the banner is enabled (not explicitly disabled via `IPE_WEB_BANNER`
+/// off/0/false), the app is NOT in production, and the app is root-mounted
+/// (not a sub-app). Mirrors the three conditions the banner injection already
+/// uses so no new env var is needed.
+fn watch_banner_active(base: &str) -> bool {
+    if crate::telemetry::production_from_env() {
+        return false;
+    }
+    if !base.is_empty() {
+        return false;
+    }
+    // Banner explicitly disabled → no endpoint either.
+    !matches!(
+        crate::system::read_env_var("IPE_WEB_BANNER")
+            .ok()
+            .map(|s| s.trim().to_ascii_lowercase()),
+        Some(ref v) if v == "off" || v == "0" || v == "false"
+    )
+}
+
 pub fn render_page_full(sid: &str, base: &str, body: &str, csrf_token: &str) -> String {
     // sid_js / base_js / csrf_js: Rust Debug ("{:?}") of a &str yields a
     // double-quoted, properly-escaped JS string literal for plain ASCII
@@ -518,6 +540,29 @@ struct PatchEnvelope<'a> {
     patches: &'a [crate::web::diff::Patch],
 }
 
+/// Body for the dev-only `POST /_ipe/watch/status` endpoint.
+///
+/// Sent by `ipe watch` to push build state to connected browsers.
+/// Only mounted when the dev banner is active (non-production, root-mounted,
+/// and `IPE_WEB_BANNER` not explicitly disabled).
+#[derive(serde::Deserialize)]
+struct WatchStatusBody {
+    ok: bool,
+    #[serde(default)]
+    error: Option<String>,
+}
+
+/// Latest build status from `ipe watch`, held in the server's shared state.
+///
+/// `None` = no status yet (initial state or production). Set by the
+/// `/_ipe/watch/status` endpoint and replayed to new SSE connections so a
+/// browser refresh during a failed build still shows the error.
+#[derive(Clone, Debug)]
+struct WatchBuildStatus {
+    ok: bool,
+    error: Option<String>,
+}
+
 /// Wire shape POSTed by the browser client to `/_ipe/event`
 /// (`live/client.js` __ipeSend): `{sessionId, seq, msg, args, handlerId}`.
 /// `handlerId` is the element's `data-ipe-hid` (== its ipe-id); `msg` is the
@@ -598,6 +643,12 @@ pub(crate) struct WebState<Model, Msg, FInit, FUpdate, FView, FSubs> {
     /// an unbounded number of sessions. Decremented ONLY via `SessionSlot::drop`,
     /// so the leak fix (mortal driver) and this cap share one mechanism.
     session_count: Arc<AtomicUsize>,
+    /// Latest build status from `ipe watch`. `None` until the first status
+    /// POST arrives. Replayed to new SSE connections so a browser refresh
+    /// during a failed build immediately shows the sticky error banner.
+    /// Populated only when the dev watch/status endpoint is mounted;
+    /// inert (always `None`) in production.
+    watch_build_status: Arc<Mutex<Option<WatchBuildStatus>>>,
 }
 
 // Manual Clone — derive would demand Clone on the closures (they're behind Arc).
@@ -615,6 +666,7 @@ impl<Model, Msg, FInit, FUpdate, FView, FSubs> Clone
             param_resolver: self.param_resolver.clone(),
             route_matched: self.route_matched.clone(),
             session_count: self.session_count.clone(),
+            watch_build_status: self.watch_build_status.clone(),
         }
     }
 }
@@ -1632,6 +1684,7 @@ where
             // No route table: only `/` is a page URL.
             route_matched: Arc::new(|path| path == "/"),
             session_count: Arc::new(AtomicUsize::new(0)),
+            watch_build_status: Arc::new(Mutex::new(None)),
         };
         serve_web(state).await
     })
@@ -1709,6 +1762,7 @@ where
                 param_resolver: Arc::new(|_path| crate::dict::dict_empty()),
                 route_matched: Arc::new(|path| path == "/"),
                 session_count: Arc::new(AtomicUsize::new(0)),
+                watch_build_status: Arc::new(Mutex::new(None)),
             };
             // The router is E-free (E only surfaces on the standalone
             // `serve_web` task's result), so `build_web_router` carries no `E`.
@@ -1807,6 +1861,7 @@ where
             param_resolver,
             route_matched,
             session_count: Arc::new(AtomicUsize::new(0)),
+            watch_build_status: Arc::new(Mutex::new(None)),
         };
         serve_web(state).await
     })
@@ -2318,6 +2373,35 @@ mod handlers {
             serde_json::json!({ "seq": g.seq, "body": html }).to_string()
         };
         let _ = tx.send(SsePatch(sse::frame("patch", &resync))).await;
+
+        // Replay the latest build-status so a browser refresh during a failed
+        // build immediately shows the sticky error banner without waiting for
+        // the next `ipe watch` status POST. A `None` status (no build has run
+        // yet, or production) sends nothing. Best-effort: a full channel is
+        // fine — the next reload or real status event will catch up.
+        {
+            let status_snapshot = st
+                .watch_build_status
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .clone();
+            if let Some(WatchBuildStatus { ok, error }) = status_snapshot {
+                let payload = if ok {
+                    r#"{"ok":true}"#.to_string()
+                } else {
+                    let esc = error
+                        .as_deref()
+                        .unwrap_or("")
+                        .replace('\\', "\\\\")
+                        .replace('"', "\\\"");
+                    format!(r#"{{"ok":false,"error":"{esc}"}}"#)
+                };
+                let _ = tx
+                    .send(SsePatch(sse::frame("ipe-build-status", &payload)))
+                    .await;
+            }
+        }
+
         {
             let tx = tx.clone();
             tokio::spawn(async move {
@@ -2572,6 +2656,99 @@ mod handlers {
         apply_literal_patch_to_web_sessions(&st.store, &st.view, &parsed.defaults, parsed.patch)
             .await;
         StatusCode::OK.into_response()
+    }
+
+    // ── POST /_ipe/watch/status (dev-only) ───────────────────────────
+    // Inbound build-status notification from `ipe watch`. Guarded two ways
+    // so it is inert in production:
+    //   1. The route is MOUNTED only when the dev banner is active (non-
+    //      production + `IPE_WEB_BANNER` not disabled + root-mounted).
+    //   2. The `X-Ipe-Hot-Token` header MUST match the per-process token
+    //      set by `ipe watch` (the same mechanism as `/_ipe/hot-appearance`).
+    //      A web page cannot obtain this token, so the token alone is the
+    //      trust boundary (same model as `/_ipe/hot-appearance`).
+    //
+    // On acceptance: stores the latest status, then broadcasts an
+    // `ipe-build-status` SSE event to every connected session.
+    pub(super) async fn watch_status_handler<Model, Msg, FInit, FUpdate, FView, FSubs>(
+        State(st): State<WebState<Model, Msg, FInit, FUpdate, FView, FSubs>>,
+        headers: axum::http::HeaderMap,
+        body: axum::body::Bytes,
+    ) -> Response
+    where
+        Model: Clone + Send + 'static,
+        Msg: Clone + Send + 'static,
+        FInit: Send + Sync + 'static,
+        FUpdate: Send + Sync + 'static,
+        FView: Send + Sync + 'static,
+        FSubs: Send + Sync + 'static,
+    {
+        // Per-process control token — same mechanism as `/_ipe/hot-appearance`.
+        // Absent expected token → fail closed (endpoint unusable without a token).
+        let expected = crate::system::read_env_var("IPE_WATCH_HOT_TOKEN")
+            .ok()
+            .filter(|t| !t.is_empty());
+        let presented = headers
+            .get("x-ipe-hot-token")
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_owned);
+        match (expected, presented) {
+            (Some(exp), Some(got)) if crate::ct_eq::ct_bytes_eq(exp.as_bytes(), got.as_bytes()) => {
+            }
+            _ => return StatusCode::FORBIDDEN.into_response(),
+        }
+        // Parse and bound-check the body.
+        let parsed: WatchStatusBody = match serde_json::from_slice(&body) {
+            Ok(b) => b,
+            Err(_) => return (StatusCode::BAD_REQUEST, "bad body").into_response(),
+        };
+        // Truncate the error string to 512 chars (char-boundary-safe).
+        let error = parsed
+            .error
+            .map(|e| e.chars().take(512).collect::<String>());
+        // Build the JSON payload for the SSE event.
+        let sse_payload = if parsed.ok {
+            r#"{"ok":true}"#.to_string()
+        } else {
+            let esc = error
+                .as_deref()
+                .unwrap_or("")
+                .replace('\\', "\\\\")
+                .replace('"', "\\\"");
+            format!(r#"{{"ok":false,"error":"{esc}"}}"#)
+        };
+        // Update the stored status so new SSE connections see the current state.
+        {
+            let mut guard = st
+                .watch_build_status
+                .lock()
+                .unwrap_or_else(|p| p.into_inner());
+            *guard = Some(WatchBuildStatus {
+                ok: parsed.ok,
+                error: error.clone(),
+            });
+        }
+        // Broadcast to all connected sessions. Dead channels (closed tabs)
+        // get a send error — collect and ignore them; the next reload naturally
+        // creates fresh channels.
+        for handle in st.store.web_sessions().await {
+            let tx = handle
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .sse_tx
+                .clone();
+            if let Some(tx) = tx {
+                let _ = tx
+                    .send(SsePatch(sse::frame("ipe-build-status", &sse_payload)))
+                    .await;
+            }
+        }
+        (
+            StatusCode::OK,
+            [(axum::http::header::CONTENT_TYPE, "application/json")],
+            r#"{"ok":true}"#,
+        )
+            .into_response()
     }
 
     // ── POST /_ipe/port ───────────────────────────────────────────────
@@ -2944,6 +3121,19 @@ where
         router.route(
             "/_ipe/hot-appearance",
             post(handlers::hot_appearance_handler::<Model, Msg, FInit, FUpdate, FView, FSubs>)
+                .layer(axum::extract::DefaultBodyLimit::max(web_max_body_bytes())),
+        )
+    } else {
+        router
+    };
+    // Dev-only build-status notification leg. MOUNTED only when the dev banner
+    // is active (non-production + banner not disabled + root-mounted). The
+    // handler additionally token-gates each request (same `IPE_WATCH_HOT_TOKEN`
+    // mechanism as `/_ipe/hot-appearance`). Never reachable in production.
+    let router = if watch_banner_active(&web_base_path()) {
+        router.route(
+            "/_ipe/watch/status",
+            post(handlers::watch_status_handler::<Model, Msg, FInit, FUpdate, FView, FSubs>)
                 .layer(axum::extract::DefaultBodyLimit::max(web_max_body_bytes())),
         )
     } else {
