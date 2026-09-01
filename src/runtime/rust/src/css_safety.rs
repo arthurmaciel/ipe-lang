@@ -226,29 +226,121 @@ fn css_unescape(s: &str) -> String {
     out
 }
 
+/// Why a CSS value was rejected by the security scan. Used only to name the
+/// reason in the A9 developer-facing diagnostic; the security decision itself is
+/// unchanged (any reason ⇒ drop).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum CssStripReason {
+    /// A declaration / ruleset / `<style>` / comment breakout in the raw value.
+    RawBreakout,
+    /// A breakout revealed only after decoding CSS backslash escapes (a
+    /// hex-escaped payload like `\65 xpression(…)`).
+    EscapedBreakout,
+}
+
+impl CssStripReason {
+    fn describe(self) -> &'static str {
+        match self {
+            Self::RawBreakout => {
+                "contains a CSS breakout (one of ; { } </ /* @import or a script-sink scheme)"
+            }
+            Self::EscapedBreakout => {
+                "hides a CSS breakout behind a backslash escape (decodes to ; { } @import or a script sink)"
+            }
+        }
+    }
+}
+
+/// Where a CSS value came from — the provenance the A9 loud-strip diagnostic
+/// keys on. A `DeveloperLiteral` is a compile-time-literal value the author
+/// wrote in source, so silently dropping it is almost always a mistake worth
+/// surfacing; an `Untrusted` value is Model-derived / attacker-influenceable and
+/// MUST stay silently stripped (a diagnostic on it would be a log-spam / info
+/// leak vector driven by untrusted input).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum CssValueOrigin {
+    DeveloperLiteral,
+    Untrusted,
+}
+
+/// Run the CSS value security scan, returning WHY the value is unsafe (for the
+/// A9 diagnostic) rather than a bare `Option`. `Ok(())` ⇒ safe.
+fn scan_css_value(v: &str) -> Result<(), CssStripReason> {
+    let low = v.to_ascii_lowercase();
+    if has_dangerous_css_pattern(&low) {
+        return Err(CssStripReason::RawBreakout);
+    }
+    // Defence-in-depth: decode CSS backslash escapes and re-scan so a
+    // hex-escaped bypass of the check above (`\65 xpression(…)`, `\3b` for `;`)
+    // is caught too.
+    if has_dangerous_css_pattern(&css_unescape(&low)) {
+        return Err(CssStripReason::EscapedBreakout);
+    }
+    Ok(())
+}
+
 impl<'a> SafeCssValue<'a> {
     /// Parse and validate a CSS property value.
     ///
     /// Returns `None` (silently drop) when any dangerous pattern is found —
     /// in either the raw value or its CSS-escape-decoded form.
     pub(crate) fn parse(v: &'a str) -> Option<Self> {
-        let low = v.to_ascii_lowercase();
-        if has_dangerous_css_pattern(&low) {
-            return None;
+        match scan_css_value(v) {
+            Ok(()) => Some(SafeCssValue(v)),
+            Err(_) => None,
         }
-        // Defence-in-depth: decode CSS backslash escapes and re-scan so a
-        // hex-escaped bypass of the check above (`\65 xpression(…)`, `\3b`
-        // for `;`) is caught too.
-        let decoded_low = css_unescape(&low);
-        if has_dangerous_css_pattern(&decoded_low) {
-            return None;
+    }
+
+    /// A9 (loud-strip diagnostic): parse a CSS value, and when it is rejected,
+    /// surface a developer-facing diagnostic IFF the value was
+    /// developer-authored (a compile-time literal). A Model-derived / untrusted
+    /// value stays silently stripped — the security outcome is identical to
+    /// [`parse`] in every case; only the diagnostic side effect differs.
+    ///
+    /// The diagnostic names the offending value and the reason, so a developer
+    /// whose literal `Ui.style` / gradient / font value was silently doing
+    /// nothing learns why. It goes to stderr (dev channel), never the rendered
+    /// page, so it cannot become an XSS or content sink.
+    pub(crate) fn parse_reporting(v: &'a str, origin: CssValueOrigin) -> Option<Self> {
+        match scan_css_value(v) {
+            Ok(()) => Some(SafeCssValue(v)),
+            Err(reason) => {
+                report_stripped_value(v, reason, origin);
+                None
+            }
         }
-        Some(SafeCssValue(v))
     }
 
     pub(crate) fn as_str(&self) -> &str {
         self.0
     }
+}
+
+/// Emit the A9 loud-strip diagnostic for a rejected CSS value — but ONLY for a
+/// developer-authored literal. Kept separate + `#[cold]` so the common
+/// (accepted, or untrusted-rejected) path stays branch-light.
+///
+/// Testable in isolation: the decision "does this (value, origin, reason) warrant
+/// a diagnostic?" is [`should_report_stripped`]; this function performs the I/O.
+#[cold]
+fn report_stripped_value(value: &str, reason: CssStripReason, origin: CssValueOrigin) {
+    if should_report_stripped(origin) {
+        // A bounded, single-line preview so a huge value cannot flood the log.
+        let preview: String = value.chars().take(120).collect();
+        eprintln!(
+            "ipe: dropped an unsafe developer-authored CSS value {preview:?} — it {} \
+             (nothing was emitted for it). Fix the literal or move the dynamic part \
+             into your Model.",
+            reason.describe()
+        );
+    }
+}
+
+/// A9: the pure decision behind [`report_stripped_value`] — a developer literal
+/// warrants a diagnostic; an untrusted value never does. Split out so both
+/// branches are unit-testable without capturing stderr.
+pub(crate) fn should_report_stripped(origin: CssValueOrigin) -> bool {
+    matches!(origin, CssValueOrigin::DeveloperLiteral)
 }
 
 /// Sink-side re-validation of a `;`-joined CSS declaration list — the payload
@@ -562,6 +654,63 @@ mod tests {
         assert!(SafeCssValue::parse("0; background:url(javascript:alert(1))").is_none());
         assert!(SafeCssValue::parse("url( javascript:alert(1))").is_none()); // ws-stripped
         assert!(SafeCssValue::parse("#ff6600").is_some()); // benign passes
+    }
+
+    // ── A9: loud-strip diagnostic ────────────────────────────────────────────
+
+    /// The security OUTCOME of `parse_reporting` is identical to `parse` for
+    /// every value and both origins — a diagnostic never changes what is
+    /// emitted, only whether stderr is written.
+    #[test]
+    fn parse_reporting_never_changes_the_security_outcome() {
+        for v in [
+            "expression(alert(1))",
+            "0; background:url(javascript:alert(1))",
+            "\\65 xpression(alert(1))",
+            "#ff6600",
+            "linear-gradient(90deg, red 0%, blue 100%)",
+        ] {
+            let baseline = SafeCssValue::parse(v).is_some();
+            for origin in [CssValueOrigin::DeveloperLiteral, CssValueOrigin::Untrusted] {
+                assert_eq!(
+                    SafeCssValue::parse_reporting(v, origin).is_some(),
+                    baseline,
+                    "parse_reporting must match parse for {v:?} / {origin:?}"
+                );
+            }
+        }
+    }
+
+    /// A stripped DEVELOPER literal warrants a diagnostic; a stripped UNTRUSTED
+    /// (Model-derived) value never does — the exact A9 split.
+    #[test]
+    fn only_developer_literals_are_reported_on_strip() {
+        assert!(
+            should_report_stripped(CssValueOrigin::DeveloperLiteral),
+            "a stripped developer literal must be surfaced"
+        );
+        assert!(
+            !should_report_stripped(CssValueOrigin::Untrusted),
+            "a stripped untrusted / Model-derived value must stay silent"
+        );
+    }
+
+    /// The scan reason distinguishes a raw breakout from an escape-hidden one,
+    /// so the diagnostic can name WHY — and a safe value scans clean.
+    #[test]
+    fn scan_reason_names_raw_vs_escaped_breakout() {
+        assert_eq!(
+            scan_css_value("red; color:blue"),
+            Err(CssStripReason::RawBreakout)
+        );
+        assert_eq!(
+            scan_css_value("\\65 xpression(alert(1))"),
+            Err(CssStripReason::EscapedBreakout)
+        );
+        assert_eq!(scan_css_value("#ff6600"), Ok(()));
+        // Every reason has a non-empty human description for the diagnostic.
+        assert!(!CssStripReason::RawBreakout.describe().is_empty());
+        assert!(!CssStripReason::EscapedBreakout.describe().is_empty());
     }
 
     #[test]

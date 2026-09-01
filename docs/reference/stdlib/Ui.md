@@ -21,6 +21,16 @@ separate native qualifiers, untouched here.
 or `ImageSrc.data` for an inline data URI) rather than a raw `String`.
 Build an `ImageSrc` via `Ipe.Ui.ImageSrc.url` or `Ipe.Ui.ImageSrc.data`.
 
+Gradients: `Background.linearGradient deg [(pos, color)]` is Ipê's gradient —
+you give a CSS angle in degrees and an explicit list of `(position, colour)`
+stops, so it maps 1:1 onto CSS `linear-gradient(<deg>deg, <colour> <pos>%, …)`
+and you control every stop. Coming from elm-ui's
+`gradient { angle = <radians>, steps = [<colour>, …] }`: convert the angle
+with `degrees` (elm's angle is in radians) and turn the evenly-weighted
+`steps` into explicit positions — N steps become positions
+`0%, 100/(N-1)%, …, 100%` — e.g. elm `gradient { angle = pi/2, steps = [red,
+blue] }` is Ipê `Background.linearGradient (degrees 90) [(0, red), (100, blue)]`.
+
 ## `node`
 
 ```ipe
