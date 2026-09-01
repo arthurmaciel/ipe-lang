@@ -64,9 +64,11 @@ pub struct TransitionPatch {
     pub new_json: String,
 }
 
-/// The set of hot-swappable deltas an edit produced with no recompile: the
-/// appearance (view literal) patches and the `update`-arm transition patches.
-/// Both are pushed to the running app over the live socket; either may be empty.
+/// The set of hot-swappable deltas an edit produced with no recompile.
+///
+/// Carries the appearance (view literal) patches and the `update`-arm transition
+/// patches. Both are pushed to the running app over the live socket; either may
+/// be empty.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct HotSwap {
     /// One [`ViewPatch`] per view whose hoisted appearance literals changed.

@@ -5222,99 +5222,109 @@ mod hot_transition_handler_tests {
         make_router().oneshot(req).await.expect("router responds")
     }
 
+    /// Run an async test body while holding the process-global overlay guard in
+    /// SYNC scope (never across an await), mirroring `hot_appearance_push_tests`:
+    /// the overlay override + transition registry are the shared state being
+    /// serialised, and the guard is released only after the whole async body has
+    /// run on a fresh current-thread runtime.
+    fn with_overlay_serialised<F: std::future::Future<Output = ()>>(body: impl FnOnce() -> F) {
+        let _g = overlay_test_lock();
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("current-thread runtime must build for the test");
+        rt.block_on(body());
+        transition::clear_dev_transition_for_test();
+        set_dev_overlay_active_for_test(None);
+        locked_remove_var("IPE_WATCH_HOT_TOKEN");
+    }
+
     const INC1: &str = r#"{"field":"count","op":"IntAdd","source":{"Int":1}}"#;
     const INC2: &str = r#"{"field":"count","op":"IntAdd","source":{"Int":2}}"#;
 
     /// No token → 403, even with the dev gate on and a well-formed body.
-    #[tokio::test]
-    async fn token_missing_is_403() {
-        let _g = overlay_test_lock();
-        set_dev_overlay_active_for_test(Some(true));
-        locked_set_var("IPE_WATCH_HOT_TOKEN", "secret");
-        let body = format!(r#"{{"old_json":{INC1:?},"new_json":{INC2:?}}}"#);
-        let resp = post_hot(None, &body).await;
-        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
-        locked_remove_var("IPE_WATCH_HOT_TOKEN");
-        set_dev_overlay_active_for_test(None);
+    #[test]
+    fn token_missing_is_403() {
+        with_overlay_serialised(|| async {
+            set_dev_overlay_active_for_test(Some(true));
+            locked_set_var("IPE_WATCH_HOT_TOKEN", "secret");
+            let body = format!(r#"{{"old_json":{INC1:?},"new_json":{INC2:?}}}"#);
+            let resp = post_hot(None, &body).await;
+            assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+        });
     }
 
     /// Wrong token → 403.
-    #[tokio::test]
-    async fn token_wrong_is_403() {
-        let _g = overlay_test_lock();
-        set_dev_overlay_active_for_test(Some(true));
-        locked_set_var("IPE_WATCH_HOT_TOKEN", "correct");
-        let body = format!(r#"{{"old_json":{INC1:?},"new_json":{INC2:?}}}"#);
-        let resp = post_hot(Some("wrong"), &body).await;
-        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
-        locked_remove_var("IPE_WATCH_HOT_TOKEN");
-        set_dev_overlay_active_for_test(None);
+    #[test]
+    fn token_wrong_is_403() {
+        with_overlay_serialised(|| async {
+            set_dev_overlay_active_for_test(Some(true));
+            locked_set_var("IPE_WATCH_HOT_TOKEN", "correct");
+            let body = format!(r#"{{"old_json":{INC1:?},"new_json":{INC2:?}}}"#);
+            let resp = post_hot(Some("wrong"), &body).await;
+            assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+        });
     }
 
     /// Dev gate OFF → 404 (defence in depth), even with the correct token.
-    #[tokio::test]
-    async fn dev_gate_off_is_404() {
-        let _g = overlay_test_lock();
-        set_dev_overlay_active_for_test(Some(false));
-        locked_set_var("IPE_WATCH_HOT_TOKEN", "correct");
-        let body = format!(r#"{{"old_json":{INC1:?},"new_json":{INC2:?}}}"#);
-        let resp = post_hot(Some("correct"), &body).await;
-        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
-        locked_remove_var("IPE_WATCH_HOT_TOKEN");
-        set_dev_overlay_active_for_test(None);
+    #[test]
+    fn dev_gate_off_is_404() {
+        with_overlay_serialised(|| async {
+            set_dev_overlay_active_for_test(Some(false));
+            locked_set_var("IPE_WATCH_HOT_TOKEN", "correct");
+            let body = format!(r#"{{"old_json":{INC1:?},"new_json":{INC2:?}}}"#);
+            let resp = post_hot(Some("correct"), &body).await;
+            assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+        });
     }
 
     /// A malformed request body → 400.
-    #[tokio::test]
-    async fn malformed_body_is_400() {
-        let _g = overlay_test_lock();
-        set_dev_overlay_active_for_test(Some(true));
-        locked_set_var("IPE_WATCH_HOT_TOKEN", "correct");
-        let resp = post_hot(Some("correct"), "not json").await;
-        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
-        locked_remove_var("IPE_WATCH_HOT_TOKEN");
-        set_dev_overlay_active_for_test(None);
+    #[test]
+    fn malformed_body_is_400() {
+        with_overlay_serialised(|| async {
+            set_dev_overlay_active_for_test(Some(true));
+            locked_set_var("IPE_WATCH_HOT_TOKEN", "correct");
+            let resp = post_hot(Some("correct"), "not json").await;
+            assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        });
     }
 
     /// A well-formed body whose `new_json` is NOT a valid `Transition` → 400
     /// (parse, don't validate: only a decodable transition is registered).
-    #[tokio::test]
-    async fn invalid_transition_json_is_400() {
-        let _g = overlay_test_lock();
-        set_dev_overlay_active_for_test(Some(true));
-        locked_set_var("IPE_WATCH_HOT_TOKEN", "correct");
-        let body = format!(r#"{{"old_json":{INC1:?},"new_json":"{{not a transition}}"}}"#);
-        let resp = post_hot(Some("correct"), &body).await;
-        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
-        locked_remove_var("IPE_WATCH_HOT_TOKEN");
-        set_dev_overlay_active_for_test(None);
+    #[test]
+    fn invalid_transition_json_is_400() {
+        with_overlay_serialised(|| async {
+            set_dev_overlay_active_for_test(Some(true));
+            locked_set_var("IPE_WATCH_HOT_TOKEN", "correct");
+            let body = format!(r#"{{"old_json":{INC1:?},"new_json":"{{not a transition}}"}}"#);
+            let resp = post_hot(Some("correct"), &body).await;
+            assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        });
     }
 
     /// Correct token + valid body → 200, and the replacement is registered so a
     /// subsequent `apply_transition_hot` for the OLD key applies the NEW datum.
-    #[tokio::test]
-    async fn accept_registers_replacement() {
-        let _g = overlay_test_lock();
-        set_dev_overlay_active_for_test(Some(true));
-        transition::clear_dev_transition_for_test();
-        locked_set_var("IPE_WATCH_HOT_TOKEN", "correct");
+    #[test]
+    fn accept_registers_replacement() {
+        with_overlay_serialised(|| async {
+            set_dev_overlay_active_for_test(Some(true));
+            transition::clear_dev_transition_for_test();
+            locked_set_var("IPE_WATCH_HOT_TOKEN", "correct");
 
-        let body = format!(r#"{{"old_json":{INC1:?},"new_json":{INC2:?}}}"#);
-        let resp = post_hot(Some("correct"), &body).await;
-        assert_eq!(resp.status(), StatusCode::OK);
+            let body = format!(r#"{{"old_json":{INC1:?},"new_json":{INC2:?}}}"#);
+            let resp = post_hot(Some("correct"), &body).await;
+            assert_eq!(resp.status(), StatusCode::OK);
 
-        // The overlay now maps the OLD baked datum to the +2 replacement: a hot
-        // read of the old key applies +2, proving registration reached the store.
-        #[derive(serde::Serialize, serde::Deserialize, PartialEq, Debug)]
-        struct Counter {
-            count: i64,
-        }
-        let next = transition::apply_transition_hot(INC1, Counter { count: 5 });
-        assert_eq!(next.count, 7, "the registered +2 replacement must apply");
-
-        transition::clear_dev_transition_for_test();
-        locked_remove_var("IPE_WATCH_HOT_TOKEN");
-        set_dev_overlay_active_for_test(None);
+            // The overlay now maps the OLD baked datum to the +2 replacement: a
+            // hot read of the old key applies +2, proving registration reached
+            // the store.
+            #[derive(serde::Serialize, serde::Deserialize, PartialEq, Debug)]
+            struct Counter {
+                count: i64,
+            }
+            let next = transition::apply_transition_hot(INC1, Counter { count: 5 });
+            assert_eq!(next.count, 7, "the registered +2 replacement must apply");
+        });
     }
 }
 
