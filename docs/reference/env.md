@@ -28,6 +28,7 @@ Every `IPE_*` variable the runtime, CLI, and compiler read. The table is grouped
 - [Runtime](#runtime)
 - [Web server](#web-server)
 - [WebSocket](#websocket)
+- [UI render](#ui-render)
 
 ## Build
 
@@ -46,9 +47,10 @@ Every `IPE_*` variable the runtime, CLI, and compiler read. The table is grouped
 | `IPE_STATIC` | unset (dynamic build) | Set to `1` or `true` to request a fully-static (musl) binary. Mirrors `--static`; env wins over `package.ipe [rust] static`. | `Tunable` |
 | `IPE_TARGET` | unset (native) | Cross-compilation target triple, e.g. `wasm32-unknown-unknown` or `aarch64-unknown-linux-musl`. Set to `wasm` as a shorthand for `wasm32-unknown-unknown`. | `Tunable` |
 | `IPE_VERSION` | dev | Compiler version baked in by CI (`option_env!`). Surfaced at `GET /_ipe/buildinfo` and used to locate the cached console binary. Not read at runtime via `env::var`. | `Tunable` |
-| `IPE_WATCH_BLUEGREEN` | unset (off) | Set to any non-empty value other than `0` to enable dev-loop blue-green swaps: `ipe watch` holds the port behind a proxy and cuts over to the rebuilt binary without dropping the browser connection. Dev-only; no effect on a release build. | `Tunable` |
+| `IPE_WATCH_BLUEGREEN` | unset (on) | Dev-loop blue-green swaps are ON by default: `ipe watch` holds the port behind a proxy and cuts over to the rebuilt binary without dropping the browser connection. Set to `0`/empty to force it off, or any other value to force it on; `IPE_WATCH_NO_BLUEGREEN` overrides either way. Dev-only; no effect on a release build. | `Tunable` |
 | `IPE_WATCH_HOT_APPEARANCE` | unset (on for `ipe watch`) | Explicit control over dev-loop appearance hot-swap, which is ON by default for `ipe watch`: an edit to a style literal is pushed to the browser without a rebuild. Set to `0` or empty to force it off; any other value forces it on. `IPE_WATCH_NO_HOT_APPEARANCE` takes precedence. Dev-only; no effect on a release build. | `Tunable` |
 | `IPE_WATCH_HOT_TOKEN` | unset | Per-process control token for the dev-only appearance-hot-swap endpoint. `ipe watch` sets it and sends it as `X-Ipe-Hot-Token`; a request whose token does not constant-time-match is refused. Dev-only; the endpoint is never mounted in a release build. | `Secret` |
+| `IPE_WATCH_NO_BLUEGREEN` | unset (blue-green on) | Set to any non-empty value other than `0` to opt OUT of dev-loop blue-green swaps and restore the direct-bind, kill-old-then-spawn-new `ipe watch` path (a rebuild briefly drops the browser connection). Overrides `IPE_WATCH_BLUEGREEN`. Dev-only; no effect on a release build. | `Tunable` |
 | `IPE_WATCH_NO_HOT_APPEARANCE` | unset (hot-swap on) | Set to any non-empty value other than `0` to opt OUT of dev-loop appearance hot-swap: `ipe watch` normally hot-swaps a style-literal edit into the running app without a rebuild. This restores the plain direct-literal emit, so an appearance edit triggers a full recompile. Dev-only; no effect on `ipe build` or a release build. | `Tunable` |
 | `IPE_WATCH_NO_INCREMENTAL` | unset (incremental on) | Set to any non-empty value other than `0` to opt OUT of the dev-loop incremental rebuild path: `ipe watch` normally builds the emitted app with `CARGO_INCREMENTAL=1` and no rustc wrapper (so a machine-level sccache config cannot force non-incremental), which speeds the warm view/update-body edit loop and is behaviour-identical. This restores the machine's normal build configuration for the watch rebuild. Dev-only; no effect on `ipe build` or a release build. | `Tunable` |
 | `IPE_WATCH_TIMING` | unset (off) | Set to `1` or `true` to print a per-phase `ipe watch` rebuild breakdown (emit, cargo, restart, reconnect) to stderr. Dev-loop instrumentation; has no effect outside `ipe watch`. | `Tunable` |
@@ -204,6 +206,7 @@ Every `IPE_*` variable the runtime, CLI, and compiler read. The table is grouped
 | `IPE_WEB_STATIC_DIR` | unset | Directory served at `/static/*`. Populated from `package.ipe [web] static`. Path traversal is blocked by construction. Deprecated alias: `IPE_LIVE_STATIC_DIR`. | `Tunable` |
 | `IPE_WEB_STORE` | memory | Session-store backend for the web server: `memory` (per-process, lost on restart), `file` (persisted to `IPE_WEB_STORE_PATH`, no database dependency), or `sqlite`/`postgres`/`redis` (persisted, require the `db` or `redis_store` feature). `ipe watch` selects `file` so a rebuild preserves live sessions even for a plain web app. Requesting a backend the build lacks the feature for is a fail-closed startup error, not a silent downgrade — build with the feature or set `IPE_WEB_STORE=file\|memory`. | `Tunable` |
 | `IPE_WEB_STORE_PATH` | unset (temp file) | Filesystem path for the `file` or `sqlite` session store. Ignored when `IPE_WEB_STORE` is `memory`. Unset uses a per-process temporary file. | `Tunable` |
+| `IPE_WEB_SWAP_TOAST` | unset (off) | Set by the `ipe watch` blue-green proxy on the app it supervises. Tells the web client a reconnect is an expected rebuild cutover, so it greets it with a brief positive "updated ✓" toast instead of the "Reconnecting…" banner. Dev-only; a release build never sets it. | `Tunable` |
 | `IPE_WEB_TTL` | 1800 (30 min) | Session idle TTL. Accepts seconds (`1800`) or duration strings (`30m`, `1h`). Takes precedence over `Web.sessionTtl`. Deprecated alias: `IPE_LIVE_TTL`. | `Tunable` |
 
 ## WebSocket
@@ -213,4 +216,10 @@ Every `IPE_*` variable the runtime, CLI, and compiler read. The table is grouped
 | `IPE_WS_HEARTBEAT` | 30 | WebSocket ping interval (seconds). A peer that does not respond within two intervals is considered dead and disconnected. | `Tunable` |
 | `IPE_WS_MAX_MESSAGE_BYTES` | 1048576 (1 MiB) | Maximum WebSocket message size (bytes) for both client and server connections. Messages larger than this limit are rejected. | `Tunable` |
 | `IPE_WS_SEND_BUFFER` | 256 | Per-connection outbound frame buffer depth. A full buffer applies backpressure (the send kernel returns `Err`) rather than dropping frames. | `Tunable` |
+
+## UI render
+
+| Variable | Default | Effect | Class |
+|----------|---------|--------|-------|
+| `IPE_EXPLAIN_VERBOSE` | unset | Enable the verbose `Debug.explain` dev overlay: each explained layout box gets a `title` tooltip annotating its type, width, and padding. Accepts `1`, `true`, or `on` (case-insensitive). Developer diagnostic, off by default. | `Tunable` |
 

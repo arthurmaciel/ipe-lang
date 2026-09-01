@@ -15,6 +15,8 @@
 //! backend resolves them through the [`ipe_intern::Interner`] it is constructed
 //! with. The [`ipe_backend::Backend`] trait stays string-free.
 
+mod const_fold;
+pub use const_fold::fold_program;
 mod crate_specs;
 mod doc;
 mod emit_console;

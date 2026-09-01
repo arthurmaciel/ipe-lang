@@ -74,6 +74,8 @@ pub enum Subsystem {
     Ws,
     /// `ipe doc` / documentation server.
     Doc,
+    /// UI layout render — developer overlays and diagnostics.
+    Ui,
 }
 
 impl Subsystem {
@@ -95,6 +97,7 @@ impl Subsystem {
             Self::Compression => "Compression",
             Self::Config => "Config",
             Self::Runtime => "Runtime",
+            Self::Ui => "UI render",
             Self::Web => "Web server",
             Self::Ws => "WebSocket",
         }
@@ -228,11 +231,12 @@ pub static ENV_VARS: &[EnvVar] = &[
     },
     EnvVar {
         name: "IPE_WATCH_BLUEGREEN",
-        default: "unset (off)",
-        purpose: "Set to any non-empty value other than `0` to enable dev-loop \
-                  blue-green swaps: `ipe watch` holds the port behind a proxy and \
-                  cuts over to the rebuilt binary without dropping the browser \
-                  connection. Dev-only; no effect on a release build.",
+        default: "unset (on)",
+        purpose: "Dev-loop blue-green swaps are ON by default: `ipe watch` holds the \
+                  port behind a proxy and cuts over to the rebuilt binary without \
+                  dropping the browser connection. Set to `0`/empty to force it off, \
+                  or any other value to force it on; `IPE_WATCH_NO_BLUEGREEN` overrides \
+                  either way. Dev-only; no effect on a release build.",
         subsystem: Subsystem::Build,
         class: Class::Tunable,
     },
@@ -256,6 +260,17 @@ pub static ENV_VARS: &[EnvVar] = &[
                   Dev-only; the endpoint is never mounted in a release build.",
         subsystem: Subsystem::Build,
         class: Class::Secret,
+    },
+    EnvVar {
+        name: "IPE_WATCH_NO_BLUEGREEN",
+        default: "unset (blue-green on)",
+        purpose: "Set to any non-empty value other than `0` to opt OUT of dev-loop \
+                  blue-green swaps and restore the direct-bind, \
+                  kill-old-then-spawn-new `ipe watch` path (a rebuild briefly drops \
+                  the browser connection). Overrides `IPE_WATCH_BLUEGREEN`. Dev-only; \
+                  no effect on a release build.",
+        subsystem: Subsystem::Build,
+        class: Class::Tunable,
     },
     EnvVar {
         name: "IPE_WATCH_NO_HOT_APPEARANCE",
@@ -1007,6 +1022,16 @@ pub static ENV_VARS: &[EnvVar] = &[
         class: Class::Tunable,
     },
     EnvVar {
+        name: "IPE_WEB_SWAP_TOAST",
+        default: "unset (off)",
+        purpose: "Set by the `ipe watch` blue-green proxy on the app it supervises. \
+                  Tells the web client a reconnect is an expected rebuild cutover, so it \
+                  greets it with a brief positive \"updated ✓\" toast instead of the \
+                  \"Reconnecting…\" banner. Dev-only; a release build never sets it.",
+        subsystem: Subsystem::Web,
+        class: Class::Tunable,
+    },
+    EnvVar {
         name: "IPE_WEB_TTL",
         default: "1800 (30 min)",
         purpose: "Session idle TTL. Accepts seconds (`1800`) or duration strings \
@@ -1039,6 +1064,17 @@ pub static ENV_VARS: &[EnvVar] = &[
                   backpressure (the send kernel returns `Err`) rather than dropping \
                   frames.",
         subsystem: Subsystem::Ws,
+        class: Class::Tunable,
+    },
+    // ── UI render ─────────────────────────────────────────────────────────────
+    EnvVar {
+        name: "IPE_EXPLAIN_VERBOSE",
+        default: "unset",
+        purpose: "Enable the verbose `Debug.explain` dev overlay: each explained \
+                  layout box gets a `title` tooltip annotating its type, width, and \
+                  padding. Accepts `1`, `true`, or `on` (case-insensitive). \
+                  Developer diagnostic, off by default.",
+        subsystem: Subsystem::Ui,
         class: Class::Tunable,
     },
 ];

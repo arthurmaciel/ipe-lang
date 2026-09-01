@@ -100,6 +100,56 @@ fn web_fixture_weight(weight: u32, extra_text: &str) -> String {
     )
 }
 
+/// A `Web.app` whose view attaches an animation built from a fully literal
+/// `Ipe.Ui.Animation` pipeline — every knob a compile-time constant. The
+/// Phase-2 const-fold reduces `Animation.attribute { …, duration, … }` to a
+/// direct `Ui.animate <name> "<shorthand tail>" …` whose shorthand-tail string
+/// literal carries `<duration>ms …`; that literal hoists into the per-view
+/// `LiteralTable`, so a `duration` edit changes only a `LiteralTable` slot and
+/// hot-swaps without a rebuild. A marker text confirms the app is up.
+fn web_fixture_animation(duration: u32, extra_text: &str) -> String {
+    format!(
+        "module Main exposing (main)\n\n\
+         import Ipe.Tea.Web as Web\n\
+         import Ipe.Ui as Ui\n\
+         import Ipe.Ui.Animation as Animation\n\
+         import Ipe.Tea.Web.Cmd\n\
+         import Ipe.Tea.Web.Sub\n\
+         import Ipe.String\n\n\
+         type alias Model = {{ count : Int }}\n\n\
+         type Msg = Noop\n\n\
+         init : a -> ( Model, Cmd Msg )\n\
+         init _req =\n    \
+             ( {{ count = 0 }}, Cmd.none )\n\n\
+         update : Msg -> Model -> ( Model, Cmd Msg )\n\
+         update _msg model =\n    \
+             ( model, Cmd.none )\n\n\
+         view : Model -> Element Msg\n\
+         view _model =\n    \
+             Ui.column\n        \
+                 [ Animation.attribute\n            \
+                     {{ name = \"spin\"\n            \
+                     , duration = {duration}\n            \
+                     , easing = Animation.easeInOut\n            \
+                     , delay = 0\n            \
+                     , iterations = Animation.once\n            \
+                     , fillMode = Animation.forwards\n            \
+                     , respectReducedMotion = True\n            \
+                     , keyframes = []\n            \
+                     }}\n        \
+                 ]\n        \
+                 [ Ui.text \"marker\"{extra_text} ]\n\n\
+         subscriptions : Model -> Sub Msg\n\
+         subscriptions _model =\n    \
+             Sub.none\n\n\
+         main =\n    \
+             Web.app\n        \
+                 {{ init = init, update = update, view = view, subscriptions = subscriptions\n        \
+                 , routes = [], notFound = Noop\n        \
+                 }}\n",
+    )
+}
+
 /// A `Web.app` whose view carries a hoistable **attribute value** (`Ui.name`)
 /// and a **static text** node whose content is `text` — both widened
 /// appearance-literal kinds (Step 5). A marker text confirms the app is up.
@@ -699,6 +749,104 @@ fn numeric_weight_edit_hot_swaps_without_rebuild() -> Result<(), BoxError> {
     write_main(
         &ipe_dir,
         &web_fixture_weight(700, "\n        , Ui.text \"added\""),
+    )?;
+    let restarted = wait_for(Duration::from_mins(2), || {
+        server_pid(port).is_some_and(|pid| pid != pid_before)
+            && http_get_body(port).is_some_and(|b| b.contains("added"))
+    });
+    assert!(
+        restarted,
+        "a structural edit (added element) must recompile and restart onto a new binary"
+    );
+    assert!(
+        wait_for(Duration::from_secs(10), || {
+            sink.count_restarted() > restarts_before_struct
+        }),
+        "a structural edit must recompile and restart (a new Restarted event)"
+    );
+
+    stop_and_join(&handle, join)
+}
+
+/// SEAL for the Phase-2 const-fold appearance slice: a web view carrying an
+/// animation built from a fully literal `Ipe.Ui.Animation` pipeline cold-builds
+/// and serves under the flag (proving the folded `ui_animate_raw_(__ipe_lit
+/// .get(N).to_string(), …)` emit cargo-compiles), an animation `duration` edit
+/// hot-swaps without a rebuild — the const-fold reduces the whole pipeline to a
+/// direct shorthand-tail string literal that hoists into the per-view
+/// `LiteralTable`, so a `duration` edit changes only a slot — while a structural
+/// edit recompiles. The folded literal flows through the SAME `build_anim` sink
+/// (`sink_safe_keyframes_body` / `SafeCssValue` / `sanitise_animation_name`) as
+/// an unfolded one, so the hoisted read is neutralised identically to the baked
+/// value (dev == prod, no sink bypass).
+#[test]
+#[cfg(target_os = "linux")]
+fn animation_duration_edit_hot_swaps_without_rebuild() -> Result<(), BoxError> {
+    if std::env::var("IPE_E2E").is_err() {
+        eprintln!("skipping (set IPE_E2E=1 to run)");
+        return Ok(());
+    }
+    // SAFETY: single-threaded here (no watch thread spawned yet); nextest isolates
+    // this process, so the var neither races nor leaks.
+    unsafe {
+        std::env::set_var("IPE_WATCH_HOT_APPEARANCE", "1");
+    }
+
+    let (ipe_dir, out_dir) = fresh_dirs("animation")?;
+    write_main(&ipe_dir, &web_fixture_animation(300, ""))?;
+
+    let sink = EventSink::default();
+    let port = 19180;
+    let (join, handle) = start_watch(&ipe_dir.join("Main.ipe"), &out_dir, port, &sink)?;
+
+    assert!(
+        wait_for_serving(port, Duration::from_mins(4)),
+        "the flag-on cold build of a folded Animation view must serve (hoisted \
+         ui_animate_raw_ literal args compile)"
+    );
+    assert!(
+        wait_for(Duration::from_secs(10), || sink.count_restarted() >= 1),
+        "the cold build must record its initial Restarted event"
+    );
+    let pid_before = server_pid(port).ok_or("server PID must be discoverable after cold build")?;
+    let restarts_before = sink.count_restarted();
+
+    // ── Animation edit: duration 300 -> 600. The const-fold re-reduces the
+    //    pipeline to a NEW shorthand-tail literal (`600ms …`); the difference is
+    //    confined to a hoisted LiteralTable slot ⇒ appearance-only hot-swap. ──
+    write_main(&ipe_dir, &web_fixture_animation(600, ""))?;
+    let swap_start = Instant::now();
+    let hot_swapped = wait_for(Duration::from_secs(20), || sink.count_hot_swapped() > 0);
+    assert!(
+        hot_swapped,
+        "a folded animation `duration` edit must be hot-swapped (AppearanceHotSwapped), \
+         not recompiled"
+    );
+    std::thread::sleep(Duration::from_secs(2));
+    assert_eq!(
+        sink.count_restarted(),
+        restarts_before,
+        "a hot-swapped animation edit must NOT restart the app (no cargo rebuild)"
+    );
+    assert_eq!(
+        server_pid(port),
+        Some(pid_before),
+        "a hot-swapped animation edit must leave the SAME server process running"
+    );
+    assert!(
+        http_get_body(port).is_some_and(|b| b.contains("marker")),
+        "the app must keep serving after the animation hot-swap"
+    );
+    eprintln!(
+        "[measure] Animation duration 300->600 hot-swap round-trip: {} ms (no cargo, no restart)",
+        swap_start.elapsed().as_millis()
+    );
+
+    // ── Structural edit: add an element. Logic ⇒ recompile + restart. ──
+    let restarts_before_struct = sink.count_restarted();
+    write_main(
+        &ipe_dir,
+        &web_fixture_animation(600, "\n        , Ui.text \"added\""),
     )?;
     let restarted = wait_for(Duration::from_mins(2), || {
         server_pid(port).is_some_and(|pid| pid != pid_before)

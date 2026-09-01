@@ -1,16 +1,16 @@
 //! Behavioral tests for the `Ipe.Debug` development escape hatches.
 //!
-//! - `Debug.explain : Attribute msg` — outline CSS emitted on the parent element
-//!   and propagated to every descendant via the renderer.
+//! - `Debug.explain : Attribute msg` — a depth-aware debug overlay emitted on
+//!   the parent element and propagated to every descendant via the renderer.
 //! - `Debug.todo : String -> a` — writes `TODO at <file>:<line>: <note>` to
 //!   stderr and exits non-zero via `system_exit`, never via `panic!`.
 
 // ── Test 4: Debug.explain outline on parent AND nested child ─────────────────
 
-/// `Debug.explain` on a parent element emits the outline CSS on the parent
+/// `Debug.explain` on a parent element emits the debug overlay on the parent
 /// AND propagates it to every direct and indirect descendant — without altering
-/// layout. Verified by running the element through the renderer and counting
-/// the outline declarations in the serialised HTML.
+/// layout. The overlay is the A7 depth-hued outline (`outline:2px solid hsl(…)`),
+/// so both the parent (depth 0) and the nested child (depth 1) carry one.
 #[test]
 fn explain_outline_emitted_on_parent_and_nested_child() {
     use ipe_runtime_rust::ui::element::{Attribute, Description, Element};
@@ -31,14 +31,20 @@ fn explain_outline_emitted_on_parent_and_nested_child() {
     let html = ui_layout(vec![], parent_elem);
     let serialised = ipe_runtime_rust::render_html(&html);
 
-    // The renderer emits this exact CSS declaration for AttrExplain.
-    let outline_marker = "outline:2px solid rgba(0,100,255,0.5)";
+    // The A7 overlay emits a depth-hued outline on every explained box; count
+    // the propagated occurrences (parent + nested child ⇒ at least 2).
+    let outline_marker = "outline:2px solid hsl(";
     let count = serialised.matches(outline_marker).count();
 
     assert!(
         count >= 2,
-        "expected the outline CSS to appear on both the parent and a nested \
-         child (at least 2 occurrences); found {count} in:\n{serialised}"
+        "expected the depth-hued explain outline on both the parent and a \
+         nested child (at least 2 occurrences); found {count} in:\n{serialised}"
+    );
+    // The former uniform solid-blue outline must be gone.
+    assert!(
+        !serialised.contains("outline:2px solid rgba(0,100,255,0.5)"),
+        "the old uniform blue explain outline must no longer appear:\n{serialised}"
     );
 }
 
