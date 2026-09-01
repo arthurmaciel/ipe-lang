@@ -11,9 +11,11 @@
 //! everything else, so an unprovable subtree stays compiled (the recompile
 //! path) — conservative by construction, exactly the appearance-vs-logic split.
 //!
-//! The match over node/attribute kernels is EXHAUSTIVE and wildcard-free: a new
-//! `Ipe.Html` node or attribute kernel forces a compile error here rather than
-//! being silently mis-templated or silently refused.
+//! Fail-closed over node/attribute kernels: only the templatable `Ipe.Html`
+//! element / text / string-attribute builders reduce to a template; EVERY other
+//! kernel — raw / trusted markup, value builders, `Ui.*` nodes, handlers,
+//! effects — refuses and keeps the subtree compiled. A new kernel is therefore
+//! never templated by default; it must be added to the accept set deliberately.
 //!
 //! ## Why a shape match, not the purity analysis
 //!
@@ -21,7 +23,7 @@
 //! subtree is a stricter, simpler property — a syntactically-literal element
 //! tree. A `Var` / `Access` / `If` / `Match` / foreign call anywhere in the
 //! subtree fails this match, which IS "no Model read, no control flow, no
-//! handler". The exhaustive shape match enforces it directly; const_fold stays
+//! handler". The exhaustive shape match enforces it directly; `const_fold` stays
 //! the mechanism for the leaf VALUES, composable but not needed here.
 //!
 //! ## Inert by construction
@@ -43,12 +45,12 @@ use ipe_ir::{Callee, Expr, KernelFn};
 /// import because the backend does not depend on the runtime crate outside
 /// tests; a drift test pins the two together. Staying at-or-below the runtime
 /// cap is the soundness requirement — equal keeps them exactly in step.
-pub(crate) const MAX_TEMPLATE_DEPTH: usize = 1024;
+pub const MAX_TEMPLATE_DEPTH: usize = 1024;
 
 /// A static attribute reduced to an inert key/value string pair. Mirrors the
 /// runtime `TemplateAttr` — strings only, never a handler.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct CompileTemplateAttr {
+pub struct CompileTemplateAttr {
     key: String,
     value: String,
 }
@@ -59,24 +61,24 @@ pub(crate) struct CompileTemplateAttr {
 /// enforced by the type (make-invalid-states-unrepresentable), exactly as the
 /// runtime `Template`.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum CompileTemplate {
+pub enum CompileTemplate {
     Element {
         tag: String,
         attrs: Vec<CompileTemplateAttr>,
-        children: Vec<CompileTemplate>,
+        children: Vec<Self>,
     },
     Text(String),
 }
 
 impl CompileTemplate {
     /// Serialize to the JSON the runtime `Template` decodes — an externally
-    /// tagged enum matching serde_json's default representation:
+    /// tagged enum matching `serde_json`'s default representation:
     /// `{"Element":{"tag":…,"attrs":[{"key":…,"value":…}],"children":[…]}}` and
     /// `{"Text":…}`. Deterministic (fixed field order, deterministic string
     /// escaping) so the emit is stable across runs — a requirement for the
     /// golden suite and the classifier's byte-diff. Byte-identical to
     /// `serde_json::to_string(&Template)` (pinned by a backend test).
-    pub(crate) fn to_json(&self) -> String {
+    pub fn to_json(&self) -> String {
         let mut out = String::new();
         self.write_json(&mut out);
         out
@@ -84,12 +86,12 @@ impl CompileTemplate {
 
     fn write_json(&self, out: &mut String) {
         match self {
-            CompileTemplate::Text(s) => {
+            Self::Text(s) => {
                 out.push_str("{\"Text\":");
                 write_json_string(s, out);
                 out.push('}');
             }
-            CompileTemplate::Element {
+            Self::Element {
                 tag,
                 attrs,
                 children,
@@ -121,12 +123,13 @@ impl CompileTemplate {
 }
 
 /// Append `s` as a JSON string literal (surrounding quotes + escaping) matching
-/// serde_json's encoding: the two mandatory JSON escapes (`"` and `\`), the
-/// short escapes for the C0 control characters serde_json spells short
+/// `serde_json`'s encoding: the two mandatory JSON escapes (`"` and `\`), the
+/// short escapes for the C0 control characters `serde_json` spells short
 /// (`\n \r \t \u{08} \u{0c}`), and `\u00XX` for every other control character.
-/// All other characters (including non-ASCII) pass through verbatim — serde_json
-/// does not escape non-ASCII by default. Total: never panics.
+/// All other characters (including non-ASCII) pass through verbatim —
+/// `serde_json` does not escape non-ASCII by default. Total: never panics.
 fn write_json_string(s: &str, out: &mut String) {
+    use std::fmt::Write as _;
     out.push('"');
     for ch in s.chars() {
         match ch {
@@ -138,8 +141,9 @@ fn write_json_string(s: &str, out: &mut String) {
             '\u{08}' => out.push_str("\\b"),
             '\u{0c}' => out.push_str("\\f"),
             c if (c as u32) < 0x20 => {
-                // Remaining C0 controls: serde_json emits `\u00XX` lowercase-hex.
-                out.push_str(&format!("\\u{:04x}", c as u32));
+                // Remaining C0 controls: `serde_json` emits `\u00XX` lowercase-hex.
+                // `write!` to a `String` is infallible; the result is discarded.
+                let _ = write!(out, "\\u{:04x}", c as u32);
             }
             c => out.push(c),
         }
@@ -151,7 +155,7 @@ fn write_json_string(s: &str, out: &mut String) {
 /// when the subtree is not provably static (any `Model` read, control flow,
 /// handler, raw markup, non-literal argument, or over-deep nesting) — the
 /// caller then keeps it compiled (recompile path).
-pub(crate) fn template_of_expr(expr: &Expr) -> Option<CompileTemplate> {
+pub fn template_of_expr(expr: &Expr) -> Option<CompileTemplate> {
     template_of_expr_at(expr, 0)
 }
 
@@ -169,9 +173,14 @@ fn template_of_expr_at(expr: &Expr, depth: usize) -> Option<CompileTemplate> {
         // A user-function or FFI call is not a static node kernel.
         return None;
     };
-    // EXHAUSTIVE over the `Ipe.Html` element/text node kernels. A `_` arm would
-    // silently refuse a new node kernel; instead every kernel is listed so a new
-    // one forces a decision here (compile error) rather than a silent gap.
+    // Matched by NODE kernel. Only the four templatable node builders below reduce
+    // to a template; EVERY other kernel — including the raw / trusted-markup node
+    // kernels (`HtmlRawNode` / `HtmlStyleNode` / `HtmlScriptNode` / `HtmlDoctype`,
+    // which carry un-escaped markup and must NEVER become an inert template, exactly
+    // as the runtime `template_of` refuses `HRaw`), every value builder, every
+    // `Ui.*` layout node, and every handler-bearing or effectful call — refuses via
+    // the final arm and stays compiled. Fail-closed: an unrecognised node kernel is
+    // never templated.
     match k {
         // `Html.text s` — a static text node when `s` is a literal.
         KernelFn::HtmlTextNode => match args.as_slice() {
@@ -217,17 +226,8 @@ fn template_of_expr_at(expr: &Expr, depth: usize) -> Option<CompileTemplate> {
             }),
             _ => None,
         },
-        // Raw / trusted-markup node kernels have NO inert representation — a
-        // template must never carry un-escaped markup (it would smuggle markup
-        // past the render sanitizer). Refuse, keep compiled. Mirrors the runtime
-        // `template_of` refusing `HRaw`.
-        KernelFn::HtmlRawNode
-        | KernelFn::HtmlStyleNode
-        | KernelFn::HtmlScriptNode
-        | KernelFn::HtmlDoctype => None,
-        // Every other kernel in element position is not a static `Ipe.Html`
-        // node (a value builder, a `Ui.*` layout node, a handler-bearing call,
-        // an effect). Not templatable — keep compiled.
+        // Raw / trusted-markup, value builders, `Ui.*` nodes, handlers, effects —
+        // not a static `Ipe.Html` element/text node. Refuse, keep compiled.
         _ => None,
     }
 }
@@ -258,6 +258,11 @@ fn static_attr(attr: &Expr) -> Option<CompileTemplateAttr> {
     let Callee::Kernel(k) = callee else {
         return None;
     };
+    // A bool attribute (`HtmlBoolAttribute`), an absent attribute (`HtmlNoAttr`),
+    // every event-handler attribute, and any other attribute kernel are outside the
+    // static string-attr scope of a template (mirrors the runtime `template_of`
+    // refusing `BoolAttr` / `NoAttr` / `EventAttr`) — they refuse via the final arm
+    // and keep the subtree compiled. Only the plain string attribute reduces.
     match k {
         // `Html.attribute key value` — a static string attribute.
         KernelFn::HtmlAttribute | KernelFn::UiHtmlAttribute => match args.as_slice() {
@@ -267,13 +272,8 @@ fn static_attr(attr: &Expr) -> Option<CompileTemplateAttr> {
             }),
             _ => None,
         },
-        // A bool attribute, an absent attribute, and every event-handler
-        // attribute are outside the static string-attr scope of a template
-        // (mirrors the runtime `template_of` refusing `BoolAttr` / `NoAttr` /
-        // `EventAttr`). Keep the subtree compiled.
-        KernelFn::HtmlBoolAttribute | KernelFn::HtmlNoAttr => None,
-        // Any other kernel in attribute position (an event builder, a value
-        // helper) is not a static string attribute.
+        // A bool / absent / event / any-other attribute kernel is not a static
+        // string attribute — keep the subtree compiled.
         _ => None,
     }
 }
