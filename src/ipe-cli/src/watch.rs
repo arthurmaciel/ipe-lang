@@ -969,14 +969,25 @@ fn run_inner(
     // or whenever the flag is off.
     let mut running_emitted: Option<Arc<ipe_backend::EmittedProject>> = None;
     // The per-session control token that authenticates a `/_ipe/hot-appearance`
-    // POST. Minted once here (when the flag is on) and injected into every
-    // spawned child via `child_env` as `IPE_WATCH_HOT_TOKEN`, so only this watch
-    // process can drive a live appearance patch of the app it launched.
-    let hot_token: Option<String> = if crate::hot_appearance_enabled() {
-        Some(mint_hot_token())
-    } else {
-        None
-    };
+    // POST and a `/_ipe/watch/status` build-status POST. Minted once here and
+    // injected into every spawned child via `child_env` as `IPE_WATCH_HOT_TOKEN`,
+    // so only this watch process can drive either dev endpoint of the app it
+    // launched. Minted when EITHER the appearance hot-swap flag OR the browser
+    // build-status banner is on — the failure banner must reach the child even
+    // with appearance hot-swap off (the two endpoints gate independently on the
+    // server; the shared token arms only whichever route is actually mounted).
+    let hot_token: Option<String> =
+        if crate::hot_appearance_enabled() || crate::watch_banner_enabled() {
+            Some(mint_hot_token())
+        } else {
+            None
+        };
+    // The appearance hot-swap classifier and its running-emit baseline are armed
+    // ONLY by the appearance flag — never merely by the banner. The child's emit
+    // carries a `LiteralTable` overlay only under `hot_appearance_enabled()`
+    // (see the emit config), so a patch push against a banner-only build would
+    // target a binary with no overlay to patch.
+    let appearance_active = crate::hot_appearance_enabled();
     // The current live cycle's per-phase timing (`IPE_WATCH_TIMING`). Reset at
     // each `FsBatch`; the resolve/compile/write/cargo phases fill it as their
     // events land, and it is reported at the terminal event (restart done, or
@@ -1224,9 +1235,11 @@ fn run_inner(
                         // classifier is conservative by construction: a logic
                         // change perturbs the emitted Rust outside a defaults
                         // array, forcing Logic (see `hot_classify`).
-                        if let (Some(tok), Some(running)) =
-                            (hot_token.as_deref(), running_emitted.as_ref())
-                        {
+                        if let (true, Some(tok), Some(running)) = (
+                            appearance_active,
+                            hot_token.as_deref(),
+                            running_emitted.as_ref(),
+                        ) {
                             match crate::hot_classify::classify(running, &emitted) {
                                 crate::hot_classify::Classification::AppearanceOnly(patches) => {
                                     // The running binary is unchanged, so
@@ -1279,9 +1292,8 @@ fn run_inner(
                         timings.write = Some(write_started.elapsed());
                         // This emit is about to be compiled into the new running
                         // binary, so it becomes the classifier's baseline for the
-                        // next edit (only relevant under the flag; cheap to keep
-                        // unconditionally).
-                        if hot_token.is_some() {
+                        // next edit (only relevant under the appearance flag).
+                        if appearance_active {
                             running_emitted = Some(emitted.clone());
                         }
                         current_is_web = is_ipe_web_project(&emitted);

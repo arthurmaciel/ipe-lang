@@ -936,6 +936,21 @@ fn hot_appearance_from_env(no_var: Option<&str>, hot_var: Option<&str>) -> bool 
     hot_var.is_none_or(|v| !v.is_empty() && v != "0")
 }
 
+/// Whether the dev-only browser build-status banner is enabled for `ipe watch`.
+///
+/// Enabled unless `IPE_WEB_BANNER` is explicitly `off`/`0`/`false`. Mirrors the
+/// runtime's `watch_banner_active` disable semantics so the CLI-side poster and
+/// the server-side endpoint agree on when the banner is live. Distinct from
+/// [`hot_appearance_enabled`]: the failure banner must surface a red compile
+/// error whenever the banner is on, even with appearance hot-swap off.
+#[must_use]
+pub fn watch_banner_enabled() -> bool {
+    std::env::var("IPE_WEB_BANNER").map_or(true, |v| {
+        let v = v.trim().to_ascii_lowercase();
+        !(v == "off" || v == "0" || v == "false")
+    })
+}
+
 /// Whether the DEV-ONLY blue-green front proxy is enabled for `ipe watch`.
 ///
 /// Default ON: `ipe watch` puts a persistent proxy on the user's port and cuts
