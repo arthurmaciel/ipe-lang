@@ -295,12 +295,11 @@ pub(crate) fn build_style_string<M>(attrs: &[Attribute<M>]) -> String {
                 decl!("cursor:pointer");
             }
             Attribute::AttrExplain => {
-                // A solid blue outline on the element boundary — 2 px, never
-                // changes layout (outline is outside the box model, like
-                // `outline` vs `border`).  The offset makes nested outlines
-                // visually distinct from parent/sibling ones.
-                decl!("outline:2px solid rgba(0,100,255,0.5)");
-                decl!("outline-offset:2px");
+                // A7: the debug overlay is depth- and node-aware (hue by depth, a
+                // padding band, a spacing tint, an overflow flag), so it cannot
+                // be a context-free per-attribute declaration. It is emitted by
+                // `explain_overlay_css` at `render_node_as`, which has the depth
+                // and the node's padding / spacing / width. Nothing here.
             }
             Attribute::AttrOverflow(x, y) => {
                 // Per-component gating: one bad axis drops alone, the other
@@ -853,6 +852,125 @@ fn overconstrain_css<M>(attrs: &[Attribute<M>], parent_axis: FlexAxis) -> &'stat
     if fixed_width { "flex-shrink:0" } else { "" }
 }
 
+/// The largest uniform padding this node declares, in px (0 when none). Used by
+/// A7 to size the translucent padding band.
+fn max_padding<M>(attrs: &[Attribute<M>]) -> i64 {
+    attrs
+        .iter()
+        .filter_map(|a| match a {
+            Attribute::AttrPadding(t, r, b, l) => Some((*t).max(*r).max(*b).max(*l)),
+            _ => None,
+        })
+        .max()
+        .unwrap_or(0)
+}
+
+/// The spacing (flex `gap`) this node declares, in px (0 when none).
+fn spacing_of<M>(attrs: &[Attribute<M>]) -> i64 {
+    attrs
+        .iter()
+        .find_map(|a| match a {
+            Attribute::AttrSpacing(n) => Some(*n),
+            _ => None,
+        })
+        .unwrap_or(0)
+}
+
+/// True when this node carries a `background-color` / `background-image` so A7's
+/// spacing tint must not paint over it.
+fn has_background<M>(attrs: &[Attribute<M>]) -> bool {
+    attrs.iter().any(|a| {
+        matches!(
+            a,
+            Attribute::AttrBgColor(_) | Attribute::AttrBgImage(_) | Attribute::AttrBgGradient(_)
+        )
+    })
+}
+
+/// A short type tag for the verbose `Debug.explain` annotation.
+fn explain_type_tag(axis: FlexAxis, tag: &str) -> &'static str {
+    match tag {
+        "button" => "button",
+        "a" => "link",
+        "img" => "image",
+        "p" => "paragraph",
+        _ => match axis {
+            FlexAxis::Row => "row",
+            FlexAxis::Column => "column",
+            FlexAxis::El => "el",
+        },
+    }
+}
+
+/// A7 (verbose): whether the opt-in verbose annotation is enabled. Read from the
+/// `IPE_EXPLAIN_VERBOSE` environment variable (`1`/`true`/`on`, case-insensitive)
+/// at render time — a dev-only, off-by-default switch that needs no ADT change.
+fn explain_verbose_enabled() -> bool {
+    std::env::var("IPE_EXPLAIN_VERBOSE")
+        .ok()
+        .is_some_and(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "on"))
+}
+
+/// A7: the sophisticated `Debug.explain` dev overlay for one node, given its
+/// depth, its own attributes, its flex axis, and whether it is over-constrained
+/// (a fixed-width child of a row). Layout-neutral (only `outline` /
+/// `box-shadow` / a tint on a bg-less node), so it never shifts the boxes it
+/// annotates.
+///
+/// Signals, past the former uniform solid-blue outline:
+/// - a DEPTH-hue-shifted outline (root and each nesting level a distinct hue),
+///   solid on the explained root, so the box tree reads as a stack of frames;
+/// - a translucent PADDING band (an inset ring sized to the node's padding);
+/// - a TINTED spacing gap (a faint background on a spaced, bg-less container so
+///   the flex gaps between its children become visible);
+/// - a RED outer edge on a node flagged as over-constrained (a fixed-width row
+///   child that A8 pins with `flex-shrink:0`, i.e. one that can overflow).
+fn explain_overlay_css<M>(
+    attrs: &[Attribute<M>],
+    depth: usize,
+    axis: FlexAxis,
+    overflowing: bool,
+) -> String {
+    use std::fmt::Write as _;
+    let mut css = String::new();
+    macro_rules! push {
+        ($($arg:tt)*) => {{
+            if !css.is_empty() { css.push(';'); }
+            let _ = write!(css, $($arg)*);
+        }};
+    }
+
+    // Depth-hue outline: rotate the hue by a large coprime step per nesting
+    // level so adjacent frames are clearly distinct; the explained root
+    // (depth 0) is a saturated solid, descendants keep the same width but a
+    // shifted hue. An `overflowing` node overrides the hue with a red edge.
+    #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
+    let hue = ((depth as i64).wrapping_mul(47)).rem_euclid(360);
+    if overflowing {
+        push!("outline:2px solid rgba(220,20,20,0.9)");
+    } else {
+        push!("outline:2px solid hsl({hue},80%,45%)");
+    }
+    // A small per-depth offset keeps a child's outline from sitting exactly on
+    // its parent's, so nesting stays legible.
+    push!("outline-offset:{}px", 1 + (depth % 3));
+
+    // Padding band: an inset ring the thickness of the node's padding, so the
+    // content box vs the padding box is visible.
+    let pad = max_padding(attrs);
+    if pad > 0 {
+        push!("box-shadow:inset 0 0 0 {pad}px rgba(255,140,0,0.18)");
+    }
+
+    // Spacing tint: a faint fill behind a spaced container (only when it has no
+    // background of its own) so the flex gaps between children show through.
+    if axis != FlexAxis::El && spacing_of(attrs) > 0 && !has_background(attrs) {
+        push!("background-color:rgba(0,140,255,0.08)");
+    }
+
+    css
+}
+
 /// A6: the native landmark tag for a `Description` carried by an `AttrDescribe`,
 /// when one exists. Returns `None` for descriptions with no landmark tag
 /// (labels, live regions, headings-are-handled-elsewhere) so the caller can fall
@@ -928,8 +1046,26 @@ fn render_node_as<M: Clone>(
     let axis = flex_axis_of(attrs);
     let augment = node_augmentations(attrs, axis, &kids);
     let align = alignment_css(attrs, parent_axis);
-    let overconstrain = overconstrain_css(attrs, parent_axis).to_owned();
-    for chunk in [augment, align, overconstrain] {
+    let overconstrain_flag = !overconstrain_css(attrs, parent_axis).is_empty();
+    let overconstrain = if overconstrain_flag {
+        "flex-shrink:0".to_owned()
+    } else {
+        String::new()
+    };
+
+    // `Debug.explain` propagates to every descendant: inject `AttrExplain`
+    // into the direct children so they in turn inject it into their own
+    // children (transitively), without touching the element data itself.
+    let explain_active = attrs.iter().any(|a| matches!(a, Attribute::AttrExplain));
+    // A7: the depth-/node-aware debug overlay for the explained subtree. An
+    // over-constrained (fixed-width row child) node gets the red overflow edge.
+    let explain = if explain_active {
+        explain_overlay_css(attrs, depth, axis, overconstrain_flag)
+    } else {
+        String::new()
+    };
+
+    for chunk in [augment, align, overconstrain, explain] {
         if !chunk.is_empty() {
             if style_str.is_empty() {
                 style_str = chunk;
@@ -945,10 +1081,23 @@ fn render_node_as<M: Clone>(
         html_attrs.insert(0, HtmlAttribute::Attr("style".to_owned(), style_str));
     }
 
-    // `Debug.explain` propagates to every descendant: inject `AttrExplain`
-    // into the direct children so they in turn inject it into their own
-    // children (transitively), without touching the element data itself.
-    let explain_active = attrs.iter().any(|a| matches!(a, Attribute::AttrExplain));
+    // A7 (verbose): opt-in via `IPE_EXPLAIN_VERBOSE=1` — annotate each explained
+    // box with a `title="type · w · pad"` tooltip. Dev-only and off by default,
+    // so a normal explain render carries no annotation overhead.
+    if explain_active && explain_verbose_enabled() {
+        let w = attrs.iter().find_map(|a| match a {
+            Attribute::AttrWidth(l) => Some(l.css()),
+            _ => None,
+        });
+        let w = w.unwrap_or_else(|| "shrink".to_owned());
+        let title = format!(
+            "{} · w {} · pad {}",
+            explain_type_tag(axis, tag),
+            w,
+            max_padding(attrs)
+        );
+        html_attrs.push(HtmlAttribute::Attr("title".to_owned(), title));
+    }
 
     // A `Ui.paragraph` node's element children must flow inline: a bare
     // `Ui.el` lowers to `Element::Node(NoDescription, …)` (a block `<div>`),
@@ -1227,6 +1376,263 @@ mod tests {
         assert!(
             s.contains("position:absolute"),
             "nearby must use absolute positioning: {s}"
+        );
+    }
+
+    // ── elm-parity render layer (A1/A2/A3/A6/A7/A8) ──────────────────────────
+
+    /// A1: a width-less `Ui.el` content-sizes (`width:fit-content`); an explicit
+    /// width overrides (no `fit-content`).
+    #[test]
+    fn a1_widthless_el_shrink_wraps_but_explicit_width_overrides() {
+        use crate::ui::helpers::{ui_el_, ui_width_};
+
+        let shrink: Element<TestMsg> = ui_el_(vec![], Element::Text("x".to_owned()));
+        let s = render_html(&render_element(shrink));
+        assert!(
+            s.contains("width:fit-content"),
+            "width-less el must shrink-wrap: {s}"
+        );
+
+        let fixed: Element<TestMsg> =
+            ui_el_(vec![ui_width_(Length::Px(200))], Element::Text("x".to_owned()));
+        let s = render_html(&render_element(fixed));
+        assert!(s.contains("width:200px"), "explicit width must render: {s}");
+        assert!(
+            !s.contains("fit-content"),
+            "an explicit width must suppress the shrink default: {s}"
+        );
+    }
+
+    /// A2: an overlay-hosting node emits `position:relative` so the overlay's
+    /// `position:absolute` anchors to it.
+    #[test]
+    fn a2_overlay_host_is_positioned_relative() {
+        use crate::ui::helpers::ui_el_;
+
+        let overlay: Element<TestMsg> = Element::Text("tip".to_owned());
+        let host: Element<TestMsg> = ui_el_(
+            vec![Attribute::AttrNearby(Location::InFront, overlay)],
+            Element::Text("base".to_owned()),
+        );
+        let s = render_html(&render_element(host));
+        assert!(
+            s.contains("position:relative"),
+            "overlay host must anchor via position:relative: {s}"
+        );
+        assert!(
+            s.contains("position:absolute"),
+            "overlay itself must be absolute: {s}"
+        );
+    }
+
+    /// A3: in a ROW, `centerX` on a child is the MAIN axis → auto-margins;
+    /// `alignRight` → `margin-left:auto`; a bare child gets neither. So a
+    /// `[left, centerX, alignRight]` row spreads to thirds.
+    #[test]
+    fn a3_row_main_axis_alignment_uses_auto_margins() {
+        use crate::ui::helpers::{ui_align_right_, ui_center_x_, ui_el_, ui_row_};
+
+        let row: Element<TestMsg> = ui_row_(
+            vec![],
+            vec![
+                ui_el_(vec![], Element::Text("left".to_owned())),
+                ui_el_(vec![ui_center_x_()], Element::Text("mid".to_owned())),
+                ui_el_(vec![ui_align_right_()], Element::Text("right".to_owned())),
+            ],
+        );
+        let s = render_html(&render_element(row));
+        assert!(
+            s.contains("margin-left:auto;margin-right:auto"),
+            "centerX in a row must be main-axis auto-margins: {s}"
+        );
+        assert!(
+            s.matches("margin-left:auto").count() >= 2,
+            "alignRight must also push via margin-left:auto: {s}"
+        );
+        assert!(
+            !s.contains("align-self"),
+            "a row's X-alignment is the main axis, never align-self: {s}"
+        );
+    }
+
+    /// A3: in a COLUMN, `centerY` on a child is the MAIN axis → auto-margins;
+    /// `centerX` is the CROSS axis → `align-self:center`.
+    #[test]
+    fn a3_column_axes_split_main_margins_from_cross_align_self() {
+        use crate::ui::helpers::{ui_center_x_, ui_center_y_, ui_column_, ui_el_};
+
+        let col: Element<TestMsg> = ui_column_(
+            vec![],
+            vec![ui_el_(
+                vec![ui_center_x_(), ui_center_y_()],
+                Element::Text("c".to_owned()),
+            )],
+        );
+        let s = render_html(&render_element(col));
+        assert!(
+            s.contains("align-self:center"),
+            "centerX is the cross axis of a column → align-self: {s}"
+        );
+        assert!(
+            s.contains("margin-top:auto;margin-bottom:auto"),
+            "centerY is the main axis of a column → auto-margins: {s}"
+        );
+    }
+
+    /// A3: a single-child `el` whose child is aligned becomes a flex container so
+    /// the child's alignment takes effect.
+    #[test]
+    fn a3_el_with_aligned_child_becomes_flex_container() {
+        use crate::ui::helpers::{ui_align_right_, ui_el_};
+
+        let outer: Element<TestMsg> = ui_el_(
+            vec![],
+            ui_el_(vec![ui_align_right_()], Element::Text("r".to_owned())),
+        );
+        let s = render_html(&render_element(outer));
+        assert!(
+            s.contains("display:flex"),
+            "an el with an aligned child must be a flex container: {s}"
+        );
+    }
+
+    /// A6: `describe descMain` on a plain `el` retags the `<div>` to `<main>`;
+    /// `descNavigation` → `<nav>`; `descLabel` keeps `aria-label`.
+    #[test]
+    fn a6_describe_landmark_retags_div_and_keeps_label() {
+        use crate::ui::helpers::{ui_describe_, ui_el_};
+
+        let main_el: Element<TestMsg> = ui_el_(
+            vec![ui_describe_(Description::DescMain)],
+            Element::Text("m".to_owned()),
+        );
+        let s = render_html(&render_element(main_el));
+        assert!(s.starts_with("<main"), "descMain must retag to <main>: {s}");
+
+        let nav_el: Element<TestMsg> = ui_el_(
+            vec![ui_describe_(Description::DescNavigation)],
+            Element::Text("n".to_owned()),
+        );
+        let s = render_html(&render_element(nav_el));
+        assert!(s.starts_with("<nav"), "descNavigation must retag to <nav>: {s}");
+
+        let labelled: Element<TestMsg> = ui_el_(
+            vec![ui_describe_(Description::DescLabel("hello".to_owned()))],
+            Element::Text("l".to_owned()),
+        );
+        let s = render_html(&render_element(labelled));
+        assert!(
+            s.contains("aria-label=\"hello\""),
+            "descLabel must keep aria-label: {s}"
+        );
+    }
+
+    /// A6: a landmark describe on a NON-div tag (a `button`) is not retagged;
+    /// a `role=` attribute is emitted instead.
+    #[test]
+    fn a6_describe_landmark_on_non_div_emits_role() {
+        // A `TaggedNode("button", …)` carrying descNavigation keeps <button>
+        // and gains role="navigation".
+        let btn: Element<TestMsg> = Element::TaggedNode(
+            "button".to_owned(),
+            Description::NoDescription,
+            vec![Attribute::AttrDescribe(Description::DescNavigation)],
+            vec![Element::Text("b".to_owned())],
+        );
+        let s = render_html(&render_element(btn));
+        assert!(s.starts_with("<button"), "button tag must be preserved: {s}");
+        assert!(
+            s.contains("role=\"navigation\""),
+            "a landmark on a non-div must emit role=: {s}"
+        );
+    }
+
+    /// A8: a fixed-px-width child of a ROW emits `flex-shrink:0` (honours the
+    /// width, overflows); the same width in a COLUMN (cross axis) does not.
+    #[test]
+    fn a8_fixed_width_row_child_pins_but_column_child_does_not() {
+        use crate::ui::helpers::{ui_column_, ui_el_, ui_row_, ui_width_};
+
+        let row: Element<TestMsg> = ui_row_(
+            vec![],
+            vec![ui_el_(
+                vec![ui_width_(Length::Px(150))],
+                Element::Text("a".to_owned()),
+            )],
+        );
+        let s = render_html(&render_element(row));
+        assert!(
+            s.contains("flex-shrink:0"),
+            "a fixed-width row child must not shrink: {s}"
+        );
+
+        let col: Element<TestMsg> = ui_column_(
+            vec![],
+            vec![ui_el_(
+                vec![ui_width_(Length::Px(150))],
+                Element::Text("a".to_owned()),
+            )],
+        );
+        let s = render_html(&render_element(col));
+        assert!(
+            !s.contains("flex-shrink:0"),
+            "a fixed-width column child (cross axis) must NOT be pinned: {s}"
+        );
+    }
+
+    /// A7: `Debug.explain` emits the sophisticated overlay — a depth-hued
+    /// outline, a padding band, and a spacing tint on a bg-less container — not
+    /// the former uniform solid blue.
+    #[test]
+    fn a7_explain_overlay_is_depth_hued_with_padding_and_spacing_bands() {
+        use crate::ui::helpers::{ui_column_, ui_el_, ui_padding_, ui_spacing_};
+
+        let tree: Element<TestMsg> = ui_column_(
+            vec![Attribute::AttrExplain, ui_spacing_(10), ui_padding_(20)],
+            vec![ui_el_(vec![ui_padding_(8)], Element::Text("one".to_owned()))],
+        );
+        let s = render_html(&render_element(tree));
+        assert!(
+            s.contains("outline:2px solid hsl("),
+            "explain must use a depth-hued outline, not solid blue: {s}"
+        );
+        assert!(
+            !s.contains("rgba(0,100,255,0.5)"),
+            "the old uniform blue outline must be gone: {s}"
+        );
+        assert!(
+            s.contains("box-shadow:inset 0 0 0 20px"),
+            "explain must draw a padding band sized to the padding: {s}"
+        );
+        assert!(
+            s.contains("background-color:rgba(0,140,255,0.08)"),
+            "a spaced bg-less container must get the gap tint: {s}"
+        );
+        // Depth propagates to the child, which gets its own overlay + band.
+        assert!(
+            s.contains("box-shadow:inset 0 0 0 8px"),
+            "the nested el must carry its own padding band: {s}"
+        );
+    }
+
+    /// A7 (overflow edge): an over-constrained fixed-width row child under
+    /// explain gets the red overflow outline instead of the depth hue.
+    #[test]
+    fn a7_explain_flags_overconstrained_child_in_red() {
+        use crate::ui::helpers::{ui_el_, ui_row_, ui_width_};
+
+        let row: Element<TestMsg> = ui_row_(
+            vec![Attribute::AttrExplain],
+            vec![ui_el_(
+                vec![ui_width_(Length::Px(150))],
+                Element::Text("wide".to_owned()),
+            )],
+        );
+        let s = render_html(&render_element(row));
+        assert!(
+            s.contains("outline:2px solid rgba(220,20,20,0.9)"),
+            "an over-constrained explained child must get the red overflow edge: {s}"
         );
     }
 
