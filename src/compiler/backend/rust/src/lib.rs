@@ -1215,6 +1215,16 @@ pub(crate) struct EmitCtx<'a> {
     /// which threads `&EmitCtx`, can append a literal's slot without an added
     /// parameter on every emit function.
     lit_accum: RefCell<LiteralAccum>,
+    /// The `Model` parameter symbol of the `update` function currently being
+    /// emitted, set only while emitting a TEA `update` lambda body under
+    /// [`Self::hot_appearance`]. `Some` there arms [`crate::emit_expr::emit_match`]
+    /// to reduce a data-describable arm to an `apply_transition_hot` call (the
+    /// logic counterpart of the appearance literal-table hoist); `None`
+    /// everywhere else, so no other `case` is ever transition-rewritten.
+    /// Interior-mutable so the arming threads through the shared `&EmitCtx`
+    /// without an added parameter on every emit function, exactly as
+    /// [`Self::lit_accum`] does for the appearance hoist.
+    transition_model_param: RefCell<Option<ipe_intern::Symbol>>,
 }
 
 /// Is an enum variant payload field type `Clone`, consulting the whole-program
@@ -1971,6 +1981,7 @@ impl<'a> EmitCtx<'a> {
             hot_appearance,
             ui_structural_wrappers,
             lit_accum: RefCell::new(LiteralAccum::default()),
+            transition_model_param: RefCell::new(None),
         };
         // Resolve the `HydrationState` type name through the same renderer the
         // emitted `main_from_hydration_state` signature uses, so the wasm-hydrate
@@ -2049,6 +2060,33 @@ impl<'a> EmitCtx<'a> {
     fn exit_closure(&self) {
         let mut accum = self.lit_accum.borrow_mut();
         accum.closure_depth = accum.closure_depth.saturating_sub(1);
+    }
+
+    /// Arm the `update`-arm transition rewrite for the duration of the `update`
+    /// lambda body: while set, [`crate::emit_expr::emit_match`] reduces a
+    /// data-describable arm to an `apply_transition_hot` call. Returns the
+    /// previous value so the caller can restore it after the body is emitted
+    /// (nested lambdas inside the arm bodies never inherit the arming — the arm
+    /// bodies are emitted as ordinary expressions, so only the top `case msg of`
+    /// is transition-aware). A no-op arming (`None`) leaves every `case` compiled.
+    fn begin_transition_update(
+        &self,
+        model_param: Option<ipe_intern::Symbol>,
+    ) -> Option<ipe_intern::Symbol> {
+        std::mem::replace(&mut *self.transition_model_param.borrow_mut(), model_param)
+    }
+
+    /// Restore the transition-update arming saved by [`Self::begin_transition_update`].
+    fn end_transition_update(&self, prev: Option<ipe_intern::Symbol>) {
+        *self.transition_model_param.borrow_mut() = prev;
+    }
+
+    /// The `Model` parameter of the `update` lambda currently being emitted, when
+    /// the transition rewrite is armed; `None` otherwise. Read by
+    /// [`crate::emit_expr::emit_match`] to decide whether to attempt the
+    /// transition reduction on the top `case`.
+    pub(crate) fn transition_model_param(&self) -> Option<ipe_intern::Symbol> {
+        *self.transition_model_param.borrow()
     }
 
     /// Enter a discard-only probe emit: hoisting is suppressed so the probe does

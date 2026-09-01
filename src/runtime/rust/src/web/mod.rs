@@ -2659,6 +2659,83 @@ mod handlers {
         StatusCode::OK.into_response()
     }
 
+    // ── POST /_ipe/hot-transition (dev-only) ──────────────────────────
+    // The running server's inbound leg of the `update`-arm transition-hot-swap
+    // live socket. The `ipe watch` process computes a transition patch for an
+    // edited data-describable arm and POSTs it here; the handler registers the
+    // replacement `Transition` under the arm's baked-datum signature, so the next
+    // dispatch of that arm applies the edited transition through the SAME compiled
+    // `apply_transition_hot` — no recompile, Model preserved.
+    //
+    // Guarded EXACTLY like `/_ipe/hot-appearance`, three ways, so it is inert in
+    // production:
+    //   1. Route MOUNTED only under `dev_overlay_active()` (flag on AND
+    //      non-production) — absent from a production build.
+    //   2. A per-process control token (`IPE_WATCH_HOT_TOKEN`) must match the
+    //      `X-Ipe-Hot-Token` header (constant-time), so a LAN peer without the
+    //      token cannot drive a transition.
+    //   3. The body carries only two inert JSON strings — the old (key) datum and
+    //      the new (replacement) datum. The replacement is STRICT-decoded into a
+    //      `Transition` (a field name + a closed op + an inert source); anything
+    //      that is not a well-formed `Transition` is rejected. The registered
+    //      transition can drive nothing but the bounded, fail-closed
+    //      `apply_transition`, which refuses any change it cannot prove applies.
+    pub(super) async fn hot_transition_handler<Model, Msg, FInit, FUpdate, FView, FSubs>(
+        State(_st): State<WebState<Model, Msg, FInit, FUpdate, FView, FSubs>>,
+        headers: axum::http::HeaderMap,
+        body: axum::body::Bytes,
+    ) -> Response
+    where
+        Model: Clone + Send + 'static,
+        Msg: Clone + Send + 'static,
+        FInit: Send + Sync + 'static,
+        FUpdate: Send + Sync + 'static,
+        FView: Send + Sync + 'static,
+        FSubs: Send + Sync + 'static,
+    {
+        // Defence in depth: re-check the dev gate even though the route is only
+        // mounted under it, so the handler is inert if ever reached otherwise.
+        if !literal_table::dev_overlay_active() {
+            return StatusCode::NOT_FOUND.into_response();
+        }
+        // Per-process control token — same mechanism as `/_ipe/hot-appearance`.
+        // Absent expected token → fail closed (endpoint unusable without a token).
+        let expected = crate::system::read_env_var("IPE_WATCH_HOT_TOKEN")
+            .ok()
+            .filter(|t| !t.is_empty());
+        let presented = headers
+            .get("x-ipe-hot-token")
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_owned);
+        match (expected, presented) {
+            (Some(exp), Some(got)) if crate::ct_eq::ct_bytes_eq(exp.as_bytes(), got.as_bytes()) => {
+            }
+            _ => return StatusCode::FORBIDDEN.into_response(),
+        }
+
+        #[derive(serde::Deserialize)]
+        struct HotTransitionBody {
+            /// The arm's PREVIOUS baked datum JSON — the overlay key the running
+            /// app's compiled arm matches (it still bakes this string).
+            old_json: String,
+            /// The edited transition's JSON — strict-decoded into a `Transition`.
+            new_json: String,
+        }
+        let parsed: HotTransitionBody = match serde_json::from_slice(&body) {
+            Ok(b) => b,
+            Err(_) => return (StatusCode::BAD_REQUEST, "bad body").into_response(),
+        };
+        // Parse, don't validate: the replacement must be a well-formed
+        // `Transition` or the request is rejected. A registered transition can
+        // therefore drive nothing but the bounded `apply_transition`.
+        let replacement: transition::Transition = match serde_json::from_str(&parsed.new_json) {
+            Ok(t) => t,
+            Err(_) => return (StatusCode::BAD_REQUEST, "bad transition").into_response(),
+        };
+        transition::register_dev_transition(&parsed.old_json, replacement);
+        StatusCode::OK.into_response()
+    }
+
     // ── POST /_ipe/watch/status (dev-only) ───────────────────────────
     // Inbound build-status notification from `ipe watch`. Guarded two ways
     // so it is inert in production:
@@ -3122,6 +3199,20 @@ where
         router.route(
             "/_ipe/hot-appearance",
             post(handlers::hot_appearance_handler::<Model, Msg, FInit, FUpdate, FView, FSubs>)
+                .layer(axum::extract::DefaultBodyLimit::max(web_max_body_bytes())),
+        )
+    } else {
+        router
+    };
+    // Dev-only `update`-arm transition-hot-swap control leg. Guarded IDENTICALLY
+    // to `/_ipe/hot-appearance`: MOUNTED only under the same dev overlay gate
+    // (flag on AND non-production), token-gated per request, and bounded. A
+    // transition patch mutates the server-held Model, so it flows through the
+    // total, fail-closed `apply_transition` alone — never arbitrary logic.
+    let router = if literal_table::dev_overlay_active() {
+        router.route(
+            "/_ipe/hot-transition",
+            post(handlers::hot_transition_handler::<Model, Msg, FInit, FUpdate, FView, FSubs>)
                 .layer(axum::extract::DefaultBodyLimit::max(web_max_body_bytes())),
         )
     } else {

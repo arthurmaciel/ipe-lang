@@ -6209,7 +6209,18 @@ fn emit_match(
     let mut arms = Vec::with_capacity(m.arms().len());
     for arm in m.arms() {
         let (pat, prelude, synth_guard) = emit_arm_head(ctx, &arm.pat, &mode)?;
-        let body = emit_expr_at(ctx, &arm.body, indent + 1, child, generics)?;
+        // Transition hot-swap (dev-gated): when emitting a TEA `update` body, an
+        // arm whose whole effect is one data-describable field change with
+        // `Cmd.none` reduces to a call into the transition table read by the ONE
+        // compiled `apply_transition_hot` over the baked datum. Prod holds only
+        // the baked datum, so the arm runs exactly what a direct compiled arm
+        // would (dev == prod); in dev an edit ships a replacement datum over the
+        // live socket. `None` (flag off, not an update body, or a non-describable
+        // arm) falls through to the ordinary arm-body emit below, byte-identical.
+        let body = match emit_transition_arm(ctx, &arm.body)? {
+            Some(hot) => hot,
+            None => emit_expr_at(ctx, &arm.body, indent + 1, child, generics)?,
+        };
         let arm_body = if prelude.is_empty() {
             body
         } else {
@@ -6233,6 +6244,65 @@ fn emit_match(
         "match {scrut} {{\n{}\n{close_indent}}}",
         arms.join("\n")
     ))
+}
+
+/// Reduce a TEA `update` arm body to an `apply_transition_hot` call when the
+/// transition rewrite is armed (a TEA `update` body under `hot_appearance`) AND
+/// the body is a data-describable single-field change with `Cmd.none`. `None`
+/// otherwise — the caller emits the arm body normally, byte-identically.
+///
+/// The emitted body is `(ipe_runtime::web::apply_transition_hot("<baked datum
+/// JSON>", <model>), cmd_none())`: the compiled reader decodes and applies the
+/// baked datum (dev == prod), or a live replacement when the dev overlay holds.
+/// The baked JSON is [`crate::transition_classify::CompileTransition::to_json`],
+/// byte-identical to the runtime `Transition`'s serde form (pinned by the
+/// classifier's conformance test), so the reader round-trips it exactly.
+///
+/// The classifier is conservative: only the four faithful shapes classify; every
+/// other arm returns `None` and stays compiled. Fail-closed by construction — a
+/// false `None` is merely a recompile, never a wrong result.
+fn emit_transition_arm(ctx: &EmitCtx, body: &Expr) -> DResult<Option<String>> {
+    let Some(model_param) = ctx.transition_model_param() else {
+        return Ok(None);
+    };
+    // Resolve a field symbol to its serde key — the emitted Rust field ident,
+    // which (no serde rename) is exactly the key the runtime Model JSON object is
+    // keyed by. `None` for an unresolved symbol refuses (never a guessed key).
+    let resolve = |sym: Symbol| ctx.emit_ident(sym).ok();
+    let Some(ct) = crate::transition_classify::transition_of_arm(body, model_param, &resolve)
+    else {
+        return Ok(None);
+    };
+    // The model parameter's emitted ident, consumed by value by the arm (only one
+    // match branch runs, so the move is sound).
+    let model_ident = ctx.emit_ident(model_param)?;
+    // The baked datum, as a Rust string literal. `to_json` emits only the JSON
+    // grammar's own escapes; wrap it as a Rust string with the escapes a Rust
+    // string literal needs (`"` and `\`), which the JSON writer already produced,
+    // so the literal is the exact JSON bytes the runtime decodes.
+    let json = ct.to_json();
+    let json_lit = rust_string_literal(&json);
+    Ok(Some(format!(
+        "(ipe_runtime::web::apply_transition_hot({json_lit}, {model_ident}), cmd_none())"
+    )))
+}
+
+/// Render `s` as a Rust double-quoted string literal: escape `\` and `"` (the
+/// two characters that would otherwise terminate or corrupt the literal). The
+/// JSON writer already escaped control characters as `\uXXXX` / `\n` etc., which
+/// are ordinary ASCII here, so only these two need Rust-level escaping. Total.
+fn rust_string_literal(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('"');
+    for ch in s.chars() {
+        match ch {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
 }
 
 /// Emit the scrutinee of a `Match` plus its two mode flags. A string scrutinee is
@@ -8396,6 +8466,34 @@ pub fn emit_func(ctx: &EmitCtx, func: &Func) -> DResult<String> {
     emit_func_vis(ctx, func, "pub fn ")
 }
 
+/// The `Model` parameter symbol of a TEA `update` function, or `None` for any
+/// other function.
+///
+/// A TEA `update` is `Msg -> Model -> (Model, Cmd Msg)` (curried), so at the IR
+/// level it returns a two-element tuple whose SECOND element is a `Cmd` and
+/// takes the `Model` as its LAST parameter. Recognised by exactly that shape;
+/// any function returning something other than `(_, Cmd _)`, or taking no
+/// parameter, is not an update and returns `None` — the arm rewrite stays off.
+///
+/// The returned symbol is only an ARMING hint: the transition classifier
+/// independently proves the arm updates THIS parameter (`is_var(record,
+/// model_param)`) and resolves each field, so a mis-identified parameter (a
+/// non-update function that coincidentally returns `(_, Cmd _)` — e.g. a helper)
+/// simply yields no classifiable arm, never a wrong rewrite. Conservative by
+/// construction.
+fn tea_update_model_param(func: &ipe_ir::Func) -> Option<Symbol> {
+    let IrType::Tuple(elems) = &func.ret else {
+        return None;
+    };
+    let [_model_ty, second] = elems.as_slice() else {
+        return None;
+    };
+    if !matches!(second, IrType::Cmd(_)) {
+        return None;
+    }
+    func.params.last().map(|(sym, _)| *sym)
+}
+
 /// Emit a whole function item with the given visibility prefix (`"pub fn "` for
 /// the single-file layout, `"pub(crate) fn "` for a split `IpeModule` file where
 /// the item lives inside a `mod` block). The prefix is threaded through to
@@ -8517,6 +8615,19 @@ pub fn emit_func_vis(ctx: &EmitCtx, func: &Func, vis_prefix: &str) -> DResult<St
     // function emission (a lambda that itself emits a helper `fn`) does not leak
     // its slots into this frame's table.
     let saved_literals = ctx.begin_function_literals();
+    // Arm the `update`-arm transition rewrite for a TEA `update` body. Only a
+    // function whose return type is `(Model, Cmd _)` and whose last parameter is
+    // that Model record is a TEA update; its `Model` parameter arms
+    // `emit_match` to reduce a data-describable arm to an `apply_transition_hot`
+    // call. Inert unless `hot_appearance` (the shared dev gate) is on — with the
+    // flag off no arm is ever rewritten and the body is byte-identical. Restored
+    // after the body so nested function emission never inherits the arming.
+    let tea_update_param = if ctx.hot_appearance {
+        tea_update_model_param(func)
+    } else {
+        None
+    };
+    let saved_transition = ctx.begin_transition_update(tea_update_param);
     let body = if ipe_main_wrap_unit {
         // Wrap the synchronous body so ipe_main returns IpeTask<()>; the
         // body's own (unit) value is discarded, only its side effects matter.
@@ -8587,6 +8698,9 @@ pub fn emit_func_vis(ctx: &EmitCtx, func: &Func, vis_prefix: &str) -> DResult<St
     } else {
         body
     };
+    // The body (the only place a TEA `update`'s arms are emitted) is rendered;
+    // disarm the transition rewrite so no sibling / nested function inherits it.
+    ctx.end_transition_update(saved_transition);
 
     // Close the accumulator and, if any style literal hoisted, prepend the
     // per-view table binding. Its baked defaults are exactly the hoisted source

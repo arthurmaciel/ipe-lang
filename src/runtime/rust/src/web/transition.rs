@@ -547,9 +547,7 @@ mod tests {
 #[cfg(test)]
 #[cfg(any(feature = "db", feature = "redis_store", feature = "web"))]
 mod hot_tests {
-    use super::super::literal_table::{
-        overlay_test_lock, set_dev_overlay_active_for_test,
-    };
+    use super::super::literal_table::{overlay_test_lock, set_dev_overlay_active_for_test};
     use super::{
         CompileTransitionJson, Source, Transition, TransitionOp, apply_transition_hot,
         clear_dev_transition_for_test, register_dev_transition,
