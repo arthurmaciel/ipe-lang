@@ -497,6 +497,11 @@ pub fn render_type(ctx: &EmitCtx, ty: &IrType, generics: GenericScope) -> DResul
         // Web types — render to qualified runtime paths.
         IrType::WebReq => "ipe_runtime::web::WebReq".to_owned(),
         // Shape opaque app leaves — render to qualified runtime paths.
+        // On the browser target `Web.app` lowers to `wasm::wasm_app(...)` (see
+        // `emit_web`), which returns an `IpeTask` the wasm epilogue drives via
+        // `run_start(ipe_main())` — so the leaf renders as that task type, not the
+        // native-only `WebApp` handle (absent on wasm32).
+        IrType::WebApp if ctx.target == ipe_ir::Target::WasmClient => "IpeTask<()>".to_owned(),
         IrType::WebApp => "ipe_runtime::tea::WebApp".to_owned(),
         IrType::WebViewApp => "ipe_runtime::tea::WebViewApp".to_owned(),
         IrType::TuiApp => "ipe_runtime::tea::TuiApp".to_owned(),
