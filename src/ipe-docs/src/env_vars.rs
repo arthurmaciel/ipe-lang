@@ -74,6 +74,8 @@ pub enum Subsystem {
     Ws,
     /// `ipe doc` / documentation server.
     Doc,
+    /// UI layout render — developer overlays and diagnostics.
+    Ui,
 }
 
 impl Subsystem {
@@ -95,6 +97,7 @@ impl Subsystem {
             Self::Compression => "Compression",
             Self::Config => "Config",
             Self::Runtime => "Runtime",
+            Self::Ui => "UI render",
             Self::Web => "Web server",
             Self::Ws => "WebSocket",
         }
@@ -1027,6 +1030,17 @@ pub static ENV_VARS: &[EnvVar] = &[
                   backpressure (the send kernel returns `Err`) rather than dropping \
                   frames.",
         subsystem: Subsystem::Ws,
+        class: Class::Tunable,
+    },
+    // ── UI render ─────────────────────────────────────────────────────────────
+    EnvVar {
+        name: "IPE_EXPLAIN_VERBOSE",
+        default: "unset",
+        purpose: "Enable the verbose `Debug.explain` dev overlay: each explained \
+                  layout box gets a `title` tooltip annotating its type, width, and \
+                  padding. Accepts `1`, `true`, or `on` (case-insensitive). \
+                  Developer diagnostic, off by default.",
+        subsystem: Subsystem::Ui,
         class: Class::Tunable,
     },
 ];

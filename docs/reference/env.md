@@ -28,6 +28,7 @@ Every `IPE_*` variable the runtime, CLI, and compiler read. The table is grouped
 - [Runtime](#runtime)
 - [Web server](#web-server)
 - [WebSocket](#websocket)
+- [UI render](#ui-render)
 
 ## Build
 
@@ -212,4 +213,10 @@ Every `IPE_*` variable the runtime, CLI, and compiler read. The table is grouped
 | `IPE_WS_HEARTBEAT` | 30 | WebSocket ping interval (seconds). A peer that does not respond within two intervals is considered dead and disconnected. | `Tunable` |
 | `IPE_WS_MAX_MESSAGE_BYTES` | 1048576 (1 MiB) | Maximum WebSocket message size (bytes) for both client and server connections. Messages larger than this limit are rejected. | `Tunable` |
 | `IPE_WS_SEND_BUFFER` | 256 | Per-connection outbound frame buffer depth. A full buffer applies backpressure (the send kernel returns `Err`) rather than dropping frames. | `Tunable` |
+
+## UI render
+
+| Variable | Default | Effect | Class |
+|----------|---------|--------|-------|
+| `IPE_EXPLAIN_VERBOSE` | unset | Enable the verbose `Debug.explain` dev overlay: each explained layout box gets a `title` tooltip annotating its type, width, and padding. Accepts `1`, `true`, or `on` (case-insensitive). Developer diagnostic, off by default. | `Tunable` |
 
