@@ -13,7 +13,10 @@
 //!    foreign-error funnel — never a process abort, never a silent hang.
 #![cfg(feature = "tokio")]
 
-use ipe_runtime_rust::{AbortOnDrop, IpeResult, IpeTask, block_on, ipe_error_from_foreign, ok_res};
+use ipe_runtime_rust::{
+    AbortOnDrop, IpeError, IpeResult, IpeTask, block_on, ffi_spawn_guarded, ipe_error_from_foreign,
+    ok_res,
+};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
@@ -126,6 +129,105 @@ fn entry_future_panic_folds_through_the_funnel() {
             e.starts_with("async task panicked (ref "),
             "entry panic must fold to the funnel message: {e}"
         ),
+        IpeResult::Ok(v) => panic!("expected a typed Err, got Ok({v})"),
+    }
+}
+
+// ── ffi_spawn_guarded: the structural single choke-point ─────────────────────
+//
+// Every emitted async FFI wrapper routes its spawn through `ffi_spawn_guarded`,
+// so the guard-arming, the cancel-abort, and the join-error funnel are one
+// indivisible operation the emitter cannot partially apply. These prove the
+// three honesty properties directly on the helper, independent of any emitter.
+
+#[test]
+fn spawn_guarded_passes_the_success_value_through() {
+    // The happy path returns the spawned future's output verbatim; the caller
+    // applies its own shape-specific lift. Exercised for each output shape a
+    // wrapper spawns: a bare value, a fallible `Result`, and an `Option`.
+    let bare: IpeResult<IpeError, i64> = block_on(Box::pin(async {
+        match ffi_spawn_guarded(async { 7_i64 }).await {
+            Ok(v) => ok_res(v),
+            Err(e) => IpeResult::Err(e),
+        }
+    }));
+    assert!(matches!(bare, IpeResult::Ok(7)));
+
+    let fallible: IpeResult<IpeError, i64> = block_on(Box::pin(async {
+        match ffi_spawn_guarded(async { Ok::<i64, String>(9) }).await {
+            Ok(Ok(v)) => ok_res(v),
+            Ok(Err(e)) => IpeResult::Err(ipe_error_from_foreign(e)),
+            Err(e) => IpeResult::Err(e),
+        }
+    }));
+    assert!(matches!(fallible, IpeResult::Ok(9)));
+
+    let optional: IpeResult<IpeError, i64> = block_on(Box::pin(async {
+        match ffi_spawn_guarded(async { Some(11_i64) }).await {
+            Ok(Some(v)) => ok_res(v),
+            Ok(None) => IpeResult::Err("none".to_owned().into()),
+            Err(e) => IpeResult::Err(e),
+        }
+    }));
+    assert!(matches!(optional, IpeResult::Ok(11)));
+}
+
+#[test]
+fn spawn_guarded_aborts_the_inner_task_on_cancel() {
+    // Dropping the wrapper future before `ffi_spawn_guarded` returns must abort
+    // the spawned foreign task, so a cancelled call fires no post-cancel side
+    // effect. The guard-arm is structural — the caller writes no `AbortOnDrop`.
+    let side_effect = Arc::new(AtomicBool::new(false));
+    let observed = Arc::clone(&side_effect);
+    let wrapper: IpeTask<IpeError, i64> = Box::pin(async move {
+        match ffi_spawn_guarded(async move {
+            tokio::time::sleep(Duration::from_millis(60)).await;
+            side_effect.store(true, Ordering::SeqCst);
+            1_i64
+        })
+        .await
+        {
+            Ok(v) => ok_res(v),
+            Err(e) => IpeResult::Err(e),
+        }
+    });
+    let outcome: IpeResult<String, bool> = block_on(Box::pin(async move {
+        let cancelled = tokio::time::timeout(Duration::from_millis(5), wrapper).await;
+        if cancelled.is_ok() {
+            return IpeResult::Err("wrapper completed before the cancel window".to_owned());
+        }
+        tokio::time::sleep(Duration::from_millis(150)).await;
+        ok_res(observed.load(Ordering::SeqCst))
+    }));
+    assert!(
+        matches!(outcome, IpeResult::Ok(false)),
+        "the aborted foreign task must not produce its side effect: {outcome:?}"
+    );
+}
+
+#[test]
+fn spawn_guarded_folds_a_poll_panic_to_the_redacted_funnel() {
+    // A poll-time panic inside the spawned foreign future becomes a `JoinError`
+    // the helper routes through `ipe_error_from_panic`: the Ipê-visible value is
+    // the generic message + correlation id, never the raw panic payload.
+    let wrapper: IpeTask<IpeError, i64> = Box::pin(async move {
+        match ffi_spawn_guarded(async move { panic!("foreign poll-time panic") }).await {
+            Ok(v) => ok_res(v),
+            Err(e) => IpeResult::Err(e),
+        }
+    });
+    match block_on(wrapper) {
+        IpeResult::Err(e) => {
+            let msg = e.to_string();
+            assert!(
+                msg.contains("foreign async task panicked (ref "),
+                "a poll panic must fold to the redacted funnel message: {msg}"
+            );
+            assert!(
+                !msg.contains("foreign poll-time panic"),
+                "the raw panic payload must never ride the Ipê-visible error: {msg}"
+            );
+        }
         IpeResult::Ok(v) => panic!("expected a typed Err, got Ok({v})"),
     }
 }
