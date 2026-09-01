@@ -78,19 +78,19 @@ pub enum ConstValue {
     Str(String),
     Bool(bool),
     /// A list value — its elements in order.
-    List(Vec<ConstValue>),
+    List(Vec<Self>),
     /// A record value — field name → constant, keyed for order-independent
     /// field lookup during an `Access`.
-    Record(BTreeMap<Symbol, ConstValue>),
+    Record(BTreeMap<Symbol, Self>),
     /// A tagged-union constructor value: the constructor name and its (already
     /// constant) payload arguments in declared order. A nullary constructor has
     /// an empty payload.
     Ctor {
         variant: Symbol,
-        args: Vec<ConstValue>,
+        args: Vec<Self>,
     },
     /// A tuple value — its elements in order.
-    Tuple(Vec<ConstValue>),
+    Tuple(Vec<Self>),
 }
 
 impl ConstValue {
@@ -103,14 +103,11 @@ impl ConstValue {
     #[must_use]
     pub fn to_literal_expr(&self) -> Option<Expr> {
         match self {
-            ConstValue::Int(n) => Some(Expr::Int(*n)),
-            ConstValue::Float(f) => Some(Expr::Float(*f)),
-            ConstValue::Str(s) => Some(Expr::Str(s.clone())),
-            ConstValue::Bool(b) => Some(Expr::Bool(*b)),
-            ConstValue::List(_)
-            | ConstValue::Record(_)
-            | ConstValue::Ctor { .. }
-            | ConstValue::Tuple(_) => None,
+            Self::Int(n) => Some(Expr::Int(*n)),
+            Self::Float(f) => Some(Expr::Float(*f)),
+            Self::Str(s) => Some(Expr::Str(s.clone())),
+            Self::Bool(b) => Some(Expr::Bool(*b)),
+            Self::List(_) | Self::Record(_) | Self::Ctor { .. } | Self::Tuple(_) => None,
         }
     }
 }
@@ -130,7 +127,7 @@ impl<'a> FoldEnv<'a> {
     /// interner. Locals start empty; a function body evaluation binds the
     /// parameters before descending.
     #[must_use]
-    pub fn new(funcs: &'a BTreeMap<FuncId, &'a Func>, interner: &'a Interner) -> Self {
+    pub const fn new(funcs: &'a BTreeMap<FuncId, &'a Func>, interner: &'a Interner) -> Self {
         Self {
             funcs,
             interner,
@@ -157,14 +154,17 @@ pub fn fold_const(expr: &Expr, env: &FoldEnv) -> Option<ConstValue> {
     eval(expr, env, &mut budget)
 }
 
-/// Phase-2 partial evaluation over a whole [`Program`]: fold every pure literal
-/// builder pipeline that feeds an appearance-kernel argument into a direct
-/// literal, so the appearance-literal registry hot-swaps it downstream.
+/// Phase-2 partial evaluation over a whole [`Program`].
+///
+/// Folds every pure literal builder pipeline that feeds an appearance-kernel
+/// argument into a direct literal, so the appearance-literal registry hot-swaps
+/// it downstream.
 ///
 /// For each `Call` to a kernel `k` in every function body, an argument sitting
-/// in a hoist-eligible position of [`appearance_literal_args`]`(k)` whose
-/// [`fold_const`] result is a scalar literal of that position's [`LitKind`] is
-/// REPLACED by the folded [`Expr`] literal. Every other argument — and every
+/// in a hoist-eligible position of the registry ([`appearance_literal_args`])
+/// whose [`fold_const`] result is a scalar literal of that position's
+/// [`LitKind`] is REPLACED by the folded [`Expr`] literal. Every other argument
+/// — and every
 /// non-appearance kernel call — is left untouched. The substituted value is the
 /// SAME value the runtime would have computed, so downstream emit and the render
 /// sink are unaffected except that the argument is now a direct literal the
@@ -206,11 +206,15 @@ pub fn fold_program(program: &mut Program, interner: &Interner) {
 /// call inside a larger body is reached), then, at each appearance-kernel
 /// `Call`, substitutes any eligible argument whose fold produces a
 /// kind-matching literal. Every other node is rebuilt unchanged.
+#[allow(clippy::too_many_lines)] // one arm per Expr variant — the exhaustive rebuild IS the pass
 fn fold_expr(expr: Expr, funcs: &BTreeMap<FuncId, &Func>, interner: &Interner) -> Expr {
     // A boxed sub-expression rewritten in place.
     let go_box = |b: Box<Expr>| -> Box<Expr> { Box::new(fold_expr(*b, funcs, interner)) };
-    let go_vec =
-        |v: Vec<Expr>| -> Vec<Expr> { v.into_iter().map(|e| fold_expr(e, funcs, interner)).collect() };
+    let go_vec = |v: Vec<Expr>| -> Vec<Expr> {
+        v.into_iter()
+            .map(|e| fold_expr(e, funcs, interner))
+            .collect()
+    };
 
     match expr {
         // Leaves and non-expression carriers pass through untouched.
@@ -350,9 +354,7 @@ fn fold_expr(expr: Expr, funcs: &BTreeMap<FuncId, &Func>, interner: &Interner) -
             // closed constant pipelines that fold to direct literals, so the
             // appearance registry hot-swaps them. A call whose arguments are not
             // all constant does not specialize and emits unchanged.
-            if let Some(residual) =
-                specialize_whitelisted_call(&callee, &args, funcs, interner)
-            {
+            if let Some(residual) = specialize_whitelisted_call(&callee, &args, funcs, interner) {
                 return residual;
             }
             let args = fold_appearance_args(&callee, args, funcs, interner);
@@ -421,15 +423,15 @@ fn specialize_whitelisted_call(
 /// refers to the local binding, not the parameter). Because only whitelisted
 /// builder bodies are inlined and their arguments are proven constant, the
 /// substituted expressions are closed constants — capture is impossible.
+#[allow(clippy::too_many_lines)] // one arm per Expr variant — the exhaustive rebuild IS the substitution
 fn substitute(expr: Expr, subst: &BTreeMap<Symbol, Expr>) -> Expr {
     let go = |e: Expr| substitute(e, subst);
     let go_box = |b: Box<Expr>| -> Box<Expr> { Box::new(substitute(*b, subst)) };
-    let go_vec = |v: Vec<Expr>| -> Vec<Expr> { v.into_iter().map(|e| substitute(e, subst)).collect() };
+    let go_vec =
+        |v: Vec<Expr>| -> Vec<Expr> { v.into_iter().map(|e| substitute(e, subst)).collect() };
 
     match expr {
-        Expr::Var(sym) | Expr::CloneVar(sym) => {
-            subst.get(&sym).cloned().unwrap_or_else(|| Expr::Var(sym))
-        }
+        Expr::Var(sym) | Expr::CloneVar(sym) => subst.get(&sym).cloned().unwrap_or(Expr::Var(sym)),
         Expr::Int(_)
         | Expr::Bool(_)
         | Expr::Float(_)
@@ -585,7 +587,11 @@ fn substitute(expr: Expr, subst: &BTreeMap<Symbol, Expr>) -> Expr {
 /// substitution map — the binder introduced by an enclosing `let` / lambda /
 /// arm re-binds that name, so a use inside refers to the local binding, not the
 /// substituted parameter.
-fn substitute_under_binders(body: Expr, subst: &BTreeMap<Symbol, Expr>, shadowed: &[Symbol]) -> Expr {
+fn substitute_under_binders(
+    body: Expr,
+    subst: &BTreeMap<Symbol, Expr>,
+    shadowed: &[Symbol],
+) -> Expr {
     if shadowed.iter().any(|s| subst.contains_key(s)) {
         let mut inner = subst.clone();
         for s in shadowed {
@@ -672,7 +678,7 @@ fn fold_appearance_args(
 
 /// Whether an expression is already a direct scalar literal — the shape the
 /// appearance registry hoists without any folding.
-fn is_direct_literal(expr: &Expr) -> bool {
+const fn is_direct_literal(expr: &Expr) -> bool {
     matches!(
         expr,
         Expr::Int(_) | Expr::Float(_) | Expr::Str(_) | Expr::Bool(_)
@@ -931,9 +937,13 @@ fn match_pat(pat: &Pat, value: &ConstValue, out: &mut BTreeMap<Symbol, ConstValu
         (Pat::Int(a), ConstValue::Int(b)) => a == b,
         (Pat::Bool(a), ConstValue::Bool(b)) => a == b,
         (Pat::Str(a), ConstValue::Str(b)) => a == b,
-        (Pat::Ctor { variant, args, .. }, ConstValue::Ctor { variant: v, args: vs })
-            if variant == v && args.len() == vs.len() =>
-        {
+        (
+            Pat::Ctor { variant, args, .. },
+            ConstValue::Ctor {
+                variant: v,
+                args: vs,
+            },
+        ) if variant == v && args.len() == vs.len() => {
             args.iter().zip(vs).all(|(p, v)| match_pat(p, v, out))
         }
         (Pat::Tuple(ps), ConstValue::Tuple(vs)) if ps.len() == vs.len() => {
@@ -942,7 +952,9 @@ fn match_pat(pat: &Pat, value: &ConstValue, out: &mut BTreeMap<Symbol, ConstValu
         (Pat::Record(entries), ConstValue::Record(map)) => entries
             .iter()
             .all(|(name, sub)| map.get(name).is_some_and(|v| match_pat(sub, v, out))),
-        (Pat::Slice { prefix, rest }, ConstValue::List(items)) => match_slice(prefix, rest, items, out),
+        (Pat::Slice { prefix, rest }, ConstValue::List(items)) => {
+            match_slice(prefix, rest.as_deref(), items, out)
+        }
         _ => false,
     }
 }
@@ -950,7 +962,7 @@ fn match_pat(pat: &Pat, value: &ConstValue, out: &mut BTreeMap<Symbol, ConstValu
 /// Match a slice pattern (`[]`, `[a, b]`, `x :: xs`) against a constant list.
 fn match_slice(
     prefix: &[Pat],
-    rest: &Option<Box<Pat>>,
+    rest: Option<&Pat>,
     items: &[ConstValue],
     out: &mut BTreeMap<Symbol, ConstValue>,
 ) -> bool {
@@ -1171,6 +1183,16 @@ fn fmt_g_exponent(neg: bool, digits: &str, exp: i32) -> String {
 /// `'g'`'s `%f` rendering (shortest mode) — mirrors the runtime's
 /// `fmt_g_positional`: `ddd[.ddd]`, zero-padding the integer part and reading
 /// fraction digits past the point.
+// The `usize`↔`i32` casts mirror the runtime `fmt_g_positional` byte-for-byte;
+// `digits` is a `{:e}`-mantissa (a handful of significant digits), so its length
+// and every index derived from it are far inside `i32`/`usize` range — the casts
+// cannot truncate, wrap, or lose a sign in practice. The conformance test pins
+// this reproduction byte-identical to the runtime.
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss
+)]
 fn fmt_g_positional(neg: bool, digits: &str, dp: i32) -> String {
     let bytes = digits.as_bytes();
     let nd = bytes.len() as i32;
@@ -1208,10 +1230,19 @@ fn fmt_g_positional(neg: bool, digits: &str, dp: i32) -> String {
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::unnecessary_wraps, // a `DResult<()>` test signature keeps the `?`-based intern calls uniform
+    clippy::unreadable_literal, // float fixtures are read as written CSS/easing values
+    clippy::approx_constant // a PI-ish fixture value exercises the float formatter, not a real constant
+)]
 mod tests {
     use super::*;
     use ipe_diagnostics::DResult;
     use ipe_ir::{CallPin, IrType, OnFormKind};
+    // The runtime string builders are referenced fully-qualified
+    // (`ipe_runtime_rust::string::…`) in the conformance tests so they never
+    // alias the same-named `const_fold` reproductions under test.
+    use ipe_runtime_rust::string as rt_string;
 
     /// A `Call` to a kernel with no pin / form classification — the common shape.
     fn kernel_call(k: KernelFn, args: Vec<Expr>) -> Expr {
@@ -1399,5 +1430,165 @@ mod tests {
             Some(ConstValue::Str("hi".to_string()))
         );
         Ok(())
+    }
+
+    // ── Conformance: fold == runtime (the dev == prod guarantee) ──────────
+    //
+    // A folded constant MUST be byte-identical to what the runtime builder
+    // computes for the same inputs. These tests call the REAL runtime string
+    // builders (`ipe_runtime_rust::string::*`, a dev-dependency) and assert
+    // `const_fold`'s reproduction — and the folded pipeline value — match them
+    // exactly. A drift in the reproduced float formatter, or in any folded
+    // kernel, fails here in CI rather than in a user's build.
+
+    #[test]
+    fn string_from_int_matches_runtime() {
+        for &n in &[0i64, 1, -1, 42, 300, -12345, i64::MAX, i64::MIN] {
+            assert_eq!(
+                string_from_int(n),
+                ipe_runtime_rust::string::string_from_int(n),
+                "const_fold string_from_int must match the runtime for {n}"
+            );
+        }
+    }
+
+    #[test]
+    fn string_from_float_matches_runtime() {
+        // A representative spread: whole numbers, sub-1 fractions, negatives,
+        // the easing coordinates `cubicBezier` renders, and the boundary
+        // exponents the `'g'`-mode formatter switches rendering at.
+        let samples = [
+            0.0f64,
+            -0.0,
+            1.0,
+            -1.0,
+            0.4,
+            0.2,
+            1.5,
+            0.0001,
+            123456.0,
+            1_000_000.0,
+            0.000_01,
+            3.141_592_653_589_793,
+            -2.5,
+            100.0,
+            0.5,
+        ];
+        for &f in &samples {
+            assert_eq!(
+                string_from_float(f),
+                ipe_runtime_rust::string::string_from_float(f),
+                "const_fold string_from_float must match the runtime for {f}"
+            );
+        }
+    }
+
+    #[test]
+    fn animation_shorthand_tail_fold_matches_runtime_composition() {
+        // Fold the `buildShorthandTail` pipeline shape for a concrete spec
+        // (`duration = 300`, `easing = ease-in-out`, `delay = 0`,
+        // `iterations = 1`, `fillMode = forwards`) — the exact string form
+        // `String.fromInt dur ++ "ms " ++ easing ++ " " ++ …`. The expected
+        // value is composed from the SAME runtime primitives, so the assertion
+        // is fold == runtime, not fold == a hand-typed literal.
+        let interner = Interner::new();
+        let funcs = BTreeMap::new();
+        let env = FoldEnv::new(&funcs, &interner);
+
+        // `String.fromInt 300 ++ "ms " ++ "ease-in-out" ++ " " ++
+        //  String.fromInt 0 ++ "ms " ++ "1" ++ " " ++ "forwards"`
+        let append = |lhs: Expr, rhs: Expr| Expr::BinOp {
+            op: BinOp::Append,
+            lhs: Box::new(lhs),
+            rhs: Box::new(rhs),
+        };
+        let from_int = |n: i64| kernel_call(KernelFn::StringFromInt, vec![Expr::Int(n)]);
+        let pipeline = append(
+            append(
+                append(
+                    append(
+                        append(
+                            append(
+                                append(from_int(300), Expr::Str("ms ".to_string())),
+                                Expr::Str("ease-in-out".to_string()),
+                            ),
+                            Expr::Str(" ".to_string()),
+                        ),
+                        from_int(0),
+                    ),
+                    Expr::Str("ms ".to_string()),
+                ),
+                Expr::Str("1".to_string()),
+            ),
+            append(
+                Expr::Str(" ".to_string()),
+                Expr::Str("forwards".to_string()),
+            ),
+        );
+
+        // The runtime-composed expectation, via the real builders.
+        let mut expected = rt_string::string_from_int(300);
+        expected = rt_string::string_append(expected, "ms ".to_string());
+        expected = rt_string::string_append(expected, "ease-in-out".to_string());
+        expected = rt_string::string_append(expected, " ".to_string());
+        expected = rt_string::string_append(expected, rt_string::string_from_int(0));
+        expected = rt_string::string_append(expected, "ms ".to_string());
+        expected = rt_string::string_append(expected, "1".to_string());
+        expected = rt_string::string_append(expected, " ".to_string());
+        expected = rt_string::string_append(expected, "forwards".to_string());
+
+        assert_eq!(fold_const(&pipeline, &env), Some(ConstValue::Str(expected)));
+    }
+
+    #[test]
+    fn cubic_bezier_fold_matches_runtime_join() {
+        // `Ipe.Css` / `easingToCss`'s `cubic-bezier(...)` composition folds to
+        // exactly what the runtime float builder + join produce for the same
+        // coordinates — a `String.fromFloat`-heavy pipeline, the strongest
+        // dev == prod check on the reproduced formatter.
+        let interner = Interner::new();
+        let funcs = BTreeMap::new();
+        let env = FoldEnv::new(&funcs, &interner);
+
+        let from_float = |f: f64| kernel_call(KernelFn::StringFromFloat, vec![Expr::Float(f)]);
+        // `"cubic-bezier(" ++ ffloat x1 ++ ", " ++ ffloat y1 ++ ", " ++
+        //  ffloat x2 ++ ", " ++ ffloat y2 ++ ")"`
+        let append = |lhs: Expr, rhs: Expr| Expr::BinOp {
+            op: BinOp::Append,
+            lhs: Box::new(lhs),
+            rhs: Box::new(rhs),
+        };
+        let (x1, y1, x2, y2) = (0.4f64, 0.0, 0.2, 1.0);
+        let pipeline = append(
+            append(
+                append(
+                    append(
+                        append(
+                            append(
+                                append(Expr::Str("cubic-bezier(".to_string()), from_float(x1)),
+                                Expr::Str(", ".to_string()),
+                            ),
+                            from_float(y1),
+                        ),
+                        Expr::Str(", ".to_string()),
+                    ),
+                    from_float(x2),
+                ),
+                Expr::Str(", ".to_string()),
+            ),
+            append(from_float(y2), Expr::Str(")".to_string())),
+        );
+
+        let mut expected = "cubic-bezier(".to_string();
+        expected = rt_string::string_append(expected, rt_string::string_from_float(x1));
+        expected = rt_string::string_append(expected, ", ".to_string());
+        expected = rt_string::string_append(expected, rt_string::string_from_float(y1));
+        expected = rt_string::string_append(expected, ", ".to_string());
+        expected = rt_string::string_append(expected, rt_string::string_from_float(x2));
+        expected = rt_string::string_append(expected, ", ".to_string());
+        expected = rt_string::string_append(expected, rt_string::string_from_float(y2));
+        expected = rt_string::string_append(expected, ")".to_string());
+
+        assert_eq!(fold_const(&pipeline, &env), Some(ConstValue::Str(expected)));
     }
 }
