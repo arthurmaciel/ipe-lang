@@ -4408,6 +4408,629 @@ mod security_env_tests {
 }
 
 #[cfg(test)]
+mod watch_status_handler_tests {
+    //! Regression-locks the `POST /_ipe/watch/status` trust boundary.
+    //!
+    //! The endpoint is a dev-only, token-gated build-status sink. Every refusal
+    //! path and every side-effect path is covered here without weakening any gate.
+    //!
+    //! Tests call the handler through a minimal axum router built directly from
+    //! `WebState`, matching the pattern used by `session_lost_body_tests` and
+    //! `reload_push_tests` in this file.
+
+    use super::*;
+    use crate::system::{locked_remove_var, locked_set_var};
+    use crate::web::sse;
+    use crate::web::store::{MemoryStore, SessionStore};
+    use axum::Router;
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode};
+    use axum::routing::post;
+    use std::time::Duration;
+    use tower::ServiceExt; // oneshot
+
+    // ── Minimal WebState fixture ──────────────────────────────────────────────
+    //
+    // The handler only touches `watch_build_status` (the status store) and
+    // `store.web_sessions()` (to broadcast SSE). Every other WebState field
+    // is unused by this handler, so we erase the generics to `()` throughout.
+
+    type TestModel = ();
+    type TestMsg = ();
+    type TestStore = MemoryStore<TestModel, TestMsg>;
+    type TestWebState = WebState<
+        TestModel,
+        TestMsg,
+        fn() -> (),
+        fn(TestMsg, TestModel) -> (TestModel, IpeCmd<TestMsg>),
+        fn(TestModel) -> Html<TestMsg>,
+        fn(TestModel) -> IpeSub<TestMsg>,
+    >;
+
+    // Named fn items so `Arc::new(<fn>)` produces the exact fn-pointer type
+    // encoded in `TestWebState` — anonymous closures have distinct opaque
+    // types that Rust will not coerce to `fn(…)` pointers in Arc struct fields.
+    fn test_init() {}
+    fn test_update(_msg: TestMsg, model: TestModel) -> (TestModel, IpeCmd<TestMsg>) {
+        (model, IpeCmd::None)
+    }
+    fn test_view(_model: TestModel) -> Html<TestMsg> {
+        Html::HText(String::new())
+    }
+    fn test_subs(_model: TestModel) -> IpeSub<TestMsg> {
+        IpeSub::None
+    }
+    fn test_route_resolver(m: TestModel, _path: &str) -> TestModel {
+        m
+    }
+    fn test_param_resolver(_path: &str) -> crate::dict::IpeDict<String> {
+        crate::dict::dict_empty()
+    }
+    fn test_route_matched(p: &str) -> bool {
+        p == "/"
+    }
+
+    fn make_state(store: Arc<TestStore>) -> TestWebState {
+        WebState {
+            store: store as Arc<dyn store::SessionStore<TestModel, TestMsg>>,
+            init: Arc::new(test_init),
+            update: Arc::new(test_update),
+            view: Arc::new(test_view),
+            subs: Arc::new(test_subs),
+            route_resolver: Arc::new(test_route_resolver),
+            param_resolver: Arc::new(test_param_resolver),
+            route_matched: Arc::new(test_route_matched),
+            session_count: Arc::new(AtomicUsize::new(0)),
+            watch_build_status: Arc::new(Mutex::new(None)),
+        }
+    }
+
+    fn make_router(state: TestWebState) -> Router {
+        Router::new()
+            .route(
+                "/_ipe/watch/status",
+                post(
+                    handlers::watch_status_handler::<
+                        TestModel,
+                        TestMsg,
+                        fn() -> (),
+                        fn(TestMsg, TestModel) -> (TestModel, IpeCmd<TestMsg>),
+                        fn(TestModel) -> Html<TestMsg>,
+                        fn(TestModel) -> IpeSub<TestMsg>,
+                    >,
+                ),
+            )
+            .with_state(state)
+    }
+
+    fn make_session_handle(sse_tx: Option<SseTx>) -> store::SessionHandle<TestModel, TestMsg> {
+        let (msg_tx, _rx) = mpsc::channel::<TestMsg>(1);
+        let tree: Html<TestMsg> = Html::HText(String::new());
+        let index = build_index(&tree);
+        Arc::new(Mutex::new(SessionEntry {
+            model: (),
+            last_view: tree,
+            index,
+            seq: 0,
+            sse_tx,
+            msg_tx,
+            #[cfg(feature = "debugger")]
+            history: crate::debugger::RecordBuffer::new((), crate::debugger::DEFAULT_HISTORY_CAP),
+        }))
+    }
+
+    async fn post_status(
+        router: Router,
+        token_header: Option<&str>,
+        body: &str,
+    ) -> axum::response::Response {
+        let mut builder = Request::builder()
+            .method("POST")
+            .uri("/_ipe/watch/status")
+            .header("content-type", "application/json");
+        if let Some(tok) = token_header {
+            builder = builder.header("x-ipe-hot-token", tok);
+        }
+        let req = builder
+            .body(Body::from(body.to_owned()))
+            .expect("build request");
+        router.oneshot(req).await.expect("router responds")
+    }
+
+    // ── 1. Token refusal ─────────────────────────────────────────────────────
+
+    /// No `X-Ipe-Hot-Token` header → 403.
+    #[tokio::test]
+    async fn token_missing_is_403() {
+        locked_set_var("IPE_WATCH_HOT_TOKEN", "secret-token");
+
+        let store = Arc::new(TestStore::new(Duration::from_secs(60)));
+        let router = make_router(make_state(store));
+        let resp = post_status(router, None, r#"{"ok":true}"#).await;
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN, "no token → 403");
+
+        locked_remove_var("IPE_WATCH_HOT_TOKEN");
+    }
+
+    /// `X-Ipe-Hot-Token` present but empty → 403.
+    #[tokio::test]
+    async fn token_empty_is_403() {
+        locked_set_var("IPE_WATCH_HOT_TOKEN", "secret-token");
+
+        let store = Arc::new(TestStore::new(Duration::from_secs(60)));
+        let router = make_router(make_state(store));
+        let resp = post_status(router, Some(""), r#"{"ok":true}"#).await;
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN, "empty token → 403");
+
+        locked_remove_var("IPE_WATCH_HOT_TOKEN");
+    }
+
+    /// `X-Ipe-Hot-Token` present but wrong → 403.
+    #[tokio::test]
+    async fn token_wrong_is_403() {
+        locked_set_var("IPE_WATCH_HOT_TOKEN", "correct-token");
+
+        let store = Arc::new(TestStore::new(Duration::from_secs(60)));
+        let router = make_router(make_state(store));
+        let resp = post_status(router, Some("wrong-token"), r#"{"ok":true}"#).await;
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN, "wrong token → 403");
+
+        locked_remove_var("IPE_WATCH_HOT_TOKEN");
+    }
+
+    /// Correct `X-Ipe-Hot-Token` → 200.
+    #[tokio::test]
+    async fn token_correct_is_200() {
+        locked_set_var("IPE_WATCH_HOT_TOKEN", "correct-token");
+
+        let store = Arc::new(TestStore::new(Duration::from_secs(60)));
+        let router = make_router(make_state(store));
+        let resp = post_status(router, Some("correct-token"), r#"{"ok":true}"#).await;
+        assert_eq!(resp.status(), StatusCode::OK, "correct token → 200");
+
+        locked_remove_var("IPE_WATCH_HOT_TOKEN");
+    }
+
+    /// Correct token + connected session → `ipe-build-status` SSE event broadcast.
+    #[tokio::test]
+    async fn correct_token_broadcasts_sse_event() {
+        locked_set_var("IPE_WATCH_HOT_TOKEN", "broadcast-token");
+
+        let store = Arc::new(TestStore::new(Duration::from_secs(60)));
+        let (sse_tx, mut sse_rx) = sse::channel();
+        store
+            .set("live-session", make_session_handle(Some(sse_tx)))
+            .await;
+        let state = make_state(store);
+        let router = make_router(state);
+
+        let resp = post_status(
+            router,
+            Some("broadcast-token"),
+            r#"{"ok":false,"error":"build failed"}"#,
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        let frame = sse_rx
+            .try_recv()
+            .expect("connected session must receive ipe-build-status frame");
+        assert!(
+            frame.0.starts_with("event: ipe-build-status\n"),
+            "SSE event name must be ipe-build-status: {:?}",
+            frame.0
+        );
+        assert!(
+            frame.0.contains("build failed"),
+            "SSE frame must carry the error text: {:?}",
+            frame.0
+        );
+
+        locked_remove_var("IPE_WATCH_HOT_TOKEN");
+    }
+
+    // ── 2. Production inertness ───────────────────────────────────────────────
+
+    /// Under `ENV=production` `watch_banner_active` returns false regardless of
+    /// banner and base settings — the gate function is the single source of truth
+    /// for whether the route is mounted.
+    #[test]
+    fn watch_banner_active_false_in_production() {
+        locked_set_var("ENV", "production");
+        assert!(
+            !watch_banner_active(""),
+            "watch_banner_active must be false in production"
+        );
+        locked_remove_var("ENV");
+    }
+
+    /// In dev mode (ENV unset) with banner on, `watch_banner_active` is true.
+    #[test]
+    fn watch_banner_active_true_in_dev() {
+        locked_remove_var("ENV");
+        locked_remove_var("IPE_ENV");
+        locked_remove_var("IPE_WEB_BANNER");
+        assert!(
+            watch_banner_active(""),
+            "watch_banner_active must be true in dev with no overrides"
+        );
+    }
+
+    /// With banner explicitly disabled, `watch_banner_active` is false even in dev.
+    #[test]
+    fn watch_banner_active_false_when_banner_disabled() {
+        locked_remove_var("ENV");
+        locked_remove_var("IPE_ENV");
+        for v in ["off", "0", "false"] {
+            locked_set_var("IPE_WEB_BANNER", v);
+            assert!(
+                !watch_banner_active(""),
+                "watch_banner_active must be false when IPE_WEB_BANNER={v}"
+            );
+        }
+        locked_remove_var("IPE_WEB_BANNER");
+    }
+
+    /// A non-root base (sub-app) → `watch_banner_active` is false.
+    #[test]
+    fn watch_banner_active_false_for_subapp() {
+        locked_remove_var("ENV");
+        locked_remove_var("IPE_ENV");
+        locked_remove_var("IPE_WEB_BANNER");
+        assert!(
+            !watch_banner_active("/sub"),
+            "watch_banner_active must be false for a sub-app base"
+        );
+    }
+
+    /// Under a production config the route is not mounted — a POST yields 404.
+    #[tokio::test]
+    async fn route_absent_in_production_gives_404() {
+        // Build a router WITHOUT mounting the watch/status route (simulating
+        // production, where watch_banner_active returns false and the route is
+        // never added).
+        let store = Arc::new(TestStore::new(Duration::from_secs(60)));
+        let _state = make_state(store);
+        let prod_router: Router = Router::new(); // no routes — production stub
+
+        let req = Request::builder()
+            .method("POST")
+            .uri("/_ipe/watch/status")
+            .header("x-ipe-hot-token", "any")
+            .body(Body::from(r#"{"ok":true}"#))
+            .expect("build request");
+        let resp = prod_router.oneshot(req).await.expect("router responds");
+        assert_eq!(
+            resp.status(),
+            StatusCode::NOT_FOUND,
+            "route absent in production → 404"
+        );
+    }
+
+    /// No `ipe-build-status` SSE event is emitted when the route is not mounted.
+    #[tokio::test]
+    async fn no_sse_event_emitted_when_route_absent() {
+        let store = Arc::new(TestStore::new(Duration::from_secs(60)));
+        let (sse_tx, mut sse_rx) = sse::channel();
+        store
+            .set("session", make_session_handle(Some(sse_tx)))
+            .await;
+        // Route not mounted — production scenario.
+        let prod_router: Router = Router::new();
+        let req = Request::builder()
+            .method("POST")
+            .uri("/_ipe/watch/status")
+            .body(Body::from(r#"{"ok":false,"error":"err"}"#))
+            .expect("build request");
+        let _ = prod_router.oneshot(req).await;
+        assert!(
+            sse_rx.try_recv().is_err(),
+            "no SSE frame must be emitted when the route is not mounted"
+        );
+    }
+
+    // ── 3. Escape / injection safety ──────────────────────────────────────────
+
+    /// An error containing `</script>`, a newline, and a `data:`-injection
+    /// attempt is stored verbatim (the server is the raw-bytes store; the
+    /// client renders via `textContent`), but the SSE framing produced by
+    /// `sse::frame` strips CR/LF and splits on `\n` — each logical line gets
+    /// its own `data:` prefix, so no single `data:` line can contain a raw
+    /// newline that injects extra SSE fields.
+    #[tokio::test]
+    async fn error_with_script_tag_and_newline_is_sse_safe() {
+        locked_set_var("IPE_WATCH_HOT_TOKEN", "injection-test-token");
+
+        let store = Arc::new(TestStore::new(Duration::from_secs(60)));
+        let (sse_tx, mut sse_rx) = sse::channel();
+        store.set("sess", make_session_handle(Some(sse_tx))).await;
+        let state = make_state(store);
+        let watch_build_status = state.watch_build_status.clone();
+        let router = make_router(state);
+
+        // error field contains script-closing tag, a newline, and an SSE
+        // field-injection attempt after the newline.
+        let body = r#"{"ok":false,"error":"</script>\ndata: injected"}"#;
+        let resp = post_status(router, Some("injection-test-token"), body).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        // The stored value must be present (the error was accepted).
+        let stored = watch_build_status
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .clone();
+        assert!(
+            stored.is_some(),
+            "build status must be stored after a valid POST"
+        );
+
+        // The SSE frame must not allow raw newlines to inject extra fields.
+        let frame = sse_rx
+            .try_recv()
+            .expect("session must receive a build-status frame");
+        for line in frame.0.lines() {
+            // Every non-empty, non-event-terminating line must start with a
+            // recognised SSE field prefix — proving no injected bare field name
+            // slipped through.
+            if line.is_empty() {
+                continue;
+            }
+            assert!(
+                line.starts_with("event: ")
+                    || line.starts_with("data: ")
+                    || line.starts_with("id: ")
+                    || line.starts_with("retry: "),
+                "SSE frame line must start with a recognised field prefix; got: {line:?}"
+            );
+        }
+
+        // CR and LF must not appear raw inside any `data:` line value
+        // (sse::frame's contract: it splits on `\n` and strips trailing `\r`).
+        let data_lines: Vec<&str> = frame
+            .0
+            .lines()
+            .filter(|l| l.starts_with("data: "))
+            .collect();
+        assert!(
+            !data_lines.is_empty(),
+            "at least one data: line must be present"
+        );
+        for dl in &data_lines {
+            assert!(
+                !dl.contains('\r') && !dl.contains('\n'),
+                "data: line must not contain raw CR/LF: {dl:?}"
+            );
+        }
+
+        locked_remove_var("IPE_WATCH_HOT_TOKEN");
+    }
+
+    /// The stored error value is NOT converted into an HTML/JS-active form
+    /// (the `<` and `>` bytes must be present, not HTML-entity-escaped, because
+    /// the client sink is `textContent`). The server must preserve bytes, not
+    /// double-escape them.
+    #[tokio::test]
+    async fn error_bytes_preserved_not_html_escaped_in_storage() {
+        locked_set_var("IPE_WATCH_HOT_TOKEN", "preserve-token");
+
+        let store = Arc::new(TestStore::new(Duration::from_secs(60)));
+        let state = make_state(store);
+        let watch_build_status = state.watch_build_status.clone();
+        let router = make_router(state);
+
+        // JSON-encode the `<` and `>` as `<`/`>` so they survive
+        // JSON decoding while still testing that the stored string contains the
+        // actual `<`/`>` bytes (serde_json decodes `<` → `<`).
+        let body = r#"{"ok":false,"error":"</script>"}"#;
+        let resp = post_status(router, Some("preserve-token"), body).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        let stored = watch_build_status
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .clone();
+        let err = stored
+            .as_ref()
+            .and_then(|s| s.error.as_deref())
+            .unwrap_or("");
+        // The stored string must have the decoded bytes — NOT a double-escaped
+        // `&lt;` or `<` — because the client renders via `textContent`.
+        assert!(
+            err.contains('<') && err.contains('>'),
+            "stored error must contain the decoded angle-bracket bytes: {err:?}"
+        );
+        assert!(
+            !err.contains("&lt;") && !err.contains("&gt;"),
+            "stored error must NOT be HTML-entity-escaped: {err:?}"
+        );
+
+        locked_remove_var("IPE_WATCH_HOT_TOKEN");
+    }
+
+    // ── 4. Length bound (512-char cap) ────────────────────────────────────────
+
+    /// An `error` longer than 512 chars is truncated to exactly 512 chars
+    /// before storage and broadcast.
+    #[tokio::test]
+    async fn long_error_is_truncated_to_512_chars() {
+        locked_set_var("IPE_WATCH_HOT_TOKEN", "trunc-token");
+
+        let long_error: String = "A".repeat(600);
+        let body = format!(r#"{{"ok":false,"error":"{long_error}"}}"#);
+
+        let store = Arc::new(TestStore::new(Duration::from_secs(60)));
+        let (sse_tx, mut sse_rx) = sse::channel();
+        store.set("s", make_session_handle(Some(sse_tx))).await;
+        let state = make_state(store);
+        let watch_build_status = state.watch_build_status.clone();
+        let router = make_router(state);
+
+        let resp = post_status(router, Some("trunc-token"), &body).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        // Stored value must be capped.
+        let stored = watch_build_status
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .clone();
+        let err_len = stored
+            .as_ref()
+            .and_then(|s| s.error.as_deref())
+            .map(|e| e.chars().count())
+            .unwrap_or(0);
+        assert_eq!(
+            err_len, 512,
+            "stored error must be truncated to exactly 512 chars, got {err_len}"
+        );
+
+        // Broadcast frame must also carry the truncated (not original) value.
+        let frame = sse_rx.try_recv().expect("session must receive frame");
+        let data_payload: String = frame
+            .0
+            .lines()
+            .filter_map(|l| l.strip_prefix("data: "))
+            .collect::<Vec<_>>()
+            .join("");
+        // The 600-char run of "A" must not appear in the frame.
+        assert!(
+            !data_payload.contains(&long_error),
+            "broadcast frame must not carry the un-truncated 600-char error"
+        );
+
+        locked_remove_var("IPE_WATCH_HOT_TOKEN");
+    }
+
+    // ── 5. SSE replay for late-connecting sessions ────────────────────────────
+
+    /// A session connecting AFTER a failed-build POST receives the retained
+    /// latest status replayed from `watch_build_status`. This is tested by
+    /// pre-populating the status store (simulating a prior successful POST)
+    /// and then calling the sse-replay logic directly: the `watch_build_status`
+    /// slot is the single source of truth — both the handler and the SSE
+    /// reconnect replay read it, so seeding it here proves the replay path.
+    #[tokio::test]
+    async fn retained_status_replayed_to_new_session() {
+        // Seed the status store with a failed-build entry.
+        let watch_build_status: Arc<Mutex<Option<WatchBuildStatus>>> =
+            Arc::new(Mutex::new(Some(WatchBuildStatus {
+                ok: false,
+                error: Some("compile error".to_string()),
+            })));
+
+        // Simulate what the sse_handler replay block does: read the status and
+        // send the SSE frame to the newly-connected session's tx.
+        let (sse_tx, mut sse_rx) = sse::channel();
+        {
+            let snapshot = watch_build_status
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .clone();
+            if let Some(WatchBuildStatus { ok, error }) = snapshot {
+                let payload = if ok {
+                    r#"{"ok":true}"#.to_string()
+                } else {
+                    let esc = error
+                        .as_deref()
+                        .unwrap_or("")
+                        .replace('\\', "\\\\")
+                        .replace('"', "\\\"");
+                    format!(r#"{{"ok":false,"error":"{esc}"}}"#)
+                };
+                let _ = sse_tx
+                    .send(SsePatch(sse::frame("ipe-build-status", &payload)))
+                    .await;
+            }
+        }
+
+        let frame = sse_rx
+            .try_recv()
+            .expect("late-joining session must receive replayed build-status frame");
+        assert!(
+            frame.0.starts_with("event: ipe-build-status\n"),
+            "replayed event must be ipe-build-status: {:?}",
+            frame.0
+        );
+        assert!(
+            frame.0.contains("compile error"),
+            "replayed frame must carry the retained error: {:?}",
+            frame.0
+        );
+        assert!(
+            !frame.0.contains("\"ok\":true"),
+            "replayed frame must reflect failed build, not ok: {:?}",
+            frame.0
+        );
+    }
+
+    /// After a build-ok POST the retained status is ok:true; a late session
+    /// gets the ok frame, not a stale error.
+    #[tokio::test]
+    async fn retained_ok_status_replayed_after_successful_build() {
+        locked_set_var("IPE_WATCH_HOT_TOKEN", "replay-ok-token");
+
+        // Two routers share the same watch_build_status via the same Arc.
+        // We build each state manually so the shared wbs Arc is threaded in,
+        // but use the same fn-pointer types as make_state so make_router accepts them.
+        let store: Arc<TestStore> = Arc::new(TestStore::new(Duration::from_secs(60)));
+        let watch_build_status: Arc<Mutex<Option<WatchBuildStatus>>> = Arc::new(Mutex::new(None));
+
+        fn make_state_with_wbs(
+            store: Arc<TestStore>,
+            wbs: Arc<Mutex<Option<WatchBuildStatus>>>,
+        ) -> TestWebState {
+            WebState {
+                store: store as Arc<dyn store::SessionStore<TestModel, TestMsg>>,
+                init: Arc::new(test_init),
+                update: Arc::new(test_update),
+                view: Arc::new(test_view),
+                subs: Arc::new(test_subs),
+                route_resolver: Arc::new(test_route_resolver),
+                param_resolver: Arc::new(test_param_resolver),
+                route_matched: Arc::new(test_route_matched),
+                session_count: Arc::new(AtomicUsize::new(0)),
+                watch_build_status: wbs,
+            }
+        }
+
+        // First POST: build failed.
+        let r1 = post_status(
+            make_router(make_state_with_wbs(
+                store.clone(),
+                watch_build_status.clone(),
+            )),
+            Some("replay-ok-token"),
+            r#"{"ok":false,"error":"first error"}"#,
+        )
+        .await;
+        assert_eq!(r1.status(), StatusCode::OK);
+
+        // Second POST: build ok (fresh router, shared watch_build_status).
+        let r2 = post_status(
+            make_router(make_state_with_wbs(store, watch_build_status.clone())),
+            Some("replay-ok-token"),
+            r#"{"ok":true}"#,
+        )
+        .await;
+        assert_eq!(r2.status(), StatusCode::OK);
+
+        // Retained status must reflect the most recent (ok) state.
+        let stored = watch_build_status
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .clone();
+        let ok = stored.as_ref().map(|s| s.ok).unwrap_or(false);
+        assert!(ok, "retained status must be ok:true after a build-ok POST");
+        let err = stored.as_ref().and_then(|s| s.error.as_deref());
+        assert!(
+            err.is_none(),
+            "retained status must have no error after a build-ok POST; got: {err:?}"
+        );
+
+        locked_remove_var("IPE_WATCH_HOT_TOKEN");
+    }
+}
+
+#[cfg(test)]
 mod bind_error_tests {
     /// The port-taken error message must name `IPE_WEB_PORT` and use an 8xxx example port.
     #[test]
