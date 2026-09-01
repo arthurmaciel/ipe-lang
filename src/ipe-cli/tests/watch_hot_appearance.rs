@@ -1601,3 +1601,135 @@ fn static_ui_subtree_wrapper_hot_swaps_without_rebuild() -> Result<(), BoxError>
 
     stop_and_join(&handle, join)
 }
+
+/// A `Web.app` counter whose `update` is a data-describable transition arm
+/// (`Increment -> ( { m | count = m.count + step }, Cmd.none )`). Under the flag
+/// the arm compiles to `apply_transition_hot("<baked datum>", model)`, so editing
+/// the `step` literal changes ONLY the baked datum json — a transition hot-swap
+/// with no recompile. A marker text confirms the app is up.
+fn web_fixture_counter(step: u32, extra_text: &str) -> String {
+    format!(
+        "module Main exposing (main)\n\n\
+         import Ipe.Tea.Web as Web\n\
+         import Ipe.Ui as Ui\n\
+         import Ipe.Tea.Web.Cmd\n\
+         import Ipe.Tea.Web.Sub\n\
+         import Ipe.String\n\n\
+         type alias Model = {{ count : Int }}\n\n\
+         type Msg = Increment\n\n\
+         init : a -> ( Model, Cmd Msg )\n\
+         init _req =\n    \
+             ( {{ count = 0 }}, Cmd.none )\n\n\
+         update : Msg -> Model -> ( Model, Cmd Msg )\n\
+         update msg model =\n    \
+             case msg of\n        \
+                 Increment ->\n            \
+                     ( {{ model | count = model.count + {step} }}, Cmd.none )\n\n\
+         view : Model -> Element Msg\n\
+         view model =\n    \
+             Ui.column []\n        \
+                 [ Ui.text \"marker\"{extra_text} ]\n\n\
+         subscriptions : Model -> Sub Msg\n\
+         subscriptions _model =\n    \
+             Sub.none\n\n\
+         main =\n    \
+             Web.app\n        \
+                 {{ init = init, update = update, view = view, subscriptions = subscriptions\n        \
+                 , routes = [], notFound = Increment\n        \
+                 }}\n",
+    )
+}
+
+/// The transition-hot-swap SEAL: a counter's `update` arm edited from `+ 1` to
+/// `+ 2` hot-swaps with no `cargo build` and no restart — the arm compiled to
+/// `apply_transition_hot(<baked datum>, model)`, so only the baked datum json
+/// changed and the classifier routes it to a transition patch. A structural
+/// `update` edit (a real `Cmd`) still recompiles.
+#[test]
+#[cfg(target_os = "linux")]
+fn update_arm_step_edit_hot_swaps_without_rebuild() -> Result<(), BoxError> {
+    if std::env::var("IPE_E2E").is_err() {
+        eprintln!("skipping (set IPE_E2E=1 to run)");
+        return Ok(());
+    }
+    // SAFETY: single-threaded here (no watch thread spawned yet); nextest isolates
+    // this process, so the var neither races nor leaks.
+    unsafe {
+        std::env::set_var("IPE_WATCH_HOT_APPEARANCE", "1");
+    }
+
+    let (ipe_dir, out_dir) = fresh_dirs("counter")?;
+    write_main(&ipe_dir, &web_fixture_counter(1, ""))?;
+
+    let sink = EventSink::default();
+    let port = 19181;
+    let (join, handle) = start_watch(&ipe_dir.join("Main.ipe"), &out_dir, port, &sink)?;
+
+    assert!(
+        wait_for_serving(port, Duration::from_mins(4)),
+        "the flag-on cold build of a transition-arm counter must serve \
+         (the emitted apply_transition_hot arm compiles)"
+    );
+    assert!(
+        wait_for(Duration::from_secs(10), || sink.count_restarted() >= 1),
+        "the cold build must record its initial Restarted event"
+    );
+    let pid_before = server_pid(port).ok_or("server PID must be discoverable after cold build")?;
+    let restarts_before = sink.count_restarted();
+
+    // update-arm edit: count + 1 -> count + 2. Transition-only => hot-swap.
+    write_main(&ipe_dir, &web_fixture_counter(2, ""))?;
+    let swap_start = Instant::now();
+    let hot_swapped = wait_for(Duration::from_secs(20), || sink.count_hot_swapped() > 0);
+    assert!(
+        hot_swapped,
+        "a +1 -> +2 update-arm edit must be hot-swapped (transition patch), not recompiled"
+    );
+    std::thread::sleep(Duration::from_secs(2));
+    assert_eq!(
+        sink.count_restarted(),
+        restarts_before,
+        "a hot-swapped update-arm edit must NOT restart the app (no cargo rebuild)"
+    );
+    assert_eq!(
+        server_pid(port),
+        Some(pid_before),
+        "a hot-swapped update-arm edit must leave the SAME server process running"
+    );
+    assert!(
+        http_get_body(port).is_some_and(|b| b.contains("marker")),
+        "the app must keep serving after the transition hot-swap"
+    );
+    eprintln!(
+        "[measure] update-arm count +1->+2 hot-swap round-trip: {} ms (no cargo, no restart)",
+        swap_start.elapsed().as_millis()
+    );
+
+    // Structural update edit: add a real Cmd (Cmd.batch []). Logic => recompile.
+    // The arm gains a non-none Cmd, so it is no longer data-describable; the emit
+    // no longer routes through apply_transition_hot and the classifier sees a
+    // skeleton change => recompile + restart.
+    let restarts_before_struct = sink.count_restarted();
+    write_main(
+        &ipe_dir,
+        &web_fixture_counter(2, "").replace(
+            "( { model | count = model.count + 2 }, Cmd.none )",
+            "( { model | count = model.count + 2 }, Cmd.batch [] )",
+        ),
+    )?;
+    let restarted = wait_for(Duration::from_mins(2), || {
+        server_pid(port).is_some_and(|pid| pid != pid_before)
+    });
+    assert!(
+        restarted,
+        "a structural update edit (a real Cmd) must recompile and restart onto a new binary"
+    );
+    assert!(
+        wait_for(Duration::from_secs(10), || {
+            sink.count_restarted() > restarts_before_struct
+        }),
+        "a structural update edit must recompile and restart (a new Restarted event)"
+    );
+
+    stop_and_join(&handle, join)
+}

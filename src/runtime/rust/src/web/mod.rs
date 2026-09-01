@@ -5128,6 +5128,197 @@ mod watch_status_handler_tests {
 }
 
 #[cfg(test)]
+mod hot_transition_handler_tests {
+    //! Regression-locks the `POST /_ipe/hot-transition` trust boundary — the
+    //! dev-only leg that mutates the server-held Model from an untrusted dev
+    //! channel. Every refusal path (dev gate, token, malformed body, malformed
+    //! transition) and the accept path (registers a decoded `Transition`) is
+    //! covered without weakening any gate.
+
+    use super::*;
+    use crate::system::{locked_remove_var, locked_set_var};
+    use crate::web::literal_table::{overlay_test_lock, set_dev_overlay_active_for_test};
+    use crate::web::store::MemoryStore;
+    use crate::web::transition;
+    use axum::Router;
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode};
+    use axum::routing::post;
+    use std::time::Duration;
+    use tower::ServiceExt; // oneshot
+
+    type TestModel = ();
+    type TestMsg = ();
+    type TestStore = MemoryStore<TestModel, TestMsg>;
+    type TestWebState = WebState<
+        TestModel,
+        TestMsg,
+        fn() -> (),
+        fn(TestMsg, TestModel) -> (TestModel, IpeCmd<TestMsg>),
+        fn(TestModel) -> Html<TestMsg>,
+        fn(TestModel) -> IpeSub<TestMsg>,
+    >;
+
+    fn test_init() {}
+    fn test_update(_msg: TestMsg, model: TestModel) -> (TestModel, IpeCmd<TestMsg>) {
+        (model, IpeCmd::None)
+    }
+    fn test_view(_model: TestModel) -> Html<TestMsg> {
+        Html::HText(String::new())
+    }
+    fn test_subs(_model: TestModel) -> IpeSub<TestMsg> {
+        IpeSub::None
+    }
+    fn test_route_resolver(m: TestModel, _path: &str) -> TestModel {
+        m
+    }
+    fn test_param_resolver(_path: &str) -> crate::dict::IpeDict<String> {
+        crate::dict::dict_empty()
+    }
+    fn test_route_matched(p: &str) -> bool {
+        p == "/"
+    }
+
+    fn make_router() -> Router {
+        let store = Arc::new(TestStore::new(Duration::from_secs(60)));
+        let state: TestWebState = WebState {
+            store: store as Arc<dyn store::SessionStore<TestModel, TestMsg>>,
+            init: Arc::new(test_init),
+            update: Arc::new(test_update),
+            view: Arc::new(test_view),
+            subs: Arc::new(test_subs),
+            route_resolver: Arc::new(test_route_resolver),
+            param_resolver: Arc::new(test_param_resolver),
+            route_matched: Arc::new(test_route_matched),
+            session_count: Arc::new(AtomicUsize::new(0)),
+            watch_build_status: Arc::new(Mutex::new(None)),
+        };
+        Router::new()
+            .route(
+                "/_ipe/hot-transition",
+                post(
+                    handlers::hot_transition_handler::<
+                        TestModel,
+                        TestMsg,
+                        fn() -> (),
+                        fn(TestMsg, TestModel) -> (TestModel, IpeCmd<TestMsg>),
+                        fn(TestModel) -> Html<TestMsg>,
+                        fn(TestModel) -> IpeSub<TestMsg>,
+                    >,
+                ),
+            )
+            .with_state(state)
+    }
+
+    async fn post_hot(token: Option<&str>, body: &str) -> axum::response::Response {
+        let mut builder = Request::builder()
+            .method("POST")
+            .uri("/_ipe/hot-transition")
+            .header("content-type", "application/json");
+        if let Some(t) = token {
+            builder = builder.header("x-ipe-hot-token", t);
+        }
+        let req = builder.body(Body::from(body.to_owned())).expect("request");
+        make_router().oneshot(req).await.expect("router responds")
+    }
+
+    const INC1: &str = r#"{"field":"count","op":"IntAdd","source":{"Int":1}}"#;
+    const INC2: &str = r#"{"field":"count","op":"IntAdd","source":{"Int":2}}"#;
+
+    /// No token → 403, even with the dev gate on and a well-formed body.
+    #[tokio::test]
+    async fn token_missing_is_403() {
+        let _g = overlay_test_lock();
+        set_dev_overlay_active_for_test(Some(true));
+        locked_set_var("IPE_WATCH_HOT_TOKEN", "secret");
+        let body = format!(r#"{{"old_json":{INC1:?},"new_json":{INC2:?}}}"#);
+        let resp = post_hot(None, &body).await;
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+        locked_remove_var("IPE_WATCH_HOT_TOKEN");
+        set_dev_overlay_active_for_test(None);
+    }
+
+    /// Wrong token → 403.
+    #[tokio::test]
+    async fn token_wrong_is_403() {
+        let _g = overlay_test_lock();
+        set_dev_overlay_active_for_test(Some(true));
+        locked_set_var("IPE_WATCH_HOT_TOKEN", "correct");
+        let body = format!(r#"{{"old_json":{INC1:?},"new_json":{INC2:?}}}"#);
+        let resp = post_hot(Some("wrong"), &body).await;
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+        locked_remove_var("IPE_WATCH_HOT_TOKEN");
+        set_dev_overlay_active_for_test(None);
+    }
+
+    /// Dev gate OFF → 404 (defence in depth), even with the correct token.
+    #[tokio::test]
+    async fn dev_gate_off_is_404() {
+        let _g = overlay_test_lock();
+        set_dev_overlay_active_for_test(Some(false));
+        locked_set_var("IPE_WATCH_HOT_TOKEN", "correct");
+        let body = format!(r#"{{"old_json":{INC1:?},"new_json":{INC2:?}}}"#);
+        let resp = post_hot(Some("correct"), &body).await;
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+        locked_remove_var("IPE_WATCH_HOT_TOKEN");
+        set_dev_overlay_active_for_test(None);
+    }
+
+    /// A malformed request body → 400.
+    #[tokio::test]
+    async fn malformed_body_is_400() {
+        let _g = overlay_test_lock();
+        set_dev_overlay_active_for_test(Some(true));
+        locked_set_var("IPE_WATCH_HOT_TOKEN", "correct");
+        let resp = post_hot(Some("correct"), "not json").await;
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        locked_remove_var("IPE_WATCH_HOT_TOKEN");
+        set_dev_overlay_active_for_test(None);
+    }
+
+    /// A well-formed body whose `new_json` is NOT a valid `Transition` → 400
+    /// (parse, don't validate: only a decodable transition is registered).
+    #[tokio::test]
+    async fn invalid_transition_json_is_400() {
+        let _g = overlay_test_lock();
+        set_dev_overlay_active_for_test(Some(true));
+        locked_set_var("IPE_WATCH_HOT_TOKEN", "correct");
+        let body = format!(r#"{{"old_json":{INC1:?},"new_json":"{{not a transition}}"}}"#);
+        let resp = post_hot(Some("correct"), &body).await;
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        locked_remove_var("IPE_WATCH_HOT_TOKEN");
+        set_dev_overlay_active_for_test(None);
+    }
+
+    /// Correct token + valid body → 200, and the replacement is registered so a
+    /// subsequent `apply_transition_hot` for the OLD key applies the NEW datum.
+    #[tokio::test]
+    async fn accept_registers_replacement() {
+        let _g = overlay_test_lock();
+        set_dev_overlay_active_for_test(Some(true));
+        transition::clear_dev_transition_for_test();
+        locked_set_var("IPE_WATCH_HOT_TOKEN", "correct");
+
+        let body = format!(r#"{{"old_json":{INC1:?},"new_json":{INC2:?}}}"#);
+        let resp = post_hot(Some("correct"), &body).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        // The overlay now maps the OLD baked datum to the +2 replacement: a hot
+        // read of the old key applies +2, proving registration reached the store.
+        #[derive(serde::Serialize, serde::Deserialize, PartialEq, Debug)]
+        struct Counter {
+            count: i64,
+        }
+        let next = transition::apply_transition_hot(INC1, Counter { count: 5 });
+        assert_eq!(next.count, 7, "the registered +2 replacement must apply");
+
+        transition::clear_dev_transition_for_test();
+        locked_remove_var("IPE_WATCH_HOT_TOKEN");
+        set_dev_overlay_active_for_test(None);
+    }
+}
+
+#[cfg(test)]
 mod bind_error_tests {
     /// The port-taken error message must name `IPE_WEB_PORT` and use an 8xxx example port.
     #[test]
