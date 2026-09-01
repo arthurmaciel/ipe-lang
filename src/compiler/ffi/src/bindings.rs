@@ -1651,17 +1651,23 @@ fn closure_per_call_body(ret: &ClosureRet, call: &str, wrapper: &str) -> Vec<Str
              {{ Ok(inner) => inner, Err(__p) => {{ note_foreign_panic(\"foreign closure panicked\", __p); None }} }}"
         )],
         ClosureRet::AsyncResult(_) | ClosureRet::AsyncOption(_) => {
+            // The production seam (building the future) keeps its own
+            // `catch_unwind`; the spawn + cancel-guard + join-error funnel is
+            // the single `ffi_spawn_guarded` choke-point. Its `Err` is already
+            // the funnelled outcome (a poll panic redacted, a cancel funnelled),
+            // so the `Result` shape returns it verbatim and the `Option` shape
+            // folds it to `None` (the funnel has already logged the detail).
             let (prod_fold, join_fold) = if matches!(ret, ClosureRet::AsyncResult(_)) {
                 (
                     "{ let __e = ipe_error_from_panic(\"foreign closure panicked\", __p); \
                      return Box::pin(async move { Err(__e) }); }",
-                    "Err(ipe_error_from_foreign(__join))",
+                    "Err(__e) => Err(__e)",
                 )
             } else {
                 (
                     "{ note_foreign_panic(\"foreign closure panicked\", __p); \
                      return Box::pin(async move { None }); }",
-                    "{ note_foreign_error(__join); None }",
+                    "Err(_) => None",
                 )
             };
             vec![
@@ -1671,12 +1677,8 @@ fn closure_per_call_body(ret: &ClosureRet, call: &str, wrapper: &str) -> Vec<Str
                      {{ Ok(f) => f, Err(__p) => {prod_fold} }};"
                 ),
                 "        Box::pin(async move {".to_owned(),
-                "            let __handle = tokio::task::spawn(__fut);".to_owned(),
-                "            let __guard = AbortOnDrop::new(__handle.abort_handle());".to_owned(),
-                "            let __joined = __handle.await;".to_owned(),
-                "            __guard.defuse();".to_owned(),
                 format!(
-                    "            match __joined {{ Ok(inner) => inner, Err(__join) => {join_fold} }}"
+                    "            match ffi_spawn_guarded(__fut).await {{ Ok(inner) => inner, {join_fold} }}"
                 ),
                 "        })".to_owned(),
             ]
@@ -1915,21 +1917,23 @@ fn plain_lines(cx: &WrapperCx<'_>) -> Vec<String> {
                     s
                 };
                 preludes = Vec::new(); // moved inside the async block
+                // The spawn + cancel-guard + join-error funnel is the single
+                // `ffi_spawn_guarded` choke-point: it arms `AbortOnDrop` and
+                // folds a poll-time panic to the redacted funnel as one
+                // indivisible step, so this shape cannot spawn unguarded. A
+                // non-panic `JoinError` is already the funnelled `Err`; only the
+                // success value needs the shape's own lift.
                 if is_async_fallible {
                     format!(
-                        "Box::pin(async move {{ {prelude_inline}let handle = tokio::task::spawn(async move {{ {call}.await }}); \
-                         let guard = AbortOnDrop::new(handle.abort_handle()); let joined = handle.await; guard.defuse(); \
-                         match joined \
+                        "Box::pin(async move {{ {prelude_inline}match ffi_spawn_guarded(async move {{ {call}.await }}).await \
                          {{ Ok(Ok(v)) => ok_res({}), Ok(Err(e)) => IpeResult::Err(ipe_error_from_foreign(e)), \
-                         Err(join_err) => IpeResult::Err(ipe_error_from_foreign(join_err)) }} }})",
+                         Err(e) => IpeResult::Err(e) }} }})",
                         ret_coerce("v")
                     )
                 } else {
                     format!(
-                        "Box::pin(async move {{ {prelude_inline}let handle = tokio::task::spawn(async move {{ {call}.await }}); \
-                         let guard = AbortOnDrop::new(handle.abort_handle()); let joined = handle.await; guard.defuse(); \
-                         match joined \
-                         {{ Ok(v) => ok_res({}), Err(join_err) => IpeResult::Err(ipe_error_from_foreign(join_err)) }} }})",
+                        "Box::pin(async move {{ {prelude_inline}match ffi_spawn_guarded(async move {{ {call}.await }}).await \
+                         {{ Ok(v) => ok_res({}), Err(e) => IpeResult::Err(e) }} }})",
                         ret_coerce("v")
                     )
                 }
@@ -2608,17 +2612,13 @@ pub fn semver_major_field_from_version(arg0: ::semver::Version) -> i64 {
         );
         assert!(out.contains("-> UpdateFnClosure {"), "{out}");
         // The future is produced under catch_unwind (a production-panic yields an
-        // immediate-error future), then awaited under a spawned task so a
-        // poll-panic folds through the JoinError arm.
-        assert!(out.contains("tokio::task::spawn(__fut)"), "{out}");
-        assert!(
-            out.contains("AbortOnDrop::new(__handle.abort_handle())"),
-            "{out}"
-        );
-        assert!(out.contains("__guard.defuse();"), "{out}");
+        // immediate-error future), then awaited under the guarded spawn
+        // choke-point so a poll-panic folds through its redacting join-error
+        // funnel and a cancel aborts the inner task.
+        assert!(out.contains("ffi_spawn_guarded(__fut)"), "{out}");
         // Both panic sites fold to Err — never abort, never fabricate: a
-        // production-panic funnels the caught payload; a poll-panic funnels
-        // the JoinError.
+        // production-panic funnels the caught payload; a poll-panic rides the
+        // choke-point's already-funnelled `Err`.
         assert!(
             out.contains(
                 "let __e = ipe_error_from_panic(\"foreign closure panicked\", __p); \
@@ -2627,7 +2627,7 @@ pub fn semver_major_field_from_version(arg0: ::semver::Version) -> i64 {
             "{out}"
         );
         assert!(
-            out.contains("Err(__join) => Err(ipe_error_from_foreign(__join))"),
+            out.contains("match ffi_spawn_guarded(__fut).await { Ok(inner) => inner, Err(__e) => Err(__e) }"),
             "{out}"
         );
         assert!(!out.contains("std::process::abort()"), "{out}");
@@ -2646,8 +2646,10 @@ pub fn semver_major_field_from_version(arg0: ::semver::Version) -> i64 {
             "{out}"
         );
         assert!(out.contains("-> UpdateFnClosure {"), "{out}");
-        assert!(out.contains("tokio::task::spawn(__fut)"), "{out}");
-        // A production-panic and a poll-panic both fold to None.
+        assert!(out.contains("ffi_spawn_guarded(__fut)"), "{out}");
+        // A production-panic and a poll-panic both fold to None. The poll-panic
+        // is redacted+logged inside the choke-point's funnel, so the Option
+        // shape just maps its `Err` to `None`.
         assert!(
             out.contains(
                 "Err(__p) => { note_foreign_panic(\"foreign closure panicked\", __p); \
@@ -2657,8 +2659,7 @@ pub fn semver_major_field_from_version(arg0: ::semver::Version) -> i64 {
         );
         assert!(
             out.contains(
-                "match __joined { Ok(inner) => inner, \
-                 Err(__join) => { note_foreign_error(__join); None } }"
+                "match ffi_spawn_guarded(__fut).await { Ok(inner) => inner, Err(_) => None }"
             ),
             "{out}"
         );
@@ -3001,11 +3002,12 @@ pub fn semver_major_field_from_version(arg0: ::semver::Version) -> i64 {
             out.contains("pub fn db_get_from_db(mut arg0: Db, arg1: String) -> IpeTask<String> {"),
             "{out}"
         );
-        // Fallible async: abort-on-drop guard, three arms, typed foreign-error
-        // fold, JoinError through the same redaction funnel.
+        // Fallible async: guarded spawn choke-point (arms the abort-on-drop and
+        // funnels the JoinError as one step), three arms, typed foreign-error
+        // fold, the funnelled JoinError riding the trailing `Err(e)` arm.
         assert!(
             out.contains(
-                "Box::pin(async move { let handle = tokio::task::spawn(async move { arg0.get(arg1.as_ref()).await }); let guard = AbortOnDrop::new(handle.abort_handle()); let joined = handle.await; guard.defuse(); match joined { Ok(Ok(v)) => ok_res(v), Ok(Err(e)) => IpeResult::Err(ipe_error_from_foreign(e)), Err(join_err) => IpeResult::Err(ipe_error_from_foreign(join_err)) } })"
+                "Box::pin(async move { match ffi_spawn_guarded(async move { arg0.get(arg1.as_ref()).await }).await { Ok(Ok(v)) => ok_res(v), Ok(Err(e)) => IpeResult::Err(ipe_error_from_foreign(e)), Err(e) => IpeResult::Err(e) } })"
             ),
             "{out}"
         );
@@ -3027,7 +3029,7 @@ pub fn semver_major_field_from_version(arg0: ::semver::Version) -> i64 {
         let out = emit_bindings(&pkg);
         assert!(
             out.contains(
-                "Box::pin(async move { let handle = tokio::task::spawn(async move { ::svc::ping().await }); let guard = AbortOnDrop::new(handle.abort_handle()); let joined = handle.await; guard.defuse(); match joined { Ok(v) => ok_res(v), Err(join_err) => IpeResult::Err(ipe_error_from_foreign(join_err)) } })"
+                "Box::pin(async move { match ffi_spawn_guarded(async move { ::svc::ping().await }).await { Ok(v) => ok_res(v), Err(e) => IpeResult::Err(e) } })"
             ),
             "{out}"
         );
@@ -3729,11 +3731,9 @@ pub fn semver_major_field_from_version(arg0: ::semver::Version) -> i64 {
             out.contains("<::firestore::Db as ::firestore::GetByIdSupport>::get_obj"),
             "{out}"
         );
-        // Async instance body: spawned + abort-guarded.
-        assert!(
-            out.contains("AbortOnDrop::new(handle.abort_handle())"),
-            "{out}"
-        );
+        // Async instance body: routed through the guarded spawn choke-point
+        // (spawn + abort-on-drop + join-error funnel are its indivisible job).
+        assert!(out.contains("ffi_spawn_guarded(async move {"), "{out}");
         assert!(
             surviving_ref_names(&pkg).contains("get_obj_from_db"),
             "the interface gate must see the synthesised region"

@@ -11,9 +11,10 @@
 //!    escape into a non-`Send` future — is discharged by rustc at the boundary,
 //!    never re-derived;
 //!  * produce the future under `catch_unwind` (a production-panic yields an
-//!    immediate-error future), then await it under a spawned task guarded by
-//!    `AbortOnDrop`, so a POLL-panic folds through the `JoinError` arm to
-//!    `Err`/`None` and a dropped outer task cancels the inner one;
+//!    immediate-error future), then await it through the `ffi_spawn_guarded`
+//!    choke-point (spawn + `AbortOnDrop` + join-error funnel as one step), so a
+//!    POLL-panic folds through the redacting funnel to `Err`/`None` and a
+//!    dropped outer task cancels the inner one;
 //!  * refuse an async TOTAL return at decode (a poll-panic would have no error
 //!    channel), so only `Result`/`Option` async shapes ever emit.
 //!
@@ -46,8 +47,8 @@ fn emit_async_closure(sig: &str) -> String {
 }
 
 /// Default gate: an async `Result` adapter emits the spawned-await containment
-/// (`tokio::task::spawn` + `AbortOnDrop` + `defuse`) with both panic sites
-/// folding to `Err`, and names the concrete boxed future on BOTH box sides.
+/// through the `ffi_spawn_guarded` choke-point with both panic sites folding to
+/// `Err`, and names the concrete boxed future on BOTH box sides.
 #[test]
 fn async_result_adapter_emits_spawned_await_containment() {
     let out = emit_async_closure(
@@ -71,14 +72,15 @@ fn async_result_adapter_emits_spawned_await_containment() {
         ),
         "the received box carries the boxed future; the return is the handle:\n{out}"
     );
-    assert!(out.contains("tokio::task::spawn(__fut)"), "{out}");
+    // The spawn + cancel-guard + join-error funnel is the single
+    // `ffi_spawn_guarded` choke-point — the adapter cannot spawn unguarded.
     assert!(
-        out.contains("AbortOnDrop::new(__handle.abort_handle())"),
+        out.contains("match ffi_spawn_guarded(__fut).await { Ok(inner) => inner, Err(__e) => Err(__e) }"),
         "{out}"
     );
-    assert!(out.contains("__guard.defuse();"), "{out}");
-    // A production-panic yields an immediate-error future; a poll-panic folds
-    // through the JoinError arm. Both to Err — never abort, never fabricate.
+    // A production-panic yields an immediate-error future; a poll-panic rides the
+    // choke-point's already-funnelled Err. Both to Err — never abort, never
+    // fabricate.
     assert!(
         out.contains(
             "let __e = ipe_error_from_panic(\"foreign closure panicked\", __p); \
@@ -177,6 +179,27 @@ impl AbortOnDrop {{
 }}
 impl Drop for AbortOnDrop {{
     fn drop(&mut self) {{ if let Some(h) = self.0.take() {{ h.abort(); }} }}
+}}
+
+// The single spawn choke-point the emitted async adapter routes through: spawn
+// the foreign future, arm the cancel guard, await, defuse, funnel the JoinError
+// (matches `ipe_runtime::ffi_spawn_guarded`). Spawn + arm are one step here too.
+pub async fn ffi_spawn_guarded<F>(future: F) -> Result<F::Output, IpeError>
+where
+    F: Future + Send + 'static,
+    F::Output: Send + 'static,
+{{
+    let handle = tokio::task::spawn(future);
+    let guard = AbortOnDrop::new(handle.abort_handle());
+    let joined = handle.await;
+    guard.defuse();
+    match joined {{
+        Ok(output) => Ok(output),
+        Err(join_err) => match join_err.try_into_panic() {{
+            Ok(payload) => Err(ipe_error_from_panic("foreign async task panicked", payload)),
+            Err(join_err) => Err(ipe_error_from_foreign(join_err)),
+        }},
+    }}
 }}
 
 // A tiny async "crate" that takes the boxed handler the adapter returns and
