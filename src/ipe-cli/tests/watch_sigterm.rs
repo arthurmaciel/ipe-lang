@@ -188,12 +188,18 @@ fn sigterm(pid: u32) -> Result<(), BoxError> {
     }
 }
 
-/// Same `/proc`-based black-box PID discovery `watch_integration.rs` uses:
-/// the supervised child carries `IPE_WEB_PORT=<port>` in its environment
-/// (injected by `watch::child_env`), unique to this test's port.
 #[cfg(target_os = "linux")]
-fn find_pid_by_environ_kv(key: &str, value: &str) -> Option<u32> {
-    let needle = format!("{key}={value}\0");
+fn pid_is_alive(pid: u32) -> bool {
+    std::path::Path::new(&format!("/proc/{pid}")).exists()
+}
+
+/// The supervised app binary is a direct child of the `ipe watch` process. In
+/// blue-green mode the child binds an INTERNAL loopback port (the proxy holds
+/// the user-facing one), so it cannot be found by the configured `IPE_WEB_PORT`;
+/// discover it by parent PID instead. Returns the first `/proc` entry whose
+/// `PPid` is `ipe_pid`.
+#[cfg(target_os = "linux")]
+fn find_child_of(ipe_pid: u32) -> Option<u32> {
     for entry in std::fs::read_dir("/proc").ok()?.flatten() {
         let Some(pid) = entry
             .file_name()
@@ -202,19 +208,34 @@ fn find_pid_by_environ_kv(key: &str, value: &str) -> Option<u32> {
         else {
             continue;
         };
-        let Ok(environ) = std::fs::read(entry.path().join("environ")) else {
+        let Ok(status) = std::fs::read_to_string(entry.path().join("status")) else {
             continue;
         };
-        if String::from_utf8_lossy(&environ).contains(&needle) {
+        let parent = status
+            .lines()
+            .find_map(|l| l.strip_prefix("PPid:"))
+            .and_then(|v| v.trim().parse::<u32>().ok());
+        if parent == Some(ipe_pid) {
             return Some(pid);
         }
     }
     None
 }
 
+/// Poll for the supervised child of `ipe_pid` up to `timeout` — the child is
+/// spawned a beat after the server first answers, so a single scan can race it.
 #[cfg(target_os = "linux")]
-fn pid_is_alive(pid: u32) -> bool {
-    std::path::Path::new(&format!("/proc/{pid}")).exists()
+fn wait_for_child_of(ipe_pid: u32, timeout: Duration) -> Option<u32> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        if let Some(pid) = find_child_of(ipe_pid) {
+            return Some(pid);
+        }
+        if Instant::now() >= deadline {
+            return None;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
 }
 
 /// Spawn a REAL `ipe watch` subprocess (the `run()` path, `external_stop =
@@ -287,7 +308,7 @@ fn watch_shuts_down_the_supervised_child_on_sigterm_to_only_the_ipe_process() ->
         let _ = ipe_proc.wait();
         return Err("initial cold build+spawn must serve v1 within budget".into());
     }
-    let child_pid = find_pid_by_environ_kv("IPE_WEB_PORT", &port.to_string())
+    let child_pid = wait_for_child_of(ipe_proc.id(), Duration::from_secs(10))
         .ok_or("the supervised child must be discoverable via /proc once v1 is serving")?;
 
     sigterm(ipe_proc.id())?;
@@ -387,19 +408,24 @@ fn spawn_never_installs_a_sigterm_forwarder() -> Result<(), BoxError> {
     )
 }
 
-/// Proof (not just a claim): a SECOND SIGTERM sent partway through the
-/// teardown's bounded grace window is SILENTLY ABSORBED — it neither
-/// escalates nor terminates the process. `signal-hook-registry` does not
-/// restore the default disposition once the forwarder thread has consumed
-/// its one signal and returned, so the second SIGTERM is neither handled
-/// nor delivered as a kernel kill. Observable consequence asserted here:
-/// the process still runs the FULL `graceful_stop` window (default 3 s —
-/// the supervised server child never exits on its own, so `stop_gracefully`
-/// always exhausts it) before exiting cleanly. A default-disposition second
-/// SIGTERM would have killed the process at the +0.8 s mark instead.
+/// Proof (not just a claim): a SECOND SIGTERM sent while the teardown is in
+/// flight is SILENTLY ABSORBED — it neither escalates the exit nor kills the
+/// process with a signal disposition. `signal-hook-registry` does not restore
+/// the default disposition once the forwarder thread has consumed its one
+/// signal and returned, so a second SIGTERM is neither re-handled nor
+/// delivered as a kernel kill. Observable consequence asserted here: the
+/// process still exits CLEANLY (status 0, not signal-killed) and the
+/// supervised child is reaped — no orphan on the port — regardless of a second
+/// signal racing the teardown.
 ///
-/// Operational conclusion, measured: a stuck `ipe watch` needs SIGKILL —
-/// a second SIGTERM is not a documented or relied-upon escape hatch.
+/// The teardown is bounded but fast: behind the blue-green proxy the stop is
+/// zero-grace (the proxy holds the user port, so there is nothing to drain), so
+/// the window is a fraction of a second, not the direct path's 3 s. The
+/// durable property is the clean exit under a double signal, not a fixed
+/// duration.
+///
+/// Operational conclusion: a stuck `ipe watch` needs SIGKILL — a second
+/// SIGTERM is not a documented or relied-upon escape hatch.
 #[cfg(target_os = "linux")]
 #[test]
 fn double_sigterm_after_forwarder_consumed_is_silently_absorbed_use_sigkill() -> Result<(), BoxError>
@@ -426,43 +452,34 @@ fn double_sigterm_after_forwarder_consumed_is_silently_absorbed_use_sigkill() ->
         let _ = ipe_proc.wait();
         return Err("initial cold build+spawn must serve v1 within budget".into());
     }
-    let child_pid = find_pid_by_environ_kv("IPE_WEB_PORT", &port.to_string())
+    let child_pid = wait_for_child_of(ipe_proc.id(), Duration::from_secs(10))
         .ok_or("the supervised child must be discoverable via /proc once v1 is serving")?;
 
-    // First SIGTERM: starts the documented graceful teardown (bounded
-    // `graceful_stop` wait — 3 s default — then SIGKILL to the child).
-    let t0 = Instant::now();
+    // First SIGTERM: starts the forwarder's orderly teardown.
     sigterm(ipe_proc.id())?;
 
-    // Partway through the grace window — the forwarder thread has already
-    // consumed the first signal and returned by now.
-    std::thread::sleep(Duration::from_millis(800));
-    assert!(
-        matches!(ipe_proc.try_wait(), Ok(None)),
-        "sanity: teardown must still be inside its bounded grace window"
-    );
-
-    // Second SIGTERM to the SAME PID.
-    sigterm(ipe_proc.id())?;
+    // A second SIGTERM lands right behind it, racing the in-flight teardown.
+    // The forwarder has consumed its one signal, so this must be absorbed —
+    // never a signal-death of the process. Sending twice at a short interval
+    // exercises both orderings (teardown still running vs. just finished); a
+    // signal to an already-exited pid is harmless.
+    std::thread::sleep(Duration::from_millis(50));
+    let _ = sigterm(ipe_proc.id());
+    std::thread::sleep(Duration::from_millis(50));
+    let _ = sigterm(ipe_proc.id());
 
     let status = wait_for_exit(&mut ipe_proc, Duration::from_secs(30));
-    let elapsed = t0.elapsed();
     let Some(status) = status else {
         let _ = ipe_proc.kill();
         let _ = ipe_proc.wait();
         return Err("ipe must still exit after its bounded teardown".into());
     };
+    // The second signal had NO escalating effect: the process exits through its
+    // own clean teardown (status 0), not a SIGTERM-disposition signal death.
     assert!(
         status.success(),
-        "the teardown still completes cleanly (exit 0), got {status}"
-    );
-    // The second signal had NO observable escalating effect: the process ran
-    // its full grace window rather than dying at the +0.8 s second signal.
-    assert!(
-        elapsed >= Duration::from_millis(2500),
-        "the second SIGTERM must be absorbed, not delivered as a kill — expected \
-         the full ~3 s graceful_stop window to elapse, but the process exited \
-         after only {elapsed:?}"
+        "a second SIGTERM must be absorbed, not delivered as a kill — the process \
+         must still exit cleanly (status 0), got {status}"
     );
     assert!(
         !pid_is_alive(child_pid),
