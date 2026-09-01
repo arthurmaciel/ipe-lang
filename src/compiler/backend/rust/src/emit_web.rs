@@ -1382,14 +1382,18 @@ mod hot_appearance_tests {
         Ok(())
     }
 
-    /// The literal hoists even when the style call is nested deep inside another
-    /// call's argument list (the real view shape) — not only at the body's top.
+    /// A nested style literal inside a fully-static `Ipe.Ui` node is absorbed
+    /// into that node's whole-subtree template (a superset of the per-leaf style
+    /// hoist): the `Font.family` value bakes INSIDE the template JSON, so a font
+    /// edit is still one changed slot (`AppearanceOnly`) — now the same slot that
+    /// also hot-swaps the node's structure. A node with a non-templatable part
+    /// (a handler, a Model read) instead falls back to the per-leaf style hoist,
+    /// covered by `nested_style_literal_in_non_templatable_node_still_hoists`.
     #[test]
-    fn nested_style_literal_still_hoists() -> DResult<()> {
+    fn nested_static_style_literal_absorbs_into_the_node_template() -> DResult<()> {
         use ipe_ir::CallPin as P;
         let mut interner = Interner::new();
-        // `ui_node_(desc, [Font.family "monospace"], [])` — the style call sits
-        // inside a list that is an argument to an outer kernel call.
+        // `ui_node_(descNone, [Font.family "monospace"], [])` — fully static.
         let list_of_attr = Expr::List {
             elem: IrType::Ui {
                 ctor: UiCtor::UiAttribute,
@@ -1421,9 +1425,76 @@ mod hot_appearance_tests {
         };
         let (program, view) = one_view_program(&mut interner, body)?;
         let out = emit_view(&interner, &program, &view, true)?;
+        // The whole node is ONE template slot; the font value is baked inside it.
+        assert!(
+            out.contains(
+                r#"from_defaults(&["{\"Node\":{\"desc\":\"NoDescription\",\"attrs\":[{\"FontFamily\":\"monospace\"}],\"children\":[]}}"])"#
+            ),
+            "a fully-static node absorbs its style leaf into the node template, got:\n{out}"
+        );
+        assert!(
+            out.contains(
+                "ipe_runtime::ui::template::materialize_ui_template_str(__ipe_lit.get(0))"
+            ),
+            "the node emits as a single template read, got:\n{out}"
+        );
+        Ok(())
+    }
+
+    /// A style literal nested in a node that is NOT wholly templatable (here a
+    /// handler-bearing attribute makes the node refuse) still hoists per-leaf
+    /// through the appearance-literal registry — the fallback that preserves the
+    /// appearance hot-swap when the structural template does not apply.
+    #[test]
+    fn nested_style_literal_in_non_templatable_node_still_hoists() -> DResult<()> {
+        use ipe_ir::CallPin as P;
+        let mut interner = Interner::new();
+        let on_click = Expr::Call {
+            callee: Callee::Kernel(KernelFn::UiOnClick),
+            args: vec![Expr::Var(interner.intern("msg")?)],
+            pin: P::None,
+            on_form: OnFormKind::NotForm,
+        };
+        let list_of_attr = Expr::List {
+            elem: IrType::Ui {
+                ctor: UiCtor::UiAttribute,
+                msg: Box::new(IrType::Int),
+            },
+            items: vec![font_family_call(), on_click],
+        };
+        let empty_children = Expr::List {
+            elem: IrType::Ui {
+                ctor: UiCtor::Element,
+                msg: Box::new(IrType::Int),
+            },
+            items: vec![],
+        };
+        let body = Expr::Call {
+            callee: Callee::Kernel(KernelFn::UiNode),
+            args: vec![
+                Expr::Call {
+                    callee: Callee::Kernel(KernelFn::UiDescNone),
+                    args: vec![],
+                    pin: P::None,
+                    on_form: OnFormKind::NotForm,
+                },
+                list_of_attr,
+                empty_children,
+            ],
+            pin: P::None,
+            on_form: OnFormKind::NotForm,
+        };
+        let (program, view) = one_view_program(&mut interner, body)?;
+        let out = emit_view(&interner, &program, &view, true)?;
+        // The handler makes the node refuse the whole-subtree template, so the
+        // font leaf hoists individually (the shipped per-leaf appearance path).
+        assert!(
+            !out.contains("materialize_ui_template_str"),
+            "a handler-bearing node must not whole-subtree template, got:\n{out}"
+        );
         assert!(
             out.contains("from_defaults(&[\"monospace\"])"),
-            "a nested style literal must still hoist, got:\n{out}"
+            "the nested style literal must still hoist per-leaf, got:\n{out}"
         );
         assert!(
             out.contains("__ipe_lit.get(0).to_string()"),
@@ -2818,6 +2889,190 @@ mod hot_appearance_tests {
         let out = emit_view(&interner, &program, &view, true)?;
         assert!(
             !out.contains("materialize_template_str"),
+            "a non-web shape must not template, got:\n{out}"
+        );
+        Ok(())
+    }
+
+    // ── Ipe.Ui structural template ───────────────────────────────────────────
+
+    fn ui_desc_none() -> Expr {
+        Expr::Call {
+            callee: Callee::Kernel(KernelFn::UiDescNone),
+            args: vec![],
+            pin: CallPin::None,
+            on_form: OnFormKind::NotForm,
+        }
+    }
+
+    fn ui_text(s: &str) -> Expr {
+        Expr::Call {
+            callee: Callee::Kernel(KernelFn::UiText),
+            args: vec![Expr::Str(s.to_string())],
+            pin: CallPin::None,
+            on_form: OnFormKind::NotForm,
+        }
+    }
+
+    fn ui_attr_list(items: Vec<Expr>) -> Expr {
+        Expr::List {
+            elem: IrType::Ui {
+                ctor: UiCtor::UiAttribute,
+                msg: Box::new(IrType::Int),
+            },
+            items,
+        }
+    }
+
+    fn ui_child_list(items: Vec<Expr>) -> Expr {
+        Expr::List {
+            elem: IrType::Ui {
+                ctor: UiCtor::Element,
+                msg: Box::new(IrType::Int),
+            },
+            items,
+        }
+    }
+
+    /// `Ui.node descNone [Ui.padding 8] [Ui.text "Hi"]` — a fully-static `Ipe.Ui`
+    /// element subtree (what `Ui.el`/`Ui.column` lower to).
+    fn static_ui_subtree() -> Expr {
+        Expr::Call {
+            callee: Callee::Kernel(KernelFn::UiNode),
+            args: vec![
+                ui_desc_none(),
+                ui_attr_list(vec![Expr::Call {
+                    callee: Callee::Kernel(KernelFn::UiPadding),
+                    args: vec![Expr::Int(8)],
+                    pin: CallPin::None,
+                    on_form: OnFormKind::NotForm,
+                }]),
+                ui_child_list(vec![ui_text("Hi")]),
+            ],
+            pin: CallPin::None,
+            on_form: OnFormKind::NotForm,
+        }
+    }
+
+    /// Flag OFF: a static `Ipe.Ui` subtree emits inline (the direct `ui_node_` /
+    /// `ui_text_` tree), never a template read — release output is unperturbed.
+    #[test]
+    fn flag_off_static_ui_subtree_emits_inline() -> DResult<()> {
+        let mut interner = Interner::new();
+        let (program, view) = one_view_program(&mut interner, static_ui_subtree())?;
+        let out = emit_view(&interner, &program, &view, false)?;
+        assert!(
+            !out.contains("materialize_ui_template_str"),
+            "flag-off emit must not template, got:\n{out}"
+        );
+        assert!(
+            !out.contains("__ipe_lit"),
+            "flag-off emit must introduce no literal table, got:\n{out}"
+        );
+        assert!(
+            out.contains("ui_node_") && out.contains("ui_text_"),
+            "flag-off emit must carry the direct inline node tree, got:\n{out}"
+        );
+        Ok(())
+    }
+
+    /// Flag ON: the whole static `Ipe.Ui` subtree hoists as ONE serialized
+    /// `UiTemplate` and the site reads it through `materialize_ui_template_str`.
+    /// The baked default is the template's JSON, byte-identical to the runtime
+    /// `UiTemplate` serde form (dev == prod).
+    #[test]
+    fn flag_on_static_ui_subtree_hoists_as_template() -> DResult<()> {
+        let mut interner = Interner::new();
+        let (program, view) = one_view_program(&mut interner, static_ui_subtree())?;
+        let out = emit_view(&interner, &program, &view, true)?;
+        assert!(
+            out.contains(
+                "ipe_runtime::ui::template::materialize_ui_template_str(__ipe_lit.get(0))"
+            ),
+            "flag-on emit must read the hoisted Ui template slot, got:\n{out}"
+        );
+        assert!(
+            !out.contains("ui_node_") && !out.contains("ui_text_"),
+            "the inline node tree must be replaced by the template read, got:\n{out}"
+        );
+        assert!(
+            out.contains(
+                r#"from_defaults(&["{\"Node\":{\"desc\":\"NoDescription\",\"attrs\":[{\"Padding\":[8,8,8,8]}],\"children\":[{\"Text\":\"Hi\"}]}}"])"#
+            ),
+            "the baked default must be the subtree's serialized Ui template, got:\n{out}"
+        );
+        Ok(())
+    }
+
+    /// A `Ipe.Ui` subtree carrying a Model read (a `Var` child) is NOT templated
+    /// even with the flag on — it stays compiled (the refusal path).
+    #[test]
+    fn flag_on_model_dependent_ui_subtree_stays_inline() -> DResult<()> {
+        let mut interner = Interner::new();
+        let dynamic = Expr::Call {
+            callee: Callee::Kernel(KernelFn::UiNode),
+            args: vec![
+                ui_desc_none(),
+                ui_attr_list(vec![]),
+                ui_child_list(vec![Expr::Var(interner.intern("child")?)]),
+            ],
+            pin: CallPin::None,
+            on_form: OnFormKind::NotForm,
+        };
+        let (program, view) = one_view_program(&mut interner, dynamic)?;
+        let out = emit_view(&interner, &program, &view, true)?;
+        assert!(
+            !out.contains("materialize_ui_template_str"),
+            "a Model-dependent Ui subtree must not template, got:\n{out}"
+        );
+        assert!(
+            out.contains("ui_node_"),
+            "a non-templated Ui subtree stays inline compiled, got:\n{out}"
+        );
+        Ok(())
+    }
+
+    /// A `Ipe.Ui` subtree carrying an event handler is NOT templated — a handler
+    /// is logic, so the subtree stays compiled.
+    #[test]
+    fn flag_on_handler_bearing_ui_subtree_stays_inline() -> DResult<()> {
+        let mut interner = Interner::new();
+        let with_handler = Expr::Call {
+            callee: Callee::Kernel(KernelFn::UiNode),
+            args: vec![
+                ui_desc_none(),
+                ui_attr_list(vec![Expr::Call {
+                    callee: Callee::Kernel(KernelFn::UiOnClick),
+                    args: vec![Expr::Var(interner.intern("msg")?)],
+                    pin: CallPin::None,
+                    on_form: OnFormKind::NotForm,
+                }]),
+                ui_child_list(vec![ui_text("x")]),
+            ],
+            pin: CallPin::None,
+            on_form: OnFormKind::NotForm,
+        };
+        let (program, view) = one_view_program(&mut interner, with_handler)?;
+        let out = emit_view(&interner, &program, &view, true)?;
+        assert!(
+            !out.contains("materialize_ui_template_str"),
+            "a handler-bearing Ui subtree must not template, got:\n{out}"
+        );
+        Ok(())
+    }
+
+    /// A static `Ipe.Ui` subtree in a NON-web shape does not template — it emits
+    /// inline (the template table is a web-runtime type).
+    #[test]
+    fn static_ui_subtree_non_web_shape_stays_inline() -> DResult<()> {
+        let mut interner = Interner::new();
+        let (mut program, view) = one_view_program(&mut interner, static_ui_subtree())?;
+        if let Some(m) = program.modules.first_mut() {
+            m.uses_web = false;
+        }
+        let out = emit_view(&interner, &program, &view, true)?;
+        assert!(
+            !out.contains("materialize_ui_template_str"),
             "a non-web shape must not template, got:\n{out}"
         );
         Ok(())

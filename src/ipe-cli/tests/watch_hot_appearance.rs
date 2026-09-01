@@ -303,6 +303,44 @@ fn web_fixture_static_html(text: &str, extra_child: &str) -> String {
     )
 }
 
+/// A `Web.app` whose view is a fully-static `Ipe.Ui` subtree built from the
+/// `Ui.node` element kernel over inert `Ui.padding` / `Ui.spacing` attributes and
+/// static `Ui.text` children — no `Model` read, no handler. Under the flag the
+/// WHOLE subtree hoists as ONE serialized `UiTemplate` into the per-view
+/// `LiteralTable`, so a STRUCTURAL edit (static text, an added static child) is a
+/// single-slot change the classifier routes to `AppearanceOnly` — a zero-compile
+/// hot-swap. This is the `Ipe.Ui` analogue of `web_fixture_static_html`; the
+/// `Ui.node` element kernel is what the `Ui.el` / `Ui.column` wrappers lower to.
+fn web_fixture_static_ui(text: &str, extra_child: &str) -> String {
+    format!(
+        "module Main exposing (main)\n\n\
+         import Ipe.Tea.Web as Web\n\
+         import Ipe.Ui as Ui\n\
+         import Ipe.Tea.Web.Cmd\n\
+         import Ipe.Tea.Web.Sub\n\n\
+         type alias Model = {{ count : Int }}\n\n\
+         type Msg = Noop\n\n\
+         init : a -> ( Model, Cmd Msg )\n\
+         init _req =\n    \
+             ( {{ count = 0 }}, Cmd.none )\n\n\
+         update : Msg -> Model -> ( Model, Cmd Msg )\n\
+         update _msg model =\n    \
+             ( model, Cmd.none )\n\n\
+         view : Model -> Element Msg\n\
+         view _model =\n    \
+             Ui.node Ui.descMain [ Ui.padding 8, Ui.spacing 4 ]\n        \
+                 [ Ui.node Ui.descContentInfo [ Ui.htmlAttribute \"class\" \"marker\" ] [ Ui.text \"{text}\" ]{extra_child} ]\n\n\
+         subscriptions : Model -> Sub Msg\n\
+         subscriptions _model =\n    \
+             Sub.none\n\n\
+         main =\n    \
+             Web.app\n        \
+                 {{ init = init, update = update, view = view, subscriptions = subscriptions\n        \
+                 , routes = [], notFound = Noop\n        \
+                 }}\n",
+    )
+}
+
 /// A `Web.app` whose view carries a `Ui.gridTracks cols rows` — two direct raw
 /// CSS String literals (`grid-template-columns` / `-rows` values) that each hoist
 /// into the per-view `LiteralTable` under the flag. The raw-CSS value sink
@@ -573,7 +611,11 @@ fn style_edit_hot_swaps_without_rebuild_and_structural_edit_recompiles() -> Resu
         swap_elapsed.as_millis()
     );
 
-    // ── Structural edit: add an element. Logic ⇒ recompile + restart. ──
+    // ── Structural edit: add an element. The view uses the `Ui.column` wrapper
+    // (a compiled stdlib function, not the `Ui.node` element kernel), so it is NOT
+    // whole-subtree templated; an added element is a `Logic` change ⇒ recompile +
+    // restart. (Whole-subtree Ui templating fires on the raw `Ui.node` kernel —
+    // see `static_ui_subtree_structural_edit_hot_swaps_without_rebuild`.) ──
     let restarts_before_struct = sink.count_restarted();
     write_main(&ipe_dir, &web_fixture(16, "\n        , Ui.text \"added\""))?;
     // A recompile swaps the running binary — wait for a NEW PID serving the added
@@ -696,7 +738,10 @@ fn attribute_and_text_edits_hot_swap_without_rebuild() -> Result<(), BoxError> {
         text_elapsed.as_millis()
     );
 
-    // ── Structural edit: add a third text node. Logic ⇒ recompile + restart. ──
+    // ── Structural edit: add a third text node. The view uses the `Ui.column`
+    // wrapper (a compiled stdlib function, not the `Ui.node` element kernel), so it
+    // is NOT whole-subtree templated; an added text node is a `Logic` change ⇒
+    // recompile + restart. ──
     let restarts_before_struct = sink.count_restarted();
     write_main(
         &ipe_dir,
@@ -787,7 +832,10 @@ fn numeric_weight_edit_hot_swaps_without_rebuild() -> Result<(), BoxError> {
         swap_start.elapsed().as_millis()
     );
 
-    // ── Structural edit: add an element. Logic ⇒ recompile + restart. ──
+    // ── Structural edit: add an element. The view uses the `Ui.column` wrapper
+    // (a compiled stdlib function, not the `Ui.node` element kernel), so it is NOT
+    // whole-subtree templated; an added element is a `Logic` change ⇒ recompile +
+    // restart. ──
     let restarts_before_struct = sink.count_restarted();
     write_main(
         &ipe_dir,
@@ -1303,6 +1351,111 @@ fn static_html_subtree_structural_edit_hot_swaps_without_rebuild() -> Result<(),
     );
     eprintln!(
         "[measure] static-Html ADD child <p>two</p> hot-swap: {} ms (no cargo, no restart)",
+        add_start.elapsed().as_millis()
+    );
+
+    stop_and_join(&handle, join)
+}
+
+/// The `Ipe.Ui` structural-hot-swap proof: a fully-static `Ipe.Ui` subtree is
+/// hoisted whole as a serialized `UiTemplate`, so editing the tree's STRUCTURE —
+/// static text, and adding a fully-static child — hot-swaps with no recompile
+/// and no restart. Real apps write `Ipe.Ui`, not raw `Ipe.Html`, so this is the
+/// biggest single coverage gain over the shipped `Ipe.Html` template. Off, the
+/// same subtree emits inline byte-for-byte (dev == prod), asserted by the served
+/// baked default matching the direct render.
+#[test]
+#[cfg(target_os = "linux")]
+// E2E harness: two sequential structural edits (static text, added static child)
+// in one live watch session — the length is the scenario, not incidental.
+#[allow(clippy::too_many_lines)]
+fn static_ui_subtree_structural_edit_hot_swaps_without_rebuild() -> Result<(), BoxError> {
+    if std::env::var("IPE_E2E").is_err() {
+        eprintln!("skipping (set IPE_E2E=1 to run)");
+        return Ok(());
+    }
+    // SAFETY: single-threaded here (no watch thread spawned yet); nextest isolates
+    // this process, so the var neither races nor leaks.
+    unsafe {
+        std::env::set_var("IPE_WATCH_HOT_APPEARANCE", "1");
+    }
+
+    let (ipe_dir, out_dir) = fresh_dirs("staticui")?;
+    write_main(&ipe_dir, &web_fixture_static_ui("one", ""))?;
+
+    let sink = EventSink::default();
+    let port = 19179;
+    let (join, handle) = start_watch(&ipe_dir.join("Main.ipe"), &out_dir, port, &sink)?;
+
+    assert!(
+        wait_for_serving(port, Duration::from_mins(4)),
+        "the flag-on cold build of a static-Ui-subtree view must serve"
+    );
+    assert!(
+        wait_for(Duration::from_secs(10), || sink.count_restarted() >= 1),
+        "the cold build must record its initial Restarted event"
+    );
+    // dev == prod: the served HTML is exactly what the direct (flag-off) inline
+    // emit renders — the baked-default `UiTemplate` materializes byte-identically
+    // through the same `render_element` chain. The static text survives the live
+    // `ipe-id` open-tag injection, so match on it.
+    assert!(
+        http_get_body(port).is_some_and(|b| b.contains("one")),
+        "the templated static Ui subtree must render its baked default (dev == prod)"
+    );
+    let pid_before = server_pid(port).ok_or("server PID must be discoverable after cold build")?;
+    let restarts_before = sink.count_restarted();
+
+    // Static-text edit inside the template: "one" -> "uno". Hot-swap.
+    write_main(&ipe_dir, &web_fixture_static_ui("uno", ""))?;
+    let swap_start = Instant::now();
+    assert!(
+        wait_for(Duration::from_secs(20), || sink.count_hot_swapped() > 0),
+        "a static-text edit inside a templated Ui subtree must hot-swap, not recompile"
+    );
+    std::thread::sleep(Duration::from_secs(2));
+    assert_eq!(
+        sink.count_restarted(),
+        restarts_before,
+        "a hot-swapped static-text edit must NOT restart the app (no cargo rebuild)"
+    );
+    assert_eq!(
+        server_pid(port),
+        Some(pid_before),
+        "a hot-swapped static-text edit must leave the SAME server process running"
+    );
+    eprintln!(
+        "[measure] static-Ui text one->uno hot-swap: {} ms (no cargo, no restart)",
+        swap_start.elapsed().as_millis()
+    );
+
+    // STRUCTURAL edit: ADD a fully-static child `Ui.text "two"`. Hot-swap.
+    let hot_before_add = sink.count_hot_swapped();
+    write_main(&ipe_dir, &web_fixture_static_ui("uno", ", Ui.text \"two\""))?;
+    let add_start = Instant::now();
+    assert!(
+        wait_for(Duration::from_secs(20), || {
+            sink.count_hot_swapped() > hot_before_add
+        }),
+        "adding a fully-static Ui child must hot-swap (structural template edit), not recompile"
+    );
+    std::thread::sleep(Duration::from_secs(2));
+    assert_eq!(
+        sink.count_restarted(),
+        restarts_before,
+        "adding a static Ui child must NOT restart the app (no cargo rebuild)"
+    );
+    assert_eq!(
+        server_pid(port),
+        Some(pid_before),
+        "adding a static Ui child must leave the SAME server process running"
+    );
+    assert!(
+        http_get_body(port).is_some_and(|b| b.contains("two")),
+        "the app must serve the added static child after the structural hot-swap"
+    );
+    eprintln!(
+        "[measure] static-Ui ADD child Ui.text \"two\" hot-swap: {} ms (no cargo, no restart)",
         add_start.elapsed().as_millis()
     );
 

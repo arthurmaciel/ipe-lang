@@ -128,7 +128,7 @@ impl CompileTemplate {
 /// (`\n \r \t \u{08} \u{0c}`), and `\u00XX` for every other control character.
 /// All other characters (including non-ASCII) pass through verbatim —
 /// `serde_json` does not escape non-ASCII by default. Total: never panics.
-fn write_json_string(s: &str, out: &mut String) {
+pub fn write_json_string(s: &str, out: &mut String) {
     use std::fmt::Write as _;
     out.push('"');
     for ch in s.chars() {

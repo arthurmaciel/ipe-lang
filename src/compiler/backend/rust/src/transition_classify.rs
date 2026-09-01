@@ -1,0 +1,789 @@
+//! Recognise the data-describable `update` arms and reduce each to an inert
+//! transition datum — the logic counterpart of [`crate::emit_template`]'s static
+//! subtree partition.
+//!
+//! A Web/TEA `update` arm returns `(Model, Cmd Msg)`. An arm is DATA-DESCRIBABLE
+//! iff its whole effect is one field of the Model set to a value drawn from a
+//! tiny closed vocabulary, with `Cmd.none` — no control flow, no function call,
+//! no branching, no real `Cmd`. [`transition_of_arm`] returns `Some` only for
+//! such an arm and `None` for everything else, so an unprovable arm stays
+//! compiled (the recompile path) — conservative by construction, exactly the
+//! appearance-vs-logic split.
+//!
+//! ## Why a shape match, fail-closed
+//!
+//! The recognised shapes are exactly the four the runtime's `apply_transition`
+//! executes: a `Set` from an int / bool / string literal or another field, an
+//! `IntAdd` / `IntSub` of a literal against the same field, and a boolean
+//! `not` of the same field (`Toggle`). EVERY other arm body — a different
+//! operator, a non-literal operand, a multi-field update, a non-`none` `Cmd`, a
+//! call, an `if` / `case` — refuses via a final wildcard-free decision and keeps
+//! the arm compiled. A new arm shape is therefore never encoded by default.
+//!
+//! ## Inert by construction (dev == prod)
+//!
+//! A [`CompileTransition`] carries only a field NAME, a closed op tag, and an
+//! inert source (a literal or a field name); it has no code and no nesting,
+//! mirroring the runtime `web::transition::Transition`. Its JSON serialization
+//! ([`CompileTransition::to_json`]) is byte-identical to the runtime
+//! `Transition`'s serde form (pinned by a test), so the emitted baked datum
+//! decodes back into exactly the transition it described and `apply_transition`
+//! produces byte-identically what the direct compiled arm would — one update
+//! semantics, dev == prod.
+
+use ipe_intern::Symbol;
+use ipe_ir::{BinOp, Callee, Expr, KernelFn};
+
+/// The inert operand of a [`CompileTransition`]. Mirrors the runtime
+/// `web::transition::Source` — a literal value or a named field read; never an
+/// expression, call, or nested transition.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum CompileSource {
+    Int(i64),
+    Bool(bool),
+    Str(String),
+    /// A read of the value under a named `Model` field (the serde key).
+    Field(String),
+}
+
+/// The closed op set. Exhaustive and wildcard-free, one-to-one with the runtime
+/// `web::transition::TransitionOp`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CompileOp {
+    Set,
+    IntAdd,
+    IntSub,
+    BoolNot,
+}
+
+/// An inert, fully-described single-field `update` transition reduced to data.
+///
+/// The `field` is the target field's serde KEY (the emitted Rust ident, i.e. the
+/// `mangle_reserved` form the runtime keys the Model object by).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CompileTransition {
+    pub field: String,
+    pub op: CompileOp,
+    pub source: CompileSource,
+}
+
+impl CompileTransition {
+    /// Serialize to the JSON the runtime `Transition` decodes — `serde_json`'s
+    /// default externally-tagged representation of
+    /// `{"field":…,"op":"IntAdd","source":{"Int":1}}`. Deterministic (fixed
+    /// field order, deterministic string escaping); byte-identical to
+    /// `serde_json::to_string(&Transition)` (pinned by a test).
+    #[must_use]
+    pub fn to_json(&self) -> String {
+        let mut out = String::new();
+        out.push_str("{\"field\":");
+        write_json_string(&self.field, &mut out);
+        out.push_str(",\"op\":\"");
+        out.push_str(match self.op {
+            CompileOp::Set => "Set",
+            CompileOp::IntAdd => "IntAdd",
+            CompileOp::IntSub => "IntSub",
+            CompileOp::BoolNot => "BoolNot",
+        });
+        out.push_str("\",\"source\":");
+        self.write_source_json(&mut out);
+        out.push('}');
+        out
+    }
+
+    fn write_source_json(&self, out: &mut String) {
+        match &self.source {
+            CompileSource::Int(n) => {
+                out.push_str("{\"Int\":");
+                out.push_str(&n.to_string());
+                out.push('}');
+            }
+            CompileSource::Bool(b) => {
+                out.push_str("{\"Bool\":");
+                out.push_str(if *b { "true" } else { "false" });
+                out.push('}');
+            }
+            CompileSource::Str(s) => {
+                out.push_str("{\"Str\":");
+                write_json_string(s, out);
+                out.push('}');
+            }
+            CompileSource::Field(name) => {
+                out.push_str("{\"Field\":");
+                write_json_string(name, out);
+                out.push('}');
+            }
+        }
+    }
+}
+
+/// Append `s` as a JSON string literal matching `serde_json`'s encoding (the two
+/// mandatory escapes plus the short C0 escapes and `\u00XX` for the rest).
+/// Mirrors [`crate::emit_template`]'s writer. Total: never panics.
+fn write_json_string(s: &str, out: &mut String) {
+    use std::fmt::Write as _;
+    out.push('"');
+    for ch in s.chars() {
+        match ch {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            '\u{08}' => out.push_str("\\b"),
+            '\u{0c}' => out.push_str("\\f"),
+            c if (c as u32) < 0x20 => {
+                let _ = write!(out, "\\u{:04x}", c as u32);
+            }
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+}
+
+/// Reduce a data-describable `update` arm to a [`CompileTransition`], or `None`.
+///
+/// Returns `None` when the arm is not provably a single-field data change (any
+/// control flow, call, non-literal operand, multi-field update, non-`none`
+/// `Cmd`, unrecognised operator) — the caller then keeps the arm compiled
+/// (recompile path).
+///
+/// `model_param` is the `Model` parameter symbol the arm body updates (the
+/// `update` function's second parameter); an update of any OTHER record refuses.
+/// `resolve` maps a field [`Symbol`] to its serde key (the emitted Rust ident);
+/// a symbol that does not resolve refuses.
+///
+/// Fail-closed everywhere: this is the conservative half of the appearance/logic
+/// split for `update`. A false `None` is merely a slower rebuild; a false `Some`
+/// that diverged from the compiled arm would be a correctness defect — so every
+/// unrecognised shape refuses.
+pub fn transition_of_arm(
+    body: &Expr,
+    model_param: Symbol,
+    resolve: &impl Fn(Symbol) -> Option<String>,
+) -> Option<CompileTransition> {
+    // The arm body of a TEA `update` is `(Model, Cmd Msg)`. Only a two-element
+    // tuple whose second element is exactly `Cmd.none` is data-describable; a
+    // real `Cmd` (perform / batch / anything else) keeps the arm compiled.
+    let Expr::Tuple(elems) = body else {
+        return None;
+    };
+    let [model_expr, cmd_expr] = elems.as_slice() else {
+        return None;
+    };
+    if !is_cmd_none(cmd_expr) {
+        return None;
+    }
+    single_field_update(model_expr, model_param, resolve)
+}
+
+/// Whether `expr` is exactly `Cmd.none` — the nullary `CmdNone` kernel call. Any
+/// other `Cmd` (`Cmd.batch`, `Cmd.perform`, a variable) refuses.
+const fn is_cmd_none(expr: &Expr) -> bool {
+    matches!(
+        expr,
+        Expr::Call {
+            callee: Callee::Kernel(KernelFn::CmdNone),
+            args,
+            ..
+        } if args.is_empty()
+    )
+}
+
+/// Reduce `{ model | field = rhs }` (a single-field update of the `Model`
+/// parameter) to a transition, or `None`.
+fn single_field_update(
+    expr: &Expr,
+    model_param: Symbol,
+    resolve: &impl Fn(Symbol) -> Option<String>,
+) -> Option<CompileTransition> {
+    let Expr::Update { record, fields } = expr else {
+        return None;
+    };
+    // The updated record must be the Model parameter itself — `{ m | … }`, never
+    // `{ someOther | … }` (which would not be the arm's Model result).
+    if !is_var(record, model_param) {
+        return None;
+    }
+    // Exactly one field changes. A multi-field update is not a single
+    // data-describable transition (this slice's scope).
+    let [(field_sym, rhs)] = fields.as_slice() else {
+        return None;
+    };
+    let field = resolve(*field_sym)?;
+    let (op, source) = classify_rhs(rhs, &field, model_param, resolve)?;
+    Some(CompileTransition { field, op, source })
+}
+
+/// Classify the right-hand side of a single-field update into `(op, source)`, or
+/// `None` for anything outside the closed vocabulary.
+///
+/// The recognised shapes, exhaustively:
+/// * an int / bool / string literal → `Set` from that literal;
+/// * a read of another Model field → `Set` from that field;
+/// * `field <int-op> <int-literal>` where the read is the SAME field being
+///   assigned → `IntAdd` / `IntSub` from the literal (`count = count + 1`);
+/// * `not field` where the read is the SAME field → `BoolNot` (`on = not on`).
+///
+/// Everything else — a different operator, a non-literal operand, an operand
+/// that reads a DIFFERENT field in an arithmetic op, a nested expression —
+/// refuses.
+fn classify_rhs(
+    rhs: &Expr,
+    target_field: &str,
+    model_param: Symbol,
+    resolve: &impl Fn(Symbol) -> Option<String>,
+) -> Option<(CompileOp, CompileSource)> {
+    match rhs {
+        // A bare literal set.
+        Expr::Int(n) => Some((CompileOp::Set, CompileSource::Int(*n))),
+        Expr::Bool(b) => Some((CompileOp::Set, CompileSource::Bool(*b))),
+        Expr::Str(s) => Some((CompileOp::Set, CompileSource::Str(s.clone()))),
+        // A set from another Model field: `{ m | a = b }` (b a field read on the
+        // Model). The read must be `model.field`; anything else refuses.
+        Expr::Access { .. } => {
+            let name = field_read(rhs, model_param, resolve)?;
+            Some((CompileOp::Set, CompileSource::Field(name)))
+        }
+        // `field + lit` / `field - lit` — the LHS must read the SAME field being
+        // assigned (`count = count + 1`), the RHS an int literal. A cross-field
+        // arithmetic (`count = other + 1`) or a non-literal RHS refuses: the
+        // runtime `IntAdd`/`IntSub` reads the target field as its accumulator, so
+        // only a same-field self-increment is faithful to it.
+        Expr::BinOp { op, lhs, rhs: rhs2 } => {
+            let compile_op = match op {
+                BinOp::IntAdd => CompileOp::IntAdd,
+                BinOp::IntSub => CompileOp::IntSub,
+                _ => return None,
+            };
+            let lhs_field = field_read(lhs, model_param, resolve)?;
+            if lhs_field != target_field {
+                return None;
+            }
+            let Expr::Int(n) = rhs2.as_ref() else {
+                return None;
+            };
+            Some((compile_op, CompileSource::Int(*n)))
+        }
+        // `not field` — the argument must read the SAME field being assigned
+        // (`on = not on`). The runtime `BoolNot` negates the target field, so a
+        // `not otherField` would diverge and refuses.
+        Expr::Call {
+            callee: Callee::Kernel(KernelFn::BasicsNot),
+            args,
+            ..
+        } => {
+            let [arg] = args.as_slice() else {
+                return None;
+            };
+            let arg_field = field_read(arg, model_param, resolve)?;
+            if arg_field != target_field {
+                return None;
+            }
+            Some((
+                CompileOp::BoolNot,
+                CompileSource::Field(target_field.to_owned()),
+            ))
+        }
+        _ => None,
+    }
+}
+
+/// If `expr` is a read of a field on the `Model` parameter (`model.field`),
+/// return that field's serde key; else `None`.
+fn field_read(
+    expr: &Expr,
+    model_param: Symbol,
+    resolve: &impl Fn(Symbol) -> Option<String>,
+) -> Option<String> {
+    let Expr::Access { record, field, .. } = expr else {
+        return None;
+    };
+    if !is_var(record, model_param) {
+        return None;
+    }
+    resolve(*field)
+}
+
+/// Whether `expr` is a variable read of exactly `sym`. A `CloneVar` (a
+/// capture-clone of the same binder) is equally a read of that binder, so both
+/// count — the Model parameter may be read either way inside the arm body.
+fn is_var(expr: &Expr, sym: Symbol) -> bool {
+    matches!(expr, Expr::Var(s) | Expr::CloneVar(s) if *s == sym)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        CompileOp, CompileSource, CompileTransition, transition_of_arm, write_json_string,
+    };
+    use ipe_intern::Symbol;
+    use ipe_ir::{BinOp, CallPin, Callee, Expr, IrType, KernelFn, OnFormKind};
+
+    // Fixed symbols for the test model + its fields. A resolver maps them to
+    // serde keys.
+    fn model_sym() -> Symbol {
+        Symbol::from_raw(1)
+    }
+    fn count_sym() -> Symbol {
+        Symbol::from_raw(2)
+    }
+    fn name_sym() -> Symbol {
+        Symbol::from_raw(3)
+    }
+    fn on_sym() -> Symbol {
+        Symbol::from_raw(4)
+    }
+
+    fn resolver(sym: Symbol) -> Option<String> {
+        match sym.as_raw() {
+            2 => Some("count".to_owned()),
+            3 => Some("name".to_owned()),
+            4 => Some("on".to_owned()),
+            _ => None,
+        }
+    }
+
+    fn cmd_none() -> Expr {
+        Expr::Call {
+            callee: Callee::Kernel(KernelFn::CmdNone),
+            args: vec![],
+            pin: CallPin::None,
+            on_form: OnFormKind::NotForm,
+        }
+    }
+
+    fn model_access(field: Symbol) -> Expr {
+        Expr::Access {
+            record: Box::new(Expr::Var(model_sym())),
+            field,
+            field_ty: IrType::Int,
+        }
+    }
+
+    /// `( { m | <field> = <rhs> }, Cmd.none )` — the TEA arm body shape.
+    fn arm_body(field: Symbol, rhs: Expr) -> Expr {
+        Expr::Tuple(vec![
+            Expr::Update {
+                record: Box::new(Expr::Var(model_sym())),
+                fields: vec![(field, rhs)],
+            },
+            cmd_none(),
+        ])
+    }
+
+    fn classify(body: &Expr) -> Option<CompileTransition> {
+        transition_of_arm(body, model_sym(), &resolver)
+    }
+
+    // ── acceptance: the four data-describable shapes ──────────────────────
+
+    #[test]
+    fn increment_same_field_is_int_add() {
+        // Increment -> ({ m | count = count + 1 }, Cmd.none)
+        let rhs = Expr::BinOp {
+            op: BinOp::IntAdd,
+            lhs: Box::new(model_access(count_sym())),
+            rhs: Box::new(Expr::Int(1)),
+        };
+        assert_eq!(
+            classify(&arm_body(count_sym(), rhs)),
+            Some(CompileTransition {
+                field: "count".to_owned(),
+                op: CompileOp::IntAdd,
+                source: CompileSource::Int(1),
+            })
+        );
+    }
+
+    #[test]
+    fn decrement_same_field_is_int_sub() {
+        let rhs = Expr::BinOp {
+            op: BinOp::IntSub,
+            lhs: Box::new(model_access(count_sym())),
+            rhs: Box::new(Expr::Int(2)),
+        };
+        assert_eq!(
+            classify(&arm_body(count_sym(), rhs)),
+            Some(CompileTransition {
+                field: "count".to_owned(),
+                op: CompileOp::IntSub,
+                source: CompileSource::Int(2),
+            })
+        );
+    }
+
+    #[test]
+    fn set_string_field_from_literal() {
+        let rhs = Expr::Str("hello".to_owned());
+        assert_eq!(
+            classify(&arm_body(name_sym(), rhs)),
+            Some(CompileTransition {
+                field: "name".to_owned(),
+                op: CompileOp::Set,
+                source: CompileSource::Str("hello".to_owned()),
+            })
+        );
+    }
+
+    #[test]
+    fn reset_int_field_to_literal_is_set() {
+        assert_eq!(
+            classify(&arm_body(count_sym(), Expr::Int(0))),
+            Some(CompileTransition {
+                field: "count".to_owned(),
+                op: CompileOp::Set,
+                source: CompileSource::Int(0),
+            })
+        );
+    }
+
+    #[test]
+    fn toggle_bool_field_is_bool_not() {
+        // Toggle -> ({ m | on = not on }, Cmd.none)
+        let rhs = Expr::Call {
+            callee: Callee::Kernel(KernelFn::BasicsNot),
+            args: vec![model_access(on_sym())],
+            pin: CallPin::None,
+            on_form: OnFormKind::NotForm,
+        };
+        assert_eq!(
+            classify(&arm_body(on_sym(), rhs)),
+            Some(CompileTransition {
+                field: "on".to_owned(),
+                op: CompileOp::BoolNot,
+                source: CompileSource::Field("on".to_owned()),
+            })
+        );
+    }
+
+    #[test]
+    fn set_field_from_another_field() {
+        // { m | count = <other-field-read> } via a field access RHS.
+        let rhs = model_access(name_sym());
+        assert_eq!(
+            classify(&arm_body(count_sym(), rhs)),
+            Some(CompileTransition {
+                field: "count".to_owned(),
+                op: CompileOp::Set,
+                source: CompileSource::Field("name".to_owned()),
+            })
+        );
+    }
+
+    // ── refusal: everything not provably a single data change ─────────────
+
+    #[test]
+    fn real_cmd_refuses() {
+        // ({ m | count = 0 }, Cmd.batch []) — a non-none Cmd keeps it compiled.
+        let real_cmd = Expr::Call {
+            callee: Callee::Kernel(KernelFn::CmdBatch),
+            args: vec![Expr::List {
+                elem: IrType::Int,
+                items: vec![],
+            }],
+            pin: CallPin::None,
+            on_form: OnFormKind::NotForm,
+        };
+        let body = Expr::Tuple(vec![
+            Expr::Update {
+                record: Box::new(Expr::Var(model_sym())),
+                fields: vec![(count_sym(), Expr::Int(0))],
+            },
+            real_cmd,
+        ]);
+        assert_eq!(classify(&body), None);
+    }
+
+    #[test]
+    fn cross_field_arithmetic_refuses() {
+        // { m | count = name + 1 } — LHS reads a DIFFERENT field than the target.
+        let rhs = Expr::BinOp {
+            op: BinOp::IntAdd,
+            lhs: Box::new(model_access(name_sym())),
+            rhs: Box::new(Expr::Int(1)),
+        };
+        assert_eq!(classify(&arm_body(count_sym(), rhs)), None);
+    }
+
+    #[test]
+    fn non_literal_arithmetic_operand_refuses() {
+        // { m | count = count + count } — RHS operand is a field read, not a literal.
+        let rhs = Expr::BinOp {
+            op: BinOp::IntAdd,
+            lhs: Box::new(model_access(count_sym())),
+            rhs: Box::new(model_access(count_sym())),
+        };
+        assert_eq!(classify(&arm_body(count_sym(), rhs)), None);
+    }
+
+    #[test]
+    fn unrecognised_operator_refuses() {
+        // { m | count = count * 2 } — Mul is outside the closed op set.
+        let rhs = Expr::BinOp {
+            op: BinOp::IntMul,
+            lhs: Box::new(model_access(count_sym())),
+            rhs: Box::new(Expr::Int(2)),
+        };
+        assert_eq!(classify(&arm_body(count_sym(), rhs)), None);
+    }
+
+    #[test]
+    fn multi_field_update_refuses() {
+        // { m | count = 0, name = "x" } — more than one field changes.
+        let body = Expr::Tuple(vec![
+            Expr::Update {
+                record: Box::new(Expr::Var(model_sym())),
+                fields: vec![
+                    (count_sym(), Expr::Int(0)),
+                    (name_sym(), Expr::Str("x".to_owned())),
+                ],
+            },
+            cmd_none(),
+        ]);
+        assert_eq!(classify(&body), None);
+    }
+
+    #[test]
+    fn update_of_non_model_record_refuses() {
+        // { other | count = 0 } — the updated record is not the Model parameter.
+        let other = Symbol::from_raw(99);
+        let body = Expr::Tuple(vec![
+            Expr::Update {
+                record: Box::new(Expr::Var(other)),
+                fields: vec![(count_sym(), Expr::Int(0))],
+            },
+            cmd_none(),
+        ]);
+        assert_eq!(classify(&body), None);
+    }
+
+    #[test]
+    fn branching_body_refuses() {
+        // An `if` in the arm body is not a bare (Model, Cmd) tuple.
+        let body = Expr::If {
+            cond: Box::new(Expr::Bool(true)),
+            then_: Box::new(arm_body(count_sym(), Expr::Int(1))),
+            else_: Box::new(arm_body(count_sym(), Expr::Int(2))),
+        };
+        assert_eq!(classify(&body), None);
+    }
+
+    #[test]
+    fn function_call_body_refuses() {
+        // The arm delegates to a helper — not a bare update tuple.
+        let body = Expr::Apply {
+            func: Box::new(Expr::Var(Symbol::from_raw(50))),
+            args: vec![Expr::Var(model_sym())],
+        };
+        assert_eq!(classify(&body), None);
+    }
+
+    #[test]
+    fn toggle_of_different_field_refuses() {
+        // { m | on = not count } — negates a DIFFERENT field than the target.
+        let rhs = Expr::Call {
+            callee: Callee::Kernel(KernelFn::BasicsNot),
+            args: vec![model_access(count_sym())],
+            pin: CallPin::None,
+            on_form: OnFormKind::NotForm,
+        };
+        assert_eq!(classify(&arm_body(on_sym(), rhs)), None);
+    }
+
+    #[test]
+    fn unresolved_field_symbol_refuses() {
+        // A field symbol the resolver does not know refuses (never a guessed key).
+        let unknown = Symbol::from_raw(77);
+        assert_eq!(classify(&arm_body(unknown, Expr::Int(0))), None);
+    }
+
+    // ── JSON shape ────────────────────────────────────────────────────────
+
+    #[test]
+    fn json_int_add_shape() {
+        let t = CompileTransition {
+            field: "count".to_owned(),
+            op: CompileOp::IntAdd,
+            source: CompileSource::Int(1),
+        };
+        assert_eq!(
+            t.to_json(),
+            r#"{"field":"count","op":"IntAdd","source":{"Int":1}}"#
+        );
+    }
+
+    #[test]
+    fn json_set_str_shape_escapes() {
+        let t = CompileTransition {
+            field: "na\"me".to_owned(),
+            op: CompileOp::Set,
+            source: CompileSource::Str("a\"b".to_owned()),
+        };
+        assert_eq!(
+            t.to_json(),
+            r#"{"field":"na\"me","op":"Set","source":{"Str":"a\"b"}}"#
+        );
+    }
+
+    #[test]
+    fn json_bool_not_shape() {
+        let t = CompileTransition {
+            field: "on".to_owned(),
+            op: CompileOp::BoolNot,
+            source: CompileSource::Field("on".to_owned()),
+        };
+        assert_eq!(
+            t.to_json(),
+            r#"{"field":"on","op":"BoolNot","source":{"Field":"on"}}"#
+        );
+    }
+
+    #[test]
+    fn json_string_escapes_control() {
+        let mut out = String::new();
+        write_json_string("\u{01}", &mut out);
+        assert_eq!(out, "\"\\u0001\"");
+    }
+}
+
+/// The dev == prod CRUX, proven at the compiler/runtime seam.
+///
+/// A data-describable arm is emitted as `apply_transition(<baked datum>, model)`;
+/// the running program (dev and prod alike) executes that ONE compiled routine
+/// over the baked datum. This module proves the two halves agree: for each op,
+/// the [`CompileTransition`] the classifier produces, serialized by
+/// [`CompileTransition::to_json`], decodes into the runtime
+/// `web::transition::Transition` and, run through the compiled `apply_transition`,
+/// yields EXACTLY the Model the direct compiled arm would have — so a hot-swap of
+/// the datum can never diverge from a full recompile of the same source arm.
+///
+/// If these ever disagree, dev lies about what prod does — the one unacceptable
+/// failure. The test therefore compares `apply_transition(interpret(datum))`
+/// against a hand-written reproduction of the compiled arm's effect for every op.
+#[cfg(test)]
+mod conformance {
+    use super::{CompileOp, CompileSource, CompileTransition};
+    use ipe_runtime_rust::web::transition::{Transition, apply_transition};
+    use serde::{Deserialize, Serialize};
+
+    #[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
+    struct Model {
+        count: i64,
+        name: String,
+        on: bool,
+    }
+
+    fn start() -> Model {
+        Model {
+            count: 5,
+            name: "alice".to_owned(),
+            on: false,
+        }
+    }
+
+    /// Decode a compile-time datum into the runtime `Transition` through its JSON
+    /// — the exact path a baked default takes at runtime. A decode failure is the
+    /// test's failure (the serializer and codec disagree), surfaced by the
+    /// `expect`, which only ever fires on a genuine drift.
+    fn interpret(ct: &CompileTransition) -> Transition {
+        serde_json::from_str(&ct.to_json())
+            .expect("compile datum JSON must decode into runtime Transition")
+    }
+
+    #[test]
+    fn int_add_matches_compiled_arm() {
+        let ct = CompileTransition {
+            field: "count".to_owned(),
+            op: CompileOp::IntAdd,
+            source: CompileSource::Int(1),
+        };
+        // The compiled arm `{ m | count = count + 1 }` on `start()`:
+        let mut compiled = start();
+        compiled.count += 1;
+        assert_eq!(apply_transition(&interpret(&ct), start()), compiled);
+    }
+
+    #[test]
+    fn int_sub_matches_compiled_arm() {
+        let ct = CompileTransition {
+            field: "count".to_owned(),
+            op: CompileOp::IntSub,
+            source: CompileSource::Int(2),
+        };
+        let mut compiled = start();
+        compiled.count -= 2;
+        assert_eq!(apply_transition(&interpret(&ct), start()), compiled);
+    }
+
+    #[test]
+    fn set_int_literal_matches_compiled_arm() {
+        let ct = CompileTransition {
+            field: "count".to_owned(),
+            op: CompileOp::Set,
+            source: CompileSource::Int(0),
+        };
+        let mut compiled = start();
+        compiled.count = 0;
+        assert_eq!(apply_transition(&interpret(&ct), start()), compiled);
+    }
+
+    #[test]
+    fn set_string_literal_matches_compiled_arm() {
+        let ct = CompileTransition {
+            field: "name".to_owned(),
+            op: CompileOp::Set,
+            source: CompileSource::Str("bob".to_owned()),
+        };
+        let mut compiled = start();
+        compiled.name = "bob".to_owned();
+        assert_eq!(apply_transition(&interpret(&ct), start()), compiled);
+    }
+
+    #[test]
+    fn set_from_field_matches_compiled_arm() {
+        let ct = CompileTransition {
+            field: "count".to_owned(),
+            op: CompileOp::Set,
+            source: CompileSource::Field("count".to_owned()),
+        };
+        // `{ m | count = count }` — identity.
+        let compiled = start();
+        assert_eq!(apply_transition(&interpret(&ct), start()), compiled);
+    }
+
+    #[test]
+    fn bool_not_matches_compiled_arm() {
+        let ct = CompileTransition {
+            field: "on".to_owned(),
+            op: CompileOp::BoolNot,
+            source: CompileSource::Field("on".to_owned()),
+        };
+        // The compiled arm `{ m | on = not on }`:
+        let mut compiled = start();
+        compiled.on = !compiled.on;
+        assert_eq!(apply_transition(&interpret(&ct), start()), compiled);
+    }
+
+    /// The compile serializer's bytes ARE the runtime codec's bytes: a runtime
+    /// `Transition` round-trips through `CompileTransition::to_json`'s exact shape.
+    /// Pins that the two serde forms never drift (a drift would break `interpret`
+    /// silently otherwise).
+    #[test]
+    fn compile_json_is_runtime_transition_serde_shape() {
+        let ct = CompileTransition {
+            field: "count".to_owned(),
+            op: CompileOp::IntAdd,
+            source: CompileSource::Int(1),
+        };
+        let runtime = Transition {
+            field: "count".to_owned(),
+            op: ipe_runtime_rust::web::transition::TransitionOp::IntAdd,
+            source: ipe_runtime_rust::web::transition::Source::Int(1),
+        };
+        assert_eq!(
+            ct.to_json(),
+            serde_json::to_string(&runtime).expect("serialize")
+        );
+    }
+}

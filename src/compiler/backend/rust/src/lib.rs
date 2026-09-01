@@ -28,6 +28,7 @@ mod emit_template;
 mod emit_tui;
 mod emit_types;
 mod emit_ui_plan;
+mod emit_ui_template;
 mod emit_web;
 mod emit_webview;
 mod naming;
@@ -37,6 +38,12 @@ mod render;
 mod runtime_features;
 mod rust_file;
 pub mod static_build;
+// The `update`-arm → transition-datum classifier: the compile-time half of the
+// dev-loop's logic hot-swap (the counterpart of `emit_template`'s static
+// partition). Public API — consumed by the `hot_appearance` update emitter and
+// the `ipe watch` transition classifier; its dev == prod conformance to the
+// runtime `apply_transition` is pinned in-module.
+pub mod transition_classify;
 
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};

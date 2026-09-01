@@ -9,6 +9,11 @@ pub use element::*;
 
 pub mod render;
 
+/// Inert static-`Ipe.Ui`-subtree template + materializer — the `Ipe.Ui`
+/// analogue of [`crate::web::template`], backing zero-compile structural
+/// hot-swap of a static `Ipe.Ui` view subtree.
+pub mod template;
+
 /// Kernel-dispatch helpers — called directly by ipe-emitted code.  Each
 /// function corresponds to a `KernelFn` variant in `ipe_ir` and is named
 /// with the `naming.rs` trailing-underscore convention.
