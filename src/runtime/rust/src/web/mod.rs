@@ -1953,8 +1953,32 @@ mod handlers {
             return (StatusCode::NOT_FOUND, "404 page not found").into_response();
         }
 
+        // A returning session whose persisted checkpoint predates a purely
+        // ADDITIVE Model change is reconstructed rather than dropped: the store
+        // splices the persisted fields onto a live `init` value and keeps the
+        // session (old state preserved, each new field filled from `init`) iff
+        // the change is a proven additive superset. `make_init` sources that
+        // value from THIS incoming GET request — the exact same `init(req)` the
+        // clean-reinit miss path runs — so a reconstructed session's new fields
+        // hold precisely what a fresh visit would have produced, with no
+        // synthetic request and no surprising default. It is invoked LAZILY:
+        // only on a schema-mismatched cold row, never on a live hit or a
+        // matched-schema restore, so `init` (and any side effect it carries)
+        // never fires on the hot paths. Any non-additive change (removed /
+        // retyped field), corrupt / oversized body, or pre-`v2` row falls back
+        // to the clean re-init the store's flat miss always produced.
+        let make_init = || {
+            let params = (st.param_resolver)(uri.path());
+            let req = req::web_req(&method, &uri, &headers, params);
+            let (m, _cmd) = (st.init)(req);
+            m
+        };
         let hit = match cookie_sid.as_ref() {
-            Some(s) => st.store.get(s).await.map(|h| (s.clone(), h)),
+            Some(s) => st
+                .store
+                .get_reconstructing(s, &make_init)
+                .await
+                .map(|h| (s.clone(), h)),
             None => None,
         };
 
