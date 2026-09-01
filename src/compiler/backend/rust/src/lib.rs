@@ -28,6 +28,7 @@ mod emit_template;
 mod emit_tui;
 mod emit_types;
 mod emit_ui_plan;
+mod emit_ui_template;
 mod emit_web;
 mod emit_webview;
 mod naming;
