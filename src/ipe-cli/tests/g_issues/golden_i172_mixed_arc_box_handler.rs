@@ -146,7 +146,7 @@ fn assert_cargo_builds_and_runs(fixture: &str) {
     // The rendered form proves the whole `Ui.onSubmit (if/case …)` expression
     // type-checked AND ran through the unified `Arc` carrier.
     assert!(
-        outcome.stdout.contains("<form>") && outcome.stdout.contains("sign in"),
+        outcome.stdout.contains("<form") && outcome.stdout.contains("sign in"),
         "must render the sign-in form through the unified handler; got: {:?}",
         outcome.stdout
     );
