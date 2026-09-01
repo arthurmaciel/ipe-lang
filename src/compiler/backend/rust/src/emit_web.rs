@@ -2758,9 +2758,7 @@ mod hot_appearance_tests {
         let (program, view) = one_view_program(&mut interner, static_html_subtree())?;
         let out = emit_view(&interner, &program, &view, true)?;
         assert!(
-            out.contains(
-                "ipe_runtime::web::template::materialize_template_str(__ipe_lit.get(0))"
-            ),
+            out.contains("ipe_runtime::web::template::materialize_template_str(__ipe_lit.get(0))"),
             "flag-on emit must read the hoisted template slot, got:\n{out}"
         );
         // The whole subtree is ONE slot — the inline node tree is gone.

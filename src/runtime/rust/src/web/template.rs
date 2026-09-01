@@ -674,7 +674,10 @@ mod tests {
         let json = r#"{"Text":"<script>alert(1)</script>"}"#;
         let out: Html<()> = materialize_template_str(json);
         let rendered = render_html(&out);
-        assert!(!rendered.contains("<script>"), "must stay escaped: {rendered}");
+        assert!(
+            !rendered.contains("<script>"),
+            "must stay escaped: {rendered}"
+        );
         assert!(rendered.contains("&lt;script&gt;"));
     }
 
