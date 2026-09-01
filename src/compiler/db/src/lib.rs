@@ -1043,6 +1043,30 @@ pub fn lower_program(db: &dyn Db, root: SourceRoot, entry: SourceFile) -> LowerR
     ipe_lower::lower(&linked.module, &types, &mut interner, &src_path, &src_text).map(Arc::new)
 }
 
+/// [`lower_program`]'s IR after Phase-2 partial evaluation — the ONE program the
+/// backend emits from.
+///
+/// Runs [`ipe_backend_rust::fold_program`] over the lowered program: a pure
+/// literal builder pipeline feeding an appearance-kernel argument
+/// (`Ipe.Ui.Animation` / `Ipe.Css`) folds to a direct literal, so the
+/// appearance-literal registry hot-swaps it downstream. The fold is
+/// value-preserving, so a folded program emits the same behaviour as the
+/// unfolded one — only the appearance argument is now a direct literal the
+/// registry recognises.
+///
+/// Every emit entry ([`emit_project`], [`emit_spine_file`], [`emit_rust_file`],
+/// [`emit_manifest`]) reads THIS query rather than [`lower_program`] directly,
+/// so the fold applies uniformly across the single-file and the multi-module
+/// split paths — the two paths render from the identical folded IR.
+#[salsa::tracked]
+pub fn folded_program(db: &dyn Db, root: SourceRoot, entry: SourceFile) -> LowerResult {
+    let lowered = lower_program(db, root, entry)?;
+    let mut program = (*lowered).clone();
+    let interner = db.interner().lock();
+    ipe_backend_rust::fold_program(&mut program, &interner);
+    Ok(Arc::new(program))
+}
+
 // ---------------------------------------------------------------------------
 // Per-Rust-file salsa domain
 // (spec: `docs/architecture/phase5-emit-rust-file-design-2026-07-12.md` §4.1)
@@ -1240,7 +1264,7 @@ pub fn emit_project(
 ) -> EmitResult {
     use ipe_backend::Backend as _;
 
-    let program = lower_program(db, root, entry)?;
+    let program = folded_program(db, root, entry)?;
 
     reject_dev_only_in_production(db, &program, config)?;
 
@@ -1340,7 +1364,7 @@ pub fn emit_spine_file(
     entry: SourceFile,
     config: BuildConfig,
 ) -> EmitTextResult {
-    let program = lower_program(db, root, entry)?;
+    let program = folded_program(db, root, entry)?;
     let driver = config.db_driver(db);
     let ffi = config.ffi(db).clone();
     let target = config.target(db);
@@ -1383,7 +1407,7 @@ pub fn emit_rust_file<'db>(
     config: BuildConfig,
     file: RustFileId<'db>,
 ) -> EmitTextResult {
-    let program = lower_program(db, root, entry)?;
+    let program = folded_program(db, root, entry)?;
     let driver = config.db_driver(db);
     let ffi = config.ffi(db).clone();
     let target = config.target(db);
@@ -1440,7 +1464,7 @@ pub fn emit_manifest(
     // Real split: demand the per-file query outputs (creating the salsa
     // dependency edges that make the §4.3 early-cut observable), then hand the
     // verbatim texts to the backend's file-count-agnostic assembler.
-    let program = lower_program(db, root, entry)?;
+    let program = folded_program(db, root, entry)?;
 
     // The production `Debug.*` gate must fire on this multi-home path too, not
     // only on the single-home collapse: a program that pulls in a

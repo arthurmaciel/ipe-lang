@@ -15,5 +15,13 @@ ipe_diagnostics = { path = "../../diagnostics" }
 # Model schema tag (H24) — same pin as ipe_watch/ipec/runtime.
 sha2 = "0.10"
 
+[dev-dependencies]
+# The const-fold conformance test calls the REAL runtime string builders
+# (`string_from_int` / `string_from_float` / `string_join`) directly and asserts
+# they are byte-identical to `const_fold`'s reproductions — the dev == prod
+# guarantee. Default (feature-less) build: the `string` module pulls no heavy
+# optional dep.
+ipe-runtime-rust = { path = "../../../runtime/rust" }
+
 [lints]
 workspace = true
