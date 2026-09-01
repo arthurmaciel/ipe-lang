@@ -8,7 +8,7 @@
 # named "panic-scan" is always produced and can be listed as a required
 # branch-protection check. A dorny/paths-filter step determines whether the
 # heavy work is needed; irrelevant PRs exit green via the no-op step.
-name: panic-scan
+name: No-panic
 
 on:
   push:
