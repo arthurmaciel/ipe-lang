@@ -16,6 +16,9 @@ at the top and follow the links; each page assumes only the ones before it.
 
 ## Tooling
 
+- [Linting](lint.md) — `ipe lint` (+ `--fix`): the idiom, consistency, and
+  safety-by-convention checks over code that already type-checks, the
+  Ipê-native `lint.ipe` config, and inline suppression.
 - [Faster builds](faster-builds.md) — a fast linker (mold/lld), sccache, a
   shared build target, and dev-profile flags; what `ipe health` configures and
   how to apply each step manually.

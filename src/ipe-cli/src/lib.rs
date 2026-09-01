@@ -35,6 +35,7 @@ pub mod hot_classify;
 pub mod index;
 pub mod init;
 pub mod io_bounded;
+pub mod lint;
 pub mod lockfile;
 pub mod login;
 mod lsp;
@@ -314,6 +315,12 @@ pub enum CliError {
     /// never shows the `health` command's `--help` page. Carries nothing: the
     /// report is the message; this variant is only the exit-code signal.
     HealthCritical,
+    /// `ipe lint` found one or more findings at or above the configured gate
+    /// severity. This is a legitimate gate verdict — the linter ran correctly and
+    /// already printed every finding to stdout — not a command-line misuse, so it
+    /// exits non-zero after the report and never shows the `lint` command's
+    /// `--help` page. Carries nothing: the printed findings are the message.
+    LintGateFailed,
     /// `ipe eject` was asked to eject a program it cannot make self-contained.
     /// Eject vendors ONLY the embedded runtime source; a program that binds a
     /// foreign Rust crate (FFI) would need those external crates pulled from a
@@ -535,6 +542,13 @@ impl std::fmt::Display for CliError {
                 style::GUTTER
             ),
             Self::EjectUnsupported { reason } => write!(f, "{}eject: {reason}", style::GUTTER),
+            // The findings already went to stdout; this stderr line is the
+            // one-line verdict paired with the non-zero gate exit.
+            Self::LintGateFailed => write!(
+                f,
+                "{}lint: findings remain at or above the gate severity (see above)",
+                style::GUTTER
+            ),
             // Both already wrote their final output; nothing more to display.
             Self::DiagnosticJsonEmitted | Self::UpgradeCheckExit { .. } => Ok(()),
             Self::UpgradeFeedUnreachable => write!(
@@ -3118,7 +3132,7 @@ fn with_help_on_misuse(
 /// 3. A bare `./ipe.toml` with no `package.ipe` — a clear migration error, so
 ///    the legacy manifest never silently governs a build.
 /// 4. Neither — usage error: nothing to build here.
-fn default_entry() -> Result<String, CliError> {
+pub(crate) fn default_entry() -> Result<String, CliError> {
     if std::path::Path::new(package_manifest::PACKAGE_IPE).exists() {
         return Ok(".".to_owned());
     }
@@ -7073,7 +7087,7 @@ pub(crate) fn read_yes_no_default(default: bool) -> bool {
 /// retry recovers from that transient case; a genuinely permanent failure
 /// (permissions, a disallowed ancestor) still surfaces as an error after the
 /// retry.
-fn write_atomic(target: &Path, contents: &str) -> Result<(), CliError> {
+pub(crate) fn write_atomic(target: &Path, contents: &str) -> Result<(), CliError> {
     let dir = target.parent().filter(|p| !p.as_os_str().is_empty());
     let name = target.file_name().map_or_else(
         || String::from("source.ipe"),

@@ -326,6 +326,17 @@ const COMMANDS: &[Command] = &[
         ],
     },
     Command {
+        name: "lint",
+        run: crate::lint::run_lint,
+        summary: "Run extensible static analysis over Ipê source (idiom, consistency, safety-by-convention).",
+        args: "[<path>]",
+        args_desc: "A source file or a project directory to lint. Defaults to the current project.",
+        options: &[Opt {
+            flag: "[--fix]",
+            desc: "apply every machine-applicable (semantics-preserving) fix instead of only reporting",
+        }],
+    },
+    Command {
         name: "clean",
         run: crate::clean::run_clean,
         summary: "Remove the project's build-generated output (out/, target/, .ipe/).",
@@ -595,7 +606,7 @@ const SECTIONS: &[Section] = &[
     },
     Section {
         title: "Quality",
-        commands: &["type-check", "test", "verify"],
+        commands: &["type-check", "lint", "test", "verify"],
     },
     Section {
         title: "Using external packages",

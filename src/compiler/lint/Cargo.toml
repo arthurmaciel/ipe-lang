@@ -1,0 +1,14 @@
+[package]
+name = "ipe_lint"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[dependencies]
+ipe_intern = { path = "../intern" }
+ipe_diagnostics = { path = "../diagnostics" }
+ipe_syntax = { path = "../syntax" }
+ipe_parse = { path = "../parse" }
+
+[lints]
+workspace = true

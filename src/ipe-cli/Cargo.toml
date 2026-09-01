@@ -24,6 +24,7 @@ ipe_db = { path = "../compiler/db" }
 ipe_canon = { path = "../compiler/canon" }
 ipe_types = { path = "../compiler/types" }
 ipe_lower = { path = "../compiler/lower" }
+ipe_lint = { path = "../compiler/lint" }
 ipe_ir = { path = "../compiler/ir" }
 ipe_backend = { path = "../compiler/backend" }
 ipe_backend_rust = { path = "../compiler/backend/rust" }

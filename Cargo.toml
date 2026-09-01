@@ -13,6 +13,7 @@ members = [
     "src/compiler/types",
     "src/compiler/ir",
     "src/compiler/lower",
+    "src/compiler/lint",
     "src/compiler/backend",
     "src/compiler/backend/rust",
     "src/compiler/ffi",
