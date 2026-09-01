@@ -304,11 +304,26 @@ fn fold_expr(expr: Expr, funcs: &BTreeMap<FuncId, &Func>, interner: &Interner) -
             record,
             field,
             field_ty,
-        } => Expr::Access {
-            record: go_box(record),
-            field,
-            field_ty,
-        },
+        } => {
+            let folded_record = fold_expr(*record, funcs, interner);
+            // Record projection: an access into a DIRECT record literal is the
+            // field's own value. Reducing it here drops the surrounding record
+            // literal wherever only one field is used — so a specialized builder's
+            // residual (`(<inlined Spec>).respectReducedMotion`) no longer drags
+            // the whole record, and every OTHER field's inline literal (an unused
+            // `duration`) disappears with it. A field the literal does not carry
+            // (impossible for well-typed source) leaves the access untouched.
+            if let Expr::Record { fields, .. } = &folded_record
+                && let Some((_, value)) = fields.iter().find(|(name, _)| *name == field)
+            {
+                return value.clone();
+            }
+            Expr::Access {
+                record: Box::new(folded_record),
+                field,
+                field_ty,
+            }
+        }
         Expr::Update { record, fields } => Expr::Update {
             record: go_box(record),
             fields: fields
@@ -418,7 +433,21 @@ fn specialize_whitelisted_call(
         // whose SCALAR arguments then fold to direct literals. Only worth doing
         // when every argument is a proven constant, so the inlined body is fully
         // determined and carries no free (Model-dependent) sub-expression.
-        if args.iter().any(|a| fold_const(a, &env).is_none()) {
+        //
+        // The `image` veneer is exempt from the all-constant requirement: its
+        // `<img>` config carries a computed `src` (a data-URI / URL builder that
+        // never folds to a scalar) alongside the direct-literal `description` the
+        // appearance registry targets. Inlining substitutes the argument
+        // EXPRESSIONS verbatim, so a non-constant field reappears unchanged and in
+        // its original scope (the inline replaces the call in place — no new
+        // binder, no capture); the emit-time record-native hoist then hoists only
+        // a field that is STILL a direct literal after projection, and a
+        // `Model`-dependent `description` stays a non-literal and recompiles. So
+        // the relaxation cannot hoist a computed value — it only lets the constant
+        // `description` reach the registry past a computed `src`.
+        let is_image_veneer = modpath_is(&func.home, &["Ipe", "Ui"], interner)
+            && interner.resolve(func.name) == Some("image");
+        if !is_image_veneer && args.iter().any(|a| fold_const(a, &env).is_none()) {
             return None;
         }
         // A tail-recursive builder body carries a `TailLoop` / `TailRecur` that
@@ -1153,6 +1182,19 @@ fn is_whitelisted_func(func: &Func, interner: &Interner) -> bool {
         || modpath_is(&func.home, &["Ipe", "Ui", "Transition"], interner)
         || modpath_is(&func.home, &["Ipe", "Ui", "Transform"], interner)
         || modpath_is(&func.home, &["Ipe", "Css"], interner)
+        // `Ipe.Ui.image` is the record-native `<img>` veneer over the
+        // `imageKernel` (`KernelFn::UiImage`); inlining its body at a constant
+        // call surfaces the direct kernel call whose config's `description`
+        // field the record-native appearance registry
+        // (`appearance_literal_record_fields`) then hoists. This is scoped to the
+        // single `image` builder — the rest of `Ipe.Ui` stays off the whitelist,
+        // so no other veneer is inlined by accident. It is pure, total, and
+        // `Model`-independent; a `Model`-dependent config field survives inlining
+        // as a non-literal and stays a recompile, gated by the emit-time
+        // direct-literal hoist check rather than the constant-argument precondition
+        // `image` is exempted from in `specialize_whitelisted_call`.
+        || (modpath_is(&func.home, &["Ipe", "Ui"], interner)
+            && interner.resolve(func.name) == Some("image"))
 }
 
 /// Whether a module path resolves, segment for segment, to `expected`.
@@ -1524,6 +1566,112 @@ mod tests {
             fold_const(&call, &env),
             Some(ConstValue::Str("hi".to_string()))
         );
+        Ok(())
+    }
+
+    // ── Record projection (drop the whole-record residual) ────────────────
+
+    /// A three-field record literal whose `keep` field is a direct `Str` and
+    /// whose other two fields carry distinct inert `Int` literals — the shape a
+    /// specialized builder leaves behind, where only one field is later read.
+    fn record_literal(
+        interner: &mut Interner,
+    ) -> Result<(Expr, Symbol), ipe_diagnostics::Diagnostic> {
+        let keep = interner.intern("keep")?;
+        let drop_a = interner.intern("dropA")?;
+        let drop_b = interner.intern("dropB")?;
+        let rec = Expr::Record {
+            fields: vec![
+                (keep, Expr::Str("kept".to_string())),
+                (drop_a, Expr::Int(300)),
+                (drop_b, Expr::Bool(true)),
+            ],
+            ty: Some(IrType::Int),
+        };
+        Ok((rec, keep))
+    }
+
+    #[test]
+    fn access_into_literal_record_projects_the_field() -> DResult<()> {
+        // `(<record literal>).keep` rewrites to that field's value — so the whole
+        // record literal (and every OTHER field's inline literal) disappears from
+        // the residual. This is what strips a specialized animation builder's dead
+        // `spec` accesses, leaving no inline `duration` alongside the hoisted
+        // shorthand.
+        let mut interner = Interner::new();
+        let (rec, keep) = record_literal(&mut interner)?;
+        let funcs = BTreeMap::new();
+        let access = Expr::Access {
+            record: Box::new(rec),
+            field: keep,
+            field_ty: IrType::Str,
+        };
+        let folded = fold_expr(access, &funcs, &interner);
+        assert_eq!(folded, Expr::Str("kept".to_string()));
+        Ok(())
+    }
+
+    #[test]
+    fn access_into_non_record_is_left_untouched() -> DResult<()> {
+        // A field read off a NON-record (a free `Var` — a `Model` binder) is not a
+        // literal projection: it stays an `Access`, so a `Model`-dependent read is
+        // never rewritten to a bogus constant.
+        let mut interner = Interner::new();
+        let model = interner.intern("model")?;
+        let field = interner.intern("count")?;
+        let funcs = BTreeMap::new();
+        let access = Expr::Access {
+            record: Box::new(Expr::Var(model)),
+            field,
+            field_ty: IrType::Int,
+        };
+        let folded = fold_expr(access.clone(), &funcs, &interner);
+        assert_eq!(folded, access);
+        Ok(())
+    }
+
+    // ── Whitelist scope: `Ipe.Ui.image`, and only `image` ────────────────
+
+    /// A `Func` in a chosen home + name whose body is irrelevant to the
+    /// name/home-only whitelist check.
+    fn named_func(home: ModPath, name: Symbol) -> Func {
+        Func {
+            id: FuncId::from_raw(0),
+            name,
+            home,
+            type_params: vec![],
+            row_params: vec![],
+            params: vec![],
+            ret: IrType::Str,
+            body: Expr::Unit,
+        }
+    }
+
+    #[test]
+    fn ipe_ui_image_veneer_is_whitelisted() -> DResult<()> {
+        let mut interner = Interner::new();
+        let home = ModPath(vec![interner.intern("Ipe")?, interner.intern("Ui")?]);
+        let image = interner.intern("image")?;
+        let func = named_func(home, image);
+        assert!(is_whitelisted_func(&func, &interner));
+        Ok(())
+    }
+
+    #[test]
+    fn other_ipe_ui_functions_are_not_whitelisted() -> DResult<()> {
+        // The whitelist is scoped to the single `image` veneer: every other
+        // `Ipe.Ui` builder (e.g. `column`, `button`) stays off it, so no unrelated
+        // veneer is inlined by accident.
+        let mut interner = Interner::new();
+        let home = ModPath(vec![interner.intern("Ipe")?, interner.intern("Ui")?]);
+        for other in ["column", "button", "row", "el", "link"] {
+            let sym = interner.intern(other)?;
+            let func = named_func(home.clone(), sym);
+            assert!(
+                !is_whitelisted_func(&func, &interner),
+                "Ipe.Ui.{other} must not be whitelisted"
+            );
+        }
         Ok(())
     }
 
