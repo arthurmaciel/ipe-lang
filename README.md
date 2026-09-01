@@ -264,6 +264,43 @@ ipe doc serve
 ipe doc check
 ```
 
+## Linting
+
+`ipe lint` runs extensible static analysis over your source — the idiom and
+consistency checks that keep code "invalid states unrepresentable" in every
+corner. The compiler enforces what *must* be true (soundness); the linter
+suggests what *should* be true by convention on code that already type-checks,
+so every finding is advisory and suppressible. The same rules surface three
+ways: on the CLI, live in the editor through the LSP, and in CI (a surviving
+denied finding exits non-zero).
+
+<!-- The commands below are verified against the released binary. -->
+```sh
+# Lint the current project (or a file / directory):
+ipe lint
+ipe lint src/Main.ipe
+
+# Apply every machine-applicable, semantics-preserving fix:
+ipe lint --fix
+```
+
+Configuration is Ipê-native — a `lint.ipe` next to `package.ipe`, written in the
+same builder style as the manifest (not TOML):
+
+```ipe
+module Lint exposing (lint)
+
+lint =
+    Lint.config
+        |> Lint.deny "adjacent-bools"
+        |> Lint.allow "prim-param"
+        |> Lint.gate "deny"
+```
+
+Suppress a single site with a source comment: `-- ipe-lint: allow <rule>` on the
+line (or the line above). Run `ipe lint --help` for the shipped rule set. See
+[the lint guide](docs/guide/lint.md) for the full rule reference.
+
 ## Editor setup (LSP)
 
 `ipe lsp` speaks JSON-RPC over stdio — type-directed completion, go-to-definition,
