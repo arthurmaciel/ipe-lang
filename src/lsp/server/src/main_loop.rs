@@ -890,6 +890,28 @@ fn compute_batch(
             per_uri.entry(uri.clone()).or_default().push(lsp);
         }
     }
+
+    // Lint findings flow through the SAME diagnostics transport, appended after
+    // the compiler's own diagnostics for each user document (the way clippy flows
+    // through rust-analyzer). Only modules the editor owns a file for are linted —
+    // injected stdlib is not the user's code. The gate/severity config uses
+    // `lint.ipe` defaults here; a workspace-configured `lint.ipe` is read on the
+    // CLI/CI path where the project root is known.
+    let user_texts: BTreeMap<Vec<String>, String> = uri_of
+        .keys()
+        .filter_map(|module| {
+            files
+                .get(module)
+                .map(|file| (module.clone(), file.text(db).clone()))
+        })
+        .collect();
+    let lint_config = ipe_lint::LintConfig::default();
+    for (module, lints) in diagnostics::collect_lint(&user_texts, &lint_config, encoding) {
+        if let Some(uri) = uri_of.get(&module) {
+            per_uri.entry(uri.clone()).or_default().extend(lints);
+        }
+    }
+
     per_uri.into_iter().collect()
 }
 
