@@ -249,8 +249,9 @@ fn static_attrs(attrs: &Expr) -> Option<Vec<CompileTemplateAttr>> {
 }
 
 /// Reduce one attribute expression to an inert key/value pair, or `None`.
-/// EXHAUSTIVE over the `Ipe.Html` attribute-producing kernels — a new one forces
-/// a decision here rather than a silent refusal.
+/// Fail-closed: only a literal `Ipe.Html` `attribute key value` templatizes; every
+/// other kernel (a handler, a boolean/absent attr, an unrecognized one) returns
+/// `None`, so the subtree stays compiled rather than being mis-templated.
 fn static_attr(attr: &Expr) -> Option<CompileTemplateAttr> {
     let Expr::Call { callee, args, .. } = attr else {
         return None;
