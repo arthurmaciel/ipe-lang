@@ -228,11 +228,12 @@ pub static ENV_VARS: &[EnvVar] = &[
     },
     EnvVar {
         name: "IPE_WATCH_BLUEGREEN",
-        default: "unset (off)",
-        purpose: "Set to any non-empty value other than `0` to enable dev-loop \
-                  blue-green swaps: `ipe watch` holds the port behind a proxy and \
-                  cuts over to the rebuilt binary without dropping the browser \
-                  connection. Dev-only; no effect on a release build.",
+        default: "unset (on)",
+        purpose: "Dev-loop blue-green swaps are ON by default: `ipe watch` holds the \
+                  port behind a proxy and cuts over to the rebuilt binary without \
+                  dropping the browser connection. Set to `0`/empty to force it off, \
+                  or any other value to force it on; `IPE_WATCH_NO_BLUEGREEN` overrides \
+                  either way. Dev-only; no effect on a release build.",
         subsystem: Subsystem::Build,
         class: Class::Tunable,
     },
@@ -255,6 +256,17 @@ pub static ENV_VARS: &[EnvVar] = &[
                   Dev-only; the endpoint is never mounted in a release build.",
         subsystem: Subsystem::Build,
         class: Class::Secret,
+    },
+    EnvVar {
+        name: "IPE_WATCH_NO_BLUEGREEN",
+        default: "unset (blue-green on)",
+        purpose: "Set to any non-empty value other than `0` to opt OUT of dev-loop \
+                  blue-green swaps and restore the direct-bind, \
+                  kill-old-then-spawn-new `ipe watch` path (a rebuild briefly drops \
+                  the browser connection). Overrides `IPE_WATCH_BLUEGREEN`. Dev-only; \
+                  no effect on a release build.",
+        subsystem: Subsystem::Build,
+        class: Class::Tunable,
     },
     EnvVar {
         name: "IPE_WATCH_NO_INCREMENTAL",
@@ -991,6 +1003,16 @@ pub static ENV_VARS: &[EnvVar] = &[
         default: "unset (temp file)",
         purpose: "Filesystem path for the `file` or `sqlite` session store. Ignored \
                   when `IPE_WEB_STORE` is `memory`. Unset uses a per-process temporary file.",
+        subsystem: Subsystem::Web,
+        class: Class::Tunable,
+    },
+    EnvVar {
+        name: "IPE_WEB_SWAP_TOAST",
+        default: "unset (off)",
+        purpose: "Set by the `ipe watch` blue-green proxy on the app it supervises. \
+                  Tells the web client a reconnect is an expected rebuild cutover, so it \
+                  greets it with a brief positive \"updated ✓\" toast instead of the \
+                  \"Reconnecting…\" banner. Dev-only; a release build never sets it.",
         subsystem: Subsystem::Web,
         class: Class::Tunable,
     },
