@@ -12,6 +12,8 @@ pub use form::*;
 pub use sse::*;
 pub mod literal_table;
 pub use literal_table::LiteralTable;
+pub mod template;
+pub use template::{Template, TemplateAttr, materialize_template, template_of};
 pub mod route;
 pub use route::*;
 pub mod console;
