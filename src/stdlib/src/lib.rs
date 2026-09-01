@@ -385,6 +385,16 @@ const PALETTE: &str = include_str!("../Ipe/Palette.ipe");
 /// invariant holds.
 const TUPLE: &str = include_str!("../Ipe/Tuple.ipe");
 
+/// `Ipe.Parser` — pure parser-combinator library (elm/parser parity).
+///
+/// Pure Ipê source: defines AND pattern-matches its own `Parser` / `Problem` /
+/// `Step` / internal `State` / `Step_` data types, expressing every combinator
+/// over `Ipe.String` / `Ipe.Char` primitives with no `Ffi.kernel` calls. A
+/// `Parser a` wraps a `State -> Step_ a` function in a single-constructor union
+/// (a storable value carrier). Disjoint from `STDLIB_MODULE_QUALIFIERS` (no
+/// `"Parser"` entry there), so the invariant holds.
+const PARSER: &str = include_str!("../Ipe/Parser.ipe");
+
 /// `Ipe.Random.Generator` — composable, seeded, reproducible random
 /// generators (elm/random `Generator` parity).
 ///
@@ -821,6 +831,12 @@ pub const COMPILED_STD_MODULES: &[CompiledStdModule] = &[
     CompiledStdModule {
         dotted: "Ipe.Tuple",
         source: TUPLE,
+    },
+    // Ipe.Parser — pure-Ipê parser combinators (elm/parser parity); no kernel
+    // calls. Defines and pattern-matches its own `Parser`/`Problem`/`Step` data.
+    CompiledStdModule {
+        dotted: "Ipe.Parser",
+        source: PARSER,
     },
     // Ipe.Bitwise — Layer-3 source; every member is a point-free
     // `Ffi.kernel "Bitwise_*"` alias resolved by `detect_kernel_alias` to the
