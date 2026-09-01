@@ -3,6 +3,7 @@ module Main exposing (main)
 import Ipe.Html as Html
 import Ipe.Ui as Ui
 import Ipe.Ui.Background as Background
+import Ipe.Ui.ImageSrc as ImageSrc
 import Ipe.Io as Io
 import Ipe.Task as Task
 
@@ -53,7 +54,7 @@ uiPage =
                 , Ui.onPseudo Ui.active [ Background.color (Ui.rgb 100 110 120) ]
                 , Ui.onPseudo Ui.disabled [ Background.color (Ui.rgb 130 140 150) ]
                 ]
-                [ Ui.image [] { src = "a.png", description = "alt text" }
+                [ Ui.image [] { src = ImageSrc.data { mime = "image/png", base64 = "AAAA" }, description = "alt text" }
                 , Ui.el [ Ui.onFile GotFile ] (Ui.text "upload")
                 ]
             )

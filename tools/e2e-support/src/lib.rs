@@ -88,23 +88,57 @@ fn sanitize(name: &str) -> String {
 /// Rewrite the emitted `Cargo.toml` so its package — and hence its binary — is
 /// unique to this golden, letting every golden's binary coexist in the one
 /// shared cargo target. Returns the unique package name.
+///
+/// The emitted package name is `ipe-app` for a single-file build but the slug
+/// from `package.ipe` for a project build, so the rewrite targets the first
+/// `name = "..."` line inside the `[package]` section (whatever its value)
+/// rather than a fixed anchor string.
 fn rewrite_package_name(emitted_dir: &Path, golden_name: &str) -> Result<String, String> {
-    const ANCHOR: &str = "name = \"ipe-app\"";
-
     let manifest = emitted_dir.join("Cargo.toml");
     let original = std::fs::read_to_string(&manifest)
         .map_err(|e| format!("cannot read {}: {e}", manifest.display()))?;
-    if !original.contains(ANCHOR) {
-        return Err(format!(
-            "emitted manifest {} did not contain the expected `{ANCHOR}` anchor",
-            manifest.display()
-        ));
-    }
     let unique = format!("ipe-app-e2e-{}", sanitize(golden_name));
-    let rewritten = original.replacen(ANCHOR, &format!("name = \"{unique}\""), 1);
+    let rewritten = replace_package_name(&original, &unique).ok_or_else(|| {
+        format!(
+            "emitted manifest {} has no `name = \"...\"` line in its `[package]` section",
+            manifest.display()
+        )
+    })?;
     std::fs::write(&manifest, rewritten)
         .map_err(|e| format!("cannot write {}: {e}", manifest.display()))?;
     Ok(unique)
+}
+
+/// Replace the package name in a `Cargo.toml` text with `unique`, returning the
+/// rewritten text (or `None` if no `[package]` `name = "..."` line is present).
+///
+/// The `[package]` table is the first section of every emitted manifest, so the
+/// first `name = "..."` line at or after a `[package]` header is the package
+/// name; a `name = ` under `[dependencies]`/`[features]` never precedes it.
+fn replace_package_name(manifest: &str, unique: &str) -> Option<String> {
+    let mut in_package = false;
+    let mut done = false;
+    let out = manifest
+        .lines()
+        .map(|line| {
+            let trimmed = line.trim_start();
+            if trimmed.starts_with('[') {
+                in_package = trimmed.starts_with("[package]");
+            } else if in_package
+                && !done
+                && trimmed.starts_with("name")
+                && let Some((lhs, _)) = line.split_once('=')
+                && lhs.trim() == "name"
+            {
+                done = true;
+                return format!("name = \"{unique}\"");
+            }
+            line.to_owned()
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+        + if manifest.ends_with('\n') { "\n" } else { "" };
+    done.then_some(out)
 }
 
 /// Parse `cargo build --message-format=json` stdout for the produced binary.
@@ -257,7 +291,38 @@ pub fn read_expected(golden_dir: &Path) -> Result<String, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::resolve_emitted_target;
+    use super::{replace_package_name, resolve_emitted_target};
+
+    #[test]
+    fn rewrites_single_file_ipe_app_name() {
+        let manifest = "[package]\nname = \"ipe-app\"\nversion = \"0.1.0\"\n\n[dependencies]\n";
+        let out = replace_package_name(manifest, "uniq").expect("has a package name");
+        assert!(out.contains("name = \"uniq\""));
+        assert!(!out.contains("name = \"ipe-app\""));
+    }
+
+    #[test]
+    fn rewrites_project_named_crate() {
+        let manifest = "[package]\nname = \"connroseal\"\nedition = \"2024\"\n\n[dependencies]\n";
+        let out = replace_package_name(manifest, "uniq").expect("has a package name");
+        assert!(out.contains("name = \"uniq\""));
+        assert!(!out.contains("name = \"connroseal\""));
+    }
+
+    #[test]
+    fn leaves_non_package_name_lines_untouched() {
+        // A `name = ` under a later section must not be mistaken for the package name.
+        let manifest =
+            "[package]\nname = \"app\"\n\n[[bin]]\nname = \"other\"\npath = \"src/main.rs\"\n";
+        let out = replace_package_name(manifest, "uniq").expect("has a package name");
+        assert!(out.contains("name = \"uniq\""));
+        assert!(out.contains("name = \"other\""));
+    }
+
+    #[test]
+    fn no_package_name_yields_none() {
+        assert!(replace_package_name("[dependencies]\nfoo = \"1\"\n", "uniq").is_none());
+    }
 
     // These lock the fail-safe semantics of `resolve_emitted_target` without
     // touching the ambient env — the function signature takes an `Option<&str>`
