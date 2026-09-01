@@ -520,7 +520,13 @@ fn substitute(expr: Expr, subst: &BTreeMap<Symbol, Expr>) -> Expr {
         |v: Vec<Expr>| -> Vec<Expr> { v.into_iter().map(|e| substitute(e, subst)).collect() };
 
     match expr {
-        Expr::Var(sym) | Expr::CloneVar(sym) => subst.get(&sym).cloned().unwrap_or(Expr::Var(sym)),
+        // A substituted parameter becomes its constant argument. An
+        // unsubstituted occurrence keeps its ORIGINAL variant: collapsing a
+        // `CloneVar` to a bare `Var` would drop a `.clone()` the move-ownership
+        // pass inserted for a multi-use binding, producing a use-after-move
+        // (E0382) in the emitted Rust.
+        Expr::Var(sym) => subst.get(&sym).cloned().unwrap_or(Expr::Var(sym)),
+        Expr::CloneVar(sym) => subst.get(&sym).cloned().unwrap_or(Expr::CloneVar(sym)),
         Expr::Int(_)
         | Expr::Bool(_)
         | Expr::Float(_)
