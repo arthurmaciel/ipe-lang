@@ -44,6 +44,9 @@ jobs:
         shell: bash
         env:
           IPE_INSTALL_DIR: ${{ runner.temp }}/ipe-smoke
+          # Authenticate install.sh's `releases/latest` lookup so the shared
+          # runner IP is not anonymously rate-limited (403). Scope is contents:read.
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           set -eu
           # Replicate the documented one-liner `curl -fsSL … | sh`: deliver the
@@ -66,8 +69,13 @@ jobs:
       - uses: actions/checkout@v7
       - name: Install ipe via the documented `curl … | sh` inside a FreeBSD VM
         uses: vmactions/freebsd-vm@v1
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         with:
           usesh: true
+          # Copy the host token into the VM so install.sh's release lookup is
+          # authenticated (avoids anonymous API rate-limit 403).
+          envs: 'GITHUB_TOKEN'
           prepare: pkg install -y curl
           run: |
             set -eu
