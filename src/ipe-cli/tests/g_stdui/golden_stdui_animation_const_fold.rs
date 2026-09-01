@@ -110,7 +110,9 @@ fn build_project(slot: &str) -> (PathBuf, Result<(), ipe::CliError>) {
 #[test]
 #[allow(clippy::expect_used)]
 fn literal_animation_pipeline_folds_to_direct_string_args() {
-    let _guard = HOT_ENV_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let _guard = HOT_ENV_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     // SAFETY: the whole test holds `HOT_ENV_LOCK`, so no sibling reads or writes
     // `IPE_WATCH_HOT_APPEARANCE` concurrently; the ordinary (non-hot) build must
     // still fold, so ensure the flag is OFF here.
@@ -157,7 +159,9 @@ fn literal_animation_pipeline_folds_to_direct_string_args() {
 #[test]
 #[allow(clippy::expect_used)]
 fn folded_animation_hoists_under_hot_appearance() {
-    let _guard = HOT_ENV_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let _guard = HOT_ENV_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     // SAFETY: guarded by `HOT_ENV_LOCK` — no concurrent env access.
     unsafe {
         std::env::set_var("IPE_WATCH_HOT_APPEARANCE", "1");
