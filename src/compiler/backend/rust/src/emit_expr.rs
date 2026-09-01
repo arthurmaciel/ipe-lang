@@ -3754,6 +3754,45 @@ fn emit_html_template(ctx: &EmitCtx, expr: &Expr) -> Option<String> {
     ))
 }
 
+/// Emit a provably-static `Ipe.Ui` subtree as a hoisted template read, or `None`
+/// to fall through to the ordinary inline emit — the `Ipe.Ui` analogue of
+/// [`emit_html_template`].
+///
+/// Fires ONLY when every gate holds: a web shape (`uses_web`), the subtree is a
+/// static `Ipe.Ui` element node ([`crate::emit_ui_template::ui_template_of_expr`]),
+/// and hoisting is armed ([`EmitCtx::hoist_style_literal`] returns a slot — which
+/// it does not under the flag-off / production emit, nor inside a `move` closure
+/// or a discard probe). Under any of those the function returns `None` and the
+/// subtree emits inline, byte-for-byte as before — so release / `ipe build`
+/// output is unchanged (golden-verified) and dev == prod at the emit level (the
+/// baked default IS the serialized template).
+///
+/// The materialized read returns an `Element<M>` (not `Html`), exactly what an
+/// inline `ui_node_(…)` yields, so it drops into the surrounding element position
+/// unchanged; `M` is inferred from that position.
+fn emit_ui_template(ctx: &EmitCtx, expr: &Expr) -> Option<String> {
+    if !ctx.uses_web {
+        return None;
+    }
+    // Only a static `Ipe.Ui` ELEMENT node (`Ui.node` / `Ui.taggedNode`) is
+    // templated at the top level; a bare `Ui.text` leaf is already covered by
+    // the appearance-literal registry (`KernelFn::UiText`), so leaving it to
+    // that path keeps the leaf emit unchanged. A text/none/nested node inside a
+    // templated element is still absorbed into that element's template.
+    match expr {
+        Expr::Call {
+            callee: Callee::Kernel(KernelFn::UiNode | KernelFn::UiTaggedNode),
+            ..
+        } => {}
+        _ => return None,
+    }
+    let template = crate::emit_ui_template::ui_template_of_expr(expr)?;
+    let slot = ctx.hoist_style_literal(&template.to_json())?;
+    Some(format!(
+        "ipe_runtime::ui::template::materialize_ui_template_str(__ipe_lit.get({slot}))"
+    ))
+}
+
 /// Returns `None` for any kernel that is not a `Ui` / `Web` / `Terminal` /
 /// `WebView` variant, letting the standard call path handle it.
 fn emit_ui_call(
@@ -5654,6 +5693,16 @@ pub fn emit_expr_at(
                 // emit below and the output is byte-identical. `None` for any
                 // non-static subtree → keep it compiled.
                 if let Some(result) = emit_html_template(ctx, expr) {
+                    return Ok(result);
+                }
+                // Structural hot-swap for `Ipe.Ui`: under `hot_appearance`, a
+                // provably-static `Ipe.Ui` element subtree is hoisted whole as ONE
+                // serialized template and emitted as a `materialize_ui_template_str`
+                // read (returning an `Element`), so a structural edit becomes a
+                // zero-compile data patch. Off (release / `ipe build`) it never
+                // fires — the subtree falls through to the inline emit below and the
+                // output is byte-identical. `None` for any non-static subtree.
+                if let Some(result) = emit_ui_template(ctx, expr) {
                     return Ok(result);
                 }
                 // Ipe.Ui / Ipe.Html / Ipe.Web / Ipe.Tui / Ipe.WebView kernels.
