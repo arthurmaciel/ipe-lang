@@ -1,0 +1,16 @@
+module Main exposing (listen, dial, probe)
+
+
+listen : Port -> String
+listen port =
+    "a"
+
+
+dial : Port -> String
+dial port =
+    "b"
+
+
+probe : Int -> String
+probe port =
+    "c"

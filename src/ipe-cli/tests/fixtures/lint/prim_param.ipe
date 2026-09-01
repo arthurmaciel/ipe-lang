@@ -1,0 +1,6 @@
+module Main exposing (connect)
+
+
+connect : String -> Int -> String
+connect host port =
+    host
