@@ -2171,6 +2171,8 @@ dependencies = [
  "ipe_intern",
  "ipe_ir",
  "ipe_kernels",
+ "serde",
+ "serde_json",
  "sha2",
 ]
 
