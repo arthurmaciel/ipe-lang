@@ -57,6 +57,11 @@ pub use store::*;
 // when the app's `Model` gains a new field (see the module doc). A pure,
 // self-contained decision + splice over a self-describing checkpoint body.
 pub mod additive;
+// Inert `update`-arm transitions: the logic counterpart of the appearance
+// `literal_table`. A data-describable `update` arm (a field record-update, a
+// toggle, a setter) reduces to a `Transition` datum run by the compiled
+// `apply_transition` — one update semantics, dev == prod (see the module doc).
+pub mod transition;
 pub mod pubsub;
 // Explicit re-export of ONLY the codegen-referenced kernel functions. A glob
 // (`pub use pubsub::*`) leaked the broker's `Event<T>` into this namespace,
