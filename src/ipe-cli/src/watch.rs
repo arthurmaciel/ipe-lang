@@ -2201,7 +2201,7 @@ mod tests {
     /// explicitly so default-on hot-swap works without the user setting anything.
     #[test]
     fn child_env_activates_hot_appearance_when_token_present() {
-        let env = child_env(3000, Path::new("/tmp/ipe-out"), Some("deadbeef"));
+        let env = child_env(3000, Path::new("/tmp/ipe-out"), Some("deadbeef"), false);
         assert!(
             env.iter()
                 .any(|(k, v)| k == "IPE_WATCH_HOT_TOKEN" && v == "deadbeef"),
@@ -2218,7 +2218,7 @@ mod tests {
     /// child — the emitted app stays inert.
     #[test]
     fn child_env_omits_hot_appearance_without_token() {
-        let env = child_env(3000, Path::new("/tmp/ipe-out"), None);
+        let env = child_env(3000, Path::new("/tmp/ipe-out"), None, false);
         assert!(
             !env.iter().any(|(k, _)| k == "IPE_WATCH_HOT_APPEARANCE"),
             "without a hot token the child must not be told to activate the overlay"
