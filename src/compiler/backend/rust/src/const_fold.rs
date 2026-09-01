@@ -46,7 +46,9 @@
 use std::collections::BTreeMap;
 
 use ipe_intern::{Interner, Symbol};
-use ipe_ir::{BinOp, Callee, Expr, Func, FuncId, KernelFn, ModPath, Pat};
+use ipe_ir::{BinOp, Callee, Expr, Func, FuncId, KernelFn, ModPath, Pat, Program};
+
+use crate::emit_ui_plan::{LitKind, appearance_literal_args};
 
 /// The starting evaluation budget: the maximum number of sub-expression visits
 /// one [`fold_const`] call may perform before giving up with `None`. Sized
@@ -153,6 +155,541 @@ pub fn fold_const(expr: &Expr, env: &FoldEnv) -> Option<ConstValue> {
         depth: 0,
     };
     eval(expr, env, &mut budget)
+}
+
+/// Phase-2 partial evaluation over a whole [`Program`]: fold every pure literal
+/// builder pipeline that feeds an appearance-kernel argument into a direct
+/// literal, so the appearance-literal registry hot-swaps it downstream.
+///
+/// For each `Call` to a kernel `k` in every function body, an argument sitting
+/// in a hoist-eligible position of [`appearance_literal_args`]`(k)` whose
+/// [`fold_const`] result is a scalar literal of that position's [`LitKind`] is
+/// REPLACED by the folded [`Expr`] literal. Every other argument — and every
+/// non-appearance kernel call — is left untouched. The substituted value is the
+/// SAME value the runtime would have computed, so downstream emit and the render
+/// sink are unaffected except that the argument is now a direct literal the
+/// registry recognises (dev == prod).
+///
+/// The pass is:
+/// * **Sound** — it only ever substitutes a proven-constant value equal to the
+///   runtime computation, and only in a position the registry already marks as
+///   inert appearance data; a `Model`-dependent argument folds to `None` and is
+///   left to recompile.
+/// * **Idempotent** — a second run sees a direct literal in the folded position,
+///   which folds to the identical literal, a no-op substitution.
+/// * **Order-independent** — the fold of one argument reads no mutable state the
+///   fold of another writes; the whole-program function snapshot it evaluates
+///   against is taken once, up front, and never mutated during the walk.
+pub fn fold_program(program: &mut Program, interner: &Interner) {
+    // A snapshot of every function keyed by id, taken before any body is
+    // rewritten. The evaluator reads whitelisted builder bodies from this
+    // immutable snapshot while the walk rewrites the program's own bodies — so a
+    // fold never observes a half-rewritten body, keeping the pass
+    // order-independent.
+    let snapshot: BTreeMap<FuncId, Func> = program
+        .modules
+        .iter()
+        .flat_map(|m| m.funcs.iter().cloned().map(|f| (f.id, f)))
+        .collect();
+    let func_refs: BTreeMap<FuncId, &Func> = snapshot.iter().map(|(id, f)| (*id, f)).collect();
+
+    for module in &mut program.modules {
+        for func in &mut module.funcs {
+            let body = std::mem::replace(&mut func.body, Expr::Unit);
+            func.body = fold_expr(body, &func_refs, interner);
+        }
+    }
+}
+
+/// Rewrite appearance-kernel arguments to folded literals throughout one owned
+/// expression. Descends into every sub-expression first (so a nested appearance
+/// call inside a larger body is reached), then, at each appearance-kernel
+/// `Call`, substitutes any eligible argument whose fold produces a
+/// kind-matching literal. Every other node is rebuilt unchanged.
+fn fold_expr(expr: Expr, funcs: &BTreeMap<FuncId, &Func>, interner: &Interner) -> Expr {
+    // A boxed sub-expression rewritten in place.
+    let go_box = |b: Box<Expr>| -> Box<Expr> { Box::new(fold_expr(*b, funcs, interner)) };
+    let go_vec =
+        |v: Vec<Expr>| -> Vec<Expr> { v.into_iter().map(|e| fold_expr(e, funcs, interner)).collect() };
+
+    match expr {
+        // Leaves and non-expression carriers pass through untouched.
+        Expr::Int(_)
+        | Expr::Bool(_)
+        | Expr::Float(_)
+        | Expr::Str(_)
+        | Expr::PathLit(_)
+        | Expr::CustomElementRef { .. }
+        | Expr::Char(_)
+        | Expr::Unit
+        | Expr::Var(_)
+        | Expr::CloneVar(_)
+        | Expr::FuncValue { .. }
+        | Expr::TailRecur { .. } => expr,
+
+        Expr::Ctor {
+            home,
+            ty,
+            variant,
+            args,
+        } => Expr::Ctor {
+            home,
+            ty,
+            variant,
+            args: go_vec(args),
+        },
+        Expr::BinOp { op, lhs, rhs } => Expr::BinOp {
+            op,
+            lhs: go_box(lhs),
+            rhs: go_box(rhs),
+        },
+        Expr::Let { name, value, body } => Expr::Let {
+            name,
+            value: go_box(value),
+            body: go_box(body),
+        },
+        Expr::Destructure {
+            binder,
+            value,
+            body,
+        } => Expr::Destructure {
+            binder,
+            value: go_box(value),
+            body: go_box(body),
+        },
+        Expr::If { cond, then_, else_ } => Expr::If {
+            cond: go_box(cond),
+            then_: go_box(then_),
+            else_: go_box(else_),
+        },
+        Expr::Match(m) => Expr::Match(m.map_bodies(
+            |scrut| fold_expr(scrut, funcs, interner),
+            |_pat, body, guard| {
+                (
+                    fold_expr(body, funcs, interner),
+                    guard.map(|g| fold_expr(g, funcs, interner)),
+                )
+            },
+        )),
+        Expr::Tuple(elems) => Expr::Tuple(go_vec(elems)),
+        Expr::List { elem, items } => Expr::List {
+            elem,
+            items: go_vec(items),
+        },
+        Expr::Cons { head, tail } => Expr::Cons {
+            head: go_box(head),
+            tail: go_box(tail),
+        },
+        Expr::ListIndexClone { list, index } => Expr::ListIndexClone {
+            list: go_box(list),
+            index,
+        },
+        Expr::ListLenCheck { list, len, exact } => Expr::ListLenCheck {
+            list: go_box(list),
+            len,
+            exact,
+        },
+        Expr::Record { fields, ty } => Expr::Record {
+            fields: fields
+                .into_iter()
+                .map(|(n, v)| (n, fold_expr(v, funcs, interner)))
+                .collect(),
+            ty,
+        },
+        Expr::Access {
+            record,
+            field,
+            field_ty,
+        } => Expr::Access {
+            record: go_box(record),
+            field,
+            field_ty,
+        },
+        Expr::Update { record, fields } => Expr::Update {
+            record: go_box(record),
+            fields: fields
+                .into_iter()
+                .map(|(n, v)| (n, fold_expr(v, funcs, interner)))
+                .collect(),
+        },
+        Expr::Lambda { params, ret, body } => Expr::Lambda {
+            params,
+            ret,
+            body: go_box(body),
+        },
+        Expr::SharedLambda { params, ret, body } => Expr::SharedLambda {
+            params,
+            ret,
+            body: go_box(body),
+        },
+        Expr::Apply { func, args } => Expr::Apply {
+            func: go_box(func),
+            args: go_vec(args),
+        },
+        Expr::TaskSeq { effect, rest } => Expr::TaskSeq {
+            effect: go_box(effect),
+            rest: go_box(rest),
+        },
+        Expr::TailLoop { params, body } => Expr::TailLoop {
+            params,
+            body: go_box(body),
+        },
+        Expr::Call {
+            callee,
+            args,
+            pin,
+            on_form,
+        } => {
+            let args = go_vec(args);
+            // A call to a whitelisted builder over all-constant arguments — e.g.
+            // `Animation.attribute (defaultSpec "spin" |> withDuration 300 |>
+            // …)` — specializes: its body is inlined with the constant argument
+            // expressions substituted for the parameters, then that residual is
+            // itself folded. The residual is the builder's `Ui.animate` (kernel)
+            // call whose scalar arguments (`buildShorthandTail spec`, …) are now
+            // closed constant pipelines that fold to direct literals, so the
+            // appearance registry hot-swaps them. A call whose arguments are not
+            // all constant does not specialize and emits unchanged.
+            if let Some(residual) =
+                specialize_whitelisted_call(&callee, &args, funcs, interner)
+            {
+                return residual;
+            }
+            let args = fold_appearance_args(&callee, args, funcs, interner);
+            Expr::Call {
+                callee,
+                args,
+                pin,
+                on_form,
+            }
+        }
+    }
+}
+
+/// Specialize a call to a whitelisted builder function whose every argument is
+/// already a compile-time constant: inline the function body with each constant
+/// argument EXPRESSION substituted for its parameter, then recursively fold the
+/// residual (which surfaces the inner appearance-kernel call with now-constant
+/// scalar arguments). Returns `None` — leaving the call unchanged — when the
+/// callee is not a whitelisted function, an argument is not constant, or the
+/// arity does not match.
+///
+/// Substituting the argument EXPRESSIONS (not their scalar values) is what lets
+/// a record-typed argument (the `Spec`) inline: the residual body's
+/// `spec.duration` becomes `(<literal record>).duration`, a closed constant the
+/// downstream fold reduces. Only a call whose arguments are all constant
+/// specializes, so the inlined body is fully determined and the residual carries
+/// no free parameter.
+fn specialize_whitelisted_call(
+    callee: &Callee,
+    args: &[Expr],
+    funcs: &BTreeMap<FuncId, &Func>,
+    interner: &Interner,
+) -> Option<Expr> {
+    let Callee::Kernel(_) = callee else {
+        let Callee::Func(id) = callee else {
+            return None;
+        };
+        let func = funcs.get(id)?;
+        if !is_whitelisted_func(func, interner) || func.params.len() != args.len() {
+            return None;
+        }
+        // Every argument must be a proven compile-time constant; otherwise the
+        // residual would carry a free (Model-dependent) sub-expression and must
+        // not specialize.
+        let env = FoldEnv::new(funcs, interner);
+        if args.iter().any(|a| fold_const(a, &env).is_none()) {
+            return None;
+        }
+        let mut subst = BTreeMap::new();
+        for ((param, _), arg) in func.params.iter().zip(args) {
+            subst.insert(*param, arg.clone());
+        }
+        let inlined = substitute(func.body.clone(), &subst);
+        return Some(fold_expr(inlined, funcs, interner));
+    };
+    // A kernel callee never specializes through this path (it has no user body
+    // to inline); its appearance arguments fold via `fold_appearance_args`.
+    None
+}
+
+/// Substitute constant argument expressions for a set of parameter symbols
+/// throughout an expression. Used to inline a whitelisted builder's body at a
+/// constant call site. Every bound parameter is replaced by its constant
+/// argument; a `Let` / `Match` / lambda that RE-BINDS one of the substituted
+/// symbols shadows it, so the substitution stops at that binder (the inner use
+/// refers to the local binding, not the parameter). Because only whitelisted
+/// builder bodies are inlined and their arguments are proven constant, the
+/// substituted expressions are closed constants — capture is impossible.
+fn substitute(expr: Expr, subst: &BTreeMap<Symbol, Expr>) -> Expr {
+    let go = |e: Expr| substitute(e, subst);
+    let go_box = |b: Box<Expr>| -> Box<Expr> { Box::new(substitute(*b, subst)) };
+    let go_vec = |v: Vec<Expr>| -> Vec<Expr> { v.into_iter().map(|e| substitute(e, subst)).collect() };
+
+    match expr {
+        Expr::Var(sym) | Expr::CloneVar(sym) => {
+            subst.get(&sym).cloned().unwrap_or_else(|| Expr::Var(sym))
+        }
+        Expr::Int(_)
+        | Expr::Bool(_)
+        | Expr::Float(_)
+        | Expr::Str(_)
+        | Expr::PathLit(_)
+        | Expr::CustomElementRef { .. }
+        | Expr::Char(_)
+        | Expr::Unit
+        | Expr::FuncValue { .. }
+        | Expr::TailRecur { .. } => expr,
+
+        Expr::Ctor {
+            home,
+            ty,
+            variant,
+            args,
+        } => Expr::Ctor {
+            home,
+            ty,
+            variant,
+            args: go_vec(args),
+        },
+        Expr::BinOp { op, lhs, rhs } => Expr::BinOp {
+            op,
+            lhs: go_box(lhs),
+            rhs: go_box(rhs),
+        },
+        // A `let` re-binding a substituted name shadows it in the body: descend
+        // into the value with the full substitution, but drop the shadowed
+        // binding from the substitution used for the body.
+        Expr::Let { name, value, body } => {
+            let value = go_box(value);
+            let body = substitute_under_binders(*body, subst, &[name]);
+            Expr::Let {
+                name,
+                value,
+                body: Box::new(body),
+            }
+        }
+        Expr::Destructure {
+            binder,
+            value,
+            body,
+        } => {
+            let value = go_box(value);
+            let bound = pat_binders(&binder);
+            let body = substitute_under_binders(*body, subst, &bound);
+            Expr::Destructure {
+                binder,
+                value,
+                body: Box::new(body),
+            }
+        }
+        Expr::If { cond, then_, else_ } => Expr::If {
+            cond: go_box(cond),
+            then_: go_box(then_),
+            else_: go_box(else_),
+        },
+        Expr::Match(m) => Expr::Match(m.map_bodies(
+            |scrut| substitute(scrut, subst),
+            |pat, body, guard| {
+                let bound = pat_binders(pat);
+                (
+                    substitute_under_binders(body, subst, &bound),
+                    guard.map(|g| substitute_under_binders(g, subst, &bound)),
+                )
+            },
+        )),
+        Expr::Tuple(elems) => Expr::Tuple(go_vec(elems)),
+        Expr::List { elem, items } => Expr::List {
+            elem,
+            items: go_vec(items),
+        },
+        Expr::Cons { head, tail } => Expr::Cons {
+            head: go_box(head),
+            tail: go_box(tail),
+        },
+        Expr::ListIndexClone { list, index } => Expr::ListIndexClone {
+            list: go_box(list),
+            index,
+        },
+        Expr::ListLenCheck { list, len, exact } => Expr::ListLenCheck {
+            list: go_box(list),
+            len,
+            exact,
+        },
+        Expr::Record { fields, ty } => Expr::Record {
+            fields: fields.into_iter().map(|(n, v)| (n, go(v))).collect(),
+            ty,
+        },
+        Expr::Access {
+            record,
+            field,
+            field_ty,
+        } => Expr::Access {
+            record: go_box(record),
+            field,
+            field_ty,
+        },
+        Expr::Update { record, fields } => Expr::Update {
+            record: go_box(record),
+            fields: fields.into_iter().map(|(n, v)| (n, go(v))).collect(),
+        },
+        Expr::Lambda { params, ret, body } => {
+            let bound: Vec<Symbol> = params.iter().map(|(s, _)| *s).collect();
+            let body = substitute_under_binders(*body, subst, &bound);
+            Expr::Lambda {
+                params,
+                ret,
+                body: Box::new(body),
+            }
+        }
+        Expr::SharedLambda { params, ret, body } => {
+            let bound: Vec<Symbol> = params.iter().map(|(s, _)| *s).collect();
+            let body = substitute_under_binders(*body, subst, &bound);
+            Expr::SharedLambda {
+                params,
+                ret,
+                body: Box::new(body),
+            }
+        }
+        Expr::Apply { func, args } => Expr::Apply {
+            func: go_box(func),
+            args: go_vec(args),
+        },
+        Expr::TaskSeq { effect, rest } => Expr::TaskSeq {
+            effect: go_box(effect),
+            rest: go_box(rest),
+        },
+        Expr::TailLoop { params, body } => {
+            let bound: Vec<Symbol> = params.iter().map(|(s, _)| *s).collect();
+            let body = substitute_under_binders(*body, subst, &bound);
+            Expr::TailLoop {
+                params,
+                body: Box::new(body),
+            }
+        }
+        Expr::Call {
+            callee,
+            args,
+            pin,
+            on_form,
+        } => Expr::Call {
+            callee,
+            args: go_vec(args),
+            pin,
+            on_form,
+        },
+    }
+}
+
+/// Substitute within `body` after removing every symbol in `shadowed` from the
+/// substitution map — the binder introduced by an enclosing `let` / lambda /
+/// arm re-binds that name, so a use inside refers to the local binding, not the
+/// substituted parameter.
+fn substitute_under_binders(body: Expr, subst: &BTreeMap<Symbol, Expr>, shadowed: &[Symbol]) -> Expr {
+    if shadowed.iter().any(|s| subst.contains_key(s)) {
+        let mut inner = subst.clone();
+        for s in shadowed {
+            inner.remove(s);
+        }
+        substitute(body, &inner)
+    } else {
+        substitute(body, subst)
+    }
+}
+
+/// Every variable symbol a pattern binds (recursively) — the names it shadows
+/// for the arm / destructure body.
+fn pat_binders(pat: &Pat) -> Vec<Symbol> {
+    let mut out = Vec::new();
+    collect_pat_binders(pat, &mut out);
+    out
+}
+
+fn collect_pat_binders(pat: &Pat, out: &mut Vec<Symbol>) {
+    match pat {
+        Pat::Var(s) => out.push(*s),
+        Pat::Alias(inner, s) => {
+            out.push(*s);
+            collect_pat_binders(inner, out);
+        }
+        Pat::Ctor { args, .. } | Pat::Tuple(args) | Pat::Or(args) => {
+            for a in args {
+                collect_pat_binders(a, out);
+            }
+        }
+        Pat::Record(entries) => {
+            for (_, sub) in entries {
+                collect_pat_binders(sub, out);
+            }
+        }
+        Pat::Slice { prefix, rest } => {
+            for p in prefix {
+                collect_pat_binders(p, out);
+            }
+            if let Some(r) = rest {
+                collect_pat_binders(r, out);
+            }
+        }
+        Pat::Wildcard | Pat::Int(_) | Pat::Bool(_) | Pat::Char(_) | Pat::Str(_) => {}
+    }
+}
+
+/// At an appearance-kernel call, replace each argument that sits in a
+/// hoist-eligible registry position and folds to a kind-matching literal with
+/// that literal; leave every other argument (and every non-appearance call)
+/// untouched. Reached only after the arguments have themselves been recursively
+/// folded, so a nested appearance call inside an argument is already rewritten.
+fn fold_appearance_args(
+    callee: &Callee,
+    mut args: Vec<Expr>,
+    funcs: &BTreeMap<FuncId, &Func>,
+    interner: &Interner,
+) -> Vec<Expr> {
+    let Callee::Kernel(k) = callee else {
+        return args;
+    };
+    let positions = appearance_literal_args(*k);
+    if positions.is_empty() {
+        return args;
+    }
+    let env = FoldEnv::new(funcs, interner);
+    for &(pos, kind) in positions {
+        let Some(arg) = args.get_mut(pos) else {
+            continue;
+        };
+        // A direct literal already sits in the target shape — nothing to fold
+        // (this is also what makes the pass idempotent: a second run sees the
+        // folded literal here and skips it).
+        if is_direct_literal(arg) {
+            continue;
+        }
+        if let Some(folded) = fold_const(arg, &env).and_then(|c| literal_of_kind(&c, kind)) {
+            *arg = folded;
+        }
+    }
+    args
+}
+
+/// Whether an expression is already a direct scalar literal — the shape the
+/// appearance registry hoists without any folding.
+fn is_direct_literal(expr: &Expr) -> bool {
+    matches!(
+        expr,
+        Expr::Int(_) | Expr::Float(_) | Expr::Str(_) | Expr::Bool(_)
+    )
+}
+
+/// The direct-literal [`Expr`] for a folded constant, but ONLY when it matches
+/// the appearance position's declared [`LitKind`]. A kind mismatch (a fold that
+/// produced, say, an `Int` for a `Str` position) is rejected — the argument is
+/// left unfolded rather than substituted with a wrong-kinded literal.
+fn literal_of_kind(value: &ConstValue, kind: LitKind) -> Option<Expr> {
+    match (kind, value) {
+        (LitKind::Str, ConstValue::Str(_))
+        | (LitKind::Int, ConstValue::Int(_))
+        | (LitKind::Float, ConstValue::Float(_)) => value.to_literal_expr(),
+        _ => None,
+    }
 }
 
 /// The two hard bounds on evaluation, threaded through the recursion: `fuel`
@@ -494,13 +1031,20 @@ fn eval_func_body(
 /// Whether a user function may be evaluated through its body.
 ///
 /// There is no general whole-program purity result for user functions here, so
-/// this is an EXPLICIT whitelist of the two appearance-builder modules whose
-/// literal pipelines the appearance hot-swap targets: `Ipe.Ui.Animation` and
-/// `Ipe.Css`. A function in any other module is not evaluated (its call folds
-/// to `None`, recompiling unfolded). This is the current scope; widening it is
-/// a deliberate, separately-audited act, not an accident of a general analysis.
+/// this is an EXPLICIT whitelist of the appearance-builder modules whose literal
+/// pipelines the appearance hot-swap targets: `Ipe.Ui.Animation` and its
+/// composed value-builder siblings `Ipe.Ui.Transition` (the `Easing` curve →
+/// CSS builder an `Animation` spec's `easing` field pulls in) and
+/// `Ipe.Ui.Transform` (the keyframe `Prop` → CSS-property builder a populated
+/// `keyframes` list renders through), plus the `Ipe.Css` value builders. Every
+/// listed module is a pure, total, `Model`-independent string/value builder. A
+/// function in any other module is not evaluated (its call folds to `None`,
+/// recompiling unfolded). This is the current scope; widening it is a
+/// deliberate, separately-audited act, not an accident of a general analysis.
 fn is_whitelisted_func(func: &Func, interner: &Interner) -> bool {
     modpath_is(&func.home, &["Ipe", "Ui", "Animation"], interner)
+        || modpath_is(&func.home, &["Ipe", "Ui", "Transition"], interner)
+        || modpath_is(&func.home, &["Ipe", "Ui", "Transform"], interner)
         || modpath_is(&func.home, &["Ipe", "Css"], interner)
 }
 
