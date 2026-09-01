@@ -238,11 +238,23 @@ pub static ENV_VARS: &[EnvVar] = &[
     },
     EnvVar {
         name: "IPE_WATCH_HOT_APPEARANCE",
-        default: "unset (off)",
-        purpose: "Set to any non-empty value other than `0` to enable dev-loop \
-                  appearance hot-swap: an `ipe watch` edit to a style literal is \
-                  pushed to the browser without a rebuild. Dev-only; no effect on a \
-                  release build.",
+        default: "unset (on for `ipe watch`)",
+        purpose: "Explicit control over dev-loop appearance hot-swap, which is ON \
+                  by default for `ipe watch`: an edit to a style literal is pushed \
+                  to the browser without a rebuild. Set to `0` or empty to force it \
+                  off; any other value forces it on. `IPE_WATCH_NO_HOT_APPEARANCE` \
+                  takes precedence. Dev-only; no effect on a release build.",
+        subsystem: Subsystem::Build,
+        class: Class::Tunable,
+    },
+    EnvVar {
+        name: "IPE_WATCH_NO_HOT_APPEARANCE",
+        default: "unset (hot-swap on)",
+        purpose: "Set to any non-empty value other than `0` to opt OUT of dev-loop \
+                  appearance hot-swap: `ipe watch` normally hot-swaps a style-literal \
+                  edit into the running app without a rebuild. This restores the plain \
+                  direct-literal emit, so an appearance edit triggers a full recompile. \
+                  Dev-only; no effect on `ipe build` or a release build.",
         subsystem: Subsystem::Build,
         class: Class::Tunable,
     },

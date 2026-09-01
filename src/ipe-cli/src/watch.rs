@@ -1536,6 +1536,12 @@ fn child_env(port: u16, out_dir: &Path, hot_token: Option<&str>) -> Vec<(String,
     // watch (and nothing else). Absent ⇒ the endpoint fails closed.
     if let Some(tok) = hot_token {
         env.push(("IPE_WATCH_HOT_TOKEN".to_owned(), tok.to_owned()));
+        // The emitted app's runtime reads `IPE_WATCH_HOT_APPEARANCE` to activate
+        // its overlay (see the runtime's `literal_table`). A hot token present
+        // means this watch built with the hot-swap emit, so tell the child to
+        // turn its overlay on — explicitly, so default-on works without the user
+        // setting anything.
+        env.push(("IPE_WATCH_HOT_APPEARANCE".to_owned(), "1".to_owned()));
     }
     if std::env::var("IPE_WEB_STORE").is_err() {
         // `file`, not `sqlite`: a plain `Web.app` reaches no DB kernel, so the
@@ -2079,11 +2085,11 @@ fn find_executable_path(cargo_json_stdout: &str) -> Option<PathBuf> {
 mod tests {
     use super::{
         BuildAccel, Command, Duration, OrchestratorEvent, RESOLVE_RETRY_DELAY, RebuildTimings,
-        apply_build_accel_env, choose_build_accel, dir_has_dep_rlib, env_flag_on, mpsc,
+        apply_build_accel_env, child_env, choose_build_accel, dir_has_dep_rlib, env_flag_on, mpsc,
         schedule_resolve_retry,
     };
     use std::ffi::OsStr;
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
 
     /// Collect a `Command`'s env overrides as owned strings, resolving the
     /// override VALUE (`None` means "remove from the child env"). Lets a test
@@ -2167,6 +2173,40 @@ mod tests {
         assert!(
             override_for(&env, "RUSTC_WRAPPER").is_none(),
             "opt-out must not touch the rustc wrapper"
+        );
+    }
+
+    /// A present hot token means the watch built the hot-swap emit, so the child
+    /// env must carry BOTH the control token and `IPE_WATCH_HOT_APPEARANCE=1` —
+    /// the flag the emitted app's runtime reads to activate its overlay, set
+    /// explicitly so default-on hot-swap works without the user setting anything.
+    #[test]
+    fn child_env_activates_hot_appearance_when_token_present() {
+        let env = child_env(3000, Path::new("/tmp/ipe-out"), Some("deadbeef"));
+        assert!(
+            env.iter()
+                .any(|(k, v)| k == "IPE_WATCH_HOT_TOKEN" && v == "deadbeef"),
+            "the control token must be handed to the child"
+        );
+        assert!(
+            env.iter()
+                .any(|(k, v)| k == "IPE_WATCH_HOT_APPEARANCE" && v == "1"),
+            "a hot token present must activate the child's overlay via IPE_WATCH_HOT_APPEARANCE=1"
+        );
+    }
+
+    /// No hot token (hot-swap off) means no overlay-activating flag reaches the
+    /// child — the emitted app stays inert.
+    #[test]
+    fn child_env_omits_hot_appearance_without_token() {
+        let env = child_env(3000, Path::new("/tmp/ipe-out"), None);
+        assert!(
+            !env.iter().any(|(k, _)| k == "IPE_WATCH_HOT_APPEARANCE"),
+            "without a hot token the child must not be told to activate the overlay"
+        );
+        assert!(
+            !env.iter().any(|(k, _)| k == "IPE_WATCH_HOT_TOKEN"),
+            "without a hot token no control token is handed to the child"
         );
     }
 
