@@ -73,6 +73,16 @@ pub(crate) fn build_style_string<M>(attrs: &[Attribute<M>]) -> String {
         match attr {
             Attribute::AttrWidth(len) => {
                 decl!("width:{}", len.css());
+                // A8 (over-constrained rows honour width): a flex child with an
+                // explicit fixed width must NOT be compressed to fit an
+                // over-full row. `flex-shrink:0` pins the declared px width and
+                // lets the row overflow instead — matching elm-ui, which never
+                // shrinks a fixed-width child. `fill` is handled below (it has
+                // its own grow/basis model); `min`/`max`/`content` keep the CSS
+                // default shrink so an intrinsic bound can still give.
+                if let Length::Px(_) | Length::Vw(_) = len {
+                    decl!("flex-shrink:0");
+                }
                 if let Length::Fill(n) = len {
                     // elm-ui portion model: `fillPortion n` divides the row's
                     // free space, so the flex base size must be 0 and growth is
@@ -97,22 +107,13 @@ pub(crate) fn build_style_string<M>(attrs: &[Attribute<M>]) -> String {
                     decl!("min-height:0");
                 }
             }
-            Attribute::AttrAlignX(h) => {
-                let v = match h {
-                    HAlign::AlignLeft => "flex-start",
-                    HAlign::CenterX => "center",
-                    HAlign::AlignRight => "flex-end",
-                };
-                decl!("align-self:{v}");
-            }
-            Attribute::AttrAlignY(v) => {
-                let css = match v {
-                    VAlign::AlignTop => "flex-start",
-                    VAlign::CenterY => "center",
-                    VAlign::AlignBottom => "flex-end",
-                };
-                decl!("align-self:{css}");
-            }
+            // `AttrAlignX` / `AttrAlignY` are layout-context-dependent: whether
+            // an alignment is the CROSS axis (`align-self`) or the MAIN axis
+            // (auto-margins) depends on the PARENT's flex direction, which this
+            // flat per-attribute collector cannot see. They are emitted by the
+            // parent-aware `alignment_css` folded in at `render_node_as` / the
+            // `ui_layout` root instead — see A3.
+            Attribute::AttrAlignX(_) | Attribute::AttrAlignY(_) => {}
             Attribute::AttrPadding(t, r, b, l) => {
                 decl!("padding:{t}px {r}px {b}px {l}px");
             }
@@ -503,6 +504,17 @@ fn render_element<M: Clone>(elem: Element<M>) -> Html<M> {
 /// overflowing the thread stack. Same ceiling as `html.rs::render_into_ctx` and
 /// `html.rs::assign_ipe_ids_depth`.
 fn render_element_depth<M: Clone>(elem: Element<M>, depth: usize) -> Html<M> {
+    render_element_depth_in(elem, depth, FlexAxis::El)
+}
+
+/// As `render_element_depth`, but told the flex direction its PARENT lays it out
+/// along (`parent_axis`). A node uses this to emit its own child-alignment CSS
+/// (`alignment_css`), which is cross-axis vs main-axis dependent on the parent.
+fn render_element_depth_in<M: Clone>(
+    elem: Element<M>,
+    depth: usize,
+    parent_axis: FlexAxis,
+) -> Html<M> {
     if depth >= crate::html::MAX_HTML_DEPTH {
         return Html::HText(String::new());
     }
@@ -516,9 +528,11 @@ fn render_element_depth<M: Clone>(elem: Element<M>, depth: usize) -> Html<M> {
         // to empty text rather than abort — a missing subtree beats a panic.
         Element::Cells(_grid) => Html::HText(String::new()),
         Element::Node(desc, attrs, kids) => {
-            render_node_as(tag_for_description(&desc), &attrs, kids, depth)
+            render_node_as(tag_for_description(&desc), &attrs, kids, depth, parent_axis)
         }
-        Element::TaggedNode(tag, _desc, attrs, kids) => render_node_as(&tag, &attrs, kids, depth),
+        Element::TaggedNode(tag, _desc, attrs, kids) => {
+            render_node_as(&tag, &attrs, kids, depth, parent_axis)
+        }
     }
 }
 
@@ -595,7 +609,10 @@ fn render_paragraph_child<M: Clone>(child: Element<M>, depth: usize) -> Html<M> 
                     Attribute::AttrStyle("__inline".to_owned(), "true".to_owned()),
                 );
             }
-            render_node_as("span", &attrs, kids, depth)
+            // A paragraph lays its children out as inline flow, not a flex
+            // main/cross axis, so alignment is inert here — `El` is the neutral
+            // parent axis (no auto-margins, no align-self).
+            render_node_as("span", &attrs, kids, depth, FlexAxis::El)
         }
         other => render_element_depth(other, depth),
     }
@@ -618,14 +635,280 @@ fn inject_explain<M: Clone>(elem: Element<M>) -> Element<M> {
     }
 }
 
+/// The flex direction a layout node imposes on ITS OWN children, decoded from
+/// the internal direction marker (`__row` / `__col` / `__wrappedrow`) prepended
+/// by `ui_row_` / `ui_column_` / `ui_wrapped_row_`. A plain `Ui.el` (single
+/// child, no marker) is `AsEl`; anything without a marker is treated as `AsEl`
+/// for child-alignment purposes (one-child block box).
+#[derive(Clone, Copy, PartialEq)]
+enum FlexAxis {
+    Row,
+    Column,
+    El,
+}
+
+fn flex_axis_of<M>(attrs: &[Attribute<M>]) -> FlexAxis {
+    for a in attrs {
+        if let Attribute::AttrStyle(k, _) = a {
+            match k.as_str() {
+                "__row" | "__wrappedrow" | "__inline_row" => return FlexAxis::Row,
+                "__col" | "__inline_col" => return FlexAxis::Column,
+                _ => {}
+            }
+        }
+    }
+    FlexAxis::El
+}
+
+/// True when the node carries an explicit `width` (any `Length`, including
+/// `fill`). Used by A1: a width-less layout element shrink-wraps by default.
+fn has_explicit_width<M>(attrs: &[Attribute<M>]) -> bool {
+    attrs.iter().any(|a| matches!(a, Attribute::AttrWidth(_)))
+}
+
+/// True when the node carries any nearby-overlay attribute (A2). Such a node
+/// must become the positioned host (`position:relative`) so its
+/// `position:absolute` overlay anchors to it rather than the page.
+fn has_nearby_overlay<M>(attrs: &[Attribute<M>]) -> bool {
+    attrs.iter().any(|a| matches!(a, Attribute::AttrNearby(_, _)))
+}
+
+/// True when the node already declares `position` via a raw `AttrStyle`, so A2
+/// must not clobber the author's choice.
+fn has_explicit_position<M>(attrs: &[Attribute<M>]) -> bool {
+    attrs.iter().any(|a| {
+        matches!(a, Attribute::AttrStyle(k, _) if k.eq_ignore_ascii_case("position"))
+    })
+}
+
+/// True when a node carries an alignment attribute (either axis).
+fn has_any_alignment<M>(attrs: &[Attribute<M>]) -> bool {
+    attrs
+        .iter()
+        .any(|a| matches!(a, Attribute::AttrAlignX(_) | Attribute::AttrAlignY(_)))
+}
+
+/// Compute the node-level layout-augmentation CSS declarations (A1/A2/A3-host)
+/// from a node's own attributes + its children. These are properties of the
+/// node itself, independent of the parent's direction.
+///
+/// Produced declarations (already `;`-joined, no leading `;`):
+/// - A1 default shrink: a width-less layout element gets `width:fit-content` so
+///   `el` / `button` / `link` / `image` content-size instead of stretching.
+/// - A2 overlay anchor: a node hosting a nearby overlay gets `position:relative`.
+/// - A3 el-container: a single-child `el` whose ONLY child carries an alignment
+///   attribute becomes `display:flex` so the child's own `align-self` /
+///   auto-margins (emitted by `alignment_css` with this `el` as parent) take
+///   effect. A block `<div>` is not a flex container, so without this the child
+///   alignment would be inert.
+fn node_augmentations<M>(attrs: &[Attribute<M>], axis: FlexAxis, kids: &[Element<M>]) -> String
+where
+    M: Clone,
+{
+    use std::fmt::Write as _;
+    let mut extra = String::new();
+    macro_rules! push {
+        ($($arg:tt)*) => {{
+            if !extra.is_empty() {
+                extra.push(';');
+            }
+            let _ = write!(extra, $($arg)*);
+        }};
+    }
+
+    // ── A1: default width = shrink-wrap ──────────────────────────────────────
+    // A layout element with no explicit `width` content-sizes. `fit-content`
+    // shrink-wraps a block box AND a flex item's cross axis; an explicit
+    // `width:` / `fill` declaration (emitted by `build_style_string`) is a
+    // separate later property that overrides this in the cascade.
+    if !has_explicit_width(attrs) {
+        push!("width:fit-content");
+    }
+
+    // ── A2: overlay host anchors its absolutely-positioned overlays ──────────
+    if has_nearby_overlay(attrs) && !has_explicit_position(attrs) {
+        push!("position:relative");
+    }
+
+    // ── A3: an `el` with an aligned child must be a flex container ────────────
+    // A `Ui.el` lowers to a block `<div>` (no direction marker). A block box is
+    // not a flex container, so a child's `align-self` / auto-margins are inert.
+    // If the sole child carries any alignment, make the `el` a flex row so the
+    // child (a flex item) can be placed by `alignment_css` (which sees this `el`
+    // as a Row parent). `min-height:0` keeps the child from forcing the row's
+    // own shrink; `height` unset ⇒ the box still hugs its content.
+    if axis == FlexAxis::El
+        && kids.len() == 1
+        && matches!(
+            kids.first(),
+            Some(Element::Node(_, ca, _) | Element::TaggedNode(_, _, ca, _)) if has_any_alignment(ca)
+        )
+    {
+        push!("display:flex");
+    }
+
+    extra
+}
+
+/// A3 (parent-aware child alignment): translate a node's own `AttrAlignX` /
+/// `AttrAlignY` into CSS given its PARENT's flex direction. Whether an alignment
+/// is the CROSS axis (`align-self`) or the MAIN axis (auto-margins) is decided by
+/// the parent — the single fact a flat per-attribute collector cannot know.
+///
+/// - In a ROW parent: `AttrAlignX` is the main axis (auto-margins push the item
+///   left/centre/right); `AttrAlignY` is the cross axis (`align-self`).
+/// - In a COLUMN parent: `AttrAlignY` is the main axis (auto-margins push
+///   top/centre/bottom); `AttrAlignX` is the cross axis (`align-self`).
+///
+/// An `el` container that has been promoted to `display:flex` (see
+/// `node_augmentations`) is a flex ROW, so its child is rendered with
+/// `parent_axis = Row` — the caller never passes `El` here.
+///
+/// The auto-margin spelling matches elm-ui: a `centerX` item gets
+/// `margin-left:auto;margin-right:auto`, an `alignRight` item `margin-left:auto`,
+/// so a `[left, centerX, alignRight]` row spreads to the three thirds.
+fn alignment_css<M>(attrs: &[Attribute<M>], parent_axis: FlexAxis) -> String {
+    use std::fmt::Write as _;
+    let mut out = String::new();
+    macro_rules! push {
+        ($($arg:tt)*) => {{
+            if !out.is_empty() {
+                out.push(';');
+            }
+            let _ = write!(out, $($arg)*);
+        }};
+    }
+    // A row is the effective axis for a promoted `el` container too.
+    let row_like = matches!(parent_axis, FlexAxis::Row | FlexAxis::El);
+    for a in attrs {
+        match a {
+            Attribute::AttrAlignX(h) => {
+                if row_like {
+                    // Main axis in a row → auto-margins.
+                    match h {
+                        HAlign::AlignLeft => push!("margin-right:auto"),
+                        HAlign::CenterX => push!("margin-left:auto;margin-right:auto"),
+                        HAlign::AlignRight => push!("margin-left:auto"),
+                    }
+                } else {
+                    // Cross axis in a column → align-self.
+                    let v = match h {
+                        HAlign::AlignLeft => "flex-start",
+                        HAlign::CenterX => "center",
+                        HAlign::AlignRight => "flex-end",
+                    };
+                    push!("align-self:{v}");
+                }
+            }
+            Attribute::AttrAlignY(v) => {
+                if row_like {
+                    // Cross axis in a row → align-self.
+                    let css = match v {
+                        VAlign::AlignTop => "flex-start",
+                        VAlign::CenterY => "center",
+                        VAlign::AlignBottom => "flex-end",
+                    };
+                    push!("align-self:{css}");
+                } else {
+                    // Main axis in a column → auto-margins.
+                    match v {
+                        VAlign::AlignTop => push!("margin-bottom:auto"),
+                        VAlign::CenterY => push!("margin-top:auto;margin-bottom:auto"),
+                        VAlign::AlignBottom => push!("margin-top:auto"),
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
+/// A6: the native landmark tag for a `Description` carried by an `AttrDescribe`,
+/// when one exists. Returns `None` for descriptions with no landmark tag
+/// (labels, live regions, headings-are-handled-elsewhere) so the caller can fall
+/// back to a `role="…"` attribute instead.
+fn landmark_tag_for(desc: &Description) -> Option<&'static str> {
+    match desc {
+        Description::DescMain => Some("main"),
+        Description::DescNavigation => Some("nav"),
+        Description::DescContentInfo => Some("footer"),
+        Description::DescComplementary => Some("aside"),
+        Description::DescParagraph => Some("p"),
+        Description::DescHeading(n) => Some(match n {
+            1 => "h1",
+            2 => "h2",
+            3 => "h3",
+            4 => "h4",
+            5 => "h5",
+            _ => "h6",
+        }),
+        _ => None,
+    }
+}
+
+/// A6: the ARIA landmark role for a `Description` with no native tag equivalent
+/// available in the current retag (used as the `role="…"` fallback).
+fn landmark_role_for(desc: &Description) -> Option<&'static str> {
+    match desc {
+        Description::DescMain => Some("main"),
+        Description::DescNavigation => Some("navigation"),
+        Description::DescContentInfo => Some("contentinfo"),
+        Description::DescComplementary => Some("complementary"),
+        _ => None,
+    }
+}
+
 fn render_node_as<M: Clone>(
     tag: &str,
     attrs: &[Attribute<M>],
     kids: Vec<Element<M>>,
     depth: usize,
+    parent_axis: FlexAxis,
 ) -> Html<M> {
-    let style_str = build_style_string(attrs);
+    // ── A6: `describe descMain`/`descNavigation`/… applies a landmark ────────
+    // A landmark `AttrDescribe` on a plain `div` retags it to the semantic
+    // element (`<main>`/`<nav>`/`<footer>`/`<aside>`/`<hN>`). A non-`div` tag
+    // (`button`/`a`/`img`, or an already-semantic tag from the Node's own
+    // Description) is never overridden — instead a `role="…"` attribute is
+    // emitted so the landmark is still announced. `descLabel` → `aria-label`
+    // continues to flow through `collect_html_attrs` untouched.
+    let landmark = attrs.iter().find_map(|a| match a {
+        Attribute::AttrDescribe(d) if landmark_tag_for(d).is_some() => Some(d.clone()),
+        _ => None,
+    });
+    let (tag_owned, role_attr): (String, Option<&'static str>) = match &landmark {
+        Some(desc) if tag == "div" => (
+            landmark_tag_for(desc).unwrap_or("div").to_owned(),
+            None,
+        ),
+        Some(desc) => (tag.to_owned(), landmark_role_for(desc)),
+        None => (tag.to_owned(), None),
+    };
+    let tag: &str = &tag_owned;
+
+    let mut style_str = build_style_string(attrs);
     let mut html_attrs = collect_html_attrs(attrs);
+    if let Some(role) = role_attr {
+        html_attrs.push(HtmlAttribute::Attr("role".to_owned(), role.to_owned()));
+    }
+
+    // ── elm-parity layout augmentations (A1/A2/A3/A8) ────────────────────────
+    // Node-level (A1 shrink / A2 overlay-host / A3 el-container) plus this
+    // node's OWN alignment relative to its parent's direction (A3 child align).
+    let axis = flex_axis_of(attrs);
+    let augment = node_augmentations(attrs, axis, &kids);
+    let align = alignment_css(attrs, parent_axis);
+    for chunk in [augment, align] {
+        if !chunk.is_empty() {
+            if style_str.is_empty() {
+                style_str = chunk;
+            } else {
+                style_str.push(';');
+                style_str.push_str(&chunk);
+            }
+        }
+    }
 
     if !style_str.is_empty() {
         // Prepend — style first so tests can pattern-match on it predictably.
@@ -644,6 +927,12 @@ fn render_node_as<M: Clone>(
     // paragraph, render each such child as an inline `<span>`.
     let inside_paragraph = has_paragraph_marker(attrs);
 
+    // The flex direction THIS node imposes on its children is its own `axis`.
+    // A promoted `el` container (single aligned child ⇒ `display:flex`, default
+    // row) reports `El`, which `alignment_css` treats row-like — so the child's
+    // main/cross axis resolves correctly. A plain block `el` also reports `El`,
+    // but its child (if any) is never aligned (`node_augmentations` promotes
+    // only when it is), so no alignment CSS is emitted for it.
     // Rendered children in source order, each one level deeper.
     let child_depth = depth.saturating_add(1);
     let mut html_kids: Vec<Html<M>> = kids
@@ -654,7 +943,7 @@ fn render_node_as<M: Clone>(
             if inside_paragraph {
                 render_paragraph_child(k, child_depth)
             } else {
-                render_element_depth(k, child_depth)
+                render_element_depth_in(k, child_depth, axis)
             }
         })
         .collect();
