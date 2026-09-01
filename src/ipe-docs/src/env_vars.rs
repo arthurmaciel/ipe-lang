@@ -1007,9 +1007,14 @@ pub static ENV_VARS: &[EnvVar] = &[
                   database dependency), or `sqlite`/`postgres`/`redis` (persisted, \
                   require the `db` or `redis_store` feature). `ipe watch` selects \
                   `file` so a rebuild preserves live sessions even for a plain web \
-                  app. Requesting a backend the build lacks the feature for is a \
-                  fail-closed startup error, not a silent downgrade — build with the \
-                  feature or set `IPE_WEB_STORE=file|memory`.",
+                  app. A persisted session survives a restart or a rolling restart \
+                  even across a purely-additive `Model` change (a new field added, \
+                  none removed or retyped): old state is kept and each new field \
+                  takes its `init` value; any non-additive change resets the session \
+                  to a fresh `init`. Requesting a backend the build lacks the \
+                  feature for is a fail-closed startup error, not a silent \
+                  downgrade — build with the feature or set \
+                  `IPE_WEB_STORE=file|memory`.",
         subsystem: Subsystem::Web,
         class: Class::Tunable,
     },
