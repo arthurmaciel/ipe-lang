@@ -36,7 +36,7 @@
 #   windows-x64 — Docker Windows container, --isolation process, --network none
 #   freebsd-x64 — vmactions/freebsd-vm VM + jail(8); reuses release.yml infra
 # ─────────────────────────────────────────────────────────────────────────────
-name: admission-sandbox
+name: Sandbox
 
 on:
   push:

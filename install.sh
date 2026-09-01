@@ -158,6 +158,20 @@ esac
 artifact="ipe-$plat-$cpu"
 [ "$plat" = windows ] && ext=zip || ext=tar.gz
 
+# Fetch the GitHub "latest release" JSON. When a token is present in the
+# environment (GITHUB_TOKEN / GH_TOKEN) the request is authenticated, so shared
+# CI runners are not rate-limited — the anonymous API allows only 60 req/hr/IP
+# and a busy runner IP hits 403. A real user without a token uses the generous
+# per-IP anonymous limit unchanged.
+gh_latest_release() {
+  _tok="${GITHUB_TOKEN:-${GH_TOKEN:-}}"
+  if [ -n "$_tok" ]; then
+    curl -fsSL -H "Authorization: Bearer $_tok" "https://api.github.com/repos/$REPO/releases/latest"
+  else
+    curl -fsSL "https://api.github.com/repos/$REPO/releases/latest"
+  fi
+}
+
 # ── Resolve version (default: latest release tag) ────────────────────────────
 # Fetch the whole API response into a variable FIRST, then parse it. Piping curl
 # straight into `grep -m1`/`head` makes the reader close the pipe early, curl
@@ -169,7 +183,7 @@ if [ -n "${IPE_VERSION:-}" ]; then
 else
   banner "latest"
   stage_start "Resolving the latest release…"
-  resp="$(curl -fsSL "https://api.github.com/repos/$REPO/releases/latest")" \
+  resp="$(gh_latest_release)" \
     || die "Could not reach GitHub to resolve the latest release (set IPE_VERSION=vX.Y.Z)."
   # Grep over the captured string — no pipe from curl, so no early-close.
   tag="$(printf '%s\n' "$resp" | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' | head -n1)"
@@ -202,7 +216,7 @@ else
       case "$ans" in
         ''|[Yy]|[Yy][Ee][Ss])
           stage_start "Resolving the latest release…"
-          resp="$(curl -fsSL "https://api.github.com/repos/$REPO/releases/latest")" \
+          resp="$(gh_latest_release)" \
             || die "Could not reach GitHub."
           tag="$(printf '%s\n' "$resp" | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' | head -n1)"
           [ -n "$tag" ] || die "Could not parse latest release tag."

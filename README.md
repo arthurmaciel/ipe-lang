@@ -4,11 +4,12 @@
 
 <br />
 
-[![CI](https://github.com/arthurmaciel/ipe-lang/actions/workflows/ci.yml/badge.svg)](https://github.com/arthurmaciel/ipe-lang/actions/workflows/ci.yml)
-[![admission-sandbox](https://github.com/arthurmaciel/ipe-lang/actions/workflows/admission-sandbox.yml/badge.svg)](https://github.com/arthurmaciel/ipe-lang/actions/workflows/admission-sandbox.yml)
-[![security](https://github.com/arthurmaciel/ipe-lang/actions/workflows/security.yml/badge.svg)](https://github.com/arthurmaciel/ipe-lang/actions/workflows/security.yml)
-[![static](https://github.com/arthurmaciel/ipe-lang/actions/workflows/static.yml/badge.svg)](https://github.com/arthurmaciel/ipe-lang/actions/workflows/static.yml)
-[![install-smoke](https://github.com/arthurmaciel/ipe-lang/actions/workflows/install-smoke.yml/badge.svg)](https://github.com/arthurmaciel/ipe-lang/actions/workflows/install-smoke.yml)
+[![Install](https://github.com/arthurmaciel/ipe-lang/actions/workflows/install-smoke.yml/badge.svg?branch=main)](https://github.com/arthurmaciel/ipe-lang/actions/workflows/install-smoke.yml)
+[![Build & test](https://github.com/arthurmaciel/ipe-lang/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/arthurmaciel/ipe-lang/actions/workflows/ci.yml)
+[![Sandbox](https://github.com/arthurmaciel/ipe-lang/actions/workflows/admission-sandbox.yml/badge.svg?branch=main)](https://github.com/arthurmaciel/ipe-lang/actions/workflows/admission-sandbox.yml)
+[![Supply-chain security](https://github.com/arthurmaciel/ipe-lang/actions/workflows/security.yml/badge.svg?branch=main)](https://github.com/arthurmaciel/ipe-lang/actions/workflows/security.yml)
+[![Static binaries](https://github.com/arthurmaciel/ipe-lang/actions/workflows/static.yml/badge.svg?branch=main)](https://github.com/arthurmaciel/ipe-lang/actions/workflows/static.yml)
+[![No-panic](https://github.com/arthurmaciel/ipe-lang/actions/workflows/panic-scan.yml/badge.svg?branch=main)](https://github.com/arthurmaciel/ipe-lang/actions/workflows/panic-scan.yml)
 
 
 # Ipê language
