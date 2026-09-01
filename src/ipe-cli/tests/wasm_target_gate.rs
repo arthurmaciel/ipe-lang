@@ -137,6 +137,79 @@ fn pure_ui_app_emits_wasm_project() {
     );
 }
 
+/// The `ipe_main` return type under `--target wasm` renders as `IpeTask<()>`,
+/// not `ipe_runtime::tea::WebApp`.
+///
+/// `ipe_runtime::tea::WebApp` is a native-only type absent from the
+/// `wasm32-unknown-unknown` target; the emitted `ipe_main()` must return
+/// `IpeTask<()>` so `ipe_runtime::wasm::run_start(ipe_main())` type-checks and
+/// `cargo build --target wasm32-unknown-unknown` succeeds. The body correctly
+/// calls `ipe_runtime::wasm::wasm_app`; only the declared return type was wrong
+/// before the fix in `emit_types.rs`. This test guards that exact regression.
+#[test]
+fn wasm_web_app_ipe_main_return_type_is_ipe_task() {
+    let dir = scratch("wasm_gate_ipe_main_ret");
+    let entry = write_entry(
+        &dir.join("srcdir"),
+        "module Main exposing (main)\n\
+         import Ipe.String as String\n\
+         import Ipe.Tea.Web exposing (app)\n\
+         import Ipe.Tea.Web.Cmd as Cmd\n\
+         import Ipe.Tea.Web.Sub as Sub\n\
+         import Ipe.Ui as Ui\n\
+         \n\
+         type Msg = Increment\n\
+         type alias Model = { count : Int }\n\
+         \n\
+         init : a -> ( Model, Cmd Msg )\n\
+         init _req = ( { count = 0 }, Cmd.none )\n\
+         \n\
+         update : Msg -> Model -> ( Model, Cmd Msg )\n\
+         update msg model =\n\
+         \x20   case msg of\n\
+         \x20       Increment -> ( { model | count = model.count + 1 }, Cmd.none )\n\
+         \n\
+         subscriptions : Model -> Sub Msg\n\
+         subscriptions _model = Sub.none\n\
+         \n\
+         view : Model -> Element Msg\n\
+         view model =\n\
+         \x20   Ui.button [] { onPress = Just Increment, label = Ui.text (String.fromInt model.count) }\n\
+         \n\
+         main =\n\
+         \x20   app\n\
+         \x20       { init = init\n\
+         \x20       , update = update\n\
+         \x20       , view = view\n\
+         \x20       , subscriptions = subscriptions\n\
+         \x20       , routes = []\n\
+         \x20       , notFound = Increment\n\
+         \x20       }\n",
+    );
+    let out = dir.join("out");
+    build_wasm(&entry, &out).expect("Web.app must emit under --target wasm");
+
+    let main_rs = std::fs::read_to_string(out.join("src/main.rs")).expect("emitted main.rs");
+
+    // The fix: `WebApp` under `WasmClient` renders as `IpeTask<()>`.
+    // A regression restores `ipe_runtime::tea::WebApp`, which does not exist
+    // on `wasm32-unknown-unknown` and causes E0425 at cargo time.
+    assert!(
+        main_rs.contains("IpeTask"),
+        "`ipe_main` return type must contain `IpeTask` on the wasm target:\n{main_rs}"
+    );
+    assert!(
+        !main_rs.contains("ipe_runtime::tea::WebApp"),
+        "`ipe_main` must NOT render the native-only `ipe_runtime::tea::WebApp` \
+         on the wasm target (causes E0425 on wasm32):\n{main_rs}"
+    );
+    // The body must call the wasm entry-point, not the native web_app.
+    assert!(
+        main_rs.contains("ipe_runtime::wasm::wasm_app"),
+        "`ipe_main` body must call `ipe_runtime::wasm::wasm_app` on the wasm target:\n{main_rs}"
+    );
+}
+
 /// A routed `Web.app` (Model has a `page` field, `routes` non-empty) emits
 /// `wasm_app_routed` under `--target wasm`. The emitted manifest must have the
 /// same closed cdylib shape as the non-routed app, and the emitted `main.rs`
