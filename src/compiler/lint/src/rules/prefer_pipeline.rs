@@ -90,14 +90,21 @@ fn as_pipeline_candidate(ctx: &Ctx, expr: &Expr) -> Option<Finding> {
     let Expr_::Call(_outer_callee, outer_args) = &expr.value else {
         return None;
     };
+    // Fire only on a genuine transform chain, not the idiomatic single wrap
+    // `f (g x)` (e.g. `Io.println (String.fromInt n)`), which reads fine as-is.
+    // A chain has the outer AND the inner call each carrying its own leading
+    // argument beyond the threaded value — `List.map fmt (List.filter live xs)`
+    // — so both calls have arity >= 2. A one-argument wrap does not.
+    if outer_args.len() < 2 {
+        return None;
+    }
     let last_outer = outer_args.last()?;
-    // The rewrite only makes sense when the outer call has real arguments and
-    // its last one is itself a call carrying at least one argument. A
-    // parenthesised argument that is not a call, or an empty inner arg list,
-    // is not this shape.
     let Expr_::Call(_inner_callee, inner_args) = &last_outer.value else {
         return None;
     };
+    if inner_args.len() < 2 {
+        return None;
+    }
     let subject = inner_args.last()?;
 
     // The three verbatim source slices, reused so the rewrite is the author's own
