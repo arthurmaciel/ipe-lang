@@ -92,7 +92,7 @@ main =
 static HOT_ENV_LOCK: Mutex<()> = Mutex::new(());
 
 #[allow(clippy::expect_used)]
-fn build_project(slot: &str) -> (PathBuf, Result<(), ipe::CliError>) {
+fn build_project(slot: &str, hot: bool) -> (PathBuf, Result<(), ipe::CliError>) {
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
         .join(format!("stdui_animation_const_fold_{slot}"));
     let _ = std::fs::remove_dir_all(&out);
@@ -101,7 +101,13 @@ fn build_project(slot: &str) -> (PathBuf, Result<(), ipe::CliError>) {
     let entry = src.join("Main.ipe");
     std::fs::write(&entry, MAIN_IPE).expect("write Main.ipe");
     let emit = out.join("emit");
-    let res = ipe::build(&entry, &emit, &runtime());
+    // `ipe::build` is the prod entry and keeps `hot_appearance` off regardless of
+    // environment; drive the hot-swap hoist explicitly through the option instead.
+    let options = ipe::BuildOptions {
+        hot_appearance: hot,
+        ..ipe::BuildOptions::from_env()
+    };
+    let res = ipe::build_with_options(&entry, &emit, &runtime(), options);
     (emit, res)
 }
 
@@ -113,14 +119,8 @@ fn literal_animation_pipeline_folds_to_direct_string_args() {
     let _guard = HOT_ENV_LOCK
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    // SAFETY: the whole test holds `HOT_ENV_LOCK`, so no sibling reads or writes
-    // `IPE_WATCH_HOT_APPEARANCE` concurrently; the ordinary (non-hot) build must
-    // still fold, so ensure the flag is OFF here.
-    unsafe {
-        std::env::remove_var("IPE_WATCH_HOT_APPEARANCE");
-    }
-
-    let (emit, res) = build_project("emit");
+    // The ordinary (non-hot) build must still fold; hot-swap hoist stays off.
+    let (emit, res) = build_project("emit", false);
     assert!(
         res.is_ok(),
         "const-fold build must succeed: {:?}",
@@ -162,16 +162,7 @@ fn folded_animation_hoists_under_hot_appearance() {
     let _guard = HOT_ENV_LOCK
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    // SAFETY: guarded by `HOT_ENV_LOCK` — no concurrent env access.
-    unsafe {
-        std::env::set_var("IPE_WATCH_HOT_APPEARANCE", "1");
-    }
-    let build = build_project("hot");
-    // SAFETY: guarded by `HOT_ENV_LOCK`.
-    unsafe {
-        std::env::remove_var("IPE_WATCH_HOT_APPEARANCE");
-    }
-    let (emit, res) = build;
+    let (emit, res) = build_project("hot", true);
     assert!(
         res.is_ok(),
         "hot-appearance const-fold build must succeed: {:?}",
