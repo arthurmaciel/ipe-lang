@@ -73,16 +73,13 @@ pub(crate) fn build_style_string<M>(attrs: &[Attribute<M>]) -> String {
         match attr {
             Attribute::AttrWidth(len) => {
                 decl!("width:{}", len.css());
-                // A8 (over-constrained rows honour width): a flex child with an
-                // explicit fixed width must NOT be compressed to fit an
-                // over-full row. `flex-shrink:0` pins the declared px width and
-                // lets the row overflow instead — matching elm-ui, which never
-                // shrinks a fixed-width child. `fill` is handled below (it has
-                // its own grow/basis model); `min`/`max`/`content` keep the CSS
-                // default shrink so an intrinsic bound can still give.
-                if let Length::Px(_) | Length::Vw(_) = len {
-                    decl!("flex-shrink:0");
-                }
+                // A8's `flex-shrink:0` (honour a fixed px width in an
+                // over-constrained ROW) is NOT emitted here: whether the width
+                // is the flex MAIN axis (a row child, where shrinking would
+                // compress the declared px) or the CROSS axis (a column child,
+                // where shrink is irrelevant) depends on the parent direction,
+                // which this flat collector cannot see. It is applied by the
+                // parent-aware `overconstrain_css` at `render_node_as` instead.
                 if let Length::Fill(n) = len {
                     // elm-ui portion model: `fillPortion n` divides the row's
                     // free space, so the flex base size must be 0 and growth is
@@ -681,6 +678,17 @@ fn has_explicit_position<M>(attrs: &[Attribute<M>]) -> bool {
     })
 }
 
+/// True when a node carries a paragraph-inline direction marker (`__inline`,
+/// `__inline_row`, `__inline_col`) injected by `render_paragraph_child`. Such a
+/// box is already inline / inline-flex and content-sizes on its own, so A1's
+/// `width:fit-content` is redundant on it.
+fn is_inline_marked<M>(attrs: &[Attribute<M>]) -> bool {
+    attrs.iter().any(|a| {
+        matches!(a, Attribute::AttrStyle(k, _)
+            if matches!(k.as_str(), "__inline" | "__inline_row" | "__inline_col"))
+    })
+}
+
 /// True when a node carries an alignment attribute (either axis).
 fn has_any_alignment<M>(attrs: &[Attribute<M>]) -> bool {
     attrs
@@ -720,8 +728,10 @@ where
     // A layout element with no explicit `width` content-sizes. `fit-content`
     // shrink-wraps a block box AND a flex item's cross axis; an explicit
     // `width:` / `fill` declaration (emitted by `build_style_string`) is a
-    // separate later property that overrides this in the cascade.
-    if !has_explicit_width(attrs) {
+    // separate later property that overrides this in the cascade. Skipped for a
+    // paragraph-inline child (`__inline*` markers): an inline / inline-flex box
+    // already content-sizes, so `fit-content` would be a redundant declaration.
+    if !has_explicit_width(attrs) && !is_inline_marked(attrs) {
         push!("width:fit-content");
     }
 
@@ -824,6 +834,25 @@ fn alignment_css<M>(attrs: &[Attribute<M>], parent_axis: FlexAxis) -> String {
     out
 }
 
+/// A8 (over-constrained rows honour width): a ROW child with an explicit fixed
+/// px/vw width must NOT be compressed to fit an over-full row. `flex-shrink:0`
+/// pins the declared width and lets the row overflow instead — matching elm-ui,
+/// which keeps a fixed-width row child at its declared size. Scoped to a Row
+/// parent (width = main axis): in a column the width is the cross axis, so
+/// shrinking never compresses it and `flex-shrink:0` would wrongly pin
+/// deeply-nested content that elm-ui lets reflow. `fill` has its own grow/basis
+/// model; `min`/`max`/`content` keep the default shrink so an intrinsic bound
+/// can still give.
+fn overconstrain_css<M>(attrs: &[Attribute<M>], parent_axis: FlexAxis) -> &'static str {
+    if !matches!(parent_axis, FlexAxis::Row) {
+        return "";
+    }
+    let fixed_width = attrs
+        .iter()
+        .any(|a| matches!(a, Attribute::AttrWidth(Length::Px(_) | Length::Vw(_))));
+    if fixed_width { "flex-shrink:0" } else { "" }
+}
+
 /// A6: the native landmark tag for a `Description` carried by an `AttrDescribe`,
 /// when one exists. Returns `None` for descriptions with no landmark tag
 /// (labels, live regions, headings-are-handled-elsewhere) so the caller can fall
@@ -899,7 +928,8 @@ fn render_node_as<M: Clone>(
     let axis = flex_axis_of(attrs);
     let augment = node_augmentations(attrs, axis, &kids);
     let align = alignment_css(attrs, parent_axis);
-    for chunk in [augment, align] {
+    let overconstrain = overconstrain_css(attrs, parent_axis).to_owned();
+    for chunk in [augment, align, overconstrain] {
         if !chunk.is_empty() {
             if style_str.is_empty() {
                 style_str = chunk;
