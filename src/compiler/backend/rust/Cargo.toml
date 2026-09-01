@@ -19,9 +19,15 @@ sha2 = "0.10"
 # The const-fold conformance test calls the REAL runtime string builders
 # (`string_from_int` / `string_from_float` / `string_join`) directly and asserts
 # they are byte-identical to `const_fold`'s reproductions — the dev == prod
-# guarantee. Default (feature-less) build: the `string` module pulls no heavy
-# optional dep.
-ipe-runtime-rust = { path = "../../../runtime/rust" }
+# guarantee. The transition conformance test additionally decodes a
+# `CompileTransition::to_json` datum into the runtime `web::transition::Transition`
+# and runs the compiled `apply_transition`, so the `web` feature is enabled.
+ipe-runtime-rust = { path = "../../../runtime/rust", features = ["web"] }
+# The transition conformance test decodes the emitted datum JSON into the
+# runtime `Transition` to prove the compile-time serializer and the runtime
+# codec agree byte-for-byte, and derives serde on a small fixture Model.
+serde_json = "1"
+serde = { version = "1", features = ["derive"] }
 
 [lints]
 workspace = true
