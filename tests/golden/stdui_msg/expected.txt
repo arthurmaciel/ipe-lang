@@ -1,1 +1,1 @@
-<div style="display:flex;flex-direction:column;height:100vh;width:100%;overflow:hidden"><div><div style="font-weight:700">typed</div></div></div>
+<div style="display:flex;flex-direction:column;height:100vh;width:100%;overflow:hidden"><div><div style="font-weight:700;width:fit-content">typed</div></div></div>

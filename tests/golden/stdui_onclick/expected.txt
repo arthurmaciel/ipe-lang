@@ -1,1 +1,1 @@
-<div style="display:flex;flex-direction:column;height:100vh;width:100%;overflow:hidden"><div><div data-ipe-on="click" ipe-click="click">x</div></div></div>
+<div style="display:flex;flex-direction:column;height:100vh;width:100%;overflow:hidden"><div><div style="width:fit-content" data-ipe-on="click" ipe-click="click">x</div></div></div>
