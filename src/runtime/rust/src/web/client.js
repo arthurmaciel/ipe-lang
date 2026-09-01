@@ -1723,13 +1723,10 @@ function __ipeOpenSSE() {
     if (data.ok === false && typeof data.error === "string") {
       __ipeSetStatus("build-failed", "Recompilation failed \xB7 " + data.error);
     } else if (data.ok === true) {
-      // Clear a sticky build-failed banner; do NOT show the build-ok toast
-      // here — a full reload triggers that via the sessionStorage path,
-      // and an appearance hot-swap shows it via __ipeShowBuildOk() called
-      // from watch.rs after the push succeeds.
-      if (__ipeStatus === "build-failed") {
-        __ipeSetStatus("connected", "");
-      }
+      // An appearance hot-swap that recovers from a prior failure: show the
+      // green toast to confirm the fix landed. A full-rebuild reload uses the
+      // sessionStorage path instead (page reloads before the SSE event lands).
+      __ipeShowBuildOk();
     }
   });
 }

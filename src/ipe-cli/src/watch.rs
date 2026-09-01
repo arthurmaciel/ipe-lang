@@ -1207,6 +1207,9 @@ fn run_inner(
                         );
                         eprint!("\n{}\n", crate::style::gutter(&body));
                         emit(opts, WatchEvent::CompileFailed { generation: g });
+                        if let Some(tok) = hot_token.as_deref() {
+                            post_watch_status(opts.port, tok, false, &first_error_line(&msg));
+                        }
                         // A red compile is terminal for this cycle (no cargo,
                         // no restart) — report the partial breakdown here.
                         timings.report(g);
@@ -1240,6 +1243,7 @@ fn run_inner(
                                                 views: patches.len(),
                                             },
                                         );
+                                        post_watch_status(opts.port, tok, true, "");
                                         timings.report(g);
                                         continue;
                                     }
@@ -1354,6 +1358,9 @@ fn run_inner(
                             )
                         );
                         emit(opts, WatchEvent::CargoFailed { generation: g });
+                        if let Some(tok) = hot_token.as_deref() {
+                            post_watch_status(opts.port, tok, false, &first_error_line(&msg));
+                        }
                         // A red cargo build is terminal (no restart) — report
                         // the partial breakdown here.
                         timings.report(g);
@@ -1712,6 +1719,60 @@ fn spawn_command(exe_path: &Path, env: &[(String, String)]) -> Command {
         cmd.env(k, v);
     }
     cmd
+}
+
+/// Extract the first non-blank line from a compiler diagnostic, capped at
+/// 120 characters, for inclusion in the build-failed banner.
+fn first_error_line(msg: &str) -> String {
+    msg.lines()
+        .find(|l| !l.trim().is_empty())
+        .unwrap_or("")
+        .chars()
+        .take(120)
+        .collect()
+}
+
+/// POST `{ok, error}` to the child's dev-only `/_ipe/watch/status` endpoint.
+///
+/// Best-effort: silently ignores all errors. The child may not be running yet,
+/// or the endpoint may not be mounted (non-web app, banner disabled, etc.) —
+/// all of those are fine. A short connect+read timeout keeps a dead app from
+/// stalling the watch loop.
+fn post_watch_status(port: u16, token: &str, ok: bool, error: &str) {
+    // Build the JSON body without serde_json to avoid a new dependency.
+    // Escape only backslash and double-quote — the error string is already
+    // a first-line excerpt from compiler output (ASCII/UTF-8, no control chars
+    // that need JSON-escaping beyond those two).
+    let body = if ok {
+        r#"{"ok":true}"#.to_string()
+    } else {
+        let esc = error.replace('\\', "\\\\").replace('"', "\\\"");
+        format!(r#"{{"ok":false,"error":"{esc}"}}"#)
+    };
+    let _ = post_to_watch_status(port, token, &body);
+}
+
+/// Send one raw HTTP/1.1 POST to `/_ipe/watch/status`. Returns `Ok(())` when
+/// the server replied (any status); any I/O failure is silently discarded by
+/// the caller. Mirrors the structure of `post_hot_appearance`.
+fn post_to_watch_status(port: u16, token: &str, body: &str) -> std::io::Result<()> {
+    use std::io::Write as _;
+    use std::net::TcpStream;
+    let addr = std::net::SocketAddr::from((std::net::Ipv4Addr::LOCALHOST, port));
+    let mut stream = TcpStream::connect_timeout(&addr, Duration::from_millis(500))?;
+    stream.set_write_timeout(Some(Duration::from_millis(1500)))?;
+    let req = format!(
+        "POST /_ipe/watch/status HTTP/1.1\r\n\
+         Host: 127.0.0.1:{port}\r\n\
+         X-Ipe-Hot-Token: {token}\r\n\
+         Content-Type: application/json\r\n\
+         Content-Length: {len}\r\n\
+         Connection: close\r\n\r\n{body}",
+        len = body.len(),
+    );
+    stream.write_all(req.as_bytes())?;
+    stream.flush()?;
+    Ok(())
 }
 
 /// The `memory`-store warning: called once, at watch startup, so it is
