@@ -18,7 +18,7 @@
 //! element inside it. `Ui.layoutWith` additionally applies `wrapperAttrs` to
 //! the outer wrapper and `rootAttrs` to an intermediate flex root.
 
-use super::super::css_safety::{SafeCssPropertyName, SafeCssValue};
+use super::super::css_safety::{CssValueOrigin, SafeCssPropertyName, SafeCssValue};
 use super::super::html::{Attribute as HtmlAttribute, Html};
 use super::element::{Attribute, Description, Element, HAlign, Length, Location, VAlign};
 
@@ -176,13 +176,22 @@ pub(crate) fn build_style_string<M>(attrs: &[Attribute<M>]) -> String {
                         // `SafeCssValue` gates the value (whole-string scan).
                         // Both are the SOLE validation boundary — no re-check
                         // downstream (PARSE, DON'T VALIDATE / T3/T4).
-                        if let (Some(pk), Some(pv)) =
-                            (SafeCssPropertyName::parse(k), SafeCssValue::parse(v))
-                        {
+                        //
+                        // A9: the value from `Ui.style k v` is a developer
+                        // literal, so route it through `parse_reporting` — if the
+                        // scan drops it, the developer gets a diagnostic naming
+                        // the value + reason instead of a silent no-op. The KEY
+                        // stays on the silent `parse` (a dropped key is a charset
+                        // issue, covered by the value diagnostic on the same
+                        // declaration when both fire).
+                        if let (Some(pk), Some(pv)) = (
+                            SafeCssPropertyName::parse(k),
+                            SafeCssValue::parse_reporting(v, CssValueOrigin::DeveloperLiteral),
+                        ) {
                             decl!("{}:{}", pk.as_str(), pv.as_str());
                         }
-                        // else: silently drop — consistent with the
-                        // `is_dangerous_url_scheme` path in `AttrBgImage`.
+                        // else: dropped (loud for a developer literal via the
+                        // diagnostic above; the security outcome is unchanged).
                     }
                 }
             }
@@ -246,7 +255,15 @@ pub(crate) fn build_style_string<M>(attrs: &[Attribute<M>]) -> String {
                     // data-URI backgrounds are unsupported through Ipe.Ui
                     // (BG-2 quoting is the upgrade if ever needed).
                     let composed = format!("url({url})");
-                    if let Some(v) = SafeCssValue::parse(&composed) {
+                    // A9: `Background.image` can carry a Model-derived / dev-
+                    // patched URL (the appearance hot-swap `LiteralTable` slot),
+                    // so it is UNTRUSTED — a dropped one stays SILENT (a
+                    // diagnostic keyed on attacker-influenceable input would be a
+                    // log-spam / info-leak vector). Same security outcome as
+                    // `parse`; the origin only suppresses the developer diagnostic.
+                    if let Some(v) =
+                        SafeCssValue::parse_reporting(&composed, CssValueOrigin::Untrusted)
+                    {
                         decl!("background-image:{}", v.as_str());
                     }
                 }
@@ -255,8 +272,10 @@ pub(crate) fn build_style_string<M>(attrs: &[Attribute<M>]) -> String {
                 // Gradient CSS value — whole-string scan via SafeCssValue (T3).
                 // Replaces the former prefix-only `sanitise_css_value` call,
                 // closing the mid-value `expression()` / `url(javascript:…)`
-                // bypass.
-                if let Some(sv) = SafeCssValue::parse(g) {
+                // bypass. A9: the gradient string is built by the developer's
+                // `Background.linearGradient` call, so a dropped one is loud.
+                if let Some(sv) = SafeCssValue::parse_reporting(g, CssValueOrigin::DeveloperLiteral)
+                {
                     decl!("background-image:{}", sv.as_str());
                 }
             }
@@ -666,15 +685,17 @@ fn has_explicit_width<M>(attrs: &[Attribute<M>]) -> bool {
 /// must become the positioned host (`position:relative`) so its
 /// `position:absolute` overlay anchors to it rather than the page.
 fn has_nearby_overlay<M>(attrs: &[Attribute<M>]) -> bool {
-    attrs.iter().any(|a| matches!(a, Attribute::AttrNearby(_, _)))
+    attrs
+        .iter()
+        .any(|a| matches!(a, Attribute::AttrNearby(_, _)))
 }
 
 /// True when the node already declares `position` via a raw `AttrStyle`, so A2
 /// must not clobber the author's choice.
 fn has_explicit_position<M>(attrs: &[Attribute<M>]) -> bool {
-    attrs.iter().any(|a| {
-        matches!(a, Attribute::AttrStyle(k, _) if k.eq_ignore_ascii_case("position"))
-    })
+    attrs
+        .iter()
+        .any(|a| matches!(a, Attribute::AttrStyle(k, _) if k.eq_ignore_ascii_case("position")))
 }
 
 /// True when a node carries a paragraph-inline direction marker (`__inline`,
@@ -1025,10 +1046,7 @@ fn render_node_as<M: Clone>(
         _ => None,
     });
     let (tag_owned, role_attr): (String, Option<&'static str>) = match &landmark {
-        Some(desc) if tag == "div" => (
-            landmark_tag_for(desc).unwrap_or("div").to_owned(),
-            None,
-        ),
+        Some(desc) if tag == "div" => (landmark_tag_for(desc).unwrap_or("div").to_owned(), None),
         Some(desc) => (tag.to_owned(), landmark_role_for(desc)),
         None => (tag.to_owned(), None),
     };
@@ -1394,8 +1412,10 @@ mod tests {
             "width-less el must shrink-wrap: {s}"
         );
 
-        let fixed: Element<TestMsg> =
-            ui_el_(vec![ui_width_(Length::Px(200))], Element::Text("x".to_owned()));
+        let fixed: Element<TestMsg> = ui_el_(
+            vec![ui_width_(Length::Px(200))],
+            Element::Text("x".to_owned()),
+        );
         let s = render_html(&render_element(fixed));
         assert!(s.contains("width:200px"), "explicit width must render: {s}");
         assert!(
@@ -1515,7 +1535,10 @@ mod tests {
             Element::Text("n".to_owned()),
         );
         let s = render_html(&render_element(nav_el));
-        assert!(s.starts_with("<nav"), "descNavigation must retag to <nav>: {s}");
+        assert!(
+            s.starts_with("<nav"),
+            "descNavigation must retag to <nav>: {s}"
+        );
 
         let labelled: Element<TestMsg> = ui_el_(
             vec![ui_describe_(Description::DescLabel("hello".to_owned()))],
@@ -1541,7 +1564,10 @@ mod tests {
             vec![Element::Text("b".to_owned())],
         );
         let s = render_html(&render_element(btn));
-        assert!(s.starts_with("<button"), "button tag must be preserved: {s}");
+        assert!(
+            s.starts_with("<button"),
+            "button tag must be preserved: {s}"
+        );
         assert!(
             s.contains("role=\"navigation\""),
             "a landmark on a non-div must emit role=: {s}"
@@ -1590,7 +1616,10 @@ mod tests {
 
         let tree: Element<TestMsg> = ui_column_(
             vec![Attribute::AttrExplain, ui_spacing_(10), ui_padding_(20)],
-            vec![ui_el_(vec![ui_padding_(8)], Element::Text("one".to_owned()))],
+            vec![ui_el_(
+                vec![ui_padding_(8)],
+                Element::Text("one".to_owned()),
+            )],
         );
         let s = render_html(&render_element(tree));
         assert!(
