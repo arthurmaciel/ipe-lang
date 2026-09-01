@@ -220,6 +220,17 @@ ipe watch
 salsa-aware pipeline, and restarts the process. The combination of `ipe watch`
 and the flags above gives you sub-second feedback on most edits.
 
+For a running web app, `ipe watch` goes further on edits that only change what the
+view *looks like*: a change to a static style value, attribute, or text — and to
+the static *structure* of a subtree, such as adding, removing, or reordering
+static elements or attributes — is hot-swapped into the live program with **no
+recompile and no restart**, so the browser updates in place while keeping its
+current state. This applies to any part of a view that does not depend on the
+model: an edit that reads the model, branches on it (`if` / `case`), or touches a
+handler is a change to the program's behaviour, so it recompiles as usual. The
+preview always runs the same code the shipped build does — a hot-swap shows
+exactly what a full rebuild of the same source would.
+
 See [Getting started](getting-started.md) for a first project, and
 [The Elm Architecture](the-elm-architecture.md) for the program model that
 `ipe watch` loops over.

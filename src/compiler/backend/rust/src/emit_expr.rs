@@ -3711,6 +3711,49 @@ fn emit_css_value_call(
 /// wiring, the HTML serialiser, deferred-subtree wrappers, the `Ui.cells` seal,
 /// and the shape-router delegations) are dispatched by their plan's native tag.
 ///
+/// Emit a provably-static `Ipe.Html` subtree as a hoisted template read, or
+/// `None` to fall through to the ordinary inline emit.
+///
+/// Fires ONLY when every gate holds: a web shape (`uses_web` — the template
+/// table is a web-runtime type), the subtree is templatable
+/// ([`crate::emit_template::template_of_expr`]), and hoisting is armed
+/// ([`EmitCtx::hoist_style_literal`] returns a slot — which it does not under
+/// the flag-off / production emit, nor inside a `move` closure or a discard
+/// probe). Under any of those the function returns `None` and the subtree emits
+/// inline, byte-for-byte as before — so release / `ipe build` output is
+/// unchanged (golden-verified) and dev == prod at the emit level (the baked
+/// default IS the serialized template).
+///
+/// The whole subtree collapses into ONE literal slot (its serialized JSON), so
+/// a structural edit is a single-slot value change the shipped emit-diff
+/// classifier already routes to the zero-compile hot-swap path.
+fn emit_html_template(ctx: &EmitCtx, expr: &Expr) -> Option<String> {
+    if !ctx.uses_web {
+        return None;
+    }
+    // Only an ELEMENT node (`Html.node` / `Html.voidNode`) is templated at the
+    // top level. A bare `Html.text` / `Html.titleNode` leaf is already covered by
+    // the appearance-literal registry (its string value hoists as a leaf), so
+    // leaving it to that path keeps the leaf emit — and the registry's
+    // self-enforcing conformance tests — unchanged. A text/title node NESTED
+    // inside a templated element is still absorbed into that element's template
+    // (via the child walk), never emitted separately.
+    match expr {
+        Expr::Call {
+            callee: Callee::Kernel(KernelFn::HtmlNode | KernelFn::HtmlVoidNode),
+            ..
+        } => {}
+        _ => return None,
+    }
+    let template = crate::emit_template::template_of_expr(expr)?;
+    let slot = ctx.hoist_style_literal(&template.to_json())?;
+    // `M` is inferred from the surrounding element/return position, exactly as
+    // an inline `html_node_(…)` infers it — no turbofish.
+    Some(format!(
+        "ipe_runtime::web::template::materialize_template_str(__ipe_lit.get({slot}))"
+    ))
+}
+
 /// Returns `None` for any kernel that is not a `Ui` / `Web` / `Terminal` /
 /// `WebView` variant, letting the standard call path handle it.
 fn emit_ui_call(
@@ -5599,6 +5642,18 @@ pub fn emit_expr_at(
                 }
                 if let Some(result) = emit_server_call(ctx, callee, args, indent, child, generics)?
                 {
+                    return Ok(result);
+                }
+                // Structural hot-swap: under `hot_appearance`, a provably-static
+                // `Ipe.Html` subtree is hoisted whole as ONE serialized template
+                // into the per-view literal table and emitted as a
+                // `materialize_template_str` read, so a structural edit
+                // (add/remove/reorder a static element, static attribute, static
+                // text) becomes a zero-compile data patch. Off (release / `ipe
+                // build`) it never fires — the subtree falls through to the inline
+                // emit below and the output is byte-identical. `None` for any
+                // non-static subtree → keep it compiled.
+                if let Some(result) = emit_html_template(ctx, expr) {
                     return Ok(result);
                 }
                 // Ipe.Ui / Ipe.Html / Ipe.Web / Ipe.Tui / Ipe.WebView kernels.

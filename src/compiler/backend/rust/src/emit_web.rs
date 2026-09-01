@@ -2669,4 +2669,157 @@ mod hot_appearance_tests {
         }
         Ok(())
     }
+
+    // ── structural hot-swap: static `Ipe.Html` subtree templating ───────────
+
+    fn html_text(s: &str) -> Expr {
+        Expr::Call {
+            callee: Callee::Kernel(KernelFn::HtmlTextNode),
+            args: vec![Expr::Str(s.to_string())],
+            pin: CallPin::None,
+            on_form: OnFormKind::NotForm,
+        }
+    }
+
+    fn html_attr(k: &str, v: &str) -> Expr {
+        Expr::Call {
+            callee: Callee::Kernel(KernelFn::HtmlAttribute),
+            args: vec![Expr::Str(k.to_string()), Expr::Str(v.to_string())],
+            pin: CallPin::None,
+            on_form: OnFormKind::NotForm,
+        }
+    }
+
+    fn attr_list(items: Vec<Expr>) -> Expr {
+        Expr::List {
+            elem: IrType::Ui {
+                ctor: UiCtor::HtmlAttribute,
+                msg: Box::new(IrType::Int),
+            },
+            items,
+        }
+    }
+
+    fn child_list(items: Vec<Expr>) -> Expr {
+        Expr::List {
+            elem: IrType::Ui {
+                ctor: UiCtor::Html,
+                msg: Box::new(IrType::Int),
+            },
+            items,
+        }
+    }
+
+    /// `Html.node "div" [class "card"] [Html.text "Hello"]` — a fully-static
+    /// `Ipe.Html` subtree.
+    fn static_html_subtree() -> Expr {
+        Expr::Call {
+            callee: Callee::Kernel(KernelFn::HtmlNode),
+            args: vec![
+                Expr::Str("div".to_string()),
+                attr_list(vec![html_attr("class", "card")]),
+                child_list(vec![html_text("Hello")]),
+            ],
+            pin: CallPin::None,
+            on_form: OnFormKind::NotForm,
+        }
+    }
+
+    /// With the flag OFF a static `Ipe.Html` subtree emits inline (the direct
+    /// `html_node_` / `html_text_node_` tree), never a template read — release /
+    /// `ipe build` output is unperturbed.
+    #[test]
+    fn flag_off_static_subtree_emits_inline() -> DResult<()> {
+        let mut interner = Interner::new();
+        let (program, view) = one_view_program(&mut interner, static_html_subtree())?;
+        let out = emit_view(&interner, &program, &view, false)?;
+        assert!(
+            !out.contains("materialize_template_str"),
+            "flag-off emit must not template, got:\n{out}"
+        );
+        assert!(
+            !out.contains("__ipe_lit"),
+            "flag-off emit must introduce no literal table, got:\n{out}"
+        );
+        assert!(
+            out.contains("html_node_") && out.contains("html_text_node_"),
+            "flag-off emit must carry the direct inline node tree, got:\n{out}"
+        );
+        Ok(())
+    }
+
+    /// With the flag ON the whole static subtree hoists as ONE serialized
+    /// template into the per-view table and the site reads it through
+    /// `materialize_template_str`. The baked default is the template's JSON, so
+    /// the read reproduces the subtree byte-identically (dev == prod).
+    #[test]
+    fn flag_on_static_subtree_hoists_as_template() -> DResult<()> {
+        let mut interner = Interner::new();
+        let (program, view) = one_view_program(&mut interner, static_html_subtree())?;
+        let out = emit_view(&interner, &program, &view, true)?;
+        assert!(
+            out.contains("ipe_runtime::web::template::materialize_template_str(__ipe_lit.get(0))"),
+            "flag-on emit must read the hoisted template slot, got:\n{out}"
+        );
+        // The whole subtree is ONE slot — the inline node tree is gone.
+        assert!(
+            !out.contains("html_node_") && !out.contains("html_text_node_"),
+            "the inline node tree must be replaced by the template read, got:\n{out}"
+        );
+        // The baked default is the serialized template JSON for this subtree.
+        assert!(
+            out.contains(
+                r#"from_defaults(&["{\"Element\":{\"tag\":\"div\",\"attrs\":[{\"key\":\"class\",\"value\":\"card\"}],\"children\":[{\"Text\":\"Hello\"}]}}"])"#
+            ),
+            "the baked default must be the subtree's serialized template, got:\n{out}"
+        );
+        Ok(())
+    }
+
+    /// A subtree carrying a Model read (a `Var` child) is NOT templated even with
+    /// the flag on — it stays compiled (the refusal path).
+    #[test]
+    fn flag_on_model_dependent_subtree_stays_inline() -> DResult<()> {
+        let mut interner = Interner::new();
+        let dynamic = Expr::Call {
+            callee: Callee::Kernel(KernelFn::HtmlNode),
+            args: vec![
+                Expr::Str("div".to_string()),
+                attr_list(vec![]),
+                // A bound name in child position — not a static literal node.
+                child_list(vec![Expr::Var(interner.intern("child")?)]),
+            ],
+            pin: CallPin::None,
+            on_form: OnFormKind::NotForm,
+        };
+        let (program, view) = one_view_program(&mut interner, dynamic)?;
+        let out = emit_view(&interner, &program, &view, true)?;
+        assert!(
+            !out.contains("materialize_template_str"),
+            "a Model-dependent subtree must not template, got:\n{out}"
+        );
+        assert!(
+            out.contains("html_node_"),
+            "a non-templated subtree stays inline compiled, got:\n{out}"
+        );
+        Ok(())
+    }
+
+    /// A static subtree in a NON-web shape does not template (the template table
+    /// is a web-runtime type) — it emits inline.
+    #[test]
+    fn static_subtree_non_web_shape_stays_inline() -> DResult<()> {
+        let mut interner = Interner::new();
+        let (mut program, view) = one_view_program(&mut interner, static_html_subtree())?;
+        // Flip the shape off the web target.
+        if let Some(m) = program.modules.first_mut() {
+            m.uses_web = false;
+        }
+        let out = emit_view(&interner, &program, &view, true)?;
+        assert!(
+            !out.contains("materialize_template_str"),
+            "a non-web shape must not template, got:\n{out}"
+        );
+        Ok(())
+    }
 }
