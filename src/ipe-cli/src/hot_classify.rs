@@ -47,13 +47,43 @@ pub struct ViewPatch {
     pub patch: Vec<(usize, String)>,
 }
 
+/// A hot-swappable transition patch for one edited `update` arm.
+///
+/// The running app's compiled arm reads its baked datum through
+/// `apply_transition_hot("<old_json>", model)`; the app is not recompiled, so it
+/// still bakes `old_json`. The overlay is keyed by that exact baked string, so
+/// the patch carries the OLD json (the key the running app matches) and the NEW
+/// json (the edited transition to register).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct TransitionPatch {
+    /// The PREVIOUS baked datum JSON — the key the running app's compiled arm
+    /// passes to `apply_transition_hot`, hence the overlay key. Send the OLD
+    /// value, not the new.
+    pub old_json: String,
+    /// The edited transition's JSON — the replacement to register for `old_json`.
+    pub new_json: String,
+}
+
+/// The set of hot-swappable deltas an edit produced with no recompile.
+///
+/// Carries the appearance (view literal) patches and the `update`-arm transition
+/// patches. Both are pushed to the running app over the live socket; either may
+/// be empty.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct HotSwap {
+    /// One [`ViewPatch`] per view whose hoisted appearance literals changed.
+    pub views: Vec<ViewPatch>,
+    /// One [`TransitionPatch`] per `update` arm whose baked transition changed.
+    pub transitions: Vec<TransitionPatch>,
+}
+
 /// The classification of a source edit, derived from the emitted-Rust diff.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Classification {
-    /// The only delta is hoisted style-literal *values*; hot-swap without a
-    /// recompile. One [`ViewPatch`] per view whose defaults changed (empty when
-    /// two emits are byte-identical — a no-op edit, still on the fast path).
-    AppearanceOnly(Vec<ViewPatch>),
+    /// The only deltas are hoisted appearance-literal *values* and/or
+    /// `update`-arm transition *data*; hot-swap without a recompile. Empty when
+    /// two emits are byte-identical — a no-op edit, still on the fast path.
+    HotSwappable(HotSwap),
     /// Anything else — recompile. This is the conservative fallback.
     Logic,
 }
@@ -74,7 +104,7 @@ pub fn classify(prev: &EmittedProject, next: &EmittedProject) -> Classification 
     if prev.files.len() != next.files.len() {
         return Classification::Logic;
     }
-    let mut view_patches = Vec::new();
+    let mut hot = HotSwap::default();
     for (rel, prev_src) in &prev.files {
         let Some(next_src) = next.files.get(rel) else {
             // A renamed/removed path — structural.
@@ -85,17 +115,21 @@ pub fn classify(prev: &EmittedProject, next: &EmittedProject) -> Classification 
             continue;
         }
         match classify_file(prev_src, next_src) {
-            FileDelta::AppearanceOnly(mut ps) => view_patches.append(&mut ps),
+            FileDelta::HotSwappable(mut delta) => {
+                hot.views.append(&mut delta.views);
+                hot.transitions.append(&mut delta.transitions);
+            }
             FileDelta::Logic => return Classification::Logic,
         }
     }
-    Classification::AppearanceOnly(view_patches)
+    Classification::HotSwappable(hot)
 }
 
 /// The per-file classification result.
 enum FileDelta {
-    /// Only defaults-array values changed; one [`ViewPatch`] per changed array.
-    AppearanceOnly(Vec<ViewPatch>),
+    /// Only appearance-literal values and/or transition data changed; the
+    /// hot-swappable deltas for this file.
+    HotSwappable(HotSwap),
     /// Any other textual difference.
     Logic,
 }
@@ -125,6 +159,19 @@ fn classify_file(prev_src: &str, next_src: &str) -> FileDelta {
         return FileDelta::Logic;
     }
 
+    // The `update`-arm transition-datum literals: each classified arm emits
+    // `apply_transition_hot("<json>", model)`. A differing number of such calls
+    // is structural (an arm gained/lost data-describability) ⇒ Logic.
+    let Some(prev_trans) = scan_transition_data(prev_src) else {
+        return FileDelta::Logic;
+    };
+    let Some(next_trans) = scan_transition_data(next_src) else {
+        return FileDelta::Logic;
+    };
+    if prev_trans.len() != next_trans.len() {
+        return FileDelta::Logic;
+    }
+
     // The masked regions are: (1) every `from_defaults(&[…])` array's contents,
     // and (2) every hoisted-read TOTAL-FALLBACK literal
     // (`__ipe_lit.get(N).parse::<T>().unwrap_or(<literal>)`). A typed style value
@@ -135,25 +182,31 @@ fn classify_file(prev_src: &str, next_src: &str) -> FileDelta {
     // default, so masking it cannot admit a false `AppearanceOnly`: any genuine
     // logic change still perturbs the skeleton outside these masks. The `String`
     // hoist reads via `.to_string()` (no fallback), so it has no such site.
-    let Some(prev_masks) = mask_spans(prev_src, &prev_arrays) else {
+    // The transition-datum literal argument is ALSO masked: the whole `<json>`
+    // string inside `apply_transition_hot("<json>", …)` may change while the arm
+    // structure is byte-identical (a `+1` → `+2` edit changes only the baked
+    // `source`). Masking it keeps a data-only arm edit hot-swappable, exactly as
+    // masking a `from_defaults` array keeps an appearance edit hot-swappable; any
+    // structural change to the arm still perturbs the skeleton and forces Logic.
+    let Some(prev_masks) = mask_spans(prev_src, &prev_arrays, &prev_trans) else {
         return FileDelta::Logic;
     };
-    let Some(next_masks) = mask_spans(next_src, &next_arrays) else {
+    let Some(next_masks) = mask_spans(next_src, &next_arrays, &next_trans) else {
         return FileDelta::Logic;
     };
-    // A differing number of hoisted-read sites is itself structural.
+    // A differing number of masked sites is itself structural.
     if prev_masks.len() != next_masks.len() {
         return FileDelta::Logic;
     }
 
     // If the skeletons (source with every masked region blanked) differ,
-    // something other than a hoisted style value moved (structure, control flow,
-    // a handler, a read index) → Logic.
+    // something other than a hoisted style value / a transition datum moved
+    // (structure, control flow, a handler, a read index) → Logic.
     if skeleton(prev_src, &prev_masks) != skeleton(next_src, &next_masks) {
         return FileDelta::Logic;
     }
 
-    let mut patches = Vec::new();
+    let mut views = Vec::new();
     for (pa, na) in prev_arrays.iter().zip(next_arrays.iter()) {
         // Same array count in a matching skeleton, but re-check length per array:
         // a length change is a literal added/removed inside one view → Logic.
@@ -167,13 +220,72 @@ fn classify_file(prev_src: &str, next_src: &str) -> FileDelta {
             }
         }
         if !patch.is_empty() {
-            patches.push(ViewPatch {
+            views.push(ViewPatch {
                 defaults: pa.values.clone(),
                 patch,
             });
         }
     }
-    FileDelta::AppearanceOnly(patches)
+
+    // Each changed transition datum: the running app still bakes the OLD json, so
+    // it is the overlay key; the NEW json is the replacement to register.
+    let mut transitions = Vec::new();
+    for (pt, nt) in prev_trans.iter().zip(next_trans.iter()) {
+        if pt.json != nt.json {
+            transitions.push(TransitionPatch {
+                old_json: pt.json.clone(),
+                new_json: nt.json.clone(),
+            });
+        }
+    }
+
+    FileDelta::HotSwappable(HotSwap { views, transitions })
+}
+
+/// One `apply_transition_hot("<json>", …)` occurrence located in a source file:
+/// the datum JSON string and the byte span of its contents (for masking).
+struct TransitionData {
+    /// Byte offset of the first char inside the json string literal (past the `"`).
+    inner_start: usize,
+    /// Byte offset of the closing `"` of the json string literal.
+    inner_end: usize,
+    /// The parsed (unescaped) json string — the baked datum.
+    json: String,
+}
+
+/// The literal opening an emitted transition-datum read in the emitted Rust.
+/// Kept in sync with the emitter's `emit_transition_arm`
+/// (`apply_transition_hot("<json>", <model>)`). If the emitter's spelling ever
+/// changes, no datum is recognised and every edit conservatively falls to
+/// `Logic` — safe, never a false hot-swap.
+const TRANSITION_OPEN: &str = "apply_transition_hot(";
+
+/// Locate every `apply_transition_hot("<json>", …)` call in `src` and parse its
+/// first argument (the baked datum JSON string literal). Returns `None`
+/// (⇒ `Logic`) if any occurrence's first argument is not a well-formed string
+/// literal — never a guess. A file with no occurrences returns `Some(empty)`.
+fn scan_transition_data(src: &str) -> Option<Vec<TransitionData>> {
+    let bytes = src.as_bytes();
+    let mut out = Vec::new();
+    let mut from = 0usize;
+    while let Some(rel) = src[from..].find(TRANSITION_OPEN) {
+        let open = from + rel;
+        // The first argument begins at the first `"` after the `(`.
+        let arg_at = skip_ws(bytes, open + TRANSITION_OPEN.len());
+        if *bytes.get(arg_at)? != b'"' {
+            return None;
+        }
+        let inner_start = arg_at + 1;
+        let (json, next) = parse_string_literal(bytes, arg_at)?;
+        // `next` is just past the closing quote; the closing quote is `next - 1`.
+        out.push(TransitionData {
+            inner_start,
+            inner_end: next - 1,
+            json,
+        });
+        from = next;
+    }
+    Some(out)
 }
 
 /// One `from_defaults(&[…])` occurrence located in a source file.
@@ -198,7 +310,11 @@ struct MaskSpan {
 /// `unwrap_or(<literal>)` fallback argument. Returns `None` (⇒ `Logic`) if a
 /// hoisted read's fallback cannot be located, so an unrecognised emit shape is
 /// conservative.
-fn mask_spans(src: &str, arrays: &[DefaultsArray]) -> Option<Vec<MaskSpan>> {
+fn mask_spans(
+    src: &str,
+    arrays: &[DefaultsArray],
+    transitions: &[TransitionData],
+) -> Option<Vec<MaskSpan>> {
     let mut spans: Vec<MaskSpan> = arrays
         .iter()
         .map(|a| MaskSpan {
@@ -206,6 +322,10 @@ fn mask_spans(src: &str, arrays: &[DefaultsArray]) -> Option<Vec<MaskSpan>> {
             end: a.inner_end,
         })
         .collect();
+    spans.extend(transitions.iter().map(|t| MaskSpan {
+        start: t.inner_start,
+        end: t.inner_end,
+    }));
     spans.extend(scan_hoisted_read_fallbacks(src)?);
     spans.sort_by_key(|s| s.start);
     Some(spans)
@@ -476,19 +596,34 @@ mod tests {
         )
     }
 
-    /// Assert `classify` returned `AppearanceOnly` and hand back its patches, so
-    /// callers extract fields via [`first_patch`] (never a panicking index). A
+    /// Assert `classify` returned `HotSwappable` and hand back its VIEW patches,
+    /// so callers extract fields via [`first_patch`] (never a panicking index). A
     /// `Logic` result is the test's failure — surfaced by asserting the variant
     /// matches before destructuring; the `else` arm is dead once the assertion
     /// holds and returns an empty vec (no `panic!`/`unreachable!`).
     fn expect_appearance(prev: &EmittedProject, next: &EmittedProject) -> Vec<ViewPatch> {
         let got = classify(prev, next);
         assert!(
-            matches!(got, Classification::AppearanceOnly(_)),
-            "expected AppearanceOnly, got {got:?}"
+            matches!(got, Classification::HotSwappable(_)),
+            "expected HotSwappable, got {got:?}"
         );
-        if let Classification::AppearanceOnly(ps) = got {
-            ps
+        if let Classification::HotSwappable(hot) = got {
+            hot.views
+        } else {
+            Vec::new()
+        }
+    }
+
+    /// Assert `classify` returned `HotSwappable` and hand back its TRANSITION
+    /// patches (same discipline as [`expect_appearance`]).
+    fn expect_transitions(prev: &EmittedProject, next: &EmittedProject) -> Vec<TransitionPatch> {
+        let got = classify(prev, next);
+        assert!(
+            matches!(got, Classification::HotSwappable(_)),
+            "expected HotSwappable, got {got:?}"
+        );
+        if let Classification::HotSwappable(hot) = got {
+            hot.transitions
         } else {
             Vec::new()
         }
@@ -740,7 +875,7 @@ mod tests {
         let p = project(&[("src/main.rs", &table(&["12"]))], "cargo");
         assert_eq!(
             classify(&p, &p.clone()),
-            Classification::AppearanceOnly(vec![])
+            Classification::HotSwappable(HotSwap::default())
         );
     }
 
@@ -804,6 +939,70 @@ mod tests {
     fn empty_arrays_with_body_change_is_logic() {
         let prev = project(&[("src/main.rs", &format!("x {} y", table(&[])))], "cargo");
         let next = project(&[("src/main.rs", &format!("z {} y", table(&[])))], "cargo");
+        assert_eq!(classify(&prev, &next), Classification::Logic);
+    }
+
+    // ── transition-data hot-swap (update arm) ─────────────────────────────
+
+    /// Mirror the emitter's classified-arm shape: an arm body emitted as
+    /// `apply_transition_hot("<json>", model)`.
+    fn transition_arm(json: &str) -> String {
+        format!(
+            "fn update(msg: Msg, model: Model) {{ match msg {{ \
+             Increment => (ipe_runtime::web::apply_transition_hot({json:?}, model), cmd_none()), \
+             }} }}"
+        )
+    }
+
+    const INC1: &str = r#"{"field":"count","op":"IntAdd","source":{"Int":1}}"#;
+    const INC2: &str = r#"{"field":"count","op":"IntAdd","source":{"Int":2}}"#;
+
+    // The counter SEAL at the classifier level: a `+1` → `+2` arm edit changes
+    // ONLY the baked datum json inside `apply_transition_hot(...)` → a
+    // transition-only hot-swap, no recompile.
+    #[test]
+    fn transition_source_edit_is_hot_swappable() {
+        let prev = project(&[("src/update.rs", &transition_arm(INC1))], "cargo");
+        let next = project(&[("src/update.rs", &transition_arm(INC2))], "cargo");
+        let ts = expect_transitions(&prev, &next);
+        assert_eq!(ts.len(), 1);
+        assert_eq!(
+            ts.first().cloned().unwrap_or_default(),
+            TransitionPatch {
+                old_json: INC1.to_owned(),
+                new_json: INC2.to_owned(),
+            }
+        );
+    }
+
+    // A no-op transition edit (identical) contributes no transition patch.
+    #[test]
+    fn identical_transition_arm_has_no_patch() {
+        let p = project(&[("src/update.rs", &transition_arm(INC1))], "cargo");
+        assert_eq!(expect_transitions(&p, &p.clone()), vec![]);
+    }
+
+    // A change to the arm STRUCTURE around the transition call (a new arm, a
+    // different call) is Logic — only the json argument is masked, never the
+    // surrounding code.
+    #[test]
+    fn arm_structure_change_is_logic() {
+        let prev = project(&[("src/update.rs", &transition_arm(INC1))], "cargo");
+        let next = project(
+            &[(
+                "src/update.rs",
+                &transition_arm(INC1).replace("cmd_none()", "cmd_batch(vec![])"),
+            )],
+            "cargo",
+        );
+        assert_eq!(classify(&prev, &next), Classification::Logic);
+    }
+
+    // An arm that GAINS a transition call (arm count grows) is structural → Logic.
+    #[test]
+    fn added_transition_call_is_logic() {
+        let prev = project(&[("src/update.rs", "fn update() { plain }")], "cargo");
+        let next = project(&[("src/update.rs", &transition_arm(INC1))], "cargo");
         assert_eq!(classify(&prev, &next), Classification::Logic);
     }
 }
