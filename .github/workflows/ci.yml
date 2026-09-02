@@ -23,25 +23,18 @@ on:
   push:
     branches: [main, master]
   pull_request:
-  # Merge queue: when the repo's merge queue is enabled (a GitHub repo setting the
-  # user flips), each queued PR runs on a merge_group event with main + the PR
-  # merged in. The heavy matrix (e2e/miri/feature-combos/tier2 jails) fires here
-  # so it GATES landing per-merge — main stays provably green without paying the
-  # full matrix on every direct push. The gating jobs list `merge_group` in their
-  # `if:` alongside the non-pull_request (push/nightly) condition.
-  merge_group:
   schedule:
     - cron: '0 4 * * *'        # nightly full sweep (catches dep/upstream drift)
   workflow_dispatch: {}
 
 concurrency:
-  # On pull requests and merge queue entries, cancel the previous run for the
-  # same ref so devs get fast feedback without wasting runner minutes. On direct
-  # pushes to the default branch (main) and on tags, never cancel: the slow
-  # Tier-2 jobs (windows-run-jail, windows-tier2, freebsd-tier2) only run on
-  # push and would be killed before they complete, making them permanently red.
+  # On pull requests, cancel the previous run for the same ref so devs get fast
+  # feedback without wasting runner minutes. On direct pushes to the default
+  # branch (main) and on tags, never cancel: the slow Tier-2 jobs
+  # (windows-run-jail, windows-tier2, freebsd-tier2) only run on push and would
+  # be killed before they complete, making them permanently red.
   group: ci-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' || github.event_name == 'merge_group' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   CARGO_TERM_COLOR: always
@@ -127,7 +120,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: changes
     # Change-gated: a docs-only PR (no code path in the `code` filter) skips
-    # clippy; it always runs on push/nightly/merge_group.
+    # clippy; it always runs on push/nightly.
     if: needs.changes.outputs.code == 'true' || github.event_name != 'pull_request'
     steps:
       - uses: actions/checkout@v7
@@ -145,7 +138,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: changes
     # Change-gated like clippy: a PR that touches no code path skips it; it
-    # always runs on push/nightly/merge_group.
+    # always runs on push/nightly.
     if: needs.changes.outputs.code == 'true' || github.event_name != 'pull_request'
     steps:
       - uses: actions/checkout@v7
@@ -230,7 +223,7 @@ jobs:
   # `#[cfg(feature = "live")]`.
   runtime-feature-combos:
     runs-on: ubuntu-latest
-    if: github.event_name != 'pull_request'   # off the PR gate; runs on push, nightly, and merge_group (merge-time gate)
+    if: github.event_name != 'pull_request'   # off the PR gate; runs on push, nightly
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
@@ -572,7 +565,7 @@ jobs:
     # Fail-fast: don't start the slow miri interpretation if the workspace does
     # not even compile (quick-check is red). Only reachable off the PR path.
     needs: [changes, quick-check]
-    if: github.event_name != 'pull_request'   # off the PR gate; runs on push, nightly, and merge_group (merge-time gate)
+    if: github.event_name != 'pull_request'   # off the PR gate; runs on push, nightly
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@nightly
@@ -607,7 +600,7 @@ jobs:
   e2e:
     runs-on: ubuntu-latest
     # off the PR gate (seal-smoke is the PR proxy); runs on push, nightly, and
-    # merge_group (merge-time gate). Fail-fast on a non-compiling tree.
+    # push/nightly gate. Fail-fast on a non-compiling tree.
     needs: [changes, quick-check]
     if: github.event_name != 'pull_request'
     env:
@@ -669,8 +662,8 @@ jobs:
   # shard-named jobs, so no single shard name is a durable required-check target
   # and a `fail-fast: false` shard failure is easy to miss. This job depends on
   # every shard and is GREEN only when all six passed — one stable context name
-  # (`e2e-all`) branch protection can require so a SEAL regression blocks the
-  # merge queue. The `always()` guard makes a skipped/failed/cancelled shard a
+  # (`e2e-all`) branch protection can require so a SEAL regression blocks a
+  # landing. The `always()` guard makes a skipped/failed/cancelled shard a
   # FAILURE here, never a false green; a legitimate skip (the `e2e` matrix itself
   # self-skips on pull_request) passes vacuously so the PR path is unaffected.
   # A bare, stable `name` so the required-check context is exactly `e2e-all`
@@ -702,7 +695,7 @@ jobs:
 
   # ── PR anti-rot SEAL slice ────────────────────────────────────────────────
   # The full `e2e` matrix (THE SEAL — build+run every emitted golden) runs only
-  # on push/merge_group, so a golden or seal that an `ipe`-accepted program no
+  # on push, so a golden or seal that an `ipe`-accepted program no
   # longer cargo-builds could merge green and only redden main after the fact.
   # This job runs ONE representative slice of THE SEAL on every code PR: the
   # `seal_modset` binary (the compact per-shape emit→build proof) plus a single
@@ -710,7 +703,7 @@ jobs:
   # emit/const-fold/golden regression pre-merge (the classes this guard exists
   # for), while a single shard bounds PR wall-clock — the full 6-shard matrix +
   # tier2 jails stay on push where wall-clock is not on the developer's critical
-  # path. Change-gated on `code`; always runs on push/nightly/merge_group.
+  # path. Change-gated on `code`; always runs on push/nightly.
   seal-slice:
     name: seal-slice (PR SEAL anti-rot — one e2e shard)
     runs-on: ubuntu-latest
@@ -756,7 +749,7 @@ jobs:
   # build — a SEAL breach invisible to the dep-model gate. This job makes that
   # class of break visible and blocking.
   #
-  # Runs on push/nightly/merge_group (like `e2e`); off the PR gate since each
+  # Runs on push/nightly (like `e2e`); off the PR gate since each
   # shape does a full `cargo build`. `seal-smoke` is the fast PR proxy.
   seal-modset-vendored:
     name: seal-modset (vendored emit model)
@@ -801,7 +794,7 @@ jobs:
   macos-tier2:
     name: macos-tier2 (sandbox-exec — the real macOS jail proof)
     runs-on: macos-latest
-    if: github.event_name != 'pull_request'   # off the PR gate; runs on push, nightly, and merge_group (merge-time gate)
+    if: github.event_name != 'pull_request'   # off the PR gate; runs on push, nightly
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
@@ -866,7 +859,7 @@ jobs:
   macos-run-jail:
     name: macos-run-jail (sandbox-exec — the real macOS run-jail proof)
     runs-on: macos-latest
-    if: github.event_name != 'pull_request'   # off the PR gate; runs on push, nightly, and merge_group (merge-time gate)
+    if: github.event_name != 'pull_request'   # off the PR gate; runs on push, nightly
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
@@ -927,7 +920,7 @@ jobs:
   windows-run-jail:
     name: windows-run-jail (Job Object + AppContainer — the real Windows run-jail proof)
     runs-on: windows-2022
-    if: github.event_name != 'pull_request'   # off the PR gate; runs on push, nightly, and merge_group (merge-time gate)
+    if: github.event_name != 'pull_request'   # off the PR gate; runs on push, nightly
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
@@ -1014,7 +1007,7 @@ jobs:
   windows-tier2:
     name: windows-tier2 (Job Object + AppContainer — the real Windows build-jail proof)
     runs-on: windows-2022
-    if: github.event_name != 'pull_request'   # off the PR gate; runs on push, nightly, and merge_group (merge-time gate)
+    if: github.event_name != 'pull_request'   # off the PR gate; runs on push, nightly
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
@@ -1163,7 +1156,7 @@ jobs:
   linux-arm64-tier2:
     name: linux-arm64-tier2 (fifth platform — fail-closed refuse-to-certify proof)
     runs-on: ubuntu-24.04-arm
-    if: github.event_name != 'pull_request'   # off the PR gate; push/nightly/merge_group
+    if: github.event_name != 'pull_request'   # off the PR gate; push/nightly
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
@@ -1208,7 +1201,7 @@ jobs:
   #
   # Change-gated: the `.ipe` veneers live under src/** (already in the `code`
   # filter), so a pure prose-only PR skips this vacuously; it always runs on
-  # push/nightly/merge_group.
+  # push/nightly.
   stdlib-docs-drift:
     runs-on: ubuntu-latest
     needs: [changes, quick-check]
@@ -1231,7 +1224,7 @@ jobs:
   #
   # Change-gated: env-var reads live under src/** (already in the `code`
   # filter), so a pure prose-only PR skips this vacuously; it always runs on
-  # push/nightly/merge_group.
+  # push/nightly.
   env-docs-drift:
     runs-on: ubuntu-latest
     needs: [changes, quick-check]

@@ -305,9 +305,9 @@ impl IpeStringify for serde_json::Value {
     }
 }
 
-// NB: `IpeError` is `type IpeError = String` (see config.rs), so it stringifies
-// through the `String` impl above — rendering its message verbatim. No separate
-// impl is needed (and a separate one would conflict with the `String` impl).
+// `IpeError` is a typed enum (see error.rs) implementing `Display`, so the
+// blanket `ipe_show` above (`self.to_string()`) already renders its message —
+// no separate `Stringify` impl is needed.
 
 #[cfg(test)]
 mod tests {
