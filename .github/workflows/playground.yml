@@ -97,6 +97,9 @@ jobs:
       - name: Build ipe (needed by sandbox_security.rs emit helpers)
         run: cargo build -p ipe
 
+      - name: Allow unprivileged user namespaces (bwrap netns)
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+
       - name: Run jail-runner tests (unit + sandbox security proofs)
         env:
           IPE_BIN: ${{ github.workspace }}/target/debug/ipe
