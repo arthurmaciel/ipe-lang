@@ -27,12 +27,8 @@ The two layers:
     is EXHAUSTIVE over `Position` / `Denied` / `Unavailable` / `Timeout`: a host
     permission denial becomes a typed `Err`, never a silently dropped variant.
 
-The one-shot `current` is shaped as an outbound `Cmd`, not a `Task Error Coords`:
-the raw `Ipe.Js` transport has no request→reply correlation kernel, so a
-`Task`-shaped one-shot cannot be spelled over it today. The reply to `current`
-arrives on the same `positions` subscription as a watch's. Closing that gap
-(a correlated port→`Task` bridge) is tracked — it needs a new backend kernel and
-a security-soundness review of the JS boundary, not a stdlib-only change.
+`current` returns a `Task Error Coords` via the correlated port→Task bridge.
+`watch` / `stopWatching` remain `Cmd`-shaped (streaming, not one-shot).
 
 ## `Coords`
 
@@ -41,15 +37,14 @@ A device position: WGS-84 latitude/longitude in degrees, accuracy in metres.
 ## `current`
 
 ```ipe
-current : Cmd.Cmd msg
+current : Task Error Coords
 ```
 
-`current` — request the device's location ONCE.
+`current` — request the device's location ONCE, as a `Task Error Coords`.
 
-Outbound `Cmd` over the raw port transport with sane defaults (low accuracy, no
-timeout, a fresh fix). The served JS handler reaches
-`navigator.geolocation.getCurrentPosition`; the reply — a `Coords` or a typed
-denial — arrives on the `positions` subscription.
+Uses the correlated port→Task bridge (`Js.request`) with sane defaults (low
+accuracy, no deadline, a fresh fix). The reply — a `Coords` or a typed denial —
+resolves the `Task` directly; no companion subscription is needed.
 
 Importing this module discloses `js-port:geolocation`; the app must grant it
 with `accepts = [ JsPort Geolocation ]` under [capabilities] in package.ipe.

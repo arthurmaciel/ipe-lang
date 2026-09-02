@@ -93,3 +93,37 @@ cannot be spelled. The decoded `a` should be one closed `JsMsg` ADT — a narrow
 published type, NEVER the internal `Msg` — and the `case` that folds it into a
 `Msg` must be exhaustive.
 
+## `request`
+
+```ipe
+request : a -> Decoder b -> Task b
+```
+
+`request cmd decoder` — a correlated one-shot request/reply over the port.
+
+The ergonomic bridge between a browser one-shot operation (geolocation fix,
+clipboard read, a bespoke JS call) and a `Task Error a` in the Ipê program. It
+removes the hand-rolled Cmd + Sub + correlation boilerplate a one-shot request
+otherwise requires.
+
+Semantics:
+
+  1. A runtime-private correlation id is minted (never derived from JS input).
+  2. `cmd` is sent outbound with the id on the wire envelope; the first-party
+     JS port glue (or a developer's `ipe.onReceive` handler that opts in to
+     correlation) echoes the id on the reply.
+  3. The runtime routes the reply to the one-shot waiter, runs `decoder` through
+     the SEALED fail-closed gate, and resolves the `Task`. The same seal codec
+     the raw port uses; no trust change.
+  4. A host trap / decode-miss / timeout / unknown-or-late id → typed `Err`,
+     never a panic or a partial value. Bounded: a ceiling caps outstanding
+     waiters; a per-waiter deadline evicts slow/missing replies.
+
+`cmd` MUST be a seal-legal value type — the same discipline `send` enforces
+(IPE-N0039). `Decoder Value` is REJECTED; spell the reply type concretely.
+
+A `js_subscribe` subscriber never sees a correlated reply — correlation routing
+intercepts it before the broadcast. No cross-talk between concurrent `request`
+calls: each id resolves ONLY its own waiter; an unknown, duplicate, or late id
+is dropped fail-closed.
+
