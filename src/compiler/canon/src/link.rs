@@ -10,10 +10,11 @@
 //! module unchanged; they already emit qualified identifiers
 //! (`Module_name`) from the `module` field of every `VarTopLevel` node.
 
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashSet};
 
 use ipe_diagnostics::{DResult, Diagnostic, NameError, Span};
 use ipe_intern::{Interner, Symbol};
+use ipe_kernels::WebCapability;
 
 use crate::ast;
 
@@ -61,11 +62,17 @@ pub fn link(
     // import-derived fact: a program reaches for an escape hatch iff ANY of its
     // modules imported an `Ipe.<M>.Unsafe` submodule.
     let mut imports_unsafe_submodule = false;
+    // The whole-program web-capability disclosure is the UNION of every linked
+    // module's import-derived set. A browser axis reached by ANY module — a direct
+    // dep or a transitive dep-of-dep — is disclosed by the linked program, so a
+    // deep dependency's disclosure is never dropped from the entry's set.
+    let mut imported_web_capabilities: BTreeSet<WebCapability> = BTreeSet::new();
     // Nominal-identity gate: reject a genuine duplicate `(home, name)` (the same
     // type declared twice), but ALLOW two distinct homes sharing a short name.
     let mut seen: HashSet<(Vec<Symbol>, Symbol)> = HashSet::new();
     for m in modules {
         imports_unsafe_submodule |= m.imports_unsafe_submodule;
+        imported_web_capabilities.extend(m.imported_web_capabilities.iter().copied());
         for u in &m.unions {
             if !seen.insert((u.home.clone(), u.name)) {
                 let name = interner
@@ -90,5 +97,6 @@ pub fn link(
         unions,
         defs,
         imports_unsafe_submodule,
+        imported_web_capabilities,
     })
 }

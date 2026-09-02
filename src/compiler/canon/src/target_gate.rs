@@ -60,6 +60,7 @@ fn single_def_module(interner: &mut Interner, body_expr: Expr_) -> Module {
     };
     Module {
         imports_unsafe_submodule: false,
+        imported_web_capabilities: std::collections::BTreeSet::new(),
         name: main,
         unions: Vec::new(),
         defs: vec![def],

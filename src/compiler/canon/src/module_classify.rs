@@ -326,6 +326,7 @@ mod tests {
         ];
         let linked = Module {
             imports_unsafe_submodule: false,
+            imported_web_capabilities: std::collections::BTreeSet::new(),
             name: main.clone(),
             unions: Vec::new(),
             defs,
@@ -378,6 +379,7 @@ mod tests {
         ];
         let linked = Module {
             imports_unsafe_submodule: false,
+            imported_web_capabilities: std::collections::BTreeSet::new(),
             name: main.clone(),
             unions: Vec::new(),
             defs,
@@ -410,6 +412,7 @@ mod tests {
         ];
         let linked = Module {
             imports_unsafe_submodule: false,
+            imported_web_capabilities: std::collections::BTreeSet::new(),
             name: main.clone(),
             unions: Vec::new(),
             defs,
@@ -498,6 +501,7 @@ mod tests {
             ];
             let linked = Module {
                 imports_unsafe_submodule: false,
+                imported_web_capabilities: std::collections::BTreeSet::new(),
                 name: main.clone(),
                 unions: Vec::new(),
                 defs,

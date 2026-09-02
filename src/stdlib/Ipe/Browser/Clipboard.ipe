@@ -1,0 +1,41 @@
+-- | Ipe.Browser.Clipboard — write text to the system clipboard from the browser.
+--
+-- A thin wrapper over `Ipe.Js` ports: `write` builds an outbound `JsCmd` and
+-- hands it to `Js.send`, so the seal codec and the fail-closed port discipline
+-- back it byte-identically — there is no second transport. The reserved
+-- `Ipe.Browser.Clipboard` module path is the SSOT the compiler keys the
+-- `js-port:clipboard` disclosure off: any module that imports it discloses that
+-- specific web capability (import-derived, alias-immune), and only the top-level
+-- app's `[capabilities] accept` set can grant it.
+--
+-- This is the thin proof of the per-capability mechanism, not the full Clipboard
+-- API: it ships the outbound `write` path only. The high-level read path and a
+-- `Task`-shaped result over an inbound `Denied`/`Unavailable` seal are a tracked
+-- follow-up (the inbound `JsMsg` denial variants belong with that path).
+module Ipe.Browser.Clipboard exposing
+    ( JsCmd(..)
+    , write
+    )
+
+import Ipe.Js as Js
+
+
+-- | The one closed OUTBOUND port type this module publishes: the whole outbound
+-- surface as a single auditable object. `WriteText text` requests that the page's
+-- clipboard handler write `text` via `navigator.clipboard.writeText`.
+type JsCmd
+    = WriteText String
+
+
+-- | `write text` — request the browser write `text` to the system clipboard.
+--
+-- Outbound one-shot over the raw port transport: it builds the closed `WriteText`
+-- command and sends it. The served JS handler (SRI-pinned, the stdlib's, never a
+-- dependency's) reaches `navigator.clipboard.writeText`; a host permission denial
+-- traps to a typed inbound result on the follow-up read path, never a panic.
+--
+-- Importing this module discloses `js-port:clipboard`; the app must grant it with
+-- `accept = [ JsPort Clipboard ]` under [capabilities] in package.ipe.
+write : String -> Cmd msg
+write text =
+    Js.send (WriteText text)

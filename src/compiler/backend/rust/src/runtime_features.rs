@@ -556,6 +556,7 @@ mod tests {
         let main = interner.intern("Main").expect("intern Main");
         let prog = Program {
             imports_unsafe_submodule: false,
+            imported_web_capabilities: std::collections::BTreeSet::new(),
             modules: vec![ctx_module(main, configure)],
         };
         let backend = RustBackend::new(&interner);
@@ -575,6 +576,7 @@ mod tests {
         let main = interner.intern("Main").expect("intern Main");
         let prog = Program {
             imports_unsafe_submodule: false,
+            imported_web_capabilities: std::collections::BTreeSet::new(),
             modules: vec![ctx_module(main, configure)],
         };
         let backend = RustBackend::new(&interner)
@@ -753,6 +755,7 @@ mod tests {
         ] {
             let prog = Program {
                 imports_unsafe_submodule: false,
+                imported_web_capabilities: std::collections::BTreeSet::new(),
                 modules: vec![db_module(&mut interner, main)],
             };
             let backend = RustBackend::new(&interner).with_db_driver(driver);

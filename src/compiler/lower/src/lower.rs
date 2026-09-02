@@ -11688,6 +11688,13 @@ pub fn program_capabilities_scan(program: &Program) -> BTreeSet<Capability> {
     if program.imports_unsafe_submodule {
         usage.caps.insert(Capability::Unsafe);
     }
+    // Each disclosed web axis is import-derived too — a reserved `Ipe.Browser.<Api>`
+    // import (union-folded across every linked module), not a kernel visit. This is
+    // the specific `js-port:<axis>` axis; the raw `Js.send`/`Js.subscribe` kernels
+    // add the `:raw` floor separately through the kernel scan above.
+    for w in &program.imported_web_capabilities {
+        usage.caps.insert(Capability::JsPort(*w));
+    }
     usage.caps
 }
 
@@ -16858,6 +16865,11 @@ impl<'a> Lowerer<'a> {
             // now) and carried on the canonical module; the capability scan reads
             // it to disclose `unsafe`.
             imports_unsafe_submodule: self.m.imports_unsafe_submodule,
+            // Likewise import-derived and canon-computed: the web capabilities the
+            // program's reserved `Ipe.Browser.<Api>` imports disclosed, already
+            // union-folded across every linked module. The scan reads it to
+            // disclose each `js-port:<axis>`.
+            imported_web_capabilities: self.m.imported_web_capabilities.clone(),
         })
     }
 
@@ -30659,6 +30671,7 @@ mod tests {
         let arith_op = interner.intern("ArithOp").expect("intern");
         let module = canon::Module {
             imports_unsafe_submodule: false,
+            imported_web_capabilities: std::collections::BTreeSet::new(),
             name: vec![],
             unions: vec![],
             defs: vec![],
@@ -30939,6 +30952,7 @@ mod tests {
 
         let module = canon::Module {
             imports_unsafe_submodule: false,
+            imported_web_capabilities: std::collections::BTreeSet::new(),
             name: vec![],
             unions: vec![],
             defs: vec![],
@@ -31057,6 +31071,7 @@ mod tests {
         let builtins = build_test_builtin_ctors(&mut interner);
         let module = canon::Module {
             imports_unsafe_submodule: false,
+            imported_web_capabilities: std::collections::BTreeSet::new(),
             name: vec![],
             unions: vec![],
             defs: vec![],
@@ -31502,6 +31517,7 @@ mod tests {
         // a first-module-only shortcut would miss.
         let m = canon::Module {
             imports_unsafe_submodule: false,
+            imported_web_capabilities: std::collections::BTreeSet::new(),
             name: vec![main],
             unions: vec![],
             defs: vec![
@@ -32440,6 +32456,7 @@ mod tests {
 
         let module = ipe_canon::ast::Module {
             imports_unsafe_submodule: false,
+            imported_web_capabilities: std::collections::BTreeSet::new(),
             name: vec![],
             unions: vec![],
             defs: vec![],
@@ -32550,6 +32567,7 @@ mod tests {
         );
         let module = ipe_canon::ast::Module {
             imports_unsafe_submodule: false,
+            imported_web_capabilities: std::collections::BTreeSet::new(),
             name: vec![],
             unions: vec![],
             defs: vec![ipe_canon::ast::Def::Typed {
@@ -32713,6 +32731,7 @@ mod tests {
 
         let module = ipe_canon::ast::Module {
             imports_unsafe_submodule: false,
+            imported_web_capabilities: std::collections::BTreeSet::new(),
             name: vec![],
             unions: vec![],
             defs: vec![],

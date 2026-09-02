@@ -126,6 +126,7 @@ fn build_two_module(interner: &mut Interner) -> DResult<(Program, ModPath, ModPa
     Ok((
         Program {
             imports_unsafe_submodule: false,
+            imported_web_capabilities: std::collections::BTreeSet::new(),
             modules: vec![module],
         },
         lib_home,
@@ -170,6 +171,7 @@ fn build_two_module_db(interner: &mut Interner) -> DResult<(Program, ModPath, Mo
     Ok((
         Program {
             imports_unsafe_submodule: false,
+            imported_web_capabilities: std::collections::BTreeSet::new(),
             modules: vec![module],
         },
         lib_home,

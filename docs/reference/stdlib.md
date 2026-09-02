@@ -9,6 +9,7 @@ Each module listed below links to a detail page with the full documentation and 
 - [Analytics](#analytics)
 - [Basics](#basics)
 - [Bitwise](#bitwise)
+- [Browser.Clipboard](#browserclipboard)
 - [ByteSize](#bytesize)
 - [Bytes](#bytes)
 - [Cache](#cache)
@@ -153,6 +154,17 @@ Ipe.Bitwise — bitwise operations on `Int`.
 | `shiftLeftBy` | Arithmetic left shift.  `shiftLeftBy offset n` shifts `n` left by |
 | `shiftRightBy` | Arithmetic (sign-preserving) right shift. |
 | `shiftRightZfBy` | Zero-fill (logical) right shift: the sign bit is not replicated. |
+
+## Browser.Clipboard
+
+[Full reference](stdlib/Browser.Clipboard.md)
+
+Ipe.Browser.Clipboard — write text to the system clipboard from the browser.
+
+| Export | Summary |
+|--------|----------|
+| `JsCmd` | The one closed OUTBOUND port type this module publishes: the whole outbound |
+| `write` | `write text` — request the browser write `text` to the system clipboard. |
 
 ## ByteSize
 

@@ -52,6 +52,7 @@ use ipe_ir::{
 fn program(name: Symbol, funcs: Vec<Func>, entry: Option<FuncId>) -> Program {
     Program {
         imports_unsafe_submodule: false,
+        imported_web_capabilities: std::collections::BTreeSet::new(),
         modules: vec![Module {
             name: ModPath(vec![name]),
             types: vec![],

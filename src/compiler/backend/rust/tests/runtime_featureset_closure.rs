@@ -580,6 +580,7 @@ fn emitted_module_references(
 ) -> BTreeSet<String> {
     let prog = Program {
         imports_unsafe_submodule: false,
+        imported_web_capabilities: std::collections::BTreeSet::new(),
         modules: vec![module_for_mask(main, mask)],
     };
     let emitted = RustBackend::new(interner)
@@ -607,6 +608,7 @@ fn selected_features(
 ) -> Vec<&'static str> {
     let prog = Program {
         imports_unsafe_submodule: false,
+        imported_web_capabilities: std::collections::BTreeSet::new(),
         modules: vec![module_for_mask(main, mask)],
     };
     RustBackend::new(interner)
@@ -867,6 +869,7 @@ fn prelude_reference_gap_fails_closed() {
     // `ipe_runtime::auth::…`, and `mod auth` is gated on `feature = "jwt"`.
     let prog = Program {
         imports_unsafe_submodule: false,
+        imported_web_capabilities: std::collections::BTreeSet::new(),
         modules: vec![module_for_mask(main, 1 << 7)],
     };
     let backend = RustBackend::new(&interner);
@@ -931,6 +934,7 @@ fn ssot_selects_a_meaningful_subset_of_the_universe() {
     for bit in 0..FLAG_COUNT {
         let prog = Program {
             imports_unsafe_submodule: false,
+            imported_web_capabilities: std::collections::BTreeSet::new(),
             modules: vec![module_for_mask(main, 1 << bit)],
         };
         for f in RustBackend::new(&interner)
@@ -976,6 +980,7 @@ fn uses_locale_selects_locale_feature() {
     let main = interner.intern("Main").expect("intern Main");
     let prog = Program {
         imports_unsafe_submodule: false,
+        imported_web_capabilities: std::collections::BTreeSet::new(),
         modules: vec![Module {
             name: ModPath(vec![main]),
             types: vec![],
@@ -1042,6 +1047,7 @@ fn uses_email_selects_email_feature() {
     let main = interner.intern("Main").expect("intern Main");
     let prog = Program {
         imports_unsafe_submodule: false,
+        imported_web_capabilities: std::collections::BTreeSet::new(),
         modules: vec![Module {
             name: ModPath(vec![main]),
             types: vec![],
@@ -1160,6 +1166,7 @@ fn email_parse_address_only_cargo_builds() -> DResult<()> {
     // Module with uses_email: true (set by the lowerer upon seeing EmailAddressParse).
     let prog = Program {
         imports_unsafe_submodule: false,
+        imported_web_capabilities: std::collections::BTreeSet::new(),
         modules: vec![Module {
             name: ModPath(vec![main_mod]),
             types: vec![],

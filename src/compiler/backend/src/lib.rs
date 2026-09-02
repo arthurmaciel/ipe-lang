@@ -297,6 +297,7 @@ mod tests {
 
         let program = Program {
             imports_unsafe_submodule: false,
+            imported_web_capabilities: std::collections::BTreeSet::new(),
             modules: Vec::new(),
         };
         let emitted = backend.emit(&program);

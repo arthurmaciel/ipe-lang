@@ -45,6 +45,15 @@ pub struct Program {
     /// by the lowerer from the canonical module's `imports_unsafe_submodule`
     /// fact and read by `program_capabilities_scan`.
     pub imports_unsafe_submodule: bool,
+    /// The web capabilities the program disclosed by importing reserved
+    /// `Ipe.Browser.<Api>` submodules — an import-derived, whole-program fact
+    /// (not per module, not a kernel visit), union-folded across every linked
+    /// module by `ipe_canon::link` and threaded here by the lowerer. Read by
+    /// `program_capabilities_scan`, which inserts one `Capability::JsPort(w)` per
+    /// member so a browser import discloses its specific `js-port:<axis>` axis on
+    /// top of the raw kernel floor. Importing the module is the signal, regardless
+    /// of dead code.
+    pub imported_web_capabilities: BTreeSet<ipe_kernels::WebCapability>,
 }
 
 /// A single module: its declared types and functions, plus an optional entry
@@ -4653,6 +4662,7 @@ mod tests {
         };
         let program = Program {
             imports_unsafe_submodule: false,
+            imported_web_capabilities: std::collections::BTreeSet::new(),
             modules: vec![Module {
                 name: ModPath(vec![main_mod]),
                 types: vec![TypeDef::Enum(EnumDef {
@@ -5186,6 +5196,7 @@ mod serde_persistence_tests {
         };
         Ok(Program {
             imports_unsafe_submodule: false,
+            imported_web_capabilities: std::collections::BTreeSet::new(),
             modules: vec![Module {
                 name: ModPath(vec![main_mod]),
                 types: vec![TypeDef::Enum(EnumDef {
@@ -5279,6 +5290,7 @@ mod serde_persistence_tests {
         let interner = Arc::new(Mutex::new(plain));
         let program = Program {
             imports_unsafe_submodule: false,
+            imported_web_capabilities: std::collections::BTreeSet::new(),
             modules: vec![Module {
                 name: ModPath(vec![f]),
                 types: vec![],
