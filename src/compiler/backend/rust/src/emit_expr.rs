@@ -3021,8 +3021,15 @@ fn emit_tea_call(
         // ── Arity-2: tick subscriptions — standard path ──────────────────────────
         // `Sub.every : Int -> msg -> Sub msg` and
         // `Time.every : Int -> msg -> Sub msg`
-        // Both pass through the default N-arg emitter (no boxing needed).
-        KernelFn::SubEvery | KernelFn::TimeEvery => Ok(None),
+        // Under an armed TEA `subscriptions` body (`hot_appearance` on), a
+        // data-describable tick entry (a literal interval + a serde-encodable
+        // literal message) reduces to `sub_every_hot("<baked datum>")`, read by the
+        // ONE compiled sub-runner over the baked datum (dev == prod). Both spellings
+        // share the same [`emit_sub_arm`], so their tokens agree and the SEAL stays
+        // exact. Otherwise (flag off, not a subscriptions body, or a
+        // non-describable entry) it passes through the default N-arg emitter
+        // (`Ok(None)`), byte-identical to the flag-off form — no boxing needed.
+        KernelFn::SubEvery | KernelFn::TimeEvery => Ok(emit_sub_arm(ctx, *k, args)),
         // ── Arity-2: pub/sub subscription — standard path ────────────────────────
         // `Sub.subscribeTopic : String -> (any -> msg) -> Sub msg`
         // The runtime `sub_subscribe_topic` is in live/pubsub.rs (live-feature
@@ -6349,6 +6356,44 @@ pub fn emit_transition_arm(ctx: &EmitCtx, body: &Expr) -> DResult<Option<String>
     )))
 }
 
+/// Reduce a TEA `subscriptions` entry to a `sub_every_hot` call when the
+/// sub-description rewrite is armed (a TEA `subscriptions` body under
+/// `hot_appearance`) AND the entry is a data-describable tick source
+/// (`Time.every <lit> <msg>` / `Sub.every <lit> <msg>`). `None` otherwise — the
+/// caller emits the entry normally, byte-identically.
+///
+/// The emitted expression is `ipe_runtime::web::sub_every_hot::<Msg>("<baked datum
+/// JSON>")`: the compiled reader decodes and builds the baked datum (dev == prod),
+/// or a live replacement when the dev overlay holds. The baked JSON is
+/// [`crate::sub_classify::CompileSubDescription::to_json`], byte-identical to the
+/// runtime `SubDescription`'s serde form (pinned by the classifier's conformance
+/// test), so the reader round-trips it exactly. `Msg` is left to Rust inference
+/// (the `subscriptions` function's `Sub Msg` return type fixes it), so no type
+/// annotation is emitted.
+///
+/// The classifier is conservative: only a literal tick source with a
+/// serde-encodable literal message classifies; every other entry returns `None`
+/// and stays compiled. Fail-closed by construction — a false `None` is merely a
+/// recompile, never a wrong result.
+pub fn emit_sub_arm(ctx: &EmitCtx, kernel: KernelFn, args: &[Expr]) -> Option<String> {
+    if !ctx.subs_hot_active() {
+        return None;
+    }
+    // Resolve a variant symbol to its serde tag — the emitted Rust variant ident,
+    // which (no serde rename) is exactly the tag serde uses for the enum's
+    // externally-tagged form. `None` for an unresolved symbol refuses (never a
+    // guessed tag).
+    let resolve_variant = |sym: Symbol| ctx.emit_ident(sym).ok();
+    let cs = crate::sub_classify::sub_of_call(kernel, args, &resolve_variant)?;
+    // The baked datum, as a Rust string literal. `to_json` emits only the JSON
+    // grammar's own escapes; wrap it as a Rust string with the escapes a Rust
+    // string literal needs (`"` and `\`), so the literal is the exact JSON bytes
+    // the runtime decodes.
+    let json = cs.to_json();
+    let json_lit = rust_string_literal(&json);
+    Some(format!("ipe_runtime::web::sub_every_hot({json_lit})"))
+}
+
 /// Render `s` as a Rust double-quoted string literal: escape `\` and `"` (the
 /// two characters that would otherwise terminate or corrupt the literal). The
 /// JSON writer already escaped control characters as `\uXXXX` / `\n` etc., which
@@ -8581,6 +8626,14 @@ fn tea_update_model_param(func: &ipe_ir::Func) -> Option<Symbol> {
     func.params.last().map(|(sym, _)| *sym)
 }
 
+/// Whether `func` is a TEA `subscriptions` function — `Model -> Sub Msg`. The
+/// return type must be a `Sub` and the function must take at least one parameter
+/// (the Model). Used to arm the `subscriptions`-entry sub-description rewrite for
+/// this body; a non-subscriptions function is never sub-rewritten.
+const fn is_tea_subs_function(func: &ipe_ir::Func) -> bool {
+    matches!(&func.ret, IrType::Sub(_)) && !func.params.is_empty()
+}
+
 /// Emit a whole function item with the given visibility prefix (`"pub fn "` for
 /// the single-file layout, `"pub(crate) fn "` for a split `IpeModule` file where
 /// the item lives inside a `mod` block). The prefix is threaded through to
@@ -8588,6 +8641,12 @@ fn tea_update_model_param(func: &ipe_ir::Func) -> Option<Symbol> {
 /// measures against the prefix the emitted line actually carries — the
 /// `pub(crate)` form is seven columns wider than `pub`, so a borderline signature
 /// breaks under one and not the other.
+#[allow(
+    clippy::too_many_lines,
+    reason = "one linear emit pipeline (elision, wraps, per-function literal + transition + \
+              sub-description arming, body render, signature); splitting it would thread a dozen \
+              locals through helpers without clarifying the single straight-line flow"
+)]
 pub fn emit_func_vis(ctx: &EmitCtx, func: &Func, vis_prefix: &str) -> DResult<String> {
     let name = ctx.func_name(func.id)?.to_owned();
 
@@ -8715,6 +8774,8 @@ pub fn emit_func_vis(ctx: &EmitCtx, func: &Func, vis_prefix: &str) -> DResult<St
         None
     };
     let saved_transition = ctx.begin_transition_update(tea_update_param);
+    // Arm the sub-description rewrite for a TEA `subscriptions` body; inert off.
+    let saved_subs_hot = ctx.begin_subs_hot(ctx.hot_appearance && is_tea_subs_function(func));
     let body = if ipe_main_wrap_unit {
         // Wrap the synchronous body so ipe_main returns IpeTask<()>; the
         // body's own (unit) value is discarded, only its side effects matter.
@@ -8788,6 +8849,7 @@ pub fn emit_func_vis(ctx: &EmitCtx, func: &Func, vis_prefix: &str) -> DResult<St
     // The body (the only place a TEA `update`'s arms are emitted) is rendered;
     // disarm the transition rewrite so no sibling / nested function inherits it.
     ctx.end_transition_update(saved_transition);
+    ctx.end_subs_hot(saved_subs_hot);
 
     // Close the accumulator and, if any style literal hoisted, prepend the
     // per-view table binding. Its baked defaults are exactly the hoisted source

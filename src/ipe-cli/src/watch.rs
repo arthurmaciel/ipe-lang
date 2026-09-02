@@ -1270,14 +1270,17 @@ fn run_inner(
                                         &hot.msg_sets,
                                         opts.quiet,
                                     );
-                                    if views_ok && transitions_ok && msg_sets_ok {
+                                    let subs_ok =
+                                        push_sub_patches(opts.port, tok, &hot.subs, opts.quiet);
+                                    if views_ok && transitions_ok && msg_sets_ok && subs_ok {
                                         emit(
                                             opts,
                                             WatchEvent::AppearanceHotSwapped {
                                                 generation: g,
                                                 views: hot.views.len()
                                                     + hot.transitions.len()
-                                                    + hot.msg_sets.len(),
+                                                    + hot.msg_sets.len()
+                                                    + hot.subs.len(),
                                             },
                                         );
                                         post_watch_status(opts.port, tok, true, "");
@@ -1868,6 +1871,49 @@ fn push_msg_set_patches(
     true
 }
 
+/// POST every edited `subscriptions` entry's sub-description patch to the running
+/// app's `/_ipe/hot-subs` endpoint, authenticated with the same session control
+/// token as the appearance/transition channels. Returns `true` only if every patch
+/// was accepted (HTTP 200), so a caller can fall back to a full recompile on any
+/// miss. An empty patch list is a no-op success.
+fn push_sub_patches(
+    port: u16,
+    token: &str,
+    patches: &[crate::hot_classify::SubPatch],
+    quiet: bool,
+) -> bool {
+    for sp in patches {
+        let body = serde_json::json!({
+            "old_json": sp.old_json,
+            "new_json": sp.new_json,
+        })
+        .to_string();
+        if !matches!(post_hot_subs(port, token, &body), Ok(true)) {
+            if !quiet {
+                eprintln!(
+                    "{}",
+                    watch_line(
+                        "[ipe watch] subscription hot-swap push failed — falling back to a \
+                         full rebuild",
+                        WatchRole::Info
+                    )
+                );
+            }
+            return false;
+        }
+    }
+    if !quiet && !patches.is_empty() {
+        eprintln!(
+            "{}",
+            watch_line(
+                "[ipe watch] subscriptions edit hot-swapped (no rebuild)",
+                WatchRole::Info
+            )
+        );
+    }
+    true
+}
+
 /// Send one `POST /_ipe/hot-msg` to loopback `port`, returning `Ok(true)` on a
 /// `200 OK` status line. Same minimal blocking-request shape and timeouts as
 /// [`post_hot_transition`] — loopback + dev-only, so no client crate needed.
@@ -1883,6 +1929,41 @@ fn post_hot_msg(port: u16, token: &str, body: &str) -> std::io::Result<bool> {
     stream.set_write_timeout(Some(Duration::from_millis(1500)))?;
     let req = format!(
         "POST /_ipe/hot-msg HTTP/1.1\r\n\
+         Host: 127.0.0.1:{port}\r\n\
+         X-Ipe-Hot-Token: {token}\r\n\
+         Content-Type: application/json\r\n\
+         Content-Length: {len}\r\n\
+         Connection: close\r\n\r\n{body}",
+        len = body.len(),
+    );
+    stream.write_all(req.as_bytes())?;
+    stream.flush()?;
+    let mut resp = Vec::new();
+    let mut chunk = [0u8; 256];
+    if let Ok(n) = stream.read(&mut chunk)
+        && let Some(head) = chunk.get(..n)
+    {
+        resp.extend_from_slice(head);
+    }
+    let head = String::from_utf8_lossy(&resp);
+    Ok(head.starts_with("HTTP/1.1 200"))
+}
+
+/// Send one `POST /_ipe/hot-subs` to loopback `port`, returning `Ok(true)` on a
+/// `200 OK` status line. Same minimal blocking-request shape and timeouts as
+/// [`post_hot_transition`] — loopback + dev-only, so no client crate needed.
+///
+/// # Errors
+/// An I/O error if the connection cannot be made or the exchange fails.
+fn post_hot_subs(port: u16, token: &str, body: &str) -> std::io::Result<bool> {
+    use std::io::{Read as _, Write as _};
+    use std::net::TcpStream;
+    let addr = std::net::SocketAddr::from((std::net::Ipv4Addr::LOCALHOST, port));
+    let mut stream = TcpStream::connect_timeout(&addr, Duration::from_millis(500))?;
+    stream.set_read_timeout(Some(Duration::from_millis(1500)))?;
+    stream.set_write_timeout(Some(Duration::from_millis(1500)))?;
+    let req = format!(
+        "POST /_ipe/hot-subs HTTP/1.1\r\n\
          Host: 127.0.0.1:{port}\r\n\
          X-Ipe-Hot-Token: {token}\r\n\
          Content-Type: application/json\r\n\
