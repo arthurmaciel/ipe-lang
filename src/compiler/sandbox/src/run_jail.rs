@@ -1163,6 +1163,50 @@ pub fn probe_run_jail_tools(wants_wall_clock: bool) -> Result<RunJailTools, RunJ
     })
 }
 
+/// Return `true` when bwrap can successfully establish a `--unshare-net`
+/// namespace on this host.
+///
+/// Unprivileged user namespaces on some Linux configurations (notably GitHub
+/// Actions runners) cannot configure loopback inside a net namespace — bwrap
+/// auto-runs `RTM_NEWADDR` to bring up 127.0.0.1 and the kernel rejects it
+/// with `EPERM`, killing bwrap before any payload executes. Callers that
+/// require `--unshare-net` should call this first and skip (not fail) when it
+/// returns `false`.
+///
+/// This is a capability check, not an isolation bypass: the `--unshare-net`
+/// flag itself is never removed from the real jail argv; the result only
+/// determines whether the host can even start the jail.
+#[cfg(all(
+    target_os = "linux",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
+#[must_use]
+pub fn netns_jail_available(bwrap: &std::path::Path) -> bool {
+    // Run bwrap with the minimal net-isolation flags, wrapping /bin/true.
+    // Exit 0 → the netns came up cleanly. Any non-zero (including the
+    // "loopback: Failed RTM_NEWADDR: Operation not permitted" bwrap error)
+    // → the netns jail cannot be established on this host.
+    std::process::Command::new(bwrap)
+        .args(["--unshare-net", "--ro-bind", "/", "/", "--", "/bin/true"])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .is_ok_and(|s| s.success())
+}
+
+/// On non-Linux targets bwrap is not the jail mechanism, so there is no
+/// `--unshare-net` netns to probe; return `false` so callers skip the
+/// bwrap-netns-dependent tests unconditionally off Linux.
+#[cfg(not(all(
+    target_os = "linux",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+)))]
+#[must_use]
+pub fn netns_jail_available(_bwrap: &std::path::Path) -> bool {
+    false
+}
+
 /// macOS: probe for `sandbox-exec`, the run jail's only primitive.
 ///
 /// The `bwrap`/`prlimit` tools the Linux jail needs do not apply. The macOS

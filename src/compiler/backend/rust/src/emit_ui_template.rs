@@ -3,34 +3,60 @@
 //! runtime materializes at render — the `Ipe.Ui` analogue of
 //! [`crate::emit_template`].
 //!
-//! A subtree is TEMPLATABLE iff it is built entirely from the literal `Ipe.Ui`
-//! element node kernels (`UiNode` / `UiTaggedNode` / `UiText` / `UiNone`) over
-//! literal arguments, an inert (non-logic, non-`Color`, non-`Float`) attribute
-//! set, and a static role `Description`. Any `Model` read ([`Expr::Var`] /
-//! [`Expr::Access`]), control flow ([`Expr::If`] / [`Expr::Match`]), event
-//! handler, embedded raw HTML (`Ui.html`), record-config builder
-//! (`Ui.button` / `Ui.link` / `Ui.image`), or non-literal argument anywhere in
-//! the subtree fails the match, so an unprovable subtree stays compiled — the
+//! A subtree is TEMPLATABLE (pure mode, [`ui_template_of_expr`]) iff it is built
+//! entirely from the literal `Ipe.Ui` element node kernels (`UiNode` /
+//! `UiTaggedNode` / `UiText` / `UiNone`) over literal arguments, an inert
+//! attribute set, and a static role `Description`. Any `Model` read
+//! ([`Expr::Var`] / [`Expr::Access`]), control flow ([`Expr::If`] /
+//! [`Expr::Match`]), event handler, embedded raw HTML (`Ui.html`), record-config
+//! builder (`Ui.button` / `Ui.link` / `Ui.image`), or non-literal argument
+//! anywhere fails the match, so an unprovable subtree stays compiled — the
 //! recompile path, conservative by construction.
+//!
+//! ## Holes ([`ui_template_of_expr_holes`])
+//!
+//! The hole-bearing partition admits a mostly-static subtree with `Model`-derived
+//! **holes**, each replaced by a numbered marker plus a compiled fill:
+//! - a `Model`-derived value leaf (`Ui.text (…model…)`) or control-flow
+//!   ([`Expr::If`] / [`Expr::Match`]) in element position → a single
+//!   [`CompileUiTemplate::Hole`] + an [`HoleKind::Element`] fill;
+//! - a `List.map` comprehension in children-list position →
+//!   [`CompileUiTemplate::ChildrenHole`] + an [`HoleKind::Children`] fill.
+//!
+//! Everything else stays as conservative as pure mode: a handler, raw markup, a
+//! record-config builder, or a non-literal attribute still refuses the whole
+//! subtree — a hole never covers a handler (that is the deferred, guardian-gated
+//! increment). Hole indices are numbered per-KIND so the emit's two ordered fill
+//! vecs land each fill where its marker names it.
 //!
 //! ## Conservative attribute scope
 //!
-//! The accepted attribute set is deliberately narrower than the runtime
-//! [`ipe_runtime::ui::template::UiTemplate`] supports: only integer / string /
-//! marker attributes and integer-valued `Length`s templatize. `Color`- and
-//! `Float`-bearing attributes (`Font.color`, `Background.color`, shadows, the
-//! `rgba` alpha, letter/word spacing, aspect ratio) refuse and stay compiled —
-//! reproducing `serde_json`'s exact float spelling in the baked JSON without a
-//! float serializer would risk a baked default that fails to decode
-//! byte-identically. Refusing is always safe: a refused attribute recompiles.
-//! The runtime datum carries the full set, so widening the compiler accept set
-//! needs no runtime change.
+//! The accepted attribute set covers the integer / string / marker attributes and
+//! integer-valued `Length`s, plus the single-`Color` and single-`Float`
+//! attributes: `Font.color` / `Background.color` / `Border.color` (each over a
+//! literal `Ui.rgb` / `Ui.rgba` / `Ui.white` / `Ui.black` / `Ui.transparent`
+//! color), and `Font.letterSpacing` / `Font.wordSpacing` (over a `Float`
+//! literal). The float spelling in the baked JSON is produced by `ryu`
+//! ([`push_f64`]) — the exact formatter `serde_json`'s `write_f64` uses — so it is
+//! byte-identical to the runtime's serde form, single source of truth with no
+//! hand-rolled float formatter to drift.
+//!
+//! Still refused (always safe — a refused attribute recompiles): the shadow
+//! record attributes (`Border.shadow` / `Border.innerShadow`, whose
+//! `{offsetX, offsetY, blur, spread, color}` record arg is a distinct reduction
+//! shape), aspect ratio, gradients, a `Model`-derived color/float, and any
+//! non-literal argument. The runtime datum carries the full set, so widening the
+//! compiler accept set further needs no runtime change.
 //!
 //! ## Inert by construction
 //!
-//! A [`CompileUiTemplate`] carries only tag / attribute / text `String`s and
-//! `i64`s — it has no handler and no raw-markup variant, mirroring the runtime
-//! `UiTemplate`. Its JSON ([`CompileUiTemplate::to_json`]) is byte-identical to
+//! A [`CompileUiTemplate`] carries only tag / attribute / text `String`s, `i64`s,
+//! `f64` style values, and hole INDICES (`usize`) — it has no handler and no
+//! raw-markup variant, mirroring the runtime `UiTemplate`. A hole is an inert
+//! index, never logic: the `Model`-derived value it stands for is compiled
+//! separately and passed to the materializer, so no template datum — however
+//! patched — can smuggle a `Msg`, a handler, or unescaped markup. Its JSON
+//! ([`CompileUiTemplate::to_json`]) is byte-identical to
 //! the runtime `UiTemplate`'s serde form (pinned by a test), so the emitted
 //! baked default decodes back into exactly the tree it described and
 //! materializes byte-identically to the direct inline emit — dev == prod.
@@ -91,6 +117,33 @@ impl CompileUiDesc {
     }
 }
 
+/// A `Color` reduced to inert data — the single `Rgba` shape. Mirrors the runtime
+/// `ipe_runtime::ui::template::UiColor` field-for-field. The alpha channel is a
+/// `Float`; it serializes through `serde_json` ([`push_f64`]) so the baked JSON is
+/// byte-identical to the runtime's `#[derive(Serialize)]` form (single source of
+/// truth for the float spelling — no hand-rolled float formatter to drift).
+#[derive(Clone, Debug, PartialEq)]
+pub struct CompileUiColor {
+    pub r: i64,
+    pub g: i64,
+    pub b: i64,
+    pub a: f64,
+}
+
+impl CompileUiColor {
+    fn write_json(&self, out: &mut String) {
+        out.push_str("{\"r\":");
+        push_i64(self.r, out);
+        out.push_str(",\"g\":");
+        push_i64(self.g, out);
+        out.push_str(",\"b\":");
+        push_i64(self.b, out);
+        out.push_str(",\"a\":");
+        push_f64(self.a, out);
+        out.push('}');
+    }
+}
+
 /// A `Length` reduced to inert data — integer-valued shapes only. Mirrors the
 /// runtime `UiLength`; the `Min` / `Max` recursive shapes carry an inner length.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -118,10 +171,14 @@ impl CompileUiLength {
     }
 }
 
-/// An inert, static `Ipe.Ui` attribute — the integer / string / marker subset of
-/// the runtime `UiTemplateAttr`. Each variant serializes to the same JSON the
-/// runtime `UiTemplateAttr` decodes.
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// An inert, static `Ipe.Ui` attribute — the integer / string / marker / color /
+/// float subset of the runtime `UiTemplateAttr`. Each variant serializes to the
+/// same JSON the runtime `UiTemplateAttr` decodes.
+///
+/// `Eq` is deliberately absent: the color and letter/word-spacing variants carry a
+/// `Float`, which is not `Eq`. `PartialEq` (structural, including the float bits)
+/// is enough for the byte-identity pins and the classifier's value diff.
+#[derive(Clone, Debug, PartialEq)]
 pub enum CompileUiAttr {
     Width(CompileUiLength),
     Height(CompileUiLength),
@@ -139,9 +196,14 @@ pub enum CompileUiAttr {
     FontUnderline,
     FontDecoration(&'static str),
     FontAlign(&'static str),
+    FontColor(CompileUiColor),
+    FontLetterSpacing(f64),
+    FontWordSpacing(f64),
+    BgColor(CompileUiColor),
     BorderWidth(i64),
     BorderRounded(i64),
     BorderStyle(&'static str),
+    BorderColor(CompileUiColor),
     Pointer,
     Overflow(&'static str, &'static str),
 }
@@ -187,9 +249,14 @@ impl CompileUiAttr {
             Self::FontUnderline => out.push_str("\"FontUnderline\""),
             Self::FontDecoration(v) => tagged_enum_static_str("FontDecoration", v, out),
             Self::FontAlign(v) => tagged_enum_static_str("FontAlign", v, out),
+            Self::FontColor(c) => tagged_color("FontColor", c, out),
+            Self::FontLetterSpacing(v) => tagged_f64("FontLetterSpacing", *v, out),
+            Self::FontWordSpacing(v) => tagged_f64("FontWordSpacing", *v, out),
+            Self::BgColor(c) => tagged_color("BgColor", c, out),
             Self::BorderWidth(n) => tagged_i64("BorderWidth", *n, out),
             Self::BorderRounded(n) => tagged_i64("BorderRounded", *n, out),
             Self::BorderStyle(v) => tagged_enum_static_str("BorderStyle", v, out),
+            Self::BorderColor(c) => tagged_color("BorderColor", c, out),
             Self::Pointer => out.push_str("\"Pointer\""),
             Self::Overflow(x, y) => {
                 out.push_str("{\"Overflow\":[");
@@ -206,10 +273,20 @@ impl CompileUiAttr {
 /// `UiTemplate`: there is deliberately no `Raw`, no `Cells`, and no
 /// handler-bearing attribute variant — that absence is the security guarantee,
 /// enforced by the type (make-invalid-states-unrepresentable).
-#[derive(Clone, Debug, PartialEq, Eq)]
+///
+/// `Eq` is absent (an attribute may carry a `Float` alpha, which is not `Eq`),
+/// matching the runtime `UiTemplate`; `PartialEq` is enough for the pins.
+#[derive(Clone, Debug, PartialEq)]
 pub enum CompileUiTemplate {
     Empty,
     Text(String),
+    /// A single-element hole (index into the per-render element-fill slice): a
+    /// `Model`-derived value leaf or a control-flow (`if` / `case`) result. Inert
+    /// — carries only an index; the fill is compiled separately.
+    Hole(usize),
+    /// A children hole (index into the per-render children-fill slice): a
+    /// `List.map` comprehension expanding to a run of sibling elements.
+    ChildrenHole(usize),
     Node {
         desc: CompileUiDesc,
         attrs: Vec<CompileUiAttr>,
@@ -237,6 +314,8 @@ impl CompileUiTemplate {
         match self {
             Self::Empty => out.push_str("\"Empty\""),
             Self::Text(s) => tagged_string("Text", s, out),
+            Self::Hole(n) => tagged_usize("Hole", *n, out),
+            Self::ChildrenHole(n) => tagged_usize("ChildrenHole", *n, out),
             Self::Node {
                 desc,
                 attrs,
@@ -294,11 +373,61 @@ fn push_i64(n: i64, out: &mut String) {
     let _ = write!(out, "{n}");
 }
 
+/// Append `f`'s JSON spelling exactly as the runtime's `#[derive(Serialize)]`
+/// would — `serde_json`'s `write_f64` formats an `f64` with
+/// `ryu::Buffer::format_finite`, so using `ryu` here yields byte-identical output
+/// (single source of truth; no hand-rolled float formatter to drift from
+/// `serde_json`'s shortest-round-trip form).
+///
+/// A non-finite `f64` (`NaN` / `±∞`) has no JSON number form and `format_finite`
+/// is documented only for finite inputs. The partition reaches this only with a
+/// finite literal (the classifier refuses any non-literal), and a source `Float`
+/// literal is always finite — so the non-finite arm is unreachable in practice;
+/// it emits `0.0` (a finite, decodable value) rather than an undecodable token, so
+/// even a future non-finite path fails closed to a valid template.
+fn push_f64(f: f64, out: &mut String) {
+    if f.is_finite() {
+        let mut buf = ryu::Buffer::new();
+        out.push_str(buf.format_finite(f));
+    } else {
+        out.push_str("0.0");
+    }
+}
+
+fn tagged_f64(tag: &str, f: f64, out: &mut String) {
+    out.push_str("{\"");
+    out.push_str(tag);
+    out.push_str("\":");
+    push_f64(f, out);
+    out.push('}');
+}
+
+/// `{"<tag>":{"r":R,"g":G,"b":B,"a":A}}` — the runtime `UiColor` struct form.
+fn tagged_color(tag: &str, c: &CompileUiColor, out: &mut String) {
+    out.push_str("{\"");
+    out.push_str(tag);
+    out.push_str("\":");
+    c.write_json(out);
+    out.push('}');
+}
+
 fn tagged_i64(tag: &str, n: i64, out: &mut String) {
     out.push_str("{\"");
     out.push_str(tag);
     out.push_str("\":");
     push_i64(n, out);
+    out.push('}');
+}
+
+/// A single-newtype variant carrying a `usize` (a hole index). `serde_json`
+/// renders a `usize` as its plain decimal — the same spelling the runtime
+/// `UiTemplate::Hole(usize)` serde form decodes.
+fn tagged_usize(tag: &str, n: usize, out: &mut String) {
+    use std::fmt::Write as _;
+    out.push_str("{\"");
+    out.push_str(tag);
+    out.push_str("\":");
+    let _ = write!(out, "{n}");
     out.push('}');
 }
 
@@ -357,24 +486,96 @@ fn tagged_enum_static_str(tag: &str, s: &str, out: &mut String) {
 /// `substitute_wrapper` replaces each param with the call-site argument.
 pub type WrapperBody = (Vec<Symbol>, Expr);
 
-/// Reduce a static `Ipe.Ui` `view` subtree to a [`CompileUiTemplate`], or `None`
-/// when the subtree is not provably static — the caller then keeps it compiled.
+/// One recognized hole and the `Model`-derived expression that fills it, in
+/// index order. The emit compiles each `expr` in the surrounding element/child
+/// position and passes the results to the runtime materializer, which splices
+/// them at the matching `Hole` / `ChildrenHole` marker.
+#[derive(Clone, Debug, PartialEq)]
+pub struct HoleFill {
+    /// The kind of runtime hole this fill supplies.
+    pub kind: HoleKind,
+    /// The original `Model`-derived expression, emitted by the caller in the
+    /// hole's position (an `Element<M>` for a single hole, a `Vec<Element<M>>`
+    /// for a children hole).
+    pub expr: Expr,
+}
+
+/// Which runtime fill slice a [`HoleFill`] feeds.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HoleKind {
+    /// One `Element<M>` in a single position (a value leaf or a control-flow
+    /// result) — a [`CompileUiTemplate::Hole`].
+    Element,
+    /// A run of `Element<M>` spliced among a node's children (a `List.map`
+    /// comprehension) — a [`CompileUiTemplate::ChildrenHole`].
+    Children,
+}
+
+/// The result of a hole-bearing partition: the (inert) template skeleton with
+/// numbered hole markers, plus the compiled fills in index order.
+#[derive(Clone, Debug, PartialEq)]
+pub struct HolePartition {
+    pub template: CompileUiTemplate,
+    pub holes: Vec<HoleFill>,
+}
+
+/// The hole accumulator threaded through the partition recursion. `None` = pure
+/// mode: holes are disallowed, so a non-static sub-expression refuses (`None`),
+/// exactly the shipped behaviour. `Some` = hole mode: a `Model`-derived leaf,
+/// control-flow, or `List.map` in a hole-legal position is recorded and replaced
+/// by a numbered marker instead of refusing.
+type Holes<'a> = Option<&'a mut Vec<HoleFill>>;
+
+/// Reduce a static `Ipe.Ui` `view` subtree to a [`CompileUiTemplate`] with NO
+/// holes admitted (pure mode), or `None` when it is not provably fully static — a
+/// `Model` read, control flow, or non-literal anywhere refuses. This is the
+/// shipped, fully-static path; [`ui_template_of_expr_holes`] is the superset that
+/// also admits `Model`-derived holes.
 ///
 /// `wrappers` maps each recognized `Ipe.Ui` structural-wrapper [`FuncId`] to its
 /// parameter list and lowered body. When `None`, wrapper resolution is skipped
 /// (pure kernel path). A `Callee::Func` whose id is absent from `wrappers` falls
 /// through to recompile — conservative, never a mis-hoist.
+///
+/// Test-only: the production emit uses [`ui_template_of_expr_holes`] and treats an
+/// empty hole set as the pure case, so this convenience entry is exercised only by
+/// the partition's own unit tests.
+#[cfg(test)]
 pub fn ui_template_of_expr(
     expr: &Expr,
     wrappers: Option<&BTreeMap<FuncId, WrapperBody>>,
 ) -> Option<CompileUiTemplate> {
-    ui_template_of_expr_at(expr, wrappers, 0)
+    ui_template_of_expr_at(expr, wrappers, 0, &mut None)
+}
+
+/// Reduce a mostly-static `Ipe.Ui` `view` subtree to a template skeleton plus its
+/// hole fills, or `None` when the subtree is not templatable even with holes.
+///
+/// A hole is admitted only in a hole-legal position and only for a shape the emit
+/// can compile back byte-identically:
+/// - a `Model`-derived value leaf or control-flow (`if` / `case`) in element
+///   position → a single [`CompileUiTemplate::Hole`];
+/// - a `List.map` comprehension in children-list position →
+///   [`CompileUiTemplate::ChildrenHole`].
+///
+/// Everything else stays exactly as conservative as the pure path: a handler, raw
+/// markup, a non-literal attribute, or an unrecognised callee still refuses the
+/// whole subtree. A subtree with no holes yields an empty `holes` vec and the same
+/// template the pure path would.
+pub fn ui_template_of_expr_holes(
+    expr: &Expr,
+    wrappers: Option<&BTreeMap<FuncId, WrapperBody>>,
+) -> Option<HolePartition> {
+    let mut holes = Vec::new();
+    let template = ui_template_of_expr_at(expr, wrappers, 0, &mut Some(&mut holes))?;
+    Some(HolePartition { template, holes })
 }
 
 fn ui_template_of_expr_at(
     expr: &Expr,
     wrappers: Option<&BTreeMap<FuncId, WrapperBody>>,
     depth: usize,
+    holes: &mut Holes,
 ) -> Option<CompileUiTemplate> {
     if depth >= MAX_UI_TEMPLATE_DEPTH {
         return None;
@@ -385,7 +586,14 @@ fn ui_template_of_expr_at(
     // recurse. Since wrapper bodies are one-level, the chain terminates quickly.
     if let Expr::Let { name, value, body } = expr {
         let reduced = subst_expr(body, &[*name], &[*value.clone()]);
-        return ui_template_of_expr_at(&reduced, wrappers, depth);
+        return ui_template_of_expr_at(&reduced, wrappers, depth, holes);
+    }
+    // In hole mode, an element-position control-flow (`if` / `case`) over the
+    // Model is a single element hole: the whole conditional is compiled and its
+    // result spliced. In pure mode `holes` is `None`, so this is skipped and the
+    // non-Call expression refuses below — the shipped behaviour.
+    if matches!(expr, Expr::If { .. } | Expr::Match(_)) {
+        return push_element_hole(expr, holes);
     }
     let Expr::Call { callee, args, .. } = expr else {
         return None;
@@ -401,7 +609,7 @@ fn ui_template_of_expr_at(
     if let Callee::Func(id) = callee {
         if let Some((params, body)) = wrappers.and_then(|m| m.get(id)) {
             let inlined = substitute_wrapper(body, params, args);
-            return ui_template_of_expr_at(&inlined, wrappers, depth);
+            return ui_template_of_expr_at(&inlined, wrappers, depth, holes);
         }
         // An unrecognised `Callee::Func` (not a known structural wrapper) stays
         // compiled — never a mis-hoist.
@@ -426,6 +634,10 @@ fn ui_template_of_expr_at(
         },
         KernelFn::UiText => match args.as_slice() {
             [Expr::Str(s)] => Some(CompileUiTemplate::Text(s.clone())),
+            // `Ui.text <Model-derived string>` — in hole mode the whole text
+            // node is a single element hole (the compiled `Ui.text (…)` result is
+            // spliced); in pure mode `push_element_hole` refuses (`holes` None).
+            [_] => push_element_hole(expr, holes),
             _ => None,
         },
         // `ui_node_(desc, attrs, children)`.
@@ -433,7 +645,7 @@ fn ui_template_of_expr_at(
             [desc, attrs, children] => Some(CompileUiTemplate::Node {
                 desc: static_desc(desc)?,
                 attrs: static_attrs(attrs)?,
-                children: static_children(children, wrappers, depth)?,
+                children: static_children(children, wrappers, depth, holes)?,
             }),
             _ => None,
         },
@@ -443,15 +655,53 @@ fn ui_template_of_expr_at(
                 tag: tag.clone(),
                 desc: static_desc(desc)?,
                 attrs: static_attrs(attrs)?,
-                children: static_children(children, wrappers, depth)?,
+                children: static_children(children, wrappers, depth, holes)?,
             }),
             _ => None,
         },
-        // Every other kernel — a raw / record-config / nearby / widget element,
-        // an attribute or value builder, or a non-UI call — is not a static
-        // `Ipe.Ui` element node. Refuse, keep compiled.
+        // Every other element-producing kernel that ISN'T a handler / raw / config
+        // shape — refuse in pure mode, but in hole mode a `Model`-derived element
+        // producer is a single element hole IF it is a safe, inert element value
+        // (no handler variant reachable). Conservative: only the explicitly
+        // hole-eligible producers below are admitted; everything else refuses.
         _ => None,
     }
+}
+
+/// Record `expr` as an element hole and return its numbered marker, or `None` in
+/// pure mode (`holes` is `None`) — where a `Model`-derived element simply refuses,
+/// exactly the shipped behaviour.
+///
+/// The marker index is per-KIND (the count of element holes already recorded),
+/// because the runtime materializer indexes the element-fill slice and the
+/// children-fill slice separately. So the emit that splits the combined hole list
+/// back into two ordered vecs lands each fill at the index its marker names.
+///
+/// An element hole is only admitted when `expr` is provably a safe, inert
+/// `Element`-producing shape the emit can compile: an `if` / `case`, or a
+/// `Ui.text` over a non-literal. A handler-bearing or raw-markup producer is NOT
+/// admitted here (those never reach this helper — the kernel match refuses them
+/// before it), so a hole can never smuggle logic or unescaped markup.
+fn push_element_hole(expr: &Expr, holes: &mut Holes) -> Option<CompileUiTemplate> {
+    let acc = holes.as_mut()?;
+    let idx = acc.iter().filter(|h| h.kind == HoleKind::Element).count();
+    acc.push(HoleFill {
+        kind: HoleKind::Element,
+        expr: expr.clone(),
+    });
+    Some(CompileUiTemplate::Hole(idx))
+}
+
+/// Record `expr` as a children hole (a `List.map` run) and return its per-kind
+/// numbered marker, or `None` in pure mode.
+fn push_children_hole(expr: &Expr, holes: &mut Holes) -> Option<CompileUiTemplate> {
+    let acc = holes.as_mut()?;
+    let idx = acc.iter().filter(|h| h.kind == HoleKind::Children).count();
+    acc.push(HoleFill {
+        kind: HoleKind::Children,
+        expr: expr.clone(),
+    });
+    Some(CompileUiTemplate::ChildrenHole(idx))
 }
 
 /// Substitute call-site `args` for `params` in `body` — a minimal positional
@@ -523,24 +773,59 @@ fn subst_expr(expr: &Expr, params: &[Symbol], args: &[Expr]) -> Expr {
     }
 }
 
-/// Reduce a literal list of child `Ipe.Ui` nodes to templates, or `None`.
+/// Reduce a child `Ipe.Ui` node list to templates (plus any holes), or `None`.
+///
+/// Two shapes reach here:
+/// - a literal `Expr::List` of child elements — each item is recursed (a
+///   `Model`-derived value leaf or control-flow item becomes an element hole in
+///   hole mode; a `List.map` item becomes a children hole);
+/// - the whole children expr being a single `List.map` comprehension (the common
+///   `column [] (List.map itemView model.items)` shape) — one children hole for
+///   the entire run.
+///
+/// In pure mode (`holes` is `None`) both hole paths refuse, leaving the shipped
+/// static-only behaviour: only a literal list of provably-static children reduces.
 fn static_children(
     children: &Expr,
     wrappers: Option<&BTreeMap<FuncId, WrapperBody>>,
     depth: usize,
+    holes: &mut Holes,
 ) -> Option<Vec<CompileUiTemplate>> {
+    // The whole children list is a `List.map` comprehension → one children hole.
+    if is_list_map_call(children) {
+        return Some(vec![push_children_hole(children, holes)?]);
+    }
     let Expr::List { items, .. } = children else {
         return None;
     };
     let mut out = Vec::with_capacity(items.len());
     for item in items {
-        out.push(ui_template_of_expr_at(
-            item,
-            wrappers,
-            depth.saturating_add(1),
-        )?);
+        // A `List.map` appearing as a list item still splices a run of children.
+        if is_list_map_call(item) {
+            out.push(push_children_hole(item, holes)?);
+        } else {
+            out.push(ui_template_of_expr_at(
+                item,
+                wrappers,
+                depth.saturating_add(1),
+                holes,
+            )?);
+        }
     }
     Some(out)
+}
+
+/// Is `expr` a `List.map f xs` call? The comprehension shape a children hole
+/// splices. Only the direct `List.map` kernel qualifies — a user helper aliasing
+/// it (a `Callee::Func`) stays conservative and refuses (recompiles).
+const fn is_list_map_call(expr: &Expr) -> bool {
+    matches!(
+        expr,
+        Expr::Call {
+            callee: Callee::Kernel(KernelFn::ListMap),
+            ..
+        }
+    )
 }
 
 /// Reduce a literal list of `Ipe.Ui` attributes to inert data, or `None` when
@@ -673,10 +958,19 @@ fn static_attr(attr: &Expr) -> Option<CompileUiAttr> {
         (KernelFn::RegionAnnounceUrgently, []) => {
             Some(CompileUiAttr::Describe(CompileUiDesc::DescLiveAssertive))
         }
-        // Every other attribute kernel — a handler, a `Color`/`Float`-bearing
-        // attribute (deferred), a pseudo-rule, a nearby overlay, the debug
-        // outline, or an unrecognised one — is not an accepted inert attribute.
-        // Refuse: keep the subtree compiled.
+        // ── single-`Color` attributes over a literal color ────────────────
+        (KernelFn::FontColor, [c]) => Some(CompileUiAttr::FontColor(static_color(c)?)),
+        (KernelFn::BackgroundColor, [c]) => Some(CompileUiAttr::BgColor(static_color(c)?)),
+        (KernelFn::BorderColor, [c]) => Some(CompileUiAttr::BorderColor(static_color(c)?)),
+        // ── single-`Float` attributes over a literal ──────────────────────
+        (KernelFn::FontLetterSpacing, [Expr::Float(v)]) => {
+            Some(CompileUiAttr::FontLetterSpacing(*v))
+        }
+        (KernelFn::FontWordSpacing, [Expr::Float(v)]) => Some(CompileUiAttr::FontWordSpacing(*v)),
+        // Every other attribute kernel — a handler, a shadow record, an
+        // aspect-ratio / gradient, a `Model`-derived color/float, a pseudo-rule, a
+        // nearby overlay, the debug outline, or an unrecognised one — is not an
+        // accepted inert attribute. Refuse: keep the subtree compiled.
         _ => None,
     }
 }
@@ -704,6 +998,65 @@ fn static_length(expr: &Expr) -> Option<CompileUiLength> {
         (KernelFn::UiMaximum, [Expr::Int(n), inner]) => {
             Some(CompileUiLength::Max(*n, Box::new(static_length(inner)?)))
         }
+        _ => None,
+    }
+}
+
+/// Reduce a `Color`-producing kernel call over literal arguments to inert data,
+/// or `None`. Only the literal color builders templatize; a `Model`-derived color
+/// (a `Var` / `Access`) or a non-literal channel refuses and keeps the subtree
+/// compiled. The alpha of `Ui.rgb` / the named colors matches the runtime helper
+/// bodies (`ui_rgb_` → `a = 1.0`, `ui_transparent_` → `a = 0.0`).
+fn static_color(expr: &Expr) -> Option<CompileUiColor> {
+    let Expr::Call { callee, args, .. } = expr else {
+        return None;
+    };
+    let Callee::Kernel(k) = callee else {
+        return None;
+    };
+    match (k, args.as_slice()) {
+        (KernelFn::UiRgb, [Expr::Int(red), Expr::Int(green), Expr::Int(blue)]) => {
+            Some(CompileUiColor {
+                r: *red,
+                g: *green,
+                b: *blue,
+                a: 1.0,
+            })
+        }
+        (
+            KernelFn::UiRgba,
+            [
+                Expr::Int(red),
+                Expr::Int(green),
+                Expr::Int(blue),
+                Expr::Float(alpha),
+            ],
+        ) => Some(CompileUiColor {
+            r: *red,
+            g: *green,
+            b: *blue,
+            a: *alpha,
+        }),
+        (KernelFn::UiWhite, []) => Some(CompileUiColor {
+            r: 255,
+            g: 255,
+            b: 255,
+            a: 1.0,
+        }),
+        (KernelFn::UiBlack, []) => Some(CompileUiColor {
+            r: 0,
+            g: 0,
+            b: 0,
+            a: 1.0,
+        }),
+        (KernelFn::UiTransparent, []) => Some(CompileUiColor {
+            r: 0,
+            g: 0,
+            b: 0,
+            a: 0.0,
+        }),
+        // A `Model`-derived color, `Ui.colorCss` (a string form the runtime
+        // `Color` variant does not carry), or any non-literal channel refuses.
         _ => None,
     }
 }
@@ -736,8 +1089,8 @@ mod tests {
     use std::collections::BTreeMap;
 
     use super::{
-        CompileUiAttr, CompileUiDesc, CompileUiLength, CompileUiTemplate, WrapperBody,
-        ui_template_of_expr,
+        CompileUiAttr, CompileUiColor, CompileUiDesc, CompileUiLength, CompileUiTemplate,
+        WrapperBody, ui_template_of_expr,
     };
     use ipe_intern::Symbol;
     use ipe_ir::{CallPin, Callee, Expr, FuncId, IrType, KernelFn, OnFormKind, UiCtor};
@@ -748,6 +1101,16 @@ mod tests {
             args,
             pin: CallPin::None,
             on_form: OnFormKind::NotForm,
+        }
+    }
+
+    impl CompileUiAttr {
+        /// Serialize a single attribute to its JSON — a test-only view of the
+        /// private `write_json`, used by the byte-shape pins.
+        fn attr_json(&self) -> String {
+            let mut out = String::new();
+            self.write_json(&mut out);
+            out
         }
     }
 
@@ -1182,10 +1545,10 @@ mod tests {
     }
 
     #[test]
-    fn color_bearing_attribute_refuses() {
-        // `Font.color (rgb …)` is inert but `Color`/`Float`-bearing — outside the
-        // integer/string/marker accept set, so it refuses and keeps the subtree
-        // compiled.
+    fn literal_color_bearing_attribute_templatizes() {
+        // `Font.color (rgb 1 2 3)` is inert and over a literal color, so it
+        // templatizes with the alpha defaulted to `1.0` (matching `ui_rgb_`). A
+        // Model-derived color still refuses (`model_derived_color_refuses`).
         let node = kcall(
             KernelFn::UiNode,
             vec![
@@ -1200,7 +1563,19 @@ mod tests {
                 child_list(vec![]),
             ],
         );
-        assert_eq!(ui_template_of_expr(&node, None), None);
+        assert_eq!(
+            ui_template_of_expr(&node, None),
+            Some(CompileUiTemplate::Node {
+                desc: CompileUiDesc::NoDescription,
+                attrs: vec![CompileUiAttr::FontColor(CompileUiColor {
+                    r: 1,
+                    g: 2,
+                    b: 3,
+                    a: 1.0,
+                })],
+                children: vec![],
+            })
+        );
     }
 
     #[test]
@@ -1242,6 +1617,349 @@ mod tests {
         );
     }
 
+    // ── acceptance: single-Color and single-Float attributes ─────────────────
+
+    fn rgb(r: i64, g: i64, b: i64) -> Expr {
+        kcall(
+            KernelFn::UiRgb,
+            vec![Expr::Int(r), Expr::Int(g), Expr::Int(b)],
+        )
+    }
+
+    fn rgba(r: i64, g: i64, b: i64, a: f64) -> Expr {
+        kcall(
+            KernelFn::UiRgba,
+            vec![Expr::Int(r), Expr::Int(g), Expr::Int(b), Expr::Float(a)],
+        )
+    }
+
+    #[test]
+    fn font_color_rgb_templatizes() {
+        let node = kcall(
+            KernelFn::UiNode,
+            vec![
+                desc_none(),
+                attr_list(vec![kcall(KernelFn::FontColor, vec![rgb(10, 20, 30)])]),
+                child_list(vec![]),
+            ],
+        );
+        let got = ui_template_of_expr(&node, None).expect("font color templatizes");
+        assert_eq!(
+            got,
+            CompileUiTemplate::Node {
+                desc: CompileUiDesc::NoDescription,
+                attrs: vec![CompileUiAttr::FontColor(super::CompileUiColor {
+                    r: 10,
+                    g: 20,
+                    b: 30,
+                    a: 1.0,
+                })],
+                children: vec![],
+            }
+        );
+    }
+
+    #[test]
+    fn bg_and_border_color_rgba_templatize() {
+        let node = kcall(
+            KernelFn::UiNode,
+            vec![
+                desc_none(),
+                attr_list(vec![
+                    kcall(KernelFn::BackgroundColor, vec![rgba(1, 2, 3, 0.25)]),
+                    kcall(
+                        KernelFn::BorderColor,
+                        vec![kcall(KernelFn::UiBlack, vec![])],
+                    ),
+                ]),
+                child_list(vec![]),
+            ],
+        );
+        let got = ui_template_of_expr(&node, None).expect("bg/border color templatize");
+        assert_eq!(
+            got,
+            CompileUiTemplate::Node {
+                desc: CompileUiDesc::NoDescription,
+                attrs: vec![
+                    CompileUiAttr::BgColor(super::CompileUiColor {
+                        r: 1,
+                        g: 2,
+                        b: 3,
+                        a: 0.25,
+                    }),
+                    CompileUiAttr::BorderColor(super::CompileUiColor {
+                        r: 0,
+                        g: 0,
+                        b: 0,
+                        a: 1.0,
+                    }),
+                ],
+                children: vec![],
+            }
+        );
+    }
+
+    #[test]
+    fn letter_and_word_spacing_float_templatize() {
+        let node = kcall(
+            KernelFn::UiNode,
+            vec![
+                desc_none(),
+                attr_list(vec![
+                    kcall(KernelFn::FontLetterSpacing, vec![Expr::Float(1.5)]),
+                    kcall(KernelFn::FontWordSpacing, vec![Expr::Float(0.5)]),
+                ]),
+                child_list(vec![]),
+            ],
+        );
+        let got = ui_template_of_expr(&node, None).expect("spacing templatizes");
+        assert_eq!(
+            got,
+            CompileUiTemplate::Node {
+                desc: CompileUiDesc::NoDescription,
+                attrs: vec![
+                    CompileUiAttr::FontLetterSpacing(1.5),
+                    CompileUiAttr::FontWordSpacing(0.5),
+                ],
+                children: vec![],
+            }
+        );
+    }
+
+    // ── refusal: Model-derived / non-literal color, colorCss, deferred shadow ─
+
+    #[test]
+    fn model_derived_color_refuses() {
+        // `Font.color model.accent` — the color arg is a Model read, not a literal.
+        let node = kcall(
+            KernelFn::UiNode,
+            vec![
+                desc_none(),
+                attr_list(vec![kcall(KernelFn::FontColor, vec![Expr::Var(sym(7))])]),
+                child_list(vec![]),
+            ],
+        );
+        assert_eq!(ui_template_of_expr(&node, None), None);
+    }
+
+    #[test]
+    fn color_css_string_form_refuses() {
+        // `Ui.colorCss "red"` is a string color the runtime `Color::Rgba` variant
+        // does not carry — refuse, keep compiled.
+        let node = kcall(
+            KernelFn::UiNode,
+            vec![
+                desc_none(),
+                attr_list(vec![kcall(
+                    KernelFn::FontColor,
+                    vec![kcall(
+                        KernelFn::UiColorCss,
+                        vec![Expr::Str("red".to_string())],
+                    )],
+                )]),
+                child_list(vec![]),
+            ],
+        );
+        assert_eq!(ui_template_of_expr(&node, None), None);
+    }
+
+    #[test]
+    fn model_derived_letter_spacing_refuses() {
+        let node = kcall(
+            KernelFn::UiNode,
+            vec![
+                desc_none(),
+                attr_list(vec![kcall(
+                    KernelFn::FontLetterSpacing,
+                    vec![Expr::Var(sym(8))],
+                )]),
+                child_list(vec![]),
+            ],
+        );
+        assert_eq!(ui_template_of_expr(&node, None), None);
+    }
+
+    // ── holes: value / control-flow / list ───────────────────────────────────
+
+    use super::{HoleFill, HoleKind, ui_template_of_expr_holes};
+
+    /// A `Ui.text <non-literal>` — a value leaf that becomes an element hole.
+    fn model_text(binder: u32) -> Expr {
+        kcall(KernelFn::UiText, vec![Expr::Var(sym(binder))])
+    }
+
+    // A value hole: `column [] [text "count: ", text model.count]` — the static
+    // text stays in the template, the model-derived text is `Hole(0)` + a fill.
+    #[test]
+    fn value_hole_partitions_and_collects_fill() {
+        let node = kcall(
+            KernelFn::UiNode,
+            vec![
+                desc_none(),
+                attr_list(vec![]),
+                child_list(vec![text("count: "), model_text(50)]),
+            ],
+        );
+        let part = ui_template_of_expr_holes(&node, None).expect("value-hole subtree templatizes");
+        assert_eq!(
+            part.template,
+            CompileUiTemplate::Node {
+                desc: CompileUiDesc::NoDescription,
+                attrs: vec![],
+                children: vec![
+                    CompileUiTemplate::Text("count: ".to_string()),
+                    CompileUiTemplate::Hole(0),
+                ],
+            }
+        );
+        assert_eq!(
+            part.holes,
+            vec![HoleFill {
+                kind: HoleKind::Element,
+                expr: model_text(50),
+            }]
+        );
+    }
+
+    // A control-flow hole: an `if` in element position is one element hole.
+    #[test]
+    fn control_flow_hole_partitions_the_if() {
+        let cond = kcall(KernelFn::UiText, vec![Expr::Str("ignored".to_string())]);
+        let iff = Expr::If {
+            cond: Box::new(Expr::Var(sym(60))),
+            then_: Box::new(text("on")),
+            else_: Box::new(text("off")),
+        };
+        let node = kcall(
+            KernelFn::UiNode,
+            vec![
+                desc_none(),
+                attr_list(vec![]),
+                child_list(vec![iff.clone(), cond]),
+            ],
+        );
+        let part = ui_template_of_expr_holes(&node, None).expect("if-hole templatizes");
+        assert_eq!(
+            part.template,
+            CompileUiTemplate::Node {
+                desc: CompileUiDesc::NoDescription,
+                attrs: vec![],
+                children: vec![
+                    CompileUiTemplate::Hole(0),
+                    CompileUiTemplate::Text("ignored".to_string()),
+                ],
+            }
+        );
+        assert_eq!(
+            part.holes,
+            vec![HoleFill {
+                kind: HoleKind::Element,
+                expr: iff,
+            }]
+        );
+    }
+
+    // A list hole: the whole children arg is `List.map itemView model.items`.
+    #[test]
+    fn list_map_children_is_one_children_hole() {
+        let listmap = kcall(
+            KernelFn::ListMap,
+            vec![Expr::Var(sym(70)), Expr::Var(sym(71))],
+        );
+        let node = kcall(
+            KernelFn::UiNode,
+            vec![desc_none(), attr_list(vec![]), listmap.clone()],
+        );
+        let part = ui_template_of_expr_holes(&node, None).expect("list-map templatizes");
+        assert_eq!(
+            part.template,
+            CompileUiTemplate::Node {
+                desc: CompileUiDesc::NoDescription,
+                attrs: vec![],
+                children: vec![CompileUiTemplate::ChildrenHole(0)],
+            }
+        );
+        assert_eq!(
+            part.holes,
+            vec![HoleFill {
+                kind: HoleKind::Children,
+                expr: listmap,
+            }]
+        );
+    }
+
+    // Per-kind indexing: two element holes and one children hole, interleaved,
+    // number 0/1 (elements) and 0 (children) within their own slice.
+    #[test]
+    fn holes_number_per_kind() {
+        let listmap = kcall(
+            KernelFn::ListMap,
+            vec![Expr::Var(sym(80)), Expr::Var(sym(81))],
+        );
+        let node = kcall(
+            KernelFn::UiNode,
+            vec![
+                desc_none(),
+                attr_list(vec![]),
+                child_list(vec![model_text(82), listmap, model_text(83)]),
+            ],
+        );
+        let part = ui_template_of_expr_holes(&node, None).expect("mixed holes templatize");
+        assert_eq!(
+            part.template,
+            CompileUiTemplate::Node {
+                desc: CompileUiDesc::NoDescription,
+                attrs: vec![],
+                children: vec![
+                    CompileUiTemplate::Hole(0),
+                    CompileUiTemplate::ChildrenHole(0),
+                    CompileUiTemplate::Hole(1),
+                ],
+            }
+        );
+        assert_eq!(part.holes.len(), 3);
+    }
+
+    // Pure mode still refuses a model-derived leaf (no holes admitted) — the
+    // shipped conservative behaviour is unchanged for the no-hole entry.
+    #[test]
+    fn pure_mode_refuses_model_leaf() {
+        let node = kcall(
+            KernelFn::UiNode,
+            vec![
+                desc_none(),
+                attr_list(vec![]),
+                child_list(vec![model_text(90)]),
+            ],
+        );
+        assert_eq!(ui_template_of_expr(&node, None), None);
+    }
+
+    // A handler-bearing subtree still refuses WHOLE even in hole mode — a hole
+    // never covers a handler (that is the deferred, guardian-gated increment).
+    #[test]
+    fn hole_mode_still_refuses_handler_attr() {
+        let node = kcall(
+            KernelFn::UiNode,
+            vec![
+                desc_none(),
+                attr_list(vec![kcall(KernelFn::UiOnClick, vec![Expr::Var(sym(91))])]),
+                child_list(vec![model_text(92)]),
+            ],
+        );
+        assert_eq!(ui_template_of_expr_holes(&node, None), None);
+    }
+
+    // JSON shape for the hole markers — pinned against the runtime serde form.
+    #[test]
+    fn json_hole_marker_shapes() {
+        assert_eq!(CompileUiTemplate::Hole(3).to_json(), r#"{"Hole":3}"#);
+        assert_eq!(
+            CompileUiTemplate::ChildrenHole(0).to_json(),
+            r#"{"ChildrenHole":0}"#
+        );
+    }
+
     // ── JSON shape: byte-identical to the runtime `UiTemplate` serde form ─────
     //
     // Pinned literals (verified against `serde_json::to_string(&UiTemplate)` —
@@ -1274,6 +1992,19 @@ mod tests {
                 CompileUiAttr::AlignX("CenterX"),
                 CompileUiAttr::Pointer,
                 CompileUiAttr::FontAlign("center"),
+                CompileUiAttr::FontColor(CompileUiColor {
+                    r: 10,
+                    g: 20,
+                    b: 30,
+                    a: 1.0,
+                }),
+                CompileUiAttr::BgColor(CompileUiColor {
+                    r: 1,
+                    g: 2,
+                    b: 3,
+                    a: 0.25,
+                }),
+                CompileUiAttr::FontLetterSpacing(1.5),
             ],
             children: vec![
                 CompileUiTemplate::Text("hi".to_string()),
@@ -1283,7 +2014,9 @@ mod tests {
         let expected = concat!(
             r#"{"TaggedNode":{"tag":"section","desc":{"DescHeading":2},"attrs":["#,
             r#"{"Width":{"Max":[320,{"Vh":80}]}},{"Padding":[1,2,3,4]},{"Style":["k","v"]},"#,
-            r#"{"AlignX":"CenterX"},"Pointer",{"FontAlign":"center"}],"#,
+            r#"{"AlignX":"CenterX"},"Pointer",{"FontAlign":"center"},"#,
+            r#"{"FontColor":{"r":10,"g":20,"b":30,"a":1.0}},"#,
+            r#"{"BgColor":{"r":1,"g":2,"b":3,"a":0.25}},{"FontLetterSpacing":1.5}],"#,
             r#""children":[{"Text":"hi"},"Empty"]}}"#,
         );
         assert_eq!(t.to_json(), expected);
@@ -1300,6 +2033,67 @@ mod tests {
             t.to_json(),
             r#"{"Node":{"desc":"NoDescription","attrs":[{"Spacing":8}],"children":[]}}"#
         );
+    }
+
+    // Byte-shape pin for the single-Color attributes: the `UiColor` struct form
+    // `{"r":R,"g":G,"b":B,"a":A}` with the alpha in `ryu`'s shortest form
+    // (`1.0` / `0.25`). Verified byte-identical to the runtime serde form by the
+    // runtime pin `backend_baked_json_decodes_to_the_described_tree` (extended to
+    // carry a color), so a drift on either side fails one of the two pins.
+    #[test]
+    fn json_color_attr_shape() {
+        assert_eq!(
+            CompileUiAttr::FontColor(CompileUiColor {
+                r: 10,
+                g: 20,
+                b: 30,
+                a: 1.0,
+            })
+            .attr_json(),
+            r#"{"FontColor":{"r":10,"g":20,"b":30,"a":1.0}}"#
+        );
+        assert_eq!(
+            CompileUiAttr::BgColor(CompileUiColor {
+                r: 1,
+                g: 2,
+                b: 3,
+                a: 0.25,
+            })
+            .attr_json(),
+            r#"{"BgColor":{"r":1,"g":2,"b":3,"a":0.25}}"#
+        );
+    }
+
+    // Byte-shape pin for the single-Float attributes: the alpha/spacing float in
+    // `ryu` shortest form. `ryu` always renders a decimal point (`1.5`, `0.5`),
+    // matching `serde_json`'s `write_f64`.
+    #[test]
+    fn json_float_attr_shape() {
+        assert_eq!(
+            CompileUiAttr::FontLetterSpacing(1.5).attr_json(),
+            r#"{"FontLetterSpacing":1.5}"#
+        );
+        assert_eq!(
+            CompileUiAttr::FontWordSpacing(0.5).attr_json(),
+            r#"{"FontWordSpacing":0.5}"#
+        );
+    }
+
+    // `ryu`'s float spelling matches `serde_json`'s exactly (serde_json's
+    // `write_f64` calls `ryu::Buffer::format_finite`). This pins the equivalence
+    // directly for the alpha values a template can carry, so the single-source-of-
+    // truth claim is a standing check, not a comment.
+    #[test]
+    fn ryu_float_matches_serde_json() {
+        for a in [1.0f64, 0.0, 0.5, 0.25, 0.18, 0.08, 0.9, 1.5, 100.0, 0.1] {
+            let mut baked = String::new();
+            super::push_f64(a, &mut baked);
+            assert_eq!(
+                baked,
+                serde_json::to_string(&a).expect("serialize f64"),
+                "ryu float spelling must equal serde_json for {a}"
+            );
+        }
     }
 
     /// `column [padding 8] [row [htmlAttr "class" "marker"] [text "uno"], text "two"]`

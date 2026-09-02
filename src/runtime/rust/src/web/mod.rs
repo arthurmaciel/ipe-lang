@@ -64,6 +64,12 @@ pub mod pubsub;
 // `apply_transition` — one update semantics, dev == prod (see the module doc).
 pub mod transition;
 pub use transition::{Transition, apply_transition, apply_transition_hot};
+// The additive-only `Msg` SET codec: a schema-tagged descriptor of the running
+// program's `Msg` variant surface. Gates whether a live edit that adds a variant
+// (plus its arm and a button firing it) may hot-swap — accepted only when the new
+// set is a proven additive superset of the live one, so a returning session's
+// in-flight `handler_id`s still resolve (see the module doc).
+pub mod msg_set;
 // Explicit re-export of ONLY the codegen-referenced kernel functions. A glob
 // (`pub use pubsub::*`) leaked the broker's `Event<T>` into this namespace,
 // colliding with the HTML `Event` enum re-exported below (`pub use …html::*`)
@@ -2765,6 +2771,94 @@ mod handlers {
         StatusCode::OK.into_response()
     }
 
+    // ── POST /_ipe/hot-msg (dev-only) ─────────────────────────────────
+    // The running server's inbound leg of the additive-`Msg`-variant hot-swap
+    // live socket. When a source edit adds a `Msg` variant (plus its arm and a
+    // button firing it), `ipe watch` computes the edited program's `MsgSet`
+    // descriptor and POSTs it here alongside the live baked descriptor. The
+    // handler accepts it ONLY when it is a proven additive superset of the live
+    // set (every live variant present, unchanged), so a returning session's live
+    // `handler_id`s still resolve. A non-additive descriptor (a removed/retyped
+    // variant) is refused, and the watch loop recompiles.
+    //
+    // Guarded EXACTLY like `/_ipe/hot-transition`, three ways, so it is inert in
+    // production:
+    //   1. Route MOUNTED only under `dev_overlay_active()` (flag on AND
+    //      non-production) — absent from a production build.
+    //   2. A per-process control token (`IPE_WATCH_HOT_TOKEN`) must match the
+    //      `X-Ipe-Hot-Token` header (constant-time).
+    //   3. The body carries two inert, schema-tagged JSON descriptors — the live
+    //      baked set (the key) and the candidate set. Both are STRICT-decoded into
+    //      a `MsgSet` (a schema tag + a list of variant name/shape pairs — no
+    //      payload value, no code); a non-`MsgSet` body is rejected. The candidate
+    //      can drive nothing but the bounded, total `is_additive_superset` gate;
+    //      it never mutates the Model and never resolves a handler.
+    pub(super) async fn hot_msg_handler<Model, Msg, FInit, FUpdate, FView, FSubs>(
+        State(_st): State<WebState<Model, Msg, FInit, FUpdate, FView, FSubs>>,
+        headers: axum::http::HeaderMap,
+        body: axum::body::Bytes,
+    ) -> Response
+    where
+        Model: Clone + Send + 'static,
+        Msg: Clone + Send + 'static,
+        FInit: Send + Sync + 'static,
+        FUpdate: Send + Sync + 'static,
+        FView: Send + Sync + 'static,
+        FSubs: Send + Sync + 'static,
+    {
+        // Defence in depth: re-check the dev gate even though the route is only
+        // mounted under it, so the handler is inert if ever reached otherwise.
+        if !literal_table::dev_overlay_active() {
+            return StatusCode::NOT_FOUND.into_response();
+        }
+        // Per-process control token — same mechanism as `/_ipe/hot-transition`.
+        // Absent expected token → fail closed (endpoint unusable without a token).
+        let expected = crate::system::read_env_var("IPE_WATCH_HOT_TOKEN")
+            .ok()
+            .filter(|t| !t.is_empty());
+        let presented = headers
+            .get("x-ipe-hot-token")
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_owned);
+        match (expected, presented) {
+            (Some(exp), Some(got)) if crate::ct_eq::ct_bytes_eq(exp.as_bytes(), got.as_bytes()) => {
+            }
+            _ => return StatusCode::FORBIDDEN.into_response(),
+        }
+
+        #[derive(serde::Deserialize)]
+        struct HotMsgBody {
+            /// The running program's baked `Msg` set descriptor JSON — the live
+            /// set the candidate must be an additive superset of.
+            live_json: String,
+            /// The edited program's `Msg` set descriptor JSON — the candidate.
+            candidate_json: String,
+        }
+        let parsed: HotMsgBody = match serde_json::from_slice(&body) {
+            Ok(b) => b,
+            Err(_) => return (StatusCode::BAD_REQUEST, "bad body").into_response(),
+        };
+        // Parse, don't validate: both descriptors must be well-formed `MsgSet`s or
+        // the request is rejected. A registered candidate can therefore drive
+        // nothing but the bounded additive-superset gate.
+        let live = match msg_set::decode_msg_set(parsed.live_json.as_bytes()) {
+            Some(s) => s,
+            None => return (StatusCode::BAD_REQUEST, "bad live set").into_response(),
+        };
+        let candidate = match msg_set::decode_msg_set(parsed.candidate_json.as_bytes()) {
+            Some(s) => s,
+            None => return (StatusCode::BAD_REQUEST, "bad candidate set").into_response(),
+        };
+        // Accept ONLY a proven additive superset. A non-additive candidate is
+        // refused with 409 Conflict, so the watch loop recompiles rather than
+        // hot-swapping a change that could orphan or hijack a live `handler_id`.
+        if msg_set::register_dev_msg_set(&live, candidate) {
+            StatusCode::OK.into_response()
+        } else {
+            (StatusCode::CONFLICT, "not an additive superset").into_response()
+        }
+    }
+
     // ── POST /_ipe/watch/status (dev-only) ───────────────────────────
     // Inbound build-status notification from `ipe watch`. Guarded two ways
     // so it is inert in production:
@@ -3298,6 +3392,21 @@ where
         router.route(
             "/_ipe/hot-transition",
             post(handlers::hot_transition_handler::<Model, Msg, FInit, FUpdate, FView, FSubs>)
+                .layer(axum::extract::DefaultBodyLimit::max(web_max_body_bytes())),
+        )
+    } else {
+        router
+    };
+    // Dev-only additive-`Msg`-variant hot-swap control leg. Guarded IDENTICALLY
+    // to `/_ipe/hot-transition`: MOUNTED only under the same dev overlay gate
+    // (flag on AND non-production), token-gated per request, and bounded. The
+    // candidate descriptor drives nothing but the total `is_additive_superset`
+    // gate — it is accepted only when it is a proven additive superset of the
+    // live `Msg` set, never resolving a handler or mutating the Model.
+    let router = if literal_table::dev_overlay_active() {
+        router.route(
+            "/_ipe/hot-msg",
+            post(handlers::hot_msg_handler::<Model, Msg, FInit, FUpdate, FView, FSubs>)
                 .layer(axum::extract::DefaultBodyLimit::max(web_max_body_bytes())),
         )
     } else {
@@ -5409,6 +5518,219 @@ mod hot_transition_handler_tests {
             }
             let next = transition::apply_transition_hot(INC1, Counter { count: 5 });
             assert_eq!(next.count, 7, "the registered +2 replacement must apply");
+        });
+    }
+}
+
+#[cfg(test)]
+mod hot_msg_handler_tests {
+    //! Regression-locks the `POST /_ipe/hot-msg` trust boundary — the dev-only leg
+    //! that extends the server-held `Msg` set from an untrusted dev channel. Every
+    //! refusal path (dev gate, token, malformed body, malformed descriptor,
+    //! NON-additive candidate) and the accept path (records a proven additive
+    //! superset) is covered without weakening any gate.
+
+    use super::*;
+    use crate::system::{locked_remove_var, locked_set_var};
+    use crate::web::literal_table::{overlay_test_lock, set_dev_overlay_active_for_test};
+    use crate::web::msg_set;
+    use crate::web::store::MemoryStore;
+    use axum::Router;
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode};
+    use axum::routing::post;
+    use std::time::Duration;
+    use tower::ServiceExt; // oneshot
+
+    type TestModel = ();
+    type TestMsg = ();
+    type TestStore = MemoryStore<TestModel, TestMsg>;
+    type TestWebState = WebState<
+        TestModel,
+        TestMsg,
+        fn() -> (),
+        fn(TestMsg, TestModel) -> (TestModel, IpeCmd<TestMsg>),
+        fn(TestModel) -> Html<TestMsg>,
+        fn(TestModel) -> IpeSub<TestMsg>,
+    >;
+
+    fn test_init() {}
+    fn test_update(_msg: TestMsg, model: TestModel) -> (TestModel, IpeCmd<TestMsg>) {
+        (model, IpeCmd::None)
+    }
+    fn test_view(_model: TestModel) -> Html<TestMsg> {
+        Html::HText(String::new())
+    }
+    fn test_subs(_model: TestModel) -> IpeSub<TestMsg> {
+        IpeSub::None
+    }
+    fn test_route_resolver(m: TestModel, _path: &str) -> TestModel {
+        m
+    }
+    fn test_param_resolver(_path: &str) -> crate::dict::IpeDict<String> {
+        crate::dict::dict_empty()
+    }
+    fn test_route_matched(p: &str) -> bool {
+        p == "/"
+    }
+
+    fn make_router() -> Router {
+        let store = Arc::new(TestStore::new(Duration::from_secs(60)));
+        let state: TestWebState = WebState {
+            store: store as Arc<dyn store::SessionStore<TestModel, TestMsg>>,
+            init: Arc::new(test_init),
+            update: Arc::new(test_update),
+            view: Arc::new(test_view),
+            subs: Arc::new(test_subs),
+            route_resolver: Arc::new(test_route_resolver),
+            param_resolver: Arc::new(test_param_resolver),
+            route_matched: Arc::new(test_route_matched),
+            session_count: Arc::new(AtomicUsize::new(0)),
+            watch_build_status: Arc::new(Mutex::new(None)),
+        };
+        Router::new()
+            .route(
+                "/_ipe/hot-msg",
+                post(
+                    handlers::hot_msg_handler::<
+                        TestModel,
+                        TestMsg,
+                        fn() -> (),
+                        fn(TestMsg, TestModel) -> (TestModel, IpeCmd<TestMsg>),
+                        fn(TestModel) -> Html<TestMsg>,
+                        fn(TestModel) -> IpeSub<TestMsg>,
+                    >,
+                ),
+            )
+            .with_state(state)
+    }
+
+    async fn post_hot(token: Option<&str>, body: &str) -> axum::response::Response {
+        let mut builder = Request::builder()
+            .method("POST")
+            .uri("/_ipe/hot-msg")
+            .header("content-type", "application/json");
+        if let Some(t) = token {
+            builder = builder.header("x-ipe-hot-token", t);
+        }
+        let req = builder.body(Body::from(body.to_owned())).expect("request");
+        make_router().oneshot(req).await.expect("router responds")
+    }
+
+    fn with_overlay_serialised<F: std::future::Future<Output = ()>>(body: impl FnOnce() -> F) {
+        let _g = overlay_test_lock();
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("current-thread runtime must build for the test");
+        rt.block_on(body());
+        msg_set::clear_dev_msg_set_for_test();
+        set_dev_overlay_active_for_test(None);
+        locked_remove_var("IPE_WATCH_HOT_TOKEN");
+    }
+
+    // The counter live set and its additive/non-additive edits, as descriptor JSON.
+    const LIVE: &str = r#"{"schema":1,"variants":[{"name":"Increment","shape":"Unit"},{"name":"Decrement","shape":"Unit"}]}"#;
+    const ADD_RESET: &str = r#"{"schema":1,"variants":[{"name":"Increment","shape":"Unit"},{"name":"Decrement","shape":"Unit"},{"name":"Reset","shape":"Unit"}]}"#;
+    const REMOVED: &str = r#"{"schema":1,"variants":[{"name":"Increment","shape":"Unit"}]}"#;
+
+    fn body_pair(live: &str, cand: &str) -> String {
+        format!(r#"{{"live_json":{live:?},"candidate_json":{cand:?}}}"#)
+    }
+
+    /// No token → 403, even with the dev gate on and a well-formed body.
+    #[test]
+    fn token_missing_is_403() {
+        with_overlay_serialised(|| async {
+            set_dev_overlay_active_for_test(Some(true));
+            locked_set_var("IPE_WATCH_HOT_TOKEN", "secret");
+            let resp = post_hot(None, &body_pair(LIVE, ADD_RESET)).await;
+            assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+        });
+    }
+
+    /// Wrong token → 403.
+    #[test]
+    fn token_wrong_is_403() {
+        with_overlay_serialised(|| async {
+            set_dev_overlay_active_for_test(Some(true));
+            locked_set_var("IPE_WATCH_HOT_TOKEN", "correct");
+            let resp = post_hot(Some("wrong"), &body_pair(LIVE, ADD_RESET)).await;
+            assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+        });
+    }
+
+    /// Dev gate OFF → 404 (defence in depth), even with the correct token.
+    #[test]
+    fn dev_gate_off_is_404() {
+        with_overlay_serialised(|| async {
+            set_dev_overlay_active_for_test(Some(false));
+            locked_set_var("IPE_WATCH_HOT_TOKEN", "correct");
+            let resp = post_hot(Some("correct"), &body_pair(LIVE, ADD_RESET)).await;
+            assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+        });
+    }
+
+    /// A malformed request body → 400.
+    #[test]
+    fn malformed_body_is_400() {
+        with_overlay_serialised(|| async {
+            set_dev_overlay_active_for_test(Some(true));
+            locked_set_var("IPE_WATCH_HOT_TOKEN", "correct");
+            let resp = post_hot(Some("correct"), "not json").await;
+            assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        });
+    }
+
+    /// A well-formed body whose `candidate_json` is NOT a valid `MsgSet` → 400
+    /// (parse, don't validate: only a decodable descriptor is compared).
+    #[test]
+    fn invalid_candidate_descriptor_is_400() {
+        with_overlay_serialised(|| async {
+            set_dev_overlay_active_for_test(Some(true));
+            locked_set_var("IPE_WATCH_HOT_TOKEN", "correct");
+            let resp = post_hot(Some("correct"), &body_pair(LIVE, "{not a set}")).await;
+            assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        });
+    }
+
+    /// A well-formed but NON-additive candidate (a removed variant) → 409 Conflict,
+    /// and nothing is recorded (the running app recompiles).
+    #[test]
+    fn non_additive_candidate_is_409() {
+        with_overlay_serialised(|| async {
+            set_dev_overlay_active_for_test(Some(true));
+            msg_set::clear_dev_msg_set_for_test();
+            locked_set_var("IPE_WATCH_HOT_TOKEN", "correct");
+            let resp = post_hot(Some("correct"), &body_pair(LIVE, REMOVED)).await;
+            assert_eq!(resp.status(), StatusCode::CONFLICT);
+            assert_eq!(
+                msg_set::accepted_dev_msg_set(),
+                None,
+                "a refused (non-additive) candidate must record nothing"
+            );
+        });
+    }
+
+    /// Correct token + a proven additive superset → 200, and the candidate is
+    /// recorded as the accepted set (every live variant survives, so live
+    /// handler_ids resolve).
+    #[test]
+    fn accept_records_additive_superset() {
+        with_overlay_serialised(|| async {
+            set_dev_overlay_active_for_test(Some(true));
+            msg_set::clear_dev_msg_set_for_test();
+            locked_set_var("IPE_WATCH_HOT_TOKEN", "correct");
+
+            let resp = post_hot(Some("correct"), &body_pair(LIVE, ADD_RESET)).await;
+            assert_eq!(resp.status(), StatusCode::OK);
+
+            let accepted = msg_set::accepted_dev_msg_set().expect("an accepted set");
+            let expected = msg_set::decode_msg_set(ADD_RESET.as_bytes()).expect("decode");
+            assert_eq!(
+                accepted, expected,
+                "the accepted set must be the additive-superset candidate"
+            );
         });
     }
 }

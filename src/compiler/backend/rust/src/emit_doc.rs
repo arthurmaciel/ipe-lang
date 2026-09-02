@@ -1862,8 +1862,18 @@ fn build_applied_lambda(
     child: u16,
     generics: GenericScope,
 ) -> DResult<Doc> {
-    let mut inner = Vec::with_capacity(params.len() * 4 + 2);
-    for ((param, ty), arg) in params.iter().zip(args.iter()) {
+    // A CURRIED application of a function-returning lambda binds its OWN params
+    // (the flattened prefix) and yields a function value that the SURPLUS args
+    // apply to: `(\p0 -> fn-value) a0 a1` is `((\p0 -> fn-value) a0)(a1)`. Bind
+    // only the `params.len()` prefix here; any remaining args become a trailing
+    // `(block)(rest)` application below. Folding all args into the `let` prefix
+    // (as a bare `params.zip(args)` would) drops the surplus applications — the
+    // composed-higher-order-combinator SEAL break (`andThen (\x -> … andThen …)`
+    // leaves the produced parser unapplied to the threaded state).
+    let own = params.len().min(args.len());
+    let (own_args, surplus_args) = args.split_at(own);
+    let mut inner = Vec::with_capacity(own * 4 + 2);
+    for ((param, ty), arg) in params.iter().zip(own_args.iter()) {
         let p = ctx.emit_ident(*param)?;
         let t = render_type(ctx, ty, generics)?;
         let arg_doc = build_doc(ctx, arg, indent, child, generics)?;
@@ -1878,12 +1888,24 @@ fn build_applied_lambda(
     let body_doc = build_doc(ctx, body, indent, child, generics)?;
     inner.push(Doc::HardLine);
     inner.push(body_doc);
-    Ok(Doc::concat(vec![
+    let block = Doc::concat(vec![
         Doc::text("({"),
         Doc::nest(4, Doc::concat(inner)),
         Doc::HardLine,
         Doc::text("})"),
-    ]))
+    ]);
+    if surplus_args.is_empty() {
+        return Ok(block);
+    }
+    // `(block)(surplus)`: the inlined lambda block produces a function value; the
+    // surplus args apply to it. `block` already renders parenthesized, so the
+    // extra pair is elidable (rustfmt collapses `(( … ))`).
+    let docs = build_args(ctx, surplus_args, indent, child, generics)?;
+    Ok(delimited(
+        Doc::concat(vec![Doc::elidable_paren(block), Doc::text("(")]),
+        docs,
+        Doc::text(")"),
+    ))
 }
 
 /// Whether a `match` arm body is a CONTROL/paren-wrapped expression that

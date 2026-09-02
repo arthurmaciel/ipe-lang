@@ -375,8 +375,8 @@ pub fn main_json_int_result(s: String) -> IpeResult<ipe_runtime::error::IpeError
                             + Sync
                             + 'static,
                     > = Box::new(
-                        move |eta_0: Decoder<Box<dyn FnOnce(i64) -> String + Send + 'static>>| -> Decoder<String> {
-                            crate::main_json_optional(cap_0.clone(), cap_1.clone(), 0i64, eta_0)
+                        move |eta_1: Decoder<Box<dyn FnOnce(i64) -> String + Send + 'static>>| -> Decoder<String> {
+                            crate::main_json_optional(cap_0.clone(), cap_1.clone(), 0i64, eta_1)
                         },
                     );
                     __ipe_fn
@@ -422,12 +422,12 @@ pub fn main_json_string_result(s: String) -> IpeResult<ipe_runtime::error::IpeEr
                                 + Sync
                                 + 'static,
                         > = Box::new(
-                            move |eta_0: Decoder<Box<dyn FnOnce(String) -> String + Send + 'static>>| -> Decoder<String> {
+                            move |eta_1: Decoder<Box<dyn FnOnce(String) -> String + Send + 'static>>| -> Decoder<String> {
                                 crate::main_json_optional(
                                     cap_0.clone(),
                                     cap_1.clone(),
                                     cap_2.clone(),
-                                    eta_0,
+                                    eta_1,
                                 )
                             },
                         );
@@ -472,8 +472,8 @@ pub fn main_row_decoder() -> Decoder<String> {
                         + Sync
                         + 'static,
                 > = Box::new(
-                    move |eta_0: Decoder<Box<dyn FnOnce(i64) -> String + Send + 'static>>| -> Decoder<String> {
-                        crate::main_db_optional(cap_0.clone(), cap_1.clone(), 0i64, eta_0)
+                    move |eta_1: Decoder<Box<dyn FnOnce(i64) -> String + Send + 'static>>| -> Decoder<String> {
+                        crate::main_db_optional(cap_0.clone(), cap_1.clone(), 0i64, eta_1)
                     },
                 );
                 __ipe_fn

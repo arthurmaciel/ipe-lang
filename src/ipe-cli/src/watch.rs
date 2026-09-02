@@ -1267,12 +1267,25 @@ fn run_inner(
                                         &hot.transitions,
                                         opts.quiet,
                                     );
-                                    if views_ok && transitions_ok {
+                                    // The additive-`Msg`-set leg: the endpoint
+                                    // re-proves the superset and refuses a
+                                    // non-additive candidate, so a miss here (like
+                                    // a view/transition miss) falls back to a full
+                                    // recompile.
+                                    let msg_sets_ok = push_msg_set_patches(
+                                        opts.port,
+                                        tok,
+                                        &hot.msg_sets,
+                                        opts.quiet,
+                                    );
+                                    if views_ok && transitions_ok && msg_sets_ok {
                                         emit(
                                             opts,
                                             WatchEvent::AppearanceHotSwapped {
                                                 generation: g,
-                                                views: hot.views.len() + hot.transitions.len(),
+                                                views: hot.views.len()
+                                                    + hot.transitions.len()
+                                                    + hot.msg_sets.len(),
                                             },
                                         );
                                         post_watch_status(opts.port, tok, true, "");
@@ -1819,6 +1832,85 @@ fn post_hot_transition(port: u16, token: &str, body: &str) -> std::io::Result<bo
     stream.set_write_timeout(Some(Duration::from_millis(1500)))?;
     let req = format!(
         "POST /_ipe/hot-transition HTTP/1.1\r\n\
+         Host: 127.0.0.1:{port}\r\n\
+         X-Ipe-Hot-Token: {token}\r\n\
+         Content-Type: application/json\r\n\
+         Content-Length: {len}\r\n\
+         Connection: close\r\n\r\n{body}",
+        len = body.len(),
+    );
+    stream.write_all(req.as_bytes())?;
+    stream.flush()?;
+    let mut resp = Vec::new();
+    let mut chunk = [0u8; 256];
+    if let Ok(n) = stream.read(&mut chunk)
+        && let Some(head) = chunk.get(..n)
+    {
+        resp.extend_from_slice(head);
+    }
+    let head = String::from_utf8_lossy(&resp);
+    Ok(head.starts_with("HTTP/1.1 200"))
+}
+
+/// Push each additive-`Msg`-set patch to the running app's `/_ipe/hot-msg`
+/// endpoint, authenticated with the same session control token. Returns `true`
+/// only if every patch was accepted (HTTP 200); the endpoint refuses a
+/// non-additive candidate (409 Conflict), which the classifier already excludes,
+/// so a non-200 here is a soft miss the caller falls back from to a full
+/// recompile. An empty patch list is a no-op success.
+fn push_msg_set_patches(
+    port: u16,
+    token: &str,
+    patches: &[crate::hot_classify::MsgSetPatch],
+    quiet: bool,
+) -> bool {
+    for mp in patches {
+        let body = serde_json::json!({
+            "live_json": mp.live_json,
+            "candidate_json": mp.candidate_json,
+        })
+        .to_string();
+        if !matches!(post_hot_msg(port, token, &body), Ok(true)) {
+            if !quiet {
+                eprintln!(
+                    "{}",
+                    watch_line(
+                        "[ipe watch] Msg-set hot-swap push failed — falling back to a \
+                         full rebuild",
+                        WatchRole::Info
+                    )
+                );
+            }
+            return false;
+        }
+    }
+    if !quiet && !patches.is_empty() {
+        eprintln!(
+            "{}",
+            watch_line(
+                "[ipe watch] added Msg variant hot-swapped (no rebuild)",
+                WatchRole::Info
+            )
+        );
+    }
+    true
+}
+
+/// Send one `POST /_ipe/hot-msg` to loopback `port`, returning `Ok(true)` on a
+/// `200 OK` status line. Same minimal blocking-request shape and timeouts as
+/// [`post_hot_transition`] — loopback + dev-only, so no client crate needed.
+///
+/// # Errors
+/// An I/O error if the connection cannot be made or the exchange fails.
+fn post_hot_msg(port: u16, token: &str, body: &str) -> std::io::Result<bool> {
+    use std::io::{Read as _, Write as _};
+    use std::net::TcpStream;
+    let addr = std::net::SocketAddr::from((std::net::Ipv4Addr::LOCALHOST, port));
+    let mut stream = TcpStream::connect_timeout(&addr, Duration::from_millis(500))?;
+    stream.set_read_timeout(Some(Duration::from_millis(1500)))?;
+    stream.set_write_timeout(Some(Duration::from_millis(1500)))?;
+    let req = format!(
+        "POST /_ipe/hot-msg HTTP/1.1\r\n\
          Host: 127.0.0.1:{port}\r\n\
          X-Ipe-Hot-Token: {token}\r\n\
          Content-Type: application/json\r\n\
