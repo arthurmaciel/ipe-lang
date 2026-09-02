@@ -38,8 +38,63 @@ pub enum ProbeUnavailable {
 pub enum StageOutcome {
     /// The stage succeeded.
     Ok,
-    /// The stage failed with a diagnostic or process message — a real gap.
-    Failed(String),
+    /// The stage failed, carrying the rejecting diagnostic's code (when the
+    /// failure is a compiler diagnostic rather than a process/IO error) and its
+    /// rendered message. The code lets a column tell a genuine stage gap from a
+    /// failure the probe FORM provokes — a point-free reference of a value the
+    /// language requires be applied directly, whose diagnostic is a limitation of
+    /// the probe, not a gap in the symbol.
+    Failed {
+        /// The rejecting diagnostic's code, when the failure carried one.
+        code: Option<ipe_diagnostics::Code>,
+        /// The rendered failure message.
+        message: String,
+    },
+}
+
+/// The diagnostic code a [`crate::CliError`] carries, when it is a pipeline
+/// rejection (the only variant framing a compiler diagnostic).
+fn cli_error_code(err: &crate::CliError) -> Option<ipe_diagnostics::Code> {
+    match err {
+        crate::CliError::Pipeline { diag, .. } => Some(diag.code()),
+        _ => None,
+    }
+}
+
+/// Whether a lowering rejection is a limitation of the probe FORM for the symbol
+/// rather than a lowering gap in the symbol.
+///
+/// A value-reference / nested-reference probe binds the symbol point-free. For a
+/// class of symbols the language deliberately refuses a point-free reference — an
+/// accessor/spec builder that reads its column from a `.field` at compile time
+/// ([`IPE_L0146`]), a committed-literal seal that must see its argument
+/// ([`IPE_L0151`]) — or the reference cannot be monomorphized because an unused
+/// binding leaves the value fully polymorphic ([`IPE_L0102`]). In each the
+/// diagnostic is provoked by the probe form, not by a gap in the symbol's own
+/// lowering, so the column reports the symbol inapplicable rather than a false
+/// hole. This is exactly the "the resolver refuses to pass point-free" /
+/// "fully-polymorphic value with no determinable concrete type" case the columns'
+/// contracts name.
+pub fn is_probe_form_limitation(outcome: &StageOutcome) -> bool {
+    use ipe_diagnostics::{IPE_L0102, IPE_L0146, IPE_L0151};
+    matches!(
+        outcome,
+        StageOutcome::Failed { code: Some(code), .. }
+            if *code == IPE_L0102 || *code == IPE_L0146 || *code == IPE_L0151
+    )
+}
+
+/// Whether a lowering rejection is an internal compiler error ([`IPE_I0001`]) — a
+/// compiler bug the probe surfaced, distinct both from a clean stage gap and from
+/// a probe-form limitation. The columns surface it as an advisory, so a
+/// pre-existing lowerer defect the probe reaches is reported without being
+/// silently passed or miscast as the column's own seam.
+pub fn is_internal_compiler_error(outcome: &StageOutcome) -> bool {
+    use ipe_diagnostics::IPE_I0001;
+    matches!(
+        outcome,
+        StageOutcome::Failed { code: Some(code), .. } if *code == IPE_I0001
+    )
 }
 
 /// The short module import header for a symbol: `import Ipe.List as List`.
@@ -126,11 +181,17 @@ pub fn nested_program(sym: &StdlibSymbol) -> Result<String, ProbeUnavailable> {
 /// reported as a stage failure.
 pub fn lower(source: &str, snippet: &Path) -> StageOutcome {
     if let Err(e) = std::fs::write(snippet, source) {
-        return StageOutcome::Failed(format!("could not write probe source: {e}"));
+        return StageOutcome::Failed {
+            code: None,
+            message: format!("could not write probe source: {e}"),
+        };
     }
     match crate::lower_entry_via_graph(snippet) {
         Ok(_) => StageOutcome::Ok,
-        Err(err) => StageOutcome::Failed(err.to_string()),
+        Err(err) => StageOutcome::Failed {
+            code: cli_error_code(&err),
+            message: err.to_string(),
+        },
     }
 }
 
@@ -142,11 +203,17 @@ pub fn lower(source: &str, snippet: &Path) -> StageOutcome {
 /// hole.
 pub fn typechecks(source: &str, snippet: &Path) -> StageOutcome {
     if let Err(e) = std::fs::write(snippet, source) {
-        return StageOutcome::Failed(format!("could not write probe source: {e}"));
+        return StageOutcome::Failed {
+            code: None,
+            message: format!("could not write probe source: {e}"),
+        };
     }
     match crate::typecheck_entry_via_graph(snippet) {
         Ok(()) => StageOutcome::Ok,
-        Err(err) => StageOutcome::Failed(err.to_string()),
+        Err(err) => StageOutcome::Failed {
+            code: cli_error_code(&err),
+            message: err.to_string(),
+        },
     }
 }
 
@@ -160,20 +227,36 @@ pub fn typechecks(source: &str, snippet: &Path) -> StageOutcome {
 pub fn build_and_run(source: &str, snippet: &Path) -> StageOutcome {
     use std::process::Command;
     if let Err(e) = std::fs::write(snippet, source) {
-        return StageOutcome::Failed(format!("could not write probe source: {e}"));
+        return StageOutcome::Failed {
+            code: None,
+            message: format!("could not write probe source: {e}"),
+        };
     }
     let ipe_bin = match std::env::current_exe() {
         Ok(p) => p,
-        Err(e) => return StageOutcome::Failed(format!("could not locate the ipe binary: {e}")),
+        Err(e) => {
+            return StageOutcome::Failed {
+                code: None,
+                message: format!("could not locate the ipe binary: {e}"),
+            };
+        }
     };
     let output = match Command::new(&ipe_bin).arg("run").arg(snippet).output() {
         Ok(o) => o,
-        Err(e) => return StageOutcome::Failed(format!("ipe run failed to spawn: {e}")),
+        Err(e) => {
+            return StageOutcome::Failed {
+                code: None,
+                message: format!("ipe run failed to spawn: {e}"),
+            };
+        }
     };
     if output.status.success() {
         StageOutcome::Ok
     } else {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        StageOutcome::Failed(format!("ipe run exited non-zero: {stderr}"))
+        StageOutcome::Failed {
+            code: None,
+            message: format!("ipe run exited non-zero: {stderr}"),
+        }
     }
 }

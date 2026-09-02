@@ -82,18 +82,48 @@ impl AspectCheck for LowersColumn {
         // The seam is "type-checks but does not lower": a probe that does not
         // type-check is a point-free-reference limitation for this symbol, not a
         // lowering gap.
-        if let StageOutcome::Failed(_) = probe::typechecks(&source, &snippet) {
+        if let StageOutcome::Failed { .. } = probe::typechecks(&source, &snippet) {
             return Cell::NotApplicable;
         }
-        match probe::lower(&source, &snippet) {
-            StageOutcome::Ok => Cell::Ok,
-            StageOutcome::Failed(msg) => Cell::Hole(format!(
-                "{}.{} type-checks but does not lower: {msg}",
-                sym.module.join("."),
-                sym.name
-            )),
-        }
+        let outcome = probe::lower(&source, &snippet);
+        classify_lower_outcome(sym, outcome, "type-checks but does not lower")
     }
+}
+
+/// Turn a probe's lowering outcome into a cell, separating the real "type-checks
+/// but does not lower" seam from the two failures the probe FORM provokes:
+///
+/// * A probe-form limitation (a value the language refuses point-free, or a
+///   fully-polymorphic unused binding) is `NotApplicable` — the diagnostic is a
+///   property of the point-free probe, not a lowering gap in the symbol.
+/// * An internal compiler error is a [`Cell::Warn`] advisory — a lowerer defect
+///   the probe reached (a pre-existing empty-type-home ICE, say), surfaced so it
+///   is neither silently passed nor miscast as this column's own seam.
+/// * Any other lowering rejection is the seam this column gates: a [`Cell::Hole`].
+fn classify_lower_outcome(sym: &StdlibSymbol, outcome: StageOutcome, seam: &str) -> Cell {
+    if let StageOutcome::Ok = outcome {
+        return Cell::Ok;
+    }
+    if probe::is_probe_form_limitation(&outcome) {
+        return Cell::NotApplicable;
+    }
+    let is_ice = probe::is_internal_compiler_error(&outcome);
+    let StageOutcome::Failed { message, .. } = outcome else {
+        return Cell::Ok;
+    };
+    if is_ice {
+        return Cell::Warn(format!(
+            "{}.{} triggers an internal compiler error when {seam} (a lowerer defect \
+             the probe reached, not a probe-form limitation): {message}",
+            sym.module.join("."),
+            sym.name
+        ));
+    }
+    Cell::Hole(format!(
+        "{}.{} {seam}: {message}",
+        sym.module.join("."),
+        sym.name
+    ))
 }
 
 // ── composes ──────────────────────────────────────────────────────────────────
@@ -147,18 +177,15 @@ impl AspectCheck for ComposesColumn {
         // A nested probe that does not type-check is a generator limitation for
         // this symbol's shape, not a lowering gap: report it inapplicable so it
         // is not a false hole.
-        if let StageOutcome::Failed(_) = probe::typechecks(&source, &snippet) {
+        if let StageOutcome::Failed { .. } = probe::typechecks(&source, &snippet) {
             return Cell::NotApplicable;
         }
-        match probe::lower(&source, &snippet) {
-            StageOutcome::Ok => Cell::Ok,
-            StageOutcome::Failed(msg) => Cell::Hole(format!(
-                "higher-order {}.{} type-checks under nesting but does NOT lower \
-                 (a composed-combinator lowering gap): {msg}",
-                sym.module.join("."),
-                sym.name
-            )),
-        }
+        let outcome = probe::lower(&source, &snippet);
+        classify_lower_outcome(
+            sym,
+            outcome,
+            "type-checks under nesting but does NOT lower (a composed-combinator lowering gap)",
+        )
     }
 }
 
@@ -205,10 +232,30 @@ impl AspectCheck for BuildRunColumn {
             Err(reason) => return unavailable_cell(&reason),
         };
         let snippet = scratch.child("Main.ipe");
+        // The point-free reference program can fail to compile for a reason that
+        // is a property of the probe FORM, not a build gap: a value the language
+        // refuses point-free, a fully-polymorphic unused binding, or a lowerer ICE
+        // the probe reaches. Pre-check by lowering — build+run shells out and sees
+        // only text, so it cannot classify — and defer to that verdict rather than
+        // pay a full cargo build to reach a false hole.
+        let lowered = probe::lower(&source, &snippet);
+        if probe::is_probe_form_limitation(&lowered) {
+            return Cell::NotApplicable;
+        }
+        if probe::is_internal_compiler_error(&lowered) {
+            let StageOutcome::Failed { message, .. } = lowered else {
+                return Cell::NotApplicable;
+            };
+            return Cell::Warn(format!(
+                "{}.{} triggers an internal compiler error before build+run: {message}",
+                sym.module.join("."),
+                sym.name
+            ));
+        }
         match probe::build_and_run(&source, &snippet) {
             StageOutcome::Ok => Cell::Ok,
-            StageOutcome::Failed(msg) => Cell::Hole(format!(
-                "{}.{} emits but does not build+run: {msg}",
+            StageOutcome::Failed { message, .. } => Cell::Hole(format!(
+                "{}.{} emits but does not build+run: {message}",
                 sym.module.join("."),
                 sym.name
             )),

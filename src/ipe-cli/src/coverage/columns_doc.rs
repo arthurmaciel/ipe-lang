@@ -320,20 +320,71 @@ fn synthesize_example_module(body: &str, source_module: &str, module_imports: &[
     }
     out.push('\n');
 
+    emit_example_bindings(&mut out, body);
+    out
+}
+
+/// Emit each example item as source the type-checker reaches.
+///
+/// An item runs until a line carrying `-->` (an expression/result assertion): the
+/// expression is every buffered line up to that line plus the text before the
+/// arrow, so a multi-line expression is assembled into one `docCheckN = …`
+/// binding rather than each line orphaned at top level. A top-level declaration
+/// (a `name =`/`name :` at column zero) and any line that carries no arrow item
+/// after it is emitted verbatim, so a standalone helper decl stays a decl.
+fn emit_example_bindings(out: &mut String, body: &str) {
     let mut check_idx = 0usize;
-    for line in body.lines() {
-        if let Some(arrow) = line.find("-->") {
-            let expr = line[..arrow].trim();
-            if !expr.is_empty() {
-                check_idx += 1;
-                let _ = writeln!(out, "docCheck{check_idx} = {expr}");
-            }
-        } else {
-            out.push_str(line);
+    let mut pending: Vec<&str> = Vec::new();
+
+    let flush_verbatim = |out: &mut String, pending: &mut Vec<&str>| {
+        for buffered in pending.drain(..) {
+            out.push_str(buffered);
             out.push('\n');
         }
+    };
+
+    for line in body.lines() {
+        if let Some(arrow) = line.find("-->") {
+            let head = line[..arrow].trim_end();
+            if !head.trim().is_empty() {
+                pending.push(head);
+            }
+            let expr: String = pending
+                .drain(..)
+                .collect::<Vec<_>>()
+                .join("\n");
+            if !expr.trim().is_empty() {
+                check_idx += 1;
+                let _ = writeln!(out, "docCheck{check_idx} =");
+                for expr_line in expr.lines() {
+                    let _ = writeln!(out, "    {expr_line}");
+                }
+            }
+        } else if is_top_level_decl(line) || line.starts_with("import ") {
+            flush_verbatim(out, &mut pending);
+            out.push_str(line);
+            out.push('\n');
+        } else {
+            pending.push(line);
+        }
     }
-    out
+    flush_verbatim(out, &mut pending);
+}
+
+/// Whether a line opens a top-level declaration — a bare name at column zero
+/// followed by a `=` or a `:` type signature — as opposed to a continuation line
+/// of a multi-line expression.
+fn is_top_level_decl(line: &str) -> bool {
+    let Some(first) = line.chars().next() else {
+        return false;
+    };
+    if !first.is_ascii_alphabetic() {
+        return false;
+    }
+    let Some((head, _)) = line.split_once(|c| c == '=' || c == ':') else {
+        return false;
+    };
+    head.split_whitespace().count() == 1
 }
 
 /// The fixed fallback imports for a qualified prefix a doc example commonly
