@@ -398,20 +398,41 @@ fn write_main(ipe_dir: &Path, source: &str) -> Result<(), BoxError> {
 }
 
 fn http_get_body(port: u16) -> Option<String> {
-    let mut stream = TcpStream::connect_timeout(
-        &format!("127.0.0.1:{port}").parse().ok()?,
-        Duration::from_millis(200),
-    )
-    .ok()?;
-    stream
-        .set_read_timeout(Some(Duration::from_millis(500)))
-        .ok()?;
-    stream
-        .write_all(b"GET / HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n")
-        .ok()?;
-    let mut buf = Vec::new();
-    let _ = stream.read_to_end(&mut buf);
-    Some(String::from_utf8_lossy(&buf).into_owned())
+    // Retry a few times with a short pause: a freshly hot-swapped server may
+    // accept the connection but return a partial body before the SSR finishes.
+    // We only give up on a genuine read failure (not a slow/partial read).
+    for attempt in 0..4u8 {
+        if attempt > 0 {
+            std::thread::sleep(Duration::from_millis(150));
+        }
+        let Ok(mut stream) = TcpStream::connect_timeout(
+            &format!("127.0.0.1:{port}").parse().ok()?,
+            Duration::from_millis(300),
+        ) else {
+            continue;
+        };
+        if stream
+            .set_read_timeout(Some(Duration::from_secs(3)))
+            .is_err()
+        {
+            continue;
+        }
+        if stream
+            .write_all(b"GET / HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n")
+            .is_err()
+        {
+            continue;
+        }
+        let mut buf = Vec::new();
+        match stream.read_to_end(&mut buf) {
+            Ok(_) if !buf.is_empty() => {
+                return Some(String::from_utf8_lossy(&buf).into_owned());
+            }
+            Ok(_) => continue,  // empty body — server not ready yet
+            Err(_) => continue, // partial read — retry
+        }
+    }
+    None
 }
 
 fn wait_for_serving(port: u16, timeout: Duration) -> bool {
