@@ -923,6 +923,57 @@ mod tests {
     }
 
     #[test]
+    fn parser_pipeline_operators_lex_as_single_tokens() {
+        use lexer::{Tok, lex};
+        let kinds = |src: &str| -> Vec<Tok> {
+            lex(src).map_or_else(
+                |_| Vec::new(),
+                |toks| toks.into_iter().map(|t| t.kind).collect(),
+            )
+        };
+        // `|=` is a single PipeEq token, not Pipe + Equals.
+        assert_eq!(kinds("|="), vec![Tok::PipeEq]);
+        // `|.` is a single PipeDot token, not Pipe + Dot.
+        assert_eq!(kinds("|."), vec![Tok::PipeDot]);
+        // Existing pipe tokens are unaffected by the new arms.
+        assert_eq!(kinds("|>"), vec![Tok::PipeGt]);
+        assert_eq!(kinds("||"), vec![Tok::PipePipe]);
+        assert_eq!(kinds("|"), vec![Tok::Pipe]);
+        // `|==` is PipeEq + lone Equals (maximal munch of `|=`).
+        assert_eq!(kinds("|=="), vec![Tok::PipeEq, Tok::Equals]);
+        // `|.x` is PipeDot + Ident (no space needed; Dot is consumed by PipeDot munch).
+        assert_eq!(
+            kinds("|. x"),
+            vec![Tok::PipeDot, Tok::Ident("x".to_owned())]
+        );
+        // In context.
+        assert_eq!(
+            kinds("|= pa"),
+            vec![Tok::PipeEq, Tok::Ident("pa".to_owned())]
+        );
+    }
+
+    #[test]
+    fn parser_pipeline_operators_parse_in_expression() {
+        // Both parser-pipeline operators must parse in a flat Binops chain.
+        let mut i = Interner::new();
+        let src = format!("{HDR}f p =\n    p |= pa\n");
+        let m = parse_module(&src, &mut i);
+        assert!(m.is_ok(), "`|=` must parse: {m:?}");
+
+        let mut i2 = Interner::new();
+        let src2 = format!("{HDR}f p =\n    p |. sep\n");
+        let m2 = parse_module(&src2, &mut i2);
+        assert!(m2.is_ok(), "`|.` must parse: {m2:?}");
+
+        // A chain `p |= pa |. sep |= pb` must parse as a flat Binops chain.
+        let mut i3 = Interner::new();
+        let src3 = format!("{HDR}f p =\n    p |= pa |. sep |= pb\n");
+        let m3 = parse_module(&src3, &mut i3);
+        assert!(m3.is_ok(), "mixed `|=` / `|.` chain must parse: {m3:?}");
+    }
+
+    #[test]
     fn plus_plus_lexes_as_one_append_token() {
         use lexer::{Tok, lex};
         let kinds = |src: &str| -> Vec<Tok> {

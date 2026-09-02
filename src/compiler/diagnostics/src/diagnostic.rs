@@ -146,6 +146,10 @@ pub enum TokenKind {
     PipeGt,
     /// The backward-pipe operator `<|`.
     LtPipe,
+    /// The parser-pipeline keep operator `|=` — apply right parser, keep its result.
+    PipeEq,
+    /// The parser-pipeline ignore operator `|.` — apply right parser, discard its result.
+    PipeDot,
     /// The forward-composition operator `>>`.
     GtGt,
     /// The backward-composition operator `<<`.

@@ -93,6 +93,16 @@ pub enum Tok {
     /// The backward-pipe operator `<|`. Lexed as ONE token (maximal munch of
     /// `<`), so `<|` never reaches the parser as `Lt` then `Pipe`.
     LtPipe,
+    /// The parser-pipeline keep operator `|=`. Desugars to `Ipe.Parser.ignore
+    /// left right` (runs left then right, yields right's result). Lexed as ONE
+    /// token (maximal munch of `|`), so `|=` never reaches the parser as `Pipe`
+    /// then `Equals`.
+    PipeEq,
+    /// The parser-pipeline discard operator `|.`. Desugars to `Ipe.Parser.keep
+    /// left right` (runs left then right, yields left's result). Lexed as ONE
+    /// token (maximal munch of `|`), so `|.` never reaches the parser as `Pipe`
+    /// then `Dot`.
+    PipeDot,
     /// The forward-composition operator `>>`. Lexed as ONE token (maximal munch
     /// of `>`), so `>>` never reaches the parser as two adjacent [`Tok::Gt`].
     GtGt,
@@ -752,7 +762,7 @@ fn lex_symbol(lx: &mut Lexer, c: char, lo: u32) -> DResult<Tok> {
         '+' => one_or_two(lx, '+', Tok::PlusPlus, Tok::Plus),
         '*' => one_char(lx, Tok::Star),
         '=' => one_or_two(lx, '=', Tok::EqEq, Tok::Equals),
-        // `|` has three forms: `||`, `|>`, and bare `|`.
+        // `|` has five forms: `||`, `|>`, `|=`, `|.`, and bare `|`.
         '|' => {
             lx.advance();
             match lx.peek() {
@@ -763,6 +773,14 @@ fn lex_symbol(lx: &mut Lexer, c: char, lo: u32) -> DResult<Tok> {
                 Some('>') => {
                     lx.advance();
                     Tok::PipeGt
+                }
+                Some('=') => {
+                    lx.advance();
+                    Tok::PipeEq
+                }
+                Some('.') => {
+                    lx.advance();
+                    Tok::PipeDot
                 }
                 _ => Tok::Pipe,
             }

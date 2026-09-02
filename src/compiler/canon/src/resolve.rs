@@ -5428,8 +5428,14 @@ enum Assoc {
 const fn op_precedence(op: &str) -> (i32, Assoc) {
     match op.as_bytes() {
         b"*" | b"/" | b"//" | b"%" => (7, Assoc::Left),
-        b"+" | b"-" => (6, Assoc::Left),
+        // `|.` (parser-pipeline discard, yields left's result) shares prec 6
+        // left-assoc with arithmetic `+`/`-` — merged because prec+assoc are identical.
+        b"+" | b"-" | b"|." => (6, Assoc::Left),
         b"++" | b"::" => (5, Assoc::Right),
+        // `|=` (parser-pipeline keep, yields right's result) — prec 5 left-assoc.
+        // Distinct from `++`/`::` (same prec, but right-assoc), so its own arm.
+        // `a |= b |. c` groups as `a |= (b |. c)` because `|.` at 6 is tighter.
+        b"|=" => (5, Assoc::Left),
         b"==" | b"/=" | b"<" | b">" | b"<=" | b">=" => (4, Assoc::None),
         b"&&" => (3, Assoc::Right),
         b"||" => (2, Assoc::Right),
@@ -5579,6 +5585,39 @@ fn combine_binop(
             span,
             canon::Expr_::Cons(Box::new(lhs), Box::new(rhs)),
         ));
+    }
+    // Parser-pipeline operators desugar to calls into `Ipe.Parser`.
+    // `a |= b`  keeps b's result:  `Ipe.Parser.ignore a b`
+    // `a |. b`  keeps a's result:  `Ipe.Parser.keep   a b`
+    //
+    // Argument order matches the combinators: `ignore dropped kept` and
+    // `keep kept dropped`, so passing (lhs, rhs) in source order is correct —
+    // lhs is the left operand, rhs the right, and each combinator runs them
+    // left-to-right internally via `map2`.
+    {
+        // Resolve the operator text to an owned string first so the immutable
+        // borrow on `interner` ends before the `intern` calls below.
+        let pipe_kind: Option<&'static str> = match interner.resolve(op.value) {
+            Some("|=") => Some("ignore"),
+            Some("|.") => Some("keep"),
+            _ => None,
+        };
+        if let Some(fn_name) = pipe_kind {
+            let mod_ipe = interner.intern("Ipe")?;
+            let mod_parser = interner.intern("Parser")?;
+            let fn_sym = interner.intern(fn_name)?;
+            let callee = Located::new(
+                span,
+                canon::Expr_::VarTopLevel {
+                    module: vec![mod_ipe, mod_parser],
+                    name: fn_sym,
+                },
+            );
+            return Ok(Located::new(
+                span,
+                canon::Expr_::Call(Box::new(callee), vec![lhs, rhs]),
+            ));
+        }
     }
     // Pipe operators desugar to function application — no new AST node needed.
     // `x |> f`  ≡  `f x`  ⇒  Call(rhs, [lhs])
