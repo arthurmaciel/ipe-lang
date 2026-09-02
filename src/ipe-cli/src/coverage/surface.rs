@@ -56,6 +56,15 @@ impl Surface for StdlibSurface {
         // result is deterministic without an explicit sort.
         by_key.into_values().collect()
     }
+
+    fn label(item: &StdlibSymbol) -> String {
+        let mut path = item.module.join(".");
+        if !path.is_empty() {
+            path.push('.');
+        }
+        path.push_str(&item.name);
+        path
+    }
 }
 
 /// Split a dotted module name (`"Ipe.List"`) into its segments.

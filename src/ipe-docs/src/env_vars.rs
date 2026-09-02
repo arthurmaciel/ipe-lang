@@ -1107,9 +1107,10 @@ pub static EXCLUDED_NAMES: &[&str] = &[
     "IPE_BLESS",
     "IPE_CAPABILITY_FLOOR", // a linker-retained static symbol, not an env var
     "IPE_DEBUG_TODO_SUBPROCESS",
-    "IPE_E2E",        // CI gate for enabling e2e test suites
-    "IPE_E2E_SECRET", // macOS jail e2e test sentinel
-    "IPE_E2E_STATIC", // CI gate for static-binary e2e tests
+    "IPE_DEFINITELY_NOT_REGISTERED_PROBE", // synthetic orphan-read fixture for the env-var coverage matrix
+    "IPE_E2E",                             // CI gate for enabling e2e test suites
+    "IPE_E2E_SECRET",                      // macOS jail e2e test sentinel
+    "IPE_E2E_STATIC",                      // CI gate for static-binary e2e tests
     "IPE_HTTP_TEST_URL",
     "IPE_LOAD_ENV_PROBE_VAR",
     "IPE_ORACLE_SHARED_TARGET",
