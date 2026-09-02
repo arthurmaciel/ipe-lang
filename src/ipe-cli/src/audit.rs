@@ -221,7 +221,8 @@ fn tier2_probe_fixture() -> Result<PathBuf, CliError> {
 /// package cannot be built or read; [`CliError::PackageAudit`] when a Tier-1
 /// check rejects the package (the gate's hard reject).
 pub fn run_audit(rest: &[String]) -> Result<(), CliError> {
-    let (path, index_root, publisher, format) = parse_audit_args(rest)?;
+    let (path, index_root, advisory_db_override, no_advisory_db, publisher, format) =
+        parse_audit_args(rest)?;
     let prepared = prepare(&path)?;
     let name = prepared.manifest.name.clone();
     let version = prepared
@@ -230,7 +231,22 @@ pub fn run_audit(rest: &[String]) -> Result<(), CliError> {
         .as_ref()
         .map_or_else(|| "(unversioned)".to_owned(), ToString::to_string);
 
-    let outcome = audit_gate(&prepared, index_root.as_deref(), publisher.as_deref());
+    // Resolve the effective advisory DB.
+    // Priority: explicit --advisory-db > default registry checkout > --no-advisory-db (None).
+    // Absence of --advisory-db uses the registry index checkout the resolver already has.
+    // --no-advisory-db is the ONLY way to skip; omitting --advisory-db does NOT skip.
+    let effective_advisory_db: Option<PathBuf> = if no_advisory_db {
+        None
+    } else {
+        Some(advisory_db_override.unwrap_or_else(crate::resolve::index_root))
+    };
+
+    let outcome = audit_gate(
+        &prepared,
+        index_root.as_deref(),
+        effective_advisory_db.as_deref(),
+        publisher.as_deref(),
+    );
 
     match format {
         OutputFormat::Json => emit_audit_json(&name, &version, &outcome),
@@ -272,6 +288,7 @@ pub fn run_audit(rest: &[String]) -> Result<(), CliError> {
 fn audit_gate(
     prepared: &Prepared,
     index_root: Option<&Path>,
+    advisory_db: Option<&Path>,
     entry_publisher: Option<&str>,
 ) -> Result<crate::audit_native::Tier2Outcome, CliError> {
     reserved_namespace_ownership(prepared, entry_publisher)?;
@@ -279,6 +296,7 @@ fn audit_gate(
     capability_consistency(prepared)?;
     enforced_semver(prepared, index_root)?;
     supply_chain(prepared)?;
+    advisory_check(prepared, advisory_db)?;
 
     crate::audit_native::native_tier2(&crate::audit_native::NativeAudit {
         declared: &prepared.manifest.capabilities,
@@ -368,19 +386,39 @@ fn passing_summary(name: &str, version: &str, tier2: &crate::audit_native::Tier2
     }
 }
 
+/// The six-field result of [`parse_audit_args`]: `(project_path, index_root,
+/// advisory_db_override, no_advisory_db, publisher, format)`.
+///
+/// `advisory_db_override` is a custom DB path from `--advisory-db <path>`.
+/// `no_advisory_db` is `true` when `--no-advisory-db` was passed (explicit opt-out).
+/// Absence of both means the check runs against the default registry checkout.
+type AuditArgs = (
+    PathBuf,
+    Option<PathBuf>,
+    Option<PathBuf>,
+    bool,
+    Option<String>,
+    OutputFormat,
+);
+
 /// Parse `ipe package audit`'s tail: an optional positional `<path>`, an
 /// optional `--index <dir>` (the curated index checkout the semver check reads
 /// the previous published version from; defaults to the resolver's index root),
 /// and the shared `--plain` / `--json` output-format flags.
 ///
+/// Advisory-DB flags:
+/// - `--advisory-db <path>`: use a custom DB root (overrides the default registry checkout).
+/// - `--no-advisory-db`: explicit opt-out; skips the advisory check with a loud warning.
+/// - Neither: the check runs against the default registry index checkout (fail-closed default).
+///
 /// # Errors
-/// [`CliError::UsageOwned`] on an unknown flag, a missing `--index` value, a
-/// second positional, or `--plain --json` together.
-fn parse_audit_args(
-    rest: &[String],
-) -> Result<(PathBuf, Option<PathBuf>, Option<String>, OutputFormat), CliError> {
+/// [`CliError::UsageOwned`] on an unknown flag, a missing flag value, a second
+/// positional, `--plain --json` together, or `--advisory-db` and `--no-advisory-db` together.
+fn parse_audit_args(rest: &[String]) -> Result<AuditArgs, CliError> {
     let mut path: Option<PathBuf> = None;
     let mut index: Option<PathBuf> = None;
+    let mut advisory_db: Option<PathBuf> = None;
+    let mut no_advisory_db = false;
     let mut publisher: Option<String> = None;
     let mut format: Option<OutputFormat> = None;
     let mut it = rest.iter();
@@ -396,6 +434,35 @@ fn parse_audit_args(
                     ));
                 }
                 index = Some(PathBuf::from(value));
+            }
+            "--advisory-db" => {
+                let value = it.next().ok_or(CliError::Usage(
+                    "ipe package audit: --advisory-db needs a value",
+                ))?;
+                if advisory_db.is_some() {
+                    return Err(CliError::Usage(
+                        "ipe package audit: --advisory-db given more than once",
+                    ));
+                }
+                if no_advisory_db {
+                    return Err(CliError::Usage(
+                        "ipe package audit: --advisory-db and --no-advisory-db are mutually exclusive",
+                    ));
+                }
+                advisory_db = Some(PathBuf::from(value));
+            }
+            "--no-advisory-db" => {
+                if no_advisory_db {
+                    return Err(CliError::Usage(
+                        "ipe package audit: --no-advisory-db given more than once",
+                    ));
+                }
+                if advisory_db.is_some() {
+                    return Err(CliError::Usage(
+                        "ipe package audit: --advisory-db and --no-advisory-db are mutually exclusive",
+                    ));
+                }
+                no_advisory_db = true;
             }
             "--publisher" => {
                 let value = it.next().ok_or(CliError::Usage(
@@ -426,6 +493,8 @@ fn parse_audit_args(
     Ok((
         path.unwrap_or_else(|| PathBuf::from(".")),
         index,
+        advisory_db,
+        no_advisory_db,
         publisher,
         format.unwrap_or_default(),
     ))
@@ -1111,6 +1180,48 @@ fn verify_locked_dependency_hashes(prepared: &Prepared) -> Result<(), CliError> 
     }
 }
 
+/// Cross-check every locked Ipê dependency against the advisory database.
+///
+/// Reads `<advisory_db_root>/advisories/<pkg>/` for each locked dep and tests
+/// its locked version against every advisory's `affected` range.
+///
+/// `advisory_db` is `None` only when the caller explicitly opted out via
+/// `--no-advisory-db`.  The default path (the registry index checkout) is
+/// resolved by the caller before this function is called, so an absent
+/// `--advisory-db` flag does NOT produce `None` — it produces `Some(default)`.
+///
+/// When `advisory_db` is `None` (explicit opt-out), the check is skipped with a
+/// loud warning naming the flag required to re-enable it.  When `advisory_db`
+/// is `Some` but the `advisories/` directory is absent from disk, the check
+/// passes cleanly (no advisories published = no risk signal).  An unreadable
+/// directory or a malformed advisory file is always an error (fail-closed).
+///
+/// # Errors
+/// [`CliError::AdvisoryVulnerable`] on a `high`/`critical` match.
+/// [`CliError::AdvisoryDbMalformed`] on a malformed advisory file.
+/// [`CliError::AdvisoryDbUnreachable`] on an unreadable advisory directory.
+fn advisory_check(prepared: &Prepared, advisory_db: Option<&Path>) -> Result<(), CliError> {
+    let Some(db_root) = advisory_db else {
+        // Explicit opt-out via --no-advisory-db.  Warn loudly; the check is
+        // on by default and omitting --no-advisory-db is the safe path.
+        eprintln!(
+            "{}",
+            crate::style::gutter(
+                "warning: advisory-database check explicitly skipped via --no-advisory-db. \
+                 Remove --no-advisory-db to re-enable the default check against the registry \
+                 advisory database."
+            )
+        );
+        return Ok(());
+    };
+
+    let lockfile = crate::lockfile::Lockfile::read(&prepared.manifest.root)?;
+    for dep in lockfile.packages() {
+        crate::advisory::check_dep_advisories(db_root, &dep.name, &dep.version)?;
+    }
+    Ok(())
+}
+
 /// Locate the workspace's `deny.toml` so the supply-chain check applies the same
 /// posture the workspace CI does. Walks up from the current directory, then from
 /// the resolved runtime tree's ancestry (the runtime lives inside the workspace,
@@ -1268,21 +1379,21 @@ mod tests {
 
     #[test]
     fn audit_parses_output_format_flags() {
-        let (_, _, _, fmt) = parse_audit_args(&args(&["--json"])).expect("json");
+        let (_, _, _, _, _, fmt) = parse_audit_args(&args(&["--json"])).expect("json");
         assert_eq!(fmt, OutputFormat::Json);
-        let (_, _, _, fmt) = parse_audit_args(&args(&["--plain"])).expect("plain");
+        let (_, _, _, _, _, fmt) = parse_audit_args(&args(&["--plain"])).expect("plain");
         assert_eq!(fmt, OutputFormat::Plain);
-        let (_, _, _, fmt) = parse_audit_args(&args(&[])).expect("default");
+        let (_, _, _, _, _, fmt) = parse_audit_args(&args(&[])).expect("default");
         assert_eq!(fmt, OutputFormat::Human);
     }
 
     #[test]
     fn audit_parses_publisher_flag() {
-        let (_, _, publisher, _) =
+        let (_, _, _, _, publisher, _) =
             parse_audit_args(&args(&["--publisher", "arthurmaciel"])).expect("publisher");
         assert_eq!(publisher.as_deref(), Some("arthurmaciel"));
         // Absent by default.
-        let (_, _, publisher, _) = parse_audit_args(&args(&[])).expect("default");
+        let (_, _, _, _, publisher, _) = parse_audit_args(&args(&[])).expect("default");
         assert_eq!(publisher, None);
         // A value is required, and it may not be given twice.
         assert!(parse_audit_args(&args(&["--publisher"])).is_err());
@@ -1712,6 +1823,141 @@ mod tests {
         );
         let _ = std::fs::remove_dir_all(&dir);
     }
+
+    // ── Advisory-check gate-level tests ─────────────────────────────────────
+
+    /// Build a minimal `Prepared` whose `manifest.root` points at `root`.
+    /// Only `manifest.root` is used by `advisory_check` (to read `ipe.lock`).
+    fn make_prepared(root: &std::path::Path) -> Prepared {
+        use std::collections::{BTreeMap, BTreeSet};
+        Prepared {
+            manifest: crate::project::ProjectManifest {
+                name: "test-pkg".to_owned(),
+                version: None,
+                root: root.to_path_buf(),
+                src_root: root.join("src"),
+                driver: ipe_backend_rust::DbDriver::default(),
+                static_request: crate::build_plan::StaticRequestLayer::default(),
+                wasm: crate::project::WasmConfig::default(),
+                dependencies: BTreeMap::new(),
+                rust_dependencies: BTreeMap::new(),
+                capabilities: BTreeSet::new(),
+                capabilities_accept: BTreeSet::new(),
+                has_rust_wrapper: false,
+                programs: Vec::new(),
+                exposed_modules: Vec::new(),
+            },
+            manifest_path: root.join("package.ipe"),
+            emitted_dir: root.join("emitted"),
+        }
+    }
+
+    /// Write a minimal `ipe.lock` with one locked dep to `project_root`.
+    fn write_lockfile(project_root: &std::path::Path, pkg_name: &str, version: &str) {
+        let content = format!(
+            "# ipe.lock\n\
+             [[package]]\n\
+             name = \"{pkg_name}\"\n\
+             version = \"{version}\"\n\
+             source = \"https://github.com/example/{pkg_name}\"\n\
+             rev = \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"\n\
+             sha256 = \"deadbeef\"\n\
+             kind = \"index\"\n"
+        );
+        std::fs::write(project_root.join("ipe.lock"), content).expect("write ipe.lock");
+    }
+
+    /// Write a high-severity advisory for `pkg_name` into `db_root/advisories/<pkg_name>/`.
+    fn write_high_advisory(db_root: &std::path::Path, pkg_name: &str, affected: &str) {
+        let dir = db_root.join("advisories").join(pkg_name);
+        std::fs::create_dir_all(&dir).expect("create advisory dir");
+        let content = format!(
+            "id          = \"IPE-TEST-0001\"\n\
+             package     = \"{pkg_name}\"\n\
+             severity    = \"high\"\n\
+             affected    = \"{affected}\"\n\
+             description = \"Test high-severity vulnerability.\"\n"
+        );
+        std::fs::write(dir.join("IPE-TEST-0001.toml"), content).expect("write advisory toml");
+    }
+
+    /// Default-on gate-level test: planting a high advisory for a locked dep and
+    /// passing `Some(db_root)` to `advisory_check` must produce a typed
+    /// `AdvisoryVulnerable` rejection. This is the path `run_audit` takes when
+    /// `--no-advisory-db` is absent — it resolves the registry checkout and always
+    /// passes `Some(effective_db)`.
+    #[test]
+    fn advisory_check_rejects_high_severity_dep_from_planted_db() {
+        let dir = make_test_dir("adv-gate-reject");
+        let db = make_test_dir("adv-gate-db");
+        write_lockfile(&dir, "vuln-pkg", "1.1.0");
+        write_high_advisory(&db, "vuln-pkg", ">=1.0.0, <1.2.0");
+
+        let prepared = make_prepared(&dir);
+        let result = advisory_check(&prepared, Some(&db));
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&db);
+        assert!(
+            matches!(result, Err(CliError::AdvisoryVulnerable(_))),
+            "high-severity dep in range must be rejected: {result:?}"
+        );
+    }
+
+    /// Explicit opt-out gate-level test: `advisory_check(prepared, None)` must
+    /// return `Ok(())` — `None` is the explicit `--no-advisory-db` opt-out path.
+    #[test]
+    fn advisory_check_none_skips_check() {
+        let dir = make_test_dir("adv-gate-skip");
+        let db = make_test_dir("adv-gate-db-skip");
+        write_lockfile(&dir, "vuln-pkg", "1.1.0");
+        write_high_advisory(&db, "vuln-pkg", ">=1.0.0, <1.2.0");
+
+        let prepared = make_prepared(&dir);
+        let result = advisory_check(&prepared, None);
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&db);
+        assert!(result.is_ok(), "explicit opt-out must pass: {result:?}");
+    }
+
+    /// `--no-advisory-db` flag is parsed correctly.
+    #[test]
+    fn parse_audit_args_no_advisory_db_sets_flag() {
+        let (_, _, override_db, no_adv, _, _) =
+            parse_audit_args(&args(&["--no-advisory-db"])).expect("--no-advisory-db accepted");
+        assert!(no_adv, "--no-advisory-db must set the flag");
+        assert!(
+            override_db.is_none(),
+            "no override path when only --no-advisory-db"
+        );
+    }
+
+    /// `--advisory-db` and `--no-advisory-db` together must be rejected.
+    #[test]
+    fn parse_audit_args_advisory_db_and_no_advisory_db_are_mutually_exclusive() {
+        assert!(
+            parse_audit_args(&args(&["--advisory-db", "/some/path", "--no-advisory-db"])).is_err(),
+            "--advisory-db then --no-advisory-db must error"
+        );
+        assert!(
+            parse_audit_args(&args(&["--no-advisory-db", "--advisory-db", "/some/path"])).is_err(),
+            "--no-advisory-db then --advisory-db must error"
+        );
+    }
+
+    /// Without either flag, `no_advisory_db` is false and `override_db` is `None`
+    /// (caller resolves the default registry checkout).
+    #[test]
+    fn parse_audit_args_defaults_to_default_on() {
+        let (_, _, override_db, no_adv, _, _) =
+            parse_audit_args(&args(&[])).expect("empty args accepted");
+        assert!(!no_adv, "default must not set --no-advisory-db");
+        assert!(
+            override_db.is_none(),
+            "default must not set an override path"
+        );
+    }
+
+    // ── Runtime resolution ───────────────────────────────────────────────────
 
     /// `prepare` resolves the runtime through the SAME path `ipe build` uses — the
     /// materialize-capable resolver — never a separate walk-up that cannot
