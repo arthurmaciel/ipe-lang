@@ -621,6 +621,19 @@ const IPE_CORE_WEBSOCKET: &str = include_str!("../Ipe/WebSocket.ipe");
 /// `STDLIB_MODULE_QUALIFIERS`.
 const IPE_CORE_JS: &str = include_str!("../Ipe/Js.ipe");
 
+/// `Ipe.Browser.Clipboard` — write text to the system clipboard over `Ipe.Js`
+/// ports (compiled source).
+///
+/// The thin first-party proof of the per-capability web mechanism: importing this
+/// reserved `Ipe.Browser.<Api>` module discloses `js-port:clipboard`
+/// (import-derived, keyed on the canonical path via
+/// `WebCapability::for_browser_module`), which the app-boundary consent gate then
+/// requires the top-level app to grant. Registered in [`COMPILED_STD_MODULES`]
+/// (NOT `MODULES`); NOT in `STDLIB_MODULE_QUALIFIERS`, so the disjointness
+/// invariant holds. The served wasm-sink JS handler reaches
+/// `navigator.clipboard.writeText`, trapping a host denial to a typed `Err`.
+const IPE_BROWSER_CLIPBOARD: &str = include_str!("../Ipe/Browser/Clipboard.ipe");
+
 /// `Ipe.Env` — build-time-embedded public config (compiled source).
 ///
 /// Defines `public : String -> Maybe String`, routed through the
@@ -1063,6 +1076,10 @@ pub const COMPILED_STD_MODULES: &[CompiledStdModule] = &[
     CompiledStdModule {
         dotted: "Ipe.Js",
         source: IPE_CORE_JS,
+    },
+    CompiledStdModule {
+        dotted: "Ipe.Browser.Clipboard",
+        source: IPE_BROWSER_CLIPBOARD,
     },
     CompiledStdModule {
         dotted: "Ipe.Env",
