@@ -30671,7 +30671,7 @@ mod tests {
         let arith_op = interner.intern("ArithOp").expect("intern");
         let module = canon::Module {
             imports_unsafe_submodule: false,
-            imported_web_capabilities: Default::default(),
+            imported_web_capabilities: std::collections::BTreeSet::new(),
             name: vec![],
             unions: vec![],
             defs: vec![],
@@ -30952,7 +30952,7 @@ mod tests {
 
         let module = canon::Module {
             imports_unsafe_submodule: false,
-            imported_web_capabilities: Default::default(),
+            imported_web_capabilities: std::collections::BTreeSet::new(),
             name: vec![],
             unions: vec![],
             defs: vec![],
@@ -31071,7 +31071,7 @@ mod tests {
         let builtins = build_test_builtin_ctors(&mut interner);
         let module = canon::Module {
             imports_unsafe_submodule: false,
-            imported_web_capabilities: Default::default(),
+            imported_web_capabilities: std::collections::BTreeSet::new(),
             name: vec![],
             unions: vec![],
             defs: vec![],
@@ -31517,7 +31517,7 @@ mod tests {
         // a first-module-only shortcut would miss.
         let m = canon::Module {
             imports_unsafe_submodule: false,
-            imported_web_capabilities: Default::default(),
+            imported_web_capabilities: std::collections::BTreeSet::new(),
             name: vec![main],
             unions: vec![],
             defs: vec![
@@ -32456,7 +32456,7 @@ mod tests {
 
         let module = ipe_canon::ast::Module {
             imports_unsafe_submodule: false,
-            imported_web_capabilities: Default::default(),
+            imported_web_capabilities: std::collections::BTreeSet::new(),
             name: vec![],
             unions: vec![],
             defs: vec![],
@@ -32567,7 +32567,7 @@ mod tests {
         );
         let module = ipe_canon::ast::Module {
             imports_unsafe_submodule: false,
-            imported_web_capabilities: Default::default(),
+            imported_web_capabilities: std::collections::BTreeSet::new(),
             name: vec![],
             unions: vec![],
             defs: vec![ipe_canon::ast::Def::Typed {
@@ -32731,7 +32731,7 @@ mod tests {
 
         let module = ipe_canon::ast::Module {
             imports_unsafe_submodule: false,
-            imported_web_capabilities: Default::default(),
+            imported_web_capabilities: std::collections::BTreeSet::new(),
             name: vec![],
             unions: vec![],
             defs: vec![],

@@ -641,7 +641,7 @@ fn a_transitive_browser_import_reaches_the_linked_set() -> TestResult {
 /// admits it once granted — the app-boundary consent mechanism, exercised through
 /// `web_consent::gate` over the real inferred set.
 #[test]
-fn web_consent_refuses_ungranted_clipboard_then_admits_it() -> TestResult {
+fn web_consent_refuses_ungranted_clipboard_then_admits_it() {
     use ipe::web_consent;
     let inferred = BTreeSet::from([Capability::JsPort(WebCapability::Clipboard)]);
     let provenance = web_consent::WebAxisProvenance::from_sources([(
@@ -657,7 +657,6 @@ fn web_consent_refuses_ungranted_clipboard_then_admits_it() -> TestResult {
     // Granted → proceeds.
     let granted = BTreeSet::from([Capability::JsPort(WebCapability::Clipboard)]);
     web_consent::gate(&inferred, &granted, &provenance).expect("a granted web axis builds");
-    Ok(())
 }
 
 /// Fail-closed: a program that reaches a port but declares NOTHING on the

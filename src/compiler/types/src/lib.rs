@@ -5406,7 +5406,7 @@ mod tests {
         // fallback path in `constrain_pattern`.
         let module = canon::Module {
             imports_unsafe_submodule: false,
-            imported_web_capabilities: Default::default(),
+            imported_web_capabilities: std::collections::BTreeSet::new(),
             name: vec![main_sym],
             unions: vec![],
             defs: vec![canon::Def::Untyped {

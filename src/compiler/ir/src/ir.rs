@@ -4662,7 +4662,7 @@ mod tests {
         };
         let program = Program {
             imports_unsafe_submodule: false,
-            imported_web_capabilities: Default::default(),
+            imported_web_capabilities: std::collections::BTreeSet::new(),
             modules: vec![Module {
                 name: ModPath(vec![main_mod]),
                 types: vec![TypeDef::Enum(EnumDef {
@@ -5196,7 +5196,7 @@ mod serde_persistence_tests {
         };
         Ok(Program {
             imports_unsafe_submodule: false,
-            imported_web_capabilities: Default::default(),
+            imported_web_capabilities: std::collections::BTreeSet::new(),
             modules: vec![Module {
                 name: ModPath(vec![main_mod]),
                 types: vec![TypeDef::Enum(EnumDef {
@@ -5290,7 +5290,7 @@ mod serde_persistence_tests {
         let interner = Arc::new(Mutex::new(plain));
         let program = Program {
             imports_unsafe_submodule: false,
-            imported_web_capabilities: Default::default(),
+            imported_web_capabilities: std::collections::BTreeSet::new(),
             modules: vec![Module {
                 name: ModPath(vec![f]),
                 types: vec![],

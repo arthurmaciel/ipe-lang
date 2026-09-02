@@ -392,7 +392,7 @@ mod tests {
         let name = intern(interner, "decoder");
         Module {
             imports_unsafe_submodule: false,
-            imported_web_capabilities: Default::default(),
+            imported_web_capabilities: std::collections::BTreeSet::new(),
             name: main.clone(),
             unions: Vec::new(),
             defs: vec![Def::Untyped {
@@ -477,7 +477,7 @@ mod tests {
         );
         let module = Module {
             imports_unsafe_submodule: false,
-            imported_web_capabilities: Default::default(),
+            imported_web_capabilities: std::collections::BTreeSet::new(),
             name: main.clone(),
             unions: Vec::new(),
             defs: vec![

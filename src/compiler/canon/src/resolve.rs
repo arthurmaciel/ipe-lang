@@ -2914,10 +2914,10 @@ fn imported_web_capabilities_of(
         // A segment that failed to resolve shortens the slice, so a partial path
         // simply fails to match — fail-closed to "no disclosure from this import",
         // never a mis-attributed one.
-        if segments.len() == imp.name.value.len() {
-            if let Some(w) = WebCapability::for_browser_module(&segments) {
-                set.insert(w);
-            }
+        if segments.len() == imp.name.value.len()
+            && let Some(w) = WebCapability::for_browser_module(&segments)
+        {
+            set.insert(w);
         }
     }
     set
@@ -7585,7 +7585,7 @@ mod config_threading_tests {
         }
         canon::Module {
             imports_unsafe_submodule: false,
-            imported_web_capabilities: Default::default(),
+            imported_web_capabilities: std::collections::BTreeSet::new(),
             name: home,
             unions: Vec::new(),
             defs,

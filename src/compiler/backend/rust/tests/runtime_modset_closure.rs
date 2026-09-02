@@ -580,7 +580,7 @@ fn extract_seg_with_trailing_colons(s: &str) -> Option<String> {
 fn declared_for_mask(interner: &Interner, main: ipe_intern::Symbol, mask: u32) -> BTreeSet<String> {
     let prog = Program {
         imports_unsafe_submodule: false,
-        imported_web_capabilities: Default::default(),
+        imported_web_capabilities: std::collections::BTreeSet::new(),
         modules: vec![module_for_mask(main, mask)],
     };
     let emitted = RustBackend::new(interner)
@@ -599,7 +599,7 @@ fn declared_for_mask(interner: &Interner, main: ipe_intern::Symbol, mask: u32) -
 fn mod_rs_for_mask(interner: &Interner, main: ipe_intern::Symbol, mask: u32) -> String {
     let prog = Program {
         imports_unsafe_submodule: false,
-        imported_web_capabilities: Default::default(),
+        imported_web_capabilities: std::collections::BTreeSet::new(),
         modules: vec![module_for_mask(main, mask)],
     };
     let emitted = RustBackend::new(interner)
@@ -816,7 +816,7 @@ fn base_modules_do_not_reach_gated_modules() {
     // flag off.
     let base_prog = Program {
         imports_unsafe_submodule: false,
-        imported_web_capabilities: Default::default(),
+        imported_web_capabilities: std::collections::BTreeSet::new(),
         modules: vec![module_for_mask(main, 0)],
     };
     let emitted = RustBackend::new(&interner)
@@ -886,7 +886,7 @@ fn web_shape_declares_tea() {
     // uses_web only (bit 3).
     let prog = Program {
         imports_unsafe_submodule: false,
-        imported_web_capabilities: Default::default(),
+        imported_web_capabilities: std::collections::BTreeSet::new(),
         modules: vec![module_for_mask(main, 1 << 3)],
     };
     let emitted = RustBackend::new(&interner).emit(&prog).expect("emit");
@@ -905,7 +905,7 @@ fn server_shape_declares_tea_without_http_stream() {
     // uses_server only (bit 1) — no HTTP kernel, no email.
     let prog = Program {
         imports_unsafe_submodule: false,
-        imported_web_capabilities: Default::default(),
+        imported_web_capabilities: std::collections::BTreeSet::new(),
         modules: vec![module_for_mask(main, 1 << 1)],
     };
     let emitted = RustBackend::new(&interner).emit(&prog).expect("emit");
@@ -929,7 +929,7 @@ fn http_kernel_shape_declares_http_stream() {
     // uses_http (bit 11) — the outbound HTTP client kernel.
     let prog = Program {
         imports_unsafe_submodule: false,
-        imported_web_capabilities: Default::default(),
+        imported_web_capabilities: std::collections::BTreeSet::new(),
         modules: vec![module_for_mask(main, 1 << 11)],
     };
     let emitted = RustBackend::new(&interner).emit(&prog).expect("emit");
@@ -1068,7 +1068,7 @@ fn wasm_vendored_modset_is_closed() {
     // `WASM_RUNTIME_MOD_RS` into `src/ipe_runtime/mod.rs`.
     let prog = Program {
         imports_unsafe_submodule: false,
-        imported_web_capabilities: Default::default(),
+        imported_web_capabilities: std::collections::BTreeSet::new(),
         modules: vec![module_for_mask(main, 0)],
     };
     let emitted = RustBackend::new(&interner)
@@ -1116,7 +1116,7 @@ fn wasm_vendored_modset_declares_app_config() {
     let main = interner.intern("Main").expect("intern Main");
     let prog = Program {
         imports_unsafe_submodule: false,
-        imported_web_capabilities: Default::default(),
+        imported_web_capabilities: std::collections::BTreeSet::new(),
         modules: vec![module_for_mask(main, 0)],
     };
     let emitted = RustBackend::new(&interner)
@@ -1158,7 +1158,7 @@ fn wasm_vendored_modset_declares_seal_codec() {
     let main = interner.intern("Main").expect("intern Main");
     let prog = Program {
         imports_unsafe_submodule: false,
-        imported_web_capabilities: Default::default(),
+        imported_web_capabilities: std::collections::BTreeSet::new(),
         modules: vec![module_for_mask(main, 0)],
     };
     let emitted = RustBackend::new(&interner)

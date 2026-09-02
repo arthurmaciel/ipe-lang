@@ -431,7 +431,7 @@ mod tests {
 
         let program = Program {
             imports_unsafe_submodule: false,
-            imported_web_capabilities: Default::default(),
+            imported_web_capabilities: std::collections::BTreeSet::new(),
             modules: vec![module],
         };
         let Partitioned { buckets, .. } = partition_items(&program, &interner);
@@ -486,7 +486,7 @@ mod tests {
 
         let program = Program {
             imports_unsafe_submodule: false,
-            imported_web_capabilities: Default::default(),
+            imported_web_capabilities: std::collections::BTreeSet::new(),
             modules: vec![module],
         };
         let Partitioned { buckets, .. } = partition_items(&program, &interner);
@@ -527,7 +527,7 @@ mod tests {
 
         let program = Program {
             imports_unsafe_submodule: false,
-            imported_web_capabilities: Default::default(),
+            imported_web_capabilities: std::collections::BTreeSet::new(),
             modules: vec![module],
         };
         let Partitioned { buckets, .. } = partition_items(&program, &interner);
@@ -596,7 +596,7 @@ mod tests {
 
         let program = Program {
             imports_unsafe_submodule: false,
-            imported_web_capabilities: Default::default(),
+            imported_web_capabilities: std::collections::BTreeSet::new(),
             modules: vec![module],
         };
         let Partitioned { buckets, .. } = partition_items(&program, &interner);
@@ -671,7 +671,7 @@ mod tests {
         // `Zeta` FIRST in `program.modules` — reverse alphabetical order.
         let program = Program {
             imports_unsafe_submodule: false,
-            imported_web_capabilities: Default::default(),
+            imported_web_capabilities: std::collections::BTreeSet::new(),
             modules: vec![zeta, alpha],
         };
         let Partitioned {

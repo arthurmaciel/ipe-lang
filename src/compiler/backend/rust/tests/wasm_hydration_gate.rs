@@ -48,7 +48,7 @@ fn hydrate_program(interner: &mut Interner, fields: Vec<IrType>) -> DResult<Prog
     };
     Ok(Program {
         imports_unsafe_submodule: false,
-        imported_web_capabilities: Default::default(),
+        imported_web_capabilities: std::collections::BTreeSet::new(),
         modules: vec![Module {
             name: ModPath(vec![main]),
             types: vec![TypeDef::Enum(hs_def)],
@@ -153,7 +153,7 @@ fn no_hydration_state_type_passes_gate() -> DResult<()> {
     let main = interner.intern("Main")?;
     let prog = Program {
         imports_unsafe_submodule: false,
-        imported_web_capabilities: Default::default(),
+        imported_web_capabilities: std::collections::BTreeSet::new(),
         modules: vec![Module {
             name: ModPath(vec![main]),
             types: vec![],
@@ -236,7 +236,7 @@ fn hydrate_program_with_record_projection(interner: &mut Interner) -> DResult<Pr
     };
     Ok(Program {
         imports_unsafe_submodule: false,
-        imported_web_capabilities: Default::default(),
+        imported_web_capabilities: std::collections::BTreeSet::new(),
         modules: vec![Module {
             name: ModPath(vec![main]),
             types: vec![],
@@ -333,7 +333,7 @@ fn no_projection_emits_no_hydrate_glue() -> DResult<()> {
     let main = interner.intern("Main")?;
     let prog = Program {
         imports_unsafe_submodule: false,
-        imported_web_capabilities: Default::default(),
+        imported_web_capabilities: std::collections::BTreeSet::new(),
         modules: vec![Module {
             name: ModPath(vec![main]),
             types: vec![],

@@ -122,7 +122,7 @@ fn nullary_int_caf_is_wrapped_in_a_share_once_cell() -> DResult<()> {
 
     let program = Program {
         imports_unsafe_submodule: false,
-        imported_web_capabilities: Default::default(),
+        imported_web_capabilities: std::collections::BTreeSet::new(),
         modules: vec![empty_module(
             ModPath(vec![main_mod]),
             vec![answer_fn, main_fn],
@@ -159,7 +159,7 @@ fn ipe_main_is_never_wrapped() -> DResult<()> {
     let main_fn = ipe_main(0, main);
     let program = Program {
         imports_unsafe_submodule: false,
-        imported_web_capabilities: Default::default(),
+        imported_web_capabilities: std::collections::BTreeSet::new(),
         modules: vec![empty_module(
             ModPath(vec![main_mod]),
             vec![main_fn],
@@ -207,7 +207,7 @@ fn nullary_task_caf_is_not_wrapped() -> DResult<()> {
 
     let program = Program {
         imports_unsafe_submodule: false,
-        imported_web_capabilities: Default::default(),
+        imported_web_capabilities: std::collections::BTreeSet::new(),
         modules: vec![empty_module(
             ModPath(vec![main_mod]),
             vec![job_fn, main_fn],
@@ -252,7 +252,7 @@ fn a_function_with_parameters_is_not_wrapped() -> DResult<()> {
 
     let program = Program {
         imports_unsafe_submodule: false,
-        imported_web_capabilities: Default::default(),
+        imported_web_capabilities: std::collections::BTreeSet::new(),
         modules: vec![empty_module(
             ModPath(vec![main_mod]),
             vec![identity_fn, main_fn],

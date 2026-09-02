@@ -41,9 +41,7 @@ impl WebAxisProvenance {
     /// and every dependency) for reserved-`Ipe.Browser.<Api>` imports, recording
     /// the importing module path against the disclosed axis.
     #[must_use]
-    pub fn from_sources<'a>(
-        sources: impl IntoIterator<Item = (&'a str, &'a str)>,
-    ) -> Self {
+    pub fn from_sources<'a>(sources: impl IntoIterator<Item = (&'a str, &'a str)>) -> Self {
         let mut by_axis: BTreeMap<WebCapability, BTreeSet<String>> = BTreeMap::new();
         for (module_name, src) in sources {
             for axis in browser_axes_imported_by(src) {
@@ -146,9 +144,8 @@ pub fn gate(
 /// The typed, fail-closed refusal naming each ungranted web axis, its disclosing
 /// module(s), and the remedy.
 fn refusal(ungranted: &[String]) -> CliError {
-    let mut body = String::from(
-        "this program reaches a browser web capability the app has not granted\n",
-    );
+    let mut body =
+        String::from("this program reaches a browser web capability the app has not granted\n");
     for item in ungranted {
         body.push_str("  = ");
         body.push_str(item);
@@ -186,8 +183,7 @@ mod tests {
         let prov = WebAxisProvenance::from_sources([("Dep.Widget", CLIPBOARD_DEP)]);
         let inferred = caps(&[Capability::JsPort(WebCapability::Clipboard)]);
         let granted = BTreeSet::new();
-        let err = gate(&inferred, &granted, &prov)
-            .expect_err("an ungranted web axis is refused");
+        let err = gate(&inferred, &granted, &prov).expect_err("an ungranted web axis is refused");
         let msg = err.to_string();
         assert!(msg.contains("IPE-S0002"), "carries the code: {msg}");
         assert!(msg.contains("js-port:clipboard"), "names the axis: {msg}");
@@ -225,6 +221,9 @@ mod tests {
             .expect_err("an un-attributable disclosed axis fails closed");
         let msg = err.to_string();
         assert!(msg.contains("js-port:geolocation"), "names the axis: {msg}");
-        assert!(msg.contains("could not attribute"), "states unattributable: {msg}");
+        assert!(
+            msg.contains("could not attribute"),
+            "states unattributable: {msg}"
+        );
     }
 }

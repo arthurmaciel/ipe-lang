@@ -54,8 +54,8 @@ pub mod scratch;
 pub mod style;
 pub mod toolchain;
 pub mod unsafe_ack;
-pub mod web_consent;
 pub mod version_check;
+pub mod web_consent;
 /// The embedded Ipê standard-library source now lives in the dependency-free
 /// [`ipe_stdlib`] leaf crate so the WebAssembly frontend can share one copy.
 /// Re-exported here so `crate::stdlib::…` call sites resolve unchanged.
@@ -5452,19 +5452,19 @@ fn named_sources_for_web_scan(
     manifest_path: Option<&Path>,
     entry: &Path,
 ) -> Result<Vec<(String, String)>, CliError> {
-    if let Some(mpath) = manifest_path {
-        if let Ok(manifest) = project::parse_manifest(mpath) {
-            let discovered = project::discover_modules(&manifest.src_root)?;
-            let mut out = Vec::with_capacity(discovered.len());
-            for m in &discovered {
-                let src = crate::io_bounded::read_to_string_capped(
-                    &m.path,
-                    crate::io_bounded::SOURCE_READ_CAP,
-                )?;
-                out.push((m.module_path.join("."), src));
-            }
-            return Ok(out);
+    if let Some(mpath) = manifest_path
+        && let Ok(manifest) = project::parse_manifest(mpath)
+    {
+        let discovered = project::discover_modules(&manifest.src_root)?;
+        let mut out = Vec::with_capacity(discovered.len());
+        for m in &discovered {
+            let src = crate::io_bounded::read_to_string_capped(
+                &m.path,
+                crate::io_bounded::SOURCE_READ_CAP,
+            )?;
+            out.push((m.module_path.join("."), src));
         }
+        return Ok(out);
     }
     match collect_entry_and_siblings(entry) {
         Ok(collected) => Ok(collected
@@ -5472,8 +5472,10 @@ fn named_sources_for_web_scan(
             .into_iter()
             .map(|(path, (_, src))| (path.join("."), src))
             .collect()),
-        Err(_) => crate::io_bounded::read_to_string_capped(entry, crate::io_bounded::SOURCE_READ_CAP)
-            .map(|src| vec![(entry.display().to_string(), src)]),
+        Err(_) => {
+            crate::io_bounded::read_to_string_capped(entry, crate::io_bounded::SOURCE_READ_CAP)
+                .map(|src| vec![(entry.display().to_string(), src)])
+        }
     }
 }
 

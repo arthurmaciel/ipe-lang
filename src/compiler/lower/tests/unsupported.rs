@@ -53,7 +53,7 @@ fn run_with_regions(
 ) -> DResult<ipe_ir::Program> {
     let m = canon::Module {
         imports_unsafe_submodule: false,
-        imported_web_capabilities: Default::default(),
+        imported_web_capabilities: std::collections::BTreeSet::new(),
         name: Vec::new(),
         unions,
         defs,

@@ -107,7 +107,7 @@ pub enum WebCapability {
     Clipboard,
     /// The Notification API — showing a system notification.
     Notification,
-    /// `localStorage` / `sessionStorage` / IndexedDB — client-side persistence.
+    /// `localStorage` / `sessionStorage` / `IndexedDB` — client-side persistence.
     Storage,
     /// `navigator.vibrate` — the vibration actuator.
     Vibration,
@@ -299,10 +299,10 @@ impl std::str::FromStr for Capability {
             // closed `WebCapability` vocabulary. A bare `js-port` (no suffix) has
             // no arm here, so it falls through to `UnknownCapability` — the coarse
             // grant-everything token a manifest cannot spell.
-            other => match other.strip_prefix("js-port:") {
-                Some(suffix) => WebCapability::from_suffix(other, suffix).map(Self::JsPort),
-                None => Err(UnknownCapability(other.to_owned())),
-            },
+            other => other.strip_prefix("js-port:").map_or_else(
+                || Err(UnknownCapability(other.to_owned())),
+                |suffix| WebCapability::from_suffix(other, suffix).map(Self::JsPort),
+            ),
         }
     }
 }

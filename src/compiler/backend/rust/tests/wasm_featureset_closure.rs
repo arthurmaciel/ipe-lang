@@ -417,7 +417,7 @@ fn selected_features(
 ) -> Vec<&'static str> {
     let prog = Program {
         imports_unsafe_submodule: false,
-        imported_web_capabilities: Default::default(),
+        imported_web_capabilities: std::collections::BTreeSet::new(),
         modules: vec![wasm_module_for_mask(main, mask)],
     };
     wasm_backend(interner)
@@ -433,7 +433,7 @@ fn emitted_module_references(
 ) -> BTreeSet<String> {
     let prog = Program {
         imports_unsafe_submodule: false,
-        imported_web_capabilities: Default::default(),
+        imported_web_capabilities: std::collections::BTreeSet::new(),
         modules: vec![wasm_module_for_mask(main, mask)],
     };
     let emitted = wasm_backend(interner)

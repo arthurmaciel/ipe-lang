@@ -35,7 +35,7 @@ fn trivial_program(interner: &mut Interner) -> DResult<Program> {
     };
     Ok(Program {
         imports_unsafe_submodule: false,
-        imported_web_capabilities: Default::default(),
+        imported_web_capabilities: std::collections::BTreeSet::new(),
         modules: vec![Module {
             name: ModPath(vec![main_mod]),
             types: vec![],

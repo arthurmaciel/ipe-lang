@@ -2189,7 +2189,7 @@ mod tests {
         .collect::<Vec<_>>();
         let program = Program {
             imports_unsafe_submodule: false,
-            imported_web_capabilities: Default::default(),
+            imported_web_capabilities: std::collections::BTreeSet::new(),
             modules: vec![Module {
                 name: ModPath(vec![main_mod]),
                 types: vec![TypeDef::Enum(EnumDef {
@@ -2844,7 +2844,7 @@ mod tests {
         let elsev = interner.intern("elsevalab").expect("intern");
         let program = Program {
             imports_unsafe_submodule: false,
-            imported_web_capabilities: Default::default(),
+            imported_web_capabilities: std::collections::BTreeSet::new(),
             modules: vec![Module {
                 name: ModPath(vec![main_mod]),
                 types: vec![],
@@ -3469,7 +3469,7 @@ mod tests {
             .expect("intern wide");
         let program = Program {
             imports_unsafe_submodule: false,
-            imported_web_capabilities: Default::default(),
+            imported_web_capabilities: std::collections::BTreeSet::new(),
             modules: vec![Module {
                 name: ModPath(vec![main_mod]),
                 types: vec![],
@@ -3866,7 +3866,7 @@ mod tests {
             .expect("intern");
         let program = Program {
             imports_unsafe_submodule: false,
-            imported_web_capabilities: Default::default(),
+            imported_web_capabilities: std::collections::BTreeSet::new(),
             modules: vec![Module {
                 name: ModPath(vec![main_mod]),
                 types: vec![],
