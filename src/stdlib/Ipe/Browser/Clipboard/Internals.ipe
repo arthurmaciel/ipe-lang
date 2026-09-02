@@ -1,0 +1,101 @@
+-- | Ipe.Browser.Clipboard.Internals — the low-level clipboard port surface: the
+-- closed outbound/inbound ADTs and the raw `Ipe.Js` request/subscribe wiring the
+-- high-level `Ipe.Browser.Clipboard` layer wraps.
+--
+-- Importing this submodule discloses the same `js-port:clipboard` axis as the
+-- top-level module (the disclosure is keyed on the `Ipe.Browser.Clipboard` path
+-- prefix), so the raw port surface cannot be reached undisclosed.
+module Ipe.Browser.Clipboard.Internals exposing
+    ( JsCmd(..)
+    , JsMsg(..)
+    , request
+    , subscribe
+    , inbound
+    )
+
+import Ipe.Js as Js
+import Ipe.Json.Decode as Decode
+import Ipe.Tea.Web.Cmd as Cmd
+import Ipe.Tea.Web.Sub as Sub
+
+
+-- | The ONE closed OUTBOUND port type. `WriteText text` requests a clipboard write;
+-- `ReadText` requests the current clipboard contents.
+type JsCmd
+    = WriteText String
+    | ReadText
+
+
+-- | The NARROW closed INBOUND port type — NOT the app's internal `Msg`. Every
+-- variant the browser can push is enumerated, so the fold in the high-level layer
+-- is EXHAUSTIVE and a permission denial becomes a typed `Err`, never a silent drop.
+--
+--   * `Written` — a write completed.
+--   * `Read text` — a read returned `text`.
+--   * `Denied` — the host refused the clipboard permission.
+--   * `Unavailable` — the Clipboard API is absent in this context.
+type JsMsg
+    = Written
+    | Read String
+    | Denied
+    | Unavailable
+
+
+-- | `request cmd` — hand a closed outbound `JsCmd` to the raw port transport. The
+-- served first-party JS sink reaches `navigator.clipboard.*`; a read's result and
+-- any denial arrive inbound as a `JsMsg`.
+request : JsCmd -> Cmd.Cmd msg
+request cmd =
+    Js.send cmd
+
+
+-- | `subscribe toMsg` — the inbound subscription over the fail-closed seal
+-- decoder. `inbound` IS the security gate; a malformed / mismatched frame is
+-- dropped whole.
+subscribe : (JsMsg -> msg) -> Sub.Sub msg
+subscribe toMsg =
+    Js.subscribe inbound toMsg
+
+
+-- | The total, fail-closed decoder for the inbound `JsMsg`. It reads `ok` first: a
+-- true flag decodes a `write` acknowledgement or a `read` result by its `event`;
+-- a false flag decodes the closed `error` vocabulary into a denial variant. An
+-- unrecognised token fails the decode closed (the frame is dropped).
+inbound : Decode.Decoder JsMsg
+inbound =
+    Decode.andThen decodeByOk (Decode.field "ok" Decode.bool)
+
+
+decodeByOk : Bool -> Decode.Decoder JsMsg
+decodeByOk ok =
+    if ok then
+        Decode.andThen decodeEvent (Decode.field "event" Decode.string)
+
+    else
+        Decode.andThen decodeError (Decode.field "error" Decode.string)
+
+
+decodeEvent : String -> Decode.Decoder JsMsg
+decodeEvent event =
+    case event of
+        "write" ->
+            Decode.succeed Written
+
+        "read" ->
+            Decode.map Read (Decode.field "text" Decode.string)
+
+        _ ->
+            Decode.fail ("unknown clipboard event: " ++ event)
+
+
+decodeError : String -> Decode.Decoder JsMsg
+decodeError token =
+    case token of
+        "denied" ->
+            Decode.succeed Denied
+
+        "unavailable" ->
+            Decode.succeed Unavailable
+
+        _ ->
+            Decode.fail ("unknown clipboard error variant: " ++ token)

@@ -160,21 +160,24 @@ impl WebCapability {
     /// closed SSOT for "which browser module discloses which Web API." A new
     /// browser module is one row here plus its `WebCapability` variant.
     ///
-    /// Keyed on the segment slice (`["Ipe", "Browser", "Clipboard"]`), alias-immune
-    /// exactly like the `Ipe.<M>.Unsafe` import rule: the canonical import path is
-    /// what matches, never a local alias, and the reserved namespace cannot be
-    /// forged by a user file.
+    /// Keyed on the `["Ipe", "Browser", <Api>, ..]` PREFIX, alias-immune exactly
+    /// like the `Ipe.<M>.Unsafe` import rule: the canonical import path is what
+    /// matches, never a local alias, and the reserved namespace cannot be forged by
+    /// a user file. Matching the prefix (not the exact 3-segment path) closes the
+    /// low-level submodule hole: importing `Ipe.Browser.Geolocation.Internals`
+    /// discloses the same `js-port:geolocation` axis as the top-level module, so the
+    /// full option surface cannot be reached undisclosed.
     #[must_use]
     pub fn for_browser_module(segments: &[&str]) -> Option<Self> {
         match segments {
-            ["Ipe", "Browser", "Geolocation"] => Some(Self::Geolocation),
-            ["Ipe", "Browser", "Clipboard"] => Some(Self::Clipboard),
-            ["Ipe", "Browser", "Notification"] => Some(Self::Notification),
-            ["Ipe", "Browser", "Storage"] => Some(Self::Storage),
-            ["Ipe", "Browser", "Vibration"] => Some(Self::Vibration),
-            ["Ipe", "Browser", "Share"] => Some(Self::Share),
-            ["Ipe", "Browser", "Battery"] => Some(Self::Battery),
-            ["Ipe", "Browser", "NetworkInfo"] => Some(Self::NetworkInfo),
+            ["Ipe", "Browser", "Geolocation", ..] => Some(Self::Geolocation),
+            ["Ipe", "Browser", "Clipboard", ..] => Some(Self::Clipboard),
+            ["Ipe", "Browser", "Notification", ..] => Some(Self::Notification),
+            ["Ipe", "Browser", "Storage", ..] => Some(Self::Storage),
+            ["Ipe", "Browser", "Vibration", ..] => Some(Self::Vibration),
+            ["Ipe", "Browser", "Share", ..] => Some(Self::Share),
+            ["Ipe", "Browser", "Battery", ..] => Some(Self::Battery),
+            ["Ipe", "Browser", "NetworkInfo", ..] => Some(Self::NetworkInfo),
             _ => None,
         }
     }
