@@ -54,6 +54,7 @@ pub mod scratch;
 pub mod style;
 pub mod toolchain;
 pub mod unsafe_ack;
+pub mod web_consent;
 pub mod version_check;
 /// The embedded Ipê standard-library source now lives in the dependency-free
 /// [`ipe_stdlib`] leaf crate so the WebAssembly frontend can share one copy.
@@ -3387,6 +3388,11 @@ fn run_build_body(rest: &[String]) -> Result<BuildSuccess, CliError> {
         args.accept_risks,
     )?;
 
+    // App-boundary web-capability consent: a disclosed `js-port:<axis>` reached by
+    // a dependency must be granted by THIS app's `[capabilities] accept`, else the
+    // build fails closed naming the disclosing module.
+    gate_web_consent(manifest_parsed.as_ref(), manifest.as_deref(), &entry_path)?;
+
     // Precedence: CLI --target wasm > IPE_TARGET=wasm > [wasm].mode != "off".
     let wasm_target = resolve_wasm_target(wasm_target, manifest_wasm.as_ref());
 
@@ -4550,6 +4556,10 @@ fn run_run_body(rest: &[String]) -> Result<(), CliError> {
         args.accept_risks,
     )?;
 
+    // App-boundary web-capability consent: same gate as `ipe build` — a disclosed
+    // `js-port:<axis>` must be granted by this app's manifest, else fail closed.
+    gate_web_consent(manifest_parsed.as_ref(), manifest.as_deref(), &entry_path)?;
+
     // When the project declares [wasm].mode != "off", or IPE_TARGET=wasm is
     // set, treat `ipe run` as a wasm build-and-bundle (no native binary to
     // exec). A plain `ipe run` in a non-wasm project stays native.
@@ -5389,6 +5399,82 @@ fn acknowledge_unsafe_imports(
         &mut stdin,
         &mut stderr,
     )
+}
+
+/// The app-boundary web-capability consent gate, shared by `ipe build` and
+/// `ipe run` and invoked right after the `.Unsafe` acknowledgment.
+///
+/// Resolves the program's inferred capabilities the same way the sandbox does; if
+/// any disclosed `js-port:<axis>` web capability is present, it demands that the
+/// top-level app's `[capabilities] accept` set grant it. An ungranted (or
+/// un-attributable) web axis is a fail-closed, typed refusal naming the disclosing
+/// module — it never prompts and never composes a dependency's own grant. A
+/// program that reaches no web capability is untouched.
+///
+/// # Errors
+/// [`CliError::UsageOwned`] (`IPE-S0002`) when a disclosed web axis is ungranted;
+/// the capability-resolution errors it composes.
+fn gate_web_consent(
+    manifest_parsed: Option<&project::ProjectManifest>,
+    manifest_path: Option<&Path>,
+    entry: &Path,
+) -> Result<(), CliError> {
+    let resolved = run_sandbox::resolve_for_run(manifest_parsed, manifest_path, entry)?;
+    // Short-circuit before any source read when no web axis is disclosed.
+    if !resolved
+        .inferred
+        .iter()
+        .any(|c| matches!(c, ipe_ir::Capability::JsPort(_)))
+    {
+        return Ok(());
+    }
+    // Provenance over the whole module set (app + siblings + any dep modules the
+    // infer path reads), keyed on the module path so the refusal names the
+    // disclosing module. Total by construction: an inferred axis that no source
+    // attributes is refused as un-attributable, never dropped.
+    let named_sources = named_sources_for_web_scan(manifest_path, entry)?;
+    let provenance = web_consent::WebAxisProvenance::from_sources(
+        named_sources
+            .iter()
+            .map(|(name, src)| (name.as_str(), src.as_str())),
+    );
+    let granted = manifest_parsed
+        .map(|m| m.capabilities_accept.clone())
+        .unwrap_or_default();
+    web_consent::gate(&resolved.inferred, &granted, &provenance)
+}
+
+/// Collect `(dotted-module-name, source)` pairs spanning the app entry and its
+/// siblings (and, when a manifest is present, every discovered package module),
+/// for the web-axis provenance scan. Falls back to the bare entry when sibling
+/// discovery fails, exactly as the `.Unsafe` scan does.
+fn named_sources_for_web_scan(
+    manifest_path: Option<&Path>,
+    entry: &Path,
+) -> Result<Vec<(String, String)>, CliError> {
+    if let Some(mpath) = manifest_path {
+        if let Ok(manifest) = project::parse_manifest(mpath) {
+            let discovered = project::discover_modules(&manifest.src_root)?;
+            let mut out = Vec::with_capacity(discovered.len());
+            for m in &discovered {
+                let src = crate::io_bounded::read_to_string_capped(
+                    &m.path,
+                    crate::io_bounded::SOURCE_READ_CAP,
+                )?;
+                out.push((m.module_path.join("."), src));
+            }
+            return Ok(out);
+        }
+    }
+    match collect_entry_and_siblings(entry) {
+        Ok(collected) => Ok(collected
+            .sources
+            .into_iter()
+            .map(|(path, (_, src))| (path.join("."), src))
+            .collect()),
+        Err(_) => crate::io_bounded::read_to_string_capped(entry, crate::io_bounded::SOURCE_READ_CAP)
+            .map(|src| vec![(entry.display().to_string(), src)]),
+    }
 }
 
 /// Type-check a single `.ipe` entry through the SAME injection-aware
