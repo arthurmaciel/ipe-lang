@@ -70,6 +70,12 @@ pub use transition::{Transition, apply_transition, apply_transition_hot};
 // set is a proven additive superset of the live one, so a returning session's
 // in-flight `handler_id`s still resolve (see the module doc).
 pub mod msg_set;
+// Inert `subscriptions`-entry descriptions: the TEA-loop counterpart of the
+// `transition` table. A data-describable subscription (`Time.every 1000 Tick`)
+// reduces to a `SubDescription` datum built by the compiled `sub_every_hot` —
+// one subscription semantics, dev == prod (see the module doc).
+pub mod sub_desc;
+pub use sub_desc::{SubDescription, build_sub, sub_every_hot};
 // Explicit re-export of ONLY the codegen-referenced kernel functions. A glob
 // (`pub use pubsub::*`) leaked the broker's `Event<T>` into this namespace,
 // colliding with the HTML `Event` enum re-exported below (`pub use …html::*`)
@@ -2830,6 +2836,86 @@ mod handlers {
         }
     }
 
+    // ── POST /_ipe/hot-subs (dev-only) ────────────────────────────────
+    // The running server's inbound leg of the `subscriptions`-entry hot-swap live
+    // socket. The `ipe watch` process computes a sub patch for an edited
+    // data-describable subscription (an interval or tick-message change) and POSTs
+    // it here; the handler registers the replacement `SubDescription` under the
+    // entry's baked-datum signature, so the next re-subscribe of that entry builds
+    // the edited tick source through the SAME compiled `sub_every_hot` — no
+    // recompile, the running Model preserved.
+    //
+    // Guarded EXACTLY like `/_ipe/hot-transition`, three ways, so it is inert in
+    // production:
+    //   1. Route MOUNTED only under `dev_overlay_active()` (flag on AND
+    //      non-production) — absent from a production build.
+    //   2. A per-process control token (`IPE_WATCH_HOT_TOKEN`) must match the
+    //      `X-Ipe-Hot-Token` header (constant-time), so a LAN peer without the
+    //      token cannot drive a subscription.
+    //   3. The body carries only two inert JSON strings — the old (key) datum and
+    //      the new (replacement) datum. The replacement is STRICT-decoded into a
+    //      `SubDescription` (an interval `i64` + a message JSON string); anything
+    //      that is not a well-formed `SubDescription` is rejected. The registered
+    //      description can drive nothing but the bounded, fail-closed
+    //      `sub_every_hot`, which refuses (installs no subscription) any datum it
+    //      cannot prove decodes into a well-typed tick source.
+    pub(super) async fn hot_subs_handler<Model, Msg, FInit, FUpdate, FView, FSubs>(
+        State(_st): State<WebState<Model, Msg, FInit, FUpdate, FView, FSubs>>,
+        headers: axum::http::HeaderMap,
+        body: axum::body::Bytes,
+    ) -> Response
+    where
+        Model: Clone + Send + 'static,
+        Msg: Clone + Send + 'static,
+        FInit: Send + Sync + 'static,
+        FUpdate: Send + Sync + 'static,
+        FView: Send + Sync + 'static,
+        FSubs: Send + Sync + 'static,
+    {
+        // Defence in depth: re-check the dev gate even though the route is only
+        // mounted under it, so the handler is inert if ever reached otherwise.
+        if !literal_table::dev_overlay_active() {
+            return StatusCode::NOT_FOUND.into_response();
+        }
+        // Per-process control token — same mechanism as `/_ipe/hot-transition`.
+        // Absent expected token → fail closed (endpoint unusable without a token).
+        let expected = crate::system::read_env_var("IPE_WATCH_HOT_TOKEN")
+            .ok()
+            .filter(|t| !t.is_empty());
+        let presented = headers
+            .get("x-ipe-hot-token")
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_owned);
+        match (expected, presented) {
+            (Some(exp), Some(got)) if crate::ct_eq::ct_bytes_eq(exp.as_bytes(), got.as_bytes()) => {
+            }
+            _ => return StatusCode::FORBIDDEN.into_response(),
+        }
+
+        #[derive(serde::Deserialize)]
+        struct HotSubsBody {
+            /// The entry's PREVIOUS baked datum JSON — the overlay key the running
+            /// app's compiled entry matches (it still bakes this string).
+            old_json: String,
+            /// The edited description's JSON — strict-decoded into a
+            /// `SubDescription`.
+            new_json: String,
+        }
+        let parsed: HotSubsBody = match serde_json::from_slice(&body) {
+            Ok(b) => b,
+            Err(_) => return (StatusCode::BAD_REQUEST, "bad body").into_response(),
+        };
+        // Parse, don't validate: the replacement must be a well-formed
+        // `SubDescription` or the request is rejected. A registered description can
+        // therefore drive nothing but the bounded `sub_every_hot`.
+        let replacement: sub_desc::SubDescription = match serde_json::from_str(&parsed.new_json) {
+            Ok(d) => d,
+            Err(_) => return (StatusCode::BAD_REQUEST, "bad sub description").into_response(),
+        };
+        sub_desc::register_dev_sub(&parsed.old_json, replacement);
+        StatusCode::OK.into_response()
+    }
+
     // ── POST /_ipe/watch/status (dev-only) ───────────────────────────
     // Inbound build-status notification from `ipe watch`. Guarded two ways
     // so it is inert in production:
@@ -3322,6 +3408,20 @@ where
         router.route(
             "/_ipe/hot-msg",
             post(handlers::hot_msg_handler::<Model, Msg, FInit, FUpdate, FView, FSubs>)
+                .layer(axum::extract::DefaultBodyLimit::max(web_max_body_bytes())),
+        )
+    } else {
+        router
+    };
+    // Dev-only `subscriptions`-entry hot-swap control leg. Guarded IDENTICALLY to
+    // `/_ipe/hot-transition`: MOUNTED only under the same dev overlay gate (flag on
+    // AND non-production), token-gated per request, and bounded. A sub patch
+    // installs a subscription on the server, so it flows through the total,
+    // fail-closed `sub_every_hot` alone — never arbitrary logic.
+    let router = if literal_table::dev_overlay_active() {
+        router.route(
+            "/_ipe/hot-subs",
+            post(handlers::hot_subs_handler::<Model, Msg, FInit, FUpdate, FView, FSubs>)
                 .layer(axum::extract::DefaultBodyLimit::max(web_max_body_bytes())),
         )
     } else {

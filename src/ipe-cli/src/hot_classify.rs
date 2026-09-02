@@ -84,11 +84,30 @@ pub struct MsgSetPatch {
     pub candidate_json: String,
 }
 
+/// A hot-swappable sub-description patch for one edited `subscriptions` entry.
+///
+/// The running app's compiled entry reads its baked datum through
+/// `sub_every_hot("<old_json>")`; the app is not recompiled, so it still bakes
+/// `old_json`. The overlay is keyed by that exact baked string, so the patch
+/// carries the OLD json (the key the running app matches) and the NEW json (the
+/// edited sub-description to register).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct SubPatch {
+    /// The PREVIOUS baked datum JSON — the key the running app's compiled entry
+    /// passes to `sub_every_hot`, hence the overlay key. Send the OLD value, not
+    /// the new.
+    pub old_json: String,
+    /// The edited sub-description's JSON — the replacement to register for
+    /// `old_json`.
+    pub new_json: String,
+}
+
 /// The set of hot-swappable deltas an edit produced with no recompile.
 ///
 /// Carries the appearance (view literal) patches, the `update`-arm transition
-/// patches, and the additive-`Msg`-set patches. All are pushed to the running app
-/// over the live socket; any may be empty.
+/// patches, the additive-`Msg`-set patches, and the `subscriptions`-entry
+/// sub-description patches. All are pushed to the running app over the live
+/// socket; any may be empty.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct HotSwap {
     /// One [`ViewPatch`] per view whose hoisted appearance literals changed.
@@ -98,14 +117,18 @@ pub struct HotSwap {
     /// One [`MsgSetPatch`] per file whose baked `Msg`-set descriptor changed
     /// additively (a variant added, none removed/retyped).
     pub msg_sets: Vec<MsgSetPatch>,
+    /// One [`SubPatch`] per `subscriptions` entry whose baked sub-description
+    /// changed.
+    pub subs: Vec<SubPatch>,
 }
 
 /// The classification of a source edit, derived from the emitted-Rust diff.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Classification {
-    /// The only deltas are hoisted appearance-literal *values* and/or
-    /// `update`-arm transition *data*; hot-swap without a recompile. Empty when
-    /// two emits are byte-identical — a no-op edit, still on the fast path.
+    /// The only deltas are hoisted appearance-literal *values*, `update`-arm
+    /// transition *data*, and/or `subscriptions`-entry sub-description *data*;
+    /// hot-swap without a recompile. Empty when two emits are byte-identical — a
+    /// no-op edit, still on the fast path.
     HotSwappable(HotSwap),
     /// Anything else — recompile. This is the conservative fallback.
     Logic,
@@ -142,6 +165,7 @@ pub fn classify(prev: &EmittedProject, next: &EmittedProject) -> Classification 
                 hot.views.append(&mut delta.views);
                 hot.transitions.append(&mut delta.transitions);
                 hot.msg_sets.append(&mut delta.msg_sets);
+                hot.subs.append(&mut delta.subs);
             }
             FileDelta::Logic => return Classification::Logic,
         }
@@ -213,6 +237,19 @@ fn classify_file(prev_src: &str, next_src: &str) -> FileDelta {
         _ => {}
     }
 
+    // The `subscriptions`-entry sub-description literals: each classified entry
+    // emits `sub_every_hot("<json>")`. A differing number of such calls is
+    // structural (an entry gained/lost data-describability) ⇒ Logic.
+    let Some(prev_subs) = scan_sub_data(prev_src) else {
+        return FileDelta::Logic;
+    };
+    let Some(next_subs) = scan_sub_data(next_src) else {
+        return FileDelta::Logic;
+    };
+    if prev_subs.len() != next_subs.len() {
+        return FileDelta::Logic;
+    }
+
     // The masked regions are: (1) every `from_defaults(&[…])` array's contents,
     // and (2) every hoisted-read TOTAL-FALLBACK literal
     // (`__ipe_lit.get(N).parse::<T>().unwrap_or(<literal>)`). A typed style value
@@ -229,10 +266,10 @@ fn classify_file(prev_src: &str, next_src: &str) -> FileDelta {
     // `source`). Masking it keeps a data-only arm edit hot-swappable, exactly as
     // masking a `from_defaults` array keeps an appearance edit hot-swappable; any
     // structural change to the arm still perturbs the skeleton and forces Logic.
-    let Some(prev_masks) = mask_spans(prev_src, &prev_arrays, &prev_trans) else {
+    let Some(prev_masks) = mask_spans(prev_src, &prev_arrays, &prev_trans, &prev_subs) else {
         return FileDelta::Logic;
     };
-    let Some(next_masks) = mask_spans(next_src, &next_arrays, &next_trans) else {
+    let Some(next_masks) = mask_spans(next_src, &next_arrays, &next_trans, &next_subs) else {
         return FileDelta::Logic;
     };
     // A differing number of masked sites is itself structural.
@@ -268,17 +305,16 @@ fn classify_file(prev_src: &str, next_src: &str) -> FileDelta {
         }
     }
 
-    // Each changed transition datum: the running app still bakes the OLD json, so
-    // it is the overlay key; the NEW json is the replacement to register.
-    let mut transitions = Vec::new();
-    for (pt, nt) in prev_trans.iter().zip(next_trans.iter()) {
-        if pt.json != nt.json {
-            transitions.push(TransitionPatch {
-                old_json: pt.json.clone(),
-                new_json: nt.json.clone(),
-            });
-        }
-    }
+    // Each changed positional datum (transition arm, subscriptions entry) yields a
+    // patch keyed by the OLD json — the running app still bakes it, so it is the
+    // overlay key; the NEW json is the replacement to register.
+    let transitions = diff_datum_patches(&prev_trans, &next_trans, |old_json, new_json| {
+        TransitionPatch { old_json, new_json }
+    });
+    let subs = diff_datum_patches(&prev_subs, &next_subs, |old_json, new_json| SubPatch {
+        old_json,
+        new_json,
+    });
 
     // An additively-changed `Msg`-set descriptor (proven above) yields a patch:
     // the running app still bakes the OLD (live) descriptor, so it is the endpoint
@@ -297,7 +333,26 @@ fn classify_file(prev_src: &str, next_src: &str) -> FileDelta {
         views,
         transitions,
         msg_sets,
+        subs,
     })
+}
+
+/// Pair the previous and new baked datum literals (equal in count, checked by the
+/// caller) and build one patch per changed datum via `mk`, which receives the OLD
+/// json (the overlay key) and the NEW json (the replacement). Shared by the
+/// transition-arm and subscriptions-entry legs, whose patch shape is identical.
+fn diff_datum_patches<P>(
+    prev: &[TransitionData],
+    next: &[TransitionData],
+    mk: impl Fn(String, String) -> P,
+) -> Vec<P> {
+    let mut out = Vec::new();
+    for (p, n) in prev.iter().zip(next.iter()) {
+        if p.json != n.json {
+            out.push(mk(p.json.clone(), n.json.clone()));
+        }
+    }
+    out
 }
 
 /// The `Msg`-set descriptor const the emitter bakes under the hot gate. Kept in
@@ -441,6 +496,42 @@ fn scan_transition_data(src: &str) -> Option<Vec<TransitionData>> {
     Some(out)
 }
 
+/// The literal opening an emitted sub-description read in the emitted Rust. Kept
+/// in sync with the emitter's `emit_sub_arm`
+/// (`ipe_runtime::web::sub_every_hot("<json>")`). If the emitter's spelling ever
+/// changes, no datum is recognised and every edit conservatively falls to `Logic`
+/// — safe, never a false hot-swap.
+const SUB_OPEN: &str = "sub_every_hot(";
+
+/// Locate every `sub_every_hot("<json>")` call in `src` and parse its first
+/// argument (the baked datum JSON string literal). Returns `None` (⇒ `Logic`) if
+/// any occurrence's first argument is not a well-formed string literal — never a
+/// guess. A file with no occurrences returns `Some(empty)`. Reuses
+/// [`TransitionData`] (same shape: the parsed json plus its inner byte span for
+/// masking).
+fn scan_sub_data(src: &str) -> Option<Vec<TransitionData>> {
+    let bytes = src.as_bytes();
+    let mut out = Vec::new();
+    let mut from = 0usize;
+    while let Some(rel) = src[from..].find(SUB_OPEN) {
+        let open = from + rel;
+        // The first argument begins at the first `"` after the `(`.
+        let arg_at = skip_ws(bytes, open + SUB_OPEN.len());
+        if *bytes.get(arg_at)? != b'"' {
+            return None;
+        }
+        let inner_start = arg_at + 1;
+        let (json, next) = parse_string_literal(bytes, arg_at)?;
+        out.push(TransitionData {
+            inner_start,
+            inner_end: next - 1,
+            json,
+        });
+        from = next;
+    }
+    Some(out)
+}
+
 /// One `from_defaults(&[…])` occurrence located in a source file.
 struct DefaultsArray {
     /// Byte offset of the first element char inside the array (just past `&[`).
@@ -467,6 +558,7 @@ fn mask_spans(
     src: &str,
     arrays: &[DefaultsArray],
     transitions: &[TransitionData],
+    subs: &[TransitionData],
 ) -> Option<Vec<MaskSpan>> {
     let mut spans: Vec<MaskSpan> = arrays
         .iter()
@@ -478,6 +570,16 @@ fn mask_spans(
     spans.extend(transitions.iter().map(|t| MaskSpan {
         start: t.inner_start,
         end: t.inner_end,
+    }));
+    // The sub-description datum literal argument is masked exactly like a
+    // transition datum: the whole `<json>` inside `sub_every_hot("<json>")` may
+    // change (an interval or tick-message edit) while the entry structure stays
+    // byte-identical. Masking it keeps a data-only subscription edit hot-swappable;
+    // any structural change to the entry still perturbs the skeleton and forces
+    // Logic.
+    spans.extend(subs.iter().map(|s| MaskSpan {
+        start: s.inner_start,
+        end: s.inner_end,
     }));
     spans.extend(scan_hoisted_read_fallbacks(src)?);
     // The `Msg`-set descriptor const's JSON contents are masked too, so a
@@ -1184,6 +1286,23 @@ mod tests {
         }
     }
 
+    // ── sub-description hot-swap (subscriptions entry) ────────────────────
+
+    /// Assert `classify` returned `HotSwappable` and hand back its SUB patches
+    /// (same discipline as [`expect_transitions`]).
+    fn expect_subs(prev: &EmittedProject, next: &EmittedProject) -> Vec<SubPatch> {
+        let got = classify(prev, next);
+        assert!(
+            matches!(got, Classification::HotSwappable(_)),
+            "expected HotSwappable, got {got:?}"
+        );
+        if let Classification::HotSwappable(hot) = got {
+            hot.subs
+        } else {
+            Vec::new()
+        }
+    }
+
     /// Mirror the emitter's baked descriptor const, inside an otherwise-identical
     /// app skeleton (so only the descriptor JSON differs between two emits).
     fn app_with_msg_set(json: &str) -> String {
@@ -1223,6 +1342,33 @@ mod tests {
         );
     }
 
+    /// Mirror the emitter's classified-entry shape: a subscriptions body emitted as
+    /// `ipe_runtime::web::sub_every_hot("<json>")`.
+    fn sub_entry(json: &str) -> String {
+        format!("fn subscriptions(model: Model) {{ ipe_runtime::web::sub_every_hot({json:?}) }}")
+    }
+
+    const SUB1000: &str = r#"{"interval_ms":1000,"msg_json":"\"Tick\""}"#;
+    const SUB500: &str = r#"{"interval_ms":500,"msg_json":"\"Tick\""}"#;
+
+    // The interval SEAL at the classifier level: a `1000ms` → `500ms` entry edit
+    // changes ONLY the baked datum json inside `sub_every_hot(...)` → a sub-only
+    // hot-swap, no recompile.
+    #[test]
+    fn sub_interval_edit_is_hot_swappable() {
+        let prev = project(&[("src/subs.rs", &sub_entry(SUB1000))], "cargo");
+        let next = project(&[("src/subs.rs", &sub_entry(SUB500))], "cargo");
+        let ss = expect_subs(&prev, &next);
+        assert_eq!(ss.len(), 1);
+        assert_eq!(
+            ss.first().cloned().unwrap_or_default(),
+            SubPatch {
+                old_json: SUB1000.to_owned(),
+                new_json: SUB500.to_owned(),
+            }
+        );
+    }
+
     // A removed variant in the descriptor is non-additive → Logic (recompile).
     #[test]
     fn removed_variant_descriptor_is_logic() {
@@ -1252,6 +1398,36 @@ mod tests {
     fn descriptor_appearing_is_logic() {
         let prev = project(&[("src/main.rs", "fn app() { plain }")], "cargo");
         let next = project(&[("src/main.rs", &app_with_msg_set(MS_COUNTER))], "cargo");
+        assert_eq!(classify(&prev, &next), Classification::Logic);
+    }
+
+    // A no-op sub edit (identical) contributes no sub patch.
+    #[test]
+    fn identical_sub_entry_has_no_patch() {
+        let p = project(&[("src/subs.rs", &sub_entry(SUB1000))], "cargo");
+        assert_eq!(expect_subs(&p, &p.clone()), vec![]);
+    }
+
+    // A change to the entry STRUCTURE around the sub call (a new call) is Logic —
+    // only the json argument is masked, never the surrounding code.
+    #[test]
+    fn sub_structure_change_is_logic() {
+        let prev = project(&[("src/subs.rs", &sub_entry(SUB1000))], "cargo");
+        let next = project(
+            &[(
+                "src/subs.rs",
+                &sub_entry(SUB1000).replace("sub_every_hot", "sub_none_wrap"),
+            )],
+            "cargo",
+        );
+        assert_eq!(classify(&prev, &next), Classification::Logic);
+    }
+
+    // An entry that GAINS a sub call (call count grows) is structural → Logic.
+    #[test]
+    fn added_sub_call_is_logic() {
+        let prev = project(&[("src/subs.rs", "fn subscriptions() { plain }")], "cargo");
+        let next = project(&[("src/subs.rs", &sub_entry(SUB1000))], "cargo");
         assert_eq!(classify(&prev, &next), Classification::Logic);
     }
 }
