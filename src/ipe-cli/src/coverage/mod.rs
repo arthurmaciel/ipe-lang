@@ -1,0 +1,11 @@
+//! The stdlib coverage matrix: one deep enumeration of the exported surface, one
+//! `surface × aspect` runner, and the static (registry-only) aspect columns.
+//!
+//! "No stdlib symbol is forgotten in any aspect" is otherwise a hope split across
+//! shallow gates with seams between them. Here the surface is enumerated once
+//! ([`surface::StdlibSurface`]), every aspect is a column applied to every symbol
+//! ([`matrix::run`]), and a hole is named at its `(symbol, aspect)` coordinate.
+//! The [`contract`] types are the seam the dynamic/build columns code to.
+
+pub mod contract;
+pub mod surface;
