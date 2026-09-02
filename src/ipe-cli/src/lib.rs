@@ -5604,14 +5604,19 @@ fn run_audit_entry(rest: &[String]) -> Result<(), CliError> {
         // the verified source tree. Pass --index so the enforced-semver check reads
         // the right baseline. Reject on the first failing check.
         let checkout_str = checkout.to_string_lossy().into_owned();
-        let audit_args: Vec<String> = match &index_root_opt {
-            Some(ir) => vec![
-                checkout_str,
-                "--index".to_owned(),
-                ir.to_string_lossy().into_owned(),
-            ],
-            None => vec![checkout_str],
-        };
+        // Pass the submitted entry's publisher so the reserved-namespace ownership
+        // check can exempt the blessed first-party publisher and reject any other
+        // publisher whose source tree provides a reserved-namespace (`Ipe.*`)
+        // module — the admission-time squat-proofing of the trusted namespace.
+        let mut audit_args: Vec<String> = vec![
+            checkout_str,
+            "--publisher".to_owned(),
+            submitted.publisher.clone(),
+        ];
+        if let Some(ir) = &index_root_opt {
+            audit_args.push("--index".to_owned());
+            audit_args.push(ir.to_string_lossy().into_owned());
+        }
         // Propagate typed errors directly — run_audit already produces a
         // descriptive typed CliError (PackageAudit / HashMismatch / etc.) whose
         // Display names the failing check; the version context is clear from

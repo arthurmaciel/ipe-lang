@@ -20,6 +20,12 @@ pub use capability::{Capability, ElementCapability, UnknownCapability};
 pub mod css_value_safety;
 pub use css_value_safety::css_value_is_safe;
 
+pub mod reserved_namespace;
+pub use reserved_namespace::{
+    BLESSED_PUBLISHER, RESERVED_MODULE_PREFIXES, is_blessed_publisher, is_reserved_module_path,
+    reserved_prefix_of,
+};
+
 /// Classification of a kernel variant by which compiler / runtime subsystem
 /// owns its emission.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]

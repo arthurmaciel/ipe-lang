@@ -3814,6 +3814,71 @@ mod tests {
         );
     }
 
+    /// A third-party dependency masquerading as first-party: a package (whatever
+    /// its name) that declares `module Ipe.Evil`. A dependency's module reaches
+    /// canon as `ModuleOrigin::User` exactly like a local file — only the
+    /// driver's stdlib-injection origin is exempt — so it is IPE-N0025-rejected,
+    /// squat-proofing the trusted `Ipe.*` namespace at compile time.
+    const THIRD_PARTY_IPE_SRC: &str = "module Ipe.Evil exposing (payload)\n\
+         payload : String\n\
+         payload =\n    \"x\"\n";
+
+    #[test]
+    fn third_party_dep_declaring_reserved_ipe_module_is_rejected() {
+        let err = canon_with_origin(THIRD_PARTY_IPE_SRC, ModuleOrigin::User)
+            .expect_err("a third-party `Ipe.Evil` must be rejected");
+        assert!(
+            matches!(
+                &err,
+                Diagnostic::Name {
+                    msg: NameError::ReservedNamespace { .. },
+                    ..
+                }
+            ),
+            "third-party `Ipe.Evil` must be IPE-N0025, got {err:?}"
+        );
+    }
+
+    /// A user (or dependency) module squatting the `Rust.*` FFI-interface
+    /// namespace. Only `ModuleOrigin::FfiInterface` — the driver-generated FFI
+    /// interface origin — may define a `Rust.*` home; a `User`-origin one is
+    /// refused via the same closed reserved-prefix set.
+    const USER_RUST_SRC: &str = "module Rust.Firestore exposing (payload)\n\
+         payload : String\n\
+         payload =\n    \"x\"\n";
+
+    #[test]
+    fn user_origin_rust_module_is_reserved_namespace() {
+        let err = canon_with_origin(USER_RUST_SRC, ModuleOrigin::User)
+            .expect_err("user `Rust.Firestore` must be rejected");
+        assert!(
+            matches!(
+                &err,
+                Diagnostic::Name {
+                    msg: NameError::ReservedNamespace { .. },
+                    ..
+                }
+            ),
+            "user `Rust.Firestore` must be IPE-N0025, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn reserved_prefix_gate_reads_the_kernels_ssot() {
+        // The resolver's reserved-prefix identity is the closed kernels-crate
+        // list, not a local re-listing: `Ipe`/`Rust` are reserved, an ordinary
+        // module home is not.
+        assert_eq!(
+            ipe_kernels::reserved_prefix_of(&["Ipe", "Palette"]),
+            Some("Ipe")
+        );
+        assert_eq!(
+            ipe_kernels::reserved_prefix_of(&["Rust", "Zstd"]),
+            Some("Rust")
+        );
+        assert_eq!(ipe_kernels::reserved_prefix_of(&["App", "View"]), None);
+    }
+
     /// A USER module minting an UNSAFE-tier kernel alias (`Ffi.kernel
     /// "Html_unsafeScript"` — the raw-`<script>` XSS sink). No `.Unsafe` import,
     /// so before the origin gate this canonicalised clean while `capabilities`
