@@ -27,22 +27,20 @@ fn cond_in_composed_position_lowers_to_its_enum() {
     let root = repo_root();
     let entry = fixture_entry(&root, GOLDEN);
 
-    let ir = ipe::emit_ir_text(&entry).unwrap_or_else(|e| {
-        panic!(
-            "a composed `Store.Cond` must lower (its kernel scheme carries the \
-             real `Ipe.Db.Store` home so the lowerer finds the emitted enum), \
-             but lowering failed: {e:?}"
-        )
-    });
-
+    let lowered = ipe::emit_ir_text(&entry);
+    let ir = lowered.as_deref().unwrap_or("");
     // The emitted enum and its leaf construction are present — proof the `Cond`
-    // lowered through the home-keyed enum path, not the empty-home ICE arm.
+    // lowered through the home-keyed enum path, not the empty-home ICE arm. An
+    // empty `ir` (a lowering rejection) fails both assertions with the message.
     assert!(
         ir.contains("type Cond ="),
-        "the emitted `Cond` enum must appear in the lowered IR:\n{ir}"
+        "a composed `Store.Cond` must lower (its kernel scheme carries the real \
+         `Ipe.Db.Store` home so the lowerer finds the emitted enum); the emitted \
+         `Cond` enum must appear in the lowered IR, got: {lowered:?}"
     );
     assert!(
         ir.contains("Ctor Cond.Compare"),
-        "the composed `Store.eq` must lower to a `Cond.Compare` construction:\n{ir}"
+        "the composed `Store.eq` must lower to a `Cond.Compare` construction, \
+         got: {lowered:?}"
     );
 }
