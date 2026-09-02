@@ -424,12 +424,10 @@ fn http_get_body(port: u16) -> Option<String> {
             continue;
         }
         let mut buf = Vec::new();
-        match stream.read_to_end(&mut buf) {
-            Ok(_) if !buf.is_empty() => {
-                return Some(String::from_utf8_lossy(&buf).into_owned());
-            }
-            Ok(_) => continue,  // empty body — server not ready yet
-            Err(_) => continue, // partial read — retry
+        // Return only a complete body; an empty body or a read error means the
+        // server is not ready yet — fall through and retry on the next attempt.
+        if stream.read_to_end(&mut buf).is_ok() && !buf.is_empty() {
+            return Some(String::from_utf8_lossy(&buf).into_owned());
         }
     }
     None
