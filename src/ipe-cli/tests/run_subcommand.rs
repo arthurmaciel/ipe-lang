@@ -187,7 +187,7 @@ fn emitted_cargo_toml_name_matches_binary_ipe_run_will_exec() {
     let _ = fs::create_dir_all(&src_dir);
     fs::write(
         pkg_dir.join("package.ipe"),
-        "module Package exposing (package)\n\n\npackage =\n    Package.named \"Crc32 Checksum\"\n        |> Package.version \"0.1.0\"\n",
+        "module Package exposing (package)\n\n\npackage =\n    { name = \"Crc32 Checksum\", version = \"0.1.0\" }\n",
     )
     .expect("write package.ipe");
     fs::write(src_dir.join("Main.ipe"), SRC).expect("write Main.ipe");

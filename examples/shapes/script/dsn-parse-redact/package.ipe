@@ -1,6 +1,10 @@
 module Package exposing (package)
 
+import Ipe.Package exposing (..)
 
+
+package : Package
 package =
-    Package.named "dsn-parse-redact"
-        |> Package.version "0.1.0"
+    { name = "dsn-parse-redact"
+    , version = "0.1.0"
+    }

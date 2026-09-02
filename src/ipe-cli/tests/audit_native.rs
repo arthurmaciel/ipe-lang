@@ -82,7 +82,7 @@ fn a_pure_ipe_package_skips_tier2_while_tier1_still_gates() {
     let pkg = temp_pkg("pure-skip");
     std::fs::write(
         pkg.join("package.ipe"),
-        "module Package exposing (package)\n\n\npackage =\n    Package.named \"pure-pkg\"\n        |> Package.version \"0.1.0\"\n",
+        "module Package exposing (package)\n\n\npackage =\n    { name = \"pure-pkg\", version = \"0.1.0\" }\n",
     )
     .expect("write package.ipe");
     std::fs::write(pkg.join("src").join("Main.ipe"), PURE_MAIN).expect("write Main");
@@ -127,9 +127,11 @@ fn a_native_bearing_package_with_no_probeable_entrypoint_fails_closed() {
     let pkg = temp_pkg("native-noprobe");
     std::fs::write(
         pkg.join("package.ipe"),
-        "module Package exposing (package)\n\n\npackage =\n    Package.named \"native-pkg\"\n\
-         \x20       |> Package.version \"0.1.0\"\n\
-         \x20       |> Package.rustDependencies [ Package.rustDep \"libc\" \"0.2\" ]\n",
+        "module Package exposing (package)\n\n\npackage =\n\
+         \x20   { name = \"native-pkg\"\n\
+         \x20   , version = \"0.1.0\"\n\
+         \x20   , rustDependencies = [ rustDep \"libc\" \"0.2\" ]\n\
+         \x20   }\n",
     )
     .expect("write package.ipe");
     std::fs::write(pkg.join("src").join("Main.ipe"), PURE_MAIN).expect("write Main");
@@ -790,9 +792,11 @@ mod real_jail {
         let csum = write_csum_crate(base);
         std::fs::write(
             pkg.join("package.ipe"),
-            "module Package exposing (package)\n\n\npackage =\n    Package.named \"csumpkg\"\n\
-             \x20       |> Package.version \"0.1.0\"\n\
-             \x20       |> Package.rustDependencies [ Package.rustDep \"csum\" \"=0.1.0\" ]\n",
+            "module Package exposing (package)\n\n\npackage =\n\
+             \x20   { name = \"csumpkg\"\n\
+             \x20   , version = \"0.1.0\"\n\
+             \x20   , rustDependencies = [ rustDep \"csum\" \"=0.1.0\" ]\n\
+             \x20   }\n",
         )
         .expect("package.ipe");
         std::fs::write(pkg.join("src").join("Main.ipe"), CSUM_MAIN).expect("Main.ipe");

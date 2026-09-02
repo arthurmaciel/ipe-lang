@@ -1,6 +1,10 @@
 module Package exposing (package)
 
+import Ipe.Package exposing (..)
 
+
+package : Package
 package =
-    Package.named "tuple-minmax"
-        |> Package.version "0.1.0"
+    { name = "tuple-minmax"
+    , version = "0.1.0"
+    }

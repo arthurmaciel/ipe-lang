@@ -19,7 +19,7 @@ Two ideas.
   produce the JSON from a typed encoder over your own record types, never from
   request input. The string is then structurally trusted before it reaches the
   verbatim sink. Importing the module discloses the `unsafe` capability
-  program-wide, accepted once with `Package.accepts [ Capability.unsafe ]`.
+  program-wide, accepted once with `capabilities = { accepts = [ Unsafe ] }`.
 
 ## A worked example: product structured data
 

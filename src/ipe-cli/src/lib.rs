@@ -39,6 +39,7 @@ pub mod lint;
 pub mod lockfile;
 pub mod login;
 mod lsp;
+pub mod migrate;
 pub mod net;
 pub mod package_manifest;
 pub mod pkg;
@@ -7750,7 +7751,7 @@ mod tests {
         let manifest = tmp.join("package.ipe");
         fs::write(
             &manifest,
-            "module Package exposing (package)\n\n\npackage =\n    Package.named \"test\"\n",
+            "module Package exposing (package)\n\n\npackage =\n    { name = \"test\" }\n",
         )
         .expect("write package.ipe");
         let main_ipe = src.join("Main.ipe");
@@ -8937,7 +8938,7 @@ pub mod web {
         // with no `IPE_TARGET` env set — the tier the env-only check missed.
         fs::write(
             tmp.join("package.ipe"),
-            "module Package exposing (package)\n\n\npackage =\n    Package.named \"w\"\n        |> Package.wasm (Wasm.spa)\n",
+            "module Package exposing (package)\n\n\npackage =\n    { name = \"w\", wasm = On { mode = Spa } }\n",
         )
         .expect("write package.ipe");
         fs::write(
@@ -8973,7 +8974,7 @@ pub mod web {
         fs::create_dir_all(&app_src).expect("create src/");
         fs::write(
             app.join("package.ipe"),
-            "module Package exposing (package)\n\n\npackage =\n    Package.named \"app\"\n",
+            "module Package exposing (package)\n\n\npackage =\n    { name = \"app\" }\n",
         )
         .expect("pkg");
         fs::write(
@@ -8990,7 +8991,7 @@ pub mod web {
         let _ = fs::remove_dir_all(&lib);
         let lib_src = lib.join("src");
         fs::create_dir_all(&lib_src).expect("create src/");
-        fs::write(lib.join("package.ipe"), "module Package exposing (package)\n\n\npackage =\n    Package.named \"lib\"\n        |> Package.exposedModules [ \"Core.Utils\" ]\n").expect("pkg");
+        fs::write(lib.join("package.ipe"), "module Package exposing (package)\n\n\npackage =\n    { name = \"lib\", exposedModules = [ \"Core.Utils\" ] }\n").expect("pkg");
         // src/ must exist for the manifest reader's source-root check; the module
         // file itself need not exist for the pure path derivation under test.
         let lib_manifest = project::parse_manifest(&lib.join("package.ipe")).expect("lib parses");
@@ -9009,7 +9010,7 @@ pub mod web {
         fs::create_dir_all(&src).expect("create src/");
         fs::write(
             tmp.join("package.ipe"),
-            "module Package exposing (package)\n\n\npackage =\n    Package.named \"lib\"\n        |> Package.exposedModules [ \"Core\" ]\n",
+            "module Package exposing (package)\n\n\npackage =\n    { name = \"lib\", exposedModules = [ \"Core\" ] }\n",
         )
         .expect("pkg");
         fs::write(src.join("Core.ipe"), "module Core exposing (x)\nx = 0\n").expect("core");
@@ -9356,7 +9357,7 @@ pub mod web {
         let manifest_path = dir.join("package.ipe");
         fs::write(
             &manifest_path,
-            "module Package exposing (package)\n\n\npackage =\n    Package.named \"test\"\n",
+            "module Package exposing (package)\n\n\npackage =\n    { name = \"test\" }\n",
         )
         .expect("write manifest");
 
@@ -9392,7 +9393,7 @@ pub mod web {
         let manifest_path = dir.join("package.ipe");
         fs::write(
             &manifest_path,
-            "module Package exposing (package)\n\n\npackage =\n    Package.named \"test\"\n",
+            "module Package exposing (package)\n\n\npackage =\n    { name = \"test\" }\n",
         )
         .expect("write manifest");
 

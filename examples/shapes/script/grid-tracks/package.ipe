@@ -1,6 +1,10 @@
 module Package exposing (package)
 
+import Ipe.Package exposing (..)
 
+
+package : Package
 package =
-    Package.named "grid-tracks"
-        |> Package.version "0.1.0"
+    { name = "grid-tracks"
+    , version = "0.1.0"
+    }

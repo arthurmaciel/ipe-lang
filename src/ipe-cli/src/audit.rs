@@ -429,7 +429,7 @@ fn set_format(slot: &mut Option<OutputFormat>, requested: OutputFormat) -> Resul
 /// audit never reads publisher-supplied bindings — only the gate-owned,
 /// freshly-generated ones pass the ownership check that follows.
 ///
-/// A `Package.wrapper`-only package is rejected before the build: wrapper
+/// A `wrapper`-only package is rejected before the build: wrapper
 /// bindings are author-asserted (a local source path, no registry pin, rev, or
 /// hash), so the gate has no independent pinned source to regenerate from. The
 /// only fail-closed option is rejection — committing author-written wrapper
@@ -439,7 +439,7 @@ fn set_format(slot: &mut Option<OutputFormat>, requested: OutputFormat) -> Resul
 /// # Errors
 /// [`CliError::UsageOwned`] when `path` names no `package.ipe`;
 /// [`CliError::PackageAudit`] with [`Check::NativeBindingRegen`] when the
-/// manifest declares a `Package.wrapper` stage; the build errors
+/// manifest declares a `wrapper` field; the build errors
 /// ([`CliError::Pipeline`] / [`CliError::Io`] / [`CliError::StaticRefusal`])
 /// otherwise.
 fn prepare(path: &Path) -> Result<Prepared, CliError> {
@@ -453,7 +453,7 @@ fn prepare(path: &Path) -> Result<Prepared, CliError> {
     if manifest.has_rust_wrapper {
         return Err(reject(
             Check::NativeBindingRegen,
-            "this package declares a `Package.wrapper` stage whose bindings are \
+            "this package declares a `wrapper` field whose bindings are \
              author-asserted (a local source path with no registry pin, rev, or \
              content hash). The audit gate has no independent pinned source to \
              regenerate wrapper bindings from, so it cannot vouch for them. \
@@ -1347,9 +1347,11 @@ mod tests {
         let mut f = std::fs::File::create(&manifest_path).expect("create package.ipe");
         writeln!(
             f,
-            "module Package exposing (package)\n\n\npackage =\n    Package.named \"wrapper-pkg\"\n\
-             \x20       |> Package.version \"0.1.0\"\n\
-             \x20       |> Package.wrapper (Rust.wrapper \"./my-crate\" |> Rust.expose [ \"some_fn\" ])\n"
+            "module Package exposing (package)\n\n\npackage =\n\
+             \x20   {{ name = \"wrapper-pkg\"\n\
+             \x20   , version = \"0.1.0\"\n\
+             \x20   , wrapper = Wrapper {{ path = \"./my-crate\", expose = [ \"some_fn\" ] }}\n\
+             \x20   }}\n"
         )
         .expect("write package.ipe");
 
@@ -1367,8 +1369,8 @@ mod tests {
                 r.check
             );
             assert!(
-                r.message.contains("Package.wrapper"),
-                "rejection message must name the Package.wrapper stage: {}",
+                r.message.contains("`wrapper` field"),
+                "rejection message must name the wrapper field: {}",
                 r.message
             );
         }
@@ -1396,10 +1398,12 @@ mod tests {
         let mut f = std::fs::File::create(&manifest_path).expect("create package.ipe");
         writeln!(
             f,
-            "module Package exposing (package)\n\n\npackage =\n    Package.named \"dep-pkg\"\n\
-             \x20       |> Package.version \"0.1.0\"\n\
-             \x20       |> Package.rustDependencies [ Package.rustDep \"uuid\" \"1\" ]\n\
-             \x20       |> Package.declares [ Capability.nativeFfi ]\n"
+            "module Package exposing (package)\n\n\npackage =\n\
+             \x20   {{ name = \"dep-pkg\"\n\
+             \x20   , version = \"0.1.0\"\n\
+             \x20   , rustDependencies = [ rustDep \"uuid\" \"1\" ]\n\
+             \x20   , capabilities = {{ declares = [ NativeFfi ] }}\n\
+             \x20   }}\n"
         )
         .expect("write package.ipe");
 
@@ -1428,8 +1432,8 @@ mod tests {
         let mut f = std::fs::File::create(&manifest_path).expect("create package.ipe");
         writeln!(
             f,
-            "module Package exposing (package)\n\n\npackage =\n    Package.named \"pure-pkg\"\n\
-             \x20       |> Package.version \"0.1.0\"\n"
+            "module Package exposing (package)\n\n\npackage =\n\
+             \x20   {{ name = \"pure-pkg\", version = \"0.1.0\" }}\n"
         )
         .expect("write package.ipe");
 

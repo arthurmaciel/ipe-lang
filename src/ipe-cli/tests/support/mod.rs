@@ -93,7 +93,7 @@ pub fn golden_dir_of(golden: &Path) -> &Path {
 #[must_use]
 #[allow(dead_code)] // adopted file-by-file as fixtures migrate to package.ipe
 pub fn package_ipe(name: &str) -> String {
-    format!("module Package exposing (package)\n\n\npackage =\n    Package.named {name:?}\n")
+    format!("module Package exposing (package)\n\n\npackage =\n    {{ name = {name:?} }}\n")
 }
 
 /// Collapse rustfmt's whitespace-driven line-wrap noise out of emitted Rust

@@ -1,6 +1,10 @@
 module Package exposing (package)
 
+import Ipe.Package exposing (..)
 
+
+package : Package
 package =
-    Package.named "net-port-guard"
-        |> Package.version "0.1.0"
+    { name = "net-port-guard"
+    , version = "0.1.0"
+    }

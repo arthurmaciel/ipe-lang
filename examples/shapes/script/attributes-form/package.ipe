@@ -1,6 +1,10 @@
 module Package exposing (package)
 
+import Ipe.Package exposing (..)
 
+
+package : Package
 package =
-    Package.named "attributes-form"
-        |> Package.version "0.1.0"
+    { name = "attributes-form"
+    , version = "0.1.0"
+    }

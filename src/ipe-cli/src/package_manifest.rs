@@ -1,12 +1,12 @@
-//! `package.ipe` — the project manifest written in Ipê and read *syntactically*.
+//! `package.ipe` — the project manifest written in Ipê as an inert typed record.
 //!
 //! The bootstrap constraint is decisive: the toolchain must learn a project's
 //! dependencies before it can compile anything, so it cannot evaluate Ipê — that
 //! would require the very dependencies it is trying to discover — to read them.
-//! The resolution is to read, never run: the manifest declares one top-level
-//! `package` binding built from a blessed vocabulary, and this reader extracts
-//! each field by walking the AST of that binding, refusing anything that is not a
-//! literal argument to a blessed builder.
+//! The resolution is to read, never run: the manifest binds one top-level
+//! `package : Package` value to a record literal, and this reader extracts each
+//! field by walking the AST of that record, refusing anything that is not a
+//! literal, a closed-set constructor, or a nested record/list of those.
 //!
 //! # What this reader does
 //!
@@ -15,25 +15,34 @@
 //! no lowering, no emit, and above all no evaluation. The parser is total and
 //! effect-free by construction, so reading an untrusted `package.ipe` runs none
 //! of its code. The reader then operates purely on the resulting AST, producing
-//! the same [`ProjectManifest`] the `ipe.toml` line-scanner produces — one
-//! struct, two front doors.
+//! a [`ProjectManifest`].
 //!
-//! # The blessed vocabulary
+//! # The record schema
 //!
-//! A single builder surface, one symbol per manifest field, recognised by name.
-//! A `package.ipe` is a `|>` pipeline of `Package.*` / `Wasm.*` / `Rust.*` calls
-//! over literal arguments (strings, lists, nested blessed calls, and blessed
-//! nullary constructors such as `Package.postgres`, `Static.on`,
-//! `Capability.network`). Driver, allocator, wasm-mode, and boolean choices are
-//! blessed nullary constructors rather than free strings, so a typo that today
-//! reaches a runtime rejection is instead not a writable manifest at all.
+//! The manifest is a `{ name = "…", version = "…", …, build = { … } }` record
+//! typed by the `Ipe.Package` stdlib schema. Every finite choice — the database
+//! driver, a program's shape, the allocator, the wasm mode, a capability — is a
+//! closed-union constructor (`Sqlite`, `Web`, `Dlmalloc`, `Spa`, `Network`), so
+//! a typo is a name that does not exist rather than a live-with-it string. Open
+//! text (`version`, an `entry` file, a `Cross` triple) is a `String`, parsed at
+//! this read boundary. No field can hold a function or an effect — the record is
+//! inert by shape.
+//!
+//! # The shared record machinery
+//!
+//! The primitive readers here ([`Reader::expect_record`],
+//! [`Reader::expect_string`], [`Reader::expect_ctor`],
+//! [`Reader::expect_ctor_app`], [`Reader::expect_list`]) read a typed inert
+//! record of closed-set constructors and literals from a parsed AST. They are
+//! written to be reused by the FFI `foreign`-record reader, which faces the same
+//! shape (a typed inert record read syntactically, never evaluated).
 //!
 //! # Preserved validations
 //!
-//! Every parse-time check the `ipe.toml` reader carries runs here too, against
-//! the extracted literal, via the *same* shared functions — the `publicEnv`
-//! secret-name denylist, semver parsing, capability validation, and the wrapper
-//! path jail. There is no second copy that could drift from the `ipe.toml` path.
+//! Every parse-time check the manifest must carry runs here against the
+//! extracted literal, via the *same* shared functions the rest of the CLI uses —
+//! the `publicEnv` secret-name denylist, semver parsing, capability validation,
+//! the allocator vocabulary, and the wrapper path jail.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -50,6 +59,12 @@ use crate::project::{
 
 /// The manifest filename read by this reader.
 pub const PACKAGE_IPE: &str = "package.ipe";
+
+/// The one import a `package.ipe` may carry: the schema its constructors come
+/// from. It is permitted and IGNORED — the reader recognises every constructor
+/// by name, never by resolving the import — so the manifest type-checks in an
+/// editor while the reader stays evaluation-free. No other import is allowed.
+const SCHEMA_MODULE: &str = "Ipe.Package";
 
 /// Read and validate a `package.ipe` manifest at `manifest_path`.
 ///
@@ -77,8 +92,8 @@ pub fn parse_package_manifest(manifest_path: &Path) -> Result<ProjectManifest, C
 /// The total core: `&str -> Result<ProjectManifest, CliError>`, given the
 /// project `root` (for path fields) and the manifest path (for diagnostics).
 ///
-/// This is the security boundary. It parses `src` and walks the AST of the sole
-/// `package` binding; it never evaluates any expression.
+/// This is the security boundary. It parses `src` and walks the record of the
+/// sole `package` binding; it never evaluates any expression.
 ///
 /// # Errors
 /// As [`parse_package_manifest`], minus the file-read error.
@@ -113,10 +128,10 @@ struct Reader<'a> {
     manifest_path: &'a Path,
 }
 
-/// The fields accumulated while walking the pipeline, before assembly into a
+/// The fields accumulated while reading the record, before assembly into a
 /// [`ProjectManifest`]. Every field defaults to the same absent-section default
-/// the `ipe.toml` path uses, so a minimal `package = Package.named "x"` yields an
-/// identical struct.
+/// the manifest schema documents, so a minimal `{ name = "x" }` yields the same
+/// struct a fully-specified record with defaulted sections would.
 #[derive(Default)]
 struct ManifestFields {
     name: Option<String>,
@@ -144,7 +159,7 @@ impl ManifestFields {
     /// source-root directory must exist.
     fn into_manifest(self, root: &Path) -> Result<ProjectManifest, CliError> {
         let name = self.name.ok_or(CliError::Usage(
-            "package.ipe: missing a `Package.named \"…\"` stage — a package must be named",
+            "package.ipe: missing a `name = \"…\"` field — a package must be named",
         ))?;
         let src_rel_raw = self.src_rel.as_deref().unwrap_or("src");
         let src_root_contained = crate::contained_path::ContainedRelPath::parse(root, src_rel_raw)
@@ -205,16 +220,22 @@ impl Reader<'_> {
     }
 
     /// Walk a whole parsed module into the accumulated [`ManifestFields`],
-    /// enforcing the module-shape rules: no imports, exactly one top-level
-    /// `package` value binding with no parameters, and no other declarations.
+    /// enforcing the module-shape rules: only the schema import (ignored),
+    /// exactly one top-level `package` value binding with no parameters, and no
+    /// other declarations.
     fn read_module(&self, module: &Module) -> Result<ManifestFields, CliError> {
-        if let Some(import) = module.imports.first() {
-            return Err(self.reject(
-                import.name.span,
-                "a package.ipe may not `import` anything — the manifest is read before \
-                 dependencies are resolved, and the vocabulary is recognised by name, never \
-                 imported",
-            ));
+        for import in &module.imports {
+            let name = self.import_module_name(import);
+            if name != SCHEMA_MODULE {
+                return Err(self.reject(
+                    import.name.span,
+                    &format!(
+                        "a package.ipe may import only `{SCHEMA_MODULE}` (the manifest schema) — \
+                         the manifest is read before dependencies are resolved, so no other module \
+                         can be imported"
+                    ),
+                ));
+            }
         }
         if let Some(union) = module.unions.first() {
             return Err(self.reject(
@@ -261,188 +282,133 @@ impl Reader<'_> {
             ));
         }
 
-        let stages = self.linearise_pipeline(&package.value.body)?;
+        self.read_package_record(&package.value.body)
+    }
+
+    /// The dotted module name of an import (`Ipe.Package` → `"Ipe.Package"`),
+    /// joining its segments.
+    fn import_module_name(&self, import: &ipe_syntax::Import) -> String {
+        import
+            .name
+            .value
+            .iter()
+            .map(|seg| self.text(*seg))
+            .collect::<Vec<_>>()
+            .join(".")
+    }
+
+    /// Read the top-level `package = { … }` record into the accumulated fields,
+    /// dispatching each field by name. An unknown field is a named rejection.
+    fn read_package_record(&self, body: &Expr) -> Result<ManifestFields, CliError> {
+        let record = self.expect_record(body)?;
         let mut fields = ManifestFields::default();
-        for stage in stages {
-            self.apply_package_stage(stage, &mut fields)?;
+        for (fname, value) in record {
+            match self.text(fname.value) {
+                "name" => fields.name = Some(self.expect_string(value)?),
+                "version" => {
+                    let raw = self.expect_string(value)?;
+                    let version = semver::Version::parse(&raw).map_err(|e| {
+                        self.reject(
+                            value.span,
+                            &format!("`version` {raw:?} is not valid semver: {e}"),
+                        )
+                    })?;
+                    fields.version = Some(version);
+                }
+                "sourceRoot" => fields.src_rel = Some(self.expect_string(value)?),
+                "dependencies" => fields.dependencies = self.read_dependencies(value)?,
+                "rustDependencies" => {
+                    fields.rust_dependencies = self.read_rust_dependencies(value)?;
+                }
+                "capabilities" => self.read_capabilities_record(value, &mut fields)?,
+                "exposedModules" => fields.exposed_modules = self.read_exposed_modules(value)?,
+                "programs" => fields.programs = self.read_programs(value)?,
+                "wasm" => fields.wasm = self.read_wasm(value)?,
+                "wrapper" => fields.has_rust_wrapper = self.read_wrapper(value)?,
+                "build" => self.read_build_record(value, &mut fields)?,
+                other => {
+                    return Err(self.reject(
+                        fname.span,
+                        &format!(
+                            "`{other}` is not a package field — expected one of name, version, \
+                             sourceRoot, dependencies, rustDependencies, capabilities, \
+                             exposedModules, programs, wasm, wrapper, build"
+                        ),
+                    ));
+                }
+            }
         }
         Ok(fields)
     }
 
-    /// Linearise the `|>` spine of the `package` body into an ordered list of
-    /// stage expressions: the pipeline head plus each right-hand call the value
-    /// is piped into. A body that is a bare `Package.named "…"` (no pipeline) is
-    /// a single-stage list. Any operator other than `|>` is rejected.
-    fn linearise_pipeline<'e>(&self, body: &'e Expr) -> Result<Vec<&'e Expr>, CliError> {
-        match &body.value {
-            Expr_::Binops(ops, last) => {
-                let mut stages = Vec::with_capacity(ops.len() + 1);
-                for (operand, op) in ops {
-                    if self.text(op.value) != "|>" {
-                        return Err(self.reject(
-                            op.span,
-                            "the package pipeline may only be threaded with `|>` — no other \
-                             operator is allowed in a package.ipe",
-                        ));
-                    }
-                    stages.push(operand);
-                }
-                stages.push(last.as_ref());
-                Ok(stages)
-            }
-            // A bare head with no pipeline (`package = Package.named "x"`).
-            _ => Ok(vec![body]),
-        }
-    }
-
-    /// Apply one top-level pipeline stage to the accumulated fields. Every stage
-    /// must be a blessed `Package.*` / `Wasm.*` / `Rust.*` call (or the bare
-    /// `Package.named "…"` head); the callee names the field and the literal
-    /// arguments carry its value.
-    fn apply_package_stage(
+    /// Read the `capabilities = { declares = [ … ], accepts = [ … ] }` record.
+    fn read_capabilities_record(
         &self,
-        stage: &Expr,
+        expr: &Expr,
         fields: &mut ManifestFields,
     ) -> Result<(), CliError> {
-        let (module, name, args) = self.expect_blessed_call(stage)?;
-        match (module, name) {
-            ("Package", "named") => {
-                fields.name = Some(self.one_string(stage.span, name, args)?);
-            }
-            ("Package", "version") => {
-                let raw = self.one_string(stage.span, name, args)?;
-                let version = semver::Version::parse(&raw).map_err(|e| {
-                    self.reject(
-                        stage.span,
-                        &format!("`Package.version {raw:?}` is not valid semver: {e}"),
-                    )
-                })?;
-                fields.version = Some(version);
-            }
-            ("Package", "sourceRoot") => {
-                fields.src_rel = Some(self.one_string(stage.span, name, args)?);
-            }
-            ("Package", "database") => {
-                fields.driver = Some(self.read_driver(self.nth_arg(stage.span, name, args, 0)?)?);
-            }
-            ("Package", "dependencies") => {
-                fields.dependencies =
-                    self.read_dependencies(self.nth_arg(stage.span, name, args, 0)?)?;
-            }
-            ("Package", "rustDependencies") => {
-                fields.rust_dependencies =
-                    self.read_rust_dependencies(self.nth_arg(stage.span, name, args, 0)?)?;
-            }
-            ("Package", "wrapper") => {
-                self.read_wrapper(self.nth_arg(stage.span, name, args, 0)?)?;
-                fields.has_rust_wrapper = true;
-            }
-            ("Package", "static") => {
-                fields.static_build =
-                    Some(self.read_static_bool(self.nth_arg(stage.span, name, args, 0)?)?);
-            }
-            ("Package", "target") => {
-                fields.target = Some(self.one_string(stage.span, name, args)?);
-            }
-            ("Package", "allocator") => {
-                fields.allocator =
-                    Some(self.read_allocator(self.nth_arg(stage.span, name, args, 0)?)?);
-            }
-            ("Package", "allowSlowAllocator") => {
-                fields.allow_slow_allocator =
-                    Some(self.read_static_bool(self.nth_arg(stage.span, name, args, 0)?)?);
-            }
-            ("Package", "cFree") => {
-                fields.c_free =
-                    Some(self.read_static_bool(self.nth_arg(stage.span, name, args, 0)?)?);
-            }
-            ("Package", "declares") => {
-                fields.capabilities =
-                    self.read_capabilities(self.nth_arg(stage.span, name, args, 0)?)?;
-            }
-            ("Package", "accepts") => {
-                fields.capabilities_accept =
-                    self.read_capabilities(self.nth_arg(stage.span, name, args, 0)?)?;
-            }
-            ("Package", "wasm") => {
-                fields.wasm = self.read_wasm(self.nth_arg(stage.span, name, args, 0)?)?;
-            }
-            ("Package", "programs") => {
-                fields.programs = self.read_programs(self.nth_arg(stage.span, name, args, 0)?)?;
-            }
-            ("Package", "exposedModules") => {
-                fields.exposed_modules =
-                    self.read_exposed_modules(self.nth_arg(stage.span, name, args, 0)?)?;
-            }
-            _ => {
-                return Err(self.reject(
-                    stage.span,
-                    &format!(
-                        "`{module}.{name}` is not a package-pipeline stage — expected a \
-                         `Package.*` builder"
-                    ),
-                ));
+        for (fname, value) in self.expect_record(expr)? {
+            match self.text(fname.value) {
+                "declares" => fields.capabilities = self.read_capability_set(value)?,
+                "accepts" => fields.capabilities_accept = self.read_capability_set(value)?,
+                other => {
+                    return Err(self.reject(
+                        fname.span,
+                        &format!(
+                            "`{other}` is not a capabilities field — expected `declares` or \
+                             `accepts`"
+                        ),
+                    ));
+                }
             }
         }
         Ok(())
     }
 
-    /// Require `expr` to be a call whose callee is a qualified blessed name
-    /// (`Module.name`), returning `(module, name, args)`. A callee that is a
-    /// local name, a lambda application, or anything but a `Module.name`
-    /// qualifier is rejected — no user-defined function can appear in a stage.
-    fn expect_blessed_call<'e>(
+    /// Read the `build = { database = …, static = …, … }` record into the
+    /// static-request / driver fields.
+    fn read_build_record(&self, expr: &Expr, fields: &mut ManifestFields) -> Result<(), CliError> {
+        for (fname, value) in self.expect_record(expr)? {
+            match self.text(fname.value) {
+                "database" => fields.driver = Some(self.read_database(value)?),
+                "static" => fields.static_build = Some(self.expect_bool(value)?),
+                "target" => fields.target = self.read_target(value)?,
+                "allocator" => fields.allocator = Some(self.read_allocator(value)?),
+                "allowSlowAllocator" => {
+                    fields.allow_slow_allocator = Some(self.expect_bool(value)?);
+                }
+                "cFree" => fields.c_free = Some(self.expect_bool(value)?),
+                other => {
+                    return Err(self.reject(
+                        fname.span,
+                        &format!(
+                            "`{other}` is not a build field — expected one of database, static, \
+                             target, allocator, allowSlowAllocator, cFree"
+                        ),
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    // ── shared record primitives (reused by the FFI foreign-record reader) ────
+
+    /// Require `expr` to be a record literal `{ … }`, returning its
+    /// `(field-name, value)` pairs. Any other shape is rejected — a manifest
+    /// section is data, never a computed value.
+    fn expect_record<'e>(
         &self,
         expr: &'e Expr,
-    ) -> Result<(&str, &str, &'e [Expr]), CliError> {
+    ) -> Result<&'e [(Located<ipe_intern::Symbol>, Expr)], CliError> {
         match &expr.value {
-            Expr_::Call(callee, args) => match &callee.value {
-                Expr_::VarQual(m, n) => Ok((self.text(*m), self.text(*n), args.as_slice())),
-                _ => Err(self.reject(
-                    callee.span,
-                    "a package stage's callee must be a blessed `Module.builder` name, never a \
-                     local binding, lambda, or computed function",
-                )),
-            },
-            // A bare nullary constructor written where a call was expected
-            // (`Package.postgres` with no application) is a `VarQual` atom, not a
-            // Call. It is handled by the nullary-constructor readers, never here.
-            Expr_::VarQual(m, n) => Ok((self.text(*m), self.text(*n), &[])),
+            Expr_::Record(fields) => Ok(fields.as_slice()),
             _ => Err(self.reject(
                 expr.span,
-                "expected a blessed builder call in the package pipeline",
+                "expected a record literal `{ … }` — a package.ipe section is written as a record \
+                 of literals, never computed",
             )),
         }
-    }
-
-    /// Require exactly one argument and read it as a string literal.
-    fn one_string(&self, span: Span, builder: &str, args: &[Expr]) -> Result<String, CliError> {
-        if args.len() != 1 {
-            return Err(self.reject(
-                span,
-                &format!(
-                    "`{builder}` takes exactly one string argument, got {}",
-                    args.len()
-                ),
-            ));
-        }
-        self.expect_string(self.nth_arg(span, builder, args, 0)?)
-    }
-
-    /// Fetch the `idx`-th argument, rejecting a builder given too few.
-    fn nth_arg<'e>(
-        &self,
-        span: Span,
-        builder: &str,
-        args: &'e [Expr],
-        idx: usize,
-    ) -> Result<&'e Expr, CliError> {
-        args.get(idx).ok_or_else(|| {
-            self.reject(
-                span,
-                &format!("`{builder}` is missing argument #{}", idx + 1),
-            )
-        })
     }
 
     /// Read a string-literal argument; reject anything computed.
@@ -453,6 +419,20 @@ impl Reader<'_> {
                 expr.span,
                 "expected a string literal — a package.ipe field may only be written as a \
                  literal, never computed",
+            )),
+        }
+    }
+
+    /// Read a boolean-literal field written as the constructor `True` / `False`.
+    /// The parser surfaces `True`/`False` as a bare `VarLocal`; anything else is
+    /// rejected.
+    fn expect_bool(&self, expr: &Expr) -> Result<bool, CliError> {
+        match self.ctor_name(expr) {
+            Some("True") => Ok(true),
+            Some("False") => Ok(false),
+            _ => Err(self.reject(
+                expr.span,
+                "expected `True` or `False` — a package.ipe boolean setting is a literal",
             )),
         }
     }
@@ -474,59 +454,120 @@ impl Reader<'_> {
             .collect()
     }
 
-    /// Read the `Package.database` argument: one of the blessed driver
-    /// constructors `Package.sqlite` / `Package.postgres`. The driver is
-    /// unrepresentable-by-construction here, strengthening the `ipe.toml`
-    /// `parse_db_driver` string check into the vocabulary.
-    fn read_driver(&self, expr: &Expr) -> Result<ipe_backend_rust::DbDriver, CliError> {
-        let (module, name) = self.expect_nullary(expr, "a database driver")?;
-        match (module, name) {
-            ("Package", "sqlite") => Ok(ipe_backend_rust::DbDriver::Sqlite),
-            ("Package", "postgres") => Ok(ipe_backend_rust::DbDriver::Postgres),
-            _ => Err(self.reject(
+    /// The unqualified constructor name a bare atom names, if it is one.
+    ///
+    /// A constructor written unqualified (`Sqlite`, `Web`, `Network` — brought
+    /// in by `import Ipe.Package exposing (..)`) is a [`Expr_::VarLocal`]; one
+    /// written qualified (`Package.Sqlite`) is a [`Expr_::VarQual`] whose name
+    /// segment is returned. Anything else (a call, a literal, a lambda) is `None`.
+    fn ctor_name<'e>(&'e self, expr: &Expr) -> Option<&'e str> {
+        match &expr.value {
+            Expr_::VarLocal(n) | Expr_::VarQual(_, n) => Some(self.text(*n)),
+            _ => None,
+        }
+    }
+
+    /// Require `expr` to be a bare nullary constructor, returning its name.
+    /// `what` names the expected kind in the error.
+    fn expect_ctor<'e>(&'e self, expr: &Expr, what: &str) -> Result<&'e str, CliError> {
+        self.ctor_name(expr).ok_or_else(|| {
+            self.reject(
                 expr.span,
                 &format!(
-                    "`{module}.{name}` is not a database driver — use `Package.sqlite` or \
-                     `Package.postgres`"
+                    "expected {what} as a constructor, never a computed value or a local binding"
+                ),
+            )
+        })
+    }
+
+    /// Require `expr` to be a constructor APPLIED to arguments (`Cross "…"`,
+    /// `On { … }`, `Wrapper { … }`), returning `(ctor-name, args)`. A bare
+    /// nullary constructor yields an empty argument slice.
+    fn expect_ctor_app<'e>(
+        &'e self,
+        expr: &'e Expr,
+        what: &str,
+    ) -> Result<(&'e str, &'e [Expr]), CliError> {
+        match &expr.value {
+            Expr_::Call(callee, args) => {
+                let name = self.ctor_name(callee).ok_or_else(|| {
+                    self.reject(
+                        callee.span,
+                        &format!(
+                            "expected {what} as a constructor applied to its argument, never a \
+                             computed function"
+                        ),
+                    )
+                })?;
+                Ok((name, args.as_slice()))
+            }
+            Expr_::VarLocal(n) | Expr_::VarQual(_, n) => Ok((self.text(*n), &[])),
+            _ => Err(self.reject(expr.span, &format!("expected {what} as a constructor"))),
+        }
+    }
+
+    /// The `idx`-th argument of a constructor application, rejecting too few.
+    fn nth_arg<'e>(
+        &self,
+        span: Span,
+        ctor: &str,
+        args: &'e [Expr],
+        idx: usize,
+    ) -> Result<&'e Expr, CliError> {
+        args.get(idx)
+            .ok_or_else(|| self.reject(span, &format!("`{ctor}` is missing argument #{}", idx + 1)))
+    }
+
+    // ── field readers ─────────────────────────────────────────────────────────
+
+    /// Read the `build.database` field: `Sqlite` / `Postgres`.
+    fn read_database(&self, expr: &Expr) -> Result<ipe_backend_rust::DbDriver, CliError> {
+        match self.expect_ctor(expr, "a database driver")? {
+            "Sqlite" => Ok(ipe_backend_rust::DbDriver::Sqlite),
+            "Postgres" => Ok(ipe_backend_rust::DbDriver::Postgres),
+            other => Err(self.reject(
+                expr.span,
+                &format!("`{other}` is not a database driver — use `Sqlite` or `Postgres`"),
+            )),
+        }
+    }
+
+    /// Read the `build.target` field: `HostTarget` (unset) or `Cross "<triple>"`
+    /// (an explicit cross-compile triple, parsed at resolution into the closed
+    /// target set).
+    fn read_target(&self, expr: &Expr) -> Result<Option<String>, CliError> {
+        let (ctor, args) = self.expect_ctor_app(expr, "a build target")?;
+        match ctor {
+            "HostTarget" => Ok(None),
+            "Cross" => {
+                let triple = self.expect_string(self.nth_arg(expr.span, ctor, args, 0)?)?;
+                Ok(Some(triple))
+            }
+            other => Err(self.reject(
+                expr.span,
+                &format!(
+                    "`{other}` is not a build target — use `HostTarget` or `Cross \"<triple>\"`"
                 ),
             )),
         }
     }
 
-    /// Read a boolean field (`Package.static` / `allowSlowAllocator` / `cFree`)
-    /// written as one of the blessed nullary constructors `Static.on` /
-    /// `Static.off`. Booleans are dedicated builders rather than bare `True` /
-    /// `False`, so the reader never recognises a raw constructor reference.
-    fn read_static_bool(&self, expr: &Expr) -> Result<bool, CliError> {
-        let (module, name) = self.expect_nullary(expr, "an on/off switch")?;
-        match (module, name) {
-            ("Static", "on") => Ok(true),
-            ("Static", "off") => Ok(false),
-            _ => Err(self.reject(
-                expr.span,
-                &format!("`{module}.{name}` is not a switch — use `Static.on` or `Static.off`"),
-            )),
-        }
-    }
-
-    /// Read the `Package.allocator` argument: one of the blessed allocator
-    /// constructors, mapped to its [`crate::build_plan::AllocatorChoice`] wire
-    /// name so the closed set stays the single source of truth.
+    /// Read the `build.allocator` field, mapped to its
+    /// [`crate::build_plan::AllocatorChoice`] wire name so the closed set stays
+    /// the single source of truth.
     fn read_allocator(&self, expr: &Expr) -> Result<crate::build_plan::AllocatorChoice, CliError> {
-        let (module, name) = self.expect_nullary(expr, "an allocator")?;
-        let wire = match (module, name) {
-            ("Package", "autoAlloc") => "auto",
-            ("Package", "system") => "system",
-            ("Package", "dlmalloc") => "dlmalloc",
-            ("Package", "talc") => "talc",
-            ("Package", "mimalloc") => "mimalloc",
-            _ => {
+        let wire = match self.expect_ctor(expr, "an allocator")? {
+            "AutoAlloc" => "auto",
+            "System" => "system",
+            "Dlmalloc" => "dlmalloc",
+            "Talc" => "talc",
+            "Mimalloc" => "mimalloc",
+            other => {
                 return Err(self.reject(
                     expr.span,
                     &format!(
-                        "`{module}.{name}` is not an allocator — use `Package.system`, \
-                         `Package.dlmalloc`, `Package.talc`, `Package.mimalloc`, or \
-                         `Package.autoAlloc`"
+                        "`{other}` is not an allocator — use `System`, `Dlmalloc`, `Talc`, \
+                         `Mimalloc`, or `AutoAlloc`"
                     ),
                 ));
             }
@@ -535,11 +576,10 @@ impl Reader<'_> {
             .map_err(|e| self.reject(expr.span, &format!("{e}")))
     }
 
-    /// Read the `Package.dependencies [ … ]` list into the typed [`IpeDep`] map.
-    /// Each element is a blessed `Package.dep` / `depGit` / `depGitRev` /
-    /// `depPath` call — the three-distinct-builders shape mirrors the `IpeDep`
-    /// sum, so a dependency is exactly one of index / git / path, never a bag of
-    /// optional keys.
+    /// Read the `dependencies = [ … ]` list into the typed [`IpeDep`] map. Each
+    /// element is a `dep` / `depGit` / `depGitRev` / `depPath` builder call — the
+    /// four-builder shape mirrors the `IpeDep` sum, so a dependency is exactly one
+    /// of index / git / path, never a bag of optional keys.
     fn read_dependencies(&self, expr: &Expr) -> Result<BTreeMap<String, IpeDep>, CliError> {
         let mut deps = BTreeMap::new();
         for item in self.expect_list(expr)? {
@@ -549,15 +589,9 @@ impl Reader<'_> {
         Ok(deps)
     }
 
-    /// Read one dependency builder into its `(name, IpeDep)`.
+    /// Read one dependency builder call into its `(name, IpeDep)`.
     fn read_one_dep(&self, expr: &Expr) -> Result<(String, IpeDep), CliError> {
-        let (module, builder, args) = self.expect_blessed_call(expr)?;
-        if module != "Package" {
-            return Err(self.reject(
-                expr.span,
-                &format!("`{module}.{builder}` is not a dependency builder"),
-            ));
-        }
+        let (builder, args) = self.expect_ctor_app(expr, "a dependency builder")?;
         match builder {
             "dep" => {
                 let name = self.expect_string(self.nth_arg(expr.span, builder, args, 0)?)?;
@@ -594,19 +628,19 @@ impl Reader<'_> {
                 let path = self.expect_string(self.nth_arg(expr.span, builder, args, 1)?)?;
                 Ok((name, IpeDep::Path(PathBuf::from(path))))
             }
-            _ => Err(self.reject(
+            other => Err(self.reject(
                 expr.span,
                 &format!(
-                    "`Package.{builder}` is not a dependency builder — use `dep`, `depGit`, \
-                     `depGitRev`, or `depPath`"
+                    "`{other}` is not a dependency builder — use `dep`, `depGit`, `depGitRev`, or \
+                     `depPath`"
                 ),
             )),
         }
     }
 
-    /// Read the `Package.rustDependencies [ … ]` list into the typed
-    /// [`RustDep`] map. Each element is a `Package.rustDep name version`,
-    /// optionally piped into `Rust.features [ … ]`.
+    /// Read the `rustDependencies = [ … ]` list into the typed [`RustDep`] map.
+    /// Each element is a `rustDep name version` or `rustDepWith name version
+    /// [ features ]` builder call.
     fn read_rust_dependencies(&self, expr: &Expr) -> Result<BTreeMap<String, RustDep>, CliError> {
         let mut deps = BTreeMap::new();
         for item in self.expect_list(expr)? {
@@ -616,148 +650,170 @@ impl Reader<'_> {
         Ok(deps)
     }
 
-    /// Read one rust dependency: a `Package.rustDep` head, threaded through any
-    /// number of `|> Rust.features [ … ]` refinements. Each refinement's `|>`
-    /// spine is linearised the same way the top-level pipeline is.
+    /// Read one rust dependency: `rustDep name version` (no features) or
+    /// `rustDepWith name version [ features ]`.
     fn read_one_rust_dep(&self, expr: &Expr) -> Result<(String, RustDep), CliError> {
-        let stages = self.linearise_pipeline(expr)?;
-        let mut name: Option<String> = None;
-        let mut dep = RustDep::default();
-        for stage in stages {
-            let (module, builder, args) = self.expect_blessed_call(stage)?;
-            match (module, builder) {
-                ("Package", "rustDep") => {
-                    let n = self.expect_string(self.nth_arg(stage.span, builder, args, 0)?)?;
-                    dep.version =
-                        self.expect_string(self.nth_arg(stage.span, builder, args, 1)?)?;
-                    name = Some(n);
-                }
-                ("Rust", "features") => {
-                    dep.features =
-                        self.expect_string_list(self.nth_arg(stage.span, builder, args, 0)?)?;
-                }
-                _ => {
-                    return Err(self.reject(
-                        stage.span,
-                        &format!(
-                            "`{module}.{builder}` is not a rust-dependency builder — use \
-                             `Package.rustDep` and `Rust.features`"
-                        ),
-                    ));
-                }
+        let (builder, args) = self.expect_ctor_app(expr, "a rust-dependency builder")?;
+        match builder {
+            "rustDep" => {
+                let name = self.expect_string(self.nth_arg(expr.span, builder, args, 0)?)?;
+                let version = self.expect_string(self.nth_arg(expr.span, builder, args, 1)?)?;
+                Ok((
+                    name,
+                    RustDep {
+                        version,
+                        features: Vec::new(),
+                    },
+                ))
             }
-        }
-        let name = name.ok_or_else(|| {
-            self.reject(
+            "rustDepWith" => {
+                let name = self.expect_string(self.nth_arg(expr.span, builder, args, 0)?)?;
+                let version = self.expect_string(self.nth_arg(expr.span, builder, args, 1)?)?;
+                let features =
+                    self.expect_string_list(self.nth_arg(expr.span, builder, args, 2)?)?;
+                Ok((name, RustDep { version, features }))
+            }
+            other => Err(self.reject(
                 expr.span,
-                "a rust dependency must begin with `Package.rustDep name version`",
-            )
-        })?;
-        Ok((name, dep))
+                &format!(
+                    "`{other}` is not a rust-dependency builder — use `rustDep` or `rustDepWith`"
+                ),
+            )),
+        }
     }
 
-    /// Read a `Package.wrapper (Rust.wrapper "…" |> Rust.expose [ … ] |>
-    /// Rust.wrapperCaps [ … ])` sub-value, validating it through the SAME
-    /// [`ipe_ffi::wrapper::WrapperManifest::parse`] gate the `ipe.toml` path uses:
-    /// the wrapper path is package-jailed and every declared capability is
-    /// checked against the closed vocabulary. The parsed result is discarded here
-    /// (the [`ProjectManifest`] carries only `has_rust_wrapper`); the point is
-    /// that a bad wrapper is a read-time error, exactly as in `ipe.toml`.
-    fn read_wrapper(&self, expr: &Expr) -> Result<(), CliError> {
-        let stages = self.linearise_pipeline(expr)?;
+    /// Read the `wrapper` field: `NoWrapper` (none) or `Wrapper { path, expose,
+    /// capabilities }`. A present wrapper is validated through the SAME
+    /// [`ipe_ffi::wrapper::WrapperManifest::parse`] gate the rest of the CLI
+    /// uses: the wrapper path is package-jailed and every declared capability is
+    /// checked against the closed vocabulary. Returns whether a wrapper is
+    /// declared.
+    fn read_wrapper(&self, expr: &Expr) -> Result<bool, CliError> {
+        let (ctor, args) = self.expect_ctor_app(expr, "a wrapper spec")?;
+        match ctor {
+            "NoWrapper" => Ok(false),
+            "Wrapper" => {
+                let options = self.nth_arg(expr.span, ctor, args, 0)?;
+                let (path, expose, capabilities) = self.read_wrapper_options(options)?;
+                // Reuse the wrapper gate verbatim: package-jailed path + closed-
+                // vocabulary capabilities. Its Diagnostic is surfaced as the
+                // reader's rejection.
+                ipe_ffi::wrapper::WrapperManifest::parse(&path, &expose, &capabilities).map_err(
+                    |diag| self.reject(options.span, &format!("wrapper rejected: {diag}")),
+                )?;
+                Ok(true)
+            }
+            other => Err(self.reject(
+                expr.span,
+                &format!("`{other}` is not a wrapper spec — use `NoWrapper` or `Wrapper {{ … }}`"),
+            )),
+        }
+    }
+
+    /// Read a `Wrapper { path, expose, capabilities }` options record into its
+    /// `(path, expose-names, capability-wire-names)`. `path` is required; the two
+    /// lists default to empty.
+    fn read_wrapper_options(
+        &self,
+        expr: &Expr,
+    ) -> Result<(String, Vec<String>, Vec<String>), CliError> {
         let mut path: Option<String> = None;
         let mut expose: Vec<String> = Vec::new();
         let mut capabilities: Vec<String> = Vec::new();
-        for stage in stages {
-            let (module, builder, args) = self.expect_blessed_call(stage)?;
-            match (module, builder) {
-                ("Rust", "wrapper") => {
-                    path = Some(self.expect_string(self.nth_arg(stage.span, builder, args, 0)?)?);
-                }
-                ("Rust", "expose") => {
-                    expose =
-                        self.expect_string_list(self.nth_arg(stage.span, builder, args, 0)?)?;
-                }
-                ("Rust", "wrapperCaps") => {
-                    capabilities =
-                        self.read_capability_names(self.nth_arg(stage.span, builder, args, 0)?)?;
-                }
-                _ => {
+        for (fname, value) in self.expect_record(expr)? {
+            match self.text(fname.value) {
+                "path" => path = Some(self.expect_string(value)?),
+                "expose" => expose = self.expect_string_list(value)?,
+                "capabilities" => capabilities = self.read_capability_wire_names(value)?,
+                other => {
                     return Err(self.reject(
-                        stage.span,
+                        fname.span,
                         &format!(
-                            "`{module}.{builder}` is not a wrapper builder — use `Rust.wrapper`, \
-                             `Rust.expose`, and `Rust.wrapperCaps`"
+                            "`{other}` is not a wrapper field — expected `path`, `expose`, or \
+                             `capabilities`"
                         ),
                     ));
                 }
             }
         }
         let path = path.ok_or_else(|| {
-            self.reject(
-                expr.span,
-                "a wrapper must begin with `Rust.wrapper \"<local path>\"`",
-            )
+            self.reject(expr.span, "a wrapper must set `path = \"<local path>\"`")
         })?;
-        // Reuse the wrapper gate verbatim: package-jailed path + closed-vocabulary
-        // capabilities. Its Diagnostic is surfaced as the reader's rejection.
-        ipe_ffi::wrapper::WrapperManifest::parse(&path, &expose, &capabilities)
-            .map_err(|diag| self.reject(expr.span, &format!("wrapper rejected: {diag}")))?;
-        Ok(())
+        Ok((path, expose, capabilities))
     }
 
-    /// Read the `Package.wasm ( Wasm.spa |> … )` sub-value. `Wasm.spa` /
-    /// `Wasm.hydrate` set the mode; the refinements set entry / mount / publicEnv
-    /// / optLevel. The `publicEnv` list runs the UNCHANGED secret-name denylist.
+    /// Read the `wasm` field: `Off` (no bundle) or `On { mode, entry, mount,
+    /// publicEnv, optLevel }`. The `publicEnv` list runs the UNCHANGED secret-name
+    /// denylist. Fields other than `mode` default to absent.
     fn read_wasm(&self, expr: &Expr) -> Result<WasmConfig, CliError> {
-        let stages = self.linearise_pipeline(expr)?;
-        let mut wasm = WasmConfig::default();
-        for stage in stages {
-            // The head may be a bare `Wasm.spa` / `Wasm.hydrate` nullary atom.
-            if let Some(mode) = self.wasm_mode_atom(stage) {
-                wasm.mode = Some(mode.to_owned());
-                continue;
+        let (ctor, args) = self.expect_ctor_app(expr, "a wasm setting")?;
+        match ctor {
+            "Off" => Ok(WasmConfig::default()),
+            "On" => {
+                let options = self.nth_arg(expr.span, ctor, args, 0)?;
+                self.read_wasm_options(options)
             }
-            let (module, builder, args) = self.expect_blessed_call(stage)?;
-            match (module, builder) {
-                ("Wasm", "spa") => wasm.mode = Some("spa".to_owned()),
-                ("Wasm", "hydrate") => wasm.mode = Some("hydrate".to_owned()),
-                ("Wasm", "entry") => {
-                    wasm.entry =
-                        Some(self.expect_string(self.nth_arg(stage.span, builder, args, 0)?)?);
+            other => Err(self.reject(
+                expr.span,
+                &format!("`{other}` is not a wasm setting — use `Off` or `On {{ … }}`"),
+            )),
+        }
+    }
+
+    /// Read an `On { mode, entry, mount, publicEnv, optLevel }` options record.
+    /// `mode` is required (an active bundle must name its rendering strategy).
+    fn read_wasm_options(&self, expr: &Expr) -> Result<WasmConfig, CliError> {
+        let mut wasm = WasmConfig::default();
+        let mut saw_mode = false;
+        for (fname, value) in self.expect_record(expr)? {
+            match self.text(fname.value) {
+                "mode" => {
+                    wasm.mode = Some(self.read_wasm_mode(value)?);
+                    saw_mode = true;
                 }
-                ("Wasm", "mount") => {
-                    wasm.mount =
-                        Some(self.expect_string(self.nth_arg(stage.span, builder, args, 0)?)?);
-                }
-                ("Wasm", "publicEnv") => {
-                    let names =
-                        self.expect_string_list(self.nth_arg(stage.span, builder, args, 0)?)?;
-                    self.check_public_env(stage.span, &names)?;
+                "entry" => wasm.entry = Some(self.expect_string(value)?),
+                "mount" => wasm.mount = Some(self.expect_string(value)?),
+                "publicEnv" => {
+                    let names = self.expect_string_list(value)?;
+                    self.check_public_env(value.span, &names)?;
                     wasm.public_env = names;
                 }
-                ("Wasm", "optLevel") => {
-                    wasm.opt_level =
-                        Some(self.expect_string(self.nth_arg(stage.span, builder, args, 0)?)?);
-                }
-                _ => {
+                "optLevel" => wasm.opt_level = Some(self.expect_string(value)?),
+                other => {
                     return Err(self.reject(
-                        stage.span,
+                        fname.span,
                         &format!(
-                            "`{module}.{builder}` is not a wasm builder — use `Wasm.spa` / \
-                             `Wasm.hydrate` and the `Wasm.*` refinements"
+                            "`{other}` is not a wasm field — expected mode, entry, mount, \
+                             publicEnv, or optLevel"
                         ),
                     ));
                 }
             }
         }
+        if !saw_mode {
+            return Err(self.reject(
+                expr.span,
+                "an `On { … }` wasm bundle must set `mode = Spa` or `mode = Hydrate`",
+            ));
+        }
         Ok(wasm)
     }
 
-    /// Read the `Package.programs [ … ]` list into the typed [`Program`] vector.
-    /// Each element is a `Program.named "…"` head threaded through any number of
-    /// `|> Program.entry "…"` / `|> Program.shape Shape.…` refinements — the same
-    /// blessed-pipeline shape the rust-dependency and wrapper readers use.
+    /// Read a `wasm` `mode` field: `Spa` / `Hydrate`, mapped to its wire mode.
+    fn read_wasm_mode(&self, expr: &Expr) -> Result<String, CliError> {
+        match self.expect_ctor(expr, "a wasm mode")? {
+            "Spa" => Ok("spa".to_owned()),
+            "Hydrate" => Ok("hydrate".to_owned()),
+            other => Err(self.reject(
+                expr.span,
+                &format!("`{other}` is not a wasm mode — use `Spa` or `Hydrate`"),
+            )),
+        }
+    }
+
+    /// Read the `programs = [ … ]` list into the typed [`Program`] vector. Each
+    /// element is a `{ name = "…", entry = "…", shape = … }` record. `entry`
+    /// defaults to `Main.ipe`; `shape` is absent unless the record sets one.
     fn read_programs(&self, expr: &Expr) -> Result<Vec<Program>, CliError> {
         let mut programs = Vec::new();
         let mut seen_names: BTreeSet<String> = BTreeSet::new();
@@ -767,7 +823,7 @@ impl Reader<'_> {
                 return Err(self.reject(
                     item.span,
                     &format!(
-                        "duplicate program name {:?} — each `Program.named` must be unique",
+                        "duplicate program name {:?} — each program's `name` must be unique",
                         program.name
                     ),
                 ));
@@ -777,43 +833,29 @@ impl Reader<'_> {
         Ok(programs)
     }
 
-    /// Read one `Program.named name |> Program.entry file |> Program.shape …`
-    /// pipeline into a [`Program`]. `entry` defaults to `Main.ipe` when omitted;
-    /// `shape` is absent unless a `Program.shape` stage names one.
+    /// Read one `{ name, entry, shape }` program record into a [`Program`].
     fn read_one_program(&self, expr: &Expr) -> Result<Program, CliError> {
-        let stages = self.linearise_pipeline(expr)?;
         let mut name: Option<String> = None;
         let mut entry: Option<String> = None;
         let mut shape: Option<EntryShape> = None;
-        for stage in stages {
-            let (module, builder, args) = self.expect_blessed_call(stage)?;
-            match (module, builder) {
-                ("Program", "named") => {
-                    name = Some(self.expect_string(self.nth_arg(stage.span, builder, args, 0)?)?);
-                }
-                ("Program", "entry") => {
-                    entry = Some(self.expect_string(self.nth_arg(stage.span, builder, args, 0)?)?);
-                }
-                ("Program", "shape") => {
-                    shape = Some(self.read_shape(self.nth_arg(stage.span, builder, args, 0)?)?);
-                }
-                _ => {
+        for (fname, value) in self.expect_record(expr)? {
+            match self.text(fname.value) {
+                "name" => name = Some(self.expect_string(value)?),
+                "entry" => entry = Some(self.expect_string(value)?),
+                "shape" => shape = Some(self.read_shape(value)?),
+                other => {
                     return Err(self.reject(
-                        stage.span,
+                        fname.span,
                         &format!(
-                            "`{module}.{builder}` is not a program builder — use `Program.named`, \
-                             `Program.entry`, and `Program.shape`"
+                            "`{other}` is not a program field — expected `name`, `entry`, or \
+                             `shape`"
                         ),
                     ));
                 }
             }
         }
-        let name = name.ok_or_else(|| {
-            self.reject(
-                expr.span,
-                "a program must begin with `Program.named \"<name>\"`",
-            )
-        })?;
+        let name =
+            name.ok_or_else(|| self.reject(expr.span, "a program must set `name = \"<name>\"`"))?;
         Ok(Program {
             name,
             entry: entry.unwrap_or_else(|| "Main.ipe".to_owned()),
@@ -821,31 +863,27 @@ impl Reader<'_> {
         })
     }
 
-    /// Read a `Program.shape` argument: one of the blessed shape constructors
-    /// `Shape.web` / `Shape.webView` / `Shape.terminal` / `Shape.program`, mapped
-    /// to its [`EntryShape`]. The closed vocabulary makes an out-of-set shape
-    /// unrepresentable rather than a runtime rejection.
+    /// Read a program `shape` field: `Web` / `WebView` / `Terminal` / `Program`,
+    /// mapped to its [`EntryShape`].
     fn read_shape(&self, expr: &Expr) -> Result<EntryShape, CliError> {
-        let (module, name) = self.expect_nullary(expr, "a program shape")?;
-        match (module, name) {
-            ("Shape", "web") => Ok(EntryShape::Web),
-            ("Shape", "webView") => Ok(EntryShape::WebView),
-            ("Shape", "terminal") => Ok(EntryShape::Terminal),
-            ("Shape", "program") => Ok(EntryShape::Program),
-            _ => Err(self.reject(
+        match self.expect_ctor(expr, "a program shape")? {
+            "Web" => Ok(EntryShape::Web),
+            "WebView" => Ok(EntryShape::WebView),
+            "Terminal" => Ok(EntryShape::Terminal),
+            "Program" => Ok(EntryShape::Program),
+            other => Err(self.reject(
                 expr.span,
                 &format!(
-                    "`{module}.{name}` is not a shape — use `Shape.web`, `Shape.webView`, \
-                     `Shape.terminal`, or `Shape.program`"
+                    "`{other}` is not a shape — use `Web`, `WebView`, `Terminal`, or `Program`"
                 ),
             )),
         }
     }
 
-    /// Read the `Package.exposedModules [ "A", "B.C" ]` list of module-name string
-    /// literals into the library's public surface. Each name is validated as a
-    /// dotted sequence of module segments (`[A-Z][A-Za-z0-9_]*`), so a lowercase
-    /// or malformed name is a read-time error rather than an unresolvable export.
+    /// Read the `exposedModules = [ "A", "B.C" ]` list of module-name string
+    /// literals. Each name is validated as a dotted sequence of module segments
+    /// (`[A-Z][A-Za-z0-9_]*`), so a lowercase or malformed name is a read-time
+    /// error rather than an unresolvable export.
     fn read_exposed_modules(&self, expr: &Expr) -> Result<Vec<String>, CliError> {
         let mut modules = Vec::new();
         for item in self.expect_list(expr)? {
@@ -864,30 +902,17 @@ impl Reader<'_> {
         Ok(modules)
     }
 
-    /// The wasm mode named by a bare `Wasm.spa` / `Wasm.hydrate` nullary atom
-    /// (not a call), or `None` for anything else.
-    fn wasm_mode_atom(&self, expr: &Expr) -> Option<&'static str> {
-        if let Expr_::VarQual(m, n) = &expr.value {
-            match (self.text(*m), self.text(*n)) {
-                ("Wasm", "spa") => return Some("spa"),
-                ("Wasm", "hydrate") => return Some("hydrate"),
-                _ => {}
-            }
-        }
-        None
-    }
-
-    /// Run the UNCHANGED `[wasm] publicEnv` secret-name denylist over the
-    /// extracted names. A denylisted name is a read-time build error, identical
-    /// to the `ipe.toml` path — the single most security-load-bearing check,
-    /// preserved verbatim via the shared [`is_denylisted_public_env_name`].
+    /// Run the UNCHANGED `publicEnv` secret-name denylist over the extracted
+    /// names. A denylisted name is a read-time build error — the single most
+    /// security-load-bearing check, preserved via the shared
+    /// [`is_denylisted_public_env_name`].
     fn check_public_env(&self, span: Span, names: &[String]) -> Result<(), CliError> {
         for name in names {
             if is_denylisted_public_env_name(name) {
                 return Err(self.reject(
                     span,
                     &format!(
-                        "`Wasm.publicEnv` lists {name:?}, which matches the secret-name denylist \
+                        "`publicEnv` lists {name:?}, which matches the secret-name denylist \
                          (*_SECRET / *_TOKEN / *_KEY / *_PASSWORD / DATABASE_URL / the internal \
                          IPE_* namespace) — a secret environment variable can never be \
                          allowlisted into the public wasm bundle"
@@ -898,12 +923,11 @@ impl Reader<'_> {
         Ok(())
     }
 
-    /// Read a `[ Capability.network, Capability.clock, … ]` list into the typed
-    /// capability set, via the shared [`Capability`] `FromStr`. An unknown
-    /// capability is a named hard error — the typo-drops-a-capability footgun
-    /// stays closed.
-    fn read_capabilities(&self, expr: &Expr) -> Result<BTreeSet<Capability>, CliError> {
-        let names = self.read_capability_names(expr)?;
+    /// Read a `[ Network, Clock, … ]` list into the typed capability set. An
+    /// unknown capability is a named hard error — the typo-drops-a-capability
+    /// footgun stays closed.
+    fn read_capability_set(&self, expr: &Expr) -> Result<BTreeSet<Capability>, CliError> {
+        let names = self.read_capability_wire_names(expr)?;
         let mut set = BTreeSet::new();
         for name in names {
             let cap = name
@@ -914,55 +938,48 @@ impl Reader<'_> {
         Ok(set)
     }
 
-    /// Read a `[ Capability.* , … ]` list into the capability *wire names* the
-    /// shared validators consume. Each element must be a blessed `Capability.*`
-    /// nullary constructor; its builder suffix is mapped to the wire name (e.g.
-    /// `Capability.nativeFfi` → `native-ffi`).
-    fn read_capability_names(&self, expr: &Expr) -> Result<Vec<String>, CliError> {
+    /// Read a `[ Network, Clock, … ]` list into capability *wire names* the
+    /// shared validators consume. Each element must be a capability constructor;
+    /// its name is mapped to the wire spelling (e.g. `NativeFfi` → `native-ffi`).
+    fn read_capability_wire_names(&self, expr: &Expr) -> Result<Vec<String>, CliError> {
         let mut names = Vec::new();
         for item in self.expect_list(expr)? {
-            let (module, name) = self.expect_nullary(item, "a capability")?;
-            if module != "Capability" {
-                return Err(self.reject(
+            let ctor = self.expect_ctor(item, "a capability")?;
+            let wire = capability_wire_name(ctor).ok_or_else(|| {
+                self.reject(
                     item.span,
-                    &format!("`{module}.{name}` is not a capability — use `Capability.*`"),
-                ));
-            }
-            names.push(capability_wire_name(name).to_owned());
+                    &format!(
+                        "`{ctor}` is not a capability — use one of Network, Filesystem, Database, \
+                         Env, Subprocess, Clock, Random, NativeFfi, FfiRaw, Unsafe, CustomElement, \
+                         JsPort"
+                    ),
+                )
+            })?;
+            names.push(wire.to_owned());
         }
         Ok(names)
     }
-
-    /// Require `expr` to be a bare `Module.name` nullary constructor reference
-    /// (never a call, never a local name, never a computed value), returning
-    /// `(module, name)`. `what` names the expected kind in the error.
-    fn expect_nullary<'e>(
-        &'e self,
-        expr: &Expr,
-        what: &str,
-    ) -> Result<(&'e str, &'e str), CliError> {
-        match &expr.value {
-            Expr_::VarQual(m, n) => Ok((self.text(*m), self.text(*n))),
-            _ => Err(self.reject(
-                expr.span,
-                &format!(
-                    "expected {what} as a blessed `Module.name` constructor, never a computed \
-                     value or a local binding"
-                ),
-            )),
-        }
-    }
 }
 
-/// The wire name of a `Capability.<builder>` reference. camelCase builder
-/// suffixes map to the hyphenated wire spelling the shared [`Capability`]
-/// `FromStr` consumes; all others pass through verbatim (they already match).
-fn capability_wire_name(builder: &str) -> &str {
-    match builder {
-        "nativeFfi" => "native-ffi",
-        "ffiRaw" => "ffi-raw",
-        "customElement" => "custom-element",
-        other => other,
+/// The wire name of a capability constructor, or `None` for a name outside the
+/// closed capability vocabulary. The mapping is the inverse of the constructor
+/// spelling in `Ipe.Package`'s `Capability` union, targeting the wire spelling
+/// the shared [`Capability`] `FromStr` consumes.
+fn capability_wire_name(ctor: &str) -> Option<&'static str> {
+    match ctor {
+        "Network" => Some("network"),
+        "Filesystem" => Some("filesystem"),
+        "Database" => Some("database"),
+        "Env" => Some("env"),
+        "Subprocess" => Some("subprocess"),
+        "Clock" => Some("clock"),
+        "Random" => Some("random"),
+        "NativeFfi" => Some("native-ffi"),
+        "FfiRaw" => Some("ffi-raw"),
+        "Unsafe" => Some("unsafe"),
+        "CustomElement" => Some("custom-element"),
+        "JsPort" => Some("js-port"),
+        _ => None,
     }
 }
 
@@ -1005,6 +1022,303 @@ fn line_col(src: &str, off: u32) -> (usize, usize) {
     (line, col)
 }
 
+/// Serialise a [`ProjectManifest`] into `package.ipe` record source.
+///
+/// The inverse of [`read_package_manifest`] over the fields the manifest carries:
+/// the emitted record re-reads to an equivalent manifest. Only non-default
+/// sections are written, so a minimal manifest serialises to a minimal record.
+/// Used by `ipe migrate config` to rewrite an interim builder manifest (or a
+/// legacy `ipe.toml`) into the record form, and available to any caller that must
+/// emit a manifest.
+#[must_use]
+pub fn render_manifest_record(manifest: &ProjectManifest) -> String {
+    let mut fields: Vec<String> = Vec::new();
+    fields.push(format!("name = {}", quote(&manifest.name)));
+    if let Some(version) = &manifest.version {
+        fields.push(format!("version = {}", quote(&version.to_string())));
+    }
+    if let Some(src_rel) = manifest_src_rel(manifest)
+        && src_rel != "src"
+    {
+        fields.push(format!("sourceRoot = {}", quote(&src_rel)));
+    }
+    if !manifest.dependencies.is_empty() {
+        fields.push(render_dependencies(&manifest.dependencies));
+    }
+    if !manifest.rust_dependencies.is_empty() {
+        fields.push(render_rust_dependencies(&manifest.rust_dependencies));
+    }
+    if !manifest.capabilities.is_empty() || !manifest.capabilities_accept.is_empty() {
+        fields.push(render_capabilities(
+            &manifest.capabilities,
+            &manifest.capabilities_accept,
+        ));
+    }
+    if !manifest.exposed_modules.is_empty() {
+        let items = manifest
+            .exposed_modules
+            .iter()
+            .map(|m| quote(m))
+            .collect::<Vec<_>>()
+            .join(", ");
+        fields.push(format!("exposedModules = [ {items} ]"));
+    }
+    if !manifest.programs.is_empty() {
+        fields.push(render_programs(&manifest.programs));
+    }
+    if let Some(wasm) = render_wasm(&manifest.wasm) {
+        fields.push(wasm);
+    }
+    if let Some(build) = render_build(manifest) {
+        fields.push(build);
+    }
+
+    let mut out = String::new();
+    out.push_str("module Package exposing (package)\n\n");
+    out.push_str("import Ipe.Package exposing (..)\n\n\n");
+    out.push_str("package : Package\npackage =\n");
+    for (i, field) in fields.iter().enumerate() {
+        let opener = if i == 0 { "    { " } else { "    , " };
+        out.push_str(opener);
+        out.push_str(field);
+        out.push('\n');
+    }
+    out.push_str("    }\n");
+    out
+}
+
+/// The manifest's source-root relative to its root, when it can be expressed as
+/// a relative path (it always can — `src_root` is `root`-contained by parse).
+fn manifest_src_rel(manifest: &ProjectManifest) -> Option<String> {
+    manifest
+        .src_root
+        .strip_prefix(&manifest.root)
+        .ok()
+        .map(|rel| rel.to_string_lossy().into_owned())
+}
+
+/// Quote a string as an Ipê string literal, escaping the two characters a
+/// literal must escape (`\` and `"`). Manifest strings (names, versions, paths,
+/// urls) do not carry control characters; a `\` or `"` in a path or url is
+/// escaped so the emitted literal round-trips.
+fn quote(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('"');
+    for ch in s.chars() {
+        match ch {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            other => out.push(other),
+        }
+    }
+    out.push('"');
+    out
+}
+
+/// Render the `dependencies = [ … ]` field from the typed map.
+fn render_dependencies(deps: &BTreeMap<String, IpeDep>) -> String {
+    let items: Vec<String> = deps
+        .iter()
+        .map(|(name, dep)| match dep {
+            IpeDep::Index(req) => format!("dep {} {}", quote(name), quote(&req.to_string())),
+            IpeDep::Git { url, rev: None } => format!("depGit {} {}", quote(name), quote(url)),
+            IpeDep::Git {
+                url,
+                rev: Some(rev),
+            } => {
+                format!("depGitRev {} {} {}", quote(name), quote(url), quote(rev))
+            }
+            IpeDep::Path(path) => {
+                format!("depPath {} {}", quote(name), quote(&path.to_string_lossy()))
+            }
+        })
+        .collect();
+    format!("dependencies =\n        [ {} ]", items.join("\n        , "))
+}
+
+/// Render the `rustDependencies = [ … ]` field from the typed map.
+fn render_rust_dependencies(deps: &BTreeMap<String, RustDep>) -> String {
+    let items: Vec<String> = deps
+        .iter()
+        .map(|(name, dep)| {
+            if dep.features.is_empty() {
+                format!("rustDep {} {}", quote(name), quote(&dep.version))
+            } else {
+                let features = dep
+                    .features
+                    .iter()
+                    .map(|f| quote(f))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!(
+                    "rustDepWith {} {} [ {features} ]",
+                    quote(name),
+                    quote(&dep.version)
+                )
+            }
+        })
+        .collect();
+    format!(
+        "rustDependencies =\n        [ {} ]",
+        items.join("\n        , ")
+    )
+}
+
+/// Render the `capabilities = { declares = …, accepts = … }` field. The
+/// constructor spelling is the inverse of [`capability_wire_name`].
+fn render_capabilities(declares: &BTreeSet<Capability>, accepts: &BTreeSet<Capability>) -> String {
+    let render_set = |set: &BTreeSet<Capability>| {
+        if set.is_empty() {
+            return "[]".to_owned();
+        }
+        let items = set
+            .iter()
+            .map(|c| capability_ctor_name(c.as_str()).to_owned())
+            .collect::<Vec<_>>()
+            .join(", ");
+        format!("[ {items} ]")
+    };
+    format!(
+        "capabilities =\n        {{ declares = {}\n        , accepts = {}\n        }}",
+        render_set(declares),
+        render_set(accepts)
+    )
+}
+
+/// The `Ipe.Package` `Capability` constructor spelling for a wire name — the
+/// inverse of [`capability_wire_name`]. An unknown wire name (never expected from
+/// a typed [`Capability`]) passes through verbatim.
+fn capability_ctor_name(wire: &str) -> &str {
+    match wire {
+        "network" => "Network",
+        "filesystem" => "Filesystem",
+        "database" => "Database",
+        "env" => "Env",
+        "subprocess" => "Subprocess",
+        "clock" => "Clock",
+        "random" => "Random",
+        "native-ffi" => "NativeFfi",
+        "ffi-raw" => "FfiRaw",
+        "unsafe" => "Unsafe",
+        "custom-element" => "CustomElement",
+        "js-port" => "JsPort",
+        other => other,
+    }
+}
+
+/// Render the `programs = [ … ]` field from the typed vector.
+fn render_programs(programs: &[Program]) -> String {
+    let items: Vec<String> = programs
+        .iter()
+        .map(|p| {
+            let mut parts = vec![
+                format!("name = {}", quote(&p.name)),
+                format!("entry = {}", quote(&p.entry)),
+            ];
+            if let Some(shape) = p.shape {
+                parts.push(format!("shape = {}", shape_ctor_name(shape)));
+            }
+            format!("{{ {} }}", parts.join(", "))
+        })
+        .collect();
+    format!("programs =\n        [ {} ]", items.join("\n        , "))
+}
+
+/// The `Ipe.Package` `Shape` constructor spelling for an [`EntryShape`].
+const fn shape_ctor_name(shape: EntryShape) -> &'static str {
+    match shape {
+        EntryShape::Web => "Web",
+        EntryShape::WebView => "WebView",
+        EntryShape::Terminal => "Terminal",
+        EntryShape::Program => "Program",
+    }
+}
+
+/// Render the `wasm = …` field, or `None` when the config is the default (no
+/// active bundle) — an absent field reads back as `Off`.
+fn render_wasm(wasm: &WasmConfig) -> Option<String> {
+    if *wasm == WasmConfig::default() {
+        return None;
+    }
+    let mode = match wasm.mode.as_deref() {
+        Some("hydrate") => "Hydrate",
+        _ => "Spa",
+    };
+    let mut parts = vec![format!("mode = {mode}")];
+    if let Some(entry) = &wasm.entry {
+        parts.push(format!("entry = {}", quote(entry)));
+    }
+    if let Some(mount) = &wasm.mount {
+        parts.push(format!("mount = {}", quote(mount)));
+    }
+    if !wasm.public_env.is_empty() {
+        let names = wasm
+            .public_env
+            .iter()
+            .map(|n| quote(n))
+            .collect::<Vec<_>>()
+            .join(", ");
+        parts.push(format!("publicEnv = [ {names} ]"));
+    }
+    if let Some(opt) = &wasm.opt_level {
+        parts.push(format!("optLevel = {}", quote(opt)));
+    }
+    Some(format!("wasm =\n        On {{ {} }}", parts.join(", ")))
+}
+
+/// Render the `build = { … }` field, or `None` when every build setting is at
+/// its default (an absent field reads back as all-defaults).
+fn render_build(manifest: &ProjectManifest) -> Option<String> {
+    let driver_default = manifest.driver == ipe_backend_rust::DbDriver::Sqlite;
+    let static_layer = &manifest.static_request;
+    if driver_default && *static_layer == crate::build_plan::StaticRequestLayer::default() {
+        return None;
+    }
+    let mut parts: Vec<String> = Vec::new();
+    let database = match manifest.driver {
+        ipe_backend_rust::DbDriver::Sqlite => "Sqlite",
+        ipe_backend_rust::DbDriver::Postgres => "Postgres",
+    };
+    parts.push(format!("database = {database}"));
+    if let Some(b) = static_layer.static_build {
+        parts.push(format!("static = {}", bool_ctor(b)));
+    }
+    if let Some(target) = &static_layer.target {
+        parts.push(format!("target = Cross {}", quote(target)));
+    }
+    if let Some(alloc) = static_layer.allocator {
+        parts.push(format!("allocator = {}", allocator_ctor_name(alloc)));
+    }
+    if let Some(b) = static_layer.allow_slow_allocator {
+        parts.push(format!("allowSlowAllocator = {}", bool_ctor(b)));
+    }
+    if let Some(b) = static_layer.c_free {
+        parts.push(format!("cFree = {}", bool_ctor(b)));
+    }
+    Some(format!(
+        "build =\n        {{ {} }}",
+        parts.join("\n        , ")
+    ))
+}
+
+/// The `True` / `False` constructor for a bool.
+const fn bool_ctor(b: bool) -> &'static str {
+    if b { "True" } else { "False" }
+}
+
+/// The `Ipe.Package` `Allocator` constructor spelling for an
+/// [`crate::build_plan::AllocatorChoice`].
+const fn allocator_ctor_name(alloc: crate::build_plan::AllocatorChoice) -> &'static str {
+    use crate::build_plan::AllocatorChoice as A;
+    match alloc {
+        A::Auto => "AutoAlloc",
+        A::System => "System",
+        A::Dlmalloc => "Dlmalloc",
+        A::Talc => "Talc",
+        A::Mimalloc => "Mimalloc",
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1041,7 +1355,7 @@ mod tests {
     fn minimal_manifest_names_the_package_and_defaults_everything() {
         let m = read(
             "minimal",
-            &format!("{HEADER}package =\n    Package.named \"my-app\"\n"),
+            &format!("{HEADER}package =\n    {{ name = \"my-app\" }}\n"),
         )
         .expect("minimal manifest must parse");
         assert_eq!(m.name, "my-app");
@@ -1063,34 +1377,40 @@ mod tests {
     fn every_field_round_trips() {
         let source = format!(
             "{HEADER}package =\n\
-             \x20   Package.named \"my-app\"\n\
-             \x20       |> Package.version \"0.3.0\"\n\
-             \x20       |> Package.sourceRoot \"src\"\n\
-             \x20       |> Package.database Package.postgres\n\
-             \x20       |> Package.dependencies\n\
-             \x20           [ Package.dep \"ipe-http\" \"^1.2\"\n\
-             \x20           , Package.depGitRev \"ipe-widgets\" \"https://example.test/w.git\" \"a1b2c3\"\n\
-             \x20           , Package.depGit \"ipe-plain\" \"https://example.test/p.git\"\n\
-             \x20           , Package.depPath \"ipe-local\" \"../local\"\n\
-             \x20           ]\n\
-             \x20       |> Package.rustDependencies\n\
-             \x20           [ Package.rustDep \"uuid\" \"1.10\"\n\
-             \x20           , Package.rustDep \"image\" \"0.25\" |> Rust.features [ \"png\", \"jpeg\" ]\n\
-             \x20           ]\n\
-             \x20       |> Package.static Static.on\n\
-             \x20       |> Package.target \"x86_64-unknown-linux-musl\"\n\
-             \x20       |> Package.allocator Package.dlmalloc\n\
-             \x20       |> Package.allowSlowAllocator Static.off\n\
-             \x20       |> Package.cFree Static.on\n\
-             \x20       |> Package.declares [ Capability.network, Capability.clock ]\n\
-             \x20       |> Package.accepts [ Capability.unsafe ]\n\
-             \x20       |> Package.wasm\n\
-             \x20           (Wasm.spa\n\
-             \x20               |> Wasm.entry \"src/Client.ipe\"\n\
-             \x20               |> Wasm.mount \"#app\"\n\
-             \x20               |> Wasm.publicEnv [ \"API_BASE_URL\", \"APP_VERSION\" ]\n\
-             \x20               |> Wasm.optLevel \"z\"\n\
-             \x20           )\n"
+             \x20   {{ name = \"my-app\"\n\
+             \x20   , version = \"0.3.0\"\n\
+             \x20   , sourceRoot = \"src\"\n\
+             \x20   , dependencies =\n\
+             \x20       [ dep \"ipe-http\" \"^1.2\"\n\
+             \x20       , depGitRev \"ipe-widgets\" \"https://example.test/w.git\" \"a1b2c3\"\n\
+             \x20       , depGit \"ipe-plain\" \"https://example.test/p.git\"\n\
+             \x20       , depPath \"ipe-local\" \"../local\"\n\
+             \x20       ]\n\
+             \x20   , rustDependencies =\n\
+             \x20       [ rustDep \"uuid\" \"1.10\"\n\
+             \x20       , rustDepWith \"image\" \"0.25\" [ \"png\", \"jpeg\" ]\n\
+             \x20       ]\n\
+             \x20   , capabilities =\n\
+             \x20       {{ declares = [ Network, Clock ]\n\
+             \x20       , accepts = [ Unsafe ]\n\
+             \x20       }}\n\
+             \x20   , wasm =\n\
+             \x20       On\n\
+             \x20           {{ mode = Spa\n\
+             \x20           , entry = \"src/Client.ipe\"\n\
+             \x20           , mount = \"#app\"\n\
+             \x20           , publicEnv = [ \"API_BASE_URL\", \"APP_VERSION\" ]\n\
+             \x20           , optLevel = \"z\"\n\
+             \x20           }}\n\
+             \x20   , build =\n\
+             \x20       {{ database = Postgres\n\
+             \x20       , static = True\n\
+             \x20       , target = Cross \"x86_64-unknown-linux-musl\"\n\
+             \x20       , allocator = Dlmalloc\n\
+             \x20       , allowSlowAllocator = False\n\
+             \x20       , cFree = True\n\
+             \x20       }}\n\
+             \x20   }}\n"
         );
         let m = read("full", &source).expect("full manifest must parse");
         assert_eq!(m.name, "my-app");
@@ -1148,6 +1468,18 @@ mod tests {
         assert_eq!(m.wasm.opt_level.as_deref(), Some("z"));
     }
 
+    #[test]
+    fn accepts_the_schema_import() {
+        let m = read(
+            "schema_import",
+            &format!(
+                "{HEADER}import Ipe.Package exposing (..)\n\n\npackage =\n    {{ name = \"x\" }}\n"
+            ),
+        )
+        .expect("the schema import is permitted");
+        assert_eq!(m.name, "x");
+    }
+
     // ── Rejections: totality (a clean diagnostic, never a panic) ──────────────
 
     /// Every rejection asserts a `UsageOwned` (the reader's named-error channel)
@@ -1163,20 +1495,20 @@ mod tests {
     }
 
     #[test]
-    fn reject_import() {
+    fn reject_non_schema_import() {
         let r = read(
             "reject_import",
-            &format!("{HEADER}import Ipe.String\n\npackage =\n    Package.named \"x\"\n"),
+            &format!("{HEADER}import Ipe.String\n\npackage =\n    {{ name = \"x\" }}\n"),
         );
         assert_rejected(&r);
     }
 
     #[test]
-    fn reject_computed_argument() {
+    fn reject_computed_field() {
         // A field written as a computed `if` expression, not a literal.
         let r = read(
             "reject_computed",
-            &format!("{HEADER}package =\n    Package.named (if True then \"a\" else \"b\")\n"),
+            &format!("{HEADER}package =\n    {{ name = if True then \"a\" else \"b\" }}\n"),
         );
         assert_rejected(&r);
     }
@@ -1187,39 +1519,35 @@ mod tests {
         // reader forbids any binding other than `package`.
         let r = read(
             "reject_ref",
-            &format!("{HEADER}n =\n    \"x\"\n\npackage =\n    Package.named n\n"),
+            &format!("{HEADER}n =\n    \"x\"\n\npackage =\n    {{ name = n }}\n"),
         );
         assert_rejected(&r);
     }
 
     #[test]
-    fn reject_non_blessed_callee() {
-        // A user-looking `Foo.bar` stage is not a blessed builder.
+    fn reject_unknown_field() {
         let r = read(
-            "reject_callee",
-            &format!("{HEADER}package =\n    Package.named \"x\"\n        |> Foo.bar \"y\"\n"),
+            "reject_field",
+            &format!("{HEADER}package =\n    {{ name = \"x\", nickname = \"y\" }}\n"),
         );
         assert_rejected(&r);
     }
 
     #[test]
-    fn reject_non_pipe_operator() {
-        // The spine must be threaded with `|>`, never another operator.
+    fn reject_non_record_body() {
         let r = read(
-            "reject_operator",
-            &format!("{HEADER}package =\n    Package.named \"x\" ++ \"y\"\n"),
+            "reject_non_record",
+            &format!("{HEADER}package =\n    \"x\"\n"),
         );
         assert_rejected(&r);
     }
 
     #[test]
     fn reject_denylisted_public_env() {
-        // A secret-name in publicEnv is a read-time build error — the preserved,
-        // security-load-bearing denylist.
         let r = read(
             "reject_secret_env",
             &format!(
-                "{HEADER}package =\n    Package.named \"x\"\n        |> Package.wasm (Wasm.spa |> Wasm.publicEnv [ \"DATABASE_URL\" ])\n"
+                "{HEADER}package =\n    {{ name = \"x\", wasm = On {{ mode = Spa, publicEnv = [ \"DATABASE_URL\" ] }} }}\n"
             ),
         );
         assert_rejected(&r);
@@ -1232,13 +1560,10 @@ mod tests {
     }
 
     #[test]
-    fn reject_unknown_driver_constructor() {
-        // Only `Package.sqlite` / `Package.postgres` are drivers.
+    fn reject_unknown_database_constructor() {
         let r = read(
             "reject_driver",
-            &format!(
-                "{HEADER}package =\n    Package.named \"x\"\n        |> Package.database Package.mysql\n"
-            ),
+            &format!("{HEADER}package =\n    {{ name = \"x\", build = {{ database = MySql }} }}\n"),
         );
         assert_rejected(&r);
     }
@@ -1248,7 +1573,7 @@ mod tests {
         let r = read(
             "reject_capability",
             &format!(
-                "{HEADER}package =\n    Package.named \"x\"\n        |> Package.declares [ Capability.telepathy ]\n"
+                "{HEADER}package =\n    {{ name = \"x\", capabilities = {{ declares = [ Telepathy ] }} }}\n"
             ),
         );
         assert_rejected(&r);
@@ -1258,19 +1583,16 @@ mod tests {
     fn reject_malformed_version() {
         let r = read(
             "reject_version",
-            &format!(
-                "{HEADER}package =\n    Package.named \"x\"\n        |> Package.version \"not-a-version\"\n"
-            ),
+            &format!("{HEADER}package =\n    {{ name = \"x\", version = \"not-a-version\" }}\n"),
         );
         assert_rejected(&r);
     }
 
     #[test]
     fn reject_missing_name() {
-        // A `package` binding that never calls `Package.named`.
         let r = read(
             "reject_no_name",
-            &format!("{HEADER}package =\n    Package.version \"1.0.0\"\n"),
+            &format!("{HEADER}package =\n    {{ version = \"1.0.0\" }}\n"),
         );
         assert_rejected(&r);
     }
@@ -1279,7 +1601,7 @@ mod tests {
     fn reject_package_as_function() {
         let r = read(
             "reject_function",
-            &format!("{HEADER}package x =\n    Package.named x\n"),
+            &format!("{HEADER}package x =\n    {{ name = x }}\n"),
         );
         assert_rejected(&r);
     }
@@ -1289,7 +1611,7 @@ mod tests {
         let r = read(
             "reject_extra",
             &format!(
-                "{HEADER}package =\n    Package.named \"x\"\n\nother =\n    Package.named \"y\"\n"
+                "{HEADER}package =\n    {{ name = \"x\" }}\n\nother =\n    {{ name = \"y\" }}\n"
             ),
         );
         assert_rejected(&r);
@@ -1297,11 +1619,10 @@ mod tests {
 
     #[test]
     fn reject_bad_wrapper_path_escapes_jail() {
-        // An absolute wrapper path escapes the package jail (WrapperPath gate).
         let r = read(
             "reject_wrapper",
             &format!(
-                "{HEADER}package =\n    Package.named \"x\"\n        |> Package.wrapper (Rust.wrapper \"/etc/passwd\" |> Rust.expose [ \"f\" ])\n"
+                "{HEADER}package =\n    {{ name = \"x\", wrapper = Wrapper {{ path = \"/etc/passwd\", expose = [ \"f\" ] }} }}\n"
             ),
         );
         assert_rejected(&r);
@@ -1312,7 +1633,7 @@ mod tests {
         let r = read(
             "ok_wrapper",
             &format!(
-                "{HEADER}package =\n    Package.named \"x\"\n        |> Package.wrapper (Rust.wrapper \"./vendor/mycrate\" |> Rust.expose [ \"encode\" ])\n"
+                "{HEADER}package =\n    {{ name = \"x\", wrapper = Wrapper {{ path = \"./vendor/mycrate\", expose = [ \"encode\" ] }} }}\n"
             ),
         );
         let m = r.expect("valid wrapper must parse");
@@ -1320,15 +1641,46 @@ mod tests {
     }
 
     #[test]
+    fn no_wrapper_declares_none() {
+        let m = read(
+            "no_wrapper",
+            &format!("{HEADER}package =\n    {{ name = \"x\", wrapper = NoWrapper }}\n"),
+        )
+        .expect("NoWrapper must parse");
+        assert!(!m.has_rust_wrapper);
+    }
+
+    #[test]
     fn allowed_public_env_passes() {
         let r = read(
             "ok_env",
             &format!(
-                "{HEADER}package =\n    Package.named \"x\"\n        |> Package.wasm (Wasm.spa |> Wasm.publicEnv [ \"API_BASE_URL\" ])\n"
+                "{HEADER}package =\n    {{ name = \"x\", wasm = On {{ mode = Spa, publicEnv = [ \"API_BASE_URL\" ] }} }}\n"
             ),
         );
         let m = r.expect("allowed env must parse");
         assert_eq!(m.wasm.public_env, vec!["API_BASE_URL"]);
+    }
+
+    #[test]
+    fn wasm_off_is_the_default_config() {
+        let m = read(
+            "wasm_off",
+            &format!("{HEADER}package =\n    {{ name = \"x\", wasm = Off }}\n"),
+        )
+        .expect("Off must parse");
+        assert_eq!(m.wasm, WasmConfig::default());
+    }
+
+    #[test]
+    fn reject_wasm_on_without_mode() {
+        let r = read(
+            "reject_wasm_no_mode",
+            &format!(
+                "{HEADER}package =\n    {{ name = \"x\", wasm = On {{ mount = \"#app\" }} }}\n"
+            ),
+        );
+        assert_rejected(&r);
     }
 
     // ── programs / exposedModules ─────────────────────────────────────────────
@@ -1337,12 +1689,13 @@ mod tests {
     fn programs_and_exposed_modules_parse_into_the_typed_manifest() {
         let source = format!(
             "{HEADER}package =\n\
-             \x20   Package.named \"my-app\"\n\
-             \x20       |> Package.programs\n\
-             \x20           [ Program.named \"server\" |> Program.entry \"Main.ipe\" |> Program.shape Shape.web\n\
-             \x20           , Program.named \"cli\" |> Program.entry \"Cli/Main.ipe\" |> Program.shape Shape.terminal\n\
-             \x20           ]\n\
-             \x20       |> Package.exposedModules [ \"Core\", \"Core.Utils\" ]\n"
+             \x20   {{ name = \"my-app\"\n\
+             \x20   , programs =\n\
+             \x20       [ {{ name = \"server\", entry = \"Main.ipe\", shape = Web }}\n\
+             \x20       , {{ name = \"cli\", entry = \"Cli/Main.ipe\", shape = Terminal }}\n\
+             \x20       ]\n\
+             \x20   , exposedModules = [ \"Core\", \"Core.Utils\" ]\n\
+             \x20   }}\n"
         );
         let m = read("programs_and_exposed", &source).expect("manifest must parse");
 
@@ -1363,8 +1716,6 @@ mod tests {
         );
 
         assert_eq!(m.exposed_modules, vec!["Core", "Core.Utils"]);
-
-        // The default program's entry resolves to a module path.
         assert_eq!(m.resolved_entry().expect("entry"), vec!["Main".to_owned()]);
     }
 
@@ -1372,8 +1723,7 @@ mod tests {
     fn program_entry_defaults_to_main_when_omitted() {
         let source = format!(
             "{HEADER}package =\n\
-             \x20   Package.named \"x\"\n\
-             \x20       |> Package.programs [ Program.named \"app\" ]\n"
+             \x20   {{ name = \"x\", programs = [ {{ name = \"app\" }} ] }}\n"
         );
         let m = read("program_default_entry", &source).expect("manifest must parse");
         assert_eq!(
@@ -1391,8 +1741,7 @@ mod tests {
     fn program_entry_routes_a_nested_module_path() {
         let source = format!(
             "{HEADER}package =\n\
-             \x20   Package.named \"x\"\n\
-             \x20       |> Package.programs [ Program.named \"app\" |> Program.entry \"Client/App.ipe\" ]\n"
+             \x20   {{ name = \"x\", programs = [ {{ name = \"app\", entry = \"Client/App.ipe\" }} ] }}\n"
         );
         let m = read("program_nested_entry", &source).expect("manifest must parse");
         assert_eq!(
@@ -1405,7 +1754,7 @@ mod tests {
     fn no_programs_resolves_entry_to_main() {
         let m = read(
             "no_programs",
-            &format!("{HEADER}package =\n    Package.named \"x\"\n"),
+            &format!("{HEADER}package =\n    {{ name = \"x\" }}\n"),
         )
         .expect("manifest must parse");
         assert!(m.programs.is_empty());
@@ -1418,7 +1767,7 @@ mod tests {
         let r = read(
             "reject_shape",
             &format!(
-                "{HEADER}package =\n    Package.named \"x\"\n        |> Package.programs [ Program.named \"a\" |> Program.shape Shape.hologram ]\n"
+                "{HEADER}package =\n    {{ name = \"x\", programs = [ {{ name = \"a\", shape = Hologram }} ] }}\n"
             ),
         );
         assert_rejected(&r);
@@ -1429,7 +1778,7 @@ mod tests {
         let r = read(
             "reject_dup_program",
             &format!(
-                "{HEADER}package =\n    Package.named \"x\"\n        |> Package.programs [ Program.named \"a\", Program.named \"a\" ]\n"
+                "{HEADER}package =\n    {{ name = \"x\", programs = [ {{ name = \"a\" }}, {{ name = \"a\" }} ] }}\n"
             ),
         );
         assert_rejected(&r);
@@ -1440,7 +1789,7 @@ mod tests {
         let r = read(
             "reject_program_no_name",
             &format!(
-                "{HEADER}package =\n    Package.named \"x\"\n        |> Package.programs [ Program.entry \"Main.ipe\" ]\n"
+                "{HEADER}package =\n    {{ name = \"x\", programs = [ {{ entry = \"Main.ipe\" }} ] }}\n"
             ),
         );
         assert_rejected(&r);
@@ -1450,21 +1799,17 @@ mod tests {
     fn reject_lowercase_exposed_module() {
         let r = read(
             "reject_exposed_lower",
-            &format!(
-                "{HEADER}package =\n    Package.named \"x\"\n        |> Package.exposedModules [ \"core\" ]\n"
-            ),
+            &format!("{HEADER}package =\n    {{ name = \"x\", exposedModules = [ \"core\" ] }}\n"),
         );
         assert_rejected(&r);
     }
 
     #[test]
     fn reject_program_entry_with_lowercase_segment() {
-        // A program entry whose file maps to a non-module segment is a manifest
-        // error at entry-resolution time.
         let m = read(
             "reject_entry_lower",
             &format!(
-                "{HEADER}package =\n    Package.named \"x\"\n        |> Package.programs [ Program.named \"a\" |> Program.entry \"lower/App.ipe\" ]\n"
+                "{HEADER}package =\n    {{ name = \"x\", programs = [ {{ name = \"a\", entry = \"lower/App.ipe\" }} ] }}\n"
             ),
         )
         .expect("manifest itself parses");
@@ -1488,11 +1833,44 @@ mod tests {
     }
 
     #[test]
+    fn capability_wire_names_cover_the_vocabulary() {
+        assert_eq!(capability_wire_name("Network"), Some("network"));
+        assert_eq!(capability_wire_name("NativeFfi"), Some("native-ffi"));
+        assert_eq!(
+            capability_wire_name("CustomElement"),
+            Some("custom-element")
+        );
+        assert_eq!(capability_wire_name("JsPort"), Some("js-port"));
+        assert_eq!(capability_wire_name("Nope"), None);
+        // Every wire name a constructor maps to must round-trip through the
+        // shared Capability FromStr — no drift between the two sets.
+        for ctor in [
+            "Network",
+            "Filesystem",
+            "Database",
+            "Env",
+            "Subprocess",
+            "Clock",
+            "Random",
+            "NativeFfi",
+            "FfiRaw",
+            "Unsafe",
+            "CustomElement",
+            "JsPort",
+        ] {
+            let wire = capability_wire_name(ctor).expect("mapped");
+            assert!(
+                wire.parse::<Capability>().is_ok(),
+                "wire {wire:?} for {ctor:?} must parse as a Capability"
+            );
+        }
+    }
+
+    #[test]
     fn line_col_is_one_based_and_total() {
         assert_eq!(line_col("abc", 0), (1, 1));
         assert_eq!(line_col("abc", 2), (1, 3));
         assert_eq!(line_col("a\nbc", 2), (2, 1));
-        // An out-of-range offset degrades gracefully rather than panicking.
         assert_eq!(line_col("a", 999), (1, 2));
     }
 }

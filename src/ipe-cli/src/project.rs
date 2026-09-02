@@ -39,10 +39,10 @@ use crate::CliError;
 /// The parsed, validated content of a `package.ipe` manifest.
 #[derive(Clone, Debug)]
 pub struct ProjectManifest {
-    /// The project name (from `Package.named "…"`).
+    /// The project name (from the manifest's `name` field).
     pub name: String,
-    /// The package version (from `Package.version "…"`), parsed into a typed
-    /// [`semver::Version`]. `None` when the manifest declares no version — the
+    /// The package version (from the manifest's `version` field), parsed into a
+    /// typed [`semver::Version`]. `None` when the manifest declares no version — the
     /// package gate's enforced-semver check needs one, so `ipe package audit`
     /// rejects a versionless manifest rather than inventing a version.
     pub version: Option<semver::Version>,
@@ -50,7 +50,7 @@ pub struct ProjectManifest {
     pub root: PathBuf,
     /// Absolute path to the source root (`<root>/src` by default).
     pub src_root: PathBuf,
-    /// The SQL driver the emitted project targets (from `Package.database …`).
+    /// The SQL driver the emitted project targets (from `build.database`).
     /// Defaults to [`ipe_backend_rust::DbDriver::Sqlite`] when absent — the
     /// documented default in `AGENTS.md`'s `package.ipe` schema table.
     pub driver: ipe_backend_rust::DbDriver,
@@ -90,7 +90,7 @@ pub struct ProjectManifest {
     pub has_rust_wrapper: bool,
     /// The `programs` list: named build targets, each with its entry module file
     /// and an optional declared shape. Empty when the manifest declares no
-    /// `Package.programs` stage — the entry then defaults to `Main` and the shape
+    /// `programs` field — the entry then defaults to `Main` and the shape
     /// is entirely compiler-inferred (`resolved_entry` returns `["Main"]`).
     ///
     /// A declared shape is VALIDATED against the compiler's inferred shape, never
@@ -98,7 +98,7 @@ pub struct ProjectManifest {
     pub programs: Vec<Program>,
     /// The `exposedModules` list: a library package's public surface — the
     /// modules a downstream consumer may import. Empty for an application
-    /// package (one that declares no `Package.exposedModules` stage).
+    /// package (one that declares no `exposedModules` field).
     pub exposed_modules: Vec<String>,
 }
 
@@ -135,30 +135,31 @@ impl ProjectManifest {
 ///
 /// Modelled so an invalid combination is unrepresentable at the type level: the
 /// `shape` is a closed [`EntryShape`] enum (never a free string), and the entry
-/// is always present (defaulting to `Main.ipe` at read time when the builder
+/// is always present (defaulting to `Main.ipe` at read time when the record
 /// omits it), so a program can never name a shape outside the vocabulary nor lack
 /// an entry.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Program {
-    /// The program's target name (from `Program.named "…"`).
+    /// The program's target name (the program record's `name` field).
     pub name: String,
     /// The entry module's source file, relative to the source root
-    /// (from `Program.entry "…"`; defaults to `Main.ipe`).
+    /// (the program record's `entry` field; defaults to `Main.ipe`).
     pub entry: String,
-    /// The declared shape, when the author asserts one (from `Program.shape
-    /// Shape.…`). `None` means "trust the compiler's inference". A declared shape
-    /// is validated against inference, never used to override it.
+    /// The declared shape, when the author asserts one (the program record's
+    /// `shape` field). `None` means "trust the compiler's inference". A declared
+    /// shape is validated against inference, never used to override it.
     pub shape: Option<EntryShape>,
 }
 
 /// The closed set of program shapes an author may declare in a `package.ipe`
-/// `Program.shape Shape.…` stage.
+/// program record's `shape` field.
 ///
 /// The four-shape model: a `Web` server, a `WebView` desktop app, a `Terminal`
 /// app, or a plain `Program`.
 ///
-/// Declared syntactically as a blessed `Shape.*` nullary constructor, so a typo
-/// is not a writable manifest at all rather than a runtime rejection.
+/// Declared syntactically as a closed-union constructor (`Web` / `WebView` /
+/// `Terminal` / `Program`), so a typo is not a writable manifest at all rather
+/// than a runtime rejection.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum EntryShape {
     /// A `Web` server app (`Web.app` / `Web.appRouted` / `Web.appWith`).
@@ -172,7 +173,8 @@ pub enum EntryShape {
 }
 
 impl EntryShape {
-    /// The wire spelling of this shape, as written after `Shape.` in a manifest.
+    /// The stable lowercase wire spelling of this shape (used to compare a
+    /// declared shape against the compiler's inferred shape).
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
@@ -1177,7 +1179,7 @@ import String
         let root = discovery_dir(
             "finds_package",
             Some(
-                "module Package exposing (package)\n\npackage =\n    Package.named \"from-package\"\n",
+                "module Package exposing (package)\n\npackage =\n    { name = \"from-package\" }\n",
             ),
             Some("[project]\nname = \"from-toml\"\n"),
         );
