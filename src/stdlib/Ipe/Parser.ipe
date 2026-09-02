@@ -1,0 +1,848 @@
+-- | `Ipe.Parser` — build parsers for DSLs and structured text by composing
+-- small, total pieces, no regular expressions required.
+--
+-- A `Parser a` reads from the front of a `String` and either succeeds with an
+-- `a` (advancing past the text it consumed) or fails at a definite position
+-- with an expectation of what it wanted. `run` drives a parser over a whole
+-- string and hands back `Result (List DeadEnd) a`: the `Ok` value on a clean
+-- parse, or the list of dead ends (each a row, a column, and the `Problem` that
+-- stopped it) on a failure.
+--
+-- The design mirrors Elm's `elm/parser`, the reference for this style: you
+-- start from `succeed` (a parser that consumes nothing and yields a value),
+-- pull in token and character parsers (`symbol`, `keyword`, `int`, `chompWhile`,
+-- `spaces`), and combine them with `map2` … `map5` — apply a builder function
+-- directly to the results of several parsers run in sequence. `keep` and
+-- `ignore` sequence two parsers when one part is punctuation to skip, `oneOf`
+-- tries alternatives, `andThen` sequences a step that depends on the previous
+-- result, and `loop` folds a repetition without growing the call stack.
+--
+-- Everything here is pure and total: parsing is a deterministic
+-- `String -> Result` transformation with no `Task`, no capability, and no
+-- effect. A `Parser` cannot both succeed and fail, and every `DeadEnd` always
+-- carries a position and a problem, so an invalid outcome is unrepresentable.
+--
+-- Example — classify a token as an integer or a word:
+--
+--     import Ipe.Parser as Parser exposing (Parser)
+--     import Ipe.Char as Char
+--
+--     type Token
+--         = Number Int
+--         | Word String
+--
+--     token : Parser Token
+--     token =
+--         Parser.oneOf
+--             [ Parser.map Number Parser.int
+--             , Parser.map Word (Parser.getChompedString (Parser.chompWhile Char.isAlpha))
+--             ]
+--
+--     Parser.run token "42" --> Ok (Number 42)
+--
+-- Divergences from `elm/parser` (recorded in `docs/divergences-from-elm.md`):
+--
+--   * `Parser a` is a transparent type alias for the underlying step function,
+--     not an opaque wrapper. Elm hides the function inside an opaque
+--     `Parser context problem value`; a bare function-typed value lowers cleanly
+--     while a union wrapper around it does not (IPE-L0107), so the alias is the
+--     sound shape. Building a parser by hand is possible but unsupported —
+--     always compose through the combinators.
+--   * Records are built with `map2` … `map5` (apply a builder directly to the
+--     results of several parsers) and sequenced with `keep` / `ignore` for
+--     punctuation to skip. Elm instead threads a curried constructor through an
+--     applicative `succeed ctor |= partA |= partB` pipeline; the named
+--     combinators here are the prefix equivalent.
+--   * Elm's `Parser.Advanced` context stack and its custom-`problem` type
+--     parameter are omitted — `Problem` is the fixed union below.
+module Ipe.Parser exposing
+    ( Parser
+    , Problem(..)
+    , DeadEnd
+    , Step(..)
+    , run
+    , succeed
+    , problem
+    , map
+    , map2
+    , map3
+    , map4
+    , map5
+    , andThen
+    , lazy
+    , keep
+    , ignore
+    , symbol
+    , keyword
+    , end
+    , chompIf
+    , chompWhile
+    , getChompedString
+    , spaces
+    , int
+    , float
+    , oneOf
+    , backtrackable
+    , loop
+    )
+
+
+import Ipe.String as String
+import Ipe.Char as Char
+import Ipe.List as List
+import Ipe.Maybe as Maybe exposing (Maybe(..))
+
+
+-- ─── Public types ──────────────────────────────────────────────────
+
+
+-- | A parser that, when run, reads from the front of the input and produces an
+-- `a` on success or a set of dead ends on failure. It is a transparent alias for
+-- a step function from parser state to a step result; build one through the
+-- combinators below and drive it with `run` rather than constructing the
+-- function by hand.
+type alias Parser a =
+    State -> PStep a
+
+
+-- | Where a parser stopped and why. `run` returns a list of these because
+-- `oneOf` can fail several ways at once, each at its own position. `row` and
+-- `col` are 1-based, counting lines and columns of characters from the start of
+-- the input.
+type alias DeadEnd =
+    { row : Int
+    , col : Int
+    , problem : Problem
+    }
+
+
+-- | What a parser expected but did not find. Mirrors `elm/parser`'s `Problem`.
+--
+--   * `Expecting text` — a specific piece of text (from `keyword` or a custom
+--     token) was required.
+--   * `ExpectingInt` / `ExpectingFloat` — a number literal was required.
+--   * `ExpectingSymbol text` — a punctuation token (from `symbol`) was required.
+--   * `ExpectingKeyword text` — a bare keyword (from `keyword`) was required,
+--     not merely a prefix of a longer word.
+--   * `ExpectingEnd` — the input was expected to be fully consumed (from `end`).
+--   * `Problem message` — a custom failure raised by `problem`.
+--   * `BadRepeat` — a `loop` body reported `Loop` without consuming any input,
+--     which would spin forever; the loop stops with this instead.
+type Problem
+    = Expecting String
+    | ExpectingInt
+    | ExpectingFloat
+    | ExpectingSymbol String
+    | ExpectingKeyword String
+    | ExpectingEnd
+    | Problem String
+    | BadRepeat
+
+
+-- | One step of a `loop`: keep going with a new accumulator (`Loop state`) or
+-- stop and yield the final value (`Done a`). The loop body returns a
+-- `Parser (Step state a)`; `loop` threads the state until a `Done`.
+type Step state a
+    = Loop state
+    | Done a
+
+
+-- ─── Internal state and step result ────────────────────────────────
+
+
+-- | The parser's position within the source. `offset` is a character index into
+-- `src`; `row` and `col` track the human-facing line and column so a `DeadEnd`
+-- can point at the failure. Not exposed — it is an implementation detail of how
+-- parsers thread progress.
+type alias State =
+    { src : String
+    , offset : Int
+    , row : Int
+    , col : Int
+    }
+
+
+-- | The outcome of running one parser over a state. `Good` carries a
+-- "committed" flag (did this parser consume input?), the produced value, and the
+-- advanced state. `Bad` carries the same committed flag and the dead ends. The
+-- flag drives `oneOf` backtracking: a `Bad` that committed does not fall through
+-- to the next alternative unless it was wrapped in `backtrackable`.
+type PStep a
+    = Good Bool a State
+    | Bad Bool (List DeadEnd)
+
+
+-- ─── Running a parser ──────────────────────────────────────────────
+
+
+-- | `run parser input` — parse the whole `input` with `parser`.
+--
+-- Succeeds with `Ok value` when the parser produces a value (it need not consume
+-- the entire input on its own; pair it with `end` to require that). Fails with
+-- `Err deadEnds` listing every position and `Problem` that stopped it.
+--
+-- ```ipe
+-- run (succeed 1) "" --> Ok 1
+-- run int "42" --> Ok 42
+-- run (symbol "(") ")" --> Err [ { row = 1, col = 1, problem = ExpectingSymbol "(" } ]
+-- ```
+run : Parser a -> String -> Result (List DeadEnd) a
+run parser src =
+    case parser { src = src, offset = 0, row = 1, col = 1 } of
+
+        Good _ value _ ->
+            Ok value
+
+        Bad _ deadEnds ->
+            Err deadEnds
+
+
+-- ─── Primitive combinators ─────────────────────────────────────────
+
+
+-- | `succeed value` — a parser that consumes nothing and always yields `value`.
+-- The starting point of a combination: `map2 build partA partB`.
+--
+-- ```ipe
+-- run (succeed 42) "anything" --> Ok 42
+-- ```
+succeed : a -> Parser a
+succeed value =
+    \state -> Good False value state
+
+
+-- | `problem message` — a parser that always fails with `Problem message` at the
+-- current position, consuming nothing. Use it inside `andThen` to reject a value
+-- the types allow but the grammar does not.
+--
+-- ```ipe
+-- run (problem "nope") "x" --> Err [ { row = 1, col = 1, problem = Problem "nope" } ]
+-- ```
+problem : String -> Parser a
+problem message =
+    \state -> Bad False [ deadEndAt state (Problem message) ]
+
+
+-- | `map f parser` — apply `f` to the value a successful `parser` produces,
+-- leaving position and failure behaviour untouched.
+--
+-- ```ipe
+-- run (map (\n -> n + 1) int) "41" --> Ok 42
+-- ```
+map : (a -> b) -> Parser a -> Parser b
+map f parser =
+    \state ->
+        case parser state of
+
+            Good committed value next ->
+                Good committed (f value) next
+
+            Bad committed deadEnds ->
+                Bad committed deadEnds
+
+
+-- | `andThen f parser` — run `parser`, then use its value to choose the next
+-- parser and continue from where the first left off. The committed flag
+-- accumulates: if either step consumed input, the combined parser is committed.
+--
+-- ```ipe
+-- run (int |> andThen (\n -> if n > 0 then succeed n else problem "non-positive")) "7" --> Ok 7
+-- ```
+andThen : (a -> Parser b) -> Parser a -> Parser b
+andThen f parser =
+    \state ->
+        case parser state of
+
+            Good committed1 value next ->
+                case f value next of
+
+                    Good committed2 result final ->
+                        Good (committed1 || committed2) result final
+
+                    Bad committed2 deadEnds ->
+                        Bad (committed1 || committed2) deadEnds
+
+            Bad committed deadEnds ->
+                Bad committed deadEnds
+
+
+-- | `lazy thunk` — defer building a parser until it runs, so a parser may refer
+-- to itself. Wrap the recursive reference in `lazy (\_ -> …)` to break the
+-- definitional cycle.
+--
+-- ```ipe
+-- run (lazy (\_ -> succeed 1)) "" --> Ok 1
+-- ```
+lazy : (() -> Parser a) -> Parser a
+lazy thunk =
+    \state -> thunk () state
+
+
+-- ─── Pipeline applicators ──────────────────────────────────────────
+
+
+-- | `map2 f a b` — run `a` then `b`, and combine their values with `f`. The
+-- direct way to build a record or tuple from two parsed parts: `f` is applied to
+-- the results, so neither parser has to carry a function value.
+--
+-- ```ipe
+-- run (map2 (\a b -> a + b) int (succeed 10)) "5" --> Ok 15
+-- ```
+map2 : (a -> b -> value) -> Parser a -> Parser b -> Parser value
+map2 f parserA parserB =
+    \state ->
+        case parserA state of
+
+            Good committedA a nextA ->
+                case parserB nextA of
+
+                    Good committedB b nextB ->
+                        Good (committedA || committedB) (f a b) nextB
+
+                    Bad committedB deadEnds ->
+                        Bad (committedA || committedB) deadEnds
+
+            Bad committed deadEnds ->
+                Bad committed deadEnds
+
+
+-- | `map3 f a b c` — run three parsers in sequence and combine their values.
+--
+-- ```ipe
+-- run (map3 (\a b c -> a + b + c) int (succeed 2) (succeed 3)) "1" --> Ok 6
+-- ```
+map3 : (a -> b -> c -> value) -> Parser a -> Parser b -> Parser c -> Parser value
+map3 f parserA parserB parserC =
+    map2 (\( a, b ) c -> f a b c) (map2 (\a b -> ( a, b )) parserA parserB) parserC
+
+
+-- | `map4 f a b c d` — run four parsers in sequence and combine their values.
+map4 : (a -> b -> c -> d -> value) -> Parser a -> Parser b -> Parser c -> Parser d -> Parser value
+map4 f parserA parserB parserC parserD =
+    map2 (\( a, b ) ( c, d ) -> f a b c d)
+        (map2 (\a b -> ( a, b )) parserA parserB)
+        (map2 (\c d -> ( c, d )) parserC parserD)
+
+
+-- | `map5 f a b c d e` — run five parsers in sequence and combine their values.
+map5 : (a -> b -> c -> d -> e -> value) -> Parser a -> Parser b -> Parser c -> Parser d -> Parser e -> Parser value
+map5 f parserA parserB parserC parserD parserE =
+    map2 (\( ( a, b ), ( c, d ) ) e -> f a b c d e)
+        (map2 (\( a, b ) ( c, d ) -> ( ( a, b ), ( c, d ) ))
+            (map2 (\a b -> ( a, b )) parserA parserB)
+            (map2 (\c d -> ( c, d )) parserC parserD)
+        )
+        parserE
+
+
+-- | `keep kept dropped` — run `kept`, then run `dropped` only to advance past it,
+-- and return `kept`'s value. The building block for a `map2`-free sequence when
+-- one part is punctuation: `keep int (symbol ",")` parses an int then a comma and
+-- yields the int.
+--
+-- ```ipe
+-- run (keep int (symbol ";")) "42;" --> Ok 42
+-- ```
+keep : Parser a -> Parser ignored -> Parser a
+keep kept dropped =
+    map2 (\value _ -> value) kept dropped
+
+
+-- | `ignore dropped kept` — run `dropped` only to advance past it, then run
+-- `kept` and return its value. The mirror of `keep` for leading punctuation:
+-- `ignore (symbol "(") int` skips an opening paren then parses an int.
+--
+-- ```ipe
+-- run (ignore (symbol "(") int) "(42" --> Ok 42
+-- ```
+ignore : Parser ignored -> Parser a -> Parser a
+ignore dropped kept =
+    map2 (\_ value -> value) dropped kept
+
+
+-- ─── Token and chomping combinators ────────────────────────────────
+
+
+-- | `symbol text` — match the exact `text` as a punctuation token, consuming it.
+-- Fails with `ExpectingSymbol text` if the input does not start with it.
+--
+-- ```ipe
+-- run (symbol "(") "()" --> Ok ()
+-- run (symbol "(") ")" --> Err [ { row = 1, col = 1, problem = ExpectingSymbol "(" } ]
+-- ```
+symbol : String -> Parser ()
+symbol text =
+    token text (ExpectingSymbol text)
+
+
+-- | `keyword text` — match the exact `text` as a whole word: it matches only
+-- when `text` is not immediately followed by another alphanumeric or underscore
+-- character, so `keyword "let"` does not match the start of `"letter"`. Fails
+-- with `ExpectingKeyword text`.
+--
+-- ```ipe
+-- run (keyword "let") "let x" --> Ok ()
+-- run (keyword "let") "letter" --> Err [ { row = 1, col = 1, problem = ExpectingKeyword "let" } ]
+-- ```
+keyword : String -> Parser ()
+keyword text =
+    \state ->
+        let
+            width =
+                String.length text
+        in
+        if matchesAt text state && not (isIdentChar (charAt (state.offset + width) state.src)) then
+            Good True () (advanceBy text width state)
+
+        else
+            Bad False [ deadEndAt state (ExpectingKeyword text) ]
+
+
+-- | `end` — succeed only if the entire input has been consumed. Use it at the
+-- top of a parser to reject trailing junk.
+--
+-- ```ipe
+-- run end "" --> Ok ()
+-- run end "x" --> Err [ { row = 1, col = 1, problem = ExpectingEnd } ]
+-- ```
+end : Parser ()
+end =
+    \state ->
+        if state.offset >= String.length state.src then
+            Good False () state
+
+        else
+            Bad False [ deadEndAt state ExpectingEnd ]
+
+
+-- | `chompIf isGood` — consume exactly one character if it satisfies `isGood`,
+-- succeeding with `()`. Fails (consuming nothing) at end of input or on a
+-- character `isGood` rejects, reporting `Expecting ""` — pair it with a token
+-- parser or `getChompedString` when you need a specific expectation message.
+--
+-- ```ipe
+-- run (chompIf Char.isDigit) "5" --> Ok ()
+-- ```
+chompIf : (Char -> Bool) -> Parser ()
+chompIf isGood =
+    \state ->
+        case unconsAt state of
+
+            Just c ->
+                if isGood c then
+                    Good True () (advanceChar c state)
+
+                else
+                    Bad False [ deadEndAt state (Expecting "") ]
+
+            Nothing ->
+                Bad False [ deadEndAt state (Expecting "") ]
+
+
+-- | `chompWhile isGood` — consume the longest run of characters that all satisfy
+-- `isGood`, succeeding with `()`. Consumes zero characters (and never fails)
+-- when the first character does not match — like a `*` repetition.
+--
+-- ```ipe
+-- run (getChompedString (chompWhile Char.isDigit)) "123abc" --> Ok "123"
+-- ```
+chompWhile : (Char -> Bool) -> Parser ()
+chompWhile isGood =
+    \state ->
+        let
+            final =
+                chompWhileHelp isGood state
+
+            consumed =
+                final.offset > state.offset
+        in
+        Good consumed () final
+
+
+-- | `getChompedString parser` — run `parser` and return the exact slice of input
+-- it consumed as a `String`, discarding its own value. The way to capture the
+-- text a chomping parser walked over.
+--
+-- ```ipe
+-- run (getChompedString (chompWhile Char.isAlpha)) "abc123" --> Ok "abc"
+-- ```
+getChompedString : Parser a -> Parser String
+getChompedString parser =
+    \state ->
+        case parser state of
+
+            Good committed _ next ->
+                Good committed (String.slice state.offset next.offset state.src) next
+
+            Bad committed deadEnds ->
+                Bad committed deadEnds
+
+
+-- | `spaces` — consume any run of spaces, tabs, carriage returns, and newlines
+-- (advancing rows and columns correctly). Never fails; consumes nothing when the
+-- next character is not whitespace.
+--
+-- ```ipe
+-- run (ignore spaces int) "   9" --> Ok 9
+-- ```
+spaces : Parser ()
+spaces =
+    chompWhile isSpace
+
+
+-- | `int` — parse a run of ASCII digits as a non-negative `Int`. Fails with
+-- `ExpectingInt` when the input does not start with a digit.
+--
+-- ```ipe
+-- run int "42" --> Ok 42
+-- run int "x" --> Err [ { row = 1, col = 1, problem = ExpectingInt } ]
+-- ```
+int : Parser Int
+int =
+    \state ->
+        let
+            final =
+                chompWhileHelp Char.isDigit state
+        in
+        if final.offset > state.offset then
+            case String.toInt (String.slice state.offset final.offset state.src) of
+
+                Just n ->
+                    Good True n final
+
+                Nothing ->
+                    Bad True [ deadEndAt state ExpectingInt ]
+
+        else
+            Bad False [ deadEndAt state ExpectingInt ]
+
+
+-- | `float` — parse a run of digits with an optional single decimal point and
+-- fractional digits as a `Float`. Fails with `ExpectingFloat` when the input
+-- does not start with a digit or the run is not a valid number.
+--
+-- ```ipe
+-- run float "3.14" --> Ok 3.14
+-- run float "10" --> Ok 10
+-- ```
+float : Parser Float
+float =
+    \state ->
+        let
+            afterInt =
+                chompWhileHelp Char.isDigit state
+
+            final =
+                chompFraction afterInt
+        in
+        if final.offset > state.offset then
+            case String.toFloat (String.slice state.offset final.offset state.src) of
+
+                Just f ->
+                    Good True f final
+
+                Nothing ->
+                    Bad True [ deadEndAt state ExpectingFloat ]
+
+        else
+            Bad False [ deadEndAt state ExpectingFloat ]
+
+
+-- ─── Branching and repetition ──────────────────────────────────────
+
+
+-- | `oneOf parsers` — try each parser in order and return the first that
+-- succeeds. Backtracking follows Elm's rule: a parser that consumed input before
+-- failing does NOT fall through to the next alternative (its dead ends are
+-- reported); wrap it in `backtrackable` to let a committed failure retry the
+-- next branch. An empty list fails with `Problem "oneOf: no alternatives"`.
+--
+-- ```ipe
+-- run (oneOf [ symbol "a", symbol "b" ]) "b" --> Ok ()
+-- ```
+oneOf : List (Parser a) -> Parser a
+oneOf parsers =
+    \state -> oneOfHelp parsers state []
+
+
+-- | `backtrackable parser` — run `parser` but mark it as not having committed,
+-- so that if it fails, an enclosing `oneOf` still tries the next alternative
+-- even though input was consumed. Use it sparingly: it is the escape hatch for
+-- grammars whose alternatives share a prefix.
+--
+-- ```ipe
+-- run (oneOf [ backtrackable (symbol "ab"), symbol "ac" ]) "ac" --> Ok ()
+-- ```
+backtrackable : Parser a -> Parser a
+backtrackable parser =
+    \state ->
+        case parser state of
+
+            Good _ value next ->
+                Good False value next
+
+            Bad _ deadEnds ->
+                Bad False deadEnds
+
+
+-- | `loop initial step` — repeat `step` to fold a growing structure without
+-- recursion in the source or unbounded stack growth. `step` receives the current
+-- accumulator and returns a parser of `Step`: `Loop next` to continue with a new
+-- accumulator, or `Done value` to stop and yield the result. A `Loop` that
+-- consumes no input is rejected with `BadRepeat` (it would spin forever).
+--
+-- ```ipe
+-- -- Parse a comma-separated list of ints into their count.
+-- run
+--     (loop 0
+--         (\count ->
+--             oneOf
+--                 [ map (\_ -> Loop (count + 1)) (keep int (chompWhile (\c -> Char.toCode c == 44)))
+--                 , succeed (Done count)
+--                 ]
+--         )
+--     )
+--     "1,2,3" --> Ok 3
+-- ```
+loop : state -> (state -> Parser (Step state a)) -> Parser a
+loop initial step =
+    \state -> loopHelp False initial step state
+
+
+-- ─── Internal helpers ──────────────────────────────────────────────
+
+
+-- | Try each alternative, collecting dead ends from uncommitted failures. A
+-- committed failure short-circuits with only its own dead ends.
+oneOfHelp : List (Parser a) -> State -> List DeadEnd -> PStep a
+oneOfHelp parsers state accumulated =
+    case parsers of
+
+        [] ->
+            case accumulated of
+
+                [] ->
+                    Bad False [ deadEndAt state (Problem "oneOf: no alternatives") ]
+
+                _ ->
+                    Bad False accumulated
+
+        first :: rest ->
+            case first state of
+
+                Good committed value next ->
+                    Good committed value next
+
+                Bad True deadEnds ->
+                    Bad True deadEnds
+
+                Bad False deadEnds ->
+                    oneOfHelp rest state (List.append accumulated deadEnds)
+
+
+-- | Drive a `loop`: run one `step`, and on `Loop` recurse only if input was
+-- consumed, else stop with `BadRepeat`. The `committed` flag accumulates across
+-- iterations so the whole loop reports whether it consumed anything.
+loopHelp : Bool -> state -> (state -> Parser (Step state a)) -> State -> PStep a
+loopHelp committed accumulator step state =
+    case step accumulator state of
+
+        Good stepCommitted stepValue next ->
+            case stepValue of
+
+                Loop nextAccumulator ->
+                    if next.offset > state.offset then
+                        loopHelp (committed || stepCommitted) nextAccumulator step next
+
+                    else
+                        Bad (committed || stepCommitted) [ deadEndAt next BadRepeat ]
+
+                Done value ->
+                    Good (committed || stepCommitted) value next
+
+        Bad stepCommitted deadEnds ->
+            Bad (committed || stepCommitted) deadEnds
+
+
+-- | Match a literal token and, on success, advance past it; otherwise fail with
+-- the given `Problem`. Shared by `symbol`.
+token : String -> Problem -> Parser ()
+token text expectation =
+    \state ->
+        if matchesAt text state then
+            Good True () (advanceBy text (String.length text) state)
+
+        else
+            Bad False [ deadEndAt state expectation ]
+
+
+-- | Does `src` contain `text` starting exactly at the state's offset?
+matchesAt : String -> State -> Bool
+matchesAt text state =
+    let
+        width =
+            String.length text
+    in
+    String.slice state.offset (state.offset + width) state.src == text
+
+
+-- | The character at `index` in `src`, or `Nothing` past the end.
+charAt : Int -> String -> Maybe Char
+charAt index src =
+    case String.uncons (String.slice index (index + 1) src) of
+
+        Just ( c, _ ) ->
+            Just c
+
+        Nothing ->
+            Nothing
+
+
+-- | The character at the state's current offset, or `Nothing` at end of input.
+unconsAt : State -> Maybe Char
+unconsAt state =
+    charAt state.offset state.src
+
+
+-- | Advance the state past `text` of the given character `width`, updating rows
+-- and columns for any newlines the token spanned.
+advanceBy : String -> Int -> State -> State
+advanceBy text width state =
+    List.foldl advanceChar state (String.toList text)
+        |> forceOffset (state.offset + width)
+
+
+-- | Advance one character: always bump the offset, and move to a new row (column
+-- reset) on a newline, else bump the column.
+advanceChar : Char -> State -> State
+advanceChar c state =
+    if c == newline then
+        { src = state.src
+        , offset = state.offset + 1
+        , row = state.row + 1
+        , col = 1
+        }
+
+    else
+        { src = state.src
+        , offset = state.offset + 1
+        , row = state.row
+        , col = state.col + 1
+        }
+
+
+-- | Pin the state's offset to `offset`, leaving row and column as folded. Guards
+-- against a `String.toList` width that disagrees with the intended character
+-- count (it does not, but this keeps offset authoritative).
+forceOffset : Int -> State -> State
+forceOffset offset state =
+    { src = state.src
+    , offset = offset
+    , row = state.row
+    , col = state.col
+    }
+
+
+-- | Consume characters while `isGood` holds, returning the advanced state.
+chompWhileHelp : (Char -> Bool) -> State -> State
+chompWhileHelp isGood state =
+    case unconsAt state of
+
+        Just c ->
+            if isGood c then
+                chompWhileHelp isGood (advanceChar c state)
+
+            else
+                state
+
+        Nothing ->
+            state
+
+
+-- | Consume an optional `.` followed by fractional digits, for `float`. Leaves
+-- the state unchanged when there is no decimal point or no digit after it.
+chompFraction : State -> State
+chompFraction state =
+    case unconsAt state of
+
+        Just c ->
+            if c == dot then
+                let
+                    afterDot =
+                        advanceChar c state
+
+                    afterDigits =
+                        chompWhileHelp Char.isDigit afterDot
+                in
+                if afterDigits.offset > afterDot.offset then
+                    afterDigits
+
+                else
+                    state
+
+            else
+                state
+
+        Nothing ->
+            state
+
+
+-- | Whether a character is one an identifier may continue with, so `keyword`
+-- rejects a keyword that is merely the prefix of a longer word. `Nothing` (end
+-- of input) is not an identifier character, so a keyword at end of input
+-- matches.
+isIdentChar : Maybe Char -> Bool
+isIdentChar maybeChar =
+    case maybeChar of
+
+        Just c ->
+            Char.isAlphaNum c || c == underscore
+
+        Nothing ->
+            False
+
+
+-- | Whether a character is inline or line whitespace, for `spaces`.
+isSpace : Char -> Bool
+isSpace c =
+    c == space || c == tab || c == carriageReturn || c == newline
+
+
+-- | A dead end at the state's current row and column carrying `p`.
+deadEndAt : State -> Problem -> DeadEnd
+deadEndAt state p =
+    { row = state.row, col = state.col, problem = p }
+
+
+-- ─── Character literals ─────────────────────────────────────────────
+-- Built from code points so the source needs no escape-in-string handling.
+
+
+newline : Char
+newline =
+    Char.fromCode 10
+
+
+carriageReturn : Char
+carriageReturn =
+    Char.fromCode 13
+
+
+tab : Char
+tab =
+    Char.fromCode 9
+
+
+space : Char
+space =
+    Char.fromCode 32
+
+
+dot : Char
+dot =
+    Char.fromCode 46
+
+
+underscore : Char
+underscore =
+    Char.fromCode 95
