@@ -51,6 +51,8 @@ cross-link where topics meet.
 - **Files and configuration** — [Files](file.md) (typed paths, effects as tasks),
   [Paths](path.md) (opaque, traversal-safe filesystem paths),
   [Configuration](config.md) (typed TOML/YAML/JSON decoders), [CSV](csv.md).
+- **Parsing structured text** — [Parser combinators](parser.md) (build a total
+  `String -> Result` parser for a DSL or token stream, no regex).
 - **Numbers and magnitudes** — [Math](math.md) (roots, trig, rounding, NaN),
   [Bitwise operations](bitwise.md) (an `Int` as a vector of bits),
   [Durations](duration.md) (unit-explicit time spans), [Byte sizes](bytesize.md)
