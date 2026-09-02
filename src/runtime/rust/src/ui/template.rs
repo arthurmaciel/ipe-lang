@@ -19,6 +19,65 @@
 //! deserialization, by which a `UiTemplate` yields a handler or unescaped HTML.
 
 use super::element::{Attribute, Color, Description, Element, HAlign, Length, PseudoClass, VAlign};
+use crate::html::{Attribute as HtmlAttribute, Event};
+
+/// A per-render handler resolution map: the concrete `Msg`s a templatized
+/// subtree's model-dependent event handlers evaluate to at THIS render, in the
+/// stable emit order the compiler assigns each hole.
+///
+/// This is the server-side half of the handler-id HOLE (issue #1668). A model-
+/// dependent event (`onClick (Select model.id)`) blocks its subtree from
+/// templatizing as pure inert data, because the concrete `Msg` depends on the
+/// model — it is logic, not appearance. Instead the template carries an opaque
+/// [`UiTemplateAttr::HandlerHole`] placeholder (an event name + a small integer
+/// hole id), and the compiled `view` builds this map fresh every render by
+/// evaluating each captured `Msg` against the current model. Materialize then
+/// resolves each hole against this map. The model-dependent part therefore lives
+/// ONLY here, in the compiled per-render map — it is never serialized into the
+/// inert template, never sent to the client, never a closure on the wire.
+///
+/// # Trust boundary (fail-closed)
+///
+/// The hole id is a compile-time-stable index the SERVER assigns; the client
+/// never sees it and never sends it (the browser addresses handlers by DOM
+/// `ipe-id`, resolved by the separate live [`crate::dispatch::HandlerIndex`]).
+/// [`Self::resolve`] is nonetheless fail-closed by construction: an out-of-range
+/// id (a stale template decoded against a shorter map after an edit, or any
+/// forged index) resolves to `None` — the event attribute is simply not
+/// reconstructed. There is no code path by which an unresolved hole yields an
+/// attacker-chosen `Msg`, a `Msg` from a different render, or a panic: the map
+/// is indexed, never trusted, and a miss drops the handler.
+#[derive(Clone, Debug, Default)]
+pub struct UiHandlerMap<M> {
+    /// The captured `Msg`s in hole-id order. Index i is hole id i.
+    msgs: Vec<M>,
+}
+
+impl<M: Clone> UiHandlerMap<M> {
+    /// An empty map — every hole resolves to `None` (fail-closed). This is what
+    /// the prod render and the map-less materialize path use when no handler
+    /// captures are supplied, so a hole never fabricates a `Msg`.
+    #[must_use]
+    pub fn new() -> Self {
+        Self { msgs: Vec::new() }
+    }
+
+    /// Build a map from the per-render captured `Msg`s, in hole-id order. The
+    /// compiled `view` calls this with each model-dependent handler's evaluated
+    /// `Msg` — position i is hole id i.
+    #[must_use]
+    pub fn from_msgs(msgs: Vec<M>) -> Self {
+        Self { msgs }
+    }
+
+    /// Resolve a hole id to its captured `Msg`, or `None` when the id is out of
+    /// range. Fail-closed: never panics, never returns a `Msg` for a different
+    /// id, never fabricates one — a miss is a clean drop of the handler.
+    #[must_use]
+    pub fn resolve(&self, handler_id: u32) -> Option<M> {
+        self.msgs.get(handler_id as usize).cloned()
+    }
+}
 
 /// The maximum template nesting depth accepted on decode and descended on
 /// materialize. Shares the render/diff ceiling ([`crate::html::MAX_HTML_DEPTH`])
@@ -249,6 +308,17 @@ pub enum UiTemplateAttr {
     Transition(String, bool),
     GridTracks(String, String),
     Animation(String, String, String, bool),
+    /// A model-dependent event handler reduced to an opaque HOLE (issue #1668):
+    /// only the DOM event name and a compile-time-stable hole id, NEVER the
+    /// `Msg` or a closure. The concrete `Msg` is resolved per render from a
+    /// [`UiHandlerMap`] the compiled `view` supplies — the model-dependent logic
+    /// lives only in that server-side map, never in this inert datum. A hole
+    /// carries no logic and no payload beyond two placeholders, so it cannot
+    /// smuggle a handler or a `Msg` across the (untrusted) template transport.
+    HandlerHole {
+        event: String,
+        handler_id: u32,
+    },
 }
 
 impl UiTemplateAttr {
@@ -320,6 +390,36 @@ impl UiTemplateAttr {
         })
     }
 
+    /// Reduce an inert [`Attribute`] to a [`UiTemplateAttr`], OR — for a clean
+    /// model-capture `AttrEvent` (`onClick msg`) — to a [`Self::HandlerHole`]
+    /// (issue #1668), pushing the captured `Msg` onto `captures` and using its
+    /// index as the hole id. Returns `None` (refuses the whole subtree) for a
+    /// nested-sub-view overlay, the debug outline, or an event shape that is NOT
+    /// a plain model-capture — `OnString` / `OnBool` / `OnForm` / `OnWidget` all
+    /// need runtime-argument-dependent resolution (a value the client sends, a
+    /// form payload, a seal decode), so they are not a pure per-render `Msg`
+    /// capture and stay compiled. Parse-don't-validate: only the provably-clean
+    /// `OnMsg` capture becomes a hole; everything else refuses.
+    fn from_attr_holed<M: Clone>(attr: &Attribute<M>, captures: &mut Vec<M>) -> Option<Self> {
+        match attr {
+            Attribute::AttrEvent(HtmlAttribute::EventAttr(Event::OnMsg(event, msg))) => {
+                let handler_id = u32::try_from(captures.len())
+                    .ok()
+                    .filter(|_| captures.len() < u32::MAX as usize)?;
+                captures.push(msg.clone());
+                Some(Self::HandlerHole {
+                    event: event.clone(),
+                    handler_id,
+                })
+            }
+            // A non-`OnMsg` event, a nested overlay, or the debug outline is not
+            // a clean per-render capture → refuse, keep the subtree compiled.
+            Attribute::AttrEvent(_) | Attribute::AttrNearby(..) | Attribute::AttrExplain => None,
+            // Every other (inert) attribute reduces exactly as the pure path.
+            _ => Self::from_attr(attr),
+        }
+    }
+
     /// Rebuild the exact [`Attribute`] this inert form was reduced from, through
     /// the same variant the normal builders produce, so the render path formats
     /// it byte-identically. `M` is free — a `UiTemplateAttr` carries no `Msg`.
@@ -376,6 +476,32 @@ impl UiTemplateAttr {
             Self::Animation(n, tail, body, respect) => {
                 Attribute::AttrAnimation(n.clone(), tail.clone(), body.clone(), *respect)
             }
+            // A handler hole with NO resolution map cannot reconstruct a live
+            // handler (it carries no `Msg`), so it drops to `NoAttribute` —
+            // fail-closed by construction. The map-aware [`Self::to_attr_with_handlers`]
+            // is the path that resolves a hole against a per-render map.
+            Self::HandlerHole { .. } => Attribute::NoAttribute,
+        }
+    }
+
+    /// Rebuild the [`Attribute`], resolving a [`Self::HandlerHole`] against the
+    /// per-render `handlers` map. Every non-hole variant is identical to
+    /// [`Self::to_attr`]; a hole becomes a live `AttrEvent(EventAttr(OnMsg(..)))`
+    /// bound to the map-resolved `Msg`, or `NoAttribute` when the hole id does
+    /// not resolve (fail-closed — never a fabricated or cross-render `Msg`).
+    fn to_attr_with_handlers<M: Clone>(&self, handlers: &UiHandlerMap<M>) -> Attribute<M> {
+        match self {
+            Self::HandlerHole { event, handler_id } => match handlers.resolve(*handler_id) {
+                Some(msg) => {
+                    Attribute::AttrEvent(HtmlAttribute::EventAttr(Event::OnMsg(event.clone(), msg)))
+                }
+                // Unknown / out-of-range hole id → no handler. The element still
+                // renders (its structure is intact); it simply carries no event
+                // marker for this hole. No Msg is invented.
+                None => Attribute::NoAttribute,
+            },
+            // Every inert variant is `M`-free — reuse the map-less rebuild.
+            other => other.to_attr(),
         }
     }
 }
@@ -576,6 +702,101 @@ pub fn materialize_ui_template_str<M>(json: &str) -> Element<M> {
     materialize_ui_template(&template)
 }
 
+/// Rebuild an [`Element`] tree from a [`UiTemplate`], resolving each handler-id
+/// HOLE (issue #1668) against the per-render `handlers` map. Identical to
+/// [`materialize_ui_template`] on every inert node/attribute; a
+/// [`UiTemplateAttr::HandlerHole`] becomes a live `AttrEvent` bound to the
+/// map-resolved `Msg`, or drops (fail-closed) when its hole id does not resolve.
+///
+/// The reconstructed handler is a real `Event::OnMsg`, so the materialized tree
+/// feeds `assign_ipe_ids` + `build_index` exactly like a compiled subtree: the
+/// browser addresses it by DOM `ipe-id` and the live [`crate::dispatch::HandlerIndex`]
+/// resolves it server-side, unchanged. The hole map is consulted ONLY here, at
+/// materialize, and only with the SERVER-assigned hole id — the untrusted client
+/// never supplies it.
+#[must_use]
+pub fn materialize_ui_template_with_handlers<M: Clone>(
+    template: &UiTemplate,
+    handlers: &UiHandlerMap<M>,
+) -> Element<M> {
+    materialize_ui_at_with_handlers(template, handlers, 0)
+}
+
+fn materialize_ui_at_with_handlers<M: Clone>(
+    template: &UiTemplate,
+    handlers: &UiHandlerMap<M>,
+    depth: usize,
+) -> Element<M> {
+    if depth >= MAX_UI_TEMPLATE_DEPTH {
+        return Element::Empty;
+    }
+    match template {
+        UiTemplate::Empty => Element::Empty,
+        UiTemplate::Text(s) => Element::Text(s.clone()),
+        UiTemplate::Node {
+            desc,
+            attrs,
+            children,
+        } => Element::Node(
+            desc.to_desc(),
+            attrs
+                .iter()
+                .map(|a| a.to_attr_with_handlers(handlers))
+                .collect(),
+            children
+                .iter()
+                .map(|c| materialize_ui_at_with_handlers(c, handlers, depth.saturating_add(1)))
+                .collect(),
+        ),
+        UiTemplate::TaggedNode {
+            tag,
+            desc,
+            attrs,
+            children,
+        } => Element::TaggedNode(
+            tag.clone(),
+            desc.to_desc(),
+            attrs
+                .iter()
+                .map(|a| a.to_attr_with_handlers(handlers))
+                .collect(),
+            children
+                .iter()
+                .map(|c| materialize_ui_at_with_handlers(c, handlers, depth.saturating_add(1)))
+                .collect(),
+        ),
+    }
+}
+
+/// Decode a serialized [`UiTemplate`] and materialize it, resolving handler-id
+/// HOLES against the per-render `handlers` map — the handler-bearing counterpart
+/// of [`materialize_ui_template_str`]. The emitted `view` reads its per-view slot
+/// (`__ipe_lit.get(N)`) for the JSON and passes the freshly-built map (each
+/// model-dependent handler's `Msg` evaluated against the current model), so prod
+/// (baked default) and dev (patched slot) run the SAME materialize path — dev ==
+/// prod by construction.
+///
+/// Fail-closed on hostile input, never a panic (the slot value crosses the
+/// untrusted dev overlay boundary):
+/// - a decode failure returns the inert empty element (`Element::Empty`);
+/// - an over-deep decoded template returns the same inert empty element;
+/// - a hole whose id does not resolve against `handlers` drops its handler (no
+///   fabricated `Msg`, no cross-render `Msg`).
+#[cfg(feature = "json")]
+#[must_use]
+pub fn materialize_ui_template_str_with_handlers<M: Clone>(
+    json: &str,
+    handlers: &UiHandlerMap<M>,
+) -> Element<M> {
+    let Ok(template) = serde_json::from_str::<UiTemplate>(json) else {
+        return Element::Empty;
+    };
+    if template.check_bounds().is_err() {
+        return Element::Empty;
+    }
+    materialize_ui_template_with_handlers(&template, handlers)
+}
+
 /// Build a [`UiTemplate`] from a static [`Element`] subtree — the inverse of
 /// [`materialize_ui_template`]. Fail-closed (parse, don't validate): any node
 /// that is NOT provably static returns `None`, so a template is only ever built
@@ -645,10 +866,93 @@ fn static_ui_children<M>(children: &[Element<M>], depth: usize) -> Option<Vec<Ui
     Some(out)
 }
 
+/// Build a [`UiTemplate`] from a static [`Element`] subtree, templatizing a
+/// model-dependent `onClick msg`-shaped event handler as a [`UiTemplateAttr::HandlerHole`]
+/// (issue #1668) instead of refusing it. Returns the template AND the captured
+/// `Msg`s in hole-id order, so the caller pairs the inert template with a
+/// [`UiHandlerMap::from_msgs`] resolving each hole back to its `Msg`.
+///
+/// This is the handler-bearing counterpart of [`ui_template_of`]: it accepts the
+/// SAME provably-static structure, and additionally a clean `Event::OnMsg`
+/// capture (an event whose only payload is a per-render `Msg`). Every other
+/// non-static shape still refuses (returns `None`) exactly as [`ui_template_of`]
+/// does — a raw HTML node, a terminal grid, a nested overlay, the debug outline,
+/// an `OnString`/`OnBool`/`OnForm`/`OnWidget` handler (runtime-arg-dependent, not
+/// a pure capture), or an over-deep tree.
+#[must_use]
+pub fn ui_template_of_holed<M: Clone>(elem: &Element<M>) -> Option<(UiTemplate, Vec<M>)> {
+    let mut captures = Vec::new();
+    let template = ui_template_of_holed_at(elem, &mut captures, 0)?;
+    Some((template, captures))
+}
+
+fn ui_template_of_holed_at<M: Clone>(
+    elem: &Element<M>,
+    captures: &mut Vec<M>,
+    depth: usize,
+) -> Option<UiTemplate> {
+    if depth >= MAX_UI_TEMPLATE_DEPTH {
+        return None;
+    }
+    match elem {
+        Element::Empty => Some(UiTemplate::Empty),
+        Element::Text(s) => Some(UiTemplate::Text(s.clone())),
+        Element::Raw(_) | Element::Cells(_) => None,
+        Element::Node(desc, attrs, children) => {
+            let attrs = static_ui_attrs_holed(attrs, captures)?;
+            let children = static_ui_children_holed(children, captures, depth)?;
+            Some(UiTemplate::Node {
+                desc: UiDescription::from_desc(desc),
+                attrs,
+                children,
+            })
+        }
+        Element::TaggedNode(tag, desc, attrs, children) => {
+            let attrs = static_ui_attrs_holed(attrs, captures)?;
+            let children = static_ui_children_holed(children, captures, depth)?;
+            Some(UiTemplate::TaggedNode {
+                tag: tag.clone(),
+                desc: UiDescription::from_desc(desc),
+                attrs,
+                children,
+            })
+        }
+    }
+}
+
+fn static_ui_attrs_holed<M: Clone>(
+    attrs: &[Attribute<M>],
+    captures: &mut Vec<M>,
+) -> Option<Vec<UiTemplateAttr>> {
+    let mut out = Vec::with_capacity(attrs.len());
+    for a in attrs {
+        out.push(UiTemplateAttr::from_attr_holed(a, captures)?);
+    }
+    Some(out)
+}
+
+fn static_ui_children_holed<M: Clone>(
+    children: &[Element<M>],
+    captures: &mut Vec<M>,
+    depth: usize,
+) -> Option<Vec<UiTemplate>> {
+    let mut out = Vec::with_capacity(children.len());
+    for c in children {
+        out.push(ui_template_of_holed_at(
+            c,
+            captures,
+            depth.saturating_add(1),
+        )?);
+    }
+    Some(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        MAX_UI_TEMPLATE_DEPTH, UiTemplate, UiTemplateError, materialize_ui_template, ui_template_of,
+        MAX_UI_TEMPLATE_DEPTH, UiHandlerMap, UiTemplate, UiTemplateAttr, UiTemplateError,
+        materialize_ui_template, materialize_ui_template_with_handlers, ui_template_of,
+        ui_template_of_holed,
     };
     use crate::ui::element::{Attribute, Color, Description, Element, Length};
     use crate::ui::render::ui_layout;
@@ -1085,5 +1389,298 @@ mod tests {
         // And it re-serializes to the identical bytes — the backend spelling IS
         // serde_json's spelling.
         assert_eq!(serde_json::to_string(&expected).unwrap(), baked);
+    }
+
+    // ── handler-id HOLE (issue #1668) ────────────────────────────────────────
+    //
+    // A model-dependent event (`onClick (Select id)`) reduces to an opaque HOLE
+    // in the inert template; the concrete `Msg` is resolved per render from a
+    // `UiHandlerMap`. The model-dependent logic lives ONLY in that server-side
+    // map — never serialized, never sent to the client, never a wire closure.
+
+    use crate::html::{Attribute as HtmlAttribute, Event};
+
+    #[derive(Clone, Debug, PartialEq)]
+    enum Msg {
+        Select(i64),
+        Save,
+    }
+
+    // A button carrying a model-dependent `onClick` — the shape that BLOCKS the
+    // pure `ui_template_of` (it refuses the whole subtree) but templatizes as a
+    // hole through `ui_template_of_holed`.
+    fn button_onclick(msg: Msg) -> Element<Msg> {
+        Element::TaggedNode(
+            "button".to_string(),
+            Description::NoDescription,
+            vec![Attribute::AttrEvent(HtmlAttribute::EventAttr(
+                Event::OnMsg("click".to_string(), msg),
+            ))],
+            vec![Element::Text("pick".to_string())],
+        )
+    }
+
+    // A subtree with a model-dependent handler now templatizes: the pure path
+    // refuses it, the holed path accepts it and records the captured Msg.
+    #[test]
+    fn model_dependent_handler_templatizes_as_a_hole() {
+        let subtree = button_onclick(Msg::Select(7));
+        // Pure path refuses (it has no hole mechanism).
+        assert_eq!(ui_template_of(&subtree), None);
+        // Holed path accepts — one hole, one captured Msg.
+        let (template, captures) =
+            ui_template_of_holed(&subtree).expect("holed path templatizes the handler");
+        assert_eq!(captures, vec![Msg::Select(7)]);
+        let UiTemplate::TaggedNode { attrs, .. } = &template else {
+            panic!("expected a TaggedNode, got {template:?}");
+        };
+        assert_eq!(
+            attrs.as_slice(),
+            &[UiTemplateAttr::HandlerHole {
+                event: "click".to_string(),
+                handler_id: 0,
+            }],
+            "the handler reduced to a bare event-name + hole-id placeholder — no Msg in the datum"
+        );
+    }
+
+    // The hole resolves back to the captured Msg through the per-render map, so
+    // the materialized element carries a LIVE handler that fires the right Msg.
+    #[test]
+    fn hole_resolves_to_the_captured_msg() {
+        let subtree = button_onclick(Msg::Select(42));
+        let (template, captures) = ui_template_of_holed(&subtree).expect("templatizes");
+        let handlers = UiHandlerMap::from_msgs(captures);
+        let materialized: Element<Msg> =
+            materialize_ui_template_with_handlers(&template, &handlers);
+        assert_eq!(
+            materialized, subtree,
+            "materialize with the per-render map reconstructs the exact handler-bearing Element"
+        );
+    }
+
+    // dev == prod byte-identity: the materialized hole renders the SAME DOM
+    // event markers (`data-ipe-on`, `ipe-click`, `data-ipe-hid` after id stamp)
+    // as the original compiled handler — the wire contract the browser POSTs is
+    // unchanged.
+    #[test]
+    fn hole_renders_byte_identical_event_markers() {
+        // Use a `()` Msg so both sides render through the same path; the marker
+        // depends only on the event NAME, never the Msg.
+        let original: Element<()> = Element::TaggedNode(
+            "button".to_string(),
+            Description::NoDescription,
+            vec![Attribute::AttrEvent(HtmlAttribute::EventAttr(
+                Event::OnMsg("click".to_string(), ()),
+            ))],
+            vec![Element::Text("go".to_string())],
+        );
+        let (template, captures) = ui_template_of_holed(&original).expect("templatizes");
+        let handlers = UiHandlerMap::from_msgs(captures);
+        let materialized: Element<()> = materialize_ui_template_with_handlers(&template, &handlers);
+        assert_eq!(
+            render(materialized),
+            render(original),
+            "the hole must render byte-identical event markers to the compiled handler"
+        );
+    }
+
+    // Fail-closed: an out-of-range hole id (a stale template resolved against a
+    // shorter map — e.g. after an edit removed a handler) drops the handler.
+    // NO Msg is fabricated, no cross-id Msg leaks, no panic.
+    #[test]
+    fn out_of_range_hole_id_fails_closed_to_no_handler() {
+        let template = UiTemplate::TaggedNode {
+            tag: "button".to_string(),
+            desc: super::UiDescription::NoDescription,
+            attrs: vec![UiTemplateAttr::HandlerHole {
+                event: "click".to_string(),
+                handler_id: 5, // no such capture
+            }],
+            children: vec![],
+        };
+        // A map with only id 0 populated — id 5 is out of range.
+        let handlers = UiHandlerMap::from_msgs(vec![Msg::Save]);
+        let materialized: Element<Msg> =
+            materialize_ui_template_with_handlers(&template, &handlers);
+        let Element::TaggedNode(_, _, attrs, _) = &materialized else {
+            panic!("expected a TaggedNode, got {materialized:?}");
+        };
+        assert_eq!(
+            attrs.as_slice(),
+            &[Attribute::NoAttribute],
+            "an unresolved hole drops to NoAttribute — never a fabricated or cross-id Msg"
+        );
+    }
+
+    // Fail-closed: the map-less materialize path (no handler captures at all)
+    // drops every hole. This is the prod/no-capture posture — a hole never
+    // invents a Msg without a map.
+    #[test]
+    fn mapless_materialize_drops_the_hole() {
+        let subtree = button_onclick(Msg::Select(1));
+        let (template, _captures) = ui_template_of_holed(&subtree).expect("templatizes");
+        // Materialize WITHOUT the handler map (empty map) — the hole drops.
+        let empty: UiHandlerMap<Msg> = UiHandlerMap::new();
+        let materialized: Element<Msg> = materialize_ui_template_with_handlers(&template, &empty);
+        let Element::TaggedNode(_, _, attrs, _) = &materialized else {
+            panic!("expected a TaggedNode, got {materialized:?}");
+        };
+        assert_eq!(attrs.as_slice(), &[Attribute::NoAttribute]);
+    }
+
+    // Cross-render / cross-session isolation: the SAME inert template resolved
+    // against two DIFFERENT per-render maps yields two DIFFERENT handlers — the
+    // Msg comes only from the render's own map, never leaks across renders. A
+    // forged id (out of both maps' range) resolves to nothing in both.
+    #[test]
+    fn hole_resolution_is_scoped_to_its_own_render_map() {
+        let template = UiTemplate::TaggedNode {
+            tag: "button".to_string(),
+            desc: super::UiDescription::NoDescription,
+            attrs: vec![UiTemplateAttr::HandlerHole {
+                event: "click".to_string(),
+                handler_id: 0,
+            }],
+            children: vec![],
+        };
+        let render_a = UiHandlerMap::from_msgs(vec![Msg::Select(1)]);
+        let render_b = UiHandlerMap::from_msgs(vec![Msg::Select(2)]);
+        let a: Element<Msg> = materialize_ui_template_with_handlers(&template, &render_a);
+        let b: Element<Msg> = materialize_ui_template_with_handlers(&template, &render_b);
+        // Compare the RESOLVED Msg directly (Element/Event PartialEq deliberately
+        // ignores the Msg payload — two OnMsg("click", _) compare equal for diff
+        // purposes — so the distinction must be read off the handler's Msg).
+        assert_eq!(resolved_click_msg(&a), Some(Msg::Select(1)));
+        assert_eq!(resolved_click_msg(&b), Some(Msg::Select(2)));
+        assert_ne!(
+            resolved_click_msg(&a),
+            resolved_click_msg(&b),
+            "each render's map resolves the hole to ITS own Msg"
+        );
+        // Neither map holds a handler for a forged higher id.
+        let forged = UiTemplate::TaggedNode {
+            tag: "button".to_string(),
+            desc: super::UiDescription::NoDescription,
+            attrs: vec![UiTemplateAttr::HandlerHole {
+                event: "click".to_string(),
+                handler_id: 99,
+            }],
+            children: vec![],
+        };
+        let fa: Element<Msg> = materialize_ui_template_with_handlers(&forged, &render_a);
+        let fb: Element<Msg> = materialize_ui_template_with_handlers(&forged, &render_b);
+        for e in [fa, fb] {
+            let Element::TaggedNode(_, _, attrs, _) = &e else {
+                panic!("expected a TaggedNode");
+            };
+            assert_eq!(attrs.as_slice(), &[Attribute::NoAttribute]);
+        }
+    }
+
+    // A non-`OnMsg` event (a runtime-arg-dependent handler) is NOT a clean
+    // per-render capture, so even the holed path refuses the whole subtree — it
+    // stays compiled rather than templatizing a handler whose resolution needs a
+    // client-supplied value / form payload / seal decode.
+    #[test]
+    fn non_onmsg_handlers_refuse_even_holed() {
+        let on_string: Element<Msg> = Element::TaggedNode(
+            "input".to_string(),
+            Description::NoDescription,
+            vec![Attribute::AttrEvent(HtmlAttribute::EventAttr(
+                Event::OnString(
+                    "input".to_string(),
+                    std::sync::Arc::new(|s| Msg::Select(s.len() as i64)),
+                ),
+            ))],
+            vec![],
+        );
+        assert_eq!(ui_template_of_holed(&on_string), None);
+
+        let on_form: Element<Msg> = Element::TaggedNode(
+            "form".to_string(),
+            Description::NoDescription,
+            vec![Attribute::AttrEvent(HtmlAttribute::EventAttr(
+                Event::OnForm(
+                    "submit".to_string(),
+                    std::sync::Arc::new(|_fd| Some(Msg::Save)),
+                ),
+            ))],
+            vec![],
+        );
+        assert_eq!(ui_template_of_holed(&on_form), None);
+    }
+
+    // The whole point of issue #1668: a subtree bearing a model-dependent handler
+    // hot-swaps its STRUCTURE (the inert template changes) while the handler
+    // still fires the right Msg (resolved from the per-render map). Here the
+    // structure gains a child between renders; both the old and new template
+    // resolve the hole to the same captured Msg.
+    #[test]
+    fn structure_hot_swaps_while_handler_still_fires() {
+        // Before: button with one text child, model-dependent onClick.
+        let before: Element<Msg> = Element::TaggedNode(
+            "button".to_string(),
+            Description::NoDescription,
+            vec![Attribute::AttrEvent(HtmlAttribute::EventAttr(
+                Event::OnMsg("click".to_string(), Msg::Select(3)),
+            ))],
+            vec![Element::Text("one".to_string())],
+        );
+        // After: the SAME handler, an added static child (a structural edit).
+        let after: Element<Msg> = Element::TaggedNode(
+            "button".to_string(),
+            Description::NoDescription,
+            vec![Attribute::AttrEvent(HtmlAttribute::EventAttr(
+                Event::OnMsg("click".to_string(), Msg::Select(3)),
+            ))],
+            vec![
+                Element::Text("one".to_string()),
+                Element::Text("two".to_string()),
+            ],
+        );
+        let (t_before, c_before) = ui_template_of_holed(&before).expect("templatizes");
+        let (t_after, c_after) = ui_template_of_holed(&after).expect("templatizes");
+        // The templates differ (structure hot-swapped) …
+        assert_ne!(t_before, t_after);
+        // … but each resolves the hole to the SAME model-captured Msg.
+        let m_before: Element<Msg> =
+            materialize_ui_template_with_handlers(&t_before, &UiHandlerMap::from_msgs(c_before));
+        let m_after: Element<Msg> =
+            materialize_ui_template_with_handlers(&t_after, &UiHandlerMap::from_msgs(c_after));
+        assert_eq!(m_before, before);
+        assert_eq!(m_after, after);
+    }
+
+    // Two model-dependent handlers in one subtree get distinct, order-stable hole
+    // ids (0, 1), so each resolves to its own captured Msg.
+    #[test]
+    fn multiple_holes_get_distinct_ordered_ids() {
+        let subtree: Element<Msg> = Element::Node(
+            Description::NoDescription,
+            vec![],
+            vec![button_onclick(Msg::Select(10)), button_onclick(Msg::Save)],
+        );
+        let (_template, captures) = ui_template_of_holed(&subtree).expect("templatizes");
+        assert_eq!(captures, vec![Msg::Select(10), Msg::Save]);
+    }
+
+    // Read the concrete `Msg` off a materialized element's `click` handler, or
+    // `None` when it carries no such handler. Needed because `Element`/`Event`
+    // equality ignores the Msg payload, so the resolved Msg must be inspected
+    // directly to prove per-render resolution.
+    fn resolved_click_msg(elem: &Element<Msg>) -> Option<Msg> {
+        let attrs = match elem {
+            Element::Node(_, attrs, _) | Element::TaggedNode(_, _, attrs, _) => attrs,
+            _ => return None,
+        };
+        attrs.iter().find_map(|a| match a {
+            Attribute::AttrEvent(HtmlAttribute::EventAttr(Event::OnMsg(name, msg)))
+                if name == "click" =>
+            {
+                Some(msg.clone())
+            }
+            _ => None,
+        })
     }
 }
