@@ -186,6 +186,7 @@ fn lower_any_call(
 
     let m = canon::Module {
         imports_unsafe_submodule: false,
+        imported_web_capabilities: std::collections::BTreeSet::new(),
         name: Vec::new(),
         unions: Vec::new(),
         defs: vec![gn_def, caller_def],
@@ -315,6 +316,7 @@ fn extra_field_beyond_required_is_accepted() {
 
     let m = canon::Module {
         imports_unsafe_submodule: false,
+        imported_web_capabilities: std::collections::BTreeSet::new(),
         name: Vec::new(),
         unions: Vec::new(),
         defs: vec![gn_def, caller_def],
@@ -425,6 +427,7 @@ fn relayed_any_param_at_row_callee_is_rejected() {
 
     let m = canon::Module {
         imports_unsafe_submodule: false,
+        imported_web_capabilities: std::collections::BTreeSet::new(),
         name: Vec::new(),
         unions: Vec::new(),
         defs: vec![gn_def, relay_def],
@@ -514,6 +517,7 @@ fn lower_any_call_bare_arg(
 
     let m = canon::Module {
         imports_unsafe_submodule: false,
+        imported_web_capabilities: std::collections::BTreeSet::new(),
         name: Vec::new(),
         unions: Vec::new(),
         defs: vec![gn_def, caller_def],

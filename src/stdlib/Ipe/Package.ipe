@@ -36,6 +36,7 @@ module Ipe.Package exposing
     , WrapperOptions
     , Build
     , Capability(..)
+    , WebCapability(..)
     , dep
     , depGit
     , depGitRev
@@ -210,7 +211,23 @@ type Capability
     | FfiRaw
     | Unsafe
     | CustomElement
-    | JsPort
+    | JsPort WebCapability
+
+
+-- | The closed per-Web-API sub-axis a `JsPort` capability discloses. A browser
+-- port reaches exactly one Web API; this names which. `Raw` is the explicit axis
+-- for an uncharacterised hand-rolled port — the coarsest grantable web axis, which
+-- reaches nothing specific. There is no bare `JsPort`; every port names an axis.
+type WebCapability
+    = Geolocation
+    | Clipboard
+    | Notification
+    | Storage
+    | Vibration
+    | Share
+    | Battery
+    | NetworkInfo
+    | Raw
 
 
 -- | An index dependency: resolved from the package index by a semver

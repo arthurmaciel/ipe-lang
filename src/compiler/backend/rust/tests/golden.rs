@@ -112,6 +112,7 @@ fn build_m0(interner: &mut Interner) -> DResult<Program> {
 
     Ok(Program {
         imports_unsafe_submodule: false,
+        imported_web_capabilities: std::collections::BTreeSet::new(),
         modules: vec![Module {
             name: ModPath(vec![main_mod]),
             types: vec![],
@@ -237,6 +238,7 @@ fn build_no_user_items(interner: &mut Interner) -> DResult<Program> {
 
     Ok(Program {
         imports_unsafe_submodule: false,
+        imported_web_capabilities: std::collections::BTreeSet::new(),
         modules: vec![Module {
             name: ModPath(vec![main_mod]),
             types: vec![],

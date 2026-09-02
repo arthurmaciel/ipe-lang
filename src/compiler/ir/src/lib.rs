@@ -28,8 +28,9 @@ pub use pretty::{MAX_IR_RENDER_DEPTH, pretty};
 pub use ipe_kernels::Target;
 
 /// The security-capability vocabulary — re-exported so lowering/CLI consumers
-/// reach it through the IR crate like `KernelFn`.
-pub use ipe_kernels::Capability;
+/// reach it through the IR crate like `KernelFn`. [`WebCapability`] is the closed
+/// per-Web-API sub-axis a [`Capability::JsPort`] discloses.
+pub use ipe_kernels::{Capability, WebCapability};
 
 /// The user function name of the wasm-hydration island projection.
 ///

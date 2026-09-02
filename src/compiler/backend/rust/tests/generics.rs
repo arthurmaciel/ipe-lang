@@ -141,6 +141,7 @@ fn build_identity_program(interner: &mut Interner) -> DResult<Program> {
 
     Ok(Program {
         imports_unsafe_submodule: false,
+        imported_web_capabilities: std::collections::BTreeSet::new(),
         modules: vec![Module {
             name: ModPath(vec![main_mod]),
             types: vec![],
@@ -330,6 +331,7 @@ fn build_bounded_program(interner: &mut Interner) -> DResult<Program> {
 
     Ok(Program {
         imports_unsafe_submodule: false,
+        imported_web_capabilities: std::collections::BTreeSet::new(),
         modules: vec![Module {
             name: ModPath(vec![main_mod]),
             types: vec![],

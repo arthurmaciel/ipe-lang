@@ -602,7 +602,7 @@ pub fn profile_from_capabilities(
             // not an axis this OS jail opens or closes — an explicit no-op arm. The
             // disclosure is surfaced to the consumer as a capability and the inbound
             // seam is fail-closed by the seal decoder, not by confining the run.
-            Capability::JsPort => {}
+            Capability::JsPort(_) => {}
         }
     }
 

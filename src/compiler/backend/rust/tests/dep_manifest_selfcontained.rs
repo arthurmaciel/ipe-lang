@@ -26,6 +26,7 @@ fn minimal_native_program() -> (Program, Interner) {
     let main = interner.intern("Main").expect("intern");
     let program = Program {
         imports_unsafe_submodule: false,
+        imported_web_capabilities: std::collections::BTreeSet::new(),
         modules: vec![Module {
             name: ModPath(vec![main]),
             types: vec![],

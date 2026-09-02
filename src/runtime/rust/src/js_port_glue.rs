@@ -31,10 +31,42 @@ use sha2::{Digest, Sha256};
 const PORT_GLUE_JS: &str = r#"// Ipe.Js browser port surface. Values cross as JSON strings only.
 (function () {
   var onReceive = null;
-  function deliver(raw) {
-    if (typeof onReceive === "function") {
-      try { onReceive(JSON.parse(raw)); } catch (_e) { /* drop a malformed frame */ }
+  // Return an inbound typed result to the Ipê program: a decoded intent, never a
+  // thrown error, so a host permission denial is an ordinary case the program
+  // handles (parse-don't-validate at the trust boundary).
+  function replyResult(ok, detail) {
+    if (typeof window.__ipePortSend === "function") {
+      try { window.__ipePortSend(JSON.stringify({ ok: ok, detail: detail })); }
+      catch (_e) { /* best-effort inbound reply */ }
     }
+  }
+  // First-party Ipe.Browser.* sinks. Each recognises its own closed outbound
+  // command shape and reaches exactly one Web API, trapping any host denial /
+  // unavailability to a typed inbound result (never a panic, never a throw). The
+  // bytes are stdlib's and SRI-pinned, so a dependency cannot substitute them.
+  function builtinSink(value) {
+    // Ipe.Browser.Clipboard: `WriteText text` -> navigator.clipboard.writeText.
+    if (value && typeof value === "object" && typeof value.WriteText === "string") {
+      var text = value.WriteText;
+      if (!navigator || !navigator.clipboard || typeof navigator.clipboard.writeText !== "function") {
+        replyResult(false, "unavailable");
+        return true;
+      }
+      navigator.clipboard.writeText(text).then(
+        function () { replyResult(true, "written"); },
+        function () { replyResult(false, "denied"); }
+      );
+      return true;
+    }
+    return false;
+  }
+  function deliver(raw) {
+    var value;
+    try { value = JSON.parse(raw); } catch (_e) { return; /* drop a malformed frame */ }
+    // A first-party browser-capability command is handled by its built-in sink;
+    // anything else is a developer port frame routed to the registered receiver.
+    if (builtinSink(value)) return;
+    if (typeof onReceive === "function") { onReceive(value); }
   }
   // The runtime calls this with each outbound seal frame (a JSON string).
   window.ipeOnReceive = deliver;
@@ -111,5 +143,18 @@ mod tests {
         assert!(js.contains("JSON.parse"));
         assert!(js.contains("JSON.stringify"));
         assert!(!js.contains("eval("));
+    }
+
+    #[test]
+    fn clipboard_sink_reaches_the_web_api_and_traps_denial_to_a_typed_result() {
+        let js = port_glue_js();
+        // The first-party Ipe.Browser.Clipboard sink reaches exactly one Web API…
+        assert!(js.contains("navigator.clipboard.writeText"));
+        assert!(js.contains("WriteText"));
+        // …and traps a host denial / absence to a typed inbound result, never a
+        // throw: both the denied and the unavailable branches reply, no `eval`.
+        assert!(js.contains("\"denied\""));
+        assert!(js.contains("\"unavailable\""));
+        assert!(js.contains("replyResult"));
     }
 }

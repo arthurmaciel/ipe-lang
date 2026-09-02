@@ -153,8 +153,8 @@ pub fn resolve_refusal(
 ) -> Result<bool, CliError> {
     // The axes that would run with the user's full authority (clock/random carry
     // no OS control, `unsafe` is a provenance label with no isolation surface, and
-    // `custom-element` is a browser-side disclosure the SERVER jail never governs,
-    // so none of them is part of the jail-authority warning).
+    // `custom-element` / `js-port` are browser-side disclosures the SERVER jail
+    // never governs, so none of them is part of the jail-authority warning).
     let names: Vec<&str> = union
         .iter()
         .filter(|c| {
@@ -164,6 +164,7 @@ pub fn resolve_refusal(
                     | Capability::Random
                     | Capability::Unsafe
                     | Capability::CustomElement
+                    | Capability::JsPort(_)
             )
         })
         .map(|c| c.as_str())

@@ -944,20 +944,76 @@ impl Reader<'_> {
     fn read_capability_wire_names(&self, expr: &Expr) -> Result<Vec<String>, CliError> {
         let mut names = Vec::new();
         for item in self.expect_list(expr)? {
-            let ctor = self.expect_ctor(item, "a capability")?;
+            // A web port is the applied ctor `JsPort <WebAxis>`, spelled to the
+            // dotted `js-port:<axis>` wire name; every other capability is a bare
+            // nullary ctor. `expect_ctor_app` yields both, with an empty arg slice
+            // for the nullary case.
+            let (ctor, args) = self.expect_ctor_app(item, "a capability")?;
+            if ctor == "JsPort" {
+                names.push(self.read_js_port_wire_name(item.span, args)?);
+                continue;
+            }
+            if !args.is_empty() {
+                return Err(self.reject(
+                    item.span,
+                    &format!("`{ctor}` is a nullary capability and takes no argument"),
+                ));
+            }
             let wire = capability_wire_name(ctor).ok_or_else(|| {
                 self.reject(
                     item.span,
                     &format!(
                         "`{ctor}` is not a capability — use one of Network, Filesystem, Database, \
                          Env, Subprocess, Clock, Random, NativeFfi, FfiRaw, Unsafe, CustomElement, \
-                         JsPort"
+                         or `JsPort <WebAxis>`"
                     ),
                 )
             })?;
             names.push(wire.to_owned());
         }
         Ok(names)
+    }
+
+    /// Read the single `WebCapability` argument of a `JsPort <WebAxis>` capability
+    /// into its `js-port:<axis>` wire name. A bare `JsPort` (no argument) is
+    /// rejected — the coarse grant-everything token is unspellable, so there is no
+    /// web port without a named axis.
+    fn read_js_port_wire_name(&self, span: Span, args: &[Expr]) -> Result<String, CliError> {
+        let axis_expr = self.nth_arg(span, "JsPort", args, 0).map_err(|_| {
+            self.reject(
+                span,
+                "`JsPort` needs a web-capability axis — write `JsPort Clipboard`, `JsPort Raw`, … \
+                 (a bare `JsPort` cannot grant the whole browser surface)",
+            )
+        })?;
+        let axis = self.expect_ctor(axis_expr, "a web capability")?;
+        let suffix = web_capability_wire_suffix(axis).ok_or_else(|| {
+            self.reject(
+                axis_expr.span,
+                &format!(
+                    "`{axis}` is not a web capability — use one of Geolocation, Clipboard, \
+                     Notification, Storage, Vibration, Share, Battery, NetworkInfo, Raw"
+                ),
+            )
+        })?;
+        Ok(format!("js-port:{suffix}"))
+    }
+}
+
+/// The wire suffix (the half after `js-port:`) of a `WebCapability` constructor,
+/// or `None` for a name outside the closed web-axis vocabulary.
+fn web_capability_wire_suffix(ctor: &str) -> Option<&'static str> {
+    match ctor {
+        "Geolocation" => Some("geolocation"),
+        "Clipboard" => Some("clipboard"),
+        "Notification" => Some("notification"),
+        "Storage" => Some("storage"),
+        "Vibration" => Some("vibration"),
+        "Share" => Some("share"),
+        "Battery" => Some("battery"),
+        "NetworkInfo" => Some("network-info"),
+        "Raw" => Some("raw"),
+        _ => None,
     }
 }
 
@@ -978,7 +1034,8 @@ fn capability_wire_name(ctor: &str) -> Option<&'static str> {
         "FfiRaw" => Some("ffi-raw"),
         "Unsafe" => Some("unsafe"),
         "CustomElement" => Some("custom-element"),
-        "JsPort" => Some("js-port"),
+        // `JsPort` is not a nullary capability — it carries a `WebCapability` axis
+        // and is read via the applied-ctor path, never here.
         _ => None,
     }
 }
@@ -1173,7 +1230,7 @@ fn render_capabilities(declares: &BTreeSet<Capability>, accepts: &BTreeSet<Capab
         }
         let items = set
             .iter()
-            .map(|c| capability_ctor_name(c.as_str()).to_owned())
+            .map(|c| capability_ctor_expr(c.as_str()))
             .collect::<Vec<_>>()
             .join(", ");
         format!("[ {items} ]")
@@ -1185,10 +1242,15 @@ fn render_capabilities(declares: &BTreeSet<Capability>, accepts: &BTreeSet<Capab
     )
 }
 
-/// The `Ipe.Package` `Capability` constructor spelling for a wire name — the
-/// inverse of [`capability_wire_name`]. An unknown wire name (never expected from
-/// a typed [`Capability`]) passes through verbatim.
-fn capability_ctor_name(wire: &str) -> &str {
+/// The `Ipe.Package` `Capability` constructor expression for a wire name — the
+/// inverse of the manifest reader. A `js-port:<axis>` wire renders as the applied
+/// ctor `JsPort <WebAxis>`; every other wire name is a bare nullary ctor. An
+/// unknown wire name (never expected from a typed [`Capability`]) passes through
+/// verbatim.
+fn capability_ctor_expr(wire: &str) -> String {
+    if let Some(suffix) = wire.strip_prefix("js-port:") {
+        return format!("JsPort {}", web_capability_ctor_name(suffix));
+    }
     match wire {
         "network" => "Network",
         "filesystem" => "Filesystem",
@@ -1201,7 +1263,24 @@ fn capability_ctor_name(wire: &str) -> &str {
         "ffi-raw" => "FfiRaw",
         "unsafe" => "Unsafe",
         "custom-element" => "CustomElement",
-        "js-port" => "JsPort",
+        other => other,
+    }
+    .to_owned()
+}
+
+/// The `WebCapability` constructor spelling for a wire suffix — the inverse of
+/// [`web_capability_wire_suffix`]. An unknown suffix passes through verbatim.
+fn web_capability_ctor_name(suffix: &str) -> &str {
+    match suffix {
+        "geolocation" => "Geolocation",
+        "clipboard" => "Clipboard",
+        "notification" => "Notification",
+        "storage" => "Storage",
+        "vibration" => "Vibration",
+        "share" => "Share",
+        "battery" => "Battery",
+        "network-info" => "NetworkInfo",
+        "raw" => "Raw",
         other => other,
     }
 }
@@ -1840,9 +1919,11 @@ mod tests {
             capability_wire_name("CustomElement"),
             Some("custom-element")
         );
-        assert_eq!(capability_wire_name("JsPort"), Some("js-port"));
+        // `JsPort` is not a nullary capability — it carries a web axis and is read
+        // via the applied-ctor path, so it is absent from the nullary map.
+        assert_eq!(capability_wire_name("JsPort"), None);
         assert_eq!(capability_wire_name("Nope"), None);
-        // Every wire name a constructor maps to must round-trip through the
+        // Every wire name a nullary constructor maps to must round-trip through the
         // shared Capability FromStr — no drift between the two sets.
         for ctor in [
             "Network",
@@ -1856,7 +1937,6 @@ mod tests {
             "FfiRaw",
             "Unsafe",
             "CustomElement",
-            "JsPort",
         ] {
             let wire = capability_wire_name(ctor).expect("mapped");
             assert!(
@@ -1864,6 +1944,34 @@ mod tests {
                 "wire {wire:?} for {ctor:?} must parse as a Capability"
             );
         }
+    }
+
+    #[test]
+    fn js_port_web_axis_wire_names_round_trip_through_capability_from_str() {
+        // Every `JsPort <WebAxis>` renders to a `js-port:<axis>` wire name that the
+        // shared Capability FromStr accepts, and a bare `js-port` never parses.
+        for axis in [
+            "Geolocation",
+            "Clipboard",
+            "Notification",
+            "Storage",
+            "Vibration",
+            "Share",
+            "Battery",
+            "NetworkInfo",
+            "Raw",
+        ] {
+            let suffix = web_capability_wire_suffix(axis).expect("mapped");
+            let wire = format!("js-port:{suffix}");
+            assert!(
+                wire.parse::<Capability>().is_ok(),
+                "wire {wire:?} for JsPort {axis} must parse as a Capability"
+            );
+            // The ctor renderer is the inverse: `js-port:<axis>` → `JsPort <Axis>`.
+            assert_eq!(capability_ctor_expr(&wire), format!("JsPort {axis}"));
+        }
+        assert!(web_capability_wire_suffix("Camera").is_none());
+        assert!("js-port".parse::<Capability>().is_err());
     }
 
     #[test]
