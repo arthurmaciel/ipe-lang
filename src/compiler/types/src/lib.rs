@@ -5406,6 +5406,7 @@ mod tests {
         // fallback path in `constrain_pattern`.
         let module = canon::Module {
             imports_unsafe_submodule: false,
+            imported_web_capabilities: Default::default(),
             name: vec![main_sym],
             unions: vec![],
             defs: vec![canon::Def::Untyped {

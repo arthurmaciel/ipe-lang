@@ -125,6 +125,7 @@ fn lower_leaf_param_ty(leaf: &str, leaf_home: &[Symbol], declare_union: bool) ->
 
     let m = canon::Module {
         imports_unsafe_submodule: false,
+        imported_web_capabilities: Default::default(),
         name: vec![main],
         unions,
         defs: vec![tag_def],

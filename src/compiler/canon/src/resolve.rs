@@ -9,7 +9,7 @@ use ipe_diagnostics::{
     NameError, ParseError, SealRejection, SortedNames, Span, TypeError,
 };
 use ipe_intern::{Interner, Symbol};
-use ipe_kernels::StdlibKernel;
+use ipe_kernels::{StdlibKernel, WebCapability};
 use ipe_syntax as src;
 
 use crate::ast as canon;
@@ -2575,6 +2575,11 @@ fn canonicalise_with_env(
     // whole-program capability scan.
     let imports_unsafe_submodule = imports_an_unsafe_submodule(&m.imports, interner);
 
+    // Import-derived web-capability disclosure: which reserved `Ipe.Browser.<Api>`
+    // submodules did this module import? The same reviewable-import discipline as
+    // the `unsafe` fact above, computed here where the source import list survives.
+    let imported_web_capabilities = imported_web_capabilities_of(&m.imports, interner);
+
     // The `"any"` wildcard symbol used to arity-fill a bare builtin parametric
     // UI annotation (`view : Html` → `view : Html any`). Interned once here where
     // the interner is mutable; the deeper `canonicalise_type` TType arm runs under
@@ -2870,6 +2875,7 @@ fn canonicalise_with_env(
             unions,
             defs,
             imports_unsafe_submodule,
+            imported_web_capabilities,
         },
         kernel_aliases,
     ))
@@ -2884,6 +2890,39 @@ fn canonicalise_with_env(
 /// discovery as `User` origin (IPE-N0025) — so a matching import can only name a
 /// vouched `EmbeddedStdlib` submodule. Mirrors the `Ipe.Tea.*` import-shape
 /// check: a segment-slice pattern, no string allocation on the hot path.
+/// The web capabilities disclosed by a module's reserved `Ipe.Browser.<Api>`
+/// imports.
+///
+/// Walks the same import list `imports_an_unsafe_submodule` walks, resolving each
+/// import's canonical path segments and looking them up in the closed
+/// [`WebCapability::for_browser_module`] table. Keyed on the canonical path, so a
+/// local alias never changes the disclosure, and the reserved `Ipe.Browser.*`
+/// namespace cannot be forged by a user file (rejected at discovery as `User`
+/// origin), exactly as the `unsafe` submodule rule relies on.
+fn imported_web_capabilities_of(
+    imports: &[src::Import],
+    interner: &Interner,
+) -> BTreeSet<WebCapability> {
+    let mut set = BTreeSet::new();
+    for imp in imports {
+        let segments: Vec<&str> = imp
+            .name
+            .value
+            .iter()
+            .filter_map(|sym| interner.resolve(*sym))
+            .collect();
+        // A segment that failed to resolve shortens the slice, so a partial path
+        // simply fails to match — fail-closed to "no disclosure from this import",
+        // never a mis-attributed one.
+        if segments.len() == imp.name.value.len() {
+            if let Some(w) = WebCapability::for_browser_module(&segments) {
+                set.insert(w);
+            }
+        }
+    }
+    set
+}
+
 fn imports_an_unsafe_submodule(imports: &[src::Import], interner: &Interner) -> bool {
     let Some((ipe_sym, unsafe_sym)) = interner.lookup("Ipe").zip(interner.lookup("Unsafe")) else {
         // Neither segment interned in this build → no such import can exist.
@@ -7546,6 +7585,7 @@ mod config_threading_tests {
         }
         canon::Module {
             imports_unsafe_submodule: false,
+            imported_web_capabilities: Default::default(),
             name: home,
             unions: Vec::new(),
             defs,

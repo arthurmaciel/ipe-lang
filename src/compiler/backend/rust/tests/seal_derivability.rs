@@ -40,6 +40,7 @@ fn program_with_web(
 ) -> Program {
     Program {
         imports_unsafe_submodule: false,
+        imported_web_capabilities: Default::default(),
         modules: vec![Module {
             name: ModPath(vec![name]),
             types,
@@ -448,6 +449,7 @@ fn build_capture_clone_on_key_down(interner: &mut Interner) -> DResult<Program> 
 
     Ok(Program {
         imports_unsafe_submodule: false,
+        imported_web_capabilities: Default::default(),
         modules: vec![Module {
             name: ModPath(vec![main_mod]),
             types: vec![],
@@ -562,6 +564,7 @@ fn on_key_up_capture_clone_peeled_outside_arc() -> DResult<()> {
     };
     let prog = Program {
         imports_unsafe_submodule: false,
+        imported_web_capabilities: Default::default(),
         modules: vec![Module {
             name: ModPath(vec![main_mod]),
             types: vec![],
@@ -654,6 +657,7 @@ fn on_file_capture_clone_peeled_outside_arc() -> DResult<()> {
     };
     let prog = Program {
         imports_unsafe_submodule: false,
+        imported_web_capabilities: Default::default(),
         modules: vec![Module {
             name: ModPath(vec![main_mod]),
             types: vec![],
@@ -746,6 +750,7 @@ fn on_bool_capture_clone_peeled_outside_arc() -> DResult<()> {
     };
     let prog = Program {
         imports_unsafe_submodule: false,
+        imported_web_capabilities: Default::default(),
         modules: vec![Module {
             name: ModPath(vec![main_mod]),
             types: vec![],

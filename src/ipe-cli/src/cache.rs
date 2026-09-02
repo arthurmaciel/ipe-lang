@@ -1077,6 +1077,7 @@ mod tests {
 
         Ok(Program {
             imports_unsafe_submodule: false,
+            imported_web_capabilities: Default::default(),
             modules: vec![Module {
                 name: ModPath(vec![main_mod]),
                 types: vec![TypeDef::Enum(EnumDef {

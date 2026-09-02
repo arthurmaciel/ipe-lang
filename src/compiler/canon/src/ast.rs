@@ -10,9 +10,11 @@
 //! Identifiers are interned [`Symbol`]s; located nodes are wrapped in
 //! [`Located`]. Module names are dotted segment vectors (`Main` → `[Main]`).
 
+use std::collections::BTreeSet;
+
 use ipe_diagnostics::{Located, Span};
 use ipe_intern::Symbol;
-use ipe_kernels::StdlibKernel;
+use ipe_kernels::{StdlibKernel, WebCapability};
 
 /// A name-resolved module.
 //
@@ -34,6 +36,15 @@ pub struct Module {
     /// a specific member — is the signal, so a module that imports an `.Unsafe`
     /// submodule discloses even if a path to its members is dead code.
     pub imports_unsafe_submodule: bool,
+    /// The web capabilities this module's source disclosed by importing reserved
+    /// `Ipe.Browser.<Api>` submodules — an import-derived fact, keyed on the
+    /// canonical module path via [`WebCapability::for_browser_module`] (the same
+    /// reviewable-import discipline as `imports_unsafe_submodule`, but a set: one
+    /// module may import several browser submodules). Union-folded across every
+    /// linked module by [`crate::link::link`] and read by the lowerer to seed the
+    /// whole-program `js-port:<axis>` disclosure. Importing the module is the
+    /// signal, regardless of dead code.
+    pub imported_web_capabilities: BTreeSet<WebCapability>,
 }
 
 /// A resolved union type and its constructors.

@@ -155,6 +155,30 @@ impl WebCapability {
         }
     }
 
+    /// The web axis disclosed by importing a reserved `Ipe.Browser.<Api>` stdlib
+    /// module, matched on the module's dotted path segments — the compiler-owned,
+    /// closed SSOT for "which browser module discloses which Web API." A new
+    /// browser module is one row here plus its `WebCapability` variant.
+    ///
+    /// Keyed on the segment slice (`["Ipe", "Browser", "Clipboard"]`), alias-immune
+    /// exactly like the `Ipe.<M>.Unsafe` import rule: the canonical import path is
+    /// what matches, never a local alias, and the reserved namespace cannot be
+    /// forged by a user file.
+    #[must_use]
+    pub fn for_browser_module(segments: &[&str]) -> Option<Self> {
+        match segments {
+            ["Ipe", "Browser", "Geolocation"] => Some(Self::Geolocation),
+            ["Ipe", "Browser", "Clipboard"] => Some(Self::Clipboard),
+            ["Ipe", "Browser", "Notification"] => Some(Self::Notification),
+            ["Ipe", "Browser", "Storage"] => Some(Self::Storage),
+            ["Ipe", "Browser", "Vibration"] => Some(Self::Vibration),
+            ["Ipe", "Browser", "Share"] => Some(Self::Share),
+            ["Ipe", "Browser", "Battery"] => Some(Self::Battery),
+            ["Ipe", "Browser", "NetworkInfo"] => Some(Self::NetworkInfo),
+            _ => None,
+        }
+    }
+
     /// Parse a web-axis wire suffix, the inverse of [`Self::as_str`]. An
     /// unrecognised suffix is [`UnknownCapability`] carrying the full offending
     /// `js-port:<suffix>` token — fail-closed, never a silent drop.

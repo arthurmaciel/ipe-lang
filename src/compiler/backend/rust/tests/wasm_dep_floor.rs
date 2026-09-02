@@ -37,6 +37,7 @@ fn minimal_wasm_program() -> (Program, Interner) {
     let main = interner.intern("Main").expect("intern");
     let program = Program {
         imports_unsafe_submodule: false,
+        imported_web_capabilities: Default::default(),
         modules: vec![Module {
             name: ModPath(vec![main]),
             types: vec![],

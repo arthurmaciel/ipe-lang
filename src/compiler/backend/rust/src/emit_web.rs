@@ -1131,6 +1131,7 @@ mod schema_tag_tests {
 
         let program = Program {
             imports_unsafe_submodule: false,
+            imported_web_capabilities: Default::default(),
             modules: vec![Module {
                 name: ModPath(vec![main_mod]),
                 types: vec![],
@@ -1301,6 +1302,7 @@ mod hot_appearance_tests {
         };
         let program = Program {
             imports_unsafe_submodule: false,
+            imported_web_capabilities: Default::default(),
             modules: vec![module],
         };
         Ok((program, view))

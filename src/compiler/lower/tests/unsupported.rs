@@ -53,6 +53,7 @@ fn run_with_regions(
 ) -> DResult<ipe_ir::Program> {
     let m = canon::Module {
         imports_unsafe_submodule: false,
+        imported_web_capabilities: Default::default(),
         name: Vec::new(),
         unions,
         defs,

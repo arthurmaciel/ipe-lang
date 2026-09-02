@@ -4813,6 +4813,7 @@ mod record_struct_namespace_tests {
 
         let program = Program {
             imports_unsafe_submodule: false,
+            imported_web_capabilities: Default::default(),
             modules: vec![Module {
                 name: ModPath(vec![rec_mod]),
                 types: vec![TypeDef::Enum(EnumDef {
@@ -4925,6 +4926,7 @@ mod record_struct_namespace_tests {
 
         let program = Program {
             imports_unsafe_submodule: false,
+            imported_web_capabilities: Default::default(),
             modules: vec![Module {
                 name: ModPath(vec![main_mod]),
                 types: vec![TypeDef::Enum(EnumDef {
@@ -5014,6 +5016,7 @@ mod record_struct_namespace_tests {
         let ty = interner.intern("T")?;
         let program = Program {
             imports_unsafe_submodule: false,
+            imported_web_capabilities: Default::default(),
             modules: vec![Module {
                 name: ModPath(vec![main_mod]),
                 types: vec![TypeDef::Enum(EnumDef {

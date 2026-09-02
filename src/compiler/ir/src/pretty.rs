@@ -1078,6 +1078,7 @@ mod tests {
 
         Ok(Program {
             imports_unsafe_submodule: false,
+            imported_web_capabilities: Default::default(),
             modules: vec![Module {
                 name: ModPath(vec![main_mod]),
                 types: vec![TypeDef::Enum(EnumDef {
@@ -1215,6 +1216,7 @@ program
         };
         let program = Program {
             imports_unsafe_submodule: false,
+            imported_web_capabilities: Default::default(),
             modules: vec![Module {
                 name: ModPath(vec![main_mod]),
                 types: vec![],
@@ -1308,6 +1310,7 @@ program
         let body = Expr::Tuple(vec![Expr::Var(n), Expr::Int(1)]);
         let program = Program {
             imports_unsafe_submodule: false,
+            imported_web_capabilities: Default::default(),
             modules: vec![Module {
                 name: ModPath(vec![main_mod]),
                 types: vec![],
@@ -1404,6 +1407,7 @@ program
         let rec_ty = IrType::Record(rec_fields);
         let program = Program {
             imports_unsafe_submodule: false,
+            imported_web_capabilities: Default::default(),
             modules: vec![Module {
                 name: ModPath(vec![main_mod]),
                 types: vec![],
@@ -1488,6 +1492,7 @@ program
         };
         let program = Program {
             imports_unsafe_submodule: false,
+            imported_web_capabilities: Default::default(),
             modules: vec![Module {
                 name: ModPath(vec![main_mod]),
                 types: vec![],
@@ -1578,6 +1583,7 @@ program
         };
         let program = Program {
             imports_unsafe_submodule: false,
+            imported_web_capabilities: Default::default(),
             modules: vec![Module {
                 name: ModPath(vec![main_mod]),
                 types: vec![],
@@ -1660,6 +1666,7 @@ program
         // thunk(k : () -> Bool) -> Bool = ...  (body shape illustrative)
         let program = Program {
             imports_unsafe_submodule: false,
+            imported_web_capabilities: Default::default(),
             modules: vec![Module {
                 name: ModPath(vec![main_mod]),
                 types: vec![],
@@ -1764,6 +1771,7 @@ program
         ];
         let program = Program {
             imports_unsafe_submodule: false,
+            imported_web_capabilities: Default::default(),
             modules: vec![Module {
                 name: ModPath(vec![main_mod]),
                 types: vec![TypeDef::Enum(EnumDef {
@@ -1884,6 +1892,7 @@ program
         }];
         let program = Program {
             imports_unsafe_submodule: false,
+            imported_web_capabilities: Default::default(),
             modules: vec![Module {
                 name: ModPath(vec![main_mod]),
                 types: vec![TypeDef::Enum(EnumDef {
@@ -1988,6 +1997,7 @@ program
         // A program referencing a symbol this interner never handed out.
         let program = Program {
             imports_unsafe_submodule: false,
+            imported_web_capabilities: Default::default(),
             modules: vec![Module {
                 name: ModPath(vec![Symbol::from_raw(999)]),
                 types: vec![],
@@ -2051,6 +2061,7 @@ program
         }
         Ok(Program {
             imports_unsafe_submodule: false,
+            imported_web_capabilities: Default::default(),
             modules: vec![Module {
                 name: ModPath(vec![main_mod]),
                 types: vec![],

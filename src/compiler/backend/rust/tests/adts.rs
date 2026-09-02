@@ -164,6 +164,7 @@ fn maybe_program(i: &mut Interner) -> DResult<Program> {
 
     Ok(Program {
         imports_unsafe_submodule: false,
+        imported_web_capabilities: Default::default(),
         modules: vec![Module {
             name: ModPath(vec![main_mod]),
             types: vec![TypeDef::Enum(def)],
@@ -369,6 +370,7 @@ fn tree_program(interner: &mut Interner) -> DResult<Program> {
     let main_fn = tree_main_fn(interner, &syms)?;
     Ok(Program {
         imports_unsafe_submodule: false,
+        imported_web_capabilities: Default::default(),
         modules: vec![Module {
             name: ModPath(vec![main_mod]),
             types: vec![TypeDef::Enum(def)],
@@ -539,6 +541,7 @@ fn concrete_multi_field_enum_emits() -> DResult<()> {
     };
     let prog = Program {
         imports_unsafe_submodule: false,
+        imported_web_capabilities: Default::default(),
         modules: vec![Module {
             name: ModPath(vec![main_mod]),
             types: vec![TypeDef::Enum(def)],

@@ -61,6 +61,7 @@ fn wrap_program(interner: &mut Interner, op: BinOp, lhs: i64, rhs: i64) -> DResu
     let main_fn = wrap_main(interner, op, lhs, rhs)?;
     Ok(Program {
         imports_unsafe_submodule: false,
+        imported_web_capabilities: Default::default(),
         modules: vec![Module {
             name: ModPath(vec![main_mod]),
             types: vec![],
@@ -248,6 +249,7 @@ fn negate_program(interner: &mut Interner, value: i64) -> DResult<Program> {
     let main_fn = negate_main(interner, value)?;
     Ok(Program {
         imports_unsafe_submodule: false,
+        imported_web_capabilities: Default::default(),
         modules: vec![Module {
             name: ModPath(vec![main_mod]),
             types: vec![],
@@ -372,6 +374,7 @@ fn generic_double_program(interner: &mut Interner, arg: i64) -> DResult<Program>
 
     Ok(Program {
         imports_unsafe_submodule: false,
+        imported_web_capabilities: Default::default(),
         modules: vec![Module {
             name: ModPath(vec![main_mod]),
             types: vec![],
