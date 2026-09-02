@@ -248,8 +248,9 @@ impl CapabilitySet {
             // `js-port` discloses typed data exchange with page JS; like
             // `custom-element` it has no server-side runtime surface a jail could
             // isolate (the far side is the client page), so it is never a
-            // confinement-set member.
-            | Capability::JsPort => None,
+            // confinement-set member. The whole `JsPort(_)` web family is one arm:
+            // every web sub-axis runs in the client page, so none is a jail axis.
+            | Capability::JsPort(_) => None,
         }
     }
 
@@ -377,7 +378,7 @@ pub const fn is_runtime_unenforceable_for(cap: Capability, jail: JailForTarget) 
         | Capability::Random
         | Capability::Unsafe
         | Capability::CustomElement
-        | Capability::JsPort => false,
+        | Capability::JsPort(_) => false,
         // A runtime-enforced axis is unenforceable exactly where the target's
         // jail does NOT confine it.
         Capability::Network
@@ -1198,7 +1199,7 @@ mod tests {
                 | Capability::Random
                 | Capability::Unsafe
                 | Capability::CustomElement
-                | Capability::JsPort => {
+                | Capability::JsPort(_) => {
                     assert!(!unenf, "{cap:?}");
                 }
                 _ => assert!(unenf, "{cap:?} must be refused until a runtime jail exists"),
@@ -1228,7 +1229,7 @@ mod tests {
                 | Capability::Random
                 | Capability::Unsafe
                 | Capability::CustomElement
-                | Capability::JsPort => {
+                | Capability::JsPort(_) => {
                     assert!(!unenf, "{cap:?}");
                 }
                 _ => assert!(unenf, "{cap:?} stays refused on a refuse-gap target"),
@@ -1501,7 +1502,7 @@ mod tests {
                 | Capability::Random
                 | Capability::Unsafe
                 | Capability::CustomElement
-                | Capability::JsPort => {
+                | Capability::JsPort(_) => {
                     assert!(!unenf, "{cap:?}");
                 }
                 _ => assert!(unenf, "{cap:?} stays refused on an empty-set target"),

@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use std::process::Command;
 
 use ipe::verify_capabilities;
-use ipe_ir::Capability;
+use ipe_ir::{Capability, WebCapability};
 
 mod support;
 
@@ -491,18 +491,19 @@ fn js_port_project(tag: &str) -> Result<PathBuf, Box<dyn Error>> {
     Ok(dir)
 }
 
-/// A port program's inferred set is exactly `{js-port}`: declaring that set must
-/// verify. Now that a seal-legal port lowers to the live transport (rather than
-/// aborting at emission), the disclosure surfaces end-to-end.
+/// A hand-rolled port program's inferred set is exactly `{js-port:raw}`: the raw
+/// `Js.send`/`Js.subscribe` kernels disclose the uncharacterised `:raw` floor
+/// (no `Ipe.Browser.<Api>` import characterises the axis). Declaring that set
+/// must verify.
 #[test]
 fn a_port_program_discloses_js_port() -> TestResult {
     let dir = js_port_project("infer")?;
     let entry = dir.join("Main.ipe");
-    let declared = BTreeSet::from([Capability::JsPort]);
+    let declared = BTreeSet::from([Capability::JsPort(WebCapability::Raw)]);
     let r = verify_capabilities(&entry, &declared);
     assert!(
         r.is_ok(),
-        "a port program's inferred set is exactly {{js-port}}: {r:?}"
+        "a hand-rolled port program's inferred set is exactly {{js-port:raw}}: {r:?}"
     );
     let _ = std::fs::remove_dir_all(&dir);
     Ok(())
@@ -521,9 +522,9 @@ fn a_port_program_that_hides_js_port_is_rejected() -> TestResult {
         matches!(
             &r,
             Err(ipe::CliError::CapabilityMismatch { missing, .. })
-                if missing.contains(&"js-port")
+                if missing.contains(&"js-port:raw")
         ),
-        "a port program that omits `js-port` must be rejected as under-declared, got: {r:?}"
+        "a port program that omits `js-port:raw` must be rejected as under-declared, got: {r:?}"
     );
     let _ = std::fs::remove_dir_all(&dir);
     Ok(())

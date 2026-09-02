@@ -15,7 +15,7 @@
 #![forbid(unsafe_code)]
 
 mod capability;
-pub use capability::{Capability, ElementCapability, UnknownCapability};
+pub use capability::{Capability, ElementCapability, UnknownCapability, WebCapability};
 
 pub mod css_value_safety;
 pub use css_value_safety::css_value_is_safe;
@@ -9712,8 +9712,12 @@ impl StdlibKernel {
             // is a security-relevant declared-trust disclosure — the `js-port`
             // axis. Tagging these two kernels is the whole inference point: any
             // module whose reachable code binds a port discloses the axis, through
-            // the same SSOT the other axes use.
-            Self::JsSend | Self::JsSubscribe => Some(Capability::JsPort),
+            // the same SSOT the other axes use. The kernel cannot see which Web API
+            // the hand-written JS behind the port reaches, so it discloses the
+            // uncharacterised `:raw` floor — the reachability floor no port slips
+            // below. A characterised `Ipe.Browser.<Api>` import adds its specific
+            // web axis on top, import-derived (see the whole-program scan).
+            Self::JsSend | Self::JsSubscribe => Some(Capability::JsPort(WebCapability::Raw)),
             Self::TimeNow
             | Self::TimeSleep
             | Self::TimeUnixMillis
@@ -12589,7 +12593,7 @@ mod tests {
     /// and a pure kernel maps to `None`.
     #[test]
     fn effect_kernels_map_to_their_capability() {
-        use super::Capability;
+        use super::{Capability, WebCapability};
         assert_eq!(
             StdlibKernel::HttpGet.capability(),
             Some(Capability::Network)
@@ -12636,11 +12640,15 @@ mod tests {
             Some(Capability::CustomElement)
         );
         // `Js.send` / `Js.subscribe` exchange typed data with page JS → the
-        // `js-port` disclosure axis, inferred through this same SSOT.
-        assert_eq!(StdlibKernel::JsSend.capability(), Some(Capability::JsPort));
+        // `js-port:raw` uncharacterised-floor axis, inferred through this same SSOT
+        // (the kernel cannot see the hand-written JS's target Web API).
+        assert_eq!(
+            StdlibKernel::JsSend.capability(),
+            Some(Capability::JsPort(WebCapability::Raw))
+        );
         assert_eq!(
             StdlibKernel::JsSubscribe.capability(),
-            Some(Capability::JsPort)
+            Some(Capability::JsPort(WebCapability::Raw))
         );
     }
 

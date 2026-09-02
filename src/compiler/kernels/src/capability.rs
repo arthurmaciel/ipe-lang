@@ -73,7 +73,105 @@ pub enum Capability {
     /// Its presence discloses that the package exchanges data with page JS whose
     /// behaviour is the package author's declared trust. Deliberately NOT
     /// low-value: a JS-exchange surface must always surface to the consumer.
-    JsPort,
+    ///
+    /// The port carries a [`WebCapability`] sub-axis naming the specific Web API
+    /// the far side reaches ([`WebCapability::Clipboard`], …), or
+    /// [`WebCapability::Raw`] for an uncharacterised hand-rolled port. A bare
+    /// `js-port` with no web axis is unrepresentable — every port discloses a
+    /// concrete web capability, so one coarse grant can never re-authorise the
+    /// whole browser surface.
+    JsPort(WebCapability),
+}
+
+/// The closed per-Web-API axis a [`Capability::JsPort`] discloses.
+///
+/// A browser port reaches exactly one Web API; this names which. It is a
+/// separate axis from the OS-jail capabilities because a web capability runs in
+/// the client page, never in the server process — the whole `JsPort(_)` family
+/// is uniformly the "no server-jail surface" partition. The vocabulary is
+/// closed and compiler-owned: a new browser capability is one variant here plus
+/// its [`Self::as_str`] arm and its `Ipe.Browser.<Api>` module→axis table row.
+///
+/// [`Self::Raw`] is the explicit, grantable axis for a port whose reached Web API
+/// the compiler cannot characterise (a hand-rolled `Js.send`/`Js.subscribe` with
+/// author-written JS). Granting `js-port:raw` admits ONLY uncharacterised ports;
+/// it does not grant any characterised axis. This is the coarse-axis-as-bypass
+/// designed out: the coarsest grantable web axis reaches nothing specific.
+#[derive(
+    Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, Hash, serde::Serialize, serde::Deserialize,
+)]
+pub enum WebCapability {
+    /// `navigator.geolocation` — the device's location.
+    Geolocation,
+    /// `navigator.clipboard` — reading or writing the system clipboard.
+    Clipboard,
+    /// The Notification API — showing a system notification.
+    Notification,
+    /// `localStorage` / `sessionStorage` / IndexedDB — client-side persistence.
+    Storage,
+    /// `navigator.vibrate` — the vibration actuator.
+    Vibration,
+    /// `navigator.share` — the platform share sheet.
+    Share,
+    /// `navigator.getBattery` — battery status.
+    Battery,
+    /// `navigator.connection` — network-information hints.
+    NetworkInfo,
+    /// A port with no characterised Web API: a hand-rolled `Js.send`/`Js.subscribe`
+    /// reaching author-written JS. The reachability floor no port can slip below —
+    /// an uncharacterised port discloses `js-port:raw`, never nothing.
+    Raw,
+}
+
+impl WebCapability {
+    /// Every web axis, in declaration order — the closed vocabulary. Feeds the
+    /// flattened [`Capability::ALL`] and the round-trip drift guards.
+    pub const ALL: &'static [Self] = &[
+        Self::Geolocation,
+        Self::Clipboard,
+        Self::Notification,
+        Self::Storage,
+        Self::Vibration,
+        Self::Share,
+        Self::Battery,
+        Self::NetworkInfo,
+        Self::Raw,
+    ];
+
+    /// The stable lowercase wire suffix, the half after `js-port:` in the wire
+    /// name (`js-port:clipboard` → `"clipboard"`).
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Geolocation => "geolocation",
+            Self::Clipboard => "clipboard",
+            Self::Notification => "notification",
+            Self::Storage => "storage",
+            Self::Vibration => "vibration",
+            Self::Share => "share",
+            Self::Battery => "battery",
+            Self::NetworkInfo => "network-info",
+            Self::Raw => "raw",
+        }
+    }
+
+    /// Parse a web-axis wire suffix, the inverse of [`Self::as_str`]. An
+    /// unrecognised suffix is [`UnknownCapability`] carrying the full offending
+    /// `js-port:<suffix>` token — fail-closed, never a silent drop.
+    fn from_suffix(full: &str, suffix: &str) -> Result<Self, UnknownCapability> {
+        match suffix {
+            "geolocation" => Ok(Self::Geolocation),
+            "clipboard" => Ok(Self::Clipboard),
+            "notification" => Ok(Self::Notification),
+            "storage" => Ok(Self::Storage),
+            "vibration" => Ok(Self::Vibration),
+            "share" => Ok(Self::Share),
+            "battery" => Ok(Self::Battery),
+            "network-info" => Ok(Self::NetworkInfo),
+            "raw" => Ok(Self::Raw),
+            _ => Err(UnknownCapability(full.to_owned())),
+        }
+    }
 }
 
 impl Capability {
@@ -92,7 +190,17 @@ impl Capability {
         Self::FfiRaw,
         Self::Unsafe,
         Self::CustomElement,
-        Self::JsPort,
+        // The `JsPort(_)` sub-axis flattens to one entry per `WebCapability`, so
+        // `ALL` stays the closed, enumerable list every drift guard iterates.
+        Self::JsPort(WebCapability::Geolocation),
+        Self::JsPort(WebCapability::Clipboard),
+        Self::JsPort(WebCapability::Notification),
+        Self::JsPort(WebCapability::Storage),
+        Self::JsPort(WebCapability::Vibration),
+        Self::JsPort(WebCapability::Share),
+        Self::JsPort(WebCapability::Battery),
+        Self::JsPort(WebCapability::NetworkInfo),
+        Self::JsPort(WebCapability::Raw),
     ];
 
     /// Whether this capability carries no OS-isolatable resource surface — the
@@ -126,7 +234,19 @@ impl Capability {
             Self::FfiRaw => "ffi-raw",
             Self::Unsafe => "unsafe",
             Self::CustomElement => "custom-element",
-            Self::JsPort => "js-port",
+            // The dotted `js-port:<axis>` wire name, one static literal per web
+            // axis — bare `js-port` is not among them (it is unrepresentable).
+            Self::JsPort(w) => match w {
+                WebCapability::Geolocation => "js-port:geolocation",
+                WebCapability::Clipboard => "js-port:clipboard",
+                WebCapability::Notification => "js-port:notification",
+                WebCapability::Storage => "js-port:storage",
+                WebCapability::Vibration => "js-port:vibration",
+                WebCapability::Share => "js-port:share",
+                WebCapability::Battery => "js-port:battery",
+                WebCapability::NetworkInfo => "js-port:network-info",
+                WebCapability::Raw => "js-port:raw",
+            },
         }
     }
 }
@@ -151,8 +271,14 @@ impl std::str::FromStr for Capability {
             "ffi-raw" => Ok(Self::FfiRaw),
             "unsafe" => Ok(Self::Unsafe),
             "custom-element" => Ok(Self::CustomElement),
-            "js-port" => Ok(Self::JsPort),
-            other => Err(UnknownCapability(other.to_owned())),
+            // A web port is spelled `js-port:<axis>`; the suffix parses against the
+            // closed `WebCapability` vocabulary. A bare `js-port` (no suffix) has
+            // no arm here, so it falls through to `UnknownCapability` — the coarse
+            // grant-everything token a manifest cannot spell.
+            other => match other.strip_prefix("js-port:") {
+                Some(suffix) => WebCapability::from_suffix(other, suffix).map(Self::JsPort),
+                None => Err(UnknownCapability(other.to_owned())),
+            },
         }
     }
 }
@@ -169,7 +295,9 @@ impl std::fmt::Display for UnknownCapability {
             f,
             "unknown capability {:?} (expected one of: network, filesystem, \
              database, env, subprocess, clock, random, native-ffi, ffi-raw, unsafe, \
-             custom-element, js-port)",
+             custom-element, js-port:<axis> where <axis> is one of geolocation, \
+             clipboard, notification, storage, vibration, share, battery, \
+             network-info, raw)",
             self.0
         )
     }
@@ -247,18 +375,31 @@ impl ElementCapability {
 
 #[cfg(test)]
 mod tests {
-    use super::Capability;
+    use super::{Capability, WebCapability};
 
     #[test]
     fn all_lists_every_variant_once() {
         // A guard against `ALL` drifting from the enum: each name is distinct,
-        // and the count matches the declared axes.
+        // and the count matches the declared axes (11 flat + one `JsPort` per
+        // `WebCapability`, so the sub-axis is enumerated, not wildcarded away).
         let names: Vec<&str> = Capability::ALL.iter().map(|c| c.as_str()).collect();
-        assert_eq!(names.len(), 12);
+        assert_eq!(names.len(), 11 + WebCapability::ALL.len());
         let mut sorted = names.clone();
         sorted.sort_unstable();
         sorted.dedup();
         assert_eq!(sorted.len(), names.len(), "ALL has a duplicate");
+    }
+
+    #[test]
+    fn all_enumerates_every_web_axis_under_js_port() {
+        // MUST-FIX #3 drift guard: every `WebCapability` appears as a `JsPort(w)`
+        // member of `ALL` — no web axis can be silently dropped from the closed set.
+        for &w in WebCapability::ALL {
+            assert!(
+                Capability::ALL.contains(&Capability::JsPort(w)),
+                "ALL is missing js-port sub-axis {w:?}"
+            );
+        }
     }
 
     #[test]
@@ -274,14 +415,26 @@ mod tests {
         assert_eq!(Capability::FfiRaw.as_str(), "ffi-raw");
         assert_eq!(Capability::Unsafe.as_str(), "unsafe");
         assert_eq!(Capability::CustomElement.as_str(), "custom-element");
-        assert_eq!(Capability::JsPort.as_str(), "js-port");
+        assert_eq!(
+            Capability::JsPort(WebCapability::Clipboard).as_str(),
+            "js-port:clipboard"
+        );
+        assert_eq!(
+            Capability::JsPort(WebCapability::Raw).as_str(),
+            "js-port:raw"
+        );
     }
 
     #[test]
     fn from_str_round_trips_every_variant() {
-        // `from_str` is the exact inverse of `as_str` over the whole vocabulary.
+        // `from_str` is the exact inverse of `as_str` over the whole vocabulary,
+        // including every `js-port:<axis>` sub-axis (MUST-FIX #2 round-trip).
         use std::str::FromStr as _;
         for &cap in Capability::ALL {
+            assert_eq!(Capability::from_str(cap.as_str()), Ok(cap));
+        }
+        for &w in WebCapability::ALL {
+            let cap = Capability::JsPort(w);
             assert_eq!(Capability::from_str(cap.as_str()), Ok(cap));
         }
     }
@@ -291,6 +444,24 @@ mod tests {
         use std::str::FromStr as _;
         let err = Capability::from_str("filesytem").unwrap_err();
         assert_eq!(err, super::UnknownCapability("filesytem".to_owned()));
+    }
+
+    #[test]
+    fn from_str_hard_rejects_bare_js_port() {
+        // MUST-FIX #2: a bare `js-port` (no `:<axis>` suffix) is NOT a member — a
+        // manifest cannot spell the coarse grant-everything token.
+        use std::str::FromStr as _;
+        let err = Capability::from_str("js-port").unwrap_err();
+        assert_eq!(err, super::UnknownCapability("js-port".to_owned()));
+    }
+
+    #[test]
+    fn from_str_rejects_an_unknown_web_axis_suffix() {
+        // An unrecognised `js-port:<axis>` suffix fails closed, carrying the full
+        // offending token, exactly as any other typo does.
+        use std::str::FromStr as _;
+        let err = Capability::from_str("js-port:camera").unwrap_err();
+        assert_eq!(err, super::UnknownCapability("js-port:camera".to_owned()));
     }
 
     #[test]
@@ -314,8 +485,11 @@ mod tests {
         // grouped with the clock/random/unsafe noise the low-value flag marks.
         assert!(!Capability::CustomElement.is_low_value());
         // `js-port` is the same class of declared-trust JS-exchange disclosure: it
-        // must always surface to the consumer, never be grouped as low-value.
-        assert!(!Capability::JsPort.is_low_value());
+        // must always surface to the consumer, never be grouped as low-value. Every
+        // web sub-axis (including `:raw`) shares that posture.
+        for &w in WebCapability::ALL {
+            assert!(!Capability::JsPort(w).is_low_value());
+        }
     }
 
     #[test]
