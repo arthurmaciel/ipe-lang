@@ -3067,6 +3067,12 @@ fn emit_tea_call(
         // needed — `js_send`/`js_subscribe` bound the handler `Send`-only, moving
         // it into one detached task, the same shape `sub_subscribe_topic` uses.
         KernelFn::JsSend | KernelFn::JsSubscribe => Ok(None),
+        // `Js.request : a -> Decoder b -> Task b`  →  `js_request(<payload>, <decoder>)`
+        // The correlated one-shot kernel takes its args in the runtime fn's order, so
+        // the default N-arg emit path renders the call verbatim. Rust generic inference
+        // resolves the payload's concrete seal type and the decoder's `Decoder<IpeError, T>`
+        // at the call site; no boxing or re-wrap is needed.
+        KernelFn::JsRequest => Ok(None),
         // (`Ipe.PubSub.publish` / `publishNoEcho` are `class = Web`, Task-shaped —
         // emitted in `emit_ui_call`, not here. They are not TEA-loop kernels.)
         // ── Ipe.WebSocket: onOpen / onMessage / onClose / onError ───────────
