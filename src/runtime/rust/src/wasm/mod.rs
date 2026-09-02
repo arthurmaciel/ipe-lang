@@ -216,6 +216,12 @@ thread_local! {
     /// (a fresh page load always resets it), so two `wasm_app`/`wasm::mount`
     /// calls on the same page (e.g. multiple embeds) never collide.
     static NEXT_INSTANCE_ID: Cell<u64> = const { Cell::new(1) };
+
+    /// One-time guard for the `Ipe.Js` port inbound seam. The seam is a single
+    /// process-global `window.__ipePortSend` slot every mount instance shares
+    /// (like the outbound `window.ipeOnReceive` handler); installing it once per
+    /// tab avoids leaking a fresh closure on every embed.
+    static PORT_SEAM_INSTALLED: Cell<bool> = const { Cell::new(false) };
 }
 fn next_instance_origin() -> String {
     NEXT_INSTANCE_ID.with(|c| {
@@ -223,6 +229,48 @@ fn next_instance_origin() -> String {
         c.set(id + 1);
         format!("wasm-instance-{id}")
     })
+}
+
+/// Install the `Ipe.Js` port inbound seam once per tab.
+///
+/// The page glue's `window.ipe.send(value)` funnels an inbound JSON string to
+/// `window.__ipePortSend`; this installs that slot as a closure that hands the
+/// string to `js_port::push_inbound`, which fans it out to every active
+/// `Js.subscribe` drain. Each drain decodes the string fail-closed through the
+/// bounded seal decoder — a malformed or oversized frame is dropped whole, never
+/// a trap. Idempotent: the closure is installed at most once and lives for the
+/// tab's lifetime.
+fn install_port_inbound_seam() {
+    if PORT_SEAM_INSTALLED.with(Cell::get) {
+        return;
+    }
+    let Some(window) = web_sys::window() else {
+        return;
+    };
+    let seam = Closure::<dyn Fn(JsValue)>::new(move |raw: JsValue| {
+        // The page glue always stringifies before calling this slot; a non-string
+        // value is a misuse of the seam and is dropped rather than trapping.
+        if let Some(s) = raw.as_string() {
+            crate::js_port::push_inbound(&s);
+        }
+    });
+    if js_sys::Reflect::set(
+        &window,
+        &JsValue::from_str("__ipePortSend"),
+        seam.as_ref().unchecked_ref(),
+    )
+    .is_err()
+    {
+        // A frozen `window` (rare, e.g. a hardened embed) leaves the seam
+        // uninstalled; inbound port frames are then dropped rather than trapping.
+        console_warn(
+            "Ipe.Js port inbound seam could not be installed (window.__ipePortSend unset)",
+        );
+        return;
+    }
+    // The seam lives for the whole tab lifetime.
+    seam.forget();
+    PORT_SEAM_INSTALLED.with(|c| c.set(true));
 }
 
 /// The retained application state driving one mounted TEA app.
@@ -348,6 +396,9 @@ where
     // The first paint went through `set_inner_html`, not the attribute-patch
     // path, so deliver each `Ui.widget`'s decoded down-state PROPERTY once here.
     widget::sync_widget_properties(&document, &app.tree.borrow());
+    // Wire the `Ipe.Js` port inbound seam before the first `resync` spawns any
+    // `Js.subscribe` drain, so no early page-JS frame is lost.
+    install_port_inbound_seam();
     run_cmd(&app, cmd0);
     resync_subscriptions(&app);
     Ok(())
@@ -445,6 +496,7 @@ where
     widget::sync_widget_properties(&document, &app.tree.borrow());
     // No cmd0: in hydrate mode there is no `init`-produced command to run.
     // The first user interaction triggers the normal update→diff→patch cycle.
+    install_port_inbound_seam();
     resync_subscriptions(&app);
     Ok(())
 }
@@ -555,6 +607,7 @@ where
     // First paint went through `set_inner_html`; deliver each widget's decoded
     // down-state PROPERTY once here (later changes ride the diff/patch route).
     widget::sync_widget_properties(&document, &app.tree.borrow());
+    install_port_inbound_seam();
     run_cmd(&app, cmd0);
     resync_subscriptions(&app);
     Ok(())

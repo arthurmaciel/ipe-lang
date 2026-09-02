@@ -197,6 +197,30 @@ mod tests {
             .expect("Cmd.none is wasm-available and must pass the Layer-1 gate");
     }
 
+    /// The typed `Ipe.Js` port (`Js.send` / `Js.subscribe`) is wasm-available:
+    /// its `js_port` wasm arm posts each sealed frame to `window.ipeOnReceive`
+    /// and drains inbound frames the page feeds through the same fail-closed seal
+    /// decoder, so a client SPA using a port must pass the Layer-1 gate.
+    #[test]
+    fn js_port_kernels_pass() {
+        for (kernel, module, name) in [
+            (StdlibKernel::JsSend, "Ipe.Js", "send"),
+            (StdlibKernel::JsSubscribe, "Ipe.Js", "subscribe"),
+        ] {
+            let mut interner = Interner::new();
+            let m = intern(&mut interner, module);
+            let n = intern(&mut interner, name);
+            let body = Expr_::VarKernel {
+                id: Some(kernel),
+                module: m,
+                name: n,
+            };
+            let module = single_def_module(&mut interner, body);
+            check_wasm_client(&module, &interner)
+                .expect("Js.send/Js.subscribe are wasm-available and must pass the Layer-1 gate");
+        }
+    }
+
     /// A foreign FFI call is always denied under `--target wasm` — the client's
     /// only host surface is the fixed web-sys allowlist, not arbitrary crates.
     #[test]
