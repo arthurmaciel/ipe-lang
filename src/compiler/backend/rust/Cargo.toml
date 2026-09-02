@@ -14,6 +14,11 @@ ipe_backend = { path = ".." }
 ipe_diagnostics = { path = "../../diagnostics" }
 # Model schema tag (H24) — same pin as ipe_watch/ipec/runtime.
 sha2 = "0.10"
+# The exact float-to-shortest-decimal formatter `serde_json` uses internally
+# (its `write_f64` calls `ryu::Buffer::format_finite`). Using it directly makes a
+# baked `Float` template default byte-identical to the runtime's
+# `#[derive(Serialize)]` form — single source of truth for the float spelling.
+ryu = "1"
 
 [dev-dependencies]
 # The const-fold conformance test calls the REAL runtime string builders

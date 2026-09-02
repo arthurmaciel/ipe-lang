@@ -3761,25 +3761,50 @@ fn emit_html_template(ctx: &EmitCtx, expr: &Expr) -> Option<String> {
     ))
 }
 
-/// Emit a provably-static `Ipe.Ui` subtree as a hoisted template read, or `None`
+/// Emit a mostly-static `Ipe.Ui` subtree as a hoisted template read, or `None`
 /// to fall through to the ordinary inline emit — the `Ipe.Ui` analogue of
 /// [`emit_html_template`].
 ///
-/// Fires ONLY when every gate holds: a web shape (`uses_web`), the subtree is a
-/// static `Ipe.Ui` element node ([`crate::emit_ui_template::ui_template_of_expr`]),
-/// and hoisting is armed ([`EmitCtx::hoist_style_literal`] returns a slot — which
-/// it does not under the flag-off / production emit, nor inside a `move` closure
-/// or a discard probe). Under any of those the function returns `None` and the
-/// subtree emits inline, byte-for-byte as before — so release / `ipe build`
-/// output is unchanged (golden-verified) and dev == prod at the emit level (the
-/// baked default IS the serialized template).
+/// Fires ONLY when every gate holds: a web shape (`uses_web`), the subtree
+/// partitions ([`crate::emit_ui_template::ui_template_of_expr_holes`]), and
+/// hoisting is armed ([`EmitCtx::hoist_style_literal`] returns a slot — which it
+/// does not under the flag-off / production emit, nor inside a `move` closure or a
+/// discard probe). Under any of those the function returns `None` and the subtree
+/// emits inline, byte-for-byte as before — so release / `ipe build` output is
+/// unchanged (golden-verified) and dev == prod at the emit level (the baked
+/// default IS the serialized template).
+///
+/// ## Holes
+///
+/// A fully-static subtree emits the shipped `materialize_ui_template_str` read.
+/// A subtree with `Model`-derived **holes** (a value leaf, an `if` / `case`
+/// control-flow result, or a `List.map` comprehension) emits
+/// `materialize_ui_template_str_with_holes(slot, vec![<element fills>], vec![<children fills>])`:
+/// the static skeleton (with numbered hole markers) rides the hoisted slot and
+/// hot-swaps on a structural edit, while each hole's fill is emitted here as
+/// ordinary compiled code and stays compiled.
+///
+/// Control-flow branches templatize by composition: a fill is emitted through the
+/// normal [`emit_expr_at`], so a static `Ipe.Ui` branch of the compiled `if`/`case`
+/// hits THIS emitter recursively and hoists into its own slot — editing that
+/// branch's static structure is itself a template patch, while the condition stays
+/// compiled. The whole-template JSON (markers included) rides one baked-defaults
+/// string, so the appearance classifier needs no change: a skeleton edit moves
+/// only that string (hot-swap), and a change to the hole COUNT moves the compiled
+/// `vec![…]` (recompile) — conservative by construction.
 ///
 /// The materialized read returns an `Element<M>` (not `Html`), exactly what an
 /// inline `ui_node_(…)` yields, so it drops into the surrounding element position
 /// unchanged; `M` is inferred from that position.
-fn emit_ui_template(ctx: &EmitCtx, expr: &Expr) -> Option<String> {
+fn emit_ui_template(
+    ctx: &EmitCtx,
+    expr: &Expr,
+    indent: usize,
+    child: u16,
+    generics: GenericScope,
+) -> DResult<Option<String>> {
     if !ctx.uses_web {
-        return None;
+        return Ok(None);
     }
     // Accept a direct element-node kernel call (`Ui.node` / `Ui.taggedNode`),
     // or a structural wrapper func whose id is registered in the wrapper table.
@@ -3788,19 +3813,50 @@ fn emit_ui_template(ctx: &EmitCtx, expr: &Expr) -> Option<String> {
     // emit unchanged. A text/none/nested node inside a templated element is
     // still absorbed into that element's template.
     let Expr::Call { callee, .. } = expr else {
-        return None;
+        return Ok(None);
     };
     match callee {
         Callee::Kernel(KernelFn::UiNode | KernelFn::UiTaggedNode) => {}
         Callee::Func(id) if ctx.ui_structural_wrappers.contains_key(id) => {}
-        _ => return None,
+        _ => return Ok(None),
     }
-    let template =
-        crate::emit_ui_template::ui_template_of_expr(expr, Some(&ctx.ui_structural_wrappers))?;
-    let slot = ctx.hoist_style_literal(&template.to_json())?;
-    Some(format!(
-        "ipe_runtime::ui::template::materialize_ui_template_str(__ipe_lit.get({slot}))"
-    ))
+    // The mostly-static partition: a fully-static subtree yields an empty hole
+    // set (the shipped path); a subtree with `Model`-derived value / control-flow
+    // / `List.map` holes yields hole markers plus the compiled fills. `None` keeps
+    // the subtree compiled (conservative).
+    let Some(partition) =
+        crate::emit_ui_template::ui_template_of_expr_holes(expr, Some(&ctx.ui_structural_wrappers))
+    else {
+        return Ok(None);
+    };
+    let Some(slot) = ctx.hoist_style_literal(&partition.template.to_json()) else {
+        return Ok(None);
+    };
+    // No holes: emit the shipped fully-static read — byte-identical to before, so
+    // existing goldens/SEALs are unperturbed for static subtrees.
+    if partition.holes.is_empty() {
+        return Ok(Some(format!(
+            "ipe_runtime::ui::template::materialize_ui_template_str(__ipe_lit.get({slot}))"
+        )));
+    }
+    // Holes present: compile each fill in the hole's element/children position and
+    // pass the two ordered fill vecs to the hole-aware materializer. The static
+    // skeleton rides the hoisted slot (hot-swappable); the fills stay compiled.
+    let mut element_fills: Vec<String> = Vec::new();
+    let mut children_fills: Vec<String> = Vec::new();
+    for hole in &partition.holes {
+        let code = emit_expr_at(ctx, &hole.expr, indent, child, generics)?;
+        match hole.kind {
+            crate::emit_ui_template::HoleKind::Element => element_fills.push(code),
+            crate::emit_ui_template::HoleKind::Children => children_fills.push(code),
+        }
+    }
+    Ok(Some(format!(
+        "ipe_runtime::ui::template::materialize_ui_template_str_with_holes(\
+         __ipe_lit.get({slot}), vec![{}], vec![{}])",
+        element_fills.join(", "),
+        children_fills.join(", "),
+    )))
 }
 
 /// Returns `None` for any kernel that is not a `Ui` / `Web` / `Terminal` /
@@ -5628,7 +5684,7 @@ pub fn emit_expr_at(
             // no-op `None` and falls through immediately.
             if let Callee::Func(id) = callee
                 && ctx.ui_structural_wrappers.contains_key(id)
-                && let Some(result) = emit_ui_template(ctx, expr)
+                && let Some(result) = emit_ui_template(ctx, expr, indent, child, generics)?
             {
                 return Ok(result);
             }
@@ -5725,7 +5781,7 @@ pub fn emit_expr_at(
                 // zero-compile data patch. Off (release / `ipe build`) it never
                 // fires — the subtree falls through to the inline emit below and the
                 // output is byte-identical. `None` for any non-static subtree.
-                if let Some(result) = emit_ui_template(ctx, expr) {
+                if let Some(result) = emit_ui_template(ctx, expr, indent, child, generics)? {
                     return Ok(result);
                 }
                 // Ipe.Ui / Ipe.Html / Ipe.Web / Ipe.Tui / Ipe.WebView kernels.
