@@ -1,7 +1,12 @@
 module Package exposing (package)
 
+import Ipe.Package exposing (..)
 
+
+package : Package
 package =
-    Package.named "wasm-websocket"
-        |> Package.version "0.1.0"
-        |> Package.wasm (Wasm.spa)
+    { name = "wasm-websocket"
+    , version = "0.1.0"
+    , wasm =
+        On { mode = Spa }
+    }

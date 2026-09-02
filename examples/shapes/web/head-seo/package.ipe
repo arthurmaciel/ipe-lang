@@ -1,6 +1,10 @@
 module Package exposing (package)
 
+import Ipe.Package exposing (..)
 
+
+package : Package
 package =
-    Package.named "head-seo"
-        |> Package.version "0.1.0"
+    { name = "head-seo"
+    , version = "0.1.0"
+    }

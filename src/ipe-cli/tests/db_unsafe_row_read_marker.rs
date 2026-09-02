@@ -41,7 +41,7 @@ fn write_project(test_name: &str, main_ipe: &str) -> PathBuf {
     fs::write(src.join("Main.ipe"), main_ipe).expect("write Main.ipe");
     fs::write(
         dir.join("package.ipe"),
-        "module Package exposing (package)\n\n\npackage =\n    Package.named \"dbrowmarker\"\n",
+        "module Package exposing (package)\n\n\npackage =\n    { name = \"dbrowmarker\" }\n",
     )
     .expect("write package.ipe");
     dir

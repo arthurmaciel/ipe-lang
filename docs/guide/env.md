@@ -34,10 +34,12 @@ The example under
 web app. Its `package.ipe` allowlists exactly one name:
 
 ```ipe
+package : Package
 package =
-    Package.named "wasm-env-public"
-        |> Package.version "0.1.0"
-        |> Package.wasm (Wasm.spa |> Wasm.publicEnv [ "API_BASE_URL" ])
+    { name = "wasm-env-public"
+    , version = "0.1.0"
+    , wasm = On { mode = Spa, publicEnv = [ "API_BASE_URL" ] }
+    }
 ```
 
 `init` reads the allowlisted name — which resolves — and also probes a

@@ -1,6 +1,10 @@
 module Package exposing (package)
 
+import Ipe.Package exposing (..)
 
+
+package : Package
 package =
-    Package.named "path-safe-join"
-        |> Package.version "0.1.0"
+    { name = "path-safe-join"
+    , version = "0.1.0"
+    }

@@ -152,10 +152,12 @@ these fields. Precedence: **process env > `.env` > `package.ipe`**. Secrets neve
 in `package.ipe` — auth secret from `IPE_AUTH_TOKEN_SECRET` (≥32 bytes).
 
 ```elm
+package : Package
 package =
-    Package.named "<project>"
-        |> Package.version "0.1.0"
-        |> Package.database Package.sqlite   -- sqlite (default) | postgres
+    { name = "<project>"
+    , version = "0.1.0"
+    , build = { database = Sqlite }   -- Sqlite (default) | Postgres
+    }
 ```
 
 `DATABASE_URL` and other runtime settings come from process env / `.env`, never
@@ -1046,25 +1048,28 @@ error — only the reachable subset matters, so a shared `view` module used by
 both a server SSR path and a wasm client type-checks against both targets
 without duplication.
 
-**`Package.wasm` in `package.ipe`**:
+**The `wasm` field in `package.ipe`**:
 
 ```elm
+package : Package
 package =
-    Package.named "<project>"
-        |> Package.wasm
-            (Wasm.spa                          -- Wasm.spa | Wasm.hydrate (absent = native)
-                |> Wasm.entry "src/Client.ipe"  -- client entry file (defaults to the build's own entry)
-                |> Wasm.mount "#app"            -- SPA mount selector
-                |> Wasm.publicEnv [ "API_BASE_URL" ]  -- default-deny allowlist; rejects IPE_*/secret-pattern names
-                |> Wasm.optLevel "z"
-            )
+    { name = "<project>"
+    , wasm =
+        On                                     -- Off (absent = native) | On { … }
+            { mode = Spa                        -- Spa | Hydrate
+            , entry = "src/Client.ipe"          -- client entry file (defaults to the build's own entry)
+            , mount = "#app"                    -- SPA mount selector
+            , publicEnv = [ "API_BASE_URL" ]    -- default-deny allowlist; rejects IPE_*/secret-pattern names
+            , optLevel = "z"
+            }
+    }
 ```
 
-When the mode is `Wasm.spa` or `Wasm.hydrate`, the compiler infers the wasm
+When `wasm = On { mode = Spa }` (or `Hydrate`), the compiler infers the wasm
 target: `ipe build` is equivalent to `ipe build --target wasm` without an
 explicit flag. Precedence (highest first): `--target wasm` CLI flag >
-`IPE_TARGET=wasm` env > the manifest's `Package.wasm` mode > default native. An
-absent `Package.wasm` stage keeps the native default.
+`IPE_TARGET=wasm` env > the manifest's `wasm` mode > default native. An
+absent `wasm` field (or `wasm = Off`) keeps the native default.
 
 `Wasm.publicEnv` is a default-deny allowlist gated by a secret-name denylist
 (`*_SECRET`/`*_TOKEN`/`*_KEY`/`*_PASSWORD`/`DATABASE_URL`/the `IPE_*`

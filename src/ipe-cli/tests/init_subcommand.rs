@@ -39,7 +39,7 @@ fn init_scaffolds_project_files() {
 
     let manifest = fs::read_to_string(target.join("package.ipe")).unwrap_or_default();
     assert!(
-        manifest.contains("Package.named \"my-app\""),
+        manifest.contains("name = \"my-app\""),
         "package.ipe must carry the project name, got:\n{manifest}"
     );
 

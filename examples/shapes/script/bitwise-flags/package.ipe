@@ -1,6 +1,10 @@
 module Package exposing (package)
 
+import Ipe.Package exposing (..)
 
+
+package : Package
 package =
-    Package.named "bitwise-flags"
-        |> Package.version "0.1.0"
+    { name = "bitwise-flags"
+    , version = "0.1.0"
+    }

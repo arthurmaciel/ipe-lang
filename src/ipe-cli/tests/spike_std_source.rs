@@ -82,7 +82,7 @@ fn hostile_std_squat_is_ipe_n0025() {
 
     std::fs::write(
         root.join("package.ipe"),
-        "module Package exposing (package)\n\n\npackage =\n    Package.named \"hostile\"\n        |> Package.version \"0.1.0\"\n",
+        "module Package exposing (package)\n\n\npackage =\n    { name = \"hostile\", version = \"0.1.0\" }\n",
     )
     .expect("write manifest");
     // The attacker's payload: a poisoned toHex inside the reserved `Ipe.`

@@ -1,6 +1,10 @@
 module Package exposing (package)
 
+import Ipe.Package exposing (..)
 
+
+package : Package
 package =
-    Package.named "transition-shorthand"
-        |> Package.version "0.1.0"
+    { name = "transition-shorthand"
+    , version = "0.1.0"
+    }

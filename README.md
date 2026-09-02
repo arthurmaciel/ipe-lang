@@ -149,20 +149,23 @@ Run `ipe capabilities --help` for the full model.
 <!--
 ## Dependencies
 
-A project declares its dependencies in `package.ipe`. Three builders, each optional:
+A project declares its dependencies in `package.ipe` — an inert typed record
+bound to `package : Package`. Each field is optional:
 
 ```elm
+package : Package
 package =
-    Package.named "my-app"
-        |> Package.dependencies              -- Ipê packages
-            [ Package.dep "http" "^1.2"      -- from the package index, by semver requirement
-            , Package.depGitRev "mylib" "https://example.com/mylib.git" "abc123"
-            , Package.depPath "local" "../local"
-            ]
-        |> Package.rustDependencies          -- Rust crates, bound as a foreign-function interface
-            [ Package.rustDep "uuid" "1.10" ]
-        |> Package.declares                  -- the capabilities you declare the program exercises
-            [ Capability.network, Capability.clock ]
+    { name = "my-app"
+    , dependencies =                             -- Ipê packages
+        [ dep "http" "^1.2"                       -- from the package index, by semver requirement
+        , depGitRev "mylib" "https://example.com/mylib.git" "abc123"
+        , depPath "local" "../local"
+        ]
+    , rustDependencies =                         -- Rust crates, bound as a foreign-function interface
+        [ rustDep "uuid" "1.10" ]
+    , capabilities =                             -- the capabilities you declare the program exercises
+        { declares = [ Network, Clock ] }
+    }
 ```
 
 **Rust crates** are managed by the `ipe rust` command group:
@@ -170,7 +173,7 @@ package =
 ```
 $ ipe rust add uuid@1.10        # inspect and cache a crate
 $ ipe rust remove uuid          # drop it
-$ ipe rust install              # (re)inspect every Package.rustDependencies crate
+$ ipe rust install              # (re)inspect every rustDependencies crate
 ```
 
 Each crate is inspected inside a sandbox before it is trusted, and its
