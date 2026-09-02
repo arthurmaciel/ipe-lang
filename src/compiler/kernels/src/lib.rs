@@ -361,8 +361,8 @@ pub enum BuiltinTag {
     /// the interned `Attribute` name with [`Self::UiAttribute`] but is
     /// MODULE-QUALIFIED with the `Html` constructor symbol, so `ir_type_from_ty`
     /// disambiguation resolves it to the `Html` attribute variant that every
-    /// `Ipe.Html` node kernel takes. The one tag whose interpreted `Con` carries
-    /// a non-empty module path (see `builtin_con_module`).
+    /// `Ipe.Html` node kernel takes. Its interpreted `Con` carries a non-empty
+    /// module path (see `builtin_con_module`).
     HtmlAttribute,
     /// `Element` — the `Ipe.Ui` element constructor `Element msg`, applied to the
     /// message type.
@@ -403,8 +403,10 @@ pub enum BuiltinTag {
     /// `WebRoute` — the route descriptor `WebRoute page`, applied to the page
     /// type. Carried by the `routes` field of the `Web.app` cfg record.
     WebRoute,
-    /// `EmailProvider` — the opaque provider handle `Email.send` takes before the
-    /// `EmailMessage`. Nullary.
+    /// `EmailProvider` — the provider handle `Email.send` takes before the
+    /// `EmailMessage`. Nullary, and module-qualified with its `Ipe.Email` home
+    /// (see `builtin_con_module`) so a point-free `send` reference lowers to the
+    /// runtime-backed enum instead of an unhomed unknown-builtin `Con`.
     EmailProvider,
     // ── Shape opaque app-leaf type constructors ──────────────────────────────
     /// `WebApp` — opaque app handle returned by `Web.app` / `Web.appRouted` /
