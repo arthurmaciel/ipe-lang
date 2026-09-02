@@ -12,6 +12,7 @@ pub mod columns_env;
 pub mod columns_runtime;
 pub mod columns_static;
 pub mod contract;
+pub mod diagnostic_surface;
 pub mod env_surface;
 pub mod matrix;
 pub mod probe;
