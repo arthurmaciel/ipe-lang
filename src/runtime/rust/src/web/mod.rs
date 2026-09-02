@@ -63,6 +63,7 @@ pub mod pubsub;
 // toggle, a setter) reduces to a `Transition` datum run by the compiled
 // `apply_transition` — one update semantics, dev == prod (see the module doc).
 pub mod transition;
+pub use transition::{Transition, apply_transition, apply_transition_hot};
 // Explicit re-export of ONLY the codegen-referenced kernel functions. A glob
 // (`pub use pubsub::*`) leaked the broker's `Event<T>` into this namespace,
 // colliding with the HTML `Event` enum re-exported below (`pub use …html::*`)
@@ -2658,6 +2659,83 @@ mod handlers {
         StatusCode::OK.into_response()
     }
 
+    // ── POST /_ipe/hot-transition (dev-only) ──────────────────────────
+    // The running server's inbound leg of the `update`-arm transition-hot-swap
+    // live socket. The `ipe watch` process computes a transition patch for an
+    // edited data-describable arm and POSTs it here; the handler registers the
+    // replacement `Transition` under the arm's baked-datum signature, so the next
+    // dispatch of that arm applies the edited transition through the SAME compiled
+    // `apply_transition_hot` — no recompile, Model preserved.
+    //
+    // Guarded EXACTLY like `/_ipe/hot-appearance`, three ways, so it is inert in
+    // production:
+    //   1. Route MOUNTED only under `dev_overlay_active()` (flag on AND
+    //      non-production) — absent from a production build.
+    //   2. A per-process control token (`IPE_WATCH_HOT_TOKEN`) must match the
+    //      `X-Ipe-Hot-Token` header (constant-time), so a LAN peer without the
+    //      token cannot drive a transition.
+    //   3. The body carries only two inert JSON strings — the old (key) datum and
+    //      the new (replacement) datum. The replacement is STRICT-decoded into a
+    //      `Transition` (a field name + a closed op + an inert source); anything
+    //      that is not a well-formed `Transition` is rejected. The registered
+    //      transition can drive nothing but the bounded, fail-closed
+    //      `apply_transition`, which refuses any change it cannot prove applies.
+    pub(super) async fn hot_transition_handler<Model, Msg, FInit, FUpdate, FView, FSubs>(
+        State(_st): State<WebState<Model, Msg, FInit, FUpdate, FView, FSubs>>,
+        headers: axum::http::HeaderMap,
+        body: axum::body::Bytes,
+    ) -> Response
+    where
+        Model: Clone + Send + 'static,
+        Msg: Clone + Send + 'static,
+        FInit: Send + Sync + 'static,
+        FUpdate: Send + Sync + 'static,
+        FView: Send + Sync + 'static,
+        FSubs: Send + Sync + 'static,
+    {
+        // Defence in depth: re-check the dev gate even though the route is only
+        // mounted under it, so the handler is inert if ever reached otherwise.
+        if !literal_table::dev_overlay_active() {
+            return StatusCode::NOT_FOUND.into_response();
+        }
+        // Per-process control token — same mechanism as `/_ipe/hot-appearance`.
+        // Absent expected token → fail closed (endpoint unusable without a token).
+        let expected = crate::system::read_env_var("IPE_WATCH_HOT_TOKEN")
+            .ok()
+            .filter(|t| !t.is_empty());
+        let presented = headers
+            .get("x-ipe-hot-token")
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_owned);
+        match (expected, presented) {
+            (Some(exp), Some(got)) if crate::ct_eq::ct_bytes_eq(exp.as_bytes(), got.as_bytes()) => {
+            }
+            _ => return StatusCode::FORBIDDEN.into_response(),
+        }
+
+        #[derive(serde::Deserialize)]
+        struct HotTransitionBody {
+            /// The arm's PREVIOUS baked datum JSON — the overlay key the running
+            /// app's compiled arm matches (it still bakes this string).
+            old_json: String,
+            /// The edited transition's JSON — strict-decoded into a `Transition`.
+            new_json: String,
+        }
+        let parsed: HotTransitionBody = match serde_json::from_slice(&body) {
+            Ok(b) => b,
+            Err(_) => return (StatusCode::BAD_REQUEST, "bad body").into_response(),
+        };
+        // Parse, don't validate: the replacement must be a well-formed
+        // `Transition` or the request is rejected. A registered transition can
+        // therefore drive nothing but the bounded `apply_transition`.
+        let replacement: transition::Transition = match serde_json::from_str(&parsed.new_json) {
+            Ok(t) => t,
+            Err(_) => return (StatusCode::BAD_REQUEST, "bad transition").into_response(),
+        };
+        transition::register_dev_transition(&parsed.old_json, replacement);
+        StatusCode::OK.into_response()
+    }
+
     // ── POST /_ipe/watch/status (dev-only) ───────────────────────────
     // Inbound build-status notification from `ipe watch`. Guarded two ways
     // so it is inert in production:
@@ -3121,6 +3199,20 @@ where
         router.route(
             "/_ipe/hot-appearance",
             post(handlers::hot_appearance_handler::<Model, Msg, FInit, FUpdate, FView, FSubs>)
+                .layer(axum::extract::DefaultBodyLimit::max(web_max_body_bytes())),
+        )
+    } else {
+        router
+    };
+    // Dev-only `update`-arm transition-hot-swap control leg. Guarded IDENTICALLY
+    // to `/_ipe/hot-appearance`: MOUNTED only under the same dev overlay gate
+    // (flag on AND non-production), token-gated per request, and bounded. A
+    // transition patch mutates the server-held Model, so it flows through the
+    // total, fail-closed `apply_transition` alone — never arbitrary logic.
+    let router = if literal_table::dev_overlay_active() {
+        router.route(
+            "/_ipe/hot-transition",
+            post(handlers::hot_transition_handler::<Model, Msg, FInit, FUpdate, FView, FSubs>)
                 .layer(axum::extract::DefaultBodyLimit::max(web_max_body_bytes())),
         )
     } else {
@@ -5032,6 +5124,207 @@ mod watch_status_handler_tests {
         );
 
         locked_remove_var("IPE_WATCH_HOT_TOKEN");
+    }
+}
+
+#[cfg(test)]
+mod hot_transition_handler_tests {
+    //! Regression-locks the `POST /_ipe/hot-transition` trust boundary — the
+    //! dev-only leg that mutates the server-held Model from an untrusted dev
+    //! channel. Every refusal path (dev gate, token, malformed body, malformed
+    //! transition) and the accept path (registers a decoded `Transition`) is
+    //! covered without weakening any gate.
+
+    use super::*;
+    use crate::system::{locked_remove_var, locked_set_var};
+    use crate::web::literal_table::{overlay_test_lock, set_dev_overlay_active_for_test};
+    use crate::web::store::MemoryStore;
+    use crate::web::transition;
+    use axum::Router;
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode};
+    use axum::routing::post;
+    use std::time::Duration;
+    use tower::ServiceExt; // oneshot
+
+    type TestModel = ();
+    type TestMsg = ();
+    type TestStore = MemoryStore<TestModel, TestMsg>;
+    type TestWebState = WebState<
+        TestModel,
+        TestMsg,
+        fn() -> (),
+        fn(TestMsg, TestModel) -> (TestModel, IpeCmd<TestMsg>),
+        fn(TestModel) -> Html<TestMsg>,
+        fn(TestModel) -> IpeSub<TestMsg>,
+    >;
+
+    fn test_init() {}
+    fn test_update(_msg: TestMsg, model: TestModel) -> (TestModel, IpeCmd<TestMsg>) {
+        (model, IpeCmd::None)
+    }
+    fn test_view(_model: TestModel) -> Html<TestMsg> {
+        Html::HText(String::new())
+    }
+    fn test_subs(_model: TestModel) -> IpeSub<TestMsg> {
+        IpeSub::None
+    }
+    fn test_route_resolver(m: TestModel, _path: &str) -> TestModel {
+        m
+    }
+    fn test_param_resolver(_path: &str) -> crate::dict::IpeDict<String> {
+        crate::dict::dict_empty()
+    }
+    fn test_route_matched(p: &str) -> bool {
+        p == "/"
+    }
+
+    fn make_router() -> Router {
+        let store = Arc::new(TestStore::new(Duration::from_secs(60)));
+        let state: TestWebState = WebState {
+            store: store as Arc<dyn store::SessionStore<TestModel, TestMsg>>,
+            init: Arc::new(test_init),
+            update: Arc::new(test_update),
+            view: Arc::new(test_view),
+            subs: Arc::new(test_subs),
+            route_resolver: Arc::new(test_route_resolver),
+            param_resolver: Arc::new(test_param_resolver),
+            route_matched: Arc::new(test_route_matched),
+            session_count: Arc::new(AtomicUsize::new(0)),
+            watch_build_status: Arc::new(Mutex::new(None)),
+        };
+        Router::new()
+            .route(
+                "/_ipe/hot-transition",
+                post(
+                    handlers::hot_transition_handler::<
+                        TestModel,
+                        TestMsg,
+                        fn() -> (),
+                        fn(TestMsg, TestModel) -> (TestModel, IpeCmd<TestMsg>),
+                        fn(TestModel) -> Html<TestMsg>,
+                        fn(TestModel) -> IpeSub<TestMsg>,
+                    >,
+                ),
+            )
+            .with_state(state)
+    }
+
+    async fn post_hot(token: Option<&str>, body: &str) -> axum::response::Response {
+        let mut builder = Request::builder()
+            .method("POST")
+            .uri("/_ipe/hot-transition")
+            .header("content-type", "application/json");
+        if let Some(t) = token {
+            builder = builder.header("x-ipe-hot-token", t);
+        }
+        let req = builder.body(Body::from(body.to_owned())).expect("request");
+        make_router().oneshot(req).await.expect("router responds")
+    }
+
+    /// Run an async test body while holding the process-global overlay guard in
+    /// SYNC scope (never across an await), mirroring `hot_appearance_push_tests`:
+    /// the overlay override + transition registry are the shared state being
+    /// serialised, and the guard is released only after the whole async body has
+    /// run on a fresh current-thread runtime.
+    fn with_overlay_serialised<F: std::future::Future<Output = ()>>(body: impl FnOnce() -> F) {
+        let _g = overlay_test_lock();
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("current-thread runtime must build for the test");
+        rt.block_on(body());
+        transition::clear_dev_transition_for_test();
+        set_dev_overlay_active_for_test(None);
+        locked_remove_var("IPE_WATCH_HOT_TOKEN");
+    }
+
+    const INC1: &str = r#"{"field":"count","op":"IntAdd","source":{"Int":1}}"#;
+    const INC2: &str = r#"{"field":"count","op":"IntAdd","source":{"Int":2}}"#;
+
+    /// No token → 403, even with the dev gate on and a well-formed body.
+    #[test]
+    fn token_missing_is_403() {
+        with_overlay_serialised(|| async {
+            set_dev_overlay_active_for_test(Some(true));
+            locked_set_var("IPE_WATCH_HOT_TOKEN", "secret");
+            let body = format!(r#"{{"old_json":{INC1:?},"new_json":{INC2:?}}}"#);
+            let resp = post_hot(None, &body).await;
+            assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+        });
+    }
+
+    /// Wrong token → 403.
+    #[test]
+    fn token_wrong_is_403() {
+        with_overlay_serialised(|| async {
+            set_dev_overlay_active_for_test(Some(true));
+            locked_set_var("IPE_WATCH_HOT_TOKEN", "correct");
+            let body = format!(r#"{{"old_json":{INC1:?},"new_json":{INC2:?}}}"#);
+            let resp = post_hot(Some("wrong"), &body).await;
+            assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+        });
+    }
+
+    /// Dev gate OFF → 404 (defence in depth), even with the correct token.
+    #[test]
+    fn dev_gate_off_is_404() {
+        with_overlay_serialised(|| async {
+            set_dev_overlay_active_for_test(Some(false));
+            locked_set_var("IPE_WATCH_HOT_TOKEN", "correct");
+            let body = format!(r#"{{"old_json":{INC1:?},"new_json":{INC2:?}}}"#);
+            let resp = post_hot(Some("correct"), &body).await;
+            assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+        });
+    }
+
+    /// A malformed request body → 400.
+    #[test]
+    fn malformed_body_is_400() {
+        with_overlay_serialised(|| async {
+            set_dev_overlay_active_for_test(Some(true));
+            locked_set_var("IPE_WATCH_HOT_TOKEN", "correct");
+            let resp = post_hot(Some("correct"), "not json").await;
+            assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        });
+    }
+
+    /// A well-formed body whose `new_json` is NOT a valid `Transition` → 400
+    /// (parse, don't validate: only a decodable transition is registered).
+    #[test]
+    fn invalid_transition_json_is_400() {
+        with_overlay_serialised(|| async {
+            set_dev_overlay_active_for_test(Some(true));
+            locked_set_var("IPE_WATCH_HOT_TOKEN", "correct");
+            let body = format!(r#"{{"old_json":{INC1:?},"new_json":"{{not a transition}}"}}"#);
+            let resp = post_hot(Some("correct"), &body).await;
+            assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        });
+    }
+
+    /// Correct token + valid body → 200, and the replacement is registered so a
+    /// subsequent `apply_transition_hot` for the OLD key applies the NEW datum.
+    #[test]
+    fn accept_registers_replacement() {
+        with_overlay_serialised(|| async {
+            set_dev_overlay_active_for_test(Some(true));
+            transition::clear_dev_transition_for_test();
+            locked_set_var("IPE_WATCH_HOT_TOKEN", "correct");
+
+            let body = format!(r#"{{"old_json":{INC1:?},"new_json":{INC2:?}}}"#);
+            let resp = post_hot(Some("correct"), &body).await;
+            assert_eq!(resp.status(), StatusCode::OK);
+
+            // The overlay now maps the OLD baked datum to the +2 replacement: a
+            // hot read of the old key applies +2, proving registration reached
+            // the store.
+            #[derive(serde::Serialize, serde::Deserialize, PartialEq, Debug)]
+            struct Counter {
+                count: i64,
+            }
+            let next = transition::apply_transition_hot(INC1, Counter { count: 5 });
+            assert_eq!(next.count, 7, "the registered +2 replacement must apply");
+        });
     }
 }
 

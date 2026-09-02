@@ -51,7 +51,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use ipe_backend::{Backend, EmittedProject};
 use ipe_diagnostics::{DResult, Diagnostic, NameError, Span};
 use ipe_intern::{Interner, Symbol};
-use ipe_ir::{FuncId, IrType, ModPath, Program, TypeDef};
+use ipe_ir::{Callee, Expr, FuncId, IrType, KernelFn, ModPath, Program, TypeDef};
 
 pub use emit_doc::{SweepDivergence, native_vs_legacy_sweep};
 pub use preamble::{epilogue, preamble};
@@ -1198,11 +1198,33 @@ pub(crate) struct EmitCtx<'a> {
     /// so a `view` appearance edit can hot-swap without recompiling. Default off:
     /// with the flag unset the emit is byte-identical to the direct-literal form.
     pub(crate) hot_appearance: bool,
+    /// `Ipe.Ui` structural wrapper functions — pure, single-kernel layout builders
+    /// (`el` / `row` / `column` / `wrappedRow` / `grid` / `paragraph` /
+    /// `textColumn` / `form` / `input`) whose bodies are a single `UiNode` or
+    /// `UiTaggedNode` (or `UiText` / `UiNone`) call over their parameters and
+    /// static descriptions. The partition pass inlines these at a call site whose
+    /// arguments are all literal, templatizing them identically to a raw kernel
+    /// call.
+    ///
+    /// Populated at build time by scanning the `Ipe.Ui` module. An id absent from
+    /// this map at the call site falls through to the ordinary emit, conservative
+    /// by construction.
+    pub(crate) ui_structural_wrappers: BTreeMap<FuncId, crate::emit_ui_template::WrapperBody>,
     /// Per-function accumulator for hoisted style literals, reset at the start of
     /// each function body (see [`LiteralAccum`]). Interior-mutable so the emit,
     /// which threads `&EmitCtx`, can append a literal's slot without an added
     /// parameter on every emit function.
     lit_accum: RefCell<LiteralAccum>,
+    /// The `Model` parameter symbol of the `update` function currently being
+    /// emitted, set only while emitting a TEA `update` lambda body under
+    /// [`Self::hot_appearance`]. `Some` there arms [`crate::emit_expr::emit_match`]
+    /// to reduce a data-describable arm to an `apply_transition_hot` call (the
+    /// logic counterpart of the appearance literal-table hoist); `None`
+    /// everywhere else, so no other `case` is ever transition-rewritten.
+    /// Interior-mutable so the arming threads through the shared `&EmitCtx`
+    /// without an added parameter on every emit function, exactly as
+    /// [`Self::lit_accum`] does for the appearance hoist.
+    transition_model_param: RefCell<Option<ipe_intern::Symbol>>,
 }
 
 /// Is an enum variant payload field type `Clone`, consulting the whole-program
@@ -1870,6 +1892,33 @@ impl<'a> EmitCtx<'a> {
             || uses_http
             || uses_email;
 
+        // Collect qualifying `Ipe.Ui` structural wrapper bodies: pure, single-kernel
+        // layout builders whose bodies reduce to a `UiNode` / `UiTaggedNode` /
+        // `UiText` / `UiNone` kernel call. The partition pass inlines these at
+        // call sites with literal arguments, templatizing them identically to a
+        // raw kernel call.
+        //
+        // Qualifying predicate: the function is in `Ipe.Ui` and its body is a
+        // single `Callee::Kernel` call to one of the four static element-node
+        // builders. Type/row parameters are not a disqualifier — `msg` is
+        // type-level and erased in the IR body, so value-level substitution is
+        // unaffected. This excludes `Ui.button` / `Ui.link` / `Ui.image` /
+        // `Ui.html` / `Ui.widget` / `Ui.cells` (handlers, raw markup, record
+        // config). The body may contain `Var`/`CloneVar` references to value
+        // parameters, `Cons` prepend (the marker-attr pattern), and nested
+        // kernel calls.
+        let ui_structural_wrappers: BTreeMap<FuncId, crate::emit_ui_template::WrapperBody> =
+            program
+                .modules
+                .iter()
+                .flat_map(|m| m.funcs.iter())
+                .filter(|f| is_ipe_ui_structural_wrapper(f, interner))
+                .map(|f| {
+                    let params: Vec<Symbol> = f.params.iter().map(|(s, _)| *s).collect();
+                    (f.id, (params, f.body.clone()))
+                })
+                .collect();
+
         let mut ctx = Self {
             interner,
             uses_db,
@@ -1930,7 +1979,9 @@ impl<'a> EmitCtx<'a> {
             record_by_fieldset,
             cargo_name,
             hot_appearance,
+            ui_structural_wrappers,
             lit_accum: RefCell::new(LiteralAccum::default()),
+            transition_model_param: RefCell::new(None),
         };
         // Resolve the `HydrationState` type name through the same renderer the
         // emitted `main_from_hydration_state` signature uses, so the wasm-hydrate
@@ -2009,6 +2060,33 @@ impl<'a> EmitCtx<'a> {
     fn exit_closure(&self) {
         let mut accum = self.lit_accum.borrow_mut();
         accum.closure_depth = accum.closure_depth.saturating_sub(1);
+    }
+
+    /// Arm the `update`-arm transition rewrite for the duration of the `update`
+    /// lambda body: while set, [`crate::emit_expr::emit_match`] reduces a
+    /// data-describable arm to an `apply_transition_hot` call. Returns the
+    /// previous value so the caller can restore it after the body is emitted
+    /// (nested lambdas inside the arm bodies never inherit the arming — the arm
+    /// bodies are emitted as ordinary expressions, so only the top `case msg of`
+    /// is transition-aware). A no-op arming (`None`) leaves every `case` compiled.
+    fn begin_transition_update(
+        &self,
+        model_param: Option<ipe_intern::Symbol>,
+    ) -> Option<ipe_intern::Symbol> {
+        std::mem::replace(&mut *self.transition_model_param.borrow_mut(), model_param)
+    }
+
+    /// Restore the transition-update arming saved by [`Self::begin_transition_update`].
+    fn end_transition_update(&self, prev: Option<ipe_intern::Symbol>) {
+        *self.transition_model_param.borrow_mut() = prev;
+    }
+
+    /// The `Model` parameter of the `update` lambda currently being emitted, when
+    /// the transition rewrite is armed; `None` otherwise. Read by
+    /// [`crate::emit_expr::emit_match`] to decide whether to attempt the
+    /// transition reduction on the top `case`.
+    pub(crate) fn transition_model_param(&self) -> Option<ipe_intern::Symbol> {
+        *self.transition_model_param.borrow()
     }
 
     /// Enter a discard-only probe emit: hoisting is suppressed so the probe does
@@ -4527,6 +4605,68 @@ fn resolve_sym(interner: &Interner, sym: Symbol) -> DResult<&str> {
             where_: "ipe_backend_rust::resolve_sym",
             detail: format!("symbol {} not present in interner", sym.as_raw()),
         })
+}
+
+/// Whether a function is a qualifying `Ipe.Ui` structural wrapper for the
+/// subtree partition pass.
+///
+/// Qualifies when ALL of:
+/// 1. The function's home module is `["Ipe", "Ui"]`.
+/// 2. The body is a single `Callee::Kernel` call whose kernel is one of the
+///    four static element-node builders (`UiNode`, `UiTaggedNode`, `UiText`,
+///    `UiNone`).
+///
+/// Type and row parameters are NOT a disqualifier: the layout wrappers
+/// (`row`, `column`, etc.) are parametric in `msg` so callers can attach
+/// typed event handlers, but `msg` is a type-level variable — it is erased
+/// in the IR body and never appears as an `Expr::Var` or `Expr::CloneVar`.
+/// The value-level substitution in `substitute_wrapper` only replaces value
+/// params (those listed in `func.params`), so a `msg` type param is
+/// transparent to the partition pass. Keeping it out would block every
+/// wrapper that carries a message type, which is all of them.
+///
+/// This excludes `Ui.button` / `Ui.link` / `Ui.image` / `Ui.html` /
+/// `Ui.widget` / `Ui.cells` (handlers, raw markup, record config). The body
+/// may contain `Var`/`CloneVar` references to value parameters, `Cons`
+/// prepend (the marker-attr pattern that `row` / `column` / `wrappedRow` /
+/// `grid` / `paragraph` / `textColumn` lower to), and nested kernel calls.
+fn is_ipe_ui_structural_wrapper(func: &ipe_ir::Func, interner: &Interner) -> bool {
+    // Gate 1: home module is exactly `Ipe.Ui`.
+    let home = &func.home.0;
+    let [seg0, seg1] = home.as_slice() else {
+        return false;
+    };
+    if interner.resolve(*seg0) != Some("Ipe") || interner.resolve(*seg1) != Some("Ui") {
+        return false;
+    }
+    // Gate 2: body is a single kernel call to one of the four static
+    // element-node builders.
+    wrapper_body_kernel(&func.body).is_some()
+}
+
+/// The element-node kernel a wrapper body calls, looking through any `Let`
+/// chain the lowerer may introduce for intermediate expressions.
+///
+/// Accepts `UiNode` / `UiTaggedNode` / `UiText` / `UiNone` — the four kernels
+/// the static partition pass can reduce. Every other kernel is refused.
+fn wrapper_body_kernel(body: &Expr) -> Option<KernelFn> {
+    // The lowerer may wrap the outermost call in one or more `Let` bindings
+    // for subexpressions (e.g. the cons prepend in `row`/`column`). Peel them.
+    let mut expr = body;
+    while let Expr::Let { body: let_body, .. } = expr {
+        expr = let_body;
+    }
+    let Expr::Call {
+        callee: Callee::Kernel(k),
+        ..
+    } = expr
+    else {
+        return None;
+    };
+    match k {
+        KernelFn::UiNode | KernelFn::UiTaggedNode | KernelFn::UiText | KernelFn::UiNone => Some(*k),
+        _ => None,
+    }
 }
 
 /// The runtime enum name a `Ipe.WebSocket` ADT is BRIDGED to, or `None`

@@ -29,6 +29,7 @@ fn main() -> ExitCode {
             | ipe::CliError::ToolchainMissing(_)
             | ipe::CliError::EmittedBuildFailed { .. }
             | ipe::CliError::HealthCritical
+            | ipe::CliError::LintGateFailed
             | ipe::CliError::EjectUnsupported { .. }
             | ipe::CliError::UpgradeFeedUnreachable
             // The JSON was already written to stderr; nothing more to print.

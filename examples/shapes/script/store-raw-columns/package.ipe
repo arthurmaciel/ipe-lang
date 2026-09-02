@@ -1,7 +1,14 @@
 module Package exposing (package)
 
+import Ipe.Package exposing (..)
 
+
+package : Package
 package =
-    Package.named "store-raw-columns"
-        |> Package.version "0.1.0"
-        |> Package.accepts [ Capability.unsafe ]
+    { name = "store-raw-columns"
+    , version = "0.1.0"
+    , capabilities =
+        { declares = []
+        , accepts = [ Unsafe ]
+        }
+    }

@@ -35,8 +35,11 @@
 //! baked default decodes back into exactly the tree it described and
 //! materializes byte-identically to the direct inline emit — dev == prod.
 
+use std::collections::BTreeMap;
+
 use crate::emit_template::write_json_string;
-use ipe_ir::{Callee, Expr, KernelFn};
+use ipe_intern::Symbol;
+use ipe_ir::{Callee, Expr, FuncId, KernelFn};
 
 /// The render/decode nesting ceiling, mirrored from the runtime
 /// (`ipe_runtime::ui::template::MAX_UI_TEMPLATE_DEPTH`). Kept as a local constant
@@ -344,20 +347,69 @@ fn tagged_enum_static_str(tag: &str, s: &str, out: &mut String) {
     tagged_string(tag, s, out);
 }
 
+/// A structural `Ipe.Ui` wrapper function's parameter symbols and lowered body.
+///
+/// Qualifies when the body is a single `UiNode` / `UiTaggedNode` / `UiText` /
+/// `UiNone` kernel call over params and static descriptions — pure, no Model
+/// read, no handler, no control flow, no capability. `el` / `row` / `column` /
+/// `wrappedRow` / `grid` / `paragraph` / `textColumn` / `form` / `input` all
+/// qualify. The params list is positional and matches the function signature;
+/// `substitute_wrapper` replaces each param with the call-site argument.
+pub type WrapperBody = (Vec<Symbol>, Expr);
+
 /// Reduce a static `Ipe.Ui` `view` subtree to a [`CompileUiTemplate`], or `None`
 /// when the subtree is not provably static — the caller then keeps it compiled.
-pub fn ui_template_of_expr(expr: &Expr) -> Option<CompileUiTemplate> {
-    ui_template_of_expr_at(expr, 0)
+///
+/// `wrappers` maps each recognized `Ipe.Ui` structural-wrapper [`FuncId`] to its
+/// parameter list and lowered body. When `None`, wrapper resolution is skipped
+/// (pure kernel path). A `Callee::Func` whose id is absent from `wrappers` falls
+/// through to recompile — conservative, never a mis-hoist.
+pub fn ui_template_of_expr(
+    expr: &Expr,
+    wrappers: Option<&BTreeMap<FuncId, WrapperBody>>,
+) -> Option<CompileUiTemplate> {
+    ui_template_of_expr_at(expr, wrappers, 0)
 }
 
-fn ui_template_of_expr_at(expr: &Expr, depth: usize) -> Option<CompileUiTemplate> {
+fn ui_template_of_expr_at(
+    expr: &Expr,
+    wrappers: Option<&BTreeMap<FuncId, WrapperBody>>,
+    depth: usize,
+) -> Option<CompileUiTemplate> {
     if depth >= MAX_UI_TEMPLATE_DEPTH {
         return None;
+    }
+    // A wrapper body may be lowered with a `let tmp = <expr> in <call>` for
+    // intermediate computations (e.g. the cons prepend `style "k" "v" :: attrs`).
+    // β-reduce the let: substitute `Var(name)` in `body` with `value`, then
+    // recurse. Since wrapper bodies are one-level, the chain terminates quickly.
+    if let Expr::Let { name, value, body } = expr {
+        let reduced = subst_expr(body, &[*name], &[*value.clone()]);
+        return ui_template_of_expr_at(&reduced, wrappers, depth);
     }
     let Expr::Call { callee, args, .. } = expr else {
         return None;
     };
+
+    // Structural wrapper: a `Callee::Func` whose id resolves to a qualifying
+    // `Ipe.Ui` layout builder. Inline the wrapper body by substituting the
+    // call-site arguments for the parameters, then recurse on the result. An id
+    // absent from `wrappers` falls through to the recompile return below.
+    // A wrapper call whose arguments are non-literal causes `static_attrs` /
+    // `static_children` / `static_desc` to refuse inside the recursion, keeping
+    // the overall result `None` — conservative by construction.
+    if let Callee::Func(id) = callee {
+        if let Some((params, body)) = wrappers.and_then(|m| m.get(id)) {
+            let inlined = substitute_wrapper(body, params, args);
+            return ui_template_of_expr_at(&inlined, wrappers, depth);
+        }
+        // An unrecognised `Callee::Func` (not a known structural wrapper) stays
+        // compiled — never a mis-hoist.
+        return None;
+    }
+
     let Callee::Kernel(k) = callee else {
+        // `Callee::Ffi` — not a static element node.
         return None;
     };
     // Exhaustive over the `Ipe.Ui` element-node kernels: the four static node
@@ -381,7 +433,7 @@ fn ui_template_of_expr_at(expr: &Expr, depth: usize) -> Option<CompileUiTemplate
             [desc, attrs, children] => Some(CompileUiTemplate::Node {
                 desc: static_desc(desc)?,
                 attrs: static_attrs(attrs)?,
-                children: static_children(children, depth)?,
+                children: static_children(children, wrappers, depth)?,
             }),
             _ => None,
         },
@@ -391,7 +443,7 @@ fn ui_template_of_expr_at(expr: &Expr, depth: usize) -> Option<CompileUiTemplate
                 tag: tag.clone(),
                 desc: static_desc(desc)?,
                 attrs: static_attrs(attrs)?,
-                children: static_children(children, depth)?,
+                children: static_children(children, wrappers, depth)?,
             }),
             _ => None,
         },
@@ -402,29 +454,127 @@ fn ui_template_of_expr_at(expr: &Expr, depth: usize) -> Option<CompileUiTemplate
     }
 }
 
+/// Substitute call-site `args` for `params` in `body` — a minimal positional
+/// substitution for the structural-wrapper inline path. Each param symbol that
+/// appears as an `Expr::Var` or `Expr::CloneVar` in `body` is replaced by the
+/// corresponding argument expression. The lowerer may introduce `Let`
+/// bindings for intermediate expressions (e.g. the cons prepend in a wrapper
+/// body); `subst_expr` descends into those so all parameter references are
+/// replaced regardless of nesting depth.
+fn substitute_wrapper(body: &Expr, params: &[Symbol], args: &[Expr]) -> Expr {
+    subst_expr(body, params, args)
+}
+
+fn subst_expr(expr: &Expr, params: &[Symbol], args: &[Expr]) -> Expr {
+    match expr {
+        Expr::Var(sym) | Expr::CloneVar(sym) => {
+            // Replace a parameter reference with its call-site argument.
+            // A parameter with no corresponding argument is an arity mismatch —
+            // leave as-is so the downstream static_* fns refuse (returning
+            // None), which is the conservative outcome.
+            params.iter().position(|p| p == sym).map_or_else(
+                || expr.clone(),
+                |pos| args.get(pos).cloned().unwrap_or_else(|| expr.clone()),
+            )
+        }
+
+        // Structural descent: a wrapper body may contain kernel calls, list
+        // literals, Cons prepend, and Let bindings (for intermediate exprs).
+        Expr::Call {
+            callee,
+            args: call_args,
+            pin,
+            on_form,
+        } => Expr::Call {
+            callee: callee.clone(),
+            args: call_args
+                .iter()
+                .map(|a| subst_expr(a, params, args))
+                .collect(),
+            pin: *pin,
+            on_form: *on_form,
+        },
+
+        Expr::List { elem, items } => Expr::List {
+            elem: elem.clone(),
+            items: items.iter().map(|i| subst_expr(i, params, args)).collect(),
+        },
+
+        Expr::Cons { head, tail } => Expr::Cons {
+            head: Box::new(subst_expr(head, params, args)),
+            tail: Box::new(subst_expr(tail, params, args)),
+        },
+
+        // The lowerer may bind an intermediate expression in a `Let`. Recurse
+        // into both the bound value and the body so that any `Expr::Var(param)`
+        // inside either arm is replaced. The let-bound name (`Let::name`) is a
+        // local binder — it shadows any outer param with the same symbol, but
+        // wrapper bodies are guaranteed not to shadow their own params (they are
+        // a single return expression over the param list), so no shadowing check
+        // is needed here.
+        Expr::Let { name, value, body } => Expr::Let {
+            name: *name,
+            value: Box::new(subst_expr(value, params, args)),
+            body: Box::new(subst_expr(body, params, args)),
+        },
+
+        // Leaves and shapes not present in a structural wrapper body pass through.
+        _ => expr.clone(),
+    }
+}
+
 /// Reduce a literal list of child `Ipe.Ui` nodes to templates, or `None`.
-fn static_children(children: &Expr, depth: usize) -> Option<Vec<CompileUiTemplate>> {
+fn static_children(
+    children: &Expr,
+    wrappers: Option<&BTreeMap<FuncId, WrapperBody>>,
+    depth: usize,
+) -> Option<Vec<CompileUiTemplate>> {
     let Expr::List { items, .. } = children else {
         return None;
     };
     let mut out = Vec::with_capacity(items.len());
     for item in items {
-        out.push(ui_template_of_expr_at(item, depth.saturating_add(1))?);
+        out.push(ui_template_of_expr_at(
+            item,
+            wrappers,
+            depth.saturating_add(1),
+        )?);
     }
     Some(out)
 }
 
 /// Reduce a literal list of `Ipe.Ui` attributes to inert data, or `None` when
 /// any element is not an accepted static attribute.
+///
+/// Accepts both `Expr::List` (the direct-kernel shape) and a `Expr::Cons` chain
+/// (the shape a structural wrapper produces after substitution — e.g. the
+/// `style "__row" "true" :: attrs` prepend in `Ui.row`'s lowered body).
 fn static_attrs(attrs: &Expr) -> Option<Vec<CompileUiAttr>> {
-    let Expr::List { items, .. } = attrs else {
-        return None;
-    };
-    let mut out = Vec::with_capacity(items.len());
-    for item in items {
-        out.push(static_attr(item)?);
-    }
+    let mut out = Vec::new();
+    collect_static_attrs(attrs, &mut out)?;
     Some(out)
+}
+
+/// Append the static attrs in `expr` to `out`. Handles both a literal
+/// `Expr::List` and a right-spine `Expr::Cons { head, tail }` chain whose
+/// eventual tail is a `List`.
+fn collect_static_attrs(expr: &Expr, out: &mut Vec<CompileUiAttr>) -> Option<()> {
+    match expr {
+        Expr::List { items, .. } => {
+            for item in items {
+                out.push(static_attr(item)?);
+            }
+            Some(())
+        }
+        // A `Cons` head is one prepended attribute; the tail is recursed.
+        Expr::Cons { head, tail } => {
+            out.push(static_attr(head)?);
+            collect_static_attrs(tail, out)
+        }
+        // Any other shape (a Var, a non-list call) is not a provably-static
+        // attribute list — refuse.
+        _ => None,
+    }
 }
 
 /// Reduce one `Ipe.Ui` attribute expression to inert data, or `None`.
@@ -583,14 +733,27 @@ fn static_desc(expr: &Expr) -> Option<CompileUiDesc> {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use super::{
-        CompileUiAttr, CompileUiDesc, CompileUiLength, CompileUiTemplate, ui_template_of_expr,
+        CompileUiAttr, CompileUiDesc, CompileUiLength, CompileUiTemplate, WrapperBody,
+        ui_template_of_expr,
     };
-    use ipe_ir::{CallPin, Callee, Expr, IrType, KernelFn, OnFormKind, UiCtor};
+    use ipe_intern::Symbol;
+    use ipe_ir::{CallPin, Callee, Expr, FuncId, IrType, KernelFn, OnFormKind, UiCtor};
 
     fn kcall(k: KernelFn, args: Vec<Expr>) -> Expr {
         Expr::Call {
             callee: Callee::Kernel(k),
+            args,
+            pin: CallPin::None,
+            on_form: OnFormKind::NotForm,
+        }
+    }
+
+    fn fcall(id: u32, args: Vec<Expr>) -> Expr {
+        Expr::Call {
+            callee: Callee::Func(FuncId::from_raw(id)),
             args,
             pin: CallPin::None,
             on_form: OnFormKind::NotForm,
@@ -625,12 +788,24 @@ mod tests {
         kcall(KernelFn::UiText, vec![Expr::Str(s.to_string())])
     }
 
-    // ── acceptance ───────────────────────────────────────────────────────────
+    fn sym(n: u32) -> Symbol {
+        Symbol::from_raw(n)
+    }
+
+    /// Build a wrapper table with one entry: func id `id` with params `params`
+    /// and body `body`.
+    fn one_wrapper(id: u32, params: Vec<Symbol>, body: Expr) -> BTreeMap<FuncId, WrapperBody> {
+        let mut m = BTreeMap::new();
+        m.insert(FuncId::from_raw(id), (params, body));
+        m
+    }
+
+    // ── acceptance: direct kernel calls ──────────────────────────────────────
 
     #[test]
     fn text_node_templates() {
         assert_eq!(
-            ui_template_of_expr(&text("hi")),
+            ui_template_of_expr(&text("hi"), None),
             Some(CompileUiTemplate::Text("hi".to_string()))
         );
     }
@@ -638,15 +813,15 @@ mod tests {
     #[test]
     fn none_templates_to_empty() {
         assert_eq!(
-            ui_template_of_expr(&kcall(KernelFn::UiNone, vec![])),
+            ui_template_of_expr(&kcall(KernelFn::UiNone, vec![]), None),
             Some(CompileUiTemplate::Empty)
         );
     }
 
     #[test]
     fn node_with_inert_attrs_and_children_templates() {
-        // A `Ui.row` shape lowered to `ui_node_(descNone, [__row marker via
-        // style; spacing 8; width (px 16)], [text "a"])`.
+        // A `Ui.row`-equivalent shape lowered to
+        // `ui_node_(descNone, [__row marker; spacing 8; width (px 16)], [text "a"])`.
         let node = kcall(
             KernelFn::UiNode,
             vec![
@@ -668,7 +843,7 @@ mod tests {
                 child_list(vec![text("a")]),
             ],
         );
-        let got = ui_template_of_expr(&node).expect("templatable");
+        let got = ui_template_of_expr(&node, None).expect("templatable");
         assert_eq!(
             got,
             CompileUiTemplate::Node {
@@ -694,7 +869,7 @@ mod tests {
                 child_list(vec![text("Body")]),
             ],
         );
-        let got = ui_template_of_expr(&node).expect("templatable");
+        let got = ui_template_of_expr(&node, None).expect("templatable");
         assert_eq!(
             got,
             CompileUiTemplate::TaggedNode {
@@ -722,7 +897,7 @@ mod tests {
                 child_list(vec![]),
             ],
         );
-        let got = ui_template_of_expr(&node).expect("templatable");
+        let got = ui_template_of_expr(&node, None).expect("templatable");
         assert_eq!(
             got,
             CompileUiTemplate::Node {
@@ -736,6 +911,234 @@ mod tests {
         );
     }
 
+    // ── acceptance: structural wrapper resolution ─────────────────────────────
+
+    /// `el attrs child = node descNone attrs [child]`
+    /// — inlines to `Node { desc: NoDescription, attrs: [spacing 8], children: [text "hi"] }`.
+    #[test]
+    fn wrapper_el_inlines_to_node() {
+        // params: (attrs_sym=10, child_sym=11)
+        // body:   ui_node_(descNone, Var(10), List [Var(11)])
+        let attrs_sym = sym(10);
+        let child_sym = sym(11);
+        let body = kcall(
+            KernelFn::UiNode,
+            vec![
+                desc_none(),
+                Expr::Var(attrs_sym),
+                Expr::List {
+                    elem: IrType::Ui {
+                        ctor: UiCtor::Element,
+                        msg: Box::new(IrType::Int),
+                    },
+                    items: vec![Expr::Var(child_sym)],
+                },
+            ],
+        );
+        let wrappers = one_wrapper(1, vec![attrs_sym, child_sym], body);
+
+        // call: el [spacing 8] (text "hi")
+        let call = fcall(
+            1,
+            vec![
+                attr_list(vec![kcall(KernelFn::UiSpacing, vec![Expr::Int(8)])]),
+                text("hi"),
+            ],
+        );
+        let got = ui_template_of_expr(&call, Some(&wrappers)).expect("el templatizes");
+        assert_eq!(
+            got,
+            CompileUiTemplate::Node {
+                desc: CompileUiDesc::NoDescription,
+                attrs: vec![CompileUiAttr::Spacing(8)],
+                children: vec![CompileUiTemplate::Text("hi".to_string())],
+            }
+        );
+    }
+
+    /// `row attrs children = node descNone (style "__row" "true" :: attrs) children`
+    /// — the Cons prepend of the marker attr is folded into the accepted attr list.
+    #[test]
+    fn wrapper_row_cons_prepend_templatizes() {
+        // params: (attrs_sym=20, children_sym=21)
+        // body:   ui_node_(descNone, Cons(style "__row" "true", Var(20)), Var(21))
+        let attrs_sym = sym(20);
+        let children_sym = sym(21);
+        let marker = kcall(
+            KernelFn::UiStyle,
+            vec![
+                Expr::Str("__row".to_string()),
+                Expr::Str("true".to_string()),
+            ],
+        );
+        let body = kcall(
+            KernelFn::UiNode,
+            vec![
+                desc_none(),
+                Expr::Cons {
+                    head: Box::new(marker),
+                    tail: Box::new(Expr::Var(attrs_sym)),
+                },
+                Expr::Var(children_sym),
+            ],
+        );
+        let wrappers = one_wrapper(2, vec![attrs_sym, children_sym], body);
+
+        // call: row [spacing 4] [text "a", text "b"]
+        let call = fcall(
+            2,
+            vec![
+                attr_list(vec![kcall(KernelFn::UiSpacing, vec![Expr::Int(4)])]),
+                child_list(vec![text("a"), text("b")]),
+            ],
+        );
+        let got = ui_template_of_expr(&call, Some(&wrappers)).expect("row templatizes");
+        assert_eq!(
+            got,
+            CompileUiTemplate::Node {
+                desc: CompileUiDesc::NoDescription,
+                attrs: vec![
+                    CompileUiAttr::Style("__row".to_string(), "true".to_string()),
+                    CompileUiAttr::Spacing(4),
+                ],
+                children: vec![
+                    CompileUiTemplate::Text("a".to_string()),
+                    CompileUiTemplate::Text("b".to_string()),
+                ],
+            }
+        );
+    }
+
+    /// `column attrs children = node descNone (style "__col" "true" :: attrs) children`
+    #[test]
+    fn wrapper_column_cons_prepend_templatizes() {
+        let attrs_sym = sym(30);
+        let children_sym = sym(31);
+        let marker = kcall(
+            KernelFn::UiStyle,
+            vec![
+                Expr::Str("__col".to_string()),
+                Expr::Str("true".to_string()),
+            ],
+        );
+        let body = kcall(
+            KernelFn::UiNode,
+            vec![
+                desc_none(),
+                Expr::Cons {
+                    head: Box::new(marker),
+                    tail: Box::new(Expr::Var(attrs_sym)),
+                },
+                Expr::Var(children_sym),
+            ],
+        );
+        let wrappers = one_wrapper(3, vec![attrs_sym, children_sym], body);
+
+        let call = fcall(3, vec![attr_list(vec![]), child_list(vec![text("x")])]);
+        let got = ui_template_of_expr(&call, Some(&wrappers)).expect("column templatizes");
+        assert_eq!(
+            got,
+            CompileUiTemplate::Node {
+                desc: CompileUiDesc::NoDescription,
+                attrs: vec![CompileUiAttr::Style(
+                    "__col".to_string(),
+                    "true".to_string()
+                )],
+                children: vec![CompileUiTemplate::Text("x".to_string())],
+            }
+        );
+    }
+
+    /// `text` is a kernel alias — the kernel path already handles `Ui.text`
+    /// directly; the wrapper table is not consulted for a kernel callee.
+    #[test]
+    fn text_kernel_templatizes_without_wrapper_table() {
+        assert_eq!(
+            ui_template_of_expr(&text("hello"), None),
+            Some(CompileUiTemplate::Text("hello".to_string()))
+        );
+    }
+
+    // ── refusal: wrapper with non-literal / model-dependent args ─────────────
+
+    /// A wrapper call whose attrs contain a `Model`-read (`Expr::Var`) refuses.
+    #[test]
+    fn wrapper_with_model_dependent_arg_refuses() {
+        let attrs_sym = sym(40);
+        let child_sym = sym(41);
+        let body = kcall(
+            KernelFn::UiNode,
+            vec![
+                desc_none(),
+                Expr::Var(attrs_sym),
+                Expr::List {
+                    elem: IrType::Ui {
+                        ctor: UiCtor::Element,
+                        msg: Box::new(IrType::Int),
+                    },
+                    items: vec![Expr::Var(child_sym)],
+                },
+            ],
+        );
+        let wrappers = one_wrapper(4, vec![attrs_sym, child_sym], body);
+
+        // Attrs list is a Var (Model-dependent) — must refuse.
+        let call = fcall(
+            4,
+            vec![
+                Expr::Var(sym(99)), // model-dependent attrs
+                text("hi"),
+            ],
+        );
+        assert_eq!(ui_template_of_expr(&call, Some(&wrappers)), None);
+    }
+
+    /// A wrapper call with a handler attribute refuses.
+    #[test]
+    fn wrapper_with_event_handler_refuses() {
+        let attrs_sym = sym(50);
+        let child_sym = sym(51);
+        let body = kcall(
+            KernelFn::UiNode,
+            vec![
+                desc_none(),
+                Expr::Var(attrs_sym),
+                Expr::List {
+                    elem: IrType::Ui {
+                        ctor: UiCtor::Element,
+                        msg: Box::new(IrType::Int),
+                    },
+                    items: vec![Expr::Var(child_sym)],
+                },
+            ],
+        );
+        let wrappers = one_wrapper(5, vec![attrs_sym, child_sym], body);
+
+        let call = fcall(
+            5,
+            vec![
+                attr_list(vec![kcall(KernelFn::UiOnClick, vec![Expr::Var(sym(99))])]),
+                text("hi"),
+            ],
+        );
+        assert_eq!(ui_template_of_expr(&call, Some(&wrappers)), None);
+    }
+
+    /// An unrecognised `Callee::Func` (not in the wrapper table) refuses.
+    #[test]
+    fn unrecognised_func_callee_refuses() {
+        let wrappers: BTreeMap<FuncId, WrapperBody> = BTreeMap::new();
+        let call = fcall(99, vec![attr_list(vec![]), child_list(vec![])]);
+        assert_eq!(ui_template_of_expr(&call, Some(&wrappers)), None);
+    }
+
+    /// A `Callee::Func` with `wrappers = None` refuses (no table — conservative).
+    #[test]
+    fn func_callee_without_wrapper_table_refuses() {
+        let call = fcall(1, vec![attr_list(vec![]), child_list(vec![])]);
+        assert_eq!(ui_template_of_expr(&call, None), None);
+    }
+
     // ── refusal: not provably static ⇒ keep compiled (None) ──────────────────
 
     #[test]
@@ -745,10 +1148,10 @@ mod tests {
             vec![
                 desc_none(),
                 attr_list(vec![]),
-                child_list(vec![Expr::Var(ipe_intern::Symbol::from_raw(1))]),
+                child_list(vec![Expr::Var(sym(1))]),
             ],
         );
-        assert_eq!(ui_template_of_expr(&node), None);
+        assert_eq!(ui_template_of_expr(&node, None), None);
     }
 
     #[test]
@@ -759,13 +1162,10 @@ mod tests {
             vec![
                 desc_none(),
                 attr_list(vec![]),
-                child_list(vec![kcall(
-                    KernelFn::UiHtml,
-                    vec![Expr::Var(ipe_intern::Symbol::from_raw(2))],
-                )]),
+                child_list(vec![kcall(KernelFn::UiHtml, vec![Expr::Var(sym(2))])]),
             ],
         );
-        assert_eq!(ui_template_of_expr(&node), None);
+        assert_eq!(ui_template_of_expr(&node, None), None);
     }
 
     #[test]
@@ -774,14 +1174,11 @@ mod tests {
             KernelFn::UiNode,
             vec![
                 desc_none(),
-                attr_list(vec![kcall(
-                    KernelFn::UiOnClick,
-                    vec![Expr::Var(ipe_intern::Symbol::from_raw(3))],
-                )]),
+                attr_list(vec![kcall(KernelFn::UiOnClick, vec![Expr::Var(sym(3))])]),
                 child_list(vec![]),
             ],
         );
-        assert_eq!(ui_template_of_expr(&node), None);
+        assert_eq!(ui_template_of_expr(&node, None), None);
     }
 
     #[test]
@@ -803,7 +1200,7 @@ mod tests {
                 child_list(vec![]),
             ],
         );
-        assert_eq!(ui_template_of_expr(&node), None);
+        assert_eq!(ui_template_of_expr(&node, None), None);
     }
 
     #[test]
@@ -814,15 +1211,12 @@ mod tests {
                 desc_none(),
                 attr_list(vec![kcall(
                     KernelFn::UiStyle,
-                    vec![
-                        Expr::Str("color".to_string()),
-                        Expr::Var(ipe_intern::Symbol::from_raw(4)),
-                    ],
+                    vec![Expr::Str("color".to_string()), Expr::Var(sym(4))],
                 )]),
                 child_list(vec![]),
             ],
         );
-        assert_eq!(ui_template_of_expr(&node), None);
+        assert_eq!(ui_template_of_expr(&node, None), None);
     }
 
     #[test]
@@ -830,20 +1224,20 @@ mod tests {
         let node = kcall(
             KernelFn::UiTaggedNode,
             vec![
-                Expr::Var(ipe_intern::Symbol::from_raw(5)),
+                Expr::Var(sym(5)),
                 desc_none(),
                 attr_list(vec![]),
                 child_list(vec![]),
             ],
         );
-        assert_eq!(ui_template_of_expr(&node), None);
+        assert_eq!(ui_template_of_expr(&node, None), None);
     }
 
     #[test]
     fn button_record_config_refuses() {
         // `Ui.button` carries an `onPress` handler record — never a static node.
         assert_eq!(
-            ui_template_of_expr(&kcall(KernelFn::UiButton, vec![])),
+            ui_template_of_expr(&kcall(KernelFn::UiButton, vec![]), None),
             None
         );
     }
@@ -905,6 +1299,115 @@ mod tests {
         assert_eq!(
             t.to_json(),
             r#"{"Node":{"desc":"NoDescription","attrs":[{"Spacing":8}],"children":[]}}"#
+        );
+    }
+
+    /// `column [padding 8] [row [htmlAttr "class" "marker"] [text "uno"], text "two"]`
+    /// — two wrappers, one nested as child of the other, both must templatize.
+    /// Mirrors the exact fixture used in the wrapper SEAL test after the
+    /// structural (add-child) edit.
+    #[test]
+    fn wrapper_column_containing_row_and_text_templatizes() {
+        // row: id=2, params=(attrs_sym=20, children_sym=21)
+        // body: node descNone (style "__row" "true" :: Var(20)) Var(21)
+        let row_attrs_sym = sym(20);
+        let row_children_sym = sym(21);
+        let row_marker = kcall(
+            KernelFn::UiStyle,
+            vec![
+                Expr::Str("__row".to_string()),
+                Expr::Str("true".to_string()),
+            ],
+        );
+        let row_body = kcall(
+            KernelFn::UiNode,
+            vec![
+                desc_none(),
+                Expr::Cons {
+                    head: Box::new(row_marker),
+                    tail: Box::new(Expr::Var(row_attrs_sym)),
+                },
+                Expr::Var(row_children_sym),
+            ],
+        );
+
+        // column: id=3, params=(attrs_sym=30, children_sym=31)
+        // body: node descNone (style "__col" "true" :: Var(30)) Var(31)
+        let col_attrs_sym = sym(30);
+        let col_children_sym = sym(31);
+        let col_marker = kcall(
+            KernelFn::UiStyle,
+            vec![
+                Expr::Str("__col".to_string()),
+                Expr::Str("true".to_string()),
+            ],
+        );
+        let col_body = kcall(
+            KernelFn::UiNode,
+            vec![
+                desc_none(),
+                Expr::Cons {
+                    head: Box::new(col_marker),
+                    tail: Box::new(Expr::Var(col_attrs_sym)),
+                },
+                Expr::Var(col_children_sym),
+            ],
+        );
+
+        let mut wrappers: BTreeMap<FuncId, WrapperBody> = BTreeMap::new();
+        wrappers.insert(
+            FuncId::from_raw(2),
+            (vec![row_attrs_sym, row_children_sym], row_body),
+        );
+        wrappers.insert(
+            FuncId::from_raw(3),
+            (vec![col_attrs_sym, col_children_sym], col_body),
+        );
+
+        // call: column [padding 8] [row [htmlAttr "class" "marker"] [text "uno"], text "two"]
+        let row_call = fcall(
+            2,
+            vec![
+                attr_list(vec![kcall(
+                    KernelFn::UiHtmlAttribute,
+                    vec![
+                        Expr::Str("class".to_string()),
+                        Expr::Str("marker".to_string()),
+                    ],
+                )]),
+                child_list(vec![text("uno")]),
+            ],
+        );
+        let col_call = fcall(
+            3,
+            vec![
+                attr_list(vec![kcall(KernelFn::UiPadding, vec![Expr::Int(8)])]),
+                child_list(vec![row_call, text("two")]),
+            ],
+        );
+
+        let got = ui_template_of_expr(&col_call, Some(&wrappers))
+            .expect("column(row(...), text) must templatize");
+        assert_eq!(
+            got,
+            CompileUiTemplate::Node {
+                desc: CompileUiDesc::NoDescription,
+                attrs: vec![
+                    CompileUiAttr::Style("__col".to_string(), "true".to_string()),
+                    CompileUiAttr::Padding(8, 8, 8, 8),
+                ],
+                children: vec![
+                    CompileUiTemplate::Node {
+                        desc: CompileUiDesc::NoDescription,
+                        attrs: vec![
+                            CompileUiAttr::Style("__row".to_string(), "true".to_string()),
+                            CompileUiAttr::Attribute("class".to_string(), "marker".to_string()),
+                        ],
+                        children: vec![CompileUiTemplate::Text("uno".to_string())],
+                    },
+                    CompileUiTemplate::Text("two".to_string()),
+                ],
+            }
         );
     }
 }

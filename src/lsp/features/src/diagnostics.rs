@@ -244,3 +244,65 @@ pub fn to_lsp(diag: &Diagnostic, text: &str, encoding: PositionEncoding) -> lsp_
         data: None,
     }
 }
+
+/// Run the linter over the project's user modules and return each finding as an
+/// LSP diagnostic, keyed by owning module.
+///
+/// This is the transport that surfaces lint findings live in the editor
+/// alongside the compiler's own diagnostics (the way clippy flows through
+/// rust-analyzer).
+///
+/// `user_texts` is the source of each module the editor owns a file for
+/// (injected stdlib is excluded — the linter reasons over the user's code).
+/// `config` is the resolved `lint.ipe` (or defaults). The message reuses the
+/// finding's own prose; the help lines are appended so the editor shows the same
+/// teaching the CLI does.
+#[must_use]
+pub fn collect_lint(
+    user_texts: &BTreeMap<Vec<String>, String>,
+    config: &ipe_lint::LintConfig,
+    encoding: PositionEncoding,
+) -> Vec<(Vec<String>, Vec<lsp_types::Diagnostic>)> {
+    let modules: Vec<ipe_lint::SourceModule> = user_texts
+        .iter()
+        .map(|(module, source)| ipe_lint::SourceModule {
+            module: module.clone(),
+            source: source.clone(),
+        })
+        .collect();
+    let report = ipe_lint::run(&modules, config);
+
+    let mut per_module: BTreeMap<Vec<String>, Vec<lsp_types::Diagnostic>> = BTreeMap::new();
+    for finding in &report.findings {
+        let Some(text) = user_texts.get(&finding.module) else {
+            continue;
+        };
+        let severity = match config.severity_of(finding.rule) {
+            ipe_lint::Severity::Deny => DiagnosticSeverity::ERROR,
+            // A warn-level (or allow, though allow never reaches here) lint is a
+            // hint in the editor — advisory, never a build blocker.
+            ipe_lint::Severity::Warn | ipe_lint::Severity::Allow => DiagnosticSeverity::WARNING,
+        };
+        let range = span_to_range(text, finding.span, encoding);
+        let message = if finding.help.is_empty() {
+            finding.message.clone()
+        } else {
+            format!("{}\n{}", finding.message, finding.help.join("\n"))
+        };
+        per_module
+            .entry(finding.module.clone())
+            .or_default()
+            .push(lsp_types::Diagnostic {
+                range,
+                severity: Some(severity),
+                code: Some(NumberOrString::String(format!("lint/{}", finding.rule))),
+                code_description: None,
+                source: Some("ipe-lint".to_owned()),
+                message,
+                related_information: None,
+                tags: None,
+                data: None,
+            });
+    }
+    per_module.into_iter().collect()
+}

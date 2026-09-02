@@ -1,9 +1,12 @@
 module Package exposing (package)
 
+import Ipe.Package exposing (..)
 
+
+package : Package
 package =
-    Package.named "iced-counter"
-        |> Package.version "0.1.0"
-        |> Package.rustDependencies
-            [ Package.rustDep "iced" "=0.12.1"
-            ]
+    { name = "iced-counter"
+    , version = "0.1.0"
+    , rustDependencies =
+        [ rustDep "iced" "=0.12.1" ]
+    }

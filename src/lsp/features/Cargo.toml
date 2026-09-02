@@ -12,6 +12,7 @@ ipe_canon = { path = "../../compiler/canon" }
 ipe_syntax = { path = "../../compiler/syntax" }
 ipe_types = { path = "../../compiler/types" }
 ipe_annotate = { path = "../../compiler/annotate" }
+ipe_lint = { path = "../../compiler/lint" }
 lsp-types = "0.95"
 
 [lints]

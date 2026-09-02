@@ -1,4 +1,4 @@
-//! `package.ipe`'s `Package.database (Package.postgres)` must actually change
+//! `package.ipe`'s `build = { database = Postgres }` must actually change
 //! what gets emitted rather than being a silent no-op: the driver choice threads
 //! through to `ipe_backend_rust::project::emit_program`'s template selection
 //! instead of the sqlite `config.rs` template being written unconditionally.
@@ -41,8 +41,8 @@ main =
 ";
 
 /// Write a minimal project (`package.ipe` + `src/Main.ipe`) under a fresh temp
-/// dir, with the given `Package.database` pipeline stage spliced in verbatim
-/// (empty string → no database stage at all, i.e. the default driver).
+/// dir, with the given record-field fragment spliced into the `package` record
+/// verbatim (empty string → no extra field at all, i.e. the default driver).
 #[allow(clippy::expect_used)]
 fn write_project(test_name: &str, database_stage: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!("ipec_pg_reachability_{test_name}"));
@@ -53,22 +53,19 @@ fn write_project(test_name: &str, database_stage: &str) -> PathBuf {
     fs::write(
         dir.join("package.ipe"),
         format!(
-            "module Package exposing (package)\n\n\npackage =\n    Package.named \"pgtest\"\n{database_stage}"
+            "module Package exposing (package)\n\nimport Ipe.Package exposing (..)\n\n\npackage : Package\npackage =\n    {{ name = \"pgtest\"{database_stage} }}\n"
         ),
     )
     .expect("write package.ipe");
     dir
 }
 
-/// `Package.database (Package.postgres)` in `package.ipe` must cause the
+/// `build = { database = Postgres }` in `package.ipe` must cause the
 /// emitted `src/ipe_runtime/config.rs` to declare `sqlx::postgres::PgPool` /
 /// `PgRow` and `DB_USES_RETURNING_ID: bool = true` — NOT the sqlite template.
 #[test]
 fn postgres_driver_selects_postgres_config_template() {
-    let dir = write_project(
-        "postgres_select",
-        "        |> Package.database (Package.postgres)\n",
-    );
+    let dir = write_project("postgres_select", ", build = { database = Postgres }");
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("pg_reachability_postgres_select");
     let _ = fs::remove_dir_all(&out);
 
@@ -123,10 +120,7 @@ fn postgres_driver_project_cargo_builds() {
     if std::env::var("IPE_E2E").is_err() {
         return;
     }
-    let dir = write_project(
-        "postgres_cargo_build",
-        "        |> Package.database (Package.postgres)\n",
-    );
+    let dir = write_project("postgres_cargo_build", ", build = { database = Postgres }");
     let out =
         PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("pg_reachability_postgres_cargo_build");
     let _ = fs::remove_dir_all(&out);

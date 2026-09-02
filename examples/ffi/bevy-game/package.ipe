@@ -1,9 +1,12 @@
 module Package exposing (package)
 
+import Ipe.Package exposing (..)
 
+
+package : Package
 package =
-    Package.named "bevy-game"
-        |> Package.version "0.1.0"
-        |> Package.rustDependencies
-            [ Package.rustDep "bevy_ecs" "=0.19.0"
-            ]
+    { name = "bevy-game"
+    , version = "0.1.0"
+    , rustDependencies =
+        [ rustDep "bevy_ecs" "=0.19.0" ]
+    }

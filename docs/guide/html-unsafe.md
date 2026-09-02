@@ -18,7 +18,7 @@ Two ideas.
 - **The risk is named and disclosed.** The `unsafe` prefix marks the hazard at
   every call site, and importing the module discloses the `unsafe` capability
   program-wide — a project accepts it once with
-  `Package.accepts [ Capability.unsafe ]`, so a reviewer sees the raw sink before
+  `capabilities = { accepts = [ Unsafe ] }`, so a reviewer sees the raw sink before
   the program runs. The safe `Html.text` needs no such capability.
 
 ## A worked example: safe next to unsafe
@@ -41,10 +41,12 @@ comparison =
 The manifest pre-accepts the capability:
 
 ```ipe
+package : Package
 package =
-    Package.named "html-unsafe-boundary"
-        |> Package.version "0.1.0"
-        |> Package.accepts [ Capability.unsafe ]
+    { name = "html-unsafe-boundary"
+    , version = "0.1.0"
+    , capabilities = { accepts = [ Unsafe ] }
+    }
 ```
 
 Running it (`ipe run`):

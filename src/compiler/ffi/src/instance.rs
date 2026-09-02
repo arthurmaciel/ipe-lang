@@ -765,24 +765,23 @@ fn render_generic_wrapper(base_name: &str, g: &GenericFn) -> String {
         // The Maybe→Option shadow runs before the spawn so the spawned
         // `async move` captures the host `Option`, not the Ipê carrier.
         lines.extend(maybe_prelude.iter().map(|p| format!("        {p}")));
-        lines.push(format!(
-            "        let handle = tokio::task::spawn(async move {{ {body_call}.await }});"
-        ));
-        lines.push("        let guard = AbortOnDrop::new(handle.abort_handle());".to_owned());
-        lines.push("        let joined = handle.await;".to_owned());
-        lines.push("        guard.defuse();".to_owned());
+        // The spawn + cancel-guard + join-error funnel is `ffi_spawn_guarded` —
+        // arming the `AbortOnDrop` and folding a poll-time panic to the redacted
+        // funnel are its indivisible job, so this shape cannot spawn unguarded.
+        // A non-panic `JoinError` is already the funnelled `Err`; only the
+        // success value needs the shape's own lift.
         if ret_is_result {
             lines.push(format!(
-                "        match joined \
+                "        match ffi_spawn_guarded(async move {{ {body_call}.await }}).await \
                  {{ Ok(Ok(v)) => ok_res({ok_lift}), Ok(Err(e)) => \
-                 IpeResult::Err(ipe_error_from_foreign(e)), Err(join_err) => \
-                 IpeResult::Err(ipe_error_from_foreign(join_err)) }}"
+                 IpeResult::Err(ipe_error_from_foreign(e)), Err(e) => \
+                 IpeResult::Err(e) }}"
             ));
         } else {
             lines.push(format!(
-                "        match joined \
-                 {{ Ok(v) => ok_res({ok_lift}), Err(join_err) => \
-                 IpeResult::Err(ipe_error_from_foreign(join_err)) }}"
+                "        match ffi_spawn_guarded(async move {{ {body_call}.await }}).await \
+                 {{ Ok(v) => ok_res({ok_lift}), Err(e) => \
+                 IpeResult::Err(e) }}"
             ));
         }
         lines.push("    })".to_owned());
@@ -1373,25 +1372,13 @@ match ::std::panic::catch_unwind(::std::panic::AssertUnwindSafe(move || ::box1::
             "{}",
             w.source
         );
-        // Spawned with an abort-on-drop guard, three-arm fallible match (the
-        // JoinError arm through the same redaction funnel), serde OK
+        // Spawned through the guarded choke-point (spawn + abort-on-drop +
+        // join-error funnel are its indivisible job), three-arm fallible match
+        // (the funnelled JoinError rides the trailing `Err(e)` arm), serde OK
         // re-serialised.
         assert!(
             w.source.contains(
-                "let handle = tokio::task::spawn(async move { <::db::Db as ::db::Repo>::get_obj::<serde_json::Value>(&arg0, sv_1).await });"
-            ),
-            "{}",
-            w.source
-        );
-        assert!(
-            w.source
-                .contains("let guard = AbortOnDrop::new(handle.abort_handle());"),
-            "{}",
-            w.source
-        );
-        assert!(
-            w.source.contains(
-                "match joined { Ok(Ok(v)) => ok_res(serde_json::to_string(&(v)).unwrap_or_default()), Ok(Err(e)) => IpeResult::Err(ipe_error_from_foreign(e)), Err(join_err) => IpeResult::Err(ipe_error_from_foreign(join_err)) }"
+                "match ffi_spawn_guarded(async move { <::db::Db as ::db::Repo>::get_obj::<serde_json::Value>(&arg0, sv_1).await }).await { Ok(Ok(v)) => ok_res(serde_json::to_string(&(v)).unwrap_or_default()), Ok(Err(e)) => IpeResult::Err(ipe_error_from_foreign(e)), Err(e) => IpeResult::Err(e) }"
             ),
             "{}",
             w.source
