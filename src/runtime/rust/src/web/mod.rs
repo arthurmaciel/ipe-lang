@@ -5950,6 +5950,434 @@ mod hot_msg_handler_tests {
 }
 
 #[cfg(test)]
+mod hot_init_handler_tests {
+    //! Regression-locks the `POST /_ipe/hot-init` trust boundary — the dev-only
+    //! leg that updates the server-held init datum from an untrusted dev channel.
+    //! Mirrors `hot_transition_handler_tests` in structure and coverage.
+
+    use super::*;
+    use crate::system::{locked_remove_var, locked_set_var};
+    use crate::web::init_datum::{self, InitDatum};
+    use crate::web::literal_table::{overlay_test_lock, set_dev_overlay_active_for_test};
+    use crate::web::store::MemoryStore;
+    use axum::Router;
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode};
+    use axum::routing::post;
+    use std::time::Duration;
+    use tower::ServiceExt;
+
+    type TestModel = ();
+    type TestMsg = ();
+    type TestStore = MemoryStore<TestModel, TestMsg>;
+    type TestWebState = WebState<
+        TestModel,
+        TestMsg,
+        fn() -> (),
+        fn(TestMsg, TestModel) -> (TestModel, IpeCmd<TestMsg>),
+        fn(TestModel) -> Html<TestMsg>,
+        fn(TestModel) -> IpeSub<TestMsg>,
+    >;
+
+    fn test_init() {}
+    fn test_update(_msg: TestMsg, model: TestModel) -> (TestModel, IpeCmd<TestMsg>) {
+        (model, IpeCmd::None)
+    }
+    fn test_view(_model: TestModel) -> Html<TestMsg> {
+        Html::HText(String::new())
+    }
+    fn test_subs(_model: TestModel) -> IpeSub<TestMsg> {
+        IpeSub::None
+    }
+    fn test_route_resolver(m: TestModel, _path: &str) -> TestModel {
+        m
+    }
+    fn test_param_resolver(_path: &str) -> crate::dict::IpeDict<String> {
+        crate::dict::dict_empty()
+    }
+    fn test_route_matched(p: &str) -> bool {
+        p == "/"
+    }
+
+    fn make_router() -> Router {
+        let store = Arc::new(TestStore::new(Duration::from_secs(60)));
+        let state: TestWebState = WebState {
+            store: store as Arc<dyn store::SessionStore<TestModel, TestMsg>>,
+            init: Arc::new(test_init),
+            update: Arc::new(test_update),
+            view: Arc::new(test_view),
+            subs: Arc::new(test_subs),
+            route_resolver: Arc::new(test_route_resolver),
+            param_resolver: Arc::new(test_param_resolver),
+            route_matched: Arc::new(test_route_matched),
+            session_count: Arc::new(AtomicUsize::new(0)),
+            watch_build_status: Arc::new(Mutex::new(None)),
+        };
+        Router::new()
+            .route(
+                "/_ipe/hot-init",
+                post(
+                    handlers::hot_init_handler::<
+                        TestModel,
+                        TestMsg,
+                        fn() -> (),
+                        fn(TestMsg, TestModel) -> (TestModel, IpeCmd<TestMsg>),
+                        fn(TestModel) -> Html<TestMsg>,
+                        fn(TestModel) -> IpeSub<TestMsg>,
+                    >,
+                ),
+            )
+            .with_state(state)
+    }
+
+    async fn post_hot_init(token: Option<&str>, body: &str) -> axum::response::Response {
+        let mut builder = Request::builder()
+            .method("POST")
+            .uri("/_ipe/hot-init")
+            .header("content-type", "application/json");
+        if let Some(t) = token {
+            builder = builder.header("x-ipe-hot-token", t);
+        }
+        let req = builder.body(Body::from(body.to_owned())).expect("request");
+        make_router().oneshot(req).await.expect("router responds")
+    }
+
+    fn with_overlay_serialised<F: std::future::Future<Output = ()>>(body: impl FnOnce() -> F) {
+        let _g = overlay_test_lock();
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("current-thread runtime");
+        rt.block_on(body());
+        init_datum::clear_dev_init_for_test();
+        set_dev_overlay_active_for_test(None);
+        locked_remove_var("IPE_WATCH_HOT_TOKEN");
+    }
+
+    fn baked_json() -> String {
+        serde_json::to_string(&InitDatum {
+            model: serde_json::json!({}),
+        })
+        .expect("serialize datum")
+    }
+
+    fn replacement_json() -> String {
+        serde_json::to_string(&InitDatum {
+            model: serde_json::json!({"x": 1}),
+        })
+        .expect("serialize datum")
+    }
+
+    /// No token → 403, even with the dev gate on and a well-formed body.
+    #[test]
+    fn token_missing_is_403() {
+        with_overlay_serialised(|| async {
+            set_dev_overlay_active_for_test(Some(true));
+            locked_set_var("IPE_WATCH_HOT_TOKEN", "secret");
+            let body = format!(
+                r#"{{"old_json":{},"new_json":{}}}"#,
+                serde_json::to_string(&baked_json()).unwrap(),
+                serde_json::to_string(&replacement_json()).unwrap()
+            );
+            let resp = post_hot_init(None, &body).await;
+            assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+        });
+    }
+
+    /// Wrong token → 403.
+    #[test]
+    fn token_wrong_is_403() {
+        with_overlay_serialised(|| async {
+            set_dev_overlay_active_for_test(Some(true));
+            locked_set_var("IPE_WATCH_HOT_TOKEN", "correct");
+            let body = format!(
+                r#"{{"old_json":{},"new_json":{}}}"#,
+                serde_json::to_string(&baked_json()).unwrap(),
+                serde_json::to_string(&replacement_json()).unwrap()
+            );
+            let resp = post_hot_init(Some("wrong"), &body).await;
+            assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+        });
+    }
+
+    /// Dev gate OFF → 404 (defence in depth), even with the correct token.
+    #[test]
+    fn dev_gate_off_is_404() {
+        with_overlay_serialised(|| async {
+            set_dev_overlay_active_for_test(Some(false));
+            locked_set_var("IPE_WATCH_HOT_TOKEN", "correct");
+            let body = format!(
+                r#"{{"old_json":{},"new_json":{}}}"#,
+                serde_json::to_string(&baked_json()).unwrap(),
+                serde_json::to_string(&replacement_json()).unwrap()
+            );
+            let resp = post_hot_init(Some("correct"), &body).await;
+            assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+        });
+    }
+
+    /// Malformed request body → 400.
+    #[test]
+    fn malformed_body_is_400() {
+        with_overlay_serialised(|| async {
+            set_dev_overlay_active_for_test(Some(true));
+            locked_set_var("IPE_WATCH_HOT_TOKEN", "correct");
+            let resp = post_hot_init(Some("correct"), "not json").await;
+            assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        });
+    }
+
+    /// Well-formed body whose `new_json` is NOT a valid `InitDatum` → 400
+    /// (parse, don't validate: only a decodable datum is registered).
+    #[test]
+    fn invalid_init_datum_json_is_400() {
+        with_overlay_serialised(|| async {
+            set_dev_overlay_active_for_test(Some(true));
+            locked_set_var("IPE_WATCH_HOT_TOKEN", "correct");
+            let body = format!(
+                r#"{{"old_json":{},"new_json":"{{not a datum}}"}}"#,
+                serde_json::to_string(&baked_json()).unwrap()
+            );
+            let resp = post_hot_init(Some("correct"), &body).await;
+            assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        });
+    }
+
+    /// Correct token + valid body → 200, replacement registered.
+    #[test]
+    fn accept_registers_replacement() {
+        with_overlay_serialised(|| async {
+            set_dev_overlay_active_for_test(Some(true));
+            init_datum::clear_dev_init_for_test();
+            locked_set_var("IPE_WATCH_HOT_TOKEN", "correct");
+
+            let body = format!(
+                r#"{{"old_json":{},"new_json":{}}}"#,
+                serde_json::to_string(&baked_json()).unwrap(),
+                serde_json::to_string(&replacement_json()).unwrap()
+            );
+            let resp = post_hot_init(Some("correct"), &body).await;
+            assert_eq!(resp.status(), StatusCode::OK);
+        });
+    }
+}
+
+#[cfg(test)]
+mod hot_wiring_handler_tests {
+    //! Regression-locks the `POST /_ipe/hot-wiring` trust boundary — the dev-only
+    //! leg that updates the server-held Cmd wiring from an untrusted dev channel.
+    //! Mirrors `hot_transition_handler_tests` in structure and coverage.
+
+    use super::*;
+    use crate::system::{locked_remove_var, locked_set_var};
+    use crate::web::cmd_wiring::{self, CmdWiring};
+    use crate::web::literal_table::{overlay_test_lock, set_dev_overlay_active_for_test};
+    use crate::web::store::MemoryStore;
+    use axum::Router;
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode};
+    use axum::routing::post;
+    use std::time::Duration;
+    use tower::ServiceExt;
+
+    type TestModel = ();
+    type TestMsg = ();
+    type TestStore = MemoryStore<TestModel, TestMsg>;
+    type TestWebState = WebState<
+        TestModel,
+        TestMsg,
+        fn() -> (),
+        fn(TestMsg, TestModel) -> (TestModel, IpeCmd<TestMsg>),
+        fn(TestModel) -> Html<TestMsg>,
+        fn(TestModel) -> IpeSub<TestMsg>,
+    >;
+
+    fn test_init() {}
+    fn test_update(_msg: TestMsg, model: TestModel) -> (TestModel, IpeCmd<TestMsg>) {
+        (model, IpeCmd::None)
+    }
+    fn test_view(_model: TestModel) -> Html<TestMsg> {
+        Html::HText(String::new())
+    }
+    fn test_subs(_model: TestModel) -> IpeSub<TestMsg> {
+        IpeSub::None
+    }
+    fn test_route_resolver(m: TestModel, _path: &str) -> TestModel {
+        m
+    }
+    fn test_param_resolver(_path: &str) -> crate::dict::IpeDict<String> {
+        crate::dict::dict_empty()
+    }
+    fn test_route_matched(p: &str) -> bool {
+        p == "/"
+    }
+
+    fn make_router() -> Router {
+        let store = Arc::new(TestStore::new(Duration::from_secs(60)));
+        let state: TestWebState = WebState {
+            store: store as Arc<dyn store::SessionStore<TestModel, TestMsg>>,
+            init: Arc::new(test_init),
+            update: Arc::new(test_update),
+            view: Arc::new(test_view),
+            subs: Arc::new(test_subs),
+            route_resolver: Arc::new(test_route_resolver),
+            param_resolver: Arc::new(test_param_resolver),
+            route_matched: Arc::new(test_route_matched),
+            session_count: Arc::new(AtomicUsize::new(0)),
+            watch_build_status: Arc::new(Mutex::new(None)),
+        };
+        Router::new()
+            .route(
+                "/_ipe/hot-wiring",
+                post(
+                    handlers::hot_wiring_handler::<
+                        TestModel,
+                        TestMsg,
+                        fn() -> (),
+                        fn(TestMsg, TestModel) -> (TestModel, IpeCmd<TestMsg>),
+                        fn(TestModel) -> Html<TestMsg>,
+                        fn(TestModel) -> IpeSub<TestMsg>,
+                    >,
+                ),
+            )
+            .with_state(state)
+    }
+
+    async fn post_hot_wiring(token: Option<&str>, body: &str) -> axum::response::Response {
+        let mut builder = Request::builder()
+            .method("POST")
+            .uri("/_ipe/hot-wiring")
+            .header("content-type", "application/json");
+        if let Some(t) = token {
+            builder = builder.header("x-ipe-hot-token", t);
+        }
+        let req = builder.body(Body::from(body.to_owned())).expect("request");
+        make_router().oneshot(req).await.expect("router responds")
+    }
+
+    fn with_overlay_serialised<F: std::future::Future<Output = ()>>(body: impl FnOnce() -> F) {
+        let _g = overlay_test_lock();
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("current-thread runtime");
+        rt.block_on(body());
+        cmd_wiring::clear_dev_wiring_for_test();
+        set_dev_overlay_active_for_test(None);
+        locked_remove_var("IPE_WATCH_HOT_TOKEN");
+    }
+
+    fn baked_none_json() -> String {
+        serde_json::to_string(&CmdWiring::none()).expect("serialize wiring")
+    }
+
+    fn wiring_effect_0_json() -> String {
+        serde_json::to_string(&CmdWiring::effect(0)).expect("serialize wiring")
+    }
+
+    /// No token → 403, even with the dev gate on and a well-formed body.
+    #[test]
+    fn token_missing_is_403() {
+        with_overlay_serialised(|| async {
+            set_dev_overlay_active_for_test(Some(true));
+            locked_set_var("IPE_WATCH_HOT_TOKEN", "secret");
+            let body = format!(
+                r#"{{"old_json":{},"new_json":{}}}"#,
+                serde_json::to_string(&baked_none_json()).unwrap(),
+                serde_json::to_string(&wiring_effect_0_json()).unwrap()
+            );
+            let resp = post_hot_wiring(None, &body).await;
+            assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+        });
+    }
+
+    /// Wrong token → 403.
+    #[test]
+    fn token_wrong_is_403() {
+        with_overlay_serialised(|| async {
+            set_dev_overlay_active_for_test(Some(true));
+            locked_set_var("IPE_WATCH_HOT_TOKEN", "correct");
+            let body = format!(
+                r#"{{"old_json":{},"new_json":{}}}"#,
+                serde_json::to_string(&baked_none_json()).unwrap(),
+                serde_json::to_string(&wiring_effect_0_json()).unwrap()
+            );
+            let resp = post_hot_wiring(Some("wrong"), &body).await;
+            assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+        });
+    }
+
+    /// Dev gate OFF → 404 (defence in depth), even with the correct token.
+    #[test]
+    fn dev_gate_off_is_404() {
+        with_overlay_serialised(|| async {
+            set_dev_overlay_active_for_test(Some(false));
+            locked_set_var("IPE_WATCH_HOT_TOKEN", "correct");
+            let body = format!(
+                r#"{{"old_json":{},"new_json":{}}}"#,
+                serde_json::to_string(&baked_none_json()).unwrap(),
+                serde_json::to_string(&wiring_effect_0_json()).unwrap()
+            );
+            let resp = post_hot_wiring(Some("correct"), &body).await;
+            assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+        });
+    }
+
+    /// Malformed request body → 400.
+    #[test]
+    fn malformed_body_is_400() {
+        with_overlay_serialised(|| async {
+            set_dev_overlay_active_for_test(Some(true));
+            locked_set_var("IPE_WATCH_HOT_TOKEN", "correct");
+            let resp = post_hot_wiring(Some("correct"), "not json").await;
+            assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        });
+    }
+
+    /// Well-formed body whose `new_json` is NOT a valid `CmdWiring` → 400
+    /// (parse, don't validate: only a decodable wiring is registered).
+    #[test]
+    fn invalid_wiring_json_is_400() {
+        with_overlay_serialised(|| async {
+            set_dev_overlay_active_for_test(Some(true));
+            locked_set_var("IPE_WATCH_HOT_TOKEN", "correct");
+            let body = format!(
+                r#"{{"old_json":{},"new_json":"{{not a wiring}}"}}"#,
+                serde_json::to_string(&baked_none_json()).unwrap()
+            );
+            let resp = post_hot_wiring(Some("correct"), &body).await;
+            assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        });
+    }
+
+    /// Correct token + valid body → 200, replacement registered.
+    #[test]
+    fn accept_registers_replacement() {
+        with_overlay_serialised(|| async {
+            set_dev_overlay_active_for_test(Some(true));
+            cmd_wiring::clear_dev_wiring_for_test();
+            locked_set_var("IPE_WATCH_HOT_TOKEN", "correct");
+
+            let body = format!(
+                r#"{{"old_json":{},"new_json":{}}}"#,
+                serde_json::to_string(&baked_none_json()).unwrap(),
+                serde_json::to_string(&wiring_effect_0_json()).unwrap()
+            );
+            let resp = post_hot_wiring(Some("correct"), &body).await;
+            assert_eq!(resp.status(), StatusCode::OK);
+
+            // Verify the replacement was registered: the baked `none` key now
+            // selects effect id 0 from the arm's table.
+            assert_eq!(
+                cmd_wiring::select_cmd_hot(&baked_none_json(), 2),
+                Some(0),
+                "registered wiring must select effect id 0"
+            );
+        });
+    }
+}
+
+#[cfg(test)]
 mod bind_error_tests {
     /// The port-taken error message must name `IPE_WEB_PORT` and use an 8xxx example port.
     #[test]
