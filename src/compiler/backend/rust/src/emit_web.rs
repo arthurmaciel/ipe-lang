@@ -3111,6 +3111,59 @@ mod hot_appearance_tests {
         Ok(())
     }
 
+    /// A `Ipe.Ui` subtree carrying BOTH a model-dependent `onClick` handler hole
+    /// and a model-derived text value hole templatizes via the combined materializer
+    /// (`materialize_ui_template_str_with_holes_and_handlers`), which resolves both
+    /// hole kinds in one pass. Previously this subtree was refused and stayed
+    /// compiled; now it templates correctly.
+    #[test]
+    fn mixed_value_hole_and_handler_hole_templatizes_via_combined_materializer() -> DResult<()> {
+        let mut interner = Interner::new();
+        // `ui_node_(descNone, [onClick msg], [ui_text_ model_str])`
+        // — one handler hole (onClick) + one element hole (ui_text_ over a Var).
+        let mixed = Expr::Call {
+            callee: Callee::Kernel(KernelFn::UiNode),
+            args: vec![
+                ui_desc_none(),
+                ui_attr_list(vec![Expr::Call {
+                    callee: Callee::Kernel(KernelFn::UiOnClick),
+                    args: vec![Expr::Var(interner.intern("msg")?)],
+                    pin: CallPin::None,
+                    on_form: OnFormKind::NotForm,
+                }]),
+                ui_child_list(vec![Expr::Call {
+                    callee: Callee::Kernel(KernelFn::UiText),
+                    args: vec![Expr::Var(interner.intern("label")?)],
+                    pin: CallPin::None,
+                    on_form: OnFormKind::NotForm,
+                }]),
+            ],
+            pin: CallPin::None,
+            on_form: OnFormKind::NotForm,
+        };
+        let (program, view) = one_view_program(&mut interner, mixed)?;
+        let out = emit_view(&interner, &program, &view, true)?;
+        assert!(
+            out.contains("materialize_ui_template_str_with_holes_and_handlers"),
+            "a subtree with both a value hole and a handler hole must use \
+             the combined materializer, got:\n{out}"
+        );
+        assert!(
+            out.contains("UiHandlerMap::from_msgs"),
+            "the combined path must build the per-render handler map, got:\n{out}"
+        );
+        // The structural node is gone; the value hole fill (`ui_text_`) is still
+        // present as a compiled expression passed INTO the materializer — that is
+        // correct. Only the top-level `ui_node_` structural call must be absent.
+        assert!(
+            !out.contains("ui_node_"),
+            "the inline structural node must be replaced by the combined template \
+             read (the fill may still call ui_text_ as a compiled fill expr), \
+             got:\n{out}"
+        );
+        Ok(())
+    }
+
     /// A static `Ipe.Ui` subtree in a NON-web shape does not template — it emits
     /// inline (the template table is a web-runtime type).
     #[test]
