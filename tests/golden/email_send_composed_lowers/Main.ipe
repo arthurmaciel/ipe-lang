@@ -1,0 +1,24 @@
+module Main exposing (main)
+
+import Ipe.Email as Email
+import Ipe.List as List
+import Ipe.Io as Io
+import Ipe.String as String
+
+
+-- Point-free alias of the provider-taking `send` kernel, deliberately
+-- unannotated so its `EmailProvider` parameter type is the inferred kernel
+-- scheme's constructor, with no source annotation to home it.
+dispatch =
+    Email.send
+
+
+-- Keep `dispatch` live (referenced from `main`) so its inferred type reaches
+-- the lowerer instead of being pruned as dead code.
+senders =
+    [ dispatch ]
+
+
+main : Task Error ()
+main =
+    Io.println (String.fromInt (List.length senders))

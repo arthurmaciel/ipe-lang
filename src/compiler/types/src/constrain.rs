@@ -784,6 +784,12 @@ struct Builtins {
     /// The interned module segments `["Ipe", "Codec"]` — the real home of the
     /// `Codec` ADT.
     codec_home: Vec<Symbol>,
+    /// The interned module segments `["Ipe", "Email"]` — the real home of the
+    /// `EmailProvider` ADT. The `send` kernel scheme carries this home so a
+    /// point-free reference lowers to the emitted enum instead of dropping
+    /// through the lowerer's home-keyed variant lookup into the unknown-builtin
+    /// internal-compiler-error arm.
+    email_home: Vec<Symbol>,
 }
 
 impl Builtins {
@@ -1064,6 +1070,7 @@ impl Builtins {
                 interner.intern("Store")?,
             ],
             codec_home: vec![interner.intern("Ipe")?, interner.intern("Codec")?],
+            email_home: vec![interner.intern("Ipe")?, interner.intern("Email")?],
         })
     }
 
@@ -4591,6 +4598,12 @@ impl<'a> Builder<'a> {
     fn builtin_con_module(&self, tag: BuiltinTag) -> Vec<Symbol> {
         match tag {
             BuiltinTag::HtmlAttribute => vec![self.builtins.html_con],
+            // The `send` kernel takes `EmailProvider` as its first parameter.
+            // Carrying the real `Ipe.Email` home lets a point-free reference to
+            // the interpreted scheme lower to the emitted enum; without it the
+            // unhomed `Con` misses the lowerer's home-keyed variant lookup and
+            // drops into the unknown-builtin internal-compiler-error arm.
+            BuiltinTag::EmailProvider => self.builtins.email_home.clone(),
             _ => Vec::new(),
         }
     }
@@ -5036,12 +5049,15 @@ impl<'a> Builder<'a> {
             m.insert(self.builtins.ws_f_ping_interval, int());
             Ty::Record(m, RowTail::Closed)
         };
-        // Ipe.Email: `EmailProvider` opaque ADT (runtime
-        // `ipe_runtime::email::EmailProvider`). Empty-module `Con` (home-
-        // insensitive lowering, same posture as `ws_server`); the Ipê
-        // `type EmailProvider` declaration unifies with it structurally by name.
+        // Ipe.Email: `EmailProvider` closed ADT (runtime
+        // `ipe_runtime::email::EmailProvider`). The `send` kernel takes this as
+        // its first parameter; carrying the real `Ipe.Email` home lets a
+        // point-free reference to the scheme lower to the emitted enum instead
+        // of dropping into the lowerer's unknown-builtin internal-compiler-error
+        // arm. Empty-home unifies with the user's declared type, but only the
+        // real home keys the home-sensitive variant lookup.
         let email_provider = || Ty::Con {
-            module: Vec::new(),
+            module: self.builtins.email_home.clone(),
             name: self.builtins.email_provider,
             args: Vec::new(),
         };
