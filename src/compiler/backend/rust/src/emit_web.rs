@@ -597,6 +597,11 @@ fn emit_single_page_web_leaf(
     let serve_call = format!(
         "ipe_runtime::web::web_app({init_s}, {update_s}, {view_s}, {subs_s}, {store_args})"
     );
+    // The additive-`Msg`-variant hot-swap descriptor: an inert emitted const the
+    // `ipe watch` classifier scans to diff the `Msg` variant surface. Empty (no
+    // emit change) unless the `hot_appearance` dev gate is on, so a release emit is
+    // byte-identical.
+    let msg_set_item = msg_set_descriptor_item(ctx, update_e);
     if mountable {
         let init_s2 = emit_web_fn(ctx, init_e, indent, child, generics)?;
         let update_s2 = emit_web_fn(ctx, update_e, indent, child, generics)?;
@@ -607,13 +612,13 @@ fn emit_single_page_web_leaf(
             "ipe_runtime::web::web_embed_router({init_s2}, {update_s2}, {view_s2}, {subs_s2}, {store_args})"
         );
         return Ok(Some(format!(
-            "{{ {tag_const} \
+            "{{ {tag_const} {msg_set_item}\
              ipe_runtime::tea::WebApp(ipe_runtime::tea::WebAppKind::Mountable {{ \
              serve: {serve_call}, router: {router_call} }}) }}"
         )));
     }
     Ok(Some(format!(
-        "{{ {tag_const} \
+        "{{ {tag_const} {msg_set_item}\
          ipe_runtime::tea::WebApp(ipe_runtime::tea::WebAppKind::Standalone({serve_call})) }}"
     )))
 }
@@ -735,6 +740,39 @@ fn schema_tag_const(ctx: &EmitCtx, view_e: &Expr) -> DResult<String> {
     Ok(format!(
         "const IPE_WEB_MODEL_SCHEMA_TAG: [u8; 32] = [{tag_bytes}];"
     ))
+}
+
+/// Bake the program's `Msg`-set descriptor as an inert emitted item, but ONLY
+/// under the `hot_appearance` dev gate. Returns the empty string with the flag off
+/// (the default, and every production build), so a release emit is byte-identical
+/// whether or not this is called — the descriptor is a dev-loop artefact the
+/// `ipe watch` classifier scans out of the emitted text to diff the `Msg` variant
+/// surface, never anything the running program reads.
+///
+/// The emitted form is a `const IPE_WEB_MSG_SET: &str = "<descriptor JSON>";`. The
+/// JSON is [`crate::msg_set_classify::CompileMsgSet::to_json`]'s exact shape (the
+/// runtime `web::msg_set::MsgSet` serde form), so a scanned descriptor decodes
+/// back into the runtime set the additive-superset proof runs over. The item is
+/// `#[allow(dead_code)]` because nothing references it — its whole purpose is to
+/// be present in the emitted text for the classifier.
+///
+/// `None`-shaped `update`, or a `Msg` type that is not a resolvable user enum,
+/// yields the empty string (no descriptor) — the classifier then simply finds no
+/// descriptor to diff and the edit takes the ordinary appearance/transition/Logic
+/// path, never a spurious `Msg`-set hot-swap.
+fn msg_set_descriptor_item(ctx: &EmitCtx, update_e: &Expr) -> String {
+    if !ctx.hot_appearance {
+        return String::new();
+    }
+    let Some(json) = ctx.msg_set_descriptor_json(update_e) else {
+        return String::new();
+    };
+    // The descriptor JSON is a plain double-quoted Rust string literal; embed it
+    // via `{:?}` so any `"`/`\` in a variant name is escaped exactly. The trailing
+    // space separates the item from the following `ipe_runtime::…` token when the
+    // gate is on; with the gate off this helper returns `""`, leaving the emitted
+    // text byte-identical.
+    format!("#[allow(dead_code)] const IPE_WEB_MSG_SET: &str = {json:?}; ")
 }
 
 /// Build the `set_page : Fn(Page, Model) -> Model` closure passed to the routed
