@@ -13,6 +13,7 @@ pub mod columns_runtime;
 pub mod columns_static;
 pub mod contract;
 pub mod env_surface;
+pub mod foreign_surface;
 pub mod matrix;
 pub mod probe;
 pub mod surface;

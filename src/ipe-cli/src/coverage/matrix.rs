@@ -10,6 +10,7 @@
 
 use crate::coverage::contract::{AspectCheck, Cell, StdlibSymbol, Surface};
 use crate::coverage::env_surface::EnvItem;
+use crate::coverage::foreign_surface::ForeignItem;
 
 /// The registered static aspect columns of the stdlib surface.
 ///
@@ -183,4 +184,23 @@ pub fn env_columns() -> Vec<Box<dyn AspectCheck<EnvItem>>> {
 #[must_use]
 pub fn run_env() -> MatrixReport {
     run(&crate::coverage::env_surface::EnvVarSurface, &env_columns())
+}
+
+/// The registered aspect columns of the foreign-binding surface.
+///
+/// All five columns read only the closed [`ipe_kernels::Capability::ALL`]
+/// constant and scan the source tree — no program build — so they run in the
+/// fast path.
+#[must_use]
+pub fn foreign_columns() -> Vec<Box<dyn AspectCheck<ForeignItem>>> {
+    crate::coverage::foreign_surface::foreign_columns()
+}
+
+/// Run the foreign-binding surface against its registered columns.
+#[must_use]
+pub fn run_foreign() -> MatrixReport {
+    run(
+        &crate::coverage::foreign_surface::ForeignSurface,
+        &foreign_columns(),
+    )
 }
