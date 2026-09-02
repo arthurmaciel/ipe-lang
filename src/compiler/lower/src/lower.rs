@@ -19,8 +19,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use ipe_canon::ast as canon;
 use ipe_diagnostics::{
-    DResult, Diagnostic, Feature, Located, LowerError, MainRetName, Span, StoreEqAccessorDefect,
-    StoreSelectProjectionDefect,
+    DResult, Diagnostic, Feature, Located, LowerError, MainRetName, NameError, Span,
+    StoreEqAccessorDefect, StoreSelectProjectionDefect,
 };
 use ipe_intern::{Interner, Symbol};
 use ipe_ir::{
@@ -22338,7 +22338,49 @@ impl<'a> Lowerer<'a> {
         if matches!(peek, Callee::Kernel(KernelFn::WebViewApp)) {
             self.reject_non_literal_webview_window(fields)?;
         }
+        if matches!(
+            peek,
+            Callee::Kernel(KernelFn::WebApp | KernelFn::WebEmbed | KernelFn::WebAppWith)
+        ) {
+            self.reject_web_app_poly_init(fields)?;
+        }
         self.lower_app_cfg_record(fields)
+    }
+
+    /// Reject a `Web.app` / `Web.embed` / `Web.appWith` cfg whose `init` field
+    /// references a binding annotated with a free type variable in the request
+    /// argument position (`init : a -> …`). The request type is always `WebReq`;
+    /// a polymorphic annotation hides that fact and causes the emitted Rust
+    /// function to be generic (`fn init<T1: Clone>(req: T1) -> …`), which
+    /// defeats SSR access to `req.path` / `req.cookies` / … and violates the
+    /// make-invalid-states-unrepresentable principle. [IPE-N0046]
+    ///
+    /// The check is conservative: it fires only when the init value is a direct
+    /// `VarTopLevel` reference to a typed binding that has annotation type params
+    /// (`poly_var_map` entry present). A let-bound / lambda / call-result init
+    /// cannot be annotated with a free type var and reaches other gates first.
+    fn reject_web_app_poly_init(&self, fields: &[(Symbol, canon::Expr)]) -> DResult<()> {
+        for (name, value) in fields {
+            if self.resolve(*name)? != "init" {
+                continue;
+            }
+            let canon::Expr_::VarTopLevel {
+                module,
+                name: init_sym,
+            } = &value.value
+            else {
+                break;
+            };
+            let key = (module.clone(), *init_sym);
+            if self.types.poly_var_map.contains_key(&key) {
+                return Err(Diagnostic::Name {
+                    span: value.span,
+                    msg: NameError::WebInitPolyArg,
+                });
+            }
+            break;
+        }
+        Ok(())
     }
 
     /// Webview `window` must be an inline record and `window.size` an inline

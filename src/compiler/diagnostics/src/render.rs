@@ -523,6 +523,12 @@ fn name_prose(msg: &NameError) -> String {
         NameError::CodecAutoUnderivable { .. } => {
             "I can't derive a codec here automatically.".to_string()
         }
+        NameError::WebInitPolyArg => {
+            "The `init` annotation uses a free type variable for the request argument, \
+             but `Web.app` always passes a `WebReq` — write `init : WebReq -> …` \
+             or remove the annotation and let inference fill it in."
+                .to_string()
+        }
         NameError::Unknown => "Something is off with a name in this code.".to_string(),
     }
 }
@@ -1526,6 +1532,11 @@ fn name_label(msg: &NameError) -> Option<String> {
             };
             Some(why)
         }
+        NameError::WebInitPolyArg => Some(
+            "change `a` to `WebReq`, or remove the type annotation entirely — \
+             inference will pin the argument to `WebReq` automatically"
+                .to_string(),
+        ),
         NameError::Unknown => None,
     }
 }
