@@ -174,7 +174,7 @@ pub fn env_columns() -> Vec<Box<dyn AspectCheck<EnvItem>>> {
             scan.clone(),
         )),
         Box::new(crate::coverage::columns_env::DocumentedColumn::new()),
-        Box::new(crate::coverage::columns_env::TruthyParseColumn::new(scan)),
+        Box::new(crate::coverage::columns_env::TruthyParseColumn::new(&scan)),
         Box::new(crate::coverage::columns_env::ProdSafetyColumn),
     ]
 }

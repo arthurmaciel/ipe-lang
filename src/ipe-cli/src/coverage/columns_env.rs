@@ -18,7 +18,7 @@ use crate::coverage::env_surface::{EnvItem, SourceReads};
 /// The registered variable, or `NotApplicable` for an orphan read.
 ///
 /// A small helper so each registry-only column early-returns uniformly.
-fn as_registered(item: &EnvItem) -> Option<&'static EnvVar> {
+const fn as_registered(item: &EnvItem) -> Option<&'static EnvVar> {
     match item {
         EnvItem::Registered(v) => Some(*v),
         EnvItem::OrphanRead(_) => None,
@@ -67,7 +67,7 @@ pub struct ReadInCodeColumn {
 
 impl ReadInCodeColumn {
     #[must_use]
-    pub fn new(reads: SourceReads) -> Self {
+    pub const fn new(reads: SourceReads) -> Self {
         Self { reads }
     }
 }
@@ -81,7 +81,7 @@ impl AspectCheck<EnvItem> for ReadInCodeColumn {
         let Some(var) = as_registered(item) else {
             return Cell::NotApplicable;
         };
-        if self.reads.names().contains(var.name) {
+        if self.reads.all_reads().contains(var.name) {
             Cell::Ok
         } else {
             Cell::Hole(format!(
@@ -184,7 +184,7 @@ pub struct TruthyParseColumn {
 
 impl TruthyParseColumn {
     #[must_use]
-    pub fn new(reads: SourceReads) -> Self {
+    pub fn new(reads: &SourceReads) -> Self {
         Self {
             hand_rolled: reads.has_hand_rolled_truthy(),
         }
@@ -226,8 +226,8 @@ fn is_boolean_style(var: &EnvVar) -> bool {
         || p.contains("`on`")
         || p.contains("`off`")
         || p.contains("truthy");
-    let mentions_disable_enable =
-        p.contains("Set to") && (p.contains("disable") || p.contains("enable") || p.contains("off"));
+    let mentions_disable_enable = p.contains("Set to")
+        && (p.contains("disable") || p.contains("enable") || p.contains("off"));
     mentions_truthy || mentions_disable_enable
 }
 
