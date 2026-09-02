@@ -979,6 +979,24 @@ pub fn canonicalise_module_with_origin(
 ///
 /// # Errors
 /// Same set as [`canonicalise_module_with_origin`].
+/// Whether `origin` is the single unforgeable compile-time provenance permitted
+/// to define a module under reserved namespace `prefix`.
+///
+/// Each reserved prefix has exactly one legitimate definer: `Ipe.*` is the
+/// bundled stdlib, injected only under [`ModuleOrigin::EmbeddedStdlib`]; `Rust.*`
+/// is a driver-generated FFI interface, minted only under
+/// [`ModuleOrigin::FfiInterface`]. Every other origin — including
+/// [`ModuleOrigin::User`], the tag every local file and every third-party
+/// dependency module carries — is refused, fail-closed. An unrecognised reserved
+/// prefix has no owning origin, so it too is refused (default-deny).
+fn origin_owns_reserved_prefix(origin: ModuleOrigin, prefix: &str) -> bool {
+    match prefix {
+        "Ipe" => origin == ModuleOrigin::EmbeddedStdlib,
+        "Rust" => origin == ModuleOrigin::FfiInterface,
+        _ => false,
+    }
+}
+
 #[allow(clippy::too_many_lines)] // qualifier_paths pass added ~20 lines; refactor tracked in #todo
 pub fn canonicalise_module_in_project(
     m: &src::Module,
@@ -1001,33 +1019,27 @@ pub fn canonicalise_module_in_project(
         });
     }
 
-    // IPE-N0025: `Ipe` is reserved for the compiler's own stdlib. User modules
-    // whose first path segment is `Ipe` are rejected here so they never shadow
-    // stdlib symbols downstream. An EmbeddedStdlib module is the ONE legitimate
-    // definer of an `Ipe.…` home, so it is exempt — but ONLY because the driver
-    // vouched for its provenance (unforgeable tag), never because the text says
-    // `module Ipe.…`.
-    let ipe_sym = interner.intern("Ipe")?;
-    if origin == ModuleOrigin::User && home.first().copied().is_some_and(|s| s == ipe_sym) {
-        let name = path_to_dot_string(interner, &home);
-        return Err(Diagnostic::Name {
-            span: m.name.span,
-            msg: NameError::ReservedNamespace { name },
-        });
-    }
-    // `Rust` is reserved for driver-generated FFI interface modules, the same
-    // way `Ipe` is reserved for the stdlib: downstream stages treat a
-    // `Rust.…` home as a foreign-crate interface (opaque foreign unions are
-    // never emitted as Rust enums), so a user module squatting there would
-    // silently vanish from emission. Same unforgeable-origin discipline.
-    let rust_sym = interner.intern("Rust")?;
-    if origin != ModuleOrigin::FfiInterface && home.first().copied().is_some_and(|s| s == rust_sym)
-    {
-        let name = path_to_dot_string(interner, &home);
-        return Err(Diagnostic::Name {
-            span: m.name.span,
-            msg: NameError::ReservedNamespace { name },
-        });
+    // IPE-N0025: a module whose first path segment is a reserved namespace prefix
+    // (`Ipe` for the stdlib, `Rust` for driver-generated FFI interfaces — the
+    // closed [`ipe_kernels::RESERVED_MODULE_PREFIXES`] set) is refused unless it
+    // carries the ONE unforgeable compile-time origin that legitimately defines
+    // that namespace. Downstream stages treat a reserved home specially (stdlib
+    // symbol resolution; opaque foreign-crate interfaces never emitted as Rust
+    // enums), so a user file — or a third-party dependency, which is likewise
+    // `ModuleOrigin::User` — squatting there would shadow a stdlib symbol or
+    // silently vanish from emission. The exemption is granted only by the
+    // driver-vouched origin tag, never because the module text says `module Ipe.…`.
+    if let Some(first) = home.first().copied() {
+        let first_name = interner.resolve(first).unwrap_or_default();
+        if let Some(prefix) = ipe_kernels::reserved_prefix_of(&[first_name])
+            && !origin_owns_reserved_prefix(origin, prefix)
+        {
+            let name = path_to_dot_string(interner, &home);
+            return Err(Diagnostic::Name {
+                span: m.name.span,
+                msg: NameError::ReservedNamespace { name },
+            });
+        }
     }
 
     let mut env = Env::initial(home.clone(), interner)?;
@@ -1061,6 +1073,9 @@ pub fn canonicalise_module_in_project(
     // Process each import declaration, injecting the dep module's exports into
     // the current env.
     let mut unqual_ctor_origins: BTreeMap<Symbol, Vec<Symbol>> = BTreeMap::new();
+    // The `Ipe` root symbol, used below to discriminate a stdlib-kernel import
+    // (absent from `deps`, qualifier-resolved) from a compiled-source stdlib dep.
+    let ipe_sym = interner.intern("Ipe")?;
     for import in &m.imports {
         let dep_path = &import.name.value;
         // IPE-kernel vs compiled-source discrimination (fail-closed).
