@@ -3829,11 +3829,36 @@ fn emit_ui_template(
     else {
         return Ok(None);
     };
+    // A subtree carrying BOTH value/children holes AND model-dependent handler
+    // holes has no single runtime front door (the hole materializer takes no
+    // handler map; the handler materializer takes no fills), so it refuses and
+    // stays compiled — conservative, never a partial materialize.
+    if !partition.holes.is_empty() && !partition.handlers.is_empty() {
+        return Ok(None);
+    }
     let Some(slot) = ctx.hoist_style_literal(&partition.template.to_json()) else {
         return Ok(None);
     };
-    // No holes: emit the shipped fully-static read — byte-identical to before, so
-    // existing goldens/SEALs are unperturbed for static subtrees.
+    // Model-dependent handlers, no value/children holes: emit the handler-resolving
+    // read. Each captured `Msg` is emitted through the main expression emitter and
+    // handed to `UiHandlerMap::from_msgs` in hole-id order; a `HandlerHole` in the
+    // baked template resolves against that per-render map (fail-closed on a miss).
+    // The static skeleton (with handler-id holes) rides the hoisted slot and
+    // hot-swaps on a structural edit, while the `Msg` logic stays compiled.
+    if !partition.handlers.is_empty() {
+        let mut handler_msgs: Vec<String> = Vec::with_capacity(partition.handlers.len());
+        for msg in &partition.handlers {
+            handler_msgs.push(emit_expr_at(ctx, msg, indent, child, generics)?);
+        }
+        return Ok(Some(format!(
+            "ipe_runtime::ui::template::materialize_ui_template_str_with_handlers(\
+             __ipe_lit.get({slot}), \
+             &ipe_runtime::ui::template::UiHandlerMap::from_msgs(vec![{}]))",
+            handler_msgs.join(", "),
+        )));
+    }
+    // No holes and no handlers: emit the shipped fully-static read — byte-identical
+    // to before, so existing goldens/SEALs are unperturbed for static subtrees.
     if partition.holes.is_empty() {
         return Ok(Some(format!(
             "ipe_runtime::ui::template::materialize_ui_template_str(__ipe_lit.get({slot}))"
