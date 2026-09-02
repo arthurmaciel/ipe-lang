@@ -10,6 +10,9 @@ Each module listed below links to a detail page with the full documentation and 
 - [Basics](#basics)
 - [Bitwise](#bitwise)
 - [Browser.Clipboard](#browserclipboard)
+- [Browser.Clipboard.Internals](#browserclipboardinternals)
+- [Browser.Geolocation](#browsergeolocation)
+- [Browser.Geolocation.Internals](#browsergeolocationinternals)
 - [ByteSize](#bytesize)
 - [Bytes](#bytes)
 - [Cache](#cache)
@@ -159,12 +162,57 @@ Ipe.Bitwise — bitwise operations on `Int`.
 
 [Full reference](stdlib/Browser.Clipboard.md)
 
-Ipe.Browser.Clipboard — write text to the system clipboard from the browser.
+Ipe.Browser.Clipboard — read from and write to the system clipboard from the
 
 | Export | Summary |
 |--------|----------|
-| `JsCmd` | The one closed OUTBOUND port type this module publishes: the whole outbound |
 | `write` | `write text` — request the browser write `text` to the system clipboard. |
+| `read` | `read` — request the current clipboard contents. |
+| `contents` | `contents toMsg` — the inbound subscription, wired in `subscriptions`. |
+
+## Browser.Clipboard.Internals
+
+[Full reference](stdlib/Browser.Clipboard.Internals.md)
+
+Ipe.Browser.Clipboard.Internals — the low-level clipboard port surface: the
+
+| Export | Summary |
+|--------|----------|
+| `JsCmd` | The ONE closed OUTBOUND port type. `WriteText text` requests a clipboard write; |
+| `JsMsg` | The NARROW closed INBOUND port type — NOT the app's internal `Msg`. Every |
+| `request` | `request cmd` — hand a closed outbound `JsCmd` to the raw port transport. The |
+| `subscribe` | `subscribe toMsg` — the inbound subscription over the fail-closed seal |
+| `inbound` | The total, fail-closed decoder for the inbound `JsMsg`. It reads `ok` first: a |
+
+## Browser.Geolocation
+
+[Full reference](stdlib/Browser.Geolocation.md)
+
+Ipe.Browser.Geolocation — read the device's location over `Ipe.Js` ports.
+
+| Export | Summary |
+|--------|----------|
+| `Coords` | A device position: WGS-84 latitude/longitude in degrees, accuracy in metres. |
+| `current` | `current` — request the device's location ONCE. |
+| `watch` | `watch` — begin a CONTINUOUS position stream. |
+| `stopWatching` | `stopWatching` — end the continuous stream started by `watch`. |
+| `positions` | `positions toMsg` — the inbound subscription, wired in `subscriptions`. |
+
+## Browser.Geolocation.Internals
+
+[Full reference](stdlib/Browser.Geolocation.Internals.md)
+
+Ipe.Browser.Geolocation.Internals — the full, low-level geolocation port
+
+| Export | Summary |
+|--------|----------|
+| `Options` | The `getCurrentPosition` / `watchPosition` option knobs, mirroring the Web API |
+| `defaults` | Sane defaults: a coarse fix, no deadline, always fresh — the values the |
+| `JsCmd` | The ONE closed OUTBOUND port type: the whole outbound surface as a single |
+| `JsMsg` | The NARROW closed INBOUND port type — deliberately NOT the app's internal |
+| `request` | `request cmd` — hand a closed outbound `JsCmd` to the raw port transport. |
+| `subscribe` | `subscribe toMsg` — the inbound subscription over the fail-closed seal |
+| `inbound` | The total, fail-closed decoder for the inbound `JsMsg`. It reads the `ok` |
 
 ## ByteSize
 

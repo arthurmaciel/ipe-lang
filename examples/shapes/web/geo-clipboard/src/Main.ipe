@@ -1,0 +1,116 @@
+module Main exposing (main)
+
+-- | geo-clipboard — the first two real `Ipe.Browser` Web-API modules over the
+-- per-capability port mechanism, end-to-end with the consent gate satisfied.
+--
+-- `Ipe.Browser.Geolocation` spans both port directions (an outbound request `Cmd`,
+-- an inbound `positions` `Sub`); `Ipe.Browser.Clipboard` adds a read to the write.
+-- Each import discloses its specific `js-port:<axis>` capability, which
+-- `package.ipe` grants under `[capabilities] accepts` — without the grant the
+-- build fails closed (IPE-S0002) naming the disclosing module.
+--
+-- Every inbound reply is a typed `Result Error _`: a host permission denial is an
+-- ordinary `Err` the update folds, never a thrown error or a silently dropped
+-- frame.
+
+
+import Ipe.Tea.Web as Web
+import Ipe.Tea.Web.Cmd as Cmd
+import Ipe.Tea.Web.Sub as Sub
+import Ipe.Ui as Ui
+import Ipe.Error as Error exposing (Error)
+import Ipe.String as String
+import Ipe.Browser.Geolocation as Geo
+import Ipe.Browser.Clipboard as Clipboard
+
+
+type alias Model =
+    { location : String
+    , clipboard : String
+    }
+
+
+type Msg
+    = Locate
+    | GotLocation (Result Error Geo.Coords)
+    | CopyLocation
+    | Paste
+    | GotClipboard (Result Error String)
+
+
+init : a -> ( Model, Cmd.Cmd Msg )
+init _req =
+    ( { location = "unknown", clipboard = "" }, Cmd.none )
+
+
+update : Msg -> Model -> ( Model, Cmd.Cmd Msg )
+update msg model =
+    case msg of
+        Locate ->
+            -- Outbound one-shot geolocation request.
+            ( model, Geo.current )
+
+        GotLocation result ->
+            case result of
+                Ok coords ->
+                    ( { model | location = describe coords }, Cmd.none )
+
+                Err error ->
+                    ( { model | location = "error: " ++ Error.toString error }, Cmd.none )
+
+        CopyLocation ->
+            ( model, Clipboard.write model.location )
+
+        Paste ->
+            ( model, Clipboard.read )
+
+        GotClipboard result ->
+            case result of
+                Ok text ->
+                    ( { model | clipboard = text }, Cmd.none )
+
+                Err error ->
+                    ( { model | clipboard = "error: " ++ Error.toString error }, Cmd.none )
+
+
+describe : Geo.Coords -> String
+describe coords =
+    String.fromFloat coords.lat
+        ++ ", "
+        ++ String.fromFloat coords.lng
+        ++ " (±"
+        ++ String.fromFloat coords.accuracy
+        ++ "m)"
+
+
+-- Two inbound subscriptions, each folding its narrow `JsMsg` into a typed
+-- `Result` message. A malformed frame is dropped by the seal decoder; a denial
+-- arrives as an `Err`.
+subscriptions : Model -> Sub.Sub Msg
+subscriptions _model =
+    Sub.batch
+        [ Geo.positions GotLocation
+        , Clipboard.contents GotClipboard
+        ]
+
+
+view : Model -> Element Msg
+view model =
+    Ui.column []
+        [ Ui.button [] { onPress = Just Locate, label = Ui.text "Locate" }
+        , Ui.text ("location: " ++ model.location)
+        , Ui.button [] { onPress = Just CopyLocation, label = Ui.text "Copy location" }
+        , Ui.button [] { onPress = Just Paste, label = Ui.text "Paste" }
+        , Ui.text ("clipboard: " ++ model.clipboard)
+        ]
+
+
+main =
+    Web.app
+        { init = init
+        , update = update
+        , view = view
+        , subscriptions = subscriptions
+        , routes = []
+        , notFound = Locate
+        }
