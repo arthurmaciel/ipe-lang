@@ -102,12 +102,46 @@ pub struct SubPatch {
     pub new_json: String,
 }
 
+/// A hot-swappable init patch for an edited data-describable `init`.
+///
+/// The running app's compiled `init` reads its baked starting-Model datum through
+/// `apply_init_hot("<old_json>", <compiled record>)`; the app is not recompiled,
+/// so it still bakes `old_json`. The overlay is keyed by that exact baked string,
+/// so the patch carries the OLD json (the key the running app matches at session
+/// creation) and the NEW json (the edited init datum to register). An init edit
+/// affects only FRESH sessions; a live session keeps its Model.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct InitPatch {
+    /// The PREVIOUS baked init datum JSON — the key the running app's compiled
+    /// `init` passes to `apply_init_hot`, hence the overlay key. Send the OLD
+    /// value, not the new.
+    pub old_json: String,
+    /// The edited init datum's JSON — the replacement to register for `old_json`.
+    pub new_json: String,
+}
+
+/// A hot-swappable Cmd-wiring patch for an `update` arm whose baked wiring datum
+/// changed (which compiled effect the arm fires).
+///
+/// The effect BODY is unchanged and still compiled in the running app; only the
+/// WIRING (the selected effect id) is data, so the patch carries the OLD json (the
+/// overlay key) and the NEW json (the edited wiring).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct WiringPatch {
+    /// The PREVIOUS baked wiring datum JSON — the key the running app's compiled
+    /// arm passes to `select_cmd_hot`, hence the overlay key. Send the OLD value.
+    pub old_json: String,
+    /// The edited wiring datum's JSON — the replacement to register for `old_json`.
+    pub new_json: String,
+}
+
 /// The set of hot-swappable deltas an edit produced with no recompile.
 ///
 /// Carries the appearance (view literal) patches, the `update`-arm transition
-/// patches, the additive-`Msg`-set patches, and the `subscriptions`-entry
-/// sub-description patches. All are pushed to the running app over the live
-/// socket; any may be empty.
+/// patches, the additive-`Msg`-set patches, the `subscriptions`-entry
+/// sub-description patches, the session-`init` datum patches, and the
+/// `update`-arm Cmd-wiring patches. All are pushed to the running app over the
+/// live socket; each may be empty.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct HotSwap {
     /// One [`ViewPatch`] per view whose hoisted appearance literals changed.
@@ -120,6 +154,10 @@ pub struct HotSwap {
     /// One [`SubPatch`] per `subscriptions` entry whose baked sub-description
     /// changed.
     pub subs: Vec<SubPatch>,
+    /// One [`InitPatch`] per `init` whose baked starting-Model datum changed.
+    pub inits: Vec<InitPatch>,
+    /// One [`WiringPatch`] per `update` arm whose baked Cmd wiring changed.
+    pub wirings: Vec<WiringPatch>,
 }
 
 /// The classification of a source edit, derived from the emitted-Rust diff.
@@ -166,6 +204,8 @@ pub fn classify(prev: &EmittedProject, next: &EmittedProject) -> Classification 
                 hot.transitions.append(&mut delta.transitions);
                 hot.msg_sets.append(&mut delta.msg_sets);
                 hot.subs.append(&mut delta.subs);
+                hot.inits.append(&mut delta.inits);
+                hot.wirings.append(&mut delta.wirings);
             }
             FileDelta::Logic => return Classification::Logic,
         }
@@ -189,45 +229,100 @@ enum FileDelta {
 /// false `AppearanceOnly`.
 const DEFAULTS_OPEN: &str = "from_defaults(&[";
 
+/// Every data channel scanned out of one emitted file: the appearance
+/// (`from_defaults`) arrays plus each positional datum channel (transition arm,
+/// subscriptions entry, session-`init`, `update`-arm Cmd wiring) and the at-most-one
+/// `Msg`-set descriptor. Produced once per side by [`scan_channels`], so the
+/// per-channel scan-and-count discipline lives in one place.
+struct Channels {
+    arrays: Vec<DefaultsArray>,
+    trans: Vec<TransitionData>,
+    subs: Vec<TransitionData>,
+    inits: Vec<InitData>,
+    wire: Vec<TransitionData>,
+    msg_set: Option<String>,
+}
+
+/// Scan every channel of one emitted `src`. Returns `None` (⇒ `Logic`) if any
+/// scanner refuses (an emit shape it cannot prove) — never a guess. The `Msg`-set
+/// descriptor is optional (at most one per emitted web app); its absence is not a
+/// refusal.
+fn scan_channels(src: &str) -> Option<Channels> {
+    Some(Channels {
+        arrays: scan_defaults_arrays(src)?,
+        trans: scan_transition_data(src)?,
+        subs: scan_sub_data(src)?,
+        inits: scan_init_data(src)?,
+        wire: scan_wiring_data(src)?,
+        msg_set: scan_msg_set(src),
+    })
+}
+
+/// Whether every positional channel has the SAME occurrence count on both sides. A
+/// differing count is structural (a datum-bearing call was added or removed, or a
+/// hoisted view appeared/disappeared) ⇒ Logic. The `Msg`-set descriptor's
+/// appearance/disappearance is handled separately by the caller (it is a superset
+/// decision, not a count).
+const fn channels_counts_match(prev: &Channels, next: &Channels) -> bool {
+    prev.arrays.len() == next.arrays.len()
+        && prev.trans.len() == next.trans.len()
+        && prev.subs.len() == next.subs.len()
+        && prev.inits.len() == next.inits.len()
+        && prev.wire.len() == next.wire.len()
+}
+
+/// Build one [`ViewPatch`] per `from_defaults` array whose default VALUES changed,
+/// keyed by the OLD defaults (the signature the running app's compiled `view` still
+/// bakes). `prev`/`next` are already equal in count (checked by
+/// [`channels_counts_match`]); returns `None` (⇒ `Logic`) if any corresponding
+/// array's element COUNT differs — a literal added/removed inside one view is
+/// structural, not an appearance edit.
+fn diff_view_patches(prev: &[DefaultsArray], next: &[DefaultsArray]) -> Option<Vec<ViewPatch>> {
+    let mut views = Vec::new();
+    for (pa, na) in prev.iter().zip(next.iter()) {
+        if pa.values.len() != na.values.len() {
+            return None;
+        }
+        let mut patch = Vec::new();
+        for (idx, (pv, nv)) in pa.values.iter().zip(na.values.iter()).enumerate() {
+            if pv != nv {
+                patch.push((idx, nv.clone()));
+            }
+        }
+        if !patch.is_empty() {
+            views.push(ViewPatch {
+                defaults: pa.values.clone(),
+                patch,
+            });
+        }
+    }
+    Some(views)
+}
+
 /// Diff two versions of one emitted file. Everything outside the
 /// `from_defaults(&[…])` array contents must be byte-identical, and each
 /// corresponding array must have the same number of elements; then the delta is
 /// exactly the changed default values.
 fn classify_file(prev_src: &str, next_src: &str) -> FileDelta {
-    // Unparsable ⇒ conservative (Logic).
-    let Some(prev_arrays) = scan_defaults_arrays(prev_src) else {
+    // Scan every data channel on both sides once (parse, don't validate): an
+    // unparsable emit or a channel whose occurrence count changed between the two
+    // emits is structural, so `scan_channels` returns `None` ⇒ Logic.
+    let Some(prev_ch) = scan_channels(prev_src) else {
         return FileDelta::Logic;
     };
-    let Some(next_arrays) = scan_defaults_arrays(next_src) else {
+    let Some(next_ch) = scan_channels(next_src) else {
         return FileDelta::Logic;
     };
-    // A differing number of defaults arrays is a structural change (a hoisted
-    // view was added or removed).
-    if prev_arrays.len() != next_arrays.len() {
+    if !channels_counts_match(&prev_ch, &next_ch) {
         return FileDelta::Logic;
     }
 
-    // The `update`-arm transition-datum literals: each classified arm emits
-    // `apply_transition_hot("<json>", model)`. A differing number of such calls
-    // is structural (an arm gained/lost data-describability) ⇒ Logic.
-    let Some(prev_trans) = scan_transition_data(prev_src) else {
-        return FileDelta::Logic;
-    };
-    let Some(next_trans) = scan_transition_data(next_src) else {
-        return FileDelta::Logic;
-    };
-    if prev_trans.len() != next_trans.len() {
-        return FileDelta::Logic;
-    }
-
-    // The `Msg`-set descriptor: at most one per emitted web app. A descriptor that
-    // APPEARS or DISAPPEARS between emits is structural (a web app was added/removed
-    // or the hot gate flipped) ⇒ Logic. A descriptor present on BOTH sides that
-    // changed NON-additively (a variant removed/retyped) ⇒ Logic. A descriptor that
-    // changed ADDITIVELY yields a `MsgSetPatch` below; an unchanged one yields none.
-    let prev_msg_set = scan_msg_set(prev_src);
-    let next_msg_set = scan_msg_set(next_src);
-    match (&prev_msg_set, &next_msg_set) {
+    // The `Msg`-set descriptor: a descriptor that APPEARS or DISAPPEARS between
+    // emits is structural (a web app was added/removed or the hot gate flipped)
+    // ⇒ Logic. A descriptor present on BOTH sides that changed NON-additively (a
+    // variant removed/retyped) ⇒ Logic. A descriptor that changed ADDITIVELY yields
+    // a `MsgSetPatch` below; an unchanged one yields none.
+    match (&prev_ch.msg_set, &next_ch.msg_set) {
         (Some(live), Some(cand)) if live != cand => {
             if !msg_set_is_additive_superset(live, cand) {
                 return FileDelta::Logic;
@@ -237,18 +332,22 @@ fn classify_file(prev_src: &str, next_src: &str) -> FileDelta {
         _ => {}
     }
 
-    // The `subscriptions`-entry sub-description literals: each classified entry
-    // emits `sub_every_hot("<json>")`. A differing number of such calls is
-    // structural (an entry gained/lost data-describability) ⇒ Logic.
-    let Some(prev_subs) = scan_sub_data(prev_src) else {
-        return FileDelta::Logic;
-    };
-    let Some(next_subs) = scan_sub_data(next_src) else {
-        return FileDelta::Logic;
-    };
-    if prev_subs.len() != next_subs.len() {
-        return FileDelta::Logic;
-    }
+    let Channels {
+        arrays: prev_arrays,
+        trans: prev_trans,
+        subs: prev_subs,
+        inits: prev_inits,
+        wire: prev_wire,
+        msg_set: prev_msg_set,
+    } = prev_ch;
+    let Channels {
+        arrays: next_arrays,
+        trans: next_trans,
+        subs: next_subs,
+        inits: next_inits,
+        wire: next_wire,
+        msg_set: next_msg_set,
+    } = next_ch;
 
     // The masked regions are: (1) every `from_defaults(&[…])` array's contents,
     // and (2) every hoisted-read TOTAL-FALLBACK literal
@@ -266,10 +365,24 @@ fn classify_file(prev_src: &str, next_src: &str) -> FileDelta {
     // `source`). Masking it keeps a data-only arm edit hot-swappable, exactly as
     // masking a `from_defaults` array keeps an appearance edit hot-swappable; any
     // structural change to the arm still perturbs the skeleton and forces Logic.
-    let Some(prev_masks) = mask_spans(prev_src, &prev_arrays, &prev_trans, &prev_subs) else {
+    let Some(prev_masks) = mask_spans(
+        prev_src,
+        &prev_arrays,
+        &prev_trans,
+        &prev_subs,
+        &prev_inits,
+        &prev_wire,
+    ) else {
         return FileDelta::Logic;
     };
-    let Some(next_masks) = mask_spans(next_src, &next_arrays, &next_trans, &next_subs) else {
+    let Some(next_masks) = mask_spans(
+        next_src,
+        &next_arrays,
+        &next_trans,
+        &next_subs,
+        &next_inits,
+        &next_wire,
+    ) else {
         return FileDelta::Logic;
     };
     // A differing number of masked sites is itself structural.
@@ -284,34 +397,27 @@ fn classify_file(prev_src: &str, next_src: &str) -> FileDelta {
         return FileDelta::Logic;
     }
 
-    let mut views = Vec::new();
-    for (pa, na) in prev_arrays.iter().zip(next_arrays.iter()) {
-        // Same array count in a matching skeleton, but re-check length per array:
-        // a length change is a literal added/removed inside one view → Logic.
-        if pa.values.len() != na.values.len() {
-            return FileDelta::Logic;
-        }
-        let mut patch = Vec::new();
-        for (idx, (pv, nv)) in pa.values.iter().zip(na.values.iter()).enumerate() {
-            if pv != nv {
-                patch.push((idx, nv.clone()));
-            }
-        }
-        if !patch.is_empty() {
-            views.push(ViewPatch {
-                defaults: pa.values.clone(),
-                patch,
-            });
-        }
-    }
+    let Some(views) = diff_view_patches(&prev_arrays, &next_arrays) else {
+        return FileDelta::Logic;
+    };
 
-    // Each changed positional datum (transition arm, subscriptions entry) yields a
-    // patch keyed by the OLD json — the running app still bakes it, so it is the
-    // overlay key; the NEW json is the replacement to register.
+    // Each changed positional datum (transition arm, subscriptions entry,
+    // session-`init`, `update`-arm Cmd wiring) yields a patch keyed by the OLD json
+    // — the running app still bakes it, so it is the overlay key; the NEW json is
+    // the replacement to register. The one `diff_datum_patches` helper collapses
+    // every positional channel.
     let transitions = diff_datum_patches(&prev_trans, &next_trans, |old_json, new_json| {
         TransitionPatch { old_json, new_json }
     });
     let subs = diff_datum_patches(&prev_subs, &next_subs, |old_json, new_json| SubPatch {
+        old_json,
+        new_json,
+    });
+    let inits = diff_datum_patches(&prev_inits, &next_inits, |old_json, new_json| InitPatch {
+        old_json,
+        new_json,
+    });
+    let wirings = diff_datum_patches(&prev_wire, &next_wire, |old_json, new_json| WiringPatch {
         old_json,
         new_json,
     });
@@ -334,22 +440,35 @@ fn classify_file(prev_src: &str, next_src: &str) -> FileDelta {
         transitions,
         msg_sets,
         subs,
+        inits,
+        wirings,
     })
+}
+
+/// A located baked datum literal that carries its parsed json — the common shape
+/// [`diff_datum_patches`] pairs across every positional channel (transition arm,
+/// subscriptions entry, session-`init`, `update`-arm Cmd wiring). Implemented for
+/// each scanned-datum struct so the one differ works over all of them.
+trait DatumJson {
+    /// The baked datum's json — the overlay key on the old side, the replacement
+    /// on the new side.
+    fn json(&self) -> &str;
 }
 
 /// Pair the previous and new baked datum literals (equal in count, checked by the
 /// caller) and build one patch per changed datum via `mk`, which receives the OLD
 /// json (the overlay key) and the NEW json (the replacement). Shared by the
-/// transition-arm and subscriptions-entry legs, whose patch shape is identical.
-fn diff_datum_patches<P>(
-    prev: &[TransitionData],
-    next: &[TransitionData],
+/// transition-arm, subscriptions-entry, session-`init`, and Cmd-wiring legs, whose
+/// patch shape is identical.
+fn diff_datum_patches<D: DatumJson, P>(
+    prev: &[D],
+    next: &[D],
     mk: impl Fn(String, String) -> P,
 ) -> Vec<P> {
     let mut out = Vec::new();
     for (p, n) in prev.iter().zip(next.iter()) {
-        if p.json != n.json {
-            out.push(mk(p.json.clone(), n.json.clone()));
+        if p.json() != n.json() {
+            out.push(mk(p.json().to_owned(), n.json().to_owned()));
         }
     }
     out
@@ -461,6 +580,12 @@ struct TransitionData {
     json: String,
 }
 
+impl DatumJson for TransitionData {
+    fn json(&self) -> &str {
+        &self.json
+    }
+}
+
 /// The literal opening an emitted transition-datum read in the emitted Rust.
 /// Kept in sync with the emitter's `emit_transition_arm`
 /// (`apply_transition_hot("<json>", <model>)`). If the emitter's spelling ever
@@ -532,6 +657,117 @@ fn scan_sub_data(src: &str) -> Option<Vec<TransitionData>> {
     Some(out)
 }
 
+/// One `apply_init_hot("<json>", <compiled record>)` occurrence located in a
+/// source file: the datum JSON string, its inner byte span (for the json mask),
+/// and the span of the SECOND argument (the compiled record fallback, which
+/// changes together with the datum on an `init` edit and so is masked too).
+struct InitData {
+    /// Byte offset of the first char inside the json string literal (past the `"`).
+    json_inner_start: usize,
+    /// Byte offset of the closing `"` of the json string literal.
+    json_inner_end: usize,
+    /// Byte offset of the first char of the second argument (the compiled record).
+    arg2_start: usize,
+    /// Byte offset just past the last char of the second argument (at the `)`).
+    arg2_end: usize,
+    /// The parsed (unescaped) json string — the baked init datum.
+    json: String,
+}
+
+impl DatumJson for InitData {
+    fn json(&self) -> &str {
+        &self.json
+    }
+}
+
+/// The literal opening an emitted init-datum read in the emitted Rust. Kept in
+/// sync with the emitter's `emit_init_datum`
+/// (`apply_init_hot("<json>", <compiled record>)`). If the emitter's spelling
+/// ever changes, no datum is recognised and every edit conservatively falls to
+/// `Logic` — safe, never a false hot-swap.
+const INIT_OPEN: &str = "apply_init_hot(";
+
+/// Locate every `apply_init_hot("<json>", <compiled record>)` call in `src`,
+/// parsing its first argument (the baked datum JSON string literal) and locating
+/// its second argument (the compiled record fallback). Returns `None`
+/// (⇒ `Logic`) if any occurrence is malformed — never a guess. A file with no
+/// occurrences returns `Some(empty)`.
+fn scan_init_data(src: &str) -> Option<Vec<InitData>> {
+    let bytes = src.as_bytes();
+    let mut out = Vec::new();
+    let mut from = 0usize;
+    while let Some(rel) = src[from..].find(INIT_OPEN) {
+        let open = from + rel;
+        // The first argument begins at the first `"` after the `(`.
+        let arg_at = skip_ws(bytes, open + INIT_OPEN.len());
+        if *bytes.get(arg_at)? != b'"' {
+            return None;
+        }
+        let json_inner_start = arg_at + 1;
+        let (json, after_str) = parse_string_literal(bytes, arg_at)?;
+        // A comma separates the two arguments.
+        let comma = skip_ws(bytes, after_str);
+        if *bytes.get(comma)? != b',' {
+            return None;
+        }
+        let arg2_start = skip_ws(bytes, comma + 1);
+        // The whole call opened at `(` just before `INIT_OPEN`'s end; find its
+        // matching close paren to bound the second argument. `match_close_paren`
+        // takes the offset just past the opening `(`.
+        let call_open = open + INIT_OPEN.len();
+        let close = match_close_paren(bytes, call_open)?;
+        // The second argument runs from `arg2_start` up to the closing `)`.
+        if close < arg2_start {
+            return None;
+        }
+        out.push(InitData {
+            json_inner_start,
+            json_inner_end: after_str - 1,
+            arg2_start,
+            arg2_end: close,
+            json,
+        });
+        from = close;
+    }
+    Some(out)
+}
+
+/// The literal opening an emitted Cmd-wiring datum read in the emitted Rust. Kept
+/// in sync with the emitter's `emit_cmd_wiring_arm`
+/// (`select_cmd_hot("<json>", <count>)`). If the emitter's spelling ever changes,
+/// no datum is recognised and every edit conservatively falls to `Logic` — safe,
+/// never a false hot-swap.
+const WIRING_OPEN: &str = "select_cmd_hot(";
+
+/// Locate every `select_cmd_hot("<json>", …)` call in `src` and parse its first
+/// argument (the baked wiring datum JSON string literal). Returns `None`
+/// (⇒ `Logic`) if any occurrence's first argument is not a well-formed string
+/// literal — never a guess. A file with no occurrences returns `Some(empty)`.
+/// Reuses [`TransitionData`] (a json string + its inner span) — the wiring's
+/// second argument (the effect count) is part of the skeleton, so it is NOT
+/// captured or masked (a count change is structural → recompile).
+fn scan_wiring_data(src: &str) -> Option<Vec<TransitionData>> {
+    let bytes = src.as_bytes();
+    let mut out = Vec::new();
+    let mut from = 0usize;
+    while let Some(rel) = src[from..].find(WIRING_OPEN) {
+        let open = from + rel;
+        let arg_at = skip_ws(bytes, open + WIRING_OPEN.len());
+        if *bytes.get(arg_at)? != b'"' {
+            return None;
+        }
+        let inner_start = arg_at + 1;
+        let (json, next) = parse_string_literal(bytes, arg_at)?;
+        out.push(TransitionData {
+            inner_start,
+            inner_end: next - 1,
+            json,
+        });
+        from = next;
+    }
+    Some(out)
+}
+
 /// One `from_defaults(&[…])` occurrence located in a source file.
 struct DefaultsArray {
     /// Byte offset of the first element char inside the array (just past `&[`).
@@ -559,6 +795,8 @@ fn mask_spans(
     arrays: &[DefaultsArray],
     transitions: &[TransitionData],
     subs: &[TransitionData],
+    inits: &[InitData],
+    wirings: &[TransitionData],
 ) -> Option<Vec<MaskSpan>> {
     let mut spans: Vec<MaskSpan> = arrays
         .iter()
@@ -580,6 +818,32 @@ fn mask_spans(
     spans.extend(subs.iter().map(|s| MaskSpan {
         start: s.inner_start,
         end: s.inner_end,
+    }));
+    // The init-datum call masks TWO regions per occurrence: the `<json>` string
+    // inside `apply_init_hot("<json>", <compiled record>)` AND the second argument
+    // (the compiled record fallback). Both change together on a data-only `init`
+    // edit (`count = 0` → `count = 1` moves the baked datum AND re-emits the record
+    // literal); masking both keeps such an edit hot-swappable, while any change to
+    // the call STRUCTURE (a different kernel, a new `init`) still perturbs the
+    // skeleton outside these masks → Logic.
+    for t in inits {
+        spans.push(MaskSpan {
+            start: t.json_inner_start,
+            end: t.json_inner_end,
+        });
+        spans.push(MaskSpan {
+            start: t.arg2_start,
+            end: t.arg2_end,
+        });
+    }
+    // The wiring datum's `<json>` argument is masked exactly like a transition
+    // datum: a wiring edit changes only the baked `<json>` inside
+    // `select_cmd_hot("<json>", <count>)` while the arm structure and the effect
+    // `<count>` are byte-identical. Masking it keeps a wiring-only edit
+    // hot-swappable; a new effect body changes the `<count>` (skeleton) → Logic.
+    spans.extend(wirings.iter().map(|t| MaskSpan {
+        start: t.inner_start,
+        end: t.inner_end,
     }));
     spans.extend(scan_hoisted_read_fallbacks(src)?);
     // The `Msg`-set descriptor const's JSON contents are masked too, so a
@@ -1286,6 +1550,22 @@ mod tests {
         }
     }
 
+    // ── init-datum hot-swap (session init) ────────────────────────────────
+
+    /// Assert `classify` returned `HotSwappable` and hand back its INIT patches.
+    fn expect_inits(prev: &EmittedProject, next: &EmittedProject) -> Vec<InitPatch> {
+        let got = classify(prev, next);
+        assert!(
+            matches!(got, Classification::HotSwappable(_)),
+            "expected HotSwappable, got {got:?}"
+        );
+        if let Classification::HotSwappable(hot) = got {
+            hot.inits
+        } else {
+            Vec::new()
+        }
+    }
+
     // ── sub-description hot-swap (subscriptions entry) ────────────────────
 
     /// Assert `classify` returned `HotSwappable` and hand back its SUB patches
@@ -1338,6 +1618,37 @@ mod tests {
             MsgSetPatch {
                 live_json: MS_COUNTER.to_owned(),
                 candidate_json: MS_WITH_RESET.to_owned(),
+            }
+        );
+    }
+
+    /// Mirror the emitter's data-describable `init` shape: an `init` body emitted
+    /// as `apply_init_hot("<json>", <compiled record>)`. Both the json AND the
+    /// compiled record change on a `count = X` edit.
+    fn init_body(json: &str, count: i64) -> String {
+        format!(
+            "fn init(_req: Req) {{ (ipe_runtime::web::apply_init_hot({json:?}, \
+             Model {{ count: {count}i64 }}), cmd_none()) }}"
+        )
+    }
+
+    const INIT0: &str = r#"{"model":{"count":0}}"#;
+    const INIT1: &str = r#"{"model":{"count":1}}"#;
+
+    // The init SEAL at the classifier level: a `count = 0` → `count = 1` init edit
+    // changes ONLY the baked datum json AND the paired compiled record (both
+    // masked) → an init-only hot-swap, no recompile.
+    #[test]
+    fn init_source_edit_is_hot_swappable() {
+        let prev = project(&[("src/main.rs", &init_body(INIT0, 0))], "cargo");
+        let next = project(&[("src/main.rs", &init_body(INIT1, 1))], "cargo");
+        let is = expect_inits(&prev, &next);
+        assert_eq!(is.len(), 1);
+        assert_eq!(
+            is.first().cloned().unwrap_or_default(),
+            InitPatch {
+                old_json: INIT0.to_owned(),
+                new_json: INIT1.to_owned(),
             }
         );
     }
@@ -1423,11 +1734,107 @@ mod tests {
         assert_eq!(classify(&prev, &next), Classification::Logic);
     }
 
+    // A no-op init edit (identical) contributes no init patch.
+    #[test]
+    fn identical_init_has_no_patch() {
+        let p = project(&[("src/main.rs", &init_body(INIT0, 0))], "cargo");
+        assert_eq!(expect_inits(&p, &p.clone()), vec![]);
+    }
+
+    // A change to the `init` STRUCTURE around the call (a different kernel) is
+    // Logic — only the json and the record arg are masked, never the surrounding
+    // code.
+    #[test]
+    fn init_structure_change_is_logic() {
+        let prev = project(&[("src/main.rs", &init_body(INIT0, 0))], "cargo");
+        let next = project(
+            &[(
+                "src/main.rs",
+                &init_body(INIT0, 0).replace("cmd_none()", "cmd_batch(vec![])"),
+            )],
+            "cargo",
+        );
+        assert_eq!(classify(&prev, &next), Classification::Logic);
+    }
+
     // An entry that GAINS a sub call (call count grows) is structural → Logic.
     #[test]
     fn added_sub_call_is_logic() {
         let prev = project(&[("src/subs.rs", "fn subscriptions() { plain }")], "cargo");
         let next = project(&[("src/subs.rs", &sub_entry(SUB1000))], "cargo");
+        assert_eq!(classify(&prev, &next), Classification::Logic);
+    }
+
+    // An `init` that GAINS a data-describable call (count grows) is structural →
+    // Logic.
+    #[test]
+    fn added_init_call_is_logic() {
+        let prev = project(&[("src/main.rs", "fn init() { plain }")], "cargo");
+        let next = project(&[("src/main.rs", &init_body(INIT0, 0))], "cargo");
+        assert_eq!(classify(&prev, &next), Classification::Logic);
+    }
+
+    // ── Cmd-wiring hot-swap (update arm) ──────────────────────────────────
+
+    /// Assert `classify` returned `HotSwappable` and hand back its WIRING patches.
+    fn expect_wirings(prev: &EmittedProject, next: &EmittedProject) -> Vec<WiringPatch> {
+        let got = classify(prev, next);
+        assert!(
+            matches!(got, Classification::HotSwappable(_)),
+            "expected HotSwappable, got {got:?}"
+        );
+        if let Classification::HotSwappable(hot) = got {
+            hot.wirings
+        } else {
+            Vec::new()
+        }
+    }
+
+    /// Mirror the emitter's classified-arm wiring shape:
+    /// `select_cmd_hot("<json>", <count>)`.
+    fn wiring_arm(json: &str, count: usize) -> String {
+        format!(
+            "fn update(msg: Msg, model: Model) {{ match msg {{ \
+             Increment => (apply_transition_hot(\"t\", model), \
+             ipe_runtime::web::select_cmd_hot({json:?}, {count})), \
+             }} }}"
+        )
+    }
+
+    const WNONE: &str = r#"{"effect":null}"#;
+    const WEFF0: &str = r#"{"effect":0}"#;
+
+    // The wiring SEAL at the classifier level: an arm rewired from no-effect to
+    // effect id 0 changes ONLY the baked wiring json (the `<count>` is unchanged,
+    // so the effect body was already compiled) → a wiring-only hot-swap.
+    #[test]
+    fn wiring_id_edit_is_hot_swappable() {
+        let prev = project(&[("src/update.rs", &wiring_arm(WNONE, 1))], "cargo");
+        let next = project(&[("src/update.rs", &wiring_arm(WEFF0, 1))], "cargo");
+        let ws = expect_wirings(&prev, &next);
+        assert_eq!(ws.len(), 1);
+        assert_eq!(
+            ws.first().cloned().unwrap_or_default(),
+            WiringPatch {
+                old_json: WNONE.to_owned(),
+                new_json: WEFF0.to_owned(),
+            }
+        );
+    }
+
+    // A no-op wiring edit (identical) contributes no wiring patch.
+    #[test]
+    fn identical_wiring_arm_has_no_patch() {
+        let p = project(&[("src/update.rs", &wiring_arm(WNONE, 1))], "cargo");
+        assert_eq!(expect_wirings(&p, &p.clone()), vec![]);
+    }
+
+    // A change to the effect COUNT (a genuinely-new effect body grows the arm's
+    // compiled effect table) is structural → Logic (recompile the body).
+    #[test]
+    fn wiring_effect_count_change_is_logic() {
+        let prev = project(&[("src/update.rs", &wiring_arm(WEFF0, 1))], "cargo");
+        let next = project(&[("src/update.rs", &wiring_arm(WEFF0, 2))], "cargo");
         assert_eq!(classify(&prev, &next), Classification::Logic);
     }
 }
