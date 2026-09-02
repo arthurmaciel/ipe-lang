@@ -1,0 +1,20 @@
+module Package exposing (package)
+
+import Ipe.Package exposing (..)
+
+
+package : Package
+package =
+    { name = "geo-clipboard"
+    , version = "0.1.0"
+    , capabilities =
+        { declares = []
+
+        -- The two first-party web capabilities this app's reachable code
+        -- discloses by importing `Ipe.Browser.Geolocation` and
+        -- `Ipe.Browser.Clipboard`. The `:raw` floor is disclosed too (both
+        -- modules reach `Js.send`/`Js.subscribe` under the hood), so the
+        -- app-boundary consent gate is satisfied only with all three granted.
+        , accepts = [ JsPort Geolocation, JsPort Clipboard, JsPort Raw ]
+        }
+    }

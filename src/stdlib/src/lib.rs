@@ -634,6 +634,35 @@ const IPE_CORE_JS: &str = include_str!("../Ipe/Js.ipe");
 /// `navigator.clipboard.writeText`, trapping a host denial to a typed `Err`.
 const IPE_BROWSER_CLIPBOARD: &str = include_str!("../Ipe/Browser/Clipboard.ipe");
 
+/// `Ipe.Browser.Clipboard.Internals` — the low-level clipboard port surface: the
+/// closed outbound/inbound ADTs and the raw `Ipe.Js` wiring behind the high-level
+/// `write` / `read`. Importing it discloses the same `js-port:clipboard` axis (the
+/// prefix key covers the submodule). Registered in [`COMPILED_STD_MODULES`] (NOT
+/// `MODULES`); NOT in `STDLIB_MODULE_QUALIFIERS`.
+const IPE_BROWSER_CLIPBOARD_INTERNALS: &str =
+    include_str!("../Ipe/Browser/Clipboard/Internals.ipe");
+
+/// `Ipe.Browser.Geolocation` — read the device location over `Ipe.Js` ports
+/// (compiled source), spanning BOTH port directions: an outbound `JsCmd` request
+/// (`current` one-shot / `watch` continuous) and an inbound `JsMsg` reply folded
+/// exhaustively into `Result Error Coords`. Importing it discloses
+/// `js-port:geolocation` (import-derived, keyed on the canonical
+/// `Ipe.Browser.Geolocation` path prefix via `WebCapability::for_browser_module`).
+/// The served wasm-sink JS handler reaches `navigator.geolocation.getCurrentPosition`
+/// / `watchPosition`, trapping a denial / unavailability / timeout to the matching
+/// typed inbound variant. Registered in [`COMPILED_STD_MODULES`] (NOT `MODULES`);
+/// NOT in `STDLIB_MODULE_QUALIFIERS`.
+const IPE_BROWSER_GEOLOCATION: &str = include_str!("../Ipe/Browser/Geolocation.ipe");
+
+/// `Ipe.Browser.Geolocation.Internals` — the low-level geolocation port surface:
+/// the closed outbound/inbound ADTs, the full `Options` knob set, and the raw
+/// `Ipe.Js` wiring the high-level layer wraps. Importing it discloses the same
+/// `js-port:geolocation` axis (the prefix key covers the submodule), so the full
+/// option surface cannot be reached undisclosed. Registered in
+/// [`COMPILED_STD_MODULES`] (NOT `MODULES`); NOT in `STDLIB_MODULE_QUALIFIERS`.
+const IPE_BROWSER_GEOLOCATION_INTERNALS: &str =
+    include_str!("../Ipe/Browser/Geolocation/Internals.ipe");
+
 /// `Ipe.Env` — build-time-embedded public config (compiled source).
 ///
 /// Defines `public : String -> Maybe String`, routed through the
@@ -1080,6 +1109,18 @@ pub const COMPILED_STD_MODULES: &[CompiledStdModule] = &[
     CompiledStdModule {
         dotted: "Ipe.Browser.Clipboard",
         source: IPE_BROWSER_CLIPBOARD,
+    },
+    CompiledStdModule {
+        dotted: "Ipe.Browser.Clipboard.Internals",
+        source: IPE_BROWSER_CLIPBOARD_INTERNALS,
+    },
+    CompiledStdModule {
+        dotted: "Ipe.Browser.Geolocation",
+        source: IPE_BROWSER_GEOLOCATION,
+    },
+    CompiledStdModule {
+        dotted: "Ipe.Browser.Geolocation.Internals",
+        source: IPE_BROWSER_GEOLOCATION_INTERNALS,
     },
     CompiledStdModule {
         dotted: "Ipe.Env",

@@ -31,33 +31,122 @@ use sha2::{Digest, Sha256};
 const PORT_GLUE_JS: &str = r#"// Ipe.Js browser port surface. Values cross as JSON strings only.
 (function () {
   var onReceive = null;
-  // Return an inbound typed result to the Ipê program: a decoded intent, never a
-  // thrown error, so a host permission denial is an ordinary case the program
-  // handles (parse-don't-validate at the trust boundary).
-  function replyResult(ok, detail) {
+  // Return an inbound typed frame to the Ipê program: a decoded intent, never a
+  // thrown error, so a host permission denial is an ordinary case the program's
+  // subscription decodes (parse-don't-validate at the trust boundary). Each frame
+  // carries a `tag` naming its first-party sink so a module's inbound decoder
+  // selects only its own frames; unknown tags simply fail that decoder closed.
+  function reply(frame) {
     if (typeof window.__ipePortSend === "function") {
-      try { window.__ipePortSend(JSON.stringify({ ok: ok, detail: detail })); }
+      try { window.__ipePortSend(JSON.stringify(frame)); }
       catch (_e) { /* best-effort inbound reply */ }
     }
   }
   // First-party Ipe.Browser.* sinks. Each recognises its own closed outbound
   // command shape and reaches exactly one Web API, trapping any host denial /
-  // unavailability to a typed inbound result (never a panic, never a throw). The
-  // bytes are stdlib's and SRI-pinned, so a dependency cannot substitute them.
-  function builtinSink(value) {
+  // unavailability / timeout to a typed inbound frame (never a panic, never a
+  // throw). The bytes are stdlib's and SRI-pinned, so a dependency cannot
+  // substitute them.
+  function clipboardSink(value) {
     // Ipe.Browser.Clipboard: `WriteText text` -> navigator.clipboard.writeText.
     if (value && typeof value === "object" && typeof value.WriteText === "string") {
       var text = value.WriteText;
       if (!navigator || !navigator.clipboard || typeof navigator.clipboard.writeText !== "function") {
-        replyResult(false, "unavailable");
+        reply({ tag: "clipboard", event: "write", ok: false, error: "unavailable" });
         return true;
       }
       navigator.clipboard.writeText(text).then(
-        function () { replyResult(true, "written"); },
-        function () { replyResult(false, "denied"); }
+        function () { reply({ tag: "clipboard", event: "write", ok: true }); },
+        function () { reply({ tag: "clipboard", event: "write", ok: false, error: "denied" }); }
       );
       return true;
     }
+    // Ipe.Browser.Clipboard: `ReadText` -> navigator.clipboard.readText. The
+    // nullary variant is externally tagged as the bare string "ReadText".
+    if (value === "ReadText") {
+      if (!navigator || !navigator.clipboard || typeof navigator.clipboard.readText !== "function") {
+        reply({ tag: "clipboard", event: "read", ok: false, error: "unavailable" });
+        return true;
+      }
+      navigator.clipboard.readText().then(
+        function (text) { reply({ tag: "clipboard", event: "read", ok: true, text: String(text) }); },
+        function () { reply({ tag: "clipboard", event: "read", ok: false, error: "denied" }); }
+      );
+      return true;
+    }
+    return false;
+  }
+  // Ipe.Browser.Geolocation: `Current opts` / `Watch opts` / `ClearWatch id`
+  // -> navigator.geolocation.getCurrentPosition / watchPosition / clearWatch. A
+  // position resolves to a typed `Coords` frame; a host denial, position
+  // unavailability, or timeout traps to the matching typed error frame — the
+  // three inbound error variants the module enumerates exhaustively.
+  var geoWatchId = null;
+  function geoOptions(opts) {
+    // The Ipê `Options` record crosses as `{ enableHighAccuracy, timeout,
+    // maximumAge }` (milliseconds). A non-positive `timeout` means "no deadline"
+    // -> Infinity; a negative `maximumAge` is clamped to a fresh fix (0).
+    var o = (opts && typeof opts === "object") ? opts : {};
+    return {
+      enableHighAccuracy: o.enableHighAccuracy === true,
+      timeout: (typeof o.timeout === "number" && o.timeout > 0) ? o.timeout : Infinity,
+      maximumAge: (typeof o.maximumAge === "number" && o.maximumAge > 0) ? o.maximumAge : 0,
+    };
+  }
+  function geoOnPosition(pos) {
+    var c = pos && pos.coords ? pos.coords : {};
+    reply({
+      tag: "geolocation", ok: true,
+      lat: Number(c.latitude), lng: Number(c.longitude), accuracy: Number(c.accuracy),
+    });
+  }
+  function geoOnError(err) {
+    // PERMISSION_DENIED=1, POSITION_UNAVAILABLE=2, TIMEOUT=3 — mapped to the
+    // module's closed inbound error vocabulary; anything else is unavailable.
+    var code = err && typeof err.code === "number" ? err.code : 2;
+    var kind = code === 1 ? "denied" : (code === 3 ? "timeout" : "unavailable");
+    reply({ tag: "geolocation", ok: false, error: kind });
+  }
+  function geolocationSink(value) {
+    // An outbound `JsCmd` is externally tagged: a payload-carrying variant is
+    // `{ Current: opts }` / `{ Watch: opts }`; the nullary `ClearWatch` is the
+    // bare string `"ClearWatch"`.
+    var isClear = value === "ClearWatch" ||
+      (value && typeof value === "object" && value.ClearWatch !== undefined);
+    var isCurrent = value && typeof value === "object" && value.Current !== undefined;
+    var isWatch = value && typeof value === "object" && value.Watch !== undefined;
+    if (!isCurrent && !isWatch && !isClear) return false;
+    if (isClear) {
+      if (geoWatchId !== null && navigator && navigator.geolocation &&
+          typeof navigator.geolocation.clearWatch === "function") {
+        navigator.geolocation.clearWatch(geoWatchId);
+      }
+      geoWatchId = null;
+      return true;
+    }
+    if (!navigator || !navigator.geolocation) {
+      reply({ tag: "geolocation", ok: false, error: "unavailable" });
+      return true;
+    }
+    var opts = geoOptions(isCurrent ? value.Current : value.Watch);
+    if (isCurrent) {
+      if (typeof navigator.geolocation.getCurrentPosition !== "function") {
+        reply({ tag: "geolocation", ok: false, error: "unavailable" });
+        return true;
+      }
+      navigator.geolocation.getCurrentPosition(geoOnPosition, geoOnError, opts);
+    } else {
+      if (typeof navigator.geolocation.watchPosition !== "function") {
+        reply({ tag: "geolocation", ok: false, error: "unavailable" });
+        return true;
+      }
+      geoWatchId = navigator.geolocation.watchPosition(geoOnPosition, geoOnError, opts);
+    }
+    return true;
+  }
+  function builtinSink(value) {
+    if (clipboardSink(value)) return true;
+    if (geolocationSink(value)) return true;
     return false;
   }
   function deliver(raw) {
@@ -148,13 +237,37 @@ mod tests {
     #[test]
     fn clipboard_sink_reaches_the_web_api_and_traps_denial_to_a_typed_result() {
         let js = port_glue_js();
-        // The first-party Ipe.Browser.Clipboard sink reaches exactly one Web API…
+        // The first-party Ipe.Browser.Clipboard sink reaches its two Web APIs…
         assert!(js.contains("navigator.clipboard.writeText"));
+        assert!(js.contains("navigator.clipboard.readText"));
         assert!(js.contains("WriteText"));
-        // …and traps a host denial / absence to a typed inbound result, never a
+        assert!(js.contains("ReadText"));
+        // …and traps a host denial / absence to a typed inbound frame, never a
         // throw: both the denied and the unavailable branches reply, no `eval`.
         assert!(js.contains("\"denied\""));
         assert!(js.contains("\"unavailable\""));
-        assert!(js.contains("replyResult"));
+        assert!(js.contains("tag: \"clipboard\""));
+        assert!(js.contains("reply("));
+    }
+
+    #[test]
+    fn geolocation_sink_reaches_the_web_api_and_enumerates_the_three_error_variants() {
+        let js = port_glue_js();
+        // The first-party Ipe.Browser.Geolocation sink reaches its Web APIs…
+        assert!(js.contains("navigator.geolocation.getCurrentPosition"));
+        assert!(js.contains("navigator.geolocation.watchPosition"));
+        assert!(js.contains("navigator.geolocation.clearWatch"));
+        assert!(js.contains("Current"));
+        assert!(js.contains("Watch"));
+        // …resolves a position to a typed Coords frame…
+        assert!(js.contains("tag: \"geolocation\""));
+        assert!(js.contains("lat:"));
+        assert!(js.contains("lng:"));
+        assert!(js.contains("accuracy:"));
+        // …and enumerates all three inbound error variants, never a throw / eval.
+        assert!(js.contains("\"denied\""));
+        assert!(js.contains("\"unavailable\""));
+        assert!(js.contains("\"timeout\""));
+        assert!(!js.contains("eval("));
     }
 }
