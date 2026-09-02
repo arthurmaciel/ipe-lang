@@ -1,57 +1,72 @@
 module Main exposing (main)
 
 import Ipe.Parser as Parser exposing (Parser)
-import Ipe.Char as Char
 import Ipe.Task as Task
 import Ipe.List as List
 import Ipe.String as String
 import Ipe.Io as Io
 
 
--- Classify each input as a token, showing the ideas most `Ipe.Parser` code
--- turns on:
---   • `oneOf` tries alternatives in order and commits to the first that matches.
---   • `map` tags a parsed value into a typed result — here a `Token` variant.
---   • `getChompedString (chompWhile …)` captures the exact run of characters a
---     predicate accepted.
---   • `run` is a total `String -> Result (List DeadEnd) a`: an unrecognised
---     input surfaces as a value, never a crash.
+-- Parse a parenthesised integer pair like `(3,4)` into a `Point`, then a small
+-- grammar of commands, exercising the composed combinators:
+--   • `map2` applies a builder to two parsers run in sequence.
+--   • `keep` / `ignore` sequence a value parser with a punctuation parser.
+--   • `andThen` sequences a step that depends on the previous result, nested to
+--     branch on a keyword.
+--   • `oneOf` tries alternatives; `run` is a total `String -> Result`.
 
 
-type Token
-    = Number Int
-    | Word String
-    | Unknown
+type alias Point =
+    { x : Int
+    , y : Int
+    }
 
 
--- A token is either a non-negative integer or a run of letters. `oneOf` picks
--- the first branch that matches; a leading non-letter, non-digit falls through
--- to the final `succeed Unknown`, which consumes nothing and always succeeds.
-token : Parser Token
-token =
+type Command
+    = Move Point
+    | Ping
+
+
+-- `(x,y)` — open paren, an int, a comma, an int, a close paren. `ignore` drops
+-- the leading `(`; `map2` combines the two ints past the comma; `keep` runs the
+-- trailing `)` for effect and keeps the point.
+point : Parser Point
+point =
+    Parser.ignore (Parser.symbol "(")
+        (Parser.keep
+            (Parser.map2 Point
+                Parser.int
+                (Parser.ignore (Parser.symbol ",") Parser.int)
+            )
+            (Parser.symbol ")")
+        )
+
+
+-- `move (x,y)` or `ping` — a keyword chooses the branch, and a nested `andThen`
+-- threads the point parser after the `move ` keyword.
+command : Parser Command
+command =
     Parser.oneOf
-        [ Parser.map Number Parser.int
-        , Parser.map Word (Parser.getChompedString (Parser.chompWhile Char.isAlpha))
-        , Parser.succeed Unknown
+        [ Parser.keyword "move"
+            |> Parser.andThen
+                (\_ ->
+                    Parser.ignore Parser.spaces point
+                        |> Parser.andThen (\p -> Parser.succeed (Move p))
+                )
+        , Parser.keyword "ping"
+            |> Parser.andThen (\_ -> Parser.succeed Ping)
         ]
 
 
 render : String -> String
 render raw =
-    case Parser.run token raw of
+    case Parser.run command raw of
 
-        Ok (Number n) ->
-            raw ++ "  ->  Number " ++ String.fromInt n
+        Ok (Move p) ->
+            raw ++ "  ->  Move (" ++ String.fromInt p.x ++ "," ++ String.fromInt p.y ++ ")"
 
-        Ok (Word w) ->
-            if String.isEmpty w then
-                raw ++ "  ->  Unknown"
-
-            else
-                raw ++ "  ->  Word " ++ w
-
-        Ok Unknown ->
-            raw ++ "  ->  Unknown"
+        Ok Ping ->
+            raw ++ "  ->  Ping"
 
         Err _ ->
             raw ++ "  ->  (parse error)"
@@ -59,16 +74,16 @@ render raw =
 
 inputs : List String
 inputs =
-    [ "42"
-    , "hello"
-    , "007"
-    , "!"
+    [ "move (3,4)"
+    , "ping"
+    , "move (12,0)"
+    , "spin"
     ]
 
 
 main =
     do
-        Io.println "Classifying tokens:"
+        Io.println "Parsing commands:"
         List.map (\s -> Io.println ("  " ++ render s)) inputs
             |> Task.sequence
             |> Task.map (\_ -> ())

@@ -67,18 +67,10 @@ fall through to the next alternative — its dead ends are reported. Wrap a pars
 in `backtrackable` when two alternatives share a prefix and a committed failure
 should still retry the next branch.
 
-## Divergences from Elm, and a current limit
+## Divergences from Elm
 
 `Ipe.Parser` keeps Elm's names and semantics, with a few deliberate differences
 recorded in [`docs/divergences-from-elm.md`](../divergences-from-elm.md): record
 building uses `map2` … `map5` (and `keep` / `ignore` for punctuation) rather than
-Elm's `|=` / `|.` pipeline, since Ipê has no custom infix operators yet (#1655).
-
-The whole API type-checks, but the compiler currently lowers only the
-non-composed subset to runnable code — `run`, `succeed`, `int`, `float`,
-`symbol`, `keyword`, `end`, `chompIf`, `chompWhile`, `getChompedString`,
-`spaces`, `oneOf`, `backtrackable`, `map`, and a single `andThen`. The
-combinators that sequence parsers through a captured function value (`map2` …
-`map5`, `keep`, `ignore`, `loop`, nested `andThen`) type-check but do not yet
-lower (#1657). Until that lands, build parsers from the runnable subset shown
-above.
+Elm's `|=` / `|.` pipeline, and `Parser a` is a transparent `State -> PStep a`
+alias instead of an opaque wrapper.

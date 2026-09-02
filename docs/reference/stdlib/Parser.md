@@ -46,18 +46,6 @@ Example — classify a token as an integer or a word:
 
     Parser.run token "42" --> Ok (Number 42)
 
-Compile-status caveat (tracked): the whole API type-checks, but the Rust
-backend currently lowers only the non-composed subset to runnable code —
-`run`, `succeed`, `int`, `float`, `symbol`, `keyword`, `end`, `chompIf`,
-`chompWhile`, `getChompedString`, `spaces`, `oneOf`, `backtrackable`, `map`,
-and a single (non-nested) `andThen`. The combinators that build or sequence
-parsers through a captured polymorphic function value — `map2` … `map5`,
-`keep`, `ignore`, `loop`, and any nesting of `andThen` — type-check but do
-not yet lower (a `Send + Sync` boxing / returned-function-application gap in
-the backend). They are shipped so the reference API is complete and so the
-gap can be closed in one place; until then, build parsers from the runnable
-subset (`oneOf` + `map` + the token parsers). See the tracked backend issue.
-
 Divergences from `elm/parser` (recorded in `docs/divergences-from-elm.md`):
 
   * `Parser a` is a transparent type alias for the underlying step function,
@@ -66,11 +54,11 @@ Divergences from `elm/parser` (recorded in `docs/divergences-from-elm.md`):
     while a union wrapper around it does not (IPE-L0107), so the alias is the
     sound shape. Building a parser by hand is possible but unsupported —
     always compose through the combinators.
-  * Elm builds records with the `succeed ctor |= partA |= partB` applicative
-    pipeline (`|=` keep, `|.` ignore). Ipê lacks custom infix operators, so
-    this module provides `map2` … `map5` (apply a builder directly to parsed
-    results) and `keep` / `ignore` as two-parser punctuation sequencers. The
-    `|=` / `|.` operators can wire in once the language gains user infix.
+  * Records are built with `map2` … `map5` (apply a builder directly to the
+    results of several parsers) and sequenced with `keep` / `ignore` for
+    punctuation to skip. Elm instead threads a curried constructor through an
+    applicative `succeed ctor |= partA |= partB` pipeline; the named
+    combinators here are the prefix equivalent.
   * Elm's `Parser.Advanced` context stack and its custom-`problem` type
     parameter are omitted — `Problem` is the fixed union below.
 

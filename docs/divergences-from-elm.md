@@ -22,30 +22,16 @@ keeps Elm's names and semantics for `succeed`, `map`, `andThen`, `oneOf`,
 
 - **Record building uses `map2` … `map5`, not the `|=` / `|.` pipeline.** Elm
   writes `succeed ctor |= partA |= partB`, threading a curried constructor
-  through a parser accumulator. That requires a `Parser` whose value is a
-  function, which the backend cannot lower. `map2` … `map5` apply the builder
-  directly to already-parsed results, so no parser holds a function. `keep` and
+  through a parser accumulator. `map2` … `map5` apply the builder directly to
+  already-parsed results, so no parser holds a function value. `keep` and
   `ignore` are two-parser sequencers for punctuation (run one, keep the other's
-  value), not pipeline stages.
-
-- **No `|=` / `|.` operators.** Ipê has no user-declarable infix operators yet
-  (tracked in #1655). The named combinators above stand in; the operators can be
-  added as thin aliases once infix support lands.
+  value), not pipeline stages. The prefix combinators are the standing form;
+  infix `|=` / `|.` aliases can be added once Ipê gains user-declarable infix
+  operators.
 
 - **No `Parser.Advanced` tier.** Elm's context stack and custom-`problem` type
   parameter are omitted; `Problem` is a fixed union.
 
-### Backend lowering caveat (tracked in #1657)
-
-The whole `Ipe.Parser` API type-checks, but the Rust backend currently lowers
-only the **non-composed** subset to runnable code: `run`, `succeed`, `int`,
-`float`, `symbol`, `keyword`, `end`, `chompIf`, `chompWhile`,
-`getChompedString`, `spaces`, `oneOf`, `backtrackable`, `map`, and a single
-(non-nested) `andThen`. The combinators that build or sequence parsers through a
-captured polymorphic function value — `map2` … `map5`, `keep`, `ignore`, `loop`,
-and any nesting of `andThen` — type-check but hit a `Send + Sync` boxing /
-returned-function-application gap in the backend and do not yet lower. They ship
-so the reference API is complete and the gap can be closed in one place. Until
-then, build parsers from the runnable subset. The shipped example under
-`examples/shapes/script/parser-demo` uses only that subset and is exercised by
-the first-party examples sweep.
+The shipped example under `examples/shapes/script/parser-demo` composes the full
+combinator surface — `map2`, `keep`, `ignore`, nested `andThen`, and `oneOf` —
+and is exercised by the first-party examples sweep.

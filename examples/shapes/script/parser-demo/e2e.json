@@ -4,7 +4,7 @@
         {
             "args": [],
             "expectExit": 0,
-            "expectStdoutContains": ["Number 42", "Word hello", "Number 7", "Unknown"]
+            "expectStdoutContains": ["Move (3,4)", "Ping", "Move (12,0)", "(parse error)"]
         }
     ]
 }
