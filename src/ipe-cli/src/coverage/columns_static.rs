@@ -43,7 +43,7 @@ fn kernel_qualifier_modules() -> BTreeSet<Vec<String>> {
 /// kernel); the disjointness axis is module membership, not the facets.
 pub struct HomeColumn;
 
-impl AspectCheck for HomeColumn {
+impl AspectCheck<StdlibSymbol> for HomeColumn {
     fn name(&self) -> &'static str {
         "home"
     }
@@ -148,7 +148,7 @@ impl Default for ResolvesColumn {
     }
 }
 
-impl AspectCheck for ResolvesColumn {
+impl AspectCheck<StdlibSymbol> for ResolvesColumn {
     fn name(&self) -> &'static str {
         "resolves"
     }
@@ -211,7 +211,7 @@ impl Default for ClosedSchemeColumn {
     }
 }
 
-impl AspectCheck for ClosedSchemeColumn {
+impl AspectCheck<StdlibSymbol> for ClosedSchemeColumn {
     fn name(&self) -> &'static str {
         "closed-scheme"
     }
@@ -326,7 +326,7 @@ impl Default for LayerAgreementColumn {
     }
 }
 
-impl AspectCheck for LayerAgreementColumn {
+impl AspectCheck<StdlibSymbol> for LayerAgreementColumn {
     fn name(&self) -> &'static str {
         "layer-agreement"
     }

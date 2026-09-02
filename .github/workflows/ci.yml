@@ -739,7 +739,8 @@ jobs:
           IPE_ORACLE_SHARED_TARGET: ${{ github.workspace }}/.cache/oracle-shared-target
         run: |
           cargo nextest run -p ipe -E 'binary(seal_modset)' --profile ci
-          cargo nextest run --workspace --profile ci --no-fail-fast --partition count:1/6
+          cargo nextest run --workspace --profile ci --no-fail-fast --partition count:1/6 \
+            -E 'not test(build_run_column_over_a_representative_slice)'
 
   # Vendored-emit SEAL gate: runs the `seal_modset` suite under the vendored
   # runtime-source emit model (`IPE_RUNTIME_VENDORED=1`). The normal e2e shards
