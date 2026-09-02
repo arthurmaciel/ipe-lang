@@ -221,7 +221,7 @@ fn tier2_probe_fixture() -> Result<PathBuf, CliError> {
 /// package cannot be built or read; [`CliError::PackageAudit`] when a Tier-1
 /// check rejects the package (the gate's hard reject).
 pub fn run_audit(rest: &[String]) -> Result<(), CliError> {
-    let (path, index_root, publisher, format) = parse_audit_args(rest)?;
+    let (path, index_root, advisory_db, publisher, format) = parse_audit_args(rest)?;
     let prepared = prepare(&path)?;
     let name = prepared.manifest.name.clone();
     let version = prepared
@@ -230,7 +230,12 @@ pub fn run_audit(rest: &[String]) -> Result<(), CliError> {
         .as_ref()
         .map_or_else(|| "(unversioned)".to_owned(), ToString::to_string);
 
-    let outcome = audit_gate(&prepared, index_root.as_deref(), publisher.as_deref());
+    let outcome = audit_gate(
+        &prepared,
+        index_root.as_deref(),
+        advisory_db.as_deref(),
+        publisher.as_deref(),
+    );
 
     match format {
         OutputFormat::Json => emit_audit_json(&name, &version, &outcome),
@@ -272,6 +277,7 @@ pub fn run_audit(rest: &[String]) -> Result<(), CliError> {
 fn audit_gate(
     prepared: &Prepared,
     index_root: Option<&Path>,
+    advisory_db: Option<&Path>,
     entry_publisher: Option<&str>,
 ) -> Result<crate::audit_native::Tier2Outcome, CliError> {
     reserved_namespace_ownership(prepared, entry_publisher)?;
@@ -279,6 +285,7 @@ fn audit_gate(
     capability_consistency(prepared)?;
     enforced_semver(prepared, index_root)?;
     supply_chain(prepared)?;
+    advisory_check(prepared, advisory_db)?;
 
     crate::audit_native::native_tier2(&crate::audit_native::NativeAudit {
         declared: &prepared.manifest.capabilities,
@@ -368,6 +375,16 @@ fn passing_summary(name: &str, version: &str, tier2: &crate::audit_native::Tier2
     }
 }
 
+/// The five-field result of [`parse_audit_args`]: `(project_path, index_root,
+/// advisory_db, publisher, format)`.
+type AuditArgs = (
+    PathBuf,
+    Option<PathBuf>,
+    Option<PathBuf>,
+    Option<String>,
+    OutputFormat,
+);
+
 /// Parse `ipe package audit`'s tail: an optional positional `<path>`, an
 /// optional `--index <dir>` (the curated index checkout the semver check reads
 /// the previous published version from; defaults to the resolver's index root),
@@ -376,11 +393,10 @@ fn passing_summary(name: &str, version: &str, tier2: &crate::audit_native::Tier2
 /// # Errors
 /// [`CliError::UsageOwned`] on an unknown flag, a missing `--index` value, a
 /// second positional, or `--plain --json` together.
-fn parse_audit_args(
-    rest: &[String],
-) -> Result<(PathBuf, Option<PathBuf>, Option<String>, OutputFormat), CliError> {
+fn parse_audit_args(rest: &[String]) -> Result<AuditArgs, CliError> {
     let mut path: Option<PathBuf> = None;
     let mut index: Option<PathBuf> = None;
+    let mut advisory_db: Option<PathBuf> = None;
     let mut publisher: Option<String> = None;
     let mut format: Option<OutputFormat> = None;
     let mut it = rest.iter();
@@ -396,6 +412,17 @@ fn parse_audit_args(
                     ));
                 }
                 index = Some(PathBuf::from(value));
+            }
+            "--advisory-db" => {
+                let value = it.next().ok_or(CliError::Usage(
+                    "ipe package audit: --advisory-db needs a value",
+                ))?;
+                if advisory_db.is_some() {
+                    return Err(CliError::Usage(
+                        "ipe package audit: --advisory-db given more than once",
+                    ));
+                }
+                advisory_db = Some(PathBuf::from(value));
             }
             "--publisher" => {
                 let value = it.next().ok_or(CliError::Usage(
@@ -426,6 +453,7 @@ fn parse_audit_args(
     Ok((
         path.unwrap_or_else(|| PathBuf::from(".")),
         index,
+        advisory_db,
         publisher,
         format.unwrap_or_default(),
     ))
@@ -1111,6 +1139,43 @@ fn verify_locked_dependency_hashes(prepared: &Prepared) -> Result<(), CliError> 
     }
 }
 
+/// Cross-check every locked Ipê dependency against the advisory database.
+///
+/// Reads `<advisory_db_root>/advisories/<pkg>/` for each locked dep and tests
+/// its locked version against every advisory's `affected` range.
+///
+/// When `advisory_db` is `None` the check is skipped with a notice (the gate
+/// cannot refuse without a DB; CI always supplies one via `--advisory-db`).
+/// When `advisory_db` is `Some` but absent from disk the check is also skipped
+/// (a registry that has published no advisories yet is not a risk signal), but
+/// an unreadable DB directory or a malformed advisory file is an error
+/// (fail-closed: absent proof the dep is safe, refuse).
+///
+/// # Errors
+/// [`CliError::AdvisoryVulnerable`] on a `high`/`critical` match.
+/// [`CliError::AdvisoryDbMalformed`] on a malformed advisory file.
+/// [`CliError::AdvisoryDbUnreachable`] on an unreadable advisory directory.
+fn advisory_check(prepared: &Prepared, advisory_db: Option<&Path>) -> Result<(), CliError> {
+    let Some(db_root) = advisory_db else {
+        // No DB supplied — cannot do the check.  Warn; never silently pass as
+        // "safe": the CI gate always passes `--advisory-db`.
+        eprintln!(
+            "{}",
+            crate::style::gutter(
+                "warning: advisory-database check skipped — pass `--advisory-db <path>` to \
+                 enable it. The package index CI always supplies a DB and never skips this check."
+            )
+        );
+        return Ok(());
+    };
+
+    let lockfile = crate::lockfile::Lockfile::read(&prepared.manifest.root)?;
+    for dep in lockfile.packages() {
+        crate::advisory::check_dep_advisories(db_root, &dep.name, &dep.version)?;
+    }
+    Ok(())
+}
+
 /// Locate the workspace's `deny.toml` so the supply-chain check applies the same
 /// posture the workspace CI does. Walks up from the current directory, then from
 /// the resolved runtime tree's ancestry (the runtime lives inside the workspace,
@@ -1268,21 +1333,21 @@ mod tests {
 
     #[test]
     fn audit_parses_output_format_flags() {
-        let (_, _, _, fmt) = parse_audit_args(&args(&["--json"])).expect("json");
+        let (_, _, _, _, fmt) = parse_audit_args(&args(&["--json"])).expect("json");
         assert_eq!(fmt, OutputFormat::Json);
-        let (_, _, _, fmt) = parse_audit_args(&args(&["--plain"])).expect("plain");
+        let (_, _, _, _, fmt) = parse_audit_args(&args(&["--plain"])).expect("plain");
         assert_eq!(fmt, OutputFormat::Plain);
-        let (_, _, _, fmt) = parse_audit_args(&args(&[])).expect("default");
+        let (_, _, _, _, fmt) = parse_audit_args(&args(&[])).expect("default");
         assert_eq!(fmt, OutputFormat::Human);
     }
 
     #[test]
     fn audit_parses_publisher_flag() {
-        let (_, _, publisher, _) =
+        let (_, _, _, publisher, _) =
             parse_audit_args(&args(&["--publisher", "arthurmaciel"])).expect("publisher");
         assert_eq!(publisher.as_deref(), Some("arthurmaciel"));
         // Absent by default.
-        let (_, _, publisher, _) = parse_audit_args(&args(&[])).expect("default");
+        let (_, _, _, publisher, _) = parse_audit_args(&args(&[])).expect("default");
         assert_eq!(publisher, None);
         // A value is required, and it may not be given twice.
         assert!(parse_audit_args(&args(&["--publisher"])).is_err());
