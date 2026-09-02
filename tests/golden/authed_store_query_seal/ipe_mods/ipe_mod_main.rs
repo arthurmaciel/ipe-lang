@@ -35,8 +35,8 @@ pub(crate) fn main_doc_codec() -> IpeCodecCodec<RecAuthorBody> {
                                     + Sync
                                     + 'static,
                             > = Box::new(
-                                move |eta_0: Decoder<Box<dyn FnOnce(String) -> RecAuthorBody + Send + 'static>>| -> Decoder<RecAuthorBody> {
-                                    decode_pipeline_required(cap_0.clone(), cap_1.clone(), eta_0)
+                                move |eta_1: Decoder<Box<dyn FnOnce(String) -> RecAuthorBody + Send + 'static>>| -> Decoder<RecAuthorBody> {
+                                    decode_pipeline_required(cap_0.clone(), cap_1.clone(), eta_1)
                                 },
                             );
                             __ipe_fn

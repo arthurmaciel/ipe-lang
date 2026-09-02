@@ -12542,6 +12542,19 @@ pub struct Lowerer<'a> {
     /// across sites without shadowing; [`Interner::fresh_symbols`] guarantees no
     /// entry aliases a user identifier.
     eta_params: Vec<Symbol>,
+    /// Per-def MONOTONIC cursor into [`Self::eta_params`]: the position of the
+    /// next fresh eta block. A binding site peeks its block with
+    /// [`Self::eta_sym`] (`eta_base + offset`) and then calls [`Self::advance_eta`]
+    /// to reserve it, so the cursor only moves forward within a def and never
+    /// hands the same name to two eta binders. That makes a composed
+    /// higher-order combinator — an eta-lambda synthesised inside another still-
+    /// live one, e.g. `a |> andThen (\x -> b |> andThen …)` — draw DISJOINT
+    /// names rather than shadow the outer scope's live eta params (the lowerer
+    /// never relies on Rust shadowing for a live binding). Reset to 0 at each
+    /// [`Self::lower_def`]: eta names are scope-local to one emitted function, so
+    /// distinct defs reuse `eta_0, eta_1, …` freely. Sized by
+    /// [`max_live_eta_params`] to cover a def's whole eta demand.
+    eta_base: Cell<usize>,
     /// Pre-minted, collision-free names for capturing a supplied argument
     /// expression in an eta-expand-partial hoist (T4). When a supplied arg
     /// is not a literal or bare `Var`, it is hoisted to
@@ -13081,6 +13094,94 @@ pub fn max_def_arity_per_module(m: &canon::Module) -> usize {
         *slot = (*slot).max(def_arity(d));
     }
     per_module.into_values().max().unwrap_or(0)
+}
+
+/// An upper bound on the eta-parameter symbols one def can consume — the sizing
+/// input for the per-def monotonic [`Lowerer::eta_base`] cursor.
+///
+/// Eta names are handed out through a cursor that only advances within a def and
+/// never reuses (so a composed higher-order combinator `a |> andThen (\x -> b |>
+/// andThen …)` draws DISJOINT names rather than shadowing a live outer one). The
+/// pool must therefore cover the SUM of every eta block a single def can draw,
+/// not just the widest one — the cursor resets per def, so the bound is the max
+/// over defs of that per-def total.
+///
+/// Each syntactic form is charged the widest eta block it can synthesise:
+/// * a lambda — its own parameter count (the flatten pad is at most that);
+/// * a call — up to [`MAX_ETA_PER_SITE`], covering a partial / over-application
+///   eta-adapter residual plus a fn-value read demoted onto the `Box` carrier;
+/// * a bare constructor reference / partial ctor — up to [`MAX_ETA_PER_SITE`];
+/// * a `let` binding — up to [`MAX_ETA_PER_SITE`] for a fn-typed binder's
+///   shim / sibling-promote / rebind block.
+///
+/// Every charge is a ceiling, so the total is a safe over-approximation.
+/// Over-sizing is byte-neutral (the surplus tail symbols are never referenced —
+/// only the advances a program's OWN eta sites produce reach the emitted names);
+/// undersizing fails closed as a [`bug`] via [`Lowerer::eta_sym`], never an index
+/// panic and never a silent reuse.
+#[must_use]
+pub fn max_live_eta_params(m: &canon::Module) -> usize {
+    /// The widest eta block any single call / ctor / fn-typed-let site can draw:
+    /// a residual arrow up to the widest callable arity, matching the eta / cap
+    /// pool floor in [`crate::lower`].
+    const MAX_ETA_PER_SITE: usize = 16;
+    fn walk_expr(e: &canon::Expr) -> usize {
+        match &e.value {
+            canon::Expr_::Lambda(params, body) => params.len() + walk_expr(body),
+            canon::Expr_::Call(callee, args) => {
+                MAX_ETA_PER_SITE + walk_expr(callee) + args.iter().map(walk_expr).sum::<usize>()
+            }
+            canon::Expr_::ForeignCall { args, .. } => args.iter().map(walk_expr).sum::<usize>(),
+            canon::Expr_::Binop { lhs, rhs, .. } => walk_expr(lhs) + walk_expr(rhs),
+            canon::Expr_::Case(scrut, branches) => {
+                walk_expr(scrut) + branches.iter().map(|b| walk_expr(&b.body)).sum::<usize>()
+            }
+            canon::Expr_::Let(bindings, body) => {
+                bindings
+                    .iter()
+                    .map(|b| MAX_ETA_PER_SITE + walk_expr(&b.body))
+                    .sum::<usize>()
+                    + walk_expr(body)
+            }
+            canon::Expr_::If(branches, else_expr) => {
+                branches
+                    .iter()
+                    .map(|(c, b)| walk_expr(c) + walk_expr(b))
+                    .sum::<usize>()
+                    + walk_expr(else_expr)
+            }
+            canon::Expr_::Tuple(elems) | canon::Expr_::List(elems) => {
+                elems.iter().map(walk_expr).sum()
+            }
+            canon::Expr_::Cons(head, tail) => walk_expr(head) + walk_expr(tail),
+            canon::Expr_::Record(fields) => fields.iter().map(|(_, v)| walk_expr(v)).sum(),
+            canon::Expr_::Access(record, _) => walk_expr(record),
+            canon::Expr_::Update(base, fields) => {
+                walk_expr(base) + fields.iter().map(|(_, v)| walk_expr(v)).sum::<usize>()
+            }
+            // A bare / partially-applied constructor reference eta-expands into a
+            // closure over up to `MAX_ETA_PER_SITE` fresh params.
+            canon::Expr_::VarCtor { .. } => MAX_ETA_PER_SITE,
+            canon::Expr_::VarLocal(_)
+            | canon::Expr_::VarTopLevel { .. }
+            | canon::Expr_::VarKernel { .. }
+            | canon::Expr_::Int(_)
+            | canon::Expr_::Float(_)
+            | canon::Expr_::Str(_)
+            | canon::Expr_::PathLit(_)
+            | canon::Expr_::CustomElementCtor(_)
+            | canon::Expr_::Char(_)
+            | canon::Expr_::Unit => 0,
+        }
+    }
+    m.defs
+        .iter()
+        .map(|d| match d {
+            canon::Def::Typed { patterns, body, .. }
+            | canon::Def::Untyped { patterns, body, .. } => patterns.len() + walk_expr(body),
+        })
+        .max()
+        .unwrap_or(0)
 }
 
 /// Count every **non-variable** parameter pattern across the whole module — both
@@ -13971,6 +14072,7 @@ impl<'a> Lowerer<'a> {
             transparent_ffi_unions,
             transparent_ffi_ctors,
             eta_params,
+            eta_base: Cell::new(0),
             cap_params,
             param_binders,
             param_cursor: Cell::new(0),
@@ -14017,6 +14119,43 @@ impl<'a> Lowerer<'a> {
         })?;
         self.param_cursor.set(i + 1);
         Ok(sym)
+    }
+
+    /// The eta-parameter symbol for local position `offset` in the eta block the
+    /// CURRENT site is about to bind — [`Self::eta_params`] indexed at
+    /// `eta_base + offset`, WITHOUT advancing the cursor (peek). A site draws its
+    /// block with `eta_sym(0..k)`, then calls [`Self::advance_eta`] once it has
+    /// committed the block, so the NEXT site — including one lowered from this
+    /// site's own body — gets disjoint names. Fails closed as a [`bug`] on
+    /// overrun (never an index panic); the pool is sized by [`max_live_eta_params`]
+    /// to cover a def's whole eta demand.
+    fn eta_sym(&self, offset: usize) -> DResult<Symbol> {
+        let i = self.eta_base.get().saturating_add(offset);
+        self.eta_params.get(i).copied().ok_or_else(|| {
+            bug(
+                "ipe_lower::eta_sym",
+                "eta-parameter pool smaller than the def's eta demand",
+            )
+        })
+    }
+
+    /// Advance the per-def monotonic eta cursor past a just-bound block of `count`
+    /// eta params. Every eta-binding site MUST advance after drawing its block, so
+    /// the next site (a sibling OR an eta-lambda synthesised from this site's body,
+    /// e.g. a composed `a |> andThen (\x -> b |> andThen …)`) never reuses — and
+    /// therefore never shadows — a still-live name. The cursor resets to 0 at each
+    /// [`Self::lower_def`] (eta names are scope-local to one function).
+    fn advance_eta(&self, count: usize) {
+        self.eta_base.set(self.eta_base.get().saturating_add(count));
+    }
+
+    /// The tail of [`Self::eta_params`] visible from the current cursor —
+    /// `eta_params[eta_base..]`. Handed to the free-function eta helpers
+    /// (`shim_fn_value_reads`, `eta_shared_rebind`, `eta_expand_leaf_to_shared`,
+    /// the sibling-lambda promoters); the caller advances the cursor past the
+    /// block those helpers consume.
+    fn eta_slice(&self) -> &[Symbol] {
+        self.eta_params.get(self.eta_base.get()..).unwrap_or(&[])
     }
 
     /// Hand out the next globally-unique fresh symbol from
@@ -15894,14 +16033,10 @@ impl<'a> Lowerer<'a> {
                 ));
             }
         };
-        // Pick a fresh symbol for the lambda parameter. Reuse the first
-        // eta-expand pool slot (sufficient for a one-parameter lambda).
-        let param_sym = self.eta_params.first().copied().ok_or_else(|| {
-            bug(
-                "ipe_lower::scalar_sql_wrap_lambda",
-                "eta-parameter pool is empty",
-            )
-        })?;
+        // Pick a fresh symbol for the lambda parameter — the current eta scope's
+        // first slot (sufficient for a one-parameter lambda).
+        let param_sym = self.eta_sym(0)?;
+        self.advance_eta(1);
         let sqlvalue_ir = IrType::Enum {
             home: ModPath(Vec::new()),
             name: self.builtins.sqlvalue,
@@ -17297,6 +17432,11 @@ impl<'a> Lowerer<'a> {
         // classifier and the binder sites; a def that errored out mid-lowering
         // must not leak its signals into the next def.
         self.deferred_fun_captures.borrow_mut().clear();
+        // Eta names are scope-local to one function: reset the monotonic cursor so
+        // each def draws `eta_0, eta_1, …` afresh. Within the def the cursor only
+        // advances (never reuses), so no two live eta binders collide even when a
+        // composed higher-order combinator nests them.
+        self.eta_base.set(0);
 
         // `id` is the def's position in `m.defs` — identical to the
         // `func_ids` entry `new()` recorded for `(home, name)` (the map is
@@ -19360,14 +19500,17 @@ impl<'a> Lowerer<'a> {
                     sym,
                     ps,
                     r,
-                    &self.eta_params,
+                    self.eta_slice(),
                     &self.builtin_runtime_ctors(),
                     body,
                 )?;
                 let mut remaining = count_var_uses(sym, &shimmed);
                 let disciplined = rewrite_multiuse_clones(sym, &mut remaining, shimmed);
                 let disciplined = force_shared_capture_clones(sym, disciplined);
-                let rebind = eta_shared_rebind(Expr::Var(sym), ps, r, &self.eta_params)?;
+                let rebind = eta_shared_rebind(Expr::Var(sym), ps, r, self.eta_slice())?;
+                // Reserve this binder's shim/rebind block (one arrow's worth of eta
+                // params) so a sibling binding in the same def does not reuse it.
+                self.advance_eta(ps.len());
                 return Ok(Expr::Let {
                     name: sym,
                     value: Box::new(rebind),
@@ -19544,17 +19687,18 @@ impl<'a> Lowerer<'a> {
         // not only lambda-literal bodies.
         let mut eta_pad: Vec<Symbol> = Vec::new();
         while let Ty::Fun(arg, rest) = cur {
-            let sym = *self.eta_params.get(eta_pad.len()).ok_or_else(|| {
-                bug(
-                    "ipe_lower::lower_lambda",
-                    "eta-parameter pool smaller than the lambda's residual arrow arity",
-                )
-            })?;
+            let sym = self.eta_sym(eta_pad.len())?;
             let ir_ty = self.ir_type_from_ty_json(arg, span)?;
             ir_params.push((sym, ir_ty));
             eta_pad.push(sym);
             cur = rest.as_ref();
         }
+        // Reserve this lambda's pad block on the monotonic cursor BEFORE lowering
+        // the body: the pad params stay live (the trailing Apply below reads them),
+        // so an eta-lambda synthesised inside the body — a nested composed
+        // combinator such as `andThen (\x -> … andThen …)` — must draw disjoint
+        // names rather than shadow this scope's `eta_N`.
+        self.advance_eta(eta_pad.len());
         // T8: use the JSON-friendly variant for the lambda return
         // type.  When the lambda's return type is a compound type containing a
         // free `Ty::Var` (e.g. `Task a` inside a polymorphic function like
@@ -21434,16 +21578,12 @@ impl<'a> Lowerer<'a> {
                     let mut params: Vec<(Symbol, IrType)> = Vec::with_capacity(arity);
                     let mut ctor_args: Vec<Expr> = Vec::with_capacity(arity);
                     for (i, arg_ty) in arg_tys.iter().enumerate() {
-                        let sym = *self.eta_params.get(i).ok_or_else(|| {
-                            bug(
-                                "ipe_lower::lower_expr/VarCtor",
-                                "eta-parameter pool smaller than constructor arity",
-                            )
-                        })?;
+                        let sym = self.eta_sym(i)?;
                         let ir = self.ir_type_from_ty(arg_ty, e.span)?;
                         params.push((sym, ir));
                         ctor_args.push(Expr::Var(sym));
                     }
+                    self.advance_eta(arity);
                     let ret = self.ir_type_from_ty(ret_ty, e.span)?;
                     let body = Expr::Ctor {
                         home: ctor_home,
@@ -23518,15 +23658,11 @@ impl<'a> Lowerer<'a> {
         let mut fresh_params: Vec<(Symbol, IrType)> = Vec::with_capacity(params.len());
         let mut call_args: Vec<Expr> = Vec::with_capacity(params.len());
         for (offset, pty) in params.iter().enumerate() {
-            let sym = self.eta_params.get(offset).copied().ok_or_else(|| {
-                bug(
-                    "ipe_lower::promote_stored_fn_carrier",
-                    "eta-parameter pool smaller than the payload arrow's arity",
-                )
-            })?;
+            let sym = self.eta_sym(offset)?;
             fresh_params.push((sym, pty.clone()));
             call_args.push(Expr::Var(sym));
         }
+        self.advance_eta(params.len());
         Ok(Expr::SharedLambda {
             params: fresh_params,
             ret: *ret,
@@ -23558,15 +23694,11 @@ impl<'a> Lowerer<'a> {
         let mut fresh_params: Vec<(Symbol, IrType)> = Vec::with_capacity(params.len());
         let mut call_args: Vec<Expr> = Vec::with_capacity(params.len());
         for (offset, pty) in params.iter().enumerate() {
-            let sym = self.eta_params.get(offset).copied().ok_or_else(|| {
-                bug(
-                    "ipe_lower::demote_shared_fn_read",
-                    "eta-parameter pool smaller than the read arrow's arity",
-                )
-            })?;
+            let sym = self.eta_sym(offset)?;
             fresh_params.push((sym, pty.clone()));
             call_args.push(Expr::Var(sym));
         }
+        self.advance_eta(params.len());
         // A `Var`/`CloneVar` leaf is MOVED into the `Box` closure and called by
         // shared reference; the shared `Arc` clone-forwards fine, but moving keeps
         // the wrapper lean and matches the fill side's leaf discipline.
@@ -23871,15 +24003,11 @@ impl<'a> Lowerer<'a> {
         let mut fresh_params: Vec<(Symbol, IrType)> = Vec::with_capacity(params.len());
         let mut call_args: Vec<Expr> = Vec::with_capacity(params.len());
         for (offset, pty) in params.iter().enumerate() {
-            let sym = self.eta_params.get(offset).copied().ok_or_else(|| {
-                bug(
-                    "ipe_lower::eta_expand_succeed_fn_value",
-                    "eta-parameter pool smaller than the payload arrow's arity",
-                )
-            })?;
+            let sym = self.eta_sym(offset)?;
             fresh_params.push((sym, pty.clone()));
             call_args.push(Expr::Var(sym));
         }
+        self.advance_eta(params.len());
         Ok(Expr::SharedLambda {
             params: fresh_params,
             ret: *ret,
@@ -23961,6 +24089,14 @@ impl<'a> Lowerer<'a> {
             .take(supplied)
             .map(|slot_ty| {
                 match self.ir_type_from_ty(slot_ty, call_span) {
+                    // A bare `Generic` slot clones, not moves: every emitted
+                    // generic carries an unconditional `T: Clone`
+                    // (`render_fn_generics`), so a supplied generic arg captured by
+                    // the re-callable `Fn` residual clones per call. SSOT with
+                    // `param_is_multiuse_clonable` / `classify_capture_clone`;
+                    // without it a threaded generic is moved out of the `Fn` env
+                    // (E0507).
+                    Ok(IrType::Generic(_)) => Some(CloneClass::CloneOk),
                     Ok(ir_ty) => Some(clone_class(self.clone_env(), &ir_ty)),
                     // T7b: ir_type_from_ty failed, but the slot's top-level type
                     // IS a function arrow.  The failure is from a nested Ty::Var
@@ -24035,16 +24171,10 @@ impl<'a> Lowerer<'a> {
             }
         }
         for (offset, arg_ty) in arg_tys.get(supplied..).unwrap_or(&[]).iter().enumerate() {
-            // Reuse pool slot `offset`: each eta-lambda is its own scope, so the
-            // i-th synthesised param can share a name across sites without
-            // shadowing. A miss means the pool was undersized — an invariant
-            // violation, since it is sized to the module's widest arity.
-            let sym = *self.eta_params.get(offset).ok_or_else(|| {
-                bug(
-                    "ipe_lower::eta_expand_partial",
-                    "eta-parameter pool smaller than the partial-application gap",
-                )
-            })?;
+            // Draw slot `offset` from the current position of the per-def monotonic
+            // eta cursor; `advance_eta` below reserves the whole block so a
+            // subsequently-lowered nested eta-lambda never reuses these names.
+            let sym = self.eta_sym(offset)?;
             // Use the JSON-friendly variant so that a free `Ty::Var` in the
             // missing-arg slot — the common case for diverging / always-failing
             // tasks passed to `Task.andThen` or `Cmd.perform` where the result
@@ -24070,6 +24200,7 @@ impl<'a> Lowerer<'a> {
             params.push((sym, ir));
             call_args.push(Expr::Var(sym));
         }
+        self.advance_eta(arity.saturating_sub(supplied));
         // T8: use the JSON-friendly variant for the lambda return
         // type for the same reason the eta-params (above) use it: when
         // `ret_ty` is `Task a` (a 1-arg Task) and `a` is a free `Ty::Var`
@@ -24192,6 +24323,16 @@ impl<'a> Lowerer<'a> {
             .iter()
             .take(supplied)
             .map(|slot_ty| match self.ir_type_from_ty(slot_ty, call_span) {
+                // A bare `Generic` slot is `CloneOk`, not `NonClone`:
+                // `render_fn_generics` stamps `T: Clone` on every emitted generic
+                // unconditionally, so a supplied generic arg captured by the
+                // re-callable `Fn` residual clones per call (a non-`Clone`
+                // instantiation is rejected at the CALLER by that bound before the
+                // insert is reached). SSOT with `param_is_multiuse_clonable` /
+                // `classify_capture_clone`; without it a threaded generic (e.g.
+                // `a` in `(f a) next` inside an `andThen`) is left un-cloned and
+                // the residual moves it out of the `Fn` env — E0507.
+                Ok(IrType::Generic(_)) => Some(CloneClass::CloneOk),
                 Ok(ir_ty) => Some(clone_class(self.clone_env(), &ir_ty)),
                 Err(_) if matches!(slot_ty, Ty::Fun(_, _)) => Some(CloneClass::NonClone),
                 Err(_) => None,
@@ -24242,16 +24383,15 @@ impl<'a> Lowerer<'a> {
         // IPE-L0102 — sound because the residual closure's slot is type-unified
         // by the surrounding application context.
         for (offset, arg_ty) in arg_tys.get(supplied..).unwrap_or(&[]).iter().enumerate() {
-            let sym = *self.eta_params.get(offset).ok_or_else(|| {
-                bug(
-                    "ipe_lower::eta_expand_value_partial",
-                    "eta-parameter pool smaller than the partial-application gap",
-                )
-            })?;
+            let sym = self.eta_sym(offset)?;
             let ir = self.ir_type_from_ty_json(arg_ty, call_span)?;
             params.push((sym, ir));
             call_args.push(Expr::Var(sym));
         }
+        // Reserve the residual block on the cursor BEFORE lowering the callee: the
+        // residual params stay live in the body, so any eta-lambda the callee's own
+        // lowering synthesises must draw disjoint names.
+        self.advance_eta(arity.saturating_sub(supplied));
         let ret = self.ir_type_from_ty_json(ret_ty, call_span)?;
         // Body: apply EVERY argument (supplied + residual) to the lowered value
         // at once — the flattened multi-parameter closure accepts them together.
@@ -24376,16 +24516,12 @@ impl<'a> Lowerer<'a> {
         // Use the JSON-friendly variant so a free `Ty::Var` in an unconstrained
         // slot maps to `IrType::Json` rather than raising IPE-L0102.
         for (offset, arg_ty) in arg_tys.get(supplied..).unwrap_or(&[]).iter().enumerate() {
-            let sym = *self.eta_params.get(offset).ok_or_else(|| {
-                bug(
-                    "ipe_lower::eta_expand_partial_ctor",
-                    "eta-parameter pool smaller than the partial-application gap",
-                )
-            })?;
+            let sym = self.eta_sym(offset)?;
             let ir = self.ir_type_from_ty_json(arg_ty, call_span)?;
             params.push((sym, ir));
             call_args.push(Expr::Var(sym));
         }
+        self.advance_eta(arity.saturating_sub(supplied));
         let ret = self.ir_type_from_ty(ret_ty, call_span)?;
         let body = Expr::Ctor {
             home: ctor_home,
@@ -24450,19 +24586,15 @@ impl<'a> Lowerer<'a> {
         let n = params.len();
         // Invariant upheld by the caller: this adapter runs only for an
         // under-applied callee, so `def_arity < n`.
-        // Allocate N eta params from the pool (one slot per param position).
-        // Each eta-lambda is its own closure scope, so the same pool entries can
-        // be reused positionally across sites without name collision.
+        // Draw an N-param block from the per-def monotonic eta cursor, then reserve
+        // it (`advance_eta`) so a later eta-lambda in the same def never reuses
+        // these names.
         let mut eta_syms: Vec<Symbol> = Vec::with_capacity(n);
         for offset in 0..n {
-            let sym = *self.eta_params.get(offset).ok_or_else(|| {
-                bug(
-                    "ipe_lower::eta_adapt_funcvalue",
-                    "eta-parameter pool smaller than the full function arity",
-                )
-            })?;
+            let sym = self.eta_sym(offset)?;
             eta_syms.push(sym);
         }
+        self.advance_eta(n);
         // Typed lambda params: (sym, type) for all N positions.
         let lam_params: Vec<(Symbol, IrType)> = eta_syms
             .iter()
@@ -24671,22 +24803,19 @@ impl<'a> Lowerer<'a> {
         let mut params: Vec<(Symbol, IrType)> =
             Vec::with_capacity(returned_arity - surplus_args.len());
         let mut apply_args = surplus_args;
+        let residual = arg_tys.get(total_supplied..).unwrap_or(&[]).len();
         for (offset, arg_ty) in arg_tys
             .get(total_supplied..)
             .unwrap_or(&[])
             .iter()
             .enumerate()
         {
-            let sym = *self.eta_params.get(offset).ok_or_else(|| {
-                bug(
-                    "ipe_lower::eta_expand_over_partial",
-                    "eta-parameter pool smaller than the over-application gap",
-                )
-            })?;
+            let sym = self.eta_sym(offset)?;
             let ir = self.ir_type_from_ty_json(arg_ty, call_span)?;
             params.push((sym, ir));
             apply_args.push(Expr::Var(sym));
         }
+        self.advance_eta(residual);
         let ret = self.ir_type_from_ty_json(ret_ty, call_span)?;
         // Body: apply (surplus + residual) args to the direct-call result at once.
         let body = Expr::Apply {
@@ -28599,6 +28728,10 @@ impl<'a> Lowerer<'a> {
             },
             _ => None,
         };
+        // The eta block width this binder's shim / sibling-promote / rebind paths
+        // draw (one arrow's worth); reserved on the monotonic cursor at the end so
+        // a sibling binding in the same def never reuses these names.
+        let fun_shape_arity = fun_shape.as_ref().map_or(0, |(ps, _)| ps.len());
         if let Some(capture_span) = deferred_capture
             && fun_shape.is_none()
         {
@@ -28646,7 +28779,7 @@ impl<'a> Lowerer<'a> {
                     name,
                     ps,
                     r,
-                    &self.eta_params,
+                    self.eta_slice(),
                     &self.builtin_runtime_ctors(),
                     acc,
                 )?;
@@ -28752,7 +28885,7 @@ impl<'a> Lowerer<'a> {
                         acc,
                         &params,
                         &ret,
-                        &self.eta_params,
+                        self.eta_slice(),
                     )?;
                     value = Expr::SharedLambda { params, ret, body };
                 }
@@ -28770,13 +28903,16 @@ impl<'a> Lowerer<'a> {
                 // behaviour is byte-pinned.
                 other => {
                     value = if new_trigger {
-                        eta_shared_rebind(other, &ps, &r, &self.eta_params)?
+                        eta_shared_rebind(other, &ps, &r, self.eta_slice())?
                     } else {
                         other
                     };
                 }
             }
         }
+        // Reserve this binder's shim/promote/rebind eta block from any sibling
+        // binding lowered next in the same def.
+        self.advance_eta(fun_shape_arity);
 
         Ok(Expr::Let {
             name,

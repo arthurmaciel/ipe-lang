@@ -110,16 +110,16 @@ pub(crate) fn user_ipe_db_codec_cell_to_value(
                 return crate::user_ipe_db_codec_require_present(name.clone(), maybeCell, move |eta_0: String| -> IpeResult<ipe_runtime::error::IpeError, JsonVal> { crate::user_ipe_db_codec_scalar_cell_to_value(name.clone(), colType.clone(), eta_0) });
             }
             IpeCodecColType::CInt => {
-                return crate::user_ipe_db_codec_require_present(name.clone(), maybeCell, move |eta_0: String| -> IpeResult<ipe_runtime::error::IpeError, JsonVal> { crate::user_ipe_db_codec_scalar_cell_to_value(name.clone(), colType.clone(), eta_0) });
+                return crate::user_ipe_db_codec_require_present(name.clone(), maybeCell, move |eta_1: String| -> IpeResult<ipe_runtime::error::IpeError, JsonVal> { crate::user_ipe_db_codec_scalar_cell_to_value(name.clone(), colType.clone(), eta_1) });
             }
             IpeCodecColType::CReal => {
-                return crate::user_ipe_db_codec_require_present(name.clone(), maybeCell, move |eta_0: String| -> IpeResult<ipe_runtime::error::IpeError, JsonVal> { crate::user_ipe_db_codec_scalar_cell_to_value(name.clone(), colType.clone(), eta_0) });
+                return crate::user_ipe_db_codec_require_present(name.clone(), maybeCell, move |eta_2: String| -> IpeResult<ipe_runtime::error::IpeError, JsonVal> { crate::user_ipe_db_codec_scalar_cell_to_value(name.clone(), colType.clone(), eta_2) });
             }
             IpeCodecColType::CBool => {
-                return crate::user_ipe_db_codec_require_present(name.clone(), maybeCell, move |eta_0: String| -> IpeResult<ipe_runtime::error::IpeError, JsonVal> { crate::user_ipe_db_codec_scalar_cell_to_value(name.clone(), colType.clone(), eta_0) });
+                return crate::user_ipe_db_codec_require_present(name.clone(), maybeCell, move |eta_3: String| -> IpeResult<ipe_runtime::error::IpeError, JsonVal> { crate::user_ipe_db_codec_scalar_cell_to_value(name.clone(), colType.clone(), eta_3) });
             }
             IpeCodecColType::CBlob => {
-                return crate::user_ipe_db_codec_require_present(name.clone(), maybeCell, move |eta_0: String| -> IpeResult<ipe_runtime::error::IpeError, JsonVal> { crate::user_ipe_db_codec_scalar_cell_to_value(name.clone(), colType.clone(), eta_0) });
+                return crate::user_ipe_db_codec_require_present(name.clone(), maybeCell, move |eta_4: String| -> IpeResult<ipe_runtime::error::IpeError, JsonVal> { crate::user_ipe_db_codec_scalar_cell_to_value(name.clone(), colType.clone(), eta_4) });
             }
         }
     }

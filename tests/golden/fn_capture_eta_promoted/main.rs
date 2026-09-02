@@ -223,17 +223,17 @@ pub fn ipe_main() -> IpeTask<()> {
                                 let wrap = wrap.clone();
                                 {
                                     let __ipe_fn: Box<dyn Fn(i64) -> i64 + Send + Sync + 'static> =
-                                        Box::new(move |eta_0: i64| -> i64 {
+                                        Box::new(move |eta_2: i64| -> i64 {
                                             (wrap)(
                                                 {
                                                     let __ipe_fn: Box<
                                                         dyn Fn(i64) -> i64 + Send + Sync + 'static,
-                                                    > = Box::new(move |eta_0: i64| -> i64 {
-                                                        crate::main_inc(f, eta_0)
+                                                    > = Box::new(move |eta_1: i64| -> i64 {
+                                                        crate::main_inc(f, eta_1)
                                                     });
                                                     __ipe_fn
                                                 },
-                                                eta_0,
+                                                eta_2,
                                             )
                                         });
                                     __ipe_fn
