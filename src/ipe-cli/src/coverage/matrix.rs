@@ -8,6 +8,8 @@
 //! concentrates every per-aspect check into one loop so no symbol is judged on a
 //! subset of the aspects.
 
+use ipe_diagnostics::Code;
+
 use crate::coverage::contract::{AspectCheck, Cell, StdlibSymbol, Surface};
 use crate::coverage::env_surface::EnvItem;
 
@@ -183,4 +185,26 @@ pub fn env_columns() -> Vec<Box<dyn AspectCheck<EnvItem>>> {
 #[must_use]
 pub fn run_env() -> MatrixReport {
     run(&crate::coverage::env_surface::EnvVarSurface, &env_columns())
+}
+
+/// The registered aspect columns of the diagnostic surface.
+///
+/// These read only the taxonomy constants and a one-time scan of the source tree
+/// for refusal-test assertions — no program build — so they run in the fast path.
+#[must_use]
+pub fn diagnostic_columns() -> Vec<Box<dyn AspectCheck<Code>>> {
+    vec![
+        Box::new(crate::coverage::diagnostic_surface::ExplainPageColumn),
+        Box::new(crate::coverage::diagnostic_surface::DocumentedColumn),
+        Box::new(crate::coverage::diagnostic_surface::RefusalTestedColumn::new()),
+    ]
+}
+
+/// Run the diagnostic surface against its registered columns.
+#[must_use]
+pub fn run_diagnostic() -> MatrixReport {
+    run(
+        &crate::coverage::diagnostic_surface::DiagnosticSurface,
+        &diagnostic_columns(),
+    )
 }
