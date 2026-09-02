@@ -65,7 +65,7 @@ impl Default for LowersColumn {
     }
 }
 
-impl AspectCheck for LowersColumn {
+impl AspectCheck<StdlibSymbol> for LowersColumn {
     fn name(&self) -> &'static str {
         "lowers"
     }
@@ -157,7 +157,7 @@ impl Default for ComposesColumn {
     }
 }
 
-impl AspectCheck for ComposesColumn {
+impl AspectCheck<StdlibSymbol> for ComposesColumn {
     fn name(&self) -> &'static str {
         "composes"
     }
@@ -218,7 +218,7 @@ impl Default for BuildRunColumn {
     }
 }
 
-impl AspectCheck for BuildRunColumn {
+impl AspectCheck<StdlibSymbol> for BuildRunColumn {
     fn name(&self) -> &'static str {
         "build+run"
     }
@@ -338,7 +338,7 @@ impl Default for RuntimeFnExistsColumn {
     }
 }
 
-impl AspectCheck for RuntimeFnExistsColumn {
+impl AspectCheck<StdlibSymbol> for RuntimeFnExistsColumn {
     fn name(&self) -> &'static str {
         "runtime-fn-exists"
     }
@@ -518,7 +518,7 @@ fn reexport_names(line: &str) -> Vec<String> {
 /// wasm-available kernel is `Ok`. A non-kernel symbol is `NotApplicable`.
 pub struct WasmColumn;
 
-impl AspectCheck for WasmColumn {
+impl AspectCheck<StdlibSymbol> for WasmColumn {
     fn name(&self) -> &'static str {
         "wasm"
     }

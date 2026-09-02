@@ -9,13 +9,14 @@
 //! subset of the aspects.
 
 use crate::coverage::contract::{AspectCheck, Cell, StdlibSymbol, Surface};
+use crate::coverage::env_surface::EnvItem;
 
 /// The registered static aspect columns of the stdlib surface.
 ///
 /// These read only registries and typed interfaces — no program build — so they
 /// run in the fast (non-E2E) path.
 #[must_use]
-pub fn static_columns() -> Vec<Box<dyn AspectCheck>> {
+pub fn static_columns() -> Vec<Box<dyn AspectCheck<StdlibSymbol>>> {
     vec![
         Box::new(crate::coverage::columns_static::HomeColumn),
         Box::new(crate::coverage::columns_static::ResolvesColumn::new()),
@@ -35,7 +36,7 @@ pub fn static_columns() -> Vec<Box<dyn AspectCheck>> {
 /// [`static_columns`] because a doc-string type-check is cheap enough for the
 /// fast path.
 #[must_use]
-pub fn dynamic_columns() -> Vec<Box<dyn AspectCheck>> {
+pub fn dynamic_columns() -> Vec<Box<dyn AspectCheck<StdlibSymbol>>> {
     vec![
         Box::new(crate::coverage::columns_runtime::LowersColumn::new()),
         Box::new(crate::coverage::columns_runtime::ComposesColumn::new()),
@@ -114,32 +115,22 @@ impl MatrixReport {
     }
 }
 
-/// The dotted display path of a symbol, e.g. `Ipe.List.map`.
-fn dotted(sym: &StdlibSymbol) -> String {
-    let mut path = sym.module.join(".");
-    if !path.is_empty() {
-        path.push('.');
-    }
-    path.push_str(&sym.name);
-    path
-}
-
 /// Run the matrix over one surface and one column set, collecting every hole and
 /// advisory coordinate.
-pub fn run<S>(surface: &S, columns: &[Box<dyn AspectCheck>]) -> MatrixReport
+pub fn run<S>(surface: &S, columns: &[Box<dyn AspectCheck<S::Item>>]) -> MatrixReport
 where
-    S: Surface<Item = StdlibSymbol>,
+    S: Surface,
 {
-    let symbols = surface.all();
+    let items = surface.all();
     let mut report = MatrixReport {
-        symbols: symbols.len(),
+        symbols: items.len(),
         columns: columns.len(),
         ..MatrixReport::default()
     };
-    for sym in &symbols {
-        let path = dotted(sym);
+    for item in &items {
+        let path = S::label(item);
         for column in columns {
-            match column.check(sym) {
+            match column.check(item) {
                 Cell::Ok | Cell::NotApplicable => {}
                 Cell::Hole(message) => report.holes.push(Hole {
                     symbol: path.clone(),
@@ -168,4 +159,28 @@ pub fn run_static() -> MatrixReport {
 #[must_use]
 pub fn run_dynamic() -> MatrixReport {
     run(&crate::coverage::surface::StdlibSurface, &dynamic_columns())
+}
+
+/// The registered aspect columns of the env-var surface.
+///
+/// These read only the env-var registry and a one-time scan of the source tree
+/// for `IPE_*` reads — no program build — so they run in the fast path.
+#[must_use]
+pub fn env_columns() -> Vec<Box<dyn AspectCheck<EnvItem>>> {
+    let scan = crate::coverage::env_surface::SourceReads::scan();
+    vec![
+        Box::new(crate::coverage::columns_env::RegisteredColumn),
+        Box::new(crate::coverage::columns_env::ReadInCodeColumn::new(
+            scan.clone(),
+        )),
+        Box::new(crate::coverage::columns_env::DocumentedColumn::new()),
+        Box::new(crate::coverage::columns_env::TruthyParseColumn::new(&scan)),
+        Box::new(crate::coverage::columns_env::ProdSafetyColumn),
+    ]
+}
+
+/// Run the env-var surface against its registered columns.
+#[must_use]
+pub fn run_env() -> MatrixReport {
+    run(&crate::coverage::env_surface::EnvVarSurface, &env_columns())
 }
