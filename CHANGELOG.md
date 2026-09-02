@@ -10,6 +10,40 @@ Entries below the header are maintained by
 section is generated from Conventional Commit messages and prepended when the
 standing release pull request is merged.
 
+## [0.1.77](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.1.76...ipe-v0.1.77) (2026-09-02)
+
+
+### Features
+
+* **backend:** Phase-2 partial evaluation — fold pure literal builder pipelines (animation/Css hot-swap) ([#1633](https://github.com/arthurmaciel/ipe-lang/issues/1633)) ([ef7ed0b](https://github.com/arthurmaciel/ipe-lang/commit/ef7ed0b510844e9d41d65a5b455feece6a367fe6))
+* **cli:** ipe lint (+ --fix) — extensible static analysis with Ipê-native lint.ipe config ([#1659](https://github.com/arthurmaciel/ipe-lang/issues/1659)) ([7622343](https://github.com/arthurmaciel/ipe-lang/commit/762234367b433c6be7b93736076e411db4a9bb90))
+* **cli:** record-syntax package.ipe manifest, retiring the pipe-builder (BREAKING) ([#1662](https://github.com/arthurmaciel/ipe-lang/issues/1662)) ([bb37a94](https://github.com/arthurmaciel/ipe-lang/commit/bb37a94b098c3117d4dda7332bc5aa5c22c46047))
+* **ffi:** async-breadth — structural spawn choke-point (honest cancel + panic across all async-FFI shapes) ([#1658](https://github.com/arthurmaciel/ipe-lang/issues/1658)) ([b34cb02](https://github.com/arthurmaciel/ipe-lang/commit/b34cb029281c7b354712e071c4e5404a7c8799df))
+* **padata:** handler-id holes — model-dependent Ui event handlers templatize ([#1668](https://github.com/arthurmaciel/ipe-lang/issues/1668)) ([#1680](https://github.com/arthurmaciel/ipe-lang/issues/1680)) ([78dff5d](https://github.com/arthurmaciel/ipe-lang/commit/78dff5de69b4c9002f3ea2d8e7ed2a8968d00b2c))
+* **stdlib:** Ipe.Parser — native parser combinators (elm/parser parity) ([#397](https://github.com/arthurmaciel/ipe-lang/issues/397)) ([#1660](https://github.com/arthurmaciel/ipe-lang/issues/1660)) ([021d774](https://github.com/arthurmaciel/ipe-lang/commit/021d7746dc96756f33a012aba2b2e92e79b4c6ad))
+* **ui:** elm-parity render fixes — default shrink, overlay anchor, alignment, describe, overflow, explain ([#1632](https://github.com/arthurmaciel/ipe-lang/issues/1632)) ([f233d73](https://github.com/arthurmaciel/ipe-lang/commit/f233d73f53f011bf431df8821156e65dc0f9334a))
+* **watch:** dev-only build-status banner in the browser ([#1651](https://github.com/arthurmaciel/ipe-lang/issues/1651)) ([053904f](https://github.com/arthurmaciel/ipe-lang/commit/053904f7b3479229879cf0190365f699e80ff433))
+* **watch:** Ipe.Ui view holes + float/color attr templating ([#1647](https://github.com/arthurmaciel/ipe-lang/issues/1647)) ([#1682](https://github.com/arthurmaciel/ipe-lang/issues/1682)) ([1999cd4](https://github.com/arthurmaciel/ipe-lang/commit/1999cd44dcc3cf3935006ea9220f6a22372cc8ec))
+* **watch:** wrapper-transparent Ipe.Ui subtree hot-swap ([#1654](https://github.com/arthurmaciel/ipe-lang/issues/1654)) ([4f41bb6](https://github.com/arthurmaciel/ipe-lang/commit/4f41bb648f018f5bfde448255145ed83b93b9750))
+* **watch:** zero-compile hot-swap of static Ipe.Html view subtrees (materializer) ([#1641](https://github.com/arthurmaciel/ipe-lang/issues/1641)) ([34f6618](https://github.com/arthurmaciel/ipe-lang/commit/34f6618605b623fcd194c49db51e0b12696caf96))
+* **watch:** zero-compile hot-swap of static Ipe.Ui view subtrees (materializer) ([#1648](https://github.com/arthurmaciel/ipe-lang/issues/1648)) ([a39a5f3](https://github.com/arthurmaciel/ipe-lang/commit/a39a5f32161c642955099d06332ec744795bb46c))
+* **web:** additive Msg-variant hot-swap — schema-tagged Msg-set codec + gate + /_ipe/hot-msg ([#1664](https://github.com/arthurmaciel/ipe-lang/issues/1664)) ([#1683](https://github.com/arthurmaciel/ipe-lang/issues/1683)) ([96abdfd](https://github.com/arthurmaciel/ipe-lang/commit/96abdfd0dcc3fcce416ef72355d750a786ac93b9))
+* **web:** additive-Model-extension — preserve session state across an additive Model change ([#1640](https://github.com/arthurmaciel/ipe-lang/issues/1640)) ([4c3d37f](https://github.com/arthurmaciel/ipe-lang/commit/4c3d37f0749588c25d2132adbd507bb5a9c71fbd))
+* **web:** subscriptions -&gt; sub descriptions (data-describable tick hot-swap) ([#1684](https://github.com/arthurmaciel/ipe-lang/issues/1684)) ([4d82e67](https://github.com/arthurmaciel/ipe-lang/commit/4d82e678efa1d26aec18b3d4a4951f3e9843c444))
+* **web:** TEA update→transition-table foundation (inert datum + total apply_transition) ([#1646](https://github.com/arthurmaciel/ipe-lang/issues/1646)) ([b509f0b](https://github.com/arthurmaciel/ipe-lang/commit/b509f0b9625a00004bcc57c5893205b57033b1c5))
+* **web:** wire update-arm transition hot-swap end-to-end (emit + watch + endpoint + SEAL) ([#1661](https://github.com/arthurmaciel/ipe-lang/issues/1661)) ([323212d](https://github.com/arthurmaciel/ipe-lang/commit/323212d50650211d3fa7476e56d93021fffd85cf))
+
+
+### Bug Fixes
+
+* **ci:** green the chronic SEAL/emit failures + add bounded seal-slice anti-rot gate ([#1650](https://github.com/arthurmaciel/ipe-lang/issues/1650)) ([09a4074](https://github.com/arthurmaciel/ipe-lang/commit/09a40743f4509cba2ec0cb4c231ad87695c9b875))
+* **ci:** green the install-smoke badge (auth release lookup) + timestamp golden newline ([#1642](https://github.com/arthurmaciel/ipe-lang/issues/1642)) ([f08e0e8](https://github.com/arthurmaciel/ipe-lang/commit/f08e0e825dbcecfdf8aab28e4dd8f7d2a34f615f))
+* **compiler:** lower composed higher-order combinators (eta-expansion + returned-fn application) ([#1669](https://github.com/arthurmaciel/ipe-lang/issues/1669)) ([4e7595b](https://github.com/arthurmaciel/ipe-lang/commit/4e7595ba5c864938ab28fe3f1b96b9dfc0a04f61))
+* **sandbox:** netns-jail capability preflight — skip net tests when unprivileged userns can't configure loopback ([#1676](https://github.com/arthurmaciel/ipe-lang/issues/1676)) ([#1689](https://github.com/arthurmaciel/ipe-lang/issues/1689)) ([2b77ce5](https://github.com/arthurmaciel/ipe-lang/commit/2b77ce531aeca263b68245b36fd857737fd55b4c))
+* **watch:** appearance hot-swap default-on for ipe watch (opt-out IPE_WATCH_NO_HOT_APPEARANCE); prod stays clean ([#1635](https://github.com/arthurmaciel/ipe-lang/issues/1635)) ([a931b1b](https://github.com/arthurmaciel/ipe-lang/commit/a931b1b89017cafe3d29507a931916cc0ac4a534))
+* **watch:** dev blue-green default-on (opt-out IPE_WATCH_NO_BLUEGREEN) + swap toast replaces the rebuild reconnect banner ([#1636](https://github.com/arthurmaciel/ipe-lang/issues/1636)) ([708895d](https://github.com/arthurmaciel/ipe-lang/commit/708895db130e345f159b699d844452ec88dbf499))
+* **watch:** model-state reset — test fixture, --reset-state flag, History::reset_to_init, debug overlay ([#1681](https://github.com/arthurmaciel/ipe-lang/issues/1681)) ([447966f](https://github.com/arthurmaciel/ipe-lang/commit/447966fe30a14f730611b2fe025aa0314aa1216f))
+
 ## [0.1.76](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.1.75...ipe-v0.1.76) (2026-08-31)
 
 
