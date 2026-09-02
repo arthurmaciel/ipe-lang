@@ -23,6 +23,7 @@ mod cache;
 pub mod clean;
 pub mod cli_args;
 pub mod contained_path;
+pub mod coverage;
 pub mod diff;
 pub mod doc;
 pub mod doc_bundle;
