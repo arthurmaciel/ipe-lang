@@ -206,6 +206,15 @@ pub enum CompileUiAttr {
     BorderColor(CompileUiColor),
     Pointer,
     Overflow(&'static str, &'static str),
+    /// A model-dependent event handler reduced to an opaque HOLE: the DOM event
+    /// wire name and a compile-time-stable hole id, never the `Msg`. Mirrors the
+    /// runtime `UiTemplateAttr::HandlerHole`; the concrete `Msg` is resolved per
+    /// render from the `UiHandlerMap` the emitted `view` supplies, so this inert
+    /// datum carries no logic across the template transport.
+    HandlerHole {
+        event: &'static str,
+        handler_id: u32,
+    },
 }
 
 impl CompileUiAttr {
@@ -264,6 +273,15 @@ impl CompileUiAttr {
                 out.push(',');
                 write_json_string(y, out);
                 out.push_str("]}");
+            }
+            // `{"HandlerHole":{"event":"click","handler_id":N}}` — the runtime
+            // `UiTemplateAttr::HandlerHole` struct-variant serde form.
+            Self::HandlerHole { event, handler_id } => {
+                out.push_str("{\"HandlerHole\":{\"event\":");
+                write_json_string(event, out);
+                out.push_str(",\"handler_id\":");
+                push_i64(i64::from(*handler_id), out);
+                out.push_str("}}");
             }
         }
     }
@@ -517,14 +535,32 @@ pub enum HoleKind {
 pub struct HolePartition {
     pub template: CompileUiTemplate,
     pub holes: Vec<HoleFill>,
+    /// Model-dependent handler `Msg` expressions, in hole-id order. Each is
+    /// emitted by the caller and passed to `UiHandlerMap::from_msgs`; a
+    /// [`CompileUiAttr::HandlerHole`] with `handler_id` i resolves to index i.
+    pub handlers: Vec<Expr>,
 }
 
-/// The hole accumulator threaded through the partition recursion. `None` = pure
-/// mode: holes are disallowed, so a non-static sub-expression refuses (`None`),
-/// exactly the shipped behaviour. `Some` = hole mode: a `Model`-derived leaf,
-/// control-flow, or `List.map` in a hole-legal position is recorded and replaced
-/// by a numbered marker instead of refusing.
-type Holes<'a> = Option<&'a mut Vec<HoleFill>>;
+/// The per-render capture accumulators threaded through the partition recursion:
+/// the value/children hole fills, plus the model-dependent handler `Msg`
+/// expressions (in hole-id order). Both grow in place as the recursion records
+/// each hole and each templatized `onClick`-style handler.
+#[derive(Default)]
+struct Captures {
+    /// Value / control-flow / `List.map` hole fills, in per-kind index order.
+    holes: Vec<HoleFill>,
+    /// Model-dependent handler `Msg` expressions, in hole-id order — index i is
+    /// the `handler_id` of the [`CompileUiAttr::HandlerHole`] that captured it.
+    handlers: Vec<Expr>,
+}
+
+/// The capture accumulator threaded through the partition recursion. `None` =
+/// pure mode: holes and handler captures are disallowed, so a non-static
+/// sub-expression (or any handler) refuses (`None`), exactly the shipped
+/// behaviour. `Some` = capture mode: a `Model`-derived leaf, control-flow,
+/// `List.map`, or model-dependent `onClick` handler is recorded and replaced by a
+/// numbered marker / hole instead of refusing.
+type Holes<'a> = Option<&'a mut Captures>;
 
 /// Reduce a static `Ipe.Ui` `view` subtree to a [`CompileUiTemplate`] with NO
 /// holes admitted (pure mode), or `None` when it is not provably fully static — a
@@ -566,9 +602,13 @@ pub fn ui_template_of_expr_holes(
     expr: &Expr,
     wrappers: Option<&BTreeMap<FuncId, WrapperBody>>,
 ) -> Option<HolePartition> {
-    let mut holes = Vec::new();
-    let template = ui_template_of_expr_at(expr, wrappers, 0, &mut Some(&mut holes))?;
-    Some(HolePartition { template, holes })
+    let mut captures = Captures::default();
+    let template = ui_template_of_expr_at(expr, wrappers, 0, &mut Some(&mut captures))?;
+    Some(HolePartition {
+        template,
+        holes: captures.holes,
+        handlers: captures.handlers,
+    })
 }
 
 fn ui_template_of_expr_at(
@@ -644,7 +684,7 @@ fn ui_template_of_expr_at(
         KernelFn::UiNode => match args.as_slice() {
             [desc, attrs, children] => Some(CompileUiTemplate::Node {
                 desc: static_desc(desc)?,
-                attrs: static_attrs(attrs)?,
+                attrs: static_attrs(attrs, holes)?,
                 children: static_children(children, wrappers, depth, holes)?,
             }),
             _ => None,
@@ -654,7 +694,7 @@ fn ui_template_of_expr_at(
             [Expr::Str(tag), desc, attrs, children] => Some(CompileUiTemplate::TaggedNode {
                 tag: tag.clone(),
                 desc: static_desc(desc)?,
-                attrs: static_attrs(attrs)?,
+                attrs: static_attrs(attrs, holes)?,
                 children: static_children(children, wrappers, depth, holes)?,
             }),
             _ => None,
@@ -683,7 +723,7 @@ fn ui_template_of_expr_at(
 /// admitted here (those never reach this helper — the kernel match refuses them
 /// before it), so a hole can never smuggle logic or unescaped markup.
 fn push_element_hole(expr: &Expr, holes: &mut Holes) -> Option<CompileUiTemplate> {
-    let acc = holes.as_mut()?;
+    let acc = &mut holes.as_mut()?.holes;
     let idx = acc.iter().filter(|h| h.kind == HoleKind::Element).count();
     acc.push(HoleFill {
         kind: HoleKind::Element,
@@ -695,7 +735,7 @@ fn push_element_hole(expr: &Expr, holes: &mut Holes) -> Option<CompileUiTemplate
 /// Record `expr` as a children hole (a `List.map` run) and return its per-kind
 /// numbered marker, or `None` in pure mode.
 fn push_children_hole(expr: &Expr, holes: &mut Holes) -> Option<CompileUiTemplate> {
-    let acc = holes.as_mut()?;
+    let acc = &mut holes.as_mut()?.holes;
     let idx = acc.iter().filter(|h| h.kind == HoleKind::Children).count();
     acc.push(HoleFill {
         kind: HoleKind::Children,
@@ -834,27 +874,31 @@ const fn is_list_map_call(expr: &Expr) -> bool {
 /// Accepts both `Expr::List` (the direct-kernel shape) and a `Expr::Cons` chain
 /// (the shape a structural wrapper produces after substitution — e.g. the
 /// `style "__row" "true" :: attrs` prepend in `Ui.row`'s lowered body).
-fn static_attrs(attrs: &Expr) -> Option<Vec<CompileUiAttr>> {
+fn static_attrs(attrs: &Expr, holes: &mut Holes) -> Option<Vec<CompileUiAttr>> {
     let mut out = Vec::new();
-    collect_static_attrs(attrs, &mut out)?;
+    collect_static_attrs(attrs, &mut out, holes)?;
     Some(out)
 }
 
 /// Append the static attrs in `expr` to `out`. Handles both a literal
 /// `Expr::List` and a right-spine `Expr::Cons { head, tail }` chain whose
 /// eventual tail is a `List`.
-fn collect_static_attrs(expr: &Expr, out: &mut Vec<CompileUiAttr>) -> Option<()> {
+fn collect_static_attrs(
+    expr: &Expr,
+    out: &mut Vec<CompileUiAttr>,
+    holes: &mut Holes,
+) -> Option<()> {
     match expr {
         Expr::List { items, .. } => {
             for item in items {
-                out.push(static_attr(item)?);
+                out.push(static_attr(item, holes)?);
             }
             Some(())
         }
         // A `Cons` head is one prepended attribute; the tail is recursed.
         Expr::Cons { head, tail } => {
-            out.push(static_attr(head)?);
-            collect_static_attrs(tail, out)
+            out.push(static_attr(head, holes)?);
+            collect_static_attrs(tail, out, holes)
         }
         // Any other shape (a Var, a non-list call) is not a provably-static
         // attribute list — refuse.
@@ -870,13 +914,24 @@ fn collect_static_attrs(expr: &Expr, out: &mut Vec<CompileUiAttr>) -> Option<()>
 /// debug outline — returns `None`, so the subtree stays compiled rather than
 /// mis-templated. A kernel absent from this allowlist defaults to refuse, which
 /// is always safe (it merely recompiles).
-fn static_attr(attr: &Expr) -> Option<CompileUiAttr> {
+fn static_attr(attr: &Expr, holes: &mut Holes) -> Option<CompileUiAttr> {
     let Expr::Call { callee, args, .. } = attr else {
         return None;
     };
     let Callee::Kernel(k) = callee else {
         return None;
     };
+    // A model-dependent plain-message event (`Ui.onClick msg`, …) templatizes as a
+    // HANDLER HOLE: the wire event name plus a hole id, with the captured `Msg`
+    // expression recorded for per-render resolution. Only the pure `OnMsg`-shaped
+    // Ui events qualify; the `OnString` / `OnBool` / `OnForm` events need a
+    // runtime-supplied argument, so they are NOT a per-render `Msg` capture and
+    // stay compiled (they fall through to the refuse arm). In pure mode
+    // (`push_handler_hole` sees `None`) every handler refuses — the shipped
+    // static-only behaviour, unchanged.
+    if let (Some(event), [msg]) = (ui_on_msg_wire_name(*k), args.as_slice()) {
+        return push_handler_hole(event, msg, holes);
+    }
     match (k, args.as_slice()) {
         (KernelFn::UiSpacing, [Expr::Int(n)]) => Some(CompileUiAttr::Spacing(*n)),
         (KernelFn::UiPadding, [Expr::Int(n)]) => Some(CompileUiAttr::Padding(*n, *n, *n, *n)),
@@ -973,6 +1028,41 @@ fn static_attr(attr: &Expr) -> Option<CompileUiAttr> {
         // accepted inert attribute. Refuse: keep the subtree compiled.
         _ => None,
     }
+}
+
+/// The DOM wire event name for a pure plain-message (`OnMsg`) `Ipe.Ui` event
+/// kernel, or `None` for any kernel that is not one of the five. Exactly the
+/// events whose runtime builder emits `Event::OnMsg("<name>", msg)` — the shape a
+/// handler hole resolves. The value-carrying events (`onInput` / `onChange` /
+/// `onKeyDown` / `onKeyUp` / `onCheck` / `onFile` / `onSubmit`) build an
+/// `Arc<dyn Fn(_) -> M>` closure over a runtime-supplied argument, so they are NOT
+/// a per-render `Msg` capture and are deliberately absent.
+const fn ui_on_msg_wire_name(k: KernelFn) -> Option<&'static str> {
+    Some(match k {
+        KernelFn::UiOnClick => "click",
+        KernelFn::UiOnFocus => "focus",
+        KernelFn::UiOnBlur => "blur",
+        KernelFn::UiOnMouseOver => "mouseover",
+        KernelFn::UiOnMouseOut => "mouseout",
+        _ => return None,
+    })
+}
+
+/// Record `msg` as a model-dependent handler capture and return a
+/// [`CompileUiAttr::HandlerHole`] carrying the wire `event` and the capture's
+/// hole id, or `None` in pure mode (`holes` is `None`) — where a handler simply
+/// refuses, exactly the shipped static-only behaviour.
+///
+/// The hole id is the count of handler captures already recorded, matching the
+/// order `UiHandlerMap::from_msgs` will index. The captured expression is the
+/// `Msg` argument itself; it is emitted separately by the caller through the main
+/// expression emitter and never appears in the inert template — the transported
+/// datum carries only the event name and the id, never the `Msg` or a closure.
+fn push_handler_hole(event: &'static str, msg: &Expr, holes: &mut Holes) -> Option<CompileUiAttr> {
+    let acc = &mut holes.as_mut()?.handlers;
+    let handler_id = u32::try_from(acc.len()).ok()?;
+    acc.push(msg.clone());
+    Some(CompileUiAttr::HandlerHole { event, handler_id })
 }
 
 /// Reduce a `Length`-producing kernel call over literal arguments to inert data,
@@ -1935,19 +2025,114 @@ mod tests {
         assert_eq!(ui_template_of_expr(&node, None), None);
     }
 
-    // A handler-bearing subtree still refuses WHOLE even in hole mode — a hole
-    // never covers a handler (that is the deferred, guardian-gated increment).
+    // A model-dependent `onClick` templatizes as a handler hole: the click event
+    // plus hole id 0, with the `Msg` argument captured in `handlers[0]`. The
+    // captured expression is the `Msg` only — the inert attribute carries no logic.
     #[test]
-    fn hole_mode_still_refuses_handler_attr() {
+    fn model_dependent_onclick_becomes_handler_hole() {
         let node = kcall(
             KernelFn::UiNode,
             vec![
                 desc_none(),
                 attr_list(vec![kcall(KernelFn::UiOnClick, vec![Expr::Var(sym(91))])]),
-                child_list(vec![model_text(92)]),
+                child_list(vec![text("go")]),
+            ],
+        );
+        let part =
+            ui_template_of_expr_holes(&node, None).expect("handler-hole subtree templatizes");
+        assert_eq!(
+            part.template,
+            CompileUiTemplate::Node {
+                desc: CompileUiDesc::NoDescription,
+                attrs: vec![CompileUiAttr::HandlerHole {
+                    event: "click",
+                    handler_id: 0,
+                }],
+                children: vec![CompileUiTemplate::Text("go".to_string())],
+            }
+        );
+        assert_eq!(part.handlers, vec![Expr::Var(sym(91))]);
+        assert!(part.holes.is_empty());
+    }
+
+    // Each pure `OnMsg` Ui event maps to its DOM wire name; handler ids number in
+    // source order across a node's attribute list.
+    #[test]
+    fn onmsg_events_map_to_wire_names_and_number_in_order() {
+        let node = kcall(
+            KernelFn::UiNode,
+            vec![
+                desc_none(),
+                attr_list(vec![
+                    kcall(KernelFn::UiOnFocus, vec![Expr::Var(sym(1))]),
+                    kcall(KernelFn::UiOnMouseOut, vec![Expr::Var(sym(2))]),
+                ]),
+                child_list(vec![]),
+            ],
+        );
+        let part = ui_template_of_expr_holes(&node, None).expect("templatizes");
+        assert_eq!(
+            part.template,
+            CompileUiTemplate::Node {
+                desc: CompileUiDesc::NoDescription,
+                attrs: vec![
+                    CompileUiAttr::HandlerHole {
+                        event: "focus",
+                        handler_id: 0,
+                    },
+                    CompileUiAttr::HandlerHole {
+                        event: "mouseout",
+                        handler_id: 1,
+                    },
+                ],
+                children: vec![],
+            }
+        );
+        assert_eq!(part.handlers, vec![Expr::Var(sym(1)), Expr::Var(sym(2))]);
+    }
+
+    // A value-carrying event (`onInput`, an `Arc<dyn Fn(String)->M>` closure) is
+    // NOT a per-render `Msg` capture, so it refuses the whole subtree — it is not
+    // a handler hole and stays compiled.
+    #[test]
+    fn value_carrying_event_refuses() {
+        let node = kcall(
+            KernelFn::UiNode,
+            vec![
+                desc_none(),
+                attr_list(vec![kcall(KernelFn::UiOnInput, vec![Expr::Var(sym(3))])]),
+                child_list(vec![]),
             ],
         );
         assert_eq!(ui_template_of_expr_holes(&node, None), None);
+    }
+
+    // Pure mode (the no-capture entry) refuses a handler exactly as it refuses a
+    // model leaf — the shipped static-only behaviour is unchanged.
+    #[test]
+    fn pure_mode_refuses_handler() {
+        let node = kcall(
+            KernelFn::UiNode,
+            vec![
+                desc_none(),
+                attr_list(vec![kcall(KernelFn::UiOnClick, vec![Expr::Var(sym(4))])]),
+                child_list(vec![]),
+            ],
+        );
+        assert_eq!(ui_template_of_expr(&node, None), None);
+    }
+
+    // JSON shape for a handler hole — pinned against the runtime
+    // `UiTemplateAttr::HandlerHole` struct-variant serde form.
+    #[test]
+    fn json_handler_hole_shape() {
+        let mut out = String::new();
+        CompileUiAttr::HandlerHole {
+            event: "click",
+            handler_id: 2,
+        }
+        .write_json(&mut out);
+        assert_eq!(out, r#"{"HandlerHole":{"event":"click","handler_id":2}}"#);
     }
 
     // JSON shape for the hole markers — pinned against the runtime serde form.

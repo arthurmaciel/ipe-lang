@@ -1482,16 +1482,17 @@ mod hot_appearance_tests {
     }
 
     /// A style literal nested in a node that is NOT wholly templatable (here a
-    /// handler-bearing attribute makes the node refuse) still hoists per-leaf
+    /// value-carrying `onInput` handler — a runtime-argument closure, not a
+    /// per-render `Msg` capture — makes the node refuse) still hoists per-leaf
     /// through the appearance-literal registry — the fallback that preserves the
     /// appearance hot-swap when the structural template does not apply.
     #[test]
     fn nested_style_literal_in_non_templatable_node_still_hoists() -> DResult<()> {
         use ipe_ir::CallPin as P;
         let mut interner = Interner::new();
-        let on_click = Expr::Call {
-            callee: Callee::Kernel(KernelFn::UiOnClick),
-            args: vec![Expr::Var(interner.intern("msg")?)],
+        let on_input = Expr::Call {
+            callee: Callee::Kernel(KernelFn::UiOnInput),
+            args: vec![Expr::Var(interner.intern("f")?)],
             pin: P::None,
             on_form: OnFormKind::NotForm,
         };
@@ -1500,7 +1501,7 @@ mod hot_appearance_tests {
                 ctor: UiCtor::UiAttribute,
                 msg: Box::new(IrType::Int),
             },
-            items: vec![font_family_call(), on_click],
+            items: vec![font_family_call(), on_input],
         };
         let empty_children = Expr::List {
             elem: IrType::Ui {
@@ -1526,11 +1527,12 @@ mod hot_appearance_tests {
         };
         let (program, view) = one_view_program(&mut interner, body)?;
         let out = emit_view(&interner, &program, &view, true)?;
-        // The handler makes the node refuse the whole-subtree template, so the
-        // font leaf hoists individually (the shipped per-leaf appearance path).
+        // The value-carrying handler makes the node refuse the whole-subtree
+        // template, so the font leaf hoists individually (the shipped per-leaf
+        // appearance path).
         assert!(
             !out.contains("materialize_ui_template_str"),
-            "a handler-bearing node must not whole-subtree template, got:\n{out}"
+            "a value-handler-bearing node must not whole-subtree template, got:\n{out}"
         );
         assert!(
             out.contains("from_defaults(&[\"monospace\"])"),
@@ -3072,10 +3074,11 @@ mod hot_appearance_tests {
         Ok(())
     }
 
-    /// A `Ipe.Ui` subtree carrying an event handler is NOT templated — a handler
-    /// is logic, so the subtree stays compiled.
+    /// A `Ipe.Ui` subtree carrying a model-dependent `onClick` templatizes: the
+    /// handler reduces to an inert hole and the whole subtree rides the handler-
+    /// resolving materializer, which binds the captured `Msg` per render.
     #[test]
-    fn flag_on_handler_bearing_ui_subtree_stays_inline() -> DResult<()> {
+    fn flag_on_model_dependent_onclick_templatizes_via_handler_map() -> DResult<()> {
         let mut interner = Interner::new();
         let with_handler = Expr::Call {
             callee: Callee::Kernel(KernelFn::UiNode),
@@ -3094,9 +3097,16 @@ mod hot_appearance_tests {
         };
         let (program, view) = one_view_program(&mut interner, with_handler)?;
         let out = emit_view(&interner, &program, &view, true)?;
+        // A model-dependent `onClick` templatizes as a handler hole: the node
+        // whole-subtree templates through the handler-resolving front door, which
+        // supplies a per-render `UiHandlerMap` carrying the captured `Msg`.
         assert!(
-            !out.contains("materialize_ui_template_str"),
-            "a handler-bearing Ui subtree must not template, got:\n{out}"
+            out.contains("materialize_ui_template_str_with_handlers"),
+            "a model-dependent onClick must template via the handler map, got:\n{out}"
+        );
+        assert!(
+            out.contains("UiHandlerMap::from_msgs"),
+            "the handler-hole template must build the per-render handler map, got:\n{out}"
         );
         Ok(())
     }
