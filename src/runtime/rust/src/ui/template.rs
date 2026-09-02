@@ -961,6 +961,113 @@ pub fn materialize_ui_template_str_with_holes<M>(
     materialize_ui_template_with_holes(&template, element_holes, children_holes)
 }
 
+/// Decode a serialized [`UiTemplate`] and materialize it, resolving both
+/// numbered value/children **holes** (spliced from `element_holes` /
+/// `children_holes`) and model-dependent handler-id **holes** (resolved from
+/// `handlers`) in a single pass — the combined front door for a `Ui` subtree
+/// that carries both kinds in the same tree.
+///
+/// Each hole kind is resolved independently, exactly as its single-kind
+/// counterpart would:
+/// - [`UiTemplate::Hole(n)`] → `element_holes[n]`, consumed once, inert empty
+///   on a miss;
+/// - [`UiTemplate::ChildrenHole(n)`] → `children_holes[n]`, spliced in place;
+/// - [`UiTemplateAttr::HandlerHole { handler_id }`] → `handlers.resolve(id)`,
+///   producing a live `AttrEvent`, or `NoAttribute` on a miss (fail-closed).
+///
+/// Fail-closed on hostile input in every dimension (never panics):
+/// - decode failure → `Element::Empty`;
+/// - over-deep template → `Element::Empty`;
+/// - out-of-range or already-consumed hole index → `Element::Empty` / empty run;
+/// - unresolved handler hole id → `NoAttribute` (event silently absent).
+#[cfg(feature = "json")]
+#[must_use]
+pub fn materialize_ui_template_str_with_holes_and_handlers<M: Clone>(
+    json: &str,
+    element_holes: Vec<Element<M>>,
+    children_holes: Vec<Vec<Element<M>>>,
+    handlers: &UiHandlerMap<M>,
+) -> Element<M> {
+    let Ok(template) = serde_json::from_str::<UiTemplate>(json) else {
+        return Element::Empty;
+    };
+    if template.check_bounds().is_err() {
+        return Element::Empty;
+    }
+    let mut fills = HoleFills {
+        elements: element_holes.into_iter().map(Some).collect(),
+        children: children_holes.into_iter().map(Some).collect(),
+    };
+    materialize_ui_at_combined(&template, handlers, 0, &mut fills)
+}
+
+#[cfg(feature = "json")]
+fn materialize_ui_at_combined<M: Clone>(
+    template: &UiTemplate,
+    handlers: &UiHandlerMap<M>,
+    depth: usize,
+    fills: &mut HoleFills<M>,
+) -> Element<M> {
+    if depth >= MAX_UI_TEMPLATE_DEPTH {
+        return Element::Empty;
+    }
+    match template {
+        UiTemplate::Empty => Element::Empty,
+        UiTemplate::Text(s) => Element::Text(s.clone()),
+        UiTemplate::Hole(idx) => fills.take_element(*idx),
+        UiTemplate::ChildrenHole(_) => Element::Empty,
+        UiTemplate::Node {
+            desc,
+            attrs,
+            children,
+        } => Element::Node(
+            desc.to_desc(),
+            attrs
+                .iter()
+                .map(|a| a.to_attr_with_handlers(handlers))
+                .collect(),
+            materialize_children_combined(children, handlers, depth, fills),
+        ),
+        UiTemplate::TaggedNode {
+            tag,
+            desc,
+            attrs,
+            children,
+        } => Element::TaggedNode(
+            tag.clone(),
+            desc.to_desc(),
+            attrs
+                .iter()
+                .map(|a| a.to_attr_with_handlers(handlers))
+                .collect(),
+            materialize_children_combined(children, handlers, depth, fills),
+        ),
+    }
+}
+
+#[cfg(feature = "json")]
+fn materialize_children_combined<M: Clone>(
+    children: &[UiTemplate],
+    handlers: &UiHandlerMap<M>,
+    depth: usize,
+    fills: &mut HoleFills<M>,
+) -> Vec<Element<M>> {
+    let mut out = Vec::with_capacity(children.len());
+    for child in children {
+        if let UiTemplate::ChildrenHole(idx) = child {
+            out.extend(fills.take_children(*idx));
+        } else {
+            out.push(materialize_ui_at_combined(
+                child,
+                handlers,
+                depth.saturating_add(1),
+                fills,
+            ));
+        }
+    }
+    out
+}
+
 /// Build a [`UiTemplate`] from a static [`Element`] subtree — the inverse of
 /// [`materialize_ui_template`]. Fail-closed (parse, don't validate): any node
 /// that is NOT provably static returns `None`, so a template is only ever built
@@ -2030,6 +2137,53 @@ mod tests {
             let got: Element<()> =
                 materialize_ui_template_with_holes(&T::ChildrenHole(0), vec![], vec![vec![]]);
             assert_eq!(got, Element::Empty);
+        }
+
+        // Combined: a subtree carrying both a value hole (Hole) and a handler hole
+        // (HandlerHole) materializes correctly through the combined fn — value fills
+        // are spliced and the handler resolves to the captured Msg.
+        #[cfg(feature = "json")]
+        #[test]
+        fn combined_value_hole_and_handler_hole_materialize_together() {
+            use super::super::{UiHandlerMap, materialize_ui_template_str_with_holes_and_handlers};
+            use crate::html::{Attribute as HtmlAttribute, Event};
+
+            #[derive(Clone, Debug, PartialEq)]
+            enum Msg {
+                Submit,
+            }
+
+            // Template: a node with an onClick handler hole (id 0) and one element
+            // child that is a value hole (Hole 0) — both kinds in the same subtree.
+            let template = T::Node {
+                desc: UiDescription::NoDescription,
+                attrs: vec![UiTemplateAttr::HandlerHole {
+                    event: "click".to_string(),
+                    handler_id: 0,
+                }],
+                children: vec![T::Hole(0)],
+            };
+            let json = serde_json::to_string(&template).unwrap();
+            let fill: Element<Msg> = Element::Text("label text".to_string());
+            let handlers = UiHandlerMap::from_msgs(vec![Msg::Submit]);
+
+            let got: Element<Msg> = materialize_ui_template_str_with_holes_and_handlers(
+                &json,
+                vec![fill.clone()],
+                vec![],
+                &handlers,
+            );
+            assert_eq!(
+                got,
+                Element::Node(
+                    Description::NoDescription,
+                    vec![Attribute::AttrEvent(HtmlAttribute::EventAttr(
+                        Event::OnMsg("click".to_string(), Msg::Submit),
+                    ))],
+                    vec![fill],
+                ),
+                "combined materializer must wire the value fill AND the handler in one pass"
+            );
         }
 
         // dev == prod for a hole-bearing template: the SAME fills over a baked-default
