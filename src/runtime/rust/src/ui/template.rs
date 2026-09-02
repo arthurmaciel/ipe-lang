@@ -506,15 +506,27 @@ impl UiTemplateAttr {
     }
 }
 
-/// An inert, fully-static `Ipe.Ui` subtree.
+/// An inert, mostly-static `Ipe.Ui` subtree, optionally carrying numbered
+/// **holes** where a `Model`-derived value is spliced in at render.
 ///
-/// The variants are the ONLY shapes a static `Ipe.Ui` subtree takes: an empty
+/// The static variants are the shapes a static `Ipe.Ui` subtree takes: an empty
 /// node, a static text node, a role-described node, or an HTML-tagged node —
 /// each with inert attributes and static children. There is deliberately no
 /// `Raw` variant (embedded `Html`), no `Cells` variant (a raw terminal grid),
 /// and no attribute able to carry a handler — that absence is the security
 /// guarantee, enforced by the type rather than a runtime check, mirroring the
 /// runtime [`crate::web::template::Template`].
+///
+/// A **hole** is an inert index (a `usize`), never logic: the model-derived
+/// value it stands for is computed by the compiled `view` and passed in a
+/// per-render slice, so the template datum itself carries no `Msg`, no handler,
+/// and no un-escaped markup — a hole cannot smuggle logic, exactly like the
+/// static variants. An out-of-range or unfilled hole materializes to the inert
+/// empty element (fail-closed), never a panic. Two hole shapes:
+/// - [`UiTemplate::Hole`] — one element in a single position (a value leaf or a
+///   control-flow branch result);
+/// - [`UiTemplate::ChildrenHole`] — a run of elements spliced into a children
+///   list (a `List.map` comprehension).
 #[derive(Clone, Debug, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum UiTemplate {
@@ -522,6 +534,14 @@ pub enum UiTemplate {
     Empty,
     /// A static text node. Rendered HTML-escaped, exactly like `Element::Text`.
     Text(String),
+    /// A single-element hole: the compiled `view` supplies one `Element` for this
+    /// index in the per-render fill slice. Stands for a `Model`-derived value leaf
+    /// or a control-flow (`if` / `case`) result.
+    Hole(usize),
+    /// A children hole: the compiled `view` supplies a run of `Element`s (a
+    /// `Vec`) for this index, spliced in place among a node's static children.
+    /// Stands for a `List.map` comprehension.
+    ChildrenHole(usize),
     /// A role-described container: `Element::Node`.
     Node {
         desc: UiDescription,
@@ -549,14 +569,20 @@ impl Drop for UiTemplate {
             UiTemplate::Node { children, .. } | UiTemplate::TaggedNode { children, .. } => {
                 std::mem::take(children)
             }
-            UiTemplate::Empty | UiTemplate::Text(_) => return,
+            UiTemplate::Empty
+            | UiTemplate::Text(_)
+            | UiTemplate::Hole(_)
+            | UiTemplate::ChildrenHole(_) => return,
         };
         while let Some(mut node) = pending.pop() {
             match &mut node {
                 UiTemplate::Node { children, .. } | UiTemplate::TaggedNode { children, .. } => {
                     pending.append(&mut std::mem::take(children));
                 }
-                UiTemplate::Empty | UiTemplate::Text(_) => {}
+                UiTemplate::Empty
+                | UiTemplate::Text(_)
+                | UiTemplate::Hole(_)
+                | UiTemplate::ChildrenHole(_) => {}
             }
             // `node` (now child-free) drops here without recursion.
         }
@@ -632,10 +658,76 @@ impl UiTemplate {
 /// markup.
 #[must_use]
 pub fn materialize_ui_template<M>(template: &UiTemplate) -> Element<M> {
-    materialize_ui_at(template, 0)
+    // A fully-static template has no holes: an empty fill set is correct, and any
+    // stray hole (there should be none) fails closed to the inert empty element.
+    materialize_ui_at(template, 0, &mut HoleFills::empty())
 }
 
-fn materialize_ui_at<M>(template: &UiTemplate, depth: usize) -> Element<M> {
+/// Rebuild an [`Element`] tree from a hole-bearing [`UiTemplate`], splicing each
+/// hole with its per-render fill. `element_holes[n]` fills a [`UiTemplate::Hole`]
+/// with index `n`; `children_holes[n]` fills a [`UiTemplate::ChildrenHole`] with
+/// index `n`. Each fill is consumed at most once (a hole index appears at most
+/// once in a template); a missing or out-of-range fill materializes to the inert
+/// empty element (fail-closed), never a panic.
+///
+/// The static structure comes from the (inert) template; only the fills carry
+/// `Model`-derived content, and they are ordinary compiled `Element`s the caller
+/// already built — so dev == prod: the same fills feed a baked-default template
+/// (prod) and a patched-structure template (dev), and only the static skeleton
+/// hot-swaps.
+#[must_use]
+pub fn materialize_ui_template_with_holes<M>(
+    template: &UiTemplate,
+    element_holes: Vec<Element<M>>,
+    children_holes: Vec<Vec<Element<M>>>,
+) -> Element<M> {
+    let mut fills = HoleFills {
+        elements: element_holes.into_iter().map(Some).collect(),
+        children: children_holes.into_iter().map(Some).collect(),
+    };
+    materialize_ui_at(template, 0, &mut fills)
+}
+
+/// Per-render hole fills, each taken at most once. `None` marks a slot already
+/// consumed (or never provided) so a duplicate/out-of-range reference fails
+/// closed to the empty element rather than reusing or panicking.
+struct HoleFills<M> {
+    elements: Vec<Option<Element<M>>>,
+    children: Vec<Option<Vec<Element<M>>>>,
+}
+
+impl<M> HoleFills<M> {
+    fn empty() -> Self {
+        Self {
+            elements: Vec::new(),
+            children: Vec::new(),
+        }
+    }
+
+    /// Take the single-element fill at `idx`, or the inert empty element when the
+    /// index is out of range or already consumed. Fail-closed by construction.
+    fn take_element(&mut self, idx: usize) -> Element<M> {
+        self.elements
+            .get_mut(idx)
+            .and_then(Option::take)
+            .unwrap_or(Element::Empty)
+    }
+
+    /// Take the children-run fill at `idx`, or an empty run when the index is out
+    /// of range or already consumed.
+    fn take_children(&mut self, idx: usize) -> Vec<Element<M>> {
+        self.children
+            .get_mut(idx)
+            .and_then(Option::take)
+            .unwrap_or_default()
+    }
+}
+
+fn materialize_ui_at<M>(
+    template: &UiTemplate,
+    depth: usize,
+    fills: &mut HoleFills<M>,
+) -> Element<M> {
     if depth >= MAX_UI_TEMPLATE_DEPTH {
         // Same bounded-descent posture as the renderer at its cap: stop
         // descending. An empty element is inert and well-formed.
@@ -644,6 +736,11 @@ fn materialize_ui_at<M>(template: &UiTemplate, depth: usize) -> Element<M> {
     match template {
         UiTemplate::Empty => Element::Empty,
         UiTemplate::Text(s) => Element::Text(s.clone()),
+        UiTemplate::Hole(idx) => fills.take_element(*idx),
+        // A `ChildrenHole` only carries meaning inside a node's children list,
+        // where [`materialize_children`] splices its run in place. Reaching it as
+        // a standalone element (a malformed decode) is inert: an empty element.
+        UiTemplate::ChildrenHole(_) => Element::Empty,
         UiTemplate::Node {
             desc,
             attrs,
@@ -651,10 +748,7 @@ fn materialize_ui_at<M>(template: &UiTemplate, depth: usize) -> Element<M> {
         } => Element::Node(
             desc.to_desc(),
             attrs.iter().map(UiTemplateAttr::to_attr).collect(),
-            children
-                .iter()
-                .map(|c| materialize_ui_at(c, depth.saturating_add(1)))
-                .collect(),
+            materialize_children(children, depth, fills),
         ),
         UiTemplate::TaggedNode {
             tag,
@@ -665,12 +759,28 @@ fn materialize_ui_at<M>(template: &UiTemplate, depth: usize) -> Element<M> {
             tag.clone(),
             desc.to_desc(),
             attrs.iter().map(UiTemplateAttr::to_attr).collect(),
-            children
-                .iter()
-                .map(|c| materialize_ui_at(c, depth.saturating_add(1)))
-                .collect(),
+            materialize_children(children, depth, fills),
         ),
     }
+}
+
+/// Materialize a node's children, splicing each [`UiTemplate::ChildrenHole`] run
+/// in place (a `List.map` comprehension expands to zero or more siblings) and
+/// materializing every other child as a single element.
+fn materialize_children<M>(
+    children: &[UiTemplate],
+    depth: usize,
+    fills: &mut HoleFills<M>,
+) -> Vec<Element<M>> {
+    let mut out = Vec::with_capacity(children.len());
+    for child in children {
+        if let UiTemplate::ChildrenHole(idx) = child {
+            out.extend(fills.take_children(*idx));
+        } else {
+            out.push(materialize_ui_at(child, depth.saturating_add(1), fills));
+        }
+    }
+    out
 }
 
 /// Decode a serialized [`UiTemplate`] and materialize it, through the dev
@@ -795,6 +905,36 @@ pub fn materialize_ui_template_str_with_handlers<M: Clone>(
         return Element::Empty;
     }
     materialize_ui_template_with_handlers(&template, handlers)
+}
+
+/// The hole-bearing string front door: decode the per-view slot JSON and
+/// materialize it, splicing the compiled hole fills. The `Ipe.Ui` analogue of
+/// [`materialize_ui_template_str`] for a mostly-static view with `Model`-derived
+/// holes — the emitted `view` reads its slot (`__ipe_lit.get(N)`) and hands the
+/// baked-default-or-patched template JSON here together with the compiled fills it
+/// built for each hole, so prod (baked default) and dev (patched slot) run the
+/// SAME materialize path over the SAME fills — dev == prod by construction; only
+/// the static skeleton hot-swaps, the fills stay compiled.
+///
+/// Fail-closed on hostile input, never a panic (the slot value crosses the
+/// untrusted dev overlay boundary): a decode failure or over-deep template
+/// returns the inert empty element, and any hole the patched template references
+/// beyond the supplied fills materializes to the empty element rather than
+/// panicking.
+#[cfg(feature = "json")]
+#[must_use]
+pub fn materialize_ui_template_str_with_holes<M>(
+    json: &str,
+    element_holes: Vec<Element<M>>,
+    children_holes: Vec<Vec<Element<M>>>,
+) -> Element<M> {
+    let Ok(template) = serde_json::from_str::<UiTemplate>(json) else {
+        return Element::Empty;
+    };
+    if template.check_bounds().is_err() {
+        return Element::Empty;
+    }
+    materialize_ui_template_with_holes(&template, element_holes, children_holes)
 }
 
 /// Build a [`UiTemplate`] from a static [`Element`] subtree — the inverse of
@@ -1362,7 +1502,9 @@ mod tests {
         let baked = concat!(
             r#"{"TaggedNode":{"tag":"section","desc":{"DescHeading":2},"attrs":["#,
             r#"{"Width":{"Max":[320,{"Vh":80}]}},{"Padding":[1,2,3,4]},{"Style":["k","v"]},"#,
-            r#"{"AlignX":"CenterX"},"Pointer",{"FontAlign":"center"}],"#,
+            r#"{"AlignX":"CenterX"},"Pointer",{"FontAlign":"center"},"#,
+            r#"{"FontColor":{"r":10,"g":20,"b":30,"a":1.0}},"#,
+            r#"{"BgColor":{"r":1,"g":2,"b":3,"a":0.25}},{"FontLetterSpacing":1.5}],"#,
             r#""children":[{"Text":"hi"},"Empty"]}}"#,
         );
         let decoded: UiTemplate = serde_json::from_str(baked).expect("backend JSON decodes");
@@ -1379,6 +1521,19 @@ mod tests {
                 super::UiTemplateAttr::AlignX(super::UiHAlign::CenterX),
                 super::UiTemplateAttr::Pointer,
                 super::UiTemplateAttr::FontAlign("center".to_string()),
+                super::UiTemplateAttr::FontColor(super::UiColor {
+                    r: 10,
+                    g: 20,
+                    b: 30,
+                    a: 1.0,
+                }),
+                super::UiTemplateAttr::BgColor(super::UiColor {
+                    r: 1,
+                    g: 2,
+                    b: 3,
+                    a: 0.25,
+                }),
+                super::UiTemplateAttr::FontLetterSpacing(1.5),
             ],
             children: vec![UiTemplate::Text("hi".to_string()), UiTemplate::Empty],
         };
@@ -1397,8 +1552,12 @@ mod tests {
     // in the inert template; the concrete `Msg` is resolved per render from a
     // `UiHandlerMap`. The model-dependent logic lives ONLY in that server-side
     // map — never serialized, never sent to the client, never a wire closure.
-
-    use crate::html::{Attribute as HtmlAttribute, Event};
+    //
+    // Nested in its own module so its local `enum Msg` and `crate::html` imports
+    // never collide with the value/list-hole suite below.
+    mod handler_holes {
+        use super::*;
+        use crate::html::{Attribute as HtmlAttribute, Event};
 
     #[derive(Clone, Debug, PartialEq)]
     enum Msg {
@@ -1682,5 +1841,207 @@ mod tests {
             }
             _ => None,
         })
+    }
+    }
+
+    // ── holes: value / control-flow (single-element) + list (children) ────────
+    //
+    // Nested in its own module so its `UiTemplate as T` / `UiTemplateAttr`
+    // re-imports never collide with the parent suite or the handler-hole suite.
+    mod value_holes {
+        use super::*;
+        use super::super::{
+            UiDescription, UiTemplate as T, UiTemplateAttr, materialize_ui_template_with_holes,
+        };
+
+    // A value hole: a mostly-static node whose single child is a `Hole(0)` filled
+    // by a `Model`-derived text leaf. Materialize splices the fill in place; the
+    // surrounding structure comes from the (inert) template.
+    #[test]
+    fn value_hole_splices_the_element_fill() {
+        let template = T::Node {
+            desc: UiDescription::NoDescription,
+            attrs: vec![UiTemplateAttr::Spacing(8)],
+            children: vec![T::Text("count: ".to_string()), T::Hole(0)],
+        };
+        let got: Element<()> = materialize_ui_template_with_holes(
+            &template,
+            vec![Element::Text("42".to_string())],
+            vec![],
+        );
+        assert_eq!(
+            got,
+            Element::Node(
+                Description::NoDescription,
+                vec![Attribute::AttrSpacing(8)],
+                vec![
+                    Element::Text("count: ".to_string()),
+                    Element::Text("42".to_string()),
+                ],
+            )
+        );
+    }
+
+    // A control-flow hole is materially the same shape as a value hole — the fill
+    // is whatever `Element` the compiled `if`/`case` produced. Editing the static
+    // wrapper structure (here: adding a sibling) hot-swaps; the fill is unchanged.
+    #[test]
+    fn control_flow_hole_fill_is_opaque_element() {
+        let template = T::Node {
+            desc: UiDescription::NoDescription,
+            attrs: vec![],
+            children: vec![T::Hole(0), T::Text("footer".to_string())],
+        };
+        // The compiled branch chose a tagged node this render.
+        let branch: Element<()> = Element::TaggedNode(
+            "strong".to_string(),
+            Description::NoDescription,
+            vec![],
+            vec![Element::Text("on".to_string())],
+        );
+        let got: Element<()> =
+            materialize_ui_template_with_holes(&template, vec![branch.clone()], vec![]);
+        assert_eq!(
+            got,
+            Element::Node(
+                Description::NoDescription,
+                vec![],
+                vec![branch, Element::Text("footer".to_string())],
+            )
+        );
+    }
+
+    // A children hole: a `List.map` comprehension expands to a RUN of siblings
+    // spliced among the node's static children, in order.
+    #[test]
+    fn children_hole_splices_the_run_in_place() {
+        let template = T::Node {
+            desc: UiDescription::NoDescription,
+            attrs: vec![],
+            children: vec![
+                T::Text("head".to_string()),
+                T::ChildrenHole(0),
+                T::Text("tail".to_string()),
+            ],
+        };
+        let items: Vec<Element<()>> = vec![
+            Element::Text("a".to_string()),
+            Element::Text("b".to_string()),
+            Element::Text("c".to_string()),
+        ];
+        let got: Element<()> = materialize_ui_template_with_holes(&template, vec![], vec![items]);
+        assert_eq!(
+            got,
+            Element::Node(
+                Description::NoDescription,
+                vec![],
+                vec![
+                    Element::Text("head".to_string()),
+                    Element::Text("a".to_string()),
+                    Element::Text("b".to_string()),
+                    Element::Text("c".to_string()),
+                    Element::Text("tail".to_string()),
+                ],
+            )
+        );
+    }
+
+    // Mixed: both an element hole and a children hole, each indexed within its own
+    // kind (the compiler numbers them per-kind).
+    #[test]
+    fn element_and_children_holes_index_independently() {
+        let template = T::Node {
+            desc: UiDescription::NoDescription,
+            attrs: vec![],
+            children: vec![T::Hole(0), T::ChildrenHole(0), T::Hole(1)],
+        };
+        let got: Element<()> = materialize_ui_template_with_holes(
+            &template,
+            vec![
+                Element::Text("first".to_string()),
+                Element::Text("last".to_string()),
+            ],
+            vec![vec![Element::Text("mid".to_string())]],
+        );
+        assert_eq!(
+            got,
+            Element::Node(
+                Description::NoDescription,
+                vec![],
+                vec![
+                    Element::Text("first".to_string()),
+                    Element::Text("mid".to_string()),
+                    Element::Text("last".to_string()),
+                ],
+            )
+        );
+    }
+
+    // Fail-closed: a hole index past the supplied fills materializes to the inert
+    // empty element, never a panic (the patched template is untrusted).
+    #[test]
+    fn out_of_range_hole_is_inert_empty() {
+        let template = T::Node {
+            desc: UiDescription::NoDescription,
+            attrs: vec![],
+            children: vec![T::Hole(5), T::ChildrenHole(9)],
+        };
+        let got: Element<()> = materialize_ui_template_with_holes(&template, vec![], vec![]);
+        assert_eq!(
+            got,
+            Element::Node(Description::NoDescription, vec![], vec![Element::Empty]),
+            "an out-of-range element hole is empty and a missing children hole adds nothing"
+        );
+    }
+
+    // A `ChildrenHole` reached as a standalone element (a malformed decode, not in
+    // a children list) is inert — the empty element, never a panic.
+    #[test]
+    fn standalone_children_hole_is_inert_empty() {
+        let got: Element<()> =
+            materialize_ui_template_with_holes(&T::ChildrenHole(0), vec![], vec![vec![]]);
+        assert_eq!(got, Element::Empty);
+    }
+
+    // dev == prod for a hole-bearing template: the SAME fills over a baked-default
+    // template (prod) and a structurally-edited template (dev) render each other's
+    // static skeleton, with the fills unchanged — the structural edit hot-swaps.
+    #[cfg(feature = "json")]
+    #[test]
+    fn holes_str_reflects_structural_edit_with_same_fills() {
+        use super::super::materialize_ui_template_str_with_holes;
+        // before: [Hole(0)] ; after: ["x", Hole(0)] — a static sibling added.
+        let before = T::Node {
+            desc: UiDescription::NoDescription,
+            attrs: vec![],
+            children: vec![T::Hole(0)],
+        };
+        let after = T::Node {
+            desc: UiDescription::NoDescription,
+            attrs: vec![],
+            children: vec![T::Text("x".to_string()), T::Hole(0)],
+        };
+        let fill = || vec![Element::Text("v".to_string())];
+        let json_before = serde_json::to_string(&before).unwrap();
+        let json_after = serde_json::to_string(&after).unwrap();
+        let out_before: Element<()> =
+            materialize_ui_template_str_with_holes(&json_before, fill(), vec![]);
+        let out_after: Element<()> =
+            materialize_ui_template_str_with_holes(&json_after, fill(), vec![]);
+        let before_render = render(out_before);
+        assert_eq!(
+            before_render,
+            render(materialize_ui_template_with_holes::<()>(
+                &before,
+                fill(),
+                vec![]
+            ))
+        );
+        assert_ne!(
+            before_render,
+            render(out_after),
+            "the edit must change render"
+        );
+    }
     }
 }
