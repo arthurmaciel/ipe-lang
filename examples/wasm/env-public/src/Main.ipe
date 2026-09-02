@@ -30,7 +30,7 @@ type alias Model =
     }
 
 
-init : a -> ( Model, Cmd Msg )
+init : WebReq -> ( Model, Cmd Msg )
 init _req =
     ( { apiBaseUrl = Maybe.withDefault "(none)" (Env.public "API_BASE_URL")
       , secretProbe = Maybe.withDefault "(none)" (Env.public "IPE_AUTH_TOKEN_SECRET")

@@ -8022,7 +8022,7 @@ import Ipe.Tea.Web.Sub as Sub
 type Msg = Noop
 type alias Model = { count : Int }
 
-init : a -> ( Model, Cmd Msg )
+init : WebReq -> ( Model, Cmd Msg )
 init _req = ( { count = 0 }, Cmd.none )
 
 update : Msg -> Model -> ( Model, Cmd Msg )

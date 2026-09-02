@@ -36,7 +36,7 @@ import Ipe.Tea.Web.Sub
 type Page = CounterPage | AboutPage
 type Msg = Increment
 type alias Model = { page : Page, count : Int }
-init : a -> ( Model, Cmd Msg )
+init : WebReq -> ( Model, Cmd Msg )
 init _req = ( { page = CounterPage, count = 0 }, Cmd.none )
 update : Msg -> Model -> ( Model, Cmd Msg )
 update msg model =

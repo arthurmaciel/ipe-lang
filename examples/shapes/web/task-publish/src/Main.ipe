@@ -49,7 +49,7 @@ roomTopic =
     PubSub.topic "room"
 
 
-init : a -> ( Model, Cmd Msg )
+init : WebReq -> ( Model, Cmd Msg )
 init _req =
     ( { lastCount = 0 }, Cmd.none )
 
