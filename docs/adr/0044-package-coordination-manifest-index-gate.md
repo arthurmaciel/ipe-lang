@@ -93,6 +93,6 @@ hole the pinned/hashed/gated design closes.
 - The index *repository* side — the entry schema, an example entry, the fail-closed
   admission CI, and the entry validator (`ipe package validate-entry`, the resolver's own
   parser reused so validator and reader cannot drift) — was scaffolded in the compiler repo and
-  now lives in the hosted index repository `arthurmaciel/ipe-index`. Only the hosted repo itself, its
+  now lives in the hosted registry repository `arthurmaciel/ipe-registry`. Only the hosted repo itself, its
   branch-protection rule making the admission workflow a *required* check, and its live
   entries are deferred to that repo; they cannot exist inside the compiler repo.
