@@ -1,6 +1,10 @@
 module Package exposing (package)
 
+import Ipe.Package exposing (..)
 
+
+package : Package
 package =
-    Package.named "animation-spec"
-        |> Package.version "0.1.0"
+    { name = "animation-spec"
+    , version = "0.1.0"
+    }

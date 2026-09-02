@@ -320,7 +320,7 @@ fn analysis_entrypoints_accept_an_asserted_program() {
     );
     fs::write(
         tmp.join("package.ipe"),
-        "module Package exposing (package)\n\n\npackage =\n    Package.named \"asserted-fixture\"\n        |> Package.version \"0.1.0\"\n",
+        "module Package exposing (package)\n\n\npackage =\n    { name = \"asserted-fixture\", version = \"0.1.0\" }\n",
     )
     .expect("package.ipe");
 

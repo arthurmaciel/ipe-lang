@@ -22,7 +22,7 @@ The word "unsafe" here is narrow, and worth stating precisely.
 - **The capability is disclosed.** Importing the module discloses the `unsafe`
   capability program-wide, so an audit sees the narrower guarantee before the
   program runs. A project accepts it once in its manifest with
-  `Package.accepts [ Capability.unsafe ]`.
+  `capabilities = { accepts = [ Unsafe ] }`.
 
 ## A worked example: a dynamic table
 
@@ -46,10 +46,12 @@ events =
 Its manifest pre-accepts the capability:
 
 ```ipe
+package : Package
 package =
-    Package.named "store-raw-columns"
-        |> Package.version "0.1.0"
-        |> Package.accepts [ Capability.unsafe ]
+    { name = "store-raw-columns"
+    , version = "0.1.0"
+    , capabilities = { accepts = [ Unsafe ] }
+    }
 ```
 
 Running it (`ipe run`):

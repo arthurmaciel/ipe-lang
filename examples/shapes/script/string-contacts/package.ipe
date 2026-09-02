@@ -1,6 +1,10 @@
 module Package exposing (package)
 
+import Ipe.Package exposing (..)
 
+
+package : Package
 package =
-    Package.named "string-contacts"
-        |> Package.version "0.1.0"
+    { name = "string-contacts"
+    , version = "0.1.0"
+    }

@@ -1,15 +1,20 @@
 module Package exposing (package)
 
+import Ipe.Package exposing (..)
 
+
+package : Package
 package =
-    Package.named "sp2-manifest-fixture"
-        |> Package.dependencies
-            [ Package.dep "http" "^1.2"
-            , Package.depPath "local" "../local"
-            , Package.depGitRev "mylib" "https://example.com/mylib.git" "abc123"
-            ]
-        |> Package.rustDependencies
-            [ Package.rustDep "stripe" "=1.0.0" |> Rust.features [ "blocking", "webhooks" ]
-            , Package.rustDep "uuid" "1.10"
-            ]
-        |> Package.declares [ Capability.network, Capability.clock ]
+    { name = "sp2-manifest-fixture"
+    , dependencies =
+        [ dep "http" "^1.2"
+        , depPath "local" "../local"
+        , depGitRev "mylib" "https://example.com/mylib.git" "abc123" ]
+    , rustDependencies =
+        [ rustDepWith "stripe" "=1.0.0" [ "blocking", "webhooks" ]
+        , rustDep "uuid" "1.10" ]
+    , capabilities =
+        { declares = [ Network, Clock ]
+        , accepts = []
+        }
+    }

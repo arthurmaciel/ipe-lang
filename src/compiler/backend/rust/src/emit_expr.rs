@@ -7972,10 +7972,16 @@ fn emit_apply(
         ret: _,
         body,
     } = func
+        && args.len() == params.len()
     {
-        // Lower guarantees `params.len() == args.len()` here; the `zip` below
-        // pairs them positionally and would silently drop any excess were that
-        // invariant ever broken upstream.
+        // Immediately-applied-lambda inlining, only when the arg count EQUALS the
+        // lambda's arity — the ordinary saturated `(\p0,… -> body) a0 …` shape.
+        // `args.len() > params.len()` is a CURRIED application of a
+        // function-returning lambda (`(\p -> fn-value) a b`): the body yields a
+        // function that the surplus args apply to, so it must NOT be inlined here —
+        // the zip would drop the surplus and silently discard those applications
+        // (the composed-higher-order-combinator SEAL break). That case is handled
+        // by the split path below.
         let child = depth + 1;
         let mut bindings = String::new();
         for ((param, ty), arg) in params.iter().zip(args.iter()) {
@@ -7989,6 +7995,25 @@ fn emit_apply(
         return Ok(format!("({{ {bindings}{body_s} }})"));
     }
     let child = depth + 1;
+    // Curried application of a function-returning lambda: `(\p0,… -> fn-value) a0
+    // … aN` where the arg count EXCEEDS the lambda's own arity. The lambda yields
+    // a function value once its own params are bound; the surplus args apply to
+    // THAT value. Emit `(lambda)(own-args)(surplus-args)` so the two application
+    // stages stay distinct — folding them into one call list would pass too many
+    // args to the lambda (E0057/E0308). Every other `func` shape (a `Box<dyn Fn>`
+    // read, a top-level `FuncValue`, …) carries the flattened arity the single
+    // call list expects, so it takes the plain path below.
+    if let Expr::Lambda { params, .. } = func
+        && args.len() > params.len()
+    {
+        let (own_args, surplus) = args.split_at(params.len());
+        let stage1 = emit_apply(ctx, func, own_args, indent, child, generics)?;
+        let mut rest = Vec::with_capacity(surplus.len());
+        for arg in surplus {
+            rest.push(emit_expr_at(ctx, arg, indent, child, generics)?);
+        }
+        return Ok(format!("({stage1})({})", rest.join(", ")));
+    }
     let f = emit_expr_at(ctx, func, indent, child, generics)?;
     let mut parts = Vec::with_capacity(args.len());
     for arg in args {

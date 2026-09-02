@@ -78,35 +78,29 @@ pub fn lower(
     // cross-module misattribution lives inside `Lowerer::run`, at the
     // `lower_def` boundary.
     let homeless = |d: Diagnostic| (d, Vec::<ipe_intern::Symbol>::new());
-    // Eta-expansion of a partial application needs fresh parameter symbols that
-    // cannot capture any name free in the supplied arguments. Mint a pool up
-    // front through the one `&mut Interner` the entry point owns, so the
-    // lowering walk itself stays over a shared `&`. Each eta-lambda is its own
-    // closure scope, so the pool is reused across sites without collision;
-    // `fresh_symbols` guarantees the names dodge every user identifier (all
-    // interned by now) and each other.
+    // Eta-expansion synthesises fresh closure parameters that must not capture
+    // any name free in the supplied arguments. Mint the pool up front through the
+    // one `&mut Interner` the entry point owns, so the lowering walk itself stays
+    // over a shared `&`; `fresh_symbols` guarantees the names dodge every user
+    // identifier (all interned by now) and each other.
     //
-    // Sizing: the most params ANY single eta-lambda introduces is the widest
-    // partial-application gap = `callee_arity - args_supplied`. The callee may
-    // be a KERNEL or CONSTRUCTOR (e.g. `List.map f` — arity-2 kernel, 1 arg,
-    // gap 1), not just a local def — so the widest local-def arity alone
-    // under-sizes the pool (it is 0 for a `main`-only program, yet
-    // `[1,2,3] |> List.map f` needs an eta param). Cover the widest callable
-    // arity; no stdlib function exceeds this ceiling, and `eta_expand_partial`
-    // fails closed (CompilerBug) if a gap ever did — never silently, never
-    // unsound.
-    // Sized by the per-module max arity: the `eta_` / `cap_` pools name a
-    // symbol by its scope-LOCAL position, so the pool SIZE is byte-neutral — only
-    // the local index reaches the emitted names. `max_def_arity_per_module`
-    // equals the widest arity across the whole module, so this sizing is
-    // byte-identical, while removing the last whole-program input from these
-    // position-indexed pools.
+    // The eta pool is handed out through a PER-DEF monotonic cursor
+    // ([`Lowerer::eta_base`] / [`Lowerer::eta_sym`]): each binding site reserves
+    // its block and the cursor only advances within a def, so a nested eta-lambda
+    // (a composed higher-order combinator such as `a |> andThen (\x -> b |>
+    // andThen …)`) draws DISJOINT names rather than shadowing a still-live outer
+    // one. Sizing therefore covers the SUM of eta demand along the deepest nesting
+    // path per def, which [`max_live_eta_params`] bounds; the `MAX_CALLEE_ARITY`
+    // floor keeps a single partial-application gap covered in a `main`-only program
+    // with no local defs. An overrun fails closed as a `CompilerBug`, never an
+    // index panic, never a silent reuse.
     let eta_params = interner
-        .fresh_symbols(
-            "eta_",
-            lower::max_def_arity_per_module(m).max(MAX_CALLEE_ARITY),
-        )
+        .fresh_symbols("eta_", lower::max_live_eta_params(m).max(MAX_CALLEE_ARITY))
         .map_err(homeless)?;
+    // `cap_` (the hoisted-argument capture pool) is drawn positionally within a
+    // single partial-application site, whose body is a `Call`/`Ctor` over already-
+    // lowered args — no nested lowering, so its scope-local reuse is collision-free
+    // and its sizing stays the per-module widest arity.
     let cap_params = interner
         .fresh_symbols(
             "cap_",

@@ -1,6 +1,10 @@
 module Package exposing (package)
 
+import Ipe.Package exposing (..)
 
+
+package : Package
 package =
-    Package.named "log-severities"
-        |> Package.version "0.1.0"
+    { name = "log-severities"
+    , version = "0.1.0"
+    }

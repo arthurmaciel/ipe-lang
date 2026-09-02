@@ -1,6 +1,10 @@
 module Package exposing (package)
 
+import Ipe.Package exposing (..)
 
+
+package : Package
 package =
-    Package.named "cache-hit-miss"
-        |> Package.version "0.1.0"
+    { name = "cache-hit-miss"
+    , version = "0.1.0"
+    }

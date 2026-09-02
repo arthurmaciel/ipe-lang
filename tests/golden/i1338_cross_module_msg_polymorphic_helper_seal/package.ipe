@@ -1,6 +1,10 @@
 module Package exposing (package)
 
+import Ipe.Package exposing (..)
 
+
+package : Package
 package =
-    Package.named "i1338_cross_module_msg_polymorphic_helper_seal"
-        |> Package.version "0.1.0"
+    { name = "i1338_cross_module_msg_polymorphic_helper_seal"
+    , version = "0.1.0"
+    }

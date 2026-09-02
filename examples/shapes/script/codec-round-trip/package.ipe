@@ -1,6 +1,10 @@
 module Package exposing (package)
 
+import Ipe.Package exposing (..)
 
+
+package : Package
 package =
-    Package.named "codec-round-trip"
-        |> Package.version "0.1.0"
+    { name = "codec-round-trip"
+    , version = "0.1.0"
+    }
