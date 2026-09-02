@@ -51,6 +51,12 @@ pub mod transition_classify;
 // in-module.
 pub mod msg_set_classify;
 
+// The `subscriptions`-entry sub-description partition: reduces a data-describable
+// tick subscription (`Time.every 1000 Tick`) to an inert `CompileSubDescription`
+// consumed by the emit hook and mirrored by the `ipe watch` subs classifier; its
+// dev == prod conformance to the runtime `sub_every_hot` is pinned in-module.
+pub mod sub_classify;
+
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -1231,6 +1237,16 @@ pub(crate) struct EmitCtx<'a> {
     /// without an added parameter on every emit function, exactly as
     /// [`Self::lit_accum`] does for the appearance hoist.
     transition_model_param: RefCell<Option<ipe_intern::Symbol>>,
+    /// Whether a TEA `subscriptions` body is currently being emitted under
+    /// [`Self::hot_appearance`]. `true` only while emitting a `Model -> Sub Msg`
+    /// function body under the flag; arms [`crate::emit_expr`]'s `Sub.every` /
+    /// `Time.every` kernel emit to reduce a data-describable tick entry to a
+    /// `sub_every_hot("<baked datum>")` call (the subscriptions counterpart of the
+    /// `update`-arm transition rewrite). `false` everywhere else, so no other
+    /// `Sub.every`/`Time.every` is ever sub-rewritten. Interior-mutable so the
+    /// arming threads through the shared `&EmitCtx`, exactly as
+    /// [`Self::transition_model_param`] does for the transition rewrite.
+    subs_hot_active: RefCell<bool>,
 }
 
 /// Is an enum variant payload field type `Clone`, consulting the whole-program
@@ -1988,6 +2004,7 @@ impl<'a> EmitCtx<'a> {
             ui_structural_wrappers,
             lit_accum: RefCell::new(LiteralAccum::default()),
             transition_model_param: RefCell::new(None),
+            subs_hot_active: RefCell::new(false),
         };
         // Resolve the `HydrationState` type name through the same renderer the
         // emitted `main_from_hydration_state` signature uses, so the wasm-hydrate
@@ -2093,6 +2110,28 @@ impl<'a> EmitCtx<'a> {
     /// transition reduction on the top `case`.
     pub(crate) fn transition_model_param(&self) -> Option<ipe_intern::Symbol> {
         *self.transition_model_param.borrow()
+    }
+
+    /// Arm the `subscriptions`-entry sub-description rewrite for the duration of a
+    /// TEA `subscriptions` lambda body: while set, [`crate::emit_expr`]'s
+    /// `Sub.every` / `Time.every` emit reduces a data-describable tick entry to a
+    /// `sub_every_hot("<baked datum>")` call. Returns the previous value so the
+    /// caller can restore it after the body is emitted (nested lambdas never leak
+    /// the arming). `false` leaves every subscription compiled.
+    fn begin_subs_hot(&self, active: bool) -> bool {
+        std::mem::replace(&mut *self.subs_hot_active.borrow_mut(), active)
+    }
+
+    /// Restore the subscriptions arming saved by [`Self::begin_subs_hot`].
+    fn end_subs_hot(&self, prev: bool) {
+        *self.subs_hot_active.borrow_mut() = prev;
+    }
+
+    /// Whether the `subscriptions`-entry sub-description rewrite is currently
+    /// armed. Read by [`crate::emit_expr`]'s `Sub.every`/`Time.every` emit to
+    /// decide whether to attempt the sub-description reduction.
+    pub(crate) fn subs_hot_active(&self) -> bool {
+        *self.subs_hot_active.borrow()
     }
 
     /// Enter a discard-only probe emit: hoisting is suppressed so the probe does
