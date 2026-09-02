@@ -100,11 +100,12 @@ fn ticker_fixture(marker: &str) -> String {
     )
 }
 
-/// A structurally DIFFERENT Model (`{ count : Int, label : String }`) so its
-/// compile-time schema tag differs from [`ticker_fixture`]'s. A session
-/// checkpointed under the old tag must be REJECTED before deserialize and the
-/// new binary must come up cleanly at `init` — never rehydrate a mismatched
-/// Model. `notFound = Tick` keeps the single-Msg shape.
+/// A Model with a RENAMED field (`score : Int` instead of `count : Int`) so a
+/// session checkpointed under the old schema is REJECTED by the additive-splice
+/// gate: the old `count` key is absent from the new schema (removal) and the new
+/// `score` key is absent from the old checkpoint (would be insertion) — neither
+/// side is a superset of the other, so the splice is refused and the new binary
+/// starts at a clean `init`. `notFound = Tick` keeps the single-Msg shape.
 fn changed_model_fixture(marker: &str) -> String {
     format!(
         "module Main exposing (main)\n\n\
@@ -114,19 +115,18 @@ fn changed_model_fixture(marker: &str) -> String {
          import Ipe.Tea.Web.Cmd as Cmd\n\
          import Ipe.Tea.Web.Sub as Sub\n\n\
          type Msg = Tick\n\n\
-         type alias Model = {{ count : Int, label : String }}\n\n\
+         type alias Model = {{ score : Int }}\n\n\
          init : a -> ( Model, Cmd Msg )\n\
-         init _req = ( {{ count = 0, label = \"fresh\" }}, Cmd.none )\n\n\
+         init _req = ( {{ score = 0 }}, Cmd.none )\n\n\
          update : Msg -> Model -> ( Model, Cmd Msg )\n\
-         update _msg model = ( {{ model | count = model.count + 1 }}, Cmd.none )\n\n\
+         update _msg model = ( {{ model | score = model.score + 1 }}, Cmd.none )\n\n\
          subscriptions : Model -> Sub Msg\n\
          subscriptions _model = Sub.every 100 Tick\n\n\
          view : Model -> Element Msg\n\
          view model =\n    \
              Ui.column [ Ui.spacing 8 ]\n        \
                  [ Ui.el [] (Ui.text \"{marker}\")\n        \
-                 , Ui.el [] (Ui.text (String.concat [ \"count=\", String.fromInt model.count ]))\n        \
-                 , Ui.el [] (Ui.text model.label)\n        \
+                 , Ui.el [] (Ui.text (String.concat [ \"score=\", String.fromInt model.score ]))\n        \
                  ]\n\n\
          main =\n    \
              Web.app\n        \
@@ -644,16 +644,16 @@ fn bluegreen_rebuild_preserves_the_model_across_the_swap() -> Result<(), BoxErro
     stop_and_join(&handle, join)
 }
 
-/// The clean-reset half of the handoff: when the Model TYPE changes between the
-/// old and new binary, the checkpoint's schema tag differs, so the store
-/// REJECTS it before deserialize and the returning session falls back to a
-/// fresh `init` — never a crash, never a torn/mismatched Model.
+/// The clean-reset half of the handoff: when the Model changes in a
+/// NON-additive way between the old and new binary, the additive-splice gate
+/// REJECTS the old checkpoint and the returning session falls back to a fresh
+/// `init` — never a crash, never a torn/mismatched Model.
 ///
-/// The old binary uses `{ count : Int }`; the rebuild uses
-/// `{ count : Int, label : String }` (a distinct structural shape → distinct
-/// compile-time schema tag). Presenting the old session's cookie to the new
-/// binary must yield a clean init (`count=0`) and the new field's rendered
-/// `label`, with the server healthy throughout.
+/// The old binary uses `{ count : Int }`; the rebuild renames that field to
+/// `{ score : Int }` — a removal + addition, not a superset → the splice is
+/// refused (the persisted `count` key is absent from the new schema).
+/// Presenting the old session's cookie to the new binary must yield a clean
+/// `init` (`score=0`), with the server healthy throughout.
 #[test]
 fn bluegreen_rebuild_resets_cleanly_on_model_type_change() -> Result<(), BoxError> {
     if std::env::var("IPE_E2E").is_err() {
@@ -691,25 +691,128 @@ fn bluegreen_rebuild_resets_cleanly_on_model_type_change() -> Result<(), BoxErro
     );
 
     // THE ASSERTION: the SAME cookie against the NEW binary is served cleanly
-    // (no crash — the socket answers, the new `label` field renders) and starts
-    // FRESH at init's count=0 (the mismatched checkpoint was rejected, not
-    // deserialized into the wrong shape). The first read of the reset session
-    // is before any tick, so it is exactly 0.
-    let (body, _) = get_with_cookies(port, Some(&cookie))
-        .ok_or_else(|| -> BoxError { "server must answer after a Model-type change".into() })?;
+    // (no crash — the socket answers) and starts FRESH at init's score=0
+    // (the non-additive rename was rejected, not spliced into the wrong shape).
+    // The first read of the reset session is before any tick, so score=0.
+    let (body, _) = get_with_cookies(port, Some(&cookie)).ok_or_else(|| -> BoxError {
+        "server must answer after a non-additive Model change".into()
+    })?;
     assert!(
         body.contains("RESET-V2"),
-        "the new (changed-Model) binary must serve a healthy page: {body:?}"
+        "the new (renamed-field Model) binary must serve a healthy page: {body:?}"
+    );
+    // score=0 proves the session was reset to init (old `count` checkpoint was
+    // refused), not spliced (which would have carried across no matching field).
+    assert!(
+        body.contains("score=0"),
+        "a non-additive Model change must reset to init's score=0, never splice the \
+         mismatched checkpoint: {body:?}"
+    );
+
+    stop_and_join(&handle, join)
+}
+
+/// A `Ipe.Web` app that ADDS a new `label : String` field to the existing
+/// `{ count : Int }` Model — a purely additive change. `ticker_fixture` is
+/// the "before" binary; this is the "after". The additive-splice algorithm
+/// must PRESERVE the running `count` from the old checkpoint and fill the new
+/// `label` field from `init`'s value. Both `count=N` and the new field's
+/// init value (`label=init`) are rendered so a `GET /` can verify both.
+fn additive_ticker_fixture(marker: &str) -> String {
+    format!(
+        "module Main exposing (main)\n\n\
+         import Ipe.Tea.Web as Web\n\
+         import Ipe.Ui as Ui\n\
+         import Ipe.String as String\n\
+         import Ipe.Tea.Web.Cmd as Cmd\n\
+         import Ipe.Tea.Web.Sub as Sub\n\n\
+         type Msg = Tick\n\n\
+         type alias Model = {{ count : Int, label : String }}\n\n\
+         init : a -> ( Model, Cmd Msg )\n\
+         init _req = ( {{ count = 0, label = \"init\" }}, Cmd.none )\n\n\
+         update : Msg -> Model -> ( Model, Cmd Msg )\n\
+         update _msg model = ( {{ model | count = model.count + 1 }}, Cmd.none )\n\n\
+         subscriptions : Model -> Sub Msg\n\
+         subscriptions _model = Sub.every 100 Tick\n\n\
+         view : Model -> Element Msg\n\
+         view model =\n    \
+             Ui.column [ Ui.spacing 8 ]\n        \
+                 [ Ui.el [] (Ui.text \"{marker}\")\n        \
+                 , Ui.el [] (Ui.text (String.concat [ \"count=\", String.fromInt model.count ]))\n        \
+                 , Ui.el [] (Ui.text (String.concat [ \"label=\", model.label ]))\n        \
+                 ]\n\n\
+         main =\n    \
+             Web.app\n        \
+                 {{ init = init\n        \
+                 , update = update\n        \
+                 , view = view\n        \
+                 , subscriptions = subscriptions\n        \
+                 , routes = []\n        \
+                 , notFound = Tick\n        \
+                 }}\n"
+    )
+}
+
+/// The additive-preserve proof: when the Model gains a NEW field (and nothing
+/// is removed or retyped), the additive-splice gate KEEPS the returning
+/// session's existing state and fills each new field from `init`.
+///
+/// The old binary uses `{ count : Int }`; the rebuild adds `label : String` —
+/// a proven additive superset. The returning session must see its `count`
+/// carried across (preserved, > 0) AND `label` filled from `init`'s `"init"`
+/// value, without losing either old state or the new field's default.
+#[test]
+fn bluegreen_rebuild_preserves_state_on_additive_model_change() -> Result<(), BoxError> {
+    if std::env::var("IPE_E2E").is_err() {
+        eprintln!("skipping (set IPE_E2E=1 to run)");
+        return Ok(());
+    }
+    let (ipe_dir, out_dir) = fresh_dirs("additive")?;
+    write_main(&ipe_dir, &ticker_fixture("ADDITIVE-V1"))?;
+
+    let port = 19175;
+    let (join, handle) = start_watch(&ipe_dir.join("Main.ipe"), &out_dir, port, true)?;
+    assert!(
+        wait_for_marker(port, "ADDITIVE-V1", Duration::from_mins(5)),
+        "cold build must serve v1 through the blue-green proxy"
+    );
+
+    // Mint a session and let the count tick well past init.
+    let (_body, cookies) = get_with_cookies(port, None)
+        .ok_or_else(|| -> BoxError { "initial GET must succeed".into() })?;
+    let cookie = session_cookie(&cookies)
+        .ok_or_else(|| -> BoxError { "server must set an ipe_sid cookie".into() })?;
+
+    let before = wait_for_count_at_least(port, &cookie, 3, Duration::from_secs(20))
+        .ok_or_else(|| -> BoxError { "session count must advance past init".into() })?;
+    assert!(before >= 3, "pre-rebuild count must be > 0: {before}");
+
+    // Rebuild with an ADDITIVE Model change (new `label` field).
+    write_main(&ipe_dir, &additive_ticker_fixture("ADDITIVE-V2"))?;
+    assert!(
+        wait_for_marker(port, "ADDITIVE-V2", Duration::from_mins(3)),
+        "the rebuild must cut over to the additive-Model v2 behind the proxy"
+    );
+
+    // THE ASSERTION: the returning session must have its `count` preserved
+    // (> 0, carried across via the additive splice) AND `label` filled from
+    // `init`'s `"init"` value (the new field's default).
+    let (body, _) = get_with_cookies(port, Some(&cookie)).ok_or_else(|| -> BoxError {
+        "server must answer after an additive Model change".into()
+    })?;
+    assert!(
+        body.contains("ADDITIVE-V2"),
+        "the additive-Model binary must serve a healthy page: {body:?}"
+    );
+    let after = rendered_count(&body);
+    assert!(
+        after.is_some_and(|c| c >= 1),
+        "an additive Model change must PRESERVE the old count (> 0), not reset to 0: \
+         {body:?}"
     );
     assert!(
-        body.contains("fresh"),
-        "the new Model's `label` field must render (clean init, right shape): {body:?}"
-    );
-    assert_eq!(
-        rendered_count(&body),
-        Some(0),
-        "a Model-type change must reset to init's count=0, never rehydrate the mismatched \
-         checkpoint: {body:?}"
+        body.contains("label=init"),
+        "the new `label` field must be filled from init's value: {body:?}"
     );
 
     stop_and_join(&handle, join)

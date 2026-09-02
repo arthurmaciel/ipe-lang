@@ -20,6 +20,7 @@
 //! | Ctrl-T     | Toggle time-travel mode on / off             |
 //! | Ctrl-Left  | Step one message backward (time-travel)      |
 //! | Ctrl-Right | Step one message forward  (time-travel)      |
+//! | Ctrl-R     | Reset to init: clear history, restart fresh  |
 //!
 //! These keys are consumed by the debugger and are never forwarded to the
 //! application's `on_key` handler while time-travel mode is active.
@@ -65,6 +66,13 @@ pub const STEP_BACK_KIND: &str = "ctrlleft";
 
 /// The key kind / value pair for stepping forward in time-travel mode.
 pub const STEP_FWD_KIND: &str = "ctrlright";
+
+/// The key kind / value pair for the "reset to init" action (Ctrl-R).
+/// Clears the step log and resets the base to a fresh `init` value, returning
+/// the debugger and the live driver to an empty-history state. Available in
+/// both live and time-travel mode.
+pub const RESET_KIND: &str = "ctrl";
+pub const RESET_VALUE: &str = "r";
 
 /// Time-travel state machine for a single terminal TEA session.
 ///
@@ -182,19 +190,33 @@ where
         self.buf.reconstruct(idx, &|m, mdl| upd(m, mdl))
     }
 
+    /// Reset the debugger to a fresh `init` state (Ctrl-R action).
+    ///
+    /// Clears the step log, resets the base to `init`, and leaves live mode
+    /// (clears any active scrub index). The caller is responsible for
+    /// resetting the live driver's model to the same `init` value so the
+    /// debugger and the running session stay in sync.
+    ///
+    /// No `update` call is made and no `Cmd` is fired — this is a pure
+    /// recorder reset.
+    pub fn reset_to_init(&mut self, init: Model) {
+        self.scrub = None;
+        self.buf.reset_to_init(init);
+    }
+
     /// Render a one-line status string for painting at the bottom of the
     /// terminal frame.
     ///
     /// Labels pass through [`IpeStringify::ipe_show`] so any `Secret` field
     /// renders as `<redacted>` — the raw payload never appears.
     ///
-    /// Live mode:         `[DBG] recording — N steps`
+    /// Live mode:         `[DBG] recording — N steps  Ctrl-T=travel Ctrl-R=reset`
     /// Time-travel mode:  `[DBG TT] step N/M  …prev | CURRENT | next…`
     pub fn status_line(&self) -> String {
         let len = self.buf.len();
         match self.scrub {
             None => format!(
-                "\x1b[7m[DBG] recording \u{2014} {len} step{}\x1b[m",
+                "\x1b[7m[DBG] recording \u{2014} {len} step{}  Ctrl-T=travel Ctrl-R=reset\x1b[m",
                 if len == 1 { "" } else { "s" }
             ),
             Some(idx) => {

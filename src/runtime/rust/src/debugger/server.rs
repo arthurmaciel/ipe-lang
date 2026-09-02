@@ -133,10 +133,15 @@ fn attr_escape(s: &str) -> String {
 ///
 /// The overlay element carries `data-ipe-debugger` (no `ipe-id` attribute) so
 /// `assign_ipe_ids` / diff / patch never touch it.
+///
+/// The "reset to init" button POSTs to `/_ipe/debug/reset` and reloads the
+/// page on success, giving the dev the same fresh-`init` state as a
+/// cold-start without a full rebuild.
 pub fn overlay_html(labels: &[String], total: usize, scrub_base: &str) -> String {
     let max_str = total.to_string();
     let cur_str = total.to_string(); // live mode: scrubber at rightmost position
     let scrub_url = format!("{scrub_base}/_ipe/debug/scrub");
+    let reset_url = format!("{scrub_base}/_ipe/debug/reset");
 
     let mut rows = String::new();
     for (idx, label) in labels.iter().enumerate() {
@@ -152,8 +157,10 @@ pub fn overlay_html(labels: &[String], total: usize, scrub_base: &str) -> String
 
     let scrub_url_js = serde_json::to_string(&scrub_url)
         .unwrap_or_else(|_| format!("\"{}\"", scrub_url.replace('"', "\\\"")));
+    let reset_url_js = serde_json::to_string(&reset_url)
+        .unwrap_or_else(|_| format!("\"{}\"", reset_url.replace('"', "\\\"")));
 
-    let script = build_overlay_script(&scrub_url_js, SELECTED_ROW_BG);
+    let script = build_overlay_script(&scrub_url_js, &reset_url_js, SELECTED_ROW_BG);
 
     format!(
         "<div data-ipe-debugger style=\"{OVERLAY_STYLE}\">\
@@ -162,6 +169,13 @@ pub fn overlay_html(labels: &[String], total: usize, scrub_base: &str) -> String
              <span style=\"flex-shrink:0;opacity:.7;\">▶ Debugger</span>\
              <input type=\"range\" min=\"0\" max=\"{max_str}\" value=\"{cur_str}\" \
                     style=\"flex:1;min-width:0;\">\
+             <button data-ipe-dbg-reset \
+                     style=\"flex-shrink:0;padding:1px 6px;font:11px monospace;\
+                             background:#c0392b;color:#fff;border:none;\
+                             border-radius:3px;cursor:pointer;\" \
+                     title=\"Reset session to init (clears history)\">\
+               ↺ reset\
+             </button>\
            </div>\
            <div data-ipe-dbg-list style=\"overflow-y:auto;flex:1;padding:4px 0;\">\
              {rows}\
@@ -171,10 +185,10 @@ pub fn overlay_html(labels: &[String], total: usize, scrub_base: &str) -> String
     )
 }
 
-/// Emit the inline `<script>` block that wires the scrubber and row-click
-/// to the scrub endpoint. The script runs in a self-calling function to
-/// avoid polluting the page's global scope.
-fn build_overlay_script(scrub_url_js: &str, selected_bg: &str) -> String {
+/// Emit the inline `<script>` block that wires the scrubber, row-click, and
+/// reset button to their respective endpoints. The script runs in a
+/// self-calling function to avoid polluting the page's global scope.
+fn build_overlay_script(scrub_url_js: &str, reset_url_js: &str, selected_bg: &str) -> String {
     format!(
         "<script>\n\
 (function(){{\n\
@@ -182,6 +196,7 @@ fn build_overlay_script(scrub_url_js: &str, selected_bg: &str) -> String {
   if(!panel)return;\n\
   var scrubber=panel.querySelector('input[type=range]');\n\
   var list=panel.querySelector('[data-ipe-dbg-list]');\n\
+  var resetBtn=panel.querySelector('[data-ipe-dbg-reset]');\n\
   function highlight(n){{\n\
     var rows=list?list.querySelectorAll('[data-ipe-dbg-step]'):[];\n\
     for(var i=0;i<rows.length;i++){{\n\
@@ -189,11 +204,14 @@ fn build_overlay_script(scrub_url_js: &str, selected_bg: &str) -> String {
       rows[i].style.background=step===n?'{selected_bg}':'';\n\
     }}\n\
   }}\n\
+  function csrfToken(){{\n\
+    return window.__IPE_CSRF_TOKEN||'';\n\
+  }}\n\
   function post(n){{\n\
     var xhr=new XMLHttpRequest();\n\
     xhr.open('POST',{scrub_url_js},true);\n\
     xhr.setRequestHeader('Content-Type','application/json');\n\
-    var csrf=window.__IPE_CSRF_TOKEN||'';\n\
+    var csrf=csrfToken();\n\
     if(csrf)xhr.setRequestHeader('X-Ipe-Csrf',csrf);\n\
     xhr.onload=function(){{\n\
       if(xhr.status===200){{\n\
@@ -226,6 +244,16 @@ fn build_overlay_script(scrub_url_js: &str, selected_bg: &str) -> String {
       }}\n\
       el=el.parentElement;\n\
     }}\n\
+  }});\n\
+  if(resetBtn)resetBtn.addEventListener('click',function(){{\n\
+    var xhr=new XMLHttpRequest();\n\
+    xhr.open('POST',{reset_url_js},true);\n\
+    var csrf=csrfToken();\n\
+    if(csrf)xhr.setRequestHeader('X-Ipe-Csrf',csrf);\n\
+    xhr.onload=function(){{\n\
+      if(xhr.status===200)window.location.reload();\n\
+    }};\n\
+    xhr.send();\n\
   }});\n\
 }})();\n\
 </script>",
@@ -278,6 +306,14 @@ mod tests {
             html.contains("/_ipe/debug/scrub"),
             "overlay must reference the scrub endpoint"
         );
+        assert!(
+            html.contains("/_ipe/debug/reset"),
+            "overlay must include the reset-to-init endpoint"
+        );
+        assert!(
+            html.contains("data-ipe-dbg-reset"),
+            "overlay must include the reset button"
+        );
     }
 
     #[test]
@@ -285,7 +321,11 @@ mod tests {
         let html = overlay_html(&[], 0, "/myapp");
         assert!(
             html.contains("/myapp/_ipe/debug/scrub"),
-            "overlay must use sub-app base prefix"
+            "overlay must use sub-app base prefix for the scrub endpoint"
+        );
+        assert!(
+            html.contains("/myapp/_ipe/debug/reset"),
+            "overlay must use sub-app base prefix for the reset endpoint"
         );
     }
 

@@ -932,6 +932,17 @@ pub static ENV_VARS: &[EnvVar] = &[
         class: Class::Tunable,
     },
     EnvVar {
+        name: "IPE_WEB_RESET_STATE",
+        default: "unset (off)",
+        purpose: "Set to `1`, `true`, `yes`, or `on` to force every returning session \
+                  to a fresh `init`, bypassing the additive-superset checkpoint splice. \
+                  Injected by `ipe watch --reset-state`; never set in production. \
+                  Fail-closed: an absent or unrecognised value leaves the normal \
+                  additive-preserve algorithm in place.",
+        subsystem: Subsystem::Web,
+        class: Class::Tunable,
+    },
+    EnvVar {
         name: "IPE_WEB_RETRY_BASE_MS",
         default: "500",
         purpose: "Initial retry interval (ms) for client reconnection after a \
