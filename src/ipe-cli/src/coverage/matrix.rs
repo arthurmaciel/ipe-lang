@@ -8,6 +8,7 @@
 //! concentrates every per-aspect check into one loop so no symbol is judged on a
 //! subset of the aspects.
 
+use crate::coverage::compiler_surface::CompilerCrate;
 use crate::coverage::contract::{AspectCheck, Cell, StdlibSymbol, Surface};
 use crate::coverage::env_surface::EnvItem;
 
@@ -183,4 +184,26 @@ pub fn env_columns() -> Vec<Box<dyn AspectCheck<EnvItem>>> {
 #[must_use]
 pub fn run_env() -> MatrixReport {
     run(&crate::coverage::env_surface::EnvVarSurface, &env_columns())
+}
+
+/// The registered aspect columns of the compiler-crate surface.
+///
+/// These inspect `src/compiler/<crate>/src/` trees directly — no build — so
+/// they run in the fast (non-E2E) path.
+#[must_use]
+pub fn compiler_columns() -> Vec<Box<dyn AspectCheck<CompilerCrate>>> {
+    vec![
+        Box::new(crate::coverage::columns_compiler::TestedColumn),
+        Box::new(crate::coverage::columns_compiler::NoPanicColumn),
+        Box::new(crate::coverage::columns_compiler::DocumentedColumn),
+    ]
+}
+
+/// Run the compiler-crate surface against its registered columns.
+#[must_use]
+pub fn run_compiler() -> MatrixReport {
+    run(
+        &crate::coverage::compiler_surface::CompilerSurface,
+        &compiler_columns(),
+    )
 }
