@@ -1985,9 +1985,24 @@ fn build_match(
     let mut arm_docs = Vec::with_capacity(m.arms().len());
     for arm in m.arms() {
         let (pat, prelude, synth_guard) = emit_arm_head(ctx, &arm.pat, &mode)?;
+        // Transition hot-swap (dev-gated): this is the PRODUCTION function-body
+        // match path, so the reduction of a data-describable TEA `update` arm to
+        // `apply_transition_hot("<baked datum>", model)` must fire here. Under the
+        // armed `hot_appearance` ctx an arm whose whole effect is one field change
+        // with `Cmd.none` reduces to that single compiled reader over the baked
+        // datum (dev == prod); every other arm returns `None` and stays compiled.
+        // The reduced body is a single-line tuple leaf, so it is not control-shaped
+        // (no synthesized braces). The same [`emit_transition_arm`] backs the
+        // string-path mirror in [`crate::emit_expr::emit_match`], keeping the SEAL
+        // exact. `None` falls through to the ordinary Doc body emit, byte-identical
+        // to the flag-off form.
+        let hot_arm = crate::emit_expr::emit_transition_arm(ctx, &arm.body)?;
         // The body is emitted at one indent step past the `match` (the arm indent),
         // exactly as the string emitter passes `indent + 1`.
-        let body_doc = build_doc(ctx, &arm.body, indent + 1, child, generics)?;
+        let body_doc = match &hot_arm {
+            Some(hot) => Doc::owned(hot.clone()),
+            None => build_doc(ctx, &arm.body, indent + 1, child, generics)?,
+        };
         let ir_guard = match &arm.guard {
             Some(g) => Some(emit_expr_at(ctx, g, indent + 1, child, generics)?),
             None => None,
@@ -2009,8 +2024,10 @@ fn build_match(
         let head = Doc::concat(vec![pat_doc, arrow]);
         let tail = if prelude.is_empty() {
             // Plain body: the arm-tail token applies the brace/comma rule by the
-            // body's head kind.
-            Doc::match_arm_tail(body_doc, arm_body_is_control(&arm.body))
+            // body's head kind. A hot-swap reduction is a single-line tuple leaf,
+            // never control-shaped, so no braces are synthesized for it.
+            let control = hot_arm.is_none() && arm_body_is_control(&arm.body);
+            Doc::match_arm_tail(body_doc, control)
         } else {
             // Prelude present: the string emitter wraps `{{ prelude body }}`. Keep
             // that block — each prelude statement and the body on their own

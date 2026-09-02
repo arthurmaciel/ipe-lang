@@ -427,27 +427,28 @@ mod tests {
 
     // ── the LOWERED shape the backend actually sees ───────────────────────
     //
-    // The lowerer hoists a record-update's RHS into a temporary: the surface
-    // `Increment -> ({ m | count = count + 1 }, Cmd.none)` reaches the backend as
-    // `( let __upd = count + 1 in { m | count = __upd }, Cmd.none )`. The
-    // classifier must peel the `let` and resolve `__upd` back to `count + 1`.
+    // `ipe_lower::lower_update` lowers `{ m | count = count + 1 }` to a DIRECT
+    // `Expr::Update` whose one field's RHS is the lowered `count + 1` in place —
+    // it does NOT hoist the RHS into a `let __upd = …` temporary. So the arm body
+    // of `Increment -> ({ m | count = count + 1 }, Cmd.none)` reaches this
+    // classifier as `( { m | count = <BinOp IntAdd (m.count) 1> }, Cmd.none )`,
+    // the field RHS a direct `BinOp`. This fixture is that exact shape, built the
+    // way the lowerer builds it, so the classifier test and the emit path agree by
+    // construction — a fabricated let-hoisted shape (which the backend never emits)
+    // previously masked the real match arm never being rewritten.
     #[test]
-    fn lowered_let_hoisted_increment_classifies() {
-        let upd = Symbol::from_raw(200);
+    fn lowered_direct_update_increment_classifies() {
+        // Mirror `ipe_lower::lower_update`: a direct `Expr::Update` with the field
+        // RHS lowered in place, no `let` temporary.
         let inc = Expr::BinOp {
             op: BinOp::IntAdd,
             lhs: Box::new(model_access(count_sym())),
             rhs: Box::new(Expr::Int(1)),
         };
-        let update = Expr::Update {
-            record: Box::new(Expr::Var(model_sym())),
-            fields: vec![(count_sym(), Expr::Var(upd))],
-        };
         let body = Expr::Tuple(vec![
-            Expr::Let {
-                name: upd,
-                value: Box::new(inc),
-                body: Box::new(update),
+            Expr::Update {
+                record: Box::new(Expr::Var(model_sym())),
+                fields: vec![(count_sym(), inc)],
             },
             cmd_none(),
         ]);
@@ -458,7 +459,7 @@ mod tests {
                 op: CompileOp::IntAdd,
                 source: CompileSource::Int(1),
             }),
-            "the lowered let-hoisted arm must classify identically to the surface shape"
+            "the direct lowered update arm the backend emits must classify"
         );
     }
 

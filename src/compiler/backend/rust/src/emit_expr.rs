@@ -6209,14 +6209,15 @@ fn emit_match(
     let mut arms = Vec::with_capacity(m.arms().len());
     for arm in m.arms() {
         let (pat, prelude, synth_guard) = emit_arm_head(ctx, &arm.pat, &mode)?;
-        // Transition hot-swap (dev-gated): when emitting a TEA `update` body, an
+        // Transition hot-swap (dev-gated) — the string-path mirror of the
+        // production reduction in [`crate::emit_doc::build_match`]. A TEA `update`
         // arm whose whole effect is one data-describable field change with
         // `Cmd.none` reduces to a call into the transition table read by the ONE
-        // compiled `apply_transition_hot` over the baked datum. Prod holds only
-        // the baked datum, so the arm runs exactly what a direct compiled arm
-        // would (dev == prod); in dev an edit ships a replacement datum over the
-        // live socket. `None` (flag off, not an update body, or a non-describable
-        // arm) falls through to the ordinary arm-body emit below, byte-identical.
+        // compiled `apply_transition_hot` over the baked datum. Both paths call
+        // the same [`emit_transition_arm`], so their token sequences agree and the
+        // SEAL stays exact. `None` (flag off, not an update body, or a
+        // non-describable arm) falls through to the ordinary arm-body emit below,
+        // byte-identical.
         let body = match emit_transition_arm(ctx, &arm.body)? {
             Some(hot) => hot,
             None => emit_expr_at(ctx, &arm.body, indent + 1, child, generics)?,
@@ -6261,7 +6262,12 @@ fn emit_match(
 /// The classifier is conservative: only the four faithful shapes classify; every
 /// other arm returns `None` and stays compiled. Fail-closed by construction — a
 /// false `None` is merely a recompile, never a wrong result.
-fn emit_transition_arm(ctx: &EmitCtx, body: &Expr) -> DResult<Option<String>> {
+///
+/// Shared with [`crate::emit_doc::build_match`], the production function-body
+/// match emitter: the same reduction fires whether a body is rendered through the
+/// Doc path (production) or the string path (the SEAL / byte-golden oracle), so
+/// both carry the identical token sequence and the SEAL stays exact.
+pub(crate) fn emit_transition_arm(ctx: &EmitCtx, body: &Expr) -> DResult<Option<String>> {
     let Some(model_param) = ctx.transition_model_param() else {
         return Ok(None);
     };
