@@ -89,6 +89,11 @@ pub enum Check {
     Semver,
     /// 1d — `cargo-deny` + content-hash integrity over the dependency graph.
     SupplyChain,
+    /// 1e — reserved-namespace ownership: a package whose module set claims a
+    /// reserved prefix (`Ipe.*`, `Rust.*`) is refused unless it is the blessed
+    /// first-party publisher's, so a third party cannot squat the trusted stdlib
+    /// namespace.
+    ReservedNamespace,
     /// Tier-2 — differential-confinement enforcement of a native package's
     /// declared capability set against what its built+exercised native code
     /// actually demands.
@@ -104,6 +109,7 @@ impl Check {
             Self::Capability => "capability consistency",
             Self::Semver => "enforced semver",
             Self::SupplyChain => "supply chain",
+            Self::ReservedNamespace => "reserved-namespace ownership",
             Self::NativeTier2 => "native Tier-2 capability enforcement",
         }
     }
@@ -215,7 +221,7 @@ fn tier2_probe_fixture() -> Result<PathBuf, CliError> {
 /// package cannot be built or read; [`CliError::PackageAudit`] when a Tier-1
 /// check rejects the package (the gate's hard reject).
 pub fn run_audit(rest: &[String]) -> Result<(), CliError> {
-    let (path, index_root, format) = parse_audit_args(rest)?;
+    let (path, index_root, publisher, format) = parse_audit_args(rest)?;
     let prepared = prepare(&path)?;
     let name = prepared.manifest.name.clone();
     let version = prepared
@@ -224,7 +230,7 @@ pub fn run_audit(rest: &[String]) -> Result<(), CliError> {
         .as_ref()
         .map_or_else(|| "(unversioned)".to_owned(), ToString::to_string);
 
-    let outcome = audit_gate(&prepared, index_root.as_deref());
+    let outcome = audit_gate(&prepared, index_root.as_deref(), publisher.as_deref());
 
     match format {
         OutputFormat::Json => emit_audit_json(&name, &version, &outcome),
@@ -249,17 +255,26 @@ pub fn run_audit(rest: &[String]) -> Result<(), CliError> {
 /// Run the full Tier-1 gate, then Tier-2 for native-bearing packages, returning
 /// the first rejection or the Tier-2 outcome on a clean pass.
 ///
-/// The checks run Security-first: the provenance scan (an authored abrupt-failure
+/// The checks run Security-first: the reserved-namespace ownership check (a
+/// third party squatting the trusted `Ipe.*` stdlib namespace is a trust-boundary
+/// breach) runs first, then the provenance scan (an authored abrupt-failure
 /// construct in author Rust is a soundness hole in the SHIPPED artifact) and the
-/// capability honesty check run before the semver and supply-chain checks; the
+/// capability honesty check, before the semver and supply-chain checks; the
 /// FIRST rejection is the verdict. A pure Ipê package skips Tier-2 (Tier-1 already
 /// gated it exactly); a native package builds and exercises its native code under
 /// a declared-scoped jail and reconciles observed-vs-declared, fail-closed
 /// (ADR 0046).
+///
+/// `entry_publisher` is the index entry's publisher when the registry admission
+/// gate runs this (the blessed first-party publisher legitimately owns the
+/// reserved namespace); `None` for a plain `ipe package audit` with no index
+/// provenance, where any reserved-namespace module is rejected fail-closed.
 fn audit_gate(
     prepared: &Prepared,
     index_root: Option<&Path>,
+    entry_publisher: Option<&str>,
 ) -> Result<crate::audit_native::Tier2Outcome, CliError> {
+    reserved_namespace_ownership(prepared, entry_publisher)?;
     provenance_panic_scan(prepared)?;
     capability_consistency(prepared)?;
     enforced_semver(prepared, index_root)?;
@@ -361,9 +376,12 @@ fn passing_summary(name: &str, version: &str, tier2: &crate::audit_native::Tier2
 /// # Errors
 /// [`CliError::UsageOwned`] on an unknown flag, a missing `--index` value, a
 /// second positional, or `--plain --json` together.
-fn parse_audit_args(rest: &[String]) -> Result<(PathBuf, Option<PathBuf>, OutputFormat), CliError> {
+fn parse_audit_args(
+    rest: &[String],
+) -> Result<(PathBuf, Option<PathBuf>, Option<String>, OutputFormat), CliError> {
     let mut path: Option<PathBuf> = None;
     let mut index: Option<PathBuf> = None;
+    let mut publisher: Option<String> = None;
     let mut format: Option<OutputFormat> = None;
     let mut it = rest.iter();
     while let Some(arg) = it.next() {
@@ -378,6 +396,17 @@ fn parse_audit_args(rest: &[String]) -> Result<(PathBuf, Option<PathBuf>, Output
                     ));
                 }
                 index = Some(PathBuf::from(value));
+            }
+            "--publisher" => {
+                let value = it.next().ok_or(CliError::Usage(
+                    "ipe package audit: --publisher needs a value",
+                ))?;
+                if publisher.is_some() {
+                    return Err(CliError::Usage(
+                        "ipe package audit: --publisher given more than once",
+                    ));
+                }
+                publisher = Some(value.clone());
             }
             "--plain" => set_format(&mut format, OutputFormat::Plain)?,
             "--json" => set_format(&mut format, OutputFormat::Json)?,
@@ -397,6 +426,7 @@ fn parse_audit_args(rest: &[String]) -> Result<(PathBuf, Option<PathBuf>, Output
     Ok((
         path.unwrap_or_else(|| PathBuf::from(".")),
         index,
+        publisher,
         format.unwrap_or_default(),
     ))
 }
@@ -1151,6 +1181,78 @@ fn derive_deny_config(emitted_dir: &Path) -> Result<Option<PathBuf>, CliError> {
     Ok(Some(derived))
 }
 
+/// Refuse a package whose own module set claims a reserved namespace (`Ipe.*`,
+/// `Rust.*` — the closed [`ipe_kernels::RESERVED_MODULE_PREFIXES`] set) unless it
+/// is published by the blessed first-party identity.
+///
+/// The trusted `Ipe.*` namespace is the bundled, reviewed stdlib; a third-party
+/// package providing an `Ipe.*` module could masquerade as first-party or shadow
+/// a stdlib module a consumer trusts. The module set is read from the package's
+/// own source tree (`src/`), not from the package NAME — a package named `foo`
+/// that declares `module Ipe.Evil` is what this catches.
+///
+/// `entry_publisher` is the index entry's publisher when the registry admission
+/// gate runs this (`Some`), and `None` for a plain `ipe package audit` with no
+/// index provenance. Fail-closed default-deny: a reserved-namespace module is
+/// rejected whenever the publisher is absent or is anyone but the blessed
+/// first-party identity. The reject NAMES the package and the offending module.
+///
+/// # Errors
+/// [`CliError::PackageAudit`] with [`Check::ReservedNamespace`] when a
+/// non-blessed package provides a reserved-namespace module; [`CliError::Io`] /
+/// [`CliError::DiscoveryLimitReached`] if the source tree cannot be walked.
+fn reserved_namespace_ownership(
+    prepared: &Prepared,
+    entry_publisher: Option<&str>,
+) -> Result<(), CliError> {
+    let modules = crate::project::discover_modules(&prepared.manifest.src_root)?;
+    let module_paths: Vec<&[String]> = modules.iter().map(|m| m.module_path.as_slice()).collect();
+    reserved_namespace_verdict(&prepared.manifest.name, &module_paths, entry_publisher)
+}
+
+/// The pure core of [`reserved_namespace_ownership`]: over an already-discovered
+/// module set, refuse a reserved-namespace module unless the publisher is the
+/// blessed first-party identity.
+///
+/// Fail-closed default-deny: the blessed exemption applies ONLY when
+/// `entry_publisher` is `Some(blessed)`. An absent publisher (a plain local
+/// audit) or any other publisher rejects on the first reserved-namespace module,
+/// naming the package and the offending module.
+///
+/// # Errors
+/// [`CliError::PackageAudit`] with [`Check::ReservedNamespace`] when a
+/// non-blessed package provides a reserved-namespace module.
+fn reserved_namespace_verdict(
+    package_name: &str,
+    module_paths: &[&[String]],
+    entry_publisher: Option<&str>,
+) -> Result<(), CliError> {
+    if entry_publisher.is_some_and(ipe_kernels::is_blessed_publisher) {
+        // The blessed first-party publisher legitimately owns the reserved
+        // namespace; nothing to refuse.
+        return Ok(());
+    }
+    for module_path in module_paths {
+        if let Some(prefix) = ipe_kernels::reserved_prefix_of(module_path) {
+            let dotted = module_path.join(".");
+            let who = entry_publisher.map_or_else(
+                || "with no first-party provenance".to_owned(),
+                |p| format!("published by `{p}`"),
+            );
+            return Err(reject(
+                Check::ReservedNamespace,
+                format!(
+                    "package `{package_name}` ({who}) provides module `{dotted}`, which claims the \
+                     reserved `{prefix}.*` namespace. `{prefix}.*` is owned by the first-party \
+                     publisher `{}`; a third-party package must not declare a module there.",
+                    ipe_kernels::BLESSED_PUBLISHER,
+                ),
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// Build a [`CliError::PackageAudit`] for `check` carrying `message`.
 const fn reject(check: Check, message: String) -> CliError {
     CliError::PackageAudit(Rejection { check, message })
@@ -1166,12 +1268,86 @@ mod tests {
 
     #[test]
     fn audit_parses_output_format_flags() {
-        let (_, _, fmt) = parse_audit_args(&args(&["--json"])).expect("json");
+        let (_, _, _, fmt) = parse_audit_args(&args(&["--json"])).expect("json");
         assert_eq!(fmt, OutputFormat::Json);
-        let (_, _, fmt) = parse_audit_args(&args(&["--plain"])).expect("plain");
+        let (_, _, _, fmt) = parse_audit_args(&args(&["--plain"])).expect("plain");
         assert_eq!(fmt, OutputFormat::Plain);
-        let (_, _, fmt) = parse_audit_args(&args(&[])).expect("default");
+        let (_, _, _, fmt) = parse_audit_args(&args(&[])).expect("default");
         assert_eq!(fmt, OutputFormat::Human);
+    }
+
+    #[test]
+    fn audit_parses_publisher_flag() {
+        let (_, _, publisher, _) =
+            parse_audit_args(&args(&["--publisher", "arthurmaciel"])).expect("publisher");
+        assert_eq!(publisher.as_deref(), Some("arthurmaciel"));
+        // Absent by default.
+        let (_, _, publisher, _) = parse_audit_args(&args(&[])).expect("default");
+        assert_eq!(publisher, None);
+        // A value is required, and it may not be given twice.
+        assert!(parse_audit_args(&args(&["--publisher"])).is_err());
+        assert!(parse_audit_args(&args(&["--publisher", "a", "--publisher", "b"])).is_err());
+    }
+
+    #[test]
+    fn reserved_namespace_rejects_third_party_ipe_module() {
+        // A package (whatever its own name) whose source provides `Ipe.Evil`,
+        // published by a non-blessed account, is refused fail-closed.
+        let ipe_evil: &[String] = &["Ipe".to_owned(), "Evil".to_owned()];
+        let err = reserved_namespace_verdict("totally-legit", &[ipe_evil], Some("attacker"))
+            .expect_err("third-party Ipe.Evil must be rejected");
+        assert!(
+            matches!(
+                &err,
+                CliError::PackageAudit(Rejection {
+                    check: Check::ReservedNamespace,
+                    ..
+                })
+            ),
+            "expected a ReservedNamespace reject, got {err:?}"
+        );
+        // The reject names the package and the offending module.
+        let message = err.to_string();
+        assert!(message.contains("totally-legit"), "message: {message}");
+        assert!(message.contains("Ipe.Evil"), "message: {message}");
+    }
+
+    #[test]
+    fn reserved_namespace_rejects_absent_publisher() {
+        // A plain local audit (no index provenance) refuses a reserved-namespace
+        // module: the blessed exemption needs an explicit blessed publisher.
+        let ipe_mod: &[String] = &["Ipe".to_owned(), "String".to_owned()];
+        let err = reserved_namespace_verdict("squatter", &[ipe_mod], None)
+            .expect_err("no-provenance Ipe.* must be rejected");
+        assert!(matches!(
+            err,
+            CliError::PackageAudit(Rejection {
+                check: Check::ReservedNamespace,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn reserved_namespace_accepts_blessed_publisher() {
+        // The blessed first-party publisher legitimately owns `Ipe.*`.
+        let ipe_mod: &[String] = &["Ipe".to_owned(), "Palette".to_owned()];
+        assert!(
+            reserved_namespace_verdict(
+                "ipe-stdlib",
+                &[ipe_mod],
+                Some(ipe_kernels::BLESSED_PUBLISHER)
+            )
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn reserved_namespace_accepts_non_reserved_module_from_any_publisher() {
+        // A package in an ordinary namespace is fine from any publisher.
+        let app_mod: &[String] = &["App".to_owned(), "View".to_owned()];
+        assert!(reserved_namespace_verdict("cool-lib", &[app_mod], Some("anyone")).is_ok());
+        assert!(reserved_namespace_verdict("cool-lib", &[app_mod], None).is_ok());
     }
 
     #[test]

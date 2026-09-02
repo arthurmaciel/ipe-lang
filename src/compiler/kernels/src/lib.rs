@@ -20,6 +20,12 @@ pub use capability::{Capability, ElementCapability, UnknownCapability, WebCapabi
 pub mod css_value_safety;
 pub use css_value_safety::css_value_is_safe;
 
+pub mod reserved_namespace;
+pub use reserved_namespace::{
+    BLESSED_PUBLISHER, RESERVED_MODULE_PREFIXES, is_blessed_publisher, is_reserved_module_path,
+    reserved_prefix_of,
+};
+
 /// Classification of a kernel variant by which compiler / runtime subsystem
 /// owns its emission.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]
@@ -12236,6 +12242,13 @@ impl StdlibKernel {
             // onMessage/onClose/onError receive surface) routes through
             // `ws_client.rs`'s wasm32 arm — `web_sys::WebSocket`'s
             // `onopen`/`onmessage`/`onclose`/`onerror` handler slots.
+            // `JsSend`/`JsSubscribe` (the typed `Ipe.Js` port) route through
+            // `js_port.rs`'s wasm32 arm: outbound `Js.send` posts the sealed
+            // frame to `window.ipeOnReceive`, inbound `Js.subscribe` drains the
+            // in-tab queue the page's `window.ipe.send` feeds — the SAME bounded,
+            // fail-closed seal decoder the native port uses. The concrete-ADT
+            // seal (IPE-N0039) that governs every value crossing the port is
+            // unchanged; this only gives the existing typed port a client sink.
             KernelClass::Tea => matches!(
                 self,
                 Self::CmdNone
@@ -12252,6 +12265,8 @@ impl StdlibKernel {
                     | Self::CmdPublishNoEcho
                     | Self::SubSubscribeTopic
                     | Self::SubSubscribeWebSocket
+                    | Self::JsSend
+                    | Self::JsSubscribe
             ),
             KernelClass::Pure => {
                 // `StringToUpperIn` / `StringToLowerIn` require ICU4X
