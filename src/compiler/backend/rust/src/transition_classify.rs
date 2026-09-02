@@ -174,7 +174,44 @@ pub fn transition_of_arm(
     if !is_cmd_none(cmd_expr) {
         return None;
     }
-    single_field_update(model_expr, model_param, resolve)
+
+    // The Model result may be a chain of pure `let` bindings ending in the record
+    // update — the lowerer hoists a record-update's RHS into a temporary, so
+    // `{ m | f = f + 1 }` reaches the backend as `let __upd = f + 1 in
+    // { m | f = __upd }`. Peel those leading `let`s into a substitution
+    // environment so a later `Var(__upd)` read resolves back to its value; this
+    // makes the classifier robust to the LOWERED shape the backend actually sees,
+    // not just the surface syntax.
+    let mut env: Vec<(Symbol, &Expr)> = Vec::new();
+    let mut cursor = model_expr;
+    while let Expr::Let { name, value, body } = cursor {
+        env.push((*name, value.as_ref()));
+        cursor = body.as_ref();
+    }
+
+    single_field_update(cursor, model_param, resolve, &env)
+}
+
+/// Resolve `expr` through the peeled-`let` substitution environment: a bare
+/// `Var`/`CloneVar` bound in `env` is replaced by its bound value, transitively
+/// (a temporary bound to another temporary). Any non-variable expression is
+/// itself. Total and terminating — the environment is a finite list built from a
+/// straight-line `let` chain, so following bindings cannot cycle.
+fn deref_subst<'e>(expr: &'e Expr, env: &[(Symbol, &'e Expr)]) -> &'e Expr {
+    let mut current = expr;
+    // Bounded by the environment length: each hop consumes one binding, and a
+    // lowered `let` chain never rebinds a name, so this cannot loop.
+    for _ in 0..=env.len() {
+        let sym = match current {
+            Expr::Var(s) | Expr::CloneVar(s) => *s,
+            _ => return current,
+        };
+        match env.iter().find(|(name, _)| *name == sym) {
+            Some((_, value)) => current = value,
+            None => return current,
+        }
+    }
+    current
 }
 
 /// Whether `expr` is exactly `Cmd.none` — the nullary `CmdNone` kernel call. Any
@@ -196,13 +233,15 @@ fn single_field_update(
     expr: &Expr,
     model_param: Symbol,
     resolve: &impl Fn(Symbol) -> Option<String>,
+    env: &[(Symbol, &Expr)],
 ) -> Option<CompileTransition> {
     let Expr::Update { record, fields } = expr else {
         return None;
     };
     // The updated record must be the Model parameter itself — `{ m | … }`, never
-    // `{ someOther | … }` (which would not be the arm's Model result).
-    if !is_var(record, model_param) {
+    // `{ someOther | … }` (which would not be the arm's Model result). Deref
+    // through the peeled-`let` environment in case the record is a temporary.
+    if !is_var(deref_subst(record, env), model_param) {
         return None;
     }
     // Exactly one field changes. A multi-field update is not a single
@@ -211,7 +250,11 @@ fn single_field_update(
         return None;
     };
     let field = resolve(*field_sym)?;
-    let (op, source) = classify_rhs(rhs, &field, model_param, resolve)?;
+    // Resolve the field RHS through the peeled-`let` environment: the lowerer
+    // hoists `count + 1` into a temporary, so the update's RHS is a `Var` that
+    // dereferences to the actual `BinOp` / literal.
+    let rhs = deref_subst(rhs, env);
+    let (op, source) = classify_rhs(rhs, &field, model_param, resolve, env)?;
     Some(CompileTransition { field, op, source })
 }
 
@@ -233,6 +276,7 @@ fn classify_rhs(
     target_field: &str,
     model_param: Symbol,
     resolve: &impl Fn(Symbol) -> Option<String>,
+    env: &[(Symbol, &Expr)],
 ) -> Option<(CompileOp, CompileSource)> {
     match rhs {
         // A bare literal set.
@@ -242,25 +286,27 @@ fn classify_rhs(
         // A set from another Model field: `{ m | a = b }` (b a field read on the
         // Model). The read must be `model.field`; anything else refuses.
         Expr::Access { .. } => {
-            let name = field_read(rhs, model_param, resolve)?;
+            let name = field_read(rhs, model_param, resolve, env)?;
             Some((CompileOp::Set, CompileSource::Field(name)))
         }
         // `field + lit` / `field - lit` — the LHS must read the SAME field being
         // assigned (`count = count + 1`), the RHS an int literal. A cross-field
         // arithmetic (`count = other + 1`) or a non-literal RHS refuses: the
         // runtime `IntAdd`/`IntSub` reads the target field as its accumulator, so
-        // only a same-field self-increment is faithful to it.
+        // only a same-field self-increment is faithful to it. Both operands are
+        // dereferenced through the peeled-`let` environment first, since the
+        // lowerer may bind them to temporaries.
         Expr::BinOp { op, lhs, rhs: rhs2 } => {
             let compile_op = match op {
                 BinOp::IntAdd => CompileOp::IntAdd,
                 BinOp::IntSub => CompileOp::IntSub,
                 _ => return None,
             };
-            let lhs_field = field_read(lhs, model_param, resolve)?;
+            let lhs_field = field_read(deref_subst(lhs, env), model_param, resolve, env)?;
             if lhs_field != target_field {
                 return None;
             }
-            let Expr::Int(n) = rhs2.as_ref() else {
+            let Expr::Int(n) = deref_subst(rhs2, env) else {
                 return None;
             };
             Some((compile_op, CompileSource::Int(*n)))
@@ -276,7 +322,7 @@ fn classify_rhs(
             let [arg] = args.as_slice() else {
                 return None;
             };
-            let arg_field = field_read(arg, model_param, resolve)?;
+            let arg_field = field_read(deref_subst(arg, env), model_param, resolve, env)?;
             if arg_field != target_field {
                 return None;
             }
@@ -290,16 +336,19 @@ fn classify_rhs(
 }
 
 /// If `expr` is a read of a field on the `Model` parameter (`model.field`),
-/// return that field's serde key; else `None`.
+/// return that field's serde key; else `None`. The record sub-expression is
+/// dereferenced through the peeled-`let` environment, so a `model` bound to a
+/// temporary still resolves.
 fn field_read(
     expr: &Expr,
     model_param: Symbol,
     resolve: &impl Fn(Symbol) -> Option<String>,
+    env: &[(Symbol, &Expr)],
 ) -> Option<String> {
     let Expr::Access { record, field, .. } = expr else {
         return None;
     };
-    if !is_var(record, model_param) {
+    if !is_var(deref_subst(record, env), model_param) {
         return None;
     }
     resolve(*field)
@@ -374,6 +423,44 @@ mod tests {
 
     fn classify(body: &Expr) -> Option<CompileTransition> {
         transition_of_arm(body, model_sym(), &resolver)
+    }
+
+    // ── the LOWERED shape the backend actually sees ───────────────────────
+    //
+    // `ipe_lower::lower_update` lowers `{ m | count = count + 1 }` to a DIRECT
+    // `Expr::Update` whose one field's RHS is the lowered `count + 1` in place —
+    // it does NOT hoist the RHS into a `let __upd = …` temporary. So the arm body
+    // of `Increment -> ({ m | count = count + 1 }, Cmd.none)` reaches this
+    // classifier as `( { m | count = <BinOp IntAdd (m.count) 1> }, Cmd.none )`,
+    // the field RHS a direct `BinOp`. This fixture is that exact shape, built the
+    // way the lowerer builds it, so the classifier test and the emit path agree by
+    // construction — a fabricated let-hoisted shape (which the backend never emits)
+    // previously masked the real match arm never being rewritten.
+    #[test]
+    fn lowered_direct_update_increment_classifies() {
+        // Mirror `ipe_lower::lower_update`: a direct `Expr::Update` with the field
+        // RHS lowered in place, no `let` temporary.
+        let inc = Expr::BinOp {
+            op: BinOp::IntAdd,
+            lhs: Box::new(model_access(count_sym())),
+            rhs: Box::new(Expr::Int(1)),
+        };
+        let body = Expr::Tuple(vec![
+            Expr::Update {
+                record: Box::new(Expr::Var(model_sym())),
+                fields: vec![(count_sym(), inc)],
+            },
+            cmd_none(),
+        ]);
+        assert_eq!(
+            classify(&body),
+            Some(CompileTransition {
+                field: "count".to_owned(),
+                op: CompileOp::IntAdd,
+                source: CompileSource::Int(1),
+            }),
+            "the direct lowered update arm the backend emits must classify"
+        );
     }
 
     // ── acceptance: the four data-describable shapes ──────────────────────

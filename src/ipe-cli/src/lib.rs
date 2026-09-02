@@ -35,9 +35,11 @@ pub mod hot_classify;
 pub mod index;
 pub mod init;
 pub mod io_bounded;
+pub mod lint;
 pub mod lockfile;
 pub mod login;
 mod lsp;
+pub mod migrate;
 pub mod net;
 pub mod package_manifest;
 pub mod pkg;
@@ -314,6 +316,12 @@ pub enum CliError {
     /// never shows the `health` command's `--help` page. Carries nothing: the
     /// report is the message; this variant is only the exit-code signal.
     HealthCritical,
+    /// `ipe lint` found one or more findings at or above the configured gate
+    /// severity. This is a legitimate gate verdict — the linter ran correctly and
+    /// already printed every finding to stdout — not a command-line misuse, so it
+    /// exits non-zero after the report and never shows the `lint` command's
+    /// `--help` page. Carries nothing: the printed findings are the message.
+    LintGateFailed,
     /// `ipe eject` was asked to eject a program it cannot make self-contained.
     /// Eject vendors ONLY the embedded runtime source; a program that binds a
     /// foreign Rust crate (FFI) would need those external crates pulled from a
@@ -535,6 +543,13 @@ impl std::fmt::Display for CliError {
                 style::GUTTER
             ),
             Self::EjectUnsupported { reason } => write!(f, "{}eject: {reason}", style::GUTTER),
+            // The findings already went to stdout; this stderr line is the
+            // one-line verdict paired with the non-zero gate exit.
+            Self::LintGateFailed => write!(
+                f,
+                "{}lint: findings remain at or above the gate severity (see above)",
+                style::GUTTER
+            ),
             // Both already wrote their final output; nothing more to display.
             Self::DiagnosticJsonEmitted | Self::UpgradeCheckExit { .. } => Ok(()),
             Self::UpgradeFeedUnreachable => write!(
@@ -3118,7 +3133,7 @@ fn with_help_on_misuse(
 /// 3. A bare `./ipe.toml` with no `package.ipe` — a clear migration error, so
 ///    the legacy manifest never silently governs a build.
 /// 4. Neither — usage error: nothing to build here.
-fn default_entry() -> Result<String, CliError> {
+pub(crate) fn default_entry() -> Result<String, CliError> {
     if std::path::Path::new(package_manifest::PACKAGE_IPE).exists() {
         return Ok(".".to_owned());
     }
@@ -7073,7 +7088,7 @@ pub(crate) fn read_yes_no_default(default: bool) -> bool {
 /// retry recovers from that transient case; a genuinely permanent failure
 /// (permissions, a disallowed ancestor) still surfaces as an error after the
 /// retry.
-fn write_atomic(target: &Path, contents: &str) -> Result<(), CliError> {
+pub(crate) fn write_atomic(target: &Path, contents: &str) -> Result<(), CliError> {
     let dir = target.parent().filter(|p| !p.as_os_str().is_empty());
     let name = target.file_name().map_or_else(
         || String::from("source.ipe"),
@@ -7735,7 +7750,7 @@ mod tests {
         let manifest = tmp.join("package.ipe");
         fs::write(
             &manifest,
-            "module Package exposing (package)\n\n\npackage =\n    Package.named \"test\"\n",
+            "module Package exposing (package)\n\n\npackage =\n    { name = \"test\" }\n",
         )
         .expect("write package.ipe");
         let main_ipe = src.join("Main.ipe");
@@ -8922,7 +8937,7 @@ pub mod web {
         // with no `IPE_TARGET` env set — the tier the env-only check missed.
         fs::write(
             tmp.join("package.ipe"),
-            "module Package exposing (package)\n\n\npackage =\n    Package.named \"w\"\n        |> Package.wasm (Wasm.spa)\n",
+            "module Package exposing (package)\n\n\npackage =\n    { name = \"w\", wasm = On { mode = Spa } }\n",
         )
         .expect("write package.ipe");
         fs::write(
@@ -8958,7 +8973,7 @@ pub mod web {
         fs::create_dir_all(&app_src).expect("create src/");
         fs::write(
             app.join("package.ipe"),
-            "module Package exposing (package)\n\n\npackage =\n    Package.named \"app\"\n",
+            "module Package exposing (package)\n\n\npackage =\n    { name = \"app\" }\n",
         )
         .expect("pkg");
         fs::write(
@@ -8975,7 +8990,7 @@ pub mod web {
         let _ = fs::remove_dir_all(&lib);
         let lib_src = lib.join("src");
         fs::create_dir_all(&lib_src).expect("create src/");
-        fs::write(lib.join("package.ipe"), "module Package exposing (package)\n\n\npackage =\n    Package.named \"lib\"\n        |> Package.exposedModules [ \"Core.Utils\" ]\n").expect("pkg");
+        fs::write(lib.join("package.ipe"), "module Package exposing (package)\n\n\npackage =\n    { name = \"lib\", exposedModules = [ \"Core.Utils\" ] }\n").expect("pkg");
         // src/ must exist for the manifest reader's source-root check; the module
         // file itself need not exist for the pure path derivation under test.
         let lib_manifest = project::parse_manifest(&lib.join("package.ipe")).expect("lib parses");
@@ -8994,7 +9009,7 @@ pub mod web {
         fs::create_dir_all(&src).expect("create src/");
         fs::write(
             tmp.join("package.ipe"),
-            "module Package exposing (package)\n\n\npackage =\n    Package.named \"lib\"\n        |> Package.exposedModules [ \"Core\" ]\n",
+            "module Package exposing (package)\n\n\npackage =\n    { name = \"lib\", exposedModules = [ \"Core\" ] }\n",
         )
         .expect("pkg");
         fs::write(src.join("Core.ipe"), "module Core exposing (x)\nx = 0\n").expect("core");
@@ -9341,7 +9356,7 @@ pub mod web {
         let manifest_path = dir.join("package.ipe");
         fs::write(
             &manifest_path,
-            "module Package exposing (package)\n\n\npackage =\n    Package.named \"test\"\n",
+            "module Package exposing (package)\n\n\npackage =\n    { name = \"test\" }\n",
         )
         .expect("write manifest");
 
@@ -9377,7 +9392,7 @@ pub mod web {
         let manifest_path = dir.join("package.ipe");
         fs::write(
             &manifest_path,
-            "module Package exposing (package)\n\n\npackage =\n    Package.named \"test\"\n",
+            "module Package exposing (package)\n\n\npackage =\n    { name = \"test\" }\n",
         )
         .expect("write manifest");
 

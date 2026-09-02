@@ -326,11 +326,30 @@ const COMMANDS: &[Command] = &[
         ],
     },
     Command {
+        name: "lint",
+        run: crate::lint::run_lint,
+        summary: "Run extensible static analysis over Ipê source (idiom, consistency, safety-by-convention).",
+        args: "[<path>]",
+        args_desc: "A source file or a project directory to lint. Defaults to the current project.",
+        options: &[Opt {
+            flag: "[--fix]",
+            desc: "apply every machine-applicable (semantics-preserving) fix instead of only reporting",
+        }],
+    },
+    Command {
         name: "clean",
         run: crate::clean::run_clean,
         summary: "Remove the project's build-generated output (out/, target/, .ipe/).",
         args: "",
         args_desc: "",
+        options: &[],
+    },
+    Command {
+        name: "migrate",
+        run: crate::migrate::run_migrate,
+        summary: "Convert an interim manifest to the package.ipe record form.",
+        args: "config",
+        args_desc: "The migration to run. `config` rewrites the interim manifest (a `Package.named |>` package.ipe, or a legacy ipe.toml) as the record form.",
         options: &[],
     },
     Command {
@@ -595,7 +614,7 @@ const SECTIONS: &[Section] = &[
     },
     Section {
         title: "Quality",
-        commands: &["type-check", "test", "verify"],
+        commands: &["type-check", "lint", "test", "verify"],
     },
     Section {
         title: "Using external packages",
@@ -616,6 +635,7 @@ const SECTIONS: &[Section] = &[
             "fmt",
             "lsp",
             "clean",
+            "migrate",
             "health",
             "capabilities",
             "diff",

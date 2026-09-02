@@ -347,6 +347,11 @@ fn scan_file_deps(path: &Path, supers_to_root: usize, deps: &mut BTreeSet<String
     //    until we have consumed at least one opening brace and the depth closes.
     let mut in_cfg_test_mod = false;
     let mut cfg_test_brace_depth: i32 = 0;
+    // `cfg_test_opened`: true once the `#[cfg(test)]` block's first `{` has been
+    // seen. Until then, stacked attributes (`#[cfg(any(feature = …))]`) and
+    // doc-comments before the `mod tests {` header keep the depth at 0 — the
+    // block must NOT be considered closed during that pre-brace window.
+    let mut cfg_test_opened = false;
     let mut cfg_gated_depth: i32 = 0;
     // `cfg_item_pending`: true after a `#[cfg(…)]` attr and until the cfg-gated
     // item's block closes (or a `;`-terminated single-line item is consumed).
@@ -360,7 +365,15 @@ fn scan_file_deps(path: &Path, supers_to_root: usize, deps: &mut BTreeSet<String
         // ── region 1: inside a `#[cfg(test)]` block ──────────────────────────
         if in_cfg_test_mod {
             cfg_test_brace_depth += unquoted_brace_delta(t);
-            if cfg_test_brace_depth <= 0 {
+            if cfg_test_brace_depth > 0 {
+                // The `mod tests {` header (possibly after stacked attributes)
+                // has been reached; the block is now genuinely open.
+                cfg_test_opened = true;
+            }
+            // Only leave the test region once the block has actually opened AND
+            // its braces have balanced back to 0 — never during the pre-brace
+            // window where stacked attributes leave the depth at 0.
+            if cfg_test_opened && cfg_test_brace_depth <= 0 {
                 in_cfg_test_mod = false;
             }
             cfg_item_pending = false;
@@ -371,6 +384,7 @@ fn scan_file_deps(path: &Path, supers_to_root: usize, deps: &mut BTreeSet<String
         if t.starts_with("#[cfg(test)]") {
             in_cfg_test_mod = true;
             cfg_test_brace_depth = 0;
+            cfg_test_opened = false;
             cfg_item_pending = false;
             cfg_item_opened = false;
             continue;

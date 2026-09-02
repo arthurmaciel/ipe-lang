@@ -3754,43 +3754,102 @@ fn emit_html_template(ctx: &EmitCtx, expr: &Expr) -> Option<String> {
     ))
 }
 
-/// Emit a provably-static `Ipe.Ui` subtree as a hoisted template read, or `None`
+/// Emit a mostly-static `Ipe.Ui` subtree as a hoisted template read, or `None`
 /// to fall through to the ordinary inline emit — the `Ipe.Ui` analogue of
 /// [`emit_html_template`].
 ///
-/// Fires ONLY when every gate holds: a web shape (`uses_web`), the subtree is a
-/// static `Ipe.Ui` element node ([`crate::emit_ui_template::ui_template_of_expr`]),
-/// and hoisting is armed ([`EmitCtx::hoist_style_literal`] returns a slot — which
-/// it does not under the flag-off / production emit, nor inside a `move` closure
-/// or a discard probe). Under any of those the function returns `None` and the
-/// subtree emits inline, byte-for-byte as before — so release / `ipe build`
-/// output is unchanged (golden-verified) and dev == prod at the emit level (the
-/// baked default IS the serialized template).
+/// Fires ONLY when every gate holds: a web shape (`uses_web`), the subtree
+/// partitions ([`crate::emit_ui_template::ui_template_of_expr_holes`]), and
+/// hoisting is armed ([`EmitCtx::hoist_style_literal`] returns a slot — which it
+/// does not under the flag-off / production emit, nor inside a `move` closure or a
+/// discard probe). Under any of those the function returns `None` and the subtree
+/// emits inline, byte-for-byte as before — so release / `ipe build` output is
+/// unchanged (golden-verified) and dev == prod at the emit level (the baked
+/// default IS the serialized template).
+///
+/// ## Holes
+///
+/// A fully-static subtree emits the shipped `materialize_ui_template_str` read.
+/// A subtree with `Model`-derived **holes** (a value leaf, an `if` / `case`
+/// control-flow result, or a `List.map` comprehension) emits
+/// `materialize_ui_template_str_with_holes(slot, vec![<element fills>], vec![<children fills>])`:
+/// the static skeleton (with numbered hole markers) rides the hoisted slot and
+/// hot-swaps on a structural edit, while each hole's fill is emitted here as
+/// ordinary compiled code and stays compiled.
+///
+/// Control-flow branches templatize by composition: a fill is emitted through the
+/// normal [`emit_expr_at`], so a static `Ipe.Ui` branch of the compiled `if`/`case`
+/// hits THIS emitter recursively and hoists into its own slot — editing that
+/// branch's static structure is itself a template patch, while the condition stays
+/// compiled. The whole-template JSON (markers included) rides one baked-defaults
+/// string, so the appearance classifier needs no change: a skeleton edit moves
+/// only that string (hot-swap), and a change to the hole COUNT moves the compiled
+/// `vec![…]` (recompile) — conservative by construction.
 ///
 /// The materialized read returns an `Element<M>` (not `Html`), exactly what an
 /// inline `ui_node_(…)` yields, so it drops into the surrounding element position
 /// unchanged; `M` is inferred from that position.
-fn emit_ui_template(ctx: &EmitCtx, expr: &Expr) -> Option<String> {
+fn emit_ui_template(
+    ctx: &EmitCtx,
+    expr: &Expr,
+    indent: usize,
+    child: u16,
+    generics: GenericScope,
+) -> DResult<Option<String>> {
     if !ctx.uses_web {
-        return None;
+        return Ok(None);
     }
-    // Only a static `Ipe.Ui` ELEMENT node (`Ui.node` / `Ui.taggedNode`) is
-    // templated at the top level; a bare `Ui.text` leaf is already covered by
-    // the appearance-literal registry (`KernelFn::UiText`), so leaving it to
-    // that path keeps the leaf emit unchanged. A text/none/nested node inside a
-    // templated element is still absorbed into that element's template.
-    match expr {
-        Expr::Call {
-            callee: Callee::Kernel(KernelFn::UiNode | KernelFn::UiTaggedNode),
-            ..
-        } => {}
-        _ => return None,
+    // Accept a direct element-node kernel call (`Ui.node` / `Ui.taggedNode`),
+    // or a structural wrapper func whose id is registered in the wrapper table.
+    // A bare `Ui.text` leaf is already covered by the appearance-literal
+    // registry (`KernelFn::UiText`), so leaving it to that path keeps the leaf
+    // emit unchanged. A text/none/nested node inside a templated element is
+    // still absorbed into that element's template.
+    let Expr::Call { callee, .. } = expr else {
+        return Ok(None);
+    };
+    match callee {
+        Callee::Kernel(KernelFn::UiNode | KernelFn::UiTaggedNode) => {}
+        Callee::Func(id) if ctx.ui_structural_wrappers.contains_key(id) => {}
+        _ => return Ok(None),
     }
-    let template = crate::emit_ui_template::ui_template_of_expr(expr)?;
-    let slot = ctx.hoist_style_literal(&template.to_json())?;
-    Some(format!(
-        "ipe_runtime::ui::template::materialize_ui_template_str(__ipe_lit.get({slot}))"
-    ))
+    // The mostly-static partition: a fully-static subtree yields an empty hole
+    // set (the shipped path); a subtree with `Model`-derived value / control-flow
+    // / `List.map` holes yields hole markers plus the compiled fills. `None` keeps
+    // the subtree compiled (conservative).
+    let Some(partition) =
+        crate::emit_ui_template::ui_template_of_expr_holes(expr, Some(&ctx.ui_structural_wrappers))
+    else {
+        return Ok(None);
+    };
+    let Some(slot) = ctx.hoist_style_literal(&partition.template.to_json()) else {
+        return Ok(None);
+    };
+    // No holes: emit the shipped fully-static read — byte-identical to before, so
+    // existing goldens/SEALs are unperturbed for static subtrees.
+    if partition.holes.is_empty() {
+        return Ok(Some(format!(
+            "ipe_runtime::ui::template::materialize_ui_template_str(__ipe_lit.get({slot}))"
+        )));
+    }
+    // Holes present: compile each fill in the hole's element/children position and
+    // pass the two ordered fill vecs to the hole-aware materializer. The static
+    // skeleton rides the hoisted slot (hot-swappable); the fills stay compiled.
+    let mut element_fills: Vec<String> = Vec::new();
+    let mut children_fills: Vec<String> = Vec::new();
+    for hole in &partition.holes {
+        let code = emit_expr_at(ctx, &hole.expr, indent, child, generics)?;
+        match hole.kind {
+            crate::emit_ui_template::HoleKind::Element => element_fills.push(code),
+            crate::emit_ui_template::HoleKind::Children => children_fills.push(code),
+        }
+    }
+    Ok(Some(format!(
+        "ipe_runtime::ui::template::materialize_ui_template_str_with_holes(\
+         __ipe_lit.get({slot}), vec![{}], vec![{}])",
+        element_fills.join(", "),
+        children_fills.join(", "),
+    )))
 }
 
 /// Returns `None` for any kernel that is not a `Ui` / `Web` / `Terminal` /
@@ -5609,6 +5668,19 @@ pub fn emit_expr_at(
             pin,
             on_form,
         } => {
+            // Structural wrapper hot-swap for `Ipe.Ui`: a `Callee::Func` whose
+            // id is a registered structural wrapper (`row` / `column` / …) and
+            // whose arguments are all static literals is hoisted here, BEFORE the
+            // kernel-only dispatch block below. This runs only when
+            // `IPE_WATCH_HOT_APPEARANCE` is armed (checked inside
+            // `emit_ui_template`); for non-web or flag-off builds it is a
+            // no-op `None` and falls through immediately.
+            if let Callee::Func(id) = callee
+                && ctx.ui_structural_wrappers.contains_key(id)
+                && let Some(result) = emit_ui_template(ctx, expr, indent, child, generics)?
+            {
+                return Ok(result);
+            }
             // Kernel-dispatch special cases apply ONLY to `Callee::Kernel` —
             // every probe below starts with a `let Callee::Kernel(..) = callee
             // else { return Ok(None) }` gate, so a plain user-function call
@@ -5702,7 +5774,7 @@ pub fn emit_expr_at(
                 // zero-compile data patch. Off (release / `ipe build`) it never
                 // fires — the subtree falls through to the inline emit below and the
                 // output is byte-identical. `None` for any non-static subtree.
-                if let Some(result) = emit_ui_template(ctx, expr) {
+                if let Some(result) = emit_ui_template(ctx, expr, indent, child, generics)? {
                     return Ok(result);
                 }
                 // Ipe.Ui / Ipe.Html / Ipe.Web / Ipe.Tui / Ipe.WebView kernels.
@@ -6193,7 +6265,19 @@ fn emit_match(
     let mut arms = Vec::with_capacity(m.arms().len());
     for arm in m.arms() {
         let (pat, prelude, synth_guard) = emit_arm_head(ctx, &arm.pat, &mode)?;
-        let body = emit_expr_at(ctx, &arm.body, indent + 1, child, generics)?;
+        // Transition hot-swap (dev-gated) — the string-path mirror of the
+        // production reduction in [`crate::emit_doc::build_match`]. A TEA `update`
+        // arm whose whole effect is one data-describable field change with
+        // `Cmd.none` reduces to a call into the transition table read by the ONE
+        // compiled `apply_transition_hot` over the baked datum. Both paths call
+        // the same [`emit_transition_arm`], so their token sequences agree and the
+        // SEAL stays exact. `None` (flag off, not an update body, or a
+        // non-describable arm) falls through to the ordinary arm-body emit below,
+        // byte-identical.
+        let body = match emit_transition_arm(ctx, &arm.body)? {
+            Some(hot) => hot,
+            None => emit_expr_at(ctx, &arm.body, indent + 1, child, generics)?,
+        };
         let arm_body = if prelude.is_empty() {
             body
         } else {
@@ -6217,6 +6301,70 @@ fn emit_match(
         "match {scrut} {{\n{}\n{close_indent}}}",
         arms.join("\n")
     ))
+}
+
+/// Reduce a TEA `update` arm body to an `apply_transition_hot` call when the
+/// transition rewrite is armed (a TEA `update` body under `hot_appearance`) AND
+/// the body is a data-describable single-field change with `Cmd.none`. `None`
+/// otherwise — the caller emits the arm body normally, byte-identically.
+///
+/// The emitted body is `(ipe_runtime::web::apply_transition_hot("<baked datum
+/// JSON>", <model>), cmd_none())`: the compiled reader decodes and applies the
+/// baked datum (dev == prod), or a live replacement when the dev overlay holds.
+/// The baked JSON is [`crate::transition_classify::CompileTransition::to_json`],
+/// byte-identical to the runtime `Transition`'s serde form (pinned by the
+/// classifier's conformance test), so the reader round-trips it exactly.
+///
+/// The classifier is conservative: only the four faithful shapes classify; every
+/// other arm returns `None` and stays compiled. Fail-closed by construction — a
+/// false `None` is merely a recompile, never a wrong result.
+///
+/// Shared with [`crate::emit_doc::build_match`], the production function-body
+/// match emitter: the same reduction fires whether a body is rendered through the
+/// Doc path (production) or the string path (the SEAL / byte-golden oracle), so
+/// both carry the identical token sequence and the SEAL stays exact.
+pub fn emit_transition_arm(ctx: &EmitCtx, body: &Expr) -> DResult<Option<String>> {
+    let Some(model_param) = ctx.transition_model_param() else {
+        return Ok(None);
+    };
+    // Resolve a field symbol to its serde key — the emitted Rust field ident,
+    // which (no serde rename) is exactly the key the runtime Model JSON object is
+    // keyed by. `None` for an unresolved symbol refuses (never a guessed key).
+    let resolve = |sym: Symbol| ctx.emit_ident(sym).ok();
+    let Some(ct) = crate::transition_classify::transition_of_arm(body, model_param, &resolve)
+    else {
+        return Ok(None);
+    };
+    // The model parameter's emitted ident, consumed by value by the arm (only one
+    // match branch runs, so the move is sound).
+    let model_ident = ctx.emit_ident(model_param)?;
+    // The baked datum, as a Rust string literal. `to_json` emits only the JSON
+    // grammar's own escapes; wrap it as a Rust string with the escapes a Rust
+    // string literal needs (`"` and `\`), which the JSON writer already produced,
+    // so the literal is the exact JSON bytes the runtime decodes.
+    let json = ct.to_json();
+    let json_lit = rust_string_literal(&json);
+    Ok(Some(format!(
+        "(ipe_runtime::web::apply_transition_hot({json_lit}, {model_ident}), cmd_none())"
+    )))
+}
+
+/// Render `s` as a Rust double-quoted string literal: escape `\` and `"` (the
+/// two characters that would otherwise terminate or corrupt the literal). The
+/// JSON writer already escaped control characters as `\uXXXX` / `\n` etc., which
+/// are ordinary ASCII here, so only these two need Rust-level escaping. Total.
+fn rust_string_literal(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('"');
+    for ch in s.chars() {
+        match ch {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
 }
 
 /// Emit the scrutinee of a `Match` plus its two mode flags. A string scrutinee is
@@ -7880,10 +8028,16 @@ fn emit_apply(
         ret: _,
         body,
     } = func
+        && args.len() == params.len()
     {
-        // Lower guarantees `params.len() == args.len()` here; the `zip` below
-        // pairs them positionally and would silently drop any excess were that
-        // invariant ever broken upstream.
+        // Immediately-applied-lambda inlining, only when the arg count EQUALS the
+        // lambda's arity — the ordinary saturated `(\p0,… -> body) a0 …` shape.
+        // `args.len() > params.len()` is a CURRIED application of a
+        // function-returning lambda (`(\p -> fn-value) a b`): the body yields a
+        // function that the surplus args apply to, so it must NOT be inlined here —
+        // the zip would drop the surplus and silently discard those applications
+        // (the composed-higher-order-combinator SEAL break). That case is handled
+        // by the split path below.
         let child = depth + 1;
         let mut bindings = String::new();
         for ((param, ty), arg) in params.iter().zip(args.iter()) {
@@ -7897,6 +8051,25 @@ fn emit_apply(
         return Ok(format!("({{ {bindings}{body_s} }})"));
     }
     let child = depth + 1;
+    // Curried application of a function-returning lambda: `(\p0,… -> fn-value) a0
+    // … aN` where the arg count EXCEEDS the lambda's own arity. The lambda yields
+    // a function value once its own params are bound; the surplus args apply to
+    // THAT value. Emit `(lambda)(own-args)(surplus-args)` so the two application
+    // stages stay distinct — folding them into one call list would pass too many
+    // args to the lambda (E0057/E0308). Every other `func` shape (a `Box<dyn Fn>`
+    // read, a top-level `FuncValue`, …) carries the flattened arity the single
+    // call list expects, so it takes the plain path below.
+    if let Expr::Lambda { params, .. } = func
+        && args.len() > params.len()
+    {
+        let (own_args, surplus) = args.split_at(params.len());
+        let stage1 = emit_apply(ctx, func, own_args, indent, child, generics)?;
+        let mut rest = Vec::with_capacity(surplus.len());
+        for arg in surplus {
+            rest.push(emit_expr_at(ctx, arg, indent, child, generics)?);
+        }
+        return Ok(format!("({stage1})({})", rest.join(", ")));
+    }
     let f = emit_expr_at(ctx, func, indent, child, generics)?;
     let mut parts = Vec::with_capacity(args.len());
     for arg in args {
@@ -8380,6 +8553,34 @@ pub fn emit_func(ctx: &EmitCtx, func: &Func) -> DResult<String> {
     emit_func_vis(ctx, func, "pub fn ")
 }
 
+/// The `Model` parameter symbol of a TEA `update` function, or `None` for any
+/// other function.
+///
+/// A TEA `update` is `Msg -> Model -> (Model, Cmd Msg)` (curried), so at the IR
+/// level it returns a two-element tuple whose SECOND element is a `Cmd` and
+/// takes the `Model` as its LAST parameter. Recognised by exactly that shape;
+/// any function returning something other than `(_, Cmd _)`, or taking no
+/// parameter, is not an update and returns `None` — the arm rewrite stays off.
+///
+/// The returned symbol is only an ARMING hint: the transition classifier
+/// independently proves the arm updates THIS parameter (`is_var(record,
+/// model_param)`) and resolves each field, so a mis-identified parameter (a
+/// non-update function that coincidentally returns `(_, Cmd _)` — e.g. a helper)
+/// simply yields no classifiable arm, never a wrong rewrite. Conservative by
+/// construction.
+fn tea_update_model_param(func: &ipe_ir::Func) -> Option<Symbol> {
+    let IrType::Tuple(elems) = &func.ret else {
+        return None;
+    };
+    let [_model_ty, second] = elems.as_slice() else {
+        return None;
+    };
+    if !matches!(second, IrType::Cmd(_)) {
+        return None;
+    }
+    func.params.last().map(|(sym, _)| *sym)
+}
+
 /// Emit a whole function item with the given visibility prefix (`"pub fn "` for
 /// the single-file layout, `"pub(crate) fn "` for a split `IpeModule` file where
 /// the item lives inside a `mod` block). The prefix is threaded through to
@@ -8501,6 +8702,19 @@ pub fn emit_func_vis(ctx: &EmitCtx, func: &Func, vis_prefix: &str) -> DResult<St
     // function emission (a lambda that itself emits a helper `fn`) does not leak
     // its slots into this frame's table.
     let saved_literals = ctx.begin_function_literals();
+    // Arm the `update`-arm transition rewrite for a TEA `update` body. Only a
+    // function whose return type is `(Model, Cmd _)` and whose last parameter is
+    // that Model record is a TEA update; its `Model` parameter arms
+    // `emit_match` to reduce a data-describable arm to an `apply_transition_hot`
+    // call. Inert unless `hot_appearance` (the shared dev gate) is on — with the
+    // flag off no arm is ever rewritten and the body is byte-identical. Restored
+    // after the body so nested function emission never inherits the arming.
+    let tea_update_param = if ctx.hot_appearance {
+        tea_update_model_param(func)
+    } else {
+        None
+    };
+    let saved_transition = ctx.begin_transition_update(tea_update_param);
     let body = if ipe_main_wrap_unit {
         // Wrap the synchronous body so ipe_main returns IpeTask<()>; the
         // body's own (unit) value is discarded, only its side effects matter.
@@ -8571,6 +8785,9 @@ pub fn emit_func_vis(ctx: &EmitCtx, func: &Func, vis_prefix: &str) -> DResult<St
     } else {
         body
     };
+    // The body (the only place a TEA `update`'s arms are emitted) is rendered;
+    // disarm the transition rewrite so no sibling / nested function inherits it.
+    ctx.end_transition_update(saved_transition);
 
     // Close the accumulator and, if any style literal hoisted, prepend the
     // per-view table binding. Its baked defaults are exactly the hoisted source

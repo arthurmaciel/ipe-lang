@@ -1,5 +1,9 @@
 module Package exposing (package)
 
+import Ipe.Package exposing (..)
 
+
+package : Package
 package =
-    Package.named "m82-record-ctor-xmod"
+    { name = "m82-record-ctor-xmod"
+    }

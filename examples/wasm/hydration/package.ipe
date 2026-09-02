@@ -1,7 +1,12 @@
 module Package exposing (package)
 
+import Ipe.Package exposing (..)
 
+
+package : Package
 package =
-    Package.named "wasm-hydration"
-        |> Package.version "0.1.0"
-        |> Package.wasm (Wasm.hydrate)
+    { name = "wasm-hydration"
+    , version = "0.1.0"
+    , wasm =
+        On { mode = Hydrate }
+    }

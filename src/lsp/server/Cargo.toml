@@ -8,6 +8,7 @@ license.workspace = true
 ipe_db = { path = "../../compiler/db" }
 ipe_diagnostics = { path = "../../compiler/diagnostics" }
 ipe_lsp_features = { path = "../features" }
+ipe_lint = { path = "../../compiler/lint" }
 lsp-server = "0.7"
 lsp-types = "0.95"
 serde = "1"

@@ -1,0 +1,250 @@
+-- | Ipe.Package — the schema of a `package.ipe` project manifest.
+--
+-- A `package.ipe` binds one value, `package : Package`, to a record literal.
+-- The manifest is INERT: every field is data — a string, a `Bool`, a list, a
+-- closed-set constructor, or a nested record — and no field may hold a function,
+-- a `Task`, or any effect. There is nothing in a manifest to run, which is
+-- exactly what lets the toolchain read a project's manifest before it has
+-- resolved (or compiled) any dependency.
+--
+-- The toolchain reads the manifest SYNTACTICALLY (it walks the record's AST and
+-- never evaluates it), yet the same record type-checks against this schema the
+-- ordinary way: a mistyped field (`database = "sqlite"` where a `Database` is
+-- wanted) is a type error, and a closed-set typo (`Postgress`) is a name error.
+--
+-- Closed choices are unions (`Database`, `Shape`, `Allocator`, `Target`,
+-- `WasmClient`, `WasmMode`, `WrapperSpec`, `Capability`); open text is `String`,
+-- parsed at the read boundary (semver, module path, path jail, secret denylist);
+-- a plain boolean setting is `Bool`.
+
+
+module Ipe.Package exposing
+    ( Package
+    , Capabilities
+    , Program
+    , Dependency
+    , RustDependency
+    , DependencySource(..)
+    , Database(..)
+    , Shape(..)
+    , Allocator(..)
+    , Target(..)
+    , WasmClient(..)
+    , WasmMode(..)
+    , WasmOptions
+    , WrapperSpec(..)
+    , WrapperOptions
+    , Build
+    , Capability(..)
+    , dep
+    , depGit
+    , depGitRev
+    , depPath
+    , rustDep
+    , rustDepWith
+    )
+
+
+-- | The whole manifest. Only `name` is strictly required; every other field
+-- defaults to its absent-section default when omitted (see each field's type).
+type alias Package =
+    { name : String
+    , version : String
+    , sourceRoot : String
+    , dependencies : List Dependency
+    , rustDependencies : List RustDependency
+    , capabilities : Capabilities
+    , exposedModules : List String
+    , programs : List Program
+    , wasm : WasmClient
+    , wrapper : WrapperSpec
+    , build : Build
+    }
+
+
+-- | The security capabilities a package declares and pre-accepts.
+--
+-- `declares` is the set of effects the author asserts the program exercises
+-- (verified against the compiler's inferred set). `accepts` is a durable,
+-- reviewable pre-acceptance of a disclosed risk — today only `Unsafe`, whose
+-- presence pre-accepts the `.Unsafe`-import acknowledgment so a repeatedly built
+-- project never re-prompts.
+type alias Capabilities =
+    { declares : List Capability
+    , accepts : List Capability
+    }
+
+
+-- | One named build target: an entry module file (relative to the source root)
+-- and a declared `Shape`. A declared shape is validated against the compiler's
+-- inferred shape, never used to override it.
+type alias Program =
+    { name : String
+    , entry : String
+    , shape : Shape
+    }
+
+
+-- | One Ipê dependency: its name and its source. Constructed with the `dep` /
+-- `depGit` / `depGitRev` / `depPath` builders so a dependency's source is
+-- exactly one of index / git / path, never a bag of optional keys.
+type alias Dependency =
+    { name : String
+    , source : DependencySource
+    }
+
+
+-- | The source of a `Dependency`: index by semver requirement, a git repository
+-- (optionally pinned to a revision), or a local path relative to the manifest.
+type DependencySource
+    = FromIndex String
+    | FromGit String (Maybe String)
+    | FromPath String
+
+
+-- | One crates.io crate bound as a foreign-function dependency, with its version
+-- requirement and requested feature list. Constructed with `rustDep` (no extra
+-- features) or `rustDepWith` (with a feature list).
+type alias RustDependency =
+    { name : String
+    , version : String
+    , features : List String
+    }
+
+
+-- | The SQL driver the emitted project targets. Defaults to `Sqlite`.
+type Database
+    = Sqlite
+    | Postgres
+
+
+-- | The declared shape of a program's entry: a `Web` server, a `WebView`
+-- desktop app, a `Terminal` app, or a plain `Program`.
+type Shape
+    = Web
+    | WebView
+    | Terminal
+    | Program
+
+
+-- | The static-link allocator. Defaults to `AutoAlloc` (resolve by target).
+type Allocator
+    = AutoAlloc
+    | System
+    | Dlmalloc
+    | Talc
+    | Mimalloc
+
+
+-- | The build target: the host, or a cross-compile rustc triple. The triple is
+-- open text, parsed into the closed target set at the read boundary.
+type Target
+    = HostTarget
+    | Cross String
+
+
+-- | The wasm client target. `Off` (the default) builds no wasm bundle; `On`
+-- carries the bundle's options.
+type WasmClient
+    = Off
+    | On WasmOptions
+
+
+-- | The rendering strategy of a wasm client bundle.
+type WasmMode
+    = Spa
+    | Hydrate
+
+
+-- | The options of an active wasm client bundle. `publicEnv` is a default-deny
+-- allowlist of environment-variable names the bundle may read at build time;
+-- listing a secret-pattern name is a read-time build error.
+type alias WasmOptions =
+    { mode : WasmMode
+    , entry : String
+    , mount : String
+    , publicEnv : List String
+    , optLevel : String
+    }
+
+
+-- | A local Rust-crate wrapper binding. `NoWrapper` (the default) declares none.
+type WrapperSpec
+    = NoWrapper
+    | Wrapper WrapperOptions
+
+
+-- | A wrapper's package-jailed local path, the functions it exposes, and the
+-- capabilities the wrapper is granted.
+type alias WrapperOptions =
+    { path : String
+    , expose : List String
+    , capabilities : List Capability
+    }
+
+
+-- | The build settings. Every field defaults to its unset value when omitted:
+-- `database = Sqlite`, each `Bool` `False`, `target = HostTarget`,
+-- `allocator = AutoAlloc`.
+type alias Build =
+    { database : Database
+    , static : Bool
+    , target : Target
+    , allocator : Allocator
+    , allowSlowAllocator : Bool
+    , cFree : Bool
+    }
+
+
+-- | The security-capability vocabulary a manifest may name in `declares` /
+-- `accepts` and in a wrapper's `capabilities`. Mirrors the kernel capability set.
+type Capability
+    = Network
+    | Filesystem
+    | Database
+    | Env
+    | Subprocess
+    | Clock
+    | Random
+    | NativeFfi
+    | FfiRaw
+    | Unsafe
+    | CustomElement
+    | JsPort
+
+
+-- | An index dependency: resolved from the package index by a semver
+-- requirement string (`dep "ipe-http" "^1.2"`).
+dep : String -> String -> Dependency
+dep name requirement =
+    { name = name, source = FromIndex requirement }
+
+
+-- | A git dependency with no pinned revision.
+depGit : String -> String -> Dependency
+depGit name url =
+    { name = name, source = FromGit url Nothing }
+
+
+-- | A git dependency pinned to a revision (commit, tag, or branch).
+depGitRev : String -> String -> String -> Dependency
+depGitRev name url rev =
+    { name = name, source = FromGit url (Just rev) }
+
+
+-- | A local-path dependency, relative to the manifest.
+depPath : String -> String -> Dependency
+depPath name path =
+    { name = name, source = FromPath path }
+
+
+-- | A Rust dependency with no extra features.
+rustDep : String -> String -> RustDependency
+rustDep name version =
+    { name = name, version = version, features = [] }
+
+
+-- | A Rust dependency with a feature list.
+rustDepWith : String -> String -> List String -> RustDependency
+rustDepWith name version features =
+    { name = name, version = version, features = features }

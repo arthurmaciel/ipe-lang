@@ -1,5 +1,9 @@
 module Package exposing (package)
 
+import Ipe.Package exposing (..)
 
+
+package : Package
 package =
-    Package.named "f2b-empty-bridge"
+    { name = "f2b-empty-bridge"
+    }

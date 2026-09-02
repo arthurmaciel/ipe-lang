@@ -1,5 +1,9 @@
 module Package exposing (package)
 
+import Ipe.Package exposing (..)
 
+
+package : Package
 package =
-    Package.named "i138-kernel-implicit-value"
+    { name = "i138-kernel-implicit-value"
+    }

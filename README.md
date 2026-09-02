@@ -149,20 +149,23 @@ Run `ipe capabilities --help` for the full model.
 <!--
 ## Dependencies
 
-A project declares its dependencies in `package.ipe`. Three builders, each optional:
+A project declares its dependencies in `package.ipe` — an inert typed record
+bound to `package : Package`. Each field is optional:
 
 ```elm
+package : Package
 package =
-    Package.named "my-app"
-        |> Package.dependencies              -- Ipê packages
-            [ Package.dep "http" "^1.2"      -- from the package index, by semver requirement
-            , Package.depGitRev "mylib" "https://example.com/mylib.git" "abc123"
-            , Package.depPath "local" "../local"
-            ]
-        |> Package.rustDependencies          -- Rust crates, bound as a foreign-function interface
-            [ Package.rustDep "uuid" "1.10" ]
-        |> Package.declares                  -- the capabilities you declare the program exercises
-            [ Capability.network, Capability.clock ]
+    { name = "my-app"
+    , dependencies =                             -- Ipê packages
+        [ dep "http" "^1.2"                       -- from the package index, by semver requirement
+        , depGitRev "mylib" "https://example.com/mylib.git" "abc123"
+        , depPath "local" "../local"
+        ]
+    , rustDependencies =                         -- Rust crates, bound as a foreign-function interface
+        [ rustDep "uuid" "1.10" ]
+    , capabilities =                             -- the capabilities you declare the program exercises
+        { declares = [ Network, Clock ] }
+    }
 ```
 
 **Rust crates** are managed by the `ipe rust` command group:
@@ -170,7 +173,7 @@ package =
 ```
 $ ipe rust add uuid@1.10        # inspect and cache a crate
 $ ipe rust remove uuid          # drop it
-$ ipe rust install              # (re)inspect every Package.rustDependencies crate
+$ ipe rust install              # (re)inspect every rustDependencies crate
 ```
 
 Each crate is inspected inside a sandbox before it is trusted, and its
@@ -263,6 +266,43 @@ ipe doc serve
 # CI coverage gate — exit non-zero when a binding lacks a doc-comment:
 ipe doc check
 ```
+
+## Linting
+
+`ipe lint` runs extensible static analysis over your source — the idiom and
+consistency checks that keep code "invalid states unrepresentable" in every
+corner. The compiler enforces what *must* be true (soundness); the linter
+suggests what *should* be true by convention on code that already type-checks,
+so every finding is advisory and suppressible. The same rules surface three
+ways: on the CLI, live in the editor through the LSP, and in CI (a surviving
+denied finding exits non-zero).
+
+<!-- The commands below are verified against the released binary. -->
+```sh
+# Lint the current project (or a file / directory):
+ipe lint
+ipe lint src/Main.ipe
+
+# Apply every machine-applicable, semantics-preserving fix:
+ipe lint --fix
+```
+
+Configuration is Ipê-native — a `lint.ipe` next to `package.ipe`, written in the
+same builder style as the manifest (not TOML):
+
+```ipe
+module Lint exposing (lint)
+
+lint =
+    Lint.config
+        |> Lint.deny "adjacent-bools"
+        |> Lint.allow "prim-param"
+        |> Lint.gate "deny"
+```
+
+Suppress a single site with a source comment: `-- ipe-lint: allow <rule>` on the
+line (or the line above). Run `ipe lint --help` for the shipped rule set. See
+[the lint guide](docs/guide/lint.md) for the full rule reference.
 
 ## Editor setup (LSP)
 

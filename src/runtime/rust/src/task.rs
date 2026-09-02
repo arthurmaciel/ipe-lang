@@ -85,6 +85,54 @@ impl Drop for AbortOnDrop {
     }
 }
 
+/// The single spawn choke-point every emitted async FFI wrapper routes through.
+///
+/// STRUCTURAL GUARANTEE. Spawning a foreign future and arming its cancel guard
+/// are one indivisible operation here: there is no way to obtain the spawned
+/// task's outcome without the `AbortOnDrop` guard having been armed on the same
+/// `AbortHandle` first. So an emitted wrapper cannot spawn a foreign task and
+/// forget the guard — the emitter has no spawn primitive of its own; it can only
+/// call this, and this always arms. That closes the class of bug where one async
+/// binding shape drops the guard while the others keep it.
+///
+/// CANCEL HONESTY. If the wrapper future is dropped before this returns (a
+/// `Task.parallel` early-cancel drops the losing sibling, a `Task` timeout drops
+/// the whole chain), the guard's `Drop` aborts the inner foreign task, so a
+/// cancelled foreign call cannot keep running and fire a post-cancel side effect
+/// (a duplicate DB write, a duplicate charge). A normal completion `defuse`s the
+/// guard before it can abort a task that already finished.
+///
+/// PANIC HONESTY. A poll-time panic inside the foreign future surfaces as a
+/// `JoinError`. Its payload is foreign-controlled (it can echo secrets / PII /
+/// internal paths just like a foreign error's `Debug`), so it is NEVER returned
+/// to Ipê: the panic payload routes through the redacting `ipe_error_from_panic`
+/// funnel (raw detail logged server-side under a correlation id, a generic typed
+/// message to Ipê); a non-panic `JoinError` (a cancel that still resolved a join)
+/// routes through `ipe_error_from_foreign`. Either way the caller gets a typed
+/// `Err`, never a process abort and never a silent hang.
+///
+/// The success value `T` is returned verbatim (`Ok(T)`); the caller applies its
+/// own shape-specific lift/fold to it (`ok_res`, the fallible `Result` unwrap,
+/// the `Option` fold). TOTALITY: no unwrap/expect/panic/indexing.
+#[cfg(all(feature = "tokio", not(target_arch = "wasm32")))]
+pub async fn ffi_spawn_guarded<F>(future: F) -> Result<F::Output, IpeError>
+where
+    F: std::future::Future + Send + 'static,
+    F::Output: Send + 'static,
+{
+    let handle = tokio::task::spawn(future);
+    let guard = AbortOnDrop::new(handle.abort_handle());
+    let joined = handle.await;
+    guard.defuse();
+    match joined {
+        Ok(output) => Ok(output),
+        Err(join_err) => match join_err.try_into_panic() {
+            Ok(payload) => Err(ipe_error_from_panic("foreign async task panicked", payload)),
+            Err(join_err) => Err(ipe_error_from_foreign(join_err)),
+        },
+    }
+}
+
 #[cfg(all(feature = "tokio", not(target_arch = "wasm32")))]
 pub fn block_on<E, A>(future: IpeTask<E, A>) -> IpeResult<E, A>
 where

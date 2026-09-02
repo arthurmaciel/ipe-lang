@@ -47,13 +47,66 @@ pub struct ViewPatch {
     pub patch: Vec<(usize, String)>,
 }
 
+/// A hot-swappable transition patch for one edited `update` arm.
+///
+/// The running app's compiled arm reads its baked datum through
+/// `apply_transition_hot("<old_json>", model)`; the app is not recompiled, so it
+/// still bakes `old_json`. The overlay is keyed by that exact baked string, so
+/// the patch carries the OLD json (the key the running app matches) and the NEW
+/// json (the edited transition to register).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct TransitionPatch {
+    /// The PREVIOUS baked datum JSON — the key the running app's compiled arm
+    /// passes to `apply_transition_hot`, hence the overlay key. Send the OLD
+    /// value, not the new.
+    pub old_json: String,
+    /// The edited transition's JSON — the replacement to register for `old_json`.
+    pub new_json: String,
+}
+
+/// A hot-swappable additive-`Msg`-set patch for an edit that extended the `Msg`
+/// variant surface.
+///
+/// The running app's compiled `Msg` set is described by `live_json` (it still
+/// bakes this descriptor, since it is not recompiled); `candidate_json` is the
+/// edited program's set. The app's `/_ipe/hot-msg` endpoint accepts the pair only
+/// when `candidate_json` is a proven additive superset of `live_json`, so a
+/// returning session's in-flight `handler_id`s still resolve. A non-additive
+/// change never produces a `MsgSetPatch` (the classifier withholds it), so the
+/// edit falls through to a recompile.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct MsgSetPatch {
+    /// The PREVIOUS baked `Msg`-set descriptor JSON — the live set the running app
+    /// still describes, hence the endpoint's comparison key.
+    pub live_json: String,
+    /// The edited program's `Msg`-set descriptor JSON — the additive-superset
+    /// candidate to register.
+    pub candidate_json: String,
+}
+
+/// The set of hot-swappable deltas an edit produced with no recompile.
+///
+/// Carries the appearance (view literal) patches, the `update`-arm transition
+/// patches, and the additive-`Msg`-set patches. All are pushed to the running app
+/// over the live socket; any may be empty.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct HotSwap {
+    /// One [`ViewPatch`] per view whose hoisted appearance literals changed.
+    pub views: Vec<ViewPatch>,
+    /// One [`TransitionPatch`] per `update` arm whose baked transition changed.
+    pub transitions: Vec<TransitionPatch>,
+    /// One [`MsgSetPatch`] per file whose baked `Msg`-set descriptor changed
+    /// additively (a variant added, none removed/retyped).
+    pub msg_sets: Vec<MsgSetPatch>,
+}
+
 /// The classification of a source edit, derived from the emitted-Rust diff.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Classification {
-    /// The only delta is hoisted style-literal *values*; hot-swap without a
-    /// recompile. One [`ViewPatch`] per view whose defaults changed (empty when
-    /// two emits are byte-identical — a no-op edit, still on the fast path).
-    AppearanceOnly(Vec<ViewPatch>),
+    /// The only deltas are hoisted appearance-literal *values* and/or
+    /// `update`-arm transition *data*; hot-swap without a recompile. Empty when
+    /// two emits are byte-identical — a no-op edit, still on the fast path.
+    HotSwappable(HotSwap),
     /// Anything else — recompile. This is the conservative fallback.
     Logic,
 }
@@ -74,7 +127,7 @@ pub fn classify(prev: &EmittedProject, next: &EmittedProject) -> Classification 
     if prev.files.len() != next.files.len() {
         return Classification::Logic;
     }
-    let mut view_patches = Vec::new();
+    let mut hot = HotSwap::default();
     for (rel, prev_src) in &prev.files {
         let Some(next_src) = next.files.get(rel) else {
             // A renamed/removed path — structural.
@@ -85,17 +138,22 @@ pub fn classify(prev: &EmittedProject, next: &EmittedProject) -> Classification 
             continue;
         }
         match classify_file(prev_src, next_src) {
-            FileDelta::AppearanceOnly(mut ps) => view_patches.append(&mut ps),
+            FileDelta::HotSwappable(mut delta) => {
+                hot.views.append(&mut delta.views);
+                hot.transitions.append(&mut delta.transitions);
+                hot.msg_sets.append(&mut delta.msg_sets);
+            }
             FileDelta::Logic => return Classification::Logic,
         }
     }
-    Classification::AppearanceOnly(view_patches)
+    Classification::HotSwappable(hot)
 }
 
 /// The per-file classification result.
 enum FileDelta {
-    /// Only defaults-array values changed; one [`ViewPatch`] per changed array.
-    AppearanceOnly(Vec<ViewPatch>),
+    /// Only appearance-literal values and/or transition data changed; the
+    /// hot-swappable deltas for this file.
+    HotSwappable(HotSwap),
     /// Any other textual difference.
     Logic,
 }
@@ -125,6 +183,36 @@ fn classify_file(prev_src: &str, next_src: &str) -> FileDelta {
         return FileDelta::Logic;
     }
 
+    // The `update`-arm transition-datum literals: each classified arm emits
+    // `apply_transition_hot("<json>", model)`. A differing number of such calls
+    // is structural (an arm gained/lost data-describability) ⇒ Logic.
+    let Some(prev_trans) = scan_transition_data(prev_src) else {
+        return FileDelta::Logic;
+    };
+    let Some(next_trans) = scan_transition_data(next_src) else {
+        return FileDelta::Logic;
+    };
+    if prev_trans.len() != next_trans.len() {
+        return FileDelta::Logic;
+    }
+
+    // The `Msg`-set descriptor: at most one per emitted web app. A descriptor that
+    // APPEARS or DISAPPEARS between emits is structural (a web app was added/removed
+    // or the hot gate flipped) ⇒ Logic. A descriptor present on BOTH sides that
+    // changed NON-additively (a variant removed/retyped) ⇒ Logic. A descriptor that
+    // changed ADDITIVELY yields a `MsgSetPatch` below; an unchanged one yields none.
+    let prev_msg_set = scan_msg_set(prev_src);
+    let next_msg_set = scan_msg_set(next_src);
+    match (&prev_msg_set, &next_msg_set) {
+        (Some(live), Some(cand)) if live != cand => {
+            if !msg_set_is_additive_superset(live, cand) {
+                return FileDelta::Logic;
+            }
+        }
+        (Some(_), None) | (None, Some(_)) => return FileDelta::Logic,
+        _ => {}
+    }
+
     // The masked regions are: (1) every `from_defaults(&[…])` array's contents,
     // and (2) every hoisted-read TOTAL-FALLBACK literal
     // (`__ipe_lit.get(N).parse::<T>().unwrap_or(<literal>)`). A typed style value
@@ -135,25 +223,31 @@ fn classify_file(prev_src: &str, next_src: &str) -> FileDelta {
     // default, so masking it cannot admit a false `AppearanceOnly`: any genuine
     // logic change still perturbs the skeleton outside these masks. The `String`
     // hoist reads via `.to_string()` (no fallback), so it has no such site.
-    let Some(prev_masks) = mask_spans(prev_src, &prev_arrays) else {
+    // The transition-datum literal argument is ALSO masked: the whole `<json>`
+    // string inside `apply_transition_hot("<json>", …)` may change while the arm
+    // structure is byte-identical (a `+1` → `+2` edit changes only the baked
+    // `source`). Masking it keeps a data-only arm edit hot-swappable, exactly as
+    // masking a `from_defaults` array keeps an appearance edit hot-swappable; any
+    // structural change to the arm still perturbs the skeleton and forces Logic.
+    let Some(prev_masks) = mask_spans(prev_src, &prev_arrays, &prev_trans) else {
         return FileDelta::Logic;
     };
-    let Some(next_masks) = mask_spans(next_src, &next_arrays) else {
+    let Some(next_masks) = mask_spans(next_src, &next_arrays, &next_trans) else {
         return FileDelta::Logic;
     };
-    // A differing number of hoisted-read sites is itself structural.
+    // A differing number of masked sites is itself structural.
     if prev_masks.len() != next_masks.len() {
         return FileDelta::Logic;
     }
 
     // If the skeletons (source with every masked region blanked) differ,
-    // something other than a hoisted style value moved (structure, control flow,
-    // a handler, a read index) → Logic.
+    // something other than a hoisted style value / a transition datum moved
+    // (structure, control flow, a handler, a read index) → Logic.
     if skeleton(prev_src, &prev_masks) != skeleton(next_src, &next_masks) {
         return FileDelta::Logic;
     }
 
-    let mut patches = Vec::new();
+    let mut views = Vec::new();
     for (pa, na) in prev_arrays.iter().zip(next_arrays.iter()) {
         // Same array count in a matching skeleton, but re-check length per array:
         // a length change is a literal added/removed inside one view → Logic.
@@ -167,13 +261,184 @@ fn classify_file(prev_src: &str, next_src: &str) -> FileDelta {
             }
         }
         if !patch.is_empty() {
-            patches.push(ViewPatch {
+            views.push(ViewPatch {
                 defaults: pa.values.clone(),
                 patch,
             });
         }
     }
-    FileDelta::AppearanceOnly(patches)
+
+    // Each changed transition datum: the running app still bakes the OLD json, so
+    // it is the overlay key; the NEW json is the replacement to register.
+    let mut transitions = Vec::new();
+    for (pt, nt) in prev_trans.iter().zip(next_trans.iter()) {
+        if pt.json != nt.json {
+            transitions.push(TransitionPatch {
+                old_json: pt.json.clone(),
+                new_json: nt.json.clone(),
+            });
+        }
+    }
+
+    // An additively-changed `Msg`-set descriptor (proven above) yields a patch:
+    // the running app still bakes the OLD (live) descriptor, so it is the endpoint
+    // comparison key; the NEW descriptor is the additive-superset candidate.
+    let mut msg_sets = Vec::new();
+    if let (Some(live), Some(cand)) = (&prev_msg_set, &next_msg_set)
+        && live != cand
+    {
+        msg_sets.push(MsgSetPatch {
+            live_json: live.clone(),
+            candidate_json: cand.clone(),
+        });
+    }
+
+    FileDelta::HotSwappable(HotSwap {
+        views,
+        transitions,
+        msg_sets,
+    })
+}
+
+/// The `Msg`-set descriptor const the emitter bakes under the hot gate. Kept in
+/// sync with `emit_web::msg_set_descriptor_item`
+/// (`const IPE_WEB_MSG_SET: &str = "<json>";`). If the emitter's spelling ever
+/// changes, no descriptor is recognised and a `Msg`-set edit conservatively takes
+/// the ordinary path — never a false hot-swap.
+const MSG_SET_OPEN: &str = "const IPE_WEB_MSG_SET: &str = ";
+
+/// Locate the `Msg`-set descriptor JSON baked in `src`, if the emitter emitted
+/// one under the hot gate. Returns `Some(json)` for the first occurrence,
+/// `None` when the file bakes no descriptor (the emitter emits at most one per
+/// emitted web app). A malformed occurrence (not a string literal) also yields
+/// `None`, so an unrecognised shape never produces a spurious patch.
+fn scan_msg_set(src: &str) -> Option<String> {
+    scan_msg_set_located(src).map(|(json, _span)| json)
+}
+
+/// Like [`scan_msg_set`] but also returns the byte span of the descriptor's JSON
+/// string CONTENTS (past the opening `"`, up to the closing `"`), for masking. The
+/// descriptor string is masked so a purely-additive descriptor change does not
+/// perturb the skeleton (exactly as a transition datum is masked); a non-additive
+/// change is caught separately and forces `Logic`.
+fn scan_msg_set_located(src: &str) -> Option<(String, MaskSpan)> {
+    let bytes = src.as_bytes();
+    let rel = src.find(MSG_SET_OPEN)?;
+    let arg_at = skip_ws(bytes, rel + MSG_SET_OPEN.len());
+    if *bytes.get(arg_at)? != b'"' {
+        return None;
+    }
+    let inner_start = arg_at + 1;
+    let (json, next) = parse_string_literal(bytes, arg_at)?;
+    Some((
+        json,
+        MaskSpan {
+            start: inner_start,
+            end: next - 1,
+        },
+    ))
+}
+
+/// Whether `candidate_json` is an additive superset of `live_json`: both are
+/// well-formed `Msg`-set descriptors, share the same schema tag, and every
+/// variant in `live_json` is present in `candidate_json` with an identical
+/// signature. Returns `false` on any parse failure or any non-additive change (a
+/// removed/retyped variant), so a `Msg`-set patch is produced ONLY for a proven
+/// additive extension — the same discipline the runtime endpoint re-checks before
+/// accepting.
+///
+/// The comparison mirrors the runtime `web::msg_set::is_additive_superset` over
+/// the same JSON shape; it is duplicated here (rather than depending on the
+/// runtime crate) so the watch classifier stays a pure text-diff with no runtime
+/// link, exactly as the transition/appearance scans do.
+fn msg_set_is_additive_superset(live_json: &str, candidate_json: &str) -> bool {
+    let Some((live_schema, live_vars)) = parse_msg_set(live_json) else {
+        return false;
+    };
+    let Some((cand_schema, cand_vars)) = parse_msg_set(candidate_json) else {
+        return false;
+    };
+    if live_schema != cand_schema {
+        return false;
+    }
+    // Every live variant must survive with an identical signature. A missing one
+    // is a removal; a differing signature is a retype. Either refuses.
+    live_vars.iter().all(|(name, sig)| {
+        cand_vars
+            .iter()
+            .find(|(cn, _)| cn == name)
+            .is_some_and(|(_, csig)| csig == sig)
+    })
+}
+
+/// Parse a `Msg`-set descriptor JSON into `(schema, [(name, signature)])`, where
+/// each variant's SIGNATURE is the raw serde form of its `shape` field (so two
+/// variants compare equal iff their names AND shape encodings match). Returns
+/// `None` on any structural surprise — a non-object, a missing `schema`/`variants`,
+/// a non-array `variants`, a malformed entry — so a corrupt descriptor is treated
+/// as non-additive (the caller then recompiles).
+fn parse_msg_set(json: &str) -> Option<(i64, Vec<(String, String)>)> {
+    let value: serde_json::Value = serde_json::from_str(json).ok()?;
+    let obj = value.as_object()?;
+    let schema = obj.get("schema")?.as_i64()?;
+    let variants = obj.get("variants")?.as_array()?;
+    let mut out = Vec::with_capacity(variants.len());
+    for v in variants {
+        let vobj = v.as_object()?;
+        let name = vobj.get("name")?.as_str()?.to_owned();
+        // The shape is compared by its canonical serde string, so a scalar tag
+        // (`"Unit"`) and a compound tag (`{"Compound":"Int,Str"}`) each round-trip
+        // to a stable signature; a change of either is a retype.
+        let sig = serde_json::to_string(vobj.get("shape")?).ok()?;
+        out.push((name, sig));
+    }
+    Some((schema, out))
+}
+
+/// One `apply_transition_hot("<json>", …)` occurrence located in a source file:
+/// the datum JSON string and the byte span of its contents (for masking).
+struct TransitionData {
+    /// Byte offset of the first char inside the json string literal (past the `"`).
+    inner_start: usize,
+    /// Byte offset of the closing `"` of the json string literal.
+    inner_end: usize,
+    /// The parsed (unescaped) json string — the baked datum.
+    json: String,
+}
+
+/// The literal opening an emitted transition-datum read in the emitted Rust.
+/// Kept in sync with the emitter's `emit_transition_arm`
+/// (`apply_transition_hot("<json>", <model>)`). If the emitter's spelling ever
+/// changes, no datum is recognised and every edit conservatively falls to
+/// `Logic` — safe, never a false hot-swap.
+const TRANSITION_OPEN: &str = "apply_transition_hot(";
+
+/// Locate every `apply_transition_hot("<json>", …)` call in `src` and parse its
+/// first argument (the baked datum JSON string literal). Returns `None`
+/// (⇒ `Logic`) if any occurrence's first argument is not a well-formed string
+/// literal — never a guess. A file with no occurrences returns `Some(empty)`.
+fn scan_transition_data(src: &str) -> Option<Vec<TransitionData>> {
+    let bytes = src.as_bytes();
+    let mut out = Vec::new();
+    let mut from = 0usize;
+    while let Some(rel) = src[from..].find(TRANSITION_OPEN) {
+        let open = from + rel;
+        // The first argument begins at the first `"` after the `(`.
+        let arg_at = skip_ws(bytes, open + TRANSITION_OPEN.len());
+        if *bytes.get(arg_at)? != b'"' {
+            return None;
+        }
+        let inner_start = arg_at + 1;
+        let (json, next) = parse_string_literal(bytes, arg_at)?;
+        // `next` is just past the closing quote; the closing quote is `next - 1`.
+        out.push(TransitionData {
+            inner_start,
+            inner_end: next - 1,
+            json,
+        });
+        from = next;
+    }
+    Some(out)
 }
 
 /// One `from_defaults(&[…])` occurrence located in a source file.
@@ -198,7 +463,11 @@ struct MaskSpan {
 /// `unwrap_or(<literal>)` fallback argument. Returns `None` (⇒ `Logic`) if a
 /// hoisted read's fallback cannot be located, so an unrecognised emit shape is
 /// conservative.
-fn mask_spans(src: &str, arrays: &[DefaultsArray]) -> Option<Vec<MaskSpan>> {
+fn mask_spans(
+    src: &str,
+    arrays: &[DefaultsArray],
+    transitions: &[TransitionData],
+) -> Option<Vec<MaskSpan>> {
     let mut spans: Vec<MaskSpan> = arrays
         .iter()
         .map(|a| MaskSpan {
@@ -206,7 +475,19 @@ fn mask_spans(src: &str, arrays: &[DefaultsArray]) -> Option<Vec<MaskSpan>> {
             end: a.inner_end,
         })
         .collect();
+    spans.extend(transitions.iter().map(|t| MaskSpan {
+        start: t.inner_start,
+        end: t.inner_end,
+    }));
     spans.extend(scan_hoisted_read_fallbacks(src)?);
+    // The `Msg`-set descriptor const's JSON contents are masked too, so a
+    // purely-additive descriptor change (a new variant appended) does not perturb
+    // the skeleton. A NON-additive descriptor change is caught separately (see
+    // `classify_file`) and forces `Logic`, so masking here can never admit a
+    // variant removal/retype as a hot-swap.
+    if let Some((_json, span)) = scan_msg_set_located(src) {
+        spans.push(span);
+    }
     spans.sort_by_key(|s| s.start);
     Some(spans)
 }
@@ -476,19 +757,34 @@ mod tests {
         )
     }
 
-    /// Assert `classify` returned `AppearanceOnly` and hand back its patches, so
-    /// callers extract fields via [`first_patch`] (never a panicking index). A
+    /// Assert `classify` returned `HotSwappable` and hand back its VIEW patches,
+    /// so callers extract fields via [`first_patch`] (never a panicking index). A
     /// `Logic` result is the test's failure — surfaced by asserting the variant
     /// matches before destructuring; the `else` arm is dead once the assertion
     /// holds and returns an empty vec (no `panic!`/`unreachable!`).
     fn expect_appearance(prev: &EmittedProject, next: &EmittedProject) -> Vec<ViewPatch> {
         let got = classify(prev, next);
         assert!(
-            matches!(got, Classification::AppearanceOnly(_)),
-            "expected AppearanceOnly, got {got:?}"
+            matches!(got, Classification::HotSwappable(_)),
+            "expected HotSwappable, got {got:?}"
         );
-        if let Classification::AppearanceOnly(ps) = got {
-            ps
+        if let Classification::HotSwappable(hot) = got {
+            hot.views
+        } else {
+            Vec::new()
+        }
+    }
+
+    /// Assert `classify` returned `HotSwappable` and hand back its TRANSITION
+    /// patches (same discipline as [`expect_appearance`]).
+    fn expect_transitions(prev: &EmittedProject, next: &EmittedProject) -> Vec<TransitionPatch> {
+        let got = classify(prev, next);
+        assert!(
+            matches!(got, Classification::HotSwappable(_)),
+            "expected HotSwappable, got {got:?}"
+        );
+        if let Classification::HotSwappable(hot) = got {
+            hot.transitions
         } else {
             Vec::new()
         }
@@ -740,7 +1036,7 @@ mod tests {
         let p = project(&[("src/main.rs", &table(&["12"]))], "cargo");
         assert_eq!(
             classify(&p, &p.clone()),
-            Classification::AppearanceOnly(vec![])
+            Classification::HotSwappable(HotSwap::default())
         );
     }
 
@@ -804,6 +1100,158 @@ mod tests {
     fn empty_arrays_with_body_change_is_logic() {
         let prev = project(&[("src/main.rs", &format!("x {} y", table(&[])))], "cargo");
         let next = project(&[("src/main.rs", &format!("z {} y", table(&[])))], "cargo");
+        assert_eq!(classify(&prev, &next), Classification::Logic);
+    }
+
+    // ── transition-data hot-swap (update arm) ─────────────────────────────
+
+    /// Mirror the emitter's classified-arm shape: an arm body emitted as
+    /// `apply_transition_hot("<json>", model)`.
+    fn transition_arm(json: &str) -> String {
+        format!(
+            "fn update(msg: Msg, model: Model) {{ match msg {{ \
+             Increment => (ipe_runtime::web::apply_transition_hot({json:?}, model), cmd_none()), \
+             }} }}"
+        )
+    }
+
+    const INC1: &str = r#"{"field":"count","op":"IntAdd","source":{"Int":1}}"#;
+    const INC2: &str = r#"{"field":"count","op":"IntAdd","source":{"Int":2}}"#;
+
+    // The counter SEAL at the classifier level: a `+1` → `+2` arm edit changes
+    // ONLY the baked datum json inside `apply_transition_hot(...)` → a
+    // transition-only hot-swap, no recompile.
+    #[test]
+    fn transition_source_edit_is_hot_swappable() {
+        let prev = project(&[("src/update.rs", &transition_arm(INC1))], "cargo");
+        let next = project(&[("src/update.rs", &transition_arm(INC2))], "cargo");
+        let ts = expect_transitions(&prev, &next);
+        assert_eq!(ts.len(), 1);
+        assert_eq!(
+            ts.first().cloned().unwrap_or_default(),
+            TransitionPatch {
+                old_json: INC1.to_owned(),
+                new_json: INC2.to_owned(),
+            }
+        );
+    }
+
+    // A no-op transition edit (identical) contributes no transition patch.
+    #[test]
+    fn identical_transition_arm_has_no_patch() {
+        let p = project(&[("src/update.rs", &transition_arm(INC1))], "cargo");
+        assert_eq!(expect_transitions(&p, &p.clone()), vec![]);
+    }
+
+    // A change to the arm STRUCTURE around the transition call (a new arm, a
+    // different call) is Logic — only the json argument is masked, never the
+    // surrounding code.
+    #[test]
+    fn arm_structure_change_is_logic() {
+        let prev = project(&[("src/update.rs", &transition_arm(INC1))], "cargo");
+        let next = project(
+            &[(
+                "src/update.rs",
+                &transition_arm(INC1).replace("cmd_none()", "cmd_batch(vec![])"),
+            )],
+            "cargo",
+        );
+        assert_eq!(classify(&prev, &next), Classification::Logic);
+    }
+
+    // An arm that GAINS a transition call (arm count grows) is structural → Logic.
+    #[test]
+    fn added_transition_call_is_logic() {
+        let prev = project(&[("src/update.rs", "fn update() { plain }")], "cargo");
+        let next = project(&[("src/update.rs", &transition_arm(INC1))], "cargo");
+        assert_eq!(classify(&prev, &next), Classification::Logic);
+    }
+
+    // ── additive-Msg-set descriptor hot-swap ──────────────────────────────
+
+    /// Assert `classify` returned `HotSwappable` and hand back its `Msg`-set
+    /// patches (same discipline as [`expect_appearance`]/[`expect_transitions`]).
+    fn expect_msg_sets(prev: &EmittedProject, next: &EmittedProject) -> Vec<MsgSetPatch> {
+        let got = classify(prev, next);
+        assert!(
+            matches!(got, Classification::HotSwappable(_)),
+            "expected HotSwappable, got {got:?}"
+        );
+        if let Classification::HotSwappable(hot) = got {
+            hot.msg_sets
+        } else {
+            Vec::new()
+        }
+    }
+
+    /// Mirror the emitter's baked descriptor const, inside an otherwise-identical
+    /// app skeleton (so only the descriptor JSON differs between two emits).
+    fn app_with_msg_set(json: &str) -> String {
+        format!(
+            "fn app() {{ const IPE_WEB_MODEL_SCHEMA_TAG: [u8; 32] = [0]; \
+             #[allow(dead_code)] const IPE_WEB_MSG_SET: &str = {json:?}; \
+             ipe_runtime::tea::WebApp(serve) }}"
+        )
+    }
+
+    const MS_COUNTER: &str = r#"{"schema":1,"variants":[{"name":"Increment","shape":"Unit"},{"name":"Decrement","shape":"Unit"}]}"#;
+    // `Reset` appended — an additive superset.
+    const MS_WITH_RESET: &str = r#"{"schema":1,"variants":[{"name":"Increment","shape":"Unit"},{"name":"Decrement","shape":"Unit"},{"name":"Reset","shape":"Unit"}]}"#;
+    // `Decrement` removed — a non-additive change.
+    const MS_REMOVED: &str = r#"{"schema":1,"variants":[{"name":"Increment","shape":"Unit"}]}"#;
+    // `Increment` retyped Unit -> Str — a non-additive change.
+    const MS_RETYPED: &str = r#"{"schema":1,"variants":[{"name":"Increment","shape":"Str"},{"name":"Decrement","shape":"Unit"}]}"#;
+
+    // The additive-Msg SEAL at the classifier level: appending a variant to the
+    // baked descriptor (skeleton otherwise identical) is a hot-swappable Msg-set
+    // patch carrying the OLD (live) descriptor as the key and the NEW as candidate.
+    #[test]
+    fn added_variant_descriptor_is_hot_swappable() {
+        let prev = project(&[("src/main.rs", &app_with_msg_set(MS_COUNTER))], "cargo");
+        let next = project(
+            &[("src/main.rs", &app_with_msg_set(MS_WITH_RESET))],
+            "cargo",
+        );
+        let ms = expect_msg_sets(&prev, &next);
+        assert_eq!(ms.len(), 1);
+        assert_eq!(
+            ms.first().cloned().unwrap_or_default(),
+            MsgSetPatch {
+                live_json: MS_COUNTER.to_owned(),
+                candidate_json: MS_WITH_RESET.to_owned(),
+            }
+        );
+    }
+
+    // A removed variant in the descriptor is non-additive → Logic (recompile).
+    #[test]
+    fn removed_variant_descriptor_is_logic() {
+        let prev = project(&[("src/main.rs", &app_with_msg_set(MS_COUNTER))], "cargo");
+        let next = project(&[("src/main.rs", &app_with_msg_set(MS_REMOVED))], "cargo");
+        assert_eq!(classify(&prev, &next), Classification::Logic);
+    }
+
+    // A retyped variant in the descriptor is non-additive → Logic (recompile).
+    #[test]
+    fn retyped_variant_descriptor_is_logic() {
+        let prev = project(&[("src/main.rs", &app_with_msg_set(MS_COUNTER))], "cargo");
+        let next = project(&[("src/main.rs", &app_with_msg_set(MS_RETYPED))], "cargo");
+        assert_eq!(classify(&prev, &next), Classification::Logic);
+    }
+
+    // An unchanged descriptor contributes no Msg-set patch.
+    #[test]
+    fn unchanged_descriptor_has_no_patch() {
+        let p = project(&[("src/main.rs", &app_with_msg_set(MS_COUNTER))], "cargo");
+        assert_eq!(expect_msg_sets(&p, &p.clone()), vec![]);
+    }
+
+    // A descriptor that APPEARS between emits (hot gate flipped / app added) is
+    // structural → Logic.
+    #[test]
+    fn descriptor_appearing_is_logic() {
+        let prev = project(&[("src/main.rs", "fn app() { plain }")], "cargo");
+        let next = project(&[("src/main.rs", &app_with_msg_set(MS_COUNTER))], "cargo");
         assert_eq!(classify(&prev, &next), Classification::Logic);
     }
 }

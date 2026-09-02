@@ -2024,6 +2024,7 @@ dependencies = [
  "ipe_intern",
  "ipe_ir",
  "ipe_kernels",
+ "ipe_lint",
  "ipe_lower",
  "ipe_lsp_server",
  "ipe_parse",
@@ -2171,6 +2172,7 @@ dependencies = [
  "ipe_intern",
  "ipe_ir",
  "ipe_kernels",
+ "ryu",
  "serde",
  "serde_json",
  "sha2",
@@ -2275,6 +2277,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "ipe_lint"
+version = "0.1.76"
+dependencies = [
+ "ipe_diagnostics",
+ "ipe_intern",
+ "ipe_parse",
+ "ipe_syntax",
+]
+
+[[package]]
 name = "ipe_lower"
 version = "0.1.76"
 dependencies = [
@@ -2296,6 +2308,7 @@ dependencies = [
  "ipe_db",
  "ipe_diagnostics",
  "ipe_intern",
+ "ipe_lint",
  "ipe_syntax",
  "ipe_types",
  "lsp-types",
@@ -2308,6 +2321,7 @@ dependencies = [
  "crossbeam-channel",
  "ipe_db",
  "ipe_diagnostics",
+ "ipe_lint",
  "ipe_lsp_features",
  "ipe_stdlib",
  "lsp-server",

@@ -225,6 +225,138 @@ fn resolve_source(
     }
 }
 
+// ─── dev-only transition hot-swap overlay ───────────────────────────────────
+//
+// The running web app owns each data-describable `update` arm through the
+// emitted `apply_transition_hot` call, which rebuilds a `Transition` from the
+// baked datum's JSON on every dispatch. To hot-swap a simple arm (a `+1` → `+2`,
+// a `Set` literal, a toggle target) without a recompile, the dev control path
+// registers a replacement `Transition` keyed by the arm's *baked-datum
+// signature* (the exact JSON the compiler baked, in emit form); the next
+// `apply_transition_hot` for that signature applies the replacement instead of
+// the baked datum, so the next `update` produces the edited transition's Model.
+//
+// Keying by the baked JSON (rather than a single global patch) confines an edit
+// to the one arm whose datum it describes: a second arm with a different baked
+// datum never sees it. The baked datum string is a compile-time constant, so the
+// signature stays stable across dispatches.
+//
+// The overlay is inert unless [`dev_transition_active`] holds (flag on AND
+// non-production). It shares the appearance overlay's `IPE_WATCH_HOT_APPEARANCE`
+// gate — one dev-overlay switch for the whole program-as-data surface. In a
+// production build the flag is off and the dev control path is never mounted, so
+// no replacement is ever registered and `apply_transition_hot` decodes and
+// applies exactly the baked datum — one update semantics, dev == prod.
+
+#[cfg(any(feature = "db", feature = "redis_store", feature = "web"))]
+use std::collections::HashMap;
+#[cfg(any(feature = "db", feature = "redis_store", feature = "web"))]
+use std::sync::{Mutex, OnceLock};
+
+/// The registered dev replacements, keyed by an arm's baked-datum JSON
+/// signature. `None` until the first registration; an empty map reads as "no
+/// overlay". Guarded by a `Mutex`; a poisoned lock is recovered (the map holds
+/// only inert [`Transition`] data, so a panic mid-update cannot leave it
+/// unsound).
+#[cfg(any(feature = "db", feature = "redis_store", feature = "web"))]
+type DevTransitionOverlay = HashMap<String, Transition>;
+
+#[cfg(any(feature = "db", feature = "redis_store", feature = "web"))]
+fn dev_transition_overlay() -> &'static Mutex<DevTransitionOverlay> {
+    static OVERLAY: OnceLock<Mutex<DevTransitionOverlay>> = OnceLock::new();
+    OVERLAY.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Whether the transition hot-swap overlay may affect an `update`: shares the
+/// appearance overlay's [`super::literal_table::dev_overlay_active`] gate (the
+/// `IPE_WATCH_HOT_APPEARANCE` flag set to a truthy value AND non-production).
+///
+/// With the flag off (the default) or in production this is `false`, so
+/// [`apply_transition_hot`] decodes and applies exactly the baked datum and the
+/// overlay is never consulted — one update semantics, dev == prod.
+#[cfg(any(feature = "db", feature = "redis_store", feature = "web"))]
+#[must_use]
+pub fn dev_transition_active() -> bool {
+    super::literal_table::dev_overlay_active()
+}
+
+/// Register (or replace) the dev replacement for the arm whose baked datum JSON
+/// is `default_json`. A subsequent [`apply_transition_hot`] for that exact
+/// signature applies `replacement` instead of the baked datum. No-op when the
+/// overlay is inactive, so a stray call in a production build changes nothing.
+///
+/// Replacing (not merging) means the most recent edit for an arm fully describes
+/// its current transition — the watch classifier sends the whole transition for
+/// the edited arm each time.
+#[cfg(any(feature = "db", feature = "redis_store", feature = "web"))]
+pub fn register_dev_transition(default_json: &str, replacement: Transition) {
+    if !dev_transition_active() {
+        return;
+    }
+    let mut map = dev_transition_overlay()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    map.insert(default_json.to_owned(), replacement);
+}
+
+/// The dev replacement registered for an arm's baked-datum signature, if any.
+#[cfg(any(feature = "db", feature = "redis_store", feature = "web"))]
+fn dev_transition_replacement_for(default_json: &str) -> Option<Transition> {
+    let map = dev_transition_overlay()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    map.get(default_json).cloned()
+}
+
+/// Clear all registered dev replacements. Test-support for asserting the
+/// flag-off / inert path without cross-test overlay leakage.
+#[cfg(test)]
+#[cfg(any(feature = "db", feature = "redis_store", feature = "web"))]
+pub(crate) fn clear_dev_transition_for_test() {
+    let mut map = dev_transition_overlay()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    map.clear();
+}
+
+/// Apply a data-describable `update` arm's transition to `model`, consulting the
+/// dev overlay first. The compiler emits a classified arm as
+/// `apply_transition_hot(<baked datum JSON>, model)`.
+///
+/// The baked `default_json` is the compile-time constant describing the arm's
+/// transition. When the dev overlay is active AND a replacement is registered
+/// for this exact baked signature, the replacement is applied; otherwise the
+/// baked datum is decoded and applied. With the flag off / in production the
+/// overlay is never consulted, so this decodes and applies exactly the baked
+/// datum — byte-identical to a direct compiled arm (dev == prod).
+///
+/// Total and fail-closed at every seam: a baked datum that fails to decode (only
+/// reachable on a codegen defect) returns `model` UNCHANGED, exactly as
+/// [`apply_transition`] refuses. The untrusted dev channel can register nothing
+/// but an inert [`Transition`], which drives only the bounded [`apply_transition`]
+/// routine.
+#[cfg(any(feature = "db", feature = "redis_store", feature = "web"))]
+#[must_use]
+pub fn apply_transition_hot<Model>(default_json: &str, model: Model) -> Model
+where
+    Model: serde::Serialize + serde::de::DeserializeOwned,
+{
+    // The overlay is consulted only under the dev gate; in production the branch
+    // is never taken, so the baked datum path below is the sole behaviour.
+    if dev_transition_active()
+        && let Some(replacement) = dev_transition_replacement_for(default_json)
+    {
+        return apply_transition(&replacement, model);
+    }
+    // Decode the baked datum. A decode failure is unreachable for
+    // compiler-emitted JSON; it fails closed (model unchanged) rather than
+    // panicking, so even a corrupt constant can never tear the Model.
+    match serde_json::from_str::<Transition>(default_json) {
+        Ok(baked) => apply_transition(&baked, model),
+        Err(_) => model,
+    }
+}
+
 #[cfg(test)]
 #[cfg(any(feature = "db", feature = "redis_store", feature = "web"))]
 mod tests {
@@ -401,5 +533,138 @@ mod tests {
         // A unit model serializes to JSON `null`, not an object — refuse.
         let t = Transition::set("x", Source::Int(1));
         assert_eq!(apply_transition(&t, ()), ());
+    }
+}
+
+// ─── dev-only transition hot-swap overlay ──────────────────────────────────
+//
+// The overlay + its gate are process-global, so these tests serialise on the
+// appearance overlay's guard (the shared gate) and restore the override + clear
+// the registry on the way out. Each proves the dev == prod crux at the reader
+// seam: with the overlay OFF, `apply_transition_hot` is byte-identical to
+// decoding + applying the baked datum; with it ON, a registered replacement
+// swaps the arm's effect with no recompile.
+#[cfg(test)]
+#[cfg(any(feature = "db", feature = "redis_store", feature = "web"))]
+mod hot_tests {
+    use super::super::literal_table::{overlay_test_lock, set_dev_overlay_active_for_test};
+    use super::{
+        CompileTransitionJson, Source, Transition, TransitionOp, apply_transition_hot,
+        clear_dev_transition_for_test, register_dev_transition,
+    };
+    use serde::{Deserialize, Serialize};
+
+    #[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
+    struct Counter {
+        count: i64,
+    }
+
+    fn model() -> Counter {
+        Counter { count: 5 }
+    }
+
+    /// The baked datum for `Increment -> { m | count = count + 1 }` (the shape
+    /// the compiler bakes; exercised as a literal JSON constant here).
+    fn baked_increment() -> String {
+        Transition {
+            field: "count".to_string(),
+            op: TransitionOp::IntAdd,
+            source: Source::Int(1),
+        }
+        .to_json_shape()
+    }
+
+    #[test]
+    fn overlay_off_applies_baked_datum_only() {
+        let _g = overlay_test_lock();
+        set_dev_overlay_active_for_test(Some(false));
+        clear_dev_transition_for_test();
+
+        // A registered replacement is IGNORED while inactive — the baked `+1`
+        // applies, byte-identical to a direct compiled arm.
+        register_dev_transition(
+            &baked_increment(),
+            Transition {
+                field: "count".to_string(),
+                op: TransitionOp::IntAdd,
+                source: Source::Int(2),
+            },
+        );
+        assert_eq!(
+            apply_transition_hot(&baked_increment(), model()).count,
+            6,
+            "inactive overlay must apply the baked datum (dev == prod)"
+        );
+
+        clear_dev_transition_for_test();
+        set_dev_overlay_active_for_test(None);
+    }
+
+    #[test]
+    fn overlay_on_applies_registered_replacement() {
+        let _g = overlay_test_lock();
+        set_dev_overlay_active_for_test(Some(true));
+        clear_dev_transition_for_test();
+
+        // The counter SEAL: a `+1` arm hot-swapped to `+2` with no recompile.
+        register_dev_transition(
+            &baked_increment(),
+            Transition {
+                field: "count".to_string(),
+                op: TransitionOp::IntAdd,
+                source: Source::Int(2),
+            },
+        );
+        assert_eq!(
+            apply_transition_hot(&baked_increment(), model()).count,
+            7,
+            "active overlay applies the registered replacement (+2)"
+        );
+
+        // A DIFFERENT baked signature is never patched by this replacement.
+        let other = Transition {
+            field: "count".to_string(),
+            op: TransitionOp::IntSub,
+            source: Source::Int(1),
+        }
+        .to_json_shape();
+        assert_eq!(
+            apply_transition_hot(&other, model()).count,
+            4,
+            "a non-matching baked signature applies its own baked datum"
+        );
+
+        clear_dev_transition_for_test();
+        set_dev_overlay_active_for_test(None);
+    }
+
+    #[test]
+    fn corrupt_baked_json_refuses_total() {
+        let _g = overlay_test_lock();
+        set_dev_overlay_active_for_test(Some(false));
+        clear_dev_transition_for_test();
+
+        // A datum that does not decode (only reachable on a codegen defect)
+        // returns the model unchanged — never a panic.
+        assert_eq!(apply_transition_hot("not json", model()), model());
+
+        set_dev_overlay_active_for_test(None);
+    }
+}
+
+/// Serialize a [`Transition`] to the exact JSON the compiler bakes — the
+/// `serde_json` default externally-tagged form. Used by the hot-path tests to
+/// build a baked-datum signature without depending on the compiler crate.
+#[cfg(test)]
+#[cfg(any(feature = "db", feature = "redis_store", feature = "web"))]
+trait CompileTransitionJson {
+    fn to_json_shape(&self) -> String;
+}
+
+#[cfg(test)]
+#[cfg(any(feature = "db", feature = "redis_store", feature = "web"))]
+impl CompileTransitionJson for Transition {
+    fn to_json_shape(&self) -> String {
+        serde_json::to_string(self).expect("serialize transition")
     }
 }
