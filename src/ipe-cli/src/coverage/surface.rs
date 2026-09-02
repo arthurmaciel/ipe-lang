@@ -255,17 +255,48 @@ const fn compiled_symbol(
 
 // ── kernel enumeration ────────────────────────────────────────────────────────
 
+/// Kernel qualifiers whose short name does not match their compiled-source
+/// module's dotted name or final segment.
+///
+/// The general heuristics in [`kernel_module_path`] resolve most qualifiers
+/// (`"List"` → `Ipe.List`, `"Store"` → `Ipe.Db.Store`), but a handful use a
+/// short internal tag that differs from the module name. This table is the
+/// single source of truth for those mismatches; it is consulted before the
+/// phantom fallback so the home column sees the real module rather than an
+/// invented `Ipe.<qualifier>` path.
+///
+/// `Cmd` / `Sub` are intentionally absent — they are shape-scoped and have no
+/// canonical standalone module (reached via `Ipe.Tea.<Shape>.Cmd` / `.Sub`).
+const QUALIFIER_MODULE_OVERRIDES: &[(&str, &[&str])] = &[
+    // `Attr` kernels (`attribute`, `boolAttribute`, `noAttr`) are the three
+    // primitive `Ffi.kernel "Attr_*"` aliases that `Ipe.Html.Attributes` wraps.
+    ("Attr", &["Ipe", "Html", "Attributes"]),
+    // `EmailAddress` kernels (`parse`, `toString`) back `Ipe.Email`'s opaque
+    // `EmailAddress` newtype via `parseAddress` / `addressToString` aliases.
+    ("EmailAddress", &["Ipe", "Email"]),
+    // `Key` and `Mac` are the opaque-type kernel families declared and used in
+    // `Ipe.Crypto` (`keyFromString` / `keyFromBytes` / `macToHex` aliases).
+    ("Key", &["Ipe", "Crypto"]),
+    ("Mac", &["Ipe", "Crypto"]),
+    // `UiCells` kernels (`cells`, `column`, `el`, `none`, `row`, `text`) are the
+    // six builders declared in `Ipe.Ui.Cells`.
+    ("UiCells", &["Ipe", "Ui", "Cells"]),
+];
+
 /// The dotted module path a kernel qualifier lives under.
 ///
-/// A qualifier registered in [`ipe_canon::STDLIB_MODULE_QUALIFIERS`] maps to its
-/// listed path (`"Web"` → `Ipe.Tea.Web`). A qualifier absent from that table
-/// belongs to a compiled-source family whose members are `Ffi.kernel` aliases:
-/// the short qualifier maps to the compiled-source module whose dotted name is
-/// `Ipe.<qualifier>` (`"List"` → `Ipe.List`; `"Db.Dsn"` → `Ipe.Db.Dsn`) or, for a
-/// deeper module addressed by a short qualifier, whose final segment equals the
-/// qualifier (`"Store"` → the compiled-source `Ipe.Db.Store`). A qualifier
-/// matching none is homed under the segments of `Ipe.<qualifier>` so the home
-/// column can name it as unhomed against the real module tables.
+/// Resolution order (first match wins):
+///
+/// 1. [`ipe_canon::STDLIB_MODULE_QUALIFIERS`] — the authoritative
+///    qualifier→path registry (`"Web"` → `Ipe.Tea.Web`).
+/// 2. The compiled-source module whose dotted name is `Ipe.<qualifier>`
+///    (`"List"` → `Ipe.List`; `"Db.Dsn"` → `Ipe.Db.Dsn`).
+/// 3. The compiled-source module whose final segment equals the qualifier
+///    (`"Store"` → `Ipe.Db.Store`).
+/// 4. [`QUALIFIER_MODULE_OVERRIDES`] — short internal tags that differ from
+///    their module's dotted name or final segment.
+/// 5. Phantom fallback `Ipe.<qualifier>` — homed under a non-existent path
+///    so the home column flags it as unhomed.
 fn kernel_module_path(
     qualifier: &str,
     qualifier_to_path: &BTreeMap<String, Vec<String>>,
@@ -281,6 +312,13 @@ fn kernel_module_path(
     }
     if let Some(path) = compiled_by_last_segment.get(qualifier) {
         return path.clone();
+    }
+    if let Some(segs) = QUALIFIER_MODULE_OVERRIDES
+        .iter()
+        .find(|(q, _)| *q == qualifier)
+        .map(|(_, segs)| segs)
+    {
+        return segs.iter().map(|s| (*s).to_owned()).collect();
     }
     segments_of(&dotted)
 }
