@@ -694,4 +694,111 @@ mod tests {
             labels[0]
         );
     }
+
+    // Export → import → fold at each step equals the live model at that step.
+    // Proves the recorder+export path is the exact basis for time-travel fold:
+    // model-at-N = fold apply_transition over the first N+1 exported messages.
+    #[cfg(feature = "json")]
+    #[test]
+    fn recorder_export_fold_matches_live() {
+        #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+        enum FoldMsg {
+            Inc,
+            Add(i64),
+            Reset,
+        }
+        #[derive(Clone, Debug, PartialEq)]
+        struct FoldModel {
+            count: i64,
+        }
+
+        fn fold_update(msg: FoldMsg, m: FoldModel) -> (FoldModel, IpeCmd<FoldMsg>) {
+            let next = match msg {
+                FoldMsg::Inc => FoldModel { count: m.count + 1 },
+                FoldMsg::Add(n) => FoldModel { count: m.count + n },
+                FoldMsg::Reset => FoldModel { count: 0 },
+            };
+            (next, IpeCmd::None)
+        }
+
+        let init = FoldModel { count: 0 };
+        let mut buf = RecordBuffer::new(init.clone(), 16);
+
+        // Drive a scripted message sequence.
+        let msgs = [FoldMsg::Inc, FoldMsg::Add(4), FoldMsg::Reset, FoldMsg::Inc];
+        let mut live = init.clone();
+        for msg in &msgs {
+            let (next, _cmd) = fold_update(msg.clone(), live.clone());
+            buf.record(msg.clone(), next.clone(), &fold_update);
+            live = next;
+        }
+
+        // Export the log.
+        let bytes = export_msgs(&buf).expect("export must succeed");
+
+        // Import into a fresh buffer (round-trip through JSON).
+        let imported = import_msgs::<FoldMsg, FoldModel, _>(&bytes, init.clone(), fold_update, 16)
+            .expect("import must succeed");
+
+        // Fold over the first N+1 imported messages must equal the live model
+        // at that step.
+        let mut expected = init.clone();
+        for (i, msg) in msgs.iter().enumerate() {
+            let (next, _) = fold_update(msg.clone(), expected.clone());
+            expected = next.clone();
+
+            let reconstructed = imported
+                .reconstruct(i, &fold_update)
+                .expect("step must be in range");
+            assert_eq!(
+                reconstructed, expected,
+                "fold at step {i} must equal live model"
+            );
+        }
+
+        // Final live model equals last imported reconstruct.
+        assert_eq!(
+            live.count, 1,
+            "live model after Inc→+4→Reset→Inc is count=1"
+        );
+        let final_step = imported
+            .reconstruct(msgs.len() - 1, &fold_update)
+            .expect("last step must exist");
+        assert_eq!(
+            final_step, live,
+            "final reconstructed model must equal live model"
+        );
+    }
+
+    // Past the cap the log does not grow unbounded; base advances to preserve
+    // correct reconstruction from the retained window.
+    #[test]
+    fn recorder_bound_does_not_grow_past_cap() {
+        let cap = 4usize;
+        let mut buf = RecordBuffer::new(TestModel { count: 0 }, cap);
+
+        // Record more steps than the cap.
+        for i in 1..=10i64 {
+            let current = buf
+                .log
+                .back()
+                .map(|s| s.model_after.clone())
+                .unwrap_or_else(|| buf.base.clone());
+            let (next, _) = test_update(TestMsg::Add(i), current);
+            buf.record(TestMsg::Add(i), next, &test_update);
+
+            assert!(
+                buf.len() <= cap,
+                "log length {} exceeded cap {} after step {i}",
+                buf.len(),
+                cap
+            );
+        }
+
+        assert_eq!(
+            buf.len(),
+            cap,
+            "log must hold exactly cap steps after overflow"
+        );
+    }
 }
