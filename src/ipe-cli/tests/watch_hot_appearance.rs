@@ -1628,7 +1628,8 @@ fn web_fixture_value_hole(label: &str, extra_child: &str) -> String {
          view : Model -> Element Msg\n\
          view model =\n    \
              Ui.column [ Ui.padding 8, Ui.spacing 4 ]\n        \
-                 [ Ui.text \"{label}\"\n        \
+                 [ Ui.text \"marker\"\n        \
+                 , Ui.text \"{label}\"\n        \
                  , Ui.text (String.fromInt model.count){extra_child}\n        \
                  ]\n\n\
          subscriptions : Model -> Sub Msg\n\
