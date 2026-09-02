@@ -9,10 +9,12 @@ module Ipe.Browser.Clipboard.Internals exposing
     ( JsCmd(..)
     , JsMsg(..)
     , request
+    , requestOne
     , subscribe
     , inbound
     )
 
+import Ipe.Error as Error exposing (Error)
 import Ipe.Js as Js
 import Ipe.Json.Decode as Decode
 import Ipe.Tea.Web.Cmd as Cmd
@@ -47,6 +49,14 @@ type JsMsg
 request : JsCmd -> Cmd.Cmd msg
 request cmd =
     Js.send cmd
+
+
+-- | `requestOne cmd` — correlated one-shot `JsCmd` → `Task Error JsMsg`.
+-- Routes through `Js.request` with the `inbound` decoder so the correlated
+-- reply is decoded fail-closed by the same gate the `subscribe` path uses.
+requestOne : JsCmd -> Task Error JsMsg
+requestOne cmd =
+    Js.request cmd inbound
 
 
 -- | `subscribe toMsg` — the inbound subscription over the fail-closed seal

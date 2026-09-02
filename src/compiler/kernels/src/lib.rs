@@ -2233,6 +2233,7 @@ pub enum StdlibKernel {
     // in-process through the seal codec. Both disclose the `js-port` capability.
     JsSend,      // a -> Cmd msg (arity 1)
     JsSubscribe, // Decoder a -> (a -> msg) -> Sub msg (arity 2)
+    JsRequest,   // a -> Decoder b -> Task b (arity 2) — correlated one-shot request/reply
     // ── Ipe.Env — build-time-embedded public config (wasm M5 residual) ──
     // `Env.public "KEY"` resolves ONLY for names in the project's `[wasm]
     // publicEnv` allowlist (`package.ipe`, validated against the secret-name
@@ -4241,6 +4242,7 @@ impl StdlibKernel {
             // inbound payload through the fail-closed seal decoder.
             Self::JsSend => d("Js", "send", 1, Tea, "js_send"),
             Self::JsSubscribe => d("Js", "subscribe", 2, Tea, "js_subscribe"),
+            Self::JsRequest => d("Js", "request", 2, Tea, "js_request"),
             Self::EnvPublic => d("Env", "public", 1, Pure, "env_public"),
             // ── Ipe.Ui.Region ──────────────────────────────────────────────
             Self::RegionMainContent => d("Region", "mainContent", 0, Ui, "ui_region_main_content_"),
@@ -5510,6 +5512,7 @@ impl StdlibKernel {
         // ── Ipe.Js — the raw typed transport across the Ipê↔JS seam ──────
         Self::JsSend,
         Self::JsSubscribe,
+        Self::JsRequest,
         // ── Ipe.Env — build-time-embedded public config ──────────────
         Self::EnvPublic,
         // ── Ipe.Ui.Region ──────────────────────────────────────────────
@@ -7295,6 +7298,9 @@ impl StdlibKernel {
         // canon gate rather than a scheme constraint.
         const JS_SEND: TyShape = TyShape::Fun(&A, &CMD_B);
         const JS_SUBSCRIBE: TyShape = TyShape::Fun(&DEC_A, &TyShape::Fun(&A_TO_B, &SUB_B));
+        // `request : a -> Decoder b -> Task b` — correlated one-shot port request.
+        // Outbound payload `a` = var 0, decoded reply `b` = var 1.
+        const JS_REQUEST: TyShape = TyShape::Fun(&A, &TyShape::Fun(&DEC_B, &TASK_B));
         // Ws server.
         const WS_ON_CB_TO_CFG: TyShape = TyShape::Fun(
             &TyShape::Fun(&WS_SERVER, &TASK_UNIT),
@@ -8996,6 +9002,7 @@ impl StdlibKernel {
             // ── Ipe.Js ports. ──
             Self::JsSend => Some(&JS_SEND),
             Self::JsSubscribe => Some(&JS_SUBSCRIBE),
+            Self::JsRequest => Some(&JS_REQUEST),
 
             // ── Ws server (opaque handle / cfg). ──
             Self::WsDefaultCfg => Some(&WS_SERVER_CFG),
@@ -9725,7 +9732,7 @@ impl StdlibKernel {
             // uncharacterised `:raw` floor — the reachability floor no port slips
             // below. A characterised `Ipe.Browser.<Api>` import adds its specific
             // web axis on top, import-derived (see the whole-program scan).
-            Self::JsSend | Self::JsSubscribe => Some(Capability::JsPort(WebCapability::Raw)),
+            Self::JsSend | Self::JsSubscribe | Self::JsRequest => Some(Capability::JsPort(WebCapability::Raw)),
             Self::TimeNow
             | Self::TimeSleep
             | Self::TimeUnixMillis
@@ -10806,6 +10813,7 @@ impl StdlibKernel {
                 | Self::SubSubscribeWebSocket
                 | Self::JsSend
                 | Self::JsSubscribe
+                | Self::JsRequest
         )
     }
 
@@ -12269,6 +12277,7 @@ impl StdlibKernel {
                     | Self::SubSubscribeWebSocket
                     | Self::JsSend
                     | Self::JsSubscribe
+                    | Self::JsRequest
             ),
             KernelClass::Pure => {
                 // `StringToUpperIn` / `StringToLowerIn` require ICU4X
@@ -12656,15 +12665,19 @@ mod tests {
             StdlibKernel::UiWidget.capability(),
             Some(Capability::CustomElement)
         );
-        // `Js.send` / `Js.subscribe` exchange typed data with page JS → the
-        // `js-port:raw` uncharacterised-floor axis, inferred through this same SSOT
-        // (the kernel cannot see the hand-written JS's target Web API).
+        // `Js.send` / `Js.subscribe` / `Js.request` exchange typed data with page
+        // JS → the `js-port:raw` uncharacterised-floor axis, inferred through this
+        // same SSOT (the kernel cannot see the hand-written JS's target Web API).
         assert_eq!(
             StdlibKernel::JsSend.capability(),
             Some(Capability::JsPort(WebCapability::Raw))
         );
         assert_eq!(
             StdlibKernel::JsSubscribe.capability(),
+            Some(Capability::JsPort(WebCapability::Raw))
+        );
+        assert_eq!(
+            StdlibKernel::JsRequest.capability(),
             Some(Capability::JsPort(WebCapability::Raw))
         );
     }
