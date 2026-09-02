@@ -1,6 +1,10 @@
 module Package exposing (package)
 
+import Ipe.Package exposing (..)
 
+
+package : Package
 package =
-    Package.named "system-greet-cli"
-        |> Package.version "0.1.0"
+    { name = "system-greet-cli"
+    , version = "0.1.0"
+    }

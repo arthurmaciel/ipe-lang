@@ -1,6 +1,10 @@
 module Package exposing (package)
 
+import Ipe.Package exposing (..)
 
+
+package : Package
 package =
-    Package.named "language-playground"
-        |> Package.version "0.1.0"
+    { name = "language-playground"
+    , version = "0.1.0"
+    }

@@ -16,7 +16,7 @@ fn a_package_that_cannot_lower_surfaces_the_real_diagnostic() -> Result<(), Box<
     fs::create_dir_all(dir.join("src"))?;
     fs::write(
         dir.join("package.ipe"),
-        "module Package exposing (package)\n\n\npackage =\n    Package.named \"badpkg\"\n        |> Package.version \"0.1.0\"\n",
+        "module Package exposing (package)\n\n\npackage =\n    { name = \"badpkg\", version = \"0.1.0\" }\n",
     )?;
     // `Main` references a name that does not exist, so lowering fails.
     fs::write(

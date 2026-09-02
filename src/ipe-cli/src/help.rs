@@ -345,6 +345,14 @@ const COMMANDS: &[Command] = &[
         options: &[],
     },
     Command {
+        name: "migrate",
+        run: crate::migrate::run_migrate,
+        summary: "Convert an interim manifest to the package.ipe record form.",
+        args: "config",
+        args_desc: "The migration to run. `config` rewrites the interim manifest (a `Package.named |>` package.ipe, or a legacy ipe.toml) as the record form.",
+        options: &[],
+    },
+    Command {
         name: "add",
         run: crate::pkg::run_add,
         summary: "Add an Ipê package dependency (resolution ships with the index).",
@@ -627,6 +635,7 @@ const SECTIONS: &[Section] = &[
             "fmt",
             "lsp",
             "clean",
+            "migrate",
             "health",
             "capabilities",
             "diff",

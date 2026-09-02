@@ -1,6 +1,10 @@
 module Package exposing (package)
 
+import Ipe.Package exposing (..)
 
+
+package : Package
 package =
-    Package.named "task-deploy-steps"
-        |> Package.version "0.1.0"
+    { name = "task-deploy-steps"
+    , version = "0.1.0"
+    }

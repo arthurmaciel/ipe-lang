@@ -1,6 +1,10 @@
 module Package exposing (package)
 
+import Ipe.Package exposing (..)
 
+
+package : Package
 package =
-    Package.named "html-escaping"
-        |> Package.version "0.1.0"
+    { name = "html-escaping"
+    , version = "0.1.0"
+    }

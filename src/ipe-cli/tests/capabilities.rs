@@ -80,7 +80,7 @@ fn widget_project(tag: &str) -> Result<PathBuf, Box<dyn Error>> {
     std::fs::create_dir_all(dir.join("src/js"))?;
     std::fs::write(
         dir.join("package.ipe"),
-        "module Package exposing (package)\n\n\npackage =\n    Package.named \"widgetpkg\"\n        |> Package.version \"0.1.0\"\n",
+        "module Package exposing (package)\n\n\npackage =\n    { name = \"widgetpkg\", version = \"0.1.0\" }\n",
     )?;
     std::fs::write(dir.join("src/Main.ipe"), WIDGET_APP)?;
     std::fs::write(dir.join("src/js/counter.js"), COUNTER_JS)?;
@@ -313,7 +313,7 @@ fn unmounted_widget_project(tag: &str) -> Result<PathBuf, Box<dyn Error>> {
     std::fs::create_dir_all(dir.join("src/js"))?;
     std::fs::write(
         dir.join("package.ipe"),
-        "module Package exposing (package)\n\n\npackage =\n    Package.named \"unmountedpkg\"\n        |> Package.version \"0.1.0\"\n",
+        "module Package exposing (package)\n\n\npackage =\n    { name = \"unmountedpkg\", version = \"0.1.0\" }\n",
     )?;
     std::fs::write(dir.join("src/Main.ipe"), UNMOUNTED_WIDGET_APP)?;
     std::fs::write(dir.join("src/js/counter.js"), COUNTER_JS)?;
@@ -374,7 +374,7 @@ fn a_handle_constructed_in_an_imported_module_discloses_custom_element() -> Test
     std::fs::create_dir_all(dir.join("src/js"))?;
     std::fs::write(
         dir.join("package.ipe"),
-        "module Package exposing (package)\n\n\npackage =\n    Package.named \"transpkg\"\n        |> Package.version \"0.1.0\"\n",
+        "module Package exposing (package)\n\n\npackage =\n    { name = \"transpkg\", version = \"0.1.0\" }\n",
     )?;
     // Module B constructs the handle; nothing mounts it.
     std::fs::write(

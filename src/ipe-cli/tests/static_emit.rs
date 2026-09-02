@@ -326,9 +326,15 @@ fn package_ipe_rust_stages_parse_and_reject_typos() {
     let manifest_path = scratch.join("package.ipe");
     std::fs::write(
         &manifest_path,
-        "module Package exposing (package)\n\n\npackage =\n    Package.named \"p\"\n\
-         \x20       |> Package.static (Static.on)\n        |> Package.allocator (Package.dlmalloc)\n\
-         \x20       |> Package.allowSlowAllocator (Static.off)\n",
+        "module Package exposing (package)\n\n\npackage =\n\
+         \x20   { name = \"p\"\n\
+         \x20   , build =\n\
+         \x20       { database = Sqlite\n\
+         \x20       , static = True\n\
+         \x20       , allocator = Dlmalloc\n\
+         \x20       , allowSlowAllocator = False\n\
+         \x20       }\n\
+         \x20   }\n",
     )
     .expect("write package.ipe");
     let parsed = ipe::project::parse_manifest(&manifest_path).expect("parse");
@@ -345,8 +351,10 @@ fn package_ipe_rust_stages_parse_and_reject_typos() {
 
     std::fs::write(
         &manifest_path,
-        "module Package exposing (package)\n\n\npackage =\n    Package.named \"p\"\n\
-         \x20       |> Package.allocator (Package.jemallocc)\n",
+        "module Package exposing (package)\n\n\npackage =\n\
+         \x20   { name = \"p\"\n\
+         \x20   , build = { allocator = Jemallocc }\n\
+         \x20   }\n",
     )
     .expect("write package.ipe");
     let err = ipe::project::parse_manifest(&manifest_path).expect_err("typo must refuse");
