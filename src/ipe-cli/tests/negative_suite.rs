@@ -1670,6 +1670,26 @@ fn exhaust_builtin_adt_toplevel_nonexhaustive() {
     assert_rejected("exhaust_builtin_toplevel", &src, "IPE-T0010");
 }
 
+/// A fold over the inbound `Ipe.Browser.Geolocation.Internals` `JsMsg` that omits
+/// a denial variant (`Denied`) is non-exhaustive (IPE-T0010) — the compiler-level
+/// guarantee that a browser permission denial can never be silently swallowed by a
+/// `case`. This is the structural half of MUST-FIX #5: the inbound ADT enumerates
+/// every denial, so an incomplete fold is a type error, not a dropped frame.
+#[test]
+fn geolocation_inbound_fold_missing_a_denial_is_non_exhaustive() {
+    let src = format!(
+        "{HEAD}import Ipe.Io as Io\n\
+         import Ipe.Browser.Geolocation.Internals as Geo exposing (JsMsg(..))\n\
+         describe : JsMsg -> String\n\
+         describe m =\n    case m of\n        \
+         Position _lat _lng _acc -> \"pos\"\n        \
+         Unavailable             -> \"unavailable\"\n        \
+         Timeout                 -> \"timeout\"\n\n\
+         main = Io.println (describe Timeout)\n"
+    );
+    assert_rejected("geolocation_inbound_missing_denied", &src, "IPE-T0010");
+}
+
 // NOTE: IPE-T0011 (redundant case branch) is intentionally `Severity::Warning`
 // (see `types::exhaust` — "collect it but do not abort"), so a redundant arm
 // does NOT reject compilation. It is therefore out of scope for a

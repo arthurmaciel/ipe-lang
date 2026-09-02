@@ -50,6 +50,8 @@ mod golden_cross_module_type_res;
 mod golden_custom_maybe_adt;
 #[path = "g_misc/golden_destructure_move_ownership.rs"]
 mod golden_destructure_move_ownership;
+#[path = "g_misc/golden_email_send_composed_lowers.rs"]
+mod golden_email_send_composed_lowers;
 #[path = "g_misc/golden_email_send_nominal_fold_seal.rs"]
 mod golden_email_send_nominal_fold_seal;
 #[path = "g_misc/golden_ffi_kernel_alias_seal.rs"]

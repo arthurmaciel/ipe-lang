@@ -4,40 +4,73 @@
 
 [Back to stdlib index](../stdlib.md)
 
-Ipe.Browser.Clipboard — write text to the system clipboard from the browser.
+Ipe.Browser.Clipboard — read from and write to the system clipboard from the
+browser, over `Ipe.Js` ports.
 
-A thin wrapper over `Ipe.Js` ports: `write` builds an outbound `JsCmd` and
-hands it to `Js.send`, so the seal codec and the fail-closed port discipline
-back it byte-identically — there is no second transport. The reserved
-`Ipe.Browser.Clipboard` module path is the SSOT the compiler keys the
-`js-port:clipboard` disclosure off: any module that imports it discloses that
-specific web capability (import-derived, alias-immune), and only the top-level
-app's `[capabilities] accept` set can grant it.
+A first-party proof of the per-capability web mechanism spanning BOTH port
+directions: outbound `JsCmd`s (`write` / `read`) request a clipboard operation,
+and an inbound `JsMsg` carries a read's result or a typed denial. Both cross the
+same seal codec and fail-closed port discipline as every other port — there is
+no second transport.
 
-This is the thin proof of the per-capability mechanism, not the full Clipboard
-API: it ships the outbound `write` path only. The high-level read path and a
-`Task`-shaped result over an inbound `Denied`/`Unavailable` seal are a tracked
-follow-up (the inbound `JsMsg` denial variants belong with that path).
+Importing this reserved `Ipe.Browser.<Api>` module discloses `js-port:clipboard`
+(import-derived, keyed on the canonical `Ipe.Browser.Clipboard` path prefix via
+`WebCapability::for_browser_module`, alias-immune), and only the top-level app's
+`[capabilities] accepts` set can grant it.
 
-## `JsCmd`
+The two layers:
 
-The one closed OUTBOUND port type this module publishes: the whole outbound
-surface as a single auditable object. `WriteText text` requests that the page's
-clipboard handler write `text` via `navigator.clipboard.writeText`.
+  * `Ipe.Browser.Clipboard.Internals` publishes the closed outbound/inbound ADTs
+    and the raw `Ipe.Js` wiring.
+  * this module is the high-level layer: `write` / `read` with the inbound
+    subscription `contents`, which folds the narrow `JsMsg` EXHAUSTIVELY into a
+    typed `Result Error String` — a host permission denial becomes an `Err`,
+    never a silently dropped variant.
+
+`read` is shaped as an outbound `Cmd`, not a `Task Error String`: the raw
+`Ipe.Js` transport has no request→reply correlation kernel, so a `Task`-shaped
+one-shot cannot be spelled over it today. The read result arrives on the
+`contents` subscription. Closing that gap (a correlated port→`Task` bridge) is
+tracked — it needs a new backend kernel and a security review of the JS
+boundary, not a stdlib-only change.
 
 ## `write`
 
 ```ipe
-write : String -> Cmd msg
+write : String -> Cmd.Cmd msg
 ```
 
 `write text` — request the browser write `text` to the system clipboard.
 
-Outbound one-shot over the raw port transport: it builds the closed `WriteText`
-command and sends it. The served JS handler (SRI-pinned, the stdlib's, never a
-dependency's) reaches `navigator.clipboard.writeText`; a host permission denial
-traps to a typed inbound result on the follow-up read path, never a panic.
+Outbound one-shot over the raw port transport. The served JS handler (SRI-pinned,
+the stdlib's, never a dependency's) reaches `navigator.clipboard.writeText`; a
+host permission denial traps to a typed inbound result on the `contents`
+subscription, never a panic.
 
-Importing this module discloses `js-port:clipboard`; the app must grant it with
-`accept = [ JsPort Clipboard ]` under [capabilities] in package.ipe.
+## `read`
+
+```ipe
+read : Cmd.Cmd msg
+```
+
+`read` — request the current clipboard contents.
+
+Outbound one-shot; the served JS handler reaches `navigator.clipboard.readText`.
+The result — the text or a typed denial — arrives on the `contents`
+subscription.
+
+## `contents`
+
+```ipe
+contents : (Result Error String -> msg) -> Sub.Sub msg
+```
+
+`contents toMsg` — the inbound subscription, wired in `subscriptions`.
+
+The decoder IS the security gate: every inbound value runs through the total,
+bounded seal decoder for the narrow `JsMsg`; a malformed / mismatched frame is
+dropped whole. A decoded `JsMsg` is folded EXHAUSTIVELY into a
+`Result Error String` — a `Read` becomes `Ok`, a denial becomes a typed `Err`,
+and a bare `Written` acknowledgement (from `write`) carries the empty string so
+the caller sees a successful, contentless completion rather than a dropped frame.
 

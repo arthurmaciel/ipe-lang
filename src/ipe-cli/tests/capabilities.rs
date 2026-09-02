@@ -679,3 +679,178 @@ fn a_port_program_that_hides_js_port_is_rejected() -> TestResult {
     let _ = std::fs::remove_dir_all(&dir);
     Ok(())
 }
+
+// ── Ipe.Browser.Geolocation — the second first-party web-API module ─────────
+
+/// A Web-shape app importing `Ipe.Browser.Geolocation` — the import-derived signal
+/// that discloses the SPECIFIC `js-port:geolocation` axis on top of the `:raw`
+/// floor the underlying `Js.send`/`Js.subscribe` tag.
+const GEOLOCATION_APP: &str = r#"module Main exposing (main)
+
+import Ipe.Tea.Web as Web
+import Ipe.Tea.Web.Cmd as Cmd
+import Ipe.Tea.Web.Sub as Sub
+import Ipe.Ui as Ui
+import Ipe.Error as Error exposing (Error)
+import Ipe.Browser.Geolocation as Geo
+
+type alias Model = { where_ : String }
+
+type Msg = Locate | Got (Result Error Geo.Coords)
+
+init : a -> ( Model, Cmd.Cmd Msg )
+init _r =
+    ( { where_ = "?" }, Cmd.none )
+
+update : Msg -> Model -> ( Model, Cmd.Cmd Msg )
+update msg model =
+    case msg of
+        Locate ->
+            ( model, Geo.current )
+
+        Got _r ->
+            ( model, Cmd.none )
+
+view : Model -> Element Msg
+view _model =
+    Ui.text "ok"
+
+subscriptions : Model -> Sub.Sub Msg
+subscriptions _model =
+    Geo.positions Got
+
+main =
+    Web.app
+        { init = init, update = update, view = view, subscriptions = subscriptions
+        , routes = [], notFound = Locate
+        }
+"#;
+
+fn write_single(tag: &str, src: &str) -> Result<PathBuf, Box<dyn Error>> {
+    let dir = std::env::temp_dir().join(format!(
+        "ipe-{tag}-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir)?;
+    std::fs::write(dir.join("Main.ipe"), src)?;
+    Ok(dir)
+}
+
+/// Importing `Ipe.Browser.Geolocation` discloses the specific `js-port:geolocation`
+/// axis — the whole import-derived mechanism through the real pipeline, mirroring
+/// the shipped Clipboard proof for the second web-API module.
+#[test]
+fn importing_browser_geolocation_discloses_js_port_geolocation() -> TestResult {
+    let dir = write_single("geo", GEOLOCATION_APP)?;
+    let entry = dir.join("Main.ipe");
+    let declared = BTreeSet::from([
+        Capability::JsPort(WebCapability::Geolocation),
+        Capability::JsPort(WebCapability::Raw),
+    ]);
+    let r = verify_capabilities(&entry, &declared);
+    assert!(
+        r.is_ok(),
+        "importing Ipe.Browser.Geolocation must disclose js-port:geolocation (+ the :raw floor): {r:?}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+    Ok(())
+}
+
+/// The prefix disclosure key closes the low-level submodule hole: importing the
+/// `Ipe.Browser.Geolocation.Internals` submodule discloses the SAME
+/// `js-port:geolocation` axis as the top-level module, so the full option surface
+/// cannot be reached undisclosed.
+const GEOLOCATION_INTERNALS_APP: &str = r#"module Main exposing (main)
+
+import Ipe.Tea.Web as Web
+import Ipe.Tea.Web.Cmd as Cmd
+import Ipe.Tea.Web.Sub as Sub
+import Ipe.Ui as Ui
+import Ipe.Browser.Geolocation.Internals as Geo
+
+type alias Model = { n : Int }
+
+type Msg = Poke
+
+init : a -> ( Model, Cmd.Cmd Msg )
+init _r =
+    ( { n = 0 }, Geo.request (Geo.Current Geo.defaults) )
+
+update : Msg -> Model -> ( Model, Cmd.Cmd Msg )
+update _msg model =
+    ( model, Cmd.none )
+
+view : Model -> Element Msg
+view _model =
+    Ui.text "ok"
+
+subscriptions : Model -> Sub.Sub Msg
+subscriptions _model =
+    Sub.none
+
+main =
+    Web.app
+        { init = init, update = update, view = view, subscriptions = subscriptions
+        , routes = [], notFound = Poke
+        }
+"#;
+
+#[test]
+fn importing_geolocation_internals_discloses_the_same_axis() -> TestResult {
+    let dir = write_single("geointernals", GEOLOCATION_INTERNALS_APP)?;
+    let entry = dir.join("Main.ipe");
+    let declared = BTreeSet::from([
+        Capability::JsPort(WebCapability::Geolocation),
+        Capability::JsPort(WebCapability::Raw),
+    ]);
+    let r = verify_capabilities(&entry, &declared);
+    assert!(
+        r.is_ok(),
+        "importing the Internals submodule must disclose js-port:geolocation (prefix key): {r:?}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+    Ok(())
+}
+
+/// Fail-closed: a geolocation app that omits the grant is rejected as
+/// under-declared, the axis named — the negative half of the consent gate.
+#[test]
+fn a_geolocation_app_without_the_grant_is_rejected() -> TestResult {
+    let dir = write_single("geonogrant", GEOLOCATION_APP)?;
+    let entry = dir.join("Main.ipe");
+    // Grant only the raw floor, not the geolocation axis.
+    let declared = BTreeSet::from([Capability::JsPort(WebCapability::Raw)]);
+    let r = verify_capabilities(&entry, &declared);
+    assert!(
+        matches!(
+            &r,
+            Err(ipe::CliError::CapabilityMismatch { missing, .. })
+                if missing.contains(&"js-port:geolocation")
+        ),
+        "an ungranted geolocation app must be rejected naming js-port:geolocation, got: {r:?}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+    Ok(())
+}
+
+/// The `web_consent::gate` refuses an ungranted geolocation axis naming the module
+/// and admits it once granted — the app-boundary consent mechanism over the second
+/// web-API module.
+#[test]
+fn web_consent_refuses_ungranted_geolocation_then_admits_it() {
+    use ipe::web_consent;
+    let inferred = BTreeSet::from([Capability::JsPort(WebCapability::Geolocation)]);
+    let provenance = web_consent::WebAxisProvenance::from_sources([(
+        "Main",
+        "import Ipe.Browser.Geolocation as Geo\n",
+    )]);
+    let ungranted = web_consent::gate(&inferred, &BTreeSet::new(), &provenance)
+        .expect_err("an ungranted web axis is refused");
+    let msg = ungranted.to_string();
+    assert!(msg.contains("js-port:geolocation"), "names the axis: {msg}");
+    assert!(msg.contains("Main"), "names the disclosing module: {msg}");
+    let granted = BTreeSet::from([Capability::JsPort(WebCapability::Geolocation)]);
+    web_consent::gate(&inferred, &granted, &provenance).expect("a granted web axis builds");
+}
