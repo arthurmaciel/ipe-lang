@@ -1,6 +1,10 @@
 module Package exposing (package)
 
+import Ipe.Package exposing (..)
 
+
+package : Package
 package =
-    Package.named "set-access-control"
-        |> Package.version "0.1.0"
+    { name = "set-access-control"
+    , version = "0.1.0"
+    }

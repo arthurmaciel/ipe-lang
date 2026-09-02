@@ -1,5 +1,9 @@
 module Package exposing (package)
 
+import Ipe.Package exposing (..)
 
+
+package : Package
 package =
-    Package.named "multi-mod-split-pilot"
+    { name = "multi-mod-split-pilot"
+    }

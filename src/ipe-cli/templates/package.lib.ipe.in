@@ -1,7 +1,11 @@
 module Package exposing (package)
 
+import Ipe.Package exposing (..)
 
+
+package : Package
 package =
-    Package.named "{name}"
-        |> Package.version "0.1.0"
-        |> Package.exposedModules [ "{module}" ]
+    { name = "{name}"
+    , version = "0.1.0"
+    , exposedModules = [ "{module}" ]
+    }

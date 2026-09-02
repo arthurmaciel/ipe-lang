@@ -178,7 +178,7 @@ fn deny_gate_exits_nonzero() -> TestResult {
     )?;
     std::fs::write(
         dir.join("package.ipe"),
-        "module Package exposing (package)\n\npackage = Package.named \"gated\"\n",
+        "module Package exposing (package)\n\npackage = { name = \"gated\" }\n",
     )?;
     std::fs::write(
         dir.join("lint.ipe"),
@@ -202,7 +202,7 @@ fn unknown_rule_in_config_fails_closed() -> TestResult {
     )?;
     std::fs::write(
         dir.join("package.ipe"),
-        "module Package exposing (package)\n\npackage = Package.named \"badcfg\"\n",
+        "module Package exposing (package)\n\npackage = { name = \"badcfg\" }\n",
     )?;
     std::fs::write(
         dir.join("lint.ipe"),

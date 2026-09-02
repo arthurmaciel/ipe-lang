@@ -1,6 +1,10 @@
 module Package exposing (package)
 
+import Ipe.Package exposing (..)
 
+
+package : Package
 package =
-    Package.named "webview-threejs-spike"
-        |> Package.version "0.0.0"
+    { name = "webview-threejs-spike"
+    , version = "0.0.0"
+    }

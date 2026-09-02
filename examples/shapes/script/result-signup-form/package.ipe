@@ -1,6 +1,10 @@
 module Package exposing (package)
 
+import Ipe.Package exposing (..)
 
+
+package : Package
 package =
-    Package.named "result-signup-form"
-        |> Package.version "0.1.0"
+    { name = "result-signup-form"
+    , version = "0.1.0"
+    }

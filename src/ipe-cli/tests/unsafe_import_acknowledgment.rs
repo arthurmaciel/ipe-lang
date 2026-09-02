@@ -22,7 +22,7 @@ fn scratch_project(name: &str, main_src: &str) -> Result<std::path::PathBuf, Box
     fs::write(
         dir.join("package.ipe"),
         format!(
-            "module Package exposing (package)\n\n\npackage =\n    Package.named \"{name}\"\n        |> Package.version \"0.1.0\"\n"
+            "module Package exposing (package)\n\n\npackage =\n    {{ name = \"{name}\", version = \"0.1.0\" }}\n"
         ),
     )?;
     fs::write(dir.join("src/Main.ipe"), main_src)?;
@@ -142,8 +142,11 @@ fn manifest_accept_token_parses_and_proceeds() -> Result<(), Box<dyn Error>> {
     // Rewrite with the durable acceptance stage.
     fs::write(
         dir.join("package.ipe"),
-        "module Package exposing (package)\n\n\npackage =\n    Package.named \"manifest\"\n\
-         \x20       |> Package.version \"0.1.0\"\n        |> Package.accepts [ Capability.unsafe ]\n",
+        "module Package exposing (package)\n\n\npackage =\n\
+         \x20   { name = \"manifest\"\n\
+         \x20   , version = \"0.1.0\"\n\
+         \x20   , capabilities = { accepts = [ Unsafe ] }\n\
+         \x20   }\n",
     )?;
 
     let manifest = ipe::project::parse_manifest(&dir.join("package.ipe"))?;

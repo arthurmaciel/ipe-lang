@@ -1,6 +1,10 @@
 module Package exposing (package)
 
+import Ipe.Package exposing (..)
 
+
+package : Package
 package =
-    Package.named "basics-clamp-normalize"
-        |> Package.version "0.1.0"
+    { name = "basics-clamp-normalize"
+    , version = "0.1.0"
+    }

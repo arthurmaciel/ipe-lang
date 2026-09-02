@@ -191,7 +191,7 @@ fn release_unsupported_native_target_is_usage_error() {
         std::fs::create_dir_all(&d).unwrap();
         std::fs::write(
             d.join("package.ipe"),
-            "module Package exposing (package)\n\n\npackage =\n    Package.named \"test\"\n",
+            "module Package exposing (package)\n\n\npackage =\n    { name = \"test\" }\n",
         )
         .unwrap();
         std::fs::create_dir_all(d.join("src")).unwrap();

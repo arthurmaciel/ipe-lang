@@ -1,6 +1,10 @@
 module Package exposing (package)
 
+import Ipe.Package exposing (..)
 
+
+package : Package
 package =
-    Package.named "responsive-breakpoints"
-        |> Package.version "0.1.0"
+    { name = "responsive-breakpoints"
+    , version = "0.1.0"
+    }

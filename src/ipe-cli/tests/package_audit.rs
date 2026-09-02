@@ -234,7 +234,7 @@ fn a_clean_package_passes() {
     let pkg = temp_pkg("clean");
     write_package(
         &pkg,
-        "module Package exposing (package)\n\n\npackage =\n    Package.named \"clean-pkg\"\n        |> Package.version \"0.1.0\"\n",
+        "module Package exposing (package)\n\n\npackage =\n    { name = \"clean-pkg\", version = \"0.1.0\" }\n",
         PURE_MAIN,
     );
     let index = empty_index("clean");
@@ -256,7 +256,7 @@ fn an_undeclared_network_capability_rejects() {
     // The program uses `network` but declares NOTHING — a hidden effect.
     write_package(
         &pkg,
-        "module Package exposing (package)\n\n\npackage =\n    Package.named \"leaky-pkg\"\n        |> Package.version \"0.1.0\"\n",
+        "module Package exposing (package)\n\n\npackage =\n    { name = \"leaky-pkg\", version = \"0.1.0\" }\n",
         NETWORK_MAIN,
     );
     let index = empty_index("undeclared-net");
@@ -282,8 +282,11 @@ fn an_overdeclared_capability_rejects() {
     // The pure program declares `filesystem` it never uses — an over-broad claim.
     write_package(
         &pkg,
-        "module Package exposing (package)\n\n\npackage =\n    Package.named \"broad-pkg\"\n\
-         \x20       |> Package.version \"0.1.0\"\n        |> Package.declares [ Capability.filesystem ]\n",
+        "module Package exposing (package)\n\n\npackage =\n\
+         \x20   { name = \"broad-pkg\"\n\
+         \x20   , version = \"0.1.0\"\n\
+         \x20   , capabilities = { declares = [ Filesystem ] }\n\
+         \x20   }\n",
         PURE_MAIN,
     );
     let index = empty_index("overdeclared");
@@ -306,7 +309,7 @@ fn an_unimported_sibling_capability_rejects() {
     let pkg = temp_pkg("sibling-cap");
     write_package(
         &pkg,
-        "module Package exposing (package)\n\n\npackage =\n    Package.named \"sibling-pkg\"\n        |> Package.version \"0.1.0\"\n",
+        "module Package exposing (package)\n\n\npackage =\n    { name = \"sibling-pkg\", version = \"0.1.0\" }\n",
         // Pure Main — does NOT import Extra.
         "module Main exposing (main)\n\nimport Ipe.Io as Io\n\n\
 import Ipe.Io
@@ -347,7 +350,7 @@ fn a_semver_underbump_rejects() {
     let pkg = temp_pkg("underbump-new");
     // The new version is a BREAKING change (Lib.double's type changed) but only
     // bumps the patch — an under-bump the gate must reject.
-    let manifest = "module Package exposing (package)\n\n\npackage =\n    Package.named \"semver-pkg\"\n        |> Package.version \"0.1.1\"\n";
+    let manifest = "module Package exposing (package)\n\n\npackage =\n    { name = \"semver-pkg\", version = \"0.1.1\" }\n";
     std::fs::write(pkg.join("package.ipe"), manifest).expect("write package.ipe");
     std::fs::write(
         pkg.join("src").join("Main.ipe"),
@@ -396,7 +399,7 @@ fn a_panic_in_author_ffi_rust_rejects() {
     let pkg = temp_pkg("ffi-panic");
     write_package(
         &pkg,
-        "module Package exposing (package)\n\n\npackage =\n    Package.named \"ffi-pkg\"\n        |> Package.version \"0.1.0\"\n",
+        "module Package exposing (package)\n\n\npackage =\n    { name = \"ffi-pkg\", version = \"0.1.0\" }\n",
         PURE_MAIN,
     );
     // Plant an author-supplied FFI wrapper (`_bindings.rs`) that panics. It has
@@ -436,10 +439,11 @@ fn a_panic_in_author_ffi_rust_rejects() {
 const NONEXISTENT_NATIVE_MANIFEST: &str = "\
 module Package exposing (package)\n\n\n\
 package =\n\
-\x20   Package.named \"native-regen-fail\"\n\
-\x20       |> Package.version \"0.1.0\"\n\
-\x20       |> Package.rustDependencies [ Package.rustDep \"ipe_does_not_exist_xyz_q9z\" \"*\" ]\n\
-\x20       |> Package.declares [ Capability.nativeFfi ]\n";
+\x20   { name = \"native-regen-fail\"\n\
+\x20   , version = \"0.1.0\"\n\
+\x20   , rustDependencies = [ rustDep \"ipe_does_not_exist_xyz_q9z\" \"*\" ]\n\
+\x20   , capabilities = { declares = [ NativeFfi ] }\n\
+\x20   }\n";
 
 /// The module for the regen-fail test: it references the nonexistent crate's
 /// module, which the build would reject — but the regen check fires first.
@@ -494,7 +498,7 @@ fn pure_package_skips_regeneration_and_certifies() {
     let pkg = temp_pkg("pure-regen-skip");
     write_package(
         &pkg,
-        "module Package exposing (package)\n\n\npackage =\n    Package.named \"pure-pkg\"\n        |> Package.version \"0.1.0\"\n",
+        "module Package exposing (package)\n\n\npackage =\n    { name = \"pure-pkg\", version = \"0.1.0\" }\n",
         PURE_MAIN,
     );
     let index = empty_index("pure-regen-skip");
@@ -641,10 +645,11 @@ fn git_stdout(dir: &Path, args: &[&str]) -> String {
 const SYMLINK_NATIVE_MANIFEST: &str = "\
 module Package exposing (package)\n\n\n\
 package =\n\
-\x20   Package.named \"symlink-native\"\n\
-\x20       |> Package.version \"0.1.0\"\n\
-\x20       |> Package.rustDependencies [ Package.rustDep \"ipe_does_not_exist_xyz_q9z\" \"*\" ]\n\
-\x20       |> Package.declares [ Capability.nativeFfi ]\n";
+\x20   { name = \"symlink-native\"\n\
+\x20   , version = \"0.1.0\"\n\
+\x20   , rustDependencies = [ rustDep \"ipe_does_not_exist_xyz_q9z\" \"*\" ]\n\
+\x20   , capabilities = { declares = [ NativeFfi ] }\n\
+\x20   }\n";
 
 /// A native package whose committed `.ipe/cache/ffi` is a symlink to an
 /// out-of-tree directory REJECTS with `NativeBindingRegen` — the out-of-tree
@@ -793,7 +798,7 @@ fn a_widget_package_that_hides_custom_element_is_rejected() {
     let pkg = temp_pkg("undeclared-widget");
     write_widget_package(
         &pkg,
-        "module Package exposing (package)\n\n\npackage =\n    Package.named \"widget-pkg\"\n        |> Package.version \"0.1.0\"\n",
+        "module Package exposing (package)\n\n\npackage =\n    { name = \"widget-pkg\", version = \"0.1.0\" }\n",
     );
     let index = empty_index("undeclared-widget");
 
@@ -824,7 +829,7 @@ fn an_unmounted_widget_package_that_hides_custom_element_is_rejected() {
     let pkg = temp_pkg("undeclared-unmounted-widget");
     write_widget_package_with_main(
         &pkg,
-        "module Package exposing (package)\n\n\npackage =\n    Package.named \"unmounted-widget-pkg\"\n        |> Package.version \"0.1.0\"\n",
+        "module Package exposing (package)\n\n\npackage =\n    { name = \"unmounted-widget-pkg\", version = \"0.1.0\" }\n",
         UNMOUNTED_WIDGET_MAIN,
     );
     let index = empty_index("undeclared-unmounted-widget");
@@ -854,7 +859,7 @@ fn a_widget_package_that_declares_custom_element_passes() {
     let pkg = temp_pkg("declared-widget");
     write_widget_package(
         &pkg,
-        "module Package exposing (package)\n\n\npackage =\n    Package.named \"widget-pkg\"\n        |> Package.version \"0.1.0\"\n        |> Package.declares [ Capability.customElement ]\n",
+        "module Package exposing (package)\n\n\npackage =\n    { name = \"widget-pkg\", version = \"0.1.0\", capabilities = { declares = [ CustomElement ] } }\n",
     );
     let index = empty_index("declared-widget");
 
@@ -883,7 +888,7 @@ fn a_tampered_widget_file_breaks_the_recorded_index_hash() {
     let pkg = temp_pkg("widget-hash-pin");
     write_widget_package(
         &pkg,
-        "module Package exposing (package)\n\n\npackage =\n    Package.named \"widget-pkg\"\n        |> Package.version \"0.1.0\"\n        |> Package.declares [ Capability.customElement ]\n",
+        "module Package exposing (package)\n\n\npackage =\n    { name = \"widget-pkg\", version = \"0.1.0\", capabilities = { declares = [ CustomElement ] } }\n",
     );
 
     // The honest tree's content hash — exactly what `ipe publish` records and the
