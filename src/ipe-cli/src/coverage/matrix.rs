@@ -8,8 +8,11 @@
 //! concentrates every per-aspect check into one loop so no symbol is judged on a
 //! subset of the aspects.
 
+use std::path::PathBuf;
+
 use crate::coverage::contract::{AspectCheck, Cell, StdlibSymbol, Surface};
 use crate::coverage::env_surface::EnvItem;
+use crate::coverage::package_surface::PackageItem;
 
 /// The registered static aspect columns of the stdlib surface.
 ///
@@ -183,4 +186,20 @@ pub fn env_columns() -> Vec<Box<dyn AspectCheck<EnvItem>>> {
 #[must_use]
 pub fn run_env() -> MatrixReport {
     run(&crate::coverage::env_surface::EnvVarSurface, &env_columns())
+}
+
+/// The registered aspect columns of the package surface for one project root.
+///
+/// These read only the project's manifest and lockfile — no program build — so
+/// they run in the fast path alongside the env-var columns.
+#[must_use]
+pub fn package_columns(project_root: PathBuf) -> Vec<Box<dyn AspectCheck<PackageItem>>> {
+    crate::coverage::package_surface::package_columns(project_root)
+}
+
+/// Run the package surface for `project_root` against its registered columns.
+#[must_use]
+pub fn run_package(project_root: PathBuf) -> MatrixReport {
+    let surface = crate::coverage::package_surface::PackageSurface::new(project_root.clone());
+    run(&surface, &package_columns(project_root))
 }

@@ -14,5 +14,6 @@ pub mod columns_static;
 pub mod contract;
 pub mod env_surface;
 pub mod matrix;
+pub mod package_surface;
 pub mod probe;
 pub mod surface;
