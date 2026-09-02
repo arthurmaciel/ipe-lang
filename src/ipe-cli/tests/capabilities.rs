@@ -509,6 +509,157 @@ fn a_port_program_discloses_js_port() -> TestResult {
     Ok(())
 }
 
+// ── the per-capability `js-port:<axis>` web disclosure ──────────────────────
+
+/// A Web-shape app importing the reserved `Ipe.Browser.Clipboard` module — the
+/// import-derived signal that discloses the SPECIFIC `js-port:clipboard` axis, on
+/// top of the raw `:raw` floor `Js.send` tags.
+const CLIPBOARD_APP: &str = r#"module Main exposing (main)
+
+import Ipe.Tea.Web as Web
+import Ipe.Tea.Web.Cmd as Cmd
+import Ipe.Tea.Web.Sub as Sub
+import Ipe.Ui as Ui
+import Ipe.Browser.Clipboard as Clipboard
+
+type alias Model = { n : Int }
+
+type Msg = Copy
+
+init : a -> ( Model, Cmd.Cmd Msg )
+init _r =
+    ( { n = 0 }, Cmd.none )
+
+update : Msg -> Model -> ( Model, Cmd.Cmd Msg )
+update _msg model =
+    ( model, Clipboard.write "hello" )
+
+view : Model -> Element Msg
+view _model =
+    Ui.text "ok"
+
+subscriptions : Model -> Sub.Sub Msg
+subscriptions _model =
+    Sub.none
+
+main =
+    Web.app
+        { init = init, update = update, view = view, subscriptions = subscriptions
+        , routes = [], notFound = Copy
+        }
+"#;
+
+/// Importing `Ipe.Browser.Clipboard` discloses the specific `js-port:clipboard`
+/// web axis. This is the whole import-derived mechanism end-to-end through the
+/// real pipeline: the reserved module → the `for_browser_module` table → the
+/// whole-program scan. A transitive-through-injection disclosure (the Clipboard
+/// module is injected as a dep of the entry, so its axis reaches the entry's
+/// linked set) pins MUST-FIX #1's link-fold at the CLI level.
+#[test]
+fn importing_browser_clipboard_discloses_js_port_clipboard() -> TestResult {
+    let dir = std::env::temp_dir().join(format!(
+        "ipe-clip-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir)?;
+    std::fs::write(dir.join("Main.ipe"), CLIPBOARD_APP)?;
+    let entry = dir.join("Main.ipe");
+    // The `:clipboard` characterised axis AND the `:raw` kernel floor (the
+    // `Clipboard.write` body reaches `Js.send`) are both disclosed.
+    let declared = BTreeSet::from([
+        Capability::JsPort(WebCapability::Clipboard),
+        Capability::JsPort(WebCapability::Raw),
+    ]);
+    let r = verify_capabilities(&entry, &declared);
+    assert!(
+        r.is_ok(),
+        "importing Ipe.Browser.Clipboard must disclose js-port:clipboard (+ the :raw floor): {r:?}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+    Ok(())
+}
+
+/// MUST-FIX #1, airtight: a dep-of-dep browser import reaches the linked entry's
+/// set. `Main` imports a local `Widget` that itself imports
+/// `Ipe.Browser.Clipboard`; `Main` never names the browser module. The link-fold
+/// must still carry `Widget`'s disclosure into the whole-program inferred set.
+#[test]
+fn a_transitive_browser_import_reaches_the_linked_set() -> TestResult {
+    let dir = std::env::temp_dir().join(format!(
+        "ipe-cliptrans-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir)?;
+    // `Widget` is the intermediate dep: it imports the browser module and re-exposes
+    // a plain helper. `Main` imports only `Widget`, never the browser module.
+    std::fs::write(
+        dir.join("Widget.ipe"),
+        "module Widget exposing (copy)\n\
+         import Ipe.Browser.Clipboard as Clipboard\n\
+         copy : String -> Cmd msg\n\
+         copy s =\n    Clipboard.write s\n",
+    )?;
+    std::fs::write(
+        dir.join("Main.ipe"),
+        "module Main exposing (main)\n\
+         import Ipe.Tea.Web as Web\n\
+         import Ipe.Tea.Web.Cmd as Cmd\n\
+         import Ipe.Tea.Web.Sub as Sub\n\
+         import Ipe.Ui as Ui\n\
+         import Widget\n\
+         type alias Model = { n : Int }\n\
+         type Msg = Copy\n\
+         init : a -> ( Model, Cmd.Cmd Msg )\n\
+         init _r =\n    ( { n = 0 }, Cmd.none )\n\
+         update : Msg -> Model -> ( Model, Cmd.Cmd Msg )\n\
+         update _msg model =\n    ( model, Widget.copy \"x\" )\n\
+         view : Model -> Element Msg\n\
+         view _model =\n    Ui.text \"ok\"\n\
+         subscriptions : Model -> Sub.Sub Msg\n\
+         subscriptions _model =\n    Sub.none\n\
+         main =\n    Web.app\n        { init = init, update = update, view = view, subscriptions = subscriptions\n        , routes = [], notFound = Copy\n        }\n",
+    )?;
+    let entry = dir.join("Main.ipe");
+    let declared = BTreeSet::from([
+        Capability::JsPort(WebCapability::Clipboard),
+        Capability::JsPort(WebCapability::Raw),
+    ]);
+    let r = verify_capabilities(&entry, &declared);
+    assert!(
+        r.is_ok(),
+        "a dep-of-dep Ipe.Browser.Clipboard import must reach the linked entry's set (MUST-FIX #1): {r:?}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+    Ok(())
+}
+
+/// The consent gate refuses an ungranted disclosed axis naming the module, and
+/// admits it once granted — the app-boundary consent mechanism, exercised through
+/// `web_consent::gate` over the real inferred set.
+#[test]
+fn web_consent_refuses_ungranted_clipboard_then_admits_it() -> TestResult {
+    use ipe::web_consent;
+    let inferred = BTreeSet::from([Capability::JsPort(WebCapability::Clipboard)]);
+    let provenance = web_consent::WebAxisProvenance::from_sources([(
+        "Main",
+        "import Ipe.Browser.Clipboard as Clipboard\n",
+    )]);
+    // Ungranted → fail closed, naming the disclosing module.
+    let ungranted = web_consent::gate(&inferred, &BTreeSet::new(), &provenance)
+        .expect_err("an ungranted web axis is refused");
+    let msg = ungranted.to_string();
+    assert!(msg.contains("js-port:clipboard"), "names the axis: {msg}");
+    assert!(msg.contains("Main"), "names the disclosing module: {msg}");
+    // Granted → proceeds.
+    let granted = BTreeSet::from([Capability::JsPort(WebCapability::Clipboard)]);
+    web_consent::gate(&inferred, &granted, &provenance).expect("a granted web axis builds");
+    Ok(())
+}
+
 /// Fail-closed: a program that reaches a port but declares NOTHING on the
 /// `js-port` axis is rejected as under-declared — a port-bearing module can never
 /// hide the disclosure.
