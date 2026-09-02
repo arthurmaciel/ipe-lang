@@ -101,7 +101,7 @@ struct Args {
 
 /// The real curated index repository. A `--index` override retargets the PR (a
 /// fork, a fixture) without changing any computed bytes.
-const DEFAULT_INDEX_REPO: &str = "arthurmaciel/ipe-index";
+const DEFAULT_INDEX_REPO: &str = "arthurmaciel/ipe-registry";
 
 /// `ipe package publish [--dry-run] [--index <repo>] [--source <url>] [--rev <sha>]`
 /// — run the gate, compute the index entry, and open (or, under `--dry-run`,
@@ -1133,7 +1133,7 @@ mod tests {
     #[test]
     fn compare_url_is_the_prefilled_pr_page() {
         let url = compare_url(
-            "arthurmaciel/ipe-index",
+            "arthurmaciel/ipe-registry",
             "main",
             "octocat",
             "publish/foo-1.2.3",
@@ -1141,7 +1141,7 @@ mod tests {
         );
         assert_eq!(
             url,
-            "https://github.com/arthurmaciel/ipe-index/compare/\
+            "https://github.com/arthurmaciel/ipe-registry/compare/\
              main...octocat:publish/foo-1.2.3?quick_pull=1&title=Publish%20foo%201.2.3"
         );
     }
@@ -1149,7 +1149,7 @@ mod tests {
     #[test]
     fn pr_request_body_targets_fork_head_against_main() {
         let plan = PrPlan {
-            index_repo: "arthurmaciel/ipe-index".to_owned(),
+            index_repo: "arthurmaciel/ipe-registry".to_owned(),
             entry_file: "packages/foo.toml".to_owned(),
             branch: "publish/foo-1.2.3".to_owned(),
             title: "Publish foo 1.2.3".to_owned(),
@@ -1178,8 +1178,8 @@ mod tests {
 
     #[test]
     fn index_repo_name_takes_the_last_segment() {
-        assert_eq!(index_repo_name("arthurmaciel/ipe-index"), "ipe-index");
-        assert_eq!(index_repo_name("ipe-index"), "ipe-index");
+        assert_eq!(index_repo_name("arthurmaciel/ipe-registry"), "ipe-registry");
+        assert_eq!(index_repo_name("ipe-registry"), "ipe-registry");
     }
 
     #[test]
