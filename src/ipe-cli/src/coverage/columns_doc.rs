@@ -1,0 +1,352 @@
+//! The documentation aspect columns: documented, doc-example-checks.
+//!
+//! These read the stdlib source doc-comments — the `{-| … -}` block form and the
+//! `-- |` line form, both recovered by [`ipe_docs::stdlib_docs`] — and the fenced
+//! ` ```ipe ` examples inside them. The documented column reads source only; the
+//! doc-example column type-checks each fenced example through the same
+//! source-graph pipeline the build path uses, so it belongs to the E2E-adjacent
+//! set but stays cheap (type-check, no cargo build).
+
+use std::collections::BTreeMap;
+use std::fmt::Write as _;
+
+use crate::coverage::contract::{AspectCheck, Cell, StdlibSymbol, SymbolKind};
+
+/// The short module name of a symbol — the dotted module with a leading `Ipe.`
+/// stripped, matching [`ipe_docs::stdlib_docs::ModuleDoc::short`].
+fn short_module(sym: &StdlibSymbol) -> String {
+    let dotted = sym.module.join(".");
+    dotted.strip_prefix("Ipe.").unwrap_or(&dotted).to_owned()
+}
+
+// ── documented ────────────────────────────────────────────────────────────────
+
+/// Column **documented**: every exported value or type carries a doc-string.
+///
+/// [`ipe_docs::stdlib_docs`] recovers both doc-comment conventions the stdlib
+/// uses (`{-| … -}` blocks and `-- |` line blocks) keyed by declaration name, so
+/// this universalizes the per-module veneer doc-string check onto the whole
+/// surface: an exported symbol whose declaration has no doc body is flagged. The
+/// verdict is [`Cell::Warn`], not [`Cell::Hole`]: a missing doc-string is
+/// documentation debt, not a correctness gap, so the column surfaces every
+/// undocumented symbol without failing the gate — the severity split the contract
+/// draws between a forgotten binding and an advisory. A non-exported symbol (a
+/// kernel homed under a kernel qualifier, not reached through a compiled-source
+/// `exposing`) is `NotApplicable` — the doc extractor reads compiled-source
+/// declarations, and there is no source declaration to document. A constructor is
+/// documented through its union type, so it is `NotApplicable` here (the type row
+/// carries the doc).
+pub struct DocumentedColumn {
+    /// `(short module, symbol name)` → whether the declaration has a doc body.
+    documented: BTreeMap<(String, String), bool>,
+}
+
+impl DocumentedColumn {
+    #[must_use]
+    pub fn new() -> Self {
+        let mut documented = BTreeMap::new();
+        for module in ipe_docs::stdlib_docs::all_module_docs() {
+            for export in &module.exports {
+                documented.insert(
+                    (module.short.clone(), export.name.clone()),
+                    export.doc.is_some(),
+                );
+            }
+        }
+        Self { documented }
+    }
+}
+
+impl Default for DocumentedColumn {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl AspectCheck for DocumentedColumn {
+    fn name(&self) -> &'static str {
+        "documented"
+    }
+
+    fn check(&self, sym: &StdlibSymbol) -> Cell {
+        if !sym.exported || sym.kind == SymbolKind::Ctor {
+            return Cell::NotApplicable;
+        }
+        match self.documented.get(&(short_module(sym), sym.name.clone())) {
+            Some(true) => Cell::Ok,
+            Some(false) => Cell::Warn(format!(
+                "exported {} {}.{} has no doc-string ({{-| … -}} or -- |)",
+                kind_word(sym.kind),
+                sym.module.join("."),
+                sym.name
+            )),
+            // The doc extractor reads compiled-source declarations; an exported
+            // symbol with no source declaration (a kernel-alias whose scheme
+            // lives in the kernel table, addressed only through `exposing`) is not
+            // a documentation hole here — its home module owns its surface.
+            None => Cell::NotApplicable,
+        }
+    }
+}
+
+/// A human word for a symbol kind, for a hole message.
+const fn kind_word(kind: SymbolKind) -> &'static str {
+    match kind {
+        SymbolKind::Value => "value",
+        SymbolKind::Type => "type",
+        SymbolKind::Ctor => "constructor",
+    }
+}
+
+// ── doc-example-checks ────────────────────────────────────────────────────────
+
+/// Column **doc-example-checks**: every fenced ` ```ipe ` example in a symbol's
+/// doc-string type-checks.
+///
+/// The doc body of each exported declaration may carry fenced ` ```ipe ` examples
+/// (a ` ```ipe ipe:skip ` fence marks a documentation-only snippet, exempt). Each
+/// example is wrapped in a synthetic `module Main` that imports the documenting
+/// module `exposing (..)`, then type-checked through the same source-graph
+/// pipeline the build uses. A symbol whose examples all type-check is `Ok`; one
+/// whose example does not is a hole naming the failing example. A symbol with no
+/// fenced example, a non-exported symbol, or a constructor is `NotApplicable`.
+pub struct DocExampleColumn {
+    /// `(short module, symbol name)` → the doc body, when the declaration has one.
+    docs: BTreeMap<(String, String), String>,
+    /// `short module` → dotted module name, for the synthetic import header.
+    dotted_of_short: BTreeMap<String, String>,
+    /// `dotted module` → its own `import …` lines, injected into the synthetic
+    /// example module so a qualified name the documenting module imports (an alias
+    /// included) resolves in the example exactly as it does inside that module.
+    module_imports: BTreeMap<String, Vec<String>>,
+}
+
+impl DocExampleColumn {
+    #[must_use]
+    pub fn new() -> Self {
+        let mut docs = BTreeMap::new();
+        let mut dotted_of_short = BTreeMap::new();
+        for module in ipe_docs::stdlib_docs::all_module_docs() {
+            dotted_of_short.insert(module.short.clone(), module.dotted.clone());
+            for export in &module.exports {
+                if let Some(doc) = &export.doc {
+                    docs.insert((module.short.clone(), export.name.clone()), doc.clone());
+                }
+            }
+        }
+        Self {
+            docs,
+            dotted_of_short,
+            module_imports: stdlib_module_imports(),
+        }
+    }
+}
+
+/// Every stdlib module's own top-level `import …` lines, keyed by dotted module
+/// name, gathered from the embedded sources.
+fn stdlib_module_imports() -> BTreeMap<String, Vec<String>> {
+    let mut out: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for m in ipe_stdlib::MODULES {
+        out.entry(m.name.to_owned())
+            .or_insert_with(|| import_lines(m.source));
+    }
+    for m in ipe_stdlib::COMPILED_STD_MODULES {
+        out.entry(m.dotted.to_owned())
+            .or_insert_with(|| import_lines(m.source));
+    }
+    out
+}
+
+/// The verbatim top-level `import …` lines of a module source.
+fn import_lines(source: &str) -> Vec<String> {
+    source
+        .lines()
+        .filter(|line| line.starts_with("import "))
+        .map(str::to_owned)
+        .collect()
+}
+
+impl Default for DocExampleColumn {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl AspectCheck for DocExampleColumn {
+    fn name(&self) -> &'static str {
+        "doc-example-checks"
+    }
+
+    fn check(&self, sym: &StdlibSymbol) -> Cell {
+        if !sym.exported || sym.kind == SymbolKind::Ctor {
+            return Cell::NotApplicable;
+        }
+        let short = short_module(sym);
+        let Some(doc) = self.docs.get(&(short.clone(), sym.name.clone())) else {
+            return Cell::NotApplicable;
+        };
+        let examples = fenced_ipe_examples(doc);
+        if examples.is_empty() {
+            return Cell::NotApplicable;
+        }
+        let dotted = self
+            .dotted_of_short
+            .get(&short)
+            .cloned()
+            .unwrap_or_else(|| sym.module.join("."));
+        let empty = Vec::new();
+        let module_imports = self.module_imports.get(&dotted).unwrap_or(&empty);
+
+        // One scratch dir for this symbol's examples; RAII-cleaned on drop.
+        let scratch = match crate::scratch::ScratchDir::new("ipe-coverage-doc-example") {
+            Ok(dir) => dir,
+            Err(e) => {
+                return Cell::Hole(format!(
+                    "could not create a scratch dir to type-check {}.{}'s example: {e}",
+                    sym.module.join("."),
+                    sym.name
+                ));
+            }
+        };
+
+        for (index, body) in examples.iter().enumerate() {
+            let module_src = synthesize_example_module(body, &dotted, module_imports);
+            let snippet = scratch.child("Main.ipe");
+            if let Err(e) = std::fs::write(&snippet, &module_src) {
+                return Cell::Hole(format!(
+                    "could not write {}.{}'s example {} to type-check it: {e}",
+                    sym.module.join("."),
+                    sym.name,
+                    index + 1
+                ));
+            }
+            if let Err(err) = crate::typecheck_entry_via_graph(&snippet) {
+                return Cell::Hole(format!(
+                    "{}.{} doc-string example {} does not type-check: {err}",
+                    sym.module.join("."),
+                    sym.name,
+                    index + 1
+                ));
+            }
+        }
+        Cell::Ok
+    }
+}
+
+/// Extract the body of every fenced ` ```ipe ` block in a doc body, dropping any
+/// fence carrying a `skip` info-string (a documentation-only snippet the gate is
+/// asked to exempt, e.g. one needing a cross-module context this synthetic module
+/// cannot supply).
+fn fenced_ipe_examples(doc: &str) -> Vec<String> {
+    const FENCE_OPEN: &str = "```ipe";
+    const FENCE_CLOSE: &str = "```";
+
+    let mut examples = Vec::new();
+    let mut search = 0usize;
+    while let Some(open_rel) = doc[search..].find(FENCE_OPEN) {
+        let after_open = search + open_rel + FENCE_OPEN.len();
+        // The rest of the opening fence line is the info string.
+        let content_start = doc[after_open..]
+            .find('\n')
+            .map_or(doc.len(), |nl| after_open + nl + 1);
+        let info = doc[after_open..content_start].trim();
+        let Some(close_rel) = doc[content_start..].find(FENCE_CLOSE) else {
+            break;
+        };
+        let content_end = content_start + close_rel;
+        if !info.contains("skip") {
+            let body = doc[content_start..content_end].trim_end_matches('\n');
+            examples.push(body.to_owned());
+        }
+        search = content_end + FENCE_CLOSE.len();
+    }
+    examples
+}
+
+/// The dotted module an `import …` line names, e.g. `Ipe.Duration` from
+/// `import Ipe.Duration as Duration exposing (Duration)`.
+fn import_line_module(line: &str) -> Option<&str> {
+    let rest = line.strip_prefix("import ")?;
+    Some(rest.split_whitespace().next().unwrap_or(rest))
+}
+
+/// Wrap an example body in a synthetic `module Main` that imports the documenting
+/// module `exposing (..)` (its unqualified names in scope), injects that module's
+/// own imports (so a qualified alias it uses resolves), and adds a fixed fallback
+/// import for a common qualified prefix the example reaches that the documenting
+/// module does not itself import. An example already starting with `module ` is
+/// returned verbatim.
+///
+/// A line carrying `-->` is an expression/result annotation: the expression
+/// before the arrow becomes a fresh top-level binding (`docCheckN = <expr>`) so
+/// the type-checker reaches it without needing a `main` entry, mirroring the
+/// stdlib doc-example gate's scoping exactly.
+fn synthesize_example_module(body: &str, source_module: &str, module_imports: &[String]) -> String {
+    if body.trim_start().starts_with("module ") {
+        return body.to_owned();
+    }
+
+    let mut out = String::from("module Main exposing (..)\n");
+    let mut imported: Vec<&str> = Vec::new();
+
+    if !source_module.is_empty() {
+        let short = source_module.split('.').next_back().unwrap_or(source_module);
+        let _ = writeln!(out, "\nimport {source_module} as {short} exposing (..)");
+        imported.push(source_module);
+    }
+
+    for import in module_imports {
+        if let Some(module) = import_line_module(import)
+            && !imported.contains(&module)
+        {
+            out.push('\n');
+            out.push_str(import);
+            imported.push(module);
+        }
+    }
+
+    // A fixed fallback for a common qualified prefix the example uses that the
+    // documenting module does not itself import (e.g. a `Ipe.Result` example
+    // reaching for `String.fromInt`).
+    for (prefix, import) in FALLBACK_IMPORTS {
+        let Some(module) = import_line_module(import) else {
+            continue;
+        };
+        if body.contains(prefix) && !imported.contains(&module) {
+            out.push('\n');
+            out.push_str(import);
+            imported.push(module);
+        }
+    }
+    out.push('\n');
+
+    let mut check_idx = 0usize;
+    for line in body.lines() {
+        if let Some(arrow) = line.find("-->") {
+            let expr = line[..arrow].trim();
+            if !expr.is_empty() {
+                check_idx += 1;
+                let _ = writeln!(out, "docCheck{check_idx} = {expr}");
+            }
+        } else {
+            out.push_str(line);
+            out.push('\n');
+        }
+    }
+    out
+}
+
+/// The fixed fallback imports for a qualified prefix a doc example commonly
+/// reaches for, mirroring the stdlib doc-example gate's fallback set.
+const FALLBACK_IMPORTS: &[(&str, &str)] = &[
+    ("Maybe.", "import Ipe.Maybe as Maybe exposing (Maybe(..))"),
+    ("List.", "import Ipe.List as List"),
+    ("String.", "import Ipe.String as String"),
+    ("Dict.", "import Ipe.Dict as Dict"),
+    ("Set.", "import Ipe.Set as Set"),
+    ("Result.", "import Ipe.Result as Result exposing (Result(..))"),
+    ("Task.", "import Ipe.Task as Task"),
+    ("Io.", "import Ipe.Io as Io"),
+    ("Debug.", "import Ipe.Debug as Debug"),
+    ("Char.", "import Ipe.Char as Char"),
+];
