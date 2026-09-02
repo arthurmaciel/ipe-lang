@@ -63,7 +63,7 @@ impl Default for DocumentedColumn {
     }
 }
 
-impl AspectCheck for DocumentedColumn {
+impl AspectCheck<StdlibSymbol> for DocumentedColumn {
     fn name(&self) -> &'static str {
         "documented"
     }
@@ -172,7 +172,7 @@ impl Default for DocExampleColumn {
     }
 }
 
-impl AspectCheck for DocExampleColumn {
+impl AspectCheck<StdlibSymbol> for DocExampleColumn {
     fn name(&self) -> &'static str {
         "doc-example-checks"
     }
