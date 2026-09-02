@@ -698,7 +698,7 @@ type alias Model = { where_ : String }
 
 type Msg = Locate | Got (Result Error Geo.Coords)
 
-init : a -> ( Model, Cmd.Cmd Msg )
+init : WebReq -> ( Model, Cmd.Cmd Msg )
 init _r =
     ( { where_ = "?" }, Cmd.none )
 
@@ -774,7 +774,7 @@ type alias Model = { n : Int }
 
 type Msg = Poke
 
-init : a -> ( Model, Cmd.Cmd Msg )
+init : WebReq -> ( Model, Cmd.Cmd Msg )
 init _r =
     ( { n = 0 }, Geo.request (Geo.Current Geo.defaults) )
 

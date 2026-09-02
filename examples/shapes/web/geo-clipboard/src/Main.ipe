@@ -38,7 +38,7 @@ type Msg
     | GotClipboard (Result Error String)
 
 
-init : a -> ( Model, Cmd.Cmd Msg )
+init : WebReq -> ( Model, Cmd.Cmd Msg )
 init _req =
     ( { location = "unknown", clipboard = "" }, Cmd.none )
 
