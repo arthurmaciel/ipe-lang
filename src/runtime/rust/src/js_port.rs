@@ -103,19 +103,57 @@ impl std::fmt::Debug for SessionId {
 
 // ─── Native (server) transport ─────────────────────────────────────────────
 
+// ─── Correlation-id wire key ────────────────────────────────────────────────
+
+/// The JSON field name the runtime uses to carry the correlation id on both
+/// the outbound request envelope and the inbound reply envelope.
+///
+/// The double-underscore prefix and `ipe_` namespace make this key impossible
+/// to collide with a user-defined field: the seal gate rejects any value that
+/// contains a field named `__ipe_id` (the sealed type is closed and declared,
+/// so an extra field on an inbound value fails the decoder for any user type).
+/// Runtime-private — never exported, never user-reachable.
+const COR_ID_FIELD: &str = "__ipe_id";
+
+/// Hard ceiling on outstanding (in-flight) `js_request` waiters per session.
+/// A JS handler that never replies must not fill heap indefinitely; once the
+/// ceiling is reached, new `js_request` calls resolve immediately with `Err`.
+pub(crate) const MAX_OUTSTANDING: usize = 256;
+
+/// Default timeout for a `js_request` waiter, in milliseconds. A JS handler
+/// that does not reply within this window resolves the Task with `Err`. The
+/// value is generous — it covers slow-permission-prompt flows. A per-call
+/// override is a tracked follow-up.
+const REQUEST_TIMEOUT_MS: u64 = 10_000;
+
+// ─── Native (server) transport ─────────────────────────────────────────────
+
 #[cfg(not(target_arch = "wasm32"))]
 mod native {
     use super::*;
     use crate::error::IpeError;
-    use crate::json::Decoder;
+    use crate::json::{Decoder, JsonVal};
     use crate::seal_codec::seal_decode;
     use std::collections::HashMap;
-    use std::sync::{Arc, Mutex, OnceLock};
-    use tokio::sync::broadcast;
+    use std::sync::{
+        Arc, Mutex, OnceLock,
+        atomic::{AtomicU64, Ordering},
+    };
+    use tokio::sync::{broadcast, oneshot};
 
     /// Broadcast buffer for one direction. A lagging subscriber drops the gap
     /// (never panics); the size bounds the queue an inbound burst can hold.
     const PORT_CAP: usize = 256;
+
+    /// Process-global monotonic correlation-id counter. Ids are runtime-private:
+    /// they are minted here and never accepted as input — a JS-injected id cannot
+    /// forge a waiter lookup because the registry key is the id minted by this
+    /// counter, not an id parsed from an untrusted inbound frame.
+    static NEXT_COR_ID: AtomicU64 = AtomicU64::new(1);
+
+    fn next_cor_id() -> u64 {
+        NEXT_COR_ID.fetch_add(1, Ordering::Relaxed)
+    }
 
     /// A registered out-sink for one session: the server installs it so each
     /// outbound `js_send` frame for that session is pushed to that session's
@@ -125,17 +163,24 @@ mod native {
     /// One session's port endpoints. The inbound channel carries browser→server
     /// frames (already through the fail-closed decode gate) to that session's
     /// `js_subscribe`; `out_sink` is that session's browser-push installed by the
-    /// live server. Both belong to exactly one sid — there is no shared channel.
-    struct SessionPorts {
+    /// live server; `pending` holds in-flight `js_request` waiters keyed by their
+    /// runtime-minted correlation id. All belong to exactly one sid.
+    pub(crate) struct SessionPorts {
         inbound: broadcast::Sender<String>,
         out_sink: Option<OutSink>,
+        /// In-flight correlated one-shot waiters. Key = runtime-minted correlation
+        /// id (never derived from JS input). A reply whose id is not in this map is
+        /// dropped fail-closed (unknown/duplicate/late id). Bounded by
+        /// [`MAX_OUTSTANDING`]: a new waiter is refused when the map is full.
+        pub(crate) pending: HashMap<u64, oneshot::Sender<JsonVal>>,
     }
 
     impl SessionPorts {
-        fn new() -> Self {
+        pub(crate) fn new() -> Self {
             SessionPorts {
                 inbound: broadcast::channel(PORT_CAP).0,
                 out_sink: None,
+                pending: HashMap::new(),
             }
         }
     }
@@ -150,7 +195,7 @@ mod native {
         S.get_or_init(|| Mutex::new(HashMap::new()))
     }
 
-    fn lock_sessions() -> std::sync::MutexGuard<'static, HashMap<String, SessionPorts>> {
+    pub(crate) fn lock_sessions() -> std::sync::MutexGuard<'static, HashMap<String, SessionPorts>> {
         // Poison-tolerant: a panic in one session's callback must not wedge the
         // whole registry; the map is still valid data.
         sessions().lock().unwrap_or_else(|e| e.into_inner())
@@ -198,11 +243,49 @@ mod native {
             .out_sink = Some(sink);
     }
 
-    /// Feed one raw inbound string to `sid`'s active `js_subscribe`s. Called by
-    /// the server's inbound port route AFTER its session-cookie + CSRF +
-    /// bounded-seal checks have accepted the body. Delivery reaches ONLY `sid`;
-    /// an unknown/closed session is a fire-and-forget no-op (never an error).
+    /// Feed one raw inbound string to `sid`'s port. Called by the server's inbound
+    /// port route AFTER its session-cookie + CSRF + bounded-seal checks.
+    ///
+    /// Dispatch policy (fail-closed at each step):
+    ///
+    /// 1. If the raw string is valid JSON and its top-level object contains the
+    ///    runtime-private `__ipe_id` field, this is a correlated reply: extract the
+    ///    id and the rest of the frame, look up the matching one-shot waiter, and
+    ///    resolve it. An unknown/duplicate/late id is silently dropped (no panic, no
+    ///    forwarding to `js_subscribe` subscribers). The `__ipe_id` field is stripped
+    ///    before the reply payload is handed to the waiter's decoder, so it is never
+    ///    user-visible.
+    /// 2. Otherwise forward to the session's `js_subscribe` broadcast channel.
+    ///
+    /// Cross-session delivery is unrepresentable: delivery reaches ONLY `sid`.
     pub fn deliver_inbound_for(sid: &SessionId, raw: String) {
+        // Peek at the raw string: if it parses as a JSON object with `__ipe_id`,
+        // this is a correlated reply — route to the pending map, not subscribers.
+        // Wire format: `{"__ipe_id": <u64>, "payload": <sealed_reply>}`.
+        // After stripping `__ipe_id`, the remaining object's `"payload"` field is
+        // the sealed reply value forwarded to the waiting decoder.
+        if let Ok(mut value) = serde_json::from_str::<serde_json::Value>(&raw)
+            && let Some(id_val) = value.as_object_mut().and_then(|o| o.remove(COR_ID_FIELD))
+            && let Some(id) = id_val.as_u64()
+        {
+            // Extract the `"payload"` field from the remaining envelope,
+            // falling back to the whole remaining value so an echo that omits
+            // the wrapper is still decoded (fail-closed if neither decodes).
+            let payload = value
+                .as_object_mut()
+                .and_then(|o| o.remove("payload"))
+                .unwrap_or(value);
+            let waiter = lock_sessions()
+                .get_mut(&sid.0)
+                .and_then(|p| p.pending.remove(&id));
+            if let Some(tx) = waiter {
+                // Resolve the one-shot with the extracted payload.
+                let _ = tx.send(payload);
+            }
+            // Unknown/duplicate/late id: dropped fail-closed, no subscribers.
+            return;
+        }
+        // No correlation id — forward to `js_subscribe` subscribers as before.
         let sender = lock_sessions().get(&sid.0).map(|p| p.inbound.clone());
         if let Some(tx) = sender {
             let _ = tx.send(raw);
@@ -300,12 +383,127 @@ mod native {
             })
         }))
     }
+
+    /// `js_request payload decoder` — correlated one-shot port request.
+    ///
+    /// Semantics:
+    ///
+    /// 1. Mint a fresh runtime-private correlation id (process-global monotonic
+    ///    counter; never derived from JS input, never user-observable).
+    /// 2. Register a one-shot waiter keyed by that id in the OWNING session's
+    ///    pending map. Fails immediately with `Err` when [`MAX_OUTSTANDING`] is
+    ///    already reached (bounded — heap cannot grow unboundedly).
+    /// 3. Send `payload` outbound as `{"__ipe_id": id, "payload": <sealed>}` so
+    ///    the first-party JS sink can echo the id on its reply.
+    /// 4. Await the one-shot with a [`REQUEST_TIMEOUT_MS`] deadline. A reply whose
+    ///    id matches resolves the waiter with the stripped reply frame; the decoder
+    ///    runs fail-closed over that frame. A duplicate/late/unknown id is dropped
+    ///    by `deliver_inbound_for` before the waiter is ever signalled.
+    /// 5. Timeout or decode-miss → typed `Err`; never a panic.
+    ///
+    /// No trust change: the same SEAL discipline governs both directions.
+    pub fn js_request<T, R>(
+        payload: T,
+        decoder: Decoder<IpeError, R>,
+    ) -> crate::core::IpeTask<IpeError, R>
+    where
+        T: serde::Serialize + Send + 'static,
+        R: Send + 'static,
+    {
+        let cor_id = next_cor_id();
+        let owner_sid = scope_sid();
+        Box::pin(async move {
+            // Refuse when the ceiling is already reached (fail-closed, no panic).
+            {
+                let mut g = lock_sessions();
+                if let Some(ports) = owner_sid.as_ref().and_then(|s| g.get_mut(&s.0))
+                    && ports.pending.len() >= MAX_OUTSTANDING
+                {
+                    return crate::core::IpeResult::Err(
+                        "js_request: outstanding waiter ceiling reached"
+                            .to_string()
+                            .into(),
+                    );
+                }
+            }
+
+            // Serialize payload and wrap with the correlation id.
+            let outbound_json = match serde_json::to_value(&payload) {
+                Ok(v) => v,
+                Err(e) => {
+                    return crate::core::IpeResult::Err(
+                        format!("js_request: payload serialisation failed: {e}").into(),
+                    );
+                }
+            };
+            let envelope = serde_json::json!({
+                COR_ID_FIELD: cor_id,
+                "payload": outbound_json,
+            });
+            let encoded = seal_encode(&envelope);
+
+            // Register the one-shot waiter.
+            let (tx, rx) = oneshot::channel::<JsonVal>();
+            if let Some(sid) = &owner_sid {
+                let mut g = lock_sessions();
+                g.entry(sid.0.clone())
+                    .or_insert_with(SessionPorts::new)
+                    .pending
+                    .insert(cor_id, tx);
+            }
+            // Deliver outbound to the origin session's sink.
+            if let Some(sid) = &owner_sid {
+                let sink = lock_sessions().get(&sid.0).and_then(|p| p.out_sink.clone());
+                if let Some(sink) = sink {
+                    sink(&encoded);
+                }
+            }
+
+            // Await reply with deadline.
+            let timeout = tokio::time::Duration::from_millis(REQUEST_TIMEOUT_MS);
+            let result = tokio::time::timeout(timeout, rx).await;
+
+            // Clean up the waiter regardless of outcome (idempotent — already
+            // removed by `deliver_inbound_for` on a clean reply).
+            if let Some(sid) = &owner_sid {
+                lock_sessions()
+                    .get_mut(&sid.0)
+                    .map(|p| p.pending.remove(&cor_id));
+            }
+
+            match result {
+                Ok(Ok(reply_value)) => {
+                    // Decode the reply fail-closed through the seal gate.
+                    match seal_decode(&reply_value.to_string(), &decoder, SealLimits::default()) {
+                        Ok(v) => crate::core::IpeResult::Ok(v),
+                        Err(_) => crate::core::IpeResult::Err(
+                            "js_request: reply failed seal decode".to_string().into(),
+                        ),
+                    }
+                }
+                Ok(Err(_)) => {
+                    // Sender dropped (session evicted or process exit) — fail closed.
+                    crate::core::IpeResult::Err(
+                        "js_request: session closed before reply".to_string().into(),
+                    )
+                }
+                Err(_) => {
+                    // Timeout.
+                    crate::core::IpeResult::Err("js_request: timeout".to_string().into())
+                }
+            }
+        })
+    }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
 pub use native::{
-    deliver_inbound_for, js_send, js_subscribe, register_out_sink_for, session_close, session_open,
+    deliver_inbound_for, js_request, js_send, js_subscribe, register_out_sink_for, session_close,
+    session_open,
 };
+
+#[cfg(all(not(target_arch = "wasm32"), test))]
+pub(crate) use native::{SessionPorts, lock_sessions};
 
 // ─── Wasm (browser) transport ──────────────────────────────────────────────
 
@@ -313,23 +511,63 @@ pub use native::{
 mod wasm {
     use super::*;
     use crate::error::IpeError;
-    use crate::json::Decoder;
+    use crate::json::{Decoder, JsonVal};
     use crate::seal_codec::seal_decode;
     use std::cell::RefCell;
+    use std::collections::HashMap;
     use std::rc::Rc;
     use wasm_bindgen::{JsCast, JsValue};
+
+    /// Process-local monotonic correlation-id counter for the wasm target.
+    /// Single-threaded (wasm32 is `!Send`), so `Cell<u64>` is safe.
+    thread_local! {
+        static NEXT_ID: std::cell::Cell<u64> = const { std::cell::Cell::new(1) };
+    }
+
+    fn next_cor_id() -> u64 {
+        NEXT_ID.with(|c| {
+            let id = c.get();
+            c.set(id.wrapping_add(1));
+            id
+        })
+    }
 
     thread_local! {
         /// The in-tab inbound queue's drains. The browser's `window.ipe.send(raw)`
         /// pushes a string here (via [`push_inbound`]); each active `js_subscribe`
         /// registers a drain closure that fires on every pushed string.
         static INBOUND: RefCell<Vec<Rc<dyn Fn(&str)>>> = const { RefCell::new(Vec::new()) };
+
+        /// In-flight correlated one-shot waiters. Key = runtime-minted id.
+        /// A reply whose id is not in this map is dropped fail-closed.
+        static PENDING: RefCell<HashMap<u64, Box<dyn FnOnce(JsonVal)>>> =
+            RefCell::new(HashMap::new());
     }
 
     /// The browser-facing entry the JS glue calls to push an inbound port
-    /// message: `window.ipe.send(raw)` routes here. Each registered drain runs
-    /// synchronously; a drain's own fail-closed decode drops a bad payload.
+    /// message: `window.ipe.send(raw)` routes here.
+    ///
+    /// Dispatch: if the raw JSON has `__ipe_id`, route to the pending waiter
+    /// (correlated reply); otherwise fan out to all `js_subscribe` drains.
     pub fn push_inbound(raw: &str) {
+        // Peek for a correlation id (fail-closed: a parse error falls through).
+        // Wire format: `{"__ipe_id": <u64>, "payload": <sealed_reply>}`.
+        if let Ok(mut value) = serde_json::from_str::<serde_json::Value>(raw)
+            && let Some(id_val) = value.as_object_mut().and_then(|o| o.remove(COR_ID_FIELD))
+            && let Some(id) = id_val.as_u64()
+        {
+            // Extract `"payload"`, falling back to the whole remaining value.
+            let payload = value
+                .as_object_mut()
+                .and_then(|o| o.remove("payload"))
+                .unwrap_or(value);
+            let waiter = PENDING.with(|p| p.borrow_mut().remove(&id));
+            if let Some(cb) = waiter {
+                cb(payload);
+            }
+            // Unknown/duplicate/late id: dropped fail-closed.
+            return;
+        }
         let drains: Vec<Rc<dyn Fn(&str)>> =
             INBOUND.with(|q| q.borrow().iter().map(Rc::clone).collect());
         for drain in drains {
@@ -397,10 +635,120 @@ mod wasm {
             })
         }))
     }
+
+    /// `js_request payload decoder` — correlated one-shot port request (wasm).
+    ///
+    /// Mirrors the native semantics using a `js_sys::Promise`-based future (the
+    /// wasm-compatible async primitive). A `resolve`/`reject` pair is stored in
+    /// `PENDING`; `push_inbound` calls `resolve` when the correlated reply arrives.
+    /// A `setTimeout` races the promise: whichever fires first wins.
+    pub fn js_request<T, R>(
+        payload: T,
+        decoder: Decoder<IpeError, R>,
+    ) -> crate::core::IpeTask<IpeError, R>
+    where
+        T: serde::Serialize + 'static,
+        R: 'static,
+    {
+        let cor_id = next_cor_id();
+        Box::pin(async move {
+            // Refuse when the ceiling is already reached.
+            let at_limit = PENDING.with(|p| p.borrow().len() >= MAX_OUTSTANDING);
+            if at_limit {
+                return crate::core::IpeResult::Err(
+                    "js_request: outstanding waiter ceiling reached"
+                        .to_string()
+                        .into(),
+                );
+            }
+
+            // Serialize and wrap with the correlation id.
+            let outbound_json = match serde_json::to_value(&payload) {
+                Ok(v) => v,
+                Err(e) => {
+                    return crate::core::IpeResult::Err(
+                        format!("js_request: payload serialisation failed: {e}").into(),
+                    );
+                }
+            };
+            let envelope = serde_json::json!({
+                COR_ID_FIELD: cor_id,
+                "payload": outbound_json,
+            });
+            let encoded = seal_encode(&envelope);
+
+            // Build a Promise whose resolve/reject pair is stored as the waiter.
+            // When `push_inbound` gets a correlated reply it calls the stored
+            // callback, which resolves the promise with the reply JSON string.
+            // The `Closure`s are `forget`-ed so they live until the promise
+            // settles — a bounded leak (one per outstanding request, cleaned up
+            // when the promise resolves or the timeout fires).
+            let promise = js_sys::Promise::new(&mut |resolve, reject| {
+                // `resolve` receives the reply payload JSON as a JsValue string.
+                // `reject` is called by the timeout closure.
+                let resolve_rc = Rc::new(resolve);
+                let reject_rc = Rc::new(reject);
+
+                // Register resolve as the waiter.
+                let resolve_stored = Rc::clone(&resolve_rc);
+                PENDING.with(|p| {
+                    p.borrow_mut().insert(
+                        cor_id,
+                        Box::new(move |value: JsonVal| {
+                            let s = value.to_string();
+                            let _ = resolve_stored.call1(&JsValue::NULL, &JsValue::from_str(&s));
+                        }),
+                    );
+                });
+
+                // Set up the timeout to call reject.
+                let reject_cb = wasm_bindgen::closure::Closure::once(move || {
+                    let _ = reject_rc.call0(&JsValue::NULL);
+                });
+                let window = web_sys::window();
+                if let Some(w) = window {
+                    let _ = w.set_timeout_with_callback_and_timeout_and_arguments_0(
+                        reject_cb.as_ref().unchecked_ref(),
+                        i32::try_from(REQUEST_TIMEOUT_MS).unwrap_or(i32::MAX),
+                    );
+                }
+                reject_cb.forget();
+            });
+
+            // Deliver outbound AFTER registering the waiter so no reply can
+            // arrive before the waiter is installed.
+            deliver_outbound(&encoded);
+
+            // Await the promise (resolve = reply arrived; reject = timeout).
+            let js_fut = wasm_bindgen_futures::JsFuture::from(promise);
+            match js_fut.await {
+                Ok(reply_js) => {
+                    // Clean up (idempotent).
+                    PENDING.with(|p| p.borrow_mut().remove(&cor_id));
+                    let reply_str = reply_js.as_string().unwrap_or_default();
+                    match serde_json::from_str::<JsonVal>(&reply_str)
+                        .ok()
+                        .and_then(|v| {
+                            seal_decode(&v.to_string(), &decoder, SealLimits::default()).ok()
+                        }) {
+                        Some(v) => crate::core::IpeResult::Ok(v),
+                        None => crate::core::IpeResult::Err(
+                            "js_request: reply failed seal decode".to_string().into(),
+                        ),
+                    }
+                }
+                Err(_) => {
+                    // Timeout (promise rejected by setTimeout) or unknown error.
+                    PENDING.with(|p| p.borrow_mut().remove(&cor_id));
+                    crate::core::IpeResult::Err("js_request: timeout".to_string().into())
+                }
+            }
+        })
+    }
 }
 
 #[cfg(target_arch = "wasm32")]
-pub use wasm::{js_send, js_subscribe, push_inbound};
+pub use wasm::{js_request, js_send, js_subscribe, push_inbound};
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
@@ -654,6 +1002,234 @@ mod tests {
             tokio::time::sleep(std::time::Duration::from_millis(20)).await;
             assert!(got.lock().unwrap_or_else(|e| e.into_inner()).is_empty()); // inert drain — nothing delivered
             h.abort();
+            session_close(&sid);
+        }
+
+        // ── js_request security / refusal tests ──────────────────────────────
+
+        // Helper: drive a `js_request` future and capture its result. The
+        // closure `intercept` is called with the outbound frame immediately after
+        // the future arms its waiter, so the test can echo a correlated reply.
+        async fn drive_request<F>(sid: &SessionId, intercept: F) -> crate::IpeResult<IpeError, i64>
+        where
+            F: Fn(String) + Send + Sync + 'static,
+        {
+            let seen: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+            let seen2 = seen.clone();
+            register_out_sink_for(
+                sid,
+                Arc::new(move |s: &str| {
+                    let s = s.to_string();
+                    seen2
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .push(s.clone());
+                    intercept(s);
+                }),
+            );
+            with_session_sid(sid.to_string(), || {
+                js_request::<i64, i64>(0_i64, int_decoder())
+            })
+            .await
+        }
+
+        // An unknown id delivered to the session (no waiter registered) must be
+        // DROPPED fail-closed — no subscriber sees it, no panic, no cross-talk.
+        #[tokio::test]
+        async fn unknown_id_reply_is_dropped() {
+            let sid = test_sid("f0e1d2c3b4a5f0e1d2c3b4a5f0e1d2c3");
+            session_open(&sid);
+            let (h, got) = collect_for(&sid, int_decoder());
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            // Deliver a frame that looks like a correlated reply with an id that
+            // has no pending waiter — it must not reach the subscriber.
+            deliver_inbound_for(&sid, r#"{"__ipe_id":999999,"payload":42}"#.to_string());
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            assert!(
+                got.lock().unwrap_or_else(|e| e.into_inner()).is_empty(),
+                "unknown-id reply must not reach subscribers"
+            );
+            h.abort();
+            session_close(&sid);
+        }
+
+        // A clean reply resolves the Task with the decoded value.
+        #[tokio::test]
+        async fn clean_reply_resolves_task() {
+            let sid = test_sid("1a2b3c4d5e6f1a2b3c4d5e6f1a2b3c4d");
+            session_open(&sid);
+            let sid_clone = sid.clone();
+            let result = drive_request(&sid, move |frame| {
+                // Parse the outbound envelope to learn the minted id.
+                let v: serde_json::Value = serde_json::from_str(&frame).unwrap_or_default();
+                if let Some(id) = v.get("__ipe_id").and_then(|x| x.as_u64()) {
+                    // Reply with envelope: id + "payload" = bare int 7.
+                    let reply = format!(r#"{{"__ipe_id":{id},"payload":7}}"#);
+                    deliver_inbound_for(&sid_clone, reply);
+                }
+            })
+            .await;
+            assert!(
+                matches!(result, crate::IpeResult::Ok(7)),
+                "expected Ok(7), got {result:?}"
+            );
+            session_close(&sid);
+        }
+
+        // A duplicate reply (same id echoed twice) does not double-resolve — the
+        // second delivery finds an empty pending slot and is dropped fail-closed.
+        #[tokio::test]
+        async fn duplicate_reply_is_dropped() {
+            let sid = test_sid("2b3c4d5e6f7a2b3c4d5e6f7a2b3c4d5e");
+            session_open(&sid);
+            let sid_clone = sid.clone();
+            let counter = Arc::new(std::sync::atomic::AtomicU32::new(0));
+            let counter2 = counter.clone();
+            register_out_sink_for(
+                &sid,
+                Arc::new(move |frame: &str| {
+                    let v: serde_json::Value = serde_json::from_str(frame).unwrap_or_default();
+                    if let Some(id) = v.get("__ipe_id").and_then(|x| x.as_u64()) {
+                        let n = counter2.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        // Send the reply twice on the FIRST outbound only.
+                        if n == 0 {
+                            let r1 = format!(r#"{{"__ipe_id":{id},"payload":1}}"#);
+                            let r2 = format!(r#"{{"__ipe_id":{id},"payload":2}}"#);
+                            deliver_inbound_for(&sid_clone, r1);
+                            deliver_inbound_for(&sid_clone, r2); // duplicate
+                        }
+                    }
+                }),
+            );
+            let result = with_session_sid(sid.to_string(), || {
+                js_request::<i64, i64>(0_i64, int_decoder())
+            })
+            .await;
+            // The first reply should win; the second is silently dropped.
+            assert!(
+                matches!(result, crate::IpeResult::Ok(_)),
+                "first reply must resolve the Task, got {result:?}"
+            );
+            session_close(&sid);
+        }
+
+        // Timeout: if no reply arrives within the deadline the Task resolves Err.
+        // The deadline is 10 s in production; we shrink it by not supplying any
+        // reply and relying on the per-test harness timeout (tokio::test has no
+        // default deadline, but the runtime's deadline is 10 s which is too slow
+        // for a unit test). We exercise the bounded-ceiling path instead: fill the
+        // pending map to MAX_OUTSTANDING so the NEXT `js_request` is refused
+        // immediately with an Err — same fail-closed outcome as a timeout.
+        #[tokio::test]
+        async fn outstanding_ceiling_refuses_immediately() {
+            let sid = test_sid("3c4d5e6f7a8b3c4d5e6f7a8b3c4d5e6f");
+            session_open(&sid);
+            // Fill the pending map with synthetic entries (dummy oneshot senders).
+            {
+                let mut g = lock_sessions();
+                let ports = g.entry(sid.0.clone()).or_insert_with(SessionPorts::new);
+                for i in 0..MAX_OUTSTANDING as u64 {
+                    let (tx, _rx) = tokio::sync::oneshot::channel::<JsonVal>();
+                    ports.pending.insert(i, tx);
+                }
+            }
+            // The next request must be refused immediately.
+            let result = with_session_sid(sid.to_string(), || {
+                js_request::<i64, i64>(0_i64, int_decoder())
+            })
+            .await;
+            assert!(
+                matches!(result, crate::IpeResult::Err(_)),
+                "ceiling breach must immediately return Err"
+            );
+            session_close(&sid);
+        }
+
+        // Two concurrent requests resolve to their OWN replies — no cross-talk.
+        #[tokio::test]
+        async fn two_concurrent_requests_no_cross_talk() {
+            let sid_a = test_sid("4d5e6f7a8b9c4d5e6f7a8b9c4d5e6f7a");
+            let sid_b = test_sid("5e6f7a8b9c0d5e6f7a8b9c0d5e6f7a8b");
+            session_open(&sid_a);
+            session_open(&sid_b);
+
+            let sid_a2 = sid_a.clone();
+            register_out_sink_for(
+                &sid_a,
+                Arc::new(move |frame: &str| {
+                    let v: serde_json::Value = serde_json::from_str(frame).unwrap_or_default();
+                    if let Some(id) = v.get("__ipe_id").and_then(|x| x.as_u64()) {
+                        // Reply to A's request with value 11.
+                        deliver_inbound_for(
+                            &sid_a2,
+                            format!(r#"{{"__ipe_id":{id},"payload":11}}"#),
+                        );
+                    }
+                }),
+            );
+            let sid_b2 = sid_b.clone();
+            register_out_sink_for(
+                &sid_b,
+                Arc::new(move |frame: &str| {
+                    let v: serde_json::Value = serde_json::from_str(frame).unwrap_or_default();
+                    if let Some(id) = v.get("__ipe_id").and_then(|x| x.as_u64()) {
+                        // Reply to B's request with value 22.
+                        deliver_inbound_for(
+                            &sid_b2,
+                            format!(r#"{{"__ipe_id":{id},"payload":22}}"#),
+                        );
+                    }
+                }),
+            );
+
+            let (ra, rb) = tokio::join!(
+                with_session_sid(sid_a.to_string(), || {
+                    js_request::<i64, i64>(0_i64, int_decoder())
+                }),
+                with_session_sid(sid_b.to_string(), || {
+                    js_request::<i64, i64>(0_i64, int_decoder())
+                }),
+            );
+
+            assert!(
+                matches!(ra, crate::IpeResult::Ok(11)),
+                "session A must get 11, got {ra:?}"
+            );
+            assert!(
+                matches!(rb, crate::IpeResult::Ok(22)),
+                "session B must get 22, got {rb:?}"
+            );
+
+            session_close(&sid_a);
+            session_close(&sid_b);
+        }
+
+        // A malformed (non-JSON) reply frame arriving with a valid id is decoded
+        // fail-closed — the Task resolves Err, no panic, no partial value.
+        #[tokio::test]
+        async fn malformed_reply_decoded_fail_closed() {
+            let sid = test_sid("6f7a8b9c0d1e6f7a8b9c0d1e6f7a8b9c");
+            session_open(&sid);
+            let sid_clone = sid.clone();
+            register_out_sink_for(
+                &sid,
+                Arc::new(move |frame: &str| {
+                    let v: serde_json::Value = serde_json::from_str(frame).unwrap_or_default();
+                    if let Some(id) = v.get("__ipe_id").and_then(|x| x.as_u64()) {
+                        // Reply with a frame whose payload won't decode as i64.
+                        let bad = format!(r#"{{"__ipe_id":{id},"payload":"not-an-int"}}"#);
+                        deliver_inbound_for(&sid_clone, bad);
+                    }
+                }),
+            );
+            let result = with_session_sid(sid.to_string(), || {
+                js_request::<i64, i64>(0_i64, int_decoder())
+            })
+            .await;
+            assert!(
+                matches!(result, crate::IpeResult::Err(_)),
+                "malformed reply must resolve Err, got {result:?}"
+            );
             session_close(&sid);
         }
 

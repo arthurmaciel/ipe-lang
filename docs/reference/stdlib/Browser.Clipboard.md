@@ -23,16 +23,8 @@ The two layers:
   * `Ipe.Browser.Clipboard.Internals` publishes the closed outbound/inbound ADTs
     and the raw `Ipe.Js` wiring.
   * this module is the high-level layer: `write` / `read` with the inbound
-    subscription `contents`, which folds the narrow `JsMsg` EXHAUSTIVELY into a
-    typed `Result Error String` — a host permission denial becomes an `Err`,
-    never a silently dropped variant.
-
-`read` is shaped as an outbound `Cmd`, not a `Task Error String`: the raw
-`Ipe.Js` transport has no request→reply correlation kernel, so a `Task`-shaped
-one-shot cannot be spelled over it today. The read result arrives on the
-`contents` subscription. Closing that gap (a correlated port→`Task` bridge) is
-tracked — it needs a new backend kernel and a security review of the JS
-boundary, not a stdlib-only change.
+    subscription `contents`. `read` returns a `Task Error String` via the
+    correlated port→Task bridge; `write` remains `Cmd`-shaped (fire-and-forget).
 
 ## `write`
 
@@ -50,14 +42,14 @@ subscription, never a panic.
 ## `read`
 
 ```ipe
-read : Cmd.Cmd msg
+read : Task Error String
 ```
 
-`read` — request the current clipboard contents.
+`read` — request the current clipboard contents as a `Task Error String`.
 
-Outbound one-shot; the served JS handler reaches `navigator.clipboard.readText`.
-The result — the text or a typed denial — arrives on the `contents`
-subscription.
+Uses the correlated port→Task bridge (`Js.request`). The served JS handler
+reaches `navigator.clipboard.readText`; the result — the text or a typed denial
+— resolves the `Task` directly, with no companion subscription needed.
 
 ## `contents`
 

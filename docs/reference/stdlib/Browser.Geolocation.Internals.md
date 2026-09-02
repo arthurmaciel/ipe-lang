@@ -64,6 +64,16 @@ request : JsCmd -> Cmd.Cmd msg
 The served first-party JS sink reaches `navigator.geolocation.*`; the reply
 arrives inbound as a `JsMsg`.
 
+## `requestOne`
+
+```ipe
+requestOne : JsCmd -> Task Error JsMsg
+```
+
+`requestOne cmd` — correlated one-shot `JsCmd` → `Task Error JsMsg`.
+Routes through `Js.request` with the `inbound` decoder so the correlated
+reply is decoded fail-closed by the same gate the `subscribe` path uses.
+
 ## `subscribe`
 
 ```ipe
