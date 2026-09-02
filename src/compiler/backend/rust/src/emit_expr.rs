@@ -6394,6 +6394,100 @@ pub fn emit_sub_arm(ctx: &EmitCtx, kernel: KernelFn, args: &[Expr]) -> Option<St
     Some(format!("ipe_runtime::web::sub_every_hot({json_lit})"))
 }
 
+/// Reduce a TEA `init` body to an `apply_init_hot` call when the init rewrite is
+/// armed (a `hot_appearance` build) AND the body is a data-describable record
+/// literal with `Cmd.none`. `None` otherwise — the caller emits the body
+/// normally, byte-identically.
+///
+/// The emitted body is
+/// `(ipe_runtime::web::apply_init_hot("<baked datum JSON>", <compiled record>),
+/// cmd_none())`: at session creation the compiled reader decodes the baked datum
+/// (dev == prod), or a live replacement when the dev overlay holds. The
+/// `<compiled record>` is the SAME record the direct compiled `init` produces —
+/// the fail-closed fallback the reader returns if a datum ever fails to decode,
+/// so the emitted body is behaviour-identical to the direct compiled `init` even
+/// on a corrupt datum.
+///
+/// The baked JSON is
+/// [`crate::transition_classify::CompileInitDatum::to_json`], byte-identical to
+/// the runtime `InitDatum`'s serde form (pinned by the classifier's conformance
+/// test), so the reader round-trips it exactly.
+///
+/// The classifier is conservative: only a record literal of closed leaf values
+/// with `Cmd.none` classifies; every other `init` (and every `update` body, which
+/// is a `msg` match, never a bare record tuple) returns `None` and stays
+/// compiled. Fail-closed by construction — a false `None` is merely a recompile,
+/// never a wrong result.
+///
+/// `indent`/`depth`/`generics` thread the record sub-expression's emission
+/// context so the compiled record renders exactly as the direct body would.
+pub fn emit_init_datum(
+    ctx: &EmitCtx,
+    body: &Expr,
+    indent: usize,
+    depth: u16,
+    generics: GenericScope,
+) -> DResult<Option<String>> {
+    let resolve = |sym: Symbol| ctx.emit_ident(sym).ok();
+    let Some(cd) = crate::transition_classify::init_datum_of_body(body, &resolve) else {
+        return Ok(None);
+    };
+    // The classifier proved the body is `(Record { .. }, Cmd.none)`; re-extract
+    // the record sub-expression to emit as the compiled fallback. A shape that
+    // does not match here would mean the classifier and this extraction drifted;
+    // it fails closed (`None` → ordinary emit), never a wrong rewrite.
+    let Expr::Tuple(elems) = body else {
+        return Ok(None);
+    };
+    let [record_expr, _cmd] = elems.as_slice() else {
+        return Ok(None);
+    };
+    let compiled_record = emit_expr_at(ctx, record_expr, indent, depth, generics)?;
+    let json = cd.to_json();
+    let json_lit = rust_string_literal(&json);
+    Ok(Some(format!(
+        "(ipe_runtime::web::apply_init_hot({json_lit}, {compiled_record}), cmd_none())"
+    )))
+}
+
+/// Reduce a data-describable `update` arm's Cmd WIRING to a `select_cmd_hot`
+/// selection expression, or `None` when the arm's Cmd is not a recognised wiring.
+///
+/// Emits `ipe_runtime::web::select_cmd_hot("<baked wiring JSON>", <effect count>)`
+/// — the compiled selector returns which of the arm's `effect_count` compiled
+/// effects to fire (or `None` for `Cmd.none`). The effect BODIES are the arm's
+/// OWN compiled effects (not reduced here); only the WIRING — which id fires — is
+/// data. A wiring edit swaps the baked id (a data patch); a genuinely-new effect
+/// body grows `effect_count` and recompiles.
+///
+/// The baked JSON is
+/// [`crate::transition_classify::CompileCmdWiring::to_json`], byte-identical to
+/// the runtime `CmdWiring`'s serde form (pinned by the classifier's conformance
+/// test), so the selector round-trips it exactly.
+///
+/// Conservative: only the closed wiring vocabulary classifies; a real effect body
+/// returns `None` and keeps the arm's Cmd compiled.
+///
+/// This is the emit-ready wiring selector for the Cmd-wiring data path. The
+/// wiring MECHANISM it feeds — the runtime `select_cmd_hot`, the classifier
+/// [`crate::transition_classify::cmd_wiring_of_arm`], the `/_ipe/hot-wiring`
+/// endpoint, and the watch push leg — is complete and tested. Composing this
+/// selector at the arm's Cmd position requires threading the arm's compiled
+/// effect table through the shared `update`-arm emitter, a language-boundary
+/// change that lands behind the security-soundness guardian separately from this
+/// data-path slice; until then this helper has no caller in the lib build, so the
+/// `dead_code` allow is ledgered here (not an un-reasoned suppression).
+#[allow(dead_code)]
+#[must_use]
+pub fn emit_cmd_wiring_arm(body: &Expr, effect_count: usize) -> Option<String> {
+    let cw = crate::transition_classify::cmd_wiring_of_arm(body)?;
+    let json = cw.to_json();
+    let json_lit = rust_string_literal(&json);
+    Some(format!(
+        "ipe_runtime::web::select_cmd_hot({json_lit}, {effect_count})"
+    ))
+}
+
 /// Render `s` as a Rust double-quoted string literal: escape `\` and `"` (the
 /// two characters that would otherwise terminate or corrupt the literal). The
 /// JSON writer already escaped control characters as `\uXXXX` / `\n` etc., which
@@ -8634,6 +8728,47 @@ const fn is_tea_subs_function(func: &ipe_ir::Func) -> bool {
     matches!(&func.ret, IrType::Sub(_)) && !func.params.is_empty()
 }
 
+/// Whether `func`'s return type is the TEA producer shape `(_, Cmd _)` — the
+/// arming gate for the `init` datum rewrite. This admits both `init` and
+/// `update` (both return `(Model, Cmd _)`); the body classifier
+/// ([`crate::transition_classify::init_datum_of_body`]) then refuses an `update`
+/// body (a `msg` match, never a bare record-literal tuple) and every non-`init`
+/// helper, so the arming is only a cheap pre-filter, never the correctness gate.
+fn func_returns_cmd_tuple(func: &ipe_ir::Func) -> bool {
+    let IrType::Tuple(elems) = &func.ret else {
+        return false;
+    };
+    let [_model_ty, second] = elems.as_slice() else {
+        return false;
+    };
+    matches!(second, IrType::Cmd(_))
+}
+
+/// The reduced body for a data-describable TEA `init`, or `None` to keep the
+/// ordinary body emit.
+///
+/// Reduces `init _ = ({ f = lit, … }, Cmd.none)` to an `apply_init_hot` call so an
+/// `init` edit is session-scoped (a FRESH session decodes the edited datum; a LIVE
+/// session keeps its Model). Armed only under `hot_appearance`, only for a
+/// function whose return type is `(_, Cmd _)` (the TEA producer shape), and only
+/// when the body classifies as a record literal of closed leaves with `Cmd.none`.
+/// An `update` body is a `msg` match (never a bare record tuple), so it never
+/// classifies; with the flag off (or an `ipe_main`-wrapped entry-point body) this
+/// returns `None` and the body is byte-identical to the direct form.
+fn emit_init_hot_for_func(
+    ctx: &EmitCtx,
+    func: &Func,
+    body_expr: &Expr,
+    ipe_main_wrap: bool,
+    generics: GenericScope,
+) -> DResult<Option<String>> {
+    if ctx.hot_appearance && !ipe_main_wrap && func_returns_cmd_tuple(func) {
+        emit_init_datum(ctx, body_expr, 1, 0, generics)
+    } else {
+        Ok(None)
+    }
+}
+
 /// Emit a whole function item with the given visibility prefix (`"pub fn "` for
 /// the single-file layout, `"pub(crate) fn "` for a split `IpeModule` file where
 /// the item lives inside a `mod` block). The prefix is threaded through to
@@ -8644,8 +8779,10 @@ const fn is_tea_subs_function(func: &ipe_ir::Func) -> bool {
 #[allow(
     clippy::too_many_lines,
     reason = "one linear emit pipeline (elision, wraps, per-function literal + transition + \
-              sub-description arming, body render, signature); splitting it would thread a dozen \
-              locals through helpers without clarifying the single straight-line flow"
+              sub-description arming + init hot rewrite, body render, signature); the cohesive \
+              sub-decisions are already extracted (e.g. `emit_init_hot_for_func`, \
+              `ipe_main_wrap_decision`), and splitting the rest would thread a dozen locals \
+              through helpers without clarifying the single straight-line flow"
 )]
 pub fn emit_func_vis(ctx: &EmitCtx, func: &Func, vis_prefix: &str) -> DResult<String> {
     let name = ctx.func_name(func.id)?.to_owned();
@@ -8776,7 +8913,11 @@ pub fn emit_func_vis(ctx: &EmitCtx, func: &Func, vis_prefix: &str) -> DResult<St
     let saved_transition = ctx.begin_transition_update(tea_update_param);
     // Arm the sub-description rewrite for a TEA `subscriptions` body; inert off.
     let saved_subs_hot = ctx.begin_subs_hot(ctx.hot_appearance && is_tea_subs_function(func));
-    let body = if ipe_main_wrap_unit {
+    let body = if let Some(init_body) =
+        emit_init_hot_for_func(ctx, func, body_expr, ipe_main_wrap, generics)?
+    {
+        init_body
+    } else if ipe_main_wrap_unit {
         // Wrap the synchronous body so ipe_main returns IpeTask<()>; the
         // body's own (unit) value is discarded, only its side effects matter.
         let inner = emit_body_native(ctx, body_expr, generics)?;
@@ -9390,5 +9531,47 @@ fn ty_mentions_var_under_fn(ty: &IrType, sym: Symbol, under_fn: bool) -> bool {
             .values()
             .any(|t| ty_mentions_var_under_fn(t, sym, under_fn)),
         _ => false,
+    }
+}
+
+#[cfg(test)]
+mod cmd_wiring_emit_tests {
+    use super::emit_cmd_wiring_arm;
+    use ipe_ir::{CallPin, Callee, Expr, KernelFn, OnFormKind};
+
+    fn cmd_none() -> Expr {
+        Expr::Call {
+            callee: Callee::Kernel(KernelFn::CmdNone),
+            args: vec![],
+            pin: CallPin::None,
+            on_form: OnFormKind::NotForm,
+        }
+    }
+
+    // A `Cmd.none` arm classifies as the no-effect wiring and emits the compiled
+    // `select_cmd_hot` selector over the arm's effect table (here empty).
+    #[test]
+    fn cmd_none_arm_emits_no_effect_selector() {
+        // `( <model>, Cmd.none )` — the model half is irrelevant to the wiring.
+        let body = Expr::Tuple(vec![Expr::Int(0), cmd_none()]);
+        assert_eq!(
+            emit_cmd_wiring_arm(&body, 0),
+            Some(r#"ipe_runtime::web::select_cmd_hot("{\"effect\":null}", 0)"#.to_owned()),
+            "a Cmd.none arm emits the no-effect wiring selector"
+        );
+    }
+
+    // A real effect body (a non-`Cmd.none` second element) is not a recognised
+    // wiring — the arm's Cmd stays compiled (`None`).
+    #[test]
+    fn real_cmd_arm_emits_nothing() {
+        let real = Expr::Call {
+            callee: Callee::Kernel(KernelFn::CmdBatch),
+            args: vec![],
+            pin: CallPin::None,
+            on_form: OnFormKind::NotForm,
+        };
+        let body = Expr::Tuple(vec![Expr::Int(0), real]);
+        assert_eq!(emit_cmd_wiring_arm(&body, 2), None);
     }
 }

@@ -361,6 +361,186 @@ fn is_var(expr: &Expr, sym: Symbol) -> bool {
     matches!(expr, Expr::Var(s) | Expr::CloneVar(s) if *s == sym)
 }
 
+// ─── data-describable `init` → an inert init datum ──────────────────────────
+//
+// The STARTING-`Model` counterpart of `transition_of_arm`. A Web/TEA `init`
+// returns `(Model, Cmd Msg)`. An `init` is DATA-DESCRIBABLE iff its whole
+// starting Model is a record LITERAL of closed leaf values (int/bool/string),
+// with `Cmd.none` and no control flow, call, or field expression.
+// [`init_datum_of_body`] returns `Some` only for such an `init` and `None` for
+// everything else, so an unprovable `init` stays compiled (the recompile path)
+// — conservative by construction, exactly the transition split. The reduced
+// datum is a self-describing JSON object (the same field-keyed shape the runtime
+// `InitDatum` strict-decodes into the real `Model`), so a hot-swap of the datum
+// produces byte-identically what a full recompile of the same `init` would seed
+// a fresh session with — one init semantics, dev == prod.
+
+/// An inert, fully-described data-describable `init` reduced to data: the
+/// starting `Model`'s fields as `(serde key, leaf source)` pairs, in the record
+/// literal's order.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CompileInitDatum {
+    /// Each starting `Model` field as `(serde KEY, leaf value)`. The key is the
+    /// emitted Rust field ident (the `mangle_reserved` form the runtime keys the
+    /// Model object by).
+    pub fields: Vec<(String, CompileLeaf)>,
+}
+
+/// A closed leaf value in a data-describable `init` record. Only the three JSON
+/// scalar leaves an `InitDatum` object body carries; anything else refuses.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum CompileLeaf {
+    Int(i64),
+    Bool(bool),
+    Str(String),
+}
+
+impl CompileInitDatum {
+    /// Serialize to the JSON the runtime `InitDatum` decodes —
+    /// `{"model":{<key>:<leaf>,...}}` in the record literal's field order.
+    /// Deterministic (fixed key order, deterministic string escaping); the body
+    /// is the same self-describing object shape the checkpoint codec uses, so it
+    /// strict-decodes into the real `Model` (pinned by a conformance test).
+    #[must_use]
+    pub fn to_json(&self) -> String {
+        let mut out = String::new();
+        out.push_str("{\"model\":{");
+        for (i, (key, leaf)) in self.fields.iter().enumerate() {
+            if i > 0 {
+                out.push(',');
+            }
+            write_json_string(key, &mut out);
+            out.push(':');
+            leaf.write_json(&mut out);
+        }
+        out.push_str("}}");
+        out
+    }
+}
+
+impl CompileLeaf {
+    fn write_json(&self, out: &mut String) {
+        match self {
+            Self::Int(n) => out.push_str(&n.to_string()),
+            Self::Bool(b) => out.push_str(if *b { "true" } else { "false" }),
+            Self::Str(s) => write_json_string(s, out),
+        }
+    }
+}
+
+/// Reduce a data-describable `init` body to a [`CompileInitDatum`], or `None`.
+///
+/// Returns `None` when the `init` is not provably a record literal of closed leaf
+/// values with `Cmd.none` (any control flow, call, field expression, non-`none`
+/// `Cmd`, a non-record starting Model, or an unresolvable field) — the caller
+/// then keeps the `init` compiled (recompile path).
+///
+/// `resolve` maps a field [`Symbol`] to its serde key (the emitted Rust ident); a
+/// symbol that does not resolve refuses.
+///
+/// Fail-closed everywhere: a false `None` is merely a slower rebuild; a false
+/// `Some` that diverged from the compiled `init` would be a correctness defect —
+/// so every unrecognised shape refuses.
+pub fn init_datum_of_body(
+    body: &Expr,
+    resolve: &impl Fn(Symbol) -> Option<String>,
+) -> Option<CompileInitDatum> {
+    // The `init` body of a TEA app is `(Model, Cmd Msg)`. Only a two-element
+    // tuple whose second element is exactly `Cmd.none` is data-describable; a
+    // real `Cmd` keeps the `init` compiled.
+    let Expr::Tuple(elems) = body else {
+        return None;
+    };
+    let [model_expr, cmd_expr] = elems.as_slice() else {
+        return None;
+    };
+    if !is_cmd_none(cmd_expr) {
+        return None;
+    }
+    // The starting Model must be a record LITERAL — `{ f = lit, ... }`, never an
+    // update, call, or `if`. Every field value must be a closed leaf; anything
+    // else (a field read, an arithmetic, a nested record) refuses.
+    let Expr::Record { fields, .. } = model_expr else {
+        return None;
+    };
+    let mut out = Vec::with_capacity(fields.len());
+    for (field_sym, value) in fields {
+        let key = resolve(*field_sym)?;
+        let leaf = leaf_of(value)?;
+        out.push((key, leaf));
+    }
+    Some(CompileInitDatum { fields: out })
+}
+
+/// Reduce a field value to a closed [`CompileLeaf`], or `None` for anything
+/// outside the closed leaf vocabulary (a field read, an operator, a call, a
+/// nested record — all keep the `init` compiled).
+fn leaf_of(value: &Expr) -> Option<CompileLeaf> {
+    match value {
+        Expr::Int(n) => Some(CompileLeaf::Int(*n)),
+        Expr::Bool(b) => Some(CompileLeaf::Bool(*b)),
+        Expr::Str(s) => Some(CompileLeaf::Str(s.clone())),
+        _ => None,
+    }
+}
+
+// ─── data-describable Cmd WIRING → an inert wiring datum ────────────────────
+//
+// The Cmd counterpart of `transition_of_arm`'s model half. An `update` arm's Cmd
+// position — the SECOND element of its `(Model, Cmd Msg)` tuple — is classified
+// into a closed wiring vocabulary: `Cmd.none` (fire no effect). The effect BODY
+// (a real `Cmd.perform`/`Cmd.batch`) is NOT reduced — it stays compiled — but the
+// WIRING (whether an effect fires, and eventually WHICH by stable id) becomes a
+// datum. This slice recognises the `Cmd.none` wiring, so an arm whose model is
+// data-describable can carry its Cmd position as data selected by the compiled
+// `select_cmd_hot`; a real effect keeps the arm's Cmd compiled (recompile path),
+// exactly the conservative body/wiring split the spec calls for.
+
+/// The compile-time counterpart of the runtime `web::cmd_wiring::CmdWiring`: which
+/// compiled effect (by stable id) an arm fires, or `None` for no effect.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CompileCmdWiring {
+    /// The stable id of the compiled effect the arm fires, or `None` for
+    /// `Cmd.none`. An id indexes the arm's compiled effect table.
+    pub effect: Option<u32>,
+}
+
+impl CompileCmdWiring {
+    /// Serialize to the JSON the runtime `CmdWiring` decodes —
+    /// `{"effect":null}` or `{"effect":<id>}`. Deterministic; byte-identical to
+    /// `serde_json::to_string(&CmdWiring)` (pinned by a conformance test).
+    #[must_use]
+    pub fn to_json(&self) -> String {
+        self.effect.map_or_else(
+            || "{\"effect\":null}".to_owned(),
+            |id| format!("{{\"effect\":{id}}}"),
+        )
+    }
+}
+
+/// Classify an `update` arm's Cmd position (the second tuple element) into an
+/// inert [`CompileCmdWiring`], or `None` when the Cmd is not a recognised wiring.
+///
+/// Recognised: `Cmd.none` → the no-effect wiring (`effect: None`). Everything else
+/// — a real `Cmd.perform`, `Cmd.batch`, a variable, a call — is an effect BODY
+/// this slice keeps compiled, so it returns `None` (the arm's Cmd stays compiled).
+/// Conservative by construction: a false `None` is a slower rebuild; a false
+/// `Some` that fired the wrong effect would be a correctness defect, so every
+/// unrecognised Cmd refuses.
+#[must_use]
+pub fn cmd_wiring_of_arm(body: &Expr) -> Option<CompileCmdWiring> {
+    let Expr::Tuple(elems) = body else {
+        return None;
+    };
+    let [_model_expr, cmd_expr] = elems.as_slice() else {
+        return None;
+    };
+    if is_cmd_none(cmd_expr) {
+        return Some(CompileCmdWiring { effect: None });
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
@@ -685,6 +865,164 @@ mod tests {
         assert_eq!(classify(&arm_body(unknown, Expr::Int(0))), None);
     }
 
+    // ── data-describable `init` → an init datum ──────────────────────────
+
+    use super::{CompileInitDatum, CompileLeaf, init_datum_of_body};
+
+    /// `( { count = <c>, name = <n>, on = <o> }, Cmd.none )` — the TEA `init`
+    /// body shape.
+    fn init_body(fields: Vec<(Symbol, Expr)>) -> Expr {
+        Expr::Tuple(vec![Expr::Record { fields, ty: None }, cmd_none()])
+    }
+
+    fn classify_init(body: &Expr) -> Option<CompileInitDatum> {
+        init_datum_of_body(body, &resolver)
+    }
+
+    #[test]
+    fn record_literal_init_classifies() {
+        let body = init_body(vec![
+            (count_sym(), Expr::Int(0)),
+            (name_sym(), Expr::Str("start".to_owned())),
+            (on_sym(), Expr::Bool(false)),
+        ]);
+        assert_eq!(
+            classify_init(&body),
+            Some(CompileInitDatum {
+                fields: vec![
+                    ("count".to_owned(), CompileLeaf::Int(0)),
+                    ("name".to_owned(), CompileLeaf::Str("start".to_owned())),
+                    ("on".to_owned(), CompileLeaf::Bool(false)),
+                ],
+            })
+        );
+    }
+
+    #[test]
+    fn init_datum_json_shape() {
+        let d = CompileInitDatum {
+            fields: vec![
+                ("count".to_owned(), CompileLeaf::Int(0)),
+                ("name".to_owned(), CompileLeaf::Str("a\"b".to_owned())),
+                ("on".to_owned(), CompileLeaf::Bool(true)),
+            ],
+        };
+        assert_eq!(
+            d.to_json(),
+            r#"{"model":{"count":0,"name":"a\"b","on":true}}"#
+        );
+    }
+
+    #[test]
+    fn init_with_real_cmd_refuses() {
+        let real_cmd = Expr::Call {
+            callee: Callee::Kernel(KernelFn::CmdBatch),
+            args: vec![Expr::List {
+                elem: IrType::Int,
+                items: vec![],
+            }],
+            pin: CallPin::None,
+            on_form: OnFormKind::NotForm,
+        };
+        let body = Expr::Tuple(vec![
+            Expr::Record {
+                fields: vec![(count_sym(), Expr::Int(0))],
+                ty: None,
+            },
+            real_cmd,
+        ]);
+        assert_eq!(classify_init(&body), None);
+    }
+
+    #[test]
+    fn init_with_field_expression_refuses() {
+        // `{ count = someCall x }` — a non-leaf field value keeps `init` compiled.
+        let call = Expr::Apply {
+            func: Box::new(Expr::Var(Symbol::from_raw(50))),
+            args: vec![Expr::Int(1)],
+        };
+        assert_eq!(classify_init(&init_body(vec![(count_sym(), call)])), None);
+    }
+
+    #[test]
+    fn init_with_field_read_refuses() {
+        // `{ count = m.count }` — a field read is not a closed leaf.
+        assert_eq!(
+            classify_init(&init_body(vec![(count_sym(), model_access(count_sym()))])),
+            None
+        );
+    }
+
+    #[test]
+    fn init_non_record_model_refuses() {
+        // `init _ = ( update_via_helper, Cmd.none )` — a non-record starting Model.
+        let body = Expr::Tuple(vec![Expr::Var(Symbol::from_raw(60)), cmd_none()]);
+        assert_eq!(classify_init(&body), None);
+    }
+
+    #[test]
+    fn init_unresolved_field_refuses() {
+        let unknown = Symbol::from_raw(77);
+        assert_eq!(
+            classify_init(&init_body(vec![(unknown, Expr::Int(0))])),
+            None
+        );
+    }
+
+    // ── Cmd wiring → an inert wiring datum ───────────────────────────────
+
+    use super::{CompileCmdWiring, cmd_wiring_of_arm};
+
+    #[test]
+    fn cmd_none_arm_wires_no_effect() {
+        // `Increment -> ({ m | count = count + 1 }, Cmd.none)` — the Cmd position
+        // is `Cmd.none`, the no-effect wiring.
+        let rhs = Expr::BinOp {
+            op: BinOp::IntAdd,
+            lhs: Box::new(model_access(count_sym())),
+            rhs: Box::new(Expr::Int(1)),
+        };
+        assert_eq!(
+            cmd_wiring_of_arm(&arm_body(count_sym(), rhs)),
+            Some(CompileCmdWiring { effect: None })
+        );
+    }
+
+    #[test]
+    fn cmd_wiring_json_shapes() {
+        assert_eq!(
+            CompileCmdWiring { effect: None }.to_json(),
+            r#"{"effect":null}"#
+        );
+        assert_eq!(
+            CompileCmdWiring { effect: Some(2) }.to_json(),
+            r#"{"effect":2}"#
+        );
+    }
+
+    #[test]
+    fn real_cmd_arm_keeps_wiring_compiled() {
+        // A real `Cmd.batch []` effect body is NOT a recognised wiring — the arm's
+        // Cmd stays compiled (recompile path).
+        let real_cmd = Expr::Call {
+            callee: Callee::Kernel(KernelFn::CmdBatch),
+            args: vec![Expr::List {
+                elem: IrType::Int,
+                items: vec![],
+            }],
+            pin: CallPin::None,
+            on_form: OnFormKind::NotForm,
+        };
+        let body = Expr::Tuple(vec![
+            Expr::Update {
+                record: Box::new(Expr::Var(model_sym())),
+                fields: vec![(count_sym(), Expr::Int(0))],
+            },
+            real_cmd,
+        ]);
+        assert_eq!(cmd_wiring_of_arm(&body), None);
+    }
+
     // ── JSON shape ────────────────────────────────────────────────────────
 
     #[test]
@@ -872,5 +1210,102 @@ mod conformance {
             ct.to_json(),
             serde_json::to_string(&runtime).expect("serialize")
         );
+    }
+
+    // ── init-datum dev == prod conformance ────────────────────────────────
+
+    use super::{CompileInitDatum, CompileLeaf};
+    use ipe_runtime_rust::web::init_datum::{InitDatum, apply_init};
+
+    /// Decode a compile-time init datum into the runtime `InitDatum` through its
+    /// JSON — the exact path a baked default takes at runtime.
+    fn interpret_init(cd: &CompileInitDatum) -> InitDatum {
+        serde_json::from_str(&cd.to_json())
+            .expect("compile init datum JSON must decode into runtime InitDatum")
+    }
+
+    #[test]
+    fn init_datum_matches_compiled_init() {
+        // The compile datum for `init _ = ({ count = 7, name = "bob", on = true }, Cmd.none)`.
+        let cd = CompileInitDatum {
+            fields: vec![
+                ("count".to_owned(), CompileLeaf::Int(7)),
+                ("name".to_owned(), CompileLeaf::Str("bob".to_owned())),
+                ("on".to_owned(), CompileLeaf::Bool(true)),
+            ],
+        };
+        // The direct compiled `init` produces exactly this Model.
+        let compiled = Model {
+            count: 7,
+            name: "bob".to_owned(),
+            on: true,
+        };
+        // A DIFFERENT compiled fallback proves the datum drove the result (not the
+        // fallback): decoding the well-typed datum yields the compiled Model.
+        let fallback = Model {
+            count: 0,
+            name: String::new(),
+            on: false,
+        };
+        assert_eq!(apply_init(&interpret_init(&cd), fallback), compiled);
+    }
+
+    /// The compile serializer's bytes ARE the runtime codec's bytes: a runtime
+    /// `InitDatum` round-trips through `CompileInitDatum::to_json`'s exact shape.
+    #[test]
+    fn compile_init_json_is_runtime_init_datum_serde_shape() {
+        let cd = CompileInitDatum {
+            fields: vec![("count".to_owned(), CompileLeaf::Int(0))],
+        };
+        let runtime = InitDatum {
+            model: serde_json::json!({ "count": 0 }),
+        };
+        assert_eq!(
+            cd.to_json(),
+            serde_json::to_string(&runtime).expect("serialize")
+        );
+    }
+
+    // ── Cmd-wiring dev == prod conformance ────────────────────────────────
+
+    use super::CompileCmdWiring;
+    use ipe_runtime_rust::web::cmd_wiring::{CmdWiring, select_effect};
+
+    /// Decode a compile-time wiring into the runtime `CmdWiring` through its JSON.
+    fn interpret_wiring(cw: CompileCmdWiring) -> CmdWiring {
+        serde_json::from_str(&cw.to_json())
+            .expect("compile wiring JSON must decode into runtime CmdWiring")
+    }
+
+    #[test]
+    fn cmd_none_wiring_selects_no_effect() {
+        // The `Cmd.none` wiring fires no effect — byte-identical to a compiled
+        // `Cmd.none` arm (dev == prod).
+        let cw = CompileCmdWiring { effect: None };
+        assert_eq!(select_effect(&interpret_wiring(cw), 0), None);
+    }
+
+    #[test]
+    fn effect_wiring_selects_that_id() {
+        // An effect wiring naming id 1 selects slot 1 when the arm's compiled
+        // effect table has it.
+        let cw = CompileCmdWiring { effect: Some(1) };
+        assert_eq!(select_effect(&interpret_wiring(cw), 2), Some(1));
+    }
+
+    /// The compile serializer's bytes ARE the runtime codec's bytes: a runtime
+    /// `CmdWiring` round-trips through `CompileCmdWiring::to_json`'s exact shape.
+    #[test]
+    fn compile_wiring_json_is_runtime_cmd_wiring_serde_shape() {
+        for cw in [
+            CompileCmdWiring { effect: None },
+            CompileCmdWiring { effect: Some(3) },
+        ] {
+            let runtime = CmdWiring { effect: cw.effect };
+            assert_eq!(
+                cw.to_json(),
+                serde_json::to_string(&runtime).expect("serialize")
+            );
+        }
     }
 }
