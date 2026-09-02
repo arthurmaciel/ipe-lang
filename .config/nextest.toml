@@ -28,12 +28,13 @@ slow-timeout = { period = "60s", terminate-after = 10 }
 # timeout) and fight over the shared target's cargo lock. Serializing them makes
 # the cold-build subprocess tests deterministic without loosening any assertion.
 #
-# Also covers `test_command` and `verify` E2E tests: each spawns the `ipe`
-# binary which invokes `cargo build` into the same shared emitted-crate target.
-# Running them concurrently produces "Blocking waiting for file lock" on the
-# cargo target lock, which under the ci profile's 600 s ceiling is a real
-# flake vector rather than a hang. Serializing into this group is exact because
-# the contended resource is identical to the server-e2e group's shared target.
+# Also covers `test_command` and `verify` E2E tests, and the
+# `stdlib_coverage_dynamic` build+run column: each spawns the `ipe` binary which
+# invokes `cargo build` into the same shared emitted-crate target. Running them
+# concurrently produces "Blocking waiting for file lock" on the cargo target
+# lock, which under the ci profile's 600 s ceiling is a real flake vector rather
+# than a hang. Serializing into this group is exact because the contended
+# resource is identical to the server-e2e group's shared target.
 #
 # `cwd-mutating` (max 1): each member calls `std::env::set_current_dir`, which
 # mutates the process-global working directory. Two such tests running
@@ -46,7 +47,7 @@ heavy-server-e2e = { max-threads = 1 }
 cwd-mutating = { max-threads = 1 }
 
 [[profile.ci.overrides]]
-filter = 'binary(watch_sigterm) | binary(watch_integration) | binary(watch_hot_appearance) | binary(watch_bluegreen) | binary(server_e2e) | binary(live_e2e) | binary(http_e2e) | binary(webview_e2e) | binary(test_command) | binary(verify)'
+filter = 'binary(watch_sigterm) | binary(watch_integration) | binary(watch_hot_appearance) | binary(watch_bluegreen) | binary(server_e2e) | binary(live_e2e) | binary(http_e2e) | binary(webview_e2e) | binary(test_command) | binary(verify) | binary(stdlib_coverage_dynamic)'
 test-group = 'heavy-server-e2e'
 
 [[profile.ci.overrides]]
@@ -55,13 +56,16 @@ test-group = 'cwd-mutating'
 
 # The parity probes compile every golden fixture twice (clean + incremental),
 # per shard — a shard legitimately approaches the default 600s ceiling under CI
-# load, so give the parity binaries a wider terminate window.
+# load, so give the parity binaries a wider terminate window. The stdlib
+# coverage dynamic sweep is the same class: its build+run column drives a real
+# `cargo build` per higher-order symbol, so the whole slice legitimately runs
+# past 600s on a cold runner even serialized.
 [[profile.ci.overrides]]
-filter = 'binary(clean_vs_incremental_parity) | binary(per_module_typecheck_parity)'
+filter = 'binary(clean_vs_incremental_parity) | binary(per_module_typecheck_parity) | binary(stdlib_coverage_dynamic)'
 slow-timeout = { period = "60s", terminate-after = 20 }
 
 [[profile.default.overrides]]
-filter = 'binary(watch_sigterm) | binary(watch_integration) | binary(watch_hot_appearance) | binary(watch_bluegreen) | binary(server_e2e) | binary(live_e2e) | binary(http_e2e) | binary(webview_e2e) | binary(test_command) | binary(verify)'
+filter = 'binary(watch_sigterm) | binary(watch_integration) | binary(watch_hot_appearance) | binary(watch_bluegreen) | binary(server_e2e) | binary(live_e2e) | binary(http_e2e) | binary(webview_e2e) | binary(test_command) | binary(verify) | binary(stdlib_coverage_dynamic)'
 test-group = 'heavy-server-e2e'
 
 [[profile.default.overrides]]
