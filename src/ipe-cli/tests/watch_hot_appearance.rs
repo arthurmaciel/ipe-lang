@@ -1901,6 +1901,44 @@ fn web_fixture_msg_variants(keep_decrement: bool) -> String {
     )
 }
 
+/// A minimal Web TEA program whose `subscriptions` is a single data-describable
+/// tick source `Sub.every <interval> Tick`, plus a `Tick` `Msg` its `update`
+/// consumes. `extra_text` perturbs the view to force a structural edit when
+/// needed. The `subscriptions` entry compiles to `sub_every_hot(<baked datum>)`
+/// under the hot flag; editing only the interval literal changes only the baked
+/// datum json, so the classifier routes it to a sub patch (no recompile).
+fn web_fixture_ticker(interval: u32, extra_text: &str) -> String {
+    format!(
+        "module Main exposing (main)\n\n\
+         import Ipe.Tea.Web as Web\n\
+         import Ipe.Ui as Ui\n\
+         import Ipe.Tea.Web.Cmd\n\
+         import Ipe.Tea.Web.Sub as Sub\n\n\
+         type alias Model = {{ count : Int }}\n\n\
+         type Msg = Tick\n\n\
+         init : a -> ( Model, Cmd Msg )\n\
+         init _req =\n    \
+             ( {{ count = 0 }}, Cmd.none )\n\n\
+         update : Msg -> Model -> ( Model, Cmd Msg )\n\
+         update msg model =\n    \
+             case msg of\n        \
+                 Tick ->\n            \
+                     ( {{ model | count = model.count + 1 }}, Cmd.none )\n\n\
+         view : Model -> Element Msg\n\
+         view model =\n    \
+             Ui.column []\n        \
+                 [ Ui.text \"marker\"{extra_text} ]\n\n\
+         subscriptions : Model -> Sub Msg\n\
+         subscriptions _model =\n    \
+             Sub.every {interval} Tick\n\n\
+         main =\n    \
+             Web.app\n        \
+                 {{ init = init, update = update, view = view, subscriptions = subscriptions\n        \
+                 , routes = [], notFound = Tick\n        \
+                 }}\n",
+    )
+}
+
 /// The `Msg`-set fail-closed SEAL: a NON-additive `Msg` change (dropping a live
 /// variant) must RECOMPILE (restart onto a new binary), never a hot-swap — the
 /// baked `IPE_WEB_MSG_SET` descriptor is no longer an additive superset, so the
@@ -1961,6 +1999,98 @@ fn non_additive_msg_change_recompiles() -> Result<(), BoxError> {
     assert!(
         http_get_body(port).is_some_and(|b| b.contains("marker")),
         "the app must keep serving on the recompiled binary"
+    );
+
+    stop_and_join(&handle, join)
+}
+
+/// The sub-description-hot-swap SEAL: a ticker's `subscriptions` interval edited
+/// from `1000` to `500` hot-swaps with no `cargo build` and no restart — the entry
+/// compiled to `sub_every_hot(<baked datum>)`, so only the baked datum json
+/// changed and the classifier routes it to a sub patch. A structural
+/// `subscriptions` edit (a real `Sub.batch`) still recompiles.
+#[test]
+#[cfg(target_os = "linux")]
+fn subscriptions_interval_edit_hot_swaps_without_rebuild() -> Result<(), BoxError> {
+    if std::env::var("IPE_E2E").is_err() {
+        eprintln!("skipping (set IPE_E2E=1 to run)");
+        return Ok(());
+    }
+    // SAFETY: single-threaded here (no watch thread spawned yet); nextest isolates
+    // this process, so the var neither races nor leaks.
+    unsafe {
+        std::env::set_var("IPE_WATCH_HOT_APPEARANCE", "1");
+    }
+
+    let (ipe_dir, out_dir) = fresh_dirs("ticker")?;
+    write_main(&ipe_dir, &web_fixture_ticker(1000, ""))?;
+
+    let sink = EventSink::default();
+    let port = 19183;
+    let (join, handle) = start_watch(&ipe_dir.join("Main.ipe"), &out_dir, port, &sink)?;
+
+    assert!(
+        wait_for_serving(port, Duration::from_mins(4)),
+        "the flag-on cold build of a ticker subscriptions must serve \
+         (the emitted sub_every_hot entry compiles)"
+    );
+    assert!(
+        wait_for(Duration::from_secs(10), || sink.count_restarted() >= 1),
+        "the cold build must record its initial Restarted event"
+    );
+    let pid_before = server_pid(port).ok_or("server PID must be discoverable after cold build")?;
+    let restarts_before = sink.count_restarted();
+
+    // subscriptions edit: Time.every 1000 -> 500. Sub-description-only => hot-swap.
+    write_main(&ipe_dir, &web_fixture_ticker(500, ""))?;
+    let swap_start = Instant::now();
+    let hot_swapped = wait_for(Duration::from_secs(20), || sink.count_hot_swapped() > 0);
+    assert!(
+        hot_swapped,
+        "a 1000 -> 500 interval edit must be hot-swapped (sub patch), not recompiled"
+    );
+    std::thread::sleep(Duration::from_secs(2));
+    assert_eq!(
+        sink.count_restarted(),
+        restarts_before,
+        "a hot-swapped subscriptions edit must NOT restart the app (no cargo rebuild)"
+    );
+    assert_eq!(
+        server_pid(port),
+        Some(pid_before),
+        "a hot-swapped subscriptions edit must leave the SAME server process running"
+    );
+    assert!(
+        http_get_body(port).is_some_and(|b| b.contains("marker")),
+        "the app must keep serving after the sub-description hot-swap"
+    );
+    eprintln!(
+        "[measure] subscriptions 1000->500 hot-swap round-trip: {} ms (no cargo, no restart)",
+        swap_start.elapsed().as_millis()
+    );
+
+    // Structural subscriptions edit: wrap in a real Sub.batch. Logic => recompile.
+    // The entry is no longer a bare data-describable tick, so the emit no longer
+    // routes through sub_every_hot and the classifier sees a skeleton change =>
+    // recompile + restart.
+    let restarts_before_struct = sink.count_restarted();
+    write_main(
+        &ipe_dir,
+        &web_fixture_ticker(500, "")
+            .replace("Sub.every 500 Tick", "Sub.batch [ Sub.every 500 Tick ]"),
+    )?;
+    let restarted = wait_for(Duration::from_mins(2), || {
+        server_pid(port).is_some_and(|pid| pid != pid_before)
+    });
+    assert!(
+        restarted,
+        "a structural subscriptions edit (a real Sub.batch) must recompile and restart"
+    );
+    assert!(
+        wait_for(Duration::from_secs(10), || {
+            sink.count_restarted() > restarts_before_struct
+        }),
+        "a structural subscriptions edit must recompile and restart (a new Restarted event)"
     );
 
     stop_and_join(&handle, join)
