@@ -44,6 +44,12 @@ pub mod static_build;
 // the `ipe watch` transition classifier; its dev == prod conformance to the
 // runtime `apply_transition` is pinned in-module.
 pub mod transition_classify;
+// The `Msg`-enum → schema-tagged set-descriptor classifier: the compile-time
+// half of the additive-`Msg`-variant hot-swap. Public API — consumed by the
+// `ipe watch` loop to bake and diff the program's `Msg` variant surface; its
+// dev == prod conformance to the runtime `web::msg_set` proof is pinned
+// in-module.
+pub mod msg_set_classify;
 
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
@@ -2519,6 +2525,50 @@ impl<'a> EmitCtx<'a> {
         self.enum_variants
             .get(&(home.clone(), sym))
             .map_or(&[], Vec::as_slice)
+    }
+
+    /// The program's `Msg`-set descriptor JSON for the additive-`Msg`-variant
+    /// hot-swap, or `None` when the `update` field's first parameter is not a
+    /// resolvable user enum.
+    ///
+    /// Recovers the `Msg` type from `update_e` (its first parameter, per
+    /// [`crate::emit_model_gate::msg_ty_of_update`]); when that is an
+    /// [`IrType::Enum`] with a registered variant set, reduces the enum to a
+    /// [`crate::msg_set_classify::CompileMsgSet`] and serializes it to the runtime
+    /// `web::msg_set::MsgSet` serde shape. The variant names are resolved through
+    /// the interner (stable across emits), so the descriptor is consistent between
+    /// the previous and next emit the watch classifier diffs. `None` (no
+    /// descriptor) is fail-open: the classifier then finds nothing to diff and the
+    /// edit takes the ordinary path, never a spurious `Msg`-set hot-swap.
+    pub(crate) fn msg_set_descriptor_json(&self, update_e: &Expr) -> Option<String> {
+        let msg_ty = crate::emit_model_gate::msg_ty_of_update(update_e)?;
+        let IrType::Enum { home, name, .. } = msg_ty else {
+            return None;
+        };
+        let payloads = self.enum_variant_payloads(home, *name);
+        if payloads.is_empty() {
+            return None;
+        }
+        let variants = payloads
+            .iter()
+            .map(|(vname, fields)| {
+                // Resolve the variant name to its interned string; an unresolvable
+                // symbol is described under "" (fail-closed — it can only make the
+                // set look less additive, never spuriously additive).
+                let vname_s = self.interner.resolve(*vname).unwrap_or("").to_owned();
+                (
+                    vname_s,
+                    crate::msg_set_classify::compile_payload_shape(fields),
+                )
+            })
+            .collect();
+        Some(
+            crate::msg_set_classify::CompileMsgSet {
+                schema: crate::msg_set_classify::MSG_SET_SCHEMA,
+                variants,
+            }
+            .to_json(),
+        )
     }
 
     /// The declared payload field types of constructor `variant` of enum `ty`,

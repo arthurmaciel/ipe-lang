@@ -1733,3 +1733,114 @@ fn update_arm_step_edit_hot_swaps_without_rebuild() -> Result<(), BoxError> {
 
     stop_and_join(&handle, join)
 }
+
+/// A `Web.app` counter with a two-variant `Msg` (`Increment | Decrement`), each a
+/// data-describable arm. Under the hot flag the emitter bakes a
+/// `const IPE_WEB_MSG_SET` descriptor of the variant surface, which the watch
+/// classifier diffs across emits. `keep_decrement` drops `Decrement` (a
+/// NON-additive removal) when false.
+fn web_fixture_msg_variants(keep_decrement: bool) -> String {
+    let decrement_variant = if keep_decrement { " | Decrement" } else { "" };
+    let decrement_arm = if keep_decrement {
+        "        Decrement ->\n            \
+             ( { model | count = model.count - 1 }, Cmd.none )\n"
+    } else {
+        ""
+    };
+    format!(
+        "module Main exposing (main)\n\n\
+         import Ipe.Tea.Web as Web\n\
+         import Ipe.Ui as Ui\n\
+         import Ipe.Tea.Web.Cmd\n\
+         import Ipe.Tea.Web.Sub\n\
+         import Ipe.String\n\n\
+         type alias Model = {{ count : Int }}\n\n\
+         type Msg = Increment{decrement_variant}\n\n\
+         init : a -> ( Model, Cmd Msg )\n\
+         init _req =\n    \
+             ( {{ count = 0 }}, Cmd.none )\n\n\
+         update : Msg -> Model -> ( Model, Cmd Msg )\n\
+         update msg model =\n    \
+             case msg of\n        \
+                 Increment ->\n            \
+                     ( {{ model | count = model.count + 1 }}, Cmd.none )\n\
+         {decrement_arm}\n\
+         view : Model -> Element Msg\n\
+         view model =\n    \
+             Ui.column []\n        \
+                 [ Ui.text \"marker\" ]\n\n\
+         subscriptions : Model -> Sub Msg\n\
+         subscriptions _model =\n    \
+             Sub.none\n\n\
+         main =\n    \
+             Web.app\n        \
+                 {{ init = init, update = update, view = view, subscriptions = subscriptions\n        \
+                 , routes = [], notFound = Increment\n        \
+                 }}\n",
+    )
+}
+
+/// The `Msg`-set fail-closed SEAL: a NON-additive `Msg` change (dropping a live
+/// variant) must RECOMPILE (restart onto a new binary), never a hot-swap — the
+/// baked `IPE_WEB_MSG_SET` descriptor is no longer an additive superset, so the
+/// classifier withholds the `Msg`-set patch and falls through to a full rebuild,
+/// re-initialising to a clean session. (The additive direction — adding a variant
+/// plus its arm and button — hot-swaps only once the sibling view-subtree and
+/// transition-arm masking lands; this SEAL locks the conservative fail-closed leg
+/// this slice owns end-to-end.)
+#[test]
+#[cfg(target_os = "linux")]
+fn non_additive_msg_change_recompiles() -> Result<(), BoxError> {
+    if std::env::var("IPE_E2E").is_err() {
+        eprintln!("skipping (set IPE_E2E=1 to run)");
+        return Ok(());
+    }
+    // SAFETY: single-threaded here (no watch thread spawned yet); nextest isolates
+    // this process, so the var neither races nor leaks.
+    unsafe {
+        std::env::set_var("IPE_WATCH_HOT_APPEARANCE", "1");
+    }
+
+    let (ipe_dir, out_dir) = fresh_dirs("msgset")?;
+    write_main(&ipe_dir, &web_fixture_msg_variants(true))?;
+
+    let sink = EventSink::default();
+    let port = 19182;
+    let (join, handle) = start_watch(&ipe_dir.join("Main.ipe"), &out_dir, port, &sink)?;
+
+    assert!(
+        wait_for_serving(port, Duration::from_mins(4)),
+        "the flag-on cold build of a two-variant counter must serve"
+    );
+    assert!(
+        wait_for(Duration::from_secs(10), || sink.count_restarted() >= 1),
+        "the cold build must record its initial Restarted event"
+    );
+    let pid_before = server_pid(port).ok_or("server PID must be discoverable after cold build")?;
+    let restarts_before = sink.count_restarted();
+
+    // NON-additive edit: drop the `Decrement` variant (and its arm). The baked
+    // Msg-set descriptor loses a live variant, so it is NOT an additive superset;
+    // the classifier withholds a Msg-set patch and the whole edit recompiles.
+    write_main(&ipe_dir, &web_fixture_msg_variants(false))?;
+    let restarted = wait_for(Duration::from_mins(2), || {
+        server_pid(port).is_some_and(|pid| pid != pid_before)
+    });
+    assert!(
+        restarted,
+        "a non-additive Msg change (a removed variant) must recompile and restart \
+         onto a new binary (fail-closed to a clean session), never hot-swap"
+    );
+    assert!(
+        wait_for(Duration::from_secs(10), || {
+            sink.count_restarted() > restarts_before
+        }),
+        "a non-additive Msg change must record a fresh Restarted event"
+    );
+    assert!(
+        http_get_body(port).is_some_and(|b| b.contains("marker")),
+        "the app must keep serving on the recompiled binary"
+    );
+
+    stop_and_join(&handle, join)
+}
