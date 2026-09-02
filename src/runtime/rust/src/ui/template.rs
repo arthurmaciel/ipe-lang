@@ -555,6 +555,26 @@ pub enum UiTemplate {
         attrs: Vec<UiTemplateAttr>,
         children: Vec<UiTemplate>,
     },
+    /// A model-driven control-flow branch (`if` / `case`) whose every arm is
+    /// itself a templatizable subtree. The compiled `view` resolves the branch
+    /// at render and supplies the zero-based arm index; materialize picks
+    /// `arms[arm_index]` and materializes that subtree in place.
+    ///
+    /// Arms are exhaustive by construction: every arm of the source `if`/`case`
+    /// is captured, so no branch is reachable at run time that the template does
+    /// not cover. An out-of-range arm index (e.g. a stale template after an arm
+    /// count change) materializes to the inert empty element — fail-closed,
+    /// never a panic. Each arm may itself carry value/handler holes, resolved
+    /// from the same per-render fills passed to the enclosing materializer.
+    ControlFlowHole {
+        /// Index into the per-render arm-selector slice the compiled `view`
+        /// supplies. Index `hole_id` selects the branch chosen this render.
+        hole_id: usize,
+        /// The templatized subtree for each arm, in source order. For an `if`
+        /// expression: `arms[0]` = true branch, `arms[1]` = false branch.
+        /// For a `case` expression: arms follow the source pattern order.
+        arms: Vec<UiTemplate>,
+    },
 }
 
 impl Drop for UiTemplate {
@@ -569,6 +589,7 @@ impl Drop for UiTemplate {
             UiTemplate::Node { children, .. } | UiTemplate::TaggedNode { children, .. } => {
                 std::mem::take(children)
             }
+            UiTemplate::ControlFlowHole { arms, .. } => std::mem::take(arms),
             UiTemplate::Empty
             | UiTemplate::Text(_)
             | UiTemplate::Hole(_)
@@ -578,6 +599,9 @@ impl Drop for UiTemplate {
             match &mut node {
                 UiTemplate::Node { children, .. } | UiTemplate::TaggedNode { children, .. } => {
                     pending.append(&mut std::mem::take(children));
+                }
+                UiTemplate::ControlFlowHole { arms, .. } => {
+                    pending.append(&mut std::mem::take(arms));
                 }
                 UiTemplate::Empty
                 | UiTemplate::Text(_)
@@ -631,12 +655,18 @@ impl UiTemplate {
             if depth >= MAX_UI_TEMPLATE_DEPTH {
                 return Err(UiTemplateError::TooDeep);
             }
-            if let UiTemplate::Node { children, .. } | UiTemplate::TaggedNode { children, .. } =
-                node
-            {
-                for child in children {
-                    stack.push((child, depth.saturating_add(1)));
+            match node {
+                UiTemplate::Node { children, .. } | UiTemplate::TaggedNode { children, .. } => {
+                    for child in children {
+                        stack.push((child, depth.saturating_add(1)));
+                    }
                 }
+                UiTemplate::ControlFlowHole { arms, .. } => {
+                    for arm in arms {
+                        stack.push((arm, depth.saturating_add(1)));
+                    }
+                }
+                _ => {}
             }
         }
         Ok(())
@@ -684,6 +714,7 @@ pub fn materialize_ui_template_with_holes<M>(
     let mut fills = HoleFills {
         elements: element_holes.into_iter().map(Some).collect(),
         children: children_holes.into_iter().map(Some).collect(),
+        control_flow: Vec::new(),
     };
     materialize_ui_at(template, 0, &mut fills)
 }
@@ -694,6 +725,11 @@ pub fn materialize_ui_template_with_holes<M>(
 struct HoleFills<M> {
     elements: Vec<Option<Element<M>>>,
     children: Vec<Option<Vec<Element<M>>>>,
+    /// Per-render arm selectors for [`UiTemplate::ControlFlowHole`] nodes: index
+    /// `i` is the zero-based arm chosen for the control-flow hole with
+    /// `hole_id == i` this render. An out-of-range selector materializes the
+    /// control-flow hole to the inert empty element — fail-closed.
+    control_flow: Vec<Option<usize>>,
 }
 
 impl<M> HoleFills<M> {
@@ -701,6 +737,7 @@ impl<M> HoleFills<M> {
         Self {
             elements: Vec::new(),
             children: Vec::new(),
+            control_flow: Vec::new(),
         }
     }
 
@@ -720,6 +757,12 @@ impl<M> HoleFills<M> {
             .get_mut(idx)
             .and_then(Option::take)
             .unwrap_or_default()
+    }
+
+    /// Take the arm selector at `idx` for a [`UiTemplate::ControlFlowHole`], or
+    /// `None` when the index is out of range or already consumed. Fail-closed.
+    fn take_control_flow(&mut self, idx: usize) -> Option<usize> {
+        self.control_flow.get_mut(idx).and_then(Option::take)
     }
 }
 
@@ -741,6 +784,15 @@ fn materialize_ui_at<M>(
         // where [`materialize_children`] splices its run in place. Reaching it as
         // a standalone element (a malformed decode) is inert: an empty element.
         UiTemplate::ChildrenHole(_) => Element::Empty,
+        UiTemplate::ControlFlowHole { hole_id, arms } => {
+            match fills.take_control_flow(*hole_id).and_then(|i| arms.get(i)) {
+                Some(arm) => materialize_ui_at(arm, depth, fills),
+                // Out-of-range selector or already-consumed hole: fail-closed.
+                // The element structure is preserved at every other position;
+                // this hole alone is silent-empty rather than a panic.
+                None => Element::Empty,
+            }
+        }
         UiTemplate::Node {
             desc,
             attrs,
@@ -843,12 +895,13 @@ fn materialize_ui_at_with_handlers<M: Clone>(
     match template {
         UiTemplate::Empty => Element::Empty,
         UiTemplate::Text(s) => Element::Text(s.clone()),
-        // The handler front door carries no value/children fills (its holes are the
-        // handler-id ATTR holes, resolved from `handlers`), so a value hole and a
-        // standalone children hole are inert here — the empty element, fail-closed,
-        // never a panic. A children hole inside a children list splices nothing (see
-        // `materialize_children_with_handlers`).
-        UiTemplate::Hole(_) | UiTemplate::ChildrenHole(_) => Element::Empty,
+        // The handler front door carries no value/children/control-flow fills (its
+        // holes are the handler-id ATTR holes, resolved from `handlers`), so a
+        // value hole, a standalone children hole, and a control-flow hole are all
+        // inert here — the empty element, fail-closed, never a panic.
+        UiTemplate::Hole(_) | UiTemplate::ChildrenHole(_) | UiTemplate::ControlFlowHole { .. } => {
+            Element::Empty
+        }
         UiTemplate::Node {
             desc,
             attrs,
@@ -997,6 +1050,7 @@ pub fn materialize_ui_template_str_with_holes_and_handlers<M: Clone>(
     let mut fills = HoleFills {
         elements: element_holes.into_iter().map(Some).collect(),
         children: children_holes.into_iter().map(Some).collect(),
+        control_flow: Vec::new(),
     };
     materialize_ui_at_combined(&template, handlers, 0, &mut fills)
 }
@@ -1016,6 +1070,12 @@ fn materialize_ui_at_combined<M: Clone>(
         UiTemplate::Text(s) => Element::Text(s.clone()),
         UiTemplate::Hole(idx) => fills.take_element(*idx),
         UiTemplate::ChildrenHole(_) => Element::Empty,
+        UiTemplate::ControlFlowHole { hole_id, arms } => {
+            match fills.take_control_flow(*hole_id).and_then(|i| arms.get(i)) {
+                Some(arm) => materialize_ui_at_combined(arm, handlers, depth, fills),
+                None => Element::Empty,
+            }
+        }
         UiTemplate::Node {
             desc,
             attrs,
@@ -1066,6 +1126,46 @@ fn materialize_children_combined<M: Clone>(
         }
     }
     out
+}
+
+/// Decode a serialized [`UiTemplate`] and materialize it, resolving value/children
+/// **holes**, model-dependent handler-id **holes**, and control-flow **arm
+/// selectors** in a single pass — the full combined front door for a `Ui`
+/// subtree that carries any mix of the three hole kinds.
+///
+/// - [`UiTemplate::Hole(n)`] → `element_holes[n]`, consumed once;
+/// - [`UiTemplate::ChildrenHole(n)`] → `children_holes[n]`, spliced in place;
+/// - [`UiTemplateAttr::HandlerHole { handler_id }`] → `handlers.resolve(id)`;
+/// - [`UiTemplate::ControlFlowHole { hole_id: n, arms }`] →
+///   `arms[cf_selectors[n]]`, recursively materialized with the same fills.
+///
+/// Fail-closed on hostile input in every dimension:
+/// - decode failure → `Element::Empty`;
+/// - over-deep template → `Element::Empty`;
+/// - out-of-range or already-consumed hole index → `Element::Empty` / empty run;
+/// - unresolved handler hole id → `NoAttribute`;
+/// - out-of-range or already-consumed control-flow selector → `Element::Empty`.
+#[cfg(feature = "json")]
+#[must_use]
+pub fn materialize_ui_template_str_with_control_flow<M: Clone>(
+    json: &str,
+    element_holes: Vec<Element<M>>,
+    children_holes: Vec<Vec<Element<M>>>,
+    handlers: &UiHandlerMap<M>,
+    cf_selectors: Vec<usize>,
+) -> Element<M> {
+    let Ok(template) = serde_json::from_str::<UiTemplate>(json) else {
+        return Element::Empty;
+    };
+    if template.check_bounds().is_err() {
+        return Element::Empty;
+    }
+    let mut fills = HoleFills {
+        elements: element_holes.into_iter().map(Some).collect(),
+        children: children_holes.into_iter().map(Some).collect(),
+        control_flow: cf_selectors.into_iter().map(Some).collect(),
+    };
+    materialize_ui_at_combined(&template, handlers, 0, &mut fills)
 }
 
 /// Build a [`UiTemplate`] from a static [`Element`] subtree — the inverse of
@@ -2137,6 +2237,132 @@ mod tests {
             let got: Element<()> =
                 materialize_ui_template_with_holes(&T::ChildrenHole(0), vec![], vec![vec![]]);
             assert_eq!(got, Element::Empty);
+        }
+
+        // ── ControlFlowHole ─────────────────────────────────────────────────────
+
+        // A `ControlFlowHole` with selector 0 materializes the true-branch arm.
+        #[cfg(feature = "json")]
+        #[test]
+        fn control_flow_hole_true_branch_materializes() {
+            let template = T::Node {
+                desc: UiDescription::NoDescription,
+                attrs: vec![],
+                children: vec![T::ControlFlowHole {
+                    hole_id: 0,
+                    arms: vec![T::Text("on".to_string()), T::Text("off".to_string())],
+                }],
+            };
+            let got: Element<()> = super::super::materialize_ui_template_str_with_control_flow(
+                &serde_json::to_string(&template).unwrap(),
+                vec![],
+                vec![],
+                &super::super::UiHandlerMap::new(),
+                vec![0], // select arm 0 = "on"
+            );
+            assert_eq!(
+                got,
+                Element::Node(
+                    Description::NoDescription,
+                    vec![],
+                    vec![Element::Text("on".to_string())],
+                )
+            );
+        }
+
+        // A `ControlFlowHole` with selector 1 materializes the false-branch arm.
+        #[cfg(feature = "json")]
+        #[test]
+        fn control_flow_hole_false_branch_materializes() {
+            let template = T::Node {
+                desc: UiDescription::NoDescription,
+                attrs: vec![],
+                children: vec![T::ControlFlowHole {
+                    hole_id: 0,
+                    arms: vec![T::Text("on".to_string()), T::Text("off".to_string())],
+                }],
+            };
+            let got: Element<()> = super::super::materialize_ui_template_str_with_control_flow(
+                &serde_json::to_string(&template).unwrap(),
+                vec![],
+                vec![],
+                &super::super::UiHandlerMap::new(),
+                vec![1], // select arm 1 = "off"
+            );
+            assert_eq!(
+                got,
+                Element::Node(
+                    Description::NoDescription,
+                    vec![],
+                    vec![Element::Text("off".to_string())],
+                )
+            );
+        }
+
+        // Fail-closed: an out-of-range selector materializes to the inert empty element.
+        #[cfg(feature = "json")]
+        #[test]
+        fn control_flow_hole_out_of_range_selector_is_empty() {
+            let template = T::ControlFlowHole {
+                hole_id: 0,
+                arms: vec![T::Text("only".to_string())],
+            };
+            let got: Element<()> = super::super::materialize_ui_template_str_with_control_flow(
+                &serde_json::to_string(&template).unwrap(),
+                vec![],
+                vec![],
+                &super::super::UiHandlerMap::new(),
+                vec![5], // out of range
+            );
+            assert_eq!(got, Element::Empty);
+        }
+
+        // Mixed: a subtree with both a `ControlFlowHole` and a value `Hole`
+        // materializes both together through `materialize_ui_template_with_control_flow`.
+        #[cfg(feature = "json")]
+        #[test]
+        fn control_flow_hole_and_value_hole_materialize_together() {
+            let template = T::Node {
+                desc: UiDescription::NoDescription,
+                attrs: vec![],
+                children: vec![
+                    T::ControlFlowHole {
+                        hole_id: 0,
+                        arms: vec![
+                            T::Node {
+                                desc: UiDescription::NoDescription,
+                                attrs: vec![],
+                                children: vec![T::Hole(0)], // value hole inside arm
+                            },
+                            T::Text("loading".to_string()),
+                        ],
+                    },
+                    T::Text("footer".to_string()),
+                ],
+            };
+            // Select arm 0 (the branch with the value hole); fill[0] = "42".
+            let got: Element<()> = super::super::materialize_ui_template_str_with_control_flow(
+                &serde_json::to_string(&template).unwrap(),
+                vec![Element::Text("42".to_string())],
+                vec![],
+                &super::super::UiHandlerMap::new(),
+                vec![0],
+            );
+            assert_eq!(
+                got,
+                Element::Node(
+                    Description::NoDescription,
+                    vec![],
+                    vec![
+                        Element::Node(
+                            Description::NoDescription,
+                            vec![],
+                            vec![Element::Text("42".to_string())],
+                        ),
+                        Element::Text("footer".to_string()),
+                    ],
+                )
+            );
         }
 
         // Combined: a subtree carrying both a value hole (Hole) and a handler hole
