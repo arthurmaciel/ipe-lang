@@ -5822,6 +5822,305 @@ mod hot_transition_handler_tests {
 }
 
 #[cfg(test)]
+mod hot_init_session_scoping_tests {
+    //! Regression-locks the session-scoping invariant of `POST /_ipe/hot-init`:
+    //! an init-datum edit is visible to FRESH sessions (those created after the
+    //! edit) but is a no-op for LIVE sessions (which never re-consult `init`).
+    //!
+    //! The test drives a real axum router through `tower::ServiceExt::oneshot`,
+    //! a `MemoryStore`, and a `WebState` whose `init` fn calls `apply_init_hot`
+    //! — exactly as a compiled Ipê app does — so the SEAL exercises the actual
+    //! store-backed session path rather than a local stub.
+
+    use super::*;
+    use crate::system::{locked_remove_var, locked_set_var};
+    use crate::web::init_datum::{InitDatum, apply_init_hot, clear_dev_init_for_test};
+    use crate::web::literal_table::{overlay_test_lock, set_dev_overlay_active_for_test};
+    use crate::web::req::WebReq;
+    use crate::web::store::{MemoryStore, SessionStore, StoreHit};
+    use axum::Router;
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode, header};
+    use axum::routing::{get, post};
+    use serde::{Deserialize, Serialize};
+    use std::time::Duration;
+    use tower::ServiceExt; // oneshot
+
+    // ── Model fixture ────────────────────────────────────────────────────────
+
+    #[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
+    struct Counter {
+        count: i64,
+    }
+
+    impl crate::stringify::IpeStringify for Counter {
+        fn ipe_show(&self) -> String {
+            format!("Counter {{ count: {} }}", self.count)
+        }
+    }
+
+    // ── Init fn — mirrors the compiler-emitted `init` body ───────────────────
+
+    /// The JSON the compiler bakes for `init _ = ({ count = 0 }, Cmd.none)`.
+    fn baked_json() -> String {
+        let datum = InitDatum {
+            model: serde_json::to_value(Counter { count: 0 }).expect("serialize"),
+        };
+        serde_json::to_string(&datum).expect("serialize datum")
+    }
+
+    /// The compiled init model — identical to what `apply_init_hot` falls back
+    /// to when the overlay is off or the datum fails to decode.
+    fn compiled_init() -> Counter {
+        Counter { count: 0 }
+    }
+
+    fn test_init(_req: WebReq) -> (Counter, IpeCmd<()>) {
+        // Mirrors the compiler-emitted `apply_init_hot` call that every compiled
+        // Ipê app's `init` body reduces to: decode the baked datum, apply the
+        // overlay replacement if one is registered, return the result.
+        let model = apply_init_hot(&baked_json(), compiled_init());
+        (model, IpeCmd::None)
+    }
+
+    fn test_update(_msg: (), model: Counter) -> (Counter, IpeCmd<()>) {
+        (model, IpeCmd::None)
+    }
+
+    fn test_view(_model: Counter) -> Html<()> {
+        Html::HText(String::new())
+    }
+
+    fn test_subs(_model: Counter) -> IpeSub<()> {
+        IpeSub::None
+    }
+
+    fn test_route_resolver(m: Counter, _path: &str) -> Counter {
+        m
+    }
+
+    fn test_param_resolver(_path: &str) -> crate::dict::IpeDict<String> {
+        crate::dict::dict_empty()
+    }
+
+    fn test_route_matched(p: &str) -> bool {
+        p == "/"
+    }
+
+    // ── Type aliases ─────────────────────────────────────────────────────────
+
+    type TestStore = MemoryStore<Counter, ()>;
+    type TestWebState = WebState<
+        Counter,
+        (),
+        fn(WebReq) -> (Counter, IpeCmd<()>),
+        fn((), Counter) -> (Counter, IpeCmd<()>),
+        fn(Counter) -> Html<()>,
+        fn(Counter) -> IpeSub<()>,
+    >;
+
+    // ── Router builder ────────────────────────────────────────────────────────
+
+    fn make_router(store: Arc<TestStore>) -> Router {
+        let state: TestWebState = WebState {
+            store: store as Arc<dyn store::SessionStore<Counter, ()>>,
+            init: Arc::new(test_init),
+            update: Arc::new(test_update),
+            view: Arc::new(test_view),
+            subs: Arc::new(test_subs),
+            route_resolver: Arc::new(test_route_resolver),
+            param_resolver: Arc::new(test_param_resolver),
+            route_matched: Arc::new(test_route_matched),
+            session_count: Arc::new(AtomicUsize::new(0)),
+            watch_build_status: Arc::new(Mutex::new(None)),
+        };
+        Router::new()
+            .route(
+                "/",
+                get(handlers::page::<
+                    Counter,
+                    (),
+                    fn(WebReq) -> (Counter, IpeCmd<()>),
+                    fn((), Counter) -> (Counter, IpeCmd<()>),
+                    fn(Counter) -> Html<()>,
+                    fn(Counter) -> IpeSub<()>,
+                >),
+            )
+            .route(
+                "/_ipe/hot-init",
+                post(
+                    handlers::hot_init_handler::<
+                        Counter,
+                        (),
+                        fn(WebReq) -> (Counter, IpeCmd<()>),
+                        fn((), Counter) -> (Counter, IpeCmd<()>),
+                        fn(Counter) -> Html<()>,
+                        fn(Counter) -> IpeSub<()>,
+                    >,
+                ),
+            )
+            .with_state(state)
+    }
+
+    // ── Helpers ───────────────────────────────────────────────────────────────
+
+    /// Extract the `ipe_sid` value from a `Set-Cookie` response header.
+    fn extract_sid(resp: &axum::response::Response) -> String {
+        for val in resp.headers().get_all(header::SET_COOKIE) {
+            let s = val.to_str().unwrap_or("");
+            for part in s.split(';') {
+                let part = part.trim();
+                if let Some((k, v)) = part.split_once('=')
+                    && k.trim() == "ipe_sid"
+                {
+                    return v.trim().to_string();
+                }
+            }
+        }
+        panic!("ipe_sid not found in Set-Cookie response headers");
+    }
+
+    /// POST `/_ipe/hot-init` with a token and a JSON body `{old_json, new_json}`.
+    async fn post_hot_init(
+        router: Router,
+        token: &str,
+        old_json: &str,
+        new_json: &str,
+    ) -> axum::response::Response {
+        let body = serde_json::json!({ "old_json": old_json, "new_json": new_json });
+        let req = Request::builder()
+            .method("POST")
+            .uri("/_ipe/hot-init")
+            .header(header::CONTENT_TYPE, "application/json")
+            .header("x-ipe-hot-token", token)
+            .body(Body::from(body.to_string()))
+            .expect("build request");
+        router.oneshot(req).await.expect("router responds")
+    }
+
+    // ── SEAL ──────────────────────────────────────────────────────────────────
+
+    /// Session-scoping SEAL for `/_ipe/hot-init`:
+    ///
+    /// 1. A GET `/` creates a live session whose `Model.count == 0` (the compiled
+    ///    baked datum, count = 0).
+    /// 2. POST `/_ipe/hot-init` registers a replacement datum (count = 99).
+    /// 3. The live session's Model in the store is still count = 0 (the edit is
+    ///    a no-op for running sessions — they never re-consult `init`).
+    /// 4. A fresh cookieless GET `/` creates a new session whose Model.count == 99
+    ///    (the replacement datum seeds it via `apply_init_hot`).
+    #[test]
+    fn init_edit_reseeds_fresh_session_but_not_a_live_one() {
+        let _g = overlay_test_lock();
+        set_dev_overlay_active_for_test(Some(true));
+        clear_dev_init_for_test();
+        locked_set_var("IPE_WATCH_HOT_TOKEN", "seal-token");
+
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("current-thread runtime");
+
+        rt.block_on(async {
+            let store = Arc::new(TestStore::new(Duration::from_secs(60)));
+            let router = make_router(store.clone());
+
+            // Step 1: fresh GET → live session seeded from baked datum (count = 0).
+            let resp1 = router
+                .oneshot(
+                    Request::builder()
+                        .method("GET")
+                        .uri("/")
+                        .body(Body::empty())
+                        .expect("build request"),
+                )
+                .await
+                .expect("router responds");
+            assert_eq!(resp1.status(), StatusCode::OK);
+            let live_sid = extract_sid(&resp1);
+
+            // Confirm the store holds the live session at count = 0.
+            let live_model_before = match store.get(&live_sid).await {
+                Some(StoreHit::Web(handle)) => handle
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .model
+                    .clone(),
+                _ => panic!("expected live Web session in store"),
+            };
+            assert_eq!(
+                live_model_before.count, 0,
+                "live session must start at count = 0 (compiled baked datum)"
+            );
+
+            // Step 2: POST /_ipe/hot-init — register replacement datum (count = 99).
+            let replacement_datum = InitDatum {
+                model: serde_json::to_value(Counter { count: 99 }).expect("serialize"),
+            };
+            let new_json = serde_json::to_string(&replacement_datum).expect("serialize datum");
+            let hot_resp = post_hot_init(
+                make_router(store.clone()),
+                "seal-token",
+                &baked_json(),
+                &new_json,
+            )
+            .await;
+            assert_eq!(
+                hot_resp.status(),
+                StatusCode::OK,
+                "hot-init POST must succeed"
+            );
+
+            // Step 3: live session Model in the store is UNCHANGED (count = 0).
+            let live_model_after = match store.get(&live_sid).await {
+                Some(StoreHit::Web(handle)) => handle
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .model
+                    .clone(),
+                _ => panic!("expected live Web session still in store"),
+            };
+            assert_eq!(
+                live_model_after.count, 0,
+                "hot-init must not touch a live session's Model"
+            );
+
+            // Step 4: fresh cookieless GET → new session decodes the replacement (count = 99).
+            let resp2 = make_router(store.clone())
+                .oneshot(
+                    Request::builder()
+                        .method("GET")
+                        .uri("/")
+                        .body(Body::empty())
+                        .expect("build request"),
+                )
+                .await
+                .expect("router responds");
+            assert_eq!(resp2.status(), StatusCode::OK);
+            let fresh_sid = extract_sid(&resp2);
+            assert_ne!(fresh_sid, live_sid, "fresh GET must mint a new session id");
+
+            let fresh_model = match store.get(&fresh_sid).await {
+                Some(StoreHit::Web(handle)) => handle
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .model
+                    .clone(),
+                _ => panic!("expected fresh Web session in store"),
+            };
+            assert_eq!(
+                fresh_model.count, 99,
+                "fresh session must decode the replacement init datum (count = 99)"
+            );
+        });
+
+        clear_dev_init_for_test();
+        set_dev_overlay_active_for_test(None);
+        locked_remove_var("IPE_WATCH_HOT_TOKEN");
+    }
+}
+
+#[cfg(test)]
 mod hot_msg_handler_tests {
     //! Regression-locks the `POST /_ipe/hot-msg` trust boundary — the dev-only leg
     //! that extends the server-held `Msg` set from an untrusted dev channel. Every
