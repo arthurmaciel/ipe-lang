@@ -222,7 +222,7 @@ pub fn main_run(codec: MainCodec, xs: Vec<i64>) -> Vec<i64> {
             ({
                 let f = {
                     let __ipe_fn: ::std::sync::Arc<dyn Fn(i64) -> i64 + Send + Sync + 'static> =
-                        ::std::sync::Arc::new(move |eta_0: i64| -> i64 { (f)(eta_0) });
+                        ::std::sync::Arc::new(move |eta_1: i64| -> i64 { (f)(eta_1) });
                     __ipe_fn
                 };
                 list_map_consume(

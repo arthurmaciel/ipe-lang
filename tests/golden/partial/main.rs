@@ -214,7 +214,7 @@ pub fn ipe_main() -> IpeTask<()> {
     ({
         let f = {
             let __ipe_fn: Box<dyn Fn(i64) -> i64 + Send + Sync + 'static> =
-                Box::new(move |eta_0: i64| -> i64 { crate::main_add(2i64, eta_0) });
+                Box::new(move |eta_1: i64| -> i64 { crate::main_add(2i64, eta_1) });
             __ipe_fn
         };
         ({

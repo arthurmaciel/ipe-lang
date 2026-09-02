@@ -1,0 +1,155 @@
+module Main exposing (main)
+
+-- A pure parser-combinator surface where a parser is a bare polymorphic
+-- closure `State -> PStep a`. The composed combinators — `map2`, a nested
+-- `andThen` chain, and a `map2`-of-`map2` sum — each return a fresh closure that
+-- captures polymorphic parser values and applies a returned parser to the
+-- threaded state. Building and running to a deterministic line proves the whole
+-- composed surface lowers, not just type-checks.
+import Ipe.Io as Io
+import Ipe.List as List
+import Ipe.String as String
+
+
+type PStep a
+    = Good a State
+    | Bad
+
+
+type alias State =
+    { input : List Int, pos : Int }
+
+
+type alias Parser a =
+    State -> PStep a
+
+
+
+-- Primitives ----------------------------------------------------------------
+
+
+succeed : a -> Parser a
+succeed value =
+    \state -> Good value state
+
+
+anyInt : Parser Int
+anyInt =
+    \state ->
+        case List.head (List.drop state.pos state.input) of
+            Just n ->
+                Good n { input = state.input, pos = state.pos + 1 }
+
+            Nothing ->
+                Bad
+
+
+
+-- Composed higher-order combinators (the #1657 surface) ---------------------
+
+
+map : (a -> b) -> Parser a -> Parser b
+map f parser =
+    \state ->
+        case parser state of
+            Good a next ->
+                Good (f a) next
+
+            Bad ->
+                Bad
+
+
+map2 : (a -> b -> c) -> Parser a -> Parser b -> Parser c
+map2 f pa pb =
+    \state ->
+        case pa state of
+            Good a next ->
+                case pb next of
+                    Good b fin ->
+                        Good (f a b) fin
+
+                    Bad ->
+                        Bad
+
+            Bad ->
+                Bad
+
+
+andThen : (a -> Parser b) -> Parser a -> Parser b
+andThen f pa =
+    \state ->
+        case pa state of
+            Good a next ->
+                (f a) next
+
+            Bad ->
+                Bad
+
+
+run : Parser a -> List Int -> Maybe a
+run parser input =
+    case parser { input = input, pos = 0 } of
+        Good a _ ->
+            Just a
+
+        Bad ->
+            Nothing
+
+
+
+-- A pair parser via a nested `andThen`, and a three-int sum via `map2`-of-`map2`.
+-- Both thread the parser state through returned closures — the composed shapes
+-- this fixture exercises end to end.
+
+
+pairViaAndThen : Parser ( Int, Int )
+pairViaAndThen =
+    anyInt
+        |> andThen (\x -> anyInt |> andThen (\y -> succeed ( x, y )))
+
+
+pairViaMap2 : Parser ( Int, Int )
+pairViaMap2 =
+    map2 (\a b -> ( a, b )) anyInt anyInt
+
+
+sumThree : Parser Int
+sumThree =
+    map2 (\a b -> a + b) anyInt anyInt
+        |> map2 (\ab c -> ab + c) anyInt
+        |> map (\total -> total)
+
+
+render : String
+render =
+    let
+        pa =
+            case run pairViaAndThen [ 1, 2 ] of
+                Just ( x, y ) ->
+                    String.fromInt x ++ "," ++ String.fromInt y
+
+                Nothing ->
+                    "none"
+
+        pk =
+            case run pairViaMap2 [ 3, 4 ] of
+                Just ( x, y ) ->
+                    String.fromInt x ++ "," ++ String.fromInt y
+
+                Nothing ->
+                    "none"
+
+        s =
+            case run sumThree [ 10, 20, 30 ] of
+                Just total ->
+                    String.fromInt total
+
+                Nothing ->
+                    "none"
+    in
+    pa ++ " " ++ pk ++ " " ++ s
+
+
+main : Task Error ()
+main =
+    Io.println render
