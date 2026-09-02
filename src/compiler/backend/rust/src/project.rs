@@ -267,6 +267,7 @@ pub mod html;
 pub mod dom;
 pub mod tea;
 pub mod ui;
+pub mod js_port;
 pub mod wasm;
 pub mod ws_client;
 pub use basics::*;
@@ -305,6 +306,12 @@ pub use uuid_kernel::*;
 pub use css::*;
 pub use html::*;
 pub use tea::*;
+// The typed `Ipe.Js` port. Its wasm32 arm (`js_port::wasm`) posts each sealed
+// outbound frame to `window.ipeOnReceive` and drains inbound frames the page's
+// `window.ipe.send` feeds through the same bounded, fail-closed seal decoder the
+// server path uses; `js_send`/`js_subscribe` are the `Js.send`/`Js.subscribe`
+// denotations the emitted TEA code calls.
+pub use js_port::*;
 pub use ws_client::*;
 // `Cmd.publish` / `Cmd.publishNoEcho` / `PubSub.publish` / `PubSub.publishNoEcho` /
 // `Sub.subscribeTopic` resolve to `ipe_runtime::web::pubsub::*` natively; the
