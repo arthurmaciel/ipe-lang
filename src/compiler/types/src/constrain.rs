@@ -4818,7 +4818,7 @@ impl<'a> Builder<'a> {
         // type-checker requires the caller to pass an `Order`, not an
         // arbitrary type. It has no type parameters.
         let order = || Ty::Con {
-            module: self.builtins.db_store_home.clone(),
+            module: Vec::new(),
             name: self.builtins.order_con,
             args: Vec::new(),
         };
