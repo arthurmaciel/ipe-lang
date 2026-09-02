@@ -775,6 +775,15 @@ struct Builtins {
     /// `"CliApp"` — opaque app handle returned by `Terminal.appLines`. Nullary;
     /// backed by `ipe_runtime::tea::CliApp`.
     cli_app: Symbol,
+    /// The interned module segments `["Ipe", "Db", "Store"]` — the real home of
+    /// the `Cond` / `Store` / `Draft` / `Joined` / `Select` / `Policy` / `Order`
+    /// ADTs. A kernel scheme returning one of these carries this home so the
+    /// lowerer's home-keyed variant lookup finds its emitted enum instead of
+    /// treating an unhomed name as an unknown builtin.
+    db_store_home: Vec<Symbol>,
+    /// The interned module segments `["Ipe", "Codec"]` — the real home of the
+    /// `Codec` ADT.
+    codec_home: Vec<Symbol>,
 }
 
 impl Builtins {
@@ -1049,6 +1058,12 @@ impl Builtins {
             webview_app: interner.intern("WebViewApp")?,
             tui_app: interner.intern("TuiApp")?,
             cli_app: interner.intern("CliApp")?,
+            db_store_home: vec![
+                interner.intern("Ipe")?,
+                interner.intern("Db")?,
+                interner.intern("Store")?,
+            ],
+            codec_home: vec![interner.intern("Ipe")?, interner.intern("Codec")?],
         })
     }
 
@@ -4746,7 +4761,7 @@ impl<'a> Builder<'a> {
         // (typed `Cond a -> … Store a`) pin the accessor's record to the store's
         // row, making a cross-row column or a value-type mismatch a type error.
         let cond = |row: Ty| Ty::Con {
-            module: Vec::new(),
+            module: self.builtins.db_store_home.clone(),
             name: self.builtins.cond_con,
             args: vec![row],
         };
@@ -4755,7 +4770,7 @@ impl<'a> Builder<'a> {
         // column-spec builder kernel schemes, so a cross-row accessor is a
         // type mismatch rather than a silent wrong column.
         let store = |row: Ty| Ty::Con {
-            module: Vec::new(),
+            module: self.builtins.db_store_home.clone(),
             name: self.builtins.store_con,
             args: vec![row],
         };
@@ -4765,7 +4780,7 @@ impl<'a> Builder<'a> {
         // before classification; no read/write kernel accepts a `Draft`, so an
         // unclassified table is unqueryable by construction (deny-by-default).
         let draft = |row: Ty| Ty::Con {
-            module: Vec::new(),
+            module: self.builtins.db_store_home.clone(),
             name: self.builtins.draft_con,
             args: vec![row],
         };
@@ -4773,7 +4788,7 @@ impl<'a> Builder<'a> {
         // result of `Store.join`. It carries both sides' row types so `toList`
         // returns `(a, b)` pairs decoded through each store's own codec.
         let joined = |a: Ty, b: Ty| Ty::Con {
-            module: Vec::new(),
+            module: self.builtins.db_store_home.clone(),
             name: self.builtins.joined_con,
             args: vec![a, b],
         };
@@ -4783,7 +4798,7 @@ impl<'a> Builder<'a> {
         // records the shape so `selectToList` / `selectToMaybe` return the typed
         // `row` — the concrete decode is emitted at the call site from it.
         let select = |row: Ty| Ty::Con {
-            module: Vec::new(),
+            module: self.builtins.db_store_home.clone(),
             name: self.builtins.select_con,
             args: vec![row],
         };
@@ -4794,7 +4809,7 @@ impl<'a> Builder<'a> {
         // columns to the store's row, making a cross-row policy column a type
         // error rather than a silent wrong column.
         let policy = |row: Ty| Ty::Con {
-            module: Vec::new(),
+            module: self.builtins.db_store_home.clone(),
             name: self.builtins.policy_con,
             args: vec![row],
         };
@@ -4808,9 +4823,10 @@ impl<'a> Builder<'a> {
             args: Vec::new(),
         };
         // `Codec inner` — the `Ipe.Codec` codec ADT, the first parameter of
-        // `Store.eqBy`. Empty module unifies with the user's `Ipe.Codec.Codec`.
+        // `Store.eqBy`. Its real home unifies with the user's `Ipe.Codec.Codec`
+        // and lets a point-free reference to the scheme lower to the emitted enum.
         let codec = |inner: Ty| Ty::Con {
-            module: Vec::new(),
+            module: self.builtins.codec_home.clone(),
             name: self.builtins.codec_con,
             args: vec![inner],
         };
