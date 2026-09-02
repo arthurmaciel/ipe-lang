@@ -196,6 +196,7 @@ Every `IPE_*` variable the runtime, CLI, and compiler read. The table is grouped
 | `IPE_WEB_MAX_SESSIONS` | 50000 | Maximum concurrent web sessions before new connections are rejected. Prevents unbounded memory growth under a session-creation flood. Deprecated alias: `IPE_LIVE_MAX_SESSIONS`. | `Tunable` |
 | `IPE_WEB_PORT` | 8000 | TCP port the web server listens on. Deprecated alias: `IPE_LIVE_PORT`. | `Tunable` |
 | `IPE_WEB_QUEUE_MAX` | 50 | Maximum queued events per session before back-pressure is applied. Deprecated alias: `IPE_LIVE_QUEUE_MAX`. | `Tunable` |
+| `IPE_WEB_RESET_STATE` | unset (off) | Set to `1`, `true`, `yes`, or `on` to force every returning session to a fresh `init`, bypassing the additive-superset checkpoint splice. Injected by `ipe watch --reset-state`; never set in production. Fail-closed: an absent or unrecognised value leaves the normal additive-preserve algorithm in place. | `Tunable` |
 | `IPE_WEB_RETRY_BASE_MS` | 500 | Initial retry interval (ms) for client reconnection after a disconnect. Deprecated alias: `IPE_LIVE_RETRY_BASE_MS`. | `Tunable` |
 | `IPE_WEB_RETRY_FAST_MS` | 200 | Fast-retry interval (ms) used during the fast-retry window after a hot-reload disconnect. | `Tunable` |
 | `IPE_WEB_RETRY_FAST_WINDOW_MS` | 3000 | Duration (ms) of the fast-retry window after a disconnect. Set to `8000` automatically by `ipe watch` to accommodate server restart time. Deprecated alias: `IPE_LIVE_RETRY_FAST_WINDOW_MS`. | `Tunable` |
