@@ -180,10 +180,10 @@ pub fn nested_program(sym: &StdlibSymbol) -> Result<String, ProbeUnavailable> {
 /// lower), so a symbol that resolves and type-checks but does not lower is
 /// reported as a stage failure.
 pub fn lower(source: &str, snippet: &Path) -> StageOutcome {
-    if let Err(e) = std::fs::write(snippet, source) {
+    if let Err(message) = write_probe_source(snippet, source) {
         return StageOutcome::Failed {
             code: None,
-            message: format!("could not write probe source: {e}"),
+            message,
         };
     }
     match crate::lower_entry_via_graph(snippet) {
@@ -195,6 +195,20 @@ pub fn lower(source: &str, snippet: &Path) -> StageOutcome {
     }
 }
 
+/// Write a probe source file, first ensuring its parent directory exists.
+///
+/// The parent is a scratch dir shared across a whole column run; recreating it
+/// before each write makes a probe resilient to a transient removal (a sibling's
+/// cleanup, an emitted-crate step that rewrites the tree) rather than reporting a
+/// spurious stage failure.
+fn write_probe_source(snippet: &Path, source: &str) -> Result<(), String> {
+    if let Some(parent) = snippet.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("could not create the probe scratch directory: {e}"))?;
+    }
+    std::fs::write(snippet, source).map_err(|e| format!("could not write probe source: {e}"))
+}
+
 /// Type-check a probe program, returning whether it type-checks.
 ///
 /// The precondition a generated nested probe relies on: if the value-reference
@@ -202,10 +216,10 @@ pub fn lower(source: &str, snippet: &Path) -> StageOutcome {
 /// the nested-lowering column reports the symbol inapplicable rather than a false
 /// hole.
 pub fn typechecks(source: &str, snippet: &Path) -> StageOutcome {
-    if let Err(e) = std::fs::write(snippet, source) {
+    if let Err(message) = write_probe_source(snippet, source) {
         return StageOutcome::Failed {
             code: None,
-            message: format!("could not write probe source: {e}"),
+            message,
         };
     }
     match crate::typecheck_entry_via_graph(snippet) {
@@ -226,10 +240,10 @@ pub fn typechecks(source: &str, snippet: &Path) -> StageOutcome {
 /// run is a real gap. Heavy: the caller gates this behind the E2E path.
 pub fn build_and_run(source: &str, snippet: &Path) -> StageOutcome {
     use std::process::Command;
-    if let Err(e) = std::fs::write(snippet, source) {
+    if let Err(message) = write_probe_source(snippet, source) {
         return StageOutcome::Failed {
             code: None,
-            message: format!("could not write probe source: {e}"),
+            message,
         };
     }
     let ipe_bin = match std::env::current_exe() {
