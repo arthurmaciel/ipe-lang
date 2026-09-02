@@ -1,26 +1,29 @@
 //! Rename: `textDocument/rename` and `textDocument/prepareRename`.
 //!
-//! Delegates reference collection to [`crate::navigation`] and definition
-//! lookup to [`crate::navigation::goto_definition`]. Builds a
-//! [`lsp_types::WorkspaceEdit`] with one `TextEdit` per span (definition +
-//! every reference), grouped by document URI.
+//! Reference collection and capture-avoidance are delegated to
+//! [`ipe_canon::rename`], which operates on the `ReferenceIndex` built from
+//! the fully resolved module graph.  This module owns the LSP boundary:
+//! converting positions to byte offsets, building the `WorkspaceEdit`, and
+//! injecting the URI/text callbacks from the server layer.
 //!
-//! Scope: top-level bindings only — the same scope `navigation` tracks.
-//! Rename returns `None` (refuse) for any position that is not on a top-level
-//! reference or definition.
+//! Scope: top-level bindings only.  Rename returns `None` (refuse) when the
+//! position is not on a top-level reference or definition, when the new name
+//! is invalid, or when the canon layer detects a capture conflict.
 //!
-//! The `new_name` string from the LSP client is untrusted input: it is parsed
-//! into a [`ValidatedIdentifier`] at the request boundary before any edits are
-//! built. Downstream code only ever receives the validated form — invalid names
-//! are unrepresentable past that point.
+//! The `new_name` string from the LSP client is untrusted: [`ValidatedIdentifier`]
+//! is the parse-don't-validate boundary; only the validated form reaches the
+//! edit builder.
 
 use std::collections::BTreeMap;
 
+use ipe_canon::ref_index::ReferenceIndex;
+use ipe_canon::rename::{EditSet, RenameError, rename as canon_rename};
 use ipe_db::{Db as _, IpeDatabase, SourceRoot};
 use ipe_diagnostics::Span;
+use ipe_intern::Symbol;
 use lsp_types::{TextEdit, Url, WorkspaceEdit};
 
-use crate::navigation::{Definition, NameRef, find_references, goto_definition};
+use crate::navigation::goto_definition;
 use crate::offset::{PositionEncoding, span_to_range};
 
 // ── Identifier grammar ───────────────────────────────────────────────────────
@@ -205,9 +208,13 @@ pub struct RenameRequest<'a> {
 /// `req.byte` in `module`. Returns the `WorkspaceEdit` the client should
 /// apply, or `None` when the position is not renameable.
 ///
-/// `resolver` supplies URI and text callbacks; they are injected by the
-/// server because URI construction requires filesystem paths the features
-/// crate never touches.
+/// Reference collection and capture-avoidance are handled by
+/// [`ipe_canon::rename::rename`] operating on a [`ReferenceIndex`] built
+/// from the fully resolved module graph.
+///
+/// `resolver` supplies URI and text callbacks; they are injected by the server
+/// because URI construction requires filesystem paths the features crate never
+/// touches.
 #[must_use]
 pub fn rename(
     db: &IpeDatabase,
@@ -218,51 +225,120 @@ pub fn rename(
     resolver: &ModuleResolver<'_>,
 ) -> Option<WorkspaceEdit> {
     // Resolve the definition of whatever is at `req.byte`.
-    let Definition {
-        module: def_module,
-        span: def_span,
-    } = goto_definition(db, root, entry, module, req.byte)?;
+    let def = goto_definition(db, root, entry, module, req.byte)?;
+    let def_module = &def.module;
 
     // Recover the current name from the definition span.
-    let def_text = (resolver.text_of_module)(&def_module)?;
-    let lo = def_span.lo as usize;
-    let hi = def_span.hi as usize;
+    let def_text = (resolver.text_of_module)(def_module)?;
+    let lo = def_span_lo_usize(def.span)?;
+    let hi = def_span_hi_usize(def.span)?;
     let current_name = def_text.get(lo..hi)?;
 
-    // Validate the new name at the boundary: it must be a single well-formed
-    // Ipê identifier with the correct case class for the symbol being renamed.
-    // No edits are built until this gate passes — invalid names are
-    // unrepresentable in the edit builder.
+    // Pre-validate at the LSP boundary (typed parse-don't-validate gate).
     let kind = symbol_kind_of(current_name);
-    let new_ident = ValidatedIdentifier::parse(req.new_name, kind)?;
+    ValidatedIdentifier::parse(req.new_name, kind)?;
 
-    // Collect all reference spans.
-    let refs: Vec<NameRef> = find_references(db, root, entry, &def_module, current_name);
+    // Build the ReferenceIndex from the full resolved module graph.
+    // `topo_order` proves the import graph is acyclic; `canonicalize_checked`
+    // repeats the guard per file so the raw `ipe_db::canonicalize` path is
+    // never taken on the interactive handler path.
+    let Ok(order) = ipe_db::topo_order(db, root, entry) else {
+        return None;
+    };
+    let files = root.files(db);
 
-    // Build the workspace edit: group edits by URI.
-    let mut edits_by_uri: BTreeMap<Url, Vec<TextEdit>> = BTreeMap::new();
-
-    // Definition edit.
-    if let Some(def_uri) = (resolver.uri_of_module)(&def_module) {
-        let range = span_to_range(&def_text, def_span, req.encoding);
-        edits_by_uri.entry(def_uri).or_default().push(TextEdit {
-            range,
-            new_text: new_ident.as_str().to_owned(),
-        });
+    // Collect canonical modules for every file in topo order.
+    // We keep them alive in a Vec so the &Module references remain valid.
+    let mut canon_modules: Vec<(ipe_canon::ast::Module, Vec<Symbol>)> = Vec::new();
+    for module_path in &*order {
+        let Some(&module_file) = files.get(module_path) else {
+            continue;
+        };
+        let Some(canonical) = crate::db_access::canonicalize_checked(db, root, entry, module_file)
+        else {
+            continue;
+        };
+        // Convert the String module path to a Symbol path.
+        let sym_path: Option<Vec<Symbol>> = {
+            let mut interner = db.interner().lock();
+            module_path
+                .iter()
+                .map(|s| interner.intern(s).ok())
+                .collect::<Option<Vec<_>>>()
+        };
+        if let Some(sym_path) = sym_path {
+            canon_modules.push((canonical.module.clone(), sym_path));
+        }
     }
 
-    // Reference edits.
-    for r in refs {
-        let Some(ref_uri) = (resolver.uri_of_module)(&r.module) else {
+    // Resolve the defining module path and old_name to symbols.
+    let (def_module_syms, old_name_sym) = {
+        let mut interner = db.interner().lock();
+        let def_syms: Option<Vec<Symbol>> = def_module
+            .iter()
+            .map(|s| interner.intern(s).ok())
+            .collect::<Option<Vec<_>>>();
+        let name_sym = interner.intern(current_name).ok();
+        drop(interner);
+        match (def_syms, name_sym) {
+            (Some(d), Some(n)) => (d, n),
+            _ => return None,
+        }
+    };
+
+    // Build the reference index.
+    let module_slice: Vec<(&ipe_canon::ast::Module, &[Symbol])> = canon_modules
+        .iter()
+        .map(|(m, p)| (m, p.as_slice()))
+        .collect();
+    let index = ReferenceIndex::build(&module_slice);
+
+    // Delegate to the canon rename engine.
+    let interner = db.interner().lock();
+    let edit_set: EditSet = match canon_rename(
+        &interner,
+        &index,
+        &module_slice,
+        &def_module_syms,
+        old_name_sym,
+        req.new_name,
+    ) {
+        Ok(es) => es,
+        Err(
+            RenameError::InvalidIdentifier { .. }
+            | RenameError::SymbolNotFound { .. }
+            | RenameError::CaptureConflict { .. },
+        ) => {
+            return None;
+        }
+    };
+    drop(interner);
+
+    // Convert the EditSet to a WorkspaceEdit grouped by URI.
+    let mut edits_by_uri: BTreeMap<Url, Vec<TextEdit>> = BTreeMap::new();
+
+    for edit in &edit_set.edits {
+        // Convert Symbol path back to String path for the resolver callbacks.
+        let string_path: Option<Vec<String>> = {
+            let interner = db.interner().lock();
+            edit.file
+                .iter()
+                .map(|&s| interner.resolve(s).map(str::to_owned))
+                .collect::<Option<Vec<_>>>()
+        };
+        let Some(string_path) = string_path else {
             continue;
         };
-        let Some(ref_text) = (resolver.text_of_module)(&r.module) else {
+        let Some(uri) = (resolver.uri_of_module)(&string_path) else {
             continue;
         };
-        let range = span_to_range(&ref_text, r.span, req.encoding);
-        edits_by_uri.entry(ref_uri).or_default().push(TextEdit {
+        let Some(text) = (resolver.text_of_module)(&string_path) else {
+            continue;
+        };
+        let range = span_to_range(&text, edit.span, req.encoding);
+        edits_by_uri.entry(uri).or_default().push(TextEdit {
             range,
-            new_text: new_ident.as_str().to_owned(),
+            new_text: edit.replacement.clone(),
         });
     }
 
@@ -275,6 +351,16 @@ pub fn rename(
         document_changes: None,
         change_annotations: None,
     })
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+fn def_span_lo_usize(span: Span) -> Option<usize> {
+    usize::try_from(span.lo).ok()
+}
+
+fn def_span_hi_usize(span: Span) -> Option<usize> {
+    usize::try_from(span.hi).ok()
 }
 
 #[cfg(test)]
