@@ -76,6 +76,20 @@ pub mod msg_set;
 // one subscription semantics, dev == prod (see the module doc).
 pub mod sub_desc;
 pub use sub_desc::{SubDescription, build_sub, sub_every_hot};
+// Inert session-`init` datum: the STARTING-`Model` counterpart of `transition`.
+// A data-describable `init` (a record of closed leaf values, `Cmd.none`) reduces
+// to an `InitDatum` decoded by the compiled `apply_init_hot` at session creation
+// only — one init semantics, dev == prod, and session-scoped by construction (a
+// live session never re-consults it). See the module doc.
+pub mod init_datum;
+pub use init_datum::{InitDatum, apply_init, apply_init_hot};
+// Inert `update`-arm Cmd WIRING: which compiled effect an arm fires, as data
+// (the effect BODY stays compiled). A wiring edit — an arm now fires a different
+// already-compiled effect — is a data patch selected by the compiled
+// `select_cmd_hot`; a genuinely-new effect body grows the arm's effect table and
+// recompiles. See the module doc.
+pub mod cmd_wiring;
+pub use cmd_wiring::{CmdWiring, select_cmd_hot, select_effect};
 // Explicit re-export of ONLY the codegen-referenced kernel functions. A glob
 // (`pub use pubsub::*`) leaked the broker's `Event<T>` into this namespace,
 // colliding with the HTML `Event` enum re-exported below (`pub use …html::*`)
@@ -2916,6 +2930,163 @@ mod handlers {
         StatusCode::OK.into_response()
     }
 
+    // ── POST /_ipe/hot-init (dev-only) ────────────────────────────────
+    // The running server's inbound leg of the session-`init` hot-swap live
+    // socket. The `ipe watch` process computes an init patch for an edited
+    // data-describable `init` and POSTs it here; the handler registers the
+    // replacement `InitDatum` under the app's baked-datum signature, so the NEXT
+    // NEW session decodes the edited init through the SAME compiled
+    // `apply_init_hot` — no recompile, and every LIVE session keeps its Model (a
+    // live session never re-consults `init`).
+    //
+    // Guarded EXACTLY like `/_ipe/hot-transition`, three ways, so it is inert in
+    // production:
+    //   1. Route MOUNTED only under `dev_overlay_active()` (flag on AND
+    //      non-production) — absent from a production build.
+    //   2. A per-process control token (`IPE_WATCH_HOT_TOKEN`) must match the
+    //      `X-Ipe-Hot-Token` header (constant-time), so a LAN peer without the
+    //      token cannot drive an init change.
+    //   3. The body carries only two inert JSON strings — the old (key) datum and
+    //      the new (replacement) datum. The replacement is STRICT-decoded into an
+    //      `InitDatum` (a self-describing Model object); anything that is not a
+    //      well-formed `InitDatum` is rejected. The registered datum can drive
+    //      nothing but the bounded, fail-closed `apply_init`, which returns the
+    //      compiled fallback for any body it cannot strict-decode.
+    pub(super) async fn hot_init_handler<Model, Msg, FInit, FUpdate, FView, FSubs>(
+        State(_st): State<WebState<Model, Msg, FInit, FUpdate, FView, FSubs>>,
+        headers: axum::http::HeaderMap,
+        body: axum::body::Bytes,
+    ) -> Response
+    where
+        Model: Clone + Send + 'static,
+        Msg: Clone + Send + 'static,
+        FInit: Send + Sync + 'static,
+        FUpdate: Send + Sync + 'static,
+        FView: Send + Sync + 'static,
+        FSubs: Send + Sync + 'static,
+    {
+        // Defence in depth: re-check the dev gate even though the route is only
+        // mounted under it, so the handler is inert if ever reached otherwise.
+        if !literal_table::dev_overlay_active() {
+            return StatusCode::NOT_FOUND.into_response();
+        }
+        // Per-process control token — same mechanism as `/_ipe/hot-transition`.
+        // Absent expected token → fail closed (endpoint unusable without a token).
+        let expected = crate::system::read_env_var("IPE_WATCH_HOT_TOKEN")
+            .ok()
+            .filter(|t| !t.is_empty());
+        let presented = headers
+            .get("x-ipe-hot-token")
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_owned);
+        match (expected, presented) {
+            (Some(exp), Some(got)) if crate::ct_eq::ct_bytes_eq(exp.as_bytes(), got.as_bytes()) => {
+            }
+            _ => return StatusCode::FORBIDDEN.into_response(),
+        }
+
+        #[derive(serde::Deserialize)]
+        struct HotInitBody {
+            /// The app's PREVIOUS baked init datum JSON — the overlay key the
+            /// running app's compiled `init` matches (it still bakes this string).
+            old_json: String,
+            /// The edited init datum's JSON — strict-decoded into an `InitDatum`.
+            new_json: String,
+        }
+        let parsed: HotInitBody = match serde_json::from_slice(&body) {
+            Ok(b) => b,
+            Err(_) => return (StatusCode::BAD_REQUEST, "bad body").into_response(),
+        };
+        // Parse, don't validate: the replacement must be a well-formed
+        // `InitDatum` or the request is rejected. A registered datum can therefore
+        // drive nothing but the bounded, fail-closed `apply_init`.
+        let replacement: init_datum::InitDatum = match serde_json::from_str(&parsed.new_json) {
+            Ok(d) => d,
+            Err(_) => return (StatusCode::BAD_REQUEST, "bad init datum").into_response(),
+        };
+        init_datum::register_dev_init(&parsed.old_json, replacement);
+        StatusCode::OK.into_response()
+    }
+
+    // ── POST /_ipe/hot-wiring (dev-only) ──────────────────────────────
+    // The running server's inbound leg of the `update`-arm Cmd-WIRING hot-swap
+    // live socket. The `ipe watch` process computes a wiring patch for an edited
+    // arm (which compiled effect it fires) and POSTs it here; the handler
+    // registers the replacement `CmdWiring` under the arm's baked-datum signature,
+    // so the next dispatch of that arm fires the edited (already-compiled) effect
+    // through the SAME compiled `select_cmd_hot` — no recompile of the effect
+    // body.
+    //
+    // Guarded EXACTLY like `/_ipe/hot-transition`, three ways, so it is inert in
+    // production:
+    //   1. Route MOUNTED only under `dev_overlay_active()` (flag on AND
+    //      non-production) — absent from a production build.
+    //   2. A per-process control token (`IPE_WATCH_HOT_TOKEN`) must match the
+    //      `X-Ipe-Hot-Token` header (constant-time), so a LAN peer without the
+    //      token cannot drive a wiring change.
+    //   3. The body carries only two inert JSON strings — the old (key) datum and
+    //      the new (replacement) datum. The replacement is STRICT-decoded into a
+    //      `CmdWiring` (an optional effect id); anything else is rejected. A
+    //      registered wiring drives only the bounded `select_cmd_hot`, which
+    //      selects an effect ONLY if the id indexes the arm's OWN compiled effect
+    //      table — an id past the table (a genuinely-new effect this build never
+    //      compiled) fires NO effect, so a wiring patch can never fire an
+    //      unintended effect.
+    pub(super) async fn hot_wiring_handler<Model, Msg, FInit, FUpdate, FView, FSubs>(
+        State(_st): State<WebState<Model, Msg, FInit, FUpdate, FView, FSubs>>,
+        headers: axum::http::HeaderMap,
+        body: axum::body::Bytes,
+    ) -> Response
+    where
+        Model: Clone + Send + 'static,
+        Msg: Clone + Send + 'static,
+        FInit: Send + Sync + 'static,
+        FUpdate: Send + Sync + 'static,
+        FView: Send + Sync + 'static,
+        FSubs: Send + Sync + 'static,
+    {
+        // Defence in depth: re-check the dev gate even though the route is only
+        // mounted under it, so the handler is inert if ever reached otherwise.
+        if !literal_table::dev_overlay_active() {
+            return StatusCode::NOT_FOUND.into_response();
+        }
+        // Per-process control token — same mechanism as `/_ipe/hot-transition`.
+        let expected = crate::system::read_env_var("IPE_WATCH_HOT_TOKEN")
+            .ok()
+            .filter(|t| !t.is_empty());
+        let presented = headers
+            .get("x-ipe-hot-token")
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_owned);
+        match (expected, presented) {
+            (Some(exp), Some(got)) if crate::ct_eq::ct_bytes_eq(exp.as_bytes(), got.as_bytes()) => {
+            }
+            _ => return StatusCode::FORBIDDEN.into_response(),
+        }
+
+        #[derive(serde::Deserialize)]
+        struct HotWiringBody {
+            /// The arm's PREVIOUS baked wiring JSON — the overlay key the running
+            /// app's compiled arm matches (it still bakes this string).
+            old_json: String,
+            /// The edited wiring's JSON — strict-decoded into a `CmdWiring`.
+            new_json: String,
+        }
+        let parsed: HotWiringBody = match serde_json::from_slice(&body) {
+            Ok(b) => b,
+            Err(_) => return (StatusCode::BAD_REQUEST, "bad body").into_response(),
+        };
+        // Parse, don't validate: the replacement must be a well-formed `CmdWiring`
+        // or the request is rejected. A registered wiring can drive nothing but the
+        // bounded, fail-closed `select_cmd_hot`.
+        let replacement: cmd_wiring::CmdWiring = match serde_json::from_str(&parsed.new_json) {
+            Ok(w) => w,
+            Err(_) => return (StatusCode::BAD_REQUEST, "bad wiring").into_response(),
+        };
+        cmd_wiring::register_dev_wiring(&parsed.old_json, replacement);
+        StatusCode::OK.into_response()
+    }
+
     // ── POST /_ipe/watch/status (dev-only) ───────────────────────────
     // Inbound build-status notification from `ipe watch`. Guarded two ways
     // so it is inert in production:
@@ -3413,6 +3584,20 @@ where
     } else {
         router
     };
+    // Dev-only session-`init` hot-swap control leg. Guarded IDENTICALLY to
+    // `/_ipe/hot-transition`: MOUNTED only under the same dev overlay gate (flag
+    // on AND non-production), token-gated per request, and bounded. An init patch
+    // registers a replacement starting-Model datum that drives only the total,
+    // fail-closed `apply_init` at SESSION CREATION — never a live session's Model.
+    let router = if literal_table::dev_overlay_active() {
+        router.route(
+            "/_ipe/hot-init",
+            post(handlers::hot_init_handler::<Model, Msg, FInit, FUpdate, FView, FSubs>)
+                .layer(axum::extract::DefaultBodyLimit::max(web_max_body_bytes())),
+        )
+    } else {
+        router
+    };
     // Dev-only `subscriptions`-entry hot-swap control leg. Guarded IDENTICALLY to
     // `/_ipe/hot-transition`: MOUNTED only under the same dev overlay gate (flag on
     // AND non-production), token-gated per request, and bounded. A sub patch
@@ -3422,6 +3607,20 @@ where
         router.route(
             "/_ipe/hot-subs",
             post(handlers::hot_subs_handler::<Model, Msg, FInit, FUpdate, FView, FSubs>)
+                .layer(axum::extract::DefaultBodyLimit::max(web_max_body_bytes())),
+        )
+    } else {
+        router
+    };
+    // Dev-only `update`-arm Cmd-wiring hot-swap control leg. Guarded IDENTICALLY
+    // to `/_ipe/hot-transition`: MOUNTED only under the same dev overlay gate,
+    // token-gated per request, and bounded. A wiring patch selects one of the
+    // arm's OWN compiled effects (or none) through the total, fail-closed
+    // `select_cmd_hot` — never an out-of-range effect, never an unintended one.
+    let router = if literal_table::dev_overlay_active() {
+        router.route(
+            "/_ipe/hot-wiring",
+            post(handlers::hot_wiring_handler::<Model, Msg, FInit, FUpdate, FView, FSubs>)
                 .layer(axum::extract::DefaultBodyLimit::max(web_max_body_bytes())),
         )
     } else {
