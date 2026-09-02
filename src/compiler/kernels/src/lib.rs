@@ -12238,6 +12238,13 @@ impl StdlibKernel {
             // onMessage/onClose/onError receive surface) routes through
             // `ws_client.rs`'s wasm32 arm — `web_sys::WebSocket`'s
             // `onopen`/`onmessage`/`onclose`/`onerror` handler slots.
+            // `JsSend`/`JsSubscribe` (the typed `Ipe.Js` port) route through
+            // `js_port.rs`'s wasm32 arm: outbound `Js.send` posts the sealed
+            // frame to `window.ipeOnReceive`, inbound `Js.subscribe` drains the
+            // in-tab queue the page's `window.ipe.send` feeds — the SAME bounded,
+            // fail-closed seal decoder the native port uses. The concrete-ADT
+            // seal (IPE-N0039) that governs every value crossing the port is
+            // unchanged; this only gives the existing typed port a client sink.
             KernelClass::Tea => matches!(
                 self,
                 Self::CmdNone
@@ -12254,6 +12261,8 @@ impl StdlibKernel {
                     | Self::CmdPublishNoEcho
                     | Self::SubSubscribeTopic
                     | Self::SubSubscribeWebSocket
+                    | Self::JsSend
+                    | Self::JsSubscribe
             ),
             KernelClass::Pure => {
                 // `StringToUpperIn` / `StringToLowerIn` require ICU4X
