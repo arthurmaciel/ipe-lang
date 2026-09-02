@@ -67,18 +67,25 @@ pub trait Surface: Sync {
     fn name(&self) -> &'static str;
     /// Every item of the surface, in a deterministic, sorted order.
     fn all(&self) -> Vec<Self::Item>;
+    /// The display label of an item, naming its row in a hole coordinate (a
+    /// dotted symbol path for the stdlib surface, a variable name for the
+    /// env-var surface).
+    fn label(item: &Self::Item) -> String;
 }
 
-/// One aspect column of the matrix.
+/// One aspect column of the matrix, over a surface's item type.
 ///
-/// Applied to every symbol of a surface; the returned [`Cell`] is that
-/// `(symbol, aspect)` coordinate's verdict.
-pub trait AspectCheck: Sync {
+/// Applied to every item of a surface; the returned [`Cell`] is that
+/// `(item, aspect)` coordinate's verdict. The item type is a parameter so a
+/// second surface (env-var, CLI, …) plugs its own item into the same runner —
+/// the stdlib columns are `AspectCheck<StdlibSymbol>`, an env-var column is
+/// `AspectCheck<EnvItem>`.
+pub trait AspectCheck<Item>: Sync {
     /// A human name for the column, used in the rendered matrix header and in a
     /// hole's failure message.
     fn name(&self) -> &'static str;
-    /// The verdict for one symbol on this aspect.
-    fn check(&self, sym: &StdlibSymbol) -> Cell;
+    /// The verdict for one item on this aspect.
+    fn check(&self, item: &Item) -> Cell;
 }
 
 /// One `(symbol, aspect)` verdict.
