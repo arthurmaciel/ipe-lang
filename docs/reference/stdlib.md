@@ -50,6 +50,7 @@ Each module listed below links to a detail page with the full documentation and 
 - [Money](#money)
 - [Net](#net)
 - [Palette](#palette)
+- [Parser](#parser)
 - [Path](#path)
 - [Process](#process)
 - [PubSub](#pubsub)
@@ -1457,6 +1458,43 @@ Ipe.Palette — colour shades and spacing values.
 | `toHex` | (no summary) |
 | `Spacing` | (no summary) |
 | `spacingPx` | (no summary) |
+
+## Parser
+
+[Full reference](stdlib/Parser.md)
+
+`Ipe.Parser` — build parsers for DSLs and structured text by composing
+
+| Export | Summary |
+|--------|----------|
+| `Parser` | A parser that, when run, reads from the front of the input and produces an |
+| `Problem` | What a parser expected but did not find. Mirrors `elm/parser`'s `Problem`. |
+| `DeadEnd` | Where a parser stopped and why. `run` returns a list of these because |
+| `Step` | One step of a `loop`: keep going with a new accumulator (`Loop state`) or |
+| `run` | `run parser input` — parse the whole `input` with `parser`. |
+| `succeed` | `succeed value` — a parser that consumes nothing and always yields `value`. |
+| `problem` | `problem message` — a parser that always fails with `Problem message` at the |
+| `map` | `map f parser` — apply `f` to the value a successful `parser` produces, |
+| `map2` | `map2 f a b` — run `a` then `b`, and combine their values with `f`. The |
+| `map3` | `map3 f a b c` — run three parsers in sequence and combine their values. |
+| `map4` | `map4 f a b c d` — run four parsers in sequence and combine their values. |
+| `map5` | `map5 f a b c d e` — run five parsers in sequence and combine their values. |
+| `andThen` | `andThen f parser` — run `parser`, then use its value to choose the next |
+| `lazy` | `lazy thunk` — defer building a parser until it runs, so a parser may refer |
+| `keep` | `keep kept dropped` — run `kept`, then run `dropped` only to advance past it, |
+| `ignore` | `ignore dropped kept` — run `dropped` only to advance past it, then run |
+| `symbol` | `symbol text` — match the exact `text` as a punctuation token, consuming it. |
+| `keyword` | `keyword text` — match the exact `text` as a whole word: it matches only |
+| `end` | `end` — succeed only if the entire input has been consumed. Use it at the |
+| `chompIf` | `chompIf isGood` — consume exactly one character if it satisfies `isGood`, |
+| `chompWhile` | `chompWhile isGood` — consume the longest run of characters that all satisfy |
+| `getChompedString` | `getChompedString parser` — run `parser` and return the exact slice of input |
+| `spaces` | `spaces` — consume any run of spaces, tabs, carriage returns, and newlines |
+| `int` | `int` — parse a run of ASCII digits as a non-negative `Int`. Fails with |
+| `float` | `float` — parse a run of digits with an optional single decimal point and |
+| `oneOf` | `oneOf parsers` — try each parser in order and return the first that |
+| `backtrackable` | `backtrackable parser` — run `parser` but mark it as not having committed, |
+| `loop` | `loop initial step` — repeat `step` to fold a growing structure without |
 
 ## Path
 

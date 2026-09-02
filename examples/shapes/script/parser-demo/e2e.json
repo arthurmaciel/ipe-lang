@@ -1,0 +1,10 @@
+{
+    "kind": "cli",
+    "steps": [
+        {
+            "args": [],
+            "expectExit": 0,
+            "expectStdoutContains": ["Move (3,4)", "Ping", "Move (12,0)", "(parse error)"]
+        }
+    ]
+}

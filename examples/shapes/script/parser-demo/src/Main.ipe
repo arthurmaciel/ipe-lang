@@ -1,0 +1,89 @@
+module Main exposing (main)
+
+import Ipe.Parser as Parser exposing (Parser)
+import Ipe.Task as Task
+import Ipe.List as List
+import Ipe.String as String
+import Ipe.Io as Io
+
+
+-- Parse a parenthesised integer pair like `(3,4)` into a `Point`, then a small
+-- grammar of commands, exercising the composed combinators:
+--   • `map2` applies a builder to two parsers run in sequence.
+--   • `keep` / `ignore` sequence a value parser with a punctuation parser.
+--   • `andThen` sequences a step that depends on the previous result, nested to
+--     branch on a keyword.
+--   • `oneOf` tries alternatives; `run` is a total `String -> Result`.
+
+
+type alias Point =
+    { x : Int
+    , y : Int
+    }
+
+
+type Command
+    = Move Point
+    | Ping
+
+
+-- `(x,y)` — open paren, an int, a comma, an int, a close paren. `ignore` drops
+-- the leading `(`; `map2` combines the two ints past the comma; `keep` runs the
+-- trailing `)` for effect and keeps the point.
+point : Parser Point
+point =
+    Parser.ignore (Parser.symbol "(")
+        (Parser.keep
+            (Parser.map2 Point
+                Parser.int
+                (Parser.ignore (Parser.symbol ",") Parser.int)
+            )
+            (Parser.symbol ")")
+        )
+
+
+-- `move (x,y)` or `ping` — a keyword chooses the branch, and a nested `andThen`
+-- threads the point parser after the `move ` keyword.
+command : Parser Command
+command =
+    Parser.oneOf
+        [ Parser.keyword "move"
+            |> Parser.andThen
+                (\_ ->
+                    Parser.ignore Parser.spaces point
+                        |> Parser.andThen (\p -> Parser.succeed (Move p))
+                )
+        , Parser.keyword "ping"
+            |> Parser.andThen (\_ -> Parser.succeed Ping)
+        ]
+
+
+render : String -> String
+render raw =
+    case Parser.run command raw of
+
+        Ok (Move p) ->
+            raw ++ "  ->  Move (" ++ String.fromInt p.x ++ "," ++ String.fromInt p.y ++ ")"
+
+        Ok Ping ->
+            raw ++ "  ->  Ping"
+
+        Err _ ->
+            raw ++ "  ->  (parse error)"
+
+
+inputs : List String
+inputs =
+    [ "move (3,4)"
+    , "ping"
+    , "move (12,0)"
+    , "spin"
+    ]
+
+
+main =
+    do
+        Io.println "Parsing commands:"
+        List.map (\s -> Io.println ("  " ++ render s)) inputs
+            |> Task.sequence
+            |> Task.map (\_ -> ())

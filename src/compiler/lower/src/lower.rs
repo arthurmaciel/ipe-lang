@@ -7894,7 +7894,7 @@ fn collect_local_derived_tvars(
 /// order) paired with its quantified type parameters and their bounds. Taken
 /// per fixpoint round in [`propagate_call_site_bounds`] so a caller can read a
 /// callee's obligations without aliasing the `&mut [Func]` it writes.
-type CalleeSig = (Vec<IrType>, Vec<(Symbol, BoundSet)>);
+type CalleeSig = (Vec<IrType>, Vec<(Symbol, BoundSet)>, IrType);
 
 /// Cross-call type-parameter-bound propagation, run to a fixpoint over all
 /// lowered funcs of a module.
@@ -7959,6 +7959,7 @@ fn propagate_call_site_bounds(funcs: &mut [Func]) {
                 (
                     f.params.iter().map(|(_, t)| t.clone()).collect(),
                     f.type_params.clone(),
+                    f.ret.clone(),
                 )
             })
             .collect();
@@ -7995,7 +7996,7 @@ fn propagate_call_site_bounds(funcs: &mut [Func]) {
                 std::collections::HashMap::new();
 
             for (callee_id, args) in calls {
-                let Some((callee_param_tys, callee_tparams)) = by_id
+                let Some((callee_param_tys, callee_tparams, _)) = by_id
                     .get(&callee_id.as_raw())
                     .and_then(|&callee_idx| sigs.get(callee_idx))
                 else {
@@ -8047,6 +8048,47 @@ fn propagate_call_site_bounds(funcs: &mut [Func]) {
                 }
             }
 
+            // Result-position propagation: a caller whose body's tail expression
+            // IS a call to a callee inherits the auto-trait bounds the callee
+            // places on its RETURN-type tvars. `keep kept dropped = map2 f kept
+            // dropped` returns exactly the `map2` call, so the caller's return
+            // tvar sits in the same structural slot as `map2`'s bounded return
+            // tvar `T3` (obliged `Sync` by the boxed builder closure). The
+            // arg-position walk above never sees this — the bound is on the
+            // callee's RESULT, not any parameter — so a returned composed
+            // combinator would emit a `T cannot be shared between threads` E0277.
+            // Aligning the two return types transfers the bound to the exact
+            // caller tvar. Propagating an auto-trait bound only ever tightens
+            // harmlessly (it holds for every concrete emitted Ipê type).
+            let caller_ret = caller.ret.clone();
+            let mut tail_callees: Vec<FuncId> = Vec::new();
+            collect_tail_call_callees(&caller.body, &mut tail_callees);
+            for callee_id in tail_callees {
+                let Some((_, callee_tparams, sig_ret)) = by_id
+                    .get(&callee_id.as_raw())
+                    .and_then(|&callee_idx| sigs.get(callee_idx))
+                else {
+                    continue;
+                };
+                for (g, gbound) in callee_tparams {
+                    if !(gbound.has_sync() || gbound.has_send() || gbound.has_static()) {
+                        continue;
+                    }
+                    for caller_tv in aligned_caller_tvars(sig_ret, *g, &caller_ret) {
+                        let slot = add.entry(caller_tv).or_insert(BoundSet::UNBOUNDED);
+                        if gbound.has_sync() {
+                            *slot = slot.with_sync();
+                        }
+                        if gbound.has_send() {
+                            *slot = slot.with_send();
+                        }
+                        if gbound.has_static() {
+                            *slot = slot.with_static();
+                        }
+                    }
+                }
+            }
+
             if add.is_empty() {
                 continue;
             }
@@ -8072,6 +8114,100 @@ fn propagate_call_site_bounds(funcs: &mut [Func]) {
         if !changed {
             break;
         }
+    }
+}
+
+/// Collect every callee reached in TAIL position of `expr` — the calls whose
+/// result becomes the enclosing function's return value. A tail call sits at the
+/// body's final expression, threaded through the tails of `Let`/`Destructure`,
+/// `If`, and `Match`. Only a direct [`Callee::Func`] call yields a callee; any
+/// other tail shape (a constructor, a bare value, an `Apply`) contributes
+/// nothing. Used by [`propagate_call_site_bounds`] to transfer a callee's
+/// return-tvar bounds onto the caller's return tvar.
+fn collect_tail_call_callees(expr: &Expr, out: &mut Vec<FuncId>) {
+    match expr {
+        Expr::Call {
+            callee: Callee::Func(id),
+            ..
+        } => {
+            out.push(*id);
+        }
+        Expr::Let { body, .. } | Expr::Destructure { body, .. } => {
+            collect_tail_call_callees(body, out);
+        }
+        Expr::If { then_, else_, .. } => {
+            collect_tail_call_callees(then_, out);
+            collect_tail_call_callees(else_, out);
+        }
+        Expr::Match(m) => {
+            for arm in m.arms() {
+                collect_tail_call_callees(&arm.body, out);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Align two return types structurally and report which of the CALLER's return
+/// tvars occupy the same slots as the callee's return tvar `callee_g`.
+///
+/// The caller returns exactly what the callee returns (a tail call), so the two
+/// types share a shape and differ only in their tvar names. Wherever `callee_g`
+/// appears bare in `callee_ret`, the caller's tvar at the mirrored position in
+/// `caller_ret` is the one that must carry `callee_g`'s bound. A structural
+/// walk over the shared shape collects those caller tvars. Any positional
+/// mismatch (a shape the two do not share) simply yields nothing — the pass then
+/// adds no bound, which is safe.
+fn aligned_caller_tvars(sig_ret: &IrType, target_g: Symbol, site_ret: &IrType) -> Vec<Symbol> {
+    let mut out = Vec::new();
+    align_ret_tvars(sig_ret, target_g, site_ret, &mut out);
+    out
+}
+
+fn align_ret_tvars(sig: &IrType, target: Symbol, site: &IrType, out: &mut Vec<Symbol>) {
+    match (sig, site) {
+        (IrType::Generic(sig_tv), IrType::Generic(site_tv)) => {
+            if *sig_tv == target {
+                out.push(*site_tv);
+            }
+        }
+        (IrType::List(a), IrType::List(b))
+        | (IrType::Maybe(a), IrType::Maybe(b))
+        | (IrType::Set(a), IrType::Set(b)) => align_ret_tvars(a, target, b, out),
+        (IrType::Result(a1, a2), IrType::Result(b1, b2))
+        | (IrType::Dict(a1, a2), IrType::Dict(b1, b2)) => {
+            align_ret_tvars(a1, target, b1, out);
+            align_ret_tvars(a2, target, b2, out);
+        }
+        (IrType::Tuple(a), IrType::Tuple(b))
+        | (IrType::Enum { args: a, .. }, IrType::Enum { args: b, .. })
+            if a.len() == b.len() =>
+        {
+            for (ca, cb) in a.iter().zip(b.iter()) {
+                align_ret_tvars(ca, target, cb, out);
+            }
+        }
+        (IrType::Record(a), IrType::Record(b)) => {
+            for (field, ca) in a {
+                if let Some(cb) = b.get(field) {
+                    align_ret_tvars(ca, target, cb, out);
+                }
+            }
+        }
+        // A `Parser a` is a transparent `State -> PStep a` function alias, so a
+        // composed combinator's return tvar sits under a function type. Aligning
+        // through the parameters and return of a function shape reaches it.
+        (IrType::Fun(pa, ra), IrType::Fun(pb, rb))
+        | (IrType::SharedFun(pa, ra), IrType::SharedFun(pb, rb))
+        | (IrType::FnOnceChain(pa, ra), IrType::FnOnceChain(pb, rb))
+            if pa.len() == pb.len() =>
+        {
+            for (ca, cb) in pa.iter().zip(pb.iter()) {
+                align_ret_tvars(ca, target, cb, out);
+            }
+            align_ret_tvars(ra, target, rb, out);
+        }
+        _ => {}
     }
 }
 
