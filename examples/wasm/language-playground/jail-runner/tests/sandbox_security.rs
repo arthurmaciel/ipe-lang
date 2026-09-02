@@ -26,6 +26,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use ipe_sandbox::run_jail::netns_jail_available;
 use playground_jail_runner::run_jailed::{
     self, PhaseOutcome, app_binary_path, jailed_build, jailed_run, probe_or_refuse,
     seed_cargo_home, seed_target_dir,
@@ -33,6 +34,22 @@ use playground_jail_runner::run_jailed::{
 
 fn e2e_enabled() -> bool {
     std::env::var("IPE_PLAYGROUND_E2E").is_ok()
+}
+
+/// Returns the bwrap path when the netns jail can be established on this host,
+/// prints a skip reason and returns `None` otherwise. The caller returns early on
+/// `None` — tests that run under `--unshare-net` skip rather than hard-fail when
+/// the host cannot configure loopback inside an unprivileged user namespace.
+fn jail_or_skip(test: &str) -> Option<std::path::PathBuf> {
+    let bwrap = ipe_sandbox::probe().bwrap?;
+    if !netns_jail_available(&bwrap) {
+        eprintln!(
+            "{test}: SKIP — netns jail unavailable on this host \
+             (unprivileged userns cannot configure loopback)"
+        );
+        return None;
+    }
+    Some(bwrap)
 }
 
 /// Repo root: `examples/wasm/language-playground/jail-runner` →
@@ -216,6 +233,9 @@ fn hello_world_runs_and_returns_stdout() {
     if !e2e_enabled() {
         return;
     }
+    if jail_or_skip("hello_world_runs_and_returns_stdout").is_none() {
+        return;
+    }
     let staged = stage_ipe(
         "module Main exposing (main)\n\nimport Ipe.Io as Io\n\nmain =\n    Io.println \"hello\"\n",
     );
@@ -236,6 +256,9 @@ fn hello_world_runs_and_returns_stdout() {
 #[test]
 fn network_access_is_denied() {
     if !e2e_enabled() {
+        return;
+    }
+    if jail_or_skip("network_access_is_denied").is_none() {
         return;
     }
     // A TCP connect to a routable address. Under the jail's fresh empty net
@@ -284,6 +307,9 @@ fn out_of_jail_filesystem_read_is_denied() {
     if !e2e_enabled() {
         return;
     }
+    if jail_or_skip("out_of_jail_filesystem_read_is_denied").is_none() {
+        return;
+    }
     // Target a repo file that must never be visible inside the jail. The jail's
     // `/home` and `/root` are tmpfs masks and the only writable/visible mount is
     // the scratch bind, so a path under the developer's checkout cannot be read.
@@ -327,6 +353,9 @@ fn main() {{
 #[test]
 fn a_spawned_subprocess_cannot_escape_the_jail() {
     if !e2e_enabled() {
+        return;
+    }
+    if jail_or_skip("a_spawned_subprocess_cannot_escape_the_jail").is_none() {
         return;
     }
     // The honest guarantee (see docs/topics/playground.md threat model): the run jail's
@@ -384,6 +413,9 @@ fn a_fork_bomb_is_bounded_not_unbounded() {
     if !e2e_enabled() {
         return;
     }
+    if jail_or_skip("a_fork_bomb_is_bounded_not_unbounded").is_none() {
+        return;
+    }
     // Spawn children in a tight loop. `prlimit --nproc` caps the process/thread
     // count and `--unshare-pid` + the wall clock bound the blast radius: the run
     // returns (killed or self-limited) rather than exhausting the host's PIDs and
@@ -422,6 +454,9 @@ fn main() {
 #[test]
 fn infinite_loop_is_killed_by_the_time_limit() {
     if !e2e_enabled() {
+        return;
+    }
+    if jail_or_skip("infinite_loop_is_killed_by_the_time_limit").is_none() {
         return;
     }
     // Non-terminating Rust. The run phase's `timeout --kill-after=5s <wall>`
