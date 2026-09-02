@@ -7,6 +7,8 @@
 //! ([`matrix::run`]), and a hole is named at its `(symbol, aspect)` coordinate.
 //! The [`contract`] types are the seam the dynamic/build columns code to.
 
+pub mod cli_surface;
+pub mod columns_cli;
 pub mod columns_doc;
 pub mod columns_env;
 pub mod columns_runtime;

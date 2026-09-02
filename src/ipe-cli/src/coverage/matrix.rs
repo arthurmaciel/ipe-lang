@@ -8,6 +8,7 @@
 //! concentrates every per-aspect check into one loop so no symbol is judged on a
 //! subset of the aspects.
 
+use crate::coverage::cli_surface::CliItem;
 use crate::coverage::contract::{AspectCheck, Cell, StdlibSymbol, Surface};
 use crate::coverage::env_surface::EnvItem;
 
@@ -183,4 +184,23 @@ pub fn env_columns() -> Vec<Box<dyn AspectCheck<EnvItem>>> {
 #[must_use]
 pub fn run_env() -> MatrixReport {
     run(&crate::coverage::env_surface::EnvVarSurface, &env_columns())
+}
+
+/// The registered aspect columns of the CLI surface.
+///
+/// These read the help table and scan source/test trees — no program build —
+/// so they run in the fast path alongside the env-var columns.
+#[must_use]
+pub fn cli_columns() -> Vec<Box<dyn AspectCheck<CliItem>>> {
+    vec![
+        Box::new(crate::coverage::columns_cli::DocumentedColumn),
+        Box::new(crate::coverage::columns_cli::TestedColumn::new()),
+        Box::new(crate::coverage::columns_cli::NotAdvertisedUnimplementedColumn::new()),
+    ]
+}
+
+/// Run the CLI surface against its registered columns.
+#[must_use]
+pub fn run_cli_surface() -> MatrixReport {
+    run(&crate::coverage::cli_surface::CliSurface, &cli_columns())
 }
