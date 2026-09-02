@@ -101,7 +101,7 @@ impl AspectCheck for LowersColumn {
 ///   is neither silently passed nor miscast as this column's own seam.
 /// * Any other lowering rejection is the seam this column gates: a [`Cell::Hole`].
 fn classify_lower_outcome(sym: &StdlibSymbol, outcome: StageOutcome, seam: &str) -> Cell {
-    if let StageOutcome::Ok = outcome {
+    if matches!(outcome, StageOutcome::Ok) {
         return Cell::Ok;
     }
     if probe::is_probe_form_limitation(&outcome) {
@@ -409,11 +409,7 @@ fn runtime_crate_src() -> Option<PathBuf> {
     }
     let mut here = std::env::current_dir().ok();
     while let Some(dir) = here {
-        let candidate = dir
-            .join("src")
-            .join("runtime")
-            .join("rust")
-            .join("src");
+        let candidate = dir.join("src").join("runtime").join("rust").join("src");
         if candidate.is_dir() {
             return Some(candidate);
         }
@@ -432,10 +428,10 @@ fn collect_symbols_in_dir(dir: &Path, out: &mut BTreeSet<String>) {
         let path = entry.path();
         if path.is_dir() {
             collect_symbols_in_dir(&path, out);
-        } else if path.extension().is_some_and(|e| e == "rs") {
-            if let Ok(text) = std::fs::read_to_string(&path) {
-                collect_symbols_in_text(&text, out);
-            }
+        } else if path.extension().is_some_and(|e| e == "rs")
+            && let Ok(text) = std::fs::read_to_string(&path)
+        {
+            collect_symbols_in_text(&text, out);
         }
     }
 }

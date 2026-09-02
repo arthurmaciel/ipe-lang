@@ -45,6 +45,16 @@ fn allowlisted(aspect: &str, symbol: &str) -> bool {
         .any(|(a, s, _)| *a == aspect && *s == symbol)
 }
 
+/// The dotted display path of a symbol, e.g. `Ipe.List.map`.
+fn dotted(sym: &StdlibSymbol) -> String {
+    let mut path = sym.module.join(".");
+    if !path.is_empty() {
+        path.push('.');
+    }
+    path.push_str(&sym.name);
+    path
+}
+
 // ── composes: the composed-combinator lowering bug-catcher ────────────────────
 
 #[test]
@@ -82,9 +92,7 @@ fn lowers_column_passes_over_the_surface() {
         return;
     }
 
-    let holes = holes_of(Box::new(
-        ipe::coverage::columns_runtime::LowersColumn::new(),
-    ));
+    let holes = holes_of(Box::new(ipe::coverage::columns_runtime::LowersColumn::new()));
 
     let mut unexpected = String::new();
     for (symbol, message) in holes {
@@ -152,18 +160,11 @@ fn build_run_column_over_a_representative_slice() {
 
     let mut unexpected = String::new();
     for sym in &symbols {
-        let dotted = {
-            let mut p = sym.module.join(".");
-            if !p.is_empty() {
-                p.push('.');
-            }
-            p.push_str(&sym.name);
-            p
-        };
-        if let Cell::Hole(message) = column.check(sym) {
-            if !allowlisted("build+run", &dotted) {
-                let _ = writeln!(unexpected, "  HOLE [build+run] {dotted}: {message}");
-            }
+        let path = dotted(sym);
+        if let Cell::Hole(message) = column.check(sym)
+            && !allowlisted("build+run", &path)
+        {
+            let _ = writeln!(unexpected, "  HOLE [build+run] {path}: {message}");
         }
     }
 
@@ -185,14 +186,13 @@ fn dynamic_columns_pass_over_the_whole_surface() {
     }
 
     let report = matrix::run_dynamic();
-    let unexpected: Vec<_> = report
+    let all_allowlisted = report
         .holes
         .iter()
-        .filter(|h| !allowlisted(h.aspect, &h.symbol))
-        .collect();
+        .all(|h| allowlisted(h.aspect, &h.symbol));
 
     assert!(
-        unexpected.is_empty(),
+        all_allowlisted,
         "the dynamic coverage columns must pass over the whole stdlib surface (or \
          be recorded in the allowlist with a tracking reason):\n{}",
         report.render(),

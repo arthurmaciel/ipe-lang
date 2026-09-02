@@ -75,6 +75,7 @@ fn cli_error_code(err: &crate::CliError) -> Option<ipe_diagnostics::Code> {
 /// hole. This is exactly the "the resolver refuses to pass point-free" /
 /// "fully-polymorphic value with no determinable concrete type" case the columns'
 /// contracts name.
+#[must_use]
 pub fn is_probe_form_limitation(outcome: &StageOutcome) -> bool {
     use ipe_diagnostics::{IPE_L0102, IPE_L0146, IPE_L0151};
     matches!(
@@ -84,11 +85,13 @@ pub fn is_probe_form_limitation(outcome: &StageOutcome) -> bool {
     )
 }
 
-/// Whether a lowering rejection is an internal compiler error ([`IPE_I0001`]) — a
-/// compiler bug the probe surfaced, distinct both from a clean stage gap and from
-/// a probe-form limitation. The columns surface it as an advisory, so a
-/// pre-existing lowerer defect the probe reaches is reported without being
+/// Whether a lowering rejection is an internal compiler error ([`IPE_I0001`]).
+///
+/// An ICE is a compiler bug the probe surfaced, distinct both from a clean stage
+/// gap and from a probe-form limitation. The columns surface it as an advisory, so
+/// a pre-existing lowerer defect the probe reaches is reported without being
 /// silently passed or miscast as the column's own seam.
+#[must_use]
 pub fn is_internal_compiler_error(outcome: &StageOutcome) -> bool {
     use ipe_diagnostics::IPE_I0001;
     matches!(
@@ -138,10 +141,11 @@ pub fn reference_program(sym: &StdlibSymbol) -> Result<String, ProbeUnavailable>
     Ok(out)
 }
 
-/// Generate a module that references the symbol in a NESTED closure position,
-/// forcing the lowerer to descend into the combinator inside another combinator
-/// — the composition shape a symbol that type-checked but did not lower failed
-/// on.
+/// Generate a module that references the symbol in a NESTED closure position.
+///
+/// This forces the lowerer to descend into the combinator inside another
+/// combinator — the composition shape a symbol that type-checked but did not
+/// lower failed on.
 ///
 /// `probe = List.map (\_ -> <Short>.<name>) []` nests the reference inside a
 /// lambda passed to `List.map`; the lowerer must walk into the lambda body and
@@ -179,6 +183,7 @@ pub fn nested_program(sym: &StdlibSymbol) -> Result<String, ProbeUnavailable> {
 /// lowering pipeline `ipe build --emit-ir` uses (name-resolution + type-check +
 /// lower), so a symbol that resolves and type-checks but does not lower is
 /// reported as a stage failure.
+#[must_use]
 pub fn lower(source: &str, snippet: &Path) -> StageOutcome {
     if let Err(message) = write_probe_source(snippet, source) {
         return StageOutcome::Failed {
@@ -215,6 +220,7 @@ fn write_probe_source(snippet: &Path, source: &str) -> Result<(), String> {
 /// form does not even type-check, the generator (not the symbol) is at fault, so
 /// the nested-lowering column reports the symbol inapplicable rather than a false
 /// hole.
+#[must_use]
 pub fn typechecks(source: &str, snippet: &Path) -> StageOutcome {
     if let Err(message) = write_probe_source(snippet, source) {
         return StageOutcome::Failed {
@@ -238,6 +244,7 @@ pub fn typechecks(source: &str, snippet: &Path) -> StageOutcome {
 /// execute path a user's `ipe run` takes — so a symbol whose program emits and
 /// type-checks but whose emitted crate does not build or whose binary does not
 /// run is a real gap. Heavy: the caller gates this behind the E2E path.
+#[must_use]
 pub fn build_and_run(source: &str, snippet: &Path) -> StageOutcome {
     use std::process::Command;
     if let Err(message) = write_probe_source(snippet, source) {

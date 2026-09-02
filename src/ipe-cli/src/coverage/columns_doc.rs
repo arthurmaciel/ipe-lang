@@ -290,7 +290,10 @@ fn synthesize_example_module(body: &str, source_module: &str, module_imports: &[
     let mut imported: Vec<&str> = Vec::new();
 
     if !source_module.is_empty() {
-        let short = source_module.split('.').next_back().unwrap_or(source_module);
+        let short = source_module
+            .split('.')
+            .next_back()
+            .unwrap_or(source_module);
         let _ = writeln!(out, "\nimport {source_module} as {short} exposing (..)");
         imported.push(source_module);
     }
@@ -349,10 +352,8 @@ fn emit_example_bindings(out: &mut String, body: &str) {
             if !head.trim().is_empty() {
                 pending.push(head);
             }
-            let expr: String = pending
-                .drain(..)
-                .collect::<Vec<_>>()
-                .join("\n");
+            let expr: String = pending.join("\n");
+            pending.clear();
             if !expr.trim().is_empty() {
                 check_idx += 1;
                 let _ = writeln!(out, "docCheck{check_idx} =");
@@ -381,7 +382,7 @@ fn is_top_level_decl(line: &str) -> bool {
     if !first.is_ascii_alphabetic() {
         return false;
     }
-    let Some((head, _)) = line.split_once(|c| c == '=' || c == ':') else {
+    let Some((head, _)) = line.split_once(['=', ':']) else {
         return false;
     };
     head.split_whitespace().count() == 1
@@ -395,7 +396,10 @@ const FALLBACK_IMPORTS: &[(&str, &str)] = &[
     ("String.", "import Ipe.String as String"),
     ("Dict.", "import Ipe.Dict as Dict"),
     ("Set.", "import Ipe.Set as Set"),
-    ("Result.", "import Ipe.Result as Result exposing (Result(..))"),
+    (
+        "Result.",
+        "import Ipe.Result as Result exposing (Result(..))",
+    ),
     ("Task.", "import Ipe.Task as Task"),
     ("Io.", "import Ipe.Io as Io"),
     ("Debug.", "import Ipe.Debug as Debug"),
