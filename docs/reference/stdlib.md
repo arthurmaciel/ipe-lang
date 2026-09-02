@@ -167,7 +167,7 @@ Ipe.Browser.Clipboard — read from and write to the system clipboard from the
 | Export | Summary |
 |--------|----------|
 | `write` | `write text` — request the browser write `text` to the system clipboard. |
-| `read` | `read` — request the current clipboard contents. |
+| `read` | `read` — request the current clipboard contents as a `Task Error String`. |
 | `contents` | `contents toMsg` — the inbound subscription, wired in `subscriptions`. |
 
 ## Browser.Clipboard.Internals
@@ -181,6 +181,7 @@ Ipe.Browser.Clipboard.Internals — the low-level clipboard port surface: the
 | `JsCmd` | The ONE closed OUTBOUND port type. `WriteText text` requests a clipboard write; |
 | `JsMsg` | The NARROW closed INBOUND port type — NOT the app's internal `Msg`. Every |
 | `request` | `request cmd` — hand a closed outbound `JsCmd` to the raw port transport. The |
+| `requestOne` | `requestOne cmd` — correlated one-shot `JsCmd` → `Task Error JsMsg`. |
 | `subscribe` | `subscribe toMsg` — the inbound subscription over the fail-closed seal |
 | `inbound` | The total, fail-closed decoder for the inbound `JsMsg`. It reads `ok` first: a |
 
@@ -193,7 +194,7 @@ Ipe.Browser.Geolocation — read the device's location over `Ipe.Js` ports.
 | Export | Summary |
 |--------|----------|
 | `Coords` | A device position: WGS-84 latitude/longitude in degrees, accuracy in metres. |
-| `current` | `current` — request the device's location ONCE. |
+| `current` | `current` — request the device's location ONCE, as a `Task Error Coords`. |
 | `watch` | `watch` — begin a CONTINUOUS position stream. |
 | `stopWatching` | `stopWatching` — end the continuous stream started by `watch`. |
 | `positions` | `positions toMsg` — the inbound subscription, wired in `subscriptions`. |
@@ -211,6 +212,7 @@ Ipe.Browser.Geolocation.Internals — the full, low-level geolocation port
 | `JsCmd` | The ONE closed OUTBOUND port type: the whole outbound surface as a single |
 | `JsMsg` | The NARROW closed INBOUND port type — deliberately NOT the app's internal |
 | `request` | `request cmd` — hand a closed outbound `JsCmd` to the raw port transport. |
+| `requestOne` | `requestOne cmd` — correlated one-shot `JsCmd` → `Task Error JsMsg`. |
 | `subscribe` | `subscribe toMsg` — the inbound subscription over the fail-closed seal |
 | `inbound` | The total, fail-closed decoder for the inbound `JsMsg`. It reads the `ok` |
 
@@ -1263,6 +1265,7 @@ Ipe.Js — the raw typed transport across the Ipê↔JS seam (ports).
 |--------|----------|
 | `send` | `send payload` — an outbound one-shot imperative effect, Ipê → JS |
 | `subscribe` | `subscribe decoder toMsg` — an inbound intent stream, JS → Ipê, wired in |
+| `request` | `request cmd decoder` — a correlated one-shot request/reply over the port. |
 
 ## Level
 

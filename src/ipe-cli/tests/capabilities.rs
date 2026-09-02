@@ -693,6 +693,7 @@ import Ipe.Tea.Web.Sub as Sub
 import Ipe.Ui as Ui
 import Ipe.Error as Error exposing (Error)
 import Ipe.Browser.Geolocation as Geo
+import Ipe.Task as Task
 
 type alias Model = { where_ : String }
 
@@ -706,7 +707,7 @@ update : Msg -> Model -> ( Model, Cmd.Cmd Msg )
 update msg model =
     case msg of
         Locate ->
-            ( model, Geo.current )
+            ( model, Task.attempt Got Geo.current )
 
         Got _r ->
             ( model, Cmd.none )
