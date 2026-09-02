@@ -157,6 +157,17 @@ impl<Msg: Clone, Model: Clone> RecordBuffer<Msg, Model> {
         &self.base
     }
 
+    /// Clear the step log and reset the base to `init`.
+    ///
+    /// After this call the buffer is empty and `base()` returns a clone of
+    /// `init`. This is the "reset to init" escape hatch for the debugger:
+    /// time-travel and recording both restart from a clean slate. No `update`
+    /// call is made; no `Cmd` is fired.
+    pub fn reset_to_init(&mut self, init: Model) {
+        self.log.clear();
+        self.base = init;
+    }
+
     /// Iterator over retained messages, oldest first.
     pub fn msgs(&self) -> impl Iterator<Item = &Msg> {
         self.log.iter().map(|s| &s.msg)
@@ -246,6 +257,15 @@ impl<Msg: Clone, Model: Clone> History<Msg, Model> {
     /// Iterator over retained messages, oldest first.
     pub fn msgs(&self) -> impl Iterator<Item = &Msg> {
         self.inner.msgs()
+    }
+
+    /// Clear the step log and reset the base to `init`.
+    ///
+    /// Delegates to [`RecordBuffer::reset_to_init`]: the log is emptied and the
+    /// base is replaced with a clone of `init`. Recording resumes from a fresh
+    /// slate on the next `record` call. No `update` call is made; no `Cmd` fires.
+    pub fn reset_to_init(&mut self, init: Model) {
+        self.inner.reset_to_init(init);
     }
 }
 

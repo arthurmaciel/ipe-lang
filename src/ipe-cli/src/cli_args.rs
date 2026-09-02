@@ -871,6 +871,10 @@ pub struct WatchArgs {
     pub port: u16,
     /// `-q` / `--quiet` — suppress progress chatter; only warnings and errors.
     pub quiet: bool,
+    /// `--reset-state` — force every returning session to a fresh `init` on
+    /// the next rebuild, bypassing the additive-splice checkpoint. Dev escape
+    /// hatch; off by default.
+    pub reset_state: bool,
 }
 
 /// Parse `ipe watch`'s argument tail. `--port` is parsed into a `u16` at this
@@ -886,6 +890,7 @@ pub fn parse_watch(rest: &[String]) -> Result<WatchArgs, CliError> {
     let mut runtime: Option<String> = None;
     let mut port: Option<u16> = None;
     let mut quiet = false;
+    let mut reset_state = false;
     while let Some(flag) = it.next() {
         match flag.as_str() {
             "--out" => set_once(
@@ -908,6 +913,7 @@ pub fn parse_watch(rest: &[String]) -> Result<WatchArgs, CliError> {
                 set_once(&mut port, parsed, "--port", "watch")?;
             }
             "-q" | "--quiet" => quiet = true,
+            "--reset-state" => reset_state = true,
             other => {
                 return Err(usage_unknown_flag("watch", other));
             }
@@ -920,6 +926,7 @@ pub fn parse_watch(rest: &[String]) -> Result<WatchArgs, CliError> {
         runtime,
         port: port.unwrap_or(8000),
         quiet,
+        reset_state,
     })
 }
 

@@ -3181,6 +3181,7 @@ pub(crate) fn run_watch(rest: &[String]) -> Result<(), CliError> {
     opts.cargo_path = cargo_bin.path().to_path_buf();
     opts.quiet = args.quiet;
     opts.bluegreen = bluegreen_enabled();
+    opts.reset_state = args.reset_state;
     // Version header: human mode only (not quiet, not piped).
     if !args.quiet {
         use std::io::IsTerminal as _;

@@ -178,6 +178,13 @@ pub struct WatchOptions {
     /// that has not chosen. Never compiled into a release binary or an emitted
     /// app.
     pub bluegreen: bool,
+    /// DEV-ONLY state-reset escape hatch. When set, the next spawned child
+    /// receives `IPE_WEB_RESET_STATE=1`, which makes the runtime skip the
+    /// session-checkpoint hydration and force every returning session to a fresh
+    /// `init` for the lifetime of that process. The flag is off by default (the
+    /// additive-preserve algorithm runs normally). Exposed as `ipe watch
+    /// --reset-state`. Never compiled into a release binary.
+    pub reset_state: bool,
 }
 
 impl WatchOptions {
@@ -194,6 +201,7 @@ impl WatchOptions {
             on_event: None,
             quiet: false,
             bluegreen: false,
+            reset_state: false,
         }
     }
 }
@@ -1440,13 +1448,20 @@ fn run_inner(
                             };
                             let out_dir = opts.out_dir.clone();
                             let tok = hot_token.clone();
+                            let reset_state = opts.reset_state;
                             supervisor.apply_green_behind_proxy(
                                 &exe_path,
                                 internal_port,
                                 move |path, port| {
                                     spawn_command(
                                         path,
-                                        &child_env(port, &out_dir, tok.as_deref(), true),
+                                        &child_env(
+                                            port,
+                                            &out_dir,
+                                            tok.as_deref(),
+                                            true,
+                                            reset_state,
+                                        ),
                                     )
                                 },
                                 readiness,
@@ -1461,8 +1476,13 @@ fn run_inner(
                                     grace: Duration::from_millis(300),
                                 }
                             };
-                            let env =
-                                child_env(opts.port, &opts.out_dir, hot_token.as_deref(), false);
+                            let env = child_env(
+                                opts.port,
+                                &opts.out_dir,
+                                hot_token.as_deref(),
+                                false,
+                                opts.reset_state,
+                            );
                             supervisor.apply_green(
                                 &exe_path,
                                 move |path| spawn_command(path, &env),
@@ -1581,6 +1601,7 @@ fn child_env(
     out_dir: &Path,
     hot_token: Option<&str>,
     bluegreen: bool,
+    reset_state: bool,
 ) -> Vec<(String, String)> {
     let mut env = vec![
         ("IPE_WEB_PORT".to_owned(), port.to_string()),
@@ -1592,6 +1613,13 @@ fn child_env(
     // sets this; the direct-bind path (and any release build) leaves it unset.
     if bluegreen {
         env.push(("IPE_WEB_SWAP_TOAST".to_owned(), "1".to_owned()));
+    }
+    // State-reset escape hatch: force every returning session to a fresh `init`
+    // for the child's lifetime, bypassing additive-splice. Dev-only; a release
+    // binary never receives this — `IPE_WEB_RESET_STATE` is a no-op unless
+    // the emitted binary's runtime reads it via `reset_state_from_env`.
+    if reset_state {
+        env.push(("IPE_WEB_RESET_STATE".to_owned(), "1".to_owned()));
     }
     // Under appearance hot-swap, hand the running app the per-session control
     // token so its `/_ipe/hot-appearance` endpoint accepts patches from THIS
@@ -2533,7 +2561,13 @@ mod tests {
     /// explicitly so default-on hot-swap works without the user setting anything.
     #[test]
     fn child_env_activates_hot_appearance_when_token_present() {
-        let env = child_env(3000, Path::new("/tmp/ipe-out"), Some("deadbeef"), false);
+        let env = child_env(
+            3000,
+            Path::new("/tmp/ipe-out"),
+            Some("deadbeef"),
+            false,
+            false,
+        );
         assert!(
             env.iter()
                 .any(|(k, v)| k == "IPE_WATCH_HOT_TOKEN" && v == "deadbeef"),
@@ -2550,7 +2584,7 @@ mod tests {
     /// child — the emitted app stays inert.
     #[test]
     fn child_env_omits_hot_appearance_without_token() {
-        let env = child_env(3000, Path::new("/tmp/ipe-out"), None, false);
+        let env = child_env(3000, Path::new("/tmp/ipe-out"), None, false, false);
         assert!(
             !env.iter().any(|(k, _)| k == "IPE_WATCH_HOT_APPEARANCE"),
             "without a hot token the child must not be told to activate the overlay"
