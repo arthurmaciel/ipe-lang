@@ -22,6 +22,26 @@ pub fn static_columns() -> Vec<Box<dyn AspectCheck>> {
         Box::new(crate::coverage::columns_static::ClosedSchemeColumn::new()),
         Box::new(crate::coverage::columns_static::LayerAgreementColumn::new()),
         // LANE B: register your columns here
+        Box::new(crate::coverage::columns_doc::DocumentedColumn::new()),
+        Box::new(crate::coverage::columns_doc::DocExampleColumn::new()),
+    ]
+}
+
+/// The registered dynamic aspect columns of the stdlib surface.
+///
+/// These generate a minimal program per symbol and emit/build/run it (or lower
+/// it), so they are gated behind the E2E path — the heavy sweep runs only when
+/// the caller asks for it. The `documented` and `doc-example` columns stay in
+/// [`static_columns`] because a doc-string type-check is cheap enough for the
+/// fast path.
+#[must_use]
+pub fn dynamic_columns() -> Vec<Box<dyn AspectCheck>> {
+    vec![
+        Box::new(crate::coverage::columns_runtime::LowersColumn::new()),
+        Box::new(crate::coverage::columns_runtime::ComposesColumn::new()),
+        Box::new(crate::coverage::columns_runtime::BuildRunColumn::new()),
+        Box::new(crate::coverage::columns_runtime::RuntimeFnExistsColumn::new()),
+        Box::new(crate::coverage::columns_runtime::WasmColumn),
     ]
 }
 
@@ -141,4 +161,11 @@ where
 #[must_use]
 pub fn run_static() -> MatrixReport {
     run(&crate::coverage::surface::StdlibSurface, &static_columns())
+}
+
+/// Run the stdlib surface against its registered dynamic (emit/build/run)
+/// columns. Heavy — the caller gates this behind the E2E path.
+#[must_use]
+pub fn run_dynamic() -> MatrixReport {
+    run(&crate::coverage::surface::StdlibSurface, &dynamic_columns())
 }
