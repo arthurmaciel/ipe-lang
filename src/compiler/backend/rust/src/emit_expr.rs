@@ -6267,7 +6267,7 @@ fn emit_match(
 /// match emitter: the same reduction fires whether a body is rendered through the
 /// Doc path (production) or the string path (the SEAL / byte-golden oracle), so
 /// both carry the identical token sequence and the SEAL stays exact.
-pub(crate) fn emit_transition_arm(ctx: &EmitCtx, body: &Expr) -> DResult<Option<String>> {
+pub fn emit_transition_arm(ctx: &EmitCtx, body: &Expr) -> DResult<Option<String>> {
     let Some(model_param) = ctx.transition_model_param() else {
         return Ok(None);
     };
