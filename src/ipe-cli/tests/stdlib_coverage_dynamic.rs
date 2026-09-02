@@ -22,7 +22,7 @@ fn e2e_enabled() -> bool {
 
 /// Run one dynamic column over the whole surface, returning every hole as a
 /// `(dotted symbol, message)` pair.
-fn holes_of(column: Box<dyn AspectCheck>) -> Vec<(String, String)> {
+fn holes_of(column: Box<dyn AspectCheck<StdlibSymbol>>) -> Vec<(String, String)> {
     let columns = vec![column];
     let report = run(&StdlibSurface, &columns);
     report
@@ -119,7 +119,7 @@ fn runtime_fn_and_wasm_columns_report_no_holes() {
     let mut unexpected = String::new();
     for column in [
         Box::new(ipe::coverage::columns_runtime::RuntimeFnExistsColumn::new())
-            as Box<dyn AspectCheck>,
+            as Box<dyn AspectCheck<StdlibSymbol>>,
         Box::new(ipe::coverage::columns_runtime::WasmColumn),
     ] {
         let aspect = column.name();
