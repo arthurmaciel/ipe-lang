@@ -8171,11 +8171,27 @@ fn align_ret_tvars(sig: &IrType, target: Symbol, site: &IrType, out: &mut Vec<Sy
                 out.push(*site_tv);
             }
         }
+        // The boxed effect / handle / view carriers each wrap a payload tvar
+        // (`Task a`, `Cmd msg`, `Sub msg`, `Decoder a`, `WebRoute page`, and a
+        // `Ui`'s `msg`); a combinator forwarding one in tail position must pass
+        // the callee's return-tvar bounds down to the payload the caller returns.
         (IrType::List(a), IrType::List(b))
         | (IrType::Maybe(a), IrType::Maybe(b))
-        | (IrType::Set(a), IrType::Set(b)) => align_ret_tvars(a, target, b, out),
+        | (IrType::Set(a), IrType::Set(b))
+        | (IrType::Task(a), IrType::Task(b))
+        | (IrType::Cmd(a), IrType::Cmd(b))
+        | (IrType::Sub(a), IrType::Sub(b))
+        | (IrType::Decoder(a), IrType::Decoder(b))
+        | (IrType::WebRoute(a), IrType::WebRoute(b))
+        | (IrType::Ui { msg: a, .. }, IrType::Ui { msg: b, .. }) => {
+            align_ret_tvars(a, target, b, out);
+        }
         (IrType::Result(a1, a2), IrType::Result(b1, b2))
-        | (IrType::Dict(a1, a2), IrType::Dict(b1, b2)) => {
+        | (IrType::Dict(a1, a2), IrType::Dict(b1, b2))
+        | (
+            IrType::CustomElement { down: a1, up: a2 },
+            IrType::CustomElement { down: b1, up: b2 },
+        ) => {
             align_ret_tvars(a1, target, b1, out);
             align_ret_tvars(a2, target, b2, out);
         }
@@ -31686,6 +31702,93 @@ mod tests {
             &IrType::Decoder(Box::new(IrType::Int)),
             a
         ));
+    }
+
+    /// Result-position bound propagation must descend the boxed effect / handle
+    /// / view carriers (`Task` / `Cmd` / `Sub` / `Decoder` / `WebRoute` / `Ui` /
+    /// `CustomElement`) exactly as it does `List` / `Fun`: a callee whose return
+    /// tvar sits under one of them aligns to the caller's mirrored return tvar,
+    /// so the caller inherits the callee's return-tvar bound. A miss here is an
+    /// under-bounded caller — an exit-0-then-cargo-fail E0277 for a combinator
+    /// boxing a `Sync` closure over a payload tvar under one of these carriers.
+    #[test]
+    fn result_position_align_descends_boxed_carriers() {
+        use ipe_ir::{IrType, UiCtor};
+
+        let mut interner = Interner::new();
+        // `sig_tv` names the callee's bounded return tvar; `site_tv` is the
+        // caller's own tvar occupying the mirrored slot — the one that must
+        // inherit the bound.
+        let sig_tv = interner.intern("a").unwrap();
+        let site_tv = interner.intern("b").unwrap();
+
+        // Every single-payload carrier: the caller's `site_tv` sits at the same
+        // slot the callee's `sig_tv` occupies, so alignment reports it.
+        let single = |ctor: fn(Box<IrType>) -> IrType| {
+            (
+                ctor(Box::new(IrType::Generic(sig_tv))),
+                ctor(Box::new(IrType::Generic(site_tv))),
+            )
+        };
+        let carriers: Vec<(IrType, IrType)> = vec![
+            single(IrType::Task),
+            single(IrType::Cmd),
+            single(IrType::Sub),
+            single(IrType::Decoder),
+            single(IrType::WebRoute),
+            (
+                IrType::Ui {
+                    ctor: UiCtor::Html,
+                    msg: Box::new(IrType::Generic(sig_tv)),
+                },
+                IrType::Ui {
+                    ctor: UiCtor::Html,
+                    msg: Box::new(IrType::Generic(site_tv)),
+                },
+            ),
+        ];
+        for (sig, site) in &carriers {
+            assert_eq!(
+                super::aligned_caller_tvars(sig, sig_tv, site),
+                vec![site_tv],
+                "alignment must descend the carrier {sig:?} to the mirrored caller tvar"
+            );
+        }
+
+        // `CustomElement down up` carries two payloads; the target under either
+        // slot aligns to the caller tvar at that same slot.
+        let ce_down = IrType::CustomElement {
+            down: Box::new(IrType::Generic(sig_tv)),
+            up: Box::new(IrType::Int),
+        };
+        let ce_down_site = IrType::CustomElement {
+            down: Box::new(IrType::Generic(site_tv)),
+            up: Box::new(IrType::Int),
+        };
+        assert_eq!(
+            super::aligned_caller_tvars(&ce_down, sig_tv, &ce_down_site),
+            vec![site_tv]
+        );
+
+        // Not over-bounding: a carrier whose payload is a DIFFERENT tvar, or a
+        // shape the two sides do not share, aligns nothing.
+        let other = interner.intern("c").unwrap();
+        assert!(
+            super::aligned_caller_tvars(
+                &IrType::Task(Box::new(IrType::Generic(other))),
+                sig_tv,
+                &IrType::Task(Box::new(IrType::Generic(site_tv))),
+            )
+            .is_empty()
+        );
+        assert!(
+            super::aligned_caller_tvars(
+                &IrType::Task(Box::new(IrType::Generic(sig_tv))),
+                sig_tv,
+                &IrType::List(Box::new(IrType::Generic(site_tv))),
+            )
+            .is_empty()
+        );
     }
 
     /// The tail-threaded-param walk finds a parameter the body ultimately

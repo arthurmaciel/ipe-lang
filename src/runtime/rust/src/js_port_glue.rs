@@ -81,7 +81,7 @@ const PORT_GLUE_JS: &str = r#"// Ipe.Js browser port surface. Values cross as JS
   // position resolves to a typed `Coords` frame; a host denial, position
   // unavailability, or timeout traps to the matching typed error frame — the
   // three inbound error variants the module enumerates exhaustively.
-  var geoWatchId = null;
+  var geoWatchIds = [];
   function geoOptions(opts) {
     // The Ipê `Options` record crosses as `{ enableHighAccuracy, timeout,
     // maximumAge }` (milliseconds). A non-positive `timeout` means "no deadline"
@@ -117,11 +117,13 @@ const PORT_GLUE_JS: &str = r#"// Ipe.Js browser port surface. Values cross as JS
     var isWatch = value && typeof value === "object" && value.Watch !== undefined;
     if (!isCurrent && !isWatch && !isClear) return false;
     if (isClear) {
-      if (geoWatchId !== null && navigator && navigator.geolocation &&
+      if (geoWatchIds.length > 0 && navigator && navigator.geolocation &&
           typeof navigator.geolocation.clearWatch === "function") {
-        navigator.geolocation.clearWatch(geoWatchId);
+        for (var i = 0; i < geoWatchIds.length; i++) {
+          navigator.geolocation.clearWatch(geoWatchIds[i]);
+        }
       }
-      geoWatchId = null;
+      geoWatchIds = [];
       return true;
     }
     if (!navigator || !navigator.geolocation) {
@@ -140,7 +142,7 @@ const PORT_GLUE_JS: &str = r#"// Ipe.Js browser port surface. Values cross as JS
         reply({ tag: "geolocation", ok: false, error: "unavailable" });
         return true;
       }
-      geoWatchId = navigator.geolocation.watchPosition(geoOnPosition, geoOnError, opts);
+      geoWatchIds.push(navigator.geolocation.watchPosition(geoOnPosition, geoOnError, opts));
     }
     return true;
   }
@@ -269,5 +271,19 @@ mod tests {
         assert!(js.contains("\"unavailable\""));
         assert!(js.contains("\"timeout\""));
         assert!(!js.contains("eval("));
+    }
+
+    #[test]
+    fn geolocation_watch_ids_tracked_as_set_so_double_watch_is_fully_clearable() {
+        let js = port_glue_js();
+        // Ids stored in an array, not a single scalar — a second Watch pushes
+        // rather than overwrites, so ClearWatch drains every id in the set.
+        assert!(js.contains("geoWatchIds"));
+        assert!(js.contains("geoWatchIds.push("));
+        assert!(js.contains("geoWatchIds.length"));
+        assert!(js.contains("geoWatchIds = []"));
+        // No single-id scalar: the old geoWatchId variable must not exist.
+        assert!(!js.contains("geoWatchId ="));
+        assert!(!js.contains("geoWatchId !=="));
     }
 }
