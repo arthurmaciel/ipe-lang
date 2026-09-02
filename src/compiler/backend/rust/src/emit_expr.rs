@@ -3835,59 +3835,67 @@ fn emit_ui_template(
     else {
         return Ok(None);
     };
-    // A subtree carrying BOTH value/children holes AND model-dependent handler
-    // holes has no single runtime front door (the hole materializer takes no
-    // handler map; the handler materializer takes no fills), so it refuses and
-    // stays compiled — conservative, never a partial materialize.
-    if !partition.holes.is_empty() && !partition.handlers.is_empty() {
-        return Ok(None);
-    }
     let Some(slot) = ctx.hoist_style_literal(&partition.template.to_json()) else {
         return Ok(None);
     };
-    // Model-dependent handlers, no value/children holes: emit the handler-resolving
-    // read. Each captured `Msg` is emitted through the main expression emitter and
-    // handed to `UiHandlerMap::from_msgs` in hole-id order; a `HandlerHole` in the
-    // baked template resolves against that per-render map (fail-closed on a miss).
-    // The static skeleton (with handler-id holes) rides the hoisted slot and
-    // hot-swaps on a structural edit, while the `Msg` logic stays compiled.
-    if !partition.handlers.is_empty() {
-        let mut handler_msgs: Vec<String> = Vec::with_capacity(partition.handlers.len());
+    let has_holes = !partition.holes.is_empty();
+    let has_handlers = !partition.handlers.is_empty();
+    // Compile handler Msg expressions (shared by the handler-only and combined paths).
+    let handler_msgs: Vec<String> = if has_handlers {
+        let mut v = Vec::with_capacity(partition.handlers.len());
         for msg in &partition.handlers {
-            handler_msgs.push(emit_expr_at(ctx, msg, indent, child, generics)?);
+            v.push(emit_expr_at(ctx, msg, indent, child, generics)?);
         }
-        return Ok(Some(format!(
+        v
+    } else {
+        Vec::new()
+    };
+    // Compile value/children hole fills (shared by the holes-only and combined paths).
+    let (element_fills, children_fills): (Vec<String>, Vec<String>) = if has_holes {
+        let mut elem: Vec<String> = Vec::new();
+        let mut kids: Vec<String> = Vec::new();
+        for hole in &partition.holes {
+            let code = emit_expr_at(ctx, &hole.expr, indent, child, generics)?;
+            match hole.kind {
+                crate::emit_ui_template::HoleKind::Element => elem.push(code),
+                crate::emit_ui_template::HoleKind::Children => kids.push(code),
+            }
+        }
+        (elem, kids)
+    } else {
+        (Vec::new(), Vec::new())
+    };
+    // Select the runtime front door that matches the hole kinds present.
+    Ok(Some(match (has_holes, has_handlers) {
+        // Both value/children holes AND handler holes in the same subtree: the
+        // combined materializer resolves all hole kinds in a single pass.
+        (true, true) => format!(
+            "ipe_runtime::ui::template::materialize_ui_template_str_with_holes_and_handlers(\
+             __ipe_lit.get({slot}), vec![{}], vec![{}], \
+             &ipe_runtime::ui::template::UiHandlerMap::from_msgs(vec![{}]))",
+            element_fills.join(", "),
+            children_fills.join(", "),
+            handler_msgs.join(", "),
+        ),
+        // Handler holes only, no value/children holes.
+        (false, true) => format!(
             "ipe_runtime::ui::template::materialize_ui_template_str_with_handlers(\
              __ipe_lit.get({slot}), \
              &ipe_runtime::ui::template::UiHandlerMap::from_msgs(vec![{}]))",
             handler_msgs.join(", "),
-        )));
-    }
-    // No holes and no handlers: emit the shipped fully-static read — byte-identical
-    // to before, so existing goldens/SEALs are unperturbed for static subtrees.
-    if partition.holes.is_empty() {
-        return Ok(Some(format!(
-            "ipe_runtime::ui::template::materialize_ui_template_str(__ipe_lit.get({slot}))"
-        )));
-    }
-    // Holes present: compile each fill in the hole's element/children position and
-    // pass the two ordered fill vecs to the hole-aware materializer. The static
-    // skeleton rides the hoisted slot (hot-swappable); the fills stay compiled.
-    let mut element_fills: Vec<String> = Vec::new();
-    let mut children_fills: Vec<String> = Vec::new();
-    for hole in &partition.holes {
-        let code = emit_expr_at(ctx, &hole.expr, indent, child, generics)?;
-        match hole.kind {
-            crate::emit_ui_template::HoleKind::Element => element_fills.push(code),
-            crate::emit_ui_template::HoleKind::Children => children_fills.push(code),
+        ),
+        // Value/children holes only, no handler holes.
+        (true, false) => format!(
+            "ipe_runtime::ui::template::materialize_ui_template_str_with_holes(\
+             __ipe_lit.get({slot}), vec![{}], vec![{}])",
+            element_fills.join(", "),
+            children_fills.join(", "),
+        ),
+        // Fully static: the inert slot read, byte-identical to before.
+        (false, false) => {
+            format!("ipe_runtime::ui::template::materialize_ui_template_str(__ipe_lit.get({slot}))")
         }
-    }
-    Ok(Some(format!(
-        "ipe_runtime::ui::template::materialize_ui_template_str_with_holes(\
-         __ipe_lit.get({slot}), vec![{}], vec![{}])",
-        element_fills.join(", "),
-        children_fills.join(", "),
-    )))
+    }))
 }
 
 /// Returns `None` for any kernel that is not a `Ui` / `Web` / `Terminal` /
