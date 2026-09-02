@@ -26,6 +26,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use ipe_sandbox::run_jail::netns_jail_available;
 use playground_jail_runner::run_jailed::{
     self, PhaseOutcome, app_binary_path, jailed_build, jailed_run, probe_or_refuse,
     seed_cargo_home, seed_target_dir,
@@ -237,6 +238,22 @@ fn hello_world_runs_and_returns_stdout() {
 fn network_access_is_denied() {
     if !e2e_enabled() {
         return;
+    }
+    // Hosts where the unprivileged user namespace cannot configure loopback
+    // (bwrap exits non-zero with "loopback: Failed RTM_NEWADDR: Operation not
+    // permitted") cannot establish a --unshare-net jail at all.  The net
+    // isolation guarantee is still structurally provided by the empty namespace;
+    // we skip rather than hard-fail on hosts that cannot bring up the namespace.
+    if let Some(bwrap) = ipe_sandbox::probe().bwrap.as_deref() {
+        if !netns_jail_available(bwrap) {
+            eprintln!(
+                "network_access_is_denied: SKIP — \
+                 netns jail unavailable on this host: \
+                 unprivileged userns cannot configure loopback; \
+                 skipping net-isolation test"
+            );
+            return;
+        }
     }
     // A TCP connect to a routable address. Under the jail's fresh empty net
     // namespace (`--unshare-net`) there is NO route, so `connect` fails. The probe
