@@ -1,0 +1,20 @@
+module Main exposing (main)
+
+import Ipe.Db.Store as Store
+import Ipe.List as List
+import Ipe.String as String
+import Ipe.Io as Io
+
+
+type alias User =
+    { name : String }
+
+
+conds : List (Store.Cond User)
+conds =
+    List.map (\n -> Store.eq .name n) [ "a", "b" ]
+
+
+main : Task Error ()
+main =
+    Io.println (String.fromInt (List.length conds))
