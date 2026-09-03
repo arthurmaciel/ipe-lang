@@ -9,13 +9,14 @@
 //! EXPORTED binding, matches a curated (name → newtype) pair AND the annotated
 //! type is the bare primitive that newtype wraps.
 //!
-//! The rule is advisory — it carries no `--fix`. Threading a fallible
-//! constructor (`Port.fromInt : Int -> Result Error Port`) into an exported
-//! signature moves the parse to every caller, which is a cross-module rewrite,
-//! not a local semantics-preserving edit. See the capability-gap issue filed
-//! alongside this rule.
+//! When the delta is mechanically applicable, the finding carries a [`SigFix`]
+//! with a `WrapPrimitive` delta — `ipe lint --fix` threads the parse constructor
+//! at every call site. Call sites the engine cannot safely rewrite are reported
+//! as manual-review spans.
 
-use crate::finding::Finding;
+use ipe_canon::sig_delta::ShapeDelta;
+
+use crate::finding::{Finding, SigFix};
 use crate::rules::{self, Ctx};
 
 /// One curated correspondence: a parameter-name substring, the bare primitive it
@@ -75,7 +76,20 @@ pub fn check(ctx: &Ctx) -> Vec<Finding> {
             for domain in DOMAINS {
                 if bare == domain.bare && lower.contains(domain.name_hint) {
                     let name = ctx.text(value.value.name.value);
-                    findings.push(ctx.advisory(
+                    // The parse constructor name is the unqualified part after
+                    // the dot, e.g. `Port.fromInt` → `Port`. This is the
+                    // constructor applied at each call site to wrap the arg.
+                    let ctor = domain.parse.split('.').next_back().unwrap_or(domain.parse);
+                    let sig_fix = SigFix {
+                        symbol_module: ctx.module.to_vec(),
+                        symbol_name: name.to_owned(),
+                        param_index: idx,
+                        delta: ShapeDelta::WrapPrimitive {
+                            arg_index: idx,
+                            ctor_name: ctor.to_owned(),
+                        },
+                    };
+                    findings.push(ctx.with_sig_fix(
                         "prim-param",
                         ann.span,
                         format!(
@@ -89,11 +103,10 @@ pub fn check(ctx: &Ctx) -> Vec<Finding> {
                                  the edge with `{}`",
                                 domain.newtype, domain.parse
                             ),
-                            "why a lint, not an error: the bare primitive is sound — this is a \
-                             safety/idiom suggestion you may accept"
-                                .to_owned(),
+                            format!("`ipe lint --fix` wraps call-site arguments with `{ctor}`"),
                             "suppress: `-- ipe-lint: allow prim-param`".to_owned(),
                         ],
+                        sig_fix,
                     ));
                     break;
                 }

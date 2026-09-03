@@ -7,6 +7,12 @@
 //! and only when a semantics-preserving rewrite exists — a machine-applicable
 //! [`Fix`]. Findings sort by `(module, span, rule)` so the report and every
 //! golden are deterministic regardless of the order rules ran.
+//!
+//! Signature-changing rules may also carry a [`SigFix`] instead of (or in
+//! addition to) a local [`Fix`]. A [`SigFix`] names the defining symbol and
+//! the [`ipe_canon::sig_delta::ShapeDelta`] to apply at every call site;
+//! `apply_sig_fixes` in the crate root resolves those call sites via
+//! canonicalisation and applies the delta through `apply_sig_delta`.
 
 use std::cmp::Ordering;
 
@@ -57,6 +63,27 @@ pub struct Fix {
     pub replacement: String,
 }
 
+/// A cross-module, call-site rewrite that `ipe lint --fix` applies via
+/// [`ipe_canon::sig_delta::apply_sig_delta`].
+///
+/// When a rule detects that a symbol's signature should change, it emits a
+/// `SigFix` naming the defining symbol and the mechanical transform to apply
+/// at every call site. `apply_sig_fixes` in the crate root resolves the call
+/// sites through the canonical AST and applies the delta, producing a
+/// per-module edit set. Call sites where the delta cannot be applied
+/// mechanically are reported as manual-review spans — fail-closed.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct SigFix {
+    /// The dotted module path of the module that DEFINES the symbol.
+    pub symbol_module: Vec<String>,
+    /// The unqualified name of the symbol whose callers need rewriting.
+    pub symbol_name: String,
+    /// The zero-based parameter position this delta targets (used in messages).
+    pub param_index: usize,
+    /// The mechanical argument-shape transform to apply at each call site.
+    pub delta: ipe_canon::sig_delta::ShapeDelta,
+}
+
 /// One reported lint observation over a valid program.
 ///
 /// `rule` is the stable, hyphenated rule name (`prim-param`) used in output, in
@@ -65,7 +92,8 @@ pub struct Fix {
 /// from a multi-module project sort and render deterministically. `span` points
 /// at the offending source; `message` is the one-line prose; `help` is zero or
 /// more teaching follow-up lines (why, the idiom, how to suppress). `fix` is
-/// present only for a semantics-preserving rewrite.
+/// present only for a semantics-preserving local rewrite; `sig_fix` is present
+/// for signature-changing rules that rewrite callers cross-module.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Finding {
     /// The stable rule name (e.g. `prim-param`).
@@ -78,8 +106,12 @@ pub struct Finding {
     pub message: String,
     /// Teaching follow-up lines, rendered under the snippet.
     pub help: Vec<String>,
-    /// A semantics-preserving rewrite, when one exists; otherwise `None`.
+    /// A semantics-preserving local (single-module) rewrite, when one exists.
     pub fix: Option<Fix>,
+    /// A cross-module call-site rewrite via the change-signature engine.
+    /// Present for signature-changing rules when the delta is mechanically
+    /// applicable. `None` means the finding is advisory only.
+    pub sig_fix: Option<SigFix>,
 }
 
 impl Finding {

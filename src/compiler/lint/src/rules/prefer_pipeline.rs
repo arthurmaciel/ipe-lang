@@ -132,6 +132,7 @@ fn as_pipeline_candidate(ctx: &Ctx, expr: &Expr) -> Option<Finding> {
             span: expr.span,
             replacement,
         }),
+        sig_fix: None,
     })
 }
 

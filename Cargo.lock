@@ -2281,6 +2281,7 @@ dependencies = [
 name = "ipe_lint"
 version = "0.1.77"
 dependencies = [
+ "ipe_canon",
  "ipe_diagnostics",
  "ipe_intern",
  "ipe_parse",
