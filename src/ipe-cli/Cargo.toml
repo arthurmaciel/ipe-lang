@@ -12,6 +12,17 @@ path = "src/lib.rs"
 name = "ipe"
 path = "src/main.rs"
 
+[features]
+# Publisher-identity provenance over the index-pinned `sha256` (keyless
+# Sigstore: Fulcio-issued ephemeral cert + Rekor inclusion proof). The typed
+# bundle model, the deny-by-default `TrustPolicy`, and the verification SEAM
+# (`SignatureVerifier`) are always compiled and tested against a mock verifier,
+# so the trust-decision logic is exercised by the default gate. Only the
+# concrete `sigstore`-crate verifier — which pulls a heavy async/TLS transitive
+# graph (tokio, rustls, the TUF client) — sits behind this feature, off by
+# default so an ordinary `ipe` build stays lean.
+signing = ["dep:sigstore"]
+
 [dependencies]
 ipe_stdlib = { path = "../stdlib" }
 ipe_docs = { path = "../ipe-docs" }
@@ -87,6 +98,16 @@ include_dir = "0.7"
 # construct. `panic-scan` declares its own `[workspace]`, so this path dependency
 # is built as a standalone unit rather than a workspace member.
 panic-scan = { path = "../../tools/panic-scan" }
+# Keyless publisher-identity provenance (`crate::signing`), behind the optional
+# `signing` feature. Offline bundle verification with an (issuer, SAN) identity
+# allowlist: `bundle::verify::blocking::Verifier` + `ManualTrustRoot` +
+# `policy::Identity`. The `sigstore-trust-root` feature (the TUF client that
+# fetches the public-good root at runtime) is DELIBERATELY OFF — the offline
+# path builds the trust root from vendored root material via `ManualTrustRoot`,
+# so verification makes no network call and the heavy `tough`/`aws-lc-rs`/TUF
+# graph is never linked. `rustls-tls` matches the CLI's existing TLS backend.
+# Optional so the default build never links the async graph this crate carries.
+sigstore = { version = "0.14", default-features = false, features = ["verify", "rustls-tls"], optional = true }
 
 # `ipe health`'s free-disk check reads the filesystem's available blocks via
 # `statvfs(2)`. rustix exposes the syscall directly — no libc binding in our own
