@@ -1117,3 +1117,89 @@ fn a_vibration_app_without_the_grant_is_rejected() -> TestResult {
     let _ = std::fs::remove_dir_all(&dir);
     Ok(())
 }
+
+// ── Ipe.Browser.Share — a first-party web-API module ────────────────────────
+
+/// A Web-shape app importing `Ipe.Browser.Share` — the import-derived signal that
+/// discloses the SPECIFIC `js-port:share` axis on top of the `:raw` floor.
+const SHARE_APP: &str = r#"module Main exposing (main)
+
+import Ipe.Tea.Web as Web
+import Ipe.Tea.Web.Cmd as Cmd
+import Ipe.Tea.Web.Sub as Sub
+import Ipe.Ui as Ui
+import Ipe.Error as Error exposing (Error)
+import Ipe.Browser.Share as Share
+import Ipe.Task as Task
+
+type alias Model = { n : Int }
+
+type Msg = Send | Sent (Result Error ()) | Outcome (Result Error ())
+
+init : WebReq -> ( Model, Cmd.Cmd Msg )
+init _r =
+    ( { n = 0 }, Cmd.none )
+
+update : Msg -> Model -> ( Model, Cmd.Cmd Msg )
+update msg model =
+    case msg of
+        Send ->
+            ( model, Task.attempt Sent (Share.share { title = "t", text = "x", url = "https://e.com" }) )
+
+        Sent _r ->
+            ( model, Cmd.none )
+
+        Outcome _r ->
+            ( model, Cmd.none )
+
+view : Model -> Element Msg
+view _model =
+    Ui.text "ok"
+
+subscriptions : Model -> Sub.Sub Msg
+subscriptions _model =
+    Share.outcomes Outcome
+
+main =
+    Web.app
+        { init = init, update = update, view = view, subscriptions = subscriptions
+        , routes = [], notFound = Send
+        }
+"#;
+
+/// Importing `Ipe.Browser.Share` discloses the specific `js-port:share` axis.
+#[test]
+fn importing_browser_share_discloses_js_port_share() -> TestResult {
+    let dir = write_single("share", SHARE_APP)?;
+    let entry = dir.join("Main.ipe");
+    let declared = BTreeSet::from([
+        Capability::JsPort(WebCapability::Share),
+        Capability::JsPort(WebCapability::Raw),
+    ]);
+    let r = verify_capabilities(&entry, &declared);
+    assert!(
+        r.is_ok(),
+        "importing Ipe.Browser.Share must disclose js-port:share (+ the :raw floor): {r:?}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+    Ok(())
+}
+
+/// Fail-closed: a share app that omits the grant is rejected as under-declared.
+#[test]
+fn a_share_app_without_the_grant_is_rejected() -> TestResult {
+    let dir = write_single("sharenogrant", SHARE_APP)?;
+    let entry = dir.join("Main.ipe");
+    let declared = BTreeSet::from([Capability::JsPort(WebCapability::Raw)]);
+    let r = verify_capabilities(&entry, &declared);
+    assert!(
+        matches!(
+            &r,
+            Err(ipe::CliError::CapabilityMismatch { missing, .. })
+                if missing.contains(&"js-port:share")
+        ),
+        "an ungranted share app must be rejected naming js-port:share, got: {r:?}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+    Ok(())
+}

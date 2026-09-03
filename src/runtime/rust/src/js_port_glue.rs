@@ -276,12 +276,42 @@ const PORT_GLUE_JS: &str = r#"// Ipe.Ffi.Js browser port surface. Values cross a
     }
     return true;
   }
+  // Ipe.Browser.Share: `Share { title, text, url }` -> navigator.share. A
+  // completion replies `shared`; a user dismissal (AbortError) traps to
+  // `cancelled`, an absent API to `unavailable` — never a throw. Empty payload
+  // fields are omitted so the platform sheet only shows populated fields.
+  function shareSink(value, corId) {
+    if (!(value && typeof value === "object" && value.Share !== undefined)) return false;
+    if (!navigator || typeof navigator.share !== "function") {
+      reply({ tag: "share", ok: false, error: "unavailable" }, corId);
+      return true;
+    }
+    var p = (value.Share && typeof value.Share === "object") ? value.Share : {};
+    var data = {};
+    if (typeof p.title === "string" && p.title !== "") data.title = p.title;
+    if (typeof p.text === "string" && p.text !== "") data.text = p.text;
+    if (typeof p.url === "string" && p.url !== "") data.url = p.url;
+    try {
+      navigator.share(data).then(
+        function () { reply({ tag: "share", ok: true }, corId); },
+        function (err) {
+          var name = err && err.name ? String(err.name) : "";
+          var kind = name === "AbortError" ? "cancelled" : "unavailable";
+          reply({ tag: "share", ok: false, error: kind }, corId);
+        }
+      );
+    } catch (_e) {
+      reply({ tag: "share", ok: false, error: "unavailable" }, corId);
+    }
+    return true;
+  }
   function builtinSink(value, corId) {
     if (clipboardSink(value, corId)) return true;
     if (geolocationSink(value, corId)) return true;
     if (notificationSink(value, corId)) return true;
     if (storageSink(value, corId)) return true;
     if (vibrationSink(value, corId)) return true;
+    if (shareSink(value, corId)) return true;
     return false;
   }
   function deliver(raw) {
@@ -464,6 +494,21 @@ mod tests {
         // …acknowledges a supported actuator…
         assert!(js.contains("tag: \"vibration\""));
         // …and traps an absent actuator to a typed frame, never a throw.
+        assert!(js.contains("\"unavailable\""));
+        assert!(!js.contains("eval("));
+    }
+
+    #[test]
+    fn share_sink_reaches_the_web_api_and_traps_cancel_and_absence_to_typed_results() {
+        let js = port_glue_js();
+        // The first-party Ipe.Browser.Share sink reaches navigator.share…
+        assert!(js.contains("navigator.share"));
+        assert!(js.contains("value.Share"));
+        // …acknowledges a completion…
+        assert!(js.contains("tag: \"share\""));
+        // …and enumerates the cancel + unavailable outcomes, never a throw.
+        assert!(js.contains("AbortError"));
+        assert!(js.contains("\"cancelled\""));
         assert!(js.contains("\"unavailable\""));
         assert!(!js.contains("eval("));
     }

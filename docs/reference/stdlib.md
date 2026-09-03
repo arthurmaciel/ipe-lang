@@ -15,6 +15,8 @@ Each module listed below links to a detail page with the full documentation and 
 - [Browser.Geolocation.Internals](#browsergeolocationinternals)
 - [Browser.Notification](#browsernotification)
 - [Browser.Notification.Internals](#browsernotificationinternals)
+- [Browser.Share](#browsershare)
+- [Browser.Share.Internals](#browsershareinternals)
 - [Browser.Storage](#browserstorage)
 - [Browser.Storage.Internals](#browserstorageinternals)
 - [Browser.Vibration](#browservibration)
@@ -252,6 +254,34 @@ Ipe.Browser.Notification.Internals — the low-level notification port surface:
 | `requestOne` | `requestOne cmd` — correlated one-shot `JsCmd` → `Task Error JsMsg`. |
 | `subscribe` | `subscribe toMsg` — the inbound subscription over the fail-closed seal |
 | `inbound` | The total, fail-closed decoder for the inbound `JsMsg`. It reads `ok` first: a |
+
+## Browser.Share
+
+[Full reference](stdlib/Browser.Share.md)
+
+Ipe.Browser.Share — invoke the platform share sheet over `Ipe.Ffi.Js` ports.
+
+| Export | Summary |
+|--------|----------|
+| `share` | `share payload` — invoke the platform share sheet with the given payload, as a |
+| `outcomes` | `outcomes toMsg` — the inbound subscription, wired in `subscriptions`. |
+
+## Browser.Share.Internals
+
+[Full reference](stdlib/Browser.Share.Internals.md)
+
+Ipe.Browser.Share.Internals — the low-level Web Share port surface: the closed
+
+| Export | Summary |
+|--------|----------|
+| `Payload` | The Web Share payload, mirroring the `ShareData` subset carried across the |
+| `empty` | An empty payload (all fields blank) — a base to override the fields a caller |
+| `JsCmd` | The ONE closed OUTBOUND port type: the whole outbound surface as a single |
+| `JsMsg` | The NARROW closed INBOUND port type — deliberately NOT the app's internal |
+| `request` | `request cmd` — hand a closed outbound `JsCmd` to the raw port transport. |
+| `requestOne` | `requestOne cmd` — correlated one-shot `JsCmd` → `Task Error JsMsg`. |
+| `subscribe` | `subscribe toMsg` — the inbound subscription over the fail-closed seal |
+| `inbound` | The total, fail-closed decoder for the inbound `JsMsg`. It reads the `ok` |
 
 ## Browser.Storage
 

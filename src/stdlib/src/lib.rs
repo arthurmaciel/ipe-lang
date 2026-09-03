@@ -735,6 +735,24 @@ const IPE_BROWSER_VIBRATION: &str = include_str!("../Ipe/Browser/Vibration.ipe")
 const IPE_BROWSER_VIBRATION_INTERNALS: &str =
     include_str!("../Ipe/Browser/Vibration/Internals.ipe");
 
+/// `Ipe.Browser.Share` — invoke the platform share sheet over `Ipe.Ffi.Js` ports
+/// (compiled source), spanning BOTH port directions: an outbound `JsCmd` request
+/// (`share`) and an inbound `JsMsg` reply folded exhaustively into
+/// `Result Error ()`. Importing it discloses `js-port:share` (import-derived, keyed
+/// on the canonical `Ipe.Browser.Share` path prefix via
+/// `WebCapability::for_browser_module`). The served wasm-sink JS handler reaches
+/// `navigator.share`, trapping a user cancellation (`AbortError`) to `Cancelled`
+/// and an absent API to `Unavailable`. Registered in [`COMPILED_STD_MODULES`] (NOT
+/// `MODULES`); NOT in `STDLIB_MODULE_QUALIFIERS`.
+const IPE_BROWSER_SHARE: &str = include_str!("../Ipe/Browser/Share.ipe");
+
+/// `Ipe.Browser.Share.Internals` — the low-level Web Share port surface: the closed
+/// outbound/inbound ADTs, the full `Payload` surface, and the raw `Ipe.Ffi.Js`
+/// wiring the high-level layer wraps. Importing it discloses the same
+/// `js-port:share` axis (the prefix key covers the submodule). Registered in
+/// [`COMPILED_STD_MODULES`] (NOT `MODULES`); NOT in `STDLIB_MODULE_QUALIFIERS`.
+const IPE_BROWSER_SHARE_INTERNALS: &str = include_str!("../Ipe/Browser/Share/Internals.ipe");
+
 /// `Ipe.Env` — build-time-embedded public config (compiled source).
 ///
 /// Defines `public : String -> Maybe String`, routed through the
@@ -1221,6 +1239,14 @@ pub const COMPILED_STD_MODULES: &[CompiledStdModule] = &[
     CompiledStdModule {
         dotted: "Ipe.Browser.Vibration.Internals",
         source: IPE_BROWSER_VIBRATION_INTERNALS,
+    },
+    CompiledStdModule {
+        dotted: "Ipe.Browser.Share",
+        source: IPE_BROWSER_SHARE,
+    },
+    CompiledStdModule {
+        dotted: "Ipe.Browser.Share.Internals",
+        source: IPE_BROWSER_SHARE_INTERNALS,
     },
     CompiledStdModule {
         dotted: "Ipe.Env",
