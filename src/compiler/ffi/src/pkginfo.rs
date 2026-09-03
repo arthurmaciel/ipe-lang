@@ -110,6 +110,16 @@ struct WireFunction {
     call_path: String,
 }
 
+/// One inspected public constant: its crate-relative path (`f64::consts::PI`)
+/// and its Rust type (`f64`). The consumer validates both at decode.
+#[derive(Debug, Deserialize)]
+struct WireConstant {
+    #[serde(default)]
+    path: String,
+    #[serde(default, rename = "type")]
+    ty: String,
+}
+
 #[derive(Debug, Deserialize)]
 struct WirePkgInfo {
     pkg: String,
@@ -118,6 +128,8 @@ struct WirePkgInfo {
     version: String,
     #[serde(default)]
     functions: Vec<WireFunction>,
+    #[serde(default)]
+    constants: Vec<WireConstant>,
     #[serde(default)]
     modules: Vec<String>,
     #[serde(default)]
@@ -733,6 +745,31 @@ impl FeatureName {
     }
 }
 
+/// One inspected public constant, validated at the decode boundary.
+///
+/// A crate-relative Rust path whose every segment is a legal identifier, and
+/// the constant's verbatim Rust type. The `Rust.const` surface reads this to
+/// confirm an author's asserted scalar type against the real constant.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConstInfo {
+    path: String,
+    ty: String,
+}
+
+impl ConstInfo {
+    /// The constant's crate-relative path (`f64::consts::PI`).
+    #[must_use]
+    pub fn path(&self) -> &str {
+        &self.path
+    }
+
+    /// The constant's Rust type, verbatim from the inspection (`f64`).
+    #[must_use]
+    pub fn rust_type(&self) -> &str {
+        &self.ty
+    }
+}
+
 /// A fully-validated package inspection result.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PkgInfo {
@@ -740,6 +777,7 @@ pub struct PkgInfo {
     name: PackageName,
     version: CrateVersion,
     fns: Vec<FnInfo>,
+    consts: Vec<ConstInfo>,
     modules: Vec<String>,
     errors: Vec<String>,
     notes: Vec<String>,
@@ -821,6 +859,12 @@ impl PkgInfo {
     #[must_use]
     pub fn fns(&self) -> &[FnInfo] {
         &self.fns
+    }
+
+    /// The validated inspected public constants (the `Rust.const` cross-check).
+    #[must_use]
+    pub fn consts(&self) -> &[ConstInfo] {
+        &self.consts
     }
 
     /// Public module paths to glob-import in generated wrappers.
@@ -1478,11 +1522,25 @@ impl TryFrom<WirePkgInfo> for PkgInfo {
         // The representation axis: classification failure of one entry is an
         // opaque fallback recorded in the catalog, never a package failure.
         let foreign_types = crate::transparency::ForeignTypeCatalog::classify(&w.types);
+        // Inspected constants: keep only a well-shaped crate-relative path
+        // (`seg::…::SEG`, every segment a legal Rust ident) with a non-empty
+        // recorded type. A malformed entry is dropped — absence only disables a
+        // `.const` cross-check (fail-closed), never admits an unverified read.
+        let consts = w
+            .constants
+            .into_iter()
+            .filter(|c| !c.path.is_empty() && !c.ty.is_empty() && is_rust_path_shaped(&c.path))
+            .map(|c| ConstInfo {
+                path: c.path,
+                ty: c.ty,
+            })
+            .collect();
         Ok(Self {
             pkg_path,
             name,
             version,
             fns,
+            consts,
             modules: w.modules,
             errors: w.errors,
             notes: w.notes,

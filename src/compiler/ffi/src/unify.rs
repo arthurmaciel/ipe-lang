@@ -328,6 +328,7 @@ mod tests {
                 .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
                 .collect(),
             inspected_free_fns: std::collections::BTreeMap::new(),
+            inspected_consts: std::collections::BTreeMap::new(),
             slug,
         }
     }

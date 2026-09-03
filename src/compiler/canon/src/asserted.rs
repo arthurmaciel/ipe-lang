@@ -23,6 +23,14 @@ pub const RUST_FFI_QUALIFIER: &str = "Rust";
 /// The reserved member of the taxonomy-native binding surface: `Rust.fn`.
 pub const RUST_FFI_MEMBER: &str = "fn";
 
+/// The reserved member of the native-constant surface: `Rust.const`.
+///
+/// `Rust.const "<crate>" "<path>"` reads an INFALLIBLE native constant of a
+/// bare scalar type — a distinct shape from `Rust.fn`: no `Result`, no unit
+/// parameter, no forwarder arity. The two-literal path spelling is shared with
+/// `Rust.fn`; only the accepted signature and the emitted read differ.
+pub const RUST_FFI_CONST_MEMBER: &str = "const";
+
 /// The reserved `_bindings.rs` identifier prefix of every asserted shim.
 ///
 /// Installed-crate wrapper identifiers derive from `<slug>_<fn>` and a slug
@@ -159,6 +167,21 @@ impl AssertedPath {
         format!("{ASSERTED_WRAPPER_PREFIX}{}", self.mangled_tail())
     }
 
+    /// The Ipê definition name of a native-constant read in the generated
+    /// `Rust.Ffi` module. A distinct prefix from [`Self::def_name`] keeps a
+    /// `Rust.const` and a `Rust.fn` at the same path from colliding under one
+    /// derived name — they are different surfaces (bare read vs forwarder).
+    #[must_use]
+    pub fn const_def_name(&self) -> String {
+        format!("asserted_const_{}", self.mangled_tail())
+    }
+
+    /// The `_bindings.rs` const-read shim identifier (`ipe_asserted_const_…`).
+    #[must_use]
+    pub fn const_wrapper_ident(&self) -> String {
+        format!("{ASSERTED_WRAPPER_PREFIX}const_{}", self.mangled_tail())
+    }
+
     fn mangled_tail(&self) -> String {
         let joined = self
             .segments
@@ -177,6 +200,10 @@ impl AssertedPath {
 /// One well-formed asserted-call site found by [`scan_module`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AssertedUse {
+    /// Which native surface the call site named — an `Rust.fn`/`Rust.Ffi.call`
+    /// forwarder, or an `Rust.const` bare-value read. The two accept different
+    /// signatures and emit different shims, so the classifier is carried here.
+    pub callee: AssertedCallee,
     /// The validated target path.
     pub path: AssertedPath,
     /// The author's annotation — the asserted signature, still source-shaped.
@@ -235,6 +262,7 @@ pub fn scan_module(
             let path = read_asserted_path(which, callee.span, args)
                 .map_err(|(span, detail)| malformed(span, detail))?;
             uses.push(AssertedUse {
+                callee: which,
                 path,
                 annotation: annotation.value.clone(),
                 span: callee.span,
@@ -268,6 +296,9 @@ pub enum AssertedCallee {
     /// The taxonomy-native two-literal spelling
     /// `Rust.fn "<crate>" "<path>"` (`import Ipe.Ffi.Rust as Rust`).
     RustFn,
+    /// The native-constant two-literal spelling
+    /// `Rust.const "<crate>" "<path>"` — an infallible bare-scalar read.
+    RustConst,
 }
 
 /// Classify `callee`, or `None` when it names neither asserted surface.
@@ -284,6 +315,8 @@ pub fn classify_asserted_callee(
         Some(AssertedCallee::Call)
     } else if q == Some(RUST_FFI_QUALIFIER) && m == Some(RUST_FFI_MEMBER) {
         Some(AssertedCallee::RustFn)
+    } else if q == Some(RUST_FFI_QUALIFIER) && m == Some(RUST_FFI_CONST_MEMBER) {
+        Some(AssertedCallee::RustConst)
     } else {
         None
     }
@@ -300,7 +333,7 @@ fn is_asserted_callee(callee: &ipe_syntax::Expr, interner: &ipe_intern::Interner
 pub const fn path_arg_count(which: AssertedCallee) -> usize {
     match which {
         AssertedCallee::Call => 1,
-        AssertedCallee::RustFn => 2,
+        AssertedCallee::RustFn | AssertedCallee::RustConst => 2,
     }
 }
 
@@ -341,6 +374,20 @@ pub fn read_asserted_path(
                     callee_span,
                     "`Rust.fn` takes exactly two string literals: the crate and the item \
                      path (`Rust.fn \"sha2\" \"Sha256::digest\"`)"
+                        .to_owned(),
+                ));
+            };
+            let krate = as_str(crate_expr)?;
+            let path = as_str(path_expr)?;
+            AssertedPath::from_crate_and_path(&krate, &path)
+                .map_err(|detail| (path_expr.span, detail))
+        }
+        AssertedCallee::RustConst => {
+            let [crate_expr, path_expr] = args else {
+                return Err((
+                    callee_span,
+                    "`Rust.const` takes exactly two string literals: the crate and the item \
+                     path (`Rust.const \"std\" \"f64::consts::PI\"`)"
                         .to_owned(),
                 ));
             };

@@ -501,6 +501,20 @@ struct ForeignTypeDecl {
     variants: Vec<TypeVariantDecl>,
 }
 
+/// One reported public constant: the `Rust.const` surface reads its crate-
+/// relative path and Rust type to confirm an author's asserted scalar. Only a
+/// bare-scalar-typed constant is ever bound; the consumer's decode gate keeps a
+/// well-shaped path and a matching type.
+#[derive(Serialize, Debug)]
+#[serde(rename_all = "camelCase")]
+struct Constant {
+    /// The constant's crate-relative path (`f64::consts::PI`).
+    path: String,
+    /// The constant's Rust type, rendered verbatim (`f64`, `&str`).
+    #[serde(rename = "type")]
+    ty: String,
+}
+
 #[derive(Serialize, Debug)]
 #[serde(rename_all = "camelCase")]
 struct PkgInfo {
@@ -509,6 +523,8 @@ struct PkgInfo {
     #[serde(skip_serializing_if = "String::is_empty")]
     version: String,
     functions: Vec<Function>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    constants: Vec<Constant>,
     // Full `::`-paths of every PUBLIC module in the crate (e.g.
     // "chrono::format").  FfiGen glob-imports each (`use <mod>::*;`) so that
     // types re-exported only in submodules resolve by their bare name in the
@@ -744,6 +760,7 @@ fn main() {
                     name: "error".into(),
                     version: String::new(),
                     functions: vec![],
+                    constants: vec![],
                     modules: vec![],
                     errors: vec![format!("manifest parse error: {}", e)],
                     notes: vec![],
@@ -869,6 +886,7 @@ fn main() {
                 name: "error".into(),
                 version: String::new(),
                 functions: vec![],
+                constants: vec![],
                 modules: vec![],
                 errors: vec![format!("JSON serialization failed: {}", e)],
                 notes: vec![],
@@ -2288,6 +2306,10 @@ fn parse_rustdoc(doc: &serde_json::Value, crate_name: &str, version: &str) -> Pk
 
     let aliases: HashMap<String, String> = HashMap::new();
     let mut functions: Vec<Function> = Vec::new();
+    // Public crate-top-level constants (the `Rust.const` surface). Collected in
+    // the same item walk as free functions; only a bare-scalar-typed constant
+    // is ever bound, and the consumer's decode + validate gates enforce that.
+    let mut constants: Vec<Constant> = Vec::new();
     // Maps Ipe type name → full Rust type string (may include generic params).
     // Used by emit_display_fromstr_bridges to carry the concrete Rust type
     // through to FfiGen so it can detect generic receivers and emit
@@ -2483,6 +2505,29 @@ fn parse_rustdoc(doc: &serde_json::Value, crate_name: &str, version: &str) -> Pk
                 f.call_path = rest.to_string();
             }
             functions.push(f);
+        }
+
+        // Public crate-top-level constant (the `Rust.const` surface). Its type
+        // node lives under `constant.type`; render it verbatim so the consumer
+        // can cross-check an asserted scalar against the real Rust type. The
+        // crate-relative path (`consts::PI`) is the reachable public path with
+        // its leading crate segment stripped — the SAME key `Rust.const`
+        // derives consumer-side. Only reachable, uniquely-named constants are
+        // recorded; an unreachable one has no path and is silently skipped
+        // (the consumer then refuses the assertion, fail-closed).
+        if let Some(const_data) = inner.get("constant")
+            && is_public(item)
+            && !associated_ids.contains(item_id.as_str())
+            && let Some(ty_node) = const_data.get("type").or_else(|| const_data.get("type_"))
+            && let Some(full) = REACHABLE_PATHS.with(|c| c.borrow().get(item_id.as_str()).cloned())
+        {
+            let relative = full
+                .split_once("::")
+                .map_or(full.as_str(), |(_crate_seg, rest)| rest);
+            constants.push(Constant {
+                path: relative.to_string(),
+                ty: rustdoc_type_to_rust_str(ty_node),
+            });
         }
 
         // Impl block — includes derive-generated trait impls.
@@ -3293,6 +3338,7 @@ fn parse_rustdoc(doc: &serde_json::Value, crate_name: &str, version: &str) -> Pk
         name: crate_name.to_string(),
         version: version.to_string(),
         functions,
+        constants,
         modules: collect_public_modules(doc),
         errors,
         notes,
@@ -8449,6 +8495,7 @@ fn pkg_error(name: &str, msg: &str) -> PkgInfo {
         name: name.into(),
         version: String::new(),
         functions: vec![],
+        constants: vec![],
         modules: vec![],
         errors: vec![msg.into()],
         notes: vec![],

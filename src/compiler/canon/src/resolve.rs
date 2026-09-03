@@ -6396,12 +6396,23 @@ fn canonicalise_asserted_call(
                  path (`Rust.fn \"sha2\" \"Sha256::digest\"`)"
                     .to_owned()
             }
+            crate::asserted::AssertedCallee::RustConst => {
+                "`Rust.const` takes exactly two string literals: the crate and the item \
+                 path (`Rust.const \"std\" \"f64::consts::PI\"`)"
+                    .to_owned()
+            }
         }));
     }
     let (path_args, value_args) = args.split_at(path_arity);
     let path = crate::asserted::read_asserted_path(which, callee.span, path_args)
         .map_err(|(_, detail)| malformed(detail))?;
-    let def_sym = interner.intern(&path.def_name())?;
+    // A native constant reads through its own generated definition (a bare
+    // value), distinct from the `Rust.fn` forwarder even at an identical path.
+    let def_name = match which {
+        crate::asserted::AssertedCallee::RustConst => path.const_def_name(),
+        _ => path.def_name(),
+    };
+    let def_sym = interner.intern(&def_name)?;
     // The generated module is imported as `import Rust.Ffi` (unaliased), which
     // registers it under its LAST path segment like every dep import — so the
     // rewritten reference resolves through the `Ffi` qualifier even though the
@@ -6417,6 +6428,15 @@ fn canonicalise_asserted_call(
     })?;
     if value_args.is_empty() {
         return Ok(Some(target));
+    }
+    // A native constant is a bare value read — it is never applied to
+    // arguments, so any trailing value argument is a misuse, refused here.
+    if matches!(which, crate::asserted::AssertedCallee::RustConst) {
+        return Err(malformed(
+            "`Rust.const` reads a bare native constant and takes no value arguments — \
+             it is applied to none"
+                .to_owned(),
+        ));
     }
     let mut can_args = Vec::with_capacity(value_args.len());
     for a in value_args {
