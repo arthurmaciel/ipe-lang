@@ -35,7 +35,7 @@ Example:
 
 See also: `Ipe.Maybe`, `Ipe.Dict` (key-value lookup), `Ipe.Set`.
 
-Every member is a point-free `Ffi.kernel` alias resolved by
+Every member is a point-free `Kernel.kernel` alias resolved by
 `detect_kernel_alias` to a registered `List*` `StdlibKernel` variant
 (`ipe_runtime::list::*`). The type constraints (`comparable`, `number`)
 are enforced by the type-checker at the call site.

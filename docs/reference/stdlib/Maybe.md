@@ -6,7 +6,7 @@
 
 The `Maybe` type and its `Just` / `Nothing` constructors are kernel-anchored
 so the type system and the runtime representation stay in lockstep; each
-combinator below is a point-free `Ffi.kernel` alias to its registered
+combinator below is a point-free `Kernel.kernel` alias to its registered
 runtime implementation.
 
 ## `withDefault`

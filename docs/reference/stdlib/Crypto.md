@@ -6,7 +6,7 @@
 
 Ipe.Crypto — cryptographic primitives.
 
-All functions are aliased to runtime kernels via `Ffi.kernel`.
+All functions are aliased to runtime kernels via `Kernel.kernel`.
 Security notes:
   * `constantTimeEqual` stays constant-time (backed by `subtle`).
   * AEAD functions (`aesGcmEncrypt`, `chacha20Encrypt`) use a fresh

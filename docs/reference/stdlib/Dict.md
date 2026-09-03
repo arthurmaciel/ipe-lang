@@ -7,7 +7,7 @@
 Ipe.Dict — string-keyed associative map.
 
 Every function in this module is declared as a Ipe-source binding
-aliased to a kernel via `Ffi.kernel "Dict_<name>"`.  The compiler
+aliased to a kernel via `Kernel.kernel "Dict_<name>"`.  The compiler
 rewrites every call site to typed kernel dispatch — so `Dict.get "k" d`
 emits the appropriate typed kernel, preserving the typed-codegen
 guarantees the kernel-direct route already enjoyed.

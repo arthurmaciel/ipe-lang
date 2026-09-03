@@ -7,7 +7,7 @@
 Ipe.Bitwise — bitwise operations on `Int`.
 
 Mirrors elm/core `Bitwise`.  Each function is aliased to its runtime
-kernel via the `Ffi.kernel` mechanism.
+kernel via the `Kernel.kernel` mechanism.
 
 `Int` is 64-bit two's-complement here, so `complement` and
 `shiftRightZfBy` cover the full 64-bit width rather than wrapping at

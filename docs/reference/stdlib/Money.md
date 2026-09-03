@@ -11,7 +11,7 @@ value.  The `Money` / `Currency` ADTs and the pure combinators (arithmetic,
 comparison, percent, `currencyCode`, `parseCurrency`) live here as Ipê
 source; the currency-property table, formatter, fair-split `allocate`, and
 FX rate registry route through the guarded `Money_*` runtime kernels via
-point-free `Ffi.kernel` aliases (each wrapper converts its `Currency` arg to
+point-free `Kernel.kernel` aliases (each wrapper converts its `Currency` arg to
 an ISO 4217 code first, since the kernels take the code as a `String`).
 
 ## `Money`

@@ -36,6 +36,8 @@ Each module listed below links to a detail page with the full documentation and 
 - [Encoding](#encoding)
 - [Env](#env)
 - [Error](#error)
+- [Ffi.Js](#ffijs)
+- [Ffi.Js.CustomElement](#ffijscustomelement)
 - [File](#file)
 - [Html](#html)
 - [Html.Attributes](#htmlattributes)
@@ -43,7 +45,6 @@ Each module listed below links to a detail page with the full documentation and 
 - [Http](#http)
 - [Http.StatusCode](#httpstatuscode)
 - [Io](#io)
-- [Js](#js)
 - [Level](#level)
 - [List](#list)
 - [Locale](#locale)
@@ -189,7 +190,7 @@ Ipe.Browser.Clipboard.Internals — the low-level clipboard port surface: the
 
 [Full reference](stdlib/Browser.Geolocation.md)
 
-Ipe.Browser.Geolocation — read the device's location over `Ipe.Js` ports.
+Ipe.Browser.Geolocation — read the device's location over `Ipe.Ffi.Js` ports.
 
 | Export | Summary |
 |--------|----------|
@@ -1027,6 +1028,28 @@ Ipe.Error — the structured `Error` type (Layer-3 Ipe source).
 | `message` | Extract the bare message string from an `Error`. |
 | `kindName` | Stable lowercase label of an `ErrorKind` (the same prefix `toString` uses). |
 
+## Ffi.Js
+
+[Full reference](stdlib/Ffi.Js.md)
+
+Ipe.Ffi.Js — the raw typed transport across the Ipê↔JS seam (ports).
+
+| Export | Summary |
+|--------|----------|
+| `send` | `send payload` — an outbound one-shot imperative effect, Ipê → JS |
+| `subscribe` | `subscribe decoder toMsg` — an inbound intent stream, JS → Ipê, wired in |
+| `request` | `request cmd decoder` — a correlated one-shot request/reply over the port. |
+
+## Ffi.Js.CustomElement
+
+[Full reference](stdlib/Ffi.Js.CustomElement.md)
+
+Ipe.Ffi.Js.CustomElement — the typed JS custom-element boundary (compiled
+
+| Export | Summary |
+|--------|----------|
+| `node` | `node handle state onEvent` — place a typed JS custom-element widget. |
+
 ## File
 
 [Full reference](stdlib/File.md)
@@ -1254,18 +1277,6 @@ Ipe.Io — standard-I/O effect kernels.
 | `writeStderr` | (no summary) |
 | `println` | (no summary) |
 | `eprintln` | (no summary) |
-
-## Js
-
-[Full reference](stdlib/Js.md)
-
-Ipe.Js — the raw typed transport across the Ipê↔JS seam (ports).
-
-| Export | Summary |
-|--------|----------|
-| `send` | `send payload` — an outbound one-shot imperative effect, Ipê → JS |
-| `subscribe` | `subscribe decoder toMsg` — an inbound intent stream, JS → Ipê, wired in |
-| `request` | `request cmd decoder` — a correlated one-shot request/reply over the port. |
 
 ## Level
 
@@ -1950,7 +1961,6 @@ Ipe.Ui — element / attribute / colour / layout surface.
 | `text` | `text s` — a text `Element`. |
 | `html` | `html h` — embed raw `Html` inside a `Ui` view. |
 | `cells` | `cells grid` — a raw terminal cell grid (one inner list per row). |
-| `widget` | `widget handle state onEvent` — place a typed JS custom-element widget. |
 | `el` | `el attrs child` — a single-child container. |
 | `row` | `row attrs children` — a horizontal container (`__row` marker). |
 | `column` | `column attrs children` — a vertical container (`__col` marker). |

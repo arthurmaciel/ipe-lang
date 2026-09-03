@@ -6,7 +6,7 @@
 
 Ipe.Basics — the implicit prelude (Tier-A auto-import, compiled source).
 
-Each binding routes to its runtime kernel via `Ffi.kernel`. Polymorphic
+Each binding routes to its runtime kernel via `Kernel.kernel`. Polymorphic
 members with ordering or numeric obligations (`clamp`, `min`, `max`,
 `negate`, `abs`, `compare`) carry the bound implicitly — the type-checker's
 `Comparable`/`Number` obligation rejects a function or record argument

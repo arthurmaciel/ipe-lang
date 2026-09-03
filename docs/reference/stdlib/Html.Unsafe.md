@@ -12,7 +12,7 @@ program-wide, so a dependency's raw sink is visible before the program runs.
 The safe default is `Html.text`, escaped by construction; `unsafeRaw` and
 `unsafeScript` bypass that escaping for trusted, verbatim content only.
 
-Each member is a point-free `Ffi.kernel "Html_*"` alias to a retained kernel
+Each member is a point-free `Kernel.kernel "Html_*"` alias to a retained kernel
 (runtime: `ipe_runtime::ui::helpers::html_raw_node_` /
 `html_script_node_`). The render sink emits the body verbatim, so the caller
 owns the XSS / code-injection invariant: the input must be trusted,

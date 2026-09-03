@@ -8,7 +8,7 @@ Ipe.Decimal — arbitrary-precision decimal arithmetic.
 
 `Decimal` is an opaque arbitrary-precision decimal value backed by
 `ipe_runtime::decimal::Decimal` (wrapping `rust_decimal::Decimal`).
-Every member is aliased to its runtime kernel via the `Ffi.kernel` mechanism.
+Every member is aliased to its runtime kernel via the `Kernel.kernel` mechanism.
 
 ## `zero`
 

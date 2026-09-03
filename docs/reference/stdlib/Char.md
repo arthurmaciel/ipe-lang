@@ -7,7 +7,7 @@
 Ipe.Char — single-character helpers.
 
 `Char` is a single Unicode code point; functions are aliased to
-runtime kernels via `Ffi.kernel`.
+runtime kernels via `Kernel.kernel`.
 
 ## `isAlpha`
 

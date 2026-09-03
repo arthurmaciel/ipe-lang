@@ -11,7 +11,7 @@ Two tiers:
 
   1. **Entropy-backed Task** — `int` / `float` / `range` / `choice` /
      `shuffle` / `weighted` consume entropy from the OS RNG and so
-     return `Task Error _`.  Each is a point-free `Ffi.kernel "Random_*"`
+     return `Task Error _`.  Each is a point-free `Kernel.kernel "Random_*"`
      alias routed to its native kernel; `range` is pure Ipê over `int`.
 
   2. **Seeded deterministic** — `seed` / `seededInt` / `seededFloat` /

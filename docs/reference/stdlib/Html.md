@@ -10,7 +10,7 @@ Every element builder (`div` / `nav` / `table` / `br` / …) is ordinary Ipê
 over two retained native primitives: `node` (a container element) and
 `voidNode` (a childless void element). Those two, plus `text` / `doctype` /
 `titleNode` / `styleNode`, are the irreducible `Html`-value constructors,
-reached through point-free `Ffi.kernel "Html_*"` aliases. The un-escaped raw
+reached through point-free `Kernel.kernel "Html_*"` aliases. The un-escaped raw
 escape hatch lives in `Ipe.Html.Unsafe.unsafeRaw`, not here.
 
 The serialiser (`render` / `toString` / `escapeHtml` / `escapeAttr` /

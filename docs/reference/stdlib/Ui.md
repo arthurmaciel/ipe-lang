@@ -12,7 +12,7 @@ retained native primitives: `node` (a container `Element`) and `taggedNode`
 (a tag-fixed `Element`). Those two, plus every other member (`layout` /
 `spacing` / `button` / `link` / `image` / the `on*` events / the
 security-gated `mediaQuery` / `breakpoint` / `onPseudo` / the `desc*` roles /
-…), are point-free `Ffi.kernel "Ui_*"` aliases resolving to their unchanged
+…), are point-free `Kernel.kernel "Ui_*"` aliases resolving to their unchanged
 native kernels, so each bespoke emit arm is preserved. The `Ipe.Ui.*`
 sub-modules (Background / Border / Font / Region / Input / Lazy / Keyed) are
 separate native qualifiers, untouched here.
@@ -96,19 +96,6 @@ cells : List (List Char) -> Element msg
 ```
 
 `cells grid` — a raw terminal cell grid (one inner list per row).
-
-## `widget`
-
-```ipe
-widget : CustomElement down up -> down -> (up -> msg) -> Element msg
-```
-
-`widget handle state onEvent` — place a typed JS custom-element widget.
-`handle` is a `CustomElement down up` produced by the reserved `customElement`
-constructor; `state` is the sealed down-state; `onEvent` maps a decoded typed
-up-event into the app's `msg`. The widget transport is not yet shipped, so a
-binding whose type mentions `CustomElement` is refused fail-closed at emission
-(IPE-L0133) until it lands.
 
 ## `el`
 

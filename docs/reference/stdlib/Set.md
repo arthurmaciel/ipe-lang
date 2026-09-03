@@ -7,7 +7,7 @@
 Ipe.Set — unordered set of unique elements.
 
 Every function in this module is declared as a Ipe-source binding
-aliased to a kernel via `Ffi.kernel "Set_<name>"`.  The compiler
+aliased to a kernel via `Kernel.kernel "Set_<name>"`.  The compiler
 rewrites every call site to typed kernel dispatch — so `Set.member x s`
 emits `rt.Set_member(x, s)`, preserving the typed-codegen guarantees
 the kernel-direct route already enjoyed.

@@ -6,7 +6,7 @@
 
 Ipe.Math — pure numeric helpers.
 
-Every function is aliased to a runtime kernel via `Ffi.kernel`.
+Every function is aliased to a runtime kernel via `Kernel.kernel`.
 
 ## `abs`
 
