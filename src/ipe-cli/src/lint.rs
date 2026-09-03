@@ -153,15 +153,28 @@ fn report_findings(
     Ok(())
 }
 
-/// Apply every machine-applicable fix, write the changed sources back to disk,
-/// and report what changed.
+/// Apply every machine-applicable fix (local and cross-module signature fixes),
+/// write the changed sources back to disk, and report what changed.
+///
+/// Local fixes (single-module, semantics-preserving rewrites such as pipeline
+/// style) are applied first via [`ipe_lint::apply_fixes`]. Cross-module
+/// signature fixes (call-site rewrites for `prim-param`, `adjacent-bools`) are
+/// applied next via [`ipe_lint::apply_sig_fixes`]. When both produce edits for
+/// the same module the signature-fix result wins: it is applied to the
+/// already-locally-fixed source so the two passes compose.
+///
+/// Call sites the change-signature engine cannot rewrite mechanically are
+/// printed as manual-review notices — fail-closed.
 fn apply_and_report(
     modules: &[SourceModule],
     config: &LintConfig,
     paths: &BTreeMap<Vec<String>, PathBuf>,
 ) -> Result<(), CliError> {
-    let outcome = ipe_lint::apply_fixes(modules, config);
-    if outcome.applied == 0 {
+    let local_outcome = ipe_lint::apply_fixes(modules, config);
+    let sig_outcome = ipe_lint::apply_sig_fixes(modules, config);
+
+    let total = local_outcome.applied + sig_outcome.applied;
+    if total == 0 && sig_outcome.manual_reviews.is_empty() {
         println!(
             "{}",
             crate::style::gutter("lint --fix: no machine-applicable fixes")
@@ -169,7 +182,13 @@ fn apply_and_report(
         return Ok(());
     }
 
-    for (module, rewritten) in &outcome.rewritten {
+    // Merge: start with local rewrites; sig-fix rewrites override per module.
+    let mut merged: BTreeMap<Vec<String>, String> = local_outcome.rewritten;
+    for (module, rewritten) in sig_outcome.rewritten {
+        merged.insert(module, rewritten);
+    }
+
+    for (module, rewritten) in &merged {
         let Some(path) = paths.get(module) else {
             continue;
         };
@@ -179,13 +198,27 @@ fn apply_and_report(
             crate::style::gutter(&format!("lint --fix: rewrote {}", path.display()))
         );
     }
-    println!(
-        "{}",
-        crate::style::gutter(&format!(
-            "lint --fix: applied {} fix{}",
-            outcome.applied,
-            if outcome.applied == 1 { "" } else { "es" }
-        ))
-    );
+
+    if total > 0 {
+        println!(
+            "{}",
+            crate::style::gutter(&format!(
+                "lint --fix: applied {} fix{}",
+                total,
+                if total == 1 { "" } else { "es" }
+            ))
+        );
+    }
+
+    for mr in &sig_outcome.manual_reviews {
+        println!(
+            "{}",
+            crate::style::gutter(&format!(
+                "lint --fix: manual review needed for `{}` ({}) — {}",
+                mr.symbol_name, mr.rule, mr.reason
+            ))
+        );
+    }
+
     Ok(())
 }

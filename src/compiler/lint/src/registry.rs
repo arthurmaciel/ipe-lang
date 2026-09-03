@@ -30,13 +30,13 @@ pub const RULES: &[RuleInfo] = &[
         name: "prim-param",
         summary: "an exported signature takes a bare primitive where a domain newtype fits",
         default_severity: Severity::Warn,
-        fixable: false,
+        fixable: true,
     },
     RuleInfo {
         name: "adjacent-bools",
         summary: "two or more adjacent Bool parameters call sites cannot tell apart",
         default_severity: Severity::Warn,
-        fixable: false,
+        fixable: true,
     },
     RuleInfo {
         name: "wrapper-consistency",
