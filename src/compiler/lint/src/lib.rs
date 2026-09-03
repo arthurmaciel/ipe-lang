@@ -948,6 +948,136 @@ mod tests {
         );
     }
 
+    // ── wrapper-consistency sig-fix tests ────────────────────────────────────
+
+    /// A `wrapper-consistency` finding carries a `SigFix` with a `WrapPrimitive`
+    /// delta naming the newtype wrapper as the constructor.
+    ///
+    /// Fixture: three exported functions with a `data` parameter. Two wrap it
+    /// as `Bytes` (a stdlib nullary builtin); one leaves it bare as `String`.
+    /// The lint fires on the bare one and the `SigFix` names `Bytes` as the
+    /// constructor to apply at call sites.
+    #[test]
+    fn wrapper_consistency_finding_carries_sig_fix() {
+        let src = "module Main exposing (encode, pack, raw)\n\
+                   \n\
+                   encode : Bytes -> String\n\
+                   encode data =\n\
+                   \x20   \"ok\"\n\
+                   \n\
+                   pack : Bytes -> String\n\
+                   pack data =\n\
+                   \x20   \"ok\"\n\
+                   \n\
+                   raw : String -> String\n\
+                   raw data =\n\
+                   \x20   \"ok\"\n";
+        let report = run(&[module(src)], &LintConfig::default());
+        let finding = report
+            .findings
+            .iter()
+            .find(|f| f.rule == "wrapper-consistency")
+            .expect("expected a wrapper-consistency finding");
+        assert!(
+            finding.sig_fix.is_some(),
+            "wrapper-consistency finding must carry a sig_fix"
+        );
+        let sf = finding.sig_fix.as_ref().expect("just checked");
+        assert_eq!(sf.symbol_name, "raw");
+        assert!(
+            matches!(
+                &sf.delta,
+                ipe_canon::sig_delta::ShapeDelta::WrapPrimitive { ctor_name, .. }
+                    if ctor_name == "Bytes"
+            ),
+            "expected WrapPrimitive with Bytes ctor, got {:?}",
+            sf.delta
+        );
+    }
+
+    /// `apply_sig_fixes` rewrites a call site of the bare-param function.
+    ///
+    /// Uses stdlib-only types (`Bytes`, `String`) so the fixture canonicalises
+    /// without needing any imports or user type declarations.
+    #[test]
+    fn apply_sig_fixes_wrapper_consistency_rewrites_call_site() {
+        let src = "module Main exposing (encode, pack, raw)\n\
+                   \n\
+                   encode : Bytes -> String\n\
+                   encode data =\n\
+                   \x20   \"ok\"\n\
+                   \n\
+                   pack : Bytes -> String\n\
+                   pack data =\n\
+                   \x20   \"ok\"\n\
+                   \n\
+                   raw : String -> String\n\
+                   raw data =\n\
+                   \x20   \"ok\"\n\
+                   \n\
+                   main =\n\
+                   \x20   raw \"hello\"\n";
+        let outcome = apply_sig_fixes(&[module(src)], &LintConfig::default());
+        assert_eq!(
+            outcome.applied, 1,
+            "one call-site edit expected; got {}",
+            outcome.applied
+        );
+        let rewritten = outcome
+            .rewritten
+            .get(&vec!["Main".to_owned()])
+            .expect("Main was rewritten");
+        assert!(
+            rewritten.contains("(Bytes \"hello\")"),
+            "rewritten source must wrap arg with Bytes, got:\n{rewritten}"
+        );
+        assert!(
+            outcome.manual_reviews.is_empty(),
+            "no manual reviews expected for a literal-string call"
+        );
+    }
+
+    /// A lambda argument at the bare-param call site → `ManualReview`, not applied.
+    #[test]
+    fn apply_sig_fixes_wrapper_consistency_lambda_arg_is_manual_review() {
+        let src = "module Main exposing (encode, pack, raw)\n\
+                   \n\
+                   encode : Bytes -> String\n\
+                   encode data =\n\
+                   \x20   \"ok\"\n\
+                   \n\
+                   pack : Bytes -> String\n\
+                   pack data =\n\
+                   \x20   \"ok\"\n\
+                   \n\
+                   raw : String -> String\n\
+                   raw data =\n\
+                   \x20   \"ok\"\n\
+                   \n\
+                   main =\n\
+                   \x20   raw (\\x -> x)\n";
+        let outcome = apply_sig_fixes(&[module(src)], &LintConfig::default());
+        assert_eq!(
+            outcome.applied, 0,
+            "lambda arg must not be applied; expected 0 edits, got {}",
+            outcome.applied
+        );
+        assert!(
+            !outcome.manual_reviews.is_empty(),
+            "lambda arg must produce a manual-review report"
+        );
+        let mr = outcome
+            .manual_reviews
+            .first()
+            .expect("just checked non-empty");
+        assert_eq!(mr.rule, "wrapper-consistency");
+        assert!(
+            mr.reason.contains("lambda") || mr.reason.contains("complex"),
+            "manual-review reason must mention the opaque shape, got: {}",
+            mr.reason
+        );
+    }
+
     /// A `ManualReview` call site (lambda argument) in the SAME module is NOT
     /// applied; it appears in `manual_reviews` instead.
     ///

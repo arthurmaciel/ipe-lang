@@ -42,7 +42,7 @@ pub const RULES: &[RuleInfo] = &[
         name: "wrapper-consistency",
         summary: "a shape wrapped as a newtype by sibling APIs is left bare in one",
         default_severity: Severity::Warn,
-        fixable: false,
+        fixable: true,
     },
     RuleInfo {
         name: "unsafe-convention",
