@@ -62,6 +62,56 @@ struct Section {
     commands: &'static [&'static str],
 }
 
+/// A flag entry exposed to coverage surfaces: the flag synopsis and its
+/// one-line description, both taken directly from [`COMMANDS`].
+///
+/// Distinct from the private [`Opt`] so the coverage module can read the table
+/// without coupling to the private render types.
+#[derive(Clone, Debug)]
+pub struct FlagSpec {
+    /// The flag as it appears in the synopsis (e.g. `"[--out <dir>]"`).
+    pub flag: &'static str,
+    /// A one-line description of the flag.
+    pub desc: &'static str,
+}
+
+/// A command's public metadata, projected from [`COMMANDS`] for the CLI
+/// coverage surface.
+#[derive(Clone, Debug)]
+pub struct CommandSpec {
+    /// The subcommand name (e.g. `"build"`).
+    pub name: &'static str,
+    /// The one-line description shown at the top of `ipe <command> --help`.
+    pub summary: &'static str,
+    /// Every flag the command accepts, in table order.
+    pub options: Vec<FlagSpec>,
+}
+
+/// Every `ipe` command's public metadata, projected from the canonical
+/// [`COMMANDS`] table.
+///
+/// The CLI coverage surface reads this instead of the private table so that
+/// command names, summaries, and flag lists have one source and the coverage
+/// columns can enumerate the full surface without duplicating the registry.
+#[must_use]
+pub fn all_command_specs() -> Vec<CommandSpec> {
+    COMMANDS
+        .iter()
+        .map(|c| CommandSpec {
+            name: c.name,
+            summary: c.summary,
+            options: c
+                .options
+                .iter()
+                .map(|o| FlagSpec {
+                    flag: o.flag,
+                    desc: o.desc,
+                })
+                .collect(),
+        })
+        .collect()
+}
+
 /// Every `ipe` command, each described exactly once.
 const COMMANDS: &[Command] = &[
     Command {
