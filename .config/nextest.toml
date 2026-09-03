@@ -42,9 +42,21 @@ slow-timeout = { period = "60s", terminate-after = 10 }
 # test A sets the cwd to its temp dir, test B immediately overwrites it, test A
 # then calls `default_entry()` which stats files relative to the wrong directory.
 # Serializing them eliminates the race without changing any assertion.
+#
+# `advisory-db-lock` (max 1): each member spawns `ipe package audit`, whose
+# supply-chain check shells out to `cargo-deny check advisories`. cargo-deny
+# opens the RustSec advisory database under a single global lock file
+# (`$CARGO_HOME/advisory-dbs/db.lock`) shared by every concurrent invocation on
+# the host. Two audits running at once race that lock — a non-deterministic
+# open/fetch failure that a code fix inside the audit cannot isolate without
+# forcing a per-invocation re-fetch of the whole advisory database (a network
+# and offline-run regression). The shared lock is the contended resource, so
+# serializing the audit-spawning binaries is the exact-shape fix the
+# server-e2e group uses for the shared cargo target lock.
 [test-groups]
 heavy-server-e2e = { max-threads = 1 }
 cwd-mutating = { max-threads = 1 }
+advisory-db-lock = { max-threads = 1 }
 
 [[profile.ci.overrides]]
 filter = 'binary(watch_sigterm) | binary(watch_integration) | binary(watch_hot_appearance) | binary(watch_bluegreen) | binary(server_e2e) | binary(live_e2e) | binary(http_e2e) | binary(webview_e2e) | binary(test_command) | binary(verify) | binary(stdlib_coverage_dynamic)'
@@ -53,6 +65,13 @@ test-group = 'heavy-server-e2e'
 [[profile.ci.overrides]]
 filter = 'binary(build_no_arg) | binary(release_subcommand)'
 test-group = 'cwd-mutating'
+
+# The audit integration binaries spawn `ipe package audit`, whose supply-chain
+# check runs `cargo-deny check advisories` against the single host-global RustSec
+# advisory-db lock. Serialize them so at most one holds that lock at a time.
+[[profile.ci.overrides]]
+filter = 'binary(package_audit) | binary(audit_native)'
+test-group = 'advisory-db-lock'
 
 # The parity probes compile every golden fixture twice (clean + incremental),
 # per shard — a shard legitimately approaches the default 600s ceiling under CI
@@ -79,3 +98,7 @@ test-group = 'heavy-server-e2e'
 [[profile.default.overrides]]
 filter = 'binary(build_no_arg) | binary(release_subcommand)'
 test-group = 'cwd-mutating'
+
+[[profile.default.overrides]]
+filter = 'binary(package_audit) | binary(audit_native)'
+test-group = 'advisory-db-lock'
