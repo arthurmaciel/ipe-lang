@@ -265,6 +265,8 @@ fn leaf_of_bounded(ctx: &EmitCtx, ty: &IrType, app: AppShape, fuel: u32) -> Mode
         | IrType::WebSocketServer
         | IrType::WebSocketServerCfg
         | IrType::WebReq
+        // The session handle is a live-registry key — never a Model leaf.
+        | IrType::SessionHandle
         | IrType::WebRoute(_)
         // The `Ui.widget` custom-element handle is an opaque, non-serde value —
         // it must never live in a Model (session state), exactly like a function

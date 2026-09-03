@@ -191,6 +191,7 @@ fn ir_type_name_at(interner: &Interner, ty: &IrType, depth: u16) -> String {
             UiPlain::LayoutContext => "LayoutContext".to_owned(),
         },
         IrType::WebReq => "WebReq".to_owned(),
+        IrType::SessionHandle => "SessionHandle".to_owned(),
         IrType::WebRoute(page) => format!("WebRoute {}", ir_type_name_at(interner, page, depth)),
         IrType::CustomElement { down, up } => format!(
             "CustomElement {} {}",

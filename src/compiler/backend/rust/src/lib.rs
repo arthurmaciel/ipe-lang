@@ -3381,6 +3381,7 @@ fn collect_type_feature_requirements(ty: &IrType, out: &mut BTreeSet<ipe_ir::Run
         | IrType::WebSocketServer
         | IrType::WebSocketServerCfg
         | IrType::WebReq
+        | IrType::SessionHandle
         | IrType::Regex
         | IrType::WebApp
         | IrType::WebViewApp
@@ -3492,6 +3493,7 @@ const fn ir_type_is_record_shape_leaf(ty: &IrType) -> bool {
             | IrType::Generic(_)
             | IrType::UiPlain(_)
             | IrType::WebReq
+            | IrType::SessionHandle
             | IrType::BackoffStrategy
             | IrType::Order
             | IrType::HttpMethod
@@ -3626,6 +3628,7 @@ fn collect_record_shapes(
         // request handle carry no record shapes of their own.
         | IrType::UiPlain(_)
         | IrType::WebReq
+        | IrType::SessionHandle
         // `Order` (LT/EQ/GT) is a primitive leaf — no record shape.
         // `HttpMethod` is a closed 7-variant ADT — no record shape.
         // `Decimal` is a Copy newtype — no record shape.
@@ -3798,6 +3801,7 @@ fn type_reaches_enum(
         // pointer-sized — they cannot form an infinite-size cycle.
         | IrType::UiPlain(_)
         | IrType::WebReq
+        | IrType::SessionHandle
         // `Order` is a primitive value — no cycle risk.
         // `HttpMethod` is a closed 7-variant ADT — no cycle risk.
         // `Decimal` is a Copy newtype — no cycle risk.
@@ -3913,6 +3917,7 @@ fn contains_generic(ty: &IrType) -> bool {
         // monomorphic.
         | IrType::UiPlain(_)
         | IrType::WebReq
+        | IrType::SessionHandle
         // `Order` is monomorphic — no generic parameters.
         // `HttpMethod` is monomorphic — no generic parameters.
         // `Decimal` is monomorphic — no generic parameters.
@@ -4059,6 +4064,7 @@ fn collect_generics(ty: &IrType, out: &mut Vec<Symbol>) {
         // contribute no generics.
         | IrType::UiPlain(_)
         | IrType::WebReq
+        | IrType::SessionHandle
         // `Order` is monomorphic — no generics to collect.
         // `HttpMethod` is monomorphic — no generics to collect.
         // `Decimal` is monomorphic — no generics to collect.
@@ -4418,6 +4424,7 @@ fn match_template(
         // request handle are monomorphic — must equal exactly.
         | IrType::UiPlain(_)
         | IrType::WebReq
+        | IrType::SessionHandle
         // `Order` is a monomorphic leaf — must equal exactly.
         // `HttpMethod` is a monomorphic leaf — must equal exactly.
         // `Decimal` is a monomorphic leaf — must equal exactly.

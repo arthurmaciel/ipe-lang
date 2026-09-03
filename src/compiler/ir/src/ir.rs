@@ -1231,6 +1231,14 @@ pub enum IrType {
     /// `WebReq` — opaque request type threaded through `Web.app`'s `init`
     /// callback.  Rendered as `ipe_runtime::web::WebReq`.
     WebReq,
+    /// `SessionHandle` — the opaque handle addressing one bounded `Ipe.Ffi.Js`
+    /// session stream, obtained ONLY from `Js.openSession`. It carries the
+    /// runtime-minted session id and is rendered as the plain `i64` the session
+    /// registry keys on. It has no Ipê constructor, so a program cannot forge a
+    /// handle for a session it did not open — cross-handle addressing is
+    /// unrepresentable. Non-derivable/non-serde (never crosses the seam as a
+    /// value; it is a live-registry key, not a session datum).
+    SessionHandle,
     /// `WebRoute page` — route descriptor returned by `Web.route`, carrying
     /// the page type it builds. Rendered as
     /// `ipe_runtime::web::route::Route<Page>`. The runtime `Route<Page>`
@@ -1906,6 +1914,9 @@ pub fn ir_type_is_derivable(
         | IrType::EmailSmtpConfig
         | IrType::EmailProvider
         | IrType::WebReq
+        // `SessionHandle` is a live-registry key (an `i64`) — not a session datum,
+        // never round-tripped through serde.
+        | IrType::SessionHandle
         // `Route<Page>` holds an `Arc<dyn Fn>` builder — never derivable/serde
         // regardless of its page argument.
         | IrType::WebRoute(_)
@@ -2101,6 +2112,7 @@ pub fn ir_type_is_serde(ty: &IrType, enum_serde: &impl Fn(&ModPath, Symbol) -> b
         | IrType::WebSocketServer
         | IrType::WebSocketServerCfg
         | IrType::WebReq
+        | IrType::SessionHandle
         // `BackoffStrategy` is not a session datum — kernel-boundary value, no serde derive.
         | IrType::BackoffStrategy
         // Typed-key newtypes must NEVER round-trip through serde — a `Key`
@@ -2329,6 +2341,9 @@ pub const fn ir_type_feature_requirement(ty: &IrType) -> Option<RuntimeFeatureId
         // reach is the `SqlFragment` / `Dsn` / `Connection` set above.
         | IrType::Db
         | IrType::BackoffStrategy
+        // `SessionHandle` renders to a plain `i64` (the session-registry key) — no
+        // gated runtime type, so it is ungated like the primitives.
+        | IrType::SessionHandle
         | IrType::Order
         | IrType::ErrorKind
         | IrType::Error
@@ -2476,6 +2491,7 @@ pub fn carrier_is_clone(ty: &IrType) -> bool {
         | IrType::WebSocketServerCfg
         | IrType::UiPlain(_)
         | IrType::WebReq
+        | IrType::SessionHandle
         | IrType::ProcessRunWithCfg
         | IrType::ProcessRunInPtyCfg
         | IrType::CacheCfg
@@ -5001,6 +5017,7 @@ mod tests {
             IrType::Fun(vec![IrType::Int], Box::new(IrType::Int)),
             IrType::ServerRequest,
             IrType::WebReq,
+            IrType::SessionHandle,
         ];
         for t in bad {
             assert!(!ir_type_is_serde(&t, &all_serde), "{t:?} must NOT be serde");

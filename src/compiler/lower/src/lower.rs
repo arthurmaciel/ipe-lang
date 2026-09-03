@@ -2381,6 +2381,7 @@ fn ir_type_mentions(ty: &IrType, leaf: &impl Fn(&IrType) -> bool) -> bool {
         | IrType::WebSocketServer
         | IrType::WebSocketServerCfg
         | IrType::WebReq
+        | IrType::SessionHandle
         | IrType::Regex
         | IrType::WebApp
         | IrType::WebViewApp
@@ -3027,6 +3028,7 @@ fn ir_contains_fun(ty: &IrType) -> bool {
         // functions.  `WebReq` is an opaque handle with no `Fn` fields.
         | IrType::UiPlain(_)
         | IrType::WebReq
+        | IrType::SessionHandle
         // `Order` (LT/EQ/GT) is a primitive leaf — no embedded function.
         // `HttpMethod` is a closed 7-variant unit ADT — no embedded function.
         // `Decimal` is a Copy newtype — no embedded function.
@@ -3202,6 +3204,7 @@ fn clone_class(env: CloneEnv<'_>, t: &IrType) -> CloneClass {
         | IrType::Db
         | IrType::UiPlain(_)
         | IrType::WebReq
+        | IrType::SessionHandle
         // The widget handle carries only a `String` tag — `#[derive(Clone)]`,
         // its Clone-ness independent of the (unstored) seal args.
         | IrType::CustomElement { .. }
@@ -6307,6 +6310,7 @@ fn ir_type_mentions_generic(ty: &IrType, tv: Symbol) -> bool {
         | IrType::WebSocketServerCfg
         | IrType::UiPlain(_)
         | IrType::WebReq
+        | IrType::SessionHandle
         | IrType::BackoffStrategy
         | IrType::Order
         | IrType::HttpMethod
@@ -6432,6 +6436,7 @@ fn ir_type_generic_in_decoder(ty: &IrType, tv: Symbol) -> bool {
         | IrType::WebSocketServerCfg
         | IrType::UiPlain(_)
         | IrType::WebReq
+        | IrType::SessionHandle
         | IrType::BackoffStrategy
         | IrType::Order
         | IrType::HttpMethod
@@ -6549,6 +6554,7 @@ fn ir_type_generic_reaches_bare(ty: &IrType, tv: Symbol) -> bool {
         | IrType::WebSocketServerCfg
         | IrType::UiPlain(_)
         | IrType::WebReq
+        | IrType::SessionHandle
         | IrType::BackoffStrategy
         | IrType::Order
         | IrType::HttpMethod
@@ -12223,6 +12229,7 @@ const fn ir_type_label(ty: &IrType) -> &'static str {
         IrType::WebSocketServer => "WebSocketServer",
         IrType::WebSocketServerCfg => "WebSocketServerCfg",
         IrType::WebReq => "WebReq",
+        IrType::SessionHandle => "SessionHandle",
         IrType::WebApp => "WebApp",
         IrType::WebViewApp => "WebViewApp",
         IrType::TuiApp => "TuiApp",
@@ -14496,6 +14503,7 @@ impl<'a> Lowerer<'a> {
             | IrType::WebSocketServerCfg
             | IrType::UiPlain(_)
             | IrType::WebReq
+            | IrType::SessionHandle
             | IrType::SqlFragment
             | IrType::Secret
             | IrType::Path
@@ -19121,6 +19129,8 @@ impl<'a> Lowerer<'a> {
                 }
                 // Ipe.Web opaque types in annotations (mirrors `ir_type_from_ty`).
                 "WebReq" => Ok(IrType::WebReq),
+                // Ipe.Ffi.Js opaque session handle (mirrors `ir_type_from_ty`).
+                "SessionHandle" => Ok(IrType::SessionHandle),
                 // Shape app-leaf opaque types in annotations. Home-guarded on the
                 // empty kernel home: these names are NOT reserved, so a user
                 // `type WebApp = …` is legal and keyed in `enum_variants` under
@@ -20581,6 +20591,8 @@ impl<'a> Lowerer<'a> {
                 "LayoutContext" => Ok(IrType::UiPlain(UiPlain::LayoutContext)),
                 // ── Ipe.Web opaque types ─────────────────────────────────
                 "WebReq" => Ok(IrType::WebReq),
+                // ── Ipe.Ffi.Js opaque session handle ──────────────────────
+                "SessionHandle" => Ok(IrType::SessionHandle),
                 // ── Shape opaque app leaves ───────────────────────────────
                 // Below the `enum_variants` guard AND home-guarded on the empty
                 // kernel home, so a user `type WebApp = …` wins by its own
@@ -30411,6 +30423,7 @@ fn collect_ir_generic_syms(ty: &IrType, out: &mut BTreeSet<Symbol>) {
         | IrType::UiPlain(_)
         | IrType::Decimal
         | IrType::WebReq
+        | IrType::SessionHandle
         | IrType::SqlFragment
         | IrType::Secret
         | IrType::Path
@@ -32985,6 +32998,7 @@ mod tests {
             | ipe_ir::IrType::WebSocketServerCfg
             | ipe_ir::IrType::UiPlain(_)
             | ipe_ir::IrType::WebReq
+            | ipe_ir::IrType::SessionHandle
             | ipe_ir::IrType::SqlFragment
             | ipe_ir::IrType::Secret
             | ipe_ir::IrType::Path

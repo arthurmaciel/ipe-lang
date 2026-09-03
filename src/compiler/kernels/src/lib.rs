@@ -400,6 +400,11 @@ pub enum BuiltinTag {
     /// `WebReq` — the opaque request handle threaded through `Web.app`'s `init`
     /// field. Nullary.
     WebReq,
+    /// `SessionHandle` — the opaque handle addressing one bounded `Ipe.Ffi.Js`
+    /// session stream. Nullary. Obtained ONLY from `Js.openSession`; no Ipê
+    /// constructor, so cross-handle addressing is unrepresentable. Backed by the
+    /// runtime session id (`i64`).
+    SessionHandle,
     /// `WebRoute` — the route descriptor `WebRoute page`, applied to the page
     /// type. Carried by the `routes` field of the `Web.app` cfg record.
     WebRoute,

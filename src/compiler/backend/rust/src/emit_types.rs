@@ -496,6 +496,11 @@ pub fn render_type(ctx: &EmitCtx, ty: &IrType, generics: GenericScope) -> DResul
         },
         // Web types — render to qualified runtime paths.
         IrType::WebReq => "ipe_runtime::web::WebReq".to_owned(),
+        // The opaque session handle IS the runtime session-registry key: a plain
+        // `i64`. Rendering it concretely (not a newtype) keeps the leaf zero-cost
+        // and the seal simple; its opacity is enforced at the Ipê type level (no
+        // constructor, obtained only from `Js.openSession`).
+        IrType::SessionHandle => "i64".to_owned(),
         // Shape opaque app leaves — render to qualified runtime paths.
         // On the browser target `Web.app` lowers to `wasm::wasm_app(...)` (see
         // `emit_web`), which returns an `IpeTask` the wasm epilogue drives via

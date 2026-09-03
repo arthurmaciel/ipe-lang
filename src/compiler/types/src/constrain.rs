@@ -377,6 +377,9 @@ struct Builtins {
     // ── Ipe.Web / Ipe.Web opaque type constructor symbols ───────────────────
     /// `"WebReq"` — opaque request threaded through `Web.app`'s `init`.
     web_req: Symbol,
+    /// `"SessionHandle"` — the opaque `Ipe.Ffi.Js` session-stream handle,
+    /// obtained only from `Js.openSession`. Backed by the runtime session id.
+    session_handle: Symbol,
     /// `"WebRoute"` — opaque route descriptor returned by `Web.route`.
     live_route_con: Symbol,
     // ── Web cfg record field name symbols ───────────────────────────────────────
@@ -905,6 +908,7 @@ impl Builtins {
             lw_root_attrs: interner.intern("rootAttrs")?,
             // Ipe.Web / Ipe.Web opaque types + cfg field names.
             web_req: interner.intern("WebReq")?,
+            session_handle: interner.intern("SessionHandle")?,
             live_route_con: interner.intern("WebRoute")?,
             live_f_init: interner.intern("init")?,
             live_f_update: interner.intern("update")?,
@@ -4476,6 +4480,7 @@ impl<'a> Builder<'a> {
             BuiltinTag::InputPlaceholder => self.builtins.input_placeholder_con,
             BuiltinTag::InputRadioOption => self.builtins.input_radio_option_con,
             BuiltinTag::WebReq => self.builtins.web_req,
+            BuiltinTag::SessionHandle => self.builtins.session_handle,
             BuiltinTag::WebRoute => self.builtins.live_route_con,
             BuiltinTag::EmailProvider => self.builtins.email_provider,
             BuiltinTag::BackoffStrategy => self.builtins.backoffstrategy,
