@@ -499,7 +499,12 @@ pub fn render_type(ctx: &EmitCtx, ty: &IrType, generics: GenericScope) -> DResul
             UiPlain::LayoutContext => "ipe_runtime::ui::element::LayoutContext".to_owned(),
         },
         // Web types — render to qualified runtime paths.
-        IrType::WebReq => "ipe_runtime::web::WebReq".to_owned(),
+        // `WebReq` is defined in `dom::req` (target-neutral, always compiled);
+        // `web::req` re-exports it only under the full `web` feature.  Emitting
+        // the canonical `dom::req` path makes the generated crate compile on
+        // every target including `wasm32` + `wasm-client` (where the lean `web`
+        // shell does not include `req`).
+        IrType::WebReq => "ipe_runtime::dom::req::WebReq".to_owned(),
         // (`SessionHandle` renders to `i64` — see the `Int | SessionHandle` arm above.)
         // Shape opaque app leaves — render to qualified runtime paths.
         // On the browser target `Web.app` lowers to `wasm::wasm_app(...)` (see

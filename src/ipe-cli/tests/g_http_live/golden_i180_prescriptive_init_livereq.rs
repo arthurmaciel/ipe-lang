@@ -17,7 +17,7 @@
 //!    opaque server `Request`), but its fixed field set is READABLE via the
 //!    deferred `FieldAccess` pass (`WebReqFields`). `init req = ... req.path`
 //!    type-checks and lowers to `(req).path.clone()`, reading
-//!    `ipe_runtime::web::WebReq` directly — no synthesised record.
+//!    `ipe_runtime::dom::req::WebReq` directly — no synthesised record.
 //!
 //! Full design: `docs/adr/0021-tea-state-engine-and-prescriptive-init.md`;
 //! Sanctioned divergence B24.
@@ -146,8 +146,8 @@ fn live_init_reads_req_path_field() {
     let main_rs = std::fs::read_to_string(out.join("src").join("main.rs"))
         .expect("emitted main.rs must exist");
     assert!(
-        main_rs.contains("ipe_runtime::web::WebReq"),
-        "#180: the emitted init must take the concrete `ipe_runtime::web::WebReq`",
+        main_rs.contains("ipe_runtime::dom::req::WebReq"),
+        "#180: the emitted init must take the concrete `ipe_runtime::dom::req::WebReq`",
     );
     assert!(
         main_rs.contains("(req).path.clone()"),
