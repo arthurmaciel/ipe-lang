@@ -1664,7 +1664,7 @@ impl RequestFields {
 /// deferred [`FieldAccess`] pass resolves `req.path` / `req.cookies` against this
 /// table; the emit side needs no synthesised record — a field access lowers to
 /// `(req).<field>.clone()` (see `emit_expr` `Access`), reading the
-/// `ipe_runtime::web::WebReq` struct directly. Every field name + type here
+/// `ipe_runtime::dom::req::WebReq` struct directly. Every field name + type here
 /// matches that struct (`path`/`query`/`method` = bare `String`;
 /// `params`/`headers`/`cookies` = `Dict String String`, i.e. `IpeDict<String>`).
 struct WebReqFields {
@@ -1944,7 +1944,7 @@ fn field_access_state(
         // The opaque `WebReq` Con (Ipe.Web `init`'s per-session request)
         // resolves the same way against its fixed field set (see
         // [`WebReqFields`]); `req.path` type-checks, the emit reads
-        // `ipe_runtime::web::WebReq` directly.
+        // `ipe_runtime::dom::req::WebReq` directly.
         Content::Structure(FlatType::Con { name, args, .. })
             if *name == tables.web_req.con && args.is_empty() =>
         {

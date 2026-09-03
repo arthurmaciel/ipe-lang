@@ -1229,7 +1229,8 @@ pub enum IrType {
     /// | `LayoutContext`   | `ipe_runtime::ui::element::LayoutContext`          |
     UiPlain(UiPlain),
     /// `WebReq` — opaque request type threaded through `Web.app`'s `init`
-    /// callback.  Rendered as `ipe_runtime::web::WebReq`.
+    /// callback.  Rendered as `ipe_runtime::dom::req::WebReq` (the canonical,
+    /// target-neutral definition; compiles on every target including `wasm32`).
     WebReq,
     /// `SessionHandle` — the opaque handle addressing one bounded `Ipe.Ffi.Js`
     /// session stream, obtained ONLY from `Js.openSession`. It carries the
