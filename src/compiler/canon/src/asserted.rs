@@ -12,11 +12,12 @@
 /// sites into references to its definitions.
 pub const ASSERTED_MODULE: &str = "Rust.Ffi";
 
-/// The reserved qualifier of the taxonomy-native binding surface. A source
-/// module reaches the surface with `import Ipe.Ffi.Rust as Rust`, so the callee
-/// spelling is `Rust.fn "<crate>" "<path>"`. The qualifier is the `as` alias's
-/// last segment; the import gate reserves the `Ipe.Ffi.Rust` path so no user
-/// module can be it.
+/// The reserved qualifier of the taxonomy-native binding surface.
+///
+/// A source module reaches the surface with `import Ipe.Ffi.Rust as Rust`, so
+/// the callee spelling is `Rust.fn "<crate>" "<path>"`. The qualifier is the
+/// `as` alias's last segment; the import gate reserves the `Ipe.Ffi.Rust` path
+/// so no user module can be it.
 pub const RUST_FFI_QUALIFIER: &str = "Rust";
 
 /// The reserved member of the taxonomy-native binding surface: `Rust.fn`.
@@ -270,6 +271,7 @@ pub enum AssertedCallee {
 }
 
 /// Classify `callee`, or `None` when it names neither asserted surface.
+#[must_use]
 pub fn classify_asserted_callee(
     callee: &ipe_syntax::Expr,
     interner: &ipe_intern::Interner,
@@ -302,10 +304,11 @@ pub const fn path_arg_count(which: AssertedCallee) -> usize {
     }
 }
 
-/// Read the [`AssertedPath`] out of an asserted call's arguments, per its
-/// spelling: one string literal for [`AssertedCallee::Call`], two (crate then
-/// path) for [`AssertedCallee::RustFn`]. Every failure carries a span so the
-/// caller renders a located [`ipe_diagnostics::NameError::AssertedCallMalformed`].
+/// Read the [`AssertedPath`] out of an asserted call's arguments, per spelling.
+///
+/// One string literal for [`AssertedCallee::Call`], two (crate then path) for
+/// [`AssertedCallee::RustFn`]. Every failure carries a span so the caller
+/// renders a located [`ipe_diagnostics::NameError::AssertedCallMalformed`].
 ///
 /// # Errors
 /// `(span, detail)` for a wrong argument count or a non-literal argument.

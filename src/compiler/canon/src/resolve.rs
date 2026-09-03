@@ -6337,12 +6337,16 @@ fn canonicalise_asserted_call(
     let path_arity = crate::asserted::path_arg_count(which);
     if args.len() < path_arity {
         return Err(malformed(match which {
-            crate::asserted::AssertedCallee::Call =>
+            crate::asserted::AssertedCallee::Call => {
                 "it is applied to no arguments — the first argument must be the \
-                 string-literal Rust path".to_owned(),
-            crate::asserted::AssertedCallee::RustFn =>
+                 string-literal Rust path"
+                    .to_owned()
+            }
+            crate::asserted::AssertedCallee::RustFn => {
                 "`Rust.fn` takes exactly two string literals: the crate and the item \
-                 path (`Rust.fn \"sha2\" \"Sha256::digest\"`)".to_owned(),
+                 path (`Rust.fn \"sha2\" \"Sha256::digest\"`)"
+                    .to_owned()
+            }
         }));
     }
     let (path_args, value_args) = args.split_at(path_arity);
