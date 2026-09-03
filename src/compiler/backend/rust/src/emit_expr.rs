@@ -3840,6 +3840,7 @@ fn emit_ui_template(
     };
     let has_holes = !partition.holes.is_empty();
     let has_handlers = !partition.handlers.is_empty();
+    let has_cf = !partition.cf_holes.is_empty();
     // Compile handler Msg expressions (shared by the handler-only and combined paths).
     let handler_msgs: Vec<String> = if has_handlers {
         let mut v = Vec::with_capacity(partition.handlers.len());
@@ -3859,41 +3860,73 @@ fn emit_ui_template(
             match hole.kind {
                 crate::emit_ui_template::HoleKind::Element => elem.push(code),
                 crate::emit_ui_template::HoleKind::Children => kids.push(code),
+                crate::emit_ui_template::HoleKind::ControlFlow => {
+                    // ControlFlow fills live in cf_holes, not holes — this arm is
+                    // unreachable by construction (the partition keeps them separate).
+                }
             }
         }
         (elem, kids)
     } else {
         (Vec::new(), Vec::new())
     };
-    // Select the runtime front door that matches the hole kinds present.
-    Ok(Some(match (has_holes, has_handlers) {
-        // Both value/children holes AND handler holes in the same subtree: the
-        // combined materializer resolves all hole kinds in a single pass.
-        (true, true) => format!(
-            "ipe_runtime::ui::template::materialize_ui_template_str_with_holes_and_handlers(\
+    // Compile control-flow arm-selector expressions. Each fill evaluates to an
+    // integer arm index; we cast it to `usize` in the emitted code so the runtime
+    // materializer receives the correct type for its `cf_selectors` vec.
+    let cf_selectors: Vec<String> = if has_cf {
+        let mut v = Vec::with_capacity(partition.cf_holes.len());
+        for cf in &partition.cf_holes {
+            let code = emit_expr_at(ctx, &cf.expr, indent, child, generics)?;
+            // Wrap in an `as usize` cast: the selector expression yields `i64`
+            // (Ipê's integer type), the runtime vec expects `usize`.
+            v.push(format!("({code}) as usize"));
+        }
+        v
+    } else {
+        Vec::new()
+    };
+    // Select the runtime front door. Control-flow holes always route to the full
+    // combined materializer (it handles all four fill kinds in one pass).
+    Ok(Some(if has_cf {
+        format!(
+            "ipe_runtime::ui::template::materialize_ui_template_str_with_control_flow(\
              __ipe_lit.get({slot}), vec![{}], vec![{}], \
-             &ipe_runtime::ui::template::UiHandlerMap::from_msgs(vec![{}]))",
+             &ipe_runtime::ui::template::UiHandlerMap::from_msgs(vec![{}]), vec![{}])",
             element_fills.join(", "),
             children_fills.join(", "),
             handler_msgs.join(", "),
-        ),
-        // Handler holes only, no value/children holes.
-        (false, true) => format!(
-            "ipe_runtime::ui::template::materialize_ui_template_str_with_handlers(\
-             __ipe_lit.get({slot}), \
-             &ipe_runtime::ui::template::UiHandlerMap::from_msgs(vec![{}]))",
-            handler_msgs.join(", "),
-        ),
-        // Value/children holes only, no handler holes.
-        (true, false) => format!(
-            "ipe_runtime::ui::template::materialize_ui_template_str_with_holes(\
-             __ipe_lit.get({slot}), vec![{}], vec![{}])",
-            element_fills.join(", "),
-            children_fills.join(", "),
-        ),
-        // Fully static: the inert slot read, byte-identical to before.
-        (false, false) => {
-            format!("ipe_runtime::ui::template::materialize_ui_template_str(__ipe_lit.get({slot}))")
+            cf_selectors.join(", "),
+        )
+    } else {
+        match (has_holes, has_handlers) {
+            // Both value/children holes AND handler holes in the same subtree: the
+            // combined materializer resolves all hole kinds in a single pass.
+            (true, true) => format!(
+                "ipe_runtime::ui::template::materialize_ui_template_str_with_holes_and_handlers(\
+                 __ipe_lit.get({slot}), vec![{}], vec![{}], \
+                 &ipe_runtime::ui::template::UiHandlerMap::from_msgs(vec![{}]))",
+                element_fills.join(", "),
+                children_fills.join(", "),
+                handler_msgs.join(", "),
+            ),
+            // Handler holes only, no value/children holes.
+            (false, true) => format!(
+                "ipe_runtime::ui::template::materialize_ui_template_str_with_handlers(\
+                 __ipe_lit.get({slot}), \
+                 &ipe_runtime::ui::template::UiHandlerMap::from_msgs(vec![{}]))",
+                handler_msgs.join(", "),
+            ),
+            // Value/children holes only, no handler holes.
+            (true, false) => format!(
+                "ipe_runtime::ui::template::materialize_ui_template_str_with_holes(\
+                 __ipe_lit.get({slot}), vec![{}], vec![{}])",
+                element_fills.join(", "),
+                children_fills.join(", "),
+            ),
+            // Fully static: the inert slot read, byte-identical to before.
+            (false, false) => format!(
+                "ipe_runtime::ui::template::materialize_ui_template_str(__ipe_lit.get({slot}))"
+            ),
         }
     }))
 }

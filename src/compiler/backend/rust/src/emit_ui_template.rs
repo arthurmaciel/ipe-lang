@@ -62,10 +62,11 @@
 //! materializes byte-identically to the direct inline emit — dev == prod.
 
 use std::collections::BTreeMap;
+use std::fmt::Write as _;
 
 use crate::emit_template::write_json_string;
 use ipe_intern::Symbol;
-use ipe_ir::{Callee, Expr, FuncId, KernelFn};
+use ipe_ir::{Callee, Expr, FuncId, KernelFn, Match};
 
 /// The render/decode nesting ceiling, mirrored from the runtime
 /// (`ipe_runtime::ui::template::MAX_UI_TEMPLATE_DEPTH`). Kept as a local constant
@@ -299,12 +300,31 @@ pub enum CompileUiTemplate {
     Empty,
     Text(String),
     /// A single-element hole (index into the per-render element-fill slice): a
-    /// `Model`-derived value leaf or a control-flow (`if` / `case`) result. Inert
-    /// — carries only an index; the fill is compiled separately.
+    /// `Model`-derived value leaf or an opaque control-flow result (when arms are
+    /// not all individually templatizable). Inert — carries only an index; the
+    /// fill is compiled separately.
     Hole(usize),
     /// A children hole (index into the per-render children-fill slice): a
     /// `List.map` comprehension expanding to a run of sibling elements.
     ChildrenHole(usize),
+    /// A model-driven control-flow branch (`if` / `case`) whose every arm is
+    /// itself a templatizable subtree. The compiled `view` resolves the branch and
+    /// supplies the zero-based arm index; the runtime picks `arms[arm_index]` and
+    /// materializes that subtree.
+    ///
+    /// Exhaustive by construction: every arm of the source `if`/`case` is
+    /// captured (true→arm 0, false→arm 1 for `if`; source pattern order for
+    /// `case`), so no reachable branch is missing from the template. An
+    /// out-of-range arm index (stale template after an arm count edit) materializes
+    /// to the inert empty element at the runtime layer — fail-closed.
+    ControlFlowHole {
+        /// Index into the per-render arm-selector vec. `cf_selectors[hole_id]` is
+        /// the zero-based arm chosen this render.
+        hole_id: usize,
+        /// Templatized subtrees, one per source arm (true/false for `if`; pattern
+        /// order for `case`).
+        arms: Vec<Self>,
+    },
     Node {
         desc: CompileUiDesc,
         attrs: Vec<CompileUiAttr>,
@@ -334,6 +354,15 @@ impl CompileUiTemplate {
             Self::Text(s) => tagged_string("Text", s, out),
             Self::Hole(n) => tagged_usize("Hole", *n, out),
             Self::ChildrenHole(n) => tagged_usize("ChildrenHole", *n, out),
+            // `{"ControlFlowHole":{"hole_id":N,"arms":[...]}}` — the runtime
+            // `UiTemplate::ControlFlowHole` struct-variant serde form.
+            Self::ControlFlowHole { hole_id, arms } => {
+                out.push_str("{\"ControlFlowHole\":{\"hole_id\":");
+                let _ = write!(out, "{hole_id}");
+                out.push_str(",\"arms\":[");
+                write_children(arms, out);
+                out.push_str("]}}");
+            }
             Self::Node {
                 desc,
                 attrs,
@@ -521,12 +550,18 @@ pub struct HoleFill {
 /// Which runtime fill slice a [`HoleFill`] feeds.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum HoleKind {
-    /// One `Element<M>` in a single position (a value leaf or a control-flow
-    /// result) — a [`CompileUiTemplate::Hole`].
+    /// One `Element<M>` in a single position (a value leaf or an opaque
+    /// control-flow result when arms are non-templatizable) — a
+    /// [`CompileUiTemplate::Hole`].
     Element,
     /// A run of `Element<M>` spliced among a node's children (a `List.map`
     /// comprehension) — a [`CompileUiTemplate::ChildrenHole`].
     Children,
+    /// A zero-based arm selector for a [`CompileUiTemplate::ControlFlowHole`]:
+    /// the compiled `view` evaluates the condition / discriminant and produces
+    /// the index of the arm to materialize (0 = true branch for `if`, pattern
+    /// order for `case`). Feeds `cf_selectors[hole_id]` at the runtime layer.
+    ControlFlow,
 }
 
 /// The result of a hole-bearing partition: the (inert) template skeleton with
@@ -539,19 +574,29 @@ pub struct HolePartition {
     /// emitted by the caller and passed to `UiHandlerMap::from_msgs`; a
     /// [`CompileUiAttr::HandlerHole`] with `handler_id` i resolves to index i.
     pub handlers: Vec<Expr>,
+    /// Control-flow arm-selector expressions, in hole-id order. Each is emitted
+    /// by the caller as a `usize`-typed expression (e.g. `if cond { 0usize } else
+    /// { 1usize }`) and passed in the `cf_selectors` vec to the runtime
+    /// materializer; a [`CompileUiTemplate::ControlFlowHole`] with `hole_id` i
+    /// resolves to `cf_selectors[i]`.
+    pub cf_holes: Vec<HoleFill>,
 }
 
 /// The per-render capture accumulators threaded through the partition recursion:
-/// the value/children hole fills, plus the model-dependent handler `Msg`
-/// expressions (in hole-id order). Both grow in place as the recursion records
-/// each hole and each templatized `onClick`-style handler.
+/// the value/children hole fills, model-dependent handler `Msg` expressions, and
+/// control-flow arm-selector expressions (each in hole-id order). All grow in
+/// place as the recursion records each hole, handler capture, or CF branch.
 #[derive(Default)]
 struct Captures {
-    /// Value / control-flow / `List.map` hole fills, in per-kind index order.
+    /// Value / opaque-control-flow / `List.map` hole fills, in per-kind index order.
     holes: Vec<HoleFill>,
     /// Model-dependent handler `Msg` expressions, in hole-id order — index i is
     /// the `handler_id` of the [`CompileUiAttr::HandlerHole`] that captured it.
     handlers: Vec<Expr>,
+    /// Control-flow arm-selector expressions, in hole-id order — index i is the
+    /// `hole_id` of the [`CompileUiTemplate::ControlFlowHole`] that captured it.
+    /// Each expression evaluates to a `usize` arm index at render.
+    cf_holes: Vec<HoleFill>,
 }
 
 /// The capture accumulator threaded through the partition recursion. `None` =
@@ -608,6 +653,7 @@ pub fn ui_template_of_expr_holes(
         template,
         holes: captures.holes,
         handlers: captures.handlers,
+        cf_holes: captures.cf_holes,
     })
 }
 
@@ -629,11 +675,20 @@ fn ui_template_of_expr_at(
         return ui_template_of_expr_at(&reduced, wrappers, depth, holes);
     }
     // In hole mode, an element-position control-flow (`if` / `case`) over the
-    // Model is a single element hole: the whole conditional is compiled and its
-    // result spliced. In pure mode `holes` is `None`, so this is skipped and the
-    // non-Call expression refuses below — the shipped behaviour.
-    if matches!(expr, Expr::If { .. } | Expr::Match(_)) {
-        return push_element_hole(expr, holes);
+    // Model is classified by how far its arms templatize:
+    //
+    // - Every arm templatizable → `ControlFlowHole`: the arm subtrees ride the
+    //   template, only the arm selector (a compiled `usize`) is the fill.
+    // - Any arm non-templatizable → fall back to an opaque element hole: the
+    //   whole conditional is compiled and its result spliced, exactly as before.
+    //
+    // In pure mode `holes` is `None`, so both paths are skipped and the
+    // non-Call expression refuses below — the shipped behaviour unchanged.
+    if let Expr::If { cond, then_, else_ } = expr {
+        return try_control_flow_hole_if(cond, then_, else_, wrappers, depth, holes);
+    }
+    if let Expr::Match(m) = expr {
+        return try_control_flow_hole_match(m, wrappers, depth, holes);
     }
     let Expr::Call { callee, args, .. } = expr else {
         return None;
@@ -730,6 +785,161 @@ fn push_element_hole(expr: &Expr, holes: &mut Holes) -> Option<CompileUiTemplate
         expr: expr.clone(),
     });
     Some(CompileUiTemplate::Hole(idx))
+}
+
+/// Try to templatize an `if cond then_ else_` as a [`CompileUiTemplate::ControlFlowHole`]
+/// by recursively templatizing BOTH arms. When both succeed the whole `if` is
+/// represented as a CF hole (only the arm selector is compiled); when either arm
+/// is non-templatizable, fall back to an opaque [`CompileUiTemplate::Hole`] with
+/// the whole `if` expression as the fill — the same outcome as before this change,
+/// so existing element-hole goldens degrade gracefully.
+///
+/// In pure mode (`holes` is `None`) both paths short-circuit to `None` —
+/// the shipped static-only behaviour is unchanged.
+fn try_control_flow_hole_if(
+    cond: &Expr,
+    then_: &Expr,
+    else_: &Expr,
+    wrappers: Option<&BTreeMap<FuncId, WrapperBody>>,
+    depth: usize,
+    holes: &mut Holes,
+) -> Option<CompileUiTemplate> {
+    // Pure mode — control flow always refuses (no captures accumulator).
+    if holes.is_none() {
+        return None;
+    }
+
+    // Attempt to templatize both arms into a SIDE accumulator so a failure in
+    // the second arm leaves the primary `holes` accumulator clean.
+    let mut arm_captures = Captures {
+        holes: Vec::new(),
+        handlers: Vec::new(),
+        cf_holes: Vec::new(),
+    };
+    let arm_result = (|| -> Option<(CompileUiTemplate, CompileUiTemplate)> {
+        let t = ui_template_of_expr_at(then_, wrappers, depth, &mut Some(&mut arm_captures))?;
+        let e = ui_template_of_expr_at(else_, wrappers, depth, &mut Some(&mut arm_captures))?;
+        Some((t, e))
+    })();
+
+    if let Some((then_tmpl, else_tmpl)) = arm_result {
+        // Both arms templatized. Merge arm_captures into the primary acc.
+        if let Some(acc) = holes.as_mut() {
+            acc.holes.extend(arm_captures.holes);
+            acc.handlers.extend(arm_captures.handlers);
+            acc.cf_holes.extend(arm_captures.cf_holes);
+        }
+        // The arm-selector expression evaluates the condition and yields
+        // 0 (true branch) or 1 (false branch). The emit layer casts the
+        // integer fill to `usize`.
+        let selector_expr = Expr::If {
+            cond: Box::new(cond.clone()),
+            then_: Box::new(Expr::Int(0)),
+            else_: Box::new(Expr::Int(1)),
+        };
+        push_control_flow_hole(selector_expr, vec![then_tmpl, else_tmpl], holes)
+    } else {
+        // At least one arm is non-templatizable — arm_captures is dropped
+        // here cleanly; the primary `holes` accumulator is unchanged.
+        // Opaque element hole: compile the whole `if` expression.
+        let if_expr = Expr::If {
+            cond: Box::new(cond.clone()),
+            then_: Box::new(then_.clone()),
+            else_: Box::new(else_.clone()),
+        };
+        push_element_hole(&if_expr, holes)
+    }
+}
+
+/// Try to templatize a `case` expression as a [`CompileUiTemplate::ControlFlowHole`]
+/// by recursively templatizing EVERY arm body. When all arms succeed the whole
+/// `case` is represented as a CF hole; when any arm is non-templatizable, fall back
+/// to an opaque element hole covering the whole `Match` expression.
+///
+/// Arm order in `arms` matches source pattern order — the same order the runtime
+/// evaluates and the compiler's arm-selector expression must reproduce.
+/// Exhaustiveness is guaranteed by [`ipe_ir::Match`]'s construction invariant.
+fn try_control_flow_hole_match(
+    m: &Match,
+    wrappers: Option<&BTreeMap<FuncId, WrapperBody>>,
+    depth: usize,
+    holes: &mut Holes,
+) -> Option<CompileUiTemplate> {
+    // Pure mode — refuse.
+    if holes.is_none() {
+        return None;
+    }
+
+    let arms_slice = m.arms();
+
+    // Attempt to templatize every arm body into a side-accumulator so a failure
+    // in any arm leaves the primary `holes` accumulator clean.
+    let mut arm_captures = Captures {
+        holes: Vec::new(),
+        handlers: Vec::new(),
+        cf_holes: Vec::new(),
+    };
+    let arm_templates: Option<Vec<CompileUiTemplate>> = arms_slice
+        .iter()
+        .map(|arm| ui_template_of_expr_at(&arm.body, wrappers, depth, &mut Some(&mut arm_captures)))
+        .collect();
+
+    match arm_templates {
+        Some(arm_tmpls) if !arm_tmpls.is_empty() => {
+            // All arms templatized. Merge arm_captures into primary acc.
+            if let Some(acc) = holes.as_mut() {
+                acc.holes.extend(arm_captures.holes);
+                acc.handlers.extend(arm_captures.handlers);
+                acc.cf_holes.extend(arm_captures.cf_holes);
+            }
+            // Build the arm-selector expression: a `Match` with Int bodies.
+            let selector_expr = build_match_arm_selector(m);
+            push_control_flow_hole(selector_expr, arm_tmpls, holes)
+        }
+        _ => {
+            // Some arm non-templatizable, or zero arms. Fall back to opaque
+            // element hole covering the whole `case`.
+            push_element_hole(&Expr::Match(m.clone()), holes)
+        }
+    }
+}
+
+/// Build a `Match` expression with the same scrutinee and patterns but `Int`
+/// bodies equal to each arm's zero-based source index. The produced expression
+/// evaluates to a `usize`-castable integer index at render time, used as the
+/// arm-selector fill for a [`CompileUiTemplate::ControlFlowHole`] over a `case`.
+///
+/// Pattern order is preserved so the arm index matches the index into `arms` in
+/// the [`CompileUiTemplate::ControlFlowHole`] the compiler emitted — they are
+/// built from the same ordered arm slice, so `arms[selector]` is always the arm
+/// the source program selected.
+fn build_match_arm_selector(m: &Match) -> Expr {
+    let mut idx = 0usize;
+    Expr::Match(m.clone().map_bodies(
+        |scrutinee| scrutinee,
+        |_pat, _body, guard| {
+            let i = idx;
+            idx = idx.saturating_add(1);
+            (Expr::Int(i64::try_from(i).unwrap_or(i64::MAX)), guard)
+        },
+    ))
+}
+
+/// Record `arms` as a control-flow hole and return its numbered marker, or
+/// `None` in pure mode. The selector `expr` (evaluating to a `usize` arm index)
+/// is recorded in `cf_holes`.
+fn push_control_flow_hole(
+    selector_expr: Expr,
+    arms: Vec<CompileUiTemplate>,
+    holes: &mut Holes,
+) -> Option<CompileUiTemplate> {
+    let acc = holes.as_mut()?;
+    let hole_id = acc.cf_holes.len();
+    acc.cf_holes.push(HoleFill {
+        kind: HoleKind::ControlFlow,
+        expr: selector_expr,
+    });
+    Some(CompileUiTemplate::ControlFlowHole { hole_id, arms })
 }
 
 /// Record `expr` as a children hole (a `List.map` run) and return its per-kind
@@ -1911,9 +2121,12 @@ mod tests {
         );
     }
 
-    // A control-flow hole: an `if` in element position is one element hole.
+    // A control-flow hole: an `if` whose both arms are templatizable becomes a
+    // `ControlFlowHole` — the arm subtrees ride the template, only the arm
+    // selector (`if cond { 0 } else { 1 }`) is compiled.
     #[test]
-    fn control_flow_hole_partitions_the_if() {
+    #[allow(clippy::indexing_slicing)]
+    fn control_flow_hole_if_both_arms_templatizable() {
         let cond = kcall(KernelFn::UiText, vec![Expr::Str("ignored".to_string())]);
         let iff = Expr::If {
             cond: Box::new(Expr::Var(sym(60))),
@@ -1922,22 +2135,77 @@ mod tests {
         };
         let node = kcall(
             KernelFn::UiNode,
-            vec![
-                desc_none(),
-                attr_list(vec![]),
-                child_list(vec![iff.clone(), cond]),
-            ],
+            vec![desc_none(), attr_list(vec![]), child_list(vec![iff, cond])],
         );
-        let part = ui_template_of_expr_holes(&node, None).expect("if-hole templatizes");
+        let part =
+            ui_template_of_expr_holes(&node, None).expect("if with templatizable arms templatizes");
+        // Template: ControlFlowHole(0) carries the two static arm subtrees.
         assert_eq!(
             part.template,
             CompileUiTemplate::Node {
                 desc: CompileUiDesc::NoDescription,
                 attrs: vec![],
                 children: vec![
-                    CompileUiTemplate::Hole(0),
+                    CompileUiTemplate::ControlFlowHole {
+                        hole_id: 0,
+                        arms: vec![
+                            CompileUiTemplate::Text("on".to_string()),
+                            CompileUiTemplate::Text("off".to_string()),
+                        ],
+                    },
                     CompileUiTemplate::Text("ignored".to_string()),
                 ],
+            }
+        );
+        // No element holes (the arms are in the template, not compiled fills).
+        assert!(
+            part.holes.is_empty(),
+            "no element holes when both arms templatize"
+        );
+        // One CF hole: the arm-selector expression `if cond { 0 } else { 1 }`.
+        assert_eq!(part.cf_holes.len(), 1);
+        assert_eq!(part.cf_holes[0].kind, HoleKind::ControlFlow);
+        let expected_selector = Expr::If {
+            cond: Box::new(Expr::Var(sym(60))),
+            then_: Box::new(Expr::Int(0)),
+            else_: Box::new(Expr::Int(1)),
+        };
+        assert_eq!(part.cf_holes[0].expr, expected_selector);
+    }
+
+    // When at least one arm is non-templatizable the whole `if` falls back to an
+    // opaque element hole — the pre-CF-hole behaviour.
+    #[test]
+    fn control_flow_hole_if_non_templatizable_arm_falls_back_to_element_hole() {
+        // `else_` contains a model-read `Ui.text model.val` — non-templatizable in
+        // pure/holes-only mode because it is a non-literal text leaf (element hole
+        // shape), but for STRUCTURE we need the ELEMENT itself to be templatizable.
+        // Actually model_text is templatizable (it becomes a value-Hole inside the
+        // arm). To get a truly non-templatizable arm we use a raw HTML node.
+        let cond_expr = Expr::Var(sym(61));
+        let non_static_arm = kcall(KernelFn::UiHtml, vec![Expr::Var(sym(62))]);
+        let iff = Expr::If {
+            cond: Box::new(cond_expr),
+            then_: Box::new(text("on")),
+            else_: Box::new(non_static_arm),
+        };
+        let node = kcall(
+            KernelFn::UiNode,
+            vec![
+                desc_none(),
+                attr_list(vec![]),
+                child_list(vec![iff.clone()]),
+            ],
+        );
+        let part = ui_template_of_expr_holes(&node, None)
+            .expect("if with non-templatizable arm still templatizes as element hole");
+        // Falls back to opaque element hole: the whole `if` is the fill.
+        assert_eq!(
+            part.template,
+            CompileUiTemplate::Node {
+                desc: CompileUiDesc::NoDescription,
+                attrs: vec![],
+                children: vec![CompileUiTemplate::Hole(0)],
             }
         );
         assert_eq!(
@@ -1947,6 +2215,7 @@ mod tests {
                 expr: iff,
             }]
         );
+        assert!(part.cf_holes.is_empty());
     }
 
     // A list hole: the whole children arg is `List.map itemView model.items`.
