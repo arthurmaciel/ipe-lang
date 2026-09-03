@@ -927,4 +927,109 @@ mod real_jail {
         }
         let _ = std::fs::remove_dir_all(&base);
     }
+
+    /// Write a `package.ipe` for a `Rust.Csum`-crossing app whose `declares`
+    /// capability set is exactly `caps` (`PascalCase` constructor tokens), plus the
+    /// `Main.ipe` that reaches the native binding. Returns the package root.
+    ///
+    /// The seeded FFI cache supplies the `csum` native surface so `import
+    /// Rust.Csum` lowers (and discloses `native-ffi`); the manifest names the
+    /// rust dependency. This is the whole surface the build-time consent gate
+    /// reads — no cargo/jail is reached, since the gate fires before emit.
+    fn write_native_crossing_package(base: &std::path::Path, declares: &str) -> PathBuf {
+        let pkg = base.join("pkg");
+        std::fs::create_dir_all(pkg.join("src")).expect("pkg src");
+        write_csum_crate(base);
+        std::fs::write(
+            pkg.join("package.ipe"),
+            format!(
+                "module Package exposing (package)\n\n\npackage =\n\
+                 \x20   {{ name = \"csumpkg\"\n\
+                 \x20   , version = \"0.1.0\"\n\
+                 \x20   , rustDependencies = [ rustDep \"csum\" \"=0.1.0\" ]\n\
+                 \x20   , capabilities = {{ declares = [ {declares} ], accepts = [] }}\n\
+                 \x20   }}\n"
+            ),
+        )
+        .expect("package.ipe");
+        std::fs::write(pkg.join("src").join("Main.ipe"), CSUM_MAIN).expect("Main.ipe");
+        assert!(seed_pure_ffi_cache(&pkg), "seed the FFI cache");
+        pkg
+    }
+
+    /// The build-time consent gate REFUSES a `Rust.` crossing when the app's
+    /// `[capabilities] declares` set does not grant `native-ffi` — a fail-closed,
+    /// typed refusal (IPE-S0003) naming the disclosing `Rust.<Crate>` module,
+    /// fired BEFORE any emit or cargo build. This is the increment-3 consent gate:
+    /// an un-granted native capability is a compile error naming the dep.
+    #[test]
+    fn build_refuses_an_ungranted_native_crossing_naming_the_dep() {
+        if std::env::var_os("IPE_E2E").is_none_or(|v| v != "1") {
+            return;
+        }
+        if ipe::resolve_runtime().is_err() {
+            eprintln!("audit_native e2e: skipping — runtime unavailable");
+            return;
+        }
+        let base = non_tmp_base("consent-refuse");
+        // No `native-ffi` grant: the crossing is disclosed but ungranted.
+        let pkg = write_native_crossing_package(&base, "");
+        let out = base.join("out");
+        let args = vec![
+            "build".to_owned(),
+            pkg.join("package.ipe").display().to_string(),
+            "--out".to_owned(),
+            out.display().to_string(),
+        ];
+        let result = ipe::run_cli(&args);
+        let err = result.expect_err("an ungranted native crossing must refuse the build");
+        let msg = err.to_string();
+        assert!(msg.contains("IPE-S0003"), "carries the consent code: {msg}");
+        assert!(
+            msg.contains("Rust.Csum"),
+            "names the disclosing crate: {msg}"
+        );
+        // The refusal fires before emit: no artifact is produced.
+        assert!(
+            !out.join("src").join("ffi.rs").is_file(),
+            "a refused build must emit nothing"
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// The mirror admit path: with `declares = [ NativeFfi ]` the SAME crossing is
+    /// GRANTED, so the consent gate passes — the build proceeds past it (any later
+    /// error is a cargo/emit concern, never the IPE-S0003 consent refusal). This
+    /// proves the gate admits a granted crossing rather than refusing everything.
+    #[test]
+    fn build_admits_a_granted_native_crossing_past_the_consent_gate() {
+        if std::env::var_os("IPE_E2E").is_none_or(|v| v != "1") {
+            return;
+        }
+        if ipe::resolve_runtime().is_err() {
+            eprintln!("audit_native e2e: skipping — runtime unavailable");
+            return;
+        }
+        let base = non_tmp_base("consent-admit");
+        let pkg = write_native_crossing_package(&base, "NativeFfi");
+        let out = base.join("out");
+        let args = vec![
+            "build".to_owned(),
+            pkg.join("package.ipe").display().to_string(),
+            "--out".to_owned(),
+            out.display().to_string(),
+        ];
+        let result = ipe::run_cli(&args);
+        // The consent gate must NOT be the reason for any failure: a granted
+        // crossing is admitted. (The build may still fail later on the offline
+        // cargo probe, which is out of this gate's scope.)
+        if let Err(err) = result {
+            let msg = err.to_string();
+            assert!(
+                !msg.contains("IPE-S0003"),
+                "a granted native crossing must pass the consent gate, got: {msg}"
+            );
+        }
+        let _ = std::fs::remove_dir_all(&base);
+    }
 }
