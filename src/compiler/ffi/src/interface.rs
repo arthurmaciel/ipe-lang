@@ -772,7 +772,35 @@ pub fn crate_interface(pkg: &PkgInfo) -> CrateInterface {
     // different Rust types that would share one nominal; the crate's own
     // inspected opaque wins and the declaration is dropped rather than
     // overwriting the resolved path with a mismatched one.
+    //
+    // A declared opaque nominal that ANOTHER surface already claims — a define
+    // nominal (`type N = N`) or a transparent record/union of the crate — is
+    // refused, never inserted: `render_module` emits one `type <Name> = <Name>`
+    // for `opaque_types.keys().chain(define_types.iter())` and one export per
+    // set, so a nominal in two sets would emit a DUPLICATED `type` declaration
+    // and a doubled `exposing` entry (an `E0428` / duplicate-definition the app
+    // crate cannot compile — an `ipe`-exit-0 ⇒ cargo-fail SEAL breach). This
+    // mirrors `claim_nominal`'s define-vs-transparent refusal: each nominal is
+    // surfaced by at most ONE surface, whichever declares it second is dropped.
     for (name, path) in pkg.declared_opaques() {
+        if define_types.contains(name) {
+            skipped.push(SkippedBinding {
+                ref_name: format!("type {name}"),
+                reason: format!(
+                    "declared opaque `{name}` collides with a define-defined nominal of the crate"
+                ),
+            });
+            continue;
+        }
+        if transparent_types.contains_key(name) {
+            skipped.push(SkippedBinding {
+                ref_name: format!("type {name}"),
+                reason: format!(
+                    "declared opaque `{name}` collides with a transparent foreign type of the crate"
+                ),
+            });
+            continue;
+        }
         match opaque_types.get(name) {
             Some(existing) if existing == path => {}
             Some(_) => {
@@ -1407,6 +1435,103 @@ mod tests {
             iface.source
         );
         assert!(iface.source.contains("exposing (Conn)"), "{}", iface.source);
+    }
+
+    #[test]
+    fn a_declared_opaque_colliding_with_a_transparent_define_is_refused() {
+        // One `foreign` head used as BOTH a define nominal (an all-identity
+        // struct → a transparent record `Widget`) AND a declared opaque handle
+        // (`Opaque "Client"`) must NOT emit `Widget` from two surfaces: that
+        // would render `type Widget = Widget` beside the record alias and list
+        // `Widget` twice in `exposing` — a duplicate-definition the app crate
+        // cannot compile. The declared opaque is refused; the transparent
+        // define keeps the nominal.
+        let doc = serde_json::json!({
+            "pkg": "demo", "name": "demo", "version": "0.1.0",
+            "functions": [{
+                "name": "widget_new", "effect": "pure", "isStructCtor": true,
+                "structName": "Widget",
+                "structFields": [{ "name": "x", "type": "i64" }],
+                "structDerives": ["Clone"]
+            }],
+            "errors": [],
+            "declaredOpaques": { "Widget": "::demo::Client" }
+        });
+        let iface = crate_interface(&PkgInfo::decode_json(&doc.to_string()).expect("decodes"));
+        // The nominal is surfaced ONCE, by the transparent define — the declared
+        // opaque never entered `opaque_types`.
+        assert!(
+            iface.transparent_types.contains_key("Widget"),
+            "{:?}",
+            iface.skipped
+        );
+        assert!(
+            !iface.opaque_types.contains_key("Widget"),
+            "declared opaque must be refused, not surfaced: {:?}",
+            iface.opaque_types
+        );
+        // No `type Widget = Widget` opaque decl rides alongside the record.
+        assert!(
+            !iface.source.contains("type Widget = Widget"),
+            "{}",
+            iface.source
+        );
+        // The `exposing` header lists `Widget` exactly once.
+        let header = iface.source.lines().next().expect("module header line");
+        assert_eq!(header.matches("Widget").count(), 1, "{header}");
+        // The refusal is recorded, naming the transparent collision.
+        assert!(
+            iface.skipped.iter().any(|s| s.ref_name == "type Widget"
+                && s.reason
+                    .contains("collides with a transparent foreign type")),
+            "{:?}",
+            iface.skipped
+        );
+    }
+
+    #[test]
+    fn a_declared_opaque_colliding_with_a_define_opaque_nominal_is_refused() {
+        // A `foreign` head used as BOTH a define nominal that stays an opaque
+        // handle (a `Bytes`-field struct → `type Blob = Blob`) AND a declared
+        // opaque (`Opaque "Other"`) would emit `type Blob = Blob` twice and
+        // double the `exposing` entry. The declared opaque is refused; the
+        // define keeps the nominal at ITS resolved representation.
+        let doc = serde_json::json!({
+            "pkg": "demo", "name": "demo", "version": "0.1.0",
+            "functions": [{
+                "name": "blob_new", "effect": "pure", "isStructCtor": true,
+                "structName": "Blob",
+                "structFields": [{ "name": "data", "type": "Bytes" }],
+                "structDerives": ["Clone"]
+            }],
+            "errors": [],
+            "declaredOpaques": { "Blob": "::demo::Other" }
+        });
+        let iface = crate_interface(&PkgInfo::decode_json(&doc.to_string()).expect("decodes"));
+        assert!(iface.define_types.contains("Blob"), "{:?}", iface.skipped);
+        // The declared opaque never overwrote the define nominal's path.
+        assert!(
+            !iface.opaque_types.contains_key("Blob"),
+            "declared opaque must be refused, not surfaced: {:?}",
+            iface.opaque_types
+        );
+        // Exactly one `type Blob = Blob` renders (from the define), not two.
+        assert_eq!(
+            iface.source.matches("type Blob = Blob").count(),
+            1,
+            "{}",
+            iface.source
+        );
+        // The `exposing` header lists `Blob` exactly once.
+        let header = iface.source.lines().next().expect("module header line");
+        assert_eq!(header.matches("Blob").count(), 1, "{header}");
+        // The refusal is recorded, naming the define collision.
+        assert!(
+            iface.skipped.iter().any(|s| s.ref_name == "type Blob"
+                && s.reason.contains("collides with a define-defined nominal")),
+            "{:?}",
+            iface.skipped
+        );
     }
 
     #[test]
