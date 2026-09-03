@@ -55,10 +55,13 @@ Divergences from `elm/parser` (recorded in `docs/divergences-from-elm.md`):
     sound shape. Building a parser by hand is possible but unsupported —
     always compose through the combinators.
   * Records are built with `map2` … `map5` (apply a builder directly to the
-    results of several parsers) and sequenced with `keep` / `ignore` for
-    punctuation to skip. Elm instead threads a curried constructor through an
-    applicative `succeed ctor |= partA |= partB` pipeline; the named
-    combinators here are the prefix equivalent.
+    results of several parsers) and sequenced with `keep` / `ignore` (or their
+    infix aliases `|.` / `|=`) for punctuation to skip.
+    `a |= b` desugars to `ignore a b` (run a then b, yield b's result — keep
+    the right); `a |. b` desugars to `keep a b` (run a then b, yield a's
+    result — keep the left). Elm instead threads a curried constructor through
+    a fully applicative `succeed ctor |= partA |= partB` pipeline; the named
+    combinators with `map2` … `map5` are the Ipê equivalent.
   * Elm's `Parser.Advanced` context stack and its custom-`problem` type
     parameter are omitted — `Problem` is the fixed union below.
 
