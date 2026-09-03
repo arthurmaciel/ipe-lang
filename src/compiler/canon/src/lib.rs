@@ -20,6 +20,7 @@ pub mod module_classify;
 pub mod ref_index;
 pub mod rename;
 mod resolve;
+pub mod sig_delta;
 pub mod target_gate;
 
 use std::collections::{BTreeMap, BTreeSet};
