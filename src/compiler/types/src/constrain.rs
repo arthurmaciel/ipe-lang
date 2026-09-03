@@ -8384,6 +8384,12 @@ impl<'a> Builder<'a> {
             // `CustomElement` seal is a canon gate rather than a type-scheme bound.
             K::JsSend => fun(var(0), cmd(var(1))),
             K::JsSubscribe => fun(dec(var(0)), fun(fun(var(0), var(1)), sub(var(1)))),
+            // `request : a -> Decoder b -> Task b` — correlated one-shot.
+            // Outbound payload `a` = var(0); decoded reply `b` = var(1).
+            // The seal-legality of the concrete `a` and the inner type of
+            // `Decoder b` are structural predicates enforced at lowering
+            // (`reject_illegal_js_port_seal`), not HM constraints.
+            K::JsRequest => fun(var(0), fun(dec(var(1)), task(var(1)))),
 
             // ── Ipe.Env — build-time-embedded public config ──────────
             // public : String -> Maybe String. Resolves ONLY for a
@@ -10447,6 +10453,7 @@ mod registry_phase_c_tests {
             // ── Ipe.Js — the raw typed transport across the Ipê↔JS seam ──
             K::JsSend,
             K::JsSubscribe,
+            K::JsRequest,
             // ── Ipe.Process — subprocess execution (no shell) ──
             K::ProcessRun,
             K::ProcessRunWith,

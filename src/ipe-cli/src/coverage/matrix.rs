@@ -8,10 +8,16 @@
 //! concentrates every per-aspect check into one loop so no symbol is judged on a
 //! subset of the aspects.
 
+use std::path::PathBuf;
+
 use ipe_diagnostics::Code;
 
+use crate::coverage::cli_surface::CliItem;
+use crate::coverage::compiler_surface::CompilerCrate;
 use crate::coverage::contract::{AspectCheck, Cell, StdlibSymbol, Surface};
 use crate::coverage::env_surface::EnvItem;
+use crate::coverage::foreign_surface::ForeignItem;
+use crate::coverage::package_surface::PackageItem;
 
 /// The registered static aspect columns of the stdlib surface.
 ///
@@ -207,4 +213,80 @@ pub fn run_diagnostic() -> MatrixReport {
         &crate::coverage::diagnostic_surface::DiagnosticSurface,
         &diagnostic_columns(),
     )
+}
+
+/// The registered aspect columns of the CLI surface.
+///
+/// These read the help table and scan source/test trees — no program build —
+/// so they run in the fast path alongside the env-var columns.
+#[must_use]
+pub fn cli_columns() -> Vec<Box<dyn AspectCheck<CliItem>>> {
+    vec![
+        Box::new(crate::coverage::columns_cli::DocumentedColumn),
+        Box::new(crate::coverage::columns_cli::TestedColumn::new()),
+        Box::new(crate::coverage::columns_cli::NotAdvertisedUnimplementedColumn::new()),
+    ]
+}
+
+/// Run the CLI surface against its registered columns.
+#[must_use]
+pub fn run_cli_surface() -> MatrixReport {
+    run(&crate::coverage::cli_surface::CliSurface, &cli_columns())
+}
+
+/// The registered aspect columns of the compiler-crate surface.
+///
+/// These inspect `src/compiler/<crate>/src/` trees directly — no build — so
+/// they run in the fast (non-E2E) path.
+#[must_use]
+pub fn compiler_columns() -> Vec<Box<dyn AspectCheck<CompilerCrate>>> {
+    vec![
+        Box::new(crate::coverage::columns_compiler::TestedColumn),
+        Box::new(crate::coverage::columns_compiler::NoPanicColumn),
+        Box::new(crate::coverage::columns_compiler::DocumentedColumn),
+    ]
+}
+
+/// Run the compiler-crate surface against its registered columns.
+#[must_use]
+pub fn run_compiler() -> MatrixReport {
+    run(
+        &crate::coverage::compiler_surface::CompilerSurface,
+        &compiler_columns(),
+    )
+}
+
+/// The registered aspect columns of the foreign-binding surface.
+///
+/// All five columns read only the closed [`ipe_kernels::Capability::ALL`]
+/// constant and scan the source tree — no program build — so they run in the
+/// fast path.
+#[must_use]
+pub fn foreign_columns() -> Vec<Box<dyn AspectCheck<ForeignItem>>> {
+    crate::coverage::foreign_surface::foreign_columns()
+}
+
+/// Run the foreign-binding surface against its registered columns.
+#[must_use]
+pub fn run_foreign() -> MatrixReport {
+    run(
+        &crate::coverage::foreign_surface::ForeignSurface,
+        &foreign_columns(),
+    )
+}
+
+/// The registered aspect columns of the package surface for one project root.
+///
+/// These read only the project's manifest and lockfile — no program build — so
+/// they run in the fast path alongside the env-var columns.
+#[must_use]
+pub fn package_columns(project_root: PathBuf) -> Vec<Box<dyn AspectCheck<PackageItem>>> {
+    crate::coverage::package_surface::package_columns(project_root)
+}
+
+/// Run the package surface for `project_root` against its registered columns.
+#[must_use]
+pub fn run_package(project_root: PathBuf) -> MatrixReport {
+    let surface = crate::coverage::package_surface::PackageSurface::new(project_root.clone());
+    run(&surface, &package_columns(project_root))
 }

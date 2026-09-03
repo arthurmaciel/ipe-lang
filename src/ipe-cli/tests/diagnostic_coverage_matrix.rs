@@ -25,24 +25,6 @@ use ipe::coverage::matrix;
 ///
 /// Codes are grouped by family and reason for clarity.
 const ALLOWLIST: &[(&str, &str, &str)] = &[
-    // ── IPE-F#### (FFI) ─────────────────────────────────────────────────────
-    // These three require network failure or an FFI cache I/O fault — conditions
-    // that cannot be reliably induced in an offline unit test.
-    (
-        "refusal-tested",
-        "IPE-F4411",
-        "git-source rejection needs a real network/VCS fixture",
-    ),
-    (
-        "refusal-tested",
-        "IPE-F4412",
-        "FFI cache I/O fault is not reproducible in a unit test",
-    ),
-    (
-        "refusal-tested",
-        "IPE-F4414",
-        "asserted FFI call refusal covered by golden_ffi_asserted_call_seal (IPE-F4414 literal absent from that file)",
-    ),
     // ── IPE-I#### (internal compiler errors / ICEs) ──────────────────────────
     // ICE and intern codes are invariant violations that require deliberate
     // compiler corruption to trigger from user source. They cannot be reached
@@ -85,11 +67,6 @@ const ALLOWLIST: &[(&str, &str, &str)] = &[
     ),
     (
         "refusal-tested",
-        "IPE-I0201",
-        "ICE: dangling value/variant symbol requires compiler-internal corruption",
-    ),
-    (
-        "refusal-tested",
         "IPE-I0202",
         "ICE: cross-module type-name collision requires compiler-internal corruption",
     ),
@@ -99,236 +76,147 @@ const ALLOWLIST: &[(&str, &str, &str)] = &[
         "ICE: golden anchor missing requires compiler-internal corruption",
     ),
     // ── IPE-L#### (lowering / not-yet-supported) ────────────────────────────
-    // The L-family represents features not yet emittable. Many of these are
-    // exercised by compiler-internal unit tests that assert the code constant
-    // without using the quoted wire string format the surface scan requires.
-    // Each should be migrated to a negative-suite or golden test.
     (
         "refusal-tested",
         "IPE-L0100",
-        "pattern kind gate tested via compiler unit test; needs negative-suite migration",
-    ),
-    (
-        "refusal-tested",
-        "IPE-L0101",
-        "operator gate tested via compiler unit test; needs negative-suite migration",
-    ),
-    (
-        "refusal-tested",
-        "IPE-L0102",
-        "polymorphic value gate tested via compiler unit test; needs negative-suite migration",
+        "pattern kind gate not yet reached by any constant assertion or wire literal",
     ),
     (
         "refusal-tested",
         "IPE-L0103",
-        "function-valued parameter gate tested via compiler unit test; needs negative-suite migration",
+        "function-valued parameter gate not yet reached by any constant assertion or wire literal",
     ),
     (
         "refusal-tested",
         "IPE-L0104",
-        "Task () gate tested via compiler unit test; needs negative-suite migration",
+        "Task () gate not yet reached by any constant assertion or wire literal",
     ),
     (
         "refusal-tested",
         "IPE-L0105",
-        "parameter destructuring gate tested via compiler unit test; needs negative-suite migration",
+        "parameter destructuring gate not yet reached by any constant assertion or wire literal",
     ),
     (
         "refusal-tested",
         "IPE-L0106",
-        "top-level function signature gate tested via compiler unit test; needs negative-suite migration",
-    ),
-    (
-        "refusal-tested",
-        "IPE-L0108",
-        "kernel not-available gate tested via compiler unit test; needs negative-suite migration",
+        "top-level function signature gate not yet reached by any constant assertion or wire literal",
     ),
     (
         "refusal-tested",
         "IPE-L0110",
-        "partial application gate tested via compiler unit test; needs negative-suite migration",
+        "partial application gate not yet reached by any constant assertion or wire literal",
     ),
     (
         "refusal-tested",
         "IPE-L0111",
-        "generic record update gate tested via compiler unit test; needs negative-suite migration",
+        "generic record update gate not yet reached by any constant assertion or wire literal",
     ),
     (
         "refusal-tested",
         "IPE-L0112",
-        "nested constructor pattern gate tested via compiler unit test; needs negative-suite migration",
+        "nested constructor pattern gate not yet reached by any constant assertion or wire literal",
     ),
     (
         "refusal-tested",
         "IPE-L0113",
-        "constructor-as-fn gate tested via compiler unit test; needs negative-suite migration",
-    ),
-    (
-        "refusal-tested",
-        "IPE-L0114",
-        "function-in-constructor gate tested via compiler unit test; needs negative-suite migration",
-    ),
-    (
-        "refusal-tested",
-        "IPE-L0115",
-        "tuple pattern gate tested via compiler unit test; needs negative-suite migration",
-    ),
-    (
-        "refusal-tested",
-        "IPE-L0116",
-        "refutable-discrimination gate tested via compiler unit test; needs negative-suite migration",
+        "constructor-as-fn gate not yet reached by any constant assertion or wire literal",
     ),
     (
         "refusal-tested",
         "IPE-L0118",
-        "Web.appRouted gate tested via compiler unit test; needs negative-suite migration",
+        "Web.appRouted gate not yet reached by any constant assertion or wire literal",
     ),
     (
         "refusal-tested",
         "IPE-L0121",
-        "succeed arity gate tested via compiler unit test; needs negative-suite migration",
+        "succeed arity gate not yet reached by any constant assertion or wire literal",
     ),
     (
         "refusal-tested",
         "IPE-L0122",
-        "Web.route param-count gate tested via compiler unit test; needs negative-suite migration",
+        "Web.route param-count gate not yet reached by any constant assertion or wire literal",
     ),
     (
         "refusal-tested",
         "IPE-L0123",
-        "Web.route builder gate tested via compiler unit test; needs negative-suite migration",
+        "Web.route builder gate not yet reached by any constant assertion or wire literal",
     ),
     (
         "refusal-tested",
         "IPE-L0124",
-        "Web.app no-page field gate tested via compiler unit test; needs negative-suite migration",
-    ),
-    (
-        "refusal-tested",
-        "IPE-L0127",
-        "function-value reuse gate tested via compiler unit test; needs negative-suite migration",
+        "Web.app no-page field gate not yet reached by any constant assertion or wire literal",
     ),
     (
         "refusal-tested",
         "IPE-L0129",
-        "wasm routed gate tested via compiler unit test; needs negative-suite migration",
+        "wasm routed gate not yet reached by any constant assertion or wire literal",
     ),
     (
         "refusal-tested",
         "IPE-L0133",
-        "CustomElement not-emittable gate tested via compiler unit test; needs negative-suite migration",
+        "CustomElement not-emittable gate not yet reached by any constant assertion or wire literal",
     ),
     (
         "refusal-tested",
         "IPE-L0143",
-        "row-generic field type mismatch gate tested via compiler unit test; needs negative-suite migration",
+        "row-generic field type mismatch gate not yet reached by any constant assertion or wire literal",
     ),
     (
         "refusal-tested",
         "IPE-L0144",
-        "row-generic non-record gate tested via compiler unit test; needs negative-suite migration",
+        "row-generic non-record gate not yet reached by any constant assertion or wire literal",
     ),
     (
         "refusal-tested",
         "IPE-L0145",
-        "Store.eq field accessor gate tested via compiler unit test; needs negative-suite migration",
-    ),
-    (
-        "refusal-tested",
-        "IPE-L0146",
-        "Store accessor point-free gate tested via compiler unit test; needs negative-suite migration",
+        "Store.eq field accessor gate not yet reached by any constant assertion or wire literal",
     ),
     (
         "refusal-tested",
         "IPE-L0147",
-        "Ui.widget browser-only gate tested via compiler unit test; needs negative-suite migration",
-    ),
-    (
-        "refusal-tested",
-        "IPE-L0149",
-        "Store.select projection gate tested via compiler unit test; needs negative-suite migration",
-    ),
-    (
-        "refusal-tested",
-        "IPE-L0150",
-        "committed string literal Secret gate tested via compiler unit test; needs negative-suite migration",
-    ),
-    (
-        "refusal-tested",
-        "IPE-L0151",
-        "Secret.fromString point-free gate tested via compiler unit test; needs negative-suite migration",
+        "Ui.widget browser-only gate not yet reached by any constant assertion or wire literal",
     ),
     (
         "refusal-tested",
         "IPE-L0153",
-        "Ui.cells Cli shape gate tested via compiler unit test; needs negative-suite migration",
-    ),
-    (
-        "refusal-tested",
-        "IPE-L0200",
-        "deep-nesting gate tested via compiler unit test; needs negative-suite migration",
+        "Ui.cells Cli shape gate not yet reached by any constant assertion or wire literal",
     ),
     // ── IPE-N#### (name resolution) ─────────────────────────────────────────
     (
         "refusal-tested",
-        "IPE-N0021",
-        "import cycle detection tested via compiler unit test; needs negative-suite migration",
-    ),
-    (
-        "refusal-tested",
-        "IPE-N0023",
-        "module path mismatch tested via compiler unit test; needs negative-suite migration",
-    ),
-    (
-        "refusal-tested",
-        "IPE-N0024",
-        "ambiguous import tested via compiler unit test; needs negative-suite migration",
-    ),
-    (
-        "refusal-tested",
-        "IPE-N0025",
-        "reserved namespace tested via compiler unit test; needs negative-suite migration",
-    ),
-    (
-        "refusal-tested",
         "IPE-N0030",
-        "wasm server-module reachability tested via compiler unit test; needs negative-suite migration",
-    ),
-    (
-        "refusal-tested",
-        "IPE-N0033",
-        "Program managed-loop shape gate tested via compiler unit test; needs negative-suite migration",
+        "wasm server-module reachability not yet reached by any constant assertion or wire literal",
     ),
     (
         "refusal-tested",
         "IPE-N0036",
-        "removed surface gate tested via compiler unit test; needs negative-suite migration",
+        "removed surface gate not yet reached by any constant assertion or wire literal",
     ),
     (
         "refusal-tested",
         "IPE-N0037",
-        "reserved JS-interop type gate tested via compiler unit test; needs negative-suite migration",
+        "reserved JS-interop type gate not yet reached by any constant assertion or wire literal",
     ),
     (
         "refusal-tested",
         "IPE-N0041",
-        "Ipe.Codec.auto derivation gate tested via compiler unit test; needs negative-suite migration",
+        "Ipe.Codec.auto derivation gate not yet reached by any constant assertion or wire literal",
     ),
     (
         "refusal-tested",
         "IPE-N0043",
-        "config binding not threaded gate tested via compiler unit test; needs negative-suite migration",
+        "config binding not threaded not yet reached by any constant assertion or wire literal",
     ),
     (
         "refusal-tested",
         "IPE-N0045",
-        "runtime shape selection gate tested via compiler unit test; needs negative-suite migration",
+        "runtime shape selection gate not yet reached by any constant assertion or wire literal",
     ),
     // ── IPE-P#### (parse) ────────────────────────────────────────────────────
     (
         "refusal-tested",
         "IPE-P0018",
-        "accessor-space gate tested via compiler unit test; needs negative-suite migration",
+        "accessor-space gate not yet reached by any constant assertion or wire literal",
     ),
     (
         "refusal-tested",
@@ -344,27 +232,17 @@ const ALLOWLIST: &[(&str, &str, &str)] = &[
     (
         "refusal-tested",
         "IPE-T0003",
-        "type inference step budget tested via compiler unit test; needs negative-suite migration",
+        "type inference step budget not yet reached by any constant assertion or wire literal",
     ),
     (
         "refusal-tested",
         "IPE-T0011",
-        "redundant case branch tested via compiler unit test; needs negative-suite migration",
-    ),
-    (
-        "refusal-tested",
-        "IPE-T0016",
-        "async carrier arity tested via compiler unit test; needs negative-suite migration",
+        "redundant case branch not yet reached by any constant assertion or wire literal",
     ),
     (
         "refusal-tested",
         "IPE-T0019",
-        "or-pattern variable binding tested via compiler unit test; needs negative-suite migration",
-    ),
-    (
-        "refusal-tested",
-        "IPE-T0020",
-        "Html-vs-Element type gate tested via compiler unit test; needs negative-suite migration",
+        "or-pattern variable binding not yet reached by any constant assertion or wire literal",
     ),
 ];
 

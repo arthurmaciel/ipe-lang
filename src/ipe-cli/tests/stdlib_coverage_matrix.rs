@@ -78,149 +78,83 @@ fn list_map_has_the_right_facets() {
 // ── A2: the four static columns pass over the WHOLE current surface ───────────
 
 /// The pre-existing-hole allowlist. A real hole the static columns surface that
-/// predates this gate is recorded here with a one-line reason and a tracking
-/// note, so the column stays meaningful (never weakened) while the gate is not
-/// blocked on debt it did not introduce.
+/// predates this gate is recorded here with a one-line reason, so the column
+/// stays meaningful (never weakened) while the gate is not blocked on debt it
+/// did not introduce.
 ///
-/// Each entry is `(aspect, dotted-symbol, reason)`. Every allowlisted hole below
-/// is a `home` hole for a kernel whose registry qualifier is a short internal tag
-/// that maps to no canonical importable module: the user-facing member reconciles
-/// through its compiled-source alias (`Ipe.Ui.Cells.cells`, `Ipe.Html.Attributes`,
-/// `Ipe.Crypto`, `Ipe.Email`) or is shape-scoped (`Cmd` / `Sub` reached through
-/// `Ipe.Tea.<Shape>.Cmd` / `.Sub`, deliberately absent as standalone modules),
-/// but the kernel row itself carries only its bare qualifier. The fix is a
-/// registry decision — add a qualifier→module mapping or align the qualifier to
-/// the module — tracked as a coverage-SSOT follow-up, not weakened here.
+/// Each entry is `(aspect, dotted-symbol, reason)`.
+///
+/// `Cmd` and `Sub` are the only genuinely home-less kernel qualifiers: they are
+/// TEA-loop machinery that is always imported through the shape-scoped
+/// `Ipe.Tea.<Shape>.Cmd` / `.Sub` paths rather than a standalone `Ipe.Cmd` /
+/// `Ipe.Sub` module. A standalone module is deliberately absent (importing it
+/// would create an ambiguous shape association); the qualifiers are internal
+/// routing tokens, not importable paths. No `QUALIFIER_MODULE_OVERRIDES` entry
+/// is possible without inventing a phantom module.
+///
+/// The original 14 `Attr`/`EmailAddress`/`Key`/`Mac`/`UiCells` entries were
+/// resolved by wiring those qualifiers to their real compiled-source homes in
+/// `coverage::surface::QUALIFIER_MODULE_OVERRIDES` (issue #1699).
 const ALLOWLIST: &[(&str, &str, &str)] = &[
     (
         "home",
-        "Ipe.Attr.attribute",
-        "kernel qualifier `Attr` → compiled-source Ipe.Html.Attributes; no registry mapping",
-    ),
-    (
-        "home",
-        "Ipe.Attr.boolAttribute",
-        "kernel qualifier `Attr` → compiled-source Ipe.Html.Attributes; no registry mapping",
-    ),
-    (
-        "home",
-        "Ipe.Attr.noAttr",
-        "kernel qualifier `Attr` → compiled-source Ipe.Html.Attributes; no registry mapping",
-    ),
-    (
-        "home",
         "Ipe.Cmd.batch",
-        "kernel qualifier `Cmd` is shape-scoped (Ipe.Tea.<Shape>.Cmd); no standalone module",
+        "qualifier `Cmd` is shape-scoped (Ipe.Tea.<Shape>.Cmd); no standalone module by design",
     ),
     (
         "home",
         "Ipe.Cmd.map",
-        "kernel qualifier `Cmd` is shape-scoped (Ipe.Tea.<Shape>.Cmd); no standalone module",
+        "qualifier `Cmd` is shape-scoped (Ipe.Tea.<Shape>.Cmd); no standalone module by design",
     ),
     (
         "home",
         "Ipe.Cmd.none",
-        "kernel qualifier `Cmd` is shape-scoped (Ipe.Tea.<Shape>.Cmd); no standalone module",
+        "qualifier `Cmd` is shape-scoped (Ipe.Tea.<Shape>.Cmd); no standalone module by design",
     ),
     (
         "home",
         "Ipe.Cmd.perform",
-        "kernel qualifier `Cmd` is shape-scoped (Ipe.Tea.<Shape>.Cmd); no standalone module",
+        "qualifier `Cmd` is shape-scoped (Ipe.Tea.<Shape>.Cmd); no standalone module by design",
     ),
     (
         "home",
         "Ipe.Cmd.publish",
-        "kernel qualifier `Cmd` is shape-scoped (Ipe.Tea.<Shape>.Cmd); no standalone module",
+        "qualifier `Cmd` is shape-scoped (Ipe.Tea.<Shape>.Cmd); no standalone module by design",
     ),
     (
         "home",
         "Ipe.Cmd.publishNoEcho",
-        "kernel qualifier `Cmd` is shape-scoped (Ipe.Tea.<Shape>.Cmd); no standalone module",
-    ),
-    (
-        "home",
-        "Ipe.EmailAddress.parse",
-        "kernel qualifier `EmailAddress` → compiled-source Ipe.Email; no registry mapping",
-    ),
-    (
-        "home",
-        "Ipe.EmailAddress.toString",
-        "kernel qualifier `EmailAddress` → compiled-source Ipe.Email; no registry mapping",
-    ),
-    (
-        "home",
-        "Ipe.Key.fromBytes",
-        "kernel qualifier `Key` → Ipe.Crypto key helpers; no registry mapping",
-    ),
-    (
-        "home",
-        "Ipe.Key.fromString",
-        "kernel qualifier `Key` → Ipe.Crypto key helpers; no registry mapping",
-    ),
-    (
-        "home",
-        "Ipe.Mac.toHex",
-        "kernel qualifier `Mac` → Ipe.Crypto MAC helpers; no registry mapping",
+        "qualifier `Cmd` is shape-scoped (Ipe.Tea.<Shape>.Cmd); no standalone module by design",
     ),
     (
         "home",
         "Ipe.Sub.batch",
-        "kernel qualifier `Sub` is shape-scoped (Ipe.Tea.<Shape>.Sub); no standalone module",
+        "qualifier `Sub` is shape-scoped (Ipe.Tea.<Shape>.Sub); no standalone module by design",
     ),
     (
         "home",
         "Ipe.Sub.every",
-        "kernel qualifier `Sub` is shape-scoped (Ipe.Tea.<Shape>.Sub); no standalone module",
+        "qualifier `Sub` is shape-scoped (Ipe.Tea.<Shape>.Sub); no standalone module by design",
     ),
     (
         "home",
         "Ipe.Sub.map",
-        "kernel qualifier `Sub` is shape-scoped (Ipe.Tea.<Shape>.Sub); no standalone module",
+        "qualifier `Sub` is shape-scoped (Ipe.Tea.<Shape>.Sub); no standalone module by design",
     ),
     (
         "home",
         "Ipe.Sub.none",
-        "kernel qualifier `Sub` is shape-scoped (Ipe.Tea.<Shape>.Sub); no standalone module",
+        "qualifier `Sub` is shape-scoped (Ipe.Tea.<Shape>.Sub); no standalone module by design",
     ),
     (
         "home",
         "Ipe.Sub.subscribeTopic",
-        "kernel qualifier `Sub` is shape-scoped (Ipe.Tea.<Shape>.Sub); no standalone module",
+        "qualifier `Sub` is shape-scoped (Ipe.Tea.<Shape>.Sub); no standalone module by design",
     ),
     (
         "home",
         "Ipe.Sub.subscribeWebSocket",
-        "kernel qualifier `Sub` is shape-scoped (Ipe.Tea.<Shape>.Sub); no standalone module",
-    ),
-    (
-        "home",
-        "Ipe.UiCells.cells",
-        "kernel qualifier `UiCells` → compiled-source Ipe.Ui.Cells; no registry mapping",
-    ),
-    (
-        "home",
-        "Ipe.UiCells.column",
-        "kernel qualifier `UiCells` → compiled-source Ipe.Ui.Cells; no registry mapping",
-    ),
-    (
-        "home",
-        "Ipe.UiCells.el",
-        "kernel qualifier `UiCells` → compiled-source Ipe.Ui.Cells; no registry mapping",
-    ),
-    (
-        "home",
-        "Ipe.UiCells.none",
-        "kernel qualifier `UiCells` → compiled-source Ipe.Ui.Cells; no registry mapping",
-    ),
-    (
-        "home",
-        "Ipe.UiCells.row",
-        "kernel qualifier `UiCells` → compiled-source Ipe.Ui.Cells; no registry mapping",
-    ),
-    (
-        "home",
-        "Ipe.UiCells.text",
-        "kernel qualifier `UiCells` → compiled-source Ipe.Ui.Cells; no registry mapping",
+        "qualifier `Sub` is shape-scoped (Ipe.Tea.<Shape>.Sub); no standalone module by design",
     ),
 ];
 
