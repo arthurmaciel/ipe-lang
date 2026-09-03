@@ -1,0 +1,118 @@
+module Main exposing (main)
+
+-- | file-camera — `Ipe.Browser.FilePicker` and `Ipe.Browser.Camera` over the
+-- per-capability port mechanism, end-to-end with the consent gate satisfied.
+--
+-- `Ipe.Browser.FilePicker` opens a general-purpose file picker (`pickFile`) or
+-- an image-only picker (`pickImage`); `Ipe.Browser.Camera` invokes the device
+-- camera (mobile) or falls back to an image file picker (desktop). Both resolve
+-- as `Task Error PickedFile` via the correlated port→Task bridge.
+--
+-- Each import discloses its specific `js-port:<axis>` capability, which
+-- `package.ipe` grants under `[capabilities] accepts` — without the grant the
+-- build fails closed (IPE-S0002) naming the disclosing module.
+--
+-- Every inbound reply is a typed `Result Error _`: a host permission denial or
+-- a user cancellation is an ordinary `Err` the update folds, never a thrown
+-- error or a silently dropped frame.
+
+
+import Ipe.Tea.Web as Web
+import Ipe.Tea.Web.Cmd as Cmd
+import Ipe.Tea.Web.Sub as Sub
+import Ipe.Ui as Ui
+import Ipe.Error as Error exposing (Error)
+import Ipe.Browser.FilePicker as FilePicker
+import Ipe.Browser.Camera as Camera
+import Ipe.Task as Task
+
+
+type alias Model =
+    { fileResult : String
+    , cameraResult : String
+    }
+
+
+type Msg
+    = PickAnyFile
+    | PickAnImage
+    | CaptureAPhoto
+    | GotFile (Result Error FilePicker.PickedFile)
+    | GotPhoto (Result Error Camera.PickedFile)
+
+
+init : WebReq -> ( Model, Cmd.Cmd Msg )
+init _req =
+    ( { fileResult = "none", cameraResult = "none" }, Cmd.none )
+
+
+update : Msg -> Model -> ( Model, Cmd.Cmd Msg )
+update msg model =
+    case msg of
+        PickAnyFile ->
+            ( model, Task.attempt GotFile FilePicker.pickFile )
+
+        PickAnImage ->
+            ( model, Task.attempt GotFile FilePicker.pickImage )
+
+        CaptureAPhoto ->
+            ( model, Task.attempt GotPhoto Camera.capturePhoto )
+
+        GotFile result ->
+            case result of
+                Ok picked ->
+                    ( { model | fileResult = describeFile picked }, Cmd.none )
+
+                Err error ->
+                    ( { model | fileResult = "error: " ++ Error.toString error }, Cmd.none )
+
+        GotPhoto result ->
+            case result of
+                Ok picked ->
+                    ( { model | cameraResult = describeCaptured picked }, Cmd.none )
+
+                Err error ->
+                    ( { model | cameraResult = "error: " ++ Error.toString error }, Cmd.none )
+
+
+describeFile : FilePicker.PickedFile -> String
+describeFile picked =
+    picked.name ++ " (" ++ picked.mime ++ ")"
+
+
+describeCaptured : Camera.PickedFile -> String
+describeCaptured picked =
+    picked.name ++ " (" ++ picked.mime ++ ")"
+
+
+-- Inbound subscriptions: each folds its narrow `JsMsg` into a typed `Result`
+-- message. A malformed frame is dropped by the seal decoder; a denial arrives
+-- as an `Err`.
+subscriptions : Model -> Sub.Sub Msg
+subscriptions _model =
+    Sub.batch
+        [ FilePicker.picks GotFile
+        , Camera.captures GotPhoto
+        ]
+
+
+view : Model -> Element Msg
+view model =
+    Ui.column []
+        [ Ui.button [] { onPress = Just PickAnyFile, label = Ui.text "Pick any file" }
+        , Ui.button [] { onPress = Just PickAnImage, label = Ui.text "Pick an image" }
+        , Ui.text ("file: " ++ model.fileResult)
+        , Ui.button [] { onPress = Just CaptureAPhoto, label = Ui.text "Capture photo" }
+        , Ui.text ("camera: " ++ model.cameraResult)
+        ]
+
+
+main =
+    Web.app
+        { init = init
+        , update = update
+        , view = view
+        , subscriptions = subscriptions
+        , routes = []
+        , notFound = PickAnyFile
+        }

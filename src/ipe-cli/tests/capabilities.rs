@@ -1376,3 +1376,169 @@ fn a_network_info_app_without_the_grant_is_rejected() -> TestResult {
     let _ = std::fs::remove_dir_all(&dir);
     Ok(())
 }
+
+// ── Ipe.Browser.FilePicker — a first-party web-API module ────────────────────
+
+/// A Web-shape app importing `Ipe.Browser.FilePicker` — the import-derived signal
+/// that discloses the SPECIFIC `js-port:file` axis on top of the `:raw` floor.
+const FILE_PICKER_APP: &str = r#"module Main exposing (main)
+
+import Ipe.Tea.Web as Web
+import Ipe.Tea.Web.Cmd as Cmd
+import Ipe.Tea.Web.Sub as Sub
+import Ipe.Ui as Ui
+import Ipe.Error as Error exposing (Error)
+import Ipe.Browser.FilePicker as FilePicker
+import Ipe.Task as Task
+
+type alias Model = { result : String }
+
+type Msg = Pick | GotFile (Result Error FilePicker.PickedFile)
+
+init : WebReq -> ( Model, Cmd.Cmd Msg )
+init _r =
+    ( { result = "" }, Cmd.none )
+
+update : Msg -> Model -> ( Model, Cmd.Cmd Msg )
+update msg model =
+    case msg of
+        Pick ->
+            ( model, Task.attempt GotFile FilePicker.pickFile )
+
+        GotFile _r ->
+            ( model, Cmd.none )
+
+view : Model -> Element Msg
+view _model =
+    Ui.text "ok"
+
+subscriptions : Model -> Sub.Sub Msg
+subscriptions _model =
+    FilePicker.picks GotFile
+
+main =
+    Web.app
+        { init = init, update = update, view = view, subscriptions = subscriptions
+        , routes = [], notFound = Pick
+        }
+"#;
+
+/// Importing `Ipe.Browser.FilePicker` discloses the specific `js-port:file` axis.
+#[test]
+fn importing_browser_file_picker_discloses_js_port_file() -> TestResult {
+    let dir = write_single("filepicker", FILE_PICKER_APP)?;
+    let entry = dir.join("Main.ipe");
+    let declared = BTreeSet::from([
+        Capability::JsPort(WebCapability::File),
+        Capability::JsPort(WebCapability::Raw),
+    ]);
+    let r = verify_capabilities(&entry, &declared);
+    assert!(
+        r.is_ok(),
+        "importing Ipe.Browser.FilePicker must disclose js-port:file (+ the :raw floor): {r:?}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+    Ok(())
+}
+
+/// Fail-closed: a file-picker app that omits the grant is rejected as under-declared.
+#[test]
+fn a_file_picker_app_without_the_grant_is_rejected() -> TestResult {
+    let dir = write_single("filepickernogrant", FILE_PICKER_APP)?;
+    let entry = dir.join("Main.ipe");
+    let declared = BTreeSet::from([Capability::JsPort(WebCapability::Raw)]);
+    let r = verify_capabilities(&entry, &declared);
+    assert!(
+        matches!(
+            &r,
+            Err(ipe::CliError::CapabilityMismatch { missing, .. })
+                if missing.contains(&"js-port:file")
+        ),
+        "an ungranted file-picker app must be rejected naming js-port:file, got: {r:?}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+    Ok(())
+}
+
+// ── Ipe.Browser.Camera — a first-party web-API module ────────────────────────
+
+/// A Web-shape app importing `Ipe.Browser.Camera` — the import-derived signal
+/// that discloses the SPECIFIC `js-port:camera` axis on top of the `:raw` floor.
+const CAMERA_APP: &str = r#"module Main exposing (main)
+
+import Ipe.Tea.Web as Web
+import Ipe.Tea.Web.Cmd as Cmd
+import Ipe.Tea.Web.Sub as Sub
+import Ipe.Ui as Ui
+import Ipe.Error as Error exposing (Error)
+import Ipe.Browser.Camera as Camera
+import Ipe.Task as Task
+
+type alias Model = { result : String }
+
+type Msg = Capture | GotPhoto (Result Error Camera.PickedFile)
+
+init : WebReq -> ( Model, Cmd.Cmd Msg )
+init _r =
+    ( { result = "" }, Cmd.none )
+
+update : Msg -> Model -> ( Model, Cmd.Cmd Msg )
+update msg model =
+    case msg of
+        Capture ->
+            ( model, Task.attempt GotPhoto Camera.capturePhoto )
+
+        GotPhoto _r ->
+            ( model, Cmd.none )
+
+view : Model -> Element Msg
+view _model =
+    Ui.text "ok"
+
+subscriptions : Model -> Sub.Sub Msg
+subscriptions _model =
+    Camera.captures GotPhoto
+
+main =
+    Web.app
+        { init = init, update = update, view = view, subscriptions = subscriptions
+        , routes = [], notFound = Capture
+        }
+"#;
+
+/// Importing `Ipe.Browser.Camera` discloses the specific `js-port:camera` axis.
+#[test]
+fn importing_browser_camera_discloses_js_port_camera() -> TestResult {
+    let dir = write_single("camera", CAMERA_APP)?;
+    let entry = dir.join("Main.ipe");
+    let declared = BTreeSet::from([
+        Capability::JsPort(WebCapability::Camera),
+        Capability::JsPort(WebCapability::Raw),
+    ]);
+    let r = verify_capabilities(&entry, &declared);
+    assert!(
+        r.is_ok(),
+        "importing Ipe.Browser.Camera must disclose js-port:camera (+ the :raw floor): {r:?}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+    Ok(())
+}
+
+/// Fail-closed: a camera app that omits the grant is rejected as under-declared.
+#[test]
+fn a_camera_app_without_the_grant_is_rejected() -> TestResult {
+    let dir = write_single("cameranogrant", CAMERA_APP)?;
+    let entry = dir.join("Main.ipe");
+    let declared = BTreeSet::from([Capability::JsPort(WebCapability::Raw)]);
+    let r = verify_capabilities(&entry, &declared);
+    assert!(
+        matches!(
+            &r,
+            Err(ipe::CliError::CapabilityMismatch { missing, .. })
+                if missing.contains(&"js-port:camera")
+        ),
+        "an ungranted camera app must be rejected naming js-port:camera, got: {r:?}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+    Ok(())
+}
