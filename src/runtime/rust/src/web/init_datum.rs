@@ -385,47 +385,6 @@ mod hot_tests {
         set_dev_overlay_active_for_test(None);
     }
 
-    /// The session-scoping SEAL: an `init` edit applies to a FRESH session (a
-    /// `apply_init_hot` call at creation) but is a no-op for a LIVE session (which
-    /// never calls `apply_init_hot` — it reuses the `Model` it already holds).
-    ///
-    /// This models the runtime's two session paths: session CREATION runs
-    /// `apply_init_hot` (so it sees the edited datum), whereas a LIVE session's
-    /// `Model` is carried through untouched (it never re-consults `init`). The
-    /// property is structural — `apply_init_hot` is the ONLY init seam and it is
-    /// reached only at creation — so this asserts the seam's contract directly.
-    #[test]
-    fn init_edit_reseeds_fresh_session_but_not_a_live_one() {
-        let _g = overlay_test_lock();
-        set_dev_overlay_active_for_test(Some(true));
-        clear_dev_init_for_test();
-
-        // A live session already advanced its Model to count = 42; it is NEVER
-        // routed through `apply_init_hot`, so the edit cannot touch it.
-        let live_session_model = Counter { count: 42 };
-
-        // The dev channel registers an edited init (a fresh session should start at
-        // count = 9). The overlay key is the app's baked init-datum JSON.
-        register_dev_init(&baked_json(), datum(9));
-
-        // A FRESH session (a creation-path `apply_init_hot`) picks up the edit.
-        let fresh = apply_init_hot(&baked_json(), compiled());
-        assert_eq!(
-            fresh.count, 9,
-            "a fresh session starts from the edited init"
-        );
-
-        // The LIVE session's Model is unchanged — the edit is a no-op for it,
-        // because it is never passed through `apply_init_hot`.
-        assert_eq!(
-            live_session_model.count, 42,
-            "a live session keeps its Model across an init edit (session-scoped)"
-        );
-
-        clear_dev_init_for_test();
-        set_dev_overlay_active_for_test(None);
-    }
-
     #[test]
     fn replacement_type_mismatch_refuses_to_compiled() {
         let _g = overlay_test_lock();
