@@ -6318,47 +6318,46 @@ fn canonicalise_asserted_call(
     if env.origin != ModuleOrigin::User {
         return Ok(None);
     }
-    let src::Expr_::VarQual(qualifier, member) = &callee.value else {
-        return Ok(None);
-    };
     // Matched by RESOLVE, never intern: this runs for every call expression
     // in every user module, and interning a symbol the module never spells
-    // would shift the deterministic interning sequence (golden byte
-    // identity). A module that does spell `Rust.Ffi.call` interned both
+    // would shift the deterministic interning sequence (golden byte identity).
+    // A module that does spell `Rust.Ffi.call` / `Rust.fn` interned the
     // symbols at parse.
-    if interner.resolve(*qualifier) != Some(crate::asserted::ASSERTED_MODULE)
-        || interner.resolve(*member) != Some("call")
-    {
+    let Some(which) = crate::asserted::classify_asserted_callee(callee, interner) else {
         return Ok(None);
-    }
+    };
     let malformed = |detail: String| Diagnostic::Name {
         span,
         msg: NameError::AssertedCallMalformed {
             detail: detail.into_boxed_str(),
         },
     };
-    let Some((path_expr, value_args)) = args.split_first() else {
-        return Err(malformed(
-            "it is applied to no arguments — the first argument must be the \
-             string-literal Rust path"
-                .to_owned(),
-        ));
-    };
-    let src::Expr_::Str(raw_path) = &path_expr.value else {
-        return Err(malformed(
-            "the path must be a string literal, never a computed value".to_owned(),
-        ));
-    };
-    let path = crate::asserted::AssertedPath::parse(raw_path).map_err(&malformed)?;
+    // Each spelling consumes its own leading string literals as the path; any
+    // remaining arguments are value arguments applied to the forwarder.
+    let path_arity = crate::asserted::path_arg_count(which);
+    if args.len() < path_arity {
+        return Err(malformed(match which {
+            crate::asserted::AssertedCallee::Call =>
+                "it is applied to no arguments — the first argument must be the \
+                 string-literal Rust path".to_owned(),
+            crate::asserted::AssertedCallee::RustFn =>
+                "`Rust.fn` takes exactly two string literals: the crate and the item \
+                 path (`Rust.fn \"sha2\" \"Sha256::digest\"`)".to_owned(),
+        }));
+    }
+    let (path_args, value_args) = args.split_at(path_arity);
+    let path = crate::asserted::read_asserted_path(which, callee.span, path_args)
+        .map_err(|(_, detail)| malformed(detail))?;
     let def_sym = interner.intern(&path.def_name())?;
     // The generated module is imported as `import Rust.Ffi` (unaliased), which
     // registers it under its LAST path segment like every dep import — so the
     // rewritten reference resolves through the `Ffi` qualifier even though the
     // surface spelling is the full `Rust.Ffi.call`.
     let ffi_qualifier = interner.intern("Ffi")?;
+    let raw_path = path.as_str().to_owned();
     let target = resolve_qual_var(ffi_qualifier, def_sym, span, env, interner).map_err(|_| {
         malformed(format!(
-            "no asserted binding exists for `{raw_path}` — an asserted call needs \
+            "no asserted binding exists for `{raw_path}` — a native binding needs \
              `import Rust.Ffi` (unaliased), the target crate installed via `ipe rust \
              add`, and a top-level annotated definition whose whole body is this call"
         ))
