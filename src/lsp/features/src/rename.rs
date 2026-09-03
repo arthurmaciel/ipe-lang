@@ -314,11 +314,25 @@ pub fn rename(
     };
     drop(interner);
 
-    // Convert the EditSet to a WorkspaceEdit grouped by URI.
+    edit_set_to_workspace_edit(db, &edit_set, resolver, req.encoding)
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+/// Group a canon [`EditSet`] into an LSP [`WorkspaceEdit`] keyed by document URI.
+///
+/// Each edit's symbol module path is resolved back to a string path for the
+/// resolver's URI and text callbacks; an edit whose path, URI, or text cannot be
+/// resolved is skipped. Returns `None` when no edit survives resolution.
+fn edit_set_to_workspace_edit(
+    db: &IpeDatabase,
+    edit_set: &EditSet,
+    resolver: &ModuleResolver<'_>,
+    encoding: PositionEncoding,
+) -> Option<WorkspaceEdit> {
     let mut edits_by_uri: BTreeMap<Url, Vec<TextEdit>> = BTreeMap::new();
 
     for edit in &edit_set.edits {
-        // Convert Symbol path back to String path for the resolver callbacks.
         let string_path: Option<Vec<String>> = {
             let interner = db.interner().lock();
             edit.file
@@ -335,7 +349,7 @@ pub fn rename(
         let Some(text) = (resolver.text_of_module)(&string_path) else {
             continue;
         };
-        let range = span_to_range(&text, edit.span, req.encoding);
+        let range = span_to_range(&text, edit.span, encoding);
         edits_by_uri.entry(uri).or_default().push(TextEdit {
             range,
             new_text: edit.replacement.clone(),
@@ -352,8 +366,6 @@ pub fn rename(
         change_annotations: None,
     })
 }
-
-// ── Helpers ───────────────────────────────────────────────────────────────────
 
 fn def_span_lo_usize(span: Span) -> Option<usize> {
     usize::try_from(span.lo).ok()
