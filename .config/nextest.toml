@@ -53,10 +53,19 @@ slow-timeout = { period = "60s", terminate-after = 10 }
 # and offline-run regression). The shared lock is the contended resource, so
 # serializing the audit-spawning binaries is the exact-shape fix the
 # server-e2e group uses for the shared cargo target lock.
+#
+# `wasm-external-cargo` (max 1): the wasm-hydration seal test spawns an external
+# `cargo check --target wasm32-unknown-unknown` on the emitted crate. Run
+# concurrently with the shard's other heavy cargo builds it contends the global
+# cargo registry/target lock and cold-compiles the wasm dependency graph under
+# load — the transient failure a `retries` override used to mask. Serializing it
+# (paired with the test's own stable, warm wasm target dir) removes the race:
+# one wasm check runs at a time, against a target that compiled its deps once.
 [test-groups]
 heavy-server-e2e = { max-threads = 1 }
 cwd-mutating = { max-threads = 1 }
 advisory-db-lock = { max-threads = 1 }
+wasm-external-cargo = { max-threads = 1 }
 
 [[profile.ci.overrides]]
 filter = 'binary(watch_sigterm) | binary(watch_integration) | binary(watch_hot_appearance) | binary(watch_bluegreen) | binary(server_e2e) | binary(live_e2e) | binary(http_e2e) | binary(webview_e2e) | binary(test_command) | binary(verify) | binary(stdlib_coverage_dynamic)'
@@ -84,12 +93,17 @@ filter = 'binary(clean_vs_incremental_parity) | binary(per_module_typecheck_pari
 slow-timeout = { period = "60s", terminate-after = 20 }
 
 # The wasm-hydration gate spawns `cargo check --target wasm32-unknown-unknown` on
-# an emitted crate; under CI resource contention that external build fails
-# transiently (registry/target lock contention), not on a code defect. Retry so a
-# flake self-heals instead of reddening the required seal-slice shard.
+# an emitted crate. The contended resource is the global cargo registry/target
+# lock plus a cold wasm-dep compile; serializing the check into its own group —
+# paired with the test's stable, warm wasm target dir — removes the race at its
+# root, so no retry mask is needed and a real failure stays visible.
 [[profile.ci.overrides]]
 filter = 'test(hydrate_glue_type_name_matches_emitted_struct_and_compiles_for_wasm)'
-retries = 2
+test-group = 'wasm-external-cargo'
+
+[[profile.default.overrides]]
+filter = 'test(hydrate_glue_type_name_matches_emitted_struct_and_compiles_for_wasm)'
+test-group = 'wasm-external-cargo'
 
 [[profile.default.overrides]]
 filter = 'binary(watch_sigterm) | binary(watch_integration) | binary(watch_hot_appearance) | binary(watch_bluegreen) | binary(server_e2e) | binary(live_e2e) | binary(http_e2e) | binary(webview_e2e) | binary(test_command) | binary(verify) | binary(stdlib_coverage_dynamic)'

@@ -497,10 +497,21 @@ fn hydrate_glue_type_name_matches_emitted_struct_and_compiles_for_wasm() {
 
     // THE SEAL: the emitted crate must actually compile for wasm. A glue/type
     // name mismatch is an E0433/E0425 here, turning ipe-exit-0 into a hard red.
+    //
+    // The external `cargo check` runs against a STABLE wasm target dir that
+    // persists across the run, so the wasm dependency graph compiles once and
+    // stays warm: no first-time registry fetch or cold dep compile happens under
+    // shard load. Paired with this test's `wasm-external-cargo` serialization
+    // group (`.config/nextest.toml`), only one wasm `cargo check` runs at a time,
+    // so it never contends the global cargo registry/target lock with a
+    // concurrent build. A throwaway per-invocation target would instead force a
+    // cold compile every run, which under CI load was the transient failure a
+    // retry used to mask.
+    let wasm_target = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("wasm_hydrate_seal_target");
     let status = std::process::Command::new("cargo")
         .args(["check", "--target", "wasm32-unknown-unknown"])
         .current_dir(&out)
-        .env("CARGO_TARGET_DIR", out.join("target"))
+        .env("CARGO_TARGET_DIR", &wasm_target)
         .env("IPE_RUNTIME_DIR", &runtime)
         .status()
         .expect("spawn cargo check");
@@ -509,8 +520,6 @@ fn hydrate_glue_type_name_matches_emitted_struct_and_compiles_for_wasm() {
         "the emitted wasm-hydration crate must `cargo check` for wasm32-unknown-unknown \
          (the hydrate glue and the emitted HydrationState struct must share ONE type name)"
     );
-
-    let _ = std::fs::remove_dir_all(out.join("target"));
 }
 
 /// The same server-only program builds cleanly for the native target — the
