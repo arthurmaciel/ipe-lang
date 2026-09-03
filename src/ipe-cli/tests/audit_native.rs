@@ -760,7 +760,13 @@ mod real_jail {
         \x20       Err _ -> Io.println \"err\"\n";
 
     /// Write the real bound crate `csum` (a pure `checksum`), returning its dir.
-    fn write_csum_crate(base: &std::path::Path) -> PathBuf {
+    /// When `net_reach` is set the crate carries a `build.rs` that connects a TCP
+    /// socket at build time — a genuine, undeclared network reach: under a jail
+    /// scoped to a set WITHOUT network the connect fails, the build.rs propagates
+    /// it, cargo exits non-zero, and the probe build is `BuildFailed` (a real
+    /// OS-boundary reject). Otherwise the crate is pure and its probe build is
+    /// clean.
+    fn write_csum_crate(base: &std::path::Path, net_reach: bool) -> PathBuf {
         let dir = base.join("csum");
         std::fs::create_dir_all(dir.join("src")).expect("csum src");
         std::fs::write(
@@ -774,6 +780,22 @@ mod real_jail {
              data.bytes().map(i64::from).sum()\n}\n",
         )
         .expect("csum lib.rs");
+        if net_reach {
+            // A build-time connect the build GENUINELY needs (it propagates the
+            // error): a jail withholding `network` makes the connect fail → build.rs
+            // errors → cargo non-zero → BuildFailed. A `let _ =`-ignored connect
+            // would be a no-op (a caught denial is no effect) and read as clean, so
+            // the negative must propagate to prove the build truly demanded network.
+            std::fs::write(
+                dir.join("build.rs"),
+                "use std::net::TcpStream;\nuse std::time::Duration;\n\
+                 fn main() {\n    \
+                 let addr: std::net::SocketAddr = \"140.82.112.3:443\".parse().unwrap();\n    \
+                 TcpStream::connect_timeout(&addr, Duration::from_secs(5))\n        \
+                 .expect(\"tier2 e2e negative: build genuinely needs network\");\n}\n",
+            )
+            .expect("csum build.rs");
+        }
         dir
     }
 
@@ -781,7 +803,10 @@ mod real_jail {
     /// its app crate under `base/out`, and repoint the bound-crate pin at the
     /// local fixture crate so an offline probe build resolves it. Returns the
     /// package root and the emitted crate dir.
-    fn emit_real_native_package(base: &std::path::Path) -> Option<(PathBuf, PathBuf)> {
+    fn emit_real_native_package(
+        base: &std::path::Path,
+        net_reach: bool,
+    ) -> Option<(PathBuf, PathBuf)> {
         let runtime = ipe::resolve_runtime().ok()?;
         let pkg = base.join("pkg");
         std::fs::create_dir_all(pkg.join("src")).expect("pkg src");
@@ -789,7 +814,7 @@ mod real_jail {
         // the manifest only needs to name the rust dependency (the legacy reader
         // captured only its name + version, never a path). The crate's path is
         // used below to repoint the emitted manifest at the local fixture.
-        let csum = write_csum_crate(base);
+        let csum = write_csum_crate(base, net_reach);
         std::fs::write(
             pkg.join("package.ipe"),
             "module Package exposing (package)\n\n\npackage =\n\
@@ -877,7 +902,7 @@ mod real_jail {
             return;
         }
         let base = non_tmp_base("certify");
-        let Some((pkg, out)) = emit_real_native_package(&base) else {
+        let Some((pkg, out)) = emit_real_native_package(&base, false) else {
             eprintln!("audit_native e2e: skipping — runtime unavailable");
             return;
         };
@@ -928,6 +953,122 @@ mod real_jail {
         let _ = std::fs::remove_dir_all(&base);
     }
 
+    #[test]
+    fn a_real_native_package_reaching_an_undeclared_axis_rejects_end_to_end() {
+        // THE END-TO-END REFUSAL: the mirror of the certify test, but with a bound
+        // crate whose `build.rs` reaches `network` while the manifest declares only
+        // `native-ffi` (network UNdeclared). Driven through the WHOLE `native_tier2`
+        // entry — sidecar read, probe emit, jail establish, reconcile — not
+        // `reconcile_native` directly. Under the declared-scoped jail (network
+        // withheld) the bound crate's build-time connect is denied → cargo non-zero
+        // → `BuildFailed` → REJECT. This is the load-bearing proof that a native
+        // package whose code demands a capability its consumer never consented to is
+        // refused at the OS boundary by the production entry, never admitted.
+        let Some(_tools) = e2e_tools() else { return };
+        if which_cargo().is_none() {
+            eprintln!("audit_native e2e: skipping — cargo not found on PATH");
+            return;
+        }
+        let base = non_tmp_base("reject-undeclared");
+        let Some((pkg, out)) = emit_real_native_package(&base, true) else {
+            eprintln!("audit_native e2e: skipping — runtime unavailable");
+            return;
+        };
+
+        // Declare only `native-ffi`: network is NOT in the consent surface, so the
+        // declared-scoped jail withholds it.
+        let declared: BTreeSet<Capability> = set(&[Capability::NativeFfi]);
+        assert!(
+            !declared.contains(&Capability::Network),
+            "the fixture must leave network undeclared for the reject to be real"
+        );
+        let _guard = JAIL_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let verdict = native_tier2(&NativeAudit {
+            declared: &declared,
+            has_rust_deps: true,
+            root: &pkg,
+            emitted_dir: &out,
+            probe_fixture: super::support::manifest_dir()
+                .join("../../tests/fixtures/admission/untrusted-build.sh"),
+        });
+
+        // POSITIVE CONTROL: `native_tier2` above emitted the probe crate + generated
+        // its lockfile, so the SAME probe crate — bound crate's net-reaching
+        // `build.rs` included — now builds OUTSIDE any jail. A clean unjailed build
+        // proves the toolchain and crate are sound and outbound egress is available,
+        // so the reject INSIDE the jail can only be the WITHHELD network capability,
+        // never a broken toolchain. If the unjailed build ALSO fails (no egress on
+        // this runner) the duality is unprovable — the reject is still valid and
+        // fail-closed (a native package reaching an unbuildable-under-jail surface is
+        // refused), but this test cannot attribute it to the withheld axis, so it
+        // skips the strict duality assert rather than mis-attribute.
+        let unjailed_clean = unjailed_probe_build_is_clean(&out, &base.join("control-target"));
+
+        let err = verdict.expect_err(
+            "a native package reaching an undeclared axis must reject end-to-end, never certify",
+        );
+        let msg = err.to_string();
+        if !unjailed_clean {
+            eprintln!(
+                "audit_native e2e: undeclared-axis package REJECTED end-to-end ({msg}); \
+                 no outbound egress to run the positive control, so the axis attribution \
+                 is unprovable here — the fail-closed refusal still holds."
+            );
+            assert!(
+                !msg.contains("passed"),
+                "a package reaching a withheld axis must never certify: {msg}"
+            );
+            let _ = std::fs::remove_dir_all(&base);
+            return;
+        }
+        // The declared-scoped run of the full entry is child-exit-only (no
+        // fabricated fixed-axis probe), so the signal is the child build's own
+        // OS-boundary failure: the net-withheld build.rs connect fails → cargo
+        // non-zero → BuildFailed. Axis NAMING on the full run is deliberately traded
+        // for not fabricating a demand the package never made (the direct-call
+        // canaries name the axis); the property proven here is that the full entry
+        // REFUSES rather than admits.
+        assert!(
+            msg.contains("failed to build") || msg.contains("network"),
+            "the reject is a real OS-boundary refusal (BuildFailed or a named axis): {msg}"
+        );
+        assert!(
+            !msg.contains("passed"),
+            "a package reaching a withheld axis must never certify: {msg}"
+        );
+        eprintln!("audit_native e2e: undeclared-axis native package REJECTED end-to-end: {msg}");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// The positive control for the end-to-end reject: build the emitted probe
+    /// crate OUTSIDE any jail. A clean build proves the toolchain and the bound
+    /// crate (net-reaching `build.rs` included) are sound and outbound egress is
+    /// available, so a failure INSIDE the declared-scoped jail can only be the
+    /// withheld capability. `false` when the unjailed build itself fails (no
+    /// egress) — the duality is unprovable and the caller skips cleanly.
+    fn unjailed_probe_build_is_clean(
+        out: &std::path::Path,
+        probe_target: &std::path::Path,
+    ) -> bool {
+        let Some(cargo) = which_cargo() else {
+            return false;
+        };
+        std::process::Command::new(cargo)
+            .arg("build")
+            .arg("--offline")
+            .arg("--locked")
+            .arg("--bin")
+            .arg("tier2_probe")
+            .arg("--manifest-path")
+            .arg(out.join("Cargo.toml"))
+            .arg("--target-dir")
+            .arg(probe_target)
+            .output()
+            .is_ok_and(|o| o.status.success())
+    }
+
     /// Write a `package.ipe` for a `Rust.Csum`-crossing app whose `declares`
     /// capability set is exactly `caps` (`PascalCase` constructor tokens), plus the
     /// `Main.ipe` that reaches the native binding. Returns the package root.
@@ -939,7 +1080,7 @@ mod real_jail {
     fn write_native_crossing_package(base: &std::path::Path, declares: &str) -> PathBuf {
         let pkg = base.join("pkg");
         std::fs::create_dir_all(pkg.join("src")).expect("pkg src");
-        write_csum_crate(base);
+        write_csum_crate(base, false);
         std::fs::write(
             pkg.join("package.ipe"),
             format!(
