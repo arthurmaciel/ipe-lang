@@ -2,19 +2,19 @@
 
 A minimal [Iced](https://iced.rs) counter, mapped onto Ipê's TEA over the REAL
 crates.io `iced` crate (auto-FFI-bound, shim-free). Iced's Elm architecture is
-Ipê's, so each piece maps to one `[rust.define.*]` form in `ipe.toml`:
+Ipê's, so each piece maps to one `foreign` record in `src/Ffi/Iced.ipe`:
 
-| Iced piece | Ipê shape | `[rust.define.*]` form | Status |
+| Iced piece | Ipê shape | `foreign` record | Status |
 |------------|-----------|-------------------------|--------|
-| `Model` (`Counter`) | a struct | `[[rust.define.struct]]` | emitted + Ipê forwarder wired |
-| `Message` (`Increment`/`Decrement`) | an enum | `[[rust.define.enum]]` | emitted + Ipê forwarder wired |
-| `update : Message -> Model -> Model` | a sync closure | `[[rust.define.closure]]` | scalar subset only; closure→run pending |
-| `view : Model -> Element Message` | a sync closure | `[[rust.define.closure]]` | opaque-map threaded; `Element<'a,Msg>` over-drops (parameterised) |
+| `Model` (`Counter`) | a struct | `foreign Counter = { kind = Struct … }` | emitted + Ipê forwarder wired |
+| `Message` (`Increment`/`Decrement`) | an enum | `foreign Message = { kind = Enum … }` | emitted + Ipê forwarder wired |
+| `update : Message -> Model -> Model` | a sync closure | `foreign counterUpdate = { kind = Closure … }` | scalar subset only; closure→run pending |
+| `view : Model -> Element Message` | a sync closure | a `Closure` `foreign` record | opaque-map threaded; `Element<'a,Msg>` over-drops (parameterised) |
 
 ## What binds today (the SEAL that holds)
 
 `ipe install` runs the sandboxed inspector over `iced = 0.12.1` and merges the
-`[rust.define.*]` decls into the generated `_bindings.rs`. For the Model + the
+`foreign` records into the generated `_bindings.rs`. For the Model + the
 Message, the driver emits **real, self-contained Rust**:
 
 ```rust
