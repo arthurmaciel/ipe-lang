@@ -57,19 +57,30 @@ pub fn resolve_and_add(
     let entry = crate::registry::read_entry_via_pages(name, index_root)?;
     let version = index::resolve_version(&entry, req)?;
 
-    // Publisher-identity provenance over the pinned `sha256`, at the same
-    // verify-before-trust seam. Deny-by-default and fail-closed: a present
-    // signature MUST verify against a configured trusted identity or the version
-    // is rejected; an unsigned version resolves (with a warning) unless the trust
-    // policy requires a signature. This runs before the hash verify and the fetch
-    // so a signature failure short-circuits before any bytes are trusted.
+    // Trust-verification ordering INVARIANT: nothing is installed or recorded
+    // until BOTH the publisher signature (if any) and the pinned content hash
+    // have verified against the FETCHED tree. The signature's digest-binding
+    // check hashes that tree (the signed subject digest must equal the tree
+    // hash), so it necessarily runs after the fetch; the pinned-`sha256` check
+    // does too. A rejected signature OR a hash mismatch aborts here, before
+    // `write_records`, so no unverified bytes are ever trusted.
     let policy = crate::signing::load_trust_policy(project_root)?;
     let verifier = signature_verifier();
+
+    let checkout = fetch_source(project_root, name, &version.version.to_string(), version)?;
+
+    // Publisher-identity provenance over the pinned `sha256`, at the same
+    // verify-before-trust seam. Deny-by-default and fail-closed: a present
+    // signature MUST verify against a configured trusted identity (its signed
+    // subject digest equal to the fetched tree's hash) or the version is
+    // rejected; an unsigned version resolves (with a warning) unless the trust
+    // policy requires a signature.
     match crate::signing::evaluate_signature(
         name,
         &policy,
         version.signature.as_ref(),
         &version.sha256,
+        &checkout,
         verifier.as_ref(),
     )? {
         crate::signing::SignatureOutcome::UnsignedAllowed => {
@@ -87,7 +98,6 @@ pub fn resolve_and_add(
         crate::signing::SignatureOutcome::Verified(_) => {}
     }
 
-    let checkout = fetch_source(project_root, name, &version.version.to_string(), version)?;
     verify_hash(name, &checkout, &version.sha256)?;
 
     let locked = LockedDep {
