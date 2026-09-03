@@ -154,6 +154,25 @@ const TREE_TAG: &[u8] = b"ipe-source-tree-v1";
 /// Returns the failing path and its [`std::io::Error`] if the tree cannot be
 /// walked or a file cannot be read.
 pub fn hash_tree(root: &Path) -> Result<String, (PathBuf, std::io::Error)> {
+    Ok(hex::encode(tree_hasher(root)?.finalize()))
+}
+
+/// Feed the identical deterministic byte stream [`hash_tree`] hashes into a fresh
+/// [`Sha256`] and return the UN-finalized hasher.
+///
+/// [`hash_tree`] is exactly `hex(tree_hasher(root)?.finalize())` — the two share
+/// this one byte stream so a tree hashes to a single value no matter which entry
+/// point is used. The un-finalized hasher exists for a caller that must hand a
+/// `Sha256` (not a hex digest) to an API that finalizes it itself — sigstore's
+/// `verify_digest(input_digest: Sha256, …)`, which finalizes the hasher and, for
+/// a DSSE bundle, compares `hex(input_digest.finalize())` against the bundle's
+/// signed subject digest. Feeding this hasher binds that comparison to exactly
+/// the pinned tree hash without re-deriving it from bytes twice.
+///
+/// # Errors
+/// Returns the failing path and its [`std::io::Error`] if the tree cannot be
+/// walked or a file cannot be read.
+pub fn tree_hasher(root: &Path) -> Result<Sha256, (PathBuf, std::io::Error)> {
     let mut files: Vec<(String, PathBuf)> = Vec::new();
     collect_files(root, root, &mut files)?;
     // Sort by the relative path so the hash is independent of directory-read
@@ -169,7 +188,7 @@ pub fn hash_tree(root: &Path) -> Result<String, (PathBuf, std::io::Error)> {
         let bytes = fs::read(abs).map_err(|e| (abs.clone(), e))?;
         update_len_prefixed(&mut hasher, &bytes);
     }
-    Ok(hex::encode(hasher.finalize()))
+    Ok(hasher)
 }
 
 /// Depth-first collect every regular file under `dir` as `(relative_path,
@@ -1386,5 +1405,34 @@ mod tests {
         let _ = std::fs::remove_dir_all(&base);
 
         assert_eq!(h1, h2, "hash_tree must be deterministic for plain trees");
+    }
+
+    /// `tree_hasher` finalized to hex MUST equal `hash_tree` byte-for-byte —
+    /// the un-finalized hasher fed to sigstore's `verify_digest` finalizes to
+    /// exactly the pinned tree hash, so the digest-binding check is over the
+    /// same value the resolver hash-verifies.
+    #[test]
+    fn tree_hasher_finalized_equals_hash_tree() {
+        let base = std::env::temp_dir().join(format!(
+            "ipe-cache-test-hasher-eq-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).expect("create base");
+        std::fs::create_dir_all(base.join("sub")).expect("create subdir");
+        std::fs::write(base.join("Main.ipe"), b"module Main exposing (main)\n")
+            .expect("write file");
+        std::fs::write(base.join("sub").join("Helper.ipe"), b"module Helper\n")
+            .expect("write nested file");
+
+        let via_hasher = hex::encode(tree_hasher(&base).expect("hasher ok").finalize());
+        let via_hash_tree = hash_tree(&base).expect("hash_tree ok");
+        let _ = std::fs::remove_dir_all(&base);
+
+        assert_eq!(
+            via_hasher, via_hash_tree,
+            "hex(tree_hasher(t).finalize()) must equal hash_tree(t) exactly"
+        );
     }
 }
