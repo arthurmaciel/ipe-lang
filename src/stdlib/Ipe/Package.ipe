@@ -52,6 +52,7 @@ type alias Package =
     { name : String
     , version : String
     , sourceRoot : String
+    , icon : String
     , dependencies : List Dependency
     , rustDependencies : List RustDependency
     , capabilities : Capabilities

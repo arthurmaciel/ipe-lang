@@ -139,6 +139,7 @@ struct ManifestFields {
     name: Option<String>,
     version: Option<semver::Version>,
     src_rel: Option<String>,
+    icon_rel: Option<String>,
     driver: Option<ipe_backend_rust::DbDriver>,
     static_build: Option<bool>,
     target: Option<String>,
@@ -175,11 +176,27 @@ impl ManifestFields {
                 "package.ipe: the source root directory does not exist",
             ));
         }
+        // The icon is an optional project-relative path resolved (and contained)
+        // at parse time, so a packager consumes a validated path and can never be
+        // handed one that escapes the project root.
+        let icon = self
+            .icon_rel
+            .as_deref()
+            .map(|raw| {
+                crate::contained_path::ContainedRelPath::parse(root, raw)
+                    .map(|c| c.resolved().to_path_buf())
+                    .map_err(|reason| CliError::PathEscape {
+                        raw: raw.to_owned(),
+                        reason,
+                    })
+            })
+            .transpose()?;
         Ok(ProjectManifest {
             name,
             version: self.version,
             root: root.to_path_buf(),
             src_root,
+            icon,
             driver: self.driver.unwrap_or(ipe_backend_rust::DbDriver::Sqlite),
             static_request: crate::build_plan::StaticRequestLayer {
                 static_build: self.static_build,
@@ -318,6 +335,7 @@ impl Reader<'_> {
                     fields.version = Some(version);
                 }
                 "sourceRoot" => fields.src_rel = Some(self.expect_string(value)?),
+                "icon" => fields.icon_rel = Some(self.expect_string(value)?),
                 "dependencies" => fields.dependencies = self.read_dependencies(value)?,
                 "rustDependencies" => {
                     fields.rust_dependencies = self.read_rust_dependencies(value)?;
@@ -333,7 +351,7 @@ impl Reader<'_> {
                         fname.span,
                         &format!(
                             "`{other}` is not a package field — expected one of name, version, \
-                             sourceRoot, dependencies, rustDependencies, capabilities, \
+                             sourceRoot, icon, dependencies, rustDependencies, capabilities, \
                              exposedModules, programs, wasm, wrapper, build"
                         ),
                     ));
