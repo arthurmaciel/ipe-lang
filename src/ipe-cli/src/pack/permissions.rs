@@ -193,6 +193,17 @@ fn requirement_for(axis: WebCapability) -> AxisRequirement {
             plist: None,
             android: vec![perm("ACCESS_NETWORK_STATE")],
         },
+        WebCapability::Microphone => AxisRequirement {
+            // iOS / macOS: `NSMicrophoneUsageDescription` is required for any
+            // `getUserMedia({ audio: true })` call; an empty string causes App
+            // Store / Gatekeeper rejection. Android: `RECORD_AUDIO` must appear
+            // in the manifest before the browser can prompt for microphone access.
+            plist: Some(plist(
+                "NSMicrophoneUsageDescription",
+                "This app uses the microphone to record audio clips.",
+            )),
+            android: vec![perm("RECORD_AUDIO")],
+        },
         // The axes that reach no permission-gated OS surface on any target:
         // clipboard (user-initiated paste), storage (in-sandbox persistence),
         // share (user-initiated share sheet), battery (ungated status), file and
@@ -671,6 +682,70 @@ mod tests {
         let err = reconcile_override(&a, Platform::Android, &over)
             .expect_err("an unbacked android camera permission must be refused");
         assert!(err.to_string().contains("android.permission.CAMERA"));
+    }
+
+    #[test]
+    fn microphone_derives_ns_microphone_usage_description_and_record_audio() {
+        // The microphone permission axis must derive:
+        //   iOS / macOS → NSMicrophoneUsageDescription (non-empty purpose)
+        //   Android     → android.permission.RECORD_AUDIO
+        let a = accepts(&[web(WebCapability::Microphone)]);
+
+        let ios = derive_permissions(&a, Platform::Ios).expect("ios");
+        let ios_entries = ios.to_info_plist_entries();
+        assert_eq!(
+            ios_entries.len(),
+            1,
+            "exactly one plist entry for microphone on iOS"
+        );
+        // Use pattern-match destructuring to avoid clippy::indexing-slicing.
+        if let Some((key, purpose)) = ios_entries.first() {
+            assert_eq!(
+                key, "NSMicrophoneUsageDescription",
+                "iOS plist key must be NSMicrophoneUsageDescription"
+            );
+            assert!(!purpose.is_empty(), "iOS microphone purpose string must be non-empty");
+        }
+        assert!(ios.to_android_manifest_entries().is_empty());
+
+        let macos = derive_permissions(&a, Platform::MacOs).expect("macos");
+        let macos_entries = macos.to_info_plist_entries();
+        assert_eq!(
+            macos_entries.len(),
+            1,
+            "exactly one plist entry for microphone on macOS"
+        );
+        if let Some((key, purpose)) = macos_entries.first() {
+            assert_eq!(
+                key, "NSMicrophoneUsageDescription",
+                "macOS plist key must be NSMicrophoneUsageDescription"
+            );
+            assert!(!purpose.is_empty(), "macOS microphone purpose string must be non-empty");
+        }
+
+        let android = derive_permissions(&a, Platform::Android).expect("android");
+        assert!(android.to_info_plist_entries().is_empty());
+        let xml = android.to_android_manifest_entries().to_xml();
+        assert!(
+            xml.contains("android.permission.RECORD_AUDIO"),
+            "Android must declare RECORD_AUDIO for microphone: {xml}"
+        );
+    }
+
+    #[test]
+    fn a_microphone_grant_does_not_back_an_unbacked_permission() {
+        // A microphone grant does not entitle an unrelated permission such as
+        // NSLocationWhenInUseUsageDescription — the permission is per-axis, not a
+        // wildcard grant.
+        let a = accepts(&[web(WebCapability::Microphone)]);
+        let over = one_override("NSLocationWhenInUseUsageDescription");
+        let err = reconcile_override(&a, Platform::Ios, &over)
+            .expect_err("a microphone grant must not back a location permission");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("NSLocationWhenInUseUsageDescription"),
+            "refusal names the smuggled key: {msg}"
+        );
     }
 
     #[test]

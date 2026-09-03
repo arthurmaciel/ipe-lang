@@ -124,6 +124,13 @@ pub enum WebCapability {
     /// the OS to open the device camera (mobile) or fall back to an image file
     /// picker (desktop). The result is a single captured image as a `data:` URL.
     Camera,
+    /// `getUserMedia({ audio: true })` / `MediaRecorder` — capturing a bounded
+    /// audio clip from the device microphone. The host records for at most
+    /// `maxDurationMs` milliseconds, assembles the chunk stream into a single
+    /// Blob, reads it via `FileReader.readAsDataURL`, and replies once with the
+    /// full base-64 audio data URL. A permission denial or an absent
+    /// `MediaRecorder` API traps to a typed inbound frame — never a throw.
+    Microphone,
     /// A port with no characterised Web API: a hand-rolled `Js.send`/`Js.subscribe`
     /// reaching author-written JS. The reachability floor no port can slip below —
     /// an uncharacterised port discloses `js-port:raw`, never nothing.
@@ -144,6 +151,7 @@ impl WebCapability {
         Self::NetworkInfo,
         Self::File,
         Self::Camera,
+        Self::Microphone,
         Self::Raw,
     ];
 
@@ -162,6 +170,7 @@ impl WebCapability {
             Self::NetworkInfo => "network-info",
             Self::File => "file",
             Self::Camera => "camera",
+            Self::Microphone => "microphone",
             Self::Raw => "raw",
         }
     }
@@ -191,6 +200,7 @@ impl WebCapability {
             ["Ipe", "Browser", "NetworkInfo", ..] => Some(Self::NetworkInfo),
             ["Ipe", "Browser", "FilePicker", ..] => Some(Self::File),
             ["Ipe", "Browser", "Camera", ..] => Some(Self::Camera),
+            ["Ipe", "Browser", "Microphone", ..] => Some(Self::Microphone),
             _ => None,
         }
     }
@@ -219,6 +229,11 @@ impl WebCapability {
                 "Capturing a photo via the device camera (mobile) or an image file picker \
                  (desktop) using a <input capture> element and the File API."
             }
+            Self::Microphone => {
+                "Recording a bounded audio clip from the device microphone via \
+                 getUserMedia({ audio: true }) / MediaRecorder; the assembled clip is \
+                 returned as a base-64 data URL in a single one-shot reply."
+            }
             Self::Raw => {
                 "Exchanging data with hand-rolled page JS over an uncharacterised port \
                  (Js.send / Js.subscribe with author-written JS)."
@@ -241,6 +256,7 @@ impl WebCapability {
             "network-info" => Ok(Self::NetworkInfo),
             "file" => Ok(Self::File),
             "camera" => Ok(Self::Camera),
+            "microphone" => Ok(Self::Microphone),
             "raw" => Ok(Self::Raw),
             _ => Err(UnknownCapability(full.to_owned())),
         }
@@ -264,6 +280,7 @@ impl WebCapability {
             Self::NetworkInfo => "NetworkInfo",
             Self::File => "File",
             Self::Camera => "Camera",
+            Self::Microphone => "Microphone",
             Self::Raw => "Raw",
         }
     }
@@ -373,6 +390,7 @@ impl Capability {
         Self::JsPort(WebCapability::NetworkInfo),
         Self::JsPort(WebCapability::File),
         Self::JsPort(WebCapability::Camera),
+        Self::JsPort(WebCapability::Microphone),
         Self::JsPort(WebCapability::Raw),
     ];
 
@@ -420,6 +438,7 @@ impl Capability {
                 WebCapability::NetworkInfo => "js-port:network-info",
                 WebCapability::File => "js-port:file",
                 WebCapability::Camera => "js-port:camera",
+                WebCapability::Microphone => "js-port:microphone",
                 WebCapability::Raw => "js-port:raw",
             },
         }
@@ -472,7 +491,7 @@ impl std::fmt::Display for UnknownCapability {
              database, env, subprocess, clock, random, native-ffi, ffi-raw, unsafe, \
              custom-element, js-port:<axis> where <axis> is one of geolocation, \
              clipboard, notification, storage, vibration, share, battery, \
-             network-info, file, camera, raw)",
+             network-info, file, camera, microphone, raw)",
             self.0
         )
     }
@@ -643,7 +662,7 @@ mod tests {
     }
 
     #[test]
-    fn from_str_accepts_file_and_camera_web_axes() {
+    fn from_str_accepts_file_camera_and_microphone_web_axes() {
         use std::str::FromStr as _;
         assert_eq!(
             Capability::from_str("js-port:file"),
@@ -652,6 +671,10 @@ mod tests {
         assert_eq!(
             Capability::from_str("js-port:camera"),
             Ok(Capability::JsPort(WebCapability::Camera))
+        );
+        assert_eq!(
+            Capability::from_str("js-port:microphone"),
+            Ok(Capability::JsPort(WebCapability::Microphone))
         );
     }
 
