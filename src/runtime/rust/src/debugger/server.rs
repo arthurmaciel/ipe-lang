@@ -260,6 +260,20 @@ fn build_overlay_script(scrub_url_js: &str, reset_url_js: &str, selected_bg: &st
     )
 }
 
+// ── Live inspection surface ───────────────────────────────────────────────────
+
+/// Render the current datum as a structural string.
+///
+/// Delegates to `IpeStringify::ipe_show`, which is total and read-only: it
+/// never mutates the model or fires any effect. `Secret`-bearing fields emit
+/// `<redacted>` so no sensitive value reaches the response.
+///
+/// This is the sole building block for `GET /_ipe/debug/inspect`; keeping it
+/// as a plain function lets it be unit-tested without an HTTP stack.
+pub fn inspect_model<Model: crate::stringify::IpeStringify>(model: &Model) -> String {
+    model.ipe_show()
+}
+
 // ── Tests ──────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -446,6 +460,34 @@ mod tests {
         let r2 = h2.reconstruct(0).expect("h2 step 0");
         assert_eq!(r1.count, 1, "session 1 is independent of session 2");
         assert_eq!(r2.count, 150, "session 2 is independent of session 1");
+    }
+
+    // ── inspect_model — live inspection surface ───────────────────────────────
+
+    impl IpeStringify for TestModel {
+        fn ipe_show(&self) -> String {
+            format!("TestModel {{ count: {} }}", self.count)
+        }
+    }
+
+    // Inspector output reflects the current datum via `IpeStringify::ipe_show`.
+    #[test]
+    fn inspect_model_reflects_current_datum() {
+        let model = TestModel { count: 42 };
+        let rendered = inspect_model(&model);
+        assert!(
+            rendered.contains("42"),
+            "inspect output must contain the model's count value; got: {rendered:?}"
+        );
+    }
+
+    // Calling `inspect_model` does not mutate the model.
+    #[test]
+    fn inspect_model_is_read_only() {
+        let model = TestModel { count: 7 };
+        let before = model.count;
+        let _ = inspect_model(&model);
+        assert_eq!(model.count, before, "inspect must not mutate the model");
     }
 
     // ── Secret redaction in labels ─────────────────────────────────────────────

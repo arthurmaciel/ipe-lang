@@ -1697,8 +1697,16 @@ pub fn web_app<E, Model, Msg, FInit, FUpdate, FView, FSubs>(
 ) -> IpeTask<E, ()>
 where
     E: From<String> + Send + 'static,
-    Model:
-        serde::Serialize + serde::de::DeserializeOwned + Clone + PartialEq + Send + Sync + 'static,
+    // IpeStringify: forwarded to serve_web → inspect_handler for the live-
+    // datum surface. Generated Model types always satisfy this bound.
+    Model: serde::Serialize
+        + serde::de::DeserializeOwned
+        + Clone
+        + PartialEq
+        + Send
+        + Sync
+        + crate::stringify::IpeStringify
+        + 'static,
     // Debug: forwarded through serve_web → drive_session for the
     // ipe_web_msg_seconds{name} label. Generated Msg enums always derive Debug.
     // IpeStringify: forwarded through serve_web → page for debugger overlay
@@ -1774,8 +1782,16 @@ pub fn web_embed_router<Model, Msg, FInit, FUpdate, FView, FSubs>(
     schema_tag: [u8; 32],
 ) -> crate::tea::MountBuilder
 where
-    Model:
-        serde::Serialize + serde::de::DeserializeOwned + Clone + PartialEq + Send + Sync + 'static,
+    // IpeStringify: forwarded to serve_web → inspect_handler for the live-
+    // datum surface. Generated Model types always satisfy this bound.
+    Model: serde::Serialize
+        + serde::de::DeserializeOwned
+        + Clone
+        + PartialEq
+        + Send
+        + Sync
+        + crate::stringify::IpeStringify
+        + 'static,
     Msg: Clone
         + Send
         + Sync
@@ -1880,8 +1896,16 @@ pub fn web_app_routed<E, Model, Msg, Page, FInit, FUpdate, FView, FSubs, FSetPag
 ) -> IpeTask<E, ()>
 where
     E: From<String> + Send + 'static,
-    Model:
-        serde::Serialize + serde::de::DeserializeOwned + Clone + PartialEq + Send + Sync + 'static,
+    // IpeStringify: forwarded to serve_web → inspect_handler for the live-
+    // datum surface. Generated Model types always satisfy this bound.
+    Model: serde::Serialize
+        + serde::de::DeserializeOwned
+        + Clone
+        + PartialEq
+        + Send
+        + Sync
+        + crate::stringify::IpeStringify
+        + 'static,
     // Debug: forwarded through serve_web → drive_session for the
     // ipe_web_msg_seconds{name} label. Generated Msg enums always derive Debug.
     // IpeStringify: forwarded through serve_web → page for debugger overlay
@@ -3829,6 +3853,56 @@ mod handlers {
         )
             .into_response()
     }
+
+    // ── GET /_ipe/debug/inspect ───────────────────────────────────────────────
+    // Read-only structural render of the current session model.
+    //
+    // Returns `{"model": "<ipe_show>"}` — the datum stringified via
+    // `IpeStringify::ipe_show`. Never mutates the model or fires any effect:
+    // the transition function is the sole mutation path (make-invalid-states-
+    // unrepresentable). `Secret`-bearing fields render as `<redacted>`.
+    //
+    // Security: GET, read-only — CSRF token not required by method. Session-
+    // cookie authentication guards access; the route is dev-build-only
+    // (`debugger` feature absent from release artifacts).
+    #[cfg(feature = "debugger")]
+    pub(super) async fn inspect_handler<Model, Msg, FInit, FUpdate, FView, FSubs>(
+        State(st): State<WebState<Model, Msg, FInit, FUpdate, FView, FSubs>>,
+        headers: axum::http::HeaderMap,
+    ) -> axum::response::Response
+    where
+        Model: Clone + PartialEq + Send + crate::stringify::IpeStringify + 'static,
+        Msg: Clone + Send + std::fmt::Debug + 'static,
+        FInit: Send + Sync + 'static,
+        FUpdate: Send + Sync + 'static,
+        FView: Send + Sync + 'static,
+        FSubs: Send + Sync + 'static,
+    {
+        use axum::response::IntoResponse;
+        let sid = match sid_from_cookie(&headers) {
+            Some(s) => s,
+            None => {
+                return (axum::http::StatusCode::UNAUTHORIZED, "no session").into_response();
+            }
+        };
+        let handle = match st.store.get(&sid).await {
+            Some(store::StoreHit::Web(h)) => h,
+            _ => {
+                return (axum::http::StatusCode::NOT_FOUND, SESSION_LOST_BODY).into_response();
+            }
+        };
+        let rendered = {
+            let e = handle.lock().unwrap_or_else(|e| e.into_inner());
+            crate::debugger::server::inspect_model(&e.model)
+        };
+        let resp_json = serde_json::json!({ "model": rendered });
+        (
+            axum::http::StatusCode::OK,
+            [(axum::http::header::CONTENT_TYPE, "application/json")],
+            resp_json.to_string(),
+        )
+            .into_response()
+    }
 }
 
 /// Shared server setup for `web_app` / `web_app_routed`: nested HTTP
@@ -3839,7 +3913,9 @@ async fn serve_web<E, Model, Msg, FInit, FUpdate, FView, FSubs>(
 ) -> IpeResult<E, ()>
 where
     E: From<String> + Send + 'static,
-    Model: Clone + PartialEq + Send + 'static,
+    // IpeStringify: required by inspect_handler for the live-datum GET
+    // (`/_ipe/debug/inspect`). Generated Model types always satisfy this bound.
+    Model: Clone + PartialEq + Send + crate::stringify::IpeStringify + 'static,
     // Debug: forwarded to drive_session for the ipe_web_msg_seconds{name} label.
     // IpeStringify: forwarded to the page handler for debugger overlay labels.
     // DeserializeOwned: required by import_handler (dev-only debug import route).
@@ -3961,7 +4037,9 @@ pub(crate) fn build_web_router<Model, Msg, FInit, FUpdate, FView, FSubs>(
     #[cfg_attr(not(feature = "http_client"), allow(unused_variables))] use_console_proxy: bool,
 ) -> axum::Router
 where
-    Model: Clone + PartialEq + Send + 'static,
+    // IpeStringify: required by inspect_handler for the live-datum GET.
+    // Generated Model types always satisfy this bound.
+    Model: Clone + PartialEq + Send + crate::stringify::IpeStringify + 'static,
     // `serde::Serialize` is required by `export_handler` and
     // `serde::de::DeserializeOwned` by `import_handler` (both dev-only routes
     // under the `debugger` feature). Generated Msg enums always derive both,
@@ -4084,6 +4162,11 @@ where
     let router = router.route(
         "/_ipe/debug/forward",
         post(handlers::forward_handler::<Model, Msg, FInit, FUpdate, FView, FSubs>),
+    );
+    #[cfg(feature = "debugger")]
+    let router = router.route(
+        "/_ipe/debug/inspect",
+        get(handlers::inspect_handler::<Model, Msg, FInit, FUpdate, FView, FSubs>),
     );
     // Dev-only appearance-hot-swap control leg. MOUNTED only when the hot
     // overlay is active (flag on AND non-production), so the route is entirely
