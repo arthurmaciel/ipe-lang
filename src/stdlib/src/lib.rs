@@ -696,6 +696,26 @@ const IPE_BROWSER_NOTIFICATION: &str = include_str!("../Ipe/Browser/Notification
 const IPE_BROWSER_NOTIFICATION_INTERNALS: &str =
     include_str!("../Ipe/Browser/Notification/Internals.ipe");
 
+/// `Ipe.Browser.Storage` — read from and write to Web Storage (`localStorage`)
+/// over `Ipe.Ffi.Js` ports (compiled source), spanning BOTH port directions: an
+/// outbound `JsCmd` request (`get` / `set` / `remove` / `clear`) and an inbound
+/// `JsMsg` reply folded exhaustively into `Result Error (Maybe String)`. Importing
+/// it discloses `js-port:storage` (import-derived, keyed on the canonical
+/// `Ipe.Browser.Storage` path prefix via `WebCapability::for_browser_module`). The
+/// served wasm-sink JS handler reaches `localStorage.getItem` / `setItem` /
+/// `removeItem` / `clear`, trapping a private-mode / absent-store throw to the
+/// typed `Unavailable` inbound variant. Registered in [`COMPILED_STD_MODULES`]
+/// (NOT `MODULES`); NOT in `STDLIB_MODULE_QUALIFIERS`.
+const IPE_BROWSER_STORAGE: &str = include_str!("../Ipe/Browser/Storage.ipe");
+
+/// `Ipe.Browser.Storage.Internals` — the low-level Web Storage port surface: the
+/// closed outbound/inbound ADTs and the raw `Ipe.Ffi.Js` wiring the high-level
+/// layer wraps. Importing it discloses the same `js-port:storage` axis (the prefix
+/// key covers the submodule). Registered in [`COMPILED_STD_MODULES`] (NOT
+/// `MODULES`); NOT in `STDLIB_MODULE_QUALIFIERS`.
+const IPE_BROWSER_STORAGE_INTERNALS: &str =
+    include_str!("../Ipe/Browser/Storage/Internals.ipe");
+
 /// `Ipe.Env` — build-time-embedded public config (compiled source).
 ///
 /// Defines `public : String -> Maybe String`, routed through the
@@ -1166,6 +1186,14 @@ pub const COMPILED_STD_MODULES: &[CompiledStdModule] = &[
     CompiledStdModule {
         dotted: "Ipe.Browser.Notification.Internals",
         source: IPE_BROWSER_NOTIFICATION_INTERNALS,
+    },
+    CompiledStdModule {
+        dotted: "Ipe.Browser.Storage",
+        source: IPE_BROWSER_STORAGE,
+    },
+    CompiledStdModule {
+        dotted: "Ipe.Browser.Storage.Internals",
+        source: IPE_BROWSER_STORAGE_INTERNALS,
     },
     CompiledStdModule {
         dotted: "Ipe.Env",

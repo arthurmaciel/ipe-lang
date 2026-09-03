@@ -15,6 +15,8 @@ Each module listed below links to a detail page with the full documentation and 
 - [Browser.Geolocation.Internals](#browsergeolocationinternals)
 - [Browser.Notification](#browsernotification)
 - [Browser.Notification.Internals](#browsernotificationinternals)
+- [Browser.Storage](#browserstorage)
+- [Browser.Storage.Internals](#browserstorageinternals)
 - [ByteSize](#bytesize)
 - [Bytes](#bytes)
 - [Cache](#cache)
@@ -242,6 +244,36 @@ Ipe.Browser.Notification.Internals — the low-level notification port surface:
 |--------|----------|
 | `Options` | The `Notification` display payload, mirroring the Web API `Notification` |
 | `defaults` | The default payload for a bare `notify title`: the given title, no body, no |
+| `JsCmd` | The ONE closed OUTBOUND port type: the whole outbound surface as a single |
+| `JsMsg` | The NARROW closed INBOUND port type — deliberately NOT the app's internal |
+| `request` | `request cmd` — hand a closed outbound `JsCmd` to the raw port transport. |
+| `requestOne` | `requestOne cmd` — correlated one-shot `JsCmd` → `Task Error JsMsg`. |
+| `subscribe` | `subscribe toMsg` — the inbound subscription over the fail-closed seal |
+| `inbound` | The total, fail-closed decoder for the inbound `JsMsg`. It reads `ok` first: a |
+
+## Browser.Storage
+
+[Full reference](stdlib/Browser.Storage.md)
+
+Ipe.Browser.Storage — read from and write to Web Storage (`localStorage`)
+
+| Export | Summary |
+|--------|----------|
+| `get` | `get key` — read the value stored under `key` as a `Task Error (Maybe String)`. |
+| `set` | `set key value` — write `value` under `key`. Outbound `Cmd`; an unavailable |
+| `remove` | `remove key` — delete the value stored under `key`. Outbound `Cmd`. |
+| `clear` | `clear` — remove every key from the store. Outbound `Cmd`. |
+| `changes` | `changes toMsg` — the inbound subscription, wired in `subscriptions`. |
+
+## Browser.Storage.Internals
+
+[Full reference](stdlib/Browser.Storage.Internals.md)
+
+Ipe.Browser.Storage.Internals — the low-level Web Storage port surface: the
+
+| Export | Summary |
+|--------|----------|
+| `Entry` | A `Set` payload: the `key` to write and the `value` string to store under it. |
 | `JsCmd` | The ONE closed OUTBOUND port type: the whole outbound surface as a single |
 | `JsMsg` | The NARROW closed INBOUND port type — deliberately NOT the app's internal |
 | `request` | `request cmd` — hand a closed outbound `JsCmd` to the raw port transport. |

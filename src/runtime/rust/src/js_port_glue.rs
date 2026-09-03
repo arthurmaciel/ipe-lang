@@ -205,10 +205,52 @@ const PORT_GLUE_JS: &str = r#"// Ipe.Ffi.Js browser port surface. Values cross a
     }
     return true;
   }
+  // Ipe.Browser.Storage: `Get key` / `Set { key, value }` / `Remove key` / `Clear`
+  // -> localStorage.getItem / setItem / removeItem / clear. A read resolves to a
+  // typed value frame (value omitted for an absent key); a private-mode quota throw
+  // or an absent store traps to `unavailable` — never a throw.
+  function storageSink(value, corId) {
+    var isGet = value && typeof value === "object" && value.Get !== undefined;
+    var isSet = value && typeof value === "object" && value.Set !== undefined;
+    var isRemove = value && typeof value === "object" && value.Remove !== undefined;
+    var isClear = value === "Clear" ||
+      (value && typeof value === "object" && value.Clear !== undefined);
+    if (!isGet && !isSet && !isRemove && !isClear) return false;
+    var store = null;
+    try { store = window.localStorage; } catch (_e) { store = null; }
+    if (!store) {
+      reply({ tag: "storage", ok: false, error: "unavailable" }, corId);
+      return true;
+    }
+    try {
+      if (isGet) {
+        var got = store.getItem(String(value.Get));
+        if (got === null || got === undefined) {
+          reply({ tag: "storage", ok: true, event: "get" }, corId);
+        } else {
+          reply({ tag: "storage", ok: true, event: "get", value: String(got) }, corId);
+        }
+      } else if (isSet) {
+        var entry = (value.Set && typeof value.Set === "object") ? value.Set : {};
+        store.setItem(String(entry.key || ""), String(entry.value || ""));
+        reply({ tag: "storage", ok: true, event: "set" }, corId);
+      } else if (isRemove) {
+        store.removeItem(String(value.Remove));
+        reply({ tag: "storage", ok: true, event: "remove" }, corId);
+      } else {
+        store.clear();
+        reply({ tag: "storage", ok: true, event: "clear" }, corId);
+      }
+    } catch (_e2) {
+      reply({ tag: "storage", ok: false, error: "unavailable" }, corId);
+    }
+    return true;
+  }
   function builtinSink(value, corId) {
     if (clipboardSink(value, corId)) return true;
     if (geolocationSink(value, corId)) return true;
     if (notificationSink(value, corId)) return true;
+    if (storageSink(value, corId)) return true;
     return false;
   }
   function deliver(raw) {
@@ -357,6 +399,26 @@ mod tests {
         assert!(js.contains("\"shown\""));
         // …and traps a denial / absence to a typed inbound frame, never a throw.
         assert!(js.contains("\"denied\""));
+        assert!(js.contains("\"unavailable\""));
+        assert!(!js.contains("eval("));
+    }
+
+    #[test]
+    fn storage_sink_reaches_web_storage_and_traps_unavailability_to_a_typed_result() {
+        let js = port_glue_js();
+        // The first-party Ipe.Browser.Storage sink reaches localStorage…
+        assert!(js.contains("localStorage"));
+        assert!(js.contains("store.getItem("));
+        assert!(js.contains("store.setItem("));
+        assert!(js.contains("store.removeItem("));
+        assert!(js.contains("store.clear()"));
+        assert!(js.contains("value.Get"));
+        assert!(js.contains("value.Set"));
+        // …resolves reads / writes to typed events…
+        assert!(js.contains("tag: \"storage\""));
+        assert!(js.contains("event: \"get\""));
+        assert!(js.contains("event: \"set\""));
+        // …and traps a private-mode / absent store to a typed frame, never a throw.
         assert!(js.contains("\"unavailable\""));
         assert!(!js.contains("eval("));
     }

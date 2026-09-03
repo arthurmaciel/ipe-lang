@@ -946,3 +946,92 @@ fn a_notification_app_without_the_grant_is_rejected() -> TestResult {
     let _ = std::fs::remove_dir_all(&dir);
     Ok(())
 }
+
+// ── Ipe.Browser.Storage — a first-party web-API module ──────────────────────
+
+/// A Web-shape app importing `Ipe.Browser.Storage` — the import-derived signal
+/// that discloses the SPECIFIC `js-port:storage` axis on top of the `:raw` floor.
+const STORAGE_APP: &str = r#"module Main exposing (main)
+
+import Ipe.Tea.Web as Web
+import Ipe.Tea.Web.Cmd as Cmd
+import Ipe.Tea.Web.Sub as Sub
+import Ipe.Ui as Ui
+import Ipe.Error as Error exposing (Error)
+import Ipe.Browser.Storage as Storage
+import Ipe.Task as Task
+
+type alias Model = { v : Maybe String }
+
+type Msg = Save | Load | Loaded (Result Error (Maybe String)) | Changed (Result Error (Maybe String))
+
+init : WebReq -> ( Model, Cmd.Cmd Msg )
+init _r =
+    ( { v = Nothing }, Storage.set "k" "v" )
+
+update : Msg -> Model -> ( Model, Cmd.Cmd Msg )
+update msg model =
+    case msg of
+        Save ->
+            ( model, Storage.set "k" "v" )
+
+        Load ->
+            ( model, Task.attempt Loaded (Storage.get "k") )
+
+        Loaded _r ->
+            ( model, Cmd.none )
+
+        Changed _r ->
+            ( model, Cmd.none )
+
+view : Model -> Element Msg
+view _model =
+    Ui.text "ok"
+
+subscriptions : Model -> Sub.Sub Msg
+subscriptions _model =
+    Storage.changes Changed
+
+main =
+    Web.app
+        { init = init, update = update, view = view, subscriptions = subscriptions
+        , routes = [], notFound = Load
+        }
+"#;
+
+/// Importing `Ipe.Browser.Storage` discloses the specific `js-port:storage` axis.
+#[test]
+fn importing_browser_storage_discloses_js_port_storage() -> TestResult {
+    let dir = write_single("storage", STORAGE_APP)?;
+    let entry = dir.join("Main.ipe");
+    let declared = BTreeSet::from([
+        Capability::JsPort(WebCapability::Storage),
+        Capability::JsPort(WebCapability::Raw),
+    ]);
+    let r = verify_capabilities(&entry, &declared);
+    assert!(
+        r.is_ok(),
+        "importing Ipe.Browser.Storage must disclose js-port:storage (+ the :raw floor): {r:?}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+    Ok(())
+}
+
+/// Fail-closed: a storage app that omits the grant is rejected as under-declared.
+#[test]
+fn a_storage_app_without_the_grant_is_rejected() -> TestResult {
+    let dir = write_single("storagenogrant", STORAGE_APP)?;
+    let entry = dir.join("Main.ipe");
+    let declared = BTreeSet::from([Capability::JsPort(WebCapability::Raw)]);
+    let r = verify_capabilities(&entry, &declared);
+    assert!(
+        matches!(
+            &r,
+            Err(ipe::CliError::CapabilityMismatch { missing, .. })
+                if missing.contains(&"js-port:storage")
+        ),
+        "an ungranted storage app must be rejected naming js-port:storage, got: {r:?}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+    Ok(())
+}

@@ -1,0 +1,140 @@
+-- | Ipe.Browser.Storage.Internals — the low-level Web Storage port surface: the
+-- closed outbound/inbound ADTs and the raw `Ipe.Ffi.Js` request/subscribe wiring
+-- the high-level `Ipe.Browser.Storage` layer wraps.
+--
+-- Importing this submodule discloses the same `js-port:storage` axis as the
+-- top-level module (the disclosure is keyed on the `Ipe.Browser.Storage` path
+-- prefix), so the raw port surface cannot be reached undisclosed.
+module Ipe.Browser.Storage.Internals exposing
+    ( Entry
+    , JsCmd(..)
+    , JsMsg(..)
+    , request
+    , requestOne
+    , subscribe
+    , inbound
+    )
+
+import Ipe.Error as Error exposing (Error)
+import Ipe.Ffi.Js as Js
+import Ipe.Json.Decode as Decode
+import Ipe.Tea.Web.Cmd as Cmd
+import Ipe.Tea.Web.Sub as Sub
+
+
+-- | A `Set` payload: the `key` to write and the `value` string to store under it.
+-- Crossing the seal as a single record keeps the outbound variant single-payload:
+-- `Set entry` externally tags as `{ Set: { key, value } }`.
+type alias Entry =
+    { key : String
+    , value : String
+    }
+
+
+-- | The ONE closed OUTBOUND port type: the whole outbound surface as a single
+-- auditable object.
+--
+--   * `Get key` — read the value stored under `key`.
+--   * `Set entry` — write `entry.value` under `entry.key`.
+--   * `Remove key` — delete the value stored under `key`.
+--   * `Clear` — remove every key.
+type JsCmd
+    = Get String
+    | Set Entry
+    | Remove String
+    | Clear
+
+
+-- | The NARROW closed INBOUND port type — deliberately NOT the app's internal
+-- `Msg`. Every variant the browser can push is enumerated, so the fold in the
+-- high-level layer is EXHAUSTIVE and an unavailability can never be silently
+-- dropped: it becomes a typed `Err`.
+--
+--   * `Got value` — a read returned `value` (`Nothing` when the key was absent).
+--   * `Stored` — a write completed.
+--   * `Removed` — a delete completed.
+--   * `Cleared` — the store was cleared.
+--   * `Unavailable` — Web Storage is absent or refused in this context (a
+--     private-mode quota throw maps here rather than to a panic).
+type JsMsg
+    = Got (Maybe String)
+    | Stored
+    | Removed
+    | Cleared
+    | Unavailable
+
+
+-- | `request cmd` — hand a closed outbound `JsCmd` to the raw port transport.
+-- The served first-party JS sink reaches `localStorage.*`; the reply arrives
+-- inbound as a `JsMsg`.
+request : JsCmd -> Cmd.Cmd msg
+request cmd =
+    Js.send cmd
+
+
+-- | `requestOne cmd` — correlated one-shot `JsCmd` → `Task Error JsMsg`.
+-- Routes through `Js.request` with the `inbound` decoder so the correlated
+-- reply is decoded fail-closed by the same gate the `subscribe` path uses.
+requestOne : JsCmd -> Task Error JsMsg
+requestOne cmd =
+    Js.request cmd inbound
+
+
+-- | `subscribe toMsg` — the inbound subscription over the fail-closed seal
+-- decoder. `inbound` IS the security gate; a malformed / mismatched frame is
+-- dropped whole. A decoded `JsMsg` is handed to `toMsg`.
+subscribe : (JsMsg -> msg) -> Sub.Sub msg
+subscribe toMsg =
+    Js.subscribe inbound toMsg
+
+
+-- | The total, fail-closed decoder for the inbound `JsMsg`. It reads `ok` first: a
+-- true flag decodes an operation acknowledgement by its `event` (a `get` also
+-- carries an optional `value`); a false flag decodes the closed `error`
+-- vocabulary. An unrecognised token fails the decode closed (the frame is dropped).
+inbound : Decode.Decoder JsMsg
+inbound =
+    Decode.andThen decodeByOk (Decode.field "ok" Decode.bool)
+
+
+decodeByOk : Bool -> Decode.Decoder JsMsg
+decodeByOk ok =
+    if ok then
+        Decode.andThen decodeEvent (Decode.field "event" Decode.string)
+
+    else
+        Decode.andThen decodeError (Decode.field "error" Decode.string)
+
+
+decodeEvent : String -> Decode.Decoder JsMsg
+decodeEvent event =
+    case event of
+        "get" ->
+            -- An absent key omits `value`; a present key carries the stored string.
+            -- `oneOf` folds "present string" first, falling back to `Nothing`.
+            Decode.oneOf
+                [ Decode.map (\v -> Got (Just v)) (Decode.field "value" Decode.string)
+                , Decode.succeed (Got Nothing)
+                ]
+
+        "set" ->
+            Decode.succeed Stored
+
+        "remove" ->
+            Decode.succeed Removed
+
+        "clear" ->
+            Decode.succeed Cleared
+
+        _ ->
+            Decode.fail ("unknown storage event: " ++ event)
+
+
+decodeError : String -> Decode.Decoder JsMsg
+decodeError token =
+    case token of
+        "unavailable" ->
+            Decode.succeed Unavailable
+
+        _ ->
+            Decode.fail ("unknown storage error variant: " ++ token)
