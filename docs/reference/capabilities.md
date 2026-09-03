@@ -43,5 +43,7 @@ Ipê runs programs under a deny-by-default capability model. Every operation tha
 | `js-port:share` | Invoking the platform share sheet via navigator.share. |
 | `js-port:battery` | Reading battery status via navigator.getBattery. |
 | `js-port:network-info` | Reading network-information hints via navigator.connection. |
+| `js-port:file` | Opening a native file picker and reading the chosen file via the File API (FileReader.readAsDataURL). |
+| `js-port:camera` | Capturing a photo via the device camera (mobile) or an image file picker (desktop) using a <input capture> element and the File API. |
 | `js-port:raw` | Exchanging data with hand-rolled page JS over an uncharacterised port (Js.send / Js.subscribe with author-written JS). |
 

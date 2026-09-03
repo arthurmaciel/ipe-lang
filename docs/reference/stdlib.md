@@ -11,8 +11,12 @@ Each module listed below links to a detail page with the full documentation and 
 - [Bitwise](#bitwise)
 - [Browser.Battery](#browserbattery)
 - [Browser.Battery.Internals](#browserbatteryinternals)
+- [Browser.Camera](#browsercamera)
+- [Browser.Camera.Internals](#browsercamerainternals)
 - [Browser.Clipboard](#browserclipboard)
 - [Browser.Clipboard.Internals](#browserclipboardinternals)
+- [Browser.FilePicker](#browserfilepicker)
+- [Browser.FilePicker.Internals](#browserfilepickerinternals)
 - [Browser.Geolocation](#browsergeolocation)
 - [Browser.Geolocation.Internals](#browsergeolocationinternals)
 - [Browser.NetworkInfo](#browsernetworkinfo)
@@ -199,6 +203,33 @@ Ipe.Browser.Battery.Internals — the low-level Battery Status port surface: the
 | `subscribe` | `subscribe toMsg` — the inbound subscription over the fail-closed seal |
 | `inbound` | The total, fail-closed decoder for the inbound `JsMsg`. It reads the `ok` |
 
+## Browser.Camera
+
+[Full reference](stdlib/Browser.Camera.md)
+
+Ipe.Browser.Camera — capture a photo from the device camera (or a
+
+| Export | Summary |
+|--------|----------|
+| `PickedFile` | A captured image: the browser-assigned filename, the image MIME type, and |
+| `capturePhoto` | `capturePhoto` — open the camera capture UI (mobile) or an image file |
+| `captures` | `captures toMsg` — the inbound subscription, wired in `subscriptions`. |
+
+## Browser.Camera.Internals
+
+[Full reference](stdlib/Browser.Camera.Internals.md)
+
+Ipe.Browser.Camera.Internals — the low-level camera capture port surface:
+
+| Export | Summary |
+|--------|----------|
+| `JsCmd` | The ONE closed OUTBOUND port type. `CapturePhoto` invokes the device |
+| `JsMsg` | The NARROW closed INBOUND port type — NOT the app's internal `Msg`. Every |
+| `request` | `request cmd` — hand a closed outbound `JsCmd` to the raw port transport. |
+| `requestOne` | `requestOne cmd` — correlated one-shot `JsCmd` → `Task Error JsMsg`. |
+| `subscribe` | `subscribe toMsg` — the inbound subscription over the fail-closed seal |
+| `inbound` | The total, fail-closed decoder for the inbound `JsMsg`. It reads `ok` |
+
 ## Browser.Clipboard
 
 [Full reference](stdlib/Browser.Clipboard.md)
@@ -225,6 +256,34 @@ Ipe.Browser.Clipboard.Internals — the low-level clipboard port surface: the
 | `requestOne` | `requestOne cmd` — correlated one-shot `JsCmd` → `Task Error JsMsg`. |
 | `subscribe` | `subscribe toMsg` — the inbound subscription over the fail-closed seal |
 | `inbound` | The total, fail-closed decoder for the inbound `JsMsg`. It reads `ok` first: a |
+
+## Browser.FilePicker
+
+[Full reference](stdlib/Browser.FilePicker.md)
+
+Ipe.Browser.FilePicker — open a native file picker and read the chosen file
+
+| Export | Summary |
+|--------|----------|
+| `PickedFile` | A file returned by the picker: the filename, its MIME type, and the full |
+| `pickFile` | `pickFile` — open a general-purpose file picker dialog, as a |
+| `pickImage` | `pickImage` — open an image-only file picker dialog, as a |
+| `picks` | `picks toMsg` — the inbound subscription, wired in `subscriptions`. |
+
+## Browser.FilePicker.Internals
+
+[Full reference](stdlib/Browser.FilePicker.Internals.md)
+
+Ipe.Browser.FilePicker.Internals — the low-level file-picker port surface:
+
+| Export | Summary |
+|--------|----------|
+| `JsCmd` | The ONE closed OUTBOUND port type. `PickFile` opens a general-purpose file |
+| `JsMsg` | The NARROW closed INBOUND port type — NOT the app's internal `Msg`. Every |
+| `request` | `request cmd` — hand a closed outbound `JsCmd` to the raw port transport. |
+| `requestOne` | `requestOne cmd` — correlated one-shot `JsCmd` → `Task Error JsMsg`. |
+| `subscribe` | `subscribe toMsg` — the inbound subscription over the fail-closed seal |
+| `inbound` | The total, fail-closed decoder for the inbound `JsMsg`. It reads `ok` |
 
 ## Browser.Geolocation
 
