@@ -51,25 +51,35 @@ use crate::CliError;
 
 /// A validated advisory identifier.
 ///
-/// Must be non-empty and must not start with `-` (injection guard).  No other
-/// structural constraint is imposed — the format is `IPE-<YEAR>-<SEQ>` by
-/// convention but is not enforced by the type (forward-compatible with future
-/// schemes).
+/// Must be a non-empty `[A-Za-z0-9._-]` string that does not start with `-`.
+/// The closed charset makes a URL-injection-shaped id (`/`, `..`, `?`, `#`,
+/// whitespace) unrepresentable, since the id flows into the advisory-record
+/// fetch URL; it admits the `IPE-<YEAR>-<SEQ>` convention and any future scheme
+/// within that charset.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct AdvisoryId(String);
 
 impl AdvisoryId {
-    /// Parse a raw `id` string, rejecting empty values and leading-`-` tokens.
+    /// Parse a raw `id` string, admitting only the closed charset
+    /// `[A-Za-z0-9._-]` (non-empty, not `-`-leading). The allowlist makes a
+    /// URL-injection-shaped id unrepresentable at the boundary, since the id
+    /// flows into the advisory-record fetch URL.
     ///
     /// # Errors
-    /// [`CliError::AdvisoryDbMalformed`] when the value is empty or injection-shaped.
+    /// [`CliError::AdvisoryDbMalformed`] when the value is empty, `-`-leading, or
+    /// carries a character outside the allowlist.
     fn parse(raw: &str, path: &Path) -> Result<Self, CliError> {
         let trimmed = raw.trim();
-        if trimmed.is_empty() || trimmed.starts_with('-') {
+        let admissible = !trimmed.is_empty()
+            && !trimmed.starts_with('-')
+            && trimmed
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'));
+        if !admissible {
             return Err(CliError::AdvisoryDbMalformed {
                 path: path.to_path_buf(),
                 detail: format!(
-                    "advisory `id` must be a non-empty, non-`-`-leading string; got: {raw:?}"
+                    "advisory `id` must be a non-empty `[A-Za-z0-9._-]` string with no `-` lead; got: {raw:?}"
                 ),
             });
         }
@@ -843,5 +853,20 @@ description = "Minor information disclosure."
         // low severity → warn only, Ok(()).
         let result = check_dep_advisories(&db, "info-leak", &version);
         assert!(result.is_ok(), "low severity must not reject: {result:?}");
+    }
+
+    #[test]
+    fn advisory_id_rejects_url_injection_charset() {
+        let path = std::path::Path::new("advisories/x.toml");
+        // Conventional + within-charset ids pass.
+        assert!(AdvisoryId::parse("IPE-2024-0001", path).is_ok());
+        assert!(AdvisoryId::parse("scheme_2.0-rc1", path).is_ok());
+        // The id flows into a fetch URL; injection-shaped ids are unrepresentable.
+        for bad in ["../secret", "a/b", "id?x=1", "id#frag", "a b", "-lead", ""] {
+            assert!(
+                AdvisoryId::parse(bad, path).is_err(),
+                "must reject injection-shaped id {bad:?}"
+            );
+        }
     }
 }
