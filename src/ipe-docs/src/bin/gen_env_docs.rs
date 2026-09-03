@@ -342,7 +342,14 @@ mod tests {
         out
     }
 
-    /// Return true when `s` matches `IPE_[A-Z][A-Z0-9_]*` (non-empty suffix).
+    /// Return true when `s` matches `IPE_[A-Z][A-Z0-9_]*` (non-empty suffix) and
+    /// is not a diagnostic-code token.
+    ///
+    /// A diagnostic code has the shape `IPE_<letter><digits>` (e.g. `IPE_N0028`) —
+    /// a single uppercase letter followed only by digits. Those are never
+    /// environment-variable names (real ones carry more structure, e.g.
+    /// `IPE_E2E`, `IPE_RUNTIME_DIR`), so they are excluded to keep the two
+    /// `IPE_`-prefixed vocabularies from colliding in this scan.
     fn is_valid_ipe_name(s: &str) -> bool {
         let Some(suffix) = s.strip_prefix("IPE_") else {
             return false;
@@ -350,9 +357,19 @@ mod tests {
         if suffix.is_empty() {
             return false;
         }
-        suffix
+        if !suffix
             .chars()
             .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_')
+        {
+            return false;
+        }
+        let first_is_letter = suffix
+            .chars()
+            .next()
+            .is_some_and(|c| c.is_ascii_uppercase());
+        let rest_all_digits =
+            suffix.len() > 1 && suffix.chars().skip(1).all(|c| c.is_ascii_digit());
+        !(first_is_letter && rest_all_digits)
     }
 
     /// Collect all regular-file paths under `root` recursively.
