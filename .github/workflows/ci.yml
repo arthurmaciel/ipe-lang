@@ -1262,3 +1262,94 @@ jobs:
         run: cargo run -p ipe_docs --bin gen-capabilities-docs -- --repo-root "${{ github.workspace }}"
       - name: Fail if generated docs differ from committed files
         run: git diff --exit-code docs/reference/capabilities.md
+
+  # Headless-browser behaviour gate for Ipe.Browser.Geolocation +
+  # Ipe.Browser.Clipboard — the three flows a raw TcpStream HTTP test cannot
+  # exercise (browser permission grant/deny + JS API round-trips):
+  #
+  #   1. Geo GRANT  — grantPermissions(['geolocation']) + setGeolocation →
+  #      click "Locate" → model renders "location: <lat>, <lng>" (Ok path).
+  #   2. Geo DENY   — no permission grant → click "Locate" → model renders
+  #      "location: error: ..." (typed Err, not a blank or crash).
+  #   3. Clipboard  — grantPermissions(['clipboard-read','clipboard-write']) →
+  #      Locate → "Copy location" → "Paste" → model renders the same coords
+  #      on the "clipboard:" line (write+read round-trip).
+  #
+  # Off the PR gate (like `e2e`); runs on push to main and nightly.
+  # The `browser-e2e` job is the ONLY gate that proves the Ipe.Browser.*
+  # port-glue JS actually drives the browser APIs end-to-end — the Rust
+  # build-only test in live_e2e.rs (`geo_clipboard_browser_build_only`) proves
+  # the emit pipeline, but not the runtime JS behaviour.
+  browser-e2e:
+    name: browser-e2e (Ipe.Browser geo+clipboard — headless Playwright)
+    runs-on: ubuntu-latest
+    needs: [changes, quick-check]
+    if: github.event_name != 'pull_request'
+    env:
+      RUSTFLAGS: -C link-arg=-fuse-ld=mold
+      IPE_RUNTIME_DIR: ${{ github.workspace }}/src/runtime/rust/src
+      IPE_GEO_CLIPBOARD_PORT: "18080"
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: rui314/setup-mold@v1
+      - uses: mozilla-actions/sccache-action@v0.0.9
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-directories: ${{ github.workspace }}/.cache/browser-e2e-target
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Install Playwright + Chromium
+        working-directory: tools/scripts/browser-e2e
+        run: |
+          npm install --save-dev @playwright/test
+          npx playwright install --with-deps chromium
+      - name: Build ipe compiler
+        run: cargo build --release -p ipe
+      - name: Compile geo-clipboard example
+        env:
+          CARGO_TARGET_DIR: ${{ github.workspace }}/.cache/browser-e2e-target
+        run: |
+          set -euo pipefail
+          IPE="$PWD/target/release/ipe"
+          OUT="${{ runner.temp }}/geo-clipboard-emitted"
+          "$IPE" build examples/shapes/web/geo-clipboard/package.ipe --out "$OUT"
+          echo "IPE_GEO_CLIPBOARD_EMITTED=$OUT" >> "$GITHUB_ENV"
+      - name: Cargo-build emitted project
+        env:
+          CARGO_TARGET_DIR: ${{ github.workspace }}/.cache/browser-e2e-target
+        run: |
+          set -euo pipefail
+          cd "$IPE_GEO_CLIPBOARD_EMITTED"
+          cargo build --release
+          BIN="$(find target/release -maxdepth 1 -type f -perm /111 ! -name '*.d' | head -1)"
+          echo "GEO_CLIPBOARD_BIN=$BIN" >> "$GITHUB_ENV"
+      - name: Spawn geo-clipboard server
+        run: |
+          set -euo pipefail
+          IPE_WEB_PORT="$IPE_GEO_CLIPBOARD_PORT" \
+          IPE_CSRF=off \
+          IPE_CONSOLE_EMBED=off \
+          "$GEO_CLIPBOARD_BIN" &
+          echo "GEO_SERVER_PID=$!" >> "$GITHUB_ENV"
+          for i in $(seq 1 20); do
+            if curl -sf "http://127.0.0.1:$IPE_GEO_CLIPBOARD_PORT/" >/dev/null 2>&1; then
+              echo "server ready (attempt $i)"; break
+            fi
+            sleep 0.5
+          done
+      - name: Run Playwright spec (geo + clipboard)
+        working-directory: tools/scripts/browser-e2e
+        run: npx playwright test --config playwright.config.mjs
+      - name: Kill server
+        if: always()
+        run: kill "$GEO_SERVER_PID" 2>/dev/null || true
+      - name: Upload screenshots
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: browser-e2e-screenshots
+          path: tools/scripts/browser-e2e/artifacts/
+          if-no-files-found: warn
+          retention-days: 7

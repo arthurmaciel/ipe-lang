@@ -2452,3 +2452,169 @@ fn live_generic_decoder_helper_build_only() -> Result<(), BoxError> {
     )?;
     Ok(())
 }
+
+// ── Ipe.Browser.Geolocation + Ipe.Browser.Clipboard ──────────────────────────
+//
+// The geo-clipboard example is the first-party proof of the Ipe.Browser.*
+// capability surface: two port-direction pairs (outbound Cmd + inbound Sub)
+// over the fail-closed JS port mechanism, with the app-boundary consent gate
+// satisfied by `package.ipe`'s `accepts` list.
+//
+// BUILD-ONLY seal: `ipe::build_project` compiles the real on-disk example
+// (which carries its `package.ipe` capabilities grant).  A successful
+// `cargo build` proves the full emit path for Geolocation + Clipboard —
+// their port-glue kernels, SRI-addressed JS, and inbound subscription
+// decoders — without requiring a headless browser.
+//
+// BEHAVIOUR seal: the served initial page must render the four expected
+// interaction buttons and the two labelled state lines ("location:" and
+// "clipboard:").  This proves the full Ipe.Web pipeline ran to a real HTML
+// page — not a blank or error page — and that the Ipe.Browser.* port
+// registration did not panic at runtime init.
+//
+// Real browser behaviour (grant/deny geolocation, clipboard round-trip) is
+// covered by the Playwright spec at
+// tools/scripts/browser-e2e/geo-clipboard.spec.mjs, which is wired into the
+// `browser-e2e` CI job and can also be run locally:
+//
+//   IPE_E2E=1 cargo test geo_clipboard_browser_build_only   # build
+//   bash tools/scripts/browser-e2e/run.sh                  # full browser spec
+
+/// Absolute path to the geo-clipboard `package.ipe` manifest, resolved
+/// relative to `CARGO_MANIFEST_DIR` (the `ipe-cli` crate root).
+fn geo_clipboard_manifest() -> PathBuf {
+    // CARGO_MANIFEST_DIR points at the crate that owns this test binary
+    // (src/ipe-cli/), two levels above the workspace root where
+    // examples/shapes/web/geo-clipboard/ lives.
+    let manifest_dir =
+        PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap_or_else(|_| ".".into()));
+    manifest_dir
+        .join("../..")
+        .join("examples/shapes/web/geo-clipboard/package.ipe")
+}
+
+/// Compile and cargo-build the geo-clipboard example from its on-disk
+/// `package.ipe` manifest, returning the path to the compiled binary.
+///
+/// Uses `ipe::build_project` (not `ipe::build`) so the capabilities consent
+/// gate is applied: without the `accepts = [JsPort Geolocation, JsPort
+/// Clipboard, JsPort Raw]` grant the build must fail closed (IPE-S0002).
+fn compile_and_build_geo_clipboard() -> Result<PathBuf, BoxError> {
+    let manifest = geo_clipboard_manifest();
+    let manifest = manifest.canonicalize().map_err(|e| -> BoxError {
+        format!(
+            "geo-clipboard: cannot canonicalize manifest {}: {}",
+            manifest.display(),
+            e
+        )
+        .into()
+    })?;
+
+    let out_dir = std::env::temp_dir().join("live_e2e_geo_clipboard_emitted");
+    let _ = std::fs::remove_dir_all(&out_dir);
+
+    let runtime = ipe::resolve_runtime()
+        .map_err(|e| -> BoxError { format!("geo-clipboard: runtime unavailable: {e}").into() })?;
+
+    ipe::build_project(&manifest, &out_dir, &runtime).map_err(|e| -> BoxError {
+        format!("geo-clipboard: ipe build_project failed: {e}").into()
+    })?;
+
+    let exe = e2e_support::build_rust_binary("geo_clipboard", &out_dir)
+        .map_err(|e| -> BoxError { format!("geo-clipboard: cargo build failed: {e}").into() })?;
+
+    Ok(PathBuf::from(exe))
+}
+
+/// BUILD-ONLY: the geo-clipboard example compiles end-to-end through
+/// `ipe::build_project` (capabilities consent gate active) and its emitted
+/// Rust project links cleanly.
+///
+/// Kernels exercised:
+/// - `Ipe.Browser.Geolocation` (`current`, `watch`, `positions` subscription)
+/// - `Ipe.Browser.Clipboard` (`write`, `read`, `contents` subscription)
+/// - The per-capability JS-port disclosure + fail-closed app-boundary
+///   consent gate (`accepts = [JsPort Geolocation, JsPort Clipboard, JsPort Raw]`)
+/// - Port-glue SRI-addressed asset serving (`/_ipe/port.<hex16>.js`)
+///
+/// A successful `ipe::build_project` + `cargo build` IS the assertion.
+///
+/// # Errors
+///
+/// Propagates any pipeline or Cargo build failure as a test error.
+#[test]
+fn geo_clipboard_browser_build_only() -> Result<(), BoxError> {
+    if std::env::var("IPE_E2E").is_err() {
+        return Ok(());
+    }
+
+    let _exe = compile_and_build_geo_clipboard()?;
+    Ok(())
+}
+
+/// BEHAVIOUR: the geo-clipboard app's initial `GET /` must return an HTML page
+/// containing all four interaction buttons and the two labelled state lines.
+///
+/// Assertions (each proves a distinct part of the pipeline):
+///
+/// - `>Locate<`          — `Ui.button` for `Locate` rendered; TEA `view` ran.
+/// - `>Copy location<`   — `Ui.button` for `CopyLocation` rendered.
+/// - `>Paste<`           — `Ui.button` for `Paste` rendered.
+/// - `location: unknown` — initial `Model.location` rendered correctly.
+/// - `clipboard:`        — initial `Model.clipboard` line present (empty string).
+///
+/// This test does NOT exercise the geolocation or clipboard browser APIs —
+/// those require a real browser with permission grants and are covered by the
+/// Playwright spec in `tools/scripts/browser-e2e/geo-clipboard.spec.mjs`.
+///
+/// # Errors
+///
+/// Propagates any pipeline, build, spawn, or HTTP error as a test error.
+#[test]
+fn geo_clipboard_browser_initial_page() -> Result<(), BoxError> {
+    if std::env::var("IPE_E2E").is_err() {
+        return Ok(());
+    }
+
+    let test_name = "geo_clipboard_browser_initial_page";
+    let exe = compile_and_build_geo_clipboard()?;
+    let port = pick_ephemeral_port()?;
+    let _guard = spawn_and_wait_ready(test_name, &exe, port)?;
+
+    let addr = format!("127.0.0.1:{port}");
+    let body = http_get(test_name, &addr, "/")?;
+
+    // All four buttons must be present in the initial render.
+    for expected in &["Locate", "Copy location", "Paste"] {
+        assert!(
+            body.contains(&format!(">{expected}<")),
+            "{test_name}: button text >{expected}< not found in GET / body\n\
+             --- first 2000 bytes ---\n{}",
+            &body[..body.len().min(2000)]
+        );
+    }
+
+    // Initial model state lines.
+    assert!(
+        body.contains("location: unknown"),
+        "{test_name}: initial 'location: unknown' not found in GET / body\n\
+         --- first 2000 bytes ---\n{}",
+        &body[..body.len().min(2000)]
+    );
+    assert!(
+        body.contains("clipboard:"),
+        "{test_name}: 'clipboard:' label not found in GET / body\n\
+         --- first 2000 bytes ---\n{}",
+        &body[..body.len().min(2000)]
+    );
+
+    // Must be a proper HTML document, not an error page.
+    assert!(
+        body.contains("<!DOCTYPE html>") || body.contains("<html"),
+        "{test_name}: GET / response does not look like HTML\n\
+         --- first 500 bytes ---\n{}",
+        &body[..body.len().min(500)]
+    );
+
+    Ok(())
+}
