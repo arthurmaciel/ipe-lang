@@ -12,6 +12,17 @@
 /// sites into references to its definitions.
 pub const ASSERTED_MODULE: &str = "Rust.Ffi";
 
+/// The reserved qualifier of the taxonomy-native binding surface.
+///
+/// A source module reaches the surface with `import Ipe.Ffi.Rust as Rust`, so
+/// the callee spelling is `Rust.fn "<crate>" "<path>"`. The qualifier is the
+/// `as` alias's last segment; the import gate reserves the `Ipe.Ffi.Rust` path
+/// so no user module can be it.
+pub const RUST_FFI_QUALIFIER: &str = "Rust";
+
+/// The reserved member of the taxonomy-native binding surface: `Rust.fn`.
+pub const RUST_FFI_MEMBER: &str = "fn";
+
 /// The reserved `_bindings.rs` identifier prefix of every asserted shim.
 ///
 /// Installed-crate wrapper identifiers derive from `<slug>_<fn>` and a slug
@@ -71,6 +82,30 @@ impl AssertedPath {
             raw: raw.to_owned(),
             segments: segments.into_iter().map(str::to_owned).collect(),
         })
+    }
+
+    /// Build a path from the two-literal `Rust.fn "<crate>" "<path>"` surface,
+    /// where the crate names the linked crate (a single Rust identifier) and the
+    /// path names the item beneath it (`Sha256::digest`, `frobnicate`).
+    ///
+    /// The two halves are joined with `::` and validated by [`Self::parse`], so
+    /// this shares one gate with the single-literal form: an ill-formed crate or
+    /// path is unrepresentable exactly as before. The crate half is additionally
+    /// required to be a SINGLE segment — a crate is one identifier, never a `::`
+    /// path — so `Rust.fn "a::b" "c"` is refused rather than silently accepted as
+    /// `a::b::c`.
+    ///
+    /// # Errors
+    /// A human-readable rule name (the caller wraps it in
+    /// [`ipe_diagnostics::NameError::AssertedCallMalformed`]).
+    pub fn from_crate_and_path(krate: &str, path: &str) -> Result<Self, String> {
+        if krate.contains("::") {
+            return Err(format!(
+                "the crate `{krate}` must be a single identifier, not a `::` path — \
+                 name the item beneath it in the second argument"
+            ));
+        }
+        Self::parse(&format!("{krate}::{path}"))
     }
 
     /// The full path as written (`some_crate::frobnicate`).
@@ -172,7 +207,7 @@ pub fn scan_module(
     for value in &module.values {
         let v = &value.value;
         if let ipe_syntax::Expr_::Call(callee, args) = &v.body.value
-            && is_asserted_callee(callee, interner)
+            && let Some(which) = classify_asserted_callee(callee, interner)
         {
             let malformed =
                 |span: ipe_diagnostics::Span, detail: String| ipe_diagnostics::Diagnostic::Name {
@@ -197,20 +232,8 @@ pub fn scan_module(
                         .to_owned(),
                 ));
             };
-            let [path_expr] = args.as_slice() else {
-                return Err(malformed(
-                    callee.span,
-                    "it must be applied to exactly one string-literal path".to_owned(),
-                ));
-            };
-            let ipe_syntax::Expr_::Str(raw) = &path_expr.value else {
-                return Err(malformed(
-                    path_expr.span,
-                    "the path must be a string literal, never a computed value".to_owned(),
-                ));
-            };
-            let path =
-                AssertedPath::parse(raw).map_err(|detail| malformed(path_expr.span, detail))?;
+            let path = read_asserted_path(which, callee.span, args)
+                .map_err(|(span, detail)| malformed(span, detail))?;
             uses.push(AssertedUse {
                 path,
                 annotation: annotation.value.clone(),
@@ -234,13 +257,99 @@ pub fn scan_module(
     Ok(uses)
 }
 
-/// Whether `callee` is the `Rust.Ffi.call` qualified reference.
-fn is_asserted_callee(callee: &ipe_syntax::Expr, interner: &ipe_intern::Interner) -> bool {
+/// Which asserted-call surface a callee names.
+///
+/// Both spellings mint the SAME [`AssertedPath`] and the same generated
+/// forwarder; they differ only in how the path is written at the call site.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AssertedCallee {
+    /// The legacy single-literal spelling `Rust.Ffi.call "<crate>::<path>"`.
+    Call,
+    /// The taxonomy-native two-literal spelling
+    /// `Rust.fn "<crate>" "<path>"` (`import Ipe.Ffi.Rust as Rust`).
+    RustFn,
+}
+
+/// Classify `callee`, or `None` when it names neither asserted surface.
+#[must_use]
+pub fn classify_asserted_callee(
+    callee: &ipe_syntax::Expr,
+    interner: &ipe_intern::Interner,
+) -> Option<AssertedCallee> {
     let ipe_syntax::Expr_::VarQual(qualifier, member) = &callee.value else {
-        return false;
+        return None;
     };
-    interner.resolve(*qualifier) == Some(ASSERTED_MODULE)
-        && interner.resolve(*member) == Some("call")
+    let (q, m) = (interner.resolve(*qualifier), interner.resolve(*member));
+    if q == Some(ASSERTED_MODULE) && m == Some("call") {
+        Some(AssertedCallee::Call)
+    } else if q == Some(RUST_FFI_QUALIFIER) && m == Some(RUST_FFI_MEMBER) {
+        Some(AssertedCallee::RustFn)
+    } else {
+        None
+    }
+}
+
+/// Whether `callee` names either asserted-call surface.
+fn is_asserted_callee(callee: &ipe_syntax::Expr, interner: &ipe_intern::Interner) -> bool {
+    classify_asserted_callee(callee, interner).is_some()
+}
+
+/// How many leading string-literal arguments a spelling consumes as its path:
+/// one for `Rust.Ffi.call`, two for `Rust.fn`.
+#[must_use]
+pub const fn path_arg_count(which: AssertedCallee) -> usize {
+    match which {
+        AssertedCallee::Call => 1,
+        AssertedCallee::RustFn => 2,
+    }
+}
+
+/// Read the [`AssertedPath`] out of an asserted call's arguments, per spelling.
+///
+/// One string literal for [`AssertedCallee::Call`], two (crate then path) for
+/// [`AssertedCallee::RustFn`]. Every failure carries a span so the caller
+/// renders a located [`ipe_diagnostics::NameError::AssertedCallMalformed`].
+///
+/// # Errors
+/// `(span, detail)` for a wrong argument count or a non-literal argument.
+pub fn read_asserted_path(
+    which: AssertedCallee,
+    callee_span: ipe_diagnostics::Span,
+    args: &[ipe_syntax::Expr],
+) -> Result<AssertedPath, (ipe_diagnostics::Span, String)> {
+    let as_str = |e: &ipe_syntax::Expr| match &e.value {
+        ipe_syntax::Expr_::Str(raw) => Ok(raw.clone()),
+        _ => Err((
+            e.span,
+            "the argument must be a string literal, never a computed value".to_owned(),
+        )),
+    };
+    match which {
+        AssertedCallee::Call => {
+            let [path_expr] = args else {
+                return Err((
+                    callee_span,
+                    "it must be applied to exactly one string-literal path".to_owned(),
+                ));
+            };
+            let raw = as_str(path_expr)?;
+            AssertedPath::parse(&raw).map_err(|detail| (path_expr.span, detail))
+        }
+        AssertedCallee::RustFn => {
+            let [crate_expr, path_expr] = args else {
+                return Err((
+                    callee_span,
+                    "`Rust.fn` takes exactly two string literals: the crate and the item \
+                     path (`Rust.fn \"sha2\" \"Sha256::digest\"`)"
+                        .to_owned(),
+                ));
+            };
+            let krate = as_str(crate_expr)?;
+            let path = as_str(path_expr)?;
+            AssertedPath::from_crate_and_path(&krate, &path)
+                .map_err(|detail| (path_expr.span, detail))
+        }
+    }
 }
 
 /// The span of the first `Rust.Ffi.call` reference anywhere in `expr`, if any.
@@ -345,6 +454,44 @@ mod tests {
         let b = AssertedPath::parse("some_crate::frobnicate").expect("parses");
         assert_eq!(a.def_name(), b.def_name());
         assert_eq!(a.wrapper_ident(), b.wrapper_ident());
+    }
+
+    #[test]
+    fn the_two_literal_form_joins_crate_and_path() {
+        // `Rust.fn "sha2" "Sha256::digest"` → `sha2::Sha256::digest`.
+        let p = AssertedPath::from_crate_and_path("sha2", "Sha256::digest").expect("parses");
+        assert_eq!(p.crate_ident(), "sha2");
+        assert_eq!(p.fn_name(), "digest");
+        assert_eq!(p.as_str(), "sha2::Sha256::digest");
+        // Identical derived identity to the single-literal spelling — the two
+        // surfaces share one generated forwarder.
+        let one = AssertedPath::parse("sha2::Sha256::digest").expect("parses");
+        assert_eq!(p.def_name(), one.def_name());
+        assert_eq!(p.wrapper_ident(), one.wrapper_ident());
+    }
+
+    #[test]
+    fn a_crate_top_level_two_literal_form_parses() {
+        let p = AssertedPath::from_crate_and_path("mycrate", "frobnicate").expect("parses");
+        assert!(p.is_crate_top_level());
+        assert_eq!(p.rust_call_path(), "::mycrate::frobnicate");
+    }
+
+    #[test]
+    fn a_multi_segment_crate_half_is_refused() {
+        // A crate is ONE identifier: `"a::b"` in the crate slot is a mistake,
+        // never re-parsed as `a::b::c`.
+        assert!(AssertedPath::from_crate_and_path("a::b", "c").is_err());
+    }
+
+    #[test]
+    fn a_malformed_two_literal_half_is_refused() {
+        for (krate, path) in [("", "f"), ("sha2", ""), ("sha-2", "f"), ("sha2", "a b")] {
+            assert!(
+                AssertedPath::from_crate_and_path(krate, path).is_err(),
+                "{krate:?} {path:?} must be refused"
+            );
+        }
     }
 
     #[test]

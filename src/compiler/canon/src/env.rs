@@ -213,11 +213,23 @@ pub fn stdlib_module_dot_paths() -> Vec<Box<str>> {
 /// yet must be accepted at the import boundary.
 const RESERVED_FFI_QUALIFIER_PATH: &[&str] = &["Ipe", "Ffi", "Kernel"];
 
+/// The reserved native-binding qualifier path. `import Ipe.Ffi.Rust as Rust`
+/// brings the `Rust.fn "<crate>" "<path>"` binding surface into scope for a
+/// user source module. Like [`RESERVED_FFI_QUALIFIER_PATH`] it is a
+/// compiler-internal qualifier, not a member-bearing stdlib module, so it lives
+/// outside [`STDLIB_MODULE_QUALIFIERS`] yet must be accepted at the import
+/// boundary. The `Rust.fn` calls it enables are recognised and rewritten by the
+/// resolver (`ipe_canon::resolve::canonicalise_asserted_call`) onto the
+/// driver-generated forwarder module, exactly as the legacy `Rust.Ffi.call`
+/// spelling is.
+const RESERVED_RUST_FFI_QUALIFIER_PATH: &[&str] = &["Ipe", "Ffi", "Rust"];
+
 /// Whether `path` (segment symbols) names a known importable `Ipe.*` module that
 /// needs no dep injection: a kernel stdlib module registered in
-/// [`STDLIB_MODULE_QUALIFIERS`], or the reserved `Ipe.Ffi.Kernel` kernel-alias
-/// qualifier. An un-interned segment cannot match a known module, so it answers
-/// `false`. Purely immutable — no interning.
+/// [`STDLIB_MODULE_QUALIFIERS`], the reserved `Ipe.Ffi.Kernel` kernel-alias
+/// qualifier, or the reserved `Ipe.Ffi.Rust` native-binding qualifier. An
+/// un-interned segment cannot match a known module, so it answers `false`.
+/// Purely immutable — no interning.
 #[must_use]
 pub fn is_kernel_stdlib_module(path: &[Symbol], interner: &Interner) -> bool {
     let mut segments: Vec<&str> = Vec::with_capacity(path.len());
@@ -231,6 +243,7 @@ pub fn is_kernel_stdlib_module(path: &[Symbol], interner: &Interner) -> bool {
         candidate.len() == segments.len() && candidate.iter().zip(&segments).all(|(a, b)| a == b)
     };
     matches(RESERVED_FFI_QUALIFIER_PATH)
+        || matches(RESERVED_RUST_FFI_QUALIFIER_PATH)
         || STDLIB_MODULE_QUALIFIERS
             .iter()
             .any(|(candidate, _)| matches(candidate))

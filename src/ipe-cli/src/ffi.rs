@@ -560,7 +560,10 @@ fn scan_asserted(
 ) -> Result<Vec<ipe_ffi::asserted::AssertedSpec>, CliError> {
     let mut specs = Vec::new();
     for (file, text) in sources.values() {
-        if !text.contains("Rust.Ffi.call") {
+        // Cheap pre-filter: skip a module that spells neither native-binding
+        // surface before the parse. `scan_module` is the authoritative
+        // classifier; this only avoids parsing modules that cannot carry one.
+        if !text.contains("Rust.Ffi.call") && !text.contains("Rust.fn") {
             continue;
         }
         let mut interner = ipe_intern::Interner::new();
