@@ -321,6 +321,11 @@ fn compute_entry_version(
         rev,
         sha256,
         capabilities,
+        // Publish computes the entry; the keyless signature is minted by the
+        // registry's CI workflow (Fulcio/Rekor) over the statement this module
+        // emits, then attached to the entry there. The locally-authored entry is
+        // therefore always unsigned.
+        signature: None,
     })
 }
 
@@ -389,6 +394,11 @@ pub fn render_entry_version(version: &EntryVersion) -> String {
         .map(|c| format!("\"{}\"", c.as_str()))
         .collect();
     let _ = writeln!(out, "capabilities = [{}]", caps.join(", "));
+    // A signed version carries its Sigstore bundle verbatim (single-line JSON,
+    // so it round-trips through the reader's quote-stripping line scan).
+    if let Some(sig) = &version.signature {
+        let _ = writeln!(out, "signature = \"{}\"", sig.as_str());
+    }
     out
 }
 
@@ -946,6 +956,7 @@ mod tests {
             .expect("valid pinned rev"),
             sha256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855".to_owned(),
             capabilities: caps_set,
+            signature: None,
         }
     }
 
@@ -983,6 +994,50 @@ mod tests {
         assert_eq!(parsed.versions, vec![version]);
 
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A signed version's `signature` bundle survives the render → read round
+    /// trip: the emitted `[[version]]` block re-parses with the same bundle.
+    #[test]
+    fn a_signed_entry_round_trips_through_the_reader() {
+        let root = temp_dir("signed-round-trip");
+        let packages = root.join("packages");
+        std::fs::create_dir_all(&packages).expect("packages dir");
+
+        let mut version = sample_version("1.2.0", caps(&[Capability::Network]));
+        let bundle = crate::signing::SignatureBundle::parse(
+            "http-extras",
+            r#"{"mediaType":"application/vnd.dev.sigstore.bundle+json;version=0.3","dsseEnvelope":{}}"#,
+        )
+        .expect("valid bundle");
+        version.signature = Some(bundle);
+
+        let toml = render_entry(
+            "http-extras",
+            "arthurmaciel",
+            std::slice::from_ref(&version),
+        );
+        std::fs::write(packages.join("http-extras.toml"), &toml).expect("write entry");
+
+        let parsed = index::read_entry(&root, "http-extras").expect("entry parses");
+        let v = parsed.versions.first().expect("one version");
+        assert!(
+            v.signature.is_some(),
+            "the signature must survive round-trip"
+        );
+        assert_eq!(&parsed.versions, std::slice::from_ref(&version));
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// The publish-side DSSE statement binds the subject digest to the version's
+    /// pinned `sha256`, so a signature over it covers exactly the published bytes.
+    #[test]
+    fn publish_dsse_statement_binds_the_pinned_sha256() {
+        let version = sample_version("1.2.0", caps(&[Capability::Network]));
+        let stmt = crate::signing::dsse_statement("http-extras", "1.2.0", &version.sha256);
+        assert!(stmt.contains("http-extras@1.2.0"), "{stmt}");
+        assert!(stmt.contains(&version.sha256), "{stmt}");
     }
 
     /// Every capability wire name survives the render → read round-trip.
