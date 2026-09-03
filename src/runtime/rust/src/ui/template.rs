@@ -585,7 +585,6 @@ impl UiTemplateAttr {
             other => other.to_attr(),
         }
     }
-
 }
 
 /// An inert, mostly-static `Ipe.Ui` subtree, optionally carrying numbered
