@@ -1,0 +1,117 @@
+-- | Ipe.Browser.Notification — show system notifications over `Ipe.Ffi.Js` ports.
+--
+-- A first-party proof of the per-capability web mechanism spanning BOTH port
+-- directions: outbound `JsCmd`s (`requestPermission` / `notify`) request a
+-- notification operation, and an inbound `JsMsg` carries the permission outcome or
+-- a display acknowledgement. Both cross the same seal codec and fail-closed port
+-- discipline as every other port; there is no second transport.
+--
+-- Importing this reserved `Ipe.Browser.<Api>` module discloses
+-- `js-port:notification` (import-derived, keyed on the canonical
+-- `Ipe.Browser.Notification` path prefix via `WebCapability::for_browser_module`,
+-- alias-immune); only the top-level app's `[capabilities] accepts` set can grant it.
+--
+-- The two layers:
+--
+--   * `Ipe.Browser.Notification.Internals` publishes the closed outbound/inbound
+--     ADTs and the full `Options` surface (`title` / `body` / `tag`) for a caller
+--     that needs every knob.
+--   * this module is the high-level layer: `requestPermission` (a
+--     `Task Error ()` that succeeds only when the host grants) and `notify` /
+--     `notifyWith` (fire a notification), plus `outcomes` — the inbound
+--     subscription that folds the narrow `JsMsg` into a typed `Result Error ()`.
+--     The inbound `case` is EXHAUSTIVE over `Granted` / `Denied` / `Shown` /
+--     `Unavailable`: a host permission denial becomes a typed `Err`, never a
+--     silently dropped variant.
+module Ipe.Browser.Notification exposing
+    ( requestPermission
+    , notify
+    , notifyWith
+    , outcomes
+    )
+
+import Ipe.Browser.Notification.Internals as Internals exposing (JsMsg(..))
+import Ipe.Error as Error exposing (Error)
+import Ipe.Task as Task
+import Ipe.Tea.Web.Cmd as Cmd
+import Ipe.Tea.Web.Sub as Sub
+
+
+-- | `requestPermission` — ask the host to grant notification permission, as a
+-- `Task Error ()`.
+--
+-- Uses the correlated port→Task bridge (`Js.request`). The served JS handler
+-- calls `Notification.requestPermission`; a grant resolves the `Task` with `()`,
+-- and a denial or an absent API resolves it to a typed `Err`.
+--
+-- Importing this module discloses `js-port:notification`; the app must grant it
+-- with `accepts = [ JsPort Notification ]` under [capabilities] in package.ipe.
+requestPermission : Task Error ()
+requestPermission =
+    Internals.requestOne Internals.RequestPermission
+        |> Task.andThen foldPermission
+
+
+-- | `notify title` — display a notification with the given title and no body.
+--
+-- Outbound `Cmd`. The served JS handler constructs a `Notification`; a host
+-- denial (no prior grant) or an absent API traps to a typed inbound result on the
+-- `outcomes` subscription, never a panic.
+notify : String -> Cmd.Cmd msg
+notify title =
+    Internals.request (Internals.Show (Internals.defaults title))
+
+
+-- | `notifyWith options` — display a notification with the full option surface
+-- (`title` / `body` / `tag`).
+notifyWith : Internals.Options -> Cmd.Cmd msg
+notifyWith options =
+    Internals.request (Internals.Show options)
+
+
+-- | `outcomes toMsg` — the inbound subscription, wired in `subscriptions`.
+--
+-- The decoder IS the security gate: every inbound value runs through the total,
+-- bounded seal decoder for the narrow `JsMsg`; a malformed / mismatched frame is
+-- dropped whole. A decoded `JsMsg` is folded EXHAUSTIVELY into a
+-- `Result Error ()` — a `Granted` / `Shown` becomes `Ok`, a denial becomes a
+-- typed `Err`.
+outcomes : (Result Error () -> msg) -> Sub.Sub msg
+outcomes toMsg =
+    Internals.subscribe (\inbound -> toMsg (toResult inbound))
+
+
+-- | Fold a `requestPermission` reply into a `Task Error ()`. The `case` is
+-- exhaustive over every published inbound variant; only `Granted` succeeds.
+foldPermission : Internals.JsMsg -> Task Error ()
+foldPermission msg =
+    case msg of
+        Granted ->
+            Task.succeed ()
+
+        Shown ->
+            Task.succeed ()
+
+        Denied ->
+            Task.fail Error.permissionDenied
+
+        Unavailable ->
+            Task.fail (Error.unavailable "notifications unavailable")
+
+
+-- | Fold the narrow inbound `JsMsg` into a typed `Result Error ()`. The `case`
+-- is exhaustive over every published inbound variant.
+toResult : Internals.JsMsg -> Result Error ()
+toResult inbound =
+    case inbound of
+        Granted ->
+            Ok ()
+
+        Shown ->
+            Ok ()
+
+        Denied ->
+            Err Error.permissionDenied
+
+        Unavailable ->
+            Err (Error.unavailable "notifications unavailable")

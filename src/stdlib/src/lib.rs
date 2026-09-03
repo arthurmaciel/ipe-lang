@@ -676,6 +676,26 @@ const IPE_BROWSER_GEOLOCATION: &str = include_str!("../Ipe/Browser/Geolocation.i
 const IPE_BROWSER_GEOLOCATION_INTERNALS: &str =
     include_str!("../Ipe/Browser/Geolocation/Internals.ipe");
 
+/// `Ipe.Browser.Notification` — show system notifications over `Ipe.Ffi.Js` ports
+/// (compiled source), spanning BOTH port directions: an outbound `JsCmd` request
+/// (`requestPermission` / `notify` / `notifyWith`) and an inbound `JsMsg` reply
+/// folded exhaustively into `Result Error ()`. Importing it discloses
+/// `js-port:notification` (import-derived, keyed on the canonical
+/// `Ipe.Browser.Notification` path prefix via `WebCapability::for_browser_module`).
+/// The served wasm-sink JS handler reaches `Notification.requestPermission` /
+/// `new Notification`, trapping a denial / absence to the matching typed inbound
+/// variant. Registered in [`COMPILED_STD_MODULES`] (NOT `MODULES`); NOT in
+/// `STDLIB_MODULE_QUALIFIERS`.
+const IPE_BROWSER_NOTIFICATION: &str = include_str!("../Ipe/Browser/Notification.ipe");
+
+/// `Ipe.Browser.Notification.Internals` — the low-level notification port surface:
+/// the closed outbound/inbound ADTs, the full `Options` knob set, and the raw
+/// `Ipe.Ffi.Js` wiring the high-level layer wraps. Importing it discloses the same
+/// `js-port:notification` axis (the prefix key covers the submodule). Registered in
+/// [`COMPILED_STD_MODULES`] (NOT `MODULES`); NOT in `STDLIB_MODULE_QUALIFIERS`.
+const IPE_BROWSER_NOTIFICATION_INTERNALS: &str =
+    include_str!("../Ipe/Browser/Notification/Internals.ipe");
+
 /// `Ipe.Env` — build-time-embedded public config (compiled source).
 ///
 /// Defines `public : String -> Maybe String`, routed through the
@@ -1138,6 +1158,14 @@ pub const COMPILED_STD_MODULES: &[CompiledStdModule] = &[
     CompiledStdModule {
         dotted: "Ipe.Browser.Geolocation.Internals",
         source: IPE_BROWSER_GEOLOCATION_INTERNALS,
+    },
+    CompiledStdModule {
+        dotted: "Ipe.Browser.Notification",
+        source: IPE_BROWSER_NOTIFICATION,
+    },
+    CompiledStdModule {
+        dotted: "Ipe.Browser.Notification.Internals",
+        source: IPE_BROWSER_NOTIFICATION_INTERNALS,
     },
     CompiledStdModule {
         dotted: "Ipe.Env",

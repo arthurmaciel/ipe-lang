@@ -13,6 +13,8 @@ Each module listed below links to a detail page with the full documentation and 
 - [Browser.Clipboard.Internals](#browserclipboardinternals)
 - [Browser.Geolocation](#browsergeolocation)
 - [Browser.Geolocation.Internals](#browsergeolocationinternals)
+- [Browser.Notification](#browsernotification)
+- [Browser.Notification.Internals](#browsernotificationinternals)
 - [ByteSize](#bytesize)
 - [Bytes](#bytes)
 - [Cache](#cache)
@@ -216,6 +218,36 @@ Ipe.Browser.Geolocation.Internals — the full, low-level geolocation port
 | `requestOne` | `requestOne cmd` — correlated one-shot `JsCmd` → `Task Error JsMsg`. |
 | `subscribe` | `subscribe toMsg` — the inbound subscription over the fail-closed seal |
 | `inbound` | The total, fail-closed decoder for the inbound `JsMsg`. It reads the `ok` |
+
+## Browser.Notification
+
+[Full reference](stdlib/Browser.Notification.md)
+
+Ipe.Browser.Notification — show system notifications over `Ipe.Ffi.Js` ports.
+
+| Export | Summary |
+|--------|----------|
+| `requestPermission` | `requestPermission` — ask the host to grant notification permission, as a |
+| `notify` | `notify title` — display a notification with the given title and no body. |
+| `notifyWith` | `notifyWith options` — display a notification with the full option surface |
+| `outcomes` | `outcomes toMsg` — the inbound subscription, wired in `subscriptions`. |
+
+## Browser.Notification.Internals
+
+[Full reference](stdlib/Browser.Notification.Internals.md)
+
+Ipe.Browser.Notification.Internals — the low-level notification port surface:
+
+| Export | Summary |
+|--------|----------|
+| `Options` | The `Notification` display payload, mirroring the Web API `Notification` |
+| `defaults` | The default payload for a bare `notify title`: the given title, no body, no |
+| `JsCmd` | The ONE closed OUTBOUND port type: the whole outbound surface as a single |
+| `JsMsg` | The NARROW closed INBOUND port type — deliberately NOT the app's internal |
+| `request` | `request cmd` — hand a closed outbound `JsCmd` to the raw port transport. |
+| `requestOne` | `requestOne cmd` — correlated one-shot `JsCmd` → `Task Error JsMsg`. |
+| `subscribe` | `subscribe toMsg` — the inbound subscription over the fail-closed seal |
+| `inbound` | The total, fail-closed decoder for the inbound `JsMsg`. It reads `ok` first: a |
 
 ## ByteSize
 

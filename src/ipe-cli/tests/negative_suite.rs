@@ -1701,6 +1701,25 @@ fn geolocation_inbound_fold_missing_a_denial_is_non_exhaustive() {
     assert_rejected("geolocation_inbound_missing_denied", &src, "IPE-T0010");
 }
 
+/// A fold over the inbound `Ipe.Browser.Notification.Internals` `JsMsg` that omits
+/// the `Denied` variant is non-exhaustive (IPE-T0010) — the same compiler-level
+/// guarantee for the notification permission-denial variant: an incomplete inbound
+/// fold is a type error, not a silently dropped frame.
+#[test]
+fn notification_inbound_fold_missing_a_denial_is_non_exhaustive() {
+    let src = format!(
+        "{HEAD}import Ipe.Io as Io\n\
+         import Ipe.Browser.Notification.Internals as Note exposing (JsMsg(..))\n\
+         describe : JsMsg -> String\n\
+         describe m =\n    case m of\n        \
+         Granted     -> \"granted\"\n        \
+         Shown       -> \"shown\"\n        \
+         Unavailable -> \"unavailable\"\n\n\
+         main = Io.println (describe Shown)\n"
+    );
+    assert_rejected("notification_inbound_missing_denied", &src, "IPE-T0010");
+}
+
 // NOTE: IPE-T0011 (redundant case branch) is intentionally `Severity::Warning`
 // (see `types::exhaust` — "collect it but do not abort"), so a redundant arm
 // does NOT reject compilation. It is therefore out of scope for a

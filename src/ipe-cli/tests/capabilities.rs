@@ -857,3 +857,92 @@ fn web_consent_refuses_ungranted_geolocation_then_admits_it() {
     let granted = BTreeSet::from([Capability::JsPort(WebCapability::Geolocation)]);
     web_consent::gate(&inferred, &granted, &provenance).expect("a granted web axis builds");
 }
+
+// ── Ipe.Browser.Notification — a first-party web-API module ──────────────────
+
+/// A Web-shape app importing `Ipe.Browser.Notification` — the import-derived signal
+/// that discloses the SPECIFIC `js-port:notification` axis on top of the `:raw`
+/// floor the underlying `Js.send` / `Js.subscribe` tag.
+const NOTIFICATION_APP: &str = r#"module Main exposing (main)
+
+import Ipe.Tea.Web as Web
+import Ipe.Tea.Web.Cmd as Cmd
+import Ipe.Tea.Web.Sub as Sub
+import Ipe.Ui as Ui
+import Ipe.Error as Error exposing (Error)
+import Ipe.Browser.Notification as Note
+import Ipe.Task as Task
+
+type alias Model = { n : Int }
+
+type Msg = Ask | Asked (Result Error ()) | Fired (Result Error ())
+
+init : WebReq -> ( Model, Cmd.Cmd Msg )
+init _r =
+    ( { n = 0 }, Task.attempt Asked Note.requestPermission )
+
+update : Msg -> Model -> ( Model, Cmd.Cmd Msg )
+update msg model =
+    case msg of
+        Ask ->
+            ( model, Note.notify "hi" )
+
+        Asked _r ->
+            ( model, Cmd.none )
+
+        Fired _r ->
+            ( model, Cmd.none )
+
+view : Model -> Element Msg
+view _model =
+    Ui.text "ok"
+
+subscriptions : Model -> Sub.Sub Msg
+subscriptions _model =
+    Note.outcomes Fired
+
+main =
+    Web.app
+        { init = init, update = update, view = view, subscriptions = subscriptions
+        , routes = [], notFound = Ask
+        }
+"#;
+
+/// Importing `Ipe.Browser.Notification` discloses the specific `js-port:notification`
+/// axis — the whole import-derived mechanism through the real pipeline.
+#[test]
+fn importing_browser_notification_discloses_js_port_notification() -> TestResult {
+    let dir = write_single("note", NOTIFICATION_APP)?;
+    let entry = dir.join("Main.ipe");
+    let declared = BTreeSet::from([
+        Capability::JsPort(WebCapability::Notification),
+        Capability::JsPort(WebCapability::Raw),
+    ]);
+    let r = verify_capabilities(&entry, &declared);
+    assert!(
+        r.is_ok(),
+        "importing Ipe.Browser.Notification must disclose js-port:notification (+ the :raw floor): {r:?}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+    Ok(())
+}
+
+/// Fail-closed: a notification app that omits the grant is rejected as
+/// under-declared, the axis named — the negative half of the consent gate.
+#[test]
+fn a_notification_app_without_the_grant_is_rejected() -> TestResult {
+    let dir = write_single("notenogrant", NOTIFICATION_APP)?;
+    let entry = dir.join("Main.ipe");
+    let declared = BTreeSet::from([Capability::JsPort(WebCapability::Raw)]);
+    let r = verify_capabilities(&entry, &declared);
+    assert!(
+        matches!(
+            &r,
+            Err(ipe::CliError::CapabilityMismatch { missing, .. })
+                if missing.contains(&"js-port:notification")
+        ),
+        "an ungranted notification app must be rejected naming js-port:notification, got: {r:?}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+    Ok(())
+}

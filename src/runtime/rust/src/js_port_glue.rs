@@ -157,9 +157,58 @@ const PORT_GLUE_JS: &str = r#"// Ipe.Ffi.Js browser port surface. Values cross a
     }
     return true;
   }
+  // Ipe.Browser.Notification: `RequestPermission` / `Show { title, body, tag }`
+  // -> Notification.requestPermission / new Notification. A grant resolves to a
+  // typed `granted` frame; a denial or an absent API traps to the matching typed
+  // error frame — never a throw.
+  function notificationSink(value, corId) {
+    // `RequestPermission` is the bare string; `Show` is `{ Show: options }`.
+    var isRequest = value === "RequestPermission" ||
+      (value && typeof value === "object" && value.RequestPermission !== undefined);
+    var isShow = value && typeof value === "object" && value.Show !== undefined;
+    if (!isRequest && !isShow) return false;
+    if (typeof Notification === "undefined") {
+      reply({ tag: "notification", ok: false, error: "unavailable" }, corId);
+      return true;
+    }
+    if (isRequest) {
+      if (typeof Notification.requestPermission !== "function") {
+        reply({ tag: "notification", ok: false, error: "unavailable" }, corId);
+        return true;
+      }
+      Promise.resolve(Notification.requestPermission()).then(
+        function (perm) {
+          if (perm === "granted") {
+            reply({ tag: "notification", ok: true, event: "granted" }, corId);
+          } else {
+            reply({ tag: "notification", ok: false, error: "denied" }, corId);
+          }
+        },
+        function () { reply({ tag: "notification", ok: false, error: "denied" }, corId); }
+      );
+      return true;
+    }
+    // isShow: only display when permission is already granted; otherwise a typed
+    // denial, never a silent no-op and never an unsolicited permission prompt.
+    var opts = (value.Show && typeof value.Show === "object") ? value.Show : {};
+    if (Notification.permission !== "granted") {
+      reply({ tag: "notification", ok: false, error: "denied" }, corId);
+      return true;
+    }
+    try {
+      var body = typeof opts.body === "string" ? opts.body : "";
+      var tag = typeof opts.tag === "string" ? opts.tag : "";
+      new Notification(String(opts.title || ""), { body: body, tag: tag });
+      reply({ tag: "notification", ok: true, event: "shown" }, corId);
+    } catch (_e) {
+      reply({ tag: "notification", ok: false, error: "unavailable" }, corId);
+    }
+    return true;
+  }
   function builtinSink(value, corId) {
     if (clipboardSink(value, corId)) return true;
     if (geolocationSink(value, corId)) return true;
+    if (notificationSink(value, corId)) return true;
     return false;
   }
   function deliver(raw) {
@@ -291,6 +340,24 @@ mod tests {
         assert!(js.contains("\"denied\""));
         assert!(js.contains("\"unavailable\""));
         assert!(js.contains("\"timeout\""));
+        assert!(!js.contains("eval("));
+    }
+
+    #[test]
+    fn notification_sink_reaches_the_web_api_and_traps_denial_to_a_typed_result() {
+        let js = port_glue_js();
+        // The first-party Ipe.Browser.Notification sink reaches its Web APIs…
+        assert!(js.contains("Notification.requestPermission"));
+        assert!(js.contains("new Notification("));
+        assert!(js.contains("RequestPermission"));
+        assert!(js.contains("value.Show"));
+        // …resolves a grant / display to a typed frame…
+        assert!(js.contains("tag: \"notification\""));
+        assert!(js.contains("\"granted\""));
+        assert!(js.contains("\"shown\""));
+        // …and traps a denial / absence to a typed inbound frame, never a throw.
+        assert!(js.contains("\"denied\""));
+        assert!(js.contains("\"unavailable\""));
         assert!(!js.contains("eval("));
     }
 
