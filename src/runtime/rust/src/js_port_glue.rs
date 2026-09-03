@@ -157,9 +157,240 @@ const PORT_GLUE_JS: &str = r#"// Ipe.Ffi.Js browser port surface. Values cross a
     }
     return true;
   }
+  // Ipe.Browser.Notification: `RequestPermission` / `Show { title, body, tag }`
+  // -> Notification.requestPermission / new Notification. A grant resolves to a
+  // typed `granted` frame; a denial or an absent API traps to the matching typed
+  // error frame — never a throw.
+  function notificationSink(value, corId) {
+    // `RequestPermission` is the bare string; `Show` is `{ Show: options }`.
+    var isRequest = value === "RequestPermission" ||
+      (value && typeof value === "object" && value.RequestPermission !== undefined);
+    var isShow = value && typeof value === "object" && value.Show !== undefined;
+    if (!isRequest && !isShow) return false;
+    if (typeof Notification === "undefined") {
+      reply({ tag: "notification", ok: false, error: "unavailable" }, corId);
+      return true;
+    }
+    if (isRequest) {
+      if (typeof Notification.requestPermission !== "function") {
+        reply({ tag: "notification", ok: false, error: "unavailable" }, corId);
+        return true;
+      }
+      Promise.resolve(Notification.requestPermission()).then(
+        function (perm) {
+          if (perm === "granted") {
+            reply({ tag: "notification", ok: true, event: "granted" }, corId);
+          } else {
+            reply({ tag: "notification", ok: false, error: "denied" }, corId);
+          }
+        },
+        function () { reply({ tag: "notification", ok: false, error: "denied" }, corId); }
+      );
+      return true;
+    }
+    // isShow: only display when permission is already granted; otherwise a typed
+    // denial, never a silent no-op and never an unsolicited permission prompt.
+    var opts = (value.Show && typeof value.Show === "object") ? value.Show : {};
+    if (Notification.permission !== "granted") {
+      reply({ tag: "notification", ok: false, error: "denied" }, corId);
+      return true;
+    }
+    try {
+      var body = typeof opts.body === "string" ? opts.body : "";
+      var tag = typeof opts.tag === "string" ? opts.tag : "";
+      new Notification(String(opts.title || ""), { body: body, tag: tag });
+      reply({ tag: "notification", ok: true, event: "shown" }, corId);
+    } catch (_e) {
+      reply({ tag: "notification", ok: false, error: "unavailable" }, corId);
+    }
+    return true;
+  }
+  // Ipe.Browser.Storage: `Get key` / `Set { key, value }` / `Remove key` / `Clear`
+  // -> localStorage.getItem / setItem / removeItem / clear. A read resolves to a
+  // typed value frame (value omitted for an absent key); a private-mode quota throw
+  // or an absent store traps to `unavailable` — never a throw.
+  function storageSink(value, corId) {
+    var isGet = value && typeof value === "object" && value.Get !== undefined;
+    var isSet = value && typeof value === "object" && value.Set !== undefined;
+    var isRemove = value && typeof value === "object" && value.Remove !== undefined;
+    var isClear = value === "Clear" ||
+      (value && typeof value === "object" && value.Clear !== undefined);
+    if (!isGet && !isSet && !isRemove && !isClear) return false;
+    var store = null;
+    try { store = window.localStorage; } catch (_e) { store = null; }
+    if (!store) {
+      reply({ tag: "storage", ok: false, error: "unavailable" }, corId);
+      return true;
+    }
+    try {
+      if (isGet) {
+        var got = store.getItem(String(value.Get));
+        if (got === null || got === undefined) {
+          reply({ tag: "storage", ok: true, event: "get" }, corId);
+        } else {
+          reply({ tag: "storage", ok: true, event: "get", value: String(got) }, corId);
+        }
+      } else if (isSet) {
+        var entry = (value.Set && typeof value.Set === "object") ? value.Set : {};
+        store.setItem(String(entry.key || ""), String(entry.value || ""));
+        reply({ tag: "storage", ok: true, event: "set" }, corId);
+      } else if (isRemove) {
+        store.removeItem(String(value.Remove));
+        reply({ tag: "storage", ok: true, event: "remove" }, corId);
+      } else {
+        store.clear();
+        reply({ tag: "storage", ok: true, event: "clear" }, corId);
+      }
+    } catch (_e2) {
+      reply({ tag: "storage", ok: false, error: "unavailable" }, corId);
+    }
+    return true;
+  }
+  // Ipe.Browser.Vibration: `Vibrate ms` / `Pattern [..]` / `Cancel`
+  // -> navigator.vibrate(ms) / vibrate([..]) / vibrate(0). A supported actuator
+  // replies `vibrated`; an absent API or a rejected request traps to `unavailable`.
+  function vibrationSink(value, corId) {
+    var isVibrate = value && typeof value === "object" && value.Vibrate !== undefined;
+    var isPattern = value && typeof value === "object" && value.Pattern !== undefined;
+    var isCancel = value === "Cancel" ||
+      (value && typeof value === "object" && value.Cancel !== undefined);
+    if (!isVibrate && !isPattern && !isCancel) return false;
+    if (!navigator || typeof navigator.vibrate !== "function") {
+      reply({ tag: "vibration", ok: false, error: "unavailable" }, corId);
+      return true;
+    }
+    var arg;
+    if (isVibrate) {
+      arg = Number(value.Vibrate) || 0;
+    } else if (isPattern) {
+      arg = Array.isArray(value.Pattern) ? value.Pattern.map(function (n) { return Number(n) || 0; }) : [];
+    } else {
+      arg = 0;
+    }
+    var accepted = false;
+    try { accepted = navigator.vibrate(arg); } catch (_e) { accepted = false; }
+    if (accepted) {
+      reply({ tag: "vibration", ok: true }, corId);
+    } else {
+      reply({ tag: "vibration", ok: false, error: "unavailable" }, corId);
+    }
+    return true;
+  }
+  // Ipe.Browser.Share: `Share { title, text, url }` -> navigator.share. A
+  // completion replies `shared`; a user dismissal (AbortError) traps to
+  // `cancelled`, an absent API to `unavailable` — never a throw. Empty payload
+  // fields are omitted so the platform sheet only shows populated fields.
+  function shareSink(value, corId) {
+    if (!(value && typeof value === "object" && value.Share !== undefined)) return false;
+    if (!navigator || typeof navigator.share !== "function") {
+      reply({ tag: "share", ok: false, error: "unavailable" }, corId);
+      return true;
+    }
+    var p = (value.Share && typeof value.Share === "object") ? value.Share : {};
+    var data = {};
+    if (typeof p.title === "string" && p.title !== "") data.title = p.title;
+    if (typeof p.text === "string" && p.text !== "") data.text = p.text;
+    if (typeof p.url === "string" && p.url !== "") data.url = p.url;
+    try {
+      navigator.share(data).then(
+        function () { reply({ tag: "share", ok: true }, corId); },
+        function (err) {
+          var name = err && err.name ? String(err.name) : "";
+          var kind = name === "AbortError" ? "cancelled" : "unavailable";
+          reply({ tag: "share", ok: false, error: kind }, corId);
+        }
+      );
+    } catch (_e) {
+      reply({ tag: "share", ok: false, error: "unavailable" }, corId);
+    }
+    return true;
+  }
+  // Ipe.Browser.Battery: `Query` / `Watch` -> navigator.getBattery(). A reading
+  // frame carries charging / level / chargingTime / dischargingTime; a
+  // never-ending time (`Infinity`) is normalised to the -1 sentinel. An absent API
+  // traps to `unavailable` — never a throw. `Watch` also attaches change listeners
+  // that push fresh readings.
+  function batteryReadingFrame(bat, corId) {
+    function finite(x) {
+      var n = Number(x);
+      return (isFinite(n)) ? n : -1;
+    }
+    reply({
+      tag: "battery", ok: true,
+      charging: bat.charging === true,
+      level: Number(bat.level),
+      chargingTime: finite(bat.chargingTime),
+      dischargingTime: finite(bat.dischargingTime),
+    }, corId);
+  }
+  function batterySink(value, corId) {
+    var isQuery = value === "Query" ||
+      (value && typeof value === "object" && value.Query !== undefined);
+    var isWatch = value === "Watch" ||
+      (value && typeof value === "object" && value.Watch !== undefined);
+    if (!isQuery && !isWatch) return false;
+    if (!navigator || typeof navigator.getBattery !== "function") {
+      reply({ tag: "battery", ok: false, error: "unavailable" }, corId);
+      return true;
+    }
+    navigator.getBattery().then(
+      function (bat) {
+        batteryReadingFrame(bat, corId);
+        if (isWatch) {
+          // A watch subscription receives every subsequent change as a fresh
+          // broadcast reading; the change events carry no correlation id.
+          var push = function () { batteryReadingFrame(bat, null); };
+          bat.addEventListener("chargingchange", push);
+          bat.addEventListener("levelchange", push);
+          bat.addEventListener("chargingtimechange", push);
+          bat.addEventListener("dischargingtimechange", push);
+        }
+      },
+      function () { reply({ tag: "battery", ok: false, error: "unavailable" }, corId); }
+    );
+    return true;
+  }
+  // Ipe.Browser.NetworkInfo: `Query` / `Watch` -> navigator.connection. A reading
+  // frame carries effectiveType / downlink / rtt / saveData; an absent API traps to
+  // `unavailable` — never a throw. `Watch` attaches a `change` listener that pushes
+  // fresh readings.
+  function networkInfoReadingFrame(conn, corId) {
+    reply({
+      tag: "network-info", ok: true,
+      effectiveType: typeof conn.effectiveType === "string" ? conn.effectiveType : "",
+      downlink: Number(conn.downlink) || 0,
+      rtt: Number(conn.rtt) || 0,
+      saveData: conn.saveData === true,
+    }, corId);
+  }
+  function networkInfoSink(value, corId) {
+    var isQuery = value === "Query" ||
+      (value && typeof value === "object" && value.Query !== undefined);
+    var isWatch = value === "Watch" ||
+      (value && typeof value === "object" && value.Watch !== undefined);
+    if (!isQuery && !isWatch) return false;
+    var conn = navigator ? (navigator.connection || navigator.mozConnection || navigator.webkitConnection) : null;
+    if (!conn) {
+      reply({ tag: "network-info", ok: false, error: "unavailable" }, corId);
+      return true;
+    }
+    networkInfoReadingFrame(conn, corId);
+    if (isWatch && typeof conn.addEventListener === "function") {
+      // A watch subscription receives every subsequent change as a fresh
+      // broadcast reading; the change event carries no correlation id.
+      conn.addEventListener("change", function () { networkInfoReadingFrame(conn, null); });
+    }
+    return true;
+  }
   function builtinSink(value, corId) {
     if (clipboardSink(value, corId)) return true;
     if (geolocationSink(value, corId)) return true;
+    if (notificationSink(value, corId)) return true;
+    if (storageSink(value, corId)) return true;
+    if (vibrationSink(value, corId)) return true;
+    if (shareSink(value, corId)) return true;
+    if (batterySink(value, corId)) return true;
+    if (networkInfoSink(value, corId)) return true;
     return false;
   }
   function deliver(raw) {
@@ -291,6 +522,105 @@ mod tests {
         assert!(js.contains("\"denied\""));
         assert!(js.contains("\"unavailable\""));
         assert!(js.contains("\"timeout\""));
+        assert!(!js.contains("eval("));
+    }
+
+    #[test]
+    fn notification_sink_reaches_the_web_api_and_traps_denial_to_a_typed_result() {
+        let js = port_glue_js();
+        // The first-party Ipe.Browser.Notification sink reaches its Web APIs…
+        assert!(js.contains("Notification.requestPermission"));
+        assert!(js.contains("new Notification("));
+        assert!(js.contains("RequestPermission"));
+        assert!(js.contains("value.Show"));
+        // …resolves a grant / display to a typed frame…
+        assert!(js.contains("tag: \"notification\""));
+        assert!(js.contains("\"granted\""));
+        assert!(js.contains("\"shown\""));
+        // …and traps a denial / absence to a typed inbound frame, never a throw.
+        assert!(js.contains("\"denied\""));
+        assert!(js.contains("\"unavailable\""));
+        assert!(!js.contains("eval("));
+    }
+
+    #[test]
+    fn storage_sink_reaches_web_storage_and_traps_unavailability_to_a_typed_result() {
+        let js = port_glue_js();
+        // The first-party Ipe.Browser.Storage sink reaches localStorage…
+        assert!(js.contains("localStorage"));
+        assert!(js.contains("store.getItem("));
+        assert!(js.contains("store.setItem("));
+        assert!(js.contains("store.removeItem("));
+        assert!(js.contains("store.clear()"));
+        assert!(js.contains("value.Get"));
+        assert!(js.contains("value.Set"));
+        // …resolves reads / writes to typed events…
+        assert!(js.contains("tag: \"storage\""));
+        assert!(js.contains("event: \"get\""));
+        assert!(js.contains("event: \"set\""));
+        // …and traps a private-mode / absent store to a typed frame, never a throw.
+        assert!(js.contains("\"unavailable\""));
+        assert!(!js.contains("eval("));
+    }
+
+    #[test]
+    fn vibration_sink_reaches_the_web_api_and_traps_absence_to_a_typed_result() {
+        let js = port_glue_js();
+        // The first-party Ipe.Browser.Vibration sink reaches navigator.vibrate…
+        assert!(js.contains("navigator.vibrate"));
+        assert!(js.contains("value.Vibrate"));
+        assert!(js.contains("value.Pattern"));
+        // …acknowledges a supported actuator…
+        assert!(js.contains("tag: \"vibration\""));
+        // …and traps an absent actuator to a typed frame, never a throw.
+        assert!(js.contains("\"unavailable\""));
+        assert!(!js.contains("eval("));
+    }
+
+    #[test]
+    fn share_sink_reaches_the_web_api_and_traps_cancel_and_absence_to_typed_results() {
+        let js = port_glue_js();
+        // The first-party Ipe.Browser.Share sink reaches navigator.share…
+        assert!(js.contains("navigator.share"));
+        assert!(js.contains("value.Share"));
+        // …acknowledges a completion…
+        assert!(js.contains("tag: \"share\""));
+        // …and enumerates the cancel + unavailable outcomes, never a throw.
+        assert!(js.contains("AbortError"));
+        assert!(js.contains("\"cancelled\""));
+        assert!(js.contains("\"unavailable\""));
+        assert!(!js.contains("eval("));
+    }
+
+    #[test]
+    fn battery_sink_reaches_the_web_api_and_traps_absence_to_a_typed_result() {
+        let js = port_glue_js();
+        // The first-party Ipe.Browser.Battery sink reaches navigator.getBattery…
+        assert!(js.contains("navigator.getBattery"));
+        // …emits a typed reading with all four status fields…
+        assert!(js.contains("tag: \"battery\""));
+        assert!(js.contains("charging:"));
+        assert!(js.contains("level:"));
+        assert!(js.contains("chargingTime:"));
+        assert!(js.contains("dischargingTime:"));
+        // …and traps an absent API to a typed frame, never a throw.
+        assert!(js.contains("\"unavailable\""));
+        assert!(!js.contains("eval("));
+    }
+
+    #[test]
+    fn network_info_sink_reaches_the_web_api_and_traps_absence_to_a_typed_result() {
+        let js = port_glue_js();
+        // The first-party Ipe.Browser.NetworkInfo sink reaches navigator.connection…
+        assert!(js.contains("navigator.connection"));
+        // …emits a typed reading with all four hint fields…
+        assert!(js.contains("tag: \"network-info\""));
+        assert!(js.contains("effectiveType:"));
+        assert!(js.contains("downlink:"));
+        assert!(js.contains("rtt:"));
+        assert!(js.contains("saveData:"));
+        // …and traps an absent API to a typed frame, never a throw.
+        assert!(js.contains("\"unavailable\""));
         assert!(!js.contains("eval("));
     }
 

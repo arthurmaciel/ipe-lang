@@ -1,0 +1,144 @@
+-- | Ipe.Browser.Notification.Internals — the low-level notification port surface:
+-- the closed outbound/inbound ADTs and the raw `Ipe.Ffi.Js` request/subscribe
+-- wiring the high-level `Ipe.Browser.Notification` layer wraps.
+--
+-- Importing this submodule discloses the same `js-port:notification` axis as the
+-- top-level module (the disclosure is keyed on the `Ipe.Browser.Notification` path
+-- prefix), so the raw port surface cannot be reached undisclosed.
+module Ipe.Browser.Notification.Internals exposing
+    ( Options
+    , defaults
+    , JsCmd(..)
+    , JsMsg(..)
+    , request
+    , requestOne
+    , subscribe
+    , inbound
+    )
+
+import Ipe.Error as Error exposing (Error)
+import Ipe.Ffi.Js as Js
+import Ipe.Json.Decode as Decode
+import Ipe.Tea.Web.Cmd as Cmd
+import Ipe.Tea.Web.Sub as Sub
+
+
+-- | The `Notification` display payload, mirroring the Web API `Notification`
+-- constructor subset carried across the seal:
+--
+--   * `title` — the notification's title line.
+--   * `body` — the notification's body text (may be empty).
+--   * `tag` — a grouping id; a later notification with the same `tag` replaces
+--     the earlier one rather than stacking (empty means no grouping).
+--
+-- Crossing the seal as a single record keeps the outbound variant single-payload:
+-- `Show options` externally tags as `{ Show: { title, body, tag } }`.
+type alias Options =
+    { title : String
+    , body : String
+    , tag : String
+    }
+
+
+-- | The default payload for a bare `notify title`: the given title, no body, no
+-- grouping tag.
+defaults : String -> Options
+defaults title =
+    { title = title
+    , body = ""
+    , tag = ""
+    }
+
+
+-- | The ONE closed OUTBOUND port type: the whole outbound surface as a single
+-- auditable object.
+--
+--   * `RequestPermission` — ask the host to grant notification permission.
+--   * `Show options` — display a notification (requires a prior grant).
+type JsCmd
+    = RequestPermission
+    | Show Options
+
+
+-- | The NARROW closed INBOUND port type — deliberately NOT the app's internal
+-- `Msg`. Every variant the browser can push is enumerated, so the fold in the
+-- high-level layer is EXHAUSTIVE and a permission denial can never be silently
+-- dropped: it becomes a typed `Err`.
+--
+--   * `Granted` — the host granted notification permission.
+--   * `Denied` — the host refused notification permission.
+--   * `Shown` — a notification was displayed.
+--   * `Unavailable` — the Notification API is absent in this context.
+type JsMsg
+    = Granted
+    | Denied
+    | Shown
+    | Unavailable
+
+
+-- | `request cmd` — hand a closed outbound `JsCmd` to the raw port transport.
+-- The served first-party JS sink reaches the `Notification` API; the reply
+-- arrives inbound as a `JsMsg`.
+request : JsCmd -> Cmd.Cmd msg
+request cmd =
+    Js.send cmd
+
+
+-- | `requestOne cmd` — correlated one-shot `JsCmd` → `Task Error JsMsg`.
+-- Routes through `Js.request` with the `inbound` decoder so the correlated
+-- reply is decoded fail-closed by the same gate the `subscribe` path uses.
+requestOne : JsCmd -> Task Error JsMsg
+requestOne cmd =
+    Js.request cmd inbound
+
+
+-- | `subscribe toMsg` — the inbound subscription over the fail-closed seal
+-- decoder. `inbound` IS the security gate; a malformed / mismatched frame is
+-- dropped whole. A decoded `JsMsg` is handed to `toMsg`.
+subscribe : (JsMsg -> msg) -> Sub.Sub msg
+subscribe toMsg =
+    Js.subscribe inbound toMsg
+
+
+-- | The total, fail-closed decoder for the inbound `JsMsg`. It reads `ok` first: a
+-- true flag decodes a `permission` grant or a `shown` acknowledgement by its
+-- `event`; a false flag decodes the closed `error` vocabulary into a denial
+-- variant. An unrecognised token fails the decode closed (the frame is dropped).
+inbound : Decode.Decoder JsMsg
+inbound =
+    Decode.andThen decodeByOk (Decode.field "ok" Decode.bool)
+
+
+decodeByOk : Bool -> Decode.Decoder JsMsg
+decodeByOk ok =
+    if ok then
+        Decode.andThen decodeEvent (Decode.field "event" Decode.string)
+
+    else
+        Decode.andThen decodeError (Decode.field "error" Decode.string)
+
+
+decodeEvent : String -> Decode.Decoder JsMsg
+decodeEvent event =
+    case event of
+        "granted" ->
+            Decode.succeed Granted
+
+        "shown" ->
+            Decode.succeed Shown
+
+        _ ->
+            Decode.fail ("unknown notification event: " ++ event)
+
+
+decodeError : String -> Decode.Decoder JsMsg
+decodeError token =
+    case token of
+        "denied" ->
+            Decode.succeed Denied
+
+        "unavailable" ->
+            Decode.succeed Unavailable
+
+        _ ->
+            Decode.fail ("unknown notification error variant: " ++ token)

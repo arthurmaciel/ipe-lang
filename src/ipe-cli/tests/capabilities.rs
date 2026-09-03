@@ -857,3 +857,522 @@ fn web_consent_refuses_ungranted_geolocation_then_admits_it() {
     let granted = BTreeSet::from([Capability::JsPort(WebCapability::Geolocation)]);
     web_consent::gate(&inferred, &granted, &provenance).expect("a granted web axis builds");
 }
+
+// ── Ipe.Browser.Notification — a first-party web-API module ──────────────────
+
+/// A Web-shape app importing `Ipe.Browser.Notification` — the import-derived signal
+/// that discloses the SPECIFIC `js-port:notification` axis on top of the `:raw`
+/// floor the underlying `Js.send` / `Js.subscribe` tag.
+const NOTIFICATION_APP: &str = r#"module Main exposing (main)
+
+import Ipe.Tea.Web as Web
+import Ipe.Tea.Web.Cmd as Cmd
+import Ipe.Tea.Web.Sub as Sub
+import Ipe.Ui as Ui
+import Ipe.Error as Error exposing (Error)
+import Ipe.Browser.Notification as Note
+import Ipe.Task as Task
+
+type alias Model = { n : Int }
+
+type Msg = Ask | Asked (Result Error ()) | Fired (Result Error ())
+
+init : WebReq -> ( Model, Cmd.Cmd Msg )
+init _r =
+    ( { n = 0 }, Task.attempt Asked Note.requestPermission )
+
+update : Msg -> Model -> ( Model, Cmd.Cmd Msg )
+update msg model =
+    case msg of
+        Ask ->
+            ( model, Note.notify "hi" )
+
+        Asked _r ->
+            ( model, Cmd.none )
+
+        Fired _r ->
+            ( model, Cmd.none )
+
+view : Model -> Element Msg
+view _model =
+    Ui.text "ok"
+
+subscriptions : Model -> Sub.Sub Msg
+subscriptions _model =
+    Note.outcomes Fired
+
+main =
+    Web.app
+        { init = init, update = update, view = view, subscriptions = subscriptions
+        , routes = [], notFound = Ask
+        }
+"#;
+
+/// Importing `Ipe.Browser.Notification` discloses the specific `js-port:notification`
+/// axis — the whole import-derived mechanism through the real pipeline.
+#[test]
+fn importing_browser_notification_discloses_js_port_notification() -> TestResult {
+    let dir = write_single("note", NOTIFICATION_APP)?;
+    let entry = dir.join("Main.ipe");
+    let declared = BTreeSet::from([
+        Capability::JsPort(WebCapability::Notification),
+        Capability::JsPort(WebCapability::Raw),
+    ]);
+    let r = verify_capabilities(&entry, &declared);
+    assert!(
+        r.is_ok(),
+        "importing Ipe.Browser.Notification must disclose js-port:notification (+ the :raw floor): {r:?}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+    Ok(())
+}
+
+/// Fail-closed: a notification app that omits the grant is rejected as
+/// under-declared, the axis named — the negative half of the consent gate.
+#[test]
+fn a_notification_app_without_the_grant_is_rejected() -> TestResult {
+    let dir = write_single("notenogrant", NOTIFICATION_APP)?;
+    let entry = dir.join("Main.ipe");
+    let declared = BTreeSet::from([Capability::JsPort(WebCapability::Raw)]);
+    let r = verify_capabilities(&entry, &declared);
+    assert!(
+        matches!(
+            &r,
+            Err(ipe::CliError::CapabilityMismatch { missing, .. })
+                if missing.contains(&"js-port:notification")
+        ),
+        "an ungranted notification app must be rejected naming js-port:notification, got: {r:?}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+    Ok(())
+}
+
+// ── Ipe.Browser.Storage — a first-party web-API module ──────────────────────
+
+/// A Web-shape app importing `Ipe.Browser.Storage` — the import-derived signal
+/// that discloses the SPECIFIC `js-port:storage` axis on top of the `:raw` floor.
+const STORAGE_APP: &str = r#"module Main exposing (main)
+
+import Ipe.Tea.Web as Web
+import Ipe.Tea.Web.Cmd as Cmd
+import Ipe.Tea.Web.Sub as Sub
+import Ipe.Ui as Ui
+import Ipe.Error as Error exposing (Error)
+import Ipe.Browser.Storage as Storage
+import Ipe.Task as Task
+
+type alias Model = { v : Maybe String }
+
+type Msg = Save | Load | Loaded (Result Error (Maybe String)) | Changed (Result Error (Maybe String))
+
+init : WebReq -> ( Model, Cmd.Cmd Msg )
+init _r =
+    ( { v = Nothing }, Storage.set "k" "v" )
+
+update : Msg -> Model -> ( Model, Cmd.Cmd Msg )
+update msg model =
+    case msg of
+        Save ->
+            ( model, Storage.set "k" "v" )
+
+        Load ->
+            ( model, Task.attempt Loaded (Storage.get "k") )
+
+        Loaded _r ->
+            ( model, Cmd.none )
+
+        Changed _r ->
+            ( model, Cmd.none )
+
+view : Model -> Element Msg
+view _model =
+    Ui.text "ok"
+
+subscriptions : Model -> Sub.Sub Msg
+subscriptions _model =
+    Storage.changes Changed
+
+main =
+    Web.app
+        { init = init, update = update, view = view, subscriptions = subscriptions
+        , routes = [], notFound = Load
+        }
+"#;
+
+/// Importing `Ipe.Browser.Storage` discloses the specific `js-port:storage` axis.
+#[test]
+fn importing_browser_storage_discloses_js_port_storage() -> TestResult {
+    let dir = write_single("storage", STORAGE_APP)?;
+    let entry = dir.join("Main.ipe");
+    let declared = BTreeSet::from([
+        Capability::JsPort(WebCapability::Storage),
+        Capability::JsPort(WebCapability::Raw),
+    ]);
+    let r = verify_capabilities(&entry, &declared);
+    assert!(
+        r.is_ok(),
+        "importing Ipe.Browser.Storage must disclose js-port:storage (+ the :raw floor): {r:?}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+    Ok(())
+}
+
+/// Fail-closed: a storage app that omits the grant is rejected as under-declared.
+#[test]
+fn a_storage_app_without_the_grant_is_rejected() -> TestResult {
+    let dir = write_single("storagenogrant", STORAGE_APP)?;
+    let entry = dir.join("Main.ipe");
+    let declared = BTreeSet::from([Capability::JsPort(WebCapability::Raw)]);
+    let r = verify_capabilities(&entry, &declared);
+    assert!(
+        matches!(
+            &r,
+            Err(ipe::CliError::CapabilityMismatch { missing, .. })
+                if missing.contains(&"js-port:storage")
+        ),
+        "an ungranted storage app must be rejected naming js-port:storage, got: {r:?}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+    Ok(())
+}
+
+// ── Ipe.Browser.Vibration — a first-party web-API module ────────────────────
+
+/// A Web-shape app importing `Ipe.Browser.Vibration` — the import-derived signal
+/// that discloses the SPECIFIC `js-port:vibration` axis on top of the `:raw` floor.
+const VIBRATION_APP: &str = r#"module Main exposing (main)
+
+import Ipe.Tea.Web as Web
+import Ipe.Tea.Web.Cmd as Cmd
+import Ipe.Tea.Web.Sub as Sub
+import Ipe.Ui as Ui
+import Ipe.Error as Error exposing (Error)
+import Ipe.Browser.Vibration as Vib
+
+type alias Model = { n : Int }
+
+type Msg = Buzz | Acked (Result Error ())
+
+init : WebReq -> ( Model, Cmd.Cmd Msg )
+init _r =
+    ( { n = 0 }, Vib.vibrate 200 )
+
+update : Msg -> Model -> ( Model, Cmd.Cmd Msg )
+update msg model =
+    case msg of
+        Buzz ->
+            ( model, Vib.pattern [ 100, 50, 100 ] )
+
+        Acked _r ->
+            ( model, Cmd.none )
+
+view : Model -> Element Msg
+view _model =
+    Ui.text "ok"
+
+subscriptions : Model -> Sub.Sub Msg
+subscriptions _model =
+    Vib.acknowledgements Acked
+
+main =
+    Web.app
+        { init = init, update = update, view = view, subscriptions = subscriptions
+        , routes = [], notFound = Buzz
+        }
+"#;
+
+/// Importing `Ipe.Browser.Vibration` discloses the specific `js-port:vibration` axis.
+#[test]
+fn importing_browser_vibration_discloses_js_port_vibration() -> TestResult {
+    let dir = write_single("vib", VIBRATION_APP)?;
+    let entry = dir.join("Main.ipe");
+    let declared = BTreeSet::from([
+        Capability::JsPort(WebCapability::Vibration),
+        Capability::JsPort(WebCapability::Raw),
+    ]);
+    let r = verify_capabilities(&entry, &declared);
+    assert!(
+        r.is_ok(),
+        "importing Ipe.Browser.Vibration must disclose js-port:vibration (+ the :raw floor): {r:?}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+    Ok(())
+}
+
+/// Fail-closed: a vibration app that omits the grant is rejected as under-declared.
+#[test]
+fn a_vibration_app_without_the_grant_is_rejected() -> TestResult {
+    let dir = write_single("vibnogrant", VIBRATION_APP)?;
+    let entry = dir.join("Main.ipe");
+    let declared = BTreeSet::from([Capability::JsPort(WebCapability::Raw)]);
+    let r = verify_capabilities(&entry, &declared);
+    assert!(
+        matches!(
+            &r,
+            Err(ipe::CliError::CapabilityMismatch { missing, .. })
+                if missing.contains(&"js-port:vibration")
+        ),
+        "an ungranted vibration app must be rejected naming js-port:vibration, got: {r:?}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+    Ok(())
+}
+
+// ── Ipe.Browser.Share — a first-party web-API module ────────────────────────
+
+/// A Web-shape app importing `Ipe.Browser.Share` — the import-derived signal that
+/// discloses the SPECIFIC `js-port:share` axis on top of the `:raw` floor.
+const SHARE_APP: &str = r#"module Main exposing (main)
+
+import Ipe.Tea.Web as Web
+import Ipe.Tea.Web.Cmd as Cmd
+import Ipe.Tea.Web.Sub as Sub
+import Ipe.Ui as Ui
+import Ipe.Error as Error exposing (Error)
+import Ipe.Browser.Share as Share
+import Ipe.Task as Task
+
+type alias Model = { n : Int }
+
+type Msg = Send | Sent (Result Error ()) | Outcome (Result Error ())
+
+init : WebReq -> ( Model, Cmd.Cmd Msg )
+init _r =
+    ( { n = 0 }, Cmd.none )
+
+update : Msg -> Model -> ( Model, Cmd.Cmd Msg )
+update msg model =
+    case msg of
+        Send ->
+            ( model, Task.attempt Sent (Share.share { title = "t", text = "x", url = "https://e.com" }) )
+
+        Sent _r ->
+            ( model, Cmd.none )
+
+        Outcome _r ->
+            ( model, Cmd.none )
+
+view : Model -> Element Msg
+view _model =
+    Ui.text "ok"
+
+subscriptions : Model -> Sub.Sub Msg
+subscriptions _model =
+    Share.outcomes Outcome
+
+main =
+    Web.app
+        { init = init, update = update, view = view, subscriptions = subscriptions
+        , routes = [], notFound = Send
+        }
+"#;
+
+/// Importing `Ipe.Browser.Share` discloses the specific `js-port:share` axis.
+#[test]
+fn importing_browser_share_discloses_js_port_share() -> TestResult {
+    let dir = write_single("share", SHARE_APP)?;
+    let entry = dir.join("Main.ipe");
+    let declared = BTreeSet::from([
+        Capability::JsPort(WebCapability::Share),
+        Capability::JsPort(WebCapability::Raw),
+    ]);
+    let r = verify_capabilities(&entry, &declared);
+    assert!(
+        r.is_ok(),
+        "importing Ipe.Browser.Share must disclose js-port:share (+ the :raw floor): {r:?}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+    Ok(())
+}
+
+/// Fail-closed: a share app that omits the grant is rejected as under-declared.
+#[test]
+fn a_share_app_without_the_grant_is_rejected() -> TestResult {
+    let dir = write_single("sharenogrant", SHARE_APP)?;
+    let entry = dir.join("Main.ipe");
+    let declared = BTreeSet::from([Capability::JsPort(WebCapability::Raw)]);
+    let r = verify_capabilities(&entry, &declared);
+    assert!(
+        matches!(
+            &r,
+            Err(ipe::CliError::CapabilityMismatch { missing, .. })
+                if missing.contains(&"js-port:share")
+        ),
+        "an ungranted share app must be rejected naming js-port:share, got: {r:?}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+    Ok(())
+}
+
+// ── Ipe.Browser.Battery — a first-party web-API module ──────────────────────
+
+/// A Web-shape app importing `Ipe.Browser.Battery` — the import-derived signal that
+/// discloses the SPECIFIC `js-port:battery` axis on top of the `:raw` floor.
+const BATTERY_APP: &str = r#"module Main exposing (main)
+
+import Ipe.Tea.Web as Web
+import Ipe.Tea.Web.Cmd as Cmd
+import Ipe.Tea.Web.Sub as Sub
+import Ipe.Ui as Ui
+import Ipe.Error as Error exposing (Error)
+import Ipe.Browser.Battery as Battery
+import Ipe.Task as Task
+
+type alias Model = { charging : Bool }
+
+type Msg = Check | Got (Result Error Battery.Status) | Reading (Result Error Battery.Status)
+
+init : WebReq -> ( Model, Cmd.Cmd Msg )
+init _r =
+    ( { charging = False }, Task.attempt Got Battery.status )
+
+update : Msg -> Model -> ( Model, Cmd.Cmd Msg )
+update msg model =
+    case msg of
+        Check ->
+            ( model, Battery.watch )
+
+        Got _r ->
+            ( model, Cmd.none )
+
+        Reading _r ->
+            ( model, Cmd.none )
+
+view : Model -> Element Msg
+view _model =
+    Ui.text "ok"
+
+subscriptions : Model -> Sub.Sub Msg
+subscriptions _model =
+    Battery.readings Reading
+
+main =
+    Web.app
+        { init = init, update = update, view = view, subscriptions = subscriptions
+        , routes = [], notFound = Check
+        }
+"#;
+
+/// Importing `Ipe.Browser.Battery` discloses the specific `js-port:battery` axis.
+#[test]
+fn importing_browser_battery_discloses_js_port_battery() -> TestResult {
+    let dir = write_single("battery", BATTERY_APP)?;
+    let entry = dir.join("Main.ipe");
+    let declared = BTreeSet::from([
+        Capability::JsPort(WebCapability::Battery),
+        Capability::JsPort(WebCapability::Raw),
+    ]);
+    let r = verify_capabilities(&entry, &declared);
+    assert!(
+        r.is_ok(),
+        "importing Ipe.Browser.Battery must disclose js-port:battery (+ the :raw floor): {r:?}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+    Ok(())
+}
+
+/// Fail-closed: a battery app that omits the grant is rejected as under-declared.
+#[test]
+fn a_battery_app_without_the_grant_is_rejected() -> TestResult {
+    let dir = write_single("batterynogrant", BATTERY_APP)?;
+    let entry = dir.join("Main.ipe");
+    let declared = BTreeSet::from([Capability::JsPort(WebCapability::Raw)]);
+    let r = verify_capabilities(&entry, &declared);
+    assert!(
+        matches!(
+            &r,
+            Err(ipe::CliError::CapabilityMismatch { missing, .. })
+                if missing.contains(&"js-port:battery")
+        ),
+        "an ungranted battery app must be rejected naming js-port:battery, got: {r:?}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+    Ok(())
+}
+
+// ── Ipe.Browser.NetworkInfo — a first-party web-API module ──────────────────
+
+/// A Web-shape app importing `Ipe.Browser.NetworkInfo` — the import-derived signal
+/// that discloses the SPECIFIC `js-port:network-info` axis on top of the `:raw` floor.
+const NETWORK_INFO_APP: &str = r#"module Main exposing (main)
+
+import Ipe.Tea.Web as Web
+import Ipe.Tea.Web.Cmd as Cmd
+import Ipe.Tea.Web.Sub as Sub
+import Ipe.Ui as Ui
+import Ipe.Error as Error exposing (Error)
+import Ipe.Browser.NetworkInfo as Net
+import Ipe.Task as Task
+
+type alias Model = { kind : String }
+
+type Msg = Check | Got (Result Error Net.Info) | Changed (Result Error Net.Info)
+
+init : WebReq -> ( Model, Cmd.Cmd Msg )
+init _r =
+    ( { kind = "?" }, Task.attempt Got Net.info )
+
+update : Msg -> Model -> ( Model, Cmd.Cmd Msg )
+update msg model =
+    case msg of
+        Check ->
+            ( model, Net.watch )
+
+        Got _r ->
+            ( model, Cmd.none )
+
+        Changed _r ->
+            ( model, Cmd.none )
+
+view : Model -> Element Msg
+view _model =
+    Ui.text "ok"
+
+subscriptions : Model -> Sub.Sub Msg
+subscriptions _model =
+    Net.changes Changed
+
+main =
+    Web.app
+        { init = init, update = update, view = view, subscriptions = subscriptions
+        , routes = [], notFound = Check
+        }
+"#;
+
+/// Importing `Ipe.Browser.NetworkInfo` discloses the specific `js-port:network-info`
+/// axis.
+#[test]
+fn importing_browser_network_info_discloses_js_port_network_info() -> TestResult {
+    let dir = write_single("netinfo", NETWORK_INFO_APP)?;
+    let entry = dir.join("Main.ipe");
+    let declared = BTreeSet::from([
+        Capability::JsPort(WebCapability::NetworkInfo),
+        Capability::JsPort(WebCapability::Raw),
+    ]);
+    let r = verify_capabilities(&entry, &declared);
+    assert!(
+        r.is_ok(),
+        "importing Ipe.Browser.NetworkInfo must disclose js-port:network-info (+ the :raw floor): {r:?}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+    Ok(())
+}
+
+/// Fail-closed: a network-info app that omits the grant is rejected as under-declared.
+#[test]
+fn a_network_info_app_without_the_grant_is_rejected() -> TestResult {
+    let dir = write_single("netinfonogrant", NETWORK_INFO_APP)?;
+    let entry = dir.join("Main.ipe");
+    let declared = BTreeSet::from([Capability::JsPort(WebCapability::Raw)]);
+    let r = verify_capabilities(&entry, &declared);
+    assert!(
+        matches!(
+            &r,
+            Err(ipe::CliError::CapabilityMismatch { missing, .. })
+                if missing.contains(&"js-port:network-info")
+        ),
+        "an ungranted network-info app must be rejected naming js-port:network-info, got: {r:?}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+    Ok(())
+}

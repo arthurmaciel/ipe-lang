@@ -1701,6 +1701,113 @@ fn geolocation_inbound_fold_missing_a_denial_is_non_exhaustive() {
     assert_rejected("geolocation_inbound_missing_denied", &src, "IPE-T0010");
 }
 
+/// A fold over the inbound `Ipe.Browser.Notification.Internals` `JsMsg` that omits
+/// the `Denied` variant is non-exhaustive (IPE-T0010) — the same compiler-level
+/// guarantee for the notification permission-denial variant: an incomplete inbound
+/// fold is a type error, not a silently dropped frame.
+#[test]
+fn notification_inbound_fold_missing_a_denial_is_non_exhaustive() {
+    let src = format!(
+        "{HEAD}import Ipe.Io as Io\n\
+         import Ipe.Browser.Notification.Internals as Note exposing (JsMsg(..))\n\
+         describe : JsMsg -> String\n\
+         describe m =\n    case m of\n        \
+         Granted     -> \"granted\"\n        \
+         Shown       -> \"shown\"\n        \
+         Unavailable -> \"unavailable\"\n\n\
+         main = Io.println (describe Shown)\n"
+    );
+    assert_rejected("notification_inbound_missing_denied", &src, "IPE-T0010");
+}
+
+/// A fold over the inbound `Ipe.Browser.Storage.Internals` `JsMsg` that omits the
+/// `Unavailable` variant is non-exhaustive (IPE-T0010) — the compiler-level
+/// guarantee that a storage unavailability can never be silently swallowed.
+#[test]
+fn storage_inbound_fold_missing_unavailable_is_non_exhaustive() {
+    let src = format!(
+        "{HEAD}import Ipe.Io as Io\n\
+         import Ipe.Browser.Storage.Internals as Storage exposing (JsMsg(..))\n\
+         describe : JsMsg -> String\n\
+         describe m =\n    case m of\n        \
+         Got _v  -> \"got\"\n        \
+         Stored  -> \"stored\"\n        \
+         Removed -> \"removed\"\n        \
+         Cleared -> \"cleared\"\n\n\
+         main = Io.println (describe Stored)\n"
+    );
+    assert_rejected("storage_inbound_missing_unavailable", &src, "IPE-T0010");
+}
+
+/// A fold over the inbound `Ipe.Browser.Vibration.Internals` `JsMsg` that omits the
+/// `Unavailable` variant is non-exhaustive (IPE-T0010) — the compiler-level
+/// guarantee that a vibration unavailability can never be silently swallowed.
+#[test]
+fn vibration_inbound_fold_missing_unavailable_is_non_exhaustive() {
+    let src = format!(
+        "{HEAD}import Ipe.Io as Io\n\
+         import Ipe.Browser.Vibration.Internals as Vib exposing (JsMsg(..))\n\
+         describe : JsMsg -> String\n\
+         describe m =\n    case m of\n        \
+         Vibrated -> \"vibrated\"\n\n\
+         main = Io.println (describe Vibrated)\n"
+    );
+    assert_rejected("vibration_inbound_missing_unavailable", &src, "IPE-T0010");
+}
+
+/// A fold over the inbound `Ipe.Browser.Share.Internals` `JsMsg` that omits the
+/// `Cancelled` variant is non-exhaustive (IPE-T0010) — the compiler-level
+/// guarantee that a user cancellation can never be silently swallowed.
+#[test]
+fn share_inbound_fold_missing_cancelled_is_non_exhaustive() {
+    let src = format!(
+        "{HEAD}import Ipe.Io as Io\n\
+         import Ipe.Browser.Share.Internals as Share exposing (JsMsg(..))\n\
+         describe : JsMsg -> String\n\
+         describe m =\n    case m of\n        \
+         Shared      -> \"shared\"\n        \
+         Unavailable -> \"unavailable\"\n\n\
+         main = Io.println (describe Shared)\n"
+    );
+    assert_rejected("share_inbound_missing_cancelled", &src, "IPE-T0010");
+}
+
+/// A fold over the inbound `Ipe.Browser.Battery.Internals` `JsMsg` that omits the
+/// `Unavailable` variant is non-exhaustive (IPE-T0010) — the compiler-level
+/// guarantee that a battery unavailability can never be silently swallowed.
+#[test]
+fn battery_inbound_fold_missing_unavailable_is_non_exhaustive() {
+    let src = format!(
+        "{HEAD}import Ipe.Io as Io\n\
+         import Ipe.Browser.Battery.Internals as Battery exposing (JsMsg(..))\n\
+         describe : JsMsg -> String\n\
+         describe m =\n    case m of\n        \
+         Reading _c _l _ct _dt -> \"reading\"\n\n\
+         main = Io.println (describe (Reading False 1.0 0.0 0.0))\n"
+    );
+    assert_rejected("battery_inbound_missing_unavailable", &src, "IPE-T0010");
+}
+
+/// A fold over the inbound `Ipe.Browser.NetworkInfo.Internals` `JsMsg` that omits
+/// the `Unavailable` variant is non-exhaustive (IPE-T0010) — the compiler-level
+/// guarantee that a network-info unavailability can never be silently swallowed.
+#[test]
+fn network_info_inbound_fold_missing_unavailable_is_non_exhaustive() {
+    let src = format!(
+        "{HEAD}import Ipe.Io as Io\n\
+         import Ipe.Browser.NetworkInfo.Internals as Net exposing (JsMsg(..))\n\
+         describe : JsMsg -> String\n\
+         describe m =\n    case m of\n        \
+         Reading _t _d _r _s -> \"reading\"\n\n\
+         main = Io.println (describe (Reading \"4g\" 10.0 50.0 False))\n"
+    );
+    assert_rejected(
+        "network_info_inbound_missing_unavailable",
+        &src,
+        "IPE-T0010",
+    );
+}
+
 // NOTE: IPE-T0011 (redundant case branch) is intentionally `Severity::Warning`
 // (see `types::exhaust` — "collect it but do not abort"), so a redundant arm
 // does NOT reject compilation. It is therefore out of scope for a

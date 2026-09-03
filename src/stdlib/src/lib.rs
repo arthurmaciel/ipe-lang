@@ -676,6 +676,119 @@ const IPE_BROWSER_GEOLOCATION: &str = include_str!("../Ipe/Browser/Geolocation.i
 const IPE_BROWSER_GEOLOCATION_INTERNALS: &str =
     include_str!("../Ipe/Browser/Geolocation/Internals.ipe");
 
+/// `Ipe.Browser.Notification` — show system notifications over `Ipe.Ffi.Js` ports
+/// (compiled source), spanning BOTH port directions: an outbound `JsCmd` request
+/// (`requestPermission` / `notify` / `notifyWith`) and an inbound `JsMsg` reply
+/// folded exhaustively into `Result Error ()`. Importing it discloses
+/// `js-port:notification` (import-derived, keyed on the canonical
+/// `Ipe.Browser.Notification` path prefix via `WebCapability::for_browser_module`).
+/// The served wasm-sink JS handler reaches `Notification.requestPermission` /
+/// `new Notification`, trapping a denial / absence to the matching typed inbound
+/// variant. Registered in [`COMPILED_STD_MODULES`] (NOT `MODULES`); NOT in
+/// `STDLIB_MODULE_QUALIFIERS`.
+const IPE_BROWSER_NOTIFICATION: &str = include_str!("../Ipe/Browser/Notification.ipe");
+
+/// `Ipe.Browser.Notification.Internals` — the low-level notification port surface:
+/// the closed outbound/inbound ADTs, the full `Options` knob set, and the raw
+/// `Ipe.Ffi.Js` wiring the high-level layer wraps. Importing it discloses the same
+/// `js-port:notification` axis (the prefix key covers the submodule). Registered in
+/// [`COMPILED_STD_MODULES`] (NOT `MODULES`); NOT in `STDLIB_MODULE_QUALIFIERS`.
+const IPE_BROWSER_NOTIFICATION_INTERNALS: &str =
+    include_str!("../Ipe/Browser/Notification/Internals.ipe");
+
+/// `Ipe.Browser.Storage` — read from and write to Web Storage (`localStorage`)
+/// over `Ipe.Ffi.Js` ports (compiled source), spanning BOTH port directions: an
+/// outbound `JsCmd` request (`get` / `set` / `remove` / `clear`) and an inbound
+/// `JsMsg` reply folded exhaustively into `Result Error (Maybe String)`. Importing
+/// it discloses `js-port:storage` (import-derived, keyed on the canonical
+/// `Ipe.Browser.Storage` path prefix via `WebCapability::for_browser_module`). The
+/// served wasm-sink JS handler reaches `localStorage.getItem` / `setItem` /
+/// `removeItem` / `clear`, trapping a private-mode / absent-store throw to the
+/// typed `Unavailable` inbound variant. Registered in [`COMPILED_STD_MODULES`]
+/// (NOT `MODULES`); NOT in `STDLIB_MODULE_QUALIFIERS`.
+const IPE_BROWSER_STORAGE: &str = include_str!("../Ipe/Browser/Storage.ipe");
+
+/// `Ipe.Browser.Storage.Internals` — the low-level Web Storage port surface: the
+/// closed outbound/inbound ADTs and the raw `Ipe.Ffi.Js` wiring the high-level
+/// layer wraps. Importing it discloses the same `js-port:storage` axis (the prefix
+/// key covers the submodule). Registered in [`COMPILED_STD_MODULES`] (NOT
+/// `MODULES`); NOT in `STDLIB_MODULE_QUALIFIERS`.
+const IPE_BROWSER_STORAGE_INTERNALS: &str = include_str!("../Ipe/Browser/Storage/Internals.ipe");
+
+/// `Ipe.Browser.Vibration` — drive the device vibration actuator over `Ipe.Ffi.Js`
+/// ports (compiled source), spanning BOTH port directions: an outbound `JsCmd`
+/// request (`vibrate` / `pattern` / `cancel`) and an inbound `JsMsg` reply folded
+/// exhaustively into `Result Error ()`. Importing it discloses `js-port:vibration`
+/// (import-derived, keyed on the canonical `Ipe.Browser.Vibration` path prefix via
+/// `WebCapability::for_browser_module`). The served wasm-sink JS handler reaches
+/// `navigator.vibrate`, trapping an absent actuator to the typed `Unavailable`
+/// inbound variant. Registered in [`COMPILED_STD_MODULES`] (NOT `MODULES`); NOT in
+/// `STDLIB_MODULE_QUALIFIERS`.
+const IPE_BROWSER_VIBRATION: &str = include_str!("../Ipe/Browser/Vibration.ipe");
+
+/// `Ipe.Browser.Vibration.Internals` — the low-level Vibration port surface: the
+/// closed outbound/inbound ADTs and the raw `Ipe.Ffi.Js` wiring the high-level
+/// layer wraps. Importing it discloses the same `js-port:vibration` axis (the
+/// prefix key covers the submodule). Registered in [`COMPILED_STD_MODULES`] (NOT
+/// `MODULES`); NOT in `STDLIB_MODULE_QUALIFIERS`.
+const IPE_BROWSER_VIBRATION_INTERNALS: &str =
+    include_str!("../Ipe/Browser/Vibration/Internals.ipe");
+
+/// `Ipe.Browser.Share` — invoke the platform share sheet over `Ipe.Ffi.Js` ports
+/// (compiled source), spanning BOTH port directions: an outbound `JsCmd` request
+/// (`share`) and an inbound `JsMsg` reply folded exhaustively into
+/// `Result Error ()`. Importing it discloses `js-port:share` (import-derived, keyed
+/// on the canonical `Ipe.Browser.Share` path prefix via
+/// `WebCapability::for_browser_module`). The served wasm-sink JS handler reaches
+/// `navigator.share`, trapping a user cancellation (`AbortError`) to `Cancelled`
+/// and an absent API to `Unavailable`. Registered in [`COMPILED_STD_MODULES`] (NOT
+/// `MODULES`); NOT in `STDLIB_MODULE_QUALIFIERS`.
+const IPE_BROWSER_SHARE: &str = include_str!("../Ipe/Browser/Share.ipe");
+
+/// `Ipe.Browser.Share.Internals` — the low-level Web Share port surface: the closed
+/// outbound/inbound ADTs, the full `Payload` surface, and the raw `Ipe.Ffi.Js`
+/// wiring the high-level layer wraps. Importing it discloses the same
+/// `js-port:share` axis (the prefix key covers the submodule). Registered in
+/// [`COMPILED_STD_MODULES`] (NOT `MODULES`); NOT in `STDLIB_MODULE_QUALIFIERS`.
+const IPE_BROWSER_SHARE_INTERNALS: &str = include_str!("../Ipe/Browser/Share/Internals.ipe");
+
+/// `Ipe.Browser.Battery` — read the device battery status over `Ipe.Ffi.Js` ports
+/// (compiled source), spanning BOTH port directions: an outbound `JsCmd` request
+/// (`status` one-shot / `watch` continuous) and an inbound `JsMsg` reply folded
+/// exhaustively into `Result Error Status`. Importing it discloses
+/// `js-port:battery` (import-derived, keyed on the canonical `Ipe.Browser.Battery`
+/// path prefix via `WebCapability::for_browser_module`). The served wasm-sink JS
+/// handler reaches `navigator.getBattery`, trapping an absent API to the typed
+/// `Unavailable` inbound variant. Registered in [`COMPILED_STD_MODULES`] (NOT
+/// `MODULES`); NOT in `STDLIB_MODULE_QUALIFIERS`.
+const IPE_BROWSER_BATTERY: &str = include_str!("../Ipe/Browser/Battery.ipe");
+
+/// `Ipe.Browser.Battery.Internals` — the low-level Battery Status port surface: the
+/// closed outbound/inbound ADTs and the raw `Ipe.Ffi.Js` wiring the high-level
+/// layer wraps. Importing it discloses the same `js-port:battery` axis (the prefix
+/// key covers the submodule). Registered in [`COMPILED_STD_MODULES`] (NOT
+/// `MODULES`); NOT in `STDLIB_MODULE_QUALIFIERS`.
+const IPE_BROWSER_BATTERY_INTERNALS: &str = include_str!("../Ipe/Browser/Battery/Internals.ipe");
+
+/// `Ipe.Browser.NetworkInfo` — read network-information hints over `Ipe.Ffi.Js`
+/// ports (compiled source), spanning BOTH port directions: an outbound `JsCmd`
+/// request (`info` one-shot / `watch` continuous) and an inbound `JsMsg` reply
+/// folded exhaustively into `Result Error Info`. Importing it discloses
+/// `js-port:network-info` (import-derived, keyed on the canonical
+/// `Ipe.Browser.NetworkInfo` path prefix via `WebCapability::for_browser_module`).
+/// The served wasm-sink JS handler reaches `navigator.connection`, trapping an
+/// absent API to the typed `Unavailable` inbound variant. Registered in
+/// [`COMPILED_STD_MODULES`] (NOT `MODULES`); NOT in `STDLIB_MODULE_QUALIFIERS`.
+const IPE_BROWSER_NETWORK_INFO: &str = include_str!("../Ipe/Browser/NetworkInfo.ipe");
+
+/// `Ipe.Browser.NetworkInfo.Internals` — the low-level Network Information port
+/// surface: the closed outbound/inbound ADTs and the raw `Ipe.Ffi.Js` wiring the
+/// high-level layer wraps. Importing it discloses the same `js-port:network-info`
+/// axis (the prefix key covers the submodule). Registered in
+/// [`COMPILED_STD_MODULES`] (NOT `MODULES`); NOT in `STDLIB_MODULE_QUALIFIERS`.
+const IPE_BROWSER_NETWORK_INFO_INTERNALS: &str =
+    include_str!("../Ipe/Browser/NetworkInfo/Internals.ipe");
+
 /// `Ipe.Env` — build-time-embedded public config (compiled source).
 ///
 /// Defines `public : String -> Maybe String`, routed through the
@@ -1138,6 +1251,54 @@ pub const COMPILED_STD_MODULES: &[CompiledStdModule] = &[
     CompiledStdModule {
         dotted: "Ipe.Browser.Geolocation.Internals",
         source: IPE_BROWSER_GEOLOCATION_INTERNALS,
+    },
+    CompiledStdModule {
+        dotted: "Ipe.Browser.Notification",
+        source: IPE_BROWSER_NOTIFICATION,
+    },
+    CompiledStdModule {
+        dotted: "Ipe.Browser.Notification.Internals",
+        source: IPE_BROWSER_NOTIFICATION_INTERNALS,
+    },
+    CompiledStdModule {
+        dotted: "Ipe.Browser.Storage",
+        source: IPE_BROWSER_STORAGE,
+    },
+    CompiledStdModule {
+        dotted: "Ipe.Browser.Storage.Internals",
+        source: IPE_BROWSER_STORAGE_INTERNALS,
+    },
+    CompiledStdModule {
+        dotted: "Ipe.Browser.Vibration",
+        source: IPE_BROWSER_VIBRATION,
+    },
+    CompiledStdModule {
+        dotted: "Ipe.Browser.Vibration.Internals",
+        source: IPE_BROWSER_VIBRATION_INTERNALS,
+    },
+    CompiledStdModule {
+        dotted: "Ipe.Browser.Share",
+        source: IPE_BROWSER_SHARE,
+    },
+    CompiledStdModule {
+        dotted: "Ipe.Browser.Share.Internals",
+        source: IPE_BROWSER_SHARE_INTERNALS,
+    },
+    CompiledStdModule {
+        dotted: "Ipe.Browser.Battery",
+        source: IPE_BROWSER_BATTERY,
+    },
+    CompiledStdModule {
+        dotted: "Ipe.Browser.Battery.Internals",
+        source: IPE_BROWSER_BATTERY_INTERNALS,
+    },
+    CompiledStdModule {
+        dotted: "Ipe.Browser.NetworkInfo",
+        source: IPE_BROWSER_NETWORK_INFO,
+    },
+    CompiledStdModule {
+        dotted: "Ipe.Browser.NetworkInfo.Internals",
+        source: IPE_BROWSER_NETWORK_INFO_INTERNALS,
     },
     CompiledStdModule {
         dotted: "Ipe.Env",

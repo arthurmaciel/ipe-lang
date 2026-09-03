@@ -9,10 +9,22 @@ Each module listed below links to a detail page with the full documentation and 
 - [Analytics](#analytics)
 - [Basics](#basics)
 - [Bitwise](#bitwise)
+- [Browser.Battery](#browserbattery)
+- [Browser.Battery.Internals](#browserbatteryinternals)
 - [Browser.Clipboard](#browserclipboard)
 - [Browser.Clipboard.Internals](#browserclipboardinternals)
 - [Browser.Geolocation](#browsergeolocation)
 - [Browser.Geolocation.Internals](#browsergeolocationinternals)
+- [Browser.NetworkInfo](#browsernetworkinfo)
+- [Browser.NetworkInfo.Internals](#browsernetworkinfointernals)
+- [Browser.Notification](#browsernotification)
+- [Browser.Notification.Internals](#browsernotificationinternals)
+- [Browser.Share](#browsershare)
+- [Browser.Share.Internals](#browsershareinternals)
+- [Browser.Storage](#browserstorage)
+- [Browser.Storage.Internals](#browserstorageinternals)
+- [Browser.Vibration](#browservibration)
+- [Browser.Vibration.Internals](#browservibrationinternals)
 - [ByteSize](#bytesize)
 - [Bytes](#bytes)
 - [Cache](#cache)
@@ -159,6 +171,34 @@ Ipe.Bitwise — bitwise operations on `Int`.
 | `shiftRightBy` | Arithmetic (sign-preserving) right shift. |
 | `shiftRightZfBy` | Zero-fill (logical) right shift: the sign bit is not replicated. |
 
+## Browser.Battery
+
+[Full reference](stdlib/Browser.Battery.md)
+
+Ipe.Browser.Battery — read the device battery status over `Ipe.Ffi.Js` ports.
+
+| Export | Summary |
+|--------|----------|
+| `Status` | A battery status snapshot. |
+| `status` | `status` — read the current battery status ONCE, as a `Task Error Status`. |
+| `watch` | `watch` — begin a CONTINUOUS status stream; each change event delivers a |
+| `readings` | `readings toMsg` — the inbound subscription, wired in `subscriptions`. |
+
+## Browser.Battery.Internals
+
+[Full reference](stdlib/Browser.Battery.Internals.md)
+
+Ipe.Browser.Battery.Internals — the low-level Battery Status port surface: the
+
+| Export | Summary |
+|--------|----------|
+| `JsCmd` | The ONE closed OUTBOUND port type: the whole outbound surface as a single |
+| `JsMsg` | The NARROW closed INBOUND port type — deliberately NOT the app's internal |
+| `request` | `request cmd` — hand a closed outbound `JsCmd` to the raw port transport. |
+| `requestOne` | `requestOne cmd` — correlated one-shot `JsCmd` → `Task Error JsMsg`. |
+| `subscribe` | `subscribe toMsg` — the inbound subscription over the fail-closed seal |
+| `inbound` | The total, fail-closed decoder for the inbound `JsMsg`. It reads the `ok` |
+
 ## Browser.Clipboard
 
 [Full reference](stdlib/Browser.Clipboard.md)
@@ -210,6 +250,150 @@ Ipe.Browser.Geolocation.Internals — the full, low-level geolocation port
 |--------|----------|
 | `Options` | The `getCurrentPosition` / `watchPosition` option knobs, mirroring the Web API |
 | `defaults` | Sane defaults: a coarse fix, no deadline, always fresh — the values the |
+| `JsCmd` | The ONE closed OUTBOUND port type: the whole outbound surface as a single |
+| `JsMsg` | The NARROW closed INBOUND port type — deliberately NOT the app's internal |
+| `request` | `request cmd` — hand a closed outbound `JsCmd` to the raw port transport. |
+| `requestOne` | `requestOne cmd` — correlated one-shot `JsCmd` → `Task Error JsMsg`. |
+| `subscribe` | `subscribe toMsg` — the inbound subscription over the fail-closed seal |
+| `inbound` | The total, fail-closed decoder for the inbound `JsMsg`. It reads the `ok` |
+
+## Browser.NetworkInfo
+
+[Full reference](stdlib/Browser.NetworkInfo.md)
+
+Ipe.Browser.NetworkInfo — read network-information hints over `Ipe.Ffi.Js` ports.
+
+| Export | Summary |
+|--------|----------|
+| `Info` | A network-information hint snapshot. Every field is a browser estimate, not a |
+| `info` | `info` — read the current network-information hints ONCE, as a |
+| `watch` | `watch` — begin a CONTINUOUS hint stream; each `change` event delivers a fresh |
+| `changes` | `changes toMsg` — the inbound subscription, wired in `subscriptions`. |
+
+## Browser.NetworkInfo.Internals
+
+[Full reference](stdlib/Browser.NetworkInfo.Internals.md)
+
+Ipe.Browser.NetworkInfo.Internals — the low-level Network Information port
+
+| Export | Summary |
+|--------|----------|
+| `JsCmd` | The ONE closed OUTBOUND port type: the whole outbound surface as a single |
+| `JsMsg` | The NARROW closed INBOUND port type — deliberately NOT the app's internal |
+| `request` | `request cmd` — hand a closed outbound `JsCmd` to the raw port transport. |
+| `requestOne` | `requestOne cmd` — correlated one-shot `JsCmd` → `Task Error JsMsg`. |
+| `subscribe` | `subscribe toMsg` — the inbound subscription over the fail-closed seal |
+| `inbound` | The total, fail-closed decoder for the inbound `JsMsg`. It reads the `ok` |
+
+## Browser.Notification
+
+[Full reference](stdlib/Browser.Notification.md)
+
+Ipe.Browser.Notification — show system notifications over `Ipe.Ffi.Js` ports.
+
+| Export | Summary |
+|--------|----------|
+| `requestPermission` | `requestPermission` — ask the host to grant notification permission, as a |
+| `notify` | `notify title` — display a notification with the given title and no body. |
+| `notifyWith` | `notifyWith options` — display a notification with the full option surface |
+| `outcomes` | `outcomes toMsg` — the inbound subscription, wired in `subscriptions`. |
+
+## Browser.Notification.Internals
+
+[Full reference](stdlib/Browser.Notification.Internals.md)
+
+Ipe.Browser.Notification.Internals — the low-level notification port surface:
+
+| Export | Summary |
+|--------|----------|
+| `Options` | The `Notification` display payload, mirroring the Web API `Notification` |
+| `defaults` | The default payload for a bare `notify title`: the given title, no body, no |
+| `JsCmd` | The ONE closed OUTBOUND port type: the whole outbound surface as a single |
+| `JsMsg` | The NARROW closed INBOUND port type — deliberately NOT the app's internal |
+| `request` | `request cmd` — hand a closed outbound `JsCmd` to the raw port transport. |
+| `requestOne` | `requestOne cmd` — correlated one-shot `JsCmd` → `Task Error JsMsg`. |
+| `subscribe` | `subscribe toMsg` — the inbound subscription over the fail-closed seal |
+| `inbound` | The total, fail-closed decoder for the inbound `JsMsg`. It reads `ok` first: a |
+
+## Browser.Share
+
+[Full reference](stdlib/Browser.Share.md)
+
+Ipe.Browser.Share — invoke the platform share sheet over `Ipe.Ffi.Js` ports.
+
+| Export | Summary |
+|--------|----------|
+| `share` | `share payload` — invoke the platform share sheet with the given payload, as a |
+| `outcomes` | `outcomes toMsg` — the inbound subscription, wired in `subscriptions`. |
+
+## Browser.Share.Internals
+
+[Full reference](stdlib/Browser.Share.Internals.md)
+
+Ipe.Browser.Share.Internals — the low-level Web Share port surface: the closed
+
+| Export | Summary |
+|--------|----------|
+| `Payload` | The Web Share payload, mirroring the `ShareData` subset carried across the |
+| `empty` | An empty payload (all fields blank) — a base to override the fields a caller |
+| `JsCmd` | The ONE closed OUTBOUND port type: the whole outbound surface as a single |
+| `JsMsg` | The NARROW closed INBOUND port type — deliberately NOT the app's internal |
+| `request` | `request cmd` — hand a closed outbound `JsCmd` to the raw port transport. |
+| `requestOne` | `requestOne cmd` — correlated one-shot `JsCmd` → `Task Error JsMsg`. |
+| `subscribe` | `subscribe toMsg` — the inbound subscription over the fail-closed seal |
+| `inbound` | The total, fail-closed decoder for the inbound `JsMsg`. It reads the `ok` |
+
+## Browser.Storage
+
+[Full reference](stdlib/Browser.Storage.md)
+
+Ipe.Browser.Storage — read from and write to Web Storage (`localStorage`)
+
+| Export | Summary |
+|--------|----------|
+| `get` | `get key` — read the value stored under `key` as a `Task Error (Maybe String)`. |
+| `set` | `set key value` — write `value` under `key`. Outbound `Cmd`; an unavailable |
+| `remove` | `remove key` — delete the value stored under `key`. Outbound `Cmd`. |
+| `clear` | `clear` — remove every key from the store. Outbound `Cmd`. |
+| `changes` | `changes toMsg` — the inbound subscription, wired in `subscriptions`. |
+
+## Browser.Storage.Internals
+
+[Full reference](stdlib/Browser.Storage.Internals.md)
+
+Ipe.Browser.Storage.Internals — the low-level Web Storage port surface: the
+
+| Export | Summary |
+|--------|----------|
+| `Entry` | A `Set` payload: the `key` to write and the `value` string to store under it. |
+| `JsCmd` | The ONE closed OUTBOUND port type: the whole outbound surface as a single |
+| `JsMsg` | The NARROW closed INBOUND port type — deliberately NOT the app's internal |
+| `request` | `request cmd` — hand a closed outbound `JsCmd` to the raw port transport. |
+| `requestOne` | `requestOne cmd` — correlated one-shot `JsCmd` → `Task Error JsMsg`. |
+| `subscribe` | `subscribe toMsg` — the inbound subscription over the fail-closed seal |
+| `inbound` | The total, fail-closed decoder for the inbound `JsMsg`. It reads `ok` first: a |
+
+## Browser.Vibration
+
+[Full reference](stdlib/Browser.Vibration.md)
+
+Ipe.Browser.Vibration — drive the device vibration actuator over `Ipe.Ffi.Js`
+
+| Export | Summary |
+|--------|----------|
+| `vibrate` | `vibrate ms` — vibrate for `ms` milliseconds. Outbound `Cmd`; an absent |
+| `pattern` | `pattern durations` — vibrate/pause along the alternating on/off `durations` |
+| `cancel` | `cancel` — stop any ongoing vibration. Outbound `Cmd`. |
+| `acknowledgements` | `acknowledgements toMsg` — the inbound subscription, wired in `subscriptions`. |
+
+## Browser.Vibration.Internals
+
+[Full reference](stdlib/Browser.Vibration.Internals.md)
+
+Ipe.Browser.Vibration.Internals — the low-level Vibration port surface: the
+
+| Export | Summary |
+|--------|----------|
 | `JsCmd` | The ONE closed OUTBOUND port type: the whole outbound surface as a single |
 | `JsMsg` | The NARROW closed INBOUND port type — deliberately NOT the app's internal |
 | `request` | `request cmd` — hand a closed outbound `JsCmd` to the raw port transport. |

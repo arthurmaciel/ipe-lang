@@ -1,0 +1,90 @@
+-- | Ipe.Browser.Share — invoke the platform share sheet over `Ipe.Ffi.Js` ports.
+--
+-- A first-party proof of the per-capability web mechanism spanning BOTH port
+-- directions: an outbound `JsCmd` (`share`) invokes the share sheet, and an inbound
+-- `JsMsg` carries the outcome — a completion, a user cancellation, or a typed
+-- unavailability. Both cross the same seal codec and fail-closed port discipline as
+-- every other port; there is no second transport.
+--
+-- Importing this reserved `Ipe.Browser.<Api>` module discloses `js-port:share`
+-- (import-derived, keyed on the canonical `Ipe.Browser.Share` path prefix via
+-- `WebCapability::for_browser_module`, alias-immune); only the top-level app's
+-- `[capabilities] accepts` set can grant it.
+--
+-- The two layers:
+--
+--   * `Ipe.Browser.Share.Internals` publishes the closed outbound/inbound ADTs and
+--     the full `Payload` surface (`title` / `text` / `url`).
+--   * this module is the high-level layer: `share` returns a `Task Error ()` via
+--     the correlated port→Task bridge (a completion succeeds; a cancellation or an
+--     absent API resolves to a typed `Err`), and `outcomes` is the inbound
+--     subscription folding the narrow `JsMsg` into a typed `Result Error ()`. The
+--     inbound `case` is EXHAUSTIVE: a cancellation becomes a typed `Err`, never a
+--     silently dropped variant.
+module Ipe.Browser.Share exposing
+    ( share
+    , outcomes
+    )
+
+import Ipe.Browser.Share.Internals as Internals exposing (JsMsg(..))
+import Ipe.Error as Error exposing (Error)
+import Ipe.Task as Task
+import Ipe.Tea.Web.Cmd as Cmd
+import Ipe.Tea.Web.Sub as Sub
+
+
+-- | `share payload` — invoke the platform share sheet with the given payload, as a
+-- `Task Error ()`.
+--
+-- Uses the correlated port→Task bridge (`Js.request`). The served JS handler calls
+-- `navigator.share`; a completion resolves the `Task` with `()`, and a user
+-- cancellation or an absent API resolves it to a typed `Err`.
+--
+-- Importing this module discloses `js-port:share`; the app must grant it with
+-- `accepts = [ JsPort Share ]` under [capabilities] in package.ipe.
+share : Internals.Payload -> Task Error ()
+share payload =
+    Internals.requestOne (Internals.Share payload)
+        |> Task.andThen foldOutcome
+
+
+-- | `outcomes toMsg` — the inbound subscription, wired in `subscriptions`.
+--
+-- The decoder IS the security gate: every inbound value runs through the total,
+-- bounded seal decoder for the narrow `JsMsg`; a malformed / mismatched frame is
+-- dropped whole. A decoded `JsMsg` is folded EXHAUSTIVELY into a
+-- `Result Error ()` — a `Shared` becomes `Ok`, a cancellation / unavailability a
+-- typed `Err`.
+outcomes : (Result Error () -> msg) -> Sub.Sub msg
+outcomes toMsg =
+    Internals.subscribe (\inbound -> toMsg (toResult inbound))
+
+
+-- | Fold a `share` reply into a `Task Error ()`. The `case` is exhaustive over
+-- every published inbound variant; only `Shared` succeeds.
+foldOutcome : Internals.JsMsg -> Task Error ()
+foldOutcome msg =
+    case msg of
+        Shared ->
+            Task.succeed ()
+
+        Cancelled ->
+            Task.fail (Error.unavailable "share sheet cancelled")
+
+        Unavailable ->
+            Task.fail (Error.unavailable "web share unavailable")
+
+
+-- | Fold the narrow inbound `JsMsg` into a typed `Result Error ()`. The `case` is
+-- exhaustive over every published inbound variant.
+toResult : Internals.JsMsg -> Result Error ()
+toResult inbound =
+    case inbound of
+        Shared ->
+            Ok ()
+
+        Cancelled ->
+            Err (Error.unavailable "share sheet cancelled")
+
+        Unavailable ->
+            Err (Error.unavailable "web share unavailable")
