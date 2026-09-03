@@ -1935,18 +1935,15 @@ mod tests {
     fn js_port_web_axis_wire_names_round_trip_through_capability_from_str() {
         // Every `JsPort <WebAxis>` renders to a `js-port:<axis>` wire name that the
         // shared Capability FromStr accepts, and a bare `js-port` never parses.
-        for axis in [
-            "Geolocation",
-            "Clipboard",
-            "Notification",
-            "Storage",
-            "Vibration",
-            "Share",
-            "Battery",
-            "NetworkInfo",
-            "Raw",
-        ] {
-            let suffix = web_capability_wire_suffix(axis).expect("mapped");
+        // Derived from `WebCapability::ALL` so adding a new axis is automatically covered.
+        for &web_cap in WebCapability::ALL {
+            let axis = web_cap.ctor_name();
+            let maybe_suffix = web_capability_wire_suffix(axis);
+            assert!(
+                maybe_suffix.is_some(),
+                "WebCapability::ALL member {axis:?} must map through web_capability_wire_suffix"
+            );
+            let suffix = maybe_suffix.unwrap();
             let wire = format!("js-port:{suffix}");
             assert!(
                 wire.parse::<Capability>().is_ok(),
@@ -1955,7 +1952,8 @@ mod tests {
             // The ctor renderer is the inverse: `js-port:<axis>` → `JsPort <Axis>`.
             assert_eq!(capability_ctor_expr(&wire), format!("JsPort {axis}"));
         }
-        assert!(web_capability_wire_suffix("Camera").is_none());
+        // A name genuinely outside the web-axis vocabulary must return None.
+        assert!(web_capability_wire_suffix("NotARealAxis").is_none());
         assert!("js-port".parse::<Capability>().is_err());
     }
 
