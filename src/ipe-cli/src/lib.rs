@@ -42,6 +42,7 @@ pub mod lockfile;
 pub mod login;
 mod lsp;
 pub mod migrate;
+pub mod native_ffi_consent;
 pub mod net;
 pub mod package_manifest;
 pub mod pkg;
@@ -3466,6 +3467,11 @@ fn run_build_body(rest: &[String]) -> Result<BuildSuccess, CliError> {
     // build fails closed naming the disclosing module.
     gate_web_consent(manifest_parsed.as_ref(), manifest.as_deref(), &entry_path)?;
 
+    // App-boundary native-crossing consent: a disclosed `native-ffi` crossing
+    // reached by a dependency must be granted by THIS app's `[capabilities]
+    // declared`, else the build fails closed naming the disclosing `Rust.<Crate>`.
+    gate_native_ffi_consent(manifest_parsed.as_ref(), manifest.as_deref(), &entry_path)?;
+
     // Precedence: CLI --target wasm > IPE_TARGET=wasm > [wasm].mode != "off".
     let wasm_target = resolve_wasm_target(wasm_target, manifest_wasm.as_ref());
 
@@ -4633,6 +4639,11 @@ fn run_run_body(rest: &[String]) -> Result<(), CliError> {
     // `js-port:<axis>` must be granted by this app's manifest, else fail closed.
     gate_web_consent(manifest_parsed.as_ref(), manifest.as_deref(), &entry_path)?;
 
+    // App-boundary native-crossing consent: same gate as `ipe build` — a disclosed
+    // `native-ffi` crossing must be granted by this app's `[capabilities] declared`,
+    // else fail closed naming the disclosing `Rust.<Crate>`.
+    gate_native_ffi_consent(manifest_parsed.as_ref(), manifest.as_deref(), &entry_path)?;
+
     // When the project declares [wasm].mode != "off", or IPE_TARGET=wasm is
     // set, treat `ipe run` as a wasm build-and-bundle (no native binary to
     // exec). A plain `ipe run` in a non-wasm project stays native.
@@ -5515,6 +5526,53 @@ fn gate_web_consent(
         .map(|m| m.capabilities_accept.clone())
         .unwrap_or_default();
     web_consent::gate(&resolved.inferred, &granted, &provenance)
+}
+
+/// The app-boundary native-crossing consent gate, shared by `ipe build` and
+/// `ipe run` and invoked right after the web-capability consent.
+///
+/// Resolves the program's inferred capabilities the same way the sandbox does; if
+/// the disclosed `native-ffi` capability is present (any `Rust.` crossing), it
+/// demands that the top-level app's `[capabilities] declared` set grant it. An
+/// ungranted (or un-attributable) crossing is a fail-closed, typed refusal naming
+/// the disclosing `Rust.<Crate>` module — it never prompts and never composes a
+/// dependency's own grant. A program that crosses into no native code is
+/// untouched.
+///
+/// The grant surface is `[capabilities] declared` (a package's *own* effects, the
+/// same set `verify_capabilities` reconciles), not `accept` (a pre-acceptance of
+/// a hazard the build would prompt about): a native crossing is a package's own
+/// declared effect, so it belongs on the `declared` axis. The runtime jail
+/// CONTAINS the crossing's opaque effects regardless; this gate is the consent
+/// half — the crossing must be granted before the (costly) emit + cargo build.
+///
+/// # Errors
+/// [`CliError::UsageOwned`] (`IPE-S0003`) when the disclosed native crossing is
+/// ungranted; the capability-resolution errors it composes.
+fn gate_native_ffi_consent(
+    manifest_parsed: Option<&project::ProjectManifest>,
+    manifest_path: Option<&Path>,
+    entry: &Path,
+) -> Result<(), CliError> {
+    let resolved = run_sandbox::resolve_for_run(manifest_parsed, manifest_path, entry)?;
+    // Short-circuit before any source read when no native crossing is disclosed.
+    if !resolved.inferred.contains(&ipe_ir::Capability::NativeFfi) {
+        return Ok(());
+    }
+    // Provenance over the whole module set (app + siblings + any dep modules the
+    // infer path reads), keyed on the crate so the refusal names the disclosing
+    // `Rust.<Crate>` import. Total by construction: an inferred crossing that no
+    // source attributes is refused as un-attributable, never dropped.
+    let named_sources = named_sources_for_web_scan(manifest_path, entry)?;
+    let provenance = native_ffi_consent::NativeCrossingProvenance::from_sources(
+        named_sources
+            .iter()
+            .map(|(name, src)| (name.as_str(), src.as_str())),
+    );
+    let granted = manifest_parsed
+        .map(|m| m.capabilities.clone())
+        .unwrap_or_default();
+    native_ffi_consent::gate(&resolved.inferred, &granted, &provenance)
 }
 
 /// Collect `(dotted-module-name, source)` pairs spanning the app entry and its
