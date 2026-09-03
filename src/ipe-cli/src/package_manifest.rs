@@ -51,6 +51,8 @@ use ipe_diagnostics::{Located, Span};
 use ipe_intern::Interner;
 use ipe_syntax::{Expr, Expr_, Module};
 
+use ipe_kernels::WebCapability;
+
 use crate::CliError;
 use crate::project::{
     Capability, EntryShape, IpeDep, Program, ProjectManifest, RustDep, WasmConfig,
@@ -988,12 +990,14 @@ impl Reader<'_> {
         })?;
         let axis = self.expect_ctor(axis_expr, "a web capability")?;
         let suffix = web_capability_wire_suffix(axis).ok_or_else(|| {
+            let valid = WebCapability::ALL
+                .iter()
+                .map(|c| c.ctor_name())
+                .collect::<Vec<_>>()
+                .join(", ");
             self.reject(
                 axis_expr.span,
-                &format!(
-                    "`{axis}` is not a web capability — use one of Geolocation, Clipboard, \
-                     Notification, Storage, Vibration, Share, Battery, NetworkInfo, Raw"
-                ),
+                &format!("`{axis}` is not a web capability — use one of {valid}"),
             )
         })?;
         Ok(format!("js-port:{suffix}"))
@@ -1003,18 +1007,7 @@ impl Reader<'_> {
 /// The wire suffix (the half after `js-port:`) of a `WebCapability` constructor,
 /// or `None` for a name outside the closed web-axis vocabulary.
 fn web_capability_wire_suffix(ctor: &str) -> Option<&'static str> {
-    match ctor {
-        "Geolocation" => Some("geolocation"),
-        "Clipboard" => Some("clipboard"),
-        "Notification" => Some("notification"),
-        "Storage" => Some("storage"),
-        "Vibration" => Some("vibration"),
-        "Share" => Some("share"),
-        "Battery" => Some("battery"),
-        "NetworkInfo" => Some("network-info"),
-        "Raw" => Some("raw"),
-        _ => None,
-    }
+    WebCapability::from_ctor(ctor).map(WebCapability::as_str)
 }
 
 /// The wire name of a capability constructor, or `None` for a name outside the
@@ -1271,18 +1264,10 @@ fn capability_ctor_expr(wire: &str) -> String {
 /// The `WebCapability` constructor spelling for a wire suffix — the inverse of
 /// [`web_capability_wire_suffix`]. An unknown suffix passes through verbatim.
 fn web_capability_ctor_name(suffix: &str) -> &str {
-    match suffix {
-        "geolocation" => "Geolocation",
-        "clipboard" => "Clipboard",
-        "notification" => "Notification",
-        "storage" => "Storage",
-        "vibration" => "Vibration",
-        "share" => "Share",
-        "battery" => "Battery",
-        "network-info" => "NetworkInfo",
-        "raw" => "Raw",
-        other => other,
-    }
+    WebCapability::ALL
+        .iter()
+        .find(|c| c.as_str() == suffix)
+        .map_or(suffix, |c| c.ctor_name())
 }
 
 /// Render the `programs = [ … ]` field from the typed vector.
@@ -1950,18 +1935,15 @@ mod tests {
     fn js_port_web_axis_wire_names_round_trip_through_capability_from_str() {
         // Every `JsPort <WebAxis>` renders to a `js-port:<axis>` wire name that the
         // shared Capability FromStr accepts, and a bare `js-port` never parses.
-        for axis in [
-            "Geolocation",
-            "Clipboard",
-            "Notification",
-            "Storage",
-            "Vibration",
-            "Share",
-            "Battery",
-            "NetworkInfo",
-            "Raw",
-        ] {
-            let suffix = web_capability_wire_suffix(axis).expect("mapped");
+        // Derived from `WebCapability::ALL` so adding a new axis is automatically covered.
+        for &web_cap in WebCapability::ALL {
+            let axis = web_cap.ctor_name();
+            let maybe_suffix = web_capability_wire_suffix(axis);
+            assert!(
+                maybe_suffix.is_some(),
+                "WebCapability::ALL member {axis:?} must map through web_capability_wire_suffix"
+            );
+            let suffix = maybe_suffix.unwrap();
             let wire = format!("js-port:{suffix}");
             assert!(
                 wire.parse::<Capability>().is_ok(),
@@ -1970,7 +1952,8 @@ mod tests {
             // The ctor renderer is the inverse: `js-port:<axis>` → `JsPort <Axis>`.
             assert_eq!(capability_ctor_expr(&wire), format!("JsPort {axis}"));
         }
-        assert!(web_capability_wire_suffix("Camera").is_none());
+        // A name genuinely outside the web-axis vocabulary must return None.
+        assert!(web_capability_wire_suffix("NotARealAxis").is_none());
         assert!("js-port".parse::<Capability>().is_err());
     }
 

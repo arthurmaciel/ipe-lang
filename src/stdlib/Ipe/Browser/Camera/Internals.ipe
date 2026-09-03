@@ -1,0 +1,108 @@
+-- | Ipe.Browser.Camera.Internals — the low-level camera capture port surface:
+-- the closed outbound/inbound ADTs and the raw `Ipe.Ffi.Js` request/subscribe
+-- wiring the high-level `Ipe.Browser.Camera` layer wraps.
+--
+-- Importing this submodule discloses the same `js-port:camera` axis as the
+-- top-level module (the disclosure is keyed on the `Ipe.Browser.Camera` path
+-- prefix), so the raw port surface cannot be reached undisclosed.
+module Ipe.Browser.Camera.Internals exposing
+    ( JsCmd(..)
+    , JsMsg(..)
+    , request
+    , requestOne
+    , subscribe
+    , inbound
+    )
+
+import Ipe.Error as Error exposing (Error)
+import Ipe.Ffi.Js as Js
+import Ipe.Json.Decode as Decode
+import Ipe.Tea.Web.Cmd as Cmd
+import Ipe.Tea.Web.Sub as Sub
+
+
+-- | The ONE closed OUTBOUND port type. `CapturePhoto` invokes the device
+-- camera (mobile) or falls back to a file picker restricted to `image/*`
+-- (desktop). The result is a single photo as a `data:` URL.
+type JsCmd
+    = CapturePhoto
+
+
+-- | The NARROW closed INBOUND port type — NOT the app's internal `Msg`. Every
+-- variant the browser can push is enumerated, so the fold in the high-level
+-- layer is EXHAUSTIVE and a denial or cancellation can never be silently
+-- dropped: it becomes a typed `Err`.
+--
+--   * `Captured name mime dataUrl` — a photo was taken; `name` is the
+--     filename provided by the browser, `mime` is the image MIME type, and
+--     `dataUrl` is the base-64-encoded `data:` URL of the captured image.
+--   * `Cancelled` — the user dismissed the capture UI without taking a photo.
+--   * `Denied` — the host refused the camera permission.
+--   * `Unavailable` — the camera or file API is absent in this context.
+type JsMsg
+    = Captured String String String
+    | Cancelled
+    | Denied
+    | Unavailable
+
+
+-- | `request cmd` — hand a closed outbound `JsCmd` to the raw port transport.
+-- The served first-party JS sink invokes the capture interface; the reply
+-- arrives inbound as a `JsMsg`.
+request : JsCmd -> Cmd.Cmd msg
+request cmd =
+    Js.send cmd
+
+
+-- | `requestOne cmd` — correlated one-shot `JsCmd` → `Task Error JsMsg`.
+-- Routes through `Js.request` with the `inbound` decoder so the correlated
+-- reply is decoded fail-closed by the same gate the `subscribe` path uses.
+requestOne : JsCmd -> Task Error JsMsg
+requestOne cmd =
+    Js.request cmd inbound
+
+
+-- | `subscribe toMsg` — the inbound subscription over the fail-closed seal
+-- decoder. `inbound` IS the security gate; a malformed / mismatched frame is
+-- dropped whole.
+subscribe : (JsMsg -> msg) -> Sub.Sub msg
+subscribe toMsg =
+    Js.subscribe inbound toMsg
+
+
+-- | The total, fail-closed decoder for the inbound `JsMsg`. It reads `ok`
+-- first: a true flag decodes the `name`, `mime`, and `dataUrl` fields into a
+-- `Captured` value; a false flag decodes the closed `error` vocabulary. An
+-- unrecognised token fails the decode closed (the frame is dropped, never a
+-- silent mis-map).
+inbound : Decode.Decoder JsMsg
+inbound =
+    Decode.andThen decodeByOk (Decode.field "ok" Decode.bool)
+
+
+decodeByOk : Bool -> Decode.Decoder JsMsg
+decodeByOk ok =
+    if ok then
+        Decode.map3 Captured
+            (Decode.field "name" Decode.string)
+            (Decode.field "mime" Decode.string)
+            (Decode.field "dataUrl" Decode.string)
+
+    else
+        Decode.andThen decodeError (Decode.field "error" Decode.string)
+
+
+decodeError : String -> Decode.Decoder JsMsg
+decodeError token =
+    case token of
+        "cancelled" ->
+            Decode.succeed Cancelled
+
+        "denied" ->
+            Decode.succeed Denied
+
+        "unavailable" ->
+            Decode.succeed Unavailable
+
+        _ ->
+            Decode.fail ("unknown camera error variant: " ++ token)
