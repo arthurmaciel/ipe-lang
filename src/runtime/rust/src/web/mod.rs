@@ -1703,11 +1703,13 @@ where
     // ipe_web_msg_seconds{name} label. Generated Msg enums always derive Debug.
     // IpeStringify: forwarded through serve_web → page for debugger overlay
     // labels via `ipe_show`. Generated Msg enums always satisfy this bound.
+    // DeserializeOwned: forwarded to import_handler (dev-only debug route).
     Msg: Clone
         + Send
         + Sync
         + std::fmt::Debug
         + serde::Serialize
+        + serde::de::DeserializeOwned
         + crate::stringify::IpeStringify
         + 'static,
     FInit: Fn(req::WebReq) -> (Model, IpeCmd<Msg>) + Send + Sync + 'static,
@@ -1779,6 +1781,7 @@ where
         + Sync
         + std::fmt::Debug
         + serde::Serialize
+        + serde::de::DeserializeOwned
         + crate::stringify::IpeStringify
         + 'static,
     FInit: Fn(req::WebReq) -> (Model, IpeCmd<Msg>) + Send + Sync + 'static,
@@ -1883,11 +1886,13 @@ where
     // ipe_web_msg_seconds{name} label. Generated Msg enums always derive Debug.
     // IpeStringify: forwarded through serve_web → page for debugger overlay
     // labels via `ipe_show`. Generated Msg enums always satisfy this bound.
+    // DeserializeOwned: forwarded to import_handler (dev-only debug route).
     Msg: Clone
         + Send
         + Sync
         + std::fmt::Debug
         + serde::Serialize
+        + serde::de::DeserializeOwned
         + crate::stringify::IpeStringify
         + 'static,
     Page: Clone + Send + Sync + 'static,
@@ -3504,6 +3509,107 @@ mod handlers {
         }
     }
 
+    // ── POST /_ipe/debug/import ───────────────────────────────────────────
+    // Load an exported message log into the current session and replay it,
+    // replacing the session history with the imported one. The request body
+    // must be a JSON array produced by `GET /_ipe/debug/export`.
+    //
+    // On success the session model is advanced to the final reconstructed
+    // step, the history is replaced, and the debug cursor is cleared (live
+    // mode). On failure (malformed bytes, type mismatch, oversized blob) the
+    // session is left unchanged and 422 Unprocessable Entity is returned.
+    //
+    // Security: POST, CSRF-guarded, session-cookie authenticated. The import
+    // path is bounded — `import_msgs` rejects blobs exceeding the seal codec
+    // byte budget before any allocation. Dev-only (`debugger` feature absent
+    // from release artifacts).
+    //
+    // Requires `Msg: serde::de::DeserializeOwned` — a Secret-bearing Msg type
+    // never implements Deserialize (seal-legality gate), so the compiler rejects
+    // import for such types at the call site.
+    #[cfg(feature = "debugger")]
+    pub(super) async fn import_handler<Model, Msg, FInit, FUpdate, FView, FSubs>(
+        State(st): State<WebState<Model, Msg, FInit, FUpdate, FView, FSubs>>,
+        headers: axum::http::HeaderMap,
+        uri: axum::http::Uri,
+        method: axum::http::Method,
+        body: axum::body::Bytes,
+    ) -> axum::response::Response
+    where
+        Model: Clone + PartialEq + Send + 'static,
+        Msg: Clone
+            + Send
+            + std::fmt::Debug
+            + serde::de::DeserializeOwned
+            + crate::stringify::IpeStringify
+            + 'static,
+        FInit: Fn(req::WebReq) -> (Model, crate::tea::IpeCmd<Msg>) + Send + Sync + 'static,
+        FUpdate: Fn(Msg, Model) -> (Model, crate::tea::IpeCmd<Msg>) + Send + Sync + 'static,
+        FView: Send + Sync + 'static,
+        FSubs: Send + Sync + 'static,
+    {
+        use axum::response::IntoResponse;
+        let sid = match sid_from_cookie(&headers) {
+            Some(s) => s,
+            None => {
+                return (axum::http::StatusCode::UNAUTHORIZED, "no session").into_response();
+            }
+        };
+        let handle = match st.store.get(&sid).await {
+            Some(store::StoreHit::Web(h)) => h,
+            _ => {
+                return (axum::http::StatusCode::NOT_FOUND, "session not found").into_response();
+            }
+        };
+        // Derive the init model the same way reset_handler does: build a
+        // WebReq from the current request context so route-aware apps get the
+        // correct initial state.
+        let params = (st.param_resolver)(uri.path());
+        let req = req::web_req(&method, &uri, &headers, params);
+        let (init_model, _cmd) = (st.init)(req);
+
+        // Replay the imported log from the init model. Fail-closed: any
+        // malformed, oversized, or type-mismatched blob yields None.
+        let update = st.update.clone();
+        let imported = crate::debugger::import_msgs::<Msg, Model, _>(
+            &body,
+            init_model,
+            move |msg, model| (*update)(msg, model),
+            crate::debugger::DEFAULT_HISTORY_CAP,
+        );
+
+        let imported_buf = match imported {
+            Some(buf) => buf,
+            None => {
+                return (
+                    axum::http::StatusCode::UNPROCESSABLE_ENTITY,
+                    "import failed: malformed, oversized, or type-mismatched log",
+                )
+                    .into_response();
+            }
+        };
+
+        // Advance session model to the final reconstructed step.
+        let final_model = if imported_buf.is_empty() {
+            imported_buf.base().clone()
+        } else {
+            let update = st.update.clone();
+            imported_buf
+                .reconstruct(imported_buf.len() - 1, &move |msg, model| {
+                    (*update)(msg, model)
+                })
+                .unwrap_or_else(|| imported_buf.base().clone())
+        };
+
+        {
+            let mut e = handle.lock().unwrap_or_else(|e| e.into_inner());
+            e.history = imported_buf;
+            e.model = final_model;
+            e.debug_cursor = None;
+        }
+        axum::http::StatusCode::OK.into_response()
+    }
+
     // ── POST /_ipe/debug/step-to ──────────────────────────────────────────
     // Commit time-travel to an absolute step index N: set the live model to
     // the fold of the first N+1 messages, discard the tail (fork), and update
@@ -3736,11 +3842,13 @@ where
     Model: Clone + PartialEq + Send + 'static,
     // Debug: forwarded to drive_session for the ipe_web_msg_seconds{name} label.
     // IpeStringify: forwarded to the page handler for debugger overlay labels.
-    // Generated Msg types always satisfy both bounds.
+    // DeserializeOwned: required by import_handler (dev-only debug import route).
+    // Generated Msg types always satisfy all bounds.
     Msg: Clone
         + Send
         + std::fmt::Debug
         + serde::Serialize
+        + serde::de::DeserializeOwned
         + crate::stringify::IpeStringify
         + 'static,
     FInit: Fn(req::WebReq) -> (Model, IpeCmd<Msg>) + Send + Sync + 'static,
@@ -3854,16 +3962,17 @@ pub(crate) fn build_web_router<Model, Msg, FInit, FUpdate, FView, FSubs>(
 ) -> axum::Router
 where
     Model: Clone + PartialEq + Send + 'static,
-    // `serde::Serialize` is required by `export_handler` (the dev-only
-    // `/_ipe/debug/export` route) when the `debugger` feature is active.
-    // Generated Msg enums always derive Serialize, so this tightens nothing
-    // for real programs; the bound is unconditional to avoid `#[cfg(…)]` on
-    // where predicates (which is an unstable feature).
+    // `serde::Serialize` is required by `export_handler` and
+    // `serde::de::DeserializeOwned` by `import_handler` (both dev-only routes
+    // under the `debugger` feature). Generated Msg enums always derive both,
+    // so these bounds tighten nothing for real programs; they are unconditional
+    // to avoid `#[cfg(…)]` on where predicates (which is an unstable feature).
     Msg: Clone
         + Send
         + std::fmt::Debug
         + crate::stringify::IpeStringify
         + serde::Serialize
+        + serde::de::DeserializeOwned
         + 'static,
     FInit: Fn(req::WebReq) -> (Model, IpeCmd<Msg>) + Send + Sync + 'static,
     FUpdate: Fn(Msg, Model) -> (Model, IpeCmd<Msg>) + Send + Sync + 'static,
@@ -3955,6 +4064,11 @@ where
     let router = router.route(
         "/_ipe/debug/export",
         get(handlers::export_handler::<Model, Msg, FInit, FUpdate, FView, FSubs>),
+    );
+    #[cfg(feature = "debugger")]
+    let router = router.route(
+        "/_ipe/debug/import",
+        post(handlers::import_handler::<Model, Msg, FInit, FUpdate, FView, FSubs>),
     );
     #[cfg(feature = "debugger")]
     let router = router.route(
