@@ -1035,3 +1035,85 @@ fn a_storage_app_without_the_grant_is_rejected() -> TestResult {
     let _ = std::fs::remove_dir_all(&dir);
     Ok(())
 }
+
+// ── Ipe.Browser.Vibration — a first-party web-API module ────────────────────
+
+/// A Web-shape app importing `Ipe.Browser.Vibration` — the import-derived signal
+/// that discloses the SPECIFIC `js-port:vibration` axis on top of the `:raw` floor.
+const VIBRATION_APP: &str = r#"module Main exposing (main)
+
+import Ipe.Tea.Web as Web
+import Ipe.Tea.Web.Cmd as Cmd
+import Ipe.Tea.Web.Sub as Sub
+import Ipe.Ui as Ui
+import Ipe.Error as Error exposing (Error)
+import Ipe.Browser.Vibration as Vib
+
+type alias Model = { n : Int }
+
+type Msg = Buzz | Acked (Result Error ())
+
+init : WebReq -> ( Model, Cmd.Cmd Msg )
+init _r =
+    ( { n = 0 }, Vib.vibrate 200 )
+
+update : Msg -> Model -> ( Model, Cmd.Cmd Msg )
+update msg model =
+    case msg of
+        Buzz ->
+            ( model, Vib.pattern [ 100, 50, 100 ] )
+
+        Acked _r ->
+            ( model, Cmd.none )
+
+view : Model -> Element Msg
+view _model =
+    Ui.text "ok"
+
+subscriptions : Model -> Sub.Sub Msg
+subscriptions _model =
+    Vib.acknowledgements Acked
+
+main =
+    Web.app
+        { init = init, update = update, view = view, subscriptions = subscriptions
+        , routes = [], notFound = Buzz
+        }
+"#;
+
+/// Importing `Ipe.Browser.Vibration` discloses the specific `js-port:vibration` axis.
+#[test]
+fn importing_browser_vibration_discloses_js_port_vibration() -> TestResult {
+    let dir = write_single("vib", VIBRATION_APP)?;
+    let entry = dir.join("Main.ipe");
+    let declared = BTreeSet::from([
+        Capability::JsPort(WebCapability::Vibration),
+        Capability::JsPort(WebCapability::Raw),
+    ]);
+    let r = verify_capabilities(&entry, &declared);
+    assert!(
+        r.is_ok(),
+        "importing Ipe.Browser.Vibration must disclose js-port:vibration (+ the :raw floor): {r:?}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+    Ok(())
+}
+
+/// Fail-closed: a vibration app that omits the grant is rejected as under-declared.
+#[test]
+fn a_vibration_app_without_the_grant_is_rejected() -> TestResult {
+    let dir = write_single("vibnogrant", VIBRATION_APP)?;
+    let entry = dir.join("Main.ipe");
+    let declared = BTreeSet::from([Capability::JsPort(WebCapability::Raw)]);
+    let r = verify_capabilities(&entry, &declared);
+    assert!(
+        matches!(
+            &r,
+            Err(ipe::CliError::CapabilityMismatch { missing, .. })
+                if missing.contains(&"js-port:vibration")
+        ),
+        "an ungranted vibration app must be rejected naming js-port:vibration, got: {r:?}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+    Ok(())
+}

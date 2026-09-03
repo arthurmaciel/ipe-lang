@@ -246,11 +246,42 @@ const PORT_GLUE_JS: &str = r#"// Ipe.Ffi.Js browser port surface. Values cross a
     }
     return true;
   }
+  // Ipe.Browser.Vibration: `Vibrate ms` / `Pattern [..]` / `Cancel`
+  // -> navigator.vibrate(ms) / vibrate([..]) / vibrate(0). A supported actuator
+  // replies `vibrated`; an absent API or a rejected request traps to `unavailable`.
+  function vibrationSink(value, corId) {
+    var isVibrate = value && typeof value === "object" && value.Vibrate !== undefined;
+    var isPattern = value && typeof value === "object" && value.Pattern !== undefined;
+    var isCancel = value === "Cancel" ||
+      (value && typeof value === "object" && value.Cancel !== undefined);
+    if (!isVibrate && !isPattern && !isCancel) return false;
+    if (!navigator || typeof navigator.vibrate !== "function") {
+      reply({ tag: "vibration", ok: false, error: "unavailable" }, corId);
+      return true;
+    }
+    var arg;
+    if (isVibrate) {
+      arg = Number(value.Vibrate) || 0;
+    } else if (isPattern) {
+      arg = Array.isArray(value.Pattern) ? value.Pattern.map(function (n) { return Number(n) || 0; }) : [];
+    } else {
+      arg = 0;
+    }
+    var accepted = false;
+    try { accepted = navigator.vibrate(arg); } catch (_e) { accepted = false; }
+    if (accepted) {
+      reply({ tag: "vibration", ok: true }, corId);
+    } else {
+      reply({ tag: "vibration", ok: false, error: "unavailable" }, corId);
+    }
+    return true;
+  }
   function builtinSink(value, corId) {
     if (clipboardSink(value, corId)) return true;
     if (geolocationSink(value, corId)) return true;
     if (notificationSink(value, corId)) return true;
     if (storageSink(value, corId)) return true;
+    if (vibrationSink(value, corId)) return true;
     return false;
   }
   function deliver(raw) {
@@ -419,6 +450,20 @@ mod tests {
         assert!(js.contains("event: \"get\""));
         assert!(js.contains("event: \"set\""));
         // …and traps a private-mode / absent store to a typed frame, never a throw.
+        assert!(js.contains("\"unavailable\""));
+        assert!(!js.contains("eval("));
+    }
+
+    #[test]
+    fn vibration_sink_reaches_the_web_api_and_traps_absence_to_a_typed_result() {
+        let js = port_glue_js();
+        // The first-party Ipe.Browser.Vibration sink reaches navigator.vibrate…
+        assert!(js.contains("navigator.vibrate"));
+        assert!(js.contains("value.Vibrate"));
+        assert!(js.contains("value.Pattern"));
+        // …acknowledges a supported actuator…
+        assert!(js.contains("tag: \"vibration\""));
+        // …and traps an absent actuator to a typed frame, never a throw.
         assert!(js.contains("\"unavailable\""));
         assert!(!js.contains("eval("));
     }

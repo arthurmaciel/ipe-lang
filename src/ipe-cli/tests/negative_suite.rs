@@ -1739,6 +1739,22 @@ fn storage_inbound_fold_missing_unavailable_is_non_exhaustive() {
     assert_rejected("storage_inbound_missing_unavailable", &src, "IPE-T0010");
 }
 
+/// A fold over the inbound `Ipe.Browser.Vibration.Internals` `JsMsg` that omits the
+/// `Unavailable` variant is non-exhaustive (IPE-T0010) — the compiler-level
+/// guarantee that a vibration unavailability can never be silently swallowed.
+#[test]
+fn vibration_inbound_fold_missing_unavailable_is_non_exhaustive() {
+    let src = format!(
+        "{HEAD}import Ipe.Io as Io\n\
+         import Ipe.Browser.Vibration.Internals as Vib exposing (JsMsg(..))\n\
+         describe : JsMsg -> String\n\
+         describe m =\n    case m of\n        \
+         Vibrated -> \"vibrated\"\n\n\
+         main = Io.println (describe Vibrated)\n"
+    );
+    assert_rejected("vibration_inbound_missing_unavailable", &src, "IPE-T0010");
+}
+
 // NOTE: IPE-T0011 (redundant case branch) is intentionally `Severity::Warning`
 // (see `types::exhaust` — "collect it but do not abort"), so a redundant arm
 // does NOT reject compilation. It is therefore out of scope for a

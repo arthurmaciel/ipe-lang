@@ -1,0 +1,81 @@
+-- | Ipe.Browser.Vibration — drive the device vibration actuator over `Ipe.Ffi.Js`
+-- ports.
+--
+-- A first-party proof of the per-capability web mechanism spanning BOTH port
+-- directions: outbound `JsCmd`s (`vibrate` / `pattern` / `cancel`) request an
+-- actuator operation, and an inbound `JsMsg` carries the acknowledgement or a
+-- typed unavailability. Both cross the same seal codec and fail-closed port
+-- discipline as every other port; there is no second transport.
+--
+-- Importing this reserved `Ipe.Browser.<Api>` module discloses `js-port:vibration`
+-- (import-derived, keyed on the canonical `Ipe.Browser.Vibration` path prefix via
+-- `WebCapability::for_browser_module`, alias-immune); only the top-level app's
+-- `[capabilities] accepts` set can grant it.
+--
+-- The two layers:
+--
+--   * `Ipe.Browser.Vibration.Internals` publishes the closed outbound/inbound ADTs
+--     and the raw `Ipe.Ffi.Js` wiring.
+--   * this module is the high-level layer: `vibrate` / `pattern` / `cancel` are
+--     `Cmd`-shaped (fire-and-forget), and `acknowledgements` is the inbound
+--     subscription folding the narrow `JsMsg` into a typed `Result Error ()`. The
+--     inbound `case` is EXHAUSTIVE: an unavailability becomes a typed `Err`, never
+--     a silently dropped variant.
+module Ipe.Browser.Vibration exposing
+    ( vibrate
+    , pattern
+    , cancel
+    , acknowledgements
+    )
+
+import Ipe.Browser.Vibration.Internals as Internals exposing (JsMsg(..))
+import Ipe.Error as Error exposing (Error)
+import Ipe.Tea.Web.Cmd as Cmd
+import Ipe.Tea.Web.Sub as Sub
+
+
+-- | `vibrate ms` — vibrate for `ms` milliseconds. Outbound `Cmd`; an absent
+-- actuator traps to a typed inbound result on the `acknowledgements` subscription,
+-- never a panic.
+--
+-- Importing this module discloses `js-port:vibration`; the app must grant it with
+-- `accepts = [ JsPort Vibration ]` under [capabilities] in package.ipe.
+vibrate : Int -> Cmd.Cmd msg
+vibrate ms =
+    Internals.request (Internals.Vibrate ms)
+
+
+-- | `pattern durations` — vibrate/pause along the alternating on/off `durations`
+-- (each in milliseconds). Outbound `Cmd`.
+pattern : List Int -> Cmd.Cmd msg
+pattern durations =
+    Internals.request (Internals.Pattern durations)
+
+
+-- | `cancel` — stop any ongoing vibration. Outbound `Cmd`.
+cancel : Cmd.Cmd msg
+cancel =
+    Internals.request Internals.Cancel
+
+
+-- | `acknowledgements toMsg` — the inbound subscription, wired in `subscriptions`.
+--
+-- The decoder IS the security gate: every inbound value runs through the total,
+-- bounded seal decoder for the narrow `JsMsg`; a malformed / mismatched frame is
+-- dropped whole. A decoded `JsMsg` is folded EXHAUSTIVELY into a
+-- `Result Error ()` — a `Vibrated` becomes `Ok`, an unavailability a typed `Err`.
+acknowledgements : (Result Error () -> msg) -> Sub.Sub msg
+acknowledgements toMsg =
+    Internals.subscribe (\inbound -> toMsg (toResult inbound))
+
+
+-- | Fold the narrow inbound `JsMsg` into a typed `Result Error ()`. The `case`
+-- is exhaustive over every published inbound variant.
+toResult : Internals.JsMsg -> Result Error ()
+toResult inbound =
+    case inbound of
+        Vibrated ->
+            Ok ()
+
+        Unavailable ->
+            Err (Error.unavailable "vibration actuator unavailable")

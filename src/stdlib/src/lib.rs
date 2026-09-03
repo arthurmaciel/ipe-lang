@@ -716,6 +716,25 @@ const IPE_BROWSER_STORAGE: &str = include_str!("../Ipe/Browser/Storage.ipe");
 const IPE_BROWSER_STORAGE_INTERNALS: &str =
     include_str!("../Ipe/Browser/Storage/Internals.ipe");
 
+/// `Ipe.Browser.Vibration` — drive the device vibration actuator over `Ipe.Ffi.Js`
+/// ports (compiled source), spanning BOTH port directions: an outbound `JsCmd`
+/// request (`vibrate` / `pattern` / `cancel`) and an inbound `JsMsg` reply folded
+/// exhaustively into `Result Error ()`. Importing it discloses `js-port:vibration`
+/// (import-derived, keyed on the canonical `Ipe.Browser.Vibration` path prefix via
+/// `WebCapability::for_browser_module`). The served wasm-sink JS handler reaches
+/// `navigator.vibrate`, trapping an absent actuator to the typed `Unavailable`
+/// inbound variant. Registered in [`COMPILED_STD_MODULES`] (NOT `MODULES`); NOT in
+/// `STDLIB_MODULE_QUALIFIERS`.
+const IPE_BROWSER_VIBRATION: &str = include_str!("../Ipe/Browser/Vibration.ipe");
+
+/// `Ipe.Browser.Vibration.Internals` — the low-level Vibration port surface: the
+/// closed outbound/inbound ADTs and the raw `Ipe.Ffi.Js` wiring the high-level
+/// layer wraps. Importing it discloses the same `js-port:vibration` axis (the
+/// prefix key covers the submodule). Registered in [`COMPILED_STD_MODULES`] (NOT
+/// `MODULES`); NOT in `STDLIB_MODULE_QUALIFIERS`.
+const IPE_BROWSER_VIBRATION_INTERNALS: &str =
+    include_str!("../Ipe/Browser/Vibration/Internals.ipe");
+
 /// `Ipe.Env` — build-time-embedded public config (compiled source).
 ///
 /// Defines `public : String -> Maybe String`, routed through the
@@ -1194,6 +1213,14 @@ pub const COMPILED_STD_MODULES: &[CompiledStdModule] = &[
     CompiledStdModule {
         dotted: "Ipe.Browser.Storage.Internals",
         source: IPE_BROWSER_STORAGE_INTERNALS,
+    },
+    CompiledStdModule {
+        dotted: "Ipe.Browser.Vibration",
+        source: IPE_BROWSER_VIBRATION,
+    },
+    CompiledStdModule {
+        dotted: "Ipe.Browser.Vibration.Internals",
+        source: IPE_BROWSER_VIBRATION_INTERNALS,
     },
     CompiledStdModule {
         dotted: "Ipe.Env",

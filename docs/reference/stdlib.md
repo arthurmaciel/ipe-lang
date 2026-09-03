@@ -17,6 +17,8 @@ Each module listed below links to a detail page with the full documentation and 
 - [Browser.Notification.Internals](#browsernotificationinternals)
 - [Browser.Storage](#browserstorage)
 - [Browser.Storage.Internals](#browserstorageinternals)
+- [Browser.Vibration](#browservibration)
+- [Browser.Vibration.Internals](#browservibrationinternals)
 - [ByteSize](#bytesize)
 - [Bytes](#bytes)
 - [Cache](#cache)
@@ -280,6 +282,34 @@ Ipe.Browser.Storage.Internals — the low-level Web Storage port surface: the
 | `requestOne` | `requestOne cmd` — correlated one-shot `JsCmd` → `Task Error JsMsg`. |
 | `subscribe` | `subscribe toMsg` — the inbound subscription over the fail-closed seal |
 | `inbound` | The total, fail-closed decoder for the inbound `JsMsg`. It reads `ok` first: a |
+
+## Browser.Vibration
+
+[Full reference](stdlib/Browser.Vibration.md)
+
+Ipe.Browser.Vibration — drive the device vibration actuator over `Ipe.Ffi.Js`
+
+| Export | Summary |
+|--------|----------|
+| `vibrate` | `vibrate ms` — vibrate for `ms` milliseconds. Outbound `Cmd`; an absent |
+| `pattern` | `pattern durations` — vibrate/pause along the alternating on/off `durations` |
+| `cancel` | `cancel` — stop any ongoing vibration. Outbound `Cmd`. |
+| `acknowledgements` | `acknowledgements toMsg` — the inbound subscription, wired in `subscriptions`. |
+
+## Browser.Vibration.Internals
+
+[Full reference](stdlib/Browser.Vibration.Internals.md)
+
+Ipe.Browser.Vibration.Internals — the low-level Vibration port surface: the
+
+| Export | Summary |
+|--------|----------|
+| `JsCmd` | The ONE closed OUTBOUND port type: the whole outbound surface as a single |
+| `JsMsg` | The NARROW closed INBOUND port type — deliberately NOT the app's internal |
+| `request` | `request cmd` — hand a closed outbound `JsCmd` to the raw port transport. |
+| `requestOne` | `requestOne cmd` — correlated one-shot `JsCmd` → `Task Error JsMsg`. |
+| `subscribe` | `subscribe toMsg` — the inbound subscription over the fail-closed seal |
+| `inbound` | The total, fail-closed decoder for the inbound `JsMsg`. It reads the `ok` |
 
 ## ByteSize
 
