@@ -343,6 +343,23 @@ pub enum CompileUiTemplate {
         /// element fills.
         item_template: Box<Self>,
     },
+    /// A model-chosen wrapping element around a fixed child subtree. The wrapper
+    /// variant — `UiTaggedNode` or `UiNode` with its tag and attrs — is chosen
+    /// at render from the per-render wrapper-fill slice; the child subtree is
+    /// fixed and may itself carry holes.
+    ///
+    /// The recognizer admits an `if`/`case` in element position whose arms are
+    /// ALL element-node calls (`UiTaggedNode` / `UiNode`) with IDENTICAL children
+    /// and only the tag/attrs differing. Conservative: any arm whose tag/attrs are
+    /// non-literal, or any arms with different children, refuses and falls back.
+    WrapperHole {
+        /// Index into the per-render wrapper-fill slice. Index `hole_id` is the
+        /// wrapper template chosen for this position this render.
+        hole_id: usize,
+        /// The fixed child subtree, templatized once. May itself carry value,
+        /// handler, control-flow, or list holes.
+        child: Box<Self>,
+    },
     Node {
         desc: CompileUiDesc,
         attrs: Vec<CompileUiAttr>,
@@ -391,6 +408,15 @@ impl CompileUiTemplate {
                 let _ = write!(out, "{hole_id}");
                 out.push_str(",\"item_template\":");
                 item_template.write_json(out);
+                out.push_str("}}");
+            }
+            // `{"WrapperHole":{"hole_id":N,"child":<template>}}` — mirrors
+            // the runtime `UiTemplate::WrapperHole` struct-variant serde form.
+            Self::WrapperHole { hole_id, child } => {
+                out.push_str("{\"WrapperHole\":{\"hole_id\":");
+                let _ = write!(out, "{hole_id}");
+                out.push_str(",\"child\":");
+                child.write_json(out);
                 out.push_str("}}");
             }
             Self::Node {
@@ -614,6 +640,24 @@ pub struct ListHoleFill {
     pub item_fills: Vec<Expr>,
 }
 
+/// Per-render fill for a [`CompileUiTemplate::WrapperHole`]: the arm-selector
+/// expression (evaluates to a `usize` arm index at render) and the arm wrapper
+/// templates in source order — one per arm of the source `if`/`case`. The emit
+/// layer evaluates the selector and passes `wrapper_arms[selector]` as the
+/// wrapper-fill `UiTemplate` to the runtime materializer.
+#[derive(Clone, Debug, PartialEq)]
+pub struct WrapperHoleFill {
+    /// Expression that evaluates to the zero-based arm index chosen this render.
+    /// For an `if`: `if cond { 0usize } else { 1usize }`.
+    pub selector_expr: Expr,
+    /// The per-arm wrapper templates in source order. Each is a
+    /// `CompileUiTemplate::TaggedNode` or `CompileUiTemplate::Node` with an
+    /// empty `children` list — encoding only the wrapper tag / desc / attrs.
+    /// The runtime materializer picks `wrapper_arms[selector]` and wraps the
+    /// materialized child with it.
+    pub wrapper_arms: Vec<CompileUiTemplate>,
+}
+
 /// The result of a hole-bearing partition: the (inert) template skeleton with
 /// numbered hole markers, plus the compiled fills in index order.
 #[derive(Clone, Debug, PartialEq)]
@@ -634,13 +678,17 @@ pub struct HolePartition {
     /// expression and per-item element-producer closures for a
     /// [`CompileUiTemplate::ListHole`] with `hole_id` i.
     pub list_holes: Vec<ListHoleFill>,
+    /// Wrapper-hole fills, in hole-id order. Each [`WrapperHoleFill`] carries the
+    /// arm-selector expression and per-arm wrapper templates for a
+    /// [`CompileUiTemplate::WrapperHole`] with `hole_id` i.
+    pub wrapper_holes: Vec<WrapperHoleFill>,
 }
 
 /// The per-render capture accumulators threaded through the partition recursion:
 /// the value/children hole fills, model-dependent handler `Msg` expressions,
-/// control-flow arm-selector expressions, and list-hole fills (each in
-/// hole-id order). All grow in place as the recursion records each hole,
-/// handler capture, CF branch, or list expansion.
+/// control-flow arm-selector expressions, list-hole fills, and wrapper-hole fills
+/// (each in hole-id order). All grow in place as the recursion records each hole,
+/// handler capture, CF branch, list expansion, or wrapper selection.
 #[derive(Default)]
 struct Captures {
     /// Value / opaque-control-flow / `List.map` hole fills, in per-kind index order.
@@ -655,6 +703,9 @@ struct Captures {
     /// List-hole fills, in hole-id order — index i is the [`ListHoleFill`] for
     /// the [`CompileUiTemplate::ListHole`] with `hole_id` i.
     list_holes: Vec<ListHoleFill>,
+    /// Wrapper-hole fills, in hole-id order — index i is the [`WrapperHoleFill`]
+    /// for the [`CompileUiTemplate::WrapperHole`] with `hole_id` i.
+    wrapper_holes: Vec<WrapperHoleFill>,
 }
 
 /// The capture accumulator threaded through the partition recursion. `None` =
@@ -713,6 +764,7 @@ pub fn ui_template_of_expr_holes(
         handlers: captures.handlers,
         cf_holes: captures.cf_holes,
         list_holes: captures.list_holes,
+        wrapper_holes: captures.wrapper_holes,
     })
 }
 
@@ -744,6 +796,12 @@ fn ui_template_of_expr_at(
     // In pure mode `holes` is `None`, so both paths are skipped and the
     // non-Call expression refuses below — the shipped behaviour unchanged.
     if let Expr::If { cond, then_, else_ } = expr {
+        // Attempt wrapper hole first (more specific than CF hole): an `if` whose
+        // arms are BOTH element-node builders differing only in tag/attrs over the
+        // SAME children subtree. Falls through to CF hole on failure.
+        if let Some(wh) = try_wrapper_hole_if(cond, then_, else_, wrappers, depth, holes) {
+            return Some(wh);
+        }
         return try_control_flow_hole_if(cond, then_, else_, wrappers, depth, holes);
     }
     if let Expr::Match(m) = expr {
@@ -875,6 +933,7 @@ fn try_control_flow_hole_if(
         handlers: Vec::new(),
         cf_holes: Vec::new(),
         list_holes: Vec::new(),
+        wrapper_holes: Vec::new(),
     };
     let arm_result = (|| -> Option<(CompileUiTemplate, CompileUiTemplate)> {
         let t = ui_template_of_expr_at(then_, wrappers, depth, &mut Some(&mut arm_captures))?;
@@ -889,6 +948,7 @@ fn try_control_flow_hole_if(
             acc.handlers.extend(arm_captures.handlers);
             acc.cf_holes.extend(arm_captures.cf_holes);
             acc.list_holes.extend(arm_captures.list_holes);
+            acc.wrapper_holes.extend(arm_captures.wrapper_holes);
         }
         // The arm-selector expression evaluates the condition and yields
         // 0 (true branch) or 1 (false branch). The emit layer casts the
@@ -940,6 +1000,7 @@ fn try_control_flow_hole_match(
         handlers: Vec::new(),
         cf_holes: Vec::new(),
         list_holes: Vec::new(),
+        wrapper_holes: Vec::new(),
     };
     let arm_templates: Option<Vec<CompileUiTemplate>> = arms_slice
         .iter()
@@ -954,6 +1015,7 @@ fn try_control_flow_hole_match(
                 acc.handlers.extend(arm_captures.handlers);
                 acc.cf_holes.extend(arm_captures.cf_holes);
                 acc.list_holes.extend(arm_captures.list_holes);
+                acc.wrapper_holes.extend(arm_captures.wrapper_holes);
             }
             // Build the arm-selector expression: a `Match` with Int bodies.
             let selector_expr = build_match_arm_selector(m);
@@ -1003,6 +1065,198 @@ fn push_control_flow_hole(
         expr: selector_expr,
     });
     Some(CompileUiTemplate::ControlFlowHole { hole_id, arms })
+}
+
+/// Try to recognize an `if cond then_ else_` as a
+/// [`CompileUiTemplate::WrapperHole`]: an if whose arms are BOTH element-node
+/// kernel calls (`UiTaggedNode` / `UiNode`) with IDENTICAL children and only the
+/// tag / attrs differing. Conservative recognizer: requires literal tag strings,
+/// static attrs (no `Model` read), and syntactically equal children expressions.
+/// Anything unrecognized returns `None` so the caller falls through to the CF-hole
+/// path, which in turn falls through to opaque element hole — byte-identical to
+/// the pre-wrapper-hole behaviour.
+///
+/// In pure mode (`holes` is `None`) returns `None` immediately.
+fn try_wrapper_hole_if(
+    cond: &Expr,
+    then_: &Expr,
+    else_: &Expr,
+    wrappers: Option<&BTreeMap<FuncId, WrapperBody>>,
+    depth: usize,
+    holes: &mut Holes,
+) -> Option<CompileUiTemplate> {
+    // Pure mode: no hole accumulator.
+    holes.as_ref()?;
+
+    // Extract wrapper arms: both must be UiTaggedNode or UiNode calls.
+    let (then_wrapper, then_children) = extract_wrapper_arm(then_, wrappers)?;
+    let (else_wrapper, else_children) = extract_wrapper_arm(else_, wrappers)?;
+
+    // Children must be IDENTICAL expressions (syntactic equality). This is the
+    // conservative guard: if the arms' children differ, the shape is not a pure
+    // wrapper selection and must fall back to CF hole / opaque hole.
+    if then_children != else_children {
+        return None;
+    }
+
+    // Templatize the shared children into a SIDE accumulator so failure leaves
+    // the primary holes accumulator clean.
+    let mut child_captures = Captures::default();
+    let child_template = static_children(
+        then_children,
+        wrappers,
+        depth,
+        &mut Some(&mut child_captures),
+    )?;
+
+    // Wrap the children in the simplest Node so we can store the child template.
+    // There is always exactly one child subtree here (the shared children list).
+    // We build a synthetic `Node { desc: NoDescription, attrs: [], children: child_template }`,
+    // but actually we want to store the templatized children as the single child node.
+    // The wrapper hole's `child` is the element that the wrapper wraps — i.e. the
+    // shared children are the sub-elements of the wrapping node. To keep the
+    // interface clean, build a synthetic static `Node` containing the templated children.
+    //
+    // Simpler: the child IS the shared children list wrapped in a synthetic node whose
+    // desc/attrs are empty. But that adds spurious structure. Instead: the child is
+    // the templatized version of `then_children` directly — a `Vec<CompileUiTemplate>`.
+    // Since `WrapperHole.child` is a single `Box<CompileUiTemplate>`, and the children
+    // list may be multi-element, we need a wrapping Node. Use a synthetic NoDescription
+    // / no-attr `Node` to hold the child list.
+    let child_node = if child_template.len() == 1 {
+        // Single-child: use it directly.
+        child_template.into_iter().next()?
+    } else {
+        // Multi-child: wrap in a synthetic node with no attrs/desc.
+        CompileUiTemplate::Node {
+            desc: CompileUiDesc::NoDescription,
+            attrs: vec![],
+            children: child_template,
+        }
+    };
+
+    // Build the arm-selector expression.
+    let selector_expr = Expr::If {
+        cond: Box::new(cond.clone()),
+        then_: Box::new(Expr::Int(0)),
+        else_: Box::new(Expr::Int(1)),
+    };
+
+    // Merge child_captures into the primary accumulator.
+    if let Some(acc) = holes.as_mut() {
+        acc.holes.extend(child_captures.holes);
+        acc.handlers.extend(child_captures.handlers);
+        acc.cf_holes.extend(child_captures.cf_holes);
+        acc.list_holes.extend(child_captures.list_holes);
+        acc.wrapper_holes.extend(child_captures.wrapper_holes);
+    }
+
+    push_wrapper_hole(
+        selector_expr,
+        vec![then_wrapper, else_wrapper],
+        Box::new(child_node),
+        holes,
+    )
+}
+
+/// Extract the wrapper (tag/desc/attrs, no children) and the children expression
+/// from an element-node call (`UiTaggedNode` / `UiNode`). Returns `None` for any
+/// other callee or non-static attrs. The children expression is returned as-is
+/// (to be compared for equality across arms).
+///
+/// Wrapper resolution is applied first: if the arm is a `Callee::Func` whose id
+/// resolves in `wrappers`, the body is inlined and the result re-extracted.
+fn extract_wrapper_arm<'e>(
+    arm: &'e Expr,
+    wrappers: Option<&BTreeMap<FuncId, WrapperBody>>,
+) -> Option<(CompileUiTemplate, &'e Expr)> {
+    // Beta-reduce a `Let` binder before inspecting the arm.
+    if let Expr::Let { name, value, body } = arm {
+        // Use a temp owned reduction; we cannot return a reference into a
+        // temporary, so wrapper-arm extraction can only proceed if the let-reduced
+        // result is itself a direct kernel call (no binder indirection). For the
+        // common `if model.link then Ui.a [attrs] else Ui.span []` shape the arms
+        // are direct calls, so this bails out on anything with an intermediate Let.
+        let _ = (name, value, body);
+        return None;
+    }
+    // Structural wrapper: inline if recognized.
+    if let Expr::Call {
+        callee: Callee::Func(id),
+        args,
+        ..
+    } = arm
+    {
+        if let Some((params, body)) = wrappers.and_then(|m| m.get(id)) {
+            let inlined = substitute_wrapper(body, params, args);
+            return extract_wrapper_arm_inlined(&inlined, wrappers);
+        }
+        return None;
+    }
+    extract_wrapper_arm_direct(arm)
+}
+
+/// Attempt to extract a wrapper + children from an OWNED (inlined) expression.
+/// Cannot return a reference to the inlined children (they live in a temporary),
+/// so this path always returns `None` — conservative fallback to CF hole.
+const fn extract_wrapper_arm_inlined(
+    _inlined: &Expr,
+    _wrappers: Option<&BTreeMap<FuncId, WrapperBody>>,
+) -> Option<(CompileUiTemplate, &'static Expr)> {
+    None
+}
+
+/// Extract wrapper + children from a direct kernel call.
+fn extract_wrapper_arm_direct(arm: &Expr) -> Option<(CompileUiTemplate, &Expr)> {
+    let Expr::Call { callee, args, .. } = arm else {
+        return None;
+    };
+    let Callee::Kernel(k) = callee else {
+        return None;
+    };
+    match (k, args.as_slice()) {
+        (KernelFn::UiTaggedNode, [Expr::Str(tag), desc, attrs, children]) => {
+            // Static desc and attrs only.
+            let s_desc = static_desc(desc)?;
+            let s_attrs = static_attrs(attrs, &mut None)?;
+            let wrapper = CompileUiTemplate::TaggedNode {
+                tag: tag.clone(),
+                desc: s_desc,
+                attrs: s_attrs,
+                children: vec![],
+            };
+            Some((wrapper, children))
+        }
+        (KernelFn::UiNode, [desc, attrs, children]) => {
+            let s_desc = static_desc(desc)?;
+            let s_attrs = static_attrs(attrs, &mut None)?;
+            let wrapper = CompileUiTemplate::Node {
+                desc: s_desc,
+                attrs: s_attrs,
+                children: vec![],
+            };
+            Some((wrapper, children))
+        }
+        _ => None,
+    }
+}
+
+/// Record `arms` as a wrapper hole and return its numbered marker, or `None` in
+/// pure mode. The selector expression (evaluating to a `usize` arm index) and the
+/// per-arm wrapper templates are recorded in `wrapper_holes`.
+fn push_wrapper_hole(
+    selector_expr: Expr,
+    wrapper_arms: Vec<CompileUiTemplate>,
+    child: Box<CompileUiTemplate>,
+    holes: &mut Holes,
+) -> Option<CompileUiTemplate> {
+    let acc = holes.as_mut()?;
+    let hole_id = acc.wrapper_holes.len();
+    acc.wrapper_holes.push(WrapperHoleFill {
+        selector_expr,
+        wrapper_arms,
+    });
+    Some(CompileUiTemplate::WrapperHole { hole_id, child })
 }
 
 /// Try to templatize a `List.map f xs` call as a [`CompileUiTemplate::ListHole`]
@@ -1071,7 +1325,8 @@ fn try_list_hole(
                 .any(|h| h.kind != HoleKind::Element)
                 || !item_captures.handlers.is_empty()
                 || !item_captures.cf_holes.is_empty()
-                || !item_captures.list_holes.is_empty();
+                || !item_captures.list_holes.is_empty()
+                || !item_captures.wrapper_holes.is_empty();
 
             if has_non_element_holes {
                 return push_children_hole(list_map_call, holes);
@@ -2964,6 +3219,121 @@ mod tests {
         assert_eq!(
             t.to_json(),
             r#"{"ListHole":{"hole_id":0,"item_template":{"Hole":0}}}"#
+        );
+    }
+
+    // ── WrapperHole — JSON shape pin ─────────────────────────────────────────
+
+    // `WrapperHole` serializes as `{"WrapperHole":{"hole_id":N,"child":<tmpl>}}`
+    // — the runtime `UiTemplate::WrapperHole` struct-variant serde form. Pinned
+    // here so a drift on either side fails both the backend and runtime pin.
+    #[test]
+    fn json_wrapper_hole_shape() {
+        let t = CompileUiTemplate::WrapperHole {
+            hole_id: 0,
+            child: Box::new(CompileUiTemplate::Text("label".to_string())),
+        };
+        assert_eq!(
+            t.to_json(),
+            r#"{"WrapperHole":{"hole_id":0,"child":{"Text":"label"}}}"#
+        );
+    }
+
+    // ── WrapperHole recognizer ───────────────────────────────────────────────
+
+    // Helper: `UiTaggedNode(tag, descNone, attrs_expr, children)` kernel call.
+    fn tagged_node(tag: &str, attrs_expr: Expr, children: Expr) -> Expr {
+        kcall(
+            KernelFn::UiTaggedNode,
+            vec![
+                Expr::Str(tag.to_string()),
+                desc_none(),
+                attrs_expr,
+                children,
+            ],
+        )
+    }
+
+    // An `if` whose arms are `UiTaggedNode` calls with the SAME children and
+    // different tags → recognized as a `WrapperHole`.
+    #[test]
+    fn wrapper_hole_if_with_same_children_recognized() {
+        use super::ui_template_of_expr_holes;
+        let shared_children = child_list(vec![text("label")]);
+
+        let then_ = tagged_node("a", attr_list(vec![]), shared_children.clone());
+        let else_ = tagged_node("span", attr_list(vec![]), shared_children);
+
+        let expr = Expr::If {
+            cond: Box::new(Expr::Var(sym(1))),
+            then_: Box::new(then_),
+            else_: Box::new(else_),
+        };
+
+        let result =
+            ui_template_of_expr_holes(&expr, None).expect("should templatize as wrapper hole");
+        assert!(
+            matches!(
+                result.template,
+                CompileUiTemplate::WrapperHole { hole_id: 0, .. }
+            ),
+            "expected WrapperHole(0), got {:?}",
+            result.template
+        );
+        assert_eq!(result.wrapper_holes.len(), 1, "one wrapper fill expected");
+        let fill = result.wrapper_holes.first().expect("one wrapper fill");
+        assert_eq!(fill.wrapper_arms.len(), 2, "two wrapper arm templates");
+        // Arm 0 is the `a` tag, arm 1 is the `span` tag.
+        assert!(
+            matches!(fill.wrapper_arms.first().expect("arm 0"), CompileUiTemplate::TaggedNode { tag, .. } if tag == "a"),
+            "arm 0 must be TaggedNode(a)"
+        );
+        assert!(
+            matches!(fill.wrapper_arms.get(1).expect("arm 1"), CompileUiTemplate::TaggedNode { tag, .. } if tag == "span"),
+            "arm 1 must be TaggedNode(span)"
+        );
+    }
+
+    // An `if` whose arms have DIFFERENT children → NOT a wrapper hole; falls back
+    // to CF hole (both arms are templatizable) or opaque element hole.
+    #[test]
+    fn wrapper_hole_if_with_different_children_not_recognized() {
+        use super::ui_template_of_expr_holes;
+        let children_a = child_list(vec![text("link")]);
+        let children_b = child_list(vec![text("label")]);
+
+        let then_ = tagged_node("a", attr_list(vec![]), children_a);
+        let else_ = tagged_node("span", attr_list(vec![]), children_b);
+
+        let expr = Expr::If {
+            cond: Box::new(Expr::Var(sym(1))),
+            then_: Box::new(then_),
+            else_: Box::new(else_),
+        };
+
+        let result =
+            ui_template_of_expr_holes(&expr, None).expect("should templatize (CF or element hole)");
+        assert!(
+            !matches!(result.template, CompileUiTemplate::WrapperHole { .. }),
+            "different children must NOT produce a WrapperHole, got {:?}",
+            result.template
+        );
+        assert!(result.wrapper_holes.is_empty(), "no wrapper holes expected");
+    }
+
+    // WrapperHole JSON serializes to the byte-identical serde form the runtime
+    // decodes — the baked default round-trips through the runtime decoder.
+    #[test]
+    fn wrapper_hole_json_is_byte_identical_to_runtime_serde() {
+        // The JSON the backend emits for a WrapperHole with a Text child.
+        let backend_json = CompileUiTemplate::WrapperHole {
+            hole_id: 0,
+            child: Box::new(CompileUiTemplate::Text("label".to_string())),
+        }
+        .to_json();
+        assert_eq!(
+            backend_json, r#"{"WrapperHole":{"hole_id":0,"child":{"Text":"label"}}}"#,
+            "backend JSON must match the runtime serde form"
         );
     }
 }

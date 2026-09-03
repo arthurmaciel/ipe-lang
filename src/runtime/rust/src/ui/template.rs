@@ -593,6 +593,28 @@ pub enum UiTemplate {
         /// item, substituting that item's element fills in index order.
         item_template: Box<UiTemplate>,
     },
+    /// A model-chosen wrapping element around a fixed child subtree. The
+    /// wrapper — which `Element` variant (`TaggedNode` / `Node`) and its attrs —
+    /// is chosen at render from the per-render wrapper-fill slice; the child
+    /// subtree is the same every render and stays a static (or hole-carrying)
+    /// template.
+    ///
+    /// `hole_id` indexes `wrapper_fills[hole_id]`: a `UiTemplate` whose top
+    /// variant is `TaggedNode` or `Node` with an empty `children` list —
+    /// it encodes only the wrapper tag / desc / attrs. Materialize reconstructs
+    /// the element with those attributes and `[materialized_child]` as children.
+    ///
+    /// Fail-closed on every ill-formed input: a missing fill, an already-consumed
+    /// fill, or a fill whose top node is not a recognised wrapper shape all
+    /// materialize `child` standalone (unwrapped) — never a panic. Each variant
+    /// is additive: a template using only prior hole kinds emits byte-identically.
+    WrapperHole {
+        /// Index into the per-render wrapper-fill slice.
+        hole_id: usize,
+        /// The fixed child subtree, templatized once. May itself carry value,
+        /// handler, control-flow, or list holes resolved from the same fills.
+        child: Box<UiTemplate>,
+    },
 }
 
 impl Drop for UiTemplate {
@@ -611,6 +633,9 @@ impl Drop for UiTemplate {
             UiTemplate::ListHole { item_template, .. } => {
                 vec![std::mem::replace(item_template.as_mut(), UiTemplate::Empty)]
             }
+            UiTemplate::WrapperHole { child, .. } => {
+                vec![std::mem::replace(child.as_mut(), UiTemplate::Empty)]
+            }
             UiTemplate::Empty
             | UiTemplate::Text(_)
             | UiTemplate::Hole(_)
@@ -626,6 +651,9 @@ impl Drop for UiTemplate {
                 }
                 UiTemplate::ListHole { item_template, .. } => {
                     pending.push(std::mem::replace(item_template.as_mut(), UiTemplate::Empty));
+                }
+                UiTemplate::WrapperHole { child, .. } => {
+                    pending.push(std::mem::replace(child.as_mut(), UiTemplate::Empty));
                 }
                 UiTemplate::Empty
                 | UiTemplate::Text(_)
@@ -693,6 +721,9 @@ impl UiTemplate {
                 UiTemplate::ListHole { item_template, .. } => {
                     stack.push((item_template, depth.saturating_add(1)));
                 }
+                UiTemplate::WrapperHole { child, .. } => {
+                    stack.push((child, depth.saturating_add(1)));
+                }
                 _ => {}
             }
         }
@@ -743,6 +774,7 @@ pub fn materialize_ui_template_with_holes<M>(
         children: children_holes.into_iter().map(Some).collect(),
         control_flow: Vec::new(),
         list_items: Vec::new(),
+        wrapper_fills: Vec::new(),
     };
     materialize_ui_at(template, 0, &mut fills)
 }
@@ -763,6 +795,12 @@ struct HoleFills<M> {
     /// element-fill slice for one materialization of the item template. An
     /// out-of-range or already-consumed slot produces an empty items run.
     list_items: Vec<Option<Vec<Vec<Element<M>>>>>,
+    /// Per-render wrapper fills for [`UiTemplate::WrapperHole`] nodes: index `i`
+    /// is a `UiTemplate` whose top node is a `TaggedNode` or `Node` with an
+    /// empty `children` list — it encodes the chosen wrapper tag / desc / attrs.
+    /// An out-of-range, already-consumed, or ill-shaped fill materializes the
+    /// child standalone — fail-closed, never a panic.
+    wrapper_fills: Vec<Option<UiTemplate>>,
 }
 
 impl<M> HoleFills<M> {
@@ -772,6 +810,7 @@ impl<M> HoleFills<M> {
             children: Vec::new(),
             control_flow: Vec::new(),
             list_items: Vec::new(),
+            wrapper_fills: Vec::new(),
         }
     }
 
@@ -807,6 +846,14 @@ impl<M> HoleFills<M> {
             .and_then(Option::take)
             .unwrap_or_default()
     }
+
+    /// Take the wrapper-fill `UiTemplate` at `idx` for a
+    /// [`UiTemplate::WrapperHole`], or `None` when the index is out of range or
+    /// already consumed. Fail-closed: a `None` result causes materialize to
+    /// render the child standalone, never a panic.
+    fn take_wrapper(&mut self, idx: usize) -> Option<UiTemplate> {
+        self.wrapper_fills.get_mut(idx).and_then(Option::take)
+    }
 }
 
 fn materialize_ui_at<M>(
@@ -840,6 +887,9 @@ fn materialize_ui_at<M>(
         // [`materialize_children`] expands it to N sibling elements. Reaching it
         // as a standalone element (a malformed decode) is inert: empty element.
         UiTemplate::ListHole { .. } => Element::Empty,
+        UiTemplate::WrapperHole { hole_id, child } => {
+            materialize_wrapper_hole(*hole_id, child, depth, fills)
+        }
         UiTemplate::Node {
             desc,
             attrs,
@@ -860,6 +910,40 @@ fn materialize_ui_at<M>(
             attrs.iter().map(UiTemplateAttr::to_attr).collect(),
             materialize_children(children, depth, fills),
         ),
+    }
+}
+
+/// Materialize a [`UiTemplate::WrapperHole`]: take the wrapper-fill template,
+/// extract its tag / desc / attrs, materialize `child`, and wrap it. Fail-closed:
+/// a missing fill, an already-consumed fill, or a fill whose top node is not a
+/// `TaggedNode` / `Node` all materialize `child` standalone — no panic.
+fn materialize_wrapper_hole<M>(
+    hole_id: usize,
+    child: &UiTemplate,
+    depth: usize,
+    fills: &mut HoleFills<M>,
+) -> Element<M> {
+    let materialized_child = materialize_ui_at(child, depth.saturating_add(1), fills);
+    // Extract tag/desc/attrs from the wrapper fill without partial-moving out of
+    // the Drop type. The Option is owned, so we inspect the discriminant first
+    // and then extract each field explicitly with clone/to_desc.
+    let wrapper = fills.take_wrapper(hole_id);
+    match &wrapper {
+        Some(UiTemplate::TaggedNode {
+            tag, desc, attrs, ..
+        }) => Element::TaggedNode(
+            tag.clone(),
+            desc.to_desc(),
+            attrs.iter().map(UiTemplateAttr::to_attr).collect(),
+            vec![materialized_child],
+        ),
+        Some(UiTemplate::Node { desc, attrs, .. }) => Element::Node(
+            desc.to_desc(),
+            attrs.iter().map(UiTemplateAttr::to_attr).collect(),
+            vec![materialized_child],
+        ),
+        // Missing, consumed, or ill-shaped fill: render child standalone.
+        _ => materialized_child,
     }
 }
 
@@ -891,6 +975,7 @@ fn materialize_children<M>(
                     children: Vec::new(),
                     control_flow: Vec::new(),
                     list_items: Vec::new(),
+                    wrapper_fills: Vec::new(),
                 };
                 out.push(materialize_ui_at(
                     item_template,
@@ -965,14 +1050,15 @@ fn materialize_ui_at_with_handlers<M: Clone>(
     match template {
         UiTemplate::Empty => Element::Empty,
         UiTemplate::Text(s) => Element::Text(s.clone()),
-        // The handler front door carries no value/children/control-flow fills (its
-        // holes are the handler-id ATTR holes, resolved from `handlers`), so a
-        // value hole, a standalone children hole, and a control-flow hole are all
-        // inert here — the empty element, fail-closed, never a panic.
+        // The handler front door carries no value/children/control-flow/wrapper
+        // fills (its holes are the handler-id ATTR holes, resolved from
+        // `handlers`), so any structural hole is inert here — the empty element,
+        // fail-closed, never a panic.
         UiTemplate::Hole(_)
         | UiTemplate::ChildrenHole(_)
         | UiTemplate::ControlFlowHole { .. }
-        | UiTemplate::ListHole { .. } => Element::Empty,
+        | UiTemplate::ListHole { .. }
+        | UiTemplate::WrapperHole { .. } => Element::Empty,
         UiTemplate::Node {
             desc,
             attrs,
@@ -1016,9 +1102,11 @@ fn materialize_children_with_handlers<M: Clone>(
     for child in children {
         if matches!(
             child,
-            UiTemplate::ChildrenHole(_) | UiTemplate::ListHole { .. }
+            UiTemplate::ChildrenHole(_)
+                | UiTemplate::ListHole { .. }
+                | UiTemplate::WrapperHole { .. }
         ) {
-            // Neither hole has list-item fills on the handler-only path — skip.
+            // These holes have no fills on the handler-only path — skip.
             continue;
         }
         out.push(materialize_ui_at_with_handlers(
@@ -1127,6 +1215,7 @@ pub fn materialize_ui_template_str_with_holes_and_handlers<M: Clone>(
         children: children_holes.into_iter().map(Some).collect(),
         control_flow: Vec::new(),
         list_items: Vec::new(),
+        wrapper_fills: Vec::new(),
     };
     materialize_ui_at_combined(&template, handlers, 0, &mut fills)
 }
@@ -1148,6 +1237,34 @@ fn materialize_ui_at_combined<M: Clone>(
         UiTemplate::ChildrenHole(_) => Element::Empty,
         // A `ListHole` at the combined path: treat as standalone (no fills here).
         UiTemplate::ListHole { .. } => Element::Empty,
+        UiTemplate::WrapperHole { hole_id, child } => {
+            // Materialize the child first (through the combined path so its own
+            // holes resolve), then apply the wrapper fill.
+            let materialized_child = materialize_ui_at_combined(child, handlers, depth, fills);
+            let wrapper = fills.take_wrapper(*hole_id);
+            match &wrapper {
+                Some(UiTemplate::TaggedNode {
+                    tag, desc, attrs, ..
+                }) => Element::TaggedNode(
+                    tag.clone(),
+                    desc.to_desc(),
+                    attrs
+                        .iter()
+                        .map(|a| a.to_attr_with_handlers(handlers))
+                        .collect(),
+                    vec![materialized_child],
+                ),
+                Some(UiTemplate::Node { desc, attrs, .. }) => Element::Node(
+                    desc.to_desc(),
+                    attrs
+                        .iter()
+                        .map(|a| a.to_attr_with_handlers(handlers))
+                        .collect(),
+                    vec![materialized_child],
+                ),
+                _ => materialized_child,
+            }
+        }
         UiTemplate::ControlFlowHole { hole_id, arms } => {
             match fills.take_control_flow(*hole_id).and_then(|i| arms.get(i)) {
                 Some(arm) => materialize_ui_at_combined(arm, handlers, depth, fills),
@@ -1246,6 +1363,7 @@ pub fn materialize_ui_template_str_with_control_flow<M: Clone>(
         children: children_holes.into_iter().map(Some).collect(),
         control_flow: cf_selectors.into_iter().map(Some).collect(),
         list_items: Vec::new(),
+        wrapper_fills: Vec::new(),
     };
     materialize_ui_at_combined(&template, handlers, 0, &mut fills)
 }
@@ -1274,6 +1392,7 @@ pub fn materialize_ui_template_with_list_holes<M>(
         children: children_holes.into_iter().map(Some).collect(),
         control_flow: Vec::new(),
         list_items: list_item_fills.into_iter().map(Some).collect(),
+        wrapper_fills: Vec::new(),
     };
     materialize_ui_at(template, 0, &mut fills)
 }
@@ -1301,6 +1420,61 @@ pub fn materialize_ui_template_with_list_holes_str<M>(
         element_holes,
         children_holes,
         list_item_fills,
+    )
+}
+
+/// Rebuild an [`Element`] tree from a hole-bearing [`UiTemplate`], applying
+/// wrapper fills in addition to element and children holes.
+///
+/// - [`UiTemplate::Hole(n)`] → `element_holes[n]`, consumed once;
+/// - [`UiTemplate::ChildrenHole(n)`] → `children_holes[n]`, spliced in place;
+/// - [`UiTemplate::WrapperHole { hole_id: n, child }`] →
+///   materialize `child`, then wrap it with the tag / desc / attrs from
+///   `wrapper_fills[n]` (a `UiTemplate::TaggedNode` or `UiTemplate::Node`
+///   with an empty `children` list). A missing or ill-shaped fill renders
+///   `child` standalone — fail-closed, never a panic.
+///
+/// Existing hole kinds remain byte-identical when no `WrapperHole` is present.
+#[must_use]
+pub fn materialize_ui_template_with_wrapper_holes<M>(
+    template: &UiTemplate,
+    element_holes: Vec<Element<M>>,
+    children_holes: Vec<Vec<Element<M>>>,
+    wrapper_fills: Vec<UiTemplate>,
+) -> Element<M> {
+    let mut fills = HoleFills {
+        elements: element_holes.into_iter().map(Some).collect(),
+        children: children_holes.into_iter().map(Some).collect(),
+        control_flow: Vec::new(),
+        list_items: Vec::new(),
+        wrapper_fills: wrapper_fills.into_iter().map(Some).collect(),
+    };
+    materialize_ui_at(template, 0, &mut fills)
+}
+
+/// Decode a serialized [`UiTemplate`] and materialize it with wrapper holes —
+/// the JSON front door to [`materialize_ui_template_with_wrapper_holes`].
+///
+/// Fail-closed: decode failure or over-deep template → `Element::Empty`.
+#[cfg(feature = "json")]
+#[must_use]
+pub fn materialize_ui_template_with_wrapper_holes_str<M>(
+    json: &str,
+    element_holes: Vec<Element<M>>,
+    children_holes: Vec<Vec<Element<M>>>,
+    wrapper_fills: Vec<UiTemplate>,
+) -> Element<M> {
+    let Ok(template) = serde_json::from_str::<UiTemplate>(json) else {
+        return Element::Empty;
+    };
+    if template.check_bounds().is_err() {
+        return Element::Empty;
+    }
+    materialize_ui_template_with_wrapper_holes(
+        &template,
+        element_holes,
+        children_holes,
+        wrapper_fills,
     )
 }
 
@@ -2698,6 +2872,216 @@ mod tests {
             );
             let back: T = serde_json::from_str(&json).expect("deserialize");
             assert_eq!(back, t);
+        }
+    }
+
+    // ── wrapper hole ──────────────────────────────────────────────────────────
+    //
+    // A model-chosen wrapping element around a fixed child. The wrapper — tag /
+    // desc / attrs — is selected at render from the per-render wrapper-fill slice;
+    // the child subtree is fixed and may itself carry holes.
+    mod wrapper_holes {
+        use super::super::{
+            UiDescription, UiTemplate as T, UiTemplateAttr,
+            materialize_ui_template_with_wrapper_holes,
+        };
+        use super::*;
+
+        // Build a wrapper fill: a `TaggedNode` with the given tag and attrs, no
+        // children (the children come from the fixed child template).
+        fn tagged_wrapper(tag: &str, attrs: Vec<UiTemplateAttr>) -> T {
+            T::TaggedNode {
+                tag: tag.to_string(),
+                desc: UiDescription::NoDescription,
+                attrs,
+                children: vec![],
+            }
+        }
+
+        // A `WrapperHole` with a tagged-node fill wraps its child in the chosen tag.
+        // `wrapper_fills[0] = TaggedNode("a", [href], [])` + child = Text("label")
+        // → `Element::TaggedNode("a", [], [NoDescription], [Text("label")])`.
+        #[test]
+        fn wrapper_hole_tagged_node_fill_wraps_child() {
+            let template = T::WrapperHole {
+                hole_id: 0,
+                child: Box::new(T::Text("label".to_string())),
+            };
+            let wrapper = tagged_wrapper("a", vec![UiTemplateAttr::Class("link".to_string())]);
+            let got: Element<()> = materialize_ui_template_with_wrapper_holes(
+                &template,
+                vec![],
+                vec![],
+                vec![wrapper],
+            );
+            assert_eq!(
+                got,
+                Element::TaggedNode(
+                    "a".to_string(),
+                    Description::NoDescription,
+                    vec![Attribute::AttrClass("link".to_string())],
+                    vec![Element::Text("label".to_string())],
+                )
+            );
+        }
+
+        // A different fill (TaggedNode("span", [], [])) renders the same child in a
+        // span — same template, different wrapper, byte-distinct output.
+        #[test]
+        fn wrapper_hole_different_fill_different_output() {
+            let template = T::WrapperHole {
+                hole_id: 0,
+                child: Box::new(T::Text("label".to_string())),
+            };
+            let wrapper_a = tagged_wrapper("a", vec![]);
+            let wrapper_span = tagged_wrapper("span", vec![]);
+            let out_a: Element<()> = materialize_ui_template_with_wrapper_holes(
+                &template,
+                vec![],
+                vec![],
+                vec![wrapper_a],
+            );
+            let out_span: Element<()> = materialize_ui_template_with_wrapper_holes(
+                &template,
+                vec![],
+                vec![],
+                vec![wrapper_span],
+            );
+            assert_ne!(render(out_a), render(out_span));
+        }
+
+        // Fail-closed: a missing wrapper fill renders the child standalone —
+        // no panic, no empty element dropped, the child content is preserved.
+        #[test]
+        fn wrapper_hole_missing_fill_renders_child_standalone() {
+            let template = T::WrapperHole {
+                hole_id: 0,
+                child: Box::new(T::Text("content".to_string())),
+            };
+            let got: Element<()> =
+                materialize_ui_template_with_wrapper_holes(&template, vec![], vec![], vec![]);
+            assert_eq!(got, Element::Text("content".to_string()));
+        }
+
+        // Fail-closed: an out-of-range hole_id (fill at index 5, hole_id = 0
+        // is consumed but a hole with id=5 has no fill) renders child standalone.
+        #[test]
+        fn wrapper_hole_out_of_range_id_renders_child_standalone() {
+            let template = T::WrapperHole {
+                hole_id: 5,
+                child: Box::new(T::Text("content".to_string())),
+            };
+            let got: Element<()> = materialize_ui_template_with_wrapper_holes(
+                &template,
+                vec![],
+                vec![],
+                vec![tagged_wrapper("a", vec![])], // only index 0 filled
+            );
+            assert_eq!(got, Element::Text("content".to_string()));
+        }
+
+        // Child may carry its own value holes; those resolve from the element_holes
+        // fill, independent of the wrapper fill.
+        #[test]
+        fn wrapper_hole_child_value_hole_resolves() {
+            let template = T::WrapperHole {
+                hole_id: 0,
+                child: Box::new(T::Node {
+                    desc: UiDescription::NoDescription,
+                    attrs: vec![],
+                    children: vec![T::Hole(0)],
+                }),
+            };
+            let wrapper = tagged_wrapper("section", vec![]);
+            let fill = Element::Text("42".to_string());
+            let got: Element<()> = materialize_ui_template_with_wrapper_holes(
+                &template,
+                vec![fill.clone()],
+                vec![],
+                vec![wrapper],
+            );
+            assert_eq!(
+                got,
+                Element::TaggedNode(
+                    "section".to_string(),
+                    Description::NoDescription,
+                    vec![],
+                    vec![Element::Node(
+                        Description::NoDescription,
+                        vec![],
+                        vec![fill],
+                    )],
+                )
+            );
+        }
+
+        // JSON round-trip: `WrapperHole` serializes as
+        // `{"WrapperHole":{"hole_id":N,"child":<template>}}` and decodes back.
+        #[cfg(feature = "serde")]
+        #[test]
+        fn wrapper_hole_json_round_trips() {
+            let t = T::WrapperHole {
+                hole_id: 0,
+                child: Box::new(T::Text("label".to_string())),
+            };
+            let json = serde_json::to_string(&t).expect("serialize");
+            assert_eq!(
+                json,
+                r#"{"WrapperHole":{"hole_id":0,"child":{"Text":"label"}}}"#
+            );
+            let back: T = serde_json::from_str(&json).expect("deserialize");
+            assert_eq!(back, t);
+        }
+
+        // JSON front-door: the str materialize path works end-to-end.
+        #[cfg(feature = "json")]
+        #[test]
+        fn wrapper_hole_str_materialize_works() {
+            use super::super::materialize_ui_template_with_wrapper_holes_str;
+            let template = T::WrapperHole {
+                hole_id: 0,
+                child: Box::new(T::Text("label".to_string())),
+            };
+            let json = serde_json::to_string(&template).expect("serialize");
+            let wrapper = tagged_wrapper("a", vec![]);
+            let got: Element<()> = materialize_ui_template_with_wrapper_holes_str(
+                &json,
+                vec![],
+                vec![],
+                vec![wrapper],
+            );
+            assert_eq!(
+                got,
+                Element::TaggedNode(
+                    "a".to_string(),
+                    Description::NoDescription,
+                    vec![],
+                    vec![Element::Text("label".to_string())],
+                )
+            );
+        }
+
+        // Byte-identity: a template with NO WrapperHole emits byte-identically with
+        // or without a (unused) wrapper_fills vec — the new kind is purely additive.
+        #[test]
+        fn wrapper_hole_addition_is_additive_no_perturbation() {
+            let static_template = T::Node {
+                desc: UiDescription::NoDescription,
+                attrs: vec![UiTemplateAttr::Spacing(4)],
+                children: vec![T::Text("hi".to_string())],
+            };
+            let with_empty_wrappers: Element<()> = materialize_ui_template_with_wrapper_holes(
+                &static_template,
+                vec![],
+                vec![],
+                vec![],
+            );
+            let without: Element<()> = super::super::materialize_ui_template(&static_template);
+            assert_eq!(
+                render(with_empty_wrappers),
+                render(without),
+                "wrapper_holes=[] must not perturb a template with no WrapperHole"
+            );
         }
     }
 }
