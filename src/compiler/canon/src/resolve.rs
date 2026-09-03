@@ -1129,6 +1129,60 @@ pub fn canonicalise_module_in_project(
         )?;
     }
 
+    // Auto-inject the driver-generated `Rust.Ffi` forwarder module when a
+    // module imports `Ipe.Ffi.Rust [as X]` without an explicit `import
+    // Rust.Ffi`. This removes the redundant double-import requirement: a module
+    // that binds `Rust.fn "<crate>" "<path>"` already declared its intent
+    // through `import Ipe.Ffi.Rust`; the resolver rewrite in
+    // `canonicalise_asserted_call` targets the `Ffi` qualifier, so that
+    // qualifier must be in scope. When the user omitted `import Rust.Ffi` and
+    // the driver-generated module is available in `deps`, inject it
+    // automatically under the `Ffi` qualifier — identical to what an explicit
+    // `import Rust.Ffi` (unaliased) would do. The security gate is unaffected:
+    // `canonicalise_asserted_call` still calls `resolve_qual_var`, which checks
+    // that the SPECIFIC mangled symbol exists as a member of `Ffi`; an
+    // uninstalled crate produces no forwarder, so the member is absent and the
+    // same IPE-N0038 refusal fires.
+    {
+        let rust_sym = interner.intern("Rust")?;
+        let ffi_sym = interner.intern("Ffi")?;
+        let ipe_ffi_rust: [Symbol; 3] = [ipe_sym, ffi_sym, rust_sym];
+        let imports_ipe_ffi_rust = m
+            .imports
+            .iter()
+            .any(|imp| imp.name.value.as_slice() == ipe_ffi_rust);
+        if imports_ipe_ffi_rust {
+            let rust_ffi_path = vec![rust_sym, ffi_sym];
+            // Only inject when the driver generated the module AND the user did
+            // not already import it explicitly (idempotent, but skip the work).
+            if let Some(rust_ffi_dep) = deps.get(&rust_ffi_path)
+                && !env.qual_vars.contains_key(&ffi_sym)
+            {
+                let synthetic_import = src::Import {
+                    name: ipe_diagnostics::Located::new(
+                        ipe_diagnostics::Span::DUMMY,
+                        rust_ffi_path,
+                    ),
+                    alias: None,
+                    exposing: ipe_diagnostics::Located::new(
+                        ipe_diagnostics::Span::DUMMY,
+                        src::Exposing::List(vec![]),
+                    ),
+                };
+                inject_dep_exports(
+                    &synthetic_import,
+                    rust_ffi_dep,
+                    &mut env,
+                    &mut type_home_map,
+                    &mut injected_aliases,
+                    &mut unqual_origins,
+                    &mut unqual_ctor_origins,
+                    interner,
+                )?;
+            }
+        }
+    }
+
     // Build qualifier → dep-path map so `TType(qualifier, …)` annotations in
     // type sigs resolve `home` from the dep path, not from the unqualified
     // `type_home_map`.  Example: `import Counter` with no `exposing` clause
@@ -7786,6 +7840,117 @@ mod config_threading_tests {
         assert!(
             untouched,
             "no config threaded when none is declared (single cfg arg stands)"
+        );
+    }
+}
+
+#[cfg(test)]
+mod rust_ffi_auto_inject_tests {
+    //! Unit coverage for the ergonomic papercut fix (#1762): a module that
+    //! imports `Ipe.Ffi.Rust as Rust` and uses `Rust.fn` does NOT need a
+    //! separate `import Rust.Ffi`; the resolver auto-injects the forwarder
+    //! qualifier. The security gate is verified: an uninstalled crate (no
+    //! forwarder generated → symbol absent from `Rust.Ffi` exports) still fires
+    //! the IPE-N0038 refusal.
+    #![allow(clippy::panic, clippy::expect_used)] // test setup: a failed parse/intern IS the failure
+
+    use super::*;
+
+    fn sym(i: &mut Interner, s: &str) -> Symbol {
+        i.intern(s).expect("intern must succeed")
+    }
+
+    /// Build a minimal `Rust.Ffi` `ModuleExports` carrying exactly the given
+    /// forwarder value name (e.g. `asserted_tm_shift__<hash>`).
+    fn rust_ffi_exports(i: &mut Interner, forwarder: &str) -> crate::ModuleExports {
+        let rust = sym(i, "Rust");
+        let ffi = sym(i, "Ffi");
+        let path = vec![rust, ffi];
+        let v = sym(i, forwarder);
+        let mut values = std::collections::BTreeSet::new();
+        values.insert(v);
+        crate::ModuleExports {
+            path,
+            values,
+            types: BTreeMap::default(),
+            ctors: BTreeMap::default(),
+            aliases: BTreeMap::default(),
+            scope_types: BTreeMap::default(),
+            scope_aliases: BTreeMap::default(),
+            kernel_aliases: BTreeMap::default(),
+        }
+    }
+
+    /// Canonicalise a module that uses `Rust.fn` WITH `import Ipe.Ffi.Rust as
+    /// Rust` but WITHOUT `import Rust.Ffi`, against a `Rust.Ffi` dep that
+    /// carries the expected forwarder. Must resolve successfully.
+    #[test]
+    fn rust_fn_resolves_without_explicit_rust_ffi_import() {
+        // The forwarder name for `Rust.fn "tm" "shift"` — derived deterministically
+        // by `AssertedPath::from_crate_and_path("tm", "shift").def_name()`.
+        let forwarder = crate::asserted::AssertedPath::from_crate_and_path("tm", "shift")
+            .expect("valid path")
+            .def_name();
+
+        let mut i = Interner::new();
+        let rust_sym = sym(&mut i, "Rust");
+        let ffi_sym = sym(&mut i, "Ffi");
+        let rust_ffi_path = vec![rust_sym, ffi_sym];
+
+        let rust_ffi_dep = rust_ffi_exports(&mut i, &forwarder);
+        let mut deps: BTreeMap<Vec<Symbol>, crate::ModuleExports> = BTreeMap::new();
+        deps.insert(rust_ffi_path, rust_ffi_dep);
+
+        // Module uses `Rust.fn` WITHOUT `import Rust.Ffi` — the papercut case.
+        let src = "module Main exposing (shifted)\n\
+             import Ipe.Ffi.Rust as Rust\n\n\
+             shifted : Int -> Result Error Int\n\
+             shifted =\n    Rust.fn \"tm\" \"shift\"\n";
+
+        let main_path = vec![sym(&mut i, "Main")];
+        let Ok(parsed) = ipe_parse::parse_module(src, &mut i) else {
+            panic!("parse failed");
+        };
+        let result = canonicalise_module(&parsed, &main_path, &deps, &mut i);
+        assert!(
+            result.is_ok(),
+            "Rust.fn must resolve with only `import Ipe.Ffi.Rust as Rust` (no `import Rust.Ffi`): {result:?}"
+        );
+    }
+
+    /// An uninstalled crate (no forwarder in `Rust.Ffi`) still fires IPE-N0038
+    /// even when `Rust.Ffi` is auto-injected.
+    #[test]
+    fn rust_fn_on_uninstalled_crate_still_fails() {
+        // Forwarder for `tm::shift` is seeded in the dep, but the module binds
+        // `nope::phantom` — no forwarder for that → must fail.
+        let forwarder = crate::asserted::AssertedPath::from_crate_and_path("tm", "shift")
+            .expect("valid path")
+            .def_name();
+
+        let mut i = Interner::new();
+        let rust_sym = sym(&mut i, "Rust");
+        let ffi_sym = sym(&mut i, "Ffi");
+        let rust_ffi_path = vec![rust_sym, ffi_sym];
+
+        let rust_ffi_dep = rust_ffi_exports(&mut i, &forwarder);
+        let mut deps: BTreeMap<Vec<Symbol>, crate::ModuleExports> = BTreeMap::new();
+        deps.insert(rust_ffi_path, rust_ffi_dep);
+
+        // `nope::phantom` has no forwarder → should fail.
+        let src = "module Main exposing (ghost)\n\
+                   import Ipe.Ffi.Rust as Rust\n\n\
+                   ghost : Int -> Result Error Int\n\
+                   ghost =\n    Rust.fn \"nope\" \"phantom\"\n";
+
+        let main_path = vec![sym(&mut i, "Main")];
+        let Ok(parsed) = ipe_parse::parse_module(src, &mut i) else {
+            panic!("parse failed");
+        };
+        let result = canonicalise_module(&parsed, &main_path, &deps, &mut i);
+        assert!(
+            result.is_err(),
+            "Rust.fn on an uninstalled crate must fail even with auto-inject: {result:?}"
         );
     }
 }

@@ -328,9 +328,36 @@ pub fn canonicalize(db: &dyn Db, root: SourceRoot, file: SourceFile) -> CanonRes
     // demand recurses into `canonicalize(dep)`, which locks the
     // (non-reentrant) interner itself.
     let mut dep_interfaces: Vec<(Vec<String>, Arc<ModuleExports>)> = Vec::new();
+    // Track whether this module imports `Ipe.Ffi.Rust` — the taxonomy-native
+    // native-binding qualifier (#1762 ergonomic fix). When it does, the
+    // resolver's `canonicalise_asserted_call` rewrites `Rust.fn` calls to
+    // references in the driver-generated `Rust.Ffi` forwarder module. Without
+    // an explicit `import Rust.Ffi`, that module would be absent from `deps`,
+    // causing IPE-N0038 despite a valid call. The fix: auto-inject the
+    // `Rust.Ffi` interface when (a) `Ipe.Ffi.Rust` is imported and (b) the
+    // driver generated the `Rust.Ffi` module (it is present in `root.files`).
+    let mut imports_ipe_ffi_rust = false;
     for (path, resolution) in resolutions.iter() {
         if let ImportResolution::Resolved(dep) = resolution {
             dep_interfaces.push((path.clone(), module_interface(db, root, *dep)?));
+        }
+        if path.as_slice() == ["Ipe", "Ffi", "Rust"] {
+            imports_ipe_ffi_rust = true;
+        }
+    }
+    // Auto-inject `Rust.Ffi` when needed (ergonomic fix for #1762).
+    let rust_ffi_path = vec!["Rust".to_owned(), "Ffi".to_owned()];
+    if imports_ipe_ffi_rust {
+        let files = root.files(db);
+        if let Some(rust_ffi_file) = files.get(&rust_ffi_path) {
+            // Only inject when not already explicitly imported (already in
+            // dep_interfaces at this path) — idempotent.
+            let already_present = dep_interfaces
+                .iter()
+                .any(|(p, _)| p.as_slice() == ["Rust", "Ffi"]);
+            if !already_present {
+                dep_interfaces.push((rust_ffi_path, module_interface(db, root, *rust_ffi_file)?));
+            }
         }
     }
 
