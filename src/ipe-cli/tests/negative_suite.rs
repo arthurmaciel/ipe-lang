@@ -956,13 +956,12 @@ fn canon_custom_element_seal_rejects_type_variable() {
     assert_rejected("canon_custom_element_seal_tyvar", &src, "IPE-N0039");
 }
 
-// ── The `customElement` constructor (WP2, IPE-N0044 / IPE-P0063 / IPE-L0133) ──
+// ── The `customElement` constructor (WP2, IPE-N0044 / IPE-P0063) ──
 //
 // The reserved `customElement "<js-path>"` constructor is legal ONLY as the whole
 // body of a `CustomElement`-annotated binding, applied to a single string literal
 // naming a widget-hook JS file inside the project. These pin every refusal, plus
-// the positive case that type-checks yet still refuses at emission (the transport
-// is not shipped).
+// the positive case that type-checks and lowers cleanly (transport shipped).
 
 /// A single-file program whose `Main.ipe` sits beside the given extra files
 /// (relative path → contents), built through the full pipeline. Returns the same
@@ -1126,8 +1125,8 @@ fn custom_element_ctor_present_file_lowers_and_compiles() {
 
 /// (f) A `CustomElement` value is an opaque, non-serialisable handle, so it can
 /// never live in a Web `Model` (session state), exactly like a function value.
-/// Once WP4 ships the transport the handle type lowers, so the enforcement is no
-/// longer the retired emission gate (IPE-L0133) but the real plain-Model gate:
+/// With the transport shipped, the handle type lowers; enforcement is the
+/// plain-Model gate:
 /// `IrType::CustomElement` is non-serde, so a Web Model carrying one is rejected
 /// with IPE-L0120. That end-to-end proof — a real `Web.app` whose Model has a
 /// `CustomElement` field — lives in `model_admissibility.rs`

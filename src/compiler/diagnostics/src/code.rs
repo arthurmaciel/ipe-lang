@@ -246,9 +246,6 @@ code! {
     IPE_N0035 = "IPE-N0035", "Cmd / Sub imported from a different shape than the app's", "IPE-N0035";
     /// a removed surface binding is used; `ipe fix` can migrate the call site
     IPE_N0036 = "IPE-N0036", "a removed standard-library surface is still being called", "IPE-N0036";
-    /// a reserved JS-interop boundary type (`CustomElement`) is used before its
-    /// runtime denotation ships — fail-closed, the typed seam is not yet emittable
-    IPE_N0037 = "IPE-N0037", "a reserved Ipê↔JS boundary type is used before its transport ships", "IPE-N0037";
     /// an asserted foreign call (`Rust.Ffi.call`) is malformed at its use site
     IPE_N0038 = "IPE-N0038", "an asserted foreign call (Rust.Ffi.call) is malformed", "IPE-N0038";
     /// a `CustomElement` boundary type parameter is not a plain, closed, concrete
@@ -403,9 +400,6 @@ code! {
     IPE_L0131 = "IPE-L0131", "a row-polymorphic record annotation is not yet emittable", "IPE-L0131";
     /// `Ui.cells` (a terminal-only raw cell grid) is used in the Web/WebView shape
     IPE_L0132 = "IPE-L0132", "Ui.cells is terminal-only and not available in the Web/WebView shape", "IPE-L0132";
-    /// a `CustomElement` boundary value reached lowering — its typed JS-widget
-    /// transport (generated glue + DOM-patch node) is not emittable yet
-    IPE_L0133 = "IPE-L0133", "a CustomElement boundary value is not emittable yet (typed transport not shipped)", "IPE-L0133";
     /// an equality/ordering collection op over a function-carrying element.
     ///
     /// `List.member`/`sort`/`unique`/… need `==`/`Ord` on the element; a stored

@@ -218,9 +218,8 @@ pub const RESERVED_BUILTIN_TYPES: &[&str] = &[
     // by construction). A USE of the name in an annotation resolves in
     // `canonicalise_type` only through two fail-closed gates — exactly two type
     // parameters (arity, IPE-N0031) and a plain-value SEAL on each (IPE-N0039).
-    // The widget transport's runtime denotation is not shipped, so a
-    // `CustomElement`-typed binding is closed at emission (IPE-L0133): it
-    // type-checks but never reaches codegen with an untyped seam.
+    // `CustomElement down up` is the shipped typed JS-widget boundary.
+    // Its two type parameters name the sealed down-state and up-event.
     "CustomElement",
     // `Ipe.PubSub`'s phantom topic handle type — reserved so user code cannot
     // define `type Topic` and silently bypass the lowerer's `Topic a → Str` arm.
@@ -359,8 +358,7 @@ const EXTRA_BUILTIN_TYPE_NAMES: &[&str] = &[
     // `codeEditor : CustomElement EditorState EditorEvent` resolves to the
     // empty-home sentinel rather than IPE-N0002; `canonicalise_type` then gates
     // it fail-closed on arity (IPE-N0031) and the plain-value SEAL (IPE-N0039),
-    // and emission stays closed (IPE-L0133) until the widget transport's runtime
-    // denotation ships.
+    // and the typed seam is fully emittable.
     "CustomElement",
 ];
 
@@ -562,10 +560,9 @@ const SEAL_SECRET_OR_SINK: &[&str] = &[
 /// plain nor a known non-plain builtin) is accepted at THIS layer: its
 /// transitive payload types are not visible in the canonicaliser's type context
 /// (only alias BODIES are, and those are already expanded before reaching here).
-/// The generated per-type seal codec (a later increment) re-derives and
-/// re-verifies each concrete field; until then emission stays fully closed by the
-/// lowerer's `CustomElementTransport` fail-closed arm, so an ADT that would carry
-/// a non-plain field can never reach codegen with an untyped seam.
+/// The generated per-type seal codec re-derives and re-verifies each concrete
+/// field, so an ADT that would carry a non-plain field is caught here and can
+/// never reach codegen with an untyped seam.
 fn boundary_seal_rejection(ty: &canon::Type, interner: &Interner) -> Option<SealRejection> {
     match ty {
         // The seal is monomorphic and concrete: a type variable has no single
@@ -6121,9 +6118,7 @@ fn canonicalise_type(
             //       value must never be serialised across the Ipê↔JS seam.
             //
             // On passing both, the type resolves to a `Con` with the empty-home
-            // sentinel. Emission is still closed: the lowerer carries an explicit
-            // fail-closed arm (IPE-L0133) for the not-yet-shipped widget transport,
-            // so nothing untyped or undenoted reaches codegen.
+            // sentinel and lowers to the opaque widget handle.
             if ctx.interner.resolve(name) == Some("CustomElement") {
                 if can_args.len() != 2 {
                     return Err(Diagnostic::Name {

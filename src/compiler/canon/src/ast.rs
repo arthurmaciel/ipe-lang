@@ -199,9 +199,9 @@ pub enum Expr_ {
     /// emitted before this node is ever constructed. The file's existence is
     /// checked later, at the build stage that owns the project root.
     ///
-    /// The node has type `CustomElement down up` — an opaque handle. Its runtime
-    /// denotation (the generated glue + content-addressed tag) is not shipped, so
-    /// lowering refuses it fail-closed (IPE-L0133) until the transport lands.
+    /// The node has type `CustomElement down up` — an opaque widget handle.
+    /// Its runtime denotation (generated glue + content-addressed tag) is
+    /// emitted by the shipped widget transport.
     CustomElementCtor(String),
     /// The unit value `()` — the sole inhabitant of the unit type. Introduces no
     /// bindings and resolves no names.

@@ -1777,9 +1777,8 @@ pub enum StdlibKernel {
     UiCellsCells,
     /// `Ui.widget : CustomElement down up -> down -> (up -> msg) -> Element msg` —
     /// the one view node that places a typed JS custom-element widget. The
-    /// `CustomElement` handle is opaque; its transport is not yet shipped, so a
-    /// `CustomElement`-typed binding is still refused fail-closed at lowering
-    /// (IPE-L0133).
+    /// `CustomElement` handle is opaque; it lowers to the shipped widget handle
+    /// type and is placed in the view tree by the widget transport.
     UiWidget,
     /// `Ui.node : Description -> List (Attribute msg) -> List (Element msg) -> Element msg`
     /// — the irreducible container-element constructor. The layout builders

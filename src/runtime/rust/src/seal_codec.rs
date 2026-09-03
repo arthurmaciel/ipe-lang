@@ -29,9 +29,8 @@
 //! over-nested JSON, a syntax error, or a value the declared-type decoder
 //! rejects — wrong shape, wrong tag, wrong arity, missing field, out-of-range
 //! integer) is rejected *before* any typed value is handed inward. This is the
-//! runtime counterpart of the shipped IPE-L0133 emission gate: absent proof the
-//! crossing value is safe, the conservative branch — rejection — is the only
-//! reachable one.
+//! runtime enforcement of the seal: absent proof the crossing value is safe,
+//! the conservative branch — rejection — is the only reachable one.
 
 #[cfg(feature = "json")]
 use crate::json::{Decoder, JsonVal};

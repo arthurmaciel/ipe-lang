@@ -501,12 +501,6 @@ fn name_prose(msg: &NameError) -> String {
         } => {
             format!("`{qualifier}.{name}` is no longer part of Ipê.")
         }
-        NameError::UnsupportedBoundaryType { name } => {
-            format!(
-                "`{name}` names a boundary type whose transport across the Ipê↔JS seam \
-                     isn't ready yet."
-            )
-        }
         NameError::AssertedCallMalformed { .. } => {
             "I can't read this `Rust.Ffi.call` — it isn't in the one shape I accept.".to_string()
         }
@@ -1450,13 +1444,6 @@ fn name_label(msg: &NameError) -> Option<String> {
                 ))
             }
         }
-        NameError::UnsupportedBoundaryType { name } => Some(format!(
-            "`{name}` is a reserved Ipê↔JS boundary type, but its typed transport \
-             is not implemented yet, so an annotation naming it cannot be compiled. \
-             A `{name} down up` binding will name — in two concrete type parameters \
-             — the sealed down-state and up-event that cross the seam once the \
-             widget transport ships; there is no untyped fallback"
-        )),
         NameError::AssertedCallMalformed { detail } => Some(format!(
             "this `Rust.Ffi.call` is malformed: {detail}. The one accepted shape is a \
              top-level annotated definition whose whole body is `Rust.Ffi.call \
@@ -2134,13 +2121,6 @@ const fn feature_label(f: Feature) -> &'static str {
              field type itself embeds an open row, is not; use a closed record \
              annotation, or drop the annotation and let the parameter's shape be \
              inferred at its call site [feature: row-poly-record-annotation]"
-        }
-        Feature::CustomElementTransport => {
-            "a `CustomElement down up` boundary value is accepted at the type level \
-             but its typed JS-widget transport — the generated glue, the \
-             content-addressed custom-element tag, and the DOM-patch node — is not \
-             emittable yet, so a program that builds one cannot be compiled to Rust \
-             until that transport ships [feature: custom-element-transport]"
         }
         Feature::JsPortBoundarySeal => {
             "a `Js.send` payload or a `Js.subscribe` decoder crosses the Ipê↔JS \
