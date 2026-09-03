@@ -1697,7 +1697,13 @@ where
     // ipe_web_msg_seconds{name} label. Generated Msg enums always derive Debug.
     // IpeStringify: forwarded through serve_web → page for debugger overlay
     // labels via `ipe_show`. Generated Msg enums always satisfy this bound.
-    Msg: Clone + Send + Sync + std::fmt::Debug + crate::stringify::IpeStringify + 'static,
+    Msg: Clone
+        + Send
+        + Sync
+        + std::fmt::Debug
+        + serde::Serialize
+        + crate::stringify::IpeStringify
+        + 'static,
     FInit: Fn(req::WebReq) -> (Model, IpeCmd<Msg>) + Send + Sync + 'static,
     FUpdate: Fn(Msg, Model) -> (Model, IpeCmd<Msg>) + Send + Sync + 'static,
     FView: Fn(Model) -> Html<Msg> + Send + Sync + 'static,
@@ -1762,7 +1768,13 @@ pub fn web_embed_router<Model, Msg, FInit, FUpdate, FView, FSubs>(
 where
     Model:
         serde::Serialize + serde::de::DeserializeOwned + Clone + PartialEq + Send + Sync + 'static,
-    Msg: Clone + Send + Sync + std::fmt::Debug + crate::stringify::IpeStringify + 'static,
+    Msg: Clone
+        + Send
+        + Sync
+        + std::fmt::Debug
+        + serde::Serialize
+        + crate::stringify::IpeStringify
+        + 'static,
     FInit: Fn(req::WebReq) -> (Model, IpeCmd<Msg>) + Send + Sync + 'static,
     FUpdate: Fn(Msg, Model) -> (Model, IpeCmd<Msg>) + Send + Sync + 'static,
     FView: Fn(Model) -> Html<Msg> + Send + Sync + 'static,
@@ -1865,7 +1877,13 @@ where
     // ipe_web_msg_seconds{name} label. Generated Msg enums always derive Debug.
     // IpeStringify: forwarded through serve_web → page for debugger overlay
     // labels via `ipe_show`. Generated Msg enums always satisfy this bound.
-    Msg: Clone + Send + Sync + std::fmt::Debug + crate::stringify::IpeStringify + 'static,
+    Msg: Clone
+        + Send
+        + Sync
+        + std::fmt::Debug
+        + serde::Serialize
+        + crate::stringify::IpeStringify
+        + 'static,
     Page: Clone + Send + Sync + 'static,
     FInit: Fn(req::WebReq) -> (Model, IpeCmd<Msg>) + Send + Sync + 'static,
     FUpdate: Fn(Msg, Model) -> (Model, IpeCmd<Msg>) + Send + Sync + 'static,
@@ -3414,6 +3432,68 @@ mod handlers {
         }
         axum::http::StatusCode::OK.into_response()
     }
+
+    // ── GET /_ipe/debug/export ────────────────────────────────────────────
+    // Export the session's recorded message log as a JSON array. The returned
+    // bytes are the direct output of `debugger::export_msgs` — a serde_json
+    // array of every retained `Msg` value in oldest-first order. An importer
+    // can reconstruct the model at any step by folding `apply_transition`
+    // over the first N entries.
+    //
+    // Security: GET, read-only, no state mutation — CSRF token not required by
+    // method. Session-cookie authentication still guards access so a cross-site
+    // GET cannot exfiltrate the log. The log is LOCAL-ONLY and dev-build-only
+    // (this route is absent from any artifact built without `--debugger`).
+    // The exported JSON is bounded by the recorder's ring-buffer cap, so the
+    // response body cannot grow past O(cap × max-msg-size).
+    //
+    // Requires `Msg: serde::Serialize` — a Secret-bearing Msg type never
+    // implements Serialize (the seal-legality gate), so the compiler rejects
+    // export for such types at the call site; no runtime filtering needed.
+    #[cfg(feature = "debugger")]
+    pub(super) async fn export_handler<Model, Msg, FInit, FUpdate, FView, FSubs>(
+        State(st): State<WebState<Model, Msg, FInit, FUpdate, FView, FSubs>>,
+        headers: axum::http::HeaderMap,
+    ) -> axum::response::Response
+    where
+        Model: Clone + PartialEq + Send + 'static,
+        Msg: Clone + Send + std::fmt::Debug + serde::Serialize + 'static,
+        FInit: Send + Sync + 'static,
+        FUpdate: Send + Sync + 'static,
+        FView: Send + Sync + 'static,
+        FSubs: Send + Sync + 'static,
+    {
+        use axum::response::IntoResponse;
+        let sid = match sid_from_cookie(&headers) {
+            Some(s) => s,
+            None => {
+                return (axum::http::StatusCode::UNAUTHORIZED, "no session").into_response();
+            }
+        };
+        let handle = match st.store.get(&sid).await {
+            Some(store::StoreHit::Web(h)) => h,
+            _ => {
+                return (axum::http::StatusCode::NOT_FOUND, SESSION_LOST_BODY).into_response();
+            }
+        };
+        let json_bytes = {
+            let e = handle.lock().unwrap_or_else(|e| e.into_inner());
+            crate::debugger::export_msgs(&e.history)
+        };
+        match json_bytes {
+            Ok(bytes) => (
+                axum::http::StatusCode::OK,
+                [(axum::http::header::CONTENT_TYPE, "application/json")],
+                bytes,
+            )
+                .into_response(),
+            Err(err) => (
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                err.to_string(),
+            )
+                .into_response(),
+        }
+    }
 }
 
 /// Shared server setup for `web_app` / `web_app_routed`: nested HTTP
@@ -3428,7 +3508,12 @@ where
     // Debug: forwarded to drive_session for the ipe_web_msg_seconds{name} label.
     // IpeStringify: forwarded to the page handler for debugger overlay labels.
     // Generated Msg types always satisfy both bounds.
-    Msg: Clone + Send + std::fmt::Debug + crate::stringify::IpeStringify + 'static,
+    Msg: Clone
+        + Send
+        + std::fmt::Debug
+        + serde::Serialize
+        + crate::stringify::IpeStringify
+        + 'static,
     FInit: Fn(req::WebReq) -> (Model, IpeCmd<Msg>) + Send + Sync + 'static,
     FUpdate: Fn(Msg, Model) -> (Model, IpeCmd<Msg>) + Send + Sync + 'static,
     FView: Fn(Model) -> Html<Msg> + Send + Sync + 'static,
@@ -3540,7 +3625,17 @@ pub(crate) fn build_web_router<Model, Msg, FInit, FUpdate, FView, FSubs>(
 ) -> axum::Router
 where
     Model: Clone + PartialEq + Send + 'static,
-    Msg: Clone + Send + std::fmt::Debug + crate::stringify::IpeStringify + 'static,
+    // `serde::Serialize` is required by `export_handler` (the dev-only
+    // `/_ipe/debug/export` route) when the `debugger` feature is active.
+    // Generated Msg enums always derive Serialize, so this tightens nothing
+    // for real programs; the bound is unconditional to avoid `#[cfg(…)]` on
+    // where predicates (which is an unstable feature).
+    Msg: Clone
+        + Send
+        + std::fmt::Debug
+        + crate::stringify::IpeStringify
+        + serde::Serialize
+        + 'static,
     FInit: Fn(req::WebReq) -> (Model, IpeCmd<Msg>) + Send + Sync + 'static,
     FUpdate: Fn(Msg, Model) -> (Model, IpeCmd<Msg>) + Send + Sync + 'static,
     FView: Fn(Model) -> Html<Msg> + Send + Sync + 'static,
@@ -3626,6 +3721,11 @@ where
     let router = router.route(
         "/_ipe/debug/reset",
         post(handlers::reset_handler::<Model, Msg, FInit, FUpdate, FView, FSubs>),
+    );
+    #[cfg(feature = "debugger")]
+    let router = router.route(
+        "/_ipe/debug/export",
+        get(handlers::export_handler::<Model, Msg, FInit, FUpdate, FView, FSubs>),
     );
     // Dev-only appearance-hot-swap control leg. MOUNTED only when the hot
     // overlay is active (flag on AND non-production), so the route is entirely
