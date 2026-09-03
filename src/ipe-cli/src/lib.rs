@@ -15,6 +15,7 @@
 //!
 //! Errors are typed ([`CliError`]); no operation panics or unwraps.
 
+pub mod advisory;
 pub mod api_surface;
 pub mod audit;
 pub mod audit_native;
@@ -84,6 +85,24 @@ pub struct RuntimeContext {
     pub root: PathBuf,
     /// The version that crate declares.
     pub version: String,
+}
+
+/// The payload of [`CliError::AdvisoryVulnerable`], boxed to keep `CliError`
+/// within its 128-byte size ceiling while still carrying the full diagnostic.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AdvisoryVulnerablePayload {
+    /// The affected dependency name.
+    pub package: String,
+    /// The exact locked version that matched.
+    pub version: String,
+    /// The advisory identifier (e.g. `IPE-2024-0001`).
+    pub id: String,
+    /// The severity string (`"high"` or `"critical"`).
+    pub severity: &'static str,
+    /// The advisory's short description.
+    pub description: String,
+    /// The first fixed version, if recorded.
+    pub fixed_in: Option<String>,
 }
 
 /// A driver-level error. Distinct from a compiler [`Diagnostic`]: it also covers
@@ -381,6 +400,30 @@ pub enum CliError {
         /// 2 = unreachable).
         code: i32,
     },
+    /// A locked dependency's version falls within an advisory's affected range
+    /// at `high` or `critical` severity.  This is a hard, typed rejection —
+    /// never a warning — because the dep is known-vulnerable and the gate
+    /// cannot certify the package safe (PRINCIPLES §1 Security, fail-closed).
+    ///
+    /// The payload is boxed because five `String` fields would exceed the
+    /// 128-byte `CliError` size ceiling; the rejection path is exceptional, so
+    /// the extra indirection costs nothing on the common path.
+    AdvisoryVulnerable(Box<AdvisoryVulnerablePayload>),
+    /// An advisory DB file could not be read (I/O error, directory
+    /// inaccessible).  Fail-closed: absent proof the dep is safe, refuse.
+    AdvisoryDbUnreachable {
+        /// What went wrong.
+        detail: String,
+    },
+    /// An advisory DB file was present but malformed (TOML parse error, a
+    /// missing required field, or an invalid value).  Fail-closed: a corrupt
+    /// advisory cannot be treated as "no advisory".
+    AdvisoryDbMalformed {
+        /// The path of the malformed advisory file.
+        path: std::path::PathBuf,
+        /// What was wrong with the file.
+        detail: String,
+    },
 }
 
 impl From<toolchain::ToolchainMissing> for CliError {
@@ -572,6 +615,36 @@ impl std::fmt::Display for CliError {
             }
             Self::DiscoveryLimitReached { detail } => {
                 write!(f, "module-discovery walk aborted: {detail}")
+            }
+            Self::AdvisoryVulnerable(p) => {
+                write!(
+                    f,
+                    "dependency `{}` v{} is affected by {}-severity advisory {}:\n  {}{}",
+                    p.package,
+                    p.version,
+                    p.severity,
+                    p.id,
+                    p.description,
+                    p.fixed_in
+                        .as_ref()
+                        .map(|v| format!("\n  Fixed in: {v}"))
+                        .unwrap_or_default()
+                )
+            }
+            Self::AdvisoryDbUnreachable { detail } => {
+                write!(
+                    f,
+                    "advisory database is unreachable — refusing to treat the dep as safe:\n  \
+                     {detail}"
+                )
+            }
+            Self::AdvisoryDbMalformed { path, detail } => {
+                write!(
+                    f,
+                    "advisory file {} is malformed — refusing to treat the dep as safe:\n  \
+                     {detail}",
+                    path.display()
+                )
             }
         }
     }

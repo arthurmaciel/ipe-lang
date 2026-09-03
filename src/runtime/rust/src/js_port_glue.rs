@@ -36,7 +36,13 @@ const PORT_GLUE_JS: &str = r#"// Ipe.Js browser port surface. Values cross as JS
   // subscription decodes (parse-don't-validate at the trust boundary). Each frame
   // carries a `tag` naming its first-party sink so a module's inbound decoder
   // selects only its own frames; unknown tags simply fail that decoder closed.
-  function reply(frame) {
+  // When `corId` is non-null, the runtime-private `__ipe_id` field is added so
+  // the runtime routes this reply to the matching one-shot waiter rather than
+  // broadcasting it to `js_subscribe` subscribers.
+  function reply(frame, corId) {
+    if (corId !== null && corId !== undefined) {
+      frame.__ipe_id = corId;
+    }
     if (typeof window.__ipePortSend === "function") {
       try { window.__ipePortSend(JSON.stringify(frame)); }
       catch (_e) { /* best-effort inbound reply */ }
@@ -47,17 +53,17 @@ const PORT_GLUE_JS: &str = r#"// Ipe.Js browser port surface. Values cross as JS
   // unavailability / timeout to a typed inbound frame (never a panic, never a
   // throw). The bytes are stdlib's and SRI-pinned, so a dependency cannot
   // substitute them.
-  function clipboardSink(value) {
+  function clipboardSink(value, corId) {
     // Ipe.Browser.Clipboard: `WriteText text` -> navigator.clipboard.writeText.
     if (value && typeof value === "object" && typeof value.WriteText === "string") {
       var text = value.WriteText;
       if (!navigator || !navigator.clipboard || typeof navigator.clipboard.writeText !== "function") {
-        reply({ tag: "clipboard", event: "write", ok: false, error: "unavailable" });
+        reply({ tag: "clipboard", event: "write", ok: false, error: "unavailable" }, corId);
         return true;
       }
       navigator.clipboard.writeText(text).then(
-        function () { reply({ tag: "clipboard", event: "write", ok: true }); },
-        function () { reply({ tag: "clipboard", event: "write", ok: false, error: "denied" }); }
+        function () { reply({ tag: "clipboard", event: "write", ok: true }, corId); },
+        function () { reply({ tag: "clipboard", event: "write", ok: false, error: "denied" }, corId); }
       );
       return true;
     }
@@ -65,12 +71,12 @@ const PORT_GLUE_JS: &str = r#"// Ipe.Js browser port surface. Values cross as JS
     // nullary variant is externally tagged as the bare string "ReadText".
     if (value === "ReadText") {
       if (!navigator || !navigator.clipboard || typeof navigator.clipboard.readText !== "function") {
-        reply({ tag: "clipboard", event: "read", ok: false, error: "unavailable" });
+        reply({ tag: "clipboard", event: "read", ok: false, error: "unavailable" }, corId);
         return true;
       }
       navigator.clipboard.readText().then(
-        function (text) { reply({ tag: "clipboard", event: "read", ok: true, text: String(text) }); },
-        function () { reply({ tag: "clipboard", event: "read", ok: false, error: "denied" }); }
+        function (text) { reply({ tag: "clipboard", event: "read", ok: true, text: String(text) }, corId); },
+        function () { reply({ tag: "clipboard", event: "read", ok: false, error: "denied" }, corId); }
       );
       return true;
     }
@@ -93,21 +99,25 @@ const PORT_GLUE_JS: &str = r#"// Ipe.Js browser port surface. Values cross as JS
       maximumAge: (typeof o.maximumAge === "number" && o.maximumAge > 0) ? o.maximumAge : 0,
     };
   }
-  function geoOnPosition(pos) {
-    var c = pos && pos.coords ? pos.coords : {};
-    reply({
-      tag: "geolocation", ok: true,
-      lat: Number(c.latitude), lng: Number(c.longitude), accuracy: Number(c.accuracy),
-    });
+  function makeGeoCallbacks(corId) {
+    return {
+      onPosition: function(pos) {
+        var c = pos && pos.coords ? pos.coords : {};
+        reply({
+          tag: "geolocation", ok: true,
+          lat: Number(c.latitude), lng: Number(c.longitude), accuracy: Number(c.accuracy),
+        }, corId);
+      },
+      onError: function(err) {
+        // PERMISSION_DENIED=1, POSITION_UNAVAILABLE=2, TIMEOUT=3 — mapped to the
+        // module's closed inbound error vocabulary; anything else is unavailable.
+        var code = err && typeof err.code === "number" ? err.code : 2;
+        var kind = code === 1 ? "denied" : (code === 3 ? "timeout" : "unavailable");
+        reply({ tag: "geolocation", ok: false, error: kind }, corId);
+      },
+    };
   }
-  function geoOnError(err) {
-    // PERMISSION_DENIED=1, POSITION_UNAVAILABLE=2, TIMEOUT=3 — mapped to the
-    // module's closed inbound error vocabulary; anything else is unavailable.
-    var code = err && typeof err.code === "number" ? err.code : 2;
-    var kind = code === 1 ? "denied" : (code === 3 ? "timeout" : "unavailable");
-    reply({ tag: "geolocation", ok: false, error: kind });
-  }
-  function geolocationSink(value) {
+  function geolocationSink(value, corId) {
     // An outbound `JsCmd` is externally tagged: a payload-carrying variant is
     // `{ Current: opts }` / `{ Watch: opts }`; the nullary `ClearWatch` is the
     // bare string `"ClearWatch"`.
@@ -127,37 +137,48 @@ const PORT_GLUE_JS: &str = r#"// Ipe.Js browser port surface. Values cross as JS
       return true;
     }
     if (!navigator || !navigator.geolocation) {
-      reply({ tag: "geolocation", ok: false, error: "unavailable" });
+      reply({ tag: "geolocation", ok: false, error: "unavailable" }, corId);
       return true;
     }
     var opts = geoOptions(isCurrent ? value.Current : value.Watch);
+    var cbs = makeGeoCallbacks(corId);
     if (isCurrent) {
       if (typeof navigator.geolocation.getCurrentPosition !== "function") {
-        reply({ tag: "geolocation", ok: false, error: "unavailable" });
+        reply({ tag: "geolocation", ok: false, error: "unavailable" }, corId);
         return true;
       }
-      navigator.geolocation.getCurrentPosition(geoOnPosition, geoOnError, opts);
+      navigator.geolocation.getCurrentPosition(cbs.onPosition, cbs.onError, opts);
     } else {
       if (typeof navigator.geolocation.watchPosition !== "function") {
-        reply({ tag: "geolocation", ok: false, error: "unavailable" });
+        reply({ tag: "geolocation", ok: false, error: "unavailable" }, corId);
         return true;
       }
-      geoWatchIds.push(navigator.geolocation.watchPosition(geoOnPosition, geoOnError, opts));
+      geoWatchIds.push(navigator.geolocation.watchPosition(cbs.onPosition, cbs.onError, opts));
     }
     return true;
   }
-  function builtinSink(value) {
-    if (clipboardSink(value)) return true;
-    if (geolocationSink(value)) return true;
+  function builtinSink(value, corId) {
+    if (clipboardSink(value, corId)) return true;
+    if (geolocationSink(value, corId)) return true;
     return false;
   }
   function deliver(raw) {
     var value;
     try { value = JSON.parse(raw); } catch (_e) { return; /* drop a malformed frame */ }
+    // If this frame carries a correlation id, it is a `js_request` envelope:
+    // extract the id and the inner payload command, and pass the id through to
+    // the reply so the runtime can route it to the one-shot waiter.
+    var corId = null;
+    if (value && typeof value === "object" && "__ipe_id" in value) {
+      corId = value.__ipe_id;
+      value = value.payload !== undefined ? value.payload : value;
+    }
     // A first-party browser-capability command is handled by its built-in sink;
     // anything else is a developer port frame routed to the registered receiver.
-    if (builtinSink(value)) return;
-    if (typeof onReceive === "function") { onReceive(value); }
+    if (builtinSink(value, corId)) return;
+    // For non-first-party frames, if there is a correlation id the developer JS
+    // handler must echo it back; we pass it as a second argument to onReceive.
+    if (typeof onReceive === "function") { onReceive(value, corId); }
   }
   // The runtime calls this with each outbound seal frame (a JSON string).
   window.ipeOnReceive = deliver;

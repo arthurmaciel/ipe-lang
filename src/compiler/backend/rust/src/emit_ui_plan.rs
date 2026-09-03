@@ -1247,6 +1247,7 @@ pub const fn appearance_literal_args(k: KernelFn) -> &'static [(usize, LitKind)]
         | KernelFn::SubSubscribeWebSocket
         | KernelFn::JsSend
         | KernelFn::JsSubscribe
+        | KernelFn::JsRequest
         | KernelFn::EnvPublic
         | KernelFn::RegionMainContent
         | KernelFn::RegionNavigation

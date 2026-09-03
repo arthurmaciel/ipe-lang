@@ -23032,6 +23032,27 @@ impl<'a> Lowerer<'a> {
                     self.reject_illegal_js_port_seal(decoder)?;
                     return Ok(Intercepted::Fallthrough(Some(peek)));
                 }
+                // `Js.request : a -> Decoder b -> Task b` — correlated one-shot.
+                // Both the outbound payload `a` and the inner type of the `Decoder b`
+                // must be port-seal-legal: no Secret/reserved-sink/function/effect
+                // carrier can cross either direction.
+                Callee::Kernel(KernelFn::JsRequest) if args.len() == 2 => {
+                    let payload = args.first().ok_or_else(|| {
+                        bug(
+                            "ipe_lower::intercept_web_kernel_call",
+                            "Js.request missing payload arg",
+                        )
+                    })?;
+                    let decoder = args.get(1).ok_or_else(|| {
+                        bug(
+                            "ipe_lower::intercept_web_kernel_call",
+                            "Js.request missing decoder arg",
+                        )
+                    })?;
+                    self.reject_illegal_js_port_seal(payload)?;
+                    self.reject_illegal_js_port_seal(decoder)?;
+                    return Ok(Intercepted::Fallthrough(Some(peek)));
+                }
                 // ── Debug.todo : String -> a — inject call-site location ──────
                 // The surface arity is 1 (user supplies only the note string).
                 // At lowering time a compiler-injected location string is prepended
@@ -25778,7 +25799,11 @@ impl<'a> Lowerer<'a> {
                 //   `Js.subscribe : Decoder a -> (a -> msg) -> Sub msg`. Arity 2;
                 //   the port intercept rejects it before emission, this is the
                 //   defensive fixed count.
-                | KernelFn::JsSubscribe,
+                | KernelFn::JsSubscribe
+                // ── Ipe.Js port — correlated one-shot.
+                //   `Js.request : a -> Decoder b -> Task b`. Arity 2;
+                //   the port intercept seal-checks both args before emission.
+                | KernelFn::JsRequest,
             ) => Ok(2),
             Callee::Kernel(
                 KernelFn::StringReplace
@@ -27573,6 +27598,7 @@ impl<'a> Lowerer<'a> {
                     // ── Ipe.Js ports (raw typed Ipê↔JS transport) ────────────
                     ("Js", "send") => Ok(Callee::Kernel(KernelFn::JsSend)),
                     ("Js", "subscribe") => Ok(Callee::Kernel(KernelFn::JsSubscribe)),
+                    ("Js", "request") => Ok(Callee::Kernel(KernelFn::JsRequest)),
                     ("Time", "every") => Ok(Callee::Kernel(KernelFn::TimeEvery)),
                     // ── Ipe.Http.Server kernels ─────────────────────────────
                     ("Server", "get") => Ok(Callee::Kernel(KernelFn::ServerGet)),

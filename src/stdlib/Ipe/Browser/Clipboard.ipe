@@ -17,16 +17,8 @@
 --   * `Ipe.Browser.Clipboard.Internals` publishes the closed outbound/inbound ADTs
 --     and the raw `Ipe.Js` wiring.
 --   * this module is the high-level layer: `write` / `read` with the inbound
---     subscription `contents`, which folds the narrow `JsMsg` EXHAUSTIVELY into a
---     typed `Result Error String` — a host permission denial becomes an `Err`,
---     never a silently dropped variant.
---
--- `read` is shaped as an outbound `Cmd`, not a `Task Error String`: the raw
--- `Ipe.Js` transport has no request→reply correlation kernel, so a `Task`-shaped
--- one-shot cannot be spelled over it today. The read result arrives on the
--- `contents` subscription. Closing that gap (a correlated port→`Task` bridge) is
--- tracked — it needs a new backend kernel and a security review of the JS
--- boundary, not a stdlib-only change.
+--     subscription `contents`. `read` returns a `Task Error String` via the
+--     correlated port→Task bridge; `write` remains `Cmd`-shaped (fire-and-forget).
 module Ipe.Browser.Clipboard exposing
     ( write
     , read
@@ -35,6 +27,7 @@ module Ipe.Browser.Clipboard exposing
 
 import Ipe.Browser.Clipboard.Internals as Internals exposing (JsMsg(..))
 import Ipe.Error as Error exposing (Error)
+import Ipe.Task as Task
 import Ipe.Tea.Web.Cmd as Cmd
 import Ipe.Tea.Web.Sub as Sub
 
@@ -50,14 +43,27 @@ write text =
     Internals.request (Internals.WriteText text)
 
 
--- | `read` — request the current clipboard contents.
+-- | `read` — request the current clipboard contents as a `Task Error String`.
 --
--- Outbound one-shot; the served JS handler reaches `navigator.clipboard.readText`.
--- The result — the text or a typed denial — arrives on the `contents`
--- subscription.
-read : Cmd.Cmd msg
+-- Uses the correlated port→Task bridge (`Js.request`). The served JS handler
+-- reaches `navigator.clipboard.readText`; the result — the text or a typed denial
+-- — resolves the `Task` directly, with no companion subscription needed.
+read : Task Error String
 read =
-    Internals.request Internals.ReadText
+    Internals.requestOne Internals.ReadText
+        |> Task.andThen (\msg ->
+            case msg of
+                Read text ->
+                    Task.succeed text
+
+                Written ->
+                    Task.succeed ""
+
+                Denied ->
+                    Task.fail Error.permissionDenied
+
+                Unavailable ->
+                    Task.fail (Error.unavailable "clipboard unavailable"))
 
 
 -- | `contents toMsg` — the inbound subscription, wired in `subscriptions`.

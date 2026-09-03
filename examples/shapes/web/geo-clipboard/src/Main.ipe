@@ -22,6 +22,7 @@ import Ipe.Error as Error exposing (Error)
 import Ipe.String as String
 import Ipe.Browser.Geolocation as Geo
 import Ipe.Browser.Clipboard as Clipboard
+import Ipe.Task as Task
 
 
 type alias Model =
@@ -47,8 +48,8 @@ update : Msg -> Model -> ( Model, Cmd.Cmd Msg )
 update msg model =
     case msg of
         Locate ->
-            -- Outbound one-shot geolocation request.
-            ( model, Geo.current )
+            -- Outbound one-shot geolocation request, resolved as a Task.
+            ( model, Task.attempt GotLocation Geo.current )
 
         GotLocation result ->
             case result of
@@ -62,7 +63,7 @@ update msg model =
             ( model, Clipboard.write model.location )
 
         Paste ->
-            ( model, Clipboard.read )
+            ( model, Task.attempt GotClipboard Clipboard.read )
 
         GotClipboard result ->
             case result of
