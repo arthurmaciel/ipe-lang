@@ -2483,6 +2483,38 @@ fn lower_let_bound_app_cfg() {
     assert_rejected("lower_let_bound_cfg", src, "IPE-L0119");
 }
 
+/// A `Web.app` `init` annotated with a free type variable (`init : a -> …`)
+/// is a false promise — the runtime always passes `WebReq` — so it must be
+/// rejected with IPE-N0046.
+#[test]
+fn name_web_init_poly_var() {
+    let src = r#"module Main exposing (main)
+import Ipe.Tea.Web as Web
+import Ipe.Ui as Ui
+import Ipe.Tea.Web.Cmd
+import Ipe.Tea.Web.Sub
+type Page = HomePage
+type Msg = Noop
+type alias Model = { page : Page }
+init : a -> ( Model, Cmd Msg )
+init _ = ( { page = HomePage }, Cmd.none )
+update : Msg -> Model -> ( Model, Cmd Msg )
+update _msg model = ( model, Cmd.none )
+view : Model -> any
+view _model = Ui.text "hi"
+subscriptions : Model -> Sub Msg
+subscriptions _model = Sub.none
+main =
+    Web.app
+        { init = init, update = update, view = view
+        , subscriptions = subscriptions
+        , routes = [ Web.route "/" HomePage ]
+        , notFound = HomePage
+        }
+"#;
+    assert_rejected("name_web_init_poly_var", src, "IPE-N0046");
+}
+
 // ===========================================================================
 // FFI trust boundary (T1) — the decode/emit gate rejects injection-bearing
 // inspector data, and the warm-cache load re-derives `_bindings.rs` from the
