@@ -1,0 +1,112 @@
+-- | Ipe.Browser.Camera — capture a photo from the device camera (or a
+-- file-input fallback on desktop) as a `data:` URL, over `Ipe.Ffi.Js` ports.
+--
+-- A first-party proof of the per-capability web mechanism: an outbound `JsCmd`
+-- triggers the capture UI, and an inbound `JsMsg` carries the result — a
+-- `PickedFile` record or a typed denial/cancellation. Both cross the same seal
+-- codec and fail-closed port discipline as every other port; there is no second
+-- transport.
+--
+-- On mobile the served JS handler uses an `<input type="file" capture="environment"
+-- accept="image/*">` element, which directs the OS to open the camera. On
+-- desktop it falls back to a plain image file picker. The result shape is
+-- identical in both cases: a `PickedFile` with `name`, `mime`, and `dataUrl`.
+--
+-- Importing this reserved `Ipe.Browser.<Api>` module discloses `js-port:camera`
+-- (import-derived, keyed on the canonical `Ipe.Browser.Camera` path prefix via
+-- `WebCapability::for_browser_module`, alias-immune); only the top-level app's
+-- `[capabilities] accepts` set can grant it.
+--
+-- The two layers:
+--
+--   * `Ipe.Browser.Camera.Internals` publishes the closed outbound/inbound ADTs
+--     and the raw `Ipe.Ffi.Js` wiring.
+--   * this module is the high-level layer: `capturePhoto` returns a
+--     `Task Error PickedFile` via the correlated port→Task bridge; a user
+--     cancellation or a host denial resolves to a typed `Err`. The inbound
+--     `case` is EXHAUSTIVE: every variant becomes either an `Ok` or a typed
+--     `Err`, never a silently dropped frame.
+module Ipe.Browser.Camera exposing
+    ( PickedFile
+    , capturePhoto
+    , captures
+    )
+
+import Ipe.Browser.Camera.Internals as Internals exposing (JsMsg(..))
+import Ipe.Error as Error exposing (Error)
+import Ipe.Task as Task
+import Ipe.Tea.Web.Sub as Sub
+
+
+-- | A captured image: the browser-assigned filename, the image MIME type, and
+-- the full image data encoded as a `data:` URL (e.g. `data:image/jpeg;base64,...`).
+type alias PickedFile =
+    { name : String
+    , mime : String
+    , dataUrl : String
+    }
+
+
+-- | `capturePhoto` — open the camera capture UI (mobile) or an image file
+-- picker (desktop), as a `Task Error PickedFile`.
+--
+-- Uses the correlated port→Task bridge (`Js.request`). The served JS handler
+-- creates a transient `<input type="file" capture="environment" accept="image/*">`
+-- element, reads the selected/captured image via `FileReader.readAsDataURL`,
+-- and resolves the `Task` with the result. A user cancellation resolves to
+-- `Err` (cancelled); a host denial or an absent File API resolves to the
+-- corresponding typed `Err`.
+--
+-- Importing this module discloses `js-port:camera`; the app must grant it with
+-- `accepts = [ JsPort Camera ]` under [capabilities] in package.ipe.
+capturePhoto : Task Error PickedFile
+capturePhoto =
+    Internals.requestOne Internals.CapturePhoto
+        |> Task.andThen foldCapture
+
+
+-- | `captures toMsg` — the inbound subscription, wired in `subscriptions`.
+--
+-- The decoder IS the security gate: every inbound value runs through the total,
+-- bounded seal decoder for the narrow `JsMsg`; a malformed / mismatched frame
+-- is dropped whole. A decoded `JsMsg` is folded EXHAUSTIVELY into a
+-- `Result Error PickedFile`.
+captures : (Result Error PickedFile -> msg) -> Sub.Sub msg
+captures toMsg =
+    Internals.subscribe (\inbound -> toMsg (toResult inbound))
+
+
+-- | Fold a `capturePhoto` reply into a `Task Error PickedFile`. The `case` is
+-- exhaustive over every published inbound variant.
+foldCapture : Internals.JsMsg -> Task Error PickedFile
+foldCapture msg =
+    case msg of
+        Captured name mime dataUrl ->
+            Task.succeed { name = name, mime = mime, dataUrl = dataUrl }
+
+        Cancelled ->
+            Task.fail (Error.unavailable "camera capture cancelled")
+
+        Denied ->
+            Task.fail Error.permissionDenied
+
+        Unavailable ->
+            Task.fail (Error.unavailable "camera capture unavailable")
+
+
+-- | Fold the narrow inbound `JsMsg` into a typed `Result Error PickedFile`.
+-- The `case` is exhaustive over every published inbound variant.
+toResult : Internals.JsMsg -> Result Error PickedFile
+toResult inbound =
+    case inbound of
+        Captured name mime dataUrl ->
+            Ok { name = name, mime = mime, dataUrl = dataUrl }
+
+        Cancelled ->
+            Err (Error.unavailable "camera capture cancelled")
+
+        Denied ->
+            Err Error.permissionDenied
+
+        Unavailable ->
+            Err (Error.unavailable "camera capture unavailable")

@@ -382,6 +382,115 @@ const PORT_GLUE_JS: &str = r#"// Ipe.Ffi.Js browser port surface. Values cross a
     }
     return true;
   }
+  // Ipe.Browser.FilePicker: `PickFile` / `PickImage` -> <input type="file">.
+  // A transient file-input element is created programmatically; after the user
+  // selects a file, `FileReader.readAsDataURL` reads the contents and the full
+  // data: URL is returned as the `dataUrl` field. A user cancellation resolves
+  // to the typed `cancelled` frame; an absent File API or a read error to
+  // `unavailable` — never a thrown error or a silent drop.
+  function filePickerSink(value, corId) {
+    var isPickFile = value === "PickFile" ||
+      (value && typeof value === "object" && value.PickFile !== undefined);
+    var isPickImage = value === "PickImage" ||
+      (value && typeof value === "object" && value.PickImage !== undefined);
+    if (!isPickFile && !isPickImage) return false;
+    if (typeof File === "undefined" || typeof FileReader === "undefined") {
+      reply({ tag: "file-picker", ok: false, error: "unavailable" }, corId);
+      return true;
+    }
+    var input = document.createElement("input");
+    input.type = "file";
+    if (isPickImage) {
+      input.accept = "image/*";
+    }
+    var settled = false;
+    input.addEventListener("change", function () {
+      if (settled) return;
+      settled = true;
+      var file = input.files && input.files[0];
+      if (!file) {
+        reply({ tag: "file-picker", ok: false, error: "cancelled" }, corId);
+        return;
+      }
+      var reader = new FileReader();
+      reader.onload = function (ev) {
+        reply({
+          tag: "file-picker", ok: true,
+          name: String(file.name),
+          mime: String(file.type || "application/octet-stream"),
+          dataUrl: String(ev.target.result),
+        }, corId);
+      };
+      reader.onerror = function () {
+        reply({ tag: "file-picker", ok: false, error: "unavailable" }, corId);
+      };
+      reader.readAsDataURL(file);
+    });
+    // A focus event after the dialog closes without a selection signals cancel.
+    window.addEventListener("focus", function onFocus() {
+      window.removeEventListener("focus", onFocus);
+      setTimeout(function () {
+        if (!settled) {
+          settled = true;
+          reply({ tag: "file-picker", ok: false, error: "cancelled" }, corId);
+        }
+      }, 400);
+    }, { once: true });
+    input.click();
+    return true;
+  }
+  // Ipe.Browser.Camera: `CapturePhoto` -> <input type="file" capture="environment"
+  // accept="image/*">. On mobile this directs the OS to open the camera; on
+  // desktop it falls back to a plain image file picker. The result shape is
+  // identical: a Captured frame carrying name / mime / dataUrl. A user
+  // cancellation resolves to `cancelled`; an absent File API to `unavailable`.
+  function cameraSink(value, corId) {
+    var isCapture = value === "CapturePhoto" ||
+      (value && typeof value === "object" && value.CapturePhoto !== undefined);
+    if (!isCapture) return false;
+    if (typeof File === "undefined" || typeof FileReader === "undefined") {
+      reply({ tag: "camera", ok: false, error: "unavailable" }, corId);
+      return true;
+    }
+    var input = document.createElement("input");
+    input.type = "file";
+    input.accept = "image/*";
+    input.capture = "environment";
+    var settled = false;
+    input.addEventListener("change", function () {
+      if (settled) return;
+      settled = true;
+      var file = input.files && input.files[0];
+      if (!file) {
+        reply({ tag: "camera", ok: false, error: "cancelled" }, corId);
+        return;
+      }
+      var reader = new FileReader();
+      reader.onload = function (ev) {
+        reply({
+          tag: "camera", ok: true,
+          name: String(file.name),
+          mime: String(file.type || "image/jpeg"),
+          dataUrl: String(ev.target.result),
+        }, corId);
+      };
+      reader.onerror = function () {
+        reply({ tag: "camera", ok: false, error: "unavailable" }, corId);
+      };
+      reader.readAsDataURL(file);
+    });
+    window.addEventListener("focus", function onFocus() {
+      window.removeEventListener("focus", onFocus);
+      setTimeout(function () {
+        if (!settled) {
+          settled = true;
+          reply({ tag: "camera", ok: false, error: "cancelled" }, corId);
+        }
+      }, 400);
+    }, { once: true });
+    input.click();
+    return true;
+  }
   function builtinSink(value, corId) {
     if (clipboardSink(value, corId)) return true;
     if (geolocationSink(value, corId)) return true;
@@ -391,6 +500,8 @@ const PORT_GLUE_JS: &str = r#"// Ipe.Ffi.Js browser port surface. Values cross a
     if (shareSink(value, corId)) return true;
     if (batterySink(value, corId)) return true;
     if (networkInfoSink(value, corId)) return true;
+    if (filePickerSink(value, corId)) return true;
+    if (cameraSink(value, corId)) return true;
     return false;
   }
   function deliver(raw) {
@@ -620,6 +731,46 @@ mod tests {
         assert!(js.contains("rtt:"));
         assert!(js.contains("saveData:"));
         // …and traps an absent API to a typed frame, never a throw.
+        assert!(js.contains("\"unavailable\""));
+        assert!(!js.contains("eval("));
+    }
+
+    #[test]
+    fn file_picker_sink_opens_input_element_and_traps_cancel_and_absence_to_typed_results() {
+        let js = port_glue_js();
+        // The first-party Ipe.Browser.FilePicker sink creates a file input element…
+        assert!(js.contains("filePickerSink"));
+        assert!(js.contains("PickFile"));
+        assert!(js.contains("PickImage"));
+        assert!(js.contains("input.type = \"file\""));
+        assert!(js.contains("FileReader"));
+        assert!(js.contains("readAsDataURL"));
+        // …resolves a selection to a typed frame with name / mime / dataUrl fields…
+        assert!(js.contains("tag: \"file-picker\""));
+        assert!(js.contains("name:"));
+        assert!(js.contains("mime:"));
+        assert!(js.contains("dataUrl:"));
+        // …and enumerates the cancelled + unavailable outcomes, never a throw.
+        assert!(js.contains("\"cancelled\""));
+        assert!(js.contains("\"unavailable\""));
+        assert!(!js.contains("eval("));
+    }
+
+    #[test]
+    fn camera_sink_uses_capture_attribute_and_traps_cancel_and_absence_to_typed_results() {
+        let js = port_glue_js();
+        // The first-party Ipe.Browser.Camera sink uses the capture attribute…
+        assert!(js.contains("cameraSink"));
+        assert!(js.contains("CapturePhoto"));
+        assert!(js.contains("input.capture = \"environment\""));
+        assert!(js.contains("input.accept = \"image/*\""));
+        // …reads via FileReader…
+        assert!(js.contains("FileReader"));
+        assert!(js.contains("readAsDataURL"));
+        // …resolves a capture to a typed frame with name / mime / dataUrl fields…
+        assert!(js.contains("tag: \"camera\""));
+        // …and enumerates the cancelled + unavailable outcomes, never a throw.
+        assert!(js.contains("\"cancelled\""));
         assert!(js.contains("\"unavailable\""));
         assert!(!js.contains("eval("));
     }

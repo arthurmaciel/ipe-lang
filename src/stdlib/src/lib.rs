@@ -789,6 +789,36 @@ const IPE_BROWSER_NETWORK_INFO: &str = include_str!("../Ipe/Browser/NetworkInfo.
 const IPE_BROWSER_NETWORK_INFO_INTERNALS: &str =
     include_str!("../Ipe/Browser/NetworkInfo/Internals.ipe");
 
+/// `Ipe.Browser.FilePicker` — open a native file picker and read the chosen
+/// file as a `data:` URL, over `Ipe.Ffi.Js` ports. Importing discloses
+/// `js-port:file` (keyed on the `Ipe.Browser.FilePicker` path prefix via
+/// `WebCapability::for_browser_module`). Registered in
+/// [`COMPILED_STD_MODULES`] (NOT `MODULES`); NOT in `STDLIB_MODULE_QUALIFIERS`.
+const IPE_BROWSER_FILE_PICKER: &str = include_str!("../Ipe/Browser/FilePicker.ipe");
+
+/// `Ipe.Browser.FilePicker.Internals` — the low-level file-picker port
+/// surface: the closed outbound/inbound ADTs and the raw `Ipe.Ffi.Js` wiring
+/// the high-level layer wraps. Importing it discloses the same `js-port:file`
+/// axis (the prefix key covers the submodule). Registered in
+/// [`COMPILED_STD_MODULES`] (NOT `MODULES`); NOT in `STDLIB_MODULE_QUALIFIERS`.
+const IPE_BROWSER_FILE_PICKER_INTERNALS: &str =
+    include_str!("../Ipe/Browser/FilePicker/Internals.ipe");
+
+/// `Ipe.Browser.Camera` — capture a photo from the device camera (or an
+/// image file-input fallback on desktop) as a `data:` URL, over `Ipe.Ffi.Js`
+/// ports. Importing discloses `js-port:camera` (keyed on the
+/// `Ipe.Browser.Camera` path prefix via `WebCapability::for_browser_module`).
+/// Registered in [`COMPILED_STD_MODULES`] (NOT `MODULES`); NOT in
+/// `STDLIB_MODULE_QUALIFIERS`.
+const IPE_BROWSER_CAMERA: &str = include_str!("../Ipe/Browser/Camera.ipe");
+
+/// `Ipe.Browser.Camera.Internals` — the low-level camera capture port
+/// surface: the closed outbound/inbound ADTs and the raw `Ipe.Ffi.Js` wiring
+/// the high-level layer wraps. Importing it discloses the same `js-port:camera`
+/// axis (the prefix key covers the submodule). Registered in
+/// [`COMPILED_STD_MODULES`] (NOT `MODULES`); NOT in `STDLIB_MODULE_QUALIFIERS`.
+const IPE_BROWSER_CAMERA_INTERNALS: &str = include_str!("../Ipe/Browser/Camera/Internals.ipe");
+
 /// `Ipe.Env` — build-time-embedded public config (compiled source).
 ///
 /// Defines `public : String -> Maybe String`, routed through the
@@ -1299,6 +1329,22 @@ pub const COMPILED_STD_MODULES: &[CompiledStdModule] = &[
     CompiledStdModule {
         dotted: "Ipe.Browser.NetworkInfo.Internals",
         source: IPE_BROWSER_NETWORK_INFO_INTERNALS,
+    },
+    CompiledStdModule {
+        dotted: "Ipe.Browser.FilePicker",
+        source: IPE_BROWSER_FILE_PICKER,
+    },
+    CompiledStdModule {
+        dotted: "Ipe.Browser.FilePicker.Internals",
+        source: IPE_BROWSER_FILE_PICKER_INTERNALS,
+    },
+    CompiledStdModule {
+        dotted: "Ipe.Browser.Camera",
+        source: IPE_BROWSER_CAMERA,
+    },
+    CompiledStdModule {
+        dotted: "Ipe.Browser.Camera.Internals",
+        source: IPE_BROWSER_CAMERA_INTERNALS,
     },
     CompiledStdModule {
         dotted: "Ipe.Env",
