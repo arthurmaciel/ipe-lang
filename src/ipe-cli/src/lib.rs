@@ -44,6 +44,7 @@ mod lsp;
 pub mod migrate;
 pub mod native_ffi_consent;
 pub mod net;
+pub mod pack;
 pub mod package_manifest;
 pub mod pkg;
 pub mod progress;
@@ -5633,6 +5634,118 @@ pub(crate) fn typecheck_entry_via_graph(entry: &Path) -> Result<(), CliError> {
         let linked = ipe_db::linked_program(db, root, file).map_err(|d| (d, Vec::new()))?;
         gate_decoder_pipelines(&linked.module)
     })
+}
+
+/// `ipe pack --emit-permissions <platform> [<path>]` — derive and print the
+/// native-shell OS-permission declarations a packaged app requires on `platform`
+/// (`ios` / `macos` / `android`), from the app's `[capabilities] accepts` set.
+///
+/// A read-only dry-run: nothing is written. It is the CLI face of the packager's
+/// permission derivation ([`pack::permissions::derive_permissions`]) — the single
+/// source of truth for what a packaged app may do — so a package author can see
+/// exactly which plist keys or Android manifest entries their consent set yields
+/// before a bundle is built.
+///
+/// # Errors
+/// [`CliError::Usage`] / [`CliError::UsageOwned`] on a missing/unknown
+/// `--emit-permissions` platform or a stray argument; the manifest's own parse
+/// errors when the project's `package.ipe` is malformed.
+pub(crate) fn run_pack(rest: &[String]) -> Result<(), CliError> {
+    // The only supported mode today is the `--emit-permissions <platform>`
+    // dry-run; anything else is misuse. Advertising only what is implemented.
+    let platform = match rest.split_first() {
+        Some((flag, tail)) if flag == "--emit-permissions" => {
+            let (raw, path_args) = tail.split_first().ok_or(CliError::Usage(
+                "usage: ipe pack --emit-permissions <ios|macos|android> [<path>]",
+            ))?;
+            let platform = raw
+                .parse::<pack::permissions::Platform>()
+                .map_err(|e| CliError::UsageOwned(format!("ipe pack: {e}")))?;
+            if let Some(extra) = path_args.get(1) {
+                return Err(cli_args::usage_unexpected_argument("pack", extra));
+            }
+            (platform, path_args.first().cloned())
+        }
+        _ => {
+            return Err(CliError::Usage(
+                "usage: ipe pack --emit-permissions <ios|macos|android> [<path>]",
+            ));
+        }
+    };
+    let (platform, path) = platform;
+    emit_permissions(platform, path.as_deref())
+}
+
+/// Resolve the project manifest, read its accepted capabilities, and print the
+/// derived OS-permission declarations for `platform`.
+fn emit_permissions(
+    platform: pack::permissions::Platform,
+    path: Option<&str>,
+) -> Result<(), CliError> {
+    use std::fmt::Write as _;
+
+    let root = path.map_or_else(|| PathBuf::from("."), PathBuf::from);
+    let manifest_path = discover_manifest(&root)?.ok_or(CliError::Usage(
+        "ipe pack: no package.ipe found — run inside a project or pass its path",
+    ))?;
+
+    let manifest = project::parse_manifest(&manifest_path)?;
+    let accepts = &manifest.capabilities_accept;
+    let derived = pack::permissions::derive_permissions(accepts, platform)?;
+
+    // Writing into an owned buffer never fails; the `let _` discards the always-Ok
+    // `fmt::Result` so a print is one syscall over the whole report.
+    let mut out = String::new();
+    let _ = writeln!(
+        out,
+        "OS permissions for `{}` on {}",
+        manifest.name,
+        platform.as_str()
+    );
+    let breakdown = pack::permissions::per_axis_breakdown(accepts, platform);
+    if breakdown.is_empty() {
+        let _ = writeln!(
+            out,
+            "  (no web capabilities accepted — no OS permissions required)"
+        );
+    } else {
+        for (axis, entries) in &breakdown {
+            if entries.is_empty() {
+                let _ = writeln!(
+                    out,
+                    "  js-port:{axis} → (no OS permission on this platform)"
+                );
+            } else {
+                let _ = writeln!(out, "  js-port:{axis} → {}", entries.join(", "));
+            }
+        }
+    }
+    match platform {
+        pack::permissions::Platform::Ios | pack::permissions::Platform::MacOs => {
+            let _ = writeln!(out, "\nInfo.plist entries:");
+            let plist = derived.to_info_plist_entries();
+            if plist.is_empty() {
+                let _ = writeln!(out, "  (none)");
+            } else {
+                for (key, purpose) in plist {
+                    let _ = writeln!(out, "  {key} = {purpose:?}");
+                }
+            }
+        }
+        pack::permissions::Platform::Android => {
+            let _ = writeln!(out, "\nAndroidManifest.xml fragment:");
+            let fragment = derived.to_android_manifest_entries();
+            if fragment.is_empty() {
+                let _ = writeln!(out, "  (none)");
+            } else {
+                for line in fragment.lines() {
+                    let _ = writeln!(out, "  {line}");
+                }
+            }
+        }
+    }
+    print!("{out}");
+    Ok(())
 }
 
 /// `ipe capabilities <entry.ipe>` — print the program's inferred security
