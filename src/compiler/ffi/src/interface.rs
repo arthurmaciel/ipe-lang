@@ -760,10 +760,30 @@ pub fn crate_interface(pkg: &PkgInfo) -> CrateInterface {
     // admitted transparent import already holds.
     transparent_types.append(&mut define_transparent);
 
-    let opaque_types: BTreeMap<String, String> = used_opaques
+    let mut opaque_types: BTreeMap<String, String> = used_opaques
         .iter()
         .filter_map(|n| path_map.get(n).map(|p| (n.clone(), p.clone())))
         .collect();
+    // Author-DECLARED opaque handles (`foreign X = { kind = Opaque "Type" }`)
+    // join the surfaced set unconditionally: the declaration exists so the
+    // handle nominal resolves even when no binding references it yet, so it is
+    // NOT subject to the used-only prune above. A declared name that collides
+    // with an inspected opaque of a DIFFERENT path is refused — the two are
+    // different Rust types that would share one nominal; the crate's own
+    // inspected opaque wins and the declaration is dropped rather than
+    // overwriting the resolved path with a mismatched one.
+    for (name, path) in pkg.declared_opaques() {
+        match opaque_types.get(name) {
+            Some(existing) if existing == path => {}
+            Some(_) => {
+                // A genuine nominal/path conflict — keep the inspected path,
+                // never let a declaration silently retarget an in-use handle.
+            }
+            None => {
+                opaque_types.insert(name.clone(), path.clone());
+            }
+        }
+    }
     let opaque_type_ids: BTreeMap<String, String> = opaque_types
         .iter()
         .filter_map(|(n, p)| {
@@ -1360,6 +1380,33 @@ mod tests {
             "{:?}",
             iface.skipped
         );
+    }
+
+    #[test]
+    fn a_declared_only_opaque_surfaces_even_without_a_binding() {
+        // A crate with no functions but one DECLARED opaque handle: the handle
+        // nominal must survive into `opaque_types` (the used-only prune does not
+        // apply to a declaration) and be exported as `type Conn = Conn`.
+        let doc = serde_json::json!({
+            "pkg": "postgres",
+            "name": "postgres",
+            "version": "0.1.0",
+            "functions": [],
+            "errors": [],
+            "declaredOpaques": { "Conn": "::postgres::Client" }
+        });
+        let pkg = PkgInfo::decode_json(&doc.to_string()).expect("decodes");
+        let iface = crate_interface(&pkg);
+        assert_eq!(
+            iface.opaque_types.get("Conn").map(String::as_str),
+            Some("::postgres::Client")
+        );
+        assert!(
+            iface.source.contains("type Conn = Conn"),
+            "{}",
+            iface.source
+        );
+        assert!(iface.source.contains("exposing (Conn)"), "{}", iface.source);
     }
 
     #[test]

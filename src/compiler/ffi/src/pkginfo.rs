@@ -132,6 +132,14 @@ struct WirePkgInfo {
     foreign_type_ids: std::collections::BTreeMap<String, String>,
     #[serde(default)]
     types: Vec<crate::transparency::WireForeignType>,
+    /// Author-DECLARED opaque handles (`foreign X = { kind = Opaque "Type" }`):
+    /// Ipê handle nominal → the resolved absolute Rust path of a reported crate
+    /// type. Injected by the CLI's `merge_provides` from the project's `foreign`
+    /// declarations, already validated against this crate's reported types; the
+    /// decode below re-validates the path shape (the value is spliced into
+    /// emitted Rust). Empty for an ordinary inspection with no declarations.
+    #[serde(default, rename = "declaredOpaques")]
+    declared_opaques: std::collections::BTreeMap<String, String>,
     #[serde(default, rename = "wrapperPath")]
     wrapper_path: String,
 }
@@ -749,6 +757,13 @@ pub struct PkgInfo {
     /// remaining reported type stays an opaque handle. Classified ONCE here at
     /// the decode boundary; every emitter reads this same decision.
     foreign_types: crate::transparency::ForeignTypeCatalog,
+    /// Author-declared opaque handles: Ipê handle nominal → absolute Rust path
+    /// (`::crate::Type`). Each names a reported crate type the author minted a
+    /// handle over via `foreign X = { kind = Opaque "Type" }`; the interface
+    /// unions these into the crate's opaque map so the nominal exists even when
+    /// no binding references it yet. Every path passed the `::seg::…::Seg`
+    /// shape gate at decode (a malformed entry is dropped, never emitted raw).
+    declared_opaques: std::collections::BTreeMap<String, String>,
     /// The absolute path to the author-supplied wrapper crate this package was
     /// inspected from, or empty for an ordinary crates.io / git inspection. When
     /// set, the emitted app crate depends on the wrapper by `path` rather than a
@@ -852,6 +867,14 @@ impl PkgInfo {
         &self.foreign_types
     }
 
+    /// Author-declared opaque handles: Ipê handle nominal → absolute Rust path.
+    /// The interface unions these into the crate's opaque map so a declared
+    /// handle exists as a nominal even before any binding references it.
+    #[must_use]
+    pub const fn declared_opaques(&self) -> &std::collections::BTreeMap<String, String> {
+        &self.declared_opaques
+    }
+
     /// The absolute wrapper-crate path this package was inspected from, or empty
     /// for an ordinary crates.io / git inspection.
     #[must_use]
@@ -865,6 +888,33 @@ impl PkgInfo {
     pub fn dropped(&self) -> &[Diagnostic] {
         &self.dropped
     }
+}
+
+/// Decode the wire `declaredOpaques` map (Ipê handle nominal → Rust path).
+///
+/// A declared opaque path reaches the wrapper emitter verbatim (as a `type X =
+/// <path>` alias body), so a malformed or injection-bearing path fails the WHOLE
+/// package here rather than reaching the emitter. Unlike `foreignTypeIds`
+/// (metadata whose absence only disables unification), a declared opaque is
+/// load-bearing — a dropped entry would silently leave a referenced handle
+/// unresolved, so an ill-shaped path refuses instead of dropping.
+fn decode_declared_opaques(
+    raw: std::collections::BTreeMap<String, String>,
+    crate_name: &str,
+) -> Result<std::collections::BTreeMap<String, String>, Diagnostic> {
+    let mut out = std::collections::BTreeMap::new();
+    for (name, path) in raw {
+        if !path.strip_prefix("::").is_some_and(is_rust_path_shaped) {
+            return Err(Diagnostic::WireMalformed {
+                context: format!("crate `{crate_name}` declared opaque `{name}`"),
+                defect: WireDefect::Json {
+                    detail: format!("`{path}` is not an absolute `::seg::…::Seg` Rust path"),
+                },
+            });
+        }
+        out.insert(name, path);
+    }
+    Ok(out)
 }
 
 /// `true` when `s` is `seg::…::Seg` with every segment a legal Rust
@@ -1403,6 +1453,7 @@ impl TryFrom<WirePkgInfo> for PkgInfo {
                 k.strip_prefix("::").is_some_and(is_rust_path_shaped) && is_rust_path_shaped(v)
             })
             .collect();
+        let declared_opaques = decode_declared_opaques(w.declared_opaques, &w.name)?;
         // Each feature is spliced into a `features = [ … ]` array of the
         // emitted `Cargo.toml`; gate it at the boundary so an injection-bearing
         // feature fails the WHOLE package here rather than reaching the emitter.
@@ -1439,6 +1490,7 @@ impl TryFrom<WirePkgInfo> for PkgInfo {
             features,
             foreign_type_ids,
             foreign_types,
+            declared_opaques,
             wrapper_path,
             dropped,
         })
@@ -1467,6 +1519,50 @@ mod tests {
             "functions": functions,
             "errors": []
         })
+    }
+
+    /// A `base_pkg` document carrying a `declaredOpaques` map.
+    fn pkg_with_declared_opaques(declared: &serde_json::Value) -> serde_json::Value {
+        json!({
+            "pkg": "semver",
+            "name": "semver",
+            "version": "1.0.26",
+            "functions": [],
+            "errors": [],
+            "declaredOpaques": declared
+        })
+    }
+
+    #[test]
+    fn declared_opaques_decode_with_a_valid_absolute_path() {
+        let doc = pkg_with_declared_opaques(&json!({ "Connection": "::postgres::Client" }));
+        let pkg = decode(&doc).expect("decodes");
+        assert_eq!(
+            pkg.declared_opaques().get("Connection").map(String::as_str),
+            Some("::postgres::Client")
+        );
+    }
+
+    #[test]
+    fn a_declared_opaque_with_a_non_absolute_path_fails_the_package() {
+        // A bare (non-`::`-prefixed) path is refused — the whole package fails
+        // rather than emit an un-renderable alias body.
+        let doc = pkg_with_declared_opaques(&json!({ "Connection": "postgres::Client" }));
+        assert!(matches!(
+            decode(&doc),
+            Err(Diagnostic::WireMalformed { .. })
+        ));
+    }
+
+    #[test]
+    fn a_declared_opaque_with_an_injection_bearing_path_fails_the_package() {
+        let doc = pkg_with_declared_opaques(
+            &json!({ "Connection": "::postgres::Client; use std::process::Command" }),
+        );
+        assert!(matches!(
+            decode(&doc),
+            Err(Diagnostic::WireMalformed { .. })
+        ));
     }
 
     #[test]
