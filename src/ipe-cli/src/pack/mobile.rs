@@ -440,8 +440,12 @@ fn android_layout(
     });
     files.push(ShellFile {
         rel_path: "settings.gradle".to_owned(),
+        // A SINGLE-quoted Groovy string: `$`/`{`/`}` are literal here, so a
+        // `${…}` in the app name cannot become live GString interpolation that
+        // Gradle evaluates at configuration time. Matches every other Gradle sink,
+        // which is why they are safe; the escaper still neutralises `'`/`\`.
         content: ShellContent::Generated(format!(
-            "rootProject.name = \"{}\"\ninclude \":app\"\n",
+            "rootProject.name = '{}'\ninclude \":app\"\n",
             gradle_string_escape(&identity.name)
         )),
     });
@@ -1265,6 +1269,30 @@ mod tests {
         assert!(
             !plist.contains("<x>"),
             "a hostile identity cannot inject raw XML into the plist: {plist}"
+        );
+    }
+
+    #[test]
+    fn a_gstring_bearing_app_name_cannot_inject_into_settings_gradle() {
+        // Gradle evaluates `settings.gradle` as Groovy at configuration time; in a
+        // DOUBLE-quoted string `${…}` is live interpolation → code execution when
+        // anyone runs `./gradlew`. A single-quoted string renders `$` literal.
+        let hostile = super::super::desktop::BundleIdentity::new(
+            "App${new ProcessBuilder('id').start()}",
+            Some("1.0.0"),
+            Some("com.evil.app"),
+        );
+        let android =
+            layout(MobileOs::Android, &hostile, &accepts(&[]), &bundle(), None).expect("layout");
+        let settings = android.generated("settings.gradle").expect("settings.gradle");
+        assert!(
+            settings.contains("rootProject.name = '"),
+            "rootProject.name must be a single-quoted Groovy string: {settings}"
+        );
+        assert!(
+            !settings.contains("rootProject.name = \""),
+            "rootProject.name must NOT be double-quoted — `${{…}}` would be live \
+             GString interpolation Gradle evaluates: {settings}"
         );
     }
 
