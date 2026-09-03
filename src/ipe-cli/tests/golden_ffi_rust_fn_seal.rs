@@ -129,6 +129,67 @@ fn walk(dir: &Path) -> Vec<PathBuf> {
     out
 }
 
+/// Ergonomic gate (#1762): `Rust.fn` resolves with ONLY `import Ipe.Ffi.Rust as
+/// Rust` — no `import Rust.Ffi` required. The forwarder qualifier is
+/// auto-injected by the resolver when `Ipe.Ffi.Rust` is in scope.
+#[test]
+fn rust_fn_resolves_without_import_rust_ffi() {
+    let Ok(runtime) = ipe::resolve_runtime() else {
+        return;
+    };
+
+    // Identical program to MAIN_IPE but with `import Rust.Ffi` removed.
+    let main_no_ffi_import = "module Main exposing (main)\n\
+        import Ipe.Io as Io\n\
+        import Ipe.String as String\n\
+        import Ipe.Ffi.Rust as Rust\n\n\
+        shifted : Int -> Result Error Int\n\
+        shifted =\n\
+        \x20   Rust.fn \"tm\" \"shift\"\n\n\
+        double : Int -> Result Error Int\n\
+        double =\n\
+        \x20   Rust.fn \"tm\" \"hidden_double\"\n\n\
+        boom : Int -> Result Error Int\n\
+        boom =\n\
+        \x20   Rust.fn \"tm\" \"boom\"\n\n\
+        main =\n\
+        \x20   case shifted 20 of\n\
+        \x20       Ok a ->\n\
+        \x20           case double a of\n\
+        \x20               Ok b ->\n\
+        \x20                   case boom 13 of\n\
+        \x20                       Ok _ -> Io.println \"no-panic\"\n\
+        \x20                       Err _ -> Io.println (\"panic-err \" ++ String.fromInt b)\n\
+        \x20               Err _ -> Io.println \"err double\"\n\
+        \x20       Err _ -> Io.println \"err shift\"\n";
+
+    let tmp = std::env::temp_dir().join("ipec_ffi_rust_fn_no_ffi_import");
+    assert!(
+        write_project(&tmp, main_no_ffi_import),
+        "must write the fixture project + FFI cache"
+    );
+
+    let entry = tmp.join("src").join("Main.ipe");
+    let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("ffi_rust_fn_no_ffi_import_out");
+    let _ = fs::remove_dir_all(&out);
+
+    if let Err(err) = ipe::build_with_sibling_discovery(&entry, &out, &runtime) {
+        assert!(
+            false_marker(),
+            "Rust.fn must build with only `import Ipe.Ffi.Rust as Rust` (no `import Rust.Ffi`): {err}"
+        );
+        return;
+    }
+
+    let forwarders = read_emitted(&out, "src/ipe_mods/ipe_mod_rust_ffi.rs");
+    assert!(
+        forwarders.contains("ipe_asserted_tm_shift__"),
+        "forwarder must be emitted even without explicit `import Rust.Ffi`:\n{forwarders}"
+    );
+
+    let _ = fs::remove_dir_all(&tmp);
+}
+
 /// Default gate: `ipe build` exits 0 and the emitted crate carries the SAME
 /// asserted surface the legacy spelling emits — the `Rust.Ffi` forwarder module
 /// and the `ipe_asserted` shim region with exact carriers, the panic boundary,
