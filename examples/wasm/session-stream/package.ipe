@@ -1,0 +1,16 @@
+module Package exposing (package)
+
+import Ipe.Package exposing (..)
+
+
+package : Package
+package =
+    { name = "wasm-session-stream"
+    , version = "0.1.0"
+    , wasm =
+        On { mode = Spa }
+    , capabilities =
+        { declares = []
+        , accepts = [ JsPort Raw ]
+        }
+    }

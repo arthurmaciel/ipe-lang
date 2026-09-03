@@ -23065,6 +23065,71 @@ impl<'a> Lowerer<'a> {
                     self.reject_illegal_js_port_seal(decoder)?;
                     return Ok(Intercepted::Fallthrough(Some(peek)));
                 }
+                // `Js.openSession : openCmd -> Decoder frame -> Task SessionHandle`.
+                // Both the outbound open cmd and the inner type of `Decoder frame`
+                // must be port-seal-legal — the same fail-closed gate as `request`.
+                Callee::Kernel(KernelFn::JsOpenSession) if args.len() == 2 => {
+                    let open_cmd = args.first().ok_or_else(|| {
+                        bug(
+                            "ipe_lower::intercept_web_kernel_call",
+                            "Js.openSession missing open-cmd arg",
+                        )
+                    })?;
+                    let decoder = args.get(1).ok_or_else(|| {
+                        bug(
+                            "ipe_lower::intercept_web_kernel_call",
+                            "Js.openSession missing frame-decoder arg",
+                        )
+                    })?;
+                    self.reject_illegal_js_port_seal(open_cmd)?;
+                    self.reject_illegal_js_port_seal(decoder)?;
+                    return Ok(Intercepted::Fallthrough(Some(peek)));
+                }
+                // `Js.sessionFrames : SessionHandle -> Decoder frame -> (frame ->
+                // msg) -> Sub msg`. The inner type of `Decoder frame` must be
+                // port-seal-legal — the inbound fail-closed gate, same as `subscribe`.
+                Callee::Kernel(KernelFn::JsSessionFrames) if args.len() == 3 => {
+                    let decoder = args.get(1).ok_or_else(|| {
+                        bug(
+                            "ipe_lower::intercept_web_kernel_call",
+                            "Js.sessionFrames missing frame-decoder arg",
+                        )
+                    })?;
+                    self.reject_illegal_js_port_seal(decoder)?;
+                    return Ok(Intercepted::Fallthrough(Some(peek)));
+                }
+                // `Js.sendToSession : SessionHandle -> sessionCmd -> Cmd msg`.
+                // The outbound session cmd must be port-seal-legal.
+                Callee::Kernel(KernelFn::JsSendToSession) if args.len() == 2 => {
+                    let session_cmd = args.get(1).ok_or_else(|| {
+                        bug(
+                            "ipe_lower::intercept_web_kernel_call",
+                            "Js.sendToSession missing session-cmd arg",
+                        )
+                    })?;
+                    self.reject_illegal_js_port_seal(session_cmd)?;
+                    return Ok(Intercepted::Fallthrough(Some(peek)));
+                }
+                // `Js.closeSession : SessionHandle -> closeCmd -> Decoder terminal
+                // -> Task terminal`. Both the outbound close cmd and the inner type
+                // of `Decoder terminal` must be port-seal-legal.
+                Callee::Kernel(KernelFn::JsCloseSession) if args.len() == 3 => {
+                    let close_cmd = args.get(1).ok_or_else(|| {
+                        bug(
+                            "ipe_lower::intercept_web_kernel_call",
+                            "Js.closeSession missing close-cmd arg",
+                        )
+                    })?;
+                    let decoder = args.get(2).ok_or_else(|| {
+                        bug(
+                            "ipe_lower::intercept_web_kernel_call",
+                            "Js.closeSession missing terminal-decoder arg",
+                        )
+                    })?;
+                    self.reject_illegal_js_port_seal(close_cmd)?;
+                    self.reject_illegal_js_port_seal(decoder)?;
+                    return Ok(Intercepted::Fallthrough(Some(peek)));
+                }
                 // ── Debug.todo : String -> a — inject call-site location ──────
                 // The surface arity is 1 (user supplies only the note string).
                 // At lowering time a compiler-injected location string is prepended
@@ -26484,7 +26549,10 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::WebSocketSendBinary
                 // ── Ipe.Auth.Revocation arity-2 ───────────────
                 | KernelFn::AuthRevocationRevokeUser
-                | KernelFn::AuthRevocationRestoreUser,
+                | KernelFn::AuthRevocationRestoreUser
+                // ── Ipe.Ffi.Js session-stream arity-2 ──────────────────
+                | KernelFn::JsOpenSession
+                | KernelFn::JsSendToSession,
             ) => Ok(2),
             Callee::Kernel(
                 KernelFn::AuthSignToken
@@ -26498,7 +26566,12 @@ impl<'a> Lowerer<'a> {
                 // `closeWithCode : Int -> String -> Int -> Task Error ()`
                 // `subscribeWebSocket : Int -> String -> (any -> msg) -> Sub msg`
                 | KernelFn::WebSocketCloseWithCode
-                | KernelFn::SubSubscribeWebSocket,
+                | KernelFn::SubSubscribeWebSocket
+                // ── Ipe.Ffi.Js session-stream arity-3 ──────────────────
+                // `sessionFrames : SessionHandle -> Decoder frame -> (frame -> msg) -> Sub msg`
+                // `closeSession  : SessionHandle -> closeCmd -> Decoder terminal -> Task terminal`
+                | KernelFn::JsSessionFrames
+                | KernelFn::JsCloseSession,
             ) => Ok(3),
             // ── Ipe.Ui.Lazy ────────────────────────────────────────────
             // lazy  : (a -> Element msg) -> a -> Element msg          — arity 2
@@ -27610,6 +27683,11 @@ impl<'a> Lowerer<'a> {
                     ("Js", "send") => Ok(Callee::Kernel(KernelFn::JsSend)),
                     ("Js", "subscribe") => Ok(Callee::Kernel(KernelFn::JsSubscribe)),
                     ("Js", "request") => Ok(Callee::Kernel(KernelFn::JsRequest)),
+                    // ── Ipe.Ffi.Js session-stream primitive ──────────────────────
+                    ("Js", "openSession") => Ok(Callee::Kernel(KernelFn::JsOpenSession)),
+                    ("Js", "sessionFrames") => Ok(Callee::Kernel(KernelFn::JsSessionFrames)),
+                    ("Js", "sendToSession") => Ok(Callee::Kernel(KernelFn::JsSendToSession)),
+                    ("Js", "closeSession") => Ok(Callee::Kernel(KernelFn::JsCloseSession)),
                     ("Time", "every") => Ok(Callee::Kernel(KernelFn::TimeEvery)),
                     // ── Ipe.Http.Server kernels ─────────────────────────────
                     ("Server", "get") => Ok(Callee::Kernel(KernelFn::ServerGet)),

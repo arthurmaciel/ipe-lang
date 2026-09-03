@@ -4258,7 +4258,7 @@ impl StdlibKernel {
             Self::JsSubscribe => d("Js", "subscribe", 2, Tea, "js_subscribe"),
             Self::JsRequest => d("Js", "request", 2, Tea, "js_request"),
             Self::JsOpenSession => d("Js", "openSession", 2, Tea, "js_open_session"),
-            Self::JsSessionFrames => d("Js", "sessionFrames", 2, Tea, "js_session_frames"),
+            Self::JsSessionFrames => d("Js", "sessionFrames", 3, Tea, "js_session_frames"),
             Self::JsSendToSession => d("Js", "sendToSession", 2, Tea, "js_send_to_session"),
             Self::JsCloseSession => d("Js", "closeSession", 3, Tea, "js_close_session"),
             Self::EnvPublic => d("Env", "public", 1, Pure, "env_public"),
@@ -7339,8 +7339,10 @@ impl StdlibKernel {
         const TASK_SESSION_HANDLE: TyShape = TyShape::Con(BuiltinTag::Task, &[SESSION_HANDLE]);
         const JS_OPEN_SESSION: TyShape =
             TyShape::Fun(&A, &TyShape::Fun(&DEC_B, &TASK_SESSION_HANDLE));
-        const JS_SESSION_FRAMES: TyShape =
-            TyShape::Fun(&SESSION_HANDLE, &TyShape::Fun(&A_TO_B, &SUB_B));
+        const JS_SESSION_FRAMES: TyShape = TyShape::Fun(
+            &SESSION_HANDLE,
+            &TyShape::Fun(&DEC_A, &TyShape::Fun(&A_TO_B, &SUB_B)),
+        );
         const JS_SEND_TO_SESSION: TyShape =
             TyShape::Fun(&SESSION_HANDLE, &TyShape::Fun(&A, &CMD_B));
         const JS_CLOSE_SESSION: TyShape = TyShape::Fun(

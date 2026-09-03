@@ -1248,6 +1248,10 @@ pub const fn appearance_literal_args(k: KernelFn) -> &'static [(usize, LitKind)]
         | KernelFn::JsSend
         | KernelFn::JsSubscribe
         | KernelFn::JsRequest
+        | KernelFn::JsOpenSession
+        | KernelFn::JsSessionFrames
+        | KernelFn::JsSendToSession
+        | KernelFn::JsCloseSession
         | KernelFn::EnvPublic
         | KernelFn::RegionMainContent
         | KernelFn::RegionNavigation

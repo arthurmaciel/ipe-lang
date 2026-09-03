@@ -5333,6 +5333,14 @@ impl<'a> Builder<'a> {
             name: self.builtins.web_req,
             args: Vec::new(),
         };
+        // `session_handle()` — the opaque `SessionHandle` from `Ipe.Ffi.Js`, a
+        // nullary con obtained only from `Js.openSession`. Backed by the runtime
+        // session id (`IrType::SessionHandle`, renders to `i64`).
+        let session_handle = || Ty::Con {
+            module: Vec::new(),
+            name: self.builtins.session_handle,
+            args: Vec::new(),
+        };
         // `live_route(page)` — `WebRoute page` is parametric on the page type.
         // Its purpose is to carry the page type through HM unification so that
         //   routes : List (WebRoute var(2))            [K::WebApp]
@@ -8395,6 +8403,21 @@ impl<'a> Builder<'a> {
             // `Decoder b` are structural predicates enforced at lowering
             // (`reject_illegal_js_port_seal`), not HM constraints.
             K::JsRequest => fun(var(0), fun(dec(var(1)), task(var(1)))),
+            // The session-stream primitive. `SessionHandle` is the opaque address;
+            // the seal-legality of the concrete open/frame/cmd/terminal types is a
+            // structural predicate enforced at lowering, not an HM constraint.
+            //   openSession   : openCmd(0) -> Decoder frame(1) -> Task SessionHandle
+            //   sessionFrames : SessionHandle -> (frame(0) -> msg(1)) -> Sub msg
+            //   sendToSession : SessionHandle -> sessionCmd(0) -> Cmd msg(1)
+            //   closeSession  : SessionHandle -> closeCmd(0) -> Decoder terminal(1) -> Task terminal
+            K::JsOpenSession => fun(var(0), fun(dec(var(1)), task(session_handle()))),
+            K::JsSessionFrames => {
+                fun(session_handle(), fun(dec(var(0)), fun(fun(var(0), var(1)), sub(var(1)))))
+            }
+            K::JsSendToSession => fun(session_handle(), fun(var(0), cmd(var(1)))),
+            K::JsCloseSession => {
+                fun(session_handle(), fun(var(0), fun(dec(var(1)), task(var(1)))))
+            }
 
             // ── Ipe.Env — build-time-embedded public config ──────────
             // public : String -> Maybe String. Resolves ONLY for a
@@ -10459,6 +10482,10 @@ mod registry_phase_c_tests {
             K::JsSend,
             K::JsSubscribe,
             K::JsRequest,
+            K::JsOpenSession,
+            K::JsSessionFrames,
+            K::JsSendToSession,
+            K::JsCloseSession,
             // ── Ipe.Process — subprocess execution (no shell) ──
             K::ProcessRun,
             K::ProcessRunWith,

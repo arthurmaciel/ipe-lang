@@ -189,8 +189,9 @@ const TAG_CLI_APP: u8 = 82;
 // `ProcessRunInPtyCfg` — kernel-boundary non-serde input record for `Ipe.Process.runInPty`.
 const TAG_PROCESS_RUN_IN_PTY_CFG: u8 = 83;
 const TAG_WEBSOCKET_CLIENT_CFG: u8 = 84;
-// `SessionHandle` — opaque `Ipe.Ffi.Js` session handle, non-serde, never a Model
-// field; present for exhaustiveness.
+// `SessionHandle` — opaque `Ipe.Ffi.Js` session handle. Renders to a bare `i64`
+// (the session-registry key), which IS serde, so it may be a Model field; it gets
+// its own structural tag so a Model shape carrying it hashes distinctly.
 const TAG_SESSION_HANDLE: u8 = 85;
 /// Fuel exhaustion marker — distinct from every variant tag.
 const TAG_FUEL_EXHAUSTED: u8 = 0xFF;

@@ -3073,6 +3073,24 @@ fn emit_tea_call(
         // resolves the payload's concrete seal type and the decoder's `Decoder<IpeError, T>`
         // at the call site; no boxing or re-wrap is needed.
         KernelFn::JsRequest => Ok(None),
+        // ── Ipe.Ffi.Js session-stream primitive ──────────────────────────────────
+        // `openSession   : openCmd -> Decoder frame -> Task SessionHandle`
+        //     →  `js_open_session(<openCmd>, <decoder>)`
+        // `sessionFrames : SessionHandle -> Decoder frame -> (frame -> msg) -> Sub msg`
+        //     →  `js_session_frames(<handle>, <decoder>, <to_msg>)` — the explicit
+        //        frame decoder is the fail-closed inbound gate, same idiom as
+        //        `subscribe`; the runtime fn takes (handle, decoder, to_msg) in order.
+        // `sendToSession : SessionHandle -> sessionCmd -> Cmd msg`
+        //     →  `js_send_to_session(<handle>, <sessionCmd>)`
+        // `closeSession  : SessionHandle -> closeCmd -> Decoder terminal -> Task terminal`
+        //     →  `js_close_session(<handle>, <closeCmd>, <decoder>)`
+        // All take their surface args in the runtime fn's order, so the default
+        // N-arg emit path renders each verbatim; Rust generic inference resolves the
+        // concrete seal types and decoders at the call site.
+        KernelFn::JsOpenSession
+        | KernelFn::JsSessionFrames
+        | KernelFn::JsSendToSession
+        | KernelFn::JsCloseSession => Ok(None),
         // (`Ipe.PubSub.publish` / `publishNoEcho` are `class = Web`, Task-shaped —
         // emitted in `emit_ui_call`, not here. They are not TEA-loop kernels.)
         // ── Ipe.WebSocket: onOpen / onMessage / onClose / onError ───────────

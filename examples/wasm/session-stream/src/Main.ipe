@@ -1,0 +1,175 @@
+module Main exposing (main)
+
+-- | session-stream — the third `Ipe.Ffi.Js` port shape: a correlated, BOUNDED,
+-- session-scoped stream (`open -> N frames -> close -> terminal`), on the
+-- client-WASM target (the Model lives in-tab, so it may hold the opaque handle —
+-- a server-driven Web Model, which is persisted, could not).
+--
+-- Where `Js.send` is fire-and-forget (`Cmd`), `Js.subscribe` a free broadcast
+-- (`Sub`), and `Js.request` a correlated ONE-shot (`Task`), a SESSION is a
+-- correlated MANY-frame lifecycle: `openSession` mints an opaque `SessionHandle`,
+-- `sessionFrames` streams the inbound frames for THAT handle, `sendToSession`
+-- sends a control cmd to it, and `closeSession` awaits a terminal reply.
+--
+-- This is a GENERIC demonstrator over a developer `ipe.onReceive` echo handler —
+-- no first-party Web API. The same closed-ADT SEAL governs every value crossing
+-- the seam: the open cmd, each frame, the control cmd, and the terminal are all
+-- closed, monomorphic value types, decoded fail-closed on the way in. The handle
+-- is opaque and unforgeable: you can only address a session you opened.
+
+
+import Ipe.Tea.Web as Web
+import Ipe.Tea.Web.Cmd as Cmd
+import Ipe.Tea.Web.Sub as Sub
+import Ipe.Ui as Ui
+import Ipe.Ffi.Js as Js
+import Ipe.Json.Decode as Decode
+import Ipe.Error as Error exposing (Error)
+import Ipe.String as String
+import Ipe.Maybe exposing (Maybe(..))
+
+
+-- The closed outbound OPEN command — start a ticker session at a given interval.
+type OpenCmd
+    = StartTicker Int
+
+
+-- The closed inbound FRAME type — one tick carrying its sequence number. The
+-- decoder for this type IS the fail-closed gate: a malformed frame is dropped
+-- whole, never a partial value.
+type Frame
+    = Tick Int
+
+
+-- The closed CONTROL command sent to a live session.
+type SessionCmd
+    = RequestStop
+
+
+-- The closed TERMINAL reply — the assembled session summary on close.
+type alias Summary =
+    { totalTicks : Int }
+
+
+type alias Model =
+    { session : Maybe Js.SessionHandle
+    , lastTick : Int
+    , summary : String
+    }
+
+
+type Msg
+    = Open
+    | Opened (Result Error Js.SessionHandle)
+    | GotFrame Frame
+    | Stop
+    | Close
+    | Closed (Result Error Summary)
+
+
+init : WebReq -> ( Model, Cmd.Cmd Msg )
+init _req =
+    ( { session = Nothing, lastTick = 0, summary = "no session" }, Cmd.none )
+
+
+-- The frame decoder: the seal-gated inbound frame parser. `Tick` is externally
+-- tagged, so the JS echo sends `{ "Tick": <int> }`.
+frameDecoder : Decode.Decoder Frame
+frameDecoder =
+    Decode.map Tick (Decode.field "Tick" Decode.int)
+
+
+-- The terminal decoder: the seal-gated close reply parser.
+summaryDecoder : Decode.Decoder Summary
+summaryDecoder =
+    Decode.map Summary (Decode.field "totalTicks" Decode.int)
+
+
+update : Msg -> Model -> ( Model, Cmd.Cmd Msg )
+update msg model =
+    case msg of
+        Open ->
+            -- Open a session: the Task resolves with the opaque handle (or Err on
+            -- host reject / the open-session ceiling).
+            ( model, Cmd.perform (Js.openSession (StartTicker 1000) frameDecoder) Opened )
+
+        Opened result ->
+            case result of
+                Ok handle ->
+                    ( { model | session = Just handle, summary = "session open" }, Cmd.none )
+
+                Err error ->
+                    ( { model | summary = "open failed: " ++ Error.toString error }, Cmd.none )
+
+        GotFrame (Tick k) ->
+            ( { model | lastTick = k }, Cmd.none )
+
+        Stop ->
+            -- Send a control cmd to the live session, if any.
+            case model.session of
+                Just handle ->
+                    ( model, Js.sendToSession handle RequestStop )
+
+                Nothing ->
+                    ( model, Cmd.none )
+
+        Close ->
+            -- Close the session: await the terminal summary, then evict the id.
+            case model.session of
+                Just handle ->
+                    ( model
+                    , Cmd.perform (Js.closeSession handle RequestStop summaryDecoder) Closed
+                    )
+
+                Nothing ->
+                    ( model, Cmd.none )
+
+        Closed result ->
+            case result of
+                Ok summary ->
+                    ( { model
+                        | session = Nothing
+                        , summary = "closed: " ++ String.fromInt summary.totalTicks ++ " ticks"
+                      }
+                    , Cmd.none
+                    )
+
+                Err error ->
+                    ( { model | session = Nothing, summary = "close failed: " ++ Error.toString error }
+                    , Cmd.none
+                    )
+
+
+-- The inbound frame stream for THIS session's handle, seal-gated by the explicit
+-- frame decoder. With no open session the subscription is inert (it names no
+-- handle) — it receives nothing, never another session's frames.
+subscriptions : Model -> Sub.Sub Msg
+subscriptions model =
+    case model.session of
+        Just handle ->
+            Js.sessionFrames handle frameDecoder GotFrame
+
+        Nothing ->
+            Sub.none
+
+
+view : Model -> Element Msg
+view model =
+    Ui.column []
+        [ Ui.button [] { onPress = Just Open, label = Ui.text "Open session" }
+        , Ui.button [] { onPress = Just Stop, label = Ui.text "Request stop" }
+        , Ui.button [] { onPress = Just Close, label = Ui.text "Close session" }
+        , Ui.text ("last tick: " ++ String.fromInt model.lastTick)
+        , Ui.text model.summary
+        ]
+
+
+main =
+    Web.app
+        { init = init
+        , update = update
+        , view = view
+        , subscriptions = subscriptions
+        , routes = []
+        , notFound = Open
+        }

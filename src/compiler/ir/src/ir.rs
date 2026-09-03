@@ -1849,6 +1849,8 @@ pub fn ir_type_is_derivable(
         // derivable by construction; its `Clone` (and any whole-record bound)
         // is guaranteed by the witness bound set the backend emits.
         | IrType::RowGeneric(_)
+        // `SessionHandle` renders to a bare `i64` — fully derivable + serde.
+        | IrType::SessionHandle
         | IrType::UiPlain(_) => true,
         // The fully-derivable Ipe.Ui / Ipe.Html carriers vs the two Clone-only
         // ones (`html::Attribute` / `html::Event`, which hold `Arc<dyn Fn>`).
@@ -1914,9 +1916,6 @@ pub fn ir_type_is_derivable(
         | IrType::EmailSmtpConfig
         | IrType::EmailProvider
         | IrType::WebReq
-        // `SessionHandle` is a live-registry key (an `i64`) — not a session datum,
-        // never round-tripped through serde.
-        | IrType::SessionHandle
         // `Route<Page>` holds an `Arc<dyn Fn>` builder — never derivable/serde
         // regardless of its page argument.
         | IrType::WebRoute(_)
@@ -2021,7 +2020,14 @@ pub fn ir_type_is_serde(ty: &IrType, enum_serde: &impl Fn(&ModPath, Symbol) -> b
         | IrType::ErrorDetails
         | IrType::ErrorInfo
         | IrType::PanicInfo
-        | IrType::TypeInfo => true,
+        | IrType::TypeInfo
+        // `SessionHandle` renders to a bare `i64` (the session-registry key), which
+        // is natively serde. Round-tripping it through a Web/SPA Model store is
+        // harmless: every session op validates the id fail-closed (an unknown or
+        // stale id yields an inert frame stream / a typed `Err`), so a rehydrated id
+        // that names no live session is safe by construction. Opacity — no Ipê
+        // constructor — still makes a MEANINGFUL handle unforgeable in source.
+        | IrType::SessionHandle => true,
         // All non-serde leaves collapse to `false`:
         //   * `UiPlain` value types (`Length`/`Color`/… → `ui::element::*`) and
         //     every `Ui` carrier (`Html`/`Element`/`Attribute`) derive only
@@ -2112,7 +2118,6 @@ pub fn ir_type_is_serde(ty: &IrType, enum_serde: &impl Fn(&ModPath, Symbol) -> b
         | IrType::WebSocketServer
         | IrType::WebSocketServerCfg
         | IrType::WebReq
-        | IrType::SessionHandle
         // `BackoffStrategy` is not a session datum — kernel-boundary value, no serde derive.
         | IrType::BackoffStrategy
         // Typed-key newtypes must NEVER round-trip through serde — a `Key`
@@ -5017,7 +5022,6 @@ mod tests {
             IrType::Fun(vec![IrType::Int], Box::new(IrType::Int)),
             IrType::ServerRequest,
             IrType::WebReq,
-            IrType::SessionHandle,
         ];
         for t in bad {
             assert!(!ir_type_is_serde(&t, &all_serde), "{t:?} must NOT be serde");
