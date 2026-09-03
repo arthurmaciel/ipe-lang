@@ -980,6 +980,11 @@ pub struct InstalledCrate {
     /// rule 1). Empty for a legacy cache, which then cross-checks nothing;
     /// the emitted shim's `rustc` check still holds.
     pub inspected_free_fns: std::collections::BTreeMap<String, InspectedFnFact>,
+    /// Inspected public-constant facts, keyed by the constant's crate-relative
+    /// path (`f64::consts::PI`) — the `Rust.const` type cross-check. A native
+    /// constant must appear here or its assertion is refused (fail-closed, no
+    /// blind trust). Empty for a legacy cache, which then admits no `.const`.
+    pub inspected_consts: std::collections::BTreeMap<String, InspectedConstFact>,
 }
 
 /// One inspected free function's declared Rust surface, for the asserted-call
@@ -992,6 +997,14 @@ pub struct InspectedFnFact {
     pub result: Option<String>,
     /// The inspector's effect classification.
     pub effect: crate::pkginfo::Effect,
+}
+
+/// One inspected public constant's declared Rust surface, for the `Rust.const`
+/// exact-carrier type cross-check.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InspectedConstFact {
+    /// The constant's Rust type, verbatim from the inspection (`f64`, `&str`).
+    pub ty: String,
 }
 
 /// Load every installed crate from a project's FFI artifact cache.
@@ -1250,6 +1263,7 @@ fn load_installed_crate(cache_root: &Path, slug: String) -> Result<InstalledCrat
             wrapper_idents,
             dep_versions,
             inspected_free_fns: std::collections::BTreeMap::new(),
+            inspected_consts: std::collections::BTreeMap::new(),
         })
     }
 }
@@ -1290,6 +1304,18 @@ pub fn installed_crate_from_pkg(slug: String, pkg: &PkgInfo) -> Result<Installed
             );
         }
     }
+    // The `Rust.const` cross-check facts: every inspected public constant,
+    // keyed by its crate-relative path, carrying its recorded Rust type.
+    let mut inspected_consts: std::collections::BTreeMap<String, InspectedConstFact> =
+        std::collections::BTreeMap::new();
+    for c in pkg.consts() {
+        inspected_consts.insert(
+            c.path().to_owned(),
+            InspectedConstFact {
+                ty: c.rust_type().to_owned(),
+            },
+        );
+    }
     let iface = crate::interface::crate_interface(pkg);
     let bindings_source = crate::bindings::emit_bindings(pkg);
     let wrapper_idents: BTreeSet<String> = iface
@@ -1312,6 +1338,7 @@ pub fn installed_crate_from_pkg(slug: String, pkg: &PkgInfo) -> Result<Installed
         wrapper_idents,
         dep_versions,
         inspected_free_fns,
+        inspected_consts,
     })
 }
 

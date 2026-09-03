@@ -218,6 +218,26 @@ pub enum AssertedDefect {
         first: String,
         second: String,
     },
+    /// A `Rust.const` annotation is not a bare scalar type — a native constant
+    /// reads a single infallible value (Int, Float, Bool, Char, String, or
+    /// Bytes), never a `Result`, an arrow, a record, or an opaque handle.
+    ConstNotScalar {
+        /// The annotation, as written.
+        ty: String,
+    },
+    /// A `Rust.const` target is not present in the crate's inspected constants,
+    /// so its type cannot be confirmed — the boundary never blind-trusts an
+    /// unverifiable native read.
+    ConstNotIntrospectable {
+        /// The constant path's final segment.
+        name: String,
+    },
+    /// A `Rust.const` target is inspected but its recorded type does not match
+    /// the asserted scalar under the exact-carrier rule.
+    ConstTypeMismatch {
+        /// The exact Rust type the inspection records for the constant.
+        expected: String,
+    },
 }
 
 impl fmt::Display for AssertedDefect {
@@ -268,6 +288,24 @@ impl fmt::Display for AssertedDefect {
                 "two definitions assert different signatures for this path \
                  (`{first}` vs `{second}`) — make them identical or share one \
                  asserted definition"
+            ),
+            Self::ConstNotScalar { ty } => write!(
+                f,
+                "a `Rust.const` reads a bare scalar constant (Int, Float, Bool, \
+                 Char, String, or Bytes); `{ty}` is not one — a native constant \
+                 is a single infallible value, never a `Result`, arrow, record, \
+                 or opaque handle"
+            ),
+            Self::ConstNotIntrospectable { name } => write!(
+                f,
+                "the constant `{name}` is not among the target crate's inspected \
+                 constants — its type cannot be confirmed, and a native read is \
+                 never trusted unverified"
+            ),
+            Self::ConstTypeMismatch { expected } => write!(
+                f,
+                "the asserted type does not match the inspected constant type \
+                 `{expected}` under the exact-carrier rule — fix the annotation"
             ),
         }
     }

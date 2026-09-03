@@ -404,8 +404,12 @@ pub fn dedupe(specs: Vec<AssertedSpec>) -> Result<Vec<AssertedSpec>, Diagnostic>
 /// hatch compiles down to the same gated interface entries as every other
 /// surface.
 #[must_use]
-pub fn render_asserted_interface(specs: &[AssertedSpec]) -> String {
-    let mut exports: Vec<&str> = specs.iter().map(|s| s.def_name.as_str()).collect();
+pub fn render_asserted_interface(specs: &[AssertedSpec], consts: &[ConstSpec]) -> String {
+    let mut exports: Vec<&str> = specs
+        .iter()
+        .map(|s| s.def_name.as_str())
+        .chain(consts.iter().map(|c| c.def_name.as_str()))
+        .collect();
     exports.sort_unstable();
     let mut out = format!(
         "module {} exposing ({})\n",
@@ -443,6 +447,7 @@ pub fn render_asserted_interface(specs: &[AssertedSpec]) -> String {
             args_joined
         );
     }
+    out.push_str(&render_const_interface(consts));
     out
 }
 
@@ -524,6 +529,241 @@ pub fn emit_asserted_shims(specs: &[AssertedSpec]) -> String {
     out
 }
 
+// ── native constants (`Rust.const`) ─────────────────────────────────────────
+
+/// One validated native-constant read: the parsed path, the asserted scalar
+/// type, the derived names, and the rendered Rust type — resolved here so
+/// emission is a total function over this value.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConstSpec {
+    /// The validated target path.
+    pub path: AssertedPath,
+    /// The asserted scalar carrier (never opaque, never a `Result`/arrow).
+    pub scalar: crate::carrier::ScalarCarrier,
+    /// The Ipê definition name in the generated `Rust.Ffi` module.
+    pub def_name: String,
+    /// The `_bindings.rs` const-read shim identifier.
+    pub wrapper_ident: String,
+}
+
+impl ConstSpec {
+    /// The Ipê surface type of the generated interface def (a bare scalar).
+    #[must_use]
+    pub const fn ipe_type(&self) -> &'static str {
+        self.scalar.ipe_surface()
+    }
+}
+
+/// Parse a `Rust.const` annotation into its bare scalar carrier.
+///
+/// The one accepted shape is a bare scalar type constructor (`Int`, `Float`,
+/// `Bool`, `Char`, `String`, `Bytes`). An arrow, a `Result`, a tuple, a
+/// record, an applied constructor, or an opaque nominal is refused — a native
+/// constant is a single infallible value, never a fallible or compound one.
+///
+/// # Errors
+/// [`AssertedDefect::ConstNotScalar`] naming the offending annotation.
+fn parse_const_scalar(
+    annotation: &TypeAnnotation,
+    interner: &Interner,
+) -> Result<crate::carrier::ScalarCarrier, AssertedDefect> {
+    let not_scalar = || AssertedDefect::ConstNotScalar {
+        ty: render_ty(annotation, interner),
+    };
+    let TypeAnnotation::TType(_, name_segments, args) = annotation else {
+        return Err(not_scalar());
+    };
+    if !args.is_empty() {
+        return Err(not_scalar());
+    }
+    let name = last_segment(name_segments, interner);
+    // Route through the shared carrier gate, then project onto the scalar
+    // subset — an opaque handle (`Carrier::Opaque`) has no scalar and is
+    // refused, exactly like a non-scalar annotation.
+    Carrier::parse(&name)
+        .ok()
+        .and_then(|c| c.as_scalar())
+        .ok_or_else(not_scalar)
+}
+
+/// Validate one `Rust.const` call against the installed-crate catalog.
+///
+/// The annotation must be a bare scalar, the target crate installed, and the
+/// constant present in the crate's inspected constants with a matching type.
+///
+/// The introspection cross-check is MANDATORY here (unlike `Rust.fn`, whose
+/// uninspected path falls back to the shim's `rustc` check): a native constant
+/// carries no panic boundary, so its type is confirmed against the inspection
+/// or the read is refused — the boundary never blind-trusts an unverifiable
+/// value. The emitted `::crate::PATH` read is the `rustc` backstop for a
+/// type the inspection recorded but the emit still mis-renders.
+///
+/// # Errors
+/// [`Diagnostic::AssertedRefused`] carrying the closed [`AssertedDefect`].
+pub fn validate_const(
+    path: AssertedPath,
+    annotation: &TypeAnnotation,
+    interner: &Interner,
+    catalog: &[InstalledCrate],
+) -> Result<ConstSpec, Diagnostic> {
+    let refused = |defect: AssertedDefect| Diagnostic::AssertedRefused {
+        path: path.as_str().to_owned(),
+        defect,
+    };
+    let Some(target) = catalog.iter().find(|c| c.slug == path.crate_ident()) else {
+        return Err(refused(AssertedDefect::TargetCrateNotInstalled {
+            crate_ident: path.crate_ident().to_owned(),
+        }));
+    };
+    let scalar = parse_const_scalar(annotation, interner).map_err(&refused)?;
+    // The constant is keyed in the inspection by its crate-RELATIVE path
+    // (`f64::consts::PI`) — the asserted path with its leading crate segment
+    // stripped. Absence is a fail-closed refusal: no unverified native read.
+    let relative = path
+        .as_str()
+        .strip_prefix(path.crate_ident())
+        .and_then(|r| r.strip_prefix("::"))
+        .unwrap_or(path.as_str());
+    let Some(fact) = target.inspected_consts.get(relative) else {
+        return Err(refused(AssertedDefect::ConstNotIntrospectable {
+            name: relative.to_owned(),
+        }));
+    };
+    if !const_type_matches(scalar, &fact.ty) {
+        return Err(refused(AssertedDefect::ConstTypeMismatch {
+            expected: fact.ty.clone(),
+        }));
+    }
+    Ok(ConstSpec {
+        def_name: path.const_def_name(),
+        wrapper_ident: path.const_wrapper_ident(),
+        path,
+        scalar,
+    })
+}
+
+/// Whether an inspected constant's Rust type is EXACTLY the asserted scalar's
+/// Rust rendering. A `&str`/`&'static str` constant matches the `String`
+/// scalar (the shim owns it with `.to_owned()`); every other scalar matches
+/// its owned spelling byte-for-byte (whitespace-normalized). Identity only —
+/// no widening, no lossy conversion.
+fn const_type_matches(scalar: crate::carrier::ScalarCarrier, foreign_ty: &str) -> bool {
+    let normalized: String = foreign_ty.chars().filter(|c| !c.is_whitespace()).collect();
+    if matches!(scalar, crate::carrier::ScalarCarrier::Str) {
+        return matches!(normalized.as_str(), "&str" | "&'staticstr" | "String");
+    }
+    normalized == scalar.rust_owned().replace(' ', "")
+}
+
+/// Render the driver-generated `Rust.Ffi` const-read forwarders.
+///
+/// Each is a nullary value binding whose whole body is an `Ffi.asserted`
+/// binding of the const-read shim — mintable only under
+/// [`ipe_canon::ModuleOrigin::FfiInterface`], so a native constant compiles
+/// down to the same gated interface entries as every other surface. The Ipê
+/// type is a bare scalar (no `Result`), so the read is infallible.
+#[must_use]
+pub fn render_const_interface(specs: &[ConstSpec]) -> String {
+    let mut ordered: Vec<&ConstSpec> = specs.iter().collect();
+    ordered.sort_unstable_by(|a, b| a.def_name.cmp(&b.def_name));
+    let mut out = String::new();
+    for s in ordered {
+        let _ = write!(
+            out,
+            "\n{} : {}\n{} =\n    Ffi.asserted \"{}\"\n",
+            s.def_name,
+            s.ipe_type(),
+            s.def_name,
+            s.wrapper_ident
+        );
+    }
+    out
+}
+
+/// Render the native-constant shim region: one nullary `fn` per constant.
+///
+/// Each returns the inspected scalar BY VALUE. The body is a BARE
+/// `::crate::PATH` read — no `catch_unwind`, no `IpeResult`, no call
+/// parentheses — because a constant cannot panic or fail. A `String`-scalar
+/// const owns its `&str` source with `.to_owned()`. A mis-typed emitted read
+/// fails `cargo build`, the `rustc` backstop for the (inspection-confirmed)
+/// type.
+#[must_use]
+pub fn emit_const_shims(specs: &[ConstSpec]) -> String {
+    use crate::carrier::ScalarCarrier;
+    let mut ordered: Vec<&ConstSpec> = specs.iter().collect();
+    ordered.sort_unstable_by(|a, b| a.wrapper_ident.cmp(&b.wrapper_ident));
+    let mut lines: Vec<String> = vec![
+        "pub mod ipe_asserted_const {".to_owned(),
+        "    //! Author-asserted native-constant reads (`Rust.const`): a bare".to_owned(),
+        "    //! value read of the inspected scalar type, no panic boundary and".to_owned(),
+        "    //! no fallible wrapper (a constant cannot fail).".to_owned(),
+        "    #![allow(unused_imports)]".to_owned(),
+        String::new(),
+        "    use crate::*;".to_owned(),
+    ];
+    for s in ordered {
+        // The bare constant read: `::crate::PATH`, never called.
+        let read = s.path.rust_call_path();
+        let (ret, body) = match s.scalar {
+            ScalarCarrier::Str => ("String".to_owned(), format!("{read}.to_owned()")),
+            other => (other.rust_owned().to_owned(), read),
+        };
+        lines.push(String::new());
+        lines.push(format!(
+            "    // [asserted-const] {} : {} = Rust.const \"{}\" \"{}\"",
+            s.def_name,
+            s.ipe_type(),
+            s.path.crate_ident(),
+            s.path
+                .as_str()
+                .strip_prefix(s.path.crate_ident())
+                .and_then(|r| r.strip_prefix("::"))
+                .unwrap_or(s.path.as_str())
+        ));
+        lines.push(
+            "    // A type error here means the asserted type does not match the real".to_owned(),
+        );
+        lines.push("    // Rust constant — fix the annotation at the definition above.".to_owned());
+        lines.push(format!("    pub fn {}() -> {ret} {{", s.wrapper_ident));
+        lines.push(format!("        {body}"));
+        lines.push("    }".to_owned());
+    }
+    lines.push("}".to_owned());
+    lines.push("pub use ipe_asserted_const::*;".to_owned());
+    let mut out = lines.join("\n");
+    out.push('\n');
+    out
+}
+
+/// Fold a batch of validated const specs, deduplicating identical reads and
+/// refusing conflicting ones (two different scalar types for one path).
+///
+/// # Errors
+/// [`Diagnostic::AssertedRefused`] with
+/// [`AssertedDefect::ConflictingAssertions`].
+pub fn dedupe_consts(specs: Vec<ConstSpec>) -> Result<Vec<ConstSpec>, Diagnostic> {
+    let mut by_def: BTreeMap<String, ConstSpec> = BTreeMap::new();
+    for spec in specs {
+        match by_def.get(&spec.def_name) {
+            None => {
+                by_def.insert(spec.def_name.clone(), spec);
+            }
+            Some(existing) if existing.scalar == spec.scalar && existing.path == spec.path => {}
+            Some(existing) => {
+                return Err(Diagnostic::AssertedRefused {
+                    path: spec.path.as_str().to_owned(),
+                    defect: AssertedDefect::ConflictingAssertions {
+                        first: format!("{} : {}", existing.path.as_str(), existing.ipe_type()),
+                        second: format!("{} : {}", spec.path.as_str(), spec.ipe_type()),
+                    },
+                });
+            }
+        }
+    }
+    Ok(by_def.into_values().collect())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -584,6 +824,12 @@ mod tests {
                     "effect": "fallible"
                 }
             ],
+            "constants": [
+                {"path": "MAX_MINOR", "type": "i64"},
+                {"path": "consts::PI", "type": "f64"},
+                {"path": "NAME", "type": "&'static str"},
+                {"path": "BUILD", "type": "semver::Prerelease"}
+            ],
             "errors": [],
             "transitiveDeps": [{"ident": "semver", "name": "semver", "version": "1.0.26"}],
             "foreignTypeIds": {"::semver::Version": "semver::version::Version"}
@@ -591,6 +837,13 @@ mod tests {
         .to_string();
         let pkg = PkgInfo::decode_json(&doc).expect("decodes");
         crate::driver::installed_crate_from_pkg("semver".to_owned(), &pkg).expect("installs")
+    }
+
+    fn validated_const(ty: &str, path: &str) -> Result<ConstSpec, Diagnostic> {
+        let mut interner = Interner::new();
+        let ann = ann_leaf(&mut interner, ty);
+        let path = AssertedPath::parse(path).expect("path parses");
+        validate_const(path, &ann, &interner, &[semver_crate()])
     }
 
     fn validated(sig_names: &[&str], path: &str) -> Result<AssertedSpec, Diagnostic> {
@@ -709,7 +962,7 @@ mod tests {
         .expect("validates");
         assert_eq!(spec.param_rust, vec!["::semver::Version".to_owned()]);
         assert!(spec.opaque_imports.contains("Version"));
-        let iface = render_asserted_interface(std::slice::from_ref(&spec));
+        let iface = render_asserted_interface(std::slice::from_ref(&spec), &[]);
         assert!(
             iface.contains("import Rust.Semver exposing (Version)"),
             "{iface}"
@@ -766,7 +1019,7 @@ mod tests {
     #[test]
     fn the_interface_renders_the_gated_asserted_body() {
         let spec = validated(&["Int", "Result Error Int"], "semver::frobnicate").expect("ok");
-        let iface = render_asserted_interface(std::slice::from_ref(&spec));
+        let iface = render_asserted_interface(std::slice::from_ref(&spec), &[]);
         assert!(iface.starts_with("module Rust.Ffi exposing ("), "{iface}");
         assert!(
             iface.contains(&format!(
@@ -789,5 +1042,142 @@ mod tests {
             "{shims}"
         );
         assert!(shims.contains("::semver::uninspected_zero()"), "{shims}");
+    }
+
+    // ── native constants (`Rust.const`) ─────────────────────────────────────
+
+    #[test]
+    fn a_matching_scalar_const_validates_and_reads_bare() {
+        let spec = validated_const("Float", "semver::consts::PI").expect("validates");
+        assert_eq!(spec.ipe_type(), "Float");
+        assert!(
+            spec.def_name
+                .starts_with("asserted_const_semver_consts_pi__")
+        );
+        assert!(
+            spec.wrapper_ident
+                .starts_with("ipe_asserted_const_semver_consts_pi__")
+        );
+        let shims = emit_const_shims(std::slice::from_ref(&spec));
+        // The SEAL of the const read: a bare `::crate::PATH` value, no call
+        // parentheses, no panic boundary, no `IpeResult` wrapper.
+        assert!(shims.contains("-> f64 {"), "{shims}");
+        assert!(shims.contains("::semver::consts::PI"), "{shims}");
+        assert!(!shims.contains("::semver::consts::PI("), "{shims}");
+        assert!(!shims.contains("catch_unwind"), "{shims}");
+        assert!(!shims.contains("IpeResult"), "{shims}");
+        assert!(!shims.contains("ipe_error_from_panic"), "{shims}");
+    }
+
+    #[test]
+    fn a_string_const_owns_its_str_source() {
+        let spec = validated_const("String", "semver::NAME").expect("validates");
+        let shims = emit_const_shims(std::slice::from_ref(&spec));
+        assert!(shims.contains("-> String {"), "{shims}");
+        assert!(shims.contains("::semver::NAME.to_owned()"), "{shims}");
+    }
+
+    #[test]
+    fn a_const_interface_is_a_nullary_bare_value_binding() {
+        let spec = validated_const("Float", "semver::consts::PI").expect("validates");
+        let iface = render_const_interface(std::slice::from_ref(&spec));
+        // A bare scalar type (no `Result`), and a nullary binding (no args).
+        assert!(
+            iface.contains(&format!(
+                "{} : Float\n{} =\n    Ffi.asserted \"{}\"\n",
+                spec.def_name, spec.def_name, spec.wrapper_ident
+            )),
+            "{iface}"
+        );
+    }
+
+    #[test]
+    fn a_result_typed_const_is_refused_as_non_scalar() {
+        let err = validated_const("Result Error Int", "semver::consts::PI").expect_err("refused");
+        assert!(
+            matches!(
+                &err,
+                Diagnostic::AssertedRefused {
+                    defect: AssertedDefect::ConstNotScalar { .. },
+                    ..
+                }
+            ),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn an_opaque_typed_const_is_refused_as_non_scalar() {
+        // A native constant reads a bare scalar; an opaque handle has no bare
+        // value shape, so `Rust.const : Version` is refused before any lookup.
+        let err = validated_const("Version", "semver::BUILD").expect_err("refused");
+        assert!(
+            matches!(
+                &err,
+                Diagnostic::AssertedRefused {
+                    defect: AssertedDefect::ConstNotScalar { .. },
+                    ..
+                }
+            ),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn an_uninspected_const_is_refused_fail_closed() {
+        // Not among the crate's inspected constants: its type cannot be
+        // confirmed, so the read is refused rather than blind-trusted.
+        let err = validated_const("Int", "semver::not_a_const").expect_err("refused");
+        assert!(
+            matches!(
+                &err,
+                Diagnostic::AssertedRefused {
+                    defect: AssertedDefect::ConstNotIntrospectable { .. },
+                    ..
+                }
+            ),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn a_wrong_typed_const_is_refused_under_exact_carrier() {
+        // `MAX_MINOR` is inspected as `i64`; asserting `Float` mismatches.
+        let err = validated_const("Float", "semver::MAX_MINOR").expect_err("refused");
+        assert!(
+            matches!(
+                &err,
+                Diagnostic::AssertedRefused {
+                    defect: AssertedDefect::ConstTypeMismatch { expected }, ..
+                } if expected == "i64"
+            ),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn conflicting_const_types_for_one_path_are_refused() {
+        let a = validated_const("Float", "semver::consts::PI").expect("validates");
+        let b = validated_const("String", "semver::NAME").expect("validates");
+        // Same derived name, different scalar: rebuild `b` on `a`'s def name.
+        let conflicting = ConstSpec {
+            def_name: a.def_name.clone(),
+            ..b
+        };
+        let err = dedupe_consts(vec![a, conflicting]).expect_err("refused");
+        assert!(
+            matches!(
+                &err,
+                Diagnostic::AssertedRefused {
+                    defect: AssertedDefect::ConflictingAssertions { .. },
+                    ..
+                }
+            ),
+            "{err}"
+        );
+        // Identical const reads deduplicate to one spec.
+        let a2 = validated_const("Float", "semver::consts::PI").expect("validates");
+        let a3 = validated_const("Float", "semver::consts::PI").expect("validates");
+        assert_eq!(dedupe_consts(vec![a2, a3]).expect("dedupes").len(), 1);
     }
 }

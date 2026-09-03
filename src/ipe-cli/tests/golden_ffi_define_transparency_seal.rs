@@ -254,3 +254,59 @@ fn define_transparency_emitted_crate_builds_and_runs() {
 
     let _ = fs::remove_dir_all(&tmp);
 }
+
+/// A program that reads a field the marshalled value-struct does NOT have
+/// (`Counter` surfaces exactly `{ value : Int }` from `structFields`).
+const MISMATCHED_RECORD_IPE: &str = "module Main exposing (main)\n\
+    import Ipe.Io as Io\n\
+    import Ipe.String as String\n\
+    import Rust.Demo as Demo\n\n\
+    count : Demo.Counter -> Int\n\
+    count c = c.nonexistent\n\n\
+    main =\n\
+    \x20   Io.println (String.fromInt (count (Demo.counter_new 41)))\n";
+
+fn write_mismatched_project(dir: &Path) -> bool {
+    let src = dir.join("src");
+    let _ = fs::remove_dir_all(dir);
+    if fs::create_dir_all(&src).is_err() {
+        return false;
+    }
+    if !seed_define_ffi_cache(dir) {
+        return false;
+    }
+    fs::write(src.join("Main.ipe"), MISMATCHED_RECORD_IPE).is_ok()
+}
+
+/// PIECE-2 REFUSAL SEAL (value-struct auto-marshal): a `.fn` returns a value
+/// struct that surfaces by shape as an Ipê record (`Counter` ⇒ `{ value :
+/// Int }`, no `.type`). An Ipê program whose record shape MISMATCHES the real
+/// struct fields — reading a field the struct does not have — is REJECTED at
+/// build, never silently dropped to a render no-op. The field-exact marshal is
+/// the checker of record; the emitted `__ipe_ffi_v.<field>` move would be the
+/// rustc backstop for any mismatch that slipped past.
+#[test]
+fn value_struct_marshal_refuses_a_mismatched_record_shape() {
+    let Ok(runtime) = ipe::resolve_runtime() else {
+        return; // runtime unavailable in this environment — skip silently
+    };
+
+    let tmp = std::env::temp_dir().join("ipec_ffi_value_struct_mismatch");
+    assert!(
+        write_mismatched_project(&tmp),
+        "must write the mismatched-record fixture project + FFI cache"
+    );
+
+    let entry = tmp.join("src").join("Main.ipe");
+    let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("ffi_value_struct_mismatch_out");
+    let _ = fs::remove_dir_all(&out);
+
+    let result = ipe::build_with_sibling_discovery(&entry, &out, &runtime);
+    assert!(
+        result.is_err(),
+        "a record shape that mismatches the marshalled value struct's real \
+         fields must be REFUSED, never silently accepted"
+    );
+
+    let _ = fs::remove_dir_all(&tmp);
+}

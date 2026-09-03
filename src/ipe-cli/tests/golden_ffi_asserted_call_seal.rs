@@ -54,6 +54,10 @@ fn seed_ffi_cache(project_root: &Path) -> bool {
                 "effect": "pure"
             }
         ],
+        "constants": [
+            {"path": "SHIFT_BASE", "type": "i64"},
+            {"path": "consts::LABEL", "type": "&'static str"}
+        ],
         "errors": [],
         "transitiveDeps": [
             {"ident": "tm", "name": "tm", "version": "0.1.0"}
@@ -424,6 +428,166 @@ pub fn boom(n: i64) -> i64 {
     assert!(
         stdout.contains("panic-err 42"),
         "the asserted calls must round-trip and the panic must fold to Err.\nstdout: {stdout}"
+    );
+
+    let _ = fs::remove_dir_all(&tmp);
+}
+
+// ── native constants (`Rust.const`) ─────────────────────────────────────────
+
+/// A program that reads two native constants of a bare scalar type. No
+/// `Result`, no parentheses, no unit parameter — a constant is an infallible
+/// value.
+const CONST_MAIN_IPE: &str = "module Main exposing (main)\n\
+    import Ipe.Io as Io\n\
+    import Ipe.String as String\n\
+    import Ipe.Ffi.Rust as Rust\n\n\
+    shiftBase : Int\n\
+    shiftBase =\n\
+    \x20   Rust.const \"tm\" \"SHIFT_BASE\"\n\n\
+    label : String\n\
+    label =\n\
+    \x20   Rust.const \"tm\" \"consts::LABEL\"\n\n\
+    main =\n\
+    \x20   Io.println (label ++ \" \" ++ String.fromInt shiftBase)\n";
+
+/// Default gate: an accepted `.const` program builds, and the emitted shim
+/// reads the constant BARE — `::tm::SHIFT_BASE` with no call parens, no
+/// `IpeResult`, no `catch_unwind`.
+#[test]
+fn const_read_emits_a_bare_infallible_shim() {
+    let Ok(runtime) = ipe::resolve_runtime() else {
+        return;
+    };
+
+    let tmp = std::env::temp_dir().join("ipec_ffi_const_read");
+    assert!(
+        write_project(&tmp, CONST_MAIN_IPE),
+        "must write the const fixture project + FFI cache"
+    );
+
+    let entry = tmp.join("src").join("Main.ipe");
+    let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("ffi_const_read_out");
+    let _ = fs::remove_dir_all(&out);
+    if let Err(err) = ipe::build_with_sibling_discovery(&entry, &out, &runtime) {
+        assert!(false_marker(), "const fixture must build, got: {err}");
+        return;
+    }
+
+    let ffi_rs = read_emitted(&out, "src/ffi.rs");
+    assert!(
+        ffi_rs.contains("pub mod ipe_asserted_const {"),
+        "the const shim region must be emitted; ffi.rs:\n{ffi_rs}"
+    );
+    // The SEAL of the const read: a bare `::tm::PATH` value, no call parens,
+    // no panic boundary, no `IpeResult` on the const shims.
+    assert!(
+        ffi_rs.contains("::tm::SHIFT_BASE") && !ffi_rs.contains("::tm::SHIFT_BASE("),
+        "SHIFT_BASE must be a bare read, no call parens; ffi.rs:\n{ffi_rs}"
+    );
+    assert!(
+        ffi_rs.contains("::tm::consts::LABEL.to_owned()"),
+        "a String const must own its &str source; ffi.rs:\n{ffi_rs}"
+    );
+
+    let _ = fs::remove_dir_all(&tmp);
+}
+
+/// A `.const` whose asserted type is a `Result` (not a bare scalar) is REFUSED
+/// — a native constant is a single infallible value.
+#[test]
+fn a_result_typed_const_is_refused() {
+    let Ok(runtime) = ipe::resolve_runtime() else {
+        return;
+    };
+
+    let tmp = std::env::temp_dir().join("ipec_ffi_const_result_refused");
+    let main = "module Main exposing (main)\n\
+        import Ipe.Io as Io\n\
+        import Ipe.Ffi.Rust as Rust\n\n\
+        bad : Result Error Int\n\
+        bad =\n\
+        \x20   Rust.const \"tm\" \"SHIFT_BASE\"\n\n\
+        main =\n\
+        \x20   Io.println \"unreached\"\n";
+    assert!(write_project(&tmp, main), "must write the fixture project");
+
+    let entry = tmp.join("src").join("Main.ipe");
+    let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("ffi_const_result_refused_out");
+    let _ = fs::remove_dir_all(&out);
+    let err = ipe::build_with_sibling_discovery(&entry, &out, &runtime)
+        .expect_err("a Result-typed .const must be refused");
+    assert!(
+        err.to_string().contains("bare scalar"),
+        "the refusal must name the bare-scalar rule; got: {err}"
+    );
+
+    let _ = fs::remove_dir_all(&tmp);
+}
+
+/// SEAL proof under `IPE_E2E=1`: an accepted `.const` program builds against a
+/// REAL foreign crate exposing the constants and runs, reading both values.
+#[test]
+fn const_read_emitted_crate_builds_and_runs() {
+    if std::env::var("IPE_E2E").is_err() {
+        return;
+    }
+    let Ok(runtime) = ipe::resolve_runtime() else {
+        return;
+    };
+
+    let tmp = std::env::temp_dir().join("ipec_ffi_const_read_e2e");
+    assert!(
+        write_project(&tmp, CONST_MAIN_IPE),
+        "must write the const fixture project + FFI cache"
+    );
+
+    let entry = tmp.join("src").join("Main.ipe");
+    let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("ffi_const_read_e2e_out");
+    let _ = fs::remove_dir_all(&out);
+    if let Err(err) = ipe::build_with_sibling_discovery(&entry, &out, &runtime) {
+        assert!(false_marker(), "const fixture must build, got: {err}");
+        return;
+    }
+
+    let tm_dir = tmp.join("tm");
+    fs::create_dir_all(tm_dir.join("src")).expect("mkdir tm");
+    fs::write(
+        tm_dir.join("Cargo.toml"),
+        "[package]\nname = \"tm\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+    )
+    .expect("tm Cargo.toml");
+    fs::write(
+        tm_dir.join("src/lib.rs"),
+        "pub const SHIFT_BASE: i64 = 20;\n\
+         pub mod consts { pub const LABEL: &str = \"tm-label\"; }\n",
+    )
+    .expect("tm lib.rs");
+
+    let manifest_path = out.join("Cargo.toml");
+    let manifest = fs::read_to_string(&manifest_path).expect("emitted Cargo.toml");
+    let patched = manifest.replace(
+        "tm = \"=0.1.0\"",
+        &format!("tm = {{ path = {:?} }}", tm_dir.display().to_string()),
+    );
+    fs::write(&manifest_path, patched).expect("patched Cargo.toml");
+
+    let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_owned());
+    let run = std::process::Command::new(cargo)
+        .arg("run")
+        .arg("--quiet")
+        .current_dir(&out)
+        .output()
+        .expect("cargo run spawns");
+    let stdout = String::from_utf8_lossy(&run.stdout);
+    let stderr = String::from_utf8_lossy(&run.stderr);
+    assert!(
+        run.status.success(),
+        "emitted const crate must build and run exit 0.\nstdout: {stdout}\nstderr: {stderr}"
+    );
+    assert!(
+        stdout.contains("tm-label 20"),
+        "both native constants must be read.\nstdout: {stdout}"
     );
 
     let _ = fs::remove_dir_all(&tmp);
