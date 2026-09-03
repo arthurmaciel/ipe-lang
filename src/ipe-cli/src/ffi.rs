@@ -1698,7 +1698,7 @@ fn add_one(
         Ok(text) => {
             reject_legacy_define_tables(&text)?;
             let src_root = Path::new("src");
-            let (closures, structs, enums) = scan_foreign_defines(src_root)?;
+            let (closures, structs, enums, opaques) = scan_foreign_defines(src_root)?;
             let sole_dep = rust_dependencies_from_manifest(&text).len() <= 1;
             merge_provides(
                 &doc_text,
@@ -1706,6 +1706,7 @@ fn add_one(
                 &closures,
                 &structs,
                 &enums,
+                &opaques,
                 sole_dep,
             )?
         }
@@ -1856,7 +1857,7 @@ pub fn install_registry_deps_for_project(
     reject_legacy_define_tables(&text)?;
     // Lift `foreign` declarations from the project's source files.
     let src_root = project_root.join("src");
-    let (closures, structs, enums) = scan_foreign_defines(&src_root)?;
+    let (closures, structs, enums, opaques) = scan_foreign_defines(&src_root)?;
     let sole_dep = deps.len() <= 1;
     for item in &items {
         let item_crate = item
@@ -1875,6 +1876,7 @@ pub fn install_registry_deps_for_project(
             &closures,
             &structs,
             &enums,
+            &opaques,
             sole_dep,
         )?;
         ipe_ffi::driver::install_from_inspection(&cache, &merged).map_err(ffi_build_error)?;
@@ -2126,7 +2128,7 @@ pub fn run_install(rest: &[String]) -> Result<(), CliError> {
     reject_legacy_define_tables(&text)?;
     // Lift `foreign` declarations from the project's source files; merge them
     // per-crate below. `sole_dep` decides whether an unqualified entry attaches.
-    let (closures, structs, enums) = scan_foreign_defines(Path::new("src"))?;
+    let (closures, structs, enums, opaques) = scan_foreign_defines(Path::new("src"))?;
     let sole_dep = deps.len() <= 1;
     for item in items {
         // The crate's own name, from its inspection document, is the key an
@@ -2147,6 +2149,7 @@ pub fn run_install(rest: &[String]) -> Result<(), CliError> {
             &closures,
             &structs,
             &enums,
+            &opaques,
             sole_dep,
         )?;
         let (pkg, paths) =
@@ -2474,14 +2477,15 @@ fn reject_ambiguous_define<'a>(
 /// An entry whose `crate` is empty attaches to `crate_name` only when it is the
 /// SOLE dependency (`sole_dep`); an unqualified entry under a multi-crate
 /// manifest is ambiguous and refused, never silently attached to every crate.
-fn merge_provides(
-    inspection_json: &str,
-    crate_name: &str,
+/// Refuse any unqualified `foreign`/`[[rust.define.*]]` entry under a
+/// multi-crate manifest, across all four surfaces (closure/struct/enum/opaque).
+fn reject_ambiguous_defines(
     closures: &[ManifestDefineClosure],
     structs: &[ManifestDefineStruct],
     enums: &[ManifestDefineEnum],
+    opaques: &[ManifestDefineOpaque],
     sole_dep: bool,
-) -> Result<String, CliError> {
+) -> Result<(), CliError> {
     reject_ambiguous_define(
         "closure",
         sole_dep,
@@ -2506,8 +2510,28 @@ fn merge_provides(
             .filter(|e| e.krate.is_empty())
             .map(|e| e.ctor.as_str()),
     )?;
+    reject_ambiguous_define(
+        "opaque",
+        sole_dep,
+        opaques
+            .iter()
+            .filter(|o| o.krate.is_empty())
+            .map(|o| o.ipe_name.as_str()),
+    )
+}
 
-    let synthetic: Vec<serde_json::Value> = closures
+/// Build the synthetic `functions` entries the driver decodes for every
+/// closure/struct/enum define that attaches to `crate_name` — the DEFINE
+/// surfaces that mint a Rust type or adapter. Opaque declarations are NOT
+/// functions; they merge into `declaredOpaques` separately.
+fn build_synthetic_functions(
+    crate_name: &str,
+    closures: &[ManifestDefineClosure],
+    structs: &[ManifestDefineStruct],
+    enums: &[ManifestDefineEnum],
+    sole_dep: bool,
+) -> Vec<serde_json::Value> {
+    closures
         .iter()
         .filter(|c| define_attaches(&c.krate, crate_name, sole_dep))
         .map(|c| {
@@ -2558,51 +2582,205 @@ fn merge_provides(
                     })
                 }),
         )
+        .collect()
+}
+
+fn merge_provides(
+    inspection_json: &str,
+    crate_name: &str,
+    closures: &[ManifestDefineClosure],
+    structs: &[ManifestDefineStruct],
+    enums: &[ManifestDefineEnum],
+    opaques: &[ManifestDefineOpaque],
+    sole_dep: bool,
+) -> Result<String, CliError> {
+    reject_ambiguous_defines(closures, structs, enums, opaques, sole_dep)?;
+    let synthetic = build_synthetic_functions(crate_name, closures, structs, enums, sole_dep);
+    let attached_opaques: Vec<&ManifestDefineOpaque> = opaques
+        .iter()
+        .filter(|o| define_attaches(&o.krate, crate_name, sole_dep))
         .collect();
-    if synthetic.is_empty() {
+    if synthetic.is_empty() && attached_opaques.is_empty() {
         return Ok(inspection_json.to_owned());
     }
     let mut doc: serde_json::Value = serde_json::from_str(inspection_json)
         .map_err(|e| CliError::UsageOwned(format!("ipe: inspection JSON is not an object: {e}")))?;
-    let obj = doc
-        .as_object_mut()
-        .ok_or_else(|| CliError::UsageOwned("ipe: inspection JSON is not an object".to_owned()))?;
-    let serde_json::Value::Array(functions) = obj
-        .entry("functions")
-        .or_insert_with(|| serde_json::Value::Array(Vec::new()))
-    else {
-        return Err(CliError::UsageOwned(
-            "ipe: inspection `functions` is not an array".to_owned(),
-        ));
-    };
-    functions.extend(synthetic);
+    if !synthetic.is_empty() {
+        let obj = doc.as_object_mut().ok_or_else(|| {
+            CliError::UsageOwned("ipe: inspection JSON is not an object".to_owned())
+        })?;
+        let serde_json::Value::Array(functions) = obj
+            .entry("functions")
+            .or_insert_with(|| serde_json::Value::Array(Vec::new()))
+        else {
+            return Err(CliError::UsageOwned(
+                "ipe: inspection `functions` is not an array".to_owned(),
+            ));
+        };
+        functions.extend(synthetic);
+    }
+    merge_declared_opaques(&mut doc, crate_name, &attached_opaques)?;
     Ok(doc.to_string())
+}
+
+/// Resolve each attached `foreign … kind = Opaque "<Type>"` against the crate's
+/// own inspection and merge the survivors into the doc's `declaredOpaques` map
+/// (Ipê handle nominal → absolute Rust path).
+///
+/// Fail-closed at every step, so a handle is minted only over a type the
+/// inspector actually reported AND left opaque:
+///   - the named type must appear in the inspection's reported `types`;
+///   - it must NOT have surfaced transparently (a transparent record/union is a
+///     value type, not a handle) — a transparent target is refused;
+///   - the resolved Rust path is rendered absolute (`::crate::Type`) so it
+///     matches the opaque-path spelling the emitter and the asserted-call
+///     validator resolve against.
+fn merge_declared_opaques(
+    doc: &mut serde_json::Value,
+    crate_name: &str,
+    opaques: &[&ManifestDefineOpaque],
+) -> Result<(), CliError> {
+    if opaques.is_empty() {
+        return Ok(());
+    }
+    // The inspection's reported foreign types: `{ name, rustPath, kind }`. A
+    // classification error leaves a type opaque, so this reads the RAW reports
+    // and treats a transparent classification (via `ForeignTypeCatalog`) as the
+    // only disqualifier — everything else the inspector reported stays a handle.
+    let types = doc
+        .get("types")
+        .and_then(serde_json::Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let transparent = transparent_type_names(&types);
+
+    let mut declared: serde_json::Map<String, serde_json::Value> = serde_json::Map::new();
+    for o in opaques {
+        let reported = types.iter().find(|t| {
+            t.get("name").and_then(serde_json::Value::as_str) == Some(o.rust_type.as_str())
+        });
+        let Some(reported) = reported else {
+            return Err(CliError::UsageOwned(format!(
+                "foreign `{}`: `Opaque \"{}\"` names a type crate `{crate_name}` does not \
+                 report — it is not an inspected type, so a handle over it cannot be minted \
+                 (check the spelling, or that the crate exposes the type)",
+                o.ipe_name, o.rust_type
+            )));
+        };
+        if transparent.contains(o.rust_type.as_str()) {
+            return Err(CliError::UsageOwned(format!(
+                "foreign `{}`: `Opaque \"{}\"` names a type the inspector surfaced \
+                 TRANSPARENTLY (a value record/union), not an opaque handle — declare the \
+                 Ipê record/ADT and let the inspector shape-match it instead of an `Opaque`",
+                o.ipe_name, o.rust_type
+            )));
+        }
+        let rust_path = reported
+            .get("rustPath")
+            .and_then(serde_json::Value::as_str)
+            .filter(|p| !p.is_empty())
+            .ok_or_else(|| {
+                CliError::UsageOwned(format!(
+                    "foreign `{}`: the inspector reported `{}` without a Rust path — it \
+                     cannot be resolved to a handle",
+                    o.ipe_name, o.rust_type
+                ))
+            })?;
+        let absolute = if rust_path.starts_with("::") {
+            rust_path.to_owned()
+        } else {
+            format!("::{rust_path}")
+        };
+        if let Some(prev) = declared.get(o.ipe_name.as_str())
+            && prev.as_str() != Some(absolute.as_str())
+        {
+            return Err(CliError::UsageOwned(format!(
+                "foreign `{}`: declared twice over different crate types — a handle nominal \
+                 names exactly one Rust type",
+                o.ipe_name
+            )));
+        }
+        declared.insert(o.ipe_name.clone(), serde_json::Value::String(absolute));
+    }
+    if let Some(obj) = doc.as_object_mut() {
+        obj.insert(
+            "declaredOpaques".to_owned(),
+            serde_json::Value::Object(declared),
+        );
+    }
+    Ok(())
+}
+
+/// The reported-type names the representation classifier surfaces TRANSPARENTLY
+/// (a value record or closed union) — the set a `foreign … Opaque` target may
+/// not name, since a transparent type is a value, not a handle.
+fn transparent_type_names(types: &[serde_json::Value]) -> BTreeSet<String> {
+    let doc = serde_json::json!({
+        "pkg": "opaque_probe",
+        "name": "opaque_probe",
+        "version": "0.0.0",
+        "errors": [],
+        "types": types,
+    });
+    // A probe decode failure never widens the opaque surface: if the axis cannot
+    // be classified, treat nothing as transparent (the inspected-type membership
+    // check is the primary gate).
+    ipe_ffi::pkginfo::PkgInfo::decode_json(&doc.to_string()).map_or_else(
+        |_| BTreeSet::new(),
+        |pkg| pkg.foreign_types().transparent().keys().cloned().collect(),
+    )
+}
+
+/// One `foreign X = { crate = "…", kind = Opaque "<Type>" }` declaration — an
+/// OPAQUE Ipê handle minted over a crate type the inspector reports but does not
+/// destructure (a `Connection`, `Hasher`, …). No fields, no constructor: the
+/// handle is a runtime-owned resource whose value never crosses transparently.
+///
+/// The declaration DECLARES the nominal so a `.fn` method that takes or returns
+/// the handle (`connect : () -> Connection`) resolves against the crate's opaque
+/// map without the program importing `Rust.<Crate>`. It is fail-closed: the named
+/// type must be an inspected opaque type of the crate (a reported `types` entry
+/// that did NOT surface transparently) — an un-inspectable or transparent target
+/// is refused at merge, never minted blind.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct ManifestDefineOpaque {
+    /// The dependency this handle names (empty ⇒ the sole dependency).
+    pub(crate) krate: String,
+    /// The Ipê-facing handle nominal (the `foreign <Name>` head).
+    pub(crate) ipe_name: String,
+    /// The inspected crate type's reported name — resolved to its absolute Rust
+    /// path against the crate's inspection at merge, then validated opaque.
+    pub(crate) rust_type: String,
 }
 
 /// A single `foreign` declaration extracted from a `.ipe` source file, ready for
 /// lifting into a `ManifestDefine*` value.
 ///
-/// Three shapes correspond to the three `[[rust.define.*]]` TOML tables, each
-/// selected by the record's `kind` field:
+/// Four shapes, each selected by the record's `kind` field:
 ///
 /// - `Struct` — `{ crate = "…", kind = Struct { field = Carrier }, derives = [ … ] }`
 /// - `Enum`   — `{ crate = "…", kind = Enum [ Variant "Name" [ Carrier ] ], derives = [ … ] }`
 /// - `Closure`— `{ crate = "…", kind = Closure { args = [ Carrier ], returns = Carrier } }`
+/// - `Opaque` — `{ crate = "…", kind = Opaque "<Type>" }`
 ///
-/// Each lifted value is byte-identical to what the TOML readers produce for
-/// equivalent inputs, so the emitted Rust is unchanged by the surface.
+/// The `Struct`/`Enum`/`Closure` shapes DEFINE a nominal in the emitted
+/// `_bindings.rs`, byte-identical to what the TOML `[[rust.define.*]]` readers
+/// produced; `Opaque` DECLARES a handle over an existing inspected crate type.
 #[derive(Debug, PartialEq, Eq)]
 enum ForeignDefine {
     Struct(ManifestDefineStruct),
     Enum(ManifestDefineEnum),
     Closure(ManifestDefineClosure),
+    Opaque(ManifestDefineOpaque),
 }
 
-/// The triple returned by `scan_foreign_defines`: `(closures, structs, enums)`.
+/// The tuple returned by `scan_foreign_defines`:
+/// `(closures, structs, enums, opaques)`.
 type ForeignDefines = (
     Vec<ManifestDefineClosure>,
     Vec<ManifestDefineStruct>,
     Vec<ManifestDefineEnum>,
+    Vec<ManifestDefineOpaque>,
 );
 
 /// Walk every `.ipe` source file reachable from `src_root`, parse each module,
@@ -2622,6 +2800,7 @@ pub(crate) fn scan_foreign_defines(src_root: &Path) -> Result<ForeignDefines, Cl
     let mut closures = Vec::new();
     let mut structs = Vec::new();
     let mut enums = Vec::new();
+    let mut opaques = Vec::new();
 
     let mut ipe_files = Vec::new();
     collect_ipe_files(src_root, &mut ipe_files)?;
@@ -2654,10 +2833,11 @@ pub(crate) fn scan_foreign_defines(src_root: &Path) -> Result<ForeignDefines, Cl
                 ForeignDefine::Struct(s) => structs.push(s),
                 ForeignDefine::Enum(e) => enums.push(e),
                 ForeignDefine::Closure(c) => closures.push(c),
+                ForeignDefine::Opaque(o) => opaques.push(o),
             }
         }
     }
-    Ok((closures, structs, enums))
+    Ok((closures, structs, enums, opaques))
 }
 
 /// Recursively collect every `.ipe` file under `dir`.
@@ -2770,15 +2950,52 @@ impl ForeignReader<'_> {
             "Struct" => self.lift_struct(foreign, args, krate, name, derives, ctor),
             "Enum" => self.lift_enum(foreign, args, krate, name, derives, ctor),
             "Closure" => self.lift_closure(foreign, args, krate, name),
+            "Opaque" => self.lift_opaque(foreign, args, krate, name),
             other => Err(self.reject(
                 kind_expr.span,
                 &format!(
                     "`{other}` is not a `kind` — use `Struct {{ … }}`, `Enum [ … ]`, \
-                     or `Closure {{ … }}`. An opaque handle is referenced as a field or \
-                     payload carrier (a bare upper-case name), never declared standalone."
+                     `Closure {{ … }}`, or `Opaque \"<Type>\"`."
                 ),
             )),
         }
+    }
+
+    /// Lift a `kind = Opaque "<Type>"` payload into a `ManifestDefineOpaque`. The
+    /// argument is a single string LITERAL naming the inspected crate type; the
+    /// fail-closed "must be an inspected opaque type" check happens later at
+    /// `merge_provides`, where the crate's inspection is in hand.
+    fn lift_opaque(
+        &self,
+        foreign: &ipe_diagnostics::Located<ipe_syntax::ForeignDecl>,
+        args: &[ipe_syntax::Expr],
+        krate: String,
+        ipe_name: String,
+    ) -> Result<ForeignDefine, CliError> {
+        let type_arg = args.first().ok_or_else(|| {
+            self.reject(
+                foreign.span,
+                "`Opaque` requires a string type argument `Opaque \"<Type>\"`",
+            )
+        })?;
+        if args.len() > 1 {
+            return Err(self.reject(
+                type_arg.span,
+                "`Opaque` takes exactly one string type argument `Opaque \"<Type>\"`",
+            ));
+        }
+        let rust_type = self.expect_string(type_arg)?;
+        if rust_type.is_empty() {
+            return Err(self.reject(
+                type_arg.span,
+                "`Opaque` type name must not be empty — name the crate's reported type",
+            ));
+        }
+        Ok(ForeignDefine::Opaque(ManifestDefineOpaque {
+            krate,
+            ipe_name,
+            rust_type,
+        }))
     }
 
     /// Lift a `kind = Struct { field = Carrier, … }` payload into a
@@ -3802,7 +4019,7 @@ version = \"1\"
             name: "update_fn".to_owned(),
             signature: "Fn(Int) -> Int + Send + Sync + 'static".to_owned(),
         }];
-        let merged = merge_provides(doc, "demo", &closures, &[], &[], true).expect("merges");
+        let merged = merge_provides(doc, "demo", &closures, &[], &[], &[], true).expect("merges");
         let val: serde_json::Value = serde_json::from_str(&merged).expect("valid json");
         let fns = val
             .get("functions")
@@ -3834,7 +4051,7 @@ version = \"1\"
             signature: "Fn(Int) -> Int".to_owned(),
         }];
         // A qualified entry for `demo` does not attach to `other`.
-        let merged = merge_provides(doc, "other", &closures, &[], &[], false).expect("merges");
+        let merged = merge_provides(doc, "other", &closures, &[], &[], &[], false).expect("merges");
         let val: serde_json::Value = serde_json::from_str(&merged).expect("valid json");
         assert!(
             val.get("functions")
@@ -3853,9 +4070,9 @@ version = \"1\"
             signature: "Fn(Int) -> Int".to_owned(),
         }];
         // sole_dep = false ⇒ an unattributed entry cannot be placed: refuse.
-        assert!(merge_provides(doc, "demo", &closures, &[], &[], false).is_err());
+        assert!(merge_provides(doc, "demo", &closures, &[], &[], &[], false).is_err());
         // sole_dep = true ⇒ it attaches to the one crate.
-        assert!(merge_provides(doc, "demo", &closures, &[], &[], true).is_ok());
+        assert!(merge_provides(doc, "demo", &closures, &[], &[], &[], true).is_ok());
     }
 
     #[test]
@@ -3868,8 +4085,181 @@ version = \"1\"
             fields: vec![("value".to_owned(), "i64".to_owned())],
             derives: Vec::new(),
         }];
-        assert!(merge_provides(doc, "demo", &[], &structs, &[], false).is_err());
-        assert!(merge_provides(doc, "demo", &[], &structs, &[], true).is_ok());
+        assert!(merge_provides(doc, "demo", &[], &structs, &[], &[], false).is_err());
+        assert!(merge_provides(doc, "demo", &[], &structs, &[], &[], true).is_ok());
+    }
+
+    /// An inspection document that reports one opaque type `Client` (a struct
+    /// with hidden members, so the classifier leaves it opaque).
+    fn doc_reporting_opaque_client() -> String {
+        serde_json::json!({
+            "pkg": "postgres",
+            "name": "postgres",
+            "version": "0.1.0",
+            "functions": [],
+            "errors": [],
+            "types": [
+                { "name": "Client", "rustPath": "postgres::Client",
+                  "kind": "struct", "hiddenMembers": true }
+            ]
+        })
+        .to_string()
+    }
+
+    #[test]
+    fn a_declared_opaque_over_a_reported_type_is_merged() {
+        let opaques = vec![ManifestDefineOpaque {
+            krate: "postgres".to_owned(),
+            ipe_name: "Connection".to_owned(),
+            rust_type: "Client".to_owned(),
+        }];
+        let merged = merge_provides(
+            &doc_reporting_opaque_client(),
+            "postgres",
+            &[],
+            &[],
+            &[],
+            &opaques,
+            true,
+        )
+        .expect("merges");
+        let val: serde_json::Value = serde_json::from_str(&merged).expect("valid json");
+        assert_eq!(
+            val.get("declaredOpaques")
+                .and_then(|d| d.get("Connection"))
+                .and_then(serde_json::Value::as_str),
+            Some("::postgres::Client"),
+            "{merged}"
+        );
+    }
+
+    #[test]
+    fn a_declared_opaque_over_an_unreported_type_is_refused() {
+        let opaques = vec![ManifestDefineOpaque {
+            krate: "postgres".to_owned(),
+            ipe_name: "Connection".to_owned(),
+            rust_type: "Nonexistent".to_owned(),
+        }];
+        let err = merge_provides(
+            &doc_reporting_opaque_client(),
+            "postgres",
+            &[],
+            &[],
+            &[],
+            &opaques,
+            true,
+        )
+        .expect_err("must_refuse: an un-inspected type cannot mint a handle");
+        assert!(
+            matches!(&err, CliError::UsageOwned(m) if m.contains("not an inspected type")),
+            "{err:?}"
+        );
+    }
+
+    #[test]
+    fn a_declared_opaque_over_a_transparent_type_is_refused() {
+        // A struct with two identity-carrier fields surfaces TRANSPARENTLY, so
+        // it is a value type — an `Opaque` handle over it is refused.
+        let doc = serde_json::json!({
+            "pkg": "geo", "name": "geo", "version": "0.1.0",
+            "functions": [], "errors": [],
+            "types": [
+                { "name": "Point", "rustPath": "geo::Point", "kind": "struct",
+                  "fields": [
+                    { "name": "x", "type": "Int", "rustType": "i64" },
+                    { "name": "y", "type": "Int", "rustType": "i64" }
+                  ]}
+            ]
+        })
+        .to_string();
+        let opaques = vec![ManifestDefineOpaque {
+            krate: "geo".to_owned(),
+            ipe_name: "Pt".to_owned(),
+            rust_type: "Point".to_owned(),
+        }];
+        let err = merge_provides(&doc, "geo", &[], &[], &[], &opaques, true)
+            .expect_err("must_refuse: a transparent value type is not a handle");
+        assert!(
+            matches!(&err, CliError::UsageOwned(m) if m.contains("TRANSPARENTLY")),
+            "{err:?}"
+        );
+    }
+
+    #[test]
+    fn an_unqualified_opaque_under_a_multi_crate_manifest_is_refused() {
+        let opaques = vec![ManifestDefineOpaque {
+            krate: String::new(),
+            ipe_name: "Connection".to_owned(),
+            rust_type: "Client".to_owned(),
+        }];
+        // sole_dep = false ⇒ an unattributed declaration cannot be placed.
+        assert!(
+            merge_provides(
+                &doc_reporting_opaque_client(),
+                "postgres",
+                &[],
+                &[],
+                &[],
+                &opaques,
+                false
+            )
+            .is_err()
+        );
+        // sole_dep = true ⇒ it attaches to the one crate.
+        assert!(
+            merge_provides(
+                &doc_reporting_opaque_client(),
+                "postgres",
+                &[],
+                &[],
+                &[],
+                &opaques,
+                true
+            )
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn lift_opaque_reads_the_kind_and_rejects_a_non_literal() {
+        let interner_and_module = |src: &str| {
+            let mut interner = ipe_intern::Interner::new();
+            let module = ipe_parse::parse_module(src, &mut interner).expect("parses");
+            (interner, module)
+        };
+        // A well-formed opaque declaration lifts to `ManifestDefineOpaque`.
+        let (interner, module) = interner_and_module(
+            "module M exposing (..)\n\nforeign Connection =\n    { crate = \"postgres\"\n    , kind = Opaque \"Client\"\n    }\n",
+        );
+        let reader = ForeignReader {
+            interner: &interner,
+            src: "",
+            file: Path::new("M.ipe"),
+        };
+        let foreign = module.foreigns.first().expect("one foreign");
+        let lifted = reader.lift_foreign(foreign).expect("lifts");
+        assert_eq!(
+            lifted,
+            ForeignDefine::Opaque(ManifestDefineOpaque {
+                krate: "postgres".to_owned(),
+                ipe_name: "Connection".to_owned(),
+                rust_type: "Client".to_owned(),
+            })
+        );
+        // A non-literal type argument is refused (literal-only, invariant 5).
+        let (interner2, module2) = interner_and_module(
+            "module M exposing (..)\n\nname = \"Client\"\n\nforeign Connection =\n    { crate = \"postgres\"\n    , kind = Opaque name\n    }\n",
+        );
+        let reader2 = ForeignReader {
+            interner: &interner2,
+            src: "",
+            file: Path::new("M.ipe"),
+        };
+        let foreign2 = module2.foreigns.first().expect("one foreign");
+        assert!(
+            reader2.lift_foreign(foreign2).is_err(),
+            "must_refuse a computed type name"
+        );
     }
 
     /// A one-crate `InstalledCrate` with the given opaque + define type maps.
@@ -4083,13 +4473,13 @@ version = \"1\"
     fn scan_foreign_defines_on_missing_src_returns_empty() {
         // Use a path that is extremely unlikely to exist.
         let non_existent = std::path::Path::new("/tmp/__ipe_lane1_no_such_dir_ae3338f3");
-        let (c, s, e) =
+        let (c, s, e, o) =
             scan_foreign_defines(non_existent).expect("missing dir must not be an error");
-        assert!(c.is_empty() && s.is_empty() && e.is_empty());
+        assert!(c.is_empty() && s.is_empty() && e.is_empty() && o.is_empty());
     }
 
     /// `scan_foreign_defines` on a directory whose `.ipe` files have no
-    /// `foreign` keyword returns three empty vectors without error.
+    /// `foreign` keyword returns four empty vectors without error.
     #[test]
     fn scan_foreign_defines_skips_files_without_foreign_keyword() {
         use std::io::Write as _;
@@ -4101,10 +4491,12 @@ version = \"1\"
         f.write_all(b"module Main exposing (..)\n\nmain = Io.println \"hello\"\n")
             .expect("write");
         drop(f);
-        let (c, s, e) =
+        let (closures, structs, enums, opaques) =
             scan_foreign_defines(&dir).expect("no foreign keyword must not produce an error");
         let _ = std::fs::remove_dir_all(&dir);
-        assert!(c.is_empty() && s.is_empty() && e.is_empty());
+        assert!(
+            closures.is_empty() && structs.is_empty() && enums.is_empty() && opaques.is_empty()
+        );
     }
 
     #[test]
