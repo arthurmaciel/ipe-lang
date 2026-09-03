@@ -13,6 +13,12 @@
 //! desktop bundle (a macOS `.app`, a Linux tarball, a Windows `.exe` + zip),
 //! assembling the macOS `Info.plist` around [`permissions`]'s derivation — never
 //! authoring a permission itself.
+//!
+//! [`mobile`] wraps the client-wasm `Web` SPA (the `--target wasm` bundle) in a
+//! thin iOS/Android system-webview shell that loads the bundle offline from app
+//! assets, assembling the `Info.plist` / `AndroidManifest.xml` around
+//! [`permissions`]'s derivation — never authoring a permission itself.
 
 pub mod desktop;
+pub mod mobile;
 pub mod permissions;

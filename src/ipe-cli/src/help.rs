@@ -489,24 +489,35 @@ const COMMANDS: &[Command] = &[
     Command {
         name: "pack",
         run: crate::run_pack,
-        summary: "Package a webview app into a desktop bundle, or derive its native-shell \
-                  OS-permission declarations.",
-        args: "--target desktop[:<linux|macos|windows>] [<path>]  |  --emit-permissions \
-               <ios|macos|android> [<path>]",
+        summary: "Package a webview app into a desktop bundle or a mobile system-webview shell, \
+                  or derive its native-shell OS-permission declarations.",
+        args: "--target desktop[:<linux|macos|windows>] [<path>]  |  --target \
+               mobile:<ios|android> [<path>]  |  --emit-permissions <ios|macos|android> [<path>]",
         args_desc: "With `--target desktop`, builds the app and lays out a self-contained \
                     desktop bundle for the given OS (the host OS by default): a Linux tarball \
                     (WebKitGTK runtime dep), a macOS `.app` (Info.plist permission keys derived \
                     from the accepted web capabilities), or a Windows `.exe` + portable zip \
                     (WebView2 runtime dep). The Linux artifact is built here; a macOS/Windows \
                     bundle's layout is written for inspection and must be finished on that OS's \
-                    runner. With `--emit-permissions`, prints (read-only) the derived Info.plist \
-                    keys (ios/macos) or AndroidManifest fragment (android) for the app's \
+                    runner. With `--target mobile:<ios|android>`, builds the client-wasm `Web` \
+                    SPA and lays out a native mobile shell that hosts it offline from app assets: \
+                    an Android Gradle project (WebView + WebViewAssetLoader; AndroidManifest \
+                    `<uses-permission>` derived from the accepted web capabilities) or an iOS \
+                    Xcode project (WKWebView + WKURLSchemeHandler; Info.plist keys derived the \
+                    same way). The wasm bundle is built here; the Android app can be finished with \
+                    the Android SDK, the iOS app on a macOS + Xcode runner. With \
+                    `--emit-permissions`, prints (read-only) the derived Info.plist keys \
+                    (ios/macos) or AndroidManifest fragment (android) for the app's \
                     `[capabilities] accepts` set. The optional path is the project directory or \
                     package.ipe (defaults to the current project).",
         options: &[
             Opt {
                 flag: "--target desktop[:<linux|macos|windows>]",
                 desc: "build and lay out a desktop bundle for the given OS (host OS by default)",
+            },
+            Opt {
+                flag: "--target mobile:<ios|android>",
+                desc: "build the wasm SPA and lay out a mobile system-webview shell for the OS",
             },
             Opt {
                 flag: "--emit-permissions <ios|macos|android>",

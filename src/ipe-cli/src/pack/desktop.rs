@@ -281,7 +281,7 @@ impl BundleIdentity {
 /// permits: lowercase, non-alphanumeric runs collapsed to a single `-`, and no
 /// leading/trailing `-`. An empty result becomes `app` so the identifier is
 /// always a valid segment.
-fn sanitise_identifier(name: &str) -> String {
+pub(crate) fn sanitise_identifier(name: &str) -> String {
     let mut out = String::with_capacity(name.len());
     let mut last_dash = true; // suppress a leading dash
     for ch in name.chars() {
