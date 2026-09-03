@@ -182,6 +182,29 @@ impl WebCapability {
         }
     }
 
+    /// One-line description of what granting this web capability permits.
+    ///
+    /// Used by [`Capability::grants`] for the `JsPort(_)` case.
+    #[must_use]
+    pub const fn grants(self) -> &'static str {
+        match self {
+            Self::Geolocation => "Accessing navigator.geolocation — the device's location.",
+            Self::Clipboard => "Reading or writing the system clipboard via navigator.clipboard.",
+            Self::Notification => "Showing a system notification via the Notification API.",
+            Self::Storage => {
+                "Client-side persistence via localStorage / sessionStorage / IndexedDB."
+            }
+            Self::Vibration => "Activating the vibration actuator via navigator.vibrate.",
+            Self::Share => "Invoking the platform share sheet via navigator.share.",
+            Self::Battery => "Reading battery status via navigator.getBattery.",
+            Self::NetworkInfo => "Reading network-information hints via navigator.connection.",
+            Self::Raw => {
+                "Exchanging data with hand-rolled page JS over an uncharacterised port \
+                 (Js.send / Js.subscribe with author-written JS)."
+            }
+        }
+    }
+
     /// Parse a web-axis wire suffix, the inverse of [`Self::as_str`]. An
     /// unrecognised suffix is [`UnknownCapability`] carrying the full offending
     /// `js-port:<suffix>` token — fail-closed, never a silent drop.
@@ -202,6 +225,74 @@ impl WebCapability {
 }
 
 impl Capability {
+    /// The trust-boundary partition this capability belongs to.
+    ///
+    /// Three partitions cover the full vocabulary:
+    ///
+    /// - `"OS resource"` — axes an OS-level sandbox (seccomp, pledge, etc.)
+    ///   can confine independently: network, filesystem, database, env,
+    ///   subprocess. Each maps to a concrete system-call family the jail
+    ///   controls.
+    /// - `"Non-determinism"` — axes that are real OS effects but carry no
+    ///   exfiltration risk on their own: clock, random. Sandboxes may or may
+    ///   not confine these; they are never the primary isolation lever.
+    /// - `"Native crossing"` — axes that disclose an opaque trust boundary
+    ///   the compiler cannot see through: native FFI, raw FFI assertion,
+    ///   Ipê-level unsafe escape, shipped browser JS, JS port data exchange.
+    ///   No OS jail confines them; their disclosure is the enforcement
+    ///   mechanism — the consumer decides whether to grant.
+    #[must_use]
+    pub const fn boundary_class(self) -> &'static str {
+        match self {
+            Self::Network | Self::Filesystem | Self::Database | Self::Env | Self::Subprocess => {
+                "OS resource"
+            }
+            Self::Clock | Self::Random => "Non-determinism",
+            Self::NativeFfi
+            | Self::FfiRaw
+            | Self::Unsafe
+            | Self::CustomElement
+            | Self::JsPort(_) => "Native crossing",
+        }
+    }
+
+    /// One-line description of what granting this capability permits.
+    ///
+    /// Sourced from the variant's doc-comment; condensed for table display.
+    #[must_use]
+    pub const fn grants(self) -> &'static str {
+        match self {
+            Self::Network => {
+                "Outbound or inbound network access (HTTP client/server, WebSocket, email send)."
+            }
+            Self::Filesystem => {
+                "Reading or writing the filesystem (files, directories, config files)."
+            }
+            Self::Database => "Structured database access (SQL queries, migrations, row decoders).",
+            Self::Env => "Reading or writing process environment variables and argv.",
+            Self::Subprocess => "Spawning or controlling a child process.",
+            Self::Clock => "Reading wall-clock or monotonic time, or sleeping / firing on a timer.",
+            Self::Random => "Drawing non-deterministic randomness (RNG, random tokens, UUIDs).",
+            Self::NativeFfi => {
+                "Crossing into native Rust. code — the program's true capability set cannot be \
+                 inferred from Ipê alone."
+            }
+            Self::FfiRaw => {
+                "Crossing into native Rust. code through an author-asserted signature rather than \
+                 an inspected binding (always accompanies NativeFfi)."
+            }
+            Self::Unsafe => {
+                "Importing an Ipe.<M>.Unsafe submodule — the program contains a value the \
+                 compiler could not prove safe."
+            }
+            Self::CustomElement => {
+                "Shipping browser custom-element JS that runs in the page with full DOM \
+                 authority; the served bytes are SRI-pinned and CSP-constrained."
+            }
+            Self::JsPort(w) => w.grants(),
+        }
+    }
+
     /// Every capability, in declaration order. The vocabulary is closed; a new
     /// axis is added here and, by the exhaustive match in
     /// [`crate::StdlibKernel::capability`], classified for every kernel.

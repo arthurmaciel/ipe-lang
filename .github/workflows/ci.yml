@@ -1239,3 +1239,26 @@ jobs:
         run: cargo run -p ipe_docs --bin gen-env-docs -- --repo-root "${{ github.workspace }}"
       - name: Fail if generated docs differ from committed files
         run: git diff --exit-code docs/reference/env.md
+
+  # Drift gate for docs/reference/capabilities.md.
+  #
+  # Runs the gen-capabilities-docs generator against the committed file and
+  # fails when the output differs, so a new Capability variant that is not
+  # reflected in the committed reference reddens the build (no silent drift).
+  #
+  # Change-gated: capability.rs lives under src/** (already in the `code`
+  # filter), so a pure prose-only PR skips this vacuously; it always runs on
+  # push/nightly.
+  capabilities-docs-drift:
+    runs-on: ubuntu-latest
+    needs: [changes, quick-check]
+    if: needs.changes.outputs.code == 'true' || github.event_name != 'pull_request'
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: mozilla-actions/sccache-action@v0.0.9
+      - uses: Swatinem/rust-cache@v2
+      - name: Regenerate docs/reference/capabilities.md
+        run: cargo run -p ipe_docs --bin gen-capabilities-docs -- --repo-root "${{ github.workspace }}"
+      - name: Fail if generated docs differ from committed files
+        run: git diff --exit-code docs/reference/capabilities.md

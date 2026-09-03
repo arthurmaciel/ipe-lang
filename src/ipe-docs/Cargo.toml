@@ -5,6 +5,10 @@ version.workspace = true
 license.workspace = true
 
 [[bin]]
+name = "gen-capabilities-docs"
+path = "src/bin/gen_capabilities_docs.rs"
+
+[[bin]]
 name = "gen-env-docs"
 path = "src/bin/gen_env_docs.rs"
 
@@ -19,6 +23,7 @@ path = "src/bin/gen_site.rs"
 [dependencies]
 ipe_annotate  = { path = "../compiler/annotate" }
 ipe_intern    = { path = "../compiler/intern" }
+ipe_kernels   = { path = "../compiler/kernels" }
 ipe_syntax    = { path = "../compiler/syntax" }
 ipe_parse     = { path = "../compiler/parse" }
 ipe_stdlib    = { path = "../stdlib" }

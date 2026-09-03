@@ -2226,6 +2226,7 @@ version = "0.1.77"
 dependencies = [
  "ipe_annotate",
  "ipe_intern",
+ "ipe_kernels",
  "ipe_parse",
  "ipe_stdlib",
  "ipe_syntax",
