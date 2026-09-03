@@ -29,7 +29,7 @@ type alias Model =
     }
 
 
-init : a -> ( Model, Cmd Msg )
+init : WebReq -> ( Model, Cmd Msg )
 init _req =
     ( { page = CounterPage, count = 0 }, Cmd.none )
 

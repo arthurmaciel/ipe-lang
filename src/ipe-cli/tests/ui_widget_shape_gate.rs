@@ -132,7 +132,7 @@ type alias Model = { state : EditorState }
 codeEditor : CustomElement EditorState EditorEvent
 codeEditor = customElement "js/x.js"
 
-init : a -> ( Model, Cmd Msg )
+init : WebReq -> ( Model, Cmd Msg )
 init _req =
     ( { state = { text = "", line = 0 } }, Cmd.none )
 

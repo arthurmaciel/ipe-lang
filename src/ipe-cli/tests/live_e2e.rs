@@ -65,7 +65,7 @@ type Msg = Increment | Decrement
 
 type alias Model = { count : Int }
 
-init : a -> ( Model, Cmd Msg )
+init : WebReq -> ( Model, Cmd Msg )
 init _req =
     ( { count = 0 }, Cmd.none )
 
@@ -136,7 +136,7 @@ renderSection : Section -> Element Msg
 renderSection section =
     Ui.column [] [ Ui.text section.title, Ui.html section.body ]
 
-init : a -> ( Model, Cmd Msg )
+init : WebReq -> ( Model, Cmd Msg )
 init _req =
     ( { count = 0 }, Cmd.none )
 
@@ -209,7 +209,7 @@ type Page = HomePage
 
 type alias Model = { count : Int, page : Page }
 
-init : a -> ( Model, Cmd Msg )
+init : WebReq -> ( Model, Cmd Msg )
 init _req =
     ( { count = 0, page = HomePage }, Cmd.none )
 
@@ -274,7 +274,7 @@ type alias Model =
     , count : Int
     }
 
-init : a -> ( Model, Cmd Msg )
+init : WebReq -> ( Model, Cmd Msg )
 init _req =
     ( { page = CounterPage, count = 0 }, Cmd.none )
 
@@ -1009,7 +1009,7 @@ chatTopic : Topic (Dict String String)
 chatTopic =
     PubSub.topic "chat"
 
-init : a -> ( Model, Cmd Msg )
+init : WebReq -> ( Model, Cmd Msg )
 init _req =
     ( { pending = "", received = [] }, Cmd.none )
 
@@ -1111,7 +1111,7 @@ cartTopic : Topic CartItem
 cartTopic =
     PubSub.topic "cart"
 
-init : a -> ( Model, Cmd Msg )
+init : WebReq -> ( Model, Cmd Msg )
 init _req =
     ( { items = [] }, Cmd.none )
 
@@ -1202,7 +1202,7 @@ type alias Model =
     { lastUsername : String
     }
 
-init : a -> ( Model, Cmd Msg )
+init : WebReq -> ( Model, Cmd Msg )
 init _req =
     ( { lastUsername = "" }, Cmd.none )
 
@@ -1403,7 +1403,7 @@ type alias Model =
     , confirmed : Bool
     }
 
-init : a -> ( Model, Cmd Msg )
+init : WebReq -> ( Model, Cmd Msg )
 init _req =
     ( { name = "", confirmed = False }, Cmd.none )
 
@@ -1611,7 +1611,7 @@ type alias Msg =
 type alias Model =
     { last : String }
 
-init : a -> ( Model, Cmd Msg )
+init : WebReq -> ( Model, Cmd Msg )
 init _req =
     ( { last = "" }, Cmd.none )
 
@@ -1664,7 +1664,7 @@ type alias Msg =
 type alias Model =
     { last : String }
 
-init : a -> ( Model, Cmd Msg )
+init : WebReq -> ( Model, Cmd Msg )
 init _req =
     ( { last = "" }, Cmd.none )
 
@@ -1723,7 +1723,7 @@ type alias Msg =
 type alias Model =
     { count : Int }
 
-init : a -> ( Model, Cmd Msg )
+init : WebReq -> ( Model, Cmd Msg )
 init _req =
     ( { count = 0 }, Cmd.none )
 
@@ -1860,7 +1860,7 @@ type alias Model =
     , confirmed : Bool
     }
 
-init : a -> ( Model, Cmd Msg )
+init : WebReq -> ( Model, Cmd Msg )
 init _req =
     ( { name = "", confirmed = False }, Cmd.none )
 
@@ -2051,7 +2051,7 @@ type alias Model =
     { lastUsername : String
     }
 
-init : a -> ( Model, Cmd Msg )
+init : WebReq -> ( Model, Cmd Msg )
 init _req =
     ( { lastUsername = "" }, Cmd.none )
 
@@ -2124,7 +2124,7 @@ type alias Model =
     { lastUsername : String
     }
 
-init : a -> ( Model, Cmd Msg )
+init : WebReq -> ( Model, Cmd Msg )
 init _req =
     ( { lastUsername = "" }, Cmd.none )
 
@@ -2241,7 +2241,7 @@ type alias Model =
     , lastUsername : String
     }
 
-init : a -> ( Model, Cmd Msg )
+init : WebReq -> ( Model, Cmd Msg )
 init _req =
     ( { page = FormPage, lastUsername = "" }, Cmd.none )
 

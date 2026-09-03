@@ -114,7 +114,7 @@ type Msg = Increment
 
 type alias Model = { count : Int }
 
-init : a -> ( Model, Cmd Msg )
+init : WebReq -> ( Model, Cmd Msg )
 init _req =
     ( { count = 0 }, Cmd.none )
 
@@ -151,7 +151,7 @@ type Msg = Tick
 
 type alias Model = { count : Int, pending : Cmd Msg }
 
-init : a -> ( Model, Cmd Msg )
+init : WebReq -> ( Model, Cmd Msg )
 init _req =
     ( { count = 0, pending = Cmd.none }, Cmd.none )
 
@@ -188,7 +188,7 @@ type Msg = Tick
 
 type alias Model = { count : Int, cached : Html Msg }
 
-init : a -> ( Model, Cmd Msg )
+init : WebReq -> ( Model, Cmd Msg )
 init _req =
     ( { count = 0, cached = Ui.layout [] (Ui.text "x") }, Cmd.none )
 
@@ -231,7 +231,7 @@ type Msg = Tick
 
 type alias Model = { count : Int, apiKey : Secret }
 
-init : a -> ( Model, Cmd Msg )
+init : WebReq -> ( Model, Cmd Msg )
 init _req =
     ( { count = 0, apiKey = Secret.fromString (System.getenvOr "K" "sk_live_x") }, Cmd.none )
 
@@ -275,7 +275,7 @@ editor = customElement "js/x.js"
 
 type alias Model = { count : Int, widget : CustomElement Int String }
 
-init : a -> ( Model, Cmd Msg )
+init : WebReq -> ( Model, Cmd Msg )
 init _req =
     ( { count = 0, widget = editor }, Cmd.none )
 
@@ -472,7 +472,7 @@ type Msg = Tick
 
 type alias Model = { count : Int, pending : Cmd Msg }
 
-init : a -> ( Model, Cmd Msg )
+init : WebReq -> ( Model, Cmd Msg )
 init _req =
     ( { count = 0, pending = Cmd.none }, Cmd.none )
 
@@ -509,7 +509,7 @@ type Msg = Increment
 
 type alias Model = { count : Int }
 
-init : a -> ( Model, Cmd Msg )
+init : WebReq -> ( Model, Cmd Msg )
 init _req =
     ( { count = 0 }, Cmd.none )
 

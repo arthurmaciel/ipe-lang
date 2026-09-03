@@ -28,7 +28,7 @@ type alias Model =
     { pageTitle : String }
 
 
-init : a -> ( Model, Cmd Msg )
+init : WebReq -> ( Model, Cmd Msg )
 init _req =
     ( { pageTitle = "Home" }, Cmd.none )
 

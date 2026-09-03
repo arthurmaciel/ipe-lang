@@ -122,7 +122,7 @@ type alias Model = { count : Int }
 counter : CustomElement WidgetState WidgetUp
 counter = customElement "js/counter.js"
 
-init : a -> ( Model, Cmd.Cmd Msg )
+init : WebReq -> ( Model, Cmd.Cmd Msg )
 init _req =
     ( { count = 0 }, Cmd.none )
 
@@ -173,7 +173,7 @@ type alias Model = { count : Int }
 counter : CustomElement WidgetState WidgetUp
 counter = customElement "js/counter.js"
 
-init : a -> ( Model, Cmd.Cmd Msg )
+init : WebReq -> ( Model, Cmd.Cmd Msg )
 init _req =
     ( { count = 0 }, Cmd.none )
 

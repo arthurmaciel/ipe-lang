@@ -63,7 +63,7 @@ echoUrl =
             Nothing
 
 
-init : a -> ( Model, Cmd Msg )
+init : WebReq -> ( Model, Cmd Msg )
 init _req =
     ( { sock = Nothing, status = "disconnected", lastFrame = "(none)" }
     , Cmd.none

@@ -43,7 +43,7 @@ fn web_fixture(padding: u32, extra_text: &str) -> String {
          import Ipe.String\n\n\
          type alias Model = {{ count : Int }}\n\n\
          type Msg = Noop\n\n\
-         init : a -> ( Model, Cmd Msg )\n\
+         init : WebReq -> ( Model, Cmd Msg )\n\
          init _req =\n    \
              ( {{ count = 0 }}, Cmd.none )\n\n\
          update : Msg -> Model -> ( Model, Cmd Msg )\n\
@@ -79,7 +79,7 @@ fn web_fixture_weight(weight: u32, extra_text: &str) -> String {
          import Ipe.String\n\n\
          type alias Model = {{ count : Int }}\n\n\
          type Msg = Noop\n\n\
-         init : a -> ( Model, Cmd Msg )\n\
+         init : WebReq -> ( Model, Cmd Msg )\n\
          init _req =\n    \
              ( {{ count = 0 }}, Cmd.none )\n\n\
          update : Msg -> Model -> ( Model, Cmd Msg )\n\
@@ -118,7 +118,7 @@ fn web_fixture_animation(duration: u32, extra_text: &str) -> String {
          import Ipe.String\n\n\
          type alias Model = {{ count : Int }}\n\n\
          type Msg = Noop\n\n\
-         init : a -> ( Model, Cmd Msg )\n\
+         init : WebReq -> ( Model, Cmd Msg )\n\
          init _req =\n    \
              ( {{ count = 0 }}, Cmd.none )\n\n\
          update : Msg -> Model -> ( Model, Cmd Msg )\n\
@@ -163,7 +163,7 @@ fn web_fixture_attr_text(name: &str, text: &str) -> String {
          import Ipe.String\n\n\
          type alias Model = {{ count : Int }}\n\n\
          type Msg = Noop\n\n\
-         init : a -> ( Model, Cmd Msg )\n\
+         init : WebReq -> ( Model, Cmd Msg )\n\
          init _req =\n    \
              ( {{ count = 0 }}, Cmd.none )\n\n\
          update : Msg -> Model -> ( Model, Cmd Msg )\n\
@@ -200,7 +200,7 @@ fn web_fixture_image(description: &str) -> String {
          import Ipe.String\n\n\
          type alias Model = {{ count : Int }}\n\n\
          type Msg = Noop\n\n\
-         init : a -> ( Model, Cmd Msg )\n\
+         init : WebReq -> ( Model, Cmd Msg )\n\
          init _req =\n    \
              ( {{ count = 0 }}, Cmd.none )\n\n\
          update : Msg -> Model -> ( Model, Cmd Msg )\n\
@@ -241,7 +241,7 @@ fn web_fixture_css(value: &str) -> String {
          import Ipe.Maybe as Maybe\n\n\
          type alias Model = {{ count : Int }}\n\n\
          type Msg = Noop\n\n\
-         init : a -> ( Model, Cmd Msg )\n\
+         init : WebReq -> ( Model, Cmd Msg )\n\
          init _req =\n    \
              ( {{ count = 0 }}, Cmd.none )\n\n\
          update : Msg -> Model -> ( Model, Cmd Msg )\n\
@@ -281,7 +281,7 @@ fn web_fixture_static_html(text: &str, extra_child: &str) -> String {
          import Ipe.Tea.Web.Sub\n\n\
          type alias Model = {{ count : Int }}\n\n\
          type Msg = Noop\n\n\
-         init : a -> ( Model, Cmd Msg )\n\
+         init : WebReq -> ( Model, Cmd Msg )\n\
          init _req =\n    \
              ( {{ count = 0 }}, Cmd.none )\n\n\
          update : Msg -> Model -> ( Model, Cmd Msg )\n\
@@ -320,7 +320,7 @@ fn web_fixture_static_ui(text: &str, extra_child: &str) -> String {
          import Ipe.Tea.Web.Sub\n\n\
          type alias Model = {{ count : Int }}\n\n\
          type Msg = Noop\n\n\
-         init : a -> ( Model, Cmd Msg )\n\
+         init : WebReq -> ( Model, Cmd Msg )\n\
          init _req =\n    \
              ( {{ count = 0 }}, Cmd.none )\n\n\
          update : Msg -> Model -> ( Model, Cmd Msg )\n\
@@ -357,7 +357,7 @@ fn web_fixture_grid(cols: &str, rows: &str) -> String {
          import Ipe.String\n\n\
          type alias Model = {{ count : Int }}\n\n\
          type Msg = Noop\n\n\
-         init : a -> ( Model, Cmd Msg )\n\
+         init : WebReq -> ( Model, Cmd Msg )\n\
          init _req =\n    \
              ( {{ count = 0 }}, Cmd.none )\n\n\
          update : Msg -> Model -> ( Model, Cmd Msg )\n\
@@ -1496,7 +1496,7 @@ fn web_fixture_static_ui_wrappers(text: &str, extra_child: &str) -> String {
          import Ipe.Tea.Web.Sub\n\n\
          type alias Model = {{ count : Int }}\n\n\
          type Msg = Noop\n\n\
-         init : a -> ( Model, Cmd Msg )\n\
+         init : WebReq -> ( Model, Cmd Msg )\n\
          init _req =\n    \
              ( {{ count = 0 }}, Cmd.none )\n\n\
          update : Msg -> Model -> ( Model, Cmd Msg )\n\
@@ -1638,7 +1638,7 @@ fn web_fixture_value_hole(label: &str, extra_child: &str) -> String {
          import Ipe.String as String\n\n\
          type alias Model = {{ count : Int }}\n\n\
          type Msg = Noop\n\n\
-         init : a -> ( Model, Cmd Msg )\n\
+         init : WebReq -> ( Model, Cmd Msg )\n\
          init _req =\n    \
              ( {{ count = 7 }}, Cmd.none )\n\n\
          update : Msg -> Model -> ( Model, Cmd Msg )\n\
@@ -1757,7 +1757,7 @@ fn web_fixture_counter(step: u32, extra_text: &str) -> String {
          import Ipe.String\n\n\
          type alias Model = {{ count : Int }}\n\n\
          type Msg = Increment\n\n\
-         init : a -> ( Model, Cmd Msg )\n\
+         init : WebReq -> ( Model, Cmd Msg )\n\
          init _req =\n    \
              ( {{ count = 0 }}, Cmd.none )\n\n\
          update : Msg -> Model -> ( Model, Cmd Msg )\n\
@@ -1896,7 +1896,7 @@ fn web_fixture_msg_variants(keep_decrement: bool) -> String {
          import Ipe.String\n\n\
          type alias Model = {{ count : Int }}\n\n\
          type Msg = Increment{decrement_variant}\n\n\
-         init : a -> ( Model, Cmd Msg )\n\
+         init : WebReq -> ( Model, Cmd Msg )\n\
          init _req =\n    \
              ( {{ count = 0 }}, Cmd.none )\n\n\
          update : Msg -> Model -> ( Model, Cmd Msg )\n\
@@ -1935,7 +1935,7 @@ fn web_fixture_ticker(interval: u32, extra_text: &str) -> String {
          import Ipe.Tea.Web.Sub as Sub\n\n\
          type alias Model = {{ count : Int }}\n\n\
          type Msg = Tick\n\n\
-         init : a -> ( Model, Cmd Msg )\n\
+         init : WebReq -> ( Model, Cmd Msg )\n\
          init _req =\n    \
              ( {{ count = 0 }}, Cmd.none )\n\n\
          update : Msg -> Model -> ( Model, Cmd Msg )\n\

@@ -280,6 +280,9 @@ code! {
     /// whose branches reach app entries — but a program's shape is a
     /// compile-time choice, pinned by the entry head, not a runtime value
     IPE_N0045 = "IPE-N0045", "main selects its shape at runtime, but a shape is a compile-time choice", "IPE-N0045";
+    /// `Web.app`'s `init` annotation uses a free type variable for its request
+    /// argument — the request type is `WebReq`, not an unconstrained `a`
+    IPE_N0046 = "IPE-N0046", "Web.app init annotation uses a type variable where WebReq is required", "IPE-N0046";
 
     // -----------------------------------------------------------------------
     // Type (IPE-T####)

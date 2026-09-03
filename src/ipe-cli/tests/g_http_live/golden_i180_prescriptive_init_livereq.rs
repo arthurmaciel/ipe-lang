@@ -56,6 +56,33 @@ main =
         }
 "#;
 
+/// The SAME app but with `init : a -> …` — a free type variable the
+/// prescriptive scheme must reject with IPE-N0046.
+const LIVE_INIT_POLY_REJECTED: &str = r#"module Main exposing (main)
+import Ipe.Tea.Web as Web
+import Ipe.Ui as Ui
+import Ipe.Tea.Web.Cmd
+import Ipe.Tea.Web.Sub
+type Page = HomePage
+type Msg = Noop
+type alias Model = { page : Page }
+init : a -> ( Model, Cmd Msg )
+init _ = ( { page = HomePage }, Cmd.none )
+update : Msg -> Model -> ( Model, Cmd Msg )
+update _msg model = ( model, Cmd.none )
+view : Model -> any
+view _model = Ui.text "hi"
+subscriptions : Model -> Sub Msg
+subscriptions _model = Sub.none
+main =
+    Web.app
+        { init = init, update = update, view = view
+        , subscriptions = subscriptions
+        , routes = [ Web.route "/" HomePage ]
+        , notFound = HomePage
+        }
+"#;
+
 /// The SAME app but with `init : {} -> …` — the non-`WebReq` shape the
 /// prescriptive scheme must reject with a clear IPE-T0001.
 const LIVE_INIT_UNIT_REJECTED: &str = r#"module Main exposing (main)
@@ -145,6 +172,26 @@ fn live_init_unit_is_rejected() {
     assert!(
         rendered.contains("WebReq"),
         "#180: the rejection must name the expected `WebReq` type, got: {rendered}",
+    );
+}
+
+/// `init : a -> …` (free type variable) on a `Web.app` must be rejected with
+/// IPE-N0046 — the annotation promises this works for *any* request shape,
+/// which is false; the runtime always passes `WebReq`.
+#[test]
+fn live_init_poly_var_is_rejected() {
+    let out = std::env::temp_dir().join("i180_init_poly_out");
+    let Some(result) = compile(LIVE_INIT_POLY_REJECTED, "init_poly", &out) else {
+        return;
+    };
+    let err = result.expect_err(
+        "#180: `init : a -> …` on a Web.app must be a compile error (IPE-N0046) \
+         under the prescriptive WebReq scheme",
+    );
+    let rendered = format!("{err:?}");
+    assert!(
+        rendered.contains("WebInitPolyArg"),
+        "#180: the rejection must carry WebInitPolyArg (IPE-N0046), got: {rendered}",
     );
 }
 

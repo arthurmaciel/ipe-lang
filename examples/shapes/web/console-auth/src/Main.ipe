@@ -32,7 +32,7 @@ type alias Model =
     {}
 
 
-init : a -> ( Model, Cmd.Cmd Msg )
+init : WebReq -> ( Model, Cmd.Cmd Msg )
 init _req =
     ( {}, Cmd.none )
 

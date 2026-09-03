@@ -72,7 +72,7 @@ fn pure_ui_app_emits_wasm_project() {
          type Msg = Increment\n\
          type alias Model = { count : Int }\n\
          \n\
-         init : a -> ( Model, Cmd Msg )\n\
+         init : WebReq -> ( Model, Cmd Msg )\n\
          init _req = ( { count = 0 }, Cmd.none )\n\
          \n\
          update : Msg -> Model -> ( Model, Cmd Msg )\n\
@@ -161,7 +161,7 @@ fn wasm_web_app_ipe_main_return_type_is_ipe_task() {
          type Msg = Increment\n\
          type alias Model = { count : Int }\n\
          \n\
-         init : a -> ( Model, Cmd Msg )\n\
+         init : WebReq -> ( Model, Cmd Msg )\n\
          init _req = ( { count = 0 }, Cmd.none )\n\
          \n\
          update : Msg -> Model -> ( Model, Cmd Msg )\n\
@@ -230,7 +230,7 @@ fn routed_web_app_emits_wasm_app_routed() {
          type Msg = NoOp\n\
          type alias Model = { page : Page, count : Int }\n\
          \n\
-         init : a -> ( Model, Cmd Msg )\n\
+         init : WebReq -> ( Model, Cmd Msg )\n\
          init _req = ( { page = Home, count = 0 }, Cmd.none )\n\
          \n\
          update : Msg -> Model -> ( Model, Cmd Msg )\n\

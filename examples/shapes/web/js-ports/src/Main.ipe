@@ -43,7 +43,7 @@ type Msg
     | Ticked Int
 
 
-init : a -> ( Model, Cmd.Cmd Msg )
+init : WebReq -> ( Model, Cmd.Cmd Msg )
 init _req =
     ( { lastTick = 0 }, Cmd.none )
 

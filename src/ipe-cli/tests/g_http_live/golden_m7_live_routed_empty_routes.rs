@@ -124,7 +124,7 @@ import Ipe.String
 import Ipe.Tea.Web.Sub
 type Msg = Increment
 type alias Model = { count : Int }
-init : a -> ( Model, Cmd Msg )
+init : WebReq -> ( Model, Cmd Msg )
 init _req = ( { count = 0 }, Cmd.none )
 update : Msg -> Model -> ( Model, Cmd Msg )
 update msg model =
@@ -156,7 +156,7 @@ import Ipe.Tea.Web.Sub
 type Page = MainPage
 type Msg = Increment
 type alias Model = { count : Int }
-init : a -> ( Model, Cmd Msg )
+init : WebReq -> ( Model, Cmd Msg )
 init _req = ( { count = 0 }, Cmd.none )
 update : Msg -> Model -> ( Model, Cmd Msg )
 update msg model =

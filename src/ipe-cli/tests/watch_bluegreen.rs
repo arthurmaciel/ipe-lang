@@ -38,7 +38,7 @@ fn web_fixture(marker: &str) -> String {
          import Ipe.Tea.Web.Sub as Sub\n\n\
          type Msg = Noop\n\n\
          type alias Model = {{ count : Int }}\n\n\
-         init : a -> ( Model, Cmd Msg )\n\
+         init : WebReq -> ( Model, Cmd Msg )\n\
          init _req = ( {{ count = 0 }}, Cmd.none )\n\n\
          update : Msg -> Model -> ( Model, Cmd Msg )\n\
          update _msg model = ( model, Cmd.none )\n\n\
@@ -76,7 +76,7 @@ fn ticker_fixture(marker: &str) -> String {
          import Ipe.Tea.Web.Sub as Sub\n\n\
          type Msg = Tick\n\n\
          type alias Model = {{ count : Int }}\n\n\
-         init : a -> ( Model, Cmd Msg )\n\
+         init : WebReq -> ( Model, Cmd Msg )\n\
          init _req = ( {{ count = 0 }}, Cmd.none )\n\n\
          update : Msg -> Model -> ( Model, Cmd Msg )\n\
          update _msg model = ( {{ model | count = model.count + 1 }}, Cmd.none )\n\n\
@@ -116,7 +116,7 @@ fn changed_model_fixture(marker: &str) -> String {
          import Ipe.Tea.Web.Sub as Sub\n\n\
          type Msg = Tick\n\n\
          type alias Model = {{ score : Int }}\n\n\
-         init : a -> ( Model, Cmd Msg )\n\
+         init : WebReq -> ( Model, Cmd Msg )\n\
          init _req = ( {{ score = 0 }}, Cmd.none )\n\n\
          update : Msg -> Model -> ( Model, Cmd Msg )\n\
          update _msg model = ( {{ model | score = model.score + 1 }}, Cmd.none )\n\n\
@@ -728,7 +728,7 @@ fn additive_ticker_fixture(marker: &str) -> String {
          import Ipe.Tea.Web.Sub as Sub\n\n\
          type Msg = Tick\n\n\
          type alias Model = {{ count : Int, label : String }}\n\n\
-         init : a -> ( Model, Cmd Msg )\n\
+         init : WebReq -> ( Model, Cmd Msg )\n\
          init _req = ( {{ count = 0, label = \"init\" }}, Cmd.none )\n\n\
          update : Msg -> Model -> ( Model, Cmd Msg )\n\
          update _msg model = ( {{ model | count = model.count + 1 }}, Cmd.none )\n\n\

@@ -1293,7 +1293,7 @@ fn custom_element_widget_program_ipe_accepts() {
          type alias Model = {{ state : EditorState }}\n\
          codeEditor : CustomElement EditorState EditorEvent\n\
          codeEditor = customElement \"js/x.js\"\n\
-         init : a -> ( Model, Cmd Msg )\n\
+         init : WebReq -> ( Model, Cmd Msg )\n\
          init _req =\n\
          \x20   ( {{ state = {{ text = \"\", line = 0 }} }}, Cmd.none )\n\
          update : Msg -> Model -> ( Model, Cmd Msg )\n\
@@ -1403,7 +1403,7 @@ fn js_port_app(decoder_expr: &str) -> String {
          import Ipe.Json.Decode as Decode\n\
          type alias Model = {{ n : Int }}\n\
          type Msg = Tick | Got Int\n\
-         init : a -> ( Model, Cmd.Cmd Msg )\n\
+         init : WebReq -> ( Model, Cmd.Cmd Msg )\n\
          init _r =\n\
          \x20   ( {{ n = 0 }}, Cmd.none )\n\
          update : Msg -> Model -> ( Model, Cmd.Cmd Msg )\n\
@@ -1457,7 +1457,7 @@ fn js_port_subscribe_value_decoder_rejected() {
          import Ipe.Json.Decode as Decode\n\
          type alias Model = { n : Int }\n\
          type Msg = Tick | GotV Value\n\
-         init : a -> ( Model, Cmd.Cmd Msg )\n\
+         init : WebReq -> ( Model, Cmd.Cmd Msg )\n\
          init _r =\n\
          \x20   ( { n = 0 }, Cmd.none )\n\
          update : Msg -> Model -> ( Model, Cmd.Cmd Msg )\n\
@@ -1493,7 +1493,7 @@ fn js_port_send_secret_rejected() {
          import Ipe.System as System\n\
          type alias Model = { s : Secret }\n\
          type Msg = Tick\n\
-         init : a -> ( Model, Cmd.Cmd Msg )\n\
+         init : WebReq -> ( Model, Cmd.Cmd Msg )\n\
          init _r =\n\
          \x20   ( { s = Secret.fromString (System.getenvOr \"K\" \"x\") }, Cmd.none )\n\
          update : Msg -> Model -> ( Model, Cmd.Cmd Msg )\n\
@@ -1532,7 +1532,7 @@ fn js_port_send_nested_secret_in_adt_rejected() {
          type Payload = Wrap Secret | Empty\n\
          type alias Model = { p : Payload }\n\
          type Msg = Tick\n\
-         init : a -> ( Model, Cmd.Cmd Msg )\n\
+         init : WebReq -> ( Model, Cmd.Cmd Msg )\n\
          init _r =\n\
          \x20   ( { p = Wrap (Secret.fromString (System.getenvOr \"K\" \"x\")) }, Cmd.none )\n\
          update : Msg -> Model -> ( Model, Cmd.Cmd Msg )\n\
@@ -1570,7 +1570,7 @@ fn js_port_send_polymorphic_wrapper_secret_rejected() {
          type Box a = Box a\n\
          type alias Model = { b : Box Secret }\n\
          type Msg = Tick\n\
-         init : a -> ( Model, Cmd.Cmd Msg )\n\
+         init : WebReq -> ( Model, Cmd.Cmd Msg )\n\
          init _r =\n\
          \x20   ( { b = Box (Secret.fromString (System.getenvOr \"K\" \"x\")) }, Cmd.none )\n\
          update : Msg -> Model -> ( Model, Cmd.Cmd Msg )\n\
@@ -1799,7 +1799,7 @@ fn effect_secret_in_live_model() {
          type Msg = Noop\n\
          type alias Model = { count : Int, apiKey : Secret }\n\
          \n\
-         init : a -> ( Model, Cmd Msg )\n\
+         init : WebReq -> ( Model, Cmd Msg )\n\
          init _req = ( { count = 0, apiKey = Secret.fromString (System.getenvOr \"K\" \"sk_live_x\") }, Cmd.none )\n\
          update : Msg -> Model -> ( Model, Cmd Msg )\n\
          update _msg model = ( model, Cmd.none )\n\
@@ -2304,7 +2304,7 @@ fn explain_reachable_src() -> String {
          import Ipe.Debug as Debug\n\
          type Msg = Noop\n\
          type alias Model = {{}}\n\
-         init : a -> ( Model, Cmd Msg )\n\
+         init : WebReq -> ( Model, Cmd Msg )\n\
          init _req = ( {{}}, Cmd.none )\n\
          update : Msg -> Model -> ( Model, Cmd Msg )\n\
          update _msg model = ( model, Cmd.none )\n\
@@ -2460,7 +2460,7 @@ fn lower_let_bound_app_cfg() {
          type Msg = Noop\n\
          type alias Model = { count : Int }\n\
          \n\
-         init : a -> ( Model, Cmd Msg )\n\
+         init : WebReq -> ( Model, Cmd Msg )\n\
          init _req = ( { count = 0 }, Cmd.none )\n\
          update : Msg -> Model -> ( Model, Cmd Msg )\n\
          update _msg model = ( model, Cmd.none )\n\
@@ -2481,6 +2481,38 @@ fn lower_let_bound_app_cfg() {
          \x20   in\n\
          \x20   app cfg\n";
     assert_rejected("lower_let_bound_cfg", src, "IPE-L0119");
+}
+
+/// A `Web.app` `init` annotated with a free type variable (`init : a -> …`)
+/// is a false promise — the runtime always passes `WebReq` — so it must be
+/// rejected with IPE-N0046.
+#[test]
+fn name_web_init_poly_var() {
+    let src = r#"module Main exposing (main)
+import Ipe.Tea.Web as Web
+import Ipe.Ui as Ui
+import Ipe.Tea.Web.Cmd
+import Ipe.Tea.Web.Sub
+type Page = HomePage
+type Msg = Noop
+type alias Model = { page : Page }
+init : a -> ( Model, Cmd Msg )
+init _ = ( { page = HomePage }, Cmd.none )
+update : Msg -> Model -> ( Model, Cmd Msg )
+update _msg model = ( model, Cmd.none )
+view : Model -> any
+view _model = Ui.text "hi"
+subscriptions : Model -> Sub Msg
+subscriptions _model = Sub.none
+main =
+    Web.app
+        { init = init, update = update, view = view
+        , subscriptions = subscriptions
+        , routes = [ Web.route "/" HomePage ]
+        , notFound = HomePage
+        }
+"#;
+    assert_rejected("name_web_init_poly_var", src, "IPE-N0046");
 }
 
 // ===========================================================================

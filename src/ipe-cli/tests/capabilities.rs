@@ -35,7 +35,7 @@ type alias Model = { count : Int }
 counter : CustomElement WidgetState WidgetUp
 counter = customElement "js/counter.js"
 
-init : a -> ( Model, Cmd.Cmd Msg )
+init : WebReq -> ( Model, Cmd.Cmd Msg )
 init _req =
     ( { count = 0 }, Cmd.none )
 
@@ -274,7 +274,7 @@ type alias Model = { count : Int }
 counter : CustomElement WidgetState WidgetUp
 counter = customElement "js/counter.js"
 
-init : a -> ( Model, Cmd.Cmd Msg )
+init : WebReq -> ( Model, Cmd.Cmd Msg )
 init _req =
     ( { count = 0 }, Cmd.none )
 
@@ -384,7 +384,7 @@ fn a_handle_constructed_in_an_imported_module_discloses_custom_element() -> Test
     // Main imports Widgets but never mounts `counter`.
     std::fs::write(
         dir.join("src/Main.ipe"),
-        "module Main exposing (main)\n\nimport Ipe.Tea.Web as Web\nimport Ipe.Ui as Ui\nimport Ipe.Tea.Web.Cmd as Cmd\nimport Ipe.Tea.Web.Sub as Sub\nimport Ipe.String as String\nimport Widgets\n\ntype Msg = Noop\n\ntype alias Model = { count : Int }\n\ninit : a -> ( Model, Cmd.Cmd Msg )\ninit _req =\n    ( { count = 0 }, Cmd.none )\n\nupdate : Msg -> Model -> ( Model, Cmd.Cmd Msg )\nupdate msg model =\n    case msg of\n        Noop ->\n            ( model, Cmd.none )\n\nview : Model -> Element Msg\nview model =\n    Ui.column [] [ Ui.text (String.fromInt model.count) ]\n\nsubscriptions : Model -> Sub.Sub Msg\nsubscriptions _model =\n    Sub.none\n\nmain =\n    Web.app\n        { init = init, update = update, view = view, subscriptions = subscriptions\n        , routes = [], notFound = Noop\n        }\n",
+        "module Main exposing (main)\n\nimport Ipe.Tea.Web as Web\nimport Ipe.Ui as Ui\nimport Ipe.Tea.Web.Cmd as Cmd\nimport Ipe.Tea.Web.Sub as Sub\nimport Ipe.String as String\nimport Widgets\n\ntype Msg = Noop\n\ntype alias Model = { count : Int }\n\ninit : WebReq -> ( Model, Cmd.Cmd Msg )\ninit _req =\n    ( { count = 0 }, Cmd.none )\n\nupdate : Msg -> Model -> ( Model, Cmd.Cmd Msg )\nupdate msg model =\n    case msg of\n        Noop ->\n            ( model, Cmd.none )\n\nview : Model -> Element Msg\nview model =\n    Ui.column [] [ Ui.text (String.fromInt model.count) ]\n\nsubscriptions : Model -> Sub.Sub Msg\nsubscriptions _model =\n    Sub.none\n\nmain =\n    Web.app\n        { init = init, update = update, view = view, subscriptions = subscriptions\n        , routes = [], notFound = Noop\n        }\n",
     )?;
     std::fs::write(dir.join("src/js/counter.js"), COUNTER_JS)?;
 
@@ -450,7 +450,7 @@ type alias Model = { n : Int }
 
 type Msg = Tick | Got Int
 
-init : a -> ( Model, Cmd.Cmd Msg )
+init : WebReq -> ( Model, Cmd.Cmd Msg )
 init _r =
     ( { n = 0 }, Cmd.none )
 
@@ -526,7 +526,7 @@ type alias Model = { n : Int }
 
 type Msg = Copy
 
-init : a -> ( Model, Cmd.Cmd Msg )
+init : WebReq -> ( Model, Cmd.Cmd Msg )
 init _r =
     ( { n = 0 }, Cmd.none )
 
@@ -613,7 +613,7 @@ fn a_transitive_browser_import_reaches_the_linked_set() -> TestResult {
          import Widget\n\
          type alias Model = { n : Int }\n\
          type Msg = Copy\n\
-         init : a -> ( Model, Cmd.Cmd Msg )\n\
+         init : WebReq -> ( Model, Cmd.Cmd Msg )\n\
          init _r =\n    ( { n = 0 }, Cmd.none )\n\
          update : Msg -> Model -> ( Model, Cmd.Cmd Msg )\n\
          update _msg model =\n    ( model, Widget.copy \"x\" )\n\
@@ -699,7 +699,7 @@ type alias Model = { where_ : String }
 
 type Msg = Locate | Got (Result Error Geo.Coords)
 
-init : a -> ( Model, Cmd.Cmd Msg )
+init : WebReq -> ( Model, Cmd.Cmd Msg )
 init _r =
     ( { where_ = "?" }, Cmd.none )
 
@@ -775,7 +775,7 @@ type alias Model = { n : Int }
 
 type Msg = Poke
 
-init : a -> ( Model, Cmd.Cmd Msg )
+init : WebReq -> ( Model, Cmd.Cmd Msg )
 init _r =
     ( { n = 0 }, Geo.request (Geo.Current Geo.defaults) )
 
