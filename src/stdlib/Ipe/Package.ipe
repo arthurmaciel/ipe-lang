@@ -227,6 +227,8 @@ type WebCapability
     | Share
     | Battery
     | NetworkInfo
+    | File
+    | Camera
     | Raw
 
 

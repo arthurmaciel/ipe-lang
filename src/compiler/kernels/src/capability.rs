@@ -117,6 +117,13 @@ pub enum WebCapability {
     Battery,
     /// `navigator.connection` — network-information hints.
     NetworkInfo,
+    /// `<input type="file">` via the File API — opening a native file picker and
+    /// reading the chosen file as a `data:` URL.
+    File,
+    /// `<input type="file" capture="environment" accept="image/*">` — directing
+    /// the OS to open the device camera (mobile) or fall back to an image file
+    /// picker (desktop). The result is a single captured image as a `data:` URL.
+    Camera,
     /// A port with no characterised Web API: a hand-rolled `Js.send`/`Js.subscribe`
     /// reaching author-written JS. The reachability floor no port can slip below —
     /// an uncharacterised port discloses `js-port:raw`, never nothing.
@@ -135,6 +142,8 @@ impl WebCapability {
         Self::Share,
         Self::Battery,
         Self::NetworkInfo,
+        Self::File,
+        Self::Camera,
         Self::Raw,
     ];
 
@@ -151,6 +160,8 @@ impl WebCapability {
             Self::Share => "share",
             Self::Battery => "battery",
             Self::NetworkInfo => "network-info",
+            Self::File => "file",
+            Self::Camera => "camera",
             Self::Raw => "raw",
         }
     }
@@ -178,6 +189,8 @@ impl WebCapability {
             ["Ipe", "Browser", "Share", ..] => Some(Self::Share),
             ["Ipe", "Browser", "Battery", ..] => Some(Self::Battery),
             ["Ipe", "Browser", "NetworkInfo", ..] => Some(Self::NetworkInfo),
+            ["Ipe", "Browser", "FilePicker", ..] => Some(Self::File),
+            ["Ipe", "Browser", "Camera", ..] => Some(Self::Camera),
             _ => None,
         }
     }
@@ -198,6 +211,14 @@ impl WebCapability {
             Self::Share => "Invoking the platform share sheet via navigator.share.",
             Self::Battery => "Reading battery status via navigator.getBattery.",
             Self::NetworkInfo => "Reading network-information hints via navigator.connection.",
+            Self::File => {
+                "Opening a native file picker and reading the chosen file via the File API \
+                 (FileReader.readAsDataURL)."
+            }
+            Self::Camera => {
+                "Capturing a photo via the device camera (mobile) or an image file picker \
+                 (desktop) using a <input capture> element and the File API."
+            }
             Self::Raw => {
                 "Exchanging data with hand-rolled page JS over an uncharacterised port \
                  (Js.send / Js.subscribe with author-written JS)."
@@ -218,6 +239,8 @@ impl WebCapability {
             "share" => Ok(Self::Share),
             "battery" => Ok(Self::Battery),
             "network-info" => Ok(Self::NetworkInfo),
+            "file" => Ok(Self::File),
+            "camera" => Ok(Self::Camera),
             "raw" => Ok(Self::Raw),
             _ => Err(UnknownCapability(full.to_owned())),
         }
@@ -318,6 +341,8 @@ impl Capability {
         Self::JsPort(WebCapability::Share),
         Self::JsPort(WebCapability::Battery),
         Self::JsPort(WebCapability::NetworkInfo),
+        Self::JsPort(WebCapability::File),
+        Self::JsPort(WebCapability::Camera),
         Self::JsPort(WebCapability::Raw),
     ];
 
@@ -363,6 +388,8 @@ impl Capability {
                 WebCapability::Share => "js-port:share",
                 WebCapability::Battery => "js-port:battery",
                 WebCapability::NetworkInfo => "js-port:network-info",
+                WebCapability::File => "js-port:file",
+                WebCapability::Camera => "js-port:camera",
                 WebCapability::Raw => "js-port:raw",
             },
         }
@@ -415,7 +442,7 @@ impl std::fmt::Display for UnknownCapability {
              database, env, subprocess, clock, random, native-ffi, ffi-raw, unsafe, \
              custom-element, js-port:<axis> where <axis> is one of geolocation, \
              clipboard, notification, storage, vibration, share, battery, \
-             network-info, raw)",
+             network-info, file, camera, raw)",
             self.0
         )
     }
@@ -578,8 +605,24 @@ mod tests {
         // An unrecognised `js-port:<axis>` suffix fails closed, carrying the full
         // offending token, exactly as any other typo does.
         use std::str::FromStr as _;
-        let err = Capability::from_str("js-port:camera").unwrap_err();
-        assert_eq!(err, super::UnknownCapability("js-port:camera".to_owned()));
+        let err = Capability::from_str("js-port:unknown-axis").unwrap_err();
+        assert_eq!(
+            err,
+            super::UnknownCapability("js-port:unknown-axis".to_owned())
+        );
+    }
+
+    #[test]
+    fn from_str_accepts_file_and_camera_web_axes() {
+        use std::str::FromStr as _;
+        assert_eq!(
+            Capability::from_str("js-port:file"),
+            Ok(Capability::JsPort(WebCapability::File))
+        );
+        assert_eq!(
+            Capability::from_str("js-port:camera"),
+            Ok(Capability::JsPort(WebCapability::Camera))
+        );
     }
 
     #[test]
