@@ -1203,3 +1203,89 @@ fn a_share_app_without_the_grant_is_rejected() -> TestResult {
     let _ = std::fs::remove_dir_all(&dir);
     Ok(())
 }
+
+// ── Ipe.Browser.Battery — a first-party web-API module ──────────────────────
+
+/// A Web-shape app importing `Ipe.Browser.Battery` — the import-derived signal that
+/// discloses the SPECIFIC `js-port:battery` axis on top of the `:raw` floor.
+const BATTERY_APP: &str = r#"module Main exposing (main)
+
+import Ipe.Tea.Web as Web
+import Ipe.Tea.Web.Cmd as Cmd
+import Ipe.Tea.Web.Sub as Sub
+import Ipe.Ui as Ui
+import Ipe.Error as Error exposing (Error)
+import Ipe.Browser.Battery as Battery
+import Ipe.Task as Task
+
+type alias Model = { charging : Bool }
+
+type Msg = Check | Got (Result Error Battery.Status) | Reading (Result Error Battery.Status)
+
+init : WebReq -> ( Model, Cmd.Cmd Msg )
+init _r =
+    ( { charging = False }, Task.attempt Got Battery.status )
+
+update : Msg -> Model -> ( Model, Cmd.Cmd Msg )
+update msg model =
+    case msg of
+        Check ->
+            ( model, Battery.watch )
+
+        Got _r ->
+            ( model, Cmd.none )
+
+        Reading _r ->
+            ( model, Cmd.none )
+
+view : Model -> Element Msg
+view _model =
+    Ui.text "ok"
+
+subscriptions : Model -> Sub.Sub Msg
+subscriptions _model =
+    Battery.readings Reading
+
+main =
+    Web.app
+        { init = init, update = update, view = view, subscriptions = subscriptions
+        , routes = [], notFound = Check
+        }
+"#;
+
+/// Importing `Ipe.Browser.Battery` discloses the specific `js-port:battery` axis.
+#[test]
+fn importing_browser_battery_discloses_js_port_battery() -> TestResult {
+    let dir = write_single("battery", BATTERY_APP)?;
+    let entry = dir.join("Main.ipe");
+    let declared = BTreeSet::from([
+        Capability::JsPort(WebCapability::Battery),
+        Capability::JsPort(WebCapability::Raw),
+    ]);
+    let r = verify_capabilities(&entry, &declared);
+    assert!(
+        r.is_ok(),
+        "importing Ipe.Browser.Battery must disclose js-port:battery (+ the :raw floor): {r:?}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+    Ok(())
+}
+
+/// Fail-closed: a battery app that omits the grant is rejected as under-declared.
+#[test]
+fn a_battery_app_without_the_grant_is_rejected() -> TestResult {
+    let dir = write_single("batterynogrant", BATTERY_APP)?;
+    let entry = dir.join("Main.ipe");
+    let declared = BTreeSet::from([Capability::JsPort(WebCapability::Raw)]);
+    let r = verify_capabilities(&entry, &declared);
+    assert!(
+        matches!(
+            &r,
+            Err(ipe::CliError::CapabilityMismatch { missing, .. })
+                if missing.contains(&"js-port:battery")
+        ),
+        "an ungranted battery app must be rejected naming js-port:battery, got: {r:?}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+    Ok(())
+}

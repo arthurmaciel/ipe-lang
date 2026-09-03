@@ -753,6 +753,25 @@ const IPE_BROWSER_SHARE: &str = include_str!("../Ipe/Browser/Share.ipe");
 /// [`COMPILED_STD_MODULES`] (NOT `MODULES`); NOT in `STDLIB_MODULE_QUALIFIERS`.
 const IPE_BROWSER_SHARE_INTERNALS: &str = include_str!("../Ipe/Browser/Share/Internals.ipe");
 
+/// `Ipe.Browser.Battery` — read the device battery status over `Ipe.Ffi.Js` ports
+/// (compiled source), spanning BOTH port directions: an outbound `JsCmd` request
+/// (`status` one-shot / `watch` continuous) and an inbound `JsMsg` reply folded
+/// exhaustively into `Result Error Status`. Importing it discloses
+/// `js-port:battery` (import-derived, keyed on the canonical `Ipe.Browser.Battery`
+/// path prefix via `WebCapability::for_browser_module`). The served wasm-sink JS
+/// handler reaches `navigator.getBattery`, trapping an absent API to the typed
+/// `Unavailable` inbound variant. Registered in [`COMPILED_STD_MODULES`] (NOT
+/// `MODULES`); NOT in `STDLIB_MODULE_QUALIFIERS`.
+const IPE_BROWSER_BATTERY: &str = include_str!("../Ipe/Browser/Battery.ipe");
+
+/// `Ipe.Browser.Battery.Internals` — the low-level Battery Status port surface: the
+/// closed outbound/inbound ADTs and the raw `Ipe.Ffi.Js` wiring the high-level
+/// layer wraps. Importing it discloses the same `js-port:battery` axis (the prefix
+/// key covers the submodule). Registered in [`COMPILED_STD_MODULES`] (NOT
+/// `MODULES`); NOT in `STDLIB_MODULE_QUALIFIERS`.
+const IPE_BROWSER_BATTERY_INTERNALS: &str =
+    include_str!("../Ipe/Browser/Battery/Internals.ipe");
+
 /// `Ipe.Env` — build-time-embedded public config (compiled source).
 ///
 /// Defines `public : String -> Maybe String`, routed through the
@@ -1247,6 +1266,14 @@ pub const COMPILED_STD_MODULES: &[CompiledStdModule] = &[
     CompiledStdModule {
         dotted: "Ipe.Browser.Share.Internals",
         source: IPE_BROWSER_SHARE_INTERNALS,
+    },
+    CompiledStdModule {
+        dotted: "Ipe.Browser.Battery",
+        source: IPE_BROWSER_BATTERY,
+    },
+    CompiledStdModule {
+        dotted: "Ipe.Browser.Battery.Internals",
+        source: IPE_BROWSER_BATTERY_INTERNALS,
     },
     CompiledStdModule {
         dotted: "Ipe.Env",

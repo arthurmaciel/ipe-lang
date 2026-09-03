@@ -305,6 +305,51 @@ const PORT_GLUE_JS: &str = r#"// Ipe.Ffi.Js browser port surface. Values cross a
     }
     return true;
   }
+  // Ipe.Browser.Battery: `Query` / `Watch` -> navigator.getBattery(). A reading
+  // frame carries charging / level / chargingTime / dischargingTime; a
+  // never-ending time (`Infinity`) is normalised to the -1 sentinel. An absent API
+  // traps to `unavailable` — never a throw. `Watch` also attaches change listeners
+  // that push fresh readings.
+  function batteryReadingFrame(bat, corId) {
+    function finite(x) {
+      var n = Number(x);
+      return (isFinite(n)) ? n : -1;
+    }
+    reply({
+      tag: "battery", ok: true,
+      charging: bat.charging === true,
+      level: Number(bat.level),
+      chargingTime: finite(bat.chargingTime),
+      dischargingTime: finite(bat.dischargingTime),
+    }, corId);
+  }
+  function batterySink(value, corId) {
+    var isQuery = value === "Query" ||
+      (value && typeof value === "object" && value.Query !== undefined);
+    var isWatch = value === "Watch" ||
+      (value && typeof value === "object" && value.Watch !== undefined);
+    if (!isQuery && !isWatch) return false;
+    if (!navigator || typeof navigator.getBattery !== "function") {
+      reply({ tag: "battery", ok: false, error: "unavailable" }, corId);
+      return true;
+    }
+    navigator.getBattery().then(
+      function (bat) {
+        batteryReadingFrame(bat, corId);
+        if (isWatch) {
+          // A watch subscription receives every subsequent change as a fresh
+          // broadcast reading; the change events carry no correlation id.
+          var push = function () { batteryReadingFrame(bat, null); };
+          bat.addEventListener("chargingchange", push);
+          bat.addEventListener("levelchange", push);
+          bat.addEventListener("chargingtimechange", push);
+          bat.addEventListener("dischargingtimechange", push);
+        }
+      },
+      function () { reply({ tag: "battery", ok: false, error: "unavailable" }, corId); }
+    );
+    return true;
+  }
   function builtinSink(value, corId) {
     if (clipboardSink(value, corId)) return true;
     if (geolocationSink(value, corId)) return true;
@@ -312,6 +357,7 @@ const PORT_GLUE_JS: &str = r#"// Ipe.Ffi.Js browser port surface. Values cross a
     if (storageSink(value, corId)) return true;
     if (vibrationSink(value, corId)) return true;
     if (shareSink(value, corId)) return true;
+    if (batterySink(value, corId)) return true;
     return false;
   }
   function deliver(raw) {
@@ -509,6 +555,22 @@ mod tests {
         // …and enumerates the cancel + unavailable outcomes, never a throw.
         assert!(js.contains("AbortError"));
         assert!(js.contains("\"cancelled\""));
+        assert!(js.contains("\"unavailable\""));
+        assert!(!js.contains("eval("));
+    }
+
+    #[test]
+    fn battery_sink_reaches_the_web_api_and_traps_absence_to_a_typed_result() {
+        let js = port_glue_js();
+        // The first-party Ipe.Browser.Battery sink reaches navigator.getBattery…
+        assert!(js.contains("navigator.getBattery"));
+        // …emits a typed reading with all four status fields…
+        assert!(js.contains("tag: \"battery\""));
+        assert!(js.contains("charging:"));
+        assert!(js.contains("level:"));
+        assert!(js.contains("chargingTime:"));
+        assert!(js.contains("dischargingTime:"));
+        // …and traps an absent API to a typed frame, never a throw.
         assert!(js.contains("\"unavailable\""));
         assert!(!js.contains("eval("));
     }

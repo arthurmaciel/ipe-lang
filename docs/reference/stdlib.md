@@ -9,6 +9,8 @@ Each module listed below links to a detail page with the full documentation and 
 - [Analytics](#analytics)
 - [Basics](#basics)
 - [Bitwise](#bitwise)
+- [Browser.Battery](#browserbattery)
+- [Browser.Battery.Internals](#browserbatteryinternals)
 - [Browser.Clipboard](#browserclipboard)
 - [Browser.Clipboard.Internals](#browserclipboardinternals)
 - [Browser.Geolocation](#browsergeolocation)
@@ -166,6 +168,34 @@ Ipe.Bitwise — bitwise operations on `Int`.
 | `shiftLeftBy` | Arithmetic left shift.  `shiftLeftBy offset n` shifts `n` left by |
 | `shiftRightBy` | Arithmetic (sign-preserving) right shift. |
 | `shiftRightZfBy` | Zero-fill (logical) right shift: the sign bit is not replicated. |
+
+## Browser.Battery
+
+[Full reference](stdlib/Browser.Battery.md)
+
+Ipe.Browser.Battery — read the device battery status over `Ipe.Ffi.Js` ports.
+
+| Export | Summary |
+|--------|----------|
+| `Status` | A battery status snapshot. |
+| `status` | `status` — read the current battery status ONCE, as a `Task Error Status`. |
+| `watch` | `watch` — begin a CONTINUOUS status stream; each change event delivers a |
+| `readings` | `readings toMsg` — the inbound subscription, wired in `subscriptions`. |
+
+## Browser.Battery.Internals
+
+[Full reference](stdlib/Browser.Battery.Internals.md)
+
+Ipe.Browser.Battery.Internals — the low-level Battery Status port surface: the
+
+| Export | Summary |
+|--------|----------|
+| `JsCmd` | The ONE closed OUTBOUND port type: the whole outbound surface as a single |
+| `JsMsg` | The NARROW closed INBOUND port type — deliberately NOT the app's internal |
+| `request` | `request cmd` — hand a closed outbound `JsCmd` to the raw port transport. |
+| `requestOne` | `requestOne cmd` — correlated one-shot `JsCmd` → `Task Error JsMsg`. |
+| `subscribe` | `subscribe toMsg` — the inbound subscription over the fail-closed seal |
+| `inbound` | The total, fail-closed decoder for the inbound `JsMsg`. It reads the `ok` |
 
 ## Browser.Clipboard
 

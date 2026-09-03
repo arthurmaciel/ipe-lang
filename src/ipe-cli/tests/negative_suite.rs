@@ -1772,6 +1772,22 @@ fn share_inbound_fold_missing_cancelled_is_non_exhaustive() {
     assert_rejected("share_inbound_missing_cancelled", &src, "IPE-T0010");
 }
 
+/// A fold over the inbound `Ipe.Browser.Battery.Internals` `JsMsg` that omits the
+/// `Unavailable` variant is non-exhaustive (IPE-T0010) — the compiler-level
+/// guarantee that a battery unavailability can never be silently swallowed.
+#[test]
+fn battery_inbound_fold_missing_unavailable_is_non_exhaustive() {
+    let src = format!(
+        "{HEAD}import Ipe.Io as Io\n\
+         import Ipe.Browser.Battery.Internals as Battery exposing (JsMsg(..))\n\
+         describe : JsMsg -> String\n\
+         describe m =\n    case m of\n        \
+         Reading _c _l _ct _dt -> \"reading\"\n\n\
+         main = Io.println (describe (Reading False 1.0 0.0 0.0))\n"
+    );
+    assert_rejected("battery_inbound_missing_unavailable", &src, "IPE-T0010");
+}
+
 // NOTE: IPE-T0011 (redundant case branch) is intentionally `Severity::Warning`
 // (see `types::exhaust` — "collect it but do not abort"), so a redundant arm
 // does NOT reject compilation. It is therefore out of scope for a
