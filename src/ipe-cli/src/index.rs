@@ -23,6 +23,7 @@ use std::str::FromStr as _;
 use ipe_ir::Capability;
 
 use crate::CliError;
+use crate::signing::SignatureBundle;
 
 /// A validated source-repository URL accepted by the package index.
 ///
@@ -264,6 +265,13 @@ pub struct EntryVersion {
     /// The capability set the publisher declared for this version, surfaced for
     /// consent at `ipe add`.
     pub capabilities: BTreeSet<Capability>,
+    /// The publisher's Sigstore signature bundle over this version's `sha256`,
+    /// when one was published. Optional and backward-compatible: an absent
+    /// `signature` is an unsigned version (resolved with a warning unless the
+    /// trust policy requires a signature). A PRESENT-but-malformed bundle is a
+    /// hard parse error, never a silently-dropped field — a malformed signature
+    /// must not masquerade as "unsigned".
+    pub signature: Option<crate::signing::SignatureBundle>,
 }
 
 /// The path of a package's entry file inside an index checkout.
@@ -517,6 +525,7 @@ fn parse_entry(name: &str, text: &str) -> Result<IndexEntry, CliError> {
                     "rev" => record.rev = Some(unquote(raw_val).to_owned()),
                     "sha256" => record.sha256 = Some(unquote(raw_val).to_owned()),
                     "capabilities" => record.capabilities = Some(raw_val.to_owned()),
+                    "signature" => record.signature = Some(unquote(raw_val).to_owned()),
                     _ => {}
                 }
             }
@@ -656,12 +665,26 @@ fn parse_entry_version_json(name: &str, raw: &serde_json::Value) -> Result<Entry
         }
     }
 
+    // `signature` is an optional Sigstore bundle. In the JSON mirror it is a
+    // nested object (the bundle envelope), re-serialized verbatim and routed
+    // through the same typed constructor as the TOML path. A present-but-
+    // malformed bundle is a hard error, never a silently-dropped field.
+    let signature = match object.get("signature") {
+        None | Some(serde_json::Value::Null) => None,
+        Some(value) => {
+            let raw = serde_json::to_string(value)
+                .map_err(|e| malformed(format!("`signature` could not be serialized: {e}")))?;
+            Some(SignatureBundle::parse(name, &raw)?)
+        }
+    };
+
     Ok(EntryVersion {
         version,
         source,
         rev,
         sha256,
         capabilities,
+        signature,
     })
 }
 
@@ -674,6 +697,7 @@ struct RawVersion {
     rev: Option<String>,
     sha256: Option<String>,
     capabilities: Option<String>,
+    signature: Option<String>,
 }
 
 impl RawVersion {
@@ -699,12 +723,20 @@ impl RawVersion {
         let source = SourceUrl::parse(name, &raw_source)?;
         let rev = PinnedRev::from_full_sha(name, &raw_rev)?;
         let capabilities = parse_capabilities(name, self.capabilities.as_deref())?;
+        // A present `signature` is parsed into a typed bundle; a malformed one is
+        // a hard error, never a silently-dropped field. Absent = unsigned.
+        let signature = self
+            .signature
+            .as_deref()
+            .map(|raw| crate::signing::SignatureBundle::parse(name, raw))
+            .transpose()?;
         Ok(EntryVersion {
             version,
             source,
             rev,
             sha256,
             capabilities,
+            signature,
         })
     }
 }
@@ -1280,6 +1312,98 @@ mod tests {
         let msg2 = format!("{err2}");
         assert!(msg2.contains("rev"), "{msg2}");
         let _ = std::fs::remove_dir_all(&root2);
+    }
+
+    // --- signature field: parse, backward-compat, malformed refusal ---
+
+    /// A minimal well-formed single-line JSON-object bundle for fixtures.
+    const BUNDLE_JSON: &str =
+        r#"{"mediaType":"application/vnd.dev.sigstore.bundle+json;version=0.3","dsseEnvelope":{}}"#;
+
+    #[test]
+    fn an_entry_without_a_signature_parses_as_unsigned() {
+        // Backward compatibility: an entry with no `signature` field parses
+        // exactly as before, with `signature == None`.
+        let root = temp_dir("no-sig");
+        write_fixture_index(&root, "http-extras", &["1.0.0"]);
+        let entry = read_entry(&root, "http-extras").expect("entry parses");
+        let v = entry.versions.first().expect("one version");
+        assert!(v.signature.is_none(), "absent signature must be None");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_signed_entry_parses_the_bundle_from_toml() {
+        // The reader's line scan strips one outer layer of quotes from a scalar,
+        // so the bundle is stored as a bare (unquoted) JSON object value.
+        let root = temp_dir("signed-toml");
+        let packages = root.join("packages");
+        std::fs::create_dir_all(&packages).expect("packages dir");
+        std::fs::write(
+            packages.join("signed.toml"),
+            format!(
+                "publisher = \"tester\"\n\n[[version]]\nversion = \"1.0.0\"\n\
+                 source = \"https://example.invalid/signed\"\nrev = \"{FIXTURE_REV}\"\n\
+                 sha256 = \"00\"\ncapabilities = []\nsignature = {BUNDLE_JSON}\n"
+            ),
+        )
+        .expect("write entry");
+        let entry = read_entry(&root, "signed").expect("entry parses");
+        let v = entry.versions.first().expect("one version");
+        assert!(
+            v.signature.is_some(),
+            "present signature must parse to Some"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_malformed_signature_is_a_hard_error_not_silently_unsigned() {
+        // A present-but-malformed bundle must be a hard error, never dropped to
+        // "unsigned" — a malformed signature must not masquerade as absent.
+        let root = temp_dir("bad-sig");
+        let packages = root.join("packages");
+        std::fs::create_dir_all(&packages).expect("packages dir");
+        std::fs::write(
+            packages.join("badsig.toml"),
+            format!(
+                "publisher = \"tester\"\n\n[[version]]\nversion = \"1.0.0\"\n\
+                 source = \"https://example.invalid/badsig\"\nrev = \"{FIXTURE_REV}\"\n\
+                 sha256 = \"00\"\ncapabilities = []\nsignature = not-json-at-all\n"
+            ),
+        )
+        .expect("write entry");
+        let err = read_entry(&root, "badsig").unwrap_err();
+        assert!(format!("{err}").contains("signature"), "{err}");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn json_mirror_parses_a_nested_signature_object() {
+        // The JSON mirror carries `signature` as a nested object, re-serialized
+        // and routed through the same typed constructor.
+        let json = r#"{ "name": "http-extras", "publisher": "p",
+            "versions": [ { "version": "1.0.0",
+                            "source": "https://example.invalid/x",
+                            "rev": "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2",
+                            "sha256": "00",
+                            "signature": { "dsseEnvelope": {} } } ] }"#;
+        let entry = super::parse_entry_json("http-extras", json).expect("parses");
+        let v = entry.versions.first().expect("one version");
+        assert!(v.signature.is_some(), "nested signature object must parse");
+        let _ = v;
+    }
+
+    #[test]
+    fn json_mirror_null_signature_is_unsigned() {
+        // An explicit null `signature` is unsigned, backward-compatible.
+        let json = r#"{ "name": "x", "publisher": "p",
+            "versions": [ { "version": "1.0.0",
+                            "source": "https://example.invalid/x",
+                            "rev": "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2",
+                            "sha256": "00", "signature": null } ] }"#;
+        let entry = super::parse_entry_json("x", json).expect("parses");
+        assert!(entry.versions.first().expect("v").signature.is_none());
     }
 
     #[test]

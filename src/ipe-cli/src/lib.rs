@@ -54,6 +54,7 @@ pub mod resolve;
 pub mod run_sandbox;
 pub mod runtime_embed;
 pub mod scratch;
+pub mod signing;
 pub mod style;
 pub mod toolchain;
 pub mod unsafe_ack;

@@ -57,6 +57,36 @@ pub fn resolve_and_add(
     let entry = crate::registry::read_entry_via_pages(name, index_root)?;
     let version = index::resolve_version(&entry, req)?;
 
+    // Publisher-identity provenance over the pinned `sha256`, at the same
+    // verify-before-trust seam. Deny-by-default and fail-closed: a present
+    // signature MUST verify against a configured trusted identity or the version
+    // is rejected; an unsigned version resolves (with a warning) unless the trust
+    // policy requires a signature. This runs before the hash verify and the fetch
+    // so a signature failure short-circuits before any bytes are trusted.
+    let policy = crate::signing::load_trust_policy(project_root)?;
+    let verifier = signature_verifier();
+    match crate::signing::evaluate_signature(
+        name,
+        &policy,
+        version.signature.as_ref(),
+        &version.sha256,
+        verifier.as_ref(),
+    )? {
+        crate::signing::SignatureOutcome::UnsignedAllowed => {
+            if !policy.trusted_identities().is_empty() {
+                eprintln!(
+                    "{}",
+                    crate::style::gutter(&format!(
+                        "warning: `{name}` {} is unsigned — no publisher signature to verify \
+                         against the configured registry trust policy.",
+                        version.version
+                    ))
+                );
+            }
+        }
+        crate::signing::SignatureOutcome::Verified(_) => {}
+    }
+
     let checkout = fetch_source(project_root, name, &version.version.to_string(), version)?;
     verify_hash(name, &checkout, &version.sha256)?;
 
@@ -267,6 +297,25 @@ pub fn verify_lockfile_hashes(project_root: &Path) -> Result<(), CliError> {
         verify_hash(&dep.name, &cache_dir, &dep.sha256)?;
     }
     Ok(())
+}
+
+/// The signature verifier for the current build.
+///
+/// Without the `signing` feature, this is the fail-closed
+/// [`crate::signing::UnavailableVerifier`]: an unsigned version still resolves,
+/// but any PRESENT signature is refused (an unverifiable signature is worse than
+/// none). With the feature on, the Sigstore-backed offline verifier is used when
+/// the vendored public-good trust-root material is available; if it cannot be
+/// built, the fail-closed verifier is used so a present signature is still
+/// refused rather than silently trusted.
+fn signature_verifier() -> Box<dyn crate::signing::SignatureVerifier> {
+    #[cfg(feature = "signing")]
+    {
+        if let Some(v) = crate::signing::vendored_sigstore_verifier() {
+            return Box::new(v);
+        }
+    }
+    Box::new(crate::signing::UnavailableVerifier)
 }
 
 /// The manifest path for a project root.
