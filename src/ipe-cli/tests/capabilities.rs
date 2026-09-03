@@ -1289,3 +1289,90 @@ fn a_battery_app_without_the_grant_is_rejected() -> TestResult {
     let _ = std::fs::remove_dir_all(&dir);
     Ok(())
 }
+
+// ── Ipe.Browser.NetworkInfo — a first-party web-API module ──────────────────
+
+/// A Web-shape app importing `Ipe.Browser.NetworkInfo` — the import-derived signal
+/// that discloses the SPECIFIC `js-port:network-info` axis on top of the `:raw` floor.
+const NETWORK_INFO_APP: &str = r#"module Main exposing (main)
+
+import Ipe.Tea.Web as Web
+import Ipe.Tea.Web.Cmd as Cmd
+import Ipe.Tea.Web.Sub as Sub
+import Ipe.Ui as Ui
+import Ipe.Error as Error exposing (Error)
+import Ipe.Browser.NetworkInfo as Net
+import Ipe.Task as Task
+
+type alias Model = { kind : String }
+
+type Msg = Check | Got (Result Error Net.Info) | Changed (Result Error Net.Info)
+
+init : WebReq -> ( Model, Cmd.Cmd Msg )
+init _r =
+    ( { kind = "?" }, Task.attempt Got Net.info )
+
+update : Msg -> Model -> ( Model, Cmd.Cmd Msg )
+update msg model =
+    case msg of
+        Check ->
+            ( model, Net.watch )
+
+        Got _r ->
+            ( model, Cmd.none )
+
+        Changed _r ->
+            ( model, Cmd.none )
+
+view : Model -> Element Msg
+view _model =
+    Ui.text "ok"
+
+subscriptions : Model -> Sub.Sub Msg
+subscriptions _model =
+    Net.changes Changed
+
+main =
+    Web.app
+        { init = init, update = update, view = view, subscriptions = subscriptions
+        , routes = [], notFound = Check
+        }
+"#;
+
+/// Importing `Ipe.Browser.NetworkInfo` discloses the specific `js-port:network-info`
+/// axis.
+#[test]
+fn importing_browser_network_info_discloses_js_port_network_info() -> TestResult {
+    let dir = write_single("netinfo", NETWORK_INFO_APP)?;
+    let entry = dir.join("Main.ipe");
+    let declared = BTreeSet::from([
+        Capability::JsPort(WebCapability::NetworkInfo),
+        Capability::JsPort(WebCapability::Raw),
+    ]);
+    let r = verify_capabilities(&entry, &declared);
+    assert!(
+        r.is_ok(),
+        "importing Ipe.Browser.NetworkInfo must disclose js-port:network-info (+ the :raw floor): {r:?}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+    Ok(())
+}
+
+/// Fail-closed: a network-info app that omits the grant is rejected as under-declared.
+#[test]
+fn a_network_info_app_without_the_grant_is_rejected() -> TestResult {
+    let dir = write_single("netinfonogrant", NETWORK_INFO_APP)?;
+    let entry = dir.join("Main.ipe");
+    let declared = BTreeSet::from([Capability::JsPort(WebCapability::Raw)]);
+    let r = verify_capabilities(&entry, &declared);
+    assert!(
+        matches!(
+            &r,
+            Err(ipe::CliError::CapabilityMismatch { missing, .. })
+                if missing.contains(&"js-port:network-info")
+        ),
+        "an ungranted network-info app must be rejected naming js-port:network-info, got: {r:?}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+    Ok(())
+}

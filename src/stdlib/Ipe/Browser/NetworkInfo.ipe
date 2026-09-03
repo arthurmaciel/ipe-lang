@@ -1,0 +1,116 @@
+-- | Ipe.Browser.NetworkInfo — read network-information hints over `Ipe.Ffi.Js` ports.
+--
+-- A first-party proof of the per-capability web mechanism spanning BOTH port
+-- directions: an outbound `JsCmd` requests the hints (`info` one-shot or a
+-- continuous `watch`), and an inbound `JsMsg` carries the reply — a decoded `Info`
+-- or a typed unavailability. Both cross the same seal codec and fail-closed port
+-- discipline as every other port; there is no second transport.
+--
+-- Importing this reserved `Ipe.Browser.<Api>` module discloses
+-- `js-port:network-info` (import-derived, keyed on the canonical
+-- `Ipe.Browser.NetworkInfo` path prefix via `WebCapability::for_browser_module`,
+-- alias-immune); only the top-level app's `[capabilities] accepts` set can grant it.
+--
+-- The two layers:
+--
+--   * `Ipe.Browser.NetworkInfo.Internals` publishes the closed outbound/inbound ADTs.
+--   * this module is the high-level layer: `info` returns a `Task Error Info` via
+--     the correlated port→Task bridge; `watch` is `Cmd`-shaped, and `changes` is
+--     the inbound subscription folding the narrow `JsMsg` into a typed
+--     `Result Error Info`. The inbound `case` is EXHAUSTIVE: an unavailability
+--     becomes a typed `Err`, never a silently dropped variant.
+module Ipe.Browser.NetworkInfo exposing
+    ( Info
+    , info
+    , watch
+    , changes
+    )
+
+import Ipe.Browser.NetworkInfo.Internals as Internals exposing (JsMsg(..))
+import Ipe.Error as Error exposing (Error)
+import Ipe.Task as Task
+import Ipe.Tea.Web.Cmd as Cmd
+import Ipe.Tea.Web.Sub as Sub
+
+
+-- | A network-information hint snapshot. Every field is a browser estimate, not a
+-- guarantee.
+--
+--   * `effectiveType` — the connection class (`"slow-2g"` / `"2g"` / `"3g"` /
+--     `"4g"`).
+--   * `downlink` — estimated downlink bandwidth, in megabits per second.
+--   * `rtt` — estimated round-trip time, in milliseconds.
+--   * `saveData` — the user's data-saver preference.
+type alias Info =
+    { effectiveType : String
+    , downlink : Float
+    , rtt : Float
+    , saveData : Bool
+    }
+
+
+-- | `info` — read the current network-information hints ONCE, as a
+-- `Task Error Info`.
+--
+-- Uses the correlated port→Task bridge (`Js.request`). The reply — an `Info` or a
+-- typed unavailability — resolves the `Task` directly; no companion subscription
+-- is needed.
+--
+-- Importing this module discloses `js-port:network-info`; the app must grant it
+-- with `accepts = [ JsPort NetworkInfo ]` under [capabilities] in package.ipe.
+info : Task Error Info
+info =
+    Internals.requestOne Internals.Query
+        |> Task.andThen foldInfo
+
+
+-- | `watch` — begin a CONTINUOUS hint stream; each `change` event delivers a fresh
+-- reading on the `changes` subscription. Outbound `Cmd`.
+watch : Cmd.Cmd msg
+watch =
+    Internals.request Internals.Watch
+
+
+-- | `changes toMsg` — the inbound subscription, wired in `subscriptions`.
+--
+-- The decoder IS the security gate: every inbound value runs through the total,
+-- bounded seal decoder for the narrow `JsMsg`; a malformed / mismatched frame is
+-- dropped whole. A decoded `JsMsg` is folded EXHAUSTIVELY into a
+-- `Result Error Info` — a `Reading` becomes `Ok`, an unavailability a typed `Err`.
+changes : (Result Error Info -> msg) -> Sub.Sub msg
+changes toMsg =
+    Internals.subscribe (\inbound -> toMsg (toResult inbound))
+
+
+-- | Fold an `info` reply into a `Task Error Info`. The `case` is exhaustive over
+-- every published inbound variant.
+foldInfo : Internals.JsMsg -> Task Error Info
+foldInfo msg =
+    case msg of
+        Reading effectiveType downlink rtt saveData ->
+            Task.succeed
+                { effectiveType = effectiveType
+                , downlink = downlink
+                , rtt = rtt
+                , saveData = saveData
+                }
+
+        Unavailable ->
+            Task.fail (Error.unavailable "network information unavailable")
+
+
+-- | Fold the narrow inbound `JsMsg` into a typed `Result Error Info`. The `case`
+-- is exhaustive over every published inbound variant; `Info` is assembled here.
+toResult : Internals.JsMsg -> Result Error Info
+toResult inbound =
+    case inbound of
+        Reading effectiveType downlink rtt saveData ->
+            Ok
+                { effectiveType = effectiveType
+                , downlink = downlink
+                , rtt = rtt
+                , saveData = saveData
+                }
+
+        Unavailable ->
+            Err (Error.unavailable "network information unavailable")

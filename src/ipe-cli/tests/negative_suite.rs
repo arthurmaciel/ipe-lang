@@ -1788,6 +1788,26 @@ fn battery_inbound_fold_missing_unavailable_is_non_exhaustive() {
     assert_rejected("battery_inbound_missing_unavailable", &src, "IPE-T0010");
 }
 
+/// A fold over the inbound `Ipe.Browser.NetworkInfo.Internals` `JsMsg` that omits
+/// the `Unavailable` variant is non-exhaustive (IPE-T0010) — the compiler-level
+/// guarantee that a network-info unavailability can never be silently swallowed.
+#[test]
+fn network_info_inbound_fold_missing_unavailable_is_non_exhaustive() {
+    let src = format!(
+        "{HEAD}import Ipe.Io as Io\n\
+         import Ipe.Browser.NetworkInfo.Internals as Net exposing (JsMsg(..))\n\
+         describe : JsMsg -> String\n\
+         describe m =\n    case m of\n        \
+         Reading _t _d _r _s -> \"reading\"\n\n\
+         main = Io.println (describe (Reading \"4g\" 10.0 50.0 False))\n"
+    );
+    assert_rejected(
+        "network_info_inbound_missing_unavailable",
+        &src,
+        "IPE-T0010",
+    );
+}
+
 // NOTE: IPE-T0011 (redundant case branch) is intentionally `Severity::Warning`
 // (see `types::exhaust` — "collect it but do not abort"), so a redundant arm
 // does NOT reject compilation. It is therefore out of scope for a

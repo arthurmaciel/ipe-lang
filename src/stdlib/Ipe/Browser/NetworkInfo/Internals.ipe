@@ -1,0 +1,103 @@
+-- | Ipe.Browser.NetworkInfo.Internals — the low-level Network Information port
+-- surface: the closed outbound/inbound ADTs and the raw `Ipe.Ffi.Js`
+-- request/subscribe wiring the high-level `Ipe.Browser.NetworkInfo` layer wraps.
+--
+-- Importing this submodule discloses the same `js-port:network-info` axis as the
+-- top-level module (the disclosure is keyed on the `Ipe.Browser.NetworkInfo` path
+-- prefix), so the raw port surface cannot be reached undisclosed.
+module Ipe.Browser.NetworkInfo.Internals exposing
+    ( JsCmd(..)
+    , JsMsg(..)
+    , request
+    , requestOne
+    , subscribe
+    , inbound
+    )
+
+import Ipe.Error as Error exposing (Error)
+import Ipe.Ffi.Js as Js
+import Ipe.Json.Decode as Decode
+import Ipe.Tea.Web.Cmd as Cmd
+import Ipe.Tea.Web.Sub as Sub
+
+
+-- | The ONE closed OUTBOUND port type: the whole outbound surface as a single
+-- auditable object.
+--
+--   * `Query` — read the current network-information hints once.
+--   * `Watch` — begin a hint stream: each `change` event delivers a fresh reading
+--     on the inbound subscription.
+type JsCmd
+    = Query
+    | Watch
+
+
+-- | The NARROW closed INBOUND port type — deliberately NOT the app's internal
+-- `Msg`. Every variant the browser can push is enumerated, so the fold in the
+-- high-level layer is EXHAUSTIVE and an unavailability can never be silently
+-- dropped: it becomes a typed `Err`.
+--
+--   * `Reading effectiveType downlink rtt saveData` — a hint snapshot.
+--     `effectiveType` is one of the connection classes (`"slow-2g"` / `"2g"` /
+--     `"3g"` / `"4g"`); `downlink` is estimated Mbps; `rtt` is estimated round-trip
+--     milliseconds; `saveData` is the data-saver preference.
+--   * `Unavailable` — the Network Information API is absent in this context.
+type JsMsg
+    = Reading String Float Float Bool
+    | Unavailable
+
+
+-- | `request cmd` — hand a closed outbound `JsCmd` to the raw port transport.
+-- The served first-party JS sink reaches `navigator.connection`; the reply arrives
+-- inbound as a `JsMsg`.
+request : JsCmd -> Cmd.Cmd msg
+request cmd =
+    Js.send cmd
+
+
+-- | `requestOne cmd` — correlated one-shot `JsCmd` → `Task Error JsMsg`.
+-- Routes through `Js.request` with the `inbound` decoder so the correlated
+-- reply is decoded fail-closed by the same gate the `subscribe` path uses.
+requestOne : JsCmd -> Task Error JsMsg
+requestOne cmd =
+    Js.request cmd inbound
+
+
+-- | `subscribe toMsg` — the inbound subscription over the fail-closed seal
+-- decoder. `inbound` IS the security gate; a malformed / mismatched frame is
+-- dropped whole. A decoded `JsMsg` is handed to `toMsg`.
+subscribe : (JsMsg -> msg) -> Sub.Sub msg
+subscribe toMsg =
+    Js.subscribe inbound toMsg
+
+
+-- | The total, fail-closed decoder for the inbound `JsMsg`. It reads the `ok`
+-- flag: a true flag decodes a `Reading` from the four hint fields; a false flag
+-- decodes the closed `error` vocabulary. An unrecognised token fails the decode
+-- closed (the frame is dropped).
+inbound : Decode.Decoder JsMsg
+inbound =
+    Decode.andThen decodeByOk (Decode.field "ok" Decode.bool)
+
+
+decodeByOk : Bool -> Decode.Decoder JsMsg
+decodeByOk ok =
+    if ok then
+        Decode.map4 Reading
+            (Decode.field "effectiveType" Decode.string)
+            (Decode.field "downlink" Decode.float)
+            (Decode.field "rtt" Decode.float)
+            (Decode.field "saveData" Decode.bool)
+
+    else
+        Decode.andThen decodeError (Decode.field "error" Decode.string)
+
+
+decodeError : String -> Decode.Decoder JsMsg
+decodeError token =
+    case token of
+        "unavailable" ->
+            Decode.succeed Unavailable
+
+        _ ->
+            Decode.fail ("unknown network-info error variant: " ++ token)

@@ -713,8 +713,7 @@ const IPE_BROWSER_STORAGE: &str = include_str!("../Ipe/Browser/Storage.ipe");
 /// layer wraps. Importing it discloses the same `js-port:storage` axis (the prefix
 /// key covers the submodule). Registered in [`COMPILED_STD_MODULES`] (NOT
 /// `MODULES`); NOT in `STDLIB_MODULE_QUALIFIERS`.
-const IPE_BROWSER_STORAGE_INTERNALS: &str =
-    include_str!("../Ipe/Browser/Storage/Internals.ipe");
+const IPE_BROWSER_STORAGE_INTERNALS: &str = include_str!("../Ipe/Browser/Storage/Internals.ipe");
 
 /// `Ipe.Browser.Vibration` — drive the device vibration actuator over `Ipe.Ffi.Js`
 /// ports (compiled source), spanning BOTH port directions: an outbound `JsCmd`
@@ -769,8 +768,26 @@ const IPE_BROWSER_BATTERY: &str = include_str!("../Ipe/Browser/Battery.ipe");
 /// layer wraps. Importing it discloses the same `js-port:battery` axis (the prefix
 /// key covers the submodule). Registered in [`COMPILED_STD_MODULES`] (NOT
 /// `MODULES`); NOT in `STDLIB_MODULE_QUALIFIERS`.
-const IPE_BROWSER_BATTERY_INTERNALS: &str =
-    include_str!("../Ipe/Browser/Battery/Internals.ipe");
+const IPE_BROWSER_BATTERY_INTERNALS: &str = include_str!("../Ipe/Browser/Battery/Internals.ipe");
+
+/// `Ipe.Browser.NetworkInfo` — read network-information hints over `Ipe.Ffi.Js`
+/// ports (compiled source), spanning BOTH port directions: an outbound `JsCmd`
+/// request (`info` one-shot / `watch` continuous) and an inbound `JsMsg` reply
+/// folded exhaustively into `Result Error Info`. Importing it discloses
+/// `js-port:network-info` (import-derived, keyed on the canonical
+/// `Ipe.Browser.NetworkInfo` path prefix via `WebCapability::for_browser_module`).
+/// The served wasm-sink JS handler reaches `navigator.connection`, trapping an
+/// absent API to the typed `Unavailable` inbound variant. Registered in
+/// [`COMPILED_STD_MODULES`] (NOT `MODULES`); NOT in `STDLIB_MODULE_QUALIFIERS`.
+const IPE_BROWSER_NETWORK_INFO: &str = include_str!("../Ipe/Browser/NetworkInfo.ipe");
+
+/// `Ipe.Browser.NetworkInfo.Internals` — the low-level Network Information port
+/// surface: the closed outbound/inbound ADTs and the raw `Ipe.Ffi.Js` wiring the
+/// high-level layer wraps. Importing it discloses the same `js-port:network-info`
+/// axis (the prefix key covers the submodule). Registered in
+/// [`COMPILED_STD_MODULES`] (NOT `MODULES`); NOT in `STDLIB_MODULE_QUALIFIERS`.
+const IPE_BROWSER_NETWORK_INFO_INTERNALS: &str =
+    include_str!("../Ipe/Browser/NetworkInfo/Internals.ipe");
 
 /// `Ipe.Env` — build-time-embedded public config (compiled source).
 ///
@@ -1274,6 +1291,14 @@ pub const COMPILED_STD_MODULES: &[CompiledStdModule] = &[
     CompiledStdModule {
         dotted: "Ipe.Browser.Battery.Internals",
         source: IPE_BROWSER_BATTERY_INTERNALS,
+    },
+    CompiledStdModule {
+        dotted: "Ipe.Browser.NetworkInfo",
+        source: IPE_BROWSER_NETWORK_INFO,
+    },
+    CompiledStdModule {
+        dotted: "Ipe.Browser.NetworkInfo.Internals",
+        source: IPE_BROWSER_NETWORK_INFO_INTERNALS,
     },
     CompiledStdModule {
         dotted: "Ipe.Env",

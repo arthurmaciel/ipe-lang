@@ -350,6 +350,38 @@ const PORT_GLUE_JS: &str = r#"// Ipe.Ffi.Js browser port surface. Values cross a
     );
     return true;
   }
+  // Ipe.Browser.NetworkInfo: `Query` / `Watch` -> navigator.connection. A reading
+  // frame carries effectiveType / downlink / rtt / saveData; an absent API traps to
+  // `unavailable` — never a throw. `Watch` attaches a `change` listener that pushes
+  // fresh readings.
+  function networkInfoReadingFrame(conn, corId) {
+    reply({
+      tag: "network-info", ok: true,
+      effectiveType: typeof conn.effectiveType === "string" ? conn.effectiveType : "",
+      downlink: Number(conn.downlink) || 0,
+      rtt: Number(conn.rtt) || 0,
+      saveData: conn.saveData === true,
+    }, corId);
+  }
+  function networkInfoSink(value, corId) {
+    var isQuery = value === "Query" ||
+      (value && typeof value === "object" && value.Query !== undefined);
+    var isWatch = value === "Watch" ||
+      (value && typeof value === "object" && value.Watch !== undefined);
+    if (!isQuery && !isWatch) return false;
+    var conn = navigator ? (navigator.connection || navigator.mozConnection || navigator.webkitConnection) : null;
+    if (!conn) {
+      reply({ tag: "network-info", ok: false, error: "unavailable" }, corId);
+      return true;
+    }
+    networkInfoReadingFrame(conn, corId);
+    if (isWatch && typeof conn.addEventListener === "function") {
+      // A watch subscription receives every subsequent change as a fresh
+      // broadcast reading; the change event carries no correlation id.
+      conn.addEventListener("change", function () { networkInfoReadingFrame(conn, null); });
+    }
+    return true;
+  }
   function builtinSink(value, corId) {
     if (clipboardSink(value, corId)) return true;
     if (geolocationSink(value, corId)) return true;
@@ -358,6 +390,7 @@ const PORT_GLUE_JS: &str = r#"// Ipe.Ffi.Js browser port surface. Values cross a
     if (vibrationSink(value, corId)) return true;
     if (shareSink(value, corId)) return true;
     if (batterySink(value, corId)) return true;
+    if (networkInfoSink(value, corId)) return true;
     return false;
   }
   function deliver(raw) {
@@ -570,6 +603,22 @@ mod tests {
         assert!(js.contains("level:"));
         assert!(js.contains("chargingTime:"));
         assert!(js.contains("dischargingTime:"));
+        // …and traps an absent API to a typed frame, never a throw.
+        assert!(js.contains("\"unavailable\""));
+        assert!(!js.contains("eval("));
+    }
+
+    #[test]
+    fn network_info_sink_reaches_the_web_api_and_traps_absence_to_a_typed_result() {
+        let js = port_glue_js();
+        // The first-party Ipe.Browser.NetworkInfo sink reaches navigator.connection…
+        assert!(js.contains("navigator.connection"));
+        // …emits a typed reading with all four hint fields…
+        assert!(js.contains("tag: \"network-info\""));
+        assert!(js.contains("effectiveType:"));
+        assert!(js.contains("downlink:"));
+        assert!(js.contains("rtt:"));
+        assert!(js.contains("saveData:"));
         // …and traps an absent API to a typed frame, never a throw.
         assert!(js.contains("\"unavailable\""));
         assert!(!js.contains("eval("));

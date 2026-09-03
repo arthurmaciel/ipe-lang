@@ -15,6 +15,8 @@ Each module listed below links to a detail page with the full documentation and 
 - [Browser.Clipboard.Internals](#browserclipboardinternals)
 - [Browser.Geolocation](#browsergeolocation)
 - [Browser.Geolocation.Internals](#browsergeolocationinternals)
+- [Browser.NetworkInfo](#browsernetworkinfo)
+- [Browser.NetworkInfo.Internals](#browsernetworkinfointernals)
 - [Browser.Notification](#browsernotification)
 - [Browser.Notification.Internals](#browsernotificationinternals)
 - [Browser.Share](#browsershare)
@@ -248,6 +250,34 @@ Ipe.Browser.Geolocation.Internals — the full, low-level geolocation port
 |--------|----------|
 | `Options` | The `getCurrentPosition` / `watchPosition` option knobs, mirroring the Web API |
 | `defaults` | Sane defaults: a coarse fix, no deadline, always fresh — the values the |
+| `JsCmd` | The ONE closed OUTBOUND port type: the whole outbound surface as a single |
+| `JsMsg` | The NARROW closed INBOUND port type — deliberately NOT the app's internal |
+| `request` | `request cmd` — hand a closed outbound `JsCmd` to the raw port transport. |
+| `requestOne` | `requestOne cmd` — correlated one-shot `JsCmd` → `Task Error JsMsg`. |
+| `subscribe` | `subscribe toMsg` — the inbound subscription over the fail-closed seal |
+| `inbound` | The total, fail-closed decoder for the inbound `JsMsg`. It reads the `ok` |
+
+## Browser.NetworkInfo
+
+[Full reference](stdlib/Browser.NetworkInfo.md)
+
+Ipe.Browser.NetworkInfo — read network-information hints over `Ipe.Ffi.Js` ports.
+
+| Export | Summary |
+|--------|----------|
+| `Info` | A network-information hint snapshot. Every field is a browser estimate, not a |
+| `info` | `info` — read the current network-information hints ONCE, as a |
+| `watch` | `watch` — begin a CONTINUOUS hint stream; each `change` event delivers a fresh |
+| `changes` | `changes toMsg` — the inbound subscription, wired in `subscriptions`. |
+
+## Browser.NetworkInfo.Internals
+
+[Full reference](stdlib/Browser.NetworkInfo.Internals.md)
+
+Ipe.Browser.NetworkInfo.Internals — the low-level Network Information port
+
+| Export | Summary |
+|--------|----------|
 | `JsCmd` | The ONE closed OUTBOUND port type: the whole outbound surface as a single |
 | `JsMsg` | The NARROW closed INBOUND port type — deliberately NOT the app's internal |
 | `request` | `request cmd` — hand a closed outbound `JsCmd` to the raw port transport. |
