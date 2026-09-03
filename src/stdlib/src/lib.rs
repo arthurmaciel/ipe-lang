@@ -621,6 +621,19 @@ const IPE_CORE_WEBSOCKET: &str = include_str!("../Ipe/WebSocket.ipe");
 /// `STDLIB_MODULE_QUALIFIERS`.
 const IPE_CORE_JS: &str = include_str!("../Ipe/Ffi/Js.ipe");
 
+/// `Ipe.Ffi.Js.CustomElement` — the typed JS custom-element boundary (compiled
+/// source).
+///
+/// Exposes `node : CustomElement down up -> down -> (up -> msg) -> Element msg`,
+/// routed through the `Kernel.kernel "Ui_widget"` alias to the registered
+/// `UiWidget` kernel, and the reserved literal-only `fromFile "<js-path>"`
+/// constructor (recognised structurally by the resolver, not a value binding).
+/// The crossing seals its down-state / up-event on the CONCRETE type
+/// (IPE-N0039), and emission stays closed (IPE-L0133) until the widget
+/// transport's runtime denotation ships. Resolved via the `Kernel.kernel` alias
+/// fast-path, so the qualifier stays out of `STDLIB_MODULE_QUALIFIERS`.
+const IPE_CORE_JS_CUSTOM_ELEMENT: &str = include_str!("../Ipe/Ffi/Js/CustomElement.ipe");
+
 /// `Ipe.Browser.Clipboard` — write text to the system clipboard over `Ipe.Ffi.Js`
 /// ports (compiled source).
 ///
@@ -1105,6 +1118,10 @@ pub const COMPILED_STD_MODULES: &[CompiledStdModule] = &[
     CompiledStdModule {
         dotted: "Ipe.Ffi.Js",
         source: IPE_CORE_JS,
+    },
+    CompiledStdModule {
+        dotted: "Ipe.Ffi.Js.CustomElement",
+        source: IPE_CORE_JS_CUSTOM_ELEMENT,
     },
     CompiledStdModule {
         dotted: "Ipe.Browser.Clipboard",

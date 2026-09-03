@@ -29,7 +29,7 @@ type BoxError = Box<dyn std::error::Error + Send + Sync + 'static>;
 const WIDGET_APP: &str = r#"module Main exposing (main)
 
 import Ipe.Tea.Web as Web
-import Ipe.Ui as Ui
+import Ipe.Ffi.Js.CustomElement as CustomElement
 import Ipe.Tea.Web.Cmd
 import Ipe.Tea.Web.Sub
 
@@ -42,7 +42,7 @@ type Msg = Edited EditorEvent
 type alias Model = { state : EditorState }
 
 codeEditor : CustomElement EditorState EditorEvent
-codeEditor = customElement "js/editor.js"
+codeEditor = CustomElement.fromFile "js/editor.js"
 
 init : WebReq -> ( Model, Cmd Msg )
 init _req =
@@ -54,7 +54,7 @@ update _msg model =
 
 view : Model -> Element Msg
 view model =
-    Ui.widget codeEditor model.state Edited
+    CustomElement.node codeEditor model.state Edited
 
 subscriptions : Model -> Sub Msg
 subscriptions _model =

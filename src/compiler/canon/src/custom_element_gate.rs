@@ -1,4 +1,4 @@
-//! Widget-file collection for the `customElement "<js-path>"` constructor.
+//! Widget-file collection for the `CustomElement.fromFile "<js-path>"` constructor.
 //!
 //! The constructor's shape gate (single string literal) and its path seal (an
 //! all-targets clean + traversal check, reusing `ipe_path_core`) run in canon,
@@ -21,7 +21,7 @@ use ipe_diagnostics::Span;
 
 use crate::ast::{CaseBranch, Def, Expr, Expr_, LetBinding, Module};
 
-/// One `customElement "<js-path>"` constructor reached in a linked program: its
+/// One `CustomElement.fromFile "<js-path>"` constructor reached in a linked program: its
 /// CLEANED, in-project-checked relative path and the span to blame if the file
 /// is absent.
 #[derive(Clone, Debug)]
@@ -33,7 +33,7 @@ pub struct WidgetFile {
     pub span: Span,
 }
 
-/// Every `customElement` constructor reached in `module`, each carrying the
+/// Every `CustomElement.fromFile` constructor reached in `module`, each carrying the
 /// cleaned path and its span. Empty when the program uses no widget.
 #[must_use]
 pub fn collect_widget_files(module: &Module) -> Vec<WidgetFile> {

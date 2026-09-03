@@ -64,15 +64,17 @@ const TYPE_EXPANSION_DEPTH_LIMIT: u32 = 128;
 /// not be relied on for stack safety.
 const TYPE_EXPANSION_NODE_LIMIT: u32 = 100_000;
 
-/// The reserved value-namespace spelling of the JS-widget boundary constructor.
-/// Legal only as the whole body of a `CustomElement`-annotated binding, applied
-/// to a single string literal (see [`detect_custom_element_constructor`]); any
-/// other appearance is IPE-N0044.
-const CUSTOM_ELEMENT_CTOR: &str = "customElement";
+/// The reserved member spelling of the JS-widget boundary constructor, reached as
+/// `CustomElement.fromFile "<js-path>"` through `import Ipe.Ffi.Js.CustomElement
+/// as CustomElement`. Legal only as the whole body of a `CustomElement`-annotated
+/// binding, applied to a single string literal (see
+/// [`detect_custom_element_constructor`]); any other appearance is IPE-N0044.
+const CUSTOM_ELEMENT_CTOR: &str = "fromFile";
 
 /// The reserved boundary type-constructor spelling paired with
 /// [`CUSTOM_ELEMENT_CTOR`]: only a binding annotated `CustomElement down up` may
-/// carry the constructor as its body.
+/// carry the constructor as its body. Doubles as the qualifier spelling of the
+/// `Ipe.Ffi.Js.CustomElement` module the constructor is reached through.
 const CUSTOM_ELEMENT_TYPE: &str = "CustomElement";
 
 /// Type-constructor names the compiler reserves for built-ins. A user `type` /
@@ -4665,11 +4667,11 @@ fn canonicalise_value(
     interner: &mut Interner,
     ui_wildcard_msg: Symbol,
 ) -> DResult<canon::Def> {
-    // The reserved `customElement "<js-path>"` constructor is recognised BEFORE
-    // the body is canonicalised: its bare head is an otherwise-unresolvable name,
+    // The reserved `CustomElement.fromFile "<js-path>"` constructor is recognised BEFORE
+    // the body is canonicalised: its qualified head is otherwise an unknown member,
     // and only this position (the whole body of a `CustomElement`-annotated
     // binding) is legal. A malformed use fails closed here (IPE-N0044); any other
-    // appearance of the bare name is rejected downstream by `resolve_var`.
+    // appearance of the qualified name is rejected downstream by `resolve_qual_var`.
     if let Some(def) = detect_custom_element_constructor(
         val,
         env,
@@ -5162,24 +5164,6 @@ fn resolve_var(name: Symbol, span: Span, env: &Env, interner: &Interner) -> DRes
         // wildcard-exposed member of the same spelling (silent shadow).
         return Ok(var_home_to_expr(name, home));
     }
-    // The reserved `customElement` constructor is legal ONLY as the whole body of
-    // a `CustomElement`-annotated binding, where `canonicalise_value` intercepts
-    // it before this resolver runs. Reaching HERE means it was referenced bare
-    // (unapplied), applied outside that sanctioned position, or nested in a
-    // sub-expression — every one of which is malformed. Fail closed with a precise
-    // IPE-N0044 rather than a bare unknown-name error. Placed after the user-binding
-    // lookup so a genuine local of the same spelling still shadows it.
-    if interner.resolve(name) == Some(CUSTOM_ELEMENT_CTOR) {
-        return Err(Diagnostic::Name {
-            span,
-            msg: NameError::CustomElementCtorMalformed {
-                detail: Box::<str>::from(
-                    "`customElement` is legal only as the whole body of a \
-                     `CustomElement`-annotated binding, applied to a single string literal",
-                ),
-            },
-        });
-    }
     // Low-priority wildcard tier: only reached when the higher tiers miss.
     resolve_wildcard_var(name, span, env, interner)
 }
@@ -5301,6 +5285,26 @@ fn resolve_qual_var(
                 detail: "`Rust.Ffi.call` is not a value — it must be applied directly \
                          to a string-literal Rust path"
                     .into(),
+            },
+        });
+    }
+    // The reserved `CustomElement.fromFile "<js-path>"` constructor is legal ONLY
+    // as the whole body of a `CustomElement`-annotated binding, where
+    // `canonicalise_value` intercepts it before this resolver runs. Reaching HERE
+    // means it was referenced bare (unapplied), applied outside that sanctioned
+    // position, or nested in a sub-expression — every one of which is malformed.
+    // Fail closed with a precise IPE-N0044 rather than a no-such-member miss on
+    // `fromFile`.
+    if interner.resolve(qualifier) == Some(CUSTOM_ELEMENT_TYPE)
+        && interner.resolve(name) == Some(CUSTOM_ELEMENT_CTOR)
+    {
+        return Err(Diagnostic::Name {
+            span,
+            msg: NameError::CustomElementCtorMalformed {
+                detail: Box::<str>::from(
+                    "`CustomElement.fromFile` is legal only as the whole body of a \
+                     `CustomElement`-annotated binding, applied to a single string literal",
+                ),
             },
         });
     }
@@ -6358,7 +6362,7 @@ fn canonicalise_asserted_call(
     )))
 }
 
-/// The offending-argument shape a `customElement` body rejects, each naming the
+/// The offending-argument shape a `CustomElement.fromFile` body rejects, each naming the
 /// specific rule broken for the IPE-N0044 diagnostic detail.
 fn custom_element_ctor_error(span: Span, detail: &'static str) -> Diagnostic {
     Diagnostic::Name {
@@ -6406,7 +6410,7 @@ fn annotation_head_name<'a>(ann: &src::TypeAnnotation, interner: &'a Interner) -
     interner.resolve(*segments.last()?)
 }
 
-/// Recognise the reserved `customElement "<js-path>"` constructor binding and
+/// Recognise the reserved `CustomElement.fromFile "<js-path>"` constructor binding and
 /// resolve it to a typed [`canon::Def`] carrying a [`canon::Expr_::CustomElementCtor`].
 ///
 /// The constructor is the JS-widget analogue of the `Ffi.kernel "…"` literal
@@ -6419,10 +6423,10 @@ fn annotation_head_name<'a>(ann: &src::TypeAnnotation, interner: &'a Interner) -
 /// project root is verified later, at the build stage that owns the root.
 ///
 /// Returns:
-/// * `Ok(None)` — the binding does not mention `customElement` at all (an ordinary
+/// * `Ok(None)` — the binding does not mention `CustomElement.fromFile` at all (an ordinary
 ///   value / function); the caller canonicalises it normally.
 /// * `Ok(Some(def))` — a well-formed constructor binding.
-/// * `Err(IPE-N0044)` — the binding IS a `customElement` use but is malformed: a
+/// * `Err(IPE-N0044)` — the binding IS a `CustomElement.fromFile` use but is malformed: a
 ///   non-literal argument, a bare (unapplied) reference, a wrong argument count, a
 ///   traversing path, a missing / non-`CustomElement` annotation, or the binding
 ///   carrying parameters. Fail-closed: absent proof the widget path is a safe,
@@ -6442,21 +6446,24 @@ fn detect_custom_element_constructor(
     interner: &Interner,
     ui_wildcard_msg: Symbol,
 ) -> DResult<Option<canon::Def>> {
-    // Peel the outermost application head. The constructor head is a bare
-    // `customElement` local reference, whether applied (`customElement "x"`) or
-    // bare (`customElement`).
+    // Peel the outermost application head. The constructor head is the qualified
+    // `CustomElement.fromFile` member (reached through `import
+    // Ipe.Ffi.Js.CustomElement as CustomElement`), whether applied
+    // (`CustomElement.fromFile "x"`) or bare (`CustomElement.fromFile`).
     let (head, args): (&src::Expr, &[src::Expr]) = match &val.body.value {
         src::Expr_::Call(callee, args) => (callee, args.as_slice()),
-        // A bare reference (`codeEditor = customElement`) — the head is the body
-        // itself with no arguments, so the shared validation reports the
+        // A bare reference (`codeEditor = CustomElement.fromFile`) — the head is
+        // the body itself with no arguments, so the shared validation reports the
         // unapplied case.
-        src::Expr_::VarLocal(_) => (&val.body, &[]),
+        src::Expr_::VarQual(..) => (&val.body, &[]),
         _ => return Ok(None),
     };
-    let src::Expr_::VarLocal(head_name) = &head.value else {
+    let src::Expr_::VarQual(qualifier, member) = &head.value else {
         return Ok(None);
     };
-    if interner.resolve(*head_name) != Some(CUSTOM_ELEMENT_CTOR) {
+    if interner.resolve(*qualifier) != Some(CUSTOM_ELEMENT_TYPE)
+        || interner.resolve(*member) != Some(CUSTOM_ELEMENT_CTOR)
+    {
         return Ok(None);
     }
 
@@ -6468,7 +6475,7 @@ fn detect_custom_element_constructor(
     if !val.patterns.is_empty() {
         return Err(custom_element_ctor_error(
             val.body.span,
-            "`customElement` is a value constructor and takes no binding parameters",
+            "`CustomElement.fromFile` is a value constructor and takes no binding parameters",
         ));
     }
 
@@ -6479,14 +6486,14 @@ fn detect_custom_element_constructor(
     let Some(ann) = &val.type_annotation else {
         return Err(custom_element_ctor_error(
             val.body.span,
-            "`customElement` is legal only as the body of a binding annotated \
+            "`CustomElement.fromFile` is legal only as the body of a binding annotated \
              `CustomElement down up`; this binding has no such annotation",
         ));
     };
     if annotation_head_name(&ann.value, interner) != Some(CUSTOM_ELEMENT_TYPE) {
         return Err(custom_element_ctor_error(
             val.body.span,
-            "`customElement` is legal only as the body of a binding annotated \
+            "`CustomElement.fromFile` is legal only as the body of a binding annotated \
              `CustomElement down up`",
         ));
     }
@@ -6496,14 +6503,14 @@ fn detect_custom_element_constructor(
     let [arg] = args else {
         return Err(custom_element_ctor_error(
             val.body.span,
-            "`customElement` takes exactly one argument — a single string literal \
+            "`CustomElement.fromFile` takes exactly one argument — a single string literal \
              naming the widget-hook JS file",
         ));
     };
     let src::Expr_::Str(raw) = &arg.value else {
         return Err(custom_element_ctor_error(
             arg.span,
-            "the `customElement` argument must be a single string literal, not a \
+            "the `CustomElement.fromFile` argument must be a single string literal, not a \
              variable or expression (the path is read at build time)",
         ));
     };
@@ -6524,7 +6531,7 @@ fn detect_custom_element_constructor(
         }
     };
 
-    // customElement-specific tightening (Security #1, defence-in-depth): the widget
+    // constructor-specific tightening (Security #1, defence-in-depth): the widget
     // path MUST be project-root-relative. The shared `path "…"` seal accepts an
     // absolute path by design (a `path` value may legitimately be absolute), but a
     // widget path is joined against the project root at the build gate — and
@@ -6540,7 +6547,7 @@ fn detect_custom_element_constructor(
     if is_rooted_widget_path(raw.as_str()) {
         return Err(custom_element_ctor_error(
             arg.span,
-            "the `customElement` widget path must be project-root-relative — an \
+            "the `CustomElement.fromFile` widget path must be project-root-relative — an \
              absolute path (a leading `/` or `\\`, a `C:` drive, or a UNC \
              `\\\\server\\share` prefix) would resolve outside the project and is refused",
         ));
