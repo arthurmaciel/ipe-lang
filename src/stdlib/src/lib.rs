@@ -629,8 +629,8 @@ const IPE_CORE_JS: &str = include_str!("../Ipe/Ffi/Js.ipe");
 /// `UiWidget` kernel, and the reserved literal-only `fromFile "<js-path>"`
 /// constructor (recognised structurally by the resolver, not a value binding).
 /// The crossing seals its down-state / up-event on the CONCRETE type
-/// (IPE-N0039), and emission stays closed (IPE-L0133) until the widget
-/// transport's runtime denotation ships. Resolved via the `Kernel.kernel` alias
+/// (IPE-N0039). The widget transport is shipped; the binding lowers to the
+/// opaque handle. Resolved via the `Kernel.kernel` alias
 /// fast-path, so the qualifier stays out of `STDLIB_MODULE_QUALIFIERS`.
 const IPE_CORE_JS_CUSTOM_ELEMENT: &str = include_str!("../Ipe/Ffi/Js/CustomElement.ipe");
 

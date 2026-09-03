@@ -26399,9 +26399,8 @@ impl<'a> Lowerer<'a> {
                 // `Ui.node : Description -> List (Attribute msg) -> List (Element msg) -> Element msg`
                 | KernelFn::UiNode
                 // `Ui.widget : CustomElement down up -> down -> (up -> msg) -> Element msg`
-                // Registered so the surface type-checks; its transport is not
-                // shipped, so a `CustomElement`-typed binding is refused fail-closed
-                // at type lowering (IPE-L0133) before this arity is consulted.
+                // Registered so the surface type-checks; arity is consulted
+                // after the type lowers to the shipped opaque widget handle.
                 | KernelFn::UiWidget
                 // `Ui.breakpoint : String -> List (Attribute msg) -> Element msg -> Element msg`
                 // (delegates to Ui.mediaQuery at runtime — see ui_breakpoint_)

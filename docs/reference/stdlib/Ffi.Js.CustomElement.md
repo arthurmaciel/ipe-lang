@@ -33,9 +33,9 @@ Two members, one per role:
     app's `msg`. Routed through the `Kernel.kernel "Ui_widget"` alias to the
     registered `UiWidget` kernel.
 
-The transport's runtime denotation is not yet shipped, so a binding whose type
-mentions `CustomElement` is refused fail-closed at emission (IPE-L0133) until it
-lands. Reachable use discloses the `js-port` capability.
+The typed transport is shipped: a binding annotated `CustomElement down up`
+lowers to the opaque widget handle. Reachable use discloses the `js-port`
+capability.
 
 ## `node`
 
@@ -46,7 +46,5 @@ node : CustomElement down up -> down -> (up -> msg) -> Element msg
 `node handle state onEvent` — place a typed JS custom-element widget.
 `handle` is a `CustomElement down up` produced by the reserved `fromFile`
 constructor; `state` is the sealed down-state; `onEvent` maps a decoded typed
-up-event into the app's `msg`. The widget transport is not yet shipped, so a
-binding whose type mentions `CustomElement` is refused fail-closed at emission
-(IPE-L0133) until it lands.
+up-event into the app's `msg`.
 

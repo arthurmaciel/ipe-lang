@@ -153,11 +153,6 @@ const ALLOWLIST: &[(&str, &str, &str)] = &[
     ),
     (
         "refusal-tested",
-        "IPE-L0133",
-        "CustomElement not-emittable gate not yet reached by any constant assertion or wire literal",
-    ),
-    (
-        "refusal-tested",
         "IPE-L0143",
         "row-generic field type mismatch gate not yet reached by any constant assertion or wire literal",
     ),
@@ -191,11 +186,6 @@ const ALLOWLIST: &[(&str, &str, &str)] = &[
         "refusal-tested",
         "IPE-N0036",
         "removed surface gate not yet reached by any constant assertion or wire literal",
-    ),
-    (
-        "refusal-tested",
-        "IPE-N0037",
-        "reserved JS-interop type gate not yet reached by any constant assertion or wire literal",
     ),
     (
         "refusal-tested",

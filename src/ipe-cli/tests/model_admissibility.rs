@@ -422,8 +422,7 @@ fn live_model_with_secret_field_is_rejected() -> Result<(), BoxError> {
 /// refused at emission), but it is an OPAQUE, non-serde value — it must never
 /// live in a Model (session state), exactly like a function or `Html`. The
 /// plain-Model gate (`ir_type_is_serde` = `false` for `IrType::CustomElement`)
-/// is the enforcement sink; this proves the opacity survives the L0133 flip and
-/// is caught by the real Model gate, not the retired emission gate.
+/// is the enforcement sink; this proves the opacity is caught by the Model gate.
 ///
 /// The widget-file must be present so the constructor clears its own
 /// existence/containment gate (IPE-N0044) and the pipeline reaches the Model
