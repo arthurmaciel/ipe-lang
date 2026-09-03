@@ -3056,7 +3056,7 @@ fn emit_tea_call(
         // `Cmd.publishNoEcho : String -> Dict String String -> Cmd msg`
         // Both map to the standard N-arg emit path (runtime live/pubsub.rs).
         KernelFn::CmdPublish | KernelFn::CmdPublishNoEcho => Ok(None),
-        // ── Ipe.Js ports: Js.send / Js.subscribe ─────────────────────────────────
+        // ── Ipe.Ffi.Js ports: Js.send / Js.subscribe ─────────────────────────────────
         // `Js.send : a -> Cmd msg`  →  `js_send(<payload>)`
         // `Js.subscribe : Decoder a -> (a -> msg) -> Sub msg`
         //   →  `js_subscribe(<decoder>, <to_msg>)`

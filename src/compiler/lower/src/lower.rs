@@ -22995,7 +22995,7 @@ impl<'a> Lowerer<'a> {
                 {
                     return Ok(Intercepted::Done(self.lower_store_order_by(&peek, args)?));
                 }
-                // ── Ipe.Js ports (raw typed Ipê↔JS transport) ────────────
+                // ── Ipe.Ffi.Js ports (raw typed Ipê↔JS transport) ────────────
                 //
                 // `Js.send : a -> Cmd msg` (arity 1) and
                 // `Js.subscribe : Decoder a -> (a -> msg) -> Sub msg` (arity 2)
@@ -25493,7 +25493,7 @@ impl<'a> Lowerer<'a> {
                 // ── Server: cookie token source — arity 1 ────────────────
                 // `Server.cookieToken : String -> TokenSource`
                 | KernelFn::ServerCookieToken
-                // ── Ipe.Js port — outbound. `Js.send : a -> Cmd msg`. Arity 1;
+                // ── Ipe.Ffi.Js port — outbound. `Js.send : a -> Cmd msg`. Arity 1;
                 //    the port intercept rejects it before emission, this is the
                 //    defensive fixed count.
                 | KernelFn::JsSend,
@@ -25795,12 +25795,12 @@ impl<'a> Lowerer<'a> {
                 // `Web.appWith : List (Setting Web) -> WebAppCfg model msg
                 //   -> Task Error ()`
                 | KernelFn::WebAppWith
-                // ── Ipe.Js port — inbound.
+                // ── Ipe.Ffi.Js port — inbound.
                 //   `Js.subscribe : Decoder a -> (a -> msg) -> Sub msg`. Arity 2;
                 //   the port intercept rejects it before emission, this is the
                 //   defensive fixed count.
                 | KernelFn::JsSubscribe
-                // ── Ipe.Js port — correlated one-shot.
+                // ── Ipe.Ffi.Js port — correlated one-shot.
                 //   `Js.request : a -> Decoder b -> Task b`. Arity 2;
                 //   the port intercept seal-checks both args before emission.
                 | KernelFn::JsRequest,
@@ -27595,7 +27595,7 @@ impl<'a> Lowerer<'a> {
                     ("Sub", "every") => Ok(Callee::Kernel(KernelFn::SubEvery)),
                     ("Sub", "map") => Ok(Callee::Kernel(KernelFn::SubMap)),
                     ("Sub", "subscribeTopic") => Ok(Callee::Kernel(KernelFn::SubSubscribeTopic)),
-                    // ── Ipe.Js ports (raw typed Ipê↔JS transport) ────────────
+                    // ── Ipe.Ffi.Js ports (raw typed Ipê↔JS transport) ────────────
                     ("Js", "send") => Ok(Callee::Kernel(KernelFn::JsSend)),
                     ("Js", "subscribe") => Ok(Callee::Kernel(KernelFn::JsSubscribe)),
                     ("Js", "request") => Ok(Callee::Kernel(KernelFn::JsRequest)),

@@ -4997,7 +4997,7 @@ mod tests {
         let src = "\
 module Ipe.Task exposing (..)
 
-import Ipe.Ffi as Ffi
+import Ipe.Ffi.Kernel as Kernel
 import Ipe.Duration as Duration exposing (Duration)
 
 withBaseMs = something
@@ -5005,7 +5005,7 @@ withBaseMs = something
         assert_eq!(
             extract_module_imports(src),
             s(&[
-                "import Ipe.Ffi as Ffi",
+                "import Ipe.Ffi.Kernel as Kernel",
                 "import Ipe.Duration as Duration exposing (Duration)",
             ])
         );
@@ -5017,7 +5017,10 @@ withBaseMs = something
             import_line_module("import Ipe.Duration as Duration exposing (Duration)"),
             Some("Ipe.Duration")
         );
-        assert_eq!(import_line_module("import Ipe.Ffi as Ffi"), Some("Ipe.Ffi"));
+        assert_eq!(
+            import_line_module("import Ipe.Ffi.Kernel as Kernel"),
+            Some("Ipe.Ffi.Kernel")
+        );
         assert_eq!(import_line_module("withBaseMs = something"), None);
     }
 

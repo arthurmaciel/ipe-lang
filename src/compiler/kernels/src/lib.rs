@@ -2219,7 +2219,7 @@ pub enum StdlibKernel {
     WebSocketClose,         // Int -> Task Error () (arity 1)
     WebSocketCloseWithCode, // Int -> String -> Int -> Task Error () (arity 3)
     SubSubscribeWebSocket,  // Int -> String -> (any -> msg) -> Sub msg (arity 3)
-    // ── Ipe.Js — the raw typed transport across the Ipê↔JS seam (ports) ──
+    // ── Ipe.Ffi.Js — the raw typed transport across the Ipê↔JS seam (ports) ──
     // `Js.send : a -> Cmd msg` (outbound) and
     // `Js.subscribe : Decoder a -> (a -> msg) -> Sub msg` (inbound). The crossing
     // value `a` must be a plain, closed, concrete SEAL type: the CONCRETE inferred
@@ -5509,7 +5509,7 @@ impl StdlibKernel {
         Self::WebSocketClose,
         Self::WebSocketCloseWithCode,
         Self::SubSubscribeWebSocket,
-        // ── Ipe.Js — the raw typed transport across the Ipê↔JS seam ──────
+        // ── Ipe.Ffi.Js — the raw typed transport across the Ipê↔JS seam ──────
         Self::JsSend,
         Self::JsSubscribe,
         Self::JsRequest,
@@ -7286,7 +7286,7 @@ impl StdlibKernel {
         );
         const SUB_SUBSCRIBE_WS: TyShape =
             TyShape::Fun(&INT, &TyShape::Fun(&STRING, &TyShape::Fun(&A, &SUB_B)));
-        // Ipe.Js ports. `send : a -> Cmd msg` — payload `a` is the scheme's `A`
+        // Ipe.Ffi.Js ports. `send : a -> Cmd msg` — payload `a` is the scheme's `A`
         // (the sealed crossing value), `msg` is `B` (so `Cmd msg` reuses `CMD_B`).
         // `subscribe : Decoder a -> (a -> msg) -> Sub msg` — decoded `a` is `A`,
         // `msg` is `B`, reusing `DEC_A` / `A_TO_B` / `SUB_B`. The variable order
@@ -8999,7 +8999,7 @@ impl StdlibKernel {
             Self::WebSocketCloseWithCode => Some(&WS_CLOSE_WITH_CODE),
             Self::SubSubscribeWebSocket => Some(&SUB_SUBSCRIBE_WS),
 
-            // ── Ipe.Js ports. ──
+            // ── Ipe.Ffi.Js ports. ──
             Self::JsSend => Some(&JS_SEND),
             Self::JsSubscribe => Some(&JS_SUBSCRIBE),
             Self::JsRequest => Some(&JS_REQUEST),
@@ -12252,7 +12252,7 @@ impl StdlibKernel {
             // onMessage/onClose/onError receive surface) routes through
             // `ws_client.rs`'s wasm32 arm — `web_sys::WebSocket`'s
             // `onopen`/`onmessage`/`onclose`/`onerror` handler slots.
-            // `JsSend`/`JsSubscribe` (the typed `Ipe.Js` port) route through
+            // `JsSend`/`JsSubscribe` (the typed `Ipe.Ffi.Js` port) route through
             // `js_port.rs`'s wasm32 arm: outbound `Js.send` posts the sealed
             // frame to `window.ipeOnReceive`, inbound `Js.subscribe` drains the
             // in-tab queue the page's `window.ipe.send` feeds — the SAME bounded,

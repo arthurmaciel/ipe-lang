@@ -87,7 +87,7 @@ const KNOWN_DEAD_OR_EPILOGUE: &[&str] = &[
     //         the topic-name String; emit_expr emits the argument directly, so
     //         this name string never reaches a runtime call. ──────────────────
     "pubsub_topic",
-    // (`js_send` / `js_subscribe` — the Ipe.Js port transport — are REAL runtime
+    // (`js_send` / `js_subscribe` — the Ipe.Ffi.Js port transport — are REAL runtime
     // fns in `js_port.rs`, so they resolve and are deliberately NOT allowlisted.)
     // ── Dead: the config-tag ADT constructors (`Host.loopback` / `Level.warn`
     //         / `Web.strict` / …) are emitted inline as their raw `Int` tag by

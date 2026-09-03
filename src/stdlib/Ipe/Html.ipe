@@ -4,7 +4,7 @@
 -- over two retained native primitives: `node` (a container element) and
 -- `voidNode` (a childless void element). Those two, plus `text` / `doctype` /
 -- `titleNode` / `styleNode`, are the irreducible `Html`-value constructors,
--- reached through point-free `Ffi.kernel "Html_*"` aliases. The un-escaped raw
+-- reached through point-free `Kernel.kernel "Html_*"` aliases. The un-escaped raw
 -- escape hatch lives in `Ipe.Html.Unsafe.unsafeRaw`, not here.
 --
 -- The serialiser (`render` / `toString` / `escapeHtml` / `escapeAttr` /
@@ -34,7 +34,7 @@ module Ipe.Html exposing
     )
 
 
-import Ipe.Ffi as Ffi
+import Ipe.Ffi.Kernel as Kernel
 
 
 -- ── Retained native primitives ───────────────────────────────────────────────
@@ -44,36 +44,36 @@ import Ipe.Ffi as Ffi
 
 -- | `node tag attrs children` — a container element `<tag …>children</tag>`.
 node : String -> List (Attribute msg) -> List (Html msg) -> Html msg
-node = Ffi.kernel "Html_node"
+node = Kernel.kernel "Html_node"
 
 
 -- | `voidNode tag attrs` — a childless void element `<tag …>` (self-closed by
 -- the render sink for any void tag).
 voidNode : String -> List (Attribute msg) -> Html msg
-voidNode = Ffi.kernel "Html_voidNode"
+voidNode = Kernel.kernel "Html_voidNode"
 
 
 -- | `text s` — an escaped text node. The value is escaped at the render sink,
 -- so this is the safe-by-construction way to embed user content.
 text : String -> Html msg
-text = Ffi.kernel "Html_text"
+text = Kernel.kernel "Html_text"
 
 
 -- | `doctype children` — wraps children in the document `<!DOCTYPE html>`
 -- preamble emitted by the render sink.
 doctype : List (Html msg) -> Html msg
-doctype = Ffi.kernel "Html_doctype"
+doctype = Kernel.kernel "Html_doctype"
 
 
 -- | `titleNode s` — `<title>` wrapping a raw string directly.
 titleNode : String -> Html msg
-titleNode = Ffi.kernel "Html_titleNode"
+titleNode = Kernel.kernel "Html_titleNode"
 
 
 -- | `styleNode attrs css` — a `<style>` element whose CSS body is
 -- close-tag-neutralised once at construction (parse, don't validate).
 styleNode : List (Attribute msg) -> String -> Html msg
-styleNode = Ffi.kernel "Html_styleNode"
+styleNode = Kernel.kernel "Html_styleNode"
 
 
 -- ── Retained native serialiser (the XSS barrier) ─────────────────────────────
@@ -83,54 +83,54 @@ styleNode = Ffi.kernel "Html_styleNode"
 -- | `render html` — serialise an `Html` tree to a `String`, escaping text and
 -- attribute values at the sink.
 render : Html msg -> String
-render = Ffi.kernel "Html_render"
+render = Kernel.kernel "Html_render"
 
 
 -- | `renderStatic view model` — render a `model -> Html msg` view once to a
 -- static HTML string, as a `Task`.
 renderStatic : (model -> Html msg) -> model -> Task Error ()
-renderStatic = Ffi.kernel "Html_renderStatic"
+renderStatic = Kernel.kernel "Html_renderStatic"
 
 
 -- | `toString html` — an alias of `render`.
 toString : Html msg -> String
-toString = Ffi.kernel "Html_toString"
+toString = Kernel.kernel "Html_toString"
 
 
 -- | `escapeHtml s` — escape a string for safe inclusion in text content.
 escapeHtml : String -> String
-escapeHtml = Ffi.kernel "Html_escapeHtml"
+escapeHtml = Kernel.kernel "Html_escapeHtml"
 
 
 -- | `escapeAttr s` — escape a string for safe inclusion in an attribute value.
 escapeAttr : String -> String
-escapeAttr = Ffi.kernel "Html_escapeAttr"
+escapeAttr = Kernel.kernel "Html_escapeAttr"
 
 
 -- | `attrToString attr` — serialise a single `Attribute` to its ` key="value"`
 -- wire form.
 attrToString : Attribute msg -> String
-attrToString = Ffi.kernel "Html_attrToString"
+attrToString = Kernel.kernel "Html_attrToString"
 
 
 -- | `htmlRender` — pipeline-readable spelling of `render`.
 htmlRender : Html msg -> String
-htmlRender = Ffi.kernel "Html_render"
+htmlRender = Kernel.kernel "Html_render"
 
 
 -- | `htmlEscapeText` — pipeline-readable spelling of `escapeHtml`.
 htmlEscapeText : String -> String
-htmlEscapeText = Ffi.kernel "Html_escapeHtml"
+htmlEscapeText = Kernel.kernel "Html_escapeHtml"
 
 
 -- | `htmlEscapeAttr` — pipeline-readable spelling of `escapeAttr`.
 htmlEscapeAttr : String -> String
-htmlEscapeAttr = Ffi.kernel "Html_escapeAttr"
+htmlEscapeAttr = Kernel.kernel "Html_escapeAttr"
 
 
 -- | `htmlAttrToString` — pipeline-readable spelling of `attrToString`.
 htmlAttrToString : Attribute msg -> String
-htmlAttrToString = Ffi.kernel "Html_attrToString"
+htmlAttrToString = Kernel.kernel "Html_attrToString"
 
 
 -- ── Container elements ───────────────────────────────────────────────────────

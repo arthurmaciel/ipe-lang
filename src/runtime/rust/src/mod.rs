@@ -420,7 +420,7 @@ pub mod tea;
 ))]
 pub use tea::*;
 
-// `Ipe.Js` ports — the raw typed Ipê↔JS transport behind `Js.send` /
+// `Ipe.Ffi.Js` ports — the raw typed Ipê↔JS transport behind `Js.send` /
 // `Js.subscribe`. Rides `IpeCmd`/`IpeSub` (so it follows `tea`'s gate) and the
 // `seal_codec` (so it also needs `json`); available on the native tokio path and
 // the wasm-client sink, with the two halves cfg-split inside the file.
@@ -527,7 +527,7 @@ pub use webview::{WebViewAppCfg, WebViewWindowCfg, webview_app};
 #[cfg(feature = "widget-assets")]
 pub mod widget_assets;
 
-// `Ipe.Js` port browser surface (`window.ipe.send` / `onReceive` / `onSync`),
+// `Ipe.Ffi.Js` port browser surface (`window.ipe.send` / `onReceive` / `onSync`),
 // served content-addressed with SRI — the same fixed-asset addressing
 // `widget_assets` uses, identical bytes on every target. Rides `widget-assets`
 // (it needs only `sha2` + `base64`).

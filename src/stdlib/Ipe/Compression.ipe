@@ -15,7 +15,7 @@ module Ipe.Compression exposing
     )
 
 
-import Ipe.Ffi as Ffi
+import Ipe.Ffi.Kernel as Kernel
 import Ipe.Error exposing (Error)
 import Ipe.Bytes exposing (Bytes)
 
@@ -32,23 +32,23 @@ import Ipe.Bytes exposing (Bytes)
 -- | `gzip bytes` — RFC 1952 gzip-compress.  Output is a complete
 -- gzip stream with header + checksum.
 gzip : Bytes -> Task Error Bytes
-gzip = Ffi.kernel "Compression_gzip"
+gzip = Kernel.kernel "Compression_gzip"
 
 
 -- | `gunzip bytes` — RFC 1952 gzip-decompress.  Fails on truncated
 -- or corrupt input.
 gunzip : Bytes -> Task Error Bytes
-gunzip = Ffi.kernel "Compression_gunzip"
+gunzip = Kernel.kernel "Compression_gunzip"
 
 
 -- | `zstdCompress bytes` — Zstandard (RFC 8478) compress at the
 -- default level.  Higher compression ratio than gzip with
 -- comparable decompression speed.
 zstdCompress : Bytes -> Task Error Bytes
-zstdCompress = Ffi.kernel "Compression_zstdCompress"
+zstdCompress = Kernel.kernel "Compression_zstdCompress"
 
 
 -- | `zstdDecompress bytes` — Zstandard decompress.  Fails on
 -- truncated or corrupt input.
 zstdDecompress : Bytes -> Task Error Bytes
-zstdDecompress = Ffi.kernel "Compression_zstdDecompress"
+zstdDecompress = Kernel.kernel "Compression_zstdDecompress"

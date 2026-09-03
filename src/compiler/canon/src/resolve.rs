@@ -6592,9 +6592,9 @@ fn detect_custom_element_constructor(
 /// `collectKernelAliases` (`Ipe.Build.Compile`).
 ///
 /// A binding qualifies when it takes NO parameters and its body is exactly
-/// `Ffi.kernel "Module_function"`. The string is split at the FIRST `_` into a
-/// `(module, function)` pair (the `KernelMod_funcName` convention) and looked up
-/// in `env.stdlib_index`.
+/// `Kernel.kernel "Module_function"`. The string is split at the FIRST `_` into
+/// a `(module, function)` pair (the `KernelMod_funcName` convention) and looked
+/// up in `env.stdlib_index`.
 ///
 /// ORIGIN GATE (capability-model integrity): minting a kernel is the exclusive
 /// privilege of driver-vouched [`ModuleOrigin::EmbeddedStdlib`] /
@@ -6607,7 +6607,7 @@ fn detect_custom_element_constructor(
 /// `unsafe` capability disclosed and no `.Unsafe` import to acknowledge. The
 /// only sanctioned path to an unsafe kernel is its `Ipe.<M>.Unsafe` module,
 /// which flips the `unsafe` capability. Make-invalid-states-unrepresentable:
-/// `Ffi.kernel` in user text is unrepresentable, not merely discouraged.
+/// `Kernel.kernel` in user text is unrepresentable, not merely discouraged.
 ///
 /// Returns:
 /// * `Ok(None)` — the binding is an ordinary value/function, not a kernel alias.
@@ -6636,20 +6636,21 @@ pub fn detect_kernel_alias(
     if !value.patterns.is_empty() {
         return Ok(None);
     }
-    // Body must be `Ffi.kernel "<raw>"`, i.e. a call of the qualified
-    // `Ffi.kernel` to a single string literal.
+    // Body must be `Kernel.kernel "<raw>"`, i.e. a call of the qualified
+    // `Kernel.kernel` to a single string literal.
     let src::Expr_::Call(callee, args) = &value.body.value else {
         return Ok(None);
     };
     let src::Expr_::VarQual(qualifier, member) = &callee.value else {
         return Ok(None);
     };
-    // Compare against the reserved `Ffi.kernel` spelling. These interns are
-    // idempotent (the strings almost always already exist), and only run for the
-    // narrow `VarQual`-applied-to-one-arg shape, so the cost is negligible.
-    let ffi_sym = interner.intern("Ffi")?;
+    // Compare against the reserved `Kernel.kernel` spelling (the last segment of
+    // `import Ipe.Ffi.Kernel as Kernel`). These interns are idempotent (the
+    // strings almost always already exist), and only run for the narrow
+    // `VarQual`-applied-to-one-arg shape, so the cost is negligible.
+    let kernel_qualifier_sym = interner.intern("Kernel")?;
     let kernel_sym = interner.intern("kernel")?;
-    if *qualifier != ffi_sym || *member != kernel_sym {
+    if *qualifier != kernel_qualifier_sym || *member != kernel_sym {
         return Ok(None);
     }
     let [arg] = args.as_slice() else {
@@ -6659,7 +6660,7 @@ pub fn detect_kernel_alias(
         return Ok(None);
     };
 
-    // ORIGIN GATE: the binding is a genuine `Ffi.kernel "<raw>"` kernel alias.
+    // ORIGIN GATE: the binding is a genuine `Kernel.kernel "<raw>"` kernel alias.
     // Only a driver-vouched EmbeddedStdlib / FfiInterface module may mint a
     // kernel; the SAME shape in User source is rejected (IPE-N0042). Placed
     // AFTER full shape confirmation so an ordinary user value is never touched,

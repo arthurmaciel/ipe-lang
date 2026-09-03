@@ -33,7 +33,7 @@
 --                        an empty origin this is a no-op.
 module Ipe.PubSub exposing (Topic, topic, publish, publishNoEcho)
 
-import Ipe.Ffi as Ffi
+import Ipe.Ffi.Kernel as Kernel
 import Ipe.Error exposing (Error)
 import Ipe.Task as Task
 
@@ -60,7 +60,7 @@ type Topic a
 --   chatTopic = PubSub.topic "chat"
 topic : String -> Topic a
 topic =
-    Ffi.kernel "PubSub_topic"
+    Kernel.kernel "PubSub_topic"
 
 
 -- | `publish t payload` — broadcast `payload` on topic `t` to every Ipe.Web
@@ -84,7 +84,7 @@ topic =
 -- should.
 publish : Topic a -> a -> Task Error Int
 publish =
-    Ffi.kernel "PubSub_publish"
+    Kernel.kernel "PubSub_publish"
 
 
 -- | `publishNoEcho t payload` — Task-shaped publish that sets the broker's
@@ -100,4 +100,4 @@ publish =
 -- process.
 publishNoEcho : Topic a -> a -> Task Error Int
 publishNoEcho =
-    Ffi.kernel "PubSub_publishNoEcho"
+    Kernel.kernel "PubSub_publishNoEcho"

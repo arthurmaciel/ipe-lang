@@ -218,7 +218,7 @@ pub fn with_session_sid<R>(sid: String, f: impl FnOnce() -> R) -> R {
 /// The sid of the session whose subscriptions/commands are being materialised
 /// in the current task-local scope, or an empty string outside any session.
 ///
-/// Public so the `Ipe.Js` port transport can bind each `js_subscribe` /
+/// Public so the `Ipe.Ffi.Js` port transport can bind each `js_subscribe` /
 /// `js_send` to the OWNING session's channel (read synchronously while
 /// [`with_session_sid`] is in scope), making cross-session port delivery
 /// unrepresentable: a port channel handle is only ever obtained from the sid

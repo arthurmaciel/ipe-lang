@@ -69,7 +69,7 @@ module Ipe.WebSocket exposing
     , onError
     )
 
-import Ipe.Ffi as Ffi
+import Ipe.Ffi.Kernel as Kernel
 import Ipe.Bytes exposing (Bytes)
 import Ipe.Error exposing (Error)
 import Ipe.Task as Task
@@ -184,7 +184,7 @@ withPingInterval interval cfg =
 -- the public `connect` wraps it in `WebSocket`.
 connectRaw : String -> Task Error Int
 connectRaw =
-    Ffi.kernel "WebSocket_connect"
+    Kernel.kernel "WebSocket_connect"
 
 
 -- | `connect wsUrl` — open a new WebSocket to `wsUrl` (`ws://` or `wss://`).
@@ -200,7 +200,7 @@ connect w =
 -- | Internal — direct kernel alias for the typed-record cfg form.
 connectWithRaw : WebSocketCfg -> Task Error Int
 connectWithRaw =
-    Ffi.kernel "WebSocket_connectWith"
+    Kernel.kernel "WebSocket_connectWith"
 
 
 -- | `connectWith cfg` — connect with custom headers / timeout /
@@ -214,7 +214,7 @@ connectWith cfg =
 -- | Internal — direct kernel alias.
 sendRaw : Int -> String -> Task Error ()
 sendRaw =
-    Ffi.kernel "WebSocket_send"
+    Kernel.kernel "WebSocket_send"
 
 
 -- | `send sock text` — write a text frame.  Blocks up to 30 s if
@@ -229,7 +229,7 @@ send sock msg =
 
 sendBinaryRaw : Int -> Bytes -> Task Error ()
 sendBinaryRaw =
-    Ffi.kernel "WebSocket_sendBinary"
+    Kernel.kernel "WebSocket_sendBinary"
 
 
 -- | `sendBinary sock bytes` — write a binary frame.  Takes `Bytes`
@@ -245,7 +245,7 @@ sendBinary sock msg =
 
 closeRaw : Int -> Task Error ()
 closeRaw =
-    Ffi.kernel "WebSocket_close"
+    Kernel.kernel "WebSocket_close"
 
 
 -- | `close sock` — release the connection (sends a Normal close
@@ -260,7 +260,7 @@ close sock =
 
 closeWithCodeRaw : Int -> String -> Int -> Task Error ()
 closeWithCodeRaw =
-    Ffi.kernel "WebSocket_closeWithCode"
+    Kernel.kernel "WebSocket_closeWithCode"
 
 
 -- | `closeWithCode code reason sock` — release the connection with
@@ -298,7 +298,7 @@ closeCodeToInt code =
 -- class this Sub receives: "open" | "message" | "close" | "error".
 subscribeWebSocketRaw : Int -> String -> any -> Sub msg
 subscribeWebSocketRaw =
-    Ffi.kernel "Sub_subscribeWebSocket"
+    Kernel.kernel "Sub_subscribeWebSocket"
 
 
 -- | `onOpen sock msg` — dispatch `msg` once the socket is connected.

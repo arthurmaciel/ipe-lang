@@ -2,7 +2,7 @@
 --
 -- `Decimal` is an opaque arbitrary-precision decimal value backed by
 -- `ipe_runtime::decimal::Decimal` (wrapping `rust_decimal::Decimal`).
--- Every member is aliased to its runtime kernel via the `Ffi.kernel` mechanism.
+-- Every member is aliased to its runtime kernel via the `Kernel.kernel` mechanism.
 module Ipe.Decimal exposing
     ( Decimal
     , zero, one, oneHundred
@@ -19,22 +19,22 @@ module Ipe.Decimal exposing
     )
 
 
-import Ipe.Ffi as Ffi
+import Ipe.Ffi.Kernel as Kernel
 
 
 -- | The additive identity.
 zero : Decimal
-zero = Ffi.kernel "Decimal_zero"
+zero = Kernel.kernel "Decimal_zero"
 
 
 -- | The multiplicative identity.
 one : Decimal
-one = Ffi.kernel "Decimal_one"
+one = Kernel.kernel "Decimal_one"
 
 
 -- | The value 100.
 oneHundred : Decimal
-oneHundred = Ffi.kernel "Decimal_oneHundred"
+oneHundred = Kernel.kernel "Decimal_oneHundred"
 
 
 -- | Parse a decimal from its string representation.
@@ -42,30 +42,30 @@ oneHundred = Ffi.kernel "Decimal_oneHundred"
 --     Decimal.fromString "3.14"  → Ok (…)
 --     Decimal.fromString "nope"  → Err …
 fromString : String -> Result Error Decimal
-fromString = Ffi.kernel "Decimal_fromString"
+fromString = Kernel.kernel "Decimal_fromString"
 
 
 -- | Convert an `Int` to a `Decimal` exactly.
 fromInt : Int -> Decimal
-fromInt = Ffi.kernel "Decimal_fromInt"
+fromInt = Kernel.kernel "Decimal_fromInt"
 
 
 -- | Convert a `Float` to a `Decimal`.  Subject to the same precision limits as
 -- IEEE 754 double; prefer `fromString` when exactness matters.
 fromFloat : Float -> Decimal
-fromFloat = Ffi.kernel "Decimal_fromFloat"
+fromFloat = Kernel.kernel "Decimal_fromFloat"
 
 
 -- | Construct a `Decimal` from a minor-unit integer and a scale.
 --
 --     Decimal.fromMinor 2 314  → 3.14
 fromMinor : Int -> Int -> Decimal
-fromMinor = Ffi.kernel "Decimal_fromMinor"
+fromMinor = Kernel.kernel "Decimal_fromMinor"
 
 
 -- | Render the decimal as a plain decimal string (no thousands separators).
 toString : Decimal -> String
-toString = Ffi.kernel "Decimal_toString"
+toString = Kernel.kernel "Decimal_toString"
 
 
 -- | Render with a fixed number of decimal places.
@@ -73,17 +73,17 @@ toString = Ffi.kernel "Decimal_toString"
 --     Decimal.toStringFixed 2 (Decimal.fromString "3.1" |> Result.withDefault Decimal.zero)
 --         → "3.10"
 toStringFixed : Int -> Decimal -> String
-toStringFixed = Ffi.kernel "Decimal_toStringFixed"
+toStringFixed = Kernel.kernel "Decimal_toStringFixed"
 
 
 -- | Convert to the nearest `Float`.  May lose precision.
 toFloat : Decimal -> Float
-toFloat = Ffi.kernel "Decimal_toFloat"
+toFloat = Kernel.kernel "Decimal_toFloat"
 
 
 -- | Truncate to an `Int` (towards zero).
 toInt : Decimal -> Int
-toInt = Ffi.kernel "Decimal_toInt"
+toInt = Kernel.kernel "Decimal_toInt"
 
 
 -- | Return the minor-unit integer at the given scale.
@@ -91,129 +91,129 @@ toInt = Ffi.kernel "Decimal_toInt"
 --     Decimal.toMinor 2 (Decimal.fromString "3.14" |> Result.withDefault Decimal.zero)
 --         → 314
 toMinor : Int -> Decimal -> Int
-toMinor = Ffi.kernel "Decimal_toMinor"
+toMinor = Kernel.kernel "Decimal_toMinor"
 
 
 -- | Add two decimals.
 add : Decimal -> Decimal -> Decimal
-add = Ffi.kernel "Decimal_add"
+add = Kernel.kernel "Decimal_add"
 
 
 -- | Subtract the second decimal from the first.
 sub : Decimal -> Decimal -> Decimal
-sub = Ffi.kernel "Decimal_sub"
+sub = Kernel.kernel "Decimal_sub"
 
 
 -- | Multiply two decimals.
 mul : Decimal -> Decimal -> Decimal
-mul = Ffi.kernel "Decimal_mul"
+mul = Kernel.kernel "Decimal_mul"
 
 
 -- | Divide the first decimal by the second.  Returns `Err` on division by zero.
 div : Decimal -> Decimal -> Result Error Decimal
-div = Ffi.kernel "Decimal_div"
+div = Kernel.kernel "Decimal_div"
 
 
 -- | Remainder of dividing the first decimal by the second.  Returns `Err` on
 -- division by zero.
 mod : Decimal -> Decimal -> Result Error Decimal
-mod = Ffi.kernel "Decimal_mod"
+mod = Kernel.kernel "Decimal_mod"
 
 
 -- | Negate a decimal.
 neg : Decimal -> Decimal
-neg = Ffi.kernel "Decimal_neg"
+neg = Kernel.kernel "Decimal_neg"
 
 
 -- | Absolute value.
 abs : Decimal -> Decimal
-abs = Ffi.kernel "Decimal_abs"
+abs = Kernel.kernel "Decimal_abs"
 
 
 -- | Round down to the nearest integer-valued decimal (towards negative infinity).
 floor : Decimal -> Decimal
-floor = Ffi.kernel "Decimal_floor"
+floor = Kernel.kernel "Decimal_floor"
 
 
 -- | Round up to the nearest integer-valued decimal (towards positive infinity).
 ceil : Decimal -> Decimal
-ceil = Ffi.kernel "Decimal_ceil"
+ceil = Kernel.kernel "Decimal_ceil"
 
 
 -- | Round to `n` decimal places using banker's rounding (round-half-to-even).
 round : Int -> Decimal -> Decimal
-round = Ffi.kernel "Decimal_round"
+round = Kernel.kernel "Decimal_round"
 
 
 -- | Round to `n` decimal places always rounding 0.5 away from zero.
 roundHalfUp : Int -> Decimal -> Decimal
-roundHalfUp = Ffi.kernel "Decimal_roundHalfUp"
+roundHalfUp = Kernel.kernel "Decimal_roundHalfUp"
 
 
 -- | Truncate to `n` decimal places (towards zero, no rounding).
 truncate : Int -> Decimal -> Decimal
-truncate = Ffi.kernel "Decimal_truncate"
+truncate = Kernel.kernel "Decimal_truncate"
 
 
 -- | Total ordering: `compare a b` returns a negative `Int` if `a < b`, zero if
 -- `a == b`, or a positive `Int` if `a > b`.
 compare : Decimal -> Decimal -> Int
-compare = Ffi.kernel "Decimal_compare"
+compare = Kernel.kernel "Decimal_compare"
 
 
 -- | Decimal equality.
 eq : Decimal -> Decimal -> Bool
-eq = Ffi.kernel "Decimal_eq"
+eq = Kernel.kernel "Decimal_eq"
 
 
 -- | Decimal inequality.
 neq : Decimal -> Decimal -> Bool
-neq = Ffi.kernel "Decimal_neq"
+neq = Kernel.kernel "Decimal_neq"
 
 
 -- | Strict less-than.
 lt : Decimal -> Decimal -> Bool
-lt = Ffi.kernel "Decimal_lt"
+lt = Kernel.kernel "Decimal_lt"
 
 
 -- | Less-than-or-equal.
 lte : Decimal -> Decimal -> Bool
-lte = Ffi.kernel "Decimal_lte"
+lte = Kernel.kernel "Decimal_lte"
 
 
 -- | Strict greater-than.
 gt : Decimal -> Decimal -> Bool
-gt = Ffi.kernel "Decimal_gt"
+gt = Kernel.kernel "Decimal_gt"
 
 
 -- | Greater-than-or-equal.
 gte : Decimal -> Decimal -> Bool
-gte = Ffi.kernel "Decimal_gte"
+gte = Kernel.kernel "Decimal_gte"
 
 
 -- | The smaller of two decimals.
 min : Decimal -> Decimal -> Decimal
-min = Ffi.kernel "Decimal_min"
+min = Kernel.kernel "Decimal_min"
 
 
 -- | The larger of two decimals.
 max : Decimal -> Decimal -> Decimal
-max = Ffi.kernel "Decimal_max"
+max = Kernel.kernel "Decimal_max"
 
 
 -- | True when the decimal equals zero.
 isZero : Decimal -> Bool
-isZero = Ffi.kernel "Decimal_isZero"
+isZero = Kernel.kernel "Decimal_isZero"
 
 
 -- | True when the decimal is strictly greater than zero.
 isPositive : Decimal -> Bool
-isPositive = Ffi.kernel "Decimal_isPositive"
+isPositive = Kernel.kernel "Decimal_isPositive"
 
 
 -- | True when the decimal is strictly less than zero.
 isNegative : Decimal -> Bool
-isNegative = Ffi.kernel "Decimal_isNegative"
+isNegative = Kernel.kernel "Decimal_isNegative"
 
 
 -- | `percentOf pct base` — the value of `pct`% of `base`.
@@ -221,17 +221,17 @@ isNegative = Ffi.kernel "Decimal_isNegative"
 --     Decimal.percentOf (Decimal.fromInt 10) (Decimal.fromInt 200)
 --         → 20.00
 percentOf : Decimal -> Decimal -> Decimal
-percentOf = Ffi.kernel "Decimal_percentOf"
+percentOf = Kernel.kernel "Decimal_percentOf"
 
 
 -- | `addPercent pct base` — `base` increased by `pct`%.
 addPercent : Decimal -> Decimal -> Decimal
-addPercent = Ffi.kernel "Decimal_addPercent"
+addPercent = Kernel.kernel "Decimal_addPercent"
 
 
 -- | `subPercent pct base` — `base` decreased by `pct`%.
 subPercent : Decimal -> Decimal -> Decimal
-subPercent = Ffi.kernel "Decimal_subPercent"
+subPercent = Kernel.kernel "Decimal_subPercent"
 
 
 -- | `formatWith thousandsSep decimalSep places value` — locale-style formatting.
@@ -239,4 +239,4 @@ subPercent = Ffi.kernel "Decimal_subPercent"
 --     Decimal.formatWith "," "." 2 (Decimal.fromInt 1234567)
 --         → "1,234,567.00"
 formatWith : String -> String -> Int -> Decimal -> String
-formatWith = Ffi.kernel "Decimal_formatWith"
+formatWith = Kernel.kernel "Decimal_formatWith"

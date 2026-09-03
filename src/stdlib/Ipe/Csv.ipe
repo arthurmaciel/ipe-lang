@@ -20,7 +20,7 @@ module Ipe.Csv exposing
     )
 
 
-import Ipe.Ffi as Ffi
+import Ipe.Ffi.Kernel as Kernel
 import Ipe.Error exposing (Error)
 import Ipe.Path exposing (Path)
 
@@ -66,26 +66,26 @@ withRows rows csv =
 -- row is treated as the header.  Returns `Err Error` on
 -- malformed input.
 parse : String -> Result Error Csv
-parse = Ffi.kernel "Csv_parse"
+parse = Kernel.kernel "Csv_parse"
 
 
 -- | `parseWithDelimiter delim text` — like `parse` but with a
 -- custom single-character delimiter.
 parseWithDelimiter : String -> String -> Result Error Csv
-parseWithDelimiter = Ffi.kernel "Csv_parseWithDelimiter"
+parseWithDelimiter = Kernel.kernel "Csv_parseWithDelimiter"
 
 
 -- | `encode csv` — encode `csv` back to a comma-delimited string.
 -- Cells containing the delimiter, double quotes, or newlines are
 -- quoted per RFC 4180.
 encode : Csv -> String
-encode = Ffi.kernel "Csv_encode"
+encode = Kernel.kernel "Csv_encode"
 
 
 -- | `encodeWithDelimiter delim csv` — like `encode` but with a
 -- custom delimiter.
 encodeWithDelimiter : String -> Csv -> String
-encodeWithDelimiter = Ffi.kernel "Csv_encodeWithDelimiter"
+encodeWithDelimiter = Kernel.kernel "Csv_encodeWithDelimiter"
 
 
 -- | `parseStreamFromFile path` — stream-read a CSV file at the
@@ -97,4 +97,4 @@ encodeWithDelimiter = Ffi.kernel "Csv_encodeWithDelimiter"
 -- `Task` that chunks by row count.  Use `Path.fromString` to
 -- construct the `Path` argument.
 parseStreamFromFile : Path -> Task Error (List (List String))
-parseStreamFromFile = Ffi.kernel "Csv_parseStreamFromFile"
+parseStreamFromFile = Kernel.kernel "Csv_parseStreamFromFile"

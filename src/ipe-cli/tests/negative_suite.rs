@@ -1358,22 +1358,22 @@ fn canon_duplicate_qualifier() {
     }
 }
 
-/// An `Ffi.kernel "Name"` alias in USER source — minting a kernel is reserved to
+/// An `Kernel.kernel "Name"` alias in USER source — minting a kernel is reserved to
 /// the vouched stdlib / FFI interface, so it is rejected by the origin gate
 /// (IPE-N0042) before the registry is consulted, whether or not the named kernel
 /// is registered.
 #[test]
 fn canon_user_kernel_alias_is_rejected() {
     let src = format!(
-        "{HEAD}import Ipe.Ffi as Ffi\n\
+        "{HEAD}import Ipe.Ffi.Kernel as Kernel\n\
          bogus : Int -> Int\n\
-         bogus = Ffi.kernel \"No_such_kernel_at_all\"\n\
+         bogus = Kernel.kernel \"No_such_kernel_at_all\"\n\
          main = bogus 1\n"
     );
     assert_rejected("canon_user_kernel_alias_is_rejected", &src, "IPE-N0042");
 }
 
-// ── Ipe.Js ports — raw typed Ipê↔JS transport (IPE-L0148 boundary seal) ──
+// ── Ipe.Ffi.Js ports — raw typed Ipê↔JS transport (IPE-L0148 boundary seal) ──
 //
 // A port (`Js.send` / `Js.subscribe`) reuses the same seal the `CustomElement`
 // boundary enforces, but on the CONCRETE inferred crossing type (a port's `a` is
@@ -1399,7 +1399,7 @@ fn js_port_app(decoder_expr: &str) -> String {
          import Ipe.Tea.Web.Cmd as Cmd\n\
          import Ipe.Tea.Web.Sub as Sub\n\
          import Ipe.Ui as Ui\n\
-         import Ipe.Js as Js\n\
+         import Ipe.Ffi.Js as Js\n\
          import Ipe.Json.Decode as Decode\n\
          type alias Model = {{ n : Int }}\n\
          type Msg = Tick | Got Int\n\
@@ -1453,7 +1453,7 @@ fn js_port_subscribe_value_decoder_rejected() {
          import Ipe.Tea.Web.Cmd as Cmd\n\
          import Ipe.Tea.Web.Sub as Sub\n\
          import Ipe.Ui as Ui\n\
-         import Ipe.Js as Js\n\
+         import Ipe.Ffi.Js as Js\n\
          import Ipe.Json.Decode as Decode\n\
          type alias Model = { n : Int }\n\
          type Msg = Tick | GotV Value\n\
@@ -1488,7 +1488,7 @@ fn js_port_send_secret_rejected() {
          import Ipe.Tea.Web.Cmd as Cmd\n\
          import Ipe.Tea.Web.Sub as Sub\n\
          import Ipe.Ui as Ui\n\
-         import Ipe.Js as Js\n\
+         import Ipe.Ffi.Js as Js\n\
          import Ipe.Secret as Secret\n\
          import Ipe.System as System\n\
          type alias Model = { s : Secret }\n\
@@ -1526,7 +1526,7 @@ fn js_port_send_nested_secret_in_adt_rejected() {
          import Ipe.Tea.Web.Cmd as Cmd\n\
          import Ipe.Tea.Web.Sub as Sub\n\
          import Ipe.Ui as Ui\n\
-         import Ipe.Js as Js\n\
+         import Ipe.Ffi.Js as Js\n\
          import Ipe.Secret as Secret\n\
          import Ipe.System as System\n\
          type Payload = Wrap Secret | Empty\n\
@@ -1564,7 +1564,7 @@ fn js_port_send_polymorphic_wrapper_secret_rejected() {
          import Ipe.Tea.Web.Cmd as Cmd\n\
          import Ipe.Tea.Web.Sub as Sub\n\
          import Ipe.Ui as Ui\n\
-         import Ipe.Js as Js\n\
+         import Ipe.Ffi.Js as Js\n\
          import Ipe.Secret as Secret\n\
          import Ipe.System as System\n\
          type Box a = Box a\n\

@@ -54,14 +54,14 @@ module Ipe.Debug exposing
     )
 
 
-import Ipe.Ffi as Ffi
+import Ipe.Ffi.Kernel as Kernel
 
 
 -- | `log label value` — print `"label: value"` to stderr, return `value`.
 -- The value is stringified through the same polymorphic path as
 -- `Basics.toString` / `{{expr}}` interpolation, so any value renders.
 log : String -> a -> a
-log = Ffi.kernel "Debug_log"
+log = Kernel.kernel "Debug_log"
 
 
 -- | `todo note` — mark an unfinished code path.
@@ -69,10 +69,10 @@ log = Ffi.kernel "Debug_log"
 -- `TODO at <location>: <note>` on stderr and a non-zero exit.
 -- A `todo` in a `case` arm does NOT satisfy exhaustiveness.
 todo : String -> a
-todo = Ffi.kernel "Debug_todo"
+todo = Kernel.kernel "Debug_todo"
 
 
 -- | `explain` — draw visible outlines on an element and all its descendants.
 -- Applies to Web and WebView shapes. Does not change layout.
 explain : Attribute msg
-explain = Ffi.kernel "Debug_explain"
+explain = Kernel.kernel "Debug_explain"

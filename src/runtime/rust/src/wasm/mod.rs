@@ -217,7 +217,7 @@ thread_local! {
     /// calls on the same page (e.g. multiple embeds) never collide.
     static NEXT_INSTANCE_ID: Cell<u64> = const { Cell::new(1) };
 
-    /// One-time guard for the `Ipe.Js` port inbound seam. The seam is a single
+    /// One-time guard for the `Ipe.Ffi.Js` port inbound seam. The seam is a single
     /// process-global `window.__ipePortSend` slot every mount instance shares
     /// (like the outbound `window.ipeOnReceive` handler); installing it once per
     /// tab avoids leaking a fresh closure on every embed.
@@ -231,7 +231,7 @@ fn next_instance_origin() -> String {
     })
 }
 
-/// Install the `Ipe.Js` port inbound seam once per tab.
+/// Install the `Ipe.Ffi.Js` port inbound seam once per tab.
 ///
 /// The page glue's `window.ipe.send(value)` funnels an inbound JSON string to
 /// `window.__ipePortSend`; this installs that slot as a closure that hands the
@@ -264,7 +264,7 @@ fn install_port_inbound_seam() {
         // A frozen `window` (rare, e.g. a hardened embed) leaves the seam
         // uninstalled; inbound port frames are then dropped rather than trapping.
         console_warn(
-            "Ipe.Js port inbound seam could not be installed (window.__ipePortSend unset)",
+            "Ipe.Ffi.Js port inbound seam could not be installed (window.__ipePortSend unset)",
         );
         return;
     }
@@ -396,7 +396,7 @@ where
     // The first paint went through `set_inner_html`, not the attribute-patch
     // path, so deliver each `Ui.widget`'s decoded down-state PROPERTY once here.
     widget::sync_widget_properties(&document, &app.tree.borrow());
-    // Wire the `Ipe.Js` port inbound seam before the first `resync` spawns any
+    // Wire the `Ipe.Ffi.Js` port inbound seam before the first `resync` spawns any
     // `Js.subscribe` drain, so no early page-JS frame is lost.
     install_port_inbound_seam();
     run_cmd(&app, cmd0);

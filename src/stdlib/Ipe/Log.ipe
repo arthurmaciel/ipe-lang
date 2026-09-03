@@ -19,47 +19,47 @@ module Ipe.Log exposing
     )
 
 
-import Ipe.Ffi as Ffi
+import Ipe.Ffi.Kernel as Kernel
 
 
 -- | Emit an info-severity log line.
 info : String -> Task Error ()
-info = Ffi.kernel "Log_info"
+info = Kernel.kernel "Log_info"
 
 
 -- | Emit a debug-severity log line.
 debug : String -> Task Error ()
-debug = Ffi.kernel "Log_debug"
+debug = Kernel.kernel "Log_debug"
 
 
 -- | Emit a warn-severity log line.
 warn : String -> Task Error ()
-warn = Ffi.kernel "Log_warn"
+warn = Kernel.kernel "Log_warn"
 
 
 -- | Emit an error-severity log line.
 error : String -> Task Error ()
-error = Ffi.kernel "Log_error"
+error = Kernel.kernel "Log_error"
 
 
 -- | Emit an info-severity log line with a list of typed context values.
 infoWith : String -> List a -> Task Error ()
-infoWith = Ffi.kernel "Log_infoWith"
+infoWith = Kernel.kernel "Log_infoWith"
 
 
 -- | Emit a debug-severity log line with a list of typed context values.
 debugWith : String -> List a -> Task Error ()
-debugWith = Ffi.kernel "Log_debugWith"
+debugWith = Kernel.kernel "Log_debugWith"
 
 
 -- | Emit a warn-severity log line with a list of typed context values.
 warnWith : String -> List a -> Task Error ()
-warnWith = Ffi.kernel "Log_warnWith"
+warnWith = Kernel.kernel "Log_warnWith"
 
 
 -- | Emit an error-severity log line with a list of typed context values.
 errorWith : String -> List a -> Task Error ()
-errorWith = Ffi.kernel "Log_errorWith"
+errorWith = Kernel.kernel "Log_errorWith"
 
 
 -- | Set the minimum log severity for the application.  Takes a `LogLevel`
@@ -70,4 +70,4 @@ errorWith = Ffi.kernel "Log_errorWith"
 --
 --     Web.appWith [ Log.level Level.warn ] { ... }
 level : LogLevel -> Setting a
-level = Ffi.kernel "Log_level"
+level = Kernel.kernel "Log_level"

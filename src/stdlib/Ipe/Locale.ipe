@@ -15,7 +15,7 @@ module Ipe.Locale exposing
     )
 
 
-import Ipe.Ffi as Ffi
+import Ipe.Ffi.Kernel as Kernel
 
 
 -- | An opaque, parse-validated BCP-47 locale.
@@ -32,9 +32,9 @@ type Locale = Locale
 --
 -- Valid examples: `"en"`, `"tr"`, `"en-US"`, `"zh-Hant-TW"`.
 fromTag : String -> Maybe Locale
-fromTag = Ffi.kernel "Locale_fromTag"
+fromTag = Kernel.kernel "Locale_fromTag"
 
 
 -- | `toTag locale` — recover the BCP-47 tag string from a `Locale`.
 toTag : Locale -> String
-toTag = Ffi.kernel "Locale_toTag"
+toTag = Kernel.kernel "Locale_toTag"

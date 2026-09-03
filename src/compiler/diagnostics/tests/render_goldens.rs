@@ -230,9 +230,9 @@ fn golden_name_import_cycle() -> Result<(), Box<dyn std::error::Error>> {
 fn golden_name_kernel_alias_in_user_source() -> Result<(), Box<dyn std::error::Error>> {
     // IPE-N0042: a user module tries to mint a kernel alias — FFI-adjacent name
     // diagnostic.
-    let source = "module Main exposing (main)\n\nmain =\n    Ffi.kernel \"Http_get\"\n";
+    let source = "module Main exposing (main)\n\nmain =\n    Kernel.kernel \"Http_get\"\n";
     let d = Diagnostic::Name {
-        span: Span::new(40, 61), // the `Ffi.kernel "Http_get"` call.
+        span: Span::new(40, 64), // the `Kernel.kernel "Http_get"` call.
         msg: NameError::KernelAliasInUserSource {
             alias: "Http_get".into(),
         },

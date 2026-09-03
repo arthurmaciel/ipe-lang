@@ -5,7 +5,7 @@
 --
 --   1. **Entropy-backed Task** — `int` / `float` / `range` / `choice` /
 --      `shuffle` / `weighted` consume entropy from the OS RNG and so
---      return `Task Error _`.  Each is a point-free `Ffi.kernel "Random_*"`
+--      return `Task Error _`.  Each is a point-free `Kernel.kernel "Random_*"`
 --      alias routed to its native kernel; `range` is pure Ipê over `int`.
 --
 --   2. **Seeded deterministic** — `seed` / `seededInt` / `seededFloat` /
@@ -28,19 +28,19 @@ module Ipe.Random exposing
     )
 
 
-import Ipe.Ffi as Ffi
+import Ipe.Ffi.Kernel as Kernel
 import Ipe.Error exposing (Error)
 import Ipe.Maybe exposing (Maybe(..))
 
 
 -- | Uniform random integer in `[lo, hi]` inclusive on BOTH ends.
 int : Int -> Int -> Task Error Int
-int = Ffi.kernel "Random_int"
+int = Kernel.kernel "Random_int"
 
 
 -- | Uniform random float in `[lo, hi)` (lo inclusive, hi exclusive).
 float : Float -> Float -> Task Error Float
-float = Ffi.kernel "Random_float"
+float = Kernel.kernel "Random_float"
 
 
 -- | Alias for `int` with a more obvious name when used in pipelines.
@@ -57,7 +57,7 @@ range lo hi =
 -- `Nothing` only when the list is empty (Ipê's failure-as-Maybe
 -- convention for total functions).
 choice : List a -> Task Error (Maybe a)
-choice = Ffi.kernel "Random_choiceMaybe"
+choice = Kernel.kernel "Random_choiceMaybe"
 
 
 -- Internal: entropy-backed choice returning the element directly (Task Error a).
@@ -65,13 +65,13 @@ choice = Ffi.kernel "Random_choiceMaybe"
 -- polymorphic access; `choiceRaw` is the String-typed partial variant used
 -- internally for backends that require a non-Maybe return.
 choiceRaw : List String -> Task Error String
-choiceRaw = Ffi.kernel "Random_choice"
+choiceRaw = Kernel.kernel "Random_choice"
 
 
 -- | Fisher-Yates shuffle.  Returns a new list with the same
 -- elements in pseudo-random order; the input is not mutated.
 shuffle : List a -> Task Error (List a)
-shuffle = Ffi.kernel "Random_shuffle"
+shuffle = Kernel.kernel "Random_shuffle"
 
 
 -- | Weighted random pick.  Each tuple is `(weight, value)`.  Weights
@@ -79,7 +79,7 @@ shuffle = Ffi.kernel "Random_shuffle"
 -- are skipped.  Returns `Nothing` only when every weight is <= 0 or
 -- the list is empty.
 weighted : List ( Float, a ) -> Task Error (Maybe a)
-weighted = Ffi.kernel "Random_weighted"
+weighted = Kernel.kernel "Random_weighted"
 
 
 -- Seeded (deterministic) variants
@@ -102,7 +102,7 @@ seed n =
 
 
 seededIntRaw : Int -> Int -> Int -> ( Int, Int )
-seededIntRaw = Ffi.kernel "Random_seededIntRaw"
+seededIntRaw = Kernel.kernel "Random_seededIntRaw"
 
 
 -- | `seededInt s lo hi` -- uniform integer in `[lo, hi]` inclusive,
@@ -119,7 +119,7 @@ seededInt s lo hi =
 
 
 seededFloatRaw : Int -> ( Float, Int )
-seededFloatRaw = Ffi.kernel "Random_seededFloatRaw"
+seededFloatRaw = Kernel.kernel "Random_seededFloatRaw"
 
 
 -- | `seededFloat s` -- uniform float in `[0, 1)`, returning the value
@@ -136,7 +136,7 @@ seededFloat s =
 
 
 seededChoiceRaw : Int -> List a -> ( Maybe a, Int )
-seededChoiceRaw = Ffi.kernel "Random_seededChoiceRaw"
+seededChoiceRaw = Kernel.kernel "Random_seededChoiceRaw"
 
 
 -- | `seededChoice s list` -- pick one element from a list, returning

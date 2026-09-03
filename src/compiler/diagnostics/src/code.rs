@@ -225,7 +225,7 @@ code! {
     IPE_N0026 = "IPE-N0026", "type name reserved for a built-in", "IPE-N0026";
     /// two imports register the same qualifier against different dep modules
     IPE_N0027 = "IPE-N0027", "duplicate import qualifier", "IPE-N0027";
-    /// an `Ffi.kernel "Name"` alias names a kernel that is not registered
+    /// an `Kernel.kernel "Name"` alias names a kernel that is not registered
     IPE_N0028 = "IPE-N0028", "unknown kernel alias", "IPE-N0028";
     /// A server-only kernel named from a `--target wasm` build.
     IPE_N0029 = "IPE-N0029", "server-only effect in a wasm build", "IPE-N0029";
@@ -262,11 +262,11 @@ code! {
     /// record value, or a field's type has no derivable leaf codec (a function, a
     /// `Secret`, a data-carrying ADT, an opaque handle) — rejected fail-closed
     IPE_N0041 = "IPE-N0041", "Ipe.Codec.auto cannot derive a codec for this type", "IPE-N0041";
-    /// a `Ffi.kernel "Name"` kernel-alias binding appears in user source — minting
+    /// a `Kernel.kernel "Name"` kernel-alias binding appears in user source — minting
     /// a kernel is reserved to the driver-vouched standard library / FFI interface,
     /// so user code cannot reach an unsafe kernel without a disclosing `.Unsafe`
     /// import (capability-model integrity, fail-closed)
-    IPE_N0042 = "IPE-N0042", "a kernel alias (Ffi.kernel) may not be minted in user source", "IPE-N0042";
+    IPE_N0042 = "IPE-N0042", "a kernel alias (Kernel.kernel) may not be minted in user source", "IPE-N0042";
     /// a top-level `config` binding (the app's cross-cutting `List (Setting
     /// shape)`) is declared but never threaded into an app entry — inert data
     /// the runtime never installs, so every setting it lists is silently dropped

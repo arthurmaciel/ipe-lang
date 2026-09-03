@@ -3,7 +3,7 @@
 -- Every fixed-key builder (`class` / `id` / `checked` / …) is ordinary Ipê over
 -- the three retained native primitives `attribute` / `boolAttribute` / `noAttr`,
 -- which are the irreducible `Attribute`-value constructors reached through
--- `Ffi.kernel` aliases (`html_named_attr_` / `html_bool_named_attr_` /
+-- `Kernel.kernel` aliases (`html_named_attr_` / `html_bool_named_attr_` /
 -- `html_no_attr_`). The attribute VALUE is escaped at the native render sink
 -- (`escape_attr`), so no escaping happens here; the fixed keys are literals.
 module Ipe.Html.Attributes exposing
@@ -16,7 +16,7 @@ module Ipe.Html.Attributes exposing
     )
 
 
-import Ipe.Ffi as Ffi
+import Ipe.Ffi.Kernel as Kernel
 import Ipe.String as String
 
 
@@ -24,7 +24,7 @@ import Ipe.String as String
 -- string-valued `Attribute` constructor every fixed-key string builder below
 -- specialises.
 attribute : String -> String -> Attribute msg
-attribute = Ffi.kernel "Attr_attribute"
+attribute = Kernel.kernel "Attr_attribute"
 
 
 -- | `boolAttribute key on` — a boolean HTML attribute. When `on` is `True`,
@@ -32,13 +32,13 @@ attribute = Ffi.kernel "Attr_attribute"
 -- The one bool-valued `Attribute` constructor every fixed-key bool builder
 -- below specialises.
 boolAttribute : String -> Bool -> Attribute msg
-boolAttribute = Ffi.kernel "Attr_boolAttribute"
+boolAttribute = Kernel.kernel "Attr_boolAttribute"
 
 
 -- | `noAttr` — the identity attribute (renders nothing). Makes "no attribute" a
 -- first-class value rather than a `Maybe`/sentinel.
 noAttr : Attribute msg
-noAttr = Ffi.kernel "Attr_noAttr"
+noAttr = Kernel.kernel "Attr_noAttr"
 
 
 -- ── String fixed-key attributes ──────────────────────────────────────────────

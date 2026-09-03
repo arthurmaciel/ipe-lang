@@ -6,7 +6,7 @@
 -- (a tag-fixed `Element`). Those two, plus every other member (`layout` /
 -- `spacing` / `button` / `link` / `image` / the `on*` events / the
 -- security-gated `mediaQuery` / `breakpoint` / `onPseudo` / the `desc*` roles /
--- …), are point-free `Ffi.kernel "Ui_*"` aliases resolving to their unchanged
+-- …), are point-free `Kernel.kernel "Ui_*"` aliases resolving to their unchanged
 -- native kernels, so each bespoke emit arm is preserved. The `Ipe.Ui.*`
 -- sub-modules (Background / Border / Font / Region / Input / Lazy / Keyed) are
 -- separate native qualifiers, untouched here.
@@ -50,7 +50,7 @@ module Ipe.Ui exposing
     )
 
 
-import Ipe.Ffi as Ffi
+import Ipe.Ffi.Kernel as Kernel
 import Ipe.Ui.ImageSrc as ImageSrc exposing (ImageSrc)
 
 
@@ -61,22 +61,22 @@ import Ipe.Ui.ImageSrc as ImageSrc exposing (ImageSrc)
 -- | `node desc attrs children` — a container `Element` carrying a role
 -- `Description`, attributes, and children verbatim.
 node : Description -> List (Attribute msg) -> List (Element msg) -> Element msg
-node = Ffi.kernel "Ui_node"
+node = Kernel.kernel "Ui_node"
 
 
 -- | `taggedNode tag desc attrs children` — a tag-fixed `Element`.
 taggedNode : String -> Description -> List (Attribute msg) -> List (Element msg) -> Element msg
-taggedNode = Ffi.kernel "Ui_taggedNode"
+taggedNode = Kernel.kernel "Ui_taggedNode"
 
 
 -- Module-local `Description` producers backing the sugar below (NOT exposed).
 
 descNone : Description
-descNone = Ffi.kernel "Ui_descNone"
+descNone = Kernel.kernel "Ui_descNone"
 
 
 descParagraph : Description
-descParagraph = Ffi.kernel "Ui_descParagraph"
+descParagraph = Kernel.kernel "Ui_descParagraph"
 
 
 -- ── Retained native surface ──────────────────────────────────────────────────
@@ -85,33 +85,33 @@ descParagraph = Ffi.kernel "Ui_descParagraph"
 
 -- | `layout attrs element` — render a root `Element` to `Html`.
 layout : List (Attribute msg) -> Element msg -> Html msg
-layout = Ffi.kernel "Ui_layout"
+layout = Kernel.kernel "Ui_layout"
 
 
 -- | `layoutWith { wrapperAttrs, rootAttrs } element` — `layout` with explicit
 -- wrapper + root attribute sets.
 layoutWith : { wrapperAttrs : List (Attribute msg), rootAttrs : List (Attribute msg) } -> Element msg -> Html msg
-layoutWith = Ffi.kernel "Ui_layoutWith"
+layoutWith = Kernel.kernel "Ui_layoutWith"
 
 
 -- | `none` — the empty `Element`.
 none : Element msg
-none = Ffi.kernel "Ui_none"
+none = Kernel.kernel "Ui_none"
 
 
 -- | `text s` — a text `Element`.
 text : String -> Element msg
-text = Ffi.kernel "Ui_text"
+text = Kernel.kernel "Ui_text"
 
 
 -- | `html h` — embed raw `Html` inside a `Ui` view.
 html : Html msg -> Element msg
-html = Ffi.kernel "Ui_html"
+html = Kernel.kernel "Ui_html"
 
 
 -- | `cells grid` — a raw terminal cell grid (one inner list per row).
 cells : List (List Char) -> Element msg
-cells = Ffi.kernel "Ui_cells"
+cells = Kernel.kernel "Ui_cells"
 
 
 -- | `widget handle state onEvent` — place a typed JS custom-element widget.
@@ -121,22 +121,22 @@ cells = Ffi.kernel "Ui_cells"
 -- binding whose type mentions `CustomElement` is refused fail-closed at emission
 -- (IPE-L0133) until it lands.
 widget : CustomElement down up -> down -> (up -> msg) -> Element msg
-widget = Ffi.kernel "Ui_widget"
+widget = Kernel.kernel "Ui_widget"
 
 
 -- | `button attrs { onPress, label }` — a `<button>` with an optional press msg.
 button : List (Attribute msg) -> { onPress : Maybe msg, label : Element msg } -> Element msg
-button = Ffi.kernel "Ui_button"
+button = Kernel.kernel "Ui_button"
 
 
 -- | `link attrs { url, label }` — an `<a href=…>` link.
 link : List (Attribute msg) -> { url : String, label : Element msg } -> Element msg
-link = Ffi.kernel "Ui_link"
+link = Kernel.kernel "Ui_link"
 
 
 -- | Private kernel: takes a raw `String` src for the `<img src=…>` attribute.
 imageKernel : List (Attribute msg) -> { src : String, description : String } -> Element msg
-imageKernel = Ffi.kernel "Ui_image"
+imageKernel = Kernel.kernel "Ui_image"
 
 
 -- | `image attrs { src, description }` — an `<img src=… alt=…>`.  `src` is a
@@ -150,363 +150,363 @@ image attrs rec =
 -- ── Attribute builders. ──
 
 spacing : Int -> Attribute msg
-spacing = Ffi.kernel "Ui_spacing"
+spacing = Kernel.kernel "Ui_spacing"
 
 
 padding : Int -> Attribute msg
-padding = Ffi.kernel "Ui_padding"
+padding = Kernel.kernel "Ui_padding"
 
 
 paddingXY : Int -> Int -> Attribute msg
-paddingXY = Ffi.kernel "Ui_paddingXY"
+paddingXY = Kernel.kernel "Ui_paddingXY"
 
 
 paddingEach : { top : Int, right : Int, bottom : Int, left : Int } -> Attribute msg
-paddingEach = Ffi.kernel "Ui_paddingEach"
+paddingEach = Kernel.kernel "Ui_paddingEach"
 
 
 width : Length -> Attribute msg
-width = Ffi.kernel "Ui_width"
+width = Kernel.kernel "Ui_width"
 
 
 height : Length -> Attribute msg
-height = Ffi.kernel "Ui_height"
+height = Kernel.kernel "Ui_height"
 
 
 centerX : Attribute msg
-centerX = Ffi.kernel "Ui_centerX"
+centerX = Kernel.kernel "Ui_centerX"
 
 
 centerY : Attribute msg
-centerY = Ffi.kernel "Ui_centerY"
+centerY = Kernel.kernel "Ui_centerY"
 
 
 alignLeft : Attribute msg
-alignLeft = Ffi.kernel "Ui_alignLeft"
+alignLeft = Kernel.kernel "Ui_alignLeft"
 
 
 alignRight : Attribute msg
-alignRight = Ffi.kernel "Ui_alignRight"
+alignRight = Kernel.kernel "Ui_alignRight"
 
 
 alignTop : Attribute msg
-alignTop = Ffi.kernel "Ui_alignTop"
+alignTop = Kernel.kernel "Ui_alignTop"
 
 
 alignBottom : Attribute msg
-alignBottom = Ffi.kernel "Ui_alignBottom"
+alignBottom = Kernel.kernel "Ui_alignBottom"
 
 
 pointer : Attribute msg
-pointer = Ffi.kernel "Ui_pointer"
+pointer = Kernel.kernel "Ui_pointer"
 
 
 clip : Attribute msg
-clip = Ffi.kernel "Ui_clip"
+clip = Kernel.kernel "Ui_clip"
 
 
 clipX : Attribute msg
-clipX = Ffi.kernel "Ui_clipX"
+clipX = Kernel.kernel "Ui_clipX"
 
 
 clipY : Attribute msg
-clipY = Ffi.kernel "Ui_clipY"
+clipY = Kernel.kernel "Ui_clipY"
 
 
 scrollbars : Attribute msg
-scrollbars = Ffi.kernel "Ui_scrollbars"
+scrollbars = Kernel.kernel "Ui_scrollbars"
 
 
 scrollbarX : Attribute msg
-scrollbarX = Ffi.kernel "Ui_scrollbarX"
+scrollbarX = Kernel.kernel "Ui_scrollbarX"
 
 
 scrollbarY : Attribute msg
-scrollbarY = Ffi.kernel "Ui_scrollbarY"
+scrollbarY = Kernel.kernel "Ui_scrollbarY"
 
 
 gridColumns : Int -> Attribute msg
-gridColumns = Ffi.kernel "Ui_gridColumns"
+gridColumns = Kernel.kernel "Ui_gridColumns"
 
 
 -- ── Nearby (absolute-positioned overlay) attributes. ──
 
 above : Element msg -> Attribute msg
-above = Ffi.kernel "Ui_above"
+above = Kernel.kernel "Ui_above"
 
 
 below : Element msg -> Attribute msg
-below = Ffi.kernel "Ui_below"
+below = Kernel.kernel "Ui_below"
 
 
 onLeft : Element msg -> Attribute msg
-onLeft = Ffi.kernel "Ui_onLeft"
+onLeft = Kernel.kernel "Ui_onLeft"
 
 
 onRight : Element msg -> Attribute msg
-onRight = Ffi.kernel "Ui_onRight"
+onRight = Kernel.kernel "Ui_onRight"
 
 
 inFront : Element msg -> Attribute msg
-inFront = Ffi.kernel "Ui_inFront"
+inFront = Kernel.kernel "Ui_inFront"
 
 
 behind : Element msg -> Attribute msg
-behind = Ffi.kernel "Ui_behind"
+behind = Kernel.kernel "Ui_behind"
 
 
 -- ── Event attributes. ──
 
 onClick : msg -> Attribute msg
-onClick = Ffi.kernel "Ui_onClick"
+onClick = Kernel.kernel "Ui_onClick"
 
 
 onSubmit : (a -> msg) -> Attribute msg
-onSubmit = Ffi.kernel "Ui_onSubmit"
+onSubmit = Kernel.kernel "Ui_onSubmit"
 
 
 onInput : (String -> msg) -> Attribute msg
-onInput = Ffi.kernel "Ui_onInput"
+onInput = Kernel.kernel "Ui_onInput"
 
 
 onChange : (String -> msg) -> Attribute msg
-onChange = Ffi.kernel "Ui_onChange"
+onChange = Kernel.kernel "Ui_onChange"
 
 
 onFocus : msg -> Attribute msg
-onFocus = Ffi.kernel "Ui_onFocus"
+onFocus = Kernel.kernel "Ui_onFocus"
 
 
 onBlur : msg -> Attribute msg
-onBlur = Ffi.kernel "Ui_onBlur"
+onBlur = Kernel.kernel "Ui_onBlur"
 
 
 onMouseOver : msg -> Attribute msg
-onMouseOver = Ffi.kernel "Ui_onMouseOver"
+onMouseOver = Kernel.kernel "Ui_onMouseOver"
 
 
 onMouseOut : msg -> Attribute msg
-onMouseOut = Ffi.kernel "Ui_onMouseOut"
+onMouseOut = Kernel.kernel "Ui_onMouseOut"
 
 
 onKeyDown : (String -> msg) -> Attribute msg
-onKeyDown = Ffi.kernel "Ui_onKeyDown"
+onKeyDown = Kernel.kernel "Ui_onKeyDown"
 
 
 onKeyUp : (String -> msg) -> Attribute msg
-onKeyUp = Ffi.kernel "Ui_onKeyUp"
+onKeyUp = Kernel.kernel "Ui_onKeyUp"
 
 
 onBool : (Bool -> msg) -> Attribute msg
-onBool = Ffi.kernel "Ui_onBool"
+onBool = Kernel.kernel "Ui_onBool"
 
 
 onFile : (String -> msg) -> Attribute msg
-onFile = Ffi.kernel "Ui_onFile"
+onFile = Kernel.kernel "Ui_onFile"
 
 
 -- ── Raw / responsive / pseudo-class attributes. ──
 
 htmlAttribute : String -> String -> Attribute msg
-htmlAttribute = Ffi.kernel "Ui_htmlAttribute"
+htmlAttribute = Kernel.kernel "Ui_htmlAttribute"
 
 
 mediaQuery : String -> List (Attribute msg) -> Element msg -> Element msg
-mediaQuery = Ffi.kernel "Ui_mediaQuery"
+mediaQuery = Kernel.kernel "Ui_mediaQuery"
 
 
 breakpoint : String -> List (Attribute msg) -> Element msg -> Element msg
-breakpoint = Ffi.kernel "Ui_breakpoint"
+breakpoint = Kernel.kernel "Ui_breakpoint"
 
 
 aspectRatio : Float -> Attribute msg
-aspectRatio = Ffi.kernel "Ui_aspectRatio"
+aspectRatio = Kernel.kernel "Ui_aspectRatio"
 
 
 aspectRatioWH : Int -> Int -> Attribute msg
-aspectRatioWH = Ffi.kernel "Ui_aspectRatioWH"
+aspectRatioWH = Kernel.kernel "Ui_aspectRatioWH"
 
 
 square : Attribute msg
-square = Ffi.kernel "Ui_square"
+square = Kernel.kernel "Ui_square"
 
 
 widescreen : Attribute msg
-widescreen = Ffi.kernel "Ui_widescreen"
+widescreen = Kernel.kernel "Ui_widescreen"
 
 
 cinemascope : Attribute msg
-cinemascope = Ffi.kernel "Ui_cinemascope"
+cinemascope = Kernel.kernel "Ui_cinemascope"
 
 
 name : String -> Attribute msg
-name = Ffi.kernel "Ui_name"
+name = Kernel.kernel "Ui_name"
 
 
 style : String -> String -> Attribute msg
-style = Ffi.kernel "Ui_style"
+style = Kernel.kernel "Ui_style"
 
 
 transition : String -> Bool -> Attribute msg
-transition = Ffi.kernel "Ui_transition"
+transition = Kernel.kernel "Ui_transition"
 
 
 gridTracks : String -> String -> Attribute msg
-gridTracks = Ffi.kernel "Ui_gridTracks"
+gridTracks = Kernel.kernel "Ui_gridTracks"
 
 
 animate : String -> String -> String -> Bool -> Attribute msg
-animate = Ffi.kernel "Ui_animate"
+animate = Kernel.kernel "Ui_animate"
 
 
 onPseudo : PseudoClass -> List (Attribute msg) -> Attribute msg
-onPseudo = Ffi.kernel "Ui_onPseudo"
+onPseudo = Kernel.kernel "Ui_onPseudo"
 
 
 hover : PseudoClass
-hover = Ffi.kernel "Ui_hover"
+hover = Kernel.kernel "Ui_hover"
 
 
 focus : PseudoClass
-focus = Ffi.kernel "Ui_focus"
+focus = Kernel.kernel "Ui_focus"
 
 
 focusVisible : PseudoClass
-focusVisible = Ffi.kernel "Ui_focusVisible"
+focusVisible = Kernel.kernel "Ui_focusVisible"
 
 
 active : PseudoClass
-active = Ffi.kernel "Ui_active"
+active = Kernel.kernel "Ui_active"
 
 
 disabled : PseudoClass
-disabled = Ffi.kernel "Ui_disabled"
+disabled = Kernel.kernel "Ui_disabled"
 
 
 mobile : String
-mobile = Ffi.kernel "Ui_mobile"
+mobile = Kernel.kernel "Ui_mobile"
 
 
 tablet : String
-tablet = Ffi.kernel "Ui_tablet"
+tablet = Kernel.kernel "Ui_tablet"
 
 
 desktop : String
-desktop = Ffi.kernel "Ui_desktop"
+desktop = Kernel.kernel "Ui_desktop"
 
 
 darkMode : String
-darkMode = Ffi.kernel "Ui_darkMode"
+darkMode = Kernel.kernel "Ui_darkMode"
 
 
 lightMode : String
-lightMode = Ffi.kernel "Ui_lightMode"
+lightMode = Kernel.kernel "Ui_lightMode"
 
 
 reducedMotion : String
-reducedMotion = Ffi.kernel "Ui_reducedMotion"
+reducedMotion = Kernel.kernel "Ui_reducedMotion"
 
 
 -- ── Length builders. ──
 
 px : Int -> Length
-px = Ffi.kernel "Ui_px"
+px = Kernel.kernel "Ui_px"
 
 
 fill : Length
-fill = Ffi.kernel "Ui_fill"
+fill = Kernel.kernel "Ui_fill"
 
 
 fillPortion : Int -> Length
-fillPortion = Ffi.kernel "Ui_fillPortion"
+fillPortion = Kernel.kernel "Ui_fillPortion"
 
 
 content : Length
-content = Ffi.kernel "Ui_content"
+content = Kernel.kernel "Ui_content"
 
 
 shrink : Length
-shrink = Ffi.kernel "Ui_shrink"
+shrink = Kernel.kernel "Ui_shrink"
 
 
 minimum : Int -> Length -> Length
-minimum = Ffi.kernel "Ui_minimum"
+minimum = Kernel.kernel "Ui_minimum"
 
 
 maximum : Int -> Length -> Length
-maximum = Ffi.kernel "Ui_maximum"
+maximum = Kernel.kernel "Ui_maximum"
 
 
 vh : Int -> Length
-vh = Ffi.kernel "Ui_vh"
+vh = Kernel.kernel "Ui_vh"
 
 
 vw : Int -> Length
-vw = Ffi.kernel "Ui_vw"
+vw = Kernel.kernel "Ui_vw"
 
 
 -- ── Colour builders. ──
 
 rgb : Int -> Int -> Int -> Color
-rgb = Ffi.kernel "Ui_rgb"
+rgb = Kernel.kernel "Ui_rgb"
 
 
 rgba : Int -> Int -> Int -> Float -> Color
-rgba = Ffi.kernel "Ui_rgba"
+rgba = Kernel.kernel "Ui_rgba"
 
 
 white : Color
-white = Ffi.kernel "Ui_white"
+white = Kernel.kernel "Ui_white"
 
 
 black : Color
-black = Ffi.kernel "Ui_black"
+black = Kernel.kernel "Ui_black"
 
 
 transparent : Color
-transparent = Ffi.kernel "Ui_transparent"
+transparent = Kernel.kernel "Ui_transparent"
 
 
 colorCss : Color -> String
-colorCss = Ffi.kernel "Ui_colorCss"
+colorCss = Kernel.kernel "Ui_colorCss"
 
 
 -- ── `describe` + `Description` role constructors. ──
 
 describe : Description -> Attribute msg
-describe = Ffi.kernel "Ui_describe"
+describe = Kernel.kernel "Ui_describe"
 
 
 descMain : Description
-descMain = Ffi.kernel "Ui_descMain"
+descMain = Kernel.kernel "Ui_descMain"
 
 
 descNavigation : Description
-descNavigation = Ffi.kernel "Ui_descNavigation"
+descNavigation = Kernel.kernel "Ui_descNavigation"
 
 
 descContentInfo : Description
-descContentInfo = Ffi.kernel "Ui_descContentInfo"
+descContentInfo = Kernel.kernel "Ui_descContentInfo"
 
 
 descComplementary : Description
-descComplementary = Ffi.kernel "Ui_descComplementary"
+descComplementary = Kernel.kernel "Ui_descComplementary"
 
 
 descLivePolite : Description
-descLivePolite = Ffi.kernel "Ui_descLivePolite"
+descLivePolite = Kernel.kernel "Ui_descLivePolite"
 
 
 descLiveAssertive : Description
-descLiveAssertive = Ffi.kernel "Ui_descLiveAssertive"
+descLiveAssertive = Kernel.kernel "Ui_descLiveAssertive"
 
 
 descHeading : Int -> Description
-descHeading = Ffi.kernel "Ui_descHeading"
+descHeading = Kernel.kernel "Ui_descHeading"
 
 
 descLabel : String -> Description
-descLabel = Ffi.kernel "Ui_descLabel"
+descLabel = Kernel.kernel "Ui_descLabel"
 
 
 -- ── Layout builders (pure Ipê sugar over `node` / `taggedNode`). ──

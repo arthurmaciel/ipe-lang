@@ -33,7 +33,7 @@
 
 -- The `Maybe` type and its `Just` / `Nothing` constructors are kernel-anchored
 -- so the type system and the runtime representation stay in lockstep; each
--- combinator below is a point-free `Ffi.kernel` alias to its registered
+-- combinator below is a point-free `Kernel.kernel` alias to its registered
 -- runtime implementation.
 module Ipe.Maybe exposing
     ( Maybe(..)
@@ -48,7 +48,7 @@ module Ipe.Maybe exposing
     )
 
 
-import Ipe.Ffi as Ffi
+import Ipe.Ffi.Kernel as Kernel
 
 
 {-| `withDefault fallback maybe` — the value inside a `Just`, or `fallback`
@@ -60,7 +60,7 @@ withDefault 0 Nothing --> 0
 ```
 -}
 withDefault : a -> Maybe a -> a
-withDefault = Ffi.kernel "Maybe_withDefault"
+withDefault = Kernel.kernel "Maybe_withDefault"
 
 
 {-| `map f maybe` — apply `f` to the value inside a `Just`, leaving `Nothing`
@@ -72,7 +72,7 @@ map (\n -> n + 1) Nothing --> Nothing
 ```
 -}
 map : (a -> b) -> Maybe a -> Maybe b
-map = Ffi.kernel "Maybe_map"
+map = Kernel.kernel "Maybe_map"
 
 
 {-| `andThen f maybe` — feed the value inside a `Just` to `f`; `Nothing` passes
@@ -85,7 +85,7 @@ andThen (\n -> if n > 0 then Just n else Nothing) Nothing --> Nothing
 ```
 -}
 andThen : (a -> Maybe b) -> Maybe a -> Maybe b
-andThen = Ffi.kernel "Maybe_andThen"
+andThen = Kernel.kernel "Maybe_andThen"
 
 
 {-| `map2 f ma mb` — combine two `Maybe` values with `f`; `Just` only when both
@@ -97,7 +97,7 @@ map2 (\a b -> a + b) (Just 2) Nothing --> Nothing
 ```
 -}
 map2 : (a -> b -> c) -> Maybe a -> Maybe b -> Maybe c
-map2 = Ffi.kernel "Maybe_map2"
+map2 = Kernel.kernel "Maybe_map2"
 
 
 {-| `map3 f ma mb mc` — combine three `Maybe` values with `f`; `Just` only when
@@ -109,7 +109,7 @@ map3 (\a b c -> a + b + c) (Just 1) Nothing (Just 3) --> Nothing
 ```
 -}
 map3 : (a -> b -> c -> d) -> Maybe a -> Maybe b -> Maybe c -> Maybe d
-map3 = Ffi.kernel "Maybe_map3"
+map3 = Kernel.kernel "Maybe_map3"
 
 
 {-| `map4 f ma mb mc md` — combine four `Maybe` values with `f`; `Just` only
@@ -121,7 +121,7 @@ map4 (\a b c d -> a + b + c + d) (Just 1) Nothing (Just 3) (Just 4) --> Nothing
 ```
 -}
 map4 : (a -> b -> c -> d -> e) -> Maybe a -> Maybe b -> Maybe c -> Maybe d -> Maybe e
-map4 = Ffi.kernel "Maybe_map4"
+map4 = Kernel.kernel "Maybe_map4"
 
 
 {-| `map5 f ma mb mc md me` — combine five `Maybe` values with `f`; `Just` only
@@ -133,7 +133,7 @@ map5 (\a b c d e -> a + b + c + d + e) (Just 1) Nothing (Just 3) (Just 4) (Just 
 ```
 -}
 map5 : (a -> b -> c -> d -> e -> f) -> Maybe a -> Maybe b -> Maybe c -> Maybe d -> Maybe e -> Maybe f
-map5 = Ffi.kernel "Maybe_map5"
+map5 = Kernel.kernel "Maybe_map5"
 
 
 {-| `andMap ma mfn` — apply the function inside `mfn` to the value inside `ma`;
@@ -145,7 +145,7 @@ andMap Nothing (Just (\n -> n + 1)) --> Nothing
 ```
 -}
 andMap : Maybe a -> Maybe (a -> b) -> Maybe b
-andMap = Ffi.kernel "Maybe_andMap"
+andMap = Kernel.kernel "Maybe_andMap"
 
 
 {-| `combine maybes` — turn a `List (Maybe a)` into a `Maybe (List a)`; `Nothing`
@@ -157,7 +157,7 @@ combine [ Just 1, Nothing, Just 3 ] --> Nothing
 ```
 -}
 combine : List (Maybe a) -> Maybe (List a)
-combine = Ffi.kernel "Maybe_combine"
+combine = Kernel.kernel "Maybe_combine"
 
 
 {-| `isJust maybe` — `True` when the `Maybe` holds a value.
@@ -168,7 +168,7 @@ isJust Nothing --> False
 ```
 -}
 isJust : Maybe a -> Bool
-isJust = Ffi.kernel "Maybe_isJust"
+isJust = Kernel.kernel "Maybe_isJust"
 
 
 {-| `isNothing maybe` — `True` when the `Maybe` is absent.
@@ -179,4 +179,4 @@ isNothing (Just 0) --> False
 ```
 -}
 isNothing : Maybe a -> Bool
-isNothing = Ffi.kernel "Maybe_isNothing"
+isNothing = Kernel.kernel "Maybe_isNothing"

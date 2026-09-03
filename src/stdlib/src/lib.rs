@@ -32,7 +32,7 @@ const RESULT: &str = include_str!("../Ipe/Result.ipe");
 /// Pure members (`map`/`filter`/`foldl`/… and the reverse-accumulator helpers)
 /// are implemented directly in Ipê.  The eleven kernel-backed members
 /// (`sort`/`singleton`/`repeat`/`product`/`intersperse`/`partition`/`unzip`/
-/// `map2`–`map5`) are point-free `Ffi.kernel "List_*"` aliases resolved by
+/// `map2`–`map5`) are point-free `Kernel.kernel "List_*"` aliases resolved by
 /// `ipe_canon::resolve::detect_kernel_alias` to the registered `List*`
 /// `StdlibKernel` variants (`ipe_runtime::list::*`).  Registered in
 /// [`COMPILED_STD_MODULES`] (NOT `MODULES`); NOT in `STDLIB_MODULE_QUALIFIERS`,
@@ -40,7 +40,7 @@ const RESULT: &str = include_str!("../Ipe/Result.ipe");
 const LIST: &str = include_str!("../Ipe/List.ipe");
 /// `Ipe.String` — string combinators, compiled-source Layer-3.
 ///
-/// Every member is a point-free `Ffi.kernel "String_*"` alias resolved by
+/// Every member is a point-free `Kernel.kernel "String_*"` alias resolved by
 /// `ipe_canon::resolve::detect_kernel_alias` to a registered `String*`
 /// `StdlibKernel` variant. Registered in [`COMPILED_STD_MODULES`] (NOT
 /// `MODULES`); NOT in `STDLIB_MODULE_QUALIFIERS`, so the disjointness invariant
@@ -49,7 +49,7 @@ const LIST: &str = include_str!("../Ipe/List.ipe");
 const STRING: &str = include_str!("../Ipe/String.ipe");
 /// `Ipe.Char` — single-character helpers, compiled-source Layer-3.
 ///
-/// Every member is a point-free `Ffi.kernel "Char_*"` alias resolved by
+/// Every member is a point-free `Kernel.kernel "Char_*"` alias resolved by
 /// `ipe_canon::resolve::detect_kernel_alias` to a registered `Char*`
 /// `StdlibKernel` variant (`ipe_runtime::char::*`). Registered in
 /// [`COMPILED_STD_MODULES`] (NOT `MODULES`); NOT in `STDLIB_MODULE_QUALIFIERS`,
@@ -57,7 +57,7 @@ const STRING: &str = include_str!("../Ipe/String.ipe");
 const CHAR: &str = include_str!("../Ipe/Char.ipe");
 /// `Ipe.Dict` — string-keyed associative map, compiled-source Layer-3.
 ///
-/// Every member is a point-free `Ffi.kernel "Dict_*"` alias resolved by
+/// Every member is a point-free `Kernel.kernel "Dict_*"` alias resolved by
 /// `ipe_canon::resolve::detect_kernel_alias` to a registered `Dict*`
 /// `StdlibKernel` variant. Registered in [`COMPILED_STD_MODULES`] (NOT
 /// `MODULES`); NOT in `STDLIB_MODULE_QUALIFIERS`, so the disjointness
@@ -65,7 +65,7 @@ const CHAR: &str = include_str!("../Ipe/Char.ipe");
 const DICT: &str = include_str!("../Ipe/Dict.ipe");
 /// `Ipe.Set` — unordered set of unique elements, compiled-source Layer-3.
 ///
-/// Every member is a point-free `Ffi.kernel "Set_*"` alias resolved by
+/// Every member is a point-free `Kernel.kernel "Set_*"` alias resolved by
 /// `ipe_canon::resolve::detect_kernel_alias` to a registered `Set*`
 /// `StdlibKernel` variant (`ipe_runtime::set::*`). Registered in
 /// [`COMPILED_STD_MODULES`] (NOT `MODULES`); NOT in `STDLIB_MODULE_QUALIFIERS`,
@@ -81,7 +81,7 @@ const BYTES: &str = include_str!("../Ipe/Bytes.ipe");
 const CRYPTO: &str = include_str!("../Ipe/Crypto.ipe");
 /// `Ipe.Bitwise` — Int-only bitwise operations, compiled-source Layer-3.
 ///
-/// Every member is a point-free `Ffi.kernel "Bitwise_*"` alias resolved by
+/// Every member is a point-free `Kernel.kernel "Bitwise_*"` alias resolved by
 /// `ipe_canon::resolve::detect_kernel_alias` to a registered `Bitwise*`
 /// `StdlibKernel` variant (`ipe_runtime::bitwise::*`). Registered in
 /// [`COMPILED_STD_MODULES`] (NOT `MODULES`); NOT in `STDLIB_MODULE_QUALIFIERS`,
@@ -89,7 +89,7 @@ const CRYPTO: &str = include_str!("../Ipe/Crypto.ipe");
 const BITWISE: &str = include_str!("../Ipe/Bitwise.ipe");
 /// `Ipe.Task` — Task combinator surface, compiled-source Layer-3.
 ///
-/// Members are either point-free `Ffi.kernel "Task_*"` aliases resolved by
+/// Members are either point-free `Kernel.kernel "Task_*"` aliases resolved by
 /// `ipe_canon::resolve::detect_kernel_alias` to registered `Task*`
 /// `StdlibKernel` variants (`ipe_runtime::task::*`), or pure Ipê over those
 /// aliases (`BackoffStrategy` type definition, `RetryPolicy` type alias).
@@ -98,7 +98,7 @@ const BITWISE: &str = include_str!("../Ipe/Bitwise.ipe");
 const TASK: &str = include_str!("../Ipe/Task.ipe");
 /// `Ipe.Io` — standard-I/O effect kernels, compiled-source Layer-3.
 ///
-/// Every member is a point-free `Ffi.kernel "Io_*"` alias resolved by
+/// Every member is a point-free `Kernel.kernel "Io_*"` alias resolved by
 /// `ipe_canon::resolve::detect_kernel_alias` to a registered `Io*`
 /// `StdlibKernel` variant (`ipe_runtime::io::*`). Registered in
 /// [`COMPILED_STD_MODULES`] (NOT `MODULES`); NOT in `STDLIB_MODULE_QUALIFIERS`,
@@ -106,7 +106,7 @@ const TASK: &str = include_str!("../Ipe/Task.ipe");
 const IO: &str = include_str!("../Ipe/Io.ipe");
 /// `Ipe.Debug` — development-only escape hatch, compiled-source Layer-3.
 ///
-/// Every member is a point-free `Ffi.kernel "Debug_*"` alias resolved by
+/// Every member is a point-free `Kernel.kernel "Debug_*"` alias resolved by
 /// `ipe_canon::resolve::detect_kernel_alias` to a registered `Debug*`
 /// `StdlibKernel` variant. Registered in [`COMPILED_STD_MODULES`] (NOT
 /// `MODULES`); NOT in `STDLIB_MODULE_QUALIFIERS`, so the disjointness
@@ -114,7 +114,7 @@ const IO: &str = include_str!("../Ipe/Io.ipe");
 const DEBUG: &str = include_str!("../Ipe/Debug.ipe");
 /// `Ipe.Uuid` — UUID generation and parsing, compiled-source Layer-3.
 ///
-/// `v4` and `v7` are point-free `Ffi.kernel "Uuid_v4"` / `"Uuid_v7"` aliases
+/// `v4` and `v7` are point-free `Kernel.kernel "Uuid_v4"` / `"Uuid_v7"` aliases
 /// resolved by `ipe_canon::resolve::detect_kernel_alias` to the registered
 /// `UuidV4` / `UuidV7` `StdlibKernel` variants (`ipe_runtime::uuid_kernel::*`).
 /// `parse` resolves to `UuidParse` likewise. Registered in
@@ -123,7 +123,7 @@ const DEBUG: &str = include_str!("../Ipe/Debug.ipe");
 const UUID: &str = include_str!("../Ipe/Uuid.ipe");
 /// `Ipe.Time` — clock + formatting + calendar helpers, compiled-source Layer-3.
 ///
-/// Every member is a point-free `Ffi.kernel "Time_*"` alias resolved by
+/// Every member is a point-free `Kernel.kernel "Time_*"` alias resolved by
 /// `ipe_canon::resolve::detect_kernel_alias` to a registered `Time*`
 /// `StdlibKernel` variant. Registered in [`COMPILED_STD_MODULES`] (NOT
 /// `MODULES`); NOT in `STDLIB_MODULE_QUALIFIERS`, so the disjointness
@@ -131,7 +131,7 @@ const UUID: &str = include_str!("../Ipe/Uuid.ipe");
 const TIME: &str = include_str!("../Ipe/Time.ipe");
 /// `Ipe.Decimal` — arbitrary-precision decimal arithmetic, compiled-source Layer-3.
 ///
-/// Every member is a point-free `Ffi.kernel "Decimal_*"` alias resolved by
+/// Every member is a point-free `Kernel.kernel "Decimal_*"` alias resolved by
 /// `ipe_canon::resolve::detect_kernel_alias` to a registered `Decimal*`
 /// `StdlibKernel` variant (`ipe_runtime::decimal::*`). Registered in
 /// [`COMPILED_STD_MODULES`] (NOT `MODULES`); NOT in `STDLIB_MODULE_QUALIFIERS`,
@@ -141,7 +141,7 @@ const DECIMAL: &str = include_str!("../Ipe/Decimal.ipe");
 const SYSTEM: &str = include_str!("../Ipe/System.ipe");
 /// `Ipe.Random` — entropy-backed and seeded randomness, compiled-source Layer-3.
 ///
-/// Every member is either a point-free `Ffi.kernel "Random_*"` alias resolved by
+/// Every member is either a point-free `Kernel.kernel "Random_*"` alias resolved by
 /// `ipe_canon::resolve::detect_kernel_alias` to a registered `Random*`
 /// `StdlibKernel` variant (`ipe_runtime::random::*`), or pure Ipê over those
 /// aliases (`range`, the seeded wrappers, the opaque `Seed` ADT). Registered in
@@ -150,7 +150,7 @@ const SYSTEM: &str = include_str!("../Ipe/System.ipe");
 const RANDOM: &str = include_str!("../Ipe/Random.ipe");
 /// `Ipe.Encoding` — text encoding helpers (base64 / URL / hex), compiled-source Layer-3.
 ///
-/// Every member is a point-free `Ffi.kernel "Encoding_*"` alias resolved by
+/// Every member is a point-free `Kernel.kernel "Encoding_*"` alias resolved by
 /// `ipe_canon::resolve::detect_kernel_alias` to a registered `Encoding*`
 /// `StdlibKernel` variant (`ipe_runtime::encoding::*`). Registered in
 /// [`COMPILED_STD_MODULES`] (NOT `MODULES`); NOT in `STDLIB_MODULE_QUALIFIERS`,
@@ -165,7 +165,7 @@ const PROCESS: &str = include_str!("../Ipe/Process.ipe");
 
 /// `Ipe.Path` — pure filesystem-path helpers, compiled-source Layer-3.
 ///
-/// The members are point-free `Ffi.kernel "Path_*"` aliases resolved by the
+/// The members are point-free `Kernel.kernel "Path_*"` aliases resolved by the
 /// kernel-alias mechanism (`ipe_canon::resolve::detect_kernel_alias`) to
 /// the pure `PathBase`/`PathDir`/`PathExt`/`PathIsAbsolute` `StdlibKernel`
 /// variants. Registered in [`COMPILED_STD_MODULES`] (NOT `MODULES`) so its body
@@ -176,7 +176,7 @@ const PATH: &str = include_str!("../Ipe/Path.ipe");
 ///
 /// Every fixed-key builder (`class`/`id`/`checked`/…) is pure Ipê over the
 /// three retained primitives `attribute`/`boolAttribute`/`noAttr`, which are
-/// point-free `Ffi.kernel "Attr_attribute"`/`"Attr_boolAttribute"`/`"Attr_noAttr"`
+/// point-free `Kernel.kernel "Attr_attribute"`/`"Attr_boolAttribute"`/`"Attr_noAttr"`
 /// aliases resolved by `ipe_canon::resolve::detect_kernel_alias` to the
 /// `HtmlAttribute`/`HtmlBoolAttribute`/`HtmlNoAttr` kernels (runtime:
 /// `ipe_runtime::html::html_named_attr_`/`html_bool_named_attr_`/`html_no_attr_`).
@@ -186,7 +186,7 @@ const HTML_ATTRIBUTES: &str = include_str!("../Ipe/Html/Attributes.ipe");
 /// `Ipe.Html.Unsafe` — the un-escaped raw-HTML escape hatch, compiled-source
 /// Layer-3.
 ///
-/// The single member `unsafeRaw` is a point-free `Ffi.kernel "Html_unsafeRaw"`
+/// The single member `unsafeRaw` is a point-free `Kernel.kernel "Html_unsafeRaw"`
 /// alias resolved by `ipe_canon::resolve::detect_kernel_alias` to the retained
 /// `HtmlRawNode` kernel (runtime: `ipe_runtime::ui::helpers::html_raw_node_`,
 /// the `HRaw` verbatim sink). Only the surface home moved here from `Ipe.Html`;
@@ -199,7 +199,7 @@ const HTML_UNSAFE: &str = include_str!("../Ipe/Html/Unsafe.ipe");
 /// `Ipe.Db.Unsafe` — the raw-SQL / untyped-column-read escape hatches for
 /// `Ipe.Db`, compiled-source Layer-3.
 ///
-/// Every member is a point-free `Ffi.kernel "Db_*"` / `"Sql_unsafeFragment"`
+/// Every member is a point-free `Kernel.kernel "Db_*"` / `"Sql_unsafeFragment"`
 /// alias resolved by `ipe_canon::resolve::detect_kernel_alias` to a retained
 /// kernel: `unsafeExecRaw`/`unsafeQuery`/`unsafeGet*` to the unchanged `Db*`
 /// kernels (runtime: `ipe_runtime::db::db_exec_raw`/`db_query_params`/
@@ -227,7 +227,7 @@ const DB_DSN: &str = include_str!("../Ipe/Db/Dsn.ipe");
 /// `Ipe.Secret.Unsafe` — the raw secret-reveal escape hatch for `Ipe.Secret`,
 /// compiled-source Layer-3.
 ///
-/// The single member `unsafeReveal` is a point-free `Ffi.kernel "Secret_reveal"`
+/// The single member `unsafeReveal` is a point-free `Kernel.kernel "Secret_reveal"`
 /// alias resolved by `ipe_canon::resolve::detect_kernel_alias` to the retained
 /// `SecretReveal` kernel (runtime: `ipe_runtime::secret::secret_reveal`, the
 /// single greppable un-parse). Only the surface home moved here from
@@ -241,7 +241,7 @@ const SECRET_UNSAFE: &str = include_str!("../Ipe/Secret/Unsafe.ipe");
 ///
 /// Every element builder (`div`/`nav`/`br`/…) is pure Ipê over two retained
 /// primitives — `node`/`voidNode` — which, with `text`/`doctype`/
-/// `titleNode`/`styleNode`, are point-free `Ffi.kernel "Html_*"` aliases
+/// `titleNode`/`styleNode`, are point-free `Kernel.kernel "Html_*"` aliases
 /// resolved by `ipe_canon::resolve::detect_kernel_alias` to the retained
 /// `HtmlNode`/`HtmlVoidNode`/… kernels (runtime: `ipe_runtime::ui::helpers::*`).
 /// The serialiser (`render`/`toString`/`escapeHtml`/`escapeAttr`/`attrToString`)
@@ -255,7 +255,7 @@ const HTML: &str = include_str!("../Ipe/Html.ipe");
 ///
 /// The layout builders (`el`/`row`/`column`/`wrappedRow`/`grid`/`paragraph`/
 /// `textColumn`/`form`/`input`) are pure Ipê over two retained primitives —
-/// `node`/`taggedNode` — point-free `Ffi.kernel "Ui_*"` aliases resolved by
+/// `node`/`taggedNode` — point-free `Kernel.kernel "Ui_*"` aliases resolved by
 /// `ipe_canon::resolve::detect_kernel_alias` to the retained `UiNode`/
 /// `UiTaggedNode` kernels (runtime: `ipe_runtime::ui::helpers::*`). Every other
 /// member (`layout`/`spacing`/`button`/`link`/`image`/the `on*` events/the
@@ -269,7 +269,7 @@ const HTML: &str = include_str!("../Ipe/Html.ipe");
 const UI: &str = include_str!("../Ipe/Ui.ipe");
 /// `Ipe.Regex` — RE2 regex helpers, compiled-source Layer-3.
 ///
-/// The members are point-free `Ffi.kernel "Regex_*"` aliases resolved by the
+/// The members are point-free `Kernel.kernel "Regex_*"` aliases resolved by the
 /// kernel-alias mechanism (`ipe_canon::resolve::detect_kernel_alias`) to
 /// the pure `RegexMatch`/`RegexFind`/… `StdlibKernel` variants. Registered in
 /// [`COMPILED_STD_MODULES`] (NOT `MODULES`) so its body is actually compiled;
@@ -277,7 +277,7 @@ const UI: &str = include_str!("../Ipe/Ui.ipe");
 const REGEX: &str = include_str!("../Ipe/Regex.ipe");
 /// `Ipe.Url` — typed, validated URLs, compiled-source Layer-3.
 ///
-/// The members are point-free `Ffi.kernel "Url_*"` aliases resolved by the
+/// The members are point-free `Kernel.kernel "Url_*"` aliases resolved by the
 /// kernel-alias mechanism (`ipe_canon::resolve::detect_kernel_alias`) to the
 /// pure `UrlFromString`/`UrlScheme`/… `StdlibKernel` variants (runtime:
 /// `ipe_runtime::url::*`). Registered in [`COMPILED_STD_MODULES`] (NOT
@@ -288,7 +288,7 @@ const URL: &str = include_str!("../Ipe/Url.ipe");
 /// `Ipe.Url.Parser` — typed routing patterns over a parsed `Url`,
 /// compiled-source Layer-3.
 ///
-/// Pure Ipê source; no `Ffi.kernel` calls and no stored function values. A
+/// Pure Ipê source; no `Kernel.kernel` calls and no stored function values. A
 /// `Pattern` is pure data (segment matchers plus query keys); `parse` matches it
 /// against the shipped `Ipe.Url` accessors (`path`/`query`) — splitting path
 /// segments and query pairs once over the already-parsed `Url`, no re-parse — and
@@ -300,7 +300,7 @@ const URL_PARSER: &str = include_str!("../Ipe/Url/Parser.ipe");
 /// `Ipe.Markdown` — markdown → `Ipe.Ui` Element renderer, compiled-source
 /// Layer-3.
 ///
-/// Pure Ipê source; no `Ffi.kernel` calls. The entire renderer (block
+/// Pure Ipê source; no `Kernel.kernel` calls. The entire renderer (block
 /// parser + inline span parser + `Ui.*` tree builder) is expressed in Ipê.
 /// Output routes exclusively through typed `Ipe.Ui` constructors so no raw
 /// HTML, scripts, or event handlers can reach the DOM — safe to feed
@@ -380,7 +380,7 @@ const PALETTE: &str = include_str!("../Ipe/Palette.ipe");
 
 /// `Ipe.Tuple` — pure pair helpers (elm/core `Tuple` parity).
 ///
-/// Pure Ipê source; no `Ffi.kernel` calls — every helper pattern-matches or
+/// Pure Ipê source; no `Kernel.kernel` calls — every helper pattern-matches or
 /// builds a 2-tuple.  Not in `STDLIB_MODULE_QUALIFIERS` so the disjointness
 /// invariant holds.
 const TUPLE: &str = include_str!("../Ipe/Tuple.ipe");
@@ -389,7 +389,7 @@ const TUPLE: &str = include_str!("../Ipe/Tuple.ipe");
 ///
 /// Pure Ipê source: defines AND pattern-matches its own `Parser` / `Problem` /
 /// `Step` / internal `State` / `Step_` data types, expressing every combinator
-/// over `Ipe.String` / `Ipe.Char` primitives with no `Ffi.kernel` calls. A
+/// over `Ipe.String` / `Ipe.Char` primitives with no `Kernel.kernel` calls. A
 /// `Parser a` wraps a `State -> Step_ a` function in a single-constructor union
 /// (a storable value carrier). Disjoint from `STDLIB_MODULE_QUALIFIERS` (no
 /// `"Parser"` entry there), so the invariant holds.
@@ -400,7 +400,7 @@ const PARSER: &str = include_str!("../Ipe/Parser.ipe");
 ///
 /// Pure Ipê source: defines the `Seed` union + a `Generator` type alias and
 /// builds every combinator over the seeded primitives it draws through
-/// `Ffi.kernel "Random_seededIntRaw"` / `"Random_seededFloatRaw"` (the pure
+/// `Kernel.kernel "Random_seededIntRaw"` / `"Random_seededFloatRaw"` (the pure
 /// `RandomSeededInt`/`RandomSeededFloat` kernels, `ipe_runtime::random::*`).
 /// The `Ipe.Random` KERNEL qualifier owns those primitives; this
 /// compiled-source module is the DISTINCT `Ipe.Random.Generator` path, so the
@@ -523,7 +523,7 @@ const STD_UI_CELLS: &str = include_str!("../Ipe/Ui/Cells.ipe");
 /// Pure Ipê source: defines the `Codec a` nominal union (an encoder plus a
 /// decode-runner, both stored on the clonable shared-function carrier) and the
 /// `map` bijection over the existing `Ipe.Json.Encode` / `Ipe.Json.Decode`
-/// kernels — no new kernel, no `Ffi.kernel` call. The decode side is stored as
+/// kernels — no new kernel, no `Kernel.kernel` call. The decode side is stored as
 /// `String -> Result Error a` (a runner) rather than a bare `Decoder a` because
 /// the runtime JSON decoder is a single-shot non-clonable carrier that cannot be
 /// held in a reusable value. Not in `STDLIB_MODULE_QUALIFIERS` so the
@@ -561,7 +561,7 @@ const STD_ANALYTICS: &str = include_str!("../Ipe/Analytics.ipe");
 ///
 /// Pure Ipê source: defines the `Store` / `ColType` / `ColumnSpec`
 /// ADTs and pattern-matches them, driving reads and writes through the audited
-/// `Ipe.Db` / `Ipe.Db.Sql` kernel surface — no new kernel, no `Ffi.kernel` call.
+/// `Ipe.Db` / `Ipe.Db.Sql` kernel surface — no new kernel, no `Kernel.kernel` call.
 /// Injection-safe by construction: `validSqlIdent` is the only gate through which
 /// a table/column identifier reaches SQL (mirroring the `valid_sql_ident` kernel
 /// gate), and every value binds as a `SqlValue`/`SqlField` parameter through
@@ -594,7 +594,7 @@ const STD_MONEY: &str = include_str!("../Ipe/Money.ipe");
 /// `Ipe.WebSocket` — outbound WebSocket client (compiled source).
 ///
 /// Defines 3 ADTs (`WebSocket`, `WebSocketMessage`, `CloseCode`) and routes its
-/// I/O through `Ffi.kernel "WebSocket_*"` / `"Sub_subscribeWebSocket"` aliases.
+/// I/O through `Kernel.kernel "WebSocket_*"` / `"Sub_subscribeWebSocket"` aliases.
 /// RESOLVES (ipe-0 AND cargo-0): the six Task-tier `WebSocket_*` kernels plus
 /// `Sub_subscribeWebSocket` are registered (`ipe_runtime::ws_client::*`). The
 /// Sub-tier kernel is `any`-typed; the backend peephole splits it on the literal
@@ -602,26 +602,26 @@ const STD_MONEY: &str = include_str!("../Ipe/Money.ipe");
 /// `WebSocketCfg` record folds to the runtime `WsClientCfg` struct (mirrors the
 /// `CacheCfg` fold). The `ws_client` runtime module + `tokio-tungstenite` dep are
 /// gated behind the `websocket_client` feature the backend adds via
-/// `uses_websocket`. Resolved via the `Ffi.kernel` alias fast-path, so the
+/// `uses_websocket`. Resolved via the `Kernel.kernel` alias fast-path, so the
 /// `WebSocket` qualifier stays out of `STDLIB_MODULE_QUALIFIERS`.
 const IPE_CORE_WEBSOCKET: &str = include_str!("../Ipe/WebSocket.ipe");
 
-/// `Ipe.Js` — the raw typed transport across the Ipê↔JS seam, ports (compiled
+/// `Ipe.Ffi.Js` — the raw typed transport across the Ipê↔JS seam, ports (compiled
 /// source).
 ///
 /// Exposes `send : a -> Cmd msg` (outbound) and
 /// `subscribe : Decoder a -> (a -> msg) -> Sub msg` (inbound), routed through the
-/// `Ffi.kernel "Js_send"` / `"Js_subscribe"` aliases to the registered `JsSend` /
+/// `Kernel.kernel "Js_send"` / `"Js_subscribe"` aliases to the registered `JsSend` /
 /// `JsSubscribe` kernels. The crossing value is seal-checked fail-closed on its
 /// CONCRETE type (IPE-N0039, the same predicate the `CustomElement down up`
 /// boundary uses), so a `Secret`/reserved-sink payload and a `Decoder Value`
 /// subscription are both rejected at compile time — the untyped channel cannot be
 /// spelled. Reachable use discloses the `js-port` capability. Resolved via the
-/// `Ffi.kernel` alias fast-path, so the `Js` qualifier stays out of
+/// `Kernel.kernel` alias fast-path, so the `Js` qualifier stays out of
 /// `STDLIB_MODULE_QUALIFIERS`.
-const IPE_CORE_JS: &str = include_str!("../Ipe/Js.ipe");
+const IPE_CORE_JS: &str = include_str!("../Ipe/Ffi/Js.ipe");
 
-/// `Ipe.Browser.Clipboard` — write text to the system clipboard over `Ipe.Js`
+/// `Ipe.Browser.Clipboard` — write text to the system clipboard over `Ipe.Ffi.Js`
 /// ports (compiled source).
 ///
 /// The thin first-party proof of the per-capability web mechanism: importing this
@@ -635,14 +635,14 @@ const IPE_CORE_JS: &str = include_str!("../Ipe/Js.ipe");
 const IPE_BROWSER_CLIPBOARD: &str = include_str!("../Ipe/Browser/Clipboard.ipe");
 
 /// `Ipe.Browser.Clipboard.Internals` — the low-level clipboard port surface: the
-/// closed outbound/inbound ADTs and the raw `Ipe.Js` wiring behind the high-level
+/// closed outbound/inbound ADTs and the raw `Ipe.Ffi.Js` wiring behind the high-level
 /// `write` / `read`. Importing it discloses the same `js-port:clipboard` axis (the
 /// prefix key covers the submodule). Registered in [`COMPILED_STD_MODULES`] (NOT
 /// `MODULES`); NOT in `STDLIB_MODULE_QUALIFIERS`.
 const IPE_BROWSER_CLIPBOARD_INTERNALS: &str =
     include_str!("../Ipe/Browser/Clipboard/Internals.ipe");
 
-/// `Ipe.Browser.Geolocation` — read the device location over `Ipe.Js` ports
+/// `Ipe.Browser.Geolocation` — read the device location over `Ipe.Ffi.Js` ports
 /// (compiled source), spanning BOTH port directions: an outbound `JsCmd` request
 /// (`current` one-shot / `watch` continuous) and an inbound `JsMsg` reply folded
 /// exhaustively into `Result Error Coords`. Importing it discloses
@@ -656,7 +656,7 @@ const IPE_BROWSER_GEOLOCATION: &str = include_str!("../Ipe/Browser/Geolocation.i
 
 /// `Ipe.Browser.Geolocation.Internals` — the low-level geolocation port surface:
 /// the closed outbound/inbound ADTs, the full `Options` knob set, and the raw
-/// `Ipe.Js` wiring the high-level layer wraps. Importing it discloses the same
+/// `Ipe.Ffi.Js` wiring the high-level layer wraps. Importing it discloses the same
 /// `js-port:geolocation` axis (the prefix key covers the submodule), so the full
 /// option surface cannot be reached undisclosed. Registered in
 /// [`COMPILED_STD_MODULES`] (NOT `MODULES`); NOT in `STDLIB_MODULE_QUALIFIERS`.
@@ -666,11 +666,11 @@ const IPE_BROWSER_GEOLOCATION_INTERNALS: &str =
 /// `Ipe.Env` — build-time-embedded public config (compiled source).
 ///
 /// Defines `public : String -> Maybe String`, routed through the
-/// `Ffi.kernel "Env_public"` alias to the registered `EnvPublic` kernel. The
+/// `Kernel.kernel "Env_public"` alias to the registered `EnvPublic` kernel. The
 /// generated `env_public.rs` (per-project, keyed on `package.ipe`'s `[wasm]
 /// publicEnv` allowlist) is what actually backs it — see
 /// `ipe_backend_rust::project::render_env_public_rs`. Resolved via the
-/// `Ffi.kernel` alias fast-path, so the `Env` qualifier stays out of
+/// `Kernel.kernel` alias fast-path, so the `Env` qualifier stays out of
 /// `STDLIB_MODULE_QUALIFIERS`.
 const IPE_CORE_ENV: &str = include_str!("../Ipe/Env.ipe");
 
@@ -725,13 +725,13 @@ const STD_EMAIL: &str = include_str!("../Ipe/Email.ipe");
 
 /// `Ipe.Web.Console` — typed console identity + builder helpers (compiled source).
 ///
-/// Pure Ipê; no Ffi.kernel calls.
+/// Pure Ipê; no Kernel.kernel calls.
 /// Not in `STDLIB_MODULE_QUALIFIERS` so disjointness invariant holds.
 const STD_LIVE_CONSOLE: &str = include_str!("../Ipe/Web/Console.ipe");
 
 /// `Ipe.PubSub` — Task-shaped publish, callable from any context (compiled source).
 ///
-/// Routes through `Ffi.kernel "PubSub_publish"` / `"PubSub_publishNoEcho"`.
+/// Routes through `Kernel.kernel "PubSub_publish"` / `"PubSub_publishNoEcho"`.
 /// RESOLVES (ipe-0 AND cargo-0): `PubSubPublish`/`PubSubPublishNoEcho` have a
 /// type scheme (`String -> a -> Task Error Int`) and a dedicated emit arm
 /// (`pubsub_publish::<_, IpeError>(topic, payload)`).  A member use exits ipe-0
@@ -749,7 +749,7 @@ const STD_TRACE: &str = include_str!("../Ipe/Trace.ipe");
 
 /// `Ipe.Locale` — opaque BCP-47 locale handle + locale-aware case mapping.
 ///
-/// `Locale.fromTag`/`Locale.toTag` route through `Ffi.kernel "Locale_*"` aliases
+/// `Locale.fromTag`/`Locale.toTag` route through `Kernel.kernel "Locale_*"` aliases
 /// resolved by the kernel-alias mechanism to the registered
 /// `LocaleFromTag`/`LocaleToTag` `StdlibKernel` variants
 /// (`ipe_runtime::locale::*`).  `String.toUpperIn`/`toLowerIn` route to the
@@ -762,7 +762,7 @@ const LOCALE: &str = include_str!("../Ipe/Locale.ipe");
 
 /// `Ipe.Math` — numeric helpers, compiled-source Layer-3.
 ///
-/// Every member is a point-free `Ffi.kernel "Math_*"` alias resolved by
+/// Every member is a point-free `Kernel.kernel "Math_*"` alias resolved by
 /// `ipe_canon::resolve::detect_kernel_alias` to a registered `Math*`
 /// `StdlibKernel` variant (`ipe_runtime::math::*`). Registered in
 /// [`COMPILED_STD_MODULES`] (NOT `MODULES`); NOT in `STDLIB_MODULE_QUALIFIERS`,
@@ -774,7 +774,7 @@ const ERROR: &str = include_str!("../Ipe/Error.ipe");
 
 /// `Ipe.Ui.Events` — pure Ipê re-exports of `Ipe.Ui` event helpers (compiled source).
 ///
-/// Pure Ipê; no Ffi.kernel calls.  RESOLVES (ipe-0 AND cargo-0): the
+/// Pure Ipê; no Kernel.kernel calls.  RESOLVES (ipe-0 AND cargo-0): the
 /// `onSubmit`/`onInput` re-exports are typed to the Rust kernels'
 /// function-arg schemes (`(a -> msg) -> Attribute msg` /
 /// `(String -> msg) -> Attribute msg`) — sanctioned divergence §B-UiEventsFnArg.
@@ -786,7 +786,7 @@ const STD_UI_EVENTS: &str = include_str!("../Ipe/Ui/Events.ipe");
 /// Pure Ipê: defines `type Port = Port Int` and pattern-matches it in `toInt`;
 /// the constructor is unexported, so `fromInt` (the `1..65535` parse boundary,
 /// building its `Err` through `Ipe.Error.invalidInput`) is the only way in.
-/// No `Ffi.kernel` call. Not in `STDLIB_MODULE_QUALIFIERS`, so the disjointness
+/// No `Kernel.kernel` call. Not in `STDLIB_MODULE_QUALIFIERS`, so the disjointness
 /// invariant holds.
 const STD_NET: &str = include_str!("../Ipe/Net.ipe");
 
@@ -795,7 +795,7 @@ const STD_NET: &str = include_str!("../Ipe/Net.ipe");
 /// Pure Ipê: defines `type Duration = Duration Int` (whole milliseconds) and
 /// pattern-matches it in `toMillis`; the constructor is unexported, so the
 /// unit-named constructors (`millis`/`seconds`/`minutes`, each clamping a
-/// negative to zero) are the only way in. No `Ffi.kernel` call. Not in
+/// negative to zero) are the only way in. No `Kernel.kernel` call. Not in
 /// `STDLIB_MODULE_QUALIFIERS`, so the disjointness invariant holds.
 const STD_DURATION: &str = include_str!("../Ipe/Duration.ipe");
 
@@ -816,7 +816,7 @@ const STD_TIME_TIMESTAMP: &str = include_str!("../Ipe/Time/Timestamp.ipe");
 /// Pure Ipê: defines `type ByteSize = ByteSize Int` (bytes) and pattern-matches
 /// it in `toBytes`; the constructor is unexported, so the unit-named
 /// constructors (`bytes`/`kib`/`mib`, each clamping a negative to zero) are the
-/// only way in. No `Ffi.kernel` call. Not in `STDLIB_MODULE_QUALIFIERS`, so the
+/// only way in. No `Kernel.kernel` call. Not in `STDLIB_MODULE_QUALIFIERS`, so the
 /// disjointness invariant holds.
 const STD_BYTESIZE: &str = include_str!("../Ipe/ByteSize.ipe");
 
@@ -838,7 +838,7 @@ const STD_UI_IMAGE_SRC: &str = include_str!("../Ipe/Ui/ImageSrc.ipe");
 /// the four classifiers `isSuccess` / `isRedirect` / `isClientError` /
 /// `isServerError`.  `Ipe.Http.statusCode` wraps `HttpResponse.status` into
 /// this type at the API boundary — no runtime struct change required.  No
-/// `Ffi.kernel` call.  Not in `STDLIB_MODULE_QUALIFIERS`, so the disjointness
+/// `Kernel.kernel` call.  Not in `STDLIB_MODULE_QUALIFIERS`, so the disjointness
 /// invariant holds.
 const STD_HTTP_STATUS_CODE: &str = include_str!("../Ipe/Http/StatusCode.ipe");
 
@@ -881,7 +881,7 @@ pub const COMPILED_STD_MODULES: &[CompiledStdModule] = &[
         source: PARSER,
     },
     // Ipe.Bitwise — Layer-3 source; every member is a point-free
-    // `Ffi.kernel "Bitwise_*"` alias resolved by `detect_kernel_alias` to the
+    // `Kernel.kernel "Bitwise_*"` alias resolved by `detect_kernel_alias` to the
     // registered `Bitwise*` kernels (`ipe_runtime::bitwise::*`). Disjoint from
     // `STDLIB_MODULE_QUALIFIERS` (no `"Bitwise"` entry there).
     CompiledStdModule {
@@ -889,7 +889,7 @@ pub const COMPILED_STD_MODULES: &[CompiledStdModule] = &[
         source: BITWISE,
     },
     // Ipe.String — Layer-3 source; every member is a point-free
-    // `Ffi.kernel "String_*"` alias resolved by `detect_kernel_alias` to the
+    // `Kernel.kernel "String_*"` alias resolved by `detect_kernel_alias` to the
     // registered `String*` kernels. Also re-exports the `String` builtin type
     // via the reserved-builtin-type path in `build_module_exports`. Disjoint
     // from `STDLIB_MODULE_QUALIFIERS` (no `"String"` entry there).
@@ -898,7 +898,7 @@ pub const COMPILED_STD_MODULES: &[CompiledStdModule] = &[
         source: STRING,
     },
     // Ipe.Encoding — Layer-3 source; every member is a point-free
-    // `Ffi.kernel "Encoding_*"` alias resolved by `detect_kernel_alias` to the
+    // `Kernel.kernel "Encoding_*"` alias resolved by `detect_kernel_alias` to the
     // registered `Encoding*` kernels (`ipe_runtime::encoding::*`). Disjoint from
     // `STDLIB_MODULE_QUALIFIERS` (no `"Encoding"` entry there).
     CompiledStdModule {
@@ -906,7 +906,7 @@ pub const COMPILED_STD_MODULES: &[CompiledStdModule] = &[
         source: ENCODING,
     },
     // Ipe.Debug — Layer-3 source; every member is a point-free
-    // `Ffi.kernel "Debug_*"` alias resolved by `detect_kernel_alias` to the
+    // `Kernel.kernel "Debug_*"` alias resolved by `detect_kernel_alias` to the
     // registered `Debug*` kernels (`ipe_runtime::debug::*`). Disjoint from
     // `STDLIB_MODULE_QUALIFIERS` (no `"Debug"` entry there).
     CompiledStdModule {
@@ -914,7 +914,7 @@ pub const COMPILED_STD_MODULES: &[CompiledStdModule] = &[
         source: DEBUG,
     },
     // Ipe.Uuid — Layer-3 source; `v4`/`v7`/`parse` are point-free
-    // `Ffi.kernel "Uuid_*"` aliases resolved by `detect_kernel_alias` to the
+    // `Kernel.kernel "Uuid_*"` aliases resolved by `detect_kernel_alias` to the
     // registered `UuidV4`/`UuidV7`/`UuidParse` kernels
     // (`ipe_runtime::uuid_kernel::*`). Disjoint from `STDLIB_MODULE_QUALIFIERS`
     // (no `"Uuid"` entry there).
@@ -923,7 +923,7 @@ pub const COMPILED_STD_MODULES: &[CompiledStdModule] = &[
         source: UUID,
     },
     // Ipe.Time — Layer-3 source; every member is a point-free
-    // `Ffi.kernel "Time_*"` alias resolved by `detect_kernel_alias` to the
+    // `Kernel.kernel "Time_*"` alias resolved by `detect_kernel_alias` to the
     // registered `Time*` kernels. Disjoint from `STDLIB_MODULE_QUALIFIERS`
     // (no `"Time"` entry there).
     CompiledStdModule {
@@ -931,7 +931,7 @@ pub const COMPILED_STD_MODULES: &[CompiledStdModule] = &[
         source: TIME,
     },
     // Ipe.Set — Layer-3 source; every member is a point-free
-    // `Ffi.kernel "Set_*"` alias resolved by `detect_kernel_alias` to the
+    // `Kernel.kernel "Set_*"` alias resolved by `detect_kernel_alias` to the
     // registered `Set*` kernels (`ipe_runtime::set::*`). Disjoint from
     // `STDLIB_MODULE_QUALIFIERS` (no `"Set"` entry there).
     CompiledStdModule {
@@ -939,7 +939,7 @@ pub const COMPILED_STD_MODULES: &[CompiledStdModule] = &[
         source: SET,
     },
     // Ipe.Bytes — Layer-3 source; every member is a point-free
-    // `Ffi.kernel "Bytes_*"` alias resolved by `detect_kernel_alias` to the
+    // `Kernel.kernel "Bytes_*"` alias resolved by `detect_kernel_alias` to the
     // registered `Bytes*` kernels (`ipe_runtime::bytes::*`). Disjoint from
     // `STDLIB_MODULE_QUALIFIERS` (no `"Bytes"` entry there).
     CompiledStdModule {
@@ -947,7 +947,7 @@ pub const COMPILED_STD_MODULES: &[CompiledStdModule] = &[
         source: BYTES,
     },
     // Ipe.Char — Layer-3 source; every member is a point-free
-    // `Ffi.kernel "Char_*"` alias resolved by `detect_kernel_alias` to the
+    // `Kernel.kernel "Char_*"` alias resolved by `detect_kernel_alias` to the
     // registered `Char*` kernels (`ipe_runtime::char::*`). Disjoint from
     // `STDLIB_MODULE_QUALIFIERS` (no `"Char"` entry there).
     CompiledStdModule {
@@ -955,7 +955,7 @@ pub const COMPILED_STD_MODULES: &[CompiledStdModule] = &[
         source: CHAR,
     },
     // Ipe.Io — Layer-3 source; every member is a point-free
-    // `Ffi.kernel "Io_*"` alias resolved by `detect_kernel_alias` to the
+    // `Kernel.kernel "Io_*"` alias resolved by `detect_kernel_alias` to the
     // registered `Io*` kernels (`ipe_runtime::io::*`). Disjoint from
     // `STDLIB_MODULE_QUALIFIERS` (no `"Io"` entry there).
     CompiledStdModule {
@@ -963,7 +963,7 @@ pub const COMPILED_STD_MODULES: &[CompiledStdModule] = &[
         source: IO,
     },
     // Ipe.Dict — Layer-3 source; every member is a point-free
-    // `Ffi.kernel "Dict_*"` alias resolved by `detect_kernel_alias` to the
+    // `Kernel.kernel "Dict_*"` alias resolved by `detect_kernel_alias` to the
     // registered `Dict*` kernels (`ipe_runtime::dict::*`). Disjoint from
     // `STDLIB_MODULE_QUALIFIERS` (no `"Dict"` entry there).
     CompiledStdModule {
@@ -973,7 +973,7 @@ pub const COMPILED_STD_MODULES: &[CompiledStdModule] = &[
     // Ipe.List — Layer-3 source; pure members compile from Ipê; the eleven
     // kernel-backed members (`sort`/`singleton`/`repeat`/`product`/
     // `intersperse`/`partition`/`unzip`/`map2`–`map5`) are point-free
-    // `Ffi.kernel "List_*"` aliases resolved by `detect_kernel_alias` to the
+    // `Kernel.kernel "List_*"` aliases resolved by `detect_kernel_alias` to the
     // registered `List*` kernels (`ipe_runtime::list::*`). Disjoint from
     // `STDLIB_MODULE_QUALIFIERS` (no `"List"` entry there).
     CompiledStdModule {
@@ -981,7 +981,7 @@ pub const COMPILED_STD_MODULES: &[CompiledStdModule] = &[
         source: LIST,
     },
     // Ipe.Task — Layer-3 source; members are either point-free
-    // `Ffi.kernel "Task_*"` aliases resolved by `detect_kernel_alias` to the
+    // `Kernel.kernel "Task_*"` aliases resolved by `detect_kernel_alias` to the
     // registered `Task*` kernels (`ipe_runtime::task::*`), or pure Ipê over
     // those aliases (`BackoffStrategy` / `RetryPolicy`). Disjoint from
     // `STDLIB_MODULE_QUALIFIERS` (no `"Task"` entry there).
@@ -990,7 +990,7 @@ pub const COMPILED_STD_MODULES: &[CompiledStdModule] = &[
         source: TASK,
     },
     // Ipe.Decimal — Layer-3 source; every member is a point-free
-    // `Ffi.kernel "Decimal_*"` alias resolved by `detect_kernel_alias` to the
+    // `Kernel.kernel "Decimal_*"` alias resolved by `detect_kernel_alias` to the
     // registered `Decimal*` kernels (`ipe_runtime::decimal::*`). Disjoint from
     // `STDLIB_MODULE_QUALIFIERS` (no `"Decimal"` entry there after migration).
     CompiledStdModule {
@@ -1103,7 +1103,7 @@ pub const COMPILED_STD_MODULES: &[CompiledStdModule] = &[
         source: IPE_CORE_WEBSOCKET,
     },
     CompiledStdModule {
-        dotted: "Ipe.Js",
+        dotted: "Ipe.Ffi.Js",
         source: IPE_CORE_JS,
     },
     CompiledStdModule {
@@ -1171,38 +1171,38 @@ pub const COMPILED_STD_MODULES: &[CompiledStdModule] = &[
     },
     // Ipe.Http.StatusCode — typed HTTP status code over Int (opaque ctor,
     // `fromInt` / `code` / `isSuccess` / `isRedirect` / `isClientError` /
-    // `isServerError`).  Pure Ipê; no Ffi.kernel calls.
+    // `isServerError`).  Pure Ipê; no Kernel.kernel calls.
     CompiledStdModule {
         dotted: "Ipe.Http.StatusCode",
         source: STD_HTTP_STATUS_CODE,
     },
-    // Ipe.Regex — Layer-3 source, `Ffi.kernel "Regex_*"` aliases route
+    // Ipe.Regex — Layer-3 source, `Kernel.kernel "Regex_*"` aliases route
     // to the registered pure `Regex*` kernels (`ipe_runtime::regex_kernel::*`).
     CompiledStdModule {
         dotted: "Ipe.Regex",
         source: REGEX,
     },
-    // Ipe.Path — Layer-3 source, `Ffi.kernel "Path_*"` aliases route
+    // Ipe.Path — Layer-3 source, `Kernel.kernel "Path_*"` aliases route
     // to the registered pure `Path*` kernels (`ipe_runtime::path::*`).
     CompiledStdModule {
         dotted: "Ipe.Path",
         source: PATH,
     },
     // Ipe.Html.Attributes — Layer-3 source; fixed-key builders are pure Ipê over
-    // the retained `Ffi.kernel "Attr_*"` primitives (`ipe_runtime::html::*`).
+    // the retained `Kernel.kernel "Attr_*"` primitives (`ipe_runtime::html::*`).
     CompiledStdModule {
         dotted: "Ipe.Html.Attributes",
         source: HTML_ATTRIBUTES,
     },
     // Ipe.Html.Unsafe — Layer-3 source; the single `unsafeRaw` escape hatch is a
-    // `Ffi.kernel "Html_unsafeRaw"` alias to the unchanged `HtmlRawNode` kernel.
+    // `Kernel.kernel "Html_unsafeRaw"` alias to the unchanged `HtmlRawNode` kernel.
     // Importing it discloses the `unsafe` capability.
     CompiledStdModule {
         dotted: "Ipe.Html.Unsafe",
         source: HTML_UNSAFE,
     },
     // Ipe.Db.Unsafe — Layer-3 source; the raw-SQL / untyped-read escape hatches
-    // are `Ffi.kernel "Db_*"` / `"Sql_unsafeFragment"` aliases to unchanged (and
+    // are `Kernel.kernel "Db_*"` / `"Sql_unsafeFragment"` aliases to unchanged (and
     // one new) kernels. Importing it discloses the `unsafe` capability.
     CompiledStdModule {
         dotted: "Ipe.Db.Unsafe",
@@ -1218,7 +1218,7 @@ pub const COMPILED_STD_MODULES: &[CompiledStdModule] = &[
         source: DB_DSN,
     },
     // Ipe.Secret.Unsafe — Layer-3 source; the single `unsafeReveal` escape hatch
-    // is a `Ffi.kernel "Secret_reveal"` alias to the unchanged `SecretReveal`
+    // is a `Kernel.kernel "Secret_reveal"` alias to the unchanged `SecretReveal`
     // kernel. Importing it discloses the `unsafe` capability. The scoped
     // `Secret.use` stays on the native `Ipe.Secret` surface (capability-neutral).
     CompiledStdModule {
@@ -1226,14 +1226,14 @@ pub const COMPILED_STD_MODULES: &[CompiledStdModule] = &[
         source: SECRET_UNSAFE,
     },
     // Ipe.Html — Layer-3 source; element builders are pure Ipê over the retained
-    // `Ffi.kernel "Html_node"` / `"Html_voidNode"` primitives, with the native
+    // `Kernel.kernel "Html_node"` / `"Html_voidNode"` primitives, with the native
     // serialiser (`render`/`escape*`) re-aliased (`ipe_runtime::ui::helpers::*`).
     CompiledStdModule {
         dotted: "Ipe.Html",
         source: HTML,
     },
     // Ipe.Ui — Layer-3 source; the layout builders are pure Ipê over the retained
-    // `Ffi.kernel "Ui_node"` / `"Ui_taggedNode"` primitives, with every other
+    // `Kernel.kernel "Ui_node"` / `"Ui_taggedNode"` primitives, with every other
     // member re-aliased to its unchanged native kernel (`ipe_runtime::ui::*`).
     CompiledStdModule {
         dotted: "Ipe.Ui",
@@ -1244,7 +1244,7 @@ pub const COMPILED_STD_MODULES: &[CompiledStdModule] = &[
         dotted: "Ipe.Markdown",
         source: STD_MARKDOWN,
     },
-    // Ipe.Url — Layer-3 source, `Ffi.kernel "Url_*"` aliases route to the
+    // Ipe.Url — Layer-3 source, `Kernel.kernel "Url_*"` aliases route to the
     // registered pure `Url*` kernels (`ipe_runtime::url::*`).
     CompiledStdModule {
         dotted: "Ipe.Url",
@@ -1257,8 +1257,8 @@ pub const COMPILED_STD_MODULES: &[CompiledStdModule] = &[
         source: URL_PARSER,
     },
     // Ipe.Locale — opaque BCP-47 locale handle + locale-aware case mapping.
-    // `Locale.fromTag`/`Locale.toTag` resolve via `Ffi.kernel "Locale_*"`;
-    // `String.toUpperIn`/`toLowerIn` resolve via `Ffi.kernel "String_toUpperIn"`
+    // `Locale.fromTag`/`Locale.toTag` resolve via `Kernel.kernel "Locale_*"`;
+    // `String.toUpperIn`/`toLowerIn` resolve via `Kernel.kernel "String_toUpperIn"`
     // / `"String_toLowerIn"`.  The runtime module is `ipe_runtime::locale::*`
     // (feature `locale`).  Disjoint from `STDLIB_MODULE_QUALIFIERS` (no
     // `"Locale"` entry there), so the invariant holds.
@@ -1267,7 +1267,7 @@ pub const COMPILED_STD_MODULES: &[CompiledStdModule] = &[
         source: LOCALE,
     },
     // Ipe.Math — Layer-3 source; every member is a point-free
-    // `Ffi.kernel "Math_*"` alias resolved by `detect_kernel_alias` to the
+    // `Kernel.kernel "Math_*"` alias resolved by `detect_kernel_alias` to the
     // registered `Math*` kernels (`ipe_runtime::math::*`). Disjoint from
     // `STDLIB_MODULE_QUALIFIERS` (no `"Math"` entry there), so the invariant
     // holds.
@@ -1404,7 +1404,7 @@ mod tests {
 
     /// Anti-drift (parse-level floor): every EXPORTED VALUE of a compiled-source
     /// stdlib module has a source home — either a local top-level binding (a pure
-    /// body OR an `Ffi.kernel "…"` alias) OR a name pulled in by an `import …
+    /// body OR an `Kernel.kernel "…"` alias) OR a name pulled in by an `import …
     /// exposing (name)` re-export. An exported value that is neither is the
     /// source-vs-kernel drift class: a member declared in `exposing (...)` with no
     /// body, which fails name-resolution at every call site. Catching it here makes
@@ -1555,7 +1555,7 @@ mod tests {
     /// 1. **Catalog reachability**: its `(qualifier, name)` appears as a
     ///    `VarHome::Kernel` in a freshly-built `Env`'s `qual_vars`.
     /// 2. **Compiled-source reachability**: a compiled-source `.ipe` module
-    ///    contains a point-free `Ffi.kernel "Qualifier_name"` alias whose raw
+    ///    contains a point-free `Kernel.kernel "Qualifier_name"` alias whose raw
     ///    string, split at the first `_`, matches `(qualifier, name)`.
     ///
     /// A kernel reachable through neither resolves to IPE-N0005 (`X doesn't have
@@ -1580,14 +1580,14 @@ mod tests {
         let catalog_reachable: Vec<StdlibKernel> = env.kernel_homes().collect();
 
         // ── Step 2: compiled-source-reachable set ────────────────────────────
-        // Scan every compiled-source module for the exact `Ffi.kernel "<raw>"`
+        // Scan every compiled-source module for the exact `Kernel.kernel "<raw>"`
         // call shape (point-free binding whose body is a qualified call
-        // `Ffi.kernel` applied to a single string literal).  Split the raw
+        // `Kernel.kernel` applied to a single string literal).  Split the raw
         // string at the first `_` to recover `(qualifier, name)`.
         //
         // The parsed AST walk mirrors `detect_kernel_alias` in `ipe_canon` and
         // is immune to false positives from comments or string content: only
-        // value bodies that parse as `VarQual("Ffi", "kernel")` applied to one
+        // value bodies that parse as `VarQual("Kernel", "kernel")` applied to one
         // string literal are counted.
         let mut compiled_reachable: Vec<(String, String)> = Vec::new();
 
@@ -1601,16 +1601,16 @@ mod tests {
             let Ok(parsed) = ipe_parse::parse_module(source, &mut local_interner) else {
                 continue; // parse failures are caught by other tests
             };
-            // Re-intern the reserved `Ffi` / `kernel` tokens in this module's
+            // Re-intern the reserved `Kernel` / `kernel` tokens in this module's
             // interner so symbol comparisons are valid within the same interner.
-            let Ok(local_ffi) = local_interner.intern("Ffi") else {
+            let Ok(local_kernel_qualifier) = local_interner.intern("Kernel") else {
                 continue;
             };
             let Ok(local_kernel) = local_interner.intern("kernel") else {
                 continue;
             };
             for value in &parsed.values {
-                // Only bare (point-free) bindings are Ffi.kernel aliases.
+                // Only bare (point-free) bindings are Kernel.kernel aliases.
                 if !value.value.patterns.is_empty() {
                     continue;
                 }
@@ -1620,7 +1620,7 @@ mod tests {
                 let Expr_::VarQual(q_sym, m_sym) = &callee.value else {
                     continue;
                 };
-                if *q_sym != local_ffi || *m_sym != local_kernel {
+                if *q_sym != local_kernel_qualifier || *m_sym != local_kernel {
                     continue;
                 }
                 let [arg] = args.as_slice() else {
@@ -1655,9 +1655,9 @@ mod tests {
                 failures.push(format!(
                     "StdlibKernel::{sk:?} — `{q}.{n}` is registered but UNREACHABLE: \
                      not in the env.rs QUALIFIERS member catalog and not via a \
-                     `Ffi.kernel \"{q}_{n}\"` alias in any compiled-source module. \
+                     `Kernel.kernel \"{q}_{n}\"` alias in any compiled-source module. \
                      It resolves to IPE-N0005 (dead feature). Add its catalog line \
-                     to `install_prelude_qualifiers` OR its `Ffi.kernel` alias to \
+                     to `install_prelude_qualifiers` OR its `Kernel.kernel` alias to \
                      the owning `.ipe` module.",
                     sk = sk,
                     q = d.qualifier,

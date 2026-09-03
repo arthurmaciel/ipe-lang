@@ -524,7 +524,7 @@ pub enum NameError {
     /// clash between two distinct dep modules is. `first` is the earlier
     /// import's span. [IPE-N0027]
     DuplicateQualifier { qualifier: Box<str>, first: Span },
-    /// A standard-library binding `f = Ffi.kernel "Name"` (a Stage-4 kernel
+    /// A standard-library binding `f = Kernel.kernel "Name"` (a Stage-4 kernel
     /// alias) names a kernel that is not registered in the kernel table. The
     /// `alias` is the raw string; `module` / `function` are its first-`_` split.
     /// FAIL-CLOSED (THE SEAL): accepting this would emit a call to a kernel that
@@ -661,7 +661,7 @@ pub enum NameError {
         reason: CodecAutoRejection,
         field: Box<str>,
     },
-    /// A `f = Ffi.kernel "Name"` kernel-alias binding appears in USER source. A
+    /// A `f = Kernel.kernel "Name"` kernel-alias binding appears in USER source. A
     /// kernel alias binds a name directly to a built-in kernel, bypassing the
     /// capability model: an unsafe-tier kernel (a raw-`<script>` sink, a secret
     /// reveal, a raw SQL exec) is reachable through it with no `unsafe`
@@ -670,7 +670,7 @@ pub enum NameError {
     /// [`crate::resolve::ModuleOrigin::EmbeddedStdlib`] / `FfiInterface` modules
     /// (the standard library and the generated FFI interface); user code reaches
     /// a kernel only through the sanctioned surface that imports and discloses
-    /// it. Mirrors the `Ffi.binding` origin gate — `Ffi.kernel` in user source
+    /// it. Mirrors the `Ffi.binding` origin gate — `Kernel.kernel` in user source
     /// is unrepresentable, not merely discouraged (Security #1, fail-closed).
     /// `alias` is the raw kernel string the binding named. [IPE-N0042]
     KernelAliasInUserSource { alias: Box<str> },
@@ -685,7 +685,7 @@ pub enum NameError {
     /// than compiled into an app that ignores it. [IPE-N0043]
     DiscardedConfig,
     /// The reserved `customElement "<js-path>"` constructor is malformed at its
-    /// use site. Like the `Ffi.kernel` literal gate, `customElement` is legal ONLY
+    /// use site. Like the `Kernel.kernel` literal gate, `customElement` is legal ONLY
     /// as the entire body of a `CustomElement`-annotated binding, applied to a
     /// SINGLE STRING LITERAL naming the author's widget-hook JS file. Rejected
     /// fail-closed when: the argument is not a string literal (a variable, an

@@ -86,7 +86,7 @@ pub struct ModuleExports {
     /// an importer of `State` expands `Model`'s body.
     pub scope_aliases: BTreeMap<Symbol, ExportedAlias>,
     /// Exported Stage-4 kernel aliases: value names whose binding is
-    /// `f = Ffi.kernel "Module_function"`, mapped to the resolved kernel target
+    /// `f = Kernel.kernel "Module_function"`, mapped to the resolved kernel target
     /// `(StdlibKernel, module, function)`.
     ///
     /// A name here is ALSO present in `values` (it is an exported value), but an
@@ -99,7 +99,7 @@ pub struct ModuleExports {
 }
 
 /// The resolved target of an exported Stage-4 kernel alias — the `(StdlibKernel,
-/// module, function)` an `Ffi.kernel "Module_function"` binding routes to. See
+/// module, function)` an `Kernel.kernel "Module_function"` binding routes to. See
 /// [`ModuleExports::kernel_aliases`].
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct ExportedKernelAlias {
@@ -2248,10 +2248,10 @@ mod tests {
             .expect("Env::initial must not fail in the tripwire test");
 
         // Kernels whose CANONICAL (qualifier, member) key is retained for
-        // `Ffi.kernel` alias resolution (via `stdlib_index`) but whose SURFACE
+        // `Kernel.kernel` alias resolution (via `stdlib_index`) but whose SURFACE
         // relocated OUT of the native qualifier into a compiled-source
         // `Ipe.<M>.Unsafe` escape-hatch submodule. The canonical qualifier stays
-        // (so `Ffi.kernel "Db_unsafeExecRaw"` still splits to `("Db", …)` and
+        // (so `Kernel.kernel "Db_unsafeExecRaw"` still splits to `("Db", …)` and
         // resolves the same kernel), but the member is intentionally ABSENT from
         // `qual_vars[qualifier]` so it no longer resolves off a plain import of
         // the native module. Verified positively by the `Ipe.Db.Unsafe`
@@ -2265,13 +2265,13 @@ mod tests {
             ("Db", "unsafeGetBool"),
             ("Db", "unsafeGetField"),
             // The external-connection raw write hatch: canonical `("Db", …)` key
-            // for the `Ffi.kernel` alias, surfaced only through `Ipe.Db.Unsafe`.
+            // for the `Kernel.kernel` alias, surfaced only through `Ipe.Db.Unsafe`.
             ("Db", "unsafeExecRawOn"),
             // The un-validated anti-`Sql.column`: canonical `("Sql", …)` key for
             // the alias, surfaced only through `Ipe.Db.Unsafe.unsafeFragment`.
             ("Sql", "unsafeFragment"),
             // The blunt secret un-parse: canonical `("Secret", "reveal")` key
-            // retained for the `Ffi.kernel "Secret_reveal"` alias, surfaced only
+            // retained for the `Kernel.kernel "Secret_reveal"` alias, surfaced only
             // through `Ipe.Secret.Unsafe.unsafeReveal`. The scoped `Secret.use`
             // stays on the native `Secret` surface (capability-neutral).
             ("Secret", "reveal"),
@@ -2491,7 +2491,7 @@ mod tests {
     /// COMPILED-SOURCE stdlib module (`src/stdlib/Ipe/PubSub.ipe`), so the bare
     /// `"PubSub"` KERNEL qualifier must NOT be registered in `env.qual_vars`
     /// (kernel qualifier OR compiled-source — never both). `Ipe.PubSub.publish`
-    /// resolves through the compiled module's `Ffi.kernel "PubSub_publish"` alias,
+    /// resolves through the compiled module's `Kernel.kernel "PubSub_publish"` alias,
     /// whose fast-path mints a `VarKernel` with a concrete kernel id — so the
     /// `stdlib_scheme` totality flip stays sound without a `qual_vars` entry.
     #[test]
@@ -2509,7 +2509,7 @@ mod tests {
             !env.qual_vars.contains_key(&pubsub),
             "The `PubSub` kernel qualifier must stay OUT of env.qual_vars — \
              `Ipe.PubSub` is a compiled-source module resolved via the \
-             `Ffi.kernel \"PubSub_publish\"` alias, not a kernel qualifier.",
+             `Kernel.kernel \"PubSub_publish\"` alias, not a kernel qualifier.",
         );
     }
 
@@ -3058,7 +3058,7 @@ mod tests {
         // `Ipe.Html` is a COMPILED-SOURCE module (`COMPILED_STD_MODULES`), so the
         // `Html` kernel qualifier must be ABSENT from `env.qual_vars`: its element
         // builders and the re-exposed serialiser (`render` / `renderStatic` / …)
-        // resolve through the `Ffi.kernel "Html_*"` aliases in `Ipe/Html.ipe`, not
+        // resolve through the `Kernel.kernel "Html_*"` aliases in `Ipe/Html.ipe`, not
         // a kernel-qualifier prelude (mirrors the `PubSub` precedent).
         let mut interner = Interner::new();
         let html = interner.intern("Html").expect("tripwire: intern Html OOM");
@@ -3068,7 +3068,7 @@ mod tests {
             !env.qual_vars.contains_key(&html),
             "The `Html` kernel qualifier must stay OUT of env.qual_vars — \
              `Ipe.Html` is a compiled-source module resolved via the \
-             `Ffi.kernel \"Html_*\"` alias, not a kernel qualifier.",
+             `Kernel.kernel \"Html_*\"` alias, not a kernel qualifier.",
         );
     }
 
@@ -3881,23 +3881,23 @@ mod tests {
         assert_eq!(ipe_kernels::reserved_prefix_of(&["App", "View"]), None);
     }
 
-    /// A USER module minting an UNSAFE-tier kernel alias (`Ffi.kernel
+    /// A USER module minting an UNSAFE-tier kernel alias (`Kernel.kernel
     /// "Html_unsafeScript"` — the raw-`<script>` XSS sink). No `.Unsafe` import,
     /// so before the origin gate this canonicalised clean while `capabilities`
     /// reported `pure`: the capability-model bypass the gate closes.
     const USER_MINTS_UNSAFE_KERNEL_SRC: &str = "module Main exposing (main)\n\
-         import Ipe.Ffi as Ffi\n\
+         import Ipe.Ffi.Kernel as Kernel\n\
          sneaky : String -> Html msg\n\
-         sneaky =\n    Ffi.kernel \"Html_unsafeScript\"\n\
+         sneaky =\n    Kernel.kernel \"Html_unsafeScript\"\n\
          main =\n    0\n";
 
     /// A USER module minting an ORDINARY (safe-tier) kernel alias. Rejected too —
     /// the privilege is denied by ORIGIN, not by which kernel is named, so there
     /// is no "safe kernel" loophole for user source to mint through.
     const USER_MINTS_PLAIN_KERNEL_SRC: &str = "module Main exposing (main)\n\
-         import Ipe.Ffi as Ffi\n\
+         import Ipe.Ffi.Kernel as Kernel\n\
          shout : String -> String\n\
-         shout =\n    Ffi.kernel \"String_toUpper\"\n\
+         shout =\n    Kernel.kernel \"String_toUpper\"\n\
          main =\n    0\n";
 
     #[test]
@@ -3906,7 +3906,7 @@ mod tests {
         // must be reached only through its `.Unsafe` module, which discloses
         // `unsafe`. The origin gate makes the bypass unrepresentable.
         let err = canon_with_origin(USER_MINTS_UNSAFE_KERNEL_SRC, ModuleOrigin::User)
-            .expect_err("user source minting `Ffi.kernel` must be rejected");
+            .expect_err("user source minting `Kernel.kernel` must be rejected");
         assert!(
             matches!(
                 &err,
@@ -3924,7 +3924,7 @@ mod tests {
         // SECURITY: the gate is by ORIGIN, not by kernel tier — a user module
         // cannot mint any kernel alias, safe-tier included.
         let err = canon_with_origin(USER_MINTS_PLAIN_KERNEL_SRC, ModuleOrigin::User)
-            .expect_err("user source minting any `Ffi.kernel` must be rejected");
+            .expect_err("user source minting any `Kernel.kernel` must be rejected");
         assert!(
             matches!(
                 &err,
@@ -3939,14 +3939,14 @@ mod tests {
 
     #[test]
     fn embedded_stdlib_origin_still_mints_the_unsafe_kernel_alias() {
-        // NON-REGRESS: the SAME `Ffi.kernel "Html_unsafeScript"` binding, in a
+        // NON-REGRESS: the SAME `Kernel.kernel "Html_unsafeScript"` binding, in a
         // driver-vouched EmbeddedStdlib module (this IS the body of the real
         // `Ipe.Html.Unsafe` submodule), must still canonicalise — the legitimate
         // kernel-alias surface is untouched by the origin gate.
         let src = "module Ipe.Html.Unsafe exposing (unsafeScript)\n\
-             import Ipe.Ffi as Ffi\n\
+             import Ipe.Ffi.Kernel as Kernel\n\
              unsafeScript : String -> Html msg\n\
-             unsafeScript =\n    Ffi.kernel \"Html_unsafeScript\"\n";
+             unsafeScript =\n    Kernel.kernel \"Html_unsafeScript\"\n";
         let res = canon_with_origin(src, ModuleOrigin::EmbeddedStdlib);
         assert!(
             res.is_ok(),

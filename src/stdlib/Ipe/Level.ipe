@@ -5,7 +5,7 @@
 -- `LogLevel` values.  Pass one to `Log.level` to configure the
 -- runtime log severity.
 --
--- Each member is aliased to its kernel via the `Ffi.kernel`
+-- Each member is aliased to its kernel via the `Kernel.kernel`
 -- mechanism; the resolver maps `"Level_<member>"` to the registered
 -- `Level<Member>` `StdlibKernel` variant.
 module Ipe.Level exposing
@@ -13,24 +13,24 @@ module Ipe.Level exposing
     )
 
 
-import Ipe.Ffi as Ffi
+import Ipe.Ffi.Kernel as Kernel
 
 
 -- | Debug severity — the lowest level; verbose diagnostic output.
 debug : LogLevel
-debug = Ffi.kernel "Level_debug"
+debug = Kernel.kernel "Level_debug"
 
 
 -- | Info severity — normal operational messages.
 info : LogLevel
-info = Ffi.kernel "Level_info"
+info = Kernel.kernel "Level_info"
 
 
 -- | Warn severity — recoverable unexpected conditions.
 warn : LogLevel
-warn = Ffi.kernel "Level_warn"
+warn = Kernel.kernel "Level_warn"
 
 
 -- | Error severity — failures that require attention.
 error : LogLevel
-error = Ffi.kernel "Level_error"
+error = Kernel.kernel "Level_error"

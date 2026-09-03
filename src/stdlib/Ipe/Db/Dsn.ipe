@@ -35,7 +35,7 @@ module Ipe.Db.Dsn exposing
     )
 
 
-import Ipe.Ffi as Ffi
+import Ipe.Ffi.Kernel as Kernel
 import Ipe.Error exposing (Error)
 import Ipe.Result as Result
 import Ipe.Task exposing (Task)
@@ -73,7 +73,7 @@ type TlsMode
 -- component. The password is captured as a `Secret`.
 parse : String -> Result Error Dsn
 parse =
-    Ffi.kernel "Db.Dsn_parse"
+    Kernel.kernel "Db.Dsn_parse"
 
 
 -- | `build parts` — THE seal from typed parts, running the SAME validators as
@@ -106,7 +106,7 @@ build parts =
 -- `tlsTag` before the call, so no ADT crosses the kernel boundary.
 buildKernel : Int -> String -> Int -> String -> String -> Secret -> Int -> Result Error Dsn
 buildKernel =
-    Ffi.kernel "Db.Dsn_build"
+    Kernel.kernel "Db.Dsn_build"
 
 
 -- ── Accessors ─────────────────────────────────────────────────────────────────
@@ -121,7 +121,7 @@ driver dsn =
 -- | `host dsn` — the host component (`""` for a file-backed sqlite descriptor).
 host : Dsn -> String
 host =
-    Ffi.kernel "Db.Dsn_host"
+    Kernel.kernel "Db.Dsn_host"
 
 
 -- | `port dsn` — the network port as a validated `Ipe.Net.Port`, or `Nothing`
@@ -138,19 +138,19 @@ port dsn =
 -- public reader is `port`, which wraps it into a validated `Maybe Port`.
 portRaw : Dsn -> Int
 portRaw =
-    Ffi.kernel "Db.Dsn_port"
+    Kernel.kernel "Db.Dsn_port"
 
 
 -- | `database dsn` — the database name (or file path, for sqlite).
 database : Dsn -> String
 database =
-    Ffi.kernel "Db.Dsn_database"
+    Kernel.kernel "Db.Dsn_database"
 
 
 -- | `user dsn` — the connection user (`""` when none).
 user : Dsn -> String
 user =
-    Ffi.kernel "Db.Dsn_user"
+    Kernel.kernel "Db.Dsn_user"
 
 
 -- | `tls dsn` — the descriptor's transport posture.
@@ -163,7 +163,7 @@ tls dsn =
 -- NEVER included; this is the ONLY display path a `Dsn` has.
 redacted : Dsn -> String
 redacted =
-    Ffi.kernel "Db.Dsn_redacted"
+    Kernel.kernel "Db.Dsn_redacted"
 
 
 -- ── Connecting a Dsn — read-only by type ───────────────────────────────────────
@@ -185,14 +185,14 @@ redacted =
 -- explicitly-disclosed `Ipe.Db.Unsafe.unsafeExecRawOn`.
 open : Dsn -> Task Error (Connection ReadOnly)
 open =
-    Ffi.kernel "Db.Dsn_open"
+    Kernel.kernel "Db.Dsn_open"
 
 
 -- | `close conn` — return the connection's pool. Total and idempotent over either
 -- access mode; a `Connection` dropped without `close` still releases its pool.
 close : Connection mode -> Task Error ()
 close =
-    Ffi.kernel "Db.Dsn_close"
+    Kernel.kernel "Db.Dsn_close"
 
 
 -- ── Tag marshalling (ADT ↔ runtime discriminant) ──────────────────────────────
@@ -200,12 +200,12 @@ close =
 
 driverTagKernel : Dsn -> Int
 driverTagKernel =
-    Ffi.kernel "Db.Dsn_driverTag"
+    Kernel.kernel "Db.Dsn_driverTag"
 
 
 tlsTagKernel : Dsn -> Int
 tlsTagKernel =
-    Ffi.kernel "Db.Dsn_tlsTag"
+    Kernel.kernel "Db.Dsn_tlsTag"
 
 
 driverTag : Driver -> Int

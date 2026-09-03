@@ -1,7 +1,7 @@
 -- | Ipe.Set — unordered set of unique elements.
 --
 -- Every function in this module is declared as a Ipe-source binding
--- aliased to a kernel via `Ffi.kernel "Set_<name>"`.  The compiler
+-- aliased to a kernel via `Kernel.kernel "Set_<name>"`.  The compiler
 -- rewrites every call site to typed kernel dispatch — so `Set.member x s`
 -- emits `rt.Set_member(x, s)`, preserving the typed-codegen guarantees
 -- the kernel-direct route already enjoyed.
@@ -25,7 +25,7 @@ module Ipe.Set exposing
     )
 
 
-import Ipe.Ffi as Ffi
+import Ipe.Ffi.Kernel as Kernel
 
 
 -- ─── Construction ──────────────────────────────────────────────────
@@ -33,7 +33,7 @@ import Ipe.Ffi as Ffi
 
 -- | The empty set.
 empty : Set a
-empty = Ffi.kernel "Set_empty"
+empty = Kernel.kernel "Set_empty"
 
 
 -- ─── Queries ───────────────────────────────────────────────────────
@@ -41,12 +41,12 @@ empty = Ffi.kernel "Set_empty"
 
 -- | Number of distinct elements.
 size : Set a -> Int
-size = Ffi.kernel "Set_size"
+size = Kernel.kernel "Set_size"
 
 
 -- | `member x s` — `True` iff `x` is in `s`.
 member : a -> Set a -> Bool
-member = Ffi.kernel "Set_member"
+member = Kernel.kernel "Set_member"
 
 
 -- ─── Mutation (returns new Set) ────────────────────────────────────
@@ -54,12 +54,12 @@ member = Ffi.kernel "Set_member"
 
 -- | `insert x s` — add `x` to `s`. No-op if already present.
 insert : a -> Set a -> Set a
-insert = Ffi.kernel "Set_insert"
+insert = Kernel.kernel "Set_insert"
 
 
 -- | `remove x s` — drop `x` from `s`. No-op if absent.
 remove : a -> Set a -> Set a
-remove = Ffi.kernel "Set_remove"
+remove = Kernel.kernel "Set_remove"
 
 
 -- ─── Conversion ────────────────────────────────────────────────────
@@ -67,12 +67,12 @@ remove = Ffi.kernel "Set_remove"
 
 -- | All elements in the set (unsorted).
 toList : Set a -> List a
-toList = Ffi.kernel "Set_toList"
+toList = Kernel.kernel "Set_toList"
 
 
 -- | Build a set from a list, de-duplicating along the way.
 fromList : List a -> Set a
-fromList = Ffi.kernel "Set_fromList"
+fromList = Kernel.kernel "Set_fromList"
 
 
 -- ─── Set algebra ───────────────────────────────────────────────────
@@ -80,17 +80,17 @@ fromList = Ffi.kernel "Set_fromList"
 
 -- | `union a b` — every element in `a` OR `b`.
 union : Set a -> Set a -> Set a
-union = Ffi.kernel "Set_union"
+union = Kernel.kernel "Set_union"
 
 
 -- | `intersect a b` — every element in BOTH `a` and `b`.
 intersect : Set a -> Set a -> Set a
-intersect = Ffi.kernel "Set_intersect"
+intersect = Kernel.kernel "Set_intersect"
 
 
 -- | `diff a b` — every element in `a` BUT NOT in `b`.
 diff : Set a -> Set a -> Set a
-diff = Ffi.kernel "Set_diff"
+diff = Kernel.kernel "Set_diff"
 
 
 -- ─── Cardinality / construction ────────────────────────────────────
@@ -98,12 +98,12 @@ diff = Ffi.kernel "Set_diff"
 
 -- | `True` when the set has no elements.
 isEmpty : Set a -> Bool
-isEmpty = Ffi.kernel "Set_isEmpty"
+isEmpty = Kernel.kernel "Set_isEmpty"
 
 
 -- | `singleton x` — the one-element set `{x}`.
 singleton : a -> Set a
-singleton = Ffi.kernel "Set_singleton"
+singleton = Kernel.kernel "Set_singleton"
 
 
 -- ─── Higher-order combinators ──────────────────────────────────────
@@ -111,24 +111,24 @@ singleton = Ffi.kernel "Set_singleton"
 
 -- | `foldl fn acc s` — fold over the elements in ascending order.
 foldl : (a -> b -> b) -> b -> Set a -> b
-foldl = Ffi.kernel "Set_foldl"
+foldl = Kernel.kernel "Set_foldl"
 
 
 -- | `foldr fn acc s` — fold over the elements in descending order.
 foldr : (a -> b -> b) -> b -> Set a -> b
-foldr = Ffi.kernel "Set_foldr"
+foldr = Kernel.kernel "Set_foldr"
 
 
 -- | `map fn s` — apply `fn` to every element; duplicate results collapse.
 map : (a -> b) -> Set a -> Set b
-map = Ffi.kernel "Set_map"
+map = Kernel.kernel "Set_map"
 
 
 -- | `filter pred s` — keep only elements satisfying `pred`.
 filter : (a -> Bool) -> Set a -> Set a
-filter = Ffi.kernel "Set_filter"
+filter = Kernel.kernel "Set_filter"
 
 
 -- | `partition pred s` — split into (satisfying, not-satisfying).
 partition : (a -> Bool) -> Set a -> ( Set a, Set a )
-partition = Ffi.kernel "Set_partition"
+partition = Kernel.kernel "Set_partition"

@@ -471,7 +471,7 @@ pub fn render_page_full(sid: &str, base: &str, body: &str, csrf_token: &str) -> 
     page_shell(&head_extra, &body_inner, &tail_scripts)
 }
 
-/// The SRI-pinned `<script>` tag that loads the `Ipe.Js` browser port surface,
+/// The SRI-pinned `<script>` tag that loads the `Ipe.Ffi.Js` browser port surface,
 /// or an empty string when the glue is unavailable. Loaded AFTER the client core
 /// so `window.__ipePortSend` (the inbound seam) and the `port` SSE listener are
 /// already installed when `window.ipe.send` first fires. Content-addressed +
@@ -486,7 +486,7 @@ fn port_glue_script(base: &str) -> String {
     )
 }
 
-/// No `Ipe.Js` port glue when the widget-asset serving surface is absent: the
+/// No `Ipe.Ffi.Js` port glue when the widget-asset serving surface is absent: the
 /// page carries no port `<script>` and `window.ipe` is never wired.
 #[cfg(not(feature = "widget-assets"))]
 fn port_glue_script(_base: &str) -> String {
@@ -842,7 +842,7 @@ async fn drive_session<Model, Msg, FUpdate, FView, FSubs>(
 {
     let mut sub_handles: Vec<tokio::task::JoinHandle<()>> = Vec::new();
 
-    // `Ipe.Js` port channel lifecycle. Open this session's inbound/outbound port
+    // `Ipe.Ffi.Js` port channel lifecycle. Open this session's inbound/outbound port
     // endpoints now (before the browser can POST to `/_ipe/port`) and close them
     // when the driver exits — the driver is the session's single mortal owner (it
     // exits once the store has evicted the session and no SSE connection pins it),
@@ -2364,7 +2364,7 @@ mod handlers {
             entry.lock().unwrap_or_else(|e| e.into_inner()).sse_tx = Some(tx.clone());
         }
 
-        // Bind this session's `Ipe.Js` outbound port sink to THIS SSE
+        // Bind this session's `Ipe.Ffi.Js` outbound port sink to THIS SSE
         // connection: every `js_send` whose origin is this sid is forwarded to
         // the browser as an `event: port` frame over the same stream that
         // carries DOM patches (mirroring how the custom-element served-widget
@@ -3228,7 +3228,7 @@ mod handlers {
     }
 
     // ── POST /_ipe/port ───────────────────────────────────────────────
-    // The `Ipe.Js` inbound port route: a browser→server port frame. Runs the
+    // The `Ipe.Ffi.Js` inbound port route: a browser→server port frame. Runs the
     // SAME trust gate as `/_ipe/event` — the CSRF middleware validates the
     // mutating POST, and the target session is authenticated by the session
     // COOKIE sid ONLY (never a body-supplied id), so a caller cannot address
@@ -3650,7 +3650,7 @@ where
     let event_route = post(handlers::event_handler::<Model, Msg, FInit, FUpdate, FView, FSubs>)
         .layer(axum::extract::DefaultBodyLimit::max(web_max_body_bytes()));
 
-    // Inbound `Ipe.Js` port route: same body-size cap as `/_ipe/event`, so an
+    // Inbound `Ipe.Ffi.Js` port route: same body-size cap as `/_ipe/event`, so an
     // over-sized port frame is rejected at the extract layer (413) before the
     // handler's own seal-boundary budget even runs.
     let port_route = post(handlers::port_handler::<Model, Msg, FInit, FUpdate, FView, FSubs>)
@@ -3702,7 +3702,7 @@ where
         .route("/_ipe/event", event_route)
         .route("/_ipe/port", port_route)
         .route(&client_js_route_path, get(serve_client_js));
-    // The `Ipe.Js` browser port surface (`window.ipe`), served
+    // The `Ipe.Ffi.Js` browser port surface (`window.ipe`), served
     // content-addressed with SRI — the same static, immutable discipline as
     // the client core and widget glue. A GET of fixed bytes (no user input),
     // so it is CSRF-exempt by method and open. Registered before the page

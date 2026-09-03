@@ -1,5 +1,5 @@
 -- | Ipe.Browser.Clipboard.Internals — the low-level clipboard port surface: the
--- closed outbound/inbound ADTs and the raw `Ipe.Js` request/subscribe wiring the
+-- closed outbound/inbound ADTs and the raw `Ipe.Ffi.Js` request/subscribe wiring the
 -- high-level `Ipe.Browser.Clipboard` layer wraps.
 --
 -- Importing this submodule discloses the same `js-port:clipboard` axis as the
@@ -15,7 +15,7 @@ module Ipe.Browser.Clipboard.Internals exposing
     )
 
 import Ipe.Error as Error exposing (Error)
-import Ipe.Js as Js
+import Ipe.Ffi.Js as Js
 import Ipe.Json.Decode as Decode
 import Ipe.Tea.Web.Cmd as Cmd
 import Ipe.Tea.Web.Sub as Sub

@@ -18,7 +18,7 @@ module Ipe.Url exposing
     )
 
 
-import Ipe.Ffi as Ffi
+import Ipe.Ffi.Kernel as Kernel
 import Ipe.Error exposing (Error)
 import Ipe.Maybe exposing (Maybe)
 
@@ -28,48 +28,48 @@ import Ipe.Maybe exposing (Maybe)
 -- URL (a relative reference, a scheme-less host, or otherwise unparseable);
 -- otherwise `Ok` the parsed `Url`.
 fromString : String -> Result Error Url
-fromString = Ffi.kernel "Url_fromString"
+fromString = Kernel.kernel "Url_fromString"
 
 
 -- | `toString url` — recover the serialized URL string.
 toString : Url -> String
-toString = Ffi.kernel "Url_toString"
+toString = Kernel.kernel "Url_toString"
 
 
 -- | `scheme url` — the URL's scheme (`"https"`, `"http"`, …), always present.
 scheme : Url -> String
-scheme = Ffi.kernel "Url_scheme"
+scheme = Kernel.kernel "Url_scheme"
 
 
 -- | `host url` — the host component, or `Nothing` for a hostless scheme
 -- (e.g. `mailto:`).
 host : Url -> Maybe String
-host = Ffi.kernel "Url_host"
+host = Kernel.kernel "Url_host"
 
 
 -- | `port url` — the port with the scheme's known default applied
 -- (`https://x` → `443`), or `Nothing`.
 port : Url -> Maybe Int
-port = Ffi.kernel "Url_port"
+port = Kernel.kernel "Url_port"
 
 
 -- | `path url` — the path component.
 path : Url -> String
-path = Ffi.kernel "Url_path"
+path = Kernel.kernel "Url_path"
 
 
 -- | `query url` — the raw query string (without the leading `?`), or `Nothing`.
 query : Url -> Maybe String
-query = Ffi.kernel "Url_query"
+query = Kernel.kernel "Url_query"
 
 
 -- | `fragment url` — the fragment (without the leading `#`), or `Nothing`.
 fragment : Url -> Maybe String
-fragment = Ffi.kernel "Url_fragment"
+fragment = Kernel.kernel "Url_fragment"
 
 
 -- | `buildQuery pairs` — the injection-safe query-string builder. Every key and
 -- value is percent-encoded, so a metacharacter in a value cannot split off a
 -- new parameter. Returns the encoded string without a leading `?`.
 buildQuery : List ( String, String ) -> String
-buildQuery = Ffi.kernel "Url_buildQuery"
+buildQuery = Kernel.kernel "Url_buildQuery"

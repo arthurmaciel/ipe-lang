@@ -12,13 +12,13 @@ module Ipe.Encoding exposing
     )
 
 
-import Ipe.Ffi as Ffi
+import Ipe.Ffi.Kernel as Kernel
 
 
 -- | Base64-encode a string (RFC 4648 standard alphabet, with padding).
 base64Encode : String -> String
 base64Encode =
-    Ffi.kernel "Encoding_base64Encode"
+    Kernel.kernel "Encoding_base64Encode"
 
 
 -- | Base64-decode a string.
@@ -27,13 +27,13 @@ base64Encode =
 -- alphabet or has invalid padding.
 base64Decode : String -> Result Error String
 base64Decode =
-    Ffi.kernel "Encoding_base64Decode"
+    Kernel.kernel "Encoding_base64Decode"
 
 
 -- | Percent-encode a string for use in a URL component (RFC 3986).
 urlEncode : String -> String
 urlEncode =
-    Ffi.kernel "Encoding_urlEncode"
+    Kernel.kernel "Encoding_urlEncode"
 
 
 -- | Percent-decode a URL-encoded string.
@@ -41,13 +41,13 @@ urlEncode =
 -- Returns `Err` when the input contains a malformed percent-escape sequence.
 urlDecode : String -> Result Error String
 urlDecode =
-    Ffi.kernel "Encoding_urlDecode"
+    Kernel.kernel "Encoding_urlDecode"
 
 
 -- | Hex-encode a string (lowercase output, two hex digits per byte).
 hexEncode : String -> String
 hexEncode =
-    Ffi.kernel "Encoding_hexEncode"
+    Kernel.kernel "Encoding_hexEncode"
 
 
 -- | Hex-decode a string.
@@ -56,4 +56,4 @@ hexEncode =
 -- outside `[0-9a-fA-F]`.
 hexDecode : String -> Result Error String
 hexDecode =
-    Ffi.kernel "Encoding_hexDecode"
+    Kernel.kernel "Encoding_hexDecode"

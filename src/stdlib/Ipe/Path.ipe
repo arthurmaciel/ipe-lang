@@ -14,7 +14,7 @@ module Ipe.Path exposing
     )
 
 
-import Ipe.Ffi as Ffi
+import Ipe.Ffi.Kernel as Kernel
 import Ipe.Error exposing (Error)
 
 
@@ -22,29 +22,29 @@ import Ipe.Error exposing (Error)
 -- constructor. Normalises separators and returns `Err` when `raw` contains a
 -- NUL byte or escapes its root via `..`; otherwise `Ok` the cleaned `Path`.
 fromString : String -> Result Error Path
-fromString = Ffi.kernel "Path_fromString"
+fromString = Kernel.kernel "Path_fromString"
 
 
 -- | `toString path` — recover the cleaned path string.
 toString : Path -> String
-toString = Ffi.kernel "Path_toString"
+toString = Kernel.kernel "Path_toString"
 
 
 -- | `base path` — the final path component.
 base : Path -> String
-base = Ffi.kernel "Path_base"
+base = Kernel.kernel "Path_base"
 
 
 -- | `dir path` — everything but the final component.
 dir : Path -> String
-dir = Ffi.kernel "Path_dir"
+dir = Kernel.kernel "Path_dir"
 
 
 -- | `ext path` — the file extension (with the dot), or "".
 ext : Path -> String
-ext = Ffi.kernel "Path_ext"
+ext = Kernel.kernel "Path_ext"
 
 
 -- | `isAbsolute path` — does the path start from the root?
 isAbsolute : Path -> Bool
-isAbsolute = Ffi.kernel "Path_isAbsolute"
+isAbsolute = Kernel.kernel "Path_isAbsolute"

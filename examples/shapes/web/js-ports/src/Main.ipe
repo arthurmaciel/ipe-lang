@@ -1,6 +1,6 @@
 module Main exposing (main)
 
--- | js-ports — the typed Ipê↔JS seam (`Ipe.Js` ports).
+-- | js-ports — the typed Ipê↔JS seam (`Ipe.Ffi.Js` ports).
 --
 -- Ports carry imperative effects and out-of-band data that have no place in the
 -- view tree. A port is not a new language construct: outbound is an ordinary
@@ -20,7 +20,7 @@ import Ipe.Tea.Web as Web
 import Ipe.Tea.Web.Cmd as Cmd
 import Ipe.Tea.Web.Sub as Sub
 import Ipe.Ui as Ui
-import Ipe.Js as Js
+import Ipe.Ffi.Js as Js
 import Ipe.Json.Decode as Decode
 import Ipe.String as String
 

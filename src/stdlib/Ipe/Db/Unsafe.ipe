@@ -6,7 +6,7 @@
 -- `unsafe` capability program-wide, so a dependency's raw-SQL or untyped-read
 -- sink is visible before the program runs.
 --
--- Every member is a point-free `Ffi.kernel "Db_<member>"` / `"Sql_<member>"`
+-- Every member is a point-free `Kernel.kernel "Db_<member>"` / `"Sql_<member>"`
 -- alias to a retained runtime kernel; only the surface home moved here from
 -- `Ipe.Db` / `Ipe.Db.Sql`. The kernels, their registry keys, and their runtime
 -- behaviour are unchanged.
@@ -37,7 +37,7 @@ module Ipe.Db.Unsafe exposing
     )
 
 
-import Ipe.Ffi as Ffi
+import Ipe.Ffi.Kernel as Kernel
 import Ipe.Error exposing (Error)
 import Ipe.Task exposing (Task)
 
@@ -46,38 +46,38 @@ import Ipe.Task exposing (Task)
 -- runs; the caller owns the injection invariant. Parameterised `Db.exec` is the
 -- safe default.
 unsafeExecRaw : Db -> String -> Task Error Int
-unsafeExecRaw = Ffi.kernel "Db_unsafeExecRaw"
+unsafeExecRaw = Kernel.kernel "Db_unsafeExecRaw"
 
 
 -- | `unsafeQuery conn sql binds` — the query TEXT is caller-authored verbatim;
 -- only the `binds` are parameterised. `Db.queryDecode` with `Sql.*` is the safe
 -- default.
 unsafeQuery : Db -> String -> List SqlValue -> Task Error (List (Dict String String))
-unsafeQuery = Ffi.kernel "Db_unsafeQuery"
+unsafeQuery = Kernel.kernel "Db_unsafeQuery"
 
 
 -- | `unsafeGetString key row` — read column `key` as a `String`, bypassing the
 -- typed row codec. The caller asserts the column holds a string.
 unsafeGetString : String -> Dict String String -> String
-unsafeGetString = Ffi.kernel "Db_unsafeGetString"
+unsafeGetString = Kernel.kernel "Db_unsafeGetString"
 
 
 -- | `unsafeGetInt key row` — read column `key` as an `Int`, bypassing the typed
 -- row codec. The caller asserts the column holds an integer.
 unsafeGetInt : String -> Dict String String -> Int
-unsafeGetInt = Ffi.kernel "Db_unsafeGetInt"
+unsafeGetInt = Kernel.kernel "Db_unsafeGetInt"
 
 
 -- | `unsafeGetBool key row` — read column `key` as a `Bool`, bypassing the typed
 -- row codec. The caller asserts the column holds a boolean.
 unsafeGetBool : String -> Dict String String -> Bool
-unsafeGetBool = Ffi.kernel "Db_unsafeGetBool"
+unsafeGetBool = Kernel.kernel "Db_unsafeGetBool"
 
 
 -- | `unsafeGetField key row` — read column `key` as an untyped string field,
 -- bypassing the typed row codec. The caller asserts the column's type.
 unsafeGetField : String -> Dict String String -> String
-unsafeGetField = Ffi.kernel "Db_unsafeGetField"
+unsafeGetField = Kernel.kernel "Db_unsafeGetField"
 
 
 -- | `unsafeFragment s` — mint a `SqlFragment` from `s` verbatim, WITHOUT the
@@ -85,7 +85,7 @@ unsafeGetField = Ffi.kernel "Db_unsafeGetField"
 -- skipped by caller assertion. The caller asserts `s` is a safe SQL identifier
 -- or fragment; `Sql.column` is the safe, validated default.
 unsafeFragment : String -> SqlFragment
-unsafeFragment = Ffi.kernel "Sql_unsafeFragment"
+unsafeFragment = Kernel.kernel "Sql_unsafeFragment"
 
 
 -- | `unsafeExecRawOn conn sql` — run verbatim, caller-authored SQL against an
@@ -95,4 +95,4 @@ unsafeFragment = Ffi.kernel "Sql_unsafeFragment"
 -- `Connection`/`ReadWrite` are reserved types — this hatch pulls in no other
 -- module, so a raw-SQL program stays lean.
 unsafeExecRawOn : Connection ReadWrite -> String -> Task Error Int
-unsafeExecRawOn = Ffi.kernel "Db_unsafeExecRawOn"
+unsafeExecRawOn = Kernel.kernel "Db_unsafeExecRawOn"

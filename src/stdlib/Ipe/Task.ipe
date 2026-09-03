@@ -37,7 +37,7 @@ module Ipe.Task exposing
     )
 
 
-import Ipe.Ffi as Ffi
+import Ipe.Ffi.Kernel as Kernel
 import Ipe.Duration as Duration exposing (Duration)
 
 
@@ -52,7 +52,7 @@ succeed "ready" --> Task Error String
 ```
 -}
 succeed : a -> Task Error a
-succeed = Ffi.kernel "Task_succeed"
+succeed = Kernel.kernel "Task_succeed"
 
 {-| `fail err` — a task that settles with `err` on the implicit error channel, so
 downstream `map`/`andThen` steps are skipped until an `onError` handles it.
@@ -62,7 +62,7 @@ downstream `map`/`andThen` steps are skipped until an `onError` handles it.
 ```
 -}
 fail : Error -> Task Error a
-fail = Ffi.kernel "Task_fail"
+fail = Kernel.kernel "Task_fail"
 
 
 -- ── Transformation ───────────────────────────────────────────────────────────
@@ -76,7 +76,7 @@ map String.fromInt (succeed 42) --> Task Error String
 ```
 -}
 map : (a -> b) -> Task Error a -> Task Error b
-map = Ffi.kernel "Task_map"
+map = Kernel.kernel "Task_map"
 
 {-| `map2`..`map5` — combine 2..5 independent tasks with an N-ary function.
 Effects run in argument order; an early failure short-circuits, so a later task's
@@ -88,7 +88,7 @@ map2 (\a b -> a + b) (succeed 2) (succeed 3) --> Task Error Int
 ```
 -}
 map2 : (a -> b -> c) -> Task Error a -> Task Error b -> Task Error c
-map2 = Ffi.kernel "Task_map2"
+map2 = Kernel.kernel "Task_map2"
 
 {-| `map3 f a b c` — combine three independent tasks with a three-argument
 function; effects run in argument order.
@@ -98,7 +98,7 @@ map3 (\a b c -> a + b + c) (succeed 1) (succeed 2) (succeed 3) --> Task Error In
 ```
 -}
 map3 : (a -> b -> c -> d) -> Task Error a -> Task Error b -> Task Error c -> Task Error d
-map3 = Ffi.kernel "Task_map3"
+map3 = Kernel.kernel "Task_map3"
 
 {-| `map4 f a b c d` — combine four independent tasks with a four-argument
 function; effects run in argument order.
@@ -108,7 +108,7 @@ map4 (\a b c d -> a + b + c + d) (succeed 1) (succeed 2) (succeed 3) (succeed 4)
 ```
 -}
 map4 : (a -> b -> c -> d -> e) -> Task Error a -> Task Error b -> Task Error c -> Task Error d -> Task Error e
-map4 = Ffi.kernel "Task_map4"
+map4 = Kernel.kernel "Task_map4"
 
 {-| `map5 f a b c d e` — combine five independent tasks with a five-argument
 function; effects run in argument order.
@@ -118,7 +118,7 @@ map5 (\a b c d e -> a + b + c + d + e) (succeed 1) (succeed 2) (succeed 3) (succ
 ```
 -}
 map5 : (a -> b -> c -> d -> e -> f) -> Task Error a -> Task Error b -> Task Error c -> Task Error d -> Task Error e -> Task Error f
-map5 = Ffi.kernel "Task_map5"
+map5 = Kernel.kernel "Task_map5"
 
 {-| `andThen next task` — run `task`, then feed its success value to `next` to
 produce the following task. This is sequencing: each step may depend on the
@@ -129,7 +129,7 @@ andThen (\n -> succeed (n * 2)) (succeed 5) --> Task Error Int
 ```
 -}
 andThen : (a -> Task Error b) -> Task Error a -> Task Error b
-andThen = Ffi.kernel "Task_andThen"
+andThen = Kernel.kernel "Task_andThen"
 
 {-| `attempt toMsg task` — run `task` as a `Cmd`, mapping its settled `Result`
 into a message. The Task-to-`Cmd` bridge that fires a task from a TEA `update`;
@@ -140,7 +140,7 @@ attempt (\result -> result) (succeed 1) --> Cmd (Result Error Int)
 ```
 -}
 attempt : (Result Error a -> msg) -> Task Error a -> Cmd msg
-attempt = Ffi.kernel "Task_attempt"
+attempt = Kernel.kernel "Task_attempt"
 
 
 -- ── Error channel ────────────────────────────────────────────────────────────
@@ -153,7 +153,7 @@ mapError (\err -> err) (succeed 5) --> Task Error Int
 ```
 -}
 mapError : (Error -> Error) -> Task Error a -> Task Error a
-mapError = Ffi.kernel "Task_mapError"
+mapError = Kernel.kernel "Task_mapError"
 
 {-| `onError recover task` — if `task` fails, run `recover` on the error to
 produce a fallback task; a success passes straight through. This is the task-level
@@ -164,7 +164,7 @@ onError (\err -> succeed 0) (succeed 5) --> Task Error Int
 ```
 -}
 onError : (Error -> Task Error a) -> Task Error a -> Task Error a
-onError = Ffi.kernel "Task_onError"
+onError = Kernel.kernel "Task_onError"
 
 
 -- ── Result bridges ───────────────────────────────────────────────────────────
@@ -177,7 +177,7 @@ fromResult (Ok 3) --> Task Error Int
 ```
 -}
 fromResult : Result Error a -> Task Error a
-fromResult = Ffi.kernel "Task_fromResult"
+fromResult = Kernel.kernel "Task_fromResult"
 
 {-| `andThenResult step task` — like `andThen`, but `step` returns a plain
 `Result`; an `Err` fails the task. Use it to weave a pure validation into a task
@@ -188,7 +188,7 @@ andThenResult (\n -> Ok (n + 1)) (succeed 5) --> Task Error Int
 ```
 -}
 andThenResult : (a -> Result Error b) -> Task Error a -> Task Error b
-andThenResult = Ffi.kernel "Task_andThenResult"
+andThenResult = Kernel.kernel "Task_andThenResult"
 
 
 -- ── Concurrency ──────────────────────────────────────────────────────────────
@@ -201,7 +201,7 @@ sequence [ succeed 1, succeed 2, succeed 3 ] --> Task Error (List Int)
 ```
 -}
 sequence : List (Task Error a) -> Task Error (List a)
-sequence = Ffi.kernel "Task_sequence"
+sequence = Kernel.kernel "Task_sequence"
 
 {-| `parallel tasks` — run a list of tasks concurrently, collecting their results
 in the original order. Latency is the slowest task, not the sum. The first
@@ -212,7 +212,7 @@ parallel [ succeed 1, succeed 2, succeed 3 ] --> Task Error (List Int)
 ```
 -}
 parallel : List (Task Error a) -> Task Error (List a)
-parallel = Ffi.kernel "Task_parallel"
+parallel = Kernel.kernel "Task_parallel"
 
 
 -- ── Deferred evaluation ──────────────────────────────────────────────────────
@@ -226,7 +226,7 @@ lazy (\_ -> succeed 1) --> Task Error Int
 ```
 -}
 lazy : (() -> Task Error a) -> Task Error a
-lazy = Ffi.kernel "Task_lazy"
+lazy = Kernel.kernel "Task_lazy"
 
 
 -- ── Retry policy ─────────────────────────────────────────────────────────────
@@ -248,19 +248,19 @@ type BackoffStrategy
 
 {-| The `Linear` backoff-strategy constructor. -}
 Linear : BackoffStrategy
-Linear = Ffi.kernel "Task_Linear"
+Linear = Kernel.kernel "Task_Linear"
 
 {-| The `LinearWithJitter` backoff-strategy constructor. -}
 LinearWithJitter : BackoffStrategy
-LinearWithJitter = Ffi.kernel "Task_LinearWithJitter"
+LinearWithJitter = Kernel.kernel "Task_LinearWithJitter"
 
 {-| The `Exponential` backoff-strategy constructor. -}
 Exponential : BackoffStrategy
-Exponential = Ffi.kernel "Task_Exponential"
+Exponential = Kernel.kernel "Task_Exponential"
 
 {-| The `ExponentialWithJitter` backoff-strategy constructor. -}
 ExponentialWithJitter : BackoffStrategy
-ExponentialWithJitter = Ffi.kernel "Task_ExponentialWithJitter"
+ExponentialWithJitter = Kernel.kernel "Task_ExponentialWithJitter"
 
 {-| Retry configuration for `retryWith`, built with the `linearBackoff` /
 `exponentialBackoff` constructors and refined with the `with*` combinators.
@@ -287,7 +287,7 @@ linearBackoff 3 200 --> RetryPolicy e
 ```
 -}
 linearBackoff : Int -> Int -> RetryPolicy e
-linearBackoff = Ffi.kernel "Task_linearBackoff"
+linearBackoff = Kernel.kernel "Task_linearBackoff"
 
 {-| `exponentialBackoff maxAttempts baseMs` — a policy whose delay doubles each
 attempt (`baseMs * 2^(attempt-1)`); retries on every error.
@@ -297,7 +297,7 @@ exponentialBackoff 5 100 --> RetryPolicy e
 ```
 -}
 exponentialBackoff : Int -> Int -> RetryPolicy e
-exponentialBackoff = Ffi.kernel "Task_exponentialBackoff"
+exponentialBackoff = Kernel.kernel "Task_exponentialBackoff"
 
 {-| `withJitter policy` — upgrade the policy's strategy to its jitter variant:
 `Linear` becomes `LinearWithJitter`, `Exponential` becomes `ExponentialWithJitter`.
@@ -308,7 +308,7 @@ withJitter (exponentialBackoff 5 100) --> RetryPolicy e
 ```
 -}
 withJitter : RetryPolicy e -> RetryPolicy e
-withJitter = Ffi.kernel "Task_withJitter"
+withJitter = Kernel.kernel "Task_withJitter"
 
 {-| `retryOn pred policy` — replace the policy's `shouldRetry` predicate so it
 retries only on the errors `pred` selects.
@@ -318,7 +318,7 @@ retryOn (\err -> True) (exponentialBackoff 3 100) --> RetryPolicy Error
 ```
 -}
 retryOn : (e -> Bool) -> RetryPolicy e -> RetryPolicy e
-retryOn = Ffi.kernel "Task_retryOn"
+retryOn = Kernel.kernel "Task_retryOn"
 
 {-| `withRetryOn pred policy` — an alias for `retryOn` with the same semantics and
 a more pipeline-friendly name.
@@ -328,7 +328,7 @@ withRetryOn (\err -> True) (exponentialBackoff 3 100) --> RetryPolicy Error
 ```
 -}
 withRetryOn : (e -> Bool) -> RetryPolicy e -> RetryPolicy e
-withRetryOn = Ffi.kernel "Task_withRetryOn"
+withRetryOn = Kernel.kernel "Task_withRetryOn"
 
 {-| `defaultRetryPolicy` — a sensible starting policy: 3 attempts, 500 ms
 exponential back-off with jitter, retry on all errors. Refine it with the `with*`
@@ -339,7 +339,7 @@ withMaxAttempts 5 defaultRetryPolicy --> RetryPolicy e
 ```
 -}
 defaultRetryPolicy : RetryPolicy e
-defaultRetryPolicy = Ffi.kernel "Task_defaultRetryPolicy"
+defaultRetryPolicy = Kernel.kernel "Task_defaultRetryPolicy"
 
 {-| `withMaxAttempts n policy` — set the maximum number of attempts.
 
@@ -348,7 +348,7 @@ withMaxAttempts 4 (exponentialBackoff 3 100) --> RetryPolicy e
 ```
 -}
 withMaxAttempts : Int -> RetryPolicy e -> RetryPolicy e
-withMaxAttempts = Ffi.kernel "Task_withMaxAttempts"
+withMaxAttempts = Kernel.kernel "Task_withMaxAttempts"
 
 {-| `withBaseMs base policy` — set the base retry delay.  Takes a typed
 `Ipe.Duration` (unit named at the call site); the raw milliseconds are unwrapped
@@ -364,7 +364,7 @@ withBaseMs base policy =
 
 
 withBaseMsKernel : Int -> RetryPolicy e -> RetryPolicy e
-withBaseMsKernel = Ffi.kernel "Task_withBaseMs"
+withBaseMsKernel = Kernel.kernel "Task_withBaseMs"
 
 {-| `retryWith policy task` — run `task`, retrying according to `policy` whenever
 it fails. The task succeeds on the first attempt that settles `Ok`; it fails with
@@ -375,4 +375,4 @@ retryWith defaultRetryPolicy (succeed 1) --> Task Error Int
 ```
 -}
 retryWith : RetryPolicy Error -> Task Error a -> Task Error a
-retryWith = Ffi.kernel "Task_retryWith"
+retryWith = Kernel.kernel "Task_retryWith"

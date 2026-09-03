@@ -246,7 +246,7 @@ import Ipe.Db as Db
 import Ipe.Db.Codec as DbCodec
 import Ipe.Db.Dsn as Dsn exposing (Connection)
 import Ipe.Db.Sql as Sql
-import Ipe.Ffi as Ffi
+import Ipe.Ffi.Kernel as Kernel
 import Ipe.Json.Encode as Encode
 import Ipe.Config as Config
 import Ipe.Char as Char
@@ -685,27 +685,27 @@ public draft =
 -- extracts the column name from the accessor and calls `primaryKeyNamed`.
 primaryKey : (row -> t) -> Draft row -> Draft row
 primaryKey =
-    Ffi.kernel "Store_primaryKey"
+    Kernel.kernel "Store_primaryKey"
 
 
 -- | Mark the accessor-named column DB-assigned (serial). `insert` omits it so
 -- the database generates it — a client value can never overwrite a serial column.
 serial : (row -> t) -> Draft row -> Draft row
 serial =
-    Ffi.kernel "Store_serial"
+    Kernel.kernel "Store_serial"
 
 
 -- | Mark the accessor-named column unique.
 unique : (row -> t) -> Draft row -> Draft row
 unique =
-    Ffi.kernel "Store_unique"
+    Kernel.kernel "Store_unique"
 
 
 -- | Mark the accessor-named column DB-stamped with the current time on insert.
 -- `insert` omits it so the database stamps it.
 defaultNow : (row -> t) -> Draft row -> Draft row
 defaultNow =
-    Ffi.kernel "Store_defaultNow"
+    Kernel.kernel "Store_defaultNow"
 
 
 -- | `defaultText accessor value store` — give the accessor-named column a
@@ -722,7 +722,7 @@ defaultNow =
 --         Store.defaultText .status "active" store
 defaultText : (row -> String) -> String -> Draft row -> Draft row
 defaultText =
-    Ffi.kernel "Store_defaultText"
+    Kernel.kernel "Store_defaultText"
 
 
 -- | `defaultInt accessor value store` — give the accessor-named column a
@@ -739,7 +739,7 @@ defaultText =
 --         Store.defaultInt .retries 0 store
 defaultInt : (row -> Int) -> Int -> Draft row -> Draft row
 defaultInt =
-    Ffi.kernel "Store_defaultInt"
+    Kernel.kernel "Store_defaultInt"
 
 
 -- | Mark the accessor-named column a DB-stamped updated-at column. Like
@@ -756,7 +756,7 @@ defaultInt =
 --         Store.touchOnUpdate .updatedAt store
 touchOnUpdate : (row -> t) -> Draft row -> Draft row
 touchOnUpdate =
-    Ffi.kernel "Store_touchOnUpdate"
+    Kernel.kernel "Store_touchOnUpdate"
 
 
 -- The stringly forms below are reached by the accessor-typed kernel intercepts
@@ -2087,7 +2087,7 @@ firstPoison existing e =
 --         |> Store.where (Store.eq .age 18)
 eq : (row -> value) -> value -> Cond row
 eq =
-    Ffi.kernel "Store_eq"
+    Kernel.kernel "Store_eq"
 
 
 -- | `eqBy codec accessor value` — the accessor-typed equality leaf for an ENUM
@@ -2103,7 +2103,7 @@ eq =
 --         |> Store.where (Store.eqBy rankCodec .rank Gold)
 eqBy : Codec value -> (row -> value) -> value -> Cond row
 eqBy =
-    Ffi.kernel "Store_eqBy"
+    Kernel.kernel "Store_eqBy"
 
 
 -- The lowered form of `eqBy`: the accessor `.field` (checked against the row
@@ -2137,7 +2137,7 @@ eqByNamed col codec v =
 --         |> Store.where (Store.neq .status "deleted")
 neq : (row -> value) -> value -> Cond row
 neq =
-    Ffi.kernel "Store_neq"
+    Kernel.kernel "Store_neq"
 
 
 -- | `neqBy codec accessor value` — the accessor-typed not-equal leaf for an
@@ -2150,7 +2150,7 @@ neq =
 --         |> Store.where (Store.neqBy rankCodec .rank Gold)
 neqBy : Codec value -> (row -> value) -> value -> Cond row
 neqBy =
-    Ffi.kernel "Store_neqBy"
+    Kernel.kernel "Store_neqBy"
 
 
 neqByNamed : String -> Codec value -> value -> Cond row
@@ -2173,7 +2173,7 @@ neqByNamed col codec v =
 --         |> Store.where (Store.gt .age 18)
 gt : (row -> value) -> value -> Cond row
 gt =
-    Ffi.kernel "Store_gt"
+    Kernel.kernel "Store_gt"
 
 
 -- | `gtBy codec accessor value` — the accessor-typed greater-than leaf for an
@@ -2185,7 +2185,7 @@ gt =
 --         |> Store.where (Store.gtBy priceCodec .price minPrice)
 gtBy : Codec value -> (row -> value) -> value -> Cond row
 gtBy =
-    Ffi.kernel "Store_gtBy"
+    Kernel.kernel "Store_gtBy"
 
 
 gtByNamed : String -> Codec value -> value -> Cond row
@@ -2208,14 +2208,14 @@ gtByNamed col codec v =
 --         |> Store.where (Store.gte .age 18)
 gte : (row -> value) -> value -> Cond row
 gte =
-    Ffi.kernel "Store_gte"
+    Kernel.kernel "Store_gte"
 
 
 -- | `gteBy codec accessor value` — the accessor-typed greater-than-or-equal
 -- leaf for an enum or newtype column.
 gteBy : Codec value -> (row -> value) -> value -> Cond row
 gteBy =
-    Ffi.kernel "Store_gteBy"
+    Kernel.kernel "Store_gteBy"
 
 
 gteByNamed : String -> Codec value -> value -> Cond row
@@ -2238,14 +2238,14 @@ gteByNamed col codec v =
 --         |> Store.where (Store.lt .age 65)
 lt : (row -> value) -> value -> Cond row
 lt =
-    Ffi.kernel "Store_lt"
+    Kernel.kernel "Store_lt"
 
 
 -- | `ltBy codec accessor value` — the accessor-typed less-than leaf for an
 -- enum or newtype column.
 ltBy : Codec value -> (row -> value) -> value -> Cond row
 ltBy =
-    Ffi.kernel "Store_ltBy"
+    Kernel.kernel "Store_ltBy"
 
 
 ltByNamed : String -> Codec value -> value -> Cond row
@@ -2268,14 +2268,14 @@ ltByNamed col codec v =
 --         |> Store.where (Store.lte .age 64)
 lte : (row -> value) -> value -> Cond row
 lte =
-    Ffi.kernel "Store_lte"
+    Kernel.kernel "Store_lte"
 
 
 -- | `lteBy codec accessor value` — the accessor-typed less-than-or-equal leaf
 -- for an enum or newtype column.
 lteBy : Codec value -> (row -> value) -> value -> Cond row
 lteBy =
-    Ffi.kernel "Store_lteBy"
+    Kernel.kernel "Store_lteBy"
 
 
 lteByNamed : String -> Codec value -> value -> Cond row
@@ -2299,7 +2299,7 @@ lteByNamed col codec v =
 --         |> Store.where (Store.like .name "al%")
 like : (row -> String) -> String -> Cond row
 like =
-    Ffi.kernel "Store_like"
+    Kernel.kernel "Store_like"
 
 
 -- | `isNull accessor` — the rows where the column named by `accessor` is SQL
@@ -2311,7 +2311,7 @@ like =
 --         |> Store.where (Store.isNull .deletedAt)
 isNull : (row -> t) -> Cond row
 isNull =
-    Ffi.kernel "Store_isNull"
+    Kernel.kernel "Store_isNull"
 
 
 -- | `notNull accessor` — the rows where the column named by `accessor` is NOT
@@ -2323,7 +2323,7 @@ isNull =
 --         |> Store.where (Store.notNull .email)
 notNull : (row -> t) -> Cond row
 notNull =
-    Ffi.kernel "Store_notNull"
+    Kernel.kernel "Store_notNull"
 
 
 -- | `inList accessor values` — the rows where the column named by `accessor`
@@ -2339,7 +2339,7 @@ notNull =
 --         |> Store.where (Store.inList .status [ "active", "trial" ])
 inList : (row -> value) -> List value -> Cond row
 inList =
-    Ffi.kernel "Store_inList"
+    Kernel.kernel "Store_inList"
 
 
 -- | `inListBy codec accessor values` — the accessor-typed IN-list leaf for an
@@ -2354,7 +2354,7 @@ inList =
 --         |> Store.where (Store.inListBy rankCodec .rank [ Gold, Silver ])
 inListBy : Codec value -> (row -> value) -> List value -> Cond row
 inListBy =
-    Ffi.kernel "Store_inListBy"
+    Kernel.kernel "Store_inListBy"
 
 
 -- The lowered form of `inListBy`: the accessor `.field` has already been
@@ -2744,7 +2744,7 @@ type Joined a b
 --             |> Store.joinToList conn
 join : Store a -> (a -> k) -> Store b -> (b -> k) -> Joined a b
 join =
-    Ffi.kernel "Store_join"
+    Kernel.kernel "Store_join"
 
 
 -- | The lowered form of `join`: each accessor `.field` has already been turned
@@ -2871,7 +2871,7 @@ addJoinFilter alias columns cond joined =
 --         |> Store.joinToList db
 orderByLeft : (a -> k) -> Order -> Joined a b -> Joined a b
 orderByLeft =
-    Ffi.kernel "Store_orderByLeft"
+    Kernel.kernel "Store_orderByLeft"
 
 
 -- | `orderByRight accessor order joined` — sort the join result by a column from
@@ -2885,7 +2885,7 @@ orderByLeft =
 --         |> Store.joinToList db
 orderByRight : (b -> k) -> Order -> Joined a b -> Joined a b
 orderByRight =
-    Ffi.kernel "Store_orderByRight"
+    Kernel.kernel "Store_orderByRight"
 
 
 -- | Lowered form of `orderByLeft`: the accessor has already been turned into its
@@ -3084,7 +3084,7 @@ type Select row
 --         |> Store.selectToList db
 select : (( a, b ) -> row) -> Joined a b -> Select row
 select =
-    Ffi.kernel "Store_select"
+    Kernel.kernel "Store_select"
 
 
 -- | `literal value` — inside a `Store.select` projection lambda, binds `value`
@@ -3102,7 +3102,7 @@ select =
 --         -- SQL: SELECT ? AS p0, a1.name AS p1 FROM …
 literal : t -> t
 literal =
-    Ffi.kernel "Store_literal"
+    Kernel.kernel "Store_literal"
 
 
 -- | `upper col` — inside a `Store.select` projection lambda, applies SQL
@@ -3120,7 +3120,7 @@ literal =
 --         -- SQL: SELECT UPPER(a1.name) AS p0 FROM …
 upper : String -> String
 upper =
-    Ffi.kernel "Store_upper"
+    Kernel.kernel "Store_upper"
 
 
 -- | `lower col` — symmetric counterpart to `upper`: applies SQL `LOWER(…)` to
@@ -3134,7 +3134,7 @@ upper =
 --         -- SQL: SELECT LOWER(a0.title) AS p0 FROM …
 lower : String -> String
 lower =
-    Ffi.kernel "Store_lower"
+    Kernel.kernel "Store_lower"
 
 
 -- | `coalesce left right` — inside a `Store.select` projection lambda, emits
@@ -3154,7 +3154,7 @@ lower =
 --         -- SQL: SELECT COALESCE(a1.name, ?) AS p0 FROM …
 coalesce : Projection a -> Projection a -> Projection a
 coalesce =
-    Ffi.kernel "Store_coalesce"
+    Kernel.kernel "Store_coalesce"
 
 
 -- | `add left right` — inside a `Store.select` projection lambda, emits
@@ -3173,21 +3173,21 @@ coalesce =
 --         -- SQL: SELECT (a0.price + ?) AS p0 FROM …
 add : a -> a -> a
 add =
-    Ffi.kernel "Store_add"
+    Kernel.kernel "Store_add"
 
 
 -- | `sub left right` — subtraction counterpart to `add`: emits `(a - b) AS pN`.
 -- The same operand and numeric-type restrictions apply.
 sub : a -> a -> a
 sub =
-    Ffi.kernel "Store_sub"
+    Kernel.kernel "Store_sub"
 
 
 -- | `mul left right` — multiplication counterpart to `add`: emits
 -- `(a * b) AS pN`. The same operand and numeric-type restrictions apply.
 mul : a -> a -> a
 mul =
-    Ffi.kernel "Store_mul"
+    Kernel.kernel "Store_mul"
 
 
 -- | The lowered form of `select`: the lambda has already been read into the
@@ -4255,7 +4255,7 @@ publicRead =
 --     Store.ownerColumn .author
 ownerColumn : (row -> t) -> Policy row
 ownerColumn =
-    Ffi.kernel "Store_ownerColumn"
+    Kernel.kernel "Store_ownerColumn"
 
 
 -- | `immutable accessor` — a policy of one immutable-column rule over the
@@ -4267,7 +4267,7 @@ ownerColumn =
 --     Store.immutable .createdAt
 immutable : (row -> t) -> Policy row
 immutable =
-    Ffi.kernel "Store_immutable"
+    Kernel.kernel "Store_immutable"
 
 
 -- The stringly forms reached by the accessor-typed policy-builder intercepts

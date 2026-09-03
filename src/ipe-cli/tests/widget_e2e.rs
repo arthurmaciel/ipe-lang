@@ -598,7 +598,7 @@ import Ipe.Tea.Web as Web
 import Ipe.Tea.Web.Cmd as Cmd
 import Ipe.Tea.Web.Sub as Sub
 import Ipe.Ui as Ui
-import Ipe.Js as Js
+import Ipe.Ffi.Js as Js
 import Ipe.Json.Decode as Decode
 
 type alias Model = { n : Int }
@@ -633,7 +633,7 @@ main =
         }
 "#;
 
-/// THE SEAL for `Ipe.Js` ports: a seal-legal port program `ipe`-accepts (exit 0)
+/// THE SEAL for `Ipe.Ffi.Js` ports: a seal-legal port program `ipe`-accepts (exit 0)
 /// AND the emitted Rust `cargo build`s. A `Js.send model.n` lowers to
 /// `js_send(...)` and `Js.subscribe Decode.int Got` to
 /// `js_subscribe(json_decode_int(), ...)`; the payload type's serde derive is

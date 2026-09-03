@@ -43,7 +43,7 @@ module Ipe.Config exposing
     )
 
 
-import Ipe.Ffi as Ffi
+import Ipe.Ffi.Kernel as Kernel
 import Ipe.Error exposing (Error)
 import Ipe.Maybe exposing (Maybe(..))
 import Ipe.Path exposing (Path)
@@ -58,19 +58,19 @@ type Decoder a
 
 
 string : Decoder String
-string = Ffi.kernel "Config_string"
+string = Kernel.kernel "Config_string"
 
 
 int : Decoder Int
-int = Ffi.kernel "Config_int"
+int = Kernel.kernel "Config_int"
 
 
 float : Decoder Float
-float = Ffi.kernel "Config_float"
+float = Kernel.kernel "Config_float"
 
 
 bool : Decoder Bool
-bool = Ffi.kernel "Config_bool"
+bool = Kernel.kernel "Config_bool"
 
 
 -- ─── Field accessors ───────────────────────────────────────────────
@@ -80,71 +80,71 @@ bool = Ffi.kernel "Config_bool"
 -- level.  Fails if the field is missing or its value doesn't
 -- match `decoder`.
 field : String -> Decoder a -> Decoder a
-field = Ffi.kernel "Config_field"
+field = Kernel.kernel "Config_field"
 
 
 -- | `at path decoder` — drill into nested fields.  `at ["db",
 -- "host"] string` is equivalent to `field "db" (field "host"
 -- string)`.
 at : List String -> Decoder a -> Decoder a
-at = Ffi.kernel "Config_at"
+at = Kernel.kernel "Config_at"
 
 
 -- | `nullable decoder` — like `decoder`, but `Nothing` on null /
 -- missing.
 nullable : Decoder a -> Decoder (Maybe a)
-nullable = Ffi.kernel "Config_nullable"
+nullable = Kernel.kernel "Config_nullable"
 
 
 -- ─── Collections ───────────────────────────────────────────────────
 
 
 list : Decoder a -> Decoder (List a)
-list = Ffi.kernel "Config_list"
+list = Kernel.kernel "Config_list"
 
 
 -- | `index n decoder` — decode the n-th element of an array. Fails on
 -- out-of-bounds or non-array input.
 index : Int -> Decoder a -> Decoder a
-index = Ffi.kernel "Config_index"
+index = Kernel.kernel "Config_index"
 
 
 -- | `keyValuePairs decoder` — decode every entry of an object into a list of
 -- `(key, value)` pairs, applying `decoder` to each value.
 keyValuePairs : Decoder a -> Decoder (List ( String, a ))
-keyValuePairs = Ffi.kernel "Config_keyValuePairs"
+keyValuePairs = Kernel.kernel "Config_keyValuePairs"
 
 
 -- | `dict decoder` — decode an object into a `Dict String a`, applying
 -- `decoder` to each value.
 dict : Decoder a -> Decoder (Dict String a)
-dict = Ffi.kernel "Config_dict"
+dict = Kernel.kernel "Config_dict"
 
 
 -- ─── Combinators ───────────────────────────────────────────────────
 
 
 succeed : a -> Decoder a
-succeed = Ffi.kernel "Config_succeed"
+succeed = Kernel.kernel "Config_succeed"
 
 
 fail : String -> Decoder a
-fail = Ffi.kernel "Config_fail"
+fail = Kernel.kernel "Config_fail"
 
 
 map : (a -> b) -> Decoder a -> Decoder b
-map = Ffi.kernel "Config_map"
+map = Kernel.kernel "Config_map"
 
 
 andThen : (a -> Decoder b) -> Decoder a -> Decoder b
-andThen = Ffi.kernel "Config_andThen"
+andThen = Kernel.kernel "Config_andThen"
 
 
 -- | `oneOf decoders` — try each decoder in order, returning the first that
 -- succeeds. Fails (with the last branch's error) if none match. Load-bearing
 -- for decoding unions / heterogeneous shapes.
 oneOf : List (Decoder a) -> Decoder a
-oneOf = Ffi.kernel "Config_oneOf"
+oneOf = Kernel.kernel "Config_oneOf"
 
 
 -- | `map2`..`map8` — combine 2..8 decoders over the SAME value with an N-ary
@@ -153,38 +153,38 @@ oneOf = Ffi.kernel "Config_oneOf"
 -- be forwarded through a Rust closure — IPE-L0126 — so these are kernels, not
 -- pure `andThen`/`map` compositions).
 map2 : (a -> b -> c) -> Decoder a -> Decoder b -> Decoder c
-map2 = Ffi.kernel "Config_map2"
+map2 = Kernel.kernel "Config_map2"
 
 
 map3 : (a -> b -> c -> d) -> Decoder a -> Decoder b -> Decoder c -> Decoder d
-map3 = Ffi.kernel "Config_map3"
+map3 = Kernel.kernel "Config_map3"
 
 
 map4 : (a -> b -> c -> d -> e) -> Decoder a -> Decoder b -> Decoder c -> Decoder d -> Decoder e
-map4 = Ffi.kernel "Config_map4"
+map4 = Kernel.kernel "Config_map4"
 
 
 map5 : (a -> b -> c -> d -> e -> f) -> Decoder a -> Decoder b -> Decoder c -> Decoder d -> Decoder e -> Decoder f
-map5 = Ffi.kernel "Config_map5"
+map5 = Kernel.kernel "Config_map5"
 
 
 map6 : (a -> b -> c -> d -> e -> f -> g) -> Decoder a -> Decoder b -> Decoder c -> Decoder d -> Decoder e -> Decoder f -> Decoder g
-map6 = Ffi.kernel "Config_map6"
+map6 = Kernel.kernel "Config_map6"
 
 
 map7 : (a -> b -> c -> d -> e -> f -> g -> h) -> Decoder a -> Decoder b -> Decoder c -> Decoder d -> Decoder e -> Decoder f -> Decoder g -> Decoder h
-map7 = Ffi.kernel "Config_map7"
+map7 = Kernel.kernel "Config_map7"
 
 
 map8 : (a -> b -> c -> d -> e -> f -> g -> h -> i) -> Decoder a -> Decoder b -> Decoder c -> Decoder d -> Decoder e -> Decoder f -> Decoder g -> Decoder h -> Decoder i
-map8 = Ffi.kernel "Config_map8"
+map8 = Kernel.kernel "Config_map8"
 
 
 -- | `maybe decoder` — succeed with `Just` when `decoder` matches, else `Nothing`
 -- (never fails). Unlike `nullable` (which only tolerates null/missing), `maybe`
 -- catches ANY decode failure.
 maybe : Decoder a -> Decoder (Maybe a)
-maybe = Ffi.kernel "Config_maybe"
+maybe = Kernel.kernel "Config_maybe"
 
 
 -- ─── Entry points ──────────────────────────────────────────────────
@@ -192,18 +192,18 @@ maybe = Ffi.kernel "Config_maybe"
 
 -- | Run a decoder against a TOML document.
 decodeToml : String -> Decoder a -> Result Error a
-decodeToml = Ffi.kernel "Config_decodeToml"
+decodeToml = Kernel.kernel "Config_decodeToml"
 
 
 -- | Run a decoder against a YAML document.
 decodeYaml : String -> Decoder a -> Result Error a
-decodeYaml = Ffi.kernel "Config_decodeYaml"
+decodeYaml = Kernel.kernel "Config_decodeYaml"
 
 
 -- | Run a decoder against a JSON document.  Alias for
 -- `Ipe.Json.Decode.decodeString` from the Config namespace.
 decodeJson : String -> Decoder a -> Result Error a
-decodeJson = Ffi.kernel "Config_decodeJson"
+decodeJson = Kernel.kernel "Config_decodeJson"
 
 
 -- | `loadFromFile path decoder` — read `path` (a validated `Path`,
@@ -211,4 +211,4 @@ decodeJson = Ffi.kernel "Config_decodeJson"
 -- decoder by extension (`.toml`, `.yaml`, `.yml`, `.json`), then
 -- decode.  Use `Path.fromString` to obtain a `Path` from a raw string.
 loadFromFile : Path -> Decoder a -> Task Error a
-loadFromFile = Ffi.kernel "Config_loadFromFile"
+loadFromFile = Kernel.kernel "Config_loadFromFile"

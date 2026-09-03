@@ -66,7 +66,7 @@ module Ipe.Http exposing
 
 import Ipe.Dict exposing (Dict)
 import Ipe.Error as Error exposing (Error)
-import Ipe.Ffi as Ffi
+import Ipe.Ffi.Kernel as Kernel
 import Ipe.Maybe exposing (Maybe)
 import Ipe.Url as Url exposing (Url)
 
@@ -122,24 +122,24 @@ type alias HttpRequest =
 -- argument is defence-in-depth at the API boundary, not a replacement for it.
 get : Url -> Task Error HttpResponse
 get =
-    Ffi.kernel "Http_get"
+    Kernel.kernel "Http_get"
 
 
 -- | `post url body` — outbound POST. Takes an already-sealed typed `Url` (see
 -- `get`) and a request body. The runtime SSRF floor is unchanged.
 post : Url -> String -> Task Error HttpResponse
 post =
-    Ffi.kernel "Http_post"
+    Kernel.kernel "Http_post"
 
 
 request : HttpRequest -> Task Error HttpResponse
 request =
-    Ffi.kernel "Http_request"
+    Kernel.kernel "Http_request"
 
 
 parseQuery : String -> Dict String String
 parseQuery =
-    Ffi.kernel "Http_parseQuery"
+    Kernel.kernel "Http_parseQuery"
 
 
 -- ── HttpMethod helpers ────────────────────────────────────────────────────────
@@ -151,7 +151,7 @@ parseQuery =
 -- Never silently defaults.
 methodFromString : String -> Maybe HttpMethod
 methodFromString =
-    Ffi.kernel "Http_methodFromString"
+    Kernel.kernel "Http_methodFromString"
 
 
 -- | `methodToString m` — the canonical uppercase string for `m`
@@ -159,7 +159,7 @@ methodFromString =
 -- runtime converts `HttpMethod` to the reqwest `Method` internally.
 methodToString : HttpMethod -> String
 methodToString =
-    Ffi.kernel "Http_methodToString"
+    Kernel.kernel "Http_methodToString"
 
 
 -- ── Pure builders ─────────────────────────────────────────────────────────────

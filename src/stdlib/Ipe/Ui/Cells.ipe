@@ -11,36 +11,36 @@ module Ipe.Ui.Cells exposing
     )
 
 
-import Ipe.Ffi as Ffi
+import Ipe.Ffi.Kernel as Kernel
 import Ipe.Ui as Ui
 
 
 -- | An empty cell view — renders nothing.
 none : Cells msg
-none = Ffi.kernel "UiCells_none"
+none = Kernel.kernel "UiCells_none"
 
 
 -- | `text str` — a single line of text.
 text : String -> Cells msg
-text = Ffi.kernel "UiCells_text"
+text = Kernel.kernel "UiCells_text"
 
 
 -- | `cells grid` — a raw terminal cell grid.  Each inner list is one row
 -- of characters; the terminal backend paints it verbatim.
 cells : List (List Char) -> Cells msg
-cells = Ffi.kernel "UiCells_cells"
+cells = Kernel.kernel "UiCells_cells"
 
 
 -- | `el attrs child` — wrap a single `Cells msg` child with attributes.
 el : List (Ui.Attribute msg) -> Cells msg -> Cells msg
-el = Ffi.kernel "UiCells_el"
+el = Kernel.kernel "UiCells_el"
 
 
 -- | `row attrs children` — lay out `Cells msg` children horizontally.
 row : List (Ui.Attribute msg) -> List (Cells msg) -> Cells msg
-row = Ffi.kernel "UiCells_row"
+row = Kernel.kernel "UiCells_row"
 
 
 -- | `column attrs children` — lay out `Cells msg` children vertically.
 column : List (Ui.Attribute msg) -> List (Cells msg) -> Cells msg
-column = Ffi.kernel "UiCells_column"
+column = Kernel.kernel "UiCells_column"

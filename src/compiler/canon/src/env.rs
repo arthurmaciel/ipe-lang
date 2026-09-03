@@ -206,16 +206,16 @@ pub fn stdlib_module_dot_paths() -> Vec<Box<str>> {
         .collect()
 }
 
-/// The reserved kernel-alias qualifier path. `import Ipe.Ffi as Ffi` brings the
-/// `Ffi.kernel "…"` alias surface into scope for a driver-vouched
+/// The reserved kernel-alias qualifier path. `import Ipe.Ffi.Kernel as Kernel`
+/// brings the `Kernel.kernel "…"` alias surface into scope for a driver-vouched
 /// stdlib / FFI-interface source. It is a compiler-internal qualifier, not a
 /// member-bearing stdlib module, so it lives outside [`STDLIB_MODULE_QUALIFIERS`]
 /// yet must be accepted at the import boundary.
-const RESERVED_FFI_QUALIFIER_PATH: &[&str] = &["Ipe", "Ffi"];
+const RESERVED_FFI_QUALIFIER_PATH: &[&str] = &["Ipe", "Ffi", "Kernel"];
 
 /// Whether `path` (segment symbols) names a known importable `Ipe.*` module that
 /// needs no dep injection: a kernel stdlib module registered in
-/// [`STDLIB_MODULE_QUALIFIERS`], or the reserved `Ipe.Ffi` kernel-alias
+/// [`STDLIB_MODULE_QUALIFIERS`], or the reserved `Ipe.Ffi.Kernel` kernel-alias
 /// qualifier. An un-interned segment cannot match a known module, so it answers
 /// `false`. Purely immutable — no interning.
 #[must_use]

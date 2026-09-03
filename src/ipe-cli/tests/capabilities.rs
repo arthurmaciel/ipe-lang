@@ -443,7 +443,7 @@ import Ipe.Tea.Web as Web
 import Ipe.Tea.Web.Cmd as Cmd
 import Ipe.Tea.Web.Sub as Sub
 import Ipe.Ui as Ui
-import Ipe.Js as Js
+import Ipe.Ffi.Js as Js
 import Ipe.Json.Decode as Decode
 
 type alias Model = { n : Int }

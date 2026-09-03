@@ -1,7 +1,8 @@
--- | Ipe.Js — the raw typed transport across the Ipê↔JS seam (ports).
+-- | Ipe.Ffi.Js — the raw typed transport across the Ipê↔JS seam (ports).
 --
 -- Ports carry imperative effects and out-of-band data that have no place in the
--- view tree — custom elements (`Ipe.Ui.widget`) own visual-in-view; ports own
+-- view tree — custom elements (`Ipe.Ffi.Js.CustomElement.node`) own
+-- visual-in-view; ports own
 -- streaming and programmatic effects. There is no new language construct: a port
 -- is an ordinary `Cmd msg` (outbound) or `Sub msg` (inbound) plus a `sync` cfg
 -- projection, so ports reuse the `Cmd`/`Sub` machinery already present.
@@ -48,13 +49,13 @@
 --
 -- A module whose reachable code uses a port discloses the `js-port` capability,
 -- inferred through the same SSOT the other capability axes use.
-module Ipe.Js exposing
+module Ipe.Ffi.Js exposing
     ( send
     , subscribe
     , request
     )
 
-import Ipe.Ffi as Ffi
+import Ipe.Ffi.Kernel as Kernel
 
 
 -- | `send payload` — an outbound one-shot imperative effect, Ipê → JS
@@ -72,7 +73,7 @@ import Ipe.Ffi as Ffi
 -- client-WASM: direct dispatch, same tick).
 send : a -> Cmd msg
 send =
-    Ffi.kernel "Js_send"
+    Kernel.kernel "Js_send"
 
 
 -- | `subscribe decoder toMsg` — an inbound intent stream, JS → Ipê, wired in
@@ -88,7 +89,7 @@ send =
 -- `Msg` must be exhaustive.
 subscribe : Decoder a -> (a -> msg) -> Sub msg
 subscribe =
-    Ffi.kernel "Js_subscribe"
+    Kernel.kernel "Js_subscribe"
 
 
 -- | `request cmd decoder` — a correlated one-shot request/reply over the port.
@@ -120,4 +121,4 @@ subscribe =
 -- is dropped fail-closed.
 request : a -> Decoder b -> Task b
 request =
-    Ffi.kernel "Js_request"
+    Kernel.kernel "Js_request"
