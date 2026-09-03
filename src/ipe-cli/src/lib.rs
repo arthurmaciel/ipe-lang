@@ -5651,9 +5651,7 @@ pub(crate) fn typecheck_entry_via_graph(entry: &Path) -> Result<(), CliError> {
 /// `--emit-permissions` platform or a stray argument; the manifest's own parse
 /// errors when the project's `package.ipe` is malformed.
 pub(crate) fn run_pack(rest: &[String]) -> Result<(), CliError> {
-    // The only supported mode today is the `--emit-permissions <platform>`
-    // dry-run; anything else is misuse. Advertising only what is implemented.
-    let platform = match rest.split_first() {
+    match rest.split_first() {
         Some((flag, tail)) if flag == "--emit-permissions" => {
             let (raw, path_args) = tail.split_first().ok_or(CliError::Usage(
                 "usage: ipe pack --emit-permissions <ios|macos|android> [<path>]",
@@ -5664,16 +5662,145 @@ pub(crate) fn run_pack(rest: &[String]) -> Result<(), CliError> {
             if let Some(extra) = path_args.get(1) {
                 return Err(cli_args::usage_unexpected_argument("pack", extra));
             }
-            (platform, path_args.first().cloned())
+            emit_permissions(platform, path_args.first().map(String::as_str))
         }
-        _ => {
-            return Err(CliError::Usage(
-                "usage: ipe pack --emit-permissions <ios|macos|android> [<path>]",
-            ));
+        Some((flag, tail)) if flag == "--target" => {
+            let (target, path_args) = tail.split_first().ok_or(CliError::Usage(
+                "usage: ipe pack --target desktop[:<linux|macos|windows>] [<path>]",
+            ))?;
+            let os_arg = target.strip_prefix("desktop").ok_or_else(|| {
+                CliError::UsageOwned(format!(
+                    "ipe pack: unknown target {target:?} (expected \
+                     `desktop[:<linux|macos|windows>]`)"
+                ))
+            })?;
+            // `desktop` → host OS; `desktop:<os>` → that OS. Anything between
+            // `desktop` and a `:` is a malformed target.
+            let explicit_os = match os_arg.strip_prefix(':') {
+                Some(os) => Some(os),
+                None if os_arg.is_empty() => None,
+                None => {
+                    return Err(CliError::UsageOwned(format!(
+                        "ipe pack: unknown target {target:?} (expected \
+                         `desktop[:<linux|macos|windows>]`)"
+                    )));
+                }
+            };
+            if let Some(extra) = path_args.get(1) {
+                return Err(cli_args::usage_unexpected_argument("pack", extra));
+            }
+            pack_desktop(explicit_os, path_args.first().map(String::as_str))
         }
-    };
-    let (platform, path) = platform;
-    emit_permissions(platform, path.as_deref())
+        _ => Err(CliError::Usage(
+            "usage: ipe pack --emit-permissions <ios|macos|android> [<path>]  |  \
+             ipe pack --target desktop[:<linux|macos|windows>] [<path>]",
+        )),
+    }
+}
+
+/// `ipe pack --target desktop[:<os>] [<path>]` — build the app and lay out a
+/// self-contained desktop bundle for `os` (the host OS by default).
+///
+/// A webview app is required: an app whose `programs` shape is declared
+/// non-`WebView` is a typed refusal ([`pack::desktop::DesktopRefusal::NotWebView`])
+/// naming its shape. The macOS `Info.plist` permission keys come only from the
+/// permission derivation ([`pack::permissions`]).
+///
+/// The Linux bundle is produced end-to-end on this host (the binary is built and
+/// the tarball layout materialised). A macOS/Windows target does not run its OS
+/// toolchain here; it reports the bundle layout + manifest it *would* produce so
+/// the author can inspect it, and directs the actual build to that OS's runner.
+///
+/// # Errors
+/// [`CliError::UsageOwned`] wrapping a [`pack::desktop::DesktopRefusal`];
+/// build/emit errors from the underlying compile; [`CliError::Io`] on any
+/// filesystem failure while materialising the bundle.
+fn pack_desktop(explicit_os: Option<&str>, path: Option<&str>) -> Result<(), CliError> {
+    let os =
+        pack::desktop::resolve_os(explicit_os).map_err(|r| CliError::UsageOwned(r.to_string()))?;
+
+    let root = path.map_or_else(|| PathBuf::from("."), PathBuf::from);
+    let manifest_path = discover_manifest(&root)?.ok_or(CliError::Usage(
+        "ipe pack: no package.ipe found — run inside a project or pass its path",
+    ))?;
+    let manifest = project::parse_manifest(&manifest_path)?;
+
+    let identity = pack::desktop::BundleIdentity::new(
+        &manifest.name,
+        manifest
+            .version
+            .as_ref()
+            .map(ToString::to_string)
+            .as_deref(),
+        None,
+    );
+    let accepts = manifest.capabilities_accept.clone();
+    let icon = manifest.icon.clone();
+
+    // Gate the app shape BEFORE any build. The author's declared `programs`
+    // shape is the authoritative packaging intent: a declared non-`WebView`
+    // shape is refused up front (naming it), and only a declared `WebView` — or
+    // an app that declares no shape at all — is packageable. This is the reliable
+    // signal; the emitted crate's feature list is a weaker secondary probe.
+    let shape = manifest.default_program().and_then(|p| p.shape).map_or(
+        pack::desktop::AppShape::WebView,
+        |declared| match declared {
+            project::EntryShape::Web => pack::desktop::AppShape::Web,
+            project::EntryShape::Terminal => pack::desktop::AppShape::Terminal,
+            project::EntryShape::WebView => pack::desktop::AppShape::WebView,
+            project::EntryShape::Program => pack::desktop::AppShape::Program,
+        },
+    );
+    pack::desktop::require_webview(shape).map_err(|r| CliError::UsageOwned(r.to_string()))?;
+
+    let layout = pack::desktop::layout(os, &identity, &accepts, icon.as_deref())?;
+
+    // Emit + compile the project to a binary. A webview app carries the system
+    // webview as a dynamic dependency, so this is a plain (non-static) native
+    // build.
+    let build_dir = manifest.root.join("out").join("rust");
+    let runtime_dir = resolve_vendored_runtime_dir(None, false)?;
+    build_project(&manifest_path, &build_dir, &runtime_dir)?;
+
+    let cargo_bin = toolchain::require_cargo(toolchain::ToolIntent::Build)?;
+    let mut cargo = std::process::Command::new(cargo_bin.path());
+    cargo.arg("build").current_dir(&build_dir);
+    force_cargo_terminal_ui(&mut cargo);
+    build_emitted_project(&mut cargo, "the desktop app", None, &build_dir)?;
+
+    // Locate the compiled binary via cargo metadata (the target dir may be a
+    // global CARGO_TARGET_DIR), then materialise (Linux) or describe (mac/Windows).
+    let target_dir = cargo_target_directory(&build_dir)?;
+    let bin_name = emitted_bin_name(&build_dir);
+    let binary = target_dir.join("debug").join(&bin_name);
+    if !binary.is_file() {
+        return Err(CliError::UsageOwned(format!(
+            "ipe pack: expected app binary at {} — cargo build succeeded but the binary is missing",
+            binary.display()
+        )));
+    }
+
+    let dist = manifest.root.join("dist").join(os.as_str());
+    pack::desktop::materialise(&layout, &binary, icon.as_deref(), &dist)
+        .map_err(|e| io_err(&e.path, e.source))?;
+
+    println!(
+        "packaged `{}` for {} → {}",
+        manifest.name,
+        os.as_str(),
+        dist.join(&layout.root_name).display()
+    );
+    println!("  {}", os.webview_runtime_note());
+    if os != pack::desktop::DesktopOs::Linux {
+        println!(
+            "  note: the {} bundle layout is written here, but a signed, runnable {} artifact \
+             must be produced on a {} runner (unsigned; cross-tooling out of scope).",
+            os.as_str(),
+            os.as_str(),
+            os.as_str()
+        );
+    }
+    Ok(())
 }
 
 /// Resolve the project manifest, read its accepted capabilities, and print the

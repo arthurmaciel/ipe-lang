@@ -166,6 +166,29 @@ an OS permission always contributes it, and a manifest can never declare a
 permission the app has not accepted — an unbacked permission is a hard, named
 refusal.
 
+### Desktop bundles
+
+`ipe pack --target desktop[:<linux|macos|windows>]` turns an `Ipe.WebView` app
+into a self-contained desktop bundle (the host OS is the default target):
+
+```
+$ ipe pack --target desktop:linux
+packaged `my-app` for linux → dist/linux/my-app
+  This app requires WebKitGTK at runtime (Debian/Ubuntu: libwebkit2gtk-4.1-0).
+```
+
+Each OS gets a runnable layout: a **Linux** tarball (binary + `.desktop`
+launcher + icon, carrying its WebKitGTK runtime-dependency note); a **macOS**
+`.app` bundle whose `Info.plist` permission keys are derived from the accepted
+web capabilities exactly as above (never hand-written); and a **Windows** `.exe`
++ portable zip with its WebView2 runtime-dependency note. A single `icon` field
+in `package.ipe` is the source for every per-OS icon format. Only a webview app
+is packageable — any other shape is a named refusal.
+
+The Linux bundle is built on the host; a macOS/Windows bundle's layout is written
+for inspection and finished (signed, packaged) on that OS's runner. Bundles are
+unsigned.
+
 <!--
 ## Dependencies
 

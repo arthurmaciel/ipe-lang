@@ -8,5 +8,11 @@
 //! of truth for what a packaged app may do, so a package can neither
 //! under-declare relative to consent nor smuggle an OS permission the app never
 //! accepted.
+//!
+//! [`desktop`] turns a built `Ipe.WebView` app into a distributable per-OS
+//! desktop bundle (a macOS `.app`, a Linux tarball, a Windows `.exe` + zip),
+//! assembling the macOS `Info.plist` around [`permissions`]'s derivation — never
+//! authoring a permission itself.
 
+pub mod desktop;
 pub mod permissions;
