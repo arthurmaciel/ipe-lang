@@ -33,8 +33,7 @@ fn run_emit_permissions(platform: &str, path: &str) -> (bool, String, String) {
 
 #[test]
 fn geo_clipboard_derives_the_ios_location_permission() {
-    let (ok, stdout, stderr) =
-        run_emit_permissions("ios", "examples/shapes/web/geo-clipboard");
+    let (ok, stdout, stderr) = run_emit_permissions("ios", "examples/shapes/web/geo-clipboard");
     assert!(
         ok,
         "`ipe pack --emit-permissions ios` must succeed on the geo-clipboard example:\n{stderr}"
