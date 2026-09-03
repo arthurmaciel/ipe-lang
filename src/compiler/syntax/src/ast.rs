@@ -85,30 +85,31 @@ fn extract_ipe_fences(text: &str) -> Vec<Span> {
     spans
 }
 
-/// An in-language Rust-FFI type declaration (`foreign Name = Ffi.crate "…" |> …`).
+/// An in-language Rust-FFI type declaration (`foreign Name = { crate = "…", kind = … }`).
 ///
 /// The CLI lift pass reads these from `.ipe` source files and promotes them into
 /// the inspection document, producing the same `ManifestDefineStruct` /
 /// `ManifestDefineEnum` / `ManifestDefineClosure` values the TOML readers emit.
 ///
-/// The `body` is the raw `|>` pipeline of `Ffi.*` builder calls; the CLI lift
-/// pass walks it through the same `expect_blessed_call` reader the package
+/// The `body` is an inert `Foreign` record literal
+/// (`{ crate = "…", kind = <Struct|Enum|Closure>, derives = [ … ] }`); the CLI
+/// lift pass walks it with the same record-reading discipline the package
 /// manifest uses, never evaluating it. The compiler itself treats `foreign`
 /// declarations as inert data — they do not participate in name resolution,
 /// type-checking, or lowering, and are erased before canon.
 ///
 /// `name` is the declared type name (upper-case), used as the struct / enum
 /// name in the lifted `ManifestDefineStruct` / `ManifestDefineEnum`, or as the
-/// wrapper name in the lifted `ManifestDefineClosure`. The optional
-/// `type_annotation` carries the `foreign name : Ffi.Fn` form for closure
-/// declarations (the only legal annotation on a `foreign` binding).
+/// wrapper name in the lifted `ManifestDefineClosure`. The `kind` field of the
+/// record selects the shape, so the optional `type_annotation` is no longer
+/// needed to distinguish a closure; it is accepted for readability but ignored.
 #[derive(Clone, PartialEq, Debug)]
 pub struct ForeignDecl {
     /// The declared name (upper-case for struct/enum, lower-camel for closure).
     pub name: Located<Symbol>,
     /// Optional type annotation (`counterUpdate : Ffi.Fn`).
     pub type_annotation: Option<Located<TypeAnnotation>>,
-    /// The `Ffi.*` builder pipeline body.
+    /// The inert `Foreign` record literal body.
     pub body: Expr,
     /// Doc-string attached immediately above this declaration. Erased before
     /// lowering; does not affect emitted code.
@@ -134,7 +135,7 @@ pub struct Module {
     /// each use site's type arguments for those parameters before expanding the
     /// body away.
     pub aliases: Vec<Located<TypeAlias>>,
-    /// `foreign Name = Ffi.crate "…" |> …` declarations. Read by the CLI lift
+    /// `foreign Name = { crate = "…", kind = … }` declarations. Read by the CLI lift
     /// pass; inert to the compiler proper (erased before canon).
     pub foreigns: Vec<Located<ForeignDecl>>,
 }

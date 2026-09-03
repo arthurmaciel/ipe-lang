@@ -3,14 +3,14 @@ module Main exposing (main)
 -- A minimal Iced counter, mapped onto Ipê's TEA over the REAL crates.io `iced`
 -- crate (auto-FFI-bound, shim-free). Iced's Elm architecture is Ipê's:
 --
---   Model   = a `Counter` struct  → [[rust.define.struct]]
---   Message = an `Increment`/`Decrement` enum → [[rust.define.enum]]
---   update  : Message -> Counter -> Counter → [[rust.define.closure]]
---   view    : Counter -> Element Message     → [[rust.define.closure]]
+--   Model   = a `Counter` struct  → foreign Counter (Struct)
+--   Message = an `Increment`/`Decrement` enum → foreign Message (Enum)
+--   update  : Message -> Counter -> Counter → foreign counterUpdate (Closure)
+--   view    : Counter -> Element Message     → a Closure foreign record
 --
--- The `[rust.define.*]` decls in ipe.toml define these Rust types from Ipê and
--- emit them (plus their constructors) into the generated `_bindings.rs`. That
--- emitted Rust cargo-builds against real Iced — the SEAL for the define forms.
+-- The `foreign` records in `src/Ffi/Iced.ipe` define these Rust types from Ipê
+-- and emit them (plus their constructors) into the generated `_bindings.rs`.
+-- That emitted Rust cargo-builds against real Iced — the SEAL for the forms.
 --
 -- The Ipê-side FORWARDER plumbing for define-defined TYPES is now wired: after
 -- `ipe install`, the `Rust.Iced` interface admits an opaque `Counter` / `Message`

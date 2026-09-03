@@ -2,17 +2,20 @@ module Ffi.Iced exposing (Counter, Message, counterUpdate)
 
 
 foreign Counter =
-          Ffi.crate "iced"
-              |> Ffi.struct { value = Int }
-              |> Ffi.derives [ Ffi.default_, Ffi.clone ]
+    { crate = "iced"
+    , kind = Struct { value = Int }
+    , derives = [ Default, Clone ]
+    }
 
 
 foreign Message =
-          Ffi.crate "iced"
-              |> Ffi.enum [ Ffi.variant "Increment" [], Ffi.variant "Decrement" [] ]
-              |> Ffi.derives [ Ffi.clone, Ffi.debug ]
+    { crate = "iced"
+    , kind = Enum [ Variant "Increment" [], Variant "Decrement" [] ]
+    , derives = [ Clone, Debug ]
+    }
 
 
-foreign counterUpdate : Ffi.Fn =
-          Ffi.crate "iced"
-              |> Ffi.closure (Ffi.fn [ Ffi.int ] Ffi.int)
+foreign counterUpdate =
+    { crate = "iced"
+    , kind = Closure { args = [ Int ], returns = Int }
+    }
