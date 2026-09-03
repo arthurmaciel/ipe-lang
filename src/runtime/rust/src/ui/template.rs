@@ -319,6 +319,22 @@ pub enum UiTemplateAttr {
         event: String,
         handler_id: u32,
     },
+    /// A model-dependent numeric (`f64`) attribute value reduced to an opaque
+    /// HOLE: the attribute name and a compile-time-stable hole id, NEVER the
+    /// concrete value. At materialize the runtime resolves the hole against a
+    /// per-render `float_attr_fills` slice (`float_attr_fills[hole_id]`) and
+    /// reconstructs the matching `Attribute` variant.
+    ///
+    /// Fail-closed: an out-of-range or already-consumed hole id drops to
+    /// `Attribute::NoAttribute` — the element still renders, but without the
+    /// float attribute. No panic, no fabricated value.
+    AttrHoleFloat {
+        /// The attribute discriminant: one of the known float-valued `Ipe.Ui`
+        /// attribute names (`"font-letter-spacing"`, `"font-word-spacing"`).
+        /// An unrecognised name drops to `NoAttribute` at materialize.
+        attr: String,
+        hole_id: u32,
+    },
 }
 
 impl UiTemplateAttr {
@@ -388,6 +404,47 @@ impl UiTemplateAttr {
                 return None;
             }
         })
+    }
+
+    /// Reconstruct the concrete [`Attribute`] from a float-attr discriminant name
+    /// and a resolved `f64` value, or `None` when the name is unrecognised.
+    fn resolve_float_attr<M>(attr: &str, value: f64) -> Option<Attribute<M>> {
+        match attr {
+            "font-letter-spacing" => Some(Attribute::AttrFontLetterSpacing(value)),
+            "font-word-spacing" => Some(Attribute::AttrFontWordSpacing(value)),
+            _ => None,
+        }
+    }
+
+    /// Rebuild the [`Attribute`], resolving both a [`Self::HandlerHole`] against
+    /// the per-render `handlers` map AND an [`Self::AttrHoleFloat`] against the
+    /// per-render `float_fills` slice in a single pass.
+    ///
+    /// Used by the combined materializer path (JSON front door with handler +
+    /// float-attr holes coexisting on the same node). Fail-closed: an unresolved
+    /// hole or unrecognised attr name → [`Attribute::NoAttribute`].
+    #[cfg(feature = "json")]
+    fn to_attr_combined<M: Clone>(
+        &self,
+        handlers: &UiHandlerMap<M>,
+        float_fills: &[Option<f64>],
+    ) -> Attribute<M> {
+        match self {
+            Self::HandlerHole { event, handler_id } => match handlers.resolve(*handler_id) {
+                Some(msg) => {
+                    Attribute::AttrEvent(HtmlAttribute::EventAttr(Event::OnMsg(event.clone(), msg)))
+                }
+                None => Attribute::NoAttribute,
+            },
+            Self::AttrHoleFloat { attr, hole_id } => {
+                let value = float_fills.get(*hole_id as usize).and_then(|v| *v);
+                match value {
+                    Some(v) => Self::resolve_float_attr(attr, v).unwrap_or(Attribute::NoAttribute),
+                    None => Attribute::NoAttribute,
+                }
+            }
+            other => other.to_attr(),
+        }
     }
 
     /// Reduce an inert [`Attribute`] to a [`UiTemplateAttr`], OR — for a clean
@@ -481,6 +538,9 @@ impl UiTemplateAttr {
             // fail-closed by construction. The map-aware [`Self::to_attr_with_handlers`]
             // is the path that resolves a hole against a per-render map.
             Self::HandlerHole { .. } => Attribute::NoAttribute,
+            // A float-attr hole with no fills drops to `NoAttribute` — fail-closed.
+            // The fills-aware path is [`Self::to_attr_with_float_fills`].
+            Self::AttrHoleFloat { .. } => Attribute::NoAttribute,
         }
     }
 
@@ -500,10 +560,32 @@ impl UiTemplateAttr {
                 // marker for this hole. No Msg is invented.
                 None => Attribute::NoAttribute,
             },
+            // A float-attr hole has no resolution path on the handler-only
+            // materializer; drop to `NoAttribute` — fail-closed.
+            Self::AttrHoleFloat { .. } => Attribute::NoAttribute,
             // Every inert variant is `M`-free — reuse the map-less rebuild.
             other => other.to_attr(),
         }
     }
+
+    /// Rebuild the [`Attribute`], resolving an [`Self::AttrHoleFloat`] against the
+    /// per-render `float_fills` slice. Every non-float-hole variant delegates to
+    /// [`Self::to_attr`]; a float hole becomes the matching `Attribute` variant
+    /// (e.g. `AttrFontLetterSpacing(v)`) when the hole id resolves, or
+    /// `NoAttribute` when it does not (fail-closed — no fabricated value).
+    fn to_attr_with_float_fills<M>(&self, float_fills: &[Option<f64>]) -> Attribute<M> {
+        match self {
+            Self::AttrHoleFloat { attr, hole_id } => {
+                let value = float_fills.get(*hole_id as usize).and_then(|v| *v);
+                match value {
+                    Some(v) => Self::resolve_float_attr(attr, v).unwrap_or(Attribute::NoAttribute),
+                    None => Attribute::NoAttribute,
+                }
+            }
+            other => other.to_attr(),
+        }
+    }
+
 }
 
 /// An inert, mostly-static `Ipe.Ui` subtree, optionally carrying numbered
@@ -775,6 +857,7 @@ pub fn materialize_ui_template_with_holes<M>(
         control_flow: Vec::new(),
         list_items: Vec::new(),
         wrapper_fills: Vec::new(),
+        float_attrs: Vec::new(),
     };
     materialize_ui_at(template, 0, &mut fills)
 }
@@ -801,6 +884,11 @@ struct HoleFills<M> {
     /// An out-of-range, already-consumed, or ill-shaped fill materializes the
     /// child standalone — fail-closed, never a panic.
     wrapper_fills: Vec<Option<UiTemplate>>,
+    /// Per-render float-attr fills for [`UiTemplateAttr::AttrHoleFloat`] nodes:
+    /// index `i` is the `f64` value for the float-attr hole with `hole_id == i`.
+    /// `None` marks a slot already consumed or never provided — resolves to
+    /// `NoAttribute` (fail-closed).
+    float_attrs: Vec<Option<f64>>,
 }
 
 impl<M> HoleFills<M> {
@@ -811,6 +899,7 @@ impl<M> HoleFills<M> {
             control_flow: Vec::new(),
             list_items: Vec::new(),
             wrapper_fills: Vec::new(),
+            float_attrs: Vec::new(),
         }
     }
 
@@ -854,6 +943,15 @@ impl<M> HoleFills<M> {
     fn take_wrapper(&mut self, idx: usize) -> Option<UiTemplate> {
         self.wrapper_fills.get_mut(idx).and_then(Option::take)
     }
+
+    /// Snapshot the float-attr fills as a slice for attribute resolution. Unlike
+    /// the other fill kinds, a float-attr fill may be read multiple times (an
+    /// `AttrHoleFloat` with the same `hole_id` may appear in multiple attrs of
+    /// the same node — unusual, but possible). Snapshot once; resolution is
+    /// non-destructive so the same value resolves correctly for each attr.
+    fn float_attr_snapshot(&self) -> Vec<Option<f64>> {
+        self.float_attrs.clone()
+    }
 }
 
 fn materialize_ui_at<M>(
@@ -894,22 +992,34 @@ fn materialize_ui_at<M>(
             desc,
             attrs,
             children,
-        } => Element::Node(
-            desc.to_desc(),
-            attrs.iter().map(UiTemplateAttr::to_attr).collect(),
-            materialize_children(children, depth, fills),
-        ),
+        } => {
+            let float_snap = fills.float_attr_snapshot();
+            Element::Node(
+                desc.to_desc(),
+                attrs
+                    .iter()
+                    .map(|a| a.to_attr_with_float_fills(&float_snap))
+                    .collect(),
+                materialize_children(children, depth, fills),
+            )
+        }
         UiTemplate::TaggedNode {
             tag,
             desc,
             attrs,
             children,
-        } => Element::TaggedNode(
-            tag.clone(),
-            desc.to_desc(),
-            attrs.iter().map(UiTemplateAttr::to_attr).collect(),
-            materialize_children(children, depth, fills),
-        ),
+        } => {
+            let float_snap = fills.float_attr_snapshot();
+            Element::TaggedNode(
+                tag.clone(),
+                desc.to_desc(),
+                attrs
+                    .iter()
+                    .map(|a| a.to_attr_with_float_fills(&float_snap))
+                    .collect(),
+                materialize_children(children, depth, fills),
+            )
+        }
     }
 }
 
@@ -927,6 +1037,7 @@ fn materialize_wrapper_hole<M>(
     // Extract tag/desc/attrs from the wrapper fill without partial-moving out of
     // the Drop type. The Option is owned, so we inspect the discriminant first
     // and then extract each field explicitly with clone/to_desc.
+    let float_snap = fills.float_attr_snapshot();
     let wrapper = fills.take_wrapper(hole_id);
     match &wrapper {
         Some(UiTemplate::TaggedNode {
@@ -934,12 +1045,18 @@ fn materialize_wrapper_hole<M>(
         }) => Element::TaggedNode(
             tag.clone(),
             desc.to_desc(),
-            attrs.iter().map(UiTemplateAttr::to_attr).collect(),
+            attrs
+                .iter()
+                .map(|a| a.to_attr_with_float_fills(&float_snap))
+                .collect(),
             vec![materialized_child],
         ),
         Some(UiTemplate::Node { desc, attrs, .. }) => Element::Node(
             desc.to_desc(),
-            attrs.iter().map(UiTemplateAttr::to_attr).collect(),
+            attrs
+                .iter()
+                .map(|a| a.to_attr_with_float_fills(&float_snap))
+                .collect(),
             vec![materialized_child],
         ),
         // Missing, consumed, or ill-shaped fill: render child standalone.
@@ -976,6 +1093,7 @@ fn materialize_children<M>(
                     control_flow: Vec::new(),
                     list_items: Vec::new(),
                     wrapper_fills: Vec::new(),
+                    float_attrs: Vec::new(),
                 };
                 out.push(materialize_ui_at(
                     item_template,
@@ -1216,6 +1334,7 @@ pub fn materialize_ui_template_str_with_holes_and_handlers<M: Clone>(
         control_flow: Vec::new(),
         list_items: Vec::new(),
         wrapper_fills: Vec::new(),
+        float_attrs: Vec::new(),
     };
     materialize_ui_at_combined(&template, handlers, 0, &mut fills)
 }
@@ -1241,6 +1360,7 @@ fn materialize_ui_at_combined<M: Clone>(
             // Materialize the child first (through the combined path so its own
             // holes resolve), then apply the wrapper fill.
             let materialized_child = materialize_ui_at_combined(child, handlers, depth, fills);
+            let float_snap = fills.float_attr_snapshot();
             let wrapper = fills.take_wrapper(*hole_id);
             match &wrapper {
                 Some(UiTemplate::TaggedNode {
@@ -1250,7 +1370,7 @@ fn materialize_ui_at_combined<M: Clone>(
                     desc.to_desc(),
                     attrs
                         .iter()
-                        .map(|a| a.to_attr_with_handlers(handlers))
+                        .map(|a| a.to_attr_combined(handlers, &float_snap))
                         .collect(),
                     vec![materialized_child],
                 ),
@@ -1258,7 +1378,7 @@ fn materialize_ui_at_combined<M: Clone>(
                     desc.to_desc(),
                     attrs
                         .iter()
-                        .map(|a| a.to_attr_with_handlers(handlers))
+                        .map(|a| a.to_attr_combined(handlers, &float_snap))
                         .collect(),
                     vec![materialized_child],
                 ),
@@ -1275,28 +1395,34 @@ fn materialize_ui_at_combined<M: Clone>(
             desc,
             attrs,
             children,
-        } => Element::Node(
-            desc.to_desc(),
-            attrs
-                .iter()
-                .map(|a| a.to_attr_with_handlers(handlers))
-                .collect(),
-            materialize_children_combined(children, handlers, depth, fills),
-        ),
+        } => {
+            let float_snap = fills.float_attr_snapshot();
+            Element::Node(
+                desc.to_desc(),
+                attrs
+                    .iter()
+                    .map(|a| a.to_attr_combined(handlers, &float_snap))
+                    .collect(),
+                materialize_children_combined(children, handlers, depth, fills),
+            )
+        }
         UiTemplate::TaggedNode {
             tag,
             desc,
             attrs,
             children,
-        } => Element::TaggedNode(
-            tag.clone(),
-            desc.to_desc(),
-            attrs
-                .iter()
-                .map(|a| a.to_attr_with_handlers(handlers))
-                .collect(),
-            materialize_children_combined(children, handlers, depth, fills),
-        ),
+        } => {
+            let float_snap = fills.float_attr_snapshot();
+            Element::TaggedNode(
+                tag.clone(),
+                desc.to_desc(),
+                attrs
+                    .iter()
+                    .map(|a| a.to_attr_combined(handlers, &float_snap))
+                    .collect(),
+                materialize_children_combined(children, handlers, depth, fills),
+            )
+        }
     }
 }
 
@@ -1364,6 +1490,7 @@ pub fn materialize_ui_template_str_with_control_flow<M: Clone>(
         control_flow: cf_selectors.into_iter().map(Some).collect(),
         list_items: Vec::new(),
         wrapper_fills: Vec::new(),
+        float_attrs: Vec::new(),
     };
     materialize_ui_at_combined(&template, handlers, 0, &mut fills)
 }
@@ -1393,6 +1520,7 @@ pub fn materialize_ui_template_with_list_holes<M>(
         control_flow: Vec::new(),
         list_items: list_item_fills.into_iter().map(Some).collect(),
         wrapper_fills: Vec::new(),
+        float_attrs: Vec::new(),
     };
     materialize_ui_at(template, 0, &mut fills)
 }
@@ -1448,6 +1576,7 @@ pub fn materialize_ui_template_with_wrapper_holes<M>(
         control_flow: Vec::new(),
         list_items: Vec::new(),
         wrapper_fills: wrapper_fills.into_iter().map(Some).collect(),
+        float_attrs: Vec::new(),
     };
     materialize_ui_at(template, 0, &mut fills)
 }
@@ -1475,6 +1604,62 @@ pub fn materialize_ui_template_with_wrapper_holes_str<M>(
         element_holes,
         children_holes,
         wrapper_fills,
+    )
+}
+
+/// Rebuild an [`Element`] tree from a hole-bearing [`UiTemplate`], resolving
+/// model-driven numeric attribute holes (`AttrHoleFloat`) from the per-render
+/// `float_attr_fills` slice in addition to element and children holes.
+///
+/// - [`UiTemplate::Hole(n)`] → `element_holes[n]`, consumed once;
+/// - [`UiTemplate::ChildrenHole(n)`] → `children_holes[n]`, spliced in place;
+/// - [`UiTemplateAttr::AttrHoleFloat { hole_id: n, attr }`] →
+///   the matching `Attribute` variant (`AttrFontLetterSpacing` etc.) built from
+///   `float_attr_fills[n]`, or `NoAttribute` on a miss (fail-closed).
+///
+/// Existing hole kinds are byte-identical when no `AttrHoleFloat` is present —
+/// this kind is purely additive.
+#[must_use]
+pub fn materialize_ui_template_with_float_attr_holes<M>(
+    template: &UiTemplate,
+    element_holes: Vec<Element<M>>,
+    children_holes: Vec<Vec<Element<M>>>,
+    float_attr_fills: Vec<f64>,
+) -> Element<M> {
+    let mut fills = HoleFills {
+        elements: element_holes.into_iter().map(Some).collect(),
+        children: children_holes.into_iter().map(Some).collect(),
+        control_flow: Vec::new(),
+        list_items: Vec::new(),
+        wrapper_fills: Vec::new(),
+        float_attrs: float_attr_fills.into_iter().map(Some).collect(),
+    };
+    materialize_ui_at(template, 0, &mut fills)
+}
+
+/// Decode a serialized [`UiTemplate`] and materialize it with float-attr holes —
+/// the JSON front door to [`materialize_ui_template_with_float_attr_holes`].
+///
+/// Fail-closed: decode failure or over-deep template → `Element::Empty`.
+#[cfg(feature = "json")]
+#[must_use]
+pub fn materialize_ui_template_with_float_attr_holes_str<M>(
+    json: &str,
+    element_holes: Vec<Element<M>>,
+    children_holes: Vec<Vec<Element<M>>>,
+    float_attr_fills: Vec<f64>,
+) -> Element<M> {
+    let Ok(template) = serde_json::from_str::<UiTemplate>(json) else {
+        return Element::Empty;
+    };
+    if template.check_bounds().is_err() {
+        return Element::Empty;
+    }
+    materialize_ui_template_with_float_attr_holes(
+        &template,
+        element_holes,
+        children_holes,
+        float_attr_fills,
     )
 }
 
@@ -3081,6 +3266,245 @@ mod tests {
                 render(with_empty_wrappers),
                 render(without),
                 "wrapper_holes=[] must not perturb a template with no WrapperHole"
+            );
+        }
+    }
+
+    // ── float attr hole ───────────────────────────────────────────────────────
+    //
+    // A model-driven numeric (`f64`) attribute value: the attr name and a hole id
+    // stored in the template; the concrete value is supplied per render via the
+    // float_attr_fills slice. Purely additive — templates with no AttrHoleFloat
+    // are byte-identical before and after this kind ships.
+    mod float_attr_holes {
+        use super::super::{
+            UiDescription, UiTemplate as T, UiTemplateAttr,
+            materialize_ui_template_with_float_attr_holes,
+        };
+        use super::*;
+
+        // A node whose `font-letter-spacing` attr is a float hole: the template
+        // carries only the attr name and hole_id; the concrete f64 is supplied via
+        // float_attr_fills. The materialized element must carry the exact
+        // `AttrFontLetterSpacing(v)` matching the fill.
+        #[test]
+        fn float_attr_hole_resolves_letter_spacing() {
+            let template = T::Node {
+                desc: UiDescription::NoDescription,
+                attrs: vec![
+                    UiTemplateAttr::Spacing(4),
+                    UiTemplateAttr::AttrHoleFloat {
+                        attr: "font-letter-spacing".to_string(),
+                        hole_id: 0,
+                    },
+                ],
+                children: vec![T::Text("hi".to_string())],
+            };
+            let got: Element<()> = materialize_ui_template_with_float_attr_holes(
+                &template,
+                vec![],
+                vec![],
+                vec![1.5_f64],
+            );
+            assert_eq!(
+                got,
+                Element::Node(
+                    Description::NoDescription,
+                    vec![
+                        Attribute::AttrSpacing(4),
+                        Attribute::AttrFontLetterSpacing(1.5),
+                    ],
+                    vec![Element::Text("hi".to_string())],
+                ),
+                "float attr hole must resolve to AttrFontLetterSpacing with the supplied value"
+            );
+        }
+
+        // Word-spacing float hole resolves to AttrFontWordSpacing.
+        #[test]
+        fn float_attr_hole_resolves_word_spacing() {
+            let template = T::Node {
+                desc: UiDescription::NoDescription,
+                attrs: vec![UiTemplateAttr::AttrHoleFloat {
+                    attr: "font-word-spacing".to_string(),
+                    hole_id: 0,
+                }],
+                children: vec![],
+            };
+            let got: Element<()> = materialize_ui_template_with_float_attr_holes(
+                &template,
+                vec![],
+                vec![],
+                vec![0.5_f64],
+            );
+            assert_eq!(
+                got,
+                Element::Node(
+                    Description::NoDescription,
+                    vec![Attribute::AttrFontWordSpacing(0.5)],
+                    vec![],
+                ),
+            );
+        }
+
+        // Multiple float holes with distinct hole_ids resolve independently.
+        #[test]
+        fn float_attr_hole_multiple_holes_resolve_independently() {
+            let template = T::Node {
+                desc: UiDescription::NoDescription,
+                attrs: vec![
+                    UiTemplateAttr::AttrHoleFloat {
+                        attr: "font-letter-spacing".to_string(),
+                        hole_id: 0,
+                    },
+                    UiTemplateAttr::AttrHoleFloat {
+                        attr: "font-word-spacing".to_string(),
+                        hole_id: 1,
+                    },
+                ],
+                children: vec![],
+            };
+            let got: Element<()> = materialize_ui_template_with_float_attr_holes(
+                &template,
+                vec![],
+                vec![],
+                vec![1.5_f64, 0.25_f64],
+            );
+            assert_eq!(
+                got,
+                Element::Node(
+                    Description::NoDescription,
+                    vec![
+                        Attribute::AttrFontLetterSpacing(1.5),
+                        Attribute::AttrFontWordSpacing(0.25),
+                    ],
+                    vec![],
+                ),
+            );
+        }
+
+        // Fail-closed: an out-of-range hole id produces `NoAttribute`.
+        #[test]
+        fn float_attr_hole_out_of_range_fails_closed() {
+            let template = T::Node {
+                desc: UiDescription::NoDescription,
+                attrs: vec![UiTemplateAttr::AttrHoleFloat {
+                    attr: "font-letter-spacing".to_string(),
+                    hole_id: 5, // no fill at index 5
+                }],
+                children: vec![],
+            };
+            let got: Element<()> = materialize_ui_template_with_float_attr_holes(
+                &template,
+                vec![],
+                vec![],
+                vec![], // no fills
+            );
+            assert_eq!(
+                got,
+                Element::Node(
+                    Description::NoDescription,
+                    vec![Attribute::NoAttribute],
+                    vec![],
+                ),
+                "out-of-range float hole must drop to NoAttribute, never panic"
+            );
+        }
+
+        // Fail-closed: an unrecognised attr name drops to `NoAttribute`.
+        #[test]
+        fn float_attr_hole_unknown_attr_name_fails_closed() {
+            let template = T::Node {
+                desc: UiDescription::NoDescription,
+                attrs: vec![UiTemplateAttr::AttrHoleFloat {
+                    attr: "unknown-attr".to_string(),
+                    hole_id: 0,
+                }],
+                children: vec![],
+            };
+            let got: Element<()> = materialize_ui_template_with_float_attr_holes(
+                &template,
+                vec![],
+                vec![],
+                vec![1.0_f64],
+            );
+            assert_eq!(
+                got,
+                Element::Node(
+                    Description::NoDescription,
+                    vec![Attribute::NoAttribute],
+                    vec![],
+                ),
+            );
+        }
+
+        // JSON round-trip: AttrHoleFloat serializes and deserializes byte-identically.
+        #[cfg(feature = "serde")]
+        #[test]
+        fn float_attr_hole_json_round_trips() {
+            let attr = UiTemplateAttr::AttrHoleFloat {
+                attr: "font-letter-spacing".to_string(),
+                hole_id: 0,
+            };
+            let json = serde_json::to_string(&attr).expect("serialize");
+            assert_eq!(
+                json, r#"{"AttrHoleFloat":{"attr":"font-letter-spacing","hole_id":0}}"#,
+                "AttrHoleFloat JSON form must match the runtime serde encoding"
+            );
+            let back: UiTemplateAttr = serde_json::from_str(&json).expect("deserialize");
+            assert_eq!(back, attr);
+        }
+
+        // JSON str front door materializes float holes end-to-end.
+        #[cfg(feature = "json")]
+        #[test]
+        fn float_attr_hole_str_materialize_works() {
+            use super::super::materialize_ui_template_with_float_attr_holes_str;
+            let template = T::Node {
+                desc: UiDescription::NoDescription,
+                attrs: vec![UiTemplateAttr::AttrHoleFloat {
+                    attr: "font-letter-spacing".to_string(),
+                    hole_id: 0,
+                }],
+                children: vec![T::Text("hi".to_string())],
+            };
+            let json = serde_json::to_string(&template).expect("serialize");
+            let got: Element<()> = materialize_ui_template_with_float_attr_holes_str(
+                &json,
+                vec![],
+                vec![],
+                vec![2.0_f64],
+            );
+            assert_eq!(
+                got,
+                Element::Node(
+                    Description::NoDescription,
+                    vec![Attribute::AttrFontLetterSpacing(2.0)],
+                    vec![Element::Text("hi".to_string())],
+                ),
+            );
+        }
+
+        // Byte-identity: a template with no AttrHoleFloat renders identically with
+        // or without an (unused) float_attr_fills vec — purely additive.
+        #[test]
+        fn float_attr_hole_addition_is_additive_no_perturbation() {
+            let static_template = T::Node {
+                desc: UiDescription::NoDescription,
+                attrs: vec![UiTemplateAttr::Spacing(4)],
+                children: vec![T::Text("hi".to_string())],
+            };
+            let with_empty_floats: Element<()> = materialize_ui_template_with_float_attr_holes(
+                &static_template,
+                vec![],
+                vec![],
+                vec![],
+            );
+            let without: Element<()> = super::super::materialize_ui_template(&static_template);
+            assert_eq!(
+                render(with_empty_floats),
+                render(without),
+                "float_attr_fills=[] must not perturb a template with no AttrHoleFloat"
             );
         }
     }
