@@ -146,6 +146,26 @@ third-party browser JS — a widget is declared trust in the package author.
 
 Run `ipe capabilities --help` for the full model. See [docs/reference/capabilities.md](docs/reference/capabilities.md) for the complete capability reference.
 
+When you package an app for a native shell, the OS-permission declarations it
+needs are *derived* from the web capabilities the app accepts, never hand-written.
+`ipe pack --emit-permissions <ios|macos|android>` prints them as a dry run:
+
+```
+$ ipe pack --emit-permissions ios examples/shapes/web/geo-clipboard
+OS permissions for `geo-clipboard` on ios
+  js-port:clipboard → (no OS permission on this platform)
+  js-port:geolocation → NSLocationWhenInUseUsageDescription
+  js-port:raw → (no OS permission on this platform)
+
+Info.plist entries:
+  NSLocationWhenInUseUsageDescription = "This app uses your location to provide location-based features."
+```
+
+The derivation is the single source of truth: an accepted capability that needs
+an OS permission always contributes it, and a manifest can never declare a
+permission the app has not accepted — an unbacked permission is a hard, named
+refusal.
+
 <!--
 ## Dependencies
 

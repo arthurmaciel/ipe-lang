@@ -487,6 +487,21 @@ const COMMANDS: &[Command] = &[
         ],
     },
     Command {
+        name: "pack",
+        run: crate::run_pack,
+        summary: "Derive a native shell's OS-permission declarations from the app's accepted \
+                  web capabilities.",
+        args: "--emit-permissions <ios|macos|android> [<path>]",
+        args_desc: "The target platform, then the project directory or package.ipe (defaults to \
+                    the current project). Reads the app's `[capabilities] accepts` set and prints \
+                    the derived Info.plist keys (ios/macos) or AndroidManifest fragment (android). \
+                    A read-only dry-run: nothing is written.",
+        options: &[Opt {
+            flag: "--emit-permissions <ios|macos|android>",
+            desc: "print the OS-permission declarations required on the given platform (required)",
+        }],
+    },
+    Command {
         name: "login",
         run: crate::login::run_login,
         summary: "Authorize ipe with GitHub (device flow) and store a publish token.",
@@ -672,7 +687,7 @@ const SECTIONS: &[Section] = &[
     },
     Section {
         title: "Package authoring",
-        commands: &["login", "package"],
+        commands: &["login", "package", "pack"],
     },
     Section {
         title: "Foreign-function interface (FFI)",
