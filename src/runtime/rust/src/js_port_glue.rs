@@ -491,6 +491,113 @@ const PORT_GLUE_JS: &str = r#"// Ipe.Ffi.Js browser port surface. Values cross a
     input.click();
     return true;
   }
+  // Ipe.Browser.Microphone: `CaptureAudio { maxDurationMs, mimeType }` →
+  // getUserMedia({ audio: true }) → MediaRecorder. The host records for
+  // `maxDurationMs` milliseconds (capped at 8 000 ms to fit inside the
+  // Js.request deadline), collects ondataavailable chunks, assembles them into
+  // one Blob, reads it via FileReader.readAsDataURL, and replies ONCE with the
+  // base-64 audio data URL. Every host trap (getUserMedia rejection, absent
+  // MediaRecorder, permission denied) → a typed Denied or Unavailable frame,
+  // never a throw. No eval, no innerHTML.
+  function microphoneSink(value, corId) {
+    var opts = value && typeof value === "object" && value.CaptureAudio;
+    if (!opts || typeof opts !== "object") return false;
+    // Deny-by-default: require corId so the result is only routed to the
+    // correct one-shot waiter, never broadcast to js_subscribe subscribers.
+    if (corId === null || corId === undefined) {
+      return true; // recognised but uncorrelated — swallow, never broadcast
+    }
+    // Cap maxDurationMs at 8 000 ms: the Js.request deadline is 10 s; the
+    // sink needs the remainder for Blob assembly and FileReader.readAsDataURL.
+    var maxMs = (typeof opts.maxDurationMs === "number" && opts.maxDurationMs > 0)
+      ? Math.min(opts.maxDurationMs, 8000) : 3000;
+    var mimeType = (typeof opts.mimeType === "string" && opts.mimeType !== "")
+      ? opts.mimeType : "";
+    if (!navigator || typeof navigator.mediaDevices === "undefined" ||
+        typeof navigator.mediaDevices.getUserMedia !== "function") {
+      reply({ tag: "microphone", ok: false, error: "unavailable" }, corId);
+      return true;
+    }
+    if (typeof MediaRecorder === "undefined") {
+      reply({ tag: "microphone", ok: false, error: "unavailable" }, corId);
+      return true;
+    }
+    navigator.mediaDevices.getUserMedia({ audio: true }).then(
+      function (stream) {
+        var recOpts = {};
+        // Only set the mimeType when the browser reports it as supported;
+        // passing an unsupported type throws a NotSupportedError.
+        if (mimeType !== "" && MediaRecorder.isTypeSupported(mimeType)) {
+          recOpts.mimeType = mimeType;
+        }
+        var recorder;
+        try {
+          recorder = new MediaRecorder(stream, recOpts);
+        } catch (_e) {
+          stream.getTracks().forEach(function (t) { t.stop(); });
+          reply({ tag: "microphone", ok: false, error: "unavailable" }, corId);
+          return;
+        }
+        var chunks = [];
+        var actualMime = recorder.mimeType || "audio/webm";
+        var startTime = Date.now();
+        var settled = false;
+        function finish() {
+          if (settled) return;
+          settled = true;
+          stream.getTracks().forEach(function (t) { t.stop(); });
+          var blob = new Blob(chunks, { type: actualMime });
+          var durationMs = Math.min(Date.now() - startTime, maxMs);
+          var reader = new FileReader();
+          reader.onload = function (ev) {
+            reply({
+              tag: "microphone", ok: true,
+              data: String(ev.target.result),
+              mime: actualMime,
+              durationMs: durationMs,
+            }, corId);
+          };
+          reader.onerror = function () {
+            reply({ tag: "microphone", ok: false, error: "unavailable" }, corId);
+          };
+          reader.readAsDataURL(blob);
+        }
+        recorder.ondataavailable = function (ev) {
+          if (ev.data && ev.data.size > 0) {
+            chunks.push(ev.data);
+          }
+        };
+        recorder.onstop = finish;
+        recorder.onerror = function () {
+          if (!settled) {
+            settled = true;
+            stream.getTracks().forEach(function (t) { t.stop(); });
+            reply({ tag: "microphone", ok: false, error: "unavailable" }, corId);
+          }
+        };
+        try {
+          recorder.start();
+        } catch (_e) {
+          stream.getTracks().forEach(function (t) { t.stop(); });
+          reply({ tag: "microphone", ok: false, error: "unavailable" }, corId);
+          return;
+        }
+        setTimeout(function () {
+          if (recorder.state !== "inactive") {
+            try { recorder.stop(); } catch (_e) { finish(); }
+          }
+        }, maxMs);
+      },
+      function (err) {
+        // getUserMedia rejection — map to typed denial or unavailability.
+        var name = err && err.name ? String(err.name) : "";
+        var kind = name === "NotAllowedError" || name === "PermissionDeniedError"
+          ? "denied" : "unavailable";
+        reply({ tag: "microphone", ok: false, error: kind }, corId);
+      }
+    );
+    return true;
+  }
   function builtinSink(value, corId) {
     if (clipboardSink(value, corId)) return true;
     if (geolocationSink(value, corId)) return true;
@@ -502,6 +609,7 @@ const PORT_GLUE_JS: &str = r#"// Ipe.Ffi.Js browser port surface. Values cross a
     if (networkInfoSink(value, corId)) return true;
     if (filePickerSink(value, corId)) return true;
     if (cameraSink(value, corId)) return true;
+    if (microphoneSink(value, corId)) return true;
     return false;
   }
   function deliver(raw) {
@@ -772,6 +880,31 @@ mod tests {
         // …and enumerates the cancelled + unavailable outcomes, never a throw.
         assert!(js.contains("\"cancelled\""));
         assert!(js.contains("\"unavailable\""));
+        assert!(!js.contains("eval("));
+    }
+
+    #[test]
+    fn microphone_sink_reaches_get_user_media_and_traps_denial_and_absence_to_typed_results() {
+        let js = port_glue_js();
+        // The first-party Ipe.Browser.Microphone sink reaches getUserMedia…
+        assert!(js.contains("microphoneSink"));
+        assert!(js.contains("CaptureAudio"));
+        assert!(js.contains("navigator.mediaDevices.getUserMedia"));
+        assert!(js.contains("MediaRecorder"));
+        // …caps maxDurationMs to 8 000 ms…
+        assert!(js.contains("Math.min(opts.maxDurationMs, 8000)"));
+        // …assembles chunks via FileReader.readAsDataURL…
+        assert!(js.contains("ondataavailable"));
+        assert!(js.contains("FileReader"));
+        assert!(js.contains("readAsDataURL"));
+        // …resolves a recording to a typed frame with data / mime / durationMs fields…
+        assert!(js.contains("tag: \"microphone\""));
+        assert!(js.contains("data:"));
+        assert!(js.contains("durationMs:"));
+        // …and enumerates the denied + unavailable outcomes, never a throw / eval.
+        assert!(js.contains("\"denied\""));
+        assert!(js.contains("\"unavailable\""));
+        assert!(js.contains("NotAllowedError"));
         assert!(!js.contains("eval("));
     }
 

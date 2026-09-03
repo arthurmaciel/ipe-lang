@@ -819,6 +819,22 @@ const IPE_BROWSER_CAMERA: &str = include_str!("../Ipe/Browser/Camera.ipe");
 /// [`COMPILED_STD_MODULES`] (NOT `MODULES`); NOT in `STDLIB_MODULE_QUALIFIERS`.
 const IPE_BROWSER_CAMERA_INTERNALS: &str = include_str!("../Ipe/Browser/Camera/Internals.ipe");
 
+/// `Ipe.Browser.Microphone` — capture a bounded audio clip from the device
+/// microphone as a base-64 `data:` URL, over `Ipe.Ffi.Js` ports. Importing
+/// discloses `js-port:microphone` (keyed on the `Ipe.Browser.Microphone` path
+/// prefix via `WebCapability::for_browser_module`). Registered in
+/// [`COMPILED_STD_MODULES`] (NOT `MODULES`); NOT in `STDLIB_MODULE_QUALIFIERS`.
+const IPE_BROWSER_MICROPHONE: &str = include_str!("../Ipe/Browser/Microphone.ipe");
+
+/// `Ipe.Browser.Microphone.Internals` — the low-level microphone capture port
+/// surface: the closed outbound/inbound ADTs and the raw `Ipe.Ffi.Js` wiring
+/// the high-level layer wraps. Importing it discloses the same
+/// `js-port:microphone` axis (the prefix key covers the submodule). Registered
+/// in [`COMPILED_STD_MODULES`] (NOT `MODULES`); NOT in
+/// `STDLIB_MODULE_QUALIFIERS`.
+const IPE_BROWSER_MICROPHONE_INTERNALS: &str =
+    include_str!("../Ipe/Browser/Microphone/Internals.ipe");
+
 /// `Ipe.Env` — build-time-embedded public config (compiled source).
 ///
 /// Defines `public : String -> Maybe String`, routed through the
@@ -1345,6 +1361,14 @@ pub const COMPILED_STD_MODULES: &[CompiledStdModule] = &[
     CompiledStdModule {
         dotted: "Ipe.Browser.Camera.Internals",
         source: IPE_BROWSER_CAMERA_INTERNALS,
+    },
+    CompiledStdModule {
+        dotted: "Ipe.Browser.Microphone",
+        source: IPE_BROWSER_MICROPHONE,
+    },
+    CompiledStdModule {
+        dotted: "Ipe.Browser.Microphone.Internals",
+        source: IPE_BROWSER_MICROPHONE_INTERNALS,
     },
     CompiledStdModule {
         dotted: "Ipe.Env",

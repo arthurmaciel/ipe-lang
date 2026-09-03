@@ -229,6 +229,7 @@ type WebCapability
     | NetworkInfo
     | File
     | Camera
+    | Microphone
     | Raw
 
 

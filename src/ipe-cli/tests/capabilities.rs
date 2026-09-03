@@ -1542,3 +1542,95 @@ fn a_camera_app_without_the_grant_is_rejected() -> TestResult {
     let _ = std::fs::remove_dir_all(&dir);
     Ok(())
 }
+
+// ── Ipe.Browser.Microphone — a first-party web-API module ────────────────────
+
+/// A Web-shape app importing `Ipe.Browser.Microphone` — the import-derived
+/// signal that discloses the SPECIFIC `js-port:microphone` axis on top of the
+/// `:raw` floor. The pinned refusal test (IPE-S0002) and the accepted-grant
+/// path are both exercised.
+const MICROPHONE_APP: &str = r#"module Main exposing (main)
+
+import Ipe.Tea.Web as Web
+import Ipe.Tea.Web.Cmd as Cmd
+import Ipe.Tea.Web.Sub as Sub
+import Ipe.Ui as Ui
+import Ipe.Error as Error exposing (Error)
+import Ipe.Browser.Microphone as Microphone
+import Ipe.Task as Task
+
+type alias Model = { result : String }
+
+type Msg = Record | GotClip (Result Error Microphone.AudioClip)
+
+init : WebReq -> ( Model, Cmd.Cmd Msg )
+init _r =
+    ( { result = "" }, Cmd.none )
+
+update : Msg -> Model -> ( Model, Cmd.Cmd Msg )
+update msg model =
+    case msg of
+        Record ->
+            ( model
+            , Task.attempt GotClip
+                (Microphone.captureAudio { maxDurationMs = 3000, mimeType = "audio/webm" })
+            )
+
+        GotClip _r ->
+            ( model, Cmd.none )
+
+view : Model -> Element Msg
+view _model =
+    Ui.text "ok"
+
+subscriptions : Model -> Sub.Sub Msg
+subscriptions _model =
+    Microphone.recordings GotClip
+
+main =
+    Web.app
+        { init = init, update = update, view = view, subscriptions = subscriptions
+        , routes = [], notFound = Record
+        }
+"#;
+
+/// Importing `Ipe.Browser.Microphone` discloses the specific `js-port:microphone`
+/// axis (the import-derived mechanism, alias-immune).
+#[test]
+fn importing_browser_microphone_discloses_js_port_microphone() -> TestResult {
+    let dir = write_single("microphone", MICROPHONE_APP)?;
+    let entry = dir.join("Main.ipe");
+    let declared = BTreeSet::from([
+        Capability::JsPort(WebCapability::Microphone),
+        Capability::JsPort(WebCapability::Raw),
+    ]);
+    let r = verify_capabilities(&entry, &declared);
+    assert!(
+        r.is_ok(),
+        "importing Ipe.Browser.Microphone must disclose js-port:microphone (+ the :raw floor): {r:?}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+    Ok(())
+}
+
+/// Fail-closed (IPE-S0002): a microphone app that omits the grant is rejected
+/// as under-declared, naming `js-port:microphone` in the refusal.
+#[test]
+fn a_microphone_app_without_the_grant_is_rejected_ipe_s0002() -> TestResult {
+    let dir = write_single("micnogrant", MICROPHONE_APP)?;
+    let entry = dir.join("Main.ipe");
+    // Granting only `:raw` (the kernel floor) is not enough — the specific
+    // `js-port:microphone` axis must be accepted explicitly.
+    let declared = BTreeSet::from([Capability::JsPort(WebCapability::Raw)]);
+    let r = verify_capabilities(&entry, &declared);
+    assert!(
+        matches!(
+            &r,
+            Err(ipe::CliError::CapabilityMismatch { missing, .. })
+                if missing.contains(&"js-port:microphone")
+        ),
+        "an ungranted microphone app must be rejected naming js-port:microphone (IPE-S0002), got: {r:?}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+    Ok(())
+}
