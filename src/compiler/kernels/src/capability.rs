@@ -245,6 +245,36 @@ impl WebCapability {
             _ => Err(UnknownCapability(full.to_owned())),
         }
     }
+
+    /// The `Ipe.Package` constructor spelling for this web axis — the spelling
+    /// a `package.ipe` author writes (`Geolocation`, `File`, `Camera`, …).
+    ///
+    /// This is the one canonical home of the constructor-name vocabulary; callers
+    /// that need to map a string ctor-name to a variant use [`Self::from_ctor`].
+    #[must_use]
+    pub const fn ctor_name(self) -> &'static str {
+        match self {
+            Self::Geolocation => "Geolocation",
+            Self::Clipboard => "Clipboard",
+            Self::Notification => "Notification",
+            Self::Storage => "Storage",
+            Self::Vibration => "Vibration",
+            Self::Share => "Share",
+            Self::Battery => "Battery",
+            Self::NetworkInfo => "NetworkInfo",
+            Self::File => "File",
+            Self::Camera => "Camera",
+            Self::Raw => "Raw",
+        }
+    }
+
+    /// Parse a `package.ipe` constructor spelling into a web axis, the inverse
+    /// of [`Self::ctor_name`]. Returns `None` for a name outside the closed
+    /// web-axis vocabulary.
+    #[must_use]
+    pub fn from_ctor(ctor: &str) -> Option<Self> {
+        Self::ALL.iter().copied().find(|c| c.ctor_name() == ctor)
+    }
 }
 
 impl Capability {
