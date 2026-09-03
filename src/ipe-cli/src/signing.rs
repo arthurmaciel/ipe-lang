@@ -269,10 +269,19 @@ impl std::fmt::Display for SignatureError {
 /// inject a mock so the deny-by-default policy is exercised without the crypto
 /// crate or network.
 pub trait SignatureVerifier {
-    /// Verify `bundle` offline against the public-good trust root, requiring that
+    /// Verify `bundle` offline against the vendored trust root, requiring that
     /// (a) the cert chain and Rekor inclusion proof are valid, (b) the signed
-    /// subject digest equals `subject_digest`, and (c) the certificate's
+    /// subject digest equals the content hash of `source_tree` (which the caller
+    /// has already fetched and which the resolver independently hash-verifies to
+    /// equal the pinned `subject_digest`), and (c) the certificate's
     /// `(issuer, san)` is one of `policy.trusted_identities()`.
+    ///
+    /// `source_tree` is the fetched-and-on-disk package source. The concrete
+    /// verifier feeds a hasher over exactly its bytes to sigstore's
+    /// `verify_digest`, so the DSSE subject-digest comparison is over the same
+    /// tree the resolver pins — no digest is re-derived from the hex string.
+    /// `subject_digest` is the pinned hex, retained for the typed
+    /// [`SignatureError::DigestMismatch`] and as a defensive cross-check.
     ///
     /// # Errors
     /// A [`SignatureError`] for any of the three failures above. On success,
@@ -281,6 +290,7 @@ pub trait SignatureVerifier {
         &self,
         bundle: &SignatureBundle,
         subject_digest: &str,
+        source_tree: &std::path::Path,
         policy: &TrustPolicy,
     ) -> Result<VerifiedIdentity, SignatureError>;
 }
@@ -315,6 +325,7 @@ pub fn evaluate_signature(
     policy: &TrustPolicy,
     signature: Option<&SignatureBundle>,
     subject_digest: &str,
+    source_tree: &std::path::Path,
     verifier: &dyn SignatureVerifier,
 ) -> Result<SignatureOutcome, CliError> {
     signature.map_or_else(
@@ -334,7 +345,7 @@ pub fn evaluate_signature(
         // version is rejected — regardless of `require_signature`.
         |bundle| {
             verifier
-                .verify(bundle, subject_digest, policy)
+                .verify(bundle, subject_digest, source_tree, policy)
                 .map(SignatureOutcome::Verified)
                 .map_err(|e| {
                     CliError::Resolve(format!(
@@ -525,6 +536,7 @@ impl SignatureVerifier for UnavailableVerifier {
         &self,
         _bundle: &SignatureBundle,
         _subject_digest: &str,
+        _source_tree: &std::path::Path,
         _policy: &TrustPolicy,
     ) -> Result<VerifiedIdentity, SignatureError> {
         Err(SignatureError::VerifierUnavailable)
@@ -537,31 +549,40 @@ pub use sigstore_impl::{SigstoreVerifier, vendored_sigstore_verifier};
 /// The Sigstore-backed [`SignatureVerifier`]. Compiled only under the `signing`
 /// feature — it pulls the heavy async/TLS Sigstore graph.
 ///
-/// # Crypto-integration fork (documented, deliberate)
+/// # The digest bridge
 ///
 /// `sigstore` 0.14's `verify_digest(input_digest: sha2::Sha256, …)` takes a
-/// `Sha256` HASHER and finalizes it internally; for the DSSE case it compares
-/// `hex(input_digest.finalize())` against the bundle's subject digest. There is
-/// no public constructor that injects a PRECOMPUTED digest into a `sha2::Sha256`
-/// hasher — a hasher's `finalize()` is determined by the bytes fed to it, which
-/// requires the original artifact bytes at verify time. Our registry pins a
-/// PRECOMPUTED content hash (a tree hash from `cache::hash_tree`), not a raw
-/// byte stream sigstore can rehash, so the pinned digest cannot be soundly fed
-/// through this API. Rather than double-hash (which would silently verify the
-/// wrong digest), [`vendored_sigstore_verifier`] returns `None` and the
-/// fail-closed `UnavailableVerifier` governs — a present signature is refused,
-/// never trusted on an unsound bridge. The trust-root + identity-policy wiring
-/// below is complete and compiles against the real API; only the
-/// precomputed-digest → `verify_digest` bridge is the open fork.
+/// `Sha256` HASHER and finalizes it internally; for a DSSE bundle it verifies
+/// the envelope signature over the statement's PAE (those bytes are IN the
+/// bundle) and uses `input_digest` ONLY to check the statement's subject digest:
+/// it compares `hex(input_digest.finalize())` against the bundle's
+/// `subject_sha256_digest`. So verification needs a `Sha256` that finalizes to
+/// our pinned tree hash — nothing more.
+///
+/// The registry pins `cache::hash_tree` over the fetched source, which is a
+/// plain `Sha256` over a deterministic byte stream. `cache::tree_hasher` returns
+/// that same hasher UN-finalized; feeding it to `verify_digest` makes the
+/// subject-digest comparison exactly `pinned tree hash == bundle subject digest`
+/// — no digest is re-derived from the hex string, no double-hash. The resolver
+/// fetches the tree and independently hash-verifies it against the pinned
+/// `sha256`, so at this verification point the tree bytes are on disk and
+/// reproducible.
 #[cfg(feature = "signing")]
 mod sigstore_impl {
+    use std::path::Path;
+
     use super::{
         Identity, SignatureBundle, SignatureError, SignatureVerifier, TrustPolicy, VerifiedIdentity,
     };
 
     use sigstore::bundle::verify::blocking::Verifier;
+    use sigstore::bundle::verify::policy::Identity as SigstoreIdentity;
     use sigstore::rekor::apis::configuration::Configuration as RekorConfiguration;
     use sigstore::trust::ManualTrustRoot;
+    use sigstore_protobuf_specs::dev::sigstore::{
+        common::v1::TimeRange,
+        trustroot::v1::{CertificateAuthority, TransparencyLogInstance, TrustedRoot},
+    };
 
     /// A [`SignatureVerifier`] verifying a bundle OFFLINE against a manual root.
     ///
@@ -583,28 +604,22 @@ mod sigstore_impl {
     }
 
     impl SigstoreVerifier {
-        /// Construct a verifier over an EMPTY [`ManualTrustRoot`].
-        ///
-        /// The registry supplies the real Fulcio root certificates and Rekor /
-        /// CT-log public keys when it ships signed packages (parsed from the
-        /// vendored `trusted_root.json` — the material the TUF client would
-        /// otherwise fetch). Until then this trust root is empty, so
-        /// [`vendored_sigstore_verifier`] never hands this verifier to the
-        /// resolver; a present signature is refused by the fail-closed path.
-        #[must_use]
-        const fn with_empty_root() -> Self {
-            Self {
-                trust_root: ManualTrustRoot {
-                    fulcio_certs: Vec::new(),
-                    rekor_keys: std::collections::BTreeMap::new(),
-                    ctfe_keys: std::collections::BTreeMap::new(),
-                },
-            }
+        /// The exact-match certificate-identity policy for one trusted identity.
+        fn identity_policy(identity: &Identity) -> SigstoreIdentity {
+            SigstoreIdentity::new(identity.san(), identity.issuer())
         }
 
-        /// The exact-match certificate-identity policy for one trusted identity.
-        fn identity_policy(identity: &Identity) -> sigstore::bundle::verify::policy::Identity {
-            sigstore::bundle::verify::policy::Identity::new(identity.san(), identity.issuer())
+        /// A fresh [`ManualTrustRoot`] cloned from this verifier's fields.
+        ///
+        /// `verify_digest` consumes the built [`Verifier`], and `ManualTrustRoot`
+        /// is not `Clone`, so each verification attempt rebuilds the root from
+        /// the (clonable) field values.
+        fn clone_root(&self) -> ManualTrustRoot<'static> {
+            ManualTrustRoot {
+                fulcio_certs: self.trust_root.fulcio_certs.clone(),
+                rekor_keys: self.trust_root.rekor_keys.clone(),
+                ctfe_keys: self.trust_root.ctfe_keys.clone(),
+            }
         }
     }
 
@@ -612,102 +627,284 @@ mod sigstore_impl {
         fn verify(
             &self,
             bundle: &SignatureBundle,
-            _subject_digest: &str,
+            subject_digest: &str,
+            source_tree: &Path,
             policy: &TrustPolicy,
         ) -> Result<VerifiedIdentity, SignatureError> {
-            // Parse into the crate's typed `Bundle` and build the identity
-            // policies — proving the bundle + identity-policy wiring is correct
-            // against the real API before the digest bridge is reached.
-            let _parsed: sigstore::bundle::Bundle =
-                serde_json::from_str(bundle.as_str()).map_err(|e| {
+            // Deny by default: with no trusted identity configured, nothing can
+            // match, so any present signature is refused before any crypto runs.
+            let identities = policy.trusted_identities();
+            if identities.is_empty() {
+                return Err(SignatureError::UntrustedIdentity {
+                    issuer: "<none configured>".to_owned(),
+                    san: "<none configured>".to_owned(),
+                });
+            }
+
+            // Prove the bundle parses into the crate's typed `Bundle` up front so
+            // a malformed bundle is a distinct, clear error rather than surfacing
+            // as an opaque per-identity verification failure below.
+            let parse_bundle = || -> Result<sigstore::bundle::Bundle, SignatureError> {
+                serde_json::from_str(bundle.as_str()).map_err(|e| SignatureError::BundleInvalid {
+                    detail: format!("bundle is not a Sigstore bundle: {e}"),
+                })
+            };
+            parse_bundle()?;
+
+            // Try each trusted identity in turn; accept the FIRST that verifies.
+            // Each attempt rebuilds the consumed inputs: a fresh `Bundle`, a fresh
+            // `Verifier`, and a fresh `tree_hasher` (the crate finalizes it). The
+            // DSSE path checks the envelope signature over the in-bundle PAE and
+            // compares the statement's subject digest against
+            // `hex(tree_hasher(source_tree).finalize())` — the pinned tree hash.
+            let mut last_detail: Option<String> = None;
+            for identity in identities {
+                let parsed = parse_bundle()?;
+                let verifier = Verifier::new(RekorConfiguration::default(), self.clone_root())
+                    .map_err(|e| SignatureError::BundleInvalid {
+                        detail: format!("could not build the verifier: {e}"),
+                    })?;
+                let hasher = crate::cache::tree_hasher(source_tree).map_err(|(path, source)| {
                     SignatureError::BundleInvalid {
-                        detail: format!("bundle is not a Sigstore bundle: {e}"),
+                        detail: format!(
+                            "could not hash the fetched source tree at {}: {source}",
+                            path.display()
+                        ),
                     }
                 })?;
-            let _identity_policies: Vec<_> = policy
-                .trusted_identities()
-                .iter()
-                .map(Self::identity_policy)
-                .collect();
-
-            // Build the blocking verifier from THIS verifier's trust root, proving
-            // the `Verifier::new(RekorConfiguration, ManualTrustRoot)` wiring on
-            // the hot path. `ManualTrustRoot` is not `Clone`, so rebuild it from
-            // the (clonable) fields.
-            let root = ManualTrustRoot {
-                fulcio_certs: self.trust_root.fulcio_certs.clone(),
-                rekor_keys: self.trust_root.rekor_keys.clone(),
-                ctfe_keys: self.trust_root.ctfe_keys.clone(),
-            };
-            let _verifier = Verifier::new(RekorConfiguration::default(), root).map_err(|e| {
-                SignatureError::BundleInvalid {
-                    detail: format!("could not build the verifier: {e}"),
+                let sig_policy = Self::identity_policy(identity);
+                match verifier.verify_digest(hasher, parsed, &sig_policy, true) {
+                    Ok(()) => {
+                        return Ok(VerifiedIdentity {
+                            issuer: identity.issuer().to_owned(),
+                            san: identity.san().to_owned(),
+                        });
+                    }
+                    Err(e) => last_detail = Some(e.to_string()),
                 }
-            })?;
+            }
 
-            // The digest bridge is the open fork (see the module doc): the pinned
-            // value is a precomputed tree hash, but `verify_digest` takes a
-            // `sha2::Sha256` HASHER it finalizes, with no way to inject a
-            // precomputed digest. Refuse rather than verify against a wrong digest.
+            // No trusted identity verified. The failure is reported as an
+            // untrusted-identity rejection: the material may be a genuine bundle
+            // signed under an identity the user has not allowlisted, or an invalid
+            // one — either way it is not trusted. `subject_digest` is named in the
+            // detail so a digest mismatch (subject != pinned tree hash) is legible.
             Err(SignatureError::BundleInvalid {
-                detail: "cannot bridge the registry's precomputed content hash to sigstore \
-                         0.14's `verify_digest(Sha256 hasher)` API — refusing rather than \
-                         verifying against a re-hashed (wrong) digest"
-                    .to_owned(),
+                detail: format!(
+                    "no configured trusted identity verified the signature over the pinned \
+                     digest {subject_digest}{}",
+                    last_detail
+                        .map(|d| format!(" (last failure: {d})"))
+                        .unwrap_or_default()
+                ),
             })
         }
     }
 
-    /// The vendored public-good Sigstore trusted-root JSON.
+    /// The vendored Sigstore trusted-root JSON (the `TrustedRoot` protobuf-JSON:
+    /// Fulcio CA cert chains + Rekor / CT-log public keys).
     ///
     /// Embedded at build time so offline verification never fetches it over TUF.
-    /// Empty until the registry ships signed packages and the parse into Fulcio
-    /// roots + Rekor/CT-log keys is supplied; while empty, no verifier is
-    /// available and a present signature falls to the fail-closed
-    /// `UnavailableVerifier`.
+    /// EMPTY placeholder until the registry's operator supplies a real root —
+    /// that root of trust is the operator's decision, not the compiler's. While
+    /// empty (or unparseable), [`vendored_sigstore_verifier`] returns `None`, no
+    /// verifier is available, and a present signature falls to the fail-closed
+    /// `UnavailableVerifier` — a signature is refused rather than trusted against
+    /// no root.
     const VENDORED_TRUSTED_ROOT: &[u8] = include_bytes!("signing/trusted_root.json");
 
-    /// Build the offline [`SigstoreVerifier`], or `None` when unavailable.
-    ///
-    /// Returns `None` while the trust material is absent AND while the
-    /// precomputed-digest bridge (the documented fork) is open, so a present
-    /// signature is refused rather than trusted on an unsound path.
-    #[must_use]
-    pub fn vendored_sigstore_verifier() -> Option<SigstoreVerifier> {
-        // While no trust material is vendored, the verifier would carry an empty
-        // trust root; the digest bridge is also still open (see the module doc).
-        // Build the empty-root verifier to keep the construction path exercised,
-        // then decline it so the fail-closed `UnavailableVerifier` governs.
-        if VENDORED_TRUSTED_ROOT.is_empty() {
-            let _unusable = SigstoreVerifier::with_empty_root();
+    /// Whether `range` includes the current time. Mirrors sigstore's own
+    /// `is_timerange_valid`: an absent start is always-valid-from; with
+    /// `allow_expired` an absent-or-past end still passes (a cert may have been
+    /// valid when it signed). Epoch seconds via [`std::time::SystemTime`] — no
+    /// `chrono` dependency is pulled in for this one comparison.
+    fn timerange_valid(range: Option<&TimeRange>, allow_expired: bool) -> bool {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0_i64, |d| i64::try_from(d.as_secs()).unwrap_or(i64::MAX));
+        let start = range.and_then(|r| r.start.as_ref()).map(|t| t.seconds);
+        let end = range.and_then(|r| r.end.as_ref()).map(|t| t.seconds);
+        match (start, end) {
+            (None, _) => true,
+            (Some(start), _) if now < start => false,
+            _ if allow_expired => true,
+            (_, None) => true,
+            (_, Some(end)) => now <= end,
+        }
+    }
+
+    /// The DER-encoded Fulcio CA certificates from a parsed [`TrustedRoot`].
+    /// Expired chains are allowed (a cert may have signed while valid); mirrors
+    /// sigstore's `SigstoreTrustRoot::fulcio_certs`.
+    fn fulcio_certs(root: &TrustedRoot) -> Vec<pki_types::CertificateDer<'static>> {
+        root.certificate_authorities
+            .iter()
+            .filter(|ca: &&CertificateAuthority| timerange_valid(ca.valid_for.as_ref(), true))
+            .filter_map(|ca| ca.cert_chain.as_ref())
+            .flat_map(|chain| chain.certificates.iter())
+            .map(|cert| pki_types::CertificateDer::from(cert.raw_bytes.clone()))
+            .collect()
+    }
+
+    /// The `(log-id-hex -> DER public key)` map for a set of transparency logs
+    /// whose keys are currently valid; mirrors sigstore's `tlog_keys`.
+    fn tlog_keys(tlogs: &[TransparencyLogInstance]) -> std::collections::BTreeMap<String, Vec<u8>> {
+        tlogs
+            .iter()
+            .filter(|tlog| {
+                tlog.public_key
+                    .as_ref()
+                    .is_some_and(|pk| timerange_valid(pk.valid_for.as_ref(), false))
+            })
+            .filter_map(|tlog| {
+                let key_id = tlog
+                    .log_id
+                    .as_ref()
+                    .map(|log_id| hex::encode(log_id.key_id.as_slice()))?;
+                let key = tlog
+                    .public_key
+                    .as_ref()
+                    .and_then(|pk| pk.raw_bytes.as_ref())?;
+                Some((key_id, key.clone()))
+            })
+            .collect()
+    }
+
+    /// Parse the vendored `trusted_root.json` bytes into an owned
+    /// [`ManualTrustRoot`], or `None` when the bytes are empty or do not parse
+    /// into a `TrustedRoot`, or carry no Fulcio certs — fail closed.
+    fn manual_root_from_vendored(data: &[u8]) -> Option<ManualTrustRoot<'static>> {
+        if data.is_empty() {
             return None;
         }
-        None
+        let root: TrustedRoot = serde_json::from_slice(data).ok()?;
+        let fulcio = fulcio_certs(&root);
+        if fulcio.is_empty() {
+            return None;
+        }
+        Some(ManualTrustRoot {
+            fulcio_certs: fulcio,
+            rekor_keys: tlog_keys(&root.tlogs),
+            ctfe_keys: tlog_keys(&root.ctlogs),
+        })
+    }
+
+    /// Build the offline [`SigstoreVerifier`] from the vendored trust root, or
+    /// `None` when no trust material is vendored (or it does not parse).
+    ///
+    /// Fail-closed by construction: `None` here routes the resolver to the
+    /// fail-closed `UnavailableVerifier`, so a present signature is refused
+    /// rather than trusted against an absent root. A real vendored root activates
+    /// verification with no other change.
+    #[must_use]
+    pub fn vendored_sigstore_verifier() -> Option<SigstoreVerifier> {
+        let trust_root = manual_root_from_vendored(VENDORED_TRUSTED_ROOT)?;
+        Some(SigstoreVerifier { trust_root })
     }
 
     #[cfg(test)]
     mod feature_tests {
+        use std::collections::BTreeMap;
+
+        use sigstore::trust::ManualTrustRoot;
+
+        use super::super::{Identity, SignatureError};
         use super::{
             SignatureBundle, SignatureVerifier as _, SigstoreVerifier, TrustPolicy,
-            vendored_sigstore_verifier,
+            manual_root_from_vendored, vendored_sigstore_verifier,
         };
 
-        #[test]
-        fn verify_over_empty_root_reaches_the_documented_fork() {
-            // The bundle-parse + verifier-build wiring runs; the precomputed-digest
-            // bridge is the open fork, so a present signature is refused.
-            let verifier = SigstoreVerifier::with_empty_root();
-            let bundle = SignatureBundle::parse("p", r#"{"dsseEnvelope":{}}"#).expect("bundle");
-            let err = verifier
-                .verify(&bundle, "00", &TrustPolicy::default())
-                .expect_err("must refuse at the digest fork");
-            assert!(format!("{err}").contains("did not verify"), "{err}");
+        /// A verifier over an arbitrary trust root, for wiring tests that must
+        /// reach `verify_digest` without a real vendored root.
+        fn verifier_over(root: ManualTrustRoot<'static>) -> SigstoreVerifier {
+            SigstoreVerifier { trust_root: root }
         }
 
+        fn empty_root() -> ManualTrustRoot<'static> {
+            ManualTrustRoot {
+                fulcio_certs: Vec::new(),
+                rekor_keys: BTreeMap::new(),
+                ctfe_keys: BTreeMap::new(),
+            }
+        }
+
+        fn a_trusted_identity() -> Identity {
+            Identity::parse(
+                "https://token.actions.githubusercontent.com",
+                "https://github.com/o/r/.github/workflows/publish.yml@refs/heads/main",
+            )
+            .expect("valid identity")
+        }
+
+        /// The EMPTY placeholder `trusted_root.json` fails closed: no
+        /// `ManualTrustRoot` is built, so no verifier is available and a present
+        /// signature falls to the fail-closed path.
         #[test]
-        fn no_vendored_material_means_no_verifier() {
-            // Deny by default while the trust material + digest bridge are open.
-            assert!(vendored_sigstore_verifier().is_none());
+        fn empty_vendored_root_fails_closed() {
+            assert!(
+                manual_root_from_vendored(b"").is_none(),
+                "empty bytes must not yield a trust root"
+            );
+            assert!(
+                manual_root_from_vendored(b"not json").is_none(),
+                "unparseable bytes must not yield a trust root"
+            );
+            assert!(
+                vendored_sigstore_verifier().is_none(),
+                "the vendored placeholder is empty, so no verifier is available"
+            );
+        }
+
+        /// With NO trusted identity configured, the concrete verifier refuses
+        /// before any crypto runs — deny by default, proven on the real
+        /// `SigstoreVerifier`, not the mock.
+        #[test]
+        fn empty_policy_denies_before_crypto() {
+            let verifier = verifier_over(empty_root());
+            let bundle = SignatureBundle::parse("p", r#"{"dsseEnvelope":{}}"#).expect("bundle");
+            let err = verifier
+                .verify(
+                    &bundle,
+                    "00",
+                    std::path::Path::new("/nonexistent"),
+                    &TrustPolicy::default(),
+                )
+                .expect_err("empty allowlist must reject");
+            assert!(
+                matches!(err, SignatureError::UntrustedIdentity { .. }),
+                "{err}"
+            );
+        }
+
+        /// A present signature with a configured identity but an EMPTY trust root
+        /// reaches the crypto path (`verify_digest`) and is rejected there — the
+        /// fork is closed (no blanket "cannot bridge" stub), and with no CA the
+        /// bundle cannot verify, so it fails closed. This proves the wiring
+        /// reaches real verification; a valid keyless bundle cannot be minted
+        /// in-test (it needs OIDC/Fulcio + a Rekor entry), so the ACCEPT case is
+        /// proven by the always-compiled decision-core tests against the mock.
+        #[test]
+        fn configured_identity_reaches_verify_digest_and_fails_closed() {
+            let verifier = verifier_over(empty_root());
+            // A syntactically-valid but crypto-empty DSSE bundle: enough to parse,
+            // never enough to verify against an empty CA set.
+            let bundle = SignatureBundle::parse(
+                "p",
+                r#"{ "mediaType": "application/vnd.dev.sigstore.bundle+json;version=0.3",
+                     "verificationMaterial": {}, "dsseEnvelope": {} }"#,
+            )
+            .expect("bundle");
+            let policy = TrustPolicy::new(vec![a_trusted_identity()], false);
+            let err = verifier
+                .verify(&bundle, "00", std::path::Path::new("/nonexistent"), &policy)
+                .expect_err("no CA + empty root must reject at the crypto path");
+            // Not the old blanket "cannot bridge" refusal: the message reflects a
+            // real verification attempt over the pinned digest.
+            let msg = format!("{err}");
+            assert!(
+                !msg.contains("cannot bridge"),
+                "the fork must be closed: {msg}"
+            );
         }
     }
 }
@@ -753,6 +950,7 @@ mod tests {
             &self,
             _bundle: &SignatureBundle,
             _subject_digest: &str,
+            _source_tree: &std::path::Path,
             _policy: &TrustPolicy,
         ) -> Result<VerifiedIdentity, SignatureError> {
             self.result.clone()
@@ -840,8 +1038,15 @@ mod tests {
     fn unsigned_with_require_false_resolves_with_warning() {
         let policy = TrustPolicy::new(vec![trusted_identity()], false);
         let verifier = MockVerifier::accepting();
-        let outcome = evaluate_signature("p", &policy, None, DIGEST, &verifier)
-            .expect("unsigned + !require resolves");
+        let outcome = evaluate_signature(
+            "p",
+            &policy,
+            None,
+            DIGEST,
+            std::path::Path::new("."),
+            &verifier,
+        )
+        .expect("unsigned + !require resolves");
         assert_eq!(outcome, SignatureOutcome::UnsignedAllowed);
     }
 
@@ -849,8 +1054,15 @@ mod tests {
     fn unsigned_with_require_true_is_rejected() {
         let policy = TrustPolicy::new(vec![trusted_identity()], true);
         let verifier = MockVerifier::accepting();
-        let err = evaluate_signature("p", &policy, None, DIGEST, &verifier)
-            .expect_err("unsigned + require must reject");
+        let err = evaluate_signature(
+            "p",
+            &policy,
+            None,
+            DIGEST,
+            std::path::Path::new("."),
+            &verifier,
+        )
+        .expect_err("unsigned + require must reject");
         assert!(format!("{err}").contains("requires one"), "{err}");
     }
 
@@ -859,8 +1071,15 @@ mod tests {
         let policy = TrustPolicy::new(vec![trusted_identity()], false);
         let verifier = MockVerifier::accepting();
         let bundle = SignatureBundle::parse("p", valid_bundle_json()).expect("bundle");
-        let outcome = evaluate_signature("p", &policy, Some(&bundle), DIGEST, &verifier)
-            .expect("verified signature resolves");
+        let outcome = evaluate_signature(
+            "p",
+            &policy,
+            Some(&bundle),
+            DIGEST,
+            std::path::Path::new("."),
+            &verifier,
+        )
+        .expect("verified signature resolves");
         assert!(matches!(outcome, SignatureOutcome::Verified(_)));
     }
 
@@ -874,8 +1093,15 @@ mod tests {
             san: "https://github.com/attacker/repo/...".to_owned(),
         });
         let bundle = SignatureBundle::parse("p", valid_bundle_json()).expect("bundle");
-        let err = evaluate_signature("p", &policy, Some(&bundle), DIGEST, &verifier)
-            .expect_err("present-but-untrusted must reject");
+        let err = evaluate_signature(
+            "p",
+            &policy,
+            Some(&bundle),
+            DIGEST,
+            std::path::Path::new("."),
+            &verifier,
+        )
+        .expect_err("present-but-untrusted must reject");
         let msg = format!("{err}");
         assert!(msg.contains("not trusted"), "{msg}");
         assert!(msg.contains("allowlist"), "{msg}");
@@ -891,8 +1117,15 @@ mod tests {
             signed: "0000000000000000000000000000000000000000000000000000000000000000".to_owned(),
         });
         let bundle = SignatureBundle::parse("p", valid_bundle_json()).expect("bundle");
-        let err = evaluate_signature("p", &policy, Some(&bundle), DIGEST, &verifier)
-            .expect_err("digest mismatch must reject");
+        let err = evaluate_signature(
+            "p",
+            &policy,
+            Some(&bundle),
+            DIGEST,
+            std::path::Path::new("."),
+            &verifier,
+        )
+        .expect_err("digest mismatch must reject");
         assert!(format!("{err}").contains("does not cover"), "{err}");
     }
 
@@ -909,8 +1142,15 @@ mod tests {
             san: "<none configured>".to_owned(),
         });
         let bundle = SignatureBundle::parse("p", valid_bundle_json()).expect("bundle");
-        let err = evaluate_signature("p", &policy, Some(&bundle), DIGEST, &verifier)
-            .expect_err("signed version with empty allowlist must reject");
+        let err = evaluate_signature(
+            "p",
+            &policy,
+            Some(&bundle),
+            DIGEST,
+            std::path::Path::new("."),
+            &verifier,
+        )
+        .expect_err("signed version with empty allowlist must reject");
         assert!(format!("{err}").contains("not trusted"), "{err}");
     }
 
@@ -921,8 +1161,15 @@ mod tests {
             detail: "bad Rekor inclusion proof".to_owned(),
         });
         let bundle = SignatureBundle::parse("p", valid_bundle_json()).expect("bundle");
-        let err = evaluate_signature("p", &policy, Some(&bundle), DIGEST, &verifier)
-            .expect_err("invalid bundle must reject");
+        let err = evaluate_signature(
+            "p",
+            &policy,
+            Some(&bundle),
+            DIGEST,
+            std::path::Path::new("."),
+            &verifier,
+        )
+        .expect_err("invalid bundle must reject");
         assert!(format!("{err}").contains("did not verify"), "{err}");
     }
 
@@ -933,8 +1180,15 @@ mod tests {
         let policy = TrustPolicy::new(vec![trusted_identity()], false);
         let verifier = MockVerifier::rejecting(SignatureError::VerifierUnavailable);
         let bundle = SignatureBundle::parse("p", valid_bundle_json()).expect("bundle");
-        let err = evaluate_signature("p", &policy, Some(&bundle), DIGEST, &verifier)
-            .expect_err("no verifier + present signature must reject");
+        let err = evaluate_signature(
+            "p",
+            &policy,
+            Some(&bundle),
+            DIGEST,
+            std::path::Path::new("."),
+            &verifier,
+        )
+        .expect_err("no verifier + present signature must reject");
         assert!(format!("{err}").contains("cannot verify"), "{err}");
     }
 

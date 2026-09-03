@@ -21,7 +21,7 @@ path = "src/main.rs"
 # concrete `sigstore`-crate verifier — which pulls a heavy async/TLS transitive
 # graph (tokio, rustls, the TUF client) — sits behind this feature, off by
 # default so an ordinary `ipe` build stays lean.
-signing = ["dep:sigstore"]
+signing = ["dep:sigstore", "dep:sigstore_protobuf_specs", "dep:pki_types"]
 
 [dependencies]
 ipe_stdlib = { path = "../stdlib" }
@@ -108,6 +108,21 @@ panic-scan = { path = "../../tools/panic-scan" }
 # graph is never linked. `rustls-tls` matches the CLI's existing TLS backend.
 # Optional so the default build never links the async graph this crate carries.
 sigstore = { version = "0.14", default-features = false, features = ["verify", "rustls-tls"], optional = true }
+
+# The Sigstore trusted-root schema (`TrustedRoot` protobuf-JSON: Fulcio CA cert
+# chains + Rekor / CT-log public keys). Parsed offline from the vendored
+# `signing/trusted_root.json` into a `ManualTrustRoot` — the same material the
+# TUF client would fetch — so no `sigstore-trust-root`/`tough` graph is linked.
+# The exact version `sigstore`'s `verify` feature already resolves, named
+# directly so the offline root parse can build on the crate's own types rather
+# than a duplicated hand-rolled schema. Gated behind `signing` alongside it.
+sigstore_protobuf_specs = { version = "0.5", default-features = false, optional = true }
+
+# `ManualTrustRoot::fulcio_certs` is `Vec<CertificateDer>` from this crate (the
+# `pki_types` the sigstore graph already links). Named directly, `signing`-gated,
+# so the offline trust-root parse can build owned `CertificateDer` values from
+# the DER bytes in `trusted_root.json`.
+pki_types = { package = "rustls-pki-types", version = "1", optional = true }
 
 # `ipe health`'s free-disk check reads the filesystem's available blocks via
 # `statvfs(2)`. rustix exposes the syscall directly — no libc binding in our own
