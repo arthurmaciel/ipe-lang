@@ -1,0 +1,86 @@
+module Main exposing (main)
+
+-- | mic-record — `Ipe.Browser.Microphone.captureAudio` end-to-end, with the
+-- consent gate satisfied.
+--
+-- Demonstrates the one-shot microphone capture: the user clicks "Record", the
+-- app calls `captureAudio` with a 3-second limit, and the reply (a base-64
+-- audio data URL or a typed error) is rendered on screen. A second click on
+-- the rendered data URL plays the clip back via an HTML audio element.
+--
+-- `Ipe.Browser.Microphone` discloses `js-port:microphone` on import; the
+-- companion `js-port:raw` floor is also disclosed (the module reaches
+-- `Js.send`/`Js.subscribe` internally). Both are accepted in `package.ipe`.
+--
+-- A host permission denial or an absent `getUserMedia`/`MediaRecorder` arrives
+-- as a typed `Err` — never a thrown error or a silently dropped frame.
+
+
+import Ipe.Tea.Web as Web
+import Ipe.Tea.Web.Cmd as Cmd
+import Ipe.Tea.Web.Sub as Sub
+import Ipe.Ui as Ui
+import Ipe.Error as Error exposing (Error)
+import Ipe.Browser.Microphone as Microphone
+import Ipe.Task as Task
+
+
+type alias Model =
+    { result : String }
+
+
+type Msg
+    = StartRecording
+    | GotClip (Result Error Microphone.AudioClip)
+
+
+init : WebReq -> ( Model, Cmd.Cmd Msg )
+init _req =
+    ( { result = "none" }, Cmd.none )
+
+
+update : Msg -> Model -> ( Model, Cmd.Cmd Msg )
+update msg model =
+    case msg of
+        StartRecording ->
+            ( model
+            , Task.attempt GotClip
+                (Microphone.captureAudio { maxDurationMs = 3000, mimeType = "audio/webm" })
+            )
+
+        GotClip result ->
+            case result of
+                Ok clip ->
+                    ( { model | result = describeClip clip }, Cmd.none )
+
+                Err error ->
+                    ( { model | result = "error: " ++ Error.toString error }, Cmd.none )
+
+
+describeClip : Microphone.AudioClip -> String
+describeClip clip =
+    "recorded " ++ String.fromInt clip.durationMs ++ "ms (" ++ clip.mime ++ ")"
+
+
+subscriptions : Model -> Sub.Sub Msg
+subscriptions _model =
+    Microphone.recordings GotClip
+
+
+view : Model -> Element Msg
+view model =
+    Ui.column []
+        [ Ui.button [] { onPress = Just StartRecording, label = Ui.text "Record 3 s" }
+        , Ui.text ("result: " ++ model.result)
+        ]
+
+
+main =
+    Web.app
+        { init = init
+        , update = update
+        , view = view
+        , subscriptions = subscriptions
+        , routes = []
+        , notFound = StartRecording
+        }

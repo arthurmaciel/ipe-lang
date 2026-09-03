@@ -1,0 +1,19 @@
+module Package exposing (package)
+
+import Ipe.Package exposing (..)
+
+
+package : Package
+package =
+    { name = "mic-record"
+    , version = "0.1.0"
+    , capabilities =
+        { declares = []
+
+        -- The `Ipe.Browser.Microphone` import discloses `js-port:microphone`;
+        -- the `:raw` floor is also disclosed because the module reaches
+        -- `Js.send`/`Js.subscribe` under the hood. Both must be accepted here
+        -- or the build fails closed (IPE-S0002).
+        , accepts = [ JsPort Microphone, JsPort Raw ]
+        }
+    }
