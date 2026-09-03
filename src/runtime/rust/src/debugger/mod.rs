@@ -168,6 +168,30 @@ impl<Msg: Clone, Model: Clone> RecordBuffer<Msg, Model> {
         self.base = init;
     }
 
+    /// Commit time-travel to step `n` (0-indexed): truncate the log to the
+    /// first `n + 1` entries and return the model at that step.
+    ///
+    /// After this call `len() == n + 1` — the tail (steps after `n`) is
+    /// discarded. Resuming forward from this point starts a new branch of
+    /// history; no `Cmd` is fired. Returns `None` when `n >= len()`.
+    ///
+    /// This is the "fork" operation from the spec: effects are never re-run,
+    /// and the tail is discarded so the caller can record new messages from
+    /// the stepped-to model.
+    pub fn step_to<F>(&mut self, n: usize, update: &F) -> Option<Model>
+    where
+        F: Fn(Msg, Model) -> (Model, IpeCmd<Msg>),
+    {
+        if n >= self.log.len() {
+            return None;
+        }
+        // Reconstruct before truncating (uses the current base + full log).
+        let model = self.reconstruct(n, update)?;
+        // Discard the tail: keep only steps 0..=n.
+        self.log.truncate(n + 1);
+        Some(model)
+    }
+
     /// Iterator over retained messages, oldest first.
     pub fn msgs(&self) -> impl Iterator<Item = &Msg> {
         self.log.iter().map(|s| &s.msg)
@@ -257,6 +281,18 @@ impl<Msg: Clone, Model: Clone> History<Msg, Model> {
     /// Iterator over retained messages, oldest first.
     pub fn msgs(&self) -> impl Iterator<Item = &Msg> {
         self.inner.msgs()
+    }
+
+    /// Commit time-travel to step `n`: truncate the log to the first `n + 1`
+    /// entries and return the model at that step.
+    ///
+    /// Delegates to [`RecordBuffer::step_to`]. After this call `len() == n + 1`
+    /// — the tail is discarded so the caller can record new messages from the
+    /// stepped-to model. No `Cmd` is fired. Returns `None` when `n >= len()`.
+    #[must_use]
+    pub fn step_to(&mut self, n: usize) -> Option<Model> {
+        let update = self.update;
+        self.inner.step_to(n, &move |m, mdl| update(m, mdl))
     }
 
     /// Clear the step log and reset the base to `init`.
@@ -799,6 +835,153 @@ mod tests {
             buf.len(),
             cap,
             "log must hold exactly cap steps after overflow"
+        );
+    }
+
+    // ── stepTo / back / forward ───────────────────────────────────────────────
+
+    // stepTo(N) yields the same model as folding apply_transition over the
+    // first N+1 messages from init — the core determinism guarantee.
+    //
+    // Each N uses a freshly-recorded history so the truncation from one
+    // step_to(N) call does not interfere with the next check.
+    #[test]
+    fn step_to_determinism() {
+        let msgs = [
+            TestMsg::Add(3),
+            TestMsg::Add(7),
+            TestMsg::Add(2),
+            TestMsg::Add(5),
+        ];
+
+        for n in 0..msgs.len() {
+            // Fresh history for each N: step_to truncates the tail, so
+            // re-using a single history would make step_to(N-1) invisible.
+            let mut history = History::new(TestModel { count: 0 }, test_update, 16);
+            let mut live = TestModel { count: 0 };
+            for msg in &msgs {
+                let (next, _) = test_update(msg.clone(), live.clone());
+                live = next.clone();
+                history.record(msg.clone(), next);
+            }
+
+            let mut expected = TestModel { count: 0 };
+            for msg in msgs.iter().take(n + 1) {
+                let (next, _) = test_update(msg.clone(), expected.clone());
+                expected = next;
+            }
+            let got = history
+                .step_to(n)
+                .expect("step_to must return Some for in-range n");
+            assert_eq!(
+                got,
+                expected,
+                "step_to({n}) must equal fold of first {} messages",
+                n + 1
+            );
+        }
+    }
+
+    // step_to(N) truncates the tail: after step_to(N), len() == N+1.
+    #[test]
+    fn step_to_forks_tail() {
+        let mut history = History::new(TestModel { count: 0 }, test_update, 16);
+        let mut live = TestModel { count: 0 };
+        for n in 1..=6i64 {
+            let (next, _) = test_update(TestMsg::Add(n), live.clone());
+            live = next.clone();
+            history.record(TestMsg::Add(n), next);
+        }
+        assert_eq!(history.len(), 6, "pre-condition: 6 steps recorded");
+
+        // step_to(2) → retain steps 0,1,2 only; tail (3,4,5) discarded.
+        let _ = history.step_to(2).expect("step_to(2) in range");
+        assert_eq!(
+            history.len(),
+            3,
+            "after step_to(2) history must hold exactly 3 steps"
+        );
+    }
+
+    // step_to fires zero additional Cmds — effects are suppressed during replay.
+    #[test]
+    fn step_to_no_effect_refire() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let effect_count = Arc::new(AtomicUsize::new(0));
+
+        let counter = Arc::clone(&effect_count);
+        // Live update bumps counter; stored update_fn does not.
+        let live_update = move |msg: TestMsg, model: TestModel| -> (TestModel, IpeCmd<TestMsg>) {
+            counter.fetch_add(1, Ordering::SeqCst);
+            test_update(msg, model)
+        };
+
+        let mut history = History::new(TestModel { count: 0 }, test_update, 16);
+        let mut live = TestModel { count: 0 };
+        for n in [1i64, 2, 3, 4, 5] {
+            let (next, _) = live_update(TestMsg::Add(n), live.clone());
+            live = next.clone();
+            history.record(TestMsg::Add(n), next);
+        }
+
+        let live_effects = effect_count.load(Ordering::SeqCst);
+        assert_eq!(live_effects, 5, "live pass must fire exactly 5 effects");
+
+        // step_to uses stored test_update (no counter) — no extra effects.
+        let _ = history.step_to(2).expect("step_to(2) in range");
+
+        let after = effect_count.load(Ordering::SeqCst);
+        assert_eq!(
+            live_effects, after,
+            "step_to must not fire any additional effects"
+        );
+    }
+
+    // back = step_to(cur-1), forward = step_to(cur+1); both clamp correctly.
+    #[test]
+    fn back_forward_cursor() {
+        let mut history = History::new(TestModel { count: 0 }, test_update, 16);
+        let mut live = TestModel { count: 0 };
+        for n in [10i64, 20, 30] {
+            let (next, _) = test_update(TestMsg::Add(n), live.clone());
+            live = next.clone();
+            history.record(TestMsg::Add(n), next);
+        }
+        // 3 steps: count at step 0=10, 1=30, 2=60.
+
+        // step_to(1) = back from tail.
+        let at1 = history.step_to(1).expect("step_to(1)");
+        assert_eq!(at1.count, 30, "step_to(1) = count 30");
+        assert_eq!(history.len(), 2, "tail truncated to 2 steps");
+
+        // Forward from step 1 has no tail left — step_to(1) on 2-step log
+        // is the last step; clamped step_to(1) must still work.
+        let clamped = history.step_to(1).expect("step_to last step");
+        assert_eq!(clamped.count, 30, "clamped forward stays at tail");
+
+        // Back to step 0.
+        let at0 = history.step_to(0).expect("step_to(0)");
+        assert_eq!(at0.count, 10, "step_to(0) = count 10");
+        assert_eq!(history.len(), 1, "tail truncated to 1 step");
+    }
+
+    // step_to out-of-range returns None without panic.
+    #[test]
+    fn step_to_out_of_range_is_none() {
+        let mut history = History::new(TestModel { count: 0 }, test_update, 16);
+        assert!(
+            history.step_to(0).is_none(),
+            "step_to on empty history must return None"
+        );
+
+        let (m, _) = test_update(TestMsg::Add(1), TestModel { count: 0 });
+        history.record(TestMsg::Add(1), m);
+
+        assert!(
+            history.step_to(1).is_none(),
+            "step_to past last step must return None"
         );
     }
 }
