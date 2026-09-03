@@ -50,6 +50,12 @@ pub struct ProjectManifest {
     pub root: PathBuf,
     /// Absolute path to the source root (`<root>/src` by default).
     pub src_root: PathBuf,
+    /// The optional source icon (the manifest's `icon` field), an absolute path
+    /// resolved and contained against the project root at parse time. The
+    /// desktop packager derives the per-OS icon formats from this single source;
+    /// `None` when the manifest declares no icon (the packager then omits the
+    /// bundle icon rather than inventing one).
+    pub icon: Option<PathBuf>,
     /// The SQL driver the emitted project targets (from `build.database`).
     /// Defaults to [`ipe_backend_rust::DbDriver::Sqlite`] when absent — the
     /// documented default in `AGENTS.md`'s `package.ipe` schema table.

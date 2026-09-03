@@ -1896,6 +1896,7 @@ mod tests {
                 version: None,
                 root: root.to_path_buf(),
                 src_root: root.join("src"),
+                icon: None,
                 driver: ipe_backend_rust::DbDriver::default(),
                 static_request: crate::build_plan::StaticRequestLayer::default(),
                 wasm: crate::project::WasmConfig::default(),
