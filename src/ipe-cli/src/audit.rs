@@ -1215,11 +1215,71 @@ fn advisory_check(prepared: &Prepared, advisory_db: Option<&Path>) -> Result<(),
         return Ok(());
     };
 
+    advisory_check_with_base(prepared, db_root, &crate::registry::registry_base_url())
+}
+
+/// The base-URL-injected core of [`advisory_check`]: reads the lockfile and
+/// cross-checks every locked dep, using `base_url` as the registry Pages read
+/// API. Tests pass an empty `base_url` to disable the HTTP attempt (immediate
+/// unreachable → the git-checkout DB is authoritative), keeping them hermetic and
+/// off the network.
+///
+/// # Errors
+/// [`CliError::AdvisoryVulnerable`] on a `high`/`critical` match; the advisory-DB
+/// errors when the fallback checkout is present but corrupt or unreadable.
+fn advisory_check_with_base(
+    prepared: &Prepared,
+    db_root: &Path,
+    base_url: &str,
+) -> Result<(), CliError> {
     let lockfile = crate::lockfile::Lockfile::read(&prepared.manifest.root)?;
     for dep in lockfile.packages() {
-        crate::advisory::check_dep_advisories(db_root, &dep.name, &dep.version)?;
+        check_one_dep_advisories(db_root, &dep.name, &dep.version, base_url)?;
     }
     Ok(())
+}
+
+/// Cross-check one locked dep against the advisory DB, preferring the registry
+/// Pages HTTP read-path and falling back to the git-checkout DB at `db_root`.
+///
+/// The Pages fast-path fetches `/advisories/index.json` + the per-advisory
+/// records. A reachable index is authoritative for this run — even an empty
+/// result proves the dep clean. When the index (or a named record) is unreachable
+/// (offline / air-gapped / an empty `base_url` opt-out), this is a WARN, never a
+/// silent all-clear: the check falls back to the git-checkout advisory DB, which
+/// is itself fail-closed on a malformed or unreadable file.
+///
+/// # Errors
+/// [`CliError::AdvisoryVulnerable`] on a `high`/`critical` match (from either
+/// source); [`CliError::AdvisoryDbMalformed`] / [`CliError::AdvisoryDbUnreachable`]
+/// when the fallback DB is present but corrupt or unreadable.
+fn check_one_dep_advisories(
+    db_root: &Path,
+    name: &str,
+    version: &semver::Version,
+    base_url: &str,
+) -> Result<(), CliError> {
+    let outcome = crate::registry::fetch_advisories_via_pages_with(
+        name,
+        base_url,
+        &crate::registry::net_fetch,
+    )?;
+    match outcome {
+        crate::registry::PagesAdvisoryOutcome::Fetched(advisories) => {
+            crate::advisory::evaluate_advisories(name, version, &advisories)
+        }
+        crate::registry::PagesAdvisoryOutcome::Unreachable => {
+            eprintln!(
+                "{}",
+                crate::style::gutter(&format!(
+                    "warning: the registry advisory database was unreachable over HTTP for \
+                     `{name}` — falling back to the local advisory checkout. Advisory coverage \
+                     is only as fresh as that checkout."
+                ))
+            );
+            crate::advisory::check_dep_advisories(db_root, name, version)
+        }
+    }
 }
 
 /// Locate the workspace's `deny.toml` so the supply-chain check applies the same
@@ -1894,7 +1954,9 @@ mod tests {
         write_high_advisory(&db, "vuln-pkg", ">=1.0.0, <1.2.0");
 
         let prepared = make_prepared(&dir);
-        let result = advisory_check(&prepared, Some(&db));
+        // Empty base URL disables the HTTP fast-path (hermetic, off-network); the
+        // planted git-checkout DB is authoritative on the fallback path.
+        let result = advisory_check_with_base(&prepared, &db, "");
         let _ = std::fs::remove_dir_all(&dir);
         let _ = std::fs::remove_dir_all(&db);
         assert!(

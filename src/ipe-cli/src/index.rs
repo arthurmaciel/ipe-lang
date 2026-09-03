@@ -545,6 +545,126 @@ fn parse_entry(name: &str, text: &str) -> Result<IndexEntry, CliError> {
     })
 }
 
+/// Parse the registry's per-package JSON mirror (`/packages/<name>.json`) into
+/// the SAME typed [`IndexEntry`] the TOML reader produces.
+///
+/// The Pages read API serves a JSON mirror of the authoritative `packages/<name>.toml`
+/// so the resolver can discover an entry without cloning the index repo. This is
+/// an optimisation ONLY: the trust root stays the per-version pinned `rev` +
+/// `sha256`, still git-fetched and hash-verified downstream. Every publisher-
+/// controlled field passes the same [`SourceUrl`] / [`PinnedRev`] / [`Capability`]
+/// constructors as the TOML path, so a malformed or partial JSON response is a
+/// hard error — never a partial entry trusted as complete. The caller treats any
+/// error here as a signal to fall back to the git-checkout reader.
+///
+/// The expected shape:
+///
+/// ```json
+/// { "name": "http-extras", "publisher": "tester",
+///   "versions": [ { "version": "1.2.0", "source": "https://…",
+///                   "rev": "<40-hex>", "sha256": "…",
+///                   "capabilities": ["network"] } ] }
+/// ```
+///
+/// # Errors
+/// [`CliError::Resolve`] when the JSON is malformed, is missing `publisher` or
+/// `versions`, lists zero versions, or any per-version field fails its typed
+/// constructor (an unknown capability, a non-immutable `rev`, an injection-shaped
+/// `source`).
+pub fn parse_entry_json(name: &str, text: &str) -> Result<IndexEntry, CliError> {
+    let malformed = |detail: &str| {
+        CliError::Resolve(format!(
+            "package `{name}`: registry JSON is malformed ({detail})"
+        ))
+    };
+
+    let value: serde_json::Value =
+        serde_json::from_str(text).map_err(|e| malformed(&format!("not valid JSON: {e}")))?;
+    let object = value
+        .as_object()
+        .ok_or_else(|| malformed("top level is not a JSON object"))?;
+
+    let publisher = object
+        .get("publisher")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| malformed("missing string field `publisher`"))?
+        .to_owned();
+
+    let raw_versions = object
+        .get("versions")
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| malformed("missing array field `versions`"))?;
+    if raw_versions.is_empty() {
+        return Err(malformed("`versions` is empty"));
+    }
+
+    let mut versions = Vec::with_capacity(raw_versions.len());
+    for raw in raw_versions {
+        versions.push(parse_entry_version_json(name, raw)?);
+    }
+
+    Ok(IndexEntry {
+        name: name.to_owned(),
+        publisher,
+        versions,
+    })
+}
+
+/// Parse one element of the JSON mirror's `versions` array into a typed
+/// [`EntryVersion`], routing every publisher-controlled field through the same
+/// constructors the TOML reader uses (parse, don't validate).
+fn parse_entry_version_json(name: &str, raw: &serde_json::Value) -> Result<EntryVersion, CliError> {
+    let malformed = |detail: String| {
+        CliError::Resolve(format!(
+            "package `{name}`: registry JSON is malformed ({detail})"
+        ))
+    };
+    let object = raw
+        .as_object()
+        .ok_or_else(|| malformed("a `versions` element is not an object".to_owned()))?;
+    let field = |key: &str| -> Result<&str, CliError> {
+        object
+            .get(key)
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| malformed(format!("a `versions` element is missing string `{key}`")))
+    };
+
+    let version_str = field("version")?;
+    let version = semver::Version::parse(version_str)
+        .map_err(|e| malformed(format!("`{version_str}` is not a valid version: {e}")))?;
+    // Parse-don't-validate: the same typed boundaries the TOML path uses. A
+    // moving or injection-shaped value can never reach `git` from the JSON path
+    // either.
+    let source = SourceUrl::parse(name, field("source")?)?;
+    let rev = PinnedRev::from_full_sha(name, field("rev")?)?;
+    let sha256 = field("sha256")?.to_owned();
+
+    // `capabilities` is an optional array of strings; absent means none. An
+    // unknown capability name is a hard error, never a silently-dropped effect.
+    let mut capabilities = BTreeSet::new();
+    if let Some(caps) = object.get("capabilities") {
+        let array = caps
+            .as_array()
+            .ok_or_else(|| malformed("`capabilities` is not an array".to_owned()))?;
+        for cap in array {
+            let token = cap
+                .as_str()
+                .ok_or_else(|| malformed("a `capabilities` element is not a string".to_owned()))?;
+            let parsed = Capability::from_str(token)
+                .map_err(|e| CliError::Resolve(format!("package `{name}`: {e}")))?;
+            capabilities.insert(parsed);
+        }
+    }
+
+    Ok(EntryVersion {
+        version,
+        source,
+        rev,
+        sha256,
+        capabilities,
+    })
+}
+
 /// The raw per-`[[version]]` fields collected during the line scan, before they
 /// are parsed into the typed [`EntryVersion`].
 #[derive(Default)]

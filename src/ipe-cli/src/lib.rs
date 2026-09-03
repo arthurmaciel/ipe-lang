@@ -49,6 +49,7 @@ pub mod pkg;
 pub mod progress;
 pub mod project;
 pub mod publish;
+pub mod registry;
 pub mod resolve;
 pub mod run_sandbox;
 pub mod runtime_embed;

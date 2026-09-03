@@ -204,6 +204,18 @@ pub static ENV_VARS: &[EnvVar] = &[
         class: Class::Tunable,
     },
     EnvVar {
+        name: "IPE_REGISTRY_URL",
+        default: "https://arthurmaciel.github.io/ipe-registry",
+        purpose: "Base URL of the registry's static Pages read API (per-package JSON \
+                  mirror + advisory index). `ipe add` and `ipe package audit` read it as \
+                  a fast-path, falling back to the `IPE_INDEX_DIR` git checkout on any \
+                  network failure or malformed response. Set to empty to disable the HTTP \
+                  fast-path (air-gapped): resolution then reads the checkout directly. \
+                  The pinned rev + sha256 stay the trust root either way.",
+        subsystem: Subsystem::Build,
+        class: Class::Tunable,
+    },
+    EnvVar {
         name: "IPE_STATIC",
         default: "unset (dynamic build)",
         purpose: "Set to `1` or `true` to request a fully-static (musl) binary. Mirrors \

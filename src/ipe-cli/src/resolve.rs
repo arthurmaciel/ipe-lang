@@ -49,7 +49,12 @@ pub fn resolve_and_add(
     req: &semver::VersionReq,
     index_root: &Path,
 ) -> Result<(), CliError> {
-    let entry = index::read_entry(index_root, name)?;
+    // Prefer the registry Pages fast-path (an HTTP read of the per-package JSON
+    // mirror), falling back to the git checkout on any network failure, air-gap,
+    // or malformed response. The entry only decides WHICH version to fetch; the
+    // resolved version's pinned `rev` + `sha256` stay the trust root, still
+    // git-fetched and hash-verified below (verify-before-trust).
+    let entry = crate::registry::read_entry_via_pages(name, index_root)?;
     let version = index::resolve_version(&entry, req)?;
 
     let checkout = fetch_source(project_root, name, &version.version.to_string(), version)?;
