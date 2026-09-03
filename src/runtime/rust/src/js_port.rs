@@ -827,7 +827,10 @@ mod native {
             let (tx, rx) = oneshot::channel::<JsonVal>();
             {
                 let mut g = lock_sessions();
-                match g.get_mut(&sid.0).and_then(|p| p.streams.get_mut(&session_id)) {
+                match g
+                    .get_mut(&sid.0)
+                    .and_then(|p| p.streams.get_mut(&session_id))
+                {
                     Some(stream) => stream.terminal = Some(tx),
                     None => {
                         return crate::core::IpeResult::Err(
@@ -869,7 +872,8 @@ mod native {
 
             match result {
                 Ok(Ok(terminal_value)) => {
-                    match seal_decode(&terminal_value.to_string(), &decoder, SealLimits::default()) {
+                    match seal_decode(&terminal_value.to_string(), &decoder, SealLimits::default())
+                    {
                         Ok(v) => crate::core::IpeResult::Ok(v),
                         Err(_) => crate::core::IpeResult::Err(
                             "js_close_session: terminal failed seal decode"
@@ -885,9 +889,9 @@ mod native {
                         .to_string()
                         .into(),
                 ),
-                Err(_) => crate::core::IpeResult::Err(
-                    "js_close_session: timeout".to_string().into(),
-                ),
+                Err(_) => {
+                    crate::core::IpeResult::Err("js_close_session: timeout".to_string().into())
+                }
             }
         })
     }
@@ -895,8 +899,9 @@ mod native {
 
 #[cfg(not(target_arch = "wasm32"))]
 pub use native::{
-    deliver_inbound_for, js_close_session, js_open_session, js_request, js_send, js_send_to_session,
-    js_session_frames, js_subscribe, register_out_sink_for, session_close, session_open,
+    deliver_inbound_for, js_close_session, js_open_session, js_request, js_send,
+    js_send_to_session, js_session_frames, js_subscribe, register_out_sink_for, session_close,
+    session_open,
 };
 
 #[cfg(all(not(target_arch = "wasm32"), test))]
@@ -1391,9 +1396,11 @@ mod wasm {
             match outcome {
                 Ok(reply_js) => {
                     let reply_str = reply_js.as_string().unwrap_or_default();
-                    match serde_json::from_str::<JsonVal>(&reply_str).ok().and_then(|v| {
-                        seal_decode(&v.to_string(), &decoder, SealLimits::default()).ok()
-                    }) {
+                    match serde_json::from_str::<JsonVal>(&reply_str)
+                        .ok()
+                        .and_then(|v| {
+                            seal_decode(&v.to_string(), &decoder, SealLimits::default()).ok()
+                        }) {
                         Some(v) => crate::core::IpeResult::Ok(v),
                         None => crate::core::IpeResult::Err(
                             "js_close_session: terminal failed seal decode"
@@ -1402,9 +1409,9 @@ mod wasm {
                         ),
                     }
                 }
-                Err(_) => crate::core::IpeResult::Err(
-                    "js_close_session: timeout".to_string().into(),
-                ),
+                Err(_) => {
+                    crate::core::IpeResult::Err("js_close_session: timeout".to_string().into())
+                }
             }
         })
     }
@@ -1919,9 +1926,7 @@ mod tests {
 
         // Drive `js_open_session`, capture the minted session id from the tagged
         // outbound open envelope, and return (handle, captured-outbound-frames).
-        async fn open_session_capturing(
-            sid: &SessionId,
-        ) -> (i64, Arc<Mutex<Vec<String>>>) {
+        async fn open_session_capturing(sid: &SessionId) -> (i64, Arc<Mutex<Vec<String>>>) {
             let seen: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
             let seen2 = seen.clone();
             register_out_sink_for(
@@ -1973,10 +1978,7 @@ mod tests {
             let (handle, _out) = open_session_capturing(&sid).await;
             let (h, got) = collect_frames(&sid, handle);
             tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-            deliver_inbound_for(
-                &sid,
-                format!(r#"{{"__ipe_session":{handle},"payload":7}}"#),
-            );
+            deliver_inbound_for(&sid, format!(r#"{{"__ipe_session":{handle},"payload":7}}"#));
             tokio::time::sleep(std::time::Duration::from_millis(20)).await;
             assert_eq!(*got.lock().unwrap_or_else(|e| e.into_inner()), vec![7]);
             h.abort();
@@ -1993,10 +1995,7 @@ mod tests {
             let (h, got) = collect_frames(&sid, handle);
             tokio::time::sleep(std::time::Duration::from_millis(20)).await;
             // A frame for a DIFFERENT (never-minted) id must not reach the drain.
-            deliver_inbound_for(
-                &sid,
-                r#"{"__ipe_session":999999,"payload":42}"#.to_string(),
-            );
+            deliver_inbound_for(&sid, r#"{"__ipe_session":999999,"payload":42}"#.to_string());
             tokio::time::sleep(std::time::Duration::from_millis(20)).await;
             assert!(
                 got.lock().unwrap_or_else(|e| e.into_inner()).is_empty(),
@@ -2019,10 +2018,7 @@ mod tests {
                 &sid,
                 format!(r#"{{"__ipe_session":{handle},"__ipe_terminal":true,"payload":0}}"#),
             );
-            deliver_inbound_for(
-                &sid,
-                format!(r#"{{"__ipe_session":{handle},"payload":5}}"#),
-            );
+            deliver_inbound_for(&sid, format!(r#"{{"__ipe_session":{handle},"payload":5}}"#));
             tokio::time::sleep(std::time::Duration::from_millis(20)).await;
             assert!(
                 got.lock().unwrap_or_else(|e| e.into_inner()).is_empty(),
@@ -2088,7 +2084,10 @@ mod tests {
                     js_open_session::<i64, i64>(0_i64, int_decoder())
                 })
                 .await;
-                assert!(matches!(r, crate::IpeResult::Ok(_)), "under ceiling must open");
+                assert!(
+                    matches!(r, crate::IpeResult::Ok(_)),
+                    "under ceiling must open"
+                );
             }
             let over = with_session_sid(sid.to_string(), || {
                 js_open_session::<i64, i64>(0_i64, int_decoder())

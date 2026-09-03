@@ -1282,6 +1282,10 @@ Ipe.Ffi.Js — the raw typed transport across the Ipê↔JS seam (ports).
 | `send` | `send payload` — an outbound one-shot imperative effect, Ipê → JS |
 | `subscribe` | `subscribe decoder toMsg` — an inbound intent stream, JS → Ipê, wired in |
 | `request` | `request cmd decoder` — a correlated one-shot request/reply over the port. |
+| `openSession` | `openSession openCmd frameDecoder` — open a session: send `openCmd` outbound |
+| `sessionFrames` | `sessionFrames handle frameDecoder toMsg` — the inbound frame stream for THIS |
+| `sendToSession` | `sendToSession handle sessionCmd` — send a control cmd (e.g. `Stop`) to THIS |
+| `closeSession` | `closeSession handle closeCmd terminalDecoder` — close the session: send |
 
 ## Ffi.Js.CustomElement
 
