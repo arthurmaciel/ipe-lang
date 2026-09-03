@@ -189,6 +189,31 @@ The Linux bundle is built on the host; a macOS/Windows bundle's layout is writte
 for inspection and finished (signed, packaged) on that OS's runner. Bundles are
 unsigned.
 
+### Mobile shells
+
+`ipe pack --target mobile:<ios|android>` wraps a client-wasm `Web` SPA (the
+`ipe build --target wasm` bundle) in a thin native system-webview shell that loads
+it **offline** from app assets:
+
+```
+$ ipe pack --target mobile:android examples/wasm/spa
+packaged `wasm-spa` for mobile:android → dist/android/wasm-spa-android
+  note: an Android shell project is written here; run `./gradlew assembleDebug` inside it with the Android SDK to produce an APK.
+```
+
+The SPA bundle is built on the host, then hosted from local app assets — never a
+remote URL. **Android** gets a Gradle project whose `WebView` +
+`WebViewAssetLoader` serve `index.html` from a same-origin local URL, with an
+`AndroidManifest.xml` whose `<uses-permission>` lines are derived from the accepted
+web capabilities exactly as above (never hand-written). **iOS** gets an Xcode
+project whose `WKWebView` + `WKURLSchemeHandler` serve the bundle under a custom
+scheme with correct MIME (so `.wasm` loads cleanly), with an `Info.plist` whose
+usage-description keys are derived the same way. The `[wasm]` mode must be on and
+the app must be a `Web` shape — any other combination is a named refusal.
+
+The Android app can be finished with the Android SDK; the iOS app is finished on a
+macOS + Xcode runner with a signing identity. Shells are unsigned.
+
 <!--
 ## Dependencies
 
