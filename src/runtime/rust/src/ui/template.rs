@@ -575,6 +575,24 @@ pub enum UiTemplate {
         /// For a `case` expression: arms follow the source pattern order.
         arms: Vec<UiTemplate>,
     },
+    /// A `List.map f xs` comprehension whose item function body is itself
+    /// templatizable. The item template is compiled once; the runtime
+    /// materializes it once per item, substituting that item's element fills.
+    ///
+    /// `hole_id` indexes the per-render list-item-fills slice:
+    /// `list_item_fills[hole_id]` is a `Vec<Vec<Element<M>>>` with one
+    /// `Vec<Element<M>>` per item — each inner vec is the element-fill slice
+    /// for one materialization of `item_template`.
+    ///
+    /// A missing or out-of-range `hole_id` produces an empty children run —
+    /// fail-closed, never a panic.
+    ListHole {
+        /// Index into the per-render list-item-fills slice.
+        hole_id: usize,
+        /// Template compiled from the item function body. Materialized once per
+        /// item, substituting that item's element fills in index order.
+        item_template: Box<UiTemplate>,
+    },
 }
 
 impl Drop for UiTemplate {
@@ -590,6 +608,9 @@ impl Drop for UiTemplate {
                 std::mem::take(children)
             }
             UiTemplate::ControlFlowHole { arms, .. } => std::mem::take(arms),
+            UiTemplate::ListHole { item_template, .. } => {
+                vec![std::mem::replace(item_template.as_mut(), UiTemplate::Empty)]
+            }
             UiTemplate::Empty
             | UiTemplate::Text(_)
             | UiTemplate::Hole(_)
@@ -602,6 +623,9 @@ impl Drop for UiTemplate {
                 }
                 UiTemplate::ControlFlowHole { arms, .. } => {
                     pending.append(&mut std::mem::take(arms));
+                }
+                UiTemplate::ListHole { item_template, .. } => {
+                    pending.push(std::mem::replace(item_template.as_mut(), UiTemplate::Empty));
                 }
                 UiTemplate::Empty
                 | UiTemplate::Text(_)
@@ -666,6 +690,9 @@ impl UiTemplate {
                         stack.push((arm, depth.saturating_add(1)));
                     }
                 }
+                UiTemplate::ListHole { item_template, .. } => {
+                    stack.push((item_template, depth.saturating_add(1)));
+                }
                 _ => {}
             }
         }
@@ -715,6 +742,7 @@ pub fn materialize_ui_template_with_holes<M>(
         elements: element_holes.into_iter().map(Some).collect(),
         children: children_holes.into_iter().map(Some).collect(),
         control_flow: Vec::new(),
+        list_items: Vec::new(),
     };
     materialize_ui_at(template, 0, &mut fills)
 }
@@ -730,6 +758,11 @@ struct HoleFills<M> {
     /// `hole_id == i` this render. An out-of-range selector materializes the
     /// control-flow hole to the inert empty element — fail-closed.
     control_flow: Vec<Option<usize>>,
+    /// Per-render item-fills for [`UiTemplate::ListHole`] nodes: index `i` is
+    /// `Vec<Vec<Element<M>>>` — one inner vec per item, each inner vec is the
+    /// element-fill slice for one materialization of the item template. An
+    /// out-of-range or already-consumed slot produces an empty items run.
+    list_items: Vec<Option<Vec<Vec<Element<M>>>>>,
 }
 
 impl<M> HoleFills<M> {
@@ -738,6 +771,7 @@ impl<M> HoleFills<M> {
             elements: Vec::new(),
             children: Vec::new(),
             control_flow: Vec::new(),
+            list_items: Vec::new(),
         }
     }
 
@@ -763,6 +797,15 @@ impl<M> HoleFills<M> {
     /// `None` when the index is out of range or already consumed. Fail-closed.
     fn take_control_flow(&mut self, idx: usize) -> Option<usize> {
         self.control_flow.get_mut(idx).and_then(Option::take)
+    }
+
+    /// Take the per-item fill vec at `idx` for a [`UiTemplate::ListHole`], or
+    /// an empty vec when the index is out of range or already consumed.
+    fn take_list_items(&mut self, idx: usize) -> Vec<Vec<Element<M>>> {
+        self.list_items
+            .get_mut(idx)
+            .and_then(Option::take)
+            .unwrap_or_default()
     }
 }
 
@@ -793,6 +836,10 @@ fn materialize_ui_at<M>(
                 None => Element::Empty,
             }
         }
+        // A `ListHole` only carries meaning inside a node's children list, where
+        // [`materialize_children`] expands it to N sibling elements. Reaching it
+        // as a standalone element (a malformed decode) is inert: empty element.
+        UiTemplate::ListHole { .. } => Element::Empty,
         UiTemplate::Node {
             desc,
             attrs,
@@ -828,6 +875,29 @@ fn materialize_children<M>(
     for child in children {
         if let UiTemplate::ChildrenHole(idx) = child {
             out.extend(fills.take_children(*idx));
+        } else if let UiTemplate::ListHole {
+            hole_id,
+            item_template,
+        } = child
+        {
+            // Expand the list hole: materialize item_template once per item,
+            // substituting that item's element fills. Each item's fills are a
+            // `Vec<Element<M>>` (element-fill slice) stored as a sub-vec in
+            // the list-items fill.
+            let item_fill_sets = fills.take_list_items(*hole_id);
+            for item_element_fills in item_fill_sets {
+                let mut item_fills = HoleFills {
+                    elements: item_element_fills.into_iter().map(Some).collect(),
+                    children: Vec::new(),
+                    control_flow: Vec::new(),
+                    list_items: Vec::new(),
+                };
+                out.push(materialize_ui_at(
+                    item_template,
+                    depth.saturating_add(1),
+                    &mut item_fills,
+                ));
+            }
         } else {
             out.push(materialize_ui_at(child, depth.saturating_add(1), fills));
         }
@@ -899,9 +969,10 @@ fn materialize_ui_at_with_handlers<M: Clone>(
         // holes are the handler-id ATTR holes, resolved from `handlers`), so a
         // value hole, a standalone children hole, and a control-flow hole are all
         // inert here — the empty element, fail-closed, never a panic.
-        UiTemplate::Hole(_) | UiTemplate::ChildrenHole(_) | UiTemplate::ControlFlowHole { .. } => {
-            Element::Empty
-        }
+        UiTemplate::Hole(_)
+        | UiTemplate::ChildrenHole(_)
+        | UiTemplate::ControlFlowHole { .. }
+        | UiTemplate::ListHole { .. } => Element::Empty,
         UiTemplate::Node {
             desc,
             attrs,
@@ -943,7 +1014,11 @@ fn materialize_children_with_handlers<M: Clone>(
 ) -> Vec<Element<M>> {
     let mut out = Vec::with_capacity(children.len());
     for child in children {
-        if matches!(child, UiTemplate::ChildrenHole(_)) {
+        if matches!(
+            child,
+            UiTemplate::ChildrenHole(_) | UiTemplate::ListHole { .. }
+        ) {
+            // Neither hole has list-item fills on the handler-only path — skip.
             continue;
         }
         out.push(materialize_ui_at_with_handlers(
@@ -1051,6 +1126,7 @@ pub fn materialize_ui_template_str_with_holes_and_handlers<M: Clone>(
         elements: element_holes.into_iter().map(Some).collect(),
         children: children_holes.into_iter().map(Some).collect(),
         control_flow: Vec::new(),
+        list_items: Vec::new(),
     };
     materialize_ui_at_combined(&template, handlers, 0, &mut fills)
 }
@@ -1070,6 +1146,8 @@ fn materialize_ui_at_combined<M: Clone>(
         UiTemplate::Text(s) => Element::Text(s.clone()),
         UiTemplate::Hole(idx) => fills.take_element(*idx),
         UiTemplate::ChildrenHole(_) => Element::Empty,
+        // A `ListHole` at the combined path: treat as standalone (no fills here).
+        UiTemplate::ListHole { .. } => Element::Empty,
         UiTemplate::ControlFlowHole { hole_id, arms } => {
             match fills.take_control_flow(*hole_id).and_then(|i| arms.get(i)) {
                 Some(arm) => materialize_ui_at_combined(arm, handlers, depth, fills),
@@ -1116,6 +1194,9 @@ fn materialize_children_combined<M: Clone>(
     for child in children {
         if let UiTemplate::ChildrenHole(idx) = child {
             out.extend(fills.take_children(*idx));
+        } else if matches!(child, UiTemplate::ListHole { .. }) {
+            // ListHole on the combined path: no list fills available here.
+            // The combined path does not carry list-item fills; skip the hole.
         } else {
             out.push(materialize_ui_at_combined(
                 child,
@@ -1164,8 +1245,63 @@ pub fn materialize_ui_template_str_with_control_flow<M: Clone>(
         elements: element_holes.into_iter().map(Some).collect(),
         children: children_holes.into_iter().map(Some).collect(),
         control_flow: cf_selectors.into_iter().map(Some).collect(),
+        list_items: Vec::new(),
     };
     materialize_ui_at_combined(&template, handlers, 0, &mut fills)
+}
+
+/// Rebuild an [`Element`] tree from a hole-bearing [`UiTemplate`], splicing list
+/// holes in addition to element and children holes.
+///
+/// - [`UiTemplate::Hole(n)`] → `element_holes[n]`, consumed once;
+/// - [`UiTemplate::ChildrenHole(n)`] → `children_holes[n]`, spliced in place;
+/// - [`UiTemplate::ListHole { hole_id: n, item_template }`] →
+///   `list_item_fills[n]` is a `Vec<Vec<Element<M>>>` — one inner vec per item;
+///   `item_template` is materialized once per item with that item's element fills,
+///   and all resulting elements are spliced as siblings.
+///
+/// Fail-closed on every dimension: out-of-range or consumed holes yield the
+/// inert empty element / empty run, never a panic.
+#[must_use]
+pub fn materialize_ui_template_with_list_holes<M>(
+    template: &UiTemplate,
+    element_holes: Vec<Element<M>>,
+    children_holes: Vec<Vec<Element<M>>>,
+    list_item_fills: Vec<Vec<Vec<Element<M>>>>,
+) -> Element<M> {
+    let mut fills = HoleFills {
+        elements: element_holes.into_iter().map(Some).collect(),
+        children: children_holes.into_iter().map(Some).collect(),
+        control_flow: Vec::new(),
+        list_items: list_item_fills.into_iter().map(Some).collect(),
+    };
+    materialize_ui_at(template, 0, &mut fills)
+}
+
+/// Decode a serialized [`UiTemplate`] and materialize it with list holes —
+/// the JSON front door to [`materialize_ui_template_with_list_holes`].
+///
+/// Fail-closed: decode failure or over-deep template → `Element::Empty`.
+#[cfg(feature = "json")]
+#[must_use]
+pub fn materialize_ui_template_with_list_holes_str<M>(
+    json: &str,
+    element_holes: Vec<Element<M>>,
+    children_holes: Vec<Vec<Element<M>>>,
+    list_item_fills: Vec<Vec<Vec<Element<M>>>>,
+) -> Element<M> {
+    let Ok(template) = serde_json::from_str::<UiTemplate>(json) else {
+        return Element::Empty;
+    };
+    if template.check_bounds().is_err() {
+        return Element::Empty;
+    }
+    materialize_ui_template_with_list_holes(
+        &template,
+        element_holes,
+        children_holes,
+        list_item_fills,
+    )
 }
 
 /// Build a [`UiTemplate`] from a static [`Element`] subtree — the inverse of
@@ -2451,6 +2587,117 @@ mod tests {
                 render(out_after),
                 "the edit must change render"
             );
+        }
+    }
+
+    // ── list hole ─────────────────────────────────────────────────────────────
+    mod list_holes {
+        use super::super::{
+            UiDescription, UiTemplate as T, materialize_ui_template_with_list_holes,
+        };
+        use super::*;
+
+        // A `ListHole` in children position: N items expand to N sibling elements,
+        // each materialized from the item template with that item's element fills.
+        // `item_template = Hole(0)` + each item fill = `[Element::Text(label)]`
+        // → the list `["a", "b", "c"]` expands to three `Text` siblings.
+        #[test]
+        fn list_hole_expands_to_n_sibling_elements() {
+            let template = T::Node {
+                desc: UiDescription::NoDescription,
+                attrs: vec![],
+                children: vec![T::ListHole {
+                    hole_id: 0,
+                    item_template: Box::new(T::Hole(0)),
+                }],
+            };
+            let items: Vec<Vec<Vec<Element<()>>>> = vec![
+                // hole_id 0: three items, each with one element fill
+                vec![
+                    vec![Element::Text("a".to_string())],
+                    vec![Element::Text("b".to_string())],
+                    vec![Element::Text("c".to_string())],
+                ],
+            ];
+            let got = materialize_ui_template_with_list_holes(&template, vec![], vec![], items);
+            assert_eq!(
+                got,
+                Element::Node(
+                    Description::NoDescription,
+                    vec![],
+                    vec![
+                        Element::Text("a".to_string()),
+                        Element::Text("b".to_string()),
+                        Element::Text("c".to_string()),
+                    ],
+                )
+            );
+        }
+
+        // Empty list → zero siblings (no elements in the children run).
+        #[test]
+        fn list_hole_empty_list_yields_no_children() {
+            let template = T::Node {
+                desc: UiDescription::NoDescription,
+                attrs: vec![],
+                children: vec![T::ListHole {
+                    hole_id: 0,
+                    item_template: Box::new(T::Text("row".to_string())),
+                }],
+            };
+            let items: Vec<Vec<Vec<Element<()>>>> = vec![vec![]]; // 0 items
+            let got = materialize_ui_template_with_list_holes(&template, vec![], vec![], items);
+            assert_eq!(
+                got,
+                Element::Node(Description::NoDescription, vec![], vec![])
+            );
+        }
+
+        // Static item template (no Hole inside): each item renders the same
+        // static subtree; the fill vec for each item is empty.
+        #[test]
+        fn list_hole_static_item_template_repeats_n_times() {
+            let template = T::Node {
+                desc: UiDescription::NoDescription,
+                attrs: vec![],
+                children: vec![T::ListHole {
+                    hole_id: 0,
+                    item_template: Box::new(T::Text("row".to_string())),
+                }],
+            };
+            // 3 items, no element fills (static template)
+            let items: Vec<Vec<Vec<Element<()>>>> = vec![vec![vec![], vec![], vec![]]];
+            let got = materialize_ui_template_with_list_holes(&template, vec![], vec![], items);
+            assert_eq!(
+                got,
+                Element::Node(
+                    Description::NoDescription,
+                    vec![],
+                    vec![
+                        Element::Text("row".to_string()),
+                        Element::Text("row".to_string()),
+                        Element::Text("row".to_string()),
+                    ],
+                )
+            );
+        }
+
+        // JSON round-trip: `ListHole` serializes as `{"ListHole":{"hole_id":N,
+        // "item_template":<template>}}` and decodes back to the original value.
+        #[cfg(feature = "serde")]
+        #[test]
+        fn list_hole_json_round_trips() {
+            let t = T::ListHole {
+                hole_id: 0,
+                item_template: Box::new(T::Hole(0)),
+            };
+            let json = serde_json::to_string(&t).expect("serialize");
+            assert_eq!(
+                json,
+                r#"{"ListHole":{"hole_id":0,"item_template":{"Hole":0}}}"#
+            );
+            let back: T = serde_json::from_str(&json).expect("deserialize");
+            assert_eq!(back, t);
         }
     }
 }

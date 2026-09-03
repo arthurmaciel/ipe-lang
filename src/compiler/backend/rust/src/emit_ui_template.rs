@@ -325,6 +325,24 @@ pub enum CompileUiTemplate {
         /// order for `case`).
         arms: Vec<Self>,
     },
+    /// A `List.map f xs` comprehension in children position whose item function
+    /// body is itself templatizable. The item template is compiled ONCE; the
+    /// runtime materializes it per item, substituting each item's hole fills.
+    /// `hole_id` indexes into the per-render list-item-fills slice.
+    ///
+    /// When the item body is non-templatizable, the whole `List.map` falls back
+    /// to a [`Self::ChildrenHole`] — the compiled view pre-expands the children
+    /// list and the runtime splices it in place, unchanged from before this step.
+    ListHole {
+        /// Index into the per-render list-item-fills slice. Index `hole_id` is
+        /// the `Vec<ItemFills>` for this list position — one entry per item.
+        hole_id: usize,
+        /// Template compiled from the item function body with item-parameter
+        /// reads replaced by numbered [`Self::Hole`] markers. The runtime
+        /// materializes this template once per item, substituting that item's
+        /// element fills.
+        item_template: Box<Self>,
+    },
     Node {
         desc: CompileUiDesc,
         attrs: Vec<CompileUiAttr>,
@@ -362,6 +380,18 @@ impl CompileUiTemplate {
                 out.push_str(",\"arms\":[");
                 write_children(arms, out);
                 out.push_str("]}}");
+            }
+            // `{"ListHole":{"hole_id":N,"item_template":<template>}}` — mirrors
+            // the runtime `UiTemplate::ListHole` struct-variant serde form.
+            Self::ListHole {
+                hole_id,
+                item_template,
+            } => {
+                out.push_str("{\"ListHole\":{\"hole_id\":");
+                let _ = write!(out, "{hole_id}");
+                out.push_str(",\"item_template\":");
+                item_template.write_json(out);
+                out.push_str("}}");
             }
             Self::Node {
                 desc,
@@ -564,6 +594,26 @@ pub enum HoleKind {
     ControlFlow,
 }
 
+/// Per-render fill for a [`CompileUiTemplate::ListHole`]: the list expression
+/// (`xs`), the item parameter symbol, and one fill expression per value hole
+/// in the item template (each may contain free references to `item_sym`).
+///
+/// The emit layer iterates `xs` and, per item bound to `item_sym`, evaluates
+/// each `item_fills[i]` to produce that item's element-fill vector, then calls
+/// the runtime materializer with those fills on the `item_template`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ListHoleFill {
+    /// The list expression (`xs` in `List.map f xs`) iterated at render.
+    pub xs: Expr,
+    /// The symbol the item is bound to inside each `item_fills` expression.
+    /// Corresponds to the single parameter of the source `Lambda`.
+    pub item_sym: Symbol,
+    /// One fill expression per [`CompileUiTemplate::Hole`] inside `item_template`,
+    /// in hole-index order. Each expression may contain free references to
+    /// [`Self::item_sym`]; the emit layer binds the current item before evaluating.
+    pub item_fills: Vec<Expr>,
+}
+
 /// The result of a hole-bearing partition: the (inert) template skeleton with
 /// numbered hole markers, plus the compiled fills in index order.
 #[derive(Clone, Debug, PartialEq)]
@@ -580,12 +630,17 @@ pub struct HolePartition {
     /// materializer; a [`CompileUiTemplate::ControlFlowHole`] with `hole_id` i
     /// resolves to `cf_selectors[i]`.
     pub cf_holes: Vec<HoleFill>,
+    /// List-hole fills, in hole-id order. Each [`ListHoleFill`] carries the list
+    /// expression and per-item element-producer closures for a
+    /// [`CompileUiTemplate::ListHole`] with `hole_id` i.
+    pub list_holes: Vec<ListHoleFill>,
 }
 
 /// The per-render capture accumulators threaded through the partition recursion:
-/// the value/children hole fills, model-dependent handler `Msg` expressions, and
-/// control-flow arm-selector expressions (each in hole-id order). All grow in
-/// place as the recursion records each hole, handler capture, or CF branch.
+/// the value/children hole fills, model-dependent handler `Msg` expressions,
+/// control-flow arm-selector expressions, and list-hole fills (each in
+/// hole-id order). All grow in place as the recursion records each hole,
+/// handler capture, CF branch, or list expansion.
 #[derive(Default)]
 struct Captures {
     /// Value / opaque-control-flow / `List.map` hole fills, in per-kind index order.
@@ -597,6 +652,9 @@ struct Captures {
     /// `hole_id` of the [`CompileUiTemplate::ControlFlowHole`] that captured it.
     /// Each expression evaluates to a `usize` arm index at render.
     cf_holes: Vec<HoleFill>,
+    /// List-hole fills, in hole-id order — index i is the [`ListHoleFill`] for
+    /// the [`CompileUiTemplate::ListHole`] with `hole_id` i.
+    list_holes: Vec<ListHoleFill>,
 }
 
 /// The capture accumulator threaded through the partition recursion. `None` =
@@ -654,6 +712,7 @@ pub fn ui_template_of_expr_holes(
         holes: captures.holes,
         handlers: captures.handlers,
         cf_holes: captures.cf_holes,
+        list_holes: captures.list_holes,
     })
 }
 
@@ -815,6 +874,7 @@ fn try_control_flow_hole_if(
         holes: Vec::new(),
         handlers: Vec::new(),
         cf_holes: Vec::new(),
+        list_holes: Vec::new(),
     };
     let arm_result = (|| -> Option<(CompileUiTemplate, CompileUiTemplate)> {
         let t = ui_template_of_expr_at(then_, wrappers, depth, &mut Some(&mut arm_captures))?;
@@ -828,6 +888,7 @@ fn try_control_flow_hole_if(
             acc.holes.extend(arm_captures.holes);
             acc.handlers.extend(arm_captures.handlers);
             acc.cf_holes.extend(arm_captures.cf_holes);
+            acc.list_holes.extend(arm_captures.list_holes);
         }
         // The arm-selector expression evaluates the condition and yields
         // 0 (true branch) or 1 (false branch). The emit layer casts the
@@ -878,6 +939,7 @@ fn try_control_flow_hole_match(
         holes: Vec::new(),
         handlers: Vec::new(),
         cf_holes: Vec::new(),
+        list_holes: Vec::new(),
     };
     let arm_templates: Option<Vec<CompileUiTemplate>> = arms_slice
         .iter()
@@ -891,6 +953,7 @@ fn try_control_flow_hole_match(
                 acc.holes.extend(arm_captures.holes);
                 acc.handlers.extend(arm_captures.handlers);
                 acc.cf_holes.extend(arm_captures.cf_holes);
+                acc.list_holes.extend(arm_captures.list_holes);
             }
             // Build the arm-selector expression: a `Match` with Int bodies.
             let selector_expr = build_match_arm_selector(m);
@@ -940,6 +1003,113 @@ fn push_control_flow_hole(
         expr: selector_expr,
     });
     Some(CompileUiTemplate::ControlFlowHole { hole_id, arms })
+}
+
+/// Try to templatize a `List.map f xs` call as a [`CompileUiTemplate::ListHole`]
+/// by inlining and templatizing the item function body. `list_map_call` MUST
+/// satisfy [`is_list_map_call`].
+///
+/// When `f` is a single-parameter `Expr::Lambda` whose body is fully
+/// templatizable (possibly carrying value holes for item-parameter reads), the
+/// function emits `ListHole { hole_id, item_template }` and records a
+/// [`ListHoleFill`] with the list expression (`xs`) and per-item fill lambdas.
+/// When `f` is not an inlineable lambda or the body is non-templatizable, falls
+/// back to a [`CompileUiTemplate::ChildrenHole`] — identical to the existing
+/// pre-list-hole behaviour.
+///
+/// In pure mode (`holes` is `None`) the list-hole path is skipped and the whole
+/// call falls through to `push_children_hole` (conservative, unchanged).
+fn try_list_hole(
+    list_map_call: &Expr,
+    wrappers: Option<&BTreeMap<FuncId, WrapperBody>>,
+    depth: usize,
+    holes: &mut Holes,
+) -> Option<CompileUiTemplate> {
+    // Pure mode — no captures accumulator; fall directly to children hole (which
+    // also returns `None` in pure mode, refusing the whole subtree).
+    if holes.is_none() {
+        return push_children_hole(list_map_call, holes);
+    }
+    let Expr::Call { args, .. } = list_map_call else {
+        return push_children_hole(list_map_call, holes);
+    };
+    // Extract `f` and `xs` from `List.map f xs`.
+    let [f, xs] = args.as_slice() else {
+        return push_children_hole(list_map_call, holes);
+    };
+
+    // Only inline a single-parameter `Lambda` whose body we can templatize.
+    let Expr::Lambda {
+        params,
+        body: item_body,
+        ..
+    } = f
+    else {
+        return push_children_hole(list_map_call, holes);
+    };
+    let [(item_sym, _)] = params.as_slice() else {
+        return push_children_hole(list_map_call, holes);
+    };
+
+    // Templatize the item body into a SIDE accumulator so failure leaves the
+    // primary holes accumulator clean. Item-parameter reads become element holes
+    // inside the item template (the fill expressions reference the item symbol).
+    let mut item_captures = Captures::default();
+    let item_template =
+        ui_template_of_expr_at(item_body, wrappers, depth, &mut Some(&mut item_captures));
+
+    match item_template {
+        Some(tmpl) => {
+            // Item body templatized. Only plain element holes are supported
+            // inside an item template for this step; a children hole, handler
+            // hole, CF hole, or nested list hole inside the item body would
+            // require re-indexing across the outer accumulator — conservative
+            // fallback to children hole when any non-element hole is present.
+            let has_non_element_holes = item_captures
+                .holes
+                .iter()
+                .any(|h| h.kind != HoleKind::Element)
+                || !item_captures.handlers.is_empty()
+                || !item_captures.cf_holes.is_empty()
+                || !item_captures.list_holes.is_empty();
+
+            if has_non_element_holes {
+                return push_children_hole(list_map_call, holes);
+            }
+
+            // Collect item element-fill expressions in hole-index order —
+            // each may contain free references to `item_sym`.
+            let item_fills = item_captures.holes.into_iter().map(|h| h.expr).collect();
+
+            push_list_hole(xs.clone(), *item_sym, item_fills, Box::new(tmpl), holes)
+        }
+        None => {
+            // Item body not templatizable — fall back to children hole.
+            push_children_hole(list_map_call, holes)
+        }
+    }
+}
+
+/// Record a list hole and return its numbered [`CompileUiTemplate::ListHole`]
+/// marker, or `None` in pure mode.
+fn push_list_hole(
+    xs: Expr,
+    item_sym: Symbol,
+    item_fills: Vec<Expr>,
+    item_template: Box<CompileUiTemplate>,
+    holes: &mut Holes,
+) -> Option<CompileUiTemplate> {
+    let acc = holes.as_mut()?;
+    let hole_id = acc.list_holes.len();
+    acc.list_holes.push(ListHoleFill {
+        xs,
+        item_sym,
+        item_fills,
+    });
+    Some(CompileUiTemplate::ListHole {
+        hole_id,
+        item_template,
+    })
 }
 
 /// Record `expr` as a children hole (a `List.map` run) and return its per-kind
@@ -1041,18 +1211,19 @@ fn static_children(
     depth: usize,
     holes: &mut Holes,
 ) -> Option<Vec<CompileUiTemplate>> {
-    // The whole children list is a `List.map` comprehension → one children hole.
+    // The whole children list is a `List.map` comprehension → attempt list hole,
+    // falling back to children hole when the item body is non-templatizable.
     if is_list_map_call(children) {
-        return Some(vec![push_children_hole(children, holes)?]);
+        return Some(vec![try_list_hole(children, wrappers, depth, holes)?]);
     }
     let Expr::List { items, .. } = children else {
         return None;
     };
     let mut out = Vec::with_capacity(items.len());
     for item in items {
-        // A `List.map` appearing as a list item still splices a run of children.
+        // A `List.map` appearing as a list item: attempt list hole first.
         if is_list_map_call(item) {
-            out.push(push_children_hole(item, holes)?);
+            out.push(try_list_hole(item, wrappers, depth, holes)?);
         } else {
             out.push(ui_template_of_expr_at(
                 item,
@@ -2656,6 +2827,143 @@ mod tests {
                     CompileUiTemplate::Text("two".to_string()),
                 ],
             }
+        );
+    }
+
+    // ── list hole (Step 2) ───────────────────────────────────────────────────
+
+    // `List.map (\item -> Ui.text item) xs` — item body is a templatizable
+    // `Ui.text` leaf whose single arg is the item parameter. The whole children
+    // arg becomes `ListHole(0)` with `item_template = Hole(0)` (one element
+    // hole per item), and the list_holes fill captures `xs` + the raw fill
+    // expression `Ui.text item` (containing free `Var(item_sym)`).
+    #[test]
+    fn list_map_lambda_with_templatizable_body_becomes_list_hole() {
+        let item_sym = sym(100);
+        let xs_sym = sym(101);
+        // item body: `Ui.text item` — a templatizable leaf (item param is a
+        // non-literal arg, so it becomes an element hole inside the item template).
+        let item_body = kcall(KernelFn::UiText, vec![Expr::Var(item_sym)]);
+        let lambda = Expr::Lambda {
+            params: vec![(item_sym, IrType::Str)],
+            ret: IrType::Ui {
+                ctor: UiCtor::Element,
+                msg: Box::new(IrType::Int),
+            },
+            body: Box::new(item_body.clone()),
+        };
+        let listmap = kcall(KernelFn::ListMap, vec![lambda, Expr::Var(xs_sym)]);
+        let node = kcall(
+            KernelFn::UiNode,
+            vec![desc_none(), attr_list(vec![]), listmap],
+        );
+        let part = ui_template_of_expr_holes(&node, None)
+            .expect("List.map with templatizable item body templatizes");
+        // Template: one ListHole(0) child; item_template has a single Hole(0).
+        assert_eq!(
+            part.template,
+            CompileUiTemplate::Node {
+                desc: CompileUiDesc::NoDescription,
+                attrs: vec![],
+                children: vec![CompileUiTemplate::ListHole {
+                    hole_id: 0,
+                    item_template: Box::new(CompileUiTemplate::Hole(0)),
+                }],
+            }
+        );
+        // No element / children / CF holes at the outer level.
+        assert!(part.holes.is_empty(), "no outer element holes");
+        assert!(part.cf_holes.is_empty(), "no CF holes");
+        // One list hole fill: xs + item_sym + one fill expr (the item_body).
+        let lh = part.list_holes.first().expect("one list hole");
+        assert_eq!(lh.xs, Expr::Var(xs_sym));
+        assert_eq!(lh.item_sym, item_sym);
+        assert_eq!(lh.item_fills, vec![item_body]);
+    }
+
+    // `List.map (\item -> text "static") xs` — item body has NO holes (fully
+    // static). Becomes `ListHole(0)` with `item_template = Text("static")` and
+    // `item_fills = []` (zero element holes).
+    #[test]
+    fn list_map_lambda_static_body_becomes_list_hole_no_fills() {
+        let item_sym = sym(102);
+        let xs_sym = sym(103);
+        let lambda = Expr::Lambda {
+            params: vec![(item_sym, IrType::Str)],
+            ret: IrType::Ui {
+                ctor: UiCtor::Element,
+                msg: Box::new(IrType::Int),
+            },
+            body: Box::new(text("static")),
+        };
+        let listmap = kcall(KernelFn::ListMap, vec![lambda, Expr::Var(xs_sym)]);
+        let node = kcall(
+            KernelFn::UiNode,
+            vec![desc_none(), attr_list(vec![]), listmap],
+        );
+        let part = ui_template_of_expr_holes(&node, None).expect("static item body templatizes");
+        assert_eq!(
+            part.template,
+            CompileUiTemplate::Node {
+                desc: CompileUiDesc::NoDescription,
+                attrs: vec![],
+                children: vec![CompileUiTemplate::ListHole {
+                    hole_id: 0,
+                    item_template: Box::new(CompileUiTemplate::Text("static".to_string())),
+                }],
+            }
+        );
+        assert!(
+            part.list_holes
+                .first()
+                .expect("one list hole")
+                .item_fills
+                .is_empty()
+        );
+    }
+
+    // `List.map f xs` where f is NOT a Lambda (a Var reference to an opaque
+    // function) — falls back to `ChildrenHole`, the pre-Step-2 behaviour.
+    #[test]
+    fn list_map_opaque_fn_falls_back_to_children_hole() {
+        let f_sym = sym(104);
+        let xs_sym = sym(105);
+        let listmap = kcall(KernelFn::ListMap, vec![Expr::Var(f_sym), Expr::Var(xs_sym)]);
+        let node = kcall(
+            KernelFn::UiNode,
+            vec![desc_none(), attr_list(vec![]), listmap.clone()],
+        );
+        let part = ui_template_of_expr_holes(&node, None)
+            .expect("opaque-fn list-map falls back to ChildrenHole");
+        assert_eq!(
+            part.template,
+            CompileUiTemplate::Node {
+                desc: CompileUiDesc::NoDescription,
+                attrs: vec![],
+                children: vec![CompileUiTemplate::ChildrenHole(0)],
+            }
+        );
+        assert!(part.list_holes.is_empty(), "no list holes for opaque fn");
+        assert_eq!(
+            part.holes,
+            vec![HoleFill {
+                kind: HoleKind::Children,
+                expr: listmap,
+            }]
+        );
+    }
+
+    // JSON shape for `ListHole` — byte-identical to the runtime
+    // `UiTemplate::ListHole` serde form.
+    #[test]
+    fn json_list_hole_shape() {
+        let t = CompileUiTemplate::ListHole {
+            hole_id: 0,
+            item_template: Box::new(CompileUiTemplate::Hole(0)),
+        };
+        assert_eq!(
+            t.to_json(),
+            r#"{"ListHole":{"hole_id":0,"item_template":{"Hole":0}}}"#
         );
     }
 }
