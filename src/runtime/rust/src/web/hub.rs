@@ -1,7 +1,7 @@
 //! Hub read-side kernels — the bundled console's data plane on Rust.
 //!
 //! The console (`ipe-bundled/console`) is itself a `Ipe.Web` app; its
-//! `HubStore.ipe` declares twelve `Ffi.kernel "Hub_read*"` bindings that the
+//! `HubStore.ipe` declares twelve `Kernel.kernel "Hub_read*"` bindings that the
 //! Rust codegen lowers to the `hub_*` functions in this module. Each reads the
 //! SQLite telemetry **spill** (`IPE_CONSOLE_HUB_DB` / the `dbPath` arg, written
 //! by the dual-write) and returns the console's typed `State*` record shape.

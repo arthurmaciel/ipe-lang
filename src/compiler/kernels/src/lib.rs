@@ -373,8 +373,8 @@ pub enum BuiltinTag {
     Cells,
     /// `CustomElement` — the JS-widget boundary constructor `CustomElement down up`,
     /// applied to its sealed down-state and up-event types. Empty-module
-    /// (unqualified); an opaque handle produced only by the reserved `customElement`
-    /// constructor and consumed only by `Ui.widget`. Never serialisable, never
+    /// (unqualified); an opaque handle produced only by the reserved `CustomElement.fromFile`
+    /// constructor and consumed only by `CustomElement.node`. Never serialisable, never
     /// storable in a `Model` (it fails the plain-value gate like a function).
     CustomElement,
     /// `Html` — the `Html msg` constructor shared by `Ipe.Html` and the `Ipe.Ui`
@@ -1694,7 +1694,7 @@ pub enum StdlibKernel {
     PubSubPublishNoEcho,
     /// `PubSub.topic : String -> Topic a` — constructs a typed topic handle.
     /// Emits as the identity function: `Topic a` erases to `String` at runtime.
-    /// Resolved exclusively through `Ffi.kernel "PubSub_topic"` in `Ipe.PubSub`.
+    /// Resolved exclusively through `Kernel.kernel "PubSub_topic"` in `Ipe.PubSub`.
     PubSubTopic,
     // ── Ipe.Http.Server / Middleware / RateLimit ─────────────────────────────
     ServerGet,
@@ -1907,7 +1907,7 @@ pub enum StdlibKernel {
     // ── Ipe.Html.Attributes retained primitives ─────────────────────────
     // The three irreducible `Attribute`-value constructors. The fixed-key
     // builders (`class`/`checked`/…) are pure Ipê in `Ipe/Html/Attributes.ipe`
-    // over these, reached via `Ffi.kernel "Attr_attribute"` etc.
+    // over these, reached via `Kernel.kernel "Attr_attribute"` etc.
     HtmlAttribute,     // `attribute : String -> String -> Attribute msg`
     HtmlBoolAttribute, // `boolAttribute : String -> Bool -> Attribute msg`
     HtmlNoAttr,        // `noAttr : Attribute msg`
@@ -2557,7 +2557,7 @@ pub enum StdlibKernel {
 
     // ── Ipe.Regex — RE2 helpers ──────────────────────────────────
     // Pure, total kernels routed via the compiled-source `Ipe.Regex`
-    // Layer-3 surface + `Ffi.kernel "Regex_*"` aliases. Runtime fns
+    // Layer-3 surface + `Kernel.kernel "Regex_*"` aliases. Runtime fns
     // (`ipe_runtime::regex_kernel::*`) are re-exported ungated — no feature gate
     // and no `project.rs` thread needed (the emitted `mod.rs` declares
     // `regex_kernel` unconditionally, deps always present).
@@ -2578,7 +2578,7 @@ pub enum StdlibKernel {
 
     // ── Ipe.Path — typed, validated filesystem paths ───────────────────
     // Pure, total kernels routed via the compiled-source `Ipe.Path`
-    // Layer-3 surface + `Ffi.kernel "Path_*"` aliases. Runtime fns
+    // Layer-3 surface + `Kernel.kernel "Path_*"` aliases. Runtime fns
     // (`ipe_runtime::path::*`) are re-exported ungated (same posture as Regex).
     // `Path` is an opaque, validated type: the ONLY constructor is
     // `PathFromString` (the parse-don't-validate seal that rejects NUL bytes
@@ -2640,7 +2640,7 @@ pub enum StdlibKernel {
     // Task-effectful; runtime `ipe_runtime::cache::*` (the emitted `mod.rs`
     // declares `cache` unconditionally — same ungated-vendoring posture as
     // Csv/Compression). Routed via the compiled-source `Ipe.Cache` Layer-3
-    // surface + `Ffi.kernel "Cache_*"` aliases. Class `Pure` (the effect lives
+    // surface + `Kernel.kernel "Cache_*"` aliases. Class `Pure` (the effect lives
     // in the `Task` scheme, same as File/Io/Http). All kernels take the raw
     // `Int` handle; the surface `Cache k v` ADT is unwrapped in Ipê source.
     /// `Cache.newRaw : CacheCfg -> Task Error Int` — allocate, return the handle.
@@ -2727,7 +2727,7 @@ pub enum StdlibKernel {
     ConfigLoadFromFile,
     // ── Ipe.Email — provider-abstract email send ──────────────────────
     // Task-effectful; runtime `ipe_runtime::email::email_send`. Routed via the
-    // compiled-source `Ipe.Email` Layer-3 surface + `Ffi.kernel "Email_send"`.
+    // compiled-source `Ipe.Email` Layer-3 surface + `Kernel.kernel "Email_send"`.
     // Class `Pure` (the effect lives in the `Task` scheme, same as File/Http).
     // Takes the runtime `EmailProvider` enum + `EmailMessage` struct (the Ipê
     // ADT / record aliases fold to those nominal runtime types).
@@ -2762,7 +2762,7 @@ pub enum StdlibKernel {
 
     // ── Ipe.Url — typed, validated URLs (parse-don't-validate) ─────────────
     // Pure, total kernels routed via the compiled-source `Ipe.Url` Layer-3
-    // surface + `Ffi.kernel "Url_*"` aliases. `Url` is an opaque, validated
+    // surface + `Kernel.kernel "Url_*"` aliases. `Url` is an opaque, validated
     // type: the ONLY constructor is `UrlFromString` (the parse seal that rejects
     // a scheme-less / unparseable string); the accessors take a `Url`, never a
     // raw `String`. Runtime fns live in `ipe_runtime::url::*`.
@@ -3510,7 +3510,7 @@ impl StdlibKernel {
             Self::DbConnClose => d("Db.Dsn", "close", 1, Db, "db_conn_close"),
             // Surface-homed in the `Ipe.Db.Unsafe` compiled-source wrapper (which
             // discloses `unsafe` by import); the registry qualifier stays `Db`, so
-            // the `Ffi.kernel` alias key is `Db_unsafeExecRawOn`, matching the
+            // the `Kernel.kernel` alias key is `Db_unsafeExecRawOn`, matching the
             // existing raw-SQL hatch convention.
             Self::DbConnUnsafeExecRawOn => {
                 d("Db", "unsafeExecRawOn", 2, Db, "db_conn_unsafe_exec_raw_on")
@@ -3671,7 +3671,7 @@ impl StdlibKernel {
             // as `Html.renderStatic`; it is excluded from `is_tea()` so it never
             // pulls in the `Cmd`/`Sub` (`tea` module) aliases. `Ipe.PubSub` is a
             // compiled-source module, so `Ipe.PubSub.publish` resolves through its
-            // `Ffi.kernel "PubSub_publish"` alias to this `("PubSub", "publish")`
+            // `Kernel.kernel "PubSub_publish"` alias to this `("PubSub", "publish")`
             // canonical kernel — the `"PubSub"` qualifier is intentionally NOT in
             // canon `QUALIFIERS` (compiled-source, not a kernel qualifier).
             Self::PubSubPublish => d("PubSub", "publish", 2, Web, "pubsub_publish"),
@@ -3679,7 +3679,7 @@ impl StdlibKernel {
                 d("PubSub", "publishNoEcho", 2, Web, "pubsub_publish_no_echo")
             }
             // `PubSub.topic : String -> Topic a` — identity at runtime; `Topic a`
-            // erases to `String`. Arity 1. Resolved via `Ffi.kernel "PubSub_topic"`.
+            // erases to `String`. Arity 1. Resolved via `Kernel.kernel "PubSub_topic"`.
             Self::PubSubTopic => d("PubSub", "topic", 1, Pure, "pubsub_topic"),
             // ── Ipe.Http.Server / Middleware / RateLimit ─────────────────────
             Self::ServerGet => d("Server", "get", 2, Server, "server_get"),
@@ -3846,7 +3846,7 @@ impl StdlibKernel {
             Self::HtmlStyleNode => d("Html", "styleNode", 2, Ui, "html_style_node_"),
             Self::HtmlScriptNode => d("Html", "unsafeScript", 1, Ui, "html_script_node_"),
             // ── Ipe.Html.Attributes builders ────────────────────────────
-            // Qualifier "Attr" matches the `Ffi.kernel "Attr_*"` alias namespace
+            // Qualifier "Attr" matches the `Kernel.kernel "Attr_*"` alias namespace
             // (the compiled-source `Ipe.Html.Attributes` reaches these three
             // retained primitives through it). Emit routes through the generic
             // runtime helpers; a fixed key is a plain runtime argument.
@@ -4593,7 +4593,7 @@ impl StdlibKernel {
     ///
     /// `PubSubPublish` / `PubSubPublishNoEcho` / `PubSubTopic` are in `ALL` but
     /// their `"PubSub"` qualifier is not a kernel-`QUALIFIERS` entry — `Ipe.PubSub`
-    /// is a compiled-source module, so they are resolved through `Ffi.kernel
+    /// is a compiled-source module, so they are resolved through `Kernel.kernel
     /// "PubSub_*"` aliases, not a canon qualifier. The tripwire skips a qualifier
     /// absent from `qual_vars`, so this is an automatic skip, not a hand-maintained
     /// exclusion. `CmdPublish` / `CmdPublishNoEcho` carry their own `"Cmd"`
@@ -5326,7 +5326,7 @@ impl StdlibKernel {
         Self::HtmlTitleNode,
         Self::HtmlToString,
         // Ipe.Html.Attributes retained primitives (reached from the
-        // compiled-source module via `Ffi.kernel "Attr_*"`).
+        // compiled-source module via `Kernel.kernel "Attr_*"`).
         Self::HtmlAttribute,
         Self::HtmlBoolAttribute,
         Self::HtmlNoAttr,
@@ -5895,7 +5895,7 @@ impl StdlibKernel {
             // Relocated into `Ipe.Html.Unsafe` after canon registration.
             Self::HtmlScriptNode => "Html.Unsafe.unsafeScript".to_owned(),
             // The `Cache.*` kernels are bound to the `*Raw` source functions
-            // (`Ffi.kernel "cache_get"` in `Cache.getRaw`); `def().name` is the
+            // (`Kernel.kernel "cache_get"` in `Cache.getRaw`); `def().name` is the
             // pure Ipê wrapper (`get`), so the display name is spelled out to
             // name the kernel node, not its wrapper.
             Self::CacheGet => "Cache.getRaw".to_owned(),
@@ -9711,12 +9711,12 @@ impl StdlibKernel {
             Self::ProcessRun | Self::ProcessRunWith | Self::ProcessRunInPty => {
                 Some(Capability::Subprocess)
             }
-            // `Ui.widget` places a browser custom-element widget: its reachable
+            // `CustomElement.node` places a browser custom-element widget: its reachable
             // presence means the program serves author-written JS that runs in
             // the page with full DOM authority. That shipped-JS surface is a
             // security-relevant disclosure (declared trust, SRI-pinned but not
-            // sandboxed) — the `custom-element` axis. The `customElement "<path>"`
-            // handle is a reserved constructor, not a kernel, and only `Ui.widget`
+            // sandboxed) — the `custom-element` axis. The `CustomElement.fromFile "<path>"`
+            // handle is a reserved constructor, not a kernel, and only `CustomElement.node`
             // consumes it, so tagging this one kernel is the whole inference point:
             // any module whose reachable code binds a widget discloses the axis.
             Self::UiWidget => Some(Capability::CustomElement),

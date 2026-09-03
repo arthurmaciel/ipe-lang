@@ -5592,7 +5592,7 @@ pub fn emit_expr_at(
         Expr::PathLit(s) => Ok(format!(
             "ipe_runtime::path::path_literal({s:?}.to_string())"
         )),
-        // The reserved `customElement` constructor value: a widget handle built
+        // The reserved `CustomElement.fromFile` constructor value: a widget handle built
         // from its generated content-addressed tag. The tag was minted at
         // lowering from the sealed, in-project JS path (never raw user input);
         // `js_path` is retained on the node for the WP5 serving stage but is not

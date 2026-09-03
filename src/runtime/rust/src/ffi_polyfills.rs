@@ -20,7 +20,7 @@ pub fn ffi_to_any_polyfill<T>(x: T) -> T {
 // `ffi_call_pure_polyfill` / `ffi_call_task_polyfill` runtime guards — which
 // returned an unconstrained generic `T` and could signal the refusal only by
 // panicking — were dead code and are removed. Effectful kernels reach Rust via
-// `Ffi.kernel` direct dispatch; the static `Ffi.callPure "<Kernel>" [lit]` shape
+// `Kernel.kernel` direct dispatch; the static `Ffi.callPure "<Kernel>" [lit]` shape
 // is peephole-resolved to a direct kernel call before emit.
 
 #[cfg(test)]

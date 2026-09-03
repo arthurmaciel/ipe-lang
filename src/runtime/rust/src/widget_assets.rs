@@ -16,7 +16,7 @@
 //!
 //! Common to both:
 //!
-//! * **Asset addressing.** Each distinct `customElement "<path>"` file is
+//! * **Asset addressing.** Each distinct `CustomElement.fromFile "<path>"` file is
 //!   content-addressed at `/_ipe/widget.<hex16>.js` and pinned with
 //!   `integrity="sha256-<b64>"` + `crossorigin="anonymous"`. The hash is over the
 //!   file bytes, so the page SRI can never disagree with the served/bundled bytes

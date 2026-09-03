@@ -1,8 +1,8 @@
-//! Server-driven `Ui.widget` custom-element boundary (WP4).
+//! Server-driven `CustomElement.node` custom-element boundary (WP4).
 //!
-//! `Ui.widget : CustomElement down up -> down -> (up -> msg) -> Element msg`
+//! `CustomElement.node : CustomElement down up -> down -> (up -> msg) -> Element msg`
 //! places one typed JS custom-element widget. This module holds the opaque
-//! handle the reserved `customElement` constructor produces and the emission
+//! handle the reserved `CustomElement.fromFile` constructor produces and the emission
 //! that renders the widget node.
 //!
 //! ## The seam, and its two fail-closed gates
@@ -38,12 +38,12 @@ use crate::seal_codec::{SealLimits, seal_decode_serde};
 use crate::ui::element::Attribute;
 use crate::ui::element::{Description, Element};
 
-/// The opaque handle a `customElement "<js-path>"` constructor produces and
-/// `Ui.widget` consumes. It carries ONLY the generated content-addressed tag —
+/// The opaque handle a `CustomElement.fromFile "<js-path>"` constructor produces and
+/// `CustomElement.node` consumes. It carries ONLY the generated content-addressed tag —
 /// the value never crosses the seam, is never serialised, and is never stored in
 /// a `Model` (the plain-Model gate rejects a `CustomElement`-typed field exactly
 /// as it rejects a function). Its `down`/`up` seal types are phantom at runtime;
-/// they drive the down-encode / up-decode codegen at the `Ui.widget` call site,
+/// they drive the down-encode / up-decode codegen at the `CustomElement.node` call site,
 /// not this handle's representation.
 #[derive(Clone, Debug)]
 pub struct IpeCustomElement {
@@ -51,7 +51,7 @@ pub struct IpeCustomElement {
     tag: String,
 }
 
-/// The reserved `customElement "<js-path>"` constructor. `tag` is the
+/// The reserved `CustomElement.fromFile "<js-path>"` constructor. `tag` is the
 /// compiler-minted content-addressed element tag; the constructor is a pure
 /// wrapper — every path/containment seal already ran at compile time.
 #[must_use]

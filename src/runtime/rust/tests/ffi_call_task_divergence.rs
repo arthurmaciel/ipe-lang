@@ -18,11 +18,11 @@
 //!
 //!   1. **No source surface.** No `.ipe` (stdlib or example) names
 //!      `Ffi.callPure` / `Ffi.callTask` in the dynamic shape; the accessor
-//!      exposed to Ipê is `Ffi.kernel "Name"` direct dispatch.
+//!      exposed to Ipê is `Kernel.kernel "Name"` direct dispatch.
 //!   2. **No codegen path.** The Rust backend emits no reference to a
 //!      dynamic-dispatch polyfill; the static `Ffi.callPure "<Kernel>" [lit]`
 //!      shape is peephole-resolved to a direct kernel call before emit.
-//!   3. **Effectful kernels route via `Ffi.kernel`, never `Ffi.callTask`.**
+//!   3. **Effectful kernels route via `Kernel.kernel`, never `Ffi.callTask`.**
 //!
 //! The surviving `Ffi.toAny` identity path stays a runtime no-op — the codegen
 //! retains concrete types, so no erasure occurs. This test locks that.

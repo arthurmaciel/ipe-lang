@@ -1250,7 +1250,7 @@ function __ipeResizeImage(file, maxW, maxH, cb) {
 // (not msgName) and value maps to args.
 window.__ipe_send = function(id, value, opts) { __ipeSend("", value, id, opts); };
 
-// Ipe.Js inbound port seam. The port glue (window.ipe.send) stringifies
+// Ipe.Ffi.Js inbound port seam. The port glue (window.ipe.send) stringifies
 // the developer's value and hands the raw JSON string here; this POSTs it
 // to /_ipe/port with the per-session CSRF token. The server authenticates
 // by the session cookie, gates the frame fail-closed through the bounded
@@ -1648,7 +1648,7 @@ function __ipeOpenSSE() {
       __ipeApplyPatches(frame.patches);
     }, frame.globalSeq);
   });
-  // Ipe.Js outbound port frame: the server's js_send delivers the seal
+  // Ipe.Ffi.Js outbound port frame: the server's js_send delivers the seal
   // wire string (a JSON string) for THIS session over its own SSE
   // stream. Hand it to the port glue's receiver (window.ipeOnReceive),
   // which parses it as data (never eval) and calls the page's

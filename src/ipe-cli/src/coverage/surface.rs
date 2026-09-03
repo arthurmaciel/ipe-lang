@@ -269,7 +269,7 @@ const fn compiled_symbol(
 /// canonical standalone module (reached via `Ipe.Tea.<Shape>.Cmd` / `.Sub`).
 const QUALIFIER_MODULE_OVERRIDES: &[(&str, &[&str])] = &[
     // `Attr` kernels (`attribute`, `boolAttribute`, `noAttr`) are the three
-    // primitive `Ffi.kernel "Attr_*"` aliases that `Ipe.Html.Attributes` wraps.
+    // primitive `Kernel.kernel "Attr_*"` aliases that `Ipe.Html.Attributes` wraps.
     ("Attr", &["Ipe", "Html", "Attributes"]),
     // `EmailAddress` kernels (`parse`, `toString`) back `Ipe.Email`'s opaque
     // `EmailAddress` newtype via `parseAddress` / `addressToString` aliases.

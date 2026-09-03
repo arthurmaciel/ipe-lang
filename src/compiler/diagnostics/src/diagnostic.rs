@@ -684,8 +684,8 @@ pub enum NameError {
     /// un-enforced CSRF posture, an unset secret), so it is rejected here rather
     /// than compiled into an app that ignores it. [IPE-N0043]
     DiscardedConfig,
-    /// The reserved `customElement "<js-path>"` constructor is malformed at its
-    /// use site. Like the `Kernel.kernel` literal gate, `customElement` is legal ONLY
+    /// The reserved `CustomElement.fromFile "<js-path>"` constructor is malformed at its
+    /// use site. Like the `Kernel.kernel` literal gate, `CustomElement.fromFile` is legal ONLY
     /// as the entire body of a `CustomElement`-annotated binding, applied to a
     /// SINGLE STRING LITERAL naming the author's widget-hook JS file. Rejected
     /// fail-closed when: the argument is not a string literal (a variable, an

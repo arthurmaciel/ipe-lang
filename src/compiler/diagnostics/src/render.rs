@@ -511,7 +511,8 @@ fn name_prose(msg: &NameError) -> String {
             "I can't read this `Rust.Ffi.call` — it isn't in the one shape I accept.".to_string()
         }
         NameError::CustomElementCtorMalformed { .. } => {
-            "I can't read this `customElement` — it isn't in the one shape I accept.".to_string()
+            "I can't read this `CustomElement.fromFile` — it isn't in the one shape I accept."
+                .to_string()
         }
         NameError::BoundarySealIllegal { seal_type, .. } => {
             format!("`{seal_type}` can't cross the boundary between Ipê and JavaScript.")
@@ -1462,8 +1463,8 @@ fn name_label(msg: &NameError) -> Option<String> {
              \"<crate>::<function>\"`"
         )),
         NameError::CustomElementCtorMalformed { detail } => Some(format!(
-            "this `customElement` is malformed: {detail}. The one accepted shape is a \
-             `CustomElement`-annotated binding whose whole body is `customElement \
+            "this `CustomElement.fromFile` is malformed: {detail}. The one accepted shape is a \
+             `CustomElement`-annotated binding whose whole body is `CustomElement.fromFile \
              \"<js-path>\"` — a single string literal naming a widget-hook JS file \
              inside your project (no `..` escape), and the file must exist"
         )),

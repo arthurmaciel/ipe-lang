@@ -2814,7 +2814,7 @@ fn canonicalise_with_env(
     // the same spelling silently shadows a wildcard member (see the fn doc);
     // cross-wildcard clashes surface only at an ambiguous use site.
     inject_stdlib_wildcard_values(m, env, interner)?;
-    // Stage-4 kernel aliases discovered in this module: `f = Ffi.kernel "K_n"`.
+    // Stage-4 kernel aliases discovered in this module: `f = Kernel.kernel "K_n"`.
     // Each is registered as a `VarHome::Kernel` (so every reference — in-module
     // `f` or cross-module `Alias.f` — routes straight to the kernel) and its
     // body is NOT canonicalised into a top-level def (the alias emits no runtime
@@ -5260,6 +5260,51 @@ fn value_not_found(
     })
 }
 
+/// Reject a bare reference to a reserved literal-only constructor.
+///
+/// `Rust.Ffi.call` and `CustomElement.fromFile` are legal ONLY fully applied in
+/// their sanctioned positions (a `Rust.Ffi` interface call, the whole body of a
+/// `CustomElement`-annotated binding). The applied forms are rewritten before
+/// their callee resolves, so reaching qualified-name resolution means the name
+/// was referenced bare, nested, or applied outside that position — each a
+/// malformed use. Returns the precise teachable diagnostic, or `None` when the
+/// name is not a reserved constructor.
+fn reject_bare_reserved_constructor(
+    qualifier: Symbol,
+    name: Symbol,
+    span: Span,
+    env: &Env,
+    interner: &Interner,
+) -> Option<Diagnostic> {
+    if env.origin == ModuleOrigin::User
+        && interner.resolve(qualifier) == Some(crate::asserted::ASSERTED_MODULE)
+        && interner.resolve(name) == Some("call")
+    {
+        return Some(Diagnostic::Name {
+            span,
+            msg: NameError::AssertedCallMalformed {
+                detail: "`Rust.Ffi.call` is not a value — it must be applied directly \
+                         to a string-literal Rust path"
+                    .into(),
+            },
+        });
+    }
+    if interner.resolve(qualifier) == Some(CUSTOM_ELEMENT_TYPE)
+        && interner.resolve(name) == Some(CUSTOM_ELEMENT_CTOR)
+    {
+        return Some(Diagnostic::Name {
+            span,
+            msg: NameError::CustomElementCtorMalformed {
+                detail: Box::<str>::from(
+                    "`CustomElement.fromFile` is legal only as the whole body of a \
+                     `CustomElement`-annotated binding, applied to a single string literal",
+                ),
+            },
+        });
+    }
+    None
+}
+
 /// Resolve a qualified name `Qualifier.name`. Distinguishes an unknown
 /// qualifier ([`NameError::UnknownModule`]) from a known qualifier missing the
 /// member ([`NameError::NoSuchMember`]).
@@ -5270,43 +5315,12 @@ fn resolve_qual_var(
     env: &Env,
     interner: &Interner,
 ) -> DResult<canon::Expr_> {
-    // A BARE `Rust.Ffi.call` (passed as a value, aliased, or partially built)
-    // reaches here because the applied form is rewritten before its callee
-    // resolves. There is no value for it to denote — the construct exists only
-    // fully applied to a literal path — so refuse it with the teachable
-    // IPE-N0038 instead of a no-such-member miss on `call`.
-    if env.origin == ModuleOrigin::User
-        && interner.resolve(qualifier) == Some(crate::asserted::ASSERTED_MODULE)
-        && interner.resolve(name) == Some("call")
-    {
-        return Err(Diagnostic::Name {
-            span,
-            msg: NameError::AssertedCallMalformed {
-                detail: "`Rust.Ffi.call` is not a value — it must be applied directly \
-                         to a string-literal Rust path"
-                    .into(),
-            },
-        });
-    }
-    // The reserved `CustomElement.fromFile "<js-path>"` constructor is legal ONLY
-    // as the whole body of a `CustomElement`-annotated binding, where
-    // `canonicalise_value` intercepts it before this resolver runs. Reaching HERE
-    // means it was referenced bare (unapplied), applied outside that sanctioned
-    // position, or nested in a sub-expression — every one of which is malformed.
-    // Fail closed with a precise IPE-N0044 rather than a no-such-member miss on
-    // `fromFile`.
-    if interner.resolve(qualifier) == Some(CUSTOM_ELEMENT_TYPE)
-        && interner.resolve(name) == Some(CUSTOM_ELEMENT_CTOR)
-    {
-        return Err(Diagnostic::Name {
-            span,
-            msg: NameError::CustomElementCtorMalformed {
-                detail: Box::<str>::from(
-                    "`CustomElement.fromFile` is legal only as the whole body of a \
-                     `CustomElement`-annotated binding, applied to a single string literal",
-                ),
-            },
-        });
+    // A bare reference to a reserved literal-only constructor (`Rust.Ffi.call`,
+    // `CustomElement.fromFile`) has no value to denote — each is legal only fully
+    // applied in a sanctioned position, so refuse it with a teachable diagnostic
+    // rather than a no-such-member miss.
+    if let Some(diag) = reject_bare_reserved_constructor(qualifier, name, span, env, interner) {
+        return Err(diag);
     }
     // Removed-surface gate (IPE-N0036): bindings intentionally dropped from
     // the Ipê surface are intercepted here before any catalog lookup, so the
@@ -6187,7 +6201,7 @@ fn name_str(interner: &Interner, sym: Symbol) -> DResult<Box<str>> {
 }
 
 /// A resolved Stage-4 kernel alias — the target of a standard-library binding
-/// of the shape `f = Ffi.kernel "Module_function"`.
+/// of the shape `f = Kernel.kernel "Module_function"`.
 ///
 /// The binding routes every reference of `f` straight to the built-in kernel
 /// `id`, so it lowers identically to a qualified `Module.function` call. The
@@ -6413,7 +6427,7 @@ fn annotation_head_name<'a>(ann: &src::TypeAnnotation, interner: &'a Interner) -
 /// Recognise the reserved `CustomElement.fromFile "<js-path>"` constructor binding and
 /// resolve it to a typed [`canon::Def`] carrying a [`canon::Expr_::CustomElementCtor`].
 ///
-/// The constructor is the JS-widget analogue of the `Ffi.kernel "…"` literal
+/// The constructor is the JS-widget analogue of the `Kernel.kernel "…"` literal
 /// gate: legal ONLY as the entire body of a binding annotated `CustomElement
 /// down up`, applied to a SINGLE STRING LITERAL naming the author's widget-hook
 /// JS file. The two type parameters are the seal (down-state / up-event) only;
@@ -6498,11 +6512,64 @@ fn detect_custom_element_constructor(
         ));
     }
 
+    // The single string-literal argument, sealed to a cleaned, project-relative,
+    // traversal-free widget path.
+    let cleaned = custom_element_widget_path(args, val.body.span)?;
+
+    // Resolve the annotation to its canonical type — this re-runs the arity + SEAL
+    // gates on `CustomElement down up`, so a mis-arity (IPE-N0031) or seal-illegal
+    // parameter (IPE-N0039) is still rejected here exactly as for any other
+    // `CustomElement` annotation.
+    let mut free_vars = BTreeSet::new();
+    let mut visited = Vec::new();
+    let ctx = TypeCtx {
+        env,
+        type_home_map,
+        qualifier_paths,
+        aliases,
+        interner,
+        ui_wildcard_msg,
+        ann_span: ann.span,
+    };
+    let subst = BTreeMap::new();
+    let mut budget = TYPE_EXPANSION_NODE_LIMIT;
+    let ty = canonicalise_type(
+        &ann.value,
+        &ctx,
+        &subst,
+        &mut free_vars,
+        &mut visited,
+        &mut budget,
+        0,
+    )?;
+    let mut free_vars: Vec<Symbol> = free_vars.into_iter().collect();
+    free_vars.sort_by(|a, b| interner.resolve(*a).cmp(&interner.resolve(*b)));
+
+    let body =
+        ipe_diagnostics::Located::new(val.body.span, canon::Expr_::CustomElementCtor(cleaned));
+    Ok(Some(canon::Def::Typed {
+        home: env.home.clone(),
+        name: val.name,
+        free_vars,
+        patterns: Vec::new(),
+        body,
+        ty,
+    }))
+}
+
+/// Seal a `CustomElement.fromFile` argument list to a cleaned widget path.
+///
+/// Enforces exactly one string-literal argument, cleans it through the shared
+/// `path "…"` seal (`ipe_path_core`), and tightens to a project-root-relative
+/// path. Every failure is the fail-closed IPE-N0044 (or the path-literal
+/// IPE-P0063 for a `..` escape); the caller is already committed to the
+/// constructor, so there is no fall-through.
+fn custom_element_widget_path(args: &[src::Expr], body_span: Span) -> DResult<String> {
     // Exactly one argument, and it must be a string literal — a non-literal
     // (a variable / an expression) cannot be resolved to a file path at build time.
     let [arg] = args else {
         return Err(custom_element_ctor_error(
-            val.body.span,
+            body_span,
             "`CustomElement.fromFile` takes exactly one argument — a single string literal \
              naming the widget-hook JS file",
         ));
@@ -6552,46 +6619,7 @@ fn detect_custom_element_constructor(
              `\\\\server\\share` prefix) would resolve outside the project and is refused",
         ));
     }
-
-    // Resolve the annotation to its canonical type — this re-runs the arity + SEAL
-    // gates on `CustomElement down up`, so a mis-arity (IPE-N0031) or seal-illegal
-    // parameter (IPE-N0039) is still rejected here exactly as for any other
-    // `CustomElement` annotation.
-    let mut free_vars = BTreeSet::new();
-    let mut visited = Vec::new();
-    let ctx = TypeCtx {
-        env,
-        type_home_map,
-        qualifier_paths,
-        aliases,
-        interner,
-        ui_wildcard_msg,
-        ann_span: ann.span,
-    };
-    let subst = BTreeMap::new();
-    let mut budget = TYPE_EXPANSION_NODE_LIMIT;
-    let ty = canonicalise_type(
-        &ann.value,
-        &ctx,
-        &subst,
-        &mut free_vars,
-        &mut visited,
-        &mut budget,
-        0,
-    )?;
-    let mut free_vars: Vec<Symbol> = free_vars.into_iter().collect();
-    free_vars.sort_by(|a, b| interner.resolve(*a).cmp(&interner.resolve(*b)));
-
-    let body =
-        ipe_diagnostics::Located::new(val.body.span, canon::Expr_::CustomElementCtor(cleaned));
-    Ok(Some(canon::Def::Typed {
-        home: env.home.clone(),
-        name: val.name,
-        free_vars,
-        patterns: Vec::new(),
-        body,
-        ty,
-    }))
+    Ok(cleaned)
 }
 
 /// Recognise a Stage-4 kernel-alias binding and resolve it against the kernel

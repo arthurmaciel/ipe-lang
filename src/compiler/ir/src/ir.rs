@@ -1248,8 +1248,8 @@ pub enum IrType {
     /// encode and the up-event decode are generated against the concrete Rust
     /// types they render to) but the HANDLE itself never crosses the seam and
     /// never serialises — like [`Self::WebRoute`], it is non-derivable and
-    /// non-serde. The value is produced only by the reserved `customElement`
-    /// constructor and consumed only as `Ui.widget`'s first argument.
+    /// non-serde. The value is produced only by the reserved `CustomElement.fromFile`
+    /// constructor and consumed only as `CustomElement.node`'s first argument.
     CustomElement {
         down: Box<Self>,
         up: Box<Self>,
@@ -2609,7 +2609,7 @@ pub enum Expr {
     /// the runtime's `Result`-returning seal (the compiler already proved the
     /// string is valid).
     PathLit(String),
-    /// The reserved `customElement "<js-path>"` constructor, lowered. `tag` is
+    /// The reserved `CustomElement.fromFile "<js-path>"` constructor, lowered. `tag` is
     /// the generated content-addressed custom-element tag (`ipe-ce-<hex>`),
     /// derived at lowering from a hash of the cleaned JS path (which the canon
     /// path seal + the build-stage containment gate already proved is in-project

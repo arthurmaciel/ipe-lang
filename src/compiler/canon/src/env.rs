@@ -48,7 +48,7 @@ pub const STDLIB_MODULE_QUALIFIERS: &[(&[&str], &str)] = &[
     // The modules listed below are compiled-source Layer-3 modules registered in
     // `ipe::stdlib::COMPILED_STD_MODULES`.  A module is EITHER a kernel qualifier
     // here OR compiled-source — never both (`compiled_vs_kernel_qualifier_disjoint`).
-    // Their members reach kernels via `Ffi.kernel "X_*"` aliases resolved by
+    // Their members reach kernels via `Kernel.kernel "X_*"` aliases resolved by
     // `detect_kernel_alias`, so they must stay out of this table.
     //
     //   Absent module          Kernel family / note
@@ -836,7 +836,7 @@ impl Env {
             // explicit "<redacted>" accessor. The blunt raw un-parse `reveal`
             // relocated to the compiled-source `Ipe.Secret.Unsafe` submodule
             // (`src/stdlib/Ipe/Secret/Unsafe.ipe`) as `unsafeReveal`, reached
-            // through the `Ffi.kernel "Secret_reveal"` alias to the SAME kernel —
+            // through the `Kernel.kernel "Secret_reveal"` alias to the SAME kernel —
             // so it is absent here and no longer resolves off a plain
             // `import Ipe.Secret`.
             ("Secret", &["fromString", "use", "redacted"]),
@@ -886,7 +886,7 @@ impl Env {
             ),
             // `Ipe.Random` is DELIBERATELY absent: it is COMPILED-SOURCE
             // (`ipe::stdlib::COMPILED_STD_MODULES`), so its whole surface resolves
-            // from `Ipe/Random.ipe` — the `Ffi.kernel "Random_*"` aliases and the
+            // from `Ipe/Random.ipe` — the `Kernel.kernel "Random_*"` aliases and the
             // pure Ipê wrappers — not from this kernel-qualifier catalog.
             // `Ipe.File` — file effects.
             (
@@ -977,7 +977,7 @@ impl Env {
             // COMPILED-SOURCE stdlib module (`src/stdlib/Ipe/PubSub.ipe`), so it
             // stays OUT of this kernel-qualifier table (kernel qualifier here OR
             // compiled-source — never both). Its `publish` / `publishNoEcho` bodies
-            // are `Ffi.kernel "PubSub_publish"` / `"PubSub_publishNoEcho"`; the
+            // are `Kernel.kernel "PubSub_publish"` / `"PubSub_publishNoEcho"`; the
             // alias fast-path (`detect_kernel_alias`) splits `"PubSub_publish"` →
             // the canonical `("PubSub", "publish")` kernel (`class = Web`,
             // Task-shaped — NOT TEA-loop machinery).
@@ -986,7 +986,7 @@ impl Env {
             // raw-SQL and untyped-column-read escape hatches (`unsafeExecRaw`,
             // `unsafeQuery`, `unsafeGet*`) live in the compiled-source
             // `Ipe.Db.Unsafe` submodule (`src/stdlib/Ipe/Db/Unsafe.ipe`), reached
-            // through `Ffi.kernel "Db_*"` aliases to the SAME kernels — so they
+            // through `Kernel.kernel "Db_*"` aliases to the SAME kernels — so they
             // are absent here and no longer resolve off a plain `import Ipe.Db`.
             // `SqlValue` / `SqlField` ADT constructors are handled by
             // `install_builtin_ctors` above; they are unqualified.
@@ -1122,7 +1122,7 @@ impl Env {
             // kernel qualifier: the layout builders (`el`/`row`/`column`/
             // `wrappedRow`/`grid`/`paragraph`/`textColumn`/`form`/`input`) are
             // pure Ipê over the retained `node`/`taggedNode` primitives, and every
-            // other member is a `Ffi.kernel "Ui_*"` alias resolving to its
+            // other member is a `Kernel.kernel "Ui_*"` alias resolving to its
             // unchanged kernel. The `Ipe.Ui.*` sub-qualifiers (Background/Border/
             // Font/Region/Input/Lazy/Keyed) stay native below. The disjointness
             // invariant forbids `Ui` here.
@@ -1315,7 +1315,7 @@ impl Env {
             ("HttpStream", &["open", "forEachChunk", "close", "chunks"]),
             // Ipe.Decimal — DELIBERATELY absent: migrated to compiled-source
             // `Ipe/Decimal.ipe` (COMPILED_STD_MODULES). Every member reaches its
-            // kernel via `Ffi.kernel "Decimal_*"`, so this catalog block is no
+            // kernel via `Kernel.kernel "Decimal_*"`, so this catalog block is no
             // longer needed here.
             //
             // Ipe.Http.Server.WebSocket (12 kernels).
@@ -1356,7 +1356,7 @@ impl Env {
             // `htmlEscapeText` / `htmlEscapeAttr` / `htmlAttrToString`) are
             // DELIBERATELY absent: `Ipe.Html` is now COMPILED-SOURCE
             // (`COMPILED_STD_MODULES`), so those aliases live in `Ipe/Html.ipe`
-            // as `Ffi.kernel "Html_*"` bindings, not the kernel-qualifier prelude.
+            // as `Kernel.kernel "Html_*"` bindings, not the kernel-qualifier prelude.
             // `Random.range` is likewise DELIBERATELY absent: `Ipe.Random` is now
             // COMPILED-SOURCE, so `range lo hi = int lo hi` lives in
             // `Ipe/Random.ipe` as pure Ipê, not a kernel-qualifier alias.
@@ -1434,7 +1434,7 @@ impl Env {
             // `Ipe.Ui`, `Ipe.Html`, and `Ipe.Html.Attributes` are compiled-source
             // (mirror `Ipe.Path` / `Ipe.Url`): no qualifier alias — members
             // resolve through source-dep injection, their retained primitives +
-            // native serialiser via `Ffi.kernel "Ui_*"` / `"Html_*"` / `"Attr_*"`.
+            // native serialiser via `Kernel.kernel "Ui_*"` / `"Html_*"` / `"Attr_*"`.
             // The `Ipe.Ui.*` sub-module aliases stay below.
             ("Ipe.Html.Events", "Event"),
             // ── Ipe.Tea.<Shape> shape aliases (ADR 0048) ──────────────────────
@@ -1466,7 +1466,7 @@ impl Env {
             // Ipe.Ui.Keyed sub-module.
             ("Ipe.Ui.Keyed", "Keyed"),
             // Ipe.Decimal — DELIBERATELY absent: migrated to compiled-source
-            // `Ipe/Decimal.ipe`. The `Ffi.kernel "Decimal_*"` aliases in that
+            // `Ipe/Decimal.ipe`. The `Kernel.kernel "Decimal_*"` aliases in that
             // module reach every kernel directly; no qualifier alias is needed.
         ];
 
