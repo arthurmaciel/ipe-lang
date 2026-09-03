@@ -806,6 +806,69 @@ mod tests {
         );
     }
 
+    // Import → reproduce: the final datum of a replayed session equals the
+    // final datum of the original session. Determinism gate for Step 3.
+    //
+    // Protocol: run a session, export, import into a fresh buffer, reconstruct
+    // the final step — the two final models must be equal.
+    #[cfg(feature = "json")]
+    #[test]
+    fn import_reproduce_final_datum() {
+        #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+        enum RepMsg {
+            Add(i64),
+            Reset,
+            Sub(i64),
+        }
+        #[derive(Clone, Debug, PartialEq)]
+        struct RepModel {
+            val: i64,
+        }
+
+        fn rep_update(msg: RepMsg, m: RepModel) -> (RepModel, IpeCmd<RepMsg>) {
+            let next = match msg {
+                RepMsg::Add(n) => RepModel { val: m.val + n },
+                RepMsg::Reset => RepModel { val: 0 },
+                RepMsg::Sub(n) => RepModel { val: m.val - n },
+            };
+            (next, IpeCmd::None)
+        }
+
+        // Record a session.
+        let init = RepModel { val: 0 };
+        let mut buf = RecordBuffer::new(init.clone(), 32);
+        let msgs = [
+            RepMsg::Add(10),
+            RepMsg::Sub(3),
+            RepMsg::Add(7),
+            RepMsg::Reset,
+            RepMsg::Add(42),
+        ];
+        let mut live = init.clone();
+        for msg in &msgs {
+            let (next, _) = rep_update(msg.clone(), live.clone());
+            buf.record(msg.clone(), next.clone(), &rep_update);
+            live = next;
+        }
+        let original_final = live;
+
+        // Export the session.
+        let bytes = export_msgs(&buf).expect("export must succeed");
+
+        // Import into a fresh buffer (reproduce from the log alone).
+        let imported = import_msgs::<RepMsg, RepModel, _>(&bytes, init, rep_update, 32)
+            .expect("import must succeed");
+
+        // Reproduced final datum must equal the original.
+        let reproduced_final = imported
+            .reconstruct(imported.len() - 1, &rep_update)
+            .expect("last step must be in range");
+        assert_eq!(
+            reproduced_final, original_final,
+            "reproduced final datum must equal original session's final datum"
+        );
+    }
+
     // Past the cap the log does not grow unbounded; base advances to preserve
     // correct reconstruction from the retained window.
     #[test]
