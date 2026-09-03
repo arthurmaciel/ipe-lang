@@ -128,3 +128,60 @@ intercepts it before the broadcast. No cross-talk between concurrent `request`
 calls: each id resolves ONLY its own waiter; an unknown, duplicate, or late id
 is dropped fail-closed.
 
+## `openSession`
+
+```ipe
+openSession : a -> Decoder frame -> Task SessionHandle
+```
+
+`openSession openCmd frameDecoder` — open a session: send `openCmd` outbound
+(with a runtime-minted correlation id on the envelope, never derived from JS)
+and return the opaque handle. The handle is the ONLY way to address the session.
+
+`openCmd` MUST be a seal-legal value type — the same discipline `send` enforces
+(IPE-N0039); a `Secret` or reserved-sink payload is REJECTED fail-closed at
+compile time. `frameDecoder` fixes the inbound frame type for `sessionFrames`;
+`Decoder Value` is REJECTED (spell the frame type concretely). The `Task` fails
+with `Err` when the host rejects the open or the open-session ceiling is reached.
+
+## `sessionFrames`
+
+```ipe
+sessionFrames : SessionHandle -> Decoder frame -> (frame -> msg) -> Sub msg
+```
+
+`sessionFrames handle frameDecoder toMsg` — the inbound frame stream for THIS
+session, routed by the handle's runtime id and seal-gated. `frameDecoder` IS the
+security gate (the same explicit-decoder idiom `subscribe` uses): each inbound
+frame runs through the total, fail-closed, bounded seal decoder; a malformed /
+oversized / mismatched frame is DROPPED whole (no partial value, no panic).
+`Decoder Value` is REJECTED (IPE-N0039). A `handle` for a closed/evicted session
+yields an inert stream — it receives nothing, never another session's frames.
+
+## `sendToSession`
+
+```ipe
+sendToSession : SessionHandle -> sessionCmd -> Cmd msg
+```
+
+`sendToSession handle sessionCmd` — send a control cmd (e.g. `Stop`) to THIS
+session, seal-encoded and tagged with the handle's id so it reaches only this
+session's host operation. `sessionCmd` MUST be a seal-legal value type
+(IPE-N0039); a `Secret` or reserved-sink payload is REJECTED fail-closed.
+
+## `closeSession`
+
+```ipe
+closeSession : SessionHandle -> closeCmd -> Decoder terminal -> Task terminal
+```
+
+`closeSession handle closeCmd terminalDecoder` — close the session: send
+`closeCmd`, await the terminal reply, and evict the session id.
+
+`closeCmd` MUST be seal-legal (IPE-N0039). The terminal reply runs through the
+SEALED fail-closed gate fixed by `terminalDecoder` (`Decoder Value` REJECTED);
+a host trap / decode-miss / deadline / budget-overflow resolves the `Task` with
+a typed `Err`, never a panic or a partial value. After close the handle is dead:
+a later `sendToSession` reaches no live host operation, and a later inbound frame
+tagged with its id is dropped fail-closed.
+

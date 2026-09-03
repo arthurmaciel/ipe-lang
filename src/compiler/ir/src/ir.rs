@@ -1231,6 +1231,14 @@ pub enum IrType {
     /// `WebReq` — opaque request type threaded through `Web.app`'s `init`
     /// callback.  Rendered as `ipe_runtime::web::WebReq`.
     WebReq,
+    /// `SessionHandle` — the opaque handle addressing one bounded `Ipe.Ffi.Js`
+    /// session stream, obtained ONLY from `Js.openSession`. It carries the
+    /// runtime-minted session id and is rendered as the plain `i64` the session
+    /// registry keys on. It has no Ipê constructor, so a program cannot forge a
+    /// handle for a session it did not open — cross-handle addressing is
+    /// unrepresentable. Non-derivable/non-serde (never crosses the seam as a
+    /// value; it is a live-registry key, not a session datum).
+    SessionHandle,
     /// `WebRoute page` — route descriptor returned by `Web.route`, carrying
     /// the page type it builds. Rendered as
     /// `ipe_runtime::web::route::Route<Page>`. The runtime `Route<Page>`
@@ -1841,6 +1849,8 @@ pub fn ir_type_is_derivable(
         // derivable by construction; its `Clone` (and any whole-record bound)
         // is guaranteed by the witness bound set the backend emits.
         | IrType::RowGeneric(_)
+        // `SessionHandle` renders to a bare `i64` — fully derivable + serde.
+        | IrType::SessionHandle
         | IrType::UiPlain(_) => true,
         // The fully-derivable Ipe.Ui / Ipe.Html carriers vs the two Clone-only
         // ones (`html::Attribute` / `html::Event`, which hold `Arc<dyn Fn>`).
@@ -2010,7 +2020,14 @@ pub fn ir_type_is_serde(ty: &IrType, enum_serde: &impl Fn(&ModPath, Symbol) -> b
         | IrType::ErrorDetails
         | IrType::ErrorInfo
         | IrType::PanicInfo
-        | IrType::TypeInfo => true,
+        | IrType::TypeInfo
+        // `SessionHandle` renders to a bare `i64` (the session-registry key), which
+        // is natively serde. Round-tripping it through a Web/SPA Model store is
+        // harmless: every session op validates the id fail-closed (an unknown or
+        // stale id yields an inert frame stream / a typed `Err`), so a rehydrated id
+        // that names no live session is safe by construction. Opacity — no Ipê
+        // constructor — still makes a MEANINGFUL handle unforgeable in source.
+        | IrType::SessionHandle => true,
         // All non-serde leaves collapse to `false`:
         //   * `UiPlain` value types (`Length`/`Color`/… → `ui::element::*`) and
         //     every `Ui` carrier (`Html`/`Element`/`Attribute`) derive only
@@ -2329,6 +2346,9 @@ pub const fn ir_type_feature_requirement(ty: &IrType) -> Option<RuntimeFeatureId
         // reach is the `SqlFragment` / `Dsn` / `Connection` set above.
         | IrType::Db
         | IrType::BackoffStrategy
+        // `SessionHandle` renders to a plain `i64` (the session-registry key) — no
+        // gated runtime type, so it is ungated like the primitives.
+        | IrType::SessionHandle
         | IrType::Order
         | IrType::ErrorKind
         | IrType::Error
@@ -2476,6 +2496,7 @@ pub fn carrier_is_clone(ty: &IrType) -> bool {
         | IrType::WebSocketServerCfg
         | IrType::UiPlain(_)
         | IrType::WebReq
+        | IrType::SessionHandle
         | IrType::ProcessRunWithCfg
         | IrType::ProcessRunInPtyCfg
         | IrType::CacheCfg

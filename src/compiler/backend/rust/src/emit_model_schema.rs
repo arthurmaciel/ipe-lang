@@ -189,6 +189,10 @@ const TAG_CLI_APP: u8 = 82;
 // `ProcessRunInPtyCfg` — kernel-boundary non-serde input record for `Ipe.Process.runInPty`.
 const TAG_PROCESS_RUN_IN_PTY_CFG: u8 = 83;
 const TAG_WEBSOCKET_CLIENT_CFG: u8 = 84;
+// `SessionHandle` — opaque `Ipe.Ffi.Js` session handle. Renders to a bare `i64`
+// (the session-registry key), which IS serde, so it may be a Model field; it gets
+// its own structural tag so a Model shape carrying it hashes distinctly.
+const TAG_SESSION_HANDLE: u8 = 85;
 /// Fuel exhaustion marker — distinct from every variant tag.
 const TAG_FUEL_EXHAUSTED: u8 = 0xFF;
 
@@ -224,6 +228,7 @@ fn hash_ty(ctx: &EmitCtx, ty: &IrType, h: &mut Sha256, fuel: u32) -> DResult<()>
         IrType::WebSocketServer => h.update([TAG_WEBSOCKET_SERVER]),
         IrType::WebSocketServerCfg => h.update([TAG_WEBSOCKET_SERVER_CFG]),
         IrType::WebReq => h.update([TAG_LIVE_REQ]),
+        IrType::SessionHandle => h.update([TAG_SESSION_HANDLE]),
         IrType::BackoffStrategy => h.update([TAG_BACKOFF_STRATEGY]),
         IrType::Order => h.update([TAG_ORDER]),
         IrType::HttpMethod => h.update([TAG_HTTP_METHOD]),

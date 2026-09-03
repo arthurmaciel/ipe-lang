@@ -126,6 +126,41 @@ pub(crate) const MAX_OUTSTANDING: usize = 256;
 /// override is a tracked follow-up.
 const REQUEST_TIMEOUT_MS: u64 = 10_000;
 
+// ─── Session-stream wire keys + bounds ──────────────────────────────────────
+
+/// The JSON field name carrying a session's runtime-minted correlation id on
+/// every open envelope, inbound frame, control cmd, and close/terminal
+/// envelope. Same collision-proof discipline as [`COR_ID_FIELD`]: the sealed
+/// frame/terminal type is closed and declared, so an inbound value that carries
+/// this extra field fails the user decoder — the runtime strips it before the
+/// payload reaches a decoder. Runtime-private, never user-reachable, never
+/// derived from JS input.
+const SESSION_ID_FIELD: &str = "__ipe_session";
+
+/// The JSON field name distinguishing a session's terminal reply (delivered to
+/// the one-shot close waiter) from an ordinary stream frame (broadcast to the
+/// session's `sessionFrames` subscriber). A frame carrying `__ipe_terminal:
+/// true` resolves the close waiter; any other framed value is a stream frame.
+const SESSION_TERMINAL_FIELD: &str = "__ipe_terminal";
+
+/// Hard ceiling on concurrently-open sessions per session sid. A host that
+/// opens sessions without closing them must not fill heap indefinitely; once
+/// the ceiling is reached, a new `openSession` resolves immediately with `Err`
+/// (fail-closed, bounded by construction — the same shape as [`MAX_OUTSTANDING`]).
+pub(crate) const MAX_OPEN_SESSIONS: usize = 64;
+
+/// Per-session inbound-frame budget. After this many frames have been routed to
+/// a session, the session is terminated fail-closed with an overflow terminal
+/// `Err` and evicted — an ordered stream (e.g. audio) is NEVER allowed to lose
+/// frames silently, so the bound surfaces as a terminal error, not a drop.
+pub(crate) const SESSION_FRAME_BUDGET: u64 = 100_000;
+
+/// Per-session deadline, in milliseconds. A session that is neither closed nor
+/// fed a terminal within this window is terminated fail-closed (overflow/timeout
+/// terminal `Err`) and evicted, so a wedged host recorder cannot leak a channel
+/// indefinitely. Generous — a long recording session stays well under it.
+const SESSION_DEADLINE_MS: u64 = 3_600_000;
+
 // ─── Native (server) transport ─────────────────────────────────────────────
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -173,6 +208,31 @@ mod native {
         /// dropped fail-closed (unknown/duplicate/late id). Bounded by
         /// [`MAX_OUTSTANDING`]: a new waiter is refused when the map is full.
         pub(crate) pending: HashMap<u64, oneshot::Sender<JsonVal>>,
+        /// Open session streams, keyed by runtime-minted session id (never derived
+        /// from JS input). A frame/terminal whose id is not in this map is dropped
+        /// fail-closed. Bounded by [`MAX_OPEN_SESSIONS`]: a new `openSession` is
+        /// refused when the map is full.
+        pub(crate) streams: HashMap<u64, SessionStream>,
+    }
+
+    /// One open session's state: the bounded frame channel a `sessionFrames`
+    /// subscriber drains, the frame budget already spent, and the one-shot the
+    /// `closeSession` waiter is parked on. Bounded by construction — the channel
+    /// capacity caps the in-flight buffer and the budget caps lifetime frames.
+    pub(crate) struct SessionStream {
+        /// Bounded broadcast of decoded-ready inbound stream frames for THIS
+        /// session. A lagging subscriber skips the gap (never panics); the
+        /// capacity bounds the burst a slow subscriber can hold.
+        pub(crate) frames: broadcast::Sender<String>,
+        /// Frames routed to this session so far. When it reaches
+        /// [`SESSION_FRAME_BUDGET`] the session is terminated fail-closed with an
+        /// overflow terminal `Err` and evicted — an ordered stream never silently
+        /// drops.
+        pub(crate) frames_seen: u64,
+        /// The `closeSession` one-shot waiter, installed when `closeSession` is
+        /// called. A terminal frame (or a fail-closed overflow/timeout) resolves it
+        /// exactly once, then the session is evicted. `None` until close is awaited.
+        pub(crate) terminal: Option<oneshot::Sender<JsonVal>>,
     }
 
     impl SessionPorts {
@@ -181,6 +241,7 @@ mod native {
                 inbound: broadcast::channel(PORT_CAP).0,
                 out_sink: None,
                 pending: HashMap::new(),
+                streams: HashMap::new(),
             }
         }
     }
@@ -259,6 +320,19 @@ mod native {
     ///
     /// Cross-session delivery is unrepresentable: delivery reaches ONLY `sid`.
     pub fn deliver_inbound_for(sid: &SessionId, raw: String) {
+        // A session-tagged frame (carrying `__ipe_session`) is routed to that
+        // session's stream/terminal BEFORE the one-shot-reply check, so a session
+        // frame can never be misrouted to a `js_request` waiter or a broadcast
+        // subscriber. An unknown/closed/foreign session id is dropped fail-closed.
+        if let Ok(mut value) = serde_json::from_str::<serde_json::Value>(&raw)
+            && let Some(sess_val) = value
+                .as_object_mut()
+                .and_then(|o| o.remove(SESSION_ID_FIELD))
+            && let Some(session_id) = sess_val.as_u64()
+        {
+            deliver_session_frame(sid, session_id, value);
+            return;
+        }
         // Peek at the raw string: if it parses as a JSON object with `__ipe_id`,
         // this is a correlated reply — route to the pending map, not subscribers.
         // Wire format: `{"__ipe_id": <u64>, "payload": <sealed_reply>}`.
@@ -290,6 +364,68 @@ mod native {
         if let Some(tx) = sender {
             let _ = tx.send(raw);
         }
+    }
+
+    /// Route one session-tagged inbound value to the session identified by the
+    /// runtime-minted `session_id` within the owning `sid`. Fail-closed at every
+    /// step:
+    ///
+    /// * An unknown/closed/foreign `session_id` (no live stream in `sid`'s
+    ///   registry) is dropped whole — no cross-session/cross-handle leak, no panic.
+    /// * A value tagged `__ipe_terminal: true` resolves the session's `closeSession`
+    ///   one-shot with the stripped payload and evicts the session.
+    /// * Any other value is an ordinary stream frame: it counts against the frame
+    ///   budget and is broadcast to the session's `sessionFrames` subscriber. When
+    ///   the budget is exhausted the session is terminated with an overflow terminal
+    ///   `Err` and evicted (an ordered stream never silently drops a frame).
+    ///
+    /// The `session_id` is the registry key minted by [`next_cor_id`]; a
+    /// JS-injected id cannot forge a live session because the key is never derived
+    /// from an inbound frame.
+    fn deliver_session_frame(sid: &SessionId, session_id: u64, mut value: serde_json::Value) {
+        let is_terminal = value
+            .as_object_mut()
+            .and_then(|o| o.remove(SESSION_TERMINAL_FIELD))
+            .and_then(|t| t.as_bool())
+            .unwrap_or(false);
+        // Extract the inner `"payload"`, falling back to the whole remaining value.
+        let payload = value
+            .as_object_mut()
+            .and_then(|o| o.remove("payload"))
+            .unwrap_or(value);
+
+        let mut g = lock_sessions();
+        let Some(ports) = g.get_mut(&sid.0) else {
+            return; // no such session sid — dropped fail-closed
+        };
+        if is_terminal {
+            // Terminal reply: resolve the close waiter (if any) and evict.
+            if let Some(stream) = ports.streams.remove(&session_id)
+                && let Some(tx) = stream.terminal
+            {
+                let _ = tx.send(payload);
+            }
+            // Unknown/closed session id, or a terminal with no close waiter yet:
+            // dropped fail-closed (the close Task resolves via its own deadline).
+            return;
+        }
+        // Ordinary stream frame. Charge the budget FIRST; on exhaustion terminate
+        // fail-closed rather than deliver-and-overflow.
+        let Some(stream) = ports.streams.get_mut(&session_id) else {
+            return; // unknown/closed/foreign session id — dropped fail-closed
+        };
+        stream.frames_seen = stream.frames_seen.saturating_add(1);
+        if stream.frames_seen > SESSION_FRAME_BUDGET {
+            // Overflow: terminate the session with a fail-closed terminal Err and
+            // evict. A parked close waiter observes the sender drop and resolves
+            // Err; a live `sessionFrames` subscriber sees the channel close and ends.
+            g.get_mut(&sid.0).map(|p| p.streams.remove(&session_id));
+            return;
+        }
+        // Deliver the frame to the session's subscriber. The value is re-encoded to
+        // its canonical string; the `sessionFrames` drain decodes it fail-closed
+        // through the seal gate, exactly as `js_subscribe` does.
+        let _ = stream.frames.send(payload.to_string());
     }
 
     /// `js_send payload` — seal-encode `payload` and deliver it to the ORIGIN
@@ -494,11 +630,277 @@ mod native {
             }
         })
     }
+
+    /// `js_open_session open_cmd _decoder` — open a bounded, session-scoped stream.
+    ///
+    /// Semantics (generalising `js_request`'s one-shot correlation to a bounded
+    /// multi-frame lifecycle):
+    ///
+    /// 1. Mint a fresh runtime-private session id (the same counter `js_request`
+    ///    uses; never derived from JS input, never user-observable).
+    /// 2. Refuse when [`MAX_OPEN_SESSIONS`] is already open in the owning session
+    ///    (fail-closed, bounded — heap cannot grow unboundedly).
+    /// 3. Register the session's bounded frame channel keyed by that id, then send
+    ///    `open_cmd` outbound tagged with the id so the first-party JS glue routes
+    ///    every subsequent frame/terminal back with it.
+    /// 4. Return the minted id as the opaque `SessionHandle` (a runtime `i64`); the
+    ///    handle is the ONLY way to address the session — cross-handle addressing is
+    ///    unrepresentable because the id is never taken from JS.
+    ///
+    /// The `decoder` is not consumed here (the frame stream carries it in
+    /// `js_session_frames`); it fixes the frame type at the type level.
+    pub fn js_open_session<T, F>(
+        open_cmd: T,
+        _decoder: Decoder<IpeError, F>,
+    ) -> crate::core::IpeTask<IpeError, i64>
+    where
+        T: serde::Serialize + Send + 'static,
+        F: Send + 'static,
+    {
+        let session_id = next_cor_id();
+        let owner_sid = scope_sid();
+        Box::pin(async move {
+            let Some(sid) = owner_sid else {
+                return crate::core::IpeResult::Err(
+                    "js_open_session: no session in scope".to_string().into(),
+                );
+            };
+            // Refuse at the ceiling (fail-closed, no panic).
+            {
+                let mut g = lock_sessions();
+                let ports = g.entry(sid.0.clone()).or_insert_with(SessionPorts::new);
+                if ports.streams.len() >= MAX_OPEN_SESSIONS {
+                    return crate::core::IpeResult::Err(
+                        "js_open_session: open-session ceiling reached"
+                            .to_string()
+                            .into(),
+                    );
+                }
+                ports.streams.insert(
+                    session_id,
+                    SessionStream {
+                        frames: broadcast::channel(PORT_CAP).0,
+                        frames_seen: 0,
+                        terminal: None,
+                    },
+                );
+            }
+            // Serialize + tag the open cmd with the session id.
+            let outbound_json = match serde_json::to_value(&open_cmd) {
+                Ok(v) => v,
+                Err(e) => {
+                    lock_sessions()
+                        .get_mut(&sid.0)
+                        .map(|p| p.streams.remove(&session_id));
+                    return crate::core::IpeResult::Err(
+                        format!("js_open_session: open cmd serialisation failed: {e}").into(),
+                    );
+                }
+            };
+            let envelope = serde_json::json!({
+                SESSION_ID_FIELD: session_id,
+                "payload": outbound_json,
+            });
+            let encoded = seal_encode(&envelope);
+            let sink = lock_sessions().get(&sid.0).and_then(|p| p.out_sink.clone());
+            if let Some(sink) = sink {
+                sink(&encoded);
+            }
+            crate::core::IpeResult::Ok(session_id as i64)
+        })
+    }
+
+    /// `js_session_frames handle to_msg` — the inbound frame stream for ONE session.
+    ///
+    /// Drains only the frame channel keyed by `handle`'s runtime-minted id in the
+    /// owning session, decoding each frame fail-closed through the bounded seal
+    /// decoder (a rejected frame is dropped whole, never a partial value, never a
+    /// panic). A `handle` with no live stream (closed/evicted/foreign) binds an
+    /// inert channel no route feeds — it receives nothing.
+    pub fn js_session_frames<T, M, F>(
+        handle: i64,
+        decoder: Decoder<IpeError, T>,
+        to_msg: F,
+    ) -> IpeSub<M>
+    where
+        M: Send + 'static,
+        F: Fn(T) -> M + Send + 'static,
+        T: Send + 'static,
+    {
+        let session_id = handle as u64;
+        // Bind this session's frame receiver while the materialisation scope is
+        // live. A missing session (unknown id / no scope) gets a fresh private
+        // channel no route publishes to — an inert, fail-closed drain.
+        let rx = match scope_sid() {
+            None => broadcast::channel(PORT_CAP).1,
+            Some(owner_sid) => {
+                let g = lock_sessions();
+                match g.get(&owner_sid.0).and_then(|p| p.streams.get(&session_id)) {
+                    Some(stream) => stream.frames.subscribe(),
+                    None => broadcast::channel(PORT_CAP).1,
+                }
+            }
+        };
+        IpeSub::Source(Box::new(move |emit| {
+            let mut rx = rx;
+            tokio::spawn(async move {
+                loop {
+                    match rx.recv().await {
+                        Ok(raw) => {
+                            if let Ok(value) = seal_decode(&raw, &decoder, SealLimits::default()) {
+                                emit(to_msg(value));
+                            }
+                        }
+                        Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                        Err(broadcast::error::RecvError::Closed) => break,
+                    }
+                }
+            })
+        }))
+    }
+
+    /// `js_send_to_session handle session_cmd` — send a control cmd to ONE session.
+    ///
+    /// Fire-and-forget via [`IpeCmd::Publish`]; the cmd is seal-encoded, tagged with
+    /// the session id, and delivered to the ORIGIN session's out-sink so the JS glue
+    /// routes it to that session's host recorder. A cmd for a session that is not
+    /// open is delivered to the sink but recognised by no live host recorder (the
+    /// tag names a dead id) — a fail-closed no-op, never cross-session.
+    pub fn js_send_to_session<T, M>(handle: i64, session_cmd: T) -> IpeCmd<M>
+    where
+        T: serde::Serialize + Send + 'static,
+    {
+        let session_id = handle as u64;
+        IpeCmd::Publish(Box::new(move |origin| {
+            match serde_json::to_value(&session_cmd) {
+                Ok(value) => {
+                    let envelope = serde_json::json!({
+                        SESSION_ID_FIELD: session_id,
+                        "payload": value,
+                    });
+                    let encoded = seal_encode(&envelope);
+                    let sink = lock_sessions().get(origin).and_then(|p| p.out_sink.clone());
+                    if let Some(sink) = sink {
+                        sink(&encoded);
+                    }
+                }
+                Err(e) => {
+                    eprintln!(
+                        "[ipe-runtime BUG] js_send_to_session: cmd of type {} failed serialisation ({e}); frame dropped — please report",
+                        std::any::type_name::<T>()
+                    );
+                }
+            }
+            0
+        }))
+    }
+
+    /// `js_close_session handle close_cmd decoder` — close a session and await its
+    /// terminal reply.
+    ///
+    /// 1. Install a one-shot terminal waiter on the session (if it is still open).
+    /// 2. Send `close_cmd` outbound tagged with the id so the host recorder emits
+    ///    its terminal frame.
+    /// 3. Await the terminal with a [`SESSION_DEADLINE_MS`] deadline; on arrival,
+    ///    decode it fail-closed through the seal gate. A timeout, a decode-miss, an
+    ///    overflow eviction, or an already-closed session → typed `Err`, never a
+    ///    panic. The session id is evicted regardless of outcome.
+    pub fn js_close_session<T, R>(
+        handle: i64,
+        close_cmd: T,
+        decoder: Decoder<IpeError, R>,
+    ) -> crate::core::IpeTask<IpeError, R>
+    where
+        T: serde::Serialize + Send + 'static,
+        R: Send + 'static,
+    {
+        let session_id = handle as u64;
+        let owner_sid = scope_sid();
+        Box::pin(async move {
+            let Some(sid) = owner_sid else {
+                return crate::core::IpeResult::Err(
+                    "js_close_session: no session in scope".to_string().into(),
+                );
+            };
+            // Install the terminal waiter on the live session; fail closed if the
+            // session is not open (already closed / evicted / never opened / foreign).
+            let (tx, rx) = oneshot::channel::<JsonVal>();
+            {
+                let mut g = lock_sessions();
+                match g
+                    .get_mut(&sid.0)
+                    .and_then(|p| p.streams.get_mut(&session_id))
+                {
+                    Some(stream) => stream.terminal = Some(tx),
+                    None => {
+                        return crate::core::IpeResult::Err(
+                            "js_close_session: session not open".to_string().into(),
+                        );
+                    }
+                }
+            }
+            // Serialize + tag the close cmd and deliver it.
+            match serde_json::to_value(&close_cmd) {
+                Ok(v) => {
+                    let envelope = serde_json::json!({
+                        SESSION_ID_FIELD: session_id,
+                        "payload": v,
+                    });
+                    let encoded = seal_encode(&envelope);
+                    let sink = lock_sessions().get(&sid.0).and_then(|p| p.out_sink.clone());
+                    if let Some(sink) = sink {
+                        sink(&encoded);
+                    }
+                }
+                Err(e) => {
+                    lock_sessions()
+                        .get_mut(&sid.0)
+                        .map(|p| p.streams.remove(&session_id));
+                    return crate::core::IpeResult::Err(
+                        format!("js_close_session: close cmd serialisation failed: {e}").into(),
+                    );
+                }
+            }
+            // Await the terminal with the deadline.
+            let timeout = tokio::time::Duration::from_millis(SESSION_DEADLINE_MS);
+            let result = tokio::time::timeout(timeout, rx).await;
+            // Evict the session regardless of outcome (idempotent — the terminal
+            // router already removed it on a clean terminal).
+            lock_sessions()
+                .get_mut(&sid.0)
+                .map(|p| p.streams.remove(&session_id));
+
+            match result {
+                Ok(Ok(terminal_value)) => {
+                    match seal_decode(&terminal_value.to_string(), &decoder, SealLimits::default())
+                    {
+                        Ok(v) => crate::core::IpeResult::Ok(v),
+                        Err(_) => crate::core::IpeResult::Err(
+                            "js_close_session: terminal failed seal decode"
+                                .to_string()
+                                .into(),
+                        ),
+                    }
+                }
+                Ok(Err(_)) => crate::core::IpeResult::Err(
+                    // Sender dropped — the session was evicted (overflow/deadline)
+                    // before a terminal arrived. Fail closed with an overflow Err.
+                    "js_close_session: session terminated before reply"
+                        .to_string()
+                        .into(),
+                ),
+                Err(_) => {
+                    crate::core::IpeResult::Err("js_close_session: timeout".to_string().into())
+                }
+            }
+        })
+    }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
 pub use native::{
-    deliver_inbound_for, js_request, js_send, js_subscribe, register_out_sink_for, session_close,
+    deliver_inbound_for, js_close_session, js_open_session, js_request, js_send,
+    js_send_to_session, js_session_frames, js_subscribe, register_out_sink_for, session_close,
     session_open,
 };
 
@@ -542,6 +944,24 @@ mod wasm {
         /// A reply whose id is not in this map is dropped fail-closed.
         static PENDING: RefCell<HashMap<u64, Box<dyn FnOnce(JsonVal)>>> =
             RefCell::new(HashMap::new());
+
+        /// Open session streams, keyed by runtime-minted session id (never derived
+        /// from JS input). Each holds the live `sessionFrames` drains, the frame
+        /// budget spent, and the one-shot terminal waiter. A frame/terminal whose id
+        /// is not in this map is dropped fail-closed. Bounded by
+        /// [`MAX_OPEN_SESSIONS`].
+        static SESSIONS: RefCell<HashMap<u64, WasmSession>> = RefCell::new(HashMap::new());
+    }
+
+    /// One open session's browser-local state.
+    struct WasmSession {
+        /// The `sessionFrames` drains for THIS session (each a fail-closed decoder).
+        drains: Vec<Rc<dyn Fn(&str)>>,
+        /// Frames routed so far; charged before delivery so an overflow terminates
+        /// the session rather than delivering past the budget.
+        frames_seen: u64,
+        /// The `closeSession` terminal one-shot (resolves the awaiting Task once).
+        terminal: Option<Box<dyn FnOnce(JsonVal)>>,
     }
 
     /// The browser-facing entry the JS glue calls to push an inbound port
@@ -550,6 +970,17 @@ mod wasm {
     /// Dispatch: if the raw JSON has `__ipe_id`, route to the pending waiter
     /// (correlated reply); otherwise fan out to all `js_subscribe` drains.
     pub fn push_inbound(raw: &str) {
+        // A session-tagged frame is routed to its session BEFORE the one-shot-reply
+        // check, so a session frame can never be misrouted. Unknown id → dropped.
+        if let Ok(mut value) = serde_json::from_str::<serde_json::Value>(raw)
+            && let Some(sess_val) = value
+                .as_object_mut()
+                .and_then(|o| o.remove(SESSION_ID_FIELD))
+            && let Some(session_id) = sess_val.as_u64()
+        {
+            deliver_session_frame(session_id, value);
+            return;
+        }
         // Peek for a correlation id (fail-closed: a parse error falls through).
         // Wire format: `{"__ipe_id": <u64>, "payload": <sealed_reply>}`.
         if let Ok(mut value) = serde_json::from_str::<serde_json::Value>(raw)
@@ -572,6 +1003,54 @@ mod wasm {
             INBOUND.with(|q| q.borrow().iter().map(Rc::clone).collect());
         for drain in drains {
             drain(raw);
+        }
+    }
+
+    /// Route one session-tagged inbound value to the session `session_id`.
+    /// Fail-closed: an unknown/closed session id is dropped whole; a terminal
+    /// resolves the close waiter and evicts; an ordinary frame is charged against
+    /// the budget and fanned to the session's drains, terminating on overflow.
+    fn deliver_session_frame(session_id: u64, mut value: serde_json::Value) {
+        let is_terminal = value
+            .as_object_mut()
+            .and_then(|o| o.remove(SESSION_TERMINAL_FIELD))
+            .and_then(|t| t.as_bool())
+            .unwrap_or(false);
+        let payload = value
+            .as_object_mut()
+            .and_then(|o| o.remove("payload"))
+            .unwrap_or(value);
+
+        if is_terminal {
+            let waiter = SESSIONS.with(|s| {
+                s.borrow_mut()
+                    .remove(&session_id)
+                    .and_then(|sess| sess.terminal)
+            });
+            if let Some(cb) = waiter {
+                cb(payload);
+            }
+            return;
+        }
+        // Charge the budget; on overflow evict (drops the terminal waiter → the
+        // close Task resolves Err) rather than deliver past the bound.
+        let drains = SESSIONS.with(|s| {
+            let mut map = s.borrow_mut();
+            let Some(sess) = map.get_mut(&session_id) else {
+                return None;
+            };
+            sess.frames_seen = sess.frames_seen.saturating_add(1);
+            if sess.frames_seen > SESSION_FRAME_BUDGET {
+                map.remove(&session_id);
+                return None;
+            }
+            Some(sess.drains.iter().map(Rc::clone).collect::<Vec<_>>())
+        });
+        if let Some(drains) = drains {
+            let raw = payload.to_string();
+            for drain in drains {
+                drain(&raw);
+            }
         }
     }
 
@@ -745,10 +1224,204 @@ mod wasm {
             }
         })
     }
+
+    /// `js_open_session open_cmd _decoder` (wasm) — mint a session id, register its
+    /// stream (bounded by [`MAX_OPEN_SESSIONS`]), send `open_cmd` outbound tagged
+    /// with the id, and resolve the Task with the id as the opaque handle. The id is
+    /// never derived from JS, so cross-handle addressing is unrepresentable.
+    pub fn js_open_session<T, F>(
+        open_cmd: T,
+        _decoder: Decoder<IpeError, F>,
+    ) -> crate::core::IpeTask<IpeError, i64>
+    where
+        T: serde::Serialize + 'static,
+        F: 'static,
+    {
+        let session_id = next_cor_id();
+        Box::pin(async move {
+            let at_limit = SESSIONS.with(|s| s.borrow().len() >= MAX_OPEN_SESSIONS);
+            if at_limit {
+                return crate::core::IpeResult::Err(
+                    "js_open_session: open-session ceiling reached"
+                        .to_string()
+                        .into(),
+                );
+            }
+            SESSIONS.with(|s| {
+                s.borrow_mut().insert(
+                    session_id,
+                    WasmSession {
+                        drains: Vec::new(),
+                        frames_seen: 0,
+                        terminal: None,
+                    },
+                );
+            });
+            let outbound_json = match serde_json::to_value(&open_cmd) {
+                Ok(v) => v,
+                Err(e) => {
+                    SESSIONS.with(|s| s.borrow_mut().remove(&session_id));
+                    return crate::core::IpeResult::Err(
+                        format!("js_open_session: open cmd serialisation failed: {e}").into(),
+                    );
+                }
+            };
+            let envelope = serde_json::json!({
+                SESSION_ID_FIELD: session_id,
+                "payload": outbound_json,
+            });
+            deliver_outbound(&seal_encode(&envelope));
+            crate::core::IpeResult::Ok(session_id as i64)
+        })
+    }
+
+    /// `js_session_frames handle to_msg` (wasm) — register a fail-closed decoder
+    /// drain on the session's stream. A `handle` with no live session registers on
+    /// nothing (inert). The teardown thunk removes the drain on re-render.
+    pub fn js_session_frames<T, M, F>(
+        handle: i64,
+        decoder: Decoder<IpeError, T>,
+        to_msg: F,
+    ) -> IpeSub<M>
+    where
+        M: 'static,
+        F: Fn(T) -> M + 'static,
+        T: 'static,
+    {
+        let session_id = handle as u64;
+        IpeSub::Source(Box::new(move |emit: Rc<dyn Fn(M)>| {
+            let decoder = decoder.clone();
+            let drain: Rc<dyn Fn(&str)> = Rc::new(move |raw: &str| {
+                if let Ok(value) = seal_decode(raw, &decoder, SealLimits::default()) {
+                    (emit)(to_msg(value));
+                }
+            });
+            let drain_key = Rc::as_ptr(&drain) as *const () as usize;
+            SESSIONS.with(|s| {
+                if let Some(sess) = s.borrow_mut().get_mut(&session_id) {
+                    sess.drains.push(Rc::clone(&drain));
+                }
+            });
+            Box::new(move || {
+                SESSIONS.with(|s| {
+                    if let Some(sess) = s.borrow_mut().get_mut(&session_id) {
+                        sess.drains
+                            .retain(|d| Rc::as_ptr(d) as *const () as usize != drain_key);
+                    }
+                });
+            })
+        }))
+    }
+
+    /// `js_send_to_session handle session_cmd` (wasm) — seal-encode + tag the cmd
+    /// and deliver it outbound. A cmd for a dead id reaches no live host recorder.
+    pub fn js_send_to_session<T, M>(handle: i64, session_cmd: T) -> IpeCmd<M>
+    where
+        T: serde::Serialize + Send + 'static,
+    {
+        let session_id = handle as u64;
+        IpeCmd::Publish(Box::new(move |_origin| {
+            if let Ok(value) = serde_json::to_value(&session_cmd) {
+                let envelope = serde_json::json!({
+                    SESSION_ID_FIELD: session_id,
+                    "payload": value,
+                });
+                deliver_outbound(&seal_encode(&envelope));
+            }
+            0
+        }))
+    }
+
+    /// `js_close_session handle close_cmd decoder` (wasm) — install the terminal
+    /// waiter, send `close_cmd` outbound tagged with the id, and await the terminal
+    /// with a deadline. Timeout / decode-miss / already-closed → typed `Err`.
+    pub fn js_close_session<T, R>(
+        handle: i64,
+        close_cmd: T,
+        decoder: Decoder<IpeError, R>,
+    ) -> crate::core::IpeTask<IpeError, R>
+    where
+        T: serde::Serialize + 'static,
+        R: 'static,
+    {
+        let session_id = handle as u64;
+        Box::pin(async move {
+            let is_open = SESSIONS.with(|s| s.borrow().contains_key(&session_id));
+            if !is_open {
+                return crate::core::IpeResult::Err(
+                    "js_close_session: session not open".to_string().into(),
+                );
+            }
+            let outbound_json = match serde_json::to_value(&close_cmd) {
+                Ok(v) => v,
+                Err(e) => {
+                    SESSIONS.with(|s| s.borrow_mut().remove(&session_id));
+                    return crate::core::IpeResult::Err(
+                        format!("js_close_session: close cmd serialisation failed: {e}").into(),
+                    );
+                }
+            };
+            let promise = js_sys::Promise::new(&mut |resolve, reject| {
+                let resolve_rc = Rc::new(resolve);
+                let reject_rc = Rc::new(reject);
+                let resolve_stored = Rc::clone(&resolve_rc);
+                SESSIONS.with(|s| {
+                    if let Some(sess) = s.borrow_mut().get_mut(&session_id) {
+                        sess.terminal = Some(Box::new(move |value: JsonVal| {
+                            let out = value.to_string();
+                            let _ = resolve_stored.call1(&JsValue::NULL, &JsValue::from_str(&out));
+                        }));
+                    }
+                });
+                let reject_cb = wasm_bindgen::closure::Closure::once(move || {
+                    let _ = reject_rc.call0(&JsValue::NULL);
+                });
+                if let Some(w) = web_sys::window() {
+                    let _ = w.set_timeout_with_callback_and_timeout_and_arguments_0(
+                        reject_cb.as_ref().unchecked_ref(),
+                        i32::try_from(SESSION_DEADLINE_MS).unwrap_or(i32::MAX),
+                    );
+                }
+                reject_cb.forget();
+            });
+            let envelope = serde_json::json!({
+                SESSION_ID_FIELD: session_id,
+                "payload": outbound_json,
+            });
+            deliver_outbound(&seal_encode(&envelope));
+
+            let js_fut = wasm_bindgen_futures::JsFuture::from(promise);
+            let outcome = js_fut.await;
+            SESSIONS.with(|s| s.borrow_mut().remove(&session_id));
+            match outcome {
+                Ok(reply_js) => {
+                    let reply_str = reply_js.as_string().unwrap_or_default();
+                    match serde_json::from_str::<JsonVal>(&reply_str)
+                        .ok()
+                        .and_then(|v| {
+                            seal_decode(&v.to_string(), &decoder, SealLimits::default()).ok()
+                        }) {
+                        Some(v) => crate::core::IpeResult::Ok(v),
+                        None => crate::core::IpeResult::Err(
+                            "js_close_session: terminal failed seal decode"
+                                .to_string()
+                                .into(),
+                        ),
+                    }
+                }
+                Err(_) => {
+                    crate::core::IpeResult::Err("js_close_session: timeout".to_string().into())
+                }
+            }
+        })
+    }
 }
 
 #[cfg(target_arch = "wasm32")]
-pub use wasm::{js_request, js_send, js_subscribe, push_inbound};
+pub use wasm::{
+    js_close_session, js_open_session, js_request, js_send, js_send_to_session, js_session_frames,
+    js_subscribe, push_inbound,
+};
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
@@ -1247,6 +1920,258 @@ mod tests {
             tokio::time::sleep(std::time::Duration::from_millis(20)).await;
             assert!(got.lock().unwrap_or_else(|e| e.into_inner()).is_empty());
             h.abort();
+        }
+
+        // ── Session-stream primitive: routing + refusals ─────────────────────
+
+        // Drive `js_open_session`, capture the minted session id from the tagged
+        // outbound open envelope, and return (handle, captured-outbound-frames).
+        async fn open_session_capturing(sid: &SessionId) -> (i64, Arc<Mutex<Vec<String>>>) {
+            let seen: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+            let seen2 = seen.clone();
+            register_out_sink_for(
+                sid,
+                Arc::new(move |s: &str| {
+                    seen2
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .push(s.to_string());
+                }),
+            );
+            let handle = match with_session_sid(sid.to_string(), || {
+                js_open_session::<i64, i64>(0_i64, int_decoder())
+            })
+            .await
+            {
+                crate::IpeResult::Ok(h) => h,
+                crate::IpeResult::Err(e) => panic!("open must succeed: {e:?}"),
+            };
+            (handle, seen)
+        }
+
+        // Materialise a `js_session_frames` Sub inside the session scope and collect
+        // the emitted frame Msgs.
+        fn collect_frames(
+            sid: &SessionId,
+            handle: i64,
+        ) -> (tokio::task::JoinHandle<()>, Arc<Mutex<Vec<i64>>>) {
+            let got = Arc::new(Mutex::new(Vec::<i64>::new()));
+            let got2 = got.clone();
+            let emit: Arc<dyn Fn(i64) + Send + Sync> =
+                Arc::new(move |m| got2.lock().unwrap_or_else(|e| e.into_inner()).push(m));
+            let sub = with_session_sid(sid.to_string(), || {
+                js_session_frames::<i64, i64, _>(handle, int_decoder(), |a| a)
+            });
+            let h = match sub {
+                IpeSub::Source(spawn) => spawn(emit),
+                _ => unreachable!("js_session_frames builds a Source"),
+            };
+            (h, got)
+        }
+
+        // A framed value tagged with the session id reaches ONLY that session's
+        // `sessionFrames` subscriber, decoded fail-closed.
+        #[tokio::test]
+        async fn session_frame_routes_to_its_subscriber() {
+            let sid = test_sid("aa11bb22cc33dd44ee55ff66aa11bb22");
+            session_open(&sid);
+            let (handle, _out) = open_session_capturing(&sid).await;
+            let (h, got) = collect_frames(&sid, handle);
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            deliver_inbound_for(&sid, format!(r#"{{"__ipe_session":{handle},"payload":7}}"#));
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            assert_eq!(*got.lock().unwrap_or_else(|e| e.into_inner()), vec![7]);
+            h.abort();
+            session_close(&sid);
+        }
+
+        // A frame tagged with an UNKNOWN/foreign session id is dropped fail-closed:
+        // no live subscriber sees it, no cross-session leak.
+        #[tokio::test]
+        async fn unknown_session_id_frame_is_dropped() {
+            let sid = test_sid("bb22cc33dd44ee55ff66aa11bb22cc33");
+            session_open(&sid);
+            let (handle, _out) = open_session_capturing(&sid).await;
+            let (h, got) = collect_frames(&sid, handle);
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            // A frame for a DIFFERENT (never-minted) id must not reach the drain.
+            deliver_inbound_for(&sid, r#"{"__ipe_session":999999,"payload":42}"#.to_string());
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            assert!(
+                got.lock().unwrap_or_else(|e| e.into_inner()).is_empty(),
+                "foreign session-id frame must not reach the subscriber"
+            );
+            h.abort();
+            session_close(&sid);
+        }
+
+        // A frame arriving AFTER the session is closed is dropped fail-closed.
+        #[tokio::test]
+        async fn closed_session_frame_is_dropped() {
+            let sid = test_sid("cc33dd44ee55ff66aa11bb22cc33dd44");
+            session_open(&sid);
+            let (handle, _out) = open_session_capturing(&sid).await;
+            let (h, got) = collect_frames(&sid, handle);
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            // Close (terminal) evicts the session; a later frame finds no stream.
+            deliver_inbound_for(
+                &sid,
+                format!(r#"{{"__ipe_session":{handle},"__ipe_terminal":true,"payload":0}}"#),
+            );
+            deliver_inbound_for(&sid, format!(r#"{{"__ipe_session":{handle},"payload":5}}"#));
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            assert!(
+                got.lock().unwrap_or_else(|e| e.into_inner()).is_empty(),
+                "a frame after close must be dropped"
+            );
+            h.abort();
+            session_close(&sid);
+        }
+
+        // Overflow past the frame budget terminates the session with a fail-closed
+        // terminal `Err` (the awaiting close Task resolves Err) — NOT a silent drop.
+        #[tokio::test]
+        async fn frame_budget_overflow_terminates_with_err() {
+            let sid = test_sid("dd44ee55ff66aa11bb22cc33dd44ee55");
+            session_open(&sid);
+            // Mint a session directly and shrink its remaining budget to 0 so the
+            // NEXT frame overflows (driving 100k frames in a unit test is wasteful).
+            let handle = match with_session_sid(sid.to_string(), || {
+                js_open_session::<i64, i64>(0_i64, int_decoder())
+            })
+            .await
+            {
+                crate::IpeResult::Ok(h) => h,
+                crate::IpeResult::Err(e) => panic!("open must succeed: {e:?}"),
+            };
+            {
+                let mut g = lock_sessions();
+                if let Some(stream) = g
+                    .get_mut(&sid.0)
+                    .and_then(|p| p.streams.get_mut(&(handle as u64)))
+                {
+                    stream.frames_seen = SESSION_FRAME_BUDGET;
+                }
+            }
+            // Park a close waiter, then push the overflowing frame; the close Task
+            // must resolve Err (session terminated, not a silent drop).
+            let sid_clone = sid.clone();
+            let close = tokio::spawn(with_session_sid(sid.to_string(), move || {
+                js_close_session::<i64, i64>(handle, 0_i64, int_decoder())
+            }));
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            deliver_inbound_for(
+                &sid_clone,
+                format!(r#"{{"__ipe_session":{handle},"payload":1}}"#),
+            );
+            let result = close.await.expect("close task joins");
+            assert!(
+                matches!(result, crate::IpeResult::Err(_)),
+                "budget overflow must terminate the session with Err, got {result:?}"
+            );
+            session_close(&sid);
+        }
+
+        // The open-session ceiling is enforced: once MAX_OPEN_SESSIONS are open,
+        // the next `openSession` is refused immediately with `Err`.
+        #[tokio::test]
+        async fn open_session_ceiling_refuses() {
+            let sid = test_sid("ee55ff66aa11bb22cc33dd44ee55ff66");
+            session_open(&sid);
+            register_out_sink_for(&sid, Arc::new(|_s: &str| {}));
+            for _ in 0..MAX_OPEN_SESSIONS {
+                let r = with_session_sid(sid.to_string(), || {
+                    js_open_session::<i64, i64>(0_i64, int_decoder())
+                })
+                .await;
+                assert!(
+                    matches!(r, crate::IpeResult::Ok(_)),
+                    "under ceiling must open"
+                );
+            }
+            let over = with_session_sid(sid.to_string(), || {
+                js_open_session::<i64, i64>(0_i64, int_decoder())
+            })
+            .await;
+            assert!(
+                matches!(over, crate::IpeResult::Err(_)),
+                "open past the ceiling must be refused with Err"
+            );
+            session_close(&sid);
+        }
+
+        // A clean terminal resolves the `closeSession` Task with the decoded value.
+        #[tokio::test]
+        async fn close_session_resolves_on_terminal() {
+            let sid = test_sid("ff66aa11bb22cc33dd44ee55ff66aa11");
+            session_open(&sid);
+            let (handle, _out) = open_session_capturing(&sid).await;
+            let sid_clone = sid.clone();
+            let close = tokio::spawn(with_session_sid(sid.to_string(), move || {
+                js_close_session::<i64, i64>(handle, 0_i64, int_decoder())
+            }));
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            deliver_inbound_for(
+                &sid_clone,
+                format!(r#"{{"__ipe_session":{handle},"__ipe_terminal":true,"payload":9}}"#),
+            );
+            let result = close.await.expect("close joins");
+            assert!(
+                matches!(result, crate::IpeResult::Ok(9)),
+                "clean terminal must resolve Ok(9), got {result:?}"
+            );
+            session_close(&sid);
+        }
+
+        // A malformed terminal (payload that won't decode) resolves the close Task
+        // fail-closed with `Err`, no panic, no partial value.
+        #[tokio::test]
+        async fn malformed_terminal_resolves_err() {
+            let sid = test_sid("a1a2a3a4b1b2b3b4c1c2c3c4d1d2d3d4");
+            session_open(&sid);
+            let (handle, _out) = open_session_capturing(&sid).await;
+            let sid_clone = sid.clone();
+            let close = tokio::spawn(with_session_sid(sid.to_string(), move || {
+                js_close_session::<i64, i64>(handle, 0_i64, int_decoder())
+            }));
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            deliver_inbound_for(
+                &sid_clone,
+                format!(
+                    r#"{{"__ipe_session":{handle},"__ipe_terminal":true,"payload":"not-an-int"}}"#
+                ),
+            );
+            let result = close.await.expect("close joins");
+            assert!(
+                matches!(result, crate::IpeResult::Err(_)),
+                "malformed terminal must resolve Err, got {result:?}"
+            );
+            session_close(&sid);
+        }
+
+        // Two open sessions are isolated: a frame for A never reaches B's subscriber.
+        #[tokio::test]
+        async fn two_sessions_isolated() {
+            let sid = test_sid("b1b2b3b4c1c2c3c4d1d2d3d4e1e2e3e4");
+            session_open(&sid);
+            let (ha_handle, _oa) = open_session_capturing(&sid).await;
+            let (hb_handle, _ob) = open_session_capturing(&sid).await;
+            let (ha, got_a) = collect_frames(&sid, ha_handle);
+            let (hb, got_b) = collect_frames(&sid, hb_handle);
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            deliver_inbound_for(
+                &sid,
+                format!(r#"{{"__ipe_session":{ha_handle},"payload":11}}"#),
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            assert_eq!(*got_a.lock().unwrap_or_else(|e| e.into_inner()), vec![11]);
+            assert!(
+                got_b.lock().unwrap_or_else(|e| e.into_inner()).is_empty(),
+                "session B must not see session A's frame"
+            );
+            ha.abort();
+            hb.abort();
+            session_close(&sid);
         }
     }
 }

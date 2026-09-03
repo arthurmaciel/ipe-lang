@@ -2952,6 +2952,7 @@ fn ir_type_contains_non_serde(ty: &IrType) -> bool {
         | IrType::WebSocketServer
         | IrType::WebSocketServerCfg
         | IrType::WebReq
+        | IrType::SessionHandle
         | IrType::WebRoute(_)
         // The widget handle is non-serde — it cannot ride a HydrationState island.
         | IrType::CustomElement { .. }

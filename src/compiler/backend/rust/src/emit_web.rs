@@ -978,6 +978,7 @@ const fn ir_type_display_name(ty: &IrType) -> &'static str {
         IrType::Ui { .. } => "Element",
         IrType::UiPlain(_) => "UiAttribute",
         IrType::WebReq => "WebReq",
+        IrType::SessionHandle => "SessionHandle",
         IrType::WebRoute(_) => "WebRoute",
         IrType::CustomElement { .. } => "CustomElement",
         IrType::BackoffStrategy => "BackoffStrategy",

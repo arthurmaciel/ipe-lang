@@ -2381,6 +2381,7 @@ fn ir_type_mentions(ty: &IrType, leaf: &impl Fn(&IrType) -> bool) -> bool {
         | IrType::WebSocketServer
         | IrType::WebSocketServerCfg
         | IrType::WebReq
+        | IrType::SessionHandle
         | IrType::Regex
         | IrType::WebApp
         | IrType::WebViewApp
@@ -3027,6 +3028,7 @@ fn ir_contains_fun(ty: &IrType) -> bool {
         // functions.  `WebReq` is an opaque handle with no `Fn` fields.
         | IrType::UiPlain(_)
         | IrType::WebReq
+        | IrType::SessionHandle
         // `Order` (LT/EQ/GT) is a primitive leaf — no embedded function.
         // `HttpMethod` is a closed 7-variant unit ADT — no embedded function.
         // `Decimal` is a Copy newtype — no embedded function.
@@ -3202,6 +3204,7 @@ fn clone_class(env: CloneEnv<'_>, t: &IrType) -> CloneClass {
         | IrType::Db
         | IrType::UiPlain(_)
         | IrType::WebReq
+        | IrType::SessionHandle
         // The widget handle carries only a `String` tag — `#[derive(Clone)]`,
         // its Clone-ness independent of the (unstored) seal args.
         | IrType::CustomElement { .. }
@@ -6307,6 +6310,7 @@ fn ir_type_mentions_generic(ty: &IrType, tv: Symbol) -> bool {
         | IrType::WebSocketServerCfg
         | IrType::UiPlain(_)
         | IrType::WebReq
+        | IrType::SessionHandle
         | IrType::BackoffStrategy
         | IrType::Order
         | IrType::HttpMethod
@@ -6432,6 +6436,7 @@ fn ir_type_generic_in_decoder(ty: &IrType, tv: Symbol) -> bool {
         | IrType::WebSocketServerCfg
         | IrType::UiPlain(_)
         | IrType::WebReq
+        | IrType::SessionHandle
         | IrType::BackoffStrategy
         | IrType::Order
         | IrType::HttpMethod
@@ -6549,6 +6554,7 @@ fn ir_type_generic_reaches_bare(ty: &IrType, tv: Symbol) -> bool {
         | IrType::WebSocketServerCfg
         | IrType::UiPlain(_)
         | IrType::WebReq
+        | IrType::SessionHandle
         | IrType::BackoffStrategy
         | IrType::Order
         | IrType::HttpMethod
@@ -12223,6 +12229,7 @@ const fn ir_type_label(ty: &IrType) -> &'static str {
         IrType::WebSocketServer => "WebSocketServer",
         IrType::WebSocketServerCfg => "WebSocketServerCfg",
         IrType::WebReq => "WebReq",
+        IrType::SessionHandle => "SessionHandle",
         IrType::WebApp => "WebApp",
         IrType::WebViewApp => "WebViewApp",
         IrType::TuiApp => "TuiApp",
@@ -14496,6 +14503,7 @@ impl<'a> Lowerer<'a> {
             | IrType::WebSocketServerCfg
             | IrType::UiPlain(_)
             | IrType::WebReq
+            | IrType::SessionHandle
             | IrType::SqlFragment
             | IrType::Secret
             | IrType::Path
@@ -19121,6 +19129,8 @@ impl<'a> Lowerer<'a> {
                 }
                 // Ipe.Web opaque types in annotations (mirrors `ir_type_from_ty`).
                 "WebReq" => Ok(IrType::WebReq),
+                // Ipe.Ffi.Js opaque session handle (mirrors `ir_type_from_ty`).
+                "SessionHandle" => Ok(IrType::SessionHandle),
                 // Shape app-leaf opaque types in annotations. Home-guarded on the
                 // empty kernel home: these names are NOT reserved, so a user
                 // `type WebApp = …` is legal and keyed in `enum_variants` under
@@ -20581,6 +20591,8 @@ impl<'a> Lowerer<'a> {
                 "LayoutContext" => Ok(IrType::UiPlain(UiPlain::LayoutContext)),
                 // ── Ipe.Web opaque types ─────────────────────────────────
                 "WebReq" => Ok(IrType::WebReq),
+                // ── Ipe.Ffi.Js opaque session handle ──────────────────────
+                "SessionHandle" => Ok(IrType::SessionHandle),
                 // ── Shape opaque app leaves ───────────────────────────────
                 // Below the `enum_variants` guard AND home-guarded on the empty
                 // kernel home, so a user `type WebApp = …` wins by its own
@@ -23050,6 +23062,71 @@ impl<'a> Lowerer<'a> {
                         )
                     })?;
                     self.reject_illegal_js_port_seal(payload)?;
+                    self.reject_illegal_js_port_seal(decoder)?;
+                    return Ok(Intercepted::Fallthrough(Some(peek)));
+                }
+                // `Js.openSession : openCmd -> Decoder frame -> Task SessionHandle`.
+                // Both the outbound open cmd and the inner type of `Decoder frame`
+                // must be port-seal-legal — the same fail-closed gate as `request`.
+                Callee::Kernel(KernelFn::JsOpenSession) if args.len() == 2 => {
+                    let open_cmd = args.first().ok_or_else(|| {
+                        bug(
+                            "ipe_lower::intercept_web_kernel_call",
+                            "Js.openSession missing open-cmd arg",
+                        )
+                    })?;
+                    let decoder = args.get(1).ok_or_else(|| {
+                        bug(
+                            "ipe_lower::intercept_web_kernel_call",
+                            "Js.openSession missing frame-decoder arg",
+                        )
+                    })?;
+                    self.reject_illegal_js_port_seal(open_cmd)?;
+                    self.reject_illegal_js_port_seal(decoder)?;
+                    return Ok(Intercepted::Fallthrough(Some(peek)));
+                }
+                // `Js.sessionFrames : SessionHandle -> Decoder frame -> (frame ->
+                // msg) -> Sub msg`. The inner type of `Decoder frame` must be
+                // port-seal-legal — the inbound fail-closed gate, same as `subscribe`.
+                Callee::Kernel(KernelFn::JsSessionFrames) if args.len() == 3 => {
+                    let decoder = args.get(1).ok_or_else(|| {
+                        bug(
+                            "ipe_lower::intercept_web_kernel_call",
+                            "Js.sessionFrames missing frame-decoder arg",
+                        )
+                    })?;
+                    self.reject_illegal_js_port_seal(decoder)?;
+                    return Ok(Intercepted::Fallthrough(Some(peek)));
+                }
+                // `Js.sendToSession : SessionHandle -> sessionCmd -> Cmd msg`.
+                // The outbound session cmd must be port-seal-legal.
+                Callee::Kernel(KernelFn::JsSendToSession) if args.len() == 2 => {
+                    let session_cmd = args.get(1).ok_or_else(|| {
+                        bug(
+                            "ipe_lower::intercept_web_kernel_call",
+                            "Js.sendToSession missing session-cmd arg",
+                        )
+                    })?;
+                    self.reject_illegal_js_port_seal(session_cmd)?;
+                    return Ok(Intercepted::Fallthrough(Some(peek)));
+                }
+                // `Js.closeSession : SessionHandle -> closeCmd -> Decoder terminal
+                // -> Task terminal`. Both the outbound close cmd and the inner type
+                // of `Decoder terminal` must be port-seal-legal.
+                Callee::Kernel(KernelFn::JsCloseSession) if args.len() == 3 => {
+                    let close_cmd = args.get(1).ok_or_else(|| {
+                        bug(
+                            "ipe_lower::intercept_web_kernel_call",
+                            "Js.closeSession missing close-cmd arg",
+                        )
+                    })?;
+                    let decoder = args.get(2).ok_or_else(|| {
+                        bug(
+                            "ipe_lower::intercept_web_kernel_call",
+                            "Js.closeSession missing terminal-decoder arg",
+                        )
+                    })?;
+                    self.reject_illegal_js_port_seal(close_cmd)?;
                     self.reject_illegal_js_port_seal(decoder)?;
                     return Ok(Intercepted::Fallthrough(Some(peek)));
                 }
@@ -26472,7 +26549,10 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::WebSocketSendBinary
                 // ── Ipe.Auth.Revocation arity-2 ───────────────
                 | KernelFn::AuthRevocationRevokeUser
-                | KernelFn::AuthRevocationRestoreUser,
+                | KernelFn::AuthRevocationRestoreUser
+                // ── Ipe.Ffi.Js session-stream arity-2 ──────────────────
+                | KernelFn::JsOpenSession
+                | KernelFn::JsSendToSession,
             ) => Ok(2),
             Callee::Kernel(
                 KernelFn::AuthSignToken
@@ -26486,7 +26566,12 @@ impl<'a> Lowerer<'a> {
                 // `closeWithCode : Int -> String -> Int -> Task Error ()`
                 // `subscribeWebSocket : Int -> String -> (any -> msg) -> Sub msg`
                 | KernelFn::WebSocketCloseWithCode
-                | KernelFn::SubSubscribeWebSocket,
+                | KernelFn::SubSubscribeWebSocket
+                // ── Ipe.Ffi.Js session-stream arity-3 ──────────────────
+                // `sessionFrames : SessionHandle -> Decoder frame -> (frame -> msg) -> Sub msg`
+                // `closeSession  : SessionHandle -> closeCmd -> Decoder terminal -> Task terminal`
+                | KernelFn::JsSessionFrames
+                | KernelFn::JsCloseSession,
             ) => Ok(3),
             // ── Ipe.Ui.Lazy ────────────────────────────────────────────
             // lazy  : (a -> Element msg) -> a -> Element msg          — arity 2
@@ -27598,6 +27683,11 @@ impl<'a> Lowerer<'a> {
                     ("Js", "send") => Ok(Callee::Kernel(KernelFn::JsSend)),
                     ("Js", "subscribe") => Ok(Callee::Kernel(KernelFn::JsSubscribe)),
                     ("Js", "request") => Ok(Callee::Kernel(KernelFn::JsRequest)),
+                    // ── Ipe.Ffi.Js session-stream primitive ──────────────────────
+                    ("Js", "openSession") => Ok(Callee::Kernel(KernelFn::JsOpenSession)),
+                    ("Js", "sessionFrames") => Ok(Callee::Kernel(KernelFn::JsSessionFrames)),
+                    ("Js", "sendToSession") => Ok(Callee::Kernel(KernelFn::JsSendToSession)),
+                    ("Js", "closeSession") => Ok(Callee::Kernel(KernelFn::JsCloseSession)),
                     ("Time", "every") => Ok(Callee::Kernel(KernelFn::TimeEvery)),
                     // ── Ipe.Http.Server kernels ─────────────────────────────
                     ("Server", "get") => Ok(Callee::Kernel(KernelFn::ServerGet)),
@@ -30411,6 +30501,7 @@ fn collect_ir_generic_syms(ty: &IrType, out: &mut BTreeSet<Symbol>) {
         | IrType::UiPlain(_)
         | IrType::Decimal
         | IrType::WebReq
+        | IrType::SessionHandle
         | IrType::SqlFragment
         | IrType::Secret
         | IrType::Path
@@ -32985,6 +33076,7 @@ mod tests {
             | ipe_ir::IrType::WebSocketServerCfg
             | ipe_ir::IrType::UiPlain(_)
             | ipe_ir::IrType::WebReq
+            | ipe_ir::IrType::SessionHandle
             | ipe_ir::IrType::SqlFragment
             | ipe_ir::IrType::Secret
             | ipe_ir::IrType::Path

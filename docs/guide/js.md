@@ -32,6 +32,26 @@ Three knots.
   is expressed by *naming* it (`type RawJson = RawJson String`), never left an
   untyped hole.
 
+## Four port shapes
+
+The same SEAL governs four transport shapes, chosen by the interaction:
+
+- **`send : a -> Cmd msg`** — a fire-and-forget outbound effect.
+- **`subscribe : Decoder a -> (a -> msg) -> Sub msg`** — a free-broadcast inbound
+  stream (a latest-value sensor).
+- **`request : a -> Decoder b -> Task b`** — a correlated *one-shot*
+  request/reply, resolved as a `Task`.
+- **A session** — a correlated, **bounded**, *many-frame* lifecycle
+  (`open → N frames → close → terminal`). `openSession` mints an opaque
+  `SessionHandle` (no constructor — you can only address a session you opened),
+  `sessionFrames` streams that handle's inbound frames through the seal gate,
+  `sendToSession` sends a control cmd, and `closeSession` awaits a terminal reply.
+  Bounded by construction: a ceiling caps open sessions, a per-session frame
+  budget + deadline cap one session, and an overflow/timeout resolves `closeSession`
+  with a fail-closed terminal `Err` — an ordered stream never silently drops a
+  frame. Use a session for a correlated ordered stream (a media recording, a
+  progressive host operation); keep a free latest-value sensor a `subscribe`.
+
 ## A worked example: an outbound effect and a guarded inbound stream
 
 The example under
@@ -86,9 +106,14 @@ transitions you deliberately exposed.
 
 ## References
 
-- **Per-symbol reference:** `ipe doc Ipe.Js` — `send` (outbound one-shot effect)
-  and `subscribe` (guarded inbound stream). A module whose reachable code uses a
-  port discloses the `js-port` capability.
+- **Per-symbol reference:** `ipe doc Ipe.Js` — `send` (outbound one-shot effect),
+  `subscribe` (guarded inbound stream), `request` (correlated one-shot), and the
+  session ops `openSession` / `sessionFrames` / `sendToSession` / `closeSession`
+  (a correlated bounded stream). A module whose reachable code uses a port
+  discloses the `js-port` capability.
+- **Generic session example:**
+  [`examples/wasm/session-stream`](../../examples/wasm/session-stream/src/Main.ipe)
+  — a demo ticker session over a developer echo handler.
 - **Sibling guides:** [The Elm Architecture](the-elm-architecture.md) — the
   `Cmd`/`Sub` machinery ports reuse. [Codec](codec.md) — the typed decode
   discipline `subscribe`'s gate applies at the boundary. [Result](result.md) and

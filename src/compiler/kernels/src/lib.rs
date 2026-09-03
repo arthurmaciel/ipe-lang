@@ -400,6 +400,11 @@ pub enum BuiltinTag {
     /// `WebReq` — the opaque request handle threaded through `Web.app`'s `init`
     /// field. Nullary.
     WebReq,
+    /// `SessionHandle` — the opaque handle addressing one bounded `Ipe.Ffi.Js`
+    /// session stream. Nullary. Obtained ONLY from `Js.openSession`; no Ipê
+    /// constructor, so cross-handle addressing is unrepresentable. Backed by the
+    /// runtime session id (`i64`).
+    SessionHandle,
     /// `WebRoute` — the route descriptor `WebRoute page`, applied to the page
     /// type. Carried by the `routes` field of the `Web.app` cfg record.
     WebRoute,
@@ -2233,6 +2238,16 @@ pub enum StdlibKernel {
     JsSend,      // a -> Cmd msg (arity 1)
     JsSubscribe, // Decoder a -> (a -> msg) -> Sub msg (arity 2)
     JsRequest,   // a -> Decoder b -> Task b (arity 2) — correlated one-shot request/reply
+    // ── Ipe.Ffi.Js session-stream primitive ──────────────────────────────────
+    // The correlated, bounded, session-scoped stream: open → N frames → close →
+    // terminal. Generalises `JsRequest`'s one-shot correlation to a bounded
+    // multi-frame lifecycle over the SAME private-id routing + seal gate. All run
+    // on the wasm client, like the other ports; the frame/cmd/terminal types are
+    // seal-legal (IPE-N0039). `SessionHandle` is the opaque address (no user ctor).
+    JsOpenSession,   // openCmd -> Decoder frame -> Task SessionHandle (arity 2)
+    JsSessionFrames, // SessionHandle -> (frame -> msg) -> Sub msg (arity 2)
+    JsSendToSession, // SessionHandle -> sessionCmd -> Cmd msg (arity 2)
+    JsCloseSession,  // SessionHandle -> closeCmd -> Decoder terminal -> Task terminal (arity 3)
     // ── Ipe.Env — build-time-embedded public config (wasm M5 residual) ──
     // `Env.public "KEY"` resolves ONLY for names in the project's `[wasm]
     // publicEnv` allowlist (`package.ipe`, validated against the secret-name
@@ -4242,6 +4257,10 @@ impl StdlibKernel {
             Self::JsSend => d("Js", "send", 1, Tea, "js_send"),
             Self::JsSubscribe => d("Js", "subscribe", 2, Tea, "js_subscribe"),
             Self::JsRequest => d("Js", "request", 2, Tea, "js_request"),
+            Self::JsOpenSession => d("Js", "openSession", 2, Tea, "js_open_session"),
+            Self::JsSessionFrames => d("Js", "sessionFrames", 3, Tea, "js_session_frames"),
+            Self::JsSendToSession => d("Js", "sendToSession", 2, Tea, "js_send_to_session"),
+            Self::JsCloseSession => d("Js", "closeSession", 3, Tea, "js_close_session"),
             Self::EnvPublic => d("Env", "public", 1, Pure, "env_public"),
             // ── Ipe.Ui.Region ──────────────────────────────────────────────
             Self::RegionMainContent => d("Region", "mainContent", 0, Ui, "ui_region_main_content_"),
@@ -5512,6 +5531,10 @@ impl StdlibKernel {
         Self::JsSend,
         Self::JsSubscribe,
         Self::JsRequest,
+        Self::JsOpenSession,
+        Self::JsSessionFrames,
+        Self::JsSendToSession,
+        Self::JsCloseSession,
         // ── Ipe.Env — build-time-embedded public config ──────────────
         Self::EnvPublic,
         // ── Ipe.Ui.Region ──────────────────────────────────────────────
@@ -7300,6 +7323,32 @@ impl StdlibKernel {
         // `request : a -> Decoder b -> Task b` — correlated one-shot port request.
         // Outbound payload `a` = var 0, decoded reply `b` = var 1.
         const JS_REQUEST: TyShape = TyShape::Fun(&A, &TyShape::Fun(&DEC_B, &TASK_B));
+        // Ipe.Ffi.Js session-stream primitive. `SessionHandle` is the opaque leaf
+        // address (nullary). Same seal-legality discipline as the other ports (the
+        // concrete `openCmd`/`frame`/`sessionCmd`/`closeCmd`/`terminal` are checked
+        // at lowering, not as a scheme bound).
+        //   `openSession   : openCmd -> Decoder frame -> Task SessionHandle`
+        //       openCmd = var 0 (`A`), frame = var 1 (`B`).
+        //   `sessionFrames : SessionHandle -> (frame -> msg) -> Sub msg`
+        //       frame = var 0 (`A`), msg = var 1 (`B`).
+        //   `sendToSession : SessionHandle -> sessionCmd -> Cmd msg`
+        //       sessionCmd = var 0 (`A`), msg = var 1 (`B`).
+        //   `closeSession  : SessionHandle -> closeCmd -> Decoder terminal -> Task terminal`
+        //       closeCmd = var 0 (`A`), terminal = var 1 (`B`).
+        const SESSION_HANDLE: TyShape = TyShape::Con(BuiltinTag::SessionHandle, &[]);
+        const TASK_SESSION_HANDLE: TyShape = TyShape::Con(BuiltinTag::Task, &[SESSION_HANDLE]);
+        const JS_OPEN_SESSION: TyShape =
+            TyShape::Fun(&A, &TyShape::Fun(&DEC_B, &TASK_SESSION_HANDLE));
+        const JS_SESSION_FRAMES: TyShape = TyShape::Fun(
+            &SESSION_HANDLE,
+            &TyShape::Fun(&DEC_A, &TyShape::Fun(&A_TO_B, &SUB_B)),
+        );
+        const JS_SEND_TO_SESSION: TyShape =
+            TyShape::Fun(&SESSION_HANDLE, &TyShape::Fun(&A, &CMD_B));
+        const JS_CLOSE_SESSION: TyShape = TyShape::Fun(
+            &SESSION_HANDLE,
+            &TyShape::Fun(&A, &TyShape::Fun(&DEC_B, &TASK_B)),
+        );
         // Ws server.
         const WS_ON_CB_TO_CFG: TyShape = TyShape::Fun(
             &TyShape::Fun(&WS_SERVER, &TASK_UNIT),
@@ -9002,6 +9051,10 @@ impl StdlibKernel {
             Self::JsSend => Some(&JS_SEND),
             Self::JsSubscribe => Some(&JS_SUBSCRIBE),
             Self::JsRequest => Some(&JS_REQUEST),
+            Self::JsOpenSession => Some(&JS_OPEN_SESSION),
+            Self::JsSessionFrames => Some(&JS_SESSION_FRAMES),
+            Self::JsSendToSession => Some(&JS_SEND_TO_SESSION),
+            Self::JsCloseSession => Some(&JS_CLOSE_SESSION),
 
             // ── Ws server (opaque handle / cfg). ──
             Self::WsDefaultCfg => Some(&WS_SERVER_CFG),
@@ -9731,7 +9784,13 @@ impl StdlibKernel {
             // uncharacterised `:raw` floor — the reachability floor no port slips
             // below. A characterised `Ipe.Browser.<Api>` import adds its specific
             // web axis on top, import-derived (see the whole-program scan).
-            Self::JsSend | Self::JsSubscribe | Self::JsRequest => Some(Capability::JsPort(WebCapability::Raw)),
+            Self::JsSend
+            | Self::JsSubscribe
+            | Self::JsRequest
+            | Self::JsOpenSession
+            | Self::JsSessionFrames
+            | Self::JsSendToSession
+            | Self::JsCloseSession => Some(Capability::JsPort(WebCapability::Raw)),
             Self::TimeNow
             | Self::TimeSleep
             | Self::TimeUnixMillis
@@ -10813,6 +10872,10 @@ impl StdlibKernel {
                 | Self::JsSend
                 | Self::JsSubscribe
                 | Self::JsRequest
+                | Self::JsOpenSession
+                | Self::JsSessionFrames
+                | Self::JsSendToSession
+                | Self::JsCloseSession
         )
     }
 
@@ -12277,6 +12340,10 @@ impl StdlibKernel {
                     | Self::JsSend
                     | Self::JsSubscribe
                     | Self::JsRequest
+                    | Self::JsOpenSession
+                    | Self::JsSessionFrames
+                    | Self::JsSendToSession
+                    | Self::JsCloseSession
             ),
             KernelClass::Pure => {
                 // `StringToUpperIn` / `StringToLowerIn` require ICU4X
@@ -12677,6 +12744,24 @@ mod tests {
         );
         assert_eq!(
             StdlibKernel::JsRequest.capability(),
+            Some(Capability::JsPort(WebCapability::Raw))
+        );
+        // The session-stream ops exchange typed data with page JS through the same
+        // seal gate → the same `js-port:raw` uncharacterised-floor axis.
+        assert_eq!(
+            StdlibKernel::JsOpenSession.capability(),
+            Some(Capability::JsPort(WebCapability::Raw))
+        );
+        assert_eq!(
+            StdlibKernel::JsSessionFrames.capability(),
+            Some(Capability::JsPort(WebCapability::Raw))
+        );
+        assert_eq!(
+            StdlibKernel::JsSendToSession.capability(),
+            Some(Capability::JsPort(WebCapability::Raw))
+        );
+        assert_eq!(
+            StdlibKernel::JsCloseSession.capability(),
             Some(Capability::JsPort(WebCapability::Raw))
         );
     }

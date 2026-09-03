@@ -281,6 +281,14 @@ pub const RESERVED_BUILTIN_TYPES: &[&str] = &[
     "Description",
     "LayoutContext",
     "WebReq",
+    // `Ipe.Ffi.Js`'s opaque session-stream handle — reserved for the same reason as
+    // the other security-tier opaque handles (`Principal` / `Connection`): the
+    // handle is the SOLE address of a bounded session, obtained only from
+    // `Js.openSession`, and a user `type SessionHandle …` could forge a look-alike
+    // to address a session it never opened, defeating the fail-closed cross-handle
+    // routing. It has no Ipê constructor, so reserving the name keeps the mint the
+    // sole origin. Its lowerer arm sits ABOVE the `enum_variants` guard.
+    "SessionHandle",
 ];
 
 /// Extra built-in type names that are handled by the lowerer's explicit arms
