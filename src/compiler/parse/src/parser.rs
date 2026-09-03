@@ -127,6 +127,8 @@ const fn tok_kind(t: &Tok) -> TokenKind {
         Tok::PipePipe => TokenKind::PipePipe,
         Tok::PipeGt => TokenKind::PipeGt,
         Tok::LtPipe => TokenKind::LtPipe,
+        Tok::PipeEq => TokenKind::PipeEq,
+        Tok::PipeDot => TokenKind::PipeDot,
         Tok::GtGt => TokenKind::GtGt,
         Tok::LtLt => TokenKind::LtLt,
         Tok::Ident(_) => TokenKind::Ident,
@@ -1341,6 +1343,8 @@ impl<'a> Parser<'a> {
             Tok::GtGt => ">>",
             Tok::LtLt => "<<",
             Tok::ColonColon => "::",
+            Tok::PipeEq => "|=",
+            Tok::PipeDot => "|.",
             _ => return None,
         };
         Some((op, tok.span))

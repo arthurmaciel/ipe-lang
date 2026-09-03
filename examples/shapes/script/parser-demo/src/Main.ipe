@@ -27,19 +27,17 @@ type Command
     | Ping
 
 
--- `(x,y)` — open paren, an int, a comma, an int, a close paren. `ignore` drops
--- the leading `(`; `map2` combines the two ints past the comma; `keep` runs the
--- trailing `)` for effect and keeps the point.
+-- `(x,y)` — open paren, an int, a comma, an int, a close paren.
+-- `|=` (keep right) drops the `(` and keeps what follows;
+-- `|.` (keep left) keeps the Point and discards the closing `)`.
+-- `symbol "," |= int` skips the comma and keeps the int — the right operand.
 point : Parser Point
 point =
-    Parser.ignore (Parser.symbol "(")
-        (Parser.keep
-            (Parser.map2 Point
-                Parser.int
-                (Parser.ignore (Parser.symbol ",") Parser.int)
-            )
-            (Parser.symbol ")")
-        )
+    Parser.symbol "("
+        |= Parser.map2 Point
+            Parser.int
+            (Parser.symbol "," |= Parser.int)
+        |. Parser.symbol ")"
 
 
 -- `move (x,y)` or `ping` — a keyword chooses the branch, and a nested `andThen`

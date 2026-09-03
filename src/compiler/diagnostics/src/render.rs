@@ -2218,6 +2218,8 @@ const fn token_kind_str(t: TokenKind) -> &'static str {
         TokenKind::PipePipe => "`||`",
         TokenKind::PipeGt => "`|>`",
         TokenKind::LtPipe => "`<|`",
+        TokenKind::PipeEq => "`|=`",
+        TokenKind::PipeDot => "`|.`",
         TokenKind::GtGt => "`>>`",
         TokenKind::LtLt => "`<<`",
         TokenKind::Ident => "an identifier",
