@@ -144,7 +144,7 @@ whenever the program ships a browser widget (`Ui.widget`): the served JavaScript
 SRI-pinned and CSP-constrained, but the sandbox protects the server, not
 third-party browser JS — a widget is declared trust in the package author.
 
-Run `ipe capabilities --help` for the full model.
+Run `ipe capabilities --help` for the full model. See [docs/reference/capabilities.md](docs/reference/capabilities.md) for the complete capability reference.
 
 <!--
 ## Dependencies
