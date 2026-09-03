@@ -553,6 +553,12 @@ pub struct SessionEntry<Model, Msg> {
     /// when the `debugger` feature is active; absent builds pay no cost.
     #[cfg(feature = "debugger")]
     pub history: crate::debugger::RecordBuffer<Msg, Model>,
+    /// Current scrub cursor for `back`/`forward` stepping.
+    ///
+    /// `None` = live mode (no active time-travel); `Some(n)` = the last step
+    /// committed by `step_to`/`back`/`forward`. Reset to `None` on `reset`.
+    #[cfg(feature = "debugger")]
+    pub debug_cursor: Option<usize>,
 }
 
 /// SSE patches envelope. The browser client (`live/client.js`) consumes the
@@ -2225,6 +2231,8 @@ mod handlers {
             msg_tx: msg_tx.clone(),
             #[cfg(feature = "debugger")]
             history: history_init,
+            #[cfg(feature = "debugger")]
+            debug_cursor: None,
         }));
         st.store.set(&sid, entry.clone()).await;
 
@@ -3429,6 +3437,7 @@ mod handlers {
             let mut e = handle.lock().unwrap_or_else(|e| e.into_inner());
             e.model = init_model.clone();
             e.history.reset_to_init(init_model);
+            e.debug_cursor = None;
         }
         axum::http::StatusCode::OK.into_response()
     }
@@ -3493,6 +3502,226 @@ mod handlers {
             )
                 .into_response(),
         }
+    }
+
+    // ── POST /_ipe/debug/step-to ──────────────────────────────────────────
+    // Commit time-travel to an absolute step index N: set the live model to
+    // the fold of the first N+1 messages, discard the tail (fork), and update
+    // the session's debug cursor to N.
+    //
+    // Request body: `{"index": N}` — target step (0-indexed in the retained
+    // window). Out-of-range N returns 404. The CSRF middleware validates
+    // `X-Ipe-Csrf` before this handler runs.
+    //
+    // Response: `{"body": "<html>", "cursor": N, "total": T}`.
+    #[cfg(feature = "debugger")]
+    pub(super) async fn step_to_handler<Model, Msg, FInit, FUpdate, FView, FSubs>(
+        State(st): State<WebState<Model, Msg, FInit, FUpdate, FView, FSubs>>,
+        headers: axum::http::HeaderMap,
+        axum::Json(body): axum::Json<serde_json::Value>,
+    ) -> axum::response::Response
+    where
+        Model: Clone + PartialEq + Send + 'static,
+        Msg: Clone + Send + std::fmt::Debug + 'static,
+        FInit: Send + Sync + 'static,
+        FUpdate: Fn(Msg, Model) -> (Model, crate::tea::IpeCmd<Msg>) + Send + Sync + 'static,
+        FView: Fn(Model) -> crate::html::Html<Msg> + Send + Sync + 'static,
+        FSubs: Send + Sync + 'static,
+    {
+        use axum::response::IntoResponse;
+        let sid = match sid_from_cookie(&headers) {
+            Some(s) => s,
+            None => {
+                return (axum::http::StatusCode::UNAUTHORIZED, "no session").into_response();
+            }
+        };
+        let handle = match st.store.get(&sid).await {
+            Some(store::StoreHit::Web(h)) => h,
+            _ => {
+                return (axum::http::StatusCode::NOT_FOUND, "session not found").into_response();
+            }
+        };
+        let requested_n = match body.get("index").and_then(|v| v.as_u64()) {
+            Some(n) => n as usize,
+            None => {
+                return (axum::http::StatusCode::BAD_REQUEST, "missing index").into_response();
+            }
+        };
+        let (model_at_n, cursor, total) = {
+            let mut e = handle.lock().unwrap_or_else(|p| p.into_inner());
+            let total = e.history.len();
+            let stepped = e
+                .history
+                .step_to(requested_n, &|m, mdl| (*st.update)(m, mdl));
+            match stepped {
+                Some(m) => {
+                    e.model = m.clone();
+                    e.debug_cursor = Some(requested_n);
+                    (m, requested_n, total)
+                }
+                None => {
+                    return (axum::http::StatusCode::NOT_FOUND, "step out of range")
+                        .into_response();
+                }
+            }
+        };
+        let mut tree = (st.view)(model_at_n);
+        assign_ipe_ids(&mut tree, "r");
+        style_inject::apply_style_injections(&mut tree);
+        let html_body = render_html(&tree);
+        let resp_json = serde_json::json!({
+            "body":   html_body,
+            "cursor": cursor,
+            "total":  total,
+        });
+        (
+            axum::http::StatusCode::OK,
+            [(axum::http::header::CONTENT_TYPE, "application/json")],
+            resp_json.to_string(),
+        )
+            .into_response()
+    }
+
+    // ── POST /_ipe/debug/back ─────────────────────────────────────────────
+    // Step the debug cursor backward by one: equivalent to step_to(cur - 1).
+    // Clamps to 0 when already at the first step. No request body required.
+    //
+    // Response: `{"body": "<html>", "cursor": N, "total": T}`.
+    #[cfg(feature = "debugger")]
+    pub(super) async fn back_handler<Model, Msg, FInit, FUpdate, FView, FSubs>(
+        State(st): State<WebState<Model, Msg, FInit, FUpdate, FView, FSubs>>,
+        headers: axum::http::HeaderMap,
+    ) -> axum::response::Response
+    where
+        Model: Clone + PartialEq + Send + 'static,
+        Msg: Clone + Send + std::fmt::Debug + 'static,
+        FInit: Send + Sync + 'static,
+        FUpdate: Fn(Msg, Model) -> (Model, crate::tea::IpeCmd<Msg>) + Send + Sync + 'static,
+        FView: Fn(Model) -> crate::html::Html<Msg> + Send + Sync + 'static,
+        FSubs: Send + Sync + 'static,
+    {
+        use axum::response::IntoResponse;
+        let sid = match sid_from_cookie(&headers) {
+            Some(s) => s,
+            None => {
+                return (axum::http::StatusCode::UNAUTHORIZED, "no session").into_response();
+            }
+        };
+        let handle = match st.store.get(&sid).await {
+            Some(store::StoreHit::Web(h)) => h,
+            _ => {
+                return (axum::http::StatusCode::NOT_FOUND, "session not found").into_response();
+            }
+        };
+        let (model_at_n, cursor, total) = {
+            let mut e = handle.lock().unwrap_or_else(|p| p.into_inner());
+            let len = e.history.len();
+            if len == 0 {
+                return (axum::http::StatusCode::NOT_FOUND, "no history").into_response();
+            }
+            // Cursor starts at the last retained step when not yet set.
+            let current = e.debug_cursor.unwrap_or(len - 1);
+            let target = current.saturating_sub(1);
+            match e.history.step_to(target, &|m, mdl| (*st.update)(m, mdl)) {
+                Some(m) => {
+                    e.model = m.clone();
+                    e.debug_cursor = Some(target);
+                    (m, target, len)
+                }
+                None => {
+                    return (axum::http::StatusCode::NOT_FOUND, "step out of range")
+                        .into_response();
+                }
+            }
+        };
+        let mut tree = (st.view)(model_at_n);
+        assign_ipe_ids(&mut tree, "r");
+        style_inject::apply_style_injections(&mut tree);
+        let html_body = render_html(&tree);
+        let resp_json = serde_json::json!({
+            "body":   html_body,
+            "cursor": cursor,
+            "total":  total,
+        });
+        (
+            axum::http::StatusCode::OK,
+            [(axum::http::header::CONTENT_TYPE, "application/json")],
+            resp_json.to_string(),
+        )
+            .into_response()
+    }
+
+    // ── POST /_ipe/debug/forward ──────────────────────────────────────────
+    // Step the debug cursor forward by one: equivalent to step_to(cur + 1),
+    // clamped to the last retained step. No request body required.
+    //
+    // Note: after a step_to/back call the tail is discarded, so forward can
+    // only reach steps that were not yet truncated. When the cursor is already
+    // at the tail this is a no-op (returns the same model).
+    //
+    // Response: `{"body": "<html>", "cursor": N, "total": T}`.
+    #[cfg(feature = "debugger")]
+    pub(super) async fn forward_handler<Model, Msg, FInit, FUpdate, FView, FSubs>(
+        State(st): State<WebState<Model, Msg, FInit, FUpdate, FView, FSubs>>,
+        headers: axum::http::HeaderMap,
+    ) -> axum::response::Response
+    where
+        Model: Clone + PartialEq + Send + 'static,
+        Msg: Clone + Send + std::fmt::Debug + 'static,
+        FInit: Send + Sync + 'static,
+        FUpdate: Fn(Msg, Model) -> (Model, crate::tea::IpeCmd<Msg>) + Send + Sync + 'static,
+        FView: Fn(Model) -> crate::html::Html<Msg> + Send + Sync + 'static,
+        FSubs: Send + Sync + 'static,
+    {
+        use axum::response::IntoResponse;
+        let sid = match sid_from_cookie(&headers) {
+            Some(s) => s,
+            None => {
+                return (axum::http::StatusCode::UNAUTHORIZED, "no session").into_response();
+            }
+        };
+        let handle = match st.store.get(&sid).await {
+            Some(store::StoreHit::Web(h)) => h,
+            _ => {
+                return (axum::http::StatusCode::NOT_FOUND, "session not found").into_response();
+            }
+        };
+        let (model_at_n, cursor, total) = {
+            let mut e = handle.lock().unwrap_or_else(|p| p.into_inner());
+            let len = e.history.len();
+            if len == 0 {
+                return (axum::http::StatusCode::NOT_FOUND, "no history").into_response();
+            }
+            let current = e.debug_cursor.unwrap_or(len - 1);
+            // Clamp: cannot go past the last retained step.
+            let target = (current + 1).min(len - 1);
+            match e.history.step_to(target, &|m, mdl| (*st.update)(m, mdl)) {
+                Some(m) => {
+                    e.model = m.clone();
+                    e.debug_cursor = Some(target);
+                    (m, target, len)
+                }
+                None => {
+                    return (axum::http::StatusCode::NOT_FOUND, "step out of range")
+                        .into_response();
+                }
+            }
+        };
+        let mut tree = (st.view)(model_at_n);
+        assign_ipe_ids(&mut tree, "r");
+        style_inject::apply_style_injections(&mut tree);
+        let html_body = render_html(&tree);
+        let resp_json = serde_json::json!({
+            "body":   html_body,
+            "cursor": cursor,
+            "total":  total,
+        });
+        (
+            axum::http::StatusCode::OK,
+            [(axum::http::header::CONTENT_TYPE, "application/json")],
+            resp_json.to_string(),
+        )
+            .into_response()
     }
 }
 
@@ -3726,6 +3955,21 @@ where
     let router = router.route(
         "/_ipe/debug/export",
         get(handlers::export_handler::<Model, Msg, FInit, FUpdate, FView, FSubs>),
+    );
+    #[cfg(feature = "debugger")]
+    let router = router.route(
+        "/_ipe/debug/step-to",
+        post(handlers::step_to_handler::<Model, Msg, FInit, FUpdate, FView, FSubs>),
+    );
+    #[cfg(feature = "debugger")]
+    let router = router.route(
+        "/_ipe/debug/back",
+        post(handlers::back_handler::<Model, Msg, FInit, FUpdate, FView, FSubs>),
+    );
+    #[cfg(feature = "debugger")]
+    let router = router.route(
+        "/_ipe/debug/forward",
+        post(handlers::forward_handler::<Model, Msg, FInit, FUpdate, FView, FSubs>),
     );
     // Dev-only appearance-hot-swap control leg. MOUNTED only when the hot
     // overlay is active (flag on AND non-production), so the route is entirely
@@ -4023,6 +4267,8 @@ mod reload_push_tests {
             msg_tx: tx,
             #[cfg(feature = "debugger")]
             history: crate::debugger::RecordBuffer::new((), crate::debugger::DEFAULT_HISTORY_CAP),
+            #[cfg(feature = "debugger")]
+            debug_cursor: None,
         }))
     }
 
@@ -4133,6 +4379,8 @@ mod hot_appearance_push_tests {
                 count,
                 crate::debugger::DEFAULT_HISTORY_CAP,
             ),
+            #[cfg(feature = "debugger")]
+            debug_cursor: None,
         }))
     }
 
@@ -4664,6 +4912,8 @@ mod sse_reconnect_reconcile_tests {
             msg_tx,
             #[cfg(feature = "debugger")]
             history: crate::debugger::RecordBuffer::new(page, crate::debugger::DEFAULT_HISTORY_CAP),
+            #[cfg(feature = "debugger")]
+            debug_cursor: None,
         }));
 
         (entry, route_resolver, route_matched, view)
@@ -4770,6 +5020,8 @@ mod sse_reconnect_reconcile_tests {
                 TestPage::Home,
                 crate::debugger::DEFAULT_HISTORY_CAP,
             ),
+            #[cfg(feature = "debugger")]
+            debug_cursor: None,
         }));
 
         reconcile(&entry, &route_matched, &route_resolver, &view, "/");
@@ -5206,6 +5458,8 @@ mod watch_status_handler_tests {
             msg_tx,
             #[cfg(feature = "debugger")]
             history: crate::debugger::RecordBuffer::new((), crate::debugger::DEFAULT_HISTORY_CAP),
+            #[cfg(feature = "debugger")]
+            debug_cursor: None,
         }))
     }
 
