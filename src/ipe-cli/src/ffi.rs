@@ -503,7 +503,7 @@ pub fn prepare_ffi(
     let unify = ipe_ffi::unify::unify_foreign_nominals(&mut catalog);
     // Scan for asserted calls BEFORE interface injection, while `sources`
     // holds only project (and stdlib) modules.
-    let (asserted, consts) = scan_asserted(sources, &catalog)?;
+    let ScannedFfi { asserted, consts } = scan_asserted(sources, &catalog)?;
     let cache_hint = find_cache_root(blame_path)?.unwrap_or_default();
     let mut injected = inject_interfaces(sources, &catalog, &cache_hint)?;
     let mut emit = assemble_emit(&catalog)?;
@@ -561,17 +561,19 @@ pub fn prepare_ffi(
 /// # Errors
 /// [`CliError::Pipeline`] (IPE-N0038, span-attributed) for a malformed site;
 /// [`CliError::UsageOwned`] (IPE-F4414) for a refused assertion.
-#[allow(clippy::type_complexity)] // one pass produces both native surfaces; splitting the scan would re-parse every module
+/// The two native-binding surfaces one scan pass produces: forwarder calls
+/// (`Rust.fn` / `Rust.Ffi.call`) and bare-scalar constant reads (`Rust.const`).
+/// A single pass over the modules yields both — splitting the scan would
+/// re-parse every module.
+struct ScannedFfi {
+    asserted: Vec<ipe_ffi::asserted::AssertedSpec>,
+    consts: Vec<ipe_ffi::asserted::ConstSpec>,
+}
+
 fn scan_asserted(
     sources: &BTreeMap<Vec<String>, (PathBuf, String)>,
     catalog: &[InstalledCrate],
-) -> Result<
-    (
-        Vec<ipe_ffi::asserted::AssertedSpec>,
-        Vec<ipe_ffi::asserted::ConstSpec>,
-    ),
-    CliError,
-> {
+) -> Result<ScannedFfi, CliError> {
     let mut specs = Vec::new();
     let mut const_specs = Vec::new();
     for (file, text) in sources.values() {
@@ -614,7 +616,7 @@ fn scan_asserted(
         ipe_ffi::asserted::dedupe(specs).map_err(|d| CliError::UsageOwned(d.to_string()))?;
     let consts = ipe_ffi::asserted::dedupe_consts(const_specs)
         .map_err(|d| CliError::UsageOwned(d.to_string()))?;
-    Ok((asserted, consts))
+    Ok(ScannedFfi { asserted, consts })
 }
 
 /// Locate the `ipe-ffi-inspector` binary: beside the running `ipe`
