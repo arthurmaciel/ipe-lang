@@ -3890,10 +3890,11 @@ fn emit_ui_template(
             match hole.kind {
                 crate::emit_ui_template::HoleKind::Element => elem.push(code),
                 crate::emit_ui_template::HoleKind::Children => kids.push(code),
-                crate::emit_ui_template::HoleKind::ControlFlow => {
-                    // ControlFlow fills live in cf_holes, not holes — this arm
-                    // is unreachable by construction (the partition keeps them
-                    // separate).
+                crate::emit_ui_template::HoleKind::ControlFlow
+                | crate::emit_ui_template::HoleKind::FloatAttr => {
+                    // ControlFlow fills live in cf_holes; FloatAttr fills live in
+                    // float_attr_holes — neither can appear in `partition.holes`
+                    // by construction.
                 }
             }
         }
@@ -3921,6 +3922,17 @@ fn emit_ui_template(
     } else {
         compile_list_fills(ctx, &partition.list_holes, indent, child, generics)?
     };
+    // Compile float-attr hole fills. Each expression evaluates to an `f64`
+    // (Ipê's `Float` type) — no cast needed, `f64` is the runtime's slot type.
+    let float_attr_fills: Vec<String> = if partition.float_attr_holes.is_empty() {
+        Vec::new()
+    } else {
+        let mut v = Vec::with_capacity(partition.float_attr_holes.len());
+        for fa in &partition.float_attr_holes {
+            v.push(emit_expr_at(ctx, &fa.expr, indent, child, generics)?);
+        }
+        v
+    };
     Ok(Some(select_ui_materializer_call(
         slot,
         &CompiledFills {
@@ -3929,6 +3941,7 @@ fn emit_ui_template(
             handler_msgs: &handler_msgs,
             cf_selectors: &cf_selectors,
             list_fills: &list_fills,
+            float_attr_fills: &float_attr_fills,
         },
     )))
 }
@@ -3940,11 +3953,32 @@ struct CompiledFills<'a> {
     handler_msgs: &'a [String],
     cf_selectors: &'a [String],
     list_fills: &'a [String],
+    float_attr_fills: &'a [String],
 }
 
 /// Select and format the runtime materializer call, choosing the front door
 /// based on which fill vecs are non-empty.
 fn select_ui_materializer_call(slot: usize, f: &CompiledFills<'_>) -> String {
+    // Float-attr fills are purely additive (attr-level); route to the float-attr
+    // front door when float fills are the ONLY non-base fills present. For the
+    // common case (float attrs alone, no other structural hole kinds), this is the
+    // correct single-call path. When float fills appear alongside other hole kinds
+    // (structurally unusual), the base materializer call is used — the float-attr
+    // holes resolve to `NoAttribute` (fail-closed), which is always safe.
+    let has_float = !f.float_attr_fills.is_empty();
+    let has_only_float = has_float
+        && f.list_fills.is_empty()
+        && f.cf_selectors.is_empty()
+        && f.handler_msgs.is_empty();
+    if has_only_float {
+        return format!(
+            "ipe_runtime::ui::template::materialize_ui_template_with_float_attr_holes_str(\
+             __ipe_lit.get({slot}), vec![{}], vec![{}], vec![{}])",
+            f.element_fills.join(", "),
+            f.children_fills.join(", "),
+            f.float_attr_fills.join(", "),
+        );
+    }
     if !f.list_fills.is_empty() {
         format!(
             "ipe_runtime::ui::template::materialize_ui_template_with_list_holes_str(\

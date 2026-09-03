@@ -216,6 +216,18 @@ pub enum CompileUiAttr {
         event: &'static str,
         handler_id: u32,
     },
+    /// A model-dependent numeric (`f64`) attribute value reduced to an opaque
+    /// HOLE: the attribute discriminant name and a compile-time-stable hole id.
+    /// Mirrors the runtime `UiTemplateAttr::AttrHoleFloat`. The concrete `f64`
+    /// is resolved per render from the `float_attr_fills` slice the emitted
+    /// `view` supplies — the model-dependent value lives only in that compiled
+    /// expression, never in this inert datum.
+    AttrHoleFloat {
+        /// The attribute discriminant name the runtime uses to reconstruct the
+        /// matching `Attribute` variant (`"font-letter-spacing"`, …).
+        attr: &'static str,
+        hole_id: u32,
+    },
 }
 
 impl CompileUiAttr {
@@ -282,6 +294,15 @@ impl CompileUiAttr {
                 write_json_string(event, out);
                 out.push_str(",\"handler_id\":");
                 push_i64(i64::from(*handler_id), out);
+                out.push_str("}}");
+            }
+            // `{"AttrHoleFloat":{"attr":"font-letter-spacing","hole_id":N}}` —
+            // the runtime `UiTemplateAttr::AttrHoleFloat` struct-variant serde form.
+            Self::AttrHoleFloat { attr, hole_id } => {
+                out.push_str("{\"AttrHoleFloat\":{\"attr\":");
+                write_json_string(attr, out);
+                out.push_str(",\"hole_id\":");
+                push_i64(i64::from(*hole_id), out);
                 out.push_str("}}");
             }
         }
@@ -618,6 +639,11 @@ pub enum HoleKind {
     /// the index of the arm to materialize (0 = true branch for `if`, pattern
     /// order for `case`). Feeds `cf_selectors[hole_id]` at the runtime layer.
     ControlFlow,
+    /// A model-driven `f64` value for an [`CompileUiAttr::AttrHoleFloat`]: the
+    /// compiled `view` evaluates the model expression and passes the concrete
+    /// float to the runtime `float_attr_fills[hole_id]` slot. One fill per
+    /// `AttrHoleFloat` in template order.
+    FloatAttr,
 }
 
 /// Per-render fill for a [`CompileUiTemplate::ListHole`]: the list expression
@@ -682,6 +708,12 @@ pub struct HolePartition {
     /// arm-selector expression and per-arm wrapper templates for a
     /// [`CompileUiTemplate::WrapperHole`] with `hole_id` i.
     pub wrapper_holes: Vec<WrapperHoleFill>,
+    /// Float-attr-hole fills, in hole-id order. Each [`HoleFill`] with kind
+    /// [`HoleKind::FloatAttr`] carries the model-derived `f64` expression for
+    /// the [`CompileUiAttr::AttrHoleFloat`] with `hole_id` i. The emitted `view`
+    /// evaluates each and passes the concrete floats in order to the runtime's
+    /// `float_attr_fills` parameter.
+    pub float_attr_holes: Vec<HoleFill>,
 }
 
 /// The per-render capture accumulators threaded through the partition recursion:
@@ -706,6 +738,9 @@ struct Captures {
     /// Wrapper-hole fills, in hole-id order — index i is the [`WrapperHoleFill`]
     /// for the [`CompileUiTemplate::WrapperHole`] with `hole_id` i.
     wrapper_holes: Vec<WrapperHoleFill>,
+    /// Float-attr-hole fills, in hole-id order — index i is the model-derived
+    /// `f64` expression for the [`CompileUiAttr::AttrHoleFloat`] with `hole_id` i.
+    float_attr_holes: Vec<HoleFill>,
 }
 
 /// The capture accumulator threaded through the partition recursion. `None` =
@@ -765,6 +800,7 @@ pub fn ui_template_of_expr_holes(
         cf_holes: captures.cf_holes,
         list_holes: captures.list_holes,
         wrapper_holes: captures.wrapper_holes,
+        float_attr_holes: captures.float_attr_holes,
     })
 }
 
@@ -934,6 +970,7 @@ fn try_control_flow_hole_if(
         cf_holes: Vec::new(),
         list_holes: Vec::new(),
         wrapper_holes: Vec::new(),
+        float_attr_holes: Vec::new(),
     };
     let arm_result = (|| -> Option<(CompileUiTemplate, CompileUiTemplate)> {
         let t = ui_template_of_expr_at(then_, wrappers, depth, &mut Some(&mut arm_captures))?;
@@ -949,6 +986,7 @@ fn try_control_flow_hole_if(
             acc.cf_holes.extend(arm_captures.cf_holes);
             acc.list_holes.extend(arm_captures.list_holes);
             acc.wrapper_holes.extend(arm_captures.wrapper_holes);
+            acc.float_attr_holes.extend(arm_captures.float_attr_holes);
         }
         // The arm-selector expression evaluates the condition and yields
         // 0 (true branch) or 1 (false branch). The emit layer casts the
@@ -1001,6 +1039,7 @@ fn try_control_flow_hole_match(
         cf_holes: Vec::new(),
         list_holes: Vec::new(),
         wrapper_holes: Vec::new(),
+        float_attr_holes: Vec::new(),
     };
     let arm_templates: Option<Vec<CompileUiTemplate>> = arms_slice
         .iter()
@@ -1016,6 +1055,7 @@ fn try_control_flow_hole_match(
                 acc.cf_holes.extend(arm_captures.cf_holes);
                 acc.list_holes.extend(arm_captures.list_holes);
                 acc.wrapper_holes.extend(arm_captures.wrapper_holes);
+                acc.float_attr_holes.extend(arm_captures.float_attr_holes);
             }
             // Build the arm-selector expression: a `Match` with Int bodies.
             let selector_expr = build_match_arm_selector(m);
@@ -1149,6 +1189,7 @@ fn try_wrapper_hole_if(
         acc.cf_holes.extend(child_captures.cf_holes);
         acc.list_holes.extend(child_captures.list_holes);
         acc.wrapper_holes.extend(child_captures.wrapper_holes);
+        acc.float_attr_holes.extend(child_captures.float_attr_holes);
     }
 
     push_wrapper_hole(
@@ -1550,6 +1591,7 @@ fn collect_static_attrs(
 /// debug outline — returns `None`, so the subtree stays compiled rather than
 /// mis-templated. A kernel absent from this allowlist defaults to refuse, which
 /// is always safe (it merely recompiles).
+#[allow(clippy::too_many_lines)]
 fn static_attr(attr: &Expr, holes: &mut Holes) -> Option<CompileUiAttr> {
     let Expr::Call { callee, args, .. } = attr else {
         return None;
@@ -1658,12 +1700,45 @@ fn static_attr(attr: &Expr, holes: &mut Holes) -> Option<CompileUiAttr> {
             Some(CompileUiAttr::FontLetterSpacing(*v))
         }
         (KernelFn::FontWordSpacing, [Expr::Float(v)]) => Some(CompileUiAttr::FontWordSpacing(*v)),
+        // ── float-attr holes: model-driven float value ─────────────────────
+        // A float-valued attribute whose argument is model-driven (not a literal)
+        // reduces to an `AttrHoleFloat` hole in hole mode. The attr discriminant
+        // name must match what the runtime's `resolve_float_attr` recognizes.
+        // In pure mode (`push_float_attr_hole` sees `None`) refuses — shipped
+        // static-only behaviour, unchanged.
+        (KernelFn::FontLetterSpacing, [_]) => {
+            push_float_attr_hole("font-letter-spacing", args.first()?, holes)
+        }
+        (KernelFn::FontWordSpacing, [_]) => {
+            push_float_attr_hole("font-word-spacing", args.first()?, holes)
+        }
         // Every other attribute kernel — a handler, a shadow record, an
         // aspect-ratio / gradient, a `Model`-derived color/float, a pseudo-rule, a
         // nearby overlay, the debug outline, or an unrecognised one — is not an
         // accepted inert attribute. Refuse: keep the subtree compiled.
         _ => None,
     }
+}
+
+/// Record `expr` (a model-driven float expression) as a float-attr hole and
+/// return a [`CompileUiAttr::AttrHoleFloat`] carrying `attr` and the hole id,
+/// or `None` in pure mode — where a non-literal float attribute simply refuses,
+/// exactly the shipped static-only behaviour.
+///
+/// The hole id is the count of float-attr holes already recorded, matching the
+/// order `float_attr_fills[hole_id]` will index at the runtime layer.
+fn push_float_attr_hole(
+    attr: &'static str,
+    expr: &Expr,
+    holes: &mut Holes,
+) -> Option<CompileUiAttr> {
+    let acc = &mut holes.as_mut()?.float_attr_holes;
+    let hole_id = u32::try_from(acc.len()).ok()?;
+    acc.push(HoleFill {
+        kind: HoleKind::FloatAttr,
+        expr: expr.clone(),
+    });
+    Some(CompileUiAttr::AttrHoleFloat { attr, hole_id })
 }
 
 /// The DOM wire event name for a pure plain-message (`OnMsg`) `Ipe.Ui` event
