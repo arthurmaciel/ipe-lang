@@ -195,15 +195,19 @@ fn requirement_for(axis: WebCapability) -> AxisRequirement {
         },
         // The axes that reach no permission-gated OS surface on any target:
         // clipboard (user-initiated paste), storage (in-sandbox persistence),
-        // share (user-initiated share sheet), battery (ungated status), and the
-        // `raw` floor (an uncharacterised port reaches no compiler-known surface;
-        // its disclosure is enforced by the consent gate, not an OS declaration).
-        // Named explicitly — no wildcard — so a new web axis stays unmatched and
-        // forces a deliberate permission decision here.
+        // share (user-initiated share sheet), battery (ungated status), file and
+        // camera (both reach the OS only through a user-gesture picker / `<input
+        // capture>`, which needs no static usage-description declaration — unlike
+        // getUserMedia), and the `raw` floor (an uncharacterised port reaches no
+        // compiler-known surface; its disclosure is enforced by the consent gate,
+        // not an OS declaration). Named explicitly — no wildcard — so a new web
+        // axis stays unmatched and forces a deliberate permission decision here.
         WebCapability::Clipboard
         | WebCapability::Storage
         | WebCapability::Share
         | WebCapability::Battery
+        | WebCapability::File
+        | WebCapability::Camera
         | WebCapability::Raw => no_os_permission(),
     }
 }
