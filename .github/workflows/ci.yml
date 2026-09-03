@@ -842,6 +842,92 @@ jobs:
           IPE_RUNTIME_DIR: ${{ github.workspace }}/src/runtime/rust/src
         run: cargo nextest run -p ipe --test audit_native --profile ci
 
+  # ─── Linux x64 Tier-2 proof (the bwrap+seccomp build jail) ───────────────────
+  # linux-x64 is a wired, CERTIFYING Tier-2 platform: the Linux bwrap+seccomp
+  # build jail is `target_arch = "x86_64"`-gated (the seccomp BPF encodes the
+  # x86_64 syscall-number ABI), so this is the arch that genuinely confines and
+  # certifies a native package. The reconciler's linux-x64 audit_native E2E runs
+  # inside the sharded `e2e` job, but only as part of a `--workspace` sweep — it
+  # is not a named, dedicated, fail-closed Tier-2 job the way every OTHER shipped
+  # platform (macos, freebsd, arm64) has. That asymmetry is a blind spot against
+  # the "a platform not run is never admitted" invariant (ADR 0046 refuse-to-
+  # certify): a change that silently stopped exercising the linux-x64 jail would
+  # not redden a platform-named check. This job closes it, mirroring macos-tier2,
+  # and is fail-closed by design:
+  #
+  #   1. It asserts the jail primitives (bwrap + python3 for the seccomp filter)
+  #      are present and REFUSES to certify (exits non-zero) if either is absent —
+  #      never a skip-green. An un-run jail is never counted as admitting.
+  #   2. It runs the admission enforce-vs-control DUALITY: the forbidden net +
+  #      fs-escape actions must SUCCEED outside the jail (positive control) and be
+  #      DENIED inside the seccomp+bwrap jail (enforce). The control proves a
+  #      denial came from the jail, not from an unreachable host.
+  #   3. It runs the `audit_native` E2E under `IPE_E2E=1`, which drives the real
+  #      reconciler through the real bwrap+seccomp jail (the linux-x64
+  #      build_in_jail path): a used-but-undeclared axis rejects, and a benign
+  #      package declaring exactly its axes certifies as linux-x64.
+  linux-x64-tier2:
+    name: linux-x64-tier2 (bwrap+seccomp — the real Linux jail proof)
+    runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request'   # off the PR gate; runs on push, nightly
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: mozilla-actions/sccache-action@v0.0.9
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@nextest
+
+      - name: Install the Linux jail primitives (bubblewrap + python3)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends bubblewrap python3
+
+      # Fail-closed primitive check: an absent bwrap or python3 is a hard failure,
+      # not a skip — the seccomp+bwrap jail cannot be verified without them, and an
+      # unverified platform is NEVER counted as admitted (refuse-to-certify).
+      - name: Assert the Linux jail primitives are present (refuse-to-certify)
+        run: |
+          if ! command -v bwrap >/dev/null 2>&1; then
+            echo "ERROR: bubblewrap (bwrap) absent on this runner — the Tier-2 jail cannot be verified; refusing to certify (this is a hard failure, never a skip-green)." >&2
+            exit 1
+          fi
+          if ! command -v python3 >/dev/null 2>&1; then
+            echo "ERROR: python3 absent — the seccomp BPF filter cannot be generated, so the network-denial layer cannot be established; refusing to certify (hard failure, never a skip-green)." >&2
+            exit 1
+          fi
+          echo "bwrap present: $(command -v bwrap); python3 present: $(command -v python3)"
+
+      - name: Make admission scripts executable
+        run: chmod +x tools/scripts/admission/jail-linux.sh tests/fixtures/admission/untrusted-build.sh
+
+      # Positive control (OUTSIDE the jail): the same net + fs-escape actions must
+      # SUCCEED, so a block under `enforce` below can only be the jail — not an
+      # unreachable host or an already-unwritable path.
+      - name: Admission positive control (no jail — forbidden actions must succeed)
+        env:
+          ESCAPE_PATH: ${{ github.workspace }}/admission-escape-probe
+        run: PROBE_MODE=control ESCAPE_PATH="$ESCAPE_PATH" sh tests/fixtures/admission/untrusted-build.sh
+
+      # Enforce (INSIDE the jail): net + fs-escape must be DENIED. Paired with the
+      # control above, this is the duality that proves the denial is the jail's.
+      # `sudo -E` matches the admission-sandbox linux invocation (bwrap needs the
+      # user-namespace setup the hosted runner grants under sudo); -E forwards the
+      # ESCAPE_PATH/timeout env into the jail wrapper.
+      - name: Admission enforce (jailed — forbidden actions must be blocked)
+        env:
+          ADMISSION_TIMEOUT_SECS: '60'
+          ESCAPE_PATH: ${{ github.workspace }}/admission-escape-probe
+        run: sudo -E tools/scripts/admission/jail-linux.sh tests/fixtures/admission/untrusted-build.sh
+
+      # The real reconciler through the real bwrap+seccomp jail (the linux-x64
+      # build_in_jail path): used-but-undeclared rejects, benign certifies.
+      - name: audit_native E2E through the real Linux jail
+        env:
+          IPE_E2E: "1"
+          IPE_RUNTIME_DIR: ${{ github.workspace }}/src/runtime/rust/src
+        run: cargo nextest run -p ipe --test audit_native --profile ci
+
   # macOS RUN-jail enforcement — the ONLY real verification of the macOS run
   # jail's deny behaviour (the jail around the EMITTED app at `ipe run`, as
   # opposed to the Tier-2 build jail above). The Rust unit tests prove the SBPL
