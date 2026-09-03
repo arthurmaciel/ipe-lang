@@ -1,4 +1,4 @@
-//! The browser `Ipe.Js` port surface, served content-addressed with SRI.
+//! The browser `Ipe.Ffi.Js` port surface, served content-addressed with SRI.
 //!
 //! One ES module exposes the developer-facing `window.ipe` port object — the
 //! IDENTICAL surface on the server-driven and the browser-WASM target:
@@ -28,7 +28,7 @@ use sha2::{Digest, Sha256};
 /// calls; `window.ipe.send` funnels an inbound value to `window.__ipePortSend`,
 /// the seam the host page/runtime installs. Values cross only as JSON strings,
 /// parsed as data (`JSON.parse` / `JSON.stringify`), never `eval`.
-const PORT_GLUE_JS: &str = r#"// Ipe.Js browser port surface. Values cross as JSON strings only.
+const PORT_GLUE_JS: &str = r#"// Ipe.Ffi.Js browser port surface. Values cross as JSON strings only.
 (function () {
   var onReceive = null;
   // Return an inbound typed frame to the Ipê program: a decoded intent, never a

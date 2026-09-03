@@ -218,7 +218,7 @@ pub fn seal_decode_serde<T: serde::de::DeserializeOwned>(
 /// Fail-closed boundary gate for an untrusted raw JS-boundary input, applying the
 /// SAME conservative-first bounds as [`seal_decode`] steps 1–2 (byte budget +
 /// depth-bounded parse) WITHOUT a typed decode. It is the check an untyped ingress
-/// route (the `Ipe.Js` inbound port) runs before fanning a raw frame to its
+/// route (the `Ipe.Ffi.Js` inbound port) runs before fanning a raw frame to its
 /// per-session subscribers, each of which then runs its own typed [`seal_decode`].
 ///
 /// A payload that exceeds the byte budget, is not valid JSON, or is nested past

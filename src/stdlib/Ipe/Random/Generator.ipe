@@ -24,7 +24,7 @@ module Ipe.Random.Generator exposing
     )
 
 
-import Ipe.Ffi as Ffi
+import Ipe.Ffi.Kernel as Kernel
 import Ipe.List as List
 
 
@@ -36,11 +36,11 @@ type Seed
 -- The seeded raw kernels this module draws through, aliased locally so the
 -- module is self-contained (no dependency on `Ipe.Random`'s internal surface).
 seededIntRaw : Int -> Int -> Int -> ( Int, Int )
-seededIntRaw = Ffi.kernel "Random_seededIntRaw"
+seededIntRaw = Kernel.kernel "Random_seededIntRaw"
 
 
 seededFloatRaw : Int -> ( Float, Int )
-seededFloatRaw = Ffi.kernel "Random_seededFloatRaw"
+seededFloatRaw = Kernel.kernel "Random_seededFloatRaw"
 
 
 -- | A recipe for a random value of type `a`: a pure step from one seed to a

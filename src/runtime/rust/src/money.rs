@@ -283,7 +283,7 @@ pub fn money_has_rate(from: String, to: String) -> bool {
 }
 
 /// `clearRates : () -> Result Error ()` — test/admin only.
-/// The compiled-source `Ipe.Money.clearRates` is a point-free `Ffi.kernel`
+/// The compiled-source `Ipe.Money.clearRates` is a point-free `Kernel.kernel`
 /// alias of type `() -> Result Error ()`, so the emit passes a unit argument
 /// (matching the arity-1 unit-kernel convention, e.g. `uuid_v4(_: ())`).
 #[must_use]

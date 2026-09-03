@@ -17,7 +17,7 @@ module Ipe.File exposing
     )
 
 
-import Ipe.Ffi as Ffi
+import Ipe.Ffi.Kernel as Kernel
 import Ipe.Error exposing (Error)
 import Ipe.Path exposing (Path)
 import Ipe.ByteSize as ByteSize exposing (ByteSize)
@@ -27,7 +27,7 @@ import Ipe.ByteSize as ByteSize exposing (ByteSize)
 
 
 readFile : Path -> Task Error String
-readFile = Ffi.kernel "File_readFile"
+readFile = Kernel.kernel "File_readFile"
 
 
 -- `readFileLimit path cap` — read at most `cap` bytes from the file.
@@ -41,13 +41,13 @@ readFileLimit path cap =
 
 
 readFileLimitKernel : Path -> Int -> Task Error String
-readFileLimitKernel = Ffi.kernel "File_readFileLimit"
+readFileLimitKernel = Kernel.kernel "File_readFileLimit"
 
 
 -- | Read raw bytes as a list of Int.  Use for binary content
 -- (images, encrypted blobs); use `readFile` for UTF-8 text.
 readFileBytes : Path -> Task Error (List Int)
-readFileBytes = Ffi.kernel "File_readFileBytes"
+readFileBytes = Kernel.kernel "File_readFileBytes"
 
 
 -- Write
@@ -55,24 +55,24 @@ readFileBytes = Ffi.kernel "File_readFileBytes"
 
 -- | `writeFile path content` -- overwrites the file.
 writeFile : Path -> String -> Task Error ()
-writeFile = Ffi.kernel "File_writeFile"
+writeFile = Kernel.kernel "File_writeFile"
 
 
 -- | `append path content` -- appends to the end of the file
 -- (creates it if absent).
 append : Path -> String -> Task Error ()
-append = Ffi.kernel "File_append"
+append = Kernel.kernel "File_append"
 
 
 -- Existence + removal
 
 
 exists : Path -> Task Error Bool
-exists = Ffi.kernel "File_exists"
+exists = Kernel.kernel "File_exists"
 
 
 remove : Path -> Task Error ()
-remove = Ffi.kernel "File_remove"
+remove = Kernel.kernel "File_remove"
 
 
 -- Directories
@@ -81,15 +81,15 @@ remove = Ffi.kernel "File_remove"
 -- | `mkdirAll path` -- like `mkdir -p`.  Creates every intermediate
 -- directory that doesn't exist.
 mkdirAll : Path -> Task Error ()
-mkdirAll = Ffi.kernel "File_mkdirAll"
+mkdirAll = Kernel.kernel "File_mkdirAll"
 
 
 readDir : Path -> Task Error (List String)
-readDir = Ffi.kernel "File_readDir"
+readDir = Kernel.kernel "File_readDir"
 
 
 isDir : Path -> Task Error Bool
-isDir = Ffi.kernel "File_isDir"
+isDir = Kernel.kernel "File_isDir"
 
 
 -- | `walk root` -- recursively walk `root`, returning the absolute path of
@@ -112,7 +112,7 @@ isDir = Ffi.kernel "File_isDir"
 --                         Io.println (String.join "\n" (List.map Path.toString files))
 --                     )
 walk : Path -> Task Error (List Path)
-walk = Ffi.kernel "File_walk"
+walk = Kernel.kernel "File_walk"
 
 
 -- | `walkMatching root pred` -- like `walk`, but only includes files for
@@ -123,7 +123,7 @@ walk = Ffi.kernel "File_walk"
 --
 --     walkMatching root (\p -> String.endsWith ".ipe" (Path.toString p))
 walkMatching : Path -> (Path -> Bool) -> Task Error (List Path)
-walkMatching = Ffi.kernel "File_walkMatching"
+walkMatching = Kernel.kernel "File_walkMatching"
 
 
 -- Misc
@@ -133,7 +133,7 @@ walkMatching = Ffi.kernel "File_walkMatching"
 -- temp dir.  `prefix` is a filename prefix (not a path), so it stays a
 -- `String`.  Returns the absolute path.
 tempFile : String -> Task Error String
-tempFile = Ffi.kernel "File_tempFile"
+tempFile = Kernel.kernel "File_tempFile"
 
 
 -- | `tempDir prefix` -- create a uniquely-named directory in the
@@ -141,12 +141,12 @@ tempFile = Ffi.kernel "File_tempFile"
 -- the absolute path.  Caller is responsible for `remove`-ing the directory
 -- when done.
 tempDir : String -> Task Error String
-tempDir = Ffi.kernel "File_tempDir"
+tempDir = Kernel.kernel "File_tempDir"
 
 
 copy : Path -> Path -> Task Error ()
-copy = Ffi.kernel "File_copy"
+copy = Kernel.kernel "File_copy"
 
 
 rename : Path -> Path -> Task Error ()
-rename = Ffi.kernel "File_rename"
+rename = Kernel.kernel "File_rename"

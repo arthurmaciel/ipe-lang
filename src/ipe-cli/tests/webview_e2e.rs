@@ -125,7 +125,7 @@ main =
 const IPE_WEBVIEW_WIDGET: &str = r#"module Main exposing (main)
 
 import Ipe.Tea.WebView as Webview
-import Ipe.Ui as Ui
+import Ipe.Ffi.Js.CustomElement as CustomElement
 import Ipe.Tea.WebView.Cmd as Cmd
 import Ipe.Tea.WebView.Sub as Sub
 
@@ -138,7 +138,7 @@ type Msg = Edited EditorEvent
 type alias Model = { state : EditorState }
 
 codeEditor : CustomElement EditorState EditorEvent
-codeEditor = customElement "js/x.js"
+codeEditor = CustomElement.fromFile "js/x.js"
 
 init : () -> ( Model, Cmd Msg )
 init _unit =
@@ -150,7 +150,7 @@ update _msg model =
 
 view : Model -> Element Msg
 view model =
-    Ui.widget codeEditor model.state Edited
+    CustomElement.node codeEditor model.state Edited
 
 subscriptions : Model -> Sub Msg
 subscriptions _model =

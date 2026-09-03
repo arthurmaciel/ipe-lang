@@ -8375,7 +8375,7 @@ impl<'a> Builder<'a> {
                 fun(int(), fun(string(), fun(var(0), sub(var(1)))))
             }
 
-            // ── Ipe.Js — the raw typed transport across the Ipê↔JS seam ──
+            // ── Ipe.Ffi.Js — the raw typed transport across the Ipê↔JS seam ──
             // `send : a -> Cmd msg` — payload `a` = var(0), msg = var(1).
             // `subscribe : Decoder a -> (a -> msg) -> Sub msg` — decoded `a`
             // = var(0), msg = var(1). The seal-legality of the concrete `a` is a
@@ -10450,7 +10450,7 @@ mod registry_phase_c_tests {
             K::WebSocketClose,
             K::WebSocketCloseWithCode,
             K::SubSubscribeWebSocket,
-            // ── Ipe.Js — the raw typed transport across the Ipê↔JS seam ──
+            // ── Ipe.Ffi.Js — the raw typed transport across the Ipê↔JS seam ──
             K::JsSend,
             K::JsSubscribe,
             K::JsRequest,

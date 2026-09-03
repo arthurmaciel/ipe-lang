@@ -38,7 +38,7 @@ module Ipe.Cache exposing
     )
 
 
-import Ipe.Ffi as Ffi
+import Ipe.Ffi.Kernel as Kernel
 import Ipe.Error exposing (Error)
 import Ipe.Maybe exposing (Maybe(..))
 import Ipe.Task as Task
@@ -99,7 +99,7 @@ withMaxBytes cap cfg =
 -- | Internal — direct kernel alias returning the raw cache id.
 newRaw : CacheCfg -> Task Error Int
 newRaw =
-    Ffi.kernel "Cache_newRaw"
+    Kernel.kernel "Cache_newRaw"
 
 
 -- | `new cfg` — create a new cache.  Resolves once the underlying
@@ -112,7 +112,7 @@ new cfg =
 -- | Internal — kernel call from raw id.
 getRaw : Int -> k -> Task Error (Maybe v)
 getRaw =
-    Ffi.kernel "Cache_get"
+    Kernel.kernel "Cache_get"
 
 
 -- | `get cache key` — look up `key` in `cache`.  Returns
@@ -127,7 +127,7 @@ get cache key =
 
 putRaw : Int -> k -> v -> Task Error ()
 putRaw =
-    Ffi.kernel "Cache_put"
+    Kernel.kernel "Cache_put"
 
 
 -- | `put cache key value` — insert (or update) `key → value`.  May
@@ -142,7 +142,7 @@ put cache key value =
 
 removeRaw : Int -> k -> Task Error ()
 removeRaw =
-    Ffi.kernel "Cache_remove"
+    Kernel.kernel "Cache_remove"
 
 
 -- | `remove cache key` — delete `key`.  Idempotent — missing keys
@@ -157,7 +157,7 @@ remove cache key =
 
 clearRaw : Int -> Task Error ()
 clearRaw =
-    Ffi.kernel "Cache_clear"
+    Kernel.kernel "Cache_clear"
 
 
 -- | `clear cache` — purge every entry.  Stats counters keep their
@@ -172,7 +172,7 @@ clear cache =
 
 sizeRaw : Int -> Task Error Int
 sizeRaw =
-    Ffi.kernel "Cache_size"
+    Kernel.kernel "Cache_size"
 
 
 -- | `size cache` — current entry count (after lazy expiration).
@@ -186,7 +186,7 @@ size cache =
 
 statsRaw : Int -> Task Error { hits : Int, misses : Int, evictions : Int }
 statsRaw =
-    Ffi.kernel "Cache_stats"
+    Kernel.kernel "Cache_stats"
 
 
 -- | `stats cache` — running totals of `{ hits, misses, evictions }`

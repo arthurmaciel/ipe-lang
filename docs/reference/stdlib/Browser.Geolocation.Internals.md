@@ -6,7 +6,7 @@
 
 Ipe.Browser.Geolocation.Internals — the full, low-level geolocation port
 surface: the closed outbound/inbound ADTs, the complete `Options` knob set, and
-the raw `Ipe.Js` request/subscribe wiring the high-level `Ipe.Browser.Geolocation`
+the raw `Ipe.Ffi.Js` request/subscribe wiring the high-level `Ipe.Browser.Geolocation`
 layer wraps with sane defaults.
 
 A caller that needs every option (accuracy, timeout, cache age) reaches for this

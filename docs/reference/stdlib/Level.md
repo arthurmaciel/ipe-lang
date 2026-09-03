@@ -11,7 +11,7 @@ Ipe.Level — the `LogLevel` severity-tag ADT.
 `LogLevel` values.  Pass one to `Log.level` to configure the
 runtime log severity.
 
-Each member is aliased to its kernel via the `Ffi.kernel`
+Each member is aliased to its kernel via the `Kernel.kernel`
 mechanism; the resolver maps `"Level_<member>"` to the registered
 `Level<Member>` `StdlibKernel` variant.
 

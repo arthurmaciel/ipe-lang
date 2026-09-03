@@ -306,7 +306,7 @@ pub use uuid_kernel::*;
 pub use css::*;
 pub use html::*;
 pub use tea::*;
-// The typed `Ipe.Js` port. Its wasm32 arm (`js_port::wasm`) posts each sealed
+// The typed `Ipe.Ffi.Js` port. Its wasm32 arm (`js_port::wasm`) posts each sealed
 // outbound frame to `window.ipeOnReceive` and drains inbound frames the page's
 // `window.ipe.send` feeds through the same bounded, fail-closed seal decoder the
 // server path uses; `js_send`/`js_subscribe` are the `Js.send`/`Js.subscribe`

@@ -58,6 +58,7 @@ const WIDGET_APP: &str = r#"module Main exposing (main)
 
 import Ipe.Tea.Web as Web
 import Ipe.Ui as Ui
+import Ipe.Ffi.Js.CustomElement as CustomElement
 import Ipe.Tea.Web.Cmd
 import Ipe.Tea.Web.Sub
 import Ipe.String
@@ -71,7 +72,7 @@ type Msg = FromWidget WidgetUp
 type alias Model = { count : Int }
 
 counter : CustomElement WidgetState WidgetUp
-counter = customElement "js/counter.js"
+counter = CustomElement.fromFile "js/counter.js"
 
 init : WebReq -> ( Model, Cmd Msg )
 init _req =
@@ -86,7 +87,7 @@ update msg model =
 view : Model -> Element Msg
 view model =
     Ui.column []
-        [ Ui.widget counter { count = model.count } FromWidget
+        [ CustomElement.node counter { count = model.count } FromWidget
         , Ui.text (String.fromInt model.count)
         ]
 
@@ -598,7 +599,7 @@ import Ipe.Tea.Web as Web
 import Ipe.Tea.Web.Cmd as Cmd
 import Ipe.Tea.Web.Sub as Sub
 import Ipe.Ui as Ui
-import Ipe.Js as Js
+import Ipe.Ffi.Js as Js
 import Ipe.Json.Decode as Decode
 
 type alias Model = { n : Int }
@@ -633,7 +634,7 @@ main =
         }
 "#;
 
-/// THE SEAL for `Ipe.Js` ports: a seal-legal port program `ipe`-accepts (exit 0)
+/// THE SEAL for `Ipe.Ffi.Js` ports: a seal-legal port program `ipe`-accepts (exit 0)
 /// AND the emitted Rust `cargo build`s. A `Js.send model.n` lowers to
 /// `js_send(...)` and `Js.subscribe Decode.int Got` to
 /// `js_subscribe(json_decode_int(), ...)`; the payload type's serde derive is

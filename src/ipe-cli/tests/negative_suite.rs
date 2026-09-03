@@ -1023,10 +1023,11 @@ fn assert_rejected_with_files(name: &str, source: &str, extra: &[(&str, &str)], 
 #[test]
 fn custom_element_ctor_non_literal_rejected() {
     let src = format!(
-        "{HEAD}src : String\n\
+        "{HEAD}import Ipe.Ffi.Js.CustomElement as CustomElement\n\
+         src : String\n\
          src = \"js/x.js\"\n\
          editor : CustomElement Int String\n\
-         editor = customElement src\n\
+         editor = CustomElement.fromFile src\n\
          main = 1\n"
     );
     assert_rejected("custom_element_non_literal", &src, "IPE-N0044");
@@ -1037,8 +1038,9 @@ fn custom_element_ctor_non_literal_rejected() {
 #[test]
 fn custom_element_ctor_bare_value_rejected() {
     let src = format!(
-        "{HEAD}editor : CustomElement Int String\n\
-         editor = customElement\n\
+        "{HEAD}import Ipe.Ffi.Js.CustomElement as CustomElement\n\
+         editor : CustomElement Int String\n\
+         editor = CustomElement.fromFile\n\
          main = 1\n"
     );
     assert_rejected("custom_element_bare", &src, "IPE-N0044");
@@ -1049,7 +1051,11 @@ fn custom_element_ctor_bare_value_rejected() {
 /// resolves nowhere legal (IPE-N0044).
 #[test]
 fn custom_element_ctor_wrong_position_rejected() {
-    let src = format!("{HEAD}oops = customElement \"js/x.js\"\nmain = 1\n");
+    let src = format!(
+        "{HEAD}import Ipe.Ffi.Js.CustomElement as CustomElement\n\
+         oops = CustomElement.fromFile \"js/x.js\"\n\
+         main = 1\n"
+    );
     assert_rejected("custom_element_wrong_pos", &src, "IPE-N0044");
 }
 
@@ -1059,8 +1065,9 @@ fn custom_element_ctor_wrong_position_rejected() {
 #[test]
 fn custom_element_ctor_missing_file_rejected() {
     let src = format!(
-        "{HEAD}editor : CustomElement Int String\n\
-         editor = customElement \"js/does-not-exist.js\"\n\
+        "{HEAD}import Ipe.Ffi.Js.CustomElement as CustomElement\n\
+         editor : CustomElement Int String\n\
+         editor = CustomElement.fromFile \"js/does-not-exist.js\"\n\
          main = 1\n"
     );
     // No extra files written — the named path is absent.
@@ -1073,8 +1080,9 @@ fn custom_element_ctor_missing_file_rejected() {
 #[test]
 fn custom_element_ctor_path_traversal_rejected() {
     let src = format!(
-        "{HEAD}editor : CustomElement Int String\n\
-         editor = customElement \"../escape.js\"\n\
+        "{HEAD}import Ipe.Ffi.Js.CustomElement as CustomElement\n\
+         editor : CustomElement Int String\n\
+         editor = CustomElement.fromFile \"../escape.js\"\n\
          main = 1\n"
     );
     assert_rejected("custom_element_traversal", &src, "IPE-P0063");
@@ -1090,8 +1098,9 @@ fn custom_element_ctor_path_traversal_rejected() {
 fn custom_element_ctor_present_file_lowers_and_compiles() {
     let src = format!(
         "{HEAD}import Ipe.Io as Io\n\
+         import Ipe.Ffi.Js.CustomElement as CustomElement\n\
          editor : CustomElement Int String\n\
-         editor = customElement \"js/x.js\"\n\
+         editor = CustomElement.fromFile \"js/x.js\"\n\
          main : Task Error ()\n\
          main =\n\
          \x20   Io.println \"ok\"\n"
@@ -1165,8 +1174,9 @@ fn custom_element_ctor_absolute_path_rejected_at_canon() {
         ("absent", "/nonexistent-ipe-widget-\u{2603}.js"),
     ] {
         let src = format!(
-            "{HEAD}editor : CustomElement Int String\n\
-             editor = customElement \"{abs}\"\n\
+            "{HEAD}import Ipe.Ffi.Js.CustomElement as CustomElement\n\
+             editor : CustomElement Int String\n\
+             editor = CustomElement.fromFile \"{abs}\"\n\
              main = 1\n"
         );
         // Single-file `compile` reaches canon and stops there on rejection, so no
@@ -1194,8 +1204,9 @@ fn custom_element_ctor_windows_rooted_path_rejected_at_canon() {
         ("backslash_root", "\\\\evil.js"),
     ] {
         let src = format!(
-            "{HEAD}editor : CustomElement Int String\n\
-             editor = customElement \"{rooted}\"\n\
+            "{HEAD}import Ipe.Ffi.Js.CustomElement as CustomElement\n\
+             editor : CustomElement Int String\n\
+             editor = CustomElement.fromFile \"{rooted}\"\n\
              main = 1\n"
         );
         assert_rejected(
@@ -1243,8 +1254,9 @@ fn custom_element_ctor_symlink_escape_rejected_at_build_gate() {
         return;
     }
     let src = format!(
-        "{HEAD}editor : CustomElement Int String\n\
-         editor = customElement \"js/evil.js\"\n\
+        "{HEAD}import Ipe.Ffi.Js.CustomElement as CustomElement\n\
+         editor : CustomElement Int String\n\
+         editor = CustomElement.fromFile \"js/evil.js\"\n\
          main = 1\n"
     );
     let entry = project.join("Main.ipe");
@@ -1284,7 +1296,7 @@ fn custom_element_ctor_symlink_escape_rejected_at_build_gate() {
 fn custom_element_widget_program_ipe_accepts() {
     let src = format!(
         "{HEAD}import Ipe.Tea.Web as Web\n\
-         import Ipe.Ui as Ui\n\
+         import Ipe.Ffi.Js.CustomElement as CustomElement\n\
          import Ipe.Tea.Web.Cmd\n\
          import Ipe.Tea.Web.Sub\n\
          type alias EditorState = {{ text : String, line : Int }}\n\
@@ -1292,7 +1304,7 @@ fn custom_element_widget_program_ipe_accepts() {
          type Msg = Edited EditorEvent\n\
          type alias Model = {{ state : EditorState }}\n\
          codeEditor : CustomElement EditorState EditorEvent\n\
-         codeEditor = customElement \"js/x.js\"\n\
+         codeEditor = CustomElement.fromFile \"js/x.js\"\n\
          init : WebReq -> ( Model, Cmd Msg )\n\
          init _req =\n\
          \x20   ( {{ state = {{ text = \"\", line = 0 }} }}, Cmd.none )\n\
@@ -1301,7 +1313,7 @@ fn custom_element_widget_program_ipe_accepts() {
          \x20   ( model, Cmd.none )\n\
          view : Model -> Element Msg\n\
          view model =\n\
-         \x20   Ui.widget codeEditor model.state Edited\n\
+         \x20   CustomElement.node codeEditor model.state Edited\n\
          subscriptions : Model -> Sub Msg\n\
          subscriptions _model =\n\
          \x20   Sub.none\n\
@@ -1358,22 +1370,22 @@ fn canon_duplicate_qualifier() {
     }
 }
 
-/// An `Ffi.kernel "Name"` alias in USER source — minting a kernel is reserved to
+/// An `Kernel.kernel "Name"` alias in USER source — minting a kernel is reserved to
 /// the vouched stdlib / FFI interface, so it is rejected by the origin gate
 /// (IPE-N0042) before the registry is consulted, whether or not the named kernel
 /// is registered.
 #[test]
 fn canon_user_kernel_alias_is_rejected() {
     let src = format!(
-        "{HEAD}import Ipe.Ffi as Ffi\n\
+        "{HEAD}import Ipe.Ffi.Kernel as Kernel\n\
          bogus : Int -> Int\n\
-         bogus = Ffi.kernel \"No_such_kernel_at_all\"\n\
+         bogus = Kernel.kernel \"No_such_kernel_at_all\"\n\
          main = bogus 1\n"
     );
     assert_rejected("canon_user_kernel_alias_is_rejected", &src, "IPE-N0042");
 }
 
-// ── Ipe.Js ports — raw typed Ipê↔JS transport (IPE-L0148 boundary seal) ──
+// ── Ipe.Ffi.Js ports — raw typed Ipê↔JS transport (IPE-L0148 boundary seal) ──
 //
 // A port (`Js.send` / `Js.subscribe`) reuses the same seal the `CustomElement`
 // boundary enforces, but on the CONCRETE inferred crossing type (a port's `a` is
@@ -1399,7 +1411,7 @@ fn js_port_app(decoder_expr: &str) -> String {
          import Ipe.Tea.Web.Cmd as Cmd\n\
          import Ipe.Tea.Web.Sub as Sub\n\
          import Ipe.Ui as Ui\n\
-         import Ipe.Js as Js\n\
+         import Ipe.Ffi.Js as Js\n\
          import Ipe.Json.Decode as Decode\n\
          type alias Model = {{ n : Int }}\n\
          type Msg = Tick | Got Int\n\
@@ -1453,7 +1465,7 @@ fn js_port_subscribe_value_decoder_rejected() {
          import Ipe.Tea.Web.Cmd as Cmd\n\
          import Ipe.Tea.Web.Sub as Sub\n\
          import Ipe.Ui as Ui\n\
-         import Ipe.Js as Js\n\
+         import Ipe.Ffi.Js as Js\n\
          import Ipe.Json.Decode as Decode\n\
          type alias Model = { n : Int }\n\
          type Msg = Tick | GotV Value\n\
@@ -1488,7 +1500,7 @@ fn js_port_send_secret_rejected() {
          import Ipe.Tea.Web.Cmd as Cmd\n\
          import Ipe.Tea.Web.Sub as Sub\n\
          import Ipe.Ui as Ui\n\
-         import Ipe.Js as Js\n\
+         import Ipe.Ffi.Js as Js\n\
          import Ipe.Secret as Secret\n\
          import Ipe.System as System\n\
          type alias Model = { s : Secret }\n\
@@ -1526,7 +1538,7 @@ fn js_port_send_nested_secret_in_adt_rejected() {
          import Ipe.Tea.Web.Cmd as Cmd\n\
          import Ipe.Tea.Web.Sub as Sub\n\
          import Ipe.Ui as Ui\n\
-         import Ipe.Js as Js\n\
+         import Ipe.Ffi.Js as Js\n\
          import Ipe.Secret as Secret\n\
          import Ipe.System as System\n\
          type Payload = Wrap Secret | Empty\n\
@@ -1564,7 +1576,7 @@ fn js_port_send_polymorphic_wrapper_secret_rejected() {
          import Ipe.Tea.Web.Cmd as Cmd\n\
          import Ipe.Tea.Web.Sub as Sub\n\
          import Ipe.Ui as Ui\n\
-         import Ipe.Js as Js\n\
+         import Ipe.Ffi.Js as Js\n\
          import Ipe.Secret as Secret\n\
          import Ipe.System as System\n\
          type Box a = Box a\n\

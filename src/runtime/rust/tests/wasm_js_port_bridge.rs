@@ -1,4 +1,4 @@
-//! Browser-run proof of the `Ipe.Js` typed-port client substitute
+//! Browser-run proof of the `Ipe.Ffi.Js` typed-port client substitute
 //! (`js_send` / `js_subscribe`): the Layer-1 wasm gate used to deny the port
 //! because it had no wasm32 runtime symbol wired into the sink; this file is the
 //! headless-browser (`wasm-bindgen-test`, real Chromium via

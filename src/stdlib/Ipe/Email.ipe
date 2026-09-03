@@ -70,7 +70,7 @@ module Ipe.Email exposing
     )
 
 
-import Ipe.Ffi as Ffi
+import Ipe.Ffi.Kernel as Kernel
 import Ipe.Error exposing (Error)
 import Ipe.Bytes exposing (Bytes)
 import Ipe.Secret
@@ -303,7 +303,7 @@ withSmtpPass pass cfg =
 -- the kernel reveals each `Secret` only at the outbound HTTP/SMTP call. No auth
 -- error or diagnostic returned from a failed send carries the plaintext.
 send : EmailProvider -> EmailMessage -> Task Error String
-send = Ffi.kernel "Email_send"
+send = Kernel.kernel "Email_send"
 
 
 -- ── Typed address newtype ──────────────────────────────────────────────────────
@@ -321,8 +321,8 @@ type EmailAddress = EmailAddress
 -- | Parse-don't-validate: attempt to parse a string as an RFC 5322 address.
 -- Returns `Nothing` if the string is not a valid address; never silently accepts.
 parseAddress : String -> Maybe EmailAddress
-parseAddress = Ffi.kernel "EmailAddress_parse"
+parseAddress = Kernel.kernel "EmailAddress_parse"
 
 -- | Render an `EmailAddress` back to its canonical string form.
 addressToString : EmailAddress -> String
-addressToString = Ffi.kernel "EmailAddress_toString"
+addressToString = Kernel.kernel "EmailAddress_toString"

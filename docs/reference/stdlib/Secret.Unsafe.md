@@ -12,7 +12,7 @@ into a bare `String`. Importing it discloses the `unsafe` capability
 program-wide, so a dependency's raw secret-reveal is visible before the
 program runs.
 
-`unsafeReveal` is a point-free `Ffi.kernel "Secret_reveal"` alias to the
+`unsafeReveal` is a point-free `Kernel.kernel "Secret_reveal"` alias to the
 retained `SecretReveal` kernel (runtime: `ipe_runtime::secret::secret_reveal`,
 the single greppable un-parse) — the SAME kernel and the SAME sealed-newtype
 barrier as before; only the surface home moved here from `Ipe.Secret`. The

@@ -1,7 +1,7 @@
 -- | Ipe.Bitwise — bitwise operations on `Int`.
 --
 -- Mirrors elm/core `Bitwise`.  Each function is aliased to its runtime
--- kernel via the `Ffi.kernel` mechanism.
+-- kernel via the `Kernel.kernel` mechanism.
 --
 -- `Int` is 64-bit two's-complement here, so `complement` and
 -- `shiftRightZfBy` cover the full 64-bit width rather than wrapping at
@@ -12,27 +12,27 @@ module Ipe.Bitwise exposing
     )
 
 
-import Ipe.Ffi as Ffi
+import Ipe.Ffi.Kernel as Kernel
 
 
 -- | Bitwise AND.
 and : Int -> Int -> Int
-and = Ffi.kernel "Bitwise_and"
+and = Kernel.kernel "Bitwise_and"
 
 
 -- | Bitwise OR.
 or : Int -> Int -> Int
-or = Ffi.kernel "Bitwise_or"
+or = Kernel.kernel "Bitwise_or"
 
 
 -- | Bitwise XOR.
 xor : Int -> Int -> Int
-xor = Ffi.kernel "Bitwise_xor"
+xor = Kernel.kernel "Bitwise_xor"
 
 
 -- | Bitwise complement (flip every bit).
 complement : Int -> Int
-complement = Ffi.kernel "Bitwise_complement"
+complement = Kernel.kernel "Bitwise_complement"
 
 
 -- | Arithmetic left shift.  `shiftLeftBy offset n` shifts `n` left by
@@ -40,16 +40,16 @@ complement = Ffi.kernel "Bitwise_complement"
 --
 --     Bitwise.shiftLeftBy 1 5 == 10
 shiftLeftBy : Int -> Int -> Int
-shiftLeftBy = Ffi.kernel "Bitwise_shiftLeftBy"
+shiftLeftBy = Kernel.kernel "Bitwise_shiftLeftBy"
 
 
 -- | Arithmetic (sign-preserving) right shift.
 --
 --     Bitwise.shiftRightBy 1 32 == 16
 shiftRightBy : Int -> Int -> Int
-shiftRightBy = Ffi.kernel "Bitwise_shiftRightBy"
+shiftRightBy = Kernel.kernel "Bitwise_shiftRightBy"
 
 
 -- | Zero-fill (logical) right shift: the sign bit is not replicated.
 shiftRightZfBy : Int -> Int -> Int
-shiftRightZfBy = Ffi.kernel "Bitwise_shiftRightZfBy"
+shiftRightZfBy = Kernel.kernel "Bitwise_shiftRightZfBy"

@@ -34,7 +34,7 @@ module Ipe.String exposing
     )
 
 
-import Ipe.Ffi as Ffi
+import Ipe.Ffi.Kernel as Kernel
 
 
 -- ─── Construction ──────────────────────────────────────────────────
@@ -49,7 +49,7 @@ fromInt 0 --> "0"
 ```
 -}
 fromInt : Int -> String
-fromInt = Ffi.kernel "String_fromInt"
+fromInt = Kernel.kernel "String_fromInt"
 
 
 {-| `fromFloat n` — the string representation of a float.
@@ -60,7 +60,7 @@ fromFloat (-0.5) --> "-0.5"
 ```
 -}
 fromFloat : Float -> String
-fromFloat = Ffi.kernel "String_fromFloat"
+fromFloat = Kernel.kernel "String_fromFloat"
 
 
 {-| `fromChar c` — a one-character string from a `Char`.
@@ -71,7 +71,7 @@ fromChar '\n' --> "\n"
 ```
 -}
 fromChar : Char -> String
-fromChar = Ffi.kernel "String_fromChar"
+fromChar = Kernel.kernel "String_fromChar"
 
 
 {-| `fromList chars` — build a `String` from a list of characters.
@@ -83,7 +83,7 @@ fromList [ 'a', 'b', 'c' ] --> "abc"
 ```
 -}
 fromList : List Char -> String
-fromList = Ffi.kernel "String_fromList"
+fromList = Kernel.kernel "String_fromList"
 
 
 -- ─── Sizes + predicates ────────────────────────────────────────────
@@ -98,7 +98,7 @@ length "café" --> 4
 ```
 -}
 length : String -> Int
-length = Ffi.kernel "String_length"
+length = Kernel.kernel "String_length"
 
 
 {-| `isEmpty s` — `True` when `s` is the empty string.
@@ -110,7 +110,7 @@ isEmpty "  " --> False
 ```
 -}
 isEmpty : String -> Bool
-isEmpty = Ffi.kernel "String_isEmpty"
+isEmpty = Kernel.kernel "String_isEmpty"
 
 
 {-| `contains needle haystack` — `True` when `needle` appears inside `haystack`.
@@ -122,7 +122,7 @@ contains "" "anything" --> True
 ```
 -}
 contains : String -> String -> Bool
-contains = Ffi.kernel "String_contains"
+contains = Kernel.kernel "String_contains"
 
 
 {-| `startsWith prefix s` — `True` when `s` begins with `prefix`.
@@ -134,7 +134,7 @@ startsWith "" "hello" --> True
 ```
 -}
 startsWith : String -> String -> Bool
-startsWith = Ffi.kernel "String_startsWith"
+startsWith = Kernel.kernel "String_startsWith"
 
 
 {-| `endsWith suffix s` — `True` when `s` ends with `suffix`.
@@ -146,7 +146,7 @@ endsWith "" "hello" --> True
 ```
 -}
 endsWith : String -> String -> Bool
-endsWith = Ffi.kernel "String_endsWith"
+endsWith = Kernel.kernel "String_endsWith"
 
 
 -- | Haystack-first companion to `contains` — built for pipelines.
@@ -164,7 +164,7 @@ containsIn "xyz" "hello" --> False
 ```
 -}
 containsIn : String -> String -> Bool
-containsIn = Ffi.kernel "String_containsIn"
+containsIn = Kernel.kernel "String_containsIn"
 
 
 -- | Haystack-first companion to `startsWith`.
@@ -179,7 +179,7 @@ startsWithIn "/v2" "/api/users" --> False
 ```
 -}
 startsWithIn : String -> String -> Bool
-startsWithIn = Ffi.kernel "String_startsWithIn"
+startsWithIn = Kernel.kernel "String_startsWithIn"
 
 
 -- | Haystack-first companion to `endsWith`.
@@ -194,7 +194,7 @@ endsWithIn ".jpg" "image.png" --> False
 ```
 -}
 endsWithIn : String -> String -> Bool
-endsWithIn = Ffi.kernel "String_endsWithIn"
+endsWithIn = Kernel.kernel "String_endsWithIn"
 
 
 {-| `isEmail s` — `True` when `s` looks like a valid email address.
@@ -205,7 +205,7 @@ isEmail "not-an-email" --> False
 ```
 -}
 isEmail : String -> Bool
-isEmail = Ffi.kernel "String_isEmail"
+isEmail = Kernel.kernel "String_isEmail"
 
 
 {-| `isUrl s` — `True` when `s` looks like a valid URL.
@@ -216,7 +216,7 @@ isUrl "not a url" --> False
 ```
 -}
 isUrl : String -> Bool
-isUrl = Ffi.kernel "String_isUrl"
+isUrl = Kernel.kernel "String_isUrl"
 
 
 {-| `equalFold s1 s2` — case-insensitive equality comparison.
@@ -228,7 +228,7 @@ equalFold "ABC" "abc" --> True
 ```
 -}
 equalFold : String -> String -> Bool
-equalFold = Ffi.kernel "String_equalFold"
+equalFold = Kernel.kernel "String_equalFold"
 
 
 -- ─── Parsing ───────────────────────────────────────────────────────
@@ -243,7 +243,7 @@ toInt "abc" --> Nothing
 ```
 -}
 toInt : String -> Maybe Int
-toInt = Ffi.kernel "String_toInt"
+toInt = Kernel.kernel "String_toInt"
 
 
 {-| `toFloat s` — parse `s` as a floating-point number; `Nothing` if not valid.
@@ -255,7 +255,7 @@ toFloat "abc" --> Nothing
 ```
 -}
 toFloat : String -> Maybe Float
-toFloat = Ffi.kernel "String_toFloat"
+toFloat = Kernel.kernel "String_toFloat"
 
 
 -- ─── Case + whitespace ─────────────────────────────────────────────
@@ -269,7 +269,7 @@ toUpper "Café" --> "CAFÉ"
 ```
 -}
 toUpper : String -> String
-toUpper = Ffi.kernel "String_toUpper"
+toUpper = Kernel.kernel "String_toUpper"
 
 
 {-| `toLower s` — convert all letters in `s` to lower case.
@@ -280,7 +280,7 @@ toLower "Café" --> "café"
 ```
 -}
 toLower : String -> String
-toLower = Ffi.kernel "String_toLower"
+toLower = Kernel.kernel "String_toLower"
 
 
 {-| `casefold s` — case-fold `s` for case-insensitive comparison.
@@ -291,7 +291,7 @@ casefold "Straße" --> "strasse"
 ```
 -}
 casefold : String -> String
-casefold = Ffi.kernel "String_casefold"
+casefold = Kernel.kernel "String_casefold"
 
 
 -- | `toUpperIn locale s` — locale-correct upper-case conversion.
@@ -320,7 +320,7 @@ Maybe.withDefault (toUpper "istanbul") (Maybe.map (\tr -> toUpperIn tr "istanbul
 ```
 -}
 toUpperIn : Locale -> String -> String
-toUpperIn = Ffi.kernel "String_toUpperIn"
+toUpperIn = Kernel.kernel "String_toUpperIn"
 
 
 -- | `toLowerIn locale s` — locale-correct lower-case conversion.
@@ -336,7 +336,7 @@ Maybe.withDefault (toLower "ISTANBUL") (Maybe.map (\tr -> toLowerIn tr "ISTANBUL
 ```
 -}
 toLowerIn : Locale -> String -> String
-toLowerIn = Ffi.kernel "String_toLowerIn"
+toLowerIn = Kernel.kernel "String_toLowerIn"
 
 
 {-| `trim s` — remove leading and trailing whitespace.
@@ -348,7 +348,7 @@ trim "no space" --> "no space"
 ```
 -}
 trim : String -> String
-trim = Ffi.kernel "String_trim"
+trim = Kernel.kernel "String_trim"
 
 
 {-| `trimStart s` — remove leading whitespace only.
@@ -359,7 +359,7 @@ trimStart "  hi" --> "hi"
 ```
 -}
 trimStart : String -> String
-trimStart = Ffi.kernel "String_trimStart"
+trimStart = Kernel.kernel "String_trimStart"
 
 
 {-| `trimEnd s` — remove trailing whitespace only.
@@ -370,7 +370,7 @@ trimEnd "hi  " --> "hi"
 ```
 -}
 trimEnd : String -> String
-trimEnd = Ffi.kernel "String_trimEnd"
+trimEnd = Kernel.kernel "String_trimEnd"
 
 
 -- ─── Slicing + assembly ────────────────────────────────────────────
@@ -385,7 +385,7 @@ reverse "abcde" --> "edcba"
 ```
 -}
 reverse : String -> String
-reverse = Ffi.kernel "String_reverse"
+reverse = Kernel.kernel "String_reverse"
 
 
 {-| `append s1 s2` — concatenate two strings; `s1` followed by `s2`.
@@ -397,7 +397,7 @@ append "foo" "" --> "foo"
 ```
 -}
 append : String -> String -> String
-append = Ffi.kernel "String_append"
+append = Kernel.kernel "String_append"
 
 
 {-| `concat strings` — join a list of strings into one.
@@ -409,7 +409,7 @@ concat [ "a", "b", "c" ] --> "abc"
 ```
 -}
 concat : List String -> String
-concat = Ffi.kernel "String_concat"
+concat = Kernel.kernel "String_concat"
 
 
 {-| `join sep strings` — join a list of strings with `sep` between each pair.
@@ -421,7 +421,7 @@ join "" [ "hello", "world" ] --> "helloworld"
 ```
 -}
 join : String -> List String -> String
-join = Ffi.kernel "String_join"
+join = Kernel.kernel "String_join"
 
 
 {-| `split sep s` — split `s` on every occurrence of `sep`.
@@ -433,7 +433,7 @@ split "x" "no match" --> [ "no match" ]
 ```
 -}
 split : String -> String -> List String
-split = Ffi.kernel "String_split"
+split = Kernel.kernel "String_split"
 
 
 {-| `replace from to s` — replace every occurrence of `from` in `s` with `to`.
@@ -445,7 +445,7 @@ replace "x" "y" "no match" --> "no match"
 ```
 -}
 replace : String -> String -> String -> String
-replace = Ffi.kernel "String_replace"
+replace = Kernel.kernel "String_replace"
 
 
 {-| `slice start end s` — characters from index `start` to `end` (exclusive).
@@ -458,7 +458,7 @@ slice (-5) (-1) "hello world" --> "worl"
 ```
 -}
 slice : Int -> Int -> String -> String
-slice = Ffi.kernel "String_slice"
+slice = Kernel.kernel "String_slice"
 
 
 -- | Drop the first n characters (runes) from s.  Elm semantics:
@@ -472,7 +472,7 @@ dropLeft 9 "hi" --> ""
 ```
 -}
 dropLeft : Int -> String -> String
-dropLeft = Ffi.kernel "String_dropLeft"
+dropLeft = Kernel.kernel "String_dropLeft"
 
 
 -- | Drop the last n characters (runes) from s.  Elm semantics:
@@ -486,7 +486,7 @@ dropRight 9 "hi" --> ""
 ```
 -}
 dropRight : Int -> String -> String
-dropRight = Ffi.kernel "String_dropRight"
+dropRight = Kernel.kernel "String_dropRight"
 
 
 {-| `repeat n s` — concatenate `s` with itself `n` times.
@@ -498,7 +498,7 @@ repeat 1 "x" --> "x"
 ```
 -}
 repeat : Int -> String -> String
-repeat = Ffi.kernel "String_repeat"
+repeat = Kernel.kernel "String_repeat"
 
 
 {-| `padLeft n c s` — left-pad `s` with character `c` to width `n`.
@@ -510,7 +510,7 @@ padLeft 2 '-' "abc" --> "abc"
 ```
 -}
 padLeft : Int -> Char -> String -> String
-padLeft = Ffi.kernel "String_padLeft"
+padLeft = Kernel.kernel "String_padLeft"
 
 
 {-| `padRight n c s` — right-pad `s` with character `c` to width `n`.
@@ -521,7 +521,7 @@ padRight 3 ' ' "abc" --> "abc"
 ```
 -}
 padRight : Int -> Char -> String -> String
-padRight = Ffi.kernel "String_padRight"
+padRight = Kernel.kernel "String_padRight"
 
 
 -- ─── Word / line / character views ─────────────────────────────────
@@ -536,7 +536,7 @@ words "" --> []
 ```
 -}
 words : String -> List String
-words = Ffi.kernel "String_words"
+words = Kernel.kernel "String_words"
 
 
 {-| `lines s` — split `s` into lines on newline boundaries.
@@ -548,7 +548,7 @@ lines "" --> [ "" ]
 ```
 -}
 lines : String -> List String
-lines = Ffi.kernel "String_lines"
+lines = Kernel.kernel "String_lines"
 
 
 {-| `toList s` — convert `s` to a list of characters.
@@ -560,7 +560,7 @@ toList "hi" --> [ 'h', 'i' ]
 ```
 -}
 toList : String -> List Char
-toList = Ffi.kernel "String_toList"
+toList = Kernel.kernel "String_toList"
 
 
 -- ─── Char-level navigation ─────────────────────────────────────────
@@ -576,7 +576,7 @@ left 9 "hi" --> "hi"
 ```
 -}
 left : Int -> String -> String
-left = Ffi.kernel "String_left"
+left = Kernel.kernel "String_left"
 
 
 -- | `right n s` — the last `n` characters (runes). `n <= 0` → "".
@@ -589,7 +589,7 @@ right 9 "hi" --> "hi"
 ```
 -}
 right : Int -> String -> String
-right = Ffi.kernel "String_right"
+right = Kernel.kernel "String_right"
 
 
 -- | `cons c s` — prepend a character.
@@ -601,7 +601,7 @@ cons 'x' "" --> "x"
 ```
 -}
 cons : Char -> String -> String
-cons = Ffi.kernel "String_cons"
+cons = Kernel.kernel "String_cons"
 
 
 -- | `uncons s` — split off the first character; `Nothing` on "".
@@ -614,7 +614,7 @@ uncons "x" --> Just ( 'x', "" )
 ```
 -}
 uncons : String -> Maybe ( Char, String )
-uncons = Ffi.kernel "String_uncons"
+uncons = Kernel.kernel "String_uncons"
 
 
 -- | `pad n ch s` — centre-pad `s` to width `n` with `ch`.
@@ -626,7 +626,7 @@ pad 3 ' ' "hello" --> "hello"
 ```
 -}
 pad : Int -> Char -> String -> String
-pad = Ffi.kernel "String_pad"
+pad = Kernel.kernel "String_pad"
 
 
 -- | `indexes sub s` — every rune start index of `sub` within `s`.
@@ -639,7 +639,7 @@ indexes "o" "foo boo" --> [ 2, 6 ]
 ```
 -}
 indexes : String -> String -> List Int
-indexes = Ffi.kernel "String_indexes"
+indexes = Kernel.kernel "String_indexes"
 
 
 -- ─── Char-fold family ──────────────────────────────────────────────
@@ -654,7 +654,7 @@ map (\c -> if c == 'e' then 'a' else c) "hello" --> "hallo"
 ```
 -}
 map : (Char -> Char) -> String -> String
-map = Ffi.kernel "String_map"
+map = Kernel.kernel "String_map"
 
 
 -- | `filter pred s` — keep only characters satisfying `pred`.
@@ -666,7 +666,7 @@ filter Char.isAlpha "a1b2c3" --> "abc"
 ```
 -}
 filter : (Char -> Bool) -> String -> String
-filter = Ffi.kernel "String_filter"
+filter = Kernel.kernel "String_filter"
 
 
 -- | `foldl fn acc s` — fold left over the characters.
@@ -678,7 +678,7 @@ foldl (\c acc -> String.cons c acc) "" "abc" --> "cba"
 ```
 -}
 foldl : (Char -> b -> b) -> b -> String -> b
-foldl = Ffi.kernel "String_foldl"
+foldl = Kernel.kernel "String_foldl"
 
 
 -- | `foldr fn acc s` — fold right over the characters.
@@ -690,7 +690,7 @@ foldr (\c acc -> acc + 1) 0 "hello" --> 5
 ```
 -}
 foldr : (Char -> b -> b) -> b -> String -> b
-foldr = Ffi.kernel "String_foldr"
+foldr = Kernel.kernel "String_foldr"
 
 
 -- | `any pred s` — `True` if any character satisfies `pred`.
@@ -703,7 +703,7 @@ any (\_ -> True) "" --> False
 ```
 -}
 any : (Char -> Bool) -> String -> Bool
-any = Ffi.kernel "String_any"
+any = Kernel.kernel "String_any"
 
 
 -- | `all pred s` — `True` if every character satisfies `pred`.
@@ -716,4 +716,4 @@ all (\_ -> True) "" --> True
 ```
 -}
 all : (Char -> Bool) -> String -> Bool
-all = Ffi.kernel "String_all"
+all = Kernel.kernel "String_all"

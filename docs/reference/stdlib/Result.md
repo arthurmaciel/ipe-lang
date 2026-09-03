@@ -16,7 +16,7 @@ values so you rarely need to `case` on them by hand: `map` changes the
 success value, `andThen` chains a step that may itself fail, `mapError`
 translates the error side, and `combine` collects a list of results.
 
-Each member is a point-free `Ffi.kernel "Result_<member>"` alias resolved
+Each member is a point-free `Kernel.kernel "Result_<member>"` alias resolved
 by `detect_kernel_alias` to the registered `Result*` `StdlibKernel`
 variant (`ipe_runtime::result::*`).
 

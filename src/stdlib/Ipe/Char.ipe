@@ -1,7 +1,7 @@
 -- | Ipe.Char — single-character helpers.
 --
 -- `Char` is a single Unicode code point; functions are aliased to
--- runtime kernels via `Ffi.kernel`.
+-- runtime kernels via `Kernel.kernel`.
 module Ipe.Char exposing
     ( isAlpha, isDigit, isLower, isUpper
     , isAlphaNum, isHexDigit, isOctDigit
@@ -10,49 +10,49 @@ module Ipe.Char exposing
     )
 
 
-import Ipe.Ffi as Ffi
+import Ipe.Ffi.Kernel as Kernel
 
 
 isAlpha : Char -> Bool
-isAlpha = Ffi.kernel "Char_isAlpha"
+isAlpha = Kernel.kernel "Char_isAlpha"
 
 
 isDigit : Char -> Bool
-isDigit = Ffi.kernel "Char_isDigit"
+isDigit = Kernel.kernel "Char_isDigit"
 
 
 isLower : Char -> Bool
-isLower = Ffi.kernel "Char_isLower"
+isLower = Kernel.kernel "Char_isLower"
 
 
 isUpper : Char -> Bool
-isUpper = Ffi.kernel "Char_isUpper"
+isUpper = Kernel.kernel "Char_isUpper"
 
 
 -- | A letter or a digit (`isAlpha` or `isDigit`).
 isAlphaNum : Char -> Bool
-isAlphaNum = Ffi.kernel "Char_isAlphaNum"
+isAlphaNum = Kernel.kernel "Char_isAlphaNum"
 
 
 -- | An ASCII hexadecimal digit (`0-9`, `a-f`, `A-F`).
 isHexDigit : Char -> Bool
-isHexDigit = Ffi.kernel "Char_isHexDigit"
+isHexDigit = Kernel.kernel "Char_isHexDigit"
 
 
 -- | An ASCII octal digit (`0-7`).
 isOctDigit : Char -> Bool
-isOctDigit = Ffi.kernel "Char_isOctDigit"
+isOctDigit = Kernel.kernel "Char_isOctDigit"
 
 
 -- Note: `toLower` / `toUpper` return a single-rune String (the
 -- result of `unicode.ToLower(r)` wrapped in `string(_)`), matching
 -- the kernel registry's `Char -> String` shape.
 toLower : Char -> String
-toLower = Ffi.kernel "Char_toLower"
+toLower = Kernel.kernel "Char_toLower"
 
 
 toUpper : Char -> String
-toUpper = Ffi.kernel "Char_toUpper"
+toUpper = Kernel.kernel "Char_toUpper"
 
 
 -- | Unicode code-point conversion.
@@ -65,8 +65,8 @@ toUpper = Ffi.kernel "Char_toUpper"
 -- ranges, etc.  Out-of-range `fromCode` (negative or above
 -- 0x10FFFF) yields the Unicode replacement character `'�'`.
 toCode : Char -> Int
-toCode = Ffi.kernel "Char_toCode"
+toCode = Kernel.kernel "Char_toCode"
 
 
 fromCode : Int -> Char
-fromCode = Ffi.kernel "Char_fromCode"
+fromCode = Kernel.kernel "Char_fromCode"

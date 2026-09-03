@@ -1,6 +1,6 @@
 -- | Ipe.Crypto — cryptographic primitives.
 --
--- All functions are aliased to runtime kernels via `Ffi.kernel`.
+-- All functions are aliased to runtime kernels via `Kernel.kernel`.
 -- Security notes:
 --   * `constantTimeEqual` stays constant-time (backed by `subtle`).
 --   * AEAD functions (`aesGcmEncrypt`, `chacha20Encrypt`) use a fresh
@@ -34,22 +34,22 @@ module Ipe.Crypto exposing
     )
 
 
-import Ipe.Ffi as Ffi
+import Ipe.Ffi.Kernel as Kernel
 
 
 -- ── Hashes ───────────────────────────────────────────────────────────────────
 
 sha256 : String -> String
-sha256 = Ffi.kernel "Crypto_sha256"
+sha256 = Kernel.kernel "Crypto_sha256"
 
 sha512 : String -> String
-sha512 = Ffi.kernel "Crypto_sha512"
+sha512 = Kernel.kernel "Crypto_sha512"
 
 sha1 : String -> String
-sha1 = Ffi.kernel "Crypto_sha1"
+sha1 = Kernel.kernel "Crypto_sha1"
 
 md5 : String -> String
-md5 = Ffi.kernel "Crypto_md5"
+md5 = Kernel.kernel "Crypto_md5"
 
 
 -- ── HMAC ─────────────────────────────────────────────────────────────────────
@@ -60,26 +60,26 @@ md5 = Ffi.kernel "Crypto_md5"
 
 -- | `hmacSha256 key message` — HMAC-SHA-256.  Returns a typed `Mac`.
 hmacSha256 : Key -> String -> Mac
-hmacSha256 = Ffi.kernel "Crypto_hmacSha256WithKey"
+hmacSha256 = Kernel.kernel "Crypto_hmacSha256WithKey"
 
 -- | `hmacSha512 key message` — HMAC-SHA-512.  Returns a typed `Mac`.
 hmacSha512 : Key -> String -> Mac
-hmacSha512 = Ffi.kernel "Crypto_hmacSha512WithKey"
+hmacSha512 = Kernel.kernel "Crypto_hmacSha512WithKey"
 
 
 -- ── RSA / asymmetric ─────────────────────────────────────────────────────────
 
 rsaSha256Sign : String -> String -> Result Error String
-rsaSha256Sign = Ffi.kernel "Crypto_rsaSha256Sign"
+rsaSha256Sign = Kernel.kernel "Crypto_rsaSha256Sign"
 
 rsaSha256Verify : String -> String -> String -> Bool
-rsaSha256Verify = Ffi.kernel "Crypto_rsaSha256Verify"
+rsaSha256Verify = Kernel.kernel "Crypto_rsaSha256Verify"
 
 
 -- ── Constant-time comparison ──────────────────────────────────────────────────
 
 constantTimeEqual : String -> String -> Bool
-constantTimeEqual = Ffi.kernel "Crypto_constantTimeEqual"
+constantTimeEqual = Kernel.kernel "Crypto_constantTimeEqual"
 
 
 -- ── AEAD symmetric encryption ─────────────────────────────────────────────────
@@ -91,19 +91,19 @@ constantTimeEqual = Ffi.kernel "Crypto_constantTimeEqual"
 
 -- | `aesGcmEncrypt key plaintext` — AES-256-GCM encrypt with a typed `Key`.
 aesGcmEncrypt : Key -> String -> Result Error String
-aesGcmEncrypt = Ffi.kernel "Crypto_aesGcmEncrypt"
+aesGcmEncrypt = Kernel.kernel "Crypto_aesGcmEncrypt"
 
 -- | `aesGcmDecrypt key ciphertext` — AES-256-GCM decrypt with a typed `Key`.
 aesGcmDecrypt : Key -> String -> Result Error String
-aesGcmDecrypt = Ffi.kernel "Crypto_aesGcmDecrypt"
+aesGcmDecrypt = Kernel.kernel "Crypto_aesGcmDecrypt"
 
 -- | `chacha20Encrypt key plaintext` — ChaCha20-Poly1305 encrypt with a typed `Key`.
 chacha20Encrypt : Key -> String -> Result Error String
-chacha20Encrypt = Ffi.kernel "Crypto_chacha20Encrypt"
+chacha20Encrypt = Kernel.kernel "Crypto_chacha20Encrypt"
 
 -- | `chacha20Decrypt key ciphertext` — ChaCha20-Poly1305 decrypt with a typed `Key`.
 chacha20Decrypt : Key -> String -> Result Error String
-chacha20Decrypt = Ffi.kernel "Crypto_chacha20Decrypt"
+chacha20Decrypt = Kernel.kernel "Crypto_chacha20Decrypt"
 
 
 -- ── Key derivation ────────────────────────────────────────────────────────────
@@ -114,20 +114,20 @@ chacha20Decrypt = Ffi.kernel "Crypto_chacha20Decrypt"
 
 -- | Derive an AES-256 `Key` from a password + salt string.
 aesKeyFromPassword : String -> String -> Key
-aesKeyFromPassword = Ffi.kernel "Crypto_aesKeyFromPassword"
+aesKeyFromPassword = Kernel.kernel "Crypto_aesKeyFromPassword"
 
 -- | Derive a ChaCha20 `Key` from a password + salt string.
 chachaKeyFromPassword : String -> String -> Key
-chachaKeyFromPassword = Ffi.kernel "Crypto_chachaKeyFromPassword"
+chachaKeyFromPassword = Kernel.kernel "Crypto_chachaKeyFromPassword"
 
 
 -- ── Random ───────────────────────────────────────────────────────────────────
 
 randomBytes : Int -> Task Error String
-randomBytes = Ffi.kernel "Crypto_randomBytes"
+randomBytes = Kernel.kernel "Crypto_randomBytes"
 
 randomToken : Int -> Task Error String
-randomToken = Ffi.kernel "Crypto_randomToken"
+randomToken = Kernel.kernel "Crypto_randomToken"
 
 
 -- ── Typed newtypes ────────────────────────────────────────────────────────────
@@ -149,12 +149,12 @@ type Mac = Mac
 -- for an empty key; a wrong-length key for a given algorithm fails closed
 -- at that algorithm's boundary (e.g. AEAD requires a 32-byte key).
 keyFromString : String -> Maybe Key
-keyFromString = Ffi.kernel "Key_fromString"
+keyFromString = Kernel.kernel "Key_fromString"
 
 -- | Parse raw bytes (as Ipe `String`/`Bytes`) into a `Key`.
 keyFromBytes : String -> Maybe Key
-keyFromBytes = Ffi.kernel "Key_fromBytes"
+keyFromBytes = Kernel.kernel "Key_fromBytes"
 
 -- | Render a `Mac` as a lowercase hex string for storage or display.
 macToHex : Mac -> String
-macToHex = Ffi.kernel "Mac_toHex"
+macToHex = Kernel.kernel "Mac_toHex"

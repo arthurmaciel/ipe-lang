@@ -9,7 +9,7 @@ Ipe.Html.Attributes — HTML attribute builders.
 Every fixed-key builder (`class` / `id` / `checked` / …) is ordinary Ipê over
 the three retained native primitives `attribute` / `boolAttribute` / `noAttr`,
 which are the irreducible `Attribute`-value constructors reached through
-`Ffi.kernel` aliases (`html_named_attr_` / `html_bool_named_attr_` /
+`Kernel.kernel` aliases (`html_named_attr_` / `html_bool_named_attr_` /
 `html_no_attr_`). The attribute VALUE is escaped at the native render sink
 (`escape_attr`), so no escaping happens here; the fixed keys are literals.
 

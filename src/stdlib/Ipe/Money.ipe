@@ -5,7 +5,7 @@
 -- comparison, percent, `currencyCode`, `parseCurrency`) live here as Ipê
 -- source; the currency-property table, formatter, fair-split `allocate`, and
 -- FX rate registry route through the guarded `Money_*` runtime kernels via
--- point-free `Ffi.kernel` aliases (each wrapper converts its `Currency` arg to
+-- point-free `Kernel.kernel` aliases (each wrapper converts its `Currency` arg to
 -- an ISO 4217 code first, since the kernels take the code as a `String`).
 module Ipe.Money exposing
     ( Money(..), Currency(..)
@@ -23,7 +23,7 @@ module Ipe.Money exposing
     , setRate, getRate, hasRate, clearRates, convert
     )
 
-import Ipe.Ffi as Ffi
+import Ipe.Ffi.Kernel as Kernel
 import Ipe.List as List
 import Ipe.Error as Error exposing (Error)
 import Ipe.Decimal as Dec exposing (Decimal)
@@ -169,15 +169,15 @@ currencyCode c =
 -- before the `String`-taking kernel.
 
 minorUnitsForCode : String -> Int
-minorUnitsForCode = Ffi.kernel "Money_minorUnits"
+minorUnitsForCode = Kernel.kernel "Money_minorUnits"
 
 
 symbolForCode : String -> String
-symbolForCode = Ffi.kernel "Money_symbol"
+symbolForCode = Kernel.kernel "Money_symbol"
 
 
 nameForCode : String -> String
-nameForCode = Ffi.kernel "Money_currencyName"
+nameForCode = Kernel.kernel "Money_currencyName"
 
 
 -- | Number of decimal places for the currency's minor unit.
@@ -218,7 +218,7 @@ knownCurrency c =
 
 
 isKnownCurrencyForCode : String -> Bool
-isKnownCurrencyForCode = Ffi.kernel "Money_isKnownCurrency"
+isKnownCurrencyForCode = Kernel.kernel "Money_isKnownCurrency"
 
 
 -- | Check whether an ISO 4217 code string is a recognised currency, via the
@@ -337,7 +337,7 @@ abs m =
 
 
 allocateDecimals : Int -> Int -> Decimal -> List Decimal
-allocateDecimals = Ffi.kernel "Money_allocate"
+allocateDecimals = Kernel.kernel "Money_allocate"
 
 
 -- | Allocate a Money value across N parts as evenly as possible, with any
@@ -465,11 +465,11 @@ subPercent pct m =
 -- ─── Formatting + minor extraction ────────────────────────────────
 
 formatForCode : String -> Decimal -> String
-formatForCode = Ffi.kernel "Money_format"
+formatForCode = Kernel.kernel "Money_format"
 
 
 formatWithCodeForCode : String -> Decimal -> String
-formatWithCodeForCode = Ffi.kernel "Money_formatWithCode"
+formatWithCodeForCode = Kernel.kernel "Money_formatWithCode"
 
 
 -- | Default symbol-prefixed form: "$12.34", "¥1234" (JPY). The amount is
@@ -500,15 +500,15 @@ toMinor m =
 -- instance deployments need a shared source for consistency.
 
 setRateForCodes : String -> String -> Decimal -> Result Error ()
-setRateForCodes = Ffi.kernel "Money_setRate"
+setRateForCodes = Kernel.kernel "Money_setRate"
 
 
 getRateForCodes : String -> String -> Result Error Decimal
-getRateForCodes = Ffi.kernel "Money_getRate"
+getRateForCodes = Kernel.kernel "Money_getRate"
 
 
 hasRateForCodes : String -> String -> Bool
-hasRateForCodes = Ffi.kernel "Money_hasRate"
+hasRateForCodes = Kernel.kernel "Money_hasRate"
 
 
 -- | Register an FX rate. Rejects a non-positive rate; auto-registers the
@@ -531,7 +531,7 @@ hasRate from to =
 
 -- | Drop every registered rate (test / admin).
 clearRates : () -> Result Error ()
-clearRates = Ffi.kernel "Money_clearRates"
+clearRates = Kernel.kernel "Money_clearRates"
 
 
 -- | Convert Money to a target currency using the registered rate.

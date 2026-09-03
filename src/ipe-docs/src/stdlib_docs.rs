@@ -529,7 +529,7 @@ withDefault 0 (Err e) --> 0
 ```
 -}
 withDefault : a -> Result b a -> a
-withDefault = Ffi.kernel \"Result_withDefault\"
+withDefault = Kernel.kernel \"Result_withDefault\"
 ";
         let m = extract_module_doc("Ipe.Demo", src);
         let wd = m

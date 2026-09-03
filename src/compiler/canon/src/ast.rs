@@ -189,13 +189,13 @@ pub enum Expr_ {
     ///
     /// [`path_literal`]: ipe_runtime::path::path_literal
     PathLit(String),
-    /// The reserved `customElement "<js-path>"` constructor — legal ONLY as the
+    /// The reserved `CustomElement.fromFile "<js-path>"` constructor — legal ONLY as the
     /// entire body of a `CustomElement`-annotated binding, applied to a single
     /// string literal. The carried [`String`] is the CLEANED, NUL-free,
     /// non-escaping relative path to the author's widget-hook JS file, validated
     /// at canonicalisation with `ipe_diagnostics::path_check::validate` (the same
     /// all-targets path seal the `path "…"` literal uses); a non-literal argument,
-    /// a bare `customElement` value, or a traversing path is a compile error
+    /// a bare `CustomElement.fromFile` value, or a traversing path is a compile error
     /// emitted before this node is ever constructed. The file's existence is
     /// checked later, at the build stage that owns the project root.
     ///

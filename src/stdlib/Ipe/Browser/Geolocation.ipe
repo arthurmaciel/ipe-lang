@@ -1,4 +1,4 @@
--- | Ipe.Browser.Geolocation — read the device's location over `Ipe.Js` ports.
+-- | Ipe.Browser.Geolocation — read the device's location over `Ipe.Ffi.Js` ports.
 --
 -- A first-party proof of the per-capability web mechanism spanning BOTH port
 -- directions: an outbound `JsCmd` requests a position (one-shot or a continuous

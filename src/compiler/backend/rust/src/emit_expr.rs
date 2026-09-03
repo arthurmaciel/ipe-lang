@@ -3056,7 +3056,7 @@ fn emit_tea_call(
         // `Cmd.publishNoEcho : String -> Dict String String -> Cmd msg`
         // Both map to the standard N-arg emit path (runtime live/pubsub.rs).
         KernelFn::CmdPublish | KernelFn::CmdPublishNoEcho => Ok(None),
-        // ── Ipe.Js ports: Js.send / Js.subscribe ─────────────────────────────────
+        // ── Ipe.Ffi.Js ports: Js.send / Js.subscribe ─────────────────────────────────
         // `Js.send : a -> Cmd msg`  →  `js_send(<payload>)`
         // `Js.subscribe : Decoder a -> (a -> msg) -> Sub msg`
         //   →  `js_subscribe(<decoder>, <to_msg>)`
@@ -5592,7 +5592,7 @@ pub fn emit_expr_at(
         Expr::PathLit(s) => Ok(format!(
             "ipe_runtime::path::path_literal({s:?}.to_string())"
         )),
-        // The reserved `customElement` constructor value: a widget handle built
+        // The reserved `CustomElement.fromFile` constructor value: a widget handle built
         // from its generated content-addressed tag. The tag was minted at
         // lowering from the sealed, in-project JS path (never raw user input);
         // `js_path` is retained on the node for the WP5 serving stage but is not

@@ -19,7 +19,7 @@ module Ipe.Time exposing
     )
 
 
-import Ipe.Ffi as Ffi
+import Ipe.Ffi.Kernel as Kernel
 import Ipe.Error exposing (Error)
 import Ipe.Task as Task
 import Ipe.Duration as Duration exposing (Duration)
@@ -31,7 +31,7 @@ import Ipe.Time.Timestamp as Timestamp exposing (Timestamp)
 
 -- | Private kernel: returns raw milliseconds since the Unix epoch.
 nowMillisKernel : () -> Task Error Int
-nowMillisKernel = Ffi.kernel "Time_now"
+nowMillisKernel = Kernel.kernel "Time_now"
 
 
 -- | `now ()` — the current instant.
@@ -42,7 +42,7 @@ now =
 
 -- | Private kernel: returns raw milliseconds since the Unix epoch.
 unixMillisKernel : () -> Task Error Int
-unixMillisKernel = Ffi.kernel "Time_unixMillis"
+unixMillisKernel = Kernel.kernel "Time_unixMillis"
 
 
 -- | `unixMillis ()` — the current instant (alias for `now`).
@@ -60,14 +60,14 @@ sleep span =
 
 
 sleepKernel : Int -> Task Error ()
-sleepKernel = Ffi.kernel "Time_sleep"
+sleepKernel = Kernel.kernel "Time_sleep"
 
 
 -- Pure formatting
 
 
 timeStringKernel : Int -> String
-timeStringKernel = Ffi.kernel "Time_timeString"
+timeStringKernel = Kernel.kernel "Time_timeString"
 
 
 -- | `timeString t` — format `t` as a human-readable local-time string.
@@ -77,7 +77,7 @@ timeString t =
 
 
 formatKernel : String -> Int -> String
-formatKernel = Ffi.kernel "Time_format"
+formatKernel = Kernel.kernel "Time_format"
 
 
 -- | `format pattern t` — format `t` using a strftime-style `pattern`.
@@ -87,7 +87,7 @@ format pattern t =
 
 
 formatHTTPKernel : Int -> String
-formatHTTPKernel = Ffi.kernel "Time_formatHTTP"
+formatHTTPKernel = Kernel.kernel "Time_formatHTTP"
 
 
 -- | `formatHTTP t` — format `t` as an HTTP-date string (RFC 7231).
@@ -97,7 +97,7 @@ formatHTTP t =
 
 
 formatISO8601Kernel : Int -> String
-formatISO8601Kernel = Ffi.kernel "Time_formatISO8601"
+formatISO8601Kernel = Kernel.kernel "Time_formatISO8601"
 
 
 -- | `formatISO8601 t` — format `t` as an ISO 8601 string.
@@ -107,7 +107,7 @@ formatISO8601 t =
 
 
 formatRFC3339Kernel : Int -> String
-formatRFC3339Kernel = Ffi.kernel "Time_formatRFC3339"
+formatRFC3339Kernel = Kernel.kernel "Time_formatRFC3339"
 
 
 -- | `formatRFC3339 t` — format `t` as an RFC 3339 string.
@@ -147,7 +147,7 @@ toMillis t =
 
 
 addMillisKernel : Int -> Int -> Int
-addMillisKernel = Ffi.kernel "Time_addMillis"
+addMillisKernel = Kernel.kernel "Time_addMillis"
 
 
 -- | `addMillis ms t` — shift instant `t` by `ms` raw milliseconds.  Prefer
@@ -159,7 +159,7 @@ addMillis ms t =
 
 
 diffMillisKernel : Int -> Int -> Int
-diffMillisKernel = Ffi.kernel "Time_diffMillis"
+diffMillisKernel = Kernel.kernel "Time_diffMillis"
 
 
 -- | `diffMillis a b` — raw milliseconds from instant `b` to instant `a`.
@@ -181,7 +181,7 @@ every interval msg =
 
 
 everyKernel : Int -> msg -> Sub msg
-everyKernel = Ffi.kernel "Time_every"
+everyKernel = Kernel.kernel "Time_every"
 
 
 -- Pure calendar helpers
@@ -189,9 +189,9 @@ everyKernel = Ffi.kernel "Time_every"
 
 -- | `isLeapYear year` — True when `year` is a leap year.
 isLeapYear : Int -> Bool
-isLeapYear = Ffi.kernel "Time_isLeapYear"
+isLeapYear = Kernel.kernel "Time_isLeapYear"
 
 
 -- | `daysInMonth year month` — number of days in `month` of `year`.
 daysInMonth : Int -> Int -> Int
-daysInMonth = Ffi.kernel "Time_daysInMonth"
+daysInMonth = Kernel.kernel "Time_daysInMonth"

@@ -21645,7 +21645,7 @@ impl<'a> Lowerer<'a> {
             // A compile-time-validated `path "…"` literal: the cleaned string
             // was proven valid by the canonicaliser; lower directly to PathLit.
             canon::Expr_::PathLit(cleaned) => Ok(Expr::PathLit(cleaned.clone())),
-            // The reserved `customElement "<js-path>"` constructor. The carried
+            // The reserved `CustomElement.fromFile "<js-path>"` constructor. The carried
             // path is the CLEANED, in-project, traversal-free relative path the
             // canon seal already proved (and the build-stage containment gate
             // re-checks against the real project root). The generated element tag
@@ -22995,7 +22995,7 @@ impl<'a> Lowerer<'a> {
                 {
                     return Ok(Intercepted::Done(self.lower_store_order_by(&peek, args)?));
                 }
-                // ── Ipe.Js ports (raw typed Ipê↔JS transport) ────────────
+                // ── Ipe.Ffi.Js ports (raw typed Ipê↔JS transport) ────────────
                 //
                 // `Js.send : a -> Cmd msg` (arity 1) and
                 // `Js.subscribe : Decoder a -> (a -> msg) -> Sub msg` (arity 2)
@@ -25493,7 +25493,7 @@ impl<'a> Lowerer<'a> {
                 // ── Server: cookie token source — arity 1 ────────────────
                 // `Server.cookieToken : String -> TokenSource`
                 | KernelFn::ServerCookieToken
-                // ── Ipe.Js port — outbound. `Js.send : a -> Cmd msg`. Arity 1;
+                // ── Ipe.Ffi.Js port — outbound. `Js.send : a -> Cmd msg`. Arity 1;
                 //    the port intercept rejects it before emission, this is the
                 //    defensive fixed count.
                 | KernelFn::JsSend,
@@ -25795,12 +25795,12 @@ impl<'a> Lowerer<'a> {
                 // `Web.appWith : List (Setting Web) -> WebAppCfg model msg
                 //   -> Task Error ()`
                 | KernelFn::WebAppWith
-                // ── Ipe.Js port — inbound.
+                // ── Ipe.Ffi.Js port — inbound.
                 //   `Js.subscribe : Decoder a -> (a -> msg) -> Sub msg`. Arity 2;
                 //   the port intercept rejects it before emission, this is the
                 //   defensive fixed count.
                 | KernelFn::JsSubscribe
-                // ── Ipe.Js port — correlated one-shot.
+                // ── Ipe.Ffi.Js port — correlated one-shot.
                 //   `Js.request : a -> Decoder b -> Task b`. Arity 2;
                 //   the port intercept seal-checks both args before emission.
                 | KernelFn::JsRequest,
@@ -27595,7 +27595,7 @@ impl<'a> Lowerer<'a> {
                     ("Sub", "every") => Ok(Callee::Kernel(KernelFn::SubEvery)),
                     ("Sub", "map") => Ok(Callee::Kernel(KernelFn::SubMap)),
                     ("Sub", "subscribeTopic") => Ok(Callee::Kernel(KernelFn::SubSubscribeTopic)),
-                    // ── Ipe.Js ports (raw typed Ipê↔JS transport) ────────────
+                    // ── Ipe.Ffi.Js ports (raw typed Ipê↔JS transport) ────────────
                     ("Js", "send") => Ok(Callee::Kernel(KernelFn::JsSend)),
                     ("Js", "subscribe") => Ok(Callee::Kernel(KernelFn::JsSubscribe)),
                     ("Js", "request") => Ok(Callee::Kernel(KernelFn::JsRequest)),
@@ -27779,7 +27779,7 @@ impl<'a> Lowerer<'a> {
                     ("Html", "doctype") => Ok(Callee::Kernel(KernelFn::HtmlDoctype)),
                     ("Html", "titleNode") => Ok(Callee::Kernel(KernelFn::HtmlTitleNode)),
                     // ── Ipe.Html.Attributes retained primitives (legacy arm; the
-                    //    `Ffi.kernel "Attr_*"` alias handles these in practice,
+                    //    `Kernel.kernel "Attr_*"` alias handles these in practice,
                     //    this arm keeps decl() ⇔ legacy parity per
                     //    `decl_equiv_legacy_match`). The fixed-key builders are
                     //    pure Ipê over these in `Ipe/Html/Attributes.ipe`. ──
@@ -27986,7 +27986,7 @@ impl<'a> Lowerer<'a> {
                     ("Log", "level") => Ok(Callee::Kernel(KernelFn::LogLevelSetting)),
                     // `Level.*` arms removed: `Ipe.Level` is now a compiled-source
                     // module; its kernels are reached exclusively through
-                    // `Ffi.kernel "Level_*"` aliases (fast path, `id = Some`).
+                    // `Kernel.kernel "Level_*"` aliases (fast path, `id = Some`).
                     // They are in `REGISTRY_ONLY_ALLOWLIST` so the
                     // `decl_equiv_legacy_match` test skips them.
                     ("Db", "url") => Ok(Callee::Kernel(KernelFn::DbUrlSetting)),
@@ -30833,7 +30833,7 @@ mod tests {
     // stdlib_index) but the qualifier "PubSub" is absent from QUALIFIERS in
     // env.rs, so no VarKernel node with module="PubSub" can be produced via
     // the legacy string path.  They are reachable ONLY through the
-    // `Ffi.kernel "PubSub_publish"` alias fast-path (`id = Some`, set by
+    // `Kernel.kernel "PubSub_publish"` alias fast-path (`id = Some`, set by
     // `ipe_canon::resolve::detect_kernel_alias`).  Both
     // have a real type scheme (`String -> a -> Task Error Int`) and a
     // dedicated emit arm — they emit `pubsub_publish::<_, IpeError>(topic,
@@ -30841,7 +30841,7 @@ mod tests {
     // decl-equiv-legacy test skips them.
     // The stdlib families (Regex / Path / Trace /
     // Compression / Csv / Cache / PubSub) are resolved EXCLUSIVELY through the
-    // `Ffi.kernel "Mod_fn"` alias fast-path (`id = Some`, set by
+    // `Kernel.kernel "Mod_fn"` alias fast-path (`id = Some`, set by
     // `ipe_canon::resolve::detect_kernel_alias`): their qualifiers are compiled-
     // source module names, never legacy `QUALIFIERS`, so no user program ever
     // produces a `VarKernel { id = None, module = "Regex", … }` node. They have
@@ -30927,7 +30927,7 @@ mod tests {
         KernelFn::ConfigDecodeJson,
         KernelFn::ConfigLoadFromFile,
         // Ipe.WebSocket — outbound client. Resolved exclusively through the
-        // `Ffi.kernel "WebSocket_*"` / `"Sub_subscribeWebSocket"` alias fast-path
+        // `Kernel.kernel "WebSocket_*"` / `"Sub_subscribeWebSocket"` alias fast-path
         // (the `WebSocket` qualifier is a compiled-source module name, never a
         // legacy `QUALIFIERS` entry), so no legacy `lower_callee` arm exists.
         KernelFn::WebSocketConnect,
@@ -30938,14 +30938,14 @@ mod tests {
         KernelFn::WebSocketCloseWithCode,
         KernelFn::SubSubscribeWebSocket,
         // Ipe.Env — compiled-source module; resolved exclusively through the
-        // `Ffi.kernel "Env_public"` alias fast-path (the `Env` qualifier is a
+        // `Kernel.kernel "Env_public"` alias fast-path (the `Env` qualifier is a
         // compiled-source module name, never a legacy `QUALIFIERS` entry), so
         // no legacy `lower_callee` arm exists.
         KernelFn::EnvPublic,
         // Ipe.Email
         KernelFn::EmailSend,
         // Ipe.Crypto typed-key newtypes — compiled-source Layer-3 module; every
-        // kernel is reached exclusively through the `Ffi.kernel "Crypto_*"` alias
+        // kernel is reached exclusively through the `Kernel.kernel "Crypto_*"` alias
         // fast-path, never a legacy `QUALIFIERS` entry.
         KernelFn::CryptoKeyFromString,
         KernelFn::CryptoKeyFromBytes,
@@ -30956,7 +30956,7 @@ mod tests {
         KernelFn::EmailAddressParse,
         KernelFn::EmailAddressToString,
         // Ipe.Locale — compiled-source Layer-3 module; `Locale.fromTag`/
-        // `Locale.toTag` route via `Ffi.kernel "Locale_*"` aliases, and
+        // `Locale.toTag` route via `Kernel.kernel "Locale_*"` aliases, and
         // `String.toUpperIn`/`toLowerIn` route via the `String` qualifier
         // string-match arms already added to `lower_callee`.
         KernelFn::LocaleFromTag,
@@ -30964,7 +30964,7 @@ mod tests {
         KernelFn::StringToUpperIn,
         KernelFn::StringToLowerIn,
         // Ipe.Money — compiled-source Layer-3 module; every kernel is reached
-        // exclusively through the `Ffi.kernel "Money_*"` alias fast-path (the
+        // exclusively through the `Kernel.kernel "Money_*"` alias fast-path (the
         // `Money` qualifier is a compiled-source module name, not a legacy
         // `QUALIFIERS` entry), so no legacy `lower_callee` string-match arm exists.
         KernelFn::MoneyMinorUnits,
@@ -30979,7 +30979,7 @@ mod tests {
         KernelFn::MoneyHasRate,
         KernelFn::MoneyClearRates,
         // Ipe.Level — compiled-source module; the `LogLevel` constructors are
-        // reached exclusively through `Ffi.kernel "Level_*"` aliases, never a
+        // reached exclusively through `Kernel.kernel "Level_*"` aliases, never a
         // legacy `QUALIFIERS` entry.
         KernelFn::LevelDebug,
         KernelFn::LevelInfo,

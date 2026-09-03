@@ -54,7 +54,7 @@ pub enum Capability {
     /// program contains a value the compiler could not prove safe.
     Unsafe,
     /// Shipping a browser custom-element widget: the program's reachable code
-    /// binds `Ui.widget` over a `customElement "<path>"` handle, so it serves
+    /// binds `CustomElement.node` over a `CustomElement.fromFile "<path>"` handle, so it serves
     /// author-written JavaScript that runs in the page with full DOM authority.
     /// Like [`Self::NativeFfi`], this is a disclosure of a declared-trust surface
     /// the server-side sandbox cannot see through — the browser JS is not an OS

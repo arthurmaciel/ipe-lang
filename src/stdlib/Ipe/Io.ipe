@@ -4,11 +4,11 @@ module Ipe.Io exposing
     )
 
 
-import Ipe.Ffi as Ffi
+import Ipe.Ffi.Kernel as Kernel
 
 
 readLine : () -> Task Error String
-readLine = Ffi.kernel "Io_readLine"
+readLine = Kernel.kernel "Io_readLine"
 
 {-| Write a prompt to stdout, then read one line from stdin with terminal echo
 suppressed — a password read. The prior terminal mode is always restored, even
@@ -20,16 +20,16 @@ freshly-read secret cannot flow into a log, an error, or a serialized payload by
 accident. Consume it with `Secret.use secret (\plain -> …)`.
 -}
 readSecret : String -> Task Error Secret
-readSecret = Ffi.kernel "Io_readSecret"
+readSecret = Kernel.kernel "Io_readSecret"
 
 writeStdout : String -> Task Error ()
-writeStdout = Ffi.kernel "Io_writeStdout"
+writeStdout = Kernel.kernel "Io_writeStdout"
 
 writeStderr : String -> Task Error ()
-writeStderr = Ffi.kernel "Io_writeStderr"
+writeStderr = Kernel.kernel "Io_writeStderr"
 
 println : String -> Task Error ()
-println = Ffi.kernel "Io_println"
+println = Kernel.kernel "Io_println"
 
 eprintln : String -> Task Error ()
-eprintln = Ffi.kernel "Io_eprintln"
+eprintln = Kernel.kernel "Io_eprintln"

@@ -1,6 +1,6 @@
 -- | Ipe.Math — pure numeric helpers.
 --
--- Every function is aliased to a runtime kernel via `Ffi.kernel`.
+-- Every function is aliased to a runtime kernel via `Kernel.kernel`.
 module Ipe.Math exposing
     ( abs, min, max
     , sqrt, pow, log, log2, log10
@@ -18,127 +18,127 @@ module Ipe.Math exposing
     )
 
 
-import Ipe.Ffi as Ffi
+import Ipe.Ffi.Kernel as Kernel
 
 
 -- ─── Integer helpers ───────────────────────────────────────────────
 
 
 abs : Int -> Int
-abs = Ffi.kernel "Math_abs"
+abs = Kernel.kernel "Math_abs"
 
 
 -- min / max are polymorphic — work on any comparable type at the
 -- runtime level.  The kernel-registry sig is `forall a. a -> a -> a`;
 -- Ipe-source annotation mirrors that.
 min : a -> a -> a
-min = Ffi.kernel "Math_min"
+min = Kernel.kernel "Math_min"
 
 
 max : a -> a -> a
-max = Ffi.kernel "Math_max"
+max = Kernel.kernel "Math_max"
 
 
 -- ─── Float helpers ─────────────────────────────────────────────────
 
 
 sqrt : Float -> Float
-sqrt = Ffi.kernel "Math_sqrt"
+sqrt = Kernel.kernel "Math_sqrt"
 
 
 pow : Float -> Float -> Float
-pow = Ffi.kernel "Math_pow"
+pow = Kernel.kernel "Math_pow"
 
 
 cbrt : Float -> Float
-cbrt = Ffi.kernel "Math_cbrt"
+cbrt = Kernel.kernel "Math_cbrt"
 
 
 hypot : Float -> Float -> Float
-hypot = Ffi.kernel "Math_hypot"
+hypot = Kernel.kernel "Math_hypot"
 
 
 -- ─── Exp / log family ──────────────────────────────────────────────
 
 
 exp : Float -> Float
-exp = Ffi.kernel "Math_exp"
+exp = Kernel.kernel "Math_exp"
 
 
 exp2 : Float -> Float
-exp2 = Ffi.kernel "Math_exp2"
+exp2 = Kernel.kernel "Math_exp2"
 
 
 log : Float -> Float
-log = Ffi.kernel "Math_log"
+log = Kernel.kernel "Math_log"
 
 
 log2 : Float -> Float
-log2 = Ffi.kernel "Math_log2"
+log2 = Kernel.kernel "Math_log2"
 
 
 log10 : Float -> Float
-log10 = Ffi.kernel "Math_log10"
+log10 = Kernel.kernel "Math_log10"
 
 
 -- ─── Trigonometry ──────────────────────────────────────────────────
 
 
 sin : Float -> Float
-sin = Ffi.kernel "Math_sin"
+sin = Kernel.kernel "Math_sin"
 
 
 cos : Float -> Float
-cos = Ffi.kernel "Math_cos"
+cos = Kernel.kernel "Math_cos"
 
 
 tan : Float -> Float
-tan = Ffi.kernel "Math_tan"
+tan = Kernel.kernel "Math_tan"
 
 
 asin : Float -> Float
-asin = Ffi.kernel "Math_asin"
+asin = Kernel.kernel "Math_asin"
 
 
 acos : Float -> Float
-acos = Ffi.kernel "Math_acos"
+acos = Kernel.kernel "Math_acos"
 
 
 atan : Float -> Float
-atan = Ffi.kernel "Math_atan"
+atan = Kernel.kernel "Math_atan"
 
 
 -- atan2 y x — quadrant-aware arctangent (y first, x second),
 -- distinct from atan which is unary.
 atan2 : Float -> Float -> Float
-atan2 = Ffi.kernel "Math_atan2"
+atan2 = Kernel.kernel "Math_atan2"
 
 
 -- ─── Hyperbolic ────────────────────────────────────────────────────
 
 
 sinh : Float -> Float
-sinh = Ffi.kernel "Math_sinh"
+sinh = Kernel.kernel "Math_sinh"
 
 
 cosh : Float -> Float
-cosh = Ffi.kernel "Math_cosh"
+cosh = Kernel.kernel "Math_cosh"
 
 
 tanh : Float -> Float
-tanh = Ffi.kernel "Math_tanh"
+tanh = Kernel.kernel "Math_tanh"
 
 
 asinh : Float -> Float
-asinh = Ffi.kernel "Math_asinh"
+asinh = Kernel.kernel "Math_asinh"
 
 
 acosh : Float -> Float
-acosh = Ffi.kernel "Math_acosh"
+acosh = Kernel.kernel "Math_acosh"
 
 
 atanh : Float -> Float
-atanh = Ffi.kernel "Math_atanh"
+atanh = Kernel.kernel "Math_atanh"
 
 
 -- ─── Modulo + remainder ────────────────────────────────────────────
@@ -146,65 +146,65 @@ atanh = Ffi.kernel "Math_atanh"
 
 -- Float modulo. Result has the sign of the dividend.
 mod : Float -> Float -> Float
-mod = Ffi.kernel "Math_mod"
+mod = Kernel.kernel "Math_mod"
 
 
 -- IEEE 754 remainder. Result has the sign of the dividend or zero.
 remainder : Float -> Float -> Float
-remainder = Ffi.kernel "Math_remainder"
+remainder = Kernel.kernel "Math_remainder"
 
 
 -- ─── Rounding (Float → Int) ────────────────────────────────────────
 
 
 floor : Float -> Int
-floor = Ffi.kernel "Math_floor"
+floor = Kernel.kernel "Math_floor"
 
 
 ceil : Float -> Int
-ceil = Ffi.kernel "Math_ceil"
+ceil = Kernel.kernel "Math_ceil"
 
 
 round : Float -> Int
-round = Ffi.kernel "Math_round"
+round = Kernel.kernel "Math_round"
 
 
 -- Truncate toward zero. `trunc 3.7 == 3`, `trunc (-3.7) == -3`.
 trunc : Float -> Int
-trunc = Ffi.kernel "Math_trunc"
+trunc = Kernel.kernel "Math_trunc"
 
 
 -- ─── Constants ─────────────────────────────────────────────────────
 
 
 pi : Float
-pi = Ffi.kernel "Math_pi"
+pi = Kernel.kernel "Math_pi"
 
 
 e : Float
-e = Ffi.kernel "Math_e"
+e = Kernel.kernel "Math_e"
 
 
 -- Golden ratio (1.618033988…).
 phi : Float
-phi = Ffi.kernel "Math_phi"
+phi = Kernel.kernel "Math_phi"
 
 
 sqrt2 : Float
-sqrt2 = Ffi.kernel "Math_sqrt2"
+sqrt2 = Kernel.kernel "Math_sqrt2"
 
 
 -- Positive infinity.
 inf : Float
-inf = Ffi.kernel "Math_inf"
+inf = Kernel.kernel "Math_inf"
 
 
 -- Not-a-Number. `nan == nan` is False (NaN ≠ NaN by IEEE 754);
 -- use `Math.isNaN` to test for NaN.
 nan : Float
-nan = Ffi.kernel "Math_nan"
+nan = Kernel.kernel "Math_nan"
 
 
 -- Returns `True` if the argument is NaN (IEEE 754).
 isNaN : Float -> Bool
-isNaN = Ffi.kernel "Math_isNaN"
+isNaN = Kernel.kernel "Math_isNaN"

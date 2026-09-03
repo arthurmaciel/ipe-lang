@@ -5,7 +5,7 @@
 [Back to stdlib index](../stdlib.md)
 
 Ipe.Browser.Clipboard.Internals — the low-level clipboard port surface: the
-closed outbound/inbound ADTs and the raw `Ipe.Js` request/subscribe wiring the
+closed outbound/inbound ADTs and the raw `Ipe.Ffi.Js` request/subscribe wiring the
 high-level `Ipe.Browser.Clipboard` layer wraps.
 
 Importing this submodule discloses the same `js-port:clipboard` axis as the

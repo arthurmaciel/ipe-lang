@@ -6,7 +6,7 @@
 -- The safe default is `Html.text`, escaped by construction; `unsafeRaw` and
 -- `unsafeScript` bypass that escaping for trusted, verbatim content only.
 --
--- Each member is a point-free `Ffi.kernel "Html_*"` alias to a retained kernel
+-- Each member is a point-free `Kernel.kernel "Html_*"` alias to a retained kernel
 -- (runtime: `ipe_runtime::ui::helpers::html_raw_node_` /
 -- `html_script_node_`). The render sink emits the body verbatim, so the caller
 -- owns the XSS / code-injection invariant: the input must be trusted,
@@ -14,13 +14,13 @@
 module Ipe.Html.Unsafe exposing (unsafeRaw, unsafeScript)
 
 
-import Ipe.Ffi as Ffi
+import Ipe.Ffi.Kernel as Kernel
 
 
 -- | `unsafeRaw s` — an UN-escaped raw HTML node. The `unsafe` prefix names the
 -- XSS risk at every call site; user content goes through `Html.text` instead.
 unsafeRaw : String -> Html msg
-unsafeRaw = Ffi.kernel "Html_unsafeRaw"
+unsafeRaw = Kernel.kernel "Html_unsafeRaw"
 
 
 -- | `unsafeScript body` — an inline `<script>` element whose JavaScript body is
@@ -30,4 +30,4 @@ unsafeRaw = Ffi.kernel "Html_unsafeRaw"
 -- be trusted, author-controlled code. The kernel neutralises a literal
 -- `</script` breakout at construction; the caller owns everything else.
 unsafeScript : String -> Html msg
-unsafeScript = Ffi.kernel "Html_unsafeScript"
+unsafeScript = Kernel.kernel "Html_unsafeScript"

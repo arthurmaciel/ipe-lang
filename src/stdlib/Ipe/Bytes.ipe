@@ -35,19 +35,19 @@ module Ipe.Bytes exposing
 -- | The empty byte buffer (zero bytes).
 empty : Bytes
 empty =
-    Ffi.kernel "Bytes_empty"
+    Kernel.kernel "Bytes_empty"
 
 
 -- | The number of bytes in the buffer.
 length : Bytes -> Int
 length =
-    Ffi.kernel "Bytes_length"
+    Kernel.kernel "Bytes_length"
 
 
 -- | True when the buffer contains no bytes.
 isEmpty : Bytes -> Bool
 isEmpty =
-    Ffi.kernel "Bytes_isEmpty"
+    Kernel.kernel "Bytes_isEmpty"
 
 
 -- | UTF-8-encode a Ipe `String` into a `Bytes` buffer.
@@ -56,7 +56,7 @@ isEmpty =
 -- fails).  To go the other way, use `toString`.
 fromString : String -> Bytes
 fromString =
-    Ffi.kernel "Bytes_fromString"
+    Kernel.kernel "Bytes_fromString"
 
 
 -- | UTF-8-decode a `Bytes` buffer into a Ipe `String`.
@@ -65,7 +65,7 @@ fromString =
 -- otherwise.  Use `Maybe.withDefault` when you need a fallback string.
 toString : Bytes -> Maybe String
 toString =
-    Ffi.kernel "Bytes_toString"
+    Kernel.kernel "Bytes_toString"
 
 
 -- | Decode a hexadecimal string into bytes.
@@ -74,13 +74,13 @@ toString =
 -- the input has an odd length or contains any character outside `[0-9a-fA-F]`.
 fromHex : String -> Maybe Bytes
 fromHex =
-    Ffi.kernel "Bytes_fromHex"
+    Kernel.kernel "Bytes_fromHex"
 
 
 -- | Hex-encode a byte buffer (lowercase output, two hex digits per byte).
 toHex : Bytes -> String
 toHex =
-    Ffi.kernel "Bytes_toHex"
+    Kernel.kernel "Bytes_toHex"
 
 
 -- | Standard (RFC 4648) base-64 decode.
@@ -88,19 +88,19 @@ toHex =
 -- Returns `Nothing` on invalid padding or non-base-64 characters.
 fromBase64 : String -> Maybe Bytes
 fromBase64 =
-    Ffi.kernel "Bytes_fromBase64"
+    Kernel.kernel "Bytes_fromBase64"
 
 
 -- | Standard (RFC 4648) base-64 encode.
 toBase64 : Bytes -> String
 toBase64 =
-    Ffi.kernel "Bytes_toBase64"
+    Kernel.kernel "Bytes_toBase64"
 
 
 -- | Concatenate two byte buffers.
 append : Bytes -> Bytes -> Bytes
 append =
-    Ffi.kernel "Bytes_append"
+    Kernel.kernel "Bytes_append"
 
 
 -- | `slice start end bytes` — return bytes in the half-open interval
@@ -111,4 +111,4 @@ append =
 -- (after clamping) returns the empty buffer.
 slice : Int -> Int -> Bytes -> Bytes
 slice =
-    Ffi.kernel "Bytes_slice"
+    Kernel.kernel "Bytes_slice"

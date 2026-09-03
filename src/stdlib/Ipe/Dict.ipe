@@ -1,7 +1,7 @@
 -- | Ipe.Dict — string-keyed associative map.
 --
 -- Every function in this module is declared as a Ipe-source binding
--- aliased to a kernel via `Ffi.kernel "Dict_<name>"`.  The compiler
+-- aliased to a kernel via `Kernel.kernel "Dict_<name>"`.  The compiler
 -- rewrites every call site to typed kernel dispatch — so `Dict.get "k" d`
 -- emits the appropriate typed kernel, preserving the typed-codegen
 -- guarantees the kernel-direct route already enjoyed.
@@ -33,7 +33,7 @@ module Ipe.Dict exposing
     )
 
 
-import Ipe.Ffi as Ffi
+import Ipe.Ffi.Kernel as Kernel
 
 
 -- ─── Construction ──────────────────────────────────────────────────
@@ -41,7 +41,7 @@ import Ipe.Ffi as Ffi
 
 -- | The empty dictionary.
 empty : Dict k v
-empty = Ffi.kernel "Dict_empty"
+empty = Kernel.kernel "Dict_empty"
 
 
 -- ─── Cardinality / queries ─────────────────────────────────────────
@@ -49,22 +49,22 @@ empty = Ffi.kernel "Dict_empty"
 
 -- | `True` when the dictionary contains no entries.
 isEmpty : Dict k v -> Bool
-isEmpty = Ffi.kernel "Dict_isEmpty"
+isEmpty = Kernel.kernel "Dict_isEmpty"
 
 
 -- | Number of key/value pairs.
 size : Dict k v -> Int
-size = Ffi.kernel "Dict_size"
+size = Kernel.kernel "Dict_size"
 
 
 -- | `member k d` — `True` iff `k` is bound in `d`.
 member : k -> Dict k v -> Bool
-member = Ffi.kernel "Dict_member"
+member = Kernel.kernel "Dict_member"
 
 
 -- | `get k d` — look up `k`; `Nothing` if absent.
 get : k -> Dict k v -> Maybe v
-get = Ffi.kernel "Dict_get"
+get = Kernel.kernel "Dict_get"
 
 
 -- ─── Mutation (returns new Dict) ───────────────────────────────────
@@ -72,12 +72,12 @@ get = Ffi.kernel "Dict_get"
 
 -- | `insert k v d` — bind `k → v`, replacing any prior value.
 insert : k -> v -> Dict k v -> Dict k v
-insert = Ffi.kernel "Dict_insert"
+insert = Kernel.kernel "Dict_insert"
 
 
 -- | `remove k d` — drop `k`'s binding; no-op if absent.
 remove : k -> Dict k v -> Dict k v
-remove = Ffi.kernel "Dict_remove"
+remove = Kernel.kernel "Dict_remove"
 
 
 -- ─── Conversion ────────────────────────────────────────────────────
@@ -85,12 +85,12 @@ remove = Ffi.kernel "Dict_remove"
 
 -- | All keys in the dictionary (unsorted).
 keys : Dict k v -> List k
-keys = Ffi.kernel "Dict_keys"
+keys = Kernel.kernel "Dict_keys"
 
 
 -- | All values in the dictionary (unsorted).
 values : Dict k v -> List v
-values = Ffi.kernel "Dict_values"
+values = Kernel.kernel "Dict_values"
 
 
 -- | `toList d` — every (key, value) pair as a list of tuples.
@@ -100,13 +100,13 @@ values = Ffi.kernel "Dict_values"
 -- tuple slot is `Int` (not `String`). Arithmetic on the returned
 -- keys works correctly — closes Limitation #10.
 toList : Dict k v -> List ( k, v )
-toList = Ffi.kernel "Dict_toList"
+toList = Kernel.kernel "Dict_toList"
 
 
 -- | `fromList pairs` — build a dictionary from a list of tuples.
 -- Later pairs overwrite earlier ones with the same key.
 fromList : List ( k, v ) -> Dict k v
-fromList = Ffi.kernel "Dict_fromList"
+fromList = Kernel.kernel "Dict_fromList"
 
 
 -- ─── Higher-order combinators ──────────────────────────────────────
@@ -115,51 +115,51 @@ fromList = Ffi.kernel "Dict_fromList"
 -- | `map fn d` — apply `fn k v` to every entry, building a new
 -- dictionary with the transformed values.
 map : (k -> v -> w) -> Dict k v -> Dict k w
-map = Ffi.kernel "Dict_map"
+map = Kernel.kernel "Dict_map"
 
 
 -- | `foldl fn acc d` — accumulate over every entry.
 foldl : (k -> v -> a -> a) -> a -> Dict k v -> a
-foldl = Ffi.kernel "Dict_foldl"
+foldl = Kernel.kernel "Dict_foldl"
 
 
 -- | `union a b` — merge two dictionaries. `a`'s bindings win on
 -- key collision.
 union : Dict k v -> Dict k v -> Dict k v
-union = Ffi.kernel "Dict_union"
+union = Kernel.kernel "Dict_union"
 
 
 -- | `singleton k v` — a dictionary with the single binding `k → v`.
 singleton : k -> v -> Dict k v
-singleton = Ffi.kernel "Dict_singleton"
+singleton = Kernel.kernel "Dict_singleton"
 
 
 -- | `foldr fn acc d` — accumulate over every entry in descending key order.
 foldr : (k -> v -> a -> a) -> a -> Dict k v -> a
-foldr = Ffi.kernel "Dict_foldr"
+foldr = Kernel.kernel "Dict_foldr"
 
 
 -- | `filter pred d` — keep only entries for which `pred k v` holds.
 filter : (k -> v -> Bool) -> Dict k v -> Dict k v
-filter = Ffi.kernel "Dict_filter"
+filter = Kernel.kernel "Dict_filter"
 
 
 -- | `partition pred d` — split into (satisfying, not-satisfying).
 partition : (k -> v -> Bool) -> Dict k v -> ( Dict k v, Dict k v )
-partition = Ffi.kernel "Dict_partition"
+partition = Kernel.kernel "Dict_partition"
 
 
 -- | `intersect a b` — keep `a`'s entries whose key also appears in `b`.
 intersect : Dict k v -> Dict k v -> Dict k v
-intersect = Ffi.kernel "Dict_intersect"
+intersect = Kernel.kernel "Dict_intersect"
 
 
 -- | `diff a b` — keep `a`'s entries whose key does NOT appear in `b`.
 diff : Dict k v -> Dict k v -> Dict k v
-diff = Ffi.kernel "Dict_diff"
+diff = Kernel.kernel "Dict_diff"
 
 
 -- | `update k fn d` — apply `fn` to the current value at `k` (`Just`/`Nothing`);
 -- a `Just` result re-binds `k`, a `Nothing` removes it.
 update : k -> (Maybe v -> Maybe v) -> Dict k v -> Dict k v
-update = Ffi.kernel "Dict_update"
+update = Kernel.kernel "Dict_update"

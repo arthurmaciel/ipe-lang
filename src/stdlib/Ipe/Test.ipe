@@ -22,7 +22,7 @@ module Ipe.Test exposing
 
 
 import Ipe.Error as Error exposing (Error, ErrorKind)
-import Ipe.Ffi as Ffi
+import Ipe.Ffi.Kernel as Kernel
 import Ipe.List as List
 import Ipe.String as String
 import Ipe.System as System
@@ -193,7 +193,7 @@ runWithPrefix prefix tests =
 
 println : String -> Task Error ()
 println =
-    Ffi.kernel "Io_println"
+    Kernel.kernel "Io_println"
 
 
 summarise : List ( String, TestResult ) -> Task Error Bool

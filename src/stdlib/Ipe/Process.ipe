@@ -29,7 +29,7 @@ module Ipe.Process exposing
     )
 
 
-import Ipe.Ffi as Ffi
+import Ipe.Ffi.Kernel as Kernel
 import Ipe.Error exposing (Error)
 
 
@@ -38,7 +38,7 @@ import Ipe.Error exposing (Error)
 -- fails with a typed `Error` on a non-zero exit or a spawn failure.
 run : String -> List String -> Task Error String
 run =
-    Ffi.kernel "Process_run"
+    Kernel.kernel "Process_run"
 
 
 -- | `runWith cfg` — run a child process with per-child options.
@@ -66,7 +66,7 @@ runWith :
     }
     -> Task Error { exitCode : Int, stdout : String, stderr : String }
 runWith =
-    Ffi.kernel "Process_runWith"
+    Kernel.kernel "Process_runWith"
 
 
 -- | `runInPty cfg` — run a child under a real pseudo-terminal.
@@ -99,4 +99,4 @@ runInPty :
     }
     -> Task Error { exitCode : Int, output : String }
 runInPty =
-    Ffi.kernel "Process_runInPty"
+    Kernel.kernel "Process_runInPty"

@@ -1,6 +1,6 @@
 -- | Ipe.Basics — the implicit prelude (Tier-A auto-import, compiled source).
 --
--- Each binding routes to its runtime kernel via `Ffi.kernel`. Polymorphic
+-- Each binding routes to its runtime kernel via `Kernel.kernel`. Polymorphic
 -- members with ordering or numeric obligations (`clamp`, `min`, `max`,
 -- `negate`, `abs`, `compare`) carry the bound implicitly — the type-checker's
 -- `Comparable`/`Number` obligation rejects a function or record argument
@@ -24,60 +24,60 @@ module Ipe.Basics exposing
     )
 
 
-import Ipe.Ffi as Ffi
+import Ipe.Ffi.Kernel as Kernel
 
 
 identity : a -> a
-identity = Ffi.kernel "Basics_identity"
+identity = Kernel.kernel "Basics_identity"
 
 
 always : a -> b -> a
-always = Ffi.kernel "Basics_always"
+always = Kernel.kernel "Basics_always"
 
 
 not : Bool -> Bool
-not = Ffi.kernel "Basics_not"
+not = Kernel.kernel "Basics_not"
 
 
 fst : ( a, b ) -> a
-fst = Ffi.kernel "Basics_fst"
+fst = Kernel.kernel "Basics_fst"
 
 
 snd : ( a, b ) -> b
-snd = Ffi.kernel "Basics_snd"
+snd = Kernel.kernel "Basics_snd"
 
 
 clamp : a -> a -> a -> a
-clamp = Ffi.kernel "Basics_clamp"
+clamp = Kernel.kernel "Basics_clamp"
 
 
 toString : a -> String
-toString = Ffi.kernel "Basics_toString"
+toString = Kernel.kernel "Basics_toString"
 
 
 modBy : Int -> Int -> Int
-modBy = Ffi.kernel "Basics_modBy"
+modBy = Kernel.kernel "Basics_modBy"
 
 
 negate : a -> a
-negate = Ffi.kernel "Basics_negate"
+negate = Kernel.kernel "Basics_negate"
 
 
 abs : a -> a
-abs = Ffi.kernel "Basics_abs"
+abs = Kernel.kernel "Basics_abs"
 
 
 sqrt : Float -> Float
-sqrt = Ffi.kernel "Basics_sqrt"
+sqrt = Kernel.kernel "Basics_sqrt"
 
 
 min : a -> a -> a
-min = Ffi.kernel "Basics_min"
+min = Kernel.kernel "Basics_min"
 
 
 max : a -> a -> a
-max = Ffi.kernel "Basics_max"
+max = Kernel.kernel "Basics_max"
 
 
 compare : a -> a -> Order
-compare = Ffi.kernel "Basics_compare"
+compare = Kernel.kernel "Basics_compare"

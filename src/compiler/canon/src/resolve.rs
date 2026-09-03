@@ -64,15 +64,17 @@ const TYPE_EXPANSION_DEPTH_LIMIT: u32 = 128;
 /// not be relied on for stack safety.
 const TYPE_EXPANSION_NODE_LIMIT: u32 = 100_000;
 
-/// The reserved value-namespace spelling of the JS-widget boundary constructor.
-/// Legal only as the whole body of a `CustomElement`-annotated binding, applied
-/// to a single string literal (see [`detect_custom_element_constructor`]); any
-/// other appearance is IPE-N0044.
-const CUSTOM_ELEMENT_CTOR: &str = "customElement";
+/// The reserved member spelling of the JS-widget boundary constructor, reached as
+/// `CustomElement.fromFile "<js-path>"` through `import Ipe.Ffi.Js.CustomElement
+/// as CustomElement`. Legal only as the whole body of a `CustomElement`-annotated
+/// binding, applied to a single string literal (see
+/// [`detect_custom_element_constructor`]); any other appearance is IPE-N0044.
+const CUSTOM_ELEMENT_CTOR: &str = "fromFile";
 
 /// The reserved boundary type-constructor spelling paired with
 /// [`CUSTOM_ELEMENT_CTOR`]: only a binding annotated `CustomElement down up` may
-/// carry the constructor as its body.
+/// carry the constructor as its body. Doubles as the qualifier spelling of the
+/// `Ipe.Ffi.Js.CustomElement` module the constructor is reached through.
 const CUSTOM_ELEMENT_TYPE: &str = "CustomElement";
 
 /// Type-constructor names the compiler reserves for built-ins. A user `type` /
@@ -2812,7 +2814,7 @@ fn canonicalise_with_env(
     // the same spelling silently shadows a wildcard member (see the fn doc);
     // cross-wildcard clashes surface only at an ambiguous use site.
     inject_stdlib_wildcard_values(m, env, interner)?;
-    // Stage-4 kernel aliases discovered in this module: `f = Ffi.kernel "K_n"`.
+    // Stage-4 kernel aliases discovered in this module: `f = Kernel.kernel "K_n"`.
     // Each is registered as a `VarHome::Kernel` (so every reference — in-module
     // `f` or cross-module `Alias.f` — routes straight to the kernel) and its
     // body is NOT canonicalised into a top-level def (the alias emits no runtime
@@ -4665,11 +4667,11 @@ fn canonicalise_value(
     interner: &mut Interner,
     ui_wildcard_msg: Symbol,
 ) -> DResult<canon::Def> {
-    // The reserved `customElement "<js-path>"` constructor is recognised BEFORE
-    // the body is canonicalised: its bare head is an otherwise-unresolvable name,
+    // The reserved `CustomElement.fromFile "<js-path>"` constructor is recognised BEFORE
+    // the body is canonicalised: its qualified head is otherwise an unknown member,
     // and only this position (the whole body of a `CustomElement`-annotated
     // binding) is legal. A malformed use fails closed here (IPE-N0044); any other
-    // appearance of the bare name is rejected downstream by `resolve_var`.
+    // appearance of the qualified name is rejected downstream by `resolve_qual_var`.
     if let Some(def) = detect_custom_element_constructor(
         val,
         env,
@@ -5162,24 +5164,6 @@ fn resolve_var(name: Symbol, span: Span, env: &Env, interner: &Interner) -> DRes
         // wildcard-exposed member of the same spelling (silent shadow).
         return Ok(var_home_to_expr(name, home));
     }
-    // The reserved `customElement` constructor is legal ONLY as the whole body of
-    // a `CustomElement`-annotated binding, where `canonicalise_value` intercepts
-    // it before this resolver runs. Reaching HERE means it was referenced bare
-    // (unapplied), applied outside that sanctioned position, or nested in a
-    // sub-expression — every one of which is malformed. Fail closed with a precise
-    // IPE-N0044 rather than a bare unknown-name error. Placed after the user-binding
-    // lookup so a genuine local of the same spelling still shadows it.
-    if interner.resolve(name) == Some(CUSTOM_ELEMENT_CTOR) {
-        return Err(Diagnostic::Name {
-            span,
-            msg: NameError::CustomElementCtorMalformed {
-                detail: Box::<str>::from(
-                    "`customElement` is legal only as the whole body of a \
-                     `CustomElement`-annotated binding, applied to a single string literal",
-                ),
-            },
-        });
-    }
     // Low-priority wildcard tier: only reached when the higher tiers miss.
     resolve_wildcard_var(name, span, env, interner)
 }
@@ -5276,6 +5260,51 @@ fn value_not_found(
     })
 }
 
+/// Reject a bare reference to a reserved literal-only constructor.
+///
+/// `Rust.Ffi.call` and `CustomElement.fromFile` are legal ONLY fully applied in
+/// their sanctioned positions (a `Rust.Ffi` interface call, the whole body of a
+/// `CustomElement`-annotated binding). The applied forms are rewritten before
+/// their callee resolves, so reaching qualified-name resolution means the name
+/// was referenced bare, nested, or applied outside that position — each a
+/// malformed use. Returns the precise teachable diagnostic, or `None` when the
+/// name is not a reserved constructor.
+fn reject_bare_reserved_constructor(
+    qualifier: Symbol,
+    name: Symbol,
+    span: Span,
+    env: &Env,
+    interner: &Interner,
+) -> Option<Diagnostic> {
+    if env.origin == ModuleOrigin::User
+        && interner.resolve(qualifier) == Some(crate::asserted::ASSERTED_MODULE)
+        && interner.resolve(name) == Some("call")
+    {
+        return Some(Diagnostic::Name {
+            span,
+            msg: NameError::AssertedCallMalformed {
+                detail: "`Rust.Ffi.call` is not a value — it must be applied directly \
+                         to a string-literal Rust path"
+                    .into(),
+            },
+        });
+    }
+    if interner.resolve(qualifier) == Some(CUSTOM_ELEMENT_TYPE)
+        && interner.resolve(name) == Some(CUSTOM_ELEMENT_CTOR)
+    {
+        return Some(Diagnostic::Name {
+            span,
+            msg: NameError::CustomElementCtorMalformed {
+                detail: Box::<str>::from(
+                    "`CustomElement.fromFile` is legal only as the whole body of a \
+                     `CustomElement`-annotated binding, applied to a single string literal",
+                ),
+            },
+        });
+    }
+    None
+}
+
 /// Resolve a qualified name `Qualifier.name`. Distinguishes an unknown
 /// qualifier ([`NameError::UnknownModule`]) from a known qualifier missing the
 /// member ([`NameError::NoSuchMember`]).
@@ -5286,23 +5315,12 @@ fn resolve_qual_var(
     env: &Env,
     interner: &Interner,
 ) -> DResult<canon::Expr_> {
-    // A BARE `Rust.Ffi.call` (passed as a value, aliased, or partially built)
-    // reaches here because the applied form is rewritten before its callee
-    // resolves. There is no value for it to denote — the construct exists only
-    // fully applied to a literal path — so refuse it with the teachable
-    // IPE-N0038 instead of a no-such-member miss on `call`.
-    if env.origin == ModuleOrigin::User
-        && interner.resolve(qualifier) == Some(crate::asserted::ASSERTED_MODULE)
-        && interner.resolve(name) == Some("call")
-    {
-        return Err(Diagnostic::Name {
-            span,
-            msg: NameError::AssertedCallMalformed {
-                detail: "`Rust.Ffi.call` is not a value — it must be applied directly \
-                         to a string-literal Rust path"
-                    .into(),
-            },
-        });
+    // A bare reference to a reserved literal-only constructor (`Rust.Ffi.call`,
+    // `CustomElement.fromFile`) has no value to denote — each is legal only fully
+    // applied in a sanctioned position, so refuse it with a teachable diagnostic
+    // rather than a no-such-member miss.
+    if let Some(diag) = reject_bare_reserved_constructor(qualifier, name, span, env, interner) {
+        return Err(diag);
     }
     // Removed-surface gate (IPE-N0036): bindings intentionally dropped from
     // the Ipê surface are intercepted here before any catalog lookup, so the
@@ -6183,7 +6201,7 @@ fn name_str(interner: &Interner, sym: Symbol) -> DResult<Box<str>> {
 }
 
 /// A resolved Stage-4 kernel alias — the target of a standard-library binding
-/// of the shape `f = Ffi.kernel "Module_function"`.
+/// of the shape `f = Kernel.kernel "Module_function"`.
 ///
 /// The binding routes every reference of `f` straight to the built-in kernel
 /// `id`, so it lowers identically to a qualified `Module.function` call. The
@@ -6358,7 +6376,7 @@ fn canonicalise_asserted_call(
     )))
 }
 
-/// The offending-argument shape a `customElement` body rejects, each naming the
+/// The offending-argument shape a `CustomElement.fromFile` body rejects, each naming the
 /// specific rule broken for the IPE-N0044 diagnostic detail.
 fn custom_element_ctor_error(span: Span, detail: &'static str) -> Diagnostic {
     Diagnostic::Name {
@@ -6406,10 +6424,10 @@ fn annotation_head_name<'a>(ann: &src::TypeAnnotation, interner: &'a Interner) -
     interner.resolve(*segments.last()?)
 }
 
-/// Recognise the reserved `customElement "<js-path>"` constructor binding and
+/// Recognise the reserved `CustomElement.fromFile "<js-path>"` constructor binding and
 /// resolve it to a typed [`canon::Def`] carrying a [`canon::Expr_::CustomElementCtor`].
 ///
-/// The constructor is the JS-widget analogue of the `Ffi.kernel "…"` literal
+/// The constructor is the JS-widget analogue of the `Kernel.kernel "…"` literal
 /// gate: legal ONLY as the entire body of a binding annotated `CustomElement
 /// down up`, applied to a SINGLE STRING LITERAL naming the author's widget-hook
 /// JS file. The two type parameters are the seal (down-state / up-event) only;
@@ -6419,10 +6437,10 @@ fn annotation_head_name<'a>(ann: &src::TypeAnnotation, interner: &'a Interner) -
 /// project root is verified later, at the build stage that owns the root.
 ///
 /// Returns:
-/// * `Ok(None)` — the binding does not mention `customElement` at all (an ordinary
+/// * `Ok(None)` — the binding does not mention `CustomElement.fromFile` at all (an ordinary
 ///   value / function); the caller canonicalises it normally.
 /// * `Ok(Some(def))` — a well-formed constructor binding.
-/// * `Err(IPE-N0044)` — the binding IS a `customElement` use but is malformed: a
+/// * `Err(IPE-N0044)` — the binding IS a `CustomElement.fromFile` use but is malformed: a
 ///   non-literal argument, a bare (unapplied) reference, a wrong argument count, a
 ///   traversing path, a missing / non-`CustomElement` annotation, or the binding
 ///   carrying parameters. Fail-closed: absent proof the widget path is a safe,
@@ -6442,21 +6460,24 @@ fn detect_custom_element_constructor(
     interner: &Interner,
     ui_wildcard_msg: Symbol,
 ) -> DResult<Option<canon::Def>> {
-    // Peel the outermost application head. The constructor head is a bare
-    // `customElement` local reference, whether applied (`customElement "x"`) or
-    // bare (`customElement`).
+    // Peel the outermost application head. The constructor head is the qualified
+    // `CustomElement.fromFile` member (reached through `import
+    // Ipe.Ffi.Js.CustomElement as CustomElement`), whether applied
+    // (`CustomElement.fromFile "x"`) or bare (`CustomElement.fromFile`).
     let (head, args): (&src::Expr, &[src::Expr]) = match &val.body.value {
         src::Expr_::Call(callee, args) => (callee, args.as_slice()),
-        // A bare reference (`codeEditor = customElement`) — the head is the body
-        // itself with no arguments, so the shared validation reports the
+        // A bare reference (`codeEditor = CustomElement.fromFile`) — the head is
+        // the body itself with no arguments, so the shared validation reports the
         // unapplied case.
-        src::Expr_::VarLocal(_) => (&val.body, &[]),
+        src::Expr_::VarQual(..) => (&val.body, &[]),
         _ => return Ok(None),
     };
-    let src::Expr_::VarLocal(head_name) = &head.value else {
+    let src::Expr_::VarQual(qualifier, member) = &head.value else {
         return Ok(None);
     };
-    if interner.resolve(*head_name) != Some(CUSTOM_ELEMENT_CTOR) {
+    if interner.resolve(*qualifier) != Some(CUSTOM_ELEMENT_TYPE)
+        || interner.resolve(*member) != Some(CUSTOM_ELEMENT_CTOR)
+    {
         return Ok(None);
     }
 
@@ -6468,7 +6489,7 @@ fn detect_custom_element_constructor(
     if !val.patterns.is_empty() {
         return Err(custom_element_ctor_error(
             val.body.span,
-            "`customElement` is a value constructor and takes no binding parameters",
+            "`CustomElement.fromFile` is a value constructor and takes no binding parameters",
         ));
     }
 
@@ -6479,72 +6500,21 @@ fn detect_custom_element_constructor(
     let Some(ann) = &val.type_annotation else {
         return Err(custom_element_ctor_error(
             val.body.span,
-            "`customElement` is legal only as the body of a binding annotated \
+            "`CustomElement.fromFile` is legal only as the body of a binding annotated \
              `CustomElement down up`; this binding has no such annotation",
         ));
     };
     if annotation_head_name(&ann.value, interner) != Some(CUSTOM_ELEMENT_TYPE) {
         return Err(custom_element_ctor_error(
             val.body.span,
-            "`customElement` is legal only as the body of a binding annotated \
+            "`CustomElement.fromFile` is legal only as the body of a binding annotated \
              `CustomElement down up`",
         ));
     }
 
-    // Exactly one argument, and it must be a string literal — a non-literal
-    // (a variable / an expression) cannot be resolved to a file path at build time.
-    let [arg] = args else {
-        return Err(custom_element_ctor_error(
-            val.body.span,
-            "`customElement` takes exactly one argument — a single string literal \
-             naming the widget-hook JS file",
-        ));
-    };
-    let src::Expr_::Str(raw) = &arg.value else {
-        return Err(custom_element_ctor_error(
-            arg.span,
-            "the `customElement` argument must be a single string literal, not a \
-             variable or expression (the path is read at build time)",
-        ));
-    };
-
-    // Path seal: clean + all-targets traversal check, the SAME `ipe_path_core`
-    // source of truth the `path "…"` literal uses. A `..` escape is refused with
-    // IPE-P0063 (no arbitrary out-of-project file is read at build).
-    let cleaned = match ipe_diagnostics::path_check::validate(raw) {
-        Ok(cleaned) => cleaned,
-        Err(reason) => {
-            return Err(Diagnostic::Parse {
-                span: arg.span,
-                msg: ParseError::InvalidPathLiteral {
-                    literal: raw.as_str().into(),
-                    reason,
-                },
-            });
-        }
-    };
-
-    // customElement-specific tightening (Security #1, defence-in-depth): the widget
-    // path MUST be project-root-relative. The shared `path "…"` seal accepts an
-    // absolute path by design (a `path` value may legitimately be absolute), but a
-    // widget path is joined against the project root at the build gate — and
-    // `Path::join` DISCARDS the base when its argument is absolute, so an absolute
-    // literal would resolve OUTSIDE the project and read/stat an arbitrary file.
-    // Reject any rooted literal here under EITHER target's separator regime (a Unix
-    // `/…`, a Windows leading `\`, a `C:` drive designator, or a `\\server\share`
-    // / `\\?\…` UNC/verbatim prefix), independent of the compiling host's OS — the
-    // same all-targets discipline the traversal seal uses. Checked on the ORIGINAL
-    // literal so a rooted spelling cannot be normalised into a relative-looking
-    // form. Fail-closed at CANON: the verdict never depends on whether the
-    // out-of-project file exists.
-    if is_rooted_widget_path(raw.as_str()) {
-        return Err(custom_element_ctor_error(
-            arg.span,
-            "the `customElement` widget path must be project-root-relative — an \
-             absolute path (a leading `/` or `\\`, a `C:` drive, or a UNC \
-             `\\\\server\\share` prefix) would resolve outside the project and is refused",
-        ));
-    }
+    // The single string-literal argument, sealed to a cleaned, project-relative,
+    // traversal-free widget path.
+    let cleaned = custom_element_widget_path(args, val.body.span)?;
 
     // Resolve the annotation to its canonical type — this re-runs the arity + SEAL
     // gates on `CustomElement down up`, so a mis-arity (IPE-N0031) or seal-illegal
@@ -6587,14 +6557,79 @@ fn detect_custom_element_constructor(
     }))
 }
 
+/// Seal a `CustomElement.fromFile` argument list to a cleaned widget path.
+///
+/// Enforces exactly one string-literal argument, cleans it through the shared
+/// `path "…"` seal (`ipe_path_core`), and tightens to a project-root-relative
+/// path. Every failure is the fail-closed IPE-N0044 (or the path-literal
+/// IPE-P0063 for a `..` escape); the caller is already committed to the
+/// constructor, so there is no fall-through.
+fn custom_element_widget_path(args: &[src::Expr], body_span: Span) -> DResult<String> {
+    // Exactly one argument, and it must be a string literal — a non-literal
+    // (a variable / an expression) cannot be resolved to a file path at build time.
+    let [arg] = args else {
+        return Err(custom_element_ctor_error(
+            body_span,
+            "`CustomElement.fromFile` takes exactly one argument — a single string literal \
+             naming the widget-hook JS file",
+        ));
+    };
+    let src::Expr_::Str(raw) = &arg.value else {
+        return Err(custom_element_ctor_error(
+            arg.span,
+            "the `CustomElement.fromFile` argument must be a single string literal, not a \
+             variable or expression (the path is read at build time)",
+        ));
+    };
+
+    // Path seal: clean + all-targets traversal check, the SAME `ipe_path_core`
+    // source of truth the `path "…"` literal uses. A `..` escape is refused with
+    // IPE-P0063 (no arbitrary out-of-project file is read at build).
+    let cleaned = match ipe_diagnostics::path_check::validate(raw) {
+        Ok(cleaned) => cleaned,
+        Err(reason) => {
+            return Err(Diagnostic::Parse {
+                span: arg.span,
+                msg: ParseError::InvalidPathLiteral {
+                    literal: raw.as_str().into(),
+                    reason,
+                },
+            });
+        }
+    };
+
+    // constructor-specific tightening (Security #1, defence-in-depth): the widget
+    // path MUST be project-root-relative. The shared `path "…"` seal accepts an
+    // absolute path by design (a `path` value may legitimately be absolute), but a
+    // widget path is joined against the project root at the build gate — and
+    // `Path::join` DISCARDS the base when its argument is absolute, so an absolute
+    // literal would resolve OUTSIDE the project and read/stat an arbitrary file.
+    // Reject any rooted literal here under EITHER target's separator regime (a Unix
+    // `/…`, a Windows leading `\`, a `C:` drive designator, or a `\\server\share`
+    // / `\\?\…` UNC/verbatim prefix), independent of the compiling host's OS — the
+    // same all-targets discipline the traversal seal uses. Checked on the ORIGINAL
+    // literal so a rooted spelling cannot be normalised into a relative-looking
+    // form. Fail-closed at CANON: the verdict never depends on whether the
+    // out-of-project file exists.
+    if is_rooted_widget_path(raw.as_str()) {
+        return Err(custom_element_ctor_error(
+            arg.span,
+            "the `CustomElement.fromFile` widget path must be project-root-relative — an \
+             absolute path (a leading `/` or `\\`, a `C:` drive, or a UNC \
+             `\\\\server\\share` prefix) would resolve outside the project and is refused",
+        ));
+    }
+    Ok(cleaned)
+}
+
 /// Recognise a Stage-4 kernel-alias binding and resolve it against the kernel
 /// registry — the compiled-source counterpart of the reference compiler's
 /// `collectKernelAliases` (`Ipe.Build.Compile`).
 ///
 /// A binding qualifies when it takes NO parameters and its body is exactly
-/// `Ffi.kernel "Module_function"`. The string is split at the FIRST `_` into a
-/// `(module, function)` pair (the `KernelMod_funcName` convention) and looked up
-/// in `env.stdlib_index`.
+/// `Kernel.kernel "Module_function"`. The string is split at the FIRST `_` into
+/// a `(module, function)` pair (the `KernelMod_funcName` convention) and looked
+/// up in `env.stdlib_index`.
 ///
 /// ORIGIN GATE (capability-model integrity): minting a kernel is the exclusive
 /// privilege of driver-vouched [`ModuleOrigin::EmbeddedStdlib`] /
@@ -6607,7 +6642,7 @@ fn detect_custom_element_constructor(
 /// `unsafe` capability disclosed and no `.Unsafe` import to acknowledge. The
 /// only sanctioned path to an unsafe kernel is its `Ipe.<M>.Unsafe` module,
 /// which flips the `unsafe` capability. Make-invalid-states-unrepresentable:
-/// `Ffi.kernel` in user text is unrepresentable, not merely discouraged.
+/// `Kernel.kernel` in user text is unrepresentable, not merely discouraged.
 ///
 /// Returns:
 /// * `Ok(None)` — the binding is an ordinary value/function, not a kernel alias.
@@ -6636,20 +6671,21 @@ pub fn detect_kernel_alias(
     if !value.patterns.is_empty() {
         return Ok(None);
     }
-    // Body must be `Ffi.kernel "<raw>"`, i.e. a call of the qualified
-    // `Ffi.kernel` to a single string literal.
+    // Body must be `Kernel.kernel "<raw>"`, i.e. a call of the qualified
+    // `Kernel.kernel` to a single string literal.
     let src::Expr_::Call(callee, args) = &value.body.value else {
         return Ok(None);
     };
     let src::Expr_::VarQual(qualifier, member) = &callee.value else {
         return Ok(None);
     };
-    // Compare against the reserved `Ffi.kernel` spelling. These interns are
-    // idempotent (the strings almost always already exist), and only run for the
-    // narrow `VarQual`-applied-to-one-arg shape, so the cost is negligible.
-    let ffi_sym = interner.intern("Ffi")?;
+    // Compare against the reserved `Kernel.kernel` spelling (the last segment of
+    // `import Ipe.Ffi.Kernel as Kernel`). These interns are idempotent (the
+    // strings almost always already exist), and only run for the narrow
+    // `VarQual`-applied-to-one-arg shape, so the cost is negligible.
+    let kernel_qualifier_sym = interner.intern("Kernel")?;
     let kernel_sym = interner.intern("kernel")?;
-    if *qualifier != ffi_sym || *member != kernel_sym {
+    if *qualifier != kernel_qualifier_sym || *member != kernel_sym {
         return Ok(None);
     }
     let [arg] = args.as_slice() else {
@@ -6659,7 +6695,7 @@ pub fn detect_kernel_alias(
         return Ok(None);
     };
 
-    // ORIGIN GATE: the binding is a genuine `Ffi.kernel "<raw>"` kernel alias.
+    // ORIGIN GATE: the binding is a genuine `Kernel.kernel "<raw>"` kernel alias.
     // Only a driver-vouched EmbeddedStdlib / FfiInterface module may mint a
     // kernel; the SAME shape in User source is rejected (IPE-N0042). Placed
     // AFTER full shape confirmation so an ordinary user value is never touched,

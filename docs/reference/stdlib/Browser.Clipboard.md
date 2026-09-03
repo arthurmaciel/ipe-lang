@@ -5,7 +5,7 @@
 [Back to stdlib index](../stdlib.md)
 
 Ipe.Browser.Clipboard — read from and write to the system clipboard from the
-browser, over `Ipe.Js` ports.
+browser, over `Ipe.Ffi.Js` ports.
 
 A first-party proof of the per-capability web mechanism spanning BOTH port
 directions: outbound `JsCmd`s (`write` / `read`) request a clipboard operation,
@@ -21,7 +21,7 @@ Importing this reserved `Ipe.Browser.<Api>` module discloses `js-port:clipboard`
 The two layers:
 
   * `Ipe.Browser.Clipboard.Internals` publishes the closed outbound/inbound ADTs
-    and the raw `Ipe.Js` wiring.
+    and the raw `Ipe.Ffi.Js` wiring.
   * this module is the high-level layer: `write` / `read` with the inbound
     subscription `contents`. `read` returns a `Task Error String` via the
     correlated port→Task bridge; `write` remains `Cmd`-shaped (fire-and-forget).

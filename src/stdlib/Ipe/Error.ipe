@@ -49,95 +49,95 @@ module Ipe.Error exposing
     )
 
 
-import Ipe.Ffi as Ffi
+import Ipe.Ffi.Kernel as Kernel
 
 
 -- | Construct an `Error` with kind `Unexpected` and the given message.
 unexpected : String -> Error
-unexpected = Ffi.kernel "Error_unexpected"
+unexpected = Kernel.kernel "Error_unexpected"
 
 
 -- | Construct an `Error` with kind `InvalidInput` and the given message.
 invalidInput : String -> Error
-invalidInput = Ffi.kernel "Error_invalidInput"
+invalidInput = Kernel.kernel "Error_invalidInput"
 
 
 -- | Construct an `Error` with kind `Io` and the given message.
 io : String -> Error
-io = Ffi.kernel "Error_io"
+io = Kernel.kernel "Error_io"
 
 
 -- | Construct an `Error` with kind `Network` and the given message.
 network : String -> Error
-network = Ffi.kernel "Error_network"
+network = Kernel.kernel "Error_network"
 
 
 -- | Construct an `Error` with kind `Ffi` and the given message.
 ffi : String -> Error
-ffi = Ffi.kernel "Error_ffi"
+ffi = Kernel.kernel "Error_ffi"
 
 
 -- | Construct an `Error` with kind `Decode` and the given message.
 decode : String -> Error
-decode = Ffi.kernel "Error_decode"
+decode = Kernel.kernel "Error_decode"
 
 
 -- | Construct an `Error` with kind `Conflict` and the given message.
 conflict : String -> Error
-conflict = Ffi.kernel "Error_conflict"
+conflict = Kernel.kernel "Error_conflict"
 
 
 -- | Construct an `Error` with kind `Unavailable` and the given message.
 unavailable : String -> Error
-unavailable = Ffi.kernel "Error_unavailable"
+unavailable = Kernel.kernel "Error_unavailable"
 
 
 -- | Canonical `Error` with kind `Timeout` and a fixed message.
 timeout : Error
-timeout = Ffi.kernel "Error_timeout"
+timeout = Kernel.kernel "Error_timeout"
 
 
 -- | Canonical `Error` with kind `NotFound` and a fixed message.
 notFound : Error
-notFound = Ffi.kernel "Error_notFound"
+notFound = Kernel.kernel "Error_notFound"
 
 
 -- | Canonical `Error` with kind `PermissionDenied` and a fixed message.
 permissionDenied : Error
-permissionDenied = Ffi.kernel "Error_permissionDenied"
+permissionDenied = Kernel.kernel "Error_permissionDenied"
 
 
 -- | Render an `Error` as `"<Kind>: <message>"`.
 toString : Error -> String
-toString = Ffi.kernel "Error_toString"
+toString = Kernel.kernel "Error_toString"
 
 
 -- | Replace the message carried by an `Error`, preserving its kind and details.
 withMessage : String -> Error -> Error
-withMessage = Ffi.kernel "Error_withMessage"
+withMessage = Kernel.kernel "Error_withMessage"
 
 
 -- | `True` when the error kind is retryable: `Timeout`, `Network`, or
 -- `Unavailable`.
 isRetryable : Error -> Bool
-isRetryable = Ffi.kernel "Error_isRetryable"
+isRetryable = Kernel.kernel "Error_isRetryable"
 
 
 -- | Attach an `ErrorDetails` value to an `Error`.
 withDetails : ErrorDetails -> Error -> Error
-withDetails = Ffi.kernel "Error_withDetails"
+withDetails = Kernel.kernel "Error_withDetails"
 
 
 -- | Extract the `ErrorKind` classification tag from an `Error`.
 kind : Error -> ErrorKind
-kind = Ffi.kernel "Error_kind"
+kind = Kernel.kernel "Error_kind"
 
 
 -- | Extract the bare message string from an `Error`.
 message : Error -> String
-message = Ffi.kernel "Error_message"
+message = Kernel.kernel "Error_message"
 
 
 -- | Stable lowercase label of an `ErrorKind` (the same prefix `toString` uses).
 kindName : ErrorKind -> String
-kindName = Ffi.kernel "Error_kindName"
+kindName = Kernel.kernel "Error_kindName"

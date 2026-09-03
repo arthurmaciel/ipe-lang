@@ -12,7 +12,7 @@ security or type invariant of the safe default. Importing it discloses the
 `unsafe` capability program-wide, so a dependency's raw-SQL or untyped-read
 sink is visible before the program runs.
 
-Every member is a point-free `Ffi.kernel "Db_<member>"` / `"Sql_<member>"`
+Every member is a point-free `Kernel.kernel "Db_<member>"` / `"Sql_<member>"`
 alias to a retained runtime kernel; only the surface home moved here from
 `Ipe.Db` / `Ipe.Db.Sql`. The kernels, their registry keys, and their runtime
 behaviour are unchanged.

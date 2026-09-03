@@ -14,14 +14,14 @@
 //! * the surface qualifier (`Unsafe.unsafeGetField` off `import Ipe.Db.Unsafe`,
 //!   and — for the relocation — `Db.unsafeGetField` off plain `Ipe.Db` failing),
 //!   and
-//! * the `Ffi.kernel "Db_unsafeGetField"` string-alias route. Minting a kernel
+//! * the `Kernel.kernel "Db_unsafeGetField"` string-alias route. Minting a kernel
 //!   alias is the exclusive privilege of the driver-vouched standard library /
-//!   FFI interface: a `Ffi.kernel "…"` binding in USER source is rejected by the
+//!   FFI interface: a `Kernel.kernel "…"` binding in USER source is rejected by the
 //!   origin gate (IPE-N0042) before the registry is even consulted. So the
 //!   string-alias route cannot smuggle a user program to the marked kernel at
 //!   all — the only path to the unsafe row read stays the disclosed
 //!   `Ipe.Db.Unsafe` surface. This closes the capability-model bypass whereby a
-//!   user `Ffi.kernel` alias reached an unsafe kernel with no `unsafe`
+//!   user `Kernel.kernel` alias reached an unsafe kernel with no `unsafe`
 //!   disclosure.
 
 use std::fs;
@@ -145,9 +145,9 @@ main =
     let _ = fs::remove_dir_all(&dir);
 }
 
-// ── Ffi.kernel string-alias route ─────────────────────────────────────────────
+// ── Kernel.kernel string-alias route ─────────────────────────────────────────────
 
-/// A USER program cannot mint the marked kernel through a `Ffi.kernel
+/// A USER program cannot mint the marked kernel through a `Kernel.kernel
 /// "Db_unsafeGetField"` alias — minting a kernel is reserved to the vouched
 /// standard library / FFI interface, so the alias is rejected by the origin gate
 /// (IPE-N0042) regardless of whether the named kernel is registered. The unsafe
@@ -159,13 +159,13 @@ fn user_kernel_alias_to_marked_kernel_is_rejected() {
         "marked_alias",
         "\
 module Main exposing (main)
-import Ipe.Ffi as Ffi
+import Ipe.Ffi.Kernel as Kernel
 import Ipe.Dict as Dict
 import Ipe.Io as Io
 
 getField : String -> Dict String String -> String
 getField =
-    Ffi.kernel \"Db_unsafeGetField\"
+    Kernel.kernel \"Db_unsafeGetField\"
 
 main =
     let
@@ -189,13 +189,13 @@ main =
     );
     assert!(
         is_user_alias,
-        "Ffi.kernel \"Db_unsafeGetField\" in user source must be rejected with \
+        "Kernel.kernel \"Db_unsafeGetField\" in user source must be rejected with \
          IPE-N0042 — a user program may not mint a kernel alias: {built:?}"
     );
     let _ = fs::remove_dir_all(&dir);
 }
 
-/// A user `Ffi.kernel "Db_getField"` alias is likewise rejected by the origin
+/// A user `Kernel.kernel "Db_getField"` alias is likewise rejected by the origin
 /// gate. The gate fires on the alias SHAPE in user source, before the registry
 /// is consulted, so the rejection is IPE-N0042 (user source may not mint a
 /// kernel) rather than IPE-N0028 (unknown kernel) — either way the smuggled row
@@ -206,13 +206,13 @@ fn user_kernel_alias_to_unmarked_kernel_is_rejected() {
         "unmarked_alias",
         "\
 module Main exposing (main)
-import Ipe.Ffi as Ffi
+import Ipe.Ffi.Kernel as Kernel
 import Ipe.Dict as Dict
 import Ipe.Io as Io
 
 getField : String -> Dict String String -> String
 getField =
-    Ffi.kernel \"Db_getField\"
+    Kernel.kernel \"Db_getField\"
 
 main =
     let
@@ -236,7 +236,7 @@ main =
     );
     assert!(
         is_user_alias,
-        "Ffi.kernel \"Db_getField\" in user source must be rejected with IPE-N0042 — \
+        "Kernel.kernel \"Db_getField\" in user source must be rejected with IPE-N0042 — \
          a user program may not mint a kernel alias: {built:?}"
     );
     let _ = fs::remove_dir_all(&dir);

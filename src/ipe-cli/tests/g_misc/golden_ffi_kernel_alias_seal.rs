@@ -1,7 +1,7 @@
-//! Regression — the Stage-4 `Ffi.kernel "Module_function"` alias mechanism is
+//! Regression — the Stage-4 `Kernel.kernel "Module_function"` alias mechanism is
 //! ORIGIN-GATED: minting a kernel is the exclusive privilege of the
 //! driver-vouched standard library and generated FFI interface. A binding of the
-//! shape `f = Ffi.kernel "K_n"` in USER source is rejected with a typed
+//! shape `f = Kernel.kernel "K_n"` in USER source is rejected with a typed
 //! diagnostic (IPE-N0042) — regardless of whether the named kernel is
 //! registered, malformed, or perfectly valid.
 //!
@@ -64,7 +64,7 @@ fn assert_rejected_as_user_kernel_alias(sub_dir: &str, out_dir: &str, main: &str
     );
     assert!(
         is_user_kernel_alias,
-        "a user-source `Ffi.kernel` alias must be rejected with IPE-N0042 \
+        "a user-source `Kernel.kernel` alias must be rejected with IPE-N0042 \
          (user code may not mint a kernel): {built:?}"
     );
 }
@@ -80,7 +80,7 @@ fn user_alias_to_unregistered_kernel_is_rejected() {
          import Ipe.Io as Io\n\n\
          bogus : String -> String\n\
          bogus =\n\
-         \x20   Ffi.kernel \"NoSuchKernel_xyz\"\n\n\
+         \x20   Kernel.kernel \"NoSuchKernel_xyz\"\n\n\
          main = Io.println (bogus \"x\")\n",
     );
 }
@@ -96,7 +96,7 @@ fn user_alias_with_malformed_string_is_rejected() {
          import Ipe.Io as Io\n\n\
          bogus : String -> String\n\
          bogus =\n\
-         \x20   Ffi.kernel \"NoUnderscoreHere\"\n\n\
+         \x20   Kernel.kernel \"NoUnderscoreHere\"\n\n\
          main = Io.println (bogus \"x\")\n",
     );
 }
@@ -115,7 +115,7 @@ fn user_alias_to_registered_kernel_is_still_rejected() {
          import Ipe.Io as Io\n\n\
          shout : String -> String\n\
          shout =\n\
-         \x20   Ffi.kernel \"String_toUpper\"\n\n\
+         \x20   Kernel.kernel \"String_toUpper\"\n\n\
          main = Io.println (shout \"hi\")\n",
     );
 }

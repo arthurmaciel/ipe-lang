@@ -17,38 +17,38 @@ module Ipe.Regex exposing
     )
 
 
-import Ipe.Ffi as Ffi
+import Ipe.Ffi.Kernel as Kernel
 
 
 -- | `compile pattern` — parse `pattern` into a reusable `Regex`.  An invalid
 -- pattern is an `Err`, so the failure is observable at the call site rather
 -- than silently degrading a later match.
 compile : String -> Result Error Regex
-compile = Ffi.kernel "Regex_compile"
+compile = Kernel.kernel "Regex_compile"
 
 
 -- | `match re s` — does the compiled pattern match anywhere in `s`?
 match : Regex -> String -> Bool
-match = Ffi.kernel "Regex_match"
+match = Kernel.kernel "Regex_match"
 
 
 -- | `find re s` — first match (Nothing if no match).
 find : Regex -> String -> Maybe String
-find = Ffi.kernel "Regex_find"
+find = Kernel.kernel "Regex_find"
 
 
 -- | `findAll re s` — every non-overlapping match in order.
 findAll : Regex -> String -> List String
-findAll = Ffi.kernel "Regex_findAll"
+findAll = Kernel.kernel "Regex_findAll"
 
 
 -- | `replace re replacement s` — replace every match with `replacement`.
 -- `replacement` may reference capture groups via `$1`, `$2`, etc. (RE2
 -- substitution syntax).
 replace : Regex -> String -> String -> String
-replace = Ffi.kernel "Regex_replace"
+replace = Kernel.kernel "Regex_replace"
 
 
 -- | `split re s` — split on every match.
 split : Regex -> String -> List String
-split = Ffi.kernel "Regex_split"
+split = Kernel.kernel "Regex_split"

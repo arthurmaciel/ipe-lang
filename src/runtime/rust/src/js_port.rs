@@ -1,4 +1,4 @@
-//! Ipe.Js ports — the raw typed Ipê↔JS transport behind `Js.send` /
+//! Ipe.Ffi.Js ports — the raw typed Ipê↔JS transport behind `Js.send` /
 //! `Js.subscribe`.
 //!
 //! A port carries a plain, seal-legal value across the boundary between an Ipê
