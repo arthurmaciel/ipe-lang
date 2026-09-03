@@ -3262,7 +3262,7 @@ mod tests {
         let shared_children = child_list(vec![text("label")]);
 
         let then_ = tagged_node("a", attr_list(vec![]), shared_children.clone());
-        let else_ = tagged_node("span", attr_list(vec![]), shared_children.clone());
+        let else_ = tagged_node("span", attr_list(vec![]), shared_children);
 
         let expr = Expr::If {
             cond: Box::new(Expr::Var(sym(1))),
@@ -3281,15 +3281,15 @@ mod tests {
             result.template
         );
         assert_eq!(result.wrapper_holes.len(), 1, "one wrapper fill expected");
-        let fill = &result.wrapper_holes[0];
+        let fill = result.wrapper_holes.first().expect("one wrapper fill");
         assert_eq!(fill.wrapper_arms.len(), 2, "two wrapper arm templates");
         // Arm 0 is the `a` tag, arm 1 is the `span` tag.
         assert!(
-            matches!(&fill.wrapper_arms[0], CompileUiTemplate::TaggedNode { tag, .. } if tag == "a"),
+            matches!(fill.wrapper_arms.first().expect("arm 0"), CompileUiTemplate::TaggedNode { tag, .. } if tag == "a"),
             "arm 0 must be TaggedNode(a)"
         );
         assert!(
-            matches!(&fill.wrapper_arms[1], CompileUiTemplate::TaggedNode { tag, .. } if tag == "span"),
+            matches!(fill.wrapper_arms.get(1).expect("arm 1"), CompileUiTemplate::TaggedNode { tag, .. } if tag == "span"),
             "arm 1 must be TaggedNode(span)"
         );
     }
