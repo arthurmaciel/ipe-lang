@@ -2579,16 +2579,15 @@ fn merge_provides(
 /// A single `foreign` declaration extracted from a `.ipe` source file, ready for
 /// lifting into a `ManifestDefine*` value.
 ///
-/// Three shapes correspond to the three `[[rust.define.*]]` TOML tables:
+/// Three shapes correspond to the three `[[rust.define.*]]` TOML tables, each
+/// selected by the record's `kind` field:
 ///
-/// - `Struct` — lifted from `foreign Name = Ffi.crate … |> Ffi.struct { field = Carrier }`
-/// - `Enum`   — lifted from `foreign Name = Ffi.crate … |> Ffi.enum [ Ffi.variant … ]`
-/// - `Closure`— lifted from `foreign name = Ffi.crate … |> Ffi.closure (Ffi.fn […] Carrier)`
+/// - `Struct` — `{ crate = "…", kind = Struct { field = Carrier }, derives = [ … ] }`
+/// - `Enum`   — `{ crate = "…", kind = Enum [ Variant "Name" [ Carrier ] ], derives = [ … ] }`
+/// - `Closure`— `{ crate = "…", kind = Closure { args = [ Carrier ], returns = Carrier } }`
 ///
-/// The `krate` field is empty when the declaration omits a `Ffi.crate "…"` stage
-/// (not currently valid syntax, but kept empty for the same semantics the TOML
-/// path uses: attach to the sole dependency). Each lifted value is
-/// byte-identical to what the TOML readers produce for equivalent inputs.
+/// Each lifted value is byte-identical to what the TOML readers produce for
+/// equivalent inputs, so the emitted Rust is unchanged by the surface.
 #[derive(Debug, PartialEq, Eq)]
 enum ForeignDefine {
     Struct(ManifestDefineStruct),
@@ -2604,13 +2603,13 @@ type ForeignDefines = (
 );
 
 /// Walk every `.ipe` source file reachable from `src_root`, parse each module,
-/// and extract its `foreign` declarations, lifting them into `ManifestDefine*`
-/// values through the same blessed-call reader the package-manifest pipeline
-/// uses.
+/// and extract its `foreign` declarations, lifting each inert `Foreign` record
+/// into a `ManifestDefine*` value through the same record-reading discipline the
+/// package-manifest pipeline uses.
 ///
 /// A parse error in any source module is silently skipped here — the compile
 /// pipeline will surface it with full context moments later. A malformed
-/// `foreign` declaration (invalid carrier, bad builder, …) is a typed refusal
+/// `foreign` declaration (invalid carrier, unknown kind, …) is a typed refusal
 /// returned as an `Err` with a `CliError::UsageOwned` carrying the source path
 /// and reason; the caller decides whether to propagate it immediately or defer.
 ///
@@ -2695,8 +2694,16 @@ impl ForeignReader<'_> {
         CliError::UsageOwned(format!("{}:{line}:{col}: {reason}", self.file.display()))
     }
 
-    /// Lift one `ForeignDecl` into a `ForeignDefine`, refusing with a span if
-    /// the builder pipeline is not a valid `Ffi.*` blessed-call sequence.
+    /// Lift one `ForeignDecl` into a `ForeignDefine`, refusing with a span if the
+    /// declaration body is not a valid inert `Foreign` record.
+    ///
+    /// The body is a record literal `{ crate = "…", kind = <Kind>, derives = [ … ] }`.
+    /// `crate` and `kind` are required; `derives` and `ctor` are optional. The
+    /// `kind` field selects the shape — `Struct { … }`, `Enum [ … ]`,
+    /// `Closure { … }`, or `Opaque` — and each maps to the same `ManifestDefine*`
+    /// value the TOML `[[rust.define.*]]` reader produces, so emitted Rust is
+    /// unchanged. No field holds a function or effect: reading the record runs no
+    /// author code.
     fn lift_foreign(
         &self,
         foreign: &ipe_diagnostics::Located<ipe_syntax::ForeignDecl>,
@@ -2704,69 +2711,88 @@ impl ForeignReader<'_> {
         let decl = &foreign.value;
         let name_text = self.text(decl.name.value).to_owned();
 
-        // Walk the `|>` pipeline into stages.
-        let stages = self.linearise_pipeline(&decl.body)?;
+        let fields = self.expect_record(&decl.body)?;
 
-        // The first stage must be `Ffi.crate "…"`.
-        let Some(first) = stages.first() else {
-            return Err(self.reject(
-                foreign.span,
-                "a `foreign` declaration must begin with `Ffi.crate \"<crate-name>\"`",
-            ));
-        };
-        let (m0, n0, args0) = self.expect_blessed_call(first)?;
-        if (m0, n0) != ("Ffi", "crate") {
-            return Err(self.reject(
-                first.span,
-                "the first stage of a `foreign` declaration must be `Ffi.crate \"<crate-name>\"`",
-            ));
-        }
-        let krate = self.one_string(first.span, "Ffi.crate", args0)?;
-
-        // The second stage determines the shape: `Ffi.struct`, `Ffi.enum`, or `Ffi.closure`.
-        let Some(second) = stages.get(1) else {
-            return Err(self.reject(
-                foreign.span,
-                "a `foreign` declaration needs a shape stage: `Ffi.struct`, `Ffi.enum`, or `Ffi.closure`",
-            ));
-        };
-        let (m1, n1, args1) = self.expect_blessed_call(second)?;
-
-        match (m1, n1) {
-            ("Ffi", "struct") => self.lift_struct(foreign, &stages, krate, name_text),
-            ("Ffi", "enum") => self.lift_enum(foreign, &stages, krate, name_text),
-            ("Ffi", "closure") => {
-                // Validate args1 is present for Ffi.closure.
-                let _ = args1;
-                self.lift_closure(foreign, &stages, krate, name_text)
+        let mut krate: Option<String> = None;
+        let mut kind_expr: Option<&ipe_syntax::Expr> = None;
+        let mut derives: Vec<String> = Vec::new();
+        let mut ctor: Option<String> = None;
+        for (fname_loc, value) in fields {
+            match self.text(fname_loc.value) {
+                "crate" => krate = Some(self.expect_string(value)?),
+                "kind" => kind_expr = Some(value),
+                "derives" => derives = self.read_derives(value)?,
+                "ctor" => ctor = Some(self.expect_string(value)?),
+                other => {
+                    return Err(self.reject(
+                        fname_loc.span,
+                        &format!(
+                            "`{other}` is not a `Foreign` field — use `crate`, `kind`, \
+                             `derives`, or `ctor`"
+                        ),
+                    ));
+                }
             }
-            _ => Err(self.reject(
-                second.span,
+        }
+
+        let krate = krate.ok_or_else(|| {
+            self.reject(
+                foreign.span,
+                "a `foreign` declaration needs a `crate = \"<crate-name>\"` field",
+            )
+        })?;
+        let kind_expr = kind_expr.ok_or_else(|| {
+            self.reject(
+                foreign.span,
+                "a `foreign` declaration needs a `kind = <Struct|Enum|Closure|Opaque>` field",
+            )
+        })?;
+
+        self.lift_kind(foreign, kind_expr, krate, name_text, derives, ctor)
+    }
+
+    /// Decode the `kind` field of a `Foreign` record into a `ForeignDefine`,
+    /// carrying the already-read `crate`/`derives`/`ctor` fields.
+    fn lift_kind(
+        &self,
+        foreign: &ipe_diagnostics::Located<ipe_syntax::ForeignDecl>,
+        kind_expr: &ipe_syntax::Expr,
+        krate: String,
+        name: String,
+        derives: Vec<String>,
+        ctor: Option<String>,
+    ) -> Result<ForeignDefine, CliError> {
+        let (ctor_name, args) = self.expect_ctor_app(kind_expr, "a `kind`")?;
+        match ctor_name {
+            "Struct" => self.lift_struct(foreign, args, krate, name, derives, ctor),
+            "Enum" => self.lift_enum(foreign, args, krate, name, derives, ctor),
+            "Closure" => self.lift_closure(foreign, args, krate, name),
+            other => Err(self.reject(
+                kind_expr.span,
                 &format!(
-                    "`{m1}.{n1}` is not a shape builder — use `Ffi.struct`, `Ffi.enum`, or `Ffi.closure`"
+                    "`{other}` is not a `kind` — use `Struct {{ … }}`, `Enum [ … ]`, \
+                     or `Closure {{ … }}`. An opaque handle is referenced as a field or \
+                     payload carrier (a bare upper-case name), never declared standalone."
                 ),
             )),
         }
     }
 
-    /// Lift a `foreign Name = Ffi.crate "…" |> Ffi.struct {…} |> Ffi.derives […]`
-    /// declaration into a `ManifestDefineStruct`, byte-identical to the TOML path.
+    /// Lift a `kind = Struct { field = Carrier, … }` payload into a
+    /// `ManifestDefineStruct`, byte-identical to the TOML path.
     fn lift_struct(
         &self,
         foreign: &ipe_diagnostics::Located<ipe_syntax::ForeignDecl>,
-        stages: &[&ipe_syntax::Expr],
+        args: &[ipe_syntax::Expr],
         krate: String,
         struct_name: String,
+        derives: Vec<String>,
+        ctor: Option<String>,
     ) -> Result<ForeignDefine, CliError> {
-        // Stage 1 must be `Ffi.struct { field : Carrier, … }`.
-        let struct_stage = stages
-            .get(1)
-            .ok_or_else(|| self.reject(foreign.span, "missing `Ffi.struct {…}` stage"))?;
-        let (_, _, struct_args) = self.expect_blessed_call(struct_stage)?;
-        let record_arg = struct_args.first().ok_or_else(|| {
+        let record_arg = args.first().ok_or_else(|| {
             self.reject(
-                struct_stage.span,
-                "`Ffi.struct` requires a record-type argument `{ field : Carrier }`",
+                foreign.span,
+                "`Struct` requires a record argument `{ field = Carrier }`",
             )
         })?;
         let fields = self.read_struct_fields(record_arg)?;
@@ -2775,29 +2801,6 @@ impl ForeignReader<'_> {
                 foreign.span,
                 "a `foreign` struct declaration must have at least one field",
             ));
-        }
-
-        // Stages 2+ are optional modifiers: `Ffi.derives`, `Ffi.ctor`.
-        let mut derives: Vec<String> = Vec::new();
-        let mut ctor: Option<String> = None;
-        for stage in stages.iter().skip(2) {
-            let (m, n, args) = self.expect_blessed_call(stage)?;
-            match (m, n) {
-                ("Ffi", "derives") => {
-                    derives = self.read_derives(stage.span, args)?;
-                }
-                ("Ffi", "ctor") => {
-                    ctor = Some(self.one_string(stage.span, "Ffi.ctor", args)?);
-                }
-                _ => {
-                    return Err(self.reject(
-                        stage.span,
-                        &format!(
-                            "`{m}.{n}` is not a struct modifier — use `Ffi.derives` or `Ffi.ctor`"
-                        ),
-                    ));
-                }
-            }
         }
 
         let ctor = ctor.unwrap_or_else(|| format!("{}_new", to_snake_case(&struct_name)));
@@ -2810,42 +2813,24 @@ impl ForeignReader<'_> {
         }))
     }
 
-    /// Lift a `foreign Name = Ffi.crate "…" |> Ffi.enum […] |> Ffi.derives […]`
-    /// declaration into a `ManifestDefineEnum`, byte-identical to the TOML path.
+    /// Lift a `kind = Enum [ Variant "Name" [ Carrier, … ], … ]` payload into a
+    /// `ManifestDefineEnum`, byte-identical to the TOML path.
     fn lift_enum(
         &self,
         foreign: &ipe_diagnostics::Located<ipe_syntax::ForeignDecl>,
-        stages: &[&ipe_syntax::Expr],
+        args: &[ipe_syntax::Expr],
         krate: String,
         enum_name: String,
+        derives: Vec<String>,
+        ctor: Option<String>,
     ) -> Result<ForeignDefine, CliError> {
-        let mut variants: Vec<(String, Vec<String>)> = Vec::new();
-        let mut derives: Vec<String> = Vec::new();
-        let mut ctor: Option<String> = None;
-
-        for stage in stages.iter().skip(1) {
-            let (m, n, args) = self.expect_blessed_call(stage)?;
-            match (m, n) {
-                ("Ffi", "enum") => {
-                    variants = self.read_enum_variants(stage.span, args)?;
-                }
-                ("Ffi", "derives") => {
-                    derives = self.read_derives(stage.span, args)?;
-                }
-                ("Ffi", "ctor") => {
-                    ctor = Some(self.one_string(stage.span, "Ffi.ctor", args)?);
-                }
-                _ => {
-                    return Err(self.reject(
-                        stage.span,
-                        &format!(
-                            "`{m}.{n}` is not an enum builder — use `Ffi.enum`, `Ffi.derives`, or `Ffi.ctor`"
-                        ),
-                    ));
-                }
-            }
-        }
-
+        let list_arg = args.first().ok_or_else(|| {
+            self.reject(
+                foreign.span,
+                "`Enum` requires a variant list `[ Variant \"Name\" [ … ], … ]`",
+            )
+        })?;
+        let variants = self.read_enum_variants(list_arg)?;
         if variants.is_empty() {
             return Err(self.reject(
                 foreign.span,
@@ -2863,32 +2848,27 @@ impl ForeignReader<'_> {
         }))
     }
 
-    /// Lift a `foreign name = Ffi.crate "…" |> Ffi.closure (Ffi.fn […] Carrier)`
-    /// declaration into a `ManifestDefineClosure`, byte-identical to the TOML path.
+    /// Lift a `kind = Closure { args = [ Carrier, … ], returns = Carrier }`
+    /// payload into a `ManifestDefineClosure`, byte-identical to the TOML path.
     ///
-    /// The `Ffi.fn` form builds the canonical `Fn(P0, P1, …) -> R + Send + Sync +
+    /// The record builds the canonical `Fn(P0, P1, …) -> R + Send + Sync +
     /// 'static` signature string the driver's `ClosureSig::parse` consumes; the
     /// bound set `{Send, Sync, 'static}` is implicit (the only set the sync adapter
     /// supports).
     fn lift_closure(
         &self,
         foreign: &ipe_diagnostics::Located<ipe_syntax::ForeignDecl>,
-        stages: &[&ipe_syntax::Expr],
+        args: &[ipe_syntax::Expr],
         krate: String,
         name: String,
     ) -> Result<ForeignDefine, CliError> {
-        // Skip stage 0 (Ffi.crate) and stage 1 (Ffi.closure).
-        let closure_stage = stages
-            .get(1)
-            .ok_or_else(|| self.reject(foreign.span, "missing `Ffi.closure (…)` stage"))?;
-        let (_, _, closure_args) = self.expect_blessed_call(closure_stage)?;
-        let fn_arg = closure_args.first().ok_or_else(|| {
+        let record_arg = args.first().ok_or_else(|| {
             self.reject(
-                closure_stage.span,
-                "`Ffi.closure` requires a `Ffi.fn` argument: `Ffi.closure (Ffi.fn […] Carrier)`",
+                foreign.span,
+                "`Closure` requires a record argument `{ args = [ … ], returns = Carrier }`",
             )
         })?;
-        let signature = self.read_ffi_fn(fn_arg)?;
+        let signature = self.read_closure_signature(record_arg)?;
         Ok(ForeignDefine::Closure(ManifestDefineClosure {
             krate,
             name,
@@ -2896,41 +2876,38 @@ impl ForeignReader<'_> {
         }))
     }
 
-    /// Read a `Ffi.fn [ Carrier, … ] ReturnCarrier` expression into the
+    /// Read a `{ args = [ Carrier, … ], returns = Carrier }` record into the
     /// `Fn(P0, …) -> R + Send + Sync + 'static` signature string the driver
     /// decodes via `ClosureSig::parse`.
     ///
-    /// Carriers are blessed nullary constructors: `Ffi.int`, `Ffi.float`,
-    /// `Ffi.bool`, `Ffi.char`, `Ffi.string`, `Ffi.bytes`, or `Ffi.opaque "Name"`.
-    /// An unknown carrier is rejected with a span.
-    fn read_ffi_fn(&self, expr: &ipe_syntax::Expr) -> Result<String, CliError> {
-        let (m, n, args) = self.expect_blessed_call(expr)?;
-        if (m, n) != ("Ffi", "fn") {
-            return Err(self.reject(
-                expr.span,
-                &format!(
-                    "`{m}.{n}` is not a closure signature — use `Ffi.fn [ params ] ReturnCarrier`"
-                ),
-            ));
+    /// Carriers are bare upper-case names: `Int`, `Float`, `Bool`, `Char`,
+    /// `String`, `Bytes`, or an opaque handle name. An unknown carrier is
+    /// rejected with a span.
+    fn read_closure_signature(&self, expr: &ipe_syntax::Expr) -> Result<String, CliError> {
+        let fields = self.expect_record(expr)?;
+        let mut args_expr: Option<&ipe_syntax::Expr> = None;
+        let mut returns_expr: Option<&ipe_syntax::Expr> = None;
+        for (fname_loc, value) in fields {
+            match self.text(fname_loc.value) {
+                "args" => args_expr = Some(value),
+                "returns" => returns_expr = Some(value),
+                other => {
+                    return Err(self.reject(
+                        fname_loc.span,
+                        &format!("`{other}` is not a `Closure` field — use `args` or `returns`"),
+                    ));
+                }
+            }
         }
-        // First arg: parameter list `[ Ffi.int, Ffi.string, … ]`.
-        let params_arg = args.first().ok_or_else(|| {
-            self.reject(
-                expr.span,
-                "`Ffi.fn` requires a parameter list `[ … ]` and a return carrier",
-            )
-        })?;
-        let ret_arg = args.get(1).ok_or_else(|| {
-            self.reject(
-                expr.span,
-                "`Ffi.fn` requires a return carrier as its second argument",
-            )
+        let args_expr = args_expr
+            .ok_or_else(|| self.reject(expr.span, "`Closure` requires an `args = [ … ]` field"))?;
+        let returns_expr = returns_expr.ok_or_else(|| {
+            self.reject(expr.span, "`Closure` requires a `returns = Carrier` field")
         })?;
 
-        let params = self.read_carrier_list(params_arg)?;
-        let ret = self.read_carrier(ret_arg)?;
+        let params = self.read_carrier_list(args_expr)?;
+        let ret = self.read_carrier_type_from_expr(returns_expr)?;
 
-        // Build the canonical `Fn(P0, P1, …) -> R + Send + Sync + 'static` string.
         let sig = format!(
             "Fn({}) -> {} + Send + Sync + 'static",
             params.join(", "),
@@ -2939,94 +2916,19 @@ impl ForeignReader<'_> {
         Ok(sig)
     }
 
-    /// Read a list-literal of carrier expressions into their canonical spellings.
+    /// Read a list-literal of carrier names into their canonical spellings.
     fn read_carrier_list(&self, expr: &ipe_syntax::Expr) -> Result<Vec<String>, CliError> {
         use ipe_syntax::Expr_;
         let Expr_::List(items) = &expr.value else {
-            return Err(self.reject(expr.span, "expected a list of carriers `[ Ffi.int, … ]`"));
+            return Err(self.reject(expr.span, "expected a list of carriers `[ Int, … ]`"));
         };
-        items.iter().map(|item| self.read_carrier(item)).collect()
+        items
+            .iter()
+            .map(|item| self.read_carrier_type_from_expr(item))
+            .collect()
     }
 
-    /// Read one carrier expression into its canonical spelling.
-    ///
-    /// Blessed carriers:
-    /// - `Ffi.int`   → `"Int"`
-    /// - `Ffi.float` → `"Float"`
-    /// - `Ffi.bool`  → `"Bool"`
-    /// - `Ffi.char`  → `"Char"`
-    /// - `Ffi.string` → `"String"`
-    /// - `Ffi.bytes` → `"Bytes"`
-    /// - `Ffi.opaque "Name"` → `"Name"` (an opaque handle; name must be upper-case)
-    ///
-    /// Any other expression is rejected with a span — an invalid carrier is a
-    /// parse-time refusal, one step earlier than the current TOML decode-then-refuse.
-    fn read_carrier(&self, expr: &ipe_syntax::Expr) -> Result<String, CliError> {
-        use ipe_syntax::Expr_;
-        match &expr.value {
-            Expr_::VarQual(m, n) => {
-                let m = self.text(*m);
-                let n = self.text(*n);
-                if m != "Ffi" {
-                    return Err(self.reject(
-                        expr.span,
-                        &format!(
-                            "`{m}.{n}` is not a carrier — use `Ffi.int`, `Ffi.float`, `Ffi.bool`, \
-                             `Ffi.char`, `Ffi.string`, `Ffi.bytes`, or `Ffi.opaque \"Name\"`"
-                        ),
-                    ));
-                }
-                match n {
-                    "int" => Ok("Int".to_owned()),
-                    "float" => Ok("Float".to_owned()),
-                    "bool" => Ok("Bool".to_owned()),
-                    "char" => Ok("Char".to_owned()),
-                    "string" => Ok("String".to_owned()),
-                    "bytes" => Ok("Bytes".to_owned()),
-                    other => Err(self.reject(
-                        expr.span,
-                        &format!(
-                            "`Ffi.{other}` is not a carrier — use `Ffi.int`, `Ffi.float`, \
-                             `Ffi.bool`, `Ffi.char`, `Ffi.string`, `Ffi.bytes`, or \
-                             `Ffi.opaque \"Name\"`"
-                        ),
-                    )),
-                }
-            }
-            Expr_::Call(callee, args) => {
-                // `Ffi.opaque "Name"` — an opaque handle carrier.
-                if let Expr_::VarQual(m, n) = &callee.value {
-                    let m = self.text(*m);
-                    let n = self.text(*n);
-                    if m == "Ffi" && n == "opaque" {
-                        let name_arg = args.first().ok_or_else(|| {
-                            self.reject(expr.span, "`Ffi.opaque` requires a string name argument")
-                        })?;
-                        let name = self.expect_string(name_arg)?;
-                        if name.is_empty()
-                            || !name.chars().next().is_some_and(|c| c.is_ascii_uppercase())
-                        {
-                            return Err(self.reject(
-                                expr.span,
-                                "`Ffi.opaque` name must be a non-empty upper-case identifier",
-                            ));
-                        }
-                        return Ok(name);
-                    }
-                }
-                Err(self.reject(
-                    expr.span,
-                    "expected a carrier (`Ffi.int`, `Ffi.string`, `Ffi.opaque \"Name\"`, …)",
-                ))
-            }
-            _ => Err(self.reject(
-                expr.span,
-                "expected a carrier (`Ffi.int`, `Ffi.string`, `Ffi.opaque \"Name\"`, …)",
-            )),
-        }
-    }
-
-    /// Read a `Ffi.struct { field = Carrier, … }` record-value argument into
+    /// Read a `Struct { field = Carrier, … }` record payload into
     /// `(field-name, carrier-spelling)` pairs, in source order.
     ///
     /// In Ipê expression context, record literals use `=` for field assignment:
@@ -3037,14 +2939,7 @@ impl ForeignReader<'_> {
         &self,
         expr: &ipe_syntax::Expr,
     ) -> Result<Vec<(String, String)>, CliError> {
-        use ipe_syntax::Expr_;
-        let Expr_::Record(fields) = &expr.value else {
-            return Err(self.reject(
-                expr.span,
-                "`Ffi.struct` expects a record-value argument `{ field = Carrier, … }` \
-                 (note: use `=`, not `:`)",
-            ));
-        };
+        let fields = self.expect_record(expr)?;
         let mut out = Vec::new();
         for (name_loc, val_expr) in fields {
             let field_name = self.text(name_loc.value).to_owned();
@@ -3091,40 +2986,22 @@ impl ForeignReader<'_> {
         }
     }
 
-    /// Read a `Ffi.derives [ Ffi.clone, Ffi.debug, Ffi.default_, … ]` arg into
-    /// derive token strings. Derives are blessed nullary constructors that map to
-    /// the standard Rust derive names the driver's closed allowlist validates.
-    fn read_derives(
-        &self,
-        span: ipe_diagnostics::Span,
-        args: &[ipe_syntax::Expr],
-    ) -> Result<Vec<String>, CliError> {
-        use ipe_syntax::Expr_;
-        let list_arg = args.first().ok_or_else(|| {
-            self.reject(
-                span,
-                "`Ffi.derives` requires a list argument `[ Ffi.clone, … ]`",
-            )
-        })?;
-        let Expr_::List(items) = &list_arg.value else {
-            return Err(self.reject(span, "`Ffi.derives` argument must be a list `[ … ]`"));
-        };
+    /// Read a `derives = [ Default, Clone, Debug, … ]` list into derive token
+    /// strings. Each element is a bare upper-case constructor naming a Rust
+    /// derive; the closed allowlist (`ffi_derive_name`) is the single source of
+    /// truth, so a misspelt derive is a refusal, never emitted Rust.
+    fn read_derives(&self, expr: &ipe_syntax::Expr) -> Result<Vec<String>, CliError> {
+        let items = self.expect_list(expr)?;
         let mut out = Vec::new();
         for item in items {
-            let (m, n) = self.expect_nullary(item)?;
-            if m != "Ffi" {
-                return Err(self.reject(
-                    item.span,
-                    &format!("`{m}.{n}` is not a derive — use `Ffi.clone`, `Ffi.debug`, `Ffi.default_`, etc."),
-                ));
-            }
-            let derive = ffi_derive_name(n).ok_or_else(|| {
+            let name = self.expect_ctor(item, "a derive")?;
+            let derive = ffi_derive_name(name).ok_or_else(|| {
                 self.reject(
                     item.span,
                     &format!(
-                        "`Ffi.{n}` is not a recognised derive — accepted: \
-                         `clone`, `debug`, `default_`, `partialEq`, `eq`, \
-                         `partialOrd`, `ord`, `hash`, `copy`"
+                        "`{name}` is not a recognised derive — accepted: \
+                         `Default`, `Clone`, `Debug`, `Copy`, `PartialEq`, `Eq`, \
+                         `PartialOrd`, `Ord`, `Hash`"
                     ),
                 )
             })?;
@@ -3133,33 +3010,26 @@ impl ForeignReader<'_> {
         Ok(out)
     }
 
-    /// Read a `Ffi.enum [ Ffi.variant "Name" […], … ]` argument into
+    /// Read a `[ Variant "Name" [ Carrier, … ], … ]` list into
     /// `(variant-name, payload-carrier-spellings)` pairs.
     fn read_enum_variants(
         &self,
-        span: ipe_diagnostics::Span,
-        args: &[ipe_syntax::Expr],
+        expr: &ipe_syntax::Expr,
     ) -> Result<Vec<(String, Vec<String>)>, CliError> {
-        use ipe_syntax::Expr_;
-        let list_arg = args.first().ok_or_else(|| {
-            self.reject(
-                span,
-                "`Ffi.enum` requires a list argument `[ Ffi.variant … ]`",
-            )
-        })?;
-        let Expr_::List(items) = &list_arg.value else {
-            return Err(self.reject(span, "`Ffi.enum` argument must be a list `[ … ]`"));
-        };
+        let items = self.expect_list(expr)?;
         let mut out = Vec::new();
         for item in items {
-            let (m, n, args) = self.expect_blessed_call(item)?;
-            if (m, n) != ("Ffi", "variant") {
+            let (ctor, args) = self.expect_ctor_app(item, "a variant")?;
+            if ctor != "Variant" {
                 return Err(self.reject(
                     item.span,
-                    &format!("`{m}.{n}` is not a variant — use `Ffi.variant \"Name\" [carriers]`"),
+                    &format!("`{ctor}` is not a variant — use `Variant \"Name\" [ Carrier, … ]`"),
                 ));
             }
-            let variant_name = self.one_string(item.span, "Ffi.variant", args)?;
+            let name_arg = args.first().ok_or_else(|| {
+                self.reject(item.span, "`Variant` requires a string name argument")
+            })?;
+            let variant_name = self.expect_string(name_arg)?;
             if variant_name.is_empty()
                 || !variant_name
                     .chars()
@@ -3181,44 +3051,82 @@ impl ForeignReader<'_> {
         Ok(out)
     }
 
-    /// Require `expr` to be a call whose callee is a `Module.name` blessed
-    /// reference, returning `(module, name, args)`. A non-blessed callee is
-    /// rejected with a span.
-    fn expect_blessed_call<'e>(
+    /// Require `expr` to be a record literal `{ … }`, returning its
+    /// `(field-name, value)` pairs. Any other shape is rejected — a `foreign`
+    /// declaration is inert data, never a computed value.
+    fn expect_record<'e>(
         &self,
         expr: &'e ipe_syntax::Expr,
-    ) -> Result<(&str, &str, &'e [ipe_syntax::Expr]), CliError> {
+    ) -> Result<
+        &'e [(
+            ipe_diagnostics::Located<ipe_intern::Symbol>,
+            ipe_syntax::Expr,
+        )],
+        CliError,
+    > {
         use ipe_syntax::Expr_;
         match &expr.value {
-            Expr_::Call(callee, args) => match &callee.value {
-                Expr_::VarQual(m, n) => Ok((self.text(*m), self.text(*n), args.as_slice())),
-                _ => Err(self.reject(
-                    callee.span,
-                    "a `foreign` stage's callee must be a blessed `Ffi.*` name, never a local \
-                     binding, lambda, or computed function",
-                )),
-            },
-            Expr_::VarQual(m, n) => Ok((self.text(*m), self.text(*n), &[])),
+            Expr_::Record(fields) => Ok(fields.as_slice()),
             _ => Err(self.reject(
                 expr.span,
-                "expected a blessed `Ffi.*` builder call in the `foreign` pipeline",
+                "expected a record literal `{ … }` — a `foreign` declaration is written as a \
+                 record of literals, never computed",
             )),
         }
     }
 
-    /// Require `expr` to be a bare `Module.name` nullary constructor (never a
-    /// call), returning `(module, name)`.
-    fn expect_nullary<'e>(
-        &'e self,
-        expr: &ipe_syntax::Expr,
-    ) -> Result<(&'e str, &'e str), CliError> {
+    /// Require `expr` to be a bare nullary constructor, returning its name.
+    /// `what` names the expected kind in the error.
+    fn expect_ctor<'e>(&'e self, expr: &ipe_syntax::Expr, what: &str) -> Result<&'e str, CliError> {
         use ipe_syntax::Expr_;
         match &expr.value {
-            Expr_::VarQual(m, n) => Ok((self.text(*m), self.text(*n))),
+            Expr_::VarLocal(n) | Expr_::VarQual(_, n) => Ok(self.text(*n)),
             _ => Err(self.reject(
                 expr.span,
-                "expected a blessed `Ffi.*` nullary constructor (e.g. `Ffi.clone`)",
+                &format!("expected {what} as a constructor, never a computed value or binding"),
             )),
+        }
+    }
+
+    /// Require `expr` to be a constructor APPLIED to arguments (`Struct { … }`,
+    /// `Variant "…" [ … ]`), returning `(ctor-name, args)`. A bare nullary
+    /// constructor yields an empty argument slice.
+    fn expect_ctor_app<'e>(
+        &'e self,
+        expr: &'e ipe_syntax::Expr,
+        what: &str,
+    ) -> Result<(&'e str, &'e [ipe_syntax::Expr]), CliError> {
+        use ipe_syntax::Expr_;
+        match &expr.value {
+            Expr_::Call(callee, args) => {
+                let name = match &callee.value {
+                    Expr_::VarLocal(n) | Expr_::VarQual(_, n) => self.text(*n),
+                    _ => {
+                        return Err(self.reject(
+                            callee.span,
+                            &format!(
+                                "expected {what} as a constructor applied to its argument, never \
+                                 a computed function"
+                            ),
+                        ));
+                    }
+                };
+                Ok((name, args.as_slice()))
+            }
+            Expr_::VarLocal(n) | Expr_::VarQual(_, n) => Ok((self.text(*n), &[])),
+            _ => Err(self.reject(expr.span, &format!("expected {what} as a constructor"))),
+        }
+    }
+
+    /// Read a list-literal expression, returning its element expressions.
+    fn expect_list<'e>(
+        &self,
+        expr: &'e ipe_syntax::Expr,
+    ) -> Result<&'e [ipe_syntax::Expr], CliError> {
+        use ipe_syntax::Expr_;
+        match &expr.value {
+            Expr_::List(items) => Ok(items.as_slice()),
+            _ => Err(self.reject(expr.span, "expected a list literal `[ … ]`")),
         }
     }
 
@@ -3233,60 +3141,22 @@ impl ForeignReader<'_> {
             )),
         }
     }
-
-    /// Require exactly one argument and read it as a string literal.
-    fn one_string(
-        &self,
-        span: ipe_diagnostics::Span,
-        builder: &str,
-        args: &[ipe_syntax::Expr],
-    ) -> Result<String, CliError> {
-        let arg = args
-            .first()
-            .ok_or_else(|| self.reject(span, &format!("`{builder}` requires a string argument")))?;
-        self.expect_string(arg)
-    }
-
-    /// Linearise the `|>` spine of the declaration body into an ordered stage list.
-    fn linearise_pipeline<'e>(
-        &self,
-        body: &'e ipe_syntax::Expr,
-    ) -> Result<Vec<&'e ipe_syntax::Expr>, CliError> {
-        use ipe_syntax::Expr_;
-        match &body.value {
-            Expr_::Binops(ops, last) => {
-                let mut stages = Vec::with_capacity(ops.len() + 1);
-                for (operand, op) in ops {
-                    if self.text(op.value) != "|>" {
-                        return Err(self.reject(
-                            op.span,
-                            "a `foreign` declaration pipeline may only be threaded with `|>` — \
-                             no other operator is allowed",
-                        ));
-                    }
-                    stages.push(operand);
-                }
-                stages.push(last.as_ref());
-                Ok(stages)
-            }
-            _ => Ok(vec![body]),
-        }
-    }
 }
 
-/// Map a `Ffi.*` derive builder name to the Rust derive token the driver decodes.
-/// Returns `None` for an unknown derive — an invalid derive is rejected with a span.
-fn ffi_derive_name(builder: &str) -> Option<&'static str> {
-    match builder {
-        "clone" => Some("Clone"),
-        "debug" => Some("Debug"),
-        "default_" => Some("Default"),
-        "partialEq" => Some("PartialEq"),
-        "eq" => Some("Eq"),
-        "partialOrd" => Some("PartialOrd"),
-        "ord" => Some("Ord"),
-        "hash" => Some("Hash"),
-        "copy" => Some("Copy"),
+/// Map a derive constructor name to the Rust derive token the driver decodes.
+/// The constructor spelling and the emitted token coincide; this closed match is
+/// the allowlist, so an unrecognised derive is rejected rather than emitted.
+fn ffi_derive_name(ctor: &str) -> Option<&'static str> {
+    match ctor {
+        "Clone" => Some("Clone"),
+        "Debug" => Some("Debug"),
+        "Default" => Some("Default"),
+        "PartialEq" => Some("PartialEq"),
+        "Eq" => Some("Eq"),
+        "PartialOrd" => Some("PartialOrd"),
+        "Ord" => Some("Ord"),
+        "Hash" => Some("Hash"),
+        "Copy" => Some("Copy"),
         _ => None,
     }
 }
@@ -4154,22 +4024,7 @@ version = \"1\"
     /// Parse a `foreign` source snippet and expect lifting to fail, returning
     /// the error message for further assertions.
     fn lift_one_err(src: &str) -> String {
-        let mut interner = ipe_intern::Interner::new();
-        let module = ipe_parse::parse_module(src, &mut interner)
-            .expect("parse_module should not fail even for a semantically invalid snippet");
-        let foreign = module
-            .foreigns
-            .first()
-            .expect("test snippet must have a `foreign` decl");
-        let reader = ForeignReader {
-            interner: &interner,
-            src,
-            file: std::path::Path::new("<test>"),
-        };
-        reader
-            .lift_foreign(foreign)
-            .expect_err("lift_foreign should fail for an invalid declaration")
-            .to_string()
+        lift_first_foreign(src).expect_err("lift_foreign should fail for an invalid declaration")
     }
 
     /// An invalid carrier in a `foreign` struct field is rejected with a span
@@ -4177,7 +4032,7 @@ version = \"1\"
     #[test]
     fn foreign_struct_invalid_carrier_is_refused() {
         // `int` (lower-case) is not a valid carrier name.
-        let bad = "module Main exposing (..)\n\nforeign Foo =\n          Ffi.crate \"x\"\n          |> Ffi.struct { value = int }\n";
+        let bad = "module Main exposing (..)\n\nforeign Foo =\n          { crate = \"x\"\n          , kind = Struct { value = int }\n          }\n";
         let err = lift_one_err(bad);
         assert!(
             err.contains("not a valid field carrier") || err.contains("carrier"),
@@ -4188,7 +4043,7 @@ version = \"1\"
     /// A derive that is not in the blessed allowlist is refused.
     #[test]
     fn foreign_struct_unknown_derive_is_refused() {
-        let src = "module Main exposing (..)\n\nforeign Foo =\n          Ffi.crate \"x\"\n          |> Ffi.struct { value = Int }\n          |> Ffi.derives [ Ffi.display ]\n";
+        let src = "module Main exposing (..)\n\nforeign Foo =\n          { crate = \"x\"\n          , kind = Struct { value = Int }\n          , derives = [ Display ]\n          }\n";
         let err = lift_one_err(src);
         assert!(
             err.contains("not a recognised derive") || err.contains("derive"),
@@ -4196,26 +4051,26 @@ version = \"1\"
         );
     }
 
-    /// An unrecognised stage name is refused, blocking injection of arbitrary
-    /// Rust code through the builder vocabulary.
+    /// An unknown record field is refused, blocking injection of arbitrary Rust
+    /// code through an unblessed vocabulary.
     #[test]
     fn foreign_struct_unknown_builder_is_refused() {
-        let src = "module Main exposing (..)\n\nforeign Foo =\n          Ffi.crate \"x\"\n          |> Ffi.struct { value = Int }\n          |> Ffi.unsafe \"inject\"\n";
+        let src = "module Main exposing (..)\n\nforeign Foo =\n          { crate = \"x\"\n          , kind = Struct { value = Int }\n          , inject = \"unsafe\"\n          }\n";
         let err = lift_one_err(src);
         assert!(
-            err.contains("not a struct modifier") || err.contains("modifier"),
-            "error must mention modifier: {err}"
+            err.contains("not a `Foreign` field") || err.contains("field"),
+            "error must mention field: {err}"
         );
     }
 
-    /// An unknown shape builder (not `struct`/`enum`/`closure`) is refused.
+    /// An unknown `kind` constructor (not `Struct`/`Enum`/`Closure`) is refused.
     #[test]
     fn foreign_unknown_shape_is_refused() {
-        let src = "module Main exposing (..)\n\nforeign Foo =\n          Ffi.crate \"x\"\n          |> Ffi.phantom\n";
+        let src = "module Main exposing (..)\n\nforeign Foo =\n          { crate = \"x\"\n          , kind = Phantom\n          }\n";
         let err = lift_one_err(src);
         assert!(
-            err.contains("not a shape builder") || err.contains("shape"),
-            "error must mention shape: {err}"
+            err.contains("not a `kind`") || err.contains("kind"),
+            "error must mention kind: {err}"
         );
     }
 
@@ -4283,5 +4138,137 @@ iced = "=0.12.1"
 "#;
         reject_legacy_define_tables(toml_clean)
             .expect("manifest without [[rust.define.*]] must pass");
+    }
+
+    /// Parse `src` and lift its first `foreign` declaration through the record
+    /// reader, returning either the lifted `ForeignDefine` or the refusal
+    /// message. The read is purely syntactic — no author code runs.
+    fn lift_first_foreign(src: &str) -> Result<ForeignDefine, String> {
+        let mut interner = ipe_intern::Interner::new();
+        let module = ipe_parse::parse_module(src, &mut interner).expect("parse");
+        let foreign = module.foreigns.first().expect("one foreign decl");
+        let reader = ForeignReader {
+            interner: &interner,
+            src,
+            file: std::path::Path::new("Ffi.ipe"),
+        };
+        reader.lift_foreign(foreign).map_err(|e| e.to_string())
+    }
+
+    #[test]
+    fn record_struct_lifts_to_the_same_define_as_the_toml_path() {
+        let src = "module Ffi exposing (Counter)\n\
+                   foreign Counter =\n\
+                   \x20   { crate = \"iced\"\n\
+                   \x20   , kind = Struct { value = Int }\n\
+                   \x20   , derives = [ Default, Clone ]\n\
+                   \x20   }\n";
+        let got = lift_first_foreign(src).expect("valid struct record");
+        assert_eq!(
+            got,
+            ForeignDefine::Struct(ManifestDefineStruct {
+                krate: "iced".to_owned(),
+                ctor: "counter_new".to_owned(),
+                struct_name: "Counter".to_owned(),
+                fields: vec![("value".to_owned(), "Int".to_owned())],
+                derives: vec!["Default".to_owned(), "Clone".to_owned()],
+            })
+        );
+    }
+
+    #[test]
+    fn record_enum_lifts_variants_and_payloads() {
+        let src = "module Ffi exposing (Message)\n\
+                   foreign Message =\n\
+                   \x20   { crate = \"iced\"\n\
+                   \x20   , kind = Enum [ Variant \"Increment\" [], Variant \"Set\" [ Int ] ]\n\
+                   \x20   , derives = [ Clone, Debug ]\n\
+                   \x20   }\n";
+        let got = lift_first_foreign(src).expect("valid enum record");
+        assert_eq!(
+            got,
+            ForeignDefine::Enum(ManifestDefineEnum {
+                krate: "iced".to_owned(),
+                ctor: "message_new".to_owned(),
+                enum_name: "Message".to_owned(),
+                variants: vec![
+                    ("Increment".to_owned(), vec![]),
+                    ("Set".to_owned(), vec!["Int".to_owned()]),
+                ],
+                derives: vec!["Clone".to_owned(), "Debug".to_owned()],
+            })
+        );
+    }
+
+    #[test]
+    fn record_closure_builds_the_canonical_signature() {
+        let src = "module Ffi exposing (update)\n\
+                   foreign update =\n\
+                   \x20   { crate = \"iced\"\n\
+                   \x20   , kind = Closure { args = [ Int, String ], returns = Int }\n\
+                   \x20   }\n";
+        let got = lift_first_foreign(src).expect("valid closure record");
+        assert_eq!(
+            got,
+            ForeignDefine::Closure(ManifestDefineClosure {
+                krate: "iced".to_owned(),
+                name: "update".to_owned(),
+                signature: "Fn(Int, String) -> Int + Send + Sync + 'static".to_owned(),
+            })
+        );
+    }
+
+    #[test]
+    fn a_misspelt_derive_is_a_refusal() {
+        let src = "module Ffi exposing (Counter)\n\
+                   foreign Counter =\n\
+                   \x20   { crate = \"iced\"\n\
+                   \x20   , kind = Struct { value = Int }\n\
+                   \x20   , derives = [ Cloen ]\n\
+                   \x20   }\n";
+        let err = lift_first_foreign(src).expect_err("misspelt derive must refuse");
+        assert!(err.contains("Cloen"), "{err}");
+        assert!(err.contains("not a recognised derive"), "{err}");
+    }
+
+    #[test]
+    fn a_misspelt_kind_is_a_refusal() {
+        let src = "module Ffi exposing (Counter)\n\
+                   foreign Counter =\n\
+                   \x20   { crate = \"iced\"\n\
+                   \x20   , kind = Strcut { value = Int }\n\
+                   \x20   }\n";
+        let err = lift_first_foreign(src).expect_err("misspelt kind must refuse");
+        assert!(err.contains("Strcut"), "{err}");
+        assert!(err.contains("not a `kind`"), "{err}");
+    }
+
+    #[test]
+    fn a_non_record_body_is_a_refusal() {
+        let src = "module Ffi exposing (Counter)\n\
+                   foreign Counter = \"iced\"\n";
+        let err = lift_first_foreign(src).expect_err("a string body must refuse");
+        assert!(err.contains("record literal"), "{err}");
+    }
+
+    #[test]
+    fn a_missing_crate_field_is_a_refusal() {
+        let src = "module Ffi exposing (Counter)\n\
+                   foreign Counter =\n\
+                   \x20   { kind = Struct { value = Int } }\n";
+        let err = lift_first_foreign(src).expect_err("a missing crate must refuse");
+        assert!(err.contains("crate"), "{err}");
+    }
+
+    #[test]
+    fn an_unknown_field_is_a_refusal() {
+        let src = "module Ffi exposing (Counter)\n\
+                   foreign Counter =\n\
+                   \x20   { crate = \"iced\"\n\
+                   \x20   , kind = Struct { value = Int }\n\
+                   \x20   , flavour = \"spicy\"\n\
+                   \x20   }\n";
+        let err = lift_first_foreign(src).expect_err("an unknown field must refuse");
+        assert!(err.contains("flavour"), "{err}");
     }
 }

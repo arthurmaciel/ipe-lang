@@ -69,7 +69,7 @@ enum Decl {
         body: Expr,
         doc: Option<DocString>,
     },
-    /// A `foreign Name = Ffi.crate "…" |> …` declaration.
+    /// A `foreign Name = { crate = "…", kind = … }` declaration.
     Foreign(Located<ForeignDecl>),
 }
 
@@ -899,16 +899,17 @@ impl<'a> Parser<'a> {
         ))
     }
 
-    /// Parse a `foreign Name = Ffi.crate "…" |> …` declaration.
+    /// Parse a `foreign Name = { crate = "…", kind = … }` declaration.
     ///
-    /// The optional `foreign name : Ffi.Fn` annotation form is handled by
+    /// The optional `foreign name : T` annotation form is handled by
     /// `parse_decl`'s annotation logic: a `name : T` annotation line preceding
     /// the `foreign name = …` binding is matched here and carried as
-    /// `type_annotation`. The CLI lift pass uses the annotation to distinguish a
-    /// closure declaration (`Ffi.Fn`) from a struct / enum declaration.
+    /// `type_annotation`. The lifted record's `kind` field selects the shape, so
+    /// the annotation is accepted for readability but not required.
     ///
     /// The body is parsed as a full expression at the name's column so the layout
-    /// rule treats the `|>` continuations as the body, not new declarations.
+    /// rule treats the record's continuation lines as the body, not new
+    /// declarations.
     fn parse_foreign(&mut self) -> DResult<Located<ForeignDecl>> {
         let foreign_tok = self.bump(Construct::Definition)?; // `foreign`
         let name_tok = self.bump(Construct::Definition)?;

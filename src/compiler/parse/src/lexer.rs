@@ -28,7 +28,7 @@ pub enum Tok {
     Exposing,
     As,
     Type,
-    /// `foreign` — introduces an FFI type declaration `foreign Name = Ffi.crate … |> …`.
+    /// `foreign` — introduces an FFI type declaration `foreign Name = { crate = …, kind = … }`.
     /// Read only by the CLI lift pass; the compiler proper ignores foreign declarations.
     Foreign,
     Case,
