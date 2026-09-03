@@ -20,6 +20,7 @@ const WIDGET_APP: &str = r#"module Main exposing (main)
 
 import Ipe.Tea.Web as Web
 import Ipe.Ui as Ui
+import Ipe.Ffi.Js.CustomElement as CustomElement
 import Ipe.Tea.Web.Cmd as Cmd
 import Ipe.Tea.Web.Sub as Sub
 import Ipe.String as String
@@ -33,7 +34,7 @@ type Msg = FromWidget WidgetUp
 type alias Model = { count : Int }
 
 counter : CustomElement WidgetState WidgetUp
-counter = customElement "js/counter.js"
+counter = CustomElement.fromFile "js/counter.js"
 
 init : WebReq -> ( Model, Cmd.Cmd Msg )
 init _req =
@@ -48,7 +49,7 @@ update msg model =
 view : Model -> Element Msg
 view model =
     Ui.column []
-        [ Ui.widget counter { count = model.count } FromWidget
+        [ CustomElement.node counter { count = model.count } FromWidget
         , Ui.text (String.fromInt model.count)
         ]
 
@@ -259,6 +260,7 @@ const UNMOUNTED_WIDGET_APP: &str = r#"module Main exposing (main)
 
 import Ipe.Tea.Web as Web
 import Ipe.Ui as Ui
+import Ipe.Ffi.Js.CustomElement as CustomElement
 import Ipe.Tea.Web.Cmd as Cmd
 import Ipe.Tea.Web.Sub as Sub
 import Ipe.String as String
@@ -272,7 +274,7 @@ type Msg = Noop
 type alias Model = { count : Int }
 
 counter : CustomElement WidgetState WidgetUp
-counter = customElement "js/counter.js"
+counter = CustomElement.fromFile "js/counter.js"
 
 init : WebReq -> ( Model, Cmd.Cmd Msg )
 init _req =
@@ -379,7 +381,7 @@ fn a_handle_constructed_in_an_imported_module_discloses_custom_element() -> Test
     // Module B constructs the handle; nothing mounts it.
     std::fs::write(
         dir.join("src/Widgets.ipe"),
-        "module Widgets exposing (counter)\n\ntype alias WidgetState = { count : Int }\n\ntype WidgetUp = Bumped Int\n\ncounter : CustomElement WidgetState WidgetUp\ncounter = customElement \"js/counter.js\"\n",
+        "module Widgets exposing (counter)\n\nimport Ipe.Ffi.Js.CustomElement as CustomElement\n\ntype alias WidgetState = { count : Int }\n\ntype WidgetUp = Bumped Int\n\ncounter : CustomElement WidgetState WidgetUp\ncounter = CustomElement.fromFile \"js/counter.js\"\n",
     )?;
     // Main imports Widgets but never mounts `counter`.
     std::fs::write(

@@ -67,7 +67,7 @@ const WIDGET_JS: &str = "export function mount(host, emit) { return {}; }\n";
 const TERMINAL_UI_WIDGET: &str = r#"module Main exposing (main)
 
 import Ipe.Tea.Terminal as Terminal
-import Ipe.Ui as Ui
+import Ipe.Ffi.Js.CustomElement as CustomElement
 import Ipe.Ui.Cells exposing (Cells)
 import Ipe.Tea.Terminal.Cmd
 import Ipe.Tea.Terminal.Sub
@@ -81,7 +81,7 @@ type Msg = Edited EditorEvent
 type alias Model = { state : EditorState }
 
 codeEditor : CustomElement EditorState EditorEvent
-codeEditor = customElement "js/x.js"
+codeEditor = CustomElement.fromFile "js/x.js"
 
 init : () -> ( Model, Cmd Msg )
 init _unit =
@@ -93,7 +93,7 @@ update _msg model =
 
 view : Model -> Cells Msg
 view model =
-    Ui.widget codeEditor model.state Edited
+    CustomElement.node codeEditor model.state Edited
 
 subscriptions : Model -> Sub Msg
 subscriptions _model =
@@ -117,7 +117,7 @@ main =
 const WEB_UI_WIDGET: &str = r#"module Main exposing (main)
 
 import Ipe.Tea.Web as Web
-import Ipe.Ui as Ui
+import Ipe.Ffi.Js.CustomElement as CustomElement
 import Ipe.Tea.Web.Cmd
 import Ipe.Tea.Web.Sub
 
@@ -130,7 +130,7 @@ type Msg = Edited EditorEvent
 type alias Model = { state : EditorState }
 
 codeEditor : CustomElement EditorState EditorEvent
-codeEditor = customElement "js/x.js"
+codeEditor = CustomElement.fromFile "js/x.js"
 
 init : WebReq -> ( Model, Cmd Msg )
 init _req =
@@ -142,7 +142,7 @@ update _msg model =
 
 view : Model -> Element Msg
 view model =
-    Ui.widget codeEditor model.state Edited
+    CustomElement.node codeEditor model.state Edited
 
 subscriptions : Model -> Sub Msg
 subscriptions _model =
@@ -160,7 +160,7 @@ main =
 const WEBVIEW_UI_WIDGET: &str = r#"module Main exposing (main)
 
 import Ipe.Tea.WebView as Webview
-import Ipe.Ui as Ui
+import Ipe.Ffi.Js.CustomElement as CustomElement
 import Ipe.Tea.WebView.Cmd as Cmd
 import Ipe.Tea.WebView.Sub as Sub
 
@@ -173,7 +173,7 @@ type Msg = Edited EditorEvent
 type alias Model = { state : EditorState }
 
 codeEditor : CustomElement EditorState EditorEvent
-codeEditor = customElement "js/x.js"
+codeEditor = CustomElement.fromFile "js/x.js"
 
 init : () -> ( Model, Cmd Msg )
 init _unit =
@@ -185,7 +185,7 @@ update _msg model =
 
 view : Model -> Element Msg
 view model =
-    Ui.widget codeEditor model.state Edited
+    CustomElement.node codeEditor model.state Edited
 
 subscriptions : Model -> Sub Msg
 subscriptions _model =
@@ -254,7 +254,7 @@ fn webview_view_with_ui_widget_is_accepted() -> Result<(), BoxError> {
 const CLI_UI_WIDGET: &str = r#"module Main exposing (main)
 
 import Ipe.Tea.Terminal as Terminal
-import Ipe.Ui as Ui
+import Ipe.Ffi.Js.CustomElement as CustomElement
 
 type alias EditorState = { text : String, line : Int }
 
@@ -265,7 +265,7 @@ type Msg = Edited EditorEvent
 type alias Model = { state : EditorState }
 
 codeEditor : CustomElement EditorState EditorEvent
-codeEditor = customElement "js/x.js"
+codeEditor = CustomElement.fromFile "js/x.js"
 
 init : () -> ( Model, Cmd Msg )
 init _unit =
@@ -277,7 +277,7 @@ update _msg model =
 
 view : Model -> String
 view model =
-    Ui.widget codeEditor model.state Edited
+    CustomElement.node codeEditor model.state Edited
 
 subscriptions : Model -> Sub Msg
 subscriptions _model =

@@ -58,6 +58,7 @@ const WIDGET_APP: &str = r#"module Main exposing (main)
 
 import Ipe.Tea.Web as Web
 import Ipe.Ui as Ui
+import Ipe.Ffi.Js.CustomElement as CustomElement
 import Ipe.Tea.Web.Cmd
 import Ipe.Tea.Web.Sub
 import Ipe.String
@@ -71,7 +72,7 @@ type Msg = FromWidget WidgetUp
 type alias Model = { count : Int }
 
 counter : CustomElement WidgetState WidgetUp
-counter = customElement "js/counter.js"
+counter = CustomElement.fromFile "js/counter.js"
 
 init : WebReq -> ( Model, Cmd Msg )
 init _req =
@@ -86,7 +87,7 @@ update msg model =
 view : Model -> Element Msg
 view model =
     Ui.column []
-        [ Ui.widget counter { count = model.count } FromWidget
+        [ CustomElement.node counter { count = model.count } FromWidget
         , Ui.text (String.fromInt model.count)
         ]
 

@@ -264,6 +264,7 @@ const LIVE_CUSTOM_ELEMENT_MODEL: &str = r#"module Main exposing (main)
 
 import Ipe.Tea.Web as Web
 import Ipe.Ui as Ui
+import Ipe.Ffi.Js.CustomElement as CustomElement
 import Ipe.Tea.Web.Cmd
 import Ipe.String
 import Ipe.Tea.Web.Sub
@@ -271,7 +272,7 @@ import Ipe.Tea.Web.Sub
 type Msg = Tick
 
 editor : CustomElement Int String
-editor = customElement "js/x.js"
+editor = CustomElement.fromFile "js/x.js"
 
 type alias Model = { count : Int, widget : CustomElement Int String }
 
