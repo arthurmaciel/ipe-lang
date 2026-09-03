@@ -250,6 +250,139 @@ pub fn parse_advisory(text: &str, path: &Path) -> Result<Advisory, CliError> {
     })
 }
 
+// ── JSON parsers (Pages read-path) ─────────────────────────────────────────────
+
+/// Parse the registry's `/advisories/index.json` catalogue, returning the
+/// advisory ids whose `package` equals `pkg_name`.
+///
+/// The Pages advisory index mirrors the advisory tree so the client can discover
+/// which advisories affect a package without cloning the registry. The expected
+/// shape:
+///
+/// ```json
+/// { "advisories": [ { "id": "IPE-2024-0001", "package": "http-client" }, … ] }
+/// ```
+///
+/// **Fail-closed:** a malformed index (not JSON, missing `advisories`, an entry
+/// missing `id`/`package`, or an injection-shaped id) is a hard
+/// [`CliError::AdvisoryDbMalformed`] — a corrupt catalogue is never treated as
+/// "no advisories". Only the ids matching `pkg_name` are returned, in file order.
+///
+/// # Errors
+/// [`CliError::AdvisoryDbMalformed`] when the index is malformed.
+pub fn parse_advisory_index_json(text: &str, pkg_name: &str) -> Result<Vec<AdvisoryId>, CliError> {
+    let index_path = PathBuf::from("advisories/index.json");
+    let malformed = |detail: String| CliError::AdvisoryDbMalformed {
+        path: index_path.clone(),
+        detail,
+    };
+
+    let value: serde_json::Value =
+        serde_json::from_str(text).map_err(|e| malformed(format!("not valid JSON: {e}")))?;
+    let array = value
+        .get("advisories")
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| malformed("missing array field `advisories`".to_owned()))?;
+
+    let mut ids = Vec::new();
+    for entry in array {
+        let object = entry
+            .as_object()
+            .ok_or_else(|| malformed("an `advisories` element is not an object".to_owned()))?;
+        let package = object
+            .get("package")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| malformed("an `advisories` element is missing `package`".to_owned()))?;
+        let id_raw = object
+            .get("id")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| malformed("an `advisories` element is missing `id`".to_owned()))?;
+        // Parse every id (even for other packages) so a malformed catalogue is
+        // caught wholesale rather than only when a matching package appears.
+        let id = AdvisoryId::parse(id_raw, &index_path)?;
+        if package.trim() == pkg_name {
+            ids.push(id);
+        }
+    }
+    Ok(ids)
+}
+
+/// Parse one `/advisories/<id>.json` record into a typed [`Advisory`], the JSON
+/// mirror of [`parse_advisory`]'s TOML.
+///
+/// The `id` argument is the id the catalogue named for this record; the parsed
+/// record's own `id` must equal it, so a swapped or mislabelled record is caught
+/// rather than silently trusted. Every field routes through the same validation
+/// as the TOML path (severity enum, `affected` [`semver::VersionReq`], optional
+/// `fixed_in`), so a malformed value is a hard error.
+///
+/// # Errors
+/// [`CliError::AdvisoryDbMalformed`] for a malformed record, a missing required
+/// field, or an id that disagrees with the catalogue.
+pub fn parse_advisory_json(text: &str, expected_id: &AdvisoryId) -> Result<Advisory, CliError> {
+    let record_path = PathBuf::from(format!("advisories/{expected_id}.json"));
+    let malformed = |detail: String| CliError::AdvisoryDbMalformed {
+        path: record_path.clone(),
+        detail,
+    };
+
+    let value: serde_json::Value =
+        serde_json::from_str(text).map_err(|e| malformed(format!("not valid JSON: {e}")))?;
+    let object = value
+        .as_object()
+        .ok_or_else(|| malformed("advisory record is not a JSON object".to_owned()))?;
+    let field = |key: &str| -> Result<&str, CliError> {
+        object
+            .get(key)
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| malformed(format!("advisory is missing required string field `{key}`")))
+    };
+
+    let id = AdvisoryId::parse(field("id")?, &record_path)?;
+    if id != *expected_id {
+        return Err(malformed(format!(
+            "advisory record `id` ({id}) does not match the catalogue id ({expected_id})"
+        )));
+    }
+    let package = field("package")?.trim().to_owned();
+    if package.is_empty() {
+        return Err(malformed(
+            "advisory `package` must be a non-empty string".to_owned(),
+        ));
+    }
+    let severity = Severity::parse(field("severity")?, &record_path)?;
+    let affected = field("affected")?
+        .parse::<semver::VersionReq>()
+        .map_err(|e| {
+            malformed(format!(
+                "advisory `affected` is not a valid version requirement: {e}"
+            ))
+        })?;
+    let description = field("description")?.trim().to_owned();
+    if description.is_empty() {
+        return Err(malformed(
+            "advisory `description` must be a non-empty string".to_owned(),
+        ));
+    }
+    let fixed_in = match object.get("fixed_in").and_then(serde_json::Value::as_str) {
+        None | Some("") => None,
+        Some(raw) => Some(raw.trim().parse::<semver::Version>().map_err(|e| {
+            malformed(format!(
+                "advisory `fixed_in` is not a valid semver version: {e}"
+            ))
+        })?),
+    };
+
+    Ok(Advisory {
+        id,
+        package,
+        affected,
+        severity,
+        description,
+        fixed_in,
+    })
+}
+
 // ── Reader ───────────────────────────────────────────────────────────────────
 
 /// Read all advisories for `pkg_name` from `advisory_db_root`.
@@ -355,7 +488,27 @@ pub fn check_dep_advisories(
     locked_version: &semver::Version,
 ) -> Result<(), CliError> {
     let advisories = read_advisories_for(advisory_db_root, pkg_name)?;
-    for adv in &advisories {
+    evaluate_advisories(pkg_name, locked_version, &advisories)
+}
+
+/// Apply the fail-closed severity policy to a set of already-fetched advisories
+/// for one locked dependency version.
+///
+/// This is the shared decision core the filesystem reader
+/// ([`check_dep_advisories`]) and the Pages HTTP read-path both call, so the two
+/// sources can never disagree on what a `high`/`critical` match does:
+/// - a `high`/`critical` match → typed [`CliError::AdvisoryVulnerable`] (reject);
+/// - a `low`/`medium` match → a warning to stderr; scanning continues;
+/// - no match → `Ok(())`.
+///
+/// # Errors
+/// [`CliError::AdvisoryVulnerable`] on a `high`/`critical` in-range match.
+pub fn evaluate_advisories(
+    pkg_name: &str,
+    locked_version: &semver::Version,
+    advisories: &[Advisory],
+) -> Result<(), CliError> {
+    for adv in advisories {
         if !adv.affected.matches(locked_version) {
             continue;
         }
