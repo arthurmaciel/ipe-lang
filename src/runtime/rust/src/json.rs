@@ -1022,6 +1022,28 @@ pub fn decode_one_of<E: From<String> + 'static, T: 'static + Send>(
         vec![],
     )
 }
+/// `nullable : Decoder a -> Decoder (Maybe a)` — a JSON `null` decodes to
+/// `Nothing`; any other value decodes to `Just` of the inner decode, and an
+/// inner failure on a present (non-null) value PROPAGATES (it is not swallowed).
+/// Returns Ipê's `IpeMaybe` so the decoded value matches the `Maybe a` the Ipê
+/// annotation lowers to. Shared by `Json.Decode`, `Config`, and `Db.Decode`
+/// over the unified `Decoder` carrier.
+pub fn decode_nullable<E: From<String> + 'static, T: 'static + Send>(
+    decoder: Decoder<E, T>,
+) -> Decoder<E, IpeMaybe<T>> {
+    let inner_fields = decoder.fields.clone();
+    Decoder::new(
+        Box::new(move |v| match v {
+            JsonVal::Null => IpeResult::Ok(IpeMaybe::Nothing),
+            _ => match (decoder.run)(v) {
+                IpeResult::Ok(t) => IpeResult::Ok(IpeMaybe::Just(t)),
+                IpeResult::Err(e) => IpeResult::Err(e),
+            },
+        }),
+        inner_fields,
+    )
+}
+
 /// `keyValuePairs : Decoder a -> Decoder (List (String, a))` — decode every
 /// entry of a JSON object, applying `decoder` to each value. Non-object input
 /// is `Err`; the first entry whose value fails to decode short-circuits with

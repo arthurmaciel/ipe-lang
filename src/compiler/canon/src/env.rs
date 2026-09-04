@@ -799,6 +799,7 @@ impl Env {
                     "at",
                     "index",
                     "list",
+                    "nullable",
                     "map",
                     "andThen",
                     "succeed",
