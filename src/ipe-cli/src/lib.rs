@@ -24,6 +24,7 @@ mod cache;
 pub mod clean;
 pub mod cli_args;
 pub mod contained_path;
+pub mod delivery;
 pub mod coverage;
 pub mod diff;
 pub mod doc;
@@ -983,6 +984,14 @@ pub struct BuildOptions {
     /// `ipe build` / `ipe run` / `ipe release` entries leave it `false` so a
     /// release artifact never carries hot-swap scaffolding. Default `false`.
     pub hot_appearance: bool,
+    /// `true` when the resolved delivery is `web desktop` (webview-native).
+    /// Threaded through [`ipe_db::BuildConfig`] and the emit fast-path to
+    /// [`ipe_backend_rust::RustBackend::with_webview_host`], forcing the
+    /// `uses_webview` signal so the emitted project selects the webview executor
+    /// and promotes `webview` to the default feature list. The webview delivery
+    /// is a resolved HOST decision (from the CLI's shape × runtime × host), not a
+    /// source entry. Default `false` (a served `web`, or any non-web shape).
+    pub webview_host: bool,
 }
 
 /// Select the emit model from the environment.
@@ -1613,6 +1622,7 @@ fn compile_modules_observed(
         &options.wasm_public_env,
         options.production,
         options.hot_appearance,
+        options.webview_host,
     );
     let epoch = cache_dir.and_then(|_| cache::derive_epoch());
     if let (Some(root), Some(epoch)) = (cache_dir, epoch.as_deref())
@@ -1679,6 +1689,7 @@ fn compile_modules_observed(
                     .with_debugger(options.debugger)
                     .with_project_name(&options.cargo_name)
                     .with_hot_appearance(options.hot_appearance)
+                    .with_webview_host(options.webview_host)
                     .emit(&program)
             };
             if let Ok(emitted) = emit_result {
@@ -1733,6 +1744,7 @@ fn compile_modules_observed(
         options.debugger,
         options.cargo_name.clone(),
         options.hot_appearance,
+        options.webview_host,
     );
 
     let emitted = match compile_prepared(&db, source_root, &sources, entry_path, blame_path, config)
@@ -3521,6 +3533,9 @@ fn run_build_body(rest: &[String]) -> Result<BuildSuccess, CliError> {
         // `ipe build` never emits appearance hot-swap scaffolding — that is a
         // `ipe watch`-only dev affordance. A release artifact stays clean.
         hot_appearance: false,
+        // Set from the resolved delivery; a webview-native `web desktop` is wired
+        // where the classified shape is known (build_project_with_options).
+        webview_host: false,
     };
 
     // Human-friendly progress: the compile+emit below is otherwise silent, so
@@ -3879,6 +3894,9 @@ pub(crate) fn run_release(rest: &[String]) -> Result<(), CliError> {
             debugger: false,
             // A release build never carries appearance hot-swap scaffolding.
             hot_appearance: false,
+            // Set from the resolved delivery; a webview-native `web desktop` is wired
+            // where the classified shape is known (build_project_with_options).
+            webview_host: false,
         };
         manifest.as_ref().map_or_else(
             || {
@@ -4693,6 +4711,9 @@ fn run_run_body(rest: &[String]) -> Result<(), CliError> {
         // `ipe run` never emits appearance hot-swap scaffolding — that is a
         // `ipe watch`-only dev affordance.
         hot_appearance: false,
+        // Set from the resolved delivery; a webview-native `web desktop` is wired
+        // where the classified shape is known (build_project_with_options).
+        webview_host: false,
     };
 
     // Human-friendly progress: the compile+emit below is otherwise silent, so

@@ -80,6 +80,7 @@ fn cold_compile(user: &UserSources) -> CompileOutcome {
         false,
         String::new(),
         false,
+        false,
     );
     ipe::compile_prepared(
         &db,
@@ -189,6 +190,7 @@ fn first_diff(a: &str, b: &str) -> String {
             return format!("line {}:\n  warm: {la}\n  cold: {lb}", i + 1);
         }
     }
+    false,
     format!(
         "line counts differ: warm {} vs cold {}",
         a.lines().count(),
