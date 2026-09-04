@@ -5666,12 +5666,35 @@ pub(crate) fn run_pack(rest: &[String]) -> Result<(), CliError> {
         }
         Some((flag, tail)) if flag == "--target" => {
             let (target, path_args) = tail.split_first().ok_or(CliError::Usage(
-                "usage: ipe pack --target desktop[:<linux|macos|windows>] [<path>]",
+                "usage: ipe pack --target desktop[:<linux|macos|windows>] [<path>]  |  \
+                 ipe pack --target mobile:<ios|android> [<path>]",
             ))?;
+            if let Some(extra) = path_args.get(1) {
+                return Err(cli_args::usage_unexpected_argument("pack", extra));
+            }
+            let path = path_args.first().map(String::as_str);
+
+            // `mobile:<os>` wraps the client-wasm SPA; `desktop[:<os>]` wraps the
+            // native webview app. A `mobile` family has no host default (this host
+            // is not a device), so the OS is always explicit.
+            if let Some(os_arg) = target.strip_prefix("mobile") {
+                let explicit_os = match os_arg.strip_prefix(':') {
+                    Some(os) => Some(os),
+                    None if os_arg.is_empty() => None,
+                    None => {
+                        return Err(CliError::UsageOwned(format!(
+                            "ipe pack: unknown target {target:?} (expected \
+                             `mobile:<ios|android>`)"
+                        )));
+                    }
+                };
+                return pack_mobile(explicit_os, path);
+            }
+
             let os_arg = target.strip_prefix("desktop").ok_or_else(|| {
                 CliError::UsageOwned(format!(
                     "ipe pack: unknown target {target:?} (expected \
-                     `desktop[:<linux|macos|windows>]`)"
+                     `desktop[:<linux|macos|windows>]` or `mobile:<ios|android>`)"
                 ))
             })?;
             // `desktop` → host OS; `desktop:<os>` → that OS. Anything between
@@ -5686,14 +5709,12 @@ pub(crate) fn run_pack(rest: &[String]) -> Result<(), CliError> {
                     )));
                 }
             };
-            if let Some(extra) = path_args.get(1) {
-                return Err(cli_args::usage_unexpected_argument("pack", extra));
-            }
-            pack_desktop(explicit_os, path_args.first().map(String::as_str))
+            pack_desktop(explicit_os, path)
         }
         _ => Err(CliError::Usage(
             "usage: ipe pack --emit-permissions <ios|macos|android> [<path>]  |  \
-             ipe pack --target desktop[:<linux|macos|windows>] [<path>]",
+             ipe pack --target desktop[:<linux|macos|windows>] [<path>]  |  \
+             ipe pack --target mobile:<ios|android> [<path>]",
         )),
     }
 }
@@ -5799,6 +5820,134 @@ fn pack_desktop(explicit_os: Option<&str>, path: Option<&str>) -> Result<(), Cli
             os.as_str(),
             os.as_str()
         );
+    }
+    Ok(())
+}
+
+/// `ipe pack --target mobile:<os> [<path>]` — build the client-wasm SPA and lay
+/// out a native mobile system-webview shell for `os` (`ios` / `android`) that
+/// hosts the SPA offline from app assets.
+///
+/// A wasm-enabled `Web` app is required: a non-`Web` shape or a project with the
+/// `[wasm]` mode off is a typed refusal ([`pack::mobile::MobileRefusal`]) BEFORE
+/// any build. The `Info.plist` / `AndroidManifest.xml` permission entries come
+/// only from the permission derivation ([`pack::permissions`]).
+///
+/// The `--target wasm` bundle is produced end-to-end on this host (the SPA is
+/// built and its `www/` tree collected into the shell). The Android build MAY run
+/// where the SDK is present; the iOS build needs macOS + Xcode + signing and is
+/// authored-but-unrun here — the layout + derived-permission manifest are written
+/// for inspection, and the actual build is directed to that OS's runner.
+///
+/// # Errors
+/// [`CliError::UsageOwned`] wrapping a [`pack::mobile::MobileRefusal`]; the wasm
+/// build's own errors; [`CliError::Io`] on any filesystem failure while
+/// collecting the bundle or materialising the shell.
+fn pack_mobile(explicit_os: Option<&str>, path: Option<&str>) -> Result<(), CliError> {
+    let os =
+        pack::mobile::resolve_os(explicit_os).map_err(|r| CliError::UsageOwned(r.to_string()))?;
+
+    let root = path.map_or_else(|| PathBuf::from("."), PathBuf::from);
+    let manifest_path = discover_manifest(&root)?.ok_or(CliError::Usage(
+        "ipe pack: no package.ipe found — run inside a project or pass its path",
+    ))?;
+    let manifest = project::parse_manifest(&manifest_path)?;
+
+    // Gate the app's web-delivery capability BEFORE any build: it must be a
+    // wasm-enabled `Web` SPA. A declared non-`Web` shape, or a `Web` app with the
+    // `[wasm]` mode off, is refused up front (naming exactly what is missing). An
+    // app that declares no shape at all is trusted to infer `Web`.
+    let shape_is_web = manifest
+        .default_program()
+        .and_then(|p| p.shape)
+        .is_none_or(|declared| declared == project::EntryShape::Web);
+    let cap = pack::mobile::WebSpaCapability {
+        shape_is_web,
+        wasm_enabled: manifest.wasm.implies_wasm_target(),
+    };
+    pack::mobile::require_web_spa(cap).map_err(|r| CliError::UsageOwned(r.to_string()))?;
+
+    let identity = pack::desktop::BundleIdentity::new(
+        &manifest.name,
+        manifest
+            .version
+            .as_ref()
+            .map(ToString::to_string)
+            .as_deref(),
+        None,
+    );
+    let accepts = manifest.capabilities_accept.clone();
+    let icon = manifest.icon.clone();
+
+    // Build the `--target wasm` SPA into the project's `out/rust`, then collect
+    // its `www/` tree. The wasm bundle pipeline (emit + cargo + wasm-bindgen) is
+    // the single source of the hostable bundle; invoking it through this binary
+    // keeps that pipeline authoritative rather than re-implemented here.
+    let build_dir = manifest.root.join("out").join("rust");
+    build_wasm_for_mobile(&manifest_path, &build_dir)?;
+    let www_dir = build_dir.join("www");
+    let bundle = pack::mobile::SpaBundle::from_www_dir(&www_dir)
+        .map_err(|e| CliError::UsageOwned(format!("ipe pack: {e}")))?;
+
+    let layout = pack::mobile::layout(os, &identity, &accepts, &bundle, icon.as_deref())?;
+
+    let dist = manifest.root.join("dist").join(os.as_str());
+    let shell_root = pack::mobile::materialise(&layout, icon.as_deref(), &dist)
+        .map_err(|e| io_err(&e.path, e.source))?;
+
+    println!(
+        "packaged `{}` for mobile:{} → {}",
+        manifest.name,
+        os.as_str(),
+        shell_root.display()
+    );
+    if os.build_runs_on_linux() {
+        println!(
+            "  note: an Android shell project is written here; run `./gradlew assembleDebug` \
+             inside it with the Android SDK to produce an APK."
+        );
+    } else {
+        println!(
+            "  note: the iOS shell project layout is written here, but a signed, runnable .ipa \
+             must be produced on a macOS runner with Xcode + a signing identity (out of scope)."
+        );
+    }
+    Ok(())
+}
+
+/// Run `ipe build --target wasm <manifest-dir>` through this binary to produce the
+/// hostable SPA bundle at `build_dir/www/`.
+///
+/// Invoking the same binary keeps the wasm bundle pipeline (emit + cargo +
+/// wasm-bindgen) authoritative — the mobile packager hosts exactly the bundle a
+/// plain `ipe build --target wasm` produces, never a re-implemented variant.
+///
+/// # Errors
+/// [`CliError::UsageOwned`] when this binary's path cannot be resolved or the
+/// wasm build exits non-zero; [`CliError::Io`] when the build cannot be spawned.
+fn build_wasm_for_mobile(manifest_path: &Path, build_dir: &Path) -> Result<(), CliError> {
+    let exe = std::env::current_exe().map_err(|e| {
+        CliError::UsageOwned(format!(
+            "ipe pack: cannot locate the ipe binary to build wasm: {e}"
+        ))
+    })?;
+    let project_dir = manifest_path.parent().unwrap_or_else(|| Path::new("."));
+    let status = std::process::Command::new(&exe)
+        .arg("build")
+        .arg(project_dir)
+        .args(["--target", "wasm", "--out"])
+        .arg(build_dir)
+        .status()
+        .map_err(|source| CliError::Io {
+            path: exe.clone(),
+            source,
+        })?;
+    if !status.success() {
+        return Err(CliError::UsageOwned(format!(
+            "ipe pack: the `--target wasm` build failed (exit {}) — the mobile shell hosts that \
+             bundle, so it must build first",
+            status.code().unwrap_or(1)
+        )));
     }
     Ok(())
 }
