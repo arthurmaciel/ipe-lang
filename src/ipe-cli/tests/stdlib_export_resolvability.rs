@@ -73,6 +73,7 @@ fn compile_main(main: &str) -> Result<(), String> {
         false,
         String::new(),
         false,
+        false,
     );
     ipe::compile_prepared(
         &db,
@@ -109,6 +110,7 @@ fn compile_main_with_helper(main: &str, extras: &[(Vec<String>, String)]) -> Res
         None,
         false,
         String::new(),
+        false,
         false,
     );
     ipe::compile_prepared(

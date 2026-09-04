@@ -268,6 +268,7 @@ pub fn compute_project_key(
     wasm_public_env: &[String],
     production: bool,
     hot_appearance: bool,
+    webview_host: bool,
 ) -> String {
     let mut hasher = Sha256::new();
     update_len_prefixed(&mut hasher, KEY_TAG);
@@ -281,6 +282,13 @@ pub fn compute_project_key(
     // two disjoint; for a program with no hoist-eligible literal the emitted
     // bytes are identical either way and the extra bit only costs a cold entry.
     hasher.update([u8::from(hot_appearance)]);
+
+    // The webview-native (`web desktop`) delivery emits a different executor and
+    // default-feature set than a served `web`, so a webview emit must never be
+    // served from a served-`web` cache entry (or vice versa). Keying on it keeps
+    // the two disjoint; for a non-web program the emitted bytes are identical
+    // either way and the extra bit only costs a cold entry.
+    hasher.update([u8::from(webview_host)]);
 
     // `ipe release` rejects any `Debug.*` use (IPE-L0140), so its outcome
     // differs from a development build for a Debug-using program (error vs
@@ -642,6 +650,7 @@ mod tests {
             &[],
             false,
             false,
+            false,
         );
         let b = compute_project_key(
             &sources,
@@ -650,6 +659,7 @@ mod tests {
             DbDriver::Sqlite,
             ipe_ir::Target::Native,
             &[],
+            false,
             false,
             false,
         );
@@ -668,6 +678,7 @@ mod tests {
             &[],
             false,
             false,
+            false,
         );
         if let Some(main) = sources.get_mut(&vec!["Main".to_owned()]) {
             main.1.push_str("\n-- comment\n");
@@ -679,6 +690,7 @@ mod tests {
             DbDriver::Sqlite,
             ipe_ir::Target::Native,
             &[],
+            false,
             false,
             false,
         );
@@ -697,6 +709,7 @@ mod tests {
             &[],
             false,
             false,
+            false,
         );
         let postgres = compute_project_key(
             &sources,
@@ -705,6 +718,7 @@ mod tests {
             DbDriver::Postgres,
             ipe_ir::Target::Native,
             &[],
+            false,
             false,
             false,
         );
@@ -728,6 +742,7 @@ mod tests {
             &[],
             false,
             false,
+            false,
         );
         let prod = compute_project_key(
             &sources,
@@ -737,6 +752,7 @@ mod tests {
             ipe_ir::Target::Native,
             &[],
             true,
+            false,
             false,
         );
         assert_ne!(dev, prod, "the production flag is part of the key");
@@ -757,6 +773,7 @@ mod tests {
             &[],
             false,
             false,
+            false,
         );
         let on = compute_project_key(
             &sources,
@@ -767,6 +784,7 @@ mod tests {
             &[],
             false,
             true,
+            false,
         );
         assert_ne!(off, on, "the hot-appearance flag is part of the key");
     }
@@ -788,6 +806,7 @@ mod tests {
             &[],
             false,
             false,
+            false,
         );
         let with_allowlist = compute_project_key(
             &sources,
@@ -796,6 +815,7 @@ mod tests {
             DbDriver::Sqlite,
             ipe_ir::Target::Native,
             &["API_BASE_URL".to_owned()],
+            false,
             false,
             false,
         );
@@ -817,6 +837,7 @@ mod tests {
             &[],
             false,
             false,
+            false,
         );
         let b = compute_project_key(
             &sources,
@@ -825,6 +846,7 @@ mod tests {
             DbDriver::Sqlite,
             ipe_ir::Target::Native,
             &[],
+            false,
             false,
             false,
         );
@@ -841,6 +863,7 @@ mod tests {
             DbDriver::Sqlite,
             ipe_ir::Target::Native,
             &[],
+            false,
             false,
             false,
         );
@@ -862,6 +885,7 @@ mod tests {
             &[],
             false,
             false,
+            false,
         );
         assert_ne!(base, with_extra, "adding a module must change the key");
 
@@ -876,6 +900,7 @@ mod tests {
             DbDriver::Sqlite,
             ipe_ir::Target::Native,
             &[],
+            false,
             false,
             false,
         );
@@ -905,6 +930,7 @@ mod tests {
             &[],
             false,
             false,
+            false,
         );
         let b = compute_project_key(
             &sources,
@@ -913,6 +939,7 @@ mod tests {
             DbDriver::Sqlite,
             ipe_ir::Target::Native,
             &[],
+            false,
             false,
             false,
         );
@@ -943,6 +970,7 @@ mod tests {
             &[],
             false,
             false,
+            false,
         );
         let b = compute_project_key(
             &right,
@@ -951,6 +979,7 @@ mod tests {
             DbDriver::Sqlite,
             ipe_ir::Target::Native,
             &[],
+            false,
             false,
             false,
         );
