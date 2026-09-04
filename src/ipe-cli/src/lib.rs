@@ -3311,10 +3311,10 @@ fn classify_entry_shape(entry_arg: &Path) -> Result<delivery::Shape, CliError> {
     let mut interner = Interner::new();
     // A parse failure is the compile pipeline's to report (with a blamed span);
     // the shape cross-check simply does not fire, so classify as a script.
-    let shape = ipe_parse::parse_module(&source, &mut interner).map_or(
-        ipe_canon::shape_source::MainShape::Script,
-        |module| ipe_canon::shape_source::classify_main_shape(&module, &interner),
-    );
+    let shape = ipe_parse::parse_module(&source, &mut interner)
+        .map_or(ipe_canon::shape_source::MainShape::Script, |module| {
+            ipe_canon::shape_source::classify_main_shape(&module, &interner)
+        });
     Ok(delivery::Shape::from_main(shape))
 }
 
