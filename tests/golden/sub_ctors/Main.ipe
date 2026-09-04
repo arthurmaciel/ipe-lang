@@ -2,10 +2,10 @@ module Main exposing (main)
 
 -- Sub.none / Sub.batch / Sub.every construct gate: a `subscriptions` built with
 -- `Sub.batch [Sub.none, Sub.every …]` confirms that `Sub.none` infers its `msg`
--- type from the sibling `Sub.every`. `Terminal.appLines` renders `view` once at
+-- type from the sibling `Sub.every`. `Cli.app` renders `view` once at
 -- stdin EOF and exits 0.
 
-import Ipe.Tea.Terminal as Terminal
+import Ipe.Tea.Cli as Cli
 import Ipe.Tea.Terminal.Cmd as Cmd
 import Ipe.Tea.Terminal.Sub as Sub
 
@@ -42,7 +42,7 @@ onLine line =
     GotLine line
 
 main =
-    Terminal.appLines
+    Cli.app
         { init = init
         , update = update
         , view = view

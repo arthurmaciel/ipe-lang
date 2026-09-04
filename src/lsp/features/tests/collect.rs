@@ -315,7 +315,7 @@ fn add_import_quick_fix_sorts_among_existing_imports() {
 #[test]
 fn wrong_shape_cmd_quick_fix_repoints_the_import_and_clears_the_diagnostic() {
     let src = "module Main exposing (main)\n\n\
-        import Ipe.Tea.Terminal as Terminal\n\
+        import Ipe.Tea.Cli as Cli\n\
         import Ipe.Tea.Web.Cmd as Cmd\n\
         import Ipe.Tea.Terminal.Sub as Sub\n\n\
         init _u = ( { n = 0 }, Cmd.none )\n\
@@ -324,7 +324,7 @@ fn wrong_shape_cmd_quick_fix_repoints_the_import_and_clears_the_diagnostic() {
         subscriptions _m = Sub.none\n\
         onLine l = l\n\
         main =\n    \
-            Terminal.appLines { init = init, update = update, view = view, subscriptions = subscriptions, onLine = onLine }\n";
+            Cli.app { init = init, update = update, view = view, subscriptions = subscriptions, onLine = onLine }\n";
     let mut db = IpeDatabase::new();
     let entry = file(&db, &["Main"], src);
     let root = root_of(&db, &[(&["Main"], entry)]);

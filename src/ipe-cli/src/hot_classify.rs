@@ -1103,6 +1103,7 @@ mod tests {
         EmittedProject {
             files: map,
             cargo_toml: cargo.to_owned(),
+            uses_webview: false,
         }
     }
 
