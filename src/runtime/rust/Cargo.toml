@@ -51,6 +51,14 @@ reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"
 # surface drops the idna/ICU4X subtree, matching the emitted floor (`url` is
 # appended only under `uses_url`, never in the base manifest).
 url = { version = "2", optional = true }
+# `tinyvec` is a transitive dep of `idna` (pulled by `url 2.x`). Version 1.13.0
+# introduced a use of `vec!` that requires the `std` feature to be active; without
+# it the emitted project's fresh `cargo build` fails with "cannot find macro `vec`
+# in this scope". Declaring it here with `features = ["std"]` forces the feature
+# on via cargo's feature-unification so every emitted project that carries this
+# runtime gets a working `tinyvec`. Optional so it is absent from dep graphs that
+# do not activate `url`.
+tinyvec = { version = "1", features = ["std"], optional = true }
 lettre = { version = "0.11", default-features = false, features = ["builder", "hostname", "smtp-transport", "pool", "tokio1", "tokio1-rustls-tls"], optional = true }
 # `rustls-tls-webpki-roots`: enables `MaybeTlsStream::Rustls` so `wss://`
 # connections use the same rustls backend as reqwest/sqlx/lettre — no native
@@ -277,7 +285,7 @@ async = ["tokio", "random"]
 # by every surface that parses URLs (http_client / websocket_client / email /
 # web) and selectable standalone. A program that reaches no URL surface drops
 # the `url` crate (and its idna/ICU4X closure) entirely.
-url = ["dep:url"]
+url = ["dep:url", "dep:tinyvec"]
 # Locale-aware case mapping (`String.toUpperIn`/`toLowerIn`/`Locale.fromTag`).
 # Programs that never import `Ipe.Locale` pay nothing — the ICU4X casemap +
 # locale-core deps are entirely absent from the default feature graph.

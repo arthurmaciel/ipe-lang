@@ -4288,8 +4288,13 @@ fn locale_cargo_toml(base: &str) -> DResult<String> {
 /// a golden-drift invariant violation (fail-loud, never a silent no-op).
 fn url_cargo_toml(base: &str) -> DResult<String> {
     const PROFILE_ANCHOR: &str = "[profile.dev]";
+    // `tinyvec` is a transitive dep of `idna` (pulled by `url 2.x`). Version
+    // 1.13+ uses `vec!` in a way that requires the `std` feature; without it
+    // the emitted project's `cargo build` fails with "cannot find macro `vec`
+    // in this scope". Declaring it here forces the feature on via cargo's
+    // feature-unification for every vendored emitted project that reaches url.
     let url_dep = format!(
-        "{} = \"{}\"\n\n",
+        "{} = \"{}\"\ntinyvec = {{ version = \"1\", features = [\"std\"] }}\n\n",
         crate_specs::URL.name,
         crate_specs::URL.version,
     );
