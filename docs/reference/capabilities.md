@@ -47,6 +47,7 @@ Ipê runs programs under a deny-by-default capability model. Every operation tha
 | `js-port:camera` | Capturing a photo via the device camera (mobile) or an image file picker (desktop) using a <input capture> element and the File API. |
 | `js-port:microphone` | Recording a bounded audio clip from the device microphone via getUserMedia({ audio: true }) / MediaRecorder; the assembled clip is returned as a base-64 data URL in a single one-shot reply. |
 | `js-port:gamepad` | Polling gamepad state and receiving connect/disconnect events via navigator.getGamepads() and the Gamepad API event listeners. |
+| `js-port:recorder` | Recording a bounded audio (or audio + video) stream from the camera and microphone via getUserMedia + MediaRecorder; recorded data arrives as a session-stream of typed base-64 data-URL chunks until stop. |
 | `js-port:visibility` | Reading the document visibility state (foreground/background) via document.visibilityState / the visibilitychange event. |
 | `js-port:media-query` | Evaluating CSS media queries via window.matchMedia and receiving change events when the environment transitions. |
 | `js-port:connectivity` | Reading the binary online/offline state via navigator.onLine and the online/offline window events. |

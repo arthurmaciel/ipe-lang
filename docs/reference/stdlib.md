@@ -33,6 +33,8 @@ Each module listed below links to a detail page with the full documentation and 
 - [Browser.Notification.Internals](#browsernotificationinternals)
 - [Browser.Permission](#browserpermission)
 - [Browser.Permission.Internals](#browserpermissioninternals)
+- [Browser.Recorder](#browserrecorder)
+- [Browser.Recorder.Internals](#browserrecorderinternals)
 - [Browser.Share](#browsershare)
 - [Browser.Share.Internals](#browsershareinternals)
 - [Browser.Speech](#browserspeech)
@@ -528,6 +530,35 @@ Ipe.Browser.Permission.Internals — the low-level Permissions API port
 | `requestOne` | `requestOne cmd` — correlated one-shot `JsCmd` → `Task Error JsMsg`. |
 | `subscribe` | `subscribe toMsg` — the inbound subscription over the fail-closed seal |
 | `inbound` | The total, fail-closed decoder for the inbound `JsMsg`. It reads the `ok` |
+
+## Browser.Recorder
+
+[Full reference](stdlib/Browser.Recorder.md)
+
+Ipe.Browser.Recorder — record a bounded audio (or audio + video) stream from
+
+| Export | Summary |
+|--------|----------|
+| `Recording` | An opaque handle to an in-flight recording session. `startAudio` / |
+| `Frame` | A typed frame delivered by the `chunks` session-stream. |
+| `startAudio` | `startAudio { mimeType, timesliceMs }` — open an audio-only recording |
+| `startVideo` | `startVideo { mimeType, timesliceMs }` — open an audio + video recording |
+| `stop` | `stop recording` — close the recording session named by `recording`, |
+| `chunks` | `chunks toMsg` — the inbound subscription, wired in `subscriptions`. |
+
+## Browser.Recorder.Internals
+
+[Full reference](stdlib/Browser.Recorder.Internals.md)
+
+Ipe.Browser.Recorder.Internals — the low-level media-recording port surface:
+
+| Export | Summary |
+|--------|----------|
+| `JsCmd` | The ONE closed OUTBOUND port type — the two verbs of one bounded recording |
+| `JsMsg` | The NARROW closed INBOUND port type — deliberately NOT the app's internal |
+| `request` | `request cmd` — hand a closed outbound `JsCmd` to the raw port transport. |
+| `subscribe` | `subscribe toMsg` — the inbound subscription over the fail-closed seal |
+| `inbound` | The total, fail-closed decoder for the inbound `JsMsg`. Reads the `event` |
 
 ## Browser.Share
 
