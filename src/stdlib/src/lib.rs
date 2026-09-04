@@ -887,6 +887,23 @@ const IPE_BROWSER_GAMEPAD: &str = include_str!("../Ipe/Browser/Gamepad.ipe");
 /// `MODULES`); NOT in `STDLIB_MODULE_QUALIFIERS`.
 const IPE_BROWSER_GAMEPAD_INTERNALS: &str = include_str!("../Ipe/Browser/Gamepad/Internals.ipe");
 
+/// `Ipe.Browser.Recorder` — record a bounded audio (or audio + video) stream from
+/// the device via `getUserMedia` + `MediaRecorder`, delivered as a session-stream
+/// of typed data chunks over `Ipe.Ffi.Js` ports. `startAudio` / `startVideo` open
+/// the session (returning a typed `Recording` handle), `stop` closes it, and
+/// `chunks` folds the inbound frames exhaustively into a typed `Frame`. Importing
+/// discloses `js-port:recorder` (keyed on the `Ipe.Browser.Recorder` path prefix
+/// via `WebCapability::for_browser_module`). Registered in [`COMPILED_STD_MODULES`]
+/// (NOT `MODULES`); NOT in `STDLIB_MODULE_QUALIFIERS`.
+const IPE_BROWSER_RECORDER: &str = include_str!("../Ipe/Browser/Recorder.ipe");
+
+/// `Ipe.Browser.Recorder.Internals` — the low-level media-recording port surface:
+/// the closed outbound/inbound ADTs and the raw `Ipe.Ffi.Js` wiring the high-level
+/// layer wraps. Importing it discloses the same `js-port:recorder` axis (the prefix
+/// key covers the submodule). Registered in [`COMPILED_STD_MODULES`] (NOT
+/// `MODULES`); NOT in `STDLIB_MODULE_QUALIFIERS`.
+const IPE_BROWSER_RECORDER_INTERNALS: &str = include_str!("../Ipe/Browser/Recorder/Internals.ipe");
+
 /// `Ipe.Browser.Visibility` — read the document visibility state over
 /// `Ipe.Ffi.Js` ports (compiled source), spanning BOTH port directions: an
 /// outbound `JsCmd` request (`state` one-shot / `watch` continuous) and an
@@ -1507,6 +1524,14 @@ pub const COMPILED_STD_MODULES: &[CompiledStdModule] = &[
     CompiledStdModule {
         dotted: "Ipe.Browser.Gamepad.Internals",
         source: IPE_BROWSER_GAMEPAD_INTERNALS,
+    },
+    CompiledStdModule {
+        dotted: "Ipe.Browser.Recorder",
+        source: IPE_BROWSER_RECORDER,
+    },
+    CompiledStdModule {
+        dotted: "Ipe.Browser.Recorder.Internals",
+        source: IPE_BROWSER_RECORDER_INTERNALS,
     },
     CompiledStdModule {
         dotted: "Ipe.Browser.Visibility",
