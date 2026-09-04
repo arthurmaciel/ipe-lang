@@ -1,0 +1,114 @@
+-- | Ipe.Browser.Gamepad.Internals — the low-level Gamepad port surface: the
+-- closed outbound/inbound ADTs and the raw `Ipe.Ffi.Js` request/subscribe
+-- wiring the high-level `Ipe.Browser.Gamepad` layer wraps.
+--
+-- Importing this submodule discloses the same `js-port:gamepad` axis as the
+-- top-level module (the disclosure is keyed on the `Ipe.Browser.Gamepad` path
+-- prefix), so the raw port surface cannot be reached undisclosed.
+module Ipe.Browser.Gamepad.Internals exposing
+    ( JsCmd(..)
+    , JsMsg(..)
+    , request
+    , requestOne
+    , subscribe
+    , inbound
+    )
+
+import Ipe.Error as Error exposing (Error)
+import Ipe.Ffi.Js as Js
+import Ipe.Json.Decode as Decode
+import Ipe.Tea.Web.Cmd as Cmd
+import Ipe.Tea.Web.Sub as Sub
+
+
+-- | The ONE closed OUTBOUND port type.
+--
+--   * `Watch` — begin a session-stream: connect/disconnect events and polled
+--     state frames arrive on the inbound subscription. The JS host starts
+--     polling via `requestAnimationFrame`.
+--   * `StopWatch` — end the active watch, stopping the `requestAnimationFrame`
+--     poll loop. A no-op when no watch is active.
+type JsCmd
+    = Watch
+    | StopWatch
+
+
+-- | The NARROW closed INBOUND port type — deliberately NOT the app's internal
+-- `Msg`. Every variant the Gamepad API can push is enumerated, so the fold in
+-- the high-level layer is EXHAUSTIVE and an unavailability can never be
+-- silently dropped: it becomes a typed `Err`.
+--
+--   * `Connected index id` — a gamepad connected (index 0..3, browser-assigned
+--     id string).
+--   * `Disconnected index` — a gamepad disconnected.
+--   * `StateFrame index buttons axes` — a polled state snapshot for one
+--     connected gamepad. `buttons` is a list of pressed flags (one per
+--     physical button, in Gamepad API order); `axes` is a list of axis values,
+--     each in the range -1.0..1.0 (one per physical axis, in Gamepad API
+--     order).
+--   * `Unavailable` — the Gamepad API is absent in this context.
+type JsMsg
+    = Connected Int String
+    | Disconnected Int
+    | StateFrame Int (List Bool) (List Float)
+    | Unavailable
+
+
+-- | `request cmd` — hand a closed outbound `JsCmd` to the raw port transport.
+-- The served first-party JS sink registers the gamepad event listeners and
+-- starts the `requestAnimationFrame` poll; replies arrive inbound as `JsMsg`
+-- frames.
+request : JsCmd -> Cmd.Cmd msg
+request cmd =
+    Js.send cmd
+
+
+-- | `requestOne cmd` — correlated one-shot `JsCmd` → `Task Error JsMsg`.
+-- Routes through `Js.request` with the `inbound` decoder so the correlated
+-- reply is decoded fail-closed by the same gate the `subscribe` path uses.
+requestOne : JsCmd -> Task Error JsMsg
+requestOne cmd =
+    Js.request cmd inbound
+
+
+-- | `subscribe toMsg` — the inbound subscription over the fail-closed seal
+-- decoder. `inbound` IS the security gate; a malformed / mismatched frame is
+-- dropped whole. A decoded `JsMsg` is handed to `toMsg`.
+subscribe : (JsMsg -> msg) -> Sub.Sub msg
+subscribe toMsg =
+    Js.subscribe inbound toMsg
+
+
+-- | The total, fail-closed decoder for the inbound `JsMsg`. Reads the `event`
+-- discriminator first: `"connected"` decodes `Connected`; `"disconnected"`
+-- decodes `Disconnected`; `"state"` decodes a `StateFrame`; `"unavailable"`
+-- decodes `Unavailable`. An unrecognised token fails the decode closed (the
+-- frame is dropped, never a silent mis-map).
+inbound : Decode.Decoder JsMsg
+inbound =
+    Decode.andThen decodeByEvent (Decode.field "event" Decode.string)
+
+
+decodeByEvent : String -> Decode.Decoder JsMsg
+decodeByEvent event =
+    case event of
+        "connected" ->
+            Decode.map2 Connected
+                (Decode.field "index" Decode.int)
+                (Decode.field "id" Decode.string)
+
+        "disconnected" ->
+            Decode.map Disconnected
+                (Decode.field "index" Decode.int)
+
+        "state" ->
+            Decode.map3 StateFrame
+                (Decode.field "index" Decode.int)
+                (Decode.field "buttons" (Decode.list Decode.bool))
+                (Decode.field "axes" (Decode.list Decode.float))
+
+        "unavailable" ->
+            Decode.succeed Unavailable
+
+        _ ->
+            Decode.fail ("unknown gamepad event variant: " ++ event)

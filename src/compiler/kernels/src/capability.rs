@@ -131,6 +131,8 @@ pub enum WebCapability {
     /// full base-64 audio data URL. A permission denial or an absent
     /// `MediaRecorder` API traps to a typed inbound frame — never a throw.
     Microphone,
+    /// `navigator.getGamepads()` — polled gamepad state, connect/disconnect events.
+    Gamepad,
     /// A port with no characterised Web API: a hand-rolled `Js.send`/`Js.subscribe`
     /// reaching author-written JS. The reachability floor no port can slip below —
     /// an uncharacterised port discloses `js-port:raw`, never nothing.
@@ -152,6 +154,7 @@ impl WebCapability {
         Self::File,
         Self::Camera,
         Self::Microphone,
+        Self::Gamepad,
         Self::Raw,
     ];
 
@@ -171,6 +174,7 @@ impl WebCapability {
             Self::File => "file",
             Self::Camera => "camera",
             Self::Microphone => "microphone",
+            Self::Gamepad => "gamepad",
             Self::Raw => "raw",
         }
     }
@@ -201,6 +205,7 @@ impl WebCapability {
             ["Ipe", "Browser", "FilePicker", ..] => Some(Self::File),
             ["Ipe", "Browser", "Camera", ..] => Some(Self::Camera),
             ["Ipe", "Browser", "Microphone", ..] => Some(Self::Microphone),
+            ["Ipe", "Browser", "Gamepad", ..] => Some(Self::Gamepad),
             _ => None,
         }
     }
@@ -234,6 +239,10 @@ impl WebCapability {
                  getUserMedia({ audio: true }) / MediaRecorder; the assembled clip is \
                  returned as a base-64 data URL in a single one-shot reply."
             }
+            Self::Gamepad => {
+                "Polling gamepad state and receiving connect/disconnect events via \
+                 navigator.getGamepads() and the Gamepad API event listeners."
+            }
             Self::Raw => {
                 "Exchanging data with hand-rolled page JS over an uncharacterised port \
                  (Js.send / Js.subscribe with author-written JS)."
@@ -257,6 +266,7 @@ impl WebCapability {
             "file" => Ok(Self::File),
             "camera" => Ok(Self::Camera),
             "microphone" => Ok(Self::Microphone),
+            "gamepad" => Ok(Self::Gamepad),
             "raw" => Ok(Self::Raw),
             _ => Err(UnknownCapability(full.to_owned())),
         }
@@ -281,6 +291,7 @@ impl WebCapability {
             Self::File => "File",
             Self::Camera => "Camera",
             Self::Microphone => "Microphone",
+            Self::Gamepad => "Gamepad",
             Self::Raw => "Raw",
         }
     }
@@ -391,6 +402,7 @@ impl Capability {
         Self::JsPort(WebCapability::File),
         Self::JsPort(WebCapability::Camera),
         Self::JsPort(WebCapability::Microphone),
+        Self::JsPort(WebCapability::Gamepad),
         Self::JsPort(WebCapability::Raw),
     ];
 
@@ -439,6 +451,7 @@ impl Capability {
                 WebCapability::File => "js-port:file",
                 WebCapability::Camera => "js-port:camera",
                 WebCapability::Microphone => "js-port:microphone",
+                WebCapability::Gamepad => "js-port:gamepad",
                 WebCapability::Raw => "js-port:raw",
             },
         }
@@ -491,7 +504,7 @@ impl std::fmt::Display for UnknownCapability {
              database, env, subprocess, clock, random, native-ffi, ffi-raw, unsafe, \
              custom-element, js-port:<axis> where <axis> is one of geolocation, \
              clipboard, notification, storage, vibration, share, battery, \
-             network-info, file, camera, microphone, raw)",
+             network-info, file, camera, microphone, gamepad, raw)",
             self.0
         )
     }

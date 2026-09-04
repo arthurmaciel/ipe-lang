@@ -598,6 +598,97 @@ const PORT_GLUE_JS: &str = r#"// Ipe.Ffi.Js browser port surface. Values cross a
     );
     return true;
   }
+  // Ipe.Browser.Gamepad: `Watch` / `StopWatch` -> navigator.getGamepads() +
+  // gamepadconnected / gamepaddisconnected events. A `Watch` command registers
+  // the two lifecycle listeners and starts a `requestAnimationFrame` poll that
+  // snapshots all connected gamepads once per frame, pushing typed `state`
+  // frames inbound. A `StopWatch` cancels the poll and removes the listeners.
+  // An absent Gamepad API traps to a typed `unavailable` frame — never a throw.
+  // No correlation-id semantics: all frames are broadcast (corId stripped).
+  var gamepadRafId = null;
+  var gamepadConnectHandler = null;
+  var gamepadDisconnectHandler = null;
+  function gamepadSink(value, _corId) {
+    var isWatch = value === "Watch" ||
+      (value && typeof value === "object" && value.Watch !== undefined);
+    var isStop = value === "StopWatch" ||
+      (value && typeof value === "object" && value.StopWatch !== undefined);
+    if (!isWatch && !isStop) return false;
+    if (isStop) {
+      if (gamepadRafId !== null) {
+        cancelAnimationFrame(gamepadRafId);
+        gamepadRafId = null;
+      }
+      if (gamepadConnectHandler !== null && window.removeEventListener) {
+        window.removeEventListener("gamepadconnected", gamepadConnectHandler);
+        gamepadConnectHandler = null;
+      }
+      if (gamepadDisconnectHandler !== null && window.removeEventListener) {
+        window.removeEventListener("gamepaddisconnected", gamepadDisconnectHandler);
+        gamepadDisconnectHandler = null;
+      }
+      return true;
+    }
+    // isWatch: check API availability before registering anything.
+    if (!navigator || typeof navigator.getGamepads !== "function") {
+      reply({ tag: "gamepad", event: "unavailable" }, null);
+      return true;
+    }
+    // Remove any previously registered listeners and cancel an existing poll
+    // so a double Watch does not accumulate duplicate handlers.
+    if (gamepadRafId !== null) { cancelAnimationFrame(gamepadRafId); gamepadRafId = null; }
+    if (gamepadConnectHandler !== null && window.removeEventListener) {
+      window.removeEventListener("gamepadconnected", gamepadConnectHandler);
+    }
+    if (gamepadDisconnectHandler !== null && window.removeEventListener) {
+      window.removeEventListener("gamepaddisconnected", gamepadDisconnectHandler);
+    }
+    // Connect/disconnect handlers push typed lifecycle frames inbound.
+    gamepadConnectHandler = function (ev) {
+      var gp = ev && ev.gamepad ? ev.gamepad : {};
+      reply({
+        tag: "gamepad", event: "connected",
+        index: Number(gp.index) || 0,
+        id: typeof gp.id === "string" ? gp.id : "",
+      }, null);
+    };
+    gamepadDisconnectHandler = function (ev) {
+      var gp = ev && ev.gamepad ? ev.gamepad : {};
+      reply({ tag: "gamepad", event: "disconnected", index: Number(gp.index) || 0 }, null);
+    };
+    window.addEventListener("gamepadconnected", gamepadConnectHandler);
+    window.addEventListener("gamepaddisconnected", gamepadDisconnectHandler);
+    // Poll via requestAnimationFrame: snapshot all connected gamepads each frame.
+    // Each connected gamepad emits one `state` frame per animation tick carrying
+    // its current button-pressed flags and axis values. The poll runs until
+    // `StopWatch` cancels `gamepadRafId`.
+    function poll() {
+      var gamepads = [];
+      try { gamepads = navigator.getGamepads() || []; } catch (_e) { gamepads = []; }
+      for (var i = 0; i < gamepads.length; i++) {
+        var gp = gamepads[i];
+        if (!gp) continue;
+        var buttons = [];
+        for (var b = 0; b < gp.buttons.length; b++) {
+          var btn = gp.buttons[b];
+          buttons.push(btn && btn.pressed === true);
+        }
+        var axes = [];
+        for (var a = 0; a < gp.axes.length; a++) {
+          axes.push(Number(gp.axes[a]) || 0);
+        }
+        reply({
+          tag: "gamepad", event: "state",
+          index: Number(gp.index),
+          buttons: buttons,
+          axes: axes,
+        }, null);
+      }
+      gamepadRafId = requestAnimationFrame(poll);
+    }
+    gamepadRafId = requestAnimationFrame(poll);
+    return true;
+  }
   function builtinSink(value, corId) {
     if (clipboardSink(value, corId)) return true;
     if (geolocationSink(value, corId)) return true;
@@ -610,6 +701,7 @@ const PORT_GLUE_JS: &str = r#"// Ipe.Ffi.Js browser port surface. Values cross a
     if (filePickerSink(value, corId)) return true;
     if (cameraSink(value, corId)) return true;
     if (microphoneSink(value, corId)) return true;
+    if (gamepadSink(value, corId)) return true;
     return false;
   }
   function deliver(raw) {
@@ -920,5 +1012,31 @@ mod tests {
         // No single-id scalar: the old geoWatchId variable must not exist.
         assert!(!js.contains("geoWatchId ="));
         assert!(!js.contains("geoWatchId !=="));
+    }
+
+    #[test]
+    fn gamepad_sink_polls_via_raf_and_traps_absence_to_a_typed_result() {
+        let js = port_glue_js();
+        // The first-party Ipe.Browser.Gamepad sink registers lifecycle listeners…
+        assert!(js.contains("gamepadSink"));
+        assert!(js.contains("Watch"));
+        assert!(js.contains("StopWatch"));
+        assert!(js.contains("gamepadconnected"));
+        assert!(js.contains("gamepaddisconnected"));
+        // …polls via requestAnimationFrame, not a busy-loop…
+        assert!(js.contains("requestAnimationFrame"));
+        assert!(js.contains("cancelAnimationFrame"));
+        // …reaches navigator.getGamepads() for state frames…
+        assert!(js.contains("navigator.getGamepads"));
+        // …emits typed connect / disconnect / state frames with the right fields…
+        assert!(js.contains("tag: \"gamepad\""));
+        assert!(js.contains("event: \"connected\""));
+        assert!(js.contains("event: \"disconnected\""));
+        assert!(js.contains("event: \"state\""));
+        assert!(js.contains("buttons:"));
+        assert!(js.contains("axes:"));
+        // …and traps an absent API to a typed frame, never a throw / eval.
+        assert!(js.contains("event: \"unavailable\""));
+        assert!(!js.contains("eval("));
     }
 }

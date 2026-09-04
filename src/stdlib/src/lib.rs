@@ -835,6 +835,20 @@ const IPE_BROWSER_MICROPHONE: &str = include_str!("../Ipe/Browser/Microphone.ipe
 const IPE_BROWSER_MICROPHONE_INTERNALS: &str =
     include_str!("../Ipe/Browser/Microphone/Internals.ipe");
 
+/// `Ipe.Browser.Gamepad` — a session-stream delivering gamepad connect/disconnect
+/// events and polled button/axis state frames, over `Ipe.Ffi.Js` ports. Importing
+/// discloses `js-port:gamepad` (keyed on the `Ipe.Browser.Gamepad` path prefix via
+/// `WebCapability::for_browser_module`). Registered in [`COMPILED_STD_MODULES`]
+/// (NOT `MODULES`); NOT in `STDLIB_MODULE_QUALIFIERS`.
+const IPE_BROWSER_GAMEPAD: &str = include_str!("../Ipe/Browser/Gamepad.ipe");
+
+/// `Ipe.Browser.Gamepad.Internals` — the low-level Gamepad port surface: the
+/// closed outbound/inbound ADTs and the raw `Ipe.Ffi.Js` wiring the high-level
+/// layer wraps. Importing it discloses the same `js-port:gamepad` axis (the prefix
+/// key covers the submodule). Registered in [`COMPILED_STD_MODULES`] (NOT
+/// `MODULES`); NOT in `STDLIB_MODULE_QUALIFIERS`.
+const IPE_BROWSER_GAMEPAD_INTERNALS: &str = include_str!("../Ipe/Browser/Gamepad/Internals.ipe");
+
 /// `Ipe.Env` — build-time-embedded public config (compiled source).
 ///
 /// Defines `public : String -> Maybe String`, routed through the
@@ -1369,6 +1383,14 @@ pub const COMPILED_STD_MODULES: &[CompiledStdModule] = &[
     CompiledStdModule {
         dotted: "Ipe.Browser.Microphone.Internals",
         source: IPE_BROWSER_MICROPHONE_INTERNALS,
+    },
+    CompiledStdModule {
+        dotted: "Ipe.Browser.Gamepad",
+        source: IPE_BROWSER_GAMEPAD,
+    },
+    CompiledStdModule {
+        dotted: "Ipe.Browser.Gamepad.Internals",
+        source: IPE_BROWSER_GAMEPAD_INTERNALS,
     },
     CompiledStdModule {
         dotted: "Ipe.Env",
