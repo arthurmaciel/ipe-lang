@@ -156,7 +156,7 @@ pub enum WebCapability {
     Raw,
     /// `speechSynthesis.speak` — one-shot text-to-speech synthesis with voice,
     /// rate, pitch, and volume options, plus queue control (`speechSynthesis.cancel`).
-    /// SpeechRecognition is deliberately excluded (experimental).
+    /// `SpeechRecognition` is deliberately excluded (experimental).
     Speech,
     /// `navigator.permissions.query({ name })` — the Permissions API state for a
     /// named browser capability: `"granted"` / `"denied"` / `"prompt"`. Covers

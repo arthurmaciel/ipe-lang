@@ -910,7 +910,7 @@ const IPE_BROWSER_VISIBILITY_INTERNALS: &str =
 /// (NOT `MODULES`); NOT in `STDLIB_MODULE_QUALIFIERS`.
 const IPE_BROWSER_MEDIA_QUERY: &str = include_str!("../Ipe/Browser/MediaQuery.ipe");
 
-/// `Ipe.Browser.MediaQuery.Internals` — the low-level MediaQuery port surface:
+/// `Ipe.Browser.MediaQuery.Internals` — the low-level `MediaQuery` port surface:
 /// the closed outbound/inbound ADTs and the raw `Ipe.Ffi.Js` wiring the
 /// high-level layer wraps. Importing it discloses the same `js-port:media-query`
 /// axis (the prefix key covers the submodule). Registered in
