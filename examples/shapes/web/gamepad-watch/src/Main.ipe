@@ -1,0 +1,97 @@
+module Main exposing (main)
+
+-- | gamepad-watch — `Ipe.Browser.Gamepad.watch` end-to-end, with the
+-- consent gate satisfied.
+--
+-- Demonstrates the continuous gamepad stream: when the app starts it calls
+-- `Gamepad.watch`, registering connect/disconnect listeners and starting a
+-- `requestAnimationFrame` poll. Each event arrives as a typed `GamepadEvent`
+-- via the `events` subscription and is rendered on screen.
+--
+-- `Ipe.Browser.Gamepad` discloses `js-port:gamepad` on import; the companion
+-- `js-port:raw` floor is also disclosed. Both are accepted in `package.ipe`.
+--
+-- A missing Gamepad API arrives as `GamepadUnavailable` — a typed variant,
+-- never a thrown error or a silently dropped frame.
+
+
+import Ipe.Tea.Web as Web
+import Ipe.Tea.Web.Cmd as Cmd
+import Ipe.Tea.Web.Sub as Sub
+import Ipe.Ui as Ui
+import Ipe.Browser.Gamepad as Gamepad
+import Ipe.String as String
+
+
+type alias Model =
+    { status : String }
+
+
+type Msg
+    = StartWatch
+    | GotEvent Gamepad.GamepadEvent
+
+
+init : WebReq -> ( Model, Cmd.Cmd Msg )
+init _req =
+    ( { status = "waiting for gamepads…" }, Gamepad.watch )
+
+
+update : Msg -> Model -> ( Model, Cmd.Cmd Msg )
+update msg model =
+    case msg of
+        StartWatch ->
+            ( model, Gamepad.watch )
+
+        GotEvent event ->
+            ( { model | status = describeEvent event }, Cmd.none )
+
+
+describeEvent : Gamepad.GamepadEvent -> String
+describeEvent event =
+    case event of
+        Gamepad.GamepadConnected index id ->
+            "connected: slot " ++ String.fromInt index ++ " (" ++ id ++ ")"
+
+        Gamepad.GamepadDisconnected index ->
+            "disconnected: slot " ++ String.fromInt index
+
+        Gamepad.GamepadState index buttons axes ->
+            let
+                pressed =
+                    List.length (List.filter (\b -> b) buttons)
+            in
+            "slot "
+                ++ String.fromInt index
+                ++ ": "
+                ++ String.fromInt pressed
+                ++ " button(s) pressed, "
+                ++ String.fromInt (List.length axes)
+                ++ " axis(es)"
+
+        Gamepad.GamepadUnavailable ->
+            "Gamepad API unavailable in this browser"
+
+
+subscriptions : Model -> Sub.Sub Msg
+subscriptions _model =
+    Gamepad.events GotEvent
+
+
+view : Model -> Element Msg
+view model =
+    Ui.column []
+        [ Ui.button [] { onPress = Just StartWatch, label = Ui.text "Watch gamepads" }
+        , Ui.text model.status
+        ]
+
+
+main =
+    Web.app
+        { init = init
+        , update = update
+        , view = view
+        , subscriptions = subscriptions
+        , routes = []
+        , notFound = StartWatch
+        }

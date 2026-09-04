@@ -1634,3 +1634,89 @@ fn a_microphone_app_without_the_grant_is_rejected_ipe_s0002() -> TestResult {
     let _ = std::fs::remove_dir_all(&dir);
     Ok(())
 }
+
+// ── Ipe.Browser.Gamepad — a first-party web-API module ────────────────────────
+
+/// A Web-shape app importing `Ipe.Browser.Gamepad` — the import-derived signal
+/// that discloses the SPECIFIC `js-port:gamepad` axis on top of the `:raw` floor.
+/// Both the accepted-grant path and the IPE-S0002 refusal path are exercised.
+const GAMEPAD_APP: &str = r#"module Main exposing (main)
+
+import Ipe.Tea.Web as Web
+import Ipe.Tea.Web.Cmd as Cmd
+import Ipe.Tea.Web.Sub as Sub
+import Ipe.Ui as Ui
+import Ipe.Browser.Gamepad as Gamepad
+
+type alias Model = { info : String }
+
+type Msg = StartWatch | GotEvent Gamepad.GamepadEvent
+
+init : WebReq -> ( Model, Cmd.Cmd Msg )
+init _r =
+    ( { info = "" }, Gamepad.watch )
+
+update : Msg -> Model -> ( Model, Cmd.Cmd Msg )
+update msg model =
+    case msg of
+        StartWatch ->
+            ( model, Gamepad.watch )
+
+        GotEvent _ev ->
+            ( model, Cmd.none )
+
+view : Model -> Element Msg
+view _model =
+    Ui.text "ok"
+
+subscriptions : Model -> Sub.Sub Msg
+subscriptions _model =
+    Gamepad.events GotEvent
+
+main =
+    Web.app
+        { init = init, update = update, view = view, subscriptions = subscriptions
+        , routes = [], notFound = StartWatch
+        }
+"#;
+
+/// Importing `Ipe.Browser.Gamepad` discloses the specific `js-port:gamepad` axis
+/// (the import-derived mechanism, alias-immune).
+#[test]
+fn importing_browser_gamepad_discloses_js_port_gamepad() -> TestResult {
+    let dir = write_single("gamepad", GAMEPAD_APP)?;
+    let entry = dir.join("Main.ipe");
+    let declared = BTreeSet::from([
+        Capability::JsPort(WebCapability::Gamepad),
+        Capability::JsPort(WebCapability::Raw),
+    ]);
+    let r = verify_capabilities(&entry, &declared);
+    assert!(
+        r.is_ok(),
+        "importing Ipe.Browser.Gamepad must disclose js-port:gamepad (+ the :raw floor): {r:?}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+    Ok(())
+}
+
+/// Fail-closed (IPE-S0002): a gamepad app that omits the grant is rejected as
+/// under-declared, naming `js-port:gamepad` in the refusal.
+#[test]
+fn a_gamepad_app_without_the_grant_is_rejected_ipe_s0002() -> TestResult {
+    let dir = write_single("gamepadnogrant", GAMEPAD_APP)?;
+    let entry = dir.join("Main.ipe");
+    // Granting only `:raw` (the kernel floor) is not enough — the specific
+    // `js-port:gamepad` axis must be accepted explicitly.
+    let declared = BTreeSet::from([Capability::JsPort(WebCapability::Raw)]);
+    let r = verify_capabilities(&entry, &declared);
+    assert!(
+        matches!(
+            &r,
+            Err(ipe::CliError::CapabilityMismatch { missing, .. })
+                if missing.contains(&"js-port:gamepad")
+        ),
+        "an ungranted gamepad app must be rejected naming js-port:gamepad (IPE-S0002), got: {r:?}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+    Ok(())
+}

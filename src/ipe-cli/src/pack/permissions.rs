@@ -219,6 +219,10 @@ fn requirement_for(axis: WebCapability) -> AxisRequirement {
         | WebCapability::Battery
         | WebCapability::File
         | WebCapability::Camera
+        // Gamepad API: no static usage-description or manifest permission needed
+        // on iOS/Android — the browser mediates access without a declaration, and
+        // no permission prompt is issued: gamepads are input devices, not sensors.
+        | WebCapability::Gamepad
         | WebCapability::Raw => no_os_permission(),
     }
 }
