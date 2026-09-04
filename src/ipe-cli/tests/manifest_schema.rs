@@ -52,3 +52,42 @@ fn full_manifest_round_trips_every_section() {
         BTreeSet::from([Capability::Network, Capability::Clock])
     );
 }
+
+#[test]
+fn icon_is_an_optional_project_contained_path() {
+    // A manifest with no `icon` field parses with `icon = None`; a manifest that
+    // declares one resolves it against the project root (the desktop packager's
+    // single icon source). A path escaping the root is refused at parse time.
+    let dir = std::env::temp_dir().join("manifest_schema_icon");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("src")).expect("project src dir");
+    std::fs::write(
+        dir.join("src/Main.ipe"),
+        "module Main exposing (main)\nmain = 0\n",
+    )
+    .expect("write Main.ipe");
+
+    let without = "module Package exposing (package)\n\nimport Ipe.Package exposing (..)\n\n\
+                   package : Package\npackage =\n    { name = \"iconless\" }\n";
+    std::fs::write(dir.join("package.ipe"), without).expect("write manifest");
+    let m = parse_manifest(&dir.join("package.ipe")).expect("iconless manifest parses");
+    assert_eq!(m.icon, None, "no icon field ⇒ None");
+
+    let with = "module Package exposing (package)\n\nimport Ipe.Package exposing (..)\n\n\
+                package : Package\npackage =\n    { name = \"iconed\", icon = \"assets/logo.png\" }\n";
+    std::fs::write(dir.join("package.ipe"), with).expect("write manifest");
+    let m = parse_manifest(&dir.join("package.ipe")).expect("iconed manifest parses");
+    assert_eq!(
+        m.icon,
+        Some(dir.join("assets/logo.png")),
+        "icon resolves against the project root"
+    );
+
+    let escaping = "module Package exposing (package)\n\nimport Ipe.Package exposing (..)\n\n\
+                    package : Package\npackage =\n    { name = \"esc\", icon = \"../secret.png\" }\n";
+    std::fs::write(dir.join("package.ipe"), escaping).expect("write manifest");
+    assert!(
+        parse_manifest(&dir.join("package.ipe")).is_err(),
+        "an icon path escaping the project root is refused"
+    );
+}
