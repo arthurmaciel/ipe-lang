@@ -168,8 +168,9 @@ fn ir_type_name_at(interner: &Interner, ty: &IrType, depth: u16) -> String {
             let ctor_name = match ctor {
                 UiCtor::Html => "Html",
                 UiCtor::Element => "Element",
-                UiCtor::Cells => "Cells",
+                UiCtor::Cells => "Screen",
                 UiCtor::UiAttribute => "Ui.Attribute",
+                UiCtor::TuiAttribute => "Tui.Ui.Attribute",
                 UiCtor::HtmlAttribute => "Html.Attribute",
                 UiCtor::HtmlEvent => "Html.Event",
                 // Ipe.Ui.Input parametric label / placeholder types.

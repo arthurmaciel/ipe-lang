@@ -506,17 +506,24 @@ const STD_UI_TRANSFORM: &str = include_str!("../Ipe/Ui/Transform.ipe");
 /// Unblocks `26-ui-showcase` (IPE-N0004: Ipe.Ui.Animation — Animation.attribute).
 const STD_UI_ANIMATION: &str = include_str!("../Ipe/Ui/Animation.ipe");
 
-/// `Ipe.Ui.Cells` — Tui-only view builders that produce `Cells msg`.
+/// `Ipe.Ui.Cells` — retained alias re-exposing the `Ipe.Tea.Tui.Ui` builders
+/// under their historical path.
 ///
-/// `Cells msg` is a newtype distinct from `Element msg`; it is produced
-/// exclusively by the six builders here (`none` / `text` / `cells` /
-/// `el` / `row` / `column`) and consumed only by `Tui.app`'s
-/// `view` field.  Using these builders inside a Web/Cli shape is a
-/// compile-time type error because the type checker sees `Cells msg`
-/// where `Element msg` is expected.
+/// The Tui view type is `Screen msg` (a newtype distinct from `Element msg`),
+/// produced exclusively by the builders here (`none` / `text` / `cells` /
+/// `el` / `row` / `column`) and consumed only by `Tui.app`'s `view` field.
+/// Using these builders inside a Web/Cli shape is a compile-time type error
+/// because the type checker sees `Screen msg` where `Element msg` is expected.
 ///
 /// Not in `STDLIB_MODULE_QUALIFIERS` so disjointness invariant holds.
 const STD_UI_CELLS: &str = include_str!("../Ipe/Ui/Cells.ipe");
+
+/// `Ipe.Tea.Tui.Ui` — the Tui shape's view surface: the `Screen msg` view type,
+/// its builders, and its OWN cell-native `Attribute msg` (spacing/padding/align/
+/// bold/underline/colour). A terminal author imports this instead of `Ipe.Ui`,
+/// so DOM attributes are unnameable in a `Screen` view (a type error, never a
+/// silent render-time drop).
+const STD_TEA_TUI_UI: &str = include_str!("../Ipe/Tea/Tui/Ui.ipe");
 
 /// `Ipe.Codec` — one invariant codec that drives the JSON direction.
 ///
@@ -1331,6 +1338,10 @@ pub const COMPILED_STD_MODULES: &[CompiledStdModule] = &[
     CompiledStdModule {
         dotted: "Ipe.Ui.Cells",
         source: STD_UI_CELLS,
+    },
+    CompiledStdModule {
+        dotted: "Ipe.Tea.Tui.Ui",
+        source: STD_TEA_TUI_UI,
     },
     CompiledStdModule {
         dotted: "Ipe.Codec",

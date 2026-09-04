@@ -87,6 +87,43 @@ fn compile_main(main: &str) -> Result<(), String> {
     .map_err(|e| e.to_string())
 }
 
+/// Like [`compile_main`], but adds extra user modules to the graph. Used to route
+/// a `Ipe.Tea.*` shape module through a `main`-less helper (exempt from the
+/// IPE-N0033 Program-imports-a-shape gate) while `Main` stays a plain Program.
+fn compile_main_with_helper(main: &str, extras: &[(Vec<String>, String)]) -> Result<(), String> {
+    let mut user = UserSources::new();
+    user.insert(entry_path(), main.to_owned());
+    for (path, text) in extras {
+        user.insert(path.clone(), text.clone());
+    }
+    let (sources, injected) = prepared(&user);
+    let db = ipe_db::IpeDatabase::new();
+    let root = ipe::create_source_root(&db, &sources, &injected, &BTreeSet::new());
+    let config = ipe_db::BuildConfig::new(
+        &db,
+        ipe_backend_rust::DbDriver::Sqlite,
+        None,
+        ipe_ir::Target::Native,
+        Vec::new(),
+        false,
+        false,
+        None,
+        false,
+        String::new(),
+        false,
+    );
+    ipe::compile_prepared(
+        &db,
+        root,
+        &sources,
+        &entry_path(),
+        Path::new("<resolvability>"),
+        config,
+    )
+    .map(|_| ())
+    .map_err(|e| e.to_string())
+}
+
 /// Every compiled-source stdlib module, imported ONE AT A TIME into a `Main`,
 /// must resolve.
 ///
@@ -102,12 +139,33 @@ fn compile_main(main: &str) -> Result<(), String> {
 fn compiled_source_modules_resolve_all_exports() {
     let mut failures: Vec<String> = Vec::new();
     for m in ipe_stdlib::COMPILED_STD_MODULES {
-        let main = format!(
-            "module Main exposing (main)\nimport Ipe.Io as Io\nimport {} as M\n\n\
-             main : Task Error ()\nmain =\n    Io.println \"ok\"\n",
-            m.dotted,
-        );
-        if let Err(e) = compile_main(&main) {
+        // A `Ipe.Tea.*` shape module marks any plain-`main` importer a TEA-app
+        // contradiction (IPE-N0033). Route it through a `main`-less helper module
+        // — exempt from that gate — so the export resolution still runs while
+        // `Main` stays a plain Program.
+        let is_tea_shape = m
+            .dotted
+            .strip_prefix("Ipe.Tea.")
+            .is_some_and(|rest| rest.contains('.'));
+        let result = if is_tea_shape {
+            let helper = format!(
+                "module Probe exposing (probe)\nimport {} as M\n\nprobe : Int\nprobe =\n    0\n",
+                m.dotted,
+            );
+            compile_main_with_helper(
+                "module Main exposing (main)\nimport Ipe.Io as Io\nimport Probe\n\n\
+                 main : Task Error ()\nmain =\n    Io.println \"ok\"\n",
+                &[(vec!["Probe".to_owned()], helper)],
+            )
+        } else {
+            let main = format!(
+                "module Main exposing (main)\nimport Ipe.Io as Io\nimport {} as M\n\n\
+                 main : Task Error ()\nmain =\n    Io.println \"ok\"\n",
+                m.dotted,
+            );
+            compile_main(&main)
+        };
+        if let Err(e) = result {
             failures.push(format!("{}: {e}", m.dotted));
         }
     }

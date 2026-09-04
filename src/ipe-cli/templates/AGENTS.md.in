@@ -125,7 +125,7 @@ Ask one focused question per ambiguity; no guess heroically.
 | Multi-tenant SaaS / dashboard            | **Ipe.Tea.Web + auth-app gate** | `Web.app { consoleAuth = … }` | Tenant scope enforced at SQL layer. |
 | Desktop app                              | **Ipe.Tea.WebView**    | `WebView.app cfg`                  | macOS today; Linux / Windows later. |
 | Line-oriented interactive tool           | **Ipe.Tea.Cli**        | `Cli.app cfg`                      | Managed stdin-driven TEA loop (init/update/view/onLine). |
-| Terminal UI (TUI)                        | **Ipe.Tea.Tui**        | `Tui.app cfg`                      | `Cells` view (`Ipe.Ui.Cells`), a terminal-only view type. |
+| Terminal UI (TUI)                        | **Ipe.Tea.Tui**        | `Tui.app cfg`                      | `Screen` view (`Ipe.Tea.Tui.Ui`), a terminal-only view type. |
 | HTTP / JSON API (no browser UI)          | **Ipe.Http.Server**| `Server.listen 8000 [...]`         | Routes + middleware (CORS / rate-limit / logging / basic-auth). |
 | WebSocket-driven feed                    | **Ipe.Http.Server.WebSocket** | `Server.upgrade req` | Bidirectional. |
 | Server-sent stream (LLM tokens, SSE)     | **Ipe.Http.Server.Stream** | `Server.Stream.emit` | Mirror of `Ipe.Http.Stream`. |
@@ -948,18 +948,18 @@ via `Http.post`. Ensure `[live] maxBodyBytes` ≥ your `fileMaxSize`.
 ## Ipe.Tea.Tui / Ipe.Tea.Cli
 
 TEA backends for the terminal, one entry per drive axis. `Tui.app`
-(`import Ipe.Tea.Tui as Tui`) renders a `Cells` tree to ANSI cells with
-`view : Model -> Cells Msg` (built with `Ipe.Ui.Cells` — a Tui-only view type
-distinct from `Element`, so a Web-only node cannot appear in a terminal view;
-keystroke-driven via `onKey`). `Cli.app` (`import Ipe.Tea.Cli as Cli`) is the
-line-oriented REPL with `view : Model -> String` and `onLine : String -> Msg`.
+(`import Ipe.Tea.Tui as Tui`) renders a `Screen` tree to ANSI cells with
+`view : Model -> Screen Msg` (built with `Ipe.Tea.Tui.Ui` — a Tui-only view
+type distinct from `Element`, so a Web-only node cannot appear in a terminal
+view; keystroke-driven via `onKey`). `Cli.app` (`import Ipe.Tea.Cli as Cli`) is
+the line-oriented REPL with `view : Model -> String` and `onLine : String -> Msg`.
 Both share the `init`/`update`/`subscriptions` shape of Ipe.Tea.Web.
 
 ```elm
 type alias Cfg model msg =
     { init          : () -> (model, Cmd msg)
     , update        : msg -> model -> (model, Cmd msg)
-    , view          : model -> Cells msg
+    , view          : model -> Screen msg
     , subscriptions : model -> Sub msg
     , onKey         : KeyEvent -> msg                  -- optional
     , guard         : msg -> model -> Result Error ()  -- optional; same as Web.app's guard
@@ -970,11 +970,12 @@ type alias Cfg model msg =
 main = Tui.app cfg
 ```
 
-**Logical-pixel canvas** — `canvasWidth × canvasHeight` defines design
-surface; runtime converts `Ui.padding 8`/`Ui.px N` to cells. Covers ~95%+
-of Ipe.Ui primitives; unsupported attrs (gradients, fine letter-spacing,
-image fills) emit deduped warning (`IPE_TUI_QUIET=1` suppresses). Wide chars
-(CJK+emoji+ZWJ) supported.
+**Cell-native attributes** — `Ipe.Tea.Tui.Ui` carries its OWN `Attribute msg`,
+exposing only what a terminal cell grid honours: `spacing`/`padding` in whole
+cells, `alignLeft`/`alignRight`/`center`, `bold`/`underline`, and terminal-
+palette `color`/`bg`. DOM attributes (`onClick`, `scrollbars`, `inFront`, …) are
+not in this type, so naming one in a `Screen` view is a type error (IPE-T0001),
+never a silently dropped attribute. Wide chars (CJK+emoji+ZWJ) supported.
 
 ## Ipe.Tea.WebView (desktop)
 
@@ -997,8 +998,8 @@ main =
 `view : Model -> Element Msg` paints identically across `Ipe.Tea.Web` (web)
 and `Ipe.Tea.WebView` (desktop) — the framework applies `Ui.layout` internally,
 so the view returns the raw `Element` with no wrap. `Ipe.Tea.Tui`
-(`Tui.app`) uses the distinct `view : Model -> Cells Msg` built from
-`Ipe.Ui.Cells`, so a browser-only node cannot leak into a terminal view.
+(`Tui.app`) uses the distinct `view : Model -> Screen Msg` built from
+`Ipe.Tea.Tui.Ui`, so a browser-only node cannot leak into a terminal view.
 `WindowCfg` is closed (`{ title : String, size : (Int, Int) }`) today; macOS
 supported first. For direct DOM control, drop raw `Ipe.Html` into the view
 through the `Ui.html : Html msg -> Element msg` node.

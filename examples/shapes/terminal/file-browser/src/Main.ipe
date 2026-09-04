@@ -1,8 +1,8 @@
 module Main exposing (main)
 
--- A keyboard-driven directory browser over `Tui.app`. The view is a
--- typed `Ipe.Ui.Cells` `Cells` tree that the runtime paints to terminal cells;
--- inside that structured view sits a raw `Cells.cells` island — a hexdump of the
+-- A keyboard-driven directory browser over `Tui.app`. The view is a typed
+-- `Ipe.Tea.Tui.Ui` `Screen` tree that the runtime paints to terminal cells;
+-- inside that structured view sits a raw `Ui.cells` island — a hexdump of the
 -- selected file's first bytes, painted character by character.
 --
 -- Keys:
@@ -13,7 +13,7 @@ module Main exposing (main)
 --
 -- `File.readDir` lists the working directory once at startup; selecting a file
 -- performs `File.readFileBytes` as a `Task`, and its settled bytes are rendered
--- as the `Cells.cells` grid. `Cells msg` is terminal-only: this same view in the
+-- as the `Ui.cells` grid. `Screen msg` is terminal-only: this same view in the
 -- Web or WebView shape would fail to type-check (a Web view returns `Element`).
 
 import Ipe.String as String
@@ -25,10 +25,8 @@ import Ipe.Task as Task
 import Ipe.Tea.Tui.Cmd as Cmd
 import Ipe.Tea.Tui.Sub as Sub
 import Ipe.List as List
-import Ipe.Ui as Ui
-import Ipe.Ui.Cells as Cells
-import Ipe.Ui.Cells exposing (Cells)
-import Ipe.Ui.Font as Font
+import Ipe.Tea.Tui.Ui as Ui
+import Ipe.Tea.Tui.Ui exposing (Screen)
 
 
 type Msg
@@ -153,22 +151,22 @@ listAt index items =
     List.head (List.drop index items)
 
 
-view : Model -> Cells Msg
+view : Model -> Screen Msg
 view model =
-    Cells.column [ Ui.spacing 12, Ui.padding 16 ]
-        [ Cells.el [ Font.bold ] (Cells.text "Ipê file browser")
-        , Cells.text model.status
-        , Cells.column [ Ui.spacing 2 ] (List.indexedMap (entryRow model.selected) model.entries)
-        , Cells.el [ Font.bold ] (Cells.text "hexdump:")
+    Ui.column [ Ui.spacing 1, Ui.padding 2 ]
+        [ Ui.el [ Ui.bold ] (Ui.text "Ipê file browser")
+        , Ui.text model.status
+        , Ui.column [ Ui.spacing 1 ] (List.indexedMap (entryRow model.selected) model.entries)
+        , Ui.el [ Ui.bold ] (Ui.text "hexdump:")
 
         -- The raw cell-grid island: a hexdump of the opened file's bytes,
         -- painted directly to the terminal.
-        , Cells.cells (hexdump model.bytes)
+        , Ui.cells (hexdump model.bytes)
         ]
 
 
 -- One directory entry, highlighted (a leading `>`) when it is the selection.
-entryRow : Int -> Int -> String -> Cells Msg
+entryRow : Int -> Int -> String -> Screen Msg
 entryRow selected index name =
     let
         marker =
@@ -178,7 +176,7 @@ entryRow selected index name =
             else
                 "  "
     in
-    Cells.text (marker ++ name)
+    Ui.text (marker ++ name)
 
 
 -- ── Hexdump: List Int → List (List Char) ─────────────────────────────────────

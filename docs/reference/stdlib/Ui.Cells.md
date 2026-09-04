@@ -4,25 +4,25 @@
 
 [Back to stdlib index](../stdlib.md)
 
-Ipe.Ui.Cells — Tui-only view builders producing `Cells msg`.
+Ipe.Ui.Cells — retained alias for the Tui view surface.
 
-Functions in this module return `Cells msg`, a type that is distinct from
-`Element msg`.  Only `Tui.app` accepts a `view : model -> Cells msg`;
-Web and Cli shapes require `Element msg`, so using these builders in a non-Tui
-shape is a compile-time type error (IPE-T0001).
+The Tui view surface now lives at `Ipe.Tea.Tui.Ui` (view type `Screen msg`,
+with its own cell-native `Attribute msg`).  This module re-exposes the same
+builders under their historical `Ipe.Ui.Cells` path, spelling the view type
+`Screen`.  Prefer `Ipe.Tea.Tui.Ui` in new code.
 
 ## `none`
 
 ```ipe
-none : Cells msg
+none : Screen msg
 ```
 
-An empty cell view — renders nothing.
+An empty screen view — renders nothing.
 
 ## `text`
 
 ```ipe
-text : String -> Cells msg
+text : String -> Screen msg
 ```
 
 `text str` — a single line of text.
@@ -30,7 +30,7 @@ text : String -> Cells msg
 ## `cells`
 
 ```ipe
-cells : List (List Char) -> Cells msg
+cells : List (List Char) -> Screen msg
 ```
 
 `cells grid` — a raw terminal cell grid.  Each inner list is one row
@@ -39,24 +39,24 @@ of characters; the terminal backend paints it verbatim.
 ## `el`
 
 ```ipe
-el : List (Ui.Attribute msg) -> Cells msg -> Cells msg
+el : List (Attribute msg) -> Screen msg -> Screen msg
 ```
 
-`el attrs child` — wrap a single `Cells msg` child with attributes.
+`el attrs child` — wrap a single `Screen msg` child with attributes.
 
 ## `row`
 
 ```ipe
-row : List (Ui.Attribute msg) -> List (Cells msg) -> Cells msg
+row : List (Attribute msg) -> List (Screen msg) -> Screen msg
 ```
 
-`row attrs children` — lay out `Cells msg` children horizontally.
+`row attrs children` — lay out `Screen msg` children horizontally.
 
 ## `column`
 
 ```ipe
-column : List (Ui.Attribute msg) -> List (Cells msg) -> Cells msg
+column : List (Attribute msg) -> List (Screen msg) -> Screen msg
 ```
 
-`column attrs children` — lay out `Cells msg` children vertically.
+`column attrs children` — lay out `Screen msg` children vertically.
 

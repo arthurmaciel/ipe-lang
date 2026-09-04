@@ -1,6 +1,6 @@
-# file-browser — `Terminal.appScreen` with a `Ui.cells` hexdump island
+# file-browser — `Tui.app` with a `Ui.cells` hexdump island
 
-A keyboard-driven directory browser. `Terminal.appScreen` renders a typed
+A keyboard-driven directory browser. `Tui.app` renders a typed
 `Ipe.Ui` `Element` tree to terminal cells; inside that structured view sits a
 raw `Ui.cells` island — a hexdump of the selected file's first bytes, painted
 character by character.

@@ -432,7 +432,7 @@ fn revoke_session_arity3_builds() {
 const TUI_APP: &str = "module Main exposing (main)\n\
     import Ipe.Tea.Tui as Tui\n\
     import Ipe.Ui.Cells as Cells\n\
-    import Ipe.Ui.Cells exposing (Cells)\n\
+    import Ipe.Ui.Cells exposing (Screen)\n\
     import Ipe.Tea.Tui.Cmd\n\
     import Ipe.Tea.Tui.Sub\n\
     type Msg = NoOp\n\
@@ -442,7 +442,7 @@ const TUI_APP: &str = "module Main exposing (main)\n\
     init _unit = ( { count = 0 }, Cmd.none )\n\
     update : Msg -> Model -> ( Model, Cmd Msg )\n\
     update _msg model = ( model, Cmd.none )\n\
-    view : Model -> Cells Msg\n\
+    view : Model -> Screen Msg\n\
     view _model = Cells.text \"hello\"\n\
     subscriptions : Model -> Sub Msg\n\
     subscriptions _model = Sub.none\n\

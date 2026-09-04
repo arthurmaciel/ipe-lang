@@ -1,13 +1,13 @@
 ---
 kind: topic
-title: "shapes: the four app entry shapes"
-summary: "The four program shapes (Web, WebView, Terminal, Program) and when to use each."
+title: "shapes: the five app entry shapes"
+summary: "The five program shapes (Web, WebView, Tui, Cli, Program) and when to use each."
 idiom: false
-aliases: ["app-shapes", "web", "webview", "terminal", "program", "app-entry"]
+aliases: ["app-shapes", "web", "webview", "tui", "cli", "program", "app-entry"]
 see_also: ["main", "state", "effects"]
 ---
 
-# `shapes` — the four app entry shapes
+# `shapes` — the five app entry shapes
 
 The code examples in this page are illustrative Ipê source snippets, not shell commands.
 
@@ -15,13 +15,14 @@ Every Ipê program has exactly one `main` value. Depending on what you want to
 build — a web app, a terminal UI, a desktop webview, or a plain script — you
 pick the matching entry function. These are called **shapes**.
 
-## The four shapes
+## The five shapes
 
 | Shape | Entry function | Output |
 |-------|---------------|--------|
 | Web | `Web.app` | Browser HTML/CSS app |
 | WebView | `WebView.app` | Desktop window running a web view |
-| Terminal | `Terminal.appScreen` / `Terminal.appLines` | TUI or line-by-line terminal app |
+| Tui | `Tui.app` | Full-screen terminal UI |
+| Cli | `Cli.app` | Line-by-line terminal app (REPL) |
 | Program | direct `Task Error ()` | Command-line script, no UI |
 
 ## Web
@@ -54,27 +55,28 @@ main =
         }
 ```
 
-## Terminal
+## Tui
 
-`Terminal.appScreen` renders a full-screen TUI that redraws on each model
-change. `Terminal.appLines` is line-by-line (stdout-style) with event handling:
+`Tui.app` renders a full-screen TUI that redraws on each model change:
 
 ```ipe
--- Full-screen TUI
 main : Task Error ()
 main =
-    Terminal.appScreen
+    Tui.app
         { init = init
         , update = update
         , view = view
         }
 ```
 
+## Cli
+
+`Cli.app` is line-by-line (stdout-style) with event handling:
+
 ```ipe
--- Line-by-line terminal app
 main : Task Error ()
 main =
-    Terminal.appLines
+    Cli.app
         { init = init
         , update = update
         , view = view
@@ -99,7 +101,8 @@ of effects.
 
 - Building for the browser? → **Web**
 - Building a desktop app with a web-rendered UI? → **WebView**
-- Building a terminal UI or interactive CLI? → **Terminal**
+- Building a full-screen terminal UI? → **Tui**
+- Building a line-by-line terminal REPL? → **Cli**
 - Building a script, a tool, or a batch job? → **Program**
 
 Each shape provides its own `Cmd`, `Sub`, and event model. Do not mix shapes
@@ -108,8 +111,8 @@ entry gives IPE-N0035.
 
 ## Glossary
 
-- **shape** — one of the four `main` entry patterns: Web, WebView, Terminal, Program.
+- **shape** — one of the five `main` entry patterns: Web, WebView, Tui, Cli, Program.
 - **`Web.app`** — browser TEA entry point.
-- **`Terminal.appScreen`** — full-screen TUI entry point.
-- **`Terminal.appLines`** — line-by-line terminal entry point.
+- **`Tui.app`** — full-screen terminal TUI entry point.
+- **`Cli.app`** — line-by-line terminal entry point.
 - **`WebView.app`** — desktop webview entry point.
