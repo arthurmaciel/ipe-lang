@@ -52,7 +52,7 @@ an arm is still an error even if another arm contains a `todo`.
 `explain` is an `Attribute msg` that draws visible outlines around the
 element it is applied to and every descendant, making the invisible box
 tree visible without changing layout. Distinct colours distinguish element
-bounds from padding. Applies to Web and WebView shapes.
+bounds from padding. Applies to the Web shape (served or webview-hosted).
 
 ## `log`
 
@@ -82,5 +82,5 @@ explain : Attribute msg
 ```
 
 `explain` — draw visible outlines on an element and all its descendants.
-Applies to Web and WebView shapes. Does not change layout.
+Applies to the Web shape (served or webview-hosted). Does not change layout.
 
