@@ -348,7 +348,6 @@ fn leaf_of_bounded(ctx: &EmitCtx, ty: &IrType, app: AppShape, fuel: u32) -> Mode
         | IrType::TokenSource
         // Shape opaque app leaves — not serde, never a Model field.
         | IrType::WebApp
-        | IrType::WebViewApp
         | IrType::TuiApp
         | IrType::CliApp
         // `Order` is a plain three-variant data enum — an admissible leaf.

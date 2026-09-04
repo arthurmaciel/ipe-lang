@@ -691,8 +691,8 @@ pub enum NameError {
     CustomElementCtorMalformed { detail: Box<str> },
     /// `main` selects its shape at runtime: after peeling application, `let`, and
     /// `\… ->` the head of `main`'s body is an `if` / `case` whose branches reach
-    /// app entries (`Web.app` / `Tui.app` / `Cli.app` /
-    /// `WebView.app`). A program's shape is pinned by the entry head at compile
+    /// app entries (`Web.app` / `Tui.app` / `Cli.app`). A program's shape is
+    /// pinned by the entry head at compile
     /// time, not chosen from a runtime value — so a shape-branching `main` fails
     /// closed here (static pinning, Correctness #2). The carrying
     /// [`Diagnostic::Name`] span points at the branching head. [IPE-N0045]
@@ -940,7 +940,7 @@ pub enum TypeError {
     /// message names the actual type the user mis-applied, not always `Task`.
     TaskArity { carrier: &'static str, found: usize },
     /// An `Html` value is used where an `Element` is required — most often a
-    /// managed-update-loop (`Web.app` / `WebView.app`) `view` whose body called
+    /// managed-update-loop (`Web.app`) `view` whose body called
     /// `Ui.layout` / `Ui.layoutWith` (which turn an `Element` into `Html`) when
     /// the shape wanted the inner `Element` and applies the layout itself. The
     /// remedy is the same wherever it arises: wrap the `Html` with `Ui.html`, or
@@ -1076,8 +1076,7 @@ pub enum Feature {
     /// [IPE-L0118]
     RoutedWebApp,
     /// The cfg record for an app entry point (`Web.app` / `Tui.app`
-    /// / `Cli.app` / `WebView.app`) — or, for `WebView.app`, its nested
-    /// `window` record and `window.size` tuple — was written as a let-bound
+    /// / `Cli.app`) was written as a let-bound
     /// variable (or any non-record expression) rather than an inline record
     /// literal. The Rust backend reads the cfg's field expressions directly at
     /// the call site to emit the runtime entry call, so a non-literal cfg has no
@@ -1307,7 +1306,7 @@ pub enum LowerError {
     /// `Ui.widget` (a server-driven custom element) appears outside a browser
     /// shape. Its up-event handler is carried over the seal codec, which is
     /// present only when the `json` runtime feature is on — and only the browser
-    /// shapes (`Web.app` / `WebView.app`) force it. Under `Terminal` / `Program`
+    /// shape (`Web.app`) forces it. Under `Terminal` / `Program`
     /// the widget has no transport for its handler, so the node would be inert
     /// (a widget with no seam). The SECURITY-tier fail-closed gate converts that
     /// would-be dead element into an ipe-time refusal rather than emit a crate
@@ -1335,7 +1334,7 @@ pub enum LowerError {
     /// The program's `main` is not an entry a runnable program can have. A
     /// `main` is the one effect a program runs, so it must be a `Task Error ()`
     /// — either written directly (a script, `main = Io.println "…"`) or produced
-    /// by an app entry (`Web.app`, `Tui.app`, `WebView.app`, whose
+    /// by an app entry (`Web.app`, `Tui.app`, `Cli.app`, whose
     /// result is itself a `Task Error ()`). A `main` of any other type (an
     /// `Int`, a `String`, a function, …) has no effect to run. `found` is a
     /// short, plain-English name for what this `main`'s type is. Fails closed at
@@ -2179,7 +2178,7 @@ fn type_help(msg: &TypeError) -> Vec<HelpLine> {
             .collect(),
         TypeError::WebViewReturnsHtml => vec![HelpLine::Note(
             "wrap the `Html` with `Ui.html (…)` to get an `Element`. In a \
-             `Web.app` / `WebView.app` `view`, prefer returning the inner \
+             `Web.app` `view`, prefer returning the inner \
              `Element` directly (annotate `view : Model -> Element Msg`) and let \
              the shape apply `Ui.layout` for you."
                 .into(),
@@ -2372,7 +2371,7 @@ fn lower_help(msg: &LowerError) -> Vec<HelpLine> {
         LowerError::UiWidgetInNonWebShape => vec![HelpLine::Note(
             "`Ui.widget` mounts a server-driven custom element whose up-events ride the \
              seal codec, which exists only in a browser build. Use it only under \
-             `Web.app` / `WebView.app`. In a `Terminal` app, build the view from native \
+             `Web.app`. In a `Terminal` app, build the view from native \
              `Ipe.Ui` elements (`Ui.text`, `Ui.column`, inputs) instead."
                 .into(),
         )],
@@ -2536,7 +2535,7 @@ fn non_entry_main_help() -> Vec<HelpLine> {
             "`main` is the one effect your whole program runs, so it has to be a \
              `Task Error ()`. Write it directly — `main = Io.println \"hello\"` prints a \
              line, `main = someTask` runs any task you built — or start an app with \
-             `Web.app { … }`, `Tui.app { … }`, or `WebView.app { … }`, each \
+             `Web.app { … }`, `Tui.app { … }`, or `Cli.app { … }`, each \
              of which is itself a `Task Error ()`. To turn a plain value into an effect, \
              do something with it: `main = Io.println (String.fromInt 42)`."
                 .into(),

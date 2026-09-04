@@ -2320,59 +2320,6 @@ fn let_bound_live_app_cfg_is_unsupported() -> DResult<()> {
     Ok(())
 }
 
-#[test]
-fn let_bound_webview_window_is_unsupported() -> DResult<()> {
-    // `WebView.app { …, window = win }` where `win` is a local var must lower
-    // to IPE-L0119 at the window value span, not an emit-stage CompilerBug.
-    let mut i = Interner::new();
-    let main = i.intern("main")?;
-    let webview = i.intern("WebView")?;
-    let app = i.intern("app")?;
-    let init = i.intern("init")?;
-    let update = i.intern("update")?;
-    let view = i.intern("view")?;
-    let subs = i.intern("subscriptions")?;
-    let window = i.intern("window")?;
-    let win = i.intern("win")?;
-    let placeholder = |span| Located::new(span, canon::Expr_::VarLocal(init));
-    let win_span = Span::new(90, 93);
-    let fields = vec![
-        (init, placeholder(Span::new(30, 34))),
-        (update, placeholder(Span::new(40, 46))),
-        (view, placeholder(Span::new(50, 54))),
-        (subs, placeholder(Span::new(60, 73))),
-        (window, Located::new(win_span, canon::Expr_::VarLocal(win))),
-    ];
-    let cfg = Located::new(Span::new(25, 95), canon::Expr_::Record(fields));
-    let callee = Located::new(
-        Span::new(10, 21),
-        canon::Expr_::VarKernel {
-            id: None,
-            module: webview,
-            name: app,
-        },
-    );
-    let body = Located::new(
-        Span::new(10, 95),
-        canon::Expr_::Call(Box::new(callee), vec![cfg]),
-    );
-    let def = canon::Def::Typed {
-        home: vec![],
-        name: Located::new(Span::new(0, 4), main),
-        free_vars: Vec::new(),
-        patterns: Vec::new(),
-        body,
-        ty: con_int(&mut i)?,
-    };
-    assert_unsupported(
-        run(Vec::new(), vec![def], BTreeMap::new(), &mut i),
-        Feature::LetBoundAppCfg,
-        IPE_L0119,
-        win_span,
-    );
-    Ok(())
-}
-
 /// A runtime `false` the optimiser cannot fold, so `assert!(false_marker())`
 /// fails the test without tripping `clippy::assertions_on_constants`.
 const fn false_marker() -> bool {

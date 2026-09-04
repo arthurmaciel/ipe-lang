@@ -681,9 +681,10 @@ const RUNTIME_MOD_RS_CSV_APPEND: &str = "pub mod csv;\npub use csv::*;\n";
 
 // ── Shape-app entry-switch anchors ────────────────────────────────────────────
 //
-// When `ipe_main` returns a shape-app leaf (WebApp / WebViewApp / TuiApp /
-// CliApp), `emit_func` emits the correct return type from the IR — no return-
-// type rewrite is needed. Only the epilogue `fn main` body needs updating:
+// When `ipe_main` returns a shape-app leaf (WebApp / TuiApp / CliApp — and a
+// `Web.app` under a webview-native host renders `WebViewApp`), `emit_func`
+// emits the correct return type from the IR — no return-type rewrite is needed.
+// Only the epilogue `fn main` body needs updating:
 // `block_on(ipe_main())` → `ipe_main().run_blocking()`. Hoisted to module
 // scope so no `const` item appears after a statement.
 
@@ -1682,8 +1683,9 @@ pub fn emit_program(ctx: &EmitCtx, program: &Program) -> DResult<EmittedProject>
 
         // Shape-app entry switch (Native only).
         //
-        // When `ipe_main` returns a shape app leaf (`WebApp` / `WebViewApp` /
-        // `TuiApp` / `CliApp`) its emitted body contains the corresponding
+        // When `ipe_main` returns a shape app leaf (`WebApp` / `TuiApp` /
+        // `CliApp`; a `Web.app` under a webview host renders `WebViewApp`) its
+        // emitted body contains the corresponding
         // `ipe_runtime::tea::<Leaf>(...)` constructor. The template declares
         // `ipe_main() -> IpeTask<()>` and `match block_on(ipe_main()) { ... }` —
         // both must be updated to use the concrete leaf type and its
@@ -1697,9 +1699,10 @@ pub fn emit_program(ctx: &EmitCtx, program: &Program) -> DResult<EmittedProject>
         // a different `ipe_main` signature — so the switch is skipped there.
         // Shape-app epilogue switch (Native only).
         //
-        // When `ipe_main` returns a shape-app leaf (WebApp / WebViewApp / TuiApp
-        // / CliApp), `emit_func` already emits the correct return type from the
-        // IR — no return-type rewrite is needed. Only the epilogue `fn main` body
+        // When `ipe_main` returns a shape-app leaf (WebApp / TuiApp / CliApp; a
+        // `Web.app` under a webview host renders WebViewApp), `emit_func` already
+        // emits the correct return type from the IR — no return-type rewrite is
+        // needed. Only the epilogue `fn main` body
         // needs updating: `block_on(ipe_main())` → `ipe_main().run_blocking()`.
         //
         // Detection scans the emitted text for a known leaf constructor call; this
@@ -3017,7 +3020,6 @@ fn ir_type_contains_non_serde(ty: &IrType) -> bool {
         | IrType::TokenSource
         // Shape opaque app leaves — not serde; rejected in a HydrationState record.
         | IrType::WebApp
-        | IrType::WebViewApp
         | IrType::TuiApp
         | IrType::CliApp => true,
     }
@@ -3190,7 +3192,8 @@ pub fn emit_spine(ctx: &EmitCtx, program: &Program) -> DResult<String> {
     // updating: swap `block_on(ipe_main())` for `ipe_main().run_blocking()`.
     //
     // The switch fires iff the program's ENTRY function itself RETURNS a shape
-    // leaf (`WebApp`/`WebViewApp`/`TuiApp`/`CliApp`) — read directly from the IR,
+    // leaf (`WebApp`/`TuiApp`/`CliApp`; a `WebApp` renders `WebViewApp` under a
+    // webview host) — read directly from the IR,
     // NOT from the coarse `uses_web` flag. A `Server.listen [ Server.mountApp
     // (Web.embed { … }) … ]` program sets `uses_web` (it builds an embedded
     // `WebApp` value) yet its `main` returns `IpeTask<()>`; it is a Program
@@ -3199,11 +3202,7 @@ pub fn emit_spine(ctx: &EmitCtx, program: &Program) -> DResult<String> {
     let main_returns_shape_leaf = program.modules.iter().any(|m| {
         m.entry.is_some_and(|eid| {
             m.funcs.iter().any(|f| {
-                f.id == eid
-                    && matches!(
-                        f.ret,
-                        IrType::WebApp | IrType::WebViewApp | IrType::TuiApp | IrType::CliApp
-                    )
+                f.id == eid && matches!(f.ret, IrType::WebApp | IrType::TuiApp | IrType::CliApp)
             })
         })
     });

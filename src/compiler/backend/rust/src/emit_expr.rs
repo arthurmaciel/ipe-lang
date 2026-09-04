@@ -5455,23 +5455,6 @@ fn emit_ui_plan(
             Ok(s)
         }
 
-        // ── Webview app-entry kernel ─────────────────────────────────────────
-        // Delegate to `emit_webview::emit_webview_call`; it returns `Some(s)` for
-        // the WebviewApp variant and `None` for anything else. A `None` here is an
-        // internal error (the `k.is_webview()` guard above already filtered), so
-        // promote it to a `CompilerBug`.
-        NativeUiEmit::Delegate(UiDelegate::WebView) => {
-            let s =
-                crate::emit_webview::emit_webview_call(ctx, callee, args, indent, child, generics)?
-                    .ok_or_else(|| Diagnostic::CompilerBug {
-                        where_: "ipe_backend_rust::emit_ui_call",
-                        detail: format!(
-                            "emit_webview returned None for Webview kernel {k:?} — missing arm"
-                        ),
-                    })?;
-            Ok(s)
-        }
-
         // ── Terminal line-oriented app-entry ─────────────────────────────────
         // Delegate to `emit_console::emit_console_call`; it returns `Some(s)` for
         // the `Cli.app` variant and `None` for anything else. A `None` here is

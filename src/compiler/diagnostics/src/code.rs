@@ -420,7 +420,7 @@ code! {
     ///
     /// A program's `main` is the single effect it runs, so it must be a
     /// `Task Error ()` — written directly (a script), or produced by an app
-    /// entry (`Web.app` / `Tui.app` / `WebView.app`, each of which
+    /// entry (`Web.app` / `Tui.app` / `Cli.app`, each of which
     /// returns a `Task Error ()`). A `main` of any other type (an `Int`, a
     /// `String`, a function, …) carries no effect to run; the runtime's single
     /// run site needs a `Task`, so this fails closed at `ipe` time rather than

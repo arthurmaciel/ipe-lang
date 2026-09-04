@@ -1,31 +1,30 @@
-//! End-to-end tests for `Ipe.WebView` / `Ipe.WebView` — `Webview.app`,
-//! `Ui.layout`, `Ui.column`, `Ui.el`, `Ui.text`, `Ui.button`, and
-//! `String.fromInt`.
+//! End-to-end tests for the DOM `Web` shape hosted as a native webview.
 //!
-//! All tests are gated on `IPE_E2E=1`.  Without it they return early so the
-//! default `cargo test` stays fast.
+//! A `Web.app` built under a webview-native (`web desktop`) delivery host is
+//! driven by `ipe_runtime::tea::WebViewApp` rather than the served
+//! `ipe_runtime::tea::WebApp`. These tests build a `Web.app` with the webview
+//! host forced on and assert the emitted project links and (Tier-B) opens a
+//! window. All tests are gated on `IPE_E2E=1`; without it they return early so
+//! the default `cargo test` stays fast.
 //!
 //! ## Architecture
 //!
-//! 1. A minimal Ipe.WebView counter program is written to a temp dir.
-//! 2. `ipe::build` compiles it (parse → canon → types → lower → emit Rust).
-//! 3. `e2e_support::build_rust_binary` runs `cargo build` on the emitted project —
-//!    the shared Cargo target lets wry/tao/webkit2gtk compile once and be reused.
+//! 1. A minimal `Web.app` program is written to a temp dir.
+//! 2. `ipe::build_with_options` compiles it with `webview_host = true` — the
+//!    same host decision the CLI derives from a resolved `web desktop` delivery.
+//! 3. `e2e_support::build_rust_binary` runs `cargo build` on the emitted project.
 //!
 //! ## Test tiers
 //!
 //! * **Tier-A** (`webview_counter_build_only`): ipe compile + `cargo build
-//!   --features webview` links cleanly.  The `webview` feature is promoted to
-//!   the default feature list by `project::webview_cargo_toml`, so a plain
-//!   `cargo build` already uses it — no extra flag needed.  This is the
-//!   minimum G5 assertion (constrain ↔ lower qualifier-set byte-match).
-//!
-//! * **Tier-B** (`webview_counter_tier_b`): the compiled binary is launched
-//!   under `xvfb-run -a timeout 5` to exercise the native-window open path.
-//!   A timeout exit (code 124) means the window stayed alive: pass.  A
-//!   non-124 non-0 exit is reported as a loud failure.  The test
-//!   **loud-skips** (prints a message + returns Ok) when `xvfb-run` is absent
-//!   or `DISPLAY` / `WAYLAND_DISPLAY` is unavailable (headless CI environments).
+//!   --features webview` links cleanly. The `webview` feature is promoted to the
+//!   default feature list, so a plain `cargo build` already uses it. This is the
+//!   SEAL assertion for a webview-hosted `Web.app`.
+//! * **Tier-B** (`webview_counter_tier_b`): the compiled binary is launched under
+//!   `xvfb-run -a timeout 5` to exercise the native-window open path. A timeout
+//!   exit (124) means the window stayed alive: pass. The test **loud-skips**
+//!   (prints a message + returns Ok) when `xvfb-run` is absent or the system
+//!   webview dev packages are not installed (headless CI environments).
 //!
 //! Run:
 //!
@@ -33,39 +32,19 @@
 //! IPE_E2E=1 cargo test webview_e2e
 //! ```
 
-/// A minimal Ipe.WebView counter app exercising the `Webview.app` wiring.
+/// A minimal `Web.app` counter, built under a webview host.
 ///
-/// Kernels exercised:
-/// - `Webview.app`   — constrain scheme + 5-field cfg with nested
-///   `window = { title, size }` (G4 gate)
-/// - `Ui.column`     — vertical layout container
-/// - `Ui.el`         — generic element container with `Ui.onClick` event attr
-/// - `Ui.onClick`    — binds a click event to a Msg constructor
-/// - `Ui.text`       — text leaf node
-/// - `String.fromInt` — displays the counter value
-/// - `Cmd.none` / `Sub.none` — baseline TEA primitives
-///
-/// Note: `view` returns `Element Msg` — the same portable Ipe.Ui view as
-/// Ipe.Web and Ipe.Tui. The framework applies `Ui.layout` internally to render
-/// the Element tree through the Webview runtime's HTML renderer.
-///
-/// Note: `init` takes `()` (unit), matching `Ty::Unit` in the constrain
-/// scheme.  Using `Ty::Tuple([])` (empty tuple) is NOT equivalent — the two
-/// don't unify, surfacing as IPE-T0001.
-///
-/// Note: G3 — the emitted `fn main` uses `block_on_current_thread(ipe_main())`
-/// (not `block_on`), enforced by the anchor-asserted switch in `project.rs`.
-/// This keeps the tao/Cocoa event loop on the true main thread (macOS + Linux
-/// both require it).
-///
-/// Note: `window = { title = "Counter", size = ( 400, 300 ) }` is an inline
-/// record literal — required by the G4 gate in `emit_webview.rs`.
-const IPE_WEBVIEW_COUNTER: &str = r#"module Main exposing (main)
+/// The webview executor takes `init/update/view/subscriptions`; the window is a
+/// delivery-host decision (threaded via `BuildOptions::webview_window`), never a
+/// source `main` field. `view` returns `Element Msg` — the same portable Ipe.Ui
+/// view a served `Web` page uses; the framework applies `Ui.layout` internally.
+/// `init` takes `WebReq`, matching the `Web.app` cfg scheme.
+const IPE_WEB_COUNTER: &str = r#"module Main exposing (main)
 
-import Ipe.Tea.WebView as Webview
+import Ipe.Tea.Web as Web
 import Ipe.Ui as Ui
-import Ipe.Tea.WebView.Cmd as Cmd
-import Ipe.Tea.WebView.Sub as Sub
+import Ipe.Tea.Web.Cmd as Cmd
+import Ipe.Tea.Web.Sub as Sub
 import Ipe.String
 
 type Msg
@@ -75,8 +54,8 @@ type Msg
 type alias Model =
     { count : Int }
 
-init : () -> ( Model, Cmd Msg )
-init _unit =
+init : WebReq -> ( Model, Cmd Msg )
+init _req =
     ( { count = 0 }, Cmd.none )
 
 update : Msg -> Model -> ( Model, Cmd Msg )
@@ -100,34 +79,29 @@ subscriptions _model =
     Sub.none
 
 main =
-    Webview.app
+    Web.app
         { init = init
         , update = update
         , view = view
         , subscriptions = subscriptions
-        , window = { title = "Counter", size = ( 400, 300 ) }
+        , routes = []
+        , notFound = Increment
         }
 "#;
 
-/// A minimal Ipe.WebView app mounting a `Ui.widget` whose DOWN state is a user
-/// record (`EditorState`) and whose UP event is a user ADT (`EditorEvent`).
+/// A minimal `Web.app` mounting a `Ui.widget` whose DOWN state is a user record
+/// (`EditorState`) and whose UP event is a user ADT (`EditorEvent`).
 ///
-/// This is the `WebView` SEAL golden for the widget serde derive.
-/// `Ui.widget` routes its down/up seal types through `ui_widget_`, whose bounds
-/// are `Down: serde::Serialize` and `Up: serde::de::DeserializeOwned`.
-/// `WebView`'s `webview_app` bounds the Model only by `Clone + Send`, so the
-/// serde derive on a widget's seal types is gated on the browser SHAPE
-/// (`uses_web || uses_webview`), not the Model bound: the serde-derive gate in
-/// `emit_types` and the app-crate `serde` dependency gate in `project` both fire
-/// for a `WebView` build. A serde-legal widget seal type therefore derives serde
-/// in a `WebView` build exactly as in a Web build. This fixture proves the closed
-/// seam: ipe-accept ⇒ cargo-build.
-const IPE_WEBVIEW_WIDGET: &str = r#"module Main exposing (main)
+/// The serde-derive gate on a widget's seal types keys on the browser SHAPE
+/// (`uses_web || uses_webview`), not the Model bound, so a serde-legal widget
+/// seal type derives serde in a webview-hosted `Web.app` exactly as in a served
+/// `Web` build. This fixture proves the closed seam: ipe-accept ⇒ cargo-build.
+const IPE_WEB_WIDGET: &str = r#"module Main exposing (main)
 
-import Ipe.Tea.WebView as Webview
+import Ipe.Tea.Web as Web
 import Ipe.Ffi.Js.CustomElement as CustomElement
-import Ipe.Tea.WebView.Cmd as Cmd
-import Ipe.Tea.WebView.Sub as Sub
+import Ipe.Tea.Web.Cmd as Cmd
+import Ipe.Tea.Web.Sub as Sub
 
 type alias EditorState = { text : String, line : Int }
 
@@ -140,8 +114,8 @@ type alias Model = { state : EditorState }
 codeEditor : CustomElement EditorState EditorEvent
 codeEditor = CustomElement.fromFile "js/x.js"
 
-init : () -> ( Model, Cmd Msg )
-init _unit =
+init : WebReq -> ( Model, Cmd Msg )
+init _req =
     ( { state = { text = "", line = 0 } }, Cmd.none )
 
 update : Msg -> Model -> ( Model, Cmd Msg )
@@ -157,57 +131,46 @@ subscriptions _model =
     Sub.none
 
 main =
-    Webview.app
+    Web.app
         { init = init
         , update = update
         , view = view
         , subscriptions = subscriptions
-        , window = { title = "Editor", size = ( 400, 300 ) }
+        , routes = []
+        , notFound = Edited Saved
         }
 "#;
 
-/// The JS custom-element source the widget fixture's `customElement` constructor
-/// points at — its mere presence satisfies the build-time file-existence gate.
+/// The JS custom-element source the widget fixture's constructor points at — its
+/// mere presence satisfies the build-time file-existence gate.
 const WIDGET_JS: &str = "export function mount(host, emit) { return {}; }\n";
 
 /// Shared error type for E2E helpers.
 type BoxError = Box<dyn std::error::Error + Send + Sync + 'static>;
 
-/// Compile a Ipê program string, build the emitted Rust project, and return
-/// the path to the compiled binary.
-///
-/// The emitted project has `webview` in its default feature list (set by
-/// `project::webview_cargo_toml`) so `e2e_support::build_rust_binary` — which runs
-/// a plain `cargo build` — picks up the `webview` feature without any extra
-/// `--features` flag.
+/// Build options that force the webview-native host — the same signal the CLI
+/// derives from a resolved `web desktop` delivery — with an explicit desktop
+/// window (there is no manifest on the single-file build path).
+fn webview_host_options() -> ipe::BuildOptions {
+    ipe::BuildOptions {
+        webview_host: true,
+        webview_window: Some(ipe_backend_rust::WebViewWindow {
+            title: "Counter".to_owned(),
+            width: 400,
+            height: 300,
+        }),
+        ..ipe::BuildOptions::from_env()
+    }
+}
+
+/// Compile a `Web.app` program string under a webview host, build the emitted
+/// Rust project, and return the path to the compiled binary.
 fn compile_and_build(test_name: &str, ipe_source: &str) -> Result<std::path::PathBuf, BoxError> {
-    let ipe_dir = std::env::temp_dir().join(format!("webview_e2e_{test_name}_ipe"));
-    let _ = std::fs::remove_dir_all(&ipe_dir);
-    std::fs::create_dir_all(&ipe_dir).map_err(|e| -> BoxError {
-        format!("{test_name}: cannot create ipe source dir: {e}").into()
-    })?;
-
-    let entry = ipe_dir.join("Main.ipe");
-    std::fs::write(&entry, ipe_source)
-        .map_err(|e| -> BoxError { format!("{test_name}: cannot write Main.ipe: {e}").into() })?;
-
-    let out_dir = std::env::temp_dir().join(format!("webview_e2e_{test_name}_emitted"));
-    let _ = std::fs::remove_dir_all(&out_dir);
-
-    let runtime = ipe::resolve_runtime()
-        .map_err(|e| -> BoxError { format!("{test_name}: runtime unavailable: {e}").into() })?;
-
-    ipe::build(&entry, &out_dir, &runtime)
-        .map_err(|e| -> BoxError { format!("{test_name}: ipe build failed: {e}").into() })?;
-
-    let exe = e2e_support::build_rust_binary(test_name, &out_dir)
-        .map_err(|e| -> BoxError { format!("{test_name}: cargo build failed: {e}").into() })?;
-
-    Ok(std::path::PathBuf::from(exe))
+    compile_and_build_with_files(test_name, ipe_source, &[])
 }
 
 /// As [`compile_and_build`], but first writes extra sibling files (e.g. the JS
-/// source a `customElement` constructor references) into the ipe source dir so
+/// source a `CustomElement` constructor references) into the ipe source dir so
 /// the build-time file-existence gate is satisfied.
 fn compile_and_build_with_files(
     test_name: &str,
@@ -241,7 +204,7 @@ fn compile_and_build_with_files(
     let runtime = ipe::resolve_runtime()
         .map_err(|e| -> BoxError { format!("{test_name}: runtime unavailable: {e}").into() })?;
 
-    ipe::build(&entry, &out_dir, &runtime)
+    ipe::build_with_options(&entry, &out_dir, &runtime, webview_host_options())
         .map_err(|e| -> BoxError { format!("{test_name}: ipe build failed: {e}").into() })?;
 
     let exe = e2e_support::build_rust_binary(test_name, &out_dir)
@@ -253,52 +216,39 @@ fn compile_and_build_with_files(
 /// Whether a `compile_and_build` failure is the Linux `wry`/`tao` link gap —
 /// the system `webkit2gtk`/`glib` dev packages missing from `pkg-config`'s
 /// search path — rather than a real codegen/link regression. Scoped to the
-/// exact `pkg-config` "not found" signature `wry`'s `glib-sys`/`gobject-sys`/
-/// `webkit2gtk-sys` build scripts emit, so an unrelated cargo build failure
+/// exact `pkg-config` "not found" signature so an unrelated cargo build failure
 /// (a genuine SEAL break) still fails the test loudly.
 #[must_use]
 fn is_missing_linux_webview_system_libs(err: &str) -> bool {
     err.contains("cargo build failed") && err.contains("pkg-config exited with status code 1")
 }
 
-/// Tier-A: ipe compiles the Ipe.WebView counter, the emitted Rust project
-/// links (with the `webview` + `wry` + `tao` deps from the promoted default
-/// features), and the binary exists.
+/// Tier-A: ipe compiles a `Web.app` under a webview host, the emitted Rust
+/// project links (with the `webview` + `wry` + `tao` deps from the promoted
+/// default features), and the binary exists.
 ///
 /// Assertions:
-/// - constrain: `Webview.app` correctly types the 5-field cfg
-///   (`init/update/view/subscriptions/window` with nested `{ title, size }`).
-/// - lower: the cfg record literal bypasses IPE-L0107 (same exemption
-///   as `Web.app` and `Tui.app`).
-/// - emit: `emit_webview_call` → `emit_webview_app_inner` (G4 gate:
-///   `window` is inline record, `size` is inline 2-tuple) → `webview_app(…)`.
-/// - manifest: `webview_cargo_toml` adds `"webview"` to default
-///   features, wires `webview = ["dep:wry", "dep:tao"]`, appends `wry` + `tao`
-///   optional deps, and the runtime `mod.rs` gets the `webview` module line.
-/// - G3: the emitted `fn main` uses `block_on_current_thread(ipe_main())`
-///   (anchor-asserted in `project::emit_program`; a zero-match aborts with
-///   `CompilerBug` rather than silently shipping the wrong executor).
+/// - emit: a webview-hosted `Web.app` renders the `WebViewApp` executor with the
+///   delivery-host window, and the `fn main` epilogue switches to `run_blocking`.
+/// - manifest: the emitted crate promotes `"webview"` to its default features,
+///   wires `webview = ["dep:wry", "dep:tao"]`, and the runtime `mod.rs` gets the
+///   `webview` module line.
 #[test]
 fn webview_counter_build_only() -> Result<(), BoxError> {
     if std::env::var("IPE_E2E").is_err() {
         return Ok(());
     }
 
-    // compile_and_build does ipe + cargo build; a clean binary path is the proof.
-    match compile_and_build("webview_build_only", IPE_WEBVIEW_COUNTER) {
+    match compile_and_build("webview_build_only", IPE_WEB_COUNTER) {
         Ok(_exe) => Ok(()),
         Err(e) if is_missing_linux_webview_system_libs(&e.to_string()) => {
-            // LOUD-SKIP, same posture as Tier-B's `xvfb-run`-absent skip:
-            // `wry`/`tao` link against the system `webkit2gtk`/`glib` dev
-            // packages on Linux, which this runner does not install
-            // `Ipe.WebView` is macOS-first; `wry`/`tao` link against
-            // system webkit2gtk/glib dev packages on Linux (an environment
-            // gap, not a codegen regression). This is an environment gap, not a
-            // codegen regression — THE SEAL (ipe exit-0 ⇒ cargo exit-0) is
-            // unproven on Linux here, never asserted false-green.
+            // LOUD-SKIP: `wry`/`tao` link against the system `webkit2gtk`/`glib`
+            // dev packages on Linux, which this runner may not install. An
+            // environment gap, not a codegen regression — THE SEAL is left
+            // unproven on this host, never asserted false-green.
             println!(
                 "LOUD-SKIP: Tier-A (webview build) — system `webkit2gtk`/`glib` dev \
-                 packages not installed on this runner (Ipe.WebView is macOS-first; \
+                 packages not installed on this runner (the webview host is macOS-first; \
                  Linux support is tracked, not yet CI-verified). Install \
                  `libwebkit2gtk-4.1-dev libglib2.0-dev` to run this test for real."
             );
@@ -308,18 +258,11 @@ fn webview_counter_build_only() -> Result<(), BoxError> {
     }
 }
 
-/// `WebView` SEAL golden: a `Ui.widget` whose down is a user record and up is a
-/// user ADT must ipe-accept AND cargo-build in a `WebView` program.
+/// SEAL golden: a `Ui.widget` whose down is a user record and up is a user ADT
+/// must ipe-accept AND cargo-build in a webview-hosted `Web.app`.
 ///
-/// `ui_widget_` requires `Down: serde::Serialize` and
-/// `Up: serde::de::DeserializeOwned`, but `webview_app` bounds the Model only by
-/// `Clone + Send`. The serde-derive gate in `emit_types` and the app-crate
-/// `serde` dependency gate in `project` therefore key on the browser SHAPE
-/// (`uses_web || uses_webview`), not the Model bound — otherwise a `WebView`
-/// widget program emits no derives and no `serde` dep and ipe-accepts yet
-/// cargo-fails (E0277 on the bounds, E0433 on the by-path `serde::` reference).
-/// A serde-legal widget seal type derives serde in a `WebView` build exactly as
-/// in a Web build; a clean `cargo build` is the proof.
+/// A serde-legal widget seal type derives serde in a webview build exactly as in
+/// a served `Web` build; a clean `cargo build` is the proof.
 #[test]
 fn webview_ui_widget_seal_builds() -> Result<(), BoxError> {
     if std::env::var("IPE_E2E").is_err() {
@@ -328,18 +271,14 @@ fn webview_ui_widget_seal_builds() -> Result<(), BoxError> {
 
     match compile_and_build_with_files(
         "webview_ui_widget_seal",
-        IPE_WEBVIEW_WIDGET,
+        IPE_WEB_WIDGET,
         &[("js/x.js", WIDGET_JS)],
     ) {
         Ok(_exe) => Ok(()),
         Err(e) if is_missing_linux_webview_system_libs(&e.to_string()) => {
-            // LOUD-SKIP, identical posture to Tier-A: `wry`/`tao` link against the
-            // system `webkit2gtk`/`glib` dev packages this runner may not install.
-            // An environment gap, never a false-green — THE SEAL is simply left
-            // unproven on this host, not asserted true.
             println!(
-                "LOUD-SKIP: WebView widget SEAL — system `webkit2gtk`/`glib` dev \
-                 packages not installed on this runner (Ipe.WebView is macOS-first; \
+                "LOUD-SKIP: webview widget SEAL — system `webkit2gtk`/`glib` dev \
+                 packages not installed on this runner (the webview host is macOS-first; \
                  Linux support is tracked, not yet CI-verified). Install \
                  `libwebkit2gtk-4.1-dev libglib2.0-dev` to run this test for real."
             );
@@ -350,23 +289,21 @@ fn webview_ui_widget_seal_builds() -> Result<(), BoxError> {
 }
 
 /// Tier-B: launch the compiled binary under `xvfb-run` to exercise the
-/// native-window-open path.  A timeout (exit 124) means the window stayed alive
+/// native-window-open path. A timeout (exit 124) means the window stayed alive
 /// long enough — that is the success condition.
 ///
 /// LOUD-SKIP conditions (prints a clear message, returns `Ok(())`):
 /// - `xvfb-run` is not on `$PATH` (headless CI without a virtual framebuffer).
-/// - `DISPLAY` and `WAYLAND_DISPLAY` are both unset AND `xvfb-run` is also
-///   absent — belt-and-suspenders for Linux container environments.
+/// - the system webview dev packages are not installed.
 ///
-/// The test is NOT a silent-green skip — it always prints whether it ran or
-/// was skipped and why.
+/// The test is NOT a silent-green skip — it always prints whether it ran or was
+/// skipped and why.
 #[test]
 fn webview_counter_tier_b() -> Result<(), BoxError> {
     if std::env::var("IPE_E2E").is_err() {
         return Ok(());
     }
 
-    // ── xvfb-run availability check ──────────────────────────────────────────
     let xvfb_available = std::process::Command::new("which")
         .arg("xvfb-run")
         .output()
@@ -380,8 +317,7 @@ fn webview_counter_tier_b() -> Result<(), BoxError> {
         return Ok(());
     }
 
-    // ── Compile + build ──────────────────────────────────────────────────────
-    let exe = match compile_and_build("webview_tier_b", IPE_WEBVIEW_COUNTER) {
+    let exe = match compile_and_build("webview_tier_b", IPE_WEB_COUNTER) {
         Ok(exe) => exe,
         Err(e) if is_missing_linux_webview_system_libs(&e.to_string()) => {
             println!(
@@ -394,11 +330,9 @@ fn webview_counter_tier_b() -> Result<(), BoxError> {
         Err(e) => return Err(e),
     };
 
-    // ── Spawn under xvfb-run with a hard timeout ─────────────────────────────
-    // `timeout 5 <binary>` is wrapped by `xvfb-run -a` which provides a
-    // virtual display.  Exit code 124 = timeout killed the process = the window
-    // stayed open = initial view painted = pass.  Any other non-zero exit
-    // (e.g. 1 = runtime Err from the webview stub) is a failure.
+    // `timeout 5 <binary>` wrapped by `xvfb-run -a` (a virtual display). Exit 124
+    // = timeout killed the process = the window stayed open = pass. Any other
+    // non-zero exit is a failure.
     let result = std::process::Command::new("xvfb-run")
         .arg("-a")
         .arg("timeout")
@@ -410,9 +344,6 @@ fn webview_counter_tier_b() -> Result<(), BoxError> {
     let exit_code = result.status.code().unwrap_or(-1);
 
     if exit_code == 124 || exit_code == 0 {
-        // 124 = killed by `timeout` after 5 s (window stayed open — pass).
-        // 0   = clean exit before timeout (unlikely for an event-loop app, but
-        //       not a failure).
         println!("Tier-B webview paint smoke: exit={exit_code} (pass — window stayed alive)");
         Ok(())
     } else {
@@ -425,92 +356,4 @@ fn webview_counter_tier_b() -> Result<(), BoxError> {
         )
         .into())
     }
-}
-
-/// The same counter, but with `window` let-bound instead of an inline record
-/// literal. Without the fix, the let-bound `window` reaches emit and fires the G4
-/// `Expr::Record` guard as a spanless `CompilerBug` (`IPE-I0001`); the
-/// lower gate instead rejects it with `IPE-L0119` at the offending span.
-const IPE_WEBVIEW_LET_BOUND_WINDOW: &str = r#"module Main exposing (main)
-
-import Ipe.Tea.WebView as Webview
-import Ipe.Ui as Ui
-import Ipe.Tea.WebView.Cmd as Cmd
-import Ipe.Tea.WebView.Sub as Sub
-import Ipe.String
-
-type Msg
-    = Increment
-    | Decrement
-
-type alias Model =
-    { count : Int }
-
-init : () -> ( Model, Cmd Msg )
-init _unit =
-    ( { count = 0 }, Cmd.none )
-
-update : Msg -> Model -> ( Model, Cmd Msg )
-update msg model =
-    case msg of
-        Increment ->
-            ( { model | count = model.count + 1 }, Cmd.none )
-        Decrement ->
-            ( { model | count = model.count - 1 }, Cmd.none )
-
-view : Model -> Element Msg
-view model =
-    Ui.column []
-        [ Ui.el [ Ui.onClick Increment ] (Ui.text "+")
-        , Ui.text (String.fromInt model.count)
-        , Ui.el [ Ui.onClick Decrement ] (Ui.text "-")
-        ]
-
-subscriptions : Model -> Sub Msg
-subscriptions _model =
-    Sub.none
-
-main =
-    let win = { title = "Counter", size = ( 400, 300 ) } in
-    Webview.app
-        { init = init
-        , update = update
-        , view = view
-        , subscriptions = subscriptions
-        , window = win
-        }
-"#;
-
-/// End-to-end guard: a let-bound `window` on `Webview.app` must produce a clean
-/// user-facing `IPE-L0119` diagnostic during lowering — NOT an
-/// internal-compiler-error (`IPE-I0001`) from the emit-stage G4 `Expr::Record`
-/// guard. Compile-only (`ipe::build`) — no `cargo build`, so it runs fast and
-/// needs no wry/tao toolchain, and it exercises the whole parse → canon → types
-/// → lower pipeline end-to-end (unlike the isolated lower unit test).
-#[test]
-fn let_bound_webview_window_is_ipe_l0119_not_ice() {
-    let dir = std::env::temp_dir().join("l0119_webview_window_ipe");
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).expect("create temp ipe dir");
-    let entry = dir.join("Main.ipe");
-    std::fs::write(&entry, IPE_WEBVIEW_LET_BOUND_WINDOW).expect("write Main.ipe");
-
-    let out = std::env::temp_dir().join("l0119_webview_window_out");
-    let _ = std::fs::remove_dir_all(&out);
-    let runtime = ipe::resolve_runtime().expect("runtime available");
-
-    let err = ipe::build(&entry, &out, &runtime)
-        .expect_err("a let-bound window must be rejected, not compiled");
-    // Borrow `err` so it stays available for the assertion message. `None` means
-    // the error was not a `Pipeline` diagnostic at all — a failure just as much as
-    // the wrong code (so the assertion is non-vacuous on both axes).
-    let code = match &err {
-        ipe::CliError::Pipeline { diag, .. } => Some(diag.code()),
-        _ => None,
-    };
-    assert_eq!(
-        code,
-        Some(ipe_diagnostics::IPE_L0119),
-        "expected a IPE-L0119 Pipeline diagnostic (not an ICE), got {err:?}"
-    );
 }

@@ -1564,8 +1564,7 @@ fn thread_config_into_entry(
 /// The TEA app-entry kernels, keyed `(qualifier, entry name)`. A module whose
 /// `main` head-calls one of these is a TEA app; any other `main` (a plain
 /// `Task`) is a Program. Kept in lockstep with the app-entry rows of
-/// `env::QUALIFIERS` (`Web.app`/`appRouted`, `Tui.app`, `Cli.app`,
-/// `WebView.app`).
+/// `env::QUALIFIERS` (`Web.app`/`appRouted`, `Tui.app`, `Cli.app`).
 ///
 /// Keyed on the kernel `(module, name)` a resolved `VarKernel` carries. `Tui.app`
 /// and `Cli.app` are the two terminal drive-axis entries; each maps to the one
@@ -1577,7 +1576,6 @@ const TEA_APP_ENTRIES: &[(&str, &str)] = &[
     ("Web", "appWith"),
     ("Tui", "app"),
     ("Cli", "app"),
-    ("WebView", "app"),
 ];
 
 /// The canonical shape (rendering family) name for a TEA surface segment. Most
@@ -1873,7 +1871,7 @@ fn app_shape_name(body: &canon::Expr, interner: &Interner) -> Option<&'static st
 ///
 /// `Cmd` / `Sub` are shape-specific and re-exported per shape under
 /// `Ipe.Tea.<Shape>.{Cmd,Sub}`. The app's shape is proven from its entry kernel
-/// (`Web.app` / `WebView.app` / `Tui.app` / `Cli.app`); an imported
+/// (`Web.app` / `Tui.app` / `Cli.app`); an imported
 /// `Ipe.Tea.<OtherShape>.{Cmd,Sub}` has no denotation in this app and fails
 /// closed here, naming the correct import path for the app's own shape.
 ///

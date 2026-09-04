@@ -323,12 +323,13 @@ pub struct Module {
     /// Set by `ipe_lower` when any call site resolves to a
     /// `KernelFn::is_console()` variant.
     pub uses_console: bool,
-    /// `true` when the lowerer detected at least one `Ipe.WebView`
-    /// kernel call (`Webview.app`) in the module's function bodies.
-    ///
-    /// Set by `ipe_lower` when any call site resolves to a
-    /// `KernelFn::is_webview()` variant.  Implies `uses_web` for the
-    /// runtime dependency chain (webview pulls live transitively).
+    /// `true` when the emit targets the webview-native host. No source kernel
+    /// sets this: the webview delivery is a HOST decision (`web desktop`)
+    /// threaded from the CLI into the backend, not a distinct source entry, so
+    /// `ipe_lower` always leaves this `false`. The backend ORs it with its
+    /// resolved `webview_host` signal to select the webview executor and the
+    /// `webview` runtime feature; kept here for the backend consumers that key
+    /// on it. Implies `uses_web` for the runtime dependency chain.
     pub uses_webview: bool,
     /// `true` when the lowerer detected at least one `Ipe.CssSafety`
     /// leaf security kernel (`CssSafety.safeValue` / `safePropName` /
@@ -1660,11 +1661,6 @@ pub enum IrType {
     /// so `mountApp : WebApp -> Route` can reject a `TuiApp` at compile time.
     /// Non-derivable, non-serde: the handle wraps live runtime state.
     WebApp,
-    /// The msg-erased result of `Ipe.Tea.WebView.app` — the `WebView`
-    /// counterpart of [`Self::WebApp`].
-    ///
-    /// Rendered as `ipe_runtime::tea::WebViewApp`.
-    WebViewApp,
     /// The msg-erased result of `Ipe.Tea.Tui.app` — a live TUI
     /// (terminal full-screen) app handle.
     ///
@@ -1931,7 +1927,6 @@ pub fn ir_type_is_derivable(
         // Opaque shape app leaves — each wraps live runtime state (event loops,
         // handles) that cannot be cloned, compared, or serialised.
         | IrType::WebApp
-        | IrType::WebViewApp
         | IrType::TuiApp
         | IrType::CliApp => false,
         // Transparent carriers: derivable iff every carried element is.
@@ -2157,7 +2152,6 @@ pub fn ir_type_is_serde(ty: &IrType, enum_serde: &impl Fn(&ModPath, Symbol) -> b
         // they cannot be serialised. A shape app handle in a Web Model field is
         // a compile-time IPE-L0120 rejection.
         | IrType::WebApp
-        | IrType::WebViewApp
         | IrType::TuiApp
         | IrType::CliApp => false,
         // Transparent carriers: serde-OK iff every carried element is.
@@ -2378,7 +2372,6 @@ pub const fn ir_type_feature_requirement(ty: &IrType) -> Option<RuntimeFeatureId
         | IrType::ProcessRunInPtyCfg
         // The shape app leaves render to the always-compiled `tea` module.
         | IrType::WebApp
-        | IrType::WebViewApp
         | IrType::TuiApp
         | IrType::CliApp
         // The `Ipe.Ui` / `Ipe.Html` carriers render to the always-compiled
@@ -2553,7 +2546,6 @@ pub fn carrier_is_clone(ty: &IrType) -> bool {
         // Opaque shape app leaves — live runtime handles wrapping event loops;
         // not `Clone`.
         | IrType::WebApp
-        | IrType::WebViewApp
         | IrType::TuiApp
         | IrType::CliApp => false,
         // Transparent carriers: `Clone` iff every carried element is.

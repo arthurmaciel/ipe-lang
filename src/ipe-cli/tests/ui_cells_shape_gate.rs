@@ -96,46 +96,6 @@ main =
         }
 ";
 
-/// `Ui.cells` inside a `Webview.app` view — must be rejected with IPE-L0132.
-const WEBVIEW_UI_CELLS: &str = r#"module Main exposing (main)
-
-import Ipe.Tea.WebView as Webview
-import Ipe.Ui as Ui
-import Ipe.Tea.WebView.Cmd as Cmd
-import Ipe.Tea.WebView.Sub as Sub
-
-type Msg = Increment
-
-type alias Model = { count : Int }
-
-init : () -> ( Model, Cmd Msg )
-init _unit =
-    ( { count = 0 }, Cmd.none )
-
-update : Msg -> Model -> ( Model, Cmd Msg )
-update msg model =
-    case msg of
-        Increment ->
-            ( { model | count = model.count + 1 }, Cmd.none )
-
-view : Model -> Element Msg
-view _model =
-    Ui.cells [ [ 'o', 'k' ] ]
-
-subscriptions : Model -> Sub Msg
-subscriptions _model =
-    Sub.none
-
-main =
-    Webview.app
-        { init = init
-        , update = update
-        , view = view
-        , subscriptions = subscriptions
-        , window = { title = "Cells", size = ( 400, 300 ) }
-        }
-"#;
-
 /// `Cells.cells` inside a `Tui.app` view — must be ACCEPTED (the raw
 /// cell grid is a terminal primitive; this is the shape it belongs to). A Tui
 /// view is `Screen Msg`, so the grid island is built with `Cells.cells`.
@@ -190,12 +150,6 @@ main =
 #[test]
 fn web_view_with_ui_cells_is_rejected() -> Result<(), BoxError> {
     assert_rejected_with("web_ui_cells", WEB_UI_CELLS, "IPE-L0132")
-}
-
-/// A `Webview.app` view painting `Ui.cells` is likewise rejected with IPE-L0132.
-#[test]
-fn webview_view_with_ui_cells_is_rejected() -> Result<(), BoxError> {
-    assert_rejected_with("webview_ui_cells", WEBVIEW_UI_CELLS, "IPE-L0132")
 }
 
 /// Non-regression control: `Cells.cells` under `Tui.app` is the
