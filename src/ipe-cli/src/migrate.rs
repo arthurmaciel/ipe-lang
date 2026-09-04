@@ -192,6 +192,7 @@ impl BuilderReader<'_> {
             has_rust_wrapper: false,
             programs: fields.programs,
             exposed_modules: fields.exposed_modules,
+            delivery: crate::project::DeliveryConfig::default(),
         })
     }
 
@@ -553,6 +554,7 @@ fn read_legacy_toml(text: &str, root: &Path) -> Result<ProjectManifest, CliError
         has_rust_wrapper: false,
         programs: Vec::new(),
         exposed_modules: Vec::new(),
+        delivery: crate::project::DeliveryConfig::default(),
     })
 }
 

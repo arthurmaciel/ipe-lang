@@ -2,13 +2,20 @@
 //!
 //! `ipe init <name>` creates `<name>/` and fills it; `ipe init .` (or no
 //! argument) scaffolds in the current directory, following the same convention
-//! as `cargo new` / `cargo init`. The scaffold is a minimal, working
-//! [`Ipe.Web`] counter: a Model holding an `Int` count, `Increment` /
-//! `Decrement` messages, and a two-button view — a real program that
-//! `ipe build` compiles and `ipe run` serves.
+//! as `cargo new` / `cargo init`.
 //!
-//! Templates are embedded at build time via [`include_str!`] (the sibling
-//! `templates/` directory), so scaffolding is self-contained and offline.
+//! On a TTY the command runs a short wizard: shape → (if web) runtime → host.
+//! The scaffold is the matching entry for that shape:
+//!
+//! - `script` — a `Task Error ()` main
+//! - `tui`    — a `Tui.app` main
+//! - `cli`    — a `Cli.app` main
+//! - `server` — a `Server.listen` main
+//! - `web`    — a `Web.app` counter (the default)
+//!
+//! Non-TTY runs and explicit `--shape` / `--runtime` / `--host` flags skip the
+//! wizard and use the supplied or default values. Templates are embedded at
+//! build time via [`include_str!`], so scaffolding is self-contained and offline.
 
 use std::fmt::Write as _;
 use std::io::{IsTerminal as _, Write as _};
@@ -16,31 +23,116 @@ use std::path::{Path, PathBuf};
 
 use crate::{CliError, health, style};
 
-/// `src/Main.ipe` — the working counter. No substitution: this is a complete
-/// program, byte-identical for every scaffolded application project.
-const MAIN_IPE: &str = include_str!("../templates/Main.ipe");
+// ── per-shape Main.ipe templates ─────────────────────────────────────────────
 
-/// Templates carrying a `{name}` hole filled from the project name.
-const PACKAGE_IPE: &str = include_str!("../templates/package.ipe.in");
+const MAIN_WEB_IPE: &str = include_str!("../templates/Main.ipe");
+const MAIN_TUI_IPE: &str = include_str!("../templates/Main.tui.ipe");
+const MAIN_CLI_IPE: &str = include_str!("../templates/Main.cli.ipe");
+const MAIN_SERVER_IPE: &str = include_str!("../templates/Main.server.ipe");
+const MAIN_SCRIPT_IPE: &str = include_str!("../templates/Main.script.ipe");
+
+// ── per-shape package.ipe templates (carry a `{name}` hole) ──────────────────
+
+const PACKAGE_WEB_IPE: &str = include_str!("../templates/package.web.ipe.in");
+const PACKAGE_TUI_IPE: &str = include_str!("../templates/package.tui.ipe.in");
+const PACKAGE_CLI_IPE: &str = include_str!("../templates/package.cli.ipe.in");
+const PACKAGE_SERVER_IPE: &str = include_str!("../templates/package.server.ipe.in");
+const PACKAGE_SCRIPT_IPE: &str = include_str!("../templates/package.script.ipe.in");
+
+// ── shared templates ──────────────────────────────────────────────────────────
+
 const README_MD: &str = include_str!("../templates/README.md.in");
 
-/// Library-scaffold templates (`ipe init --lib`), carrying `{name}` and
-/// `{module}` holes filled from the project name and its derived public module.
 const PACKAGE_LIB_IPE: &str = include_str!("../templates/package.lib.ipe.in");
 const LIB_IPE: &str = include_str!("../templates/Lib.ipe.in");
 const README_LIB_MD: &str = include_str!("../templates/README.lib.md.in");
 
-/// `.gitignore` — no substitution; the same ignore set fits every project.
 const GITIGNORE: &str = include_str!("../templates/gitignore.in");
-
-/// `AGENTS.md` — the Ipê authoring reference, embedded from the sibling
-/// `templates/` directory so every scaffolded project ships the same
-/// self-contained guide an agent or developer needs to write Ipê. No
-/// substitution: it is byte-identical for every project.
 const AGENTS_MD: &str = include_str!("../templates/AGENTS.md.in");
 
-/// One file `ipe init` manages: where it lives, relative to the target, and the
-/// content it would write there.
+// ── shape model ───────────────────────────────────────────────────────────────
+
+/// The five project shapes a wizard or `--shape` flag may select.
+///
+/// The shape is pinned by `main`'s entry function; the manifest's `delivery`
+/// sections provide per-host build configuration for each resolved target.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum InitShape {
+    /// `main = Web.app …` — DOM rendering, live or SPA.
+    #[default]
+    Web,
+    /// `main = Tui.app …` — terminal cells rendering.
+    Tui,
+    /// `main = Cli.app …` — terminal lines rendering.
+    Cli,
+    /// `main = Server.listen …` — HTTP server.
+    Server,
+    /// `main : Task Error ()` — plain task, no rendering.
+    Script,
+}
+
+impl InitShape {
+    /// Parse a `--shape` flag value. Returns `None` for an unrecognised token.
+    fn parse(s: &str) -> Option<Self> {
+        match s {
+            "web" => Some(Self::Web),
+            "tui" => Some(Self::Tui),
+            "cli" => Some(Self::Cli),
+            "server" => Some(Self::Server),
+            "script" => Some(Self::Script),
+            _ => None,
+        }
+    }
+
+    /// The display name used in prompts and messages.
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Web => "web",
+            Self::Tui => "tui",
+            Self::Cli => "cli",
+            Self::Server => "server",
+            Self::Script => "script",
+        }
+    }
+
+    /// The `Main.ipe` source for this shape (byte-stable, no substitution).
+    const fn main_ipe(self) -> &'static str {
+        match self {
+            Self::Web => MAIN_WEB_IPE,
+            Self::Tui => MAIN_TUI_IPE,
+            Self::Cli => MAIN_CLI_IPE,
+            Self::Server => MAIN_SERVER_IPE,
+            Self::Script => MAIN_SCRIPT_IPE,
+        }
+    }
+
+    /// The `package.ipe` template for this shape (carries a `{name}` hole).
+    const fn package_ipe(self) -> &'static str {
+        match self {
+            Self::Web => PACKAGE_WEB_IPE,
+            Self::Tui => PACKAGE_TUI_IPE,
+            Self::Cli => PACKAGE_CLI_IPE,
+            Self::Server => PACKAGE_SERVER_IPE,
+            Self::Script => PACKAGE_SCRIPT_IPE,
+        }
+    }
+}
+
+// ── init args ─────────────────────────────────────────────────────────────────
+
+/// Parsed and validated arguments for `ipe init`.
+struct InitArgs {
+    target_arg: Option<String>,
+    force: bool,
+    lib: bool,
+    /// When set by `--shape <shape>`, skips the wizard shape prompt.
+    shape: Option<InitShape>,
+}
+
+// ── managed-file model ────────────────────────────────────────────────────────
+
+/// One file `ipe init` manages: where it lives, relative to the target, and
+/// the content it would write there.
 struct ManagedFile {
     /// The file's path relative to the target directory.
     rel: PathBuf,
@@ -49,9 +141,8 @@ struct ManagedFile {
 }
 
 /// What `init` will do with a single managed file, decided once from its
-/// on-disk presence and the run's consent mode. Making the choice a value
-/// keeps the decision (which may prompt) separate from the write (which never
-/// prompts), so no write path re-derives consent.
+/// on-disk presence and the run's consent mode. Keeping the choice as a value
+/// separates the decision (which may prompt) from the write (which never prompts).
 enum FileAction {
     /// Write the file — it is absent, or the user consented to overwrite it.
     Write,
@@ -60,29 +151,73 @@ enum FileAction {
     Skip,
 }
 
-/// `ipe init [<name>] [--force]`.
+// ── entry point ───────────────────────────────────────────────────────────────
+
+/// `ipe init [<name>] [--force] [--lib] [--shape <shape>]`.
 ///
-/// With `<name>`, create the directory `<name>/` and scaffold inside it, using
-/// `<name>` as the project name. With no argument or `.`, scaffold in the
-/// current directory and take the project name from the directory's own name.
+/// With `<name>`, create the directory `<name>/` and scaffold inside it. With
+/// no argument or `.`, scaffold in the current directory.
 ///
-/// In an already-populated directory `init` never clobbers silently: for each
-/// managed file it asks per file — restoring a missing one (default yes) or
-/// overwriting an existing one (default no). `--force` overwrites every managed
-/// file without asking. A non-interactive run (no TTY) never prompts: it writes
-/// only the missing files and reports the existing ones it left untouched.
+/// On a TTY, without `--shape`, the wizard prompts for shape (and, for `web`,
+/// runtime and host) before scaffolding. With `--shape` or no TTY, the
+/// supplied shape (or the default, `web`) is used directly.
 ///
 /// # Errors
-/// Returns [`CliError::UsageOwned`] on an unrecognised flag or an unexpected
-/// argument, and [`CliError::Io`] on any filesystem failure.
+/// [`CliError::UsageOwned`] on an unrecognised flag or an unexpected argument;
+/// [`CliError::Io`] on any filesystem failure.
 pub fn run_init(rest: &[String]) -> Result<(), CliError> {
+    let args = parse_init_args(rest)?;
+
+    let target = args.target_arg.as_deref().unwrap_or(".");
+    let target_dir = PathBuf::from(target);
+    let project_name = project_name_for(&target_dir)?;
+
+    if args.lib {
+        let files = library_files(&project_name);
+        return run_scaffold(target, &target_dir, &project_name, &files, args.force, true);
+    }
+
+    let is_tty = std::io::stdin().is_terminal() && std::io::stdout().is_terminal();
+
+    // Determine shape: explicit flag → no wizard; TTY → wizard; else default.
+    let shape = match args.shape {
+        Some(s) => s,
+        None if is_tty && !args.force => wizard_shape()?,
+        None => InitShape::default(),
+    };
+
+    let files = managed_files(&project_name, shape);
+    run_scaffold(
+        target,
+        &target_dir,
+        &project_name,
+        &files,
+        args.force,
+        false,
+    )
+}
+
+/// Parse raw `init` arguments into [`InitArgs`].
+fn parse_init_args(rest: &[String]) -> Result<InitArgs, CliError> {
     let mut target_arg: Option<String> = None;
     let mut force = false;
     let mut lib = false;
-    for arg in rest {
+    let mut shape: Option<InitShape> = None;
+    let mut iter = rest.iter();
+    while let Some(arg) = iter.next() {
         match arg.as_str() {
             "--force" => force = true,
             "--lib" => lib = true,
+            "--shape" => {
+                let val = iter.next().ok_or(CliError::Usage(
+                    "ipe init: `--shape` requires a value: script, tui, cli, server, web",
+                ))?;
+                shape = Some(InitShape::parse(val).ok_or_else(|| {
+                    CliError::UsageOwned(format!(
+                        "ipe init: unknown shape `{val}` — expected: script, tui, cli, server, web"
+                    ))
+                })?);
+            }
             flag if flag.starts_with('-') => {
                 return Err(crate::cli_args::usage_unknown_flag("init", flag));
             }
@@ -92,51 +227,103 @@ pub fn run_init(rest: &[String]) -> Result<(), CliError> {
             }
         }
     }
+    Ok(InitArgs {
+        target_arg,
+        force,
+        lib,
+        shape,
+    })
+}
 
-    let target = target_arg.as_deref().unwrap_or(".");
-    let target_dir = PathBuf::from(target);
-    let project_name = project_name_for(&target_dir)?;
-
-    let files = if lib {
-        library_files(&project_name)
-    } else {
-        managed_files(&project_name)
+/// TTY wizard: prompt the user for shape and (for web) runtime+host.
+///
+/// Returns the selected [`InitShape`]. The wizard is only called when stdin
+/// and stdout are both TTYs and `--shape` was not passed.
+fn wizard_shape() -> Result<InitShape, CliError> {
+    print!(
+        "{}",
+        style::gutter(
+            "What kind of program is this?\n\
+             \n\
+             [1] web    — browser / desktop / mobile app  (default)\n\
+             [2] tui    — terminal UI with cells\n\
+             [3] cli    — command-line program with text output\n\
+             [4] server — HTTP server\n\
+             [5] script — plain task, no rendering\n\
+             \n\
+             Shape [1]: "
+        )
+    );
+    let _ = std::io::stdout().flush();
+    let line = read_line_trimmed();
+    let shape = match line.as_deref().unwrap_or("") {
+        "" | "1" | "web" => InitShape::Web,
+        "2" | "tui" => InitShape::Tui,
+        "3" | "cli" => InitShape::Cli,
+        "4" | "server" => InitShape::Server,
+        "5" | "script" => InitShape::Script,
+        other => {
+            return Err(CliError::UsageOwned(format!(
+                "ipe init: unknown shape `{other}` — expected 1-5 or one of: \
+                 web, tui, cli, server, script"
+            )));
+        }
     };
-    let fresh = is_fresh_target(&target_dir)?;
+    Ok(shape)
+}
+
+/// Read one trimmed line from stdin, or `None` on EOF / read error.
+fn read_line_trimmed() -> Option<String> {
+    let mut buf = String::new();
+    match std::io::stdin().read_line(&mut buf) {
+        Ok(0) | Err(_) => None,
+        Ok(_) => Some(buf.trim_end_matches(['\n', '\r']).to_owned()),
+    }
+}
+
+// ── scaffold helpers ─────────────────────────────────────────────────────────
+
+/// Run the scaffold: fresh → write all; existing → reconcile.
+fn run_scaffold(
+    target_arg: &str,
+    target_dir: &Path,
+    project_name: &str,
+    files: &[ManagedFile],
+    force: bool,
+    lib: bool,
+) -> Result<(), CliError> {
+    let fresh = is_fresh_target(target_dir)?;
     if fresh || force {
-        scaffold(&target_dir, &files)?;
-        let interactive = should_offer_health_check(
-            std::io::stdin().is_terminal() && std::io::stdout().is_terminal(),
-            force,
-        );
+        scaffold(target_dir, files)?;
+        let is_tty = std::io::stdin().is_terminal() && std::io::stdout().is_terminal();
+        let interactive = should_offer_health_check(is_tty, force);
         if lib {
-            print_next_steps_lib(target, &project_name);
+            print_next_steps_lib(target_arg, project_name);
         } else {
-            print_next_steps(target, &project_name, interactive);
+            print_next_steps(target_arg, project_name, interactive);
         }
         if interactive && prompt_yes_no("Verify your toolchain now?", true) {
-            // Ignore a critical-check exit from health inline: the scaffold
-            // succeeded; a missing Rust toolchain is shown by the report.
             let _ = health::run_health_inline();
         }
     } else {
-        reconcile_existing(&target_dir, &files)?;
+        reconcile_existing(target_dir, files)?;
     }
     Ok(())
 }
 
-/// The complete set of files `init` writes, each with its final content
-/// (`{name}` already substituted). The single source of truth for both a fresh
-/// scaffold and a per-file reconcile of an existing project.
-fn managed_files(project_name: &str) -> Vec<ManagedFile> {
+/// The complete set of files `init` writes for an application project.
+///
+/// `shape` selects which `Main.ipe` and `package.ipe` are scaffolded; all
+/// other files are shape-independent.
+fn managed_files(project_name: &str, shape: InitShape) -> Vec<ManagedFile> {
     vec![
         ManagedFile {
             rel: PathBuf::from("package.ipe"),
-            content: PACKAGE_IPE.replace("{name}", project_name),
+            content: shape.package_ipe().replace("{name}", project_name),
         },
         ManagedFile {
             rel: PathBuf::from("src").join("Main.ipe"),
-            content: MAIN_IPE.to_owned(),
+            content: shape.main_ipe().to_owned(),
         },
         ManagedFile {
             rel: PathBuf::from("README.md"),
@@ -153,10 +340,7 @@ fn managed_files(project_name: &str) -> Vec<ManagedFile> {
     ]
 }
 
-/// The complete set of files `ipe init --lib` writes: a library `package.ipe`
-/// declaring `exposedModules`, a public `src/<Module>.ipe`, a library README,
-/// and the shared `.gitignore` / `AGENTS.md`. The public module name is derived
-/// from the project name via [`module_name_for`].
+/// The complete set of files `ipe init --lib` writes.
 fn library_files(project_name: &str) -> Vec<ManagedFile> {
     let module = module_name_for(project_name);
     // `{name}` / `{module}` are template placeholders substituted by `.replace`,
@@ -193,12 +377,6 @@ fn library_files(project_name: &str) -> Vec<ManagedFile> {
 }
 
 /// Derive a valid single-segment Ipê module name from a project name.
-///
-/// The project name is split on non-alphanumeric boundaries; each run is
-/// upper-cased on its first letter and concatenated (`my-cool-lib` → `MyCoolLib`).
-/// A name that yields no usable segment (all punctuation, or a leading digit that
-/// leaves nothing) falls back to `Lib`, so the scaffolded module name is always a
-/// valid `[A-Z][A-Za-z0-9_]*` segment the manifest reader and compiler accept.
 fn module_name_for(project_name: &str) -> String {
     let mut out = String::new();
     for word in project_name.split(|c: char| !c.is_ascii_alphanumeric()) {
@@ -208,8 +386,6 @@ fn module_name_for(project_name: &str) -> String {
             out.extend(chars);
         }
     }
-    // Ensure the first character is an ASCII uppercase letter (a leading digit is
-    // not a valid module segment). Fall back to `Lib` when nothing usable remains.
     match out.chars().next() {
         Some(c) if c.is_ascii_uppercase() => out,
         _ => "Lib".to_owned(),
@@ -217,8 +393,7 @@ fn module_name_for(project_name: &str) -> String {
 }
 
 /// Whether the target holds none of `init`'s footprint: no manifest
-/// (`package.ipe` or a legacy `ipe.toml`) and no non-empty `src/`. A fresh (or
-/// absent) target scaffolds without prompting.
+/// (`package.ipe` or a legacy `ipe.toml`) and no non-empty `src/`.
 fn is_fresh_target(target_dir: &Path) -> Result<bool, CliError> {
     if target_dir.join("package.ipe").exists() || target_dir.join("ipe.toml").exists() {
         return Ok(false);
@@ -236,11 +411,9 @@ fn is_fresh_target(target_dir: &Path) -> Result<bool, CliError> {
     Ok(true)
 }
 
-/// Reconcile an already-populated target against the managed set, one file at a
-/// time. An interactive run asks per file (restore a missing file, default yes;
-/// overwrite an existing one, default no). A non-interactive run writes only the
-/// missing files and reports every existing file it left untouched — it never
-/// overwrites without a visible decision.
+/// Reconcile an already-populated target against the managed set, one file at
+/// a time. Interactive runs prompt per file; non-interactive runs write only
+/// missing files and report the existing ones left untouched.
 fn reconcile_existing(target_dir: &Path, files: &[ManagedFile]) -> Result<(), CliError> {
     let interactive = std::io::stdin().is_terminal() && std::io::stdout().is_terminal();
     let mut restored: Vec<PathBuf> = Vec::new();
@@ -266,20 +439,15 @@ fn reconcile_existing(target_dir: &Path, files: &[ManagedFile]) -> Result<(), Cl
     Ok(())
 }
 
-/// Decide what to do with one managed file. A missing file defaults to being
-/// restored; an existing file defaults to being left alone — the fail-closed
-/// choice, so a project's own edits are never overwritten without an explicit
-/// yes. An interactive run may override either default through a per-file
-/// prompt; a non-interactive run takes the default silently.
+/// Decide what to do with one managed file. Missing files default to being
+/// restored; existing ones default to being left alone.
 fn decide_action(rel: &Path, exists: bool, interactive: bool) -> FileAction {
     if !exists {
-        // Restoring a missing file: default yes.
         if !interactive || prompt_yes_no(&format!("Restore {}?", rel.display()), true) {
             return FileAction::Write;
         }
         return FileAction::Skip;
     }
-    // Overwriting an existing file: default no, and never without a prompt.
     if interactive && prompt_yes_no(&format!("Overwrite {}?", rel.display()), false) {
         FileAction::Write
     } else {
@@ -287,8 +455,7 @@ fn decide_action(rel: &Path, exists: bool, interactive: bool) -> FileAction {
     }
 }
 
-/// Ask a `[Y/n]` / `[y/N]` question and read the answer, echoing the default in
-/// the brackets. An empty answer (a bare Enter) takes `default`.
+/// Ask a `[Y/n]` / `[y/N]` question and read the answer.
 fn prompt_yes_no(question: &str, default: bool) -> bool {
     let hint = if default { "[Y/n]" } else { "[y/N]" };
     print!("{}", style::gutter(&format!("{question} {hint} ")));
@@ -296,9 +463,7 @@ fn prompt_yes_no(question: &str, default: bool) -> bool {
     crate::read_yes_no_default(default)
 }
 
-/// Report what `reconcile_existing` did: the files restored and the ones left in
-/// place. A non-interactive run frames the skipped set as "would change" so a
-/// script's operator sees what an interactive run would have offered.
+/// Report what `reconcile_existing` did.
 fn print_reconcile_summary(interactive: bool, restored: &[PathBuf], skipped: &[PathBuf]) {
     let mut body = String::new();
     for rel in restored {
@@ -317,9 +482,7 @@ fn print_reconcile_summary(interactive: bool, restored: &[PathBuf], skipped: &[P
     print!("{}", style::frame(&style::gutter(&body)));
 }
 
-/// Derive the project name: the last path component of the target, resolved to
-/// an absolute path first so `.` yields the current directory's own name rather
-/// than the literal `"."`.
+/// Derive the project name from the last path component of the resolved target.
 fn project_name_for(target_dir: &Path) -> Result<String, CliError> {
     let absolute = if target_dir.is_absolute() {
         target_dir.to_path_buf()
@@ -343,8 +506,7 @@ fn project_name_for(target_dir: &Path) -> Result<String, CliError> {
     Ok(name)
 }
 
-/// Write every managed file into a fresh (or force-overwritten) target,
-/// creating each file's parent directory as needed.
+/// Write every managed file into a fresh (or force-overwritten) target.
 fn scaffold(target_dir: &Path, files: &[ManagedFile]) -> Result<(), CliError> {
     for file in files {
         let path = target_dir.join(&file.rel);
@@ -371,18 +533,11 @@ fn write_file(path: &Path, contents: &str) -> Result<(), CliError> {
 }
 
 /// Whether to offer the interactive `ipe health` check after scaffolding.
-///
-/// The offer appears only when the user is sitting at a terminal and did not
-/// request a non-interactive `--force` run. Non-TTY and forced runs print the
-/// static health tip instead.
 const fn should_offer_health_check(is_tty: bool, force: bool) -> bool {
     is_tty && !force
 }
 
-/// Print the friendly next-steps message. When scaffolding in place (`.`), the
-/// `cd` step is omitted. `interactive` controls whether the static `ipe health`
-/// tip is included: an interactive run replaces it with a live prompt, so the
-/// tip is omitted to avoid redundancy.
+/// Print the friendly next-steps message.
 fn print_next_steps(target_arg: &str, project_name: &str, interactive: bool) {
     let run_cmd = if target_arg == "." {
         "    ipe run".to_owned()
@@ -406,8 +561,7 @@ fn print_next_steps(target_arg: &str, project_name: &str, interactive: bool) {
     print!("{}", style::frame(&style::gutter(&body)));
 }
 
-/// Print the next-steps message for a freshly scaffolded library. A library has
-/// no `ipe run` UI; the guidance is to build it and add public modules.
+/// Print the next-steps message for a freshly scaffolded library.
 fn print_next_steps_lib(target_arg: &str, project_name: &str) {
     let build_cmd = if target_arg == "." {
         "    ipe build".to_owned()
@@ -425,23 +579,14 @@ fn print_next_steps_lib(target_arg: &str, project_name: &str) {
     print!("{}", style::frame(&style::gutter(&body)));
 }
 
+// ── tests ─────────────────────────────────────────────────────────────────────
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[test]
-    fn scaffolded_manifest_is_package_ipe_that_re_parses() {
-        // `init` writes `package.ipe` (not `ipe.toml`), and its content must be a
-        // valid manifest the syntactic reader accepts and reads the project name
-        // back from.
-        let files = managed_files("demo-app");
-        let manifest = files
-            .iter()
-            .find(|f| f.rel == Path::new("package.ipe"))
-            .expect("init writes a package.ipe");
-
-        let root = std::env::temp_dir().join("ipe_init_roundtrip");
-        let _ = std::fs::remove_dir_all(&root);
+    // Helper: write a minimal src/Main.ipe so the manifest reader's src-root check passes.
+    fn write_stub_src(root: &Path) {
         let src = root.join("src");
         std::fs::create_dir_all(&src).expect("create src/");
         std::fs::write(
@@ -449,33 +594,180 @@ mod tests {
             "module Main exposing (main)\nmain = 0\n",
         )
         .expect("write Main.ipe");
+    }
+
+    #[test]
+    fn scaffolded_web_manifest_is_package_ipe_that_re_parses() {
+        let files = managed_files("demo-app", InitShape::Web);
+        let manifest = files
+            .iter()
+            .find(|f| f.rel == Path::new("package.ipe"))
+            .expect("init writes a package.ipe");
+
+        let root = std::env::temp_dir().join("ipe_init_web_roundtrip");
+        let _ = std::fs::remove_dir_all(&root);
+        write_stub_src(&root);
         let path = root.join("package.ipe");
         std::fs::write(&path, &manifest.content).expect("write scaffolded package.ipe");
 
         let parsed = crate::project::parse_manifest(&path).expect("scaffolded manifest re-parses");
         assert_eq!(parsed.name, "demo-app");
+        assert_eq!(parsed.delivery.desktop.width, 1024);
+        assert_eq!(parsed.delivery.desktop.height, 768);
+        assert_eq!(parsed.delivery.browser.base_path, "/");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn scaffolded_tui_manifest_re_parses() {
+        let files = managed_files("tui-app", InitShape::Tui);
+        let manifest = files
+            .iter()
+            .find(|f| f.rel == Path::new("package.ipe"))
+            .expect("init writes a package.ipe");
+
+        let root = std::env::temp_dir().join("ipe_init_tui_roundtrip");
+        let _ = std::fs::remove_dir_all(&root);
+        write_stub_src(&root);
+        let path = root.join("package.ipe");
+        std::fs::write(&path, &manifest.content).expect("write scaffolded package.ipe");
+
+        let parsed =
+            crate::project::parse_manifest(&path).expect("scaffolded tui manifest re-parses");
+        assert_eq!(parsed.name, "tui-app");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn scaffolded_script_manifest_re_parses() {
+        let files = managed_files("my-script", InitShape::Script);
+        let manifest = files
+            .iter()
+            .find(|f| f.rel == Path::new("package.ipe"))
+            .expect("init writes a package.ipe");
+
+        let root = std::env::temp_dir().join("ipe_init_script_roundtrip");
+        let _ = std::fs::remove_dir_all(&root);
+        write_stub_src(&root);
+        let path = root.join("package.ipe");
+        std::fs::write(&path, &manifest.content).expect("write scaffolded package.ipe");
+
+        let parsed =
+            crate::project::parse_manifest(&path).expect("scaffolded script manifest re-parses");
+        assert_eq!(parsed.name, "my-script");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn each_shape_scaffolds_a_distinct_main_ipe() {
+        let web = managed_files("x", InitShape::Web);
+        let tui = managed_files("x", InitShape::Tui);
+        let cli = managed_files("x", InitShape::Cli);
+        let server = managed_files("x", InitShape::Server);
+        let script = managed_files("x", InitShape::Script);
+
+        let main = |files: &[ManagedFile]| {
+            files
+                .iter()
+                .find(|f| f.rel == Path::new("src/Main.ipe"))
+                .map(|f| f.content.clone())
+                .expect("a Main.ipe is scaffolded")
+        };
+
+        let web_main = main(&web);
+        let tui_main = main(&tui);
+        let cli_main = main(&cli);
+        let server_main = main(&server);
+        let script_main = main(&script);
+
+        // Each shape uses a different entry point.
+        assert!(
+            web_main.contains("Web.app") || web_main.contains("app"),
+            "web uses Web.app"
+        );
+        assert!(
+            tui_main.contains("Tui.app") || tui_main.contains("Tui"),
+            "tui uses Tui.app"
+        );
+        assert!(
+            cli_main.contains("Cli.app") || cli_main.contains("Cli"),
+            "cli uses Cli.app"
+        );
+        assert!(
+            server_main.contains("Server.listen"),
+            "server uses Server.listen"
+        );
+        assert!(script_main.contains("Task"), "script uses Task");
+
+        // All five are distinct.
+        let mains = [&web_main, &tui_main, &cli_main, &server_main, &script_main];
+        for (i, a) in mains.iter().enumerate() {
+            for (j, b) in mains.iter().enumerate() {
+                if i != j {
+                    assert_ne!(a, b, "shapes {i} and {j} produce identical Main.ipe");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn shape_parse_round_trips() {
+        for (token, expected) in [
+            ("web", InitShape::Web),
+            ("tui", InitShape::Tui),
+            ("cli", InitShape::Cli),
+            ("server", InitShape::Server),
+            ("script", InitShape::Script),
+        ] {
+            assert_eq!(InitShape::parse(token), Some(expected), "parse {token}");
+            assert_eq!(expected.label(), token, "label {token}");
+        }
+        assert_eq!(InitShape::parse("unknown"), None, "unknown shape is None");
+    }
+
+    #[test]
+    fn delivery_defaults_in_scaffolded_manifest() {
+        let files = managed_files("proj", InitShape::Web);
+        let manifest = files
+            .iter()
+            .find(|f| f.rel == Path::new("package.ipe"))
+            .expect("package.ipe present");
+
+        let root = std::env::temp_dir().join("ipe_init_delivery_defaults");
+        let _ = std::fs::remove_dir_all(&root);
+        write_stub_src(&root);
+        let path = root.join("package.ipe");
+        std::fs::write(&path, &manifest.content).unwrap();
+
+        let parsed = crate::project::parse_manifest(&path).expect("re-parses");
+        // desktop defaults
+        assert_eq!(parsed.delivery.desktop.width, 1024);
+        assert_eq!(parsed.delivery.desktop.height, 768);
+        assert_eq!(parsed.delivery.desktop.title, "proj");
+        // browser default
+        assert_eq!(parsed.delivery.browser.base_path, "/");
+        // mobile default orientation
+        assert_eq!(
+            parsed.delivery.mobile.orientation,
+            crate::project::ScreenOrientation::Portrait
+        );
         let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
     fn library_scaffold_manifest_declares_exposed_modules_and_re_parses() {
-        // `ipe init --lib` writes a `package.ipe` declaring `exposedModules`, and
-        // its content must be a valid manifest the syntactic reader accepts, with
-        // the derived public module in its exposed set.
         let files = library_files("my-cool-lib");
         let manifest = files
             .iter()
             .find(|f| f.rel == Path::new("package.ipe"))
             .expect("init --lib writes a package.ipe");
 
-        // The public source module is scaffolded under src/ at the derived name.
         assert!(
             files
                 .iter()
                 .any(|f| f.rel == Path::new("src").join("MyCoolLib.ipe")),
             "the public module src/MyCoolLib.ipe is scaffolded"
         );
-        // No runnable Main.ipe for a library.
         assert!(
             !files
                 .iter()
@@ -487,7 +779,6 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
         let src = root.join("src");
         std::fs::create_dir_all(&src).expect("create src/");
-        // The reader's source-root existence check needs src/ to exist.
         let path = root.join("package.ipe");
         std::fs::write(&path, &manifest.content).expect("write scaffolded package.ipe");
 
@@ -508,38 +799,49 @@ mod tests {
         assert_eq!(module_name_for("json"), "Json");
         assert_eq!(module_name_for("ipe_http"), "IpeHttp");
         assert_eq!(module_name_for("Already"), "Already");
-        // A name that yields no usable leading letter falls back to `Lib`.
         assert_eq!(module_name_for("123"), "Lib");
         assert_eq!(module_name_for("---"), "Lib");
     }
 
     #[test]
     fn managed_set_omits_legacy_ipe_toml() {
-        let files = managed_files("x");
+        let files = managed_files("x", InitShape::default());
         assert!(
             !files.iter().any(|f| f.rel == Path::new("ipe.toml")),
             "init must not scaffold a legacy ipe.toml"
         );
     }
 
-    // --- should_offer_health_check ---
-
     #[test]
     fn health_offer_requires_tty() {
-        // Non-TTY: never prompt, regardless of force.
         assert!(!should_offer_health_check(false, false));
         assert!(!should_offer_health_check(false, true));
     }
 
     #[test]
     fn health_offer_suppressed_by_force() {
-        // --force is a non-interactive mode: no prompt even on a TTY.
         assert!(!should_offer_health_check(true, true));
     }
 
     #[test]
     fn health_offer_on_interactive_non_forced() {
-        // TTY + no --force: the one case that prompts.
         assert!(should_offer_health_check(true, false));
+    }
+
+    #[test]
+    fn all_shape_package_templates_contain_name_hole() {
+        for shape in [
+            InitShape::Web,
+            InitShape::Tui,
+            InitShape::Cli,
+            InitShape::Server,
+            InitShape::Script,
+        ] {
+            assert!(
+                shape.package_ipe().contains("{name}"),
+                "package template for shape '{}' is missing the {{name}} hole",
+                shape.label()
+            );
+        }
     }
 }

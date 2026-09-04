@@ -1,0 +1,54 @@
+module Main exposing (main)
+
+import Ipe.Tea.Tui exposing (app)
+import Ipe.Tea.Tui.Cmd as Cmd
+import Ipe.Tea.Tui.Sub as Sub
+import Ipe.Tea.Tui.Ui as Ui
+
+
+type Msg
+    = Increment
+    | Decrement
+
+
+type alias Model =
+    { count : Int
+    }
+
+
+init : ( Model, Cmd Msg )
+init =
+    ( { count = 0 }, Cmd.none )
+
+
+update : Msg -> Model -> ( Model, Cmd Msg )
+update msg model =
+    case msg of
+        Increment ->
+            ( { model | count = model.count + 1 }, Cmd.none )
+
+        Decrement ->
+            ( { model | count = model.count - 1 }, Cmd.none )
+
+
+subscriptions : Model -> Sub Msg
+subscriptions _model =
+    Sub.none
+
+
+view : Model -> Screen Msg
+view model =
+    Ui.column
+        []
+        [ Ui.text "Ipê counter"
+        , Ui.text ("[+] count: " ++ String.fromInt model.count ++ " [-]")
+        ]
+
+
+main =
+    app
+        { init = init
+        , update = update
+        , view = view
+        , subscriptions = subscriptions
+        }
