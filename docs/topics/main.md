@@ -39,10 +39,10 @@ main =
 ```ipe
 main : Task Error ()
 main =
-    Terminal.appScreen { init = init, update = update, view = view }
+    Tui.app { init = init, update = update, view = view }
 ```
 
-The shape entry function (`Web.app`, `Terminal.appScreen`, etc.) returns a
+The shape entry function (`Web.app`, `Tui.app`, etc.) returns a
 `Task Error ()` — the runtime runs it the same way a plain script runs.
 
 ## Idiom: main must be `Task Error ()`
