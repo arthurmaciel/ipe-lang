@@ -178,6 +178,7 @@ impl WarmSession {
                 false,
                 String::new(),
                 false,
+                false,
             ));
         }
         self.demand(user)
@@ -190,7 +191,6 @@ fn first_diff(a: &str, b: &str) -> String {
             return format!("line {}:\n  warm: {la}\n  cold: {lb}", i + 1);
         }
     }
-    false,
     format!(
         "line counts differ: warm {} vs cold {}",
         a.lines().count(),

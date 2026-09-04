@@ -3309,12 +3309,12 @@ fn classify_entry_shape(entry_arg: &Path) -> Result<delivery::Shape, CliError> {
     let entry_file = resolve_analysis_entry(entry_arg)?;
     let source = io_bounded::read_to_string_capped(&entry_file, io_bounded::SOURCE_READ_CAP)?;
     let mut interner = Interner::new();
-    let shape = match ipe_parse::parse_module(&source, &mut interner) {
-        Ok(module) => ipe_canon::shape_source::classify_main_shape(&module, &interner),
-        // A parse failure is the compile pipeline's to report (with a blamed
-        // span); the shape cross-check simply does not fire.
-        Err(_) => ipe_canon::shape_source::MainShape::Script,
-    };
+    // A parse failure is the compile pipeline's to report (with a blamed span);
+    // the shape cross-check simply does not fire, so classify as a script.
+    let shape = ipe_parse::parse_module(&source, &mut interner).map_or(
+        ipe_canon::shape_source::MainShape::Script,
+        |module| ipe_canon::shape_source::classify_main_shape(&module, &interner),
+    );
     Ok(delivery::Shape::from_main(shape))
 }
 
@@ -5878,10 +5878,10 @@ fn pack_desktop(explicit_os: Option<&str>, path: Option<&str>) -> Result<(), Cli
         None => match classify_entry_shape(&root)? {
             delivery::Shape::Web => pack::desktop::AppShape::WebView,
             delivery::Shape::Tui | delivery::Shape::Cli => pack::desktop::AppShape::Terminal,
-            delivery::Shape::Script => pack::desktop::AppShape::Program,
-            // A `server` main renders http, not a desktop window; classify it as
-            // a plain program so the webview gate refuses it by name.
-            delivery::Shape::Server => pack::desktop::AppShape::Program,
+            // A `script` renders nothing and a `server` main renders http, not a
+            // desktop window; both classify as a plain program so the webview
+            // gate refuses them by name.
+            delivery::Shape::Script | delivery::Shape::Server => pack::desktop::AppShape::Program,
         },
     };
     pack::desktop::require_webview(shape).map_err(|r| CliError::UsageOwned(r.to_string()))?;

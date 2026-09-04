@@ -12,9 +12,10 @@
 use ipe_intern::Interner;
 use ipe_syntax::{Expr, Expr_, Module};
 
-/// The rendering shape a `main` pins, as read from the parse tree. Mirrors the
-/// delivery grammar's shape axis: the four non-web shapes plus the DOM `Web`
-/// shape (the only one with a delivery runtime choice).
+/// The rendering shape a `main` pins, as read from the parse tree.
+///
+/// Mirrors the delivery grammar's shape axis: the four non-web shapes plus the
+/// DOM `Web` shape (the only one with a delivery runtime choice).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MainShape {
     /// A plain `main : Task Error ()` — renders nothing.
@@ -78,10 +79,9 @@ fn head_shape(body: &Expr, interner: &Interner) -> Option<MainShape> {
         match &node.value {
             // `entry cfg` — the callee is the head.
             Expr_::Call(callee, _) => node = callee,
-            // `\arg -> entry cfg` — the lambda body is the head.
-            Expr_::Lambda(_, inner) => node = inner,
-            // `let … in entry cfg` — the `in` body is the head.
-            Expr_::Let(_, inner) => node = inner,
+            // `\arg -> entry cfg` (lambda body) and `let … in entry cfg` (the
+            // `in` body) both peel to the inner expression.
+            Expr_::Lambda(_, inner) | Expr_::Let(_, inner) => node = inner,
             // `Web.app` / `Tui.app` / … at the head pins its shape.
             Expr_::VarQual(qual, name) => {
                 let (q, n) = (interner.resolve(*qual)?, interner.resolve(*name)?);

@@ -2295,6 +2295,7 @@ mod tests {
             false,
             String::new(),
             false,
+            false,
         )
         .expect("EmitCtx::build");
         f(&ctx)
@@ -2901,6 +2902,7 @@ mod tests {
             None,
             false,
             String::new(),
+            false,
             false,
         )
         .expect("EmitCtx::build");
@@ -3527,6 +3529,7 @@ mod tests {
             false,
             String::new(),
             false,
+            false,
         )
         .expect("EmitCtx::build");
         let expr = Expr::Lambda {
@@ -3923,6 +3926,7 @@ mod tests {
             None,
             false,
             String::new(),
+            false,
             false,
         )
         .expect("EmitCtx::build");

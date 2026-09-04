@@ -150,9 +150,11 @@ impl Host {
 }
 
 /// A fully-resolved delivery target — a shape, its (web-only) runtime, and a
-/// valid host. Constructible only through [`Delivery::resolve`], so no invalid
-/// combination can be built. The runtime is `None` for every non-web shape (the
-/// axis does not exist for them).
+/// valid host.
+///
+/// Constructible only through [`Delivery::resolve`], so no invalid combination
+/// can be built. The runtime is `None` for every non-web shape (the axis does
+/// not exist for them).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Delivery {
     shape: Shape,
@@ -298,7 +300,7 @@ impl Delivery {
 impl fmt::Display for Delivery {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.shape.word())?;
-        if let Some(Runtime::Spa) = self.runtime {
+        if self.runtime == Some(Runtime::Spa) {
             f.write_str(" spa")?;
         }
         if let Some(word) = self.host.word() {
@@ -308,10 +310,11 @@ impl fmt::Display for Delivery {
     }
 }
 
-/// A pedagogical delivery refusal (spec § 6): each variant names the problem,
-/// explains the two-axis big picture in a sentence, and suggests the fix. This
-/// enum is the message-set single source of truth — every delivery diagnostic
-/// is one of these, phrased once.
+/// A pedagogical delivery refusal (spec § 6).
+///
+/// Each variant names the problem, explains the two-axis big picture in a
+/// sentence, and suggests the fix. This enum is the message-set single source of
+/// truth — every delivery diagnostic is one of these, phrased once.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DeliveryError {
     /// The leading `[shape]` positional names a different shape than `main`.

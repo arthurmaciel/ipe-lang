@@ -202,6 +202,10 @@ pub enum FfiGluePayload {
 /// Holds a reference to the [`Interner`] used to build the program, so it can
 /// resolve the [`Symbol`]s carried by the IR without widening the
 /// [`Backend::emit`] signature.
+// Each boolean is an independent emit-shape switch (production gate, debugger,
+// hot-appearance, webview-host) set by its own `with_*` builder; a bit-flags
+// enum would obscure that each is toggled in isolation.
+#[allow(clippy::struct_excessive_bools)]
 pub struct RustBackend<'a> {
     interner: &'a Interner,
     db_driver: DbDriver,
@@ -1332,6 +1336,7 @@ impl<'a> EmitCtx<'a> {
     #[allow(clippy::too_many_lines)]
     #[allow(clippy::similar_names)] // `uses_ui` / `uses_tui` are intentionally similar
     #[allow(clippy::too_many_arguments)] // the backend-config thread-through (driver, ffi, target, wasm, runtime-dep, debugger, cargo_name)
+    #[allow(clippy::fn_params_excessive_bools)] // each bool is an independent emit-shape switch threaded from BuildConfig
     fn build(
         interner: &'a Interner,
         program: &Program,
