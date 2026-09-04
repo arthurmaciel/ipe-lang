@@ -134,14 +134,17 @@ pub enum AndroidEntry {
 /// The per-axis OS-permission requirement across all platforms — the closed SSOT
 /// row for one [`WebCapability`].
 ///
-/// `plist` is the Apple usage-description key (absent when the axis needs no
-/// plist entry — some web surfaces are user-initiated on Apple platforms and
-/// require no static declaration); `android` is the (possibly empty) set of
-/// Android manifest elements the axis contributes.
+/// `plist` is the (possibly empty) set of Apple usage-description keys the axis
+/// contributes — empty when the axis needs no plist declaration (some web
+/// surfaces are user-initiated on Apple platforms and require none), one for a
+/// single-surface axis, or more than one for an axis that reaches several gated
+/// surfaces (media recording reaches both the camera and the microphone through
+/// `getUserMedia`); `android` is the (possibly empty) set of Android manifest
+/// elements the axis contributes.
 struct AxisRequirement {
-    /// The Apple `Info.plist` usage-description entry this axis contributes, or
-    /// `None` when the axis needs no static plist declaration on Apple platforms.
-    plist: Option<PlistEntry>,
+    /// The Apple `Info.plist` usage-description entries this axis contributes.
+    /// Empty when the axis needs no static plist declaration on Apple platforms.
+    plist: Vec<PlistEntry>,
     /// The Android manifest elements this axis contributes (may be empty).
     android: Vec<AndroidEntry>,
 }
@@ -164,33 +167,33 @@ fn requirement_for(axis: WebCapability) -> AxisRequirement {
     };
 
     let no_os_permission = || AxisRequirement {
-        plist: None,
+        plist: Vec::new(),
         android: Vec::new(),
     };
 
     match axis {
         WebCapability::Geolocation => AxisRequirement {
-            plist: Some(plist(
+            plist: vec![plist(
                 "NSLocationWhenInUseUsageDescription",
                 "This app uses your location to provide location-based features.",
-            )),
+            )],
             android: vec![perm("ACCESS_FINE_LOCATION"), perm("ACCESS_COARSE_LOCATION")],
         },
         WebCapability::Notification => AxisRequirement {
             // Apple: notification authorisation is a runtime prompt, not a static
             // plist key. Android 13+ requires the POST_NOTIFICATIONS permission.
-            plist: None,
+            plist: Vec::new(),
             android: vec![perm("POST_NOTIFICATIONS")],
         },
         WebCapability::Vibration => AxisRequirement {
             // Apple has no vibration permission. Android gates the vibrator.
-            plist: None,
+            plist: Vec::new(),
             android: vec![perm("VIBRATE")],
         },
         WebCapability::NetworkInfo => AxisRequirement {
             // Network-information hints. Android reads them behind ACCESS_NETWORK_STATE;
             // Apple exposes them without a usage-description key.
-            plist: None,
+            plist: Vec::new(),
             android: vec![perm("ACCESS_NETWORK_STATE")],
         },
         WebCapability::Microphone => AxisRequirement {
@@ -198,11 +201,35 @@ fn requirement_for(axis: WebCapability) -> AxisRequirement {
             // `getUserMedia({ audio: true })` call; an empty string causes App
             // Store / Gatekeeper rejection. Android: `RECORD_AUDIO` must appear
             // in the manifest before the browser can prompt for microphone access.
-            plist: Some(plist(
+            plist: vec![plist(
                 "NSMicrophoneUsageDescription",
                 "This app uses the microphone to record audio clips.",
-            )),
+            )],
             android: vec![perm("RECORD_AUDIO")],
+        },
+        WebCapability::Recorder => AxisRequirement {
+            // Media recording reaches BOTH the camera and the microphone through
+            // `getUserMedia({ audio: true[, video: true] })`, so it needs BOTH OS
+            // usage descriptions on Apple platforms — a video recording prompts for
+            // camera access and an audio recording for microphone, and an app that
+            // ships either path must declare both keys (an empty string causes App
+            // Store / Gatekeeper rejection). This is the honest, weightier posture
+            // versus the one-shot [`WebCapability::Camera`] (`<input capture>`, no
+            // static key) and [`WebCapability::Microphone`] (audio only): the
+            // getUserMedia camera path needs `NSCameraUsageDescription` that the
+            // capture-element camera axis does not. Android: `CAMERA` and
+            // `RECORD_AUDIO` must both appear before the browser can prompt.
+            plist: vec![
+                plist(
+                    "NSCameraUsageDescription",
+                    "This app uses the camera to record video.",
+                ),
+                plist(
+                    "NSMicrophoneUsageDescription",
+                    "This app uses the microphone to record audio.",
+                ),
+            ],
+            android: vec![perm("CAMERA"), perm("RECORD_AUDIO")],
         },
         // The axes that reach no permission-gated OS surface on any target:
         // clipboard (user-initiated paste), storage (in-sandbox persistence),
@@ -371,7 +398,7 @@ pub fn derive_permissions(
         };
         let requirement = requirement_for(*axis);
         if platform.is_apple() {
-            if let Some(entry) = requirement.plist {
+            for entry in requirement.plist {
                 plist.insert(entry);
             }
         } else {
@@ -491,7 +518,7 @@ pub fn per_axis_breakdown(
         let requirement = requirement_for(*axis);
         let mut entries = Vec::new();
         if platform.is_apple() {
-            if let Some(e) = requirement.plist {
+            for e in requirement.plist {
                 entries.push(e.key);
             }
         } else {
@@ -755,6 +782,82 @@ mod tests {
             xml.contains("android.permission.RECORD_AUDIO"),
             "Android must declare RECORD_AUDIO for microphone: {xml}"
         );
+    }
+
+    #[test]
+    fn recorder_derives_camera_and_microphone_on_every_platform() {
+        // Media recording reaches BOTH the camera and the microphone through
+        // getUserMedia, so it must derive:
+        //   iOS / macOS → NSCameraUsageDescription + NSMicrophoneUsageDescription
+        //                 (both with non-empty purpose)
+        //   Android     → android.permission.CAMERA + android.permission.RECORD_AUDIO
+        let a = accepts(&[web(WebCapability::Recorder)]);
+
+        for platform in [Platform::Ios, Platform::MacOs] {
+            let apple = derive_permissions(&a, platform).expect("apple");
+            let keys: BTreeSet<String> = apple
+                .to_info_plist_entries()
+                .into_iter()
+                .map(|(k, purpose)| {
+                    assert!(!purpose.is_empty(), "{k} on {platform:?} has empty purpose");
+                    k
+                })
+                .collect();
+            assert!(
+                keys.contains("NSCameraUsageDescription"),
+                "recorder must declare NSCameraUsageDescription on {platform:?}: {keys:?}"
+            );
+            assert!(
+                keys.contains("NSMicrophoneUsageDescription"),
+                "recorder must declare NSMicrophoneUsageDescription on {platform:?}: {keys:?}"
+            );
+            assert!(apple.to_android_manifest_entries().is_empty());
+        }
+
+        let android = derive_permissions(&a, Platform::Android).expect("android");
+        assert!(android.to_info_plist_entries().is_empty());
+        let xml = android.to_android_manifest_entries().to_xml();
+        assert!(
+            xml.contains("android.permission.CAMERA"),
+            "recorder must declare CAMERA on Android: {xml}"
+        );
+        assert!(
+            xml.contains("android.permission.RECORD_AUDIO"),
+            "recorder must declare RECORD_AUDIO on Android: {xml}"
+        );
+    }
+
+    #[test]
+    fn a_recorder_grant_backs_its_camera_and_mic_overrides() {
+        // The completeness face: a recorder grant entitles both getUserMedia
+        // usage keys, so an override naming either is accepted rather than refused.
+        let a = accepts(&[web(WebCapability::Recorder)]);
+        reconcile_override(&a, Platform::Ios, &one_override("NSCameraUsageDescription"))
+            .expect("recorder backs the camera usage key");
+        reconcile_override(
+            &a,
+            Platform::Ios,
+            &one_override("NSMicrophoneUsageDescription"),
+        )
+        .expect("recorder backs the microphone usage key");
+        reconcile_override(
+            &a,
+            Platform::Android,
+            &one_override("android.permission.CAMERA"),
+        )
+        .expect("recorder backs the android CAMERA permission");
+    }
+
+    #[test]
+    fn a_camera_grant_does_not_back_the_getusermedia_camera_key() {
+        // The capture-element camera axis (Camera) needs NO static usage key, so a
+        // Camera grant must NOT back an NSCameraUsageDescription override — only the
+        // getUserMedia Recorder axis does. This keeps the weightier getUserMedia
+        // path from being smuggled in under the lighter capture-element grant.
+        let a = accepts(&[web(WebCapability::Camera)]);
+        let err = reconcile_override(&a, Platform::Ios, &one_override("NSCameraUsageDescription"))
+            .expect_err("a capture-element camera grant does not back the getUserMedia camera key");
+        assert!(err.to_string().contains("NSCameraUsageDescription"));
     }
 
     #[test]
