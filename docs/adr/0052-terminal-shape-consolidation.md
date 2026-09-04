@@ -1,4 +1,4 @@
-Status: Accepted
+Status: Superseded by 0069
 Date: 2026-07-29
 
 # 0052. Terminal shape consolidation — four shapes, escapes as nodes
