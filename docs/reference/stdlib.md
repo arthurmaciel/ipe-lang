@@ -19,6 +19,8 @@ Each module listed below links to a detail page with the full documentation and 
 - [Browser.FilePicker.Internals](#browserfilepickerinternals)
 - [Browser.Geolocation](#browsergeolocation)
 - [Browser.Geolocation.Internals](#browsergeolocationinternals)
+- [Browser.Microphone](#browsermicrophone)
+- [Browser.Microphone.Internals](#browsermicrophoneinternals)
 - [Browser.NetworkInfo](#browsernetworkinfo)
 - [Browser.NetworkInfo.Internals](#browsernetworkinfointernals)
 - [Browser.Notification](#browsernotification)
@@ -315,6 +317,34 @@ Ipe.Browser.Geolocation.Internals — the full, low-level geolocation port
 | `requestOne` | `requestOne cmd` — correlated one-shot `JsCmd` → `Task Error JsMsg`. |
 | `subscribe` | `subscribe toMsg` — the inbound subscription over the fail-closed seal |
 | `inbound` | The total, fail-closed decoder for the inbound `JsMsg`. It reads the `ok` |
+
+## Browser.Microphone
+
+[Full reference](stdlib/Browser.Microphone.md)
+
+Ipe.Browser.Microphone — capture a bounded audio clip from the device
+
+| Export | Summary |
+|--------|----------|
+| `Options` | Recording options. `maxDurationMs` is the maximum recording length in |
+| `AudioClip` | A captured audio clip: the assembled audio data encoded as a `data:` URL |
+| `captureAudio` | `captureAudio opts` — record an audio clip for at most `opts.maxDurationMs` |
+| `recordings` | `recordings toMsg` — the inbound subscription, wired in `subscriptions`. |
+
+## Browser.Microphone.Internals
+
+[Full reference](stdlib/Browser.Microphone.Internals.md)
+
+Ipe.Browser.Microphone.Internals — the low-level microphone capture port
+
+| Export | Summary |
+|--------|----------|
+| `JsCmd` | The ONE closed OUTBOUND port type. `CaptureAudio opts` starts a bounded |
+| `JsMsg` | The NARROW closed INBOUND port type — NOT the app's internal `Msg`. Every |
+| `request` | `request cmd` — hand a closed outbound `JsCmd` to the raw port transport. |
+| `requestOne` | `requestOne cmd` — correlated one-shot `JsCmd` → `Task Error JsMsg`. |
+| `subscribe` | `subscribe toMsg` — the inbound subscription over the fail-closed seal |
+| `inbound` | The total, fail-closed decoder for the inbound `JsMsg`. It reads `ok` |
 
 ## Browser.NetworkInfo
 

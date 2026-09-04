@@ -704,7 +704,10 @@ mod tests {
                 key, "NSMicrophoneUsageDescription",
                 "iOS plist key must be NSMicrophoneUsageDescription"
             );
-            assert!(!purpose.is_empty(), "iOS microphone purpose string must be non-empty");
+            assert!(
+                !purpose.is_empty(),
+                "iOS microphone purpose string must be non-empty"
+            );
         }
         assert!(ios.to_android_manifest_entries().is_empty());
 
@@ -720,7 +723,10 @@ mod tests {
                 key, "NSMicrophoneUsageDescription",
                 "macOS plist key must be NSMicrophoneUsageDescription"
             );
-            assert!(!purpose.is_empty(), "macOS microphone purpose string must be non-empty");
+            assert!(
+                !purpose.is_empty(),
+                "macOS microphone purpose string must be non-empty"
+            );
         }
 
         let android = derive_permissions(&a, Platform::Android).expect("android");
