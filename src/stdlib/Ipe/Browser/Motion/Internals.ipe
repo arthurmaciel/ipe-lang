@@ -80,8 +80,9 @@ decodeByEvent event =
             Decode.fail ("unknown motion event variant: " ++ event)
 
 
--- | Decode a `Reading` by chaining `andThen` over the six nullable float fields.
--- This avoids the need for a `map6` combinator in `Decode`.
+-- | Decode a `Reading` by chaining `andThen` over the six optional float fields.
+-- Each field is `Maybe Float` — present as a number or absent/null. This avoids
+-- the need for a `map6` combinator in `Decode`.
 decodeReading : Decode.Decoder JsMsg
 decodeReading =
     Decode.andThen
@@ -98,14 +99,14 @@ decodeReading =
                                                 (\rotGamma ->
                                                     Reading accelX accelY accelZ rotAlpha rotBeta rotGamma
                                                 )
-                                                (Decode.field "rotGamma" (Decode.nullable Decode.float))
+                                                (Decode.field "rotGamma" (Decode.oneOf [ Decode.map Just Decode.float, Decode.succeed Nothing ]))
                                         )
-                                        (Decode.field "rotBeta" (Decode.nullable Decode.float))
+                                        (Decode.field "rotBeta" (Decode.oneOf [ Decode.map Just Decode.float, Decode.succeed Nothing ]))
                                 )
-                                (Decode.field "rotAlpha" (Decode.nullable Decode.float))
+                                (Decode.field "rotAlpha" (Decode.oneOf [ Decode.map Just Decode.float, Decode.succeed Nothing ]))
                         )
-                        (Decode.field "accelZ" (Decode.nullable Decode.float))
+                        (Decode.field "accelZ" (Decode.oneOf [ Decode.map Just Decode.float, Decode.succeed Nothing ]))
                 )
-                (Decode.field "accelY" (Decode.nullable Decode.float))
+                (Decode.field "accelY" (Decode.oneOf [ Decode.map Just Decode.float, Decode.succeed Nothing ]))
         )
-        (Decode.field "accelX" (Decode.nullable Decode.float))
+        (Decode.field "accelX" (Decode.oneOf [ Decode.map Just Decode.float, Decode.succeed Nothing ]))

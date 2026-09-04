@@ -61,7 +61,7 @@ update msg model =
 
         GotLock result ->
             case result of
-                Ok () ->
+                Ok _ ->
                     ( { model | status = "locked to portrait-primary" }, Cmd.none )
 
                 Err err ->

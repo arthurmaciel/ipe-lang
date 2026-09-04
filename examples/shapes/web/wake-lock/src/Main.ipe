@@ -49,7 +49,7 @@ update msg model =
 
         GotAcquire result ->
             case result of
-                Ok () ->
+                Ok _ ->
                     ( { model | status = "wake lock held" }, Cmd.none )
 
                 Err err ->

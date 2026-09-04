@@ -62,7 +62,7 @@ update msg model =
 
         FullscreenResult result ->
             case result of
-                Ok () ->
+                Ok _ ->
                     ( { model | status = "fullscreen toggled" }, Cmd.none )
 
                 Err err ->

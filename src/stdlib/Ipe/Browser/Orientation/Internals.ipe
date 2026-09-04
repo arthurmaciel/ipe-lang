@@ -70,9 +70,9 @@ decodeByEvent event =
     case event of
         "reading" ->
             Decode.map3 Reading
-                (Decode.field "alpha" (Decode.nullable Decode.float))
-                (Decode.field "beta" (Decode.nullable Decode.float))
-                (Decode.field "gamma" (Decode.nullable Decode.float))
+                (Decode.field "alpha" (Decode.oneOf [ Decode.map Just Decode.float, Decode.succeed Nothing ]))
+                (Decode.field "beta" (Decode.oneOf [ Decode.map Just Decode.float, Decode.succeed Nothing ]))
+                (Decode.field "gamma" (Decode.oneOf [ Decode.map Just Decode.float, Decode.succeed Nothing ]))
 
         "unavailable" ->
             Decode.succeed Unavailable
