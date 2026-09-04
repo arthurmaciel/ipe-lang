@@ -679,6 +679,8 @@ Ipe.Browser.Recorder.Internals — the low-level media-recording port surface:
 | `JsCmd` | The ONE closed OUTBOUND port type — the two verbs of one bounded recording |
 | `JsMsg` | The NARROW closed INBOUND port type — deliberately NOT the app's internal |
 | `request` | `request cmd` — hand a closed outbound `JsCmd` to the raw port transport. |
+| `subscribe` | `subscribe toMsg` — the inbound subscription over the fail-closed seal |
+| `inbound` | The total, fail-closed decoder for the inbound `JsMsg`. Reads the `event` |
 
 ## Browser.ScreenOrientation
 
