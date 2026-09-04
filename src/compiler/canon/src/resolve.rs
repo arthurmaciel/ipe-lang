@@ -266,11 +266,11 @@ pub const RESERVED_BUILTIN_TYPES: &[&str] = &[
     "RevocationMode",
     "Html",
     "Element",
-    // `Ipe.Tea.Tui.Ui`'s Tui-only view type `Screen msg` (formerly spelled
-    // `Cells`). Reserved so a user `type Screen …` cannot shadow the builtin and
-    // defeat the shape-gate that prevents Web/Cli builders from appearing in a
-    // `view : M -> Screen Msg` function. Built only through `Ipe.Tea.Tui.Ui.*`
-    // kernels. `Cells` stays reserved too (the retired spelling / raw-grid word).
+    // `Ipe.Tea.Tui.Ui`'s Tui-only view type `Screen msg`. Reserved so a user
+    // `type Screen …` cannot shadow the builtin and defeat the shape-gate that
+    // prevents Web/Cli builders from appearing in a `view : M -> Screen Msg`
+    // function. Built only through `Ipe.Tea.Tui.Ui.*` kernels. `Cells` is
+    // reserved alongside it — the internal rendering-model spelling.
     "Screen",
     "Cells",
     // `Ipe.Tea.Tui.Ui`'s cell-native attribute type `Attribute msg` (interned
