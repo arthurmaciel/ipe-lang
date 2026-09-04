@@ -85,6 +85,7 @@ impl InitShape {
     }
 
     /// The display name used in prompts and messages.
+    #[must_use]
     pub const fn label(self) -> &'static str {
         match self {
             Self::Web => "web",
