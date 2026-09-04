@@ -5441,7 +5441,7 @@ fn emit_ui_plan(
 
         // ── Terminal full-screen app-entry ───────────────────────────────────
         // Delegate to `emit_tui::emit_tui_call`; it returns `Some(s)` for the
-        // `appScreen` variant and `None` for anything else. A `None` here is an
+        // `Tui.app` variant and `None` for anything else. A `None` here is an
         // internal error (the `k.is_tui()` guard already filtered), so promote
         // it to a `CompilerBug`.
         NativeUiEmit::Delegate(UiDelegate::Tui) => {
@@ -5474,7 +5474,7 @@ fn emit_ui_plan(
 
         // ── Terminal line-oriented app-entry ─────────────────────────────────
         // Delegate to `emit_console::emit_console_call`; it returns `Some(s)` for
-        // the `appLines` variant and `None` for anything else. A `None` here is
+        // the `Cli.app` variant and `None` for anything else. A `None` here is
         // an internal error (the `k.is_console()` guard above already filtered),
         // so promote it to a `CompilerBug`.
         NativeUiEmit::Delegate(UiDelegate::Console) => {
@@ -8987,7 +8987,7 @@ pub fn emit_func_vis(ctx: &EmitCtx, func: &Func, vis_prefix: &str) -> DResult<St
     // This is not always a FLAT `Call(TaskRun, …)` body — the Ipe.Terminal /
     // Ipe.Web `argv`-dispatch idiom branches on `System.args` before picking which
     // app to run, e.g. `main = case List.head argsList of Just "live" -> Web.app
-    // cfg |> Task.run; _ -> Terminal.appScreen cfg |> Task.run`. Every arm still
+    // cfg |> Task.run; _ -> Tui.app cfg |> Task.run`. Every arm still
     // tail-calls
     // `Task.run`, so the SAME elision must apply — otherwise `ipe_main` keeps
     // its `IpeResult<E, A>` return type and `block_on(ipe_main())` mismatches

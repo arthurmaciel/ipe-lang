@@ -3,7 +3,7 @@
 //! Cmd/Sub are generic over the message type M (NOT `any`): the intermediate
 //! value `a` in `Cmd.perform` is erased inside a boxed M-producing future, but M
 //! stays concrete. Step 1 (this file) ships the types, the simple kernels, and a
-//! blocking Terminal.appLines loop (stdin -> onLine -> update -> view). Sub.every
+//! blocking Cli.app loop (stdin -> onLine -> update -> view). Sub.every
 //! tickers + async Cmd.perform delivery land in steps 2-3 (a subManager + an
 //! mpsc msg channel + tokio::select over stdin and the channel).
 
@@ -464,7 +464,7 @@ pub(crate) fn cli_run_cmd_tracked<M: Send + 'static>(
 
 // ─── Ipe.Terminal — line-oriented TEA loop ─────────────────────────────────────
 
-/// Terminal.appLines { init, update, view, subscriptions, onLine } : Task Error ().
+/// Cli.app { init, update, view, subscriptions, onLine } : Task Error ().
 ///
 /// init -> fire cmd -> subs -> view; then fold each event (stdin line via
 /// onLine, ticker/Cmd.perform Msg) through update -> re-fire cmd -> re-subs ->
@@ -602,8 +602,8 @@ where
 
 // ─── Shape opaque app-leaf types ──────────────────────────────────────────
 //
-// Each entry builder (`Web.app`, `WebView.app`, `Terminal.appScreen`,
-// `Terminal.appLines`) returns one of these opaque handles instead of
+// Each entry builder (`Web.app`, `WebView.app`, `Tui.app`,
+// `Cli.app`) returns one of these opaque handles instead of
 // `IpeTask<E, ()>`. The handle wraps the underlying task and exposes a single
 // `run_blocking` method consumed by the emitted `fn main()`. This erases the
 // msg/model type parameters from the program's `main` type signature while
@@ -688,7 +688,7 @@ impl WebViewApp {
     }
 }
 
-/// Opaque app handle returned by `Terminal.appScreen`.
+/// Opaque app handle returned by `Tui.app`.
 /// Backed by a boxed `IpeTask<IpeError, ()>`; run via `run_blocking`.
 #[cfg(not(target_arch = "wasm32"))]
 pub struct TuiApp(pub IpeTask<crate::error::IpeError, ()>);
@@ -701,7 +701,7 @@ impl TuiApp {
     }
 }
 
-/// Opaque app handle returned by `Terminal.appLines`.
+/// Opaque app handle returned by `Cli.app`.
 /// Backed by a boxed `IpeTask<IpeError, ()>`; run via `run_blocking`.
 #[cfg(not(target_arch = "wasm32"))]
 pub struct CliApp(pub IpeTask<crate::error::IpeError, ()>);

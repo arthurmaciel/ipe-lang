@@ -997,7 +997,7 @@ pub(crate) struct EmitCtx<'a> {
     /// Cargo feature and the tui module is wired into `ipe_runtime/mod.rs`.
     pub(crate) uses_tui: bool,
     /// `true` when the program uses the `Ipe.Terminal` line-oriented app-entry
-    /// (`Terminal.appLines`). When set, the guard in `emit_ui_plan` rejects
+    /// (`Cli.app`). When set, the guard in `emit_ui_plan` rejects
     /// `Ui.cells` with IPE-L0153 (a terminal cell grid has no string
     /// denotation in a line-oriented Cli view).
     pub(crate) uses_console: bool,

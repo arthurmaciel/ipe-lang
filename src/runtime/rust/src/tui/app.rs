@@ -74,7 +74,7 @@ impl TuiGuard {
     fn enter() -> Result<Self, String> {
         Self::enter_with(false)
     }
-    /// Element-view driver (`tui_app_ui` / `Terminal.appScreen`) — enables mouse reporting
+    /// Element-view driver (`tui_app_ui` / `Tui.app`) — enables mouse reporting
     /// for focus-click + wheel scroll.
     fn enter_mouse() -> Result<Self, String> {
         Self::enter_with(true)
@@ -449,7 +449,7 @@ where
     fs2
 }
 
-/// `Terminal.appScreen` — terminal TEA driver for a `view : Model -> Cells msg`.
+/// `Tui.app` — terminal TEA driver for a `view : Model -> Cells msg`.
 /// The `Cells msg` value wraps the same structured `Element` tree that `Ipe.Web`
 /// renders; here it is laid out to ANSI cells by walking the typed attributes
 /// (`tui::layout`), and `Ipe.Ui.Input.*` widgets become focusables. Tab /

@@ -113,9 +113,9 @@ const BARE: &str = "module Main exposing (main)\n\
     import Ipe.Io as Io\n\
     main = Io.println \"bare\"\n";
 
-/// Minimal `Terminal.appLines` (`CliApp` shape) program.
+/// Minimal `Cli.app` (`CliApp` shape) program.
 ///
-/// `Terminal.appLines` emits `ipe_runtime::tea::CliApp(console_app(...))`.
+/// `Cli.app` emits `ipe_runtime::tea::CliApp(console_app(...))`.
 /// The `fn main` epilogue must call `ipe_main().run_blocking()` rather than
 /// `block_on(ipe_main())` — `CliApp` is not an `IpeTask` and `block_on`
 /// does not accept it. A missing or misrouted epilogue switch produces E0277
@@ -123,7 +123,7 @@ const BARE: &str = "module Main exposing (main)\n\
 /// always-run gate that catches that class without requiring a full `IPE_E2E`
 /// run of an actual interactive binary.
 const CLI_APP_LINES: &str = "module Main exposing (main)\n\
-    import Ipe.Tea.Terminal as Terminal\n\
+    import Ipe.Tea.Cli as Cli\n\
     import Ipe.Tea.Terminal.Cmd\n\
     import Ipe.Tea.Terminal.Sub\n\
     type Msg = Line String\n\
@@ -134,7 +134,7 @@ const CLI_APP_LINES: &str = "module Main exposing (main)\n\
     view _model = \"ok\"\n\
     subscriptions _model = Sub.none\n\
     onLine s = Line s\n\
-    main = Terminal.appLines\n\
+    main = Cli.app\n\
     \x20   { init = init, update = update, view = view\n\
     \x20   , subscriptions = subscriptions, onLine = onLine }\n";
 
@@ -263,7 +263,7 @@ fn bare_shape_builds() {
     emit_and_build("bare", BARE).expect("bare shape must emit and cargo-build");
 }
 
-/// A `Terminal.appLines` program emits `ipe_runtime::tea::CliApp(console_app(...))`.
+/// A `Cli.app` program emits `ipe_runtime::tea::CliApp(console_app(...))`.
 /// The epilogue `fn main` must call `ipe_main().run_blocking()` — `CliApp` is
 /// not an `IpeTask`, so `block_on(ipe_main())` does not type-check (E0277/E0308).
 /// This test is the always-run gate for that SEAL class: a misrouted or missing
@@ -274,7 +274,7 @@ fn cli_app_lines_builds() {
         return;
     }
     emit_and_build("cli_app_lines", CLI_APP_LINES).expect(
-        "Terminal.appLines must emit and cargo-build \
+        "Cli.app must emit and cargo-build \
          (ipe_main must return CliApp and fn main must call run_blocking, not block_on)",
     );
 }

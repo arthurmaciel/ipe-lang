@@ -1,11 +1,11 @@
 module Main exposing (main)
 
 -- Cross-shape Cmd/Sub gate (IPE-N0035): this is a Terminal app (its `main` calls
--- `Terminal.appLines`), but it imports the Web shape's `Cmd`. `Cmd` is
+-- `Cli.app`), but it imports the Web shape's `Cmd`. `Cmd` is
 -- shape-specific and reached through the app's own shape, so the wrong-shape
 -- import fails closed here, before any Rust is generated.
 
-import Ipe.Tea.Terminal as Terminal
+import Ipe.Tea.Cli as Cli
 import Ipe.Tea.Web.Cmd as Cmd
 import Ipe.Tea.Terminal.Sub as Sub
 
@@ -36,7 +36,7 @@ onLine line =
     GotLine line
 
 main =
-    Terminal.appLines
+    Cli.app
         { init = init
         , update = update
         , view = view

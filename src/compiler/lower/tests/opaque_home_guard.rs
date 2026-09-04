@@ -2,7 +2,7 @@
 //!
 //! Several opaque runtime types are reachable by a BARE constructor name at the
 //! annotation level: the shape app-leaves (`WebApp` / `WebViewApp` / `TuiApp` /
-//! `CliApp`) minted by `Web.app` / `Terminal.appScreen` / …, and the `Ipe.Server`
+//! `CliApp`) minted by `Web.app` / `Tui.app` / …, and the `Ipe.Server`
 //! nominals (`Request` / `Response` / `Route` / `Cookie`). The genuine kernel
 //! type carries the EMPTY home (`ipe_types::constrain` builds every one with
 //! `module: Vec::new()`), so the lowerer maps a bare name to its runtime `IrType`
@@ -202,7 +202,7 @@ fn assert_user_union_wins(leaf: &str) {
 }
 
 /// Assert the genuine kernel leaf — a bare `Con` with the EMPTY home, exactly
-/// what `ipe_types::constrain` mints for a `Web.app` / `Terminal.appScreen`
+/// what `ipe_types::constrain` mints for a `Web.app` / `Tui.app`
 /// result — still maps to its opaque runtime `IrType`. The empty-home guard must
 /// not regress the legitimate shape entry.
 fn assert_kernel_leaf_maps_to_opaque(leaf: &str) {

@@ -1,6 +1,6 @@
 //! Ipe.Terminal — terminal (ANSI cell) backend for the Rust target.
 //!
-//! TEA-shaped (`Terminal.appScreen cfg`): `view : Model -> Cells msg` lowered
+//! TEA-shaped (`Tui.app cfg`): `view : Model -> Cells msg` lowered
 //! to ANSI cells via the structured `Element<Msg>` tree inside `CellsView<M>`.
 
 pub mod app;

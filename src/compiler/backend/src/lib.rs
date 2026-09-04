@@ -144,6 +144,13 @@ pub struct EmittedProject {
     pub files: BTreeMap<RelPath, String>,
     /// The contents of the project-root `Cargo.toml`.
     pub cargo_toml: String,
+    /// Whether this project links the system webview backend. The typed source
+    /// of truth the driver reads to refuse a static (musl) build of a
+    /// webview-hosted app — never a re-parse of `cargo_toml`'s default-feature
+    /// list. Set by the backend from the resolved runtime/host, so it is present
+    /// even on a cache-deserialized project.
+    #[serde(default)]
+    pub uses_webview: bool,
 }
 
 /// A code-generation backend: turns a typed IR [`Program`] into an
@@ -270,6 +277,7 @@ mod tests {
         let project = EmittedProject {
             files,
             cargo_toml: "[package]\nname = \"app\"\n".to_owned(),
+            uses_webview: false,
         };
         let json = serde_json::to_string(&project).expect("serialize must succeed");
         let back: EmittedProject = serde_json::from_str(&json).expect("deserialize must succeed");

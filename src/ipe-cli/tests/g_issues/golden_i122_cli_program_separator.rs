@@ -1,4 +1,4 @@
-//! oracle parity check for `Terminal.appLines`'s view printer. A
+//! oracle parity check for `Cli.app`'s view printer. A
 //! `view` that doesn't append its own trailing newline gets renders glued
 //! together with NOTHING in between, and exactly ONE trailing newline after
 //! the event loop exits. This matches the runtime's
@@ -60,7 +60,7 @@ fn console_app_glues_consecutive_renders_matching_go_oracle() {
     let expected = "lines: 0lines: 1lines: 2\n";
     assert_eq!(
         outcome.stdout, expected,
-        "Terminal.appLines must match the view-printer contract (no per-render \
+        "Cli.app must match the view-printer contract (no per-render \
          newline, one trailing newline at exit), got: {:?}",
         outcome.stdout
     );

@@ -1,7 +1,7 @@
-//! Seal — `Terminal.appLines` app-entry kernel, end to end.
+//! Seal — `Cli.app` app-entry kernel, end to end.
 //!
 //! Regression for the L0107-exemption gap found at reconcile time: the
-//! `Terminal.appLines` cfg record carries five function-typed fields
+//! `Cli.app` cfg record carries five function-typed fields
 //! (init/update/view/subscriptions/onLine), so without `KernelFn::TerminalAppLines`
 //! in the app-entry cfg intercept (`lower.rs`) EVERY real call tripped
 //! `IPE-L0107: function value in a record field` and the `emit_console` path was
@@ -63,12 +63,12 @@ fn console_app_ipec_cargo_and_run_zero() {
     assert_eq!(
         outcome.exit_code,
         Some(0),
-        "Terminal.appLines binary must exit 0 on stdin EOF; got {:?}",
+        "Cli.app binary must exit 0 on stdin EOF; got {:?}",
         outcome.exit_code
     );
     assert!(
         outcome.stdout.contains("lines: 0"),
-        "Terminal.appLines must render the initial view on start; got: {:?}",
+        "Cli.app must render the initial view on start; got: {:?}",
         outcome.stdout
     );
 }

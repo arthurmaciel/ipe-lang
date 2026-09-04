@@ -312,13 +312,13 @@ pub struct Module {
     /// `KernelFn::is_web()` variant.
     pub uses_web: bool,
     /// `true` when the lowerer detected the `Ipe.Terminal` full-screen
-    /// app-entry (`Terminal.appScreen`) in the module's function bodies.
+    /// app-entry (`Tui.app`) in the module's function bodies.
     ///
     /// Set by `ipe_lower` when any call site resolves to a
     /// `KernelFn::is_tui()` variant.
     pub uses_tui: bool,
     /// `true` when the lowerer detected the `Ipe.Terminal` line-oriented
-    /// app-entry (`Terminal.appLines`) in the module's function bodies.
+    /// app-entry (`Cli.app`) in the module's function bodies.
     ///
     /// Set by `ipe_lower` when any call site resolves to a
     /// `KernelFn::is_console()` variant.
@@ -1665,12 +1665,12 @@ pub enum IrType {
     ///
     /// Rendered as `ipe_runtime::tea::WebViewApp`.
     WebViewApp,
-    /// The msg-erased result of `Ipe.Tea.Terminal.appScreen` — a live TUI
+    /// The msg-erased result of `Ipe.Tea.Tui.app` — a live TUI
     /// (terminal full-screen) app handle.
     ///
     /// Rendered as `ipe_runtime::tea::TuiApp`.
     TuiApp,
-    /// The msg-erased result of `Ipe.Tea.Terminal.appLines` — a live
+    /// The msg-erased result of `Ipe.Tea.Cli.app` — a live
     /// line-oriented CLI app handle.
     ///
     /// Rendered as `ipe_runtime::tea::CliApp`.
