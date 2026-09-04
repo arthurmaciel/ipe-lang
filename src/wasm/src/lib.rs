@@ -132,6 +132,8 @@ fn compile_inner(source: &str) -> Result<ipe_backend::EmittedProject, String> {
         String::new(),
         // The browser playground is not the dev watch loop; no appearance hoist.
         false,
+        // The browser playground is a wasm SPA, never a webview-native delivery.
+        false,
     );
 
     // Per-module canonicalisation in dep-first order — purely for BLAME

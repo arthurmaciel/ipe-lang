@@ -1189,6 +1189,7 @@ mod schema_tag_tests {
             false,
             String::new(),
             false,
+            false,
         )?;
 
         // Model = { count : Int } (no `page` field → the single-page branch).

@@ -90,6 +90,7 @@ fn cold_compile(user: &UserSources) -> CompileOutcome {
         false,
         String::new(),
         false,
+        false,
     );
     ipe::compile_prepared(
         &db,
@@ -162,6 +163,7 @@ impl WarmSession {
                 None,
                 false,
                 String::new(),
+                false,
                 false,
             )
         });
