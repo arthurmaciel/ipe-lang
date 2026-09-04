@@ -992,6 +992,12 @@ pub struct BuildOptions {
     /// is a resolved HOST decision (from the CLI's shape × runtime × host), not a
     /// source entry. Default `false` (a served `web`, or any non-web shape).
     pub webview_host: bool,
+    /// The webview-native desktop window, sourced from the manifest
+    /// `delivery.desktop` block. Threaded to
+    /// [`ipe_backend_rust::RustBackend::with_webview_window`] and consulted only
+    /// when [`Self::webview_host`]. Filled in `build_project_with_options` once
+    /// the manifest is parsed; `None` selects the built-in fallback window.
+    pub webview_window: Option<ipe_backend_rust::WebViewWindow>,
 }
 
 /// Select the emit model from the environment.
@@ -1623,6 +1629,7 @@ fn compile_modules_observed(
         options.production,
         options.hot_appearance,
         options.webview_host,
+        options.webview_window.as_ref(),
     );
     let epoch = cache_dir.and_then(|_| cache::derive_epoch());
     if let (Some(root), Some(epoch)) = (cache_dir, epoch.as_deref())
@@ -1680,7 +1687,7 @@ fn compile_modules_observed(
                 let guard = fresh_interner
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner);
-                ipe_backend_rust::RustBackend::new(&guard)
+                let backend = ipe_backend_rust::RustBackend::new(&guard)
                     .with_db_driver(db_driver)
                     .with_target(options.target)
                     .with_wasm_public_env(options.wasm_public_env.clone())
@@ -1689,8 +1696,12 @@ fn compile_modules_observed(
                     .with_debugger(options.debugger)
                     .with_project_name(&options.cargo_name)
                     .with_hot_appearance(options.hot_appearance)
-                    .with_webview_host(options.webview_host)
-                    .emit(&program)
+                    .with_webview_host(options.webview_host);
+                let backend = match &options.webview_window {
+                    Some(w) => backend.with_webview_window(w.clone()),
+                    None => backend,
+                };
+                backend.emit(&program)
             };
             if let Ok(emitted) = emit_result {
                 // Warm the (cheaper-to-hit) EmittedProject tier for the
@@ -3014,10 +3025,21 @@ pub fn build_project_with_options(
     // caller's `options` carries no manifest-derived data — it is built before
     // the manifest is parsed — so these three fields are completed here, the
     // same way `manifest.driver` bypasses `options` as its own positional arg.
+    // The webview window is a manifest-derived HOST setting: read the
+    // `delivery.desktop` block only for a webview-native (`web desktop`) build.
+    let webview_window = options.webview_host.then(|| {
+        let d = &manifest.delivery.desktop;
+        ipe_backend_rust::WebViewWindow {
+            title: d.title.clone(),
+            width: i64::from(d.width),
+            height: i64::from(d.height),
+        }
+    });
     let options = BuildOptions {
         wasm_public_env: manifest.wasm.public_env.clone(),
         wasm_hydrate_mode: manifest.wasm.mode.as_deref() == Some("hydrate"),
         cargo_name: ipe_backend_rust::sanitize_cargo_name(&manifest.name),
+        webview_window,
         ..options
     };
 
@@ -3611,6 +3633,9 @@ fn run_build_body(rest: &[String]) -> Result<BuildSuccess, CliError> {
         // A webview-native `web desktop` delivery links the system webview and
         // selects the webview executor; every other delivery does not.
         webview_host: delivery.is_webview_native(),
+        // Filled from the manifest `delivery.desktop` in
+        // build_project_with_options once the manifest is parsed.
+        webview_window: None,
     };
 
     // Human-friendly progress: the compile+emit below is otherwise silent, so
@@ -3972,6 +3997,7 @@ pub(crate) fn run_release(rest: &[String]) -> Result<(), CliError> {
             // Set from the resolved delivery; a webview-native `web desktop` is wired
             // where the classified shape is known (build_project_with_options).
             webview_host: false,
+            webview_window: None,
         };
         manifest.as_ref().map_or_else(
             || {
@@ -4800,6 +4826,9 @@ fn run_run_body(rest: &[String]) -> Result<(), CliError> {
         // A webview-native `web desktop` delivery links the system webview and
         // selects the webview executor; every other delivery does not.
         webview_host: delivery.is_webview_native(),
+        // Filled from the manifest `delivery.desktop` in
+        // build_project_with_options once the manifest is parsed.
+        webview_window: None,
     };
 
     // Human-friendly progress: the compile+emit below is otherwise silent, so

@@ -480,6 +480,7 @@ pub fn native_vs_legacy_sweep(
         String::new(),
         false,
         false,
+        None,
     )?;
     let mut divergences = Vec::new();
     let mut compared = 0usize;

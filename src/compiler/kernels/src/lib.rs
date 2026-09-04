@@ -49,8 +49,6 @@ pub enum KernelClass {
     /// Terminal rendering family — the `Tui.app` / `Cli.app` app-entry kernels
     /// and their `onKey` / `onLine` companions.
     Terminal,
-    /// `Ipe.WebView` app-entry kernel.
-    WebView,
     /// Reserved for the FFI kernel tier.
     Ffi,
 }
@@ -423,11 +421,9 @@ pub enum BuiltinTag {
     EmailProvider,
     // ── Shape opaque app-leaf type constructors ──────────────────────────────
     /// `WebApp` — opaque app handle returned by `Web.app` / `Web.appRouted` /
-    /// `Web.appWith`. Nullary; backed by `ipe_runtime::tea::WebApp`.
+    /// `Web.appWith`. Nullary; backed by `ipe_runtime::tea::WebApp` (served) or
+    /// `ipe_runtime::tea::WebViewApp` (webview-native `web desktop` host).
     WebApp,
-    /// `WebViewApp` — opaque app handle returned by `WebView.app`. Nullary;
-    /// backed by `ipe_runtime::tea::WebViewApp`.
-    WebViewApp,
     /// `TuiApp` — opaque app handle returned by `Tui.app`. Nullary;
     /// backed by `ipe_runtime::tea::TuiApp`.
     TuiApp,
@@ -620,7 +616,7 @@ pub enum FieldTag {
     /// `"label"` — shared by `Ui.button`, `Ui.link`, and every `Input` config
     /// record.
     Label,
-    // ── App-entry cfg (Web / WebView / Terminal) shared TEA fields ──
+    // ── App-entry cfg (Web / Terminal) shared TEA fields ──
     /// `"init"`.
     AppInit,
     /// `"update"`.
@@ -641,12 +637,6 @@ pub enum FieldTag {
     TerminalKeyValue,
     /// `"onLine"` — `Cli.app` only.
     TerminalOnLine,
-    /// `"window"` — `WebView.app` only.
-    WebViewWindow,
-    /// `"title"` — the `WebView` window record field.
-    WebViewTitle,
-    /// `"size"` — the `WebView` window record field.
-    WebViewSize,
     // ── Edge record (Ui.paddingEach / Border.widthEach) ──
     /// `"top"`.
     EdgeTop,
@@ -1321,7 +1311,7 @@ pub enum StdlibKernel {
     DebugTodo,
     /// `Debug.explain : Attribute msg` — draw visible outlines on an element and
     /// all its descendants (box bounds vs padding, distinct colours). Never
-    /// changes layout. Applies to `Web` / `WebView` shapes only; a production build
+    /// changes layout. Applies to the `Web` shape only; a production build
     /// (`ipe release`) rejects any use (IPE-L0140).
     DebugExplain,
     // ── Time (non-TEA) ──────────────────────────────────────────────────────
@@ -1957,8 +1947,6 @@ pub enum StdlibKernel {
     /// `Tui.app` — full-screen TEA entry, `view : Model -> Element
     /// Msg`, driven by `onKey`.
     TerminalAppScreen,
-    // ── Ipe.WebView app-entry kernel ─────────────────────────────────────
-    WebViewApp,
     // ── Ipe.Web app-entry with runtime settings ──────────────────────────
     /// `Web.appWith : List (Setting Web) -> { … } -> app` — the additive
     /// settings-carrying web entry. Same cfg record as `Web.app`, preceded by a
@@ -2871,7 +2859,7 @@ impl StdlibKernel {
                 emit,
             }
         }
-        use KernelClass::{Db, Pure, Server, Tea, Terminal, Ui, Web, WebView};
+        use KernelClass::{Db, Pure, Server, Tea, Terminal, Ui, Web};
         match self {
             // ── Log ─────────────────────────────────────────────────────────
             // Qualifier "Log" is installed via `install_builtin_vars` as an
@@ -3921,8 +3909,6 @@ impl StdlibKernel {
             // ── Ipe.Tui app-entry kernel ─────────────────────────────────
             // Surface `Tui.app`; the internal rendering family is `Terminal`.
             Self::TerminalAppScreen => d("Tui", "app", 1, Terminal, "tui_app_ui"),
-            // ── Ipe.WebView app-entry kernel ─────────────────────────────
-            Self::WebViewApp => d("WebView", "app", 1, WebView, "webview_app"),
             // ── Ipe.Web settings-carrying app entry + runtime-config kernels ──
             Self::WebAppWith => d("Web", "appWith", 2, Web, "web_app_with"),
             Self::AppFromEnv => d("App", "fromEnv", 1, Pure, "ipe_app_from_env"),
@@ -5414,8 +5400,6 @@ impl StdlibKernel {
         Self::WebRenderStatic,
         // Terminal
         Self::TerminalAppScreen,
-        // WebView
-        Self::WebViewApp,
         // Ipe.Web settings-carrying app entry + runtime-config front door
         Self::WebAppWith,
         Self::AppFromEnv,
@@ -8158,24 +8142,6 @@ impl StdlibKernel {
             ],
             tail: RowTailShape::Closed,
         };
-        // `WebView.app` — `window { title, size : (Int, Int) }`, CLOSED.
-        const WEBVIEW_WINDOW: TyShape = TyShape::Record {
-            fields: &[
-                (FieldTag::WebViewTitle, &STRING),
-                (FieldTag::WebViewSize, &TUPLE_INT_INT),
-            ],
-            tail: RowTailShape::Closed,
-        };
-        const WEBVIEW_APP_CFG: TyShape = TyShape::Record {
-            fields: &[
-                (FieldTag::AppInit, &UNIT_TO_TUPLE),
-                (FieldTag::AppUpdate, &UPDATE_FN),
-                (FieldTag::AppView, &VIEW_ELEM_FN),
-                (FieldTag::AppSubscriptions, &SUBS_FN),
-                (FieldTag::WebViewWindow, &WEBVIEW_WINDOW),
-            ],
-            tail: RowTailShape::Closed,
-        };
         // Edge record `{ top, right, bottom, left }` (Ui.paddingEach /
         // Border.widthEach).
         const EDGE: TyShape = TyShape::Record {
@@ -8394,18 +8360,16 @@ impl StdlibKernel {
         // App-entry whole signatures — `cfg -> <ShapeApp>`.
         // Each entry builder returns its shape's opaque app leaf, not `Task ()`.
         const WEB_APP_LEAF: TyShape = TyShape::Con(BuiltinTag::WebApp, &[]);
-        const WEBVIEW_APP_LEAF: TyShape = TyShape::Con(BuiltinTag::WebViewApp, &[]);
         const TUI_APP_LEAF: TyShape = TyShape::Con(BuiltinTag::TuiApp, &[]);
         const CLI_APP_LEAF: TyShape = TyShape::Con(BuiltinTag::CliApp, &[]);
         const WEB_APP: TyShape = TyShape::Fun(&WEB_APP_CFG, &WEB_APP_LEAF);
         // `Server.mountApp : String -> WebApp -> ServerRoute` — nominal `WebApp`
         // in the second slot is the §9 type gate: only a `Web.embed`/`Web.app`
-        // handle mounts; a `TuiApp`/`CliApp`/`WebViewApp` is rejected at unify.
+        // handle mounts; a `TuiApp`/`CliApp` is rejected at unify.
         const WEB_APP_LEAF_TO_SERVER_ROUTE: TyShape = TyShape::Fun(&WEB_APP_LEAF, &SERVER_ROUTE);
         const MOUNT_APP: TyShape = TyShape::Fun(&STRING, &WEB_APP_LEAF_TO_SERVER_ROUTE);
         const TERMINAL_APP_SCREEN: TyShape = TyShape::Fun(&TERMINAL_SCREEN_CFG, &TUI_APP_LEAF);
         const TERMINAL_APP_LINES: TyShape = TyShape::Fun(&TERMINAL_LINES_CFG, &CLI_APP_LEAF);
-        const WEBVIEW_APP: TyShape = TyShape::Fun(&WEBVIEW_APP_CFG, &WEBVIEW_APP_LEAF);
         // Ui builders taking a record.
         const LAYOUT_WITH: TyShape = {
             const HTML_A_INNER: TyShape = TyShape::Con(BuiltinTag::Html, &[A]);
@@ -9448,7 +9412,6 @@ impl StdlibKernel {
             Self::WebApp | Self::WebEmbed => Some(&WEB_APP),
             Self::TerminalAppScreen => Some(&TERMINAL_APP_SCREEN),
             Self::TerminalAppLines => Some(&TERMINAL_APP_LINES),
-            Self::WebViewApp => Some(&WEBVIEW_APP),
             // Ui / Input / Border record builders.
             Self::UiLayoutWith => Some(&LAYOUT_WITH),
             Self::UiButton => Some(&BUTTON),
@@ -10416,7 +10379,6 @@ impl StdlibKernel {
             | Self::WebRoute
             | Self::WebRenderStatic
             | Self::TerminalAppScreen
-            | Self::WebViewApp
             | Self::UiOnClick
             | Self::UiOnFocus
             | Self::UiOnBlur
@@ -11417,8 +11379,9 @@ impl StdlibKernel {
     /// `time` feature (`chrono-tz`), which implies `time-core`. Used by
     /// `ipe_lower` to detect `uses_time` and by the backend to enable both
     /// features and add the `chrono-tz` dependency; a program that reaches no
-    /// `Ipe.Time` kernel drops `chrono-tz` and — unless a Log/Db/Web/WebView
-    /// surface also reaches `time-core` — `chrono` itself.
+    /// `Ipe.Time` kernel drops `chrono-tz` and — unless a Log/Db/Web surface (or
+    /// a webview-native `web desktop` host) also reaches `time-core` — `chrono`
+    /// itself.
     #[must_use]
     pub const fn is_time(self) -> bool {
         matches!(
@@ -11445,7 +11408,8 @@ impl StdlibKernel {
     /// the module — and, via `time-core`, the base `chrono` crate — is behind the
     /// `log` feature. Used by `ipe_lower` to detect `uses_log` and by the backend
     /// to declare `log` and add `chrono`. A program that reaches no `Log.*` kernel
-    /// (and no Time/Db/Web/WebView surface) drops `chrono`.
+    /// (and no Time/Db/Web surface or webview-native `web desktop` host) drops
+    /// `chrono`.
     ///
     /// `Debug.log` is deliberately NOT here: `debug.rs` is a pure `IpeStringify`
     /// passthrough (no `chrono`, no `log.rs`), always compiled, so it never
@@ -12261,12 +12225,6 @@ impl StdlibKernel {
         matches!(self, Self::TerminalAppScreen)
     }
 
-    /// `true` when this variant is the `Ipe.WebView` app-entry kernel.
-    #[must_use]
-    pub const fn is_webview(self) -> bool {
-        matches!(self, Self::WebViewApp)
-    }
-
     /// `true` when this variant is the `Ipe.Terminal` line-oriented app-entry.
     #[must_use]
     pub const fn is_console(self) -> bool {
@@ -12556,11 +12514,10 @@ impl StdlibKernel {
                 matches!(self, Self::PubSubTopic)
             }
             // Server-only surfaces: no browser denotation, ever (Db/Server)
-            // or until a dedicated backend exists (Terminal/WebView/Ffi).
+            // or until a dedicated backend exists (Terminal/Ffi).
             KernelClass::Db
             | KernelClass::Server
             | KernelClass::Terminal
-            | KernelClass::WebView
             | KernelClass::Ffi => false,
         }
     }
@@ -13810,29 +13767,6 @@ mod tests {
                  ws_client::* out of scope (E0425)",
                 k.decl().qualifier,
                 k.is_websocket_client(),
-                expected,
-            );
-        }
-    }
-
-    /// `is_webview()` MUST be true for exactly the kernels with `class == WebView`.
-    /// Currently a single variant (`WebViewApp`), but the test is exhaustive over
-    /// `ALL` so any future `class = WebView` addition that forgets the predicate
-    /// → `uses_webview` never set → `webview` module not declared (E0425).
-    /// Both directions are asserted.
-    #[test]
-    fn webview_predicate_tracks_webview_class() {
-        use super::KernelClass;
-        for k in StdlibKernel::ALL {
-            let expected = k.decl().class == KernelClass::WebView;
-            assert_eq!(
-                k.is_webview(),
-                expected,
-                "{k:?} (class={:?}): is_webview()={} but class==WebView is {} — \
-                 a forgotten class=WebView kernel causes the emitted crate to omit \
-                 the webview module declaration (E0425)",
-                k.decl().class,
-                k.is_webview(),
                 expected,
             );
         }

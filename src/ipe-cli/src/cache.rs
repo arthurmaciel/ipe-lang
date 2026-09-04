@@ -269,6 +269,7 @@ pub fn compute_project_key(
     production: bool,
     hot_appearance: bool,
     webview_host: bool,
+    webview_window: Option<&ipe_backend_rust::WebViewWindow>,
 ) -> String {
     let mut hasher = Sha256::new();
     update_len_prefixed(&mut hasher, KEY_TAG);
@@ -289,6 +290,19 @@ pub fn compute_project_key(
     // the two disjoint; for a non-web program the emitted bytes are identical
     // either way and the extra bit only costs a cold entry.
     hasher.update([u8::from(webview_host)]);
+
+    // The webview desktop window (title / size) is emitted as literals into the
+    // executor, so a window change must invalidate a stale cache entry. Absence
+    // folds a distinct marker from any present window.
+    match webview_window {
+        Some(w) => {
+            hasher.update([1u8]);
+            update_len_prefixed(&mut hasher, w.title.as_bytes());
+            hasher.update(w.width.to_le_bytes());
+            hasher.update(w.height.to_le_bytes());
+        }
+        None => hasher.update([0u8]),
+    }
 
     // `ipe release` rejects any `Debug.*` use (IPE-L0140), so its outcome
     // differs from a development build for a Debug-using program (error vs

@@ -145,7 +145,6 @@ pub const STDLIB_MODULE_QUALIFIERS: &[(&[&str], &str)] = &[
     // bare app surface) is retired: the entries are `Tui.app` / `Cli.app`.
     (&["Ipe", "Tea", "Tui"], "Tui"),
     (&["Ipe", "Tea", "Cli"], "Cli"),
-    (&["Ipe", "Tea", "WebView"], "WebView"),
     // `Ipe.Tea.Web.PubSub` — the Web-shape-scoped TEA-side broadcast surface:
     // `publish` / `publishNoEcho` (Cmd forms, fired from `update`) and
     // `subscribeTopic` (Sub form, declared in `subscriptions`). Distinct from the
@@ -167,8 +166,6 @@ pub const STDLIB_MODULE_QUALIFIERS: &[(&[&str], &str)] = &[
     (&["Ipe", "Tea", "Tui", "Sub"], "TeaTuiSub"),
     (&["Ipe", "Tea", "Cli", "Cmd"], "TeaCliCmd"),
     (&["Ipe", "Tea", "Cli", "Sub"], "TeaCliSub"),
-    (&["Ipe", "Tea", "WebView", "Cmd"], "TeaWebViewCmd"),
-    (&["Ipe", "Tea", "WebView", "Sub"], "TeaWebViewSub"),
     // ── Effect stdlib modules ───────────────────────────────────────────────
     (&["Ipe", "Auth"], "Auth"),
     // `Ipe.Auth.Revocation` — per-session and per-subject revocation gate.
@@ -1297,8 +1294,6 @@ impl Env {
             // carry `KernelClass::Terminal` internally.
             ("Tui", &["app"]),
             ("Cli", &["app"]),
-            // ── Ipe.WebView app-entry kernel ─────────────────────────────────────
-            ("WebView", &["app"]),
             // Ipe.Auth / Ipe.Auth — authentication helpers (fail-closed: no lower
             // arm yet → IPE-L0108 at lower time; canon registration removes N0004).
             (
@@ -1423,8 +1418,6 @@ impl Env {
             ("TeaTuiSub", "Sub"),
             ("TeaCliCmd", "Cmd"),
             ("TeaCliSub", "Sub"),
-            ("TeaWebViewCmd", "Cmd"),
-            ("TeaWebViewSub", "Sub"),
         ];
 
         // ── Qualifier module aliases (Ipe.X / Ipê.X → short canonical) ────────
@@ -1452,7 +1445,6 @@ impl Env {
             // these two; its `Cmd` / `Sub` re-exports remain (below).
             ("Ipe.Tea.Tui", "Tui"),
             ("Ipe.Tea.Cli", "Cli"),
-            ("Ipe.Tea.WebView", "WebView"),
             ("Ipe.Log", "Log"),
             // ── Effect stdlib module aliases ──────────────────────────────────────
             ("Ipe.Auth", "Auth"),

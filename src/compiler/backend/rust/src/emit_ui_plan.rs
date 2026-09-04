@@ -136,8 +136,6 @@ pub enum UiDelegate {
     Web,
     /// `emit_tui::emit_tui_call` — `Tui.app`.
     Tui,
-    /// `emit_webview::emit_webview_call` — `WebView.app`.
-    WebView,
     /// `emit_console::emit_console_call` — `Cli.app`.
     Console,
 }
@@ -1117,7 +1115,6 @@ pub const fn appearance_literal_args(k: KernelFn) -> &'static [(usize, LitKind)]
         | KernelFn::WebRoute
         | KernelFn::WebRenderStatic
         | KernelFn::TerminalAppScreen
-        | KernelFn::WebViewApp
         | KernelFn::WebAppWith
         | KernelFn::AppFromEnv
         | KernelFn::AppFromEnvRequired
@@ -1526,7 +1523,7 @@ pub const fn appearance_literal_record_fields(k: KernelFn) -> &'static [(&'stati
 ///
 /// Returns `None` for a non-UI-family kernel, preserving the caller's
 /// early-return contract; `Some(plan)` for every kernel where
-/// `is_ui() || is_web() || is_tui() || is_webview() || is_console()` holds. The
+/// `is_ui() || is_web() || is_tui() || is_console()` holds. The
 /// two properties — every UI-family kernel classified, no other kernel
 /// classified — are the exhaustiveness partition the tests below assert.
 #[allow(clippy::too_many_lines)] // one declarative row per UI kernel — the table is the point
@@ -1829,7 +1826,6 @@ pub const fn ui_call_shape(k: KernelFn) -> Option<UiEmitPlan> {
         | KernelFn::WebRoute
         | KernelFn::WebRenderStatic => delegate(UiDelegate::Web),
         KernelFn::TerminalAppScreen => delegate(UiDelegate::Tui),
-        KernelFn::WebViewApp => delegate(UiDelegate::WebView),
         KernelFn::TerminalAppLines => delegate(UiDelegate::Console),
 
         // ── Debug.explain — dev-only, Web/WebView only ────────────────────
@@ -1860,7 +1856,7 @@ mod tests {
     /// Every kernel `ui_call_shape` classifies as UI-family. Mirrors the
     /// `is_ui() || …` guard that fronts the emitter.
     fn is_ui_family(k: KernelFn) -> bool {
-        k.is_ui() || k.is_web() || k.is_tui() || k.is_webview() || k.is_console()
+        k.is_ui() || k.is_web() || k.is_tui() || k.is_console()
     }
 
     /// A widget's plan is the positional shape the emitter renders as
@@ -1921,10 +1917,6 @@ mod tests {
             (
                 KernelFn::TerminalAppScreen,
                 NativeUiEmit::Delegate(UiDelegate::Tui),
-            ),
-            (
-                KernelFn::WebViewApp,
-                NativeUiEmit::Delegate(UiDelegate::WebView),
             ),
             (
                 KernelFn::TerminalAppLines,

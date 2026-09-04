@@ -513,8 +513,12 @@ pub fn render_type(ctx: &EmitCtx, ty: &IrType, generics: GenericScope) -> DResul
         // `run_start(ipe_main())` — so the leaf renders as that task type, not the
         // native-only `WebApp` handle (absent on wasm32).
         IrType::WebApp if ctx.target == ipe_ir::Target::WasmClient => "IpeTask<()>".to_owned(),
+        // A `Web.app` handle renders to the served `WebApp` unless the delivery
+        // host is webview-native (`web desktop`): then the same DOM app is driven
+        // by `WebViewApp`, whose `run_blocking` runs the event loop on the process
+        // main thread (tao/Cocoa requirement). One shape, two host executors.
+        IrType::WebApp if ctx.uses_webview => "ipe_runtime::tea::WebViewApp".to_owned(),
         IrType::WebApp => "ipe_runtime::tea::WebApp".to_owned(),
-        IrType::WebViewApp => "ipe_runtime::tea::WebViewApp".to_owned(),
         IrType::TuiApp => "ipe_runtime::tea::TuiApp".to_owned(),
         IrType::CliApp => "ipe_runtime::tea::CliApp".to_owned(),
         // `Route<Page>` has NO default type parameter in the runtime

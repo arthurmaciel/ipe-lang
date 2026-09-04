@@ -26,20 +26,19 @@ pub enum MainShape {
     Cli,
     /// `main = Server.listen …` — an HTTP server.
     Server,
-    /// `main = Web.app …` / `appRouted` / `appWith` / `WebView.app …` — the DOM
-    /// shape.
+    /// `main = Web.app …` / `appRouted` / `appWith` — the DOM shape. A webview is
+    /// a delivery *host* of this shape (`web desktop`), not a distinct shape
+    /// (spec § 1).
     Web,
 }
 
 /// A `main` head that head-calls one of these `(qualifier, name)` pairs pins the
-/// paired shape. `WebView.app` folds onto [`MainShape::Web`] — a webview is a
-/// Web *host*, not a distinct shape (spec § 1). Kept in lockstep with the
-/// resolver's `TEA_APP_ENTRIES` and `Server.listen` entry.
+/// paired shape. Kept in lockstep with the resolver's `TEA_APP_ENTRIES` and
+/// `Server.listen` entry.
 const SHAPE_ENTRIES: &[(&str, &str, MainShape)] = &[
     ("Web", "app", MainShape::Web),
     ("Web", "appRouted", MainShape::Web),
     ("Web", "appWith", MainShape::Web),
-    ("WebView", "app", MainShape::Web),
     ("Tui", "app", MainShape::Tui),
     ("Cli", "app", MainShape::Cli),
     ("Server", "listen", MainShape::Server),
@@ -131,14 +130,6 @@ mod tests {
     fn web_app_head_is_web() {
         assert_eq!(
             classify("module Main exposing (..)\n\nmain = Web.app cfg\n"),
-            MainShape::Web
-        );
-    }
-
-    #[test]
-    fn webview_app_folds_onto_web() {
-        assert_eq!(
-            classify("module Main exposing (..)\n\nmain = WebView.app cfg\n"),
             MainShape::Web
         );
     }
