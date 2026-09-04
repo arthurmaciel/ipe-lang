@@ -13,22 +13,14 @@ use super::json::{Decoder, JsonVal};
 use super::*;
 
 // Config.nullable : Decoder a -> Decoder (Maybe a)
-// Returns Ipê's IpeMaybe (not Rust Option) so the decoded value matches the
-// `Maybe a` the Ipê annotation lowers to.
+// The Config surface reuses the one shared nullable builder in `json` — the
+// combinator is JSON-shaped (null => Nothing, else Just, inner error
+// propagated) and lives once, in the always-available `json` module, so
+// JsonDec / Config / Db.Decode share a single implementation.
 pub fn config_nullable<E: From<String> + 'static, T: 'static + Send>(
     decoder: Decoder<E, T>,
 ) -> Decoder<E, IpeMaybe<T>> {
-    let inner_fields = decoder.fields.clone();
-    Decoder::new(
-        Box::new(move |v| match v {
-            JsonVal::Null => IpeResult::Ok(IpeMaybe::Nothing),
-            _ => match (decoder.run)(v) {
-                IpeResult::Ok(t) => IpeResult::Ok(IpeMaybe::Just(t)),
-                IpeResult::Err(e) => IpeResult::Err(e),
-            },
-        }),
-        inner_fields,
-    )
+    super::json::decode_nullable(decoder)
 }
 
 // Config.maybe : Decoder a -> Decoder (Maybe a)

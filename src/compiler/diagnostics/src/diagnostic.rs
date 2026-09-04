@@ -23,12 +23,12 @@ use crate::code::{
     IPE_N0021, IPE_N0022, IPE_N0023, IPE_N0024, IPE_N0025, IPE_N0026, IPE_N0027, IPE_N0028,
     IPE_N0029, IPE_N0030, IPE_N0031, IPE_N0032, IPE_N0033, IPE_N0034, IPE_N0035, IPE_N0036,
     IPE_N0038, IPE_N0039, IPE_N0040, IPE_N0041, IPE_N0042, IPE_N0043, IPE_N0044, IPE_N0045,
-    IPE_N0046, IPE_P0001, IPE_P0002, IPE_P0003, IPE_P0010, IPE_P0011, IPE_P0012, IPE_P0013,
-    IPE_P0014, IPE_P0015, IPE_P0016, IPE_P0017, IPE_P0018, IPE_P0020, IPE_P0021, IPE_P0030,
-    IPE_P0031, IPE_P0040, IPE_P0041, IPE_P0050, IPE_P0060, IPE_P0061, IPE_P0062, IPE_P0063,
-    IPE_P0064, IPE_P0065, IPE_P0066, IPE_P0067, IPE_S0001, IPE_T0001, IPE_T0002, IPE_T0003,
-    IPE_T0004, IPE_T0010, IPE_T0011, IPE_T0012, IPE_T0013, IPE_T0014, IPE_T0015, IPE_T0016,
-    IPE_T0017, IPE_T0018, IPE_T0019, IPE_T0020, Severity,
+    IPE_N0046, IPE_N0047, IPE_P0001, IPE_P0002, IPE_P0003, IPE_P0010, IPE_P0011, IPE_P0012,
+    IPE_P0013, IPE_P0014, IPE_P0015, IPE_P0016, IPE_P0017, IPE_P0018, IPE_P0020, IPE_P0021,
+    IPE_P0030, IPE_P0031, IPE_P0040, IPE_P0041, IPE_P0050, IPE_P0060, IPE_P0061, IPE_P0062,
+    IPE_P0063, IPE_P0064, IPE_P0065, IPE_P0066, IPE_P0067, IPE_S0001, IPE_T0001, IPE_T0002,
+    IPE_T0003, IPE_T0004, IPE_T0010, IPE_T0011, IPE_T0012, IPE_T0013, IPE_T0014, IPE_T0015,
+    IPE_T0016, IPE_T0017, IPE_T0018, IPE_T0019, IPE_T0020, Severity,
 };
 use crate::span::Span;
 
@@ -706,6 +706,52 @@ pub enum NameError {
     /// annotation `init : WebReq -> (Model, Cmd Msg)` or omit the annotation and
     /// let inference fill in `WebReq`. [IPE-N0046]
     WebInitPolyArg,
+    /// A standard-library module is imported in a shape × runtime placement the
+    /// library single-source-of-truth table does not admit (spec § 5). A
+    /// program's placement is fixed by two orthogonal axes — its shape (what
+    /// `view` renders, pinned by `main`) and, for the Web shape, its runtime
+    /// (co-located `live` vs sandboxed `spa`). One table classifies every stdlib
+    /// module by the placements it is admissible in; an import outside that set
+    /// is refused here at resolve time, before any downstream cargo build (THE
+    /// SEAL) can break and before a native effect could reach a sandboxed
+    /// browser bundle (Security > ease of use, fail-closed). The carried
+    /// [`ModulePlacementRejection`] names the module, the placement, and why the
+    /// two axes forbid it, so the rendered message teaches the fix. [IPE-N0047]
+    ModuleNotAllowedInPlacement(Box<ModulePlacementRejection>),
+}
+
+/// Why a standard-library module is not admissible in a shape × runtime
+/// placement, reported inside [`NameError::ModuleNotAllowedInPlacement`].
+///
+/// Boxed on the `NameError` so `Diagnostic` stays under clippy's
+/// `result_large_err` threshold. `module` is the offending import path;
+/// `placement` is the human placement phrase (`script`, `terminal`, `server`,
+/// `web live`, `web spa`); `reason` selects the kind-teacher sentence and its
+/// suggested fix (spec § 6). The prose lives with the renderer so the message
+/// set is itself a single source of truth.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct ModulePlacementRejection {
+    /// The offending stdlib import path, e.g. `Ipe.Db.Store`.
+    pub module: Box<str>,
+    /// The program's placement phrase, e.g. `web spa`.
+    pub placement: Box<str>,
+    /// Why this module family is inadmissible in that placement.
+    pub reason: ModulePlacementReason,
+}
+
+/// The specific library-SSOT rule a rejected import broke (spec § 5, § 6).
+///
+/// Each variant selects a distinct kind-teacher sentence naming what is wrong,
+/// the big-picture reason (which of the two axes forbids it), and the fix.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ModulePlacementReason {
+    /// A native effect (`Ipe.Db` / `Ipe.File` / `Ipe.Http.Server` / a secret) in
+    /// a sandboxed `spa` runtime — the DB/secret-to-browser leak. Move it behind
+    /// an HTTP boundary, or deliver as `web live`.
+    NativeEffectInSandbox,
+    /// A `Ipe.Browser.*` host capability in a placement with no JS host
+    /// (`terminal` / `server` / `script`).
+    BrowserOutsideBrowserHost,
 }
 
 /// Why `Ipe.Codec.auto` could not derive a codec.
@@ -1895,6 +1941,7 @@ const fn name_code(msg: &NameError) -> Code {
         NameError::CustomElementCtorMalformed { .. } => IPE_N0044,
         NameError::RuntimeBranchedMain => IPE_N0045,
         NameError::WebInitPolyArg => IPE_N0046,
+        NameError::ModuleNotAllowedInPlacement(..) => IPE_N0047,
     }
 }
 
@@ -2086,6 +2133,7 @@ fn name_help(msg: &NameError, span: Span) -> Vec<HelpLine> {
         | NameError::DiscardedConfig
         | NameError::CustomElementCtorMalformed { .. }
         | NameError::RuntimeBranchedMain
+        | NameError::ModuleNotAllowedInPlacement(..)
         | NameError::WebInitPolyArg => Vec::new(), // no span-based help
     }
 }

@@ -133,6 +133,16 @@ pub enum WebCapability {
     Microphone,
     /// `navigator.getGamepads()` — polled gamepad state, connect/disconnect events.
     Gamepad,
+    /// `getUserMedia({ audio[, video] })` + `MediaRecorder` — recording a bounded
+    /// audio (or audio + video) stream from the device. A start opens a
+    /// session-stream: the host arms a `MediaRecorder` and pushes one typed data
+    /// chunk frame per `ondataavailable` blob until stop, then a terminal frame;
+    /// no chunk is ever emitted after close. This axis reaches BOTH the camera and
+    /// the microphone through `getUserMedia`, so it is a distinct, strictly
+    /// weightier axis than [`Self::Camera`] (a `<input capture>` photo picker) or
+    /// [`Self::Microphone`] (a one-shot bounded audio clip). A permission denial or
+    /// an absent `MediaRecorder` API traps to a typed inbound frame — never a throw.
+    Recorder,
     /// `document.visibilityState` / `visibilitychange` event — the binary
     /// foreground/background state of the page. A one-shot query reads the
     /// current state; a watch subscription delivers a fresh reading on every
@@ -207,6 +217,7 @@ impl WebCapability {
         Self::Camera,
         Self::Microphone,
         Self::Gamepad,
+        Self::Recorder,
         Self::Visibility,
         Self::MediaQuery,
         Self::Connectivity,
@@ -238,6 +249,7 @@ impl WebCapability {
             Self::Camera => "camera",
             Self::Microphone => "microphone",
             Self::Gamepad => "gamepad",
+            Self::Recorder => "recorder",
             Self::Visibility => "visibility",
             Self::MediaQuery => "media-query",
             Self::Connectivity => "connectivity",
@@ -280,6 +292,7 @@ impl WebCapability {
             ["Ipe", "Browser", "Camera", ..] => Some(Self::Camera),
             ["Ipe", "Browser", "Microphone", ..] => Some(Self::Microphone),
             ["Ipe", "Browser", "Gamepad", ..] => Some(Self::Gamepad),
+            ["Ipe", "Browser", "Recorder", ..] => Some(Self::Recorder),
             ["Ipe", "Browser", "Visibility", ..] => Some(Self::Visibility),
             ["Ipe", "Browser", "MediaQuery", ..] => Some(Self::MediaQuery),
             ["Ipe", "Browser", "Connectivity", ..] => Some(Self::Connectivity),
@@ -327,6 +340,11 @@ impl WebCapability {
             Self::Gamepad => {
                 "Polling gamepad state and receiving connect/disconnect events via \
                  navigator.getGamepads() and the Gamepad API event listeners."
+            }
+            Self::Recorder => {
+                "Recording a bounded audio (or audio + video) stream from the camera and \
+                 microphone via getUserMedia + MediaRecorder; recorded data arrives as a \
+                 session-stream of typed base-64 data-URL chunks until stop."
             }
             Self::Visibility => {
                 "Reading the document visibility state (foreground/background) via \
@@ -399,6 +417,7 @@ impl WebCapability {
             "camera" => Ok(Self::Camera),
             "microphone" => Ok(Self::Microphone),
             "gamepad" => Ok(Self::Gamepad),
+            "recorder" => Ok(Self::Recorder),
             "visibility" => Ok(Self::Visibility),
             "media-query" => Ok(Self::MediaQuery),
             "connectivity" => Ok(Self::Connectivity),
@@ -435,6 +454,7 @@ impl WebCapability {
             Self::Camera => "Camera",
             Self::Microphone => "Microphone",
             Self::Gamepad => "Gamepad",
+            Self::Recorder => "Recorder",
             Self::Visibility => "Visibility",
             Self::MediaQuery => "MediaQuery",
             Self::Connectivity => "Connectivity",
@@ -557,6 +577,7 @@ impl Capability {
         Self::JsPort(WebCapability::Camera),
         Self::JsPort(WebCapability::Microphone),
         Self::JsPort(WebCapability::Gamepad),
+        Self::JsPort(WebCapability::Recorder),
         Self::JsPort(WebCapability::Visibility),
         Self::JsPort(WebCapability::MediaQuery),
         Self::JsPort(WebCapability::Connectivity),
@@ -617,6 +638,7 @@ impl Capability {
                 WebCapability::Camera => "js-port:camera",
                 WebCapability::Microphone => "js-port:microphone",
                 WebCapability::Gamepad => "js-port:gamepad",
+                WebCapability::Recorder => "js-port:recorder",
                 WebCapability::Visibility => "js-port:visibility",
                 WebCapability::MediaQuery => "js-port:media-query",
                 WebCapability::Connectivity => "js-port:connectivity",
@@ -680,9 +702,9 @@ impl std::fmt::Display for UnknownCapability {
              database, env, subprocess, clock, random, native-ffi, ffi-raw, unsafe, \
              custom-element, js-port:<axis> where <axis> is one of geolocation, \
              clipboard, notification, storage, vibration, share, battery, \
-             network-info, file, camera, microphone, gamepad, visibility, media-query, \
-             connectivity, raw, speech, permission, orientation, motion, channel, \
-             fullscreen, screen-orientation, wake-lock)",
+             network-info, file, camera, microphone, gamepad, recorder, visibility, \
+             media-query, connectivity, raw, speech, permission, orientation, motion, \
+             channel, fullscreen, screen-orientation, wake-lock)",
             self.0
         )
     }
@@ -866,6 +888,32 @@ mod tests {
         assert_eq!(
             Capability::from_str("js-port:microphone"),
             Ok(Capability::JsPort(WebCapability::Microphone))
+        );
+    }
+
+    #[test]
+    fn recorder_axis_round_trips_and_names_the_browser_module() {
+        // The media-recording axis is its own closed vocabulary member, distinct
+        // from camera/microphone, and the `Ipe.Browser.Recorder` module (and its
+        // Internals submodule) discloses it via the path-prefix key.
+        use std::str::FromStr as _;
+        assert_eq!(
+            Capability::from_str("js-port:recorder"),
+            Ok(Capability::JsPort(WebCapability::Recorder))
+        );
+        assert_eq!(WebCapability::Recorder.as_str(), "recorder");
+        assert_eq!(WebCapability::Recorder.ctor_name(), "Recorder");
+        assert_eq!(
+            WebCapability::from_ctor("Recorder"),
+            Some(WebCapability::Recorder)
+        );
+        assert_eq!(
+            WebCapability::for_browser_module(&["Ipe", "Browser", "Recorder"]),
+            Some(WebCapability::Recorder)
+        );
+        assert_eq!(
+            WebCapability::for_browser_module(&["Ipe", "Browser", "Recorder", "Internals"]),
+            Some(WebCapability::Recorder)
         );
     }
 

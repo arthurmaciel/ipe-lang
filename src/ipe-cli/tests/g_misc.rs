@@ -106,5 +106,7 @@ mod golden_tree;
 mod golden_typed_primitives_seal;
 #[path = "g_misc/golden_unit_pattern.rs"]
 mod golden_unit_pattern;
+#[path = "g_misc/golden_unit_pattern_match.rs"]
+mod golden_unit_pattern_match;
 #[path = "g_misc/golden_update_base_after_move.rs"]
 mod golden_update_base_after_move;

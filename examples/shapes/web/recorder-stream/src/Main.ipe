@@ -1,0 +1,120 @@
+module Main exposing (main)
+
+-- | recorder-stream — `Ipe.Browser.Recorder` end-to-end, with the consent gate
+-- satisfied.
+--
+-- Demonstrates the bounded recording session-stream: the user clicks "Record
+-- audio" (or "Record video"), the app calls `startAudio` / `startVideo` — which
+-- returns a typed `Recording` handle — and each recorded data chunk arrives as a
+-- typed `Frame` on the `chunks` subscription and is counted on screen. Clicking
+-- "Stop" closes the session with the stored handle; the host emits one terminal
+-- `RecorderEnded` frame and never another chunk.
+--
+-- `Ipe.Browser.Recorder` discloses `js-port:recorder` on import; the companion
+-- `js-port:raw` floor is also disclosed. Both are accepted in `package.ipe`.
+--
+-- A host permission denial or an absent `getUserMedia`/`MediaRecorder` arrives as
+-- a typed `RecorderDenied` / `RecorderUnavailable` frame — never a thrown error
+-- or a silently dropped chunk.
+
+
+import Ipe.Tea.Web as Web
+import Ipe.Tea.Web.Cmd as Cmd
+import Ipe.Tea.Web.Sub as Sub
+import Ipe.Ui as Ui
+import Ipe.Browser.Recorder as Recorder exposing (Frame(..))
+import Ipe.String as String
+
+
+type alias Model =
+    { status : String
+    , chunkCount : Int
+    , recording : Maybe Recorder.Recording
+    }
+
+
+type Msg
+    = StartAudio
+    | StartVideo
+    | Stop
+    | GotFrame Recorder.Frame
+
+
+init : WebReq -> ( Model, Cmd.Cmd Msg )
+init _req =
+    ( { status = "idle", chunkCount = 0, recording = Nothing }, Cmd.none )
+
+
+update : Msg -> Model -> ( Model, Cmd.Cmd Msg )
+update msg model =
+    case msg of
+        StartAudio ->
+            let
+                ( handle, cmd ) =
+                    Recorder.startAudio { mimeType = "audio/webm", timesliceMs = 1000 }
+            in
+            ( { model | status = "recording audio…", chunkCount = 0, recording = Just handle }, cmd )
+
+        StartVideo ->
+            let
+                ( handle, cmd ) =
+                    Recorder.startVideo { mimeType = "video/webm", timesliceMs = 1000 }
+            in
+            ( { model | status = "recording video…", chunkCount = 0, recording = Just handle }, cmd )
+
+        Stop ->
+            case model.recording of
+                Just handle ->
+                    ( { model | status = "stopping…" }, Recorder.stop handle )
+
+                Nothing ->
+                    ( model, Cmd.none )
+
+        GotFrame frame ->
+            ( applyFrame frame model, Cmd.none )
+
+
+applyFrame : Recorder.Frame -> Model -> Model
+applyFrame frame model =
+    case frame of
+        RecorderStarted mime ->
+            { model | status = "started (" ++ mime ++ ")" }
+
+        RecorderChunk _data _mime ->
+            { model | chunkCount = model.chunkCount + 1 }
+
+        RecorderEnded ->
+            { model | status = "ended", recording = Nothing }
+
+        RecorderDenied ->
+            { model | status = "permission denied", recording = Nothing }
+
+        RecorderUnavailable ->
+            { model | status = "recording unavailable in this browser", recording = Nothing }
+
+
+subscriptions : Model -> Sub.Sub Msg
+subscriptions _model =
+    Recorder.chunks GotFrame
+
+
+view : Model -> Element Msg
+view model =
+    Ui.column []
+        [ Ui.button [] { onPress = Just StartAudio, label = Ui.text "Record audio" }
+        , Ui.button [] { onPress = Just StartVideo, label = Ui.text "Record video" }
+        , Ui.button [] { onPress = Just Stop, label = Ui.text "Stop" }
+        , Ui.text ("status: " ++ model.status)
+        , Ui.text ("chunks: " ++ String.fromInt model.chunkCount)
+        ]
+
+
+main =
+    Web.app
+        { init = init
+        , update = update
+        , view = view
+        , subscriptions = subscriptions
+        , routes = []
+        , notFound = Stop
+        }

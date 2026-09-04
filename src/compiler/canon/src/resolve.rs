@@ -6,7 +6,8 @@ use std::rc::Rc;
 
 use ipe_diagnostics::{
     AliasExpansionKind, CmdSubShapeMismatch, CodecAutoRejection, DResult, Diagnostic, Located,
-    NameError, ParseError, SealRejection, SortedNames, Span, TypeError,
+    ModulePlacementReason, ModulePlacementRejection, NameError, ParseError, SealRejection,
+    SortedNames, Span, TypeError,
 };
 use ipe_intern::{Interner, Symbol};
 use ipe_kernels::{StdlibKernel, WebCapability};
@@ -1372,6 +1373,7 @@ pub fn canonicalise_module_in_project(
         check_main_not_runtime_branched(&canon_mod, interner)?;
         check_program_tea_import_gate(m, &canon_mod, interner)?;
         check_cross_shape_cmd_sub_gate(m, &canon_mod, interner)?;
+        check_library_ssot_import_gate(m, interner)?;
         // Thread a sibling top-level `config` binding into the app entry
         // (`main = Web.app { … }` becomes `Web.appWith config { … }`), or reject
         // a `config` binding that no app entry consumes (IPE-N0043).
@@ -1944,6 +1946,131 @@ fn check_cross_shape_cmd_sub_gate(
         });
     }
     Ok(())
+}
+
+/// IPE-N0047: reject a stdlib import the library single-source-of-truth table
+/// does not admit for this module's shape (spec § 5).
+///
+/// The program's shape is pinned by the head of `main`
+/// ([`crate::shape_source::classify_main_shape`]); the placement's runtime is a
+/// delivery-time choice not known at resolve for the Web shape. So this gate
+/// enforces exactly the SHAPE-FIXED deny rows — a rejection that holds
+/// regardless of runtime. The one runtime-specific row (a native effect denied
+/// only in the sandboxed `spa` runtime) is enforced downstream by the wasm
+/// target gate (IPE-N0029), which knows the resolved runtime; both consult the
+/// same [`crate::shape_runtime::allowed_in`] table, so there is one source of
+/// truth and no per-site duplication.
+///
+/// A module is refused here only when [`crate::shape_runtime::allowed_in`] denies
+/// it in EVERY runtime the shape can carry (both `live` and `spa` for Web, the
+/// sole co-located runtime for every other shape). A denial that holds in one
+/// runtime but not the other is left to the runtime-aware gate, so a delivery
+/// that would be valid is never rejected at resolve.
+///
+/// Only USER modules with a `main`-pinned shape are gated; a helper submodule
+/// (no `main`) is a `Script` placement by default and carries no shape-render
+/// constraint of its own — its imports are gated when the entry that reaches it
+/// is resolved.
+///
+/// # Errors
+/// [`Diagnostic::Name`] (IPE-N0047) at the offending import span.
+fn check_library_ssot_import_gate(m: &src::Module, interner: &Interner) -> DResult<()> {
+    use crate::shape_runtime::{Admissibility, Placement, Runtime, Shape};
+
+    // Only an ENTRY module — one that defines `main` — has a placement to gate.
+    // A helper submodule (no `main`) carries no shape/runtime of its own: its
+    // shape is not `main`-pinned, and a shape-render or browser-host module it
+    // imports is legitimate when the entry that transitively reaches it renders
+    // that surface. Gating a helper as a default `script` placement would reject
+    // a `Ipe.Browser.*` widget helper reused by a web entry. The entry's own
+    // gate — plus the runtime-aware wasm link gate over the whole linked program
+    // — cover a helper's imports transitively; here we gate only the entry.
+    let Some(main_sym) = interner.lookup("main") else {
+        return Ok(()); // `main` never interned → this module defines no entry.
+    };
+    if !m.values.iter().any(|v| v.value.name.value == main_sym) {
+        return Ok(()); // a helper module with no `main` — not an entry.
+    }
+
+    let shape = Shape::from_main(crate::shape_source::classify_main_shape(m, interner));
+
+    // The runtimes this shape can carry: Web admits both live and spa, every
+    // other shape has its one co-located runtime. A row is enforced here only
+    // when it denies in ALL of them (a shape-fixed rejection).
+    let runtimes: &[Runtime] = match shape {
+        Shape::Web => &[Runtime::CoLocated, Runtime::Spa],
+        _ => &[Runtime::CoLocated],
+    };
+
+    for import in &m.imports {
+        let dot = path_to_dot_string(interner, &import.name.value);
+        let class = crate::shape_runtime::classify(&dot);
+
+        // Collect the deny reasons across every runtime this shape can carry.
+        // A shape-fixed rejection denies in all of them; the reason is the same
+        // in each, so the first suffices for the message.
+        let mut denies_everywhere = true;
+        let mut first_reason = None;
+        for &runtime in runtimes {
+            match crate::shape_runtime::allowed_in(class, Placement { shape, runtime }) {
+                Admissibility::Allow => {
+                    denies_everywhere = false;
+                    break;
+                }
+                Admissibility::Deny(reason) => {
+                    first_reason.get_or_insert(reason);
+                }
+            }
+        }
+
+        if !denies_everywhere {
+            continue;
+        }
+        let Some(reason) = first_reason else {
+            continue;
+        };
+
+        return Err(Diagnostic::Name {
+            span: import.name.span,
+            msg: NameError::ModuleNotAllowedInPlacement(Box::new(ModulePlacementRejection {
+                module: dot,
+                placement: placement_phrase(shape, runtimes).into(),
+                reason: map_placement_reason(&reason),
+            })),
+        });
+    }
+    Ok(())
+}
+
+/// The human placement phrase to name in an IPE-N0047 message. For a non-Web
+/// shape the phrase is unambiguous (`script` / `terminal` / `server`). For the
+/// Web shape a shape-fixed rejection holds in both runtimes, so the bare `web`
+/// word names the shape without over-committing to `live` or `spa`.
+const fn placement_phrase(
+    shape: crate::shape_runtime::Shape,
+    _runtimes: &[crate::shape_runtime::Runtime],
+) -> &'static str {
+    use crate::shape_runtime::Shape;
+    match shape {
+        Shape::Script => "script",
+        Shape::Tui | Shape::Cli => "terminal",
+        Shape::Server => "server",
+        Shape::Web => "web",
+    }
+}
+
+/// Map a [`crate::shape_runtime::DenyReason`] onto the diagnostic-layer
+/// [`ModulePlacementReason`]. The two enums are kept distinct so the placement
+/// model (canon) and the message set (diagnostics) each own their vocabulary;
+/// this total mapping is the one bridge between them.
+const fn map_placement_reason(reason: &crate::shape_runtime::DenyReason) -> ModulePlacementReason {
+    use crate::shape_runtime::DenyReason;
+    match reason {
+        DenyReason::NativeEffectInSandbox => ModulePlacementReason::NativeEffectInSandbox,
+        DenyReason::BrowserOutsideBrowserHost { .. } => {
+            ModulePlacementReason::BrowserOutsideBrowserHost
+        }
+    }
 }
 
 /// Reject any `Ipe.*` import that names no importable module, at the import
@@ -4811,8 +4938,9 @@ fn canonicalise_value(
 /// Bind every variable a pattern introduces as a local in the environment.
 fn bind_pattern_names(p: &src::Pattern_, env: &mut Env) {
     match p {
-        // The wildcard and the literal leaves all bind nothing.
+        // The wildcard, the unit pattern, and the literal leaves all bind nothing.
         src::Pattern_::PAnything
+        | src::Pattern_::PUnit
         | src::Pattern_::PInt(_)
         | src::Pattern_::PBool(_)
         | src::Pattern_::PChar(_)
@@ -4868,6 +4996,7 @@ fn bound_name_set(p: &src::Pattern_) -> std::collections::BTreeSet<Symbol> {
 fn collect_bound_names(p: &src::Pattern_, names: &mut std::collections::BTreeSet<Symbol>) {
     match p {
         src::Pattern_::PAnything
+        | src::Pattern_::PUnit
         | src::Pattern_::PInt(_)
         | src::Pattern_::PBool(_)
         | src::Pattern_::PChar(_)
@@ -4917,6 +5046,7 @@ fn canonicalise_pattern(
     let span = p.span;
     let node = match &p.value {
         src::Pattern_::PAnything => canon::Pattern_::PAnything,
+        src::Pattern_::PUnit => canon::Pattern_::PUnit,
         src::Pattern_::PVar(name) => canon::Pattern_::PVar(*name),
         src::Pattern_::PCtor(name, _, args) => {
             let Some(ctor) = env.lookup_ctor(*name) else {

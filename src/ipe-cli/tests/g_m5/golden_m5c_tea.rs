@@ -167,3 +167,19 @@ fn wrong_shape_cmd_import_is_ipe_n0035() {
         ipe_diagnostics::IPE_N0035,
     );
 }
+
+/// A `cli` app (a terminal-lines shape, no browser) importing
+/// `Ipe.Browser.Clipboard` — a browser host capability that needs a JS host. The
+/// library single-source-of-truth table admits a browser capability only in a
+/// placement with a browser (a web app), so the import is a placement
+/// contradiction rejected with IPE-N0047 at resolve, before any Rust is
+/// generated. This is the gate's uniquely-owned row (no other gate covers a
+/// browser capability in a live-rendering terminal shape).
+#[test]
+fn browser_capability_in_cli_is_ipe_n0047() {
+    assert_gate(
+        "gate_browser_in_cli",
+        "m5c_gate_browser_in_cli_emit",
+        ipe_diagnostics::IPE_N0047,
+    );
+}

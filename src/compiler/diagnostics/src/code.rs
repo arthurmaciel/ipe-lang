@@ -280,6 +280,9 @@ code! {
     /// `Web.app`'s `init` annotation uses a free type variable for its request
     /// argument — the request type is `WebReq`, not an unconstrained `a`
     IPE_N0046 = "IPE-N0046", "Web.app init annotation uses a type variable where WebReq is required", "IPE-N0046";
+    /// a standard-library module is imported in a shape × runtime placement the
+    /// library single-source-of-truth table does not admit
+    IPE_N0047 = "IPE-N0047", "this standard-library module is not available in this shape × runtime placement", "IPE-N0047";
 
     // -----------------------------------------------------------------------
     // Type (IPE-T####)

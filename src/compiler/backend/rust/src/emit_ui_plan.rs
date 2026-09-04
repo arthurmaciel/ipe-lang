@@ -739,6 +739,7 @@ pub const fn appearance_literal_args(k: KernelFn) -> &'static [(usize, LitKind)]
         | KernelFn::JsonDecAt
         | KernelFn::JsonDecIndex
         | KernelFn::JsonDecList
+        | KernelFn::JsonDecNullable
         | KernelFn::JsonDecMap
         | KernelFn::JsonDecAndThen
         | KernelFn::JsonDecSucceed

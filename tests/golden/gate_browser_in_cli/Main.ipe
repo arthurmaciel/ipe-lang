@@ -1,0 +1,69 @@
+module Main exposing (main)
+
+-- Library-SSOT placement gate (IPE-N0047): this is a `cli` app (its `main`
+-- calls `Cli.app`, so it renders terminal lines). It imports
+-- `Ipe.Browser.Clipboard` — a browser host capability that needs a JS host. A
+-- terminal app has no browser and never will, so the import has no denotation
+-- here; it fails closed at resolve, before any Rust is generated. The fix is a
+-- web app (`web` / `web spa`), which is hosted in a browser.
+
+import Ipe.String as String
+import Ipe.Task as Task
+import Ipe.Tea.Cli as Cli
+import Ipe.Tea.Cli.Cmd as Cmd
+import Ipe.Tea.Cli.Sub as Sub
+import Ipe.Browser.Clipboard as Clipboard
+
+
+type Msg
+    = Echo String
+    | NoOp
+
+
+type alias Model =
+    { count : Int }
+
+
+init : () -> ( Model, Cmd Msg )
+init _unit =
+    ( { count = 0 }, Cmd.none )
+
+
+update : Msg -> Model -> ( Model, Cmd Msg )
+update msg model =
+    case msg of
+        Echo _line ->
+            ( { count = model.count + 1 }, Cmd.none )
+
+        NoOp ->
+            ( model, Cmd.none )
+
+
+view : Model -> String
+view model =
+    "lines: " ++ String.fromInt model.count ++ " > "
+
+
+subscriptions : Model -> Sub Msg
+subscriptions _model =
+    Sub.none
+
+
+onLine : String -> Msg
+onLine line =
+    case String.trim line of
+        "" ->
+            NoOp
+
+        trimmed ->
+            Echo trimmed
+
+
+main =
+    Cli.app
+        { init = init
+        , update = update
+        , view = view
+        , subscriptions = subscriptions
+        , onLine = onLine
+        }

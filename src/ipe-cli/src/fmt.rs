@@ -1162,6 +1162,7 @@ impl Printer<'_> {
     fn pattern(&self, p: &Pattern_) -> String {
         match p {
             Pattern_::PAnything => "_".to_owned(),
+            Pattern_::PUnit => "()".to_owned(),
             Pattern_::PVar(s) => self.sym(*s),
             Pattern_::PInt(n) => n.to_string(),
             Pattern_::PBool(b) => if *b { "True" } else { "False" }.to_owned(),

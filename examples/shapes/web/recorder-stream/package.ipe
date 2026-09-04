@@ -1,0 +1,24 @@
+module Package exposing (package)
+
+import Ipe.Package exposing (..)
+
+
+package : Package
+package =
+    { name = "recorder-stream"
+    , version = "0.1.0"
+    , capabilities =
+        { declares = []
+
+        -- The `Ipe.Browser.Recorder` import discloses `js-port:recorder`;
+        -- the `:raw` floor is also disclosed because the module reaches
+        -- `Js.send`/`Js.subscribe` under the hood. Both must be accepted here
+        -- or the build fails closed (IPE-S0002).
+        --
+        -- `js-port:recorder` is the getUserMedia camera + microphone axis; a
+        -- native shell packaging this app DERIVES NSCameraUsageDescription +
+        -- NSMicrophoneUsageDescription (iOS/macOS) and CAMERA + RECORD_AUDIO
+        -- (Android) from this one grant — never hand-added.
+        , accepts = [ JsPort Recorder, JsPort Raw ]
+        }
+    }

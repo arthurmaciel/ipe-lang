@@ -3461,6 +3461,7 @@ fn canon_collect_pat_binds(pat: &canon::Pattern, bound: &mut BTreeSet<Symbol>) {
             bound.insert(*s);
         }
         canon::Pattern_::PAnything
+        | canon::Pattern_::PUnit
         | canon::Pattern_::PInt(_)
         | canon::Pattern_::PBool(_)
         | canon::Pattern_::PChar(_)
@@ -5594,6 +5595,7 @@ fn collect_pvars_inner(pat: &canon::Pattern_, out: &mut Vec<Symbol>) {
         }
         // Leaf patterns: no bindings.
         canon::Pattern_::PAnything
+        | canon::Pattern_::PUnit
         | canon::Pattern_::PInt(_)
         | canon::Pattern_::PBool(_)
         | canon::Pattern_::PChar(_)
@@ -13594,7 +13596,10 @@ pub fn count_any_param_sites(m: &canon::Module, interner: &Interner) -> usize {
 /// index panic.
 pub fn count_destructure_thunk_sites(m: &canon::Module) -> usize {
     const fn is_thunk_countable_binding(pat: &canon::Pattern_) -> bool {
-        !matches!(pat, canon::Pattern_::PVar(_) | canon::Pattern_::PAnything)
+        !matches!(
+            pat,
+            canon::Pattern_::PVar(_) | canon::Pattern_::PAnything | canon::Pattern_::PUnit
+        )
     }
     fn is_destructure_headed(pat: &canon::Pattern_) -> bool {
         match pat {
@@ -18668,9 +18673,13 @@ impl<'a> Lowerer<'a> {
         match &pat.value {
             // The param is its own name — no synthetic binder, no prologue.
             canon::Pattern_::PVar(s) => Ok(((*s, ir_ty), None)),
-            // A wildcard param needs a name (Rust params are named) but binds
-            // nothing: a fresh unused binder, no destructure.
-            canon::Pattern_::PAnything => Ok(((self.fresh_param_binder()?, ir_ty), None)),
+            // A wildcard or unit param needs a name (Rust params are named) but
+            // binds nothing: a fresh unused binder, no destructure. `()` is
+            // irrefutable and its arg is unit-typed, so the fresh binder holds an
+            // unread unit value — `\() -> …` and `f () = …` are sound.
+            canon::Pattern_::PAnything | canon::Pattern_::PUnit => {
+                Ok(((self.fresh_param_binder()?, ir_ty), None))
+            }
             // A destructuring param: a fresh binder holds the whole argument, and
             // a `Destructure` prologue opens it in the body.
             canon::Pattern_::PTuple(_)
@@ -25311,6 +25320,7 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::JsonEncObject
                 // ── JsonDec arity-1 combinators ─────────────────────────
                 | KernelFn::JsonDecList
+                | KernelFn::JsonDecNullable
                 | KernelFn::JsonDecSucceed
                 | KernelFn::JsonDecFail
                 | KernelFn::JsonDecOneOf
@@ -27301,6 +27311,7 @@ impl<'a> Lowerer<'a> {
                     ("JsonDec", "at") => Ok(Callee::Kernel(KernelFn::JsonDecAt)),
                     ("JsonDec", "index") => Ok(Callee::Kernel(KernelFn::JsonDecIndex)),
                     ("JsonDec", "list") => Ok(Callee::Kernel(KernelFn::JsonDecList)),
+                    ("JsonDec", "nullable") => Ok(Callee::Kernel(KernelFn::JsonDecNullable)),
                     ("JsonDec", "map") => Ok(Callee::Kernel(KernelFn::JsonDecMap)),
                     ("JsonDec", "andThen") => Ok(Callee::Kernel(KernelFn::JsonDecAndThen)),
                     ("JsonDec", "succeed") => Ok(Callee::Kernel(KernelFn::JsonDecSucceed)),
@@ -28319,7 +28330,10 @@ impl<'a> Lowerer<'a> {
     fn lower_payload_pat(&self, p: &canon::Pattern) -> DResult<Pat> {
         match &p.value {
             canon::Pattern_::PVar(s) => Ok(Pat::Var(*s)),
-            canon::Pattern_::PAnything => Ok(Pat::Wildcard),
+            // `()` binds nothing and the type layer has pinned its scrutinee to
+            // unit, so it lowers to a wildcard — sound: `_` matches the sole unit
+            // value.
+            canon::Pattern_::PAnything | canon::Pattern_::PUnit => Ok(Pat::Wildcard),
             // Literal leaves lower to the matching refutable IR leaf.
             // Int / Bool / Char are `Copy` — a literal pattern against an owned
             // FIELD of one of those types is ordinary, sound Rust regardless of
@@ -28431,7 +28445,7 @@ impl<'a> Lowerer<'a> {
     fn lower_destructure_pat(&self, p: &canon::Pattern) -> DResult<Pat> {
         match &p.value {
             canon::Pattern_::PVar(s) => Ok(Pat::Var(*s)),
-            canon::Pattern_::PAnything => Ok(Pat::Wildcard),
+            canon::Pattern_::PAnything | canon::Pattern_::PUnit => Ok(Pat::Wildcard),
             canon::Pattern_::PTuple(elems) => {
                 let subs = elems
                     .iter()
@@ -28793,6 +28807,7 @@ impl<'a> Lowerer<'a> {
             // backend's binder + `as_str()` guard) all match without a
             // coerced-column path.
             canon::Pattern_::PAnything
+            | canon::Pattern_::PUnit
             | canon::Pattern_::PVar(_)
             | canon::Pattern_::PRecord(_)
             | canon::Pattern_::PStr(_)
@@ -30053,7 +30068,9 @@ impl<'a> Lowerer<'a> {
     fn lower_arm_pat(&self, p: &canon::Pattern) -> DResult<Pat> {
         match &p.value {
             canon::Pattern_::PVar(s) => Ok(Pat::Var(*s)),
-            canon::Pattern_::PAnything => Ok(Pat::Wildcard),
+            // `()` is irrefutable and its scrutinee is unit-typed; a wildcard arm
+            // is the sound, exhaustive cover of the sole unit value.
+            canon::Pattern_::PAnything | canon::Pattern_::PUnit => Ok(Pat::Wildcard),
             canon::Pattern_::PInt(n) => Ok(Pat::Int(*n)),
             canon::Pattern_::PBool(b) => Ok(Pat::Bool(*b)),
             canon::Pattern_::PChar(c) => Ok(Pat::Char(c.clone())),

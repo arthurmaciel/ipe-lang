@@ -524,6 +524,13 @@ fn name_prose(msg: &NameError) -> String {
              or remove the annotation and let inference fill it in."
                 .to_string()
         }
+        NameError::ModuleNotAllowedInPlacement(r) => {
+            format!(
+                "`{}` isn't available in a `{}` app — that combination of what your app \
+                 renders and where it runs doesn't include this module.",
+                r.module, r.placement,
+            )
+        }
         NameError::Unknown => "Something is off with a name in this code.".to_string(),
     }
 }
@@ -1525,6 +1532,32 @@ fn name_label(msg: &NameError) -> Option<String> {
              inference will pin the argument to `WebReq` automatically"
                 .to_string(),
         ),
+        NameError::ModuleNotAllowedInPlacement(r) => {
+            use crate::diagnostic::ModulePlacementReason;
+            let module = &r.module;
+            let placement = &r.placement;
+            let why_and_fix = match r.reason {
+                ModulePlacementReason::NativeEffectInSandbox => {
+                    "it is a native effect (a direct database, file, server, or secret), and a \
+                     `spa` app runs sandboxed in the browser — there is no native effect there. \
+                     Move it behind an HTTP boundary (`Ipe.Http` to your backend), or deliver \
+                     the app as `web live` (the co-located default), where the loop runs \
+                     server-side"
+                        .to_string()
+                }
+                ModulePlacementReason::BrowserOutsideBrowserHost => format!(
+                    "it is a browser host capability, and a `{placement}` app has no browser to \
+                     host it. Use a web app (`web` or `web spa`) for browser capabilities, or \
+                     reach the equivalent effect through a native module in this shape"
+                ),
+            };
+            Some(format!(
+                "`{module}` is not available in a `{placement}` app because {why_and_fix}. \
+                 A program is placed on two axes: what it renders (its shape, pinned by `main`) \
+                 and where it runs (its runtime); this module belongs to a different set of \
+                 placements"
+            ))
+        }
         NameError::Unknown => None,
     }
 }

@@ -376,10 +376,16 @@ pub enum Pattern_ {
     PVar(Symbol),
     /// A constructor pattern: name, dotted module segments, sub-patterns.
     PCtor(Symbol, Vec<Symbol>, Vec<Pattern>),
+    /// The unit pattern `()` — the sole inhabitant of the unit type. Binds
+    /// nothing (like [`Self::PAnything`]) but is typed at `()`, so `Ok () -> …`
+    /// and `case u of () -> …` are accepted where `u : ()`. Irrefutable: unit has
+    /// exactly one value, so a lone `()` arm is an exhaustive cover.
+    PUnit,
     /// A tuple pattern `(p0, p1, ...)`. Invariant: arity ≥ 2 — a parenthesised
-    /// single pattern `(p)` is unwrapped to `p`, and empty parens `()` are not a
-    /// pattern. Elements may be variables, wildcards, nested constructor
-    /// patterns, or nested tuples. Mirrors the the compiler compiler's tuple pattern.
+    /// single pattern `(p)` is unwrapped to `p`, and empty parens `()` are the
+    /// unit pattern [`Self::PUnit`], not a tuple. Elements may be variables,
+    /// wildcards, nested constructor patterns, or nested tuples. Mirrors the the
+    /// compiler compiler's tuple pattern.
     PTuple(Vec<Pattern>),
     /// A record pattern `{ x, y }`. Field-pun only: every entry names a
     /// field of the scrutinee record and binds a variable of the same name, so

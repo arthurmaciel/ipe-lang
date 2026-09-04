@@ -598,6 +598,158 @@ const PORT_GLUE_JS: &str = r#"// Ipe.Ffi.Js browser port surface. Values cross a
     );
     return true;
   }
+  // Ipe.Browser.Recorder: `Start { video, mimeType, timesliceMs }` / `Stop` ->
+  // getUserMedia({ audio: true[, video: true] }) + MediaRecorder, delivered as a
+  // bounded session-stream: one `started` frame, N `chunk` data-URL frames (one
+  // per ondataavailable blob), then a terminal `ended` frame on Stop or a
+  // host-side track end. All frames are broadcast (corId stripped) exactly like
+  // the Gamepad session stream.
+  //
+  // Fail-closed by construction:
+  //   * `recorderActive` is a ONE-WAY flag: `Stop` (and any host-side track end)
+  //     flips it to false BEFORE stopping the recorder / releasing the tracks, and
+  //     `ondataavailable` drops its blob when the flag is false — so NO `chunk`
+  //     frame is ever emitted after the session closes.
+  //   * a getUserMedia rejection -> a typed `denied` (NotAllowedError) or
+  //     `unavailable` frame; an absent getUserMedia / MediaRecorder -> `unavailable`.
+  //     Never a throw, never a leaked track.
+  //   * a fresh `Start` first tears the previous session down (flag off, recorder
+  //     stopped, tracks released) and bumps the grant epoch, so a double Start
+  //     cannot leave two live streams — the earlier, now-stale grant releases its
+  //     tracks when it resolves instead of going live.
+  //   * a `Stop` (even with nothing active) bumps the grant epoch too, so a Start
+  //     whose getUserMedia is still pending is cancelled: when it resolves it
+  //     releases the granted tracks and emits no `started`/`chunk` frame.
+  var recorderState = null; // { recorder, stream, active }
+  // Monotonic generation for the in-flight getUserMedia grant. Each Start
+  // captures the current value; a later Stop / teardown / Start bumps it, so a
+  // grant that resolves after its session was closed or superseded sees a stale
+  // epoch and releases its just-granted tracks instead of going live.
+  var recorderEpoch = 0;
+  function recorderTeardown() {
+    // Invalidate any pending grant so a getUserMedia still in flight cancels.
+    recorderEpoch += 1;
+    if (recorderState === null) return;
+    // Flip the one-way active flag FIRST so a racing ondataavailable is dropped.
+    recorderState.active = false;
+    var st = recorderState;
+    recorderState = null;
+    try {
+      if (st.recorder && st.recorder.state !== "inactive") { st.recorder.stop(); }
+    } catch (_e) { /* best-effort */ }
+    try {
+      if (st.stream) { st.stream.getTracks().forEach(function (t) { t.stop(); }); }
+    } catch (_e) { /* best-effort */ }
+  }
+  function recorderSink(value, _corId) {
+    var startOpts = value && typeof value === "object" && value.Start;
+    var isStop = value === "Stop" ||
+      (value && typeof value === "object" && value.Stop !== undefined);
+    if ((!startOpts || typeof startOpts !== "object") && !isStop) return false;
+    if (isStop) {
+      // Close the session: teardown flips the flag and releases tracks, then we
+      // emit the single terminal `ended` frame. A no-op when nothing is active.
+      var wasActive = recorderState !== null;
+      recorderTeardown();
+      if (wasActive) { reply({ tag: "recorder", event: "ended" }, null); }
+      return true;
+    }
+    // isStart. Tear down any prior session so a double Start never leaves two
+    // live getUserMedia streams running.
+    recorderTeardown();
+    var wantVideo = startOpts.video === true;
+    var mimeType = (typeof startOpts.mimeType === "string" && startOpts.mimeType !== "")
+      ? startOpts.mimeType : "";
+    // Clamp the chunk interval to a >= 100 ms floor: a zero/negative timeslice
+    // would spin ondataavailable every event-loop tick.
+    var timeslice = (typeof startOpts.timesliceMs === "number" && startOpts.timesliceMs >= 100)
+      ? startOpts.timesliceMs : 1000;
+    if (!navigator || typeof navigator.mediaDevices === "undefined" ||
+        typeof navigator.mediaDevices.getUserMedia !== "function" ||
+        typeof MediaRecorder === "undefined") {
+      reply({ tag: "recorder", event: "unavailable" }, null);
+      return true;
+    }
+    var constraints = wantVideo ? { audio: true, video: true } : { audio: true };
+    // Capture this Start's generation. If a Stop / teardown / later Start bumps
+    // the epoch while getUserMedia is pending, both arms below see the mismatch
+    // and abandon the grant.
+    var myEpoch = ++recorderEpoch;
+    navigator.mediaDevices.getUserMedia(constraints).then(
+      function (stream) {
+        // A superseded or cancelled grant: release the just-granted tracks and
+        // start / emit nothing, so no camera or mic stays live past its session.
+        if (myEpoch !== recorderEpoch) {
+          stream.getTracks().forEach(function (t) { t.stop(); });
+          return;
+        }
+        var recOpts = {};
+        if (mimeType !== "" && MediaRecorder.isTypeSupported(mimeType)) {
+          recOpts.mimeType = mimeType;
+        }
+        var recorder;
+        try {
+          recorder = new MediaRecorder(stream, recOpts);
+        } catch (_e) {
+          stream.getTracks().forEach(function (t) { t.stop(); });
+          reply({ tag: "recorder", event: "unavailable" }, null);
+          return;
+        }
+        var actualMime = recorder.mimeType || (wantVideo ? "video/webm" : "audio/webm");
+        recorderState = { recorder: recorder, stream: stream, active: true };
+        recorder.ondataavailable = function (ev) {
+          // Deny-by-default: drop a blob that arrives after the session closed —
+          // this is the no-frame-after-close guarantee at the sink.
+          if (!recorderState || recorderState.active !== true) return;
+          if (!ev.data || ev.data.size <= 0) return;
+          var reader = new FileReader();
+          reader.onload = function (rev) {
+            // Re-check the flag at delivery time: a Stop may have arrived while the
+            // FileReader was decoding this chunk.
+            if (!recorderState || recorderState.active !== true) return;
+            reply({
+              tag: "recorder", event: "chunk",
+              data: String(rev.target.result),
+              mime: actualMime,
+            }, null);
+          };
+          reader.onerror = function () { /* drop an unreadable chunk, never throw */ };
+          reader.readAsDataURL(ev.data);
+        };
+        recorder.onstop = function () {
+          // A host-side track end (user revokes, device unplugged) also lands here.
+          if (recorderState !== null) {
+            recorderTeardown();
+            reply({ tag: "recorder", event: "ended" }, null);
+          }
+        };
+        recorder.onerror = function () {
+          if (recorderState !== null) {
+            recorderTeardown();
+            reply({ tag: "recorder", event: "ended" }, null);
+          }
+        };
+        try {
+          recorder.start(timeslice);
+        } catch (_e) {
+          recorderTeardown();
+          reply({ tag: "recorder", event: "unavailable" }, null);
+          return;
+        }
+        reply({ tag: "recorder", event: "started", mime: actualMime }, null);
+      },
+      function (err) {
+        // A rejection for a superseded or cancelled grant is not this session's
+        // to report: stay silent so no stale denied/unavailable frame leaks out.
+        if (myEpoch !== recorderEpoch) { return; }
+        var name = err && err.name ? String(err.name) : "";
+        var kind = name === "NotAllowedError" || name === "PermissionDeniedError"
+          ? "denied" : "unavailable";
+        reply({ tag: "recorder", event: kind }, null);
+      }
+    );
+    return true;
+  }
   // Ipe.Browser.Speech: `Speak { text, options }` → speechSynthesis.speak.
   // Cancels any queued utterance first, constructs a SpeechSynthesisUtterance,
   // applies rate/pitch/volume/lang from options, and calls speechSynthesis.speak.
@@ -1098,6 +1250,7 @@ const PORT_GLUE_JS: &str = r#"// Ipe.Ffi.Js browser port surface. Values cross a
     if (filePickerSink(value, corId)) return true;
     if (cameraSink(value, corId)) return true;
     if (microphoneSink(value, corId)) return true;
+    if (recorderSink(value, corId)) return true;
     if (speechSink(value, corId)) return true;
     if (gamepadSink(value, corId)) return true;
     if (visibilitySink(value, corId)) return true;
@@ -1405,6 +1558,56 @@ mod tests {
         assert!(js.contains("\"unavailable\""));
         assert!(js.contains("NotAllowedError"));
         assert!(!js.contains("eval("));
+    }
+
+    #[test]
+    fn recorder_sink_streams_chunks_and_never_emits_after_close() {
+        let js = port_glue_js();
+        // The first-party Ipe.Browser.Recorder sink reaches getUserMedia +
+        // MediaRecorder and reacts to the Start / Stop verbs.
+        assert!(js.contains("recorderSink"));
+        assert!(js.contains("value.Start"));
+        assert!(js.contains("value.Stop"));
+        assert!(js.contains("navigator.mediaDevices.getUserMedia"));
+        assert!(js.contains("MediaRecorder"));
+        // The audio-only vs audio+video getUserMedia constraint switch.
+        assert!(js.contains("{ audio: true, video: true }"));
+        assert!(js.contains("{ audio: true }"));
+        // Delivers a session-stream of typed started / chunk / ended frames.
+        assert!(js.contains("tag: \"recorder\""));
+        assert!(js.contains("event: \"started\""));
+        assert!(js.contains("event: \"chunk\""));
+        assert!(js.contains("event: \"ended\""));
+        assert!(js.contains("ondataavailable"));
+        assert!(js.contains("readAsDataURL"));
+        // The no-frame-after-close guarantee: a one-way active flag flipped false
+        // on teardown, re-checked at chunk delivery time so a late blob is dropped.
+        assert!(js.contains("recorderState.active !== true"));
+        assert!(js.contains("recorderState.active = false"));
+        // Denial + unavailability trap to typed terminal frames, never a throw / eval.
+        assert!(js.contains("event: kind"));
+        assert!(js.contains("NotAllowedError"));
+        assert!(js.contains("event: \"unavailable\""));
+        assert!(!js.contains("eval("));
+    }
+
+    #[test]
+    fn recorder_sink_cancels_a_superseded_in_flight_grant_via_epoch() {
+        let js = port_glue_js();
+        // A monotonic epoch tracks the in-flight getUserMedia grant. Each Start
+        // captures the current generation before requesting media.
+        assert!(js.contains("var recorderEpoch = 0;"));
+        assert!(js.contains("var myEpoch = ++recorderEpoch;"));
+        // teardown (hence every Stop, including a no-op null-state Stop) bumps the
+        // epoch, so a pending grant becomes cancellable.
+        assert!(js.contains("recorderEpoch += 1;"));
+        // Stop-before-grant: the success arm of a superseded grant releases the
+        // just-granted tracks and starts / emits nothing.
+        assert!(js.contains("if (myEpoch !== recorderEpoch) {"));
+        assert!(js.contains("stream.getTracks().forEach(function (t) { t.stop(); });"));
+        // The reject arm of a superseded grant stays silent — no stale
+        // denied / unavailable frame leaks after the session closed.
+        assert!(js.contains("if (myEpoch !== recorderEpoch) { return; }"));
     }
 
     #[test]

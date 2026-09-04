@@ -1155,6 +1155,7 @@ pub enum StdlibKernel {
     JsonDecAt,
     JsonDecIndex,
     JsonDecList,
+    JsonDecNullable,
     JsonDecMap,
     JsonDecAndThen,
     JsonDecSucceed,
@@ -3233,6 +3234,13 @@ impl StdlibKernel {
             Self::JsonDecAt => d("JsonDec", "at", 2, Pure, "decode_at"),
             Self::JsonDecIndex => d("JsonDec", "index", 2, Pure, "decode_index"),
             Self::JsonDecList => d("JsonDec", "list", 1, Pure, "decode_list"),
+            // `nullable` maps to the shared `decode_nullable` runtime builder in
+            // the always-available `json` module — null ⇒ `Nothing`, any other
+            // value ⇒ `Just` of the inner decode, with the inner error propagated
+            // (never swallowed). One runtime impl serves JsonDec, Config, and
+            // Db.Decode; it is NOT behind the `config` feature, so a pure-JSON
+            // program pulls in neither `toml` nor `serde_yaml`.
+            Self::JsonDecNullable => d("JsonDec", "nullable", 1, Pure, "decode_nullable"),
             Self::JsonDecMap => d("JsonDec", "map", 2, Pure, "decode_map"),
             Self::JsonDecAndThen => d("JsonDec", "andThen", 2, Pure, "decode_and_then"),
             Self::JsonDecSucceed => d("JsonDec", "succeed", 1, Pure, "decode_succeed"),
@@ -4952,6 +4960,7 @@ impl StdlibKernel {
         Self::JsonDecAt,
         Self::JsonDecIndex,
         Self::JsonDecList,
+        Self::JsonDecNullable,
         Self::JsonDecMap,
         Self::JsonDecAndThen,
         Self::JsonDecSucceed,
@@ -8844,7 +8853,10 @@ impl StdlibKernel {
             Self::JsonDecPOptional | Self::DbDecOptional => Some(&DEC_OPTIONAL),
             Self::JsonDecPCustom => Some(&DEC_CUSTOM),
             Self::JsonDecDecodeString => Some(&DEC_DECODE_STRING),
-            Self::ConfigNullable | Self::ConfigMaybe | Self::DbDecNullable => Some(&DEC_NULLABLE),
+            Self::JsonDecNullable
+            | Self::ConfigNullable
+            | Self::ConfigMaybe
+            | Self::DbDecNullable => Some(&DEC_NULLABLE),
             Self::ConfigKeyValuePairs => Some(&CONFIG_KVP),
             Self::ConfigDict => Some(&CONFIG_DICT),
             Self::ConfigDecodeToml | Self::ConfigDecodeYaml | Self::ConfigDecodeJson => {
@@ -10170,6 +10182,7 @@ impl StdlibKernel {
             | Self::JsonDecAt
             | Self::JsonDecIndex
             | Self::JsonDecList
+            | Self::JsonDecNullable
             | Self::JsonDecMap
             | Self::JsonDecAndThen
             | Self::JsonDecSucceed
@@ -11131,6 +11144,7 @@ impl StdlibKernel {
                 | Self::JsonDecAt
                 | Self::JsonDecIndex
                 | Self::JsonDecList
+                | Self::JsonDecNullable
                 | Self::JsonDecMap
                 | Self::JsonDecAndThen
                 | Self::JsonDecSucceed

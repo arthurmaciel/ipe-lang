@@ -200,7 +200,13 @@ enum UPat {
 /// re-proving.
 fn expand_upats(p: &canon::Pattern_) -> Vec<UPat> {
     match p {
-        canon::Pattern_::PAnything | canon::Pattern_::PVar(_) | canon::Pattern_::PRecord(_) => {
+        // The unit pattern matches the single value of the unit type, so — like a
+        // wildcard, a variable, or a field-pun record — it covers its whole type
+        // in one arm.
+        canon::Pattern_::PAnything
+        | canon::Pattern_::PVar(_)
+        | canon::Pattern_::PUnit
+        | canon::Pattern_::PRecord(_) => {
             vec![UPat::Wild]
         }
         canon::Pattern_::PCtor {
@@ -288,6 +294,7 @@ fn pattern_uses_unknown_ctor(p: &canon::Pattern_, sigs: &Sigs) -> bool {
         // no ADT constructor.
         canon::Pattern_::PAnything
         | canon::Pattern_::PVar(_)
+        | canon::Pattern_::PUnit
         | canon::Pattern_::PRecord(_)
         | canon::Pattern_::PInt(_)
         | canon::Pattern_::PBool(_)
@@ -337,7 +344,10 @@ fn pattern_uses_unknown_ctor(p: &canon::Pattern_, sigs: &Sigs) -> bool {
 /// *which* nodes are refutable.
 fn refutable_span(pat: &canon::Pattern) -> Option<Span> {
     match &pat.value {
-        canon::Pattern_::PVar(_) | canon::Pattern_::PAnything | canon::Pattern_::PRecord(_) => None,
+        canon::Pattern_::PVar(_)
+        | canon::Pattern_::PAnything
+        | canon::Pattern_::PUnit
+        | canon::Pattern_::PRecord(_) => None,
         canon::Pattern_::PTuple(elems) => elems.iter().find_map(refutable_span),
         canon::Pattern_::PAlias(inner, _) => refutable_span(inner),
         canon::Pattern_::PCtor { .. }
@@ -1025,6 +1035,7 @@ fn render_upat(p: &UPat, interner: &Interner, atom: bool) -> DResult<String> {
 fn arm_label(p: &canon::Pattern_, interner: &Interner) -> DResult<Box<str>> {
     let s = match p {
         canon::Pattern_::PAnything => "_".to_owned(),
+        canon::Pattern_::PUnit => "()".to_owned(),
         canon::Pattern_::PVar(name) | canon::Pattern_::PCtor { name, .. } => {
             resolve(interner, *name)?.to_string()
         }
