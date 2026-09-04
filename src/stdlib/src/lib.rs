@@ -518,6 +518,13 @@ const STD_UI_ANIMATION: &str = include_str!("../Ipe/Ui/Animation.ipe");
 /// Not in `STDLIB_MODULE_QUALIFIERS` so disjointness invariant holds.
 const STD_UI_CELLS: &str = include_str!("../Ipe/Ui/Cells.ipe");
 
+/// `Ipe.Tea.Tui.Ui` — the Tui shape's view surface: the `Screen msg` view type,
+/// its builders, and its OWN cell-native `Attribute msg` (spacing/padding/align/
+/// bold/underline/colour). A terminal author imports this instead of `Ipe.Ui`,
+/// so DOM attributes are unnameable in a `Screen` view (a type error, never a
+/// silent render-time drop).
+const STD_TEA_TUI_UI: &str = include_str!("../Ipe/Tea/Tui/Ui.ipe");
+
 /// `Ipe.Codec` — one invariant codec that drives the JSON direction.
 ///
 /// Pure Ipê source: defines the `Codec a` nominal union (an encoder plus a
@@ -1331,6 +1338,10 @@ pub const COMPILED_STD_MODULES: &[CompiledStdModule] = &[
     CompiledStdModule {
         dotted: "Ipe.Ui.Cells",
         source: STD_UI_CELLS,
+    },
+    CompiledStdModule {
+        dotted: "Ipe.Tea.Tui.Ui",
+        source: STD_TEA_TUI_UI,
     },
     CompiledStdModule {
         dotted: "Ipe.Codec",
