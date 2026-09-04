@@ -1,0 +1,98 @@
+-- | Ipe.Browser.Visibility.Internals — the low-level Visibility port surface:
+-- the closed outbound/inbound ADTs and the raw `Ipe.Ffi.Js` request/subscribe
+-- wiring the high-level `Ipe.Browser.Visibility` layer wraps.
+--
+-- Importing this submodule discloses the same `js-port:visibility` axis as the
+-- top-level module (the disclosure is keyed on the `Ipe.Browser.Visibility` path
+-- prefix), so the raw port surface cannot be reached undisclosed.
+module Ipe.Browser.Visibility.Internals exposing
+    ( JsCmd(..)
+    , JsMsg(..)
+    , request
+    , requestOne
+    , subscribe
+    , inbound
+    )
+
+import Ipe.Error as Error exposing (Error)
+import Ipe.Ffi.Js as Js
+import Ipe.Json.Decode as Decode
+import Ipe.Tea.Web.Cmd as Cmd
+import Ipe.Tea.Web.Sub as Sub
+
+
+-- | The ONE closed OUTBOUND port type: the whole outbound surface as a single
+-- auditable object.
+--
+--   * `Query` — read the current document visibility state once.
+--   * `Watch` — begin a state stream: each `visibilitychange` event delivers a
+--     fresh reading on the inbound subscription.
+type JsCmd
+    = Query
+    | Watch
+
+
+-- | The NARROW closed INBOUND port type — deliberately NOT the app's internal
+-- `Msg`. Every variant the browser can push is enumerated, so the fold in the
+-- high-level layer is EXHAUSTIVE and an unavailability can never be silently
+-- dropped: it becomes a typed `Err`.
+--
+--   * `Reading isVisible` — the current visibility: `True` when the document is
+--     visible (`"visible"`), `False` when hidden (`"hidden"` or `"prerender"`).
+--   * `Unavailable` — the Page Visibility API is absent in this context.
+type JsMsg
+    = Reading Bool
+    | Unavailable
+
+
+-- | `request cmd` — hand a closed outbound `JsCmd` to the raw port transport.
+-- The served first-party JS sink reaches `document.visibilityState`; the reply
+-- arrives inbound as a `JsMsg`.
+request : JsCmd -> Cmd.Cmd msg
+request cmd =
+    Js.send cmd
+
+
+-- | `requestOne cmd` — correlated one-shot `JsCmd` → `Task Error JsMsg`.
+-- Routes through `Js.request` with the `inbound` decoder so the correlated
+-- reply is decoded fail-closed by the same gate the `subscribe` path uses.
+requestOne : JsCmd -> Task Error JsMsg
+requestOne cmd =
+    Js.request cmd inbound
+
+
+-- | `subscribe toMsg` — the inbound subscription over the fail-closed seal
+-- decoder. `inbound` IS the security gate; a malformed / mismatched frame is
+-- dropped whole. A decoded `JsMsg` is handed to `toMsg`.
+subscribe : (JsMsg -> msg) -> Sub.Sub msg
+subscribe toMsg =
+    Js.subscribe inbound toMsg
+
+
+-- | The total, fail-closed decoder for the inbound `JsMsg`. It reads the `ok`
+-- flag: a true flag decodes a `Reading` from the boolean `visible` field; a false
+-- flag decodes the closed `error` vocabulary. An unrecognised token fails the
+-- decode closed (the frame is dropped).
+inbound : Decode.Decoder JsMsg
+inbound =
+    Decode.andThen decodeByOk (Decode.field "ok" Decode.bool)
+
+
+decodeByOk : Bool -> Decode.Decoder JsMsg
+decodeByOk ok =
+    if ok then
+        Decode.map Reading
+            (Decode.field "visible" Decode.bool)
+
+    else
+        Decode.andThen decodeError (Decode.field "error" Decode.string)
+
+
+decodeError : String -> Decode.Decoder JsMsg
+decodeError token =
+    case token of
+        "unavailable" ->
+            Decode.succeed Unavailable
+
+        _ ->
+            Decode.fail ("unknown visibility error variant: " ++ token)

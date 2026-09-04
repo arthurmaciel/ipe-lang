@@ -1,0 +1,26 @@
+module Package exposing (package)
+
+import Ipe.Package exposing (..)
+
+
+package : Package
+package =
+    { name = "wasm-browser-session-streams"
+    , version = "0.1.0"
+    , wasm =
+        On { mode = Spa }
+    , capabilities =
+        { declares =
+            [ JsPort Visibility
+            , JsPort MediaQuery
+            , JsPort Connectivity
+            , JsPort Raw
+            ]
+        , accepts =
+            [ JsPort Visibility
+            , JsPort MediaQuery
+            , JsPort Connectivity
+            , JsPort Raw
+            ]
+        }
+    }

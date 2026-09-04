@@ -231,6 +231,9 @@ type WebCapability
     | File
     | Camera
     | Microphone
+    | Visibility
+    | MediaQuery
+    | Connectivity
     | Raw
 
 

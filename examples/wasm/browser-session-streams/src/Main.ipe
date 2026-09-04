@@ -1,0 +1,188 @@
+-- | Exercises Ipe.Browser.Visibility, MediaQuery, and Connectivity in a
+-- single SPA page, covering:
+--
+--   * One-shot Task reads (state / match_ / connected).
+--   * Continuous change subscriptions (changes / matches).
+--   * Exhaustive `case` folds over every inbound `JsMsg` variant.
+module Main exposing (main)
+
+import Ipe.Browser.Connectivity as Connectivity
+import Ipe.Browser.MediaQuery as MediaQuery
+import Ipe.Browser.Visibility as Visibility
+import Ipe.String as String
+import Ipe.Tea.Web as Web exposing (app)
+import Ipe.Tea.Web.Cmd as Cmd
+import Ipe.Tea.Web.Sub as Sub
+import Ipe.Task as Task
+import Ipe.Ui as Ui
+import Ipe.Ui.Font as Font
+
+
+type Page
+    = MainPage
+
+
+type Msg
+    = GotVisibility (Result Error Visibility.State)
+    | VisibilityChanged (Result Error Visibility.State)
+    | GotDarkMode (Result Error Bool)
+    | DarkModeChanged (Result Error Bool)
+    | GotConnected (Result Error Bool)
+    | ConnectivityChanged (Result Error Bool)
+    | WatchVisibility
+    | WatchDarkMode
+    | WatchConnectivity
+
+
+type alias Model =
+    { visibility : String
+    , darkMode : String
+    , connectivity : String
+    , watchingVisibility : Bool
+    , watchingDarkMode : Bool
+    , watchingConnectivity : Bool
+    }
+
+
+init : WebReq -> ( Model, Cmd Msg )
+init _req =
+    ( { visibility = "(not read)"
+      , darkMode = "(not read)"
+      , connectivity = "(not read)"
+      , watchingVisibility = False
+      , watchingDarkMode = False
+      , watchingConnectivity = False
+      }
+    , Cmd.batch
+        [ Cmd.perform Visibility.state GotVisibility
+        , Cmd.perform (MediaQuery.match_ "(prefers-color-scheme: dark)") GotDarkMode
+        , Cmd.perform Connectivity.connected GotConnected
+        ]
+    )
+
+
+update : Msg -> Model -> ( Model, Cmd Msg )
+update msg model =
+    case msg of
+        GotVisibility result ->
+            ( { model | visibility = visibilityText result }, Cmd.none )
+
+        VisibilityChanged result ->
+            ( { model | visibility = visibilityText result ++ " (changed)" }, Cmd.none )
+
+        GotDarkMode result ->
+            ( { model | darkMode = boolMatchText result "dark" "light" }, Cmd.none )
+
+        DarkModeChanged result ->
+            ( { model | darkMode = boolMatchText result "dark (changed)" "light (changed)" }, Cmd.none )
+
+        GotConnected result ->
+            ( { model | connectivity = connectedText result }, Cmd.none )
+
+        ConnectivityChanged result ->
+            ( { model | connectivity = connectedText result ++ " (changed)" }, Cmd.none )
+
+        WatchVisibility ->
+            ( { model | watchingVisibility = True }
+            , Visibility.watch
+            )
+
+        WatchDarkMode ->
+            ( { model | watchingDarkMode = True }
+            , MediaQuery.watch "(prefers-color-scheme: dark)"
+            )
+
+        WatchConnectivity ->
+            ( { model | watchingConnectivity = True }
+            , Connectivity.watch
+            )
+
+
+subscriptions : Model -> Sub Msg
+subscriptions model =
+    Sub.batch
+        [ if model.watchingVisibility then
+            Visibility.changes VisibilityChanged
+
+          else
+            Sub.none
+        , if model.watchingDarkMode then
+            MediaQuery.matches DarkModeChanged
+
+          else
+            Sub.none
+        , if model.watchingConnectivity then
+            Connectivity.changes ConnectivityChanged
+
+          else
+            Sub.none
+        ]
+
+
+visibilityText : Result Error Visibility.State -> String
+visibilityText result =
+    case result of
+        Ok Visibility.Visible ->
+            "visible"
+
+        Ok Visibility.Hidden ->
+            "hidden"
+
+        Err _ ->
+            "unavailable"
+
+
+boolMatchText : Result Error Bool -> String -> String -> String
+boolMatchText result onTrue onFalse =
+    case result of
+        Ok True ->
+            onTrue
+
+        Ok False ->
+            onFalse
+
+        Err _ ->
+            "unavailable"
+
+
+connectedText : Result Error Bool -> String
+connectedText result =
+    case result of
+        Ok True ->
+            "online"
+
+        Ok False ->
+            "offline"
+
+        Err _ ->
+            "unavailable"
+
+
+view : Model -> Element Msg
+view model =
+    Ui.column
+        [ Ui.spacing 16, Ui.padding 32 ]
+        [ Ui.el [ Font.size 22, Font.bold ] (Ui.text "Browser Session Streams")
+        , row "Visibility:" model.visibility
+        , row "Dark mode (prefers-color-scheme):" model.darkMode
+        , row "Connectivity:" model.connectivity
+        ]
+
+
+row : String -> String -> Element Msg
+row label value =
+    Ui.row [ Ui.spacing 12 ]
+        [ Ui.el [ Font.bold ] (Ui.text label)
+        , Ui.text value
+        ]
+
+
+main =
+    app
+        { init = init
+        , update = update
+        , view = view
+        , subscriptions = subscriptions
+        , routes = []
+        , notFound = MainPage
+        }

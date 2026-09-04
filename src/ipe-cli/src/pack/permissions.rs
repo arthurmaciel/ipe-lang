@@ -213,12 +213,20 @@ fn requirement_for(axis: WebCapability) -> AxisRequirement {
         // compiler-known surface; its disclosure is enforced by the consent gate,
         // not an OS declaration). Named explicitly — no wildcard — so a new web
         // axis stays unmatched and forces a deliberate permission decision here.
+        // Visibility, MediaQuery, and Connectivity reach no permission-gated OS
+        // surface: the Page Visibility API, matchMedia, and navigator.onLine are
+        // all user-context reads with no static OS permission declaration on any
+        // platform (iOS / macOS / Android). Named explicitly so a future change
+        // to one of these axes is considered deliberately, not through a wildcard.
         WebCapability::Clipboard
         | WebCapability::Storage
         | WebCapability::Share
         | WebCapability::Battery
         | WebCapability::File
         | WebCapability::Camera
+        | WebCapability::Visibility
+        | WebCapability::MediaQuery
+        | WebCapability::Connectivity
         | WebCapability::Raw => no_os_permission(),
     }
 }
