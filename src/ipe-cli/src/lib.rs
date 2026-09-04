@@ -3474,21 +3474,11 @@ fn run_build_body(rest: &[String]) -> Result<BuildSuccess, CliError> {
     };
     let entry_path = PathBuf::from(&entry);
 
-    // Resolve the delivery grammar against the shape `main` pins: the optional
-    // `[shape]` cross-check, the `[runtime] [host]` tail, and the `--static`
-    // gate. A webview-native `web desktop` drives `webview_host` below.
     let wants_static = matches!(
         &args.mode,
         cli_args::BuildMode::Emit { static_layer, .. }
             if static_layer.static_build == Some(true)
     );
-    let delivery = resolve_delivery(&entry_path, &args.delivery, wants_static, "build")?;
-
-    // `--fix` carries durable authorization: apply machine-applicable fixes
-    // non-interactively before the (re-run) build sees the source.
-    if args.fix {
-        apply_fixes_cmd(&entry_path, true, &mut std::io::stdout())?;
-    }
 
     // Parse guaranteed `--emit-ir` composes with no emit-affecting flag, so the
     // IR-dump path carries no options to drop.
@@ -3533,12 +3523,25 @@ fn run_build_body(rest: &[String]) -> Result<BuildSuccess, CliError> {
     let manifest_wasm: Option<project::WasmConfig> =
         manifest_parsed.as_ref().map(|m| m.wasm.clone());
 
-    // Resolve the static plan FIRST: it is pure over the flag/env/manifest
-    // request layer and reads no source, so a flag-contradiction refusal
-    // (talc-without-arena, --target-without-static, cfree conflicts) fires
-    // before any filesystem read of the entry — a refused build produces no
-    // artifact and touches nothing.
+    // Static-flag contradictions (--cfree + C-requiring allocator,
+    // --target without --static, talc-without-arena) are pure over the CLI +
+    // env + manifest layers and touch no source. Resolving here — before
+    // resolve_delivery reads the entry file — ensures a refused build produces
+    // no artifact and touches nothing, even when the entry path does not exist.
     let static_plan = resolve_static_plan(cli_layer, manifest.as_deref())?;
+
+    // Resolve the delivery grammar against the shape `main` pins: the optional
+    // `[shape]` cross-check, the `[runtime] [host]` tail, and the `--static`
+    // gate. Runs after the static-plan check so a flag contradiction fires
+    // before the entry file is read. A webview-native `web desktop` drives
+    // `webview_host` below.
+    let delivery = resolve_delivery(&entry_path, &args.delivery, wants_static, "build")?;
+
+    // `--fix` carries durable authorization: apply machine-applicable fixes
+    // non-interactively before the (re-run) build sees the source.
+    if args.fix {
+        apply_fixes_cmd(&entry_path, true, &mut std::io::stdout())?;
+    }
 
     // Acknowledge any disclosed `.Unsafe` escape-hatch import BEFORE the (costly)
     // emit + cargo build. The safe path (no `.Unsafe` import) returns silently;
