@@ -8889,9 +8889,10 @@ impl StdlibKernel {
             Self::JsonDecPOptional | Self::DbDecOptional => Some(&DEC_OPTIONAL),
             Self::JsonDecPCustom => Some(&DEC_CUSTOM),
             Self::JsonDecDecodeString => Some(&DEC_DECODE_STRING),
-            Self::JsonDecNullable | Self::ConfigNullable | Self::ConfigMaybe | Self::DbDecNullable => {
-                Some(&DEC_NULLABLE)
-            }
+            Self::JsonDecNullable
+            | Self::ConfigNullable
+            | Self::ConfigMaybe
+            | Self::DbDecNullable => Some(&DEC_NULLABLE),
             Self::ConfigKeyValuePairs => Some(&CONFIG_KVP),
             Self::ConfigDict => Some(&CONFIG_DICT),
             Self::ConfigDecodeToml | Self::ConfigDecodeYaml | Self::ConfigDecodeJson => {

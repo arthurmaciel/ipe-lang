@@ -30,8 +30,7 @@ fn entry_path(root: &Path) -> PathBuf {
 fn json_decode_nullable_ipec_accepts_and_emits_shared_builder() {
     let root = repo_root();
     let entry = entry_path(&root);
-    let out =
-        PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("json_decode_nullable_ipec_out");
+    let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("json_decode_nullable_ipec_out");
     let _ = std::fs::remove_dir_all(&out);
 
     let Ok(runtime) = ipe::resolve_runtime() else {
