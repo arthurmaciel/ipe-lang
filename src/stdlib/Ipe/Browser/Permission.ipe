@@ -1,0 +1,135 @@
+-- | Ipe.Browser.Permission — query and watch browser permission state via
+-- `navigator.permissions.query({ name })` from Ipê browser apps, over
+-- `Ipe.Ffi.Js` ports.
+--
+-- A first-party proof of the per-capability web mechanism spanning BOTH port
+-- directions: an outbound `JsCmd` requests a state snapshot (`query`) or begins
+-- a continuous change stream (`watch`), and an inbound `JsMsg` carries the typed
+-- `PermissionState` reply or a typed denial. Both cross the same seal codec and
+-- fail-closed port discipline as every other port; there is no second transport.
+--
+-- Importing this reserved `Ipe.Browser.<Api>` module discloses `js-port:permission`
+-- (import-derived, keyed on the canonical `Ipe.Browser.Permission` path prefix via
+-- `WebCapability::for_browser_module`, alias-immune); only the top-level app's
+-- `[capabilities] accepts` set can grant it.
+--
+-- The two layers:
+--
+--   * `Ipe.Browser.Permission.Internals` publishes the closed outbound/inbound ADTs
+--     and the raw `Ipe.Ffi.Js` wiring. The `PermissionName` type there enumerates
+--     all Baseline-supported permission names.
+--   * this module is the high-level layer: `query` returns a `Task Error PermissionState`
+--     via the correlated port→Task bridge; `watch` is `Cmd`-shaped, and `changes` is
+--     the inbound subscription folding the narrow `JsMsg` into a typed
+--     `Result Error PermissionState`. The inbound `case` is EXHAUSTIVE: an
+--     unavailability becomes a typed `Err`, never a silently dropped variant.
+module Ipe.Browser.Permission exposing
+    ( PermissionState(..)
+    , PermissionName
+    , query
+    , watch
+    , changes
+    )
+
+import Ipe.Browser.Permission.Internals as Internals exposing (JsMsg(..))
+import Ipe.Error as Error exposing (Error)
+import Ipe.Task as Task
+import Ipe.Tea.Web.Cmd as Cmd
+import Ipe.Tea.Web.Sub as Sub
+
+
+-- | The three states the browser reports for any queried permission.
+--
+-- Re-exported from this module so callers import only `Ipe.Browser.Permission`.
+--
+--   * `Granted` — the user (or automatic policy) has granted the permission; the
+--     guarded API can be called without a user gesture.
+--   * `Denied` — the user has explicitly denied or the site is blocked; the guarded
+--     API will refuse without a fresh gesture.
+--   * `Prompt` — no prior decision; the browser will ask the user when the guarded
+--     API is first called.
+type PermissionState
+    = Granted
+    | Denied
+    | Prompt
+
+
+-- | Re-export of `Internals.PermissionName` — the closed set of W3C Permissions
+-- API names (Camera, Microphone, Geolocation, Notifications, PersistentStorage,
+-- ClipboardRead, ClipboardWrite, MidiSysex).
+type alias PermissionName =
+    Internals.PermissionName
+
+
+-- | `query name` — read the current state of a single browser permission ONCE,
+-- as a `Task Error PermissionState`.
+--
+-- Uses the correlated port→Task bridge (`Js.request`). The served JS handler
+-- (SRI-pinned, the stdlib's, never a dependency's) reaches
+-- `navigator.permissions.query({ name })`; the typed state or a typed
+-- unavailability resolves the `Task` directly, with no companion subscription
+-- needed.
+--
+-- Importing this module discloses `js-port:permission`; the app must grant it
+-- with `accepts = [ JsPort Permission ]` under [capabilities] in package.ipe.
+query : Internals.PermissionName -> Task Error PermissionState
+query name =
+    Internals.requestOne (Internals.Query name)
+        |> Task.andThen foldState
+
+
+-- | `watch name` — begin a CONTINUOUS state-change stream for a single
+-- permission; each `PermissionStatus.onchange` event delivers a fresh state on
+-- the `changes` subscription. Outbound `Cmd`.
+watch : Internals.PermissionName -> Cmd.Cmd msg
+watch name =
+    Internals.request (Internals.Watch name)
+
+
+-- | `changes name toMsg` — the inbound subscription for state changes on `name`,
+-- wired in `subscriptions`.
+--
+-- The decoder IS the security gate: every inbound value runs through the total,
+-- bounded seal decoder for the narrow `JsMsg`; a malformed / mismatched frame is
+-- dropped whole. A decoded `JsMsg` is folded EXHAUSTIVELY into a
+-- `Result Error PermissionState` — a typed state becomes `Ok`, an unavailability
+-- a typed `Err`.
+changes : Internals.PermissionName -> (Result Error PermissionState -> msg) -> Sub.Sub msg
+changes _ toMsg =
+    Internals.subscribe (\inbound -> toMsg (toResult inbound))
+
+
+-- | Fold a `query` reply into a `Task Error PermissionState`. The `case` is
+-- exhaustive over every published inbound variant.
+foldState : Internals.JsMsg -> Task Error PermissionState
+foldState msg =
+    case msg of
+        Granted ->
+            Task.succeed Granted
+
+        Denied ->
+            Task.succeed Denied
+
+        Prompt ->
+            Task.succeed Prompt
+
+        Unavailable ->
+            Task.fail (Error.unavailable "Permissions API unavailable")
+
+
+-- | Fold the narrow inbound `JsMsg` into a typed `Result Error PermissionState`.
+-- The `case` is exhaustive over every published inbound variant.
+toResult : Internals.JsMsg -> Result Error PermissionState
+toResult inbound =
+    case inbound of
+        Granted ->
+            Ok Granted
+
+        Denied ->
+            Ok Denied
+
+        Prompt ->
+            Ok Prompt
+
+        Unavailable ->
+            Err (Error.unavailable "Permissions API unavailable")
