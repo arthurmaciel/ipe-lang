@@ -305,7 +305,7 @@ const TUI_GOOD: &str = r"module Main exposing (main)
 
 import Ipe.Tea.Tui as Tui
 import Ipe.Ui.Cells as Cells
-import Ipe.Ui.Cells exposing (Cells)
+import Ipe.Ui.Cells exposing (Screen)
 import Ipe.Tea.Terminal.Cmd
 import Ipe.String
 import Ipe.Tea.Terminal.Sub
@@ -326,7 +326,7 @@ update msg model =
         NoOp ->
             ( model, Cmd.none )
 
-view : Model -> Cells Msg
+view : Model -> Screen Msg
 view model =
     Cells.column [] [ Cells.el [] (Cells.text (String.fromInt model.count)) ]
 
@@ -351,7 +351,7 @@ const TUI_CMD_MODEL: &str = r"module Main exposing (main)
 
 import Ipe.Tea.Tui as Tui
 import Ipe.Ui.Cells as Cells
-import Ipe.Ui.Cells exposing (Cells)
+import Ipe.Ui.Cells exposing (Screen)
 import Ipe.Tea.Terminal.Cmd
 import Ipe.String
 import Ipe.Tea.Terminal.Sub
@@ -372,7 +372,7 @@ update msg model =
         NoOp ->
             ( model, Cmd.none )
 
-view : Model -> Cells Msg
+view : Model -> Screen Msg
 view model =
     Cells.column [] [ Cells.el [] (Cells.text (String.fromInt model.count)) ]
 

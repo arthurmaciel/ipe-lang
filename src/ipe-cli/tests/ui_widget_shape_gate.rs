@@ -61,14 +61,14 @@ fn assert_accepted(test_name: &str, source: &str, extra: &[(&str, &str)]) -> Res
 const WIDGET_JS: &str = "export function mount(host, emit) { return {}; }\n";
 
 /// `Ui.widget` inside a `Tui.app` view — must be rejected. A Tui
-/// view is `Cells Msg`; `Ui.widget` returns `Element msg`, so the type checker
+/// view is `Screen Msg`; `Ui.widget` returns `Element msg`, so the type checker
 /// rejects the program (a browser custom element has no seam in a terminal
 /// build, and no `Cells` denotation either).
 const TERMINAL_UI_WIDGET: &str = r#"module Main exposing (main)
 
 import Ipe.Tea.Tui as Tui
 import Ipe.Ffi.Js.CustomElement as CustomElement
-import Ipe.Ui.Cells exposing (Cells)
+import Ipe.Ui.Cells exposing (Screen)
 import Ipe.Tea.Terminal.Cmd
 import Ipe.Tea.Terminal.Sub
 
@@ -91,7 +91,7 @@ update : Msg -> Model -> ( Model, Cmd Msg )
 update _msg model =
     ( model, Cmd.none )
 
-view : Model -> Cells Msg
+view : Model -> Screen Msg
 view model =
     CustomElement.node codeEditor model.state Edited
 
@@ -203,7 +203,7 @@ main =
 
 /// A `Tui.app` view mounting `Ui.widget` is a browser-only node in a
 /// terminal build: rejected fail-closed at ipe time (not a cargo failure or a
-/// panic). A Tui view is `Cells Msg` and `Ui.widget` returns `Element msg`, so
+/// panic). A Tui view is `Screen Msg` and `Ui.widget` returns `Element msg`, so
 /// the type checker rejects it (IPE-T0001); the `RejectInNonWebShape` shape gate
 /// (IPE-L0147) is defense-in-depth for any path that bypasses type inference.
 #[test]

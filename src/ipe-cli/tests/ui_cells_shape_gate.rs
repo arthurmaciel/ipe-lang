@@ -138,12 +138,12 @@ main =
 
 /// `Cells.cells` inside a `Tui.app` view — must be ACCEPTED (the raw
 /// cell grid is a terminal primitive; this is the shape it belongs to). A Tui
-/// view is `Cells Msg`, so the grid island is built with `Cells.cells`.
+/// view is `Screen Msg`, so the grid island is built with `Cells.cells`.
 const TERMINAL_UI_CELLS: &str = r#"module Main exposing (main)
 
 import Ipe.Tea.Tui as Tui
 import Ipe.Ui.Cells as Cells
-import Ipe.Ui.Cells exposing (Cells)
+import Ipe.Ui.Cells exposing (Screen)
 import Ipe.Tea.Terminal.Cmd
 import Ipe.Tea.Terminal.Sub
 
@@ -161,7 +161,7 @@ update msg model =
         NoOp ->
             ( model, Cmd.none )
 
-view : Model -> Cells Msg
+view : Model -> Screen Msg
 view _model =
     Cells.column []
         [ Cells.text "grid:"
