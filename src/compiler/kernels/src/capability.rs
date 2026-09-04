@@ -133,6 +133,23 @@ pub enum WebCapability {
     Microphone,
     /// `navigator.getGamepads()` — polled gamepad state, connect/disconnect events.
     Gamepad,
+    /// `document.visibilityState` / `visibilitychange` event — the binary
+    /// foreground/background state of the page. A one-shot query reads the
+    /// current state; a watch subscription delivers a fresh reading on every
+    /// `visibilitychange` event. An absent Page Visibility API traps to a typed
+    /// inbound frame — never a throw.
+    Visibility,
+    /// `window.matchMedia(query)` — evaluate a CSS media query string and
+    /// receive its current match result plus a stream of change events when the
+    /// environment transitions in or out of the query. An absent `matchMedia`
+    /// API traps to a typed inbound frame — never a throw.
+    MediaQuery,
+    /// `navigator.onLine` / `online`+`offline` window events — the binary
+    /// connected/disconnected state from the browser's network event model.
+    /// Distinct from [`Self::NetworkInfo`], which surfaces connection-quality
+    /// hints; this axis carries ONLY the binary event stream. An absent
+    /// `navigator.onLine` traps to a typed inbound frame — never a throw.
+    Connectivity,
     /// A port with no characterised Web API: a hand-rolled `Js.send`/`Js.subscribe`
     /// reaching author-written JS. The reachability floor no port can slip below —
     /// an uncharacterised port discloses `js-port:raw`, never nothing.
@@ -163,6 +180,9 @@ impl WebCapability {
         Self::Camera,
         Self::Microphone,
         Self::Gamepad,
+        Self::Visibility,
+        Self::MediaQuery,
+        Self::Connectivity,
         Self::Raw,
         Self::Speech,
         Self::Permission,
@@ -185,6 +205,9 @@ impl WebCapability {
             Self::Camera => "camera",
             Self::Microphone => "microphone",
             Self::Gamepad => "gamepad",
+            Self::Visibility => "visibility",
+            Self::MediaQuery => "media-query",
+            Self::Connectivity => "connectivity",
             Self::Raw => "raw",
             Self::Speech => "speech",
             Self::Permission => "permission",
@@ -218,6 +241,9 @@ impl WebCapability {
             ["Ipe", "Browser", "Camera", ..] => Some(Self::Camera),
             ["Ipe", "Browser", "Microphone", ..] => Some(Self::Microphone),
             ["Ipe", "Browser", "Gamepad", ..] => Some(Self::Gamepad),
+            ["Ipe", "Browser", "Visibility", ..] => Some(Self::Visibility),
+            ["Ipe", "Browser", "MediaQuery", ..] => Some(Self::MediaQuery),
+            ["Ipe", "Browser", "Connectivity", ..] => Some(Self::Connectivity),
             ["Ipe", "Browser", "Speech", ..] => Some(Self::Speech),
             ["Ipe", "Browser", "Permission", ..] => Some(Self::Permission),
             _ => None,
@@ -257,6 +283,18 @@ impl WebCapability {
                 "Polling gamepad state and receiving connect/disconnect events via \
                  navigator.getGamepads() and the Gamepad API event listeners."
             }
+            Self::Visibility => {
+                "Reading the document visibility state (foreground/background) via \
+                 document.visibilityState / the visibilitychange event."
+            }
+            Self::MediaQuery => {
+                "Evaluating CSS media queries via window.matchMedia and receiving \
+                 change events when the environment transitions."
+            }
+            Self::Connectivity => {
+                "Reading the binary online/offline state via navigator.onLine and \
+                 the online/offline window events."
+            }
             Self::Raw => {
                 "Exchanging data with hand-rolled page JS over an uncharacterised port \
                  (Js.send / Js.subscribe with author-written JS)."
@@ -290,6 +328,9 @@ impl WebCapability {
             "camera" => Ok(Self::Camera),
             "microphone" => Ok(Self::Microphone),
             "gamepad" => Ok(Self::Gamepad),
+            "visibility" => Ok(Self::Visibility),
+            "media-query" => Ok(Self::MediaQuery),
+            "connectivity" => Ok(Self::Connectivity),
             "raw" => Ok(Self::Raw),
             "speech" => Ok(Self::Speech),
             "permission" => Ok(Self::Permission),
@@ -317,6 +358,9 @@ impl WebCapability {
             Self::Camera => "Camera",
             Self::Microphone => "Microphone",
             Self::Gamepad => "Gamepad",
+            Self::Visibility => "Visibility",
+            Self::MediaQuery => "MediaQuery",
+            Self::Connectivity => "Connectivity",
             Self::Raw => "Raw",
             Self::Speech => "Speech",
             Self::Permission => "Permission",
@@ -430,6 +474,9 @@ impl Capability {
         Self::JsPort(WebCapability::Camera),
         Self::JsPort(WebCapability::Microphone),
         Self::JsPort(WebCapability::Gamepad),
+        Self::JsPort(WebCapability::Visibility),
+        Self::JsPort(WebCapability::MediaQuery),
+        Self::JsPort(WebCapability::Connectivity),
         Self::JsPort(WebCapability::Raw),
         Self::JsPort(WebCapability::Speech),
         Self::JsPort(WebCapability::Permission),
@@ -481,6 +528,9 @@ impl Capability {
                 WebCapability::Camera => "js-port:camera",
                 WebCapability::Microphone => "js-port:microphone",
                 WebCapability::Gamepad => "js-port:gamepad",
+                WebCapability::Visibility => "js-port:visibility",
+                WebCapability::MediaQuery => "js-port:media-query",
+                WebCapability::Connectivity => "js-port:connectivity",
                 WebCapability::Raw => "js-port:raw",
                 WebCapability::Speech => "js-port:speech",
                 WebCapability::Permission => "js-port:permission",
@@ -535,7 +585,8 @@ impl std::fmt::Display for UnknownCapability {
              database, env, subprocess, clock, random, native-ffi, ffi-raw, unsafe, \
              custom-element, js-port:<axis> where <axis> is one of geolocation, \
              clipboard, notification, storage, vibration, share, battery, \
-             network-info, file, camera, microphone, gamepad, raw, speech, permission)",
+             network-info, file, camera, microphone, gamepad, visibility, media-query, \
+             connectivity, raw, speech, permission)",
             self.0
         )
     }
@@ -621,7 +672,7 @@ mod tests {
         // and the count matches the declared axes (11 flat + one `JsPort` per
         // `WebCapability`, so the sub-axis is enumerated, not wildcarded away).
         let names: Vec<&str> = Capability::ALL.iter().map(|c| c.as_str()).collect();
-        assert_eq!(names.len(), 11 + WebCapability::ALL.len());
+        assert_eq!(names.len(), 11 + WebCapability::ALL.len()); // 11 flat + one JsPort per WebCapability
         let mut sorted = names.clone();
         sorted.sort_unstable();
         sorted.dedup();

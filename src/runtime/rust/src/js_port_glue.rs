@@ -753,6 +753,88 @@ const PORT_GLUE_JS: &str = r#"// Ipe.Ffi.Js browser port surface. Values cross a
     gamepadRafId = requestAnimationFrame(poll);
     return true;
   }
+  // Ipe.Browser.Visibility: `Query` / `Watch` -> document.visibilityState +
+  // visibilitychange. A `Query` reads the current state once; a `Watch` also
+  // attaches a `visibilitychange` listener that pushes fresh readings. An absent
+  // Page Visibility API traps to `unavailable` — never a throw.
+  function visibilitySink(value, corId) {
+    var isQuery = value === "Query" ||
+      (value && typeof value === "object" && value.Query !== undefined);
+    var isWatch = value === "Watch" ||
+      (value && typeof value === "object" && value.Watch !== undefined);
+    if (!isQuery && !isWatch) return false;
+    if (typeof document === "undefined" || typeof document.visibilityState !== "string") {
+      reply({ tag: "visibility", ok: false, error: "unavailable" }, corId);
+      return true;
+    }
+    reply({ tag: "visibility", ok: true, visible: document.visibilityState === "visible" }, corId);
+    if (isWatch && typeof document.addEventListener === "function") {
+      // Each change event delivers a fresh reading; no correlation id on broadcasts.
+      document.addEventListener("visibilitychange", function () {
+        reply({ tag: "visibility", ok: true, visible: document.visibilityState === "visible" }, null);
+      });
+    }
+    return true;
+  }
+  // Ipe.Browser.MediaQuery: `Match { Match: query }` / `Watch { Watch: query }`
+  // -> window.matchMedia(query). A `Match` evaluates the query once; a `Watch`
+  // also attaches a `change` listener on the returned MediaQueryList. An absent
+  // `matchMedia` API traps to `unavailable` — never a throw. The query string
+  // comes from the sealed `JsCmd` payload, never from untrusted input.
+  function mediaQuerySink(value, corId) {
+    var isMatch = value && typeof value === "object" && value.Match !== undefined;
+    var isWatch = value && typeof value === "object" && value.Watch !== undefined;
+    if (!isMatch && !isWatch) return false;
+    var query = isMatch ? value.Match : value.Watch;
+    if (typeof query !== "string") {
+      reply({ tag: "media-query", ok: false, error: "unavailable" }, corId);
+      return true;
+    }
+    if (typeof window === "undefined" || typeof window.matchMedia !== "function") {
+      reply({ tag: "media-query", ok: false, error: "unavailable" }, corId);
+      return true;
+    }
+    var mql;
+    try { mql = window.matchMedia(query); } catch (_e) { mql = null; }
+    if (!mql) {
+      reply({ tag: "media-query", ok: false, error: "unavailable" }, corId);
+      return true;
+    }
+    reply({ tag: "media-query", ok: true, matches: mql.matches === true }, corId);
+    if (isWatch && typeof mql.addEventListener === "function") {
+      // Each change event delivers a fresh match result; no correlation id on broadcasts.
+      mql.addEventListener("change", function (ev) {
+        reply({ tag: "media-query", ok: true, matches: ev.matches === true }, null);
+      });
+    }
+    return true;
+  }
+  // Ipe.Browser.Connectivity: `Query` / `Watch` -> navigator.onLine + online/offline
+  // window events. A `Query` reads `navigator.onLine` once; a `Watch` also attaches
+  // `online`/`offline` event listeners. An absent `navigator.onLine` traps to
+  // `unavailable` — never a throw.
+  function connectivitySink(value, corId) {
+    var isQuery = value === "Query" ||
+      (value && typeof value === "object" && value.Query !== undefined);
+    var isWatch = value === "Watch" ||
+      (value && typeof value === "object" && value.Watch !== undefined);
+    if (!isQuery && !isWatch) return false;
+    if (typeof navigator === "undefined" || typeof navigator.onLine !== "boolean") {
+      reply({ tag: "connectivity", ok: false, error: "unavailable" }, corId);
+      return true;
+    }
+    reply({ tag: "connectivity", ok: true, online: navigator.onLine === true }, corId);
+    if (isWatch && typeof window !== "undefined" && typeof window.addEventListener === "function") {
+      // Each online/offline event delivers a fresh state; no correlation id on broadcasts.
+      window.addEventListener("online", function () {
+        reply({ tag: "connectivity", ok: true, online: true }, null);
+      });
+      window.addEventListener("offline", function () {
+        reply({ tag: "connectivity", ok: true, online: false }, null);
+      });
+    }
+    return true;
+  }
   function builtinSink(value, corId) {
     if (clipboardSink(value, corId)) return true;
     if (geolocationSink(value, corId)) return true;
@@ -767,6 +849,9 @@ const PORT_GLUE_JS: &str = r#"// Ipe.Ffi.Js browser port surface. Values cross a
     if (microphoneSink(value, corId)) return true;
     if (speechSink(value, corId)) return true;
     if (gamepadSink(value, corId)) return true;
+    if (visibilitySink(value, corId)) return true;
+    if (mediaQuerySink(value, corId)) return true;
+    if (connectivitySink(value, corId)) return true;
     return false;
   }
   function deliver(raw) {
@@ -1085,6 +1170,53 @@ mod tests {
         // …and traps absence + failure to typed frames, never a throw / eval.
         assert!(js.contains("\"unavailable\""));
         assert!(js.contains("\"failed\""));
+        assert!(!js.contains("eval("));
+    }
+
+    #[test]
+    fn visibility_sink_reaches_the_web_api_and_traps_absence_to_a_typed_result() {
+        let js = port_glue_js();
+        // The first-party Ipe.Browser.Visibility sink reads document.visibilityState…
+        assert!(js.contains("visibilitySink"));
+        assert!(js.contains("document.visibilityState"));
+        assert!(js.contains("visibilitychange"));
+        // …emits a typed reading with the `visible` boolean field…
+        assert!(js.contains("tag: \"visibility\""));
+        assert!(js.contains("visible:"));
+        // …and traps an absent API to a typed frame, never a throw.
+        assert!(js.contains("\"unavailable\""));
+        assert!(!js.contains("eval("));
+    }
+
+    #[test]
+    fn media_query_sink_reaches_the_web_api_and_traps_absence_to_a_typed_result() {
+        let js = port_glue_js();
+        // The first-party Ipe.Browser.MediaQuery sink reaches window.matchMedia…
+        assert!(js.contains("mediaQuerySink"));
+        assert!(js.contains("window.matchMedia"));
+        assert!(js.contains("mql.matches"));
+        // …emits a typed reading with the `matches` boolean field…
+        assert!(js.contains("tag: \"media-query\""));
+        assert!(js.contains("matches:"));
+        // …and traps an absent API to a typed frame, never a throw.
+        assert!(js.contains("\"unavailable\""));
+        assert!(!js.contains("eval("));
+    }
+
+    #[test]
+    fn connectivity_sink_reaches_the_web_api_and_traps_absence_to_a_typed_result() {
+        let js = port_glue_js();
+        // The first-party Ipe.Browser.Connectivity sink reads navigator.onLine…
+        assert!(js.contains("connectivitySink"));
+        assert!(js.contains("navigator.onLine"));
+        // …attaches online/offline event listeners for the watch path…
+        assert!(js.contains("\"online\""));
+        assert!(js.contains("\"offline\""));
+        // …emits a typed reading with the `online` boolean field…
+        assert!(js.contains("tag: \"connectivity\""));
+        assert!(js.contains("online:"));
+        // …and traps an absent API to a typed frame, never a throw.
+        assert!(js.contains("\"unavailable\""));
         assert!(!js.contains("eval("));
     }
 

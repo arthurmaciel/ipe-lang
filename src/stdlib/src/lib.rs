@@ -880,6 +880,64 @@ const IPE_BROWSER_GAMEPAD: &str = include_str!("../Ipe/Browser/Gamepad.ipe");
 /// `MODULES`); NOT in `STDLIB_MODULE_QUALIFIERS`.
 const IPE_BROWSER_GAMEPAD_INTERNALS: &str = include_str!("../Ipe/Browser/Gamepad/Internals.ipe");
 
+/// `Ipe.Browser.Visibility` — read the document visibility state over
+/// `Ipe.Ffi.Js` ports (compiled source), spanning BOTH port directions: an
+/// outbound `JsCmd` request (`state` one-shot / `watch` continuous) and an
+/// inbound `JsMsg` reply folded exhaustively into `Result Error State`. Importing
+/// it discloses `js-port:visibility` (import-derived, keyed on the canonical
+/// `Ipe.Browser.Visibility` path prefix via `WebCapability::for_browser_module`).
+/// The served JS sink reads `document.visibilityState`, trapping an absent API to
+/// the typed `Unavailable` inbound variant. Registered in
+/// [`COMPILED_STD_MODULES`] (NOT `MODULES`); NOT in `STDLIB_MODULE_QUALIFIERS`.
+const IPE_BROWSER_VISIBILITY: &str = include_str!("../Ipe/Browser/Visibility.ipe");
+
+/// `Ipe.Browser.Visibility.Internals` — the low-level Visibility port surface:
+/// the closed outbound/inbound ADTs and the raw `Ipe.Ffi.Js` wiring the
+/// high-level layer wraps. Importing it discloses the same `js-port:visibility`
+/// axis (the prefix key covers the submodule). Registered in
+/// [`COMPILED_STD_MODULES`] (NOT `MODULES`); NOT in `STDLIB_MODULE_QUALIFIERS`.
+const IPE_BROWSER_VISIBILITY_INTERNALS: &str =
+    include_str!("../Ipe/Browser/Visibility/Internals.ipe");
+
+/// `Ipe.Browser.MediaQuery` — evaluate CSS media queries over `Ipe.Ffi.Js` ports
+/// (compiled source), spanning BOTH port directions: an outbound `JsCmd` request
+/// (`match_` one-shot / `watch` continuous) and an inbound `JsMsg` reply folded
+/// exhaustively into `Result Error Bool`. Importing it discloses
+/// `js-port:media-query` (import-derived, keyed on the canonical
+/// `Ipe.Browser.MediaQuery` path prefix via `WebCapability::for_browser_module`).
+/// The served JS sink reaches `window.matchMedia`, trapping an absent API to the
+/// typed `Unavailable` inbound variant. Registered in [`COMPILED_STD_MODULES`]
+/// (NOT `MODULES`); NOT in `STDLIB_MODULE_QUALIFIERS`.
+const IPE_BROWSER_MEDIA_QUERY: &str = include_str!("../Ipe/Browser/MediaQuery.ipe");
+
+/// `Ipe.Browser.MediaQuery.Internals` — the low-level MediaQuery port surface:
+/// the closed outbound/inbound ADTs and the raw `Ipe.Ffi.Js` wiring the
+/// high-level layer wraps. Importing it discloses the same `js-port:media-query`
+/// axis (the prefix key covers the submodule). Registered in
+/// [`COMPILED_STD_MODULES`] (NOT `MODULES`); NOT in `STDLIB_MODULE_QUALIFIERS`.
+const IPE_BROWSER_MEDIA_QUERY_INTERNALS: &str =
+    include_str!("../Ipe/Browser/MediaQuery/Internals.ipe");
+
+/// `Ipe.Browser.Connectivity` — read the browser online/offline state over
+/// `Ipe.Ffi.Js` ports (compiled source), spanning BOTH port directions: an
+/// outbound `JsCmd` request (`connected` one-shot / `watch` continuous) and an
+/// inbound `JsMsg` reply folded exhaustively into `Result Error Bool`. Importing
+/// it discloses `js-port:connectivity` (import-derived, keyed on the canonical
+/// `Ipe.Browser.Connectivity` path prefix via `WebCapability::for_browser_module`).
+/// The served JS sink reads `navigator.onLine` and attaches `online`/`offline`
+/// event listeners, trapping an absent API to the typed `Unavailable` inbound
+/// variant. Registered in [`COMPILED_STD_MODULES`] (NOT `MODULES`); NOT in
+/// `STDLIB_MODULE_QUALIFIERS`.
+const IPE_BROWSER_CONNECTIVITY: &str = include_str!("../Ipe/Browser/Connectivity.ipe");
+
+/// `Ipe.Browser.Connectivity.Internals` — the low-level Connectivity port
+/// surface: the closed outbound/inbound ADTs and the raw `Ipe.Ffi.Js` wiring the
+/// high-level layer wraps. Importing it discloses the same `js-port:connectivity`
+/// axis (the prefix key covers the submodule). Registered in
+/// [`COMPILED_STD_MODULES`] (NOT `MODULES`); NOT in `STDLIB_MODULE_QUALIFIERS`.
+const IPE_BROWSER_CONNECTIVITY_INTERNALS: &str =
+    include_str!("../Ipe/Browser/Connectivity/Internals.ipe");
+
 /// `Ipe.Env` — build-time-embedded public config (compiled source).
 ///
 /// Defines `public : String -> Maybe String`, routed through the
@@ -1438,6 +1496,30 @@ pub const COMPILED_STD_MODULES: &[CompiledStdModule] = &[
     CompiledStdModule {
         dotted: "Ipe.Browser.Gamepad.Internals",
         source: IPE_BROWSER_GAMEPAD_INTERNALS,
+    },
+    CompiledStdModule {
+        dotted: "Ipe.Browser.Visibility",
+        source: IPE_BROWSER_VISIBILITY,
+    },
+    CompiledStdModule {
+        dotted: "Ipe.Browser.Visibility.Internals",
+        source: IPE_BROWSER_VISIBILITY_INTERNALS,
+    },
+    CompiledStdModule {
+        dotted: "Ipe.Browser.MediaQuery",
+        source: IPE_BROWSER_MEDIA_QUERY,
+    },
+    CompiledStdModule {
+        dotted: "Ipe.Browser.MediaQuery.Internals",
+        source: IPE_BROWSER_MEDIA_QUERY_INTERNALS,
+    },
+    CompiledStdModule {
+        dotted: "Ipe.Browser.Connectivity",
+        source: IPE_BROWSER_CONNECTIVITY,
+    },
+    CompiledStdModule {
+        dotted: "Ipe.Browser.Connectivity.Internals",
+        source: IPE_BROWSER_CONNECTIVITY_INTERNALS,
     },
     CompiledStdModule {
         dotted: "Ipe.Env",

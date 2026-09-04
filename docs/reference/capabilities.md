@@ -46,5 +46,8 @@ Ipê runs programs under a deny-by-default capability model. Every operation tha
 | `js-port:file` | Opening a native file picker and reading the chosen file via the File API (FileReader.readAsDataURL). |
 | `js-port:camera` | Capturing a photo via the device camera (mobile) or an image file picker (desktop) using a <input capture> element and the File API. |
 | `js-port:microphone` | Recording a bounded audio clip from the device microphone via getUserMedia({ audio: true }) / MediaRecorder; the assembled clip is returned as a base-64 data URL in a single one-shot reply. |
+| `js-port:visibility` | Reading the document visibility state (foreground/background) via document.visibilityState / the visibilitychange event. |
+| `js-port:media-query` | Evaluating CSS media queries via window.matchMedia and receiving change events when the environment transitions. |
+| `js-port:connectivity` | Reading the binary online/offline state via navigator.onLine and the online/offline window events. |
 | `js-port:raw` | Exchanging data with hand-rolled page JS over an uncharacterised port (Js.send / Js.subscribe with author-written JS). |
 

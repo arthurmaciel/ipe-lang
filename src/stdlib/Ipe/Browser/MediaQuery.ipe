@@ -1,0 +1,92 @@
+-- | Ipe.Browser.MediaQuery — evaluate CSS media queries over `Ipe.Ffi.Js` ports.
+--
+-- A first-party proof of the per-capability web mechanism spanning BOTH port
+-- directions: an outbound `JsCmd` requests a match (`match` one-shot or a
+-- continuous `watch`), and an inbound `JsMsg` carries the reply — a decoded
+-- `Bool` match result or a typed unavailability. Both cross the same seal codec
+-- and fail-closed port discipline as every other port; there is no second
+-- transport.
+--
+-- Importing this reserved `Ipe.Browser.<Api>` module discloses
+-- `js-port:media-query` (import-derived, keyed on the canonical
+-- `Ipe.Browser.MediaQuery` path prefix via `WebCapability::for_browser_module`,
+-- alias-immune); only the top-level app's `[capabilities] accepts` set can grant
+-- it.
+--
+-- The two layers:
+--
+--   * `Ipe.Browser.MediaQuery.Internals` publishes the closed outbound/inbound ADTs.
+--   * this module is the high-level layer: `match_` returns a `Task Error Bool`
+--     via the correlated port→Task bridge; `watch` is `Cmd`-shaped, and `matches`
+--     is the inbound subscription folding the narrow `JsMsg` into a typed
+--     `Result Error Bool`. The inbound `case` is EXHAUSTIVE: an unavailability
+--     becomes a typed `Err`, never a silently dropped variant.
+module Ipe.Browser.MediaQuery exposing
+    ( match_
+    , watch
+    , matches
+    )
+
+import Ipe.Browser.MediaQuery.Internals as Internals exposing (JsMsg(..))
+import Ipe.Error as Error exposing (Error)
+import Ipe.Task as Task
+import Ipe.Tea.Web.Cmd as Cmd
+import Ipe.Tea.Web.Sub as Sub
+
+
+-- | `match_ query` — evaluate a CSS media query string ONCE, as a
+-- `Task Error Bool`.
+--
+-- `True` when the current environment matches the query; `False` when it does
+-- not. Uses the correlated port→Task bridge (`Js.request`). A typed unavailability
+-- resolves the `Task` with `Err`; no companion subscription is needed.
+--
+-- Importing this module discloses `js-port:media-query`; the app must grant it
+-- with `accepts = [ JsPort MediaQuery ]` under [capabilities] in package.ipe.
+match_ : String -> Task Error Bool
+match_ query =
+    Internals.requestOne (Internals.Match query)
+        |> Task.andThen foldMatch
+
+
+-- | `watch query` — begin a CONTINUOUS match stream for `query`; each
+-- `MediaQueryList.change` event delivers a fresh match result on the `matches`
+-- subscription. Outbound `Cmd`.
+watch : String -> Cmd.Cmd msg
+watch query =
+    Internals.request (Internals.Watch query)
+
+
+-- | `matches toMsg` — the inbound subscription, wired in `subscriptions`.
+--
+-- The decoder IS the security gate: every inbound value runs through the total,
+-- bounded seal decoder for the narrow `JsMsg`; a malformed / mismatched frame is
+-- dropped whole. A decoded `JsMsg` is folded EXHAUSTIVELY into a
+-- `Result Error Bool` — a `Matched` becomes `Ok`, an unavailability a typed `Err`.
+matches : (Result Error Bool -> msg) -> Sub.Sub msg
+matches toMsg =
+    Internals.subscribe (\inbound -> toMsg (toResult inbound))
+
+
+-- | Fold a `match_` reply into a `Task Error Bool`. The `case` is exhaustive
+-- over every published inbound variant.
+foldMatch : Internals.JsMsg -> Task Error Bool
+foldMatch msg =
+    case msg of
+        Matched doesMatch ->
+            Task.succeed doesMatch
+
+        Unavailable ->
+            Task.fail (Error.unavailable "matchMedia unavailable")
+
+
+-- | Fold the narrow inbound `JsMsg` into a typed `Result Error Bool`. The `case`
+-- is exhaustive over every published inbound variant.
+toResult : Internals.JsMsg -> Result Error Bool
+toResult inbound =
+    case inbound of
+        Matched doesMatch ->
+            Ok doesMatch
+
+        Unavailable ->
+            Err (Error.unavailable "matchMedia unavailable")

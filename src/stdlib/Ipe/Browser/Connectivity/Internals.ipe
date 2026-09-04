@@ -1,0 +1,98 @@
+-- | Ipe.Browser.Connectivity.Internals — the low-level Connectivity port surface:
+-- the closed outbound/inbound ADTs and the raw `Ipe.Ffi.Js` request/subscribe
+-- wiring the high-level `Ipe.Browser.Connectivity` layer wraps.
+--
+-- Importing this submodule discloses the same `js-port:connectivity` axis as the
+-- top-level module (the disclosure is keyed on the `Ipe.Browser.Connectivity` path
+-- prefix), so the raw port surface cannot be reached undisclosed.
+module Ipe.Browser.Connectivity.Internals exposing
+    ( JsCmd(..)
+    , JsMsg(..)
+    , request
+    , requestOne
+    , subscribe
+    , inbound
+    )
+
+import Ipe.Error as Error exposing (Error)
+import Ipe.Ffi.Js as Js
+import Ipe.Json.Decode as Decode
+import Ipe.Tea.Web.Cmd as Cmd
+import Ipe.Tea.Web.Sub as Sub
+
+
+-- | The ONE closed OUTBOUND port type: the whole outbound surface as a single
+-- auditable object.
+--
+--   * `Query` — read the current online state from `navigator.onLine` once.
+--   * `Watch` — begin an online/offline event stream: each `online`/`offline`
+--     window event delivers a fresh `Online` reading on the inbound subscription.
+type JsCmd
+    = Query
+    | Watch
+
+
+-- | The NARROW closed INBOUND port type — deliberately NOT the app's internal
+-- `Msg`. Every variant the browser can push is enumerated, so the fold in the
+-- high-level layer is EXHAUSTIVE and an unavailability can never be silently
+-- dropped: it becomes a typed `Err`.
+--
+--   * `Online isOnline` — the current connectivity state: `True` when
+--     `navigator.onLine` is `true`, `False` when offline.
+--   * `Unavailable` — `navigator.onLine` is absent in this context.
+type JsMsg
+    = Online Bool
+    | Unavailable
+
+
+-- | `request cmd` — hand a closed outbound `JsCmd` to the raw port transport.
+-- The served first-party JS sink reads `navigator.onLine` and attaches
+-- `online`/`offline` event listeners; the reply arrives inbound as a `JsMsg`.
+request : JsCmd -> Cmd.Cmd msg
+request cmd =
+    Js.send cmd
+
+
+-- | `requestOne cmd` — correlated one-shot `JsCmd` → `Task Error JsMsg`.
+-- Routes through `Js.request` with the `inbound` decoder so the correlated
+-- reply is decoded fail-closed by the same gate the `subscribe` path uses.
+requestOne : JsCmd -> Task Error JsMsg
+requestOne cmd =
+    Js.request cmd inbound
+
+
+-- | `subscribe toMsg` — the inbound subscription over the fail-closed seal
+-- decoder. `inbound` IS the security gate; a malformed / mismatched frame is
+-- dropped whole. A decoded `JsMsg` is handed to `toMsg`.
+subscribe : (JsMsg -> msg) -> Sub.Sub msg
+subscribe toMsg =
+    Js.subscribe inbound toMsg
+
+
+-- | The total, fail-closed decoder for the inbound `JsMsg`. It reads the `ok`
+-- flag: a true flag decodes an `Online` from the boolean `online` field; a false
+-- flag decodes the closed `error` vocabulary. An unrecognised token fails the
+-- decode closed (the frame is dropped).
+inbound : Decode.Decoder JsMsg
+inbound =
+    Decode.andThen decodeByOk (Decode.field "ok" Decode.bool)
+
+
+decodeByOk : Bool -> Decode.Decoder JsMsg
+decodeByOk ok =
+    if ok then
+        Decode.map Online
+            (Decode.field "online" Decode.bool)
+
+    else
+        Decode.andThen decodeError (Decode.field "error" Decode.string)
+
+
+decodeError : String -> Decode.Decoder JsMsg
+decodeError token =
+    case token of
+        "unavailable" ->
+            Decode.succeed Unavailable
+
+        _ ->
+            Decode.fail ("unknown connectivity error variant: " ++ token)
