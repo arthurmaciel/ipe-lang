@@ -6,8 +6,8 @@
 //! never silently become `Nothing`.
 //!
 //! The kernel reuses the shared `config_nullable` runtime builder over the
-//! unified `Decoder` carrier, so there is one runtime impl behind JsonDec,
-//! Config, and Db.Decode.
+//! unified `Decoder` carrier, so there is one runtime impl behind `JsonDec`,
+//! `Config`, and `Db.Decode`.
 
 use std::path::{Path, PathBuf};
 
