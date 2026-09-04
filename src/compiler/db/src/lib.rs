@@ -1220,6 +1220,14 @@ pub struct BuildConfig {
     /// once by the CLI when the config is built; default off ⇒ byte-identical
     /// emit.
     pub hot_appearance: bool,
+    /// `true` when the resolved delivery is `web desktop` (webview-native).
+    /// Threaded to [`ipe_backend_rust::RustBackend::with_webview_host`], which
+    /// forces the `uses_webview` signal so the emitted project selects the
+    /// webview executor and promotes `webview` to the default feature list. The
+    /// webview delivery is a resolved HOST decision (from the CLI's
+    /// shape × runtime × host), not a source entry — lives on `BuildConfig` so
+    /// toggling it re-runs only the emit demand. Default off ⇒ served `web`.
+    pub webview_host: bool,
 }
 
 /// The memoized result of emitting the linked, lowered program to Rust
@@ -1304,6 +1312,7 @@ pub fn emit_project(
     let debugger = config.debugger(db);
     let cargo_name = config.cargo_name(db).clone();
     let hot_appearance = config.hot_appearance(db);
+    let webview_host = config.webview_host(db);
     let interner = db.interner().lock();
     ipe_backend_rust::RustBackend::new(&interner)
         .with_db_driver(driver)
@@ -1315,6 +1324,7 @@ pub fn emit_project(
         .with_debugger(debugger)
         .with_project_name(&cargo_name)
         .with_hot_appearance(hot_appearance)
+        .with_webview_host(webview_host)
         .emit(&program)
         .map(Arc::new)
         .map_err(|d| (d, Vec::new()))
@@ -1516,6 +1526,7 @@ pub fn emit_manifest(
     let runtime_dep = config.runtime_dep(db).clone();
     let debugger = config.debugger(db);
     let hot_appearance = config.hot_appearance(db);
+    let webview_host = config.webview_host(db);
     let interner = db.interner().lock();
     ipe_backend_rust::RustBackend::new(&interner)
         .with_db_driver(driver)
@@ -1526,6 +1537,7 @@ pub fn emit_manifest(
         .with_runtime_dep(runtime_dep)
         .with_debugger(debugger)
         .with_hot_appearance(hot_appearance)
+        .with_webview_host(webview_host)
         .assemble_split_manifest(&program, &spine, &module_texts)
         .map(Arc::new)
         .map_err(|d| (d, Vec::new()))

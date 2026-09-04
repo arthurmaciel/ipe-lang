@@ -25,6 +25,7 @@ pub mod clean;
 pub mod cli_args;
 pub mod contained_path;
 pub mod coverage;
+pub mod delivery;
 pub mod diff;
 pub mod doc;
 pub mod doc_bundle;
@@ -983,6 +984,14 @@ pub struct BuildOptions {
     /// `ipe build` / `ipe run` / `ipe release` entries leave it `false` so a
     /// release artifact never carries hot-swap scaffolding. Default `false`.
     pub hot_appearance: bool,
+    /// `true` when the resolved delivery is `web desktop` (webview-native).
+    /// Threaded through [`ipe_db::BuildConfig`] and the emit fast-path to
+    /// [`ipe_backend_rust::RustBackend::with_webview_host`], forcing the
+    /// `uses_webview` signal so the emitted project selects the webview executor
+    /// and promotes `webview` to the default feature list. The webview delivery
+    /// is a resolved HOST decision (from the CLI's shape × runtime × host), not a
+    /// source entry. Default `false` (a served `web`, or any non-web shape).
+    pub webview_host: bool,
 }
 
 /// Select the emit model from the environment.
@@ -1613,6 +1622,7 @@ fn compile_modules_observed(
         &options.wasm_public_env,
         options.production,
         options.hot_appearance,
+        options.webview_host,
     );
     let epoch = cache_dir.and_then(|_| cache::derive_epoch());
     if let (Some(root), Some(epoch)) = (cache_dir, epoch.as_deref())
@@ -1679,6 +1689,7 @@ fn compile_modules_observed(
                     .with_debugger(options.debugger)
                     .with_project_name(&options.cargo_name)
                     .with_hot_appearance(options.hot_appearance)
+                    .with_webview_host(options.webview_host)
                     .emit(&program)
             };
             if let Ok(emitted) = emit_result {
@@ -1733,6 +1744,7 @@ fn compile_modules_observed(
         options.debugger,
         options.cargo_name.clone(),
         options.hot_appearance,
+        options.webview_host,
     );
 
     let emitted = match compile_prepared(&db, source_root, &sources, entry_path, blame_path, config)
@@ -3239,6 +3251,13 @@ pub(crate) fn run_watch(rest: &[String]) -> Result<(), CliError> {
         None => default_entry()?,
     };
 
+    // Validate the delivery grammar against the shape `main` pins: the `[shape]`
+    // cross-check and the `[runtime] [host]` tail. `ipe watch` is a dev
+    // build-run-reload loop that serves the live runtime; it takes no `--static`.
+    // A grammar refusal (e.g. `web spa ios`, which cannot be watched — see the
+    // spec's mobile-watch note) is caught here before the loop starts.
+    let _delivery = resolve_delivery(Path::new(&entry), &args.delivery, false, "watch")?;
+
     let out_dir = args
         .out
         .map_or_else(|| PathBuf::from("out").join("rust"), PathBuf::from);
@@ -3271,6 +3290,61 @@ pub(crate) fn run_watch(rest: &[String]) -> Result<(), CliError> {
         }
     }
     watch::run(&opts)
+}
+
+/// Classify the shape `main` pins for the entry the user named, reading the
+/// entry `.ipe` source and inspecting `main`'s head (spec § 0, § 1).
+///
+/// The shape is the single source of truth for delivery: it is derived from
+/// code, never from config or the CLI. `entry_arg` is the raw positional (a
+/// `.ipe` file, a project directory, or a bare `.`); it is routed to its entry
+/// source file the same way the analysis surfaces route it. A source that does
+/// not parse yields [`delivery::Shape::Script`] — the cross-check then does not
+/// fire and the build pipeline reports the real parse error with a blamed span.
+///
+/// # Errors
+/// [`CliError::Io`] when the entry source cannot be read, or the manifest /
+/// entry-resolution errors of [`resolve_analysis_entry`].
+fn classify_entry_shape(entry_arg: &Path) -> Result<delivery::Shape, CliError> {
+    let entry_file = resolve_analysis_entry(entry_arg)?;
+    let source = io_bounded::read_to_string_capped(&entry_file, io_bounded::SOURCE_READ_CAP)?;
+    let mut interner = Interner::new();
+    // A parse failure is the compile pipeline's to report (with a blamed span);
+    // the shape cross-check simply does not fire, so classify as a script.
+    let shape = ipe_parse::parse_module(&source, &mut interner)
+        .map_or(ipe_canon::shape_source::MainShape::Script, |module| {
+            ipe_canon::shape_source::classify_main_shape(&module, &interner)
+        });
+    Ok(delivery::Shape::from_main(shape))
+}
+
+/// Resolve the delivery for a `build` / `run` / `watch` invocation: classify the
+/// shape `main` pins, cross-check the optional `[shape]` positional against it,
+/// resolve the `[runtime] [host]` tail, and gate `--static`.
+///
+/// This is the one place the CLI turns the delivery grammar into a validated
+/// [`delivery::Delivery`], from which `is_webview_native()` drives the backend
+/// `webview_host` signal and the packager routing. Every refusal is a
+/// pedagogical [`delivery::DeliveryError`], surfaced as a usage error.
+///
+/// # Errors
+/// [`CliError::UsageOwned`] carrying the delivery lesson on a shape mismatch, an
+/// invalid runtime/host combination, or a `--static` request the delivery
+/// cannot honour; the I/O errors of [`classify_entry_shape`].
+fn resolve_delivery(
+    entry_arg: &Path,
+    positionals: &cli_args::DeliveryPositionals,
+    wants_static: bool,
+    command: &str,
+) -> Result<delivery::Delivery, CliError> {
+    let pinned = classify_entry_shape(entry_arg)?;
+    delivery::Delivery::resolve_checked(
+        pinned,
+        positionals.stated_shape,
+        &positionals.tokens,
+        wants_static,
+    )
+    .map_err(|e| CliError::UsageOwned(format!("ipe {command}: {e}")))
 }
 
 /// Route an entry argument to its `package.ipe`, when one governs it:
@@ -3400,11 +3474,11 @@ fn run_build_body(rest: &[String]) -> Result<BuildSuccess, CliError> {
     };
     let entry_path = PathBuf::from(&entry);
 
-    // `--fix` carries durable authorization: apply machine-applicable fixes
-    // non-interactively before the (re-run) build sees the source.
-    if args.fix {
-        apply_fixes_cmd(&entry_path, true, &mut std::io::stdout())?;
-    }
+    let wants_static = matches!(
+        &args.mode,
+        cli_args::BuildMode::Emit { static_layer, .. }
+            if static_layer.static_build == Some(true)
+    );
 
     // Parse guaranteed `--emit-ir` composes with no emit-affecting flag, so the
     // IR-dump path carries no options to drop.
@@ -3449,12 +3523,25 @@ fn run_build_body(rest: &[String]) -> Result<BuildSuccess, CliError> {
     let manifest_wasm: Option<project::WasmConfig> =
         manifest_parsed.as_ref().map(|m| m.wasm.clone());
 
-    // Resolve the static plan FIRST: it is pure over the flag/env/manifest
-    // request layer and reads no source, so a flag-contradiction refusal
-    // (talc-without-arena, --target-without-static, cfree conflicts) fires
-    // before any filesystem read of the entry — a refused build produces no
-    // artifact and touches nothing.
+    // Static-flag contradictions (--cfree + C-requiring allocator,
+    // --target without --static, talc-without-arena) are pure over the CLI +
+    // env + manifest layers and touch no source. Resolving here — before
+    // resolve_delivery reads the entry file — ensures a refused build produces
+    // no artifact and touches nothing, even when the entry path does not exist.
     let static_plan = resolve_static_plan(cli_layer, manifest.as_deref())?;
+
+    // Resolve the delivery grammar against the shape `main` pins: the optional
+    // `[shape]` cross-check, the `[runtime] [host]` tail, and the `--static`
+    // gate. Runs after the static-plan check so a flag contradiction fires
+    // before the entry file is read. A webview-native `web desktop` drives
+    // `webview_host` below.
+    let delivery = resolve_delivery(&entry_path, &args.delivery, wants_static, "build")?;
+
+    // `--fix` carries durable authorization: apply machine-applicable fixes
+    // non-interactively before the (re-run) build sees the source.
+    if args.fix {
+        apply_fixes_cmd(&entry_path, true, &mut std::io::stdout())?;
+    }
 
     // Acknowledge any disclosed `.Unsafe` escape-hatch import BEFORE the (costly)
     // emit + cargo build. The safe path (no `.Unsafe` import) returns silently;
@@ -3521,6 +3608,9 @@ fn run_build_body(rest: &[String]) -> Result<BuildSuccess, CliError> {
         // `ipe build` never emits appearance hot-swap scaffolding — that is a
         // `ipe watch`-only dev affordance. A release artifact stays clean.
         hot_appearance: false,
+        // A webview-native `web desktop` delivery links the system webview and
+        // selects the webview executor; every other delivery does not.
+        webview_host: delivery.is_webview_native(),
     };
 
     // Human-friendly progress: the compile+emit below is otherwise silent, so
@@ -3879,6 +3969,9 @@ pub(crate) fn run_release(rest: &[String]) -> Result<(), CliError> {
             debugger: false,
             // A release build never carries appearance hot-swap scaffolding.
             hot_appearance: false,
+            // Set from the resolved delivery; a webview-native `web desktop` is wired
+            // where the classified shape is known (build_project_with_options).
+            webview_host: false,
         };
         manifest.as_ref().map_or_else(
             || {
@@ -4610,6 +4703,7 @@ fn run_run_body(rest: &[String]) -> Result<(), CliError> {
     };
 
     let entry_path = PathBuf::from(&entry);
+
     let out_dir = args
         .out
         .map_or_else(|| PathBuf::from("out").join("rust"), PathBuf::from);
@@ -4625,10 +4719,20 @@ fn run_run_body(rest: &[String]) -> Result<(), CliError> {
     let manifest_wasm: Option<project::WasmConfig> =
         manifest_parsed.as_ref().map(|m| m.wasm.clone());
 
-    // Resolve the static plan FIRST: it is pure over the flag/env/manifest
-    // request layer and reads no source, so a flag-contradiction refusal fires
-    // before any filesystem read of the entry — identical to `ipe build`.
+    let wants_static = cli_layer.static_build == Some(true);
+
+    // Static-flag contradictions (--cfree + C-requiring allocator,
+    // --target without --static, talc-without-arena) are pure over the CLI +
+    // env + manifest layers and touch no source. Resolving here — before
+    // resolve_delivery reads the entry file — ensures a refused run produces
+    // no artifact and touches nothing, even when the entry path does not exist.
     let static_plan = resolve_static_plan(cli_layer, manifest.as_deref())?;
+
+    // Resolve the delivery grammar (shape cross-check, runtime/host, `--static`
+    // gate) against the shape `main` pins — same as `ipe build`. A webview-native
+    // `web desktop` drives `webview_host` below. Runs after the static-plan check
+    // so a flag contradiction fires before the entry file is read.
+    let delivery = resolve_delivery(&entry_path, &args.delivery, wants_static, "run")?;
 
     // Acknowledge any disclosed `.Unsafe` escape-hatch import BEFORE the (costly)
     // emit + cargo build. Same gate as `ipe build`: the safe path is silent, an
@@ -4693,6 +4797,9 @@ fn run_run_body(rest: &[String]) -> Result<(), CliError> {
         // `ipe run` never emits appearance hot-swap scaffolding — that is a
         // `ipe watch`-only dev affordance.
         hot_appearance: false,
+        // A webview-native `web desktop` delivery links the system webview and
+        // selects the webview executor; every other delivery does not.
+        webview_host: delivery.is_webview_native(),
     };
 
     // Human-friendly progress: the compile+emit below is otherwise silent, so
@@ -5761,20 +5868,29 @@ fn pack_desktop(explicit_os: Option<&str>, path: Option<&str>) -> Result<(), Cli
     let accepts = manifest.capabilities_accept.clone();
     let icon = manifest.icon.clone();
 
-    // Gate the app shape BEFORE any build. The author's declared `programs`
-    // shape is the authoritative packaging intent: a declared non-`WebView`
-    // shape is refused up front (naming it), and only a declared `WebView` — or
-    // an app that declares no shape at all — is packageable. This is the reliable
-    // signal; the emitted crate's feature list is a weaker secondary probe.
-    let shape = manifest.default_program().and_then(|p| p.shape).map_or(
-        pack::desktop::AppShape::WebView,
-        |declared| match declared {
+    // Gate the app shape BEFORE any build. The desktop packager is the
+    // webview-native host of the DOM `web` shape (`web desktop`): the shape is
+    // pinned by `main` (the delivery SSOT), so it is classified from the entry
+    // source. An author's declared `programs` shape, when present, is honoured
+    // as an explicit override for the rare app that declares one; otherwise the
+    // main-classified shape decides. A non-web `main` is refused up front,
+    // naming its shape.
+    let shape = match manifest.default_program().and_then(|p| p.shape) {
+        Some(declared) => match declared {
             project::EntryShape::Web => pack::desktop::AppShape::Web,
             project::EntryShape::Terminal => pack::desktop::AppShape::Terminal,
             project::EntryShape::WebView => pack::desktop::AppShape::WebView,
             project::EntryShape::Program => pack::desktop::AppShape::Program,
         },
-    );
+        None => match classify_entry_shape(&root)? {
+            delivery::Shape::Web => pack::desktop::AppShape::WebView,
+            delivery::Shape::Tui | delivery::Shape::Cli => pack::desktop::AppShape::Terminal,
+            // A `script` renders nothing and a `server` main renders http, not a
+            // desktop window; both classify as a plain program so the webview
+            // gate refuses them by name.
+            delivery::Shape::Script | delivery::Shape::Server => pack::desktop::AppShape::Program,
+        },
+    };
     pack::desktop::require_webview(shape).map_err(|r| CliError::UsageOwned(r.to_string()))?;
 
     let layout = pack::desktop::layout(os, &identity, &accepts, icon.as_deref())?;
@@ -5860,10 +5976,14 @@ fn pack_mobile(explicit_os: Option<&str>, path: Option<&str>) -> Result<(), CliE
     // wasm-enabled `Web` SPA. A declared non-`Web` shape, or a `Web` app with the
     // `[wasm]` mode off, is refused up front (naming exactly what is missing). An
     // app that declares no shape at all is trusted to infer `Web`.
-    let shape_is_web = manifest
-        .default_program()
-        .and_then(|p| p.shape)
-        .is_none_or(|declared| declared == project::EntryShape::Web);
+    // The mobile packager hosts the `web spa <ios|android>` SPA: the shape is
+    // pinned by `main`. Honour an explicit declared shape when present, else
+    // classify `main` — a non-web `main` fails the `require_web_spa` gate by
+    // name rather than silently packaging a terminal or script app as an SPA.
+    let shape_is_web = match manifest.default_program().and_then(|p| p.shape) {
+        Some(declared) => declared == project::EntryShape::Web,
+        None => classify_entry_shape(&root)? == delivery::Shape::Web,
+    };
     let cap = pack::mobile::WebSpaCapability {
         shape_is_web,
         wasm_enabled: manifest.wasm.implies_wasm_target(),

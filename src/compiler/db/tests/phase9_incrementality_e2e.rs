@@ -101,6 +101,7 @@ fn body_edit_reexecutes_only_the_edited_module_file() {
         false,
         String::new(),
         false,
+        false,
     );
 
     // Warm the session: demand the top-level manifest once. On a genuine

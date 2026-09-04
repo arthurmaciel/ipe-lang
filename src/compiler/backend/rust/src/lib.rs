@@ -202,6 +202,10 @@ pub enum FfiGluePayload {
 /// Holds a reference to the [`Interner`] used to build the program, so it can
 /// resolve the [`Symbol`]s carried by the IR without widening the
 /// [`Backend::emit`] signature.
+// Each boolean is an independent emit-shape switch (production gate, debugger,
+// hot-appearance, webview-host) set by its own `with_*` builder; a bit-flags
+// enum would obscure that each is toggled in isolation.
+#[allow(clippy::struct_excessive_bools)]
 pub struct RustBackend<'a> {
     interner: &'a Interner,
     db_driver: DbDriver,
@@ -225,6 +229,13 @@ pub struct RustBackend<'a> {
     /// style-value literals through a per-view `LiteralTable` for appearance
     /// hot-swap. Set via [`Self::with_hot_appearance`]; default off.
     hot_appearance: bool,
+    /// `true` when the resolved delivery is `web desktop` — webview-native. The
+    /// webview delivery is a HOST decision (from the CLI's resolved
+    /// shape × runtime × host), not a distinct `main` entry, so it is threaded in
+    /// here rather than read from a source leaf. It forces `uses_webview` on,
+    /// which selects the webview executor and the `default = ["webview"]` feature.
+    /// Set via [`Self::with_webview_host`]; default off (served `web`).
+    webview_host: bool,
 }
 
 /// Convert an arbitrary `package.ipe` name value into a valid Cargo package
@@ -360,6 +371,7 @@ impl<'a> RustBackend<'a> {
             debugger: false,
             cargo_name: String::new(),
             hot_appearance: false,
+            webview_host: false,
         }
     }
 
@@ -397,6 +409,17 @@ impl<'a> RustBackend<'a> {
     #[must_use]
     pub const fn with_debugger(mut self, debugger: bool) -> Self {
         self.debugger = debugger;
+        self
+    }
+
+    /// Mark the emit as a webview-native (`web desktop`) delivery. This is the
+    /// single source of the `uses_webview` signal: it is a resolved host
+    /// decision from the CLI, not a source-level entry. When set, the emitted
+    /// project selects the webview executor and promotes `webview` to the default
+    /// feature list; a served `web` (the default host) leaves it unset.
+    #[must_use]
+    pub const fn with_webview_host(mut self, webview_host: bool) -> Self {
+        self.webview_host = webview_host;
         self
     }
 
@@ -484,6 +507,7 @@ impl<'a> RustBackend<'a> {
             self.debugger,
             self.cargo_name.clone(),
             self.hot_appearance,
+            self.webview_host,
         )?;
         project::emit_spine(&ctx, program)
     }
@@ -510,6 +534,7 @@ impl<'a> RustBackend<'a> {
             self.debugger,
             self.cargo_name.clone(),
             self.hot_appearance,
+            self.webview_host,
         )
     }
 
@@ -536,6 +561,7 @@ impl<'a> RustBackend<'a> {
             self.debugger,
             self.cargo_name.clone(),
             self.hot_appearance,
+            self.webview_host,
         )?;
         Ok(runtime_features::runtime_features(&ctx).as_feature_names())
     }
@@ -562,6 +588,7 @@ impl<'a> RustBackend<'a> {
             self.debugger,
             self.cargo_name.clone(),
             self.hot_appearance,
+            self.webview_host,
         )?;
         project::emit_module_file(
             &ctx,
@@ -603,6 +630,7 @@ impl<'a> RustBackend<'a> {
             self.debugger,
             self.cargo_name.clone(),
             self.hot_appearance,
+            self.webview_host,
         )?;
         project::assemble_split_manifest(&ctx, program, spine_text, module_texts)
     }
@@ -651,6 +679,7 @@ impl Backend for RustBackend<'_> {
             self.debugger,
             self.cargo_name.clone(),
             self.hot_appearance,
+            self.webview_host,
         )?;
         project::emit_program(&ctx, program)
     }
@@ -1307,6 +1336,7 @@ impl<'a> EmitCtx<'a> {
     #[allow(clippy::too_many_lines)]
     #[allow(clippy::similar_names)] // `uses_ui` / `uses_tui` are intentionally similar
     #[allow(clippy::too_many_arguments)] // the backend-config thread-through (driver, ffi, target, wasm, runtime-dep, debugger, cargo_name)
+    #[allow(clippy::fn_params_excessive_bools)] // each bool is an independent emit-shape switch threaded from BuildConfig
     fn build(
         interner: &'a Interner,
         program: &Program,
@@ -1319,6 +1349,7 @@ impl<'a> EmitCtx<'a> {
         debugger: bool,
         cargo_name: String,
         hot_appearance: bool,
+        webview_host: bool,
     ) -> DResult<Self> {
         let mut enum_names: BTreeMap<(ModPath, Symbol), String> = BTreeMap::new();
         let mut variant_fields: BTreeMap<(ModPath, Symbol, Symbol), Vec<IrType>> = BTreeMap::new();
@@ -1814,12 +1845,17 @@ impl<'a> EmitCtx<'a> {
         let uses_url = program.modules.iter().any(|m| m.uses_url);
 
         // detect Ipe.Ui / Ipe.Html / Ipe.Web / Ipe.Tui / Ipe.Console / Ipe.WebView usage.
-        let (uses_ui, uses_web, uses_tui, uses_console, uses_webview) = (
+        // `uses_webview` is the webview-native delivery signal: the resolved
+        // `web desktop` host (threaded in as `webview_host`) OR a source module
+        // that still carries the leaf. A webview delivery implies the web surface,
+        // so it also forces `uses_web` — the webview runtime imports from the web
+        // module and the served/desktop pipelines share the same web app.
+        let uses_webview = webview_host || program.modules.iter().any(|m| m.uses_webview);
+        let (uses_ui, uses_web, uses_tui, uses_console) = (
             program.modules.iter().any(|m| m.uses_ui),
-            program.modules.iter().any(|m| m.uses_web),
+            program.modules.iter().any(|m| m.uses_web) || uses_webview,
             program.modules.iter().any(|m| m.uses_tui),
             program.modules.iter().any(|m| m.uses_console),
-            program.modules.iter().any(|m| m.uses_webview),
         );
 
         // detect Ipe.Css (Ipe.CssSafety) leaf-kernel usage.
@@ -4898,6 +4934,7 @@ mod record_struct_namespace_tests {
             false,
             String::new(),
             false,
+            false,
         )?;
         assert_eq!(ctx.record_structs().len(), 1);
         assert_eq!(
@@ -5002,6 +5039,7 @@ mod record_struct_namespace_tests {
             false,
             String::new(),
             false,
+            false,
         )?;
         ctx.assert_record_structs_disjoint_from_type_namespace(&BTreeSet::new())
     }
@@ -5088,6 +5126,7 @@ mod record_struct_namespace_tests {
             None,
             false,
             String::new(),
+            false,
             false,
         )?;
 
