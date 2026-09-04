@@ -306,6 +306,9 @@ pub type Pattern = Located<Pattern_>;
 pub enum Pattern_ {
     /// The wildcard `_`.
     PAnything,
+    /// The unit pattern `()` — the sole value of the unit type. Binds nothing,
+    /// typed at `()`. Irrefutable: unit has exactly one value.
+    PUnit,
     /// A variable binding.
     PVar(Symbol),
     /// A resolved constructor pattern.
@@ -376,7 +379,7 @@ impl Pattern_ {
     #[must_use]
     pub fn is_irrefutable(&self) -> bool {
         match self {
-            Self::PVar(_) | Self::PAnything | Self::PRecord(_) => true,
+            Self::PVar(_) | Self::PAnything | Self::PUnit | Self::PRecord(_) => true,
             Self::PTuple(elems) => elems.iter().all(|e| e.value.is_irrefutable()),
             Self::PAlias(inner, _) => inner.value.is_irrefutable(),
             Self::POr(alts) => alts.iter().all(|a| a.value.is_irrefutable()),

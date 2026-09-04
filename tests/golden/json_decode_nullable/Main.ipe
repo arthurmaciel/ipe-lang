@@ -1,0 +1,46 @@
+module Main exposing (main)
+
+-- `Ipe.Json.Decode.nullable : Decoder a -> Decoder (Maybe a)` — a JSON `null`
+-- decodes to `Nothing`, any other value decodes to `Just` of the inner decode,
+-- and an inner failure on a present (non-null) value propagates (it is NOT
+-- swallowed the way `oneOf [ map Just d, succeed Nothing ]` would swallow it).
+-- The three probes below pin all three paths.
+import Ipe.Json.Decode as JsonDec exposing (Decoder)
+import Ipe.Maybe exposing (Maybe(..))
+import Ipe.Io as Io
+
+
+nickname : Decoder (Maybe String)
+nickname =
+    JsonDec.field "nickname" (JsonDec.nullable JsonDec.string)
+
+
+show : Maybe String -> String
+show m =
+    case m of
+        Just s ->
+            "Just " ++ s
+
+        Nothing ->
+            "Nothing"
+
+
+-- `null` → `Nothing`, present → `Just`, present-but-wrong-type → propagated Err.
+run : String -> String
+run j =
+    case JsonDec.decodeString nickname j of
+        Ok m ->
+            show m
+
+        Err _ ->
+            "propagated"
+
+
+main =
+    Io.println
+        (run "{\"nickname\":\"ada\"}"
+            ++ " | "
+            ++ run "{\"nickname\":null}"
+            ++ " | "
+            ++ run "{\"nickname\":42}"
+        )

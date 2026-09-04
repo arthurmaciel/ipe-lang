@@ -398,6 +398,7 @@ fn push_pattern(out: &mut String, pat: &ipe_syntax::Pattern, interner: &ipe_inte
     let resolve = |sym: ipe_intern::Symbol| interner.resolve(sym).unwrap_or("?");
     match &pat.value {
         ipe_syntax::Pattern_::PAnything => out.push('_'),
+        ipe_syntax::Pattern_::PUnit => out.push_str("()"),
         ipe_syntax::Pattern_::PVar(sym) => out.push_str(resolve(*sym)),
         ipe_syntax::Pattern_::PCtor(name, module_segs, args) => {
             if !module_segs.is_empty() {
