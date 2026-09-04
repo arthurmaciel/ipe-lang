@@ -156,6 +156,14 @@ rust_decimal = { version = "1", optional = true, default-features = false, featu
     "maths",
 ] }
 bcrypt = { version = "0.17", optional = true }
+# `tinyvec`: pulled transitively by unicode-normalization (via url → idna) with only
+# the `alloc` feature. tinyvec 1.13.0 introduced a regression where `use alloc::vec::{self,
+# Vec}` at module level shadows the `vec!` macro when compiled alloc-only. Listing it
+# here with `std` ensures cargo unifies `std` into the feature set across the whole dep
+# tree, resolving the macro via std (which avoids the shadowing). Direct-dep, non-optional,
+# no code in this crate references tinyvec — the entry exists solely to drive the feature
+# unification in emitted projects that include this crate as a path dep.
+tinyvec = { version = "1", features = ["std"] }
 # `icu_casemap`: locale-aware case mapping (`String.toUpperIn`/`toLowerIn`).
 # Feature-gated so programs that never use locale-aware case pay nothing.
 # Uses ICU4X compiled-data bundling — no separate data-provider call needed.

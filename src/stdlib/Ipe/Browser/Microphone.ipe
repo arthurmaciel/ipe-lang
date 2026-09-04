@@ -1,0 +1,129 @@
+-- | Ipe.Browser.Microphone — capture a bounded audio clip from the device
+-- microphone as a base-64 `data:` URL, over `Ipe.Ffi.Js` ports.
+--
+-- A first-party proof of the per-capability web mechanism: an outbound `JsCmd`
+-- carries the recording options; the host starts `getUserMedia({ audio: true })`,
+-- arms a `MediaRecorder`, buffers the chunk stream, stops after `maxDurationMs`
+-- milliseconds, assembles the chunks into a single Blob, reads it via
+-- `FileReader.readAsDataURL`, and pushes ONE inbound `JsMsg` carrying the
+-- assembled clip. Both directions cross the same seal codec and fail-closed port
+-- discipline as every other port; there is no second transport.
+--
+-- This is the ONE-SHOT microphone member of the `Ipe.Browser` device family,
+-- exactly as `Ipe.Browser.Geolocation.current` is the one-shot member of
+-- geolocation. Audio STREAMING (chunks as they arrive) is a separate, session-
+-- level primitive and is NOT part of this module.
+--
+-- The `maxDurationMs` option is capped at 8 000 ms (8 seconds) on the JS side.
+-- This ceiling keeps the full round-trip well within the `Js.request` per-waiter
+-- deadline of 10 seconds (blob assembly and the `FileReader` read happen after
+-- the recording stops, so a 10 s deadline requires a ≤ 8 s recording). A caller
+-- that supplies a larger value silently records for 8 s. If you need a longer
+-- clip, batch multiple `captureAudio` calls.
+--
+-- Importing this reserved `Ipe.Browser.<Api>` module discloses `js-port:microphone`
+-- (import-derived, keyed on the canonical `Ipe.Browser.Microphone` path prefix via
+-- `WebCapability::for_browser_module`, alias-immune); only the top-level app's
+-- `[capabilities] accepts` set can grant it.
+--
+-- The two layers:
+--
+--   * `Ipe.Browser.Microphone.Internals` publishes the closed outbound/inbound ADTs
+--     and the raw `Ipe.Ffi.Js` wiring.
+--   * this module is the high-level layer: `captureAudio` returns a
+--     `Task Error AudioClip` via the correlated port→Task bridge; a host permission
+--     denial or an absent `MediaRecorder` resolves to a typed `Err`. The inbound
+--     `case` is EXHAUSTIVE: every variant becomes either an `Ok` or a typed `Err`,
+--     never a silently dropped frame or a panic.
+module Ipe.Browser.Microphone exposing
+    ( Options
+    , AudioClip
+    , captureAudio
+    , recordings
+    )
+
+import Ipe.Browser.Microphone.Internals as Internals exposing (JsMsg(..))
+import Ipe.Error as Error exposing (Error)
+import Ipe.Task as Task
+import Ipe.Tea.Web.Sub as Sub
+
+
+-- | Recording options. `maxDurationMs` is the maximum recording length in
+-- milliseconds (capped at 8 000 by the JS sink); `mimeType` is the preferred
+-- MIME type passed to `MediaRecorder` (e.g. `"audio/webm"`) — the browser may
+-- fall back to its own default if the type is unsupported, and the actual MIME
+-- type used is returned in `AudioClip.mime`.
+type alias Options =
+    { maxDurationMs : Int
+    , mimeType : String
+    }
+
+
+-- | A captured audio clip: the assembled audio data encoded as a `data:` URL
+-- (e.g. `data:audio/webm;base64,...`), the MIME type the browser actually used,
+-- and the actual recording duration in milliseconds (clamped to `maxDurationMs`).
+type alias AudioClip =
+    { data : String
+    , mime : String
+    , durationMs : Int
+    }
+
+
+-- | `captureAudio opts` — record an audio clip for at most `opts.maxDurationMs`
+-- milliseconds, as a `Task Error AudioClip`.
+--
+-- Uses the correlated port→Task bridge (`Js.request`). The served JS handler
+-- calls `getUserMedia({ audio: true })`, starts a `MediaRecorder`, collects
+-- `ondataavailable` chunks, stops after `maxDurationMs` milliseconds (capped at
+-- 8 000 ms — see module note), assembles the chunks into one Blob, reads it via
+-- `FileReader.readAsDataURL`, and resolves the `Task` with the result. A host
+-- permission denial (`NotAllowedError`) resolves to `Err permissionDenied`; an
+-- absent `getUserMedia` or `MediaRecorder` resolves to `Err unavailable`.
+--
+-- Importing this module discloses `js-port:microphone`; the app must grant it
+-- with `accepts = [ JsPort Microphone ]` under [capabilities] in package.ipe.
+captureAudio : Options -> Task Error AudioClip
+captureAudio opts =
+    Internals.requestOne (Internals.CaptureAudio opts)
+        |> Task.andThen foldRecording
+
+
+-- | `recordings toMsg` — the inbound subscription, wired in `subscriptions`.
+--
+-- The decoder IS the security gate: every inbound value runs through the total,
+-- bounded seal decoder for the narrow `JsMsg`; a malformed / mismatched frame is
+-- dropped whole. A decoded `JsMsg` is folded EXHAUSTIVELY into a
+-- `Result Error AudioClip`.
+recordings : (Result Error AudioClip -> msg) -> Sub.Sub msg
+recordings toMsg =
+    Internals.subscribe (\inbound -> toMsg (toResult inbound))
+
+
+-- | Fold a `captureAudio` reply into a `Task Error AudioClip`. The `case` is
+-- exhaustive over every published inbound variant.
+foldRecording : Internals.JsMsg -> Task Error AudioClip
+foldRecording msg =
+    case msg of
+        Recorded data mime durationMs ->
+            Task.succeed { data = data, mime = mime, durationMs = durationMs }
+
+        Denied ->
+            Task.fail Error.permissionDenied
+
+        Unavailable ->
+            Task.fail (Error.unavailable "microphone capture unavailable")
+
+
+-- | Fold the narrow inbound `JsMsg` into a typed `Result Error AudioClip`.
+-- The `case` is exhaustive over every published inbound variant.
+toResult : Internals.JsMsg -> Result Error AudioClip
+toResult inbound =
+    case inbound of
+        Recorded data mime durationMs ->
+            Ok { data = data, mime = mime, durationMs = durationMs }
+
+        Denied ->
+            Err Error.permissionDenied
+
+        Unavailable ->
+            Err (Error.unavailable "microphone capture unavailable")
