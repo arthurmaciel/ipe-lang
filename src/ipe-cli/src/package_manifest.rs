@@ -55,7 +55,8 @@ use ipe_kernels::WebCapability;
 
 use crate::CliError;
 use crate::project::{
-    Capability, EntryShape, IpeDep, Program, ProjectManifest, RustDep, WasmConfig,
+    BrowserDelivery, Capability, DeliveryConfig, DesktopDelivery, EntryShape, IpeDep,
+    MobileDelivery, Program, ProjectManifest, RustDep, ScreenOrientation, WasmConfig,
     is_denylisted_public_env_name,
 };
 
@@ -154,6 +155,7 @@ struct ManifestFields {
     has_rust_wrapper: bool,
     programs: Vec<crate::project::Program>,
     exposed_modules: Vec<String>,
+    delivery: DeliveryConfig,
 }
 
 impl ManifestFields {
@@ -213,6 +215,7 @@ impl ManifestFields {
             has_rust_wrapper: self.has_rust_wrapper,
             programs: self.programs,
             exposed_modules: self.exposed_modules,
+            delivery: self.delivery,
         })
     }
 }
@@ -346,13 +349,14 @@ impl Reader<'_> {
                 "wasm" => fields.wasm = self.read_wasm(value)?,
                 "wrapper" => fields.has_rust_wrapper = self.read_wrapper(value)?,
                 "build" => self.read_build_record(value, &mut fields)?,
+                "delivery" => fields.delivery = self.read_delivery(value)?,
                 other => {
                     return Err(self.reject(
                         fname.span,
                         &format!(
                             "`{other}` is not a package field — expected one of name, version, \
                              sourceRoot, icon, dependencies, rustDependencies, capabilities, \
-                             exposedModules, programs, wasm, wrapper, build"
+                             exposedModules, programs, wasm, wrapper, build, delivery"
                         ),
                     ));
                 }
@@ -760,6 +764,122 @@ impl Reader<'_> {
             self.reject(expr.span, "a wrapper must set `path = \"<local path>\"`")
         })?;
         Ok((path, expose, capabilities))
+    }
+
+    /// Read the `delivery = { desktop = { … }, mobile = { … }, browser = { … } }`
+    /// record. All three sub-sections default to their [`Default`] values when
+    /// omitted; the toolchain reads only the section matching the resolved target.
+    fn read_delivery(&self, expr: &Expr) -> Result<DeliveryConfig, CliError> {
+        let mut config = DeliveryConfig::default();
+        for (fname, value) in self.expect_record(expr)? {
+            match self.text(fname.value) {
+                "desktop" => config.desktop = self.read_desktop(value)?,
+                "mobile" => config.mobile = self.read_mobile(value)?,
+                "browser" => config.browser = self.read_browser(value)?,
+                other => {
+                    return Err(self.reject(
+                        fname.span,
+                        &format!(
+                            "`{other}` is not a delivery field — expected `desktop`, `mobile`, \
+                             or `browser`"
+                        ),
+                    ));
+                }
+            }
+        }
+        Ok(config)
+    }
+
+    /// Read `delivery.desktop = { title, width, height }`.
+    fn read_desktop(&self, expr: &Expr) -> Result<DesktopDelivery, CliError> {
+        let mut d = DesktopDelivery::default();
+        for (fname, value) in self.expect_record(expr)? {
+            match self.text(fname.value) {
+                "title" => d.title = self.expect_string(value)?,
+                "width" => d.width = self.expect_positive_int(value, "width")?,
+                "height" => d.height = self.expect_positive_int(value, "height")?,
+                other => {
+                    return Err(self.reject(
+                        fname.span,
+                        &format!(
+                            "`{other}` is not a desktop field — expected `title`, `width`, or \
+                             `height`"
+                        ),
+                    ));
+                }
+            }
+        }
+        Ok(d)
+    }
+
+    /// Read `delivery.mobile = { bundleId, orientation }`.
+    fn read_mobile(&self, expr: &Expr) -> Result<MobileDelivery, CliError> {
+        let mut m = MobileDelivery::default();
+        for (fname, value) in self.expect_record(expr)? {
+            match self.text(fname.value) {
+                "bundleId" => m.bundle_id = self.expect_string(value)?,
+                "orientation" => m.orientation = self.read_orientation(value)?,
+                other => {
+                    return Err(self.reject(
+                        fname.span,
+                        &format!(
+                            "`{other}` is not a mobile field — expected `bundleId` or \
+                             `orientation`"
+                        ),
+                    ));
+                }
+            }
+        }
+        Ok(m)
+    }
+
+    /// Read `delivery.mobile.orientation`: `Portrait` / `Landscape` / `Any`.
+    fn read_orientation(&self, expr: &Expr) -> Result<ScreenOrientation, CliError> {
+        match self.expect_ctor(expr, "an orientation")? {
+            "Portrait" => Ok(ScreenOrientation::Portrait),
+            "Landscape" => Ok(ScreenOrientation::Landscape),
+            "Any" => Ok(ScreenOrientation::Any),
+            other => Err(self.reject(
+                expr.span,
+                &format!("`{other}` is not an orientation — use `Portrait`, `Landscape`, or `Any`"),
+            )),
+        }
+    }
+
+    /// Read `delivery.browser = { basePath }`.
+    fn read_browser(&self, expr: &Expr) -> Result<BrowserDelivery, CliError> {
+        let mut b = BrowserDelivery::default();
+        for (fname, value) in self.expect_record(expr)? {
+            match self.text(fname.value) {
+                "basePath" => b.base_path = self.expect_string(value)?,
+                other => {
+                    return Err(self.reject(
+                        fname.span,
+                        &format!("`{other}` is not a browser field — expected `basePath`"),
+                    ));
+                }
+            }
+        }
+        Ok(b)
+    }
+
+    /// Read a non-negative integer literal, used for pixel dimensions. Negative
+    /// values (or non-integers) are a named parse error; `u32` is the type so
+    /// zero is allowed (a zero-size window is unusual but not an initialisation
+    /// failure — the OS will clamp it).
+    fn expect_positive_int(&self, expr: &Expr, field: &str) -> Result<u32, CliError> {
+        match &expr.value {
+            ipe_syntax::Expr_::Int(n) => u32::try_from(*n).map_err(|_| {
+                self.reject(
+                    expr.span,
+                    &format!("`{field}` must be a non-negative integer in 0..=4294967295, got {n}"),
+                )
+            }),
+            _ => Err(self.reject(
+                expr.span,
+                &format!("`{field}` must be a non-negative integer literal"),
+            )),
+        }
     }
 
     /// Read the `wasm` field: `Off` (no bundle) or `On { mode, entry, mount,

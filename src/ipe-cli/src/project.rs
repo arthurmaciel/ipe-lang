@@ -106,6 +106,85 @@ pub struct ProjectManifest {
     /// modules a downstream consumer may import. Empty for an application
     /// package (one that declares no `exposedModules` field).
     pub exposed_modules: Vec<String>,
+    /// The `delivery` section: per-host build configuration.
+    ///
+    /// All three sub-sections are always present; the active one is chosen at
+    /// build time from the resolved shape+runtime+host. Defaults to
+    /// [`DeliveryConfig::default()`] when the manifest omits the field.
+    pub delivery: DeliveryConfig,
+}
+
+/// Per-host delivery configuration, parsed from the `delivery = { … }` field.
+///
+/// All three sections are present and live: every project's manifest carries
+/// defaults for all hosts, and `ipe build` reads only the one matching the
+/// resolved target. There is no `active` selector — that is the CLI.
+#[derive(Clone, Debug, Default)]
+pub struct DeliveryConfig {
+    /// Window title, width, and height for the `web live desktop`
+    /// (webview-native) host.
+    pub desktop: DesktopDelivery,
+    /// Bundle identifier and orientation for `web spa ios` / `web spa android`.
+    pub mobile: MobileDelivery,
+    /// Base path for the `web spa` browser host.
+    pub browser: BrowserDelivery,
+}
+
+/// `delivery.desktop` — webview-native window settings.
+#[derive(Clone, Debug)]
+pub struct DesktopDelivery {
+    /// The native window title shown in the OS title bar.
+    pub title: String,
+    /// Initial inner width in logical pixels.
+    pub width: u32,
+    /// Initial inner height in logical pixels.
+    pub height: u32,
+}
+
+impl Default for DesktopDelivery {
+    fn default() -> Self {
+        Self {
+            title: String::new(),
+            width: 1024,
+            height: 768,
+        }
+    }
+}
+
+/// `delivery.mobile` — mobile-host shell settings.
+#[derive(Clone, Debug, Default)]
+pub struct MobileDelivery {
+    /// Reverse-DNS application identifier (`com.example.myapp`).
+    pub bundle_id: String,
+    /// Locked launch orientation.
+    pub orientation: ScreenOrientation,
+}
+
+/// The allowed screen orientations for a mobile host launch.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ScreenOrientation {
+    /// Portrait-only; the shell refuses landscape rotation.
+    #[default]
+    Portrait,
+    /// Landscape-only; the shell refuses portrait rotation.
+    Landscape,
+    /// Unrestricted: the shell follows the device sensor.
+    Any,
+}
+
+/// `delivery.browser` — browser-SPA host settings.
+#[derive(Clone, Debug)]
+pub struct BrowserDelivery {
+    /// The URL base path the SPA is served from (`"/"` for root).
+    pub base_path: String,
+}
+
+impl Default for BrowserDelivery {
+    fn default() -> Self {
+        Self {
+            base_path: "/".to_owned(),
+        }
+    }
 }
 
 impl ProjectManifest {

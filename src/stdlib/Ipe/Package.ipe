@@ -35,6 +35,11 @@ module Ipe.Package exposing
     , WrapperSpec(..)
     , WrapperOptions
     , Build
+    , Delivery
+    , DesktopConfig
+    , MobileConfig
+    , BrowserConfig
+    , Orientation(..)
     , Capability(..)
     , WebCapability(..)
     , dep
@@ -61,6 +66,57 @@ type alias Package =
     , wasm : WasmClient
     , wrapper : WrapperSpec
     , build : Build
+    , delivery : Delivery
+    }
+
+
+-- | Per-host delivery configuration.
+--
+-- All three sections are present and live — the active target is the CLI's
+-- resolved shape+runtime+host, not a field here. `ipe build` reads only the
+-- section matching the resolved target; the others are inert at that run.
+type alias Delivery =
+    { desktop : DesktopConfig
+    , mobile : MobileConfig
+    , browser : BrowserConfig
+    }
+
+
+-- | Configuration for the `web live desktop` (webview-native) host.
+--
+-- `title` is the native window title. `width` and `height` are the initial
+-- inner dimensions in logical pixels; the user may resize afterwards.
+type alias DesktopConfig =
+    { title : String
+    , width : Int
+    , height : Int
+    }
+
+
+-- | Configuration for the `web spa ios` / `web spa android` mobile hosts.
+--
+-- `bundleId` is the reverse-DNS application identifier required by both
+-- platforms (`com.example.myapp`). `orientation` locks the device orientation
+-- on launch; the host's native shell enforces it.
+type alias MobileConfig =
+    { bundleId : String
+    , orientation : Orientation
+    }
+
+
+-- | The allowed screen orientations for a mobile host.
+type Orientation
+    = Portrait
+    | Landscape
+    | Any
+
+
+-- | Configuration for the `web spa` browser host.
+--
+-- `basePath` is the URL base path the SPA is served from. Use `"/"` for the
+-- root and `"/app"` when the SPA lives at a sub-path behind a reverse proxy.
+type alias BrowserConfig =
+    { basePath : String
     }
 
 
