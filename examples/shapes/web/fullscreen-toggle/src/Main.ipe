@@ -1,0 +1,105 @@
+module Main exposing (main)
+
+-- | fullscreen-toggle — `Ipe.Browser.Fullscreen` end-to-end, with the consent
+-- gate satisfied.
+--
+-- Demonstrates the Fullscreen API: clicking "Enter fullscreen" calls
+-- `Fullscreen.request` (a Task); clicking "Exit fullscreen" calls
+-- `Fullscreen.exit`. Change events arrive via `Fullscreen.changes` and update
+-- the displayed status.
+--
+-- `Ipe.Browser.Fullscreen` discloses `js-port:fullscreen` on import; the
+-- companion `js-port:raw` floor is also disclosed. Both are accepted in
+-- `package.ipe`.
+--
+-- An absent or denied Fullscreen API resolves the Task with a typed `Err` —
+-- never a thrown error or a silently dropped frame.
+
+
+import Ipe.Tea.Web as Web
+import Ipe.Tea.Web.Cmd as Cmd
+import Ipe.Tea.Web.Sub as Sub
+import Ipe.Task as Task
+import Ipe.Ui as Ui
+import Ipe.Browser.Fullscreen as Fullscreen
+import Ipe.Error as Error exposing (Error)
+
+
+type alias Model =
+    { status : String }
+
+
+type Msg
+    = EnterFullscreen
+    | ExitFullscreen
+    | FullscreenResult (Result Error ())
+    | FullscreenChanged (Result Error Bool)
+    | StartWatch
+
+
+init : WebReq -> ( Model, Cmd.Cmd Msg )
+init _req =
+    ( { status = "not fullscreen" }
+    , Cmd.batch [ Fullscreen.watch ]
+    )
+
+
+update : Msg -> Model -> ( Model, Cmd.Cmd Msg )
+update msg model =
+    case msg of
+        StartWatch ->
+            ( model, Fullscreen.watch )
+
+        EnterFullscreen ->
+            ( model
+            , Task.attempt FullscreenResult Fullscreen.request
+            )
+
+        ExitFullscreen ->
+            ( model
+            , Task.attempt FullscreenResult Fullscreen.exit
+            )
+
+        FullscreenResult result ->
+            case result of
+                Ok _ ->
+                    ( { model | status = "fullscreen toggled" }, Cmd.none )
+
+                Err err ->
+                    ( { model | status = "error: " ++ Error.message err }, Cmd.none )
+
+        FullscreenChanged result ->
+            case result of
+                Ok True ->
+                    ( { model | status = "fullscreen: ON" }, Cmd.none )
+
+                Ok False ->
+                    ( { model | status = "fullscreen: OFF" }, Cmd.none )
+
+                Err err ->
+                    ( { model | status = "error: " ++ Error.message err }, Cmd.none )
+
+
+subscriptions : Model -> Sub.Sub Msg
+subscriptions _model =
+    Fullscreen.changes FullscreenChanged
+
+
+view : Model -> Element Msg
+view model =
+    Ui.column []
+        [ Ui.button [] { onPress = Just EnterFullscreen, label = Ui.text "Enter fullscreen" }
+        , Ui.button [] { onPress = Just ExitFullscreen, label = Ui.text "Exit fullscreen" }
+        , Ui.text model.status
+        ]
+
+
+main =
+    Web.app
+        { init = init
+        , update = update
+        , view = view
+        , subscriptions = subscriptions
+        , routes = []
+        , notFound = StartWatch
+        }

@@ -1,0 +1,92 @@
+-- | Ipe.Browser.Orientation — a session-stream delivering `deviceorientation`
+-- events as typed alpha/beta/gamma readings, over `Ipe.Ffi.Js` ports.
+--
+-- A first-party proof of the per-capability web mechanism spanning BOTH port
+-- directions: an outbound `JsCmd` starts or stops the orientation watch, and
+-- inbound `JsMsg` frames carry typed orientation readings. Both cross the same
+-- seal codec and fail-closed port discipline as every other port; there is no
+-- second transport.
+--
+-- Importing this reserved `Ipe.Browser.<Api>` module discloses
+-- `js-port:orientation` (import-derived, keyed on the canonical
+-- `Ipe.Browser.Orientation` path prefix via `WebCapability::for_browser_module`,
+-- alias-immune); only the top-level app's `[capabilities] accepts` set can grant
+-- it.
+--
+-- The two layers:
+--
+--   * `Ipe.Browser.Orientation.Internals` publishes the closed outbound/inbound ADTs.
+--   * this module is the high-level layer: `watch` starts the continuous stream
+--     as an outbound `Cmd`, `stopWatch` ends it, and `readings` is the inbound
+--     subscription folding the narrow `JsMsg` into a typed `OrientationEvent`.
+--     The inbound `case` is EXHAUSTIVE: an unavailability becomes a typed variant,
+--     never a silently dropped frame.
+module Ipe.Browser.Orientation exposing
+    ( OrientationEvent(..)
+    , watch
+    , stopWatch
+    , readings
+    )
+
+import Ipe.Browser.Orientation.Internals as Internals exposing (JsMsg(..))
+import Ipe.Tea.Web.Cmd as Cmd
+import Ipe.Tea.Web.Sub as Sub
+
+
+-- | A typed orientation event delivered by the watch stream.
+--
+--   * `OrientationReading alpha beta gamma` — a `deviceorientation` event.
+--     `alpha` is rotation around the Z axis (0.0..360.0 degrees); `beta` is
+--     rotation around the X axis (-180.0..180.0 degrees); `gamma` is rotation
+--     around the Y axis (-90.0..90.0 degrees). Values are `Maybe` because the
+--     browser may deliver `null` for axes not supported by the device.
+--   * `OrientationUnavailable` — the `deviceorientation` event is absent in
+--     this browser context.
+type OrientationEvent
+    = OrientationReading (Maybe Float) (Maybe Float) (Maybe Float)
+    | OrientationUnavailable
+
+
+-- | `watch` — begin a continuous `deviceorientation` stream; readings are
+-- delivered on the `readings` subscription. Outbound `Cmd`.
+--
+-- The JS host attaches a `deviceorientation` listener on `window`. A missing
+-- event replies immediately with `Unavailable` rather than silently failing.
+--
+-- Importing this module discloses `js-port:orientation`; the app must grant it
+-- with `accepts = [ JsPort Orientation ]` under [capabilities] in package.ipe.
+watch : Cmd.Cmd msg
+watch =
+    Internals.request Internals.Watch
+
+
+-- | `stopWatch` — remove the active `deviceorientation` listener. A no-op when
+-- no watch is active. Outbound `Cmd`.
+stopWatch : Cmd.Cmd msg
+stopWatch =
+    Internals.request Internals.StopWatch
+
+
+-- | `readings toMsg` — the inbound subscription, wired in `subscriptions`.
+--
+-- The decoder IS the security gate: every inbound value runs through the total,
+-- bounded seal decoder for the narrow `JsMsg`; a malformed / mismatched frame is
+-- dropped whole. A decoded `JsMsg` is folded EXHAUSTIVELY into an
+-- `OrientationEvent` — every variant is covered, so no reading can ever be
+-- silently dropped.
+readings : (OrientationEvent -> msg) -> Sub.Sub msg
+readings toMsg =
+    Internals.subscribe (\inbound -> toMsg (toEvent inbound))
+
+
+-- | Fold the narrow inbound `JsMsg` into a typed `OrientationEvent`. The `case`
+-- is exhaustive over every published inbound variant; an unavailability becomes
+-- `OrientationUnavailable`, never a silent drop.
+toEvent : Internals.JsMsg -> OrientationEvent
+toEvent msg =
+    case msg of
+        Reading alpha beta gamma ->
+            OrientationReading alpha beta gamma
+
+        Unavailable ->
+            OrientationUnavailable

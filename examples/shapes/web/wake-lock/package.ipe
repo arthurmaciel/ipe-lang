@@ -1,0 +1,18 @@
+module Package exposing (package)
+
+import Ipe.Package exposing (..)
+
+
+package : Package
+package =
+    { name = "wake-lock"
+    , version = "0.1.0"
+    , capabilities =
+        { declares = []
+
+        -- The `Ipe.Browser.WakeLock` import discloses `js-port:wake-lock`;
+        -- the `:raw` floor is also disclosed. Both must be accepted here or the
+        -- build fails closed (IPE-S0002).
+        , accepts = [ JsPort WakeLock, JsPort Raw ]
+        }
+    }
