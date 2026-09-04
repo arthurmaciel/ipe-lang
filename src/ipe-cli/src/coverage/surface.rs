@@ -281,6 +281,10 @@ const QUALIFIER_MODULE_OVERRIDES: &[(&str, &[&str])] = &[
     // `UiCells` kernels (`cells`, `column`, `el`, `none`, `row`, `text`) are the
     // six builders declared in `Ipe.Ui.Cells`.
     ("UiCells", &["Ipe", "Ui", "Cells"]),
+    // `TuiUi` cell-native attribute builders (`spacing`, `padding`, `alignLeft`,
+    // `alignRight`, `center`, `bold`, `underline`, `color`, `bg`) live in
+    // `Ipe.Tea.Tui.Ui`.
+    ("TuiUi", &["Ipe", "Tea", "Tui", "Ui"]),
 ];
 
 /// The dotted module path a kernel qualifier lives under.

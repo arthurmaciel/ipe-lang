@@ -19062,13 +19062,13 @@ impl<'a> Lowerer<'a> {
                         msg: Box::new(msg),
                     })
                 }
-                // `Cells msg` — a Tui-only structured view type.
-                "Cells" if args.len() == 1 => {
+                // `Screen msg` — a Tui-only structured view type.
+                "Screen" if args.len() == 1 => {
                     let msg = self.ir_ui_msg_from_canon(
                         args.first().ok_or_else(|| {
                             bug(
                                 "ipe_lower::ir_type_from_canon",
-                                "Cells applied without its message type",
+                                "Screen applied without its message type",
                             )
                         })?,
                         generics,
@@ -19106,6 +19106,22 @@ impl<'a> Lowerer<'a> {
                     };
                     Ok(IrType::Ui {
                         ctor,
+                        msg: Box::new(msg),
+                    })
+                }
+                // `Ipe.Tea.Tui.Ui.Attribute msg` — the cell-native attribute type.
+                "TuiAttr" if args.len() == 1 => {
+                    let msg = self.ir_ui_msg_from_canon(
+                        args.first().ok_or_else(|| {
+                            bug(
+                                "ipe_lower::ir_type_from_canon",
+                                "TuiAttr applied without its message type",
+                            )
+                        })?,
+                        generics,
+                    )?;
+                    Ok(IrType::Ui {
+                        ctor: UiCtor::TuiAttribute,
                         msg: Box::new(msg),
                     })
                 }
@@ -20384,18 +20400,34 @@ impl<'a> Lowerer<'a> {
                         msg: Box::new(msg),
                     })
                 }
-                "Cells" if args.len() == 1 => {
+                "Screen" if args.len() == 1 => {
                     let msg = self.ir_type_from_ty_ui_msg(
                         args.first().ok_or_else(|| {
                             bug(
                                 "ipe_lower::ir_type_from_ty",
-                                "Cells applied without its message type",
+                                "Screen applied without its message type",
                             )
                         })?,
                         span,
                     )?;
                     Ok(IrType::Ui {
                         ctor: UiCtor::Cells,
+                        msg: Box::new(msg),
+                    })
+                }
+                // `Ipe.Tea.Tui.Ui.Attribute msg` — the cell-native attribute type.
+                "TuiAttr" if args.len() == 1 => {
+                    let msg = self.ir_type_from_ty_ui_msg(
+                        args.first().ok_or_else(|| {
+                            bug(
+                                "ipe_lower::ir_type_from_ty",
+                                "TuiAttr applied without its message type",
+                            )
+                        })?,
+                        span,
+                    )?;
+                    Ok(IrType::Ui {
+                        ctor: UiCtor::TuiAttribute,
                         msg: Box::new(msg),
                     })
                 }
@@ -26078,6 +26110,12 @@ impl<'a> Lowerer<'a> {
                 KernelFn::UiNone
                 // `UiCells.none : Cells msg`
                 | KernelFn::UiCellsNone
+                // `Ipe.Tea.Tui.Ui` nullary cell-native attributes.
+                | KernelFn::TuiUiAlignLeft
+                | KernelFn::TuiUiAlignRight
+                | KernelFn::TuiUiCenter
+                | KernelFn::TuiUiBold
+                | KernelFn::TuiUiUnderline
                 // `Ui.fill : Length`
                 | KernelFn::UiFill
                 // `Ui.content : Length`
@@ -26199,6 +26237,11 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::UiCellsText
                 // `UiCells.cells : List (List Char) -> Cells msg`
                 | KernelFn::UiCellsCells
+                // `Ipe.Tea.Tui.Ui` arity-1 cell-native attributes.
+                | KernelFn::TuiUiSpacing
+                | KernelFn::TuiUiPadding
+                | KernelFn::TuiUiColor
+                | KernelFn::TuiUiBg
                 // ── Ui attribute builders — arity 1 ──────────────────────
                 // `Ui.spacing : Int -> Attribute msg`
                 | KernelFn::UiSpacing
@@ -27763,6 +27806,16 @@ impl<'a> Lowerer<'a> {
                     ("UiCells", "row") => Ok(Callee::Kernel(KernelFn::UiCellsRow)),
                     ("UiCells", "column") => Ok(Callee::Kernel(KernelFn::UiCellsColumn)),
                     ("UiCells", "cells") => Ok(Callee::Kernel(KernelFn::UiCellsCells)),
+                    // ── Ipe.Tea.Tui.Ui cell-native attribute builders ─────
+                    ("TuiUi", "spacing") => Ok(Callee::Kernel(KernelFn::TuiUiSpacing)),
+                    ("TuiUi", "padding") => Ok(Callee::Kernel(KernelFn::TuiUiPadding)),
+                    ("TuiUi", "alignLeft") => Ok(Callee::Kernel(KernelFn::TuiUiAlignLeft)),
+                    ("TuiUi", "alignRight") => Ok(Callee::Kernel(KernelFn::TuiUiAlignRight)),
+                    ("TuiUi", "center") => Ok(Callee::Kernel(KernelFn::TuiUiCenter)),
+                    ("TuiUi", "bold") => Ok(Callee::Kernel(KernelFn::TuiUiBold)),
+                    ("TuiUi", "underline") => Ok(Callee::Kernel(KernelFn::TuiUiUnderline)),
+                    ("TuiUi", "color") => Ok(Callee::Kernel(KernelFn::TuiUiColor)),
+                    ("TuiUi", "bg") => Ok(Callee::Kernel(KernelFn::TuiUiBg)),
                     // Retained container / tagged-element primitives — the layout
                     // and flow builders are pure Ipê over these in `Ipe/Ui.ipe`.
                     ("Ui", "node") => Ok(Callee::Kernel(KernelFn::UiNode)),

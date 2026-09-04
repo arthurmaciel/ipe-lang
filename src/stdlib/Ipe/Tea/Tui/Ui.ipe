@@ -1,0 +1,124 @@
+-- | Ipe.Tea.Tui.Ui — the Tui shape's view surface.
+--
+-- A `tui` program's `view` returns `Screen msg`, a type distinct from the web
+-- `Element msg`: putting a web builder into a `Screen` view is a compile-time
+-- type error (IPE-T0001), never a silent drop.
+--
+-- The builders take this module's OWN `Attribute msg`, which exposes only
+-- terminal-honorable, cell-native attributes (spacing/padding in whole cells,
+-- horizontal alignment, bold/underline text style, and terminal-palette
+-- colours). DOM-only attributes (`Ui.onClick`, `Ui.scrollbars`, `Ui.inFront`,
+-- …) are simply not in this type, so naming one in a `Screen` view is a type
+-- error rather than an attribute the renderer quietly discards. Terminal input
+-- (keys) arrives through subscriptions (`Ipe.Tea.Tui.Sub`), not view attributes.
+module Ipe.Tea.Tui.Ui exposing
+    ( Screen
+    , none, text, cells
+    , el, row, column
+    , Attribute
+    , spacing, padding
+    , alignLeft, alignRight, center
+    , bold, underline
+    , color, bg
+    , Color, rgb, rgba, white, black
+    )
+
+
+import Ipe.Ffi.Kernel as Kernel
+
+
+-- | An empty screen view — renders nothing.
+none : Screen msg
+none = Kernel.kernel "UiCells_none"
+
+
+-- | `text str` — a single line of text.
+text : String -> Screen msg
+text = Kernel.kernel "UiCells_text"
+
+
+-- | `cells grid` — a raw terminal cell grid.  Each inner list is one row of
+-- characters; the terminal backend paints it verbatim.  The one place the
+-- word "cells" survives in the surface: the raw-grid escape hatch.
+cells : List (List Char) -> Screen msg
+cells = Kernel.kernel "UiCells_cells"
+
+
+-- | `el attrs child` — wrap a single `Screen msg` child with attributes.
+el : List (Attribute msg) -> Screen msg -> Screen msg
+el = Kernel.kernel "UiCells_el"
+
+
+-- | `row attrs children` — lay out `Screen msg` children horizontally.
+row : List (Attribute msg) -> List (Screen msg) -> Screen msg
+row = Kernel.kernel "UiCells_row"
+
+
+-- | `column attrs children` — lay out `Screen msg` children vertically.
+column : List (Attribute msg) -> List (Screen msg) -> Screen msg
+column = Kernel.kernel "UiCells_column"
+
+
+-- | `spacing n` — the gap between a container's children, in whole cells.
+spacing : Int -> Attribute msg
+spacing = Kernel.kernel "TuiUi_spacing"
+
+
+-- | `padding n` — inner padding on all four sides, in whole cells.
+padding : Int -> Attribute msg
+padding = Kernel.kernel "TuiUi_padding"
+
+
+-- | Align a node's content to the left.
+alignLeft : Attribute msg
+alignLeft = Kernel.kernel "TuiUi_alignLeft"
+
+
+-- | Align a node's content to the right.
+alignRight : Attribute msg
+alignRight = Kernel.kernel "TuiUi_alignRight"
+
+
+-- | Centre a node's content horizontally.
+center : Attribute msg
+center = Kernel.kernel "TuiUi_center"
+
+
+-- | Render text in bold.
+bold : Attribute msg
+bold = Kernel.kernel "TuiUi_bold"
+
+
+-- | Render text underlined.
+underline : Attribute msg
+underline = Kernel.kernel "TuiUi_underline"
+
+
+-- | `color c` — the foreground (text) colour, from the terminal palette.
+color : Color -> Attribute msg
+color = Kernel.kernel "TuiUi_color"
+
+
+-- | `bg c` — the background colour, from the terminal palette.
+bg : Color -> Attribute msg
+bg = Kernel.kernel "TuiUi_bg"
+
+
+-- | `rgb r g b` — a terminal colour from red/green/blue channels (0-255).
+rgb : Int -> Int -> Int -> Color
+rgb = Kernel.kernel "Ui_rgb"
+
+
+-- | `rgba r g b a` — a terminal colour with an alpha channel (0..1).
+rgba : Int -> Int -> Int -> Float -> Color
+rgba = Kernel.kernel "Ui_rgba"
+
+
+-- | Opaque white.
+white : Color
+white = Kernel.kernel "Ui_white"
+
+
+-- | Opaque black.
+black : Color
+black = Kernel.kernel "Ui_black"

@@ -110,6 +110,7 @@ Each module listed below links to a detail page with the full documentation and 
 - [String](#string)
 - [System](#system)
 - [Task](#task)
+- [Tea.Tui.Ui](#teatuiui)
 - [Test](#test)
 - [Time](#time)
 - [Time.Timestamp](#timetimestamp)
@@ -2477,6 +2478,34 @@ Ipe.System -- process environment + args + termination
 | `withBaseMs` | `withBaseMs base policy` — set the base retry delay.  Takes a typed |
 | `retryWith` | `retryWith policy task` — run `task`, retrying according to `policy` whenever |
 
+## Tea.Tui.Ui
+
+[Full reference](stdlib/Tea.Tui.Ui.md)
+
+Ipe.Tea.Tui.Ui — the Tui shape's view surface.
+
+| Export | Summary |
+|--------|----------|
+| `none` | An empty screen view — renders nothing. |
+| `text` | `text str` — a single line of text. |
+| `cells` | `cells grid` — a raw terminal cell grid.  Each inner list is one row of |
+| `el` | `el attrs child` — wrap a single `Screen msg` child with attributes. |
+| `row` | `row attrs children` — lay out `Screen msg` children horizontally. |
+| `column` | `column attrs children` — lay out `Screen msg` children vertically. |
+| `spacing` | `spacing n` — the gap between a container's children, in whole cells. |
+| `padding` | `padding n` — inner padding on all four sides, in whole cells. |
+| `alignLeft` | Align a node's content to the left. |
+| `alignRight` | Align a node's content to the right. |
+| `center` | Centre a node's content horizontally. |
+| `bold` | Render text in bold. |
+| `underline` | Render text underlined. |
+| `color` | `color c` — the foreground (text) colour, from the terminal palette. |
+| `bg` | `bg c` — the background colour, from the terminal palette. |
+| `rgb` | `rgb r g b` — a terminal colour from red/green/blue channels (0-255). |
+| `rgba` | `rgba r g b a` — a terminal colour with an alpha channel (0..1). |
+| `white` | Opaque white. |
+| `black` | Opaque black. |
+
 ## Test
 
 [Full reference](stdlib/Test.md)
@@ -2739,16 +2768,16 @@ Ipe.Ui.Animation — typed CSS keyframe animations for `Ipe.Ui`.
 
 [Full reference](stdlib/Ui.Cells.md)
 
-Ipe.Ui.Cells — Tui-only view builders producing `Cells msg`.
+Ipe.Ui.Cells — retained alias for the Tui view surface.
 
 | Export | Summary |
 |--------|----------|
-| `none` | An empty cell view — renders nothing. |
+| `none` | An empty screen view — renders nothing. |
 | `text` | `text str` — a single line of text. |
 | `cells` | `cells grid` — a raw terminal cell grid.  Each inner list is one row |
-| `el` | `el attrs child` — wrap a single `Cells msg` child with attributes. |
-| `row` | `row attrs children` — lay out `Cells msg` children horizontally. |
-| `column` | `column attrs children` — lay out `Cells msg` children vertically. |
+| `el` | `el attrs child` — wrap a single `Screen msg` child with attributes. |
+| `row` | `row attrs children` — lay out `Screen msg` children horizontally. |
+| `column` | `column attrs children` — lay out `Screen msg` children vertically. |
 
 ## Ui.Chart
 

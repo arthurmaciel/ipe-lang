@@ -3,9 +3,9 @@ module Main exposing (main)
 {-|
 A full-screen TEA counter over the canonical `Tui.app` surface.
 
-`Tui.app` re-exports the terminal `appScreen` entry: the `view` paints a
-typed `Ipe.Ui` `Element` tree to terminal cells, and the `onKey` callback
-maps each key event to a `Msg`.
+The `view` returns `Screen msg` from `Ipe.Tea.Tui.Ui` — the terminal shape's
+own view surface, with cell-native attributes.  The `onKey` callback maps each
+key event to a `Msg`.
 
 Keys:
     Up / k     increment
@@ -20,10 +20,8 @@ import Ipe.Task as Task
 import Ipe.Tea.Tui as Tui
 import Ipe.Tea.Tui.Cmd as Cmd
 import Ipe.Tea.Tui.Sub as Sub
-import Ipe.Ui as Ui
-import Ipe.Ui.Cells as Cells
-import Ipe.Ui.Cells exposing (Cells)
-import Ipe.Ui.Font as Font
+import Ipe.Tea.Tui.Ui as Ui
+import Ipe.Tea.Tui.Ui exposing (Screen)
 
 
 type Msg
@@ -62,12 +60,12 @@ update msg model =
             ( model, Cmd.none )
 
 
-view : Model -> Cells Msg
+view : Model -> Screen Msg
 view model =
-    Cells.column [ Ui.spacing 12, Ui.padding 16 ]
-        [ Cells.el [ Font.bold ] (Cells.text "Ipê tui counter")
-        , Cells.text ("count = " ++ String.fromInt model.count)
-        , Cells.text "(Up/k +, Down/j -, r reset, q quit)"
+    Ui.column [ Ui.spacing 1, Ui.padding 2 ]
+        [ Ui.el [ Ui.bold ] (Ui.text "Ipê tui counter")
+        , Ui.text ("count = " ++ String.fromInt model.count)
+        , Ui.text "(Up/k +, Down/j -, r reset, q quit)"
         ]
 
 
