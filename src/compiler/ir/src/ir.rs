@@ -1694,6 +1694,11 @@ pub enum UiCtor {
     Cells,
     /// `Attribute msg` from `Ipe.Ui` — a layout attribute (`ipe_runtime::ui::element::Attribute<M>`).
     UiAttribute,
+    /// `Attribute msg` from `Ipe.Tea.Tui.Ui` — a cell-native attribute
+    /// (`ipe_runtime::tui::TuiAttr<M>`). Distinct from `UiAttribute`: only
+    /// terminal-honorable attributes inhabit it, so a DOM attribute is a
+    /// type error in a `Screen` view rather than a silent render-time drop.
+    TuiAttribute,
     /// `Attribute msg` from `Ipe.Html` / `Ipe.Html.Attributes` —
     /// an HTML attribute (`ipe_runtime::html::Attribute<M>`).
     HtmlAttribute,

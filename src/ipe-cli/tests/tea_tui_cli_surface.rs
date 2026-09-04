@@ -36,7 +36,7 @@ const TUI_APP: &str = r#"module Main exposing (main)
 
 import Ipe.Tea.Tui as Tui
 import Ipe.Ui.Cells as Cells
-import Ipe.Ui.Cells exposing (Cells)
+import Ipe.Ui.Cells exposing (Screen)
 import Ipe.Tea.Tui.Cmd
 import Ipe.Tea.Tui.Sub
 
@@ -54,7 +54,7 @@ update : Msg -> Model -> ( Model, Cmd Msg )
 update _msg model =
     ( model, Cmd.none )
 
-view : Model -> Cells Msg
+view : Model -> Screen Msg
 view _model =
     Cells.text "hello"
 

@@ -368,10 +368,17 @@ pub enum BuiltinTag {
     /// `Element` — the `Ipe.Ui` element constructor `Element msg`, applied to the
     /// message type.
     UiElement,
-    /// `Cells` — the Tui-only view type constructor `Cells msg`. Distinct from
-    /// `Element msg`; produced exclusively by `Ipe.Ui.Cells.*` builders and
-    /// consumed only by `Tui.app`'s view field.
+    /// `Cells` — the Tui-only view type constructor `Screen msg` (exposed name).
+    /// Distinct from `Element msg`; produced exclusively by `Ipe.Tea.Tui.Ui.*`
+    /// builders and consumed only by `Tui.app`'s view field. The internal tag
+    /// keeps the `Cells` spelling (the rendering model); the user-facing type is
+    /// `Screen`.
     Cells,
+    /// `TuiAttr` — the cell-native attribute type constructor
+    /// `Ipe.Tea.Tui.Ui.Attribute msg`. Distinct from the DOM `UiAttribute`:
+    /// only terminal-honorable attributes inhabit it, so a DOM attribute is
+    /// unnameable in a `Screen` view (a type error, never a silent drop).
+    TuiAttr,
     /// `CustomElement` — the JS-widget boundary constructor `CustomElement down up`,
     /// applied to its sealed down-state and up-event types. Empty-module
     /// (unqualified); an opaque handle produced only by the reserved `CustomElement.fromFile`
@@ -1781,6 +1788,25 @@ pub enum StdlibKernel {
     /// `UiCells.cells : List (List Char) -> Cells msg` — a raw character-grid
     /// island inside a `Cells`-typed Tui view.
     UiCellsCells,
+    // ── Ipe.Tea.Tui.Ui cell-native attribute builders ─────────────────────────
+    /// `TuiUi.spacing : Int -> Attribute msg` — gap between children, in cells.
+    TuiUiSpacing,
+    /// `TuiUi.padding : Int -> Attribute msg` — inner padding, in cells.
+    TuiUiPadding,
+    /// `TuiUi.alignLeft : Attribute msg`
+    TuiUiAlignLeft,
+    /// `TuiUi.alignRight : Attribute msg`
+    TuiUiAlignRight,
+    /// `TuiUi.center : Attribute msg` — centre content horizontally.
+    TuiUiCenter,
+    /// `TuiUi.bold : Attribute msg`
+    TuiUiBold,
+    /// `TuiUi.underline : Attribute msg`
+    TuiUiUnderline,
+    /// `TuiUi.color : Color -> Attribute msg` — foreground text colour.
+    TuiUiColor,
+    /// `TuiUi.bg : Color -> Attribute msg` — background colour.
+    TuiUiBg,
     /// `Ui.widget : CustomElement down up -> down -> (up -> msg) -> Element msg` —
     /// the one view node that places a typed JS custom-element widget. The
     /// `CustomElement` handle is opaque; it lowers to the shipped widget handle
@@ -3777,6 +3803,16 @@ impl StdlibKernel {
             Self::UiCellsRow => d("UiCells", "row", 2, Ui, "cells_row_"),
             Self::UiCellsColumn => d("UiCells", "column", 2, Ui, "cells_column_"),
             Self::UiCellsCells => d("UiCells", "cells", 1, Ui, "cells_cells_"),
+            // ── Ipe.Tea.Tui.Ui cell-native attribute builders ────────────
+            Self::TuiUiSpacing => d("TuiUi", "spacing", 1, Ui, "tui_spacing_"),
+            Self::TuiUiPadding => d("TuiUi", "padding", 1, Ui, "tui_padding_"),
+            Self::TuiUiAlignLeft => d("TuiUi", "alignLeft", 0, Ui, "tui_align_left_"),
+            Self::TuiUiAlignRight => d("TuiUi", "alignRight", 0, Ui, "tui_align_right_"),
+            Self::TuiUiCenter => d("TuiUi", "center", 0, Ui, "tui_center_"),
+            Self::TuiUiBold => d("TuiUi", "bold", 0, Ui, "tui_bold_"),
+            Self::TuiUiUnderline => d("TuiUi", "underline", 0, Ui, "tui_underline_"),
+            Self::TuiUiColor => d("TuiUi", "color", 1, Ui, "tui_color_"),
+            Self::TuiUiBg => d("TuiUi", "bg", 1, Ui, "tui_bg_"),
             Self::UiWidget => d("Ui", "widget", 3, Ui, "ui_widget_"),
             Self::UiNode => d("Ui", "node", 3, Ui, "ui_node_"),
             Self::UiTaggedNode => d("Ui", "taggedNode", 4, Ui, "ui_tagged_node_"),
@@ -5271,6 +5307,16 @@ impl StdlibKernel {
         Self::UiCellsRow,
         Self::UiCellsColumn,
         Self::UiCellsCells,
+        // Ipe.Tea.Tui.Ui cell-native attribute builders
+        Self::TuiUiSpacing,
+        Self::TuiUiPadding,
+        Self::TuiUiAlignLeft,
+        Self::TuiUiAlignRight,
+        Self::TuiUiCenter,
+        Self::TuiUiBold,
+        Self::TuiUiUnderline,
+        Self::TuiUiColor,
+        Self::TuiUiBg,
         Self::UiWidget,
         Self::UiNode,
         Self::UiTaggedNode,
@@ -7659,19 +7705,28 @@ impl StdlibKernel {
         const LIST_UI_ELEM_A: TyShape = TyShape::Con(BuiltinTag::List, &[UI_ELEM_A]);
         const LIST_HTML_A: TyShape = TyShape::Con(BuiltinTag::List, &[HTML_A]);
         const LIST_HTML_ATTR_A: TyShape = TyShape::Con(BuiltinTag::List, &[HTML_ATTR_A]);
-        // `Cells msg` (var(0) = msg), and derived forms for `Ipe.Ui.Cells` builders.
+        // `Screen msg` (var(0) = msg), and derived forms for `Ipe.Tea.Tui.Ui`
+        // builders. The internal `Cells` tag is the exposed `Screen` type.
         const CELLS_A: TyShape = TyShape::Con(BuiltinTag::Cells, &[A]);
         const LIST_CELLS_A: TyShape = TyShape::Con(BuiltinTag::List, &[CELLS_A]);
-        // `String -> Cells msg`
+        // The cell-native attribute type `Ipe.Tea.Tui.Ui.Attribute msg` and its
+        // list slot — DISTINCT from the DOM `UI_ATTR_A`, so a `Screen` builder
+        // rejects a DOM attribute at type-check (make-invalid-states-unrepresentable).
+        const TUI_ATTR_A: TyShape = TyShape::Con(BuiltinTag::TuiAttr, &[A]);
+        const LIST_TUI_ATTR_A: TyShape = TyShape::Con(BuiltinTag::List, &[TUI_ATTR_A]);
+        // `String -> Screen msg`
         const STRING_TO_CELLS_A: TyShape = TyShape::Fun(&STRING, &CELLS_A);
-        // `List (Attribute msg) -> Cells msg -> Cells msg` (el)
+        // `List (Attribute msg) -> Screen msg -> Screen msg` (el)
         const CELLS_A_TO_CELLS_A: TyShape = TyShape::Fun(&CELLS_A, &CELLS_A);
-        const CELLS_EL: TyShape = TyShape::Fun(&LIST_UI_ATTR_A, &CELLS_A_TO_CELLS_A);
-        // `List (Attribute msg) -> List (Cells msg) -> Cells msg` (row / column)
+        const CELLS_EL: TyShape = TyShape::Fun(&LIST_TUI_ATTR_A, &CELLS_A_TO_CELLS_A);
+        // `List (Attribute msg) -> List (Screen msg) -> Screen msg` (row / column)
         const LIST_CELLS_A_TO_CELLS_A: TyShape = TyShape::Fun(&LIST_CELLS_A, &CELLS_A);
-        const CELLS_CONTAINER: TyShape = TyShape::Fun(&LIST_UI_ATTR_A, &LIST_CELLS_A_TO_CELLS_A);
-        // `List (List Char) -> Cells msg` (cells)
+        const CELLS_CONTAINER: TyShape = TyShape::Fun(&LIST_TUI_ATTR_A, &LIST_CELLS_A_TO_CELLS_A);
+        // `List (List Char) -> Screen msg` (cells)
         const LIST_LIST_CHAR_TO_CELLS_A: TyShape = TyShape::Fun(&LIST_LIST_CHAR, &CELLS_A);
+        // Cell-native attribute builders.
+        const INT_TO_TUI_ATTR_A: TyShape = TyShape::Fun(&INT, &TUI_ATTR_A);
+        const COLOR_TO_TUI_ATTR_A: TyShape = TyShape::Fun(&COLOR, &TUI_ATTR_A);
 
         // ── Ipe.Ui element / layout arrows. ──
         // `layout : List (Attribute msg) -> Element msg -> Html msg`.
@@ -9168,6 +9223,14 @@ impl StdlibKernel {
             Self::UiCellsEl => Some(&CELLS_EL),
             Self::UiCellsRow | Self::UiCellsColumn => Some(&CELLS_CONTAINER),
             Self::UiCellsCells => Some(&LIST_LIST_CHAR_TO_CELLS_A),
+            // Cell-native attribute builders.
+            Self::TuiUiSpacing | Self::TuiUiPadding => Some(&INT_TO_TUI_ATTR_A),
+            Self::TuiUiAlignLeft
+            | Self::TuiUiAlignRight
+            | Self::TuiUiCenter
+            | Self::TuiUiBold
+            | Self::TuiUiUnderline => Some(&TUI_ATTR_A),
+            Self::TuiUiColor | Self::TuiUiBg => Some(&COLOR_TO_TUI_ATTR_A),
             Self::UiWidget => Some(&UI_WIDGET),
             Self::UiNode => Some(&UI_NODE),
             Self::UiTaggedNode => Some(&UI_TAGGED_NODE),
@@ -10265,6 +10328,15 @@ impl StdlibKernel {
             | Self::UiCellsRow
             | Self::UiCellsColumn
             | Self::UiCellsCells
+            | Self::TuiUiSpacing
+            | Self::TuiUiPadding
+            | Self::TuiUiAlignLeft
+            | Self::TuiUiAlignRight
+            | Self::TuiUiCenter
+            | Self::TuiUiBold
+            | Self::TuiUiUnderline
+            | Self::TuiUiColor
+            | Self::TuiUiBg
             | Self::UiNode
             | Self::UiTaggedNode
             | Self::UiButton
@@ -11831,6 +11903,15 @@ impl StdlibKernel {
                 | Self::UiCellsRow
                 | Self::UiCellsColumn
                 | Self::UiCellsCells
+                | Self::TuiUiSpacing
+                | Self::TuiUiPadding
+                | Self::TuiUiAlignLeft
+                | Self::TuiUiAlignRight
+                | Self::TuiUiCenter
+                | Self::TuiUiBold
+                | Self::TuiUiUnderline
+                | Self::TuiUiColor
+                | Self::TuiUiBg
                 | Self::UiWidget
                 | Self::UiNode
                 | Self::UiTaggedNode
