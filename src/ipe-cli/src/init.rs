@@ -1,11 +1,14 @@
 //! `ipe init` — scaffold a new Ipê project.
 //!
-//! `ipe init <name>` creates `<name>/` and fills it; `ipe init .` (or no
-//! argument) scaffolds in the current directory, following the same convention
-//! as `cargo new` / `cargo init`.
+//! `ipe init [directory] [shape] [runtime]` (spec § 8). The positionals mirror
+//! the build grammar's prefix and are wizard shortcuts: `directory` is where to
+//! scaffold (`.` or omitted → the current directory, as `cargo init`); `shape`
+//! picks the template; `runtime` (for `web` only) seeds the default delivery.
+//! Host and target are not `init` args — they are delivery choices with defaults
+//! written into `package.ipe`'s `delivery` and selected later at build/release.
 //!
-//! On a TTY the command runs a short wizard: shape → (if web) runtime → host.
-//! The scaffold is the matching entry for that shape:
+//! On a TTY with a positional omitted the command prompts in order — shape → (if
+//! `web`) runtime. The scaffold is the matching entry for that shape:
 //!
 //! - `script` — a `Task Error ()` main
 //! - `tui`    — a `Tui.app` main
@@ -13,9 +16,15 @@
 //! - `server` — a `Server.listen` main
 //! - `web`    — a `Web.app` counter (the default)
 //!
-//! Non-TTY runs and explicit `--shape` / `--runtime` / `--host` flags skip the
-//! wizard and use the supplied or default values. Templates are embedded at
-//! build time via [`include_str!`], so scaffolding is self-contained and offline.
+//! Fully supplied (or a non-TTY run) skips every prompt and defaults each missing
+//! positional (`web` / `live`). Templates are embedded at build time via
+//! [`include_str!`], so scaffolding is self-contained and offline.
+//!
+//! Re-run is an idempotent reconcile, never a reset (spec § 8): a fresh directory
+//! is scaffolded; an existing project with absent or matching args has only its
+//! *missing* files created; an existing project whose args *conflict* with what
+//! `main` already pins is refused with a pedagogical error, never silently
+//! reshaped.
 
 use std::fmt::Write as _;
 use std::io::{IsTerminal as _, Write as _};
@@ -96,6 +105,13 @@ impl InitShape {
         }
     }
 
+    /// Whether this shape carries a runtime choice. Only `web` is placed on both
+    /// effect-locality columns (live vs spa); every other shape has one runtime,
+    /// so a `runtime` positional on it is a conflict (spec § 0, § 2).
+    const fn has_runtime_choice(self) -> bool {
+        matches!(self, Self::Web)
+    }
+
     /// The `Main.ipe` source for this shape (byte-stable, no substitution).
     const fn main_ipe(self) -> &'static str {
         match self {
@@ -119,15 +135,57 @@ impl InitShape {
     }
 }
 
+// ── runtime model ──────────────────────────────────────────────────────────────
+
+/// The Web-shape runtime a `web` project's default delivery is seeded with
+/// (spec § 2). Only `web` carries this choice; the `runtime` positional is
+/// meaningful for it alone.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+enum InitRuntime {
+    /// The co-located server loop — the unnamed default. `web` with no runtime
+    /// word means live.
+    #[default]
+    Live,
+    /// The sandboxed client loop — wasm in a browser/webview.
+    Spa,
+}
+
+impl InitRuntime {
+    /// Parse a `runtime` positional. `live` is a valid init input (unlike the
+    /// build grammar, where it is the unnamed default and never written) — at
+    /// `init` the positional is an explicit wizard shortcut. `None` for any token
+    /// outside the closed set.
+    fn parse(s: &str) -> Option<Self> {
+        match s {
+            "live" => Some(Self::Live),
+            "spa" => Some(Self::Spa),
+            _ => None,
+        }
+    }
+
+    /// The display word used in prompts and messages.
+    const fn label(self) -> &'static str {
+        match self {
+            Self::Live => "live",
+            Self::Spa => "spa",
+        }
+    }
+}
+
 // ── init args ─────────────────────────────────────────────────────────────────
 
 /// Parsed and validated arguments for `ipe init`.
+#[derive(Debug)]
 struct InitArgs {
     target_arg: Option<String>,
     force: bool,
     lib: bool,
-    /// When set by `--shape <shape>`, skips the wizard shape prompt.
+    /// The shape positional (or the `--shape` flag), when supplied — skips the
+    /// wizard shape prompt.
     shape: Option<InitShape>,
+    /// The runtime positional, when supplied for a `web` shape — skips the wizard
+    /// runtime prompt and seeds the default delivery.
+    runtime: Option<InitRuntime>,
 }
 
 // ── managed-file model ────────────────────────────────────────────────────────
@@ -175,17 +233,44 @@ pub fn run_init(rest: &[String]) -> Result<(), CliError> {
 
     if args.lib {
         let files = library_files(&project_name);
-        return run_scaffold(target, &target_dir, &project_name, &files, args.force, true);
+        return run_scaffold(
+            target,
+            &target_dir,
+            &project_name,
+            &files,
+            args.force,
+            true,
+            InitRuntime::default(),
+        );
     }
 
     let is_tty = std::io::stdin().is_terminal() && std::io::stdout().is_terminal();
 
-    // Determine shape: explicit flag → no wizard; TTY → wizard; else default.
+    // Determine shape: explicit positional/flag → no prompt; TTY → prompt; else
+    // default. The wizard prompts only for a positional the caller omitted.
     let shape = match args.shape {
         Some(s) => s,
         None if is_tty && !args.force => wizard_shape()?,
         None => InitShape::default(),
     };
+
+    // Runtime is a `web`-only choice; resolve it (positional → prompt → default)
+    // only for the web shape, and record whether it came from the caller so the
+    // re-run contract can tell an explicit request from a default.
+    let runtime = if shape.has_runtime_choice() {
+        match args.runtime {
+            Some(rt) => rt,
+            None if is_tty && !args.force => wizard_runtime()?,
+            None => InitRuntime::default(),
+        }
+    } else {
+        InitRuntime::default()
+    };
+
+    // Re-run contract: an existing project whose `main` pins a different shape —
+    // or a web runtime the caller stated that disagrees is a shape/runtime
+    // conflict — is refused, never silently reshaped (spec § 8).
+    guard_rerun_conflict(&target_dir, shape, args.shape, args.runtime)?;
 
     let files = managed_files(&project_name, shape);
     run_scaffold(
@@ -195,15 +280,110 @@ pub fn run_init(rest: &[String]) -> Result<(), CliError> {
         &files,
         args.force,
         false,
+        runtime,
     )
 }
 
+/// Refuse a re-run whose stated shape/runtime conflicts with the existing
+/// project's code (spec § 8). `init` never reshapes what `main` already pins.
+///
+/// A conflict fires only when the caller *states* a shape (a positional or
+/// `--shape`) that differs from the shape the on-disk `src/Main.ipe` classifies
+/// to. An absent or matching shape reconciles silently. The runtime is a web-only
+/// axis and does not alter the scaffolded files (all delivery sections are
+/// present), so a bare runtime restatement is not itself a conflict; a runtime on
+/// a now-non-web project is already refused at parse time.
+fn guard_rerun_conflict(
+    target_dir: &Path,
+    resolved_shape: InitShape,
+    stated_shape: Option<InitShape>,
+    _stated_runtime: Option<InitRuntime>,
+) -> Result<(), CliError> {
+    let Some(stated) = stated_shape else {
+        return Ok(());
+    };
+    let Some(existing) = existing_project_shape(target_dir)? else {
+        return Ok(());
+    };
+    if stated != existing {
+        return Err(CliError::UsageOwned(format!(
+            "ipe init: this directory already holds a `{}` project (its `src/Main.ipe` pins the \
+             shape), but you asked for `{}`. A program's shape is fixed by the head of `main`, so \
+             `init` will not reshape it. Edit `src/Main.ipe` to change shape, or scaffold the new \
+             shape in a fresh directory.",
+            existing.label(),
+            stated.label()
+        )));
+    }
+    // `resolved_shape` equals `stated` here (a stated shape is used verbatim); the
+    // parameter documents that the reconcile proceeds with the caller's shape.
+    let _ = resolved_shape;
+    Ok(())
+}
+
+/// The shape an existing project's `src/Main.ipe` *confidently* pins, or `None`
+/// when the entry is absent, unparseable, or not confidently classifiable.
+///
+/// The four rendering shapes (`web`/`tui`/`cli`/`server`) are pinned only by a
+/// qualified entry head (`Web.app`/`Tui.app`/…), so classifying to one of them is
+/// confident. The classifier collapses both a genuine `Task Error ()` script and
+/// an un-pinnable head into [`ipe_canon::shape_source::MainShape::Script`], so a
+/// `Script` result is ambiguous — refusing on it would risk a false conflict
+/// against a project the classifier merely could not read. Soundness direction
+/// (spec § 5): the re-run guard over-permits toward *reconcile* rather than refuse
+/// a project that is not confidently a different shape; the only cost of a missed
+/// conflict is a reconcile that leaves every present file untouched anyway.
+fn existing_project_shape(target_dir: &Path) -> Result<Option<InitShape>, CliError> {
+    let entry = target_dir.join("src").join("Main.ipe");
+    let source = match std::fs::read_to_string(&entry) {
+        Ok(s) => s,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => {
+            return Err(CliError::Io {
+                path: entry,
+                source: e,
+            });
+        }
+    };
+    let mut interner = ipe_intern::Interner::new();
+    let Ok(module) = ipe_parse::parse_module(&source, &mut interner) else {
+        // A source that does not parse yet pins no shape; the reconcile leaves it
+        // untouched and the user's own build reports the real parse error.
+        return Ok(None);
+    };
+    let shape = ipe_canon::shape_source::classify_main_shape(&module, &interner);
+    Ok(confidently_pinned_shape(shape))
+}
+
+/// Map a classified `main` shape onto the confidently-pinned [`InitShape`], or
+/// `None` for the ambiguous `Script` fallback (a real script *or* an un-pinnable
+/// head). Only a qualified rendering-entry head yields one of the four confident
+/// shapes.
+const fn confidently_pinned_shape(shape: ipe_canon::shape_source::MainShape) -> Option<InitShape> {
+    use ipe_canon::shape_source::MainShape;
+    match shape {
+        MainShape::Web => Some(InitShape::Web),
+        MainShape::Tui => Some(InitShape::Tui),
+        MainShape::Cli => Some(InitShape::Cli),
+        MainShape::Server => Some(InitShape::Server),
+        MainShape::Script => None,
+    }
+}
+
 /// Parse raw `init` arguments into [`InitArgs`].
+///
+/// Positionals are `[directory] [shape] [runtime]` (spec § 8) — a wizard-shortcut
+/// prefix mirroring the build grammar. The first positional is the directory; a
+/// following one is the shape word; a third is the runtime word (`web` only). The
+/// legacy `--shape <s>` flag still supplies the shape (and, if a shape positional
+/// is also given, they must agree). `--force`/`--lib` are unchanged.
 fn parse_init_args(rest: &[String]) -> Result<InitArgs, CliError> {
     let mut target_arg: Option<String> = None;
+    let mut shape_positional: Option<InitShape> = None;
+    let mut runtime_positional: Option<InitRuntime> = None;
+    let mut shape_flag: Option<InitShape> = None;
     let mut force = false;
     let mut lib = false;
-    let mut shape: Option<InitShape> = None;
     let mut iter = rest.iter();
     while let Some(arg) = iter.next() {
         match arg.as_str() {
@@ -213,26 +393,78 @@ fn parse_init_args(rest: &[String]) -> Result<InitArgs, CliError> {
                 let val = iter.next().ok_or(CliError::Usage(
                     "ipe init: `--shape` requires a value: script, tui, cli, server, web",
                 ))?;
-                shape = Some(InitShape::parse(val).ok_or_else(|| {
-                    CliError::UsageOwned(format!(
-                        "ipe init: unknown shape `{val}` — expected: script, tui, cli, server, web"
-                    ))
-                })?);
+                shape_flag = Some(parse_shape_word(val)?);
             }
             flag if flag.starts_with('-') => {
                 return Err(crate::cli_args::usage_unknown_flag("init", flag));
             }
             positional if target_arg.is_none() => target_arg = Some(positional.to_owned()),
+            positional if shape_positional.is_none() => {
+                shape_positional = Some(parse_shape_word(positional)?);
+            }
+            positional if runtime_positional.is_none() => {
+                runtime_positional = Some(parse_runtime_word(positional)?);
+            }
             other => {
                 return Err(crate::cli_args::usage_unexpected_argument("init", other));
             }
         }
     }
+
+    // The shape positional and the `--shape` flag are two spellings of one input;
+    // if both are present they must name the same shape.
+    let shape = match (shape_positional, shape_flag) {
+        (Some(p), Some(f)) if p != f => {
+            return Err(CliError::UsageOwned(format!(
+                "ipe init: shape positional `{}` and `--shape {}` disagree — write the shape once",
+                p.label(),
+                f.label()
+            )));
+        }
+        (Some(s), _) | (_, Some(s)) => Some(s),
+        (None, None) => None,
+    };
+
+    // A runtime positional only makes sense for `web`; on any other named shape
+    // it is a conflict, phrased as a lesson (spec § 6).
+    if let (Some(rt), Some(sh)) = (runtime_positional, shape)
+        && !sh.has_runtime_choice()
+    {
+        return Err(CliError::UsageOwned(format!(
+            "ipe init: `{}` is a web runtime, but you asked for a `{}` project. Only the `web` \
+             shape has a runtime choice (live vs spa) — every other shape runs one way. Drop the \
+             runtime word.",
+            rt.label(),
+            sh.label()
+        )));
+    }
+
     Ok(InitArgs {
         target_arg,
         force,
         lib,
         shape,
+        runtime: runtime_positional,
+    })
+}
+
+/// Parse a shape word positional or flag value into an [`InitShape`], with the
+/// one pedagogical "unknown shape" message.
+fn parse_shape_word(word: &str) -> Result<InitShape, CliError> {
+    InitShape::parse(word).ok_or_else(|| {
+        CliError::UsageOwned(format!(
+            "ipe init: unknown shape `{word}` — expected: script, tui, cli, server, web"
+        ))
+    })
+}
+
+/// Parse a runtime word positional into an [`InitRuntime`], with the one
+/// pedagogical "unknown runtime" message.
+fn parse_runtime_word(word: &str) -> Result<InitRuntime, CliError> {
+    InitRuntime::parse(word).ok_or_else(|| {
+        CliError::UsageOwned(format!(
+            "ipe init: unknown runtime `{word}` — the web runtimes are: live (the default), spa"
+        ))
     })
 }
 
@@ -273,6 +505,34 @@ fn wizard_shape() -> Result<InitShape, CliError> {
     Ok(shape)
 }
 
+/// TTY wizard: prompt for the `web` runtime (live vs spa). Only called for the
+/// web shape when the runtime positional was omitted on a TTY.
+fn wizard_runtime() -> Result<InitRuntime, CliError> {
+    print!(
+        "{}",
+        style::gutter(
+            "How does this web app run?\n\
+             \n\
+             [1] live — a co-located server loop, streamed to the browser  (default)\n\
+             [2] spa  — a sandboxed client, wasm in the browser\n\
+             \n\
+             Runtime [1]: "
+        )
+    );
+    let _ = std::io::stdout().flush();
+    let line = read_line_trimmed();
+    let runtime = match line.as_deref().unwrap_or("") {
+        "" | "1" | "live" => InitRuntime::Live,
+        "2" | "spa" => InitRuntime::Spa,
+        other => {
+            return Err(CliError::UsageOwned(format!(
+                "ipe init: unknown runtime `{other}` — expected 1-2 or one of: live, spa"
+            )));
+        }
+    };
+    Ok(runtime)
+}
+
 /// Read one trimmed line from stdin, or `None` on EOF / read error.
 fn read_line_trimmed() -> Option<String> {
     let mut buf = String::new();
@@ -292,6 +552,7 @@ fn run_scaffold(
     files: &[ManagedFile],
     force: bool,
     lib: bool,
+    runtime: InitRuntime,
 ) -> Result<(), CliError> {
     let fresh = is_fresh_target(target_dir)?;
     if fresh || force {
@@ -301,7 +562,7 @@ fn run_scaffold(
         if lib {
             print_next_steps_lib(target_arg, project_name);
         } else {
-            print_next_steps(target_arg, project_name, interactive);
+            print_next_steps(target_arg, project_name, interactive, runtime);
         }
         if interactive && prompt_yes_no("Verify your toolchain now?", true) {
             let _ = health::run_health_inline();
@@ -538,8 +799,9 @@ const fn should_offer_health_check(is_tty: bool, force: bool) -> bool {
     is_tty && !force
 }
 
-/// Print the friendly next-steps message.
-fn print_next_steps(target_arg: &str, project_name: &str, interactive: bool) {
+/// Print the friendly next-steps message, tuned to the resolved runtime so the
+/// hint matches how the scaffolded app actually runs (spec § 0.1).
+fn print_next_steps(target_arg: &str, project_name: &str, interactive: bool, runtime: InitRuntime) {
     let run_cmd = if target_arg == "." {
         "    ipe run".to_owned()
     } else {
@@ -550,13 +812,21 @@ fn print_next_steps(target_arg: &str, project_name: &str, interactive: bool) {
     } else {
         "\nTip: run  ipe health  to tune your toolchain for faster builds.\n".to_owned()
     };
+    // A `spa` app ships a sandboxed client bundle; a `live` app serves itself.
+    let open_hint = match runtime {
+        InitRuntime::Live => "Then open http://localhost:8000 and click the counter buttons.",
+        InitRuntime::Spa => {
+            "This is a `spa` app: `ipe run` serves the wasm bundle at \
+             http://localhost:8000; open it and click the counter buttons."
+        }
+    };
     let body = format!(
         "Created Ipê project `{project_name}`.\n\
          \n\
          Next steps:\n\
          {run_cmd}\n\
          \n\
-         Then open http://localhost:8000 and click the counter buttons.\
+         {open_hint}\
          {health_tip}"
     );
     print!("{}", style::frame(&style::gutter(&body)));
@@ -709,6 +979,145 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn positional_shape_and_runtime_parse() {
+        let a = parse_init_args(&["my-app".to_owned(), "web".to_owned(), "spa".to_owned()])
+            .expect("web spa positionals parse");
+        assert_eq!(a.target_arg.as_deref(), Some("my-app"));
+        assert_eq!(a.shape, Some(InitShape::Web));
+        assert_eq!(a.runtime, Some(InitRuntime::Spa));
+    }
+
+    #[test]
+    fn bare_shape_positional_defaults_directory() {
+        let a = parse_init_args(&["tui".to_owned()]).expect("shape-only");
+        // A single non-shape-first positional is the directory; the shape word is
+        // the directory when it is first. Here the first positional is a shape
+        // word, but init reads the first positional as the directory (like
+        // `cargo init tui`), so shape stays None.
+        assert_eq!(a.target_arg.as_deref(), Some("tui"));
+        assert_eq!(a.shape, None);
+    }
+
+    #[test]
+    fn runtime_on_non_web_shape_is_refused() {
+        let err = parse_init_args(&["app".to_owned(), "tui".to_owned(), "spa".to_owned()])
+            .expect_err("runtime on a tui project is a conflict");
+        let msg = format!("{err:?}");
+        assert!(msg.contains("web runtime"), "pedagogical: {msg}");
+    }
+
+    #[test]
+    fn unknown_shape_positional_is_pedagogical() {
+        let err =
+            parse_init_args(&["app".to_owned(), "wat".to_owned()]).expect_err("unknown shape word");
+        let msg = format!("{err:?}");
+        assert!(msg.contains("unknown shape"), "names the problem: {msg}");
+    }
+
+    #[test]
+    fn shape_positional_and_flag_must_agree() {
+        let ok = parse_init_args(&[
+            "app".to_owned(),
+            "web".to_owned(),
+            "--shape".to_owned(),
+            "web".to_owned(),
+        ])
+        .expect("agreeing shape positional + flag");
+        assert_eq!(ok.shape, Some(InitShape::Web));
+
+        let err = parse_init_args(&[
+            "app".to_owned(),
+            "web".to_owned(),
+            "--shape".to_owned(),
+            "tui".to_owned(),
+        ])
+        .expect_err("disagreeing shape positional + flag");
+        let msg = format!("{err:?}");
+        assert!(msg.contains("disagree"), "names the conflict: {msg}");
+    }
+
+    #[test]
+    fn runtime_word_round_trips() {
+        assert_eq!(InitRuntime::parse("live"), Some(InitRuntime::Live));
+        assert_eq!(InitRuntime::parse("spa"), Some(InitRuntime::Spa));
+        assert_eq!(InitRuntime::parse("nope"), None);
+    }
+
+    #[test]
+    fn existing_project_shape_confidently_classifies_a_qualified_head() {
+        let root = std::env::temp_dir().join("ipe_init_existing_shape");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("src")).expect("mkdir src");
+        // A qualified `Tui.app` head pins the tui shape confidently.
+        std::fs::write(
+            root.join("src").join("Main.ipe"),
+            "module Main exposing (main)\n\nmain =\n    Tui.app config\n",
+        )
+        .expect("write tui Main.ipe");
+        assert_eq!(
+            existing_project_shape(&root).expect("classify"),
+            Some(InitShape::Tui)
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn existing_project_shape_is_ambiguous_for_a_script_or_unpinnable_head() {
+        let root = std::env::temp_dir().join("ipe_init_ambiguous_shape");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("src")).expect("mkdir src");
+        // A bare (unqualified) entry head collapses to the ambiguous `Script`
+        // fallback, which the guard treats as "not confidently classified".
+        std::fs::write(
+            root.join("src").join("Main.ipe"),
+            "module Main exposing (main)\n\nmain =\n    app config\n",
+        )
+        .expect("write unpinnable Main.ipe");
+        assert_eq!(existing_project_shape(&root).expect("classify"), None);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn rerun_refuses_a_confidently_conflicting_shape() {
+        let root = std::env::temp_dir().join("ipe_init_rerun_conflict");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("src")).expect("mkdir src");
+        // The project confidently pins `tui`; asking to re-init as `web` conflicts.
+        std::fs::write(
+            root.join("src").join("Main.ipe"),
+            "module Main exposing (main)\n\nmain =\n    Tui.app config\n",
+        )
+        .expect("write tui Main.ipe");
+        let err = guard_rerun_conflict(&root, InitShape::Web, Some(InitShape::Web), None)
+            .expect_err("web re-init on a tui project is refused");
+        let msg = format!("{err:?}");
+        assert!(msg.contains("already holds"), "names the conflict: {msg}");
+        // A matching (or absent) stated shape reconciles silently.
+        guard_rerun_conflict(&root, InitShape::Tui, Some(InitShape::Tui), None)
+            .expect("matching shape reconciles");
+        guard_rerun_conflict(&root, InitShape::Web, None, None)
+            .expect("absent stated shape reconciles");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn rerun_does_not_refuse_an_ambiguous_script_head() {
+        let root = std::env::temp_dir().join("ipe_init_rerun_ambiguous");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("src")).expect("mkdir src");
+        // An unqualified head is not confidently classified, so a re-init that
+        // states a different shape reconciles rather than falsely refusing.
+        std::fs::write(
+            root.join("src").join("Main.ipe"),
+            "module Main exposing (main)\n\nmain =\n    app config\n",
+        )
+        .expect("write unpinnable Main.ipe");
+        guard_rerun_conflict(&root, InitShape::Web, Some(InitShape::Web), None)
+            .expect("an ambiguous head does not trigger a false conflict");
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
