@@ -117,6 +117,7 @@ struct Style {
     fg: Option<(u8, u8, u8)>,
     bg: Option<(u8, u8, u8)>,
     bold: bool,
+    dim: bool,
     italic: bool,
     underline: bool,
     overline: bool,
@@ -702,6 +703,8 @@ fn walk_attrs<M>(attrs: &[Attribute<M>], inherited: Style) -> Walked {
             Attribute::AttrFontDecoration(s) if s == "line-through" || s == "strike" => {
                 w.style.strike = true
             }
+            Attribute::AttrFontDecoration(s) if s == "dim" => w.style.dim = true,
+            Attribute::AttrFontDecoration(s) if s == "reverse" => w.style.reverse = true,
             // Border frame (drawBorder — solid/dashed/dotted box). Width is
             // taken as present/absent (the frame is always 1 cell each side in the
             // terminal regardless of CSS px); colour + style drive the glyphs.
@@ -2449,6 +2452,9 @@ fn sgr(style: Style) -> String {
     if style.bold {
         codes.push("1".to_string());
     }
+    if style.dim {
+        codes.push("2".to_string());
+    }
     if style.italic {
         codes.push("3".to_string());
     }
@@ -3217,6 +3223,23 @@ mod tests {
         assert!(
             line_count <= ROWS * (PAD_ROW_SLACK + 2),
             "frame line count {line_count} exceeded terminal-proportional cap on {ROWS}-row canvas (spacing)"
+        );
+    }
+
+    #[test]
+    fn sgr_emits_dim_and_reverse() {
+        let dim = sgr(Style {
+            dim: true,
+            ..Style::default()
+        });
+        assert!(dim.contains('2'), "dim style must emit SGR 2, got {dim:?}");
+        let reverse = sgr(Style {
+            reverse: true,
+            ..Style::default()
+        });
+        assert!(
+            reverse.contains('7'),
+            "reverse style must emit SGR 7, got {reverse:?}"
         );
     }
 }

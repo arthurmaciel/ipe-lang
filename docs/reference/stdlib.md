@@ -2530,6 +2530,8 @@ Ipe.Tea.Tui.Ui — the Tui shape's view surface.
 | `center` | Centre a node's content horizontally. |
 | `bold` | Render text in bold. |
 | `underline` | Render text underlined. |
+| `dim` | Render text dim (faint). |
+| `reverse` | Render text in reverse video (swap foreground and background). |
 | `color` | `color c` — the foreground (text) colour, from the terminal palette. |
 | `bg` | `bg c` — the background colour, from the terminal palette. |
 | `rgb` | `rgb r g b` — a terminal colour from red/green/blue channels (0-255). |

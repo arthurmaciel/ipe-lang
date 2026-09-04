@@ -18,7 +18,7 @@ module Ipe.Tea.Tui.Ui exposing
     , Attribute
     , spacing, padding
     , alignLeft, alignRight, center
-    , bold, underline
+    , bold, underline, dim, reverse
     , color, bg
     , Color, rgb, rgba, white, black
     )
@@ -92,6 +92,16 @@ bold = Kernel.kernel "TuiUi_bold"
 -- | Render text underlined.
 underline : Attribute msg
 underline = Kernel.kernel "TuiUi_underline"
+
+
+-- | Render text dim (faint).
+dim : Attribute msg
+dim = Kernel.kernel "TuiUi_dim"
+
+
+-- | Render text in reverse video (swap foreground and background).
+reverse : Attribute msg
+reverse = Kernel.kernel "TuiUi_reverse"
 
 
 -- | `color c` — the foreground (text) colour, from the terminal palette.

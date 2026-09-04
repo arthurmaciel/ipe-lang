@@ -1804,6 +1804,10 @@ pub enum StdlibKernel {
     TuiUiBold,
     /// `TuiUi.underline : Attribute msg`
     TuiUiUnderline,
+    /// `TuiUi.dim : Attribute msg` — faint text.
+    TuiUiDim,
+    /// `TuiUi.reverse : Attribute msg` — reverse video.
+    TuiUiReverse,
     /// `TuiUi.color : Color -> Attribute msg` — foreground text colour.
     TuiUiColor,
     /// `TuiUi.bg : Color -> Attribute msg` — background colour.
@@ -3819,6 +3823,8 @@ impl StdlibKernel {
             Self::TuiUiCenter => d("TuiUi", "center", 0, Ui, "tui_center_"),
             Self::TuiUiBold => d("TuiUi", "bold", 0, Ui, "tui_bold_"),
             Self::TuiUiUnderline => d("TuiUi", "underline", 0, Ui, "tui_underline_"),
+            Self::TuiUiDim => d("TuiUi", "dim", 0, Ui, "tui_dim_"),
+            Self::TuiUiReverse => d("TuiUi", "reverse", 0, Ui, "tui_reverse_"),
             Self::TuiUiColor => d("TuiUi", "color", 1, Ui, "tui_color_"),
             Self::TuiUiBg => d("TuiUi", "bg", 1, Ui, "tui_bg_"),
             Self::UiWidget => d("Ui", "widget", 3, Ui, "ui_widget_"),
@@ -5324,6 +5330,8 @@ impl StdlibKernel {
         Self::TuiUiCenter,
         Self::TuiUiBold,
         Self::TuiUiUnderline,
+        Self::TuiUiDim,
+        Self::TuiUiReverse,
         Self::TuiUiColor,
         Self::TuiUiBg,
         Self::UiWidget,
@@ -9241,7 +9249,9 @@ impl StdlibKernel {
             | Self::TuiUiAlignRight
             | Self::TuiUiCenter
             | Self::TuiUiBold
-            | Self::TuiUiUnderline => Some(&TUI_ATTR_A),
+            | Self::TuiUiUnderline
+            | Self::TuiUiDim
+            | Self::TuiUiReverse => Some(&TUI_ATTR_A),
             Self::TuiUiColor | Self::TuiUiBg => Some(&COLOR_TO_TUI_ATTR_A),
             Self::UiWidget => Some(&UI_WIDGET),
             Self::UiNode => Some(&UI_NODE),
@@ -10348,6 +10358,8 @@ impl StdlibKernel {
             | Self::TuiUiCenter
             | Self::TuiUiBold
             | Self::TuiUiUnderline
+            | Self::TuiUiDim
+            | Self::TuiUiReverse
             | Self::TuiUiColor
             | Self::TuiUiBg
             | Self::UiNode
@@ -11924,6 +11936,8 @@ impl StdlibKernel {
                 | Self::TuiUiCenter
                 | Self::TuiUiBold
                 | Self::TuiUiUnderline
+                | Self::TuiUiDim
+                | Self::TuiUiReverse
                 | Self::TuiUiColor
                 | Self::TuiUiBg
                 | Self::UiWidget

@@ -33,6 +33,10 @@ pub enum TuiAttr<M> {
     Bold,
     /// Underlined text.
     Underline,
+    /// Dim (faint) text.
+    Dim,
+    /// Reverse video (swap foreground and background).
+    Reverse,
     /// Foreground (text) colour, from the terminal palette.
     FgColor(Color),
     /// Background colour, from the terminal palette.
@@ -53,6 +57,8 @@ impl<M> TuiAttr<M> {
             TuiAttr::Align(h) => Some(Attribute::AttrAlignX(h)),
             TuiAttr::Bold => Some(Attribute::AttrFontWeight(700)),
             TuiAttr::Underline => Some(Attribute::AttrFontUnderline),
+            TuiAttr::Dim => Some(Attribute::AttrFontDecoration("dim".to_owned())),
+            TuiAttr::Reverse => Some(Attribute::AttrFontDecoration("reverse".to_owned())),
             TuiAttr::FgColor(c) => Some(Attribute::AttrFontColor(c)),
             TuiAttr::BgColor(c) => Some(Attribute::AttrBgColor(c)),
             TuiAttr::_Msg(_) => None,
@@ -193,6 +199,18 @@ pub fn tui_underline_<M>() -> TuiAttr<M> {
     TuiAttr::Underline
 }
 
+/// `Ipe.Tea.Tui.Ui.dim : Attribute msg` — faint text.
+#[must_use]
+pub fn tui_dim_<M>() -> TuiAttr<M> {
+    TuiAttr::Dim
+}
+
+/// `Ipe.Tea.Tui.Ui.reverse : Attribute msg` — reverse video.
+#[must_use]
+pub fn tui_reverse_<M>() -> TuiAttr<M> {
+    TuiAttr::Reverse
+}
+
 /// `Ipe.Tea.Tui.Ui.color : Color -> Attribute msg` — foreground text colour.
 #[must_use]
 pub fn tui_color_<M>(c: Color) -> TuiAttr<M> {
@@ -203,4 +221,21 @@ pub fn tui_color_<M>(c: Color) -> TuiAttr<M> {
 #[must_use]
 pub fn tui_bg_<M>(c: Color) -> TuiAttr<M> {
     TuiAttr::BgColor(c)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dim_and_reverse_translate_to_decoration_attributes() {
+        assert!(matches!(
+            TuiAttr::<()>::Dim.translate(),
+            Some(Attribute::AttrFontDecoration(s)) if s == "dim"
+        ));
+        assert!(matches!(
+            TuiAttr::<()>::Reverse.translate(),
+            Some(Attribute::AttrFontDecoration(s)) if s == "reverse"
+        ));
+    }
 }

@@ -7285,7 +7285,9 @@ impl<'a> Builder<'a> {
             | K::TuiUiAlignRight
             | K::TuiUiCenter
             | K::TuiUiBold
-            | K::TuiUiUnderline => tui_attr(var(0)),
+            | K::TuiUiUnderline
+            | K::TuiUiDim
+            | K::TuiUiReverse => tui_attr(var(0)),
             K::TuiUiColor | K::TuiUiBg => fun(color(), tui_attr(var(0))),
             // `widget : CustomElement down up -> down -> (up -> msg) -> Element msg`
             // (msg = var(0), down = var(1), up = var(2)).
@@ -10358,6 +10360,8 @@ mod registry_phase_c_tests {
             K::TuiUiCenter,
             K::TuiUiBold,
             K::TuiUiUnderline,
+            K::TuiUiDim,
+            K::TuiUiReverse,
             K::TuiUiColor,
             K::TuiUiBg,
             K::UiWidget,

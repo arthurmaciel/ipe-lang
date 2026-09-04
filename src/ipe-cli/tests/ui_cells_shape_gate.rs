@@ -273,6 +273,57 @@ fn cli_view_with_ui_cells_is_rejected() -> Result<(), BoxError> {
 /// never silently discarded at render time. This is the make-invalid-states-
 /// unrepresentable half of the surface: the builder half was already guarded;
 /// this pins the attribute half.
+const SCREEN_WITH_DIM_REVERSE: &str = r#"module Main exposing (main)
+
+import Ipe.Tea.Tui as Tui
+import Ipe.Tea.Tui.Ui as Ui
+import Ipe.Tea.Tui.Ui exposing (Screen)
+import Ipe.Tea.Tui.Cmd
+import Ipe.Tea.Tui.Sub
+
+type Msg = NoOp
+
+type alias Model = { count : Int }
+
+init : () -> ( Model, Cmd Msg )
+init _unit =
+    ( { count = 0 }, Cmd.none )
+
+update : Msg -> Model -> ( Model, Cmd Msg )
+update _msg model =
+    ( model, Cmd.none )
+
+view : Model -> Screen Msg
+view _model =
+    Ui.column []
+        [ Ui.el [ Ui.dim ] (Ui.text "faint")
+        , Ui.el [ Ui.reverse ] (Ui.text "reversed")
+        ]
+
+subscriptions : Model -> Sub Msg
+subscriptions _model =
+    Sub.none
+
+type alias KeyEvent = { kind : String, value : String }
+
+onKey : KeyEvent -> Msg
+onKey _event =
+    NoOp
+
+main =
+    Tui.app
+        { init = init, update = update, view = view
+        , subscriptions = subscriptions, onKey = onKey
+        }
+"#;
+
+/// The line-scoped `dim` / `reverse` text styles are admissible cell-native
+/// attributes in a `Screen` view (ipe-0).
+#[test]
+fn screen_view_with_dim_and_reverse_is_accepted() -> Result<(), BoxError> {
+    assert_accepted("screen_dim_reverse", SCREEN_WITH_DIM_REVERSE)
+}
+
 const SCREEN_WITH_DOM_ATTRIBUTE: &str = r#"module Main exposing (main)
 
 import Ipe.Tea.Tui as Tui

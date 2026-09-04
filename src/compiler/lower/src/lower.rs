@@ -26126,6 +26126,8 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::TuiUiCenter
                 | KernelFn::TuiUiBold
                 | KernelFn::TuiUiUnderline
+                | KernelFn::TuiUiDim
+                | KernelFn::TuiUiReverse
                 // `Ui.fill : Length`
                 | KernelFn::UiFill
                 // `Ui.content : Length`
@@ -27825,6 +27827,8 @@ impl<'a> Lowerer<'a> {
                     ("TuiUi", "center") => Ok(Callee::Kernel(KernelFn::TuiUiCenter)),
                     ("TuiUi", "bold") => Ok(Callee::Kernel(KernelFn::TuiUiBold)),
                     ("TuiUi", "underline") => Ok(Callee::Kernel(KernelFn::TuiUiUnderline)),
+                    ("TuiUi", "dim") => Ok(Callee::Kernel(KernelFn::TuiUiDim)),
+                    ("TuiUi", "reverse") => Ok(Callee::Kernel(KernelFn::TuiUiReverse)),
                     ("TuiUi", "color") => Ok(Callee::Kernel(KernelFn::TuiUiColor)),
                     ("TuiUi", "bg") => Ok(Callee::Kernel(KernelFn::TuiUiBg)),
                     // Retained container / tagged-element primitives — the layout

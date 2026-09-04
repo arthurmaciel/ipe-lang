@@ -1058,6 +1058,8 @@ pub const fn appearance_literal_args(k: KernelFn) -> &'static [(usize, LitKind)]
         | KernelFn::TuiUiCenter
         | KernelFn::TuiUiBold
         | KernelFn::TuiUiUnderline
+        | KernelFn::TuiUiDim
+        | KernelFn::TuiUiReverse
         | KernelFn::TuiUiColor
         | KernelFn::TuiUiBg
         | KernelFn::UiWidget
@@ -1569,6 +1571,8 @@ pub const fn ui_call_shape(k: KernelFn) -> Option<UiEmitPlan> {
         KernelFn::TuiUiCenter => pos("ipe_runtime::tui::tui_center_", 0),
         KernelFn::TuiUiBold => pos("ipe_runtime::tui::tui_bold_", 0),
         KernelFn::TuiUiUnderline => pos("ipe_runtime::tui::tui_underline_", 0),
+        KernelFn::TuiUiDim => pos("ipe_runtime::tui::tui_dim_", 0),
+        KernelFn::TuiUiReverse => pos("ipe_runtime::tui::tui_reverse_", 0),
         KernelFn::TuiUiColor => pos("ipe_runtime::tui::tui_color_", 1),
         KernelFn::TuiUiBg => pos("ipe_runtime::tui::tui_bg_", 1),
         // `Ui.widget ce state on_up` — the server-driven custom-element node.
