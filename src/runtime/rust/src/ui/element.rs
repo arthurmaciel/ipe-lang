@@ -227,7 +227,7 @@ pub enum Element<M> {
     Raw(Html<M>),
     /// `Ui.cells`: a raw terminal cell grid (rows of characters), painted
     /// verbatim by the terminal backend and embeddable as an island inside an
-    /// otherwise-structured `Ipe.Ui` view under `Terminal.appScreen`.
+    /// otherwise-structured `Ipe.Ui` view under `Tui.app`.
     Cells(Vec<Vec<char>>),
 }
 
