@@ -11293,8 +11293,8 @@ mod registry_phase_c_tests {
         // `stdlib_scheme` `html_attr` builder.
         //
         // The closed-record / open-row families via the `Record` node: the
-        // app-entry cfg records (`Web.app` open-row, `WebView.app` /
-        // `Tui.app` open-row / `Cli.app`), `HttpRequest` /
+        // app-entry cfg records (`Web.app` open-row, `Tui.app` open-row /
+        // `Cli.app`), `HttpRequest` /
         // `HttpResponse` / server `Response`, `Migration`, `Csv` / `CacheCfg` /
         // `CacheStats` / `WebSocketCfg` / `EmailMessage` (+ nested attachment),
         // `RetryPolicy` (incl. the `Error`-channel `retryWith`), the

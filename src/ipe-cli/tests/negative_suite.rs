@@ -771,7 +771,7 @@ fn canon_server_cookie_definition_reserved() {
     assert_rejected("canon_server_cookie_def", &src, "IPE-N0026");
 }
 
-/// The shape app-leaf names (`WebApp` / `WebViewApp` / `TuiApp` / `CliApp`) are
+/// The shape app-leaf names (`WebApp` / `TuiApp` / `CliApp`) are
 /// deliberately NOT reserved — a user program may soundly declare
 /// `type WebApp = …` and use it, and the lowerer's empty-home guard keeps that
 /// user union winning over the opaque runtime leaf (see the `ipe_lower`
@@ -2159,7 +2159,7 @@ fn lower_dict_function_value_get_and_apply_compiles() {
 
 // A program's `main` is the single effect it runs, so it must be a `Task Error ()`
 // — written directly (a script) or produced by an app entry (`Web.app` /
-// `Tui.app` / `WebView.app`, each of which is itself a `Task Error ()`).
+// `Tui.app` / `Cli.app`, each of which is itself a `Task Error ()`).
 // A `main` of any other type (an `Int`, a `String`, a function) has no effect to
 // run: the emitted entry wraps `main` in the runtime's single run site, which needs
 // a `Task`, so a non-`Task` `main` would ship a crate that cannot build. That must

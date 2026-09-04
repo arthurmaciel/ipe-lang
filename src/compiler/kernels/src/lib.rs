@@ -12515,10 +12515,9 @@ impl StdlibKernel {
             }
             // Server-only surfaces: no browser denotation, ever (Db/Server)
             // or until a dedicated backend exists (Terminal/Ffi).
-            KernelClass::Db
-            | KernelClass::Server
-            | KernelClass::Terminal
-            | KernelClass::Ffi => false,
+            KernelClass::Db | KernelClass::Server | KernelClass::Terminal | KernelClass::Ffi => {
+                false
+            }
         }
     }
 }

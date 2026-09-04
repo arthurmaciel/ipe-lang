@@ -665,6 +665,7 @@ mod tests {
             false,
             false,
             false,
+            None,
         );
         let b = compute_project_key(
             &sources,
@@ -676,6 +677,7 @@ mod tests {
             false,
             false,
             false,
+            None,
         );
         assert_eq!(a, b, "same inputs must hash to the same key");
     }
@@ -693,6 +695,7 @@ mod tests {
             false,
             false,
             false,
+            None,
         );
         if let Some(main) = sources.get_mut(&vec!["Main".to_owned()]) {
             main.1.push_str("\n-- comment\n");
@@ -707,6 +710,7 @@ mod tests {
             false,
             false,
             false,
+            None,
         );
         assert_ne!(base, edited, "a body edit must change the key");
     }
@@ -724,6 +728,7 @@ mod tests {
             false,
             false,
             false,
+            None,
         );
         let postgres = compute_project_key(
             &sources,
@@ -735,6 +740,7 @@ mod tests {
             false,
             false,
             false,
+            None,
         );
         assert_ne!(sqlite, postgres, "the SQL driver is part of the key");
     }
@@ -757,6 +763,7 @@ mod tests {
             false,
             false,
             false,
+            None,
         );
         let prod = compute_project_key(
             &sources,
@@ -768,6 +775,7 @@ mod tests {
             true,
             false,
             false,
+            None,
         );
         assert_ne!(dev, prod, "the production flag is part of the key");
     }
@@ -788,6 +796,7 @@ mod tests {
             false,
             false,
             false,
+            None,
         );
         let on = compute_project_key(
             &sources,
@@ -799,8 +808,47 @@ mod tests {
             false,
             true,
             false,
+            None,
         );
         assert_ne!(off, on, "the hot-appearance flag is part of the key");
+    }
+
+    #[test]
+    fn key_changes_with_webview_window() {
+        let (sources, injected) = sample_sources();
+        let small = ipe_backend_rust::WebViewWindow {
+            title: "App".to_owned(),
+            width: 800,
+            height: 600,
+        };
+        let large = ipe_backend_rust::WebViewWindow {
+            width: 1600,
+            ..small.clone()
+        };
+        let key = |w: Option<&ipe_backend_rust::WebViewWindow>| {
+            compute_project_key(
+                &sources,
+                &injected,
+                &entry(),
+                DbDriver::Sqlite,
+                ipe_ir::Target::Native,
+                &[],
+                false,
+                false,
+                true,
+                w,
+            )
+        };
+        assert_ne!(
+            key(None),
+            key(Some(&small)),
+            "an explicit window must differ from the fallback"
+        );
+        assert_ne!(
+            key(Some(&small)),
+            key(Some(&large)),
+            "a window size change must invalidate the cache entry"
+        );
     }
 
     /// `[wasm] publicEnv` only affects the final emit stage (the generated
@@ -821,6 +869,7 @@ mod tests {
             false,
             false,
             false,
+            None,
         );
         let with_allowlist = compute_project_key(
             &sources,
@@ -832,6 +881,7 @@ mod tests {
             false,
             false,
             false,
+            None,
         );
         assert_ne!(
             empty_allowlist, with_allowlist,
@@ -852,6 +902,7 @@ mod tests {
             false,
             false,
             false,
+            None,
         );
         let b = compute_project_key(
             &sources,
@@ -863,6 +914,7 @@ mod tests {
             false,
             false,
             false,
+            None,
         );
         assert_ne!(a, b, "the entry module path is part of the key");
     }
@@ -880,6 +932,7 @@ mod tests {
             false,
             false,
             false,
+            None,
         );
 
         let mut added = sources.clone();
@@ -900,6 +953,7 @@ mod tests {
             false,
             false,
             false,
+            None,
         );
         assert_ne!(base, with_extra, "adding a module must change the key");
 
@@ -917,6 +971,7 @@ mod tests {
             false,
             false,
             false,
+            None,
         );
         assert_ne!(
             base, without_basics,
@@ -945,6 +1000,7 @@ mod tests {
             false,
             false,
             false,
+            None,
         );
         let b = compute_project_key(
             &sources,
@@ -956,6 +1012,7 @@ mod tests {
             false,
             false,
             false,
+            None,
         );
         assert_ne!(a, b, "the trust-origin flag is part of the key");
     }
@@ -985,6 +1042,7 @@ mod tests {
             false,
             false,
             false,
+            None,
         );
         let b = compute_project_key(
             &right,
@@ -996,6 +1054,7 @@ mod tests {
             false,
             false,
             false,
+            None,
         );
         assert_ne!(a, b, "differently-segmented module paths must not collide");
     }

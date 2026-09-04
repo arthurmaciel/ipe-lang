@@ -1687,7 +1687,7 @@ fn compile_modules_observed(
                 let guard = fresh_interner
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner);
-                let backend = ipe_backend_rust::RustBackend::new(&guard)
+                ipe_backend_rust::RustBackend::new(&guard)
                     .with_db_driver(db_driver)
                     .with_target(options.target)
                     .with_wasm_public_env(options.wasm_public_env.clone())
@@ -1696,12 +1696,9 @@ fn compile_modules_observed(
                     .with_debugger(options.debugger)
                     .with_project_name(&options.cargo_name)
                     .with_hot_appearance(options.hot_appearance)
-                    .with_webview_host(options.webview_host);
-                let backend = match &options.webview_window {
-                    Some(w) => backend.with_webview_window(w.clone()),
-                    None => backend,
-                };
-                backend.emit(&program)
+                    .with_webview_host(options.webview_host)
+                    .with_webview_window(options.webview_window.clone())
+                    .emit(&program)
             };
             if let Ok(emitted) = emit_result {
                 // Warm the (cheaper-to-hit) EmittedProject tier for the

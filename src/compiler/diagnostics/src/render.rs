@@ -1403,7 +1403,7 @@ fn name_label(msg: &NameError) -> Option<String> {
             "this module has a plain `main` (a Program) but imports `{module}`; \
              a module that imports any `Ipe.Tea.*` shape is a TEA app, so give \
              `main` a shape entry (`Web.app` / `Tui.app` / \
-             `Cli.app` / `WebView.app`), or drop the `{module}` import \
+             `Cli.app`), or drop the `{module}` import \
              if this is a Program"
         )),
         NameError::RuntimeBranchedMain => Some(
@@ -1411,7 +1411,7 @@ fn name_label(msg: &NameError) -> Option<String> {
              entries, so which shape this program is would be decided at run time; \
              a program's shape is pinned by the entry head at compile time, not \
              chosen from a value. Commit `main` to one shape entry (`Web.app` / \
-             `Tui.app` / `Cli.app` / `WebView.app`), and put \
+             `Tui.app` / `Cli.app`), and put \
              any run-time choice inside that shape (in its `init` / `update`), or \
              — for a plain program — make `main` a `Task Error ()`"
                 .to_string(),
@@ -1713,9 +1713,9 @@ fn lower_label(msg: &LowerError) -> String {
                 .to_string()
         }
         LowerError::UiWidgetInNonWebShape => {
-            "`Ui.widget` is browser-only; not available outside a Web/WebView shape — its \
+            "`Ui.widget` is browser-only; not available outside a Web shape — its \
              up-event handler is carried over the seal codec, which exists only in a \
-             browser build. Use it only under `Web.app` / `WebView.app`"
+             browser build. Use it only under `Web.app`"
                 .to_string()
         }
         LowerError::LawlessEffectDiscard => {
@@ -2092,9 +2092,7 @@ const fn feature_label(f: Feature) -> &'static str {
         }
         Feature::LetBoundAppCfg => {
             "the cfg for an app entry point (`Web.app` / `Tui.app` / \
-             `Cli.app` / \
-             `WebView.app`), and for `WebView.app` its nested `window` record and \
-             `window.size` tuple, must be written inline as a record/tuple literal, \
+             `Cli.app`) must be written inline as a record literal, \
              not a let-bound variable [feature: let-bound-app-cfg]"
         }
         Feature::NonCloneCapture => {

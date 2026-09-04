@@ -449,8 +449,8 @@ impl<'a> RustBackend<'a> {
     /// Only consulted when [`Self::with_webview_host`] is set; a served `web`
     /// leaves it `None`.
     #[must_use]
-    pub fn with_webview_window(mut self, window: WebViewWindow) -> Self {
-        self.webview_window = Some(window);
+    pub fn with_webview_window(mut self, window: Option<WebViewWindow>) -> Self {
+        self.webview_window = window;
         self
     }
 
@@ -567,6 +567,7 @@ impl<'a> RustBackend<'a> {
             self.cargo_name.clone(),
             self.hot_appearance,
             self.webview_host,
+            self.webview_window.clone(),
         )
     }
 
@@ -4975,6 +4976,7 @@ mod record_struct_namespace_tests {
             String::new(),
             false,
             false,
+            None,
         )?;
         assert_eq!(ctx.record_structs().len(), 1);
         assert_eq!(
@@ -5080,6 +5082,7 @@ mod record_struct_namespace_tests {
             String::new(),
             false,
             false,
+            None,
         )?;
         ctx.assert_record_structs_disjoint_from_type_namespace(&BTreeSet::new())
     }
@@ -5168,6 +5171,7 @@ mod record_struct_namespace_tests {
             String::new(),
             false,
             false,
+            None,
         )?;
 
         let colliding: BTreeSet<Symbol> = [snake, camel].into_iter().collect();

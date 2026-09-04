@@ -502,6 +502,7 @@ mod tests {
             String::new(),
             false,
             false,
+            None,
         )?;
         model_schema_tag(&ctx, &IrType::Record(fields))
     }
@@ -675,6 +676,7 @@ mod tests {
             String::new(),
             false,
             false,
+            None,
         )?;
 
         let model_a = IrType::Record(BTreeMap::from([(
@@ -766,6 +768,7 @@ mod tests {
             String::new(),
             false,
             false,
+            None,
         )?;
         let a = model_schema_tag(&ctx_1, &model)?;
         let ctx_2 = EmitCtx::build(
@@ -781,6 +784,7 @@ mod tests {
             String::new(),
             false,
             false,
+            None,
         )?;
         let b = model_schema_tag(&ctx_2, &model)?;
         assert_ne!(

@@ -3202,11 +3202,7 @@ pub fn emit_spine(ctx: &EmitCtx, program: &Program) -> DResult<String> {
     let main_returns_shape_leaf = program.modules.iter().any(|m| {
         m.entry.is_some_and(|eid| {
             m.funcs.iter().any(|f| {
-                f.id == eid
-                    && matches!(
-                        f.ret,
-                        IrType::WebApp | IrType::TuiApp | IrType::CliApp
-                    )
+                f.id == eid && matches!(f.ret, IrType::WebApp | IrType::TuiApp | IrType::CliApp)
             })
         })
     });

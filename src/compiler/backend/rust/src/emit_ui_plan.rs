@@ -155,7 +155,7 @@ pub enum Guard {
     /// browser shape the widget has NO transport — the node would be inert, a
     /// widget with no seam. Reject it fail-closed rather than emit a dead
     /// element (or trip the non-`json` runtime fallback's unconstrained type
-    /// parameter). Admissible only under `Web.app` / `WebView.app`.
+    /// parameter). Admissible only under `Web.app`.
     RejectInNonWebShape,
 }
 

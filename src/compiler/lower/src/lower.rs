@@ -12097,11 +12097,7 @@ fn main_ret_is_runnable_entry(ret: &IrType) -> bool {
         // Opaque shape-app leaves: each has a `run_blocking` entry the emitted
         // `fn main` calls; accepting them here keeps the SEAL closed (a program
         // whose `main` returns a shape handle still compiles and runs).
-        IrType::Task(_)
-        | IrType::Unit
-        | IrType::WebApp
-        | IrType::TuiApp
-        | IrType::CliApp => true,
+        IrType::Task(_) | IrType::Unit | IrType::WebApp | IrType::TuiApp | IrType::CliApp => true,
         IrType::Result(err, _) => matches!(**err, IrType::Error),
         _ => false,
     }
@@ -22686,9 +22682,9 @@ impl<'a> Lowerer<'a> {
                 //   emit_console path could never fire.
                 // A non-literal cfg (let-bound, piped, etc.) is rejected here with
                 // IPE-L0119 at the argument span — fail-closed, never an ICE.
-                Callee::Kernel(
-                    KernelFn::TerminalAppScreen | KernelFn::TerminalAppLines,
-                ) if args.len() == 1 => {
+                Callee::Kernel(KernelFn::TerminalAppScreen | KernelFn::TerminalAppLines)
+                    if args.len() == 1 =>
+                {
                     if let Some(arg0) = args.first() {
                         // Borrow `peek` for the gate BEFORE moving it below.
                         let lowered_cfg = self.lower_app_entry_cfg(&peek, arg0)?;
