@@ -291,6 +291,9 @@ pub const fn appearance_literal_args(k: KernelFn) -> &'static [(usize, LitKind)]
         // size, or a `Length` constructor carrying pixels.
         KernelFn::UiSpacing
         | KernelFn::UiPadding
+        // `Ipe.Tea.Tui.Ui.spacing / .padding : Int -> Attribute msg` — cells.
+        | KernelFn::TuiUiSpacing
+        | KernelFn::TuiUiPadding
         | KernelFn::FontSize
         | KernelFn::BorderWidth
         | KernelFn::BorderRounded
@@ -1049,6 +1052,13 @@ pub const fn appearance_literal_args(k: KernelFn) -> &'static [(usize, LitKind)]
         | KernelFn::UiCellsRow
         | KernelFn::UiCellsColumn
         | KernelFn::UiCellsCells
+        | KernelFn::TuiUiAlignLeft
+        | KernelFn::TuiUiAlignRight
+        | KernelFn::TuiUiCenter
+        | KernelFn::TuiUiBold
+        | KernelFn::TuiUiUnderline
+        | KernelFn::TuiUiColor
+        | KernelFn::TuiUiBg
         | KernelFn::UiWidget
         | KernelFn::UiNode
         | KernelFn::UiTaggedNode
@@ -1548,6 +1558,18 @@ pub const fn ui_call_shape(k: KernelFn) -> Option<UiEmitPlan> {
         KernelFn::UiCellsRow => pos("ipe_runtime::tui::cells_row_", 2),
         KernelFn::UiCellsColumn => pos("ipe_runtime::tui::cells_column_", 2),
         KernelFn::UiCellsCells => pos("ipe_runtime::tui::cells_cells_", 1),
+        // ── Ipe.Tea.Tui.Ui cell-native attribute builders. No shape guard: the
+        // type system rejects a `TuiAttr msg` where a DOM `Attribute msg` is
+        // expected (and vice-versa) via distinct type constructors (IPE-T0001).
+        KernelFn::TuiUiSpacing => pos("ipe_runtime::tui::tui_spacing_", 1),
+        KernelFn::TuiUiPadding => pos("ipe_runtime::tui::tui_padding_", 1),
+        KernelFn::TuiUiAlignLeft => pos("ipe_runtime::tui::tui_align_left_", 0),
+        KernelFn::TuiUiAlignRight => pos("ipe_runtime::tui::tui_align_right_", 0),
+        KernelFn::TuiUiCenter => pos("ipe_runtime::tui::tui_center_", 0),
+        KernelFn::TuiUiBold => pos("ipe_runtime::tui::tui_bold_", 0),
+        KernelFn::TuiUiUnderline => pos("ipe_runtime::tui::tui_underline_", 0),
+        KernelFn::TuiUiColor => pos("ipe_runtime::tui::tui_color_", 1),
+        KernelFn::TuiUiBg => pos("ipe_runtime::tui::tui_bg_", 1),
         // `Ui.widget ce state on_up` — the server-driven custom-element node.
         // A bespoke arm, not a plain positional call: `ui_widget_`'s handler
         // parameter carries `F: Fn(Up) -> M + Send + Sync + 'static`, which the

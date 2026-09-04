@@ -332,9 +332,16 @@ struct Builtins {
     attribute: Symbol,
     /// `"Element"` — Ipe.Ui element type constructor `Element msg`.
     element: Symbol,
-    /// `"Cells"` — Tui-only view type constructor `Cells msg`. Distinct from
-    /// `Element msg`; produced by `Ipe.Ui.Cells.*` builders.
+    /// `"Screen"` — Tui-only view type constructor `Screen msg`. Distinct from
+    /// `Element msg`; produced by `Ipe.Tea.Tui.Ui.*` builders.
     cells: Symbol,
+    /// `"TuiAttr"` — the cell-native attribute type constructor
+    /// `Ipe.Tea.Tui.Ui.Attribute msg`. Distinct from the DOM `Attribute msg`
+    /// (`attribute`): only terminal-honorable attributes (spacing/padding/
+    /// align/bold/underline/color/bg) inhabit it, so a DOM attribute
+    /// (`Ui.onClick`, `Ui.scrollbars`, …) is unnameable in a `Screen` view —
+    /// a type error, never a silent render-time drop.
+    tui_attr: Symbol,
     /// `"CustomElement"` — the JS-widget boundary type constructor
     /// `CustomElement down up`. Empty-module opaque handle; consumed only by the
     /// `Ui.widget` kernel scheme.
@@ -896,7 +903,8 @@ impl Builtins {
             // Ipe.Ui / Ipe.Html parametric type constructor symbols.
             attribute: interner.intern("Attribute")?,
             element: interner.intern("Element")?,
-            cells: interner.intern("Cells")?,
+            cells: interner.intern("Screen")?,
+            tui_attr: interner.intern("TuiAttr")?,
             custom_element: interner.intern("CustomElement")?,
             html_con: interner.intern("Html")?,
             length: interner.intern("Length")?,
@@ -4470,6 +4478,7 @@ impl<'a> Builder<'a> {
             BuiltinTag::UiAttribute | BuiltinTag::HtmlAttribute => self.builtins.attribute,
             BuiltinTag::UiElement => self.builtins.element,
             BuiltinTag::Cells => self.builtins.cells,
+            BuiltinTag::TuiAttr => self.builtins.tui_attr,
             BuiltinTag::CustomElement => self.builtins.custom_element,
             BuiltinTag::Html => self.builtins.html_con,
             BuiltinTag::UiLength => self.builtins.length,
@@ -5225,6 +5234,14 @@ impl<'a> Builder<'a> {
         let cells_t = |m: Ty| Ty::Con {
             module: Vec::new(),
             name: self.builtins.cells,
+            args: vec![m],
+        };
+        // `tui_attr(msg)` — the cell-native attribute type `Ipe.Tea.Tui.Ui.Attribute msg`.
+        // Distinct from the DOM `attr` above, so `Screen`-view builders never
+        // admit a DOM attribute.
+        let tui_attr = |m: Ty| Ty::Con {
+            module: Vec::new(),
+            name: self.builtins.tui_attr,
             args: vec![m],
         };
         // `custom_element(down, up)` — the empty-home JS-widget boundary handle
@@ -7244,16 +7261,25 @@ impl<'a> Builder<'a> {
             K::UiCellsNone => cells_t(var(0)),
             K::UiCellsText => fun(string(), cells_t(var(0))),
             K::UiCellsCells => fun(list(list(char())), cells_t(var(0))),
-            // `UiCells.el : List (Attribute msg) -> Cells msg -> Cells msg`
+            // `Tui.Ui.el : List (Attribute msg) -> Screen msg -> Screen msg`
+            // (the cell-native `tui_attr`, NOT the DOM `attr`).
             K::UiCellsEl => fun(
-                list(attr(var(0))),
+                list(tui_attr(var(0))),
                 fun(cells_t(var(0)), cells_t(var(0))),
             ),
-            // `UiCells.row/column : List (Attribute msg) -> List (Cells msg) -> Cells msg`
+            // `Tui.Ui.row/column : List (Attribute msg) -> List (Screen msg) -> Screen msg`
             K::UiCellsRow | K::UiCellsColumn => fun(
-                list(attr(var(0))),
+                list(tui_attr(var(0))),
                 fun(list(cells_t(var(0))), cells_t(var(0))),
             ),
+            // ── Ipe.Tea.Tui.Ui cell-native attribute builders ──
+            K::TuiUiSpacing | K::TuiUiPadding => fun(int(), tui_attr(var(0))),
+            K::TuiUiAlignLeft
+            | K::TuiUiAlignRight
+            | K::TuiUiCenter
+            | K::TuiUiBold
+            | K::TuiUiUnderline => tui_attr(var(0)),
+            K::TuiUiColor | K::TuiUiBg => fun(color(), tui_attr(var(0))),
             // `widget : CustomElement down up -> down -> (up -> msg) -> Element msg`
             // (msg = var(0), down = var(1), up = var(2)).
             K::UiWidget => fun(
@@ -10316,6 +10342,15 @@ mod registry_phase_c_tests {
             K::UiCellsRow,
             K::UiCellsColumn,
             K::UiCellsCells,
+            K::TuiUiSpacing,
+            K::TuiUiPadding,
+            K::TuiUiAlignLeft,
+            K::TuiUiAlignRight,
+            K::TuiUiCenter,
+            K::TuiUiBold,
+            K::TuiUiUnderline,
+            K::TuiUiColor,
+            K::TuiUiBg,
             K::UiWidget,
             // The container / tagged-element primitives (first-schemed — no
             // legacy). The layout / flow builders are pure Ipê over them.
