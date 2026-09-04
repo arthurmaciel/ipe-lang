@@ -1,0 +1,87 @@
+module Main exposing (main)
+
+-- | orientation-watch — `Ipe.Browser.Orientation.watch` end-to-end, with the
+-- consent gate satisfied.
+--
+-- Demonstrates the continuous deviceorientation stream: on start the app calls
+-- `Orientation.watch`, attaching a listener. Each event arrives as a typed
+-- `OrientationEvent` via the `readings` subscription and is rendered on screen.
+--
+-- `Ipe.Browser.Orientation` discloses `js-port:orientation` on import; the
+-- companion `js-port:raw` floor is also disclosed. Both are accepted in
+-- `package.ipe`.
+--
+-- A missing deviceorientation API arrives as `OrientationUnavailable` — a typed
+-- variant, never a thrown error or a silently dropped frame.
+
+
+import Ipe.Tea.Web as Web
+import Ipe.Tea.Web.Cmd as Cmd
+import Ipe.Tea.Web.Sub as Sub
+import Ipe.Ui as Ui
+import Ipe.Browser.Orientation as Orientation exposing (OrientationEvent(..))
+import Ipe.String as String
+
+
+type alias Model =
+    { status : String }
+
+
+type Msg
+    = GotReading Orientation.OrientationEvent
+
+
+init : WebReq -> ( Model, Cmd.Cmd Msg )
+init _req =
+    ( { status = "waiting for orientation…" }, Orientation.watch )
+
+
+update : Msg -> Model -> ( Model, Cmd.Cmd Msg )
+update msg model =
+    case msg of
+        GotReading event ->
+            ( { model | status = describeEvent event }, Cmd.none )
+
+
+describeEvent : Orientation.OrientationEvent -> String
+describeEvent event =
+    case event of
+        OrientationReading alpha beta gamma ->
+            "α=" ++ describeAngle alpha ++ " β=" ++ describeAngle beta ++ " γ=" ++ describeAngle gamma
+
+        OrientationUnavailable ->
+            "deviceorientation API unavailable in this browser"
+
+
+describeAngle : Maybe Float -> String
+describeAngle angle =
+    case angle of
+        Just v ->
+            String.fromFloat v
+
+        Nothing ->
+            "null"
+
+
+subscriptions : Model -> Sub.Sub Msg
+subscriptions _model =
+    Orientation.readings GotReading
+
+
+view : Model -> Element Msg
+view model =
+    Ui.column []
+        [ Ui.text "Device Orientation"
+        , Ui.text model.status
+        ]
+
+
+main =
+    Web.app
+        { init = init
+        , update = update
+        , view = view
+        , subscriptions = subscriptions
+        , routes = []
+        , notFound = GotReading OrientationUnavailable
+        }

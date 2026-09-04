@@ -1,0 +1,81 @@
+module Main exposing (main)
+
+-- | wake-lock — `Ipe.Browser.WakeLock` end-to-end, with the consent gate
+-- satisfied.
+--
+-- Demonstrates the Wake Lock API: clicking "Acquire" calls `WakeLock.acquire`
+-- (a Task) to hold the screen on; clicking "Release" calls `WakeLock.release`
+-- (fire-and-forget Cmd) to allow the device to sleep again.
+--
+-- `Ipe.Browser.WakeLock` discloses `js-port:wake-lock` on import; the companion
+-- `js-port:raw` floor is also disclosed. Both are accepted in `package.ipe`.
+--
+-- An absent or denied Wake Lock API resolves the Task with a typed `Err` — never
+-- a thrown error or a silently dropped frame.
+
+
+import Ipe.Tea.Web as Web
+import Ipe.Tea.Web.Cmd as Cmd
+import Ipe.Tea.Web.Sub as Sub
+import Ipe.Task as Task
+import Ipe.Ui as Ui
+import Ipe.Browser.WakeLock as WakeLock
+import Ipe.Error as Error exposing (Error)
+
+
+type alias Model =
+    { status : String }
+
+
+type Msg
+    = Acquire
+    | Release
+    | GotAcquire (Result Error ())
+
+
+init : WebReq -> ( Model, Cmd.Cmd Msg )
+init _req =
+    ( { status = "no wake lock" }, Cmd.none )
+
+
+update : Msg -> Model -> ( Model, Cmd.Cmd Msg )
+update msg model =
+    case msg of
+        Acquire ->
+            ( model, Task.attempt GotAcquire WakeLock.acquire )
+
+        Release ->
+            ( { model | status = "wake lock released" }, WakeLock.release )
+
+        GotAcquire result ->
+            case result of
+                Ok _ ->
+                    ( { model | status = "wake lock held" }, Cmd.none )
+
+                Err err ->
+                    ( { model | status = "error: " ++ Error.message err }, Cmd.none )
+
+
+subscriptions : Model -> Sub.Sub Msg
+subscriptions _model =
+    Sub.none
+
+
+view : Model -> Element Msg
+view model =
+    Ui.column []
+        [ Ui.button [] { onPress = Just Acquire, label = Ui.text "Acquire wake lock" }
+        , Ui.button [] { onPress = Just Release, label = Ui.text "Release wake lock" }
+        , Ui.text model.status
+        ]
+
+
+main =
+    Web.app
+        { init = init
+        , update = update
+        , view = view
+        , subscriptions = subscriptions
+        , routes = []
+        , notFound = Acquire
+        }
