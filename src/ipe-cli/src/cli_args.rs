@@ -15,7 +15,58 @@
 
 use crate::CliError;
 use crate::build_plan::{AllocatorChoice, StaticRequestLayer};
+use crate::delivery::{DeliveryError, DeliveryTokens, Shape};
 pub use ipe_backend_rust::static_build::StaticTriple;
+
+/// The delivery positionals a `build` / `run` / `watch` tail may carry after the
+/// optional entry path: an optional leading `[shape]` cross-check word and the
+/// `[runtime] [host] [target]` tail.
+///
+/// Constructed by [`take_delivery_positionals`], which splits a run of
+/// positional tokens into the (optional) leading shape word and the rest,
+/// parsing the rest into typed [`DeliveryTokens`] at this boundary — an
+/// out-of-grammar token is a [`DeliveryError`] here, never a silent drop.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct DeliveryPositionals {
+    /// The leading `[shape]` cross-check word, when one was written. Validated
+    /// against the compiler-pinned shape at resolution.
+    pub stated_shape: Option<Shape>,
+    /// The parsed `[runtime] [host] [target]` tail.
+    pub tokens: DeliveryTokens,
+}
+
+/// Split a run of positional tokens into the delivery positionals: an optional
+/// leading `[shape]` word, then the `[runtime] [host] [target]` tail.
+///
+/// A leading token that is a shape word (`web`/`tui`/`cli`/`server`/`script`) is
+/// the cross-check shape; any other leading token belongs to the tail (a
+/// runtime/host/target), so a bare `ipe build spa` and a bare `ipe build web`
+/// both parse. The tail is parsed by [`DeliveryTokens::parse`].
+///
+/// # Errors
+/// [`DeliveryError`] surfaced as a [`CliError::UsageOwned`] when a tail token is
+/// neither `spa`, a host, nor a plausible target (e.g. the `live` word).
+fn take_delivery_positionals(
+    positionals: &[String],
+    command: &str,
+) -> Result<DeliveryPositionals, CliError> {
+    let (stated_shape, tail) = match positionals.split_first() {
+        Some((first, rest)) if Shape::from_word(first).is_some() => (Shape::from_word(first), rest),
+        _ => (None, positionals),
+    };
+    let tokens = DeliveryTokens::parse(tail).map_err(|e| delivery_usage(command, &e))?;
+    Ok(DeliveryPositionals {
+        stated_shape,
+        tokens,
+    })
+}
+
+/// Render a [`DeliveryError`] as a `ipe <command>:` usage error — the delivery
+/// refusals are pedagogical lessons, carried verbatim behind the command prefix.
+#[must_use]
+fn delivery_usage(command: &str, err: &DeliveryError) -> CliError {
+    CliError::UsageOwned(format!("ipe {command}: {err}"))
+}
 
 /// The one phrasing for "a command was given a flag it does not recognise".
 ///
@@ -282,6 +333,49 @@ fn take_leading_entry(
     }
 }
 
+/// `true` when `token` is a delivery word — a shape (`web`/`tui`/…), the `spa`
+/// runtime, the never-written `live`, or a host (`desktop`/`ios`/`android`).
+/// Used to tell a leading entry-path positional from a leading delivery word so
+/// `ipe build web` (a delivery) and `ipe build src/Main.ipe` (an entry) both
+/// parse. A target triple is deliberately excluded: a leading bare triple with
+/// no preceding shape word is meaningless, so it stays an entry-path candidate
+/// and the delivery parse rejects it in tail position if it slips through.
+fn is_delivery_word(token: &str) -> bool {
+    Shape::from_word(token).is_some()
+        || token == "spa"
+        || token == "live"
+        || crate::delivery::Host::from_word(token).is_some()
+}
+
+/// Take the leading positional entry only when it is a genuine entry path — not
+/// a delivery word. `ipe build web desktop` leaves the entry unset (the project
+/// default) and hands `web desktop` to the delivery parse; `ipe build
+/// src/Main.ipe web` consumes the path, then hands `web` to delivery.
+fn take_leading_entry_path(
+    it: &mut std::iter::Peekable<std::slice::Iter<'_, String>>,
+) -> Option<String> {
+    match it.peek() {
+        Some(first) if !first.starts_with('-') && !is_delivery_word(first) => it.next().cloned(),
+        _ => None,
+    }
+}
+
+/// Collect the trailing positional run — every remaining non-flag token — for
+/// the delivery grammar. Stops at the first flag; a flag interleaved after a
+/// positional is still the caller's to parse (the caller loops on the same
+/// iterator). Returns the collected words in order.
+fn take_delivery_words(it: &mut std::iter::Peekable<std::slice::Iter<'_, String>>) -> Vec<String> {
+    let mut words = Vec::new();
+    while let Some(next) = it.peek() {
+        if next.starts_with('-') {
+            break;
+        }
+        words.push((*next).clone());
+        it.next();
+    }
+    words
+}
+
 /// The static-request flags shared by `build` and `run`, parsed into a typed
 /// layer. Each value flag is rejected on a second occurrence; the boolean flags
 /// are idempotent (a repeat is harmless and stays accepted).
@@ -382,6 +476,9 @@ pub enum BuildMode {
 pub struct BuildArgs {
     /// The positional entry (`None` → project-aware default).
     pub entry: Option<String>,
+    /// The delivery positionals (`[shape] [runtime] [host]`) that follow the
+    /// entry — the shape cross-check and the web runtime/host selection.
+    pub delivery: DeliveryPositionals,
     /// `--runtime <dir>` — vendor the runtime from here.
     pub runtime: Option<String>,
     /// `--fix` — apply machine-applicable fixes before building.
@@ -419,7 +516,8 @@ pub struct BuildArgs {
 #[allow(clippy::too_many_lines)] // one linear flag loop + the emit-compose rejection gate
 pub fn parse_build(rest: &[String]) -> Result<BuildArgs, CliError> {
     let mut it = rest.iter().peekable();
-    let entry = take_leading_entry(&mut it);
+    let entry = take_leading_entry_path(&mut it);
+    let delivery = take_delivery_positionals(&take_delivery_words(&mut it), "build")?;
 
     let mut out: Option<String> = None;
     let mut runtime: Option<String> = None;
@@ -525,6 +623,7 @@ pub fn parse_build(rest: &[String]) -> Result<BuildArgs, CliError> {
 
     Ok(BuildArgs {
         entry,
+        delivery,
         runtime,
         fix,
         accept_risks,
@@ -539,6 +638,9 @@ pub fn parse_build(rest: &[String]) -> Result<BuildArgs, CliError> {
 pub struct RunArgs {
     /// The positional entry (`None` → project-aware default).
     pub entry: Option<String>,
+    /// The delivery positionals (`[shape] [runtime] [host]`) that follow the
+    /// entry.
+    pub delivery: DeliveryPositionals,
     /// `--out <dir>`.
     pub out: Option<String>,
     /// `--runtime <dir>`.
@@ -585,7 +687,8 @@ pub fn parse_run(rest: &[String]) -> Result<RunArgs, CliError> {
     );
 
     let mut it = ipe_args.iter().peekable();
-    let entry = take_leading_entry(&mut it);
+    let entry = take_leading_entry_path(&mut it);
+    let delivery = take_delivery_positionals(&take_delivery_words(&mut it), "run")?;
 
     let mut out: Option<String> = None;
     let mut runtime: Option<String> = None;
@@ -632,6 +735,7 @@ pub fn parse_run(rest: &[String]) -> Result<RunArgs, CliError> {
 
     Ok(RunArgs {
         entry,
+        delivery,
         out,
         runtime,
         static_layer: static_flags.layer(),
@@ -863,6 +967,9 @@ pub fn parse_release(rest: &[String]) -> Result<ReleaseArgs, CliError> {
 pub struct WatchArgs {
     /// The positional entry (`None` → project-aware default).
     pub entry: Option<String>,
+    /// The delivery positionals (`[shape] [runtime] [host]`) that follow the
+    /// entry.
+    pub delivery: DeliveryPositionals,
     /// `--out <dir>`.
     pub out: Option<String>,
     /// `--runtime <dir>`.
@@ -884,7 +991,8 @@ pub struct WatchArgs {
 /// [`CliError::Usage`] / [`CliError::UsageOwned`] naming the exact problem.
 pub fn parse_watch(rest: &[String]) -> Result<WatchArgs, CliError> {
     let mut it = rest.iter().peekable();
-    let entry = take_leading_entry(&mut it);
+    let entry = take_leading_entry_path(&mut it);
+    let delivery = take_delivery_positionals(&take_delivery_words(&mut it), "watch")?;
 
     let mut out: Option<String> = None;
     let mut runtime: Option<String> = None;
@@ -922,6 +1030,7 @@ pub fn parse_watch(rest: &[String]) -> Result<WatchArgs, CliError> {
 
     Ok(WatchArgs {
         entry,
+        delivery,
         out,
         runtime,
         port: port.unwrap_or(8000),
@@ -1155,6 +1264,66 @@ mod tests {
 
     fn s(v: &[&str]) -> Vec<String> {
         v.iter().map(|x| (*x).to_owned()).collect()
+    }
+
+    // ---- delivery positionals ----------------------------------------------
+
+    #[test]
+    fn build_leading_shape_word_is_delivery_not_entry() {
+        // `ipe build web` is a delivery shape cross-check, not an entry file.
+        let a = parse_build(&s(&["web"])).expect("web");
+        assert!(a.entry.is_none());
+        assert_eq!(a.delivery.stated_shape, Some(Shape::Web));
+    }
+
+    #[test]
+    fn build_entry_path_then_delivery() {
+        let a = parse_build(&s(&["src/Main.ipe", "web", "desktop"])).expect("entry+delivery");
+        assert_eq!(a.entry.as_deref(), Some("src/Main.ipe"));
+        assert_eq!(a.delivery.stated_shape, Some(Shape::Web));
+        assert_eq!(a.delivery.tokens.host, crate::delivery::Host::Desktop);
+    }
+
+    #[test]
+    fn build_web_spa_host_parses() {
+        let a = parse_build(&s(&["web", "spa", "ios"])).expect("web spa ios");
+        assert_eq!(a.delivery.stated_shape, Some(Shape::Web));
+        assert_eq!(
+            a.delivery.tokens.runtime,
+            Some(crate::delivery::Runtime::Spa)
+        );
+        assert_eq!(a.delivery.tokens.host, crate::delivery::Host::Ios);
+    }
+
+    #[test]
+    fn build_live_word_is_a_pedagogical_refusal() {
+        match parse_build(&s(&["web", "live"])) {
+            Err(CliError::UsageOwned(m)) => assert!(m.contains("live"), "got: {m}"),
+            _ => panic!("`live` must be refused as a word"),
+        }
+    }
+
+    #[test]
+    fn build_no_delivery_positionals_is_empty() {
+        let a = parse_build(&[]).expect("empty");
+        assert_eq!(a.delivery, DeliveryPositionals::default());
+    }
+
+    #[test]
+    fn run_and_watch_take_delivery_positionals() {
+        let r = parse_run(&s(&["web", "desktop"])).expect("run web desktop");
+        assert_eq!(r.delivery.stated_shape, Some(Shape::Web));
+        assert_eq!(r.delivery.tokens.host, crate::delivery::Host::Desktop);
+        let w = parse_watch(&s(&["tui"])).expect("watch tui");
+        assert_eq!(w.delivery.stated_shape, Some(Shape::Tui));
+    }
+
+    #[test]
+    fn run_delivery_before_dash_dash_only() {
+        // Positionals after `--` are the binary's, never delivery words.
+        let r = parse_run(&s(&["web", "--", "spa"])).expect("run");
+        assert_eq!(r.delivery.stated_shape, Some(Shape::Web));
+        assert_eq!(r.bin_args, s(&["spa"]));
     }
 
     #[test]

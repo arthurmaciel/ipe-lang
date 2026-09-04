@@ -74,6 +74,22 @@ impl Shape {
     pub const fn is_terminal(self) -> bool {
         matches!(self, Self::Tui | Self::Cli)
     }
+
+    /// The delivery shape a compiler-classified `main` pins. The compiler is the
+    /// single source of truth for the shape (spec § 0); this maps its
+    /// [`ipe_canon::shape_source::MainShape`] onto the delivery vocabulary so the
+    /// grammar cross-check and the packager routing speak the same words.
+    #[must_use]
+    pub const fn from_main(shape: ipe_canon::shape_source::MainShape) -> Self {
+        use ipe_canon::shape_source::MainShape;
+        match shape {
+            MainShape::Script => Self::Script,
+            MainShape::Tui => Self::Tui,
+            MainShape::Cli => Self::Cli,
+            MainShape::Server => Self::Server,
+            MainShape::Web => Self::Web,
+        }
+    }
 }
 
 /// The Web-shape runtime (spec § 2). Only `web` has a runtime choice; every
@@ -246,6 +262,37 @@ impl Delivery {
             host,
         })
     }
+
+    /// Resolve a delivery from the compiler-pinned shape and the parsed CLI
+    /// tail, applying the `[shape]` cross-check and the `--static` gate.
+    ///
+    /// `pinned` is the shape the compiler derived from `main` (the single source
+    /// of truth). `stated` is the optional leading `[shape]` positional: when
+    /// present it must name the same shape as `pinned`, else the
+    /// [`DeliveryError::ShapeMismatch`] lesson. `tokens` carries the parsed
+    /// `[runtime] [host]`; `wants_static` is the `--static` request, refused for
+    /// a delivery that has no static musl form.
+    ///
+    /// # Errors
+    /// [`DeliveryError`] for a shape mismatch, an invalid runtime/host
+    /// combination, or a `--static` request the delivery cannot honour.
+    pub fn resolve_checked(
+        pinned: Shape,
+        stated: Option<Shape>,
+        tokens: &DeliveryTokens,
+        wants_static: bool,
+    ) -> Result<Self, DeliveryError> {
+        if let Some(stated) = stated
+            && stated != pinned
+        {
+            return Err(DeliveryError::ShapeMismatch { stated, pinned });
+        }
+        let delivery = Self::resolve(pinned, tokens.runtime, tokens.host)?;
+        if wants_static && !delivery.allows_static() {
+            return Err(DeliveryError::StaticNotAllowed { delivery });
+        }
+        Ok(delivery)
+    }
 }
 
 impl fmt::Display for Delivery {
@@ -364,7 +411,10 @@ impl DeliveryTokens {
 /// that separates a target positional from a mistyped runtime/host word; the
 /// static/packager layers validate the exact triple against their curated sets.
 fn looks_like_target(tok: &str) -> bool {
-    tok.contains('-') && tok.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    tok.contains('-')
+        && tok
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
 }
 
 impl fmt::Display for DeliveryError {
@@ -450,7 +500,10 @@ mod tests {
         assert_eq!(d.runtime(), Some(Runtime::Live));
         assert_eq!(d.host(), Host::Default);
         assert!(!d.is_webview_native());
-        assert!(d.allows_static(), "served live is a co-located static target");
+        assert!(
+            d.allows_static(),
+            "served live is a co-located static target"
+        );
         assert_eq!(d.to_string(), "web");
     }
 
