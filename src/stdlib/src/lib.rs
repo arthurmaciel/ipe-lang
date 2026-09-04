@@ -850,6 +850,22 @@ const IPE_BROWSER_SPEECH: &str = include_str!("../Ipe/Browser/Speech.ipe");
 /// `STDLIB_MODULE_QUALIFIERS`.
 const IPE_BROWSER_SPEECH_INTERNALS: &str = include_str!("../Ipe/Browser/Speech/Internals.ipe");
 
+/// `Ipe.Browser.Permission` — one-shot query and continuous state-change stream
+/// over `navigator.permissions.query({ name })` (compiled source). Importing it
+/// discloses `js-port:permission`; only the top-level app's `[capabilities]
+/// accepts` set can grant it. Registered in [`COMPILED_STD_MODULES`] (NOT
+/// `MODULES`); NOT in `STDLIB_MODULE_QUALIFIERS`.
+const IPE_BROWSER_PERMISSION: &str = include_str!("../Ipe/Browser/Permission.ipe");
+
+/// `Ipe.Browser.Permission.Internals` — the low-level Permissions API port
+/// surface: the closed outbound/inbound ADTs and the raw `Ipe.Ffi.Js` wiring
+/// the high-level layer wraps. Importing it discloses the same
+/// `js-port:permission` axis (the prefix key covers the submodule). Registered
+/// in [`COMPILED_STD_MODULES`] (NOT `MODULES`); NOT in
+/// `STDLIB_MODULE_QUALIFIERS`.
+const IPE_BROWSER_PERMISSION_INTERNALS: &str =
+    include_str!("../Ipe/Browser/Permission/Internals.ipe");
+
 /// `Ipe.Env` — build-time-embedded public config (compiled source).
 ///
 /// Defines `public : String -> Maybe String`, routed through the
@@ -1392,6 +1408,14 @@ pub const COMPILED_STD_MODULES: &[CompiledStdModule] = &[
     CompiledStdModule {
         dotted: "Ipe.Browser.Speech.Internals",
         source: IPE_BROWSER_SPEECH_INTERNALS,
+    },
+    CompiledStdModule {
+        dotted: "Ipe.Browser.Permission",
+        source: IPE_BROWSER_PERMISSION,
+    },
+    CompiledStdModule {
+        dotted: "Ipe.Browser.Permission.Internals",
+        source: IPE_BROWSER_PERMISSION_INTERNALS,
     },
     CompiledStdModule {
         dotted: "Ipe.Env",

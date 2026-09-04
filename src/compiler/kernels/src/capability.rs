@@ -139,6 +139,10 @@ pub enum WebCapability {
     /// rate, pitch, and volume options, plus queue control (`speechSynthesis.cancel`).
     /// SpeechRecognition is deliberately excluded (experimental).
     Speech,
+    /// `navigator.permissions.query({ name })` — the Permissions API state for a
+    /// named browser capability: `"granted"` / `"denied"` / `"prompt"`. Covers
+    /// one-shot queries and the `PermissionStatus.onchange` continuous state stream.
+    Permission,
 }
 
 impl WebCapability {
@@ -158,6 +162,7 @@ impl WebCapability {
         Self::Microphone,
         Self::Raw,
         Self::Speech,
+        Self::Permission,
     ];
 
     /// The stable lowercase wire suffix, the half after `js-port:` in the wire
@@ -178,6 +183,7 @@ impl WebCapability {
             Self::Microphone => "microphone",
             Self::Raw => "raw",
             Self::Speech => "speech",
+            Self::Permission => "permission",
         }
     }
 
@@ -208,6 +214,7 @@ impl WebCapability {
             ["Ipe", "Browser", "Camera", ..] => Some(Self::Camera),
             ["Ipe", "Browser", "Microphone", ..] => Some(Self::Microphone),
             ["Ipe", "Browser", "Speech", ..] => Some(Self::Speech),
+            ["Ipe", "Browser", "Permission", ..] => Some(Self::Permission),
             _ => None,
         }
     }
@@ -250,6 +257,10 @@ impl WebCapability {
                  with voice, rate, pitch, and volume options, and queue control via \
                  speechSynthesis.cancel."
             }
+            Self::Permission => {
+                "Querying and watching browser permission state via \
+                 navigator.permissions.query({ name }) and PermissionStatus.onchange."
+            }
         }
     }
 
@@ -271,6 +282,7 @@ impl WebCapability {
             "microphone" => Ok(Self::Microphone),
             "raw" => Ok(Self::Raw),
             "speech" => Ok(Self::Speech),
+            "permission" => Ok(Self::Permission),
             _ => Err(UnknownCapability(full.to_owned())),
         }
     }
@@ -296,6 +308,7 @@ impl WebCapability {
             Self::Microphone => "Microphone",
             Self::Raw => "Raw",
             Self::Speech => "Speech",
+            Self::Permission => "Permission",
         }
     }
 
@@ -407,6 +420,7 @@ impl Capability {
         Self::JsPort(WebCapability::Microphone),
         Self::JsPort(WebCapability::Raw),
         Self::JsPort(WebCapability::Speech),
+        Self::JsPort(WebCapability::Permission),
     ];
 
     /// Whether this capability carries no OS-isolatable resource surface — the
@@ -456,6 +470,7 @@ impl Capability {
                 WebCapability::Microphone => "js-port:microphone",
                 WebCapability::Raw => "js-port:raw",
                 WebCapability::Speech => "js-port:speech",
+                WebCapability::Permission => "js-port:permission",
             },
         }
     }
@@ -507,7 +522,7 @@ impl std::fmt::Display for UnknownCapability {
              database, env, subprocess, clock, random, native-ffi, ffi-raw, unsafe, \
              custom-element, js-port:<axis> where <axis> is one of geolocation, \
              clipboard, notification, storage, vibration, share, battery, \
-             network-info, file, camera, microphone, raw, speech)",
+             network-info, file, camera, microphone, raw, speech, permission)",
             self.0
         )
     }
