@@ -400,7 +400,7 @@ struct Builtins {
     #[allow(dead_code)]
     live_f_not_found: Symbol,
     // ── Tui cfg record field name symbols ─────────────────────────────────────
-    /// `"onKey"` — the onKey field of the `Terminal.appScreen` config record.
+    /// `"onKey"` — the onKey field of the `Tui.app` config record.
     /// Typed `{ kind : String, value : String } -> msg`; the backend bridges the
     /// record handler onto the runtime bound `FOnKey: Fn(String, String) -> Msg`.
     tui_f_on_key: Symbol,
@@ -418,7 +418,7 @@ struct Builtins {
     /// Typed as `(Int, Int)` — width × height in logical pixels.
     webview_f_size: Symbol,
     // ── Cli cfg record field name symbols ──────────────────────────────
-    /// `"onLine"` — the onLine field of the `Terminal.appLines` config record.
+    /// `"onLine"` — the onLine field of the `Cli.app` config record.
     /// Typed as `String -> Msg` — called once per stdin line.
     cli_f_on_line: Symbol,
     // ── Ui.button cfg record field name symbols ───────────────────────────────
@@ -772,10 +772,10 @@ struct Builtins {
     /// `"WebViewApp"` — opaque app handle returned by `WebView.app`. Nullary;
     /// backed by `ipe_runtime::tea::WebViewApp`.
     webview_app: Symbol,
-    /// `"TuiApp"` — opaque app handle returned by `Terminal.appScreen`. Nullary;
+    /// `"TuiApp"` — opaque app handle returned by `Tui.app`. Nullary;
     /// backed by `ipe_runtime::tea::TuiApp`.
     tui_app: Symbol,
-    /// `"CliApp"` — opaque app handle returned by `Terminal.appLines`. Nullary;
+    /// `"CliApp"` — opaque app handle returned by `Cli.app`. Nullary;
     /// backed by `ipe_runtime::tea::CliApp`.
     cli_app: Symbol,
     /// The interned module segments `["Ipe", "Db", "Store"]` — the real home of
@@ -7018,7 +7018,7 @@ impl<'a> Builder<'a> {
             K::WebRoute => fun(string(), fun(var(1), live_route(var(0)))),
             K::WebRenderStatic => fun(fun(var(0), html_t(var(1))), fun(var(0), task_unit())),
 
-            // ── Ipe.Terminal full-screen app-entry (`appScreen`) ────────────────
+            // ── Ipe.Terminal full-screen app-entry (`Tui.app`) ────────────────
             //
             // `view : Model -> Cells Msg`, driven by `onKey`. `onKey` is
             // REQUIRED because the runtime's `tui_app_ui` entry takes a concrete
@@ -7063,8 +7063,8 @@ impl<'a> Builder<'a> {
                 fun(cfg_rec, tui_app_leaf())
             }
 
-            // ── Ipe.Terminal line-oriented app-entry (`appLines`) ───────────────
-            // `Terminal.appLines : { init : () -> (model, Cmd msg)
+            // ── Ipe.Terminal line-oriented app-entry (`Cli.app`) ───────────────
+            // `Cli.app : { init : () -> (model, Cmd msg)
             //                      , update : msg -> model -> (model, Cmd msg)
             //                      , view : model -> String
             //                      , subscriptions : model -> Sub msg
@@ -7082,7 +7082,7 @@ impl<'a> Builder<'a> {
                         m.insert(self.builtins.cli_f_on_line, fun(string(), var(1)));
                         m
                     },
-                    // Closed cfg record — like `appScreen` / `WebView.app`, the
+                    // Closed cfg record — like `Tui.app` / `WebView.app`, the
                     // line cfg takes exactly its named fields (the open
                     // row is a `Web.app`-only surface).
                     RowTail::Closed,
@@ -11319,7 +11319,7 @@ mod registry_phase_c_tests {
         //
         // The closed-record / open-row families via the `Record` node: the
         // app-entry cfg records (`Web.app` open-row, `WebView.app` /
-        // `Terminal.appScreen` open-row / `Terminal.appLines`), `HttpRequest` /
+        // `Tui.app` open-row / `Cli.app`), `HttpRequest` /
         // `HttpResponse` / server `Response`, `Migration`, `Csv` / `CacheCfg` /
         // `CacheStats` / `WebSocketCfg` / `EmailMessage` (+ nested attachment),
         // `RetryPolicy` (incl. the `Error`-channel `retryWith`), the

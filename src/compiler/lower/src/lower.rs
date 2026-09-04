@@ -10776,9 +10776,9 @@ struct KernelUsage {
     principal: bool,
     /// Any Ipe.Web kernel.
     web: bool,
-    /// Any Ipe.Tui kernel (`Terminal.appScreen`).
+    /// Any Ipe.Tui kernel (`Tui.app`).
     tui: bool,
-    /// Any Ipe.Console kernel (`Terminal.appLines`).
+    /// Any Ipe.Console kernel (`Cli.app`).
     console: bool,
     /// Any Ipe.WebView kernel.
     webview: bool,
@@ -17368,7 +17368,7 @@ impl<'a> Lowerer<'a> {
     /// `WebApp` / `WebViewApp` / `TuiApp` / `CliApp`?
     ///
     /// Each leaf is produced only by a shape kernel (`Web.app`,
-    /// `Terminal.appScreen`, …) with the empty home, so the runtime-`IrType`
+    /// `Tui.app`, …) with the empty home, so the runtime-`IrType`
     /// mapping keys on the empty home alone. These names are NOT reserved, so a
     /// user `type WebApp = …` is legal and is keyed in `enum_variants` under its
     /// own home; the empty-home guard lets that user union fall through and win,
@@ -21879,7 +21879,7 @@ impl<'a> Lowerer<'a> {
                 // type are likewise exempt: the backend will register them from the
                 // function signature.
                 //
-                // App-entry cfg records (Web.app / Terminal.appScreen / …) are
+                // App-entry cfg records (Web.app / Tui.app / …) are
                 // exempt by construction: they are lowered through
                 // `lower_app_cfg_record`, which intentionally bypasses this arm.
                 if let Some(rec_ty) = self.region_ty(e.span)
@@ -22686,7 +22686,7 @@ impl<'a> Lowerer<'a> {
                         }));
                     }
                 }
-                // ── Terminal.appScreen / WebView.app / Terminal.appLines cfg
+                // ── Tui.app / WebView.app / Cli.app cfg
                 //    literal (L0107 exemption) ──
                 //
                 // Same pattern as `Web.app`: intercept the single cfg-record arg
@@ -22696,9 +22696,9 @@ impl<'a> Lowerer<'a> {
                 //   value (no functions); `lower_app_entry_cfg` additionally
                 //   requires that record — and its `size` tuple — to be inline
                 //   literals (the G4 emit gates).
-                // Terminal.appLines — 5-field cfg (init/update/view/
+                // Cli.app — 5-field cfg (init/update/view/
                 //   subscriptions/onLine), all function-typed; without this arm
-                //   every real `appLines` call would trip IPE-L0107 and the
+                //   every real `Cli.app` call would trip IPE-L0107 and the
                 //   emit_console path could never fire.
                 // A non-literal cfg (let-bound, piped, etc.) is rejected here with
                 // IPE-L0119 at the argument span — fail-closed, never an ICE.
@@ -26301,11 +26301,11 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::WebEmbed
                 // `Web.appRouted : WebAppCfg model msg -> WebApp`
                 | KernelFn::WebAppRouted
-                // `Terminal.appScreen : TerminalCfg model msg -> TuiApp`
+                // `Tui.app : TerminalCfg model msg -> TuiApp`
                 | KernelFn::TerminalAppScreen
                 // `WebView.app : WebViewCfg model msg -> WebViewApp`
                 | KernelFn::WebViewApp
-                // `Terminal.appLines : TerminalCfg model msg -> CliApp`
+                // `Cli.app : TerminalCfg model msg -> CliApp`
                 | KernelFn::TerminalAppLines
                 // ── runtime-config front door — arity 1 ──────────────────
                 // `App.fromEnv : String -> Secret`
@@ -28046,9 +28046,9 @@ impl<'a> Lowerer<'a> {
                     ("Web", "route") => Ok(Callee::Kernel(KernelFn::WebRoute)),
                     // `Ipe.Html.renderStatic` — shape-neutral static-render bridge.
                     ("Html", "renderStatic") => Ok(Callee::Kernel(KernelFn::WebRenderStatic)),
-                    // ── Ipe.Terminal app-entry kernels ────────────────────
-                    ("Terminal", "appScreen") => Ok(Callee::Kernel(KernelFn::TerminalAppScreen)),
-                    ("Terminal", "appLines") => Ok(Callee::Kernel(KernelFn::TerminalAppLines)),
+                    // ── Ipe.Tui / Ipe.Cli app-entry kernels ───────────────
+                    ("Tui", "app") => Ok(Callee::Kernel(KernelFn::TerminalAppScreen)),
+                    ("Cli", "app") => Ok(Callee::Kernel(KernelFn::TerminalAppLines)),
                     // ── Ipe.WebView app-entry kernel ──────────────────────
                     ("WebView", "app") => Ok(Callee::Kernel(KernelFn::WebViewApp)),
                     // ── Ipe.Web settings-carrying entry + runtime-config ──
