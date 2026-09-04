@@ -194,6 +194,7 @@ fn emit_spine_file_memoized_coarse_floor() {
         false,
         String::new(),
         false,
+        false,
     );
 
     let spine = ipe_db::emit_spine_file(&db, root, main, config).expect("spine must render");
@@ -254,6 +255,7 @@ fn emit_rust_file_memoized_per_file() {
         None,
         false,
         String::new(),
+        false,
         false,
     );
 
@@ -367,6 +369,7 @@ fn emit_manifest_matches_emit_project_for_single_module() {
         false,
         String::new(),
         false,
+        false,
     );
 
     let via_project =
@@ -407,6 +410,7 @@ fn emit_manifest_matches_emit_project_for_two_modules() {
         None,
         false,
         String::new(),
+        false,
         false,
     );
 

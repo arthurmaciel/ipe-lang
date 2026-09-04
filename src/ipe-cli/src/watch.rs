@@ -1148,6 +1148,9 @@ fn run_inner(
                         false,
                         resolved.cargo_name.clone(),
                         crate::hot_appearance_enabled(),
+                        // `ipe watch` reloads the served-live web app; the
+                        // webview-native desktop delivery is not a watch target.
+                        false,
                     );
                     config = Some(cfg);
                     cfg
