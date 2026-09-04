@@ -2378,10 +2378,16 @@ fn ty_to_string(t: &TyDoc) -> String {
         TyDoc::Unit => "()".to_string(),
         TyDoc::Var(v) => v.to_string(),
         TyDoc::Con { module, name, args } => {
-            let head = if module.is_empty() {
-                name.to_string()
-            } else {
-                format!("{module}.{name}")
+            // The terminal view surfaces intern their attribute types under
+            // internal spellings (`TuiAttr` / `CliAttr`) that keep them distinct
+            // from the DOM `Attribute`, but the author only ever writes the
+            // module-qualified `Attribute`. Render the user-facing name so a
+            // mismatch points at the type they can name, not the internal one.
+            let head = match name.as_ref() {
+                "TuiAttr" => "Tui.Ui.Attribute".to_string(),
+                "CliAttr" => "Cli.Ui.Attribute".to_string(),
+                _ if module.is_empty() => name.to_string(),
+                _ => format!("{module}.{name}"),
             };
             if args.is_empty() {
                 head
@@ -2438,6 +2444,14 @@ mod tests {
             name: name.into(),
             args: Box::new([]),
         }
+    }
+
+    #[test]
+    fn terminal_attribute_types_render_user_facing_name() {
+        assert_eq!(render_ty(&con("TuiAttr")), "Tui.Ui.Attribute");
+        assert_eq!(render_ty(&con("CliAttr")), "Cli.Ui.Attribute");
+        // A plain con with an empty module still renders bare.
+        assert_eq!(render_ty(&con("Int")), "Int");
     }
 
     #[test]
