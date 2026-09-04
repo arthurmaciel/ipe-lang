@@ -105,20 +105,6 @@ impl InitShape {
         }
     }
 
-    /// The shape a compiler-classified `main` pins — the single source of truth
-    /// for the shape of an *existing* project (spec § 0). Used by the re-run
-    /// contract to detect a stated-shape conflict against the code on disk.
-    const fn from_main(shape: ipe_canon::shape_source::MainShape) -> Self {
-        use ipe_canon::shape_source::MainShape;
-        match shape {
-            MainShape::Web => Self::Web,
-            MainShape::Tui => Self::Tui,
-            MainShape::Cli => Self::Cli,
-            MainShape::Server => Self::Server,
-            MainShape::Script => Self::Script,
-        }
-    }
-
     /// Whether this shape carries a runtime choice. Only `web` is placed on both
     /// effect-locality columns (live vs spa); every other shape has one runtime,
     /// so a `runtime` positional on it is a conflict (spec § 0, § 2).
@@ -335,9 +321,18 @@ fn guard_rerun_conflict(
     Ok(())
 }
 
-/// The shape an existing project's `src/Main.ipe` pins, or `None` when the
-/// directory holds no readable/parseable entry (a fresh or half-formed target,
-/// which the fresh/reconcile split handles without a conflict).
+/// The shape an existing project's `src/Main.ipe` *confidently* pins, or `None`
+/// when the entry is absent, unparseable, or not confidently classifiable.
+///
+/// The four rendering shapes (`web`/`tui`/`cli`/`server`) are pinned only by a
+/// qualified entry head (`Web.app`/`Tui.app`/…), so classifying to one of them is
+/// confident. The classifier collapses both a genuine `Task Error ()` script and
+/// an un-pinnable head into [`ipe_canon::shape_source::MainShape::Script`], so a
+/// `Script` result is ambiguous — refusing on it would risk a false conflict
+/// against a project the classifier merely could not read. Soundness direction
+/// (spec § 5): the re-run guard over-permits toward *reconcile* rather than refuse
+/// a project that is not confidently a different shape; the only cost of a missed
+/// conflict is a reconcile that leaves every present file untouched anyway.
 fn existing_project_shape(target_dir: &Path) -> Result<Option<InitShape>, CliError> {
     let entry = target_dir.join("src").join("Main.ipe");
     let source = match std::fs::read_to_string(&entry) {
@@ -357,7 +352,22 @@ fn existing_project_shape(target_dir: &Path) -> Result<Option<InitShape>, CliErr
         return Ok(None);
     };
     let shape = ipe_canon::shape_source::classify_main_shape(&module, &interner);
-    Ok(Some(InitShape::from_main(shape)))
+    Ok(confidently_pinned_shape(shape))
+}
+
+/// Map a classified `main` shape onto the confidently-pinned [`InitShape`], or
+/// `None` for the ambiguous `Script` fallback (a real script *or* an un-pinnable
+/// head). Only a qualified rendering-entry head yields one of the four confident
+/// shapes.
+const fn confidently_pinned_shape(shape: ipe_canon::shape_source::MainShape) -> Option<InitShape> {
+    use ipe_canon::shape_source::MainShape;
+    match shape {
+        MainShape::Web => Some(InitShape::Web),
+        MainShape::Tui => Some(InitShape::Tui),
+        MainShape::Cli => Some(InitShape::Cli),
+        MainShape::Server => Some(InitShape::Server),
+        MainShape::Script => None,
+    }
 }
 
 /// Parse raw `init` arguments into [`InitArgs`].
@@ -1037,42 +1047,76 @@ mod tests {
     }
 
     #[test]
-    fn existing_project_shape_is_classified_from_main() {
+    fn existing_project_shape_confidently_classifies_a_qualified_head() {
         let root = std::env::temp_dir().join("ipe_init_existing_shape");
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(root.join("src")).expect("mkdir src");
+        // A qualified `Tui.app` head pins the tui shape confidently.
         std::fs::write(
             root.join("src").join("Main.ipe"),
-            "module Main exposing (main)\n\nmain : Task Error ()\nmain =\n    Task.succeed ()\n",
+            "module Main exposing (main)\n\nmain =\n    Tui.app config\n",
         )
-        .expect("write script Main.ipe");
+        .expect("write tui Main.ipe");
         assert_eq!(
             existing_project_shape(&root).expect("classify"),
-            Some(InitShape::Script)
+            Some(InitShape::Tui)
         );
         let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
-    fn rerun_refuses_conflicting_shape() {
+    fn existing_project_shape_is_ambiguous_for_a_script_or_unpinnable_head() {
+        let root = std::env::temp_dir().join("ipe_init_ambiguous_shape");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("src")).expect("mkdir src");
+        // A bare (unqualified) entry head collapses to the ambiguous `Script`
+        // fallback, which the guard treats as "not confidently classified".
+        std::fs::write(
+            root.join("src").join("Main.ipe"),
+            "module Main exposing (main)\n\nmain =\n    app config\n",
+        )
+        .expect("write unpinnable Main.ipe");
+        assert_eq!(existing_project_shape(&root).expect("classify"), None);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn rerun_refuses_a_confidently_conflicting_shape() {
         let root = std::env::temp_dir().join("ipe_init_rerun_conflict");
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(root.join("src")).expect("mkdir src");
+        // The project confidently pins `tui`; asking to re-init as `web` conflicts.
         std::fs::write(
             root.join("src").join("Main.ipe"),
-            "module Main exposing (main)\n\nmain : Task Error ()\nmain =\n    Task.succeed ()\n",
+            "module Main exposing (main)\n\nmain =\n    Tui.app config\n",
         )
-        .expect("write script Main.ipe");
-        // The project is a `script`; asking to re-init as `web` conflicts.
+        .expect("write tui Main.ipe");
         let err = guard_rerun_conflict(&root, InitShape::Web, Some(InitShape::Web), None)
-            .expect_err("web re-init on a script project is refused");
+            .expect_err("web re-init on a tui project is refused");
         let msg = format!("{err:?}");
         assert!(msg.contains("already holds"), "names the conflict: {msg}");
         // A matching (or absent) stated shape reconciles silently.
-        guard_rerun_conflict(&root, InitShape::Script, Some(InitShape::Script), None)
+        guard_rerun_conflict(&root, InitShape::Tui, Some(InitShape::Tui), None)
             .expect("matching shape reconciles");
         guard_rerun_conflict(&root, InitShape::Web, None, None)
             .expect("absent stated shape reconciles");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn rerun_does_not_refuse_an_ambiguous_script_head() {
+        let root = std::env::temp_dir().join("ipe_init_rerun_ambiguous");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("src")).expect("mkdir src");
+        // An unqualified head is not confidently classified, so a re-init that
+        // states a different shape reconciles rather than falsely refusing.
+        std::fs::write(
+            root.join("src").join("Main.ipe"),
+            "module Main exposing (main)\n\nmain =\n    app config\n",
+        )
+        .expect("write unpinnable Main.ipe");
+        guard_rerun_conflict(&root, InitShape::Web, Some(InitShape::Web), None)
+            .expect("an ambiguous head does not trigger a false conflict");
         let _ = std::fs::remove_dir_all(&root);
     }
 
