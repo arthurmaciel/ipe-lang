@@ -1,0 +1,173 @@
+-- | Ipe.Browser.Recorder — record a bounded audio (or audio + video) stream from
+-- the device via `getUserMedia` + `MediaRecorder`, delivered as a session-stream
+-- of typed data chunks over `Ipe.Ffi.Js` ports.
+--
+-- The recording is a bounded session-stream, exactly the `open → N frames →
+-- close` shape of `Ipe.Browser.Gamepad.watch`: `startAudio` / `startVideo`
+-- OPENS the session (an outbound `Cmd` that returns a typed `Recording` handle),
+-- the host emits one `Started` frame, then N `Chunk data-URL` frames as
+-- `MediaRecorder.ondataavailable` fires, and `stop` CLOSES it — after which the
+-- host emits one terminal `Ended` frame and NEVER another chunk. A permission
+-- denial or an absent API closes the session with a typed `Denied` / `Unavailable`
+-- frame instead of a chunk stream; nothing is ever silently dropped.
+--
+-- Fail-closed by construction:
+--
+--   * `getUserMedia` refusal (`NotAllowedError`) → a typed `RecorderDenied`
+--     frame, never a throw and never a leaked track.
+--   * NO `Chunk` frame is emitted after the session closes: the JS sink flips a
+--     one-way `active` flag on `Stop` (and on any host-side track end) before
+--     releasing the tracks, so a late `ondataavailable` is dropped at the sink.
+--   * consent is fail-closed: importing this module discloses `js-port:recorder`,
+--     which only the top-level app's `[capabilities] accepts` set can grant.
+--     getUserMedia additionally needs the OS camera + microphone usage
+--     descriptions, which the packager DERIVES from that same grant.
+--
+-- Importing this reserved `Ipe.Browser.<Api>` module discloses `js-port:recorder`
+-- (import-derived, keyed on the canonical `Ipe.Browser.Recorder` path prefix via
+-- `WebCapability::for_browser_module`, alias-immune); only the top-level app's
+-- `[capabilities] accepts` set can grant it.
+--
+-- The two layers:
+--
+--   * `Ipe.Browser.Recorder.Internals` publishes the closed outbound/inbound ADTs
+--     and the raw `Ipe.Ffi.Js` wiring.
+--   * this module is the high-level layer: `startAudio` / `startVideo` open the
+--     session (returning a typed opaque `Recording` handle), `stop` closes it,
+--     and `chunks` is the inbound subscription folding the narrow `JsMsg` into a
+--     typed `Frame`. The inbound `case` is EXHAUSTIVE: a denial or an
+--     unavailability becomes a typed `Frame`, never a silently dropped frame.
+module Ipe.Browser.Recorder exposing
+    ( Recording
+    , Frame(..)
+    , startAudio
+    , startVideo
+    , stop
+    , chunks
+    )
+
+import Ipe.Browser.Recorder.Internals as Internals exposing (JsMsg(..))
+import Ipe.Tea.Web.Cmd as Cmd
+import Ipe.Tea.Web.Sub as Sub
+
+
+-- | An opaque handle to an in-flight recording session. `startAudio` /
+-- `startVideo` mint one; `stop` consumes it to close the session. The handle is
+-- opaque: it carries no accessible payload, so a program cannot forge one or
+-- read the recording out of band — the only way to obtain the recorded data is
+-- the `chunks` subscription. A page hosts at most one active recording; the
+-- handle names "the session this start opened", making "stop a recording that
+-- was started" the only representable stop.
+type Recording
+    = Recording
+
+
+-- | A typed frame delivered by the `chunks` session-stream.
+--
+--   * `RecorderStarted mime` — the session opened; `mime` is the actual
+--     container MIME the browser chose (e.g. `"audio/webm"`, `"video/webm"`).
+--     Delivered once, before any `RecorderChunk`.
+--   * `RecorderChunk data mime` — one recorded data chunk. `data` is the base-64
+--     `data:` URL of the chunk blob; `mime` is the actual MIME. Delivered zero
+--     or more times between `RecorderStarted` and `RecorderEnded`, NEVER after
+--     `RecorderEnded`.
+--   * `RecorderEnded` — the session closed (via `stop` or a host-side track
+--     end). The terminal frame: no chunk follows it.
+--   * `RecorderDenied` — the host refused the camera/microphone permission.
+--     Terminal.
+--   * `RecorderUnavailable` — `getUserMedia` or `MediaRecorder` is absent in this
+--     context. Terminal.
+type Frame
+    = RecorderStarted String
+    | RecorderChunk String String
+    | RecorderEnded
+    | RecorderDenied
+    | RecorderUnavailable
+
+
+-- | `startAudio { mimeType, timesliceMs }` — open an audio-only recording
+-- session; recorded chunks arrive on the `chunks` subscription. Returns the
+-- outbound `Cmd` and a typed `Recording` handle to pass to `stop`.
+--
+-- The JS host calls `getUserMedia({ audio: true })`, arms a `MediaRecorder`, and
+-- pushes a `Chunk` frame for each `ondataavailable` blob. A denied permission or
+-- an absent API closes the session with a typed `Denied` / `Unavailable` frame
+-- rather than a throw.
+--
+-- Importing this module discloses `js-port:recorder`; the app must grant it with
+-- `accepts = [ JsPort Recorder ]` under [capabilities] in package.ipe.
+startAudio : { mimeType : String, timesliceMs : Int } -> ( Recording, Cmd.Cmd msg )
+startAudio opts =
+    ( Recording
+    , Internals.request
+        (Internals.Start
+            { video = False, mimeType = opts.mimeType, timesliceMs = opts.timesliceMs }
+        )
+    )
+
+
+-- | `startVideo { mimeType, timesliceMs }` — open an audio + video recording
+-- session; recorded chunks arrive on the `chunks` subscription. Returns the
+-- outbound `Cmd` and a typed `Recording` handle to pass to `stop`.
+--
+-- The JS host calls `getUserMedia({ audio: true, video: true })`, arms a
+-- `MediaRecorder`, and pushes a `Chunk` frame for each `ondataavailable` blob. A
+-- denied permission or an absent API closes the session with a typed `Denied` /
+-- `Unavailable` frame rather than a throw.
+--
+-- Importing this module discloses `js-port:recorder`; the app must grant it with
+-- `accepts = [ JsPort Recorder ]` under [capabilities] in package.ipe.
+startVideo : { mimeType : String, timesliceMs : Int } -> ( Recording, Cmd.Cmd msg )
+startVideo opts =
+    ( Recording
+    , Internals.request
+        (Internals.Start
+            { video = True, mimeType = opts.mimeType, timesliceMs = opts.timesliceMs }
+        )
+    )
+
+
+-- | `stop recording` — close the recording session named by `recording`,
+-- stopping the `MediaRecorder` and releasing every `getUserMedia` track. The
+-- host emits one terminal `RecorderEnded` frame; NO further chunk follows.
+-- Outbound `Cmd`. A no-op when no recording is active.
+--
+-- The `Recording` argument is consumed (not read): it exists so `stop` can only
+-- be called on a session `startAudio` / `startVideo` opened — a `stop` with no
+-- prior start is unrepresentable.
+stop : Recording -> Cmd.Cmd msg
+stop _recording =
+    Internals.request Internals.Stop
+
+
+-- | `chunks toMsg` — the inbound subscription, wired in `subscriptions`.
+--
+-- The decoder IS the security gate: every inbound value runs through the total,
+-- bounded seal decoder for the narrow `JsMsg`; a malformed / mismatched frame is
+-- dropped whole. A decoded `JsMsg` is folded EXHAUSTIVELY into a `Frame` — every
+-- variant is covered, so no recorder frame can ever be silently dropped.
+chunks : (Frame -> msg) -> Sub.Sub msg
+chunks toMsg =
+    Internals.subscribe (\inbound -> toMsg (toFrame inbound))
+
+
+-- | Fold the narrow inbound `JsMsg` into a typed `Frame`. The `case` is
+-- exhaustive over every published inbound variant; a denial or an unavailability
+-- becomes a typed `Frame`, never a silent drop.
+toFrame : Internals.JsMsg -> Frame
+toFrame msg =
+    case msg of
+        Started mime ->
+            RecorderStarted mime
+
+        Chunk data mime ->
+            RecorderChunk data mime
+
+        Ended ->
+            RecorderEnded
+
+        Denied ->
+            RecorderDenied
+
+        Unavailable ->
+            RecorderUnavailable
