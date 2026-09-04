@@ -1,0 +1,16 @@
+module Main exposing (main)
+
+import Ipe.Http.Server as Server
+import Ipe.Http.Response as Response
+
+
+main =
+    Server.listen
+        { port = 8000
+        , handler = handler
+        }
+
+
+handler : Server.Request -> Server.Response
+handler _req =
+    Response.text "Hello, world!"
