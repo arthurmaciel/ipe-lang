@@ -1284,7 +1284,9 @@ mod tests {
         );
         let android =
             layout(MobileOs::Android, &hostile, &accepts(&[]), &bundle(), None).expect("layout");
-        let settings = android.generated("settings.gradle").expect("settings.gradle");
+        let settings = android
+            .generated("settings.gradle")
+            .expect("settings.gradle");
         assert!(
             settings.contains("rootProject.name = '"),
             "rootProject.name must be a single-quoted Groovy string: {settings}"
