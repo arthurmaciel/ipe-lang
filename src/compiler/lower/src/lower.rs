@@ -2384,7 +2384,6 @@ fn ir_type_mentions(ty: &IrType, leaf: &impl Fn(&IrType) -> bool) -> bool {
         | IrType::SessionHandle
         | IrType::Regex
         | IrType::WebApp
-        | IrType::WebViewApp
         | IrType::TuiApp
         | IrType::CliApp
         | IrType::UiPlain(_) => false,
@@ -3089,7 +3088,6 @@ fn ir_contains_fun(ty: &IrType) -> bool {
         // Shape app leaves — opaque handles wrapping runtime event loops,
         // no embedded Ipê function.
         | IrType::WebApp
-        | IrType::WebViewApp
         | IrType::TuiApp
         | IrType::CliApp => false,
         // `WebRoute page` carries the page type it builds — recurse (the
@@ -3285,7 +3283,6 @@ fn clone_class(env: CloneEnv<'_>, t: &IrType) -> CloneClass {
         | IrType::RowGeneric(_)
         // Opaque shape-app handles wrap active event loops — not Clone.
         | IrType::WebApp
-        | IrType::WebViewApp
         | IrType::TuiApp
         | IrType::CliApp => CloneClass::NonClone,
         // Composite: CloneOk iff all components CloneOk (no NonClone part).
@@ -6364,7 +6361,6 @@ fn ir_type_mentions_generic(ty: &IrType, tv: Symbol) -> bool {
         | IrType::TokenSource
         // Shape app leaves are non-parametric — no type var.
         | IrType::WebApp
-        | IrType::WebViewApp
         | IrType::TuiApp
         | IrType::CliApp
         // A row variable is a distinct row generic (`R{n}`), never the ordinary
@@ -6480,7 +6476,6 @@ fn ir_type_generic_in_decoder(ty: &IrType, tv: Symbol) -> bool {
         | IrType::AuthConfig
         | IrType::TokenSource
         | IrType::WebApp
-        | IrType::WebViewApp
         | IrType::TuiApp
         | IrType::CliApp
         | IrType::RowGeneric(_) => false,
@@ -6598,7 +6593,6 @@ fn ir_type_generic_reaches_bare(ty: &IrType, tv: Symbol) -> bool {
         | IrType::AuthConfig
         | IrType::TokenSource
         | IrType::WebApp
-        | IrType::WebViewApp
         | IrType::TuiApp
         | IrType::CliApp
         | IrType::RowGeneric(_) => false,
@@ -10782,8 +10776,6 @@ struct KernelUsage {
     tui: bool,
     /// Any Ipe.Console kernel (`Cli.app`).
     console: bool,
-    /// Any Ipe.WebView kernel.
-    webview: bool,
     /// Any outbound `Ipe.WebSocket` client kernel — gates the
     /// `websocket_client` Cargo feature + `ws_client` runtime module.
     websocket: bool,
@@ -10870,7 +10862,6 @@ impl KernelUsage {
             && self.web
             && self.tui
             && self.console
-            && self.webview
             && self.websocket
             && self.email
             && self.locale
@@ -10919,7 +10910,6 @@ impl KernelUsage {
         self.web |= k.is_web();
         self.tui |= k.is_tui();
         self.console |= k.is_console();
-        self.webview |= k.is_webview();
         self.websocket |= k.is_websocket_client();
         self.email |= matches!(
             k,
@@ -12096,7 +12086,7 @@ pub const fn float_key_rejected(ir: &IrType) -> bool {
 ///   re-wraps the resolved `Result` into an already-settled `Task`.
 /// * `Unit` — a synchronous `Task.run`-calls idiom whose body evaluates to `()`;
 ///   the backend wraps it as `task_succeed(())`.
-/// * Shape app leaves (`WebApp` / `WebViewApp` / `TuiApp` / `CliApp`) — each
+/// * Shape app leaves (`WebApp` / `TuiApp` / `CliApp`) — each
 ///   wraps its own event-loop task; the backend calls the leaf's `run_blocking`
 ///   wrapper in `fn main` instead of `block_on(ipe_main())`.
 ///
@@ -12109,12 +12099,7 @@ fn main_ret_is_runnable_entry(ret: &IrType) -> bool {
         // Opaque shape-app leaves: each has a `run_blocking` entry the emitted
         // `fn main` calls; accepting them here keeps the SEAL closed (a program
         // whose `main` returns a shape handle still compiles and runs).
-        IrType::Task(_)
-        | IrType::Unit
-        | IrType::WebApp
-        | IrType::WebViewApp
-        | IrType::TuiApp
-        | IrType::CliApp => true,
+        IrType::Task(_) | IrType::Unit | IrType::WebApp | IrType::TuiApp | IrType::CliApp => true,
         IrType::Result(err, _) => matches!(**err, IrType::Error),
         _ => false,
     }
@@ -12233,7 +12218,6 @@ const fn ir_type_label(ty: &IrType) -> &'static str {
         IrType::WebReq => "WebReq",
         IrType::SessionHandle => "SessionHandle",
         IrType::WebApp => "WebApp",
-        IrType::WebViewApp => "WebViewApp",
         IrType::TuiApp => "TuiApp",
         IrType::CliApp => "CliApp",
     }
@@ -14540,7 +14524,6 @@ impl<'a> Lowerer<'a> {
             | IrType::AuthConfig
             | IrType::TokenSource
             | IrType::WebApp
-            | IrType::WebViewApp
             | IrType::TuiApp
             | IrType::CliApp => Ok(ty),
         }
@@ -16778,7 +16761,11 @@ impl<'a> Lowerer<'a> {
         let uses_console_shape = kernel_usage.console;
         let uses_ui = kernel_usage.ui || uses_tui_shape;
         let uses_web = kernel_usage.web;
-        let uses_webview = kernel_usage.webview;
+        // No source kernel produces a webview app: the webview delivery is a
+        // HOST decision (`web desktop`) the backend resolves from the CLI, not a
+        // source entry. The IR module flag is always `false`; the backend ORs it
+        // with its resolved `webview_host` signal.
+        let uses_webview = false;
 
         // detect Ipe.Css (Ipe.CssSafety) leaf-kernel usage. Independent
         // of `uses_ui` — a pure-Ipe.Css program uses no render kernel.
@@ -17370,7 +17357,7 @@ impl<'a> Lowerer<'a> {
     }
 
     /// is `(home, name)` a shape app-leaf opaque —
-    /// `WebApp` / `WebViewApp` / `TuiApp` / `CliApp`?
+    /// `WebApp` / `TuiApp` / `CliApp`?
     ///
     /// Each leaf is produced only by a shape kernel (`Web.app`,
     /// `Tui.app`, …) with the empty home, so the runtime-`IrType`
@@ -17382,7 +17369,7 @@ impl<'a> Lowerer<'a> {
         home.is_empty()
             && matches!(
                 self.interner.resolve(name),
-                Some("WebApp" | "WebViewApp" | "TuiApp" | "CliApp")
+                Some("WebApp" | "TuiApp" | "CliApp")
             )
     }
 
@@ -19162,7 +19149,6 @@ impl<'a> Lowerer<'a> {
                 // its own home — the guard lets that user union fall through and
                 // win instead of being hijacked to the opaque runtime leaf.
                 "WebApp" if self.is_shape_app_leaf_con(home, *name) => Ok(IrType::WebApp),
-                "WebViewApp" if self.is_shape_app_leaf_con(home, *name) => Ok(IrType::WebViewApp),
                 "TuiApp" if self.is_shape_app_leaf_con(home, *name) => Ok(IrType::TuiApp),
                 "CliApp" if self.is_shape_app_leaf_con(home, *name) => Ok(IrType::CliApp),
                 // Built-in ADTs that are never in `enum_variants` at lowering time
@@ -20639,7 +20625,6 @@ impl<'a> Lowerer<'a> {
                 // kernel home, so a user `type WebApp = …` wins by its own
                 // identity at both gates (twin of `ir_type_from_canon`).
                 "WebApp" if self.is_shape_app_leaf_con(module, *name) => Ok(IrType::WebApp),
-                "WebViewApp" if self.is_shape_app_leaf_con(module, *name) => Ok(IrType::WebViewApp),
                 "TuiApp" if self.is_shape_app_leaf_con(module, *name) => Ok(IrType::TuiApp),
                 "CliApp" if self.is_shape_app_leaf_con(module, *name) => Ok(IrType::CliApp),
                 // `WebRoute page` — the route descriptor produced by
@@ -22394,19 +22379,10 @@ impl<'a> Lowerer<'a> {
     /// cfg has no literal fields to read and is rejected here with `IPE-L0119`
     /// ([`Feature::LetBoundAppCfg`]) at the argument's span — never allowed to
     /// reach emit, where it would fire a spanless `CompilerBug`.
-    ///
-    /// For `Webview.app`, the nested `window` field must itself be an inline
-    /// record literal and its `size` field an inline 2-tuple literal (the G4 emit
-    /// gates). Those are validated here on the canon fields (which carry spans) so
-    /// a let-bound `window`/`size` gets `IPE-L0119` at the offending span, not an
-    /// ICE.
     fn lower_app_entry_cfg(&self, peek: &Callee, arg0: &canon::Expr) -> DResult<Expr> {
         let canon::Expr_::Record(fields) = &arg0.value else {
             return Err(unsupported(arg0.span, Feature::LetBoundAppCfg));
         };
-        if matches!(peek, Callee::Kernel(KernelFn::WebViewApp)) {
-            self.reject_non_literal_webview_window(fields)?;
-        }
         if matches!(
             peek,
             Callee::Kernel(KernelFn::WebApp | KernelFn::WebEmbed | KernelFn::WebAppWith)
@@ -22448,29 +22424,6 @@ impl<'a> Lowerer<'a> {
                 });
             }
             break;
-        }
-        Ok(())
-    }
-
-    /// Webview `window` must be an inline record and `window.size` an inline
-    /// tuple. Checked on canon (spanned) fields; a present-but-non-literal shape
-    /// is `IPE-L0119` at that value's span. A MISSING window/size is left
-    /// untouched — the constrain scheme enforces the 5-field shape, so absence is
-    /// a genuine compiler bug handled fail-closed by emit's field lookup.
-    fn reject_non_literal_webview_window(&self, fields: &[(Symbol, canon::Expr)]) -> DResult<()> {
-        for (name, value) in fields {
-            if self.resolve(*name)? == "window" {
-                let canon::Expr_::Record(win_fields) = &value.value else {
-                    return Err(unsupported(value.span, Feature::LetBoundAppCfg));
-                };
-                for (wname, wvalue) in win_fields {
-                    if self.resolve(*wname)? == "size"
-                        && !matches!(&wvalue.value, canon::Expr_::Tuple(_))
-                    {
-                        return Err(unsupported(wvalue.span, Feature::LetBoundAppCfg));
-                    }
-                }
-            }
         }
         Ok(())
     }
@@ -22727,25 +22680,20 @@ impl<'a> Lowerer<'a> {
                         }));
                     }
                 }
-                // ── Tui.app / WebView.app / Cli.app cfg
-                //    literal (L0107 exemption) ──
+                // ── Tui.app / Cli.app cfg literal (L0107 exemption) ──
                 //
                 // Same pattern as `Web.app`: intercept the single cfg-record arg
                 // BEFORE the uniform `lower_expr` path so function-typed fields
                 // (init/update/view/subscriptions/onKey) do not trip IPE-L0107.
-                // WebViewApp — the extra `window` field is a plain record
-                //   value (no functions); `lower_app_entry_cfg` additionally
-                //   requires that record — and its `size` tuple — to be inline
-                //   literals (the G4 emit gates).
                 // Cli.app — 5-field cfg (init/update/view/
                 //   subscriptions/onLine), all function-typed; without this arm
                 //   every real `Cli.app` call would trip IPE-L0107 and the
                 //   emit_console path could never fire.
                 // A non-literal cfg (let-bound, piped, etc.) is rejected here with
                 // IPE-L0119 at the argument span — fail-closed, never an ICE.
-                Callee::Kernel(
-                    KernelFn::TerminalAppScreen | KernelFn::WebViewApp | KernelFn::TerminalAppLines,
-                ) if args.len() == 1 => {
+                Callee::Kernel(KernelFn::TerminalAppScreen | KernelFn::TerminalAppLines)
+                    if args.len() == 1 =>
+                {
                     if let Some(arg0) = args.first() {
                         // Borrow `peek` for the gate BEFORE moving it below.
                         let lowered_cfg = self.lower_app_entry_cfg(&peek, arg0)?;
@@ -26356,8 +26304,6 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::WebAppRouted
                 // `Tui.app : TerminalCfg model msg -> TuiApp`
                 | KernelFn::TerminalAppScreen
-                // `WebView.app : WebViewCfg model msg -> WebViewApp`
-                | KernelFn::WebViewApp
                 // `Cli.app : TerminalCfg model msg -> CliApp`
                 | KernelFn::TerminalAppLines
                 // ── runtime-config front door — arity 1 ──────────────────
@@ -28113,8 +28059,6 @@ impl<'a> Lowerer<'a> {
                     // ── Ipe.Tui / Ipe.Cli app-entry kernels ───────────────
                     ("Tui", "app") => Ok(Callee::Kernel(KernelFn::TerminalAppScreen)),
                     ("Cli", "app") => Ok(Callee::Kernel(KernelFn::TerminalAppLines)),
-                    // ── Ipe.WebView app-entry kernel ──────────────────────
-                    ("WebView", "app") => Ok(Callee::Kernel(KernelFn::WebViewApp)),
                     // ── Ipe.Web settings-carrying entry + runtime-config ──
                     ("Web", "appWith") => Ok(Callee::Kernel(KernelFn::WebAppWith)),
                     ("Web", "csrf") => Ok(Callee::Kernel(KernelFn::WebCsrf)),
@@ -30607,7 +30551,6 @@ fn collect_ir_generic_syms(ty: &IrType, out: &mut BTreeSet<Symbol>) {
         | IrType::AuthConfig
         | IrType::TokenSource
         | IrType::WebApp
-        | IrType::WebViewApp
         | IrType::TuiApp
         | IrType::CliApp
         // A row variable is tracked in `Func::row_params`, NOT in the ordinary
@@ -33178,7 +33121,6 @@ mod tests {
             | ipe_ir::IrType::AuthConfig
             | ipe_ir::IrType::TokenSource
             | ipe_ir::IrType::WebApp
-            | ipe_ir::IrType::WebViewApp
             | ipe_ir::IrType::TuiApp
             | ipe_ir::IrType::CliApp => {}
         }

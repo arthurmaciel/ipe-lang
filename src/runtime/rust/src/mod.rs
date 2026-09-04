@@ -509,11 +509,10 @@ pub mod telemetry;
 // glob-re-exported (its `Attribute` would collide with html's).
 pub mod ui;
 
-// Ipe.WebView — native desktop window backend (a TEA app, so gated on the async
-// runtime like `tea`). The cross-platform floor (a stub returning a graceful Err)
-// keeps `import Ipe.Tea.WebView` linking everywhere; the real wry/tao window backend
-// needs the system webview dev libs (staged behind the webview design doc).
-// Implements webview_stub.go.
+// Native desktop window backend — the webview host of a `web desktop` delivery
+// (a TEA app, so gated on the async runtime like `tea`). The cross-platform floor
+// (a stub returning a graceful Err) keeps the backend linking everywhere; the real
+// wry/tao window backend needs the system webview dev libs.
 #[cfg(feature = "tokio")]
 pub mod webview;
 #[cfg(feature = "tokio")]

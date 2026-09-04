@@ -183,7 +183,8 @@ const TAG_PROCESS_RUN_WITH_CFG: u8 = 77;
 const TAG_BACKOFF_STRATEGY: u8 = 78;
 // Shape opaque app leaves — non-serde, never a Model field; present for exhaustiveness.
 const TAG_WEB_APP: u8 = 79;
-const TAG_WEBVIEW_APP: u8 = 80;
+// Tag 80 is unassigned: a webview build renders a `Web.app` (`WebApp`) handle,
+// so there is no distinct webview-app leaf to tag.
 const TAG_TUI_APP: u8 = 81;
 const TAG_CLI_APP: u8 = 82;
 // `ProcessRunInPtyCfg` — kernel-boundary non-serde input record for `Ipe.Process.runInPty`.
@@ -284,7 +285,6 @@ fn hash_ty(ctx: &EmitCtx, ty: &IrType, h: &mut Sha256, fuel: u32) -> DResult<()>
         IrType::TokenSource => h.update([TAG_TOKEN_SOURCE]),
         // Shape opaque app leaves — non-serde, never a Model field; present for exhaustiveness.
         IrType::WebApp => h.update([TAG_WEB_APP]),
-        IrType::WebViewApp => h.update([TAG_WEBVIEW_APP]),
         IrType::TuiApp => h.update([TAG_TUI_APP]),
         IrType::CliApp => h.update([TAG_CLI_APP]),
 
@@ -502,6 +502,7 @@ mod tests {
             String::new(),
             false,
             false,
+            None,
         )?;
         model_schema_tag(&ctx, &IrType::Record(fields))
     }
@@ -675,6 +676,7 @@ mod tests {
             String::new(),
             false,
             false,
+            None,
         )?;
 
         let model_a = IrType::Record(BTreeMap::from([(
@@ -766,6 +768,7 @@ mod tests {
             String::new(),
             false,
             false,
+            None,
         )?;
         let a = model_schema_tag(&ctx_1, &model)?;
         let ctx_2 = EmitCtx::build(
@@ -781,6 +784,7 @@ mod tests {
             String::new(),
             false,
             false,
+            None,
         )?;
         let b = model_schema_tag(&ctx_2, &model)?;
         assert_ne!(
@@ -862,7 +866,6 @@ mod tests {
             TAG_STR, TAG_STREAM_WRITER, TAG_SUB, TAG_TASK, TAG_TOKEN_SOURCE, TAG_TUI_APP,
             TAG_TUPLE, TAG_TYPE_INFO, TAG_UI, TAG_UI_PLAIN, TAG_UNIT, TAG_URL, TAG_WEB_APP,
             TAG_WEBSOCKET_CLIENT_CFG, TAG_WEBSOCKET_SERVER, TAG_WEBSOCKET_SERVER_CFG,
-            TAG_WEBVIEW_APP,
         };
 
         let tags: &[(&str, u8)] = &[
@@ -945,7 +948,6 @@ mod tests {
             ("TAG_PROCESS_RUN_WITH_CFG", TAG_PROCESS_RUN_WITH_CFG),
             ("TAG_BACKOFF_STRATEGY", TAG_BACKOFF_STRATEGY),
             ("TAG_WEB_APP", TAG_WEB_APP),
-            ("TAG_WEBVIEW_APP", TAG_WEBVIEW_APP),
             ("TAG_TUI_APP", TAG_TUI_APP),
             ("TAG_CLI_APP", TAG_CLI_APP),
             ("TAG_PROCESS_RUN_IN_PTY_CFG", TAG_PROCESS_RUN_IN_PTY_CFG),

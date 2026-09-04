@@ -1,6 +1,6 @@
-//! Ipe.WebView — native desktop window backend.
+//! Native desktop window backend — the webview host of a `web desktop` delivery.
 //!
-//! `Webview.app { init, update, view, subscriptions, window }` opens a native
+//! `webview_app(init, update, view, subscriptions, window)` opens a native
 //! system webview (`wry` ≥0.55 + `tao` ≥0.35: WKWebView on macOS, WebView2 on
 //! Windows, WebKitGTK on Linux — webkit2gtk-4.1 + libsoup-3.0) and runs the same
 //! TEA loop as Ipe.Web, reusing Ipe.Web's `Html` renderer + event dispatch
@@ -24,9 +24,9 @@
 //!
 //! Two builds: the real backend is behind the opt-in `webview` Cargo feature
 //! (needs the system webview dev libraries); otherwise a stub returning a graceful
-//! `Err` is compiled (implements `webview_stub.go` on non-darwin), so a program
-//! that `import Ipe.Tea.WebView`s always links + never panics. No panic vectors: the
-//! stub returns `Err`; the real path routes every fallible call through `Err`.
+//! `Err` is compiled, so a `web desktop` build always links + never panics. No
+//! panic vectors: the stub returns `Err`; the real path routes every fallible
+//! call through `Err`.
 
 use super::core::IpeTask;
 use super::html::Html;

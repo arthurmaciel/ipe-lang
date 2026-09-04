@@ -415,15 +415,6 @@ struct Builtins {
     tui_f_key_kind: Symbol,
     /// `"value"` — field of the pinned `KeyEvent` record in the `onKey` scheme.
     tui_f_key_value: Symbol,
-    // ── Webview cfg record field name symbols ─────────────────────────────────
-    /// `"window"` — the window field of the `Webview.app` config record.
-    /// Typed as a closed record `{ title : String, size : (Int, Int) }`.
-    webview_f_window: Symbol,
-    /// `"title"` — the title field inside the Webview window config record.
-    webview_f_title: Symbol,
-    /// `"size"` — the size field inside the Webview window config record.
-    /// Typed as `(Int, Int)` — width × height in logical pixels.
-    webview_f_size: Symbol,
     // ── Cli cfg record field name symbols ──────────────────────────────
     /// `"onLine"` — the onLine field of the `Cli.app` config record.
     /// Typed as `String -> Msg` — called once per stdin line.
@@ -776,9 +767,6 @@ struct Builtins {
     /// `"WebApp"` — opaque app handle returned by `Web.app` / `Web.appRouted` /
     /// `Web.appWith`. Nullary; backed by `ipe_runtime::tea::WebApp`.
     web_app: Symbol,
-    /// `"WebViewApp"` — opaque app handle returned by `WebView.app`. Nullary;
-    /// backed by `ipe_runtime::tea::WebViewApp`.
-    webview_app: Symbol,
     /// `"TuiApp"` — opaque app handle returned by `Tui.app`. Nullary;
     /// backed by `ipe_runtime::tea::TuiApp`.
     tui_app: Symbol,
@@ -928,10 +916,6 @@ impl Builtins {
             tui_f_on_key: interner.intern("onKey")?,
             tui_f_key_kind: interner.intern("kind")?,
             tui_f_key_value: interner.intern("value")?,
-            // Webview cfg field names.
-            webview_f_window: interner.intern("window")?,
-            webview_f_title: interner.intern("title")?,
-            webview_f_size: interner.intern("size")?,
             // Cli cfg field names.
             cli_f_on_line: interner.intern("onLine")?,
             // Ui.button cfg field names.
@@ -1073,7 +1057,6 @@ impl Builtins {
             operand_literal: interner.intern("OperandLiteral")?,
             // ── Shape opaque app-leaf type constructor symbols ─────────────
             web_app: interner.intern("WebApp")?,
-            webview_app: interner.intern("WebViewApp")?,
             tui_app: interner.intern("TuiApp")?,
             cli_app: interner.intern("CliApp")?,
             db_store_home: vec![
@@ -4501,7 +4484,6 @@ impl<'a> Builder<'a> {
             BuiltinTag::EmailProvider => self.builtins.email_provider,
             BuiltinTag::BackoffStrategy => self.builtins.backoffstrategy,
             BuiltinTag::WebApp => self.builtins.web_app,
-            BuiltinTag::WebViewApp => self.builtins.webview_app,
             BuiltinTag::TuiApp => self.builtins.tui_app,
             BuiltinTag::CliApp => self.builtins.cli_app,
         }
@@ -4565,9 +4547,6 @@ impl<'a> Builder<'a> {
             FieldTag::TerminalKeyKind => self.builtins.tui_f_key_kind,
             FieldTag::TerminalKeyValue => self.builtins.tui_f_key_value,
             FieldTag::TerminalOnLine => self.builtins.cli_f_on_line,
-            FieldTag::WebViewWindow => self.builtins.webview_f_window,
-            FieldTag::WebViewTitle => self.builtins.webview_f_title,
-            FieldTag::WebViewSize => self.builtins.webview_f_size,
             FieldTag::EdgeTop => self.builtins.edge_f_top,
             FieldTag::EdgeRight => self.builtins.edge_f_right,
             FieldTag::EdgeBottom => self.builtins.edge_f_bottom,
@@ -4746,11 +4725,6 @@ impl<'a> Builder<'a> {
         let web_app_leaf = || Ty::Con {
             module: Vec::new(),
             name: self.builtins.web_app,
-            args: Vec::new(),
-        };
-        let webview_app_leaf = || Ty::Con {
-            module: Vec::new(),
-            name: self.builtins.webview_app,
             args: Vec::new(),
         };
         let tui_app_leaf = || Ty::Con {
@@ -6102,9 +6076,9 @@ impl<'a> Builder<'a> {
             | K::ServerApi => fun(string(), fun(fun(req(), task(resp())), route())),
             K::ServerStatic => fun(string(), fun(string(), route())),
             // `mountApp : String -> WebApp -> Route`. The nominal `WebApp` in
-            // the second slot is the §9 type gate: a `TuiApp`/`CliApp`/
-            // `WebViewApp` (or any non-`WebApp`) fails to unify here (IPE-T0001)
-            // — an app of the wrong shape is unrepresentable in a mount.
+            // the second slot is the §9 type gate: a `TuiApp`/`CliApp` (or any
+            // non-`WebApp`) fails to unify here (IPE-T0001) — an app of the
+            // wrong shape is unrepresentable in a mount.
             K::ServerMountApp => fun(string(), fun(web_app_leaf(), route())),
             K::ServerListen => fun(int(), fun(list(route()), task_unit())),
             K::ServerText | K::ServerJson | K::ServerHtml | K::ServerRedirect => {
@@ -7106,44 +7080,12 @@ impl<'a> Builder<'a> {
                         m.insert(self.builtins.cli_f_on_line, fun(string(), var(1)));
                         m
                     },
-                    // Closed cfg record — like `Tui.app` / `WebView.app`, the
-                    // line cfg takes exactly its named fields (the open
-                    // row is a `Web.app`-only surface).
+                    // Closed cfg record — like `Tui.app`, the line cfg takes
+                    // exactly its named fields (the open row is a `Web.app`-only
+                    // surface).
                     RowTail::Closed,
                 );
                 fun(cfg_rec, cli_app_leaf())
-            }
-
-            // ── Ipe.WebView app-entry (already schemed in kernel_ty) ──
-            //
-            // `view : Model -> Element Msg`; the framework applies `Ui.layout`,
-            // the same unification as Web. Raw HTML is reached through the
-            // `Ui.html` node inside this single `Element` view.
-            K::WebViewApp => {
-                let view_ret = elem_t(var(1));
-                let tup = tuple2(var(0), cmd(var(1)));
-                let window_ty = Ty::Record(
-                    {
-                        let mut m = BTreeMap::new();
-                        m.insert(self.builtins.webview_f_title, string());
-                        m.insert(self.builtins.webview_f_size, tuple2(int(), int()));
-                        m
-                    },
-                    RowTail::Closed,
-                );
-                let cfg_rec = Ty::Record(
-                    {
-                        let mut m = BTreeMap::new();
-                        m.insert(self.builtins.live_f_init, fun(Ty::Unit, tup.clone()));
-                        m.insert(self.builtins.live_f_update, fun(var(1), fun(var(0), tup)));
-                        m.insert(self.builtins.live_f_view, fun(var(0), view_ret));
-                        m.insert(self.builtins.live_f_subscriptions, fun(var(0), sub(var(1))));
-                        m.insert(self.builtins.webview_f_window, window_ty);
-                        m
-                    },
-                    RowTail::Closed,
-                );
-                fun(cfg_rec, webview_app_leaf())
             }
 
             // ══ FIRST-SCHEMED families ══
@@ -9970,8 +9912,6 @@ mod registry_phase_c_tests {
             K::WebRenderStatic,
             // Ipe.Terminal app-entry (1)
             K::TerminalAppScreen,
-            // Ipe.WebView app-entry (1)
-            K::WebViewApp,
             // Ipe.Html styleNode (1 — F7; parity checked by
             // stdlib_scheme_matches_legacy).
             K::HtmlStyleNode,
@@ -11362,8 +11302,8 @@ mod registry_phase_c_tests {
         // `stdlib_scheme` `html_attr` builder.
         //
         // The closed-record / open-row families via the `Record` node: the
-        // app-entry cfg records (`Web.app` open-row, `WebView.app` /
-        // `Tui.app` open-row / `Cli.app`), `HttpRequest` /
+        // app-entry cfg records (`Web.app` open-row, `Tui.app` open-row /
+        // `Cli.app`), `HttpRequest` /
         // `HttpResponse` / server `Response`, `Migration`, `Csv` / `CacheCfg` /
         // `CacheStats` / `WebSocketCfg` / `EmailMessage` (+ nested attachment),
         // `RetryPolicy` (incl. the `Error`-channel `retryWith`), the

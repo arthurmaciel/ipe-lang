@@ -1,8 +1,8 @@
 //! Home-guarded lowering of kernel-implicit opaque type names.
 //!
 //! Several opaque runtime types are reachable by a BARE constructor name at the
-//! annotation level: the shape app-leaves (`WebApp` / `WebViewApp` / `TuiApp` /
-//! `CliApp`) minted by `Web.app` / `Tui.app` / …, and the `Ipe.Server`
+//! annotation level: the shape app-leaves (`WebApp` / `TuiApp` / `CliApp`)
+//! minted by `Web.app` / `Tui.app` / …, and the `Ipe.Server`
 //! nominals (`Request` / `Response` / `Route` / `Cookie`). The genuine kernel
 //! type carries the EMPTY home (`ipe_types::constrain` builds every one with
 //! `module: Vec::new()`), so the lowerer maps a bare name to its runtime `IrType`
@@ -41,7 +41,6 @@ const fn false_marker() -> bool {
 fn opaque_leaf_ir(leaf: &str) -> Option<IrType> {
     match leaf {
         "WebApp" => Some(IrType::WebApp),
-        "WebViewApp" => Some(IrType::WebViewApp),
         "TuiApp" => Some(IrType::TuiApp),
         "CliApp" => Some(IrType::CliApp),
         "StreamWriter" => Some(IrType::StreamWriter),
@@ -223,11 +222,6 @@ fn user_type_webapp_wins_over_opaque_shape_leaf() {
 }
 
 #[test]
-fn user_type_webviewapp_wins_over_opaque_shape_leaf() {
-    assert_user_union_wins("WebViewApp");
-}
-
-#[test]
 fn user_type_tuiapp_wins_over_opaque_shape_leaf() {
     assert_user_union_wins("TuiApp");
 }
@@ -240,11 +234,6 @@ fn user_type_cliapp_wins_over_opaque_shape_leaf() {
 #[test]
 fn kernel_webapp_still_maps_to_opaque() {
     assert_kernel_leaf_maps_to_opaque("WebApp");
-}
-
-#[test]
-fn kernel_webviewapp_still_maps_to_opaque() {
-    assert_kernel_leaf_maps_to_opaque("WebViewApp");
 }
 
 #[test]

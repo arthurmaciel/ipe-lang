@@ -18,20 +18,20 @@
 
 use std::path::{Path, PathBuf};
 
-/// A full `WebView` app whose inner `rawView : Model -> Html` omits the message
+/// A full `Web` app whose inner `rawView : Model -> Html` omits the message
 /// parameter, reached through the `Ui.html` escape node inside the single
 /// `Element` view. The `onPress = Just Bump` button pins the inferred message
 /// type to the concrete `Msg`, so the arity-filled inner `Html` return must
 /// solve to `Html<MainMsg>`.
 const BARE_HTML_VIEW_APP: &str = r#"module Main exposing (main)
-import Ipe.Tea.WebView as WebView
-import Ipe.Tea.WebView.Cmd as Cmd
-import Ipe.Tea.WebView.Sub as Sub
+import Ipe.Tea.Web as Web
+import Ipe.Tea.Web.Cmd as Cmd
+import Ipe.Tea.Web.Sub as Sub
 import Ipe.Ui as Ui
 import Ipe.Html as Html
 type alias Model = { n : Int }
 type Msg = Bump
-init : () -> ( Model, Cmd Msg )
+init : WebReq -> ( Model, Cmd Msg )
 init _ = ( { n = 0 }, Cmd.none )
 update : Msg -> Model -> ( Model, Cmd Msg )
 update msg model =
@@ -48,12 +48,13 @@ view : Model -> Element Msg
 view model =
     Ui.html (rawView model)
 main =
-    WebView.app
+    Web.app
         { init = init
         , update = update
         , view = view
         , subscriptions = subscriptions
-        , window = { title = "x", size = ( 400, 300 ) }
+        , routes = []
+        , notFound = Bump
         }
 "#;
 
@@ -127,7 +128,7 @@ fn emitted_program_sources(out: &Path) -> String {
     acc
 }
 
-/// `rawView : Model -> Html` (bare) reached via `Ui.html` under `WebView.app`
+/// `rawView : Model -> Html` (bare) reached via `Ui.html` under `Web.app`
 /// must be ipe-0 and
 /// emit the CONCRETE `Html<MainMsg>` return — the arity-fill's message parameter
 /// resolved from the body's solved type, never `Html<()>` or `Html<T1>`.

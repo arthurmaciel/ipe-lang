@@ -602,8 +602,8 @@ where
 
 // ─── Shape opaque app-leaf types ──────────────────────────────────────────
 //
-// Each entry builder (`Web.app`, `WebView.app`, `Tui.app`,
-// `Cli.app`) returns one of these opaque handles instead of
+// Each entry builder (`Web.app`, `Tui.app`, `Cli.app`) returns one of these
+// opaque handles instead of
 // `IpeTask<E, ()>`. The handle wraps the underlying task and exposes a single
 // `run_blocking` method consumed by the emitted `fn main()`. This erases the
 // msg/model type parameters from the program's `main` type signature while
@@ -674,9 +674,9 @@ impl WebApp {
     }
 }
 
-/// Opaque app handle returned by `WebView.app`.
-/// Backed by a boxed `IpeTask<IpeError, ()>`; run via `run_blocking` on the
-/// current thread (tao/Cocoa mandates the process main thread on macOS).
+/// Opaque app handle for the webview-native host of a `Web.app` (a `web desktop`
+/// delivery). Backed by a boxed `IpeTask<IpeError, ()>`; run via `run_blocking` on
+/// the current thread (tao/Cocoa mandates the process main thread on macOS).
 #[cfg(not(target_arch = "wasm32"))]
 pub struct WebViewApp(pub IpeTask<crate::error::IpeError, ()>);
 

@@ -1,44 +1,34 @@
 module Main exposing (main)
 
--- Ipe.Webview spike — Three.js + WebGL2 under a native webview.
+-- Web shape hosted as a native webview — Three.js + WebGL2.
 --
--- Validates risk #2 from docs/ipewebview/PLAN.md: does WebGL2 +
--- Three.js work end-to-end through the system webview engine?
+-- Proves WebGL2 + Three.js work end-to-end through the system webview
+-- engine. Built as `web desktop`, the same `Web.app` a served web page
+-- uses is driven by the native webview host: a native window opens
+-- pointing at the scene. The runtime serves the `static/` assets over
+-- loopback so the embedded browser resolves relative paths like
+-- `/static/three.min.js`.
 --
--- Run it with `ipe run src/Main.ipe` — a native window opens
--- pointing at the spike scene. There's no separate `webview_go`
--- shim, no separate Ipe.Http.Server: the same Ipe.Webview backend
--- that powers every other Ipe.Webview example handles loopback
--- asset serving via ipe.toml's `[live].static` (bug #370 — the
--- runtime spawns a 127.0.0.1 http.Server when `static` is set,
--- and Navigate()s to it so the embedded browser can resolve
--- relative paths like `/static/three.min.js`).
+-- What this proves:
 --
--- What we're proving by this rewrite:
+--   1. The webview host can serve real-world web content (Three.js +
+--      WebGL2) end-to-end via the built-in static serving.
 --
---   1. The Ipe.Webview backend can host real-world web content
---      (Three.js + WebGL2) end-to-end via the built-in static
---      serving — no hand-rolled Ipe.Http.Server, no second
---      process, no `webview_go` shim.
+--   2. The same Ipe source you'd write for a served `Web` page works
+--      under the webview host — `Ipe.Html.script`, `Ipe.Html.link`,
+--      `Ipe.Html.node "canvas"` all render identically.
 --
---   2. The same Ipe source you'd write for a Ipe.Web page works
---      for a Ipe.Webview desktop app — `Ipe.Html.script`,
---      `Ipe.Html.link`, `Ipe.Html.node "canvas"`, etc all render
---      identically.
---
---   3. `<script>` tags in the rendered view bootstrap correctly
---      (the runtime's __ipeReviveScripts shim revives them after
---      the initial HTML lands in the document — same hardening
---      Ipe.Web uses).
-import Ipe.Webview as Webview
-import Ipe.Tea.WebView.Cmd as Cmd
-import Ipe.Tea.WebView.Sub as Sub
+--   3. `<script>` tags in the rendered view bootstrap correctly after
+--      the initial HTML lands in the document.
+import Ipe.Tea.Web as Web
+import Ipe.Tea.Web.Cmd as Cmd
+import Ipe.Tea.Web.Sub as Sub
 import Ipe.Html as Html
 import Ipe.Html.Attributes as Attr
 
 -- ═══════════════════════════════════════════════════════════════════
 -- TEA shape — minimal: nothing in Model the WebGL scene cares about,
--- but the Webview.app contract requires init/update/view/subs.
+-- but the Web.app contract requires init/update/view/subs.
 -- ═══════════════════════════════════════════════════════════════════
 type alias Model =
     {  }
@@ -47,7 +37,7 @@ type Msg
     = NoOp
 
 
-init : () -> ( Model, Cmd Msg )
+init : WebReq -> ( Model, Cmd Msg )
 init _ =
     ( {}, Cmd.none )
 
@@ -65,10 +55,10 @@ subscriptions _ =
 -- ═══════════════════════════════════════════════════════════════════
 -- View — Three.js HUD + canvas mount + two vendored script tags.
 -- The browser fetches /static/three.min.js + /static/scene.js +
--- /static/style.css from the loopback http server that Ipe.Webview
--- spawns when ipe.toml's `[live].static = "static"` is set.
+-- /static/style.css from the loopback http server the webview host
+-- spawns to serve the project's `static/` assets.
 -- ═══════════════════════════════════════════════════════════════════
--- Webview's renderer expects the same Html-node tree shape Ipe.Web
+-- The webview host renders the same Html-node tree a served `Web` page
 -- emits. We use raw Ipe.Html nodes (NOT Ipe.Ui's layout primitives)
 -- because the Three.js scene paints into a plain <div id="canvas-wrap">
 -- that the loaded JS bundle takes over — no Ipe.Ui layout machinery
@@ -138,10 +128,11 @@ view _ =
 -- Main
 -- ═══════════════════════════════════════════════════════════════════
 main =
-    Webview.app
+    Web.app
         { init = init
         , update = update
         , view = view
         , subscriptions = subscriptions
-        , window = { title = "Ipe.Webview spike - three.js", size = ( 1024, 720 ) }
+        , routes = []
+        , notFound = NoOp
         }

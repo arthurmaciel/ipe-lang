@@ -3172,7 +3172,7 @@ mod tests {
         // `Terminal`. Importing another shape's
         // `Sub` (`Ipe.Tea.Web.Sub`) has no denotation in a terminal app and must
         // fail closed (IPE-N0035) — the `canonical_shape` fold admits only the
-        // terminal-family surfaces, never `Web` / `WebView`.
+        // terminal-family surfaces, never `Web`.
         let src = "module Main exposing (main)\n\
                    import Ipe.Tea.Tui as Tui\n\
                    import Ipe.Tea.Web.Sub as Sub\n\n\

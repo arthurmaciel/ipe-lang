@@ -431,6 +431,31 @@ fn emit_web_app_inner(
     let view_s = wrap_view(&view_raw_s);
     let subs_s = emit_web_fn(ctx, subs_e, indent, child, generics)?;
 
+    // Webview-native delivery host (`web desktop`): the same DOM `Web.app` is
+    // driven by the native `WebViewApp` executor rather than the served
+    // `web_app`. The window is a delivery-host decision (threaded from the CLI's
+    // `delivery.desktop`), never a source `main` field. Native only — a webview
+    // build never targets wasm, and a mountable `Web.embed` is a server-nested
+    // handle with no webview host.
+    if ctx.uses_webview && ctx.target != ipe_ir::Target::WasmClient && !mountable {
+        // The webview executor takes init/update/view/subs only — it has no
+        // client-side router. A routed `Web.app` (a `page` field in the Model)
+        // under a webview host has no honoured routing, so reject it fail-closed
+        // rather than silently drop the routes.
+        if routed_page_field(ctx, view_e).is_some() {
+            return Err(ipe_diagnostics::Diagnostic::CompilerBug {
+                where_: "ipe_backend_rust::emit_web_app_inner::webview_routed",
+                detail: "a routed `Web.app` (a `page` field in the Model) has no \
+                         client-side router under a webview-native `web desktop` \
+                         delivery; drop the routing or serve it as `web`"
+                    .into(),
+            });
+        }
+        return Ok(Some(crate::emit_webview::emit_web_app_as_webview(
+            ctx, &init_s, &update_s, &view_s, &subs_s,
+        )));
+    }
+
     // Browser target: the same cfg drives the client sink. No session store
     // (the model lives in the tab), so no store args and no schema tag.
     if ctx.target == ipe_ir::Target::WasmClient {
@@ -1026,7 +1051,6 @@ const fn ir_type_display_name(ty: &IrType) -> &'static str {
         IrType::AuthConfig => "AuthConfig",
         IrType::TokenSource => "TokenSource",
         IrType::WebApp => "WebApp",
-        IrType::WebViewApp => "WebViewApp",
         IrType::TuiApp => "TuiApp",
         IrType::CliApp => "CliApp",
     }
@@ -1190,6 +1214,7 @@ mod schema_tag_tests {
             String::new(),
             false,
             false,
+            None,
         )?;
 
         // Model = { count : Int } (no `page` field → the single-page branch).

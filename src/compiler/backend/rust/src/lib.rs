@@ -236,6 +236,26 @@ pub struct RustBackend<'a> {
     /// which selects the webview executor and the `default = ["webview"]` feature.
     /// Set via [`Self::with_webview_host`]; default off (served `web`).
     webview_host: bool,
+    /// The desktop window configuration for a webview-native (`web desktop`)
+    /// delivery, resolved from the manifest `delivery.desktop` block. `None`
+    /// (the default, and always for a served `web`) selects the built-in
+    /// fallback window. Set via [`Self::with_webview_window`].
+    webview_window: Option<WebViewWindow>,
+}
+
+/// The desktop window configuration for a webview-native (`web desktop`)
+/// delivery, resolved by the CLI from the manifest `delivery.desktop` block.
+///
+/// The webview is the delivery HOST of the DOM `Web` shape, so the window is a
+/// host decision carried in the backend options, never a source `main` field.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct WebViewWindow {
+    /// The native window title.
+    pub title: String,
+    /// The initial window width in logical pixels.
+    pub width: i64,
+    /// The initial window height in logical pixels.
+    pub height: i64,
 }
 
 /// Convert an arbitrary `package.ipe` name value into a valid Cargo package
@@ -372,6 +392,7 @@ impl<'a> RustBackend<'a> {
             cargo_name: String::new(),
             hot_appearance: false,
             webview_host: false,
+            webview_window: None,
         }
     }
 
@@ -420,6 +441,16 @@ impl<'a> RustBackend<'a> {
     #[must_use]
     pub const fn with_webview_host(mut self, webview_host: bool) -> Self {
         self.webview_host = webview_host;
+        self
+    }
+
+    /// Set the desktop window configuration for a webview-native (`web desktop`)
+    /// delivery. Sourced from the manifest `delivery.desktop` block by the CLI.
+    /// Only consulted when [`Self::with_webview_host`] is set; a served `web`
+    /// leaves it `None`.
+    #[must_use]
+    pub fn with_webview_window(mut self, window: Option<WebViewWindow>) -> Self {
+        self.webview_window = window;
         self
     }
 
@@ -508,6 +539,7 @@ impl<'a> RustBackend<'a> {
             self.cargo_name.clone(),
             self.hot_appearance,
             self.webview_host,
+            self.webview_window.clone(),
         )?;
         project::emit_spine(&ctx, program)
     }
@@ -535,6 +567,7 @@ impl<'a> RustBackend<'a> {
             self.cargo_name.clone(),
             self.hot_appearance,
             self.webview_host,
+            self.webview_window.clone(),
         )
     }
 
@@ -562,6 +595,7 @@ impl<'a> RustBackend<'a> {
             self.cargo_name.clone(),
             self.hot_appearance,
             self.webview_host,
+            self.webview_window.clone(),
         )?;
         Ok(runtime_features::runtime_features(&ctx).as_feature_names())
     }
@@ -589,6 +623,7 @@ impl<'a> RustBackend<'a> {
             self.cargo_name.clone(),
             self.hot_appearance,
             self.webview_host,
+            self.webview_window.clone(),
         )?;
         project::emit_module_file(
             &ctx,
@@ -631,6 +666,7 @@ impl<'a> RustBackend<'a> {
             self.cargo_name.clone(),
             self.hot_appearance,
             self.webview_host,
+            self.webview_window.clone(),
         )?;
         project::assemble_split_manifest(&ctx, program, spine_text, module_texts)
     }
@@ -680,6 +716,7 @@ impl Backend for RustBackend<'_> {
             self.cargo_name.clone(),
             self.hot_appearance,
             self.webview_host,
+            self.webview_window.clone(),
         )?;
         project::emit_program(&ctx, program)
     }
@@ -1035,6 +1072,10 @@ pub(crate) struct EmitCtx<'a> {
     /// (which transitively pulls `"live"`) and the main entry is switched to
     /// `block_on_current_thread` (tao/Cocoa requires the process main thread).
     pub(crate) uses_webview: bool,
+    /// The desktop window configuration for a webview-native delivery, threaded
+    /// from the CLI's resolved `delivery.desktop`. `None` selects the runtime's
+    /// built-in fallback window; only consulted when [`Self::uses_webview`].
+    pub(crate) webview_window: Option<WebViewWindow>,
     /// `true` when the program uses at least one `Ipe.CssSafety` leaf
     /// security kernel (the `Ipe.Css` backing).  When set (independently of
     /// [`Self::uses_ui`]), [`crate::project::emit_program`] declares
@@ -1350,6 +1391,7 @@ impl<'a> EmitCtx<'a> {
         cargo_name: String,
         hot_appearance: bool,
         webview_host: bool,
+        webview_window: Option<WebViewWindow>,
     ) -> DResult<Self> {
         let mut enum_names: BTreeMap<(ModPath, Symbol), String> = BTreeMap::new();
         let mut variant_fields: BTreeMap<(ModPath, Symbol, Symbol), Vec<IrType>> = BTreeMap::new();
@@ -2007,6 +2049,7 @@ impl<'a> EmitCtx<'a> {
             uses_tui,
             uses_console,
             uses_webview,
+            webview_window,
             uses_css,
             uses_auth,
             uses_principal,
@@ -3420,7 +3463,6 @@ fn collect_type_feature_requirements(ty: &IrType, out: &mut BTreeSet<ipe_ir::Run
         | IrType::SessionHandle
         | IrType::Regex
         | IrType::WebApp
-        | IrType::WebViewApp
         | IrType::TuiApp
         | IrType::CliApp
         | IrType::UiPlain(_) => {}
@@ -3560,7 +3602,6 @@ const fn ir_type_is_record_shape_leaf(ty: &IrType) -> bool {
             | IrType::Locale
             | IrType::Principal
             | IrType::WebApp
-            | IrType::WebViewApp
             | IrType::TuiApp
             | IrType::CliApp
     )
@@ -3712,7 +3753,7 @@ fn collect_record_shapes(
         // descriptors, are opaque handles — no record shape.
         | IrType::Locale | IrType::Principal | IrType::AuthConfig | IrType::TokenSource
         // Shape opaque app leaves — no record shape.
-        | IrType::WebApp | IrType::WebViewApp | IrType::TuiApp | IrType::CliApp => {}
+        | IrType::WebApp | IrType::TuiApp | IrType::CliApp => {}
         // `WebRoute page` descends in case the page type carries a record shape.
         IrType::WebRoute(page) => collect_record_shapes(interner, page, shapes)?,
         IrType::CustomElement { down, up } => {
@@ -3892,7 +3933,7 @@ fn type_reaches_enum(
         // descriptors, are monomorphic opaque leaves — no enum edge.
         | IrType::Principal | IrType::AuthConfig | IrType::TokenSource
         // Shape opaque app leaves — monomorphic, no enum edge.
-        | IrType::WebApp | IrType::WebViewApp | IrType::TuiApp | IrType::CliApp => false,
+        | IrType::WebApp | IrType::TuiApp | IrType::CliApp => false,
         // `Route<Page>` stores its `not_found`/built pages by value — a page
         // type reaching `target` through a route is a genuine size edge.
         IrType::WebRoute(page) => type_reaches_enum(page, target, enums, visited),
@@ -4011,7 +4052,7 @@ fn contains_generic(ty: &IrType) -> bool {
         | IrType::AuthConfig
         | IrType::TokenSource
         // Shape opaque app leaves — monomorphic, no generic parameters.
-        | IrType::WebApp | IrType::WebViewApp | IrType::TuiApp | IrType::CliApp
+        | IrType::WebApp | IrType::TuiApp | IrType::CliApp
         // A row variable is a SEPARATE row generic (`R{n}`), never an ordinary
         // `T{n}` record-struct parameter, and never appears inside a record-
         // struct field. It contributes no `<T>` clause here.
@@ -4156,7 +4197,7 @@ fn collect_generics(ty: &IrType, out: &mut Vec<Symbol>) {
         | IrType::AuthConfig
         | IrType::TokenSource
         // Shape opaque app leaves — monomorphic, no generics to collect.
-        | IrType::WebApp | IrType::WebViewApp | IrType::TuiApp | IrType::CliApp
+        | IrType::WebApp | IrType::TuiApp | IrType::CliApp
         // A row variable is a separate row generic (`R{n}`), tracked in
         // `Func::row_params`, never in the ordinary `T{n}` scope collected here.
         | IrType::RowGeneric(_) => {}
@@ -4515,7 +4556,7 @@ fn match_template(
         | IrType::AuthConfig
         | IrType::TokenSource
         // Shape opaque app leaves — monomorphic.
-        | IrType::WebApp | IrType::WebViewApp | IrType::TuiApp | IrType::CliApp => {
+        | IrType::WebApp | IrType::TuiApp | IrType::CliApp => {
             if template == concrete {
                 Ok(())
             } else {
@@ -4935,6 +4976,7 @@ mod record_struct_namespace_tests {
             String::new(),
             false,
             false,
+            None,
         )?;
         assert_eq!(ctx.record_structs().len(), 1);
         assert_eq!(
@@ -5040,6 +5082,7 @@ mod record_struct_namespace_tests {
             String::new(),
             false,
             false,
+            None,
         )?;
         ctx.assert_record_structs_disjoint_from_type_namespace(&BTreeSet::new())
     }
@@ -5128,6 +5171,7 @@ mod record_struct_namespace_tests {
             String::new(),
             false,
             false,
+            None,
         )?;
 
         let colliding: BTreeSet<Symbol> = [snake, camel].into_iter().collect();
