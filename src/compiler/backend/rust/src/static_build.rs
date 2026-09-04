@@ -15,9 +15,11 @@
 //!   supplying `+crt-static` for the target, headed by
 //!   [`CARGO_CONFIG_MARKER`] so the driver can recognise (and, on a later
 //!   non-static build, remove) a file it generated.
-//! * [`manifest_is_webview`] is the typed app-shape probe the driver's
-//!   webview-under-static refusal reads: an `Ipe.WebView` app links the
-//!   system webview and can never be a static artifact.
+//!
+//! The webview-under-static refusal reads the backend's typed
+//! [`ipe_backend::EmittedProject::uses_webview`] signal (a webview app links
+//! the system webview and can never be a static artifact), not a re-parse of
+//! the emitted manifest's default-feature list.
 //!
 //! Anchored-`replacen` surgery with fail-loud [`Diagnostic::CompilerBug`] on
 //! anchor drift, exactly like the sibling `*_cargo_toml` functions in
@@ -307,42 +309,11 @@ pub fn staticize_manifest(base: &str, allocator: StaticAllocator) -> DResult<Str
     Ok(out)
 }
 
-/// Whether the emitted manifest is an `Ipe.WebView` app.
-///
-/// Read from the `default = [...]` feature list the backend computed (the
-/// machine-readable app-shape record every `*_cargo_toml` surgery
-/// maintains). The driver's static path refuses webview apps before writing
-/// any file: they link the system WebKit/WebView2 and cannot be static.
-///
-/// # Errors
-///
-/// [`Diagnostic::CompilerBug`] when the manifest has no `default = [` list —
-/// a drifted manifest, not a decidable shape.
-pub fn manifest_is_webview(cargo_toml: &str) -> DResult<bool> {
-    const DEFAULT_PREFIX: &str = "default = [";
-    let pfx = cargo_toml
-        .find(DEFAULT_PREFIX)
-        .ok_or_else(|| Diagnostic::CompilerBug {
-            where_: "ipe_backend_rust::static_build::manifest_is_webview",
-            detail: format!("Cargo.toml anchor {DEFAULT_PREFIX:?} not found — golden drifted"),
-        })?;
-    let search_from = pfx + DEFAULT_PREFIX.len();
-    let rel = cargo_toml
-        .get(search_from..)
-        .and_then(|s| s.find(']'))
-        .ok_or_else(|| Diagnostic::CompilerBug {
-            where_: "ipe_backend_rust::static_build::manifest_is_webview",
-            detail: "default feature list has no closing ']' — golden drifted".to_owned(),
-        })?;
-    let default_list = cargo_toml.get(search_from..search_from + rel).unwrap_or("");
-    Ok(default_list.contains("\"webview\""))
-}
-
 #[cfg(test)]
 mod tests {
     use super::{
         CARGO_CONFIG_MARKER, CProfile, StaticAllocator, StaticPlan, StaticTriple, cargo_config,
-        manifest_is_webview, staticize_manifest,
+        staticize_manifest,
     };
     use ipe_diagnostics::DResult;
 
@@ -551,24 +522,5 @@ mod tests {
             cfg.contains("linker=rust-lld"),
             "aarch64 pins rust-lld self-contained (portable, no scarce musl-cross-gcc)"
         );
-    }
-
-    #[test]
-    fn webview_shape_is_read_from_the_default_list() -> DResult<()> {
-        assert!(!manifest_is_webview(CARGO_TOML)?);
-        let webview = CARGO_TOML.replacen(
-            r#"default = ["json"]"#,
-            r#"default = ["tokio", "crypto", "json", "live", "webview"]"#,
-            1,
-        );
-        assert!(manifest_is_webview(&webview)?);
-        // The feature *definition* (`webview = []`) alone is not the shape.
-        assert!(CARGO_TOML.contains("webview = []"));
-        Ok(())
-    }
-
-    #[test]
-    fn webview_probe_without_default_list_is_a_compiler_bug() {
-        assert!(manifest_is_webview("[package]\n").is_err());
     }
 }

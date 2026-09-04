@@ -1,6 +1,6 @@
 //! Emission for the `Ipe.Terminal` line-oriented app-entry.
 //!
-//! * [`KernelFn::TerminalAppLines`] — `Terminal.appLines cfg` →
+//! * [`KernelFn::TerminalAppLines`] — `Cli.app cfg` →
 //!   `ipe_runtime::console_app(init, update, view, subscriptions, on_line)`.
 //!   View returns `String` (printed to stdout on each state change).
 //!   5-field closed cfg: init / update / view / subscriptions / onLine.
@@ -47,7 +47,7 @@ pub fn emit_console_call(
     };
 
     match k {
-        // ── Terminal.appLines { init, update, view, subscriptions, onLine } ─
+        // ── Cli.app { init, update, view, subscriptions, onLine } ─
         //
         // view : Model -> String
         // Runtime entry: `ipe_runtime::console_app(init, update, view, subs, on_line)`
@@ -55,7 +55,7 @@ pub fn emit_console_call(
             let [cfg_e] = args else {
                 return Err(Diagnostic::CompilerBug {
                     where_: "ipe_backend_rust::emit_console_call::TerminalAppLines",
-                    detail: format!("Terminal.appLines requires 1 argument, got {}", args.len()),
+                    detail: format!("Cli.app requires 1 argument, got {}", args.len()),
                 });
             };
             // Unreachable for well-typed source: a non-literal cfg is rejected
@@ -64,7 +64,7 @@ pub fn emit_console_call(
             let Expr::Record { fields, .. } = cfg_e else {
                 return Err(Diagnostic::CompilerBug {
                     where_: "ipe_backend_rust::emit_console_call::TerminalAppLines",
-                    detail: "Terminal.appLines cfg must be an inline record literal; \
+                    detail: "Cli.app cfg must be an inline record literal; \
                              a non-literal cfg is rejected at lower with IPE-L0119"
                         .into(),
                 });

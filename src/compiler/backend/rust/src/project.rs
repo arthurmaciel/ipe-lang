@@ -2205,7 +2205,11 @@ fn assemble_project_files(
                 relocate_env_public_to_user_crate(&mut files, &ctx.wasm_public_env)?;
             }
             let cargo_toml = apply_cargo_name(&cargo_toml, &safe_name);
-            return Ok(EmittedProject { files, cargo_toml });
+            return Ok(EmittedProject {
+                files,
+                cargo_toml,
+                uses_webview: ctx.uses_webview,
+            });
         }
 
         // Vendored model: the trimmed runtime module subtree is emitted into the
@@ -2242,6 +2246,7 @@ fn assemble_project_files(
         return Ok(EmittedProject {
             files,
             cargo_toml: wasm_cargo_toml,
+            uses_webview: ctx.uses_webview,
         });
     }
 
@@ -2303,7 +2308,11 @@ fn assemble_project_files(
             cargo_toml = ffi_cargo_toml(&cargo_toml, ctx)?;
         }
         let cargo_toml = apply_cargo_name(&cargo_toml, &safe_name);
-        return Ok(EmittedProject { files, cargo_toml });
+        return Ok(EmittedProject {
+            files,
+            cargo_toml,
+            uses_webview: ctx.uses_webview,
+        });
     }
 
     // ── Manifest + runtime module files ──────────────────────────────────────
@@ -2881,7 +2890,11 @@ fn assemble_project_files(
         main.push_str("\nmod ffi;\n");
     }
     let cargo_toml = apply_cargo_name(&cargo_toml, &safe_name);
-    Ok(EmittedProject { files, cargo_toml })
+    Ok(EmittedProject {
+        files,
+        cargo_toml,
+        uses_webview: ctx.uses_webview,
+    })
 }
 
 /// Return `true` when `ty` (or any type it structurally contains) is a
