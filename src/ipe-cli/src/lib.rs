@@ -4704,12 +4704,6 @@ fn run_run_body(rest: &[String]) -> Result<(), CliError> {
 
     let entry_path = PathBuf::from(&entry);
 
-    // Resolve the delivery grammar (shape cross-check, runtime/host, `--static`
-    // gate) against the shape `main` pins — same as `ipe build`. A webview-native
-    // `web desktop` drives `webview_host` below.
-    let wants_static = cli_layer.static_build == Some(true);
-    let delivery = resolve_delivery(&entry_path, &args.delivery, wants_static, "run")?;
-
     let out_dir = args
         .out
         .map_or_else(|| PathBuf::from("out").join("rust"), PathBuf::from);
@@ -4725,10 +4719,20 @@ fn run_run_body(rest: &[String]) -> Result<(), CliError> {
     let manifest_wasm: Option<project::WasmConfig> =
         manifest_parsed.as_ref().map(|m| m.wasm.clone());
 
-    // Resolve the static plan FIRST: it is pure over the flag/env/manifest
-    // request layer and reads no source, so a flag-contradiction refusal fires
-    // before any filesystem read of the entry — identical to `ipe build`.
+    let wants_static = cli_layer.static_build == Some(true);
+
+    // Static-flag contradictions (--cfree + C-requiring allocator,
+    // --target without --static, talc-without-arena) are pure over the CLI +
+    // env + manifest layers and touch no source. Resolving here — before
+    // resolve_delivery reads the entry file — ensures a refused run produces
+    // no artifact and touches nothing, even when the entry path does not exist.
     let static_plan = resolve_static_plan(cli_layer, manifest.as_deref())?;
+
+    // Resolve the delivery grammar (shape cross-check, runtime/host, `--static`
+    // gate) against the shape `main` pins — same as `ipe build`. A webview-native
+    // `web desktop` drives `webview_host` below. Runs after the static-plan check
+    // so a flag contradiction fires before the entry file is read.
+    let delivery = resolve_delivery(&entry_path, &args.delivery, wants_static, "run")?;
 
     // Acknowledge any disclosed `.Unsafe` escape-hatch import BEFORE the (costly)
     // emit + cargo build. Same gate as `ipe build`: the safe path is silent, an
