@@ -1,0 +1,135 @@
+-- | Ipe.Browser.Permission.Internals — the low-level Permissions API port
+-- surface: the closed outbound/inbound ADTs and the raw `Ipe.Ffi.Js`
+-- request/subscribe wiring the high-level `Ipe.Browser.Permission` layer wraps.
+--
+-- Importing this submodule discloses the same `js-port:permission` axis as the
+-- top-level module (the disclosure is keyed on the `Ipe.Browser.Permission` path
+-- prefix), so the raw port surface cannot be reached undisclosed.
+module Ipe.Browser.Permission.Internals exposing
+    ( JsCmd(..)
+    , JsMsg(..)
+    , PermissionName(..)
+    , request
+    , requestOne
+    , subscribe
+    , inbound
+    )
+
+import Ipe.Error as Error exposing (Error)
+import Ipe.Ffi.Js as Js
+import Ipe.Json.Decode as Decode
+import Ipe.Tea.Web.Cmd as Cmd
+import Ipe.Tea.Web.Sub as Sub
+
+
+-- | The closed set of queryable permission names.
+--
+-- Each constructor maps to its W3C Permissions API name string; only the
+-- Baseline-supported names are covered.
+type PermissionName
+    = Camera
+    | Microphone
+    | Geolocation
+    | Notifications
+    | PersistentStorage
+    | ClipboardRead
+    | ClipboardWrite
+    | MidiSysex
+
+
+-- | The ONE closed OUTBOUND port type.
+--
+--   * `Query name` — one-shot: query the current state of a single permission.
+--   * `Watch name` — begin a continuous stream; each state change event
+--     delivers a fresh reading on the inbound subscription.
+type JsCmd
+    = Query PermissionName
+    | Watch PermissionName
+
+
+-- | The NARROW closed INBOUND port type — NOT the app's internal `Msg`. Every
+-- variant the browser can push is enumerated, so the fold in the high-level
+-- layer is EXHAUSTIVE and a denial becomes a typed `Err`, never a silent drop.
+--
+--   * `StateGranted` — the permission is currently granted.
+--   * `StateDenied` — the permission is currently denied; querying it again without a
+--     user gesture yields the same result.
+--   * `StatePrompt` — the browser will prompt the user on the next relevant API call.
+--   * `StateUnavailable` — the Permissions API is absent in this context.
+--
+-- Variants are prefixed with `State` to avoid clashing with the public
+-- `PermissionState` constructors (`Granted`, `Denied`, `Prompt`) in modules
+-- that import both.
+type JsMsg
+    = StateGranted
+    | StateDenied
+    | StatePrompt
+    | StateUnavailable
+
+
+-- | `request cmd` — hand a closed outbound `JsCmd` to the raw port transport.
+-- The served first-party JS sink reaches `navigator.permissions.query`; the
+-- reply arrives inbound as a `JsMsg`.
+request : JsCmd -> Cmd.Cmd msg
+request cmd =
+    Js.send cmd
+
+
+-- | `requestOne cmd` — correlated one-shot `JsCmd` → `Task Error JsMsg`.
+-- Routes through `Js.request` with the `inbound` decoder so the correlated
+-- reply is decoded fail-closed by the same gate the `subscribe` path uses.
+requestOne : JsCmd -> Task Error JsMsg
+requestOne cmd =
+    Js.request cmd inbound
+
+
+-- | `subscribe toMsg` — the inbound subscription over the fail-closed seal
+-- decoder. `inbound` IS the security gate; a malformed / mismatched frame is
+-- dropped whole.
+subscribe : (JsMsg -> msg) -> Sub.Sub msg
+subscribe toMsg =
+    Js.subscribe inbound toMsg
+
+
+-- | The total, fail-closed decoder for the inbound `JsMsg`. It reads the `ok`
+-- flag: a true flag decodes a `state` string into the closed state vocabulary;
+-- a false flag decodes the closed `error` vocabulary. An unrecognised token
+-- fails the decode closed (the frame is dropped).
+inbound : Decode.Decoder JsMsg
+inbound =
+    Decode.andThen decodeByOk (Decode.field "ok" Decode.bool)
+
+
+decodeByOk : Bool -> Decode.Decoder JsMsg
+decodeByOk ok =
+    if ok then
+        Decode.andThen decodeState (Decode.field "state" Decode.string)
+
+    else
+        Decode.andThen decodeError (Decode.field "error" Decode.string)
+
+
+decodeState : String -> Decode.Decoder JsMsg
+decodeState state =
+    case state of
+        "granted" ->
+            Decode.succeed StateGranted
+
+        "denied" ->
+            Decode.succeed StateDenied
+
+        "prompt" ->
+            Decode.succeed StatePrompt
+
+        _ ->
+            Decode.fail ("unknown permission state: " ++ state)
+
+
+decodeError : String -> Decode.Decoder JsMsg
+decodeError token =
+    case token of
+        "unavailable" ->
+            Decode.succeed StateUnavailable
+
+        _ ->
+            Decode.fail ("unknown permission error variant: " ++ token)

@@ -1,0 +1,98 @@
+-- | Ipe.Browser.Connectivity — read the browser online/offline state over
+-- `Ipe.Ffi.Js` ports.
+--
+-- Distinct from `Ipe.Browser.NetworkInfo`, which surfaces network-information
+-- HINTS (effective type, downlink, RTT) from `navigator.connection`.
+-- `Connectivity` surfaces the binary online/offline event stream from the
+-- `online`/`offline` window events and `navigator.onLine`, without reading any
+-- connection-quality hint.
+--
+-- A first-party proof of the per-capability web mechanism spanning BOTH port
+-- directions: an outbound `JsCmd` requests the state (`connected` one-shot or a
+-- continuous `watch`), and an inbound `JsMsg` carries the reply — a decoded
+-- `Bool` or a typed unavailability. Both cross the same seal codec and
+-- fail-closed port discipline as every other port; there is no second transport.
+--
+-- Importing this reserved `Ipe.Browser.<Api>` module discloses
+-- `js-port:connectivity` (import-derived, keyed on the canonical
+-- `Ipe.Browser.Connectivity` path prefix via `WebCapability::for_browser_module`,
+-- alias-immune); only the top-level app's `[capabilities] accepts` set can grant
+-- it.
+--
+-- The two layers:
+--
+--   * `Ipe.Browser.Connectivity.Internals` publishes the closed outbound/inbound ADTs.
+--   * this module is the high-level layer: `connected` returns a `Task Error Bool`
+--     via the correlated port→Task bridge; `watch` is `Cmd`-shaped, and `changes`
+--     is the inbound subscription folding the narrow `JsMsg` into a typed
+--     `Result Error Bool`. The inbound `case` is EXHAUSTIVE: an unavailability
+--     becomes a typed `Err`, never a silently dropped variant.
+module Ipe.Browser.Connectivity exposing
+    ( connected
+    , watch
+    , changes
+    )
+
+import Ipe.Browser.Connectivity.Internals as Internals exposing (JsMsg(..))
+import Ipe.Error as Error exposing (Error)
+import Ipe.Task as Task
+import Ipe.Tea.Web.Cmd as Cmd
+import Ipe.Tea.Web.Sub as Sub
+
+
+-- | `connected` — read the current online state ONCE, as a `Task Error Bool`.
+--
+-- `True` when `navigator.onLine` is `true` (the browser believes the device is
+-- online); `False` when offline. Uses the correlated port→Task bridge
+-- (`Js.request`). A typed unavailability resolves the `Task` with `Err`; no
+-- companion subscription is needed.
+--
+-- Importing this module discloses `js-port:connectivity`; the app must grant it
+-- with `accepts = [ JsPort Connectivity ]` under [capabilities] in package.ipe.
+connected : Task Error Bool
+connected =
+    Internals.requestOne Internals.Query
+        |> Task.andThen foldConnected
+
+
+-- | `watch` — begin a CONTINUOUS online/offline stream; each `online`/`offline`
+-- window event delivers a fresh state on the `changes` subscription. Outbound `Cmd`.
+watch : Cmd.Cmd msg
+watch =
+    Internals.request Internals.Watch
+
+
+-- | `changes toMsg` — the inbound subscription, wired in `subscriptions`.
+--
+-- The decoder IS the security gate: every inbound value runs through the total,
+-- bounded seal decoder for the narrow `JsMsg`; a malformed / mismatched frame is
+-- dropped whole. A decoded `JsMsg` is folded EXHAUSTIVELY into a
+-- `Result Error Bool` — an `Online` state becomes `Ok True`/`Ok False`, an
+-- unavailability a typed `Err`.
+changes : (Result Error Bool -> msg) -> Sub.Sub msg
+changes toMsg =
+    Internals.subscribe (\inbound -> toMsg (toResult inbound))
+
+
+-- | Fold a `connected` reply into a `Task Error Bool`. The `case` is exhaustive
+-- over every published inbound variant.
+foldConnected : Internals.JsMsg -> Task Error Bool
+foldConnected msg =
+    case msg of
+        Online isOnline ->
+            Task.succeed isOnline
+
+        Unavailable ->
+            Task.fail (Error.unavailable "connectivity state unavailable")
+
+
+-- | Fold the narrow inbound `JsMsg` into a typed `Result Error Bool`. The `case`
+-- is exhaustive over every published inbound variant.
+toResult : Internals.JsMsg -> Result Error Bool
+toResult inbound =
+    case inbound of
+        Online isOnline ->
+            Ok isOnline
+
+        Unavailable ->
+            Err (Error.unavailable "connectivity state unavailable")

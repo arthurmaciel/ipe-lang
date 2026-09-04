@@ -1,0 +1,95 @@
+module Main exposing (main)
+
+-- | speech-tts — `Ipe.Browser.Speech.speak` end-to-end, with the consent gate
+-- satisfied.
+--
+-- Demonstrates one-shot speech synthesis: the user types text, clicks "Speak",
+-- and the app synthesises it at normal rate and pitch. A second "Cancel" button
+-- interrupts any in-progress utterance. The outcome (completion or typed error)
+-- is displayed on screen.
+--
+-- `Ipe.Browser.Speech` discloses `js-port:speech` on import; the companion
+-- `js-port:raw` floor is also disclosed (the module reaches `Js.send`/
+-- `Js.subscribe` internally). Both are accepted in `package.ipe`.
+--
+-- A host denial or an absent `speechSynthesis` API arrives as a typed `Err` —
+-- never a thrown error or a silently dropped frame.
+
+
+import Ipe.Tea.Web as Web
+import Ipe.Tea.Web.Cmd as Cmd
+import Ipe.Tea.Web.Sub as Sub
+import Ipe.Ui as Ui
+import Ipe.Error as Error exposing (Error)
+import Ipe.Browser.Speech as Speech
+import Ipe.Task as Task
+
+
+type alias Model =
+    { text : String
+    , status : String
+    }
+
+
+type Msg
+    = TextChanged String
+    | Speak
+    | Cancel
+    | GotOutcome (Result Error ())
+
+
+init : WebReq -> ( Model, Cmd.Cmd Msg )
+init _req =
+    ( { text = "Hello from Ipê!", status = "ready" }, Cmd.none )
+
+
+update : Msg -> Model -> ( Model, Cmd.Cmd Msg )
+update msg model =
+    case msg of
+        TextChanged t ->
+            ( { model | text = t }, Cmd.none )
+
+        Speak ->
+            ( { model | status = "speaking…" }
+            , Task.attempt GotOutcome
+                (Speech.speak model.text Speech.defaultOptions)
+            )
+
+        Cancel ->
+            ( { model | status = "cancelled" }, Speech.cancel )
+
+        GotOutcome result ->
+            case result of
+                Ok _ ->
+                    ( { model | status = "done" }, Cmd.none )
+
+                Err error ->
+                    ( { model | status = "error: " ++ Error.toString error }, Cmd.none )
+
+
+subscriptions : Model -> Sub.Sub Msg
+subscriptions _model =
+    Speech.outcomes GotOutcome
+
+
+view : Model -> Element Msg
+view model =
+    Ui.column []
+        [ Ui.text "Text to speak:"
+        , Ui.row []
+            [ Ui.button [] { onPress = Just Speak, label = Ui.text "Speak" }
+            , Ui.button [] { onPress = Just Cancel, label = Ui.text "Cancel" }
+            ]
+        , Ui.text ("status: " ++ model.status)
+        ]
+
+
+main =
+    Web.app
+        { init = init
+        , update = update
+        , view = view
+        , subscriptions = subscriptions
+        , routes = []
+        , notFound = Speak
+        }

@@ -219,7 +219,26 @@ fn requirement_for(axis: WebCapability) -> AxisRequirement {
         | WebCapability::Battery
         | WebCapability::File
         | WebCapability::Camera
-        | WebCapability::Raw => no_os_permission(),
+        // Gamepad API: no static usage-description or manifest permission needed
+        // on iOS/Android — the browser mediates access without a declaration, and
+        // no permission prompt is issued: gamepads are input devices, not sensors.
+        | WebCapability::Gamepad
+        // Visibility, MediaQuery, and Connectivity reach no permission-gated OS
+        // surface: the Page Visibility API, matchMedia, and navigator.onLine are
+        // all user-context reads with no static OS permission declaration on any
+        // platform (iOS / macOS / Android). Named explicitly so a future change
+        // to one of these axes is considered deliberately, not through a wildcard.
+        | WebCapability::Visibility
+        | WebCapability::MediaQuery
+        | WebCapability::Connectivity
+        | WebCapability::Raw
+        // Speech synthesis uses the browser's speechSynthesis API — no static
+        // usage-description or manifest permission entry on iOS/macOS/Android.
+        | WebCapability::Speech
+        // The Permissions API itself (navigator.permissions.query) has no OS-level
+        // permission declaration; the API queries existing permission state rather
+        // than requesting a new privilege.
+        | WebCapability::Permission => no_os_permission(),
     }
 }
 

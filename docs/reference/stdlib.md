@@ -15,22 +15,34 @@ Each module listed below links to a detail page with the full documentation and 
 - [Browser.Camera.Internals](#browsercamerainternals)
 - [Browser.Clipboard](#browserclipboard)
 - [Browser.Clipboard.Internals](#browserclipboardinternals)
+- [Browser.Connectivity](#browserconnectivity)
+- [Browser.Connectivity.Internals](#browserconnectivityinternals)
 - [Browser.FilePicker](#browserfilepicker)
 - [Browser.FilePicker.Internals](#browserfilepickerinternals)
+- [Browser.Gamepad](#browsergamepad)
+- [Browser.Gamepad.Internals](#browsergamepadinternals)
 - [Browser.Geolocation](#browsergeolocation)
 - [Browser.Geolocation.Internals](#browsergeolocationinternals)
+- [Browser.MediaQuery](#browsermediaquery)
+- [Browser.MediaQuery.Internals](#browsermediaqueryinternals)
 - [Browser.Microphone](#browsermicrophone)
 - [Browser.Microphone.Internals](#browsermicrophoneinternals)
 - [Browser.NetworkInfo](#browsernetworkinfo)
 - [Browser.NetworkInfo.Internals](#browsernetworkinfointernals)
 - [Browser.Notification](#browsernotification)
 - [Browser.Notification.Internals](#browsernotificationinternals)
+- [Browser.Permission](#browserpermission)
+- [Browser.Permission.Internals](#browserpermissioninternals)
 - [Browser.Share](#browsershare)
 - [Browser.Share.Internals](#browsershareinternals)
+- [Browser.Speech](#browserspeech)
+- [Browser.Speech.Internals](#browserspeechinternals)
 - [Browser.Storage](#browserstorage)
 - [Browser.Storage.Internals](#browserstorageinternals)
 - [Browser.Vibration](#browservibration)
 - [Browser.Vibration.Internals](#browservibrationinternals)
+- [Browser.Visibility](#browservisibility)
+- [Browser.Visibility.Internals](#browservisibilityinternals)
 - [ByteSize](#bytesize)
 - [Bytes](#bytes)
 - [Cache](#cache)
@@ -259,6 +271,33 @@ Ipe.Browser.Clipboard.Internals — the low-level clipboard port surface: the
 | `subscribe` | `subscribe toMsg` — the inbound subscription over the fail-closed seal |
 | `inbound` | The total, fail-closed decoder for the inbound `JsMsg`. It reads `ok` first: a |
 
+## Browser.Connectivity
+
+[Full reference](stdlib/Browser.Connectivity.md)
+
+Ipe.Browser.Connectivity — read the browser online/offline state over
+
+| Export | Summary |
+|--------|----------|
+| `connected` | `connected` — read the current online state ONCE, as a `Task Error Bool`. |
+| `watch` | `watch` — begin a CONTINUOUS online/offline stream; each `online`/`offline` |
+| `changes` | `changes toMsg` — the inbound subscription, wired in `subscriptions`. |
+
+## Browser.Connectivity.Internals
+
+[Full reference](stdlib/Browser.Connectivity.Internals.md)
+
+Ipe.Browser.Connectivity.Internals — the low-level Connectivity port surface:
+
+| Export | Summary |
+|--------|----------|
+| `JsCmd` | The ONE closed OUTBOUND port type: the whole outbound surface as a single |
+| `JsMsg` | The NARROW closed INBOUND port type — deliberately NOT the app's internal |
+| `request` | `request cmd` — hand a closed outbound `JsCmd` to the raw port transport. |
+| `requestOne` | `requestOne cmd` — correlated one-shot `JsCmd` → `Task Error JsMsg`. |
+| `subscribe` | `subscribe toMsg` — the inbound subscription over the fail-closed seal |
+| `inbound` | The total, fail-closed decoder for the inbound `JsMsg`. It reads the `ok` |
+
 ## Browser.FilePicker
 
 [Full reference](stdlib/Browser.FilePicker.md)
@@ -287,6 +326,34 @@ Ipe.Browser.FilePicker.Internals — the low-level file-picker port surface:
 | `subscribe` | `subscribe toMsg` — the inbound subscription over the fail-closed seal |
 | `inbound` | The total, fail-closed decoder for the inbound `JsMsg`. It reads `ok` |
 
+## Browser.Gamepad
+
+[Full reference](stdlib/Browser.Gamepad.md)
+
+Ipe.Browser.Gamepad — a session-stream delivering gamepad connect/disconnect
+
+| Export | Summary |
+|--------|----------|
+| `GamepadEvent` | A typed gamepad event delivered by the watch stream. |
+| `watch` | `watch` — begin a continuous gamepad stream; connect/disconnect events and |
+| `stopWatch` | `stopWatch` — stop the active gamepad poll and remove the event listeners. |
+| `events` | `events toMsg` — the inbound subscription, wired in `subscriptions`. |
+
+## Browser.Gamepad.Internals
+
+[Full reference](stdlib/Browser.Gamepad.Internals.md)
+
+Ipe.Browser.Gamepad.Internals — the low-level Gamepad port surface: the
+
+| Export | Summary |
+|--------|----------|
+| `JsCmd` | The ONE closed OUTBOUND port type. |
+| `JsMsg` | The NARROW closed INBOUND port type — deliberately NOT the app's internal |
+| `request` | `request cmd` — hand a closed outbound `JsCmd` to the raw port transport. |
+| `requestOne` | `requestOne cmd` — correlated one-shot `JsCmd` → `Task Error JsMsg`. |
+| `subscribe` | `subscribe toMsg` — the inbound subscription over the fail-closed seal |
+| `inbound` | The total, fail-closed decoder for the inbound `JsMsg`. Reads the `event` |
+
 ## Browser.Geolocation
 
 [Full reference](stdlib/Browser.Geolocation.md)
@@ -311,6 +378,33 @@ Ipe.Browser.Geolocation.Internals — the full, low-level geolocation port
 |--------|----------|
 | `Options` | The `getCurrentPosition` / `watchPosition` option knobs, mirroring the Web API |
 | `defaults` | Sane defaults: a coarse fix, no deadline, always fresh — the values the |
+| `JsCmd` | The ONE closed OUTBOUND port type: the whole outbound surface as a single |
+| `JsMsg` | The NARROW closed INBOUND port type — deliberately NOT the app's internal |
+| `request` | `request cmd` — hand a closed outbound `JsCmd` to the raw port transport. |
+| `requestOne` | `requestOne cmd` — correlated one-shot `JsCmd` → `Task Error JsMsg`. |
+| `subscribe` | `subscribe toMsg` — the inbound subscription over the fail-closed seal |
+| `inbound` | The total, fail-closed decoder for the inbound `JsMsg`. It reads the `ok` |
+
+## Browser.MediaQuery
+
+[Full reference](stdlib/Browser.MediaQuery.md)
+
+Ipe.Browser.MediaQuery — evaluate CSS media queries over `Ipe.Ffi.Js` ports.
+
+| Export | Summary |
+|--------|----------|
+| `match_` | `match_ query` — evaluate a CSS media query string ONCE, as a |
+| `watch` | `watch query` — begin a CONTINUOUS match stream for `query`; each |
+| `matches` | `matches toMsg` — the inbound subscription, wired in `subscriptions`. |
+
+## Browser.MediaQuery.Internals
+
+[Full reference](stdlib/Browser.MediaQuery.Internals.md)
+
+Ipe.Browser.MediaQuery.Internals — the low-level MediaQuery port surface:
+
+| Export | Summary |
+|--------|----------|
 | `JsCmd` | The ONE closed OUTBOUND port type: the whole outbound surface as a single |
 | `JsMsg` | The NARROW closed INBOUND port type — deliberately NOT the app's internal |
 | `request` | `request cmd` — hand a closed outbound `JsCmd` to the raw port transport. |
@@ -404,6 +498,36 @@ Ipe.Browser.Notification.Internals — the low-level notification port surface:
 | `subscribe` | `subscribe toMsg` — the inbound subscription over the fail-closed seal |
 | `inbound` | The total, fail-closed decoder for the inbound `JsMsg`. It reads `ok` first: a |
 
+## Browser.Permission
+
+[Full reference](stdlib/Browser.Permission.md)
+
+Ipe.Browser.Permission — query and watch browser permission state via
+
+| Export | Summary |
+|--------|----------|
+| `PermissionState` | The three states the browser reports for any queried permission. |
+| `PermissionName` | Re-export of `Internals.PermissionName` — the closed set of W3C Permissions |
+| `query` | `query name` — read the current state of a single browser permission ONCE, |
+| `watch` | `watch name` — begin a CONTINUOUS state-change stream for a single |
+| `changes` | `changes name toMsg` — the inbound subscription for state changes on `name`, |
+
+## Browser.Permission.Internals
+
+[Full reference](stdlib/Browser.Permission.Internals.md)
+
+Ipe.Browser.Permission.Internals — the low-level Permissions API port
+
+| Export | Summary |
+|--------|----------|
+| `JsCmd` | The ONE closed OUTBOUND port type. |
+| `JsMsg` | The NARROW closed INBOUND port type — NOT the app's internal `Msg`. Every |
+| `PermissionName` | The closed set of queryable permission names. |
+| `request` | `request cmd` — hand a closed outbound `JsCmd` to the raw port transport. |
+| `requestOne` | `requestOne cmd` — correlated one-shot `JsCmd` → `Task Error JsMsg`. |
+| `subscribe` | `subscribe toMsg` — the inbound subscription over the fail-closed seal |
+| `inbound` | The total, fail-closed decoder for the inbound `JsMsg`. It reads the `ok` |
+
 ## Browser.Share
 
 [Full reference](stdlib/Browser.Share.md)
@@ -431,6 +555,37 @@ Ipe.Browser.Share.Internals — the low-level Web Share port surface: the closed
 | `requestOne` | `requestOne cmd` — correlated one-shot `JsCmd` → `Task Error JsMsg`. |
 | `subscribe` | `subscribe toMsg` — the inbound subscription over the fail-closed seal |
 | `inbound` | The total, fail-closed decoder for the inbound `JsMsg`. It reads the `ok` |
+
+## Browser.Speech
+
+[Full reference](stdlib/Browser.Speech.md)
+
+Ipe.Browser.Speech — one-shot speech synthesis and queue control via the
+
+| Export | Summary |
+|--------|----------|
+| `Options` | Synthesis options — see `Ipe.Browser.Speech.Internals.Options` for field |
+| `defaultOptions` | Sensible defaults: normal rate, pitch, and volume; browser-default language. |
+| `speak` | `speak text opts` — synthesise `text` with the given options, as a |
+| `cancel` | `cancel` — cancel any queued or in-progress utterance, fire-and-forget. |
+| `outcomes` | `outcomes toMsg` — the inbound subscription, wired in `subscriptions`. |
+
+## Browser.Speech.Internals
+
+[Full reference](stdlib/Browser.Speech.Internals.md)
+
+Ipe.Browser.Speech.Internals — the low-level speech synthesis port surface:
+
+| Export | Summary |
+|--------|----------|
+| `Options` | Synthesis options. All fields are clamped by the browser to its own |
+| `defaultOptions` | Sensible defaults: normal rate, pitch, and volume; browser-default language. |
+| `JsCmd` | The closed OUTBOUND port type. The entire outbound surface is a single |
+| `JsMsg` | The NARROW closed INBOUND port type — NOT the app's internal `Msg`. Every |
+| `request` | `request cmd` — hand a closed outbound `JsCmd` to the raw port transport. |
+| `requestOne` | `requestOne cmd` — correlated one-shot `JsCmd` → `Task Error JsMsg`. |
+| `subscribe` | `subscribe toMsg` — the inbound subscription over the fail-closed seal |
+| `inbound` | The total, fail-closed decoder for the inbound `JsMsg`. It reads `ok` |
 
 ## Browser.Storage
 
@@ -480,6 +635,34 @@ Ipe.Browser.Vibration — drive the device vibration actuator over `Ipe.Ffi.Js`
 [Full reference](stdlib/Browser.Vibration.Internals.md)
 
 Ipe.Browser.Vibration.Internals — the low-level Vibration port surface: the
+
+| Export | Summary |
+|--------|----------|
+| `JsCmd` | The ONE closed OUTBOUND port type: the whole outbound surface as a single |
+| `JsMsg` | The NARROW closed INBOUND port type — deliberately NOT the app's internal |
+| `request` | `request cmd` — hand a closed outbound `JsCmd` to the raw port transport. |
+| `requestOne` | `requestOne cmd` — correlated one-shot `JsCmd` → `Task Error JsMsg`. |
+| `subscribe` | `subscribe toMsg` — the inbound subscription over the fail-closed seal |
+| `inbound` | The total, fail-closed decoder for the inbound `JsMsg`. It reads the `ok` |
+
+## Browser.Visibility
+
+[Full reference](stdlib/Browser.Visibility.md)
+
+Ipe.Browser.Visibility — read the document visibility state over `Ipe.Ffi.Js`
+
+| Export | Summary |
+|--------|----------|
+| `State` | The document visibility state. |
+| `state` | `state` — read the current document visibility state ONCE, as a |
+| `watch` | `watch` — begin a CONTINUOUS visibility stream; each `visibilitychange` |
+| `changes` | `changes toMsg` — the inbound subscription, wired in `subscriptions`. |
+
+## Browser.Visibility.Internals
+
+[Full reference](stdlib/Browser.Visibility.Internals.md)
+
+Ipe.Browser.Visibility.Internals — the low-level Visibility port surface:
 
 | Export | Summary |
 |--------|----------|

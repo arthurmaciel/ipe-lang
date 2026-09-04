@@ -1,0 +1,127 @@
+module Main exposing (main)
+
+-- | browser-permission — queries and watches browser permission state via
+-- `Ipe.Browser.Permission`.
+--
+-- On load, the app sends a one-shot `query` for the Geolocation permission and
+-- shows the typed `PermissionState`. A "Watch" button begins a continuous stream
+-- over `PermissionStatus.onchange`; state changes arrive via the `changes`
+-- subscription and refresh the display. All denials and unavailability trap to a
+-- typed `Err`, never a panic or silent drop.
+--
+-- This example requires `accepts = [ JsPort Permission ]` in package.ipe, which
+-- is the capability consent gate: the compiler refuses to build the example if
+-- the declaration is absent.
+
+
+import Ipe.Browser.Permission as Permission exposing (PermissionState(..))
+import Ipe.Browser.Permission.Internals as Internals
+import Ipe.Error as Error exposing (Error)
+import Ipe.Maybe exposing (Maybe(..))
+import Ipe.Result exposing (Result(..))
+import Ipe.String as String
+import Ipe.Tea.Web as Web
+import Ipe.Tea.Web.Cmd as Cmd
+import Ipe.Tea.Web.Sub as Sub
+import Ipe.Ui as Ui
+
+
+type alias Model =
+    { state : Maybe (Result Error PermissionState)
+    , watching : Bool
+    }
+
+
+type Msg
+    = QueryGeolocation
+    | GotState (Result Error PermissionState)
+    | WatchGeolocation
+    | StateChanged (Result Error PermissionState)
+
+
+init : WebReq -> ( Model, Cmd.Cmd Msg )
+init _req =
+    ( { state = Nothing, watching = False }
+    , Cmd.perform (Permission.query Internals.Geolocation) GotState
+    )
+
+
+update : Msg -> Model -> ( Model, Cmd.Cmd Msg )
+update msg model =
+    case msg of
+        QueryGeolocation ->
+            ( model
+            , Cmd.perform (Permission.query Internals.Geolocation) GotState
+            )
+
+        GotState result ->
+            ( { model | state = Just result }, Cmd.none )
+
+        WatchGeolocation ->
+            ( { model | watching = True }
+            , Permission.watch Internals.Geolocation
+            )
+
+        StateChanged result ->
+            ( { model | state = Just result }, Cmd.none )
+
+
+subscriptions : Model -> Sub.Sub Msg
+subscriptions model =
+    if model.watching then
+        Permission.changes Internals.Geolocation StateChanged
+
+    else
+        Sub.none
+
+
+stateLabel : PermissionState -> String
+stateLabel s =
+    case s of
+        Granted ->
+            "granted"
+
+        Denied ->
+            "denied"
+
+        Prompt ->
+            "prompt (user will be asked)"
+
+
+view : Model -> Element Msg
+view model =
+    Ui.column []
+        [ Ui.text "Ipe.Browser.Permission demo — Geolocation"
+        , case model.state of
+            Nothing ->
+                Ui.text "Querying…"
+
+            Just (Ok s) ->
+                Ui.text ("State: " ++ stateLabel s)
+
+            Just (Err e) ->
+                Ui.text ("Error: " ++ Error.toString e)
+        , Ui.button []
+            { onPress = Just QueryGeolocation
+            , label = Ui.text "Re-query"
+            }
+        , if model.watching then
+            Ui.text "Watching for changes…"
+
+          else
+            Ui.button []
+                { onPress = Just WatchGeolocation
+                , label = Ui.text "Watch for changes"
+                }
+        ]
+
+
+main =
+    Web.app
+        { init = init
+        , update = update
+        , view = view
+        , subscriptions = subscriptions
+        , routes = []
+        , notFound = QueryGeolocation
+        }

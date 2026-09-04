@@ -1,0 +1,115 @@
+-- | Ipe.Browser.Visibility — read the document visibility state over `Ipe.Ffi.Js`
+-- ports.
+--
+-- A first-party proof of the per-capability web mechanism spanning BOTH port
+-- directions: an outbound `JsCmd` requests the state (`state` one-shot or a
+-- continuous `watch`), and an inbound `JsMsg` carries the reply — a decoded
+-- `State` or a typed unavailability. Both cross the same seal codec and
+-- fail-closed port discipline as every other port; there is no second transport.
+--
+-- Importing this reserved `Ipe.Browser.<Api>` module discloses
+-- `js-port:visibility` (import-derived, keyed on the canonical
+-- `Ipe.Browser.Visibility` path prefix via `WebCapability::for_browser_module`,
+-- alias-immune); only the top-level app's `[capabilities] accepts` set can grant
+-- it.
+--
+-- The two layers:
+--
+--   * `Ipe.Browser.Visibility.Internals` publishes the closed outbound/inbound ADTs.
+--   * this module is the high-level layer: `state` returns a `Task Error State`
+--     via the correlated port→Task bridge; `watch` is `Cmd`-shaped, and `changes`
+--     is the inbound subscription folding the narrow `JsMsg` into a typed
+--     `Result Error State`. The inbound `case` is EXHAUSTIVE: an unavailability
+--     becomes a typed `Err`, never a silently dropped variant.
+module Ipe.Browser.Visibility exposing
+    ( State(..)
+    , state
+    , watch
+    , changes
+    )
+
+import Ipe.Browser.Visibility.Internals as Internals exposing (JsMsg(..))
+import Ipe.Error as Error exposing (Error)
+import Ipe.Task as Task
+import Ipe.Tea.Web.Cmd as Cmd
+import Ipe.Tea.Web.Sub as Sub
+
+
+-- | The document visibility state.
+--
+--   * `Visible` — the document is at least partially visible (the page is in the
+--     foreground tab).
+--   * `Hidden` — the document is not visible (backgrounded, minimised, or on an
+--     inactive tab).
+type State
+    = Visible
+    | Hidden
+
+
+-- | `state` — read the current document visibility state ONCE, as a
+-- `Task Error State`.
+--
+-- Uses the correlated port→Task bridge (`Js.request`). The reply — a `State` or a
+-- typed unavailability — resolves the `Task` directly; no companion subscription
+-- is needed.
+--
+-- Importing this module discloses `js-port:visibility`; the app must grant it
+-- with `accepts = [ JsPort Visibility ]` under [capabilities] in package.ipe.
+state : Task Error State
+state =
+    Internals.requestOne Internals.Query
+        |> Task.andThen foldState
+
+
+-- | `watch` — begin a CONTINUOUS visibility stream; each `visibilitychange`
+-- event delivers a fresh reading on the `changes` subscription. Outbound `Cmd`.
+watch : Cmd.Cmd msg
+watch =
+    Internals.request Internals.Watch
+
+
+-- | `changes toMsg` — the inbound subscription, wired in `subscriptions`.
+--
+-- The decoder IS the security gate: every inbound value runs through the total,
+-- bounded seal decoder for the narrow `JsMsg`; a malformed / mismatched frame is
+-- dropped whole. A decoded `JsMsg` is folded EXHAUSTIVELY into a
+-- `Result Error State` — a `Reading` becomes `Ok`, an unavailability a typed `Err`.
+changes : (Result Error State -> msg) -> Sub.Sub msg
+changes toMsg =
+    Internals.subscribe (\inbound -> toMsg (toResult inbound))
+
+
+-- | Fold a `state` reply into a `Task Error State`. The `case` is exhaustive
+-- over every published inbound variant.
+foldState : Internals.JsMsg -> Task Error State
+foldState msg =
+    case msg of
+        Reading isVisible ->
+            Task.succeed
+                (if isVisible then
+                    Visible
+
+                 else
+                    Hidden
+                )
+
+        Unavailable ->
+            Task.fail (Error.unavailable "document visibility unavailable")
+
+
+-- | Fold the narrow inbound `JsMsg` into a typed `Result Error State`. The `case`
+-- is exhaustive over every published inbound variant; `State` is assembled here.
+toResult : Internals.JsMsg -> Result Error State
+toResult inbound =
+    case inbound of
+        Reading isVisible ->
+            Ok
+                (if isVisible then
+                    Visible
+
+                 else
+                    Hidden
+                )
+
+        Unavailable ->
+            Err (Error.unavailable "document visibility unavailable")
