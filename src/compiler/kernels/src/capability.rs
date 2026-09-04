@@ -172,6 +172,33 @@ pub enum WebCapability {
     /// named browser capability: `"granted"` / `"denied"` / `"prompt"`. Covers
     /// one-shot queries and the `PermissionStatus.onchange` continuous state stream.
     Permission,
+    /// `deviceorientation` window event — the device's physical orientation as
+    /// alpha/beta/gamma Euler angles. A watch subscription delivers typed frames on
+    /// each event; an absent API traps to a typed inbound frame — never a throw.
+    Orientation,
+    /// `devicemotion` window event — the device's acceleration and rotation rate.
+    /// A watch subscription delivers typed frames on each event; an absent API
+    /// traps to a typed inbound frame — never a throw.
+    Motion,
+    /// `BroadcastChannel` — a named channel for exchanging typed message frames
+    /// between tabs, workers, and iframes sharing the same origin. Covers open,
+    /// send, receive, and close. An absent API traps to a typed inbound frame —
+    /// never a throw.
+    Channel,
+    /// `document.documentElement.requestFullscreen` / `document.exitFullscreen` /
+    /// `fullscreenchange` event — entering/exiting fullscreen mode and receiving
+    /// change events. An absent or denied API traps to a typed inbound frame —
+    /// never a throw.
+    Fullscreen,
+    /// `screen.orientation.lock` / `screen.orientation.unlock` /
+    /// `screen.orientation.type` — locking, unlocking, and reading the current
+    /// screen orientation. An absent or denied API traps to a typed inbound frame —
+    /// never a throw.
+    ScreenOrientation,
+    /// `navigator.wakeLock.request("screen")` — acquiring a screen wake lock that
+    /// prevents the device from dimming or sleeping, and releasing it. An absent or
+    /// denied API traps to a typed inbound frame — never a throw.
+    WakeLock,
 }
 
 impl WebCapability {
@@ -197,6 +224,12 @@ impl WebCapability {
         Self::Raw,
         Self::Speech,
         Self::Permission,
+        Self::Orientation,
+        Self::Motion,
+        Self::Channel,
+        Self::Fullscreen,
+        Self::ScreenOrientation,
+        Self::WakeLock,
     ];
 
     /// The stable lowercase wire suffix, the half after `js-port:` in the wire
@@ -223,6 +256,12 @@ impl WebCapability {
             Self::Raw => "raw",
             Self::Speech => "speech",
             Self::Permission => "permission",
+            Self::Orientation => "orientation",
+            Self::Motion => "motion",
+            Self::Channel => "channel",
+            Self::Fullscreen => "fullscreen",
+            Self::ScreenOrientation => "screen-orientation",
+            Self::WakeLock => "wake-lock",
         }
     }
 
@@ -259,6 +298,12 @@ impl WebCapability {
             ["Ipe", "Browser", "Connectivity", ..] => Some(Self::Connectivity),
             ["Ipe", "Browser", "Speech", ..] => Some(Self::Speech),
             ["Ipe", "Browser", "Permission", ..] => Some(Self::Permission),
+            ["Ipe", "Browser", "Orientation", ..] => Some(Self::Orientation),
+            ["Ipe", "Browser", "Motion", ..] => Some(Self::Motion),
+            ["Ipe", "Browser", "Channel", ..] => Some(Self::Channel),
+            ["Ipe", "Browser", "Fullscreen", ..] => Some(Self::Fullscreen),
+            ["Ipe", "Browser", "ScreenOrientation", ..] => Some(Self::ScreenOrientation),
+            ["Ipe", "Browser", "WakeLock", ..] => Some(Self::WakeLock),
             _ => None,
         }
     }
@@ -326,6 +371,32 @@ impl WebCapability {
                 "Querying and watching browser permission state via \
                  navigator.permissions.query({ name }) and PermissionStatus.onchange."
             }
+            Self::Orientation => {
+                "Receiving device orientation readings (alpha/beta/gamma Euler angles) \
+                 via the deviceorientation window event."
+            }
+            Self::Motion => {
+                "Receiving device motion readings (acceleration and rotation rate) \
+                 via the devicemotion window event."
+            }
+            Self::Channel => {
+                "Opening a named BroadcastChannel for cross-tab typed message exchange \
+                 within the same origin."
+            }
+            Self::Fullscreen => {
+                "Requesting and exiting fullscreen mode via \
+                 document.documentElement.requestFullscreen / document.exitFullscreen, \
+                 and receiving fullscreenchange events."
+            }
+            Self::ScreenOrientation => {
+                "Locking and unlocking the screen orientation via \
+                 screen.orientation.lock / screen.orientation.unlock, and reading the \
+                 current screen.orientation.type."
+            }
+            Self::WakeLock => {
+                "Acquiring a screen wake lock via navigator.wakeLock.request(\"screen\") \
+                 that prevents the device from dimming or sleeping, and releasing it."
+            }
         }
     }
 
@@ -353,6 +424,12 @@ impl WebCapability {
             "raw" => Ok(Self::Raw),
             "speech" => Ok(Self::Speech),
             "permission" => Ok(Self::Permission),
+            "orientation" => Ok(Self::Orientation),
+            "motion" => Ok(Self::Motion),
+            "channel" => Ok(Self::Channel),
+            "fullscreen" => Ok(Self::Fullscreen),
+            "screen-orientation" => Ok(Self::ScreenOrientation),
+            "wake-lock" => Ok(Self::WakeLock),
             _ => Err(UnknownCapability(full.to_owned())),
         }
     }
@@ -384,6 +461,12 @@ impl WebCapability {
             Self::Raw => "Raw",
             Self::Speech => "Speech",
             Self::Permission => "Permission",
+            Self::Orientation => "Orientation",
+            Self::Motion => "Motion",
+            Self::Channel => "Channel",
+            Self::Fullscreen => "Fullscreen",
+            Self::ScreenOrientation => "ScreenOrientation",
+            Self::WakeLock => "WakeLock",
         }
     }
 
@@ -501,6 +584,12 @@ impl Capability {
         Self::JsPort(WebCapability::Raw),
         Self::JsPort(WebCapability::Speech),
         Self::JsPort(WebCapability::Permission),
+        Self::JsPort(WebCapability::Orientation),
+        Self::JsPort(WebCapability::Motion),
+        Self::JsPort(WebCapability::Channel),
+        Self::JsPort(WebCapability::Fullscreen),
+        Self::JsPort(WebCapability::ScreenOrientation),
+        Self::JsPort(WebCapability::WakeLock),
     ];
 
     /// Whether this capability carries no OS-isolatable resource surface — the
@@ -556,6 +645,12 @@ impl Capability {
                 WebCapability::Raw => "js-port:raw",
                 WebCapability::Speech => "js-port:speech",
                 WebCapability::Permission => "js-port:permission",
+                WebCapability::Orientation => "js-port:orientation",
+                WebCapability::Motion => "js-port:motion",
+                WebCapability::Channel => "js-port:channel",
+                WebCapability::Fullscreen => "js-port:fullscreen",
+                WebCapability::ScreenOrientation => "js-port:screen-orientation",
+                WebCapability::WakeLock => "js-port:wake-lock",
             },
         }
     }
@@ -608,7 +703,8 @@ impl std::fmt::Display for UnknownCapability {
              custom-element, js-port:<axis> where <axis> is one of geolocation, \
              clipboard, notification, storage, vibration, share, battery, \
              network-info, file, camera, microphone, gamepad, recorder, visibility, \
-             media-query, connectivity, raw, speech, permission)",
+             media-query, connectivity, raw, speech, permission, orientation, motion, \
+             channel, fullscreen, screen-orientation, wake-lock)",
             self.0
         )
     }

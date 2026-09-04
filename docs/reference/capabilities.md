@@ -54,4 +54,10 @@ Ipê runs programs under a deny-by-default capability model. Every operation tha
 | `js-port:raw` | Exchanging data with hand-rolled page JS over an uncharacterised port (Js.send / Js.subscribe with author-written JS). |
 | `js-port:speech` | Synthesising speech via speechSynthesis.speak — one-shot text-to-speech with voice, rate, pitch, and volume options, and queue control via speechSynthesis.cancel. |
 | `js-port:permission` | Querying and watching browser permission state via navigator.permissions.query({ name }) and PermissionStatus.onchange. |
+| `js-port:orientation` | Receiving device orientation readings (alpha/beta/gamma Euler angles) via the deviceorientation window event. |
+| `js-port:motion` | Receiving device motion readings (acceleration and rotation rate) via the devicemotion window event. |
+| `js-port:channel` | Opening a named BroadcastChannel for cross-tab typed message exchange within the same origin. |
+| `js-port:fullscreen` | Requesting and exiting fullscreen mode via document.documentElement.requestFullscreen / document.exitFullscreen, and receiving fullscreenchange events. |
+| `js-port:screen-orientation` | Locking and unlocking the screen orientation via screen.orientation.lock / screen.orientation.unlock, and reading the current screen.orientation.type. |
+| `js-port:wake-lock` | Acquiring a screen wake lock via navigator.wakeLock.request("screen") that prevents the device from dimming or sleeping, and releasing it. |
 

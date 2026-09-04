@@ -1,0 +1,109 @@
+module Main exposing (main)
+
+-- | screen-orientation — `Ipe.Browser.ScreenOrientation` end-to-end, with the
+-- consent gate satisfied.
+--
+-- Demonstrates the Screen Orientation API: clicking "Read" calls
+-- `ScreenOrientation.current` (a Task) to read the current orientation; clicking
+-- "Lock portrait" locks the screen to portrait-primary.
+--
+-- `Ipe.Browser.ScreenOrientation` discloses `js-port:screen-orientation` on
+-- import; the companion `js-port:raw` floor is also disclosed. Both are accepted
+-- in `package.ipe`.
+--
+-- An absent or denied API resolves the Task with a typed `Err` — never a thrown
+-- error or a silently dropped frame.
+
+
+import Ipe.Tea.Web as Web
+import Ipe.Tea.Web.Cmd as Cmd
+import Ipe.Tea.Web.Sub as Sub
+import Ipe.Task as Task
+import Ipe.Ui as Ui
+import Ipe.Browser.ScreenOrientation as ScreenOrientation exposing (OrientationType(..))
+import Ipe.Error as Error exposing (Error)
+
+
+type alias Model =
+    { status : String }
+
+
+type Msg
+    = ReadOrientation
+    | LockPortrait
+    | GotOrientation (Result Error ScreenOrientation.OrientationType)
+    | GotLock (Result Error ())
+
+
+init : WebReq -> ( Model, Cmd.Cmd Msg )
+init _req =
+    ( { status = "unknown" }
+    , Task.attempt GotOrientation ScreenOrientation.current
+    )
+
+
+update : Msg -> Model -> ( Model, Cmd.Cmd Msg )
+update msg model =
+    case msg of
+        ReadOrientation ->
+            ( model, Task.attempt GotOrientation ScreenOrientation.current )
+
+        LockPortrait ->
+            ( model, Task.attempt GotLock (ScreenOrientation.lock PortraitPrimary) )
+
+        GotOrientation result ->
+            case result of
+                Ok orientation ->
+                    ( { model | status = describeOrientation orientation }, Cmd.none )
+
+                Err err ->
+                    ( { model | status = "error: " ++ Error.message err }, Cmd.none )
+
+        GotLock result ->
+            case result of
+                Ok _ ->
+                    ( { model | status = "locked to portrait-primary" }, Cmd.none )
+
+                Err err ->
+                    ( { model | status = "lock error: " ++ Error.message err }, Cmd.none )
+
+
+describeOrientation : ScreenOrientation.OrientationType -> String
+describeOrientation orientation =
+    case orientation of
+        PortraitPrimary ->
+            "portrait-primary"
+
+        PortraitSecondary ->
+            "portrait-secondary"
+
+        LandscapePrimary ->
+            "landscape-primary"
+
+        LandscapeSecondary ->
+            "landscape-secondary"
+
+
+subscriptions : Model -> Sub.Sub Msg
+subscriptions _model =
+    Sub.none
+
+
+view : Model -> Element Msg
+view model =
+    Ui.column []
+        [ Ui.button [] { onPress = Just ReadOrientation, label = Ui.text "Read orientation" }
+        , Ui.button [] { onPress = Just LockPortrait, label = Ui.text "Lock portrait" }
+        , Ui.text ("Current: " ++ model.status)
+        ]
+
+
+main =
+    Web.app
+        { init = init
+        , update = update
+        , view = view
+        , subscriptions = subscriptions
+        , routes = []
+        , notFound = ReadOrientation
+        }

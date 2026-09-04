@@ -987,6 +987,257 @@ const PORT_GLUE_JS: &str = r#"// Ipe.Ffi.Js browser port surface. Values cross a
     }
     return true;
   }
+  // Ipe.Browser.Orientation: `Watch` / `StopWatch` -> deviceorientation event.
+  // A `Watch` attaches a `deviceorientation` listener on `window`; each event
+  // delivers alpha/beta/gamma fields (each may be null when the axis is
+  // unsupported). A `StopWatch` removes the listener. An absent event type
+  // traps to a typed `unavailable` frame — never a throw.
+  var orientationHandler = null;
+  function orientationSink(value, _corId) {
+    var isWatch = value === "Watch" ||
+      (value && typeof value === "object" && value.Watch !== undefined);
+    var isStop = value === "StopWatch" ||
+      (value && typeof value === "object" && value.StopWatch !== undefined);
+    if (!isWatch && !isStop) return false;
+    if (isStop) {
+      if (orientationHandler !== null && window.removeEventListener) {
+        window.removeEventListener("deviceorientation", orientationHandler);
+        orientationHandler = null;
+      }
+      return true;
+    }
+    // isWatch
+    if (typeof window === "undefined" || typeof window.addEventListener !== "function") {
+      reply({ tag: "orientation", event: "unavailable" }, null);
+      return true;
+    }
+    if (orientationHandler !== null && window.removeEventListener) {
+      window.removeEventListener("deviceorientation", orientationHandler);
+    }
+    orientationHandler = function (ev) {
+      reply({
+        tag: "orientation",
+        event: "reading",
+        alpha: (ev.alpha !== null && ev.alpha !== undefined) ? Number(ev.alpha) : null,
+        beta: (ev.beta !== null && ev.beta !== undefined) ? Number(ev.beta) : null,
+        gamma: (ev.gamma !== null && ev.gamma !== undefined) ? Number(ev.gamma) : null,
+      }, null);
+    };
+    window.addEventListener("deviceorientation", orientationHandler);
+    return true;
+  }
+  // Ipe.Browser.Motion: `Watch` / `StopWatch` -> devicemotion event.
+  // A `Watch` attaches a `devicemotion` listener on `window`; each event
+  // delivers acceleration (x/y/z in m/s²) and rotationRate (alpha/beta/gamma
+  // in deg/s) fields (each may be null when the axis is unsupported). A
+  // `StopWatch` removes the listener. An absent event type traps to a typed
+  // `unavailable` frame — never a throw.
+  var motionHandler = null;
+  function motionSink(value, _corId) {
+    var isWatch = value === "Watch" ||
+      (value && typeof value === "object" && value.Watch !== undefined);
+    var isStop = value === "StopWatch" ||
+      (value && typeof value === "object" && value.StopWatch !== undefined);
+    if (!isWatch && !isStop) return false;
+    if (isStop) {
+      if (motionHandler !== null && window.removeEventListener) {
+        window.removeEventListener("devicemotion", motionHandler);
+        motionHandler = null;
+      }
+      return true;
+    }
+    // isWatch
+    if (typeof window === "undefined" || typeof window.addEventListener !== "function") {
+      reply({ tag: "motion", event: "unavailable" }, null);
+      return true;
+    }
+    if (motionHandler !== null && window.removeEventListener) {
+      window.removeEventListener("devicemotion", motionHandler);
+    }
+    function maybeNum(v) { return (v !== null && v !== undefined) ? Number(v) : null; }
+    motionHandler = function (ev) {
+      var a = (ev.acceleration && typeof ev.acceleration === "object") ? ev.acceleration : {};
+      var r = (ev.rotationRate && typeof ev.rotationRate === "object") ? ev.rotationRate : {};
+      reply({
+        tag: "motion",
+        event: "reading",
+        accelX: maybeNum(a.x),
+        accelY: maybeNum(a.y),
+        accelZ: maybeNum(a.z),
+        rotAlpha: maybeNum(r.alpha),
+        rotBeta: maybeNum(r.beta),
+        rotGamma: maybeNum(r.gamma),
+      }, null);
+    };
+    window.addEventListener("devicemotion", motionHandler);
+    return true;
+  }
+  // Ipe.Browser.Channel: `Open name` / `Send name payload` / `Close name` ->
+  // BroadcastChannel. `Open` creates a BroadcastChannel and attaches a `message`
+  // listener that routes inbound frames. `Send` posts a string message. `Close`
+  // closes and removes the channel. An absent API traps to a typed `unavailable`
+  // frame — never a throw. Multiple channels keyed by name are tracked.
+  var broadcastChannels = {};
+  function channelSink(value, _corId) {
+    var isOpen = value && typeof value === "object" && value.Open !== undefined;
+    var isSend = value && typeof value === "object" && value.Send !== undefined;
+    var isClose = value && typeof value === "object" && value.Close !== undefined;
+    if (!isOpen && !isSend && !isClose) return false;
+    if (typeof BroadcastChannel === "undefined") {
+      reply({ tag: "channel", event: "unavailable" }, null);
+      return true;
+    }
+    if (isOpen) {
+      var name = typeof value.Open === "string" ? value.Open : String(value.Open);
+      if (broadcastChannels[name]) { try { broadcastChannels[name].close(); } catch (_e) {} }
+      var ch;
+      try { ch = new BroadcastChannel(name); } catch (_e) {
+        reply({ tag: "channel", event: "unavailable" }, null);
+        return true;
+      }
+      ch.onmessage = function (ev) {
+        var payload = typeof ev.data === "string" ? ev.data : JSON.stringify(ev.data);
+        reply({ tag: "channel", event: "message", payload: payload }, null);
+      };
+      broadcastChannels[name] = ch;
+      return true;
+    }
+    if (isSend) {
+      var parts = (value.Send && typeof value.Send === "object") ? value.Send : {};
+      // Send is [name, payload] encoded as { "0": name, "1": payload } or as an array.
+      var sendName = (parts && typeof parts[0] === "string") ? parts[0] :
+        (typeof parts.name === "string" ? parts.name : null);
+      var sendPayload = (parts && typeof parts[1] === "string") ? parts[1] :
+        (typeof parts.payload === "string" ? parts.payload : null);
+      if (sendName && broadcastChannels[sendName]) {
+        try { broadcastChannels[sendName].postMessage(sendPayload !== null ? sendPayload : ""); }
+        catch (_e) { /* best-effort */ }
+      }
+      return true;
+    }
+    // isClose
+    var closeName = typeof value.Close === "string" ? value.Close : String(value.Close);
+    if (broadcastChannels[closeName]) {
+      try { broadcastChannels[closeName].close(); } catch (_e) {}
+      delete broadcastChannels[closeName];
+    }
+    return true;
+  }
+  // Ipe.Browser.Fullscreen: `Request` / `Exit` / `Watch` ->
+  // document.documentElement.requestFullscreen / document.exitFullscreen /
+  // fullscreenchange. `Request` and `Exit` are correlated one-shot; `Watch`
+  // attaches a `fullscreenchange` listener for broadcast state frames. An absent
+  // or denied API traps to typed frames — never a throw.
+  function fullscreenSink(value, corId) {
+    var isRequest = value === "Request" ||
+      (value && typeof value === "object" && value.Request !== undefined);
+    var isExit = value === "Exit" ||
+      (value && typeof value === "object" && value.Exit !== undefined);
+    var isWatch = value === "Watch" ||
+      (value && typeof value === "object" && value.Watch !== undefined);
+    if (!isRequest && !isExit && !isWatch) return false;
+    if (isWatch) {
+      if (typeof document !== "undefined" && typeof document.addEventListener === "function") {
+        document.addEventListener("fullscreenchange", function () {
+          var isFull = !!document.fullscreenElement;
+          reply({ tag: "fullscreen", event: "changed", fullscreen: isFull }, null);
+        });
+      }
+      return true;
+    }
+    if (isRequest) {
+      if (typeof document === "undefined" || !document.documentElement ||
+          typeof document.documentElement.requestFullscreen !== "function") {
+        reply({ tag: "fullscreen", event: "unavailable" }, corId);
+        return true;
+      }
+      document.documentElement.requestFullscreen().then(
+        function () { reply({ tag: "fullscreen", event: "ok" }, corId); },
+        function () { reply({ tag: "fullscreen", event: "denied" }, corId); }
+      );
+      return true;
+    }
+    // isExit
+    if (typeof document === "undefined" || typeof document.exitFullscreen !== "function") {
+      reply({ tag: "fullscreen", event: "unavailable" }, corId);
+      return true;
+    }
+    document.exitFullscreen().then(
+      function () { reply({ tag: "fullscreen", event: "ok" }, corId); },
+      function () { reply({ tag: "fullscreen", event: "denied" }, corId); }
+    );
+    return true;
+  }
+  // Ipe.Browser.ScreenOrientation: `Lock typeStr` / `Unlock` / `Query` ->
+  // screen.orientation.lock / screen.orientation.unlock / screen.orientation.type.
+  // `Lock` and `Unlock` are correlated one-shot; `Query` reads the current type
+  // once. An absent or denied API traps to typed frames — never a throw.
+  function screenOrientationSink(value, corId) {
+    var isLock = value && typeof value === "object" && value.Lock !== undefined;
+    var isUnlock = value === "Unlock" ||
+      (value && typeof value === "object" && value.Unlock !== undefined);
+    var isQuery = value === "Query" ||
+      (value && typeof value === "object" && value.Query !== undefined);
+    if (!isLock && !isUnlock && !isQuery) return false;
+    if (typeof screen === "undefined" || !screen.orientation ||
+        typeof screen.orientation.type !== "string") {
+      reply({ tag: "screen-orientation", event: "unavailable" }, corId);
+      return true;
+    }
+    if (isQuery) {
+      reply({ tag: "screen-orientation", event: "orientation", type: screen.orientation.type }, corId);
+      return true;
+    }
+    if (isUnlock) {
+      try { screen.orientation.unlock(); } catch (_e) { /* best-effort */ }
+      reply({ tag: "screen-orientation", event: "ok" }, corId);
+      return true;
+    }
+    // isLock
+    var lockType = typeof value.Lock === "string" ? value.Lock : "portrait-primary";
+    if (typeof screen.orientation.lock !== "function") {
+      reply({ tag: "screen-orientation", event: "unavailable" }, corId);
+      return true;
+    }
+    screen.orientation.lock(lockType).then(
+      function () { reply({ tag: "screen-orientation", event: "ok" }, corId); },
+      function () { reply({ tag: "screen-orientation", event: "denied" }, corId); }
+    );
+    return true;
+  }
+  // Ipe.Browser.WakeLock: `Acquire` / `Release` ->
+  // navigator.wakeLock.request("screen") / sentinel.release().
+  // `Acquire` is a correlated one-shot; `Release` is fire-and-forget. An absent
+  // or denied API traps to typed frames — never a throw.
+  var wakeLockSentinel = null;
+  function wakeLockSink(value, corId) {
+    var isAcquire = value === "Acquire" ||
+      (value && typeof value === "object" && value.Acquire !== undefined);
+    var isRelease = value === "Release" ||
+      (value && typeof value === "object" && value.Release !== undefined);
+    if (!isAcquire && !isRelease) return false;
+    if (isRelease) {
+      if (wakeLockSentinel !== null) {
+        try { wakeLockSentinel.release(); } catch (_e) { /* best-effort */ }
+        wakeLockSentinel = null;
+      }
+      return true;
+    }
+    // isAcquire
+    if (typeof navigator === "undefined" || !navigator.wakeLock ||
+        typeof navigator.wakeLock.request !== "function") {
+      reply({ tag: "wake-lock", event: "unavailable" }, corId);
+      return true;
+    }
+    navigator.wakeLock.request("screen").then(
+      function (sentinel) {
+        wakeLockSentinel = sentinel;
+        reply({ tag: "wake-lock", event: "acquired" }, corId);
+      },
+      function () { reply({ tag: "wake-lock", event: "denied" }, corId); }
+    );
+    return true;
+  }
   function builtinSink(value, corId) {
     if (clipboardSink(value, corId)) return true;
     if (geolocationSink(value, corId)) return true;
@@ -1005,6 +1256,12 @@ const PORT_GLUE_JS: &str = r#"// Ipe.Ffi.Js browser port surface. Values cross a
     if (visibilitySink(value, corId)) return true;
     if (mediaQuerySink(value, corId)) return true;
     if (connectivitySink(value, corId)) return true;
+    if (orientationSink(value, corId)) return true;
+    if (motionSink(value, corId)) return true;
+    if (channelSink(value, corId)) return true;
+    if (fullscreenSink(value, corId)) return true;
+    if (screenOrientationSink(value, corId)) return true;
+    if (wakeLockSink(value, corId)) return true;
     return false;
   }
   function deliver(raw) {
@@ -1459,6 +1716,83 @@ mod tests {
         assert!(js.contains("buttons:"));
         assert!(js.contains("axes:"));
         // …and traps an absent API to a typed frame, never a throw / eval.
+        assert!(js.contains("event: \"unavailable\""));
+        assert!(!js.contains("eval("));
+    }
+
+    #[test]
+    fn orientation_sink_attaches_deviceorientation_and_traps_absence_to_a_typed_result() {
+        let js = port_glue_js();
+        assert!(js.contains("orientationSink"));
+        assert!(js.contains("deviceorientation"));
+        assert!(js.contains("tag: \"orientation\""));
+        assert!(js.contains("event: \"reading\""));
+        assert!(js.contains("alpha:"));
+        assert!(js.contains("beta:"));
+        assert!(js.contains("gamma:"));
+        assert!(js.contains("event: \"unavailable\""));
+        assert!(!js.contains("eval("));
+    }
+
+    #[test]
+    fn motion_sink_attaches_devicemotion_and_traps_absence_to_a_typed_result() {
+        let js = port_glue_js();
+        assert!(js.contains("motionSink"));
+        assert!(js.contains("devicemotion"));
+        assert!(js.contains("tag: \"motion\""));
+        assert!(js.contains("event: \"reading\""));
+        assert!(js.contains("accelX:"));
+        assert!(js.contains("rotAlpha:"));
+        assert!(js.contains("event: \"unavailable\""));
+        assert!(!js.contains("eval("));
+    }
+
+    #[test]
+    fn channel_sink_uses_broadcast_channel_and_traps_absence_to_a_typed_result() {
+        let js = port_glue_js();
+        assert!(js.contains("channelSink"));
+        assert!(js.contains("BroadcastChannel"));
+        assert!(js.contains("tag: \"channel\""));
+        assert!(js.contains("event: \"message\""));
+        assert!(js.contains("event: \"unavailable\""));
+        assert!(!js.contains("eval("));
+    }
+
+    #[test]
+    fn fullscreen_sink_reaches_the_web_api_and_traps_absence_and_denial_to_typed_results() {
+        let js = port_glue_js();
+        assert!(js.contains("fullscreenSink"));
+        assert!(js.contains("requestFullscreen"));
+        assert!(js.contains("exitFullscreen"));
+        assert!(js.contains("fullscreenchange"));
+        assert!(js.contains("tag: \"fullscreen\""));
+        assert!(js.contains("event: \"ok\""));
+        assert!(js.contains("event: \"denied\""));
+        assert!(js.contains("event: \"unavailable\""));
+        assert!(!js.contains("eval("));
+    }
+
+    #[test]
+    fn screen_orientation_sink_reaches_the_web_api_and_traps_absence_to_typed_results() {
+        let js = port_glue_js();
+        assert!(js.contains("screenOrientationSink"));
+        assert!(js.contains("screen.orientation"));
+        assert!(js.contains("tag: \"screen-orientation\""));
+        assert!(js.contains("event: \"orientation\""));
+        assert!(js.contains("event: \"ok\""));
+        assert!(js.contains("event: \"unavailable\""));
+        assert!(!js.contains("eval("));
+    }
+
+    #[test]
+    fn wake_lock_sink_reaches_navigator_wake_lock_and_traps_absence_to_typed_results() {
+        let js = port_glue_js();
+        assert!(js.contains("wakeLockSink"));
+        assert!(js.contains("navigator.wakeLock"));
+        assert!(js.contains("wakeLock.request"));
+        assert!(js.contains("tag: \"wake-lock\""));
+        assert!(js.contains("event: \"acquired\""));
+        assert!(js.contains("event: \"denied\""));
         assert!(js.contains("event: \"unavailable\""));
         assert!(!js.contains("eval("));
     }

@@ -1,0 +1,81 @@
+-- | Ipe.Browser.Orientation.Internals — the low-level Orientation port surface:
+-- the closed outbound/inbound ADTs and the raw `Ipe.Ffi.Js` request/subscribe
+-- wiring the high-level `Ipe.Browser.Orientation` layer wraps.
+--
+-- Importing this submodule discloses the same `js-port:orientation` axis as the
+-- top-level module (the disclosure is keyed on the `Ipe.Browser.Orientation`
+-- path prefix), so the raw port surface cannot be reached undisclosed.
+module Ipe.Browser.Orientation.Internals exposing
+    ( JsCmd(..)
+    , JsMsg(..)
+    , request
+    , subscribe
+    , inbound
+    )
+
+import Ipe.Ffi.Js as Js
+import Ipe.Json.Decode as Decode
+import Ipe.Tea.Web.Cmd as Cmd
+import Ipe.Tea.Web.Sub as Sub
+
+
+-- | The ONE closed OUTBOUND port type.
+--
+--   * `Watch` — begin a session-stream: `deviceorientation` events arrive on
+--     the inbound subscription.
+--   * `StopWatch` — remove the active listener. A no-op when no watch is
+--     active.
+type JsCmd
+    = Watch
+    | StopWatch
+
+
+-- | The NARROW closed INBOUND port type — deliberately NOT the app's internal
+-- `Msg`. Every variant the browser can push is enumerated, so the fold in the
+-- high-level layer is EXHAUSTIVE and an unavailability can never be silently
+-- dropped: it becomes a typed variant.
+--
+--   * `Reading alpha beta gamma` — a `deviceorientation` event. Each field is
+--     `Maybe Float` because the browser may deliver `null` for unsupported axes.
+--   * `Unavailable` — the `deviceorientation` event is absent in this context.
+type JsMsg
+    = Reading (Maybe Float) (Maybe Float) (Maybe Float)
+    | Unavailable
+
+
+-- | `request cmd` — hand a closed outbound `JsCmd` to the raw port transport.
+request : JsCmd -> Cmd.Cmd msg
+request cmd =
+    Js.send cmd
+
+
+-- | `subscribe toMsg` — the inbound subscription over the fail-closed seal
+-- decoder. `inbound` IS the security gate; a malformed / mismatched frame is
+-- dropped whole. A decoded `JsMsg` is handed to `toMsg`.
+subscribe : (JsMsg -> msg) -> Sub.Sub msg
+subscribe toMsg =
+    Js.subscribe inbound toMsg
+
+
+-- | The total, fail-closed decoder for the inbound `JsMsg`. Reads the `event`
+-- discriminator first: `"reading"` decodes a `Reading`; `"unavailable"` decodes
+-- `Unavailable`. An unrecognised token fails the decode closed.
+inbound : Decode.Decoder JsMsg
+inbound =
+    Decode.andThen decodeByEvent (Decode.field "event" Decode.string)
+
+
+decodeByEvent : String -> Decode.Decoder JsMsg
+decodeByEvent event =
+    case event of
+        "reading" ->
+            Decode.map3 Reading
+                (Decode.field "alpha" (Decode.oneOf [ Decode.map Just Decode.float, Decode.succeed Nothing ]))
+                (Decode.field "beta" (Decode.oneOf [ Decode.map Just Decode.float, Decode.succeed Nothing ]))
+                (Decode.field "gamma" (Decode.oneOf [ Decode.map Just Decode.float, Decode.succeed Nothing ]))
+
+        "unavailable" ->
+            Decode.succeed Unavailable
+
+        _ ->
+            Decode.fail ("unknown orientation event variant: " ++ event)

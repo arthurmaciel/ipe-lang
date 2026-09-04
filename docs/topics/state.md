@@ -21,7 +21,7 @@ This cycle — **Model → view → Msg → update → new Model** — is called
 Elm Architecture (TEA). It is the only sanctioned mechanism for application
 state in Ipê.
 
-## Minimal TEA example (Terminal shape)
+## Minimal TEA example (Cli shape)
 
 ```ipe
 module Main exposing (..)
@@ -54,7 +54,7 @@ view model =
 
 main : Task Error ()
 main =
-    Terminal.appLines
+    Cli.app
         { init = init
         , update = update
         , view = view

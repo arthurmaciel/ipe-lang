@@ -265,7 +265,25 @@ fn requirement_for(axis: WebCapability) -> AxisRequirement {
         // The Permissions API itself (navigator.permissions.query) has no OS-level
         // permission declaration; the API queries existing permission state rather
         // than requesting a new privilege.
-        | WebCapability::Permission => no_os_permission(),
+        | WebCapability::Permission
+        // Device orientation and motion events have no static OS-permission
+        // declaration on iOS/macOS/Android — the browser mediates access without a
+        // required plist key or manifest entry on Android. Named explicitly so a
+        // future change is considered deliberately.
+        | WebCapability::Orientation
+        | WebCapability::Motion
+        // BroadcastChannel is a same-origin messaging primitive with no OS-level
+        // permission gate on any platform.
+        | WebCapability::Channel
+        // Fullscreen has no OS-level permission declaration on any target — it is
+        // gated by user gesture in the browser, not a static manifest entry.
+        | WebCapability::Fullscreen
+        // Screen orientation lock has no static OS-permission declaration; the API
+        // is browser-mediated and typically requires fullscreen on some platforms.
+        | WebCapability::ScreenOrientation
+        // Wake lock has no static OS-permission declaration on iOS/macOS/Android;
+        // the browser mediates the request without a plist key or manifest entry.
+        | WebCapability::WakeLock => no_os_permission(),
     }
 }
 

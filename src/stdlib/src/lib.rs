@@ -962,6 +962,94 @@ const IPE_BROWSER_CONNECTIVITY: &str = include_str!("../Ipe/Browser/Connectivity
 const IPE_BROWSER_CONNECTIVITY_INTERNALS: &str =
     include_str!("../Ipe/Browser/Connectivity/Internals.ipe");
 
+/// `Ipe.Browser.Orientation` — a session-stream delivering `deviceorientation`
+/// events as typed alpha/beta/gamma readings, over `Ipe.Ffi.Js` ports. Importing
+/// discloses `js-port:orientation` (keyed on the `Ipe.Browser.Orientation` path
+/// prefix via `WebCapability::for_browser_module`). Registered in
+/// [`COMPILED_STD_MODULES`] (NOT `MODULES`); NOT in `STDLIB_MODULE_QUALIFIERS`.
+const IPE_BROWSER_ORIENTATION: &str = include_str!("../Ipe/Browser/Orientation.ipe");
+
+/// `Ipe.Browser.Orientation.Internals` — the low-level Orientation port surface:
+/// the closed outbound/inbound ADTs and the raw `Ipe.Ffi.Js` wiring the high-level
+/// layer wraps. Importing it discloses the same `js-port:orientation` axis (the
+/// prefix key covers the submodule). Registered in [`COMPILED_STD_MODULES`]
+/// (NOT `MODULES`); NOT in `STDLIB_MODULE_QUALIFIERS`.
+const IPE_BROWSER_ORIENTATION_INTERNALS: &str =
+    include_str!("../Ipe/Browser/Orientation/Internals.ipe");
+
+/// `Ipe.Browser.Motion` — a session-stream delivering `devicemotion` events as
+/// typed acceleration and rotation-rate readings, over `Ipe.Ffi.Js` ports.
+/// Importing discloses `js-port:motion` (keyed on the `Ipe.Browser.Motion` path
+/// prefix via `WebCapability::for_browser_module`). Registered in
+/// [`COMPILED_STD_MODULES`] (NOT `MODULES`); NOT in `STDLIB_MODULE_QUALIFIERS`.
+const IPE_BROWSER_MOTION: &str = include_str!("../Ipe/Browser/Motion.ipe");
+
+/// `Ipe.Browser.Motion.Internals` — the low-level Motion port surface: the closed
+/// outbound/inbound ADTs and the raw `Ipe.Ffi.Js` wiring the high-level layer
+/// wraps. Importing it discloses the same `js-port:motion` axis (the prefix key
+/// covers the submodule). Registered in [`COMPILED_STD_MODULES`] (NOT `MODULES`);
+/// NOT in `STDLIB_MODULE_QUALIFIERS`.
+const IPE_BROWSER_MOTION_INTERNALS: &str = include_str!("../Ipe/Browser/Motion/Internals.ipe");
+
+/// `Ipe.Browser.Channel` — a session-stream for cross-tab message exchange over
+/// the `BroadcastChannel` API, via `Ipe.Ffi.Js` ports. Importing discloses
+/// `js-port:channel` (keyed on the `Ipe.Browser.Channel` path prefix via
+/// `WebCapability::for_browser_module`). Registered in [`COMPILED_STD_MODULES`]
+/// (NOT `MODULES`); NOT in `STDLIB_MODULE_QUALIFIERS`.
+const IPE_BROWSER_CHANNEL: &str = include_str!("../Ipe/Browser/Channel.ipe");
+
+/// `Ipe.Browser.Channel.Internals` — the low-level `BroadcastChannel` port surface:
+/// the closed outbound/inbound ADTs and the raw `Ipe.Ffi.Js` wiring the high-level
+/// layer wraps. Importing it discloses the same `js-port:channel` axis (the prefix
+/// key covers the submodule). Registered in [`COMPILED_STD_MODULES`]
+/// (NOT `MODULES`); NOT in `STDLIB_MODULE_QUALIFIERS`.
+const IPE_BROWSER_CHANNEL_INTERNALS: &str = include_str!("../Ipe/Browser/Channel/Internals.ipe");
+
+/// `Ipe.Browser.Fullscreen` — request/exit fullscreen and receive
+/// `fullscreenchange` notifications, over `Ipe.Ffi.Js` ports. Importing discloses
+/// `js-port:fullscreen` (keyed on the `Ipe.Browser.Fullscreen` path prefix via
+/// `WebCapability::for_browser_module`). Registered in [`COMPILED_STD_MODULES`]
+/// (NOT `MODULES`); NOT in `STDLIB_MODULE_QUALIFIERS`.
+const IPE_BROWSER_FULLSCREEN: &str = include_str!("../Ipe/Browser/Fullscreen.ipe");
+
+/// `Ipe.Browser.Fullscreen.Internals` — the low-level Fullscreen port surface: the
+/// closed outbound/inbound ADTs and the raw `Ipe.Ffi.Js` wiring the high-level
+/// layer wraps. Importing it discloses the same `js-port:fullscreen` axis (the
+/// prefix key covers the submodule). Registered in [`COMPILED_STD_MODULES`]
+/// (NOT `MODULES`); NOT in `STDLIB_MODULE_QUALIFIERS`.
+const IPE_BROWSER_FULLSCREEN_INTERNALS: &str =
+    include_str!("../Ipe/Browser/Fullscreen/Internals.ipe");
+
+/// `Ipe.Browser.ScreenOrientation` — lock/unlock the screen orientation and read
+/// the current orientation type, over `Ipe.Ffi.Js` ports. Importing discloses
+/// `js-port:screen-orientation` (keyed on the `Ipe.Browser.ScreenOrientation`
+/// path prefix via `WebCapability::for_browser_module`). Registered in
+/// [`COMPILED_STD_MODULES`] (NOT `MODULES`); NOT in `STDLIB_MODULE_QUALIFIERS`.
+const IPE_BROWSER_SCREEN_ORIENTATION: &str = include_str!("../Ipe/Browser/ScreenOrientation.ipe");
+
+/// `Ipe.Browser.ScreenOrientation.Internals` — the low-level Screen Orientation
+/// port surface: the closed outbound/inbound ADTs and the raw `Ipe.Ffi.Js` wiring
+/// the high-level layer wraps. Importing it discloses the same
+/// `js-port:screen-orientation` axis (the prefix key covers the submodule).
+/// Registered in [`COMPILED_STD_MODULES`] (NOT `MODULES`); NOT in
+/// `STDLIB_MODULE_QUALIFIERS`.
+const IPE_BROWSER_SCREEN_ORIENTATION_INTERNALS: &str =
+    include_str!("../Ipe/Browser/ScreenOrientation/Internals.ipe");
+
+/// `Ipe.Browser.WakeLock` — acquire a screen wake lock and release it, over
+/// `Ipe.Ffi.Js` ports. Importing discloses `js-port:wake-lock` (keyed on the
+/// `Ipe.Browser.WakeLock` path prefix via `WebCapability::for_browser_module`).
+/// Registered in [`COMPILED_STD_MODULES`] (NOT `MODULES`); NOT in
+/// `STDLIB_MODULE_QUALIFIERS`.
+const IPE_BROWSER_WAKE_LOCK: &str = include_str!("../Ipe/Browser/WakeLock.ipe");
+
+/// `Ipe.Browser.WakeLock.Internals` — the low-level Wake Lock port surface: the
+/// closed outbound/inbound ADTs and the raw `Ipe.Ffi.Js` wiring the high-level
+/// layer wraps. Importing it discloses the same `js-port:wake-lock` axis (the
+/// prefix key covers the submodule). Registered in [`COMPILED_STD_MODULES`]
+/// (NOT `MODULES`); NOT in `STDLIB_MODULE_QUALIFIERS`.
+const IPE_BROWSER_WAKE_LOCK_INTERNALS: &str = include_str!("../Ipe/Browser/WakeLock/Internals.ipe");
+
 /// `Ipe.Env` — build-time-embedded public config (compiled source).
 ///
 /// Defines `public : String -> Maybe String`, routed through the
@@ -1556,6 +1644,54 @@ pub const COMPILED_STD_MODULES: &[CompiledStdModule] = &[
     CompiledStdModule {
         dotted: "Ipe.Browser.Connectivity.Internals",
         source: IPE_BROWSER_CONNECTIVITY_INTERNALS,
+    },
+    CompiledStdModule {
+        dotted: "Ipe.Browser.Orientation",
+        source: IPE_BROWSER_ORIENTATION,
+    },
+    CompiledStdModule {
+        dotted: "Ipe.Browser.Orientation.Internals",
+        source: IPE_BROWSER_ORIENTATION_INTERNALS,
+    },
+    CompiledStdModule {
+        dotted: "Ipe.Browser.Motion",
+        source: IPE_BROWSER_MOTION,
+    },
+    CompiledStdModule {
+        dotted: "Ipe.Browser.Motion.Internals",
+        source: IPE_BROWSER_MOTION_INTERNALS,
+    },
+    CompiledStdModule {
+        dotted: "Ipe.Browser.Channel",
+        source: IPE_BROWSER_CHANNEL,
+    },
+    CompiledStdModule {
+        dotted: "Ipe.Browser.Channel.Internals",
+        source: IPE_BROWSER_CHANNEL_INTERNALS,
+    },
+    CompiledStdModule {
+        dotted: "Ipe.Browser.Fullscreen",
+        source: IPE_BROWSER_FULLSCREEN,
+    },
+    CompiledStdModule {
+        dotted: "Ipe.Browser.Fullscreen.Internals",
+        source: IPE_BROWSER_FULLSCREEN_INTERNALS,
+    },
+    CompiledStdModule {
+        dotted: "Ipe.Browser.ScreenOrientation",
+        source: IPE_BROWSER_SCREEN_ORIENTATION,
+    },
+    CompiledStdModule {
+        dotted: "Ipe.Browser.ScreenOrientation.Internals",
+        source: IPE_BROWSER_SCREEN_ORIENTATION_INTERNALS,
+    },
+    CompiledStdModule {
+        dotted: "Ipe.Browser.WakeLock",
+        source: IPE_BROWSER_WAKE_LOCK,
+    },
+    CompiledStdModule {
+        dotted: "Ipe.Browser.WakeLock.Internals",
+        source: IPE_BROWSER_WAKE_LOCK_INTERNALS,
     },
     CompiledStdModule {
         dotted: "Ipe.Env",
