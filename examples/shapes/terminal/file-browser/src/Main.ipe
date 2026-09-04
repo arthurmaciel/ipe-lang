@@ -1,6 +1,6 @@
 module Main exposing (main)
 
--- A keyboard-driven directory browser over `Terminal.appScreen`. The view is a
+-- A keyboard-driven directory browser over `Tui.app`. The view is a
 -- typed `Ipe.Ui.Cells` `Cells` tree that the runtime paints to terminal cells;
 -- inside that structured view sits a raw `Cells.cells` island — a hexdump of the
 -- selected file's first bytes, painted character by character.
@@ -18,12 +18,12 @@ module Main exposing (main)
 
 import Ipe.String as String
 import Ipe.System as System
-import Ipe.Tea.Terminal as Terminal
+import Ipe.Tea.Tui as Tui
 import Ipe.File as File
 import Ipe.Path as Path
 import Ipe.Task as Task
-import Ipe.Tea.Terminal.Cmd as Cmd
-import Ipe.Tea.Terminal.Sub as Sub
+import Ipe.Tea.Tui.Cmd as Cmd
+import Ipe.Tea.Tui.Sub as Sub
 import Ipe.List as List
 import Ipe.Ui as Ui
 import Ipe.Ui.Cells as Cells
@@ -369,7 +369,7 @@ onKey key =
 
 
 main =
-    Terminal.appScreen
+    Tui.app
         { init = init
         , update = update
         , view = view

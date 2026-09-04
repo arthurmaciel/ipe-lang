@@ -7,7 +7,7 @@
 Ipe.Ui.Cells — Tui-only view builders producing `Cells msg`.
 
 Functions in this module return `Cells msg`, a type that is distinct from
-`Element msg`.  Only `Terminal.appScreen` accepts a `view : model -> Cells msg`;
+`Element msg`.  Only `Tui.app` accepts a `view : model -> Cells msg`;
 Web and Cli shapes require `Element msg`, so using these builders in a non-Tui
 shape is a compile-time type error (IPE-T0001).
 
