@@ -2645,6 +2645,15 @@ impl<'a> Parser<'a> {
             },
             Tok::LParen => {
                 let opener = tok.span;
+                // Empty parens `()` are the unit pattern — the sole value of the
+                // unit type — mirroring the unit EXPRESSION the parser builds
+                // from `()`. Handled before `parse_pattern`, which cannot begin
+                // on a `)`.
+                if self.peek_kind() == Some(&Tok::RParen) {
+                    let close = self.expect_rparen(opener, Construct::Pattern)?;
+                    let span = Self::span_merge(opener, close);
+                    return Ok(Located::new(span, Pattern_::PUnit));
+                }
                 let inner = self.parse_pattern(depth + 1)?;
                 // A following `,` makes this a tuple pattern `(p0, p1, ...)`;
                 // otherwise the parens just group a single pattern and unwrap.

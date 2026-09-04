@@ -316,7 +316,7 @@ fn canon_expr(out: &mut Vec<Raw>, expr: &ipe_canon::ast::Expr, interner: &Intern
 fn canon_pattern(out: &mut Vec<Raw>, pat: &ipe_canon::ast::Pattern, interner: &Interner) {
     use ipe_canon::ast::Pattern_;
     match &pat.value {
-        Pattern_::PAnything => {}
+        Pattern_::PAnything | Pattern_::PUnit => {}
         Pattern_::PVar(_) => {
             Raw::push(out, pat.span, TokenClass::Variable, None);
         }
@@ -449,7 +449,7 @@ const fn push_type_annotation(_out: &mut Vec<Raw>, _ty: &ipe_syntax::TypeAnnotat
 
 fn push_syn_pattern(out: &mut Vec<Raw>, pat: &ipe_syntax::Pattern, interner: &Interner) {
     match &pat.value {
-        ipe_syntax::Pattern_::PAnything => {}
+        ipe_syntax::Pattern_::PAnything | ipe_syntax::Pattern_::PUnit => {}
         ipe_syntax::Pattern_::PVar(_) => {
             Raw::push(out, pat.span, TokenClass::Variable, None);
         }
