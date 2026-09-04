@@ -51,16 +51,20 @@ type JsCmd
 -- variant the browser can push is enumerated, so the fold in the high-level
 -- layer is EXHAUSTIVE and a denial becomes a typed `Err`, never a silent drop.
 --
---   * `Granted` — the permission is currently granted.
---   * `Denied` — the permission is currently denied; querying it again without a
+--   * `StateGranted` — the permission is currently granted.
+--   * `StateDenied` — the permission is currently denied; querying it again without a
 --     user gesture yields the same result.
---   * `Prompt` — the browser will prompt the user on the next relevant API call.
---   * `Unavailable` — the Permissions API is absent in this context.
+--   * `StatePrompt` — the browser will prompt the user on the next relevant API call.
+--   * `StateUnavailable` — the Permissions API is absent in this context.
+--
+-- Variants are prefixed with `State` to avoid clashing with the public
+-- `PermissionState` constructors (`Granted`, `Denied`, `Prompt`) in modules
+-- that import both.
 type JsMsg
-    = Granted
-    | Denied
-    | Prompt
-    | Unavailable
+    = StateGranted
+    | StateDenied
+    | StatePrompt
+    | StateUnavailable
 
 
 -- | `request cmd` — hand a closed outbound `JsCmd` to the raw port transport.
@@ -109,13 +113,13 @@ decodeState : String -> Decode.Decoder JsMsg
 decodeState state =
     case state of
         "granted" ->
-            Decode.succeed Granted
+            Decode.succeed StateGranted
 
         "denied" ->
-            Decode.succeed Denied
+            Decode.succeed StateDenied
 
         "prompt" ->
-            Decode.succeed Prompt
+            Decode.succeed StatePrompt
 
         _ ->
             Decode.fail ("unknown permission state: " ++ state)
@@ -125,7 +129,7 @@ decodeError : String -> Decode.Decoder JsMsg
 decodeError token =
     case token of
         "unavailable" ->
-            Decode.succeed Unavailable
+            Decode.succeed StateUnavailable
 
         _ ->
             Decode.fail ("unknown permission error variant: " ++ token)

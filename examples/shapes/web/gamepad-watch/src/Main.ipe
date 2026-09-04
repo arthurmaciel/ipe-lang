@@ -19,7 +19,8 @@ import Ipe.Tea.Web as Web
 import Ipe.Tea.Web.Cmd as Cmd
 import Ipe.Tea.Web.Sub as Sub
 import Ipe.Ui as Ui
-import Ipe.Browser.Gamepad as Gamepad
+import Ipe.Browser.Gamepad as Gamepad exposing (GamepadEvent(..))
+import Ipe.List as List
 import Ipe.String as String
 
 
@@ -50,13 +51,13 @@ update msg model =
 describeEvent : Gamepad.GamepadEvent -> String
 describeEvent event =
     case event of
-        Gamepad.GamepadConnected index id ->
+        GamepadConnected index id ->
             "connected: slot " ++ String.fromInt index ++ " (" ++ id ++ ")"
 
-        Gamepad.GamepadDisconnected index ->
+        GamepadDisconnected index ->
             "disconnected: slot " ++ String.fromInt index
 
-        Gamepad.GamepadState index buttons axes ->
+        GamepadState index buttons axes ->
             let
                 pressed =
                     List.length (List.filter (\b -> b) buttons)
@@ -69,7 +70,7 @@ describeEvent event =
                 ++ String.fromInt (List.length axes)
                 ++ " axis(es)"
 
-        Gamepad.GamepadUnavailable ->
+        GamepadUnavailable ->
             "Gamepad API unavailable in this browser"
 
 

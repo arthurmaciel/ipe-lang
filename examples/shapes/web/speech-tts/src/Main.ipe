@@ -60,7 +60,7 @@ update msg model =
 
         GotOutcome result ->
             case result of
-                Ok () ->
+                Ok _ ->
                     ( { model | status = "done" }, Cmd.none )
 
                 Err error ->

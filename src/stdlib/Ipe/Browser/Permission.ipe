@@ -104,16 +104,16 @@ changes _ toMsg =
 foldState : Internals.JsMsg -> Task Error PermissionState
 foldState msg =
     case msg of
-        Granted ->
+        StateGranted ->
             Task.succeed Granted
 
-        Denied ->
+        StateDenied ->
             Task.succeed Denied
 
-        Prompt ->
+        StatePrompt ->
             Task.succeed Prompt
 
-        Unavailable ->
+        StateUnavailable ->
             Task.fail (Error.unavailable "Permissions API unavailable")
 
 
@@ -122,14 +122,14 @@ foldState msg =
 toResult : Internals.JsMsg -> Result Error PermissionState
 toResult inbound =
     case inbound of
-        Granted ->
+        StateGranted ->
             Ok Granted
 
-        Denied ->
+        StateDenied ->
             Ok Denied
 
-        Prompt ->
+        StatePrompt ->
             Ok Prompt
 
-        Unavailable ->
+        StateUnavailable ->
             Err (Error.unavailable "Permissions API unavailable")

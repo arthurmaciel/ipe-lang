@@ -8,7 +8,7 @@ module Main exposing (main)
 
 import Ipe.Browser.Connectivity as Connectivity
 import Ipe.Browser.MediaQuery as MediaQuery
-import Ipe.Browser.Visibility as Visibility
+import Ipe.Browser.Visibility as Visibility exposing (State(..))
 import Ipe.String as String
 import Ipe.Tea.Web as Web exposing (app)
 import Ipe.Tea.Web.Cmd as Cmd
@@ -122,10 +122,10 @@ subscriptions model =
 visibilityText : Result Error Visibility.State -> String
 visibilityText result =
     case result of
-        Ok Visibility.Visible ->
+        Ok Visible ->
             "visible"
 
-        Ok Visibility.Hidden ->
+        Ok Hidden ->
             "hidden"
 
         Err _ ->
