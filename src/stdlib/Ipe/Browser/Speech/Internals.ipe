@@ -1,0 +1,132 @@
+-- | Ipe.Browser.Speech.Internals — the low-level speech synthesis port surface:
+-- the closed outbound/inbound ADTs and the raw `Ipe.Ffi.Js` request/subscribe
+-- wiring the high-level `Ipe.Browser.Speech` layer wraps.
+--
+-- Importing this submodule discloses the same `js-port:speech` axis as the
+-- top-level module (the disclosure is keyed on the `Ipe.Browser.Speech` path
+-- prefix), so the raw port surface cannot be reached undisclosed.
+module Ipe.Browser.Speech.Internals exposing
+    ( Options
+    , defaultOptions
+    , JsCmd(..)
+    , JsMsg(..)
+    , request
+    , requestOne
+    , subscribe
+    , inbound
+    )
+
+import Ipe.Error as Error exposing (Error)
+import Ipe.Ffi.Js as Js
+import Ipe.Json.Decode as Decode
+import Ipe.Tea.Web.Cmd as Cmd
+import Ipe.Tea.Web.Sub as Sub
+
+
+-- | Synthesis options. All fields are clamped by the browser to its own
+-- supported range; out-of-range values are silently normalised by the browser
+-- and do not cause an error.
+--
+--   * `rate` — speaking rate in the range [0.1, 10.0]; 1.0 is normal speed.
+--   * `pitch` — voice pitch in [0.0, 2.0]; 1.0 is normal pitch.
+--   * `volume` — output volume in [0.0, 1.0]; 1.0 is full volume.
+--   * `lang` — BCP-47 language tag (e.g. `"en-US"`); an empty string means
+--     the browser chooses its default voice.
+type alias Options =
+    { rate : Float
+    , pitch : Float
+    , volume : Float
+    , lang : String
+    }
+
+
+-- | Sensible defaults: normal rate, pitch, and volume; browser-default language.
+defaultOptions : Options
+defaultOptions =
+    { rate = 1.0
+    , pitch = 1.0
+    , volume = 1.0
+    , lang = ""
+    }
+
+
+-- | The closed OUTBOUND port type. The entire outbound surface is a single
+-- auditable object.
+--
+--   * `Speak { text, options }` — synthesise `text` with the given options; a
+--     single inbound `JsMsg` arrives when synthesis completes or fails.
+--   * `Cancel` — cancel any queued or in-progress utterance. The browser
+--     calls `speechSynthesis.cancel()`. No inbound reply is sent for a cancel.
+type JsCmd
+    = Speak { text : String, options : Options }
+    | Cancel
+
+
+-- | The NARROW closed INBOUND port type — NOT the app's internal `Msg`. Every
+-- variant the browser can push is enumerated, so the fold in the high-level
+-- layer is EXHAUSTIVE and a denial or an absent API can never be silently
+-- dropped: it becomes a typed `Err`.
+--
+--   * `Spoken` — synthesis completed without error.
+--   * `Unavailable` — the `speechSynthesis` API is absent in this context.
+--   * `Failed` — the browser fired an error event (e.g. interrupted, cancelled
+--     by a subsequent call, or a network error on a remote voice).
+type JsMsg
+    = Spoken
+    | Unavailable
+    | Failed
+
+
+-- | `request cmd` — hand a closed outbound `JsCmd` to the raw port transport.
+-- The served first-party JS sink reaches `speechSynthesis.speak`; a completion
+-- or error arrives inbound as a `JsMsg`.
+request : JsCmd -> Cmd.Cmd msg
+request cmd =
+    Js.send cmd
+
+
+-- | `requestOne cmd` — correlated one-shot `JsCmd` → `Task Error JsMsg`.
+-- Routes through `Js.request` with the `inbound` decoder so the correlated
+-- reply is decoded fail-closed by the same gate the `subscribe` path uses.
+requestOne : JsCmd -> Task Error JsMsg
+requestOne cmd =
+    Js.request cmd inbound
+
+
+-- | `subscribe toMsg` — the inbound subscription over the fail-closed seal
+-- decoder. `inbound` IS the security gate; a malformed / mismatched frame is
+-- dropped whole.
+subscribe : (JsMsg -> msg) -> Sub.Sub msg
+subscribe toMsg =
+    Js.subscribe inbound toMsg
+
+
+-- | The total, fail-closed decoder for the inbound `JsMsg`. It reads `ok`
+-- first: a true flag is a `Spoken` acknowledgement; a false flag decodes the
+-- closed `error` vocabulary. An unrecognised token fails the decode closed
+-- (the frame is dropped, never a silent mis-map).
+inbound : Decode.Decoder JsMsg
+inbound =
+    Decode.andThen decodeByOk (Decode.field "ok" Decode.bool)
+
+
+decodeByOk : Bool -> Decode.Decoder JsMsg
+decodeByOk ok =
+    if ok then
+        Decode.succeed Spoken
+
+    else
+        Decode.andThen decodeError (Decode.field "error" Decode.string)
+
+
+decodeError : String -> Decode.Decoder JsMsg
+decodeError token =
+    case token of
+        "unavailable" ->
+            Decode.succeed Unavailable
+
+        "failed" ->
+            Decode.succeed Failed
+
+        _ ->
+            Decode.fail ("unknown speech error variant: " ++ token)

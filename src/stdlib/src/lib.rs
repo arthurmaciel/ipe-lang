@@ -835,6 +835,21 @@ const IPE_BROWSER_MICROPHONE: &str = include_str!("../Ipe/Browser/Microphone.ipe
 const IPE_BROWSER_MICROPHONE_INTERNALS: &str =
     include_str!("../Ipe/Browser/Microphone/Internals.ipe");
 
+/// `Ipe.Browser.Speech` — one-shot text-to-speech synthesis and queue control
+/// via the browser `speechSynthesis` API, over `Ipe.Ffi.Js` ports. Importing
+/// discloses `js-port:speech` (keyed on the `Ipe.Browser.Speech` path prefix
+/// via `WebCapability::for_browser_module`). Registered in
+/// [`COMPILED_STD_MODULES`] (NOT `MODULES`); NOT in `STDLIB_MODULE_QUALIFIERS`.
+const IPE_BROWSER_SPEECH: &str = include_str!("../Ipe/Browser/Speech.ipe");
+
+/// `Ipe.Browser.Speech.Internals` — the low-level speech synthesis port
+/// surface: the closed outbound/inbound ADTs, the `Options` record, and the raw
+/// `Ipe.Ffi.Js` wiring the high-level layer wraps. Importing it discloses the
+/// same `js-port:speech` axis (the prefix key covers the submodule). Registered
+/// in [`COMPILED_STD_MODULES`] (NOT `MODULES`); NOT in
+/// `STDLIB_MODULE_QUALIFIERS`.
+const IPE_BROWSER_SPEECH_INTERNALS: &str = include_str!("../Ipe/Browser/Speech/Internals.ipe");
+
 /// `Ipe.Env` — build-time-embedded public config (compiled source).
 ///
 /// Defines `public : String -> Maybe String`, routed through the
@@ -1369,6 +1384,14 @@ pub const COMPILED_STD_MODULES: &[CompiledStdModule] = &[
     CompiledStdModule {
         dotted: "Ipe.Browser.Microphone.Internals",
         source: IPE_BROWSER_MICROPHONE_INTERNALS,
+    },
+    CompiledStdModule {
+        dotted: "Ipe.Browser.Speech",
+        source: IPE_BROWSER_SPEECH,
+    },
+    CompiledStdModule {
+        dotted: "Ipe.Browser.Speech.Internals",
+        source: IPE_BROWSER_SPEECH_INTERNALS,
     },
     CompiledStdModule {
         dotted: "Ipe.Env",

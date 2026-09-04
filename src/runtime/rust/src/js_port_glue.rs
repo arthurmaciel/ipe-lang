@@ -598,6 +598,70 @@ const PORT_GLUE_JS: &str = r#"// Ipe.Ffi.Js browser port surface. Values cross a
     );
     return true;
   }
+  // Ipe.Browser.Speech: `Speak { text, options }` → speechSynthesis.speak.
+  // Cancels any queued utterance first, constructs a SpeechSynthesisUtterance,
+  // applies rate/pitch/volume/lang from options, and calls speechSynthesis.speak.
+  // Resolves once via `onend` (Spoken) or `onerror` (Failed). An absent API
+  // traps to Unavailable — never a throw, never a broadcast.
+  // `Cancel` calls speechSynthesis.cancel() and sends no reply.
+  function speechSink(value, corId) {
+    var isSpeak = value && typeof value === "object" && value.Speak !== undefined;
+    var isCancel = value === "Cancel" ||
+      (value && typeof value === "object" && value.Cancel !== undefined);
+    if (!isSpeak && !isCancel) return false;
+    if (isCancel) {
+      if (window.speechSynthesis && typeof window.speechSynthesis.cancel === "function") {
+        try { window.speechSynthesis.cancel(); } catch (_e) { /* best-effort */ }
+      }
+      return true;
+    }
+    // isSpeak — require corId so the result is only routed to the correct
+    // one-shot waiter, never broadcast to js_subscribe subscribers.
+    if (corId === null || corId === undefined) {
+      return true; // recognised but uncorrelated — swallow, never broadcast
+    }
+    if (!window.speechSynthesis || typeof window.speechSynthesis.speak !== "function" ||
+        typeof SpeechSynthesisUtterance === "undefined") {
+      reply({ tag: "speech", ok: false, error: "unavailable" }, corId);
+      return true;
+    }
+    var p = (value.Speak && typeof value.Speak === "object") ? value.Speak : {};
+    var text = typeof p.text === "string" ? p.text : "";
+    var opts = (p.options && typeof p.options === "object") ? p.options : {};
+    // Cancel any in-progress utterance so the new one starts immediately.
+    try { window.speechSynthesis.cancel(); } catch (_e) { /* best-effort */ }
+    var utterance;
+    try { utterance = new SpeechSynthesisUtterance(text); } catch (_e) {
+      reply({ tag: "speech", ok: false, error: "unavailable" }, corId);
+      return true;
+    }
+    if (typeof opts.rate === "number") { utterance.rate = opts.rate; }
+    if (typeof opts.pitch === "number") { utterance.pitch = opts.pitch; }
+    if (typeof opts.volume === "number") { utterance.volume = opts.volume; }
+    if (typeof opts.lang === "string" && opts.lang !== "") { utterance.lang = opts.lang; }
+    var settled = false;
+    utterance.onend = function () {
+      if (settled) return;
+      settled = true;
+      reply({ tag: "speech", ok: true }, corId);
+    };
+    utterance.onerror = function (ev) {
+      if (settled) return;
+      settled = true;
+      // "interrupted" and "cancelled" mean a subsequent cancel() arrived — still
+      // a typed Failed outcome, not a throw or a silent drop.
+      reply({ tag: "speech", ok: false, error: "failed" }, corId);
+    };
+    try {
+      window.speechSynthesis.speak(utterance);
+    } catch (_e) {
+      if (!settled) {
+        settled = true;
+        reply({ tag: "speech", ok: false, error: "unavailable" }, corId);
+      }
+    }
+    return true;
+  }
   function builtinSink(value, corId) {
     if (clipboardSink(value, corId)) return true;
     if (geolocationSink(value, corId)) return true;
@@ -610,6 +674,7 @@ const PORT_GLUE_JS: &str = r#"// Ipe.Ffi.Js browser port surface. Values cross a
     if (filePickerSink(value, corId)) return true;
     if (cameraSink(value, corId)) return true;
     if (microphoneSink(value, corId)) return true;
+    if (speechSink(value, corId)) return true;
     return false;
   }
   function deliver(raw) {
@@ -905,6 +970,29 @@ mod tests {
         assert!(js.contains("\"denied\""));
         assert!(js.contains("\"unavailable\""));
         assert!(js.contains("NotAllowedError"));
+        assert!(!js.contains("eval("));
+    }
+
+    #[test]
+    fn speech_sink_reaches_the_web_api_and_traps_absence_and_failure_to_typed_results() {
+        let js = port_glue_js();
+        // The first-party Ipe.Browser.Speech sink reaches speechSynthesis…
+        assert!(js.contains("speechSink"));
+        assert!(js.contains("value.Speak"));
+        assert!(js.contains("window.speechSynthesis.speak"));
+        assert!(js.contains("SpeechSynthesisUtterance"));
+        assert!(js.contains("window.speechSynthesis.cancel"));
+        // …applies rate / pitch / volume / lang options…
+        assert!(js.contains("utterance.rate"));
+        assert!(js.contains("utterance.pitch"));
+        assert!(js.contains("utterance.volume"));
+        assert!(js.contains("utterance.lang"));
+        // …resolves a completed utterance to a typed Spoken frame…
+        assert!(js.contains("tag: \"speech\""));
+        assert!(js.contains("ok: true"));
+        // …and traps absence + failure to typed frames, never a throw / eval.
+        assert!(js.contains("\"unavailable\""));
+        assert!(js.contains("\"failed\""));
         assert!(!js.contains("eval("));
     }
 
