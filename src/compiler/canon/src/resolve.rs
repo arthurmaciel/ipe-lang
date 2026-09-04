@@ -1553,30 +1553,30 @@ fn thread_config_into_entry(
     }
 }
 
-/// The TEA app-entry kernels, keyed `(canonical qualifier, entry name)`. A
-/// module whose `main` head-calls one of these is a TEA app; any other `main`
-/// (a plain `Task`) is a Program. Kept in lockstep with the app-entry rows of
-/// `env::QUALIFIERS` (`Web.app`/`appRouted`, `Terminal.appScreen`/`appLines`,
+/// The TEA app-entry kernels, keyed `(qualifier, entry name)`. A module whose
+/// `main` head-calls one of these is a TEA app; any other `main` (a plain
+/// `Task`) is a Program. Kept in lockstep with the app-entry rows of
+/// `env::QUALIFIERS` (`Web.app`/`appRouted`, `Tui.app`, `Cli.app`,
 /// `WebView.app`).
 ///
-/// Keyed on the CANONICAL kernel `(module, name)` a resolved `VarKernel` carries.
-/// The canonical-facing `Tui.app` / `Cli.app` re-export the `Terminal` entries
-/// (via `env::CROSS_QUALIFIER_MEMBERS`), so their resolved `VarKernel` is already
-/// `("Terminal", "appScreen"|"appLines")` and matches here without its own row.
+/// Keyed on the kernel `(module, name)` a resolved `VarKernel` carries. `Tui.app`
+/// and `Cli.app` are the two terminal drive-axis entries; each maps to the one
+/// `"Terminal"` rendering family via [`canonical_shape`] where the shape gate
+/// needs a family name.
 const TEA_APP_ENTRIES: &[(&str, &str)] = &[
     ("Web", "app"),
     ("Web", "appRouted"),
     ("Web", "appWith"),
-    ("Terminal", "appScreen"),
-    ("Terminal", "appLines"),
+    ("Tui", "app"),
+    ("Cli", "app"),
     ("WebView", "app"),
 ];
 
-/// The canonical shape name for a `Ipe.Tea.<Shape>` surface segment. Most shapes
-/// name themselves; the two terminal drive-axis surfaces (`Tui` / `Cli`) both
-/// fold onto the one `Terminal` shape, so their shape-scoped `Cmd` / `Sub`
-/// imports are admissible in a terminal app. An unrecognised segment maps to
-/// itself, so a genuine cross-shape import still fails the gate.
+/// The canonical shape (rendering family) name for a TEA surface segment. Most
+/// shapes name themselves; the two terminal drive-axis surfaces (`Tui` / `Cli`)
+/// both fold onto the one `Terminal` rendering family, so their shape-scoped
+/// `Cmd` / `Sub` imports are admissible in a terminal app. An unrecognised
+/// segment maps to itself, so a genuine cross-shape import still fails the gate.
 fn canonical_shape(surface: &str) -> &str {
     match surface {
         "Tui" | "Cli" => "Terminal",
@@ -1587,7 +1587,7 @@ fn canonical_shape(surface: &str) -> &str {
 /// IPE-N0045: reject a `main` that selects its shape at run time.
 ///
 /// A program's shape is pinned by the head of `main` at compile time (§ static
-/// pinning): `main = Web.app …` is a web app, `main = Terminal.appScreen …` a
+/// pinning): `main = Web.app …` is a web app, `main = Tui.app …` a
 /// terminal app, a `Task Error ()` `main` a script. It is never chosen from a
 /// value, so a `main` whose head — after peeling application / `let` / `\… ->`,
 /// exactly as the shape classifier peels it — is an `if` or `case` with a branch
@@ -1833,12 +1833,12 @@ fn main_head_is_tea_entry(body: &canon::Expr, interner: &Interner) -> bool {
     }
 }
 
-/// The CANONICAL TEA shape a `main` proves from its entry kernel. The value is
-/// the shape a user's `Ipe.Tea.<Shape>.{Cmd,Sub}` import must fold onto (via
-/// [`canonical_shape`]) to be admissible. The terminal shape's drive axes —
-/// whether reached as `Terminal.appScreen`/`appLines` or the canonical-facing
-/// `Tui.app`/`Cli.app` (which re-export those kernels) — all resolve to the one
-/// `"Terminal"` shape here.
+/// The CANONICAL TEA shape (rendering family) a `main` proves from its entry
+/// kernel. The value is the family a user's `Ipe.Tea.<Shape>.{Cmd,Sub}` import
+/// must fold onto (via [`canonical_shape`]) to be admissible. The terminal
+/// family's two drive axes (`Tui.app`, `Cli.app`) both resolve to the one
+/// `"Terminal"` family here, so a terminal app may import either surface's
+/// `Cmd` / `Sub`.
 ///
 /// Returns `None` when `main` is not a shape-entry app — the cross-shape gate
 /// then does not apply (a plain-`main` Program importing `Ipe.Tea.*` is already
@@ -1854,7 +1854,7 @@ fn app_shape_name(body: &canon::Expr, interner: &Interner) -> Option<&'static st
                 return TEA_APP_ENTRIES
                     .iter()
                     .find(|(em, en)| *em == m && *en == n)
-                    .map(|(shape, _)| *shape);
+                    .map(|(shape, _)| canonical_shape(shape));
             }
             _ => return None,
         }
@@ -1865,7 +1865,7 @@ fn app_shape_name(body: &canon::Expr, interner: &Interner) -> Option<&'static st
 ///
 /// `Cmd` / `Sub` are shape-specific and re-exported per shape under
 /// `Ipe.Tea.<Shape>.{Cmd,Sub}`. The app's shape is proven from its entry kernel
-/// (`Web.app` / `WebView.app` / `Terminal.app*`); an imported
+/// (`Web.app` / `WebView.app` / `Tui.app` / `Cli.app`); an imported
 /// `Ipe.Tea.<OtherShape>.{Cmd,Sub}` has no denotation in this app and fails
 /// closed here, naming the correct import path for the app's own shape.
 ///

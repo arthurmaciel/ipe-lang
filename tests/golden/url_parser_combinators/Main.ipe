@@ -6,12 +6,12 @@ module Main exposing (main)
 -- `withQuery`, `query`, `parse`, `firstInt`/`firstString`/`firstQuery` —
 -- matching a typed `Url` into a typed `AppRoute`, then rendering it. Proves the
 -- pure-data patterns lower over the shipped `Ipe.Url` accessors, the emitted
--- crate builds, and the program runs: `Terminal.appLines` renders once at stdin
+-- crate builds, and the program runs: `Cli.app` renders once at stdin
 -- EOF and exits 0.
 
 import Ipe.Maybe as Maybe
 import Ipe.String
-import Ipe.Tea.Terminal as Terminal
+import Ipe.Tea.Cli as Cli
 import Ipe.Tea.Terminal.Cmd
 import Ipe.Tea.Terminal.Sub
 import Ipe.Url as Url
@@ -130,7 +130,7 @@ onLine line =
 
 
 main =
-    Terminal.appLines
+    Cli.app
         { init = init
         , update = update
         , view = view

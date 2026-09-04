@@ -969,6 +969,7 @@ mod tests {
         let project = EmittedProject {
             files,
             cargo_toml: "[package]\nname = \"x\"\n".to_owned(),
+            uses_webview: false,
         };
 
         assert!(

@@ -60,13 +60,13 @@ fn assert_accepted(test_name: &str, source: &str, extra: &[(&str, &str)]) -> Res
 /// at — its mere presence satisfies the build-time file-existence gate.
 const WIDGET_JS: &str = "export function mount(host, emit) { return {}; }\n";
 
-/// `Ui.widget` inside a `Terminal.appScreen` view — must be rejected. A Tui
+/// `Ui.widget` inside a `Tui.app` view — must be rejected. A Tui
 /// view is `Cells Msg`; `Ui.widget` returns `Element msg`, so the type checker
 /// rejects the program (a browser custom element has no seam in a terminal
 /// build, and no `Cells` denotation either).
 const TERMINAL_UI_WIDGET: &str = r#"module Main exposing (main)
 
-import Ipe.Tea.Terminal as Terminal
+import Ipe.Tea.Tui as Tui
 import Ipe.Ffi.Js.CustomElement as CustomElement
 import Ipe.Ui.Cells exposing (Cells)
 import Ipe.Tea.Terminal.Cmd
@@ -106,7 +106,7 @@ onKey _event =
     Edited Saved
 
 main =
-    Terminal.appScreen
+    Tui.app
         { init = init, update = update, view = view
         , subscriptions = subscriptions, onKey = onKey
         }
@@ -201,7 +201,7 @@ main =
         }
 "#;
 
-/// A `Terminal.appScreen` view mounting `Ui.widget` is a browser-only node in a
+/// A `Tui.app` view mounting `Ui.widget` is a browser-only node in a
 /// terminal build: rejected fail-closed at ipe time (not a cargo failure or a
 /// panic). A Tui view is `Cells Msg` and `Ui.widget` returns `Element msg`, so
 /// the type checker rejects it (IPE-T0001); the `RejectInNonWebShape` shape gate
@@ -244,7 +244,7 @@ fn webview_view_with_ui_widget_is_accepted() -> Result<(), BoxError> {
     )
 }
 
-/// `Ui.widget` inside a `Terminal.appLines` (Cli shape) view.
+/// `Ui.widget` inside a `Cli.app` (Cli shape) view.
 ///
 /// A Cli view has type `Model -> String`. `Ui.widget` returns `Element msg`, so
 /// the type checker rejects the program before the `RejectInNonWebShape` shape
@@ -253,7 +253,7 @@ fn webview_view_with_ui_widget_is_accepted() -> Result<(), BoxError> {
 /// (e.g., programmatic IR construction in tests).
 const CLI_UI_WIDGET: &str = r#"module Main exposing (main)
 
-import Ipe.Tea.Terminal as Terminal
+import Ipe.Tea.Cli as Cli
 import Ipe.Ffi.Js.CustomElement as CustomElement
 
 type alias EditorState = { text : String, line : Int }
@@ -288,13 +288,13 @@ onLine _line =
     Edited Saved
 
 main =
-    Terminal.appLines
+    Cli.app
         { init = init, update = update, view = view
         , subscriptions = subscriptions, onLine = onLine
         }
 "#;
 
-/// `Ui.widget` in a `Terminal.appLines` view is rejected because `Ui.widget`
+/// `Ui.widget` in a `Cli.app` view is rejected because `Ui.widget`
 /// returns `Element msg` but the Cli view expects `String`. The type checker
 /// rejects it (IPE-T0001) before the `RejectInNonWebShape` shape gate fires.
 /// The gate is defense-in-depth for any IR path that bypasses type inference.

@@ -691,7 +691,7 @@ pub enum NameError {
     CustomElementCtorMalformed { detail: Box<str> },
     /// `main` selects its shape at runtime: after peeling application, `let`, and
     /// `\… ->` the head of `main`'s body is an `if` / `case` whose branches reach
-    /// app entries (`Web.app` / `Terminal.appScreen` / `Terminal.appLines` /
+    /// app entries (`Web.app` / `Tui.app` / `Cli.app` /
     /// `WebView.app`). A program's shape is pinned by the entry head at compile
     /// time, not chosen from a runtime value — so a shape-branching `main` fails
     /// closed here (static pinning, Correctness #2). The carrying
@@ -1029,8 +1029,8 @@ pub enum Feature {
     /// `init`/`update`/`view`/`subscriptions` until routing support lands.
     /// [IPE-L0118]
     RoutedWebApp,
-    /// The cfg record for an app entry point (`Web.app` / `Terminal.appScreen`
-    /// / `Terminal.appLines` / `WebView.app`) — or, for `WebView.app`, its nested
+    /// The cfg record for an app entry point (`Web.app` / `Tui.app`
+    /// / `Cli.app` / `WebView.app`) — or, for `WebView.app`, its nested
     /// `window` record and `window.size` tuple — was written as a let-bound
     /// variable (or any non-record expression) rather than an inline record
     /// literal. The Rust backend reads the cfg's field expressions directly at
@@ -1249,12 +1249,12 @@ pub enum LowerError {
     /// `Ui.cells` (a raw terminal cell grid) appears in a `Web`/`WebView`
     /// program. It paints directly to the terminal and has no denotation in a
     /// browser view, so it is admissible only under the `Terminal` shape
-    /// (`Terminal.appScreen` / `Terminal.appLines`). The carried [`AppShape`] is
+    /// (`Tui.app` / `Cli.app`). The carried [`AppShape`] is
     /// the web-family shape that rejected it — the SECURITY-tier fail-closed
     /// gate converts a would-be wrong-render into an ipe-time error. [IPE-L0132]
     UiCellsInWebShape(AppShape),
     /// `Ui.cells` (a raw terminal cell grid) appears in a `Cli`
-    /// (`Terminal.appLines`) program. A Cli view returns `String` (line I/O),
+    /// (`Cli.app`) program. A Cli view returns `String` (line I/O),
     /// so a `Cells` grid has no string denotation. Rejected at ipe time.
     /// [IPE-L0153]
     UiCellsInCliShape(AppShape),
@@ -1289,7 +1289,7 @@ pub enum LowerError {
     /// The program's `main` is not an entry a runnable program can have. A
     /// `main` is the one effect a program runs, so it must be a `Task Error ()`
     /// — either written directly (a script, `main = Io.println "…"`) or produced
-    /// by an app entry (`Web.app`, `Terminal.appScreen`, `WebView.app`, whose
+    /// by an app entry (`Web.app`, `Tui.app`, `WebView.app`, whose
     /// result is itself a `Task Error ()`). A `main` of any other type (an
     /// `Int`, a `String`, a function, …) has no effect to run. `found` is a
     /// short, plain-English name for what this `main`'s type is. Fails closed at
@@ -2309,7 +2309,7 @@ fn lower_help(msg: &LowerError) -> Vec<HelpLine> {
         )],
         LowerError::UiCellsInWebShape(_) => vec![HelpLine::Note(
             "`Ui.cells` paints a raw character grid onto the terminal, which a browser \
-             cannot render. Use it only under `Terminal.appScreen`; \
+             cannot render. Use it only under `Tui.app`; \
              for the same content in a Web/WebView view, render it with `Ui.text` (or a \
              `Ui.column` of rows) instead."
                 .into(),
@@ -2317,7 +2317,7 @@ fn lower_help(msg: &LowerError) -> Vec<HelpLine> {
         LowerError::UiCellsInCliShape(_) => vec![HelpLine::Note(
             "`Ui.cells` paints a terminal character grid — a Cli (line-oriented) view \
              returns `String`, so there is no character-grid surface to paint on. \
-             Use it only under `Terminal.appScreen`; for line output, \
+             Use it only under `Tui.app`; for line output, \
              format the content as a `String` instead."
                 .into(),
         )],
@@ -2488,7 +2488,7 @@ fn non_entry_main_help() -> Vec<HelpLine> {
             "`main` is the one effect your whole program runs, so it has to be a \
              `Task Error ()`. Write it directly — `main = Io.println \"hello\"` prints a \
              line, `main = someTask` runs any task you built — or start an app with \
-             `Web.app { … }`, `Terminal.appScreen { … }`, or `WebView.app { … }`, each \
+             `Web.app { … }`, `Tui.app { … }`, or `WebView.app { … }`, each \
              of which is itself a `Task Error ()`. To turn a plain value into an effect, \
              do something with it: `main = Io.println (String.fromInt 42)`."
                 .into(),

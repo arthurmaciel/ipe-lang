@@ -14,7 +14,7 @@ module Main exposing (main)
 
 import Ipe.String as String
 import Ipe.Task as Task
-import Ipe.Tea.Terminal as Terminal
+import Ipe.Tea.Cli as Cli
 import Ipe.Tea.Terminal.Cmd as Cmd
 import Ipe.Tea.Terminal.Sub as Sub
 import Ipe.Random as Random
@@ -122,7 +122,7 @@ onLine line =
     GotLine line
 
 main =
-    Terminal.appLines
+    Cli.app
         { init = init
         , update = update
         , view = view

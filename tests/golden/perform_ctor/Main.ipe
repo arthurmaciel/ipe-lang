@@ -1,10 +1,10 @@
 module Main exposing (main)
 
 -- Cmd.perform construct gate: an `init` command built with `Cmd.perform`
--- confirms type+emit+link soundness for the TEA wiring. `Terminal.appLines`
+-- confirms type+emit+link soundness for the TEA wiring. `Cli.app`
 -- renders `view` once at stdin EOF and exits 0.
 
-import Ipe.Tea.Terminal as Terminal
+import Ipe.Tea.Cli as Cli
 import Ipe.Tea.Terminal.Cmd as Cmd
 import Ipe.Tea.Terminal.Sub as Sub
 import Ipe.Task as Task
@@ -42,7 +42,7 @@ onLine line =
     GotLine line
 
 main =
-    Terminal.appLines
+    Cli.app
         { init = init
         , update = update
         , view = view

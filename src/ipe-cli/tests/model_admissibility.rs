@@ -303,7 +303,7 @@ main =
 
 const TUI_GOOD: &str = r"module Main exposing (main)
 
-import Ipe.Tea.Terminal as Terminal
+import Ipe.Tea.Tui as Tui
 import Ipe.Ui.Cells as Cells
 import Ipe.Ui.Cells exposing (Cells)
 import Ipe.Tea.Terminal.Cmd
@@ -341,7 +341,7 @@ onKey _event =
     NoOp
 
 main =
-    Terminal.appScreen
+    Tui.app
         { init = init, update = update, view = view
         , subscriptions = subscriptions, onKey = onKey
         }
@@ -349,7 +349,7 @@ main =
 
 const TUI_CMD_MODEL: &str = r"module Main exposing (main)
 
-import Ipe.Tea.Terminal as Terminal
+import Ipe.Tea.Tui as Tui
 import Ipe.Ui.Cells as Cells
 import Ipe.Ui.Cells exposing (Cells)
 import Ipe.Tea.Terminal.Cmd
@@ -387,7 +387,7 @@ onKey _event =
     NoOp
 
 main =
-    Terminal.appScreen
+    Tui.app
         { init = init, update = update, view = view
         , subscriptions = subscriptions, onKey = onKey
         }

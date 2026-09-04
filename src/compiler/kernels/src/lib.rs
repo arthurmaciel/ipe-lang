@@ -46,7 +46,8 @@ pub enum KernelClass {
     Ui,
     /// `Ipe.Web` app-entry kernels.
     Web,
-    /// `Ipe.Terminal` app-entry kernels (`appScreen`, `appLines`).
+    /// Terminal rendering family — the `Tui.app` / `Cli.app` app-entry kernels
+    /// and their `onKey` / `onLine` companions.
     Terminal,
     /// `Ipe.WebView` app-entry kernel.
     WebView,
@@ -369,7 +370,7 @@ pub enum BuiltinTag {
     UiElement,
     /// `Cells` — the Tui-only view type constructor `Cells msg`. Distinct from
     /// `Element msg`; produced exclusively by `Ipe.Ui.Cells.*` builders and
-    /// consumed only by `Terminal.appScreen`'s view field.
+    /// consumed only by `Tui.app`'s view field.
     Cells,
     /// `CustomElement` — the JS-widget boundary constructor `CustomElement down up`,
     /// applied to its sealed down-state and up-event types. Empty-module
@@ -420,10 +421,10 @@ pub enum BuiltinTag {
     /// `WebViewApp` — opaque app handle returned by `WebView.app`. Nullary;
     /// backed by `ipe_runtime::tea::WebViewApp`.
     WebViewApp,
-    /// `TuiApp` — opaque app handle returned by `Terminal.appScreen`. Nullary;
+    /// `TuiApp` — opaque app handle returned by `Tui.app`. Nullary;
     /// backed by `ipe_runtime::tea::TuiApp`.
     TuiApp,
-    /// `CliApp` — opaque app handle returned by `Terminal.appLines`. Nullary;
+    /// `CliApp` — opaque app handle returned by `Cli.app`. Nullary;
     /// backed by `ipe_runtime::tea::CliApp`.
     CliApp,
 }
@@ -625,13 +626,13 @@ pub enum FieldTag {
     AppRoutes,
     /// `"notFound"` — `Web.app` only.
     AppNotFound,
-    /// `"onKey"` — `Terminal.appScreen` only.
+    /// `"onKey"` — `Tui.app` only.
     TerminalOnKey,
     /// `"kind"` — the `KeyEvent` record field.
     TerminalKeyKind,
     /// `"value"` — the `KeyEvent` record field.
     TerminalKeyValue,
-    /// `"onLine"` — `Terminal.appLines` only.
+    /// `"onLine"` — `Cli.app` only.
     TerminalOnLine,
     /// `"window"` — `WebView.app` only.
     WebViewWindow,
@@ -1761,7 +1762,7 @@ pub enum StdlibKernel {
     UiText,
     UiHtml,
     /// `Ui.cells : List (List Char) -> Element msg` — a raw terminal cell grid
-    /// embedded as an island inside an `Ipe.Ui` view under `Terminal.appScreen`.
+    /// embedded as an island inside an `Ipe.Ui` view under `Tui.app`.
     UiCells,
     /// `UiCells.none : Cells msg` — empty cell, matching `Ui.none` but returns
     /// `Cells msg`.
@@ -1927,7 +1928,7 @@ pub enum StdlibKernel {
     WebRoute,
     WebRenderStatic,
     // ── Ipe.Terminal app-entry kernels ───────────────────────────────────
-    /// `Terminal.appScreen` — full-screen TEA entry, `view : Model -> Element
+    /// `Tui.app` — full-screen TEA entry, `view : Model -> Element
     /// Msg`, driven by `onKey`.
     TerminalAppScreen,
     // ── Ipe.WebView app-entry kernel ─────────────────────────────────────
@@ -2156,7 +2157,7 @@ pub enum StdlibKernel {
     FontDisabledColor,
     FontHoverSize, // Int → Attr pseudo
     // ── Effect stdlib modules ────────────────────────────────────────
-    // `Terminal.appLines` — line-oriented TEA app-entry, `view : Model ->
+    // `Cli.app` — line-oriented TEA app-entry, `view : Model ->
     // String`, driven by `onLine`.
     TerminalAppLines,
     // Ipe.Auth / Ipe.Auth — authentication helpers (fail-closed: no lower arm
@@ -3881,8 +3882,9 @@ impl StdlibKernel {
             // stays out of `is_tea()`, so a Program using it never pulls in the
             // `Cmd`/`Sub` loop aliases.
             Self::WebRenderStatic => d("Html", "renderStatic", 2, Web, "web_render_static"),
-            // ── Ipe.Terminal app-entry kernels ───────────────────────────
-            Self::TerminalAppScreen => d("Terminal", "appScreen", 1, Terminal, "tui_app_ui"),
+            // ── Ipe.Tui app-entry kernel ─────────────────────────────────
+            // Surface `Tui.app`; the internal rendering family is `Terminal`.
+            Self::TerminalAppScreen => d("Tui", "app", 1, Terminal, "tui_app_ui"),
             // ── Ipe.WebView app-entry kernel ─────────────────────────────
             Self::WebViewApp => d("WebView", "app", 1, WebView, "webview_app"),
             // ── Ipe.Web settings-carrying app entry + runtime-config kernels ──
@@ -4122,8 +4124,9 @@ impl StdlibKernel {
             Self::FontDisabledColor => d("Font", "disabledColor", 1, Ui, "ui_font_disabled_color_"),
             Self::FontHoverSize => d("Font", "hoverSize", 1, Ui, "ui_font_hover_size_"),
             // ── Effect stdlib modules ────────────────────────────────────
-            // Ipe.Terminal line-oriented app-entry.
-            Self::TerminalAppLines => d("Terminal", "appLines", 1, Terminal, "ipe_console_app_"),
+            // Ipe.Cli line-oriented app-entry. Surface `Cli.app`; the internal
+            // rendering family is `Terminal`.
+            Self::TerminalAppLines => d("Cli", "app", 1, Terminal, "ipe_console_app_"),
             // Ipe.Auth / Ipe.Auth (fail-closed: qual-registered only, no lower arm).
             Self::AuthHashPassword => d("Auth", "hashPassword", 1, Pure, "auth_hash_password"),
             Self::AuthHashPasswordCost => d(
@@ -8045,7 +8048,7 @@ impl StdlibKernel {
             tail: RowTailShape::Closed,
         };
         // ── App-entry cfg records. var(0)=model, var(1)=msg, var(2)=page,
-        // var(3)=appExt (open-row tail on Web / Terminal.appScreen). ──
+        // var(3)=appExt (open-row tail on Web / Tui.app). ──
         const TUPLE_A_CMD_B: TyShape = TyShape::Tuple(&[A, CMD_B]);
         const WEB_REQ_TO_TUPLE: TyShape = TyShape::Fun(&WEB_REQ, &TUPLE_A_CMD_B);
         const UNIT_TO_TUPLE: TyShape = TyShape::Fun(&UNIT, &TUPLE_A_CMD_B);
@@ -8069,7 +8072,7 @@ impl StdlibKernel {
             ],
             tail: RowTailShape::Open(3),
         };
-        // `Terminal.appScreen` — pinned `onKey : KeyEvent -> msg`, OPEN row.
+        // `Tui.app` — pinned `onKey : KeyEvent -> msg`, OPEN row.
         const KEY_EVENT: TyShape = TyShape::Record {
             fields: &[
                 (FieldTag::TerminalKeyKind, &STRING),
@@ -8088,7 +8091,7 @@ impl StdlibKernel {
             ],
             tail: RowTailShape::Open(3),
         };
-        // `Terminal.appLines` — `view : model -> String`, `onLine`, CLOSED.
+        // `Cli.app` — `view : model -> String`, `onLine`, CLOSED.
         const ON_LINE_FN: TyShape = TyShape::Fun(&STRING, &B);
         const TERMINAL_LINES_CFG: TyShape = TyShape::Record {
             fields: &[

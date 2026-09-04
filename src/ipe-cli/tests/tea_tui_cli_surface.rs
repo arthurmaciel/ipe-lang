@@ -1,10 +1,9 @@
 //! Compile-time surface tests for `Ipe.Tea.Tui` and `Ipe.Tea.Cli`.
 //!
-//! `Ipe.Tea.Tui` exposes the full-screen terminal TEA entry via `Tui.app`
-//! (which resolves to `Terminal.appScreen`). `Ipe.Tea.Cli` exposes the
-//! line-oriented entry via `Cli.app` (which resolves to `Terminal.appLines`).
-//! Both are registered as qualifier aliases in `env.rs` and their `app` members
-//! are wired via `CROSS_QUALIFIER_MEMBERS`.
+//! `Ipe.Tea.Tui` exposes the full-screen terminal TEA entry via `Tui.app`;
+//! `Ipe.Tea.Cli` exposes the line-oriented entry via `Cli.app`. Both `app`
+//! entries are registered in the `env.rs` qualifier catalog and carry
+//! `KernelClass::Terminal` (the one terminal rendering family).
 //!
 //! These tests are COMPILE-ONLY (the `ipe` pipeline writes the emitted project
 //! but `cargo` is never invoked), so they run in CI without `IPE_E2E`.
@@ -116,16 +115,16 @@ main =
         }
 "#;
 
-/// `Tui.app` resolves to `Terminal.appScreen` via the qualifier alias in
-/// `env.rs` and the `CROSS_QUALIFIER_MEMBERS` entry. A program using
+/// `Tui.app` is the full-screen terminal entry kernel registered in
+/// the `env.rs` qualifier catalog. A program using
 /// `import Ipe.Tea.Tui as Tui` and `Tui.app { ... }` must compile (ipe-0).
 #[test]
 fn tui_app_surface_compiles() -> Result<(), BoxError> {
     assert_accepted("tui_app", TUI_APP)
 }
 
-/// `Cli.app` resolves to `Terminal.appLines` via the qualifier alias in
-/// `env.rs` and the `CROSS_QUALIFIER_MEMBERS` entry. A program using
+/// `Cli.app` is the line-oriented terminal entry kernel registered in
+/// the `env.rs` qualifier catalog. A program using
 /// `import Ipe.Tea.Cli as Cli` and `Cli.app { ... }` must compile (ipe-0).
 #[test]
 fn cli_app_surface_compiles() -> Result<(), BoxError> {

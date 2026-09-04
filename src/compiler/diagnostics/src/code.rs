@@ -417,7 +417,7 @@ code! {
     ///
     /// A program's `main` is the single effect it runs, so it must be a
     /// `Task Error ()` — written directly (a script), or produced by an app
-    /// entry (`Web.app` / `Terminal.appScreen` / `WebView.app`, each of which
+    /// entry (`Web.app` / `Tui.app` / `WebView.app`, each of which
     /// returns a `Task Error ()`). A `main` of any other type (an `Int`, a
     /// `String`, a function, …) carries no effect to run; the runtime's single
     /// run site needs a `Task`, so this fails closed at `ipe` time rather than
@@ -471,8 +471,8 @@ code! {
     /// call so every argument passes the committed-literal seal gate
     IPE_L0151 = "IPE-L0151", "`Secret.fromString` must be applied directly to its argument", "IPE-L0151";
     /// `Ui.cells` (a terminal character-grid builder) was used in a Cli
-    /// (`Terminal.appLines`) program. A Cli view returns `String` (line output),
-    /// so a character grid has no denotation there. Use `Terminal.appScreen` for
+    /// (`Cli.app`) program. A Cli view returns `String` (line output),
+    /// so a character grid has no denotation there. Use `Tui.app` for
     /// a full-screen cell-grid app.
     IPE_L0153 = "IPE-L0153", "Ui.cells is terminal-screen-only and not available in the Cli shape", "IPE-L0153";
     /// expression nests too deeply for the backend

@@ -12,7 +12,7 @@
 //! * A plain-`main` Program reaching for a shape-scoped `Cmd` / `Sub` is the
 //!   IPE-N0033 Program-importing-a-shape contradiction, rejected before emit.
 //!
-//! The positive fixtures are minimal `Terminal.appLines` apps: `Cmd` / `Sub`
+//! The positive fixtures are minimal `Cli.app` apps: `Cmd` / `Sub`
 //! are shape-scoped, so they are exercised inside the shape's own managed loop.
 //! Each renders its `view` (`"ok"`) once at stdin EOF and exits 0.
 //!

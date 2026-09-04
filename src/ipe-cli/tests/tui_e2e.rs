@@ -1,14 +1,14 @@
-//! End-to-end tests for `Ipe.Terminal` `appScreen` — `Cells.column`,
+//! End-to-end tests for `Ipe.Terminal` `Tui.app` — `Cells.column`,
 //! `Cells.el`, `Cells.text`, and `String.fromInt`.
 //!
 //! Non-E2E tests (no `IPE_E2E` required):
 //! - `tui_onkey_record_typechecks` — ipe-level regression for the `onKey :
-//!   KeyEvent -> Msg` record scheme fix (T0001); verifies `Terminal.appScreen`
+//!   KeyEvent -> Msg` record scheme fix (T0001); verifies `Tui.app`
 //!   accepts a single-argument record-typed key handler and that the emitter
 //!   generates the bridging wrapper closure.
 //!
 //! E2E tests (gated on `IPE_E2E=1`):
-//! - `tui_counter_build_only` — full ipe + cargo build with `Terminal.appScreen`
+//! - `tui_counter_build_only` — full ipe + cargo build with `Tui.app`
 //!   and a `KeyEvent -> Msg` handler (a `String -> String -> Msg` curried shape
 //!   is not valid under the scheme).
 //!
@@ -25,7 +25,7 @@
 //! proof that the full pipeline works:
 //!
 //! ```text
-//! Terminal.appScreen cfg → constrain → lower → emit_tui_call →
+//! Tui.app cfg → constrain → lower → emit_tui_call →
 //!     ipe_runtime::tui::tui_app_ui(init, update, view, subs, on_key)
 //! ```
 //!
@@ -40,7 +40,7 @@
 //! IPE_E2E=1 cargo test tui_e2e
 //! ```
 
-/// A minimal `Terminal.appScreen` counter exercising the `appScreen` scheme.
+/// A minimal `Tui.app` counter exercising the `Tui.app` scheme.
 ///
 /// `onKey` is a SINGLE-argument record handler — `KeyEvent -> Msg` — matching
 /// the the compiler reference scheme (`any -> msg`).  The emitter generates the
@@ -60,7 +60,7 @@
 /// cells; there is no HTML step.
 const IPE_TUI_COUNTER: &str = r"module Main exposing (main)
 
-import Ipe.Tea.Terminal as Terminal
+import Ipe.Tea.Tui as Tui
 import Ipe.Ui.Cells as Cells
 import Ipe.Ui.Cells exposing (Cells)
 import Ipe.Tea.Terminal.Cmd
@@ -101,7 +101,7 @@ onKey _ =
     NoOp
 
 main =
-    Terminal.appScreen
+    Tui.app
         { init = init
         , update = update
         , view = view
@@ -141,12 +141,12 @@ fn compile_and_build(test_name: &str, ipe_source: &str) -> Result<std::path::Pat
     Ok(std::path::PathBuf::from(exe))
 }
 
-/// **Regression for T0001**: `Terminal.appScreen` must accept
+/// **Regression for T0001**: `Tui.app` must accept
 /// `onKey : KeyEvent -> Msg` where `KeyEvent = { kind : String,
 /// value : String }` (a SINGLE-argument record handler).
 ///
 /// Typing `onKey` as `String -> String -> Msg` (two curried String arguments)
-/// would cause `IPE-T0001` at the `Terminal.appScreen` call site, since example
+/// would cause `IPE-T0001` at the `Tui.app` call site, since example
 /// code uses the record-alias shape.
 ///
 /// After the fix, the scheme PINS the key-event argument to the closed
@@ -214,7 +214,7 @@ fn tui_onkey_record_typechecks() {
         combined
     }
 
-    // ── Terminal.appScreen with `onKey : KeyEvent -> Msg` ────────────────────
+    // ── Tui.app with `onKey : KeyEvent -> Msg` ────────────────────
     let app_rs = compile_ok("terminal_app_screen", IPE_TUI_COUNTER);
     if app_rs.is_empty() {
         return; // runtime unavailable — structural assertions skipped
@@ -223,13 +223,13 @@ fn tui_onkey_record_typechecks() {
     // The emitter must produce the bridging wrapper closure.
     assert!(
         app_rs.contains("|kind: String, value: String|"),
-        "Terminal.appScreen emitted Rust must contain the `|kind: String, value: String|` \
+        "Tui.app emitted Rust must contain the `|kind: String, value: String|` \
          wrapper closure (onKey record bridge); got:\n{app_rs}"
     );
     // The record struct `RecKindValue` must be referenced inside the wrapper.
     assert!(
         app_rs.contains("RecKindValue"),
-        "Terminal.appScreen emitted Rust must reference `RecKindValue` struct in the wrapper; \
+        "Tui.app emitted Rust must reference `RecKindValue` struct in the wrapper; \
          got:\n{app_rs}"
     );
 }
@@ -241,7 +241,7 @@ fn tui_onkey_record_typechecks() {
 /// This is a BUILD-ONLY test — it does not spawn the binary (Tui requires a
 /// real TTY).  A successful `cargo build` is the assertion:
 ///
-/// * constrain: `Terminal.appScreen` correctly types the 5-field cfg with a
+/// * constrain: `Tui.app` correctly types the 5-field cfg with a
 ///   record-typed `onKey : KeyEvent -> Msg` handler.
 /// * lower: the cfg record literal bypasses IPE-L0107 (same exemption
 ///   as `Web.app`).

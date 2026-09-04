@@ -134,11 +134,11 @@ pub enum NativeUiEmit {
 pub enum UiDelegate {
     /// `emit_web::emit_web_call` — the Web app-entry kernels.
     Web,
-    /// `emit_tui::emit_tui_call` — `Terminal.appScreen`.
+    /// `emit_tui::emit_tui_call` — `Tui.app`.
     Tui,
     /// `emit_webview::emit_webview_call` — `WebView.app`.
     WebView,
-    /// `emit_console::emit_console_call` — `Terminal.appLines`.
+    /// `emit_console::emit_console_call` — `Cli.app`.
     Console,
 }
 

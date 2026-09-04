@@ -510,7 +510,7 @@ const STD_UI_ANIMATION: &str = include_str!("../Ipe/Ui/Animation.ipe");
 ///
 /// `Cells msg` is a newtype distinct from `Element msg`; it is produced
 /// exclusively by the six builders here (`none` / `text` / `cells` /
-/// `el` / `row` / `column`) and consumed only by `Terminal.appScreen`'s
+/// `el` / `row` / `column`) and consumed only by `Tui.app`'s
 /// `view` field.  Using these builders inside a Web/Cli shape is a
 /// compile-time type error because the type checker sees `Cells msg`
 /// where `Element msg` is expected.

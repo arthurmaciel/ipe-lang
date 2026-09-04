@@ -2577,7 +2577,10 @@ fn write_emitted_project(
 
     let mut manifest = build_emit_manifest(emitted, runtime_dir, tree_shake_vendored)?;
     if let Some(plan) = static_plan {
-        if static_build::manifest_is_webview(&emitted.cargo_toml).map_err(backend_invariant_err)? {
+        // The webview-under-static refusal reads the backend's typed
+        // `uses_webview` signal (set from the resolved runtime/host), never a
+        // re-parse of the emitted `cargo_toml` default-feature list.
+        if emitted.uses_webview {
             return Err(CliError::StaticRefusal(build_plan::Refusal::WebviewStatic));
         }
         let cargo_toml = static_build::staticize_manifest(&emitted.cargo_toml, plan.allocator())

@@ -1402,8 +1402,8 @@ fn name_label(msg: &NameError) -> Option<String> {
         NameError::ProgramImportsTeaShape { module } => Some(format!(
             "this module has a plain `main` (a Program) but imports `{module}`; \
              a module that imports any `Ipe.Tea.*` shape is a TEA app, so give \
-             `main` a shape entry (`Web.app` / `Terminal.appScreen` / \
-             `Terminal.appLines` / `WebView.app`), or drop the `{module}` import \
+             `main` a shape entry (`Web.app` / `Tui.app` / \
+             `Cli.app` / `WebView.app`), or drop the `{module}` import \
              if this is a Program"
         )),
         NameError::RuntimeBranchedMain => Some(
@@ -1411,7 +1411,7 @@ fn name_label(msg: &NameError) -> Option<String> {
              entries, so which shape this program is would be decided at run time; \
              a program's shape is pinned by the entry head at compile time, not \
              chosen from a value. Commit `main` to one shape entry (`Web.app` / \
-             `Terminal.appScreen` / `Terminal.appLines` / `WebView.app`), and put \
+             `Tui.app` / `Cli.app` / `WebView.app`), and put \
              any run-time choice inside that shape (in its `init` / `update`), or \
              — for a plain program — make `main` a `Task Error ()`"
                 .to_string(),
@@ -1702,13 +1702,13 @@ fn lower_label(msg: &LowerError) -> String {
         LowerError::UiCellsInWebShape(app) => format!(
             "`Ui.cells` is terminal-only; not available in the {} shape — it paints a \
              raw character grid directly to the terminal and has no browser rendering. \
-             Use it only under `Terminal.appScreen`",
+             Use it only under `Tui.app`",
             web_shape_label(*app)
         ),
         LowerError::UiCellsInCliShape(_) => {
             "`Ui.cells` is terminal-screen-only; not available in the Cli shape — a \
              Cli view returns `String` (line output) and has no character-grid surface. \
-             Use `Terminal.appScreen` for a full-screen cell-grid app, or format the \
+             Use `Tui.app` for a full-screen cell-grid app, or format the \
              content as a `String` for line output"
                 .to_string()
         }
@@ -2091,8 +2091,8 @@ const fn feature_label(f: Feature) -> &'static str {
              [feature: routed-live-app]"
         }
         Feature::LetBoundAppCfg => {
-            "the cfg for an app entry point (`Web.app` / `Terminal.appScreen` / \
-             `Terminal.appLines` / \
+            "the cfg for an app entry point (`Web.app` / `Tui.app` / \
+             `Cli.app` / \
              `WebView.app`), and for `WebView.app` its nested `window` record and \
              `window.size` tuple, must be written inline as a record/tuple literal, \
              not a let-bound variable [feature: let-bound-app-cfg]"

@@ -5,10 +5,10 @@ module Main exposing (main)
 -- A child sub-component speaks its own `ChildMsg`; the parent folds it in with
 -- `Cmd.map` (its init command) and `Sub.map` (its subscriptions), retagging the
 -- child's effects into the parent's `Msg`. Proves the full pipeline compiles,
--- the emitted crate builds, and the program runs: `Terminal.appLines` renders the
+-- the emitted crate builds, and the program runs: `Cli.app` renders the
 -- initial view once at stdin EOF and exits 0.
 
-import Ipe.Tea.Terminal as Terminal
+import Ipe.Tea.Cli as Cli
 import Ipe.Tea.Terminal.Cmd
 import Ipe.String
 import Ipe.Tea.Terminal.Sub
@@ -58,7 +58,7 @@ onLine line =
     GotLine line
 
 main =
-    Terminal.appLines
+    Cli.app
         { init = init
         , update = update
         , view = view

@@ -1,6 +1,6 @@
 //! Emission for the `Ipe.Terminal` full-screen app-entry.
 //!
-//! * [`KernelFn::TerminalAppScreen`] — `Terminal.appScreen cfg` →
+//! * [`KernelFn::TerminalAppScreen`] — `Tui.app cfg` →
 //!   `ipe_runtime::tui::tui_app_ui(…)`. View returns `Element<Msg>` (the Ipe.Ui
 //!   typed element tree, rendered to ANSI cells by the runtime). 5-field cfg
 //!   (init / update / view / subscriptions / onKey) with an open row tail for
@@ -76,7 +76,7 @@ pub fn emit_tui_call(
     };
 
     match k {
-        // ── Terminal.appScreen { init, update, view, subscriptions, onKey } ─
+        // ── Tui.app { init, update, view, subscriptions, onKey } ─
         //
         // view : Model -> Cells Msg
         // Runtime entry: `ipe_runtime::tui::tui_app_ui(init, update, view, subs, on_key)`
@@ -84,7 +84,7 @@ pub fn emit_tui_call(
             let [cfg_e] = args else {
                 return Err(Diagnostic::CompilerBug {
                     where_: "ipe_backend_rust::emit_tui_call::TerminalAppScreen",
-                    detail: format!("Terminal.appScreen requires 1 argument, got {}", args.len()),
+                    detail: format!("Tui.app requires 1 argument, got {}", args.len()),
                 });
             };
             // Unreachable for well-typed source: a non-literal cfg is rejected
@@ -93,7 +93,7 @@ pub fn emit_tui_call(
             let Expr::Record { fields, .. } = cfg_e else {
                 return Err(Diagnostic::CompilerBug {
                     where_: "ipe_backend_rust::emit_tui_call::TerminalAppScreen",
-                    detail: "Terminal.appScreen cfg must be an inline record literal; \
+                    detail: "Tui.app cfg must be an inline record literal; \
                              a non-literal cfg is rejected at lower with IPE-L0119"
                         .into(),
                 });
