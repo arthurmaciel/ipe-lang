@@ -91,13 +91,6 @@ zeroize = "1"
 getrandom = "0.2"
 uuid = { version = "1", features = ["v4", "v7"] }
 bcrypt = "0.17"
-# `tinyvec`: pulled transitively by unicode-normalization (via url → idna) with only
-# the `alloc` feature. tinyvec 1.13.0 introduced a regression where `use alloc::vec::{self,
-# Vec}` at module level shadows the `vec!` macro when compiled alloc-only. Listing it
-# here with `std` ensures cargo unifies `std` into the feature set across the whole dep
-# tree, resolving the macro via std. Non-optional — all emitted projects that reach a
-# surface carrying url/idna/unicode-normalization pick up the fix unconditionally.
-tinyvec = { version = "1", features = ["std"] }
 
 # Unix-only: `Io.readSecret` toggles terminal echo via termios (tcgetattr /
 # tcsetattr / isatty) in the vendored runtime's `io` module; `Process.runInPty`
