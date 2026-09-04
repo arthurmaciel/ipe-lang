@@ -265,3 +265,60 @@ fn cli_view_with_ui_cells_is_rejected() -> Result<(), BoxError> {
         Err(other) => Err(format!("cli_ui_cells: unexpected error: {other:?}").into()),
     }
 }
+
+/// A DOM attribute (`Ui.onClick`) placed in a `Screen` view. `Ipe.Tea.Tui.Ui`'s
+/// builders take a cell-native `Attribute msg` (`TuiAttr`), a type DISTINCT from
+/// the DOM `Ipe.Ui.Attribute msg`. So naming a DOM attribute here is a type
+/// error (IPE-T0001) — the terminal author's intent is rejected at type-check,
+/// never silently discarded at render time. This is the make-invalid-states-
+/// unrepresentable half of the surface: the builder half was already guarded;
+/// this pins the attribute half.
+const SCREEN_WITH_DOM_ATTRIBUTE: &str = r#"module Main exposing (main)
+
+import Ipe.Tea.Tui as Tui
+import Ipe.Tea.Tui.Ui as Ui
+import Ipe.Tea.Tui.Ui exposing (Screen)
+import Ipe.Ui as Dom
+import Ipe.Tea.Tui.Cmd
+import Ipe.Tea.Tui.Sub
+
+type Msg = Clicked | NoOp
+
+type alias Model = { count : Int }
+
+init : () -> ( Model, Cmd Msg )
+init _unit =
+    ( { count = 0 }, Cmd.none )
+
+update : Msg -> Model -> ( Model, Cmd Msg )
+update _msg model =
+    ( model, Cmd.none )
+
+view : Model -> Screen Msg
+view _model =
+    Ui.el [ Dom.onClick Clicked ] (Ui.text "hello")
+
+subscriptions : Model -> Sub Msg
+subscriptions _model =
+    Sub.none
+
+type alias KeyEvent = { kind : String, value : String }
+
+onKey : KeyEvent -> Msg
+onKey _event =
+    NoOp
+
+main =
+    Tui.app
+        { init = init, update = update, view = view
+        , subscriptions = subscriptions, onKey = onKey
+        }
+"#;
+
+/// A DOM attribute in a `Screen` view is IPE-T0001 (rejected at type-check),
+/// NOT a silent render-time drop. The distinct cell-native `Attribute` type
+/// makes the DOM constructor unnameable in the terminal surface.
+#[test]
+fn screen_view_with_dom_attribute_is_rejected() -> Result<(), BoxError> {
+    assert_rejected_with("screen_dom_attr", SCREEN_WITH_DOM_ATTRIBUTE, "IPE-T0001")
+}
