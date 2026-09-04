@@ -3105,10 +3105,10 @@ mod tests {
         // fires ahead of the coarser IPE-N0033 import contradiction.
         let src = "module Main exposing (main)\n\
                    import Ipe.Tea.Web as Web\n\
-                   import Ipe.Tea.Terminal as Terminal\n\n\
+                   import Ipe.Tea.Tui as Tui\n\n\
                    flag = True\n\
                    cfg = 0\n\n\
-                   main =\n    if flag then\n        Web.app cfg\n    else\n        Terminal.appScreen cfg\n";
+                   main =\n    if flag then\n        Web.app cfg\n    else\n        Tui.app cfg\n";
         assert!(
             matches!(
                 canon_module_err(src),
@@ -3166,8 +3166,8 @@ mod tests {
 
     #[test]
     fn tui_app_importing_web_cmd_sub_is_rejected_n0035() {
-        // The canonical-facing `Tui.app` re-exports the `Terminal.appScreen`
-        // entry, so its app shape folds to `Terminal`. Importing another shape's
+        // `Tui.app` is a terminal-family entry, so its app shape folds to
+        // `Terminal`. Importing another shape's
         // `Sub` (`Ipe.Tea.Web.Sub`) has no denotation in a terminal app and must
         // fail closed (IPE-N0035) — the `canonical_shape` fold admits only the
         // terminal-family surfaces, never `Web` / `WebView`.

@@ -132,19 +132,17 @@ pub const STDLIB_MODULE_QUALIFIERS: &[(&[&str], &str)] = &[
     // above); `Ipe.Html.Events` is a kernel qualifier and stays in this table.
     (&["Ipe", "Html", "Events"], "Event"),
     // ── Ipe.Tea.<Shape> managed-update-loop shapes (ADR 0048) ────────────────
-    // The four TEA shapes live under `Ipe.Tea.*`; the canonical short qualifier
-    // ("Web"/"Terminal"/…) is preserved so every lower.rs kernel match arm is
+    // The TEA shapes live under `Ipe.Tea.*`; the canonical short qualifier
+    // ("Web"/"Tui"/…) is preserved so every lower.rs kernel match arm is
     // unchanged. Importing any `Ipe.Tea.*` module marks the module a TEA app —
     // a plain-`main` Program that imports one is rejected (IPE-N0033).
     (&["Ipe", "Tea", "Web"], "Web"),
-    (&["Ipe", "Tea", "Terminal"], "Terminal"),
-    // `Ipe.Tea.Tui` / `Ipe.Tea.Cli` — the canonical-facing surface over the one
-    // terminal TEA shape's two drive axes. `Tui.app` re-exports the full-screen
-    // `Terminal.appScreen` entry (view=Element, `onKey`); `Cli.app` re-exports
-    // the line-oriented `Terminal.appLines` entry (view=String, `onLine`). Their
-    // members re-export the canonical `Terminal` kernels (see
-    // `CROSS_QUALIFIER_MEMBERS`), so every lower.rs `("Terminal", …)` arm is
-    // unchanged.
+    // `Ipe.Tea.Tui` / `Ipe.Tea.Cli` — the two app-entry surfaces over the one
+    // terminal rendering family's two drive axes. `Tui.app` is the full-screen
+    // entry (view=Element, `onKey`); `Cli.app` is the line-oriented entry
+    // (view=String, `onLine`). Both carry `KernelClass::Terminal` internally, so
+    // every lower.rs Terminal-family arm is unchanged. `Ipe.Tea.Terminal` (the
+    // bare app surface) is retired: the entries are `Tui.app` / `Cli.app`.
     (&["Ipe", "Tea", "Tui"], "Tui"),
     (&["Ipe", "Tea", "Cli"], "Cli"),
     (&["Ipe", "Tea", "WebView"], "WebView"),
@@ -1293,10 +1291,12 @@ impl Env {
                     "revocationStore",
                 ],
             ),
-            // ── Ipe.Terminal app-entry kernels ───────────────────────────────────
-            // `appScreen` (full screen, `onKey`) and `appLines` (line stream,
-            // `onLine`) — one terminal TEA shape, two drive axes.
-            ("Terminal", &["appScreen", "appLines"]),
+            // ── Ipe.Tui / Ipe.Cli app-entry kernels ──────────────────────────────
+            // `Tui.app` (full screen, `onKey`) and `Cli.app` (line stream,
+            // `onLine`) — one terminal rendering family, two drive axes. Both
+            // carry `KernelClass::Terminal` internally.
+            ("Tui", &["app"]),
+            ("Cli", &["app"]),
             // ── Ipe.WebView app-entry kernel ─────────────────────────────────────
             ("WebView", &["app"]),
             // Ipe.Auth / Ipe.Auth — authentication helpers (fail-closed: no lower
@@ -1403,11 +1403,6 @@ impl Env {
             ("TeaWebPubSub", "publish", "Cmd", "publish"),
             ("TeaWebPubSub", "publishNoEcho", "Cmd", "publishNoEcho"),
             ("TeaWebPubSub", "subscribeTopic", "Sub", "subscribeTopic"),
-            // `Tui.app` / `Cli.app` re-export the two terminal entry kernels. The
-            // VarHome carries the canonical `Terminal` module + `appScreen` /
-            // `appLines` name, so lower.rs's `("Terminal", …)` arms fire unchanged.
-            ("Tui", "app", "Terminal", "appScreen"),
-            ("Cli", "app", "Terminal", "appLines"),
         ];
 
         // ── Shape-scoped `Cmd` / `Sub` re-exports ─────────────────────────────
@@ -1452,9 +1447,9 @@ impl Env {
             ("Ipe.Html.Events", "Event"),
             // ── Ipe.Tea.<Shape> shape aliases (ADR 0048) ──────────────────────
             ("Ipe.Tea.Web", "Web"),
-            ("Ipe.Tea.Terminal", "Terminal"),
-            // `Tui` / `Cli` are populated by `CROSS_QUALIFIER_MEMBERS` (which runs
-            // before this alias loop), so these copies pick up their `app` member.
+            // `Tui` / `Cli` carry their `app` member from the QUALIFIERS catalog.
+            // `Ipe.Tea.Terminal` (the bare app surface) is retired in favour of
+            // these two; its `Cmd` / `Sub` re-exports remain (below).
             ("Ipe.Tea.Tui", "Tui"),
             ("Ipe.Tea.Cli", "Cli"),
             ("Ipe.Tea.WebView", "WebView"),
