@@ -614,9 +614,21 @@ const PORT_GLUE_JS: &str = r#"// Ipe.Ffi.Js browser port surface. Values cross a
   //     `unavailable` frame; an absent getUserMedia / MediaRecorder -> `unavailable`.
   //     Never a throw, never a leaked track.
   //   * a fresh `Start` first tears the previous session down (flag off, recorder
-  //     stopped, tracks released), so a double Start cannot leave two live streams.
+  //     stopped, tracks released) and bumps the grant epoch, so a double Start
+  //     cannot leave two live streams — the earlier, now-stale grant releases its
+  //     tracks when it resolves instead of going live.
+  //   * a `Stop` (even with nothing active) bumps the grant epoch too, so a Start
+  //     whose getUserMedia is still pending is cancelled: when it resolves it
+  //     releases the granted tracks and emits no `started`/`chunk` frame.
   var recorderState = null; // { recorder, stream, active }
+  // Monotonic generation for the in-flight getUserMedia grant. Each Start
+  // captures the current value; a later Stop / teardown / Start bumps it, so a
+  // grant that resolves after its session was closed or superseded sees a stale
+  // epoch and releases its just-granted tracks instead of going live.
+  var recorderEpoch = 0;
   function recorderTeardown() {
+    // Invalidate any pending grant so a getUserMedia still in flight cancels.
+    recorderEpoch += 1;
     if (recorderState === null) return;
     // Flip the one-way active flag FIRST so a racing ondataavailable is dropped.
     recorderState.active = false;
@@ -659,8 +671,18 @@ const PORT_GLUE_JS: &str = r#"// Ipe.Ffi.Js browser port surface. Values cross a
       return true;
     }
     var constraints = wantVideo ? { audio: true, video: true } : { audio: true };
+    // Capture this Start's generation. If a Stop / teardown / later Start bumps
+    // the epoch while getUserMedia is pending, both arms below see the mismatch
+    // and abandon the grant.
+    var myEpoch = ++recorderEpoch;
     navigator.mediaDevices.getUserMedia(constraints).then(
       function (stream) {
+        // A superseded or cancelled grant: release the just-granted tracks and
+        // start / emit nothing, so no camera or mic stays live past its session.
+        if (myEpoch !== recorderEpoch) {
+          stream.getTracks().forEach(function (t) { t.stop(); });
+          return;
+        }
         var recOpts = {};
         if (mimeType !== "" && MediaRecorder.isTypeSupported(mimeType)) {
           recOpts.mimeType = mimeType;
@@ -717,6 +739,9 @@ const PORT_GLUE_JS: &str = r#"// Ipe.Ffi.Js browser port surface. Values cross a
         reply({ tag: "recorder", event: "started", mime: actualMime }, null);
       },
       function (err) {
+        // A rejection for a superseded or cancelled grant is not this session's
+        // to report: stay silent so no stale denied/unavailable frame leaks out.
+        if (myEpoch !== recorderEpoch) { return; }
         var name = err && err.name ? String(err.name) : "";
         var kind = name === "NotAllowedError" || name === "PermissionDeniedError"
           ? "denied" : "unavailable";
@@ -1307,6 +1332,25 @@ mod tests {
         assert!(js.contains("NotAllowedError"));
         assert!(js.contains("event: \"unavailable\""));
         assert!(!js.contains("eval("));
+    }
+
+    #[test]
+    fn recorder_sink_cancels_a_superseded_in_flight_grant_via_epoch() {
+        let js = port_glue_js();
+        // A monotonic epoch tracks the in-flight getUserMedia grant. Each Start
+        // captures the current generation before requesting media.
+        assert!(js.contains("var recorderEpoch = 0;"));
+        assert!(js.contains("var myEpoch = ++recorderEpoch;"));
+        // teardown (hence every Stop, including a no-op null-state Stop) bumps the
+        // epoch, so a pending grant becomes cancellable.
+        assert!(js.contains("recorderEpoch += 1;"));
+        // Stop-before-grant: the success arm of a superseded grant releases the
+        // just-granted tracks and starts / emits nothing.
+        assert!(js.contains("if (myEpoch !== recorderEpoch) {"));
+        assert!(js.contains("stream.getTracks().forEach(function (t) { t.stop(); });"));
+        // The reject arm of a superseded grant stays silent — no stale
+        // denied / unavailable frame leaks after the session closed.
+        assert!(js.contains("if (myEpoch !== recorderEpoch) { return; }"));
     }
 
     #[test]
