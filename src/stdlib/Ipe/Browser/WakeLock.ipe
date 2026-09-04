@@ -1,0 +1,66 @@
+-- | Ipe.Browser.WakeLock — acquire a screen wake lock (preventing the device
+-- from dimming or sleeping) and release it, over `Ipe.Ffi.Js` ports.
+--
+-- A first-party proof of the per-capability web mechanism spanning BOTH port
+-- directions: an outbound `JsCmd` acquires or releases the wake lock, and an
+-- inbound `JsMsg` carries the outcome. Both cross the same seal codec and
+-- fail-closed port discipline as every other port; there is no second transport.
+--
+-- Importing this reserved `Ipe.Browser.<Api>` module discloses
+-- `js-port:wake-lock` (import-derived, keyed on the canonical
+-- `Ipe.Browser.WakeLock` path prefix via `WebCapability::for_browser_module`,
+-- alias-immune); only the top-level app's `[capabilities] accepts` set can grant
+-- it.
+--
+-- The two layers:
+--
+--   * `Ipe.Browser.WakeLock.Internals` publishes the closed outbound/inbound ADTs.
+--   * this module is the high-level layer: `acquire` returns a `Task Error ()`
+--     via the correlated port→Task bridge; `release` is fire-and-forget
+--     `Cmd`-shaped. The inbound `case` is EXHAUSTIVE: an unavailability or
+--     denial becomes a typed `Err`, never a silently dropped frame.
+module Ipe.Browser.WakeLock exposing
+    ( acquire
+    , release
+    )
+
+import Ipe.Browser.WakeLock.Internals as Internals exposing (JsMsg(..))
+import Ipe.Error as Error exposing (Error)
+import Ipe.Task as Task
+import Ipe.Tea.Web.Cmd as Cmd
+
+
+-- | `acquire` — request a screen wake lock, as a `Task Error ()`.
+--
+-- Uses the correlated port→Task bridge (`Js.request`). Resolves with `Ok ()`
+-- when the lock is held; resolves with a typed `Err` when the API is absent or
+-- the browser denies the request (e.g. the page is not visible).
+--
+-- Importing this module discloses `js-port:wake-lock`; the app must grant it
+-- with `accepts = [ JsPort WakeLock ]` under [capabilities] in package.ipe.
+acquire : Task Error ()
+acquire =
+    Internals.requestOne Internals.Acquire
+        |> Task.andThen foldOutcome
+
+
+-- | `release` — release the currently held wake lock, fire-and-forget. A no-op
+-- when no wake lock is held. Outbound `Cmd`.
+release : Cmd.Cmd msg
+release =
+    Internals.request Internals.Release
+
+
+-- | Fold a one-shot reply into a `Task Error ()`. The `case` is exhaustive over
+-- every published inbound variant.
+foldOutcome : Internals.JsMsg -> Task Error ()
+foldOutcome msg =
+    case msg of
+        Acquired ->
+            Task.succeed ()
+
+        Unavailable ->
+            Task.fail (Error.unavailable "wake lock API unavailable")
+
+        Denied ->
+            Task.fail (Error.unavailable "wake lock request denied")

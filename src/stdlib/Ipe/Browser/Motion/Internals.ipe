@@ -1,0 +1,111 @@
+-- | Ipe.Browser.Motion.Internals — the low-level Motion port surface: the
+-- closed outbound/inbound ADTs and the raw `Ipe.Ffi.Js` request/subscribe
+-- wiring the high-level `Ipe.Browser.Motion` layer wraps.
+--
+-- Importing this submodule discloses the same `js-port:motion` axis as the
+-- top-level module (the disclosure is keyed on the `Ipe.Browser.Motion` path
+-- prefix), so the raw port surface cannot be reached undisclosed.
+module Ipe.Browser.Motion.Internals exposing
+    ( JsCmd(..)
+    , JsMsg(..)
+    , request
+    , subscribe
+    , inbound
+    )
+
+import Ipe.Ffi.Js as Js
+import Ipe.Json.Decode as Decode
+import Ipe.Tea.Web.Cmd as Cmd
+import Ipe.Tea.Web.Sub as Sub
+
+
+-- | The ONE closed OUTBOUND port type.
+--
+--   * `Watch` — begin a session-stream: `devicemotion` events arrive on the
+--     inbound subscription.
+--   * `StopWatch` — remove the active listener. A no-op when no watch is active.
+type JsCmd
+    = Watch
+    | StopWatch
+
+
+-- | The NARROW closed INBOUND port type — deliberately NOT the app's internal
+-- `Msg`. Every variant the browser can push is enumerated, so the fold in the
+-- high-level layer is EXHAUSTIVE and an unavailability can never be silently
+-- dropped.
+--
+--   * `Reading accelX accelY accelZ rotAlpha rotBeta rotGamma` — a
+--     `devicemotion` event. Acceleration fields are in m/s²; rotation-rate
+--     fields are in degrees/second. All are `Maybe Float` because the browser
+--     may deliver `null` for axes the device does not support.
+--   * `Unavailable` — the `devicemotion` event is absent in this context.
+type JsMsg
+    = Reading (Maybe Float) (Maybe Float) (Maybe Float) (Maybe Float) (Maybe Float) (Maybe Float)
+    | Unavailable
+
+
+-- | `request cmd` — hand a closed outbound `JsCmd` to the raw port transport.
+request : JsCmd -> Cmd.Cmd msg
+request cmd =
+    Js.send cmd
+
+
+-- | `subscribe toMsg` — the inbound subscription over the fail-closed seal
+-- decoder. `inbound` IS the security gate; a malformed / mismatched frame is
+-- dropped whole. A decoded `JsMsg` is handed to `toMsg`.
+subscribe : (JsMsg -> msg) -> Sub.Sub msg
+subscribe toMsg =
+    Js.subscribe inbound toMsg
+
+
+-- | The total, fail-closed decoder for the inbound `JsMsg`. Reads the `event`
+-- discriminator first: `"reading"` decodes a `Reading`; `"unavailable"` decodes
+-- `Unavailable`. An unrecognised token fails the decode closed.
+-- Six nullable float fields are decoded by chaining `andThen`.
+inbound : Decode.Decoder JsMsg
+inbound =
+    Decode.andThen decodeByEvent (Decode.field "event" Decode.string)
+
+
+decodeByEvent : String -> Decode.Decoder JsMsg
+decodeByEvent event =
+    case event of
+        "reading" ->
+            decodeReading
+
+        "unavailable" ->
+            Decode.succeed Unavailable
+
+        _ ->
+            Decode.fail ("unknown motion event variant: " ++ event)
+
+
+-- | Decode a `Reading` by chaining `andThen` over the six nullable float fields.
+-- This avoids the need for a `map6` combinator in `Decode`.
+decodeReading : Decode.Decoder JsMsg
+decodeReading =
+    Decode.andThen
+        (\accelX ->
+            Decode.andThen
+                (\accelY ->
+                    Decode.andThen
+                        (\accelZ ->
+                            Decode.andThen
+                                (\rotAlpha ->
+                                    Decode.andThen
+                                        (\rotBeta ->
+                                            Decode.map
+                                                (\rotGamma ->
+                                                    Reading accelX accelY accelZ rotAlpha rotBeta rotGamma
+                                                )
+                                                (Decode.field "rotGamma" (Decode.nullable Decode.float))
+                                        )
+                                        (Decode.field "rotBeta" (Decode.nullable Decode.float))
+                                )
+                                (Decode.field "rotAlpha" (Decode.nullable Decode.float))
+                        )
+                        (Decode.field "accelZ" (Decode.nullable Decode.float))
+                )
+                (Decode.field "accelY" (Decode.nullable Decode.float))
+        )
+        (Decode.field "accelX" (Decode.nullable Decode.float))

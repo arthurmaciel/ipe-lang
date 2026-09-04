@@ -1,0 +1,97 @@
+-- | Ipe.Browser.Channel — a session-stream for cross-tab message exchange over
+-- the `BroadcastChannel` API, via `Ipe.Ffi.Js` ports.
+--
+-- A first-party proof of the per-capability web mechanism spanning BOTH port
+-- directions: outbound `JsCmd` frames open a named channel, send typed message
+-- payloads, and close it; inbound `JsMsg` frames carry received message payloads
+-- or typed error variants. Both cross the same seal codec and fail-closed port
+-- discipline as every other port; there is no second transport.
+--
+-- Importing this reserved `Ipe.Browser.<Api>` module discloses
+-- `js-port:channel` (import-derived, keyed on the canonical `Ipe.Browser.Channel`
+-- path prefix via `WebCapability::for_browser_module`, alias-immune); only the
+-- top-level app's `[capabilities] accepts` set can grant it.
+--
+-- The two layers:
+--
+--   * `Ipe.Browser.Channel.Internals` publishes the closed outbound/inbound ADTs.
+--   * this module is the high-level layer: `open` starts the channel session as
+--     an outbound `Cmd`, `send` posts a message, `close` tears it down, and
+--     `messages` is the inbound subscription folding the narrow `JsMsg` into a
+--     typed `ChannelEvent`. The inbound `case` is EXHAUSTIVE: an unavailability
+--     becomes a typed variant, never a silently dropped frame.
+module Ipe.Browser.Channel exposing
+    ( ChannelEvent(..)
+    , open
+    , send
+    , close
+    , messages
+    )
+
+import Ipe.Browser.Channel.Internals as Internals exposing (JsMsg(..))
+import Ipe.Tea.Web.Cmd as Cmd
+import Ipe.Tea.Web.Sub as Sub
+
+
+-- | A typed channel event delivered by the message subscription.
+--
+--   * `ChannelMessage payload` — a message received on the named channel from
+--     another tab or worker. `payload` is the string content of the message.
+--   * `ChannelUnavailable` — the `BroadcastChannel` API is absent in this
+--     browser context.
+type ChannelEvent
+    = ChannelMessage String
+    | ChannelUnavailable
+
+
+-- | `open name` — open a `BroadcastChannel` with the given name. Future
+-- messages posted to the same channel name (from this tab or others) arrive
+-- on the `messages` subscription. Outbound `Cmd`.
+--
+-- The channel name is a plain string identifier; the JS host creates a
+-- `new BroadcastChannel(name)`. A missing `BroadcastChannel` API replies
+-- immediately with `Unavailable` rather than silently failing.
+--
+-- Importing this module discloses `js-port:channel`; the app must grant it
+-- with `accepts = [ JsPort Channel ]` under [capabilities] in package.ipe.
+open : String -> Cmd.Cmd msg
+open name =
+    Internals.request (Internals.Open name)
+
+
+-- | `send name payload` — post a string message on the named channel. All
+-- subscribers in other tabs or workers sharing that channel name will receive
+-- it. Fire-and-forget; no inbound reply. Outbound `Cmd`.
+send : String -> String -> Cmd.Cmd msg
+send name payload =
+    Internals.request (Internals.Send name payload)
+
+
+-- | `close name` — close the `BroadcastChannel` with the given name, removing
+-- the event listener. A no-op when no open channel with that name exists.
+-- Outbound `Cmd`.
+close : String -> Cmd.Cmd msg
+close name =
+    Internals.request (Internals.Close name)
+
+
+-- | `messages toMsg` — the inbound subscription, wired in `subscriptions`.
+--
+-- The decoder IS the security gate: every inbound value runs through the total,
+-- bounded seal decoder for the narrow `JsMsg`; a malformed / mismatched frame is
+-- dropped whole. A decoded `JsMsg` is folded EXHAUSTIVELY into a `ChannelEvent`.
+messages : (ChannelEvent -> msg) -> Sub.Sub msg
+messages toMsg =
+    Internals.subscribe (\inbound -> toMsg (toEvent inbound))
+
+
+-- | Fold the narrow inbound `JsMsg` into a typed `ChannelEvent`. The `case` is
+-- exhaustive over every published inbound variant.
+toEvent : Internals.JsMsg -> ChannelEvent
+toEvent msg =
+    case msg of
+        Message payload ->
+            ChannelMessage payload
+
+        Unavailable ->
+            ChannelUnavailable

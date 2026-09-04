@@ -1,0 +1,98 @@
+module Main exposing (main)
+
+-- | motion-watch — `Ipe.Browser.Motion.watch` end-to-end, with the consent gate
+-- satisfied.
+--
+-- Demonstrates the continuous devicemotion stream: on start the app calls
+-- `Motion.watch`, attaching a listener. Each event arrives as a typed
+-- `MotionEvent` via the `readings` subscription and is rendered on screen.
+--
+-- `Ipe.Browser.Motion` discloses `js-port:motion` on import; the companion
+-- `js-port:raw` floor is also disclosed. Both are accepted in `package.ipe`.
+--
+-- A missing devicemotion API arrives as `MotionUnavailable` — a typed variant,
+-- never a thrown error or a silently dropped frame.
+
+
+import Ipe.Tea.Web as Web
+import Ipe.Tea.Web.Cmd as Cmd
+import Ipe.Tea.Web.Sub as Sub
+import Ipe.Ui as Ui
+import Ipe.Browser.Motion as Motion exposing (MotionEvent(..))
+import Ipe.String as String
+
+
+type alias Model =
+    { status : String }
+
+
+type Msg
+    = GotReading Motion.MotionEvent
+
+
+init : WebReq -> ( Model, Cmd.Cmd Msg )
+init _req =
+    ( { status = "waiting for motion…" }, Motion.watch )
+
+
+update : Msg -> Model -> ( Model, Cmd.Cmd Msg )
+update msg model =
+    case msg of
+        GotReading event ->
+            ( { model | status = describeEvent event }, Cmd.none )
+
+
+describeEvent : Motion.MotionEvent -> String
+describeEvent event =
+    case event of
+        MotionReading accelX accelY accelZ rotAlpha rotBeta rotGamma ->
+            "accel=("
+                ++ describeMaybe accelX
+                ++ ","
+                ++ describeMaybe accelY
+                ++ ","
+                ++ describeMaybe accelZ
+                ++ ") rot=("
+                ++ describeMaybe rotAlpha
+                ++ ","
+                ++ describeMaybe rotBeta
+                ++ ","
+                ++ describeMaybe rotGamma
+                ++ ")"
+
+        MotionUnavailable ->
+            "devicemotion API unavailable in this browser"
+
+
+describeMaybe : Maybe Float -> String
+describeMaybe v =
+    case v of
+        Just n ->
+            String.fromFloat n
+
+        Nothing ->
+            "null"
+
+
+subscriptions : Model -> Sub.Sub Msg
+subscriptions _model =
+    Motion.readings GotReading
+
+
+view : Model -> Element Msg
+view model =
+    Ui.column []
+        [ Ui.text "Device Motion"
+        , Ui.text model.status
+        ]
+
+
+main =
+    Web.app
+        { init = init
+        , update = update
+        , view = view
+        , subscriptions = subscriptions
+        , routes = []
+        , notFound = GotReading MotionUnavailable
+        }

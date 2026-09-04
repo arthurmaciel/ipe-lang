@@ -13,12 +13,16 @@ Each module listed below links to a detail page with the full documentation and 
 - [Browser.Battery.Internals](#browserbatteryinternals)
 - [Browser.Camera](#browsercamera)
 - [Browser.Camera.Internals](#browsercamerainternals)
+- [Browser.Channel](#browserchannel)
+- [Browser.Channel.Internals](#browserchannelinternals)
 - [Browser.Clipboard](#browserclipboard)
 - [Browser.Clipboard.Internals](#browserclipboardinternals)
 - [Browser.Connectivity](#browserconnectivity)
 - [Browser.Connectivity.Internals](#browserconnectivityinternals)
 - [Browser.FilePicker](#browserfilepicker)
 - [Browser.FilePicker.Internals](#browserfilepickerinternals)
+- [Browser.Fullscreen](#browserfullscreen)
+- [Browser.Fullscreen.Internals](#browserfullscreeninternals)
 - [Browser.Gamepad](#browsergamepad)
 - [Browser.Gamepad.Internals](#browsergamepadinternals)
 - [Browser.Geolocation](#browsergeolocation)
@@ -27,12 +31,18 @@ Each module listed below links to a detail page with the full documentation and 
 - [Browser.MediaQuery.Internals](#browsermediaqueryinternals)
 - [Browser.Microphone](#browsermicrophone)
 - [Browser.Microphone.Internals](#browsermicrophoneinternals)
+- [Browser.Motion](#browsermotion)
+- [Browser.Motion.Internals](#browsermotioninternals)
 - [Browser.NetworkInfo](#browsernetworkinfo)
 - [Browser.NetworkInfo.Internals](#browsernetworkinfointernals)
 - [Browser.Notification](#browsernotification)
 - [Browser.Notification.Internals](#browsernotificationinternals)
+- [Browser.Orientation](#browserorientation)
+- [Browser.Orientation.Internals](#browserorientationinternals)
 - [Browser.Permission](#browserpermission)
 - [Browser.Permission.Internals](#browserpermissioninternals)
+- [Browser.ScreenOrientation](#browserscreenorientation)
+- [Browser.ScreenOrientation.Internals](#browserscreenorientationinternals)
 - [Browser.Share](#browsershare)
 - [Browser.Share.Internals](#browsershareinternals)
 - [Browser.Speech](#browserspeech)
@@ -43,6 +53,8 @@ Each module listed below links to a detail page with the full documentation and 
 - [Browser.Vibration.Internals](#browservibrationinternals)
 - [Browser.Visibility](#browservisibility)
 - [Browser.Visibility.Internals](#browservisibilityinternals)
+- [Browser.WakeLock](#browserwakelock)
+- [Browser.WakeLock.Internals](#browserwakelockinternals)
 - [ByteSize](#bytesize)
 - [Bytes](#bytes)
 - [Cache](#cache)
@@ -244,6 +256,34 @@ Ipe.Browser.Camera.Internals — the low-level camera capture port surface:
 | `subscribe` | `subscribe toMsg` — the inbound subscription over the fail-closed seal |
 | `inbound` | The total, fail-closed decoder for the inbound `JsMsg`. It reads `ok` |
 
+## Browser.Channel
+
+[Full reference](stdlib/Browser.Channel.md)
+
+Ipe.Browser.Channel — a session-stream for cross-tab message exchange over
+
+| Export | Summary |
+|--------|----------|
+| `ChannelEvent` | A typed channel event delivered by the message subscription. |
+| `open` | `open name` — open a `BroadcastChannel` with the given name. Future |
+| `send` | `send name payload` — post a string message on the named channel. All |
+| `close` | `close name` — close the `BroadcastChannel` with the given name, removing |
+| `messages` | `messages toMsg` — the inbound subscription, wired in `subscriptions`. |
+
+## Browser.Channel.Internals
+
+[Full reference](stdlib/Browser.Channel.Internals.md)
+
+Ipe.Browser.Channel.Internals — the low-level BroadcastChannel port
+
+| Export | Summary |
+|--------|----------|
+| `JsCmd` | The ONE closed OUTBOUND port type. |
+| `JsMsg` | The NARROW closed INBOUND port type — deliberately NOT the app's internal |
+| `request` | `request cmd` — hand a closed outbound `JsCmd` to the raw port transport. |
+| `subscribe` | `subscribe toMsg` — the inbound subscription over the fail-closed seal |
+| `inbound` | The total, fail-closed decoder for the inbound `JsMsg`. Reads the `event` |
+
 ## Browser.Clipboard
 
 [Full reference](stdlib/Browser.Clipboard.md)
@@ -325,6 +365,34 @@ Ipe.Browser.FilePicker.Internals — the low-level file-picker port surface:
 | `requestOne` | `requestOne cmd` — correlated one-shot `JsCmd` → `Task Error JsMsg`. |
 | `subscribe` | `subscribe toMsg` — the inbound subscription over the fail-closed seal |
 | `inbound` | The total, fail-closed decoder for the inbound `JsMsg`. It reads `ok` |
+
+## Browser.Fullscreen
+
+[Full reference](stdlib/Browser.Fullscreen.md)
+
+Ipe.Browser.Fullscreen — request/exit fullscreen and receive change
+
+| Export | Summary |
+|--------|----------|
+| `request` | `request` — ask the browser to enter fullscreen mode for the document |
+| `exit` | `exit` — ask the browser to leave fullscreen mode, as a `Task Error ()`. |
+| `watch` | `watch` — begin a `fullscreenchange` event stream; each change delivers a |
+| `changes` | `changes toMsg` — the inbound subscription, wired in `subscriptions`. |
+
+## Browser.Fullscreen.Internals
+
+[Full reference](stdlib/Browser.Fullscreen.Internals.md)
+
+Ipe.Browser.Fullscreen.Internals — the low-level Fullscreen port surface:
+
+| Export | Summary |
+|--------|----------|
+| `JsCmd` | The ONE closed OUTBOUND port type. |
+| `JsMsg` | The NARROW closed INBOUND port type — deliberately NOT the app's internal |
+| `request` | `request cmd` — hand a closed outbound `JsCmd` to the raw port transport. |
+| `requestOne` | `requestOne cmd` — correlated one-shot `JsCmd` → `Task Error JsMsg`. |
+| `subscribe` | `subscribe toMsg` — the inbound subscription over the fail-closed seal |
+| `inbound` | The total, fail-closed decoder for the inbound `JsMsg`. Reads the `event` |
 
 ## Browser.Gamepad
 
@@ -440,6 +508,33 @@ Ipe.Browser.Microphone.Internals — the low-level microphone capture port
 | `subscribe` | `subscribe toMsg` — the inbound subscription over the fail-closed seal |
 | `inbound` | The total, fail-closed decoder for the inbound `JsMsg`. It reads `ok` |
 
+## Browser.Motion
+
+[Full reference](stdlib/Browser.Motion.md)
+
+Ipe.Browser.Motion — a session-stream delivering `devicemotion` events as
+
+| Export | Summary |
+|--------|----------|
+| `MotionEvent` | A typed motion event delivered by the watch stream. |
+| `watch` | `watch` — begin a continuous `devicemotion` stream; readings are delivered |
+| `stopWatch` | `stopWatch` — remove the active `devicemotion` listener. A no-op when no |
+| `readings` | `readings toMsg` — the inbound subscription, wired in `subscriptions`. |
+
+## Browser.Motion.Internals
+
+[Full reference](stdlib/Browser.Motion.Internals.md)
+
+Ipe.Browser.Motion.Internals — the low-level Motion port surface: the
+
+| Export | Summary |
+|--------|----------|
+| `JsCmd` | The ONE closed OUTBOUND port type. |
+| `JsMsg` | The NARROW closed INBOUND port type — deliberately NOT the app's internal |
+| `request` | `request cmd` — hand a closed outbound `JsCmd` to the raw port transport. |
+| `subscribe` | `subscribe toMsg` — the inbound subscription over the fail-closed seal |
+| `inbound` | The total, fail-closed decoder for the inbound `JsMsg`. Reads the `event` |
+
 ## Browser.NetworkInfo
 
 [Full reference](stdlib/Browser.NetworkInfo.md)
@@ -498,6 +593,33 @@ Ipe.Browser.Notification.Internals — the low-level notification port surface:
 | `subscribe` | `subscribe toMsg` — the inbound subscription over the fail-closed seal |
 | `inbound` | The total, fail-closed decoder for the inbound `JsMsg`. It reads `ok` first: a |
 
+## Browser.Orientation
+
+[Full reference](stdlib/Browser.Orientation.md)
+
+Ipe.Browser.Orientation — a session-stream delivering `deviceorientation`
+
+| Export | Summary |
+|--------|----------|
+| `OrientationEvent` | A typed orientation event delivered by the watch stream. |
+| `watch` | `watch` — begin a continuous `deviceorientation` stream; readings are |
+| `stopWatch` | `stopWatch` — remove the active `deviceorientation` listener. A no-op when |
+| `readings` | `readings toMsg` — the inbound subscription, wired in `subscriptions`. |
+
+## Browser.Orientation.Internals
+
+[Full reference](stdlib/Browser.Orientation.Internals.md)
+
+Ipe.Browser.Orientation.Internals — the low-level Orientation port surface:
+
+| Export | Summary |
+|--------|----------|
+| `JsCmd` | The ONE closed OUTBOUND port type. |
+| `JsMsg` | The NARROW closed INBOUND port type — deliberately NOT the app's internal |
+| `request` | `request cmd` — hand a closed outbound `JsCmd` to the raw port transport. |
+| `subscribe` | `subscribe toMsg` — the inbound subscription over the fail-closed seal |
+| `inbound` | The total, fail-closed decoder for the inbound `JsMsg`. Reads the `event` |
+
 ## Browser.Permission
 
 [Full reference](stdlib/Browser.Permission.md)
@@ -527,6 +649,34 @@ Ipe.Browser.Permission.Internals — the low-level Permissions API port
 | `requestOne` | `requestOne cmd` — correlated one-shot `JsCmd` → `Task Error JsMsg`. |
 | `subscribe` | `subscribe toMsg` — the inbound subscription over the fail-closed seal |
 | `inbound` | The total, fail-closed decoder for the inbound `JsMsg`. It reads the `ok` |
+
+## Browser.ScreenOrientation
+
+[Full reference](stdlib/Browser.ScreenOrientation.md)
+
+Ipe.Browser.ScreenOrientation — lock/unlock the screen orientation and read
+
+| Export | Summary |
+|--------|----------|
+| `OrientationType` | The screen orientation type, matching the W3C Screen Orientation API. |
+| `lock` | `lock orientation` — lock the screen to the given orientation type, as a |
+| `unlock` | `unlock` — unlock the screen orientation, allowing the device to rotate |
+| `current` | `current` — read the current screen orientation type as a `Task Error OrientationType`. |
+
+## Browser.ScreenOrientation.Internals
+
+[Full reference](stdlib/Browser.ScreenOrientation.Internals.md)
+
+Ipe.Browser.ScreenOrientation.Internals — the low-level Screen Orientation
+
+| Export | Summary |
+|--------|----------|
+| `JsCmd` | The ONE closed OUTBOUND port type. |
+| `JsMsg` | The NARROW closed INBOUND port type — deliberately NOT the app's internal |
+| `request` | `request cmd` — hand a closed outbound `JsCmd` to the raw port transport. |
+| `requestOne` | `requestOne cmd` — correlated one-shot `JsCmd` → `Task Error JsMsg`. |
+| `subscribe` | `subscribe toMsg` — the inbound subscription over the fail-closed seal |
+| `inbound` | The total, fail-closed decoder for the inbound `JsMsg`. Reads the `event` |
 
 ## Browser.Share
 
@@ -672,6 +822,32 @@ Ipe.Browser.Visibility.Internals — the low-level Visibility port surface:
 | `requestOne` | `requestOne cmd` — correlated one-shot `JsCmd` → `Task Error JsMsg`. |
 | `subscribe` | `subscribe toMsg` — the inbound subscription over the fail-closed seal |
 | `inbound` | The total, fail-closed decoder for the inbound `JsMsg`. It reads the `ok` |
+
+## Browser.WakeLock
+
+[Full reference](stdlib/Browser.WakeLock.md)
+
+Ipe.Browser.WakeLock — acquire a screen wake lock (preventing the device
+
+| Export | Summary |
+|--------|----------|
+| `acquire` | `acquire` — request a screen wake lock, as a `Task Error ()`. |
+| `release` | `release` — release the currently held wake lock, fire-and-forget. A no-op |
+
+## Browser.WakeLock.Internals
+
+[Full reference](stdlib/Browser.WakeLock.Internals.md)
+
+Ipe.Browser.WakeLock.Internals — the low-level Wake Lock port surface: the
+
+| Export | Summary |
+|--------|----------|
+| `JsCmd` | The ONE closed OUTBOUND port type. |
+| `JsMsg` | The NARROW closed INBOUND port type — deliberately NOT the app's internal |
+| `request` | `request cmd` — hand a closed outbound `JsCmd` to the raw port transport. |
+| `requestOne` | `requestOne cmd` — correlated one-shot `JsCmd` → `Task Error JsMsg`. |
+| `subscribe` | `subscribe toMsg` — the inbound subscription over the fail-closed seal |
+| `inbound` | The total, fail-closed decoder for the inbound `JsMsg`. Reads the `event` |
 
 ## ByteSize
 

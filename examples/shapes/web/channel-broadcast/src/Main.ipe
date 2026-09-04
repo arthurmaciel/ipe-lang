@@ -1,0 +1,79 @@
+module Main exposing (main)
+
+-- | channel-broadcast — `Ipe.Browser.Channel` end-to-end, with the consent gate
+-- satisfied.
+--
+-- Demonstrates BroadcastChannel: on start the app opens a named channel and
+-- listens for messages. Clicking "Send" posts a message on the channel (visible
+-- to any other tab open on the same page). Received messages are shown on screen.
+--
+-- `Ipe.Browser.Channel` discloses `js-port:channel` on import; the companion
+-- `js-port:raw` floor is also disclosed. Both are accepted in `package.ipe`.
+--
+-- A missing BroadcastChannel API arrives as `ChannelUnavailable` — a typed
+-- variant, never a thrown error or a silently dropped frame.
+
+
+import Ipe.Tea.Web as Web
+import Ipe.Tea.Web.Cmd as Cmd
+import Ipe.Tea.Web.Sub as Sub
+import Ipe.Ui as Ui
+import Ipe.Browser.Channel as Channel exposing (ChannelEvent(..))
+
+
+channelName : String
+channelName =
+    "ipe-demo"
+
+
+type alias Model =
+    { lastMessage : String }
+
+
+type Msg
+    = SendPing
+    | GotEvent Channel.ChannelEvent
+
+
+init : WebReq -> ( Model, Cmd.Cmd Msg )
+init _req =
+    ( { lastMessage = "no message yet" }, Channel.open channelName )
+
+
+update : Msg -> Model -> ( Model, Cmd.Cmd Msg )
+update msg model =
+    case msg of
+        SendPing ->
+            ( model, Channel.send channelName "ping from this tab" )
+
+        GotEvent event ->
+            case event of
+                ChannelMessage payload ->
+                    ( { model | lastMessage = payload }, Cmd.none )
+
+                ChannelUnavailable ->
+                    ( { model | lastMessage = "BroadcastChannel unavailable" }, Cmd.none )
+
+
+subscriptions : Model -> Sub.Sub Msg
+subscriptions _model =
+    Channel.messages GotEvent
+
+
+view : Model -> Element Msg
+view model =
+    Ui.column []
+        [ Ui.button [] { onPress = Just SendPing, label = Ui.text "Send ping" }
+        , Ui.text ("Last received: " ++ model.lastMessage)
+        ]
+
+
+main =
+    Web.app
+        { init = init
+        , update = update
+        , view = view
+        , subscriptions = subscriptions
+        , routes = []
+        , notFound = SendPing
+        }

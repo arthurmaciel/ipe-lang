@@ -1,0 +1,18 @@
+module Package exposing (package)
+
+import Ipe.Package exposing (..)
+
+
+package : Package
+package =
+    { name = "orientation-watch"
+    , version = "0.1.0"
+    , capabilities =
+        { declares = []
+
+        -- The `Ipe.Browser.Orientation` import discloses `js-port:orientation`;
+        -- the `:raw` floor is also disclosed. Both must be accepted here or the
+        -- build fails closed (IPE-S0002).
+        , accepts = [ JsPort Orientation, JsPort Raw ]
+        }
+    }
