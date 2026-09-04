@@ -4100,6 +4100,13 @@ impl<'a> Builder<'a> {
     ) -> DResult<()> {
         match &pat.value {
             canon::Pattern_::PAnything => Ok(()),
+            // The unit pattern `()` pins the scrutinee to the unit type and binds
+            // nothing — the pattern-position counterpart of the unit expression.
+            canon::Pattern_::PUnit => {
+                let unit = self.structure(FlatType::Unit)?;
+                self.eq(pat.span, unit, scrut_var);
+                Ok(())
+            }
             canon::Pattern_::PVar(s) => {
                 local.insert(*s, scrut_var);
                 Ok(())
@@ -7822,6 +7829,7 @@ impl<'a> Builder<'a> {
             K::JsonDecAt => fun(list(string()), fun(dec(var(0)), dec(var(0)))),
             K::JsonDecIndex => fun(int(), fun(dec(var(0)), dec(var(0)))),
             K::JsonDecList => fun(dec(var(0)), dec(list(var(0)))),
+            K::JsonDecNullable => fun(dec(var(0)), dec(maybe(var(0)))),
             K::JsonDecMap => fun(fun(var(0), var(1)), fun(dec(var(0)), dec(var(1)))),
             K::JsonDecAndThen => fun(fun(var(0), dec(var(1))), fun(dec(var(0)), dec(var(1)))),
             K::JsonDecSucceed => fun(var(0), dec(var(0))),
@@ -10128,7 +10136,7 @@ mod registry_phase_c_tests {
             K::JwtWithClaim,
             K::JwtEncode,
             K::JwtDecode,
-            // Json.Decode (17)
+            // Json.Decode (18)
             K::JsonDecString,
             K::JsonDecInt,
             K::JsonDecFloat,
@@ -10138,6 +10146,7 @@ mod registry_phase_c_tests {
             K::JsonDecAt,
             K::JsonDecIndex,
             K::JsonDecList,
+            K::JsonDecNullable,
             K::JsonDecMap,
             K::JsonDecAndThen,
             K::JsonDecSucceed,

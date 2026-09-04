@@ -2643,24 +2643,7 @@ impl<'a> Parser<'a> {
                     &[Expected::Pattern],
                 )),
             },
-            Tok::LParen => {
-                let opener = tok.span;
-                let inner = self.parse_pattern(depth + 1)?;
-                // A following `,` makes this a tuple pattern `(p0, p1, ...)`;
-                // otherwise the parens just group a single pattern and unwrap.
-                if self.peek_kind() == Some(&Tok::Comma) {
-                    let mut elems = vec![inner];
-                    while self.peek_kind() == Some(&Tok::Comma) {
-                        self.bump(Construct::Pattern)?;
-                        elems.push(self.parse_pattern(depth + 1)?);
-                    }
-                    let close = self.expect_rparen(opener, Construct::Pattern)?;
-                    let span = Self::span_merge(opener, close);
-                    return Ok(Located::new(span, Pattern_::PTuple(elems)));
-                }
-                self.close_paren(opener, Construct::Pattern)?;
-                Ok(Located::new(tok.span, inner.value))
-            }
+            Tok::LParen => self.parse_paren_pattern(tok.span, depth),
             Tok::LBrace => {
                 // A record pattern `{ x, y }`. Field-pun only: each entry
                 // is a bare lowercase field name that also binds a local of the
@@ -2734,6 +2717,35 @@ impl<'a> Parser<'a> {
     /// Parse a list pattern `[]` / `[a, b, c]` after the `[` is consumed.
     /// Comma-separated sub-patterns; the empty brackets are the nil cover.
     /// `opener` is the `[`'s span.
+    /// Parse the pattern after an opening `(`: the unit pattern `()`, a
+    /// parenthesized grouping that unwraps to its inner pattern, or a tuple
+    /// `(p0, p1, ...)`.
+    fn parse_paren_pattern(&mut self, opener: Span, depth: u32) -> DResult<Pattern> {
+        // Empty parens `()` are the unit pattern — the sole value of the unit
+        // type — mirroring the unit EXPRESSION the parser builds from `()`.
+        // Handled before `parse_pattern`, which cannot begin on a `)`.
+        if self.peek_kind() == Some(&Tok::RParen) {
+            let close = self.expect_rparen(opener, Construct::Pattern)?;
+            let span = Self::span_merge(opener, close);
+            return Ok(Located::new(span, Pattern_::PUnit));
+        }
+        let inner = self.parse_pattern(depth + 1)?;
+        // A following `,` makes this a tuple `(p0, p1, ...)`; otherwise the
+        // parens group a single pattern and unwrap.
+        if self.peek_kind() == Some(&Tok::Comma) {
+            let mut elems = vec![inner];
+            while self.peek_kind() == Some(&Tok::Comma) {
+                self.bump(Construct::Pattern)?;
+                elems.push(self.parse_pattern(depth + 1)?);
+            }
+            let close = self.expect_rparen(opener, Construct::Pattern)?;
+            let span = Self::span_merge(opener, close);
+            return Ok(Located::new(span, Pattern_::PTuple(elems)));
+        }
+        self.close_paren(opener, Construct::Pattern)?;
+        Ok(Located::new(opener, inner.value))
+    }
+
     fn parse_list_pattern(&mut self, opener: Span, depth: u32) -> DResult<Pattern> {
         if depth > MAX_DEPTH {
             return Err(self.too_deep(Construct::Pattern));

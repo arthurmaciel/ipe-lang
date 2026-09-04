@@ -1,0 +1,31 @@
+module Main exposing (main)
+
+-- The unit pattern `()` is accepted in pattern position — nested inside a
+-- constructor (`Ok () ->`) and as a plain `case` head (`case u of () -> …`). It
+-- binds nothing and type-checks against the unit type, so `Ok ()` reads
+-- naturally where `Ok _` was previously forced.
+import Ipe.Io as Io
+
+
+-- A `Result String ()` scrutinee: the `Ok` arm carries a NESTED unit pattern.
+describe : Result String () -> String
+describe r =
+    case r of
+        Ok () ->
+            "ok"
+
+        Err e ->
+            e
+
+
+-- A bare unit scrutinee matched by a lone `()` arm — exhaustive, since unit has
+-- exactly one value.
+unitLabel : () -> String
+unitLabel u =
+    case u of
+        () ->
+            "unit"
+
+
+main =
+    Io.println (describe (Ok ()) ++ " " ++ describe (Err "bad") ++ " " ++ unitLabel ())

@@ -48,6 +48,8 @@ mod golden_fn_value_return_reify_typevar;
 mod golden_function_field_gate;
 #[path = "g_fn_pattern/golden_function_payload_gate.rs"]
 mod golden_function_payload_gate;
+#[path = "g_fn_pattern/golden_json_decode_nullable.rs"]
+mod golden_json_decode_nullable;
 #[path = "g_fn_pattern/golden_json_decode_pipeline.rs"]
 mod golden_json_decode_pipeline;
 #[path = "g_fn_pattern/golden_lambdas.rs"]
