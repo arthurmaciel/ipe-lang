@@ -105,12 +105,12 @@ One language, four ways to ship. Pick the entry point that matches your app.
 |---|---|---|---|
 | `Ipe.Tea.Web` | `Web.app` | Web apps — server-rendered HTML, real-time SSE patches, sessions | ✓ |
 | `Ipe.Tea.WebView` | `WebView.app` | Native desktop apps | ✓ |
-| `Ipe.Tea.Terminal` | `Terminal.appScreen` / `Terminal.appLines` | Terminal UIs (`appScreen`) and line-oriented REPLs (`appLines`) | ✓ |
+| `Ipe.Tea.Tui` / `Ipe.Tea.Cli` | `Tui.app` / `Cli.app` | Full-screen terminal UIs (`Tui.app`) and line-oriented REPLs (`Cli.app`) | ✓ |
 | `Program` | plain `main` | Scripts, one-shot tools, cron jobs, HTTP servers | |
 
 The three ✓ shapes follow [The Elm Architecture](https://guide.elm-lang.org/architecture/)
 (`init` / `update` / `view` / `subscriptions`) — and Web, WebView, and
-`Terminal.appScreen` share the **same `Ipe.Ui` view code**, so one
+`Tui.app` share the **same `Ipe.Ui` view code**, so one
 `view : Model -> Element Msg` renders on web, desktop, and terminal.
 See [`examples/`](examples/) for runnable programs.
 
