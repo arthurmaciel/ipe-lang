@@ -1,0 +1,55 @@
+module Main exposing (main)
+
+import Ipe.Tea.Cli exposing (app)
+import Ipe.Tea.Cli.Cmd as Cmd
+import Ipe.Tea.Cli.Sub as Sub
+import Ipe.Tea.Cli.Ui as Ui
+
+
+type Msg
+    = Done
+
+
+type alias Model =
+    { message : String
+    }
+
+
+init : List String -> ( Model, Cmd Msg )
+init args =
+    let
+        greeting =
+            case args of
+                [] ->
+                    "Hello, world!"
+
+                name :: _ ->
+                    "Hello, " ++ name ++ "!"
+    in
+    ( { message = greeting }, Cmd.none )
+
+
+update : Msg -> Model -> ( Model, Cmd Msg )
+update msg model =
+    case msg of
+        Done ->
+            ( model, Cmd.none )
+
+
+subscriptions : Model -> Sub Msg
+subscriptions _model =
+    Sub.none
+
+
+view : Model -> Lines Msg
+view model =
+    Ui.lines [ Ui.line model.message ]
+
+
+main =
+    app
+        { init = init
+        , update = update
+        , view = view
+        , subscriptions = subscriptions
+        }

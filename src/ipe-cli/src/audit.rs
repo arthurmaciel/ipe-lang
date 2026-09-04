@@ -1907,6 +1907,7 @@ mod tests {
                 has_rust_wrapper: false,
                 programs: Vec::new(),
                 exposed_modules: Vec::new(),
+                delivery: crate::project::DeliveryConfig::default(),
             },
             manifest_path: root.join("package.ipe"),
             emitted_dir: root.join("emitted"),
