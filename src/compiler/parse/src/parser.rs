@@ -1652,9 +1652,10 @@ impl<'a> Parser<'a> {
     ///   `negate 5`.
     ///
     /// * **Adjacent non-literal atom** (`-x`, `-(e)`, `-f x`) — desugared at
-    ///   parse time to `Call(VarLocal("negate"), [e])`, matching the canonical
-    ///   Elm / Ipê desugar path.  This closes the IPE-P0001 that 37-composite-
-    ///   live-shop hit on `if cents < 0 then -cents else cents` (State.ipe:156).
+    ///   parse time to `Call(Basics.negate, [e])`. The callee is the QUALIFIED
+    ///   `Basics.negate` reference, which resolves through the module catalog to
+    ///   the `Basics_negate` kernel and is unshadowable, so a user binding named
+    ///   `negate` never captures the unary-minus operator.
     ///
     /// * **Non-adjacent** (`- 5`, `- x`) — the the compiler parser's `exprAtom_`
     ///   has no leading `spaces` call after consuming `-`, so a space before the
@@ -1698,16 +1699,21 @@ impl<'a> Parser<'a> {
         }
 
         // ── Attempt 2: adjacent non-literal atom → `negate(e)` ──────────────
-        // Port of the the compiler `_` branch: parse the sub-atom immediately
-        // following `-` and desugar to `Call(VarLocal("negate"), [e])`.
-        // Adjacency check mirrors the the compiler `exprAtom_` having no leading
-        // `spaces` call after the `-`: a space before the operand would cause
-        // the recursive atom parse to fail on the space character (consumed
-        // error). The check uses byte-span adjacency: `t.span.lo == minus_span.hi`.
+        // Parse the sub-atom immediately following `-` and desugar to
+        // `Call(Basics.negate, [e])`. The callee is a QUALIFIED `Basics.negate`
+        // reference, never a bare `negate` name: qualified references resolve
+        // through the module catalog to the `Basics_negate` kernel and cannot be
+        // captured by a user binding named `negate`, so `-x` always means
+        // arithmetic negation regardless of names in scope.
+        //
+        // Adjacency check: a space before the operand would cause the recursive
+        // atom parse to fail on the space character (consumed error). The check
+        // uses byte-span adjacency: `t.span.lo == minus_span.hi`.
         let is_adjacent = self.peek().is_some_and(|t| t.span.lo == minus_span.hi);
         if is_adjacent {
+            let basics_sym = self.intern("Basics")?;
             let negate_sym = self.intern("negate")?;
-            let negate_expr = Located::new(minus_span, Expr_::VarLocal(negate_sym));
+            let negate_expr = Located::new(minus_span, Expr_::VarQual(basics_sym, negate_sym));
             let sub_expr = self.parse_atom_postfix(threshold, depth + 1)?;
             let call_span = Self::span_merge(minus_span, sub_expr.span);
             return Ok(Located::new(

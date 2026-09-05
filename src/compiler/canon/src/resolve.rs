@@ -5558,6 +5558,19 @@ fn resolve_qual_var(
             _ => {}
         }
     }
+    // Unary minus desugars (in the parser) to a `Basics.negate` reference. Its
+    // qualified form resolves DIRECTLY to the negate kernel here, bypassing the
+    // scope chain, so a user binding named `negate` cannot capture the operator:
+    // `-x` always means arithmetic negation. `Basics` is the ambient prelude
+    // (Tier A) and is not otherwise a resolvable qualifier, so this is the sole
+    // `Basics.member` spelling — no member table to consult.
+    if interner.resolve(qualifier) == Some("Basics") && interner.resolve(name) == Some("negate") {
+        return Ok(canon::Expr_::VarKernel {
+            id: Some(StdlibKernel::BasicsNegate),
+            module: qualifier,
+            name,
+        });
+    }
     // Tier-C import gate (ADR 0047): a known stdlib qualifier used WITHOUT its
     // import is the teachable must-import diagnostic (IPE-N0034), naming the exact
     // `Ipe.*` module to add — NOT a silent resolve against the pre-installed
@@ -8120,5 +8133,100 @@ mod rust_ffi_auto_inject_tests {
             result.is_err(),
             "Rust.fn on an uninstalled crate must fail even with auto-inject: {result:?}"
         );
+    }
+}
+
+#[cfg(test)]
+mod unary_minus_hygiene_tests {
+    //! Unary minus on a non-literal desugars to a QUALIFIED `Basics.negate`
+    //! reference, which resolves through the module catalog to the
+    //! `Basics_negate` kernel. A user binding named `negate` — top-level or
+    //! `let`-local — therefore cannot capture the operator: `-x` always means
+    //! arithmetic negation.
+    #![allow(clippy::panic, clippy::expect_used)] // test setup: a failed parse/canon IS the failure
+
+    use super::*;
+
+    fn sym(i: &mut Interner, s: &str) -> Symbol {
+        i.intern(s).expect("intern must succeed")
+    }
+
+    /// The canonicalised body of the named top-level def.
+    fn def_body<'m>(module: &'m canon::Module, i: &Interner, name: &str) -> &'m canon::Expr {
+        module
+            .defs
+            .iter()
+            .find(|d| i.resolve(d.name().value) == Some(name))
+            .map(|d| match d {
+                canon::Def::Untyped { body, .. } | canon::Def::Typed { body, .. } => body,
+            })
+            .expect("named def must exist")
+    }
+
+    /// The callee of a `Call` body must be the `Basics.negate` kernel.
+    fn assert_negate_kernel_callee(body: &canon::Expr, i: &Interner) {
+        let canon::Expr_::Call(callee, _) = &body.value else {
+            panic!("body must be a Call, got {:?}", body.value);
+        };
+        match &callee.value {
+            canon::Expr_::VarKernel { module, name, .. } => {
+                assert_eq!(i.resolve(*module), Some("Basics"), "kernel module");
+                assert_eq!(i.resolve(*name), Some("negate"), "kernel name");
+            }
+            other => panic!("unary-minus callee must be the Basics.negate kernel, got {other:?}"),
+        }
+    }
+
+    /// `-x` resolves to the `Basics.negate` kernel with no shadowing binding.
+    #[test]
+    fn unary_minus_resolves_to_basics_negate_kernel() {
+        let mut i = Interner::new();
+        let src = "module Main exposing (v)\n\nv x =\n    -x\n";
+        let main_path = vec![sym(&mut i, "Main")];
+        let deps: BTreeMap<Vec<Symbol>, crate::ModuleExports> = BTreeMap::new();
+        let Ok(parsed) = ipe_parse::parse_module(src, &mut i) else {
+            panic!("parse failed");
+        };
+        let (module, _) = canonicalise_module(&parsed, &main_path, &deps, &mut i)
+            .expect("module must canonicalise");
+        assert_negate_kernel_callee(def_body(&module, &i, "v"), &i);
+    }
+
+    /// A top-level `negate` binding does NOT capture the unary-minus operator:
+    /// `-x` still resolves to the `Basics.negate` kernel.
+    #[test]
+    fn top_level_negate_does_not_capture_unary_minus() {
+        let mut i = Interner::new();
+        let src = "module Main exposing (v)\n\n\
+                   negate n =\n    n\n\n\
+                   v x =\n    -x\n";
+        let main_path = vec![sym(&mut i, "Main")];
+        let deps: BTreeMap<Vec<Symbol>, crate::ModuleExports> = BTreeMap::new();
+        let Ok(parsed) = ipe_parse::parse_module(src, &mut i) else {
+            panic!("parse failed");
+        };
+        let (module, _) = canonicalise_module(&parsed, &main_path, &deps, &mut i)
+            .expect("module must canonicalise");
+        assert_negate_kernel_callee(def_body(&module, &i, "v"), &i);
+    }
+
+    /// A `let`-local `negate` binding does NOT capture the unary-minus operator
+    /// in its `in` body.
+    #[test]
+    fn let_local_negate_does_not_capture_unary_minus() {
+        let mut i = Interner::new();
+        let src = "module Main exposing (v)\n\n\
+                   v x =\n    let\n        negate = x\n    in\n    -x\n";
+        let main_path = vec![sym(&mut i, "Main")];
+        let deps: BTreeMap<Vec<Symbol>, crate::ModuleExports> = BTreeMap::new();
+        let Ok(parsed) = ipe_parse::parse_module(src, &mut i) else {
+            panic!("parse failed");
+        };
+        let (module, _) = canonicalise_module(&parsed, &main_path, &deps, &mut i)
+            .expect("module must canonicalise");
+        let canon::Expr_::Let(_, in_body) = &def_body(&module, &i, "v").value else {
+            panic!("v body must be a Let");
+        };
+        assert_negate_kernel_callee(in_body, &i);
     }
 }
