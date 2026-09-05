@@ -118,9 +118,18 @@ const COMMANDS: &[Command] = &[
         name: "init",
         run: crate::init::run_init,
         summary: "Scaffold a new Ipê project.",
-        args: "[<name>]",
-        args_desc: "The directory to create the project in (`.` for the current directory).",
+        args: "[<directory>] [<shape>] [<runtime>]",
+        args_desc: "directory: where to scaffold (`.` or omitted → the current directory). \
+                    shape: script | tui | cli | server | web (default web) — picks the template. \
+                    runtime (web only): live (default) | spa — seeds the default delivery. \
+                    Host and target are delivery choices, chosen later at build/release. On a TTY \
+                    an omitted positional is prompted; a re-run reconciles (creates only missing \
+                    files) and refuses a shape that conflicts with the existing `main`.",
         options: &[
+            Opt {
+                flag: "[--shape <shape>]",
+                desc: "select the shape without a positional (script|tui|cli|server|web)",
+            },
             Opt {
                 flag: "[--force]",
                 desc: "overwrite a non-empty target directory",
@@ -135,8 +144,15 @@ const COMMANDS: &[Command] = &[
         name: "build",
         run: crate::run_build,
         summary: "Compile a program to a native or WebAssembly artifact.",
-        args: "[<path>]",
-        args_desc: "A source file, a project directory, or a package.ipe. Defaults to the current project.",
+        args: "[<path>] [<shape>] [<runtime>] [<host>] [<target>]",
+        args_desc: "path: a source file, a project directory, or a package.ipe (default: the \
+                    current project). shape is derived from `main` and, if written, only \
+                    cross-checked. runtime/host apply to `web` only: `web` = served live (live is \
+                    the unnamed default, never written), `web spa` = sandboxed browser client, and \
+                    a host is desktop/ios/android. With no delivery args, `build` builds the \
+                    default delivery — the fast one-artifact inner loop; `release` builds every \
+                    declared delivery. Delivery args select a subset or override for this \
+                    invocation only and never edit package.ipe.",
         options: &[
             Opt {
                 flag: "[--out <dir>]",
@@ -202,7 +218,10 @@ const COMMANDS: &[Command] = &[
         run: crate::run_release,
         summary: "Build the production artifact — optimised, Debug.* gated. Native-bearing apps get a jailed bundle; pure-native apps get a plain optimised binary; `--target wasm` produces a production browser bundle.",
         args: "[<path>]",
-        args_desc: "A source file, a project directory, or a package.ipe. Defaults to the current project.",
+        args_desc: "A source file, a project directory, or a package.ipe (default: the current \
+                    project). With no delivery args, `release` builds every delivery declared in \
+                    package.ipe (`build` builds only the default one). Signing is release-time env, \
+                    never in package.ipe.",
         options: &[
             Opt {
                 flag: "[--out <dir>]",

@@ -199,6 +199,14 @@ pub enum WebCapability {
     /// prevents the device from dimming or sleeping, and releasing it. An absent or
     /// denied API traps to a typed inbound frame — never a throw.
     WakeLock,
+    /// `navigator.credentials.create` / `navigator.credentials.get` — the Web
+    /// Authentication API (WebAuthn): registering and authenticating a public-key
+    /// credential (a passkey). A ceremony returns an OPAQUE base64url-encoded
+    /// credential envelope — never raw key material — or, on a `NotAllowedError` /
+    /// user cancellation / absent API, a typed denial / unavailable inbound frame,
+    /// never a throw. This is a crypto-credential trust boundary: the far side
+    /// mints authentication material the relying party server verifies.
+    WebAuthn,
 }
 
 impl WebCapability {
@@ -230,6 +238,7 @@ impl WebCapability {
         Self::Fullscreen,
         Self::ScreenOrientation,
         Self::WakeLock,
+        Self::WebAuthn,
     ];
 
     /// The stable lowercase wire suffix, the half after `js-port:` in the wire
@@ -262,6 +271,7 @@ impl WebCapability {
             Self::Fullscreen => "fullscreen",
             Self::ScreenOrientation => "screen-orientation",
             Self::WakeLock => "wake-lock",
+            Self::WebAuthn => "web-authn",
         }
     }
 
@@ -304,6 +314,7 @@ impl WebCapability {
             ["Ipe", "Browser", "Fullscreen", ..] => Some(Self::Fullscreen),
             ["Ipe", "Browser", "ScreenOrientation", ..] => Some(Self::ScreenOrientation),
             ["Ipe", "Browser", "WakeLock", ..] => Some(Self::WakeLock),
+            ["Ipe", "Browser", "WebAuthn", ..] => Some(Self::WebAuthn),
             _ => None,
         }
     }
@@ -397,6 +408,11 @@ impl WebCapability {
                 "Acquiring a screen wake lock via navigator.wakeLock.request(\"screen\") \
                  that prevents the device from dimming or sleeping, and releasing it."
             }
+            Self::WebAuthn => {
+                "Registering and authenticating a public-key credential (a passkey) via \
+                 navigator.credentials.create / navigator.credentials.get; results are \
+                 opaque base64url credential envelopes verified by the relying party server."
+            }
         }
     }
 
@@ -430,6 +446,7 @@ impl WebCapability {
             "fullscreen" => Ok(Self::Fullscreen),
             "screen-orientation" => Ok(Self::ScreenOrientation),
             "wake-lock" => Ok(Self::WakeLock),
+            "web-authn" => Ok(Self::WebAuthn),
             _ => Err(UnknownCapability(full.to_owned())),
         }
     }
@@ -467,6 +484,7 @@ impl WebCapability {
             Self::Fullscreen => "Fullscreen",
             Self::ScreenOrientation => "ScreenOrientation",
             Self::WakeLock => "WakeLock",
+            Self::WebAuthn => "WebAuthn",
         }
     }
 
@@ -590,6 +608,7 @@ impl Capability {
         Self::JsPort(WebCapability::Fullscreen),
         Self::JsPort(WebCapability::ScreenOrientation),
         Self::JsPort(WebCapability::WakeLock),
+        Self::JsPort(WebCapability::WebAuthn),
     ];
 
     /// Whether this capability carries no OS-isolatable resource surface — the
@@ -651,6 +670,7 @@ impl Capability {
                 WebCapability::Fullscreen => "js-port:fullscreen",
                 WebCapability::ScreenOrientation => "js-port:screen-orientation",
                 WebCapability::WakeLock => "js-port:wake-lock",
+                WebCapability::WebAuthn => "js-port:web-authn",
             },
         }
     }
@@ -704,7 +724,7 @@ impl std::fmt::Display for UnknownCapability {
              clipboard, notification, storage, vibration, share, battery, \
              network-info, file, camera, microphone, gamepad, recorder, visibility, \
              media-query, connectivity, raw, speech, permission, orientation, motion, \
-             channel, fullscreen, screen-orientation, wake-lock)",
+             channel, fullscreen, screen-orientation, wake-lock, web-authn)",
             self.0
         )
     }
@@ -914,6 +934,32 @@ mod tests {
         assert_eq!(
             WebCapability::for_browser_module(&["Ipe", "Browser", "Recorder", "Internals"]),
             Some(WebCapability::Recorder)
+        );
+    }
+
+    #[test]
+    fn web_authn_axis_round_trips_and_names_the_browser_module() {
+        // The Web Authentication (WebAuthn) axis is its own closed vocabulary
+        // member, and the `Ipe.Browser.WebAuthn` module (and its Internals
+        // submodule) discloses it via the path-prefix key.
+        use std::str::FromStr as _;
+        assert_eq!(
+            Capability::from_str("js-port:web-authn"),
+            Ok(Capability::JsPort(WebCapability::WebAuthn))
+        );
+        assert_eq!(WebCapability::WebAuthn.as_str(), "web-authn");
+        assert_eq!(WebCapability::WebAuthn.ctor_name(), "WebAuthn");
+        assert_eq!(
+            WebCapability::from_ctor("WebAuthn"),
+            Some(WebCapability::WebAuthn)
+        );
+        assert_eq!(
+            WebCapability::for_browser_module(&["Ipe", "Browser", "WebAuthn"]),
+            Some(WebCapability::WebAuthn)
+        );
+        assert_eq!(
+            WebCapability::for_browser_module(&["Ipe", "Browser", "WebAuthn", "Internals"]),
+            Some(WebCapability::WebAuthn)
         );
     }
 
