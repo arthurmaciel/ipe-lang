@@ -793,7 +793,6 @@ fn an_article(rendered: &str) -> String {
     format!("{article} `{rendered}`")
 }
 
-/// The uppercase title shown in the rule, chosen per code so it names what
 /// The uppercase title for the human-facing header rule.
 ///
 /// Derives mechanically from the [`crate::code::title`] SSOT: every code's
