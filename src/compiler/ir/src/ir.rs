@@ -1695,6 +1695,14 @@ pub enum UiCtor {
     /// terminal-honorable attributes inhabit it, so a DOM attribute is a
     /// type error in a `Screen` view rather than a silent render-time drop.
     TuiAttribute,
+    /// `Lines msg` from `Ipe.Tea.Cli.Ui` — a line-oriented view
+    /// (`ipe_runtime::tui::LinesView<M>`). Distinct from both `Element msg` and
+    /// `Cells msg`: line-scoped, so 2D cell and DOM builders cannot appear in it.
+    CliLines,
+    /// `Attribute msg` from `Ipe.Tea.Cli.Ui` — a line-native attribute
+    /// (`ipe_runtime::tui::CliAttr<M>`). Only line-scoped styles inhabit it, so a
+    /// 2D cell attribute or a DOM attribute is a type error in a `Lines` view.
+    CliAttribute,
     /// `Attribute msg` from `Ipe.Html` / `Ipe.Html.Attributes` —
     /// an HTML attribute (`ipe_runtime::html::Attribute<M>`).
     HtmlAttribute,
@@ -1714,7 +1722,7 @@ pub enum UiCtor {
 /// Tag enum for the nullary (non-message-parametric) `Ipe.Ui` types.
 ///
 /// Used inside [`IrType::UiPlain`] to select the correct Rust path at emission
-/// time.  The set is closed (eight variants).
+/// time.  The set is closed.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, serde::Serialize, serde::Deserialize)]
 pub enum UiPlain {
     /// `Length` — `ipe_runtime::ui::element::Length`.
@@ -1733,6 +1741,9 @@ pub enum UiPlain {
     Description,
     /// `LayoutContext` — `ipe_runtime::ui::element::LayoutContext`.
     LayoutContext,
+    /// `Terminal.Color` — `ipe_runtime::tui::TermColor`, the closed terminal
+    /// colour palette accepted by the Tui and Cli `color` / `bg` builders.
+    TermColor,
 }
 
 /// Total predicate: does the Rust type that [`IrType`] renders to support the

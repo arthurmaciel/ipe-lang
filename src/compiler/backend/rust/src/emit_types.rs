@@ -482,6 +482,8 @@ pub fn render_type(ctx: &EmitCtx, ty: &IrType, generics: GenericScope) -> DResul
                 UiCtor::Cells => format!("ipe_runtime::tui::CellsView<{m}>"),
                 UiCtor::UiAttribute => format!("ipe_runtime::ui::element::Attribute<{m}>"),
                 UiCtor::TuiAttribute => format!("ipe_runtime::tui::TuiAttr<{m}>"),
+                UiCtor::CliLines => format!("ipe_runtime::tui::LinesView<{m}>"),
+                UiCtor::CliAttribute => format!("ipe_runtime::tui::CliAttr<{m}>"),
                 UiCtor::HtmlAttribute => format!("ipe_runtime::html::Attribute<{m}>"),
                 UiCtor::HtmlEvent => format!("ipe_runtime::html::Event<{m}>"),
                 UiCtor::Label => format!("ipe_runtime::ui::input::Label<{m}>"),
@@ -498,6 +500,7 @@ pub fn render_type(ctx: &EmitCtx, ty: &IrType, generics: GenericScope) -> DResul
             UiPlain::PseudoClass => "ipe_runtime::ui::element::PseudoClass".to_owned(),
             UiPlain::Description => "ipe_runtime::ui::element::Description".to_owned(),
             UiPlain::LayoutContext => "ipe_runtime::ui::element::LayoutContext".to_owned(),
+            UiPlain::TermColor => "ipe_runtime::tui::TermColor".to_owned(),
         },
         // Web types — render to qualified runtime paths.
         // `WebReq` is defined in `dom::req` (target-neutral, always compiled);

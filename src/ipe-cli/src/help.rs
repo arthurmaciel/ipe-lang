@@ -360,6 +360,10 @@ const COMMANDS: &[Command] = &[
                 flag: "[--port <n>]",
                 desc: "serve on port <n> (default: 8000)",
             },
+            Opt {
+                flag: "[--debugger]",
+                desc: "compile the in-app time-travelling debugger overlay into the served app",
+            },
         ],
     },
     Command {

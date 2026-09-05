@@ -227,6 +227,57 @@ fn cli_view_with_ui_cells_is_rejected() -> Result<(), BoxError> {
 /// never silently discarded at render time. This is the make-invalid-states-
 /// unrepresentable half of the surface: the builder half was already guarded;
 /// this pins the attribute half.
+const SCREEN_WITH_DIM_REVERSE: &str = r#"module Main exposing (main)
+
+import Ipe.Tea.Tui as Tui
+import Ipe.Tea.Tui.Ui as Ui
+import Ipe.Tea.Tui.Ui exposing (Screen)
+import Ipe.Tea.Tui.Cmd
+import Ipe.Tea.Tui.Sub
+
+type Msg = NoOp
+
+type alias Model = { count : Int }
+
+init : () -> ( Model, Cmd Msg )
+init _unit =
+    ( { count = 0 }, Cmd.none )
+
+update : Msg -> Model -> ( Model, Cmd Msg )
+update _msg model =
+    ( model, Cmd.none )
+
+view : Model -> Screen Msg
+view _model =
+    Ui.column []
+        [ Ui.el [ Ui.dim ] (Ui.text "faint")
+        , Ui.el [ Ui.reverse ] (Ui.text "reversed")
+        ]
+
+subscriptions : Model -> Sub Msg
+subscriptions _model =
+    Sub.none
+
+type alias KeyEvent = { kind : String, value : String }
+
+onKey : KeyEvent -> Msg
+onKey _event =
+    NoOp
+
+main =
+    Tui.app
+        { init = init, update = update, view = view
+        , subscriptions = subscriptions, onKey = onKey
+        }
+"#;
+
+/// The line-scoped `dim` / `reverse` text styles are admissible cell-native
+/// attributes in a `Screen` view (ipe-0).
+#[test]
+fn screen_view_with_dim_and_reverse_is_accepted() -> Result<(), BoxError> {
+    assert_accepted("screen_dim_reverse", SCREEN_WITH_DIM_REVERSE)
+}
+
 const SCREEN_WITH_DOM_ATTRIBUTE: &str = r#"module Main exposing (main)
 
 import Ipe.Tea.Tui as Tui
@@ -275,4 +326,134 @@ main =
 #[test]
 fn screen_view_with_dom_attribute_is_rejected() -> Result<(), BoxError> {
     assert_rejected_with("screen_dom_attr", SCREEN_WITH_DOM_ATTRIBUTE, "IPE-T0001")
+}
+
+// ── Ipe.Tea.Cli.Ui structured `Lines` view surface ───────────────────────────
+
+const CLI_WITH_LINES_HELPER: &str = r#"module Main exposing (main)
+
+import Ipe.String as String
+import Ipe.Tea.Cli as Cli
+import Ipe.Tea.Cli.Cmd as Cmd
+import Ipe.Tea.Cli.Sub as Sub
+import Ipe.Tea.Cli.Ui as Ui
+import Ipe.Tea.Cli.Ui exposing (Lines)
+import Ipe.Tea.Terminal.Color as Color
+
+type Msg = NoOp
+
+type alias Model = { count : Int }
+
+init : () -> ( Model, Cmd Msg )
+init _unit =
+    ( { count = 0 }, Cmd.none )
+
+update : Msg -> Model -> ( Model, Cmd Msg )
+update _msg model =
+    ( model, Cmd.none )
+
+banner : Model -> Lines Msg
+banner model =
+    Ui.lines
+        [ Ui.line [ Ui.bold, Ui.color Color.brightGreen ] "ready"
+        , Ui.line [ Ui.dim ] ("count = " ++ String.fromInt model.count)
+        , Ui.line [ Ui.reverse, Ui.bg Color.blue ] "status"
+        , Ui.text "(type a line)"
+        ]
+
+view : Model -> String
+view _model =
+    "> "
+
+subscriptions : Model -> Sub Msg
+subscriptions _model =
+    Sub.none
+
+onLine : String -> Msg
+onLine _line =
+    NoOp
+
+main =
+    Cli.app
+        { init = init, update = update, view = view
+        , subscriptions = subscriptions, onLine = onLine
+        }
+"#;
+
+/// The structured `Lines` view surface, its line-native `Attribute` builders,
+/// and the first-class `Terminal.Color` palette type-check + lower + emit under
+/// the Cli shape (ipe-0). A `Lines`-returning helper is admissible alongside the
+/// canonical `Cli.app` string `view`.
+#[test]
+fn cli_lines_surface_with_palette_is_accepted() -> Result<(), BoxError> {
+    assert_accepted("cli_lines_palette", CLI_WITH_LINES_HELPER)
+}
+
+const LINES_WITH_DOM_ATTRIBUTE: &str = r#"module Main exposing (main)
+
+import Ipe.Tea.Cli as Cli
+import Ipe.Tea.Cli.Cmd as Cmd
+import Ipe.Tea.Cli.Sub as Sub
+import Ipe.Tea.Cli.Ui as Ui
+import Ipe.Tea.Cli.Ui exposing (Lines)
+import Ipe.Ui as Dom
+
+type Msg = Clicked | NoOp
+
+type alias Model = { count : Int }
+
+init : () -> ( Model, Cmd Msg )
+init _unit =
+    ( { count = 0 }, Cmd.none )
+
+update : Msg -> Model -> ( Model, Cmd Msg )
+update _msg model =
+    ( model, Cmd.none )
+
+banner : Model -> Lines Msg
+banner _model =
+    Ui.line [ Dom.onClick Clicked ] "hello"
+
+view : Model -> String
+view _model =
+    "> "
+
+subscriptions : Model -> Sub Msg
+subscriptions _model =
+    Sub.none
+
+onLine : String -> Msg
+onLine _line =
+    NoOp
+
+main =
+    Cli.app
+        { init = init, update = update, view = view
+        , subscriptions = subscriptions, onLine = onLine
+        }
+"#;
+
+/// A DOM attribute in a `Lines` view is IPE-T0001 (rejected at type-check), NOT
+/// a silent render-time drop: the line-native `Attribute` type makes the DOM
+/// constructor unnameable in the line surface. The diagnostic names the
+/// user-facing `Cli.Ui.Attribute`, not the internal `CliAttr` spelling.
+#[test]
+fn lines_view_with_dom_attribute_is_rejected() -> Result<(), BoxError> {
+    match compile("lines_dom_attr", LINES_WITH_DOM_ATTRIBUTE)? {
+        Ok(()) => Err("lines_dom_attr: expected IPE-T0001, but ipec succeeded".into()),
+        Err(ipe::CliError::Pipeline { diag, src, .. }) => {
+            assert_eq!(diag.code().as_str(), "IPE-T0001", "wrong diagnostic code");
+            let rendered = ipe_diagnostics::plain_message(&diag, &src);
+            assert!(
+                rendered.contains("Cli.Ui.Attribute"),
+                "diagnostic must name the user-facing `Cli.Ui.Attribute`, got:\n{rendered}"
+            );
+            assert!(
+                !rendered.contains("CliAttr"),
+                "diagnostic must not leak the internal `CliAttr` spelling, got:\n{rendered}"
+            );
+            Ok(())
+        }
+        Err(other) => Err(format!("lines_dom_attr: expected IPE-T0001, got {other:?}").into()),
+    }
 }

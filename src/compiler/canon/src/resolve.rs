@@ -278,6 +278,17 @@ pub const RESERVED_BUILTIN_TYPES: &[&str] = &[
     // `TuiAttr`). Reserved so a user `type TuiAttr …` cannot forge a look-alike
     // that would admit a DOM attribute into a `Screen` view.
     "TuiAttr",
+    // `Ipe.Tea.Cli.Ui`'s line-oriented view type `Lines msg` and its line-native
+    // attribute type `Attribute msg` (interned `CliAttr`). Reserved so a user
+    // `type Lines …` / `type CliAttr …` cannot shadow the builtins and defeat the
+    // shape-gate that keeps DOM and 2D cell builders out of a `Lines` view. Built
+    // only through `Ipe.Tea.Cli.Ui.*` kernels.
+    "Lines",
+    "CliAttr",
+    // `Ipe.Tea.Terminal.Color`'s palette type `Color` (interned `TermColor`).
+    // Reserved so a user `type Color …` in a terminal module cannot forge a
+    // look-alike palette; built only through `Ipe.Tea.Terminal.Color.*` kernels.
+    "TermColor",
     "Attribute",
     "Event",
     "Length",
@@ -482,7 +493,7 @@ pub fn builtin_empty_home_arity(name: Option<&str>) -> Option<usize> {
         "List" | "Maybe" | "Set" | "Connection" | "Setting" => Some(1),
         "Dict" | "Result" => Some(2),
         "ReadOnly" | "ReadWrite" | "HostMode" | "LogLevel" | "CsrfMode" | "RevocationMode"
-        | "ProjectionTerm" | "ProjectionOperand" | "ArithOp" => Some(0),
+        | "ProjectionTerm" | "ProjectionOperand" | "ArithOp" | "TermColor" => Some(0),
         _ => None,
     }
 }
