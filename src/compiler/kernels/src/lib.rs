@@ -5996,100 +5996,19 @@ impl StdlibKernel {
     // These are the single authoritative classification lists.  `ipe_ir`
     // re-exports them through the `type KernelFn = StdlibKernel` alias.
 
-    /// `true` when this variant belongs to the `Db` / `Db.Decode` subsystem.
+    /// `true` when this variant's kernel `class` is [`KernelClass::Db`] — the
+    /// `Db` / `Db.Decode` / `Db.Sql` subsystem.
+    ///
+    /// Derived from the [`Self::decl`] class column (const, so this predicate
+    /// stays const) rather than hand-mirroring the variant set. This predicate
+    /// is the SOLE selector for the `db` runtime module/feature (`ipe_lower`
+    /// sets `uses_db` from it), so a Db-class kernel a hand list forgot would
+    /// emit an `ipe`-accepted crate that fails at `cargo` time (E0425/E0433).
+    /// Reading the class makes that drift unrepresentable, not merely
+    /// test-detectable.
     #[must_use]
     pub const fn is_db(self) -> bool {
-        matches!(
-            self,
-            Self::DbConnect
-                | Self::DbOpen
-                | Self::DbClose
-                | Self::DsnParse
-                | Self::DsnBuild
-                | Self::DsnDriverTag
-                | Self::DsnHost
-                | Self::DsnPort
-                | Self::DsnDatabase
-                | Self::DsnUser
-                | Self::DsnTlsTag
-                | Self::DsnRedacted
-                | Self::DbConnOpen
-                | Self::DbConnClose
-                | Self::DbConnUnsafeExecRawOn
-                | Self::DbConnFindWhere
-                | Self::DbConnQueryDecode
-                | Self::DbConnGetById
-                | Self::DbExecRaw
-                | Self::DbExec
-                | Self::DbQuery
-                | Self::DbQueryDecode
-                | Self::DbGetString
-                | Self::DbGetInt
-                | Self::DbGetBool
-                | Self::DbGetField
-                | Self::DbInsertRow
-                | Self::DbGetById
-                | Self::DbUpdateById
-                | Self::DbDeleteById
-                | Self::DbFindOneByField
-                | Self::DbFindManyByField
-                | Self::DbFindByConditions
-                | Self::DbInsertFields
-                | Self::DbUpdateFields
-                | Self::DbInsertFieldsReturning
-                | Self::DbWithTransaction
-                | Self::DbMigrate
-                | Self::DbDecString
-                | Self::DbDecInt
-                | Self::DbDecFloat
-                | Self::DbDecBool
-                | Self::DbDecNullable
-                | Self::DbDecMap
-                | Self::DbDecAndThen
-                | Self::DbDecSucceed
-                | Self::DbDecFail
-                | Self::DbDecMap2
-                | Self::DbDecMap3
-                | Self::DbDecMap4
-                | Self::DbDecRequired
-                | Self::DbDecOptional
-                | Self::DbDecMoney
-                | Self::DbDecDecimal
-                | Self::DbDecBytes
-                // ── Ipe.Db.Sql — classified `Db` like
-                // `Db.Decode.*` above: no live connection is touched by the
-                // combinators, but the runtime types they build on
-                // (`SqlFragment` / `SqlParam`) live in this crate's
-                // `feature = "db"`-gated `db.rs` module, so a program using
-                // ONLY `Sql.*` still needs the `db` Cargo feature turned on.
-                | Self::SqlColumn
-                | Self::SqlUnsafeFragment
-                | Self::SqlParam
-                | Self::SqlInt
-                | Self::SqlString
-                | Self::SqlFloat
-                | Self::SqlBool
-                | Self::SqlEq
-                | Self::SqlNe
-                | Self::SqlGt
-                | Self::SqlLt
-                | Self::SqlGte
-                | Self::SqlLte
-                | Self::SqlAnd
-                | Self::SqlOr
-                | Self::SqlNot
-                | Self::SqlIsNull
-                | Self::SqlIsNotNull
-                | Self::SqlInList
-                | Self::SqlLike
-                | Self::DbFindWhere
-                | Self::DbFindJoin
-                | Self::DbFindProjection
-                | Self::DbFindJoinOrdered
-                | Self::DbFindProjectionOrdered
-                | Self::DbDeleteWhere
-                | Self::DbUpdateWhere
-        )
+        matches!(self.decl().class, KernelClass::Db)
     }
 
     /// The whole kernel row as one [`KernelDef`] descriptor — the authoritative
@@ -9873,10 +9792,12 @@ impl StdlibKernel {
     /// [`Capability::Network`]; file / database / config-and-`.env`-file reads →
     /// [`Capability::Filesystem`]; environment-variable and argv reads →
     /// [`Capability::Env`]; wall-clock / sleep / timer → [`Capability::Clock`];
-    /// RNG / random tokens / UUIDs → [`Capability::Random`]. `Env.public` reads a
-    /// build-time-embedded allowlisted constant, not the live process
-    /// environment, so it is pure. `Trace.*` write only to an observability sink,
-    /// and `Io.*` only to the console, so neither is a sandboxed capability.
+    /// RNG / random tokens / UUIDs → [`Capability::Random`]. `Env.public` reads
+    /// the live process environment on native (a per-call `std::env::var`), so it
+    /// discloses [`Capability::Env`] like `System.getenv`; only its wasm32
+    /// emission is a build-time constant, and over-reporting there is the
+    /// fail-closed direction. `Trace.*` write only to an observability sink, and
+    /// `Io.*` only to the console, so neither is a sandboxed capability.
     ///
     /// The match is exhaustive with no `_` arm: a newly-added kernel cannot
     /// compile until it is classified here, so a program's inferred capability
@@ -10047,7 +9968,15 @@ impl StdlibKernel {
             | Self::SystemGetenvInt
             | Self::SystemGetenvBool
             | Self::SystemSetenv
-            | Self::SystemUnsetenv => Some(Capability::Env),
+            | Self::SystemUnsetenv
+            // The native emission of `Env.public` is a per-call `std::env::var`
+            // read of the live process environment, so it discloses the same env
+            // axis as `System.getenv`. (Only the wasm32 emission is a
+            // build-time-embedded constant.) Reporting `Env` on both targets is
+            // the fail-closed direction: it over-reports on wasm32 at no cost,
+            // and it re-injects the allowlisted keys into the scrubbed jail
+            // environment so `Env.public` does not silently return `Nothing`.
+            | Self::EnvPublic => Some(Capability::Env),
             Self::ProcessRun | Self::ProcessRunWith | Self::ProcessRunInPty => {
                 Some(Capability::Subprocess)
             }
@@ -10771,7 +10700,6 @@ impl StdlibKernel {
             | Self::AuthRevocationRevokeSession
             | Self::AuthRevocationRestoreUser
             | Self::AuthRevocationIsRevoked
-            | Self::EnvPublic
             | Self::RegionMainContent
             | Self::RegionNavigation
             | Self::RegionFooter
@@ -12054,24 +11982,28 @@ impl StdlibKernel {
     /// verified against the runtime source.
     ///
     /// The whitelist is keyed on the kernel's canonical qualifier for the
-    /// families that are pure in whole, with per-kernel carve-outs for the
-    /// mixed ones (`Time.sleep`, `System.loadEnv`, and the reactor-driven
-    /// `Task` combinators are reactor-requiring; the rest of those families are
-    /// not).
+    /// families that are pure in WHOLE. The mixed families (`Time`, `System`)
+    /// carry both pure and reactor-driven members, so admitting them by
+    /// qualifier would let any future reactor-driven member added under that
+    /// qualifier default to pure — a silent hang. Those two families are held
+    /// OFF the qualifier whitelist; their proven-pure members are admitted one
+    /// by one by NAME ([`Self::is_reactor_free_time_or_system`]), so a new
+    /// member of either defaults to reactor-requiring until it is audited and
+    /// listed. `Task` is likewise mixed and never gets a qualifier entry: its
+    /// reactor members are named below and its pure `BackoffStrategy`
+    /// constructors are named here.
     ///
     /// Not `const`: the whole-family arms compare the kernel's canonical
     /// qualifier (`&str`), which stable Rust cannot match in a `const fn`.
     #[must_use]
     pub fn requires_async_runtime(self) -> bool {
-        // The reactor-driven members of otherwise-pure families. `Task.run` /
-        // `Task.perform` block on an inner task whose purity is not knowable
-        // here; `Task.parallel` spawns; `Task.retryWith` sleeps; `Task.attempt`
-        // bridges into the TEA command loop. `Time.sleep` / `Time.every` and
-        // `System.loadEnv` (a `spawn_blocking` offload) likewise touch the
-        // reactor. All are fail-closed to reactor-requiring by NAME so a future
-        // rename cannot silently demote them.
-        // `BackoffStrategy` constructors are pure zero-arity values; they carry no
-        // future and never touch the reactor.
+        // `BackoffStrategy` constructors are pure zero-arity values under the
+        // mixed `Task` qualifier; they carry no future and never touch the
+        // reactor, so they are admitted by name. Every other `Task` member —
+        // `Task.run` / `Task.perform` block on an inner task of unknown purity,
+        // `Task.parallel` spawns, `Task.retryWith` sleeps, `Task.attempt`
+        // bridges into the TEA loop — has no qualifier entry and falls to the
+        // reactor-requiring default below.
         if matches!(
             self,
             Self::BackoffLinear
@@ -12081,26 +12013,19 @@ impl StdlibKernel {
         ) {
             return false;
         }
-        if matches!(
-            self,
-            Self::TaskRun
-                | Self::TaskPerform
-                | Self::TaskParallel
-                | Self::TaskRetryWith
-                | Self::TaskAttempt
-                | Self::TimeSleep
-                | Self::TimeEvery
-                | Self::SystemLoadEnv
-        ) {
-            return true;
+        // The proven-pure members of the mixed `Time` / `System` families are
+        // admitted one by one by NAME, so a new member of either family
+        // defaults to reactor-requiring below.
+        if self.is_reactor_free_time_or_system() {
+            return false;
         }
         // Whole-family pure qualifiers: every kernel under these qualifiers
         // resolves without the reactor (synchronous computation, or a
         // synchronous `std` effect wrapped in an already-`Ready` future).
-        // Verified reactor-free in the runtime module for each. The reactor
-        // members of the mixed `Time` / `System` / `Task` families were already
-        // returned above, so reaching this arm under `Time` / `System` means a
-        // pure member. A qualifier not listed here is reactor-requiring.
+        // Verified reactor-free in the runtime module for each. The mixed
+        // `Time` / `System` / `Task` families are deliberately absent — their
+        // pure members were admitted by name above. A qualifier not listed here
+        // is reactor-requiring.
         !matches!(
             self.decl().qualifier,
             "Log"
@@ -12131,8 +12056,43 @@ impl StdlibKernel {
                 | "Random"
                 | "Io"
                 | "Sql"
-                | "Time"
-                | "System"
+        )
+    }
+
+    /// `true` for the individually-audited, reactor-free members of the mixed
+    /// `Time` and `System` families. These families each carry a reactor-driven
+    /// member (`Time.sleep` / `Time.every` drive a tokio timer; `System.loadEnv`
+    /// is a `spawn_blocking` offload), so neither can be admitted whole by
+    /// qualifier without letting a future reactor-driven member default to pure.
+    /// Membership here is an allow-list of the proven-pure members by name: a
+    /// kernel added later under `Time` or `System` is absent, so
+    /// [`Self::requires_async_runtime`] classifies it reactor-requiring until it
+    /// is audited and added here.
+    #[must_use]
+    const fn is_reactor_free_time_or_system(self) -> bool {
+        matches!(
+            self,
+            Self::TimeNow
+                | Self::TimeUnixMillis
+                | Self::TimeTimeString
+                | Self::TimeIsLeapYear
+                | Self::TimeDaysInMonth
+                | Self::TimeFormat
+                | Self::TimeFormatHTTP
+                | Self::TimeFormatISO8601
+                | Self::TimeFormatRFC3339
+                | Self::TimeAddMillis
+                | Self::TimeDiffMillis
+                | Self::SystemArgs
+                | Self::SystemGetenv
+                | Self::SystemGetenvOr
+                | Self::SystemGetArg
+                | Self::SystemGetenvInt
+                | Self::SystemGetenvBool
+                | Self::SystemSetenv
+                | Self::SystemUnsetenv
+                | Self::SystemCwd
+                | Self::SystemExit
         )
     }
 
@@ -13087,8 +13047,9 @@ mod tests {
         assert_eq!(StdlibKernel::LogInfo.capability(), None);
         assert_eq!(StdlibKernel::IoPrintln.capability(), None);
         assert_eq!(StdlibKernel::DebugLog.capability(), None);
-        // `Env.public` reads a build-time constant, not the live environment.
-        assert_eq!(StdlibKernel::EnvPublic.capability(), None);
+        // `Env.public` reads the live process environment on native, so it
+        // discloses the env axis like `System.getenv` (wasm32 over-reports).
+        assert_eq!(StdlibKernel::EnvPublic.capability(), Some(Capability::Env));
         // `Ui.widget` ships browser JS → the `custom-element` disclosure axis.
         assert_eq!(
             StdlibKernel::UiWidget.capability(),
@@ -13189,71 +13150,89 @@ mod tests {
     /// fires).
     #[test]
     fn async_runtime_classification_is_fail_closed() {
-        // The whole-family pure qualifiers (every kernel under them is
-        // reactor-free) plus the reactor members of the mixed families that are
-        // carved out by name.
-        const PURE_QUALIFIERS: &[&str] = &[
-            "Log",
-            "String",
-            "Char",
-            "List",
-            "Basics",
-            "Maybe",
-            "Result",
-            "Math",
-            "Bitwise",
-            "Dict",
-            "Set",
-            "Bytes",
-            "Encoding",
-            "JsonEnc",
-            "JsonDec",
-            "JsonDecP",
-            "Uuid",
-            "Decimal",
-            "Money",
-            "Secret",
-            "Regex",
-            "Path",
-            "Locale",
-            "Error",
-            "CssSafety",
-            "Random",
-            "Io",
-            "Sql",
-            "Time",
-            "System",
-        ];
-        // Reactor-driven carve-outs inside the otherwise-pure `Time` / `System`
-        // / `Task` families.
-        let reactor_carveouts = |k: StdlibKernel| {
-            matches!(
+        // Ground truth is an INDEPENDENT hand-audited enumeration of the
+        // reactor-FREE kernels — not a copy of the production qualifier formula.
+        // A kernel is reactor-free iff its runtime denotation drives its future
+        // to `Ready` without a tokio timer, socket, spawn, or `spawn_blocking`
+        // offload. Every kernel NOT listed here must classify reactor-requiring;
+        // in particular the mixed-family reactor members (`Time.sleep`,
+        // `Time.every`, `System.loadEnv`, the reactor `Task` combinators) are
+        // absent, so this table catches the exact drift — a new reactor member
+        // under a mixed qualifier wrongly admitted as pure — that the invariant
+        // guards. The listed pure members of `Time` / `System` were each audited
+        // against their runtime source.
+        let reactor_free = |k: StdlibKernel| -> bool {
+            let pure_time_system = matches!(
                 k,
-                StdlibKernel::TaskRun
-                    | StdlibKernel::TaskPerform
-                    | StdlibKernel::TaskParallel
-                    | StdlibKernel::TaskRetryWith
-                    | StdlibKernel::TaskAttempt
-                    | StdlibKernel::TimeSleep
-                    | StdlibKernel::TimeEvery
-                    | StdlibKernel::SystemLoadEnv
-            )
-        };
-        // `BackoffStrategy` constructors are pure zero-arity values under the
-        // `"Task"` qualifier; they need an explicit pure exemption.
-        let pure_exceptions = |k: StdlibKernel| {
-            matches!(
+                StdlibKernel::TimeNow
+                    | StdlibKernel::TimeUnixMillis
+                    | StdlibKernel::TimeTimeString
+                    | StdlibKernel::TimeIsLeapYear
+                    | StdlibKernel::TimeDaysInMonth
+                    | StdlibKernel::TimeFormat
+                    | StdlibKernel::TimeFormatHTTP
+                    | StdlibKernel::TimeFormatISO8601
+                    | StdlibKernel::TimeFormatRFC3339
+                    | StdlibKernel::TimeAddMillis
+                    | StdlibKernel::TimeDiffMillis
+                    | StdlibKernel::SystemArgs
+                    | StdlibKernel::SystemGetenv
+                    | StdlibKernel::SystemGetenvOr
+                    | StdlibKernel::SystemGetArg
+                    | StdlibKernel::SystemGetenvInt
+                    | StdlibKernel::SystemGetenvBool
+                    | StdlibKernel::SystemSetenv
+                    | StdlibKernel::SystemUnsetenv
+                    | StdlibKernel::SystemCwd
+                    | StdlibKernel::SystemExit
+            );
+            let pure_backoff = matches!(
                 k,
                 StdlibKernel::BackoffLinear
                     | StdlibKernel::BackoffLinearWithJitter
                     | StdlibKernel::BackoffExponential
                     | StdlibKernel::BackoffExponentialWithJitter
-            )
+            );
+            // The families that are pure in whole: every member resolves without
+            // the reactor. Distinct from the qualifier list in production only
+            // in that this test re-derives it from the audited-purity judgement
+            // rather than reading the production constant.
+            let pure_whole_family = matches!(
+                k.decl().qualifier,
+                "Log"
+                    | "String"
+                    | "Char"
+                    | "List"
+                    | "Basics"
+                    | "Maybe"
+                    | "Result"
+                    | "Math"
+                    | "Bitwise"
+                    | "Dict"
+                    | "Set"
+                    | "Bytes"
+                    | "Encoding"
+                    | "JsonEnc"
+                    | "JsonDec"
+                    | "JsonDecP"
+                    | "Uuid"
+                    | "Decimal"
+                    | "Money"
+                    | "Secret"
+                    | "Regex"
+                    | "Path"
+                    | "Locale"
+                    | "Error"
+                    | "CssSafety"
+                    | "Random"
+                    | "Io"
+                    | "Sql"
+            );
+            pure_time_system || pure_backoff || pure_whole_family
         };
         for k in StdlibKernel::ALL {
             let q = k.decl().qualifier;
-            let expected_async =
-                (reactor_carveouts(*k) || !PURE_QUALIFIERS.contains(&q)) && !pure_exceptions(*k);
+            let expected_async = !reactor_free(*k);
             assert_eq!(
                 k.requires_async_runtime(),
                 expected_async,
@@ -13263,6 +13242,34 @@ mod tests {
                  synchronous `fn main` that HANGS on a reactor op — re-audit the runtime impl \
                  before changing the whitelist.",
                 k.requires_async_runtime(),
+            );
+        }
+    }
+
+    /// The mixed-family drift the fail-closed invariant exists to catch: the
+    /// reactor-driven members of `Time` / `System` must classify
+    /// reactor-requiring, and admitting their family by qualifier would silently
+    /// demote them. This pins each reactor member directly (independent of the
+    /// whitelist formula) and asserts a representative pure member of the same
+    /// family stays admitted, so a regression that re-adds `Time` / `System` to
+    /// the whole-family qualifier list fails here.
+    #[test]
+    fn mixed_family_reactor_members_are_not_admitted_by_qualifier() {
+        for reactor in [
+            StdlibKernel::TimeSleep,
+            StdlibKernel::TimeEvery,
+            StdlibKernel::SystemLoadEnv,
+        ] {
+            assert!(
+                reactor.requires_async_runtime(),
+                "{reactor:?} drives the tokio reactor but was classified pure — a mixed \
+                 family admitted by qualifier would emit a synchronous `fn main` that HANGS"
+            );
+        }
+        for pure in [StdlibKernel::TimeNow, StdlibKernel::SystemGetenv] {
+            assert!(
+                !pure.requires_async_runtime(),
+                "{pure:?} is a proven-pure member of a mixed family and must stay admitted"
             );
         }
     }
@@ -14064,6 +14071,53 @@ mod tests {
                 k.decl().qualifier,
                 k.is_css(),
                 expected,
+            );
+        }
+    }
+
+    /// `is_db()` MUST be true for exactly the `class = Db` kernels — it is the
+    /// SOLE selector for the `db` runtime module/feature (`ipe_lower` sets
+    /// `uses_db` from it), so a forgotten Db-class kernel would emit an
+    /// `ipe`-accepted crate that references `ipe_runtime::db::*` with no `db`
+    /// feature enabled (E0425/E0433).
+    ///
+    /// The oracle is an INDEPENDENT restatement, not a copy of the predicate:
+    /// the Db-class kernels live under the qualifiers `Db` / `Db.Decode` /
+    /// `Db.Dsn` / `Sql`, with the `class = Pure` exceptions `Db.url`
+    /// (`DbUrlSetting`, a setting reader emitting `ipe_setting_db_url`) and
+    /// `Db.defaultMigration` (`DbDefaultMigration`, a record builder emitted
+    /// inline as a `Migration` struct literal) — neither emits a db-runtime
+    /// symbol, so neither must set `uses_db`. Those exceptions are exactly why
+    /// `is_db` reads the `class` column and not the qualifier. Both directions
+    /// are asserted, so a Db-class kernel outside these qualifiers, a non-Db
+    /// kernel inside them, or a drift in either Pure exception all fail.
+    #[test]
+    fn db_predicate_tracks_db_class() {
+        use super::KernelClass;
+        for k in StdlibKernel::ALL {
+            let qualifier = k.decl().qualifier;
+            let expected = matches!(qualifier, "Db" | "Db.Decode" | "Db.Dsn" | "Sql")
+                && !matches!(
+                    k,
+                    StdlibKernel::DbUrlSetting | StdlibKernel::DbDefaultMigration
+                );
+            assert_eq!(
+                k.is_db(),
+                expected,
+                "{k:?} (qualifier={qualifier:?}, class={:?}): is_db()={} but the \
+                 Db-residency oracle={expected} — a forgotten Db-class kernel omits \
+                 the db feature/module, leaving ipe_runtime::db::* out of scope \
+                 (E0425/E0433)",
+                k.decl().class,
+                k.is_db(),
+            );
+            assert_eq!(
+                k.is_db(),
+                k.decl().class == KernelClass::Db,
+                "{k:?}: is_db()={} disagrees with class==Db ({}) — is_db is derived \
+                 from the class column and must equal it exactly",
+                k.is_db(),
+                k.decl().class == KernelClass::Db,
             );
         }
     }
