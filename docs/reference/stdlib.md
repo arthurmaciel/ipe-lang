@@ -57,6 +57,8 @@ Each module listed below links to a detail page with the full documentation and 
 - [Browser.Visibility.Internals](#browservisibilityinternals)
 - [Browser.WakeLock](#browserwakelock)
 - [Browser.WakeLock.Internals](#browserwakelockinternals)
+- [Browser.WebAuthn](#browserwebauthn)
+- [Browser.WebAuthn.Internals](#browserwebauthninternals)
 - [ByteSize](#bytesize)
 - [Bytes](#bytes)
 - [Cache](#cache)
@@ -880,6 +882,42 @@ Ipe.Browser.WakeLock.Internals — the low-level Wake Lock port surface: the
 | `requestOne` | `requestOne cmd` — correlated one-shot `JsCmd` → `Task Error JsMsg`. |
 | `subscribe` | `subscribe toMsg` — the inbound subscription over the fail-closed seal |
 | `inbound` | The total, fail-closed decoder for the inbound `JsMsg`. Reads the `event` |
+
+## Browser.WebAuthn
+
+[Full reference](stdlib/Browser.WebAuthn.md)
+
+Ipe.Browser.WebAuthn — register and authenticate a public-key credential
+
+| Export | Summary |
+|--------|----------|
+| `CreationOptions` | Registration (attestation) ceremony options — the `publicKey` creation |
+| `RequestOptions` | Authentication (assertion) ceremony options — the `publicKey` request |
+| `PublicKeyCredential` | A completed public-key credential — the typed, opaque handle a ceremony |
+| `AttestationResponse` | The attestation response of a completed registration ceremony. Every field |
+| `AssertionResponse` | The assertion response of a completed authentication ceremony. Every field |
+| `Outcome` | A typed ceremony outcome delivered by the `results` subscription. |
+| `register` | `register opts` — run a registration (attestation) ceremony via |
+| `authenticate` | `authenticate opts` — run an authentication (assertion) ceremony via |
+| `results` | `results toMsg` — the inbound subscription, wired in `subscriptions`, for a |
+| `credentialId` | `credentialId credential` — the base64url credential id, the one field a |
+| `attestation` | `attestation credential` — the registration `AttestationResponse` envelope, |
+| `assertion` | `assertion credential` — the authentication `AssertionResponse` envelope, or |
+
+## Browser.WebAuthn.Internals
+
+[Full reference](stdlib/Browser.WebAuthn.Internals.md)
+
+Ipe.Browser.WebAuthn.Internals — the low-level Web Authentication port
+
+| Export | Summary |
+|--------|----------|
+| `JsCmd` | The ONE closed OUTBOUND port type — the two ceremonies of Web |
+| `JsMsg` | The NARROW closed INBOUND port type — deliberately NOT the app's internal |
+| `request` | `request cmd` — hand a closed outbound `JsCmd` to the raw port transport. |
+| `requestOne` | `requestOne cmd` — correlated one-shot `JsCmd` → `Task Error JsMsg`. Routes |
+| `subscribe` | `subscribe toMsg` — the inbound subscription over the fail-closed seal |
+| `inbound` | The total, fail-closed decoder for the inbound `JsMsg`. It reads `ok` first: |
 
 ## ByteSize
 

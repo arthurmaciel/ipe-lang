@@ -904,6 +904,24 @@ const IPE_BROWSER_RECORDER: &str = include_str!("../Ipe/Browser/Recorder.ipe");
 /// `MODULES`); NOT in `STDLIB_MODULE_QUALIFIERS`.
 const IPE_BROWSER_RECORDER_INTERNALS: &str = include_str!("../Ipe/Browser/Recorder/Internals.ipe");
 
+/// `Ipe.Browser.WebAuthn` — register and authenticate a public-key credential (a
+/// passkey) via the Web Authentication API (`navigator.credentials.create` /
+/// `.get`) over `Ipe.Ffi.Js` ports. `register` / `authenticate` return a
+/// `Task Error PublicKeyCredential`; `results` folds inbound frames exhaustively
+/// into a typed `Outcome`. Credential material is opaque base64url — never raw
+/// key bytes. Importing discloses `js-port:web-authn` (keyed on the
+/// `Ipe.Browser.WebAuthn` path prefix via `WebCapability::for_browser_module`).
+/// Registered in [`COMPILED_STD_MODULES`] (NOT `MODULES`); NOT in
+/// `STDLIB_MODULE_QUALIFIERS`.
+const IPE_BROWSER_WEB_AUTHN: &str = include_str!("../Ipe/Browser/WebAuthn.ipe");
+
+/// `Ipe.Browser.WebAuthn.Internals` — the low-level Web Authentication port
+/// surface: the closed outbound/inbound ADTs and the raw `Ipe.Ffi.Js` wiring the
+/// high-level layer wraps. Importing it discloses the same `js-port:web-authn`
+/// axis (the prefix key covers the submodule). Registered in
+/// [`COMPILED_STD_MODULES`] (NOT `MODULES`); NOT in `STDLIB_MODULE_QUALIFIERS`.
+const IPE_BROWSER_WEB_AUTHN_INTERNALS: &str = include_str!("../Ipe/Browser/WebAuthn/Internals.ipe");
+
 /// `Ipe.Browser.Visibility` — read the document visibility state over
 /// `Ipe.Ffi.Js` ports (compiled source), spanning BOTH port directions: an
 /// outbound `JsCmd` request (`state` one-shot / `watch` continuous) and an
@@ -1620,6 +1638,14 @@ pub const COMPILED_STD_MODULES: &[CompiledStdModule] = &[
     CompiledStdModule {
         dotted: "Ipe.Browser.Recorder.Internals",
         source: IPE_BROWSER_RECORDER_INTERNALS,
+    },
+    CompiledStdModule {
+        dotted: "Ipe.Browser.WebAuthn",
+        source: IPE_BROWSER_WEB_AUTHN,
+    },
+    CompiledStdModule {
+        dotted: "Ipe.Browser.WebAuthn.Internals",
+        source: IPE_BROWSER_WEB_AUTHN_INTERNALS,
     },
     CompiledStdModule {
         dotted: "Ipe.Browser.Visibility",
