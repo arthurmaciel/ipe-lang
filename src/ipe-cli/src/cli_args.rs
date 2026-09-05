@@ -1098,9 +1098,10 @@ pub struct FixArgs {
 }
 
 /// Parse `ipe fix`'s argument tail. The `<path>` positional is required; a
-/// second positional, or a flag other than `--yes`/`-y`, is rejected. Any
-/// leading-dash token is treated as a flag (never bound as the path), matching
-/// the sibling parsers.
+/// second positional, or a flag other than `--yes`/`-y`, is rejected.
+///
+/// Any leading-dash token is treated as a flag (never bound as the path),
+/// matching the sibling parsers.
 ///
 /// # Errors
 /// [`CliError::Usage`] / [`CliError::UsageOwned`] naming the exact problem.
