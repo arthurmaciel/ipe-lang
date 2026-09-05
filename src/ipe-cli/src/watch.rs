@@ -2251,12 +2251,40 @@ fn spawn_command(exe_path: &Path, env: &[(String, String)]) -> Command {
 /// Extract the first non-blank line from a compiler diagnostic, capped at
 /// 120 characters, for inclusion in the build-failed banner.
 fn first_error_line(msg: &str) -> String {
-    msg.lines()
+    let stripped = strip_ansi(msg);
+    stripped
+        .lines()
         .find(|l| !l.trim().is_empty())
         .unwrap_or("")
         .chars()
         .take(120)
         .collect()
+}
+
+/// Remove ANSI escape sequences from `s`. Cargo forces coloured, progress-bar
+/// stderr when the watch's terminal is a TTY, so a build-failure excerpt arrives
+/// laced with CSI sequences (`ESC [ … m`) and other escapes. Dropping them keeps
+/// the browser build-status banner readable and free of terminal control codes.
+fn strip_ansi(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars();
+    while let Some(c) = chars.next() {
+        if c != '\u{1b}' {
+            out.push(c);
+            continue;
+        }
+        // An escape introduces a control sequence. A CSI (`ESC [`) runs until a
+        // final byte in 0x40..=0x7e; any other escape consumes just its single
+        // following byte. Either way the escape itself is dropped.
+        if chars.next() == Some('[') {
+            for seq in chars.by_ref() {
+                if ('\u{40}'..='\u{7e}').contains(&seq) {
+                    break;
+                }
+            }
+        }
+    }
+    out
 }
 
 /// POST `{ok, error}` to the child's dev-only `/_ipe/watch/status` endpoint.
@@ -2283,17 +2311,21 @@ fn app_status_port(proxy: Option<&ipe_watch::DevProxy>, port: u16) -> Option<u16
 }
 
 fn post_watch_status(port: u16, token: &str, ok: bool, error: &str) {
-    // Build the JSON body without serde_json to avoid a new dependency.
-    // Escape only backslash and double-quote — the error string is already
-    // a first-line excerpt from compiler output (ASCII/UTF-8, no control chars
-    // that need JSON-escaping beyond those two).
-    let body = if ok {
-        r#"{"ok":true}"#.to_string()
+    let _ = post_to_watch_status(port, token, &watch_status_body(ok, error));
+}
+
+/// Serialise the `{ok, error}` watch-status body. `serde_json` escapes every
+/// control char below 0x20 as `\u00XX`, so a compiler excerpt carrying carriage
+/// returns or ANSI escapes still yields RFC 8259-valid JSON the server can
+/// parse — hand-rolled backslash/quote escaping alone left those unescaped and
+/// the server rejected the body.
+fn watch_status_body(ok: bool, error: &str) -> String {
+    let value = if ok {
+        serde_json::json!({ "ok": true })
     } else {
-        let esc = error.replace('\\', "\\\\").replace('"', "\\\"");
-        format!(r#"{{"ok":false,"error":"{esc}"}}"#)
+        serde_json::json!({ "ok": false, "error": error })
     };
-    let _ = post_to_watch_status(port, token, &body);
+    value.to_string()
 }
 
 /// Tell the running app a rebuild has started, so it shows a soft-yellow
@@ -2743,8 +2775,8 @@ fn find_executable_path(cargo_json_stdout: &str) -> Option<PathBuf> {
 mod tests {
     use super::{
         BuildAccel, Command, Duration, OrchestratorEvent, RESOLVE_RETRY_DELAY, RebuildTimings,
-        apply_build_accel_env, child_env, choose_build_accel, dir_has_dep_rlib, env_flag_on, mpsc,
-        schedule_resolve_retry,
+        apply_build_accel_env, child_env, choose_build_accel, dir_has_dep_rlib, env_flag_on,
+        first_error_line, mpsc, schedule_resolve_retry, strip_ansi, watch_status_body,
     };
     use std::ffi::OsStr;
     use std::path::{Path, PathBuf};
@@ -3007,5 +3039,63 @@ mod tests {
         evt_rx
             .recv_timeout(RESOLVE_RETRY_DELAY * 4)
             .expect("the retry must still arrive after the short delay");
+    }
+
+    /// A build-failure excerpt laced with carriage returns, ANSI escapes, and a
+    /// double-quote must still serialise to JSON the server can parse. The
+    /// former hand-rolled escaper left control chars raw, producing invalid
+    /// JSON that the endpoint rejected — silently blanking the banner exactly
+    /// when a build failed.
+    #[test]
+    fn watch_status_body_is_valid_json_for_hostile_input() {
+        let hostile = "error\r\n\u{1b}[31m\"broke\"out\u{1b}[0m\ttab\u{7}bell";
+        let body = watch_status_body(false, hostile);
+        let parsed: serde_json::Value =
+            serde_json::from_str(&body).expect("the body must be RFC 8259-valid JSON");
+        assert_eq!(parsed.get("ok"), Some(&serde_json::Value::Bool(false)));
+        assert_eq!(
+            parsed.get("error"),
+            Some(&serde_json::Value::String(hostile.to_string())),
+            "the error round-trips byte-for-byte, so no field is injected"
+        );
+    }
+
+    /// A crafted excerpt cannot inject sibling JSON fields: the closing quote,
+    /// braces, and a spoofed `"ok":true` all survive as string content.
+    #[test]
+    fn watch_status_body_resists_field_injection() {
+        let attack = r#"","ok":true,"injected":"x"#;
+        let body = watch_status_body(false, attack);
+        let parsed: serde_json::Value = serde_json::from_str(&body).expect("valid JSON");
+        assert_eq!(parsed.get("ok"), Some(&serde_json::Value::Bool(false)));
+        assert!(
+            parsed.get("injected").is_none(),
+            "a crafted excerpt must not add fields to the object"
+        );
+    }
+
+    #[test]
+    fn watch_status_body_ok_omits_error() {
+        let parsed: serde_json::Value =
+            serde_json::from_str(&watch_status_body(true, "")).expect("valid JSON");
+        assert_eq!(parsed.get("ok"), Some(&serde_json::Value::Bool(true)));
+        assert!(parsed.get("error").is_none());
+    }
+
+    /// ANSI colour and CSI sequences are removed while the surrounding text is
+    /// preserved intact.
+    #[test]
+    fn strip_ansi_removes_escape_sequences() {
+        assert_eq!(strip_ansi("\u{1b}[31mred\u{1b}[0m text"), "red text");
+        assert_eq!(strip_ansi("no escapes here"), "no escapes here");
+        assert_eq!(strip_ansi("\u{1b}[2K\u{1b}[1G   Compiling"), "   Compiling");
+    }
+
+    /// The excerpt handed to the banner is the first non-blank line, stripped of
+    /// ANSI codes and capped at 120 chars.
+    #[test]
+    fn first_error_line_strips_ansi_and_picks_first_nonblank() {
+        let raw = "\r\n\u{1b}[1m\u{1b}[38;5;9merror[E0308]\u{1b}[0m: mismatched types\nnext line";
+        assert_eq!(first_error_line(raw), "error[E0308]: mismatched types");
     }
 }
