@@ -17,7 +17,7 @@
 //!    gutter, the primary span underlined with `^` and an inline payload-derived
 //!    label, plus any secondary span underlined with `-` and its own label.
 //! 5. **help / note** — the structured [`Diagnostic::help`] lines.
-//! 6. **code footer** — the machine code and the `ipe explain` next step, last:
+//! 6. **code footer** — the machine code and the `ipe doc` next step, last:
 //!    a reader reaches for the lookup key only after reading the message above.
 //!
 //! The function is pure and **deterministic**: every list is walked in producer
@@ -48,9 +48,8 @@ const RESET: &str = "\x1b[0m";
 
 /// The CLI verb that looks up diagnostic codes and teaching pages.
 ///
-/// Every diagnostic footer and help-line that points a reader at a lookup
-/// derives from this one constant so renaming the command requires a single
-/// change here.
+/// Every rendered diagnostic footer and help-line that points a reader at a
+/// lookup interpolates this constant rather than spelling the verb inline.
 pub const DOC_HINT_CMD: &str = "ipe doc";
 
 /// Render a diagnostic against its source file.
@@ -184,7 +183,7 @@ pub fn render(d: &Diagnostic, file: &str, source: &str) -> String {
     }
 
     // Band 6 — code footer. The lookup key and the next step, last: a reader
-    // reaches for `ipe explain` only after reading the message above.
+    // reaches for `ipe doc` only after reading the message above.
     out.push('\n');
     out.push_str(&paint(color, severity_color(severity), code.as_str()));
     let _ = write!(out, " · run `{DOC_HINT_CMD} {}`", code.as_str());
@@ -890,9 +889,13 @@ pub fn plain_message(d: &Diagnostic, source: &str) -> String {
 ///       "replacement": "…",
 ///       "applicability": "machine-applicable" | "maybe-incorrect" | "has-placeholders" }
 ///   ],
-///   "explain_ref": "ipe explain IPE-T0001"
+///   "explain_ref": "ipe doc IPE-T0001"
 /// }
 /// ```
+///
+/// `explain_ref` is `<DOC_HINT_CMD> <code>` — the verb is [`DOC_HINT_CMD`], not
+/// a literal, so a consumer reads the prefix from that constant rather than
+/// hard-coding it.
 ///
 /// The object ends with a newline so callers can concatenate records (one per
 /// line) without inserting separators. Escaping follows RFC 8259: `\n`, `\r`,
