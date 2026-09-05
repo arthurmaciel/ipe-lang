@@ -174,7 +174,9 @@ fn value_parses(s: &str) -> bool {
         // remainder of the value is exactly `important` (the sole legitimate
         // use of `!` in a declaration value). Any other `!…` is rejected.
         if c == b'!' {
-            return s.get(i + 1..).is_some_and(|rest| rest.trim_start() == "important");
+            return s
+                .get(i + 1..)
+                .is_some_and(|rest| rest.trim_start() == "important");
         }
         // A quoted string token (e.g. a `content` value or a `url("…")` handled
         // inside `parse_function`): only reachable at top level for `content`,
@@ -321,9 +323,7 @@ fn parse_string(bytes: &[u8], start: usize, q: u8) -> Option<usize> {
 /// `:` `;` `{` `}` `<` `>` `(` `)` `,` `/` `%` `"` `'` `*` `@` — every
 /// declaration/ruleset/at-rule breakout and every scheme-introducing byte.
 const fn is_token_byte(b: u8) -> bool {
-    b.is_ascii_alphanumeric()
-        || matches!(b, b'#' | b'.' | b'+' | b'-' | b'_' | b'\\')
-        || b >= 0x80
+    b.is_ascii_alphanumeric() || matches!(b, b'#' | b'.' | b'+' | b'-' | b'_' | b'\\') || b >= 0x80
 }
 
 /// True for a byte permitted inside a scheme-free `url()` path argument: token
@@ -407,7 +407,9 @@ mod tests {
     fn rejects_url_exfiltration_channels() {
         // The vectors named in the issue: a data-scheme SVG and any remote URL
         // are CSS exfiltration / script-sink channels the old denylist missed.
-        assert!(!css_value_is_safe("url(data:image/svg+xml,<svg/onload=alert(1)>)"));
+        assert!(!css_value_is_safe(
+            "url(data:image/svg+xml,<svg/onload=alert(1)>)"
+        ));
         assert!(!css_value_is_safe(
             "url(data:image/svg+xml;base64,PHN2Zz48L3N2Zz4=)"
         ));
