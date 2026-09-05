@@ -283,7 +283,13 @@ fn requirement_for(axis: WebCapability) -> AxisRequirement {
         | WebCapability::ScreenOrientation
         // Wake lock has no static OS-permission declaration on iOS/macOS/Android;
         // the browser mediates the request without a plist key or manifest entry.
-        | WebCapability::WakeLock => no_os_permission(),
+        | WebCapability::WakeLock
+        // Web Authentication (navigator.credentials) has no static OS-permission
+        // declaration on iOS/macOS/Android — the browser and platform
+        // authenticator mediate the ceremony (biometric / PIN) without a plist
+        // key or manifest entry; the user-verification prompt is not a
+        // declarable permission.
+        | WebCapability::WebAuthn => no_os_permission(),
     }
 }
 

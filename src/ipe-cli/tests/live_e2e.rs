@@ -2775,3 +2775,82 @@ fn recorder_stream_browser_build_only() -> Result<(), BoxError> {
     let _exe = compile_and_build_recorder_stream()?;
     Ok(())
 }
+
+// ── Ipe.Browser.WebAuthn — build-only E2E gate ───────────────────────────────
+//
+// Proves that the web-authn example compiles end-to-end through
+// `ipe::build_project` (capabilities consent gate active) and that its emitted
+// Rust project links cleanly. Real ceremony behaviour (the authenticator prompt,
+// the attestation / assertion returned by navigator.credentials) requires a real
+// browser, a secure context, and a physical authenticator, and is not exercised
+// by this build-only test.
+//
+//   IPE_E2E=1 cargo test web_authn_browser_build_only
+
+/// Absolute path to the web-authn `package.ipe` manifest, resolved relative to
+/// `CARGO_MANIFEST_DIR` (the `ipe-cli` crate root).
+fn web_authn_manifest() -> PathBuf {
+    let manifest_dir =
+        PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap_or_else(|_| ".".into()));
+    manifest_dir
+        .join("../..")
+        .join("examples/shapes/web/web-authn/package.ipe")
+}
+
+/// Compile and cargo-build the web-authn example from its on-disk `package.ipe`
+/// manifest, returning the path to the compiled binary.
+///
+/// Uses `ipe::build_project` so the capabilities consent gate is applied:
+/// without the `accepts = [JsPort WebAuthn, JsPort Raw]` grant the build must
+/// fail closed (IPE-S0002).
+fn compile_and_build_web_authn() -> Result<PathBuf, BoxError> {
+    let manifest = web_authn_manifest();
+    let manifest = manifest.canonicalize().map_err(|e| -> BoxError {
+        format!(
+            "web-authn: cannot canonicalize manifest {}: {}",
+            manifest.display(),
+            e
+        )
+        .into()
+    })?;
+
+    let out_dir = std::env::temp_dir().join("live_e2e_web_authn_emitted");
+    let _ = std::fs::remove_dir_all(&out_dir);
+
+    let runtime = ipe::resolve_runtime()
+        .map_err(|e| -> BoxError { format!("web-authn: runtime unavailable: {e}").into() })?;
+
+    ipe::build_project(&manifest, &out_dir, &runtime)
+        .map_err(|e| -> BoxError { format!("web-authn: ipe build_project failed: {e}").into() })?;
+
+    let exe = e2e_support::build_rust_binary("web_authn", &out_dir)
+        .map_err(|e| -> BoxError { format!("web-authn: cargo build failed: {e}").into() })?;
+
+    Ok(PathBuf::from(exe))
+}
+
+/// BUILD-ONLY: the web-authn example compiles end-to-end through
+/// `ipe::build_project` (capabilities consent gate active) and its emitted Rust
+/// project links cleanly.
+///
+/// Kernels exercised:
+/// - `Ipe.Browser.WebAuthn` (`register`, `authenticate` over the port→Task
+///   bridge, the opaque `PublicKeyCredential` handle)
+/// - The per-capability JS-port disclosure + fail-closed app-boundary consent
+///   gate (`accepts = [JsPort WebAuthn, JsPort Raw]`)
+/// - Port-glue SRI-addressed asset serving (`/_ipe/port.<hex16>.js`)
+///
+/// A successful `ipe::build_project` + `cargo build` IS the assertion.
+///
+/// # Errors
+///
+/// Propagates any pipeline or Cargo build failure as a test error.
+#[test]
+fn web_authn_browser_build_only() -> Result<(), BoxError> {
+    if std::env::var("IPE_E2E").is_err() {
+        return Ok(());
+    }
+
+    let _exe = compile_and_build_web_authn()?;
+    Ok(())
+}
