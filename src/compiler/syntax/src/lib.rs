@@ -45,6 +45,7 @@ mod tests {
 
         // type Msg = Increment | Decrement
         let union = Union {
+            type_kw: sp(),
             name: loc(msg_ty),
             vars: Vec::new(),
             ctors: vec![
@@ -122,9 +123,11 @@ mod tests {
         let core = i.intern("Core")?;
         let prelude = i.intern("Prelude")?;
         Ok(Module {
+            module_kw: sp(),
             name: loc(vec![main_mod]),
             exposing: loc(Exposing::List(vec![loc(Exposed::Value(main))])),
             imports: vec![Import {
+                import_kw: sp(),
                 name: loc(vec![ipe, core, prelude]),
                 alias: None,
                 exposing: loc(Exposing::All),

@@ -2392,7 +2392,18 @@ impl<'a> Builder<'a> {
         lhs: &canon::Expr,
         rhs: &canon::Expr,
     ) -> DResult<VarId> {
-        let class = classify_binop(self.interner.resolve(func).unwrap_or(""));
+        // A binop operator symbol that does not resolve is a broken internal
+        // invariant, not an unknown-but-named operator: fail closed to the
+        // compiler-bug channel rather than let an empty string fall through to
+        // `BinopClass::Poly` and silently defer the failure downstream.
+        let func_name = self
+            .interner
+            .resolve(func)
+            .ok_or_else(|| Diagnostic::CompilerBug {
+                where_: "ipe_types::constrain_binop",
+                detail: "interned operator symbol did not resolve".to_owned(),
+            })?;
+        let class = classify_binop(func_name);
         let lv = self.constrain_expr(local, lhs)?;
         let rv = self.constrain_expr(local, rhs)?;
         match class {

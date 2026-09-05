@@ -122,6 +122,8 @@ pub struct ForeignDecl {
 // float literal, so the tree is only `PartialEq`.
 #[derive(Clone, PartialEq, Debug)]
 pub struct Module {
+    /// Span of the `module` keyword token.
+    pub module_kw: Span,
     /// Dotted module-name segments, e.g. `Main` → `[Main]`.
     pub name: Located<Vec<Symbol>>,
     /// The `exposing (...)` clause of the `module` header.
@@ -172,6 +174,8 @@ pub enum Privacy {
 /// An `import` declaration.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Import {
+    /// Span of the `import` keyword token.
+    pub import_kw: Span,
     /// Dotted module-name segments, e.g. `Ipe.String`.
     pub name: Located<Vec<Symbol>>,
     /// Optional `as Alias`.
@@ -200,6 +204,8 @@ pub struct Value {
 /// A `type` (union) declaration.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Union {
+    /// Span of the `type` keyword token.
+    pub type_kw: Span,
     pub name: Located<Symbol>,
     /// Type variables, e.g. `a` in `type Maybe a`.
     pub vars: Vec<Located<Symbol>>,

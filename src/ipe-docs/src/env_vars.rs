@@ -438,6 +438,16 @@ pub static ENV_VARS: &[EnvVar] = &[
     },
     // ── Compiler ──────────────────────────────────────────────────────────────
     EnvVar {
+        name: "IPE_EXHAUST_BUDGET",
+        default: "2000000",
+        purpose: "Maximum work units the pattern-match exhaustiveness pass spends on a single \
+                  `case` before giving up and emitting a budget-exceeded error. Set to `0` for \
+                  no limit (escape hatch for a `case` with very many independent or-patterns). \
+                  Raise when the compiler reports an exhaustiveness budget-exceeded diagnostic.",
+        subsystem: Subsystem::Compiler,
+        class: Class::Tunable,
+    },
+    EnvVar {
         name: "IPE_SOLVER_BUDGET",
         default: "5000000",
         purpose: "Maximum unification steps the type solver takes before giving up and \
