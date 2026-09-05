@@ -5581,7 +5581,10 @@ mod tests {
 
         let mut missing: Vec<String> = Vec::new();
         for (page_key, html) in &site {
-            if !page_key.ends_with(".html") {
+            if !std::path::Path::new(page_key)
+                .extension()
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("html"))
+            {
                 continue;
             }
             for href in extract_relative_hrefs(html) {

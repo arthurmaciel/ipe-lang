@@ -200,10 +200,11 @@ pub fn print_command_header() {
     eprint!("{}", command_header(colored));
 }
 
-/// Text that has been proven safe to write to a terminal: no ANSI escape
-/// sequences, no C0/C1 control bytes, no `DEL`, only printable characters plus
-/// the two layout whitespaces (`\n`, `\t`) the gutter and terminal handle
-/// safely.
+/// Text that has been proven safe to write to a terminal.
+///
+/// No ANSI escape sequences, no C0/C1 control bytes, no `DEL`, only printable
+/// characters plus the two layout whitespaces (`\n`, `\t`) the gutter and
+/// terminal handle safely.
 ///
 /// The error sink writes an arbitrary error message — a filename, a compiler
 /// excerpt, any embedded text — to stderr. On a terminal, a crafted message
@@ -232,7 +233,7 @@ impl TerminalSafe {
                 // until a final byte in 0x40..=0x7e; any other escape consumes
                 // just its single following byte. Either way the escape and its
                 // sequence are dropped whole.
-                if let Some('[') = chars.clone().next() {
+                if chars.clone().next() == Some('[') {
                     chars.next();
                     for seq in chars.by_ref() {
                         if ('\u{40}'..='\u{7e}').contains(&seq) {
@@ -244,11 +245,9 @@ impl TerminalSafe {
                 }
                 continue;
             }
-            // Keep the two layout whitespaces; drop every other control byte
-            // (C0 below 0x20, and DEL 0x7f).
-            if c == '\n' || c == '\t' {
-                out.push(c);
-            } else if !c.is_control() {
+            // Keep the two layout whitespaces and any printable character; drop
+            // every other control byte (C0 below 0x20, and DEL 0x7f).
+            if c == '\n' || c == '\t' || !c.is_control() {
                 out.push(c);
             }
         }
