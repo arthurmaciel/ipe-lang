@@ -210,6 +210,57 @@ enum FileAction {
     Skip,
 }
 
+// ── template string escaping ─────────────────────────────────────────────────
+
+/// Text safe to splice into a single-line Ipê string literal (`"…"`).
+///
+/// Templates carry `{name}` holes that live *inside* quoted `.ipe` literals. A
+/// project name is a directory basename, so it may hold a quote, backslash, or
+/// newline that would otherwise close the literal early or inject syntax. This
+/// constructor escapes those characters, so a hole filled with an
+/// [`IpeStringLiteral`] cannot produce a malformed or injected literal — the
+/// unescaped case is unrepresentable.
+///
+/// The escapes match the lexer's recognised set (`\n \t \r \\ \" \0`): a
+/// carriage return escapes to `\r`; every other control scalar is dropped, as
+/// none is valid inside a single-line literal and there is no escape for it.
+/// The body is *unquoted*: the template supplies the surrounding quotes.
+struct IpeStringLiteral(String);
+
+impl IpeStringLiteral {
+    /// Escape `raw` into the body of a single-line Ipê string literal.
+    fn escaped(raw: &str) -> Self {
+        let mut body = String::with_capacity(raw.len());
+        for ch in raw.chars() {
+            match ch {
+                '\\' => body.push_str("\\\\"),
+                '"' => body.push_str("\\\""),
+                '\n' => body.push_str("\\n"),
+                '\r' => body.push_str("\\r"),
+                '\t' => body.push_str("\\t"),
+                '\0' => body.push_str("\\0"),
+                other if other.is_control() => {}
+                other => body.push(other),
+            }
+        }
+        Self(body)
+    }
+
+    fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+/// Fill a template's `{name}` hole, escaping `project_name` for the quoted
+/// `.ipe` literals it lands in.
+fn fill_name(template: &str, project_name: &str) -> String {
+    let escaped = IpeStringLiteral::escaped(project_name);
+    // `{name}` is a template placeholder substituted by `.replace`, not a
+    // `format!` argument — the formatting-args lint's heuristic misreads it.
+    #[allow(clippy::literal_string_with_formatting_args)]
+    template.replace("{name}", escaped.as_str())
+}
+
 // ── entry point ───────────────────────────────────────────────────────────────
 
 /// `ipe init [<name>] [--force] [--lib] [--shape <shape>]`.
@@ -581,7 +632,7 @@ fn managed_files(project_name: &str, shape: InitShape) -> Vec<ManagedFile> {
     vec![
         ManagedFile {
             rel: PathBuf::from("package.ipe"),
-            content: shape.package_ipe().replace("{name}", project_name),
+            content: fill_name(shape.package_ipe(), project_name),
         },
         ManagedFile {
             rel: PathBuf::from("src").join("Main.ipe"),
@@ -605,11 +656,16 @@ fn managed_files(project_name: &str, shape: InitShape) -> Vec<ManagedFile> {
 /// The complete set of files `ipe init --lib` writes.
 fn library_files(project_name: &str) -> Vec<ManagedFile> {
     let module = module_name_for(project_name);
-    // `{name}` / `{module}` are template placeholders substituted by `.replace`,
-    // not `format!` arguments — the formatting-args lint's heuristic misreads the
-    // `{module}` literal here.
+    // `{module}` is a derived single-segment module name (ASCII-alphanumeric by
+    // construction, hence literal-safe); only the raw `{name}` needs escaping,
+    // and only where it lands in a quoted `.ipe` literal.
+    //
+    // `{module}` is a template placeholder substituted by `.replace`, not a
+    // `format!` argument — the formatting-args lint's heuristic misreads it.
     #[allow(clippy::literal_string_with_formatting_args)]
-    let fill = |template: &str| {
+    let fill_ipe = |template: &str| fill_name(template, project_name).replace("{module}", &module);
+    #[allow(clippy::literal_string_with_formatting_args)]
+    let fill_markdown = |template: &str| {
         template
             .replace("{name}", project_name)
             .replace("{module}", &module)
@@ -617,15 +673,15 @@ fn library_files(project_name: &str) -> Vec<ManagedFile> {
     vec![
         ManagedFile {
             rel: PathBuf::from("package.ipe"),
-            content: fill(PACKAGE_LIB_IPE),
+            content: fill_ipe(PACKAGE_LIB_IPE),
         },
         ManagedFile {
             rel: PathBuf::from("src").join(format!("{module}.ipe")),
-            content: fill(LIB_IPE),
+            content: fill_ipe(LIB_IPE),
         },
         ManagedFile {
             rel: PathBuf::from("README.md"),
-            content: fill(README_LIB_MD),
+            content: fill_markdown(README_LIB_MD),
         },
         ManagedFile {
             rel: PathBuf::from(".gitignore"),
@@ -1236,6 +1292,53 @@ mod tests {
     #[test]
     fn health_offer_on_interactive_non_forced() {
         assert!(should_offer_health_check(true, false));
+    }
+
+    #[test]
+    fn ipe_string_literal_escapes_literal_breaking_characters() {
+        assert_eq!(IpeStringLiteral::escaped("plain").as_str(), "plain");
+        assert_eq!(
+            IpeStringLiteral::escaped("a\"b\\c").as_str(),
+            "a\\\"b\\\\c",
+            "quote and backslash must be escaped"
+        );
+        assert_eq!(
+            IpeStringLiteral::escaped("line\ntab\tcr\r").as_str(),
+            "line\\ntab\\tcr\\r",
+            "newline, tab, and carriage return must be escaped"
+        );
+        assert_eq!(
+            IpeStringLiteral::escaped("bell\u{7}here").as_str(),
+            "bellhere",
+            "other control scalars are dropped (no valid single-line escape)"
+        );
+    }
+
+    #[test]
+    fn scaffolded_manifest_survives_a_hostile_project_name() {
+        // A directory named with a quote, backslash, and newline would break out
+        // of the quoted `.ipe` literal without escaping. The scaffolded manifest
+        // must still re-parse, and the name must round-trip exactly.
+        let hostile = "evil\"\\\n }, injected = True { ";
+        let files = managed_files(hostile, InitShape::Web);
+        let manifest = files
+            .iter()
+            .find(|f| f.rel == Path::new("package.ipe"))
+            .expect("init writes a package.ipe");
+
+        let root = std::env::temp_dir().join("ipe_init_hostile_name_roundtrip");
+        let _ = std::fs::remove_dir_all(&root);
+        write_stub_src(&root);
+        let path = root.join("package.ipe");
+        std::fs::write(&path, &manifest.content).expect("write scaffolded package.ipe");
+
+        let parsed = crate::project::parse_manifest(&path)
+            .expect("scaffolded manifest with a hostile name re-parses");
+        assert_eq!(
+            parsed.name, hostile,
+            "the hostile name round-trips through the escaped literal unchanged"
+        );
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
