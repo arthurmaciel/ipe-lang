@@ -566,11 +566,14 @@ fn open_pr(entry_toml: &str, plan: &PrPlan, fork_owner: &str) -> Result<(), CliE
 
 /// The token for the headless PR-open path: `GITHUB_TOKEN` (CI) wins, else the
 /// token stored by `ipe login`. `None` selects the browser path.
-fn publish_token() -> Option<String> {
+///
+/// Both sources are parsed through [`crate::login::PublishToken`], so a token
+/// carrying a quote, newline, or other non-alphabet byte selects the browser
+/// path rather than reaching curl's `--config` mini-language.
+fn publish_token() -> Option<crate::login::PublishToken> {
     std::env::var("GITHUB_TOKEN")
         .ok()
-        .map(|t| t.trim().to_owned())
-        .filter(|t| !t.is_empty())
+        .and_then(|t| crate::login::PublishToken::parse(&t))
         .or_else(crate::login::stored_token)
 }
 
@@ -597,7 +600,7 @@ enum PrResult {
 /// Open the index PR through the GitHub REST API — no browser. Reuses the branch
 /// already pushed to the fork. On any API failure the pre-filled compare URL is
 /// printed as the manual fallback, so a headless publish never dead-ends.
-fn submit_pr_via_api(plan: &PrPlan, fork_owner: &str, token: &str) {
+fn submit_pr_via_api(plan: &PrPlan, fork_owner: &str, token: &crate::login::PublishToken) {
     let api = format!("https://api.github.com/repos/{}/pulls", plan.index_repo);
     let body = pr_request_body(plan, fork_owner);
     let fallback_url = compare_url(
@@ -620,9 +623,18 @@ fn submit_pr_via_api(plan: &PrPlan, fork_owner: &str, token: &str) {
 /// the process argument list and cannot be read from `/proc/<pid>/cmdline` by
 /// other local users.
 ///
+/// The token arrives as a [`crate::login::PublishToken`], whose alphabet
+/// excludes the quote and newline that could otherwise inject a new curl
+/// directive on the `--config` header line — the injection is unrepresentable,
+/// not merely escaped.
+///
 /// The HTTP status drives the result — not body-field presence — so the outcome
 /// is a typed [`PrResult`] parsed once at the network boundary.
-fn github_api_post(url: &str, token: &str, body: &serde_json::Value) -> PrResult {
+fn github_api_post(
+    url: &str,
+    token: &crate::login::PublishToken,
+    body: &serde_json::Value,
+) -> PrResult {
     let body_str = body.to_string();
     // curl writes the response body to an exclusively-created scratch file;
     // the HTTP status code is captured on stdout (`-w '%{http_code}'`).
@@ -666,7 +678,11 @@ fn github_api_post(url: &str, token: &str, body: &serde_json::Value) -> PrResult
     // curl proceeds.  A write failure here means curl never gets the header;
     // the subsequent wait will capture the error.
     if let Some(mut stdin) = child.stdin.take() {
-        let _ = writeln!(stdin, r#"header = "Authorization: Bearer {token}""#);
+        let _ = writeln!(
+            stdin,
+            r#"header = "Authorization: Bearer {}""#,
+            token.as_str()
+        );
     }
 
     let output = match child.wait_with_output() {
