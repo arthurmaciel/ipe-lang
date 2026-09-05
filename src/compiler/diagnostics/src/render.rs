@@ -398,6 +398,18 @@ fn parse_prose(msg: &ParseError) -> String {
         ParseError::MissingDocString { name } => {
             format!("`{name}` is exported but has no doc-string.")
         }
+        ParseError::AnnotationWithoutBinding { name } => {
+            format!(
+                "This `{name} : …` type annotation has no matching `{name} = …` \
+                 definition. Without a binding to attach to, the type is discarded."
+            )
+        }
+        ParseError::DuplicateAnnotation { name } => {
+            format!(
+                "`{name}` has more than one type annotation. A value can carry only \
+                 one declared type."
+            )
+        }
         ParseError::Unexpected => "I couldn't make sense of this part of the file.".to_string(),
     }
 }
@@ -531,6 +543,16 @@ fn name_prose(msg: &NameError) -> String {
                 r.module, r.placement,
             )
         }
+        NameError::RustNameFold {
+            first,
+            second,
+            rust_name,
+            kind,
+        } => format!(
+            "Two different {} — `{first}` and `{second}` — end up with the same \
+             generated name `{rust_name}`, so I can't emit them both.",
+            kind.noun(),
+        ),
         NameError::Unknown => "Something is off with a name in this code.".to_string(),
     }
 }
@@ -1315,6 +1337,12 @@ fn parse_label(msg: &ParseError) -> Option<String> {
             };
             Some(detail)
         }
+        ParseError::AnnotationWithoutBinding { .. } => {
+            Some("this annotation has no matching definition".to_string())
+        }
+        ParseError::DuplicateAnnotation { .. } => {
+            Some("this name is already annotated above".to_string())
+        }
         ParseError::Unexpected
         | ParseError::TooDeep
         | ParseError::SteplessDo
@@ -1558,7 +1586,11 @@ fn name_label(msg: &NameError) -> Option<String> {
                  placements"
             ))
         }
-        NameError::Unknown => None,
+        // `RustNameFold`'s span is always DUMMY (the IR carries none), so a label
+        // never reaches a caret; the fix rides the help note instead (see
+        // `name_help`), which renders with or without a snippet — and `None` here
+        // also avoids duplicating that note in the snippet-free `plain_message`.
+        NameError::RustNameFold { .. } | NameError::Unknown => None,
     }
 }
 
@@ -2376,10 +2408,17 @@ fn ty_to_string(t: &TyDoc) -> String {
         TyDoc::Unit => "()".to_string(),
         TyDoc::Var(v) => v.to_string(),
         TyDoc::Con { module, name, args } => {
-            let head = if module.is_empty() {
-                name.to_string()
-            } else {
-                format!("{module}.{name}")
+            // The terminal view surfaces intern their attribute types under
+            // internal spellings (`TuiAttr` / `CliAttr`) that keep them distinct
+            // from the DOM `Attribute`, but the author only ever writes the
+            // module-qualified `Attribute`. Render the user-facing name so a
+            // mismatch points at the type they can name, not the internal one.
+            let head = match name.as_ref() {
+                "TuiAttr" => "Tui.Ui.Attribute".to_string(),
+                "CliAttr" => "Cli.Ui.Attribute".to_string(),
+                "TermColor" => "Terminal.Color".to_string(),
+                _ if module.is_empty() => name.to_string(),
+                _ => format!("{module}.{name}"),
             };
             if args.is_empty() {
                 head
@@ -2436,6 +2475,14 @@ mod tests {
             name: name.into(),
             args: Box::new([]),
         }
+    }
+
+    #[test]
+    fn terminal_attribute_types_render_user_facing_name() {
+        assert_eq!(render_ty(&con("TuiAttr")), "Tui.Ui.Attribute");
+        assert_eq!(render_ty(&con("CliAttr")), "Cli.Ui.Attribute");
+        // A plain con with an empty module still renders bare.
+        assert_eq!(render_ty(&con("Int")), "Int");
     }
 
     #[test]

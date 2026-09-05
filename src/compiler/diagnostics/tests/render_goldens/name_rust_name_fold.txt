@@ -1,0 +1,6 @@
+-- TWO DEFINITIONS FOLD TO ONE GENERATED RUST NAME --------- test.ipe
+
+Two different values — `firstName` and `first_name` — end up with the same generated name `IpeHasFirstName`, so I can't emit them both.
+  = note: `firstName` and `first_name` are distinct Ipê values, but after name mangling both become the Rust name `IpeHasFirstName`, which can only be defined once. Rename one of the two so they fold to different Rust names.
+
+IPE-N0048 · run `ipe doc IPE-N0048`

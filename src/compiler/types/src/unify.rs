@@ -281,6 +281,45 @@ fn unify_step(
     }
 }
 
+/// Whether an empty-home `Con` may unify with a `Con` of the same `name`
+/// carrying the non-empty `other_home`.
+///
+/// The empty home is the builtin/kernel sentinel. A builtin legitimately appears
+/// with a non-empty home in exactly two shapes, both admitted here:
+///
+/// * an `Ipe.*`-**rooted** home — the stdlib namespace, which a user module can
+///   never occupy. A compiled-source stdlib module declares or re-exports the
+///   type (`Ipe.Task`'s `BackoffStrategy`, `Ipe.Error`'s `ErrorKind`) so an
+///   annotation there resolves to `[Ipe, …]` while a kernel scheme still mints
+///   the empty home. An `Ipe`-rooted home is therefore always the stdlib
+///   spelling of that builtin, never a user shadow.
+/// * a **reserved** builtin reached through a non-stdlib-rooted qualifier
+///   (`Http.HttpMethod` → `[Http]`). Reserved names can never be user-declared,
+///   so any non-empty home for one is a builtin qualifier, never a user shadow.
+///
+/// Everything else — a name with a *user* home (`type Order` in `Main` →
+/// `[Main]`) — is a genuinely distinct type and does NOT unify.
+fn empty_home_compat(
+    other_home: &[ipe_intern::Symbol],
+    name: ipe_intern::Symbol,
+    interner: &Interner,
+) -> bool {
+    let ipe_rooted = other_home
+        .first()
+        .and_then(|s| interner.resolve(*s))
+        .is_some_and(|root| root == IPE_STDLIB_ROOT);
+    ipe_rooted
+        || interner
+            .resolve(name)
+            .is_some_and(ipe_canon::is_user_type_declaration_forbidden)
+}
+
+/// The reserved root module segment of every compiled-source stdlib home
+/// (`Ipe.Error`, `Ipe.Task`, …). A user module can never occupy this namespace,
+/// so an `Ipe`-rooted home is always the stdlib spelling of a builtin, never a
+/// user shadow.
+const IPE_STDLIB_ROOT: &str = "Ipe";
+
 /// Unify two concrete structures that share representatives `ra` (found) / `rb`
 /// (expected). Child obligations are pushed onto `stack` (in reverse of source
 /// order, so LIFO replays them left-to-right) rather than unified in place, so
@@ -320,16 +359,20 @@ fn unify_flat(
                 args: as2,
             },
         ) => {
-            // An empty module path (`module = []`) is used both for
-            // kernel/builtin types and for user-defined type names that appear
-            // in a module without a corresponding import (the canonicaliser
-            // falls back to `unwrap_or_default()` → `[]` for unknown names).
-            // Two `Con` nodes unify when they have the same name and arity; a
-            // module conflict is only fatal when *both* sides carry a non-empty,
-            // differing path.  Whichever side carries the more specific
-            // (non-empty) path wins as the canonical representation — this
-            // matches the the compiler oracle's behaviour.
-            let modules_compat = m1 == m2 || m1.is_empty() || m2.is_empty();
+            // An empty module path (`module = []`) is the sentinel for a
+            // kernel/builtin type: every builtin `Con` carries it, in kernel
+            // schemes and in annotations alike. A user type always carries its
+            // real declaring home, so a home disagreement between an empty and a
+            // non-empty side is only compatible when the non-empty side is itself
+            // a builtin spelling — a reserved builtin reached through a stdlib
+            // qualifier (`Http.HttpMethod` → the empty-home kernel `Con`). A
+            // shadowable builtin name carrying a non-empty home is a *user* type
+            // of that name (`type Order` in `Main`), a genuinely distinct type
+            // from the empty-home builtin; unifying them would let a wrong program
+            // type-check and then lower to conflicting Rust representations.
+            let modules_compat = m1 == m2
+                || (m1.is_empty() && empty_home_compat(&m2, n2, interner))
+                || (m2.is_empty() && empty_home_compat(&m1, n1, interner));
             if !modules_compat || n1 != n2 || as1.len() != as2.len() {
                 return Err(mismatch(uf, budget, interner, span, ra, rb));
             }
@@ -1060,6 +1103,138 @@ mod tests {
         assert!(
             result.is_err(),
             "an incompatible leaf under a deep spine must be a typed error, not a crash"
+        );
+    }
+
+    // ── Nominal-Con empty-home compatibility tests ──────────────────────────
+
+    /// Build a nullary `Con` node with the given interned home path and name.
+    fn con_var(
+        uf: &mut UnionFind<Content>,
+        home: Vec<ipe_intern::Symbol>,
+        name: ipe_intern::Symbol,
+    ) -> VarId {
+        uf.fresh(Content::Structure(FlatType::Con {
+            module: home,
+            name,
+            args: Vec::new(),
+        }))
+        .expect("fresh Con var")
+    }
+
+    /// A user-shadowable builtin (`Order`) declared in a user module carries a
+    /// real home (`[Main]`). The builtin `Order` (from a kernel scheme such as
+    /// `compare`) carries the empty home. They are DISTINCT types and must NOT
+    /// unify — the empty-home wildcard is restricted to reserved builtins, so a
+    /// shadowable-name home disagreement is a mismatch (soundness).
+    #[test]
+    fn shadowable_builtin_user_home_vs_empty_kernel_home_mismatch() {
+        let mut uf = UnionFind::new();
+        let mut interner = Interner::new();
+        let order = interner.intern("Order").expect("intern Order");
+        let main = interner.intern("Main").expect("intern Main");
+
+        let user_order = con_var(&mut uf, vec![main], order);
+        let builtin_order = con_var(&mut uf, Vec::new(), order);
+
+        let mut budget = Budget::unbounded();
+        let result = unify(
+            &mut uf,
+            &mut budget,
+            &interner,
+            Span::DUMMY,
+            user_order,
+            builtin_order,
+        );
+        assert!(
+            result.is_err(),
+            "user `type Order` ([Main]) must not unify with the empty-home builtin `Order`"
+        );
+    }
+
+    /// A RESERVED builtin (`HttpMethod`, never user-declarable) reached through a
+    /// stdlib qualifier carries a non-empty home; the kernel spelling carries the
+    /// empty home. A non-empty home for a reserved name is always a builtin
+    /// qualifier, so the two must still unify (no regression on qualified
+    /// builtin annotations).
+    #[test]
+    fn reserved_builtin_qualified_home_vs_empty_kernel_home_unifies() {
+        let mut uf = UnionFind::new();
+        let mut interner = Interner::new();
+        let method = interner.intern("HttpMethod").expect("intern HttpMethod");
+        let http = interner.intern("Http").expect("intern Http");
+
+        let qualified = con_var(&mut uf, vec![http], method);
+        let kernel = con_var(&mut uf, Vec::new(), method);
+
+        let mut budget = Budget::unbounded();
+        unify(
+            &mut uf,
+            &mut budget,
+            &interner,
+            Span::DUMMY,
+            qualified,
+            kernel,
+        )
+        .expect("reserved builtin qualified home must unify with the empty-home kernel Con");
+    }
+
+    /// A shadowable builtin that a compiled-source `Ipe.*` stdlib module also
+    /// declares/re-exports (`ErrorKind` from `Ipe.Error`) resolves to the stdlib
+    /// home `[Ipe, Error]` in that module while a kernel scheme mints the empty
+    /// home. These are the SAME builtin and must unify — an `Ipe`-rooted home is
+    /// the stdlib spelling, never a user shadow.
+    #[test]
+    fn shadowable_builtin_stdlib_home_vs_empty_kernel_home_unifies() {
+        let mut uf = UnionFind::new();
+        let mut interner = Interner::new();
+        let kind = interner.intern("ErrorKind").expect("intern ErrorKind");
+        let ipe = interner.intern("Ipe").expect("intern Ipe");
+        let error = interner.intern("Error").expect("intern Error");
+
+        let stdlib = con_var(&mut uf, vec![ipe, error], kind);
+        let kernel = con_var(&mut uf, Vec::new(), kind);
+
+        let mut budget = Budget::unbounded();
+        unify(&mut uf, &mut budget, &interner, Span::DUMMY, stdlib, kernel)
+            .expect("stdlib-homed builtin must unify with its empty-home kernel Con");
+    }
+
+    /// Two empty-home builtin `Con`s of the same name always unify — the common
+    /// kernel-implicit annotation path (both sides empty).
+    #[test]
+    fn two_empty_home_builtins_unify() {
+        let mut uf = UnionFind::new();
+        let mut interner = Interner::new();
+        let order = interner.intern("Order").expect("intern Order");
+
+        let a = con_var(&mut uf, Vec::new(), order);
+        let b = con_var(&mut uf, Vec::new(), order);
+
+        let mut budget = Budget::unbounded();
+        unify(&mut uf, &mut budget, &interner, Span::DUMMY, a, b)
+            .expect("two empty-home builtin Cons of the same name must unify");
+    }
+
+    /// A NON-builtin name with an empty home on one side is a mismatch against a
+    /// user home: after fail-closed resolution an empty home can only be a
+    /// builtin, so a home disagreement for an ordinary user type is a genuine
+    /// clash rather than a wildcard match.
+    #[test]
+    fn non_builtin_name_empty_vs_user_home_mismatch() {
+        let mut uf = UnionFind::new();
+        let mut interner = Interner::new();
+        let widget = interner.intern("Widget").expect("intern Widget");
+        let main = interner.intern("Main").expect("intern Main");
+
+        let user = con_var(&mut uf, vec![main], widget);
+        let empty = con_var(&mut uf, Vec::new(), widget);
+
+        let mut budget = Budget::unbounded();
+        let result = unify(&mut uf, &mut budget, &interner, Span::DUMMY, user, empty);
+        assert!(
+            result.is_err(),
+            "a non-builtin name with an empty home must not wildcard-match a user home"
         );
     }
 }

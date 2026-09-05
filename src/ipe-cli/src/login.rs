@@ -70,17 +70,57 @@ pub fn run_login(rest: &[String]) -> Result<(), CliError> {
     }
 }
 
+/// A GitHub access token, parsed once at the trust boundary into a value whose
+/// bytes are drawn only from the GitHub token alphabet (`[A-Za-z0-9_]`).
+///
+/// This is `parse, don't validate` at the credential boundary: a token that
+/// reached this type cannot contain a quote, a newline, or any control byte, so
+/// splicing it into curl's `--config` mini-language (`header = "…{token}"`)
+/// cannot inject a new curl directive. The unparsed `String` never travels
+/// downstream — only a `PublishToken` does.
+#[derive(Clone)]
+pub struct PublishToken(String);
+
+impl PublishToken {
+    /// Parse a raw token, accepting only the GitHub token alphabet.
+    ///
+    /// Returns `None` when the trimmed token is empty or holds any byte outside
+    /// `[A-Za-z0-9_]` — quotes, newlines, spaces, and control bytes are all
+    /// rejected, closing the curl-config injection path.
+    #[must_use]
+    pub fn parse(raw: &str) -> Option<Self> {
+        let trimmed = raw.trim();
+        if trimmed.is_empty() {
+            return None;
+        }
+        if trimmed
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_')
+        {
+            Some(Self(trimmed.to_owned()))
+        } else {
+            None
+        }
+    }
+
+    /// The token bytes, safe to splice into the curl config header line.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
 /// The stored publish token, if the user has run `ipe login`. `None` when no
-/// token file exists or it cannot be read. Consumed by the publish headless path.
+/// token file exists, it cannot be read, or its contents are not a well-formed
+/// token. Consumed by the publish headless path.
 #[must_use]
-pub fn stored_token() -> Option<String> {
+pub fn stored_token() -> Option<PublishToken> {
     let raw = crate::io_bounded::read_to_string_capped(
         &token_path()?,
         crate::io_bounded::SMALL_FILE_READ_CAP,
     )
     .ok()?;
-    let token = raw.trim().to_owned();
-    if token.is_empty() { None } else { Some(token) }
+    PublishToken::parse(&raw)
 }
 
 /// Run the full device flow: request a code, prompt the user, poll for the token,
@@ -92,10 +132,11 @@ fn run_device_flow() -> Result<(), CliError> {
         "{}",
         crate::style::frame(&crate::style::gutter(&format!(
             "To authorize ipe, visit:\n  {}\nand enter the code:  {}",
-            device.verification_uri, device.user_code
+            device.verification_uri.as_str(),
+            device.user_code
         )))
     );
-    if open_in_browser(&device.verification_uri) {
+    if open_in_browser(device.verification_uri.as_str()) {
         eprintln!("{}", crate::style::gutter("(opened your browser)"));
     }
     eprintln!("{}", crate::style::gutter("Waiting for authorization …"));
@@ -112,11 +153,50 @@ fn run_device_flow() -> Result<(), CliError> {
     Ok(())
 }
 
+/// The verification URL GitHub tells the user to open, parsed once into a value
+/// that is guaranteed `https` on the expected GitHub host.
+///
+/// `parse, don't validate` at the network boundary: a compromised or spoofed
+/// device-code response cannot smuggle an arbitrary scheme (`file:`, `javascript:`,
+/// a custom app handler) or an off-host URL into `xdg-open`/`open`, because only
+/// a `VerificationUri` reaches the opener and it can only hold an accepted URL.
+struct VerificationUri(String);
+
+impl VerificationUri {
+    /// The single accepted host for the device-flow verification URL.
+    const EXPECTED_HOST: &'static str = "github.com";
+    const HTTPS_PREFIX: &'static str = "https://";
+
+    /// Parse a raw verification URL, accepting only `https://github.com[/…]`.
+    ///
+    /// Fails closed: any non-`https` scheme, any other host, or an embedded
+    /// userinfo/`@` that could mask the real host is rejected.
+    fn parse(raw: &str) -> Option<Self> {
+        let after_scheme = raw.strip_prefix(Self::HTTPS_PREFIX)?;
+        // The authority runs up to the first `/`, `?`, or `#`.
+        let authority = after_scheme
+            .split(['/', '?', '#'])
+            .next()
+            .unwrap_or(after_scheme);
+        // Reject userinfo (`user@host`) so `github.com` in userinfo cannot mask
+        // an attacker host, and reject a port or any non-host authority.
+        if authority == Self::EXPECTED_HOST {
+            Some(Self(raw.to_owned()))
+        } else {
+            None
+        }
+    }
+
+    fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
 /// The device-code grant's first response.
 struct DeviceGrant {
     device_code: String,
     user_code: String,
-    verification_uri: String,
+    verification_uri: VerificationUri,
     interval: u64,
     expires_in: u64,
 }
@@ -129,7 +209,12 @@ fn request_device_code() -> Result<DeviceGrant, CliError> {
     )?;
     let device_code = str_field(&json, "device_code")?;
     let user_code = str_field(&json, "user_code")?;
-    let verification_uri = str_field(&json, "verification_uri")?;
+    let verification_uri_raw = str_field(&json, "verification_uri")?;
+    let verification_uri = VerificationUri::parse(&verification_uri_raw).ok_or_else(|| {
+        login_error(
+            "GitHub returned a verification URL that is not https on github.com — refusing to open it",
+        )
+    })?;
     // GitHub returns these as JSON numbers; default to safe values if absent.
     let interval = json
         .get("interval")
@@ -149,8 +234,9 @@ fn request_device_code() -> Result<DeviceGrant, CliError> {
 }
 
 /// Poll `login/oauth/access_token` until the user authorizes, the code expires,
-/// or GitHub reports a terminal error.
-fn poll_for_token(device: &DeviceGrant) -> Result<String, CliError> {
+/// or GitHub reports a terminal error. The returned token is parsed into a
+/// [`PublishToken`] at this boundary, so a malformed token never travels on.
+fn poll_for_token(device: &DeviceGrant) -> Result<PublishToken, CliError> {
     let deadline = Instant::now() + Duration::from_secs(device.expires_in);
     let mut interval = device.interval.max(1);
     loop {
@@ -169,7 +255,8 @@ fn poll_for_token(device: &DeviceGrant) -> Result<String, CliError> {
             ],
         )?;
         if let Some(token) = json.get("access_token").and_then(serde_json::Value::as_str) {
-            return Ok(token.to_owned());
+            return PublishToken::parse(token)
+                .ok_or_else(|| login_error("GitHub returned a token with unexpected characters"));
         }
         match json.get("error").and_then(serde_json::Value::as_str) {
             // Not authorized yet — keep waiting at the current cadence.
@@ -287,7 +374,7 @@ fn existing_token_path() -> Option<PathBuf> {
 /// On Unix the file is created with mode 0600 atomically before any bytes are
 /// written, so there is no window where the token is readable by other users.
 /// On non-Unix the containing profile directory is the protection layer.
-fn store_token(token: &str) -> Result<PathBuf, CliError> {
+fn store_token(token: &PublishToken) -> Result<PathBuf, CliError> {
     let path = token_path().ok_or_else(|| {
         login_error("could not determine a config directory (set HOME or XDG_CONFIG_HOME)")
     })?;
@@ -295,7 +382,7 @@ fn store_token(token: &str) -> Result<PathBuf, CliError> {
         std::fs::create_dir_all(parent)
             .map_err(|e| login_error(&format!("could not create {}: {e}", parent.display())))?;
     }
-    write_token_atomic(&path, token)?;
+    write_token_atomic(&path, token.as_str())?;
     Ok(path)
 }
 
@@ -422,6 +509,69 @@ mod tests {
     fn a_missing_field_is_a_typed_error() {
         let json: serde_json::Value = serde_json::from_str(r#"{"user_code":"X"}"#).unwrap();
         assert!(str_field(&json, "device_code").is_err());
+    }
+
+    #[test]
+    fn publish_token_accepts_github_alphabet() {
+        let parsed = PublishToken::parse("ghp_ABCdef0123456789_XYZ").expect("valid token");
+        assert_eq!(parsed.as_str(), "ghp_ABCdef0123456789_XYZ");
+    }
+
+    #[test]
+    fn publish_token_trims_surrounding_whitespace() {
+        let parsed = PublishToken::parse("  ghp_token123  \n").expect("valid after trim");
+        assert_eq!(parsed.as_str(), "ghp_token123");
+    }
+
+    #[test]
+    fn publish_token_rejects_a_quote() {
+        // A quote would close the curl `header = "…"` string and let the rest of
+        // the token inject further curl directives.
+        assert!(PublishToken::parse(r#"ghp_"url = file:///etc/passwd"#).is_none());
+    }
+
+    #[test]
+    fn publish_token_rejects_an_embedded_newline() {
+        // A newline would start a fresh curl config line (`upload-file = …`).
+        assert!(PublishToken::parse("ghp_token\nupload-file = /etc/passwd").is_none());
+    }
+
+    #[test]
+    fn publish_token_rejects_empty_and_whitespace_only() {
+        assert!(PublishToken::parse("").is_none());
+        assert!(PublishToken::parse("   \n\t").is_none());
+    }
+
+    #[test]
+    fn verification_uri_accepts_https_github() {
+        let uri = VerificationUri::parse("https://github.com/login/device").expect("accepted");
+        assert_eq!(uri.as_str(), "https://github.com/login/device");
+    }
+
+    #[test]
+    fn verification_uri_rejects_non_https_scheme() {
+        assert!(VerificationUri::parse("http://github.com/login/device").is_none());
+        assert!(VerificationUri::parse("file:///etc/passwd").is_none());
+        assert!(VerificationUri::parse("javascript:alert(1)").is_none());
+    }
+
+    #[test]
+    fn verification_uri_rejects_other_host() {
+        assert!(VerificationUri::parse("https://evil.example.com/login/device").is_none());
+        // A lookalike host and a subdomain are not github.com.
+        assert!(VerificationUri::parse("https://github.com.evil.com/x").is_none());
+        assert!(VerificationUri::parse("https://notgithub.com/x").is_none());
+    }
+
+    #[test]
+    fn verification_uri_rejects_userinfo_masking_the_host() {
+        // `github.com` in the userinfo must not let an attacker host through.
+        assert!(VerificationUri::parse("https://github.com@evil.example.com/x").is_none());
+    }
+
+    #[test]
+    fn verification_uri_rejects_a_port() {
+        assert!(VerificationUri::parse("https://github.com:8443/login/device").is_none());
     }
 
     #[test]

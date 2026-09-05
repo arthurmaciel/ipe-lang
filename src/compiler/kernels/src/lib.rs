@@ -377,6 +377,20 @@ pub enum BuiltinTag {
     /// only terminal-honorable attributes inhabit it, so a DOM attribute is
     /// unnameable in a `Screen` view (a type error, never a silent drop).
     TuiAttr,
+    /// `Lines` — the Cli-only line-oriented view type constructor `Lines msg`
+    /// (exposed name `Lines`). Distinct from both `Element msg` and `Screen msg`;
+    /// produced exclusively by `Ipe.Tea.Cli.Ui.*` builders. Line-scoped: it has
+    /// no 2D geometry, so a cell-grid or DOM builder is unnameable in it.
+    CliLines,
+    /// `CliAttr` — the line-native attribute type constructor
+    /// `Ipe.Tea.Cli.Ui.Attribute msg`. Only line-scoped styles inhabit it
+    /// (bold/underline/dim/reverse/colour), so a 2D cell attribute or a DOM
+    /// attribute is unnameable in a `Lines` view (a type error, never a drop).
+    CliAttr,
+    /// `Color` (spelled `Terminal.Color`) — the closed terminal colour palette:
+    /// sixteen named ANSI colours plus `default`, plus a truecolour path. The
+    /// argument type of the Tui and Cli `color` / `bg` builders.
+    TermColor,
     /// `CustomElement` — the JS-widget boundary constructor `CustomElement down up`,
     /// applied to its sealed down-state and up-event types. Empty-module
     /// (unqualified); an opaque handle produced only by the reserved `CustomElement.fromFile`
@@ -1797,10 +1811,74 @@ pub enum StdlibKernel {
     TuiUiBold,
     /// `TuiUi.underline : Attribute msg`
     TuiUiUnderline,
+    /// `TuiUi.dim : Attribute msg` — faint text.
+    TuiUiDim,
+    /// `TuiUi.reverse : Attribute msg` — reverse video.
+    TuiUiReverse,
     /// `TuiUi.color : Color -> Attribute msg` — foreground text colour.
     TuiUiColor,
     /// `TuiUi.bg : Color -> Attribute msg` — background colour.
     TuiUiBg,
+    // ── Ipe.Tea.Cli.Ui line-oriented view + attribute builders ─────────────────
+    /// `CliUi.none : Lines msg` — the empty line view.
+    CliUiNone,
+    /// `CliUi.text : String -> Lines msg` — one unstyled line.
+    CliUiText,
+    /// `CliUi.line : List (Attribute msg) -> String -> Lines msg` — one styled line.
+    CliUiLine,
+    /// `CliUi.lines : List (Lines msg) -> Lines msg` — stack lines vertically.
+    CliUiLines,
+    /// `CliUi.bold : Attribute msg`
+    CliUiBold,
+    /// `CliUi.underline : Attribute msg`
+    CliUiUnderline,
+    /// `CliUi.dim : Attribute msg` — faint text.
+    CliUiDim,
+    /// `CliUi.reverse : Attribute msg` — reverse video.
+    CliUiReverse,
+    /// `CliUi.color : Color -> Attribute msg` — foreground text colour.
+    CliUiColor,
+    /// `CliUi.bg : Color -> Attribute msg` — background colour.
+    CliUiBg,
+    // ── Ipe.Tea.Terminal.Color palette constructors (nullary closed sum) ───────
+    /// `TermColor.black : Color`
+    TermColorBlack,
+    /// `TermColor.red : Color`
+    TermColorRed,
+    /// `TermColor.green : Color`
+    TermColorGreen,
+    /// `TermColor.yellow : Color`
+    TermColorYellow,
+    /// `TermColor.blue : Color`
+    TermColorBlue,
+    /// `TermColor.magenta : Color`
+    TermColorMagenta,
+    /// `TermColor.cyan : Color`
+    TermColorCyan,
+    /// `TermColor.white : Color`
+    TermColorWhite,
+    /// `TermColor.brightBlack : Color`
+    TermColorBrightBlack,
+    /// `TermColor.brightRed : Color`
+    TermColorBrightRed,
+    /// `TermColor.brightGreen : Color`
+    TermColorBrightGreen,
+    /// `TermColor.brightYellow : Color`
+    TermColorBrightYellow,
+    /// `TermColor.brightBlue : Color`
+    TermColorBrightBlue,
+    /// `TermColor.brightMagenta : Color`
+    TermColorBrightMagenta,
+    /// `TermColor.brightCyan : Color`
+    TermColorBrightCyan,
+    /// `TermColor.brightWhite : Color`
+    TermColorBrightWhite,
+    /// `TermColor.default : Color` — the terminal's own default colour.
+    TermColorDefault,
+    /// `TermColor.rgb : Int -> Int -> Int -> Color` — a 24-bit truecolour.
+    TermColorRgb,
+    /// `TermColor.rgba : Int -> Int -> Int -> Float -> Color` — truecolour + alpha.
+    TermColorRgba,
     /// `Ui.widget : CustomElement down up -> down -> (up -> msg) -> Element msg` —
     /// the one view node that places a typed JS custom-element widget. The
     /// `CustomElement` handle is opaque; it lowers to the shipped widget handle
@@ -3811,8 +3889,85 @@ impl StdlibKernel {
             Self::TuiUiCenter => d("TuiUi", "center", 0, Ui, "tui_center_"),
             Self::TuiUiBold => d("TuiUi", "bold", 0, Ui, "tui_bold_"),
             Self::TuiUiUnderline => d("TuiUi", "underline", 0, Ui, "tui_underline_"),
+            Self::TuiUiDim => d("TuiUi", "dim", 0, Ui, "tui_dim_"),
+            Self::TuiUiReverse => d("TuiUi", "reverse", 0, Ui, "tui_reverse_"),
             Self::TuiUiColor => d("TuiUi", "color", 1, Ui, "tui_color_"),
             Self::TuiUiBg => d("TuiUi", "bg", 1, Ui, "tui_bg_"),
+            // ── Ipe.Tea.Cli.Ui line-oriented view + attribute builders ────
+            Self::CliUiNone => d("CliUi", "none", 0, Ui, "cli_none_"),
+            Self::CliUiText => d("CliUi", "text", 1, Ui, "cli_text_"),
+            Self::CliUiLine => d("CliUi", "line", 2, Ui, "cli_line_"),
+            Self::CliUiLines => d("CliUi", "lines", 1, Ui, "cli_lines_"),
+            Self::CliUiBold => d("CliUi", "bold", 0, Ui, "cli_bold_"),
+            Self::CliUiUnderline => d("CliUi", "underline", 0, Ui, "cli_underline_"),
+            Self::CliUiDim => d("CliUi", "dim", 0, Ui, "cli_dim_"),
+            Self::CliUiReverse => d("CliUi", "reverse", 0, Ui, "cli_reverse_"),
+            Self::CliUiColor => d("CliUi", "color", 1, Ui, "cli_color_"),
+            Self::CliUiBg => d("CliUi", "bg", 1, Ui, "cli_bg_"),
+            // ── Ipe.Tea.Terminal.Color palette constructors ──────────────
+            Self::TermColorBlack => d("TermColor", "black", 0, Pure, "term_color_black_"),
+            Self::TermColorRed => d("TermColor", "red", 0, Pure, "term_color_red_"),
+            Self::TermColorGreen => d("TermColor", "green", 0, Pure, "term_color_green_"),
+            Self::TermColorYellow => d("TermColor", "yellow", 0, Pure, "term_color_yellow_"),
+            Self::TermColorBlue => d("TermColor", "blue", 0, Pure, "term_color_blue_"),
+            Self::TermColorMagenta => d("TermColor", "magenta", 0, Pure, "term_color_magenta_"),
+            Self::TermColorCyan => d("TermColor", "cyan", 0, Pure, "term_color_cyan_"),
+            Self::TermColorWhite => d("TermColor", "white", 0, Pure, "term_color_white_"),
+            Self::TermColorBrightBlack => d(
+                "TermColor",
+                "brightBlack",
+                0,
+                Pure,
+                "term_color_bright_black_",
+            ),
+            Self::TermColorBrightRed => {
+                d("TermColor", "brightRed", 0, Pure, "term_color_bright_red_")
+            }
+            Self::TermColorBrightGreen => d(
+                "TermColor",
+                "brightGreen",
+                0,
+                Pure,
+                "term_color_bright_green_",
+            ),
+            Self::TermColorBrightYellow => d(
+                "TermColor",
+                "brightYellow",
+                0,
+                Pure,
+                "term_color_bright_yellow_",
+            ),
+            Self::TermColorBrightBlue => d(
+                "TermColor",
+                "brightBlue",
+                0,
+                Pure,
+                "term_color_bright_blue_",
+            ),
+            Self::TermColorBrightMagenta => d(
+                "TermColor",
+                "brightMagenta",
+                0,
+                Pure,
+                "term_color_bright_magenta_",
+            ),
+            Self::TermColorBrightCyan => d(
+                "TermColor",
+                "brightCyan",
+                0,
+                Pure,
+                "term_color_bright_cyan_",
+            ),
+            Self::TermColorBrightWhite => d(
+                "TermColor",
+                "brightWhite",
+                0,
+                Pure,
+                "term_color_bright_white_",
+            ),
+            Self::TermColorDefault => d("TermColor", "default", 0, Pure, "term_color_default_"),
+            Self::TermColorRgb => d("TermColor", "rgb", 3, Pure, "term_color_rgb_"),
+            Self::TermColorRgba => d("TermColor", "rgba", 4, Pure, "term_color_rgba_"),
             Self::UiWidget => d("Ui", "widget", 3, Ui, "ui_widget_"),
             Self::UiNode => d("Ui", "node", 3, Ui, "ui_node_"),
             Self::UiTaggedNode => d("Ui", "taggedNode", 4, Ui, "ui_tagged_node_"),
@@ -5315,8 +5470,41 @@ impl StdlibKernel {
         Self::TuiUiCenter,
         Self::TuiUiBold,
         Self::TuiUiUnderline,
+        Self::TuiUiDim,
+        Self::TuiUiReverse,
         Self::TuiUiColor,
         Self::TuiUiBg,
+        // Ipe.Tea.Cli.Ui line-oriented view + attribute builders
+        Self::CliUiNone,
+        Self::CliUiText,
+        Self::CliUiLine,
+        Self::CliUiLines,
+        Self::CliUiBold,
+        Self::CliUiUnderline,
+        Self::CliUiDim,
+        Self::CliUiReverse,
+        Self::CliUiColor,
+        Self::CliUiBg,
+        // Ipe.Tea.Terminal.Color palette constructors
+        Self::TermColorBlack,
+        Self::TermColorRed,
+        Self::TermColorGreen,
+        Self::TermColorYellow,
+        Self::TermColorBlue,
+        Self::TermColorMagenta,
+        Self::TermColorCyan,
+        Self::TermColorWhite,
+        Self::TermColorBrightBlack,
+        Self::TermColorBrightRed,
+        Self::TermColorBrightGreen,
+        Self::TermColorBrightYellow,
+        Self::TermColorBrightBlue,
+        Self::TermColorBrightMagenta,
+        Self::TermColorBrightCyan,
+        Self::TermColorBrightWhite,
+        Self::TermColorDefault,
+        Self::TermColorRgb,
+        Self::TermColorRgba,
         Self::UiWidget,
         Self::UiNode,
         Self::UiTaggedNode,
@@ -5813,100 +6001,19 @@ impl StdlibKernel {
     // These are the single authoritative classification lists.  `ipe_ir`
     // re-exports them through the `type KernelFn = StdlibKernel` alias.
 
-    /// `true` when this variant belongs to the `Db` / `Db.Decode` subsystem.
+    /// `true` when this variant's kernel `class` is [`KernelClass::Db`] — the
+    /// `Db` / `Db.Decode` / `Db.Sql` subsystem.
+    ///
+    /// Derived from the [`Self::decl`] class column (const, so this predicate
+    /// stays const) rather than hand-mirroring the variant set. This predicate
+    /// is the SOLE selector for the `db` runtime module/feature (`ipe_lower`
+    /// sets `uses_db` from it), so a Db-class kernel a hand list forgot would
+    /// emit an `ipe`-accepted crate that fails at `cargo` time (E0425/E0433).
+    /// Reading the class makes that drift unrepresentable, not merely
+    /// test-detectable.
     #[must_use]
     pub const fn is_db(self) -> bool {
-        matches!(
-            self,
-            Self::DbConnect
-                | Self::DbOpen
-                | Self::DbClose
-                | Self::DsnParse
-                | Self::DsnBuild
-                | Self::DsnDriverTag
-                | Self::DsnHost
-                | Self::DsnPort
-                | Self::DsnDatabase
-                | Self::DsnUser
-                | Self::DsnTlsTag
-                | Self::DsnRedacted
-                | Self::DbConnOpen
-                | Self::DbConnClose
-                | Self::DbConnUnsafeExecRawOn
-                | Self::DbConnFindWhere
-                | Self::DbConnQueryDecode
-                | Self::DbConnGetById
-                | Self::DbExecRaw
-                | Self::DbExec
-                | Self::DbQuery
-                | Self::DbQueryDecode
-                | Self::DbGetString
-                | Self::DbGetInt
-                | Self::DbGetBool
-                | Self::DbGetField
-                | Self::DbInsertRow
-                | Self::DbGetById
-                | Self::DbUpdateById
-                | Self::DbDeleteById
-                | Self::DbFindOneByField
-                | Self::DbFindManyByField
-                | Self::DbFindByConditions
-                | Self::DbInsertFields
-                | Self::DbUpdateFields
-                | Self::DbInsertFieldsReturning
-                | Self::DbWithTransaction
-                | Self::DbMigrate
-                | Self::DbDecString
-                | Self::DbDecInt
-                | Self::DbDecFloat
-                | Self::DbDecBool
-                | Self::DbDecNullable
-                | Self::DbDecMap
-                | Self::DbDecAndThen
-                | Self::DbDecSucceed
-                | Self::DbDecFail
-                | Self::DbDecMap2
-                | Self::DbDecMap3
-                | Self::DbDecMap4
-                | Self::DbDecRequired
-                | Self::DbDecOptional
-                | Self::DbDecMoney
-                | Self::DbDecDecimal
-                | Self::DbDecBytes
-                // ── Ipe.Db.Sql — classified `Db` like
-                // `Db.Decode.*` above: no live connection is touched by the
-                // combinators, but the runtime types they build on
-                // (`SqlFragment` / `SqlParam`) live in this crate's
-                // `feature = "db"`-gated `db.rs` module, so a program using
-                // ONLY `Sql.*` still needs the `db` Cargo feature turned on.
-                | Self::SqlColumn
-                | Self::SqlUnsafeFragment
-                | Self::SqlParam
-                | Self::SqlInt
-                | Self::SqlString
-                | Self::SqlFloat
-                | Self::SqlBool
-                | Self::SqlEq
-                | Self::SqlNe
-                | Self::SqlGt
-                | Self::SqlLt
-                | Self::SqlGte
-                | Self::SqlLte
-                | Self::SqlAnd
-                | Self::SqlOr
-                | Self::SqlNot
-                | Self::SqlIsNull
-                | Self::SqlIsNotNull
-                | Self::SqlInList
-                | Self::SqlLike
-                | Self::DbFindWhere
-                | Self::DbFindJoin
-                | Self::DbFindProjection
-                | Self::DbFindJoinOrdered
-                | Self::DbFindProjectionOrdered
-                | Self::DbDeleteWhere
-                | Self::DbUpdateWhere
-        )
+        matches!(self.decl().class, KernelClass::Db)
     }
 
     /// The whole kernel row as one [`KernelDef`] descriptor — the authoritative
@@ -7724,7 +7831,35 @@ impl StdlibKernel {
         const LIST_LIST_CHAR_TO_CELLS_A: TyShape = TyShape::Fun(&LIST_LIST_CHAR, &CELLS_A);
         // Cell-native attribute builders.
         const INT_TO_TUI_ATTR_A: TyShape = TyShape::Fun(&INT, &TUI_ATTR_A);
-        const COLOR_TO_TUI_ATTR_A: TyShape = TyShape::Fun(&COLOR, &TUI_ATTR_A);
+        // The first-class terminal palette type. Both Tui and Cli `color`/`bg`
+        // take it, so a colour is one type everywhere in a terminal view.
+        const TERM_COLOR: TyShape = TyShape::Con(BuiltinTag::TermColor, &[]);
+        const COLOR_TO_TUI_ATTR_A: TyShape = TyShape::Fun(&TERM_COLOR, &TUI_ATTR_A);
+        // `Lines msg` (var(0) = msg) and the Cli line-native attribute type and
+        // list slots — DISTINCT from both DOM `UI_ATTR_A` and cell `TUI_ATTR_A`.
+        const LINES_A: TyShape = TyShape::Con(BuiltinTag::CliLines, &[A]);
+        const LIST_LINES_A: TyShape = TyShape::Con(BuiltinTag::List, &[LINES_A]);
+        const CLI_ATTR_A: TyShape = TyShape::Con(BuiltinTag::CliAttr, &[A]);
+        const LIST_CLI_ATTR_A: TyShape = TyShape::Con(BuiltinTag::List, &[CLI_ATTR_A]);
+        // `String -> Lines msg` (text)
+        const STRING_TO_LINES_A: TyShape = TyShape::Fun(&STRING, &LINES_A);
+        // `List (Attribute msg) -> String -> Lines msg` (line)
+        const STRING_TO_LINES_A_INNER: TyShape = TyShape::Fun(&STRING, &LINES_A);
+        const CLI_LINE: TyShape = TyShape::Fun(&LIST_CLI_ATTR_A, &STRING_TO_LINES_A_INNER);
+        // `List (Lines msg) -> Lines msg` (lines)
+        const LIST_LINES_A_TO_LINES_A: TyShape = TyShape::Fun(&LIST_LINES_A, &LINES_A);
+        // Line-native colour attribute builders.
+        const COLOR_TO_CLI_ATTR_A: TyShape = TyShape::Fun(&TERM_COLOR, &CLI_ATTR_A);
+        // Terminal palette constructors.
+        const INT_TO_INT_TO_INT_TO_TERM_COLOR: TyShape =
+            TyShape::Fun(&INT, &TyShape::Fun(&INT, &TyShape::Fun(&INT, &TERM_COLOR)));
+        const INT_TO_INT_TO_INT_TO_FLOAT_TO_TERM_COLOR: TyShape = TyShape::Fun(
+            &INT,
+            &TyShape::Fun(
+                &INT,
+                &TyShape::Fun(&INT, &TyShape::Fun(&FLOAT, &TERM_COLOR)),
+            ),
+        );
 
         // ── Ipe.Ui element / layout arrows. ──
         // `layout : List (Attribute msg) -> Element msg -> Html msg`.
@@ -9210,8 +9345,39 @@ impl StdlibKernel {
             | Self::TuiUiAlignRight
             | Self::TuiUiCenter
             | Self::TuiUiBold
-            | Self::TuiUiUnderline => Some(&TUI_ATTR_A),
+            | Self::TuiUiUnderline
+            | Self::TuiUiDim
+            | Self::TuiUiReverse => Some(&TUI_ATTR_A),
             Self::TuiUiColor | Self::TuiUiBg => Some(&COLOR_TO_TUI_ATTR_A),
+            // ── Ipe.Tea.Cli.Ui line-oriented builders. ──
+            Self::CliUiNone => Some(&LINES_A),
+            Self::CliUiText => Some(&STRING_TO_LINES_A),
+            Self::CliUiLine => Some(&CLI_LINE),
+            Self::CliUiLines => Some(&LIST_LINES_A_TO_LINES_A),
+            Self::CliUiBold | Self::CliUiUnderline | Self::CliUiDim | Self::CliUiReverse => {
+                Some(&CLI_ATTR_A)
+            }
+            Self::CliUiColor | Self::CliUiBg => Some(&COLOR_TO_CLI_ATTR_A),
+            // ── Ipe.Tea.Terminal.Color palette constructors. ──
+            Self::TermColorBlack
+            | Self::TermColorRed
+            | Self::TermColorGreen
+            | Self::TermColorYellow
+            | Self::TermColorBlue
+            | Self::TermColorMagenta
+            | Self::TermColorCyan
+            | Self::TermColorWhite
+            | Self::TermColorBrightBlack
+            | Self::TermColorBrightRed
+            | Self::TermColorBrightGreen
+            | Self::TermColorBrightYellow
+            | Self::TermColorBrightBlue
+            | Self::TermColorBrightMagenta
+            | Self::TermColorBrightCyan
+            | Self::TermColorBrightWhite
+            | Self::TermColorDefault => Some(&TERM_COLOR),
+            Self::TermColorRgb => Some(&INT_TO_INT_TO_INT_TO_TERM_COLOR),
+            Self::TermColorRgba => Some(&INT_TO_INT_TO_INT_TO_FLOAT_TO_TERM_COLOR),
             Self::UiWidget => Some(&UI_WIDGET),
             Self::UiNode => Some(&UI_NODE),
             Self::UiTaggedNode => Some(&UI_TAGGED_NODE),
@@ -9631,10 +9797,12 @@ impl StdlibKernel {
     /// [`Capability::Network`]; file / database / config-and-`.env`-file reads →
     /// [`Capability::Filesystem`]; environment-variable and argv reads →
     /// [`Capability::Env`]; wall-clock / sleep / timer → [`Capability::Clock`];
-    /// RNG / random tokens / UUIDs → [`Capability::Random`]. `Env.public` reads a
-    /// build-time-embedded allowlisted constant, not the live process
-    /// environment, so it is pure. `Trace.*` write only to an observability sink,
-    /// and `Io.*` only to the console, so neither is a sandboxed capability.
+    /// RNG / random tokens / UUIDs → [`Capability::Random`]. `Env.public` reads
+    /// the live process environment on native (a per-call `std::env::var`), so it
+    /// discloses [`Capability::Env`] like `System.getenv`; only its wasm32
+    /// emission is a build-time constant, and over-reporting there is the
+    /// fail-closed direction. `Trace.*` write only to an observability sink, and
+    /// `Io.*` only to the console, so neither is a sandboxed capability.
     ///
     /// The match is exhaustive with no `_` arm: a newly-added kernel cannot
     /// compile until it is classified here, so a program's inferred capability
@@ -9806,7 +9974,15 @@ impl StdlibKernel {
             | Self::SystemGetenvInt
             | Self::SystemGetenvBool
             | Self::SystemSetenv
-            | Self::SystemUnsetenv => Some(Capability::Env),
+            | Self::SystemUnsetenv
+            // The native emission of `Env.public` is a per-call `std::env::var`
+            // read of the live process environment, so it discloses the same env
+            // axis as `System.getenv`. (Only the wasm32 emission is a
+            // build-time-embedded constant.) Reporting `Env` on both targets is
+            // the fail-closed direction: it over-reports on wasm32 at no cost,
+            // and it re-injects the allowlisted keys into the scrubbed jail
+            // environment so `Env.public` does not silently return `Nothing`.
+            | Self::EnvPublic => Some(Capability::Env),
             Self::ProcessRun | Self::ProcessRunWith | Self::ProcessRunInPty => {
                 Some(Capability::Subprocess)
             }
@@ -10317,8 +10493,39 @@ impl StdlibKernel {
             | Self::TuiUiCenter
             | Self::TuiUiBold
             | Self::TuiUiUnderline
+            | Self::TuiUiDim
+            | Self::TuiUiReverse
             | Self::TuiUiColor
             | Self::TuiUiBg
+            | Self::CliUiNone
+            | Self::CliUiText
+            | Self::CliUiLine
+            | Self::CliUiLines
+            | Self::CliUiBold
+            | Self::CliUiUnderline
+            | Self::CliUiDim
+            | Self::CliUiReverse
+            | Self::CliUiColor
+            | Self::CliUiBg
+            | Self::TermColorBlack
+            | Self::TermColorRed
+            | Self::TermColorGreen
+            | Self::TermColorYellow
+            | Self::TermColorBlue
+            | Self::TermColorMagenta
+            | Self::TermColorCyan
+            | Self::TermColorWhite
+            | Self::TermColorBrightBlack
+            | Self::TermColorBrightRed
+            | Self::TermColorBrightGreen
+            | Self::TermColorBrightYellow
+            | Self::TermColorBrightBlue
+            | Self::TermColorBrightMagenta
+            | Self::TermColorBrightCyan
+            | Self::TermColorBrightWhite
+            | Self::TermColorDefault
+            | Self::TermColorRgb
+            | Self::TermColorRgba
             | Self::UiNode
             | Self::UiTaggedNode
             | Self::UiButton
@@ -10499,7 +10706,6 @@ impl StdlibKernel {
             | Self::AuthRevocationRevokeSession
             | Self::AuthRevocationRestoreUser
             | Self::AuthRevocationIsRevoked
-            | Self::EnvPublic
             | Self::RegionMainContent
             | Self::RegionNavigation
             | Self::RegionFooter
@@ -11782,24 +11988,28 @@ impl StdlibKernel {
     /// verified against the runtime source.
     ///
     /// The whitelist is keyed on the kernel's canonical qualifier for the
-    /// families that are pure in whole, with per-kernel carve-outs for the
-    /// mixed ones (`Time.sleep`, `System.loadEnv`, and the reactor-driven
-    /// `Task` combinators are reactor-requiring; the rest of those families are
-    /// not).
+    /// families that are pure in WHOLE. The mixed families (`Time`, `System`)
+    /// carry both pure and reactor-driven members, so admitting them by
+    /// qualifier would let any future reactor-driven member added under that
+    /// qualifier default to pure — a silent hang. Those two families are held
+    /// OFF the qualifier whitelist; their proven-pure members are admitted one
+    /// by one by NAME ([`Self::is_reactor_free_time_or_system`]), so a new
+    /// member of either defaults to reactor-requiring until it is audited and
+    /// listed. `Task` is likewise mixed and never gets a qualifier entry: its
+    /// reactor members are named below and its pure `BackoffStrategy`
+    /// constructors are named here.
     ///
     /// Not `const`: the whole-family arms compare the kernel's canonical
     /// qualifier (`&str`), which stable Rust cannot match in a `const fn`.
     #[must_use]
     pub fn requires_async_runtime(self) -> bool {
-        // The reactor-driven members of otherwise-pure families. `Task.run` /
-        // `Task.perform` block on an inner task whose purity is not knowable
-        // here; `Task.parallel` spawns; `Task.retryWith` sleeps; `Task.attempt`
-        // bridges into the TEA command loop. `Time.sleep` / `Time.every` and
-        // `System.loadEnv` (a `spawn_blocking` offload) likewise touch the
-        // reactor. All are fail-closed to reactor-requiring by NAME so a future
-        // rename cannot silently demote them.
-        // `BackoffStrategy` constructors are pure zero-arity values; they carry no
-        // future and never touch the reactor.
+        // `BackoffStrategy` constructors are pure zero-arity values under the
+        // mixed `Task` qualifier; they carry no future and never touch the
+        // reactor, so they are admitted by name. Every other `Task` member —
+        // `Task.run` / `Task.perform` block on an inner task of unknown purity,
+        // `Task.parallel` spawns, `Task.retryWith` sleeps, `Task.attempt`
+        // bridges into the TEA loop — has no qualifier entry and falls to the
+        // reactor-requiring default below.
         if matches!(
             self,
             Self::BackoffLinear
@@ -11809,26 +12019,19 @@ impl StdlibKernel {
         ) {
             return false;
         }
-        if matches!(
-            self,
-            Self::TaskRun
-                | Self::TaskPerform
-                | Self::TaskParallel
-                | Self::TaskRetryWith
-                | Self::TaskAttempt
-                | Self::TimeSleep
-                | Self::TimeEvery
-                | Self::SystemLoadEnv
-        ) {
-            return true;
+        // The proven-pure members of the mixed `Time` / `System` families are
+        // admitted one by one by NAME, so a new member of either family
+        // defaults to reactor-requiring below.
+        if self.is_reactor_free_time_or_system() {
+            return false;
         }
         // Whole-family pure qualifiers: every kernel under these qualifiers
         // resolves without the reactor (synchronous computation, or a
         // synchronous `std` effect wrapped in an already-`Ready` future).
-        // Verified reactor-free in the runtime module for each. The reactor
-        // members of the mixed `Time` / `System` / `Task` families were already
-        // returned above, so reaching this arm under `Time` / `System` means a
-        // pure member. A qualifier not listed here is reactor-requiring.
+        // Verified reactor-free in the runtime module for each. The mixed
+        // `Time` / `System` / `Task` families are deliberately absent — their
+        // pure members were admitted by name above. A qualifier not listed here
+        // is reactor-requiring.
         !matches!(
             self.decl().qualifier,
             "Log"
@@ -11859,8 +12062,43 @@ impl StdlibKernel {
                 | "Random"
                 | "Io"
                 | "Sql"
-                | "Time"
-                | "System"
+        )
+    }
+
+    /// `true` for the individually-audited, reactor-free members of the mixed
+    /// `Time` and `System` families. These families each carry a reactor-driven
+    /// member (`Time.sleep` / `Time.every` drive a tokio timer; `System.loadEnv`
+    /// is a `spawn_blocking` offload), so neither can be admitted whole by
+    /// qualifier without letting a future reactor-driven member default to pure.
+    /// Membership here is an allow-list of the proven-pure members by name: a
+    /// kernel added later under `Time` or `System` is absent, so
+    /// [`Self::requires_async_runtime`] classifies it reactor-requiring until it
+    /// is audited and added here.
+    #[must_use]
+    const fn is_reactor_free_time_or_system(self) -> bool {
+        matches!(
+            self,
+            Self::TimeNow
+                | Self::TimeUnixMillis
+                | Self::TimeTimeString
+                | Self::TimeIsLeapYear
+                | Self::TimeDaysInMonth
+                | Self::TimeFormat
+                | Self::TimeFormatHTTP
+                | Self::TimeFormatISO8601
+                | Self::TimeFormatRFC3339
+                | Self::TimeAddMillis
+                | Self::TimeDiffMillis
+                | Self::SystemArgs
+                | Self::SystemGetenv
+                | Self::SystemGetenvOr
+                | Self::SystemGetArg
+                | Self::SystemGetenvInt
+                | Self::SystemGetenvBool
+                | Self::SystemSetenv
+                | Self::SystemUnsetenv
+                | Self::SystemCwd
+                | Self::SystemExit
         )
     }
 
@@ -11894,8 +12132,39 @@ impl StdlibKernel {
                 | Self::TuiUiCenter
                 | Self::TuiUiBold
                 | Self::TuiUiUnderline
+                | Self::TuiUiDim
+                | Self::TuiUiReverse
                 | Self::TuiUiColor
                 | Self::TuiUiBg
+                | Self::CliUiNone
+                | Self::CliUiText
+                | Self::CliUiLine
+                | Self::CliUiLines
+                | Self::CliUiBold
+                | Self::CliUiUnderline
+                | Self::CliUiDim
+                | Self::CliUiReverse
+                | Self::CliUiColor
+                | Self::CliUiBg
+                | Self::TermColorBlack
+                | Self::TermColorRed
+                | Self::TermColorGreen
+                | Self::TermColorYellow
+                | Self::TermColorBlue
+                | Self::TermColorMagenta
+                | Self::TermColorCyan
+                | Self::TermColorWhite
+                | Self::TermColorBrightBlack
+                | Self::TermColorBrightRed
+                | Self::TermColorBrightGreen
+                | Self::TermColorBrightYellow
+                | Self::TermColorBrightBlue
+                | Self::TermColorBrightMagenta
+                | Self::TermColorBrightCyan
+                | Self::TermColorBrightWhite
+                | Self::TermColorDefault
+                | Self::TermColorRgb
+                | Self::TermColorRgba
                 | Self::UiWidget
                 | Self::UiNode
                 | Self::UiTaggedNode
@@ -12784,8 +13053,9 @@ mod tests {
         assert_eq!(StdlibKernel::LogInfo.capability(), None);
         assert_eq!(StdlibKernel::IoPrintln.capability(), None);
         assert_eq!(StdlibKernel::DebugLog.capability(), None);
-        // `Env.public` reads a build-time constant, not the live environment.
-        assert_eq!(StdlibKernel::EnvPublic.capability(), None);
+        // `Env.public` reads the live process environment on native, so it
+        // discloses the env axis like `System.getenv` (wasm32 over-reports).
+        assert_eq!(StdlibKernel::EnvPublic.capability(), Some(Capability::Env));
         // `Ui.widget` ships browser JS → the `custom-element` disclosure axis.
         assert_eq!(
             StdlibKernel::UiWidget.capability(),
@@ -12886,71 +13156,89 @@ mod tests {
     /// fires).
     #[test]
     fn async_runtime_classification_is_fail_closed() {
-        // The whole-family pure qualifiers (every kernel under them is
-        // reactor-free) plus the reactor members of the mixed families that are
-        // carved out by name.
-        const PURE_QUALIFIERS: &[&str] = &[
-            "Log",
-            "String",
-            "Char",
-            "List",
-            "Basics",
-            "Maybe",
-            "Result",
-            "Math",
-            "Bitwise",
-            "Dict",
-            "Set",
-            "Bytes",
-            "Encoding",
-            "JsonEnc",
-            "JsonDec",
-            "JsonDecP",
-            "Uuid",
-            "Decimal",
-            "Money",
-            "Secret",
-            "Regex",
-            "Path",
-            "Locale",
-            "Error",
-            "CssSafety",
-            "Random",
-            "Io",
-            "Sql",
-            "Time",
-            "System",
-        ];
-        // Reactor-driven carve-outs inside the otherwise-pure `Time` / `System`
-        // / `Task` families.
-        let reactor_carveouts = |k: StdlibKernel| {
-            matches!(
+        // Ground truth is an INDEPENDENT hand-audited enumeration of the
+        // reactor-FREE kernels — not a copy of the production qualifier formula.
+        // A kernel is reactor-free iff its runtime denotation drives its future
+        // to `Ready` without a tokio timer, socket, spawn, or `spawn_blocking`
+        // offload. Every kernel NOT listed here must classify reactor-requiring;
+        // in particular the mixed-family reactor members (`Time.sleep`,
+        // `Time.every`, `System.loadEnv`, the reactor `Task` combinators) are
+        // absent, so this table catches the exact drift — a new reactor member
+        // under a mixed qualifier wrongly admitted as pure — that the invariant
+        // guards. The listed pure members of `Time` / `System` were each audited
+        // against their runtime source.
+        let reactor_free = |k: StdlibKernel| -> bool {
+            let pure_time_system = matches!(
                 k,
-                StdlibKernel::TaskRun
-                    | StdlibKernel::TaskPerform
-                    | StdlibKernel::TaskParallel
-                    | StdlibKernel::TaskRetryWith
-                    | StdlibKernel::TaskAttempt
-                    | StdlibKernel::TimeSleep
-                    | StdlibKernel::TimeEvery
-                    | StdlibKernel::SystemLoadEnv
-            )
-        };
-        // `BackoffStrategy` constructors are pure zero-arity values under the
-        // `"Task"` qualifier; they need an explicit pure exemption.
-        let pure_exceptions = |k: StdlibKernel| {
-            matches!(
+                StdlibKernel::TimeNow
+                    | StdlibKernel::TimeUnixMillis
+                    | StdlibKernel::TimeTimeString
+                    | StdlibKernel::TimeIsLeapYear
+                    | StdlibKernel::TimeDaysInMonth
+                    | StdlibKernel::TimeFormat
+                    | StdlibKernel::TimeFormatHTTP
+                    | StdlibKernel::TimeFormatISO8601
+                    | StdlibKernel::TimeFormatRFC3339
+                    | StdlibKernel::TimeAddMillis
+                    | StdlibKernel::TimeDiffMillis
+                    | StdlibKernel::SystemArgs
+                    | StdlibKernel::SystemGetenv
+                    | StdlibKernel::SystemGetenvOr
+                    | StdlibKernel::SystemGetArg
+                    | StdlibKernel::SystemGetenvInt
+                    | StdlibKernel::SystemGetenvBool
+                    | StdlibKernel::SystemSetenv
+                    | StdlibKernel::SystemUnsetenv
+                    | StdlibKernel::SystemCwd
+                    | StdlibKernel::SystemExit
+            );
+            let pure_backoff = matches!(
                 k,
                 StdlibKernel::BackoffLinear
                     | StdlibKernel::BackoffLinearWithJitter
                     | StdlibKernel::BackoffExponential
                     | StdlibKernel::BackoffExponentialWithJitter
-            )
+            );
+            // The families that are pure in whole: every member resolves without
+            // the reactor. Distinct from the qualifier list in production only
+            // in that this test re-derives it from the audited-purity judgement
+            // rather than reading the production constant.
+            let pure_whole_family = matches!(
+                k.decl().qualifier,
+                "Log"
+                    | "String"
+                    | "Char"
+                    | "List"
+                    | "Basics"
+                    | "Maybe"
+                    | "Result"
+                    | "Math"
+                    | "Bitwise"
+                    | "Dict"
+                    | "Set"
+                    | "Bytes"
+                    | "Encoding"
+                    | "JsonEnc"
+                    | "JsonDec"
+                    | "JsonDecP"
+                    | "Uuid"
+                    | "Decimal"
+                    | "Money"
+                    | "Secret"
+                    | "Regex"
+                    | "Path"
+                    | "Locale"
+                    | "Error"
+                    | "CssSafety"
+                    | "Random"
+                    | "Io"
+                    | "Sql"
+            );
+            pure_time_system || pure_backoff || pure_whole_family
         };
         for k in StdlibKernel::ALL {
             let q = k.decl().qualifier;
-            let expected_async =
-                (reactor_carveouts(*k) || !PURE_QUALIFIERS.contains(&q)) && !pure_exceptions(*k);
+            let expected_async = !reactor_free(*k);
             assert_eq!(
                 k.requires_async_runtime(),
                 expected_async,
@@ -12960,6 +13248,34 @@ mod tests {
                  synchronous `fn main` that HANGS on a reactor op — re-audit the runtime impl \
                  before changing the whitelist.",
                 k.requires_async_runtime(),
+            );
+        }
+    }
+
+    /// The mixed-family drift the fail-closed invariant exists to catch: the
+    /// reactor-driven members of `Time` / `System` must classify
+    /// reactor-requiring, and admitting their family by qualifier would silently
+    /// demote them. This pins each reactor member directly (independent of the
+    /// whitelist formula) and asserts a representative pure member of the same
+    /// family stays admitted, so a regression that re-adds `Time` / `System` to
+    /// the whole-family qualifier list fails here.
+    #[test]
+    fn mixed_family_reactor_members_are_not_admitted_by_qualifier() {
+        for reactor in [
+            StdlibKernel::TimeSleep,
+            StdlibKernel::TimeEvery,
+            StdlibKernel::SystemLoadEnv,
+        ] {
+            assert!(
+                reactor.requires_async_runtime(),
+                "{reactor:?} drives the tokio reactor but was classified pure — a mixed \
+                 family admitted by qualifier would emit a synchronous `fn main` that HANGS"
+            );
+        }
+        for pure in [StdlibKernel::TimeNow, StdlibKernel::SystemGetenv] {
+            assert!(
+                !pure.requires_async_runtime(),
+                "{pure:?} is a proven-pure member of a mixed family and must stay admitted"
             );
         }
     }
@@ -13761,6 +14077,53 @@ mod tests {
                 k.decl().qualifier,
                 k.is_css(),
                 expected,
+            );
+        }
+    }
+
+    /// `is_db()` MUST be true for exactly the `class = Db` kernels — it is the
+    /// SOLE selector for the `db` runtime module/feature (`ipe_lower` sets
+    /// `uses_db` from it), so a forgotten Db-class kernel would emit an
+    /// `ipe`-accepted crate that references `ipe_runtime::db::*` with no `db`
+    /// feature enabled (E0425/E0433).
+    ///
+    /// The oracle is an INDEPENDENT restatement, not a copy of the predicate:
+    /// the Db-class kernels live under the qualifiers `Db` / `Db.Decode` /
+    /// `Db.Dsn` / `Sql`, with the `class = Pure` exceptions `Db.url`
+    /// (`DbUrlSetting`, a setting reader emitting `ipe_setting_db_url`) and
+    /// `Db.defaultMigration` (`DbDefaultMigration`, a record builder emitted
+    /// inline as a `Migration` struct literal) — neither emits a db-runtime
+    /// symbol, so neither must set `uses_db`. Those exceptions are exactly why
+    /// `is_db` reads the `class` column and not the qualifier. Both directions
+    /// are asserted, so a Db-class kernel outside these qualifiers, a non-Db
+    /// kernel inside them, or a drift in either Pure exception all fail.
+    #[test]
+    fn db_predicate_tracks_db_class() {
+        use super::KernelClass;
+        for k in StdlibKernel::ALL {
+            let qualifier = k.decl().qualifier;
+            let expected = matches!(qualifier, "Db" | "Db.Decode" | "Db.Dsn" | "Sql")
+                && !matches!(
+                    k,
+                    StdlibKernel::DbUrlSetting | StdlibKernel::DbDefaultMigration
+                );
+            assert_eq!(
+                k.is_db(),
+                expected,
+                "{k:?} (qualifier={qualifier:?}, class={:?}): is_db()={} but the \
+                 Db-residency oracle={expected} — a forgotten Db-class kernel omits \
+                 the db feature/module, leaving ipe_runtime::db::* out of scope \
+                 (E0425/E0433)",
+                k.decl().class,
+                k.is_db(),
+            );
+            assert_eq!(
+                k.is_db(),
+                k.decl().class == KernelClass::Db,
+                "{k:?}: is_db()={} disagrees with class==Db ({}) — is_db is derived \
+                 from the class column and must equal it exactly",
+                k.is_db(),
+                k.decl().class == KernelClass::Db,
             );
         }
     }

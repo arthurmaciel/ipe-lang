@@ -116,7 +116,13 @@ impl Canvas {
 struct Style {
     fg: Option<(u8, u8, u8)>,
     bg: Option<(u8, u8, u8)>,
+    /// A named-palette foreground SGR code (30-37 / 90-97 / 39). Takes precedence
+    /// over `fg` (truecolour) so the portable palette path renders its own code.
+    fg_palette: Option<u8>,
+    /// A named-palette background SGR code (40-47 / 100-107 / 49).
+    bg_palette: Option<u8>,
     bold: bool,
+    dim: bool,
     italic: bool,
     underline: bool,
     overline: bool,
@@ -701,6 +707,14 @@ fn walk_attrs<M>(attrs: &[Attribute<M>], inherited: Style) -> Walked {
             Attribute::AttrFontDecoration(s) if s == "overline" => w.style.overline = true,
             Attribute::AttrFontDecoration(s) if s == "line-through" || s == "strike" => {
                 w.style.strike = true
+            }
+            Attribute::AttrFontDecoration(s) if s == "dim" => w.style.dim = true,
+            Attribute::AttrFontDecoration(s) if s == "reverse" => w.style.reverse = true,
+            Attribute::AttrFontDecoration(s) if s.starts_with("fg:") => {
+                w.style.fg_palette = parse_palette_code(s);
+            }
+            Attribute::AttrFontDecoration(s) if s.starts_with("bg:") => {
+                w.style.bg_palette = parse_palette_code(s);
             }
             // Border frame (drawBorder — solid/dashed/dotted box). Width is
             // taken as present/absent (the frame is always 1 cell each side in the
@@ -2444,10 +2458,22 @@ fn no_color() -> bool {
     })
 }
 
+/// Parse a `"fg:<code>"` / `"bg:<code>"` palette decoration into its SGR code.
+/// The `<code>` is produced by the runtime `TermColor::{fg,bg}_code`, so it is
+/// always a valid `u8`; a malformed string yields `None` (no colour, never a
+/// panic).
+fn parse_palette_code(s: &str) -> Option<u8> {
+    s.split_once(':')
+        .and_then(|(_, code)| code.parse::<u8>().ok())
+}
+
 fn sgr(style: Style) -> String {
     let mut codes: Vec<String> = Vec::new();
     if style.bold {
         codes.push("1".to_string());
+    }
+    if style.dim {
+        codes.push("2".to_string());
     }
     if style.italic {
         codes.push("3".to_string());
@@ -2465,10 +2491,17 @@ fn sgr(style: Style) -> String {
         codes.push("7".to_string());
     }
     if !no_color() {
-        if let Some((r, g, b)) = style.fg {
+        // A named-palette code takes precedence over truecolour: the portable
+        // path emits its own SGR code (30-37 / 90-97 / 39), else fall back to the
+        // 24-bit truecolour sequence.
+        if let Some(code) = style.fg_palette {
+            codes.push(code.to_string());
+        } else if let Some((r, g, b)) = style.fg {
             codes.push(format!("38;2;{r};{g};{b}"));
         }
-        if let Some((r, g, b)) = style.bg {
+        if let Some(code) = style.bg_palette {
+            codes.push(code.to_string());
+        } else if let Some((r, g, b)) = style.bg {
             codes.push(format!("48;2;{r};{g};{b}"));
         }
     }
@@ -3217,6 +3250,54 @@ mod tests {
         assert!(
             line_count <= ROWS * (PAD_ROW_SLACK + 2),
             "frame line count {line_count} exceeded terminal-proportional cap on {ROWS}-row canvas (spacing)"
+        );
+    }
+
+    #[test]
+    fn sgr_emits_named_palette_codes() {
+        let fg = sgr(Style {
+            fg_palette: Some(31),
+            ..Style::default()
+        });
+        assert!(
+            fg.contains("31"),
+            "named fg must emit its SGR code, got {fg:?}"
+        );
+        assert!(
+            !fg.contains("38;2"),
+            "a named palette fg must not emit a truecolour sequence, got {fg:?}"
+        );
+        let bg = sgr(Style {
+            bg_palette: Some(44),
+            ..Style::default()
+        });
+        assert!(
+            bg.contains("44"),
+            "named bg must emit its SGR code, got {bg:?}"
+        );
+    }
+
+    #[test]
+    fn parse_palette_code_reads_the_trailing_number() {
+        assert_eq!(parse_palette_code("fg:31"), Some(31));
+        assert_eq!(parse_palette_code("bg:100"), Some(100));
+        assert_eq!(parse_palette_code("fg:notanumber"), None);
+    }
+
+    #[test]
+    fn sgr_emits_dim_and_reverse() {
+        let dim = sgr(Style {
+            dim: true,
+            ..Style::default()
+        });
+        assert!(dim.contains('2'), "dim style must emit SGR 2, got {dim:?}");
+        let reverse = sgr(Style {
+            reverse: true,
+            ..Style::default()
+        });
+        assert!(
+            reverse.contains('7'),
+            "reverse style must emit SGR 7, got {reverse:?}"
         );
     }
 }
