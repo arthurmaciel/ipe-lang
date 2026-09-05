@@ -68,6 +68,7 @@ const BPF_RET: u16 = 0x06;
 const BPF_W: u16 = 0x00;
 const BPF_ABS: u16 = 0x20;
 const BPF_JEQ: u16 = 0x10;
+const BPF_JGE: u16 = 0x30;
 const BPF_JSET: u16 = 0x40;
 const BPF_K: u16 = 0x00;
 
@@ -88,6 +89,13 @@ const OFF_ARG0_LO: u32 = 16;
 /// __AUDIT_ARCH_64BIT (0x8000_0000) | __AUDIT_ARCH_LE (0x4000_0000)` =
 /// `0xC000_003E`.
 const AUDIT_ARCH_X86_64: u32 = 0x3E | 0x8000_0000 | 0x4000_0000;
+
+/// `__X32_SYSCALL_BIT` (from `<asm/unistd.h>`): on a kernel built with
+/// `CONFIG_X86_X32_ABI`, an x32-ABI syscall reports the `x86_64` audit arch but
+/// carries this bit in its number, so `syscall(0x4000_0000 | nr)` reaches the
+/// same handler as `nr` while dodging an exact-number match. The `x86_64` filter
+/// kills any number at or above this bit; no legitimate 64-bit payload issues one.
+const X32_SYSCALL_BIT: u32 = 0x4000_0000;
 
 /// The aarch64 audit architecture. `AUDIT_ARCH_AARCH64` = `EM_AARCH64 (183) |
 /// __AUDIT_ARCH_64BIT (0x8000_0000) | __AUDIT_ARCH_LE (0x4000_0000)` =
@@ -124,6 +132,13 @@ const EPERM: u32 = 1;
 struct AbiSyscalls {
     /// The `AUDIT_ARCH_*` value the arch guard compares against.
     audit_arch: u32,
+    /// A fail-closed kill for every syscall number at or above this value, when
+    /// the ABI shares an audit arch with a secondary calling convention that
+    /// tags its numbers with a high bit (`x86_64`'s x32 ABI sets
+    /// [`X32_SYSCALL_BIT`]). Emitted before any per-syscall compare so a tagged
+    /// number cannot slip past the exact-match denials into the default allow.
+    /// `None` on ABIs with no such secondary convention (aarch64).
+    deny_nr_ge: Option<u32>,
     nr_clone: u32,
     /// `fork`/`vfork` on `x86_64`; empty on `aarch64` (no such syscalls there).
     create_denied_non_clone: &'static [u32],
@@ -184,6 +199,7 @@ mod x86_64_abi {
     /// [`super::build_program_for`] for why each baseline entry is denied.
     pub(super) const SYSCALLS: AbiSyscalls = AbiSyscalls {
         audit_arch: AUDIT_ARCH_X86_64,
+        deny_nr_ge: Some(super::X32_SYSCALL_BIT),
         nr_clone: NR_CLONE,
         create_denied_non_clone: &[NR_FORK, NR_VFORK],
         baseline_denied: &[
@@ -255,6 +271,7 @@ mod aarch64_abi {
     /// (same escape/exfiltration primitives, different numbers).
     pub(super) const SYSCALLS: AbiSyscalls = AbiSyscalls {
         audit_arch: AUDIT_ARCH_AARCH64,
+        deny_nr_ge: None,
         nr_clone: NR_CLONE,
         create_denied_non_clone: &[],
         baseline_denied: &[
@@ -425,6 +442,17 @@ fn build_program_for(abi: AbiSyscalls, allow_subprocess: bool) -> Vec<SockFilter
 
     // 2. Load the syscall number for the per-syscall decisions below.
     prog.push(stmt(BPF_LD | BPF_W | BPF_ABS, OFF_NR));
+
+    // 2a. Kill any syscall number tagged for a secondary calling convention that
+    //     shares this audit arch. The exact-match denials below compare plain
+    //     numbers, so a tagged number (x86_64's x32 ABI sets the high bit) would
+    //     miss every deny and reach the default allow — re-issuing a denied call.
+    //     The JGE lands on the kill (jump +1) when nr >= the tag; else it falls
+    //     through to the per-syscall logic.
+    if let Some(floor) = abi.deny_nr_ge {
+        prog.push(jump(BPF_JMP | BPF_JGE | BPF_K, floor, 0, 1));
+        prog.push(ret(SECCOMP_RET_KILL_PROCESS));
+    }
 
     // 3. Baseline denials (unconditional). Each: if nr == denied → EPERM.
     for &nr in abi.baseline_denied {
@@ -814,6 +842,54 @@ mod tests {
             assert_eq!(prog[vm_clear_target], ret(SECCOMP_RET_ERRNO | EPERM));
             // Fall-through of c3 (both bits set) is the ALLOW for a thread.
             assert_eq!(prog[c3 + 1], ret(SECCOMP_RET_ALLOW));
+        }
+    }
+
+    #[test]
+    fn x86_64_kills_x32_tagged_syscall_numbers_before_any_compare() {
+        // On x86_64 the x32 ABI reports the same audit arch but tags its numbers
+        // with X32_SYSCALL_BIT, so an exact-match denylist would let
+        // syscall(0x4000_0000|nr) fall through to the default allow. The filter
+        // must JGE-kill every tagged number, and that guard must precede every
+        // per-syscall JEQ (else a plain-number match could be reached on a tagged
+        // number only by luck of ordering).
+        assert_eq!(X86_64_SYSCALLS.deny_nr_ge, Some(X32_SYSCALL_BIT));
+        assert_eq!(X32_SYSCALL_BIT, 0x4000_0000);
+        for allow in [true, false] {
+            let prog = build_program_for(X86_64_SYSCALLS, allow);
+            let jge = prog
+                .iter()
+                .position(|i| i.code == (BPF_JMP | BPF_JGE | BPF_K) && i.k == X32_SYSCALL_BIT)
+                .expect("x32 JGE guard present on x86_64");
+            // Its true branch (jump +jt) lands on a KILL_PROCESS return.
+            let kill_target = jge + 1 + prog[jge].jt as usize;
+            assert_eq!(prog[kill_target], ret(SECCOMP_RET_KILL_PROCESS));
+            // The guard precedes every per-syscall JEQ.
+            let first_jeq = prog
+                .iter()
+                .position(|i| {
+                    i.code == (BPF_JMP | BPF_JEQ | BPF_K) && i.k != X86_64_SYSCALLS.audit_arch
+                })
+                .expect("at least one syscall JEQ");
+            assert!(
+                jge < first_jeq,
+                "x32 kill guard must precede every syscall compare"
+            );
+        }
+    }
+
+    #[test]
+    fn aarch64_has_no_secondary_abi_kill_guard() {
+        // aarch64 shares its audit arch with no high-bit-tagged secondary ABI, so
+        // it needs no JGE guard (and adding one could kill legitimate high-numbered
+        // syscalls).
+        assert_eq!(AARCH64_SYSCALLS.deny_nr_ge, None);
+        for allow in [true, false] {
+            let prog = build_program_for(AARCH64_SYSCALLS, allow);
+            assert!(
+                !prog.iter().any(|i| i.code == (BPF_JMP | BPF_JGE | BPF_K)),
+                "aarch64 must emit no JGE range guard"
+            );
         }
     }
 
