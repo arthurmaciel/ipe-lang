@@ -263,17 +263,239 @@ pub(crate) enum CssValueOrigin {
     Untrusted,
 }
 
+/// Function names accepted as the `<ident>(` head of a value function token.
+/// Every other name rejects the value (deny-by-default). MUST stay identical to
+/// `ipe_kernels::css_value_safety::ALLOWED_FUNCTIONS` — the
+/// `value_policy_agrees_with_shared_kernel_policy` test pins the whole policy
+/// equal, so a divergence here is caught at test time. `url` is present but its
+/// argument is gated scheme-free by [`url_arg_is_safe`].
+const ALLOWED_VALUE_FUNCTIONS: &[&str] = &[
+    "rgb",
+    "rgba",
+    "hsl",
+    "hsla",
+    "hwb",
+    "lab",
+    "lch",
+    "oklab",
+    "oklch",
+    "color",
+    "color-mix",
+    "var",
+    "calc",
+    "min",
+    "max",
+    "clamp",
+    "env",
+    "linear-gradient",
+    "radial-gradient",
+    "conic-gradient",
+    "repeating-linear-gradient",
+    "repeating-radial-gradient",
+    "repeating-conic-gradient",
+    "translate",
+    "translatex",
+    "translatey",
+    "translatez",
+    "translate3d",
+    "scale",
+    "scalex",
+    "scaley",
+    "scalez",
+    "scale3d",
+    "rotate",
+    "rotatex",
+    "rotatey",
+    "rotatez",
+    "rotate3d",
+    "skew",
+    "skewx",
+    "skewy",
+    "matrix",
+    "matrix3d",
+    "perspective",
+    "repeat",
+    "minmax",
+    "fit-content",
+    "blur",
+    "brightness",
+    "contrast",
+    "drop-shadow",
+    "grayscale",
+    "hue-rotate",
+    "invert",
+    "opacity",
+    "saturate",
+    "sepia",
+    "cubic-bezier",
+    "steps",
+    "url",
+    "format",
+    "local",
+    "attr",
+    "counter",
+    "counters",
+];
+
+/// Parse `s` (already lowercased) against the allowlisted CSS declaration-value
+/// grammar. Returns `false` on the first unrecognized byte, unbalanced paren,
+/// unrecognized function name, or scheme-bearing `url(...)`. Mirror of the
+/// shared `ipe_kernels::css_value_safety::value_parses`.
+fn value_grammar_parses(s: &str) -> bool {
+    let bytes = s.as_bytes();
+    let mut i = 0;
+    while let Some(&c) = bytes.get(i) {
+        if c.is_ascii_whitespace() || c == b',' || c == b'/' || c == b'%' {
+            i += 1;
+            continue;
+        }
+        // The `!important` priority flag: `!` is admitted ONLY when the trimmed
+        // remainder is exactly `important`. Mirror of the shared kernel gate.
+        if c == b'!' {
+            return s
+                .get(i + 1..)
+                .is_some_and(|rest| rest.trim_start() == "important");
+        }
+        if c == b'"' || c == b'\'' {
+            match value_parse_string(bytes, i, c) {
+                Some(next) => i = next,
+                None => return false,
+            }
+            continue;
+        }
+        match value_parse_token(bytes, i) {
+            Some(next) => i = next,
+            None => return false,
+        }
+    }
+    true
+}
+
+/// Parse one value token (ident/number run, optionally an `ident(...)` function
+/// call) starting at `start`. Mirror of the shared kernel's `parse_token`.
+fn value_parse_token(bytes: &[u8], start: usize) -> Option<usize> {
+    let mut i = start;
+    while bytes.get(i).is_some_and(|&b| is_value_token_byte(b)) {
+        i += 1;
+    }
+    if bytes.get(i) == Some(&b'(') {
+        return value_parse_function(bytes, bytes.get(start..i)?, i);
+    }
+    if i > start { Some(i) } else { None }
+}
+
+/// Parse a balanced `name(...)` function call. `name` must be on
+/// [`ALLOWED_VALUE_FUNCTIONS`]; `url(...)` gates its argument scheme-free, every
+/// other function recurses into its argument list. Mirror of the shared kernel's
+/// `parse_function`.
+fn value_parse_function(bytes: &[u8], name: &[u8], open: usize) -> Option<usize> {
+    let name_str = core::str::from_utf8(name).ok()?;
+    if !ALLOWED_VALUE_FUNCTIONS.contains(&name_str) {
+        return None;
+    }
+    let mut depth = 0usize;
+    let mut close = None;
+    let mut i = open;
+    while let Some(&b) = bytes.get(i) {
+        match b {
+            b'(' => depth += 1,
+            b')' => {
+                depth = depth.saturating_sub(1);
+                if depth == 0 {
+                    close = Some(i);
+                    break;
+                }
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    let close = close?;
+    let inner = bytes.get(open + 1..close)?;
+    if name_str == "url" {
+        if !url_arg_is_safe(inner) {
+            return None;
+        }
+    } else {
+        let inner_str = core::str::from_utf8(inner).ok()?;
+        if !value_grammar_parses(inner_str) {
+            return None;
+        }
+    }
+    Some(close + 1)
+}
+
+/// A `url(...)` argument is safe ONLY when it is a scheme-free, non-authority
+/// reference: no `:` (scheme), no leading `//` (protocol-relative host), no
+/// quote/paren/whitespace/control byte. Mirror of the shared kernel's
+/// `url_arg_is_safe`.
+fn url_arg_is_safe(inner: &[u8]) -> bool {
+    let arg = inner.trim_ascii();
+    if arg.is_empty() || arg.starts_with(b"//") {
+        return false;
+    }
+    arg.iter().all(|&b| is_url_path_byte(b))
+}
+
+/// Parse a quoted string token starting at the opening quote `q` at `start`.
+/// Mirror of the shared kernel's `parse_string`.
+fn value_parse_string(bytes: &[u8], start: usize, q: u8) -> Option<usize> {
+    let mut i = start + 1;
+    while let Some(&c) = bytes.get(i) {
+        if c == b'\\' {
+            i += 2;
+            continue;
+        }
+        if c == q {
+            return Some(i + 1);
+        }
+        if c == b'<' || c == b'>' || c == b'{' || c == b'}' || c == b';' || c < 0x20 {
+            return None;
+        }
+        i += 1;
+    }
+    None
+}
+
+/// Bytes permitted in a bare value token. Mirror of the shared kernel's
+/// `is_token_byte` (`\` admitted in the raw parse; the decoded parse judges it).
+const fn is_value_token_byte(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || matches!(b, b'#' | b'.' | b'+' | b'-' | b'_' | b'\\') || b >= 0x80
+}
+
+/// Bytes permitted inside a scheme-free `url()` path argument. Mirror of the
+/// shared kernel's `is_url_path_byte`.
+const fn is_url_path_byte(b: u8) -> bool {
+    is_value_token_byte(b) || matches!(b, b'/' | b'?' | b'&' | b'=' | b'~')
+}
+
 /// Run the CSS value security scan, returning WHY the value is unsafe (for the
 /// A9 diagnostic) rather than a bare `Option`. `Ok(())` ⇒ safe.
+///
+/// The DECISION is an allowlisted CSS declaration-value grammar
+/// ([`value_grammar_parses`], parse-don't-validate): a value is safe IFF every
+/// token is a recognized ident / number / hex-colour / string / allowlisted
+/// function and every `url(...)` argument is scheme-free — anything
+/// unrecognized is rejected (deny-by-default / fail-closed). This is the exact
+/// policy of the shared `ipe_kernels::css_value_safety` gate; a `#[test]`
+/// (`value_policy_agrees_with_shared_kernel_policy`) pins the two equal so the
+/// render gate and the backend hoist gate can never drift. The kernel is a
+/// compiler crate and stays a test-only dependency of the runtime (it must not
+/// enter the runtime's `wasm32` production closure), so the grammar is mirrored
+/// here rather than called at render time.
+///
+/// The A9 reason classification distinguishes a value rejected in its RAW form
+/// from one that parsed raw but is rejected only after CSS-escape decoding (a
+/// hex-escaped payload), so the developer diagnostic can name which.
 fn scan_css_value(v: &str) -> Result<(), CssStripReason> {
-    let low = v.to_ascii_lowercase();
-    if has_dangerous_css_pattern(&low) {
+    if v.trim().is_empty() {
         return Err(CssStripReason::RawBreakout);
     }
-    // Defence-in-depth: decode CSS backslash escapes and re-scan so a
-    // hex-escaped bypass of the check above (`\65 xpression(…)`, `\3b` for `;`)
-    // is caught too.
-    if has_dangerous_css_pattern(&css_unescape(&low)) {
+    let low = v.to_ascii_lowercase();
+    if !value_grammar_parses(&low) {
+        return Err(CssStripReason::RawBreakout);
+    }
+    if !value_grammar_parses(&css_unescape(&low)) {
         return Err(CssStripReason::EscapedBreakout);
     }
     Ok(())
@@ -354,13 +576,14 @@ pub(crate) fn should_report_stripped(origin: CssValueOrigin) -> bool {
 /// must re-validate rather than trust an upstream that a generic `htmlAttribute`
 /// escape hatch can side-step.
 ///
-/// Splits on `;` and checks each non-empty declaration through the shared
-/// [`SafeCssValue`] policy (which rejects `; { } </ /* @import` and the
-/// script-sink keywords in both raw and CSS-escape-decoded forms). Returns the
-/// ORIGINAL, unmodified slice when EVERY declaration is safe (byte-identical to
-/// the producer output — no reformat); drops the WHOLE block (`None`,
-/// fail-closed) the moment any declaration carries a breakout. A block of only
-/// empty declarations yields `None`.
+/// Splits on `;` into declarations and each declaration on its FIRST `:` into a
+/// `property:value` pair (parse, don't validate — a declaration IS that pair),
+/// gating the property name through [`SafeCssPropertyName`] and the value
+/// through the shared allowlist-grammar [`SafeCssValue`] policy. A declaration
+/// with no `:`, an unsafe property name, or an unrecognized value drops the
+/// WHOLE block (`None`, fail-closed). Returns the ORIGINAL, unmodified slice
+/// when EVERY declaration is safe (byte-identical to the producer output — no
+/// reformat). A block of only empty declarations yields `None`.
 ///
 /// `cfg(feature = "web")`-gated: its only callers are the `live` style sink's
 /// `build_mq` / `build_pc` (`live/style_inject.rs`), which are themselves under
@@ -373,7 +596,12 @@ pub(crate) fn sink_safe_declaration_list(rules: &str) -> Option<&str> {
         if d.is_empty() {
             continue;
         }
-        SafeCssValue::parse(d)?;
+        // A declaration is `property : value`; split on the FIRST `:` only, so a
+        // `:` inside the value (none survive the value gate, but be precise) does
+        // not mis-split. A declaration with no `:` is malformed — reject.
+        let (prop, value) = d.split_once(':')?;
+        SafeCssPropertyName::parse(prop)?;
+        SafeCssValue::parse(value.trim())?;
         any = true;
     }
     if any { Some(rules) } else { None }
@@ -423,7 +651,12 @@ pub(crate) fn sink_safe_keyframes_body(body: &str) -> Option<&str> {
             if d.is_empty() {
                 continue;
             }
-            SafeCssValue::parse(d)?;
+            // Each keyframe declaration is a `property : value` pair — split on
+            // the first `:` and gate the name and value separately (a nested `{`
+            // or breakout lands in one side and is rejected by its gate).
+            let (prop, value) = d.split_once(':')?;
+            SafeCssPropertyName::parse(prop)?;
+            SafeCssValue::parse(value.trim())?;
         }
         rest = after_open[close + 1..].trim_start();
     }
@@ -696,15 +929,23 @@ mod tests {
     }
 
     /// The scan reason distinguishes a raw breakout from an escape-hidden one,
-    /// so the diagnostic can name WHY — and a safe value scans clean.
+    /// so the diagnostic can name WHY — and a safe value scans clean. Under the
+    /// allowlist grammar a bare backslash is itself unrecognized structure, so
+    /// an escaped payload whose backslash sits at top level fails the RAW parse
+    /// (`RawBreakout`); `EscapedBreakout` is reached only when the raw form
+    /// parses cleanly and the CSS-escape decode reveals the reject — e.g. a
+    /// `var(...)` custom-property name that decodes to a breakout character.
     #[test]
     fn scan_reason_names_raw_vs_escaped_breakout() {
         assert_eq!(
             scan_css_value("red; color:blue"),
             Err(CssStripReason::RawBreakout)
         );
+        // `\3a` decodes to `:` inside a `var()` name — the raw `var(--x\3a)`
+        // parses (backslash never reaches top level; it is inside the nested
+        // value that recurses), but the decoded `var(--x:)` fails the grammar.
         assert_eq!(
-            scan_css_value("\\65 xpression(alert(1))"),
+            scan_css_value("var(--x\\3a y)"),
             Err(CssStripReason::EscapedBreakout)
         );
         assert_eq!(scan_css_value("#ff6600"), Ok(()));
