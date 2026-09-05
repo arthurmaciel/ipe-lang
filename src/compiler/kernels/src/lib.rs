@@ -5996,100 +5996,19 @@ impl StdlibKernel {
     // These are the single authoritative classification lists.  `ipe_ir`
     // re-exports them through the `type KernelFn = StdlibKernel` alias.
 
-    /// `true` when this variant belongs to the `Db` / `Db.Decode` subsystem.
+    /// `true` when this variant's kernel `class` is [`KernelClass::Db`] — the
+    /// `Db` / `Db.Decode` / `Db.Sql` subsystem.
+    ///
+    /// Derived from the [`Self::decl`] class column (const, so this predicate
+    /// stays const) rather than hand-mirroring the variant set. This predicate
+    /// is the SOLE selector for the `db` runtime module/feature (`ipe_lower`
+    /// sets `uses_db` from it), so a Db-class kernel a hand list forgot would
+    /// emit an `ipe`-accepted crate that fails at `cargo` time (E0425/E0433).
+    /// Reading the class makes that drift unrepresentable, not merely
+    /// test-detectable.
     #[must_use]
     pub const fn is_db(self) -> bool {
-        matches!(
-            self,
-            Self::DbConnect
-                | Self::DbOpen
-                | Self::DbClose
-                | Self::DsnParse
-                | Self::DsnBuild
-                | Self::DsnDriverTag
-                | Self::DsnHost
-                | Self::DsnPort
-                | Self::DsnDatabase
-                | Self::DsnUser
-                | Self::DsnTlsTag
-                | Self::DsnRedacted
-                | Self::DbConnOpen
-                | Self::DbConnClose
-                | Self::DbConnUnsafeExecRawOn
-                | Self::DbConnFindWhere
-                | Self::DbConnQueryDecode
-                | Self::DbConnGetById
-                | Self::DbExecRaw
-                | Self::DbExec
-                | Self::DbQuery
-                | Self::DbQueryDecode
-                | Self::DbGetString
-                | Self::DbGetInt
-                | Self::DbGetBool
-                | Self::DbGetField
-                | Self::DbInsertRow
-                | Self::DbGetById
-                | Self::DbUpdateById
-                | Self::DbDeleteById
-                | Self::DbFindOneByField
-                | Self::DbFindManyByField
-                | Self::DbFindByConditions
-                | Self::DbInsertFields
-                | Self::DbUpdateFields
-                | Self::DbInsertFieldsReturning
-                | Self::DbWithTransaction
-                | Self::DbMigrate
-                | Self::DbDecString
-                | Self::DbDecInt
-                | Self::DbDecFloat
-                | Self::DbDecBool
-                | Self::DbDecNullable
-                | Self::DbDecMap
-                | Self::DbDecAndThen
-                | Self::DbDecSucceed
-                | Self::DbDecFail
-                | Self::DbDecMap2
-                | Self::DbDecMap3
-                | Self::DbDecMap4
-                | Self::DbDecRequired
-                | Self::DbDecOptional
-                | Self::DbDecMoney
-                | Self::DbDecDecimal
-                | Self::DbDecBytes
-                // ── Ipe.Db.Sql — classified `Db` like
-                // `Db.Decode.*` above: no live connection is touched by the
-                // combinators, but the runtime types they build on
-                // (`SqlFragment` / `SqlParam`) live in this crate's
-                // `feature = "db"`-gated `db.rs` module, so a program using
-                // ONLY `Sql.*` still needs the `db` Cargo feature turned on.
-                | Self::SqlColumn
-                | Self::SqlUnsafeFragment
-                | Self::SqlParam
-                | Self::SqlInt
-                | Self::SqlString
-                | Self::SqlFloat
-                | Self::SqlBool
-                | Self::SqlEq
-                | Self::SqlNe
-                | Self::SqlGt
-                | Self::SqlLt
-                | Self::SqlGte
-                | Self::SqlLte
-                | Self::SqlAnd
-                | Self::SqlOr
-                | Self::SqlNot
-                | Self::SqlIsNull
-                | Self::SqlIsNotNull
-                | Self::SqlInList
-                | Self::SqlLike
-                | Self::DbFindWhere
-                | Self::DbFindJoin
-                | Self::DbFindProjection
-                | Self::DbFindJoinOrdered
-                | Self::DbFindProjectionOrdered
-                | Self::DbDeleteWhere
-                | Self::DbUpdateWhere
-        )
+        matches!(self.decl().class, KernelClass::Db)
     }
 
     /// The whole kernel row as one [`KernelDef`] descriptor — the authoritative
@@ -14074,6 +13993,48 @@ mod tests {
                 k.decl().qualifier,
                 k.is_css(),
                 expected,
+            );
+        }
+    }
+
+    /// `is_db()` MUST be true for exactly the `class = Db` kernels — it is the
+    /// SOLE selector for the `db` runtime module/feature (`ipe_lower` sets
+    /// `uses_db` from it), so a forgotten Db-class kernel would emit an
+    /// `ipe`-accepted crate that references `ipe_runtime::db::*` with no `db`
+    /// feature enabled (E0425/E0433).
+    ///
+    /// The oracle is an INDEPENDENT restatement, not a copy of the predicate:
+    /// the Db-class kernels live under the qualifiers `Db` / `Db.Decode` /
+    /// `Db.Dsn` / `Sql`, with the single exception of `Db.url` (`DbUrlSetting`,
+    /// class `Pure`) — a setting reader that emits `ipe_setting_db_url`, not a
+    /// db-runtime symbol, and so must NOT set `uses_db`. That exception is
+    /// exactly why `is_db` reads the `class` column and not the qualifier. Both
+    /// directions are asserted, so a Db-class kernel outside these qualifiers, a
+    /// non-Db kernel inside them, or a drift in the `Db.url` exception all fail.
+    #[test]
+    fn db_predicate_tracks_db_class() {
+        use super::KernelClass;
+        for k in StdlibKernel::ALL {
+            let qualifier = k.decl().qualifier;
+            let expected = matches!(qualifier, "Db" | "Db.Decode" | "Db.Dsn" | "Sql")
+                && !matches!(k, StdlibKernel::DbUrlSetting);
+            assert_eq!(
+                k.is_db(),
+                expected,
+                "{k:?} (qualifier={qualifier:?}, class={:?}): is_db()={} but the \
+                 Db-residency oracle={expected} — a forgotten Db-class kernel omits \
+                 the db feature/module, leaving ipe_runtime::db::* out of scope \
+                 (E0425/E0433)",
+                k.decl().class,
+                k.is_db(),
+            );
+            assert_eq!(
+                k.is_db(),
+                k.decl().class == KernelClass::Db,
+                "{k:?}: is_db()={} disagrees with class==Db ({}) — is_db is derived \
+                 from the class column and must equal it exactly",
+                k.is_db(),
+                k.decl().class == KernelClass::Db,
             );
         }
     }
