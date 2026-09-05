@@ -123,6 +123,11 @@ fn walk_for_ref_at(
                 walk_for_ref_at(v, byte, best);
             }
         }
+        Expr_::ForeignCall { args, .. } => {
+            for arg in args {
+                walk_for_ref_at(arg, byte, best);
+            }
+        }
         Expr_::VarLocal(_)
         | Expr_::VarKernel { .. }
         | Expr_::VarCtor { .. }
@@ -132,8 +137,7 @@ fn walk_for_ref_at(
         | Expr_::PathLit(_)
         | Expr_::CustomElementCtor(_)
         | Expr_::Char(_)
-        | Expr_::Unit
-        | Expr_::ForeignCall { .. } => {}
+        | Expr_::Unit => {}
     }
 }
 
@@ -206,6 +210,11 @@ fn walk_for_refs(
                 walk_for_refs(v, target_home, target_name, out);
             }
         }
+        Expr_::ForeignCall { args, .. } => {
+            for arg in args {
+                walk_for_refs(arg, target_home, target_name, out);
+            }
+        }
         Expr_::VarLocal(_)
         | Expr_::VarKernel { .. }
         | Expr_::VarCtor { .. }
@@ -215,8 +224,7 @@ fn walk_for_refs(
         | Expr_::PathLit(_)
         | Expr_::CustomElementCtor(_)
         | Expr_::Char(_)
-        | Expr_::Unit
-        | Expr_::ForeignCall { .. } => {}
+        | Expr_::Unit => {}
     }
 }
 
@@ -319,7 +327,22 @@ fn walk_for_span_at(
                 walk_for_span_at(v, byte, best);
             }
         }
-        _ => {}
+        Expr_::ForeignCall { args, .. } => {
+            for arg in args {
+                walk_for_span_at(arg, byte, best);
+            }
+        }
+        Expr_::VarLocal(_)
+        | Expr_::VarTopLevel { .. }
+        | Expr_::VarKernel { .. }
+        | Expr_::VarCtor { .. }
+        | Expr_::Int(_)
+        | Expr_::Float(_)
+        | Expr_::Str(_)
+        | Expr_::PathLit(_)
+        | Expr_::CustomElementCtor(_)
+        | Expr_::Char(_)
+        | Expr_::Unit => {}
     }
 }
 
