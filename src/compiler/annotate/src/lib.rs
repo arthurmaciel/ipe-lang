@@ -321,7 +321,7 @@ mod tests {
         let src = "module Main exposing (main)\n\nmap : Int -> Int\nmap x = x\n\nmain : Int\nmain =\n    let\n        map = 99\n    in\n    map\n";
         let (syntax, mut interner) = parse(src);
         let canon_mod = canon(&syntax, &mut interner);
-        let tokens = annotate(&syntax, &canon_mod, src, &interner);
+        let tokens = annotate(&syntax, &canon_mod, &interner);
 
         // The `let map = 99` binding occurrence shadows the top-level `map`, so it
         // must not be classified as a Kernel.
@@ -354,7 +354,7 @@ mod tests {
         let src = "module Main exposing (main)\n\nmain : String\nmain =\n    \"List.map\"\n";
         let (syntax, mut interner) = parse(src);
         let canon_mod = canon(&syntax, &mut interner);
-        let tokens = annotate(&syntax, &canon_mod, src, &interner);
+        let tokens = annotate(&syntax, &canon_mod, &interner);
 
         // The string token must cover the entire literal.
         let string_toks: Vec<_> = by_class(&tokens, TokenClass::StringLit);
@@ -384,7 +384,7 @@ mod tests {
         let src = "module Main exposing (main)\n\ntype Color = Red | Blue\n\nmain : Int\nmain =\n    1 + 2\n";
         let (syntax, mut interner) = parse(src);
         let canon_mod = canon(&syntax, &mut interner);
-        let tokens = annotate(&syntax, &canon_mod, src, &interner);
+        let tokens = annotate(&syntax, &canon_mod, &interner);
 
         let ops = by_class(&tokens, TokenClass::Operator);
         // The `+` operator should appear as an Operator-class token.
@@ -399,7 +399,7 @@ mod tests {
         let src = "module Main exposing (main)\n\nimport Ipe.Crypto as Crypto\n\nseed : String\nseed = \"x\"\n\nmain : String\nmain =\n    Crypto.sha256 seed\n";
         let (syntax, mut interner) = parse(src);
         let canon_mod = canon(&syntax, &mut interner);
-        let tokens = annotate(&syntax, &canon_mod, src, &interner);
+        let tokens = annotate(&syntax, &canon_mod, &interner);
 
         // `seed` call site in `Crypto.sha256 seed` must be Function.
         let kernel_pos = src.rfind("Crypto.sha256").expect("Crypto.sha256 present");
@@ -433,7 +433,7 @@ mod tests {
         let src = "module Main exposing (main)\n\ntype Color = Red | Blue\n\nmain : Color\nmain =\n    Red\n";
         let (syntax, mut interner) = parse(src);
         let canon_mod = canon(&syntax, &mut interner);
-        let tokens = annotate(&syntax, &canon_mod, src, &interner);
+        let tokens = annotate(&syntax, &canon_mod, &interner);
 
         let ctors = by_class(&tokens, TokenClass::Constructor);
         let red_ctor = ctors.iter().find(|t| text_of(src, t) == "Red");
@@ -446,7 +446,7 @@ mod tests {
         let src = "module Main exposing (main)\n\nimport Ipe.Crypto as Crypto\n\nmain : String\nmain =\n    Crypto.sha256 \"x\"\n";
         let (syntax, mut interner) = parse(src);
         let canon_mod = canon(&syntax, &mut interner);
-        let tokens = annotate(&syntax, &canon_mod, src, &interner);
+        let tokens = annotate(&syntax, &canon_mod, &interner);
 
         let kernel_toks = by_class(&tokens, TokenClass::Kernel);
         let map_tok = kernel_toks
@@ -468,7 +468,7 @@ mod tests {
         let src = "module Main exposing (main)\n\nmain : String\nmain =\n    \"List.map\"\n";
         let (syntax, mut interner) = parse(src);
         let canon_mod = canon(&syntax, &mut interner);
-        let tokens = annotate(&syntax, &canon_mod, src, &interner);
+        let tokens = annotate(&syntax, &canon_mod, &interner);
 
         // Every token that is inside the string literal must have def = None.
         let str_tok = tokens
