@@ -1,7 +1,16 @@
 -- | Ipe.Tuple — helpers for 2-tuples (pairs).
 --
--- Pure Ipê source, compiled through the ordinary pipeline; mirrors
--- elm/core `Tuple`.  A pair is written `( a, b )`.
+-- A pair is written `( a, b )` — parentheses, two values, a comma. The type
+-- of a pair whose first element is `Int` and second is `String` is
+-- `( Int, String )`. Pairs are useful for returning two values from a
+-- function without defining a named record.
+--
+-- The functions here let you extract a component (`first`, `second`),
+-- construct a pair (`pair`), or transform one or both components without
+-- destructuring by hand.
+--
+-- See also: `Ipe.Basics` — `fst` and `snd` are the prelude equivalents
+-- of `first` and `second`.
 module Ipe.Tuple exposing
     ( first, second
     , pair
@@ -9,9 +18,14 @@ module Ipe.Tuple exposing
     )
 
 
--- | Extract the first component of a pair.
---
---     Tuple.first ( 3, 4 ) == 3
+{-| `first pair` — extract the first component of a 2-tuple.
+
+```ipe
+first ( 3, 4 ) --> 3
+first ( "hello", True ) --> "hello"
+first ( 'x', [ 1, 2 ] ) --> 'x'
+```
+-}
 first : ( a, b ) -> a
 first p =
     case p of
@@ -20,9 +34,14 @@ first p =
             a
 
 
--- | Extract the second component of a pair.
---
---     Tuple.second ( 3, 4 ) == 4
+{-| `second pair` — extract the second component of a 2-tuple.
+
+```ipe
+second ( 3, 4 ) --> 4
+second ( "hello", True ) --> True
+second ( 'x', [ 1, 2 ] ) --> [ 1, 2 ]
+```
+-}
 second : ( a, b ) -> b
 second p =
     case p of
@@ -31,17 +50,29 @@ second p =
             b
 
 
--- | Build a pair from its two components.
---
---     Tuple.pair 3 4 == ( 3, 4 )
+{-| `pair a b` — construct a 2-tuple from two values.
+
+Useful as a first-class function when you need to build pairs inside
+a `map` or `List.zip` pipeline.
+
+```ipe
+pair 3 4 --> ( 3, 4 )
+pair "hello" True --> ( "hello", True )
+List.map (pair 0) [ 1, 2, 3 ] --> [ ( 0, 1 ), ( 0, 2 ), ( 0, 3 ) ]
+```
+-}
 pair : a -> b -> ( a, b )
 pair a b =
     ( a, b )
 
 
--- | Transform the first component of a pair.
---
---     Tuple.mapFirst negate ( 3, 4 ) == ( -3, 4 )
+{-| `mapFirst f pair` — apply `f` to the first component, leaving the second unchanged.
+
+```ipe
+mapFirst negate ( 3, 4 ) --> ( -3, 4 )
+mapFirst String.length ( "hello", True ) --> ( 5, True )
+```
+-}
 mapFirst : (a -> x) -> ( a, b ) -> ( x, b )
 mapFirst f p =
     case p of
@@ -50,9 +81,13 @@ mapFirst f p =
             ( f a, b )
 
 
--- | Transform the second component of a pair.
---
---     Tuple.mapSecond negate ( 3, 4 ) == ( 3, -4 )
+{-| `mapSecond f pair` — apply `f` to the second component, leaving the first unchanged.
+
+```ipe
+mapSecond negate ( 3, 4 ) --> ( 3, -4 )
+mapSecond not ( True, False ) --> ( True, True )
+```
+-}
 mapSecond : (b -> y) -> ( a, b ) -> ( a, y )
 mapSecond f p =
     case p of
@@ -61,9 +96,13 @@ mapSecond f p =
             ( a, f b )
 
 
--- | Transform both components of a pair, each with its own function.
---
---     Tuple.mapBoth negate negate ( 3, 4 ) == ( -3, -4 )
+{-| `mapBoth f g pair` — apply `f` to the first component and `g` to the second.
+
+```ipe
+mapBoth negate negate ( 3, 4 ) --> ( -3, -4 )
+mapBoth String.length not ( "hi", False ) --> ( 2, True )
+```
+-}
 mapBoth : (a -> x) -> (b -> y) -> ( a, b ) -> ( x, y )
 mapBoth f g p =
     case p of

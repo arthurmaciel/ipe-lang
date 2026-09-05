@@ -6,13 +6,32 @@
 
 Ipe.Char — single-character helpers.
 
-`Char` is a single Unicode code point; functions are aliased to
+`Char` is a single Unicode code point. Functions here classify characters
+into categories (`isAlpha`, `isDigit`, …), convert case, and translate
+between `Char` and its integer code point. All functions are aliased to
 runtime kernels via `Kernel.kernel`.
+
+A `Char` literal is written with single quotes: `'a'`, `'Z'`, `'3'`, `'€'`.
+Because a `Char` is a full Unicode code point, multi-byte sequences (like
+emoji) occupy a single `Char` value.
+
+See also: `Ipe.String` (sequences of characters).
 
 ## `isAlpha`
 
 ```ipe
 isAlpha : Char -> Bool
+```
+
+`isAlpha c` — `True` when `c` is a Unicode letter.
+
+Covers the full Unicode `Letter` category (L), not just ASCII a–z / A–Z.
+
+```ipe
+isAlpha 'a' --> True
+isAlpha 'Z' --> True
+isAlpha '3' --> False
+isAlpha ' ' --> False
 ```
 
 ## `isDigit`
@@ -21,10 +40,28 @@ isAlpha : Char -> Bool
 isDigit : Char -> Bool
 ```
 
+`isDigit c` — `True` when `c` is an ASCII decimal digit (`0`–`9`).
+
+```ipe
+isDigit '7' --> True
+isDigit '0' --> True
+isDigit 'a' --> False
+isDigit ' ' --> False
+```
+
 ## `isLower`
 
 ```ipe
 isLower : Char -> Bool
+```
+
+`isLower c` — `True` when `c` is a Unicode lowercase letter.
+
+```ipe
+isLower 'a' --> True
+isLower 'z' --> True
+isLower 'A' --> False
+isLower '3' --> False
 ```
 
 ## `isUpper`
@@ -33,13 +70,31 @@ isLower : Char -> Bool
 isUpper : Char -> Bool
 ```
 
+`isUpper c` — `True` when `c` is a Unicode uppercase letter.
+
+```ipe
+isUpper 'A' --> True
+isUpper 'Z' --> True
+isUpper 'a' --> False
+isUpper '3' --> False
+```
+
 ## `isAlphaNum`
 
 ```ipe
 isAlphaNum : Char -> Bool
 ```
 
-A letter or a digit (`isAlpha` or `isDigit`).
+`isAlphaNum c` — `True` when `c` is a Unicode letter or an ASCII digit.
+
+Equivalent to `isAlpha c || isDigit c`.
+
+```ipe
+isAlphaNum 'a' --> True
+isAlphaNum '5' --> True
+isAlphaNum '_' --> False
+isAlphaNum ' ' --> False
+```
 
 ## `isHexDigit`
 
@@ -47,7 +102,16 @@ A letter or a digit (`isAlpha` or `isDigit`).
 isHexDigit : Char -> Bool
 ```
 
-An ASCII hexadecimal digit (`0-9`, `a-f`, `A-F`).
+`isHexDigit c` — `True` when `c` is an ASCII hexadecimal digit.
+
+Accepts `0`–`9`, `a`–`f`, and `A`–`F`.
+
+```ipe
+isHexDigit '0' --> True
+isHexDigit 'f' --> True
+isHexDigit 'F' --> True
+isHexDigit 'g' --> False
+```
 
 ## `isOctDigit`
 
@@ -55,12 +119,33 @@ An ASCII hexadecimal digit (`0-9`, `a-f`, `A-F`).
 isOctDigit : Char -> Bool
 ```
 
-An ASCII octal digit (`0-7`).
+`isOctDigit c` — `True` when `c` is an ASCII octal digit (`0`–`7`).
+
+```ipe
+isOctDigit '0' --> True
+isOctDigit '7' --> True
+isOctDigit '8' --> False
+isOctDigit 'a' --> False
+```
 
 ## `toLower`
 
 ```ipe
 toLower : Char -> String
+```
+
+`toLower c` — the lowercase version of `c`, as a `String`.
+
+Returns a `String` rather than a `Char` because some Unicode uppercase
+letters lowercase to a multi-code-point sequence (e.g. the German `'ß'`
+uppercases to `"SS"`). For ASCII letters the result is always a single
+character.
+
+```ipe
+toLower 'A' --> "a"
+toLower 'Z' --> "z"
+toLower 'a' --> "a"
+toLower '3' --> "3"
 ```
 
 ## `toUpper`
@@ -69,25 +154,52 @@ toLower : Char -> String
 toUpper : Char -> String
 ```
 
+`toUpper c` — the uppercase version of `c`, as a `String`.
+
+Returns a `String` for the same reason as `toLower` — some Unicode
+characters uppercase to multiple code points.
+
+```ipe
+toUpper 'a' --> "A"
+toUpper 'z' --> "Z"
+toUpper 'A' --> "A"
+toUpper '3' --> "3"
+```
+
 ## `toCode`
 
 ```ipe
 toCode : Char -> Int
 ```
 
-Unicode code-point conversion.
+`toCode c` — the Unicode code point of `c` as an `Int`.
 
-`toCode 'A'  → 65`
-`fromCode 65 → 'A'`
+Use `toCode` to do arithmetic on character values, compare characters
+by position, or convert to another encoding.
 
-Round-trip on a single Unicode code point.  Use these to bridge
-between `Char` and integer arithmetic — index tables, parse ASCII
-ranges, etc.  Out-of-range `fromCode` (negative or above
-0x10FFFF) yields the Unicode replacement character `'�'`.
+```ipe
+toCode 'A' --> 65
+toCode 'a' --> 97
+toCode '0' --> 48
+toCode '\n' --> 10
+```
 
 ## `fromCode`
 
 ```ipe
 fromCode : Int -> Char
+```
+
+`fromCode n` — the `Char` whose Unicode code point is `n`.
+
+The round-trip `fromCode (toCode c) == c` holds for all valid code points.
+An out-of-range `n` (negative or above `0x10FFFF`) yields the Unicode
+replacement character `'\u{FFFD}'` (`'<27>'`).
+
+```ipe
+fromCode 65 --> 'A'
+fromCode 97 --> 'a'
+fromCode 48 --> '0'
+fromCode 0x1F600 --> '😀'
 ```
 
