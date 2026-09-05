@@ -13307,7 +13307,6 @@ pub fn max_live_eta_params(m: &canon::Module) -> usize {
     // positions, whose count is uncapped at the language surface — so its per-site
     // charge is the widest ctor arity, not the `MAX_ETA_PER_SITE` floor a
     // stdlib-callable residual assumes.
-    let ctor_charge = MAX_ETA_PER_SITE.max(max_ctor_arity_per_module(m));
     fn walk_expr(e: &canon::Expr, ctor_charge: usize) -> usize {
         let recur = |sub: &canon::Expr| walk_expr(sub, ctor_charge);
         match &e.value {
@@ -13357,6 +13356,7 @@ pub fn max_live_eta_params(m: &canon::Module) -> usize {
             | canon::Expr_::Unit => 0,
         }
     }
+    let ctor_charge = MAX_ETA_PER_SITE.max(max_ctor_arity_per_module(m));
     m.defs
         .iter()
         .map(|d| match d {
@@ -31918,6 +31918,9 @@ mod tests {
     #[test]
     fn ctor_arity_wider_than_def_arity_sizes_the_pools() {
         use ipe_diagnostics::Located;
+        // A 17-field constructor — one past the `MAX_CALLEE_ARITY` = 16 floor,
+        // so the floor alone cannot cover it.
+        const CTOR_ARITY: usize = 17;
 
         let mut interner = Interner::new();
         let main = interner.intern("Main").expect("intern");
@@ -31926,9 +31929,6 @@ mod tests {
         let make = interner.intern("make").expect("intern");
         let a = interner.intern("a").expect("intern");
 
-        // A 17-field constructor — one past the `MAX_CALLEE_ARITY` = 16 floor,
-        // so the floor alone cannot cover it.
-        const CTOR_ARITY: usize = 17;
         let ctor = canon::Ctor {
             name: mk,
             index: 0,
