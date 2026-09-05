@@ -25402,6 +25402,7 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::SystemGetenvBool
                 | KernelFn::SystemUnsetenv
                 | KernelFn::SystemCwd
+                | KernelFn::SystemGetcwd
                 | KernelFn::SystemLoadEnv
                 | KernelFn::SystemExit
                 // ── Debug.todo : String -> a — dev-only, arity 1 ────────
@@ -27464,6 +27465,7 @@ impl<'a> Lowerer<'a> {
                     ("System", "setenv") => Ok(Callee::Kernel(KernelFn::SystemSetenv)),
                     ("System", "unsetenv") => Ok(Callee::Kernel(KernelFn::SystemUnsetenv)),
                     ("System", "cwd") => Ok(Callee::Kernel(KernelFn::SystemCwd)),
+                    ("System", "getcwd") => Ok(Callee::Kernel(KernelFn::SystemGetcwd)),
                     ("System", "loadEnv") => Ok(Callee::Kernel(KernelFn::SystemLoadEnv)),
                     ("System", "exit") => Ok(Callee::Kernel(KernelFn::SystemExit)),
                     // ── Random kernels ──────────────────────────────────

@@ -848,6 +848,7 @@ pub const fn appearance_literal_args(k: KernelFn) -> &'static [(usize, LitKind)]
         | KernelFn::SystemSetenv
         | KernelFn::SystemUnsetenv
         | KernelFn::SystemCwd
+        | KernelFn::SystemGetcwd
         | KernelFn::SystemLoadEnv
         | KernelFn::SystemExit
         | KernelFn::RandomInt
