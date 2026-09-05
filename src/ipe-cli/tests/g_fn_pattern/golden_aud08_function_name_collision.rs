@@ -1,9 +1,12 @@
 //! AUD-08 regression — two DISTINCT functions in DIFFERENT modules whose
 //! `(home, name)` identity folds to the SAME Rust identifier under
 //! `naming::module_value`'s `snake_case` fold must be rejected with
-//! `NameError::DuplicateValue`, never silently emit two functions sharing
+//! `NameError::RustNameFold`, never silently emit two functions sharing
 //! one Rust name (a `rustc` E0428 "duplicate definition", or worse, whichever
-//! definition the emitter's map keeps last silently winning).
+//! definition the emitter's map keeps last silently winning). Unlike a
+//! same-name source redefinition (`DuplicateValue`), this is a mangling
+//! collision between two differently-spelled Ipê definitions, so the
+//! diagnostic names both Ipê paths and the shared Rust name.
 //!
 //! `module_value`'s fold is not injective over the (home, name) split:
 //! `["ZuiBorder"]/"rounded"` and `["Zui"]/"borderRounded"` both fold to
@@ -87,7 +90,7 @@ fn distinct_functions_folding_to_the_same_rust_name_are_rejected() {
     let Err(err) = built else {
         assert!(
             false_marker(),
-            "expected a DuplicateValue rejection for ZuiBorder.rounded vs \
+            "expected a RustNameFold rejection for ZuiBorder.rounded vs \
              Zui.borderRounded (both fold to `zui_border_rounded`), but ipec \
              build SUCCEEDED — the collision would silently emit two Rust \
              fns sharing one name"
@@ -99,17 +102,27 @@ fn distinct_functions_folding_to_the_same_rust_name_are_rejected() {
         return;
     };
     let ipe_diagnostics::Diagnostic::Name {
-        msg: ipe_diagnostics::NameError::DuplicateValue { name, .. },
+        msg:
+            ipe_diagnostics::NameError::RustNameFold {
+                first,
+                second,
+                rust_name,
+                kind,
+            },
         ..
     } = &**diag
     else {
-        assert!(
-            false_marker(),
-            "expected NameError::DuplicateValue, got: {err}"
-        );
+        assert!(false_marker(), "expected NameError::RustNameFold, got: {err}");
         return;
     };
-    assert_eq!(&**name, "zui_border_rounded");
+    assert_eq!(&**rust_name, "zui_border_rounded");
+    assert_eq!(*kind, ipe_diagnostics::RustNameFoldKind::Value);
+    // Both colliding Ipê definitions are named, so the fix is unambiguous.
+    let both: [&str; 2] = [first, second];
+    assert!(
+        both.contains(&"ZuiBorder.rounded") && both.contains(&"Zui.borderRounded"),
+        "diagnostic must name both folding Ipê definitions, got {both:?}"
+    );
 }
 
 /// Positive control: two functions in different modules whose names do NOT
