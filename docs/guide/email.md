@@ -66,12 +66,29 @@ case Email.parseAddress "alice@example.com" of
 Explore the full surface — the `with*` builders, the SES / SMTP config records,
 and `send` itself — with `ipe doc Ipe.Email`.
 
-> A `send`-free script that only parses an address and builds a message does not
-> yet compile end-to-end: emit references `ipe_runtime::email::*` but does not
-> enable the runtime's `email` cargo feature unless `Email.send` is called
-> ([issue #1545](https://github.com/arthurmaciel/ipe-lang/issues/1545)). A full
-> program that *does* call `send` links the feature and builds. Until #1545 lands
-> this guide stays reference-only rather than shipping a broken example.
+A program that only parses an address and builds a message — without ever
+calling `Email.send` — compiles and runs end-to-end:
+
+```ipe
+import Ipe.Email as Email
+import Ipe.Io as Io
+
+
+main : Task Error ()
+main =
+    case Email.parseAddress "alice@example.com" of
+        Just addr ->
+            let
+                _ =
+                    Email.defaultMessage
+                        { from = addr, to = [ addr ], subject = "Welcome" }
+                        |> Email.withTextBody "Thanks for signing up."
+            in
+            Io.println "message built"
+
+        Nothing ->
+            Io.println "not a valid address"
+```
 
 ## The why
 

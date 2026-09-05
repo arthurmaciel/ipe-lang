@@ -3,10 +3,9 @@
 //! When `IPE_CONSOLE_DB_PATH` is set, the always-compiled in-RAM sink
 //! (`telemetry.rs`) ALSO dual-writes every log + span to a SQLite file via a
 //! background batcher task. The bundled console child reads that
-//! same file through the `hub_*` kernels — so this module + `live/hub.rs`
-//! are the two halves of one data layer. Schema = the **hub schema**
-//! (`/store.go`) the hub read kernels expect, NOT  per-app
-//! `persist.go` schema; the Rust embedded console uses one schema end-to-end.
+//! same file through the `hub_*` kernels — so this module + `web/hub.rs`
+//! are the two halves of one data layer. The schema is the **hub schema** the
+//! hub read kernels expect; the embedded console uses one schema end-to-end.
 //!
 //! ## Tokio-free core (the load-bearing constraint)
 //!

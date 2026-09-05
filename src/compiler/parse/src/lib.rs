@@ -5,7 +5,7 @@
 //! Entry point: [`parse_module`]. It consumes source text plus a mutable
 //! [`Interner`] and produces a [`ipe_syntax::Module`], or a typed
 //! [`ipe_diagnostics::Diagnostic`]. The parser is a hand-written recursive
-//! descent port of the the compiler compiler's `Ipe.Parse.*`, narrowed to the
+//! descent port of the reference compiler's `Ipe.Parse.*`, narrowed to the
 //! nodes the supported subset exercises. Recursion is bounded by
 //! [`parser::MAX_DEPTH`] so adversarial input cannot overflow the stack.
 
@@ -1027,7 +1027,7 @@ mod tests {
             )
         };
         // `1e400` overflows f64 to infinity; rejecting it (rather than silently
-        // accepting `inf`) keeps parity with the the reference. A finite literal,
+        // accepting `inf`) keeps parity with the reference. A finite literal,
         // including the largest in-range exponent, still lexes cleanly.
         assert_eq!(err_code("1e400"), "IPE-P0016");
         assert_eq!(err_code("1.0e309"), "IPE-P0016");
@@ -1737,7 +1737,7 @@ mod tests {
     fn open_record_type_annotation_parses_into_a_trecordopen() {
         // `getName : { r | name : String } -> String` — a row-polymorphic
         // record type. The annotation's argument is a `TRecordOpen(r, [(name,
-        // String)])`, mirroring the the compiler reference's
+        // String)])`, mirroring the reference compiler's
         // `TRecord fields (Just rowVar)`.
         let mut i = Interner::new();
         let src = format!(
@@ -1793,7 +1793,7 @@ mod tests {
     #[test]
     fn empty_record_type_parses_into_empty_trecord() {
         // `{}` in type position is the empty record type — valid, yields `TRecord []`.
-        // Mirrors the the compiler reference (Type.hs line 131-133):
+        // Mirrors the reference compiler (Type.hs line 131-133):
         //   Just '}' -> char mkError '}' >> return (TRecord [] Nothing)
         let mut i = Interner::new();
         let m = parse_module(&format!("{HDR}f : {{}}\nf =\n    0\n"), &mut i);
@@ -2179,7 +2179,7 @@ mod tests {
     #[test]
     fn parses_negative_int_literal() {
         // `(-5)` in atom (prefix) position folds the sign into a signed
-        // `Expr_::Int(-5)` node, mirroring the the reference's `Src.Negate` of a
+        // `Expr_::Int(-5)` node, mirroring the reference's `Src.Negate` of a
         // numeric literal. The parens are unwrapped, so the body is the literal.
         let mut i = Interner::new();
         let src = "module Main exposing (v)\n\nv =\n    (-5)\n";
@@ -2413,7 +2413,7 @@ mod tests {
     #[test]
     fn space_between_minus_and_ident_is_a_parse_error() {
         // `(- x)` (space between `-` and the identifier) must fail.
-        // Mirrors the the compiler behaviour: `exprAtom_` has no `spaces` call after
+        // Mirrors the reference compiler behaviour: `exprAtom_` has no `spaces` call after
         // consuming `-`, so a space before the operand causes the nested atom
         // parse to fail (consumed error, no backtrack).
         let src = format!("{HDR}v x =\n    (- x)\n");

@@ -16,8 +16,8 @@
 //! applies an inline lambda that captures the outer local `n = 10` → `15`;
 //! `add 2 3` applies the multi-parameter lambda `\a b -> a + b` → `5`. The
 //! entry's `let r = inc 41 + (\x -> x + n) 5 + add 2 3` is `42 + 15 + 5 = 62`.
-//! Running the the toolchain inside `cargo test` is impractical (it needs the
-//! the `ipe` binary plus a the toolchain), so the hand-computed value is the
+//! Running the toolchain inside `cargo test` is impractical (it needs the
+//! the `ipe` binary plus a toolchain), so the hand-computed value is the
 //! in-test oracle, documented here against the equivalent command.
 
 use std::path::{Path, PathBuf};
@@ -61,7 +61,7 @@ fn emits_byte_identical_main_rs() {
 }
 
 /// Full spine: compile, build the emitted Cargo project, run it, and assert the
-/// lambda-driven arithmetic prints `62` — the same value the the backend
+/// lambda-driven arithmetic prints `62` — the same value the backend
 /// produces. Gated on `IPE_E2E=1` so the default `cargo test` stays fast.
 #[test]
 fn end_to_end_builds_and_prints_sixty_two() {

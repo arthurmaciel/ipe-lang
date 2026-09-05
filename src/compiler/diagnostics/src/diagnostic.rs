@@ -619,8 +619,6 @@ pub enum NameError {
         name: Box<str>,
         replacement: Box<str>,
     },
-    /// A reserved language/JS-interop BOUNDARY type is named in an annotation,
-    /// but its runtime denotation has not shipped yet. The name is reserved
     /// An asserted foreign call (`Rust.Ffi.call`) is malformed at its use
     /// site: applied to a non-literal path, referenced without application,
     /// carrying an invalid Rust path, or placed anywhere other than the whole
@@ -1168,8 +1166,6 @@ pub enum Feature {
     /// the annotation and let the parameter's shape be inferred at its call site,
     /// until each such form lands. [IPE-L0131]
     RowPolyRecordAnnotation,
-    /// A `CustomElement down up` boundary value reached lowering. The type
-    /// resolves and its two parameters pass the SEAL, but the widget transport —
     /// A `Js.send` payload or a `Js.subscribe` decoder crossed the Ipê↔JS port
     /// seam with a type that is NOT seal-legal: a `Secret` or reserved-sink type
     /// (a secret must never be serialised to JS), an untyped `Value`/`Json` (the
@@ -1278,7 +1274,7 @@ pub enum LowerError {
     /// Debug`). The predicate used is `ir_type_is_derivable` (NOT serde), so
     /// `Html`/`Element`/`Color`-carrying Msg variants are accepted (they derive
     /// `Clone + Debug + PartialEq`). Converts a would-be `cargo` trait-bound
-    /// failure into a fail-closed `ipe` error. [IPE-L0122]
+    /// failure into a fail-closed `ipe` error. [IPE-L0125]
     InadmissibleAppMsg {
         app: AppShape,
         field: Box<str>,

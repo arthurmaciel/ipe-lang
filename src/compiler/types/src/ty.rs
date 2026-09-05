@@ -4,9 +4,9 @@
 //! * [`Ty`] — the *resolved*, immutable, canonical type read back after the
 //!   solver settles. This is what [`crate::SolvedTypes`] hands to the lowerer.
 //! * [`Content`] / [`FlatType`] — the *solver-level* descriptors stored inside
-//!   union-find nodes during inference (mirrors the compiler `Content` / `FlatType`,
-//!   narrowed to the supported lattice: functions, type-constructor
-//!   applications, and unit; no records / tuples / aliases / super-types yet).
+//!   union-find nodes during inference. The lattice spans functions,
+//!   type-constructor applications, unit, tuples, records with a row tail, and
+//!   super-typed variables (`comparable` / `number`, see [`TyBounds`]).
 //!
 //! # Open records (`RoutedWebApp` / row-poly)
 //!
@@ -149,7 +149,7 @@ pub const fn is_solver_var(raw: u32) -> bool {
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum RowTail {
     /// Closed record — no extension variable; the field set is exact.
-    /// Corresponds to `Nothing` on the the compiler `TRecord` / `EmptyRecord1`
+    /// Corresponds to `Nothing` on the reference compiler `TRecord` / `EmptyRecord1`
     /// at the solver level.
     Closed,
     /// Open record — extra fields are absorbed by the row variable whose raw
@@ -162,8 +162,8 @@ pub enum RowTail {
 /// The field names of the kernel-managed `RetryPolicy e` record.
 ///
 /// In [`BTreeMap`]/alphabetical order — the order the emitted Rust struct also
-/// uses: `{ baseMs : Int, jitter : Bool, kind : Int, maxAttempts : Int,
-/// shouldRetry : e -> Bool }`.
+/// uses: `{ baseMs : Int, maxAttempts : Int, shouldRetry : e -> Bool,
+/// strategy : BackoffStrategy }`.
 ///
 /// This is the single source of truth for the field-name set. The type
 /// checker interns exactly these strings for the `RetryPolicy` scheme, and the

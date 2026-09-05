@@ -1425,7 +1425,7 @@ pub enum IrType {
     /// `Path.fromString`, which normalises the path and REJECTS a NUL byte or a
     /// `..` traversal escape, so an unvalidated string can never reach a
     /// filesystem syscall. This closes the raw-`String`-path injection surface
-    /// (the the compiler `FilePath = String` anti-pattern).
+    /// (the reference compiler `FilePath = String` anti-pattern).
     ///
     /// Renders as `ipe_runtime::path::Path` (a `#[derive(Clone)]` newtype around
     /// a cleaned `String`; `Debug`/`PartialEq`/`Eq` are safe — a path is not a

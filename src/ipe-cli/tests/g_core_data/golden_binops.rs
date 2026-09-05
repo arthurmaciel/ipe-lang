@@ -14,8 +14,8 @@
 //! `2 + 3 * 4 - 1` associates as `(2 + (3 * 4)) - 1 = 13` (`*` at precedence 7
 //! binds tighter than `+`/`-` at 6; `+`/`-` are left-associative). The Rust
 //! `end_to_end_*` test below asserts the Rust backend reaches the identical
-//! `13`. Running the the toolchain inside `cargo test` is impractical (it needs
-//! the the `ipe` binary plus a the toolchain), so the hand-computed value is
+//! `13`. Running the toolchain inside `cargo test` is impractical (it needs
+//! the `ipe` binary plus a toolchain), so the hand-computed value is
 //! the in-test oracle, documented here against the equivalent command.
 //!
 //! `assoc_reduce_order_*` tests pin the reduce order for mixed-prec and
@@ -65,7 +65,7 @@ fn emits_byte_identical_main_rs() {
 }
 
 /// Full spine: compile, build the emitted Cargo project, run it, and assert the
-/// precedence-sensitive arithmetic prints `13` — the same value the the backend
+/// precedence-sensitive arithmetic prints `13` — the same value the backend
 /// produces. Gated on `IPE_E2E=1` so the default `cargo test` stays fast.
 #[test]
 fn end_to_end_builds_and_prints_thirteen() {

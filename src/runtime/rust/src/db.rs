@@ -1207,11 +1207,10 @@ pub fn db_get_int<R: IpeRow>(field: String, row: &R) -> i64 {
 }
 
 /// Lowercase sha256-hex of a migration's SQL text. This value is stored in the
-/// `_ipe_migrations` ledger and is a CROSS-BACKEND DB CONTRACT:
-/// records `fmt.Sprintf("%x", sha256.Sum256([]byte(stmt)))` (db_auth.go), so a
-/// database created/advanced by one backend must hash byte-identically under the
-/// other. Hence sha256, lowercase hex, over the exact statement bytes — never a
-/// different/cheaper hash. `{:x}` on a `Sha256` digest is lowercase hex.
+/// `_ipe_migrations` ledger and is a DB CONTRACT: it is the lowercase-hex
+/// sha256 of the exact statement bytes, so a database created/advanced by any
+/// version must hash byte-identically — never a different/cheaper hash. `{:x}`
+/// on a `Sha256` digest is lowercase hex.
 fn migrate_checksum(sql: &str) -> String {
     use sha2::{Digest, Sha256};
     let mut h = Sha256::new();

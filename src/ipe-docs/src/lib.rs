@@ -3,11 +3,11 @@
 //!
 //! Builds an in-memory index that maps a documentation key to its entry.
 //! Every entry is a *reference* to a per-kind SSOT; no prose is duplicated
-//! here. The four SSOTs are:
+//! here. The sources are:
 //!
 //! - **Symbols / modules** — parsed doc-strings from the embedded stdlib
-//!   `.ipe` sources (component A/B). The raw [`DocString`] body is carried
-//!   as-is; the index is the aggregator, not the author.
+//!   `.ipe` sources. The raw [`DocString`] body is carried as-is; the index
+//!   is the aggregator, not the author.
 //! - **Diagnostics** — the `src/compiler/diagnostics/explain/*.md` files
 //!   (already SSOT). Read at index-build time from the filesystem.
 //! - **Constructs / glossary** — `docs/constructs/*.md` files (the only newly
@@ -15,6 +15,8 @@
 //! - **CLI commands** — injected by the caller from `help.rs`'s `COMMANDS`
 //!   table (the SSOT). The index never imports `ipe` to avoid a circular
 //!   dependency; command data is passed in via [`CommandInfo`].
+//! - **Environment variables** — the `ENV_VARS` registry in
+//!   [`env_vars`], keyed by variable name.
 //!
 //! Entry point: [`Index::build`].
 
@@ -100,7 +102,7 @@ pub struct Index {
 }
 
 impl Index {
-    /// Build the index from all five SSOTs.
+    /// Build the index from every documentation source.
     ///
     /// - `explain_dir`: path to `src/compiler/diagnostics/explain/`
     /// - `content_dir`: path to `docs/constructs/`

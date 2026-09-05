@@ -74,10 +74,8 @@ least-recently-used entry and the one evicted. `Cache.stats` returns running
 totals of `{ hits, misses, evictions }`; `Cache.size` the live entry count after
 lazy expiry.
 
-The values here are strings. A cache whose value type is `Int` currently reads
-back as a miss even after a successful `put`
-([arthurmaciel/ipe-lang#1536](https://github.com/arthurmaciel/ipe-lang/issues/1536)),
-so model an integer payload as a record or string field until that is resolved.
+A cache holds any value type; an `Int`-valued cache reads back the stored value
+after a `put`, exactly as a string-valued one does.
 
 ## The why
 

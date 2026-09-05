@@ -2751,7 +2751,7 @@ impl<'a> EmitCtx<'a> {
     /// such a field in `Box<…>` at the declaration and balances that with
     /// `Box::new` at construction and a deref at pattern binding — boxing at
     /// least one edge of every cycle, which is what keeps the emitted crate
-    /// finite-sized and matches the the reference's recursive-payload boxing.
+    /// finite-sized and matches the reference's recursive-payload boxing.
     ///
     /// Every *constructible* recursive Ipê type routes through an enum (the enum
     /// supplies the nullary base case), so boxing the cyclic enum-payload edge

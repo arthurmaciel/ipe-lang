@@ -310,7 +310,7 @@ pub(crate) enum CliEvent<M> {
 
 /// Tracks the goroutine-equivalent ticker tasks spawned for the active
 /// `Sub.every` subscriptions. `update` stops all + respawns from the new Sub
-/// (mirrors tea_subs.go: one program, one model, re-evaluated each tick).
+/// (one program, one model, re-evaluated each tick).
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) struct SubManager<M> {
     tx: tokio::sync::mpsc::UnboundedSender<CliEvent<M>>,

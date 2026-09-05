@@ -22,8 +22,8 @@
 //! ```
 //!
 //! The `end_to_end_*` test below asserts the Rust backend reaches the identical
-//! `42`. Running the the toolchain inside `cargo test` is impractical (it needs
-//! the the `ipe` binary plus a the toolchain), so the hand-verified value is
+//! `42`. Running the toolchain inside `cargo test` is impractical (it needs
+//! the `ipe` binary plus a toolchain), so the hand-verified value is
 //! the in-test oracle, documented here against the equivalent command.
 
 use std::path::{Path, PathBuf};

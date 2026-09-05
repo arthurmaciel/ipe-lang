@@ -15,8 +15,8 @@
 //!
 //! `p = { x = 2, y = 40 }`; the entry prints `p.x + p.y = 42`. The
 //! `end_to_end_*` test below asserts the Rust backend reaches the identical
-//! `42`. Running the the toolchain inside `cargo test` is impractical (it needs
-//! the the `ipe` binary plus a the toolchain), so the hand-verified value is
+//! `42`. Running the toolchain inside `cargo test` is impractical (it needs
+//! the `ipe` binary plus a toolchain), so the hand-verified value is
 //! the in-test oracle, documented here against the equivalent command.
 
 use std::path::{Path, PathBuf};
@@ -60,7 +60,7 @@ fn emits_byte_identical_main_rs() {
 }
 
 /// Full spine: compile, build the emitted Cargo project, run it, and assert the
-/// record field-read program prints `42` — the same value the the backend
+/// record field-read program prints `42` — the same value the backend
 /// produces. Gated on `IPE_E2E=1` so the default `cargo test` stays fast.
 #[test]
 fn end_to_end_builds_and_prints_forty_two() {

@@ -43,7 +43,7 @@
 /// A minimal `Tui.app` counter exercising the `Tui.app` scheme.
 ///
 /// `onKey` is a SINGLE-argument record handler — `KeyEvent -> Msg` — matching
-/// the the compiler reference scheme (`any -> msg`).  The emitter generates the
+/// the reference compiler scheme (`any -> msg`).  The emitter generates the
 /// bridging closure:
 ///
 /// ```text
@@ -150,7 +150,7 @@ fn compile_and_build(test_name: &str, ipe_source: &str) -> Result<std::path::Pat
 /// code uses the record-alias shape.
 ///
 /// After the fix, the scheme PINS the key-event argument to the closed
-/// record `{ kind : String, value : String }` (the the compiler reference types it
+/// record `{ kind : String, value : String }` (the reference compiler types it
 /// `any -> msg` but we fail at compile time — same sanctioned tightening as
 /// the Model / Msg gates).
 /// The emitter generates a bridging wrapper:

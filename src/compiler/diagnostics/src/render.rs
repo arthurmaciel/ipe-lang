@@ -794,7 +794,6 @@ fn an_article(rendered: &str) -> String {
     format!("{article} `{rendered}`")
 }
 
-/// The uppercase title shown in the rule, chosen per code so it names what
 /// The uppercase title for the human-facing header rule.
 ///
 /// Derives mechanically from the [`crate::code::title`] SSOT: every code's
@@ -2094,8 +2093,8 @@ const fn feature_label(f: Feature) -> &'static str {
         }
         Feature::BoundedRecordUpdate => {
             "updating a generic record is not supported yet — it needs a \
-             `Clone`-bounded type parameter (bounded generics are M2d) \
-             [feature: bounded-record-update]"
+             `Clone`-bounded type parameter (bounded generics are not \
+             supported yet) [feature: bounded-record-update]"
         }
         Feature::NestedPayloadPatterns => {
             "a record pattern is supported at a `case` scrutinee or a `let` \

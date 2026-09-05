@@ -1,6 +1,6 @@
 //! `Vec`-backed union-find with weighted union + path compression.
 //!
-//! Rust port of the the compiler compiler's `Ipe.Type.UnionFind` (itself a
+//! Rust port of the reference compiler's `Ipe.Type.UnionFind` (itself a
 //! derivative of elm/compiler's `Type.UnionFind`, BSD-3-Clause). The the compiler
 //! original threads `IORef`-backed pointers; this port replaces them with a
 //! single arena `Vec` indexed by [`VarId`]. That choice is deliberate: it keeps
@@ -31,7 +31,7 @@ enum Node<T> {
 
 /// A weighted-union / path-compressed union-find over descriptors of type `T`.
 ///
-/// `T` mirrors the the compiler `Descriptor`'s payload — here a `Content` (see
+/// `T` mirrors the reference compiler `Descriptor`'s payload — here a `Content` (see
 /// `ty.rs`). The structure is generic so the union-find logic stays decoupled
 /// from the type lattice it carries, exactly as `UF.Point a` is in the
 /// reference compiler.

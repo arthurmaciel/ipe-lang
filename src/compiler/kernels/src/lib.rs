@@ -3373,7 +3373,7 @@ impl StdlibKernel {
             ),
             // AEAD arity is 2 (key, plaintext/ciphertext): the Rust runtime
             // (`ipe_aes_gcm_encrypt(key, plaintext)` etc.) prepends/strips a
-            // fresh random nonce internally, so — unlike the the backend which
+            // fresh random nonce internally, so — unlike the backend which
             // took an explicit nonce/AAD arg — there is no third argument.
             Self::CryptoAesGcmEncrypt => d(
                 "Crypto",
@@ -6091,33 +6091,28 @@ impl StdlibKernel {
     /// `Some` when the scheme is expressible structurally — `ipe_types`
     /// interprets the returned shape into a `Ty` byte-identical to what the
     /// `stdlib_scheme` table produces. `None` for a scheme that is not, which
-    /// resolves through that table instead. A shape may be **monomorphic** (an
-    /// arrow spine over the primitive built-ins) or **rank-1 polymorphic** (over
-    /// [`TyShape::Var`] applied to the `List` / `Maybe` constructors); the one
-    /// class still absent is an open row, because [`TyShape`]'s vocabulary
-    /// carries no solver-touching open-tail node.
+    /// resolves through that table instead.
     ///
-    /// Every fully-monomorphic kernel family whose scheme is an arrow spine over
-    /// ONLY the six primitive built-ins ([`BuiltinTag`]) carries a shape — no
-    /// type variable, no row, no record, no tuple, no opaque constructor. Each
-    /// spine is a `'static` value assembled from the primitive leaves below, so
-    /// it embeds directly as the carried shape and the `ipe_types` interpreter
-    /// reproduces the exact `Ty` the (now-removed) `stdlib_scheme` arm did.
+    /// [`TyShape`]'s vocabulary spans arrow spines over the primitive built-ins
+    /// ([`BuiltinTag`]), the `List` / `Maybe` / `Dict` / `Set` constructors,
+    /// scheme-local type variables ([`TyShape::Var`]), tuples
+    /// ([`TyShape::Tuple`]), records with an open row tail
+    /// ([`RowTailShape::Open`]), and closed records. Each shape is a `'static`
+    /// value assembled from the leaves below, so it embeds directly and the
+    /// `ipe_types` interpreter reproduces the exact `Ty` the scheme names.
     ///
-    /// The core `List` combinator family carries a **polymorphic** shape over
-    /// the scheme-local type variables `a` (index 0) and `b` (index 1) applied to
-    /// the `List` / `Maybe` constructors, e.g. `map : (a -> b) -> List a ->
-    /// List b`. Only the obligation-free members migrate: the `comparable` /
-    /// `number`-bounded ones (`sort`/`sortBy`, `sum`, `product`, `maximum`,
-    /// `minimum`) keep their `stdlib_scheme` base-scheme arm because their bounded
-    /// super-var is minted in `constrain_var_kernel` before the scheme is read,
-    /// and the tuple-shaped ones (`zip`, `unzip`, `partition`, `map2`..`map5`,
-    /// `indexedMap`, `foldl`/`foldr`, `sortWith`) are deferred until [`TyShape`]
-    /// gains a tuple node.
+    /// The core `List` combinator family carries a polymorphic shape over the
+    /// scheme-local type variables `a` (index 0) and `b` (index 1), e.g.
+    /// `map : (a -> b) -> List a -> List b`; the tuple-returning members
+    /// (`zip`, `unzip`, `partition`, `map2`, `indexedMap`, `foldl`/`foldr`,
+    /// `sortWith`) carry shapes over [`TyShape::Tuple`].
     ///
-    /// A family that touches any not-yet-tagged constructor (`Result`, `Task`, a
-    /// tuple, a record, an opaque handle) or an open row carries NO shape and
-    /// resolves through the `stdlib_scheme` table.
+    /// The classes that still resolve through `stdlib_scheme` instead are the
+    /// bounded-super-var families — the `comparable` / `number`-bounded members
+    /// (`sort`, `sum`, `product`, `maximum`, `minimum`) whose super-var is minted
+    /// in `constrain_var_kernel` before the scheme is read — and any scheme over
+    /// a constructor not yet in the vocabulary (`Result`, `Task`, an opaque
+    /// handle).
     #[must_use]
     #[allow(clippy::too_many_lines)] // one flat declarative spine table per family
     #[allow(clippy::match_same_arms)] // family-grouped spine table; merging cross-family arms with coincidentally-equal spines would obscure the per-family structure
@@ -11101,9 +11096,8 @@ impl StdlibKernel {
         None
     }
 
-    /// `true` when this variant belongs to the TEA (`Cmd` / `Sub` /
-    /// A development-only escape hatch (the `Ipe.Debug` family). Rejected in a
-    /// PRODUCTION build (`ipe release`, IPE-L0140) rather than
+    /// `true` for a development-only escape hatch (the `Ipe.Debug` family).
+    /// Rejected in a PRODUCTION build (`ipe release`, IPE-L0140) rather than
     /// silently stripped or shipped. The single SSOT for "which kernels are
     /// dev-only" — the lowerer's usage scan and every gate consult this.
     #[must_use]
@@ -11111,6 +11105,7 @@ impl StdlibKernel {
         matches!(self, Self::DebugLog | Self::DebugTodo | Self::DebugExplain)
     }
 
+    /// `true` when this variant belongs to the TEA (`Cmd` / `Sub` /
     /// `Time.every`) subsystem, including reserved pub/sub variants.
     #[must_use]
     pub const fn is_tea(self) -> bool {

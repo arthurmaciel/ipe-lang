@@ -37,7 +37,7 @@ const STAGE: &str = "ipe_types::constrain";
 /// `Dict String String` — the concrete pub/sub wire carrier.
 ///
 /// Mirrors the reference's `any`-wildcard semantics for union-ctor field types:
-/// the the compiler/the backend carries `any` payloads as dynamic `interface{}`; the
+/// the reference compiler/the backend carries `any` payloads as dynamic `interface{}`; the
 /// Rust backend pins them to `Dict String String`, the sole concrete carrier that
 /// satisfies `Clone + Debug + PartialEq + Serialize + DeserializeOwned`.
 fn pin_any_in_ty(
@@ -144,7 +144,7 @@ struct Builtins {
     set: Symbol,
     /// `Ipe.Bytes` type constructor symbol.
     /// Divergence from Ipê: Bytes is a distinct primitive in Ipê-Rust (Vec<u8>),
-    /// not a String alias as in the the reference.
+    /// not a String alias as in the reference.
     bytes: Symbol,
     /// The interned `Error` symbol, used to validate the error channel in
     /// `Task Error a` annotations (normalised to unary `Task a`) and to pin the
@@ -1619,7 +1619,7 @@ impl Builtins {
 enum BinopClass {
     /// `//`: integer division `Int -> Int -> Int`.
     IntDiv,
-    /// `/`: `Float -> Float -> Float` (matches the the backend's float division).
+    /// `/`: `Float -> Float -> Float` (matches the backend's float division).
     FloatDiv,
     /// `+ - *`: `Number a => a -> a -> a`. The operands and the result share one
     /// numeric variable carrying the named obligation, so the operation stays
@@ -2291,7 +2291,7 @@ impl<'a> Builder<'a> {
     ///
     /// Each closed record gets its own `EmptyRecord` node rather than sharing
     /// one, so the occurs-check can distinguish different records' tails;
-    /// this matches the the compiler reference's `UF.fresh EmptyRecord1` per
+    /// this matches the reference compiler's `UF.fresh EmptyRecord1` per
     /// record literal.
     fn empty_record_tail(&mut self) -> DResult<VarId> {
         self.structure(FlatType::EmptyRecord)
@@ -2557,7 +2557,7 @@ impl<'a> Builder<'a> {
     /// Instantiate a resolved [`Ty`] into fresh union-find structure, with every
     /// type variable replaced by a fresh **flexible** variable.
     ///
-    /// This is the per-call-site instantiation (the the compiler `CForeign` path):
+    /// This is the per-call-site instantiation (the reference compiler `CForeign` path):
     /// each reference to a polymorphic top-level binding alpha-renames the
     /// binding's scheme into fresh flex variables, so the call unifies against the
     /// concrete argument types at *this* site without pinning the binding's other
@@ -2655,7 +2655,7 @@ impl<'a> Builder<'a> {
                 // INDEPENDENT fresh flex UV, NOT a shared rigid skolem. Sharing
                 // would force all occurrences to the same type; rigid would
                 // prevent the body from assigning a concrete type.  Mirrors the
-                // the compiler compiler's `Instantiate.fromAnnotation` filtering
+                // the reference compiler's `Instantiate.fromAnnotation` filtering
                 // `"any"` out of the skolem set and `buildEnv` giving each
                 // occurrence its own fresh UF var.
                 // AUD-13: a solver-representative id (tagged by `zonk`) is
@@ -6766,7 +6766,7 @@ impl<'a> Builder<'a> {
             // pair. Deliberately NOT `Decoder Money`: `Money`/`Currency` are
             // project-generated types unnameable from this crate (see
             // `docs/adr/0013-multi-driver-db-compile-time-selection.md`) — a
-            // recorded divergence from the the backend's `Decoder Money`,
+            // recorded divergence from the backend's `Decoder Money`,
             // sanctioned divergence §B-DbDecMoney.
             K::DbDecMoney => fun(string(), dec(tuple2(decimal(), string()))),
             // `Db.Decode.decimal : String -> Decoder Decimal` — reads an exact-decimal
@@ -7465,7 +7465,7 @@ impl<'a> Builder<'a> {
             // sanctioned divergence §B-Breakpoint.  Users cannot
             // fabricate arbitrary `Breakpoint` values because all constructors
             // (`mobile`, `tablet`, …) are kernels whose schemes return `string()`;
-            // the only type-safety gap vs. the the backend is that a plain `String`
+            // the only type-safety gap vs. the backend is that a plain `String`
             // literal would also unify — an accepted limitation.
             //
             // `Ui.breakpoint : String -> List (Attribute msg) -> Element msg -> Element msg`
@@ -8533,7 +8533,7 @@ impl<'a> Builder<'a> {
             // ── Ipe.Compression (4 kernels) ───────────────────────────────
             // `Bytes -> Task Bytes` — the Rust runtime `compression_*` takes and
             // returns `Vec<u8>` (`Bytes` lowers to `Vec<u8>`), a documented
-            // divergence from the the backend's `String`-as-bytes shape.
+            // divergence from the backend's `String`-as-bytes shape.
             K::CompressionGzip => fun(bytes(), task(bytes())),
             K::CompressionGunzip => fun(bytes(), task(bytes())),
             K::CompressionZstdCompress => fun(bytes(), task(bytes())),
@@ -9519,7 +9519,7 @@ pub fn zonk(uf: &mut UnionFind<Content>, budget: &mut Budget, var: VarId) -> DRe
                 // Zonked records are always presented as closed — the RowTail
                 // is a solver artefact; the resolved `Ty` simply carries the
                 // settled field map without advertising openness (consistent
-                // with the the compiler reference's read-back behaviour).
+                // with the reference compiler's read-back behaviour).
                 results.push(Ty::Record(fields, RowTail::Closed));
             }
         }

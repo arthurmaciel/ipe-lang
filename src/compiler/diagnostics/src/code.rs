@@ -4,8 +4,7 @@
 //! [`crate::Diagnostic::code`]. Codes are the machine-greppable, user-facing
 //! handle a reader passes to `ipe explain <CODE>`; they never change once
 //! shipped. The taxonomy is authoritative here (this file + the explain
-//! pages under `crates/ipe_diagnostics/explain/`); the original design spec
-//! is preserved in git history.
+//! pages under `src/compiler/diagnostics/explain/`).
 //!
 //! Ranges: `IPE-P####` parse, `IPE-N####` name resolution, `IPE-T####` type,
 //! `IPE-L####` lower / not-yet-supported, `IPE-F####` foreign bindings (FFI),
@@ -353,7 +352,7 @@ code! {
     IPE_L0108 = "IPE-L0108", "kernel function not available yet", "IPE-L0108";
     /// partial or over-application of a function not supported yet
     IPE_L0110 = "IPE-L0110", "partial or over-application not supported yet", "IPE-L0110";
-    /// updating a generic record needs a bounded type parameter (M2d)
+    /// updating a generic record needs a bounded type parameter
     IPE_L0111 = "IPE-L0111", "updating a generic record is not supported yet", "IPE-L0111";
     /// a constructor payload sub-pattern other than a variable / wildcard
     IPE_L0112 = "IPE-L0112", "nested constructor payload patterns not supported yet", "IPE-L0112";

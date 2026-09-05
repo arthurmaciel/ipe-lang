@@ -16,8 +16,8 @@
 //! leading `n > 0` branch); `classify (0 - 3) = 2` (the `else if n < 0`
 //! branch); the entry's `total = 7 + 1 + 2 = 10`. The `end_to_end_*` test
 //! below asserts the Rust backend reaches the identical `10`. Running the golden
-//! toolchain inside `cargo test` is impractical (it needs the the compiler `ipe`
-//! binary plus a the toolchain), so the hand-computed value is the in-test
+//! toolchain inside `cargo test` is impractical (it needs the reference compiler `ipe`
+//! binary plus a toolchain), so the hand-computed value is the in-test
 //! oracle, documented here against the equivalent command.
 
 use std::path::{Path, PathBuf};
