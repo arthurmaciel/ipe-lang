@@ -23,7 +23,8 @@ use crate::code::{
     IPE_N0021, IPE_N0022, IPE_N0023, IPE_N0024, IPE_N0025, IPE_N0026, IPE_N0027, IPE_N0028,
     IPE_N0029, IPE_N0030, IPE_N0031, IPE_N0032, IPE_N0033, IPE_N0034, IPE_N0035, IPE_N0036,
     IPE_N0038, IPE_N0039, IPE_N0040, IPE_N0041, IPE_N0042, IPE_N0043, IPE_N0044, IPE_N0045,
-    IPE_N0046, IPE_N0047, IPE_P0001, IPE_P0002, IPE_P0003, IPE_P0010, IPE_P0011, IPE_P0012,
+    IPE_N0046, IPE_N0047, IPE_N0048, IPE_P0001, IPE_P0002, IPE_P0003, IPE_P0010, IPE_P0011,
+    IPE_P0012,
     IPE_P0013, IPE_P0014, IPE_P0015, IPE_P0016, IPE_P0017, IPE_P0018, IPE_P0020, IPE_P0021,
     IPE_P0030, IPE_P0031, IPE_P0040, IPE_P0041, IPE_P0050, IPE_P0060, IPE_P0061, IPE_P0062,
     IPE_P0063, IPE_P0064, IPE_P0065, IPE_P0066, IPE_P0067, IPE_S0001, IPE_T0001, IPE_T0002,
@@ -718,6 +719,50 @@ pub enum NameError {
     /// [`ModulePlacementRejection`] names the module, the placement, and why the
     /// two axes forbid it, so the rendered message teaches the fix. [IPE-N0047]
     ModuleNotAllowedInPlacement(Box<ModulePlacementRejection>),
+    /// Two DISTINCT Ipê definitions collapse to one generated Rust identifier
+    /// after name mangling — the backend's `naming.rs` fold is not injective, so
+    /// e.g. `Std.Ui.borderRounded` and `Std.Ui.Border.rounded` both fold to
+    /// `std_ui_border_rounded`, and `firstName` / `first_name` both fold to the
+    /// witness trait `IpeHasFirstName`. Emitting both items under one name is
+    /// `rustc` E0428, so the backend fails closed here rather than emit a broken
+    /// crate. Unlike [`NameError::DuplicateValue`] (a genuine same-name source
+    /// redefinition, carrying real spans), this is a mangling collision between
+    /// two differently-spelled Ipê definitions; the IR carries no source spans,
+    /// so it names both Ipê definitions and the shared Rust name and asks for a
+    /// rename. [IPE-N0048]
+    RustNameFold {
+        /// The first (already-claimed) Ipê definition, as a dotted path.
+        first: Box<str>,
+        /// The second Ipê definition that folds onto the same Rust name.
+        second: Box<str>,
+        /// The generated Rust identifier both definitions produce.
+        rust_name: Box<str>,
+        /// Whether the collision is in the value or type namespace — selects the
+        /// noun the message uses.
+        kind: RustNameFoldKind,
+    },
+}
+
+/// Which namespace a [`NameError::RustNameFold`] collision falls in — selects
+/// the noun the rendered message uses ("value" vs "type").
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum RustNameFoldKind {
+    /// A value-namespace fold: two functions, or a record struct / row-witness
+    /// trait, collapsing onto one Rust identifier.
+    Value,
+    /// A type-namespace fold: two enums collapsing onto one Rust type name.
+    Type,
+}
+
+impl RustNameFoldKind {
+    /// The noun for this namespace, used in the rendered message.
+    #[must_use]
+    pub const fn noun(self) -> &'static str {
+        match self {
+            Self::Value => "values",
+            Self::Type => "types",
+        }
+    }
 }
 
 /// Why a standard-library module is not admissible in a shape × runtime
@@ -1942,6 +1987,7 @@ const fn name_code(msg: &NameError) -> Code {
         NameError::RuntimeBranchedMain => IPE_N0045,
         NameError::WebInitPolyArg => IPE_N0046,
         NameError::ModuleNotAllowedInPlacement(..) => IPE_N0047,
+        NameError::RustNameFold { .. } => IPE_N0048,
     }
 }
 
@@ -2134,6 +2180,7 @@ fn name_help(msg: &NameError, span: Span) -> Vec<HelpLine> {
         | NameError::CustomElementCtorMalformed { .. }
         | NameError::RuntimeBranchedMain
         | NameError::ModuleNotAllowedInPlacement(..)
+        | NameError::RustNameFold { .. }
         | NameError::WebInitPolyArg => Vec::new(), // no span-based help
     }
 }

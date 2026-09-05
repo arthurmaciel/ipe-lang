@@ -531,6 +531,16 @@ fn name_prose(msg: &NameError) -> String {
                 r.module, r.placement,
             )
         }
+        NameError::RustNameFold {
+            first,
+            second,
+            rust_name,
+            kind,
+        } => format!(
+            "Two different {} — `{first}` and `{second}` — end up with the same \
+             generated name `{rust_name}`, so I can't emit them both.",
+            kind.noun(),
+        ),
         NameError::Unknown => "Something is off with a name in this code.".to_string(),
     }
 }
@@ -1558,6 +1568,22 @@ fn name_label(msg: &NameError) -> Option<String> {
                  placements"
             ))
         }
+        NameError::RustNameFold {
+            first,
+            second,
+            rust_name,
+            kind,
+        } => Some(format!(
+            "`{first}` and `{second}` are distinct Ipê {}, but after name mangling \
+             they both become the Rust {} `{rust_name}`, which would define one name \
+             twice in the emitted crate. This is a naming collision, not a genuine \
+             redefinition — rename one of the two so they fold to different Rust names",
+            kind.noun(),
+            match kind {
+                crate::diagnostic::RustNameFoldKind::Value => "value",
+                crate::diagnostic::RustNameFoldKind::Type => "type",
+            },
+        )),
         NameError::Unknown => None,
     }
 }

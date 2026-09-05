@@ -283,6 +283,10 @@ code! {
     /// a standard-library module is imported in a shape × runtime placement the
     /// library single-source-of-truth table does not admit
     IPE_N0047 = "IPE-N0047", "this standard-library module is not available in this shape × runtime placement", "IPE-N0047";
+    /// two distinct Ipê definitions mangle to one generated Rust name, which
+    /// would emit two Rust items under one identifier (E0428) — reported with
+    /// both Ipê names and the shared Rust name so the fix is a rename
+    IPE_N0048 = "IPE-N0048", "two Ipê definitions fold to one generated Rust name", "IPE-N0048";
 
     // -----------------------------------------------------------------------
     // Type (IPE-T####)
