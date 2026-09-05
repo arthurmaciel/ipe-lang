@@ -388,7 +388,7 @@ fn post_form(url: &str, fields: &[(&str, &str)]) -> Result<serde_json::Value, Cl
 /// these arguments — it is `-d @-`, read from stdin — so no field value (in
 /// particular the poll's `device_code`) can leak through `/proc/<pid>/cmdline`.
 /// Split out so a regression test can assert the argv is secret-free.
-fn curl_argv(url: &str) -> [&str; 10] {
+const fn curl_argv(url: &str) -> [&str; 10] {
     [
         "--silent",
         "--show-error",
