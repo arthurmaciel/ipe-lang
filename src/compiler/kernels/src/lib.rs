@@ -9873,10 +9873,12 @@ impl StdlibKernel {
     /// [`Capability::Network`]; file / database / config-and-`.env`-file reads →
     /// [`Capability::Filesystem`]; environment-variable and argv reads →
     /// [`Capability::Env`]; wall-clock / sleep / timer → [`Capability::Clock`];
-    /// RNG / random tokens / UUIDs → [`Capability::Random`]. `Env.public` reads a
-    /// build-time-embedded allowlisted constant, not the live process
-    /// environment, so it is pure. `Trace.*` write only to an observability sink,
-    /// and `Io.*` only to the console, so neither is a sandboxed capability.
+    /// RNG / random tokens / UUIDs → [`Capability::Random`]. `Env.public` reads
+    /// the live process environment on native (a per-call `std::env::var`), so it
+    /// discloses [`Capability::Env`] like `System.getenv`; only its wasm32
+    /// emission is a build-time constant, and over-reporting there is the
+    /// fail-closed direction. `Trace.*` write only to an observability sink, and
+    /// `Io.*` only to the console, so neither is a sandboxed capability.
     ///
     /// The match is exhaustive with no `_` arm: a newly-added kernel cannot
     /// compile until it is classified here, so a program's inferred capability
@@ -10047,7 +10049,15 @@ impl StdlibKernel {
             | Self::SystemGetenvInt
             | Self::SystemGetenvBool
             | Self::SystemSetenv
-            | Self::SystemUnsetenv => Some(Capability::Env),
+            | Self::SystemUnsetenv
+            // The native emission of `Env.public` is a per-call `std::env::var`
+            // read of the live process environment, so it discloses the same env
+            // axis as `System.getenv`. (Only the wasm32 emission is a
+            // build-time-embedded constant.) Reporting `Env` on both targets is
+            // the fail-closed direction: it over-reports on wasm32 at no cost,
+            // and it re-injects the allowlisted keys into the scrubbed jail
+            // environment so `Env.public` does not silently return `Nothing`.
+            | Self::EnvPublic => Some(Capability::Env),
             Self::ProcessRun | Self::ProcessRunWith | Self::ProcessRunInPty => {
                 Some(Capability::Subprocess)
             }
@@ -10771,7 +10781,6 @@ impl StdlibKernel {
             | Self::AuthRevocationRevokeSession
             | Self::AuthRevocationRestoreUser
             | Self::AuthRevocationIsRevoked
-            | Self::EnvPublic
             | Self::RegionMainContent
             | Self::RegionNavigation
             | Self::RegionFooter
@@ -13087,8 +13096,9 @@ mod tests {
         assert_eq!(StdlibKernel::LogInfo.capability(), None);
         assert_eq!(StdlibKernel::IoPrintln.capability(), None);
         assert_eq!(StdlibKernel::DebugLog.capability(), None);
-        // `Env.public` reads a build-time constant, not the live environment.
-        assert_eq!(StdlibKernel::EnvPublic.capability(), None);
+        // `Env.public` reads the live process environment on native, so it
+        // discloses the env axis like `System.getenv` (wasm32 over-reports).
+        assert_eq!(StdlibKernel::EnvPublic.capability(), Some(Capability::Env));
         // `Ui.widget` ships browser JS → the `custom-element` disclosure axis.
         assert_eq!(
             StdlibKernel::UiWidget.capability(),
