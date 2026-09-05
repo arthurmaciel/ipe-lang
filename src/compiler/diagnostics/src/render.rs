@@ -398,6 +398,18 @@ fn parse_prose(msg: &ParseError) -> String {
         ParseError::MissingDocString { name } => {
             format!("`{name}` is exported but has no doc-string.")
         }
+        ParseError::AnnotationWithoutBinding { name } => {
+            format!(
+                "This `{name} : …` type annotation has no matching `{name} = …` \
+                 definition. Without a binding to attach to, the type is discarded."
+            )
+        }
+        ParseError::DuplicateAnnotation { name } => {
+            format!(
+                "`{name}` has more than one type annotation. A value can carry only \
+                 one declared type."
+            )
+        }
         ParseError::Unexpected => "I couldn't make sense of this part of the file.".to_string(),
     }
 }
@@ -1314,6 +1326,12 @@ fn parse_label(msg: &ParseError) -> Option<String> {
                 }
             };
             Some(detail)
+        }
+        ParseError::AnnotationWithoutBinding { .. } => {
+            Some("this annotation has no matching definition".to_string())
+        }
+        ParseError::DuplicateAnnotation { .. } => {
+            Some("this name is already annotated above".to_string())
         }
         ParseError::Unexpected
         | ParseError::TooDeep
