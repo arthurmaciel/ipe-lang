@@ -189,14 +189,18 @@ impl<'a> Parser<'a> {
     /// Consume the next token. On end-of-input the error names `construct`, the
     /// enclosing grammar production that still required more tokens.
     fn bump(&mut self, construct: Construct) -> DResult<Token> {
-        let tok = self
-            .toks
-            .get(self.pos)
-            .cloned()
-            .ok_or_else(|| Diagnostic::Parse {
+        if self.pos >= self.toks.len() {
+            return Err(Diagnostic::Parse {
                 span: self.eof_err_span(),
                 msg: ParseError::UnexpectedEof { construct },
-            })?;
+            });
+        }
+        // Move the token out of the Vec without shifting elements — the slot is
+        // never read again because `pos` only advances.
+        let tok = std::mem::replace(
+            &mut self.toks[self.pos],
+            Token { kind: Tok::Underscore, line: 0, col: 0, span: Span::DUMMY },
+        );
         self.pos += 1;
         Ok(tok)
     }
@@ -430,24 +434,39 @@ impl<'a> Parser<'a> {
     /// The module name in the header: a single (possibly dotted) identifier.
     /// A missing or non-identifier name is a malformed-header defect.
     fn parse_module_name(&mut self) -> DResult<Located<Vec<Symbol>>> {
-        let Some(tok) = self.peek().cloned() else {
-            return Err(Self::malformed_header(
-                self.eof_err_span(),
-                HeaderDefect::MissingName,
-            ));
-        };
-        let Tok::Ident(text) = &tok.kind else {
-            return Err(Self::malformed_header(
-                tok.span,
-                HeaderDefect::NameNotIdentifier,
-            ));
-        };
-        self.pos += 1; // consume the name token (already cloned above)
-        let segs = text
-            .split('.')
-            .map(|s| self.interner.intern(s))
-            .collect::<DResult<Vec<Symbol>>>()?;
-        Ok(Located::new(tok.span, segs))
+        // Validate via peek before consuming, so errors can reference the right span.
+        match self.peek() {
+            None => {
+                return Err(Self::malformed_header(
+                    self.eof_err_span(),
+                    HeaderDefect::MissingName,
+                ));
+            }
+            Some(t) if !matches!(t.kind, Tok::Ident(_)) => {
+                return Err(Self::malformed_header(
+                    t.span,
+                    HeaderDefect::NameNotIdentifier,
+                ));
+            }
+            Some(_) => {}
+        }
+        let tok = self.bump(Construct::ModuleHeader)?;
+        let tok_span = tok.span;
+        // peek() confirmed Ident above; extract the text by value.
+        if let Tok::Ident(text) = tok.kind {
+            let segs = text
+                .split('.')
+                .map(|s| self.interner.intern(s))
+                .collect::<DResult<Vec<Symbol>>>()?;
+            Ok(Located::new(tok_span, segs))
+        } else {
+            // peek() and bump() are sequential in a single-threaded parser;
+            // reaching this branch would be a compiler bug, not a user error.
+            Err(Diagnostic::CompilerBug {
+                where_: "ipe_parse::parse_module_name",
+                detail: "token changed between peek and bump".to_owned(),
+            })
+        }
     }
 
     /// A dotted import name, e.g. `Ipe.String`.
@@ -1420,25 +1439,23 @@ impl<'a> Parser<'a> {
             return self.parse_lambda(threshold, depth + 1);
         }
         let tok = self.bump(Construct::Expression)?;
-        match &tok.kind {
-            Tok::LParen => self.parse_paren_or_tuple(tok.span, depth + 1),
-            Tok::LBrace => self.parse_record(tok.span, depth + 1),
-            Tok::LBracket => self.parse_list(tok.span, depth + 1),
-            Tok::Int(n) => Ok(Located::new(tok.span, Expr_::Int(*n))),
-            Tok::Float(f) => Ok(Located::new(tok.span, Expr_::Float(*f))),
-            Tok::Str(s) => Ok(Located::new(tok.span, Expr_::Str(s.clone()))),
+        let span = tok.span;
+        match tok.kind {
+            Tok::LParen => self.parse_paren_or_tuple(span, depth + 1),
+            Tok::LBrace => self.parse_record(span, depth + 1),
+            Tok::LBracket => self.parse_list(span, depth + 1),
+            Tok::Int(n) => Ok(Located::new(span, Expr_::Int(n))),
+            Tok::Float(f) => Ok(Located::new(span, Expr_::Float(f))),
+            // String payloads move directly into the AST node — no secondary copy.
+            Tok::Str(s) => Ok(Located::new(span, Expr_::Str(s))),
             // Triple-quoted strings carry raw content; the canonicaliser desugars
             // `{{expr}}` interpolation at name-resolution time. Mirrors the the compiler
             // parser's `MultiLine str -> return (Src.MultilineStr str)` arm.
-            Tok::TripleStr { raw, anchor } => Ok(Located::new(
-                tok.span,
-                Expr_::MultilineStr {
-                    raw: raw.clone(),
-                    anchor: *anchor,
-                },
-            )),
-            Tok::Char(c) => Ok(Located::new(tok.span, Expr_::Char(c.clone()))),
-            Tok::Minus => self.parse_negative_literal(tok.span, threshold, depth),
+            Tok::TripleStr { raw, anchor } => {
+                Ok(Located::new(span, Expr_::MultilineStr { raw, anchor }))
+            }
+            Tok::Char(c) => Ok(Located::new(span, Expr_::Char(c))),
+            Tok::Minus => self.parse_negative_literal(span, threshold, depth),
             Tok::Ident(text) => {
                 // `path "…"` — a contextual path literal. `path` is only
                 // special when immediately followed (in the same layout block)
@@ -1450,20 +1467,23 @@ impl<'a> Parser<'a> {
                 {
                     let str_tok = self.bump(Construct::Expression)?;
                     if let Tok::Str(raw) = str_tok.kind {
-                        let span = Self::span_merge(tok.span, str_tok.span);
-                        return Ok(Located::new(span, Expr_::PathLit(raw)));
+                        let merged = Self::span_merge(span, str_tok.span);
+                        return Ok(Located::new(merged, Expr_::PathLit(raw)));
                     }
                 }
-                let expr = self.ident_expr(text, tok.span)?;
-                Ok(Located::new(tok.span, expr))
+                let expr = self.ident_expr(&text, span)?;
+                Ok(Located::new(span, expr))
             }
             // A leading `.field` in atom position is the first-class accessor — a
             // value of type `{ r | field : a } -> a`. It desugars here to the
             // getter lambda `\<fresh> -> <fresh>.field`, reusing the ordinary
             // record-access path (deferred field access + monomorphic pinning) so
             // no new type/canon/backend node is needed.
-            Tok::Dot => self.parse_field_accessor(tok.span, depth),
-            _ => Err(Self::unexpected_token(&tok, &[Expected::Expression])),
+            Tok::Dot => self.parse_field_accessor(span, depth),
+            kind => Err(Self::unexpected_token(
+                &Token { kind, line: 0, col: 0, span },
+                &[Expected::Expression],
+            )),
         }
     }
 
@@ -1478,8 +1498,17 @@ impl<'a> Parser<'a> {
             return Err(self.too_deep(Construct::Expression));
         }
         let tok = self.bump(Construct::Expression)?;
-        let Tok::Ident(text) = &tok.kind else {
+        let tok_span = tok.span;
+        // Validate before destructuring so the error can carry the found kind.
+        if !matches!(tok.kind, Tok::Ident(_)) {
             return Err(Self::unexpected_token(&tok, &[Expected::Identifier]));
+        }
+        // The `matches!` guard above ensures this arm is always taken.
+        let Tok::Ident(text) = tok.kind else {
+            return Err(Diagnostic::CompilerBug {
+                where_: "ipe_parse::parse_field_accessor",
+                detail: "token kind changed after Ident check".to_owned(),
+            });
         };
         // The synthesised parameter. Its name need only be a valid emitted Rust
         // identifier: the parameter is the innermost binder of this lambda, so the
@@ -1492,9 +1521,8 @@ impl<'a> Parser<'a> {
         // Each field of a dotted accessor `.a.b` gets a distinct sub-span via
         // the shared helper, so no two Access nodes share a `(module, span)`
         // type-region key.
-        let text = text.clone();
-        body = self.build_access_chain(body, tok.span, &text)?;
-        let span = Self::span_merge(dot_span, tok.span);
+        body = self.build_access_chain(body, tok_span, &text)?;
+        let span = Self::span_merge(dot_span, tok_span);
         Ok(Located::new(
             span,
             Expr_::Lambda(vec![param], Box::new(body)),
