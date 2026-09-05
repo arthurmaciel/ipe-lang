@@ -1,0 +1,120 @@
+module Main exposing (main)
+
+-- | web-authn — `Ipe.Browser.WebAuthn` end-to-end, with the consent gate
+-- satisfied.
+--
+-- Demonstrates the two Web Authentication ceremonies over the correlated
+-- port→Task bridge: the user clicks "Register a passkey" (attestation via
+-- `navigator.credentials.create`) or "Sign in" (assertion via
+-- `navigator.credentials.get`); each returns a `Task Error PublicKeyCredential`
+-- dispatched with `Task.attempt`, so a host refusal is an ordinary `Err` the
+-- update folds — never a thrown error.
+--
+-- `Ipe.Browser.WebAuthn` discloses `js-port:web-authn` on import; the companion
+-- `js-port:raw` floor is also disclosed. Both are accepted in `package.ipe`.
+--
+-- Credential material is OPAQUE: the app only reads the credential id (a
+-- base64url string), never any key bytes. A real relying party would forward the
+-- attestation / assertion envelope to its server for verification.
+
+
+import Ipe.Tea.Web as Web
+import Ipe.Tea.Web.Cmd as Cmd
+import Ipe.Tea.Web.Sub as Sub
+import Ipe.Ui as Ui
+import Ipe.Error as Error exposing (Error)
+import Ipe.Browser.WebAuthn as WebAuthn
+import Ipe.Task as Task
+
+
+type alias Model =
+    { status : String
+    , credentialId : String
+    }
+
+
+type Msg
+    = Register
+    | SignIn
+    | GotCredential (Result Error WebAuthn.PublicKeyCredential)
+
+
+init : WebReq -> ( Model, Cmd.Cmd Msg )
+init _req =
+    ( { status = "idle", credentialId = "" }, Cmd.none )
+
+
+update : Msg -> Model -> ( Model, Cmd.Cmd Msg )
+update msg model =
+    case msg of
+        Register ->
+            ( { model | status = "registering…" }
+            , Task.attempt GotCredential (WebAuthn.register creationOptions)
+            )
+
+        SignIn ->
+            ( { model | status = "authenticating…" }
+            , Task.attempt GotCredential (WebAuthn.authenticate requestOptions)
+            )
+
+        GotCredential result ->
+            case result of
+                Ok credential ->
+                    ( { model | status = "ok", credentialId = WebAuthn.credentialId credential }
+                    , Cmd.none
+                    )
+
+                Err error ->
+                    ( { model | status = "error: " ++ Error.toString error }, Cmd.none )
+
+
+-- Static ceremony options for the demo. A real app mints `challenge` server-side
+-- per ceremony (freshly, never reused) and encodes it as base64url.
+creationOptions : WebAuthn.CreationOptions
+creationOptions =
+    { rpId = "example.com"
+    , rpName = "Example"
+    , userId = "dXNlci1pZA"
+    , userName = "jamie"
+    , userDisplayName = "Jamie Doe"
+    , challenge = "Y2hhbGxlbmdl"
+    , algorithms = [ -7, -257 ]
+    , timeoutMs = 60000
+    , userVerification = "preferred"
+    }
+
+
+requestOptions : WebAuthn.RequestOptions
+requestOptions =
+    { rpId = "example.com"
+    , challenge = "Y2hhbGxlbmdl"
+    , allowCredentials = []
+    , timeoutMs = 60000
+    , userVerification = "preferred"
+    }
+
+
+subscriptions : Model -> Sub.Sub Msg
+subscriptions _model =
+    Sub.none
+
+
+view : Model -> Element Msg
+view model =
+    Ui.column []
+        [ Ui.button [] { onPress = Just Register, label = Ui.text "Register a passkey" }
+        , Ui.button [] { onPress = Just SignIn, label = Ui.text "Sign in" }
+        , Ui.text ("status: " ++ model.status)
+        , Ui.text ("credential: " ++ model.credentialId)
+        ]
+
+
+main =
+    Web.app
+        { init = init
+        , update = update
+        , view = view
+        , subscriptions = subscriptions
+        , routes = []
+        , notFound = Register
+        }
