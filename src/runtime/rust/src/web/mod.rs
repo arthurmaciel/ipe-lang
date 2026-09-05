@@ -1818,11 +1818,10 @@ where
             // mounts would need per-mount base-path threading).
             let base = normalise_base_path(&prefix);
             if !base.is_empty() {
-                // SAFETY: set once, before any request is served, during router
-                // assembly — no concurrent env reads race this write.
-                unsafe {
-                    std::env::set_var("IPE_WEB_BASE_PATH", &base);
-                }
+                // Write the process-local env overlay, never the real `environ`:
+                // a raw `set_var` here races any concurrent libc `environ` reader
+                // (a parallel `getaddrinfo`) and is undefined behavior.
+                crate::system::locked_set_var("IPE_WEB_BASE_PATH", &base);
             }
             // A mount has no task-error channel (it yields a `Router`, not an
             // `IpeTask`), so an unhonourable store config fails closed as a
