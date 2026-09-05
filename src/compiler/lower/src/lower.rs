@@ -13248,6 +13248,30 @@ pub fn max_def_arity_per_module(m: &canon::Module) -> usize {
     per_module.into_values().max().unwrap_or(0)
 }
 
+/// The widest constructor **payload** arity in the module — the most eta / cap
+/// parameters an eta-expanded first-class or partially-applied constructor can
+/// introduce. A constructor referenced first-class (`Node`) or partially applied
+/// (`Node left`) becomes a closure over its remaining payload positions, drawing
+/// that many `eta_` / (for hoisted complex args) `cap_` symbols; the pool must
+/// cover the widest such reference. Unlike a def arity this is uncapped at the
+/// language surface, so it — not the `MAX_CALLEE_ARITY` floor — governs the pool
+/// size whenever a union has more fields than a def has parameters.
+///
+/// Byte-neutral like [`max_def_arity_per_module`]: the pools name a symbol by its
+/// scope-LOCAL position, so an over-approximation only mints unreferenced tail
+/// symbols. Under-sizing is the failure this closes — it would let a first-class
+/// wide constructor overrun the pool, which fails closed as a [`bug`] at the
+/// [`Lowerer::eta_sym`] / `cap_params` draw rather than an index panic.
+#[must_use]
+pub fn max_ctor_arity_per_module(m: &canon::Module) -> usize {
+    m.unions
+        .iter()
+        .flat_map(|u| u.ctors.iter())
+        .map(|c| c.arity)
+        .max()
+        .unwrap_or(0)
+}
+
 /// An upper bound on the eta-parameter symbols one def can consume — the sizing
 /// input for the per-def monotonic [`Lowerer::eta_base`] cursor.
 ///
@@ -13262,7 +13286,9 @@ pub fn max_def_arity_per_module(m: &canon::Module) -> usize {
 /// * a lambda — its own parameter count (the flatten pad is at most that);
 /// * a call — up to [`MAX_ETA_PER_SITE`], covering a partial / over-application
 ///   eta-adapter residual plus a fn-value read demoted onto the `Box` carrier;
-/// * a bare constructor reference / partial ctor — up to [`MAX_ETA_PER_SITE`];
+/// * a bare constructor reference / partial ctor — up to the widest constructor
+///   payload arity ([`max_ctor_arity_per_module`]), which is uncapped and so can
+///   exceed the `MAX_ETA_PER_SITE` floor;
 /// * a `let` binding — up to [`MAX_ETA_PER_SITE`] for a fn-typed binder's
 ///   shim / sibling-promote / rebind block.
 ///
@@ -13273,47 +13299,52 @@ pub fn max_def_arity_per_module(m: &canon::Module) -> usize {
 /// panic and never a silent reuse.
 #[must_use]
 pub fn max_live_eta_params(m: &canon::Module) -> usize {
-    /// The widest eta block any single call / ctor / fn-typed-let site can draw:
+    /// The widest eta block any single call / fn-typed-let site can draw:
     /// a residual arrow up to the widest callable arity, matching the eta / cap
     /// pool floor in [`crate::lower`].
     const MAX_ETA_PER_SITE: usize = 16;
-    fn walk_expr(e: &canon::Expr) -> usize {
+    // A first-class / partial constructor eta-expands over its remaining payload
+    // positions, whose count is uncapped at the language surface — so its per-site
+    // charge is the widest ctor arity, not the `MAX_ETA_PER_SITE` floor a
+    // stdlib-callable residual assumes.
+    let ctor_charge = MAX_ETA_PER_SITE.max(max_ctor_arity_per_module(m));
+    fn walk_expr(e: &canon::Expr, ctor_charge: usize) -> usize {
+        let recur = |sub: &canon::Expr| walk_expr(sub, ctor_charge);
         match &e.value {
-            canon::Expr_::Lambda(params, body) => params.len() + walk_expr(body),
+            canon::Expr_::Lambda(params, body) => params.len() + recur(body),
             canon::Expr_::Call(callee, args) => {
-                MAX_ETA_PER_SITE + walk_expr(callee) + args.iter().map(walk_expr).sum::<usize>()
+                MAX_ETA_PER_SITE + recur(callee) + args.iter().map(recur).sum::<usize>()
             }
-            canon::Expr_::ForeignCall { args, .. } => args.iter().map(walk_expr).sum::<usize>(),
-            canon::Expr_::Binop { lhs, rhs, .. } => walk_expr(lhs) + walk_expr(rhs),
+            canon::Expr_::ForeignCall { args, .. } => args.iter().map(recur).sum::<usize>(),
+            canon::Expr_::Binop { lhs, rhs, .. } => recur(lhs) + recur(rhs),
             canon::Expr_::Case(scrut, branches) => {
-                walk_expr(scrut) + branches.iter().map(|b| walk_expr(&b.body)).sum::<usize>()
+                recur(scrut) + branches.iter().map(|b| recur(&b.body)).sum::<usize>()
             }
             canon::Expr_::Let(bindings, body) => {
                 bindings
                     .iter()
-                    .map(|b| MAX_ETA_PER_SITE + walk_expr(&b.body))
+                    .map(|b| MAX_ETA_PER_SITE + recur(&b.body))
                     .sum::<usize>()
-                    + walk_expr(body)
+                    + recur(body)
             }
             canon::Expr_::If(branches, else_expr) => {
                 branches
                     .iter()
-                    .map(|(c, b)| walk_expr(c) + walk_expr(b))
+                    .map(|(c, b)| recur(c) + recur(b))
                     .sum::<usize>()
-                    + walk_expr(else_expr)
+                    + recur(else_expr)
             }
-            canon::Expr_::Tuple(elems) | canon::Expr_::List(elems) => {
-                elems.iter().map(walk_expr).sum()
-            }
-            canon::Expr_::Cons(head, tail) => walk_expr(head) + walk_expr(tail),
-            canon::Expr_::Record(fields) => fields.iter().map(|(_, v)| walk_expr(v)).sum(),
-            canon::Expr_::Access(record, _) => walk_expr(record),
+            canon::Expr_::Tuple(elems) | canon::Expr_::List(elems) => elems.iter().map(recur).sum(),
+            canon::Expr_::Cons(head, tail) => recur(head) + recur(tail),
+            canon::Expr_::Record(fields) => fields.iter().map(|(_, v)| recur(v)).sum(),
+            canon::Expr_::Access(record, _) => recur(record),
             canon::Expr_::Update(base, fields) => {
-                walk_expr(base) + fields.iter().map(|(_, v)| walk_expr(v)).sum::<usize>()
+                recur(base) + fields.iter().map(|(_, v)| recur(v)).sum::<usize>()
             }
             // A bare / partially-applied constructor reference eta-expands into a
-            // closure over up to `MAX_ETA_PER_SITE` fresh params.
-            canon::Expr_::VarCtor { .. } => MAX_ETA_PER_SITE,
+            // closure over up to `ctor_charge` fresh params (the widest ctor arity,
+            // which can exceed `MAX_ETA_PER_SITE`).
+            canon::Expr_::VarCtor { .. } => ctor_charge,
             canon::Expr_::VarLocal(_)
             | canon::Expr_::VarTopLevel { .. }
             | canon::Expr_::VarKernel { .. }
@@ -13330,7 +13361,9 @@ pub fn max_live_eta_params(m: &canon::Module) -> usize {
         .iter()
         .map(|d| match d {
             canon::Def::Typed { patterns, body, .. }
-            | canon::Def::Untyped { patterns, body, .. } => patterns.len() + walk_expr(body),
+            | canon::Def::Untyped { patterns, body, .. } => {
+                patterns.len() + walk_expr(body, ctor_charge)
+            }
         })
         .max()
         .unwrap_or(0)
@@ -31717,6 +31750,76 @@ mod tests {
         // reproduces it exactly despite the widest def sitting in the second
         // module — the equality the byte-identical eta/cap sizing rests on.
         assert_eq!(super::max_def_arity_per_module(&m), 3);
+    }
+
+    /// A first-class constructor whose payload arity exceeds every def arity must
+    /// size the eta/cap pools by the CONSTRUCTOR arity, not the def arity. A wide
+    /// union constructor used first-class eta-expands into a closure over all its
+    /// payload positions; sizing the pool from def arity alone would underflow and
+    /// turn a well-typed program into a `CompilerBug` at the pool draw.
+    #[test]
+    fn ctor_arity_wider_than_def_arity_sizes_the_pools() {
+        use ipe_diagnostics::Located;
+
+        let mut interner = Interner::new();
+        let main = interner.intern("Main").expect("intern");
+        let wide = interner.intern("Wide").expect("intern");
+        let mk = interner.intern("MkWide").expect("intern");
+        let make = interner.intern("make").expect("intern");
+        let a = interner.intern("a").expect("intern");
+
+        // A 17-field constructor — one past the `MAX_CALLEE_ARITY` = 16 floor,
+        // so the floor alone cannot cover it.
+        const CTOR_ARITY: usize = 17;
+        let ctor = canon::Ctor {
+            name: mk,
+            index: 0,
+            arity: CTOR_ARITY,
+            args: std::iter::repeat_with(|| canon::Type::Var(a))
+                .take(CTOR_ARITY)
+                .collect(),
+            span: Span::DUMMY,
+        };
+        let union = canon::Union {
+            home: vec![main],
+            name: wide,
+            vars: vec![a],
+            ctors: vec![ctor],
+        };
+
+        // `make = MkWide` binds the constructor first-class; the def itself has
+        // arity 0, so def-arity sizing would see only 0 (floored to 16), still
+        // short of the 17-position eta expansion the first-class reference needs.
+        let make_def = canon::Def::Untyped {
+            home: vec![main],
+            name: Located::new(Span::DUMMY, make),
+            patterns: vec![],
+            body: Located::new(
+                Span::DUMMY,
+                canon::Expr_::VarCtor {
+                    home: vec![main],
+                    type_name: wide,
+                    name: mk,
+                    index: 0,
+                },
+            ),
+        };
+
+        let m = canon::Module {
+            imports_unsafe_submodule: false,
+            imported_web_capabilities: std::collections::BTreeSet::new(),
+            name: vec![main],
+            unions: vec![union],
+            defs: vec![make_def],
+        };
+
+        // The ctor scan reports the payload arity, and the eta-demand scan charges
+        // the first-class ctor its full payload width — both above the def arity
+        // (0) and the `MAX_CALLEE_ARITY` floor (16). This is what keeps the pools
+        // large enough for the first-class expansion.
+        assert_eq!(super::max_ctor_arity_per_module(&m), CTOR_ARITY);
+        assert_eq!(super::max_def_arity_per_module(&m), 0);
+        assert!(super::max_live_eta_params(&m) >= CTOR_ARITY);
     }
 
     // ── body-carried type detection ties `uses_*` to the emitter ────────────
