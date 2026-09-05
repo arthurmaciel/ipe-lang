@@ -985,8 +985,10 @@ async fn drive_session<Model, Msg, FUpdate, FView, FSubs>(
             // dispatch has no error channel, so the `err==nil` conjunct is always
             // true and is dropped.
             let noop = cmd_is_none && e.model == next;
-            e.last_view = tree.clone();
+            // Build the handler index from the tree, then move the tree into
+            // last_view (its only remaining use), avoiding a deep VDOM clone.
             e.index = build_index(&tree);
+            e.last_view = tree;
             e.model = next.clone();
             e.seq += 1;
             #[cfg(feature = "debugger")]
@@ -1548,8 +1550,10 @@ async fn apply_literal_patch_to_web_sessions<Model, Msg, FView>(
         let (patches, seq, sse) = {
             let mut e = handle.lock().unwrap_or_else(|e| e.into_inner());
             let patches = diff(&e.last_view, &tree);
-            e.last_view = tree.clone();
+            // Index first (borrow), then move the tree into last_view — its
+            // only remaining use — instead of a deep VDOM clone.
             e.index = build_index(&tree);
+            e.last_view = tree;
             e.seq += 1;
             (patches, e.seq, e.sse_tx.clone())
         };
