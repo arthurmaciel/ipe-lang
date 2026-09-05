@@ -523,35 +523,111 @@ fn run_bwrap(
         any(target_arch = "x86_64", target_arch = "aarch64")
     )))]
     let _ = seccomp_fd;
-    let mut child = cmd.spawn().map_err(spawn_err)?;
-    let cap = spec.limits.out_cap_bytes;
-    // Drain stdout and stderr CONCURRENTLY: a payload that fills the stderr
-    // pipe while stdout stays open (or vice-versa) would wedge a sequential
-    // reader — the wall clock is the only backstop and this removes the hang
-    // independent of it. Each stream is read in its own thread.
+    let child = cmd.spawn().map_err(spawn_err)?;
+    drain_and_reap(child, spec.limits.out_cap_bytes, program)
+}
+
+/// Which jailed stream a drain thread read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Stream {
+    Stdout,
+    Stderr,
+}
+
+/// One drain thread's report: which stream it read and the bounded outcome.
+struct DrainOutcome {
+    stream: Stream,
+    result: Result<Option<Vec<u8>>, std::io::Error>,
+}
+
+/// Drain both pipes under the byte cap, killing the child the instant the cap
+/// is breached, then reap it.
+///
+/// Stdout and stderr are read CONCURRENTLY: a payload that fills the stderr
+/// pipe while stdout stays open (or vice-versa) would wedge a sequential
+/// reader. Each stream is read in its own thread, and every thread reports
+/// through one channel so the parent reacts to whichever finishes first rather
+/// than blocking on a fixed join order.
+fn drain_and_reap(
+    mut child: std::process::Child,
+    cap: u64,
+    program: &std::ffi::OsStr,
+) -> Result<JailedOutput, SandboxDefect> {
+    let spawn_err = |e: std::io::Error| SandboxDefect::Spawn {
+        program: program.to_string_lossy().into_owned(),
+        detail: e.to_string(),
+    };
     let out_handle = child.stdout.take();
     let err_handle = child.stderr.take();
-    let out_thread = std::thread::spawn(move || read_bounded(out_handle, cap));
-    let err_thread = std::thread::spawn(move || read_bounded(err_handle, cap));
+    let (tx, rx) = std::sync::mpsc::channel::<DrainOutcome>();
+    let out_tx = tx.clone();
+    let out_thread = std::thread::spawn(move || {
+        let _ = out_tx.send(DrainOutcome {
+            stream: Stream::Stdout,
+            result: read_bounded(out_handle, cap),
+        });
+    });
+    let err_thread = std::thread::spawn(move || {
+        let _ = tx.send(DrainOutcome {
+            stream: Stream::Stderr,
+            result: read_bounded(err_handle, cap),
+        });
+    });
     let join_err = || SandboxDefect::Spawn {
         program: program.to_string_lossy().into_owned(),
         detail: "output-drain thread panicked".to_owned(),
     };
-    let stdout = out_thread
-        .join()
-        .map_err(|_| join_err())?
-        .map_err(spawn_err)?;
-    let stderr = err_thread
-        .join()
-        .map_err(|_| join_err())?
-        .map_err(spawn_err)?;
+    let mut stdout: Option<Vec<u8>> = None;
+    let mut stderr: Option<Vec<u8>> = None;
+    let mut cap_exceeded = false;
+    let mut read_error: Option<std::io::Error> = None;
+    // Both drain threads always report exactly once, so two receives drain the
+    // channel. The verdict is decided the instant the cap is breached, so kill
+    // the jail on the FIRST cap breach or read error rather than waiting for
+    // the still-running child to exit on its own or hit the wall clock.
+    // Killing the direct child (the `timeout` wrapper) tears the whole jail
+    // down through bwrap's `--die-with-parent`, which unblocks the other
+    // reader (its pipe closes) and lets `child.wait()` reap promptly.
+    for _ in 0..2 {
+        let outcome = match rx.recv() {
+            Ok(outcome) => outcome,
+            // Each thread sends before returning, so a closed channel means
+            // both reports are in; stop rather than block forever.
+            Err(std::sync::mpsc::RecvError) => break,
+        };
+        match outcome.result {
+            Ok(Some(bytes)) => match outcome.stream {
+                Stream::Stdout => stdout = Some(bytes),
+                Stream::Stderr => stderr = Some(bytes),
+            },
+            Ok(None) => {
+                cap_exceeded = true;
+                let _ = child.kill();
+            }
+            Err(e) => {
+                read_error = Some(e);
+                let _ = child.kill();
+            }
+        }
+    }
+    out_thread.join().map_err(|_| join_err())?;
+    err_thread.join().map_err(|_| join_err())?;
     let status = child.wait().map_err(spawn_err)?;
+    if let Some(e) = read_error {
+        return Err(spawn_err(e));
+    }
+    if cap_exceeded {
+        return Err(SandboxDefect::OutputCapExceeded { cap_bytes: cap });
+    }
     match (stdout, stderr) {
         (Some(out), Some(err)) => Ok(JailedOutput {
             status: status.code(),
             stdout: out,
             stderr: err,
         }),
+        // Unreachable: with no cap breach and no read error each stream yields
+        // `Ok(Some(_))`, so both are populated. Fail closed on the cap defect
+        // rather than fabricate an empty-output success.
         _ => Err(SandboxDefect::OutputCapExceeded { cap_bytes: cap }),
     }
 }
@@ -820,6 +896,58 @@ mod tests {
         assert_eq!(ok, Some(data.clone()));
         let over = read_bounded(Some(&data[..]), 9).expect("read");
         assert_eq!(over, None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_overproducing_child_is_killed_promptly_on_cap_breach() {
+        use std::process::{Command, Stdio};
+        use std::time::{Duration, Instant};
+
+        // A child that floods stdout forever (and never exits on its own).
+        // Before the fix, the parent stopped reading at the cap but left this
+        // running until the wall clock; now the cap breach must kill it.
+        let mut cmd = Command::new("yes");
+        cmd.stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        let Ok(child) = cmd.spawn() else {
+            // `yes` absent: skip rather than fail on a host without coreutils.
+            return;
+        };
+        let started = Instant::now();
+        let outcome = drain_and_reap(child, 64 * 1024, std::ffi::OsStr::new("yes"));
+        let elapsed = started.elapsed();
+        assert!(
+            matches!(outcome, Err(SandboxDefect::OutputCapExceeded { .. })),
+            "an overproducing child must yield the cap-exceeded defect: {outcome:?}"
+        );
+        // The verdict is decided at the cap; killing the child must surface it
+        // in well under the 900s wall clock. A generous ceiling keeps this
+        // robust on a loaded CI runner while still proving the child was killed
+        // rather than waited out.
+        assert!(
+            elapsed < Duration::from_secs(30),
+            "cap breach must kill the child promptly, took {elapsed:?}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_well_behaved_child_returns_its_bounded_output() {
+        use std::process::{Command, Stdio};
+
+        let mut cmd = Command::new("printf");
+        cmd.arg("hello")
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        let Ok(child) = cmd.spawn() else {
+            return;
+        };
+        let out = drain_and_reap(child, 1024, std::ffi::OsStr::new("printf")).expect("run");
+        assert_eq!(out.stdout, b"hello");
+        assert_eq!(out.status, Some(0));
     }
 
     #[test]
