@@ -904,12 +904,13 @@ fn choose_sandbox_route(
 ) -> SandboxRoute {
     match mechanism {
         ipe_sandbox::Mechanism::Bwrap(_) if missing_caps.is_empty() => SandboxRoute::Jailed,
-        ipe_sandbox::Mechanism::Bwrap(_) if unsandboxed_ok => SandboxRoute::Unsandboxed,
+        ipe_sandbox::Mechanism::Bwrap(_) | ipe_sandbox::Mechanism::Refused if unsandboxed_ok => {
+            SandboxRoute::Unsandboxed
+        }
         ipe_sandbox::Mechanism::Bwrap(_) => SandboxRoute::RefuseMissingCaps {
             missing: missing_caps,
         },
-        _ if unsandboxed_ok => SandboxRoute::Unsandboxed,
-        _ => SandboxRoute::RefuseNoBwrap,
+        ipe_sandbox::Mechanism::Refused => SandboxRoute::RefuseNoBwrap,
     }
 }
 
