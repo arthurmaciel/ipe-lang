@@ -5939,7 +5939,7 @@ impl<'a> Builder<'a> {
             // a raw `String` — construction is the validated boundary).
             K::FileRemove | K::FileMkdirAll | K::FileDelete => fun(path(), task_unit()),
             // () -> Task String
-            K::IoReadLine | K::SystemCwd => fun(Ty::Unit, task(string())),
+            K::IoReadLine | K::SystemCwd | K::SystemGetcwd => fun(Ty::Unit, task(string())),
             // prompt String -> Task Secret (echo-suppressed line read). The line
             // is sealed into the opaque `Secret` at the read boundary — never a
             // bare `String` — so a freshly-read password cannot flow into a log,
@@ -9785,6 +9785,7 @@ mod registry_phase_c_tests {
             K::SystemSetenv,
             K::SystemUnsetenv,
             K::SystemCwd,
+            K::SystemGetcwd,
             K::SystemLoadEnv,
             K::SystemExit,
             // Random (6)

@@ -1355,6 +1355,9 @@ pub enum StdlibKernel {
     SystemSetenv,
     SystemUnsetenv,
     SystemCwd,
+    /// `System.getcwd : () -> Task Error String` — backward-compatible alias of
+    /// `System.cwd`; both resolve to the same `system_getcwd` runtime effect.
+    SystemGetcwd,
     SystemLoadEnv,
     SystemExit,
     // ── Random ──────────────────────────────────────────────────────────────
@@ -3544,6 +3547,7 @@ impl StdlibKernel {
             Self::SystemSetenv => d("System", "setenv", 2, Pure, "system_setenv"),
             Self::SystemUnsetenv => d("System", "unsetenv", 1, Pure, "system_unsetenv"),
             Self::SystemCwd => d("System", "cwd", 1, Pure, "system_cwd"),
+            Self::SystemGetcwd => d("System", "getcwd", 1, Pure, "system_getcwd"),
             Self::SystemLoadEnv => d("System", "loadEnv", 1, Pure, "system_load_env"),
             Self::SystemExit => d("System", "exit", 1, Pure, "system_exit"),
             // ── Random ──────────────────────────────────────────────────────
@@ -5233,6 +5237,7 @@ impl StdlibKernel {
         Self::SystemSetenv,
         Self::SystemUnsetenv,
         Self::SystemCwd,
+        Self::SystemGetcwd,
         Self::SystemLoadEnv,
         Self::SystemExit,
         // Random
@@ -8924,7 +8929,7 @@ impl StdlibKernel {
             | Self::IoEprintln
             | Self::SystemUnsetenv => Some(&STRING_TO_TASK_UNIT),
             Self::FileRemove | Self::FileMkdirAll | Self::FileDelete => Some(&PATH_TO_TASK_UNIT),
-            Self::IoReadLine | Self::SystemCwd => Some(&UNIT_TO_TASK_STRING),
+            Self::IoReadLine | Self::SystemCwd | Self::SystemGetcwd => Some(&UNIT_TO_TASK_STRING),
             Self::IoReadSecret => Some(&STRING_TO_TASK_SECRET),
             Self::TimeNow | Self::TimeUnixMillis => Some(&UNIT_TO_TASK_INT),
             Self::TimeSleep => Some(&INT_TO_TASK_UNIT),
@@ -9883,6 +9888,7 @@ impl StdlibKernel {
             // external act's isolatable resource is the network host.)
             | Self::DbConnOpen => Some(Capability::Network),
             Self::SystemCwd
+            | Self::SystemGetcwd
             | Self::SystemLoadEnv
             | Self::FileReadFile
             | Self::FileWriteFile

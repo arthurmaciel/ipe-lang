@@ -17,6 +17,7 @@
 //! its own canonicalisation here — pre-cargo, in the fast (non-E2E) path.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
 use ipe::project;
@@ -175,6 +176,78 @@ fn compiled_source_modules_resolve_all_exports() {
         "every compiled-source stdlib module must resolve all its exports \
          through the real pipeline — a failure here is source-vs-kernel drift \
          (a declared-but-homeless export or a broken `Ffi.kernel` alias):\n{}",
+        failures.join("\n"),
+    );
+}
+
+/// Every EXPOSED VALUE of every kernel-veneer `MODULES` fixture resolves through
+/// the real pipeline against the qualifier catalog.
+///
+/// The veneers (`Ipe.System`, `Ipe.File`, `Ipe.Http`, …) are NEVER injected as
+/// source — `inject_compiled_std_closure` consults `COMPILED_STD_MODULES` alone,
+/// so their `Kernel.kernel "…"` bodies never compile. A `Module.member` call
+/// instead resolves against the pre-installed kernel-qualifier catalog. A member
+/// listed in the veneer's `exposing (...)` but absent from that catalog (and from
+/// the kernel registry) type-checks nowhere: the call is IPE-N0005, yet `ipe doc`
+/// still advertises it (docs derive from the fixtures). This gate references
+/// every exposed value at a real call site so a catalog-homeless veneer export
+/// fails the compile here, pre-cargo — closing the same drift class the
+/// compiled-source gate closes for `COMPILED_STD_MODULES`.
+#[test]
+fn kernel_veneer_modules_resolve_all_exports() {
+    use ipe_intern::Interner;
+    use ipe_syntax::{Exposed, Exposing};
+
+    let mut failures: Vec<String> = Vec::new();
+    for m in ipe_stdlib::MODULES {
+        let mut interner = Interner::new();
+        let parsed = match ipe_parse::parse_module(m.source, &mut interner) {
+            Ok(p) => p,
+            Err(e) => {
+                failures.push(format!("{}: veneer failed to parse: {e:?}", m.name));
+                continue;
+            }
+        };
+        let value_names: Vec<String> = match &parsed.exposing.value {
+            // An export-all veneer has nothing to cross-check name-by-name.
+            Exposing::All => continue,
+            Exposing::List(items) => items
+                .iter()
+                .filter_map(|item| match &item.value {
+                    Exposed::Value(n) => interner.resolve(*n).map(str::to_owned),
+                    Exposed::Type(_, _) => None,
+                })
+                .collect(),
+        };
+        if value_names.is_empty() {
+            continue;
+        }
+
+        // Reference every exposed value at a real call site: one bare top-level
+        // binding per value forces name resolution (and HM inference of its
+        // scheme) independently, so a catalog-homeless member fails resolution
+        // and names itself. No application is needed — a dangling `Module.member`
+        // reference already resolves against the catalog.
+        let mut probes = String::new();
+        for (i, name) in value_names.iter().enumerate() {
+            let _ = writeln!(probes, "probe{i} = M.{name}");
+        }
+        let main = format!(
+            "module Main exposing (main)\nimport Ipe.Io as Io\nimport {} as M\n\n\
+             {probes}\nmain : Task Error ()\nmain =\n    Io.println \"ok\"\n",
+            m.name,
+        );
+
+        if let Err(e) = compile_main(&main) {
+            failures.push(format!("{}: {e}", m.name));
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "every kernel-veneer stdlib module must resolve all its exposed values \
+         through the real pipeline — a failure here is a veneer that advertises \
+         (and documents) a member with no catalog home (IPE-N0005 at any call \
+         site):\n{}",
         failures.join("\n"),
     );
 }
