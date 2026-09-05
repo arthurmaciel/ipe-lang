@@ -55,13 +55,12 @@ impl Raw {
 pub fn annotate_full(
     syntax: &ipe_syntax::Module,
     canon: &ipe_canon::ast::Module,
-    source: &str,
     interner: &Interner,
 ) -> Vec<AnnotatedToken> {
     let mut raw: Vec<Raw> = Vec::new();
 
     // Walk the canonical AST for semantically-classified tokens.
-    canon_walk(&mut raw, syntax, canon, source, interner);
+    canon_walk(&mut raw, syntax, canon, interner);
 
     finish(raw)
 }
@@ -72,12 +71,11 @@ pub fn annotate_full(
 
 pub fn annotate_syntax(
     syntax: &ipe_syntax::Module,
-    source: &str,
     interner: &Interner,
 ) -> Vec<AnnotatedToken> {
     let mut raw: Vec<Raw> = Vec::new();
 
-    syntax_walk(&mut raw, syntax, source, interner);
+    syntax_walk(&mut raw, syntax, interner);
 
     finish(raw)
 }
@@ -108,29 +106,22 @@ fn canon_walk(
     out: &mut Vec<Raw>,
     syntax: &ipe_syntax::Module,
     canon: &ipe_canon::ast::Module,
-    source: &str,
     interner: &Interner,
 ) {
     // Module keyword + name.
-    if let Some(kw) = find_keyword(source, 0, "module") {
-        Raw::keyword(out, kw);
-    }
+    Raw::keyword(out, syntax.module_kw);
     Raw::push(out, syntax.name.span, TokenClass::Module, None);
 
     // Imports — syntactic (canon AST does not retain import list post-resolution).
     for imp in &syntax.imports {
-        if let Some(kw) = find_keyword_before(source, imp.name.span.lo, "import") {
-            Raw::keyword(out, kw);
-        }
+        Raw::keyword(out, imp.import_kw);
         Raw::push(out, imp.name.span, TokenClass::Module, None);
         push_exposing(out, &imp.exposing.value, interner);
     }
 
     // Union types — syntactic (canon carries unions with resolved ctors).
     for (syn_union, can_union) in syntax.unions.iter().zip(canon.unions.iter()) {
-        if let Some(kw) = find_keyword_before(source, syn_union.value.name.span.lo, "type") {
-            Raw::keyword(out, kw);
-        }
+        Raw::keyword(out, syn_union.value.type_kw);
         Raw::push(out, syn_union.value.name.span, TokenClass::Type, None);
         for var in &syn_union.value.vars {
             Raw::push(out, var.span, TokenClass::TypeVar, None);
@@ -380,24 +371,18 @@ fn canon_pattern(out: &mut Vec<Raw>, pat: &ipe_canon::ast::Pattern, interner: &I
 // Syntax-only walk (parse tree, no canon)
 // ---------------------------------------------------------------------------
 
-fn syntax_walk(out: &mut Vec<Raw>, syntax: &ipe_syntax::Module, source: &str, interner: &Interner) {
-    if let Some(kw) = find_keyword(source, 0, "module") {
-        Raw::keyword(out, kw);
-    }
+fn syntax_walk(out: &mut Vec<Raw>, syntax: &ipe_syntax::Module, interner: &Interner) {
+    Raw::keyword(out, syntax.module_kw);
     Raw::push(out, syntax.name.span, TokenClass::Module, None);
 
     for imp in &syntax.imports {
-        if let Some(kw) = find_keyword_before(source, imp.name.span.lo, "import") {
-            Raw::keyword(out, kw);
-        }
+        Raw::keyword(out, imp.import_kw);
         Raw::push(out, imp.name.span, TokenClass::Module, None);
         push_exposing(out, &imp.exposing.value, interner);
     }
 
     for syn_union in &syntax.unions {
-        if let Some(kw) = find_keyword_before(source, syn_union.value.name.span.lo, "type") {
-            Raw::keyword(out, kw);
-        }
+        Raw::keyword(out, syn_union.value.type_kw);
         Raw::push(out, syn_union.value.name.span, TokenClass::Type, None);
         for var in &syn_union.value.vars {
             Raw::push(out, var.span, TokenClass::TypeVar, None);
@@ -581,60 +566,11 @@ fn push_syn_expr(out: &mut Vec<Raw>, expr: &ipe_syntax::Expr, interner: &Interne
 }
 
 // ---------------------------------------------------------------------------
-// Keyword scanning
-// ---------------------------------------------------------------------------
-
-fn find_keyword(source: &str, from: usize, kw: &str) -> Option<Span> {
-    let pos = source.get(from..)?.find(kw)?;
-    let abs = from + pos;
-    let before_ok = abs == 0
-        || source
-            .as_bytes()
-            .get(abs - 1)
-            .is_none_or(u8::is_ascii_whitespace);
-    let after_ok = source
-        .as_bytes()
-        .get(abs + kw.len())
-        .is_none_or(|b| b.is_ascii_whitespace() || *b == b'(');
-    if before_ok && after_ok {
-        Some(Span::new(offset_u32(abs), offset_u32(abs + kw.len())))
-    } else {
-        None
-    }
-}
-
-/// Scan backwards from `before_byte` up to 64 bytes to find a keyword.
-fn find_keyword_before(source: &str, before_byte: u32, kw: &str) -> Option<Span> {
-    let window_start = (before_byte as usize).saturating_sub(64);
-    let window = source.get(window_start..before_byte as usize)?;
-    let rel = window.rfind(kw)?;
-    let abs = window_start + rel;
-    let before_ok = abs == 0
-        || source
-            .as_bytes()
-            .get(abs - 1)
-            .is_none_or(u8::is_ascii_whitespace);
-    let after_ok = source
-        .as_bytes()
-        .get(abs + kw.len())
-        .is_none_or(|b| b.is_ascii_whitespace() || *b == b'(');
-    if before_ok && after_ok {
-        Some(Span::new(offset_u32(abs), offset_u32(abs + kw.len())))
-    } else {
-        None
-    }
-}
-
-// ---------------------------------------------------------------------------
 // Utilities
 // ---------------------------------------------------------------------------
 
 fn byte_len_u32(s: &str) -> u32 {
     u32::try_from(s.len()).unwrap_or(u32::MAX)
-}
-
-fn offset_u32(n: usize) -> u32 {
-    u32::try_from(n).unwrap_or(u32::MAX)
 }
 
 fn interner_join(syms: &[Symbol], interner: &Interner) -> String {
@@ -704,7 +640,54 @@ mod tests {
     fn syntax_walk_produces_tokens_for_valid_module() {
         let src = "module Main exposing (main)\n\nmain : Int\nmain =\n    42\n";
         let (syntax, interner) = parse(src);
-        let tokens = annotate_syntax(&syntax, src, &interner);
+        let tokens = annotate_syntax(&syntax, &interner);
         assert!(!tokens.is_empty(), "syntax walk produces tokens");
+    }
+
+    /// Keyword spans come from the lexer, not substring scans.
+    ///
+    /// A leading line comment contains the word "module"; the scanner approach
+    /// would match inside the comment.  The lexer-span approach emits a keyword
+    /// token only at the real keyword position.
+    #[test]
+    fn keyword_spans_are_exact_not_from_comment() {
+        // "-- module comment\nmodule Main exposing (..)\n"
+        // The real `module` keyword starts at byte 19.
+        let src = "-- module comment\nmodule Main exposing (..)\n";
+        let (syntax, interner) = parse(src);
+        let tokens = annotate_syntax(&syntax, &interner);
+        let kw = tokens
+            .iter()
+            .find(|t| t.class == TokenClass::Keyword)
+            .expect("at least one keyword token");
+        // The real keyword is at byte 18 (after the newline), not byte 3 inside the comment.
+        assert!(
+            kw.byte_start >= 18,
+            "keyword token must be at the real `module` span (byte >= 18), got {}",
+            kw.byte_start
+        );
+    }
+
+    /// A `type` declaration preceded by a comment longer than 64 bytes must
+    /// still produce a keyword token at the correct span.
+    #[test]
+    fn type_kw_span_survives_long_comment() {
+        // Construct a comment that is > 64 bytes, then a `type` declaration.
+        let long_comment = "-- ".to_owned() + &"x".repeat(70) + "\n";
+        let src = format!(
+            "module Main exposing (..)\n\n{long_comment}type Color = Red | Blue\n"
+        );
+        let (syntax, interner) = parse(&src);
+        let tokens = annotate_syntax(&syntax, &interner);
+        let type_kw = tokens
+            .iter()
+            .find(|t| {
+                t.class == TokenClass::Keyword
+                    && src.get(t.byte_start as usize..(t.byte_start + t.byte_len) as usize)
+                        == Some("type")
+            })
+            .expect("a `type` keyword token must be present");
+        let lexed = &src[type_kw.byte_start as usize..(type_kw.byte_start + type_kw.byte_len) as usize];
+        assert_eq!(lexed, "type");
     }
 }

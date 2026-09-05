@@ -388,6 +388,7 @@ impl<'a> Parser<'a> {
         let header_span = Self::span_merge(module_tok.span, name.span);
         let (values, unions, aliases, foreigns) = self.assemble(decls)?;
         Ok(Module {
+            module_kw: module_tok.span,
             name,
             exposing: Located::new(header_span, exposing),
             imports,
@@ -698,7 +699,7 @@ impl<'a> Parser<'a> {
 
     fn parse_import(&mut self) -> DResult<Import> {
         // The caller has already peeked `import`.
-        self.bump(Construct::ModuleHeader)?;
+        let import_tok = self.bump(Construct::ModuleHeader)?;
         let name = self.parse_dotted_name()?;
         let alias = if self.peek_kind() == Some(&Tok::As) {
             self.bump(Construct::ModuleHeader)?;
@@ -720,6 +721,7 @@ impl<'a> Parser<'a> {
             Located::new(name.span, Exposing::List(Vec::new()))
         };
         Ok(Import {
+            import_kw: import_tok.span,
             name,
             alias,
             exposing,
@@ -969,6 +971,7 @@ impl<'a> Parser<'a> {
         Ok(Located::new(
             span,
             Union {
+                type_kw: type_tok.span,
                 name,
                 vars,
                 ctors,
