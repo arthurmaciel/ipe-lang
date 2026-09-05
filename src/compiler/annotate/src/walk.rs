@@ -9,6 +9,8 @@
 //!
 //! Both produce a sorted, deduplicated token stream.
 
+use std::collections::BTreeMap;
+
 use ipe_diagnostics::Span;
 use ipe_intern::{Interner, Symbol};
 
@@ -149,12 +151,25 @@ fn canon_walk(
         }
     }
 
-    // Value bindings — walk canonical expr for semantic class.
-    for (syn_val, can_def) in syntax.values.iter().zip(canon.defs.iter()) {
-        // The binding name itself — top-level Function with DefKey::TopLevel.
-        let def = resolve_sym(can_def.name().value, interner).map(|name_str| DefKey::TopLevel {
-            module: interner_join(can_def.home(), interner),
-            name: name_str,
+    // Value bindings — match each syntax value to its canonical def by name.
+    //
+    // Canon filters some syntax values out of `canon.defs` (a `Ffi.kernel` alias
+    // binding leaves no ordinary def), so a positional pairing would attach the
+    // wrong `DefKey` to every following value and silently drop the tail. Keying
+    // by name pairs each value with its own def; a value with no matching def
+    // (a kernel alias) is classified as a plain `Function` with no `DefKey`,
+    // never mispaired with a neighbour's def.
+    let defs_by_name: BTreeMap<Symbol, &ipe_canon::ast::Def> =
+        canon.defs.iter().map(|d| (d.name().value, d)).collect();
+    for syn_val in &syntax.values {
+        let can_def = defs_by_name.get(&syn_val.value.name.value).copied();
+        // The binding name itself — top-level Function; carry a DefKey::TopLevel
+        // only when a canonical def backs this value.
+        let def = can_def.and_then(|d| {
+            resolve_sym(d.name().value, interner).map(|name_str| DefKey::TopLevel {
+                module: interner_join(d.home(), interner),
+                name: name_str,
+            })
         });
         Raw::push(out, syn_val.value.name.span, TokenClass::Function, def);
         // Type annotation (syntactic spans not always available).
@@ -165,13 +180,15 @@ fn canon_walk(
         for pat in &syn_val.value.patterns {
             push_syn_pattern(out, pat, interner);
         }
-        // Body expression — walk the canonical expr for semantic richness.
-        let body = match can_def {
-            ipe_canon::ast::Def::Untyped { body, .. } | ipe_canon::ast::Def::Typed { body, .. } => {
-                body
-            }
-        };
-        canon_expr(out, body, interner);
+        // Body expression — walk the canonical expr for semantic richness when a
+        // canonical def exists; fall back to the syntax body for a value with no
+        // def (a kernel alias) so its tokens are not dropped.
+        match can_def {
+            Some(
+                ipe_canon::ast::Def::Untyped { body, .. } | ipe_canon::ast::Def::Typed { body, .. },
+            ) => canon_expr(out, body, interner),
+            None => push_syn_expr(out, &syn_val.value.body, interner),
+        }
     }
 }
 
@@ -706,5 +723,76 @@ mod tests {
         let (syntax, interner) = parse(src);
         let tokens = annotate_syntax(&syntax, src, &interner);
         assert!(!tokens.is_empty(), "syntax walk produces tokens");
+    }
+
+    // Build an untyped canonical def whose body is a bare unit, so it can stand
+    // in for a real value binding without materialising an expression tree.
+    fn unit_def(name: Symbol, home: &[Symbol]) -> ipe_canon::ast::Def {
+        ipe_canon::ast::Def::Untyped {
+            home: home.to_vec(),
+            name: ipe_diagnostics::Located::new(Span::new(0, 0), name),
+            patterns: Vec::new(),
+            body: ipe_diagnostics::Located::new(Span::new(0, 0), ipe_canon::ast::Expr_::Unit),
+        }
+    }
+
+    // Regression for the positional-zip mispairing: canon filters a kernel-alias
+    // binding out of `canon.defs`, so a value's DefKey must be resolved by NAME,
+    // never by position. Here `aliased` is present in syntax but absent from
+    // `canon.defs`; a positional zip would attach `aliased`'s slot to `first`
+    // and drop `second` entirely.
+    #[test]
+    fn full_walk_pairs_defs_by_name_across_a_filtered_alias() {
+        let src = concat!(
+            "module Main exposing (first, second)\n\n",
+            "aliased : Int\n",
+            "aliased =\n    Kernel.kernel\n\n",
+            "first : Int\n",
+            "first =\n    1\n\n",
+            "second : Int\n",
+            "second =\n    2\n",
+        );
+        let (syntax, mut interner) = parse(src);
+        let home = vec![interner.intern("Main").expect("intern Main")];
+        let first_sym = interner.intern("first").expect("intern first");
+        let second_sym = interner.intern("second").expect("intern second");
+
+        // canon.defs OMITS `aliased` (the filtered kernel alias), keeping only
+        // the two ordinary values — the exact shape canon produces.
+        let canon = ipe_canon::ast::Module {
+            name: home.clone(),
+            unions: Vec::new(),
+            defs: vec![unit_def(first_sym, &home), unit_def(second_sym, &home)],
+            imports_unsafe_submodule: false,
+            imported_web_capabilities: std::collections::BTreeSet::default(),
+        };
+
+        let tokens = annotate_full(&syntax, &canon, src, &interner);
+
+        // Resolve a value's name token (by source byte offset) to the top-level
+        // name its DefKey carries, or `None` when it has no top-level DefKey.
+        let top_level_name = |needle: &str| -> Option<String> {
+            let off = u32::try_from(src.find(&format!("{needle} =")).expect("value in source"))
+                .expect("offset fits u32");
+            tokens
+                .iter()
+                .find(|t| t.byte_start == off && t.class == TokenClass::Function)
+                .and_then(|t| t.def.clone())
+                .and_then(|def| match def {
+                    DefKey::TopLevel { name, .. } => Some(name),
+                    _ => None,
+                })
+        };
+
+        // Each value keys to its OWN def, never a neighbour's — the property a
+        // positional zip violates once the filtered alias shifts every pairing.
+        assert_eq!(top_level_name("first").as_deref(), Some("first"));
+        assert_eq!(top_level_name("second").as_deref(), Some("second"));
+        // The filtered alias has no canonical def: it is a plain Function token
+        // with no DefKey, never borrowing a neighbour's key.
+        assert!(
+            top_level_name("aliased").is_none(),
+            "a value with no canonical def carries no DefKey"
+        );
     }
 }
