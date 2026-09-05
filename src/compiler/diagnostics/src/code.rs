@@ -186,6 +186,10 @@ code! {
     IPE_P0066 = "IPE-P0066", "doc-string on a non-exported binding is unreachable", "IPE-P0066";
     /// exported binding has no doc-string — opt-in lint (warning)
     IPE_P0067 = "IPE-P0067", "exported binding has no doc-string", "IPE-P0067";
+    /// type annotation has no matching value binding
+    IPE_P0068 = "IPE-P0068", "type annotation has no matching value binding", "IPE-P0068";
+    /// duplicate type annotation for one name
+    IPE_P0069 = "IPE-P0069", "duplicate type annotation for one name", "IPE-P0069";
 
     // -----------------------------------------------------------------------
     // Name resolution (IPE-N####)

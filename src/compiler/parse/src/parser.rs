@@ -73,6 +73,17 @@ enum Decl {
     Foreign(Located<ForeignDecl>),
 }
 
+/// A standalone type annotation awaiting its value binding, tracked by
+/// [`Parser::assemble`] so orphans and duplicates can be rejected rather than
+/// silently dropped.
+struct Annotation {
+    name: Symbol,
+    ty: Located<TypeAnnotation>,
+    doc: Option<DocString>,
+    /// Set once a value binding of the same name claims this annotation.
+    consumed: bool,
+}
+
 /// Map a concrete lexer token to its payload-free [`TokenKind`] category — the
 /// "found" shape a [`ParseError::UnexpectedToken`] reports.
 const fn tok_kind(t: &Tok) -> TokenKind {
@@ -371,7 +382,7 @@ impl<'a> Parser<'a> {
         }
 
         let header_span = Self::span_merge(module_tok.span, name.span);
-        let (values, unions, aliases, foreigns) = Self::assemble(decls);
+        let (values, unions, aliases, foreigns) = self.assemble(decls)?;
         Ok(Module {
             name,
             exposing: Located::new(header_span, exposing),
@@ -385,31 +396,53 @@ impl<'a> Parser<'a> {
 
     /// Split decls into values (with annotations attached), unions, aliases,
     /// and foreign FFI declarations.
-    fn assemble(decls: Vec<Decl>) -> AssembledDecls {
+    ///
+    /// Every standalone `name : T` annotation must attach to exactly one value
+    /// binding of the same `name`. A second annotation for a name is a
+    /// duplicate ([`ParseError::DuplicateAnnotation`]); an annotation left
+    /// unattached once all values are processed is an orphan
+    /// ([`ParseError::AnnotationWithoutBinding`]). Both are rejected rather
+    /// than silently dropped, so a typo like `nmae : Int` cannot discard the
+    /// author's stated type.
+    fn assemble(&self, decls: Vec<Decl>) -> DResult<AssembledDecls> {
         let mut unions = Vec::new();
         let mut aliases = Vec::new();
         let mut foreigns = Vec::new();
-        let mut annotations: Vec<(Symbol, Located<TypeAnnotation>, Option<DocString>)> = Vec::new();
+        // One annotation slot per name; `consumed` flips when a value binds it.
+        let mut annotations: Vec<Annotation> = Vec::new();
         let mut values = Vec::new();
         for d in decls {
             match d {
                 Decl::Union(u) => unions.push(u),
                 Decl::Alias(a) => aliases.push(a),
                 Decl::Foreign(f) => foreigns.push(f),
-                Decl::Annotation(name, ty, doc) => annotations.push((name, ty, doc)),
+                Decl::Annotation(name, ty, doc) => {
+                    if annotations.iter().any(|a| a.name == name) {
+                        return Err(Self::duplicate_annotation(ty.span, self.symbol_text(name)));
+                    }
+                    annotations.push(Annotation {
+                        name,
+                        ty,
+                        doc,
+                        consumed: false,
+                    });
+                }
                 Decl::Value {
                     name,
                     patterns,
                     body,
                     doc,
                 } => {
-                    let matched_ann = annotations.iter().rev().find(|(n, _, _)| *n == name.value);
-                    let type_annotation = matched_ann.map(|(_, ty, _)| ty.clone());
+                    let matched = annotations.iter_mut().find(|a| a.name == name.value);
+                    let type_annotation = matched.as_ref().map(|a| a.ty.clone());
                     // When the value has no inline doc but a preceding
                     // annotation carried one (the `{-| … -}\nname : T\nname
                     // = …` pattern), inherit the annotation's doc.
                     let effective_doc =
-                        doc.or_else(|| matched_ann.and_then(|(_, _, ann_doc)| ann_doc.clone()));
+                        doc.or_else(|| matched.as_ref().and_then(|a| a.doc.clone()));
+                    if let Some(a) = matched {
+                        a.consumed = true;
+                    }
                     let span = name.span;
                     values.push(Located::new(
                         span,
@@ -424,7 +457,33 @@ impl<'a> Parser<'a> {
                 }
             }
         }
-        (values, unions, aliases, foreigns)
+        if let Some(orphan) = annotations.iter().find(|a| !a.consumed) {
+            return Err(Self::orphan_annotation(
+                orphan.ty.span,
+                self.symbol_text(orphan.name),
+            ));
+        }
+        Ok((values, unions, aliases, foreigns))
+    }
+
+    /// The source text of `sym`, or a placeholder when it is somehow
+    /// un-interned (unreachable for a symbol the parser itself minted).
+    fn symbol_text(&self, sym: Symbol) -> Box<str> {
+        self.interner.resolve(sym).unwrap_or("?").into()
+    }
+
+    const fn duplicate_annotation(span: Span, name: Box<str>) -> Diagnostic {
+        Diagnostic::Parse {
+            span,
+            msg: ParseError::DuplicateAnnotation { name },
+        }
+    }
+
+    const fn orphan_annotation(span: Span, name: Box<str>) -> Diagnostic {
+        Diagnostic::Parse {
+            span,
+            msg: ParseError::AnnotationWithoutBinding { name },
+        }
     }
 
     /// The module name in the header: a single (possibly dotted) identifier.

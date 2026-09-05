@@ -1060,6 +1060,38 @@ mod tests {
     }
 
     #[test]
+    fn orphan_annotation_is_rejected_p0068() {
+        // A `name : T` annotation whose name misspells its definition attaches
+        // to nothing and must be rejected, not silently dropped.
+        let src = format!("{HDR}incrementt : Int\nincrement =\n    1\n");
+        assert_eq!(err_code(&src), "IPE-P0068");
+        // A lone annotation with no definition at all is likewise an orphan.
+        assert_eq!(err_code(&format!("{HDR}x : Int\n")), "IPE-P0068");
+    }
+
+    #[test]
+    fn duplicate_annotation_is_rejected_p0069() {
+        // Two annotations for one name give no single type to attach; reject
+        // rather than keep one last-write-wins.
+        let src = format!("{HDR}area : Int\narea : Float\narea =\n    1\n");
+        assert_eq!(err_code(&src), "IPE-P0069");
+    }
+
+    #[test]
+    fn valid_annotation_still_attaches() {
+        // The common, correct case must keep parsing: one annotation, one
+        // matching definition, type attached to the value.
+        let mut i = Interner::new();
+        let src = format!("{HDR}v : Int\nv =\n    1\n");
+        let m = parse_module(&src, &mut i).expect("annotated value must parse");
+        let v = find_value(&m, &i, "v").expect("v present");
+        assert!(
+            v.type_annotation.is_some(),
+            "the `v : Int` annotation must attach to `v`"
+        );
+    }
+
+    #[test]
     fn malformed_type_declaration_is_p0031() {
         // Missing type name.
         assert_eq!(err_code(&format!("{HDR}type = Foo")), "IPE-P0031");
