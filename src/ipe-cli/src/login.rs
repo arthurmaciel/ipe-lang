@@ -66,10 +66,7 @@ pub fn run_login(rest: &[String]) -> Result<(), CliError> {
                     "not logged in — run `ipe login` to authorize".to_owned()
                 }
             };
-            print!(
-                "{}",
-                crate::style::frame(&crate::style::gutter(&message))
-            );
+            print!("{}", crate::style::frame(&crate::style::gutter(&message)));
             Ok(())
         }
         Some("--logout") if rest.len() == 1 => logout(),
@@ -481,9 +478,7 @@ fn write_token_atomic(path: &std::path::Path, token: &str) -> Result<(), CliErro
     let dir = path.parent().unwrap_or_else(|| std::path::Path::new("."));
     let tmp_path = dir.join(format!(
         ".{}.{}.tmp",
-        path.file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("token"),
+        path.file_name().and_then(|n| n.to_str()).unwrap_or("token"),
         std::process::id()
     ));
     // O_EXCL: refuse an existing name (a stale temp or a planted symlink) rather
@@ -776,7 +771,10 @@ mod tests {
                 !arg.contains(secret),
                 "curl argv must not contain the device_code secret; found in `{arg}`"
             );
-            assert_ne!(arg, body, "the form body must not appear as an argv element");
+            assert_ne!(
+                arg, body,
+                "the form body must not appear as an argv element"
+            );
         }
         // The body must be present exactly as the stdin sentinel, nothing more.
         assert!(argv.contains(&"@-"), "body must be read from stdin (`@-`)");
@@ -787,14 +785,15 @@ mod tests {
     #[test]
     fn poll_interval_is_clamped_to_ceiling() {
         // Mirrors the slow_down clamp: `.max(interval + 5).min(MAX_POLL_INTERVAL_SECS)`.
-        let clamp = |raw: u64, current: u64| {
-            raw.max(current + 5).min(MAX_POLL_INTERVAL_SECS)
-        };
+        let clamp = |raw: u64, current: u64| raw.max(current + 5).min(MAX_POLL_INTERVAL_SECS);
         assert_eq!(clamp(u64::MAX, 5), MAX_POLL_INTERVAL_SECS);
         assert_eq!(clamp(0, 5), 10); // floor of current+5 still applies
         assert!(MAX_POLL_INTERVAL_SECS <= 60);
         // The initial-interval clamp keeps a hostile first value bounded too.
-        assert_eq!(u64::MAX.clamp(1, MAX_POLL_INTERVAL_SECS), MAX_POLL_INTERVAL_SECS);
+        assert_eq!(
+            u64::MAX.clamp(1, MAX_POLL_INTERVAL_SECS),
+            MAX_POLL_INTERVAL_SECS
+        );
         assert_eq!(0u64.clamp(1, MAX_POLL_INTERVAL_SECS), 1);
     }
 
@@ -832,7 +831,11 @@ mod tests {
             std::fs::read_to_string(&path).expect("token readable"),
             "ghp_atomic_token\n"
         );
-        let mode = std::fs::metadata(&path).expect("exists").permissions().mode() & 0o777;
+        let mode = std::fs::metadata(&path)
+            .expect("exists")
+            .permissions()
+            .mode()
+            & 0o777;
         assert_eq!(mode, 0o600, "renamed token must be 0600, got {mode:04o}");
 
         // No leftover temp file in the directory.
@@ -841,7 +844,10 @@ mod tests {
             .filter_map(Result::ok)
             .filter(|e| e.file_name().to_string_lossy().ends_with(".tmp"))
             .collect();
-        assert!(leftovers.is_empty(), "no .tmp file should remain after rename");
+        assert!(
+            leftovers.is_empty(),
+            "no .tmp file should remain after rename"
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }

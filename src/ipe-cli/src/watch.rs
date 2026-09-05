@@ -3001,7 +3001,8 @@ mod tests {
         let b = mint_hot_token().expect("OS CSPRNG must be available under test");
         assert_eq!(a.len(), 64, "32 random bytes render to 64 hex chars");
         assert!(
-            a.bytes().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()),
+            a.bytes()
+                .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()),
             "token must be lowercase hex"
         );
         assert_ne!(a, b, "two mints must not collide");
