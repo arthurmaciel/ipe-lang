@@ -14,10 +14,10 @@ fn main() -> ExitCode {
             ExitCode::from(u8::try_from(code).unwrap_or(2))
         }
         // These variants render their own complete screen — a full help page, a
-        // gate report, or a self-guttered environment message — so the `ipe: `
-        // prefix (which belongs to short one-line diagnostics) and the extra
-        // gutter are not applied; they print as-is. A command misuse leads with
-        // its own reason line before its help page.
+        // gate report, or a self-guttered environment message — so the
+        // soft-yellow error banner (which belongs to short one-line diagnostics)
+        // and the extra gutter are not applied; they print as-is. A command
+        // misuse leads with its own reason line before its help page.
         Err(
             err @ (ipe::CliError::UnknownCommand { .. }
             | ipe::CliError::CommandUsage { .. }
@@ -39,10 +39,7 @@ fn main() -> ExitCode {
             ExitCode::FAILURE
         }
         Err(err) => {
-            eprint!(
-                "{}",
-                ipe::style::frame(&ipe::style::gutter(&format!("ipe: {err}")))
-            );
+            ipe::style::print_error_banner(&err.to_string());
             ExitCode::FAILURE
         }
     }
