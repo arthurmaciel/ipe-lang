@@ -200,6 +200,74 @@ pub fn print_command_header() {
     eprint!("{}", command_header(colored));
 }
 
+/// Text that has been proven safe to write to a terminal: no ANSI escape
+/// sequences, no C0/C1 control bytes, no `DEL`, only printable characters plus
+/// the two layout whitespaces (`\n`, `\t`) the gutter and terminal handle
+/// safely.
+///
+/// The error sink writes an arbitrary error message — a filename, a compiler
+/// excerpt, any embedded text — to stderr. On a terminal, a crafted message
+/// laced with ANSI escapes or control bytes could move the cursor, recolour or
+/// erase lines, or hide text, turning a diagnostic into a spoofing/injection
+/// surface. `TerminalSafe` is the typed boundary: construct it ONCE from the
+/// untrusted string, and every downstream renderer takes a `TerminalSafe`
+/// rather than a bare `&str`, so the unsanitised form is unrepresentable past
+/// the sink. Parse, don't validate.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TerminalSafe(String);
+
+impl TerminalSafe {
+    /// Sanitise `raw` into terminal-safe text: drop every ANSI escape sequence
+    /// (a lone `ESC`, or a CSI `ESC [ … final`) whole, and drop every remaining
+    /// control byte below `0x20` and the `DEL` (`0x7f`), keeping only `\n` and
+    /// `\t` — the whitespace the gutter and line layout rely on. Printable text
+    /// passes through untouched.
+    #[must_use]
+    pub fn sanitize(raw: &str) -> Self {
+        let mut out = String::with_capacity(raw.len());
+        let mut chars = raw.chars();
+        while let Some(c) = chars.next() {
+            if c == '\u{1b}' {
+                // An escape introduces a control sequence. A CSI (`ESC [`) runs
+                // until a final byte in 0x40..=0x7e; any other escape consumes
+                // just its single following byte. Either way the escape and its
+                // sequence are dropped whole.
+                if let Some('[') = chars.clone().next() {
+                    chars.next();
+                    for seq in chars.by_ref() {
+                        if ('\u{40}'..='\u{7e}').contains(&seq) {
+                            break;
+                        }
+                    }
+                } else {
+                    chars.next();
+                }
+                continue;
+            }
+            // Keep the two layout whitespaces; drop every other control byte
+            // (C0 below 0x20, and DEL 0x7f).
+            if c == '\n' || c == '\t' {
+                out.push(c);
+            } else if !c.is_control() {
+                out.push(c);
+            }
+        }
+        Self(out)
+    }
+
+    /// The sanitised text.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for TerminalSafe {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
 /// The short-diagnostic error banner: a soft-yellow block that leads with the
 /// product name and version, then the error message, both guttered and framed.
 ///
@@ -208,8 +276,11 @@ pub fn print_command_header() {
 /// red. No `ipe: ` prefix: the product-name header identifies the source, so the
 /// prefix only added noise that scrolled away with the message. Coloured when
 /// `color` is on, plain (empty escapes) otherwise, so one shape serves both.
+///
+/// The message is already-sanitised [`TerminalSafe`]: the banner's own escapes
+/// (yellow/reset) are the only control bytes the output may carry.
 #[must_use]
-pub fn error_banner(message: &str, color: bool) -> String {
+pub fn error_banner(message: &TerminalSafe, color: bool) -> String {
     let version = env!("CARGO_PKG_VERSION");
     let p = Palette::select(color);
     let body = format!(
@@ -222,9 +293,13 @@ pub fn error_banner(message: &str, color: bool) -> String {
 
 /// Print [`error_banner`] to stderr, respecting the terminal / `NO_COLOR` state
 /// of stderr. The one place short CLI diagnostics render their final screen.
+///
+/// The untrusted message is parsed into [`TerminalSafe`] HERE, once, at the
+/// boundary — every deeper renderer sees only the sanitised form.
 pub fn print_error_banner(message: &str) {
     let colored = use_color(&std::io::stderr());
-    eprint!("{}", error_banner(message, colored));
+    let safe = TerminalSafe::sanitize(message);
+    eprint!("{}", error_banner(&safe, colored));
 }
 
 /// A framed, guttered status line: a leading success/failure glyph, then the
@@ -294,7 +369,7 @@ mod tests {
 
     #[test]
     fn error_banner_leads_with_versioned_product_name_then_message() {
-        let b = error_banner("no such file `Main.ipe`", false);
+        let b = error_banner(&TerminalSafe::sanitize("no such file `Main.ipe`"), false);
         // Framed: one blank edge each side.
         assert!(b.starts_with('\n') && b.ends_with('\n'), "framed banner");
         // No `ipe: ` prefix survives.
@@ -317,9 +392,39 @@ mod tests {
 
     #[test]
     fn error_banner_colour_mode_is_soft_yellow_not_red() {
-        let b = error_banner("boom", true);
+        let b = error_banner(&TerminalSafe::sanitize("boom"), true);
         assert!(b.contains(Palette::COLOR.yellow), "soft yellow applied");
         assert!(!b.contains(Palette::COLOR.red), "never the alarming red");
+    }
+
+    /// A hostile error message laced with ANSI escapes and control bytes is
+    /// stripped to printable text plus layout whitespace: the banner it renders
+    /// carries no escape the message injected, so a crafted filename or compiler
+    /// excerpt cannot rewrite the terminal.
+    #[test]
+    fn terminal_safe_strips_ansi_and_control_bytes() {
+        let hostile = "\u{1b}[31mred\u{1b}[0m\u{1b}]0;title\u{7}\rmoved\u{8}\u{7f}done\ttab\nline";
+        let safe = TerminalSafe::sanitize(hostile);
+        let s = safe.as_str();
+        assert!(!s.contains('\u{1b}'), "no ESC survives: {s:?}");
+        assert!(!s.contains('\r'), "carriage return dropped: {s:?}");
+        assert!(!s.contains('\u{7}'), "bell dropped: {s:?}");
+        assert!(!s.contains('\u{8}'), "backspace dropped: {s:?}");
+        assert!(!s.contains('\u{7f}'), "DEL dropped: {s:?}");
+        // The CSI colour codes are removed whole, leaving only the visible text;
+        // layout whitespace (tab, newline) is preserved.
+        assert_eq!(s, "redmoveddone\ttab\nline");
+    }
+
+    /// The escaped banner is safe end to end: sanitising the message before it
+    /// reaches [`error_banner`] means the only ANSI in the rendered output is the
+    /// banner's own soft-yellow framing, never a byte the message smuggled in.
+    #[test]
+    fn error_banner_message_cannot_inject_ansi_in_plain_mode() {
+        let hostile = "boom\u{1b}[2J\u{1b}[1;1H";
+        let b = error_banner(&TerminalSafe::sanitize(hostile), false);
+        assert!(!b.contains('\x1b'), "plain banner carries no ANSI: {b:?}");
+        assert!(b.contains("boom"), "the visible text survives");
     }
 
     #[test]
