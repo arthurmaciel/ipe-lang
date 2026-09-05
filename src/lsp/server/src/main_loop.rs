@@ -5,6 +5,8 @@
 use std::collections::BTreeMap;
 use std::panic::AssertUnwindSafe;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 
 use crossbeam_channel::{Receiver, Sender, select};
@@ -69,6 +71,10 @@ struct State {
     /// Open editor buffers, keyed by normalized path.
     overlays: BTreeMap<PathBuf, String>,
     module_of_path: BTreeMap<PathBuf, Vec<String>>,
+    /// Reverse of `module_of_path`: a user module's normalized on-disk path.
+    /// Built once per layout in [`adopt`] so per-request URI resolution and
+    /// per-edit overlay lookup are `O(log n)`, not a linear scan / re-canonicalize.
+    path_of_module: BTreeMap<Vec<String>, PathBuf>,
     /// Whether the current layout is the degraded single-file fallback
     /// (project resolution failed — retry a full load on the next edit).
     fallback: bool,
@@ -77,6 +83,11 @@ struct State {
     /// a new `recompute` call joins (cancels) the previous one before spawning
     /// its replacement.
     worker: Option<thread::JoinHandle<()>>,
+    /// The in-flight worker's cancel flag, set before joining a superseded
+    /// worker so its lint tail (which never demands the db again, and so cannot
+    /// unwind via salsa `Cancelled`) exits within one module's lint time
+    /// instead of stalling the main loop for a full lint pass.
+    worker_cancel: Option<Arc<AtomicBool>>,
     /// Last non-empty payload per URI, for change-suppression and clearing.
     last_published: BTreeMap<Url, Vec<lsp_types::Diagnostic>>,
 }
@@ -84,21 +95,19 @@ struct State {
 impl State {
     /// The document URI of a user module, when it has an on-disk path.
     fn uri_for_module(&self, module: &[String]) -> Option<Url> {
-        self.module_of_path
-            .iter()
-            .find(|(_, m)| m.as_slice() == module)
-            .and_then(|(path, _)| Url::from_file_path(path).ok())
+        let path = self.path_of_module.get(module)?;
+        Url::from_file_path(path).ok()
     }
 
-    /// Resolve a document URI to its module path, input handle, and current
-    /// input text.
-    fn locate(&self, uri: &Url) -> Option<(Vec<String>, ipe_db::SourceFile, String)> {
+    /// Resolve a document URI to its module path and input handle. The handle's
+    /// text is read by borrowing `file.text(&state.db)` at the use site, so the
+    /// full document is never cloned just to satisfy the borrow checker.
+    fn locate(&self, uri: &Url) -> Option<(Vec<String>, ipe_db::SourceFile)> {
         let path = normalize(&uri.to_file_path().ok()?);
         let module = self.module_of_path.get(&path)?.clone();
         let root = self.root?;
         let file = root.files(&self.db).get(&module).copied()?;
-        let text = file.text(&self.db).clone();
-        Some((module, file, text))
+        Some((module, file))
     }
 
     fn new(workspace_root: Option<PathBuf>, encoding: PositionEncoding) -> Self {
@@ -111,9 +120,11 @@ impl State {
             disk: BTreeMap::new(),
             overlays: BTreeMap::new(),
             module_of_path: BTreeMap::new(),
+            path_of_module: BTreeMap::new(),
             fallback: false,
             generation: 0,
             worker: None,
+            worker_cancel: None,
             last_published: BTreeMap::new(),
         }
     }
@@ -257,16 +268,17 @@ fn hover_result(state: &State, params: &serde_json::Value) -> FeatureOutcome {
         return FeatureOutcome::InvalidParams("invalid params for textDocument/hover".into());
     };
     let position = params.text_document_position_params;
-    let Some((_module, file, text)) = state.locate(&position.text_document.uri) else {
+    let Some((_module, file)) = state.locate(&position.text_document.uri) else {
         return FeatureOutcome::NoResult;
     };
+    let text = file.text(&state.db);
     let Some(root) = state.root else {
         return FeatureOutcome::NoResult;
     };
     let Some(entry_file) = root.files(&state.db).get(&state.entry_module).copied() else {
         return FeatureOutcome::NoResult;
     };
-    let byte = offset::position_to_offset(&text, position.position, state.encoding);
+    let byte = offset::position_to_offset(text, position.position, state.encoding);
     let byte = u32::try_from(byte).unwrap_or(u32::MAX);
     ipe_lsp_features::hover::hover(&state.db, root, entry_file, file, byte).map_or(
         FeatureOutcome::NoResult,
@@ -279,7 +291,7 @@ fn hover_result(state: &State, params: &serde_json::Value) -> FeatureOutcome {
                     }),
                 ),
                 range: Some(ipe_lsp_features::offset::span_to_range(
-                    &text,
+                    text,
                     info.span,
                     state.encoding,
                 )),
@@ -297,9 +309,10 @@ fn document_links_result(state: &State, params: &serde_json::Value) -> FeatureOu
             "invalid params for textDocument/documentLink".into(),
         );
     };
-    let Some((_module, file, text)) = state.locate(&params.text_document.uri) else {
+    let Some((_module, file)) = state.locate(&params.text_document.uri) else {
         return FeatureOutcome::NoResult;
     };
+    let text = file.text(&state.db);
     let Some(root) = state.root else {
         return FeatureOutcome::NoResult;
     };
@@ -309,11 +322,7 @@ fn document_links_result(state: &State, params: &serde_json::Value) -> FeatureOu
             .filter_map(|link| {
                 let target = state.uri_for_module(&link.target_module)?;
                 Some(lsp_types::DocumentLink {
-                    range: ipe_lsp_features::offset::span_to_range(
-                        &text,
-                        link.span,
-                        state.encoding,
-                    ),
+                    range: ipe_lsp_features::offset::span_to_range(text, link.span, state.encoding),
                     target: Some(target),
                     tooltip: None,
                     data: None,
@@ -331,7 +340,7 @@ fn folding_ranges_result(state: &State, params: &serde_json::Value) -> FeatureOu
             "invalid params for textDocument/foldingRange".into(),
         );
     };
-    let Some((_module, file, _text)) = state.locate(&params.text_document.uri) else {
+    let Some((_module, file)) = state.locate(&params.text_document.uri) else {
         return FeatureOutcome::NoResult;
     };
     let ranges = ipe_lsp_features::folding::folding_ranges(&state.db, file, state.encoding);
@@ -346,7 +355,7 @@ fn document_symbols_result(state: &State, params: &serde_json::Value) -> Feature
             "invalid params for textDocument/documentSymbol".into(),
         );
     };
-    let Some((_module, file, _text)) = state.locate(&params.text_document.uri) else {
+    let Some((_module, file)) = state.locate(&params.text_document.uri) else {
         return FeatureOutcome::NoResult;
     };
     let symbols = ipe_lsp_features::symbols::document_symbols(&state.db, file, state.encoding);
@@ -359,7 +368,7 @@ fn completion_result(state: &State, params: &serde_json::Value) -> FeatureOutcom
         return FeatureOutcome::InvalidParams("invalid params for textDocument/completion".into());
     };
     let position = params.text_document_position;
-    let Some((module, _file, text)) = state.locate(&position.text_document.uri) else {
+    let Some((module, file)) = state.locate(&position.text_document.uri) else {
         return FeatureOutcome::NoResult;
     };
     let Some(root) = state.root else {
@@ -370,7 +379,8 @@ fn completion_result(state: &State, params: &serde_json::Value) -> FeatureOutcom
     };
     // Convert the UTF-16 cursor position to a byte offset so completion can read
     // the type the surrounding context expects there (type-directed ranking).
-    let byte = offset::position_to_offset(&text, position.position, state.encoding);
+    let text = file.text(&state.db);
+    let byte = offset::position_to_offset(text, position.position, state.encoding);
     let byte = u32::try_from(byte).unwrap_or(u32::MAX);
     let items =
         ipe_lsp_features::completion::completions(&state.db, root, entry_file, &module, byte);
@@ -385,16 +395,17 @@ fn definition_result(state: &State, params: &serde_json::Value) -> FeatureOutcom
         return FeatureOutcome::InvalidParams("invalid params for textDocument/definition".into());
     };
     let position = params.text_document_position_params;
-    let Some((module, _file, text)) = state.locate(&position.text_document.uri) else {
+    let Some((module, file)) = state.locate(&position.text_document.uri) else {
         return FeatureOutcome::NoResult;
     };
+    let text = file.text(&state.db);
     let Some(root) = state.root else {
         return FeatureOutcome::NoResult;
     };
     let Some(entry_file) = root.files(&state.db).get(&state.entry_module).copied() else {
         return FeatureOutcome::NoResult;
     };
-    let byte = offset::position_to_offset(&text, position.position, state.encoding);
+    let byte = offset::position_to_offset(text, position.position, state.encoding);
     let byte = u32::try_from(byte).unwrap_or(u32::MAX);
     let Some(def) =
         ipe_lsp_features::navigation::goto_definition(&state.db, root, entry_file, &module, byte)
@@ -404,13 +415,13 @@ fn definition_result(state: &State, params: &serde_json::Value) -> FeatureOutcom
     let Some(def_uri) = state.uri_for_module(&def.module) else {
         return FeatureOutcome::NoResult;
     };
-    // Fetch the target text to convert the byte span to a range.
-    let def_text: String = root
+    // Borrow the target text to convert the byte span to a range.
+    let empty = String::new();
+    let def_text = root
         .files(&state.db)
         .get(&def.module)
-        .map(|f| f.text(&state.db).clone())
-        .unwrap_or_default();
-    let range = ipe_lsp_features::offset::span_to_range(&def_text, def.span, state.encoding);
+        .map_or(&empty, |f| f.text(&state.db));
+    let range = ipe_lsp_features::offset::span_to_range(def_text, def.span, state.encoding);
     let location = lsp_types::Location {
         uri: def_uri,
         range,
@@ -424,16 +435,17 @@ fn references_result(state: &State, params: &serde_json::Value) -> FeatureOutcom
         return FeatureOutcome::InvalidParams("invalid params for textDocument/references".into());
     };
     let position = params.text_document_position;
-    let Some((module, _file, text)) = state.locate(&position.text_document.uri) else {
+    let Some((module, file)) = state.locate(&position.text_document.uri) else {
         return FeatureOutcome::NoResult;
     };
+    let text = file.text(&state.db);
     let Some(root) = state.root else {
         return FeatureOutcome::NoResult;
     };
     let Some(entry_file) = root.files(&state.db).get(&state.entry_module).copied() else {
         return FeatureOutcome::NoResult;
     };
-    let byte = offset::position_to_offset(&text, position.position, state.encoding);
+    let byte = offset::position_to_offset(text, position.position, state.encoding);
     let byte = u32::try_from(byte).unwrap_or(u32::MAX);
     // Resolve via goto_definition to get the canonical (home, name) pair.
     let Some(def) =
@@ -441,11 +453,13 @@ fn references_result(state: &State, params: &serde_json::Value) -> FeatureOutcom
     else {
         return FeatureOutcome::NoResult;
     };
-    let def_text = root
-        .files(&state.db)
-        .get(&def.module)
-        .map(|f| f.text(&state.db).clone())
-        .unwrap_or_default();
+    // Borrow each module's salsa-owned text rather than cloning the whole file:
+    // once for the definition, and once per module a reference lands in.
+    let files = root.files(&state.db);
+    let text_of = |module: &[String]| files.get(module).map(|f| f.text(&state.db));
+    let Some(def_text) = text_of(&def.module) else {
+        return FeatureOutcome::NoResult;
+    };
     let lo = def.span.lo as usize;
     let hi = def.span.hi as usize;
     let Some(def_name) = def_text.get(lo..hi) else {
@@ -463,7 +477,7 @@ fn references_result(state: &State, params: &serde_json::Value) -> FeatureOutcom
     if params.context.include_declaration
         && let Some(def_uri) = state.uri_for_module(&def.module)
     {
-        let range = ipe_lsp_features::offset::span_to_range(&def_text, def.span, state.encoding);
+        let range = ipe_lsp_features::offset::span_to_range(def_text, def.span, state.encoding);
         locations.push(lsp_types::Location {
             uri: def_uri,
             range,
@@ -473,12 +487,10 @@ fn references_result(state: &State, params: &serde_json::Value) -> FeatureOutcom
         let Some(ref_uri) = state.uri_for_module(&r.module) else {
             continue;
         };
-        let ref_text = root
-            .files(&state.db)
-            .get(&r.module)
-            .map(|f| f.text(&state.db).clone())
-            .unwrap_or_default();
-        let range = ipe_lsp_features::offset::span_to_range(&ref_text, r.span, state.encoding);
+        let Some(ref_text) = text_of(&r.module) else {
+            continue;
+        };
+        let range = ipe_lsp_features::offset::span_to_range(ref_text, r.span, state.encoding);
         locations.push(lsp_types::Location {
             uri: ref_uri,
             range,
@@ -497,23 +509,24 @@ fn prepare_rename_result(state: &State, params: &serde_json::Value) -> FeatureOu
             "invalid params for textDocument/prepareRename".into(),
         );
     };
-    let Some((module, _file, text)) = state.locate(&params.text_document.uri) else {
+    let Some((module, file)) = state.locate(&params.text_document.uri) else {
         return FeatureOutcome::NoResult;
     };
+    let text = file.text(&state.db);
     let Some(root) = state.root else {
         return FeatureOutcome::NoResult;
     };
     let Some(entry_file) = root.files(&state.db).get(&state.entry_module).copied() else {
         return FeatureOutcome::NoResult;
     };
-    let byte = offset::position_to_offset(&text, params.position, state.encoding);
+    let byte = offset::position_to_offset(text, params.position, state.encoding);
     let byte = u32::try_from(byte).unwrap_or(u32::MAX);
     let Some(prep) =
         ipe_lsp_features::rename::prepare_rename(&state.db, root, entry_file, &module, byte)
     else {
         return FeatureOutcome::NoResult;
     };
-    let range = ipe_lsp_features::offset::span_to_range(&text, prep.span, state.encoding);
+    let range = ipe_lsp_features::offset::span_to_range(text, prep.span, state.encoding);
     // Return `{ range, placeholder }` — the standard `PrepareRenameResponse`.
     let response = lsp_types::PrepareRenameResponse::RangeWithPlaceholder {
         range,
@@ -528,16 +541,17 @@ fn rename_result(state: &State, params: &serde_json::Value) -> FeatureOutcome {
         return FeatureOutcome::InvalidParams("invalid params for textDocument/rename".into());
     };
     let position = params.text_document_position;
-    let Some((module, _file, text)) = state.locate(&position.text_document.uri) else {
+    let Some((module, file)) = state.locate(&position.text_document.uri) else {
         return FeatureOutcome::NoResult;
     };
+    let text = file.text(&state.db);
     let Some(root) = state.root else {
         return FeatureOutcome::NoResult;
     };
     let Some(entry_file) = root.files(&state.db).get(&state.entry_module).copied() else {
         return FeatureOutcome::NoResult;
     };
-    let byte = offset::position_to_offset(&text, position.position, state.encoding);
+    let byte = offset::position_to_offset(text, position.position, state.encoding);
     let byte = u32::try_from(byte).unwrap_or(u32::MAX);
     let encoding = state.encoding;
     let db = &state.db;
@@ -724,11 +738,19 @@ fn module_name_fallback(path: &Path) -> String {
 
 fn adopt(state: &mut State, project: LoadedProject) {
     state.entry_module = project.entry_module;
-    state.module_of_path = project
+    // Canonicalize each user path once here, and keep both directions of the
+    // path<->module mapping so the request handlers and `sync_inputs` never
+    // re-canonicalize or linear-scan on the hot path.
+    state.path_of_module = project
         .files
         .iter()
         .filter(|(_, file)| file.origin == ModuleOrigin::User)
-        .map(|(module, file)| (normalize(&file.path), module.clone()))
+        .map(|(module, file)| (module.clone(), normalize(&file.path)))
+        .collect();
+    state.module_of_path = state
+        .path_of_module
+        .iter()
+        .map(|(module, path)| (path.clone(), module.clone()))
         .collect();
     state.disk = project.files;
 }
@@ -743,11 +765,14 @@ fn sync_inputs(state: &mut State) {
         .disk
         .iter()
         .map(|(module, file)| {
-            let text = state
-                .overlays
-                .get(&normalize(&file.path))
-                .unwrap_or(&file.text)
-                .clone();
+            // Only a user module can carry an open-buffer overlay, and its
+            // normalized path was canonicalized once in `adopt`; reuse it rather
+            // than re-canonicalizing every module (a syscall) on each keystroke.
+            let overlay = state
+                .path_of_module
+                .get(module)
+                .and_then(|path| state.overlays.get(path));
+            let text = overlay.unwrap_or(&file.text).clone();
             (module.clone(), (text, file.origin))
         })
         .collect();
@@ -809,6 +834,12 @@ fn recompute(state: &mut State, diag_tx: &Sender<DiagnosticsBatch>) {
     // cloned snapshot's next query to unwind with `Cancelled`. Joining here
     // ensures the old thread has exited and released its resources before we
     // allocate the next clone.
+    if let Some(cancel) = state.worker_cancel.take() {
+        // Signal the outgoing worker before joining: the compiler-diagnostics
+        // phase unwinds via salsa `Cancelled` on the next demand, but the lint
+        // tail has no further demand, so this flag is what lets it stop early.
+        cancel.store(true, Ordering::Relaxed);
+    }
     if let Some(prev) = state.worker.take() {
         // Ignore join errors — a panicking worker is already logged inside.
         let _ = prev.join();
@@ -819,16 +850,26 @@ fn recompute(state: &mut State, diag_tx: &Sender<DiagnosticsBatch>) {
     let encoding = state.encoding;
     let entry_module = state.entry_module.clone();
     let mut uri_of: BTreeMap<Vec<String>, Url> = BTreeMap::new();
-    for (path, module) in &state.module_of_path {
+    for (module, path) in &state.path_of_module {
         if let Ok(uri) = Url::from_file_path(path) {
             uri_of.insert(module.clone(), uri);
         }
     }
+    let cancel = Arc::new(AtomicBool::new(false));
+    state.worker_cancel = Some(cancel.clone());
     let tx = diag_tx.clone();
     state.worker = Some(thread::spawn(move || {
         let outcome = std::panic::catch_unwind(AssertUnwindSafe(|| {
             salsa::Cancelled::catch(AssertUnwindSafe(|| {
-                compute_batch(&db, root, entry_file, &uri_of, &entry_module, encoding)
+                compute_batch(
+                    &db,
+                    root,
+                    entry_file,
+                    &uri_of,
+                    &entry_module,
+                    encoding,
+                    &cancel,
+                )
             }))
         }));
         match outcome {
@@ -856,6 +897,7 @@ fn compute_batch(
     uri_of: &BTreeMap<Vec<String>, Url>,
     entry_module: &[String],
     encoding: PositionEncoding,
+    cancel: &AtomicBool,
 ) -> Vec<(Url, Vec<lsp_types::Diagnostic>)> {
     let collected = diagnostics::collect(db, root, entry_file);
     let files = root.files(db);
@@ -864,6 +906,7 @@ fn compute_batch(
         .values()
         .map(|uri| (uri.clone(), Vec::new()))
         .collect();
+    let empty = String::new();
     for module_diags in collected {
         if module_diags.diagnostics.is_empty() {
             continue;
@@ -873,12 +916,12 @@ fn compute_batch(
         let Some(uri) = direct_uri.or_else(|| entry_uri.clone()) else {
             continue;
         };
-        let text: String = files
+        // Borrow the salsa-owned text rather than cloning the whole module.
+        let text = files
             .get(&module_diags.module)
-            .map(|file| file.text(db).clone())
-            .unwrap_or_default();
+            .map_or(&empty, |file| file.text(db));
         for diag in &module_diags.diagnostics {
-            let mut lsp = diagnostics::to_lsp(diag, &text, encoding);
+            let mut lsp = diagnostics::to_lsp(diag, text, encoding);
             if re_attributed {
                 lsp.range = lsp_types::Range::default();
                 lsp.message = format!(
@@ -889,6 +932,14 @@ fn compute_batch(
             }
             per_uri.entry(uri.clone()).or_default().push(lsp);
         }
+    }
+
+    // A superseded worker skips the whole lint pass — the expensive tail that
+    // never demands the db again and so cannot unwind via salsa `Cancelled`.
+    // The newer worker owns the next publish, so dropping this one's lint work
+    // is observationally identical.
+    if cancel.load(Ordering::Relaxed) {
+        return per_uri.into_iter().collect();
     }
 
     // Lint findings flow through the SAME diagnostics transport, appended after
@@ -921,7 +972,7 @@ fn formatting_result(state: &State, params: &serde_json::Value) -> FeatureOutcom
     else {
         return FeatureOutcome::InvalidParams("invalid params for textDocument/formatting".into());
     };
-    let Some((_module, file, _text)) = state.locate(&params.text_document.uri) else {
+    let Some((_module, file)) = state.locate(&params.text_document.uri) else {
         return FeatureOutcome::NoResult;
     };
     let edits = ipe_lsp_features::formatting::format_document(&state.db, file, state.encoding);
@@ -937,7 +988,7 @@ fn range_formatting_result(state: &State, params: &serde_json::Value) -> Feature
             "invalid params for textDocument/rangeFormatting".into(),
         );
     };
-    let Some((_module, file, _text)) = state.locate(&params.text_document.uri) else {
+    let Some((_module, file)) = state.locate(&params.text_document.uri) else {
         return FeatureOutcome::NoResult;
     };
     let edits =
@@ -950,9 +1001,10 @@ fn code_action_result(state: &State, params: &serde_json::Value) -> FeatureOutco
     let Ok(params) = serde_json::from_value::<lsp_types::CodeActionParams>(params.clone()) else {
         return FeatureOutcome::InvalidParams("invalid params for textDocument/codeAction".into());
     };
-    let Some((module, _file, text)) = state.locate(&params.text_document.uri) else {
+    let Some((module, file)) = state.locate(&params.text_document.uri) else {
         return FeatureOutcome::NoResult;
     };
+    let text = file.text(&state.db);
     let Some(root) = state.root else {
         return FeatureOutcome::NoResult;
     };
@@ -969,7 +1021,7 @@ fn code_action_result(state: &State, params: &serde_json::Value) -> FeatureOutco
         &params.text_document.uri,
         params.range,
         &params.context.diagnostics,
-        &text,
+        text,
         state.encoding,
     );
     FeatureOutcome::payload(actions)
@@ -983,7 +1035,7 @@ fn semantic_tokens_full_result(state: &State, params: &serde_json::Value) -> Fea
             "invalid params for textDocument/semanticTokens/full".into(),
         );
     };
-    let Some((_module, file, _text)) = state.locate(&params.text_document.uri) else {
+    let Some((_module, file)) = state.locate(&params.text_document.uri) else {
         return FeatureOutcome::NoResult;
     };
     let result =
@@ -1000,16 +1052,17 @@ fn signature_help_result(state: &State, params: &serde_json::Value) -> FeatureOu
         );
     };
     let position = params.text_document_position_params;
-    let Some((module, _file, text)) = state.locate(&position.text_document.uri) else {
+    let Some((module, file)) = state.locate(&position.text_document.uri) else {
         return FeatureOutcome::NoResult;
     };
+    let text = file.text(&state.db);
     let Some(root) = state.root else {
         return FeatureOutcome::NoResult;
     };
     let Some(entry_file) = root.files(&state.db).get(&state.entry_module).copied() else {
         return FeatureOutcome::NoResult;
     };
-    let byte = offset::position_to_offset(&text, position.position, state.encoding);
+    let byte = offset::position_to_offset(text, position.position, state.encoding);
     let byte = u32::try_from(byte).unwrap_or(u32::MAX);
     FeatureOutcome::maybe(ipe_lsp_features::signature_help::signature_help(
         &state.db, root, entry_file, &module, byte,
@@ -1021,7 +1074,7 @@ fn inlay_hints_result(state: &State, params: &serde_json::Value) -> FeatureOutco
     let Ok(params) = serde_json::from_value::<lsp_types::InlayHintParams>(params.clone()) else {
         return FeatureOutcome::InvalidParams("invalid params for textDocument/inlayHint".into());
     };
-    let Some((module, _file, _text)) = state.locate(&params.text_document.uri) else {
+    let Some((module, _file)) = state.locate(&params.text_document.uri) else {
         return FeatureOutcome::NoResult;
     };
     let Some(root) = state.root else {
