@@ -1612,7 +1612,7 @@ mod tests {
     }
 
     /// A single file over [`MAX_HASHED_FILE_BYTES`] must be refused with a typed
-    /// `InvalidInput` error rather than materialized whole in memory — the DoS
+    /// `InvalidInput` error rather than materialized whole in memory — the `DoS`
     /// ceiling on a fetched, still-untrusted checkout.
     #[test]
     fn hash_tree_rejects_a_file_over_the_per_file_ceiling() {
