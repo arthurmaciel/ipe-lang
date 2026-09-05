@@ -164,59 +164,69 @@ pub struct Token {
     pub span: Span,
 }
 
-struct Lexer {
-    /// `(byte_offset, char)` pairs for the whole source.
-    chars: Vec<(usize, char)>,
-    pos: usize,
+struct Lexer<'src> {
+    /// Up to three characters of lookahead. `window[0]` is the current char
+    /// (what `peek()` returns), `window[1]` is one ahead, `window[2]` is two
+    /// ahead. A `None` slot means end-of-input at that position.
+    window: [Option<(usize, char)>; 3],
+    /// The remaining source characters after the lookahead window.
+    rest: std::str::CharIndices<'src>,
+    /// Byte offset one past the last character in `src` — the EOF position used
+    /// by `offset()` when the window is empty.
+    eof_offset: u32,
     line: u32,
     col: u32,
 }
 
-impl Lexer {
-    fn new(src: &str) -> Self {
+impl<'src> Lexer<'src> {
+    fn new(src: &'src str) -> Self {
+        let eof_offset = u32::try_from(src.len()).unwrap_or(u32::MAX);
+        let mut iter = src.char_indices();
+        let a = iter.next();
+        let b = iter.next();
+        let c = iter.next();
         Self {
-            chars: src.char_indices().collect(),
-            pos: 0,
+            window: [a, b, c],
+            rest: iter,
+            eof_offset,
             line: 1,
             col: 1,
         }
     }
 
     fn peek(&self) -> Option<char> {
-        self.chars.get(self.pos).map(|&(_, c)| c)
+        self.window[0].map(|(_, c)| c)
     }
 
     fn peek2(&self) -> Option<char> {
-        self.chars.get(self.pos + 1).map(|&(_, c)| c)
+        self.window[1].map(|(_, c)| c)
     }
 
     /// The character two positions ahead of the cursor, used to confirm a digit
     /// follows a signed exponent (`e-2`) before committing to a float lexeme.
     fn peek3(&self) -> Option<char> {
-        self.chars.get(self.pos + 2).map(|&(_, c)| c)
+        self.window[2].map(|(_, c)| c)
     }
 
     /// Byte offset of the current char, or end-of-input.
     fn offset(&self) -> u32 {
-        self.chars.get(self.pos).map_or_else(
-            || {
-                self.chars.last().map_or(0, |&(o, c)| {
-                    u32::try_from(o + c.len_utf8()).unwrap_or(u32::MAX)
-                })
-            },
-            |&(o, _)| u32::try_from(o).unwrap_or(u32::MAX),
-        )
+        match self.window[0] {
+            Some((o, _)) => u32::try_from(o).unwrap_or(u32::MAX),
+            None => self.eof_offset,
+        }
     }
 
     fn advance(&mut self) {
-        if let Some(c) = self.peek() {
+        if let Some((_, c)) = self.window[0] {
             if c == '\n' {
                 self.line = self.line.saturating_add(1);
                 self.col = 1;
             } else {
                 self.col = self.col.saturating_add(1);
             }
-            self.pos += 1;
+            self.window[0] = self.window[1];
+            self.window[1] = self.window[2];
+            self.window[2] = self.rest.next();
         }
     }
 
@@ -245,7 +255,7 @@ impl Lexer {
                 // main lex loop to emit as [`Tok::DocComment`].
                 Some('{')
                     if self.peek2() == Some('-')
-                        && self.chars.get(self.pos + 2).map(|&(_, c)| c) != Some('|') =>
+                        && self.peek3() != Some('|') =>
                 {
                     let lo = self.offset();
                     self.advance(); // consume `{`
@@ -330,7 +340,7 @@ pub fn lex(src: &str) -> DResult<Vec<Token>> {
 
         let kind = if c == '{'
             && lx.peek2() == Some('-')
-            && lx.chars.get(lx.pos + 2).map(|&(_, c)| c) == Some('|')
+            && lx.peek3() == Some('|')
         {
             lex_doc_comment(&mut lx, lo)?
         } else if c.is_ascii_digit() {
