@@ -1563,6 +1563,9 @@ mod tests {
     /// legitimate in-tree `src/` is accepted rather than refused as an escape.
     #[test]
     fn bare_filename_resolves_root_to_current_dir() {
+        // A shared static mutex serialises the process-wide cwd change so parallel
+        // tests never observe a transient cwd.
+        static CWD_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
         let root = fresh_project("bare_filename");
         std::fs::write(
             root.join(PACKAGE_IPE),
@@ -1570,10 +1573,7 @@ mod tests {
         )
         .expect("write package.ipe");
         // `ipe build package.ipe` runs with cwd == project root and a bare path.
-        // A shared static mutex serialises the process-wide cwd change so parallel
-        // tests never observe a transient cwd.
-        static CWD_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-        let _guard = CWD_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _guard = CWD_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let prev = std::env::current_dir().expect("read cwd");
         std::env::set_current_dir(&root).expect("enter project dir");
         let result = parse_package_manifest(Path::new(PACKAGE_IPE));
