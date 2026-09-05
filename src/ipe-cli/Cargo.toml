@@ -61,6 +61,11 @@ notify = "8"
 # cached `EmittedProject`.
 sha2 = "0.10"
 hex = "0.4"
+# `crate::watch::mint_hot_token` fills the hot-control token from the OS CSPRNG.
+# `getrandom` is a thin cross-platform wrapper over each target's real CSPRNG
+# (`getrandom(2)`/`/dev/urandom` on Unix, `BCryptGenRandom` on Windows), so the
+# security control has no silent non-CSPRNG fallback on any released target.
+getrandom = "0.3"
 serde_json = "1"
 # `[dependencies]` version requirements in `ipe.toml` are parsed into typed
 # `semver::VersionReq` at manifest-parse time (parse, don't validate).
