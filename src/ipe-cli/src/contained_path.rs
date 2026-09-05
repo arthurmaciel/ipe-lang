@@ -280,8 +280,10 @@ mod tests {
     #[test]
     fn accepts_new_path_under_symlinked_root() {
         let real = fresh_root("symlinked_root_real");
-        let link = std::env::temp_dir()
-            .join(format!("ipe_crp_symlinked_root_link_{}", std::process::id()));
+        let link = std::env::temp_dir().join(format!(
+            "ipe_crp_symlinked_root_link_{}",
+            std::process::id()
+        ));
         let _ = std::fs::remove_file(&link);
         std::os::unix::fs::symlink(&real, &link).expect("create root symlink");
         // `src/New` does not exist; `src` does. The root is behind `link`.

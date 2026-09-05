@@ -255,9 +255,8 @@ fn poll_for_token(device: &DeviceGrant) -> Result<PublishToken, CliError> {
             ],
         )?;
         if let Some(token) = json.get("access_token").and_then(serde_json::Value::as_str) {
-            return PublishToken::parse(token).ok_or_else(|| {
-                login_error("GitHub returned a token with unexpected characters")
-            });
+            return PublishToken::parse(token)
+                .ok_or_else(|| login_error("GitHub returned a token with unexpected characters"));
         }
         match json.get("error").and_then(serde_json::Value::as_str) {
             // Not authorized yet — keep waiting at the current cadence.
