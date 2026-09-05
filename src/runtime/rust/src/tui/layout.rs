@@ -2463,7 +2463,8 @@ fn no_color() -> bool {
 /// always a valid `u8`; a malformed string yields `None` (no colour, never a
 /// panic).
 fn parse_palette_code(s: &str) -> Option<u8> {
-    s.split_once(':').and_then(|(_, code)| code.parse::<u8>().ok())
+    s.split_once(':')
+        .and_then(|(_, code)| code.parse::<u8>().ok())
 }
 
 fn sgr(style: Style) -> String {
@@ -3258,7 +3259,10 @@ mod tests {
             fg_palette: Some(31),
             ..Style::default()
         });
-        assert!(fg.contains("31"), "named fg must emit its SGR code, got {fg:?}");
+        assert!(
+            fg.contains("31"),
+            "named fg must emit its SGR code, got {fg:?}"
+        );
         assert!(
             !fg.contains("38;2"),
             "a named palette fg must not emit a truecolour sequence, got {fg:?}"
@@ -3267,7 +3271,10 @@ mod tests {
             bg_palette: Some(44),
             ..Style::default()
         });
-        assert!(bg.contains("44"), "named bg must emit its SGR code, got {bg:?}");
+        assert!(
+            bg.contains("44"),
+            "named bg must emit its SGR code, got {bg:?}"
+        );
     }
 
     #[test]

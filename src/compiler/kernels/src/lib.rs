@@ -3909,21 +3909,37 @@ impl StdlibKernel {
             Self::TermColorMagenta => d("TermColor", "magenta", 0, Pure, "term_color_magenta_"),
             Self::TermColorCyan => d("TermColor", "cyan", 0, Pure, "term_color_cyan_"),
             Self::TermColorWhite => d("TermColor", "white", 0, Pure, "term_color_white_"),
-            Self::TermColorBrightBlack => {
-                d("TermColor", "brightBlack", 0, Pure, "term_color_bright_black_")
-            }
+            Self::TermColorBrightBlack => d(
+                "TermColor",
+                "brightBlack",
+                0,
+                Pure,
+                "term_color_bright_black_",
+            ),
             Self::TermColorBrightRed => {
                 d("TermColor", "brightRed", 0, Pure, "term_color_bright_red_")
             }
-            Self::TermColorBrightGreen => {
-                d("TermColor", "brightGreen", 0, Pure, "term_color_bright_green_")
-            }
-            Self::TermColorBrightYellow => {
-                d("TermColor", "brightYellow", 0, Pure, "term_color_bright_yellow_")
-            }
-            Self::TermColorBrightBlue => {
-                d("TermColor", "brightBlue", 0, Pure, "term_color_bright_blue_")
-            }
+            Self::TermColorBrightGreen => d(
+                "TermColor",
+                "brightGreen",
+                0,
+                Pure,
+                "term_color_bright_green_",
+            ),
+            Self::TermColorBrightYellow => d(
+                "TermColor",
+                "brightYellow",
+                0,
+                Pure,
+                "term_color_bright_yellow_",
+            ),
+            Self::TermColorBrightBlue => d(
+                "TermColor",
+                "brightBlue",
+                0,
+                Pure,
+                "term_color_bright_blue_",
+            ),
             Self::TermColorBrightMagenta => d(
                 "TermColor",
                 "brightMagenta",
@@ -3931,12 +3947,20 @@ impl StdlibKernel {
                 Pure,
                 "term_color_bright_magenta_",
             ),
-            Self::TermColorBrightCyan => {
-                d("TermColor", "brightCyan", 0, Pure, "term_color_bright_cyan_")
-            }
-            Self::TermColorBrightWhite => {
-                d("TermColor", "brightWhite", 0, Pure, "term_color_bright_white_")
-            }
+            Self::TermColorBrightCyan => d(
+                "TermColor",
+                "brightCyan",
+                0,
+                Pure,
+                "term_color_bright_cyan_",
+            ),
+            Self::TermColorBrightWhite => d(
+                "TermColor",
+                "brightWhite",
+                0,
+                Pure,
+                "term_color_bright_white_",
+            ),
             Self::TermColorDefault => d("TermColor", "default", 0, Pure, "term_color_default_"),
             Self::TermColorRgb => d("TermColor", "rgb", 3, Pure, "term_color_rgb_"),
             Self::TermColorRgba => d("TermColor", "rgba", 4, Pure, "term_color_rgba_"),
@@ -9406,10 +9430,9 @@ impl StdlibKernel {
             Self::CliUiText => Some(&STRING_TO_LINES_A),
             Self::CliUiLine => Some(&CLI_LINE),
             Self::CliUiLines => Some(&LIST_LINES_A_TO_LINES_A),
-            Self::CliUiBold
-            | Self::CliUiUnderline
-            | Self::CliUiDim
-            | Self::CliUiReverse => Some(&CLI_ATTR_A),
+            Self::CliUiBold | Self::CliUiUnderline | Self::CliUiDim | Self::CliUiReverse => {
+                Some(&CLI_ATTR_A)
+            }
             Self::CliUiColor | Self::CliUiBg => Some(&COLOR_TO_CLI_ATTR_A),
             // ── Ipe.Tea.Terminal.Color palette constructors. ──
             Self::TermColorBlack
@@ -12147,6 +12170,35 @@ impl StdlibKernel {
                 | Self::TuiUiReverse
                 | Self::TuiUiColor
                 | Self::TuiUiBg
+                | Self::CliUiNone
+                | Self::CliUiText
+                | Self::CliUiLine
+                | Self::CliUiLines
+                | Self::CliUiBold
+                | Self::CliUiUnderline
+                | Self::CliUiDim
+                | Self::CliUiReverse
+                | Self::CliUiColor
+                | Self::CliUiBg
+                | Self::TermColorBlack
+                | Self::TermColorRed
+                | Self::TermColorGreen
+                | Self::TermColorYellow
+                | Self::TermColorBlue
+                | Self::TermColorMagenta
+                | Self::TermColorCyan
+                | Self::TermColorWhite
+                | Self::TermColorBrightBlack
+                | Self::TermColorBrightRed
+                | Self::TermColorBrightGreen
+                | Self::TermColorBrightYellow
+                | Self::TermColorBrightBlue
+                | Self::TermColorBrightMagenta
+                | Self::TermColorBrightCyan
+                | Self::TermColorBrightWhite
+                | Self::TermColorDefault
+                | Self::TermColorRgb
+                | Self::TermColorRgba
                 | Self::UiWidget
                 | Self::UiNode
                 | Self::UiTaggedNode

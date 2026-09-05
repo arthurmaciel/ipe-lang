@@ -1630,9 +1630,7 @@ pub const fn ui_call_shape(k: KernelFn) -> Option<UiEmitPlan> {
         KernelFn::TermColorBrightGreen => pos("ipe_runtime::tui::term_color_bright_green_", 0),
         KernelFn::TermColorBrightYellow => pos("ipe_runtime::tui::term_color_bright_yellow_", 0),
         KernelFn::TermColorBrightBlue => pos("ipe_runtime::tui::term_color_bright_blue_", 0),
-        KernelFn::TermColorBrightMagenta => {
-            pos("ipe_runtime::tui::term_color_bright_magenta_", 0)
-        }
+        KernelFn::TermColorBrightMagenta => pos("ipe_runtime::tui::term_color_bright_magenta_", 0),
         KernelFn::TermColorBrightCyan => pos("ipe_runtime::tui::term_color_bright_cyan_", 0),
         KernelFn::TermColorBrightWhite => pos("ipe_runtime::tui::term_color_bright_white_", 0),
         KernelFn::TermColorDefault => pos("ipe_runtime::tui::term_color_default_", 0),
