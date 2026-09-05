@@ -342,6 +342,19 @@ struct Builtins {
     /// (`Ui.onClick`, `Ui.scrollbars`, …) is unnameable in a `Screen` view —
     /// a type error, never a silent render-time drop.
     tui_attr: Symbol,
+    /// `"Lines"` — the Cli-only line-oriented view type constructor `Lines msg`.
+    /// Distinct from both `Element msg` and `Screen msg`; produced by
+    /// `Ipe.Tea.Cli.Ui.*` builders. Line-scoped, so 2D cell and DOM builders are
+    /// unnameable in it.
+    cli_lines: Symbol,
+    /// `"CliAttr"` — the line-native attribute type constructor
+    /// `Ipe.Tea.Cli.Ui.Attribute msg`. Only line-scoped styles
+    /// (bold/underline/dim/reverse/color/bg) inhabit it, so a 2D cell attribute
+    /// or a DOM attribute is unnameable in a `Lines` view.
+    cli_attr: Symbol,
+    /// `"TermColor"` (spelled `Terminal.Color`) — the closed terminal colour
+    /// palette. The argument type of the Tui and Cli `color` / `bg` builders.
+    term_color: Symbol,
     /// `"CustomElement"` — the JS-widget boundary type constructor
     /// `CustomElement down up`. Empty-module opaque handle; consumed only by the
     /// `Ui.widget` kernel scheme.
@@ -893,6 +906,9 @@ impl Builtins {
             element: interner.intern("Element")?,
             cells: interner.intern("Screen")?,
             tui_attr: interner.intern("TuiAttr")?,
+            cli_lines: interner.intern("Lines")?,
+            cli_attr: interner.intern("CliAttr")?,
+            term_color: interner.intern("TermColor")?,
             custom_element: interner.intern("CustomElement")?,
             html_con: interner.intern("Html")?,
             length: interner.intern("Length")?,
@@ -4469,6 +4485,9 @@ impl<'a> Builder<'a> {
             BuiltinTag::UiElement => self.builtins.element,
             BuiltinTag::Cells => self.builtins.cells,
             BuiltinTag::TuiAttr => self.builtins.tui_attr,
+            BuiltinTag::CliLines => self.builtins.cli_lines,
+            BuiltinTag::CliAttr => self.builtins.cli_attr,
+            BuiltinTag::TermColor => self.builtins.term_color,
             BuiltinTag::CustomElement => self.builtins.custom_element,
             BuiltinTag::Html => self.builtins.html_con,
             BuiltinTag::UiLength => self.builtins.length,
@@ -5224,6 +5243,27 @@ impl<'a> Builder<'a> {
             module: Vec::new(),
             name: self.builtins.tui_attr,
             args: vec![m],
+        };
+        // `lines_t(msg)` — the Cli line-oriented view type `Lines msg`. Distinct
+        // from both `Element msg` and `Screen msg`.
+        let lines_t = |m: Ty| Ty::Con {
+            module: Vec::new(),
+            name: self.builtins.cli_lines,
+            args: vec![m],
+        };
+        // `cli_attr(msg)` — the line-native attribute type
+        // `Ipe.Tea.Cli.Ui.Attribute msg`. Distinct from the DOM `attr` and the
+        // cell-native `tui_attr`, so a `Lines`-view builder admits neither.
+        let cli_attr = |m: Ty| Ty::Con {
+            module: Vec::new(),
+            name: self.builtins.cli_attr,
+            args: vec![m],
+        };
+        // `term_color()` — the first-class terminal palette `Terminal.Color`.
+        let term_color = || Ty::Con {
+            module: Vec::new(),
+            name: self.builtins.term_color,
+            args: Vec::new(),
         };
         // `custom_element(down, up)` — the empty-home JS-widget boundary handle
         // `CustomElement down up`, the argument type of `Ui.widget`.
@@ -7230,7 +7270,44 @@ impl<'a> Builder<'a> {
             | K::TuiUiUnderline
             | K::TuiUiDim
             | K::TuiUiReverse => tui_attr(var(0)),
-            K::TuiUiColor | K::TuiUiBg => fun(color(), tui_attr(var(0))),
+            K::TuiUiColor | K::TuiUiBg => fun(term_color(), tui_attr(var(0))),
+            // ── Ipe.Tea.Cli.Ui line-oriented view + attribute builders ──
+            K::CliUiNone => lines_t(var(0)),
+            K::CliUiText => fun(string(), lines_t(var(0))),
+            // `Cli.Ui.line : List (Attribute msg) -> String -> Lines msg`
+            K::CliUiLine => fun(
+                list(cli_attr(var(0))),
+                fun(string(), lines_t(var(0))),
+            ),
+            // `Cli.Ui.lines : List (Lines msg) -> Lines msg`
+            K::CliUiLines => fun(list(lines_t(var(0))), lines_t(var(0))),
+            K::CliUiBold | K::CliUiUnderline | K::CliUiDim | K::CliUiReverse => {
+                cli_attr(var(0))
+            }
+            K::CliUiColor | K::CliUiBg => fun(term_color(), cli_attr(var(0))),
+            // ── Ipe.Tea.Terminal.Color palette constructors ──
+            K::TermColorBlack
+            | K::TermColorRed
+            | K::TermColorGreen
+            | K::TermColorYellow
+            | K::TermColorBlue
+            | K::TermColorMagenta
+            | K::TermColorCyan
+            | K::TermColorWhite
+            | K::TermColorBrightBlack
+            | K::TermColorBrightRed
+            | K::TermColorBrightGreen
+            | K::TermColorBrightYellow
+            | K::TermColorBrightBlue
+            | K::TermColorBrightMagenta
+            | K::TermColorBrightCyan
+            | K::TermColorBrightWhite
+            | K::TermColorDefault => term_color(),
+            K::TermColorRgb => fun(int(), fun(int(), fun(int(), term_color()))),
+            K::TermColorRgba => fun(
+                int(),
+                fun(int(), fun(int(), fun(float(), term_color()))),
+            ),
             // `widget : CustomElement down up -> down -> (up -> msg) -> Element msg`
             // (msg = var(0), down = var(1), up = var(2)).
             K::UiWidget => fun(
@@ -10304,6 +10381,35 @@ mod registry_phase_c_tests {
             K::TuiUiReverse,
             K::TuiUiColor,
             K::TuiUiBg,
+            K::CliUiNone,
+            K::CliUiText,
+            K::CliUiLine,
+            K::CliUiLines,
+            K::CliUiBold,
+            K::CliUiUnderline,
+            K::CliUiDim,
+            K::CliUiReverse,
+            K::CliUiColor,
+            K::CliUiBg,
+            K::TermColorBlack,
+            K::TermColorRed,
+            K::TermColorGreen,
+            K::TermColorYellow,
+            K::TermColorBlue,
+            K::TermColorMagenta,
+            K::TermColorCyan,
+            K::TermColorWhite,
+            K::TermColorBrightBlack,
+            K::TermColorBrightRed,
+            K::TermColorBrightGreen,
+            K::TermColorBrightYellow,
+            K::TermColorBrightBlue,
+            K::TermColorBrightMagenta,
+            K::TermColorBrightCyan,
+            K::TermColorBrightWhite,
+            K::TermColorDefault,
+            K::TermColorRgb,
+            K::TermColorRgba,
             K::UiWidget,
             // The container / tagged-element primitives (first-schemed — no
             // legacy). The layout / flow builders are pure Ipê over them.

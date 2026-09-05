@@ -2384,6 +2384,7 @@ fn ty_to_string(t: &TyDoc) -> String {
             let head = match name.as_ref() {
                 "TuiAttr" => "Tui.Ui.Attribute".to_string(),
                 "CliAttr" => "Cli.Ui.Attribute".to_string(),
+                "TermColor" => "Terminal.Color".to_string(),
                 _ if module.is_empty() => name.to_string(),
                 _ => format!("{module}.{name}"),
             };

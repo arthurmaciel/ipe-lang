@@ -19121,6 +19121,40 @@ impl<'a> Lowerer<'a> {
                         msg: Box::new(msg),
                     })
                 }
+                // `Lines msg` — the Cli line-oriented view type.
+                "Lines" if args.len() == 1 => {
+                    let msg = self.ir_ui_msg_from_canon(
+                        args.first().ok_or_else(|| {
+                            bug(
+                                "ipe_lower::ir_type_from_canon",
+                                "Lines applied without its message type",
+                            )
+                        })?,
+                        generics,
+                    )?;
+                    Ok(IrType::Ui {
+                        ctor: UiCtor::CliLines,
+                        msg: Box::new(msg),
+                    })
+                }
+                // `Ipe.Tea.Cli.Ui.Attribute msg` — the line-native attribute type.
+                "CliAttr" if args.len() == 1 => {
+                    let msg = self.ir_ui_msg_from_canon(
+                        args.first().ok_or_else(|| {
+                            bug(
+                                "ipe_lower::ir_type_from_canon",
+                                "CliAttr applied without its message type",
+                            )
+                        })?,
+                        generics,
+                    )?;
+                    Ok(IrType::Ui {
+                        ctor: UiCtor::CliAttribute,
+                        msg: Box::new(msg),
+                    })
+                }
+                // `Terminal.Color` — the closed terminal colour palette (nullary).
+                "TermColor" => Ok(IrType::UiPlain(UiPlain::TermColor)),
                 // `Event msg` — a Ipe.Ui / Ipe.Html event handler carrier.
                 // Mirrors the `ir_type_from_ty` "Event" arm; same empty-home
                 // gap as `Attribute` for compiled-source stdlib annotations.
@@ -20426,6 +20460,40 @@ impl<'a> Lowerer<'a> {
                         msg: Box::new(msg),
                     })
                 }
+                // `Lines msg` — the Cli line-oriented view type.
+                "Lines" if args.len() == 1 => {
+                    let msg = self.ir_type_from_ty_ui_msg(
+                        args.first().ok_or_else(|| {
+                            bug(
+                                "ipe_lower::ir_type_from_ty",
+                                "Lines applied without its message type",
+                            )
+                        })?,
+                        span,
+                    )?;
+                    Ok(IrType::Ui {
+                        ctor: UiCtor::CliLines,
+                        msg: Box::new(msg),
+                    })
+                }
+                // `Ipe.Tea.Cli.Ui.Attribute msg` — the line-native attribute type.
+                "CliAttr" if args.len() == 1 => {
+                    let msg = self.ir_type_from_ty_ui_msg(
+                        args.first().ok_or_else(|| {
+                            bug(
+                                "ipe_lower::ir_type_from_ty",
+                                "CliAttr applied without its message type",
+                            )
+                        })?,
+                        span,
+                    )?;
+                    Ok(IrType::Ui {
+                        ctor: UiCtor::CliAttribute,
+                        msg: Box::new(msg),
+                    })
+                }
+                // `Terminal.Color` — the closed terminal colour palette (nullary).
+                "TermColor" => Ok(IrType::UiPlain(UiPlain::TermColor)),
                 // T2 trap: `Attribute` exists in BOTH `Ipe.Ui` and `Ipe.Html`.
                 // Disambiguate by `Ty::Con.module` — a module path containing
                 // "Html" identifies the `Ipe.Html.Attribute` form.
@@ -26076,6 +26144,30 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::TuiUiUnderline
                 | KernelFn::TuiUiDim
                 | KernelFn::TuiUiReverse
+                // `Ipe.Tea.Cli.Ui` nullary line view + line-native attributes.
+                | KernelFn::CliUiNone
+                | KernelFn::CliUiBold
+                | KernelFn::CliUiUnderline
+                | KernelFn::CliUiDim
+                | KernelFn::CliUiReverse
+                // `Ipe.Tea.Terminal.Color` nullary palette constructors.
+                | KernelFn::TermColorBlack
+                | KernelFn::TermColorRed
+                | KernelFn::TermColorGreen
+                | KernelFn::TermColorYellow
+                | KernelFn::TermColorBlue
+                | KernelFn::TermColorMagenta
+                | KernelFn::TermColorCyan
+                | KernelFn::TermColorWhite
+                | KernelFn::TermColorBrightBlack
+                | KernelFn::TermColorBrightRed
+                | KernelFn::TermColorBrightGreen
+                | KernelFn::TermColorBrightYellow
+                | KernelFn::TermColorBrightBlue
+                | KernelFn::TermColorBrightMagenta
+                | KernelFn::TermColorBrightCyan
+                | KernelFn::TermColorBrightWhite
+                | KernelFn::TermColorDefault
                 // `Ui.fill : Length`
                 | KernelFn::UiFill
                 // `Ui.content : Length`
@@ -26202,6 +26294,11 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::TuiUiPadding
                 | KernelFn::TuiUiColor
                 | KernelFn::TuiUiBg
+                // `Ipe.Tea.Cli.Ui` arity-1 line view + line-native attributes.
+                | KernelFn::CliUiText
+                | KernelFn::CliUiLines
+                | KernelFn::CliUiColor
+                | KernelFn::CliUiBg
                 // ── Ui attribute builders — arity 1 ──────────────────────
                 // `Ui.spacing : Int -> Attribute msg`
                 | KernelFn::UiSpacing
@@ -26465,7 +26562,9 @@ impl<'a> Lowerer<'a> {
                 // `UiCells.row : List (Attribute msg) -> List (Cells msg) -> Cells msg`
                 | KernelFn::UiCellsRow
                 // `UiCells.column : List (Attribute msg) -> List (Cells msg) -> Cells msg`
-                | KernelFn::UiCellsColumn,
+                | KernelFn::UiCellsColumn
+                // `Cli.Ui.line : List (Attribute msg) -> String -> Lines msg`
+                | KernelFn::CliUiLine,
             ) => Ok(2),
             // Arity 3: `Ui.rgb r g b`, `Html.node tag attrs children`,
             //          `Ui.breakpoint query attrs element`.
@@ -26486,7 +26585,9 @@ impl<'a> Lowerer<'a> {
                 // `Ui.mediaQuery : String -> List (Attribute msg) -> Element msg -> Element msg`
                 // Raw-query escape hatch — marker-carrying wrapper consumed by
                 // web::style_inject::build_mq (see ui_media_query_).
-                | KernelFn::UiMediaQuery,
+                | KernelFn::UiMediaQuery
+                // `Terminal.Color.rgb : Int -> Int -> Int -> Color`
+                | KernelFn::TermColorRgb,
             ) => Ok(3),
             // Arity 4: `Ui.rgba r g b a`, `Ui.animate name shorthand kf respect`.
             Callee::Kernel(
@@ -26498,7 +26599,9 @@ impl<'a> Lowerer<'a> {
                 // respect-`prefers-reduced-motion` flag (see ui_animate_raw_).
                 | KernelFn::UiAnimateRaw
                 // `Ui.taggedNode : String -> Description -> List (Attribute msg) -> List (Element msg) -> Element msg`
-                | KernelFn::UiTaggedNode,
+                | KernelFn::UiTaggedNode
+                // `Terminal.Color.rgba : Int -> Int -> Int -> Float -> Color`
+                | KernelFn::TermColorRgba,
             ) => Ok(4),
             // ── Ipe.Auth / Stream / HttpStream — fail-closed kernels ──
             // These kernels are registered in the qualifier table but have no
@@ -27777,6 +27880,51 @@ impl<'a> Lowerer<'a> {
                     ("TuiUi", "reverse") => Ok(Callee::Kernel(KernelFn::TuiUiReverse)),
                     ("TuiUi", "color") => Ok(Callee::Kernel(KernelFn::TuiUiColor)),
                     ("TuiUi", "bg") => Ok(Callee::Kernel(KernelFn::TuiUiBg)),
+                    // ── Ipe.Tea.Cli.Ui line-oriented view + attribute builders ─
+                    ("CliUi", "none") => Ok(Callee::Kernel(KernelFn::CliUiNone)),
+                    ("CliUi", "text") => Ok(Callee::Kernel(KernelFn::CliUiText)),
+                    ("CliUi", "line") => Ok(Callee::Kernel(KernelFn::CliUiLine)),
+                    ("CliUi", "lines") => Ok(Callee::Kernel(KernelFn::CliUiLines)),
+                    ("CliUi", "bold") => Ok(Callee::Kernel(KernelFn::CliUiBold)),
+                    ("CliUi", "underline") => Ok(Callee::Kernel(KernelFn::CliUiUnderline)),
+                    ("CliUi", "dim") => Ok(Callee::Kernel(KernelFn::CliUiDim)),
+                    ("CliUi", "reverse") => Ok(Callee::Kernel(KernelFn::CliUiReverse)),
+                    ("CliUi", "color") => Ok(Callee::Kernel(KernelFn::CliUiColor)),
+                    ("CliUi", "bg") => Ok(Callee::Kernel(KernelFn::CliUiBg)),
+                    // ── Ipe.Tea.Terminal.Color palette constructors ──
+                    ("TermColor", "black") => Ok(Callee::Kernel(KernelFn::TermColorBlack)),
+                    ("TermColor", "red") => Ok(Callee::Kernel(KernelFn::TermColorRed)),
+                    ("TermColor", "green") => Ok(Callee::Kernel(KernelFn::TermColorGreen)),
+                    ("TermColor", "yellow") => Ok(Callee::Kernel(KernelFn::TermColorYellow)),
+                    ("TermColor", "blue") => Ok(Callee::Kernel(KernelFn::TermColorBlue)),
+                    ("TermColor", "magenta") => Ok(Callee::Kernel(KernelFn::TermColorMagenta)),
+                    ("TermColor", "cyan") => Ok(Callee::Kernel(KernelFn::TermColorCyan)),
+                    ("TermColor", "white") => Ok(Callee::Kernel(KernelFn::TermColorWhite)),
+                    ("TermColor", "brightBlack") => {
+                        Ok(Callee::Kernel(KernelFn::TermColorBrightBlack))
+                    }
+                    ("TermColor", "brightRed") => Ok(Callee::Kernel(KernelFn::TermColorBrightRed)),
+                    ("TermColor", "brightGreen") => {
+                        Ok(Callee::Kernel(KernelFn::TermColorBrightGreen))
+                    }
+                    ("TermColor", "brightYellow") => {
+                        Ok(Callee::Kernel(KernelFn::TermColorBrightYellow))
+                    }
+                    ("TermColor", "brightBlue") => {
+                        Ok(Callee::Kernel(KernelFn::TermColorBrightBlue))
+                    }
+                    ("TermColor", "brightMagenta") => {
+                        Ok(Callee::Kernel(KernelFn::TermColorBrightMagenta))
+                    }
+                    ("TermColor", "brightCyan") => {
+                        Ok(Callee::Kernel(KernelFn::TermColorBrightCyan))
+                    }
+                    ("TermColor", "brightWhite") => {
+                        Ok(Callee::Kernel(KernelFn::TermColorBrightWhite))
+                    }
+                    ("TermColor", "default") => Ok(Callee::Kernel(KernelFn::TermColorDefault)),
+                    ("TermColor", "rgb") => Ok(Callee::Kernel(KernelFn::TermColorRgb)),
+                    ("TermColor", "rgba") => Ok(Callee::Kernel(KernelFn::TermColorRgba)),
                     // Retained container / tagged-element primitives — the layout
                     // and flow builders are pure Ipê over these in `Ipe/Ui.ipe`.
                     ("Ui", "node") => Ok(Callee::Kernel(KernelFn::UiNode)),
