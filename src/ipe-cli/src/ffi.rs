@@ -876,6 +876,43 @@ fn inspector_payload(
     payload
 }
 
+/// How an inspector job should be run, once the host's sandbox capabilities and
+/// the operator's unsandboxed override have been weighed. Every reachable
+/// combination maps to exactly one variant, so no host configuration can fall
+/// through to a branch its capabilities doom.
+enum SandboxRoute {
+    /// bubblewrap with the mandatory cap helpers present — the jailed path.
+    Jailed,
+    /// The operator accepted running foreign build code without a jail. Reached
+    /// either when bwrap is absent or when its cap helpers are missing, and only
+    /// when `IPE_FFI_ALLOW_UNSANDBOXED=1` is set.
+    Unsandboxed,
+    /// bwrap is absent and no override is set — refuse, advising bwrap.
+    RefuseNoBwrap,
+    /// bwrap is present but a mandatory cap helper is missing and no override is
+    /// set — refuse, advising the missing helpers.
+    RefuseMissingCaps { missing: Vec<&'static str> },
+}
+
+/// Decide how to run an inspector job from the host's sandbox capabilities and
+/// the unsandboxed override. Pure so the refusal and override paths are pinned
+/// by tests without spawning a subprocess.
+fn choose_sandbox_route(
+    mechanism: &ipe_sandbox::Mechanism,
+    missing_caps: Vec<&'static str>,
+    unsandboxed_ok: bool,
+) -> SandboxRoute {
+    match mechanism {
+        ipe_sandbox::Mechanism::Bwrap(_) if missing_caps.is_empty() => SandboxRoute::Jailed,
+        ipe_sandbox::Mechanism::Bwrap(_) if unsandboxed_ok => SandboxRoute::Unsandboxed,
+        ipe_sandbox::Mechanism::Bwrap(_) => SandboxRoute::RefuseMissingCaps {
+            missing: missing_caps,
+        },
+        _ if unsandboxed_ok => SandboxRoute::Unsandboxed,
+        _ => SandboxRoute::RefuseNoBwrap,
+    }
+}
+
 fn run_inspector_job(job: &InspectorJob, allow_build_scripts: bool) -> Result<String, CliError> {
     let inspector = inspector_binary()?;
     let scratch_hint = match job {
@@ -887,20 +924,17 @@ fn run_inspector_job(job: &InspectorJob, allow_build_scripts: bool) -> Result<St
     let caps = ipe_sandbox::probe();
     let mechanism = ipe_sandbox::select_mechanism(&caps);
     let unsandboxed_ok = ipe_sandbox::unsandboxed_override_set();
-    if !matches!(mechanism, ipe_sandbox::Mechanism::Bwrap(_)) && !unsandboxed_ok {
-        return Err(CliError::Usage(
-            "ipe add: no bubblewrap isolation available — install `bwrap`, or set \
-             IPE_FFI_ALLOW_UNSANDBOXED=1 to accept running the crate's build scripts \
-             UNSANDBOXED (dangerous)",
-        ));
-    }
-
     let io_err = |detail: String| CliError::UsageOwned(format!("ipe add: {detail}"));
-    if matches!(mechanism, ipe_sandbox::Mechanism::Bwrap(_)) {
-        // Refuse if the mandatory cap helpers are missing — never run
-        // untrusted code without a wall clock and rlimits.
-        let missing = ipe_sandbox::missing_caps(&caps);
-        if !missing.is_empty() && !unsandboxed_ok {
+
+    match choose_sandbox_route(&mechanism, ipe_sandbox::missing_caps(&caps), unsandboxed_ok) {
+        SandboxRoute::RefuseNoBwrap => {
+            return Err(CliError::Usage(
+                "ipe add: no bubblewrap isolation available — install `bwrap`, or set \
+                 IPE_FFI_ALLOW_UNSANDBOXED=1 to accept running the crate's build scripts \
+                 UNSANDBOXED (dangerous)",
+            ));
+        }
+        SandboxRoute::RefuseMissingCaps { missing } => {
             return Err(io_err(format!(
                 "missing mandatory sandbox cap helper(s): {} — install coreutils \
                  (timeout) and util-linux (prlimit), or set IPE_FFI_ALLOW_UNSANDBOXED=1 \
@@ -908,40 +942,48 @@ fn run_inspector_job(job: &InspectorJob, allow_build_scripts: bool) -> Result<St
                 missing.join(", ")
             )));
         }
-        let scoped_tmp = make_scratch_dir(scratch_hint)?;
-        let binds = toolchain_binds(&inspector);
-        let result = match job {
-            // A single crate — or a single local wrapper crate — is one
-            // populate-free bind over the historical two phases (fetch,
-            // introspect) on one scoped scratch. A wrapper crate is local, so
-            // its fetch phase only resolves the wrapper's own registry deps.
-            InspectorJob::Single { .. } | InspectorJob::WrapperPath { .. } => run_single_bwrap(
+        SandboxRoute::Unsandboxed => {
+            return run_inspector_job_unsandboxed(
                 &inspector,
                 job,
-                &caps,
-                &scoped_tmp,
-                &binds,
+                scratch_hint,
                 allow_build_scripts,
-            ),
-            // A multi-crate manifest is CHUNKED: one fetch, then a per-crate
-            // populate sequence that accumulates the cross-crate index through
-            // a checkpoint, then a per-crate bind — so no single jailed run
-            // exceeds the wall, which the whole-manifest run did (its populate
-            // + bind of every crate ran under one wall budget).
-            InspectorJob::Manifest { entries } => run_manifest_bwrap_chunked(
-                &inspector,
-                entries,
-                &caps,
-                &scoped_tmp,
-                &binds,
-                allow_build_scripts,
-            ),
-        };
-        let _ = std::fs::remove_dir_all(&scoped_tmp);
-        return result;
+            );
+        }
+        SandboxRoute::Jailed => {}
     }
 
-    run_inspector_job_unsandboxed(&inspector, job, scratch_hint, allow_build_scripts)
+    let scoped_tmp = make_scratch_dir(scratch_hint)?;
+    let binds = toolchain_binds(&inspector);
+    let result = match job {
+        // A single crate — or a single local wrapper crate — is one
+        // populate-free bind over the historical two phases (fetch,
+        // introspect) on one scoped scratch. A wrapper crate is local, so
+        // its fetch phase only resolves the wrapper's own registry deps.
+        InspectorJob::Single { .. } | InspectorJob::WrapperPath { .. } => run_single_bwrap(
+            &inspector,
+            job,
+            &caps,
+            &scoped_tmp,
+            &binds,
+            allow_build_scripts,
+        ),
+        // A multi-crate manifest is CHUNKED: one fetch, then a per-crate
+        // populate sequence that accumulates the cross-crate index through
+        // a checkpoint, then a per-crate bind — so no single jailed run
+        // exceeds the wall, which the whole-manifest run did (its populate
+        // + bind of every crate ran under one wall budget).
+        InspectorJob::Manifest { entries } => run_manifest_bwrap_chunked(
+            &inspector,
+            entries,
+            &caps,
+            &scoped_tmp,
+            &binds,
+            allow_build_scripts,
+        ),
+    };
+    let _ = std::fs::remove_dir_all(&scoped_tmp);
+    result
 }
 
 /// The toolchain jail binds, grouped so the chunked driver can clone them once
@@ -4702,5 +4744,56 @@ iced = "=0.12.1"
                    \x20   }\n";
         let err = lift_first_foreign(src).expect_err("an unknown field must refuse");
         assert!(err.contains("flavour"), "{err}");
+    }
+
+    fn bwrap() -> ipe_sandbox::Mechanism {
+        ipe_sandbox::Mechanism::Bwrap(PathBuf::from("/usr/bin/bwrap"))
+    }
+
+    #[test]
+    fn bwrap_with_all_caps_runs_jailed() {
+        assert!(matches!(
+            choose_sandbox_route(&bwrap(), vec![], false),
+            SandboxRoute::Jailed
+        ));
+        // The override is irrelevant when the jail is fully viable.
+        assert!(matches!(
+            choose_sandbox_route(&bwrap(), vec![], true),
+            SandboxRoute::Jailed
+        ));
+    }
+
+    #[test]
+    fn bwrap_missing_caps_without_override_refuses() {
+        assert!(matches!(
+            choose_sandbox_route(&bwrap(), vec!["timeout", "prlimit"], false),
+            SandboxRoute::RefuseMissingCaps { missing } if missing == vec!["timeout", "prlimit"]
+        ));
+    }
+
+    #[test]
+    fn bwrap_missing_caps_with_override_runs_unsandboxed() {
+        // The escape hatch the missing-caps message advertises must be live on
+        // exactly this configuration: bwrap present, cap helpers absent.
+        assert!(matches!(
+            choose_sandbox_route(&bwrap(), vec!["prlimit"], true),
+            SandboxRoute::Unsandboxed
+        ));
+    }
+
+    #[test]
+    fn no_bwrap_without_override_refuses() {
+        assert!(matches!(
+            choose_sandbox_route(&ipe_sandbox::Mechanism::Refused, vec![], false),
+            SandboxRoute::RefuseNoBwrap
+        ));
+    }
+
+    #[test]
+    fn no_bwrap_with_override_runs_unsandboxed() {
+        assert!(matches!(
+            choose_sandbox_route(&ipe_sandbox::Mechanism::Refused, vec![], true),
+            SandboxRoute::Unsandboxed
+        ));
     }
 }
