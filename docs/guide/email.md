@@ -66,29 +66,12 @@ case Email.parseAddress "alice@example.com" of
 Explore the full surface — the `with*` builders, the SES / SMTP config records,
 and `send` itself — with `ipe doc Ipe.Email`.
 
-A program that only parses an address and builds a message — without ever
-calling `Email.send` — compiles and runs end-to-end:
-
-```ipe
-import Ipe.Email as Email
-import Ipe.Io as Io
-
-
-main : Task Error ()
-main =
-    case Email.parseAddress "alice@example.com" of
-        Just addr ->
-            let
-                _ =
-                    Email.defaultMessage
-                        { from = addr, to = [ addr ], subject = "Welcome" }
-                        |> Email.withTextBody "Thanks for signing up."
-            in
-            Io.println "message built"
-
-        Nothing ->
-            Io.println "not a valid address"
-```
+> A program that imports `Ipe.Email` but never calls `Email.send` does not yet
+> build end-to-end: the emitted runtime references the `Secret` module without
+> pulling in the feature that provides it, so the crate fails to compile. A full
+> program that *does* call `send` links everything and builds. Until that gap
+> closes, this guide teaches the shape and points at `ipe doc Ipe.Email` for the
+> per-symbol reference rather than shipping a script that will not compile.
 
 ## The why
 
