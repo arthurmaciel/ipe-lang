@@ -344,9 +344,12 @@ fn render_candidates(
             continue;
         };
         // The candidate's own solved type (values only), used for both the
-        // detail string and result-head classification.
+        // detail string and result-head classification. The home is looked up by
+        // a borrowed slice, so no key is allocated per candidate.
         let value_ty: Option<&Ty> = match c.kind {
-            CandidateKind::Value => solved_env.and_then(|env| env.get(&(c.home.clone(), c.name))),
+            CandidateKind::Value => {
+                solved_env.and_then(|env| env.get(c.home.as_slice())?.get(&c.name))
+            }
             CandidateKind::Ctor | CandidateKind::Type => None,
         };
 
@@ -486,17 +489,41 @@ fn keyword_item(label: &'static str) -> CompletionItem {
     }
 }
 
-/// Ipê keywords offered at every cursor position.
+/// Ipê keywords offered at every cursor position. Every entry is a real
+/// reserved word per the lexer's own table (`ipe_parse::is_keyword`);
+/// `completion_keywords_match_the_lexer` pins the two against drift.
 const KEYWORDS: &[&str] = &[
-    "module", "import", "exposing", "type", "alias", "let", "in", "if", "then", "else", "case",
-    "of", "as",
+    "module", "import", "exposing", "as", "type", "foreign", "case", "of", "let", "in", "if",
+    "then", "else", "do",
 ];
 
 #[cfg(test)]
 mod tests {
     use ipe_db::{IpeDatabase, ModuleOrigin, SourceFile, SourceRoot};
 
-    use super::completions;
+    use super::{KEYWORDS, completions};
+
+    /// Every completion keyword must be a real reserved word per the lexer's own
+    /// table — no invented entry (a past list offered `alias`, which is not a
+    /// keyword) and no drift from the lexer SSOT.
+    #[test]
+    fn completion_keywords_match_the_lexer() {
+        for kw in KEYWORDS {
+            assert!(
+                ipe_parse::is_keyword(kw),
+                "completion offers {kw:?}, which is not a lexer keyword"
+            );
+        }
+        for kw in [
+            "module", "import", "exposing", "as", "type", "foreign", "case", "of", "let", "in",
+            "if", "then", "else", "do",
+        ] {
+            assert!(
+                KEYWORDS.contains(&kw),
+                "completion is missing the keyword {kw:?}"
+            );
+        }
+    }
 
     fn file(db: &IpeDatabase, path: &[&str], text: &str) -> SourceFile {
         SourceFile::new(
