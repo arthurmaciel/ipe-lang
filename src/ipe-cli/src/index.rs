@@ -23,6 +23,7 @@ use std::str::FromStr as _;
 use ipe_ir::Capability;
 
 use crate::CliError;
+use crate::package_name::PackageName;
 use crate::signing::SignatureBundle;
 
 /// A validated source-repository URL accepted by the package index.
@@ -275,18 +276,29 @@ pub struct EntryVersion {
 }
 
 /// The path of a package's entry file inside an index checkout.
-fn entry_path(index_root: &Path, name: &str) -> PathBuf {
-    index_root.join("packages").join(format!("{name}.toml"))
+///
+/// Takes a validated [`PackageName`] so the name is a single, non-traversing
+/// path component by construction — an unvalidated string cannot reach this
+/// join and reroot it outside the index root.
+fn entry_path(index_root: &Path, name: &PackageName) -> PathBuf {
+    index_root
+        .join("packages")
+        .join(format!("{}.toml", name.as_str()))
 }
 
-/// Whether the package's entry file exists in the index checkout at `index_root`.
+/// Whether the package named `name` has an entry file in the index checkout at
+/// `index_root`.
 ///
 /// Publish uses this to distinguish a first publish (no file — create it) from a
 /// present-but-unreadable entry (a real error to surface), rather than treating
 /// every read failure as "absent".
-#[must_use]
-pub fn entry_file_exists(index_root: &Path, name: &str) -> bool {
-    entry_path(index_root, name).is_file()
+///
+/// # Errors
+/// [`CliError::Resolve`] when `name` is not a valid package name (it would
+/// otherwise be joined into a filesystem path).
+pub fn entry_file_exists(index_root: &Path, name: &str) -> Result<bool, CliError> {
+    let name = PackageName::parse(name)?;
+    Ok(entry_path(index_root, &name).is_file())
 }
 
 /// The three-way outcome of looking up a package entry in the index.
@@ -346,7 +358,11 @@ impl EntryLookup {
 /// every integrity gate so an unreadable baseline propagates as an error (fail
 /// closed) rather than collapsing to "absent → skip".
 pub fn read_entry_lookup(index_root: &Path, name: &str) -> EntryLookup {
-    let path = entry_path(index_root, name);
+    let name = match PackageName::parse(name) {
+        Ok(name) => name,
+        Err(err) => return EntryLookup::Unreadable(err),
+    };
+    let path = entry_path(index_root, &name);
     let text = match crate::io_bounded::read_to_string_capped(
         &path,
         crate::io_bounded::SMALL_FILE_READ_CAP,
@@ -363,7 +379,7 @@ pub fn read_entry_lookup(index_root: &Path, name: &str) -> EntryLookup {
             )));
         }
     };
-    match parse_entry(name, &text) {
+    match parse_entry(name.as_str(), &text) {
         Ok(entry) => EntryLookup::Present(entry),
         Err(err) => EntryLookup::Unreadable(err),
     }
@@ -380,7 +396,8 @@ pub fn read_entry_lookup(index_root: &Path, name: &str) -> EntryLookup {
 /// # Errors
 /// [`CliError::Resolve`] when the entry file is absent or malformed.
 pub fn read_entry(index_root: &Path, name: &str) -> Result<IndexEntry, CliError> {
-    let path = entry_path(index_root, name);
+    let package_name = PackageName::parse(name)?;
+    let path = entry_path(index_root, &package_name);
     let text =
         crate::io_bounded::read_to_string_capped(&path, crate::io_bounded::SMALL_FILE_READ_CAP)
             .map_err(|e| match e {
@@ -1162,6 +1179,47 @@ mod tests {
             "a present-but-malformed entry must produce Unreadable, not Absent"
         );
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A traversing name must be refused by the name gate BEFORE `entry_path`
+    /// joins it — never read an entry from outside the index root. The gate
+    /// surfaces as `Unreadable` (fail-closed), never `Absent` (which a gate would
+    /// treat as "first version → skip").
+    #[test]
+    fn lookup_rejects_traversal_name_as_unreadable() {
+        let root = temp_dir("lookup-traversal");
+        std::fs::create_dir_all(root.join("packages")).expect("packages dir");
+        for hostile in ["..", "../../etc/passwd", "/etc/passwd", "a/b"] {
+            let result = super::read_entry_lookup(&root, hostile);
+            assert!(
+                matches!(result, super::EntryLookup::Unreadable(_)),
+                "hostile name {hostile:?} must be Unreadable (refused), got a non-Unreadable variant"
+            );
+        }
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// `read_entry` must refuse a traversing name with an error rather than
+    /// joining it into a path and reading an arbitrary `.toml`.
+    #[test]
+    fn read_entry_rejects_traversal_name() {
+        let root = temp_dir("read-entry-traversal");
+        std::fs::create_dir_all(root.join("packages")).expect("packages dir");
+        for hostile in ["..", "../secret", "/etc/hosts", "a/b"] {
+            super::read_entry(&root, hostile)
+                .expect_err(&format!("hostile name {hostile:?} must be rejected"));
+        }
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// `entry_file_exists` must refuse a traversing name rather than probing a
+    /// path outside the index root.
+    #[test]
+    fn entry_file_exists_rejects_traversal_name() {
+        let root = temp_dir("exists-traversal");
+        std::fs::create_dir_all(root.join("packages")).expect("packages dir");
+        super::entry_file_exists(&root, "../../etc/passwd")
+            .expect_err("a traversing name must be rejected, not probed");
     }
 
     #[test]

@@ -47,6 +47,7 @@ pub mod native_ffi_consent;
 pub mod net;
 pub mod pack;
 pub mod package_manifest;
+pub mod package_name;
 pub mod pkg;
 pub mod progress;
 pub mod project;

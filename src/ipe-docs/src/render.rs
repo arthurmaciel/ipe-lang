@@ -82,7 +82,7 @@ pub fn highlight_snippet(source: &str) -> String {
     let Ok(syntax) = parse_module(source, &mut interner) else {
         return format!("<code>{}</code>", html_escape(source));
     };
-    let tokens = annotate_syntax_only(&syntax, source, &interner);
+    let tokens = annotate_syntax_only(&syntax, &interner);
     build_highlighted(source, &tokens)
 }
 

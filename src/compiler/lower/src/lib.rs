@@ -94,8 +94,20 @@ pub fn lower(
     // floor keeps a single partial-application gap covered in a `main`-only program
     // with no local defs. An overrun fails closed as a `CompilerBug`, never an
     // index panic, never a silent reuse.
+    // The widest first-class / partial constructor draws one `eta_` (and, for a
+    // hoisted complex arg, one `cap_`) symbol per remaining payload position. A
+    // union constructor's arity is uncapped at the language surface, so it — not
+    // the `MAX_CALLEE_ARITY` floor, which assumes stdlib-callable residuals — can
+    // govern both pool sizes. Fold it into each so a wide first-class constructor
+    // never overruns (which would fail closed as a `CompilerBug`, never compile).
+    let max_ctor_arity = lower::max_ctor_arity_per_module(m);
     let eta_params = interner
-        .fresh_symbols("eta_", lower::max_live_eta_params(m).max(MAX_CALLEE_ARITY))
+        .fresh_symbols(
+            "eta_",
+            lower::max_live_eta_params(m)
+                .max(max_ctor_arity)
+                .max(MAX_CALLEE_ARITY),
+        )
         .map_err(homeless)?;
     // `cap_` (the hoisted-argument capture pool) is drawn positionally within a
     // single partial-application site, whose body is a `Call`/`Ctor` over already-
@@ -104,7 +116,9 @@ pub fn lower(
     let cap_params = interner
         .fresh_symbols(
             "cap_",
-            lower::max_def_arity_per_module(m).max(MAX_CALLEE_ARITY),
+            lower::max_def_arity_per_module(m)
+                .max(max_ctor_arity)
+                .max(MAX_CALLEE_ARITY),
         )
         .map_err(homeless)?;
     // A destructuring parameter (tuple / record / alias / wildcard) has no single

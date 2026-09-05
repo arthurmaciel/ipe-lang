@@ -1060,6 +1060,38 @@ mod tests {
     }
 
     #[test]
+    fn orphan_annotation_is_rejected_p0068() {
+        // A `name : T` annotation whose name misspells its definition attaches
+        // to nothing and must be rejected, not silently dropped.
+        let src = format!("{HDR}incrementt : Int\nincrement =\n    1\n");
+        assert_eq!(err_code(&src), "IPE-P0068");
+        // A lone annotation with no definition at all is likewise an orphan.
+        assert_eq!(err_code(&format!("{HDR}x : Int\n")), "IPE-P0068");
+    }
+
+    #[test]
+    fn duplicate_annotation_is_rejected_p0069() {
+        // Two annotations for one name give no single type to attach; reject
+        // rather than keep one last-write-wins.
+        let src = format!("{HDR}area : Int\narea : Float\narea =\n    1\n");
+        assert_eq!(err_code(&src), "IPE-P0069");
+    }
+
+    #[test]
+    fn valid_annotation_still_attaches() {
+        // The common, correct case must keep parsing: one annotation, one
+        // matching definition, type attached to the value.
+        let mut i = Interner::new();
+        let src = format!("{HDR}v : Int\nv =\n    1\n");
+        let m = parse_module(&src, &mut i).expect("annotated value must parse");
+        let v = find_value(&m, &i, "v").expect("v present");
+        assert!(
+            v.type_annotation.is_some(),
+            "the `v : Int` annotation must attach to `v`"
+        );
+    }
+
+    #[test]
     fn malformed_type_declaration_is_p0031() {
         // Missing type name.
         assert_eq!(err_code(&format!("{HDR}type = Foo")), "IPE-P0031");
@@ -2238,17 +2270,15 @@ mod tests {
 
     // ── Unary negation on identifiers / expressions ──────────────────────────
     //
-    // Port of the the compiler `exprAtom_` `Negate` arm (Expression.hs:356–367):
-    // `-e` in prefix position desugars to `Call(VarLocal("negate"), [e])`.
-    // The upstream both-branches-produce-Negate rule extends negation beyond
-    // numeric literals to identifiers and parenthesised expressions.
+    // `-e` in prefix position on a non-literal atom desugars to
+    // `Call(VarQual(Basics, negate), [e])`, extending negation beyond numeric
+    // literals to identifiers and parenthesised expressions. The callee is a
+    // QUALIFIED `Basics.negate` reference so a user binding named `negate`
+    // cannot capture the operator.
 
     #[test]
     fn negation_of_identifier_desugars_to_negate_call() {
-        // `-cents` → `Call(VarLocal("negate"), [VarLocal("cents")])`.
-        // This is the exact shape that triggered IPE-P0001 in
-        // 37-composite-live-shop / State.ipe:156:
-        //   `if cents < 0 then -cents else cents`
+        // `-cents` → `Call(VarQual(Basics, negate), [VarLocal("cents")])`.
         let mut i = Interner::new();
         let src = format!("{HDR}v cents =\n    -cents\n");
         let result = parse_module(&src, &mut i);
@@ -2258,15 +2288,16 @@ mod tests {
         assert!(
             v.is_some_and(|val| match &val.body.value {
                 Expr_::Call(callee, args) =>
-                    matches!(callee.value, Expr_::VarLocal(s) if i.resolve(s) == Some("negate"))
+                    matches!(callee.value, Expr_::VarQual(qual, func)
+                        if i.resolve(qual) == Some("Basics") && i.resolve(func) == Some("negate"))
                         && args.len() == 1
                         && matches!(
-                            args.first().map(|a| &a.value),
-                            Some(Expr_::VarLocal(s)) if i.resolve(*s) == Some("cents")
+                            args.first().map(|arg| &arg.value),
+                            Some(Expr_::VarLocal(inner)) if i.resolve(*inner) == Some("cents")
                         ),
                 _ => false,
             }),
-            "body must be Call(negate, [VarLocal(cents)]), got {:?}",
+            "body must be Call(Basics.negate, [VarLocal(cents)]), got {:?}",
             v.map(|val| &val.body.value)
         );
     }
@@ -2328,9 +2359,10 @@ mod tests {
         let is_call_negate = v.is_some_and(|val| match &val.body.value {
             Expr_::Call(_, args) => args.len() == 1
                 && matches!(
-                    args.first().map(|a| &a.value),
-                    Some(Expr_::Call(c, inner_args))
-                        if matches!(c.value, Expr_::VarLocal(s) if i.resolve(s) == Some("negate"))
+                    args.first().map(|arg| &arg.value),
+                    Some(Expr_::Call(inner_callee, inner_args))
+                        if matches!(inner_callee.value, Expr_::VarQual(qual, func)
+                            if i.resolve(qual) == Some("Basics") && i.resolve(func) == Some("negate"))
                         && inner_args.len() == 1
                 ),
             _ => false,

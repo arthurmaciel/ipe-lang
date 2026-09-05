@@ -1182,6 +1182,7 @@ pub fn canonicalise_module_in_project(
                 && !env.qual_vars.contains_key(&ffi_sym)
             {
                 let synthetic_import = src::Import {
+                    import_kw: ipe_diagnostics::Span::DUMMY,
                     name: ipe_diagnostics::Located::new(
                         ipe_diagnostics::Span::DUMMY,
                         rust_ffi_path,
@@ -3565,9 +3566,9 @@ fn field_leaf_codecs(
     env: &Env,
     interner: &mut Interner,
 ) -> DResult<(canon::Expr, canon::Expr)> {
-    let field_name = || interner.resolve(field).unwrap_or("").to_owned();
+    let field_name = resolve_or_bug(interner, field, "ipe_canon::field_leaf_codecs")?.to_owned();
     let diag_span = sg.diag;
-    let bad = |reason: CodecAutoRejection, name: String| Diagnostic::Name {
+    let bad = |reason: CodecAutoRejection, name: &str| Diagnostic::Name {
         span: diag_span,
         msg: NameError::CodecAutoUnderivable {
             reason,
@@ -3581,11 +3582,11 @@ fn field_leaf_codecs(
         && let Some(text) = interner.resolve(*name)
         && SEAL_SECRET_OR_SINK.contains(&text)
     {
-        return Err(bad(CodecAutoRejection::SecretField, field_name()));
+        return Err(bad(CodecAutoRejection::SecretField, &field_name));
     }
     // A function field is not a serialisable value.
     if matches!(ty, canon::Type::Lambda(_, _)) {
-        return Err(bad(CodecAutoRejection::FunctionField, field_name()));
+        return Err(bad(CodecAutoRejection::FunctionField, &field_name));
     }
 
     match ty {
@@ -3602,7 +3603,7 @@ fn field_leaf_codecs(
                     kernel_ref(enc_k, sg.fresh(), interner)?,
                     kernel_ref(dec_k, sg.fresh(), interner)?,
                 )),
-                None => Err(bad(CodecAutoRejection::UnsupportedField, field_name())),
+                None => Err(bad(CodecAutoRejection::UnsupportedField, &field_name)),
             }
         }
         // `List t` — `Encode.list <encElem>` / `Decode.list <decElem>`, recursing
@@ -3612,7 +3613,7 @@ fn field_leaf_codecs(
             if interner.resolve(*name) == Some("List") && args.len() == 1 =>
         {
             let Some(elem) = args.first() else {
-                return Err(bad(CodecAutoRejection::UnsupportedField, field_name()));
+                return Err(bad(CodecAutoRejection::UnsupportedField, &field_name));
             };
             let (enc_elem, dec_elem) = field_leaf_codecs(field, elem, sg, env, interner)?;
             let enc = call_expr(
@@ -3633,7 +3634,7 @@ fn field_leaf_codecs(
             let codec = derive_record_codec(fields, sg, env, interner)?;
             project_codec_enc_dec(&codec, sg, env, interner)
         }
-        _ => Err(bad(CodecAutoRejection::UnsupportedField, field_name())),
+        _ => Err(bad(CodecAutoRejection::UnsupportedField, &field_name)),
     }
 }
 
@@ -3662,7 +3663,11 @@ fn derive_record_codec(
     // enc = \rec -> Encode.object [ (key, leafEnc rec.field), … ]
     let mut pairs = Vec::with_capacity(leaves.len());
     for (fname, enc, _) in &leaves {
-        let key = to_snake_case(interner.resolve(*fname).unwrap_or(""));
+        let key = to_snake_case(resolve_or_bug(
+            interner,
+            *fname,
+            "ipe_canon::derive_record_codec::encoder",
+        )?);
         let access = Located::new(
             sg.fresh(),
             canon::Expr_::Access(
@@ -3728,7 +3733,11 @@ fn derive_record_codec(
         sg.fresh(),
     );
     for (fname, _, dec) in &leaves {
-        let key = to_snake_case(interner.resolve(*fname).unwrap_or(""));
+        let key = to_snake_case(resolve_or_bug(
+            interner,
+            *fname,
+            "ipe_canon::derive_record_codec::decoder",
+        )?);
         let required = call_expr(
             kernel_ref(StdlibKernel::JsonDecPRequired, sg.fresh(), interner)?,
             vec![
@@ -3843,7 +3852,11 @@ fn derive_record_shape(
 ) -> DResult<canon::Expr> {
     let mut pairs = Vec::with_capacity(fields.len());
     for (fname, fty) in fields {
-        let key = to_snake_case(interner.resolve(*fname).unwrap_or(""));
+        let key = to_snake_case(resolve_or_bug(
+            interner,
+            *fname,
+            "ipe_canon::derive_record_shape",
+        )?);
         let col = field_col_type_expr(fty, sg, env, interner)?;
         pairs.push(Located::new(
             sg.fresh(),
@@ -5558,6 +5571,19 @@ fn resolve_qual_var(
             _ => {}
         }
     }
+    // Unary minus desugars (in the parser) to a `Basics.negate` reference. Its
+    // qualified form resolves DIRECTLY to the negate kernel here, bypassing the
+    // scope chain, so a user binding named `negate` cannot capture the operator:
+    // `-x` always means arithmetic negation. `Basics` is the ambient prelude
+    // (Tier A) and is not otherwise a resolvable qualifier, so this is the sole
+    // `Basics.member` spelling — no member table to consult.
+    if interner.resolve(qualifier) == Some("Basics") && interner.resolve(name) == Some("negate") {
+        return Ok(canon::Expr_::VarKernel {
+            id: Some(StdlibKernel::BasicsNegate),
+            module: qualifier,
+            name,
+        });
+    }
     // Tier-C import gate (ADR 0047): a known stdlib qualifier used WITHOUT its
     // import is the teachable must-import diagnostic (IPE-N0034), naming the exact
     // `Ipe.*` module to add — NOT a silent resolve against the pre-installed
@@ -5707,7 +5733,11 @@ fn canonicalise_binops(
     let mut ops: VecDeque<(Located<Symbol>, i32, Assoc)> = VecDeque::with_capacity(pairs.len());
     for (operand, op) in pairs {
         operands.push_back(canonicalise_expr(operand, env, interner)?);
-        let (prec, assoc) = op_precedence(name_or_empty(interner, op.value));
+        let (prec, assoc) = op_precedence(resolve_or_bug(
+            interner,
+            op.value,
+            "ipe_canon::canonicalise_binops",
+        )?);
         ops.push_back((*op, prec, assoc));
     }
     operands.push_back(canonicalise_expr(final_, env, interner)?);
@@ -5783,11 +5813,26 @@ fn climb_binops(
     Ok(left)
 }
 
-/// Resolve an operator symbol to its text, or `""` when (impossibly) un-interned
-/// — the empty string falls through [`op_precedence`] to the `9 L` default, so a
-/// missing symbol degrades gracefully rather than panicking.
-fn name_or_empty(interner: &Interner, sym: Symbol) -> &str {
-    interner.resolve(sym).unwrap_or("")
+/// Resolve an interned `Symbol` to its text, or fail closed with a
+/// [`Diagnostic::CompilerBug`] naming `where_`.
+///
+/// A `Symbol` that the interner cannot resolve is a broken internal invariant,
+/// not a user error: every `Symbol` reaching resolution was minted by the same
+/// interner. Fail-open handling (an empty string flowing on) turns that
+/// invariant break into a silently-wrong result downstream — a mis-precedenced
+/// operator, an empty record key, a `TypeNotFound { name: "" }`. Routing it to
+/// the compiler-bug channel keeps invalid states unrepresentable.
+fn resolve_or_bug<'a>(
+    interner: &'a Interner,
+    sym: Symbol,
+    where_: &'static str,
+) -> DResult<&'a str> {
+    interner
+        .resolve(sym)
+        .ok_or_else(|| Diagnostic::CompilerBug {
+            where_,
+            detail: "interned symbol did not resolve".to_owned(),
+        })
 }
 
 /// Build a single resolved binary-operation node.
@@ -5959,7 +6004,11 @@ fn resolve_unqualified_type_home(name: Symbol, ctx: &TypeCtx) -> DResult<Vec<Sym
     if let Some(h) = ctx.type_home_map.get(&name) {
         return Ok(h.clone());
     }
-    let name_s = ctx.interner.resolve(name).unwrap_or("");
+    let name_s = resolve_or_bug(
+        ctx.interner,
+        name,
+        "ipe_canon::resolve_unqualified_type_home",
+    )?;
     if RESERVED_BUILTIN_TYPES.contains(&name_s)
         || EXTRA_BUILTIN_TYPE_NAMES.contains(&name_s)
         || KERNEL_IMPLICIT_BUILTIN_TYPE_NAMES.contains(&name_s)
@@ -6129,7 +6178,14 @@ fn canonicalise_type(
             // multi-module import layer builds that map; for now, a valid
             // qualifier is sufficient to accept the annotation and look the type
             // up in `type_home_map` as usual.
-            let qualifier_str = ctx.interner.resolve(*qualifier).unwrap_or("");
+            // An unqualified type carries a genuinely-interned empty-string
+            // qualifier, so `""` is a valid result here; only an unresolvable
+            // symbol is the compiler-bug case.
+            let qualifier_str = resolve_or_bug(
+                ctx.interner,
+                *qualifier,
+                "ipe_canon::canonicalise_type::qualifier",
+            )?;
             if !qualifier_str.is_empty() {
                 // Tier-C import gate (ADR 0047): a KNOWN stdlib module qualifier on
                 // a type (`Dict.Dict`, `JsonDec.Decoder`) used without importing it
@@ -6181,7 +6237,11 @@ fn canonicalise_type(
             let alias_key: Symbol = if qualifier_str.is_empty() {
                 name
             } else {
-                let name_s = ctx.interner.resolve(name).unwrap_or("");
+                let name_s = resolve_or_bug(
+                    ctx.interner,
+                    name,
+                    "ipe_canon::canonicalise_type::alias_key",
+                )?;
                 ctx.interner
                     .lookup(&format!("{qualifier_str}.{name_s}"))
                     .filter(|sym| ctx.aliases.contains_key(sym))
@@ -7585,6 +7645,30 @@ mod alias_ctor_gate_tests {
         assert!(!field_type_nonderivable(&i, &canon::Type::Var(a)));
         assert!(!field_type_nonderivable(&i, &canon::Type::Unit));
     }
+
+    #[test]
+    fn resolve_or_bug_fails_closed_on_unresolvable_symbol() {
+        let i = Interner::new();
+        // A raw symbol the interner never handed out resolves to `None`; the
+        // fail-closed path must be `CompilerBug`, never a fabricated empty name.
+        let forged = Symbol::from_raw(u32::MAX);
+        let err = resolve_or_bug(&i, forged, "test_site")
+            .expect_err("an unresolvable symbol must not resolve to a name");
+        assert!(
+            matches!(err, Diagnostic::CompilerBug { where_, .. } if where_ == "test_site"),
+            "fail-closed path must be CompilerBug at the given site"
+        );
+    }
+
+    #[test]
+    fn resolve_or_bug_returns_text_for_interned_symbol() {
+        let mut i = Interner::new();
+        let s = i.intern("Widget").expect("intern");
+        assert_eq!(
+            resolve_or_bug(&i, s, "test_site").expect("resolves"),
+            "Widget"
+        );
+    }
 }
 
 #[cfg(test)]
@@ -8120,5 +8204,100 @@ mod rust_ffi_auto_inject_tests {
             result.is_err(),
             "Rust.fn on an uninstalled crate must fail even with auto-inject: {result:?}"
         );
+    }
+}
+
+#[cfg(test)]
+mod unary_minus_hygiene_tests {
+    //! Unary minus on a non-literal desugars to a QUALIFIED `Basics.negate`
+    //! reference, which resolves through the module catalog to the
+    //! `Basics_negate` kernel. A user binding named `negate` — top-level or
+    //! `let`-local — therefore cannot capture the operator: `-x` always means
+    //! arithmetic negation.
+    #![allow(clippy::panic, clippy::expect_used)] // test setup: a failed parse/canon IS the failure
+
+    use super::*;
+
+    fn sym(i: &mut Interner, s: &str) -> Symbol {
+        i.intern(s).expect("intern must succeed")
+    }
+
+    /// The canonicalised body of the named top-level def.
+    fn def_body<'m>(module: &'m canon::Module, i: &Interner, name: &str) -> &'m canon::Expr {
+        module
+            .defs
+            .iter()
+            .find(|d| i.resolve(d.name().value) == Some(name))
+            .map(|d| match d {
+                canon::Def::Untyped { body, .. } | canon::Def::Typed { body, .. } => body,
+            })
+            .expect("named def must exist")
+    }
+
+    /// The callee of a `Call` body must be the `Basics.negate` kernel.
+    fn assert_negate_kernel_callee(body: &canon::Expr, i: &Interner) {
+        let canon::Expr_::Call(callee, _) = &body.value else {
+            panic!("body must be a Call, got {:?}", body.value);
+        };
+        match &callee.value {
+            canon::Expr_::VarKernel { module, name, .. } => {
+                assert_eq!(i.resolve(*module), Some("Basics"), "kernel module");
+                assert_eq!(i.resolve(*name), Some("negate"), "kernel name");
+            }
+            other => panic!("unary-minus callee must be the Basics.negate kernel, got {other:?}"),
+        }
+    }
+
+    /// `-x` resolves to the `Basics.negate` kernel with no shadowing binding.
+    #[test]
+    fn unary_minus_resolves_to_basics_negate_kernel() {
+        let mut i = Interner::new();
+        let src = "module Main exposing (v)\n\nv x =\n    -x\n";
+        let main_path = vec![sym(&mut i, "Main")];
+        let deps: BTreeMap<Vec<Symbol>, crate::ModuleExports> = BTreeMap::new();
+        let Ok(parsed) = ipe_parse::parse_module(src, &mut i) else {
+            panic!("parse failed");
+        };
+        let (module, _) = canonicalise_module(&parsed, &main_path, &deps, &mut i)
+            .expect("module must canonicalise");
+        assert_negate_kernel_callee(def_body(&module, &i, "v"), &i);
+    }
+
+    /// A top-level `negate` binding does NOT capture the unary-minus operator:
+    /// `-x` still resolves to the `Basics.negate` kernel.
+    #[test]
+    fn top_level_negate_does_not_capture_unary_minus() {
+        let mut i = Interner::new();
+        let src = "module Main exposing (v)\n\n\
+                   negate n =\n    n\n\n\
+                   v x =\n    -x\n";
+        let main_path = vec![sym(&mut i, "Main")];
+        let deps: BTreeMap<Vec<Symbol>, crate::ModuleExports> = BTreeMap::new();
+        let Ok(parsed) = ipe_parse::parse_module(src, &mut i) else {
+            panic!("parse failed");
+        };
+        let (module, _) = canonicalise_module(&parsed, &main_path, &deps, &mut i)
+            .expect("module must canonicalise");
+        assert_negate_kernel_callee(def_body(&module, &i, "v"), &i);
+    }
+
+    /// A `let`-local `negate` binding does NOT capture the unary-minus operator
+    /// in its `in` body.
+    #[test]
+    fn let_local_negate_does_not_capture_unary_minus() {
+        let mut i = Interner::new();
+        let src = "module Main exposing (v)\n\n\
+                   v x =\n    let\n        negate = x\n    in\n    -x\n";
+        let main_path = vec![sym(&mut i, "Main")];
+        let deps: BTreeMap<Vec<Symbol>, crate::ModuleExports> = BTreeMap::new();
+        let Ok(parsed) = ipe_parse::parse_module(src, &mut i) else {
+            panic!("parse failed");
+        };
+        let (module, _) = canonicalise_module(&parsed, &main_path, &deps, &mut i)
+            .expect("module must canonicalise");
+        let canon::Expr_::Let(_, in_body) = &def_body(&module, &i, "v").value else {
+            panic!("v body must be a Let");
+        };
+        assert_negate_kernel_callee(in_body, &i);
     }
 }
