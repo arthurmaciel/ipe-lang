@@ -6037,7 +6037,7 @@ impl StdlibKernel {
             arity: identity.arity,
             class: identity.class,
             runtime_fn: identity.emit,
-            capability: self.capability(),
+            capability: self.capability_classification(),
             runtime_module: self.required_runtime_module(),
             scheme: SchemeKey(self),
             shape: self.scheme_shape(),
@@ -9806,9 +9806,12 @@ impl StdlibKernel {
     /// The match is exhaustive with no `_` arm: a newly-added kernel cannot
     /// compile until it is classified here, so a program's inferred capability
     /// set cannot silently drift as the stdlib grows.
-    #[must_use]
+    ///
+    /// This is the single classifying match that populates [`KernelDef::capability`].
+    /// It is private: every consumer reads the capability off the row
+    /// ([`Self::def`]`().capability`), so the fact has exactly one public home.
     #[allow(clippy::too_many_lines)]
-    pub const fn capability(self) -> Option<Capability> {
+    const fn capability_classification(self) -> Option<Capability> {
         match self {
             Self::HttpGet
             | Self::HttpPost
@@ -12907,14 +12910,14 @@ mod tests {
         }
     }
 
-    /// Every wired kernel is callable through `capability()` (the exhaustive
-    /// match is total over the whole registry — no panic, no gap). The compile
-    /// error on a missing arm is the real drift guarantee; this asserts the
-    /// method is live over `ALL`.
+    /// Every wired kernel has a capability decision on its row (the exhaustive
+    /// classifying match is total over the whole registry — no panic, no gap).
+    /// The compile error on a missing arm is the real drift guarantee; this
+    /// asserts the fact is live over `ALL`.
     #[test]
     fn every_wired_kernel_has_a_capability_decision() {
         for k in StdlibKernel::ALL {
-            let _ = k.capability();
+            let _ = k.def().capability;
         }
     }
 
@@ -13026,82 +13029,82 @@ mod tests {
     fn effect_kernels_map_to_their_capability() {
         use super::{Capability, WebCapability};
         assert_eq!(
-            StdlibKernel::HttpGet.capability(),
+            StdlibKernel::HttpGet.def().capability,
             Some(Capability::Network)
         );
         assert_eq!(
-            StdlibKernel::ServerListen.capability(),
+            StdlibKernel::ServerListen.def().capability,
             Some(Capability::Network)
         );
         assert_eq!(
-            StdlibKernel::EmailSend.capability(),
+            StdlibKernel::EmailSend.def().capability,
             Some(Capability::Network)
         );
         assert_eq!(
-            StdlibKernel::FileReadFile.capability(),
+            StdlibKernel::FileReadFile.def().capability,
             Some(Capability::Filesystem)
         );
         assert_eq!(
-            StdlibKernel::DbQuery.capability(),
+            StdlibKernel::DbQuery.def().capability,
             Some(Capability::Database)
         );
         assert_eq!(
-            StdlibKernel::DbDecString.capability(),
+            StdlibKernel::DbDecString.def().capability,
             Some(Capability::Database)
         );
         assert_eq!(
-            StdlibKernel::SystemGetenv.capability(),
+            StdlibKernel::SystemGetenv.def().capability,
             Some(Capability::Env)
         );
-        assert_eq!(StdlibKernel::TimeNow.capability(), Some(Capability::Clock));
+        assert_eq!(StdlibKernel::TimeNow.def().capability, Some(Capability::Clock));
         assert_eq!(
-            StdlibKernel::RandomInt.capability(),
+            StdlibKernel::RandomInt.def().capability,
             Some(Capability::Random)
         );
-        assert_eq!(StdlibKernel::UuidV4.capability(), Some(Capability::Random));
-        assert_eq!(StdlibKernel::StringToUpper.capability(), None);
-        assert_eq!(StdlibKernel::LogInfo.capability(), None);
-        assert_eq!(StdlibKernel::IoPrintln.capability(), None);
-        assert_eq!(StdlibKernel::DebugLog.capability(), None);
+        assert_eq!(StdlibKernel::UuidV4.def().capability, Some(Capability::Random));
+        assert_eq!(StdlibKernel::StringToUpper.def().capability, None);
+        assert_eq!(StdlibKernel::LogInfo.def().capability, None);
+        assert_eq!(StdlibKernel::IoPrintln.def().capability, None);
+        assert_eq!(StdlibKernel::DebugLog.def().capability, None);
         // `Env.public` reads the live process environment on native, so it
         // discloses the env axis like `System.getenv` (wasm32 over-reports).
-        assert_eq!(StdlibKernel::EnvPublic.capability(), Some(Capability::Env));
+        assert_eq!(StdlibKernel::EnvPublic.def().capability, Some(Capability::Env));
         // `Ui.widget` ships browser JS → the `custom-element` disclosure axis.
         assert_eq!(
-            StdlibKernel::UiWidget.capability(),
+            StdlibKernel::UiWidget.def().capability,
             Some(Capability::CustomElement)
         );
         // `Js.send` / `Js.subscribe` / `Js.request` exchange typed data with page
         // JS → the `js-port:raw` uncharacterised-floor axis, inferred through this
         // same SSOT (the kernel cannot see the hand-written JS's target Web API).
         assert_eq!(
-            StdlibKernel::JsSend.capability(),
+            StdlibKernel::JsSend.def().capability,
             Some(Capability::JsPort(WebCapability::Raw))
         );
         assert_eq!(
-            StdlibKernel::JsSubscribe.capability(),
+            StdlibKernel::JsSubscribe.def().capability,
             Some(Capability::JsPort(WebCapability::Raw))
         );
         assert_eq!(
-            StdlibKernel::JsRequest.capability(),
+            StdlibKernel::JsRequest.def().capability,
             Some(Capability::JsPort(WebCapability::Raw))
         );
         // The session-stream ops exchange typed data with page JS through the same
         // seal gate → the same `js-port:raw` uncharacterised-floor axis.
         assert_eq!(
-            StdlibKernel::JsOpenSession.capability(),
+            StdlibKernel::JsOpenSession.def().capability,
             Some(Capability::JsPort(WebCapability::Raw))
         );
         assert_eq!(
-            StdlibKernel::JsSessionFrames.capability(),
+            StdlibKernel::JsSessionFrames.def().capability,
             Some(Capability::JsPort(WebCapability::Raw))
         );
         assert_eq!(
-            StdlibKernel::JsSendToSession.capability(),
+            StdlibKernel::JsSendToSession.def().capability,
             Some(Capability::JsPort(WebCapability::Raw))
         );
         assert_eq!(
-            StdlibKernel::JsCloseSession.capability(),
+            StdlibKernel::JsCloseSession.def().capability,
             Some(Capability::JsPort(WebCapability::Raw))
         );
         // Auth kernels that take a live `Db` handle disclose the database axis, not

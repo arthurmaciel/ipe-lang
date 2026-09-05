@@ -8834,7 +8834,7 @@ impl KernelUsage {
     /// when the capability scan is active.
     fn record(&mut self, k: KernelFn) {
         if self.collect_caps
-            && let Some(cap) = k.capability()
+            && let Some(cap) = k.def().capability
         {
             self.caps.insert(cap);
         }

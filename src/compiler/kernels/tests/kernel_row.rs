@@ -25,7 +25,6 @@ fn def_projects_the_authoritative_methods() {
         assert_eq!(def.arity, decl.arity, "arity drift for {k:?}");
         assert_eq!(def.class, decl.class, "class drift for {k:?}");
         assert_eq!(def.runtime_fn, decl.emit, "runtime_fn drift for {k:?}");
-        assert_eq!(def.capability, k.capability(), "capability drift for {k:?}");
         assert_eq!(
             def.runtime_module,
             k.required_runtime_module(),
