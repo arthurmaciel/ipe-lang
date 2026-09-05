@@ -136,10 +136,9 @@ impl AnnotatedToken {
 pub fn annotate(
     syntax: &ipe_syntax::Module,
     canon: &ipe_canon::ast::Module,
-    source: &str,
     interner: &ipe_intern::Interner,
 ) -> Vec<AnnotatedToken> {
-    walk::annotate_full(syntax, canon, source, interner)
+    walk::annotate_full(syntax, canon, interner)
 }
 
 /// Produce the annotated-token stream using only the parse tree.
@@ -153,10 +152,9 @@ pub fn annotate(
 #[must_use]
 pub fn annotate_syntax_only(
     syntax: &ipe_syntax::Module,
-    source: &str,
     interner: &ipe_intern::Interner,
 ) -> Vec<AnnotatedToken> {
-    walk::annotate_syntax(syntax, source, interner)
+    walk::annotate_syntax(syntax, interner)
 }
 
 // ---------------------------------------------------------------------------
