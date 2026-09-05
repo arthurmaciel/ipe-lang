@@ -1573,7 +1573,9 @@ mod tests {
         )
         .expect("write package.ipe");
         // `ipe build package.ipe` runs with cwd == project root and a bare path.
-        let _guard = CWD_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _guard = CWD_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let prev = std::env::current_dir().expect("read cwd");
         std::env::set_current_dir(&root).expect("enter project dir");
         let result = parse_package_manifest(Path::new(PACKAGE_IPE));
