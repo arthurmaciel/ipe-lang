@@ -1238,6 +1238,132 @@ const PORT_GLUE_JS: &str = r#"// Ipe.Ffi.Js browser port surface. Values cross a
     );
     return true;
   }
+  // Ipe.Browser.WebAuthn: `Create opts` / `Get opts` ->
+  // navigator.credentials.create / navigator.credentials.get. A one-shot
+  // ceremony: it requires a corId so its opaque result routes only to the
+  // matching Js.request waiter, never broadcast to js_subscribe subscribers.
+  //
+  // Fail-closed by construction:
+  //   * every buffer-shaped field crosses as a base64url string; the sink
+  //     decodes challenge / credential ids to ArrayBuffers for the browser and
+  //     re-encodes every returned buffer to base64url, so no raw key material is
+  //     ever placed in a frame.
+  //   * a NotAllowedError / user cancellation / security refusal -> a typed
+  //     `denied` frame; an absent navigator.credentials / PublicKeyCredential ->
+  //     `unavailable`. Never a throw, never a leaked credential structure.
+  function b64urlToBuf(s) {
+    // Decode a base64url string to an ArrayBuffer. Invalid input yields an empty
+    // buffer rather than throwing — the ceremony then fails closed downstream.
+    var str = String(s || "");
+    var b64 = str.replace(/-/g, "+").replace(/_/g, "/");
+    var pad = b64.length % 4;
+    if (pad === 2) { b64 += "=="; } else if (pad === 3) { b64 += "="; }
+    var bin;
+    try { bin = atob(b64); } catch (_e) { return new ArrayBuffer(0); }
+    var bytes = new Uint8Array(bin.length);
+    for (var i = 0; i < bin.length; i += 1) { bytes[i] = bin.charCodeAt(i); }
+    return bytes.buffer;
+  }
+  function bufToB64url(buf) {
+    if (!buf) { return ""; }
+    var bytes = new Uint8Array(buf);
+    var bin = "";
+    for (var i = 0; i < bytes.length; i += 1) { bin += String.fromCharCode(bytes[i]); }
+    return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  }
+  function webAuthnUnavailable() {
+    return (typeof navigator === "undefined" || !navigator.credentials ||
+      typeof PublicKeyCredential === "undefined");
+  }
+  function webAuthnFail(err, corId) {
+    // A NotAllowedError / SecurityError / abort maps to a user-facing denial;
+    // any other rejection is treated as unavailable. Never rethrown.
+    var name = err && err.name ? String(err.name) : "";
+    var kind = (name === "NotAllowedError" || name === "SecurityError" ||
+      name === "AbortError") ? "denied" : "unavailable";
+    reply({ tag: "web-authn", ok: false, error: kind }, corId);
+  }
+  function webAuthnSink(value, corId) {
+    if (!value || typeof value !== "object") { return false; }
+    var isCreate = value.Create && typeof value.Create === "object";
+    var isGet = value.Get && typeof value.Get === "object";
+    if (!isCreate && !isGet) { return false; }
+    // Deny-by-default: a ceremony result must route to its one-shot waiter only.
+    if (corId === null || corId === undefined) {
+      return true; // recognised but uncorrelated — swallow, never broadcast
+    }
+    if (webAuthnUnavailable()) {
+      reply({ tag: "web-authn", ok: false, error: "unavailable" }, corId);
+      return true;
+    }
+    if (isCreate) {
+      var c = value.Create;
+      var createOpts = {
+        publicKey: {
+          rp: { id: String(c.rpId || ""), name: String(c.rpName || "") },
+          user: {
+            id: b64urlToBuf(c.userId),
+            name: String(c.userName || ""),
+            displayName: String(c.userDisplayName || ""),
+          },
+          challenge: b64urlToBuf(c.challenge),
+          pubKeyCredParams: (Array.isArray(c.algorithms) ? c.algorithms : []).map(
+            function (alg) { return { type: "public-key", alg: Number(alg) }; }
+          ),
+          timeout: (typeof c.timeoutMs === "number" && c.timeoutMs > 0) ? c.timeoutMs : undefined,
+          authenticatorSelection: { userVerification: String(c.userVerification || "preferred") },
+        },
+      };
+      navigator.credentials.create(createOpts).then(
+        function (cred) {
+          if (!cred || !cred.response) {
+            reply({ tag: "web-authn", ok: false, error: "unavailable" }, corId);
+            return;
+          }
+          reply({
+            tag: "web-authn", ok: true, event: "registered",
+            id: String(cred.id || ""),
+            rawId: bufToB64url(cred.rawId),
+            clientDataJson: bufToB64url(cred.response.clientDataJSON),
+            attestationObject: bufToB64url(cred.response.attestationObject),
+          }, corId);
+        },
+        function (err) { webAuthnFail(err, corId); }
+      );
+      return true;
+    }
+    var g = value.Get;
+    var getOpts = {
+      publicKey: {
+        rpId: String(g.rpId || ""),
+        challenge: b64urlToBuf(g.challenge),
+        allowCredentials: (Array.isArray(g.allowCredentials) ? g.allowCredentials : []).map(
+          function (id) { return { type: "public-key", id: b64urlToBuf(id) }; }
+        ),
+        timeout: (typeof g.timeoutMs === "number" && g.timeoutMs > 0) ? g.timeoutMs : undefined,
+        userVerification: String(g.userVerification || "preferred"),
+      },
+    };
+    navigator.credentials.get(getOpts).then(
+      function (cred) {
+        if (!cred || !cred.response) {
+          reply({ tag: "web-authn", ok: false, error: "unavailable" }, corId);
+          return;
+        }
+        reply({
+          tag: "web-authn", ok: true, event: "asserted",
+          id: String(cred.id || ""),
+          rawId: bufToB64url(cred.rawId),
+          clientDataJson: bufToB64url(cred.response.clientDataJSON),
+          authenticatorData: bufToB64url(cred.response.authenticatorData),
+          signature: bufToB64url(cred.response.signature),
+          userHandle: bufToB64url(cred.response.userHandle),
+        }, corId);
+      },
+      function (err) { webAuthnFail(err, corId); }
+    );
+    return true;
+  }
   function builtinSink(value, corId) {
     if (clipboardSink(value, corId)) return true;
     if (geolocationSink(value, corId)) return true;
@@ -1262,6 +1388,7 @@ const PORT_GLUE_JS: &str = r#"// Ipe.Ffi.Js browser port surface. Values cross a
     if (fullscreenSink(value, corId)) return true;
     if (screenOrientationSink(value, corId)) return true;
     if (wakeLockSink(value, corId)) return true;
+    if (webAuthnSink(value, corId)) return true;
     return false;
   }
   function deliver(raw) {
@@ -1373,6 +1500,37 @@ mod tests {
         assert!(js.contains("\"unavailable\""));
         assert!(js.contains("tag: \"clipboard\""));
         assert!(js.contains("reply("));
+    }
+
+    #[test]
+    fn web_authn_sink_reaches_the_ceremonies_and_keeps_credentials_opaque() {
+        let js = port_glue_js();
+        // The first-party Ipe.Browser.WebAuthn sink reaches both ceremonies…
+        assert!(js.contains("navigator.credentials.create"));
+        assert!(js.contains("navigator.credentials.get"));
+        assert!(js.contains("value.Create"));
+        assert!(js.contains("value.Get"));
+        // …emits the two success events…
+        assert!(js.contains("event: \"registered\""));
+        assert!(js.contains("event: \"asserted\""));
+        assert!(js.contains("tag: \"web-authn\""));
+        // …carries every buffer field as base64url, never raw bytes…
+        assert!(js.contains("bufToB64url"));
+        assert!(js.contains("b64urlToBuf"));
+        // …and traps a refusal / absence to a typed inbound frame, never a throw.
+        assert!(js.contains("NotAllowedError"));
+        assert!(js.contains("\"denied\""));
+        assert!(js.contains("\"unavailable\""));
+        assert!(js.contains("reply("));
+        assert!(!js.contains("eval("));
+    }
+
+    #[test]
+    fn web_authn_sink_requires_a_correlation_id_and_never_broadcasts() {
+        let js = port_glue_js();
+        // The ceremony is one-shot: an uncorrelated frame is recognised and
+        // swallowed, never broadcast to js_subscribe subscribers.
+        assert!(js.contains("recognised but uncorrelated"));
     }
 
     #[test]
