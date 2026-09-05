@@ -11,7 +11,7 @@
 //! <blank: 128>
 //! <user functions: 129..=137>  emitted from the IR (emit_func)
 //! <blank: 138>
-//! <epilogue: 139..>            Ffi.kernel polyfill, list helpers, entry point
+//! <epilogue: 139..>            list helpers, FFI-placeholder banner, entry point
 //! ```
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -324,12 +324,13 @@ pub use wasm::pubsub::{
 };
 ";
 
-/// Prelude module paths with no denotation in the wasm module set — a
-/// kernel-wrapper block referencing one of these is dropped from the wasm
-/// prelude by [`wasm_runtime_bindings`], UNLESS the block also matches
-/// [`WASM_PRESENT_OVERRIDES`] (a landed M4 substitute inside an otherwise
-/// mostly-native module). Keyed on module paths (structural), so a prelude
-/// drift auto-adapts.
+/// Runtime call paths shadowed absent on the wasm target even though their module
+/// is declared in [`WASM_RUNTIME_MOD_RS`] — a mostly-native module (`task`,
+/// `time`, `crypto`, `http_client`) whose non-override functions have no wasm32
+/// arm. A kernel-wrapper whose own body call path matches one of these is dropped
+/// from the wasm prelude by [`wasm_runtime_bindings`], UNLESS that exact path is a
+/// [`WASM_PRESENT_OVERRIDES`] entry (a landed browser substitute in the same
+/// module). Keyed on call paths (structural), so a prelude drift auto-adapts.
 const WASM_ABSENT_MODULE_PATHS: &[&str] = &[
     "ipe_runtime::task::",
     "ipe_runtime::http_client::",
@@ -380,28 +381,136 @@ const WASM_PRESENT_OVERRIDES: &[&str] = &[
     "ipe_runtime::task::task_sequence",
 ];
 
-/// The wasm-target kernel-wrapper prelude: [`runtime_bindings`] filtered to
-/// the blocks whose runtime modules exist in [`WASM_RUNTIME_MOD_RS`] (or are
-/// individually allowlisted by [`WASM_PRESENT_OVERRIDES`]). The Layer-1 gate
-/// already denies the kernels behind the dropped wrappers, so no emitted call
-/// site can reference them.
+/// The wasm-target kernel-wrapper prelude: [`runtime_bindings`] filtered to the
+/// wrappers whose OWN `ipe_runtime::<module>::` call path denotes a kernel present
+/// on the browser-wasm target. An allowlist, not a denylist: a wrapper is kept
+/// only when it is classified PRESENT, and a wrapper naming a runtime module
+/// neither classified present nor absent fails loud (IPE-I0203) rather than
+/// defaulting to KEPT — so a new native-only wrapper can never silently ship into
+/// a wasm crate and E0433 after ipe exit-0. The classification reads the wrapper's
+/// body call path (not the comment-inclusive block text), so a doc comment
+/// mentioning another module can neither keep nor drop the wrong wrapper.
+///
+/// A body path is PRESENT iff it is an exact [`WASM_PRESENT_OVERRIDES`] entry, or
+/// its module is declared in [`WASM_RUNTIME_MOD_RS`] and not shadowed by a
+/// [`WASM_ABSENT_MODULE_PATHS`] entry (a mostly-native module whose non-override
+/// functions have no wasm arm). The Layer-1 gate already denies the kernels behind
+/// the dropped wrappers, so no emitted call site can reference them.
 fn wasm_runtime_bindings() -> DResult<String> {
     let full = runtime_bindings()?;
+    let declared = wasm_declared_modules();
     let mut out = String::with_capacity(full.len());
     let mut first = true;
     for block in full.split("\npub fn ") {
-        let keep = WASM_PRESENT_OVERRIDES.iter().any(|p| block.contains(p))
-            || !WASM_ABSENT_MODULE_PATHS.iter().any(|p| block.contains(p));
         if first {
-            // The head segment (IpeError re-export + type aliases).
+            // The head segment (IpeError re-export + type aliases), never a
+            // wrapper.
             out.push_str(block);
             first = false;
-        } else if keep {
+            continue;
+        }
+        if wasm_wrapper_is_present(block, &declared)? {
             out.push_str("\npub fn ");
             out.push_str(block);
         }
     }
     Ok(out)
+}
+
+/// The `pub mod <name>;` module names [`WASM_RUNTIME_MOD_RS`] declares — the set a
+/// wrapper's own call-path module is checked against.
+fn wasm_declared_modules() -> std::collections::BTreeSet<&'static str> {
+    WASM_RUNTIME_MOD_RS
+        .lines()
+        .filter_map(|line| {
+            line.trim()
+                .strip_prefix("pub mod ")
+                .and_then(|rest| rest.strip_suffix(';'))
+        })
+        .collect()
+}
+
+/// Whether one kernel-wrapper `block` (the text following a `\npub fn ` split, so
+/// its signature then body) denotes a browser-wasm-present kernel.
+///
+/// Classifies on the wrapper's OWN `ipe_runtime::<module>::<fn>` call path parsed
+/// from the body (the text after the signature's opening `{`), never the leading
+/// doc comment — a comment mentioning another module cannot mis-route the decision.
+/// Fails loud (IPE-I0203) when the wrapper names a runtime module that is neither
+/// declared present in [`WASM_RUNTIME_MOD_RS`] nor listed absent, so an
+/// unclassified native-only wrapper is rejected at emit rather than shipped.
+fn wasm_wrapper_is_present(
+    block: &str,
+    declared: &std::collections::BTreeSet<&'static str>,
+) -> DResult<bool> {
+    // The wrapper body begins at the signature's opening brace; classify only the
+    // call paths inside it, so a preceding doc comment never contributes a path.
+    let body = block.split_once('{').map_or(block, |(_, rest)| rest);
+    let mut classified = false;
+    let mut present = false;
+    for path in ipe_runtime_call_paths(body) {
+        // An explicit per-function present override wins outright.
+        if WASM_PRESENT_OVERRIDES.contains(&path) {
+            classified = true;
+            present = true;
+            continue;
+        }
+        // A module/function shadowed absent (a mostly-native module's non-override
+        // function) is not present on wasm.
+        if WASM_ABSENT_MODULE_PATHS.iter().any(|p| path.starts_with(p)) {
+            classified = true;
+            continue;
+        }
+        // Otherwise the wrapper is present iff its module is declared in the wasm
+        // module set; a module neither declared nor listed absent is unclassified.
+        let module = path
+            .strip_prefix("ipe_runtime::")
+            .and_then(|rest| rest.split_once("::"))
+            .map(|(m, _)| m);
+        match module {
+            Some(m) if declared.contains(m) => {
+                classified = true;
+                present = true;
+            }
+            _ => {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "backend.wasm_prelude_classify",
+                    detail: format!(
+                        "wasm kernel-wrapper references unclassified runtime path {path:?} \
+                         (neither WASM_RUNTIME_MOD_RS-declared nor WASM_ABSENT_MODULE_PATHS-listed)"
+                    ),
+                });
+            }
+        }
+    }
+    // A wrapper with no `ipe_runtime::` call path (a pure re-export/type alias
+    // helper) carries nothing native to gate — keep it.
+    Ok(present || !classified)
+}
+
+/// Every distinct `ipe_runtime::<module>::<fn>` call path appearing in `body`, as
+/// borrowed slices. Scans for the `ipe_runtime::` prefix and takes the following
+/// `<module>::<fn>` identifier path (segments of ASCII identifier characters
+/// separated by `::`), stopping at the first non-path character.
+fn ipe_runtime_call_paths(body: &str) -> Vec<&str> {
+    const PREFIX: &str = "ipe_runtime::";
+    let mut paths = Vec::new();
+    let mut rest = body;
+    while let Some(idx) = rest.find(PREFIX) {
+        let after = &rest[idx..];
+        let end = after
+            .char_indices()
+            .find(|&(_, c)| !(c.is_ascii_alphanumeric() || c == '_' || c == ':'))
+            .map_or(after.len(), |(i, _)| i);
+        let path = &after[..end];
+        // Only a full `ipe_runtime::<module>::<fn>` path (two `::` after the prefix)
+        // classifies a wrapper; a bare `ipe_runtime::Type` reference is not a call.
+        if path[PREFIX.len()..].contains("::") && !paths.contains(&path) {
+            paths.push(path);
+        }
+        rest = &after[end..];
+    }
+    paths
 }
 
 /// The `--target wasm` entry: `#[wasm_bindgen(start)]` replacing `fn main`.
