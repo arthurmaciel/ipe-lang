@@ -3603,7 +3603,10 @@ fn field_leaf_codecs(
                     kernel_ref(enc_k, sg.fresh(), interner)?,
                     kernel_ref(dec_k, sg.fresh(), interner)?,
                 )),
-                None => Err(bad(CodecAutoRejection::UnsupportedField, field_name.clone())),
+                None => Err(bad(
+                    CodecAutoRejection::UnsupportedField,
+                    field_name.clone(),
+                )),
             }
         }
         // `List t` — `Encode.list <encElem>` / `Decode.list <decElem>`, recursing
@@ -3613,7 +3616,10 @@ fn field_leaf_codecs(
             if interner.resolve(*name) == Some("List") && args.len() == 1 =>
         {
             let Some(elem) = args.first() else {
-                return Err(bad(CodecAutoRejection::UnsupportedField, field_name.clone()));
+                return Err(bad(
+                    CodecAutoRejection::UnsupportedField,
+                    field_name.clone(),
+                ));
             };
             let (enc_elem, dec_elem) = field_leaf_codecs(field, elem, sg, env, interner)?;
             let enc = call_expr(
@@ -3634,7 +3640,10 @@ fn field_leaf_codecs(
             let codec = derive_record_codec(fields, sg, env, interner)?;
             project_codec_enc_dec(&codec, sg, env, interner)
         }
-        _ => Err(bad(CodecAutoRejection::UnsupportedField, field_name.clone())),
+        _ => Err(bad(
+            CodecAutoRejection::UnsupportedField,
+            field_name.clone(),
+        )),
     }
 }
 
@@ -6002,7 +6011,11 @@ fn resolve_unqualified_type_home(name: Symbol, ctx: &TypeCtx) -> DResult<Vec<Sym
     if let Some(h) = ctx.type_home_map.get(&name) {
         return Ok(h.clone());
     }
-    let name_s = resolve_or_bug(ctx.interner, name, "ipe_canon::resolve_unqualified_type_home")?;
+    let name_s = resolve_or_bug(
+        ctx.interner,
+        name,
+        "ipe_canon::resolve_unqualified_type_home",
+    )?;
     if RESERVED_BUILTIN_TYPES.contains(&name_s)
         || EXTRA_BUILTIN_TYPE_NAMES.contains(&name_s)
         || KERNEL_IMPLICIT_BUILTIN_TYPE_NAMES.contains(&name_s)
@@ -7658,7 +7671,10 @@ mod alias_ctor_gate_tests {
     fn resolve_or_bug_returns_text_for_interned_symbol() {
         let mut i = Interner::new();
         let s = i.intern("Widget").expect("intern");
-        assert_eq!(resolve_or_bug(&i, s, "test_site").expect("resolves"), "Widget");
+        assert_eq!(
+            resolve_or_bug(&i, s, "test_site").expect("resolves"),
+            "Widget"
+        );
     }
 }
 

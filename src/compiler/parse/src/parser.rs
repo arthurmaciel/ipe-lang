@@ -210,7 +210,12 @@ impl<'a> Parser<'a> {
         // never read again because `pos` only advances.
         let tok = std::mem::replace(
             &mut self.toks[self.pos],
-            Token { kind: Tok::Underscore, line: 0, col: 0, span: Span::DUMMY },
+            Token {
+                kind: Tok::Underscore,
+                line: 0,
+                col: 0,
+                span: Span::DUMMY,
+            },
         );
         self.pos += 1;
         Ok(tok)
@@ -1543,7 +1548,12 @@ impl<'a> Parser<'a> {
             // no new type/canon/backend node is needed.
             Tok::Dot => self.parse_field_accessor(span, depth),
             kind => Err(Self::unexpected_token(
-                &Token { kind, line: 0, col: 0, span },
+                &Token {
+                    kind,
+                    line: 0,
+                    col: 0,
+                    span,
+                },
                 &[Expected::Expression],
             )),
         }

@@ -71,10 +71,7 @@ pub fn annotate_full(
 // Syntax-only annotate
 // ---------------------------------------------------------------------------
 
-pub fn annotate_syntax(
-    syntax: &ipe_syntax::Module,
-    interner: &Interner,
-) -> Vec<AnnotatedToken> {
+pub fn annotate_syntax(syntax: &ipe_syntax::Module, interner: &Interner) -> Vec<AnnotatedToken> {
     let mut raw: Vec<Raw> = Vec::new();
 
     syntax_walk(&mut raw, syntax, interner);
@@ -691,9 +688,7 @@ mod tests {
     fn type_kw_span_survives_long_comment() {
         // Construct a comment that is > 64 bytes, then a `type` declaration.
         let long_comment = "-- ".to_owned() + &"x".repeat(70) + "\n";
-        let src = format!(
-            "module Main exposing (..)\n\n{long_comment}type Color = Red | Blue\n"
-        );
+        let src = format!("module Main exposing (..)\n\n{long_comment}type Color = Red | Blue\n");
         let (syntax, interner) = parse(&src);
         let tokens = annotate_syntax(&syntax, &interner);
         let type_kw = tokens
@@ -704,7 +699,8 @@ mod tests {
                         == Some("type")
             })
             .expect("a `type` keyword token must be present");
-        let lexed = &src[type_kw.byte_start as usize..(type_kw.byte_start + type_kw.byte_len) as usize];
+        let lexed =
+            &src[type_kw.byte_start as usize..(type_kw.byte_start + type_kw.byte_len) as usize];
         assert_eq!(lexed, "type");
     }
 

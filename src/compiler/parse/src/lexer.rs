@@ -253,10 +253,7 @@ impl<'src> Lexer<'src> {
                 // increments the depth; a `-}` decrements it; depth 0 ends.
                 // A `{-|` opener is a doc-comment token — leave it for the
                 // main lex loop to emit as [`Tok::DocComment`].
-                Some('{')
-                    if self.peek2() == Some('-')
-                        && self.peek3() != Some('|') =>
-                {
+                Some('{') if self.peek2() == Some('-') && self.peek3() != Some('|') => {
                     let lo = self.offset();
                     self.advance(); // consume `{`
                     self.advance(); // consume `-`
@@ -338,10 +335,7 @@ pub fn lex(src: &str) -> DResult<Vec<Token>> {
         let col = lx.col;
         let lo = lx.offset();
 
-        let kind = if c == '{'
-            && lx.peek2() == Some('-')
-            && lx.peek3() == Some('|')
-        {
+        let kind = if c == '{' && lx.peek2() == Some('-') && lx.peek3() == Some('|') {
             lex_doc_comment(&mut lx, lo)?
         } else if c.is_ascii_digit() {
             lex_number(&mut lx, lo)?
