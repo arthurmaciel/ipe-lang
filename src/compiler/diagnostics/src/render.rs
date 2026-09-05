@@ -1568,22 +1568,11 @@ fn name_label(msg: &NameError) -> Option<String> {
                  placements"
             ))
         }
-        NameError::RustNameFold {
-            first,
-            second,
-            rust_name,
-            kind,
-        } => Some(format!(
-            "`{first}` and `{second}` are distinct Ipê {}, but after name mangling \
-             they both become the Rust {} `{rust_name}`, which would define one name \
-             twice in the emitted crate. This is a naming collision, not a genuine \
-             redefinition — rename one of the two so they fold to different Rust names",
-            kind.noun(),
-            match kind {
-                crate::diagnostic::RustNameFoldKind::Value => "value",
-                crate::diagnostic::RustNameFoldKind::Type => "type",
-            },
-        )),
+        // The span is always DUMMY (the IR carries none), so this label never
+        // reaches a caret; the fix rides the help note instead (see `name_help`),
+        // which renders with or without a snippet. Returning `None` also avoids
+        // duplicating that note in the snippet-free `plain_message` path.
+        NameError::RustNameFold { .. } => None,
         NameError::Unknown => None,
     }
 }

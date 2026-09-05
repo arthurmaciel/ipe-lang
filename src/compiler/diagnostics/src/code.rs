@@ -286,7 +286,7 @@ code! {
     /// two distinct Ipê definitions mangle to one generated Rust name, which
     /// would emit two Rust items under one identifier (E0428) — reported with
     /// both Ipê names and the shared Rust name so the fix is a rename
-    IPE_N0048 = "IPE-N0048", "two Ipê definitions fold to one generated Rust name", "IPE-N0048";
+    IPE_N0048 = "IPE-N0048", "two definitions fold to one generated Rust name", "IPE-N0048";
 
     // -----------------------------------------------------------------------
     // Type (IPE-T####)

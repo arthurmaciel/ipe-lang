@@ -1,0 +1,5 @@
+-- TWO IPê DEFINITIONS FOLD TO ONE GENERATED RUST NAME ----- test.ipe
+
+Two different values — `firstName` and `first_name` — end up with the same generated name `IpeHasFirstName`, so I can't emit them both.
+
+IPE-N0048 · run `ipe doc IPE-N0048`

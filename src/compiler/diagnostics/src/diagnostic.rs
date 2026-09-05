@@ -2156,6 +2156,23 @@ fn name_help(msg: &NameError, span: Span) -> Vec<HelpLine> {
             )
             .into_boxed_str(),
         )],
+        // The IR carries no source spans, so there is no caret to hang the fix
+        // label on; carry it as a note instead, which renders whether or not a
+        // snippet is shown.
+        NameError::RustNameFold {
+            first,
+            second,
+            rust_name,
+            kind,
+        } => vec![HelpLine::Note(
+            format!(
+                "`{first}` and `{second}` are distinct Ipê {}, but after name mangling both \
+                 become the Rust name `{rust_name}`, which can only be defined once. Rename one \
+                 of the two so they fold to different Rust names.",
+                kind.noun(),
+            )
+            .into_boxed_str(),
+        )],
         NameError::Unknown
         | NameError::AliasArity { .. }
         | NameError::BuiltinTypeArity { .. }
@@ -2180,7 +2197,6 @@ fn name_help(msg: &NameError, span: Span) -> Vec<HelpLine> {
         | NameError::CustomElementCtorMalformed { .. }
         | NameError::RuntimeBranchedMain
         | NameError::ModuleNotAllowedInPlacement(..)
-        | NameError::RustNameFold { .. }
         | NameError::WebInitPolyArg => Vec::new(), // no span-based help
     }
 }
