@@ -200,6 +200,22 @@ pub fn print_command_header() {
     eprint!("{}", command_header(colored));
 }
 
+/// A framed, guttered status line: a leading success/failure glyph, then the
+/// message. `ok` picks the green check or the red cross; `color` toggles ANSI.
+///
+/// The one way a human-mode command reports a completed step — replacing a bare
+/// left-flush spinner line with `<glyph> <message>` plus the 2-space gutter.
+#[must_use]
+pub fn status_line(ok: bool, message: &str, color: bool) -> String {
+    let p = Palette::select(color);
+    let (glyph, tint) = if ok {
+        (glyph::OK, p.green)
+    } else {
+        (glyph::FAIL, p.red)
+    };
+    frame(&gutter(&format!("{tint}{glyph}{} {message}", p.reset)))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
