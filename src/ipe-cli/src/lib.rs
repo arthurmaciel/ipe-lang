@@ -3301,6 +3301,7 @@ pub(crate) fn run_watch(rest: &[String]) -> Result<(), CliError> {
     opts.quiet = args.quiet;
     opts.bluegreen = bluegreen_enabled();
     opts.reset_state = args.reset_state;
+    opts.debugger = args.debugger;
     // Version header: human mode only (not quiet, not piped).
     if !args.quiet {
         use std::io::IsTerminal as _;

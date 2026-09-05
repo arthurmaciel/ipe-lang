@@ -982,6 +982,11 @@ pub struct WatchArgs {
     /// the next rebuild, bypassing the additive-splice checkpoint. Dev escape
     /// hatch; off by default.
     pub reset_state: bool,
+    /// `--debugger` — compile the development-only time-travelling debugger into
+    /// the rebuilt runtime loop, exposing the in-app debugger overlay. Off by
+    /// default (the recorder adds runtime weight); the same opt-in `ipe run` and
+    /// `ipe build` offer.
+    pub debugger: bool,
 }
 
 /// Parse `ipe watch`'s argument tail. `--port` is parsed into a `u16` at this
@@ -999,6 +1004,7 @@ pub fn parse_watch(rest: &[String]) -> Result<WatchArgs, CliError> {
     let mut port: Option<u16> = None;
     let mut quiet = false;
     let mut reset_state = false;
+    let mut debugger = false;
     while let Some(flag) = it.next() {
         match flag.as_str() {
             "--out" => set_once(
@@ -1022,6 +1028,7 @@ pub fn parse_watch(rest: &[String]) -> Result<WatchArgs, CliError> {
             }
             "-q" | "--quiet" => quiet = true,
             "--reset-state" => reset_state = true,
+            "--debugger" => debugger = true,
             other => {
                 return Err(usage_unknown_flag("watch", other));
             }
@@ -1036,6 +1043,7 @@ pub fn parse_watch(rest: &[String]) -> Result<WatchArgs, CliError> {
         port: port.unwrap_or(8000),
         quiet,
         reset_state,
+        debugger,
     })
 }
 
@@ -1522,6 +1530,13 @@ mod tests {
     fn watch_rejects_build_flags() {
         // `--static` belongs to build/run, never watch.
         assert!(parse_watch(&s(&["--static"])).is_err());
+    }
+
+    #[test]
+    fn watch_debugger_flag_off_by_default_and_parses() {
+        assert!(!parse_watch(&[]).expect("empty watch").debugger);
+        let a = parse_watch(&s(&["Main.ipe", "--debugger"])).expect("debugger");
+        assert!(a.debugger);
     }
 
     // ---- fix ----------------------------------------------------------------
