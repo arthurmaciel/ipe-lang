@@ -2,92 +2,134 @@
 use super::{IpeMaybe, IpeResult, IpeTask, ok_res, str_err};
 
 // `std::env::set_var`/`remove_var` are documented as NOT thread-safe: a mutator
-// can reallocate the C `environ` block while another thread READS it
-// (`std::env::var` walks `environ`), which is a data race / use-after-free by the
-// std + POSIX contract — not just a mutator↔mutator hazard. Both are reachable
-// from Ipê purely through env-Task composition under `Task.parallel`
-// (`System.setenv`/`unsetenv`/`loadEnv` are mutators; `System.getenv*` are
-// readers). Serialise BOTH sides behind one process-global RwLock: mutators take
-// the write lock (exclusive), readers take the read lock (shared with each other,
-// excluded against any mutator). This closes the reader↔mutator race for every
-// Ipê-originated access. (A non-Ipê dependency reading `environ` without this lock
-// is outside our reach — but every Ipê path is now serialised.)
-static ENV_LOCK: std::sync::RwLock<()> = std::sync::RwLock::new(());
+// reallocates the C `environ` block while another thread READS it — and the
+// racing reader is NOT only `std::env::var`. libc readers (`getenv`, and
+// `getaddrinfo` reached through `to_socket_addrs`), and any third-party crate,
+// walk `environ` WITHOUT taking any lock we control. A process-global RwLock over
+// the real environ can serialise only OUR readers, never those — so a mutator
+// holding a write lock still races a concurrent libc `getaddrinfo`, a real
+// use-after-free reachable from safe Ipê (`Task.parallel [System.setenv, Http.get]`).
+//
+// The runtime therefore NEVER mutates the real `environ` after startup. Ipê env
+// writes land in a process-local overlay map guarded by this `RwLock`; every Ipê
+// read (`read_env_var`/`read_env_var_os`) consults the overlay first and the real
+// (immutable-after-startup) environ second. Children spawned by `Process.*`
+// receive the overlay applied explicitly onto their `Command` env, so an
+// overlay-set var still reaches a subprocess without touching the parent's
+// `environ`. No `environ` mutation ⇒ no reader↔mutator race with ANY reader,
+// ours or libc's — the hazard is removed, not merely serialised on one side.
+type EnvOverlay = std::collections::HashMap<String, Option<String>>;
 
-/// Read an environment variable under the shared env read lock (excluded against
-/// any concurrent mutator so the `environ` walk can't race a realloc). `pub(crate)`
-/// so every non-test process-env read in the crate routes through this one lock —
-/// that's what makes the reader↔mutator serialisation true by construction.
-pub(crate) fn read_env_var(key: &str) -> Result<String, std::env::VarError> {
-    let _guard = ENV_LOCK
-        .read()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    std::env::var(key)
+/// Process-local env overlay. `Some(value)` shadows/introduces a variable;
+/// `None` is a tombstone that hides a variable present in the real environ. An
+/// absent key defers to the real environ. Guarded so concurrent Ipê readers and
+/// writers are consistent; the real `environ` is never mutated, so no reader of
+/// any origin can race a mutation.
+static ENV_OVERLAY: std::sync::LazyLock<std::sync::RwLock<EnvOverlay>> =
+    std::sync::LazyLock::new(|| std::sync::RwLock::new(std::collections::HashMap::new()));
+
+/// A key/value pair Ipê may write to the env overlay: a key that is empty,
+/// contains `=` or NUL, or a value containing NUL is rejected (would be an
+/// invalid environment entry). `pub(crate)` so child-spawn paths reuse the same
+/// admission rule the overlay applies.
+pub(crate) fn env_entry_is_valid(key: &str, val: &str) -> bool {
+    !(key.is_empty() || key.contains('=') || key.contains('\0') || val.contains('\0'))
 }
 
-/// Read an environment variable as an `OsString` under the shared env read lock —
-/// the `var_os` companion of `read_env_var` (same poison handling, same race
-/// guarantee). `None` when unset or — unlike `read_env_var` — when the value is
-/// not valid Unicode. Gated to the feature whose module actually reads `var_os`
+/// Read an environment variable: the overlay wins over the real environ, so a
+/// value Ipê set/removed via `System.setenv`/`unsetenv`/`loadEnv` is observed
+/// consistently. `pub(crate)` so every non-test process-env read in the crate
+/// routes through this one accessor — that is what makes the overlay authoritative
+/// for Ipê by construction.
+pub(crate) fn read_env_var(key: &str) -> Result<String, std::env::VarError> {
+    let overlay = ENV_OVERLAY
+        .read()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    match overlay.get(key) {
+        Some(Some(v)) => Ok(v.clone()),
+        Some(None) => Err(std::env::VarError::NotPresent),
+        None => std::env::var(key),
+    }
+}
+
+/// Read an environment variable as an `OsString` — the `var_os` companion of
+/// `read_env_var` (same overlay-first semantics). `None` when unset (or masked by
+/// an overlay tombstone) or — unlike `read_env_var` — when the real value is not
+/// valid Unicode. Gated to the feature whose module actually reads `var_os`
 /// (`tui` — the `NO_COLOR` probe); widen the gate when another feature gains a
 /// `var_os` reader, so it never sits as dead code under `-D warnings`.
 #[cfg(feature = "tui")]
 pub(crate) fn read_env_var_os(key: &str) -> Option<std::ffi::OsString> {
-    let _guard = ENV_LOCK.read().unwrap_or_else(|p| p.into_inner());
-    std::env::var_os(key)
+    let overlay = ENV_OVERLAY
+        .read()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    match overlay.get(key) {
+        Some(Some(v)) => Some(std::ffi::OsString::from(v)),
+        Some(None) => None,
+        None => std::env::var_os(key),
+    }
 }
 
-/// Set an environment variable under the exclusive env write lock.
+/// Snapshot the overlay as explicit child-env directives: `(key, Some(val))` sets
+/// the var on the child, `(key, None)` removes it (so a tombstone masks an
+/// inherited value). Applied by the `Process.*` spawn paths ON TOP of the
+/// inherited real environ, so a child observes exactly the env Ipê observes
+/// without the parent ever mutating its own `environ`.
+pub(crate) fn env_overlay_snapshot() -> Vec<(String, Option<String>)> {
+    let overlay = ENV_OVERLAY
+        .read()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    overlay
+        .iter()
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect()
+}
+
+/// Set an environment variable in the process-local overlay (never the real
+/// `environ`). A key/value the overlay would reject (`env_entry_is_valid`) is a
+/// silent no-op rather than a panic.
 pub(crate) fn locked_set_var(key: &str, val: &str) {
-    // std::env::set_var PANICS on an empty key, a key containing '=' or NUL, or a
-    // value containing NUL. Skip such a key/value (no-op) rather than panic.
-    if key.is_empty() || key.contains('=') || key.contains('\0') || val.contains('\0') {
+    if !env_entry_is_valid(key, val) {
         return;
     }
-    let _guard = ENV_LOCK
+    let mut overlay = ENV_OVERLAY
         .write()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    // SAFETY: `set_var` is `unsafe` in Rust 2024 because a concurrent reader
-    // walking `environ` can race the mutation. The exclusive `ENV_LOCK` write
-    // guard held here excludes every Ipê-originated reader (all route through
-    // `read_env_var`/`read_env_var_os`, which take the shared read lock), so no
-    // such reader can run during this write.
-    unsafe { std::env::set_var(key, val) };
+    overlay.insert(key.to_owned(), Some(val.to_owned()));
 }
 
-/// Set an environment variable ONLY if it is currently absent, performing the
-/// presence check and the set atomically under a SINGLE write-lock acquisition.
-/// This avoids the TOCTOU window a separate `read_env_var_os` + `locked_set_var`
-/// pair would open (a concurrent mutator could set the key between the two lock
-/// acquisitions). Same invalid-key/value guard as `locked_set_var` — never panics.
+/// Set an overlay variable ONLY if it is currently absent (in BOTH the overlay
+/// and the real environ), performing the presence check and the set atomically
+/// under a SINGLE write-lock acquisition — no TOCTOU window a separate read + set
+/// would open. Same admission rule as `locked_set_var` — never panics.
 pub(crate) fn locked_set_var_if_absent(key: &str, val: &str) {
-    if key.is_empty() || key.contains('=') || key.contains('\0') || val.contains('\0') {
+    if !env_entry_is_valid(key, val) {
         return;
     }
-    let _guard = ENV_LOCK
+    let mut overlay = ENV_OVERLAY
         .write()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    if std::env::var_os(key).is_none() {
-        // SAFETY: held under the exclusive `ENV_LOCK` write guard, which excludes
-        // every Ipê-originated reader (all take the shared read lock) — see
-        // `locked_set_var`. The presence check and set share this one acquisition.
-        unsafe { std::env::set_var(key, val) };
+    let absent = match overlay.get(key) {
+        Some(Some(_)) => false,
+        Some(None) => true,
+        None => std::env::var_os(key).is_none(),
+    };
+    if absent {
+        overlay.insert(key.to_owned(), Some(val.to_owned()));
     }
 }
 
-/// Remove an environment variable under the exclusive env write lock.
+/// Remove an environment variable: record a tombstone in the overlay so the key
+/// reads as unset even when present in the real environ. An empty/`=`-bearing/NUL
+/// key is a no-op (never a valid var to remove).
 pub(crate) fn locked_remove_var(key: &str) {
-    // std::env::remove_var panics on the same invalid keys as set_var — guard it.
     if key.is_empty() || key.contains('=') || key.contains('\0') {
         return;
     }
-    let _guard = ENV_LOCK
+    let mut overlay = ENV_OVERLAY
         .write()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    // SAFETY: held under the exclusive `ENV_LOCK` write guard, which excludes
-    // every Ipê-originated reader (all take the shared read lock) — see
-    // `locked_set_var`.
-    unsafe { std::env::remove_var(key) };
+    overlay.insert(key.to_owned(), None);
 }
 
 #[must_use]
@@ -228,16 +270,35 @@ where
 /// `stdin` is closed (`Stdio::null`) so a child reading stdin gets EOF and
 /// cannot block the capture. The child is reaped on every exit path via
 /// [`ChildGuard`].
+/// Apply the process-local env overlay to a child `Command`: overlay sets become
+/// `env`, tombstones become `env_remove`. The runtime never mutates its own
+/// `environ`, so without this a child would inherit only the real environ and
+/// miss every Ipê `System.setenv`/`unsetenv`/`loadEnv`. Applied BEFORE any
+/// per-child override so an explicit override still wins.
+fn apply_env_overlay(builder: &mut std::process::Command) {
+    for (k, v) in env_overlay_snapshot() {
+        match v {
+            Some(val) => {
+                builder.env(k, val);
+            }
+            None => {
+                builder.env_remove(k);
+            }
+        }
+    }
+}
+
 fn process_run_sync(cmd: &str, args: &[String], cap: u64) -> Result<ProcessCapture, String> {
     use std::process::{Command, Stdio};
 
-    let child = Command::new(cmd)
+    let mut builder = Command::new(cmd);
+    builder
         .args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| format!("{cmd}: {e}"))?;
+        .stderr(Stdio::piped());
+    apply_env_overlay(&mut builder);
+    let child = builder.spawn().map_err(|e| format!("{cmd}: {e}"))?;
     let mut guard = ChildGuard(Some(child));
 
     // Per-stream read bound; passed by value to each capture thread (no shared
@@ -394,9 +455,11 @@ fn process_run_with_sync(
         builder.current_dir(dir);
     }
 
+    // Overlay first (the env Ipê itself observes), then per-child overrides win.
+    apply_env_overlay(&mut builder);
     for (k, v) in env_overrides {
-        // Guard against invalid keys/values — same policy as `locked_set_var`.
-        if k.is_empty() || k.contains('=') || k.contains('\0') || v.contains('\0') {
+        // Same admission rule as the overlay writers.
+        if !env_entry_is_valid(k, v) {
             continue;
         }
         builder.env(k, v);
@@ -677,9 +740,11 @@ fn process_run_in_pty_sync(cfg: ProcessRunInPtyCfg, cap: u64) -> Result<ProcessP
     if let IpeMaybe::Just(dir) = &cfg.cwd {
         builder.current_dir(dir);
     }
+    // Overlay first (the env Ipê itself observes), then per-child overrides win.
+    apply_env_overlay(&mut builder);
     for (k, v) in &cfg.env {
-        // Same key/value guard as `process_run_with_sync` / `locked_set_var`.
-        if k.is_empty() || k.contains('=') || k.contains('\0') || v.contains('\0') {
+        // Same admission rule as the overlay writers.
+        if !env_entry_is_valid(k, v) {
             continue;
         }
         builder.env(k, v);
@@ -999,6 +1064,89 @@ mod exit_hook_tests {
         assert!(
             CALLS.load(Ordering::SeqCst) >= 1,
             "registered exit hook must run"
+        );
+    }
+}
+
+#[cfg(test)]
+mod env_overlay_tests {
+    use super::*;
+
+    /// Overlay set is observed by the reader; a tombstone masks a value present
+    /// in the real environ; an untouched key still defers to the real environ.
+    /// Uses a process-unique key so parallel test binaries never collide.
+    #[test]
+    fn overlay_set_remove_and_passthrough() {
+        let key = format!("IPE_OVERLAY_PROBE_{}", std::process::id());
+
+        // Absent everywhere → the reader reports unset.
+        assert!(read_env_var(&key).is_err(), "probe must start unset");
+
+        // Overlay set is observed WITHOUT mutating the real environ.
+        locked_set_var(&key, "value");
+        assert_eq!(read_env_var(&key).as_deref(), Ok("value"));
+        assert!(
+            std::env::var_os(&key).is_none(),
+            "the real environ must NOT be mutated by an Ipê env write"
+        );
+
+        // set-if-absent does not override an existing overlay value.
+        locked_set_var_if_absent(&key, "other");
+        assert_eq!(read_env_var(&key).as_deref(), Ok("value"));
+
+        // A tombstone masks the overlay value (reads as unset).
+        locked_remove_var(&key);
+        assert!(read_env_var(&key).is_err(), "tombstone must mask the value");
+
+        // Passthrough: a key never touched by the overlay reads through to the
+        // real environ (PATH is present on every supported target).
+        assert!(
+            read_env_var("PATH").is_ok(),
+            "an untouched key must defer to the real environ"
+        );
+    }
+
+    /// Soundness core: an Ipê env write must NEVER mutate the real `environ`,
+    /// because a concurrent libc reader (`getaddrinfo` via `to_socket_addrs`)
+    /// walks `environ` under no lock we hold. This drives that exact concurrent
+    /// composition — a writer thread hammering the overlay while a reader thread
+    /// resolves addresses — and asserts the writes stayed OUT of the real
+    /// environ. Under the pre-fix `set_var` design this same interleaving is the
+    /// use-after-free the issue describes.
+    #[test]
+    fn concurrent_writes_never_touch_real_environ() {
+        use std::net::ToSocketAddrs;
+
+        let key = format!("IPE_OVERLAY_RACE_{}", std::process::id());
+        let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+
+        let writer = {
+            let key = key.clone();
+            let stop = stop.clone();
+            std::thread::spawn(move || {
+                let mut i: u64 = 0;
+                while !stop.load(std::sync::atomic::Ordering::Relaxed) {
+                    locked_set_var(&key, &i.to_string());
+                    locked_remove_var(&key);
+                    i = i.wrapping_add(1);
+                }
+            })
+        };
+
+        let reader = std::thread::spawn(move || {
+            for _ in 0..200 {
+                // Exercises libc `getaddrinfo`, the unlocked `environ` reader.
+                let _ = "localhost:0".to_socket_addrs().map(Iterator::count);
+            }
+        });
+
+        let _ = reader.join();
+        stop.store(true, std::sync::atomic::Ordering::Relaxed);
+        let _ = writer.join();
+
+        assert!(
+            std::env::var_os(&key).is_none(),
+            "an Ipê env write leaked into the real environ — the environ-reader race is back"
         );
     }
 }
