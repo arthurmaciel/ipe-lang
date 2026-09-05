@@ -23,6 +23,9 @@ on:
   push:
     branches: [main, master]
   pull_request:
+    # A PR opened as a draft skips the heavy gates (enforced in the `changes`
+    # job); marking it ready-for-review re-fires the full suite once.
+    types: [opened, synchronize, reopened, ready_for_review]
   schedule:
     - cron: '0 4 * * *'        # nightly full sweep (catches dep/upstream drift)
   workflow_dispatch: {}
@@ -55,8 +58,8 @@ jobs:
   changes:
     runs-on: ubuntu-latest
     outputs:
-      wasm: ${{ steps.filter.outputs.wasm }}
-      code: ${{ steps.filter.outputs.code }}
+      wasm: ${{ steps.gate.outputs.wasm }}
+      code: ${{ steps.gate.outputs.code }}
     steps:
       - uses: actions/checkout@v7
       - uses: dorny/paths-filter@v3
@@ -84,6 +87,20 @@ jobs:
               # and asserted by the init_subcommand test. Every other root *.md /
               # docs/** / misc/** file is prose no test reads — safe to skip.
               - 'AGENTS.md'
+      - id: gate
+        # A draft PR forces both gates false, so every code/wasm-gated job skips;
+        # push/schedule have no draft and pass the filter result through. Marking
+        # the PR ready-for-review re-fires this workflow with draft unset.
+        env:
+          IS_DRAFT: ${{ github.event.pull_request.draft }}
+        run: |
+          if [ "$IS_DRAFT" = "true" ]; then
+            echo "code=false" >> "$GITHUB_OUTPUT"
+            echo "wasm=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "code=${{ steps.filter.outputs.code }}" >> "$GITHUB_OUTPUT"
+            echo "wasm=${{ steps.filter.outputs.wasm }}" >> "$GITHUB_OUTPUT"
+          fi
 
   # Fail-closed guard against clone bloat: a commit that tracks a build artifact
   # (a target/ directory, an .rlib/.rmeta/.o/.a/.so/.dylib/.wasm blob) or any file
