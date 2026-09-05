@@ -11776,24 +11776,28 @@ impl StdlibKernel {
     /// verified against the runtime source.
     ///
     /// The whitelist is keyed on the kernel's canonical qualifier for the
-    /// families that are pure in whole, with per-kernel carve-outs for the
-    /// mixed ones (`Time.sleep`, `System.loadEnv`, and the reactor-driven
-    /// `Task` combinators are reactor-requiring; the rest of those families are
-    /// not).
+    /// families that are pure in WHOLE. The mixed families (`Time`, `System`)
+    /// carry both pure and reactor-driven members, so admitting them by
+    /// qualifier would let any future reactor-driven member added under that
+    /// qualifier default to pure — a silent hang. Those two families are held
+    /// OFF the qualifier whitelist; their proven-pure members are admitted one
+    /// by one by NAME ([`Self::is_reactor_free_time_or_system`]), so a new
+    /// member of either defaults to reactor-requiring until it is audited and
+    /// listed. `Task` is likewise mixed and never gets a qualifier entry: its
+    /// reactor members are named below and its pure `BackoffStrategy`
+    /// constructors are named here.
     ///
     /// Not `const`: the whole-family arms compare the kernel's canonical
     /// qualifier (`&str`), which stable Rust cannot match in a `const fn`.
     #[must_use]
     pub fn requires_async_runtime(self) -> bool {
-        // The reactor-driven members of otherwise-pure families. `Task.run` /
-        // `Task.perform` block on an inner task whose purity is not knowable
-        // here; `Task.parallel` spawns; `Task.retryWith` sleeps; `Task.attempt`
-        // bridges into the TEA command loop. `Time.sleep` / `Time.every` and
-        // `System.loadEnv` (a `spawn_blocking` offload) likewise touch the
-        // reactor. All are fail-closed to reactor-requiring by NAME so a future
-        // rename cannot silently demote them.
-        // `BackoffStrategy` constructors are pure zero-arity values; they carry no
-        // future and never touch the reactor.
+        // `BackoffStrategy` constructors are pure zero-arity values under the
+        // mixed `Task` qualifier; they carry no future and never touch the
+        // reactor, so they are admitted by name. Every other `Task` member —
+        // `Task.run` / `Task.perform` block on an inner task of unknown purity,
+        // `Task.parallel` spawns, `Task.retryWith` sleeps, `Task.attempt`
+        // bridges into the TEA loop — has no qualifier entry and falls to the
+        // reactor-requiring default below.
         if matches!(
             self,
             Self::BackoffLinear
@@ -11803,26 +11807,19 @@ impl StdlibKernel {
         ) {
             return false;
         }
-        if matches!(
-            self,
-            Self::TaskRun
-                | Self::TaskPerform
-                | Self::TaskParallel
-                | Self::TaskRetryWith
-                | Self::TaskAttempt
-                | Self::TimeSleep
-                | Self::TimeEvery
-                | Self::SystemLoadEnv
-        ) {
-            return true;
+        // The proven-pure members of the mixed `Time` / `System` families are
+        // admitted one by one by NAME, so a new member of either family
+        // defaults to reactor-requiring below.
+        if self.is_reactor_free_time_or_system() {
+            return false;
         }
         // Whole-family pure qualifiers: every kernel under these qualifiers
         // resolves without the reactor (synchronous computation, or a
         // synchronous `std` effect wrapped in an already-`Ready` future).
-        // Verified reactor-free in the runtime module for each. The reactor
-        // members of the mixed `Time` / `System` / `Task` families were already
-        // returned above, so reaching this arm under `Time` / `System` means a
-        // pure member. A qualifier not listed here is reactor-requiring.
+        // Verified reactor-free in the runtime module for each. The mixed
+        // `Time` / `System` / `Task` families are deliberately absent — their
+        // pure members were admitted by name above. A qualifier not listed here
+        // is reactor-requiring.
         !matches!(
             self.decl().qualifier,
             "Log"
@@ -11853,8 +11850,43 @@ impl StdlibKernel {
                 | "Random"
                 | "Io"
                 | "Sql"
-                | "Time"
-                | "System"
+        )
+    }
+
+    /// `true` for the individually-audited, reactor-free members of the mixed
+    /// `Time` and `System` families. These families each carry a reactor-driven
+    /// member (`Time.sleep` / `Time.every` drive a tokio timer; `System.loadEnv`
+    /// is a `spawn_blocking` offload), so neither can be admitted whole by
+    /// qualifier without letting a future reactor-driven member default to pure.
+    /// Membership here is an allow-list of the proven-pure members by name: a
+    /// kernel added later under `Time` or `System` is absent, so
+    /// [`Self::requires_async_runtime`] classifies it reactor-requiring until it
+    /// is audited and added here.
+    #[must_use]
+    const fn is_reactor_free_time_or_system(self) -> bool {
+        matches!(
+            self,
+            Self::TimeNow
+                | Self::TimeUnixMillis
+                | Self::TimeTimeString
+                | Self::TimeIsLeapYear
+                | Self::TimeDaysInMonth
+                | Self::TimeFormat
+                | Self::TimeFormatHTTP
+                | Self::TimeFormatISO8601
+                | Self::TimeFormatRFC3339
+                | Self::TimeAddMillis
+                | Self::TimeDiffMillis
+                | Self::SystemArgs
+                | Self::SystemGetenv
+                | Self::SystemGetenvOr
+                | Self::SystemGetArg
+                | Self::SystemGetenvInt
+                | Self::SystemGetenvBool
+                | Self::SystemSetenv
+                | Self::SystemUnsetenv
+                | Self::SystemCwd
+                | Self::SystemExit
         )
     }
 
@@ -12880,71 +12912,89 @@ mod tests {
     /// fires).
     #[test]
     fn async_runtime_classification_is_fail_closed() {
-        // The whole-family pure qualifiers (every kernel under them is
-        // reactor-free) plus the reactor members of the mixed families that are
-        // carved out by name.
-        const PURE_QUALIFIERS: &[&str] = &[
-            "Log",
-            "String",
-            "Char",
-            "List",
-            "Basics",
-            "Maybe",
-            "Result",
-            "Math",
-            "Bitwise",
-            "Dict",
-            "Set",
-            "Bytes",
-            "Encoding",
-            "JsonEnc",
-            "JsonDec",
-            "JsonDecP",
-            "Uuid",
-            "Decimal",
-            "Money",
-            "Secret",
-            "Regex",
-            "Path",
-            "Locale",
-            "Error",
-            "CssSafety",
-            "Random",
-            "Io",
-            "Sql",
-            "Time",
-            "System",
-        ];
-        // Reactor-driven carve-outs inside the otherwise-pure `Time` / `System`
-        // / `Task` families.
-        let reactor_carveouts = |k: StdlibKernel| {
-            matches!(
+        // Ground truth is an INDEPENDENT hand-audited enumeration of the
+        // reactor-FREE kernels — not a copy of the production qualifier formula.
+        // A kernel is reactor-free iff its runtime denotation drives its future
+        // to `Ready` without a tokio timer, socket, spawn, or `spawn_blocking`
+        // offload. Every kernel NOT listed here must classify reactor-requiring;
+        // in particular the mixed-family reactor members (`Time.sleep`,
+        // `Time.every`, `System.loadEnv`, the reactor `Task` combinators) are
+        // absent, so this table catches the exact drift — a new reactor member
+        // under a mixed qualifier wrongly admitted as pure — that the invariant
+        // guards. The listed pure members of `Time` / `System` were each audited
+        // against their runtime source.
+        let reactor_free = |k: StdlibKernel| -> bool {
+            let pure_time_system = matches!(
                 k,
-                StdlibKernel::TaskRun
-                    | StdlibKernel::TaskPerform
-                    | StdlibKernel::TaskParallel
-                    | StdlibKernel::TaskRetryWith
-                    | StdlibKernel::TaskAttempt
-                    | StdlibKernel::TimeSleep
-                    | StdlibKernel::TimeEvery
-                    | StdlibKernel::SystemLoadEnv
-            )
-        };
-        // `BackoffStrategy` constructors are pure zero-arity values under the
-        // `"Task"` qualifier; they need an explicit pure exemption.
-        let pure_exceptions = |k: StdlibKernel| {
-            matches!(
+                StdlibKernel::TimeNow
+                    | StdlibKernel::TimeUnixMillis
+                    | StdlibKernel::TimeTimeString
+                    | StdlibKernel::TimeIsLeapYear
+                    | StdlibKernel::TimeDaysInMonth
+                    | StdlibKernel::TimeFormat
+                    | StdlibKernel::TimeFormatHTTP
+                    | StdlibKernel::TimeFormatISO8601
+                    | StdlibKernel::TimeFormatRFC3339
+                    | StdlibKernel::TimeAddMillis
+                    | StdlibKernel::TimeDiffMillis
+                    | StdlibKernel::SystemArgs
+                    | StdlibKernel::SystemGetenv
+                    | StdlibKernel::SystemGetenvOr
+                    | StdlibKernel::SystemGetArg
+                    | StdlibKernel::SystemGetenvInt
+                    | StdlibKernel::SystemGetenvBool
+                    | StdlibKernel::SystemSetenv
+                    | StdlibKernel::SystemUnsetenv
+                    | StdlibKernel::SystemCwd
+                    | StdlibKernel::SystemExit
+            );
+            let pure_backoff = matches!(
                 k,
                 StdlibKernel::BackoffLinear
                     | StdlibKernel::BackoffLinearWithJitter
                     | StdlibKernel::BackoffExponential
                     | StdlibKernel::BackoffExponentialWithJitter
-            )
+            );
+            // The families that are pure in whole: every member resolves without
+            // the reactor. Distinct from the qualifier list in production only
+            // in that this test re-derives it from the audited-purity judgement
+            // rather than reading the production constant.
+            let pure_whole_family = matches!(
+                k.decl().qualifier,
+                "Log"
+                    | "String"
+                    | "Char"
+                    | "List"
+                    | "Basics"
+                    | "Maybe"
+                    | "Result"
+                    | "Math"
+                    | "Bitwise"
+                    | "Dict"
+                    | "Set"
+                    | "Bytes"
+                    | "Encoding"
+                    | "JsonEnc"
+                    | "JsonDec"
+                    | "JsonDecP"
+                    | "Uuid"
+                    | "Decimal"
+                    | "Money"
+                    | "Secret"
+                    | "Regex"
+                    | "Path"
+                    | "Locale"
+                    | "Error"
+                    | "CssSafety"
+                    | "Random"
+                    | "Io"
+                    | "Sql"
+            );
+            pure_time_system || pure_backoff || pure_whole_family
         };
         for k in StdlibKernel::ALL {
             let q = k.decl().qualifier;
-            let expected_async =
-                (reactor_carveouts(*k) || !PURE_QUALIFIERS.contains(&q)) && !pure_exceptions(*k);
+            let expected_async = !reactor_free(*k);
             assert_eq!(
                 k.requires_async_runtime(),
                 expected_async,
@@ -12954,6 +13004,34 @@ mod tests {
                  synchronous `fn main` that HANGS on a reactor op — re-audit the runtime impl \
                  before changing the whitelist.",
                 k.requires_async_runtime(),
+            );
+        }
+    }
+
+    /// The mixed-family drift the fail-closed invariant exists to catch: the
+    /// reactor-driven members of `Time` / `System` must classify
+    /// reactor-requiring, and admitting their family by qualifier would silently
+    /// demote them. This pins each reactor member directly (independent of the
+    /// whitelist formula) and asserts a representative pure member of the same
+    /// family stays admitted, so a regression that re-adds `Time` / `System` to
+    /// the whole-family qualifier list fails here.
+    #[test]
+    fn mixed_family_reactor_members_are_not_admitted_by_qualifier() {
+        for reactor in [
+            StdlibKernel::TimeSleep,
+            StdlibKernel::TimeEvery,
+            StdlibKernel::SystemLoadEnv,
+        ] {
+            assert!(
+                reactor.requires_async_runtime(),
+                "{reactor:?} drives the tokio reactor but was classified pure — a mixed \
+                 family admitted by qualifier would emit a synchronous `fn main` that HANGS"
+            );
+        }
+        for pure in [StdlibKernel::TimeNow, StdlibKernel::SystemGetenv] {
+            assert!(
+                !pure.requires_async_runtime(),
+                "{pure:?} is a proven-pure member of a mixed family and must stay admitted"
             );
         }
     }
