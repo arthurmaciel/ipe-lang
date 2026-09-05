@@ -219,7 +219,8 @@ pub struct TerminalSafe(String);
 
 impl TerminalSafe {
     /// Sanitise `raw` into terminal-safe text: drop every ANSI escape sequence
-    /// (a lone `ESC`, or a CSI `ESC [ … final`) whole, and drop every remaining
+    /// (a lone `ESC`, a CSI `ESC [ … final`, or an OSC `ESC ] … BEL/ST`) whole,
+    /// and drop every remaining
     /// control byte below `0x20` and the `DEL` (`0x7f`), keeping only `\n` and
     /// `\t` — the whitespace the gutter and line layout rely on. Printable text
     /// passes through untouched.
@@ -233,15 +234,34 @@ impl TerminalSafe {
                 // until a final byte in 0x40..=0x7e; any other escape consumes
                 // just its single following byte. Either way the escape and its
                 // sequence are dropped whole.
-                if chars.clone().next() == Some('[') {
-                    chars.next();
-                    for seq in chars.by_ref() {
-                        if ('\u{40}'..='\u{7e}').contains(&seq) {
-                            break;
+                match chars.clone().next() {
+                    Some('[') => {
+                        // CSI (`ESC [`) runs until a final byte in 0x40..=0x7e.
+                        chars.next();
+                        for seq in chars.by_ref() {
+                            if ('\u{40}'..='\u{7e}').contains(&seq) {
+                                break;
+                            }
                         }
                     }
-                } else {
-                    chars.next();
+                    Some(']') => {
+                        // OSC (`ESC ]`) runs until BEL (0x07) or ST (`ESC \`).
+                        chars.next();
+                        while let Some(seq) = chars.next() {
+                            if seq == '\u{7}' {
+                                break;
+                            }
+                            if seq == '\u{1b}' {
+                                if chars.clone().next() == Some('\\') {
+                                    chars.next();
+                                }
+                                break;
+                            }
+                        }
+                    }
+                    _ => {
+                        chars.next();
+                    }
                 }
                 continue;
             }
