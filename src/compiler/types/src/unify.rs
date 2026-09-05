@@ -3,10 +3,18 @@
 //!
 //! Eager, in-place unification over the union-find arena. A flexible variable
 //! adopts the other side's content; two structures must agree head-to-head and
-//! then recurse on their children. A flexible variable bound to a structure
+//! then unify their children. A flexible variable bound to a structure
 //! that *contains* it is an infinite type — rejected via an occurs check
 //! (mirrors `Occurs.occurs`), so the read-back ([`crate::ty`] zonking) always
 //! terminates.
+//!
+//! The child obligations are driven from an explicit heap-allocated work stack
+//! of `(found, expected)` pairs rather than native recursion, so an
+//! adversarially deep type spine (e.g. a curried lambda tens of thousands of
+//! parameters wide) cannot overflow the native stack: it is bounded by the
+//! shared [`Budget`] and turned back with a typed limit error. The sibling
+//! walks [`occurs`] and [`crate::constrain::zonk`] are iterative for the same
+//! reason.
 //!
 //! Every step decrements the shared [`Budget`]; an adversarial constraint set
 //! that drives the unifier into a blow-up trips [`TypeError::StepBudgetExceeded`]
@@ -103,6 +111,33 @@ pub fn unify(
     span: Span,
     a: VarId,
     b: VarId,
+) -> DResult<()> {
+    // Explicit heap work stack of `(found, expected)` obligations. A structure's
+    // children are pushed here instead of recursed, so a type spine of depth N
+    // costs O(N) heap, never O(N) native stack. Children are pushed in reverse
+    // of source order so that LIFO pops them in the original left-to-right
+    // sequence — later obligations may depend on the merges an earlier one
+    // performs, so the ordering is load-bearing, not cosmetic.
+    let mut stack: Vec<(VarId, VarId)> = vec![(a, b)];
+    while let Some((a, b)) = stack.pop() {
+        unify_step(uf, budget, interner, span, a, b, &mut stack)?;
+    }
+    Ok(())
+}
+
+/// Process a single `(found, expected)` obligation: agree the two heads and
+/// push any child obligations onto `stack`. Never recurses on children — that
+/// is what keeps the whole unification bounded by the [`Budget`] rather than the
+/// native stack.
+#[allow(clippy::too_many_arguments)]
+fn unify_step(
+    uf: &mut UnionFind<Content>,
+    budget: &mut Budget,
+    interner: &Interner,
+    span: Span,
+    a: VarId,
+    b: VarId,
+    stack: &mut Vec<(VarId, VarId)>,
 ) -> DResult<()> {
     budget.tick()?;
     // Two finds, reused for both the same-class short-circuit and the content
@@ -241,13 +276,15 @@ pub fn unify(
             Err(mismatch(uf, budget, interner, span, ra, rb))
         }
         (Content::Structure(fa), Content::Structure(fb)) => {
-            unify_flat(uf, budget, interner, span, ra, rb, fa, fb)
+            unify_flat(uf, budget, interner, span, ra, rb, fa, fb, stack)
         }
     }
 }
 
 /// Unify two concrete structures that share representatives `ra` (found) / `rb`
-/// (expected).
+/// (expected). Child obligations are pushed onto `stack` (in reverse of source
+/// order, so LIFO replays them left-to-right) rather than unified in place, so
+/// the driver loop stays bounded by the [`Budget`], not the native stack.
 #[allow(clippy::too_many_arguments)]
 fn unify_flat(
     uf: &mut UnionFind<Content>,
@@ -258,15 +295,18 @@ fn unify_flat(
     rb: VarId,
     fa: FlatType,
     fb: FlatType,
+    stack: &mut Vec<(VarId, VarId)>,
 ) -> DResult<()> {
     match (fa, fb) {
         (FlatType::Unit, FlatType::Unit) => uf.union(ra, rb, Content::Structure(FlatType::Unit)),
         (FlatType::Fun(a1, r1), FlatType::Fun(a2, r2)) => {
             // Merge the roots first so a recursive reference resolves, then
-            // unify argument-with-argument and result-with-result.
+            // queue argument-with-argument and result-with-result. Push result
+            // last so it pops after the argument (source order preserved).
             uf.union(ra, rb, Content::Structure(FlatType::Fun(a1, r1)))?;
-            unify(uf, budget, interner, span, a1, a2)?;
-            unify(uf, budget, interner, span, r1, r2)
+            stack.push((r1, r2));
+            stack.push((a1, a2));
+            Ok(())
         }
         (
             FlatType::Con {
@@ -305,8 +345,10 @@ fn unify_flat(
                     args: as1.clone(),
                 }),
             )?;
-            for (x, y) in as1.iter().zip(as2.iter()) {
-                unify(uf, budget, interner, span, *x, *y)?;
+            // Queue each argument pair. Push in reverse so LIFO replays them in
+            // ascending index order, matching the original in-place walk.
+            for (x, y) in as1.iter().zip(as2.iter()).rev() {
+                stack.push((*x, *y));
             }
             Ok(())
         }
@@ -317,8 +359,9 @@ fn unify_flat(
                 return Err(mismatch(uf, budget, interner, span, ra, rb));
             }
             uf.union(ra, rb, Content::Structure(FlatType::Tuple(es1.clone())))?;
-            for (x, y) in es1.iter().zip(es2.iter()) {
-                unify(uf, budget, interner, span, *x, *y)?;
+            // Push in reverse so LIFO replays elements in ascending index order.
+            for (x, y) in es1.iter().zip(es2.iter()).rev() {
+                stack.push((*x, *y));
             }
             Ok(())
         }
@@ -340,7 +383,10 @@ fn unify_flat(
         // `is_empty_record`: follow `v` to its root; `true` iff the content is
         // `FlatType::EmptyRecord` (the closed-tail sentinel).
         (FlatType::Record(fs1, ext1), FlatType::Record(fs2, ext2)) => {
-            // Step 1 — unify shared fields pairwise.
+            // Step 1 — queue shared fields for pairwise unification. Each shared
+            // field's types are distinct solver variables from the extension
+            // tails, so deferring them onto the stack cannot change the
+            // `is_empty_record` tail reads or the merges below.
             // Both `.get()` calls are infallible: `name` came from `fs1.keys()`
             // and the filter already proved `fs2.contains_key(name)`.
             for name in fs1.keys().filter(|k| fs2.contains_key(*k)) {
@@ -348,7 +394,7 @@ fn unify_flat(
                 let Some((v1, v2)) = fs1.get(name).copied().zip(fs2.get(name).copied()) else {
                     continue;
                 };
-                unify(uf, budget, interner, span, v1, v2)?;
+                stack.push((v1, v2));
             }
 
             // Partition into only-on-left and only-on-right.
@@ -375,17 +421,15 @@ fn unify_flat(
             }
 
             if only1.is_empty() && only2.is_empty() {
-                // Step 3 — identical field sets: merge first, then unify tails.
-                // `fs1` is moved into the union; no clone needed.
+                // Step 3 — identical field sets: merge first, then queue the
+                // tail unification. `fs1` is moved into the union; no clone.
                 uf.union(ra, rb, Content::Structure(FlatType::Record(fs1, ext1)))?;
-                unify(uf, budget, interner, span, ext1, ext2)?;
+                stack.push((ext1, ext2));
             } else {
                 // Step 4 — differing extras: absorb each side's unique fields
                 // into the other's extension so both original tails carry the
                 // full field union and stay live for later constraints.
-                unify_open_record_rows(
-                    uf, budget, interner, span, ra, rb, fs1, ext1, ext2, only1, only2,
-                )?;
+                unify_open_record_rows(uf, ra, rb, fs1, ext1, ext2, only1, only2, stack)?;
             }
             Ok(())
         }
@@ -419,15 +463,12 @@ fn unify_flat(
 ///   `ext1 ← { only2 | new_ext }`, `ext2 ← { only1 | new_ext }`; the two records
 ///   become equal, both open on `new_ext`.
 ///
-/// The recursive `unify` calls run the occurs check (the Flex-vs-Structure arm),
-/// so no cycle can form; fresh extension nodes are minted before the call to
-/// keep a single mutable borrow of `uf` per `unify`.
+/// The queued tail unifications run the occurs check (the Flex-vs-Structure
+/// arm), so no cycle can form; fresh extension nodes are minted before pushing
+/// so each obligation carries a resolved target.
 #[allow(clippy::too_many_arguments)]
 fn unify_open_record_rows(
     uf: &mut UnionFind<Content>,
-    budget: &mut Budget,
-    interner: &Interner,
-    span: Span,
     ra: VarId,
     rb: VarId,
     fs1: BTreeMap<ipe_intern::Symbol, VarId>,
@@ -435,6 +476,7 @@ fn unify_open_record_rows(
     ext2: VarId,
     only1: Vec<(ipe_intern::Symbol, VarId)>,
     only2: Vec<(ipe_intern::Symbol, VarId)>,
+    stack: &mut Vec<(VarId, VarId)>,
 ) -> DResult<()> {
     // Merged field map: the union of both sides' fields, used as the merged
     // record's structure. `fs1` is moved in; `only2` supplies the right-unique
@@ -451,14 +493,16 @@ fn unify_open_record_rows(
             uf.union(ra, rb, Content::Structure(FlatType::Record(merged, ext2)))?;
             let only2_map: BTreeMap<_, _> = only2.into_iter().collect();
             let ext1_target = uf.fresh(Content::Structure(FlatType::Record(only2_map, ext2)))?;
-            unify(uf, budget, interner, span, ext1, ext1_target)
+            stack.push((ext1, ext1_target));
+            Ok(())
         }
         // Only side 1 carries extras: symmetric to the case above.
         (false, true) => {
             uf.union(ra, rb, Content::Structure(FlatType::Record(merged, ext1)))?;
             let only1_map: BTreeMap<_, _> = only1.into_iter().collect();
             let ext2_target = uf.fresh(Content::Structure(FlatType::Record(only1_map, ext1)))?;
-            unify(uf, budget, interner, span, ext2, ext2_target)
+            stack.push((ext2, ext2_target));
+            Ok(())
         }
         // Both sides carry unique fields: a shared fresh tail closes the union,
         // and each original tail absorbs the other side's extras onto it.
@@ -474,17 +518,22 @@ fn unify_open_record_rows(
 
             let only2_map: BTreeMap<_, _> = only2.into_iter().collect();
             let ext1_target = uf.fresh(Content::Structure(FlatType::Record(only2_map, new_ext)))?;
-            unify(uf, budget, interner, span, ext1, ext1_target)?;
 
             let only1_map: BTreeMap<_, _> = only1.into_iter().collect();
             let ext2_target = uf.fresh(Content::Structure(FlatType::Record(only1_map, new_ext)))?;
-            unify(uf, budget, interner, span, ext2, ext2_target)
+
+            // Push in reverse so LIFO replays them as ext1-then-ext2, matching
+            // the original sequential order.
+            stack.push((ext2, ext2_target));
+            stack.push((ext1, ext1_target));
+            Ok(())
         }
         // Unreachable: the caller only enters step 4 when at least one side has
         // extras. Handle it as the identical-field-set merge for total safety.
         (true, true) => {
             uf.union(ra, rb, Content::Structure(FlatType::Record(merged, ext1)))?;
-            unify(uf, budget, interner, span, ext1, ext2)
+            stack.push((ext1, ext2));
+            Ok(())
         }
     }
 }
@@ -948,6 +997,69 @@ mod tests {
         assert!(
             result.is_err(),
             "the absorbed tail must be closed, rejecting a further field (soundness)"
+        );
+    }
+
+    // ── Deep-spine stack-safety tests ───────────────────────────────────────
+
+    /// Build a right-nested function spine `Unit -> Unit -> … -> leaf` of the
+    /// given `depth`, returning the outermost variable. Depth zero is `leaf`.
+    fn fun_spine(uf: &mut UnionFind<Content>, depth: usize, leaf: VarId) -> VarId {
+        let mut result = leaf;
+        for _ in 0..depth {
+            let arg = unit_var(uf);
+            result = uf
+                .fresh(Content::Structure(FlatType::Fun(arg, result)))
+                .expect("fresh fun node");
+        }
+        result
+    }
+
+    /// Two curried-lambda types tens of thousands of parameters deep unify
+    /// without overflowing the native stack. Native recursion of this depth
+    /// segfaults the type-checker on the default 8MB stack (issue #1840); the
+    /// iterative work-stack turns it into ordinary bounded heap work.
+    #[test]
+    fn deep_fun_spine_unifies_without_stack_overflow() {
+        const DEPTH: usize = 200_000;
+        let mut uf = UnionFind::new();
+        let interner = Interner::new();
+
+        let leaf_a = unit_var(&mut uf);
+        let leaf_b = unit_var(&mut uf);
+        let a = fun_spine(&mut uf, DEPTH, leaf_a);
+        let b = fun_spine(&mut uf, DEPTH, leaf_b);
+
+        let mut budget = Budget::unbounded();
+        unify(&mut uf, &mut budget, &interner, Span::DUMMY, a, b)
+            .expect("deep matching spines must unify");
+    }
+
+    /// A deep spine whose leaf is incompatible surfaces a typed mismatch rather
+    /// than crashing: the walk descends the whole spine iteratively and reports
+    /// the leaf clash as an ordinary error.
+    #[test]
+    fn deep_fun_spine_leaf_mismatch_is_typed_error() {
+        const DEPTH: usize = 200_000;
+        let mut uf = UnionFind::new();
+        let interner = Interner::new();
+
+        let leaf_a = unit_var(&mut uf);
+        // A function-typed leaf on the other side: `Unit` vs `Unit -> Unit`
+        // cannot unify, so the deepest obligation is a mismatch.
+        let arg = unit_var(&mut uf);
+        let ret = unit_var(&mut uf);
+        let leaf_b = uf
+            .fresh(Content::Structure(FlatType::Fun(arg, ret)))
+            .expect("fresh leaf fun");
+        let a = fun_spine(&mut uf, DEPTH, leaf_a);
+        let b = fun_spine(&mut uf, DEPTH, leaf_b);
+
+        let mut budget = Budget::unbounded();
+        let result = unify(&mut uf, &mut budget, &interner, Span::DUMMY, a, b);
+        assert!(
+            result.is_err(),
+            "an incompatible leaf under a deep spine must be a typed error, not a crash"
         );
     }
 }
