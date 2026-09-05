@@ -4004,7 +4004,11 @@ where
         .ok()
         .and_then(|s| s.parse().ok())
         .unwrap_or(8000);
-    let addr = format!("0.0.0.0:{port}");
+    // Honour the same host-bind precedence as the Ipe.Http.Server path
+    // (`IPE_HTTP_BIND` > `Host.bind` setting > loopback-unless-production), so
+    // an explicit loopback setting is never overridden into all-interfaces.
+    let host = crate::app_config::resolve_host_bind();
+    let addr = format!("{host}:{port}");
     let listener = match tokio::net::TcpListener::bind(&addr).await {
         Ok(l) => l,
         Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => {
@@ -4019,7 +4023,7 @@ where
         }
         Err(e) => return IpeResult::Err(format!("Web.app: bind {addr}: {e}").into()),
     };
-    // Bind-address line (stderr, Rust-specific — carries the 0.0.0.0 bind).
+    // Bind-address line (stderr) — carries the resolved host:port.
     eprintln!("[ipe.web] listening on http://{addr}");
     //  user-facing line (stdout, `fmt.Printf("Ipe.Web listening on
     // :%d\n", port)` — live.go:3546).
