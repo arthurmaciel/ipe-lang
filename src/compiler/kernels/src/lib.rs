@@ -14083,19 +14083,24 @@ mod tests {
     ///
     /// The oracle is an INDEPENDENT restatement, not a copy of the predicate:
     /// the Db-class kernels live under the qualifiers `Db` / `Db.Decode` /
-    /// `Db.Dsn` / `Sql`, with the single exception of `Db.url` (`DbUrlSetting`,
-    /// class `Pure`) — a setting reader that emits `ipe_setting_db_url`, not a
-    /// db-runtime symbol, and so must NOT set `uses_db`. That exception is
-    /// exactly why `is_db` reads the `class` column and not the qualifier. Both
-    /// directions are asserted, so a Db-class kernel outside these qualifiers, a
-    /// non-Db kernel inside them, or a drift in the `Db.url` exception all fail.
+    /// `Db.Dsn` / `Sql`, with the `class = Pure` exceptions `Db.url`
+    /// (`DbUrlSetting`, a setting reader emitting `ipe_setting_db_url`) and
+    /// `Db.defaultMigration` (`DbDefaultMigration`, a record builder emitted
+    /// inline as a `Migration` struct literal) — neither emits a db-runtime
+    /// symbol, so neither must set `uses_db`. Those exceptions are exactly why
+    /// `is_db` reads the `class` column and not the qualifier. Both directions
+    /// are asserted, so a Db-class kernel outside these qualifiers, a non-Db
+    /// kernel inside them, or a drift in either Pure exception all fail.
     #[test]
     fn db_predicate_tracks_db_class() {
         use super::KernelClass;
         for k in StdlibKernel::ALL {
             let qualifier = k.decl().qualifier;
             let expected = matches!(qualifier, "Db" | "Db.Decode" | "Db.Dsn" | "Sql")
-                && !matches!(k, StdlibKernel::DbUrlSetting);
+                && !matches!(
+                    k,
+                    StdlibKernel::DbUrlSetting | StdlibKernel::DbDefaultMigration
+                );
             assert_eq!(
                 k.is_db(),
                 expected,
