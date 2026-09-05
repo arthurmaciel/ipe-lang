@@ -1,0 +1,24 @@
+module Package exposing (package)
+
+import Ipe.Package exposing (..)
+
+
+package : Package
+package =
+    { name = "web-authn"
+    , version = "0.1.0"
+    , capabilities =
+        { declares = []
+
+        -- The `Ipe.Browser.WebAuthn` import discloses `js-port:web-authn`; the
+        -- `:raw` floor is also disclosed because the module reaches
+        -- `Js.send`/`Js.subscribe`/`Js.request` under the hood. Both must be
+        -- accepted here or the build fails closed (IPE-S0002).
+        --
+        -- `js-port:web-authn` is a crypto-credential trust boundary: the ceremony
+        -- mints public-key authentication material (a passkey) the relying party
+        -- server verifies. Credential material never crosses the port as raw
+        -- bytes — only opaque base64url envelopes.
+        , accepts = [ JsPort WebAuthn, JsPort Raw ]
+        }
+    }
