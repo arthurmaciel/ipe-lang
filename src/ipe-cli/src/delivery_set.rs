@@ -27,10 +27,12 @@ use ipe_backend_rust::static_build::StaticTriple;
 use crate::CliError;
 use crate::delivery::{Delivery, DeliveryError, Host, Runtime, Shape};
 
-/// The third delivery axis a co-located binary carries: the host triple, the
-/// musl static triple, or a curated cross triple. `Delivery` owns shape ×
-/// runtime × host; this owns the target the binary is built for.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+/// The third delivery axis a co-located binary carries.
+///
+/// The host triple, the musl static triple, or a curated cross triple.
+/// `Delivery` owns shape × runtime × host; this owns the target the binary is
+/// built for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BinaryTarget {
     /// The host's own triple — the default artifact.
     Host,
@@ -48,7 +50,7 @@ pub enum BinaryTarget {
 ///
 /// Produced only by the manifest reader. The eight variants are the closed ship
 /// vocabulary, each mapping one-to-one onto the CLI delivery grammar.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ShipEntry {
     /// The shape's own co-located artifact, on the given target. For `web` this
     /// is served live. Meaningful for every shape.
@@ -81,9 +83,10 @@ impl ShipEntry {
     }
 }
 
-/// A resolved delivery paired with its target axis — one member of a
-/// [`DeliverySet`]. Every field is already validated: the [`Delivery`] passed
-/// through [`Delivery::resolve`], and a `Static` target passed `allows_static`.
+/// A resolved delivery paired with its target axis — one member of a set.
+///
+/// Every field is already validated: the [`Delivery`] passed through
+/// [`Delivery::resolve`], and a `Static` target passed `allows_static`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PlannedDelivery {
     delivery: Delivery,
@@ -161,7 +164,7 @@ impl DeliverySet {
         let mut planned: Vec<PlannedDelivery> = Vec::with_capacity(entries.len());
         for &entry in entries {
             let plan = Self::resolve_one(pinned, entry)?;
-            if planned.iter().any(|p| *p == plan) {
+            if planned.contains(&plan) {
                 return Err(duplicate_entry(entry));
             }
             planned.push(plan);
@@ -171,35 +174,33 @@ impl DeliverySet {
 
     /// Resolve one ship entry against the pinned shape into a [`PlannedDelivery`].
     fn resolve_one(pinned: Shape, entry: ShipEntry) -> Result<PlannedDelivery, CliError> {
-        match entry.web_axes() {
-            // A web-bearing entry: resolve through the validity table, then
-            // reject if the shape is not `web` — with the shape lesson, not the
-            // table's generic host/runtime message.
-            Some((runtime, host)) => {
-                if !matches!(pinned, Shape::Web) {
-                    return Err(web_entry_on_non_web(pinned, entry));
-                }
-                let delivery = Delivery::resolve(pinned, runtime, host)?;
-                Ok(PlannedDelivery {
-                    delivery,
-                    target: BinaryTarget::Host,
-                })
-            }
-            // The shape-led co-located binary: runtime/host follow the shape.
-            None => {
-                let ShipEntry::Binary(target) = entry else {
-                    // `web_axes` returns `None` only for `Binary`.
-                    unreachable!("only Binary has no web axes");
-                };
+        // The shape-led co-located binary: runtime/host follow the shape, and the
+        // target axis (host/static/cross) rides alongside.
+        let (runtime, host) = match entry {
+            ShipEntry::Binary(target) => {
                 let delivery = Delivery::resolve(pinned, None, Host::Default)?;
                 if matches!(target, BinaryTarget::Static) && !delivery.allows_static() {
-                    return Err(CliError::UsageOwned(
-                        DeliveryError::StaticNotAllowed { delivery }.to_string(),
-                    ));
+                    return Err(DeliveryError::StaticNotAllowed { delivery }.into());
                 }
-                Ok(PlannedDelivery { delivery, target })
+                return Ok(PlannedDelivery { delivery, target });
             }
+            ShipEntry::Desktop => (Some(Runtime::Live), Host::Desktop),
+            ShipEntry::Spa => (Some(Runtime::Spa), Host::Default),
+            ShipEntry::SpaDesktop => (Some(Runtime::Spa), Host::Desktop),
+            ShipEntry::SpaIos => (Some(Runtime::Spa), Host::Ios),
+            ShipEntry::SpaAndroid => (Some(Runtime::Spa), Host::Android),
+        };
+
+        // A web-bearing entry: reject a non-web shape first with the shape lesson,
+        // then resolve through the validity table.
+        if !matches!(pinned, Shape::Web) {
+            return Err(web_entry_on_non_web(pinned, entry));
         }
+        let delivery = Delivery::resolve(pinned, runtime, host)?;
+        Ok(PlannedDelivery {
+            delivery,
+            target: BinaryTarget::Host,
+        })
     }
 
     /// The resolved deliveries, in declared order.
@@ -210,7 +211,7 @@ impl DeliverySet {
 
     /// The number of declared deliveries. Always at least one.
     #[must_use]
-    pub fn len(&self) -> usize {
+    pub const fn len(&self) -> usize {
         self.0.len()
     }
 
@@ -218,7 +219,7 @@ impl DeliverySet {
     /// present only to satisfy the `len`-without-`is_empty` lint. It always
     /// returns `false`.
     #[must_use]
-    pub fn is_empty(&self) -> bool {
+    pub const fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
 

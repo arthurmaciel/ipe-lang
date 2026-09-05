@@ -451,6 +451,14 @@ impl From<build_plan::Refusal> for CliError {
     }
 }
 
+impl From<delivery::DeliveryError> for CliError {
+    /// A delivery refusal is a pedagogical, user-facing message; it surfaces
+    /// through the reader's named-error channel.
+    fn from(err: delivery::DeliveryError) -> Self {
+        Self::UsageOwned(err.to_string())
+    }
+}
+
 /// Emit a `Pipeline` diagnostic as a JSON object on stderr, then return
 /// [`CliError::DiagnosticJsonEmitted`] so the caller exits non-zero without
 /// printing the human-readable layout a second time.
