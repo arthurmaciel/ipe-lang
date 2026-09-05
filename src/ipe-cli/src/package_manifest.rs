@@ -82,9 +82,13 @@ const SCHEMA_MODULE: &str = "Ipe.Package";
 /// shape or a failed field validation; [`CliError::Usage`] if the source root
 /// directory does not exist.
 pub fn parse_package_manifest(manifest_path: &Path) -> Result<ProjectManifest, CliError> {
-    let root = manifest_path
-        .parent()
-        .map_or_else(|| PathBuf::from("."), Path::to_path_buf);
+    // A bare `package.ipe` has an EMPTY parent (`Some("")`), not `None`; both an
+    // empty and an absent parent mean the current directory. An empty root never
+    // canonicalises, so normalise it to `.` before path containment.
+    let root = match manifest_path.parent() {
+        Some(parent) if !parent.as_os_str().is_empty() => parent.to_path_buf(),
+        _ => PathBuf::from("."),
+    };
     let text = crate::io_bounded::read_to_string_capped(
         manifest_path,
         crate::io_bounded::MANIFEST_READ_CAP,
@@ -1552,6 +1556,32 @@ mod tests {
     }
 
     const HEADER: &str = "module Package exposing (package)\n\n";
+
+    /// A bare `package.ipe` filename (as `ipe build package.ipe` passes it from
+    /// inside the project dir) has an EMPTY parent, not an absolute one. The
+    /// path-containment root must resolve to the current directory, so a
+    /// legitimate in-tree `src/` is accepted rather than refused as an escape.
+    #[test]
+    fn bare_filename_resolves_root_to_current_dir() {
+        let root = fresh_project("bare_filename");
+        std::fs::write(
+            root.join(PACKAGE_IPE),
+            format!("{HEADER}package =\n    {{ name = \"bare\" }}\n"),
+        )
+        .expect("write package.ipe");
+        // `ipe build package.ipe` runs with cwd == project root and a bare path.
+        // A shared static mutex serialises the process-wide cwd change so parallel
+        // tests never observe a transient cwd.
+        static CWD_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let _guard = CWD_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let prev = std::env::current_dir().expect("read cwd");
+        std::env::set_current_dir(&root).expect("enter project dir");
+        let result = parse_package_manifest(Path::new(PACKAGE_IPE));
+        std::env::set_current_dir(&prev).expect("restore cwd");
+        let _ = std::fs::remove_dir_all(&root);
+        let m = result.expect("a bare package.ipe filename must parse from its own dir");
+        assert_eq!(m.name, "bare");
+    }
 
     #[test]
     fn minimal_manifest_names_the_package_and_defaults_everything() {
