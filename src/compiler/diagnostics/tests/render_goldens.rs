@@ -213,6 +213,24 @@ fn golden_name_duplicate_value() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 #[test]
+fn golden_name_rust_name_fold() -> Result<(), Box<dyn std::error::Error>> {
+    // IPE-N0048: two distinct Ipê definitions mangle to one generated Rust name.
+    // The IR carries no source spans, so the message names BOTH Ipê definitions
+    // and the shared Rust name and asks for a rename (DUMMY span → no snippet).
+    let source = "";
+    let d = Diagnostic::Name {
+        span: Span::DUMMY,
+        msg: NameError::RustNameFold {
+            first: "firstName".into(),
+            second: "first_name".into(),
+            rust_name: "IpeHasFirstName".into(),
+            kind: ipe_diagnostics::RustNameFoldKind::Value,
+        },
+    };
+    check_golden("name_rust_name_fold", &d, "test.ipe", source)
+}
+
+#[test]
 fn golden_name_import_cycle() -> Result<(), Box<dyn std::error::Error>> {
     // IPE-N0021: circular import — no snippet (DUMMY span), just the cycle in
     // the label.

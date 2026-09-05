@@ -24,6 +24,7 @@ use ipe_ir::Capability;
 
 use crate::index::{self, CommitId, EntryVersion, PinnedRev, SourceUrl};
 use crate::lockfile::{DepKind, LockedDep, LockedRev, Lockfile};
+use crate::package_name::PackageName;
 use crate::project::{self, IpeDep};
 use crate::{CliError, cache};
 
@@ -54,7 +55,11 @@ pub fn resolve_and_add(
     // or malformed response. The entry only decides WHICH version to fetch; the
     // resolved version's pinned `rev` + `sha256` stay the trust root, still
     // git-fetched and hash-verified below (verify-before-trust).
-    let entry = crate::registry::read_entry_via_pages(name, index_root)?;
+    // Parse-don't-validate: gate the name into a safe path component here, at the
+    // boundary, before it reaches the cache-directory join in `fetch_source` or
+    // the per-package URL/entry lookup.
+    let package_name = PackageName::parse(name)?;
+    let entry = crate::registry::read_entry_via_pages(package_name.as_str(), index_root)?;
     let version = index::resolve_version(&entry, req)?;
 
     // Trust-verification ordering INVARIANT: nothing is installed or recorded
@@ -67,7 +72,12 @@ pub fn resolve_and_add(
     let policy = crate::signing::load_trust_policy(project_root)?;
     let verifier = signature_verifier();
 
-    let checkout = fetch_source(project_root, name, &version.version.to_string(), version)?;
+    let checkout = fetch_source(
+        project_root,
+        &package_name,
+        &version.version.to_string(),
+        version,
+    )?;
 
     // Publisher-identity provenance over the pinned `sha256`, at the same
     // verify-before-trust seam. Deny-by-default and fail-closed: a present
@@ -127,6 +137,9 @@ pub fn resolve_and_add(
 /// [`CliError::Resolve`] if a `git` fetch fails or a path source is missing;
 /// [`CliError::Io`] on a filesystem failure.
 pub fn resolve_escape(project_root: &Path, name: &str, dep: &IpeDep) -> Result<(), CliError> {
+    // Parse-don't-validate: gate the name into a safe path component here, at the
+    // boundary, before it reaches any cache-directory join.
+    let package_name = PackageName::parse(name)?;
     let (source, locked_rev, checkout) = match dep {
         IpeDep::Git { url, rev } => {
             // Parse-don't-validate: convert the raw manifest strings to typed
@@ -139,11 +152,12 @@ pub fn resolve_escape(project_root: &Path, name: &str, dep: &IpeDep) -> Result<(
             let requested = CommitId::parse(name, raw_rev)?;
             // Fetch first into a temporary location keyed by the requested ref,
             // then resolve to the concrete SHA that names the exact commit.
-            let checkout = fetch_git_requested(project_root, name, &typed_url, &requested)?;
+            let checkout =
+                fetch_git_requested(project_root, &package_name, &typed_url, &requested)?;
             let pinned = PinnedRev::resolve_in_checkout(name, &checkout, &requested)?;
             // Re-key the cache dir by the immutable SHA so fetch and verify
             // share the same key regardless of what ref was requested.
-            let final_dest = escape_cache_dir(project_root, name, &pinned);
+            let final_dest = escape_cache_dir(project_root, &package_name, &pinned);
             if checkout != final_dest {
                 if final_dest.exists() {
                     std::fs::remove_dir_all(&final_dest).map_err(|e| CliError::Io {
@@ -276,8 +290,9 @@ pub fn fetch_and_verify_index_version(
     name: &str,
     version: &EntryVersion,
 ) -> Result<PathBuf, CliError> {
-    let checkout = fetch_source(project_root, name, &version.version.to_string(), version)?;
-    verify_hash(name, &checkout, &version.sha256)?;
+    let name = PackageName::parse(name)?;
+    let checkout = fetch_source(project_root, &name, &version.version.to_string(), version)?;
+    verify_hash(name.as_str(), &checkout, &version.sha256)?;
     Ok(checkout)
 }
 
@@ -298,7 +313,7 @@ pub fn fetch_and_verify_index_version(
 pub fn verify_lockfile_hashes(project_root: &Path) -> Result<(), CliError> {
     let lockfile = Lockfile::read(project_root)?;
     for dep in lockfile.packages() {
-        let cache_dir = dep_cache_dir(project_root, dep);
+        let cache_dir = dep_cache_dir(project_root, dep)?;
         if !cache_dir.is_dir() {
             // Not cached locally — nothing to re-verify here; a build re-fetches
             // and re-verifies against this same pin.
@@ -335,18 +350,22 @@ fn manifest_path(project_root: &Path) -> PathBuf {
 
 /// The package cache directory for one resolved `(name, version)` under the
 /// project's `.ipe/packages/` tree.
-fn package_cache_dir(project_root: &Path, name: &str, version: &str) -> PathBuf {
+///
+/// Takes a validated [`PackageName`] so the name is a single, non-traversing
+/// path component by construction — an unvalidated string cannot reach this
+/// join and reroot the cache directory outside the project.
+fn package_cache_dir(project_root: &Path, name: &PackageName, version: &str) -> PathBuf {
     project_root
         .join(".ipe")
         .join("packages")
-        .join(format!("{name}-{version}"))
+        .join(format!("{}-{version}", name.as_str()))
 }
 
 /// The cache directory for a git escape dep, keyed by its pinned SHA.
 ///
 /// This is the single SSOT for the escape cache key — both the fetch path and
 /// the verify path call this so they can never key by different values.
-fn escape_cache_dir(project_root: &Path, name: &str, pinned: &PinnedRev) -> PathBuf {
+fn escape_cache_dir(project_root: &Path, name: &PackageName, pinned: &PinnedRev) -> PathBuf {
     package_cache_dir(project_root, name, pinned.as_str())
 }
 
@@ -357,28 +376,31 @@ fn escape_cache_dir(project_root: &Path, name: &str, pinned: &PinnedRev) -> Path
 /// Both [`resolve_escape`]'s fetch path and [`verify_lockfile_hashes`]'s
 /// verify path route through this function so the two dirs are provably equal.
 /// The [`DepKind`] tag is the sole authority — field shapes are never re-derived.
-fn dep_cache_dir(project_root: &Path, dep: &LockedDep) -> PathBuf {
-    match dep.kind {
+///
+/// # Errors
+/// [`CliError::Resolve`] when the locked dep's name is not a valid package name
+/// (a lockfile carrying a traversing name is refused rather than joined).
+fn dep_cache_dir(project_root: &Path, dep: &LockedDep) -> Result<PathBuf, CliError> {
+    let name = PackageName::parse(&dep.name)?;
+    Ok(match dep.kind {
         DepKind::Escape => match &dep.rev {
-            LockedRev::Pinned(sha) => package_cache_dir(project_root, &dep.name, sha.as_str()),
-            LockedRev::Local => {
-                package_cache_dir(project_root, &dep.name, &dep.version.to_string())
-            }
+            LockedRev::Pinned(sha) => package_cache_dir(project_root, &name, sha.as_str()),
+            LockedRev::Local => package_cache_dir(project_root, &name, &dep.version.to_string()),
         },
-        DepKind::Index => package_cache_dir(project_root, &dep.name, &dep.version.to_string()),
-    }
+        DepKind::Index => package_cache_dir(project_root, &name, &dep.version.to_string()),
+    })
 }
 
 /// Fetch an index version's source at its pinned revision into the package
 /// cache, returning the checkout directory.
 fn fetch_source(
     project_root: &Path,
-    name: &str,
+    name: &PackageName,
     version: &str,
     entry: &EntryVersion,
 ) -> Result<PathBuf, CliError> {
     let dest = package_cache_dir(project_root, name, version);
-    fetch_git_into(name, &entry.source, entry.rev.as_str(), &dest)?;
+    fetch_git_into(name.as_str(), &entry.source, entry.rev.as_str(), &dest)?;
     Ok(dest)
 }
 
@@ -390,12 +412,12 @@ fn fetch_source(
 /// directory to the SHA-keyed final location.
 fn fetch_git_requested(
     project_root: &Path,
-    name: &str,
+    name: &PackageName,
     url: &SourceUrl,
     requested: &CommitId,
 ) -> Result<PathBuf, CliError> {
     let dest = package_cache_dir(project_root, name, requested.as_str());
-    fetch_git_into(name, url, requested.as_str(), &dest)?;
+    fetch_git_into(name.as_str(), url, requested.as_str(), &dest)?;
     Ok(dest)
 }
 
@@ -559,6 +581,7 @@ mod tests {
     use crate::cache;
     use crate::index::{CommitId, PinnedRev, SourceUrl};
     use crate::lockfile::{DepKind, LockedDep, LockedRev, Lockfile};
+    use crate::package_name::PackageName;
     use crate::project::IpeDep;
     use ipe_ir::Capability;
     use std::collections::BTreeSet;
@@ -658,12 +681,13 @@ mod tests {
         );
         assert_ne!(rev_str, "HEAD", "locked rev must not be the string HEAD");
         // The cached checkout must be keyed by the SHA, not by "HEAD".
+        let remotelib = PackageName::parse("remotelib").expect("valid name");
         assert!(
-            !package_cache_dir(&proj, "remotelib", "HEAD").exists(),
+            !package_cache_dir(&proj, &remotelib, "HEAD").exists(),
             "HEAD-keyed cache dir must not exist"
         );
         assert!(
-            package_cache_dir(&proj, "remotelib", rev_str).exists(),
+            package_cache_dir(&proj, &remotelib, rev_str).exists(),
             "SHA-keyed cache dir must exist"
         );
         // Verify the locked SHA matches the fixture repo's actual HEAD.
@@ -774,7 +798,8 @@ mod tests {
             .clone();
 
         // Tamper a file inside the cache dir.
-        let cache = package_cache_dir(&proj, "escapedep", entry.rev.as_str());
+        let escapedep = PackageName::parse("escapedep").expect("valid name");
+        let cache = package_cache_dir(&proj, &escapedep, entry.rev.as_str());
         assert!(cache.is_dir(), "cache dir must exist at the SHA key");
         std::fs::write(cache.join("TAMPERED"), "evil").expect("tamper");
 
@@ -818,22 +843,62 @@ mod tests {
         };
 
         // Escape: dep_cache_dir must equal escape_cache_dir (keyed by SHA).
-        let via_escape = escape_cache_dir(&proj, "myescape", &pinned_sha);
-        let via_dep = dep_cache_dir(&proj, &escape_dep);
+        let myescape = PackageName::parse("myescape").expect("valid name");
+        let via_escape = escape_cache_dir(&proj, &myescape, &pinned_sha);
+        let via_dep = dep_cache_dir(&proj, &escape_dep).expect("valid dep name");
         assert_eq!(
             via_escape, via_dep,
             "fetch and verify must key escape by the same path"
         );
 
         // Index dep: dep_cache_dir must key by version, not rev.
-        let via_version = package_cache_dir(&proj, "mypkg", "1.2.0");
-        let via_index = dep_cache_dir(&proj, &index_dep);
+        let mypkg = PackageName::parse("mypkg").expect("valid name");
+        let via_version = package_cache_dir(&proj, &mypkg, "1.2.0");
+        let via_index = dep_cache_dir(&proj, &index_dep).expect("valid dep name");
         assert_eq!(via_version, via_index, "index dep must be keyed by version");
         assert_ne!(
             via_escape, via_index,
             "escape and index deps must not share a cache dir"
         );
 
+        let _ = std::fs::remove_dir_all(&proj);
+    }
+
+    /// A lockfile carrying a traversing dep name must be refused by
+    /// `dep_cache_dir` — the name is never joined into a cache path that could
+    /// reroot outside the project. The refusal is a typed error, not a path.
+    #[test]
+    fn dep_cache_dir_rejects_traversal_name() {
+        let proj = temp_dir("dep-cache-traversal");
+        let sha = "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2";
+        for hostile in ["..", "../../evil", "/abs", "a/b"] {
+            let dep = LockedDep {
+                name: hostile.to_owned(),
+                version: semver::Version::new(0, 0, 0),
+                source: "https://example.invalid/x".to_owned(),
+                rev: LockedRev::Pinned(PinnedRev::from_full_sha("x", sha).expect("valid sha")),
+                sha256: "00".to_owned(),
+                kind: DepKind::Escape,
+            };
+            dep_cache_dir(&proj, &dep)
+                .expect_err(&format!("hostile dep name {hostile:?} must be refused"));
+        }
+        let _ = std::fs::remove_dir_all(&proj);
+    }
+
+    /// `resolve_escape` must refuse a traversing package name before any git
+    /// fetch or cache-dir join — the delete-then-clone sink is unreachable with
+    /// an unvalidated name.
+    #[test]
+    fn resolve_escape_rejects_traversal_name() {
+        let proj = temp_dir("resolve-escape-traversal");
+        scaffold_project(&proj);
+        let dep = IpeDep::Git {
+            url: "https://example.invalid/x".to_owned(),
+            rev: None,
+        };
+        resolve_escape(&proj, "../../evil", &dep)
+            .expect_err("a traversing package name must be refused");
         let _ = std::fs::remove_dir_all(&proj);
     }
 

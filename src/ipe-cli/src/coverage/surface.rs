@@ -285,6 +285,13 @@ const QUALIFIER_MODULE_OVERRIDES: &[(&str, &[&str])] = &[
     // `alignRight`, `center`, `bold`, `underline`, `color`, `bg`) live in
     // `Ipe.Tea.Tui.Ui`.
     ("TuiUi", &["Ipe", "Tea", "Tui", "Ui"]),
+    // `CliUi` line-native view builders and attributes (`none`, `text`, `line`,
+    // `lines`, `bold`, `underline`, `dim`, `reverse`, `color`, `bg`) live in
+    // `Ipe.Tea.Cli.Ui`.
+    ("CliUi", &["Ipe", "Tea", "Cli", "Ui"]),
+    // `TermColor` palette constructors (`black` … `brightWhite`, `default`) live
+    // in `Ipe.Tea.Terminal.Color`.
+    ("TermColor", &["Ipe", "Tea", "Terminal", "Color"]),
 ];
 
 /// The dotted module path a kernel qualifier lives under.

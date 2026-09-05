@@ -124,6 +124,22 @@ underline : Attribute msg
 
 Render text underlined.
 
+## `dim`
+
+```ipe
+dim : Attribute msg
+```
+
+Render text dim (faint).
+
+## `reverse`
+
+```ipe
+reverse : Attribute msg
+```
+
+Render text in reverse video (swap foreground and background).
+
 ## `color`
 
 ```ipe

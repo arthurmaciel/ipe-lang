@@ -17,6 +17,8 @@ pub struct Cell {
     pub bg: Option<(u8, u8, u8)>,
     pub bold: bool,
     pub underline: bool,
+    pub dim: bool,
+    pub reverse: bool,
 }
 
 impl Cell {
@@ -28,6 +30,8 @@ impl Cell {
             bg: None,
             bold: false,
             underline: false,
+            dim: false,
+            reverse: false,
         }
     }
 }

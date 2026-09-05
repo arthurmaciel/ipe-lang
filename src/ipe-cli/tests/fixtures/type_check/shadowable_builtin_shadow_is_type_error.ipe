@@ -1,0 +1,21 @@
+module Main exposing (main)
+
+import Ipe.Io as Io
+import Ipe.String as String
+
+-- A user `type Order` is a distinct type from the built-in comparison `Order`
+-- returned by `compare`. Feeding `compare`'s built-in `Order` into a function
+-- annotated with the user `Order` must be a TYPE MISMATCH — unifying them would
+-- let this wrong program type-check and then lower to conflicting Rust
+-- representations (an ipe-exit-0-then-cargo-fail SEAL break).
+type Order = Buy | Sell
+
+orderScore : Order -> Int
+orderScore o =
+    case o of
+        Buy -> 1
+        Sell -> 2
+
+main : Task Error ()
+main =
+    Io.println (String.fromInt (orderScore (compare 1 2)))

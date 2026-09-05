@@ -525,6 +525,18 @@ const STD_UI_CELLS: &str = include_str!("../Ipe/Ui/Cells.ipe");
 /// silent render-time drop).
 const STD_TEA_TUI_UI: &str = include_str!("../Ipe/Tea/Tui/Ui.ipe");
 
+/// `Ipe.Tea.Cli.Ui` — the Cli shape's line-oriented view surface: the
+/// `Lines msg` view type, its builders, and its OWN line-native `Attribute msg`
+/// (bold/underline/dim/reverse/colour). A line author imports this instead of
+/// `Ipe.Ui` or `Ipe.Tea.Tui.Ui`, so DOM and 2D cell-grid attributes are
+/// unnameable in a `Lines` view (a type error, never a silent render-time drop).
+const STD_TEA_CLI_UI: &str = include_str!("../Ipe/Tea/Cli/Ui.ipe");
+
+/// `Ipe.Tea.Terminal.Color` — the first-class terminal colour palette: a closed
+/// sum over the sixteen named ANSI colours plus `default`. Both the Tui and Cli
+/// view surfaces accept it in their `color` / `bg` builders.
+const STD_TEA_TERMINAL_COLOR: &str = include_str!("../Ipe/Tea/Terminal/Color.ipe");
+
 /// `Ipe.Codec` — one invariant codec that drives the JSON direction.
 ///
 /// Pure Ipê source: defines the `Codec a` nominal union (an encoder plus a
@@ -1467,6 +1479,14 @@ pub const COMPILED_STD_MODULES: &[CompiledStdModule] = &[
         source: STD_TEA_TUI_UI,
     },
     CompiledStdModule {
+        dotted: "Ipe.Tea.Cli.Ui",
+        source: STD_TEA_CLI_UI,
+    },
+    CompiledStdModule {
+        dotted: "Ipe.Tea.Terminal.Color",
+        source: STD_TEA_TERMINAL_COLOR,
+    },
+    CompiledStdModule {
         dotted: "Ipe.Codec",
         source: STD_CODEC,
     },
@@ -2188,10 +2208,13 @@ mod tests {
         // string literal are counted.
         let mut compiled_reachable: Vec<(String, String)> = Vec::new();
 
-        let all_sources = MODULES
-            .iter()
-            .map(|m| m.source)
-            .chain(COMPILED_STD_MODULES.iter().map(|m| m.source));
+        // Reachability evidence comes ONLY from sources that actually compile
+        // into a user program. The `MODULES` veneers are never injected
+        // (`inject_compiled_std_closure` consults `COMPILED_STD_MODULES` alone),
+        // so a `Kernel.kernel` alias in a veneer is no proof a kernel is reachable
+        // — crediting one masks a dead feature (a member `ipe doc` advertises but
+        // a real call resolves to IPE-N0005).
+        let all_sources = COMPILED_STD_MODULES.iter().map(|m| m.source);
 
         for source in all_sources {
             let mut local_interner = Interner::new();

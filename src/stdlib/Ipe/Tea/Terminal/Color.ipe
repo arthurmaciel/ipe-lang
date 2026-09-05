@@ -1,0 +1,119 @@
+-- | Ipe.Tea.Terminal.Color — the first-class terminal colour palette.
+--
+-- `Color` (spelled `Terminal.Color` in a view) is a closed sum over the
+-- sixteen named ANSI colours plus `default` (the terminal's own foreground or
+-- background). The set is fixed: an invalid colour has no representation, so a
+-- view can never name a colour the terminal cannot render.
+--
+-- Both the Tui view surface (`Ipe.Tea.Tui.Ui.color` / `bg`) and the Cli line
+-- surface (`Ipe.Tea.Cli.Ui.color` / `bg`) accept this palette. Truecolour
+-- (`Ipe.Tea.Tui.Ui.rgb` / `rgba`) remains available as a separate path for
+-- terminals that support it; the palette is the portable, first-class surface.
+module Ipe.Tea.Terminal.Color exposing
+    ( Color
+    , black, red, green, yellow, blue, magenta, cyan, white
+    , brightBlack, brightRed, brightGreen, brightYellow
+    , brightBlue, brightMagenta, brightCyan, brightWhite
+    , default
+    , rgb, rgba
+    )
+
+
+import Ipe.Ffi.Kernel as Kernel
+
+
+-- | ANSI black (SGR foreground 30, background 40).
+black : Color
+black = Kernel.kernel "TermColor_black"
+
+
+-- | ANSI red (SGR foreground 31, background 41).
+red : Color
+red = Kernel.kernel "TermColor_red"
+
+
+-- | ANSI green (SGR foreground 32, background 42).
+green : Color
+green = Kernel.kernel "TermColor_green"
+
+
+-- | ANSI yellow (SGR foreground 33, background 43).
+yellow : Color
+yellow = Kernel.kernel "TermColor_yellow"
+
+
+-- | ANSI blue (SGR foreground 34, background 44).
+blue : Color
+blue = Kernel.kernel "TermColor_blue"
+
+
+-- | ANSI magenta (SGR foreground 35, background 45).
+magenta : Color
+magenta = Kernel.kernel "TermColor_magenta"
+
+
+-- | ANSI cyan (SGR foreground 36, background 46).
+cyan : Color
+cyan = Kernel.kernel "TermColor_cyan"
+
+
+-- | ANSI white (SGR foreground 37, background 47).
+white : Color
+white = Kernel.kernel "TermColor_white"
+
+
+-- | ANSI bright black / grey (SGR foreground 90, background 100).
+brightBlack : Color
+brightBlack = Kernel.kernel "TermColor_brightBlack"
+
+
+-- | ANSI bright red (SGR foreground 91, background 101).
+brightRed : Color
+brightRed = Kernel.kernel "TermColor_brightRed"
+
+
+-- | ANSI bright green (SGR foreground 92, background 102).
+brightGreen : Color
+brightGreen = Kernel.kernel "TermColor_brightGreen"
+
+
+-- | ANSI bright yellow (SGR foreground 93, background 103).
+brightYellow : Color
+brightYellow = Kernel.kernel "TermColor_brightYellow"
+
+
+-- | ANSI bright blue (SGR foreground 94, background 104).
+brightBlue : Color
+brightBlue = Kernel.kernel "TermColor_brightBlue"
+
+
+-- | ANSI bright magenta (SGR foreground 95, background 105).
+brightMagenta : Color
+brightMagenta = Kernel.kernel "TermColor_brightMagenta"
+
+
+-- | ANSI bright cyan (SGR foreground 96, background 106).
+brightCyan : Color
+brightCyan = Kernel.kernel "TermColor_brightCyan"
+
+
+-- | ANSI bright white (SGR foreground 97, background 107).
+brightWhite : Color
+brightWhite = Kernel.kernel "TermColor_brightWhite"
+
+
+-- | The terminal's own default colour (SGR foreground 39, background 49).
+default : Color
+default = Kernel.kernel "TermColor_default"
+
+
+-- | `rgb r g b` — a 24-bit truecolour from red/green/blue channels (0-255).
+-- Rendered on terminals that support truecolour; the named palette above is the
+-- portable path.
+rgb : Int -> Int -> Int -> Color
+rgb = Kernel.kernel "TermColor_rgb"
+
+
+-- | `rgba r g b a` — a 24-bit truecolour with an alpha channel (0..1).
+rgba : Int -> Int -> Int -> Float -> Color
+rgba = Kernel.kernel "TermColor_rgba"

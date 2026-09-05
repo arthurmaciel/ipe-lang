@@ -180,6 +180,9 @@ pub fn system_getenv_bool(key: String) -> IpeTask<bool> {
 pub fn system_cwd(_: ()) -> IpeTask<String> {
     ipe_runtime::system::system_cwd(())
 }
+pub fn system_getcwd(_: ()) -> IpeTask<String> {
+    ipe_runtime::system::system_getcwd(())
+}
 pub fn system_load_env(_: ()) -> IpeTask<()> {
     ipe_runtime::system::system_load_env(())
 }
