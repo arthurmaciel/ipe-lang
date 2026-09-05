@@ -268,11 +268,11 @@ fn parse_function(bytes: &[u8], name: &[u8], open: usize) -> Option<usize> {
 
 /// A `url(...)` argument is safe ONLY when it references a resource with no
 /// scheme: no `:` (which would introduce `javascript:`, `data:`, `https:` — the
-/// CSS-level exfiltration / script-sink channels the fail-open denylist missed),
-/// no quote, no paren, no whitespace, and no control byte. This is stricter than
-/// CSS (it forbids quoted and absolute URLs) on purpose: a scheme-free,
-/// path-only reference is the only `url()` shape that is not an exfil vector, so
-/// the gate admits exactly that and rejects everything else (fail-closed).
+/// CSS-level exfiltration / script-sink channels), no quote, no paren, no
+/// whitespace, and no control byte. This is stricter than CSS (it forbids
+/// quoted and absolute URLs) on purpose: a scheme-free, path-only reference is
+/// the only `url()` shape that is not an exfil vector, so the gate admits
+/// exactly that and rejects everything else (fail-closed).
 fn url_arg_is_safe(inner: &[u8]) -> bool {
     let arg = inner.trim_ascii();
     if arg.is_empty() {
@@ -405,8 +405,8 @@ mod tests {
 
     #[test]
     fn rejects_url_exfiltration_channels() {
-        // The vectors named in the issue: a data-scheme SVG and any remote URL
-        // are CSS exfiltration / script-sink channels the old denylist missed.
+        // A data-scheme SVG and any remote URL are CSS exfiltration /
+        // script-sink channels — every scheme-bearing `url()` is rejected.
         assert!(!css_value_is_safe(
             "url(data:image/svg+xml,<svg/onload=alert(1)>)"
         ));
