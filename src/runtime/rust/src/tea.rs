@@ -533,19 +533,11 @@ where
         // Inline render (a closure borrowing `view` would make the future non-Send).
         // Fallible writes (NOT print!/println!, which panic on a broken pipe).
         //
-        // A render must NOT force a trailing "\n": that would diverge from the
-        // the spec. ``'s `cliPrintView` is explicit that
-        // it "writes the result to stdout WITHOUT a trailing newline (the
-        // user's prompt formatting decides whether to add one)" — runtime only ever
-        // appends ONE newline, at `fmt.Println()` after the event loop exits
-        // (same as here). This is intentional REPL-prompt design:
-        // `examples/shapes/terminal/simple-counter`'s `view` returns
-        // `"count=" ++ ... ++ "  (+, -, r, q) > "` with NO trailing newline so
-        // the cursor stays on the prompt line for the user's input. An app that
-        // wants each render on its own line supplies its own trailing "\n"
-        // in its `view` string — see `tests/golden/console_app_view_separator`
-        // for a fixture that deliberately does NOT do this and therefore glues
-        // renders together.
+        // A render writes the view's text to stdout with NO forced trailing "\n":
+        // the prompt formatting is the view's own to decide, so a prompt that ends
+        // `"> "` keeps the cursor on the prompt line for the user's input. Exactly
+        // one terminating newline is written after the event loop exits. A view
+        // that wants each render on its own line supplies its own trailing "\n".
         //
         // The initial render is skipped when `init` issued an outstanding
         // effect: that effect's Msg folds through `update` and renders the
