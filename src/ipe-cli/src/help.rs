@@ -191,6 +191,18 @@ const COMMANDS: &[Command] = &[
                 desc: "permit an allocator known to be slow for the target",
             },
             Opt {
+                flag: "[--cfree]",
+                desc: "build without linking any C code (incompatible with allocators that require C, e.g. mimalloc)",
+            },
+            Opt {
+                flag: "[--debugger]",
+                desc: "compile the in-app time-travelling debugger overlay into the built app",
+            },
+            Opt {
+                flag: "[-q|--quiet]",
+                desc: "suppress progress chatter; only warnings and errors",
+            },
+            Opt {
                 flag: "[--json]",
                 desc: "emit each diagnostic as a stable JSON object (one per line) instead of the human layout",
             },
@@ -315,8 +327,20 @@ const COMMANDS: &[Command] = &[
                 desc: "permit an allocator known to be slow for the target",
             },
             Opt {
+                flag: "[--cfree]",
+                desc: "build without linking any C code (incompatible with allocators that require C, e.g. mimalloc)",
+            },
+            Opt {
                 flag: "[--accept-risks]",
                 desc: "accept every disclosed .Unsafe escape-hatch import and proceed without prompting",
+            },
+            Opt {
+                flag: "[--debugger]",
+                desc: "compile the in-app time-travelling debugger overlay into the run app",
+            },
+            Opt {
+                flag: "[-q|--quiet]",
+                desc: "suppress progress chatter; only warnings and errors",
             },
             Opt {
                 flag: "[--json]",
@@ -363,6 +387,14 @@ const COMMANDS: &[Command] = &[
             Opt {
                 flag: "[--debugger]",
                 desc: "compile the in-app time-travelling debugger overlay into the served app",
+            },
+            Opt {
+                flag: "[--reset-state]",
+                desc: "force every returning session to a fresh init instead of preserving prior state",
+            },
+            Opt {
+                flag: "[-q|--quiet]",
+                desc: "suppress progress chatter; only warnings and errors",
             },
         ],
     },
@@ -1043,5 +1075,62 @@ mod tests {
             handler("exec").is_some(),
             "exec must resolve to a dispatch handler"
         );
+    }
+
+    /// Split a help `Opt.flag` field (`[-q|--quiet]`, `[--out <dir>]`,
+    /// `[-- <args>...]`) into the dashed option tokens it advertises, dropping the
+    /// surrounding brackets, the `<value>` placeholders, and the bare `--`
+    /// forwarding separator (which no parser treats as an option).
+    fn advertised_flag_tokens(field: &str) -> Vec<String> {
+        field
+            .trim_start_matches('[')
+            .trim_end_matches(']')
+            .split(|c| c == '|' || c == ' ')
+            .map(str::trim)
+            .filter(|tok| tok.starts_with('-') && *tok != "--")
+            .map(str::to_owned)
+            .collect()
+    }
+
+    /// A flag advertised in help must be accepted by the command's parser: run
+    /// the parser with just that flag (a dummy value for a value flag) and assert
+    /// it never rejects the flag as unknown. This closes the help/parser drift
+    /// that let real working flags go undocumented.
+    fn assert_help_flags_are_accepted(
+        command: &str,
+        parse: impl Fn(&[String]) -> Result<(), crate::CliError>,
+    ) {
+        let Some(cmd) = COMMANDS.iter().find(|c| c.name == command) else {
+            panic!("no such command {command}");
+        };
+        for opt in cmd.options {
+            let takes_value = opt.flag.contains('<');
+            for tok in advertised_flag_tokens(opt.flag) {
+                let mut argv = vec![tok.clone()];
+                if takes_value {
+                    argv.push("x".to_owned());
+                }
+                let unknown = format!("unknown flag `{tok}`");
+                if let Err(err) = parse(&argv) {
+                    assert!(
+                        !err.to_string().contains(&unknown),
+                        "`ipe {command}` help advertises `{tok}` but its parser rejects it as unknown"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn advertised_flags_are_accepted_by_their_parser() {
+        assert_help_flags_are_accepted("build", |a| crate::cli_args::parse_build(a).map(|_| ()));
+        assert_help_flags_are_accepted("run", |a| crate::cli_args::parse_run(a).map(|_| ()));
+        assert_help_flags_are_accepted("watch", |a| crate::cli_args::parse_watch(a).map(|_| ()));
+        assert_help_flags_are_accepted("fix", |a| crate::cli_args::parse_fix(a).map(|_| ()));
+        assert_help_flags_are_accepted("type-check", |a| {
+            crate::cli_args::parse_type_check(a).map(|_| ())
+        });
+        assert_help_flags_are_accepted("health", |a| crate::cli_args::parse_health(a).map(|_| ()));
+        assert_help_flags_are_accepted("fmt", |a| crate::cli_args::parse_fmt(a).map(|_| ()));
     }
 }
