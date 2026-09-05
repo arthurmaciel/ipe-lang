@@ -25,7 +25,9 @@
 //! narrowing the wrapper), whereas a false negative would admit an unconstrained
 //! capability. Every ambiguous or unenumerable construct (`extern`, `#[link]`,
 //! `libc::`, `include!`, `#[path]`, a source that does not lex) is treated as an
-//! **opaque** refuse trigger, never as "no capability found".
+//! **opaque** refuse trigger, never as "no capability found". Aliasing the
+//! crate root itself (`use std as s`, `extern crate std`) is one of these: the
+//! alias carries the whole `std` surface no path rule can see, so it refuses.
 
 use std::collections::BTreeSet;
 
@@ -662,6 +664,18 @@ fn scan_ident(
                 construct: "std::<unrecognised>",
             });
         }
+    } else if (name == "std" || name == "core") && !next_is_colon(toks, i) {
+        // A `std` / `core` crate-root token NOT followed by `::` is an alias or
+        // bare import of the crate root — `use std as s;`, `use core as c;`,
+        // `extern crate std;`, `extern crate std as s;`. The alias then bears a
+        // full-crate capability surface the path rules can never see (`s::fs::…`
+        // matches nothing), so the whole crate root is unenumerable. Refuse it,
+        // matching the closed-allowlist policy of the catch-all above.
+        out.opacities.push(Opacity::UnenumerableModule {
+            file: file.to_owned(),
+            line,
+            construct: "std-root-alias",
+        });
     }
 }
 
@@ -1031,6 +1045,88 @@ mod tests {
             o.opacities
         );
         assert!(o.must_refuse());
+    }
+
+    #[test]
+    fn a_crate_root_alias_of_std_is_an_unenumerable_module() {
+        // `use std as s;` renames the crate root, so `s::fs::write(...)` matches
+        // no path rule and would otherwise scan to an empty, admissible set. The
+        // alias itself must refuse as an unenumerable module.
+        let src = "use std as s; pub fn f() { s::fs::write(\"a\", \"b\").ok(); }";
+        let o = scan_source("lib.rs", src);
+        assert!(
+            o.opacities.iter().any(|op| matches!(
+                op,
+                Opacity::UnenumerableModule {
+                    construct: "std-root-alias",
+                    ..
+                }
+            )),
+            "aliasing the std crate root must refuse: {:?}",
+            o.opacities
+        );
+        assert!(
+            o.must_refuse(),
+            "a hidden-capability alias must force a refuse"
+        );
+    }
+
+    #[test]
+    fn a_crate_root_alias_of_core_is_an_unenumerable_module() {
+        let src = "use core as c; pub fn f() -> c::cmp::Ordering { c::cmp::Ordering::Less }";
+        let o = scan_source("lib.rs", src);
+        assert!(
+            o.opacities.iter().any(|op| matches!(
+                op,
+                Opacity::UnenumerableModule {
+                    construct: "std-root-alias",
+                    ..
+                }
+            )),
+            "aliasing the core crate root must refuse: {:?}",
+            o.opacities
+        );
+        assert!(o.must_refuse());
+    }
+
+    #[test]
+    fn an_extern_crate_std_is_an_unenumerable_module() {
+        // `extern crate std;` / `extern crate std as s;` is the 2015-edition
+        // crate-root alias — the same evasion, caught when the scan reaches the
+        // `std` ident (which is not followed by `::`).
+        let src = "extern crate std as s; pub fn f() { s::fs::write(\"a\", \"b\").ok(); }";
+        let o = scan_source("lib.rs", src);
+        assert!(
+            o.opacities.iter().any(|op| matches!(
+                op,
+                Opacity::UnenumerableModule {
+                    construct: "std-root-alias",
+                    ..
+                }
+            )),
+            "extern crate std alias must refuse: {:?}",
+            o.opacities
+        );
+        assert!(o.must_refuse());
+    }
+
+    #[test]
+    fn an_extern_crate_of_a_third_party_still_does_not_refuse_here() {
+        // A non-std `extern crate` is a plain dependency import; the crate-root
+        // refuse rule is scoped to `std` / `core` and must not widen to it.
+        let src = "extern crate serde as s; pub fn f() -> i32 { 1 }";
+        let o = scan_source("lib.rs", src);
+        assert!(
+            !o.opacities.iter().any(|op| matches!(
+                op,
+                Opacity::UnenumerableModule {
+                    construct: "std-root-alias",
+                    ..
+                }
+            )),
+            "a third-party extern crate must not trip the std-root rule: {:?}",
+            o.opacities
+        );
     }
 
     #[test]
