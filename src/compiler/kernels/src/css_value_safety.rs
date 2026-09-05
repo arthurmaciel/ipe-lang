@@ -181,6 +181,12 @@ fn value_parses(s: &str) -> bool {
             i += 1;
             continue;
         }
+        // The `!important` priority flag: `!` is admitted ONLY when the trimmed
+        // remainder of the value is exactly `important` (the sole legitimate
+        // use of `!` in a declaration value). Any other `!…` is rejected.
+        if c == b'!' {
+            return s[i + 1..].trim_start() == "important";
+        }
         // A quoted string token (e.g. a `content` value or a `url("…")` handled
         // inside `parse_function`): only reachable at top level for `content`,
         // and permitted only when it carries no breakout byte.
@@ -480,6 +486,18 @@ mod tests {
         // A scheme-free, path-only `url()` is the one accepted URL shape.
         assert!(css_value_is_safe("url(assets/bg.png)"));
         assert!(css_value_is_safe("url(/static/img/logo.svg)"));
+    }
+
+    #[test]
+    fn accepts_important_flag_and_rejects_other_bang() {
+        // The `!important` priority flag is the sole legitimate `!` in a value.
+        assert!(css_value_is_safe("red !important"));
+        assert!(css_value_is_safe("rgba(0,0,0,0.2) !important"));
+        assert!(css_value_is_safe("1px solid #ccc!important"));
+        // Any other `!…` is rejected — `!` is not a general value byte.
+        assert!(!css_value_is_safe("red !imporant"));
+        assert!(!css_value_is_safe("red ! url(x)"));
+        assert!(!css_value_is_safe("!"));
     }
 
     #[test]

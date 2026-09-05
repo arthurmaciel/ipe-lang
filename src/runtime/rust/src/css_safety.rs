@@ -294,6 +294,11 @@ fn value_grammar_parses(s: &str) -> bool {
             i += 1;
             continue;
         }
+        // The `!important` priority flag: `!` is admitted ONLY when the trimmed
+        // remainder is exactly `important`. Mirror of the shared kernel gate.
+        if c == b'!' {
+            return s[i + 1..].trim_start() == "important";
+        }
         if c == b'"' || c == b'\'' {
             match value_parse_string(bytes, i, c) {
                 Some(next) => i = next,
@@ -515,13 +520,14 @@ pub(crate) fn should_report_stripped(origin: CssValueOrigin) -> bool {
 /// must re-validate rather than trust an upstream that a generic `htmlAttribute`
 /// escape hatch can side-step.
 ///
-/// Splits on `;` and checks each non-empty declaration through the shared
-/// [`SafeCssValue`] policy (which rejects `; { } </ /* @import` and the
-/// script-sink keywords in both raw and CSS-escape-decoded forms). Returns the
-/// ORIGINAL, unmodified slice when EVERY declaration is safe (byte-identical to
-/// the producer output — no reformat); drops the WHOLE block (`None`,
-/// fail-closed) the moment any declaration carries a breakout. A block of only
-/// empty declarations yields `None`.
+/// Splits on `;` into declarations and each declaration on its FIRST `:` into a
+/// `property:value` pair (parse, don't validate — a declaration IS that pair),
+/// gating the property name through [`SafeCssPropertyName`] and the value
+/// through the shared allowlist-grammar [`SafeCssValue`] policy. A declaration
+/// with no `:`, an unsafe property name, or an unrecognized value drops the
+/// WHOLE block (`None`, fail-closed). Returns the ORIGINAL, unmodified slice
+/// when EVERY declaration is safe (byte-identical to the producer output — no
+/// reformat). A block of only empty declarations yields `None`.
 ///
 /// `cfg(feature = "web")`-gated: its only callers are the `live` style sink's
 /// `build_mq` / `build_pc` (`live/style_inject.rs`), which are themselves under
@@ -534,7 +540,12 @@ pub(crate) fn sink_safe_declaration_list(rules: &str) -> Option<&str> {
         if d.is_empty() {
             continue;
         }
-        SafeCssValue::parse(d)?;
+        // A declaration is `property : value`; split on the FIRST `:` only, so a
+        // `:` inside the value (none survive the value gate, but be precise) does
+        // not mis-split. A declaration with no `:` is malformed — reject.
+        let (prop, value) = d.split_once(':')?;
+        SafeCssPropertyName::parse(prop)?;
+        SafeCssValue::parse(value.trim())?;
         any = true;
     }
     if any { Some(rules) } else { None }
@@ -584,7 +595,12 @@ pub(crate) fn sink_safe_keyframes_body(body: &str) -> Option<&str> {
             if d.is_empty() {
                 continue;
             }
-            SafeCssValue::parse(d)?;
+            // Each keyframe declaration is a `property : value` pair — split on
+            // the first `:` and gate the name and value separately (a nested `{`
+            // or breakout lands in one side and is rejected by its gate).
+            let (prop, value) = d.split_once(':')?;
+            SafeCssPropertyName::parse(prop)?;
+            SafeCssValue::parse(value.trim())?;
         }
         rest = after_open[close + 1..].trim_start();
     }
