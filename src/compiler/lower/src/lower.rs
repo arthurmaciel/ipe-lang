@@ -15265,7 +15265,13 @@ impl<'a> Lowerer<'a> {
         };
         let helper_name = match peek {
             Callee::Kernel(KernelFn::StoreOrderByLeft) => "orderByLeftNamed",
-            _ => "orderByRightNamed",
+            Callee::Kernel(KernelFn::StoreOrderByRight) => "orderByRightNamed",
+            _ => {
+                return Err(bug(
+                    "ipe_lower::lower_store_order_by",
+                    "unexpected callee in order-by intercept",
+                ));
+            }
         };
         let lowered_joined = self.lower_expr(joined)?;
         let id = self.store_named_func_id(helper_name)?;

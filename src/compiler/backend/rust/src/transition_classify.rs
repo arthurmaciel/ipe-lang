@@ -31,6 +31,7 @@
 //! produces byte-identically what the direct compiled arm would — one update
 //! semantics, dev == prod.
 
+use crate::emit_template::write_json_string;
 use ipe_intern::Symbol;
 use ipe_ir::{BinOp, Callee, Expr, KernelFn};
 
@@ -115,30 +116,6 @@ impl CompileTransition {
             }
         }
     }
-}
-
-/// Append `s` as a JSON string literal matching `serde_json`'s encoding (the two
-/// mandatory escapes plus the short C0 escapes and `\u00XX` for the rest).
-/// Mirrors [`crate::emit_template`]'s writer. Total: never panics.
-fn write_json_string(s: &str, out: &mut String) {
-    use std::fmt::Write as _;
-    out.push('"');
-    for ch in s.chars() {
-        match ch {
-            '"' => out.push_str("\\\""),
-            '\\' => out.push_str("\\\\"),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            '\u{08}' => out.push_str("\\b"),
-            '\u{0c}' => out.push_str("\\f"),
-            c if (c as u32) < 0x20 => {
-                let _ = write!(out, "\\u{:04x}", c as u32);
-            }
-            c => out.push(c),
-        }
-    }
-    out.push('"');
 }
 
 /// Reduce a data-describable `update` arm to a [`CompileTransition`], or `None`.
