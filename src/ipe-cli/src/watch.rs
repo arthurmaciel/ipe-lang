@@ -2213,15 +2213,12 @@ fn strip_ansi(s: &str) -> String {
         // An escape introduces a control sequence. A CSI (`ESC [`) runs until a
         // final byte in 0x40..=0x7e; any other escape consumes just its single
         // following byte. Either way the escape itself is dropped.
-        match chars.next() {
-            Some('[') => {
-                for seq in chars.by_ref() {
-                    if ('\u{40}'..='\u{7e}').contains(&seq) {
-                        break;
-                    }
+        if chars.next() == Some('[') {
+            for seq in chars.by_ref() {
+                if ('\u{40}'..='\u{7e}').contains(&seq) {
+                    break;
                 }
             }
-            Some(_) | None => {}
         }
     }
     out
@@ -2237,7 +2234,7 @@ fn post_watch_status(port: u16, token: &str, ok: bool, error: &str) {
     let _ = post_to_watch_status(port, token, &watch_status_body(ok, error));
 }
 
-/// Serialise the `{ok, error}` watch-status body. serde_json escapes every
+/// Serialise the `{ok, error}` watch-status body. `serde_json` escapes every
 /// control char below 0x20 as `\u00XX`, so a compiler excerpt carrying carriage
 /// returns or ANSI escapes still yields RFC 8259-valid JSON the server can
 /// parse — hand-rolled backslash/quote escaping alone left those unescaped and
@@ -2941,10 +2938,10 @@ mod tests {
         let body = watch_status_body(false, hostile);
         let parsed: serde_json::Value =
             serde_json::from_str(&body).expect("the body must be RFC 8259-valid JSON");
-        assert_eq!(parsed["ok"], serde_json::Value::Bool(false));
+        assert_eq!(parsed.get("ok"), Some(&serde_json::Value::Bool(false)));
         assert_eq!(
-            parsed["error"],
-            serde_json::Value::String(hostile.to_string()),
+            parsed.get("error"),
+            Some(&serde_json::Value::String(hostile.to_string())),
             "the error round-trips byte-for-byte, so no field is injected"
         );
     }
@@ -2956,7 +2953,7 @@ mod tests {
         let attack = r#"","ok":true,"injected":"x"#;
         let body = watch_status_body(false, attack);
         let parsed: serde_json::Value = serde_json::from_str(&body).expect("valid JSON");
-        assert_eq!(parsed["ok"], serde_json::Value::Bool(false));
+        assert_eq!(parsed.get("ok"), Some(&serde_json::Value::Bool(false)));
         assert!(
             parsed.get("injected").is_none(),
             "a crafted excerpt must not add fields to the object"
@@ -2967,7 +2964,7 @@ mod tests {
     fn watch_status_body_ok_omits_error() {
         let parsed: serde_json::Value =
             serde_json::from_str(&watch_status_body(true, "")).expect("valid JSON");
-        assert_eq!(parsed["ok"], serde_json::Value::Bool(true));
+        assert_eq!(parsed.get("ok"), Some(&serde_json::Value::Bool(true)));
         assert!(parsed.get("error").is_none());
     }
 
