@@ -58,6 +58,30 @@ fn type_error_program_exits_nonzero_with_the_diagnostic() -> TestResult {
     Ok(())
 }
 
+/// SOUNDNESS: a user `type Order` is a distinct type from the built-in
+/// comparison `Order` returned by `compare`. Feeding the built-in `Order` into a
+/// function annotated with the user `Order` must be a TYPE MISMATCH — the two
+/// carry different lowered representations (`MainOrder` vs `IpeOrder`), so
+/// unifying them would let a wrong program type-check and then fail `cargo build`
+/// (an ipe-exit-0-then-cargo-fail SEAL break). Negative proof that the shadowed
+/// builtin does not silently unify with its empty-home kernel spelling.
+#[test]
+fn shadowable_builtin_shadow_is_a_type_error() -> TestResult {
+    let (ok, _, stderr) = run_ipe(&[
+        "type-check",
+        &fixture("shadowable_builtin_shadow_is_type_error.ipe").to_string_lossy(),
+    ])?;
+    assert!(
+        !ok,
+        "a user `type Order` fed the built-in comparison `Order` must NOT type-check"
+    );
+    assert!(
+        stderr.contains("IPE-T0001") && stderr.contains("TYPE MISMATCH"),
+        "the rendered nominal-mismatch diagnostic must be shown, got:\n{stderr}"
+    );
+    Ok(())
+}
+
 /// SECURITY: the raw-`String`-key crypto path is unrepresentable. `Ipe.Crypto`
 /// exposes no bare-`String`-key entry point — every keyed operation requires the
 /// typed `Key`. Passing a plaintext `String` where `hmacSha256` expects a `Key`
