@@ -288,8 +288,7 @@ const ALLOWED_VALUE_FUNCTIONS: &[&str] = &[
 fn value_grammar_parses(s: &str) -> bool {
     let bytes = s.as_bytes();
     let mut i = 0;
-    while i < bytes.len() {
-        let c = bytes[i];
+    while let Some(&c) = bytes.get(i) {
         if c.is_ascii_whitespace() || c == b',' || c == b'/' || c == b'%' {
             i += 1;
             continue;
@@ -297,7 +296,9 @@ fn value_grammar_parses(s: &str) -> bool {
         // The `!important` priority flag: `!` is admitted ONLY when the trimmed
         // remainder is exactly `important`. Mirror of the shared kernel gate.
         if c == b'!' {
-            return s[i + 1..].trim_start() == "important";
+            return s
+                .get(i + 1..)
+                .is_some_and(|rest| rest.trim_start() == "important");
         }
         if c == b'"' || c == b'\'' {
             match value_parse_string(bytes, i, c) {
@@ -318,11 +319,11 @@ fn value_grammar_parses(s: &str) -> bool {
 /// call) starting at `start`. Mirror of the shared kernel's `parse_token`.
 fn value_parse_token(bytes: &[u8], start: usize) -> Option<usize> {
     let mut i = start;
-    while i < bytes.len() && is_value_token_byte(bytes[i]) {
+    while bytes.get(i).is_some_and(|&b| is_value_token_byte(b)) {
         i += 1;
     }
-    if i < bytes.len() && bytes[i] == b'(' {
-        return value_parse_function(bytes, &bytes[start..i], i);
+    if bytes.get(i) == Some(&b'(') {
+        return value_parse_function(bytes, bytes.get(start..i)?, i);
     }
     if i > start { Some(i) } else { None }
 }
@@ -339,11 +340,11 @@ fn value_parse_function(bytes: &[u8], name: &[u8], open: usize) -> Option<usize>
     let mut depth = 0usize;
     let mut close = None;
     let mut i = open;
-    while i < bytes.len() {
-        match bytes[i] {
+    while let Some(&b) = bytes.get(i) {
+        match b {
             b'(' => depth += 1,
             b')' => {
-                depth -= 1;
+                depth = depth.saturating_sub(1);
                 if depth == 0 {
                     close = Some(i);
                     break;
@@ -354,7 +355,7 @@ fn value_parse_function(bytes: &[u8], name: &[u8], open: usize) -> Option<usize>
         i += 1;
     }
     let close = close?;
-    let inner = &bytes[open + 1..close];
+    let inner = bytes.get(open + 1..close)?;
     if name_str == "url" {
         if !url_arg_is_safe(inner) {
             return None;
@@ -384,8 +385,7 @@ fn url_arg_is_safe(inner: &[u8]) -> bool {
 /// Mirror of the shared kernel's `parse_string`.
 fn value_parse_string(bytes: &[u8], start: usize, q: u8) -> Option<usize> {
     let mut i = start + 1;
-    while i < bytes.len() {
-        let c = bytes[i];
+    while let Some(&c) = bytes.get(i) {
         if c == b'\\' {
             i += 2;
             continue;
@@ -403,13 +403,13 @@ fn value_parse_string(bytes: &[u8], start: usize, q: u8) -> Option<usize> {
 
 /// Bytes permitted in a bare value token. Mirror of the shared kernel's
 /// `is_token_byte` (`\` admitted in the raw parse; the decoded parse judges it).
-fn is_value_token_byte(b: u8) -> bool {
+const fn is_value_token_byte(b: u8) -> bool {
     b.is_ascii_alphanumeric() || matches!(b, b'#' | b'.' | b'+' | b'-' | b'_' | b'\\') || b >= 0x80
 }
 
 /// Bytes permitted inside a scheme-free `url()` path argument. Mirror of the
 /// shared kernel's `is_url_path_byte`.
-fn is_url_path_byte(b: u8) -> bool {
+const fn is_url_path_byte(b: u8) -> bool {
     is_value_token_byte(b) || matches!(b, b'/' | b'?' | b'&' | b'=' | b'~')
 }
 

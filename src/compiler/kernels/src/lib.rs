@@ -18,7 +18,7 @@ mod capability;
 pub use capability::{Capability, ElementCapability, UnknownCapability, WebCapability};
 
 pub mod css_value_safety;
-pub use css_value_safety::{css_value_is_safe, css_value_raw_form_parses};
+pub use css_value_safety::css_value_is_safe;
 
 pub mod reserved_namespace;
 pub use reserved_namespace::{

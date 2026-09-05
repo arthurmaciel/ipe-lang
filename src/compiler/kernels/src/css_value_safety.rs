@@ -130,10 +130,12 @@ const ALLOWED_FUNCTIONS: &[&str] = &[
     "counters",
 ];
 
-/// The authoritative `Css.safeValue` decision: `true` iff `v` parses cleanly
-/// against the allowlisted CSS declaration-value grammar (colours, lengths,
-/// numbers, keywords, and the recognized function forms) with no unrecognized
-/// byte and no scheme-bearing `url(...)`.
+/// The authoritative `Css.safeValue` decision. `true` iff `v` parses cleanly.
+///
+/// A value is accepted IFF it parses against the allowlisted CSS
+/// declaration-value grammar (colours, lengths, numbers, keywords, and the
+/// recognized function forms) with no unrecognized byte and no scheme-bearing
+/// `url(...)`, in BOTH its raw and CSS-escape-decoded forms.
 ///
 /// This is a pass/reject gate: the value's bytes are never rewritten, so a
 /// `true` result means `v` is safe to emit verbatim. The runtime sanitizer and
@@ -154,26 +156,13 @@ pub fn css_value_is_safe(v: &str) -> bool {
     value_parses(&low) && value_parses(&css_unescape(&low))
 }
 
-/// True iff `v` parses against the allowlist grammar in its RAW (non
-/// escape-decoded) form. Exposed so a consumer that needs to distinguish a
-/// value rejected outright from one rejected only after CSS-escape decoding —
-/// e.g. the runtime's developer-facing loud-strip diagnostic — can classify the
-/// reason WITHOUT re-implementing (and risking drift from) the grammar. Not a
-/// security gate on its own: [`css_value_is_safe`] additionally requires the
-/// decoded form to parse.
-#[must_use]
-pub fn css_value_raw_form_parses(v: &str) -> bool {
-    value_parses(&v.to_ascii_lowercase())
-}
-
 /// Parse `s` (already lowercased) as a whitespace/`,`/`/`-separated sequence of
 /// recognized value tokens. Returns `false` on the first unrecognized byte,
 /// unbalanced paren, unrecognized function name, or scheme-bearing `url(...)`.
 fn value_parses(s: &str) -> bool {
     let bytes = s.as_bytes();
     let mut i = 0;
-    while i < bytes.len() {
-        let c = bytes[i];
+    while let Some(&c) = bytes.get(i) {
         // Separators between tokens: whitespace, comma, slash (shorthand),
         // and the percent sign (a bare `%` follows a number but tolerating it
         // as a separator keeps the tokenizer simple and adds no sink).
@@ -185,7 +174,7 @@ fn value_parses(s: &str) -> bool {
         // remainder of the value is exactly `important` (the sole legitimate
         // use of `!` in a declaration value). Any other `!…` is rejected.
         if c == b'!' {
-            return s[i + 1..].trim_start() == "important";
+            return s.get(i + 1..).is_some_and(|rest| rest.trim_start() == "important");
         }
         // A quoted string token (e.g. a `content` value or a `url("…")` handled
         // inside `parse_function`): only reachable at top level for `content`,
@@ -217,12 +206,12 @@ fn parse_token(bytes: &[u8], start: usize) -> Option<usize> {
     // Consume the ident/number/hexcolour run: the character class permitted in
     // a bare token. `:` is deliberately EXCLUDED so no scheme (`javascript:`,
     // `data:`) can appear anywhere outside the scheme-free `url()` argument.
-    while i < bytes.len() && is_token_byte(bytes[i]) {
+    while bytes.get(i).is_some_and(|&b| is_token_byte(b)) {
         i += 1;
     }
     // A function call: the just-consumed run is the name, and `(` opens it.
-    if i < bytes.len() && bytes[i] == b'(' {
-        let name = &bytes[start..i];
+    if bytes.get(i) == Some(&b'(') {
+        let name = bytes.get(start..i)?;
         return parse_function(bytes, name, i);
     }
     // A bare token must have consumed at least one byte; otherwise `start`
@@ -244,11 +233,11 @@ fn parse_function(bytes: &[u8], name: &[u8], open: usize) -> Option<usize> {
     let mut depth = 0usize;
     let mut close = None;
     let mut i = open;
-    while i < bytes.len() {
-        match bytes[i] {
+    while let Some(&b) = bytes.get(i) {
+        match b {
             b'(' => depth += 1,
             b')' => {
-                depth -= 1;
+                depth = depth.saturating_sub(1);
                 if depth == 0 {
                     close = Some(i);
                     break;
@@ -259,7 +248,7 @@ fn parse_function(bytes: &[u8], name: &[u8], open: usize) -> Option<usize> {
         i += 1;
     }
     let close = close?;
-    let inner = &bytes[open + 1..close];
+    let inner = bytes.get(open + 1..close)?;
     if name_str == "url" {
         if !url_arg_is_safe(inner) {
             return None;
@@ -283,7 +272,7 @@ fn parse_function(bytes: &[u8], name: &[u8], open: usize) -> Option<usize> {
 /// path-only reference is the only `url()` shape that is not an exfil vector, so
 /// the gate admits exactly that and rejects everything else (fail-closed).
 fn url_arg_is_safe(inner: &[u8]) -> bool {
-    let arg = trim_ascii(inner);
+    let arg = inner.trim_ascii();
     if arg.is_empty() {
         return false;
     }
@@ -304,8 +293,7 @@ fn url_arg_is_safe(inner: &[u8]) -> bool {
 /// double-parse in [`css_value_is_safe`] catches an escaped-hidden breakout.
 fn parse_string(bytes: &[u8], start: usize, q: u8) -> Option<usize> {
     let mut i = start + 1;
-    while i < bytes.len() {
-        let c = bytes[i];
+    while let Some(&c) = bytes.get(i) {
         if c == b'\\' {
             // Skip the escaped byte (if any); the decoded-form parse re-scans.
             i += 2;
@@ -332,7 +320,7 @@ fn parse_string(bytes: &[u8], start: usize, q: u8) -> Option<usize> {
 /// non-ASCII (Unicode idents, e.g. a localized keyword). Deliberately EXCLUDES
 /// `:` `;` `{` `}` `<` `>` `(` `)` `,` `/` `%` `"` `'` `*` `@` — every
 /// declaration/ruleset/at-rule breakout and every scheme-introducing byte.
-fn is_token_byte(b: u8) -> bool {
+const fn is_token_byte(b: u8) -> bool {
     b.is_ascii_alphanumeric()
         || matches!(b, b'#' | b'.' | b'+' | b'-' | b'_' | b'\\')
         || b >= 0x80
@@ -342,28 +330,8 @@ fn is_token_byte(b: u8) -> bool {
 /// bytes (including `\`, judged in the decode pass) plus the small set of
 /// path/query characters (`/`, `?`, `&`, `=`, `~`). Excludes `:` (scheme),
 /// quotes, parens, whitespace, and control bytes.
-fn is_url_path_byte(b: u8) -> bool {
+const fn is_url_path_byte(b: u8) -> bool {
     is_token_byte(b) || matches!(b, b'/' | b'?' | b'&' | b'=' | b'~')
-}
-
-/// Trim leading/trailing ASCII whitespace from a byte slice (stable-toolchain
-/// equivalent of `[u8]::trim_ascii`, used to normalize a `url()` argument).
-fn trim_ascii(mut s: &[u8]) -> &[u8] {
-    while let [first, rest @ ..] = s {
-        if first.is_ascii_whitespace() {
-            s = rest;
-        } else {
-            break;
-        }
-    }
-    while let [rest @ .., last] = s {
-        if last.is_ascii_whitespace() {
-            s = rest;
-        } else {
-            break;
-        }
-    }
-    s
 }
 
 /// Decode CSS backslash escapes (CSS Syntax Level 3 §4.3.7) for DETECTION
