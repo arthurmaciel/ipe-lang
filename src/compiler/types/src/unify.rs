@@ -141,20 +141,33 @@ fn unify_step(
 ) -> DResult<()> {
     budget.tick()?;
     // Two finds, reused for both the same-class short-circuit and the content
-    // reads below (efficiency-audit §2 low: `equivalent(a, b)` + two more
-    // finds performed up to 6 union-find traversals where 2 suffice).
-    // `equivalent` is exactly `find(a)? == find(b)?`, so the short-circuit is
-    // identical and path compression still runs on both chains.
+    // reads below — the short-circuit is `find(a)? == find(b)?`, and path
+    // compression runs on both chains as a side effect.
     let ra = uf.find(a)?;
     let rb = uf.find(b)?;
     if ra == rb {
         return Ok(());
     }
+    // Clone a structure descriptor only when an arm actually MOVES one into the
+    // union: peek both roots by reference and, if neither side carries a
+    // structure, dispatch on the trivial `Flex`/`Rigid`/`Super` descriptors
+    // (`bool` + `Copy` bounds) without ever deep-copying a record's field map or
+    // a `Con`'s argument vector. Only the structure arms fetch an owned `Content`.
+    let peek_a = uf.root_content(ra)?;
+    if !matches!(peek_a, Content::Structure(_)) {
+        let peek_b = uf.root_content(rb)?;
+        if !matches!(peek_b, Content::Structure(_)) {
+            // Both descriptors are the trivial `Flex`/`Rigid`/`Super` shapes
+            // (a `bool` + `Copy` bounds); cloning them copies no heap data.
+            let owned_a = peek_a.clone();
+            let owned_b = peek_b.clone();
+            return unify_nonstructure(uf, budget, interner, span, ra, rb, &owned_a, &owned_b);
+        }
+    }
+
     let ca = uf.content(ra)?;
     let cb = uf.content(rb)?;
     match (ca, cb) {
-        // Two flexes collapse into one flex class.
-        (Content::Flex, Content::Flex) => uf.union(ra, rb, Content::Flex),
         // A flex adopts the other side's structure (occurs-checked).
         (Content::Flex, structure @ Content::Structure(_)) => {
             occurs_guard(uf, budget, interner, span, ra, rb)?;
@@ -164,16 +177,75 @@ fn unify_step(
             occurs_guard(uf, budget, interner, span, rb, ra)?;
             uf.union(ra, rb, structure)
         }
+        // A super-typed variable meeting a concrete structure. A flex pins to the
+        // structure when it satisfies the obligations; a rigid cannot be pinned
+        // (the annotation promised a generic), and a structure that fails the
+        // obligations is a mismatch either way.
+        (Content::Super { rigid, bounds }, structure @ Content::Structure(_))
+        | (structure @ Content::Structure(_), Content::Super { rigid, bounds }) => {
+            let pins = match &structure {
+                Content::Structure(flat) => !rigid && super_concrete_ok(interner, bounds, flat),
+                _ => false,
+            };
+            if pins {
+                uf.union(ra, rb, structure)
+            } else {
+                Err(mismatch(uf, budget, interner, span, ra, rb))
+            }
+        }
+        // A rigid against a concrete structure is a mismatch — the annotation
+        // promised a fully parametric variable the body is now trying to pin
+        // down.
+        (Content::Rigid, Content::Structure(_)) | (Content::Structure(_), Content::Rigid) => {
+            Err(mismatch(uf, budget, interner, span, ra, rb))
+        }
+        (Content::Structure(fa), Content::Structure(fb)) => {
+            unify_flat(uf, budget, interner, span, ra, rb, fa, fb, stack)
+        }
+        // At least one side is a structure here (the no-structure fast path
+        // returned above), so every remaining combination pairs a structure with
+        // a `Flex`/`Rigid`/`Super` already handled by an arm above. Delegating the
+        // trivial descriptors keeps the match total without duplicating the
+        // non-structure logic.
+        (a, b) => unify_nonstructure(uf, budget, interner, span, ra, rb, &a, &b),
+    }
+}
+
+/// Merge two variables NEITHER of which carries a structure descriptor — the
+/// `Flex` / `Rigid` / `Super` combinations. Reads only the trivial `Copy`
+/// payloads (`rigid: bool`, `bounds: TyBounds`) off the borrowed descriptors, so
+/// the common inner-loop step (a numeric literal meeting a variable, two rigids
+/// meeting) never deep-copies a descriptor.
+#[allow(clippy::too_many_arguments)]
+fn unify_nonstructure(
+    uf: &mut UnionFind<Content>,
+    budget: &mut Budget,
+    interner: &Interner,
+    span: Span,
+    ra: VarId,
+    rb: VarId,
+    ca: &Content,
+    cb: &Content,
+) -> DResult<()> {
+    match (ca, cb) {
+        // Two flexes collapse into one flex class.
+        (Content::Flex, Content::Flex) => uf.union(ra, rb, Content::Flex),
         // A flex adopts the other side's rigid (skolem). No occurs check is
         // needed: a rigid carries no transitive structure, so the merge cannot
-        // build a cycle. Mirrors the the compiler `(FlexVar, _)` / `(_, FlexVar)` arms.
+        // build a cycle.
         (Content::Flex, Content::Rigid) | (Content::Rigid, Content::Flex) => {
             uf.union(ra, rb, Content::Rigid)
         }
         // A flex adopts a super-typed variable's obligations wholesale.
-        (s @ Content::Super { .. }, Content::Flex) | (Content::Flex, s @ Content::Super { .. }) => {
-            uf.union(ra, rb, s)
-        }
+        (Content::Super { rigid, bounds }, Content::Flex)
+        | (Content::Flex, Content::Super { rigid, bounds }) => uf.union(
+            ra,
+            rb,
+            Content::Super {
+                rigid: *rigid,
+                bounds: *bounds,
+            },
+        ),
         // Two super-typed variables meet.
         //
         // Same rigidity → merge, the survivor owing the union of both obligation
@@ -202,6 +274,14 @@ fn unify_step(
                 bounds: b2,
             },
         ) => {
+            // Two RIGID supers are two distinct annotation skolems — a same-class
+            // pair already short-circuited at the `ra == rb` root check above, so
+            // any rigid/rigid pair here promised the body two independently
+            // generic variables. Merging them conflates the two, accepting a
+            // program whose emitted Rust then fails to type-check (one type
+            // parameter used where the other is expected). They never unify,
+            // exactly as the plain `Rigid` vs `Rigid` path rejects.
+            //
             // Number (`+ - *`) and Append (`++`) require the variable to resolve
             // to a concrete type at monomorphisation / lowering. Letting either
             // cross onto a rigid annotation var would pin an annotation-generic
@@ -211,14 +291,14 @@ fn unify_step(
             // accumulate across rigidity and survive as trait bounds on the param.
             let concrete_dispatch =
                 b1.has_number() || b2.has_number() || b1.has_append() || b2.has_append();
-            let can_union = (r1 == r2) || !concrete_dispatch;
+            let can_union = !(*r1 && *r2) && ((r1 == r2) || !concrete_dispatch);
             if can_union {
                 uf.union(
                     ra,
                     rb,
                     Content::Super {
-                        rigid: r1 || r2,
-                        bounds: b1.union(b2),
+                        rigid: *r1 || *r2,
+                        bounds: b1.union(*b2),
                     },
                 )
             } else {
@@ -228,56 +308,22 @@ fn unify_step(
         // A super-typed FLEX meeting a rigid skolem: the rigid adopts the
         // obligations and stays rigid, so the body's super-typed use of an
         // annotated `a` becomes a trait bound on `a` rather than a rejection.
-        (
-            Content::Super {
-                rigid: false,
-                bounds,
-            },
-            Content::Rigid,
-        )
-        | (
-            Content::Rigid,
-            Content::Super {
-                rigid: false,
-                bounds,
-            },
-        ) => uf.union(
+        (Content::Super { rigid: false, bounds }, Content::Rigid)
+        | (Content::Rigid, Content::Super { rigid: false, bounds }) => uf.union(
             ra,
             rb,
             Content::Super {
                 rigid: true,
-                bounds,
+                bounds: *bounds,
             },
         ),
-        // A super-typed variable meeting a concrete structure. A flex pins to the
-        // structure when it satisfies the obligations; a rigid cannot be pinned
-        // (the annotation promised a generic), and a structure that fails the
-        // obligations is a mismatch either way.
-        (Content::Super { rigid, bounds }, structure @ Content::Structure(_))
-        | (structure @ Content::Structure(_), Content::Super { rigid, bounds }) => {
-            let pins = match &structure {
-                Content::Structure(flat) => !rigid && super_concrete_ok(interner, bounds, flat),
-                _ => false,
-            };
-            if pins {
-                uf.union(ra, rb, structure)
-            } else {
-                Err(mismatch(uf, budget, interner, span, ra, rb))
-            }
-        }
-        // A rigid unifies only with itself (caught by the `equivalent` check
-        // above) or with a flex (handled above). Against a concrete structure, a
-        // *different* rigid, or a super-typed RIGID (which would conflate two
-        // distinct annotation variables) it is a mismatch — the annotation
-        // promised a fully parametric variable the body is now trying to pin
-        // down. Mirrors the the compiler `(RigidVar _, _)` / `(_, RigidVar _)` reject
-        // arms.
-        (Content::Rigid, _) | (_, Content::Rigid) => {
-            Err(mismatch(uf, budget, interner, span, ra, rb))
-        }
-        (Content::Structure(fa), Content::Structure(fb)) => {
-            unify_flat(uf, budget, interner, span, ra, rb, fa, fb, stack)
-        }
+        // Mismatch for everything left: two distinct rigid skolems (a same-class
+        // pair short-circuited at the root check) or a super-typed RIGID meeting a
+        // plain rigid — the annotation promised a fully parametric variable the
+        // body is now trying to pin down. Any structure-involving pair reaching
+        // here would be a caller invariant break (`unify_step` handles those), and
+        // rejecting it fails closed rather than mis-merging.
+        _ => Err(mismatch(uf, budget, interner, span, ra, rb)),
     }
 }
 
@@ -319,6 +365,34 @@ fn empty_home_compat(
 /// so an `Ipe`-rooted home is always the stdlib spelling of a builtin, never a
 /// user shadow.
 const IPE_STDLIB_ROOT: &str = "Ipe";
+
+/// Whether merging `ra` and `rb` would make the surviving class a direct child
+/// of itself — a depth-one cycle (`t = List t`) the structure-vs-structure path
+/// would otherwise mint silently.
+///
+/// A structure-vs-structure union keeps one side's children and merges the two
+/// roots into one class; if any of those kept children already resolves to the
+/// other root, the merged class contains itself. The flex-vs-structure binds run
+/// a full occurs check for the same reason, but two structures with matching
+/// heads never take that path. This is the shallow guard for that path: it reads
+/// only the direct child roots (each an already-compressed `find`), so it costs
+/// O(children) per union rather than a recursive occurs walk — a deep spine
+/// stays linear. A deeper indirect cycle can only close through a
+/// flex-binds-structure step, which `occurs_guard` still covers.
+fn merges_into_self(
+    uf: &mut UnionFind<Content>,
+    ra: VarId,
+    rb: VarId,
+    children: &[VarId],
+) -> DResult<bool> {
+    for &child in children {
+        let root = uf.find(child)?;
+        if root == ra || root == rb {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
 
 /// Unify two concrete structures that share representatives `ra` (found) / `rb`
 /// (expected). Child obligations are pushed onto `stack` (in reverse of source
@@ -379,33 +453,44 @@ fn unify_flat(
             // Prefer the non-empty (more specific) module path as canonical.
             // m1 and m2 are not used after this expression; move them directly.
             let canonical_module = if m1.is_empty() { m2 } else { m1 };
+            if merges_into_self(uf, ra, rb, &as2)? || merges_into_self(uf, ra, rb, &as1)? {
+                return Err(infinite_type(uf, budget, interner, span, ra, rb));
+            }
+            // Queue each argument pair (child ids are `Copy`, read by reference)
+            // BEFORE moving the surviving structure into the union — so `as1` is
+            // moved, never cloned. Push in reverse so LIFO replays them in
+            // ascending index order, matching the original in-place walk. The
+            // driver processes this stack only after the union commits.
+            for (x, y) in as1.iter().zip(as2.iter()).rev() {
+                stack.push((*x, *y));
+            }
             uf.union(
                 ra,
                 rb,
                 Content::Structure(FlatType::Con {
                     module: canonical_module,
                     name: n1,
-                    args: as1.clone(),
+                    args: as1,
                 }),
             )?;
-            // Queue each argument pair. Push in reverse so LIFO replays them in
-            // ascending index order, matching the original in-place walk.
-            for (x, y) in as1.iter().zip(as2.iter()).rev() {
-                stack.push((*x, *y));
-            }
             Ok(())
         }
         (FlatType::Tuple(es1), FlatType::Tuple(es2)) => {
-            // Tuples unify only at the same arity, element-wise. Merge the roots
-            // first so a recursive reference resolves before the children unify.
+            // Tuples unify only at the same arity, element-wise.
             if es1.len() != es2.len() {
                 return Err(mismatch(uf, budget, interner, span, ra, rb));
             }
-            uf.union(ra, rb, Content::Structure(FlatType::Tuple(es1.clone())))?;
-            // Push in reverse so LIFO replays elements in ascending index order.
+            if merges_into_self(uf, ra, rb, &es2)? || merges_into_self(uf, ra, rb, &es1)? {
+                return Err(infinite_type(uf, budget, interner, span, ra, rb));
+            }
+            // Queue element pairs (ids are `Copy`, read by reference) before
+            // moving `es1` into the union — so the surviving element vector is
+            // moved, never cloned. Push in reverse so LIFO replays them in
+            // ascending index order.
             for (x, y) in es1.iter().zip(es2.iter()).rev() {
                 stack.push((*x, *y));
             }
+            uf.union(ra, rb, Content::Structure(FlatType::Tuple(es1)))?;
             Ok(())
         }
         // ── Open-record unification (row-poly) ───────────────────────────────
@@ -635,7 +720,10 @@ fn occurs(
         if here == target {
             return Ok(true);
         }
-        match uf.content(here)? {
+        // Read the descriptor by reference and copy only the child `VarId`s (each
+        // `Copy`) onto the work stack — no per-node descriptor clone, so a record
+        // node's whole field map is never duplicated just to enumerate its tails.
+        match uf.root_content(here)? {
             // Leaves: a flexible, rigid, or super-typed variable, `Unit`, and the
             // `EmptyRecord` closed-tail sentinel carry no children.
             Content::Flex
@@ -643,17 +731,17 @@ fn occurs(
             | Content::Super { .. }
             | Content::Structure(FlatType::Unit | FlatType::EmptyRecord) => {}
             Content::Structure(FlatType::Fun(a, r)) => {
-                stack.push(a);
-                stack.push(r);
+                stack.push(*a);
+                stack.push(*r);
             }
             Content::Structure(FlatType::Con { args, .. }) => {
                 for arg in args {
-                    stack.push(arg);
+                    stack.push(*arg);
                 }
             }
             Content::Structure(FlatType::Tuple(elems)) => {
                 for elem in elems {
-                    stack.push(elem);
+                    stack.push(*elem);
                 }
             }
             Content::Structure(FlatType::Record(fields, ext)) => {
@@ -662,7 +750,7 @@ fn occurs(
                 }
                 // Also walk the extension variable: a row tail that points back
                 // to the record itself would be a cyclic open record.
-                stack.push(ext);
+                stack.push(*ext);
             }
         }
     }
@@ -869,6 +957,58 @@ mod tests {
                 rigid: false,
                 bounds: TyBounds::eq().union(TyBounds::ord()),
             },
+        );
+    }
+
+    /// Two distinct RIGID supers are two independent annotation skolems; a
+    /// same-class pair short-circuits at the root check, so any rigid/rigid pair
+    /// reaching the Super×Super arm must MISMATCH — merging them would accept a
+    /// program whose emitted Rust then fails to type-check. Holds even when both
+    /// carry only pure trait-bound obligations (which cross rigidity when one
+    /// side is flex).
+    #[test]
+    fn super_super_both_rigid_eq_mismatch() {
+        let mut uf = UnionFind::new();
+        let a = super_var(&mut uf, true, TyBounds::eq());
+        let b = super_var(&mut uf, true, TyBounds::eq());
+        assert!(
+            do_unify(&mut uf, a, b).is_err(),
+            "two distinct rigid annotation skolems must never merge"
+        );
+    }
+
+    /// Merging two `List` structures whose element already IS the other root
+    /// would make the class contain itself (`t = List t`); the structure-vs-
+    /// structure path must reject it as an infinite type, not mint the cycle.
+    #[test]
+    fn cyclic_con_union_is_infinite_type() {
+        let mut uf = UnionFind::new();
+        let empty: Vec<ipe_intern::Symbol> = Vec::new();
+        // `outer = List(inner)` where `inner` is a fresh flex.
+        let inner = uf.fresh(Content::Flex).expect("fresh inner");
+        let list_name = {
+            let mut interner = Interner::new();
+            interner.intern("List").expect("intern List")
+        };
+        let outer = uf
+            .fresh(Content::Structure(FlatType::Con {
+                module: empty.clone(),
+                name: list_name,
+                args: vec![inner],
+            }))
+            .expect("fresh outer");
+        // `self_list = List(outer)`. Unifying it with `outer` forces
+        // `inner = outer`, i.e. `outer = List outer` — an infinite type.
+        let self_list = uf
+            .fresh(Content::Structure(FlatType::Con {
+                module: empty,
+                name: list_name,
+                args: vec![outer],
+            }))
+            .expect("fresh self_list");
+        assert!(
+            do_unify(&mut uf, outer, self_list).is_err(),
+            "a structure that would contain itself must be rejected"
         );
     }
 
