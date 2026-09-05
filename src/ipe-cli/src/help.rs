@@ -1080,7 +1080,10 @@ mod tests {
     fn add_and_remove_are_hidden_but_dispatchable() {
         for name in ["add", "remove"] {
             let cmd = find(name).expect("command still in the registry");
-            assert!(cmd.hidden, "{name} must be hidden from the top-level screen");
+            assert!(
+                cmd.hidden,
+                "{name} must be hidden from the top-level screen"
+            );
             assert!(handler(name).is_some(), "{name} must stay dispatchable");
             // Its per-command help page still renders (documentation survives).
             let page = render_command(cmd, &Palette::PLAIN);
@@ -1089,7 +1092,10 @@ mod tests {
         // Neither appears on the top-level screen.
         let plain = render_top_level(&Palette::PLAIN);
         assert!(!plain.contains("ipe add "), "add must not be advertised");
-        assert!(!plain.contains("ipe remove "), "remove must not be advertised");
+        assert!(
+            !plain.contains("ipe remove "),
+            "remove must not be advertised"
+        );
     }
 
     // The single-source-of-truth invariant: dispatch and advertisement are the

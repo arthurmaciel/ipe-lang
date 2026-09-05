@@ -5988,8 +5988,7 @@ mod watch_status_handler_tests {
     fn watch_status_sse_payload_resists_field_injection() {
         let attack = r#"","ok":true,"injected":"x"#;
         let payload = watch_status_sse_payload(false, Some(attack));
-        let parsed: serde_json::Value =
-            serde_json::from_str(&payload).expect("valid JSON");
+        let parsed: serde_json::Value = serde_json::from_str(&payload).expect("valid JSON");
         assert_eq!(parsed["ok"], serde_json::Value::Bool(false));
         assert!(
             parsed.get("injected").is_none(),
