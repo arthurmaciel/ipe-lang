@@ -281,6 +281,13 @@ fn url_arg_is_safe(inner: &[u8]) -> bool {
     if arg.is_empty() {
         return false;
     }
+    // A leading `//` is a protocol-relative authority (`//host/path`) — a
+    // network-fetch / exfiltration shape even without an explicit scheme. Only
+    // a same-document / same-origin reference (relative path or root-absolute
+    // `/path`, never `//host`) is admitted.
+    if arg.starts_with(b"//") {
+        return false;
+    }
     arg.iter().all(|&b| is_url_path_byte(b))
 }
 
