@@ -178,6 +178,9 @@ fn ir_type_name_at(interner: &Interner, ty: &IrType, depth: u16) -> String {
                 UiCtor::Placeholder => "Input.Placeholder",
                 // Ipe.Ui.Input radio option type.
                 UiCtor::RadioOption => "Input.RadioOption",
+                // Ipe.Tea.Cli.Ui structured Lines view + its line-native attribute.
+                UiCtor::CliLines => "Cli.Lines",
+                UiCtor::CliAttribute => "Cli.Ui.Attribute",
             };
             format!("{} {}", ctor_name, ir_type_name_at(interner, msg, depth))
         }
@@ -190,6 +193,8 @@ fn ir_type_name_at(interner: &Interner, ty: &IrType, depth: u16) -> String {
             UiPlain::PseudoClass => "PseudoClass".to_owned(),
             UiPlain::Description => "Description".to_owned(),
             UiPlain::LayoutContext => "LayoutContext".to_owned(),
+            // Ipe terminal palette, first-class in the terminal view surface.
+            UiPlain::TermColor => "Terminal.Color".to_owned(),
         },
         IrType::WebReq => "WebReq".to_owned(),
         IrType::SessionHandle => "SessionHandle".to_owned(),

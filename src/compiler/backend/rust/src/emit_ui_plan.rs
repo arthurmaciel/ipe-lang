@@ -302,6 +302,12 @@ pub const fn appearance_literal_args(k: KernelFn) -> &'static [(usize, LitKind)]
         KernelFn::UiRgb => &[(0, Int), (1, Int), (2, Int)],
         // `rgba`: three `Int` channels plus a `Float` alpha (opacity).
         KernelFn::UiRgba => &[(0, Int), (1, Int), (2, Int), (3, Float)],
+        // `Terminal.Color.rgb : Int -> Int -> Int -> Color` — three direct
+        // channel literals, the truecolour path of the terminal palette.
+        KernelFn::TermColorRgb => &[(0, Int), (1, Int), (2, Int)],
+        // `Terminal.Color.rgba : Int -> Int -> Int -> Float -> Color` — three
+        // `Int` channels plus a `Float` alpha.
+        KernelFn::TermColorRgba => &[(0, Int), (1, Int), (2, Int), (3, Float)],
 
         // ── Ipe.Ui — direct numeric appearance scalars ────────────────────
         // Each kernel's marked position is a *direct* `Int`/`Float` scalar the
@@ -1056,8 +1062,37 @@ pub const fn appearance_literal_args(k: KernelFn) -> &'static [(usize, LitKind)]
         | KernelFn::TuiUiCenter
         | KernelFn::TuiUiBold
         | KernelFn::TuiUiUnderline
+        | KernelFn::TuiUiDim
+        | KernelFn::TuiUiReverse
         | KernelFn::TuiUiColor
         | KernelFn::TuiUiBg
+        | KernelFn::CliUiNone
+        | KernelFn::CliUiText
+        | KernelFn::CliUiLine
+        | KernelFn::CliUiLines
+        | KernelFn::CliUiBold
+        | KernelFn::CliUiUnderline
+        | KernelFn::CliUiDim
+        | KernelFn::CliUiReverse
+        | KernelFn::CliUiColor
+        | KernelFn::CliUiBg
+        | KernelFn::TermColorBlack
+        | KernelFn::TermColorRed
+        | KernelFn::TermColorGreen
+        | KernelFn::TermColorYellow
+        | KernelFn::TermColorBlue
+        | KernelFn::TermColorMagenta
+        | KernelFn::TermColorCyan
+        | KernelFn::TermColorWhite
+        | KernelFn::TermColorBrightBlack
+        | KernelFn::TermColorBrightRed
+        | KernelFn::TermColorBrightGreen
+        | KernelFn::TermColorBrightYellow
+        | KernelFn::TermColorBrightBlue
+        | KernelFn::TermColorBrightMagenta
+        | KernelFn::TermColorBrightCyan
+        | KernelFn::TermColorBrightWhite
+        | KernelFn::TermColorDefault
         | KernelFn::UiWidget
         | KernelFn::UiNode
         | KernelFn::UiTaggedNode
@@ -1566,8 +1601,41 @@ pub const fn ui_call_shape(k: KernelFn) -> Option<UiEmitPlan> {
         KernelFn::TuiUiCenter => pos("ipe_runtime::tui::tui_center_", 0),
         KernelFn::TuiUiBold => pos("ipe_runtime::tui::tui_bold_", 0),
         KernelFn::TuiUiUnderline => pos("ipe_runtime::tui::tui_underline_", 0),
+        KernelFn::TuiUiDim => pos("ipe_runtime::tui::tui_dim_", 0),
+        KernelFn::TuiUiReverse => pos("ipe_runtime::tui::tui_reverse_", 0),
         KernelFn::TuiUiColor => pos("ipe_runtime::tui::tui_color_", 1),
         KernelFn::TuiUiBg => pos("ipe_runtime::tui::tui_bg_", 1),
+        // ── Ipe.Tea.Cli.Ui line-oriented view + attribute builders ──
+        KernelFn::CliUiNone => pos("ipe_runtime::tui::cli_none_", 0),
+        KernelFn::CliUiText => pos("ipe_runtime::tui::cli_text_", 1),
+        KernelFn::CliUiLine => pos("ipe_runtime::tui::cli_line_", 2),
+        KernelFn::CliUiLines => pos("ipe_runtime::tui::cli_lines_", 1),
+        KernelFn::CliUiBold => pos("ipe_runtime::tui::cli_bold_", 0),
+        KernelFn::CliUiUnderline => pos("ipe_runtime::tui::cli_underline_", 0),
+        KernelFn::CliUiDim => pos("ipe_runtime::tui::cli_dim_", 0),
+        KernelFn::CliUiReverse => pos("ipe_runtime::tui::cli_reverse_", 0),
+        KernelFn::CliUiColor => pos("ipe_runtime::tui::cli_color_", 1),
+        KernelFn::CliUiBg => pos("ipe_runtime::tui::cli_bg_", 1),
+        // ── Ipe.Tea.Terminal.Color palette constructors ──
+        KernelFn::TermColorBlack => pos("ipe_runtime::tui::term_color_black_", 0),
+        KernelFn::TermColorRed => pos("ipe_runtime::tui::term_color_red_", 0),
+        KernelFn::TermColorGreen => pos("ipe_runtime::tui::term_color_green_", 0),
+        KernelFn::TermColorYellow => pos("ipe_runtime::tui::term_color_yellow_", 0),
+        KernelFn::TermColorBlue => pos("ipe_runtime::tui::term_color_blue_", 0),
+        KernelFn::TermColorMagenta => pos("ipe_runtime::tui::term_color_magenta_", 0),
+        KernelFn::TermColorCyan => pos("ipe_runtime::tui::term_color_cyan_", 0),
+        KernelFn::TermColorWhite => pos("ipe_runtime::tui::term_color_white_", 0),
+        KernelFn::TermColorBrightBlack => pos("ipe_runtime::tui::term_color_bright_black_", 0),
+        KernelFn::TermColorBrightRed => pos("ipe_runtime::tui::term_color_bright_red_", 0),
+        KernelFn::TermColorBrightGreen => pos("ipe_runtime::tui::term_color_bright_green_", 0),
+        KernelFn::TermColorBrightYellow => pos("ipe_runtime::tui::term_color_bright_yellow_", 0),
+        KernelFn::TermColorBrightBlue => pos("ipe_runtime::tui::term_color_bright_blue_", 0),
+        KernelFn::TermColorBrightMagenta => pos("ipe_runtime::tui::term_color_bright_magenta_", 0),
+        KernelFn::TermColorBrightCyan => pos("ipe_runtime::tui::term_color_bright_cyan_", 0),
+        KernelFn::TermColorBrightWhite => pos("ipe_runtime::tui::term_color_bright_white_", 0),
+        KernelFn::TermColorDefault => pos("ipe_runtime::tui::term_color_default_", 0),
+        KernelFn::TermColorRgb => pos("ipe_runtime::tui::term_color_rgb_", 3),
+        KernelFn::TermColorRgba => pos("ipe_runtime::tui::term_color_rgba_", 4),
         // `Ui.widget ce state on_up` — the server-driven custom-element node.
         // A bespoke arm, not a plain positional call: `ui_widget_`'s handler
         // parameter carries `F: Fn(Up) -> M + Send + Sync + 'static`, which the

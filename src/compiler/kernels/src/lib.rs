@@ -377,6 +377,20 @@ pub enum BuiltinTag {
     /// only terminal-honorable attributes inhabit it, so a DOM attribute is
     /// unnameable in a `Screen` view (a type error, never a silent drop).
     TuiAttr,
+    /// `Lines` — the Cli-only line-oriented view type constructor `Lines msg`
+    /// (exposed name `Lines`). Distinct from both `Element msg` and `Screen msg`;
+    /// produced exclusively by `Ipe.Tea.Cli.Ui.*` builders. Line-scoped: it has
+    /// no 2D geometry, so a cell-grid or DOM builder is unnameable in it.
+    CliLines,
+    /// `CliAttr` — the line-native attribute type constructor
+    /// `Ipe.Tea.Cli.Ui.Attribute msg`. Only line-scoped styles inhabit it
+    /// (bold/underline/dim/reverse/colour), so a 2D cell attribute or a DOM
+    /// attribute is unnameable in a `Lines` view (a type error, never a drop).
+    CliAttr,
+    /// `Color` (spelled `Terminal.Color`) — the closed terminal colour palette:
+    /// sixteen named ANSI colours plus `default`, plus a truecolour path. The
+    /// argument type of the Tui and Cli `color` / `bg` builders.
+    TermColor,
     /// `CustomElement` — the JS-widget boundary constructor `CustomElement down up`,
     /// applied to its sealed down-state and up-event types. Empty-module
     /// (unqualified); an opaque handle produced only by the reserved `CustomElement.fromFile`
@@ -1794,10 +1808,74 @@ pub enum StdlibKernel {
     TuiUiBold,
     /// `TuiUi.underline : Attribute msg`
     TuiUiUnderline,
+    /// `TuiUi.dim : Attribute msg` — faint text.
+    TuiUiDim,
+    /// `TuiUi.reverse : Attribute msg` — reverse video.
+    TuiUiReverse,
     /// `TuiUi.color : Color -> Attribute msg` — foreground text colour.
     TuiUiColor,
     /// `TuiUi.bg : Color -> Attribute msg` — background colour.
     TuiUiBg,
+    // ── Ipe.Tea.Cli.Ui line-oriented view + attribute builders ─────────────────
+    /// `CliUi.none : Lines msg` — the empty line view.
+    CliUiNone,
+    /// `CliUi.text : String -> Lines msg` — one unstyled line.
+    CliUiText,
+    /// `CliUi.line : List (Attribute msg) -> String -> Lines msg` — one styled line.
+    CliUiLine,
+    /// `CliUi.lines : List (Lines msg) -> Lines msg` — stack lines vertically.
+    CliUiLines,
+    /// `CliUi.bold : Attribute msg`
+    CliUiBold,
+    /// `CliUi.underline : Attribute msg`
+    CliUiUnderline,
+    /// `CliUi.dim : Attribute msg` — faint text.
+    CliUiDim,
+    /// `CliUi.reverse : Attribute msg` — reverse video.
+    CliUiReverse,
+    /// `CliUi.color : Color -> Attribute msg` — foreground text colour.
+    CliUiColor,
+    /// `CliUi.bg : Color -> Attribute msg` — background colour.
+    CliUiBg,
+    // ── Ipe.Tea.Terminal.Color palette constructors (nullary closed sum) ───────
+    /// `TermColor.black : Color`
+    TermColorBlack,
+    /// `TermColor.red : Color`
+    TermColorRed,
+    /// `TermColor.green : Color`
+    TermColorGreen,
+    /// `TermColor.yellow : Color`
+    TermColorYellow,
+    /// `TermColor.blue : Color`
+    TermColorBlue,
+    /// `TermColor.magenta : Color`
+    TermColorMagenta,
+    /// `TermColor.cyan : Color`
+    TermColorCyan,
+    /// `TermColor.white : Color`
+    TermColorWhite,
+    /// `TermColor.brightBlack : Color`
+    TermColorBrightBlack,
+    /// `TermColor.brightRed : Color`
+    TermColorBrightRed,
+    /// `TermColor.brightGreen : Color`
+    TermColorBrightGreen,
+    /// `TermColor.brightYellow : Color`
+    TermColorBrightYellow,
+    /// `TermColor.brightBlue : Color`
+    TermColorBrightBlue,
+    /// `TermColor.brightMagenta : Color`
+    TermColorBrightMagenta,
+    /// `TermColor.brightCyan : Color`
+    TermColorBrightCyan,
+    /// `TermColor.brightWhite : Color`
+    TermColorBrightWhite,
+    /// `TermColor.default : Color` — the terminal's own default colour.
+    TermColorDefault,
+    /// `TermColor.rgb : Int -> Int -> Int -> Color` — a 24-bit truecolour.
+    TermColorRgb,
+    /// `TermColor.rgba : Int -> Int -> Int -> Float -> Color` — truecolour + alpha.
+    TermColorRgba,
     /// `Ui.widget : CustomElement down up -> down -> (up -> msg) -> Element msg` —
     /// the one view node that places a typed JS custom-element widget. The
     /// `CustomElement` handle is opaque; it lowers to the shipped widget handle
@@ -3807,8 +3885,85 @@ impl StdlibKernel {
             Self::TuiUiCenter => d("TuiUi", "center", 0, Ui, "tui_center_"),
             Self::TuiUiBold => d("TuiUi", "bold", 0, Ui, "tui_bold_"),
             Self::TuiUiUnderline => d("TuiUi", "underline", 0, Ui, "tui_underline_"),
+            Self::TuiUiDim => d("TuiUi", "dim", 0, Ui, "tui_dim_"),
+            Self::TuiUiReverse => d("TuiUi", "reverse", 0, Ui, "tui_reverse_"),
             Self::TuiUiColor => d("TuiUi", "color", 1, Ui, "tui_color_"),
             Self::TuiUiBg => d("TuiUi", "bg", 1, Ui, "tui_bg_"),
+            // ── Ipe.Tea.Cli.Ui line-oriented view + attribute builders ────
+            Self::CliUiNone => d("CliUi", "none", 0, Ui, "cli_none_"),
+            Self::CliUiText => d("CliUi", "text", 1, Ui, "cli_text_"),
+            Self::CliUiLine => d("CliUi", "line", 2, Ui, "cli_line_"),
+            Self::CliUiLines => d("CliUi", "lines", 1, Ui, "cli_lines_"),
+            Self::CliUiBold => d("CliUi", "bold", 0, Ui, "cli_bold_"),
+            Self::CliUiUnderline => d("CliUi", "underline", 0, Ui, "cli_underline_"),
+            Self::CliUiDim => d("CliUi", "dim", 0, Ui, "cli_dim_"),
+            Self::CliUiReverse => d("CliUi", "reverse", 0, Ui, "cli_reverse_"),
+            Self::CliUiColor => d("CliUi", "color", 1, Ui, "cli_color_"),
+            Self::CliUiBg => d("CliUi", "bg", 1, Ui, "cli_bg_"),
+            // ── Ipe.Tea.Terminal.Color palette constructors ──────────────
+            Self::TermColorBlack => d("TermColor", "black", 0, Pure, "term_color_black_"),
+            Self::TermColorRed => d("TermColor", "red", 0, Pure, "term_color_red_"),
+            Self::TermColorGreen => d("TermColor", "green", 0, Pure, "term_color_green_"),
+            Self::TermColorYellow => d("TermColor", "yellow", 0, Pure, "term_color_yellow_"),
+            Self::TermColorBlue => d("TermColor", "blue", 0, Pure, "term_color_blue_"),
+            Self::TermColorMagenta => d("TermColor", "magenta", 0, Pure, "term_color_magenta_"),
+            Self::TermColorCyan => d("TermColor", "cyan", 0, Pure, "term_color_cyan_"),
+            Self::TermColorWhite => d("TermColor", "white", 0, Pure, "term_color_white_"),
+            Self::TermColorBrightBlack => d(
+                "TermColor",
+                "brightBlack",
+                0,
+                Pure,
+                "term_color_bright_black_",
+            ),
+            Self::TermColorBrightRed => {
+                d("TermColor", "brightRed", 0, Pure, "term_color_bright_red_")
+            }
+            Self::TermColorBrightGreen => d(
+                "TermColor",
+                "brightGreen",
+                0,
+                Pure,
+                "term_color_bright_green_",
+            ),
+            Self::TermColorBrightYellow => d(
+                "TermColor",
+                "brightYellow",
+                0,
+                Pure,
+                "term_color_bright_yellow_",
+            ),
+            Self::TermColorBrightBlue => d(
+                "TermColor",
+                "brightBlue",
+                0,
+                Pure,
+                "term_color_bright_blue_",
+            ),
+            Self::TermColorBrightMagenta => d(
+                "TermColor",
+                "brightMagenta",
+                0,
+                Pure,
+                "term_color_bright_magenta_",
+            ),
+            Self::TermColorBrightCyan => d(
+                "TermColor",
+                "brightCyan",
+                0,
+                Pure,
+                "term_color_bright_cyan_",
+            ),
+            Self::TermColorBrightWhite => d(
+                "TermColor",
+                "brightWhite",
+                0,
+                Pure,
+                "term_color_bright_white_",
+            ),
+            Self::TermColorDefault => d("TermColor", "default", 0, Pure, "term_color_default_"),
+            Self::TermColorRgb => d("TermColor", "rgb", 3, Pure, "term_color_rgb_"),
+            Self::TermColorRgba => d("TermColor", "rgba", 4, Pure, "term_color_rgba_"),
             Self::UiWidget => d("Ui", "widget", 3, Ui, "ui_widget_"),
             Self::UiNode => d("Ui", "node", 3, Ui, "ui_node_"),
             Self::UiTaggedNode => d("Ui", "taggedNode", 4, Ui, "ui_tagged_node_"),
@@ -5310,8 +5465,41 @@ impl StdlibKernel {
         Self::TuiUiCenter,
         Self::TuiUiBold,
         Self::TuiUiUnderline,
+        Self::TuiUiDim,
+        Self::TuiUiReverse,
         Self::TuiUiColor,
         Self::TuiUiBg,
+        // Ipe.Tea.Cli.Ui line-oriented view + attribute builders
+        Self::CliUiNone,
+        Self::CliUiText,
+        Self::CliUiLine,
+        Self::CliUiLines,
+        Self::CliUiBold,
+        Self::CliUiUnderline,
+        Self::CliUiDim,
+        Self::CliUiReverse,
+        Self::CliUiColor,
+        Self::CliUiBg,
+        // Ipe.Tea.Terminal.Color palette constructors
+        Self::TermColorBlack,
+        Self::TermColorRed,
+        Self::TermColorGreen,
+        Self::TermColorYellow,
+        Self::TermColorBlue,
+        Self::TermColorMagenta,
+        Self::TermColorCyan,
+        Self::TermColorWhite,
+        Self::TermColorBrightBlack,
+        Self::TermColorBrightRed,
+        Self::TermColorBrightGreen,
+        Self::TermColorBrightYellow,
+        Self::TermColorBrightBlue,
+        Self::TermColorBrightMagenta,
+        Self::TermColorBrightCyan,
+        Self::TermColorBrightWhite,
+        Self::TermColorDefault,
+        Self::TermColorRgb,
+        Self::TermColorRgba,
         Self::UiWidget,
         Self::UiNode,
         Self::UiTaggedNode,
@@ -7719,7 +7907,35 @@ impl StdlibKernel {
         const LIST_LIST_CHAR_TO_CELLS_A: TyShape = TyShape::Fun(&LIST_LIST_CHAR, &CELLS_A);
         // Cell-native attribute builders.
         const INT_TO_TUI_ATTR_A: TyShape = TyShape::Fun(&INT, &TUI_ATTR_A);
-        const COLOR_TO_TUI_ATTR_A: TyShape = TyShape::Fun(&COLOR, &TUI_ATTR_A);
+        // The first-class terminal palette type. Both Tui and Cli `color`/`bg`
+        // take it, so a colour is one type everywhere in a terminal view.
+        const TERM_COLOR: TyShape = TyShape::Con(BuiltinTag::TermColor, &[]);
+        const COLOR_TO_TUI_ATTR_A: TyShape = TyShape::Fun(&TERM_COLOR, &TUI_ATTR_A);
+        // `Lines msg` (var(0) = msg) and the Cli line-native attribute type and
+        // list slots — DISTINCT from both DOM `UI_ATTR_A` and cell `TUI_ATTR_A`.
+        const LINES_A: TyShape = TyShape::Con(BuiltinTag::CliLines, &[A]);
+        const LIST_LINES_A: TyShape = TyShape::Con(BuiltinTag::List, &[LINES_A]);
+        const CLI_ATTR_A: TyShape = TyShape::Con(BuiltinTag::CliAttr, &[A]);
+        const LIST_CLI_ATTR_A: TyShape = TyShape::Con(BuiltinTag::List, &[CLI_ATTR_A]);
+        // `String -> Lines msg` (text)
+        const STRING_TO_LINES_A: TyShape = TyShape::Fun(&STRING, &LINES_A);
+        // `List (Attribute msg) -> String -> Lines msg` (line)
+        const STRING_TO_LINES_A_INNER: TyShape = TyShape::Fun(&STRING, &LINES_A);
+        const CLI_LINE: TyShape = TyShape::Fun(&LIST_CLI_ATTR_A, &STRING_TO_LINES_A_INNER);
+        // `List (Lines msg) -> Lines msg` (lines)
+        const LIST_LINES_A_TO_LINES_A: TyShape = TyShape::Fun(&LIST_LINES_A, &LINES_A);
+        // Line-native colour attribute builders.
+        const COLOR_TO_CLI_ATTR_A: TyShape = TyShape::Fun(&TERM_COLOR, &CLI_ATTR_A);
+        // Terminal palette constructors.
+        const INT_TO_INT_TO_INT_TO_TERM_COLOR: TyShape =
+            TyShape::Fun(&INT, &TyShape::Fun(&INT, &TyShape::Fun(&INT, &TERM_COLOR)));
+        const INT_TO_INT_TO_INT_TO_FLOAT_TO_TERM_COLOR: TyShape = TyShape::Fun(
+            &INT,
+            &TyShape::Fun(
+                &INT,
+                &TyShape::Fun(&INT, &TyShape::Fun(&FLOAT, &TERM_COLOR)),
+            ),
+        );
 
         // ── Ipe.Ui element / layout arrows. ──
         // `layout : List (Attribute msg) -> Element msg -> Html msg`.
@@ -9205,8 +9421,39 @@ impl StdlibKernel {
             | Self::TuiUiAlignRight
             | Self::TuiUiCenter
             | Self::TuiUiBold
-            | Self::TuiUiUnderline => Some(&TUI_ATTR_A),
+            | Self::TuiUiUnderline
+            | Self::TuiUiDim
+            | Self::TuiUiReverse => Some(&TUI_ATTR_A),
             Self::TuiUiColor | Self::TuiUiBg => Some(&COLOR_TO_TUI_ATTR_A),
+            // ── Ipe.Tea.Cli.Ui line-oriented builders. ──
+            Self::CliUiNone => Some(&LINES_A),
+            Self::CliUiText => Some(&STRING_TO_LINES_A),
+            Self::CliUiLine => Some(&CLI_LINE),
+            Self::CliUiLines => Some(&LIST_LINES_A_TO_LINES_A),
+            Self::CliUiBold | Self::CliUiUnderline | Self::CliUiDim | Self::CliUiReverse => {
+                Some(&CLI_ATTR_A)
+            }
+            Self::CliUiColor | Self::CliUiBg => Some(&COLOR_TO_CLI_ATTR_A),
+            // ── Ipe.Tea.Terminal.Color palette constructors. ──
+            Self::TermColorBlack
+            | Self::TermColorRed
+            | Self::TermColorGreen
+            | Self::TermColorYellow
+            | Self::TermColorBlue
+            | Self::TermColorMagenta
+            | Self::TermColorCyan
+            | Self::TermColorWhite
+            | Self::TermColorBrightBlack
+            | Self::TermColorBrightRed
+            | Self::TermColorBrightGreen
+            | Self::TermColorBrightYellow
+            | Self::TermColorBrightBlue
+            | Self::TermColorBrightMagenta
+            | Self::TermColorBrightCyan
+            | Self::TermColorBrightWhite
+            | Self::TermColorDefault => Some(&TERM_COLOR),
+            Self::TermColorRgb => Some(&INT_TO_INT_TO_INT_TO_TERM_COLOR),
+            Self::TermColorRgba => Some(&INT_TO_INT_TO_INT_TO_FLOAT_TO_TERM_COLOR),
             Self::UiWidget => Some(&UI_WIDGET),
             Self::UiNode => Some(&UI_NODE),
             Self::UiTaggedNode => Some(&UI_TAGGED_NODE),
@@ -10311,8 +10558,39 @@ impl StdlibKernel {
             | Self::TuiUiCenter
             | Self::TuiUiBold
             | Self::TuiUiUnderline
+            | Self::TuiUiDim
+            | Self::TuiUiReverse
             | Self::TuiUiColor
             | Self::TuiUiBg
+            | Self::CliUiNone
+            | Self::CliUiText
+            | Self::CliUiLine
+            | Self::CliUiLines
+            | Self::CliUiBold
+            | Self::CliUiUnderline
+            | Self::CliUiDim
+            | Self::CliUiReverse
+            | Self::CliUiColor
+            | Self::CliUiBg
+            | Self::TermColorBlack
+            | Self::TermColorRed
+            | Self::TermColorGreen
+            | Self::TermColorYellow
+            | Self::TermColorBlue
+            | Self::TermColorMagenta
+            | Self::TermColorCyan
+            | Self::TermColorWhite
+            | Self::TermColorBrightBlack
+            | Self::TermColorBrightRed
+            | Self::TermColorBrightGreen
+            | Self::TermColorBrightYellow
+            | Self::TermColorBrightBlue
+            | Self::TermColorBrightMagenta
+            | Self::TermColorBrightCyan
+            | Self::TermColorBrightWhite
+            | Self::TermColorDefault
+            | Self::TermColorRgb
+            | Self::TermColorRgba
             | Self::UiNode
             | Self::UiTaggedNode
             | Self::UiButton
@@ -11888,8 +12166,39 @@ impl StdlibKernel {
                 | Self::TuiUiCenter
                 | Self::TuiUiBold
                 | Self::TuiUiUnderline
+                | Self::TuiUiDim
+                | Self::TuiUiReverse
                 | Self::TuiUiColor
                 | Self::TuiUiBg
+                | Self::CliUiNone
+                | Self::CliUiText
+                | Self::CliUiLine
+                | Self::CliUiLines
+                | Self::CliUiBold
+                | Self::CliUiUnderline
+                | Self::CliUiDim
+                | Self::CliUiReverse
+                | Self::CliUiColor
+                | Self::CliUiBg
+                | Self::TermColorBlack
+                | Self::TermColorRed
+                | Self::TermColorGreen
+                | Self::TermColorYellow
+                | Self::TermColorBlue
+                | Self::TermColorMagenta
+                | Self::TermColorCyan
+                | Self::TermColorWhite
+                | Self::TermColorBrightBlack
+                | Self::TermColorBrightRed
+                | Self::TermColorBrightGreen
+                | Self::TermColorBrightYellow
+                | Self::TermColorBrightBlue
+                | Self::TermColorBrightMagenta
+                | Self::TermColorBrightCyan
+                | Self::TermColorBrightWhite
+                | Self::TermColorDefault
+                | Self::TermColorRgb
+                | Self::TermColorRgba
                 | Self::UiWidget
                 | Self::UiNode
                 | Self::UiTaggedNode

@@ -150,9 +150,11 @@ fn every_kernel_name_resolves_to_runtime_fn() {
     );
 
     // ── 2. Walk src/runtime/rust/src/**/*.rs: collect all `pub fn` names ─
+    //    (`pub const fn` is also a callable runtime symbol — e.g. the nullary
+    //    `term_color_*` colour constructors — so the pattern accepts `const`.)
     let runtime_src_dir = root.join("src");
     let mut runtime_fns: HashSet<String> = HashSet::new();
-    let fn_re = regex::Regex::new(r"pub fn ([a-z_][a-z0-9_]*)").expect("fn_re");
+    let fn_re = regex::Regex::new(r"pub (?:const )?fn ([a-z_][a-z0-9_]*)").expect("fn_re");
 
     walk(&runtime_src_dir, &fn_re, &mut runtime_fns);
     assert!(
