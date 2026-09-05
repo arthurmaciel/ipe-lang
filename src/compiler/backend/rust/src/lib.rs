@@ -1394,6 +1394,12 @@ impl<'a> EmitCtx<'a> {
         webview_window: Option<WebViewWindow>,
     ) -> DResult<Self> {
         let mut enum_names: BTreeMap<(ModPath, Symbol), String> = BTreeMap::new();
+        // Generated Rust type name -> the first Ipê type (dotted) that claimed
+        // it. Keyed by the emitted name so a fold collision is an O(1) lookup
+        // (not a scan of `enum_names`), and so the loser of a collision can be
+        // disambiguated to a free name instead of the whole program being
+        // rejected.
+        let mut enum_rust_names: BTreeMap<String, String> = BTreeMap::new();
         let mut variant_fields: BTreeMap<(ModPath, Symbol, Symbol), Vec<IrType>> = BTreeMap::new();
         let mut enum_variants: BTreeMap<(ModPath, Symbol), VariantList> = BTreeMap::new();
         let mut func_names = BTreeMap::new();
@@ -1460,33 +1466,32 @@ impl<'a> EmitCtx<'a> {
                 // Guard the emitted-name space too: `naming::enum_name`'s camel-case
                 // fold is not injective over the (home, name) split (`["Std",
                 // "Palette"]/Color` and `["Std"]/PaletteColor` both fold to
-                // `StdPaletteColor`), so two DISTINCT identities could otherwise
-                // emit the same Rust enum and trip `rustc` E0428. Fail closed and
-                // name both colliding Ipê types (IPE-N0048) rather than emit a
-                // broken crate.
-                if let Some((first_home, first_name)) = enum_names
-                    .iter()
-                    .find(|(_, n)| *n == &rust_name)
-                    .map(|(k, _)| k)
+                // `StdPaletteColor`), so two DISTINCT identities would otherwise
+                // emit the same Rust enum and trip `rustc` E0428. Disambiguate the
+                // loser to a free name so the legal program still emits; only a
+                // degenerate name space with no free suffix fails closed with the
+                // fold diagnostic (IPE-N0048) naming both Ipê types.
+                let this_dotted = ipe_dotted_name(&home_segs, def_name);
+                let rust_name = match disambiguated_rust_name(&rust_name, "", &enum_rust_names)
                 {
-                    let first_segs = first_home
-                        .0
-                        .iter()
-                        .map(|s| resolve_sym(interner, *s))
-                        .collect::<DResult<Vec<&str>>>()?;
-                    let first_dotted =
-                        ipe_dotted_name(&first_segs, resolve_sym(interner, *first_name)?);
-                    let second_dotted = ipe_dotted_name(&home_segs, def_name);
-                    return Err(Diagnostic::Name {
-                        span: Span::DUMMY,
-                        msg: NameError::RustNameFold {
-                            first: first_dotted.into_boxed_str(),
-                            second: second_dotted.into_boxed_str(),
-                            rust_name: rust_name.into_boxed_str(),
-                            kind: RustNameFoldKind::Type,
-                        },
-                    });
-                }
+                    Some(name) => name,
+                    None => {
+                        let first_dotted = enum_rust_names
+                            .get(&rust_name)
+                            .cloned()
+                            .unwrap_or_default();
+                        return Err(Diagnostic::Name {
+                            span: Span::DUMMY,
+                            msg: NameError::RustNameFold {
+                                first: first_dotted.into_boxed_str(),
+                                second: this_dotted.into_boxed_str(),
+                                rust_name: rust_name.into_boxed_str(),
+                                kind: RustNameFoldKind::Type,
+                            },
+                        });
+                    }
+                };
+                enum_rust_names.insert(rust_name.clone(), this_dotted);
                 enum_names.insert(key.clone(), rust_name.clone());
                 let mut all_fields = Vec::with_capacity(def.variants.len());
                 for variant in &def.variants {
@@ -1516,27 +1521,34 @@ impl<'a> EmitCtx<'a> {
                     .map(|s| resolve_sym(interner, *s))
                     .collect::<DResult<Vec<&str>>>()?;
                 let rust_name = naming::module_value(&func_segs, resolve_sym(interner, func.name)?);
-                // AUD-08: mirror the enum guard above (`enum_names.values().any`,
-                // line ~306). `naming::module_value`'s snake_case fold is not
-                // injective over the (home, name) split — `["Std", "Ui"]/borderRounded`
-                // and `["Std", "Ui", "Border"]/rounded` both fold to
-                // `std_ui_border_rounded` — so two DISTINCT functions could
-                // otherwise emit the same Rust fn and trip `rustc` E0428. Fail
-                // closed and name both colliding Ipê values (IPE-N0048) rather
-                // than emit a broken crate.
-                let second_dotted = ipe_dotted_name(&func_segs, resolve_sym(interner, func.name)?);
-                if let Some(first_dotted) = func_ipe_names.get(&rust_name) {
-                    return Err(Diagnostic::Name {
-                        span: Span::DUMMY,
-                        msg: NameError::RustNameFold {
-                            first: first_dotted.clone().into_boxed_str(),
-                            second: second_dotted.into_boxed_str(),
-                            rust_name: rust_name.into_boxed_str(),
-                            kind: RustNameFoldKind::Value,
-                        },
-                    });
-                }
-                func_ipe_names.insert(rust_name.clone(), second_dotted);
+                // Mirror the enum guard above. `naming::module_value`'s snake_case
+                // fold is not injective over the (home, name) split —
+                // `["Std", "Ui"]/borderRounded` and `["Std", "Ui", "Border"]/rounded`
+                // both fold to `std_ui_border_rounded` — so two DISTINCT functions
+                // would otherwise emit the same Rust fn and trip `rustc` E0428.
+                // Disambiguate the loser to a free name so the legal program still
+                // emits; a degenerate name space fails closed with the fold
+                // diagnostic (IPE-N0048) naming both Ipê values.
+                let this_dotted = ipe_dotted_name(&func_segs, resolve_sym(interner, func.name)?);
+                let rust_name = match disambiguated_rust_name(&rust_name, "_", &func_ipe_names) {
+                    Some(name) => name,
+                    None => {
+                        let first_dotted = func_ipe_names
+                            .get(&rust_name)
+                            .cloned()
+                            .unwrap_or_default();
+                        return Err(Diagnostic::Name {
+                            span: Span::DUMMY,
+                            msg: NameError::RustNameFold {
+                                first: first_dotted.into_boxed_str(),
+                                second: this_dotted.into_boxed_str(),
+                                rust_name: rust_name.into_boxed_str(),
+                                kind: RustNameFoldKind::Value,
+                            },
+                        });
+                    }
+                };
+                func_ipe_names.insert(rust_name.clone(), this_dotted);
                 func_names.insert(func.id, rust_name);
                 // Record which of this function's `Fn`-typed params were
                 // monomorphized to `impl Fn` so the call-site emitter passes the
@@ -4831,6 +4843,41 @@ fn ipe_dotted_name(home_segs: &[&str], leaf: &str) -> String {
     } else {
         format!("{}.{leaf}", home_segs.join("."))
     }
+}
+
+/// A ceiling on the suffix search in [`disambiguated_rust_name`]. A distinct
+/// suffix always exists below this bound for any realistic program (it is at
+/// most the count of definitions folding to one base name), so exhausting it
+/// means the name space is degenerate; the caller fails closed rather than loop.
+const RUST_NAME_FOLD_SUFFIX_LIMIT: u32 = 1_000_000;
+
+/// A non-injective mangling can fold two distinct Ipê identifiers (`firstName`
+/// and `first_name`, or `Std.Palette/Color` and `Std/PaletteColor`) to one Rust
+/// name. Rather than reject the legal program, disambiguate the SECOND claimant
+/// to a distinct name by appending a numeric suffix, so both definitions emit.
+///
+/// The base name is tried first; on collision `<base><sep>2`, `<base><sep>3`, …
+/// are tried against `claimed` (the Rust names already taken in this namespace)
+/// until one is free. `sep` is `"_"` for snake-cased value names and `""` for
+/// `CamelCase` type names, keeping the result a valid Rust identifier in either
+/// namespace. Deterministic: definitions fold in a fixed order, so the same
+/// program always assigns the same disambiguated names.
+///
+/// Returns `None` only when every candidate up to [`RUST_NAME_FOLD_SUFFIX_LIMIT`]
+/// is taken — a degenerate name space the caller turns back with the fold
+/// diagnostic (fail closed, bounded by construction).
+fn disambiguated_rust_name(
+    base: &str,
+    sep: &str,
+    claimed: &BTreeMap<String, String>,
+) -> Option<String> {
+    if !claimed.contains_key(base) {
+        return Some(base.to_owned());
+    }
+    (2..=RUST_NAME_FOLD_SUFFIX_LIMIT).find_map(|n| {
+        let candidate = format!("{base}{sep}{n}");
+        (!claimed.contains_key(&candidate)).then_some(candidate)
+    })
 }
 
 /// Whether a function is a qualifying `Ipe.Ui` structural wrapper for the
