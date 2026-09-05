@@ -1094,8 +1094,8 @@ Ipe.Crypto — cryptographic primitives.
 |--------|----------|
 | `sha256` | (no summary) |
 | `sha512` | (no summary) |
-| `sha1` | (no summary) |
-| `md5` | (no summary) |
+| `sha1` | SHA-1 hash, hex-encoded. |
+| `md5` | MD5 hash, hex-encoded. |
 | `rsaSha256Sign` | (no summary) |
 | `rsaSha256Verify` | (no summary) |
 | `constantTimeEqual` | (no summary) |
