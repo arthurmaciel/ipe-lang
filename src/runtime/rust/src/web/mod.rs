@@ -6134,16 +6134,7 @@ mod watch_status_handler_tests {
                 .unwrap_or_else(|p| p.into_inner())
                 .clone();
             if let Some(WatchBuildStatus { ok, error }) = snapshot {
-                let payload = if ok {
-                    r#"{"ok":true}"#.to_string()
-                } else {
-                    let esc = error
-                        .as_deref()
-                        .unwrap_or("")
-                        .replace('\\', "\\\\")
-                        .replace('"', "\\\"");
-                    format!(r#"{{"ok":false,"error":"{esc}"}}"#)
-                };
+                let payload = watch_status_sse_payload(ok, error.as_deref());
                 let _ = sse_tx
                     .send(SsePatch(sse::frame("ipe-build-status", &payload)))
                     .await;
