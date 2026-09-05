@@ -1333,7 +1333,8 @@ window.addEventListener("popstate", function() {
 //   "connected"      → invisible
 //   "reconnecting"   → amber bar, "Reconnecting…" + attempt counter
 //   "offline"        → red bar, "Connection lost — refresh to retry"
-//   "build-ok"       → green transient toast, "Reloaded ✓", auto-hides
+//   "recompiling"    → amber bar, "Recompiling app", until the next result
+//   "build-ok"       → green transient toast, "Updated!", auto-hides
 //   "build-failed"   → red sticky bar, persists until next green build
 // The two build-* states are dev-only; they are only ever entered via
 // an `ipe-build-status` SSE event or the sessionStorage reload flag —
@@ -1362,7 +1363,7 @@ function __ipeSetStatus(state, msg) {
   }
 }
 
-// Show a transient green "Reloaded ✓" toast, then revert to connected.
+// Show a transient green "Updated!" toast, then revert to connected.
 // prefers-reduced-motion: use a slightly longer hold, no fade (opacity
 // transition is on the element; we just flip states faster/slower).
 function __ipeShowBuildOk() {
@@ -1371,7 +1372,7 @@ function __ipeShowBuildOk() {
     clearTimeout(__ipeBuildOkTimer);
     __ipeBuildOkTimer = null;
   }
-  __ipeSetStatus("build-ok", "Reloaded ✓");
+  __ipeSetStatus("build-ok", "Updated!");
   var reducedMotion = window.matchMedia &&
     window.matchMedia("(prefers-reduced-motion: reduce)").matches;
   var holdMs = reducedMotion ? 2000 : 1500;
@@ -1415,9 +1416,11 @@ function __ipeInjectStatusBanner() {
     "#__ipe-status.ipe-status--connected{display:none}" +
     "#__ipe-status.ipe-status--reconnecting{background:#b45309}" +
     "#__ipe-status.ipe-status--offline{background:#b91c1c}" +
+    "#__ipe-status.ipe-status--recompiling{background:#b45309}" +
     "#__ipe-status.ipe-status--build-ok{background:#166534}" +
     "#__ipe-status.ipe-status--build-failed{background:#991b1b;pointer-events:auto;cursor:default}" +
     "@media(prefers-color-scheme:dark){" +
+      "#__ipe-status.ipe-status--recompiling{background:#92400e}" +
       "#__ipe-status.ipe-status--build-ok{background:#14532d}" +
       "#__ipe-status.ipe-status--build-failed{background:#7f1d1d}" +
     "}";
@@ -1720,12 +1723,17 @@ function __ipeOpenSSE() {
     var data;
     try { data = JSON.parse(e.data); } catch(_) { return; }
     if (!data) return;
-    if (data.ok === false && typeof data.error === "string") {
+    if (data.phase === "recompiling") {
+      // A rebuild is in flight — a multi-second silent window otherwise. Show a
+      // soft-yellow "Recompiling app" banner until the ok/error result lands.
+      if (__ipeBannerEnabled) __ipeSetStatus("recompiling", "Recompiling app");
+    } else if (data.ok === false && typeof data.error === "string") {
       __ipeSetStatus("build-failed", "Recompilation failed \xB7 " + data.error);
     } else if (data.ok === true) {
-      // An appearance hot-swap that recovers from a prior failure: show the
-      // green toast to confirm the fix landed. A full-rebuild reload uses the
-      // sessionStorage path instead (page reloads before the SSE event lands).
+      // A successful rebuild or an appearance hot-swap that recovers from a prior
+      // failure: show the green "Updated!" toast to confirm the change landed. A
+      // full-rebuild reload may also use the sessionStorage path when the page
+      // reloads before this event lands.
       __ipeShowBuildOk();
     }
   });

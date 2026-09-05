@@ -583,6 +583,11 @@ struct WatchStatusBody {
     ok: bool,
     #[serde(default)]
     error: Option<String>,
+    /// Optional lifecycle phase. `"recompiling"` is pushed when a rebuild starts
+    /// so the browser can show a soft-yellow "Recompiling app" banner during the
+    /// otherwise-silent cargo build; absent for the terminal ok/error result.
+    #[serde(default)]
+    phase: Option<String>,
 }
 
 /// Latest build status from `ipe watch`, held in the server's shared state.
@@ -3218,8 +3223,14 @@ mod handlers {
         let error = parsed
             .error
             .map(|e| e.chars().take(512).collect::<String>());
+        // A transient "recompiling" phase — a rebuild is in flight. It carries no
+        // terminal ok/error verdict; the browser shows a soft-yellow "Recompiling
+        // app" banner and waits for the ok/error that follows.
+        let recompiling = parsed.phase.as_deref() == Some("recompiling");
         // Build the JSON payload for the SSE event.
-        let sse_payload = if parsed.ok {
+        let sse_payload = if recompiling {
+            r#"{"phase":"recompiling"}"#.to_string()
+        } else if parsed.ok {
             r#"{"ok":true}"#.to_string()
         } else {
             let esc = error
@@ -3230,7 +3241,10 @@ mod handlers {
             format!(r#"{{"ok":false,"error":"{esc}"}}"#)
         };
         // Update the stored status so new SSE connections see the current state.
-        {
+        // The recompiling phase is transient (not a terminal verdict), so it does
+        // NOT overwrite the sticky replay state — a refresh mid-rebuild should
+        // show the last real result, then the imminent ok/error updates it.
+        if !recompiling {
             let mut guard = st
                 .watch_build_status
                 .lock()

@@ -200,6 +200,33 @@ pub fn print_command_header() {
     eprint!("{}", command_header(colored));
 }
 
+/// The short-diagnostic error banner: a soft-yellow block that leads with the
+/// product name and version, then the error message, both guttered and framed.
+///
+/// A failed command is not an alarm — the last-good state (a prior build, the
+/// running app) usually survives — so the banner is a calm soft yellow, never
+/// red. No `ipe: ` prefix: the product-name header identifies the source, so the
+/// prefix only added noise that scrolled away with the message. Coloured when
+/// `color` is on, plain (empty escapes) otherwise, so one shape serves both.
+#[must_use]
+pub fn error_banner(message: &str, color: bool) -> String {
+    let version = env!("CARGO_PKG_VERSION");
+    let p = Palette::select(color);
+    let body = format!(
+        "{y}Ipê lang - {version}{r}\n\n{y}{message}{r}",
+        y = p.yellow,
+        r = p.reset,
+    );
+    frame(&gutter(&body))
+}
+
+/// Print [`error_banner`] to stderr, respecting the terminal / `NO_COLOR` state
+/// of stderr. The one place short CLI diagnostics render their final screen.
+pub fn print_error_banner(message: &str) {
+    let colored = use_color(&std::io::stderr());
+    eprint!("{}", error_banner(message, colored));
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -247,6 +274,36 @@ mod tests {
     fn command_header_colour_mode_has_ansi() {
         let h = command_header(true);
         assert!(h.contains('\x1b'), "colour banner carries ANSI");
+    }
+
+    #[test]
+    fn error_banner_leads_with_versioned_product_name_then_message() {
+        let b = error_banner("no such file `Main.ipe`", false);
+        // Framed: one blank edge each side.
+        assert!(b.starts_with('\n') && b.ends_with('\n'), "framed banner");
+        // No `ipe: ` prefix survives.
+        assert!(!b.contains("ipe: "), "the ipe: prefix is gone");
+        // The product name and crate version lead.
+        assert!(b.contains("Ipê lang - "), "product name present");
+        assert!(
+            b.contains(env!("CARGO_PKG_VERSION")),
+            "crate version present"
+        );
+        // The message follows, guttered.
+        assert!(b.contains("  no such file `Main.ipe`"), "message present");
+        // Header sits above the message.
+        let header_at = b.find("Ipê lang").expect("header present");
+        let msg_at = b.find("no such file").expect("message present");
+        assert!(header_at < msg_at, "header above message");
+        // Plain variant carries no ANSI.
+        assert!(!b.contains('\x1b'), "plain banner has no ANSI");
+    }
+
+    #[test]
+    fn error_banner_colour_mode_is_soft_yellow_not_red() {
+        let b = error_banner("boom", true);
+        assert!(b.contains(Palette::COLOR.yellow), "soft yellow applied");
+        assert!(!b.contains(Palette::COLOR.red), "never the alarming red");
     }
 
     #[test]

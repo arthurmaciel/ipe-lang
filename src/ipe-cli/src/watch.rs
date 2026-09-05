@@ -147,6 +147,10 @@ pub enum RestartOutcomeKind {
 /// Configuration for one `ipe watch` session. Every field has a sound
 /// default via [`WatchOptions::new`]; the CLI layer (`run_watch` in
 /// `lib.rs`) is the only place that overrides them from flags.
+// The flags are independent dev toggles (quiet / blue-green / reset-state /
+// debugger), not the axes of a state machine — a two-variant enum per flag would
+// obscure, not clarify, so the bool-per-toggle shape is the honest one.
+#[allow(clippy::struct_excessive_bools)]
 pub struct WatchOptions {
     pub entry: PathBuf,
     pub out_dir: PathBuf,
@@ -185,6 +189,11 @@ pub struct WatchOptions {
     /// additive-preserve algorithm runs normally). Exposed as `ipe watch
     /// --reset-state`. Never compiled into a release binary.
     pub reset_state: bool,
+    /// DEV-ONLY debugger. When set, each rebuild emits with the `debugger`
+    /// runtime feature so the served app carries the in-app time-travelling
+    /// debugger overlay. Exposed as `ipe watch --debugger`; off by default (the
+    /// recorder adds runtime weight). Never compiled into a release binary.
+    pub debugger: bool,
 }
 
 impl WatchOptions {
@@ -202,6 +211,7 @@ impl WatchOptions {
             quiet: false,
             bluegreen: false,
             reset_state: false,
+            debugger: false,
         }
     }
 }
@@ -967,6 +977,11 @@ fn run_inner(
     // `Web.app`?), decided once per generation right after emit, not
     // re-derived from the built executable (which carries no such marker).
     let mut current_is_web = false;
+    // The prominent "open this URL" line is printed once, after the first web
+    // app settles into a running state — so the address the user must open is
+    // the last thing on screen, not a line that scrolled away above the cargo
+    // build. A non-web app (CLI/TUI) has no URL and never sets this.
+    let mut url_announced = false;
     // The emit of the currently-RUNNING binary, kept only under the appearance
     // hot-swap flag. The classifier diffs each new emit against this to decide
     // AppearanceOnly (push a table patch, skip cargo) vs Logic (recompile). It is
@@ -1144,8 +1159,9 @@ fn run_inner(
                         Some(ipe_backend_rust::RuntimeDep {
                             root: runtime_dep_root.clone(),
                         }),
-                        // `ipe watch` does not expose `--debugger`; never record.
-                        false,
+                        // `ipe watch --debugger` compiles the in-app debugger
+                        // overlay into the rebuilt runtime loop.
+                        opts.debugger,
                         resolved.cargo_name.clone(),
                         crate::hot_appearance_enabled(),
                         // `ipe watch` reloads the served-live web app; the
@@ -1229,8 +1245,11 @@ fn run_inner(
                         );
                         eprint!("\n{}\n", crate::style::gutter(&body));
                         emit(opts, WatchEvent::CompileFailed { generation: g });
-                        if let Some(tok) = hot_token.as_deref() {
-                            post_watch_status(opts.port, tok, false, &first_error_line(&msg));
+                        if let (Some(tok), Some(app_port)) = (
+                            hot_token.as_deref(),
+                            app_status_port(proxy.as_ref(), opts.port),
+                        ) {
+                            post_watch_status(app_port, tok, false, &first_error_line(&msg));
                         }
                         // A red compile is terminal for this cycle (no cargo,
                         // no restart) — report the partial breakdown here.
@@ -1310,7 +1329,11 @@ fn run_inner(
                                                     + hot.wirings.len(),
                                             },
                                         );
-                                        post_watch_status(opts.port, tok, true, "");
+                                        if let Some(app_port) =
+                                            app_status_port(proxy.as_ref(), opts.port)
+                                        {
+                                            post_watch_status(app_port, tok, true, "");
+                                        }
                                         timings.report(g);
                                         continue;
                                     }
@@ -1375,6 +1398,16 @@ fn run_inner(
                                 );
                             }
                         }
+                        // A cargo rebuild is a multi-second silent window — tell
+                        // the running app to raise its "Recompiling app" banner so
+                        // the browser is never left guessing. Only meaningful when
+                        // an app is already up (a rebuild, not the first build).
+                        if let (Some(tok), Some(app_port)) = (
+                            hot_token.as_deref(),
+                            app_status_port(proxy.as_ref(), opts.port),
+                        ) {
+                            post_watch_recompiling(app_port, tok);
+                        }
                         match spawn_cargo_build(
                             &opts.cargo_path,
                             &opts.out_dir,
@@ -1421,8 +1454,11 @@ fn run_inner(
                             )
                         );
                         emit(opts, WatchEvent::CargoFailed { generation: g });
-                        if let Some(tok) = hot_token.as_deref() {
-                            post_watch_status(opts.port, tok, false, &first_error_line(&msg));
+                        if let (Some(tok), Some(app_port)) = (
+                            hot_token.as_deref(),
+                            app_status_port(proxy.as_ref(), opts.port),
+                        ) {
+                            post_watch_status(app_port, tok, false, &first_error_line(&msg));
                         }
                         // A red cargo build is terminal (no restart) — report
                         // the partial breakdown here.
@@ -1511,6 +1547,33 @@ fn run_inner(
                         };
                         timings.restart = Some(restart_started.elapsed());
                         report_restart_outcome(&outcome, opts.quiet);
+                        // Clear any "Recompiling app" banner with a soft-green
+                        // "Updated!" the moment the rebuilt app is serving. Under
+                        // blue-green the client also greets its reconnect with the
+                        // swap toast; this covers the direct-bind path and closes
+                        // the recompiling banner deterministically either way.
+                        if outcome_is_running(&outcome)
+                            && let (Some(tok), Some(app_port)) = (
+                                hot_token.as_deref(),
+                                app_status_port(proxy.as_ref(), opts.port),
+                            )
+                        {
+                            post_watch_status(app_port, tok, true, "");
+                        }
+                        // Surface the open-URL prominently once the first web
+                        // app is up: the address is the one thing the user must
+                        // act on, and it would otherwise be buried above the
+                        // cargo output. Web shapes only; a running-app outcome
+                        // only (a failed readiness keeps the last-good app, so
+                        // its URL — already shown — still stands).
+                        if !opts.quiet
+                            && current_is_web
+                            && !url_announced
+                            && outcome_is_running(&outcome)
+                        {
+                            eprint!("{}", open_url_block(opts.port));
+                            url_announced = true;
+                        }
                         emit(
                             opts,
                             WatchEvent::Restarted {
@@ -2202,6 +2265,23 @@ fn first_error_line(msg: &str) -> String {
 /// or the endpoint may not be mounted (non-web app, banner disabled, etc.) —
 /// all of those are fine. A short connect+read timeout keeps a dead app from
 /// stalling the watch loop.
+/// The port the app that actually serves the browser is listening on — the
+/// target for a build-status POST.
+///
+/// Under blue-green (default) the user-facing `port` is held by the front proxy
+/// and the live app runs behind it on an internal loopback port, so a status
+/// POST to `port` would hit the proxy (which 502s when no upstream is ready yet,
+/// so the in-app banner never appears). Route to the proxy's current upstream
+/// instead. `None` when no app is up (no upstream, or the internal port is not
+/// yet known) — there is then no browser to notify. Direct-bind (no proxy) keeps
+/// the app on `port` itself.
+fn app_status_port(proxy: Option<&ipe_watch::DevProxy>, port: u16) -> Option<u16> {
+    proxy.map_or(Some(port), |p| match p.current_upstream() {
+        0 => None,
+        up => Some(up),
+    })
+}
+
 fn post_watch_status(port: u16, token: &str, ok: bool, error: &str) {
     // Build the JSON body without serde_json to avoid a new dependency.
     // Escape only backslash and double-quote — the error string is already
@@ -2214,6 +2294,14 @@ fn post_watch_status(port: u16, token: &str, ok: bool, error: &str) {
         format!(r#"{{"ok":false,"error":"{esc}"}}"#)
     };
     let _ = post_to_watch_status(port, token, &body);
+}
+
+/// Tell the running app a rebuild has started, so it shows a soft-yellow
+/// "Recompiling app" banner during the otherwise-silent cargo build (the ok /
+/// error result follows when the build settles). Best-effort, like every other
+/// dev-endpoint POST.
+fn post_watch_recompiling(port: u16, token: &str) {
+    let _ = post_to_watch_status(port, token, r#"{"ok":false,"phase":"recompiling"}"#);
 }
 
 /// Send one raw HTTP/1.1 POST to `/_ipe/watch/status`. Returns `Ok(())` when
@@ -2258,6 +2346,32 @@ fn warn_if_memory_store() {
             )
         );
     }
+}
+
+/// Whether a restart outcome left an app actually serving — the two outcomes
+/// that bring a binary up (a fresh spawn, a reload). The last-good-fallback and
+/// nothing-running outcomes did NOT start the new binary, so they must not
+/// trigger the first-run URL announcement.
+const fn outcome_is_running(outcome: &ipe_watch::RestartOutcome) -> bool {
+    matches!(
+        outcome,
+        ipe_watch::RestartOutcome::Spawned
+            | ipe_watch::RestartOutcome::Restarted
+            | ipe_watch::RestartOutcome::UnchangedBinary
+    )
+}
+
+/// The prominent open-URL block shown once the first web app is up: a framed,
+/// guttered, soft-green line naming the address to open. Coloured when stderr is
+/// a colour terminal, plain otherwise.
+fn open_url_block(port: u16) -> String {
+    let p = crate::style::Palette::for_stream(&std::io::stderr());
+    let body = format!(
+        "{g}➜  Open{r}   {g}http://localhost:{port}{r}",
+        g = p.green,
+        r = p.reset,
+    );
+    crate::style::frame(&crate::style::gutter(&body))
 }
 
 fn report_restart_outcome(outcome: &ipe_watch::RestartOutcome, quiet: bool) {
