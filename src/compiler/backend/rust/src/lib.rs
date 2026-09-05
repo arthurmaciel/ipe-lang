@@ -1464,8 +1464,10 @@ impl<'a> EmitCtx<'a> {
                 // emit the same Rust enum and trip `rustc` E0428. Fail closed and
                 // name both colliding Ipê types (IPE-N0048) rather than emit a
                 // broken crate.
-                if let Some((first_home, first_name)) =
-                    enum_names.iter().find(|(_, n)| *n == &rust_name).map(|(k, _)| k)
+                if let Some((first_home, first_name)) = enum_names
+                    .iter()
+                    .find(|(_, n)| *n == &rust_name)
+                    .map(|(k, _)| k)
                 {
                     let first_segs = first_home
                         .0
@@ -1522,8 +1524,7 @@ impl<'a> EmitCtx<'a> {
                 // otherwise emit the same Rust fn and trip `rustc` E0428. Fail
                 // closed and name both colliding Ipê values (IPE-N0048) rather
                 // than emit a broken crate.
-                let second_dotted =
-                    ipe_dotted_name(&func_segs, resolve_sym(interner, func.name)?);
+                let second_dotted = ipe_dotted_name(&func_segs, resolve_sym(interner, func.name)?);
                 if let Some(first_dotted) = func_ipe_names.get(&rust_name) {
                     return Err(Diagnostic::Name {
                         span: Span::DUMMY,
@@ -5241,12 +5242,16 @@ mod record_struct_namespace_tests {
             ..
         }) = result
         else {
-            panic!("two field names colliding to one witness trait must fail closed with RustNameFold, got {result:?}");
+            panic!(
+                "two field names colliding to one witness trait must fail closed with RustNameFold, got {result:?}"
+            );
         };
         let named: BTreeSet<&str> = [first.as_ref(), second.as_ref()].into_iter().collect();
         assert_eq!(
             named,
-            ["firstName", "first_name"].into_iter().collect::<BTreeSet<_>>(),
+            ["firstName", "first_name"]
+                .into_iter()
+                .collect::<BTreeSet<_>>(),
             "both colliding Ipê field names must be reported"
         );
         assert_eq!(rust_name.as_ref(), "IpeHasFirstName");

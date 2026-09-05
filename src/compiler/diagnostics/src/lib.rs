@@ -25,11 +25,10 @@ pub use code::{
     IPE_N0038, IPE_N0039, IPE_N0040, IPE_N0041, IPE_N0042, IPE_N0043, IPE_N0044, IPE_N0045,
     IPE_N0046, IPE_N0047, IPE_N0048, IPE_P0001, IPE_P0002, IPE_P0003, IPE_P0010, IPE_P0011,
     IPE_P0012, IPE_P0013, IPE_P0014, IPE_P0015, IPE_P0016, IPE_P0017, IPE_P0018, IPE_P0020,
-    IPE_P0021,
-    IPE_P0030, IPE_P0031, IPE_P0040, IPE_P0041, IPE_P0050, IPE_P0060, IPE_P0061, IPE_P0062,
-    IPE_P0063, IPE_P0064, IPE_S0001, IPE_T0001, IPE_T0002, IPE_T0003, IPE_T0004, IPE_T0010,
-    IPE_T0011, IPE_T0012, IPE_T0013, IPE_T0014, IPE_T0015, IPE_T0016, IPE_T0017, IPE_T0018,
-    IPE_T0019, IPE_T0020, ISSUE_TRACKER_URL, Severity, explain_page, title,
+    IPE_P0021, IPE_P0030, IPE_P0031, IPE_P0040, IPE_P0041, IPE_P0050, IPE_P0060, IPE_P0061,
+    IPE_P0062, IPE_P0063, IPE_P0064, IPE_S0001, IPE_T0001, IPE_T0002, IPE_T0003, IPE_T0004,
+    IPE_T0010, IPE_T0011, IPE_T0012, IPE_T0013, IPE_T0014, IPE_T0015, IPE_T0016, IPE_T0017,
+    IPE_T0018, IPE_T0019, IPE_T0020, ISSUE_TRACKER_URL, Severity, explain_page, title,
 };
 pub use diagnostic::{
     AliasExpansionKind, AppShape, Applicability, CaseDefect, CmdSubShapeMismatch,
@@ -38,8 +37,7 @@ pub use diagnostic::{
     IfDefect, LetDefect, LowerError, MainRetName, ModelLeaf, ModulePlacementReason,
     ModulePlacementRejection, NameError, ParseError, RustNameFoldKind, SandboxError, SealRejection,
     SortedNames, SpanRole, StoreEqAccessorDefect, StoreSelectProjectionDefect, Suggestion,
-    TokenKind, TyDoc,
-    TypeDeclDefect, TypeError,
+    TokenKind, TyDoc, TypeDeclDefect, TypeError,
 };
 pub use render::{DOC_HINT_CMD, plain_message, render, render_json, render_ty};
 pub use span::{Located, Span};
