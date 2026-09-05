@@ -653,6 +653,33 @@ const IPE_CORE_JS: &str = include_str!("../Ipe/Ffi/Js.ipe");
 /// fast-path, so the qualifier stays out of `STDLIB_MODULE_QUALIFIERS`.
 const IPE_CORE_JS_CUSTOM_ELEMENT: &str = include_str!("../Ipe/Ffi/Js/CustomElement.ipe");
 
+/// `Ipe.Ffi.Kernel` — the documentation veneer for the point-free kernel-alias
+/// primitive `Kernel.kernel "<Name>"`.
+///
+/// A DOC-ONLY surface (registered in [`DOC_ONLY_MODULES`], NOT
+/// `COMPILED_STD_MODULES`): `Ipe.Ffi.Kernel` is a reserved compiler-internal
+/// qualifier — accepted at the import boundary and resolved by
+/// `detect_kernel_alias` only in a driver-vouched embedded-stdlib / FFI-interface
+/// module — never a member-bearing importable module. Keeping it out of
+/// `COMPILED_STD_MODULES` is load-bearing: were it injectable, the many stdlib
+/// modules that `import Ipe.Ffi.Kernel as Kernel` would pull in this
+/// body-less veneer as a compiled dep. The embedded source carries only the
+/// module-header and the `kernel : String -> a` signature + doc so the surface is
+/// discoverable through `ipe doc`.
+const IPE_FFI_KERNEL: &str = include_str!("../Ipe/Ffi/Kernel.ipe");
+
+/// `Ipe.Ffi.Rust` — the documentation veneer for the taxonomy-native native-call
+/// surface (`Rust.fn` / `Rust.const`) and the companion `foreign` declaration.
+///
+/// A DOC-ONLY surface (registered in [`DOC_ONLY_MODULES`], NOT
+/// `COMPILED_STD_MODULES`): `Ipe.Ffi.Rust` is a reserved compiler-internal
+/// qualifier — accepted at the import boundary, its `Rust.fn`/`Rust.const` calls
+/// rewritten onto the driver-generated forwarder by `canonicalise_asserted_call`
+/// — never a member-bearing importable module. The embedded source carries the
+/// module-header and the `fn` / `const` signatures + docs so the surface is
+/// discoverable through `ipe doc`.
+const IPE_FFI_RUST: &str = include_str!("../Ipe/Ffi/Rust.ipe");
+
 /// `Ipe.Browser.Clipboard` — write text to the system clipboard over `Ipe.Ffi.Js`
 /// ports (compiled source).
 ///
@@ -1923,6 +1950,47 @@ pub const COMPILED_STD_MODULES: &[CompiledStdModule] = &[
     },
 ];
 
+// ===========================================================================
+// Documentation-only modules — reserved compiler-internal qualifiers.
+// ===========================================================================
+//
+// These name reserved FFI qualifiers (`Ipe.Ffi.Kernel`, `Ipe.Ffi.Rust`) that
+// the compiler recognises structurally, not as importable member-bearing
+// modules: `Kernel.kernel "…"` is rewritten by `detect_kernel_alias` and
+// `Rust.fn`/`Rust.const` by `canonicalise_asserted_call`, each only in a
+// driver-vouched origin. They carry doc-comments + signatures purely so the
+// surface is discoverable through `ipe doc` and the generated stdlib reference.
+//
+// They are DISJOINT from both `MODULES` and `COMPILED_STD_MODULES` on purpose:
+// the doc-enumeration paths read this table, but the build-driver injection
+// path (`is_compiled_source_segments`) does NOT, so a stdlib module that does
+// `import Ipe.Ffi.Kernel as Kernel` never pulls a body-less veneer in as a
+// compiled dependency.
+
+/// One documentation-only stdlib module: its dotted name and its embedded Ipê
+/// source. Shares the shape of [`CompiledStdModule`] but is never compiled or
+/// injected — it feeds `ipe doc` and the stdlib reference only.
+pub struct DocOnlyModule {
+    /// The dotted module name as written in an `import`, e.g. `Ipe.Ffi.Kernel`.
+    pub dotted: &'static str,
+    /// The module's Ipê source, embedded at compile time.
+    pub source: &'static str,
+}
+
+/// The reserved FFI qualifiers surfaced for documentation only. Enumerated by
+/// the `ipe doc` module list and the stdlib-reference generator; never compiled
+/// or injected.
+pub const DOC_ONLY_MODULES: &[DocOnlyModule] = &[
+    DocOnlyModule {
+        dotted: "Ipe.Ffi.Kernel",
+        source: IPE_FFI_KERNEL,
+    },
+    DocOnlyModule {
+        dotted: "Ipe.Ffi.Rust",
+        source: IPE_FFI_RUST,
+    },
+];
+
 /// The embedded Ipê source for a compiled-source stdlib module named by its path
 /// SEGMENTS (e.g. `["Std", "Palette"]`), or `None` when the segments name no
 /// compiled-source module.
@@ -2100,6 +2168,50 @@ mod tests {
                 "module doc treats `{qualifier}` as kernel-backed, but the \
                  KernelDef registry has no `{qualifier}_*` kernel — the doc \
                  prose and the registry SSOT have drifted",
+            );
+        }
+    }
+
+    /// Every documentation-only veneer must PARSE with the real front end — it is
+    /// relayed to `ipe doc` from raw source, so ill-formed source would surface a
+    /// broken signature line rather than fail closed.
+    #[test]
+    fn every_doc_only_module_parses() {
+        for m in DOC_ONLY_MODULES {
+            let mut interner = Interner::new();
+            let parsed = ipe_parse::parse_module(m.source, &mut interner);
+            assert!(
+                parsed.is_ok(),
+                "doc-only module {} must parse: {:?}",
+                m.dotted,
+                parsed.err()
+            );
+        }
+    }
+
+    /// Load-bearing invariant: a documentation-only veneer is NEVER a compiled or
+    /// injectable module. Were a `DOC_ONLY_MODULES` name also in
+    /// `COMPILED_STD_MODULES` (or the `MODULES` parse fixtures), the many stdlib
+    /// modules that `import Ipe.Ffi.Kernel as Kernel` would pull the body-less
+    /// veneer in as a compiled dependency — the exact breakage this table avoids.
+    #[test]
+    fn doc_only_disjoint_from_compiled_and_parse_fixtures() {
+        for d in DOC_ONLY_MODULES {
+            assert!(
+                !COMPILED_STD_MODULES.iter().any(|m| m.dotted == d.dotted),
+                "{} is BOTH doc-only and compiled-source — it must never be injectable",
+                d.dotted
+            );
+            assert!(
+                !MODULES.iter().any(|m| m.name == d.dotted),
+                "{} is BOTH doc-only and a `MODULES` parse fixture",
+                d.dotted
+            );
+            let segments: Vec<String> = d.dotted.split('.').map(str::to_owned).collect();
+            assert!(
+                !is_compiled_source_segments(&segments),
+                "{} must not be seen as a compiled-source module by the injector",
+                d.dotted
             );
         }
     }
