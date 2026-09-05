@@ -1568,12 +1568,11 @@ fn name_label(msg: &NameError) -> Option<String> {
                  placements"
             ))
         }
-        // The span is always DUMMY (the IR carries none), so this label never
-        // reaches a caret; the fix rides the help note instead (see `name_help`),
-        // which renders with or without a snippet. Returning `None` also avoids
-        // duplicating that note in the snippet-free `plain_message` path.
-        NameError::RustNameFold { .. } => None,
-        NameError::Unknown => None,
+        // `RustNameFold`'s span is always DUMMY (the IR carries none), so a label
+        // never reaches a caret; the fix rides the help note instead (see
+        // `name_help`), which renders with or without a snippet — and `None` here
+        // also avoids duplicating that note in the snippet-free `plain_message`.
+        NameError::RustNameFold { .. } | NameError::Unknown => None,
     }
 }
 

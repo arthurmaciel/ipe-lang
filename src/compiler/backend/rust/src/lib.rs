@@ -5144,6 +5144,7 @@ mod record_struct_namespace_tests {
     /// (`first_name` / `firstName` → `IpeHasFirstName`) must fail the row-witness
     /// disjointness gate closed — emitting two `IpeHasFirstName` traits is E0428.
     #[test]
+    #[allow(clippy::too_many_lines)] // one exhaustive collision-construction fixture
     fn colliding_row_witness_names_fail_closed() -> DResult<()> {
         let mut interner = Interner::new();
         let main_mod = interner.intern("Main")?;
@@ -5231,31 +5232,38 @@ mod record_struct_namespace_tests {
         let result = ctx.assert_row_witness_names_disjoint(&colliding, &BTreeSet::new());
         // The two folding field names must BOTH be named (IPE-N0048), not just
         // the mangled trait — that is the point of the fix.
-        let Err(Diagnostic::Name {
+        assert!(
+            matches!(
+                &result,
+                Err(Diagnostic::Name {
+                    msg: NameError::RustNameFold { .. },
+                    ..
+                })
+            ),
+            "two field names colliding to one witness trait must fail closed with RustNameFold, got {result:?}"
+        );
+        if let Err(Diagnostic::Name {
             msg:
                 NameError::RustNameFold {
-                    ref first,
-                    ref second,
-                    ref rust_name,
+                    first,
+                    second,
+                    rust_name,
                     kind,
                 },
             ..
-        }) = result
-        else {
-            panic!(
-                "two field names colliding to one witness trait must fail closed with RustNameFold, got {result:?}"
+        }) = &result
+        {
+            let named: BTreeSet<&str> = [first.as_ref(), second.as_ref()].into_iter().collect();
+            assert_eq!(
+                named,
+                ["firstName", "first_name"]
+                    .into_iter()
+                    .collect::<BTreeSet<_>>(),
+                "both colliding Ipê field names must be reported"
             );
-        };
-        let named: BTreeSet<&str> = [first.as_ref(), second.as_ref()].into_iter().collect();
-        assert_eq!(
-            named,
-            ["firstName", "first_name"]
-                .into_iter()
-                .collect::<BTreeSet<_>>(),
-            "both colliding Ipê field names must be reported"
-        );
-        assert_eq!(rust_name.as_ref(), "IpeHasFirstName");
-        assert_eq!(kind, ipe_diagnostics::RustNameFoldKind::Value);
+            assert_eq!(rust_name.as_ref(), "IpeHasFirstName");
+            assert_eq!(*kind, ipe_diagnostics::RustNameFoldKind::Value);
+        }
 
         // Distinct field names pass — the gate is purely additive.
         let distinct: BTreeSet<Symbol> = std::iter::once(snake).collect();
