@@ -1001,7 +1001,9 @@ fn run_inner(
     // server; the shared token arms only whichever route is actually mounted).
     let hot_token: Option<String> =
         if crate::hot_appearance_enabled() || crate::watch_banner_enabled() {
-            Some(mint_hot_token())
+            // `None` here (OS CSPRNG unavailable) leaves the control endpoint
+            // unarmed rather than falling back to a guessable token.
+            mint_hot_token()
         } else {
             None
         };
@@ -1748,34 +1750,16 @@ fn child_env(
 ///
 /// The token authenticates a live appearance patch: only this watch process
 /// knows it (it is injected into the child's env and never printed), so even a
-/// dev server bound to `0.0.0.0` cannot be driven by a LAN peer. Primary source
-/// is the OS CSPRNG (`/dev/urandom`); if that is unavailable, a SHA-256 mix of
-/// several process-unique entropy sources is used so the token is never a fixed
-/// or trivially-guessable value. Rendered as lowercase hex.
-fn mint_hot_token() -> String {
-    use sha2::{Digest as _, Sha256};
-    use std::io::Read as _;
-
+/// dev server bound to `0.0.0.0` cannot be driven by a LAN peer. The 256 bits
+/// come from the OS CSPRNG on every target (`getrandom` wraps `getrandom(2)` /
+/// `/dev/urandom` on Unix and `BCryptGenRandom` on Windows), rendered as
+/// lowercase hex. There is no non-CSPRNG fallback: if the OS CSPRNG cannot be
+/// read this returns `None` and the caller leaves the control endpoint unarmed
+/// — a fail-closed downgrade to "no hot control", never a guessable token.
+fn mint_hot_token() -> Option<String> {
     let mut buf = [0u8; 32];
-    if let Ok(mut f) = std::fs::File::open("/dev/urandom")
-        && f.read_exact(&mut buf).is_ok()
-    {
-        return hex::encode(buf);
-    }
-    // Fallback: hash a mix of process-unique, hard-to-predict values. Not a
-    // CSPRNG, but never a constant — and the endpoint is dev-only and
-    // fail-closed regardless.
-    let mut h = Sha256::new();
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |d| d.as_nanos());
-    h.update(now.to_le_bytes());
-    h.update(std::process::id().to_le_bytes());
-    h.update(format!("{:?}", std::thread::current().id()).as_bytes());
-    // A heap-allocation address adds ASLR entropy across runs.
-    let probe = Box::new(0u8);
-    h.update((std::ptr::from_ref::<u8>(&probe).addr()).to_le_bytes());
-    hex::encode(h.finalize())
+    getrandom::fill(&mut buf).ok()?;
+    Some(hex::encode(buf))
 }
 
 /// POST every edited view's appearance patch to the running app's
@@ -2743,8 +2727,8 @@ fn find_executable_path(cargo_json_stdout: &str) -> Option<PathBuf> {
 mod tests {
     use super::{
         BuildAccel, Command, Duration, OrchestratorEvent, RESOLVE_RETRY_DELAY, RebuildTimings,
-        apply_build_accel_env, child_env, choose_build_accel, dir_has_dep_rlib, env_flag_on, mpsc,
-        schedule_resolve_retry,
+        apply_build_accel_env, child_env, choose_build_accel, dir_has_dep_rlib, env_flag_on,
+        mint_hot_token, mpsc, schedule_resolve_retry,
     };
     use std::ffi::OsStr;
     use std::path::{Path, PathBuf};
@@ -3007,5 +2991,19 @@ mod tests {
         evt_rx
             .recv_timeout(RESOLVE_RETRY_DELAY * 4)
             .expect("the retry must still arrive after the short delay");
+    }
+
+    /// The hot-control token is 256 bits of OS-CSPRNG output rendered as 64 hex
+    /// chars, and two mints differ — there is no fixed or predictable fallback.
+    #[test]
+    fn mint_hot_token_is_csprng_hex() {
+        let a = mint_hot_token().expect("OS CSPRNG must be available under test");
+        let b = mint_hot_token().expect("OS CSPRNG must be available under test");
+        assert_eq!(a.len(), 64, "32 random bytes render to 64 hex chars");
+        assert!(
+            a.bytes().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()),
+            "token must be lowercase hex"
+        );
+        assert_ne!(a, b, "two mints must not collide");
     }
 }
