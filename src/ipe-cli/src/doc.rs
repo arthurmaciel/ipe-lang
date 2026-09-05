@@ -3845,13 +3845,37 @@ fn serve(path: &Path, port: Option<u16>) -> Result<(), CliError> {
 /// and writes the file with its content type — or a `404` when the path names no
 /// built file. Only `GET`/`HEAD`-shaped requests are honoured; the body, if any,
 /// is ignored (nothing here writes or executes).
-fn serve_one(conn: &mut std::net::TcpStream, site: &BTreeMap<String, String>) {
-    use std::io::{BufRead, BufReader, Write};
+/// The largest request line the doc server will read before giving up. A request
+/// line is a method, a path, and a version; a few kilobytes covers any real one,
+/// and the cap turns a client that streams bytes without a newline into a bounded
+/// read rather than an unbounded buffer growth.
+const DOC_SERVE_REQUEST_LINE_CAP: usize = 16 * 1024;
 
-    let mut reader = BufReader::new(match conn.try_clone() {
+/// The wall-clock a single read may block before the doc server abandons the
+/// connection, so a client that opens a socket and never sends stalls one
+/// connection briefly instead of pinning the accept loop forever.
+const DOC_SERVE_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
+fn serve_one(conn: &mut std::net::TcpStream, site: &BTreeMap<String, String>) {
+    use std::io::{BufRead, BufReader, Read, Write};
+
+    // Bound the wait: a peer that connects and never writes stalls this one
+    // connection for at most the timeout, never the whole loop (a remote
+    // exhaustion vector otherwise).
+    if conn
+        .set_read_timeout(Some(DOC_SERVE_READ_TIMEOUT))
+        .is_err()
+    {
+        return;
+    }
+    let clone = match conn.try_clone() {
         Ok(c) => c,
         Err(_) => return,
-    });
+    };
+    // Bound the size: read at most one capped request line. `take` caps the byte
+    // count, so a client that never sends a newline yields a bounded buffer, not
+    // unbounded growth.
+    let mut reader = BufReader::new(clone.take(DOC_SERVE_REQUEST_LINE_CAP as u64));
     let mut request_line = String::new();
     if reader.read_line(&mut request_line).is_err() {
         return;
@@ -5057,4 +5081,74 @@ withBaseMs = something
             "Ipe.List must be imported exactly once:\n{out}"
         );
     }
+
+    #[test]
+    fn doc_serve_answers_a_normal_request() {
+        use std::io::{Read, Write};
+        use std::net::{TcpListener, TcpStream};
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind loopback");
+        let addr = listener.local_addr().expect("addr");
+
+        let handle = std::thread::spawn(move || {
+            let mut site: BTreeMap<String, String> = BTreeMap::new();
+            site.insert("index.html".to_owned(), "<h1>hi</h1>".to_owned());
+            let (mut conn, _) = listener.accept().expect("accept");
+            serve_one(&mut conn, &site);
+        });
+
+        let mut client = TcpStream::connect(addr).expect("connect");
+        client
+            .write_all(b"GET / HTTP/1.1\r\n\r\n")
+            .expect("write request");
+        let mut resp = String::new();
+        client.read_to_string(&mut resp).expect("read response");
+        handle.join().expect("server thread");
+
+        assert!(resp.starts_with("HTTP/1.1 200 OK"), "got: {resp}");
+        assert!(resp.contains("<h1>hi</h1>"), "body served: {resp}");
+    }
+
+    #[test]
+    fn doc_serve_does_not_hang_on_a_headerless_flood() {
+        // A client that streams bytes without ever sending a newline must not
+        // grow the server's buffer without bound nor pin the connection: the
+        // capped read gives up past the cap and the request-line read timeout
+        // bounds the wait, so `serve_one` returns and the test completes.
+        use std::io::Write;
+        use std::net::{TcpListener, TcpStream};
+        use std::time::Instant;
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind loopback");
+        let addr = listener.local_addr().expect("addr");
+
+        let handle = std::thread::spawn(move || {
+            let site: BTreeMap<String, String> = BTreeMap::new();
+            let (mut conn, _) = listener.accept().expect("accept");
+            let started = Instant::now();
+            serve_one(&mut conn, &site);
+            started.elapsed()
+        });
+
+        let mut client = TcpStream::connect(addr).expect("connect");
+        // Send well past the request-line cap with no newline. Ignore write
+        // errors: the server closing early (cap hit) is exactly the bounded
+        // behaviour under test.
+        let chunk = vec![b'a'; 64 * 1024];
+        for _ in 0..64 {
+            if client.write_all(&chunk).is_err() {
+                break;
+            }
+        }
+        drop(client);
+        let elapsed = handle.join().expect("server thread");
+        // The read timeout is 10s; a bounded server returns well within it. A
+        // regression that reverted to an unbounded `read_line` would block until
+        // the client closed (here) or forever (a real slow-loris).
+        assert!(
+            elapsed < DOC_SERVE_READ_TIMEOUT * 3,
+            "serve_one must return promptly, took {elapsed:?}"
+        );
+    }
+
 }

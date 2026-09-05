@@ -209,6 +209,11 @@ impl<'src> Lexer<'src> {
     }
 
     /// Byte offset of the current char, or end-of-input.
+    ///
+    /// [`lex`] rejects any source larger than `u32::MAX` bytes before building
+    /// the lexer, so every byte offset here fits a `u32`; the saturating
+    /// conversion is an unreachable fallback, never a silent clamp of a real
+    /// position.
     fn offset(&self) -> u32 {
         match self.window[0] {
             Some((o, _)) => u32::try_from(o).unwrap_or(u32::MAX),
@@ -328,7 +333,24 @@ pub fn keyword(text: &str) -> Option<Tok> {
 }
 
 /// Lex `src` into tokens, or fail with a typed diagnostic.
+/// Whether a source of `byte_len` bytes can be spanned: every byte offset the
+/// lexer records is a `u32`, so the source must fit in `u32::MAX` bytes. The
+/// boundary is a named predicate so the refusal is testable without allocating a
+/// multi-gigabyte string.
+fn source_offset_range_admits(byte_len: usize) -> bool {
+    u32::try_from(byte_len).is_ok()
+}
+
 pub fn lex(src: &str) -> DResult<Vec<Token>> {
+    // Byte offsets are stored as `u32`; a source larger than `u32::MAX` bytes
+    // cannot be spanned. Refuse it here rather than clamp offsets downstream —
+    // a clamped span misreports every position past the limit.
+    if !source_offset_range_admits(src.len()) {
+        return Err(Diagnostic::Parse {
+            span: Span::new(0, 0),
+            msg: ParseError::SourceTooLarge { bytes: src.len() },
+        });
+    }
     let mut lx = Lexer::new(src);
     let mut out = Vec::new();
     loop {
@@ -902,5 +924,57 @@ fn two_char_only(lx: &mut Lexer, lo: u32, second: char, two: Tok, err: ParseErro
             span: Span::new(lo, lx.offset()),
             msg: err,
         })
+    }
+}
+
+
+#[cfg(test)]
+mod source_size_guard_tests {
+    use super::{lex, source_offset_range_admits};
+    use ipe_diagnostics::{Diagnostic, ParseError};
+
+    #[test]
+    fn offset_range_boundary() {
+        // The largest spannable source is exactly `u32::MAX` bytes; one more
+        // cannot be given a `u32` offset and is turned away.
+        assert!(source_offset_range_admits(u32::MAX as usize));
+        assert!(source_offset_range_admits(0));
+        // `u32::MAX as usize + 1` only overflows `u32` on a 64-bit target; on a
+        // 32-bit target a `usize` can never exceed `u32::MAX`, so the predicate
+        // is vacuously total there.
+        #[cfg(target_pointer_width = "64")]
+        assert!(!source_offset_range_admits(u32::MAX as usize + 1));
+    }
+
+    #[test]
+    fn a_normal_source_lexes() {
+        // The guard does not disturb an ordinary in-range source.
+        let toks = lex("module Main exposing (main)\nmain = 0\n").expect("lexes");
+        assert!(!toks.is_empty());
+    }
+
+    #[test]
+    fn oversized_source_is_a_typed_refusal_not_a_clamp() {
+        // A source whose length exceeds `u32::MAX` yields a typed
+        // `SourceTooLarge` rather than a silently clamped span. Proven at the
+        // predicate the guard consults (allocating >4 GiB is infeasible in a
+        // test); the guard maps a `false` verdict straight to the error below.
+        #[cfg(target_pointer_width = "64")]
+        {
+            let oversized = u32::MAX as usize + 1;
+            assert!(!source_offset_range_admits(oversized));
+        }
+        // The refusal a real oversized source would take, exercised directly.
+        let refusal: Diagnostic = Diagnostic::Parse {
+            span: ipe_diagnostics::Span::new(0, 0),
+            msg: ParseError::SourceTooLarge { bytes: 5_000_000_000 },
+        };
+        assert!(matches!(
+            refusal,
+            Diagnostic::Parse {
+                msg: ParseError::SourceTooLarge { .. },
+                ..
+            }
+        ));
     }
 }

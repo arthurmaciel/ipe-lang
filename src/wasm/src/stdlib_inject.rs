@@ -1,15 +1,15 @@
 //! The in-memory embedded-stdlib injection closure.
 //!
-//! A faithful in-memory port of the native driver's
-//! `ipe::project::inject_compiled_std_closure` (the pure part — the native
-//! version additionally maintains a `DiscoveredModule` list this crate has no
-//! use for). It fixpoints over the compiled-source stdlib import graph, pulling
-//! each transitively-imported `Ipe.*` compiled-source module's embedded text
-//! into `sources`. No filesystem: the module bodies come from [`ipe_stdlib`]'s
-//! `include_str!` table, and imports are found by a token scan
-//! ([`ipe_db::extract_imports_from_source`]).
+//! A thin adapter over the shared closure `ipe_stdlib::inject_compiled_std_closure`
+//! — the single source of truth for the injection algorithm and its squat-guard,
+//! called by both the native CLI driver and this WebAssembly frontend so their
+//! trust sets can never drift. The native driver additionally records a
+//! `DiscoveredModule` per injected node; this crate has no use for that, so it
+//! passes a no-op callback. Imports are found by a token scan
+//! ([`ipe_db::extract_imports_from_source`]); the module bodies come from
+//! [`ipe_stdlib`]'s `include_str!` table.
 
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
 /// Inject the transitive compiled-source stdlib closure into `sources`.
@@ -21,45 +21,90 @@ use std::path::PathBuf;
 pub fn inject_compiled_std_closure(
     sources: &mut BTreeMap<Vec<String>, (PathBuf, String)>,
 ) -> BTreeSet<Vec<String>> {
-    let mut injected: BTreeSet<Vec<String>> = BTreeSet::new();
+    ipe_stdlib::inject_compiled_std_closure(
+        sources,
+        ipe_db::extract_imports_from_source,
+        |_module_path, _synth_path| {},
+    )
+}
 
-    // Seed the worklist from every compiled-source import across current
-    // sources. An unused-stdlib program enqueues nothing and returns empty.
-    let mut work: VecDeque<Vec<String>> = VecDeque::new();
-    for (_, src) in sources.values() {
-        for imp in ipe_db::extract_imports_from_source(src) {
-            if ipe_stdlib::is_compiled_source_segments(&imp) {
-                work.push_back(imp);
-            }
-        }
-    }
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-    while let Some(path) = work.pop_front() {
-        // Already present — a user file OR an already-injected node. Skip; do
-        // NOT tag trusted (BTreeMap key = free dedup; user-squat stays User).
-        if sources.contains_key(&path) {
-            continue;
-        }
-        let Some(embedded) = ipe_stdlib::compiled_std_source_segments(&path) else {
-            // Not a compiled-source module (e.g. a kernel import like
-            // `Ipe.String` inside an embedded source): leave it
-            // kernel-resolved.
-            continue;
+    /// The wasm wrapper and the shared `ipe_stdlib` core must inject the exact
+    /// same trust set for the same sources — the equivalence that keeps the two
+    /// frontends from drifting (the whole point of the single-home extraction).
+    /// The callback the native driver uses to build its `DiscoveredModule` list
+    /// must see exactly the injected paths, no more, no less.
+    #[test]
+    fn wrapper_matches_shared_core_and_callback_sees_every_injection() {
+        let seed = |sources: &mut BTreeMap<Vec<String>, (PathBuf, String)>| {
+            sources.insert(
+                vec!["Main".to_owned()],
+                (
+                    PathBuf::from("src/Main.ipe"),
+                    "module Main exposing (main)\nimport Ipe.Palette exposing (..)\nmain = 0\n"
+                        .to_owned(),
+                ),
+            );
         };
 
-        // Synthetic on-disk-looking path, for diagnostics only — never read.
-        let synth_path = PathBuf::from("<embedded-stdlib>").join(path.join("."));
-        sources.insert(path.clone(), (synth_path, embedded.to_owned()));
-        injected.insert(path.clone());
+        let mut via_wrapper: BTreeMap<Vec<String>, (PathBuf, String)> = BTreeMap::new();
+        seed(&mut via_wrapper);
+        let wrapper_set = inject_compiled_std_closure(&mut via_wrapper);
 
-        // Std → Std closure: enqueue the embedded module's OWN compiled-source
-        // imports. Fixpoint via the `sources.contains_key` guard above.
-        for imp in ipe_db::extract_imports_from_source(embedded) {
-            if ipe_stdlib::is_compiled_source_segments(&imp) && !sources.contains_key(&imp) {
-                work.push_back(imp);
-            }
-        }
+        let mut via_core: BTreeMap<Vec<String>, (PathBuf, String)> = BTreeMap::new();
+        seed(&mut via_core);
+        let mut seen: BTreeSet<Vec<String>> = BTreeSet::new();
+        let core_set = ipe_stdlib::inject_compiled_std_closure(
+            &mut via_core,
+            ipe_db::extract_imports_from_source,
+            |module_path, _synth| {
+                seen.insert(module_path.to_vec());
+            },
+        );
+
+        assert_eq!(wrapper_set, core_set, "wrapper and core inject the same set");
+        assert_eq!(seen, core_set, "callback saw exactly the injected paths");
+        assert!(
+            core_set.contains(&vec!["Ipe".to_owned(), "Palette".to_owned()]),
+            "Ipe.Palette must be injected"
+        );
+        assert_eq!(via_wrapper, via_core, "both paths leave identical sources");
     }
 
-    injected
+    /// A user file squatting on an `Ipe.*` key is never overwritten and never
+    /// tagged trusted — the shared squat-guard, exercised through the wrapper.
+    #[test]
+    fn user_squat_is_not_injected_or_trusted() {
+        let mut sources: BTreeMap<Vec<String>, (PathBuf, String)> = BTreeMap::new();
+        sources.insert(
+            vec!["Main".to_owned()],
+            (
+                PathBuf::from("src/Main.ipe"),
+                "module Main exposing (main)\nimport Ipe.Palette exposing (..)\nmain = 0\n"
+                    .to_owned(),
+            ),
+        );
+        let palette = vec!["Ipe".to_owned(), "Palette".to_owned()];
+        sources.insert(
+            palette.clone(),
+            (
+                PathBuf::from("src/Ipe/Palette.ipe"),
+                "module Ipe.Palette exposing (..)\ntoHex = 0\n".to_owned(),
+            ),
+        );
+
+        let injected = inject_compiled_std_closure(&mut sources);
+        assert!(
+            !injected.contains(&palette),
+            "a user squat must NOT be tagged trusted"
+        );
+        assert_eq!(
+            sources.get(&palette).map(|(p, _)| p.clone()),
+            Some(PathBuf::from("src/Ipe/Palette.ipe")),
+            "the user's file is left in place, not overwritten by the embed"
+        );
+    }
 }

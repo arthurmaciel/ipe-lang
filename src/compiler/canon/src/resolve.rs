@@ -4906,6 +4906,7 @@ fn canonicalise_value(
 
     let mut patterns = Vec::with_capacity(val.patterns.len());
     for p in &val.patterns {
+        reject_duplicate_pattern_binders(p, interner)?;
         patterns.push(canonicalise_pattern(p, env, interner)?);
     }
     let body = canonicalise_expr(&val.body, &body_env, interner)?;
@@ -5059,6 +5060,83 @@ fn collect_bound_names(p: &src::Pattern_, names: &mut std::collections::BTreeSet
             }
         }
     }
+}
+
+/// Reject a pattern that binds the same variable name more than once.
+///
+/// A pattern's binders each introduce a distinct local, so two binders of one
+/// name in the same pattern (`( x, x )`, `x :: x`, `{ a, a }`) are ambiguous —
+/// a later use could mean either, and the two need not be equal. Rather than
+/// silently shadow one with the other, canon rejects it here, before the local
+/// scope is built. The alternatives of an or-pattern are DISJOINT scopes (only
+/// one ever matches), so a name reused ACROSS alternatives is not a duplicate;
+/// each alternative is checked on its own.
+fn reject_duplicate_pattern_binders(p: &src::Pattern, interner: &Interner) -> DResult<()> {
+    let mut seen: BTreeMap<Symbol, Span> = BTreeMap::new();
+    collect_binders_no_dup(p, &mut seen, interner)?;
+    Ok(())
+}
+
+fn collect_binders_no_dup(
+    p: &src::Pattern,
+    seen: &mut BTreeMap<Symbol, Span>,
+    interner: &Interner,
+) -> DResult<()> {
+    let mut note = |name: Symbol, span: Span, seen: &mut BTreeMap<Symbol, Span>| -> DResult<()> {
+        if let Some(&first) = seen.get(&name) {
+            return Err(Diagnostic::Name {
+                span,
+                msg: NameError::DuplicatePatternBinder {
+                    name: name_str(interner, name)?,
+                    first,
+                },
+            });
+        }
+        seen.insert(name, span);
+        Ok(())
+    };
+    match &p.value {
+        src::Pattern_::PAnything
+        | src::Pattern_::PUnit
+        | src::Pattern_::PInt(_)
+        | src::Pattern_::PBool(_)
+        | src::Pattern_::PChar(_)
+        | src::Pattern_::PStr(_) => {}
+        src::Pattern_::PVar(name) => note(*name, p.span, seen)?,
+        src::Pattern_::PCtor(_, _, args) => {
+            for a in args {
+                collect_binders_no_dup(a, seen, interner)?;
+            }
+        }
+        src::Pattern_::PTuple(elems) | src::Pattern_::PList(elems) => {
+            for e in elems {
+                collect_binders_no_dup(e, seen, interner)?;
+            }
+        }
+        src::Pattern_::PRecord(fields) => {
+            for f in fields {
+                note(f.value, f.span, seen)?;
+            }
+        }
+        src::Pattern_::PAlias(inner, name) => {
+            collect_binders_no_dup(inner, seen, interner)?;
+            note(name.value, name.span, seen)?;
+        }
+        src::Pattern_::PCons(head, tail) => {
+            collect_binders_no_dup(head, seen, interner)?;
+            collect_binders_no_dup(tail, seen, interner)?;
+        }
+        src::Pattern_::POr(alts) => {
+            // Each alternative is a disjoint scope: a name reused across
+            // alternatives is legal, so each alternative is checked against a
+            // fresh set rather than the shared one.
+            for alt in alts {
+                let mut alt_seen: BTreeMap<Symbol, Span> = BTreeMap::new();
+                collect_binders_no_dup(alt, &mut alt_seen, interner)?;
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Canonicalise a pattern. Supports wildcard, var, and constructor patterns.
@@ -5225,6 +5303,7 @@ fn canonicalise_expr(e: &src::Expr, env: &Env, interner: &mut Interner) -> DResu
                 // Pattern-bound names are local in the arm body.
                 let mut arm_env = env.clone();
                 bind_pattern_names(&pat.value, &mut arm_env);
+                reject_duplicate_pattern_binders(pat, interner)?;
                 let can_pat = canonicalise_pattern(pat, env, interner)?;
                 let can_body = canonicalise_expr(body, &arm_env, interner)?;
                 branches.push(canon::CaseBranch {
@@ -5244,6 +5323,7 @@ fn canonicalise_expr(e: &src::Expr, env: &Env, interner: &mut Interner) -> DResu
             let mut body_env = env.clone();
             let mut can_params = Vec::with_capacity(params.len());
             for p in params {
+                reject_duplicate_pattern_binders(p, interner)?;
                 bind_pattern_names(&p.value, &mut body_env);
                 can_params.push(canonicalise_pattern(p, env, interner)?);
             }
@@ -5268,6 +5348,7 @@ fn canonicalise_expr(e: &src::Expr, env: &Env, interner: &mut Interner) -> DResu
                 // that follow and the `in` body. The binder pattern itself is
                 // canonicalised against the enclosing env (consistent with how
                 // `case` arms and lambda parameters resolve their patterns).
+                reject_duplicate_pattern_binders(&b.pat, interner)?;
                 let can_pat = canonicalise_pattern(&b.pat, &let_env, interner)?;
                 bind_pattern_names(&b.pat.value, &mut let_env);
                 can_bindings.push(canon::LetBinding {
@@ -8290,5 +8371,104 @@ mod unary_minus_hygiene_tests {
             panic!("v body must be a Let");
         };
         assert_negate_kernel_callee(in_body, &i);
+    }
+}
+
+#[cfg(test)]
+mod duplicate_pattern_binder_tests {
+    //! IPE-N0049 — a single pattern may not bind one name twice. Or-pattern
+    //! alternatives are disjoint scopes, so a name reused across them is legal.
+
+    use super::{reject_duplicate_pattern_binders, src};
+    use ipe_diagnostics::{Diagnostic, Located, NameError, Span};
+    use ipe_intern::Interner;
+
+    fn sym(i: &mut Interner, name: &str) -> ipe_intern::Symbol {
+        i.intern(name).expect("intern must succeed")
+    }
+
+    fn pvar(i: &mut Interner, name: &str, lo: u32) -> src::Pattern {
+        Located::new(Span::new(lo, lo + 1), src::Pattern_::PVar(sym(i, name)))
+    }
+
+    #[test]
+    fn tuple_binding_the_same_name_twice_is_rejected() {
+        let mut i = Interner::new();
+        let x1 = pvar(&mut i, "x", 0);
+        let x2 = pvar(&mut i, "x", 5);
+        let pat = Located::new(Span::new(0, 6), src::Pattern_::PTuple(vec![x1, x2]));
+        let err = reject_duplicate_pattern_binders(&pat, &i)
+            .expect_err("`( x, x )` binds `x` twice — must be rejected");
+        match err {
+            Diagnostic::Name {
+                msg: NameError::DuplicatePatternBinder { .. },
+                ..
+            } => {}
+            other => panic!("expected DuplicatePatternBinder, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn cons_binding_the_same_name_twice_is_rejected() {
+        let mut i = Interner::new();
+        let head = Box::new(pvar(&mut i, "x", 0));
+        let tail = Box::new(pvar(&mut i, "x", 4));
+        let pat = Located::new(Span::new(0, 5), src::Pattern_::PCons(head, tail));
+        assert!(
+            reject_duplicate_pattern_binders(&pat, &i).is_err(),
+            "`x :: x` binds `x` twice — must be rejected"
+        );
+    }
+
+    #[test]
+    fn distinct_names_in_a_tuple_are_accepted() {
+        let mut i = Interner::new();
+        let a = pvar(&mut i, "a", 0);
+        let b = pvar(&mut i, "b", 5);
+        let pat = Located::new(Span::new(0, 6), src::Pattern_::PTuple(vec![a, b]));
+        assert!(
+            reject_duplicate_pattern_binders(&pat, &i).is_ok(),
+            "`( a, b )` binds two distinct names — must be accepted"
+        );
+    }
+
+    #[test]
+    fn or_pattern_reusing_a_name_across_alternatives_is_accepted() {
+        // `x | x` — each alternative is a disjoint scope; the reuse is legal.
+        let mut i = Interner::new();
+        let alt1 = pvar(&mut i, "x", 0);
+        let alt2 = pvar(&mut i, "x", 4);
+        let pat = Located::new(Span::new(0, 5), src::Pattern_::POr(vec![alt1, alt2]));
+        assert!(
+            reject_duplicate_pattern_binders(&pat, &i).is_ok(),
+            "a name reused across or-pattern alternatives is not a duplicate"
+        );
+    }
+
+    #[test]
+    fn duplicate_within_one_or_alternative_is_rejected() {
+        // `( x, x ) | y` — the duplicate lives inside the first alternative.
+        let mut i = Interner::new();
+        let x1 = pvar(&mut i, "x", 0);
+        let x2 = pvar(&mut i, "x", 3);
+        let inner = Located::new(Span::new(0, 4), src::Pattern_::PTuple(vec![x1, x2]));
+        let y = pvar(&mut i, "y", 8);
+        let pat = Located::new(Span::new(0, 9), src::Pattern_::POr(vec![inner, y]));
+        assert!(
+            reject_duplicate_pattern_binders(&pat, &i).is_err(),
+            "a duplicate inside one alternative must still be rejected"
+        );
+    }
+
+    #[test]
+    fn wildcards_may_repeat() {
+        let mut i = Interner::new();
+        let w1 = Located::new(Span::new(0, 1), src::Pattern_::PAnything);
+        let w2 = Located::new(Span::new(3, 4), src::Pattern_::PAnything);
+        let pat = Located::new(Span::new(0, 5), src::Pattern_::PTuple(vec![w1, w2]));
+        assert!(
+            reject_duplicate_pattern_binders(&pat, &i).is_ok(),
+            "`_` binds nothing, so `( _, _ )` is fine"
+        );
     }
 }
